@@ -841,7 +841,90 @@ const SUPPLIED_CONTENT_COORDINATOR = 'and|or|but|then|also';
 const SUPPLIED_CONTENT_OBJECT_FILLER = String.raw`(?:(?!\b(?:${SUPPLIED_CONTENT_COORDINATOR})\b)\S+\s+){0,1}?`;
 const SUPPLIED_CONTENT_REFERENCE = String.raw`${SUPPLIED_CONTENT_UNTRUSTED_DETERMINER}\s+(?:\S+\s+){0,2}?[\x60'"]?${SUPPLIED_CONTENT_NOUN}`;
 const SUPPLIED_CONTENT_OBJECT_REFERENCE = String.raw`^\s*${SUPPLIED_CONTENT_PARENTHETICAL_ASIDE}${SUPPLIED_CONTENT_AMBIGUOUS_DETERMINER}\s+${SUPPLIED_CONTENT_OBJECT_FILLER}[\x60'"]?${SUPPLIED_CONTENT_NOUN}`;
-const UNSAFE_DIRECTIVE_TARGET_SOURCE = String.raw`(?:\b(?:untrusted|user-provided|user input|(?:from|by)\s+(?:the\s+)?user|${SUPPLIED_CONTENT_REFERENCE})\b|${SUPPLIED_CONTENT_OBJECT_REFERENCE}\b)`;
+const USER_ACTOR_STEP_OTHER_ACTOR_NAME_SOURCE =
+  '(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance)';
+const USER_ACTOR_STEP_OTHER_ACTOR_A_NAME_SOURCE =
+  '(?:user|human|tester|reviewer|maintainer|developer|person)';
+const UNSAFE_HUMAN_ACTOR_TARGET_CONTINUATION_SOURCE = `(?:to|and|or|but|then|while|whereas|when|because|if|as|in|on|at|during|after|before|for|with|who|that|which|can|could|may|might|must|should|will|would|is|are|was|were|has|have|had|${USER_ACTOR_STEP_OTHER_ACTOR_NAME_SOURCE}|participant)`;
+const UNSAFE_HUMAN_ACTOR_TARGET_BOUNDARY_SOURCE = String.raw`(?![\w-]|\s+(?!(?:${UNSAFE_HUMAN_ACTOR_TARGET_CONTINUATION_SOURCE})\b)\w)`;
+// Subject recognition keeps its established clause continuation grammar.
+// Transfer recipients additionally require a complete human phrase, so a
+// compound such as "a user interface" cannot be accepted as "a user".
+const USER_ACTOR_STEP_OTHER_ACTOR_BOUNDARY_SOURCE = String.raw`(?![\w-]|\s+(?:agent|assistant|bot)\b)`;
+const USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT_SOURCE = String.raw`(?:(?:the\s+)?${USER_ACTOR_STEP_OTHER_ACTOR_NAME_SOURCE}|a\s+${USER_ACTOR_STEP_OTHER_ACTOR_A_NAME_SOURCE}|an\s+operator)${USER_ACTOR_STEP_OTHER_ACTOR_BOUNDARY_SOURCE}`;
+const USER_ACTOR_STEP_OTHER_ACTOR_TRANSFER_RECIPIENT_SOURCE = String.raw`(?:(?:the\s+)?${USER_ACTOR_STEP_OTHER_ACTOR_NAME_SOURCE}|a\s+${USER_ACTOR_STEP_OTHER_ACTOR_A_NAME_SOURCE}|an\s+operator)${UNSAFE_HUMAN_ACTOR_TARGET_BOUNDARY_SOURCE}`;
+const USER_ACTOR_STEP_OTHER_ACTOR_TRANSFER_SOURCE = String.raw`\b(?:to\s+${USER_ACTOR_STEP_OTHER_ACTOR_TRANSFER_RECIPIENT_SOURCE}|${USER_ACTOR_STEP_OTHER_ACTOR_TRANSFER_RECIPIENT_SOURCE}\s+to\s+(?:perform|run|execute|complete|check|test|verify|implement|handle|manage|follow))\b`;
+const USER_ACTOR_STEP_OTHER_ACTOR_TRANSFER = new RegExp(
+  USER_ACTOR_STEP_OTHER_ACTOR_TRANSFER_SOURCE,
+  'i',
+);
+const USER_ACTOR_STEP_OTHER_ACTOR_TRANSFER_SUFFIX = new RegExp(
+  String.raw`^\s+to\s+${USER_ACTOR_STEP_OTHER_ACTOR_TRANSFER_RECIPIENT_SOURCE}\s*$`,
+  'i',
+);
+const USER_ACTOR_STEP_OTHER_ACTOR_TRANSFER_PREFIX = new RegExp(
+  String.raw`^\s+to\s+${USER_ACTOR_STEP_OTHER_ACTOR_TRANSFER_RECIPIENT_SOURCE}\b`,
+  'i',
+);
+// Other human actors remain unsafe command targets. Only the exact
+// USER_ACTOR_STEP_WINDOW signature below can make a user-actor step safe.
+// A name at the start of a compound noun is not an actor target ("a user
+// interface tool"). Keep common clause continuations eligible so a command
+// that continues after an actor ("by the user to verify") stays unsafe.
+const UNSAFE_HUMAN_ACTOR_TARGET_SOURCE = String.raw`(?:by|from)\s+(?:(?:the|a|an)\s+)?${USER_ACTOR_STEP_OTHER_ACTOR_NAME_SOURCE}${UNSAFE_HUMAN_ACTOR_TARGET_BOUNDARY_SOURCE}`;
+// Agent-role recipients are unsafe when they follow a direct command object.
+// The final object noun stays adjacent to "by", while the preceding phrase
+// remains inside sliceUnsafeDirectiveWindow's 100-character/sentence bound.
+// Exclude source participles so an arbitrary artifact noun does not turn
+// passive attribution ("workflow maintained by a human agent") into an
+// execution assignment; supplied executable sources have their own matcher.
+const UNSAFE_DIRECT_ACTOR_ROLE_PASSIVE_VERB_SOURCE =
+  '(?:generated|maintained|provided|created|built|written|compiled|developed|authored|designed|produced|implemented|assembled|configured)';
+const UNSAFE_DIRECT_ACTOR_ROLE_PASSIVE_MODIFIER_SOURCE = String.raw`(?:\s+(?:[\w'-]+ly|in\s+(?:the\s+)?CI))*`;
+const UNSAFE_DIRECT_ACTOR_ROLE_PASSIVE_CHAIN_SOURCE = String.raw`${UNSAFE_DIRECT_ACTOR_ROLE_PASSIVE_VERB_SOURCE}${UNSAFE_DIRECT_ACTOR_ROLE_PASSIVE_MODIFIER_SOURCE}(?:\s+(?:and|or)\s+${UNSAFE_DIRECT_ACTOR_ROLE_PASSIVE_VERB_SOURCE}${UNSAFE_DIRECT_ACTOR_ROLE_PASSIVE_MODIFIER_SOURCE})*`;
+// Keep coordinated nouns such as "test suite" inside the command object.
+// A coordinator plus a verb and determiner starts a separate clause, as in
+// the passive-attribution boundary "and inspect the deployment by ...".
+const UNSAFE_DIRECT_ACTOR_ROLE_COMMAND_OBJECT_CLAUSE_SOURCE = String.raw`(?:\b(?:but|then|also)\b|\b(?:and|or)\s+(?:inspect|verify|check|test|run|execute|paste|install|invoke|record|review|read|write|update|add|remove|create|build|generate|use|open|close|follow|document|fix|resolve|ensure|compare|validate|select|download|upload|copy|move|apply|perform|handle|manage|implement|investigate)\b\s+(?:the|a|an|this|that|these|those|each|every|any|all|my|our|your|their|its|his|her)\b)`;
+const UNSAFE_DIRECT_ACTOR_ROLE_COMMAND_OBJECT_FILLER_SOURCE = String.raw`(?:(?!${UNSAFE_DIRECT_ACTOR_ROLE_COMMAND_OBJECT_CLAUSE_SOURCE})[\w-]+\s+)*?`;
+const UNSAFE_DIRECT_ACTOR_ROLE_COMMAND_OBJECT_SOURCE = String.raw`(?:(?:this|the|a|an)\s+)?${UNSAFE_DIRECT_ACTOR_ROLE_COMMAND_OBJECT_FILLER_SOURCE}(?!(?:${UNSAFE_DIRECT_ACTOR_ROLE_PASSIVE_VERB_SOURCE})\b\s+by\b)[\w-]+\s+`;
+const UNSAFE_DIRECT_ACTOR_ROLE_COORDINATED_COMMAND_VERB_SOURCE =
+  '(?:verify|check|test|run|execute|paste|install|invoke|record|review|read|write|update|add|remove|create|build|generate|use|open|close|follow|document|fix|resolve|ensure|compare|validate|select|download|upload|copy|move|apply|perform|handle|manage|implement|investigate)';
+const UNSAFE_DIRECT_ACTOR_ROLE_COORDINATED_COMMAND_CONNECTOR_SOURCE = String.raw`(?:and|or|but|then|also)(?:\s+(?:then|also))?`;
+const UNSAFE_DIRECT_ACTOR_ROLE_RECIPIENT_SUFFIX_SOURCE =
+  'agent|assistant|bot|contributor|reviewer|maintainer|operator|tester|developer|person';
+const UNSAFE_DIRECT_ACTOR_ROLE_RECIPIENT_SOURCE = String.raw`(?:${USER_ACTOR_STEP_OTHER_ACTOR_NAME_SOURCE}(?:\s+|-)(?:${UNSAFE_DIRECT_ACTOR_ROLE_RECIPIENT_SUFFIX_SOURCE})|user-facing\s+(?:coding\s+)?(?:${UNSAFE_DIRECT_ACTOR_ROLE_RECIPIENT_SUFFIX_SOURCE}))`;
+const UNSAFE_DIRECT_ACTOR_ROLE_TARGET_SOURCE = String.raw`(?:^\s*(${UNSAFE_DIRECT_ACTOR_ROLE_COMMAND_OBJECT_SOURCE})by\s+(?:(?:the|a|an)\s+)?${UNSAFE_DIRECT_ACTOR_ROLE_RECIPIENT_SOURCE}${UNSAFE_HUMAN_ACTOR_TARGET_BOUNDARY_SOURCE}|^\s*${UNSAFE_DIRECT_ACTOR_ROLE_COMMAND_OBJECT_SOURCE}${UNSAFE_DIRECT_ACTOR_ROLE_COORDINATED_COMMAND_CONNECTOR_SOURCE}\s+${UNSAFE_DIRECT_ACTOR_ROLE_COORDINATED_COMMAND_VERB_SOURCE}\s+(${UNSAFE_DIRECT_ACTOR_ROLE_COMMAND_OBJECT_SOURCE})by\s+(?:(?:the|a|an)\s+)?${UNSAFE_DIRECT_ACTOR_ROLE_RECIPIENT_SOURCE}${UNSAFE_HUMAN_ACTOR_TARGET_BOUNDARY_SOURCE})`;
+const UNSAFE_DIRECT_ACTOR_ROLE_TARGET = new RegExp(
+  UNSAFE_DIRECT_ACTOR_ROLE_TARGET_SOURCE,
+  'i',
+);
+const UNSAFE_DIRECT_ACTOR_ROLE_PASSIVE_ATTRIBUTION_PREFIX = new RegExp(
+  String.raw`\b${UNSAFE_DIRECT_ACTOR_ROLE_PASSIVE_CHAIN_SOURCE}\s*$`,
+  'i',
+);
+const UNSAFE_NONCANONICAL_USER_STEP_ACTOR_TARGET_SOURCE = String.raw`^\s*this\s+(?:step|check)\s+by\s+(?:(?:the|a|an)\s+)?${USER_ACTOR_STEP_OTHER_ACTOR_NAME_SOURCE}(?:[\s-]+[\w-]+)*\s*[.!?]?\s*$`;
+const UNSAFE_NONCANONICAL_USER_STEP_ACTOR_TARGET = new RegExp(
+  UNSAFE_NONCANONICAL_USER_STEP_ACTOR_TARGET_SOURCE,
+  'i',
+);
+const UNSAFE_DIRECTIVE_TARGET_SOURCE = String.raw`(?:${UNSAFE_DIRECT_ACTOR_ROLE_TARGET_SOURCE}|\b(?:untrusted|user-provided|user input|${UNSAFE_HUMAN_ACTOR_TARGET_SOURCE}|${SUPPLIED_CONTENT_REFERENCE})\b|${SUPPLIED_CONTENT_OBJECT_REFERENCE}\b)`;
+// Only this specialized path recognizes human-sourced executable and task
+// objects; keeping these nouns separate avoids making ordinary "run this
+// test/check/step" repository commands look like supplied content.
+const SUPPLIED_CONTENT_HUMAN_SOURCE_NOUN_SOURCE = `(?:${SUPPLIED_CONTENT_NOUN}|(?:build|test|check|step|task)s?)`;
+const SUPPLIED_CONTENT_USER_SUPPLIED_TARGET_SOURCE = String.raw`\buser-supplied\s+(?:${SUPPLIED_CONTENT_HUMAN_SOURCE_NOUN_SOURCE})\b`;
+const SUPPLIED_CONTENT_USER_SUPPLIED_TOOL_SOURCE = String.raw`(?:(?:the|a|an)\s+)?user-supplied\s+tool\b`;
+// Preserve existing human-source detection when a relative clause or
+// provenance adverb separates an executable noun from its passive verb.
+const SUPPLIED_CONTENT_HUMAN_SOURCE_MODIFIER_SOURCE = String.raw`(?:(?:that|which)\s+(?:was|is|are|were|has been|have been|had been)\s+)?(?:(?:[\w'-]+ly|just|already|still)\s+)?`;
+const SUPPLIED_CONTENT_HUMAN_SOURCE_PASSIVE_MODIFIER_SOURCE =
+  UNSAFE_DIRECT_ACTOR_ROLE_PASSIVE_CHAIN_SOURCE;
+const SUPPLIED_CONTENT_HUMAN_SOURCE_RECIPIENT_SOURCE = String.raw`(?:(?:the|a|an)\s+)?(?:user-facing\s+(?:coding\s+)?${UNSAFE_DIRECT_ACTOR_ROLE_RECIPIENT_SUFFIX_SOURCE}|(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance))`;
+const SUPPLIED_CONTENT_AGENT_ROLE_SOURCE = String.raw`(?:(?:the|a|an)\s+)?${UNSAFE_DIRECT_ACTOR_ROLE_RECIPIENT_SOURCE}`;
+const SUPPLIED_CONTENT_HUMAN_SOURCE_PROVENANCE_MODIFIER_SOURCE =
+  '(?:via|through|using)';
+const SUPPLIED_CONTENT_HUMAN_SOURCE_BOUNDARY_SOURCE = String.raw`(?![\w-](?!(?:-?(?:${UNSAFE_DIRECT_ACTOR_ROLE_RECIPIENT_SUFFIX_SOURCE}))\b)|\s+(?!(?:${UNSAFE_HUMAN_ACTOR_TARGET_CONTINUATION_SOURCE}|${SUPPLIED_CONTENT_HUMAN_SOURCE_PROVENANCE_MODIFIER_SOURCE}|${UNSAFE_DIRECT_ACTOR_ROLE_RECIPIENT_SUFFIX_SOURCE}|named|called)\b)\w)`;
 // #3073: "run this full command to validate the config" matches only
 // SUPPLIED_CONTENT_OBJECT_REFERENCE's ambiguous "this <filler> <noun>" shape
 // above -- the filler word here is a repository-scoping adjective, not an
@@ -953,10 +1036,6 @@ const USER_ACTOR_STEP_ASSIGNABLE_AGENT = new RegExp(
   `(?:${USER_ACTOR_STEP_AGENT.source}|\\bAI\\s+models?\\b)`,
   'i',
 );
-const USER_ACTOR_STEP_OTHER_ACTOR_NAME_SOURCE =
-  '(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance)';
-const USER_ACTOR_STEP_OTHER_ACTOR_BOUNDARY_SOURCE = String.raw`(?![\w-]|\s+(?:agent|assistant|bot)\b)`;
-const USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT_SOURCE = String.raw`(?:the\s+)?${USER_ACTOR_STEP_OTHER_ACTOR_NAME_SOURCE}${USER_ACTOR_STEP_OTHER_ACTOR_BOUNDARY_SOURCE}`;
 const USER_ACTOR_STEP_OTHER_ACTOR = new RegExp(
   String.raw`\b${USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT_SOURCE}`,
   'i',
@@ -966,7 +1045,7 @@ const USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT = new RegExp(
   'i',
 );
 const USER_ACTOR_STEP_TRANSFER_RECIPIENT_RELATION = new RegExp(
-  String.raw`^\s+to\s+${USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT_SOURCE}(?:[.,;:!?)}\]]?\s*(?:(?:(?:and|but|then|while|whereas)\s+)?${USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT_SOURCE}.*)?)?\s*$|^\s+to\s+${USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT_SOURCE}\s+(?:and|but|then|while|whereas)\s+${USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT_SOURCE}.*$`,
+  String.raw`^\s+to\s+${USER_ACTOR_STEP_OTHER_ACTOR_TRANSFER_RECIPIENT_SOURCE}(?:[.,;:!?)}\]]?\s*(?:(?:(?:and|but|then|while|whereas)\s+)?${USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT_SOURCE}.*)?)?\s*$|^\s+to\s+${USER_ACTOR_STEP_OTHER_ACTOR_TRANSFER_RECIPIENT_SOURCE}\s+(?:and|but|then|while|whereas)\s+${USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT_SOURCE}.*$`,
   'i',
 );
 const USER_ACTOR_STEP_AGENT_SUBJECT = new RegExp(
@@ -1085,17 +1164,21 @@ const USER_ACTOR_STEP_AGENT_SUBJECT_WORK_ASSIGNMENT = new RegExp(
 const USER_ACTOR_STEP_NEUTRAL_AGENT_PREDICATE =
   /^(?:(?:am|is|are|was|were)\s+available|attend(?:s|ed|ing)?\s+(?:a|the)\s+meeting)$/i;
 const USER_ACTOR_STEP_NEUTRAL_AGENT_TRANSFER = new RegExp(
-  String.raw`^(?:${USER_ACTOR_STEP_TRANSFER_ASSIGNMENT_VERB_SOURCE}\s+(?:(?:this|that)\s+(?:step|check|task)|(?:a|the)\s+(?:[\w-]+\s+){0,3}task)\s+to\s+${USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT_SOURCE}|${USER_ACTOR_STEP_TRANSFER_ASSIGNMENT_VERB_SOURCE}\s+(?:to\s+)?${USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT_SOURCE}\s+to\s+(?:perform|run|execute|complete|check|test|verify|implement|handle|manage|follow)\s+(?:(?:this|that)\s+)?(?:step|check|task))$`,
+  String.raw`^(?:${USER_ACTOR_STEP_TRANSFER_ASSIGNMENT_VERB_SOURCE}\s+(?:(?:this|that)\s+(?:step|check|task)|(?:a|the)\s+(?:[\w-]+\s+){0,3}task)\s+to\s+${USER_ACTOR_STEP_OTHER_ACTOR_TRANSFER_RECIPIENT_SOURCE}|${USER_ACTOR_STEP_TRANSFER_ASSIGNMENT_VERB_SOURCE}\s+(?:to\s+)?${USER_ACTOR_STEP_OTHER_ACTOR_TRANSFER_RECIPIENT_SOURCE}\s+to\s+(?:perform|run|execute|complete|check|test|verify|implement|handle|manage|follow)\s+(?:(?:this|that)\s+)?(?:step|check|task))$`,
   'i',
 );
-const USER_ACTOR_STEP_NEUTRAL_AGENT_PATIENT =
-  /^(?:(?:must|should|shall|will|can|could|may|might)\s+be|is|are|was|were)\s+(?:tested|checked|reviewed)(?:\s+by\s+(?:the\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance))?\s+in\s+this\s+(?:step|check)$/i;
+const USER_ACTOR_STEP_NEUTRAL_AGENT_PATIENT = new RegExp(
+  String.raw`^(?:(?:must|should|shall|will|can|could|may|might)\s+be|is|are|was|were)\s+(?:tested|checked|reviewed)(?:\s+by\s+${USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT_SOURCE})?\s+in\s+this\s+(?:step|check)$`,
+  'i',
+);
 const USER_ACTOR_STEP_HUMAN_SUBJECT_CONTINUATION = new RegExp(
   String.raw`(?:\s*[,;:—–]\s*(?:(?:and|but|then|while|whereas)\s+)*|\s+(?:(?:and|but|then|while|whereas)\s+)+)${USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT_SOURCE}`,
   'i',
 );
-const USER_ACTOR_STEP_HUMAN_AGENT_OBJECT_PREFIX =
-  /^\s*(?:the\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance)\s+(?:tests?|verifies|reviews?|discusses?|mentions?|show(?:s|ed|ing)?)\s+(?:(?:a|an|the)\s+)?$/i;
+const USER_ACTOR_STEP_HUMAN_AGENT_OBJECT_PREFIX = new RegExp(
+  String.raw`^\s*${USER_ACTOR_STEP_OTHER_ACTOR_SUBJECT_SOURCE}\s+(?:tests?|verifies|reviews?|discusses?|mentions?|show(?:s|ed|ing)?)\s+(?:(?:a|an|the)\s+)?$`,
+  'i',
+);
 const USER_ACTOR_STEP_NEUTRAL_AGENT_SECTION_LABEL = new RegExp(
   String.raw`^${USER_ACTOR_STEP_ASSIGNABLE_AGENT.source}\s+implementation$`,
   'i',
@@ -3075,11 +3158,7 @@ function hasAgentWorkAssignmentInClause(clause) {
       let transferCue = null;
       for (const match of suffix.matchAll(transferVerbPattern)) {
         const transferTail = suffix.slice(match.index ?? 0);
-        if (
-          /\b(?:to\s+(?:the\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance)|(?:the\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance)\s+to\s+(?:perform|run|execute|complete|check|test|verify|implement|handle|manage|follow))\b/i.test(
-            transferTail,
-          )
-        ) {
+        if (USER_ACTOR_STEP_OTHER_ACTOR_TRANSFER.test(transferTail)) {
           transferCue = match;
         }
       }
@@ -3128,9 +3207,7 @@ function hasAgentWorkAssignmentInClause(clause) {
       if (
         agentObjectAssignmentRelation &&
         /^\s+to\s+/i.test(suffix) &&
-        !/^\s+to\s+(?:the\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance)\s*$/i.test(
-          suffix,
-        )
+        !USER_ACTOR_STEP_OTHER_ACTOR_TRANSFER_SUFFIX.test(suffix)
       ) {
         return true;
       }
@@ -3186,9 +3263,7 @@ function hasAgentWorkAssignmentInClause(clause) {
       if (
         USER_ACTOR_STEP_AGENT_STRONG_OBJECT_ASSIGNMENT_RELATION.test(prefix) &&
         /\S/.test(suffix) &&
-        !/^\s+to\s+(?:the\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance)\s*$/i.test(
-          suffix,
-        ) &&
+        !USER_ACTOR_STEP_OTHER_ACTOR_TRANSFER_SUFFIX.test(suffix) &&
         !(agentStrongWorkNounIsInformation && completeInformationComplement) &&
         !agentWasGivenGift
       ) {
@@ -3231,9 +3306,7 @@ function hasAgentWorkAssignmentInClause(clause) {
           ) ||
           (agentWorkNoun !== null && !agentWorkNounHasClauseContinuation) ||
           (agentForWork !== null && !agentForInformation)) &&
-        !/^\s+to\s+(?:the\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance)\b/i.test(
-          suffix,
-        )
+        !USER_ACTOR_STEP_OTHER_ACTOR_TRANSFER_PREFIX.test(suffix)
       ) {
         return true;
       }
@@ -5229,7 +5302,33 @@ function findUnsafeExecutionDirectiveMatch(
     String.raw`\b${UNSAFE_DIRECTIVE_VERB}\b`,
     'gi',
   );
-  const targetPattern = new RegExp(UNSAFE_DIRECTIVE_TARGET_SOURCE, 'i');
+  const targetPattern = new RegExp(UNSAFE_DIRECTIVE_TARGET_SOURCE, 'gi');
+  const passiveAttributionPrefixPattern = new RegExp(
+    String.raw`\b${UNSAFE_DIRECT_ACTOR_ROLE_PASSIVE_CHAIN_SOURCE}\s+$`,
+    'i',
+  );
+  // The general boundary leaves unlisted compound nouns such as "user
+  // interface" available for passive attribution. After a direct command
+  // object, a recognized human prefix followed by a noun remains unsafe.
+  const directActorCompoundTargetPattern = new RegExp(
+    String.raw`^\s*(${UNSAFE_DIRECT_ACTOR_ROLE_COMMAND_OBJECT_SOURCE})by\s+(?:(?:the|a|an)\s+)?${USER_ACTOR_STEP_OTHER_ACTOR_NAME_SOURCE}\s+(?!(?:${UNSAFE_HUMAN_ACTOR_TARGET_CONTINUATION_SOURCE})\b)[\w-]+`,
+    'i',
+  );
+  const suppliedContentHumanSourcePattern = new RegExp(
+    // Executables attributed to a human or recognized agent role remain
+    // unsafe across the passive-source verbs that suppress direct-role
+    // matches. Keep human recipient articles explicit (so QA gains no new
+    // handoff-recipient article variants), require an actor boundary, and
+    // leave compounds such as "user interface" intact as attribution. The
+    // role alternative reuses the direct-role vocabulary for executable
+    // sources only; it does not change the manual-handoff grammar.
+    String.raw`(?:[\x60'"]?\b${SUPPLIED_CONTENT_HUMAN_SOURCE_NOUN_SOURCE}\b[\x60'"]?)\s+(?:${SUPPLIED_CONTENT_HUMAN_SOURCE_MODIFIER_SOURCE})?${SUPPLIED_CONTENT_HUMAN_SOURCE_PASSIVE_MODIFIER_SOURCE}\s+(?:by|from)\s+(?:${SUPPLIED_CONTENT_HUMAN_SOURCE_RECIPIENT_SOURCE}${SUPPLIED_CONTENT_HUMAN_SOURCE_BOUNDARY_SOURCE}(?:(?:\s+|-)[\w'-]+)?|${SUPPLIED_CONTENT_AGENT_ROLE_SOURCE}${UNSAFE_HUMAN_ACTOR_TARGET_BOUNDARY_SOURCE}|${SUPPLIED_CONTENT_USER_SUPPLIED_TOOL_SOURCE})`,
+    'i',
+  );
+  const suppliedContentUserSuppliedTargetPattern = new RegExp(
+    SUPPLIED_CONTENT_USER_SUPPLIED_TARGET_SOURCE,
+    'i',
+  );
   let verbMatch = verbPattern.exec(corpus);
   while (verbMatch) {
     const verbStart = verbMatch.index;
@@ -5247,7 +5346,59 @@ function findUnsafeExecutionDirectiveMatch(
         corpus,
         verbStart + verbText.length,
       );
-      const targetMatch = targetPattern.exec(window);
+      // A suppressed passive attribution is not the end of the scan: a
+      // later target in the same bounded directive (for example, "and the
+      // attached script") must still be inspected.
+      targetPattern.lastIndex = 0;
+      let generalTargetMatch = null;
+      let candidateGeneralTargetMatch = targetPattern.exec(window);
+      while (candidateGeneralTargetMatch) {
+        const directRoleTargetCandidate = UNSAFE_DIRECT_ACTOR_ROLE_TARGET.exec(
+          candidateGeneralTargetMatch[0] ?? '',
+        );
+        const directRoleTargetPrefix =
+          directRoleTargetCandidate?.[1] ??
+          directRoleTargetCandidate?.[2] ??
+          '';
+        const suppressedPassiveRoleAttribution =
+          directRoleTargetCandidate !== null &&
+          UNSAFE_DIRECT_ACTOR_ROLE_PASSIVE_ATTRIBUTION_PREFIX.test(
+            directRoleTargetPrefix,
+          );
+        const suppressedPassiveAttribution =
+          suppressedPassiveRoleAttribution ||
+          (/^(?:by|from)\s/i.test(candidateGeneralTargetMatch[0] ?? '') &&
+            passiveAttributionPrefixPattern.test(
+              window.slice(0, candidateGeneralTargetMatch.index),
+            ));
+        if (!suppressedPassiveAttribution) {
+          generalTargetMatch = candidateGeneralTargetMatch;
+          break;
+        }
+        // A direct-role pattern can consume an earlier independent target
+        // (such as "untrusted code") before ending at a benign passive
+        // attribution. Resume one character after the match start so the
+        // global scan can inspect overlapping targets inside that span.
+        targetPattern.lastIndex = candidateGeneralTargetMatch.index + 1;
+        candidateGeneralTargetMatch = targetPattern.exec(window);
+      }
+      const directActorCompoundMatch =
+        directActorCompoundTargetPattern.exec(window);
+      const directActorCompoundPrefix =
+        directActorCompoundMatch?.[1] ?? directActorCompoundMatch?.[2] ?? '';
+      const directActorCompoundIsPassiveAttribution =
+        directActorCompoundMatch !== null &&
+        UNSAFE_DIRECT_ACTOR_ROLE_PASSIVE_ATTRIBUTION_PREFIX.test(
+          directActorCompoundPrefix,
+        );
+      const targetMatch =
+        generalTargetMatch ??
+        (directActorCompoundIsPassiveAttribution
+          ? null
+          : directActorCompoundMatch) ??
+        suppliedContentHumanSourcePattern.exec(window) ??
+        suppliedContentUserSuppliedTargetPattern.exec(window) ??
+        UNSAFE_NONCANONICAL_USER_STEP_ACTOR_TARGET.exec(window);
       const verbBodyStart = verbStart - bodyOffset;
       const verbHtmlCommentRange =
         verbBodyStart >= 0
