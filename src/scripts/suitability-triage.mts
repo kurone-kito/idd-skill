@@ -1115,7 +1115,9 @@ const SUPPLIED_CONTENT_HUMAN_SOURCE_PASSIVE_MODIFIER_SOURCE =
   UNSAFE_DIRECT_ACTOR_ROLE_PASSIVE_CHAIN_SOURCE;
 const SUPPLIED_CONTENT_HUMAN_SOURCE_RECIPIENT_SOURCE = String.raw`(?:(?:the\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person|QA|quality assurance)|a\s+(?:user|human|tester|reviewer|maintainer|developer|person|QA|quality assurance)|an\s+operator)`;
 const SUPPLIED_CONTENT_AGENT_ROLE_SOURCE = String.raw`(?:(?:the|a|an)\s+)?${UNSAFE_DIRECT_ACTOR_ROLE_RECIPIENT_SOURCE}`;
-const SUPPLIED_CONTENT_HUMAN_SOURCE_BOUNDARY_SOURCE = String.raw`(?![\w-](?!(?:-?(?:agent|assistant|bot))\b)|\s+(?!(?:${UNSAFE_HUMAN_ACTOR_TARGET_CONTINUATION_SOURCE}|agent|assistant|bot|contributor|named|called)\b)\w)`;
+const SUPPLIED_CONTENT_HUMAN_SOURCE_PROVENANCE_MODIFIER_SOURCE =
+  '(?:via|through|using)';
+const SUPPLIED_CONTENT_HUMAN_SOURCE_BOUNDARY_SOURCE = String.raw`(?![\w-](?!(?:-?(?:agent|assistant|bot))\b)|\s+(?!(?:${UNSAFE_HUMAN_ACTOR_TARGET_CONTINUATION_SOURCE}|${SUPPLIED_CONTENT_HUMAN_SOURCE_PROVENANCE_MODIFIER_SOURCE}|agent|assistant|bot|contributor|named|called)\b)\w)`;
 // #3073: "run this full command to validate the config" matches only
 // SUPPLIED_CONTENT_OBJECT_REFERENCE's ambiguous "this <filler> <noun>" shape
 // above -- the filler word here is a repository-scoping adjective, not an
