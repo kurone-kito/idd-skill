@@ -2237,7 +2237,7 @@ function resolveFormerChildMembership(input) {
       return next;
     }
     state = next;
-    if (parsed.mode === 'release') {
+    if (parsed.mode === 'release' && state.open?.latest.id === latest.id) {
       releaseMarker = latest;
     }
   }

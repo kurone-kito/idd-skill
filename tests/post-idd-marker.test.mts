@@ -36,6 +36,7 @@ import {
   parseArgs,
   parseIssueReference,
   readWatermarkRequiredCiAgreement,
+  reconcileFormerChildMemberships,
   runOperationLocalSnapshotWatermark,
   selectAuthoringOwnerOpeningMarkers,
   selectLatestAuthoringOwnerMarker,
@@ -8718,6 +8719,119 @@ test('authoring-owner promotes a child whose completed release is minimized as o
     } finally {
       stub.restore();
     }
+  }
+});
+
+test('authoring-owner ignores a losing child release after an outdated winning release (#4669)', () => {
+  const formerAnchor = 'o/r#44';
+  const set = 'set-raced-former-child';
+  const winningOwner = 'owner-winning-child';
+  const winningSession = 'session-winning-child';
+  const comment = (
+    id: number,
+    body: string,
+    second: number,
+    minimizedReason: string | null = null,
+  ) => {
+    const createdAt = `2026-10-24T10:00:0${second}Z`;
+    return {
+      id,
+      authorLogin: 'kurone-kito',
+      body,
+      createdAt,
+      updatedAt: createdAt,
+      lastEditedAt: null,
+      isMinimized: minimizedReason !== null,
+      minimizedReason,
+    };
+  };
+  const targetComments = [
+    comment(
+      101,
+      ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: OWNER_ID_ANCHOR_TARGET,
+        anchor: formerAnchor,
+        owner: winningOwner,
+        set,
+        session: winningSession,
+      }),
+      0,
+    ),
+    comment(
+      102,
+      ownerIdHistoryMarker({
+        mode: 'release',
+        target: OWNER_ID_ANCHOR_TARGET,
+        anchor: formerAnchor,
+        owner: winningOwner,
+        set,
+        session: winningSession,
+      }),
+      1,
+      'outdated',
+    ),
+    comment(
+      103,
+      ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: OWNER_ID_ANCHOR_TARGET,
+        anchor: formerAnchor,
+        owner: 'owner-losing-child',
+        set,
+        session: 'session-losing-child',
+      }),
+      2,
+    ),
+    comment(
+      104,
+      ownerIdHistoryMarker({
+        mode: 'release',
+        target: OWNER_ID_ANCHOR_TARGET,
+        anchor: formerAnchor,
+        owner: 'owner-losing-child',
+        set,
+        session: 'session-losing-child',
+      }),
+      3,
+    ),
+  ];
+  const formerAnchorComments = [
+    'acquire',
+    'release',
+    'release-guard',
+    'release-complete',
+  ].map((mode, index) => ({
+    id: 201 + index,
+    body: ownerIdHistoryMarker({
+      mode,
+      target: formerAnchor,
+      anchor: formerAnchor,
+      owner: 'owner-former-anchor',
+      set,
+      session: winningSession,
+    }),
+    createdAt: `2026-10-24T10:00:0${index + 2}Z`,
+  }));
+  const stub = withOwnerIdStub({
+    commentsByIssueNumber: { 44: formerAnchorComments },
+  });
+  try {
+    const result = reconcileFormerChildMemberships({
+      comments: targetComments,
+      historyTargetRef: OWNER_ID_ANCHOR_TARGET,
+      markerPrefix: 'idd-skill',
+      trusted: ['kurone-kito'],
+    });
+    assert.ok('problem' in result);
+    if ('problem' in result) {
+      assert.match(
+        result.problem,
+        /final release marker minimized as outdated/,
+      );
+    }
+  } finally {
+    stub.restore();
   }
 });
 
