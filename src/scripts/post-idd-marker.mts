@@ -2030,10 +2030,12 @@ release-guard, release-complete or resume also reads the target's comment
 log for the identity check (#3899). Acquire and bootstrap read the declared
 anchor's paginated owner log before dry-run output or POST: self-anchored posts
 may start only with a fresh set and no open generation; child posts must match
-the anchor's open, non-releasing set and session. A closed set ID, an open or
-releasing generation, or unreadable history that cannot be replayed
-conclusively refuses the post. An
-empty self-anchor log and a completed history with a fresh set are valid.
+the anchor's open, non-releasing set and session. When a self-anchor log shows
+prior child memberships, each former anchor's owner log is also read and must
+show the matching set/session release-complete after the child's release. A
+closed set ID, an open or releasing generation, or unreadable history that
+cannot be replayed conclusively refuses the post. An empty self-anchor log
+and a completed history with a fresh set are valid.
 Concurrent first openers still resolve by comment order.
 --marker-target / --marker-owner map to these
 markers' own \`target=\` / \`owner=\` fields -- named with a \`marker-\`
@@ -2237,9 +2239,18 @@ export interface AnchorOwnerGeneration {
   latest: AnchorOwnerLatestMarker;
 }
 
+/** A verified generation that ended with its trusted release-complete marker. */
+export interface ClosedAnchorOwnerGeneration {
+  owner: string;
+  set: string;
+  session: string;
+  releaseComplete: AnchorOwnerLatestMarker;
+}
+
 interface AnchorOwnerReplayState {
   open: AnchorOwnerGeneration | null;
   closedSets: ReadonlySet<string>;
+  closedGenerations: readonly ClosedAnchorOwnerGeneration[];
   losers: ReadonlySet<string>;
 }
 
@@ -2247,6 +2258,7 @@ export type AnchorOwnerReplayResult =
   | {
       generation: AnchorOwnerGeneration | null;
       closedSets: ReadonlySet<string>;
+      closedGenerations: readonly ClosedAnchorOwnerGeneration[];
     }
   | { problem: string };
 
@@ -2271,7 +2283,7 @@ function advanceAnchorOwnerGeneration(
   parsed: ParsedAuthoringOwnerMarker,
   latest: AnchorOwnerLatestMarker,
 ): AnchorOwnerReplayState | { problem: string } {
-  const { open, closedSets, losers } = state;
+  const { open, closedSets, closedGenerations, losers } = state;
   const malformed = ownerMarkerReplayFieldProblem(parsed);
   if (malformed !== null) {
     return {
@@ -2299,6 +2311,7 @@ function advanceAnchorOwnerGeneration(
         return {
           open,
           closedSets,
+          closedGenerations,
           losers: new Set([...losers, parsed.owner]),
         };
       }
@@ -2316,6 +2329,7 @@ function advanceAnchorOwnerGeneration(
           latest,
         },
         closedSets,
+        closedGenerations,
         losers,
       };
     case 'resume':
@@ -2335,6 +2349,7 @@ function advanceAnchorOwnerGeneration(
           latest,
         },
         closedSets,
+        closedGenerations,
         losers,
       };
     case 'heartbeat':
@@ -2366,6 +2381,15 @@ function advanceAnchorOwnerGeneration(
         return {
           open: null,
           closedSets: new Set([...closedSets, open.set]),
+          closedGenerations: [
+            ...closedGenerations,
+            {
+              owner: open.owner,
+              set: open.set,
+              session: open.session,
+              releaseComplete: latest,
+            },
+          ],
           losers: new Set(),
         };
       }
@@ -2378,6 +2402,7 @@ function advanceAnchorOwnerGeneration(
           latest,
         },
         closedSets,
+        closedGenerations,
         losers,
       };
     default:
@@ -2391,9 +2416,10 @@ function advanceAnchorOwnerGeneration(
  * Replay owner markers from an anchor's full comment log. A non-empty trusted
  * actor list filters authors; an empty list applies no author filter, matching
  * the existing owner-marker identity contract. A valid empty or completed log
- * returns `generation: null` and its closed set IDs; an open generation retains
- * its `releasing` state. Malformed or incomplete evidence fails closed. The
- * first valid opener in comment order wins a concurrent acquisition race.
+ * returns `generation: null` and its closed set IDs plus closure identities;
+ * an open generation retains its `releasing` state. Malformed or incomplete
+ * evidence fails closed. The first valid opener in comment order wins a
+ * concurrent acquisition race.
  */
 export function resolveAnchorOwnerGeneration(input: {
   comments: readonly AuthoringOwnerProvenanceComment[];
@@ -2439,6 +2465,7 @@ export function resolveAnchorOwnerGeneration(input: {
   let state: AnchorOwnerReplayState = {
     open: null,
     closedSets: new Set(),
+    closedGenerations: [],
     losers: new Set(),
   };
   for (const { comment } of shaped) {
@@ -2473,7 +2500,262 @@ export function resolveAnchorOwnerGeneration(input: {
       problem: `the latest owner marker of ${input.anchorRef}, comment ${state.open.latest.id}, is minimized as outdated, so it cannot prove an open generation`,
     };
   }
-  return { generation: state.open, closedSets: state.closedSets };
+  return {
+    generation: state.open,
+    closedSets: state.closedSets,
+    closedGenerations: state.closedGenerations,
+  };
+}
+
+interface FormerChildMembership {
+  anchorRef: string;
+  set: string;
+  comments: AuthoringOwnerProvenanceComment[];
+}
+
+/**
+ * Replay one former child's markers for an anchor/set pair. A completed child
+ * membership must end with its own trusted `release`; only the former anchor's
+ * matching `release-complete` can prove that the set then closed.
+ */
+function resolveFormerChildMembership(input: {
+  membership: FormerChildMembership;
+  targetRef: string;
+  markerPrefix: string;
+  trusted: readonly string[];
+}): { generation: AnchorOwnerGeneration } | { problem: string } {
+  const trustedSet = new Set(input.trusted.map((login) => login.toLowerCase()));
+  const shaped: {
+    comment: AuthoringOwnerProvenanceComment;
+    parsed: ParsedAuthoringOwnerMarker;
+    time: number;
+  }[] = [];
+  for (const comment of input.membership.comments) {
+    if (
+      (trustedSet.size > 0 &&
+        !trustedSet.has(comment.authorLogin.trim().toLowerCase())) ||
+      !looksLikeOwnerMarker(comment.body, input.markerPrefix)
+    ) {
+      continue;
+    }
+    const edited = inspectLastEditedAt(comment);
+    if (edited !== null) {
+      return { problem: edited };
+    }
+    if (
+      typeof comment.isMinimized !== 'boolean' ||
+      (comment.isMinimized &&
+        (typeof comment.minimizedReason !== 'string' ||
+          comment.minimizedReason.trim() === ''))
+    ) {
+      return {
+        problem: `owner marker ${comment.id} has no readable minimization state`,
+      };
+    }
+    const time = Date.parse(comment.createdAt);
+    if (!Number.isFinite(time)) {
+      return {
+        problem: `owner marker ${comment.id} has a creation time that cannot be read`,
+      };
+    }
+    const parsed = parseAuthoringOwnerComment(comment.body, input.markerPrefix);
+    if (parsed === null) {
+      return { problem: `owner marker ${comment.id} does not parse` };
+    }
+    if (
+      !sameIssueRef(parsed.target, input.targetRef) ||
+      !sameIssueRef(parsed.anchor, input.membership.anchorRef) ||
+      parsed.set !== input.membership.set
+    ) {
+      return {
+        problem: `owner marker ${comment.id} does not match former child membership ${input.membership.anchorRef}/${input.membership.set}`,
+      };
+    }
+    if (parsed.mode === 'release-guard' || parsed.mode === 'release-complete') {
+      return {
+        problem: `owner marker ${comment.id} (mode=${parsed.mode}) is anchor-only and cannot close a child membership`,
+      };
+    }
+    shaped.push({ comment, parsed, time });
+  }
+  shaped.sort((a, b) => a.time - b.time || a.comment.id - b.comment.id);
+
+  let state: AnchorOwnerReplayState = {
+    open: null,
+    closedSets: new Set(),
+    closedGenerations: [],
+    losers: new Set(),
+  };
+  for (const { comment, parsed } of shaped) {
+    const next = advanceAnchorOwnerGeneration(state, parsed, {
+      id: comment.id,
+      mode: parsed.mode,
+      owner: parsed.owner,
+      session: parsed.session,
+      createdAt: comment.createdAt,
+      bodySha256: parsed.bodySha256,
+      outdated: isOutdatedMinimized(comment),
+    });
+    if ('problem' in next) {
+      return next;
+    }
+    state = next;
+  }
+  if (
+    state.open === null ||
+    !state.open.releasing ||
+    state.open.latest.mode !== 'release'
+  ) {
+    return {
+      problem: `former child membership ${input.membership.anchorRef}/${input.membership.set} has no final trusted release marker`,
+    };
+  }
+  return { generation: state.open };
+}
+
+/**
+ * A target can later become its own set anchor after being a completed child.
+ * Reconcile each old child membership against the exact former anchor/set/
+ * session completion before removing those foreign-anchor markers from the
+ * self-anchor replay. Any incomplete target or former-anchor history fails
+ * closed.
+ */
+function reconcileFormerChildMemberships(input: {
+  comments: readonly AuthoringOwnerProvenanceComment[];
+  targetRef: string;
+  markerPrefix: string;
+  trusted: readonly string[];
+}): { comments: AuthoringOwnerProvenanceComment[] } | { problem: string } {
+  const trustedSet = new Set(input.trusted.map((login) => login.toLowerCase()));
+  const foreignMemberships = new Map<string, FormerChildMembership>();
+  const foreignCommentIds = new Set<number>();
+  for (const comment of input.comments) {
+    if (
+      (trustedSet.size > 0 &&
+        !trustedSet.has(comment.authorLogin.trim().toLowerCase())) ||
+      !looksLikeOwnerMarker(comment.body, input.markerPrefix)
+    ) {
+      continue;
+    }
+    const edited = inspectLastEditedAt(comment);
+    if (edited !== null) {
+      return { problem: edited };
+    }
+    if (
+      typeof comment.isMinimized !== 'boolean' ||
+      (comment.isMinimized &&
+        (typeof comment.minimizedReason !== 'string' ||
+          comment.minimizedReason.trim() === ''))
+    ) {
+      return {
+        problem: `owner marker ${comment.id} has no readable minimization state`,
+      };
+    }
+    if (!Number.isFinite(Date.parse(comment.createdAt))) {
+      return {
+        problem: `owner marker ${comment.id} has a creation time that cannot be read`,
+      };
+    }
+    const parsed = parseAuthoringOwnerComment(comment.body, input.markerPrefix);
+    if (parsed === null) {
+      return { problem: `owner marker ${comment.id} does not parse` };
+    }
+    if (!sameIssueRef(parsed.target, input.targetRef)) {
+      return {
+        problem: `owner marker ${comment.id} names target ${parsed.target}, not ${input.targetRef}`,
+      };
+    }
+    if (sameIssueRef(parsed.anchor, input.targetRef)) {
+      continue;
+    }
+    if (parseIssueReference(parsed.anchor) === null) {
+      return {
+        problem: `owner marker ${comment.id} names an unreadable former anchor ${parsed.anchor}`,
+      };
+    }
+    const key = `${parsed.anchor.toLowerCase()}\u0000${parsed.set}`;
+    const membership = foreignMemberships.get(key) ?? {
+      anchorRef: parsed.anchor,
+      set: parsed.set,
+      comments: [],
+    };
+    membership.comments.push(comment);
+    foreignMemberships.set(key, membership);
+    foreignCommentIds.add(comment.id);
+  }
+
+  if (foreignMemberships.size === 0) {
+    return { comments: [...input.comments] };
+  }
+
+  const anchorReplays = new Map<string, AnchorOwnerReplayResult>();
+  for (const membership of foreignMemberships.values()) {
+    const childReplay = resolveFormerChildMembership({
+      membership,
+      targetRef: input.targetRef,
+      markerPrefix: input.markerPrefix,
+      trusted: input.trusted,
+    });
+    if ('problem' in childReplay) {
+      return {
+        problem: `former child membership ${membership.anchorRef}/${membership.set} cannot be replayed: ${childReplay.problem}`,
+      };
+    }
+
+    const anchorKey = membership.anchorRef.toLowerCase();
+    let anchorReplay = anchorReplays.get(anchorKey);
+    if (anchorReplay === undefined) {
+      const anchor = parseIssueReference(membership.anchorRef);
+      if (anchor === null) {
+        return {
+          problem: `former child membership names an unreadable anchor ${membership.anchorRef}`,
+        };
+      }
+      let anchorComments: AuthoringOwnerProvenanceComment[];
+      try {
+        anchorComments = fetchProvenanceCommentsGraphql(
+          anchor.owner,
+          anchor.repo,
+          anchor.number,
+        );
+      } catch (error) {
+        return {
+          problem: `former anchor ${membership.anchorRef} owner history cannot be read: ${(error as Error).message}`,
+        };
+      }
+      anchorReplay = resolveAnchorOwnerGeneration({
+        comments: anchorComments,
+        anchorRef: membership.anchorRef,
+        markerPrefix: input.markerPrefix,
+        trusted: input.trusted,
+      });
+      anchorReplays.set(anchorKey, anchorReplay);
+    }
+    if ('problem' in anchorReplay) {
+      return {
+        problem: `former anchor ${membership.anchorRef} owner history cannot be replayed: ${anchorReplay.problem}`,
+      };
+    }
+
+    const childReleaseAt = Date.parse(childReplay.generation.latest.createdAt);
+    const completion = anchorReplay.closedGenerations.find(
+      (closed) =>
+        closed.set === membership.set &&
+        closed.session === childReplay.generation.latest.session &&
+        Date.parse(closed.releaseComplete.createdAt) >= childReleaseAt,
+    );
+    if (completion === undefined) {
+      return {
+        problem: `former child membership ${membership.anchorRef}/${membership.set}/${childReplay.generation.latest.session} has no matching trusted release-complete from the former anchor's current owner`,
+      };
+    }
+  }
+
+  return {
+    comments: input.comments.filter(
+      (comment) => !foreignCommentIds.has(comment.id),
+    ),
+  };
 }
 
 /**
@@ -2543,8 +2825,23 @@ function checkAuthoringOwnerPostIdentity(input: {
   });
   const trustedLogins = new Set(actors);
   if (acquisitionMode) {
+    let ownerHistoryComments = comments;
+    if (sameIssueRef(post.target, post.anchor)) {
+      const reconciliation = reconcileFormerChildMemberships({
+        comments,
+        targetRef: post.target,
+        markerPrefix: input.markerPrefix,
+        trusted: actors,
+      });
+      if ('problem' in reconciliation) {
+        const refusal = `refusing to post authoring-owner marker (mode=${post.mode}) on ${post.target}: former child membership history cannot be reconciled: ${reconciliation.problem}`;
+        process.stderr.write(`${refusal}\n`);
+        return { exitCode: 1, kind: 'gate', message: refusal };
+      }
+      ownerHistoryComments = reconciliation.comments;
+    }
     const replay = resolveAnchorOwnerGeneration({
-      comments,
+      comments: ownerHistoryComments,
       anchorRef: post.anchor,
       markerPrefix: input.markerPrefix,
       trusted: actors,

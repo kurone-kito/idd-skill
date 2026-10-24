@@ -1035,8 +1035,11 @@ in this preamble, since the fallback differs per helper.
   or after a completed generation with a fresh set ID; a closed set ID or
   any already-open generation, including a release in progress, refuses.
   A child must match its anchor's open, non-releasing set and session; owner
-  tokens are per-target and are not compared across the set. Trusted marker
-  history is replayed in `(createdAt, id)` order; malformed, edited,
+  tokens are per-target and are not compared across the set. If the self-anchor
+  log contains former child memberships, each former anchor's owner log is also
+  read and must prove the matching set and session reached `release-complete`
+  after the child's release. Trusted marker history is replayed in
+  `(createdAt, id)` order; malformed, edited,
   incomplete history, or one that cannot be replayed conclusively, refuses;
   an untrusted marker cannot close a set. If concurrent first openers both
   read before either POST, replay still gives the first valid opener the

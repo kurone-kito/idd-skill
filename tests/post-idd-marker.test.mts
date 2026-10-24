@@ -7564,17 +7564,33 @@ function ownerIdCommentPage(comments: OwnerIdComment[]): string {
 
 function withOwnerIdStub(options: {
   comments?: OwnerIdComment[];
+  commentsByIssueNumber?: Record<number, OwnerIdComment[]>;
   graphqlReply?: { stdout: string } | { stderr: string };
+  graphqlFailureIssueNumber?: number;
 }): { postsFile: string; readsFile: string; restore: () => void } {
   const tempRoot = mkdtempSync(join(tmpdir(), 'idd-post-idd-marker-identity-'));
   const postsFile = join(tempRoot, 'posts.txt');
   const readsFile = join(tempRoot, 'reads.txt');
   const page = ownerIdCommentPage(options.comments ?? []);
+  const pagesByIssueNumber = Object.fromEntries(
+    Object.entries(options.commentsByIssueNumber ?? {}).map(
+      ([number, comments]) => [number, ownerIdCommentPage(comments)],
+    ),
+  );
   const reply = options.graphqlReply ?? { stdout: page };
   const replyCode =
     'stdout' in reply
       ? `out(${JSON.stringify(reply.stdout)});`
       : `fail(${JSON.stringify(reply.stderr)});`;
+  const dynamicFailureCode =
+    options.graphqlFailureIssueNumber === undefined
+      ? ''
+      : `if (number === ${JSON.stringify(String(options.graphqlFailureIssueNumber))}) fail('gh: Service Unavailable (HTTP 503)');`;
+  const dynamicReplyCode = `const numberArg = args.find((arg) => arg.startsWith('number='));
+const number = numberArg ? numberArg.slice('number='.length) : '';
+const pages = ${JSON.stringify(pagesByIssueNumber)};
+${dynamicFailureCode}
+out(pages[number] ?? ${JSON.stringify(page)});`;
   const restore = stubExecutable(
     'gh',
     `const fs = require('node:fs');
@@ -7583,7 +7599,7 @@ function out(s) { fs.writeSync(1, s); process.exit(0); }
 function fail(s) { fs.writeSync(2, s); process.exit(1); }
 if (args.includes('graphql')) {
   fs.appendFileSync(${JSON.stringify(readsFile)}, 'graphql\\n');
-  ${replyCode}
+  ${options.graphqlReply === undefined ? dynamicReplyCode : replyCode}
 }
 if (args[0] === 'api' && args[1] === 'repos/o/r/issues/42') {
   out(JSON.stringify({ number: 42, body: ${JSON.stringify(OWNER_ID_LIVE_BODY)} }));
@@ -7687,6 +7703,30 @@ function ownerIdAnchorMarker(
       anchor: OWNER_ID_ANCHOR_TARGET,
       'marker-owner': owner,
       set: OWNER_ID_ANCHOR_SET,
+      session: OWNER_ID_ANCHOR_SESSION,
+      supersedes,
+      ...overrides,
+    }),
+  );
+}
+
+const OWNER_ID_CHILD_SET = OWNER_ID_ANCHOR_SET;
+const OWNER_ID_CHILD_OWNER = 'owner-child-42';
+
+function ownerIdChildMarker(
+  mode: string,
+  overrides: Record<string, string> = {},
+): string {
+  const supersedes =
+    overrides.supersedes ??
+    (mode === 'acquire' || mode === 'bootstrap'
+      ? 'none'
+      : OWNER_ID_CHILD_OWNER);
+  return ownerIdBody(
+    ownerIdFlags(mode, {
+      anchor: OWNER_ID_ANCHOR_TARGET,
+      'marker-owner': OWNER_ID_CHILD_OWNER,
+      set: OWNER_ID_CHILD_SET,
       session: OWNER_ID_ANCHOR_SESSION,
       supersedes,
       ...overrides,
@@ -8243,6 +8283,148 @@ test('authoring-owner acquire may start a fresh self-anchored set after release-
     );
   } finally {
     stub.restore();
+  }
+});
+
+test('authoring-owner acquire lets a completed child become a fresh self-anchor (#4669)', () => {
+  const targetComments = [
+    { id: 101, body: ownerIdChildMarker('acquire') },
+    { id: 102, body: ownerIdChildMarker('release') },
+  ];
+  const formerAnchorComments = [
+    { id: 201, body: ownerIdAnchorMarker('acquire') },
+    { id: 202, body: ownerIdAnchorMarker('release') },
+    { id: 203, body: ownerIdAnchorMarker('release-guard') },
+    { id: 204, body: ownerIdAnchorMarker('release-complete') },
+  ];
+
+  for (const apply of [false, true]) {
+    const stub = withOwnerIdStub({
+      comments: targetComments,
+      commentsByIssueNumber: { 43: formerAnchorComments },
+    });
+    try {
+      const run = runOwnerIdPost(
+        ownerIdFlags('acquire', {
+          'marker-owner': 'owner-next',
+          set: 'set-next',
+        }),
+        { apply },
+      );
+      assert.equal(run.status, 0, run.stderr);
+      assert.equal(
+        readOwnerIdLines(stub.readsFile).length,
+        2,
+        `apply=${apply}`,
+      );
+      const posted = readOwnerIdLines(stub.postsFile).map((line) =>
+        JSON.parse(line),
+      );
+      assert.equal(posted.length, apply ? 1 : 0, `apply=${apply}`);
+      if (apply) {
+        assert.match(
+          posted[0].body,
+          /mode=acquire; owner=owner-next; set=set-next/,
+        );
+      }
+    } finally {
+      stub.restore();
+    }
+  }
+});
+
+test('authoring-owner acquire refuses an unreconciled former-child generation (#4669)', () => {
+  const scenarios: {
+    name: string;
+    targetComments: OwnerIdComment[];
+    formerAnchorComments: OwnerIdComment[];
+  }[] = [
+    {
+      name: 'former anchor has no release-complete',
+      targetComments: [
+        { id: 101, body: ownerIdChildMarker('acquire') },
+        { id: 102, body: ownerIdChildMarker('release') },
+      ],
+      formerAnchorComments: [
+        { id: 201, body: ownerIdAnchorMarker('acquire') },
+        { id: 202, body: ownerIdAnchorMarker('release') },
+      ],
+    },
+    {
+      name: 'release session does not match the former anchor completion',
+      targetComments: [
+        { id: 101, body: ownerIdChildMarker('acquire') },
+        {
+          id: 102,
+          body: ownerIdChildMarker('release', { session: 'session-other' }),
+        },
+      ],
+      formerAnchorComments: [
+        { id: 201, body: ownerIdAnchorMarker('acquire') },
+        { id: 202, body: ownerIdAnchorMarker('release') },
+        { id: 203, body: ownerIdAnchorMarker('release-guard') },
+        { id: 204, body: ownerIdAnchorMarker('release-complete') },
+      ],
+    },
+  ];
+
+  for (const scenario of scenarios) {
+    for (const apply of [false, true]) {
+      const stub = withOwnerIdStub({
+        comments: scenario.targetComments,
+        commentsByIssueNumber: { 43: scenario.formerAnchorComments },
+      });
+      try {
+        const run = runOwnerIdPost(
+          ownerIdFlags('acquire', {
+            'marker-owner': 'owner-next',
+            set: 'set-next',
+          }),
+          { apply },
+        );
+        assert.equal(run.status, 1, `${scenario.name}, apply=${apply}`);
+        assert.equal(run.kind, 'gate', `${scenario.name}, apply=${apply}`);
+        assert.match(run.stderr, /former child membership/);
+        assert.deepEqual(readOwnerIdLines(stub.postsFile), [], scenario.name);
+      } finally {
+        stub.restore();
+      }
+    }
+  }
+});
+
+test('authoring-owner acquire fails closed when a former anchor log cannot be read (#4669)', () => {
+  for (const apply of [false, true]) {
+    const stub = withOwnerIdStub({
+      comments: [
+        { id: 101, body: ownerIdChildMarker('acquire') },
+        { id: 102, body: ownerIdChildMarker('release') },
+      ],
+      graphqlFailureIssueNumber: 43,
+    });
+    try {
+      const run = runOwnerIdPost(
+        ownerIdFlags('acquire', {
+          'marker-owner': 'owner-next',
+          set: 'set-next',
+        }),
+        { apply },
+      );
+      assert.equal(run.status, 1, `apply=${apply}`);
+      assert.equal(run.kind, 'gate', `apply=${apply}`);
+      assert.match(
+        run.stderr,
+        /former anchor o\/r#43 owner history cannot be read/,
+      );
+      assert.equal(
+        readOwnerIdLines(stub.readsFile).length,
+        2,
+        `apply=${apply}`,
+      );
+      assert.deepEqual(readOwnerIdLines(stub.postsFile), []);
+    } finally {
+      stub.restore();
+    }
   }
 });
 
@@ -9090,7 +9272,11 @@ test('post-idd-marker --help describes the authoring-owner identity check (#3910
   );
   assert.match(
     help,
-    /unreadable history that cannot be replayed\s+conclusively refuses the post/,
+    /unreadable history that\s+cannot be replayed\s+conclusively refuses the post/,
+  );
+  assert.match(
+    help,
+    /former anchor's owner log is also read and must\s+show the matching set\/session release-complete/,
   );
 });
 

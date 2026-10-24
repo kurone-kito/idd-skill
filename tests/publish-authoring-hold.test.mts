@@ -2771,7 +2771,11 @@ test('shared anchor replay distinguishes empty, releasing, and closed histories'
     markerPrefix: 'idd-skill',
     trusted: ['kurone-kito'],
   });
-  assert.deepEqual(empty, { generation: null, closedSets: new Set() });
+  assert.deepEqual(empty, {
+    generation: null,
+    closedSets: new Set(),
+    closedGenerations: [],
+  });
 
   const releasing = resolveAnchorOwnerGeneration({
     comments: [
@@ -2799,6 +2803,25 @@ test('shared anchor replay distinguishes empty, releasing, and closed histories'
   assert.ok(!('problem' in completed));
   assert.equal(completed.generation, null);
   assert.deepEqual(completed.closedSets, new Set([ANCHOR_SET]));
+  assert.deepEqual(
+    completed.closedGenerations.map((closed) => ({
+      owner: closed.owner,
+      set: closed.set,
+      session: closed.session,
+      releaseComplete: {
+        id: closed.releaseComplete.id,
+        mode: closed.releaseComplete.mode,
+      },
+    })),
+    [
+      {
+        owner: ANCHOR_OWNER,
+        set: ANCHOR_SET,
+        session: ANCHOR_SESSION,
+        releaseComplete: { id: 3, mode: 'release-complete' },
+      },
+    ],
+  );
 
   const untrustedClose = resolveAnchorOwnerGeneration({
     comments: [
