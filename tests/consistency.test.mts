@@ -3067,3 +3067,107 @@ test('docs idd-workflow fan-out variant carries a delegation brief template for 
     }
   }
 });
+
+test('fan-out scratchpad preflight provisions and recovers one session root (#4685)', () => {
+  const workflowCopies = [
+    'idd-template/docs/idd-workflow.md',
+    'docs/idd-workflow.md',
+  ];
+  const orchestratorCopies = [
+    'idd-template/.github/instructions/idd-orchestrator.instructions.md',
+    '.github/instructions/idd-orchestrator.instructions.md',
+  ];
+  const routingCases = [
+    'The harness supplies an existing valid root and there is no prior record',
+    'harness context identifies a first entry before claims or dispatch',
+    'The exact record matches this session and repository, and its root is valid',
+    'Claims already exist, but live evidence establishes that no worker was dispatched',
+    'The fallback directory already exists without a valid record',
+    'A record is unreadable, invalid, linked unsafely, for another session or repository',
+    'Worker launch or prior-worker state is uncertain',
+    'Allocation succeeded but the durable record cannot be verified',
+    'Stable session identity or a verified writable root cannot be resolved',
+    'A worker receives a missing parent path',
+  ];
+
+  for (const path of workflowCopies) {
+    const text = readText(path);
+    const start = text.indexOf('#### Session scratchpad lifecycle\n');
+    const end = text.indexOf('\nRunning this variant safely requires:', start);
+    assert.ok(
+      start >= 0 && end > start,
+      `${path}: lifecycle section not found`,
+    );
+    const lifecycle = normalizeWhitespace(text.slice(start, end));
+    for (const required of [
+      'stable session identifier supplied by the current harness context',
+      'path-safe single component',
+      'name different roots, treat that as a contradiction and hold',
+      'actual harness context',
+      'live worker and artifact evidence',
+      '<state-base>/idd-skill/orchestrator-sessions/records/<session-id>.json',
+      '<state-base>/idd-skill/orchestrator-sessions/<session-id>/',
+      'canonical repository root',
+      'canonical git common directory',
+      'canonical state base, record directory, and scratchpad root all lie',
+      'Reject symlink components along each managed path',
+      'directory owned by the current user with private permissions',
+      'Create each parent-owned directory exclusively',
+      'Create the record exclusively too',
+      'current-user-only access',
+      'Never overwrite a record',
+      'adds no helper, policy key, or automatic deletion',
+      'keep the allocated directory and any known path',
+      'resume those claims without minting a claim or nonce',
+      'hold for reconciliation',
+    ]) {
+      assert.ok(
+        lifecycle.includes(required),
+        `${path}: lifecycle must include ${required}`,
+      );
+    }
+    for (const routingCase of routingCases) {
+      assert.ok(
+        lifecycle.includes(routingCase),
+        `${path}: missing scratchpad route ${routingCase}`,
+      );
+    }
+
+    const scratchpad = text.slice(
+      text.indexOf('**Scratchpad.**'),
+      text.indexOf('**Critique allowance.**'),
+    );
+    assert.match(scratchpad, /parent path already exists/);
+    assert.match(
+      scratchpad,
+      /When the parent path is missing,\s+create nothing/,
+    );
+    assert.match(scratchpad, /never\s+use mkdir -p/);
+    assert.match(
+      text,
+      /issue-numbered subdirectory of the resolved session\s+scratchpad root/,
+    );
+    assert.match(text, /directly in the resolved session scratchpad root/);
+    assert.match(text, /the verified root from the session\s+record/);
+    assert.doesNotMatch(
+      text,
+      /copy the scratchpad path that your harness reports/,
+    );
+  }
+
+  for (const path of orchestratorCopies) {
+    const text = normalizeWhitespace(readText(path));
+    assert.match(
+      text,
+      /Run this preflight on every fan-out entry before Discover, a fresh A5 claim, restart recovery, refill, or worker dispatch/,
+    );
+    assert.match(text, /actual current harness context/);
+    assert.match(text, /complete live worker and artifact evidence/);
+    assert.match(text, /do not repeat A5 or mint another claim or nonce/);
+    assert.match(
+      text,
+      /If prior dispatch or ownership is uncertain, reconcile/,
+    );
+    assert.match(text, /workers create nothing and never use `mkdir -p`/);
+  }
+});

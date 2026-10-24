@@ -26,12 +26,59 @@ Activate fan-out only when all conditions hold:
 Otherwise, continue with idd-discover.instructions.md unchanged.
 The cap is per orchestrator session, not per host.
 
-## 2. Roster
+## 2. Session scratchpad preflight and roster
+
+### Session scratchpad preflight
+
+Run this preflight on every fan-out entry before Discover, a fresh A5 claim,
+restart recovery, refill, or worker dispatch. Do not proceed until the parent
+has resolved and verified the session scratchpad root and its durable record.
+Follow the [session scratchpad lifecycle](../../docs/idd-workflow.md#session-scratchpad-lifecycle)
+for the exact paths, safe creation procedure, and routing table.
+
+Read the stable session id and any scratchpad root from the actual current
+harness context. Do not infer either from the issue, branch, worktree, worker
+agent id, current directory, or an absent path. Require the session id to be a
+non-empty, path-safe single component; reject separators and `.` or `..`. Bind
+the record to that exact session id, repository slug, canonical repository
+root, and canonical git
+common directory. Discover the record by session id under the per-user IDD
+state base, outside the scratchpad root, then verify all identity fields and
+the root before reuse. A missing, invalid, unsafe, or contradictory record or
+root is a hold; preserve it and do not allocate a replacement. A current
+harness-reported root that differs from an existing record is contradictory.
+The canonical state base, record directory, and scratchpad root must all be
+outside every worktree, with no symlink components. Reuse existing managed
+directories only when they are owned by the current user and have private
+permissions; otherwise hold without changing them.
+
+With no record, verify a valid harness-provided root and record it exclusively.
+If the harness provides no root, allocate the private fallback root only when
+the current harness context and complete live worker and artifact evidence
+establish a first entry with no prior dispatch. Exclusive directory and record
+creation must complete and read back successfully before any worker starts. If
+allocation succeeds but the record cannot be verified, keep the directory and
+known path, start no worker, and hold for reconciliation. Missing stable session
+identity or a verified writable root is a hold with that exact prerequisite.
+
+For an already-claimed session with no worker dispatch, first revalidate every
+existing claim, winning nonce, worktree lock, and generated-token record. Use
+the complete harness worker listing and any existing briefs and reports to
+prove no worker started. Only then bootstrap the scratchpad and resume those
+claims under the normal hold-resumption and delegation rules; do not repeat A5
+or mint another claim or nonce. If prior dispatch or ownership is uncertain,
+reconcile the live worker list and artifacts and hold while unresolved. The
+worker-side missing-parent guard still applies: workers create nothing and
+never use `mkdir -p` when their parent path is absent.
+
+### Roster
 
 One entry per worker: issue number, claim ID, branch, worker handle, report
 draft path, and state (`running`, `reporting`, `disposed`, `stalled`).
 
 Lost on restart: see [recovery](../../docs/idd-workflow.md#orchestrator-restart).
+Derive each issue directory and report-draft path from the verified root; the
+report draft is directly under that root with its issue-number prefix.
 
 ## 3. Dispatch
 

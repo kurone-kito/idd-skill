@@ -1136,6 +1136,90 @@ The orchestrator's end-of-run report is defined under
 worker's own final report carries for each way a run can end is listed under
 [Worker report outcomes](#worker-report-outcomes).
 
+#### Session scratchpad lifecycle
+
+The orchestrator owns one scratchpad root for the full runtime session. Resolve
+and record it before Discover starts, before any fresh A5 claim, and before any
+worker dispatch. On restart, resolve the same root before rebuilding the roster
+or refilling. A worker only receives paths under the root; it never provisions
+the session root. This parent preflight closes the gap observed on issues
+`#4668` and `#4675`: no harness path had ever been allocated, so the missing
+value was not an operator setting to recover.
+
+Use the stable session identifier supplied by the current harness context, and
+the live harness worker listing, where available. Do not derive an identity or
+root from the issue, branch, worktree, worker agent id, current directory, or a
+path that is absent. Require the supplied session id to be a non-empty,
+path-safe single component; reject separators and `.` or `..`. Bind the record
+to the exact session id, repository slug,
+canonical repository root, and canonical git common directory. Resolve the
+per-user state base the same way as `resolveStateBase` in
+`src/scripts/idd-worker-report.mts`: on POSIX, use an absolute
+`XDG_STATE_HOME`, otherwise `~/.local/state`; on Windows, use an absolute
+`LOCALAPPDATA`, otherwise `%USERPROFILE%/AppData/Local`.
+
+Keep the discovery record outside the scratchpad root, so a missing or
+unavailable scratchpad does not hide its own recovery record:
+
+```text
+<state-base>/idd-skill/orchestrator-sessions/records/<session-id>.json
+<state-base>/idd-skill/orchestrator-sessions/<session-id>/
+```
+
+Verify the canonical state base, record directory, and scratchpad root all lie
+outside every worktree. Reject symlink components along each managed path.
+Reuse an existing namespace only when it is a directory owned by the current
+user with private permissions; hold on a broad or conflicting namespace and do
+not change its permissions.
+
+The JSON record has `schemaVersion`, `sessionId`, `repository`,
+`repositoryRoot`, `gitCommonDir`, `scratchpadRoot`, and `allocationSource`
+(`harness` or `parent`). A record is valid only when every identity field
+matches this live session and repository and its root still passes the safety
+checks. Existing valid records take precedence over any new allocation. If a
+record and the current harness context name different roots, treat that as a
+contradiction and hold. If the harness supplies a root, verify the canonical
+path is an existing writable
+directory, has current-user-only access, contains no unsafe links, and lies
+outside every worktree for this repository. If the harness supplies no root,
+the parent may create the fallback root below the verified state base, outside
+every worktree. Require a stable session id and a writable state base first.
+
+Create each parent-owned directory exclusively with private permissions
+(POSIX mode `0700`; equivalent current-user-only ACL on Windows), refusing
+symlinks and conflicting existing entries. Create the record exclusively too
+(POSIX mode `0600`; equivalent current-user-only ACL on Windows), then read it
+back and verify it before dispatch. Never overwrite a record, reuse an
+unrecorded fallback directory, remove an old root, or use `mkdir -p`. If root
+allocation succeeds but exclusive record creation or read-back fails, keep the
+allocated directory and any known path, start no worker, and hold for
+reconciliation. The worker-side missing-parent guard remains in force (issue
+`#4377`). This documented lifecycle adds no helper, policy key, or automatic
+deletion.
+
+Classify the entry using the actual harness context, this exact
+session-and-repository record, and live worker and artifact evidence:
+
+| Evidence                                                                                                                                                                           | Verdict and next action                                                                                                                                        |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The harness supplies an existing valid root and there is no prior record                                                                                                           | Verify the root, create and verify the record exclusively, then reuse it                                                                                       |
+| There is no supplied root or record, and harness context identifies a first entry before claims or dispatch; the complete worker listing and session artifacts show no prior start | Allocate the private fallback root and record before Discover                                                                                                  |
+| The exact record matches this session and repository, and its root is valid                                                                                                        | Reuse that root and recover its report locations before refill                                                                                                 |
+| Claims already exist, but live evidence establishes that no worker was dispatched                                                                                                  | Revalidate every claim, winning nonce, worktree lock, and token record first; then bootstrap the root and resume those claims without minting a claim or nonce |
+| The fallback directory already exists without a valid record                                                                                                                       | Hold and preserve it; do not reuse or overwrite it                                                                                                             |
+| A record is unreadable, invalid, linked unsafely, for another session or repository, or its root is missing, contradictory, or unsafe                                              | Hold and preserve all evidence; do not allocate a replacement                                                                                                  |
+| Worker launch or prior-worker state is uncertain                                                                                                                                   | Reconcile the live worker list and existing briefs and reports; hold while any dispatch or ownership remains unresolved                                        |
+| Allocation succeeded but the durable record cannot be verified                                                                                                                     | Keep the directory and known path, start no worker, and hold for reconciliation                                                                                |
+| Stable session identity or a verified writable root cannot be resolved                                                                                                             | Hold with the missing prerequisite; do not guess a harness capability or ask for a path that was never issued                                                  |
+| A worker receives a missing parent path                                                                                                                                            | Hold in the worker, create nothing, and never use `mkdir -p`                                                                                                   |
+
+On the already-claimed, never-dispatched recovery route, do not repeat A5 or
+mint another activation nonce. Verify each existing claim against the live
+issue, the winning nonce, the worktree-local lock, and the generated-token
+record. Confirm the harness has no matching started worker and inspect any
+available briefs and report drafts before allocating. If worker state cannot be
+proven absent, stop for reconciliation instead of starting a replacement.
+
 Running this variant safely requires:
 
 - **A non-context-inheriting delegation mechanism for the full worker role,
@@ -1453,10 +1537,10 @@ the repository.
   minted anew.
 - `{branch-name}`: the branch named in the claim marker.
 - `{worktree-path}`: the worktree the orchestrator pre-created for the claim.
-- `{scratchpad-dir}`: an issue-numbered subdirectory of the scratchpad path that
-  the harness reports (see the Scratchpad part).
+- `{scratchpad-dir}`: an issue-numbered subdirectory of the resolved session
+  scratchpad root (see the Session scratchpad lifecycle and Scratchpad part).
 - `{report-path}`: the worker's report draft, a file whose name starts with the
-  issue number, directly in the scratchpad path that the harness reports.
+  issue number, directly in the resolved session scratchpad root.
 - `{terminal-phase}`: F4 under `fully_autonomous_merge`, F2.5 otherwise, or
   the earlier phase that the run is scoped to end at (see the Terminal phase
   part).
@@ -1555,12 +1639,14 @@ the directory already exists, reuse it. If it cannot be created although the
 parent path exists, fall back to prefixing each scratch file you write in that
 parent path with the issue number, for example `2878-pr-body.md`.
 
-Fill note: copy the scratchpad path that your harness reports, and hand the
-worker an issue-numbered subdirectory of it as `{scratchpad-dir}`. Never type
-the path by hand. Observed in the source repository's 2026-10-14 to 2026-10-15
-orchestrator run (no issue records the incident itself): one brief went out
-with a mistyped scratchpad path and needed a correction message to the running
-worker.
+Fill note: run the Session scratchpad lifecycle preflight and use its verified
+root to derive `{scratchpad-dir}`. Treat a harness-reported path as input to
+verify, never as a path to copy without checking the session record. Do not
+invent a path or ask for a harness setting when the harness did not issue one;
+issues `#4668` and `#4675` had no prior allocation to recover. Observed in the
+source repository's 2026-10-14 to 2026-10-15 orchestrator run (no issue records
+the incident itself): one brief went out with a mistyped scratchpad path and
+needed a correction message to the running worker.
 
 **Critique allowance.** For the critique pass only, you may start a
 non-context-inheriting agent, as a carve-out from the Role part. Follow
@@ -1625,8 +1711,9 @@ because the orchestrator checks it against live GitHub state first. The
 [Worker report outcomes](#worker-report-outcomes).
 
 Fill note: set `{report-path}` to a file whose name starts with the issue number,
-for example `2878-worker-report.json`, directly in the scratchpad path that the
-harness reports, because an orchestrator restart looks there for report drafts.
+for example `2878-worker-report.json`, directly under the resolved session
+scratchpad root. The durable record lets an orchestrator restart rediscover this
+same root and report draft without depending on a fresh harness path.
 At verification, the orchestrator computes `reviewRounds` from the complete
 review list for a non-null `pullRequest`:
 
@@ -1767,8 +1854,11 @@ session-suffixed agent id, as the 2026-10-11 session did (issue
 session suffix, the session cannot tell its claims from another session's, so
 recovery is unavailable: it reports its claims to the operator and does not
 refill. The roster is not stored anywhere locally, so the steps below rebuild it
-from the forge, the worktrees, and the harness's agent listing. A session with a
-new id cannot identify its old claims, and step 1 treats them as not its own.
+from the forge, the worktrees, and the harness's agent listing. Start with the
+orchestrator phase's session scratchpad preflight to discover the durable record
+from the session identity and recover the exact report-draft root. A session
+with a new id cannot identify its old claims, and step 1 treats them as not its
+own.
 
 1. **Find own claims.** For each worktree in `git worktree list --porcelain`,
    list `idd-generated-tokens-*.json` in that worktree's private admin directory
@@ -1904,8 +1994,9 @@ new id cannot identify its old claims, and step 1 treats them as not its own.
    store dedupes on claimId, workerHandle, and terminalPhase, so a retry is
    safe. A matched running worker gets no record. A released claim whose only
    matched worker is still running gets no record and is reported in step 5.
-   Look for the worker's report draft in the scratchpad of the same session,
-   under the issue-number prefix that the fan-out variant already requires. If a
+   Look for the worker's report draft in the verified root from the session
+   record, at `<scratchpadRoot>/<issue-number>-worker-report.json`; issue-numbered
+   scratch files remain in that root's matching issue directory. If a
    draft is found, check that its `issue` and `claimId` match the claim. When
    the claim has a matched worker, set the draft's `workerHandle` to the listed
    handle, whatever value the draft holds, as section 5 of the orchestrator
