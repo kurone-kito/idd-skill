@@ -464,9 +464,58 @@ a rerun until a new event (a branch-sync merge of the base branch, or
 reopening the PR) picks it up (see
 `.github/instructions/idd-ci.instructions.md`'s Rerun
 mechanics). Observed 2026-10-05 in a private adopter and reproduced on
-2026-10-09 (issue `#3859`). Note this dependency in the roadmap's
-parallel note rather than assuming disjoint files always mean safe
-parallelism.
+2026-10-09 (issue `#3859`).
+When a consumer's required validation needs the new workflow definition,
+encode an edge from the consumer to its producer and explain which
+check cannot run against the old definition. File-disjointness does not
+remove that dependency. Keep mere contention or preferred order in
+scheduling notes.
+
+### Per-edge rationale examples
+
+**Good — schema consumer.** Producer issue #420 defines the schema field
+that consumer issue #421's parser acceptance criterion must accept. The
+consumer is blocked by #420, names that field as its output, and cites
+the schema and criterion as evidence. Ask what fails without the field
+while other prerequisites remain. That is a hard edge because the parser
+cannot meet its criterion without the producer's output.
+
+**Good — shared CI definition.** A consumer issue's required check uses
+the workflow definition changed by a sibling. Its rationale names that
+workflow output and adds an edge from the consumer to its producer issue.
+It also names the check that still uses the old definition until a new
+event. This is a hard edge when the check cannot validate the consumer
+against the needed definition.
+
+**Bad — shared parent or file.** Sharing a roadmap or editing the same
+file, by itself, does not identify an output that one child consumes
+from the other. Keep them as siblings unless one child needs a specific
+output from the other. Common parentage is illustrated by issue #4079
+(opened 2026-10-12); shared-file-only and generic-claim cases are
+preventive; no observed incident yet.
+
+**Observed comparison — roadmap #4079.** Issues #4083 and #4084 waited
+for the doctor warning from #4081. Their criteria did not consume it;
+PRs #4131 and #4126 also did not consume it. Issue #4084 explicitly
+excludes describing the warning. Remove those two edges. The retained
+edge to issue #4080 consumes its concrete output: the policy-constants
+row defining `{default-branch}`, including its resolution command,
+safe-character rule, and fail-closed behavior. Issue #4083 consumes
+that output when it changes primary-worktree references from `main` to
+`{default-branch}`; issue #4084 consumes it in three trusted-checkout
+passages in `optional-host-setup.md`. Evidence: #4080 proposed change
+item 1; #4083 items 7.1–7.3; #4084 items 2.1–2.3. With other
+prerequisites retained, without the #4080 row those children would use
+a placeholder with no defined branch meaning, so their role-specific
+documentation cannot be checked. Keep these consumed edges. The graph
+showed unnecessary blockers, but the doctor warning happened to merge
+first, so this does not establish a measured elapsed-time penalty.
+
+For documentation, retain an edge only to an implementation output the
+documentation child actually describes; it still documents shipped
+behavior. For finalize or verify work, retain an edge only when an
+acceptance criterion checks that sibling's output, and wait until those
+inputs exist before final verification.
 
 ### Artificial decomposition
 
@@ -530,6 +579,11 @@ Blocked by #445
 
 Now Discover and A4.5 defer `#450` until every sibling merges, so it is
 claimed only when its acceptance criteria can actually pass.
+
+Each listed edge is retained because a stated finalization criterion
+checks that sibling's output. If a sibling's output is not consumed by
+any criterion, remove that edge and keep any preferred sequence as a
+scheduling note.
 
 **Prefix-first**: resolve `<marker-prefix>` from the target repository's
 onboarding or IDD docs before emitting any of these markers —

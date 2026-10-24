@@ -294,8 +294,8 @@ Resolve the commands as A5(a) does.
 5. After the settle delay, `resume-claim-routing.mjs --issue <n> --assert
    --claim-id {claim-id} --nonce {nonce} --worktree <path>`. This verification
    alone counts.
-6. Continue B1 in that worktree, from Step 3 (install dependencies) of
-   `idd-work.instructions.md`.
+6. Continue B1 in that worktree at B1 Step 3: install dependencies with
+   `install-deps`.
 
 Steps 2 to 5 are one fail-closed block in
 [fresh-claim wrapper](../../docs/idd-helper-scripts.md#fresh-claim-wrapper).
@@ -493,8 +493,9 @@ closed issue.
 
 ### Orchestrator delegation
 
-An orchestrating session that delegates a verified claim reads
-`claim-orchestrator.instructions.md` before it writes the delegation brief.
+Read the distributed
+[idd-orchestrator](idd-orchestrator.instructions.md) before dispatch; fill
+the [delegation brief](../../docs/idd-workflow.md#delegation-brief-template).
 
 ### Hide displaced claim chain on takeover
 
@@ -529,13 +530,14 @@ heartbeat post; heartbeats refresh the stale clock but do not
 supersede prior markers, and the visible heartbeat chain is the
 active-claim audit trail.
 
-After claim verification, upsert the issue live status digest when there
-is exactly one marked digest or none. Use the verified `claimed-by`
-comment as the authority: set `Phase` to `A5 claimed`, `Claim` to the
-current `{agent-id}` / `{claim-id}`, `Branch` to the verified branch,
-`Open blockers` to `none`, and `Next action` to `B1 create branch and
-worktree`. If multiple marked digests exist, report their URLs and
-continue from the verified claim without editing a digest.
+If in use, upsert one digest; report duplicate URLs and edit none. Set
+`Phase` to `A5 claimed`, `Claim`/`Branch` from the verified marker, and
+`Open blockers` to `none`. Set `Next action` to `B1 Step 3: install
+dependencies` (`install-deps`) if the fresh-claim order created the
+worktree; otherwise `B1 create branch and worktree`.
+
+Observed 2026-10-23 v0.17.0 review (#4640): stale B1 digest,
+source-only delegation reference, broken E/F link.
 
 The verified `branch:` field is also the input to the cwd-vs-claim
 check that every later mutation must satisfy — see the

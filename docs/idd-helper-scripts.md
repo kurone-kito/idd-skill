@@ -1232,6 +1232,17 @@ in this preamble, since the fallback differs per helper.
   filed on 2026-09-14.
 - `scripts/live-status-digest.mjs` for issue or PR live status digest
   discovery, rendering, dry-run, and claim-checked upsert
+- `scripts/audit-authored-issue.mjs` accepts `--dependency-inventory` to
+  add a JSON `dependencyInventory` object or separate table rows for
+  parsed hard issue prerequisites, unresolved qualified references,
+  sequential-roadmap blocker identities, `## Tracks` membership, and
+  ordinary `Ref(s)` references. This is a syntax inventory of the
+  supplied body, not a live graph, an edge-necessity proof, an
+  independence verdict, or an exhaustive history; an empty hard
+  prerequisite list means no recognized local hard-prerequisite syntax;
+  recognized qualified dependency tokens remain in
+  `unresolvedQualifiedReferences`. Malformed near-misses remain in the
+  existing audit findings.
 - `scripts/audit-pr-cleanup.mjs` for post-merge comment cleanup auditing
 - `scripts/minimize-superseded-markers.mjs` for in-flight per-marker
   `minimizeComment` of strictly superseded markers — `review-watermark`/
@@ -9877,6 +9888,128 @@ These hazards were observed while recovering
 [PR #3431](https://github.com/kurone-kito/idd-skill/pull/3431) for
 issue #3285; the field report is tracked in issue #3552.
 
+## Signed annotated release tags (`idd-release-tag`)
+
+`idd-release-tag` exposes the `signed-annotated-tag` release operation. Its
+interface is:
+
+```sh
+idd-release-tag --operation signed-annotated-tag --version <x.y.z> \
+  --merge-sha <40-lowercase-hex-sha> --pr <merged-bump-pr-number> \
+  --issue <open-release-issue-number> \
+  --allowed-signers <absolute-path-to-existing-regular-file> [--apply]
+```
+
+The command accepts no other operation. `--version` is the release version
+without a prefix or suffix; `--merge-sha` is the version-bump merge commit;
+`--pr` and `--issue` take positive pull request and issue numbers,
+respectively. The
+`--allowed-signers` path is required for every signing format and must name an
+existing regular file; SSH signature verification uses that file. Use
+`--help` for the command summary.
+
+The helper writes a JSON report to stdout. It records the operation and mode,
+tag, precondition results, planned or completed effects, tag object and peeled
+commit, and any refusal's machine-readable `name` and detail. A passed run
+exits with status 0; a refusal exits non-zero.
+
+### Preconditions
+
+The helper checks the repository and release state before creating or pushing
+a tag:
+
+- `origin` must have exactly one fetch URL and one push URL, and both must name
+  the same hosted repository. A non-empty `GH_REPO` must name that repository
+  too.
+- The default branch reported by `gh` must match the branch named by the
+  live symbolic `HEAD` advertised by `origin`. The supplied merge commit must
+  be the merge commit of the supplied merged version-bump
+  pull request and must be reachable from that default branch.
+- The supplied release issue must be open and carry none of the effective
+  configured blocked-by-human labels. The default repository label is
+  `status:blocked-by-human`; user-global blocking labels are also checked
+  unless `GITHUB_ACTIONS=true`, when the helper omits that user-global gate.
+- The version must match `package.json`, the root
+  `.github/idd/config.json`, and `idd-template/.github/idd/config.json`.
+  `CHANGELOG.md` must contain the exact `## [X.Y.Z] - YYYY-MM-DD` heading for
+  that version with a valid calendar date.
+- The expected tag is `v<X.Y.Z>`. An existing tag must be an annotated tag
+  object named for that tag and point directly to the supplied commit; its
+  signature must verify. A present invalid or unsigned remote tag is refused;
+  it does not fall through to local-tag inspection or tag creation. When the
+  remote tag is valid, the helper reports it as found and skips local-tag
+  inspection. Only when the remote tag is absent does it inspect a local tag;
+  a matching local tag may be used, while a conflicting local tag is left in
+  place and refused.
+
+### Dry-run and apply
+
+Dry-run is the default; there is no separate `--dry-run` flag. The helper
+checks preconditions and prints planned effects. Its fetches can update
+remote-tracking refs and `FETCH_HEAD`, and write fetched objects, but a dry run
+creates no tag ref and makes no push.
+
+Pass `--apply` to enable effects. When the remote tag is absent, the helper
+reuses a matching local tag or creates at most one signed annotated tag
+object, verifies it, and pushes it.
+After a non-zero push, the helper reads the remote tag and retries once only
+if it remains absent. After a timeout, it does so only when cleanup recorded
+the PID, read the process listing, and found no surviving process; otherwise
+it refuses before the remote read or retry. The helper allows at most two
+push invocations and one successful push. After a landed push it checks the
+remote tag object and signature again.
+The helper never deletes, moves, or force-pushes a tag, creates an unsigned
+tag, branch, or commit, or edits a tracked file. These retry, timeout-cleanup,
+and tag-preservation safeguards are preventive; no observed incident yet.
+
+Tag creation uses the repository's configured Git signing setup. If the
+configured format is SSH and the helper would create a tag, Git 2.44 or later
+is required; the helper checks this during dry-run too. Whether an autonomous
+session may sign a real release is a separate operator decision, outside this
+command. Record that decision on [issue #4523](https://github.com/kurone-kito/idd-skill/issues/4523)
+before the first real release. The command does not read or decide that
+permission; it separately requires the supplied per-release issue to be open
+and unblocked.
+
+### Runtime bounds and refusal names
+
+Every Git command has a two-minute default time bound. If it times out, the
+helper records the launched process tree, sends SIGTERM to its recorded
+processes, and waits once for up to a shared 30 seconds. A missing PID record,
+an unavailable process listing, or a non-signer survivor has a distinct
+refusal name. A signer-only survivor is reported with the operation's
+timeout refusal.
+
+The report's `refusal.name` uses one of these names:
+
+- **Input:** `unknown-operation`, `invalid-version`, `invalid-merge-sha`,
+  `invalid-pull-request`, `invalid-issue`, `invalid-allowed-signers`,
+  `invalid-apply`.
+- **Repository and policy:** `origin-url-unreadable`, `origin-url-ambiguous`,
+  `push-url-mismatch`, `repository-not-hosted`, `gh-repo-mismatch`,
+  `policy-unreadable`, `policy-label-invalid`.
+- **Release issue:** `release-issue-unreadable`, `release-issue-closed`,
+  `release-issue-blocked`.
+- **Pull request and branch:** `pull-request-unreadable`,
+  `pull-request-not-merged`, `merge-commit-mismatch`,
+  `default-branch-unreadable`, `default-branch-invalid`,
+  `default-branch-mismatch`, `branch-fetch-failed`, `fetch-head-mismatch`,
+  `merge-commit-missing`, `merge-commit-unreachable`,
+  `merge-commit-unreadable`.
+- **Version and changelog:** `package-version-mismatch`,
+  `idd-version-mismatch`, `template-idd-version-mismatch`,
+  `changelog-heading-missing`.
+- **Remote and local tag:** `remote-tag-unreadable`, `remote-tag-invalid`,
+  `remote-tag-unsigned`, `remote-tag-signature-invalid`,
+  `local-tag-unreadable`, `local-tag-conflict`.
+- **Signing and push:** `git-version-unsupported`,
+  `signing-config-unreadable`, `signing-failed`, `signing-timeout`,
+  `created-tag-invalid`, `tag-unsigned`, `signature-check-failed`,
+  `push-failed`, `push-outcome-unknown`, `remote-tag-conflict`,
+  `post-push-check-failed`.
+- **Process and command timeout:** `process-listing-unavailable`,
+  `pid-record-missing`, `process-survivor`, `command-timeout`.
+
 ## Claimed push (kurone-kito/idd-skill#4375)
 
 `scripts/claimed-push.mjs` (bin `idd-claimed-push`) pushes the claimed
@@ -10221,10 +10354,14 @@ directory. If helper scripts are introduced too early, every operational
 rule must be maintained twice: once in the instructions that agents read,
 and once in code that agents run.
 
-For now, the safer balance is to keep pre-merge and advisory
-instructions canonical while allowing three read-only evidence helpers,
-one live digest upsert helper, and one post-merge cleanup helper. Merge
-safety still depends on the written checks, not on helper output alone.
+The safer balance is to keep pre-merge and advisory instructions
+canonical while making the helpers in the current [Decision inventory](#decision)
+optional for adopters. The inventory's [helper contract classes](#helper-contract-classes)
+cover read-only evidence collectors and dry-run-by-default authoring
+helpers. The exported template remains usable without Node.js, a package
+manager, or repository-local scripts, and merge safety still depends on
+the written checks, not helper output alone. This summary was corrected
+after the stale count was reported in [issue #4641](https://github.com/kurone-kito/idd-skill/issues/4641).
 
 ## Non-goals
 

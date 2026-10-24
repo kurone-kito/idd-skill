@@ -915,6 +915,105 @@ for (const mutation of mutations) {
   });
 }
 
+test('issue authoring dependency guidance verifies consumed outputs', () => {
+  const normalize = (value: string): string =>
+    value
+      .split(String.fromCharCode(10))
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .join(' ');
+  const contractPaths = [
+    'docs/issue-authoring-skill.md',
+    'skills/issue-authoring/references/contract.md',
+  ];
+  const contractNeedles = [
+    'Common parentage, shared files, and generic correctness claims alone do not establish an edge.',
+    'roadmap #4079 opened 2026-10-12',
+    'the shared-file-only and generic-claim cases are preventive; no observed incident yet.',
+    'To justify each dependency edge, name the predecessor output, the dependent operation or acceptance criterion it blocks, and the evidence that supports the relationship.',
+    'Ask what fails without that output while keeping the other valid prerequisites.',
+    'Keep the concise rationale in the issue body. For a multi-issue set, map each hard edge in `relationships` and support it with `evidence`. For a single issue, keep the rationale in the body and supporting evidence in `evidence`; `relationships` remains empty as the packet schema requires. Do not add packet fields.',
+    'Review each edge against the body and packet, then review the set for independent siblings and natural cohesion.',
+    'Do not impose a parallelism quota or another approval gate.',
+    'each dependency edge names the consumed predecessor output, blocked operation or criterion, supporting evidence, and counterfactual with other prerequisites retained. The body and packet agree; for a multi-issue set, `relationships` maps each hard edge and `evidence` supports it, while a single-issue packet keeps `relationships` empty and uses `evidence` for support. Independent siblings stay in the roadmap task list',
+    'For a multi-issue set, map each hard edge in `relationships` to its producer output and blocked work, and use `evidence` to support that relationship. For a single issue, keep `relationships` empty and put supporting evidence in `evidence`.',
+    'the packet schema stays unchanged.',
+  ];
+  for (const path of contractPaths) {
+    const content = normalize(readFileSync(join(REPO_ROOT, path), 'utf8'));
+    for (const needle of contractNeedles) {
+      assert.ok(content.includes(needle), `${path} is missing: ${needle}`);
+    }
+  }
+
+  const contract = readFileSync(
+    join(REPO_ROOT, 'skills/issue-authoring/references/contract.md'),
+    'utf8',
+  );
+  const perEdgeExamplesLink =
+    '[Per-edge rationale examples](https://github.com/kurone-kito/idd-skill/blob/main/skills/issue-authoring/references/draft-patterns.md#per-edge-rationale-examples)';
+  assert.ok(
+    contract.includes(perEdgeExamplesLink),
+    'contract.md links to the per-edge examples',
+  );
+  const docs = readFileSync(
+    join(REPO_ROOT, 'docs/issue-authoring-skill.md'),
+    'utf8',
+  );
+  assert.ok(
+    docs.includes(perEdgeExamplesLink),
+    'issue-authoring-skill.md links to the canonical per-edge examples',
+  );
+
+  const patterns = readFileSync(
+    join(REPO_ROOT, 'skills/issue-authoring/references/draft-patterns.md'),
+    'utf8',
+  );
+  const normalizedPatterns = normalize(patterns);
+  for (const needle of [
+    'Good — schema consumer.',
+    'Good — shared CI definition.',
+    'encode an edge from the consumer to its producer',
+    'consumer is blocked by #420',
+    'Bad — shared parent or file.',
+    'Sharing a roadmap or editing the same file, by itself, does not identify an output that one child consumes from the other.',
+    'Observed comparison — roadmap #4079.',
+    'Issues #4083 and #4084 waited for the doctor warning from #4081',
+    'Their criteria did not consume it; PRs #4131 and #4126 also did not consume it.',
+    'Issue #4084 explicitly excludes describing the warning.',
+    'Remove those two edges.',
+    'edge to issue #4080 consumes its concrete output: the policy-constants row defining `{default-branch}`, including its resolution command, safe-character rule, and fail-closed behavior.',
+    'Issue #4083 consumes that output when it changes primary-worktree references from `main` to `{default-branch}`',
+    'issue #4084 consumes it in three trusted-checkout passages in `optional-host-setup.md`.',
+    'Evidence: #4080 proposed change item 1; #4083 items 7.1–7.3; #4084 items 2.1–2.3.',
+    'With other prerequisites retained, without the #4080 row those children would use a placeholder with no defined branch meaning, so their role-specific documentation cannot be checked.',
+    'this does not establish a measured elapsed-time penalty.',
+    'For documentation, retain an edge only to an implementation output the documentation child actually describes; it still documents shipped behavior.',
+    "For finalize or verify work, retain an edge only when an acceptance criterion checks that sibling's output, and wait until those inputs exist before final verification.",
+  ]) {
+    assert.ok(
+      normalizedPatterns.includes(needle),
+      `draft-patterns.md is missing: ${needle}`,
+    );
+  }
+
+  const skill = normalize(
+    readFileSync(join(REPO_ROOT, 'skills/issue-authoring/SKILL.md'), 'utf8'),
+  );
+  assert.ok(
+    skill.includes(
+      'For every hard dependency edge, name the consumed producer output',
+    ),
+    'SKILL.md is missing the per-edge workflow reminder',
+  );
+  assert.ok(
+    skill.includes(
+      'for a single issue, keep `relationships` empty and put supporting evidence in `evidence`',
+    ),
+    'SKILL.md is missing the single-issue packet guidance',
+  );
+});
+
 test('A0-T step 1 stops without claiming on the three configured hold labels (#4233)', () => {
   const discover = readFileSync(
     join(

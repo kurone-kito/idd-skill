@@ -109,12 +109,41 @@ function substitutePlaceholders(text: string): string {
     .replaceAll('{pr-number}', PR_NUMBER)
     .replaceAll('{owner}', OWNER)
     .replaceAll('{repo}', REPO)
+    .replaceAll('{agent-id}', AGENT_LOGIN)
+    .replace(/(?<!\$)\{PR_HEAD_SHA\}/g, HEAD_SHA)
+    .replaceAll('{ISO8601-recovery-time}', '2026-10-08T10:00:00Z')
     .replaceAll('{issue-number}', '3860')
     .replaceAll('{claim-id}', 'claim-3860')
     .replaceAll('{nonce}', 'nonce-3860')
+    .replaceAll('{n}', '1')
     .replaceAll('{primary-advisory-bot-rest-login}', `${BOT_LOGIN}[bot]`)
     .replaceAll('{primary-advisory-bot-login}', BOT_LOGIN)
     .replaceAll('{primary-advisory-bot}', BOT_LOGIN);
+}
+
+function manualBlockAfter(heading: string, marker: string): string {
+  const lines = readFileSync(DOC, 'utf8').split('\n');
+  const start = lines.indexOf(heading);
+  if (start < 0) {
+    throw new Error('heading not found: ' + heading);
+  }
+  const markerIndex = lines.findIndex(
+    (line, index) => index > start && line.includes(marker),
+  );
+  const fence = String.fromCharCode(96).repeat(3);
+  const previousOpen = lines.lastIndexOf(fence + 'sh', markerIndex);
+  const previousClose = lines.lastIndexOf(fence, markerIndex);
+  const markerIsInsideBlock = previousOpen > previousClose;
+  const open = markerIsInsideBlock
+    ? previousOpen
+    : lines.indexOf(fence + 'sh', markerIndex);
+  const close = lines.indexOf(fence, open + 1);
+  if (markerIndex < 0 || open < 0 || close < 0) {
+    throw new Error('no manual sh block after ' + marker);
+  }
+  return lines
+    .slice(markerIsInsideBlock ? markerIndex + 1 : open + 1, close)
+    .join('\n');
 }
 
 /**
@@ -150,10 +179,13 @@ answer() {
   if [ -n "$jq_expr" ]; then "$JQ_BIN" -c "$jq_expr" "$1"; else cat "$1"; fi
 }
 case "$*" in
+  "repo view --json owner,name,url"*) "$JQ_BIN" -c "$jq_expr" "$STUB_REPO_URL" ;;
   "repo view --json owner"*) echo "${OWNER}" ;;
   "repo view --json name"*) echo "${REPO}" ;;
+  "repo view --json url"*) "$JQ_BIN" -r "$jq_expr" "$STUB_REPO_URL" ;;
   "pr view "*"--json headRefOid"*) cat "$STUB_HEAD" ;;
   "api user"*) echo "$STUB_LOGIN" ;;
+  "auth status --active --hostname "*) exit "$STUB_AUTH_STATUS_EXIT" ;;
   "pr edit "*) exit "\${STUB_PR_EDIT_EXIT:-0}" ;;
   "api graphql"*)
     case "$*" in
@@ -167,13 +199,30 @@ case "$*" in
       *"comments(first"*) answer "$STUB_EDIT" ;;
       *) echo "stub: unrecognised graphql query" >&2; exit 1 ;;
     esac ;;
-  "api repos/"*"/reviews/"*"/comments"*) answer "$STUB_REVIEW_COMMENTS" ;;
-  "api repos/"*"/pulls/"*"/reviews"*) answer "$STUB_REVIEWS" ;;
-  "api repos/"*"/pulls/"*"/requested_reviewers"*) exit 0 ;;
+  *"/pulls/"*"/reviews/"*"/comments"*)
+    case "$STUB_REVIEW_COMMENTS_FAIL" in
+      first) exit 1 ;;
+      late) cat "$STUB_REVIEW_COMMENTS"; exit 1 ;;
+    esac
+    answer "$STUB_REVIEW_COMMENTS" ;;
+  *"/pulls/"*"/reviews"*)
+    case "$STUB_REVIEW_LIST_FAIL" in
+      first) exit 1 ;;
+      late) cat "$STUB_REVIEWS"; exit 1 ;;
+    esac
+    answer "$STUB_REVIEWS" ;;
+  *"/pulls/"*"/requested_reviewers"*) exit 0 ;;
   "api repos/"*"/issues/"*"/timeline"*)
     if [ "\${STUB_TIMELINE_FAIL:-0}" = 1 ]; then exit 1; fi
     cat "$STUB_TIMELINE" ;;
-  "api repos/"*"/issues/"*"/comments"*)
+  *"/issues/"*"/comments"*)
+    case "$*" in
+      *"--method POST"*)
+        case "$*" in
+          *"--silent"*) exit 0 ;;
+          *) echo '{"id": 1, "body": "posted"}'; exit 0 ;;
+        esac ;;
+    esac
     if [ "\${STUB_REST_FAIL:-0}" = 1 ]; then exit 1; fi
     answer "$STUB_REST" ;;
   *) echo "stub: unhandled gh call: $*" >&2; exit 1 ;;
@@ -186,6 +235,10 @@ interface Fixtures {
   threads?: unknown;
   reviews?: unknown;
   reviewComments?: unknown;
+  reviewListFail?: 'first' | 'late';
+  reviewCommentsFail?: 'first' | 'late';
+  repoUrl?: string;
+  authStatusExit?: number;
   proof?: string;
   proofBefore?: string;
   restFail?: boolean;
@@ -238,6 +291,14 @@ function makeSandbox(fixtures: Fixtures): string {
     ],
   );
   write('review-comments.json', fixtures.reviewComments ?? []);
+  write('review-list-fail.txt', fixtures.reviewListFail ?? '');
+  write('review-comments-fail.txt', fixtures.reviewCommentsFail ?? '');
+  write('repo-url.json', {
+    owner: { login: OWNER },
+    name: REPO,
+    url: fixtures.repoUrl ?? 'https://github.com/' + OWNER + '/' + REPO,
+  });
+  write('auth-status-exit.txt', String(fixtures.authStatusExit ?? 0));
   const proof =
     fixtures.proof ??
     '{"data":{"repository":{"pullRequest":{"reviewRequests":{"pageInfo":{"hasNextPage":false},"nodes":[]},"timelineItems":{"pageInfo":{"hasPreviousPage":false},"nodes":[]}}}}}';
@@ -319,6 +380,19 @@ function runScript(
         STUB_THREADS: join(root, 'threads.json'),
         STUB_REVIEWS: join(root, 'reviews.json'),
         STUB_REVIEW_COMMENTS: join(root, 'review-comments.json'),
+        STUB_REVIEW_LIST_FAIL: readFileSync(
+          join(root, 'review-list-fail.txt'),
+          'utf8',
+        ).trim(),
+        STUB_REVIEW_COMMENTS_FAIL: readFileSync(
+          join(root, 'review-comments-fail.txt'),
+          'utf8',
+        ).trim(),
+        STUB_REPO_URL: join(root, 'repo-url.json'),
+        STUB_AUTH_STATUS_EXIT: readFileSync(
+          join(root, 'auth-status-exit.txt'),
+          'utf8',
+        ).trim(),
         STUB_PROOF: join(root, 'proof.json'),
         STUB_PROOF_BEFORE: join(root, 'proof-before.json'),
         STUB_PR_EDIT_EXIT: readFileSync(
@@ -704,10 +778,12 @@ function f2Edit(
 
 interface F2Result {
   status: number;
+  stdout: string;
   stderr: string;
   conjuncts: string[];
   missingRegularComments: number;
   missingThreads: number;
+  ghCalls: string[];
 }
 
 function runF2(fixtures: Fixtures): F2Result {
@@ -715,7 +791,8 @@ function runF2(fixtures: Fixtures): F2Result {
   const block = inlineGraphqlVariables(
     substitutePlaceholders(fencedBlock('## F2')),
   );
-  const result = runScript(root, `PR_HEAD_SHA=${HEAD_SHA}\n${block}`, {});
+  const script = 'PR_HEAD_SHA=' + HEAD_SHA + '\n' + block;
+  const result = runScript(root, script, {});
   rmSync(root, { recursive: true, force: true });
   const conjuncts =
     /conjuncts=(\S+)/.exec(result.stdout)?.[1]?.split(',') ?? [];
@@ -723,12 +800,308 @@ function runF2(fixtures: Fixtures): F2Result {
   const threads = /missingThreads=(\d+)/.exec(result.stdout)?.[1];
   return {
     status: result.status,
+    stdout: result.stdout,
     stderr: result.stderr,
     conjuncts,
     missingRegularComments: Number(regular ?? '-1'),
     missingThreads: Number(threads ?? '-1'),
+    ghCalls: result.ghCalls,
   };
 }
+
+test('F2 blocks a failed review-list read on its first or later page (#4638)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  const first = runF2({ reviewListFail: 'first' });
+  assert.equal(first.status, 2);
+  assert.match(first.stderr, /F2 review list read failed; not converged/);
+
+  const late = runF2({ reviews: '[]', reviewListFail: 'late' });
+  assert.equal(late.status, 2);
+  assert.match(late.stderr, /F2 review list read failed; not converged/);
+});
+
+test('F2 rejects empty, malformed, and unexpected review-list data (#4638)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  const emptyTransport = runF2({ reviews: '' });
+  assert.equal(emptyTransport.status, 2);
+  assert.match(emptyTransport.stderr, /F2 review list read empty/);
+
+  for (const reviews of ['null', '[{}]', '[]\nnull']) {
+    const run = runF2({ reviews });
+    assert.equal(run.status, 2, reviews);
+    assert.match(run.stderr, /F2 review list malformed; not converged/);
+  }
+
+  const botReview = {
+    user: { login: BOT_LOGIN + '[bot]' },
+    submitted_at: '2026-10-08T09:00:00Z',
+    commit_id: HEAD_SHA,
+    id: 901,
+  };
+  for (const review of [
+    { ...botReview, submitted_at: '' },
+    { ...botReview, submitted_at: 'not-a-date' },
+    { ...botReview, submitted_at: '2026-02-31T09:00:00Z' },
+    { ...botReview, submitted_at: '2026-10-08T09:00:00+25:00' },
+    { ...botReview, commit_id: '' },
+    { ...botReview, id: 0 },
+    { ...botReview, user: { login: null } },
+  ]) {
+    const run = runF2({ reviews: JSON.stringify([review]) });
+    assert.equal(run.status, 2);
+    assert.match(run.stderr, /F2 review list malformed; not converged/);
+  }
+
+  const validEmptyList = runF2({ reviews: '[]' });
+  assert.equal(validEmptyList.status, 0, validEmptyList.stderr);
+  assert.deepEqual(validEmptyList.conjuncts, ['false', 'false', 'true']);
+});
+
+test('F2 selects the latest review and counts comments across valid pages (#4638)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  const reviews =
+    JSON.stringify([
+      { user: null },
+      {
+        user: { login: BOT_LOGIN + '[bot]' },
+        submitted_at: '2026-10-08T09:00:00Z',
+        commit_id: '0'.repeat(40),
+        id: 900,
+      },
+    ]) +
+    '\n' +
+    JSON.stringify([
+      {
+        user: { login: BOT_LOGIN + '[bot]' },
+        submitted_at: '2026-10-08T09:00:00.123Z',
+        commit_id: HEAD_SHA,
+        id: 901,
+      },
+    ]);
+  const reviewComments =
+    '[]\n' + JSON.stringify([{ id: 1, path: 'src/one.mts', body: 'finding' }]);
+  const run = runF2({ reviews, reviewComments });
+  assert.equal(run.status, 0, run.stderr);
+  assert.deepEqual(
+    run.conjuncts,
+    ['true', 'false', 'true'],
+    run.stdout + run.stderr + JSON.stringify(run.ghCalls),
+  );
+  assert.ok(
+    run.ghCalls.some((call) =>
+      call.includes('/pulls/' + PR_NUMBER + '/reviews/901/comments'),
+    ),
+  );
+});
+
+test('F2 blocks a failed review-comment read on its first or later page (#4638)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  const first = runF2({ reviewCommentsFail: 'first' });
+  assert.equal(first.status, 2);
+  assert.match(first.stderr, /F2 review-comment read failed; not converged/);
+
+  const late = runF2({
+    reviewComments: '[]',
+    reviewCommentsFail: 'late',
+  });
+  assert.equal(late.status, 2);
+  assert.match(late.stderr, /F2 review-comment read failed; not converged/);
+});
+
+test('F2 rejects empty transport, malformed pages, and invalid review comments (#4638)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  const emptyTransport = runF2({ reviewComments: '' });
+  assert.equal(emptyTransport.status, 2);
+  assert.match(emptyTransport.stderr, /F2 review-comment read empty/);
+
+  for (const reviewComments of [
+    'null',
+    '[]\nnull',
+    '[{}]',
+    JSON.stringify([{ id: 0, path: 'src/file.mts', body: 'finding' }]),
+    JSON.stringify([{ id: 1, path: '', body: 'finding' }]),
+  ]) {
+    const run = runF2({ reviewComments });
+    assert.equal(run.status, 2, reviewComments);
+    assert.match(run.stderr, /F2 review-comment read malformed; not converged/);
+  }
+
+  const emptyArray = runF2({ reviewComments: '[]' });
+  assert.equal(emptyArray.status, 0, emptyArray.stderr);
+  assert.deepEqual(emptyArray.conjuncts, ['true', 'true', 'true']);
+});
+
+function runManualRecoveryPost(
+  heading: string,
+  marker: string,
+  repoUrl: string,
+  authStatusExit = 0,
+): RunResult {
+  const root = makeSandbox({ repoUrl, authStatusExit });
+  const body = substitutePlaceholders(manualBlockAfter(heading, marker));
+  const result = runScript(root, body, {});
+  rmSync(root, { recursive: true, force: true });
+  return result;
+}
+
+for (const example of [
+  { heading: '## AW3-R', marker: 'or manually:' },
+  {
+    heading: '## AW3-S',
+    marker:
+      'instructions-only profile, or any profile if the helper is unavailable',
+  },
+]) {
+  for (const route of [
+    {
+      url: 'https://github.com/' + OWNER + '/' + REPO,
+      authHost: 'github.com',
+    },
+    {
+      url: 'https://ghe.example.test/' + OWNER + '/' + REPO,
+      authHost: 'ghe.example.test',
+    },
+  ]) {
+    test(example.heading +
+      ' keeps its manual POST on ' +
+      route.authHost +
+      ' (#4638)', {
+      skip: SKIP_REASON ?? false,
+    }, () => {
+      const result = runManualRecoveryPost(
+        example.heading,
+        example.marker,
+        route.url,
+      );
+      assert.equal(result.status, 0, result.stderr);
+      assert.ok(
+        result.ghCalls.some((call) =>
+          call.includes('auth status --active --hostname ' + route.authHost),
+        ),
+      );
+      const apiEndpoint = 'repos/' + OWNER + '/' + REPO;
+      assert.ok(
+        result.ghCalls.some(
+          (call) =>
+            call.includes('api --hostname ' + route.authHost) &&
+            call.includes(apiEndpoint + '/issues/' + PR_NUMBER + '/comments') &&
+            call.includes('--method POST') &&
+            call.includes('--silent'),
+        ),
+      );
+      assert.ok(!result.ghCalls.some((call) => call.includes('auth token')));
+      assert.ok(!result.stdout.includes('STUB_SECRET'));
+      assert.ok(!result.stderr.includes('STUB_SECRET'));
+    });
+  }
+
+  test(example.heading + ' fails closed for a ported GHES URL (#4638)', {
+    skip: SKIP_REASON ?? false,
+  }, () => {
+    const result = runManualRecoveryPost(
+      example.heading,
+      example.marker,
+      'https://ghe.example.test:8443/' + OWNER + '/' + REPO,
+    );
+    assert.equal(result.status, 2, result.stdout + result.stderr);
+    assert.match(
+      result.stderr,
+      /cannot verify authentication for a ported GitHub host/,
+    );
+    assert.ok(!result.ghCalls.some((call) => call.startsWith('auth status')));
+    assert.ok(!result.ghCalls.some((call) => call.includes('--method POST')));
+    assert.ok(!result.ghCalls.some((call) => call.includes('auth token')));
+    assert.ok(!result.stdout.includes('STUB_SECRET'));
+    assert.ok(!result.stderr.includes('STUB_SECRET'));
+  });
+}
+
+test('both manual recovery examples stop before POST when host or auth fails (#4659)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  const examples = [
+    { heading: '## AW3-R', marker: 'or manually:' },
+    {
+      heading: '## AW3-S',
+      marker:
+        'instructions-only profile, or any profile if the helper is unavailable',
+    },
+  ];
+
+  for (const example of examples) {
+    const hostMissing = runManualRecoveryPost(
+      example.heading,
+      example.marker,
+      '',
+    );
+    assert.equal(
+      hostMissing.status,
+      2,
+      `${example.heading}\n${hostMissing.stdout}${hostMissing.stderr}`,
+    );
+    assert.ok(
+      !hostMissing.ghCalls.some((call) => call.startsWith('auth status')),
+      example.heading,
+    );
+    assert.ok(
+      !hostMissing.ghCalls.some((call) => call.includes('api --hostname')),
+      example.heading,
+    );
+    assert.ok(
+      !hostMissing.ghCalls.some((call) => call.includes('--method POST')),
+      example.heading,
+    );
+
+    const unauthenticated = runManualRecoveryPost(
+      example.heading,
+      example.marker,
+      `https://ghe.example.test/${OWNER}/${REPO}`,
+      1,
+    );
+    assert.equal(
+      unauthenticated.status,
+      2,
+      `${example.heading}\n${unauthenticated.stdout}${unauthenticated.stderr}`,
+    );
+    assert.ok(
+      unauthenticated.ghCalls.some((call) =>
+        call.includes('auth status --active --hostname ghe.example.test'),
+      ),
+      example.heading,
+    );
+    assert.ok(
+      !unauthenticated.ghCalls.some((call) => call.includes('--method POST')),
+      example.heading,
+    );
+  }
+});
+
+test('manual recovery POST stops before authentication for invalid or mismatched repository URLs (#4638)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  for (const repoUrl of [
+    'http://ghe.example.test/' + OWNER + '/' + REPO,
+    'https://ghe.example.test:65536/' + OWNER + '/' + REPO,
+    'https://ghe.example.test:8443/other/repo',
+    'https://ghe.example.test:8443.evil.test/' + OWNER + '/' + REPO,
+  ]) {
+    const result = runManualRecoveryPost('## AW3-R', 'or manually:', repoUrl);
+    assert.equal(result.status, 2, repoUrl + '\n' + result.stderr);
+    assert.ok(
+      !result.ghCalls.some((call) => call.startsWith('auth status')),
+      repoUrl,
+    );
+    assert.ok(
+      !result.ghCalls.some((call) => call.includes('--method POST')),
+      repoUrl,
+    );
+  }
+});
 
 test('F2 does not count an edited disposition reply as a fresh disposition (#3860)', {
   skip: SKIP_REASON ?? false,

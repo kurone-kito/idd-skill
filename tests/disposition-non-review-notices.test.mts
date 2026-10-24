@@ -34,6 +34,7 @@ import {
   isGateAdvisoryBotLogin,
   isReviewSummaryComment,
   isTerminalAdvisoryNonReviewNotice,
+  parseCodexNoFindDisposition,
   renderLiveStatusDigest,
   retireLiveStatusDigestBody,
   summarizeDispositionEvidenceForGate,
@@ -249,6 +250,37 @@ const CODEX_NO_FIND_RESULT =
   '- Mark a draft as ready\n' +
   '- Comment "@codex review" or "@codex security review".\n\n' +
   '</details>';
+// Pinned from PR 654's actual Codex receipt (comment 6206989263), including
+// the receipt marker and terminal ending: https://github.com/kurone-kito/dotfiles/pull/654#issuecomment-6206989263
+const CODEX_NO_FIND_RECEIPT = {
+  sourceUrl:
+    'https://github.com/kurone-kito/dotfiles/pull/654#issuecomment-6206989263',
+  headSha: '556cbfef9186cfd554577645339699c25607e6fc',
+  body: [
+    '<!-- codex-review-receipt:v1 -->',
+    '',
+    "Codex Review: Didn't find any major issues. :rocket:",
+    '',
+    '**Reviewed commit:** `556cbfef91`',
+    '',
+    '<details> <summary>ℹ️ About Codex in GitHub</summary>',
+    '<br/>',
+    '',
+    '[Your team has set up Codex to review pull requests in this repo](https://chatgpt.com/codex/cloud/settings/general). Reviews are triggered when you',
+    '- Open a pull request for review',
+    '- Mark a draft as ready',
+    '- Comment "@codex review".',
+    '',
+    'If Codex has suggestions, it will comment; otherwise it will react with 👍.',
+    '',
+    '',
+    '',
+    '',
+    'Codex can also answer questions or update the PR. Try commenting "@codex address that feedback".',
+    '            ',
+    '</details>',
+  ].join('\n'),
+};
 // A full 40-char head SHA for the cases that validate against the schema, which
 // now constrains `headSha` to `^[0-9a-f]{40}$`.
 const HEAD_SHA = '0123456789abcdef0123456789abcdef01234567';
@@ -264,6 +296,50 @@ function notice(
   return updatedAt === undefined
     ? { id, login, body, createdAt, lastEditedAt }
     : { id, login, body, createdAt, updatedAt, lastEditedAt };
+}
+
+function summarizeGateComments(comments: NoticeComment[], headSha: string) {
+  return summarizeDispositionEvidenceForGate(
+    {
+      comments: comments.map((comment) => ({
+        id: String(comment.id),
+        author: { login: comment.login },
+        body: comment.body,
+        createdAt: comment.createdAt,
+        updatedAt: comment.updatedAt ?? comment.createdAt,
+        lastEditedAt: comment.lastEditedAt,
+      })),
+      threads: [],
+    },
+    {
+      iddAgentLogins: ['kurone-kito'],
+      trustedMarkerLogins: ['kurone-kito'],
+      advisoryBotLogins: [CODEX],
+      prHeadSha: headSha,
+    },
+  );
+}
+
+function assertEmptyPlanApplyIsNoop(plan: DispositionPlan): void {
+  const calls: string[] = [];
+  const result = applyDispositionPlan(plan, {
+    revalidateClaim: () => {
+      calls.push('claim');
+      return true;
+    },
+    postDisposition: () => {
+      calls.push('post');
+      return { id: 1 };
+    },
+    recoverPostedDisposition: () => {
+      calls.push('recover');
+      return null;
+    },
+    knownViewerCommentIds: new Set(),
+  });
+  assert.deepEqual(result.applied, []);
+  assert.deepEqual(result.failed, []);
+  assert.deepEqual(calls, []);
 }
 
 // --- #1450: migration onto the shared cli-args.mts wrapper -----------------
@@ -1523,6 +1599,239 @@ test('Codex no-find classifier accepts only the observed terminal shape for the 
       'abc1234',
     ),
     false,
+  );
+});
+
+test('#4635: the pinned PR 654 receipt is a current-head no-find result only in its exact Codex form', () => {
+  const { body, headSha, sourceUrl } = CODEX_NO_FIND_RECEIPT;
+  assert.equal(isCodexNoFindResultForHeadSha(body, headSha), true, sourceUrl);
+  assert.equal(
+    isCodexNoFindResultForHeadSha(
+      body,
+      'deadbeef9186cfd554577645339699c25607e6fc',
+    ),
+    false,
+  );
+  assert.equal(
+    isCodexNoFindResultForHeadSha(
+      body.replace('codex-review-receipt:v1', 'codex-review-receipt:v2'),
+      headSha,
+    ),
+    false,
+  );
+  assert.equal(
+    isCodexNoFindResultForHeadSha(
+      body.replace('556cbfef91', 'deadbeef91'),
+      headSha,
+    ),
+    false,
+  );
+  assert.equal(
+    isCodexNoFindResultForHeadSha(
+      body.replace(
+        '**Reviewed commit:** `556cbfef91`',
+        'Reviewed commit: missing',
+      ),
+      headSha,
+    ),
+    false,
+  );
+  assert.equal(
+    isCodexNoFindResultForHeadSha(
+      body.replace('</details>', 'I found a major issue.\n\n</details>'),
+      headSha,
+    ),
+    false,
+  );
+  assert.equal(
+    isCodexNoFindResultForHeadSha(
+      body.replace(
+        'Reviews are triggered when you',
+        'I found a major issue.\nReviews are triggered when you',
+      ),
+      headSha,
+    ),
+    false,
+  );
+  assert.equal(
+    isCodexNoFindResultForHeadSha(
+      body.replace('<!-- codex-review-receipt:v1 -->\n\n', ''),
+      headSha,
+    ),
+    false,
+  );
+
+  const actualReceipt = notice(
+    6206989263,
+    CODEX,
+    body,
+    '2026-10-16T02:55:30Z',
+    '2026-10-16T02:55:30Z',
+  );
+  const humanCopy = notice(
+    6206989264,
+    'reviewer-a',
+    body,
+    '2026-10-16T02:55:31Z',
+    '2026-10-16T02:55:31Z',
+  );
+  const humanPlan = buildDispositionPlan(
+    { headSha, comments: [actualReceipt, humanCopy] },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.deepEqual(
+    humanPlan.planned.map((item) => item.noticeId),
+    [actualReceipt.id],
+  );
+  assert.deepEqual(
+    summarizeGateComments(
+      [actualReceipt, humanCopy],
+      headSha,
+    ).missingRegularComments.map((comment) => comment.id),
+    [String(actualReceipt.id), String(humanCopy.id)],
+  );
+
+  const lookalikePlan = buildDispositionPlan(
+    {
+      headSha,
+      comments: [
+        actualReceipt,
+        notice(
+          6206989265,
+          'chatgpt-codex-connector-fork[bot]',
+          body,
+          '2026-10-16T02:55:32Z',
+          '2026-10-16T02:55:32Z',
+        ),
+      ],
+    },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.deepEqual(
+    lookalikePlan.planned.map((item) => item.noticeId),
+    [actualReceipt.id],
+  );
+});
+
+test('#4635: sticky summary and source-bound receipt settle independently and stay idempotent', () => {
+  const headSha = CODEX_NO_FIND_RECEIPT.headSha;
+  const sticky = notice(
+    6204243359,
+    CODEX,
+    CODEX_SUMMARY_COMPLETED.replace('abc1234', '556cbfe'),
+    '2026-10-16T02:55:31Z',
+    '2026-10-16T02:55:32Z',
+  );
+  const receipt = notice(
+    6206989263,
+    CODEX,
+    CODEX_NO_FIND_RECEIPT.body,
+    '2026-10-16T02:55:30Z',
+    '2026-10-16T02:55:30Z',
+  );
+
+  const stickyInitial = buildDispositionPlan(
+    { headSha, comments: [sticky] },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.deepEqual(
+    stickyInitial.planned.map((item) => [item.noticeId, item.reason]),
+    [[sticky.id, 'summary walkthrough']],
+  );
+  const stickyDisposition = notice(
+    6207000001,
+    'kurone-kito',
+    stickyInitial.planned[0]?.body ?? '',
+    '2026-10-16T03:00:00Z',
+    '2026-10-16T03:00:00Z',
+  );
+  const stickySettled = [sticky, stickyDisposition];
+  const stickyNext = buildDispositionPlan(
+    { headSha, comments: stickySettled },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.deepEqual(stickyNext.planned, []);
+  assertEmptyPlanApplyIsNoop(stickyNext);
+  assert.deepEqual(
+    summarizeGateComments(stickySettled, headSha).missingRegularComments,
+    [],
+  );
+
+  const combinedInitial = buildDispositionPlan(
+    { headSha, comments: [sticky, receipt] },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.deepEqual(
+    combinedInitial.planned.map((item) => [item.noticeId, item.reason]),
+    [
+      [sticky.id, 'summary walkthrough'],
+      [receipt.id, 'Codex no-find result'],
+    ],
+  );
+  const combinedDispositions = combinedInitial.planned.map((item, index) =>
+    notice(
+      6207000002 + index,
+      'kurone-kito',
+      item.body,
+      `2026-10-16T03:00:0${index + 1}Z`,
+      `2026-10-16T03:00:0${index + 1}Z`,
+    ),
+  );
+  const summaryDisposition = combinedDispositions.find((item) =>
+    item.body.includes('summary walkthrough'),
+  );
+  const receiptDisposition = combinedDispositions.find((item) =>
+    isCodexNoFindResultDisposition(item.body),
+  );
+  assert.ok(summaryDisposition);
+  assert.ok(receiptDisposition);
+  assert.equal(
+    parseCodexNoFindDisposition(receiptDisposition.body)?.sourceCommentId,
+    String(receipt.id),
+  );
+
+  const receiptOnly = summarizeGateComments(
+    [sticky, receipt, receiptDisposition],
+    headSha,
+  );
+  assert.deepEqual(
+    receiptOnly.missingRegularComments.map((comment) => comment.id),
+    [String(sticky.id)],
+  );
+  const stickyOnly = summarizeGateComments(
+    [sticky, receipt, summaryDisposition],
+    headSha,
+  );
+  assert.deepEqual(
+    stickyOnly.missingRegularComments.map((comment) => comment.id),
+    [String(receipt.id)],
+  );
+
+  const settled = [sticky, receipt, ...combinedDispositions];
+  const next = buildDispositionPlan(
+    { headSha, comments: settled },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.deepEqual(next.planned, []);
+  assertEmptyPlanApplyIsNoop(next);
+  assert.deepEqual(
+    summarizeGateComments(settled, headSha).missingRegularComments,
+    [],
+  );
+
+  const laterFeedback = notice(
+    6207000004,
+    'reviewer-a',
+    'Please preserve the behavior described in the issue.',
+    '2026-10-16T03:01:00Z',
+    '2026-10-16T03:01:00Z',
+  );
+  assert.deepEqual(
+    summarizeGateComments(
+      [...settled, laterFeedback],
+      headSha,
+    ).missingRegularComments.map((comment) => comment.id),
+    [String(laterFeedback.id)],
   );
 });
 
