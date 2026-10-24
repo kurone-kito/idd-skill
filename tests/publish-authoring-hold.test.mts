@@ -14,6 +14,7 @@ import { test } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { AuthoringOwnerProvenanceComment } from '../src/scripts/authoring-owner-provenance.mts';
 import { markdownItAvailable } from '../src/scripts/markdown-structure.mts';
+import { resolveAnchorOwnerGeneration } from '../src/scripts/post-idd-marker.mts';
 import {
   buildLintArgs,
   carrierSetSnapshot,
@@ -25,7 +26,6 @@ import {
   markerPostSentNothing,
   parseJournalReference,
   replayAnchorHold,
-  resolveAnchorGeneration,
   resolvePublishLabels,
 } from '../src/scripts/publish-authoring-hold.mts';
 import { stubExecutable } from './test-utils.mts';
@@ -180,8 +180,8 @@ if (args.includes('graphql')) {
     updatedAt: c.createdAt,
     body: c.body,
     author: { login: c.user },
-    isMinimized: false,
-    minimizedReason: null,
+    isMinimized: (c.minimizedReason ?? null) !== null,
+    minimizedReason: c.minimizedReason ?? null,
   }));
   out({ data: { repository: { issue: { comments: { nodes, pageInfo: { hasNextPage: false, endCursor: null } } } } } });
 }
@@ -343,6 +343,7 @@ interface StubState {
     body: string;
     user: string;
     createdAt: string;
+    minimizedReason?: string | null;
   }[];
   [key: string]: unknown;
 }
@@ -805,6 +806,7 @@ test('CLI: --apply runs the mutations in the contract order and ends at member',
       'journal-pending',
       'create',
       'identity-attach',
+      'provenance',
       'owner-marker',
       'provenance',
       'member',
@@ -963,9 +965,9 @@ test('CLI: an open linked pull request stops before member', () => {
 });
 
 test('CLI: a foreign owner marker that lands after provenance stops before member', () => {
-  // The first GraphQL comment read is the provenance run; the second is the
-  // final owner-log replay.
-  const fixture = setup({ foreignOwnerOnRead: 2 });
+  // The first read is acquire preflight, the second is provenance, and the
+  // third is the final owner-log replay.
+  const fixture = setup({ foreignOwnerOnRead: 3 });
   try {
     const result = fixture.run([...files(fixture), '--apply']);
     assert.equal(result.status, 1);
@@ -2665,12 +2667,27 @@ function provenanceComment(
 }
 
 function replay(comments: AuthoringOwnerProvenanceComment[]) {
-  return resolveAnchorGeneration({
+  const result = resolveAnchorOwnerGeneration({
     comments,
     anchorRef: ANCHOR_REF,
     markerPrefix: 'idd-skill',
     trusted: ['kurone-kito'],
   });
+  if ('problem' in result) {
+    return result;
+  }
+  if (result.generation === null) {
+    return {
+      problem: `${ANCHOR_REF} has no open owner generation: no trusted acquire, bootstrap or resume marker, or its set was released`,
+    };
+  }
+  if (result.generation.releasing) {
+    return {
+      problem: `the set of ${ANCHOR_REF} is being released, so a child cannot join it`,
+    };
+  }
+  const { owner, set, session, latest } = result.generation;
+  return { generation: { owner, set, session, latest } };
 }
 
 test('child ids: the anchor is the real reference and the set and session are the anchor`s', () => {
@@ -2746,6 +2763,80 @@ test('anchor replay: an acquire opens a generation and heartbeats and resumes ke
   assert.equal(resumed.generation.owner, 'owner-next');
   assert.equal(resumed.generation.session, 'session-next');
   assert.equal(resumed.generation.set, ANCHOR_SET);
+});
+
+test('shared anchor replay distinguishes empty, releasing, and closed histories', () => {
+  const empty = resolveAnchorOwnerGeneration({
+    comments: [],
+    anchorRef: ANCHOR_REF,
+    markerPrefix: 'idd-skill',
+    trusted: ['kurone-kito'],
+  });
+  assert.deepEqual(empty, {
+    generation: null,
+    closedSets: new Set(),
+    closedGenerations: [],
+  });
+
+  const releasing = resolveAnchorOwnerGeneration({
+    comments: [
+      provenanceComment(1, 'acquire'),
+      provenanceComment(2, 'release'),
+    ],
+    anchorRef: ANCHOR_REF,
+    markerPrefix: 'idd-skill',
+    trusted: ['kurone-kito'],
+  });
+  assert.ok(!('problem' in releasing));
+  assert.equal(releasing.generation?.releasing, true);
+  assert.deepEqual(releasing.closedSets, new Set());
+
+  const completed = resolveAnchorOwnerGeneration({
+    comments: [
+      provenanceComment(1, 'acquire'),
+      provenanceComment(2, 'release'),
+      provenanceComment(3, 'release-complete'),
+    ],
+    anchorRef: ANCHOR_REF,
+    markerPrefix: 'idd-skill',
+    trusted: ['kurone-kito'],
+  });
+  assert.ok(!('problem' in completed));
+  assert.equal(completed.generation, null);
+  assert.deepEqual(completed.closedSets, new Set([ANCHOR_SET]));
+  assert.deepEqual(
+    completed.closedGenerations.map((closed) => ({
+      owner: closed.owner,
+      set: closed.set,
+      session: closed.session,
+      releaseComplete: {
+        id: closed.releaseComplete.id,
+        mode: closed.releaseComplete.mode,
+      },
+    })),
+    [
+      {
+        owner: ANCHOR_OWNER,
+        set: ANCHOR_SET,
+        session: ANCHOR_SESSION,
+        releaseComplete: { id: 3, mode: 'release-complete' },
+      },
+    ],
+  );
+
+  const untrustedClose = resolveAnchorOwnerGeneration({
+    comments: [
+      provenanceComment(1, 'acquire'),
+      provenanceComment(2, 'release'),
+      provenanceComment(3, 'release-complete', {}, { authorLogin: 'stranger' }),
+    ],
+    anchorRef: ANCHOR_REF,
+    markerPrefix: 'idd-skill',
+    trusted: ['kurone-kito'],
+  });
+  assert.ok(!('problem' in untrustedClose));
+  assert.equal(untrustedClose.generation?.releasing, true);
+  assert.deepEqual(untrustedClose.closedSets, new Set());
 });
 
 test('anchor replay: a resume keeps a release in progress until release-complete closes it', () => {
@@ -2831,14 +2922,14 @@ test('anchor replay: a released set is not joinable, and a new acquire after rel
   }
 });
 
-test('anchor replay: the terminal modes retain the session and close only a release in progress', () => {
+test('anchor replay: closure needs an accepted release marker', () => {
   // A release-complete with no release before it closes nothing.
   const early = replay([
     provenanceComment(1, 'acquire'),
     provenanceComment(2, 'release-complete'),
   ]);
   assert.ok('problem' in early);
-  assert.match(early.problem, /no release in progress/);
+  assert.match(early.problem, /no accepted release marker in progress/);
 
   // A heartbeat does not start a release either.
   const beaten = replay([
@@ -2847,6 +2938,15 @@ test('anchor replay: the terminal modes retain the session and close only a rele
     provenanceComment(3, 'release-complete'),
   ]);
   assert.ok('problem' in beaten);
+
+  // A release-guard is not evidence that the release marker itself landed.
+  const guarded = replay([
+    provenanceComment(1, 'acquire'),
+    provenanceComment(2, 'release-guard'),
+    provenanceComment(3, 'release-complete'),
+  ]);
+  assert.ok('problem' in guarded);
+  assert.match(guarded.problem, /no accepted release marker in progress/);
 
   // The anchor-only terminal markers retain the current session.
   for (const mode of ['release-guard', 'release-complete']) {
@@ -3682,6 +3782,83 @@ test('CLI: a child apply heartbeats the anchor, joins its set and never edits th
       );
     }
     assert.match(records[2] ?? '', /state=member/);
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('CLI: a promoted anchor remains usable for child publication (#4669)', () => {
+  const formerAnchorRef = 'o/r#4001';
+  const formerSet = 'set-former-child';
+  const formerSession = 'session-former-child';
+  const formerChildFields = {
+    target: ANCHOR_REF,
+    anchor: formerAnchorRef,
+    set: formerSet,
+    session: formerSession,
+    owner: 'owner-former-child',
+  };
+  const fixture = setup({ labels: ['status:authoring'] });
+  try {
+    seedAnchor(fixture, {
+      markers: [
+        ownerMarkerText('acquire', formerChildFields),
+        ownerMarkerText('release', formerChildFields),
+        ownerMarkerText('acquire'),
+      ],
+    });
+    fixture.seed((stored) => {
+      stored.issues['4001'] = {
+        body: 'The former anchor is closed.',
+        labels: [],
+        state: 'closed',
+      };
+      const formerChildRelease = stored.comments.find(
+        (comment) => comment.issue === ANCHOR && comment.id === 4101,
+      );
+      assert.ok(formerChildRelease);
+      formerChildRelease.minimizedReason = 'outdated';
+      const promotedSelfAcquire = stored.comments.find(
+        (comment) => comment.issue === ANCHOR && comment.id === 4102,
+      );
+      assert.ok(promotedSelfAcquire);
+      promotedSelfAcquire.createdAt = new Date(
+        Date.UTC(2026, 9, 12, 0, 0, 6),
+      ).toISOString();
+      for (const [index, mode] of [
+        'acquire',
+        'release',
+        'release-guard',
+        'release-complete',
+      ].entries()) {
+        stored.comments.push({
+          id: 4200 + index,
+          issue: 4001,
+          body: ownerMarkerText(mode, {
+            target: formerAnchorRef,
+            anchor: formerAnchorRef,
+            set: formerSet,
+            session: formerSession,
+            owner: 'owner-former-anchor',
+          }),
+          user: 'kurone-kito',
+          createdAt: new Date(
+            Date.UTC(2026, 9, 12, 0, 0, index + 2),
+          ).toISOString(),
+        });
+      }
+    });
+
+    const result = fixture.run([...childArgs(fixture), '--apply']);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.outcome, 'published');
+    assert.equal(report.ids.anchor, ANCHOR_REF);
+    assert.equal(report.ids.set, ANCHOR_SET);
+    assert.ok(writeKinds(fixture).includes('anchor:heartbeat'));
+    assert.ok(
+      childComments(fixture).some((body) => /mode=acquire;/.test(body)),
+    );
   } finally {
     fixture.restore();
   }
