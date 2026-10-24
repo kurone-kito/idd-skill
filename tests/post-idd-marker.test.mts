@@ -8436,6 +8436,48 @@ test('authoring-owner acquire refuses an outdated release-complete as closure ev
   }
 });
 
+test('authoring-owner child acquire accepts an outdated completion superseded by a verified generation (#4669)', () => {
+  const oldHistory = ownerIdClosedHistory(
+    OWNER_ID_ANCHOR_TARGET,
+    'set-old',
+    'session-old',
+  ).map((comment) =>
+    comment.id === 103 ? { ...comment, minimizedReason: 'outdated' } : comment,
+  );
+  const comments = [
+    ...oldHistory,
+    {
+      id: 104,
+      body: ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: OWNER_ID_ANCHOR_TARGET,
+        anchor: OWNER_ID_ANCHOR_TARGET,
+        owner: 'owner-next',
+        set: 'set-next',
+        session: 'session-next',
+      }),
+    },
+  ];
+  const stub = withOwnerIdStub({
+    comments: [],
+    commentsByIssueNumber: { 43: comments },
+  });
+  try {
+    const run = runOwnerIdPost(
+      ownerIdFlags('acquire', {
+        anchor: OWNER_ID_ANCHOR_TARGET,
+        'marker-owner': 'owner-child-next',
+        set: 'set-next',
+        session: 'session-next',
+      }),
+    );
+    assert.equal(run.status, 0, run.stderr);
+    assert.equal(readOwnerIdLines(stub.postsFile).length, 1);
+  } finally {
+    stub.restore();
+  }
+});
+
 test('authoring-owner acquire lets a completed child become a fresh self-anchor (#4669)', () => {
   const targetComments = [
     { id: 101, body: ownerIdChildMarker('acquire') },
@@ -9652,6 +9694,17 @@ test('authoring-owner child acquire ignores a losing foreign opener after a self
         session: 'session-losing-child',
       }),
     },
+    {
+      id: 103,
+      body: ownerIdHistoryMarker({
+        mode: 'heartbeat',
+        target: OWNER_ID_ANCHOR_TARGET,
+        anchor: 'o/r#44',
+        owner: 'owner-losing-child',
+        set: 'set-losing-child',
+        session: 'session-losing-child',
+      }),
+    },
   ];
   for (const apply of [false, true]) {
     const stub = withOwnerIdStub({
@@ -9682,6 +9735,71 @@ test('authoring-owner child acquire ignores a losing foreign opener after a self
     } finally {
       stub.restore();
     }
+  }
+});
+
+test('authoring-owner acquire replays a later foreign opener after the self generation closes (#4669)', () => {
+  const set = 'set-losing-child';
+  const targetComments = [
+    { id: 101, body: ownerIdAnchorMarker('acquire') },
+    {
+      id: 102,
+      body: ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: OWNER_ID_ANCHOR_TARGET,
+        anchor: 'o/r#44',
+        owner: 'owner-losing-child',
+        set,
+        session: 'session-losing-child',
+      }),
+    },
+    {
+      id: 103,
+      body: ownerIdHistoryMarker({
+        mode: 'heartbeat',
+        target: OWNER_ID_ANCHOR_TARGET,
+        anchor: 'o/r#44',
+        owner: 'owner-losing-child',
+        set,
+        session: 'session-losing-child',
+      }),
+    },
+    { id: 104, body: ownerIdAnchorMarker('release') },
+    { id: 105, body: ownerIdAnchorMarker('release-guard') },
+    { id: 106, body: ownerIdAnchorMarker('release-complete') },
+    {
+      id: 107,
+      body: ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: OWNER_ID_ANCHOR_TARGET,
+        anchor: 'o/r#44',
+        owner: 'owner-later-child',
+        set,
+        session: 'session-later-child',
+      }),
+    },
+  ];
+  const stub = withOwnerIdStub({
+    comments: [],
+    commentsByIssueNumber: { 43: targetComments },
+  });
+  try {
+    const run = runOwnerIdPost(
+      ownerIdFlags('acquire', {
+        'marker-target': OWNER_ID_ANCHOR_TARGET,
+        anchor: OWNER_ID_ANCHOR_TARGET,
+        'marker-owner': 'owner-self-next',
+        set: 'set-self-next',
+        session: 'session-self-next',
+      }),
+      { targetNumber: 43 },
+    );
+    assert.equal(run.status, 1);
+    assert.equal(run.kind, 'gate');
+    assert.match(run.stderr, /no trusted release marker in progress/);
+    assert.deepEqual(readOwnerIdLines(stub.postsFile), []);
+  } finally {
+    stub.restore();
   }
 });
 

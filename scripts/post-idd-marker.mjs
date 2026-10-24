@@ -1992,11 +1992,6 @@ function advanceAnchorOwnerGeneration(state, parsed, latest) {
             problem: `owner marker ${latest.id} (mode=release-complete) closes a generation with no release in progress`,
           };
         }
-        if (latest.outdated) {
-          return {
-            problem: `owner marker ${latest.id} (mode=release-complete) is minimized as outdated, so it cannot close the generation`,
-          };
-        }
         return {
           open: null,
           closedSets: new Set([...closedSets, open.set]),
@@ -2114,6 +2109,32 @@ export function resolveAnchorOwnerGeneration(input) {
       return next;
     }
     state = next;
+  }
+  const verifiedOpeningIds = new Set([
+    ...state.closedGenerations.flatMap(
+      (generation) => generation.lineageOpeningIds,
+    ),
+    ...(state.open?.lineageOpeningIds ?? []),
+  ]);
+  for (const closed of state.closedGenerations) {
+    if (!closed.releaseComplete.outdated) {
+      continue;
+    }
+    const completion = shaped.find(
+      ({ comment }) => comment.id === closed.releaseComplete.id,
+    )?.comment;
+    const superseded =
+      completion !== undefined &&
+      shaped.some(
+        ({ comment }) =>
+          verifiedOpeningIds.has(comment.id) &&
+          commentPrecedes(completion, comment),
+      );
+    if (!superseded) {
+      return {
+        problem: `owner marker ${closed.releaseComplete.id} (mode=release-complete) is minimized as outdated, so it cannot close the generation`,
+      };
+    }
   }
   if (state.open?.latest.outdated) {
     return {
@@ -2272,7 +2293,7 @@ function reconcileFormerChildMembershipsInternal(input, ancestry, readBudget) {
     };
   }
   const nextAncestry = [...ancestry, targetKey];
-  const foreignMemberships = new Map();
+  const foreignEvents = [];
   const foreignCommentIds = new Set();
   const selfAnchorOpenings = [];
   const selfAnchorComments = [];
@@ -2330,71 +2351,96 @@ function reconcileFormerChildMembershipsInternal(input, ancestry, readBudget) {
       };
     }
     const key = `${parsed.anchor.toLowerCase()}\u0000${parsed.set}`;
-    const membership = foreignMemberships.get(key) ?? {
+    foreignEvents.push({
+      key,
       anchorRef: parsed.anchor,
       set: parsed.set,
-      comments: [],
-    };
-    membership.comments.push(comment);
-    if (parsed.mode === 'acquire' || parsed.mode === 'bootstrap') {
-      const opening = {
-        id: comment.id,
-        createdAt: comment.createdAt,
-        owner: parsed.owner,
-      };
-      if (
-        membership.firstOpening === undefined ||
-        commentPrecedes(opening, membership.firstOpening)
-      ) {
-        membership.firstOpening = opening;
-      }
-    }
-    foreignMemberships.set(key, membership);
+      comment,
+      parsed,
+    });
     foreignCommentIds.add(comment.id);
   }
-  if (foreignMemberships.size === 0) {
+  if (foreignEvents.length === 0) {
     return { comments: [...input.comments], closedSets: new Set() };
+  }
+  foreignEvents.sort((left, right) =>
+    commentPrecedes(left.comment, right.comment)
+      ? -1
+      : commentPrecedes(right.comment, left.comment)
+        ? 1
+        : 0,
+  );
+  const foreignEventsByMembership = new Map();
+  for (const event of foreignEvents) {
+    const events = foreignEventsByMembership.get(event.key) ?? [];
+    events.push(event);
+    foreignEventsByMembership.set(event.key, events);
   }
   const anchorReplays = new Map();
   const closedSets = new Set();
   const outdatedReleaseSuccessors = [];
-  const losingForeignMemberships = new Set();
-  for (const [key, membership] of foreignMemberships) {
-    const firstOpening = membership.firstOpening;
-    if (firstOpening === undefined) {
-      continue;
-    }
-    const earlierSelfComments = selfAnchorComments.filter((comment) =>
-      commentPrecedes(comment, firstOpening),
-    );
-    if (earlierSelfComments.length === 0) {
-      continue;
-    }
-    const earlierSelfReplay = resolveAnchorOwnerGeneration({
-      comments: earlierSelfComments,
-      anchorRef: input.historyTargetRef,
-      markerPrefix: input.markerPrefix,
-      trusted: input.trusted,
-    });
-    if ('problem' in earlierSelfReplay) {
-      return {
-        problem: `self-anchored owner history before former-child acquisition ${firstOpening.id} cannot be replayed: ${earlierSelfReplay.problem}`,
-      };
-    }
-    if (
-      earlierSelfReplay.generation !== null &&
-      earlierSelfReplay.generation.owner !== firstOpening.owner
-    ) {
-      // The target-wide self generation was already open when this foreign
-      // opener arrived. The foreign opener and its continuations lost that
-      // race; they are not a completed former-child membership.
-      losingForeignMemberships.add(key);
+  const losingForeignCommentIds = new Set();
+  for (const events of foreignEventsByMembership.values()) {
+    for (let index = 0; index < events.length; index += 1) {
+      const opener = events[index];
+      if (
+        opener.parsed.mode !== 'acquire' &&
+        opener.parsed.mode !== 'bootstrap'
+      ) {
+        continue;
+      }
+      const nextOpenerIndex = events.findIndex(
+        (event, eventIndex) =>
+          eventIndex > index &&
+          (event.parsed.mode === 'acquire' ||
+            event.parsed.mode === 'bootstrap'),
+      );
+      const segmentEnd =
+        nextOpenerIndex === -1 ? events.length : nextOpenerIndex;
+      const earlierSelfComments = selfAnchorComments.filter((comment) =>
+        commentPrecedes(comment, opener.comment),
+      );
+      if (earlierSelfComments.length === 0) {
+        continue;
+      }
+      const earlierSelfReplay = resolveAnchorOwnerGeneration({
+        comments: earlierSelfComments,
+        anchorRef: input.historyTargetRef,
+        markerPrefix: input.markerPrefix,
+        trusted: input.trusted,
+      });
+      if ('problem' in earlierSelfReplay) {
+        return {
+          problem: `self-anchored owner history before former-child acquisition ${opener.comment.id} cannot be replayed: ${earlierSelfReplay.problem}`,
+        };
+      }
+      if (
+        earlierSelfReplay.generation !== null &&
+        earlierSelfReplay.generation.owner !== opener.parsed.owner
+      ) {
+        // Only this opener and its continuations lose the target-wide race.
+        // A later opener for the same anchor/set starts a new segment and is
+        // replayed independently against the self-anchor history at that time.
+        for (const event of events.slice(index, segmentEnd)) {
+          losingForeignCommentIds.add(event.comment.id);
+        }
+      }
     }
   }
-  for (const [key, membership] of foreignMemberships) {
-    if (losingForeignMemberships.has(key)) {
+  const foreignMemberships = new Map();
+  for (const event of foreignEvents) {
+    if (losingForeignCommentIds.has(event.comment.id)) {
       continue;
     }
+    const membership = foreignMemberships.get(event.key) ?? {
+      anchorRef: event.anchorRef,
+      set: event.set,
+      comments: [],
+    };
+    membership.comments.push(event.comment);
+    foreignMemberships.set(event.key, membership);
+  }
+  for (const membership of foreignMemberships.values()) {
     const childReplay = resolveFormerChildMembership({
       membership,
       targetRef: input.historyTargetRef,

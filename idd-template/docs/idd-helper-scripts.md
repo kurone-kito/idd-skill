@@ -1063,11 +1063,18 @@ in this preamble, since the fallback differs per helper.
   and nested-promotion case
   ([thread #4367046671](https://github.com/kurone-kito/idd-skill/pull/4677#discussion_r4367046671)).
   Before reconciling foreign-child memberships, replay the target's
-  self-anchor history up to each foreign opener; an opener posted while a
-  different self generation is already open lost the target-wide race and
-  does not need a release-complete ([PR #4677, thread #4367443380](https://github.com/kurone-kito/idd-skill/pull/4677#discussion_r4367443380)).
-  A `release-complete` minimized as outdated cannot close a generation
-  ([PR #4677, thread #4367445303](https://github.com/kurone-kito/idd-skill/pull/4677#discussion_r4367445303)).
+  self-anchor history up to each foreign opener. An opener posted while a
+  different self generation is already open lost the target-wide race; ignore
+  only that opener and its continuations through the next `acquire` or
+  `bootstrap` for the same anchor/set. Evaluate each later opener against the
+  self-anchor history at its own point in the log, so a later active child
+  still needs release and completion evidence ([PR #4677, threads #4367443380](https://github.com/kurone-kito/idd-skill/pull/4677#discussion_r4367443380)
+  and [#4367522311](https://github.com/kurone-kito/idd-skill/pull/4677#discussion_r4367522311)).
+  A `release-complete` minimized as outdated is historical closure evidence
+  only when a later verified generation opener appears in the same replay;
+  without one, it cannot close the generation, and a prospective post is not
+  evidence that supersedes it ([PR #4677, threads #4367445303](https://github.com/kurone-kito/idd-skill/pull/4677#discussion_r4367445303)
+  and [#4367516300](https://github.com/kurone-kito/idd-skill/pull/4677#discussion_r4367516300)).
   A child release remains the completion evidence across a later heartbeat:
   its outdated state is preserved, completion must follow the latest child
   marker, and the former-anchor completion is matched to the replayed
