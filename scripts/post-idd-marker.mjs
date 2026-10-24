@@ -1777,6 +1777,11 @@ from another session stays allowed
 (#3498). The comments are read over GraphQL, once per check, and a failed
 read refuses too. The contract's direct JSON post stays available where only
 REST works, and it is not checked.
+Acquire and bootstrap also replay the declared anchor's complete owner log
+before dry-run output or POST. They fail closed when the trusted marker actor
+list is empty, or when recursive former-child reconciliation would exceed its
+shared budget of 32 former-anchor history reads; cycle and depth guards apply
+separately.
 authoring-publication-intent's --issue may be \`none\` only at
 --state pending (contract.md; mirrors audit-authored-issue.mts's own
 replay rule) -- \`--state member/cleanup/abandoned\` always require a real
@@ -2024,20 +2029,27 @@ function advanceAnchorOwnerGeneration(state, parsed, latest) {
 }
 /**
  * Replay owner markers from an anchor's full comment log. A non-empty trusted
- * actor list filters authors; an empty list applies no author filter, matching
- * the existing owner-marker identity contract. A valid empty or completed log
- * returns `generation: null` and its closed set IDs plus closure identities;
- * an open generation retains its `releasing` state. Malformed or incomplete
- * evidence fails closed. The first valid opener in comment order wins a
- * concurrent acquisition race.
+ * actor list filters authors; an empty list fails closed because no marker
+ * author can be established as trusted. A valid empty or completed log returns
+ * `generation: null` and its closed set IDs plus closure identities; an open
+ * generation retains its `releasing` state. Malformed or incomplete evidence
+ * fails closed. The first valid opener in comment order wins a concurrent
+ * acquisition race.
  */
 export function resolveAnchorOwnerGeneration(input) {
-  const trustedSet = new Set(input.trusted.map((login) => login.toLowerCase()));
+  const trustedSet = new Set(
+    input.trusted.map((login) => login.trim().toLowerCase()).filter(Boolean),
+  );
+  if (trustedSet.size === 0) {
+    return {
+      problem:
+        'trusted marker actor set is empty, so owner history cannot be verified',
+    };
+  }
   const shaped = [];
   for (const comment of input.comments) {
     if (
-      (trustedSet.size > 0 &&
-        !trustedSet.has(comment.authorLogin.trim().toLowerCase())) ||
+      !trustedSet.has(comment.authorLogin.trim().toLowerCase()) ||
       !looksLikeOwnerMarker(comment.body, input.markerPrefix)
     ) {
       continue;
@@ -2115,12 +2127,19 @@ export function resolveAnchorOwnerGeneration(input) {
  * matching `release-complete` can prove that the set then closed.
  */
 function resolveFormerChildMembership(input) {
-  const trustedSet = new Set(input.trusted.map((login) => login.toLowerCase()));
+  const trustedSet = new Set(
+    input.trusted.map((login) => login.trim().toLowerCase()).filter(Boolean),
+  );
+  if (trustedSet.size === 0) {
+    return {
+      problem:
+        'trusted marker actor set is empty, so former child history cannot be verified',
+    };
+  }
   const shaped = [];
   for (const comment of input.membership.comments) {
     if (
-      (trustedSet.size > 0 &&
-        !trustedSet.has(comment.authorLogin.trim().toLowerCase())) ||
+      !trustedSet.has(comment.authorLogin.trim().toLowerCase()) ||
       !looksLikeOwnerMarker(comment.body, input.markerPrefix)
     ) {
       continue;
@@ -2199,16 +2218,27 @@ function resolveFormerChildMembership(input) {
   return { generation: state.open };
 }
 const MAX_FORMER_CHILD_RECONCILIATION_DEPTH = 32;
+const MAX_FORMER_CHILD_RECONCILIATION_READS = 32;
 /**
  * An issue can become its own set anchor after being a completed child.
  * Reconcile each old child membership against the exact former anchor/set/
  * session completion before removing those foreign-anchor markers from an
  * anchor replay. Any later self-generation must open after that completion.
- * Former anchors are reconciled recursively with a cycle and depth guard.
+ * Former anchors are reconciled recursively with shared read, cycle and depth
+ * guards. An empty trusted actor list cannot establish marker provenance.
  * An outdated child release is historical only when the matching completion
  * precedes a verified later self-generation. Incomplete history fails closed.
  */
-function reconcileFormerChildMembershipsInternal(input, ancestry) {
+function reconcileFormerChildMembershipsInternal(input, ancestry, readBudget) {
+  const trustedSet = new Set(
+    input.trusted.map((login) => login.trim().toLowerCase()).filter(Boolean),
+  );
+  if (trustedSet.size === 0) {
+    return {
+      problem:
+        'trusted marker actor set is empty, so former-child history cannot be verified',
+    };
+  }
   const target = parseIssueReference(input.historyTargetRef);
   if (target === null) {
     return {
@@ -2227,14 +2257,12 @@ function reconcileFormerChildMembershipsInternal(input, ancestry) {
     };
   }
   const nextAncestry = [...ancestry, targetKey];
-  const trustedSet = new Set(input.trusted.map((login) => login.toLowerCase()));
   const foreignMemberships = new Map();
   const foreignCommentIds = new Set();
   const selfAnchorOpenings = [];
   for (const comment of input.comments) {
     if (
-      (trustedSet.size > 0 &&
-        !trustedSet.has(comment.authorLogin.trim().toLowerCase())) ||
+      !trustedSet.has(comment.authorLogin.trim().toLowerCase()) ||
       !looksLikeOwnerMarker(comment.body, input.markerPrefix)
     ) {
       continue;
@@ -2322,6 +2350,14 @@ function reconcileFormerChildMembershipsInternal(input, ancestry) {
         };
       }
       let anchorComments;
+      if (
+        readBudget.formerAnchorReads >= MAX_FORMER_CHILD_RECONCILIATION_READS
+      ) {
+        return {
+          problem: `former-anchor reconciliation exceeded the maximum of ${MAX_FORMER_CHILD_RECONCILIATION_READS} former-anchor history reads`,
+        };
+      }
+      readBudget.formerAnchorReads += 1;
       try {
         anchorComments = fetchProvenanceCommentsGraphql(
           anchor.owner,
@@ -2341,6 +2377,7 @@ function reconcileFormerChildMembershipsInternal(input, ancestry) {
           trusted: input.trusted,
         },
         nextAncestry,
+        readBudget,
       );
       if ('problem' in anchorReconciliation) {
         return {
@@ -2483,7 +2520,9 @@ function reconcileFormerChildMembershipsInternal(input, ancestry) {
   return { comments: reconciledComments, closedSets };
 }
 export function reconcileFormerChildMemberships(input) {
-  return reconcileFormerChildMembershipsInternal(input, []);
+  return reconcileFormerChildMembershipsInternal(input, [], {
+    formerAnchorReads: 0,
+  });
 }
 /**
  * The owner-state preflight for `authoring-owner` posts, run before both dry
@@ -2524,6 +2563,18 @@ function checkAuthoringOwnerPostIdentity(input) {
     process.stderr.write(`${message}\n`);
     return { exitCode: 1, kind: 'gate', message };
   }
+  const { actors } = resolveTrustedActors({
+    flagValue: input.trustedMarkerLoginsFlag,
+    envValue: process.env.IDD_TRUSTED_MARKER_ACTORS ?? '',
+    config: loadIddConfig(),
+  });
+  if (acquisitionMode && actors.length === 0) {
+    const message =
+      `refusing to post authoring-owner marker (mode=${post.mode}): ` +
+      'trusted marker actor list is empty, so owner history cannot be verified';
+    process.stderr.write(`${message}\n`);
+    return { exitCode: 1, kind: 'gate', message };
+  }
   let comments;
   try {
     comments = fetchProvenanceCommentsGraphql(
@@ -2540,11 +2591,6 @@ function checkAuthoringOwnerPostIdentity(input) {
     process.stderr.write(`${message}\n`);
     return { exitCode: 1, ...classifyHelperError(error), message };
   }
-  const { actors } = resolveTrustedActors({
-    flagValue: input.trustedMarkerLoginsFlag,
-    envValue: process.env.IDD_TRUSTED_MARKER_ACTORS ?? '',
-    config: loadIddConfig(),
-  });
   const trustedLogins = new Set(actors);
   if (acquisitionMode) {
     const reconciliation = reconcileFormerChildMemberships({

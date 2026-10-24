@@ -1039,6 +1039,11 @@ in this preamble, since the fallback differs per helper.
   memberships are reconciled whenever an anchor log is read, including child
   acquisition and publication from an anchor that was itself previously a
   child. Reconciliation is recursive and stops on a cycle or the depth limit.
+  One shared budget allows at most 32 former-anchor history reads across the
+  full nested and sibling reconciliation; a larger history fails closed before
+  the next read. Acquire and bootstrap also fail closed before the anchor
+  owner-history read when the resolved trusted marker actor list is empty,
+  because no owner marker can then be established as trusted.
   Each former anchor's owner log must prove the matching set and session
   reached `release-complete` after the child's final release and before the
   next self-generation in `(createdAt, id)` order. A child release minimized

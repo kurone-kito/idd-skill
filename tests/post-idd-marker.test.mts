@@ -8227,6 +8227,26 @@ test('authoring-owner --apply counts any login when the working directory config
   }
 });
 
+test('authoring-owner acquire fails closed when no trusted marker actors are configured (#4669)', () => {
+  const isolatedCwd = mkdtempSync(join(tmpdir(), 'idd-post-idd-marker-cwd-'));
+  const stub = withOwnerIdStub({
+    comments: [{ ...OWNER_ID_ACQUIRE_OPENER, author: 'stranger' }],
+  });
+  try {
+    const run = runOwnerIdPost(ownerIdFlags('acquire'), {
+      cwd: isolatedCwd,
+    });
+    assert.equal(run.status, 1);
+    assert.equal(run.kind, 'gate');
+    assert.match(run.stderr, /trusted marker actor list is empty/);
+    assert.deepEqual(readOwnerIdLines(stub.readsFile), []);
+    assert.deepEqual(readOwnerIdLines(stub.postsFile), []);
+  } finally {
+    stub.restore();
+    rmSync(isolatedCwd, { recursive: true, force: true });
+  }
+});
+
 test('authoring-owner --apply checks release-guard and release-complete against the anchor opening marker (#3910)', () => {
   for (const mode of ['release-guard', 'release-complete']) {
     const matching = withOwnerIdStub({ comments: [OWNER_ID_ACQUIRE_OPENER] });
@@ -8342,7 +8362,7 @@ test('authoring-owner acquire and bootstrap reject a trusted closed set in dry-r
   }
 });
 
-test('authoring-owner acquire and bootstrap retain closed-set checks when no trusted logins are configured (#4669)', () => {
+test('authoring-owner acquire and bootstrap fail closed when no trusted logins are configured (#4669)', () => {
   for (const mode of ['acquire', 'bootstrap']) {
     for (const apply of [false, true]) {
       const isolatedCwd = mkdtempSync(
@@ -8357,11 +8377,8 @@ test('authoring-owner acquire and bootstrap retain closed-set checks when no tru
         });
         assert.equal(run.status, 1, `${mode}, apply=${apply}`);
         assert.equal(run.kind, 'gate', `${mode}, apply=${apply}`);
-        assert.match(
-          run.stderr,
-          /already closed by a trusted release-complete/,
-        );
-        assert.equal(readOwnerIdLines(stub.readsFile).length, 1);
+        assert.match(run.stderr, /trusted marker actor list is empty/);
+        assert.deepEqual(readOwnerIdLines(stub.readsFile), []);
         assert.deepEqual(readOwnerIdLines(stub.postsFile), []);
       } finally {
         stub.restore();
@@ -9208,6 +9225,102 @@ test('authoring-owner acquire fails closed when former-anchor replay exceeds its
     assert.equal(run.status, 1);
     assert.equal(run.kind, 'gate');
     assert.match(run.stderr, /exceeded the maximum depth of 32/);
+    assert.deepEqual(readOwnerIdLines(stub.postsFile), []);
+  } finally {
+    stub.restore();
+  }
+});
+
+test('authoring-owner acquire bounds former-anchor history reads across siblings (#4669)', () => {
+  const membershipCount = 33;
+  const commentsByIssueNumber: Record<number, OwnerIdComment[]> = {};
+  const targetComments: OwnerIdComment[] = [];
+
+  for (let index = 0; index < membershipCount; index += 1) {
+    const anchorNumber = 43 + index;
+    const anchorRef = `o/r#${anchorNumber}`;
+    const set = `set-budget-${index}`;
+    const session = `session-budget-${index}`;
+    const childOwner = `owner-child-${index}`;
+    const anchorOwner = `owner-anchor-${index}`;
+    const firstChildCommentId = 1000 + index * 2;
+
+    targetComments.push(
+      {
+        id: firstChildCommentId,
+        body: ownerIdHistoryMarker({
+          mode: 'acquire',
+          target: OWNER_ID_TARGET,
+          anchor: anchorRef,
+          owner: childOwner,
+          set,
+          session,
+        }),
+      },
+      {
+        id: firstChildCommentId + 1,
+        body: ownerIdHistoryMarker({
+          mode: 'release',
+          target: OWNER_ID_TARGET,
+          anchor: anchorRef,
+          owner: childOwner,
+          set,
+          session,
+        }),
+      },
+    );
+
+    const firstAnchorCommentId = 10_000 + index * 3;
+    commentsByIssueNumber[anchorNumber] = [
+      {
+        id: firstAnchorCommentId,
+        body: ownerIdHistoryMarker({
+          mode: 'acquire',
+          target: anchorRef,
+          anchor: anchorRef,
+          owner: anchorOwner,
+          set,
+          session,
+        }),
+      },
+      {
+        id: firstAnchorCommentId + 1,
+        body: ownerIdHistoryMarker({
+          mode: 'release-guard',
+          target: anchorRef,
+          anchor: anchorRef,
+          owner: anchorOwner,
+          set,
+          session,
+        }),
+      },
+      {
+        id: firstAnchorCommentId + 2,
+        body: ownerIdHistoryMarker({
+          mode: 'release-complete',
+          target: anchorRef,
+          anchor: anchorRef,
+          owner: anchorOwner,
+          set,
+          session,
+        }),
+      },
+    ];
+  }
+
+  const stub = withOwnerIdStub({
+    comments: targetComments,
+    commentsByIssueNumber,
+  });
+  try {
+    const run = runOwnerIdPost(ownerIdFlags('acquire', { set: 'set-new' }));
+    assert.equal(run.status, 1);
+    assert.equal(run.kind, 'gate');
+    assert.match(
+      run.stderr,
+      /former-anchor reconciliation exceeded the maximum of 32 former-anchor history reads/,
+    );
+    assert.equal(readOwnerIdLines(stub.readsFile).length, 33);
     assert.deepEqual(readOwnerIdLines(stub.postsFile), []);
   } finally {
     stub.restore();
