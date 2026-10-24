@@ -4828,19 +4828,23 @@ test('post-idd-marker CLI: every required flag of authoring-owner other than bod
   }
 });
 
-/** Stub `gh api repos/<owner>/<repo>/issues/<n>` (the exact call
- * `createGithubProviderAdapter(...).getWorkItem` makes, and thus the
- * authoring-owner body-sha256 live-fetch source, #2931) to return `{ body
- * }`, and fail loudly on any other invocation. */
+/** Stub the authoring-owner live-body fetch and its paginated anchor-log
+ * preflight. A caller may supply a specific anchor history; otherwise the
+ * GraphQL log is empty. */
 function stubGhIssueBody(
   owner: string,
   repo: string,
   number: number,
   body: string,
+  comments: OwnerIdComment[] = [],
 ): () => void {
   return stubExecutable(
     'gh',
     `const args = process.argv.slice(2);
+if (args.includes('graphql')) {
+  process.stdout.write(${JSON.stringify(ownerIdCommentPage(comments))});
+  process.exit(0);
+}
 if (args[0] === 'api' && args[1] === 'repos/${owner}/${repo}/issues/${number}') {
   process.stdout.write(JSON.stringify({ number: ${number}, body: ${JSON.stringify(body)} }));
   process.exit(0);
@@ -5261,7 +5265,22 @@ test('authoring-owner CLI tolerates a mismatching --anchor for a non-anchor-only
   const correctDigest = createHash('sha256')
     .update(LIVE_BODY, 'utf8')
     .digest('hex');
-  const restore = stubGhIssueBody('o', 'r', 42, LIVE_BODY);
+  const anchorOpener: OwnerIdComment = {
+    id: 101,
+    body: buildMarkerBody('authoring-owner', {
+      'marker-prefix': 'idd-skill',
+      'marker-target': 'o/r#7',
+      anchor: 'o/r#7',
+      mode: 'acquire',
+      'marker-owner': 'owner-anchor',
+      set: 'set-1',
+      session: 'session-1',
+      'body-sha256': 'a'.repeat(64),
+      'snapshot-sha256': 'none',
+      supersedes: 'none',
+    }),
+  };
+  const restore = stubGhIssueBody('o', 'r', 42, LIVE_BODY, [anchorOpener]);
   try {
     const { 'body-sha256': _omit, ...rest } = AUTHORING_OWNER_FULL_FIELDS;
     const output = execFileSync(
@@ -5540,6 +5559,10 @@ test('kurone-kito/idd-skill#2925 regression: authoring-owner body-sha256 derivat
   const restore = stubExecutable(
     'gh',
     `const args = process.argv.slice(2);
+if (args.includes('graphql')) {
+  process.stdout.write(${JSON.stringify(ownerIdCommentPage([]))});
+  process.exit(0);
+}
 if (args[0] === 'api' && args[1] === 'repos/kurone-kito/idd-skill/issues/2925' && args.includes('--jq')) {
   process.stdout.write(${JSON.stringify(LIVE_BODY)} + '\\n');
   process.exit(0);
@@ -5628,18 +5651,22 @@ test('--apply --type authoring-owner POSTs the byte-exact body with the live-der
     join(tmpdir(), 'idd-post-idd-marker-authoring-owner-apply-'),
   );
   const stdinFile = join(tempRoot, 'gh-stdin.txt');
-  // Any THIRD gh invocation beyond the GET (digest derivation) and the POST
-  // falls through to the catch-all failure below -- including a
-  // hide-at-post-time comments-listing call, which authoring-owner must
-  // never trigger (it is deliberately not in HIDE_AT_POST_TIME_MARKER_TYPES,
-  // #2931).
+  const readsFile = join(tempRoot, 'graphql-reads.txt');
+  // The only GraphQL invocation is the acquisition preflight; a second one
+  // would be an unexpected post-time read (authoring-owner is not in
+  // HIDE_AT_POST_TIME_MARKER_TYPES, #2931).
   const restore = stubExecutable(
     'gh',
     `const fs = require('node:fs');
 const args = process.argv.slice(2);
 function out(s) { fs.writeSync(1, s); process.exit(0); }
 function fail(s) { fs.writeSync(2, s); process.exit(1); }
-if (args[0] === 'api' && args[1] === 'repos/o/r/issues/42') {
+if (args.includes('graphql')) {
+  const previous = fs.existsSync(${JSON.stringify(readsFile)}) ? Number(fs.readFileSync(${JSON.stringify(readsFile)}, 'utf8')) : 0;
+  if (previous > 0) fail('unexpected extra GraphQL read');
+  fs.writeFileSync(${JSON.stringify(readsFile)}, String(previous + 1));
+  out(${JSON.stringify(ownerIdCommentPage([]))});
+} else if (args[0] === 'api' && args[1] === 'repos/o/r/issues/42') {
   out(JSON.stringify({ number: 42, body: ${JSON.stringify(LIVE_BODY)} }));
 } else if (args[0] === 'api' && args[1] === '--method' && args[2] === 'POST') {
   const raw = fs.readFileSync(0, 'utf8');
@@ -5688,6 +5715,7 @@ if (args[0] === 'api' && args[1] === 'repos/o/r/issues/42') {
     const parsed = JSON.parse(output);
     assert.equal(parsed.mode, 'apply');
     assert.equal(parsed.commentId, 555);
+    assert.deepEqual(readOwnerIdLines(readsFile), ['1']);
     assert.deepEqual(JSON.parse(readFileSync(stdinFile, 'utf8')), {
       body: buildMarkerBody('authoring-owner', {
         'marker-prefix': 'idd-skill',
@@ -7586,13 +7614,21 @@ function readOwnerIdLines(file: string): string[] {
 
 function runOwnerIdPost(
   flags: Record<string, string>,
-  options: { apply?: boolean; cwd?: string; trustedLogins?: string } = {},
+  options: {
+    apply?: boolean;
+    cwd?: string;
+    trustedLogins?: string;
+    githubActions?: boolean;
+  } = {},
 ): { status: number | null; stderr: string; kind: string | undefined } {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     IDD_HELPER_ERROR_ENVELOPE: '1',
   };
   delete env.IDD_TRUSTED_MARKER_ACTORS;
+  if (options.githubActions === true) {
+    env.GITHUB_ACTIONS = 'true';
+  }
   const result = spawnSync(
     process.execPath,
     [
@@ -7632,6 +7668,52 @@ const OWNER_ID_ACQUIRE_OPENER: OwnerIdComment = {
   id: 101,
   body: ownerIdBody(ownerIdFlags('acquire')),
 };
+
+const OWNER_ID_ANCHOR_TARGET = 'o/r#43';
+const OWNER_ID_ANCHOR_SET = 'set-anchor-43';
+const OWNER_ID_ANCHOR_SESSION = 'session-anchor-43';
+
+function ownerIdAnchorMarker(
+  mode: string,
+  overrides: Record<string, string> = {},
+): string {
+  const owner = overrides['marker-owner'] ?? 'owner-anchor-43';
+  const supersedes =
+    overrides.supersedes ??
+    (mode === 'acquire' || mode === 'bootstrap' ? 'none' : owner);
+  return ownerIdBody(
+    ownerIdFlags(mode, {
+      'marker-target': OWNER_ID_ANCHOR_TARGET,
+      anchor: OWNER_ID_ANCHOR_TARGET,
+      'marker-owner': owner,
+      set: OWNER_ID_ANCHOR_SET,
+      session: OWNER_ID_ANCHOR_SESSION,
+      supersedes,
+      ...overrides,
+    }),
+  );
+}
+
+function ownerIdClosedHistory(
+  target = OWNER_ID_TARGET,
+  set = OWNER_ID_SET,
+  session = OWNER_ID_SESSION,
+): OwnerIdComment[] {
+  const marker = (mode: string) =>
+    ownerIdBody(
+      ownerIdFlags(mode, {
+        'marker-target': target,
+        anchor: target,
+        set,
+        session,
+      }),
+    );
+  return [
+    { id: 101, body: marker('acquire') },
+    { id: 102, body: marker('release') },
+    { id: 103, body: marker('release-complete') },
+  ];
+}
 
 test('authoring-owner --apply refuses a release whose set id lost two characters, names both ids, and sends nothing (#3910)', () => {
   const stub = withOwnerIdStub({ comments: [OWNER_ID_ACQUIRE_OPENER] });
@@ -8025,13 +8107,13 @@ test('authoring-owner --apply checks release-guard and release-complete against 
   }
 });
 
-test('authoring-owner --apply sends acquire and bootstrap posts with no GraphQL read (#3910)', () => {
+test('authoring-owner --apply sends acquire and bootstrap after reading an empty self-anchor log (#4669)', () => {
   for (const mode of ['acquire', 'bootstrap']) {
     const stub = withOwnerIdStub({ comments: [] });
     try {
       const run = runOwnerIdPost(ownerIdFlags(mode));
       assert.equal(run.status, 0, mode);
-      assert.deepEqual(readOwnerIdLines(stub.readsFile), [], mode);
+      assert.equal(readOwnerIdLines(stub.readsFile).length, 1, mode);
       assert.equal(readOwnerIdLines(stub.postsFile).length, 1, mode);
     } finally {
       stub.restore();
@@ -8075,15 +8157,249 @@ test('authoring-owner dry run refuses a heartbeat whose set differs from the lat
   }
 });
 
-test('authoring-owner dry run of acquire and bootstrap makes no read (#3899)', () => {
+test('authoring-owner dry run of acquire and bootstrap reads the empty self-anchor log (#4669)', () => {
   for (const mode of ['acquire', 'bootstrap']) {
     const stub = withOwnerIdStub({ comments: [] });
     try {
       const run = runOwnerIdPost(ownerIdFlags(mode), { apply: false });
       assert.equal(run.status, 0, mode);
-      assert.deepEqual(readOwnerIdLines(stub.readsFile), [], mode);
+      assert.equal(readOwnerIdLines(stub.readsFile).length, 1, mode);
+      assert.deepEqual(readOwnerIdLines(stub.postsFile), [], mode);
     } finally {
       stub.restore();
+    }
+  }
+});
+
+test('authoring-owner acquire and bootstrap reject a trusted closed set in dry-run and apply (#4669)', () => {
+  const comments = ownerIdClosedHistory();
+  for (const mode of ['acquire', 'bootstrap']) {
+    for (const apply of [false, true]) {
+      const stub = withOwnerIdStub({ comments });
+      try {
+        const run = runOwnerIdPost(ownerIdFlags(mode), { apply });
+        assert.equal(run.status, 1, `${mode}, apply=${apply}`);
+        assert.equal(run.kind, 'gate', `${mode}, apply=${apply}`);
+        assert.match(
+          run.stderr,
+          /already closed by a trusted release-complete/,
+        );
+        assert.equal(readOwnerIdLines(stub.readsFile).length, 1);
+        assert.deepEqual(readOwnerIdLines(stub.postsFile), []);
+      } finally {
+        stub.restore();
+      }
+    }
+  }
+});
+
+test('authoring-owner acquire and bootstrap retain closed-set checks when no trusted logins are configured (#4669)', () => {
+  for (const mode of ['acquire', 'bootstrap']) {
+    for (const apply of [false, true]) {
+      const isolatedCwd = mkdtempSync(
+        join(tmpdir(), 'idd-post-idd-marker-cwd-'),
+      );
+      const stub = withOwnerIdStub({ comments: ownerIdClosedHistory() });
+      try {
+        const run = runOwnerIdPost(ownerIdFlags(mode), {
+          apply,
+          cwd: isolatedCwd,
+          githubActions: true,
+        });
+        assert.equal(run.status, 1, `${mode}, apply=${apply}`);
+        assert.equal(run.kind, 'gate', `${mode}, apply=${apply}`);
+        assert.match(
+          run.stderr,
+          /already closed by a trusted release-complete/,
+        );
+        assert.equal(readOwnerIdLines(stub.readsFile).length, 1);
+        assert.deepEqual(readOwnerIdLines(stub.postsFile), []);
+      } finally {
+        stub.restore();
+        rmSync(isolatedCwd, { recursive: true, force: true });
+      }
+    }
+  }
+});
+
+test('authoring-owner acquire may start a fresh self-anchored set after release-complete (#4669)', () => {
+  const stub = withOwnerIdStub({ comments: ownerIdClosedHistory() });
+  try {
+    const run = runOwnerIdPost(
+      ownerIdFlags('acquire', {
+        'marker-owner': 'owner-next',
+        set: 'set-next',
+      }),
+    );
+    assert.equal(run.status, 0, run.stderr);
+    assert.equal(readOwnerIdLines(stub.readsFile).length, 1);
+    const posted = readOwnerIdLines(stub.postsFile).map((line) =>
+      JSON.parse(line),
+    );
+    assert.equal(posted.length, 1);
+    assert.match(
+      posted[0].body,
+      /mode=acquire; owner=owner-next; set=set-next/,
+    );
+  } finally {
+    stub.restore();
+  }
+});
+
+test('authoring-owner acquire and bootstrap refuse a trusted history that cannot be replayed conclusively in dry-run and apply (#4669)', () => {
+  const comments = [
+    OWNER_ID_ACQUIRE_OPENER,
+    {
+      id: 102,
+      body: ownerIdBody(ownerIdFlags('release-complete')),
+    },
+  ];
+  for (const mode of ['acquire', 'bootstrap']) {
+    for (const apply of [false, true]) {
+      const stub = withOwnerIdStub({ comments });
+      try {
+        const run = runOwnerIdPost(ownerIdFlags(mode), { apply });
+        assert.equal(run.status, 1, `${mode}, apply=${apply}`);
+        assert.equal(run.kind, 'gate', `${mode}, apply=${apply}`);
+        assert.match(
+          run.stderr,
+          /closes a generation with no release in progress/,
+        );
+        assert.deepEqual(readOwnerIdLines(stub.postsFile), []);
+      } finally {
+        stub.restore();
+      }
+    }
+  }
+});
+
+test('authoring-owner ignores an untrusted release-complete and keeps a releasing set closed to acquisition (#4669)', () => {
+  const comments = [
+    OWNER_ID_ACQUIRE_OPENER,
+    { id: 102, body: ownerIdBody(ownerIdFlags('release')) },
+    {
+      id: 103,
+      body: ownerIdBody(ownerIdFlags('release-complete')),
+      author: 'stranger',
+    },
+  ];
+  const stub = withOwnerIdStub({ comments });
+  try {
+    const run = runOwnerIdPost(ownerIdFlags('acquire'));
+    assert.equal(run.status, 1);
+    assert.equal(run.kind, 'gate');
+    assert.match(
+      run.stderr,
+      /already has open set .* with release in progress/,
+    );
+    assert.deepEqual(readOwnerIdLines(stub.postsFile), []);
+  } finally {
+    stub.restore();
+  }
+});
+
+test('authoring-owner child acquire joins only the matching non-releasing anchor set (#4669)', () => {
+  for (const apply of [false, true]) {
+    const stub = withOwnerIdStub({
+      comments: [{ id: 101, body: ownerIdAnchorMarker('acquire') }],
+    });
+    try {
+      const flags = ownerIdFlags('acquire', {
+        anchor: OWNER_ID_ANCHOR_TARGET,
+        'marker-owner': 'owner-child-42',
+        set: OWNER_ID_ANCHOR_SET,
+        session: OWNER_ID_ANCHOR_SESSION,
+      });
+      const run = runOwnerIdPost(flags, { apply });
+      assert.equal(run.status, 0, run.stderr);
+      const posts = readOwnerIdLines(stub.postsFile).map((line) =>
+        JSON.parse(line),
+      );
+      assert.equal(posts.length, apply ? 1 : 0);
+      if (apply) assert.match(posts[0].body, /owner=owner-child-42/);
+      assert.equal(readOwnerIdLines(stub.readsFile).length, 1);
+    } finally {
+      stub.restore();
+    }
+  }
+});
+
+test('authoring-owner child acquire refuses a closed, mismatched, or releasing anchor before POST (#4669)', () => {
+  const scenarios: {
+    name: string;
+    comments: OwnerIdComment[];
+    overrides?: Record<string, string>;
+    expected: RegExp;
+  }[] = [
+    {
+      name: 'closed anchor',
+      comments: ownerIdClosedHistory(
+        OWNER_ID_ANCHOR_TARGET,
+        OWNER_ID_ANCHOR_SET,
+        OWNER_ID_ANCHOR_SESSION,
+      ),
+      expected: /has no open owner generation to join/,
+    },
+    {
+      name: 'set mismatch',
+      comments: [{ id: 101, body: ownerIdAnchorMarker('acquire') }],
+      overrides: { set: 'set-other' },
+      expected: /does not match anchor .* open generation/,
+    },
+    {
+      name: 'session mismatch',
+      comments: [{ id: 101, body: ownerIdAnchorMarker('acquire') }],
+      overrides: { session: 'session-other' },
+      expected: /does not match anchor .* open generation/,
+    },
+    {
+      name: 'release in progress',
+      comments: [
+        { id: 101, body: ownerIdAnchorMarker('acquire') },
+        { id: 102, body: ownerIdAnchorMarker('release') },
+      ],
+      expected: /is being released/,
+    },
+  ];
+  for (const scenario of scenarios) {
+    for (const apply of [false, true]) {
+      const stub = withOwnerIdStub({ comments: scenario.comments });
+      try {
+        const run = runOwnerIdPost(
+          ownerIdFlags('acquire', {
+            anchor: OWNER_ID_ANCHOR_TARGET,
+            set: OWNER_ID_ANCHOR_SET,
+            session: OWNER_ID_ANCHOR_SESSION,
+            ...scenario.overrides,
+          }),
+          { apply },
+        );
+        assert.equal(run.status, 1, `${scenario.name}, apply=${apply}`);
+        assert.equal(run.kind, 'gate', `${scenario.name}, apply=${apply}`);
+        assert.match(run.stderr, scenario.expected, scenario.name);
+        assert.deepEqual(readOwnerIdLines(stub.postsFile), [], scenario.name);
+      } finally {
+        stub.restore();
+      }
+    }
+  }
+});
+
+test('authoring-owner acquire refuses an incomplete anchor read before dry-run output or POST (#4669)', () => {
+  for (const mode of ['acquire', 'bootstrap']) {
+    for (const apply of [false, true]) {
+      const stub = withOwnerIdStub({
+        graphqlReply: { stderr: 'gh: Service Unavailable (HTTP 503)' },
+      });
+      try {
+        const run = runOwnerIdPost(ownerIdFlags(mode), { apply });
+        assert.equal(run.status, 1, `${mode}, apply=${apply}`);
+        assert.equal(run.kind, 'transport', `${mode}, apply=${apply}`);
+        assert.match(run.stderr, /anchor owner history cannot be checked/);
+        assert.deepEqual(readOwnerIdLines(stub.postsFile), []);
+      } finally {
+        stub.restore();
+      }
     }
   }
 });
@@ -8767,6 +9083,14 @@ test('post-idd-marker --help describes the authoring-owner identity check (#3910
   assert.match(
     help,
     /latest\s+trusted owner marker on\s+--marker-target \(#3899\)/,
+  );
+  assert.match(
+    help,
+    /Acquire and bootstrap read the declared\s+anchor's paginated owner log/,
+  );
+  assert.match(
+    help,
+    /unreadable history that cannot be replayed\s+conclusively refuses the post/,
   );
 });
 

@@ -1690,7 +1690,14 @@ dry-run (like --from-pr above): whenever a live fetch is needed for
 regardless of --apply, so a dry-run preview shows the exact value that
 would actually post. A dry run of an authoring-owner heartbeat, release,
 release-guard, release-complete or resume also reads the target's comment
-log for the identity check (#3899); acquire and bootstrap make no read.
+log for the identity check (#3899). Acquire and bootstrap read the declared
+anchor's paginated owner log before dry-run output or POST: self-anchored posts
+may start only with a fresh set and no open generation; child posts must match
+the anchor's open, non-releasing set and session. A closed set ID, an open or
+releasing generation, or unreadable history that cannot be replayed
+conclusively refuses the post. An
+empty self-anchor log and a completed history with a fresh set are valid.
+Concurrent first openers still resolve by comment order.
 --marker-target / --marker-owner map to these
 markers' own \`target=\` / \`owner=\` fields -- named with a \`marker-\`
 prefix, not bare --target / --owner, because this CLI already reserves
@@ -1866,15 +1873,223 @@ function postMarker(owner, repo, number, body) {
   );
   return { id: posted.id, html_url: posted.htmlUrl };
 }
+function ownerMarkerReplayFieldProblem(parsed) {
+  const fields = {
+    mode: parsed.mode,
+    'marker-owner': parsed.owner,
+    'body-sha256': parsed.bodySha256,
+    'snapshot-sha256': parsed.snapshotSha256,
+    supersedes: parsed.supersedes,
+  };
+  return (
+    validateAuthoringOwnerModeDigestCoupling(fields) ??
+    validateAuthoringOwnerSupersedesModeCoupling(fields)
+  );
+}
+function advanceAnchorOwnerGeneration(state, parsed, latest) {
+  const { open, closedSets, losers } = state;
+  const malformed = ownerMarkerReplayFieldProblem(parsed);
+  if (malformed !== null) {
+    return {
+      problem: `owner marker ${latest.id} (mode=${parsed.mode}) is malformed: ${malformed}`,
+    };
+  }
+  if (losers.has(parsed.owner)) {
+    return state;
+  }
+  if (parsed.mode === 'resume' && losers.has(parsed.supersedes)) {
+    return { ...state, losers: new Set([...losers, parsed.owner]) };
+  }
+  const mismatch = () => ({
+    problem: `owner marker ${latest.id} (mode=${parsed.mode}) does not match the open generation`,
+  });
+  switch (parsed.mode) {
+    case 'acquire':
+    case 'bootstrap':
+      if (open !== null) {
+        if (parsed.owner === open.owner) {
+          return {
+            problem: `owner marker ${latest.id} (mode=${parsed.mode}) opens the generation of its own owner a second time`,
+          };
+        }
+        return {
+          open,
+          closedSets,
+          losers: new Set([...losers, parsed.owner]),
+        };
+      }
+      if (closedSets.has(parsed.set)) {
+        return {
+          problem: `owner marker ${latest.id} (mode=${parsed.mode}) reuses set ${parsed.set}, which a release-complete marker already closed`,
+        };
+      }
+      return {
+        open: {
+          owner: parsed.owner,
+          set: parsed.set,
+          session: parsed.session,
+          releasing: false,
+          latest,
+        },
+        closedSets,
+        losers,
+      };
+    case 'resume':
+      if (
+        open === null ||
+        parsed.set !== open.set ||
+        parsed.supersedes !== open.owner
+      ) {
+        return mismatch();
+      }
+      return {
+        open: {
+          owner: parsed.owner,
+          set: open.set,
+          session: parsed.session,
+          releasing: open.releasing,
+          latest,
+        },
+        closedSets,
+        losers,
+      };
+    case 'heartbeat':
+    case 'release':
+    case 'release-guard':
+    case 'release-complete':
+      if (
+        open === null ||
+        parsed.set !== open.set ||
+        parsed.owner !== open.owner
+      ) {
+        return mismatch();
+      }
+      if (
+        (parsed.mode === 'release-guard' ||
+          parsed.mode === 'release-complete') &&
+        parsed.session !== open.session
+      ) {
+        return {
+          problem: `owner marker ${latest.id} (mode=${parsed.mode}) does not retain the session of the open generation`,
+        };
+      }
+      if (parsed.mode === 'release-complete') {
+        if (!open.releasing) {
+          return {
+            problem: `owner marker ${latest.id} (mode=release-complete) closes a generation with no release in progress`,
+          };
+        }
+        return {
+          open: null,
+          closedSets: new Set([...closedSets, open.set]),
+          losers: new Set(),
+        };
+      }
+      return {
+        open: {
+          owner: open.owner,
+          set: open.set,
+          session: open.session,
+          releasing: open.releasing || parsed.mode !== 'heartbeat',
+          latest,
+        },
+        closedSets,
+        losers,
+      };
+    default:
+      return {
+        problem: `owner marker ${latest.id} has the unknown mode ${parsed.mode}`,
+      };
+  }
+}
 /**
- * The identity check of an `authoring-owner` post (#3910, #3899), run on a dry
- * run and on `--apply`. It re-parses the body about to be sent, so the check
- * compares the values the marker carries rather than the raw flags, then reads
- * the comments of its `--marker-target` once through the paginated GraphQL
- * reader. Returns the refusal when the post contradicts an opening marker or
- * the latest trusted owner marker, or the failure when the comments cannot be
- * read completely; nothing is sent in either case. Returns `null` when the post
- * may be sent. Acquire and bootstrap are not checked and make no read.
+ * Replay owner markers from an anchor's full comment log. A non-empty trusted
+ * actor list filters authors; an empty list applies no author filter, matching
+ * the existing owner-marker identity contract. A valid empty or completed log
+ * returns `generation: null` and its closed set IDs; an open generation retains
+ * its `releasing` state. Malformed or incomplete evidence fails closed. The
+ * first valid opener in comment order wins a concurrent acquisition race.
+ */
+export function resolveAnchorOwnerGeneration(input) {
+  const trustedSet = new Set(input.trusted.map((login) => login.toLowerCase()));
+  const shaped = [];
+  for (const comment of input.comments) {
+    if (
+      (trustedSet.size > 0 &&
+        !trustedSet.has(comment.authorLogin.trim().toLowerCase())) ||
+      !looksLikeOwnerMarker(comment.body, input.markerPrefix)
+    ) {
+      continue;
+    }
+    const edited = inspectLastEditedAt(comment);
+    if (edited !== null) {
+      return { problem: edited };
+    }
+    if (
+      typeof comment.isMinimized !== 'boolean' ||
+      (comment.isMinimized &&
+        (typeof comment.minimizedReason !== 'string' ||
+          comment.minimizedReason.trim() === ''))
+    ) {
+      return {
+        problem: `owner marker ${comment.id} has no readable minimization state`,
+      };
+    }
+    const time = Date.parse(comment.createdAt);
+    if (!Number.isFinite(time)) {
+      return {
+        problem: `owner marker ${comment.id} has a creation time that cannot be read`,
+      };
+    }
+    shaped.push({ comment, time });
+  }
+  shaped.sort((a, b) => a.time - b.time || a.comment.id - b.comment.id);
+  let state = {
+    open: null,
+    closedSets: new Set(),
+    losers: new Set(),
+  };
+  for (const { comment } of shaped) {
+    const parsed = parseAuthoringOwnerComment(comment.body, input.markerPrefix);
+    if (parsed === null) {
+      return { problem: `owner marker ${comment.id} does not parse` };
+    }
+    if (
+      !sameIssueRef(parsed.target, input.anchorRef) ||
+      !sameIssueRef(parsed.anchor, input.anchorRef)
+    ) {
+      return {
+        problem: `owner marker ${comment.id} names target ${parsed.target} and anchor ${parsed.anchor}, not the anchor ${input.anchorRef} itself`,
+      };
+    }
+    const next = advanceAnchorOwnerGeneration(state, parsed, {
+      id: comment.id,
+      mode: parsed.mode,
+      owner: parsed.owner,
+      session: parsed.session,
+      createdAt: comment.createdAt,
+      bodySha256: parsed.bodySha256,
+      outdated: isOutdatedMinimized(comment),
+    });
+    if ('problem' in next) {
+      return next;
+    }
+    state = next;
+  }
+  if (state.open?.latest.outdated) {
+    return {
+      problem: `the latest owner marker of ${input.anchorRef}, comment ${state.open.latest.id}, is minimized as outdated, so it cannot prove an open generation`,
+    };
+  }
+  return { generation: state.open, closedSets: state.closedSets };
+}
+/**
+ * The owner-state preflight for `authoring-owner` posts, run before both dry
+ * run output and `--apply`. Continuation modes check the target's opening and
+ * latest trusted markers. Acquire and bootstrap replay the declared anchor's
+ * complete owner log, allowing only a fresh self-anchored generation or a
+ * child that joins the matching open set. Nothing is sent when a read or gate
+ * fails.
  */
 function checkAuthoringOwnerPostIdentity(input) {
   const { markerTarget } = input;
@@ -1890,18 +2105,36 @@ function checkAuthoringOwnerPostIdentity(input) {
     process.stderr.write(`${message}\n`);
     return { exitCode: 1, kind: 'internal', message };
   }
-  if (!AUTHORING_OWNER_IDENTITY_CHECKED_MODES.has(post.mode)) {
+  const acquisitionMode = post.mode === 'acquire' || post.mode === 'bootstrap';
+  if (
+    !acquisitionMode &&
+    !AUTHORING_OWNER_IDENTITY_CHECKED_MODES.has(post.mode)
+  ) {
     return null;
+  }
+  const anchorTarget = acquisitionMode
+    ? parseIssueReference(post.anchor)
+    : markerTarget;
+  if (anchorTarget === null) {
+    const message = acquisitionMode
+      ? `refusing to post authoring-owner marker (mode=${post.mode}): --anchor ${post.anchor} is not a readable issue reference`
+      : '--marker-target is required for --type authoring-owner';
+    process.stderr.write(`${message}\n`);
+    return { exitCode: 1, kind: 'gate', message };
   }
   let comments;
   try {
     comments = fetchProvenanceCommentsGraphql(
-      markerTarget.owner,
-      markerTarget.repo,
-      markerTarget.number,
+      anchorTarget.owner,
+      anchorTarget.repo,
+      anchorTarget.number,
     );
   } catch (error) {
-    const message = `refusing to post authoring-owner marker: the comments of ${post.target} could not be read, so its opening markers cannot be checked: ${error.message}`;
+    const readRef = `${anchorTarget.owner}/${anchorTarget.repo}#${anchorTarget.number}`;
+    const purpose = acquisitionMode
+      ? 'the anchor owner history cannot be checked'
+      : 'its opening markers cannot be checked';
+    const message = `refusing to post authoring-owner marker (mode=${post.mode}): the comments of ${readRef} could not be read, so ${purpose}: ${error.message}`;
     process.stderr.write(`${message}\n`);
     return { exitCode: 1, ...classifyHelperError(error), message };
   }
@@ -1911,6 +2144,38 @@ function checkAuthoringOwnerPostIdentity(input) {
     config: loadIddConfig(),
   });
   const trustedLogins = new Set(actors);
+  if (acquisitionMode) {
+    const replay = resolveAnchorOwnerGeneration({
+      comments,
+      anchorRef: post.anchor,
+      markerPrefix: input.markerPrefix,
+      trusted: actors,
+    });
+    let refusal = null;
+    if ('problem' in replay) {
+      refusal = `refusing to post authoring-owner marker (mode=${post.mode}) on ${post.target}: the owner history of anchor ${post.anchor} cannot be replayed: ${replay.problem}`;
+    } else if (sameIssueRef(post.target, post.anchor)) {
+      if (replay.generation !== null) {
+        refusal = `refusing to post authoring-owner marker (mode=${post.mode}) on ${post.target}: anchor ${post.anchor} already has open set ${replay.generation.set}${replay.generation.releasing ? ' with release in progress' : ''}`;
+      } else if (replay.closedSets.has(post.set)) {
+        refusal = `refusing to post authoring-owner marker (mode=${post.mode}) on ${post.target}: set ${post.set} was already closed by a trusted release-complete marker on anchor ${post.anchor}`;
+      }
+    } else if (replay.generation === null) {
+      refusal = `refusing to post authoring-owner marker (mode=${post.mode}) on ${post.target}: anchor ${post.anchor} has no open owner generation to join`;
+    } else if (replay.generation.releasing) {
+      refusal = `refusing to post authoring-owner marker (mode=${post.mode}) on ${post.target}: set ${replay.generation.set} of anchor ${post.anchor} is being released`;
+    } else if (
+      replay.generation.set !== post.set ||
+      replay.generation.session !== post.session
+    ) {
+      refusal = `refusing to post authoring-owner marker (mode=${post.mode}) on ${post.target}: requested set/session ${post.set}/${post.session} does not match anchor ${post.anchor}'s open generation ${replay.generation.set}/${replay.generation.session}`;
+    }
+    if (refusal === null) {
+      return null;
+    }
+    process.stderr.write(`${refusal}\n`);
+    return { exitCode: 1, kind: 'gate', message: refusal };
+  }
   const refusal = validateAuthoringOwnerPostIdentity(
     post,
     selectAuthoringOwnerOpeningMarkers(comments, {
@@ -3122,10 +3387,8 @@ function main() {
     return { exitCode: 1, kind: 'usage', message };
   }
   const number = args.number;
-  // #3910, #3899: the identity check runs before the dry-run return too, so a
-  // dry run refuses exactly where --apply would, with nothing posted. Only
-  // authoring-owner heartbeat, release, release-guard, release-complete and
-  // resume make the read; acquire and bootstrap return before it.
+  // #3910, #3899, #4669: owner-state checks run before the dry-run return too,
+  // so dry-run and --apply refuse on the same target/anchor history.
   if (args.type === 'authoring-owner') {
     const identityRefusal = checkAuthoringOwnerPostIdentity({
       body,

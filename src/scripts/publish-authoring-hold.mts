@@ -34,7 +34,6 @@ import {
   evaluateAuthoringOwnerProvenance,
   fetchProvenanceCommentsGraphql,
   inspectLastEditedAt,
-  looksLikeOwnerMarker,
   sameIssueRef,
 } from './authoring-owner-provenance.mts';
 import { isOutdatedMinimized } from './authoring-set-members.mts';
@@ -70,8 +69,8 @@ import {
   parseIsoDurationToMs,
 } from './policy-helpers.mts';
 import {
-  validateAuthoringOwnerModeDigestCoupling,
-  validateAuthoringOwnerSupersedesModeCoupling,
+  type AnchorOwnerGeneration,
+  resolveAnchorOwnerGeneration,
 } from './post-idd-marker.mts';
 import {
   readClaimStaleAgeMs,
@@ -912,327 +911,7 @@ export function checkOwnerLogStillOurs(input: {
   return ours > 0 ? null : "this run's owner marker is not on the issue";
 }
 
-/** The latest owner marker of an anchor's open generation. */
-export interface AnchorLatestMarker {
-  id: number;
-  mode: string;
-  owner: string;
-  session: string;
-  createdAt: string;
-  bodySha256: string;
-  /** True when the comment is minimized as outdated (a disavowed marker). */
-  outdated: boolean;
-}
-
-/** The generation being replayed: a generation plus whether a release began. */
-interface OpenAnchorGeneration {
-  owner: string;
-  set: string;
-  session: string;
-  releasing: boolean;
-  latest: AnchorLatestMarker;
-}
-
-/** The open owner generation of a set anchor (#4251). */
-export interface AnchorGeneration {
-  owner: string;
-  set: string;
-  session: string;
-  latest: AnchorLatestMarker;
-}
-
-/** What the anchor replay carries between markers. */
-interface AnchorReplayState {
-  open: OpenAnchorGeneration | null;
-  /** The set ids of generations a `release-complete` already closed. */
-  closedSets: ReadonlySet<string>;
-  /**
-   * The owner tokens of openers that lost a race to the first valid opener of
-   * the open generation; a `release-complete` clears them.
-   */
-  losers: ReadonlySet<string>;
-}
-
-/**
- * The mode-specific field rules `post-idd-marker` enforces before it posts an
- * owner marker (the digest sentinel and the `supersedes` coupling of the
- * contract's mode table), checked on a marker already on the log. A trusted
- * author's marker that breaks them is not a valid owner marker, so it cannot
- * open or extend a generation. Returns the violated rule, or null.
- */
-function ownerMarkerFieldProblem(parsed: ParsedOwnerMarker): string | null {
-  const fields = {
-    mode: parsed.mode,
-    'marker-owner': parsed.owner,
-    'body-sha256': parsed.bodySha256,
-    'snapshot-sha256': parsed.snapshotSha256,
-    supersedes: parsed.supersedes,
-  };
-  return (
-    validateAuthoringOwnerModeDigestCoupling(fields) ??
-    validateAuthoringOwnerSupersedesModeCoupling(fields)
-  );
-}
-
-/**
- * One step of the anchor replay: the state after a marker, or the problem that
- * marker causes. A pure function over explicit types, so the replay loop stays
- * free of self-referential narrowing.
- */
-function advanceAnchorGeneration(
-  state: AnchorReplayState,
-  parsed: ParsedOwnerMarker,
-  latest: AnchorLatestMarker,
-): AnchorReplayState | { problem: string } {
-  const { open, closedSets, losers } = state;
-  const malformed = ownerMarkerFieldProblem(parsed);
-  if (malformed !== null) {
-    return {
-      problem: `owner marker ${latest.id} (mode=${parsed.mode}) is malformed: ${malformed}`,
-    };
-  }
-  // A session that lost the race for the generation owns nothing, so its
-  // later markers (and a resume that supersedes it) are not evidence.
-  if (losers.has(parsed.owner)) {
-    return state;
-  }
-  // A resume of a loser belongs to the loser's chain, so its new owner loses
-  // too and its later markers are ignored the same way.
-  if (parsed.mode === 'resume' && losers.has(parsed.supersedes)) {
-    return { ...state, losers: new Set([...losers, parsed.owner]) };
-  }
-  const mismatch = (): { problem: string } => ({
-    problem: `owner marker ${latest.id} (mode=${parsed.mode}) does not match the open generation`,
-  });
-  switch (parsed.mode) {
-    case 'acquire':
-    case 'bootstrap':
-      if (open !== null) {
-        // The first valid opener in comment order wins the generation
-        // (contract.md, "Per-target ownership"); a later one loses. The same
-        // owner opening twice is a malformed log, not a rival.
-        if (parsed.owner === open.owner) {
-          return {
-            problem: `owner marker ${latest.id} (mode=${parsed.mode}) opens the generation of its own owner a second time`,
-          };
-        }
-        return {
-          open,
-          closedSets,
-          losers: new Set([...losers, parsed.owner]),
-        };
-      }
-      // A completed set is closed for good: a later acquisition starts a fresh
-      // generation under a new set id (contract.md, `release-complete`).
-      if (closedSets.has(parsed.set)) {
-        return {
-          problem: `owner marker ${latest.id} (mode=${parsed.mode}) reuses set ${parsed.set}, which a release-complete marker already closed`,
-        };
-      }
-      return {
-        open: {
-          owner: parsed.owner,
-          set: parsed.set,
-          session: parsed.session,
-          releasing: false,
-          latest,
-        },
-        closedSets,
-        losers,
-      };
-    case 'resume':
-      if (
-        open === null ||
-        parsed.set !== open.set ||
-        parsed.supersedes !== open.owner
-      ) {
-        return mismatch();
-      }
-      return {
-        open: {
-          owner: parsed.owner,
-          set: open.set,
-          session: parsed.session,
-          // A resume recovers the interrupted set; only release-complete ends
-          // a release that began (contract.md, "Per-target ownership").
-          releasing: open.releasing,
-          latest,
-        },
-        closedSets,
-        losers,
-      };
-    case 'heartbeat':
-    case 'release':
-    case 'release-guard':
-    case 'release-complete':
-      if (
-        open === null ||
-        parsed.set !== open.set ||
-        parsed.owner !== open.owner
-      ) {
-        return mismatch();
-      }
-      // The anchor-only terminal modes retain the anchor's current session
-      // (contract.md, `release-guard` and `release-complete`).
-      if (
-        (parsed.mode === 'release-guard' ||
-          parsed.mode === 'release-complete') &&
-        parsed.session !== open.session
-      ) {
-        return {
-          problem: `owner marker ${latest.id} (mode=${parsed.mode}) does not retain the session of the open generation`,
-        };
-      }
-      if (parsed.mode === 'release-complete') {
-        // It is the terminal event of a release, so it closes nothing else.
-        if (!open.releasing) {
-          return {
-            problem: `owner marker ${latest.id} (mode=release-complete) closes a generation with no release in progress`,
-          };
-        }
-        // The losers belonged to the generation that just closed, so a former
-        // loser may open the next one.
-        return {
-          open: null,
-          closedSets: new Set([...closedSets, open.set]),
-          losers: new Set(),
-        };
-      }
-      return {
-        open: {
-          owner: open.owner,
-          set: open.set,
-          session: open.session,
-          releasing: open.releasing || parsed.mode !== 'heartbeat',
-          latest,
-        },
-        closedSets,
-        losers,
-      };
-    default:
-      return {
-        problem: `owner marker ${latest.id} has the unknown mode ${parsed.mode}`,
-      };
-  }
-}
-
-/**
- * Replay the trusted authoring-owner markers on a set anchor's own comment log
- * and return its one open generation, or the reason there is none. Fails
- * closed: an edited or unparseable marker, a marker whose digest or
- * `supersedes` fields break the rules of its mode, a marker that names another
- * target or anchor, a second opening marker inside an open generation, a
- * heartbeat or release from another owner or set, a resume that does not
- * supersede the current owner, a release in progress, and a log with no open
- * generation all return a problem instead of a guess. The generation is
- * closed by `release-complete`, after which a later `acquire` or `bootstrap`
- * opens a new one, but never under the closed set's id (contract.md,
- * "Per-target ownership"). `session` is compared only where the contract pins
- * it: an opening marker sets it, and a heartbeat or release from another
- * session of the same owner is accepted.
- */
-export function resolveAnchorGeneration(input: {
-  comments: readonly AuthoringOwnerProvenanceComment[];
-  anchorRef: string;
-  markerPrefix: string;
-  trusted: readonly string[];
-}): { generation: AnchorGeneration } | { problem: string } {
-  const trustedSet = new Set(input.trusted.map((login) => login.toLowerCase()));
-  const shaped: { comment: AuthoringOwnerProvenanceComment; time: number }[] =
-    [];
-  for (const comment of input.comments) {
-    if (
-      !trustedSet.has(comment.authorLogin.trim().toLowerCase()) ||
-      !looksLikeOwnerMarker(comment.body, input.markerPrefix)
-    ) {
-      continue;
-    }
-    const edited = inspectLastEditedAt(comment);
-    if (edited !== null) {
-      return { problem: edited };
-    }
-    // A read that omits the minimization state, or a minimized comment without
-    // its reason, is incomplete evidence and fails closed.
-    if (
-      typeof comment.isMinimized !== 'boolean' ||
-      (comment.isMinimized &&
-        (typeof comment.minimizedReason !== 'string' ||
-          comment.minimizedReason.trim() === ''))
-    ) {
-      return {
-        problem: `owner marker ${comment.id} has no readable minimization state`,
-      };
-    }
-    const time = Date.parse(comment.createdAt);
-    if (!Number.isFinite(time)) {
-      return {
-        problem: `owner marker ${comment.id} has a creation time that cannot be read`,
-      };
-    }
-    shaped.push({ comment, time });
-  }
-  shaped.sort((a, b) => a.time - b.time || a.comment.id - b.comment.id);
-
-  let state: AnchorReplayState = {
-    open: null,
-    closedSets: new Set(),
-    losers: new Set(),
-  };
-  for (const { comment } of shaped) {
-    const parsed = parseAuthoringOwnerComment(comment.body, input.markerPrefix);
-    if (parsed === null) {
-      return { problem: `owner marker ${comment.id} does not parse` };
-    }
-    if (
-      !sameIssueRef(parsed.target, input.anchorRef) ||
-      !sameIssueRef(parsed.anchor, input.anchorRef)
-    ) {
-      return {
-        problem: `owner marker ${comment.id} names target ${parsed.target} and anchor ${parsed.anchor}, not the anchor ${input.anchorRef} itself`,
-      };
-    }
-    const next = advanceAnchorGeneration(state, parsed, {
-      id: comment.id,
-      mode: parsed.mode,
-      owner: parsed.owner,
-      session: parsed.session,
-      createdAt: comment.createdAt,
-      bodySha256: parsed.bodySha256,
-      outdated: isOutdatedMinimized(comment),
-    });
-    if ('problem' in next) {
-      return next;
-    }
-    state = next;
-  }
-  const { open } = state;
-  if (open === null) {
-    return {
-      problem: `${input.anchorRef} has no open owner generation: no trusted acquire, bootstrap or resume marker, or its set was released`,
-    };
-  }
-  if (open.releasing) {
-    return {
-      problem: `the set of ${input.anchorRef} is being released, so a child cannot join it`,
-    };
-  }
-  // History that a sweep hid still counts, but the marker that carries the
-  // generation to now is never a hidden one: a latest marker minimized as
-  // outdated was disavowed, so it cannot prove an open generation.
-  if (open.latest.outdated) {
-    return {
-      problem: `the latest owner marker of ${input.anchorRef}, comment ${open.latest.id}, is minimized as outdated, so it cannot prove an open generation`,
-    };
-  }
-  return {
-    generation: {
-      owner: open.owner,
-      set: open.set,
-      session: open.session,
-      latest: open.latest,
-    },
-  };
-}
+type AnchorGeneration = Omit<AnchorOwnerGeneration, 'releasing'>;
 
 /**
  * Replay the journal's records of one publication token (contract.md, "On
@@ -1522,7 +1201,7 @@ function checkAnchor(input: {
       problem: `the anchor ${ref} has an open linked pull request, or its pull-request state cannot be read`,
     };
   }
-  const replay = resolveAnchorGeneration({
+  const replay = resolveAnchorOwnerGeneration({
     comments,
     anchorRef: ref,
     markerPrefix: input.markerPrefix,
@@ -1531,7 +1210,18 @@ function checkAnchor(input: {
   if ('problem' in replay) {
     return replay;
   }
-  return { generation: replay.generation, snapshot, comments };
+  if (replay.generation === null) {
+    return {
+      problem: `${ref} has no open owner generation: no trusted acquire, bootstrap or resume marker, or its set was released`,
+    };
+  }
+  if (replay.generation.releasing) {
+    return {
+      problem: `the set of ${ref} is being released, so a child cannot join it`,
+    };
+  }
+  const { owner, set, session, latest } = replay.generation;
+  return { generation: { owner, set, session, latest }, snapshot, comments };
 }
 
 /**

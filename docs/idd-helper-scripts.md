@@ -1016,7 +1016,7 @@ in this preamble, since the fallback differs per helper.
   the reliable JSON path that HTML-comment-first bodies require
   (referenced in
   [kurone-kito/idd-skill#1047](https://github.com/kurone-kito/idd-skill/issues/1047))
-  For the `authoring-owner` marker (issues `#3910` and `#3899`), a dry
+  For the `authoring-owner` marker (issues `#3910`, `#3899` and `#4669`), a dry
   run and `--apply` both run one more check before anything is posted. A
   `heartbeat`, `release`, `release-guard`, `release-complete` or `resume`
   post is refused, with exit `1` and nothing posted, unless its `set`,
@@ -1029,10 +1029,21 @@ in this preamble, since the fallback differs per helper.
   `(createdAt, id)` order that carries the owner token, in any mode, is
   written by a trusted login when any are configured, and is not minimized
   as outdated. One that was edited, whose edit state is unknown, or that
-  does not parse refuses the post. Acquire and bootstrap make no read. The
-  session is not compared, so a release from another session stays allowed.
-  The comments are read over GraphQL, paginated to
-  completion, and a failed or incomplete read refuses the post too. The
+  does not parse refuses the post. Acquire and bootstrap now read the
+  declared anchor's complete owner log over paginated GraphQL before either
+  dry-run output or POST. A self-anchored target may open from an empty log
+  or after a completed generation with a fresh set ID; a closed set ID or
+  any already-open generation, including a release in progress, refuses.
+  A child must match its anchor's open, non-releasing set and session; owner
+  tokens are per-target and are not compared across the set. Trusted marker
+  history is replayed in `(createdAt, id)` order; malformed, edited,
+  incomplete history, or one that cannot be replayed conclusively, refuses;
+  an untrusted marker cannot close a set. If concurrent first openers both
+  read before either POST, replay still gives the first valid opener the
+  generation.
+  The session is not compared for continuation modes, so a release from
+  another session stays allowed. A failed or incomplete comment read refuses
+  the post too. The
   check exists because a `release` carrying the mangled set id
   `set-8fc92e9b28760e` (for `set-8fc92e8e9b28760e`) was posted on the
   three issues `#3556`, `#3557` and `#3559` on 2026-09-27, about 20

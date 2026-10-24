@@ -14,6 +14,7 @@ import { test } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { AuthoringOwnerProvenanceComment } from '../src/scripts/authoring-owner-provenance.mts';
 import { markdownItAvailable } from '../src/scripts/markdown-structure.mts';
+import { resolveAnchorOwnerGeneration } from '../src/scripts/post-idd-marker.mts';
 import {
   buildLintArgs,
   carrierSetSnapshot,
@@ -25,7 +26,6 @@ import {
   markerPostSentNothing,
   parseJournalReference,
   replayAnchorHold,
-  resolveAnchorGeneration,
   resolvePublishLabels,
 } from '../src/scripts/publish-authoring-hold.mts';
 import { stubExecutable } from './test-utils.mts';
@@ -805,6 +805,7 @@ test('CLI: --apply runs the mutations in the contract order and ends at member',
       'journal-pending',
       'create',
       'identity-attach',
+      'provenance',
       'owner-marker',
       'provenance',
       'member',
@@ -963,9 +964,9 @@ test('CLI: an open linked pull request stops before member', () => {
 });
 
 test('CLI: a foreign owner marker that lands after provenance stops before member', () => {
-  // The first GraphQL comment read is the provenance run; the second is the
-  // final owner-log replay.
-  const fixture = setup({ foreignOwnerOnRead: 2 });
+  // The first read is acquire preflight, the second is provenance, and the
+  // third is the final owner-log replay.
+  const fixture = setup({ foreignOwnerOnRead: 3 });
   try {
     const result = fixture.run([...files(fixture), '--apply']);
     assert.equal(result.status, 1);
@@ -2665,12 +2666,27 @@ function provenanceComment(
 }
 
 function replay(comments: AuthoringOwnerProvenanceComment[]) {
-  return resolveAnchorGeneration({
+  const result = resolveAnchorOwnerGeneration({
     comments,
     anchorRef: ANCHOR_REF,
     markerPrefix: 'idd-skill',
     trusted: ['kurone-kito'],
   });
+  if ('problem' in result) {
+    return result;
+  }
+  if (result.generation === null) {
+    return {
+      problem: `${ANCHOR_REF} has no open owner generation: no trusted acquire, bootstrap or resume marker, or its set was released`,
+    };
+  }
+  if (result.generation.releasing) {
+    return {
+      problem: `the set of ${ANCHOR_REF} is being released, so a child cannot join it`,
+    };
+  }
+  const { owner, set, session, latest } = result.generation;
+  return { generation: { owner, set, session, latest } };
 }
 
 test('child ids: the anchor is the real reference and the set and session are the anchor`s', () => {
@@ -2746,6 +2762,57 @@ test('anchor replay: an acquire opens a generation and heartbeats and resumes ke
   assert.equal(resumed.generation.owner, 'owner-next');
   assert.equal(resumed.generation.session, 'session-next');
   assert.equal(resumed.generation.set, ANCHOR_SET);
+});
+
+test('shared anchor replay distinguishes empty, releasing, and closed histories', () => {
+  const empty = resolveAnchorOwnerGeneration({
+    comments: [],
+    anchorRef: ANCHOR_REF,
+    markerPrefix: 'idd-skill',
+    trusted: ['kurone-kito'],
+  });
+  assert.deepEqual(empty, { generation: null, closedSets: new Set() });
+
+  const releasing = resolveAnchorOwnerGeneration({
+    comments: [
+      provenanceComment(1, 'acquire'),
+      provenanceComment(2, 'release'),
+    ],
+    anchorRef: ANCHOR_REF,
+    markerPrefix: 'idd-skill',
+    trusted: ['kurone-kito'],
+  });
+  assert.ok(!('problem' in releasing));
+  assert.equal(releasing.generation?.releasing, true);
+  assert.deepEqual(releasing.closedSets, new Set());
+
+  const completed = resolveAnchorOwnerGeneration({
+    comments: [
+      provenanceComment(1, 'acquire'),
+      provenanceComment(2, 'release'),
+      provenanceComment(3, 'release-complete'),
+    ],
+    anchorRef: ANCHOR_REF,
+    markerPrefix: 'idd-skill',
+    trusted: ['kurone-kito'],
+  });
+  assert.ok(!('problem' in completed));
+  assert.equal(completed.generation, null);
+  assert.deepEqual(completed.closedSets, new Set([ANCHOR_SET]));
+
+  const untrustedClose = resolveAnchorOwnerGeneration({
+    comments: [
+      provenanceComment(1, 'acquire'),
+      provenanceComment(2, 'release'),
+      provenanceComment(3, 'release-complete', {}, { authorLogin: 'stranger' }),
+    ],
+    anchorRef: ANCHOR_REF,
+    markerPrefix: 'idd-skill',
+    trusted: ['kurone-kito'],
+  });
+  assert.ok(!('problem' in untrustedClose));
+  assert.equal(untrustedClose.generation?.releasing, true);
+  assert.deepEqual(untrustedClose.closedSets, new Set());
 });
 
 test('anchor replay: a resume keeps a release in progress until release-complete closes it', () => {
