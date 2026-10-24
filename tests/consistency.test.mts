@@ -2723,10 +2723,8 @@ const BRIEF_ELEMENT_ROWS: readonly {
   },
   {
     element: 'worker report request',
-    source:
-      'idd-template/.github/instructions/idd-orchestrator.instructions.md',
-    anchor:
-      '- The brief asks for a per-worker `schemas/worker-report.schema.json`',
+    source: 'idd-template/docs/idd-workflow.md',
+    anchor: 'Fill the fields of `schemas/worker-report.schema.json`',
     label: '**Worker report.**',
   },
   {
@@ -3159,15 +3157,12 @@ test('fan-out scratchpad preflight provisions and recovers one session root (#46
     const text = normalizeWhitespace(readText(path));
     assert.match(
       text,
-      /Run this preflight on every fan-out entry before Discover, a fresh A5 claim, restart recovery, refill, or worker dispatch/,
+      /Before Discover, A5, restart, refill, or dispatch, follow the \[session scratchpad lifecycle\]/,
     );
-    assert.match(text, /actual current harness context/);
-    assert.match(text, /complete live worker and artifact evidence/);
-    assert.match(text, /do not repeat A5 or mint another claim or nonce/);
     assert.match(
       text,
-      /If prior dispatch or ownership is uncertain, reconcile/,
+      /already-claimed\/no-dispatch work without new claims or nonces/,
     );
-    assert.match(text, /workers create nothing and never use `mkdir -p`/);
+    assert.match(text, /worker missing-parent guard/);
   }
 });
