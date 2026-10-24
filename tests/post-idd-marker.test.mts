@@ -8459,6 +8459,54 @@ test('authoring-owner acquire lets a completed child become a fresh self-anchor 
   }
 });
 
+test('authoring-owner acquire preserves child release through a removal heartbeat (#4669)', () => {
+  const targetComments = [
+    { id: 101, body: ownerIdChildMarker('acquire') },
+    { id: 102, body: ownerIdChildMarker('release') },
+    { id: 103, body: ownerIdChildMarker('heartbeat') },
+  ];
+  const formerAnchorComments = [
+    { id: 201, body: ownerIdAnchorMarker('acquire') },
+    { id: 202, body: ownerIdAnchorMarker('release') },
+    { id: 203, body: ownerIdAnchorMarker('release-guard') },
+    { id: 204, body: ownerIdAnchorMarker('release-complete') },
+  ];
+
+  for (const apply of [false, true]) {
+    const stub = withOwnerIdStub({
+      comments: targetComments,
+      commentsByIssueNumber: { 43: formerAnchorComments },
+    });
+    try {
+      const run = runOwnerIdPost(
+        ownerIdFlags('acquire', {
+          'marker-owner': 'owner-next',
+          set: 'set-next',
+        }),
+        { apply },
+      );
+      assert.equal(run.status, 0, run.stderr);
+      assert.equal(
+        readOwnerIdLines(stub.readsFile).length,
+        2,
+        `apply=${apply}`,
+      );
+      const posted = readOwnerIdLines(stub.postsFile).map((line) =>
+        JSON.parse(line),
+      );
+      assert.equal(posted.length, apply ? 1 : 0, `apply=${apply}`);
+      if (apply) {
+        assert.match(
+          posted[0].body,
+          /mode=acquire; owner=owner-next; set=set-next/,
+        );
+      }
+    } finally {
+      stub.restore();
+    }
+  }
+});
+
 test('authoring-owner acquire cannot reuse a former child set ID (#4669)', () => {
   const history = formerChildHistory(OWNER_ID_TARGET, OWNER_ID_ANCHOR_TARGET);
   const targetComments = [

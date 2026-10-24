@@ -2123,8 +2123,10 @@ export function resolveAnchorOwnerGeneration(input) {
 }
 /**
  * Replay one former child's markers for an anchor/set pair. A completed child
- * membership must end with its own trusted `release`; only the former anchor's
- * matching `release-complete` can prove that the set then closed.
+ * membership must have its own trusted `release` in progress; a subsequent
+ * heartbeat can preserve that state while the child label is removed. Only
+ * the former anchor's matching `release-complete` can prove that the set then
+ * closed.
  */
 function resolveFormerChildMembership(input) {
   const trustedSet = new Set(
@@ -2206,13 +2208,9 @@ function resolveFormerChildMembership(input) {
     }
     state = next;
   }
-  if (
-    state.open === null ||
-    !state.open.releasing ||
-    state.open.latest.mode !== 'release'
-  ) {
+  if (state.open === null || !state.open.releasing) {
     return {
-      problem: `former child membership ${input.membership.anchorRef}/${input.membership.set} has no final trusted release marker`,
+      problem: `former child membership ${input.membership.anchorRef}/${input.membership.set} has no trusted release marker in progress`,
     };
   }
   return { generation: state.open };
