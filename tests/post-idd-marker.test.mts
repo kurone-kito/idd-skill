@@ -10043,6 +10043,318 @@ test('authoring-owner acquire ignores a losing self opener after an earlier chil
   }
 });
 
+test('former-child reconciliation retains the winning release across same-set openers (#4669)', () => {
+  const targetRef = OWNER_ID_TARGET;
+  const formerAnchor = OWNER_ID_ANCHOR_TARGET;
+  const set = 'set-same-anchor-race';
+  const winningSession = 'session-winning-child';
+  const at = (seconds: number) =>
+    new Date(Date.parse(TS) + seconds * 1000).toISOString();
+  const targetComments = [
+    {
+      id: 101,
+      createdAt: at(1),
+      body: ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: targetRef,
+        anchor: formerAnchor,
+        owner: 'owner-winning-child',
+        set,
+        session: winningSession,
+      }),
+    },
+    {
+      id: 102,
+      createdAt: at(2),
+      body: ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: targetRef,
+        anchor: formerAnchor,
+        owner: 'owner-losing-child',
+        set,
+        session: 'session-losing-child',
+      }),
+    },
+    {
+      id: 103,
+      createdAt: at(3),
+      body: ownerIdHistoryMarker({
+        mode: 'release',
+        target: targetRef,
+        anchor: formerAnchor,
+        owner: 'owner-winning-child',
+        set,
+        session: winningSession,
+      }),
+    },
+  ];
+  const formerAnchorComments = (
+    ['acquire', 'release', 'release-guard', 'release-complete'] as const
+  ).map((mode, index) => ({
+    id: 201 + index,
+    createdAt: at([0, 4, 5, 6][index] ?? 0),
+    body: ownerIdHistoryMarker({
+      mode,
+      target: formerAnchor,
+      anchor: formerAnchor,
+      owner: 'owner-former-anchor',
+      set,
+      session: winningSession,
+    }),
+  }));
+  const stub = withOwnerIdStub({
+    commentsByIssueNumber: { 43: formerAnchorComments },
+  });
+  try {
+    const result = reconcileFormerChildMemberships({
+      comments: targetComments.map((comment) => ({
+        ...comment,
+        authorLogin: 'kurone-kito',
+        updatedAt: comment.createdAt,
+        lastEditedAt: null,
+        isMinimized: false,
+        minimizedReason: null,
+      })),
+      historyTargetRef: targetRef,
+      markerPrefix: 'idd-skill',
+      trusted: ['kurone-kito'],
+    });
+    assert.ok(!('problem' in result));
+    if (!('problem' in result)) {
+      assert.deepEqual(result.comments, []);
+      assert.ok(result.closedSets.has(set));
+      assert.deepEqual(
+        result.supersedingOpenings.map((opening) => opening.id),
+        [101],
+      );
+    }
+  } finally {
+    stub.restore();
+  }
+});
+
+test('former-child reconciliation ignores a target-wide loser continuation in a later candidate (#4669)', () => {
+  const targetRef = OWNER_ID_TARGET;
+  const formerAnchor = 'o/r#44';
+  const childSet = 'set-later-child-winner';
+  const childSession = 'session-later-child-winner';
+  const at = (seconds: number) =>
+    new Date(Date.parse(TS) + seconds * 1000).toISOString();
+  const targetComments = [
+    {
+      id: 101,
+      createdAt: at(0),
+      body: ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: targetRef,
+        anchor: targetRef,
+        owner: 'owner-self-first',
+        set: 'set-self-first',
+        session: 'session-self-first',
+      }),
+    },
+    {
+      id: 102,
+      createdAt: at(1),
+      body: ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: targetRef,
+        anchor: formerAnchor,
+        owner: 'owner-child-losing',
+        set: childSet,
+        session: 'session-child-losing',
+      }),
+    },
+    ...(['release', 'release-guard', 'release-complete'] as const).map(
+      (mode, index) => ({
+        id: 103 + index,
+        createdAt: at([2, 2.5, 3][index] ?? 2),
+        body: ownerIdHistoryMarker({
+          mode,
+          target: targetRef,
+          anchor: targetRef,
+          owner: 'owner-self-first',
+          set: 'set-self-first',
+          session: 'session-self-first',
+        }),
+      }),
+    ),
+    {
+      id: 106,
+      createdAt: at(4),
+      body: ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: targetRef,
+        anchor: formerAnchor,
+        owner: 'owner-child-winning',
+        set: childSet,
+        session: childSession,
+      }),
+    },
+    {
+      id: 107,
+      createdAt: at(5),
+      body: ownerIdHistoryMarker({
+        mode: 'release',
+        target: targetRef,
+        anchor: formerAnchor,
+        owner: 'owner-child-losing',
+        set: childSet,
+        session: 'session-child-losing',
+      }),
+    },
+    {
+      id: 108,
+      createdAt: at(6),
+      body: ownerIdHistoryMarker({
+        mode: 'release',
+        target: targetRef,
+        anchor: formerAnchor,
+        owner: 'owner-child-winning',
+        set: childSet,
+        session: childSession,
+      }),
+    },
+  ];
+  const formerAnchorComments = (
+    ['acquire', 'release', 'release-guard', 'release-complete'] as const
+  ).map((mode, index) => ({
+    id: 201 + index,
+    createdAt: at([0, 7, 8, 9][index] ?? 0),
+    body: ownerIdHistoryMarker({
+      mode,
+      target: formerAnchor,
+      anchor: formerAnchor,
+      owner: 'owner-former-anchor',
+      set: childSet,
+      session: childSession,
+    }),
+  }));
+  const stub = withOwnerIdStub({
+    commentsByIssueNumber: { 44: formerAnchorComments },
+  });
+  try {
+    const result = reconcileFormerChildMemberships({
+      comments: targetComments.map((comment) => ({
+        ...comment,
+        authorLogin: 'kurone-kito',
+        updatedAt: comment.createdAt,
+        lastEditedAt: null,
+        isMinimized: false,
+        minimizedReason: null,
+      })),
+      historyTargetRef: targetRef,
+      markerPrefix: 'idd-skill',
+      trusted: ['kurone-kito'],
+    });
+    assert.ok(
+      !('problem' in result),
+      'problem' in result ? result.problem : '',
+    );
+    if (!('problem' in result)) {
+      assert.deepEqual(
+        result.comments.map((comment) => comment.id),
+        [101, 103, 104, 105],
+      );
+      assert.ok(result.closedSets.has(childSet));
+      assert.deepEqual(
+        result.supersedingOpenings.map((opening) => opening.id),
+        [106],
+      );
+    }
+  } finally {
+    stub.restore();
+  }
+});
+
+test('former-child reconciliation rejects a same-set opener after release-complete (#4669)', () => {
+  const targetRef = OWNER_ID_TARGET;
+  const formerAnchor = OWNER_ID_ANCHOR_TARGET;
+  const set = 'set-child-reopen-after-completion';
+  const session = 'session-child-before-reopen';
+  const at = (seconds: number) =>
+    new Date(Date.parse(TS) + seconds * 1000).toISOString();
+  const targetComments = [
+    {
+      id: 101,
+      createdAt: at(1),
+      body: ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: targetRef,
+        anchor: formerAnchor,
+        owner: 'owner-child-first',
+        set,
+        session,
+      }),
+    },
+    {
+      id: 102,
+      createdAt: at(2),
+      body: ownerIdHistoryMarker({
+        mode: 'release',
+        target: targetRef,
+        anchor: formerAnchor,
+        owner: 'owner-child-first',
+        set,
+        session,
+      }),
+    },
+    {
+      id: 103,
+      createdAt: at(4),
+      body: ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: targetRef,
+        anchor: formerAnchor,
+        owner: 'owner-child-later',
+        set,
+        session: 'session-child-later',
+      }),
+    },
+  ];
+  const formerAnchorComments = (
+    ['acquire', 'release', 'release-guard', 'release-complete'] as const
+  ).map((mode, index) => ({
+    id: 201 + index,
+    createdAt: at([0, 2.5, 2.75, 3][index] ?? 0),
+    body: ownerIdHistoryMarker({
+      mode,
+      target: formerAnchor,
+      anchor: formerAnchor,
+      owner: 'owner-former-anchor',
+      set,
+      session,
+    }),
+  }));
+  const stub = withOwnerIdStub({
+    commentsByIssueNumber: { 43: formerAnchorComments },
+  });
+  try {
+    const result = reconcileFormerChildMemberships({
+      comments: targetComments.map((comment) => ({
+        ...comment,
+        authorLogin: 'kurone-kito',
+        updatedAt: comment.createdAt,
+        lastEditedAt: null,
+        isMinimized: false,
+        minimizedReason: null,
+      })),
+      historyTargetRef: targetRef,
+      markerPrefix: 'idd-skill',
+      trusted: ['kurone-kito'],
+    });
+    assert.ok('problem' in result);
+    if ('problem' in result) {
+      assert.match(
+        result.problem,
+        /reopens after its matching release-complete/,
+      );
+    }
+  } finally {
+    stub.restore();
+  }
+});
+
 test('former-child reconciliation arbitrates foreign openers across anchors (#4669)', () => {
   const targetRef = OWNER_ID_TARGET;
   const anchorA = OWNER_ID_ANCHOR_TARGET;
