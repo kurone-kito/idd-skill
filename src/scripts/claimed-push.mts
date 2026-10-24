@@ -960,9 +960,10 @@ function readGeneratedSyncTargets(
 
 /**
  * Item 4(d): every path the branch changed since its branch point, committed
- * or not, minus the generated copies and the sync-manifest targets that exist
- * at the branch point. Both exclusions read the branch point, never the
- * branch, so a branch cannot exclude its own files.
+ * or not, minus generated copies and branch-point `syncPairs` targets whose
+ * mode is `exact` or `concreted`. `contains` and `structure` targets remain
+ * canonical. Both exclusions read the branch point, never the branch, so a
+ * branch cannot exclude its own files.
  */
 function readCanonicalPaths(
   ctx: Context,
