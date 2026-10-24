@@ -1046,7 +1046,10 @@ in this preamble, since the fallback differs per helper.
   completion precedes a verified later self-generation or the self-anchor
   acquisition or bootstrap currently being preflighted; otherwise
   reconciliation refuses. Verified
-  former-child set IDs remain closed and unavailable for reuse. This covers
+  former-child set IDs, including IDs closed deeper in the former-anchor
+  ancestry, remain closed and unavailable for reuse. The nested propagation
+  gap was reproduced during review on 2026-10-24 (PR #4677, thread
+  #4367196700). This covers
   child acquisition under a promoted anchor, found during review on
   2026-10-24 (PR #4677,
   [thread #4366954325](https://github.com/kurone-kito/idd-skill/pull/4677#discussion_r4366954325)).

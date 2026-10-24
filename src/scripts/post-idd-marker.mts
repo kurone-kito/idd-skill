@@ -2813,6 +2813,14 @@ function reconcileFormerChildMembershipsInternal(
           problem: `former anchor ${membership.anchorRef} reuses set ${reusedFormerChildSet}, already closed by a verified former-child membership`,
         };
       }
+      // Keep every verified closed set from this anchor's recursively
+      // reconciled history unavailable to the target being promoted too.
+      for (const set of anchorReconciliation.closedSets) {
+        closedSets.add(set);
+      }
+      for (const set of anchorReplay.closedSets) {
+        closedSets.add(set);
+      }
       cachedAnchorReplay = anchorReplay;
       anchorReplays.set(anchorKey, cachedAnchorReplay);
     }
