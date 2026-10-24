@@ -3031,6 +3031,19 @@ function reconcileFormerChildMembershipsInternal(
     (left, right) =>
       commentPrecedes(left, right) ? -1 : commentPrecedes(right, left) ? 1 : 0,
   );
+  const selfAnchorOwnerKey = (set: string, owner: string): string =>
+    `${set}\u0000${owner}`;
+  const selfAnchorOwnerKeys = new Map<number, string>();
+  for (const comment of orderedSelfAnchorComments) {
+    const parsed = parseAuthoringOwnerComment(comment.body, input.markerPrefix);
+    if (parsed !== null) {
+      selfAnchorOwnerKeys.set(
+        comment.id,
+        selfAnchorOwnerKey(parsed.set, parsed.owner),
+      );
+    }
+  }
+  const losingSelfAnchorOwners = new Set<string>();
   const verifiedSupersedingOpenings: VerifiedSupersedingOpening[] = [];
   type VerifiedForeignMembership = {
     membership: FormerChildMembership;
@@ -3231,9 +3244,13 @@ function reconcileFormerChildMembershipsInternal(
     opening: AuthoringOwnerProvenanceComment,
   ): { completion: AnchorOwnerLatestMarker | null } | { problem: string } => {
     const replay = resolveAnchorOwnerGeneration({
-      comments: selfAnchorComments.filter(
-        (comment) => !losingSelfAnchorCommentIds.has(comment.id),
-      ),
+      comments: selfAnchorComments.filter((comment) => {
+        if (losingSelfAnchorCommentIds.has(comment.id)) {
+          return false;
+        }
+        const ownerKey = selfAnchorOwnerKeys.get(comment.id);
+        return ownerKey === undefined || !losingSelfAnchorOwners.has(ownerKey);
+      }),
       anchorRef: input.historyTargetRef,
       markerPrefix: input.markerPrefix,
       trusted: input.trusted,
@@ -3262,8 +3279,6 @@ function reconcileFormerChildMembershipsInternal(
     };
   };
 
-  const selfAnchorOwnerKey = (set: string, owner: string): string =>
-    `${set}\u0000${owner}`;
   const selfAnchorResumeSuccessors = new Map<string, string[]>();
   for (const comment of orderedSelfAnchorComments) {
     const parsed = parseAuthoringOwnerComment(comment.body, input.markerPrefix);
@@ -3276,7 +3291,6 @@ function reconcileFormerChildMembershipsInternal(
     successors.push(successorOwner);
     selfAnchorResumeSuccessors.set(priorOwner, successors);
   }
-  const losingSelfAnchorOwners = new Set<string>();
   const recordLosingSelfAnchorOwner = (set: string, owner: string): void => {
     const pending = [selfAnchorOwnerKey(set, owner)];
     while (pending.length > 0) {

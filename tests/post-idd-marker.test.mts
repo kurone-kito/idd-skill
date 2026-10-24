@@ -10196,6 +10196,140 @@ test('former-child reconciliation preserves winning self-anchor closure after a 
   }
 });
 
+test('former-child replay filters losing self-owner lineages before later openings (#4669)', () => {
+  const targetRef = OWNER_ID_TARGET;
+  const formerAnchor = OWNER_ID_ANCHOR_TARGET;
+  const childSet = 'set-former-child-before-losing-self';
+  const childSession = 'session-former-child-before-losing-self';
+  const losingSet = 'set-losing-self-before-child-completion';
+  const losingOwner = 'owner-losing-self-before-child-completion';
+  const resumedOwner = 'owner-losing-self-resumed-before-completion';
+  const freshSet = 'set-fresh-self-after-child-completion';
+  const freshSession = 'session-fresh-self-after-child-completion';
+  const at = (seconds: number) =>
+    new Date(Date.parse(TS) + seconds * 1000).toISOString();
+  const targetComments = [
+    {
+      id: 101,
+      createdAt: at(1),
+      body: ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: targetRef,
+        anchor: formerAnchor,
+        owner: 'owner-former-child-before-losing-self',
+        set: childSet,
+        session: childSession,
+      }),
+    },
+    {
+      id: 102,
+      createdAt: at(2),
+      body: ownerIdHistoryMarker({
+        mode: 'release',
+        target: targetRef,
+        anchor: formerAnchor,
+        owner: 'owner-former-child-before-losing-self',
+        set: childSet,
+        session: childSession,
+      }),
+    },
+    {
+      id: 103,
+      createdAt: at(3),
+      body: ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: targetRef,
+        anchor: targetRef,
+        owner: losingOwner,
+        set: losingSet,
+        session: 'session-losing-self-before-child-completion',
+      }),
+    },
+    {
+      id: 104,
+      createdAt: at(3.25),
+      body: ownerIdHistoryMarker({
+        mode: 'release',
+        target: targetRef,
+        anchor: targetRef,
+        owner: losingOwner,
+        set: losingSet,
+        session: 'session-losing-self-before-child-completion-release',
+      }),
+    },
+    {
+      id: 105,
+      createdAt: at(3.5),
+      body: ownerIdHistoryMarker({
+        mode: 'resume',
+        target: targetRef,
+        anchor: targetRef,
+        owner: resumedOwner,
+        set: losingSet,
+        session: 'session-losing-self-before-child-completion-resumed',
+        supersedes: losingOwner,
+      }),
+    },
+    {
+      id: 106,
+      createdAt: at(5),
+      body: ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: targetRef,
+        anchor: targetRef,
+        owner: 'owner-fresh-self-after-child-completion',
+        set: freshSet,
+        session: freshSession,
+      }),
+    },
+  ];
+  const formerAnchorComments = (
+    ['acquire', 'release', 'release-guard', 'release-complete'] as const
+  ).map((mode, index) => ({
+    id: 201 + index,
+    createdAt: at([0, 3, 3.5, 4][index] ?? 0),
+    body: ownerIdHistoryMarker({
+      mode,
+      target: formerAnchor,
+      anchor: formerAnchor,
+      owner: 'owner-former-anchor-before-losing-self',
+      set: childSet,
+      session: childSession,
+    }),
+  }));
+  const stub = withOwnerIdStub({
+    commentsByIssueNumber: { 43: formerAnchorComments },
+  });
+  try {
+    const result = reconcileFormerChildMemberships({
+      comments: targetComments.map((comment) => ({
+        ...comment,
+        authorLogin: 'kurone-kito',
+        updatedAt: comment.createdAt,
+        lastEditedAt: null,
+        isMinimized: false,
+        minimizedReason: null,
+      })),
+      historyTargetRef: targetRef,
+      markerPrefix: 'idd-skill',
+      trusted: ['kurone-kito'],
+    });
+    assert.ok(
+      !('problem' in result),
+      'problem' in result ? result.problem : '',
+    );
+    if (!('problem' in result)) {
+      assert.deepEqual(
+        result.comments.map((comment) => comment.id),
+        [106],
+      );
+      assert.ok(result.closedSets.has(childSet));
+    }
+  } finally {
+    stub.restore();
+  }
+});
+
 test('former-child reconciliation retains the winning release across same-set openers (#4669)', () => {
   const targetRef = OWNER_ID_TARGET;
   const formerAnchor = OWNER_ID_ANCHOR_TARGET;
