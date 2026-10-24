@@ -216,12 +216,12 @@ npx --yes --package <reviewed-helper-spec> \
   idd-helper-bundle-manifest --profile <selected-profile>
 ```
 
-If `package-manager` auto-detection does not resolve npm, pnpm, or yarn,
-pass `--package-manager <npm|pnpm|yarn>` explicitly. Pass
-`--package-spec <pinned-spec>` when the repository wants the helper to
-emit a reviewed tag, commit, tarball, or internal mirror URL. Treat
-`refs/heads/main` as a manual opt-in when the repository explicitly
-wants a mutable helper source instead of a reviewed pinned spec.
+When detection is ambiguous, pass `--package-manager <npm|pnpm|yarn>`.
+`--package` selects the running build; use a reviewed full SHA.
+`--package-spec` selects emitted output, not the running build. When
+omitted, it keeps the existing mutable `DEFAULT_PACKAGE_SPEC`
+(`refs/heads/main`). Treat `refs/heads/main` as a manual opt-in for
+either explicit override.
 
 **Missing pin is a non-blocking advisory, not a blocking check.**
 Observed 2026-09-14, during the issue-mediated bootstrap of this

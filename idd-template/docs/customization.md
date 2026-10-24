@@ -387,9 +387,17 @@ from the target repository root to get the concrete import surface for
 the chosen profile:
 
 ```sh
-npx --yes --package https://codeload.github.com/kurone-kito/idd-skill/tar.gz/refs/heads/main \
+npx --yes \
+  --package https://codeload.github.com/kurone-kito/idd-skill/tar.gz/77befdd4030757464bed7f31c7dfe6d0a404a18b \
   idd-helper-bundle-manifest --profile package-manager
 ```
+
+`--package` selects the running manifest build, pinned here to
+v0.17.0. Issue #4644's
+[2026-10-23 intake][reviewed-executable-example-intake] records the
+maintainer's guidance choice, not a demonstrated vulnerability. See the
+[pinning guide](idd-helper-scripts.md#pinning-executable-examples) for
+update steps and the mutable-source option.
 
 The manifest auto-detects npm, pnpm, or yarn from the target repository
 when possible. If detection is ambiguous, pass this flag explicitly:
@@ -400,8 +408,9 @@ when possible. If detection is ambiguous, pass this flag explicitly:
 
 The output shows which dependency entries, `package.json` scripts,
 vendored files, or one-shot commands belong to the selected profile.
-Pass `--package-spec <pinned-spec>` when you want the manifest to emit a
-reviewed tarball or mirror URL instead of the default archive URL.
+`--package-spec` selects emitted output, not the running build. If
+omitted, the existing mutable `DEFAULT_PACKAGE_SPEC` (`refs/heads/main`)
+remains.
 
 To switch profiles later, rerun the same command with
 these flags:
@@ -1331,7 +1340,7 @@ Example downstream usage:
 ```yaml
 jobs:
   pnpm-boundary:
-    uses: kurone-kito/idd-skill/.github/workflows/pnpm-boundary.yml@main
+    uses: kurone-kito/idd-skill/.github/workflows/pnpm-boundary.yml@77befdd4030757464bed7f31c7dfe6d0a404a18b
     with:
       node-version: "24.x"
       lint-command: npm run lint # replace with your own lint/test command
@@ -2745,3 +2754,4 @@ or the cross-agent workflow.
 
 [issue-authoring-review-input-schema]: https://kurone-kito.github.io/idd-skill/schemas/issue-authoring-review-input.schema.json
 [actions-billing]: https://docs.github.com/en/actions/concepts/billing-and-usage
+[reviewed-executable-example-intake]: https://gist.github.com/kurone-kito/9f2d7871542cb2f7a255f92a7c1232d0
