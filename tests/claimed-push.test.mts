@@ -2558,12 +2558,13 @@ test('readBaseText reports absent, present, and error through the runner', () =>
   assert.match(stepOf(failing, 'scope').reason, /git show failed/u);
 });
 
-test('generated copies and manifest targets at the branch point are excluded', () => {
+test('generated copies and generated manifest targets are excluded', () => {
   const manifest = JSON.stringify({
     syncPairs: [
       {
         source: 'idd-template/docs/idd-helper-scripts.md',
         target: 'docs/idd-helper-scripts.md',
+        mode: 'exact',
       },
     ],
   });
@@ -2631,6 +2632,80 @@ test('generated copies and manifest targets at the branch point are excluded', (
     baseFiles: { 'audit/sync-manifest.json': present('{ not json') },
   });
   assertRefused(malformed, 'scope', NEXT.stopAndReport, { exitStatus: null });
+});
+
+test('sync-pair modes retain independent targets and exclude generated copies', () => {
+  const manifest = JSON.stringify({
+    syncPairs: [
+      { target: 'generated/exact.mjs', mode: 'exact' },
+      { target: 'generated/concreted.md', mode: 'concreted' },
+      { target: 'docs/contains.md', mode: 'contains' },
+      { target: 'docs/structure.md', mode: 'structure' },
+      {
+        source: 'docs/issue-authoring-skill.md',
+        target: 'skills/issue-authoring/references/contract.md',
+        mode: 'contains',
+      },
+      {
+        source: 'skills/issue-authoring/references/contract.md',
+        target: '.claude/skills/issue-authoring/references/contract.md',
+        mode: 'exact',
+      },
+    ],
+  });
+  const changed = [
+    'generated/exact.mjs',
+    'generated/concreted.md',
+    'docs/contains.md',
+    'docs/structure.md',
+    'skills/issue-authoring/references/contract.md',
+    '.claude/skills/issue-authoring/references/contract.md',
+  ];
+  const r = run({
+    input: { apply: false },
+    world: { [K.diff]: result(0, nulList(changed)) },
+    baseFiles: {
+      'audit/sync-manifest.json': { status: 'present', text: manifest },
+    },
+  });
+
+  assert.equal(stepOf(r, 'scope').status, 'passed');
+  assert.deepEqual(canonicalOf(auditInputs(r)[1] ?? ''), [
+    'docs/contains.md',
+    'docs/structure.md',
+    'skills/issue-authoring/references/contract.md',
+  ]);
+});
+
+test('missing and unsupported sync-pair modes refuse before gate or push', () => {
+  const present = (text: string): BaseTextRead => ({ status: 'present', text });
+  const cases = [
+    {
+      label: 'missing',
+      pair: { target: 'docs/unknown.md' },
+      reasonPattern: /no string mode/u,
+    },
+    {
+      label: 'unsupported',
+      pair: { target: 'docs/unknown.md', mode: 'generated' },
+      reasonPattern: /unsupported mode/u,
+    },
+  ] as const;
+  for (const { label, pair, reasonPattern } of cases) {
+    const r = run({
+      world: { [K.diff]: result(0, nulList(['src/scripts/claimed-push.mts'])) },
+      baseFiles: {
+        'audit/sync-manifest.json': present(
+          JSON.stringify({ syncPairs: [pair] }),
+        ),
+      },
+    });
+
+    assertRefused(r, 'scope', NEXT.stopAndReport, { exitStatus: null });
+    assert.match(stepOf(r, 'scope').reason, reasonPattern, label);
+    assert.equal(stepOf(r, 'gate').status, 'skipped');
+    noPush(r);
+  }
 });
 
 test('the diff request uses --no-renames and the branch point from git merge-base', () => {
