@@ -897,6 +897,8 @@ const UNSAFE_DIRECTIVE_TARGET_SOURCE = String.raw`(?:${UNSAFE_DIRECT_ACTOR_ROLE_
 // sources; keeping these nouns separate avoids making ordinary "run this
 // test/check" repository commands look like supplied content.
 const SUPPLIED_CONTENT_HUMAN_SOURCE_NOUN_SOURCE = `(?:${SUPPLIED_CONTENT_NOUN}|build|test|check)`;
+const SUPPLIED_CONTENT_HUMAN_SOURCE_RECIPIENT_SOURCE = String.raw`(?:(?:the\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person)|a\s+(?:user|human|tester|reviewer|maintainer|developer|person)|an\s+operator)`;
+const SUPPLIED_CONTENT_AGENT_ROLE_SOURCE = String.raw`(?:(?:the|a|an)\s+)?${UNSAFE_DIRECT_ACTOR_ROLE_RECIPIENT_SOURCE}`;
 const SUPPLIED_CONTENT_HUMAN_SOURCE_BOUNDARY_SOURCE = String.raw`(?![\w-](?!(?:-?(?:agent|assistant|bot))\b)|\s+interface\b)`;
 // #3073: "run this full command to validate the config" matches only
 // SUPPLIED_CONTENT_OBJECT_REFERENCE's ambiguous "this <filler> <noun>" shape
@@ -5286,12 +5288,14 @@ function findUnsafeExecutionDirectiveMatch(
     'i',
   );
   const suppliedContentHumanSourcePattern = new RegExp(
-    // Executables supplied, generated, created, or built by a human remain
-    // unsafe even when the source has a name or role modifier. Keep the
-    // article forms explicit (so QA gains no new article variants), require
-    // a boundary after the actor name (so "username" is not "user"), and
-    // leave compounds such as "user interface" intact as attribution.
-    String.raw`\b${SUPPLIED_CONTENT_HUMAN_SOURCE_NOUN_SOURCE}\b\s+(?:provided|generated|created|built)\s+by\s+(?:(?:the\s+)?(?:user|human|tester|reviewer|maintainer|operator|developer|person)|a\s+(?:user|human|tester|reviewer|maintainer|developer|person)|an\s+operator)${SUPPLIED_CONTENT_HUMAN_SOURCE_BOUNDARY_SOURCE}(?:(?:\s+|-)[\w'-]+)?`,
+    // Executables attributed to a human or recognized agent role remain
+    // unsafe across the passive-source verbs that suppress direct-role
+    // matches. Keep human recipient articles explicit (so QA gains no new
+    // handoff-recipient article variants), require an actor boundary, and
+    // leave compounds such as "user interface" intact as attribution. The
+    // role alternative reuses the direct-role vocabulary for executable
+    // sources only; it does not change the manual-handoff grammar.
+    String.raw`\b${SUPPLIED_CONTENT_HUMAN_SOURCE_NOUN_SOURCE}\b\s+${UNSAFE_DIRECT_ACTOR_ROLE_PASSIVE_VERB_SOURCE}\s+by\s+(?:${SUPPLIED_CONTENT_HUMAN_SOURCE_RECIPIENT_SOURCE}${SUPPLIED_CONTENT_HUMAN_SOURCE_BOUNDARY_SOURCE}(?:(?:\s+|-)[\w'-]+)?|${SUPPLIED_CONTENT_AGENT_ROLE_SOURCE}${UNSAFE_HUMAN_ACTOR_TARGET_BOUNDARY_SOURCE})`,
     'i',
   );
   let verbMatch = verbPattern.exec(corpus);
