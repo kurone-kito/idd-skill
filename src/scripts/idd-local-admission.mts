@@ -85,7 +85,7 @@ const ACQUIRED_LINE = 'acquired\n';
 /**
  * Acquire the inherited FD in descriptor mode, report it, then run argv with
  * the lock FD closed only in the command process. The wrapper keeps the lock
- * alive if the helper exits before its command, then a detached guardian keeps
+ * alive if the helper exits before its command, then a same-group guardian keeps
  * it until every live member of the supervised process group has exited.
  */
 const ACQUIRED_WRAPPER =
@@ -548,7 +548,8 @@ interface SuperviseOptions {
 /**
  * Forward SIGINT and SIGTERM to the child, and settle one promise with the
  * exit status. A forwarded signal ends with 128 plus its number, after the
- * group is gone. A failed group signal settles 2 at once, without waiting.
+ * group is gone. If forwarding a group signal fails, the helper returns 2
+ * only after the group is gone.
  */
 function superviseChild(
   child: ChildProcess,
@@ -586,7 +587,7 @@ function superviseChild(
         }
         signalForwardFailed = true;
         deps.stderr(
-          `local-admission: could not signal the admitted command (process group ${pgid}): ${errorMessage(error)}; the lock stays held until the command exits\n`,
+          `local-admission: could not signal the admitted command (process group ${pgid}): ${errorMessage(error)}; the lock stays held until the process group exits\n`,
         );
       }
     };
