@@ -2031,13 +2031,21 @@ anchor's paginated owner log before dry-run output or POST. A self-anchor or
 child post may use only a fresh set and valid open-generation state. When an
 anchor log shows prior child memberships, each former anchor's owner log is
 also read recursively, with cycle and depth guards, and must show the matching
-set/session release-complete after the child's release and before the next
-self-anchored generation. An outdated child release is usable only as historical
-input when that verified later generation exists, or the post is opening it
-now; otherwise reconciliation refuses. Closed set IDs, an open or releasing
-self-generation, or unreadable history that cannot be replayed conclusively
-refuses the post. A completed history with a fresh set remains valid.
-Concurrent first openers still resolve by comment order.
+set/session release-complete after the child's final marker. That completion
+closes the former membership even when the child's release marker is minimized
+as outdated, so a fresh acquisition may use a new set after closure (observed
+during the 2026-10-24 review on PR #4677, thread #4367878222). Any later
+self-anchored generation must open after the matching completion. Across the
+target-wide first-opener race, a self opener posted after a foreign child opener
+but before its matching completion loses; ignore that losing self generation
+and its continuations through the next self opener (observed during the
+2026-10-24 review on PR #4677, thread #4367884510). Closed set IDs, an open or
+releasing generation, or unreadable history that cannot be replayed
+conclusively refuses the post. Foreign openers under different anchors also
+share this target-wide order; a later opener before the current winner's exact
+completion loses (preventive; no observed incident yet). A completed history
+with a fresh set remains valid. Concurrent first openers resolve by comment
+order.
 --marker-target / --marker-owner map to these
 markers' own \`target=\` / \`owner=\` fields -- named with a \`marker-\`
 prefix, not bare --target / --owner, because this CLI already reserves
@@ -2756,12 +2764,16 @@ function commentPrecedes(
 /**
  * An issue can become its own set anchor after being a completed child.
  * Reconcile each old child membership against the exact former anchor/set/
- * session completion before removing those foreign-anchor markers from an
- * anchor replay. Any later self-generation must open after that completion.
+ * session completion, then arbitrate all self and foreign generations in the
+ * target-wide comment order before replaying the target's owner history.
+ * Losing self generations are removed with their continuations. Any later
+ * self-generation must open after the matching completion.
  * Former anchors are reconciled recursively with shared read, cycle and depth
  * guards. An empty trusted actor list cannot establish marker provenance.
- * An outdated child release is historical only when the matching completion
- * precedes a verified later self-generation. Incomplete history fails closed.
+ * The exact former-anchor release-complete closes the old membership even
+ * when the child release is minimized as outdated, allowing a fresh
+ * acquisition with a new set. Any later self-generation must open after that
+ * completion. Incomplete history fails closed.
  */
 function reconcileFormerChildMembershipsInternal(
   input: {
@@ -2769,7 +2781,6 @@ function reconcileFormerChildMembershipsInternal(
     historyTargetRef: string;
     markerPrefix: string;
     trusted: readonly string[];
-    pendingSelfAnchorOpening?: boolean;
   },
   ancestry: readonly string[],
   readBudget: FormerChildReconciliationReadBudget,
@@ -2900,73 +2911,69 @@ function reconcileFormerChildMembershipsInternal(
     events.push(event);
     foreignEventsByMembership.set(event.key, events);
   }
+  const foreignMembershipCandidates: {
+    membership: FormerChildMembership;
+    opening: AuthoringOwnerProvenanceComment;
+  }[] = [];
+  for (const events of foreignEventsByMembership.values()) {
+    const openerIndices = events.flatMap((event, index) =>
+      event.parsed.mode === 'acquire' || event.parsed.mode === 'bootstrap'
+        ? [index]
+        : [],
+    );
+    if (openerIndices.length === 0) {
+      const first = events[0];
+      if (first === undefined) {
+        return {
+          problem: 'former child membership has no readable owner markers',
+        };
+      }
+      return {
+        problem: `former child membership ${first.anchorRef}/${first.set} has no acquisition marker to open a membership generation`,
+      };
+    }
+    for (let index = 0; index < openerIndices.length; index += 1) {
+      const openerIndex = openerIndices[index];
+      const nextOpenerIndex = openerIndices[index + 1];
+      const first = events[0];
+      const opener =
+        openerIndex === undefined ? undefined : events[openerIndex];
+      if (first === undefined || opener === undefined) {
+        return {
+          problem: 'former child acquisition segment cannot be read',
+        };
+      }
+      foreignMembershipCandidates.push({
+        membership: {
+          anchorRef: first.anchorRef,
+          set: first.set,
+          comments: events
+            .slice(index === 0 ? 0 : openerIndex, nextOpenerIndex)
+            .map((event) => event.comment),
+        },
+        opening: opener.comment,
+      });
+    }
+  }
 
   const anchorReplays = new Map<string, AnchorOwnerReplayResult>();
   const closedSets = new Set<string>();
-  const outdatedReleaseSuccessors: FormerAnchorSelfOpening[] = [];
-  const losingForeignCommentIds = new Set<number>();
+  const losingSelfAnchorCommentIds = new Set<number>();
+  const orderedSelfAnchorComments = [...selfAnchorComments].sort(
+    (left, right) =>
+      commentPrecedes(left, right) ? -1 : commentPrecedes(right, left) ? 1 : 0,
+  );
   const verifiedSupersedingOpenings: VerifiedSupersedingOpening[] = [];
-  for (const events of foreignEventsByMembership.values()) {
-    for (let index = 0; index < events.length; index += 1) {
-      const opener = events[index];
-      if (
-        opener.parsed.mode !== 'acquire' &&
-        opener.parsed.mode !== 'bootstrap'
-      ) {
-        continue;
-      }
-      const nextOpenerIndex = events.findIndex(
-        (event, eventIndex) =>
-          eventIndex > index &&
-          (event.parsed.mode === 'acquire' ||
-            event.parsed.mode === 'bootstrap'),
-      );
-      const segmentEnd =
-        nextOpenerIndex === -1 ? events.length : nextOpenerIndex;
-      const earlierSelfComments = selfAnchorComments.filter((comment) =>
-        commentPrecedes(comment, opener.comment),
-      );
-      if (earlierSelfComments.length === 0) {
-        continue;
-      }
-      const earlierSelfReplay = resolveAnchorOwnerGeneration({
-        comments: earlierSelfComments,
-        anchorRef: input.historyTargetRef,
-        markerPrefix: input.markerPrefix,
-        trusted: input.trusted,
-        prefixOnly: true,
-      });
-      if ('problem' in earlierSelfReplay) {
-        return {
-          problem: `self-anchored owner history before former-child acquisition ${opener.comment.id} cannot be replayed: ${earlierSelfReplay.problem}`,
-        };
-      }
-      if (earlierSelfReplay.generation !== null) {
-        // Only this opener and its continuations lose the target-wide race.
-        // A later opener for the same anchor/set starts a new segment and is
-        // replayed independently against the self-anchor history at that time.
-        for (const event of events.slice(index, segmentEnd)) {
-          losingForeignCommentIds.add(event.comment.id);
-        }
-      }
-    }
-  }
+  type VerifiedForeignMembership = {
+    membership: FormerChildMembership;
+    opening: AuthoringOwnerProvenanceComment;
+    completion: AnchorOwnerLatestMarker;
+  };
 
-  const foreignMemberships = new Map<string, FormerChildMembership>();
-  for (const event of foreignEvents) {
-    if (losingForeignCommentIds.has(event.comment.id)) {
-      continue;
-    }
-    const membership = foreignMemberships.get(event.key) ?? {
-      anchorRef: event.anchorRef,
-      set: event.set,
-      comments: [],
-    };
-    membership.comments.push(event.comment);
-    foreignMemberships.set(event.key, membership);
-  }
-
-  for (const membership of foreignMemberships.values()) {
+  const verifyForeignMembership = (
+    candidate: (typeof foreignMembershipCandidates)[number],
+  ): VerifiedForeignMembership | { problem: string } => {
+    const { membership } = candidate;
     const childReplay = resolveFormerChildMembership({
       membership,
       targetRef: input.historyTargetRef,
@@ -3063,7 +3070,6 @@ function reconcileFormerChildMembershipsInternal(
       };
     }
 
-    const childRelease = childReplay.releaseMarker;
     const childLatestAt = Date.parse(childReplay.generation.latest.createdAt);
     const childLatest = membership.comments.find(
       (comment) => comment.id === childReplay.generation.latest.id,
@@ -3098,6 +3104,11 @@ function reconcileFormerChildMembershipsInternal(
         problem: `former child membership ${membership.anchorRef}/${membership.set} has no readable winning acquisition or latest marker`,
       };
     }
+    if (childOpening.comment.id !== candidate.opening.id) {
+      return {
+        problem: `former child membership ${membership.anchorRef}/${membership.set} does not replay from its acquisition at comment ${candidate.opening.id}`,
+      };
+    }
     const completion = anchorReplay.closedGenerations.find((closed) => {
       const completionAt = Date.parse(closed.releaseComplete.createdAt);
       return (
@@ -3113,8 +3124,13 @@ function reconcileFormerChildMembershipsInternal(
         problem: `former child membership ${membership.anchorRef}/${membership.set}/${childReplay.generation.session} has no matching trusted release-complete from the former anchor's current owner`,
       };
     }
+    const verified: VerifiedForeignMembership = {
+      membership,
+      opening: childOpening.comment,
+      completion: completion.releaseComplete,
+    };
     const postCompletionChildOpener = membership.comments.find((comment) => {
-      if (!commentPrecedes(completion.releaseComplete, comment)) {
+      if (!commentPrecedes(verified.completion, comment)) {
         return false;
       }
       const parsed = parseAuthoringOwnerComment(
@@ -3128,41 +3144,147 @@ function reconcileFormerChildMembershipsInternal(
         problem: `former child membership ${membership.anchorRef}/${membership.set} reopens after its matching release-complete at comment ${postCompletionChildOpener.id}`,
       };
     }
-    verifiedSupersedingOpenings.push({
-      id: childOpening.comment.id,
-      createdAt: childOpening.comment.createdAt,
-    });
-    const nextSelfOpening = selfAnchorOpenings
-      .filter((opening) => commentPrecedes(childLatest, opening))
-      .sort(
-        (left, right) =>
-          Date.parse(left.createdAt) - Date.parse(right.createdAt) ||
-          left.id - right.id,
-      )[0];
-    if (
-      nextSelfOpening !== undefined &&
-      !commentPrecedes(completion.releaseComplete, nextSelfOpening)
-    ) {
+    return verified;
+  };
+
+  // The first replay is provisional: all actual foreign acquisition openings
+  // are supplied so an outdated self release-complete can be interpreted.
+  // Each foreign candidate is verified only if target-wide ordering says it
+  // can win, so a losing anchor cannot block a later valid generation.
+  const provisionalForeignOpenings = foreignMembershipCandidates.map(
+    ({ opening }) => ({ id: opening.id, createdAt: opening.createdAt }),
+  );
+  const provisionalSelfReplay = resolveAnchorOwnerGeneration({
+    comments: selfAnchorComments,
+    anchorRef: input.historyTargetRef,
+    markerPrefix: input.markerPrefix,
+    trusted: input.trusted,
+    supersedingOpenings: provisionalForeignOpenings,
+  });
+  if ('problem' in provisionalSelfReplay) {
+    return {
+      problem: `self-anchored owner history cannot be replayed before target-wide opener arbitration: ${provisionalSelfReplay.problem}`,
+    };
+  }
+
+  const orderedSelfAnchorOpenings = [...selfAnchorOpenings].sort(
+    (left, right) =>
+      commentPrecedes(left, right) ? -1 : commentPrecedes(right, left) ? 1 : 0,
+  );
+  type TargetWideGeneration = {
+    kind: 'self' | 'foreign';
+    opening: AuthoringOwnerProvenanceComment;
+    completion: AnchorOwnerLatestMarker | null;
+    foreignCandidate?: (typeof foreignMembershipCandidates)[number];
+  };
+  const targetWideGenerations: TargetWideGeneration[] = [];
+  const selfGenerations = [
+    ...provisionalSelfReplay.closedGenerations,
+    ...(provisionalSelfReplay.generation === null
+      ? []
+      : [provisionalSelfReplay.generation]),
+  ];
+  for (const generation of selfGenerations) {
+    const openingId = generation.lineageOpeningIds[0];
+    const opening = selfAnchorComments.find(
+      (comment) => comment.id === openingId,
+    );
+    if (opening === undefined) {
       return {
-        problem: `former anchor ${membership.anchorRef}/${membership.set} release-complete does not precede the next self-anchored generation`,
+        problem: `self-anchored generation opening ${String(openingId)} cannot be found in the target owner history`,
       };
     }
-    if (childRelease.outdated) {
-      if (nextSelfOpening === undefined) {
-        if (input.pendingSelfAnchorOpening !== true) {
+    targetWideGenerations.push({
+      kind: 'self',
+      opening,
+      completion:
+        'releaseComplete' in generation ? generation.releaseComplete : null,
+    });
+  }
+  for (const foreignCandidate of foreignMembershipCandidates) {
+    targetWideGenerations.push({
+      kind: 'foreign',
+      opening: foreignCandidate.opening,
+      completion: null,
+      foreignCandidate,
+    });
+  }
+  targetWideGenerations.sort((left, right) =>
+    commentPrecedes(left.opening, right.opening)
+      ? -1
+      : commentPrecedes(right.opening, left.opening)
+        ? 1
+        : 0,
+  );
+
+  let targetWideWinner: TargetWideGeneration | undefined;
+  for (const generation of targetWideGenerations) {
+    if (
+      targetWideWinner !== undefined &&
+      (targetWideWinner.completion === null ||
+        !commentPrecedes(targetWideWinner.completion, generation.opening))
+    ) {
+      if (generation.kind === 'self') {
+        const start = orderedSelfAnchorComments.findIndex(
+          (comment) => comment.id === generation.opening.id,
+        );
+        if (start === -1) {
           return {
-            problem: `former child membership ${membership.anchorRef}/${membership.set} has a final release marker minimized as outdated without a later self-anchored generation`,
+            problem: `losing self-anchored opening ${generation.opening.id} cannot be found in the target owner history`,
           };
         }
-      } else {
-        outdatedReleaseSuccessors.push(nextSelfOpening);
+        const nextSelfOpening = orderedSelfAnchorOpenings.find((candidate) =>
+          commentPrecedes(generation.opening, candidate),
+        );
+        const end =
+          nextSelfOpening === undefined
+            ? orderedSelfAnchorComments.length
+            : orderedSelfAnchorComments.findIndex(
+                (comment) => comment.id === nextSelfOpening.id,
+              );
+        if (end === -1) {
+          return {
+            problem: `the next self-anchored opening after ${generation.opening.id} cannot be found in the target owner history`,
+          };
+        }
+        for (const comment of orderedSelfAnchorComments.slice(start, end)) {
+          losingSelfAnchorCommentIds.add(comment.id);
+        }
       }
+      continue;
     }
-    closedSets.add(membership.set);
+    if (generation.kind === 'self') {
+      targetWideWinner = generation;
+      continue;
+    }
+
+    const candidate = generation.foreignCandidate;
+    if (candidate === undefined) {
+      return {
+        problem: `foreign generation opening ${generation.opening.id} has no former-child membership candidate`,
+      };
+    }
+    const verified = verifyForeignMembership(candidate);
+    if ('problem' in verified) {
+      return verified;
+    }
+    closedSets.add(verified.membership.set);
+    verifiedSupersedingOpenings.push({
+      id: verified.opening.id,
+      createdAt: verified.opening.createdAt,
+    });
+    targetWideWinner = {
+      kind: 'foreign',
+      opening: verified.opening,
+      completion: verified.completion,
+      foreignCandidate: candidate,
+    };
   }
 
   const reconciledComments = input.comments.filter(
-    (comment) => !foreignCommentIds.has(comment.id),
+    (comment) =>
+      !foreignCommentIds.has(comment.id) &&
+      !losingSelfAnchorCommentIds.has(comment.id),
   );
   const selfReplay = resolveAnchorOwnerGeneration({
     comments: reconciledComments,
@@ -3185,22 +3307,6 @@ function reconcileFormerChildMembershipsInternal(
       problem: `self-anchored owner history reuses set ${reusedFormerChildSet}, already closed by a verified former-child membership`,
     };
   }
-  for (const opening of outdatedReleaseSuccessors) {
-    const verifiedGeneration = [
-      ...selfReplay.closedGenerations,
-      ...(selfReplay.generation === null ? [] : [selfReplay.generation]),
-    ].some(
-      (generation) =>
-        generation.set === opening.set &&
-        generation.lineageOpeningIds.includes(opening.id),
-    );
-    if (!verifiedGeneration) {
-      return {
-        problem: `former child release ${opening.id} minimized as outdated has no verified later self-anchored generation`,
-      };
-    }
-  }
-
   return {
     comments: reconciledComments,
     closedSets,
@@ -3213,7 +3319,6 @@ export function reconcileFormerChildMemberships(input: {
   historyTargetRef: string;
   markerPrefix: string;
   trusted: readonly string[];
-  pendingSelfAnchorOpening?: boolean;
 }): FormerChildReconciliationResult {
   return reconcileFormerChildMembershipsWithBudget(input, {
     formerAnchorReads: 0,
@@ -3226,7 +3331,6 @@ function reconcileFormerChildMembershipsWithBudget(
     historyTargetRef: string;
     markerPrefix: string;
     trusted: readonly string[];
-    pendingSelfAnchorOpening?: boolean;
   },
   readBudget: FormerChildReconciliationReadBudget,
 ): FormerChildReconciliationResult {
@@ -3388,7 +3492,6 @@ function checkAuthoringOwnerPostIdentity(input: {
         historyTargetRef: post.anchor,
         markerPrefix: input.markerPrefix,
         trusted: actors,
-        pendingSelfAnchorOpening: sameIssueRef(post.target, post.anchor),
       },
       formerChildReadBudget,
     );

@@ -1051,14 +1051,17 @@ in this preamble, since the fallback differs per helper.
   session. It must also show an actual `release` before `release-complete`,
   with completion after the child's final marker and before the next
   self-generation in `(createdAt, id)` order; `release-guard` alone is not
-  closure proof (observed during the 2026-10-24 review on PR `#4677`). A child
-  release minimized as outdated is accepted as
-  historical input only when that matching completion precedes a verified
-  later self-generation or the self-anchor acquisition or bootstrap currently
-  being preflighted; otherwise reconciliation refuses. Verified
-  former-child set IDs, including IDs closed deeper in the former-anchor
-  ancestry, remain closed and unavailable for reuse. The nested propagation
-  gap was reproduced during review on 2026-10-24 (PR #4677, thread
+  closure proof (observed during the 2026-10-24 review on PR `#4677`). An
+  outdated child release is accepted as historical input once the exact matching
+  completion is verified; that closure permits a fresh child or self-anchor
+  acquisition with a new set. A later self-generation must still open after the
+  matching completion (observed during the 2026-10-24 review on PR `#4677`).
+
+  See [thread #4367878222](https://github.com/kurone-kito/idd-skill/pull/4677#discussion_r4367878222).
+
+  Verified former-child set IDs, including IDs closed deeper in the
+  former-anchor ancestry, remain closed and unavailable for reuse. The nested
+  propagation gap was reproduced during review on 2026-10-24 (PR #4677, thread
   #4367196700). This covers
   child acquisition under a promoted anchor, found during review on
   2026-10-24 (PR #4677,
@@ -1071,10 +1074,22 @@ in this preamble, since the fallback differs per helper.
   self-anchor history up to each foreign opener. An opener posted while a
   different self generation is already open lost the target-wide race; ignore
   only that opener and its continuations through the next `acquire` or
-  `bootstrap` for the same anchor/set. Evaluate each later opener against the
-  self-anchor history at its own point in the log, so a later active child
-  still needs release and completion evidence ([PR #4677, threads #4367443380](https://github.com/kurone-kito/idd-skill/pull/4677#discussion_r4367443380)
-  and [#4367522311](https://github.com/kurone-kito/idd-skill/pull/4677#discussion_r4367522311)).
+  `bootstrap` for the same anchor/set. Conversely, a self opener posted after a
+  foreign child opener but before that membership's exact `release-complete`
+  lost the race; ignore that self generation and its continuations through the
+  next self opener (observed during review on PR `#4677`).
+
+  See [thread #4367884510](https://github.com/kurone-kito/idd-skill/pull/4677#discussion_r4367884510).
+
+  Evaluate each later opener against the target history at its own point in
+  the log. Foreign child openers under different anchors also
+  compete in this target-wide order; a later opener before the current winner's
+  exact `release-complete` loses (preventive; no observed incident yet). A later
+  active child still needs its own release and completion evidence.
+
+  See [PR #4677 threads #4367443380](https://github.com/kurone-kito/idd-skill/pull/4677#discussion_r4367443380)
+  and [thread #4367522311](https://github.com/kurone-kito/idd-skill/pull/4677#discussion_r4367522311).
+
   A `release-complete` minimized as outdated is historical closure evidence
   only when a later verified generation opener appears in the same replay;
   without one, it cannot close the generation, and a prospective post is not

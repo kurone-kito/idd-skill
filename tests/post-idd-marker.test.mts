@@ -8837,12 +8837,10 @@ test('authoring-owner ignores a losing child release after an outdated winning r
       markerPrefix: 'idd-skill',
       trusted: ['kurone-kito'],
     });
-    assert.ok('problem' in result);
-    if ('problem' in result) {
-      assert.match(
-        result.problem,
-        /final release marker minimized as outdated/,
-      );
+    assert.ok(!('problem' in result));
+    if (!('problem' in result)) {
+      assert.deepEqual(result.comments, []);
+      assert.ok(result.closedSets.has(set));
     }
   } finally {
     stub.restore();
@@ -8902,7 +8900,7 @@ test('authoring-owner child acquire accepts an outdated former-child release onl
   }
 });
 
-test('authoring-owner child acquire rejects an outdated former-child release without a later self-generation (#4669)', () => {
+test('authoring-owner child acquire accepts an outdated former-child release after exact completion (#4669)', () => {
   const history = formerChildHistory(OWNER_ID_TARGET, OWNER_ID_ANCHOR_TARGET);
   const formerChildOnlyComments = [
     { ...history.child[0], id: 101 },
@@ -8912,32 +8910,53 @@ test('authoring-owner child acquire rejects an outdated former-child release wit
       minimizedReason: 'outdated',
     },
   ];
-  const stub = withOwnerIdStub({
-    commentsByIssueNumber: {
-      42: formerChildOnlyComments,
-      43: history.formerAnchor,
-    },
-  });
-  try {
-    const run = runOwnerIdPost(
-      ownerIdFlags('acquire', {
-        'marker-target': OWNER_ID_ANCHOR_TARGET,
-        anchor: OWNER_ID_TARGET,
-        'marker-owner': 'owner-child-next',
-        set: 'set-next',
-        session: 'session-next',
+  const newAnchorRef = 'o/r#44';
+  const newAnchorComments = [
+    {
+      id: 301,
+      body: ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: newAnchorRef,
+        anchor: newAnchorRef,
+        owner: 'owner-new-anchor',
+        set: 'set-new-anchor',
+        session: 'session-new-anchor',
       }),
-      { targetNumber: 43 },
-    );
-    assert.equal(run.status, 1);
-    assert.equal(run.kind, 'gate');
-    assert.match(
-      run.stderr,
-      /minimized as outdated without a later self-anchored generation/,
-    );
-    assert.deepEqual(readOwnerIdLines(stub.postsFile), []);
-  } finally {
-    stub.restore();
+    },
+  ];
+  for (const apply of [false, true]) {
+    const stub = withOwnerIdStub({
+      comments: formerChildOnlyComments,
+      commentsByIssueNumber: {
+        43: history.formerAnchor,
+        44: newAnchorComments,
+      },
+    });
+    try {
+      const run = runOwnerIdPost(
+        ownerIdFlags('acquire', {
+          'marker-target': OWNER_ID_TARGET,
+          anchor: newAnchorRef,
+          'marker-owner': 'owner-child-next',
+          set: 'set-new-anchor',
+          session: 'session-new-anchor',
+        }),
+        { apply, targetNumber: 42 },
+      );
+      assert.equal(run.status, 0, `apply=${apply}: ${run.stderr}`);
+      const posted = readOwnerIdLines(stub.postsFile).map((line) =>
+        JSON.parse(line),
+      );
+      assert.equal(posted.length, apply ? 1 : 0, `apply=${apply}`);
+      if (apply) {
+        assert.match(
+          posted[0].body,
+          /target=o\/r#42; anchor=o\/r#44; mode=acquire; owner=owner-child-next; set=set-new-anchor; session=session-new-anchor/,
+        );
+      }
+    } finally {
+      stub.restore();
+    }
   }
 });
 
@@ -9483,6 +9502,8 @@ test('authoring-owner acquire bounds former-anchor history reads across siblings
   const membershipCount = 33;
   const commentsByIssueNumber: Record<number, OwnerIdComment[]> = {};
   const targetComments: OwnerIdComment[] = [];
+  const at = (seconds: number) =>
+    new Date(Date.parse(TS) + seconds * 1000).toISOString();
 
   for (let index = 0; index < membershipCount; index += 1) {
     const anchorNumber = 43 + index;
@@ -9496,6 +9517,7 @@ test('authoring-owner acquire bounds former-anchor history reads across siblings
     targetComments.push(
       {
         id: firstChildCommentId,
+        createdAt: at(index * 10 + 1),
         body: ownerIdHistoryMarker({
           mode: 'acquire',
           target: OWNER_ID_TARGET,
@@ -9507,6 +9529,7 @@ test('authoring-owner acquire bounds former-anchor history reads across siblings
       },
       {
         id: firstChildCommentId + 1,
+        createdAt: at(index * 10 + 2),
         body: ownerIdHistoryMarker({
           mode: 'release',
           target: OWNER_ID_TARGET,
@@ -9522,6 +9545,7 @@ test('authoring-owner acquire bounds former-anchor history reads across siblings
     commentsByIssueNumber[anchorNumber] = [
       {
         id: firstAnchorCommentId,
+        createdAt: at(index * 10),
         body: ownerIdHistoryMarker({
           mode: 'acquire',
           target: anchorRef,
@@ -9533,6 +9557,7 @@ test('authoring-owner acquire bounds former-anchor history reads across siblings
       },
       {
         id: firstAnchorCommentId + 1,
+        createdAt: at(index * 10 + 3),
         body: ownerIdHistoryMarker({
           mode: 'release',
           target: anchorRef,
@@ -9544,6 +9569,7 @@ test('authoring-owner acquire bounds former-anchor history reads across siblings
       },
       {
         id: firstAnchorCommentId + 2,
+        createdAt: at(index * 10 + 4),
         body: ownerIdHistoryMarker({
           mode: 'release-guard',
           target: anchorRef,
@@ -9555,6 +9581,7 @@ test('authoring-owner acquire bounds former-anchor history reads across siblings
       },
       {
         id: firstAnchorCommentId + 3,
+        createdAt: at(index * 10 + 5),
         body: ownerIdHistoryMarker({
           mode: 'release-complete',
           target: anchorRef,
@@ -9622,7 +9649,7 @@ test('authoring-owner child acquire refuses promotion before release-complete (#
     assert.equal(run.kind, 'gate');
     assert.match(
       run.stderr,
-      /release-complete does not precede the next self-anchored generation/,
+      /anchor o\/r#43 has no open owner generation to join/,
     );
     assert.deepEqual(readOwnerIdLines(stub.postsFile), []);
   } finally {
@@ -9915,6 +9942,315 @@ test('authoring-owner child acquire ignores a losing foreign opener after a same
     } finally {
       stub.restore();
     }
+  }
+});
+
+test('authoring-owner acquire ignores a losing self opener after an earlier child generation (#4669)', () => {
+  const formerAnchorRef = 'o/r#44';
+  const set = 'set-child-first';
+  const session = 'session-child-first';
+  const at = (seconds: number) =>
+    new Date(Date.parse(TS) + seconds * 1000).toISOString();
+  const targetComments = [
+    {
+      id: 101,
+      createdAt: at(1),
+      body: ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: OWNER_ID_ANCHOR_TARGET,
+        anchor: formerAnchorRef,
+        owner: 'owner-child-first',
+        set,
+        session,
+      }),
+    },
+    {
+      id: 102,
+      createdAt: at(2),
+      body: ownerIdAnchorMarker('acquire', {
+        'marker-owner': 'owner-losing-self',
+        set: 'set-losing-self',
+        session: 'session-losing-self',
+      }),
+    },
+    {
+      id: 103,
+      createdAt: at(3),
+      body: ownerIdHistoryMarker({
+        mode: 'release',
+        target: OWNER_ID_ANCHOR_TARGET,
+        anchor: formerAnchorRef,
+        owner: 'owner-child-first',
+        set,
+        session,
+      }),
+    },
+  ];
+  const formerAnchorComments = (
+    ['acquire', 'release', 'release-guard', 'release-complete'] as const
+  ).map((mode, index) => ({
+    id: 201 + index,
+    createdAt: at([0, 4, 5, 6][index] ?? 0),
+    body: ownerIdHistoryMarker({
+      mode,
+      target: formerAnchorRef,
+      anchor: formerAnchorRef,
+      owner: 'owner-former-anchor',
+      set,
+      session,
+    }),
+  }));
+
+  for (const apply of [false, true]) {
+    const stub = withOwnerIdStub({
+      comments: targetComments,
+      commentsByIssueNumber: { 44: formerAnchorComments },
+    });
+    try {
+      const run = runOwnerIdPost(
+        ownerIdFlags('acquire', {
+          'marker-target': OWNER_ID_ANCHOR_TARGET,
+          anchor: OWNER_ID_ANCHOR_TARGET,
+          'marker-owner': 'owner-self-next',
+          set: 'set-self-next',
+          session: 'session-self-next',
+        }),
+        { apply, targetNumber: 43 },
+      );
+      assert.equal(run.status, 0, `apply=${apply}: ${run.stderr}`);
+      const posted = readOwnerIdLines(stub.postsFile).map((line) =>
+        JSON.parse(line),
+      );
+      assert.equal(posted.length, apply ? 1 : 0, `apply=${apply}`);
+      if (apply) {
+        assert.match(
+          posted[0].body,
+          /mode=acquire; owner=owner-self-next; set=set-self-next/,
+        );
+      }
+    } finally {
+      stub.restore();
+    }
+  }
+});
+
+test('former-child reconciliation arbitrates foreign openers across anchors (#4669)', () => {
+  const targetRef = OWNER_ID_TARGET;
+  const anchorA = OWNER_ID_ANCHOR_TARGET;
+  const anchorB = 'o/r#44';
+  const at = (seconds: number) =>
+    new Date(Date.parse(TS) + seconds * 1000).toISOString();
+  const targetComments = [
+    {
+      id: 101,
+      createdAt: at(1),
+      body: ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: targetRef,
+        anchor: anchorA,
+        owner: 'owner-child-a',
+        set: 'set-anchor-a',
+        session: 'session-anchor-a',
+      }),
+    },
+    {
+      id: 102,
+      createdAt: at(2),
+      body: ownerIdHistoryMarker({
+        mode: 'release',
+        target: targetRef,
+        anchor: anchorA,
+        owner: 'owner-child-a',
+        set: 'set-anchor-a',
+        session: 'session-anchor-a',
+      }),
+    },
+    {
+      id: 103,
+      createdAt: at(3),
+      body: ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: targetRef,
+        anchor: anchorB,
+        owner: 'owner-child-b',
+        set: 'set-anchor-b',
+        session: 'session-anchor-b',
+      }),
+    },
+    {
+      id: 104,
+      createdAt: at(5),
+      body: ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: targetRef,
+        anchor: targetRef,
+        owner: 'owner-self-after-a',
+        set: 'set-self-after-a',
+        session: 'session-self-after-a',
+      }),
+    },
+    ...(['release', 'release-guard', 'release-complete'] as const).map(
+      (mode, index) => ({
+        id: 105 + index,
+        createdAt: at([5.2, 5.4, 5.6][index] ?? 5.2),
+        body: ownerIdHistoryMarker({
+          mode,
+          target: targetRef,
+          anchor: targetRef,
+          owner: 'owner-self-after-a',
+          set: 'set-self-after-a',
+          session: 'session-self-after-a',
+        }),
+      }),
+    ),
+    {
+      id: 108,
+      createdAt: at(6),
+      body: ownerIdHistoryMarker({
+        mode: 'release',
+        target: targetRef,
+        anchor: anchorB,
+        owner: 'owner-child-b',
+        set: 'set-anchor-b',
+        session: 'session-anchor-b',
+      }),
+    },
+  ];
+  const makeAnchorHistory = (
+    anchor: string,
+    set: string,
+    session: string,
+    owner: string,
+    atTimes: readonly number[],
+  ) =>
+    (['acquire', 'release', 'release-guard', 'release-complete'] as const).map(
+      (mode, index) => ({
+        id: 201 + index,
+        createdAt: at(atTimes[index] ?? 0),
+        body: ownerIdHistoryMarker({
+          mode,
+          target: anchor,
+          anchor,
+          owner,
+          set,
+          session,
+        }),
+      }),
+    );
+  const stub = withOwnerIdStub({
+    commentsByIssueNumber: {
+      43: makeAnchorHistory(
+        anchorA,
+        'set-anchor-a',
+        'session-anchor-a',
+        'owner-anchor-a',
+        [0, 2.5, 3, 4],
+      ),
+      44: makeAnchorHistory(
+        anchorB,
+        'set-anchor-b',
+        'session-anchor-b',
+        'owner-anchor-b',
+        [2, 6.5, 7, 8],
+      ),
+    },
+  });
+  try {
+    const result = reconcileFormerChildMemberships({
+      comments: targetComments.map((comment) => ({
+        ...comment,
+        authorLogin: 'kurone-kito',
+        updatedAt: comment.createdAt,
+        lastEditedAt: null,
+        isMinimized: false,
+        minimizedReason: null,
+      })),
+      historyTargetRef: targetRef,
+      markerPrefix: 'idd-skill',
+      trusted: ['kurone-kito'],
+    });
+    assert.ok(!('problem' in result));
+    if (!('problem' in result)) {
+      assert.deepEqual(
+        result.comments.map((comment) => comment.id),
+        [104, 105, 106, 107],
+      );
+      assert.deepEqual(
+        result.supersedingOpenings.map((opening) => opening.id),
+        [101],
+      );
+    }
+  } finally {
+    stub.restore();
+  }
+});
+
+test('former-child reconciliation rejects a foreign continuation without an opener (#4669)', () => {
+  const targetRef = OWNER_ID_TARGET;
+  const formerAnchor = OWNER_ID_ANCHOR_TARGET;
+  const selfSet = 'set-self-orphan-continuation';
+  const selfSession = 'session-self-orphan-continuation';
+  const at = (seconds: number) =>
+    new Date(Date.parse(TS) + seconds * 1000).toISOString();
+  const comment = (
+    id: number,
+    mode:
+      | 'acquire'
+      | 'release'
+      | 'release-guard'
+      | 'release-complete'
+      | 'heartbeat',
+    anchor: string,
+    set: string,
+    session: string,
+    seconds: number,
+  ) => {
+    const createdAt = at(seconds);
+    return {
+      id,
+      authorLogin: 'kurone-kito',
+      body: ownerIdHistoryMarker({
+        mode,
+        target: targetRef,
+        anchor,
+        owner: 'owner-orphan-continuation',
+        set,
+        session,
+      }),
+      createdAt,
+      updatedAt: createdAt,
+      lastEditedAt: null,
+      isMinimized: false,
+      minimizedReason: null,
+    };
+  };
+  const stub = withOwnerIdStub({});
+  try {
+    const result = reconcileFormerChildMemberships({
+      comments: [
+        comment(101, 'acquire', targetRef, selfSet, selfSession, 1),
+        comment(102, 'release', targetRef, selfSet, selfSession, 2),
+        comment(
+          103,
+          'heartbeat',
+          formerAnchor,
+          'set-orphan-continuation',
+          'session-orphan-continuation',
+          3,
+        ),
+        comment(104, 'release-guard', targetRef, selfSet, selfSession, 4),
+        comment(105, 'release-complete', targetRef, selfSet, selfSession, 5),
+      ],
+      historyTargetRef: targetRef,
+      markerPrefix: 'idd-skill',
+      trusted: ['kurone-kito'],
+    });
+    assert.ok('problem' in result);
+    if ('problem' in result) {
+      assert.match(result.problem, /has no acquisition marker/);
+    }
+  } finally {
+    stub.restore();
   }
 });
 
@@ -10762,8 +11098,9 @@ test('post-idd-marker --help describes the authoring-owner identity check (#3910
   assert.match(help, /before the next\s+self-anchored generation/);
   assert.match(
     help,
-    /outdated child release is usable only as historical\s+input/,
+    /child's release marker is minimized\s+as outdated, so a fresh acquisition may use a new set/,
   );
+  assert.match(help, /self opener posted after a foreign child opener/);
   assert.match(help, /recursively, with cycle and depth guards/);
 });
 
