@@ -986,6 +986,7 @@ function checkAnchor(input) {
     anchorRef: ref,
     markerPrefix: input.markerPrefix,
     trusted: input.trusted,
+    supersedingOpenings: reconciliation.supersedingOpenings,
   });
   if ('problem' in replay) {
     return replay;

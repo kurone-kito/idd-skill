@@ -4838,12 +4838,24 @@ function stubGhIssueBody(
   number: number,
   body: string,
   comments: OwnerIdComment[] = [],
+  commentsByIssueNumber: Record<number, OwnerIdComment[]> = {},
 ): () => void {
+  const pagesByIssueNumber = Object.fromEntries(
+    Object.entries(commentsByIssueNumber).map(
+      ([issueNumber, issueComments]) => [
+        issueNumber,
+        ownerIdCommentPage(issueComments),
+      ],
+    ),
+  );
   return stubExecutable(
     'gh',
     `const args = process.argv.slice(2);
 if (args.includes('graphql')) {
-  process.stdout.write(${JSON.stringify(ownerIdCommentPage(comments))});
+  const numberArg = args.find((arg) => arg.startsWith('number='));
+  const issueNumber = numberArg ? Number(numberArg.slice('number='.length)) : NaN;
+  const pages = ${JSON.stringify(pagesByIssueNumber)};
+  process.stdout.write(pages[issueNumber] ?? ${JSON.stringify(ownerIdCommentPage(comments))});
   process.exit(0);
 }
 if (args[0] === 'api' && args[1] === 'repos/${owner}/${repo}/issues/${number}') {
@@ -5281,7 +5293,9 @@ test('authoring-owner CLI tolerates a mismatching --anchor for a non-anchor-only
       supersedes: 'none',
     }),
   };
-  const restore = stubGhIssueBody('o', 'r', 42, LIVE_BODY, [anchorOpener]);
+  const restore = stubGhIssueBody('o', 'r', 42, LIVE_BODY, [], {
+    7: [anchorOpener],
+  });
   try {
     const { 'body-sha256': _omit, ...rest } = AUTHORING_OWNER_FULL_FIELDS;
     const output = execFileSync(
@@ -8657,7 +8671,7 @@ test('authoring-owner child acquire reconciles a promoted anchor log (#4669)', (
       assert.equal(run.status, 0, run.stderr);
       assert.equal(
         readOwnerIdLines(stub.readsFile).length,
-        2,
+        3,
         `apply=${apply}`,
       );
       const posted = readOwnerIdLines(stub.postsFile).map((line) =>
@@ -8874,7 +8888,7 @@ test('authoring-owner child acquire accepts an outdated former-child release onl
       { targetNumber: 43 },
     );
     assert.equal(run.status, 0, run.stderr);
-    assert.equal(readOwnerIdLines(stub.readsFile).length, 2);
+    assert.equal(readOwnerIdLines(stub.readsFile).length, 3);
     const posted = readOwnerIdLines(stub.postsFile).map((line) =>
       JSON.parse(line),
     );
@@ -9504,7 +9518,7 @@ test('authoring-owner acquire bounds former-anchor history reads across siblings
       },
     );
 
-    const firstAnchorCommentId = 10_000 + index * 3;
+    const firstAnchorCommentId = 10_000 + index * 4;
     commentsByIssueNumber[anchorNumber] = [
       {
         id: firstAnchorCommentId,
@@ -9520,7 +9534,7 @@ test('authoring-owner acquire bounds former-anchor history reads across siblings
       {
         id: firstAnchorCommentId + 1,
         body: ownerIdHistoryMarker({
-          mode: 'release-guard',
+          mode: 'release',
           target: anchorRef,
           anchor: anchorRef,
           owner: anchorOwner,
@@ -9530,6 +9544,17 @@ test('authoring-owner acquire bounds former-anchor history reads across siblings
       },
       {
         id: firstAnchorCommentId + 2,
+        body: ownerIdHistoryMarker({
+          mode: 'release-guard',
+          target: anchorRef,
+          anchor: anchorRef,
+          owner: anchorOwner,
+          set,
+          session,
+        }),
+      },
+      {
+        id: firstAnchorCommentId + 3,
         body: ownerIdHistoryMarker({
           mode: 'release-complete',
           target: anchorRef,
@@ -9733,7 +9758,7 @@ test('authoring-owner acquire and bootstrap refuse a trusted history that cannot
         assert.equal(run.kind, 'gate', `${mode}, apply=${apply}`);
         assert.match(
           run.stderr,
-          /closes a generation with no release in progress/,
+          /closes a generation with no accepted release marker in progress/,
         );
         assert.deepEqual(readOwnerIdLines(stub.postsFile), []);
       } finally {
@@ -9771,7 +9796,10 @@ test('authoring-owner ignores an untrusted release-complete and keeps a releasin
 test('authoring-owner child acquire joins only the matching non-releasing anchor set (#4669)', () => {
   for (const apply of [false, true]) {
     const stub = withOwnerIdStub({
-      comments: [{ id: 101, body: ownerIdAnchorMarker('acquire') }],
+      comments: [],
+      commentsByIssueNumber: {
+        43: [{ id: 101, body: ownerIdAnchorMarker('acquire') }],
+      },
     });
     try {
       const flags = ownerIdFlags('acquire', {
@@ -9787,14 +9815,52 @@ test('authoring-owner child acquire joins only the matching non-releasing anchor
       );
       assert.equal(posts.length, apply ? 1 : 0);
       if (apply) assert.match(posts[0].body, /owner=owner-child-42/);
-      assert.equal(readOwnerIdLines(stub.readsFile).length, 1);
+      assert.equal(readOwnerIdLines(stub.readsFile).length, 2);
     } finally {
       stub.restore();
     }
   }
 });
 
-test('authoring-owner child acquire ignores a losing foreign opener after a self-anchor win (#4669)', () => {
+test('authoring-owner child acquire reconciles the target history before joining a different anchor (#4669)', () => {
+  const priorChildMembership = [
+    { id: 101, body: ownerIdChildMarker('acquire') },
+    { id: 102, body: ownerIdChildMarker('release') },
+  ];
+  const priorAnchorHistory = [
+    { id: 201, body: ownerIdAnchorMarker('acquire') },
+    { id: 202, body: ownerIdAnchorMarker('release') },
+  ];
+
+  for (const mode of ['acquire', 'bootstrap']) {
+    for (const apply of [false, true]) {
+      const stub = withOwnerIdStub({
+        comments: priorChildMembership,
+        commentsByIssueNumber: { 43: priorAnchorHistory, 44: [] },
+      });
+      try {
+        const run = runOwnerIdPost(
+          ownerIdFlags(mode, {
+            anchor: 'o/r#44',
+            'marker-owner': 'owner-new-child',
+            set: 'set-new-child',
+            session: 'session-new-child',
+          }),
+          { apply },
+        );
+        assert.equal(run.status, 1, `${mode}, apply=${apply}`);
+        assert.equal(run.kind, 'gate', `${mode}, apply=${apply}`);
+        assert.match(run.stderr, /former child membership/);
+        assert.equal(readOwnerIdLines(stub.readsFile).length, 2);
+        assert.deepEqual(readOwnerIdLines(stub.postsFile), []);
+      } finally {
+        stub.restore();
+      }
+    }
+  }
+});
+
+test('authoring-owner child acquire ignores a losing foreign opener after a same-token self-anchor win (#4669)', () => {
   const targetComments = [
     { id: 101, body: ownerIdAnchorMarker('acquire') },
     {
@@ -9803,7 +9869,7 @@ test('authoring-owner child acquire ignores a losing foreign opener after a self
         mode: 'acquire',
         target: OWNER_ID_ANCHOR_TARGET,
         anchor: 'o/r#44',
-        owner: 'owner-losing-child',
+        owner: 'owner-anchor-43',
         set: 'set-losing-child',
         session: 'session-losing-child',
       }),
@@ -9814,7 +9880,7 @@ test('authoring-owner child acquire ignores a losing foreign opener after a self
         mode: 'heartbeat',
         target: OWNER_ID_ANCHOR_TARGET,
         anchor: 'o/r#44',
-        owner: 'owner-losing-child',
+        owner: 'owner-anchor-43',
         set: 'set-losing-child',
         session: 'session-losing-child',
       }),
@@ -9838,7 +9904,7 @@ test('authoring-owner child acquire ignores a losing foreign opener after a self
       assert.equal(run.status, 0, run.stderr);
       assert.equal(
         readOwnerIdLines(stub.readsFile).length,
-        1,
+        2,
         `apply=${apply}`,
       );
       const posted = readOwnerIdLines(stub.postsFile).map((line) =>
@@ -9957,7 +10023,10 @@ test('authoring-owner child acquire refuses a closed, mismatched, or releasing a
   ];
   for (const scenario of scenarios) {
     for (const apply of [false, true]) {
-      const stub = withOwnerIdStub({ comments: scenario.comments });
+      const stub = withOwnerIdStub({
+        comments: [],
+        commentsByIssueNumber: { 43: scenario.comments },
+      });
       try {
         const run = runOwnerIdPost(
           ownerIdFlags('acquire', {

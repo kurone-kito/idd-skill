@@ -1029,28 +1029,33 @@ in this preamble, since the fallback differs per helper.
   `(createdAt, id)` order that carries the owner token, in any mode, is
   written by a trusted login when any are configured, and is not minimized
   as outdated. One that was edited, whose edit state is unknown, or that
-  does not parse refuses the post. Acquire and bootstrap now read the
-  declared anchor's complete owner log over paginated GraphQL before either
-  dry-run output or POST. A self-anchored target may open from an empty log
-  or after a completed generation with a fresh set ID; a closed set ID or
-  any already-open generation, including a release in progress, refuses.
-  A child must match its anchor's open, non-releasing set and session; owner
-  tokens are per-target and are not compared across the set. Former-child
-  memberships are reconciled whenever an anchor log is read, including child
-  acquisition and publication from an anchor that was itself previously a
-  child. Reconciliation is recursive and stops on a cycle or the depth limit.
-  One shared budget allows at most 32 former-anchor history reads across the
-  full nested and sibling reconciliation; a larger history fails closed before
-  the next read. Acquire and bootstrap also fail closed before the anchor
-  owner-history read when the resolved trusted marker actor list is empty,
-  because no owner marker can then be established as trusted.
-  Each former anchor's owner log must prove the matching set and session
-  reached `release-complete` after the child's final release and before the
-  next self-generation in `(createdAt, id)` order. A child release minimized
-  as outdated is accepted as historical input only when that matching
-  completion precedes a verified later self-generation or the self-anchor
-  acquisition or bootstrap currently being preflighted; otherwise
-  reconciliation refuses. Verified
+  does not parse refuses the post. Acquire and bootstrap first read a child
+  target's complete owner log over paginated GraphQL, reconcile prior
+  memberships, and refuse an open or unreconciled generation. They then read
+  the declared anchor's complete owner log before either dry-run output or
+  POST; a self-anchored target reads its own log. A self-anchored target may
+  open from an empty log or after a completed generation with a fresh set ID;
+  a closed set ID or any already-open generation, including a release in
+  progress, refuses. A child must match its anchor's open, non-releasing set
+  and session; owner tokens are per-target and are not compared across the
+  set. Former-child memberships are reconciled whenever an anchor log is read,
+  including child acquisition and publication from an anchor that was itself
+  previously a child. Reconciliation is recursive and stops on a cycle or the
+  depth limit. One shared budget allows at most 32 former-anchor history reads
+  across the full nested and sibling reconciliation; a larger history fails
+  closed before the next read. Acquire and bootstrap also fail closed before
+  the owner-history reads when the resolved trusted marker actor list is
+  empty, because no owner marker can then be established as trusted. Each
+  former anchor's owner log must prove the matching set and that the anchor
+  generation's session lineage includes the child's original acquisition
+  session. It must also show an actual `release` before `release-complete`,
+  with completion after the child's final marker and before the next
+  self-generation in `(createdAt, id)` order; `release-guard` alone is not
+  closure proof (observed during the 2026-10-24 review on PR `#4677`). A child
+  release minimized as outdated is accepted as
+  historical input only when that matching completion precedes a verified
+  later self-generation or the self-anchor acquisition or bootstrap currently
+  being preflighted; otherwise reconciliation refuses. Verified
   former-child set IDs, including IDs closed deeper in the former-anchor
   ancestry, remain closed and unavailable for reuse. The nested propagation
   gap was reproduced during review on 2026-10-24 (PR #4677, thread

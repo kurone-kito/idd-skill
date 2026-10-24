@@ -2922,14 +2922,14 @@ test('anchor replay: a released set is not joinable, and a new acquire after rel
   }
 });
 
-test('anchor replay: the terminal modes retain the session and close only a release in progress', () => {
+test('anchor replay: closure needs an accepted release marker', () => {
   // A release-complete with no release before it closes nothing.
   const early = replay([
     provenanceComment(1, 'acquire'),
     provenanceComment(2, 'release-complete'),
   ]);
   assert.ok('problem' in early);
-  assert.match(early.problem, /no release in progress/);
+  assert.match(early.problem, /no accepted release marker in progress/);
 
   // A heartbeat does not start a release either.
   const beaten = replay([
@@ -2938,6 +2938,15 @@ test('anchor replay: the terminal modes retain the session and close only a rele
     provenanceComment(3, 'release-complete'),
   ]);
   assert.ok('problem' in beaten);
+
+  // A release-guard is not evidence that the release marker itself landed.
+  const guarded = replay([
+    provenanceComment(1, 'acquire'),
+    provenanceComment(2, 'release-guard'),
+    provenanceComment(3, 'release-complete'),
+  ]);
+  assert.ok('problem' in guarded);
+  assert.match(guarded.problem, /no accepted release marker in progress/);
 
   // The anchor-only terminal markers retain the current session.
   for (const mode of ['release-guard', 'release-complete']) {

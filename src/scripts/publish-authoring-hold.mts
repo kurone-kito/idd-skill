@@ -914,7 +914,7 @@ export function checkOwnerLogStillOurs(input: {
 
 type AnchorGeneration = Omit<
   AnchorOwnerGeneration,
-  'releasing' | 'lineageOpeningIds'
+  'releasing' | 'lineageOpeningIds' | 'lineageSessions' | 'releaseMarker'
 >;
 
 /**
@@ -1221,6 +1221,7 @@ function checkAnchor(input: {
     anchorRef: ref,
     markerPrefix: input.markerPrefix,
     trusted: input.trusted,
+    supersedingOpenings: reconciliation.supersedingOpenings,
   });
   if ('problem' in replay) {
     return replay;
