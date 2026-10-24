@@ -45,8 +45,11 @@ import {
 } from './helper-cli-runner.mjs';
 import { loadIddConfig } from './idd-config.mjs';
 import {
+  DEFAULT_MARKER_PREFIX,
   isValidIsoTimestamp,
+  normalizeMarkerPrefix,
   parseAuthoringOwnerComment,
+  renderScopeOverrunRecordComment,
 } from './marker-helpers.mjs';
 import {
   isTrustedAuthor,
@@ -110,6 +113,7 @@ export const MARKER_TYPES = [
   'out-of-loop',
   'idd-hold',
   'f4-head-proof',
+  'scope-overrun',
   'authoring-owner',
   'authoring-publication-intent',
 ];
@@ -225,6 +229,7 @@ const REQUIRED_FIELDS_BY_TYPE = {
   // the claim) are derived from live reads, never typed, so they are not
   // listed here; `worktree` is read by the gate and is not a body field.
   'f4-head-proof': ['agent-id', 'claim-id', 'worktree'],
+  'scope-overrun': ['agent-id', 'effort', 'candidate-files'],
   'authoring-owner': [
     'marker-target',
     'anchor',
@@ -392,6 +397,28 @@ export function buildMarkerBody(type, fields) {
           ? {}
           : { supersedes: fields.supersedes }),
       });
+    case 'scope-overrun': {
+      let candidateFiles;
+      try {
+        candidateFiles = JSON.parse(fields['candidate-files'] ?? '');
+      } catch {
+        throw new Error('--candidate-files must be a JSON array of paths');
+      }
+      return renderScopeOverrunRecordComment({
+        markerPrefix: fields['marker-prefix'],
+        agentId: fields['agent-id'],
+        issueNumber: fields.issue,
+        effort: fields.effort,
+        candidateFiles,
+        ...(fields['pull-request'] === undefined
+          ? {}
+          : { pullRequestNumber: fields['pull-request'] }),
+        ...(fields.branch === undefined ? {} : { branch: fields.branch }),
+        ...(fields['head-sha'] === undefined
+          ? {}
+          : { headSha: fields['head-sha'] }),
+      });
+    }
     case 'authoring-owner':
       // #2931: routes through the existing marker-helpers.mts renderer
       // unchanged (never a hand-formatted template), so the posted body
@@ -1596,6 +1623,10 @@ below).
   --type <type>        one of: ${MARKER_TYPES.join(', ')}
   --target <issue|pr>  the comment target kind (both use the issues comments API)
   <number>             issue or PR number (positional; required unless --from-pr)
+  scope-overrun        issue only; requires --agent-id --effort
+                       --candidate-files '<JSON array>'. Optional
+                       --pull-request --branch --head-sha must be supplied
+                       together to bind the record to a pushed PR head.
   --from-pr <n>        watermark: derive --head-sha / --max-activity-at /
                        --total-item-count / --ci-completed-at from one live
                        review-activity capture of PR <n>. The advisory-family
@@ -2666,6 +2697,40 @@ function main() {
       return { exitCode: 1, kind: 'usage', message };
     }
     args.fields.pr = String(args.number);
+  }
+  // #4674: the scope snapshot is an issue record. Its marker prefix comes
+  // from repository configuration, and its issue number is derived from the
+  // actual posting destination so the record cannot name a different issue.
+  if (args.type === 'scope-overrun') {
+    if (args.target !== 'issue') {
+      const message = '--type scope-overrun requires --target issue';
+      process.stderr.write(`${message}\n`);
+      return { exitCode: 1, kind: 'usage', message };
+    }
+    args.fields.issue = String(args.number);
+    const configuredPrefix = normalizeMarkerPrefix(
+      loadIddConfig()?.markerPrefix ?? DEFAULT_MARKER_PREFIX,
+    );
+    const suppliedPrefix = args.fields['marker-prefix'];
+    if (
+      suppliedPrefix !== undefined &&
+      normalizeMarkerPrefix(suppliedPrefix) !== configuredPrefix
+    ) {
+      const message =
+        '--marker-prefix for scope-overrun must match configured markerPrefix';
+      process.stderr.write(`${message}\n`);
+      return { exitCode: 1, kind: 'usage', message };
+    }
+    args.fields['marker-prefix'] = configuredPrefix;
+    const pullRequestFields = ['pull-request', 'branch', 'head-sha'].filter(
+      (field) => args.fields[field] !== undefined,
+    );
+    if (pullRequestFields.length !== 0 && pullRequestFields.length !== 3) {
+      const message =
+        '--pull-request, --branch, and --head-sha must be provided together';
+      process.stderr.write(`${message}\n`);
+      return { exitCode: 1, kind: 'usage', message };
+    }
   }
   // #4310: the hold marker is read from the claimed issue's comments (the
   // orchestrator's held-worker renewal rule, docs/idd-workflow.md), so one

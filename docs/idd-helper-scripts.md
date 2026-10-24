@@ -5219,6 +5219,58 @@ the verdict table or `post-rejected`. Exit status is 0 for `post` and
   unedited one, since ignoring an edit would lower the count and could
   lift the bound instead of tightening it.
 
+### Scope-overrun evidence marker
+
+Issue `#4674` adds a durable `scope-overrun` record for the candidate-file
+limit detected during B3 or push validation. It snapshots the issue number,
+the effort value observed at that time, and the canonical candidate-file set.
+The record does not reread the ordinary issue effort marker later, so an edit
+to that marker cannot rewrite the snapshot.
+
+```sh
+node scripts/post-idd-marker.mjs --type scope-overrun --target issue <issue> \
+  --agent-id <agent> --effort <S|M|L> \
+  --candidate-files '["src/one.mts","src/two.mts"]' [--apply]
+```
+
+This first record is pre-push and has no PR fields. Once a pull request exists,
+append a post-push record with the same issue, effort, and candidate files, plus
+the observed PR number, branch, and full 40-character head SHA:
+
+```sh
+node scripts/post-idd-marker.mjs --type scope-overrun --target issue <issue> \
+  --agent-id <agent> --effort <S|M|L> \
+  --candidate-files '["src/one.mts","src/two.mts"]' \
+  --pull-request <pr> --branch <branch> --head-sha <40-hex> [--apply]
+```
+
+`--candidate-files` is a JSON array. The renderer sorts paths by UTF-8 byte
+order, rejects duplicates and paths that cannot safely appear in the visible
+record, and uses the repository's configured `markerPrefix`. The three PR
+flags are optional as a group and required together when recording a pushed
+head. The target must be an issue. Dry-run prints the exact body; `--apply`
+posts it as JSON after the caller runs its normal claim-revalidation gate.
+
+`parseScopeOverrunRecordComment(body, markerPrefix)` accepts only a canonical
+record under the supplied prefix. `resolveScopeOverrunEvidence()` additionally
+requires each record comment's author to be in the configured trusted marker
+actor list and `lastEditedAt` to be explicitly `null`. A pre-push record may be
+followed by one post-push record only when the snapshot fields match. Identical
+duplicate records are tolerated; malformed, edited, untrusted, incomplete,
+or conflicting evidence returns `invalid`.
+
+The owner decision is a separate comment whose exact first line is
+`Scope decision: accept head <full 40-character SHA>`. A worker never writes
+this decision. It is valid only from a configured trusted actor, with an
+explicitly unedited comment, and only when the SHA equals both the recorded
+post-push SHA and the live PR head. A changed live head leaves the decision
+pending because acceptance remains bound to the recorded SHA; the evidence
+cannot accept a different head. Editing the issue's ordinary effort marker
+does not change the stored scope or decision.
+
+This record is durable issue evidence: it is not added to the transient
+`OPERATIONAL_MARKERS` cleanup or hide-at-post-time registries.
+
 ### Local validation evidence helper
 
 - Command:
@@ -6534,7 +6586,12 @@ cleanup script is in
   `f4-head-proof` is not in that list: its body comes from
   `renderF4HeadProofBody` (`f4-head-proof.mts`), and its command reads the
   live state before it renders (see the
-  [F4 head-proof marker contract](#f4-head-proof-marker-contract)).
+  [F4 head-proof marker contract](#f4-head-proof-marker-contract).
+  `scope-overrun` is also a special issue-targeted type: its body comes from
+  `renderScopeOverrunRecordComment` (`marker-helpers.mts`) and it remains
+  persistent evidence rather than entering the transient operational-marker
+  cleanup list (see the
+  [scope-overrun evidence marker](#scope-overrun-evidence-marker)).
 - The `claim` / `unclaim` / `activation-nonce` / `watermark` / `baseline` /
   `idd-hold` bodies are HTML-comment-first with a visible "Do not edit" note;
   `advisory` / `advisory-recovery` / `advisory-reroll` are the
@@ -6555,6 +6612,10 @@ cleanup script is in
   `--agent-id --claim-id --worktree` and only `--target issue`, and reads every
   proof value live (see the
   [F4 head-proof marker contract](#f4-head-proof-marker-contract)).
+- Scope-overrun (`scope-overrun`) takes `--agent-id --effort
+  --candidate-files '<JSON array>'` and only `--target issue`; optionally
+  add `--pull-request --branch --head-sha` together for the post-push record
+  (see the [scope-overrun evidence marker](#scope-overrun-evidence-marker)).
 - One-command watermark (`watermark` only): `--from-pr <n>` derives
   `--head-sha` / `--max-activity-at` / `--total-item-count` /
   `--ci-completed-at` from a fresh `review-activity-snapshot` of PR `<n>` and
