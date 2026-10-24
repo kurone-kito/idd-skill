@@ -2860,7 +2860,7 @@ function reconcileFormerChildMembershipsInternal(
     }
     if (sameIssueRef(parsed.anchor, input.historyTargetRef)) {
       selfAnchorComments.push(comment);
-      if (AUTHORING_OWNER_OPENING_MODES.has(parsed.mode)) {
+      if (parsed.mode === 'acquire' || parsed.mode === 'bootstrap') {
         selfAnchorOpenings.push({
           id: comment.id,
           createdAt: comment.createdAt,
@@ -3147,25 +3147,47 @@ function reconcileFormerChildMembershipsInternal(
     return verified;
   };
 
-  // The first replay is provisional: all actual foreign acquisition openings
-  // are supplied so an outdated self release-complete can be interpreted.
-  // Each foreign candidate is verified only if target-wide ordering says it
-  // can win, so a losing anchor cannot block a later valid generation.
+  // Candidate self histories are replayed after prior target-wide losers have
+  // been removed. All foreign openings are supplied provisionally so an
+  // outdated self release-complete can be interpreted. Foreign candidates
+  // are verified only after target-wide ordering says they can win.
   const provisionalForeignOpenings = foreignMembershipCandidates.map(
     ({ opening }) => ({ id: opening.id, createdAt: opening.createdAt }),
   );
-  const provisionalSelfReplay = resolveAnchorOwnerGeneration({
-    comments: selfAnchorComments,
-    anchorRef: input.historyTargetRef,
-    markerPrefix: input.markerPrefix,
-    trusted: input.trusted,
-    supersedingOpenings: provisionalForeignOpenings,
-  });
-  if ('problem' in provisionalSelfReplay) {
+  const resolveSelfGenerationAtOpening = (
+    opening: AuthoringOwnerProvenanceComment,
+  ): { completion: AnchorOwnerLatestMarker | null } | { problem: string } => {
+    const replay = resolveAnchorOwnerGeneration({
+      comments: selfAnchorComments.filter(
+        (comment) => !losingSelfAnchorCommentIds.has(comment.id),
+      ),
+      anchorRef: input.historyTargetRef,
+      markerPrefix: input.markerPrefix,
+      trusted: input.trusted,
+      supersedingOpenings: provisionalForeignOpenings,
+    });
+    if ('problem' in replay) {
+      return {
+        problem: `self-anchored owner history before opener ${opening.id} cannot be replayed: ${replay.problem}`,
+      };
+    }
+    const generations = [
+      ...replay.closedGenerations,
+      ...(replay.generation === null ? [] : [replay.generation]),
+    ];
+    const generation = generations.find((candidate) =>
+      candidate.lineageOpeningIds.includes(opening.id),
+    );
+    if (generation === undefined) {
+      return {
+        problem: `self-anchored opener ${opening.id} does not replay as a winning generation after target-wide losers are removed`,
+      };
+    }
     return {
-      problem: `self-anchored owner history cannot be replayed before target-wide opener arbitration: ${provisionalSelfReplay.problem}`,
+      completion:
+        'releaseComplete' in generation ? generation.releaseComplete : null,
     };
-  }
+  };
 
   const orderedSelfAnchorOpenings = [...selfAnchorOpenings].sort(
     (left, right) =>
@@ -3178,27 +3200,19 @@ function reconcileFormerChildMembershipsInternal(
     foreignCandidate?: (typeof foreignMembershipCandidates)[number];
   };
   const targetWideGenerations: TargetWideGeneration[] = [];
-  const selfGenerations = [
-    ...provisionalSelfReplay.closedGenerations,
-    ...(provisionalSelfReplay.generation === null
-      ? []
-      : [provisionalSelfReplay.generation]),
-  ];
-  for (const generation of selfGenerations) {
-    const openingId = generation.lineageOpeningIds[0];
+  for (const selfOpening of selfAnchorOpenings) {
     const opening = selfAnchorComments.find(
-      (comment) => comment.id === openingId,
+      (comment) => comment.id === selfOpening.id,
     );
     if (opening === undefined) {
       return {
-        problem: `self-anchored generation opening ${String(openingId)} cannot be found in the target owner history`,
+        problem: `self-anchored opening ${selfOpening.id} cannot be found in the target owner history`,
       };
     }
     targetWideGenerations.push({
       kind: 'self',
       opening,
-      completion:
-        'releaseComplete' in generation ? generation.releaseComplete : null,
+      completion: null,
     });
   }
   for (const foreignCandidate of foreignMembershipCandidates) {
@@ -3254,7 +3268,14 @@ function reconcileFormerChildMembershipsInternal(
       continue;
     }
     if (generation.kind === 'self') {
-      targetWideWinner = generation;
+      const selfGeneration = resolveSelfGenerationAtOpening(generation.opening);
+      if ('problem' in selfGeneration) {
+        return selfGeneration;
+      }
+      targetWideWinner = {
+        ...generation,
+        completion: selfGeneration.completion,
+      };
       continue;
     }
 

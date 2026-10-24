@@ -9976,6 +9976,15 @@ test('authoring-owner acquire ignores a losing self opener after an earlier chil
     {
       id: 103,
       createdAt: at(3),
+      body: ownerIdAnchorMarker('acquire', {
+        'marker-owner': 'owner-losing-self-second',
+        set: 'set-losing-self-second',
+        session: 'session-losing-self-second',
+      }),
+    },
+    {
+      id: 104,
+      createdAt: at(4),
       body: ownerIdHistoryMarker({
         mode: 'release',
         target: OWNER_ID_ANCHOR_TARGET,
