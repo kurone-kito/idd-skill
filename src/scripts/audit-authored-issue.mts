@@ -57,6 +57,7 @@ import {
 import { parseCliArgs } from './cli-args.mts';
 import {
   consumeDependencyReferenceList,
+  extractDependencyReferences,
   hasDependencyReferenceListStart,
   matchDependencyKeywordLine,
 } from './dependency-grammar.mts';
@@ -69,10 +70,12 @@ import {
   hasDeferSourceMarker,
 } from './discover-readiness-check.mts';
 import {
+  extractKeywordReferences,
   extractRoadmapMarkerId,
   extractTaskListReferences,
   isTaskListBlockBoundary,
   isTaskListCheckboxLine,
+  type RoadmapGraphReference,
 } from './discover-roadmap-graph.mts';
 import { parseCandidateFiles } from './discover-shared-file-overlap.mts';
 import { evaluateA4Viability } from './discover-viability-gate.mts';
@@ -297,12 +300,28 @@ export interface AuditReport {
   markerPrefix: string;
   passed: boolean;
   findings: AuditFinding[];
+  dependencyInventory?: DependencyInventory;
+}
+
+/** Syntax-only dependencies recognized in the supplied issue body. */
+export interface DependencyInventory {
+  scope: string;
+  hardIssuePrerequisites: number[];
+  unresolvedQualifiedReferences: {
+    token: string;
+    reason: 'cross_repository_reference';
+  }[];
+  sequentialRoadmapBlockers: string[];
+  tracksMembership: RoadmapGraphReference[];
+  ordinaryReferences: RoadmapGraphReference[];
 }
 
 /** Options accepted by {@link auditAuthoredIssue}. */
 export interface AuditOptions {
   /** The declared issue shape (orphan / roadmap / child). */
   shape: IssueShape;
+  /** Include a syntax-only inventory without changing audit findings. */
+  dependencyInventory?: boolean;
   /** The resolved target markerPrefix; defaults to `idd-skill`. */
   markerPrefix?: string;
   /**
@@ -810,6 +829,7 @@ const AUDIT_AUTHORED_ISSUE_FLAG_SPEC = {
   '--journal-comments-file': { type: 'string' },
   '--cleanup-evidence-file': { type: 'string' },
   '--new-issue': { type: 'boolean', default: false },
+  '--dependency-inventory': { type: 'boolean', default: false },
   '--trusted-marker-logins': { type: 'string' },
   '--format': { type: 'string', default: 'json' },
 } as const;
@@ -1249,11 +1269,127 @@ export function auditAuthoredIssue(
     ),
   ];
 
-  return {
+  const report: AuditReport = {
     shape,
     markerPrefix,
     passed: findings.every((finding) => finding.result === 'pass'),
     findings,
+  };
+  if (options.dependencyInventory === true) {
+    report.dependencyInventory = buildDependencyInventory(
+      rawText,
+      text,
+      shape,
+      markerPrefix,
+      normalizeCurrentRepo(options.currentRepo),
+    );
+  }
+  return report;
+}
+
+function dependencyInventoryScope(): string {
+  return [
+    'Syntax inventory of the supplied body only.',
+    'It is not a live graph, an edge-necessity proof, an independence verdict, or an exhaustive history.',
+    'An empty hardIssuePrerequisites list means no recognized local hard-prerequisite syntax; recognized qualified dependency tokens remain in unresolvedQualifiedReferences.',
+  ].join(' ');
+}
+
+function compareInventoryStrings(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function dedupeAndSortRoadmapReferences(
+  references: readonly RoadmapGraphReference[],
+): RoadmapGraphReference[] {
+  const unique = new Map<string, RoadmapGraphReference>();
+  for (const reference of references) {
+    const key =
+      reference.relationship === 'unresolvable-reference'
+        ? `${reference.relationship}\u0000${reference.target}\u0000${reference.evidence}`
+        : `${reference.relationship}\u0000${reference.target}`;
+    if (!unique.has(key)) {
+      unique.set(key, reference);
+    }
+  }
+  return [...unique.values()].sort(
+    (left, right) =>
+      left.target - right.target ||
+      compareInventoryStrings(left.relationship, right.relationship) ||
+      compareInventoryStrings(left.evidence, right.evidence),
+  );
+}
+
+function buildDependencyInventory(
+  rawText: string,
+  maskedText: string,
+  shape: IssueShape,
+  markerPrefix: string,
+  currentRepo: string | undefined,
+): DependencyInventory {
+  // Both calls deliberately receive the raw body. The shared parser owns
+  // line anchoring, Markdown masking, CRLF normalization, and qualified
+  // reference resolution; parsing the already-masked audit view would
+  // mask some code spans twice and can hide following real content.
+  const parsedDependencies = [
+    extractDependencyReferences(rawText, 'Blocked by', { currentRepo }),
+    extractDependencyReferences(rawText, 'Depends on', { currentRepo }),
+  ];
+  const hardIssuePrerequisites = [
+    ...new Set(parsedDependencies.flatMap((parsed) => parsed.numbers)),
+  ].sort((left, right) => left - right);
+  const unresolvedByKey = new Map<
+    string,
+    DependencyInventory['unresolvedQualifiedReferences'][number]
+  >();
+  for (const parsed of parsedDependencies) {
+    for (const reference of parsed.unresolvable) {
+      unresolvedByKey.set(`${reference.token}\u0000${reference.reason}`, {
+        token: reference.token,
+        reason: reference.reason,
+      });
+    }
+  }
+  const unresolvedQualifiedReferences = [...unresolvedByKey.values()].sort(
+    (left, right) =>
+      compareInventoryStrings(left.token, right.token) ||
+      compareInventoryStrings(left.reason, right.reason),
+  );
+  const sequentialRoadmapBlockers = [
+    ...new Set(extractBlockedByRoadmapMarkers(rawText, markerPrefix)),
+  ].sort(compareInventoryStrings);
+
+  const rawLines = rawText.split(/\r?\n/u);
+  const maskedLines = maskedText.split(/\r?\n/u);
+  const tracksBounds =
+    shape === 'roadmap'
+      ? locateLevel2Section(maskedLines, 'Tracks')
+      : undefined;
+  const tracksBody = tracksBounds
+    ? rawLines.slice(tracksBounds.start, tracksBounds.end).join('\n')
+    : '';
+  const tracksMembership = dedupeAndSortRoadmapReferences(
+    extractTaskListReferences(tracksBody, { currentRepoRef: currentRepo }),
+  );
+
+  // Ordinary Ref(s) are intentionally kept apart from hard prerequisites.
+  // The roadmap extractor is the shared source for its recognized keyword
+  // forms and evidence text; dependency relationships are excluded here.
+  const ordinaryReferences = dedupeAndSortRoadmapReferences(
+    extractKeywordReferences(rawText, { currentRepoRef: currentRepo }).filter(
+      (reference) =>
+        reference.relationship === 'reference' ||
+        reference.relationship === 'non-blocking-reference',
+    ),
+  );
+
+  return {
+    scope: dependencyInventoryScope(),
+    hardIssuePrerequisites,
+    unresolvedQualifiedReferences,
+    sequentialRoadmapBlockers,
+    tracksMembership,
+    ordinaryReferences,
   };
 }
 
@@ -5291,6 +5427,7 @@ interface CliArgs {
   journalCommentsFile?: string;
   cleanupEvidenceFile?: string;
   newIssue: boolean;
+  dependencyInventory: boolean;
   trustedMarkerLogins?: string;
 }
 
@@ -5637,6 +5774,7 @@ function main(): HelperCliResult {
       ? configuredJournalIssue(policy.rawConfig)
       : undefined,
     newIssue: args.newIssue,
+    dependencyInventory: args.dependencyInventory,
     upstreamEscalationEnabled: policy.upstreamEscalationEnabled,
     effortLPolicy: policy.effortLPolicy,
     unreadableConfigPath: policy.unreadableConfigPath,
@@ -5786,6 +5924,66 @@ function writeReport(report: AuditReport, format: string): void {
         ].join('\t'),
       );
     }
+    if (report.dependencyInventory) {
+      const inventory = report.dependencyInventory;
+      const safeCell = (value: string): string =>
+        value.replace(/[\t\r\n]/gu, ' ');
+      const rows: [string, string, string][] = [
+        ['scope', 'syntax-only', inventory.scope],
+        ...inventory.hardIssuePrerequisites.map(
+          (number): [string, string, string] => [
+            'hard-issue-prerequisite',
+            `#${number}`,
+            'Blocked by / Depends on',
+          ],
+        ),
+        ...inventory.unresolvedQualifiedReferences.map(
+          (reference): [string, string, string] => [
+            'unresolved-qualified-reference',
+            reference.token,
+            reference.reason,
+          ],
+        ),
+        ...inventory.sequentialRoadmapBlockers.map(
+          (identity): [string, string, string] => [
+            'sequential-roadmap-blocker',
+            identity,
+            'marker identity only',
+          ],
+        ),
+        ...inventory.tracksMembership.map(
+          (reference): [string, string, string] => [
+            'tracks-membership',
+            `#${reference.target}`,
+            `${reference.relationship}; ${reference.evidence}`,
+          ],
+        ),
+        ...inventory.ordinaryReferences.map(
+          (reference): [string, string, string] => [
+            'ordinary-reference',
+            `#${reference.target}`,
+            `${reference.relationship}; ${reference.evidence}`,
+          ],
+        ),
+      ];
+      const categories = new Set(rows.map(([category]) => category));
+      for (const category of [
+        'hard-issue-prerequisite',
+        'unresolved-qualified-reference',
+        'sequential-roadmap-blocker',
+        'tracks-membership',
+        'ordinary-reference',
+      ]) {
+        if (!categories.has(category)) {
+          rows.push([category, '(none recognized)', '']);
+        }
+      }
+      console.log('dependency inventory: syntax only');
+      console.log(['category', 'identity', 'detail'].join('\t'));
+      for (const row of rows) {
+        console.log(row.map(safeCell).join('\t'));
+      }
+    }
     return;
   }
   console.log(`${JSON.stringify(report, null, 2)}\n`);
@@ -5828,6 +6026,7 @@ function parseArgs(argv: string[]): CliArgs {
     journalCommentsFile: values['journal-comments-file'] as string | undefined,
     cleanupEvidenceFile: values['cleanup-evidence-file'] as string | undefined,
     newIssue: values['new-issue'] as boolean,
+    dependencyInventory: values['dependency-inventory'] as boolean,
     trustedMarkerLogins: values['trusted-marker-logins'] as string | undefined,
     format,
   };
@@ -5961,6 +6160,11 @@ Options:
                                     authoring-publication body line, and (when
                                     --comments-file is also given) requires
                                     --journal-comments-file and --issue too
+  --dependency-inventory           include a syntax-only inventory of parsed
+                                    prerequisites, unresolved qualified refs,
+                                    sequential-roadmap blockers, Tracks links,
+                                    and ordinary references; this is not a live
+                                    graph or a semantic necessity verdict
   --trusted-marker-logins <csv>    comma-separated trusted GitHub actor logins
                                     (flag > $IDD_TRUSTED_MARKER_ACTORS >
                                     .github/idd/config.json's trustedMarkerActors);

@@ -1232,6 +1232,17 @@ in this preamble, since the fallback differs per helper.
   filed on 2026-09-14.
 - `scripts/live-status-digest.mjs` for issue or PR live status digest
   discovery, rendering, dry-run, and claim-checked upsert
+- `scripts/audit-authored-issue.mjs` accepts `--dependency-inventory` to
+  add a JSON `dependencyInventory` object or separate table rows for
+  parsed hard issue prerequisites, unresolved qualified references,
+  sequential-roadmap blocker identities, `## Tracks` membership, and
+  ordinary `Ref(s)` references. This is a syntax inventory of the
+  supplied body, not a live graph, an edge-necessity proof, an
+  independence verdict, or an exhaustive history; an empty hard
+  prerequisite list means no recognized local hard-prerequisite syntax;
+  recognized qualified dependency tokens remain in
+  `unresolvedQualifiedReferences`. Malformed near-misses remain in the
+  existing audit findings.
 - `scripts/audit-pr-cleanup.mjs` for post-merge comment cleanup auditing
 - `scripts/minimize-superseded-markers.mjs` for in-flight per-marker
   `minimizeComment` of strictly superseded markers — `review-watermark`/
