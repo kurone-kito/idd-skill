@@ -1062,6 +1062,14 @@ in this preamble, since the fallback differs per helper.
   ([thread #4367046666](https://github.com/kurone-kito/idd-skill/pull/4677#discussion_r4367046666))
   and nested-promotion case
   ([thread #4367046671](https://github.com/kurone-kito/idd-skill/pull/4677#discussion_r4367046671)).
+  Before reconciling foreign-child memberships, replay the target's
+  self-anchor history up to each foreign opener; an opener posted while a
+  different self generation is already open lost the target-wide race and
+  does not need a release-complete ([PR #4677, thread #4367443380](https://github.com/kurone-kito/idd-skill/pull/4677#discussion_r4367443380)).
+  A `release-complete` minimized as outdated cannot close a generation
+  ([PR #4677, thread #4367445303](https://github.com/kurone-kito/idd-skill/pull/4677#discussion_r4367445303)).
+  A child release remains in progress across the required pre-removal
+  heartbeat ([PR #4677, thread #4367384977](https://github.com/kurone-kito/idd-skill/pull/4677#discussion_r4367384977)).
   Trusted marker history is replayed in
   `(createdAt, id)` order; malformed, edited,
   incomplete history, or one that cannot be replayed conclusively, refuses;

@@ -1992,6 +1992,11 @@ function advanceAnchorOwnerGeneration(state, parsed, latest) {
             problem: `owner marker ${latest.id} (mode=release-complete) closes a generation with no release in progress`,
           };
         }
+        if (latest.outdated) {
+          return {
+            problem: `owner marker ${latest.id} (mode=release-complete) is minimized as outdated, so it cannot close the generation`,
+          };
+        }
         return {
           open: null,
           closedSets: new Set([...closedSets, open.set]),
@@ -2217,6 +2222,11 @@ function resolveFormerChildMembership(input) {
 }
 const MAX_FORMER_CHILD_RECONCILIATION_DEPTH = 32;
 const MAX_FORMER_CHILD_RECONCILIATION_READS = 32;
+function commentPrecedes(left, right) {
+  const leftTime = Date.parse(left.createdAt);
+  const rightTime = Date.parse(right.createdAt);
+  return leftTime < rightTime || (leftTime === rightTime && left.id < right.id);
+}
 /**
  * An issue can become its own set anchor after being a completed child.
  * Reconcile each old child membership against the exact former anchor/set/
@@ -2258,6 +2268,7 @@ function reconcileFormerChildMembershipsInternal(input, ancestry, readBudget) {
   const foreignMemberships = new Map();
   const foreignCommentIds = new Set();
   const selfAnchorOpenings = [];
+  const selfAnchorComments = [];
   for (const comment of input.comments) {
     if (
       !trustedSet.has(comment.authorLogin.trim().toLowerCase()) ||
@@ -2294,6 +2305,7 @@ function reconcileFormerChildMembershipsInternal(input, ancestry, readBudget) {
       };
     }
     if (sameIssueRef(parsed.anchor, input.historyTargetRef)) {
+      selfAnchorComments.push(comment);
       if (AUTHORING_OWNER_OPENING_MODES.has(parsed.mode)) {
         selfAnchorOpenings.push({
           id: comment.id,
@@ -2317,6 +2329,19 @@ function reconcileFormerChildMembershipsInternal(input, ancestry, readBudget) {
       comments: [],
     };
     membership.comments.push(comment);
+    if (parsed.mode === 'acquire' || parsed.mode === 'bootstrap') {
+      const opening = {
+        id: comment.id,
+        createdAt: comment.createdAt,
+        owner: parsed.owner,
+      };
+      if (
+        membership.firstOpening === undefined ||
+        commentPrecedes(opening, membership.firstOpening)
+      ) {
+        membership.firstOpening = opening;
+      }
+    }
     foreignMemberships.set(key, membership);
     foreignCommentIds.add(comment.id);
   }
@@ -2326,7 +2351,43 @@ function reconcileFormerChildMembershipsInternal(input, ancestry, readBudget) {
   const anchorReplays = new Map();
   const closedSets = new Set();
   const outdatedReleaseSuccessors = [];
-  for (const membership of foreignMemberships.values()) {
+  const losingForeignMemberships = new Set();
+  for (const [key, membership] of foreignMemberships) {
+    const firstOpening = membership.firstOpening;
+    if (firstOpening === undefined) {
+      continue;
+    }
+    const earlierSelfComments = selfAnchorComments.filter((comment) =>
+      commentPrecedes(comment, firstOpening),
+    );
+    if (earlierSelfComments.length === 0) {
+      continue;
+    }
+    const earlierSelfReplay = resolveAnchorOwnerGeneration({
+      comments: earlierSelfComments,
+      anchorRef: input.historyTargetRef,
+      markerPrefix: input.markerPrefix,
+      trusted: input.trusted,
+    });
+    if ('problem' in earlierSelfReplay) {
+      return {
+        problem: `self-anchored owner history before former-child acquisition ${firstOpening.id} cannot be replayed: ${earlierSelfReplay.problem}`,
+      };
+    }
+    if (
+      earlierSelfReplay.generation !== null &&
+      earlierSelfReplay.generation.owner !== firstOpening.owner
+    ) {
+      // The target-wide self generation was already open when this foreign
+      // opener arrived. The foreign opener and its continuations lost that
+      // race; they are not a completed former-child membership.
+      losingForeignMemberships.add(key);
+    }
+  }
+  for (const [key, membership] of foreignMemberships) {
+    if (losingForeignMemberships.has(key)) {
+      continue;
+    }
     const childReplay = resolveFormerChildMembership({
       membership,
       targetRef: input.historyTargetRef,

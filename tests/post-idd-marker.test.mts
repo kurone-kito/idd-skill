@@ -8412,6 +8412,30 @@ test('authoring-owner acquire may start a fresh self-anchored set after release-
   }
 });
 
+test('authoring-owner acquire refuses an outdated release-complete as closure evidence (#4669)', () => {
+  const comments = ownerIdClosedHistory().map((comment) =>
+    comment.id === 103 ? { ...comment, minimizedReason: 'outdated' } : comment,
+  );
+  for (const apply of [false, true]) {
+    const stub = withOwnerIdStub({ comments });
+    try {
+      const run = runOwnerIdPost(
+        ownerIdFlags('acquire', {
+          'marker-owner': 'owner-next',
+          set: 'set-next',
+        }),
+        { apply },
+      );
+      assert.equal(run.status, 1, `apply=${apply}`);
+      assert.equal(run.kind, 'gate', `apply=${apply}`);
+      assert.match(run.stderr, /release-complete.*minimized as outdated/);
+      assert.deepEqual(readOwnerIdLines(stub.postsFile), []);
+    } finally {
+      stub.restore();
+    }
+  }
+});
+
 test('authoring-owner acquire lets a completed child become a fresh self-anchor (#4669)', () => {
   const targetComments = [
     { id: 101, body: ownerIdChildMarker('acquire') },
@@ -9599,6 +9623,53 @@ test('authoring-owner child acquire joins only the matching non-releasing anchor
       assert.equal(posts.length, apply ? 1 : 0);
       if (apply) assert.match(posts[0].body, /owner=owner-child-42/);
       assert.equal(readOwnerIdLines(stub.readsFile).length, 1);
+    } finally {
+      stub.restore();
+    }
+  }
+});
+
+test('authoring-owner child acquire ignores a losing foreign opener after a self-anchor win (#4669)', () => {
+  const targetComments = [
+    { id: 101, body: ownerIdAnchorMarker('acquire') },
+    {
+      id: 102,
+      body: ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: OWNER_ID_ANCHOR_TARGET,
+        anchor: 'o/r#44',
+        owner: 'owner-losing-child',
+        set: 'set-losing-child',
+        session: 'session-losing-child',
+      }),
+    },
+  ];
+  for (const apply of [false, true]) {
+    const stub = withOwnerIdStub({
+      comments: [],
+      commentsByIssueNumber: { 43: targetComments },
+    });
+    try {
+      const run = runOwnerIdPost(
+        ownerIdFlags('acquire', {
+          anchor: OWNER_ID_ANCHOR_TARGET,
+          'marker-owner': 'owner-child-42',
+          set: OWNER_ID_ANCHOR_SET,
+          session: OWNER_ID_ANCHOR_SESSION,
+        }),
+        { apply },
+      );
+      assert.equal(run.status, 0, run.stderr);
+      assert.equal(
+        readOwnerIdLines(stub.readsFile).length,
+        1,
+        `apply=${apply}`,
+      );
+      const posted = readOwnerIdLines(stub.postsFile).map((line) =>
+        JSON.parse(line),
+      );
+      assert.equal(posted.length, apply ? 1 : 0, `apply=${apply}`);
+      if (apply) assert.match(posted[0].body, /owner=owner-child-42/);
     } finally {
       stub.restore();
     }
