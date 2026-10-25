@@ -41,15 +41,23 @@
 #     tracked `scripts/audit-pr-cleanup.mjs`), so it is called out here
 #     explicitly. Under `ephemeral-npx` and `user-global` specifically, when
 #     the repository has not configured `helperRuntime.packageSpec`, the
-#     invocation falls back to fetching a **mutable** default archive URL
-#     (`https://codeload.github.com/kurone-kito/idd-skill/tar.gz/refs/heads/main`)
-#     over the network at run time -- not base-branch-tracked content and
-#     not a declared dependency either. This is a real, wider execution
-#     surface than the other profiles; adopters on `ephemeral-npx` or
-#     `user-global` should pin `helperRuntime.packageSpec` to a reviewed
-#     tarball or mirror URL (see docs/idd-helper-scripts.md's "Profile
-#     Wiring Surface" section)
-#     to close this gap.
+#     invocation falls back to a **reviewed** full-commit archive URL,
+#     `https://codeload.github.com/kurone-kito/idd-skill/tar.gz/966b89c0c925a30d771a3063d6cf0fc628dcc27a`,
+#     fetched over the network at run time -- not base-branch-tracked
+#     content and not a declared dependency either. This pin replaces the
+#     mutable main archive that issue `#3888` adopted; it is a deliberate
+#     change made by issue `#4700`. An explicit `helperRuntime.packageSpec`,
+#     including an intentionally mutable one, still takes precedence. Like
+#     any remote build, the pinned archive is a wider execution surface than
+#     the other profiles. The `SPEC` default changes only through a reviewed
+#     template change (see docs/idd-helper-scripts.md's "Reviewed cleanup
+#     helper pin" section for the refresh procedure). The advisory-convergence
+#     workflows still fall back to the mutable main archive, which issue
+#     `#4700` leaves out of scope, so adopters on `ephemeral-npx` or
+#     `user-global` should pin `packageSpec` for those workflows too. That
+#     key is shared, so an explicit pin also replaces this cleanup build.
+#     Observed 2026-10-23 in adopter field feedback (gist finding 8, cited in
+#     issue `#4700`).
 #   - The `pr_number` value (a `workflow_dispatch` number input, not
 #     strictly enforced as numeric for direct API dispatches) is passed
 #     through `env:` and referenced as a quoted shell variable, never
@@ -400,7 +408,8 @@ jobs:
               esac
               ;;
             ephemeral-npx|user-global)
-              SPEC="${PACKAGE_SPEC:-https://codeload.github.com/kurone-kito/idd-skill/tar.gz/refs/heads/main}"
+              # Reviewed full-commit default (issue #4700); see the header above.
+              SPEC="${PACKAGE_SPEC:-https://codeload.github.com/kurone-kito/idd-skill/tar.gz/966b89c0c925a30d771a3063d6cf0fc628dcc27a}"
               # shellcheck disable=SC2086
               JSON=$(npx --yes --package "$SPEC" idd-audit-pr-cleanup --pr "$PR_NUMBER" $FLAGS 2>cleanup-stderr.log)
               ;;

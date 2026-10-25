@@ -3484,12 +3484,76 @@ Node.js helper path.
   `helperRuntime.packageSpec` when it is set, so CI runs the build named
   there rather than anything on an operator's `PATH`. CI reads only the
   committed policy files: `.github/idd/config.json`, falling back to the
-  legacy root `idd-policy.json`. When `packageSpec` is unset, CI falls back
-  to the mutable default archive URL, as `ephemeral-npx` does, and
-  `idd-onboard --verify` warns about it (#2987). Pin `packageSpec` to the
-  same reviewed build the operators install.
+  legacy root `idd-policy.json`. When `packageSpec` is unset, the advisory
+  workflows fall back to the mutable default archive URL, as `ephemeral-npx`
+  does, and `idd-onboard --verify` warns about it (#2987). The post-merge
+  cleanup workflow instead falls back to the reviewed commit archive named in
+  its own `SPEC` default (see
+  [Reviewed cleanup helper pin](#reviewed-cleanup-helper-pin)). Pin
+  `packageSpec` to the same reviewed build the operators install.
 - `instructions-only`: keep helper dependencies, helper files, and helper
   wrapper scripts out of the target repository entirely.
+
+### Reviewed cleanup helper pin
+
+The post-merge cleanup workflow runs its remote helper with `GH_TOKEN`, and
+it holds `issues: write` and `pull-requests: write`. Its implicit
+`ephemeral-npx` and `user-global` default is therefore a reviewed full
+commit, not the mutable `refs/heads/main` archive that issue `#3888` adopted.
+Issue `#4700` makes this change as a maintainer decision, and it acts on
+adopter field feedback from 2026-10-23 ([gist, finding 8](https://gist.github.com/kurone-kito/9f2d7871542cb2f7a255f92a7c1232d0)).
+The change applies only to this workflow's implicit default.
+
+- **Source identity.** Commit `966b89c0c925a30d771a3063d6cf0fc628dcc27a`,
+  tree `88e0d0c5c097e1ea60ea10fde7ba60832fcbb292`: the `origin/main` tip on
+  2026-10-25 and the merge commit of pull request `#4684`. Its archive,
+  `https://codeload.github.com/kurone-kito/idd-skill/tar.gz/966b89c0c925a30d771a3063d6cf0fc628dcc27a`,
+  exposes the `idd-audit-pr-cleanup` bin and accepts the workflow's flags
+  (`--apply --skip-claim-check --format json --time-budget-seconds 360`). A
+  version string alone does not identify the build; the commit does.
+- **Scope.** An explicit `helperRuntime.packageSpec` still wins, including an
+  intentionally mutable one. `vendored-node` and `package-manager` dispatch is
+  unchanged. The advisory-convergence workflows keep the mutable default.
+- **Divergence.** The helper command that `helper-runtime-manifest` emits for
+  local use under `ephemeral-npx` still names the mutable
+  `DEFAULT_PACKAGE_SPEC`. Until that emitted default changes, a repository's
+  CI cleanup and its local helper can run different builds.
+  Pinning `packageSpec` to the reviewed commit makes them match.
+- **Support.** The pinned build receives no fixes until the pin is refreshed,
+  so a helper defect that needs a fix requires a refresh. No adopter's
+  committed `packageSpec` is rewritten automatically, and an adopter with its
+  own pin keeps it.
+
+**Refresh procedure.** Choose a commit that has already been reviewed, then
+change the pin in one commit:
+
+1. Resolve the commit with `gh api repos/kurone-kito/idd-skill/commits/<sha>`,
+   and record the commit and tree SHA.
+2. Download `https://codeload.github.com/kurone-kito/idd-skill/tar.gz/<sha>`
+   into an empty directory. Check that `package.json`, and the file that its
+   `bin` entry names for `idd-audit-pr-cleanup`, equal their
+   `git show <sha>:<path>` blobs.
+3. Run the workflow's invocation as a dry run on a merged pull request, without
+   `--apply`:
+
+   ```sh
+   npx --yes --package <archive-url> idd-audit-pr-cleanup --pr <merged-pr> --skip-claim-check --format json --time-budget-seconds 360
+   ```
+
+   Confirm that the JSON carries the top-level fields the workflow reads:
+   `status`, `applied`, `failed`, `skipped`, and `skipReasonSummary`. Each
+   `skipped` entry must also carry `isMinimized` and `viewerCanMinimize`. A
+   `skipped` entry counts as blocked only when both are `false`. The
+   `retryAttempts` field appears only in an `--apply` run, and
+   `retryBoundExhausted` appears only when it is `true`, so a dry run carries
+   neither. A missing top-level field silently falls back to its jq default,
+   and a `skipped` entry without the two row fields is not counted as blocked,
+   so check them explicitly.
+4. (Source repository only.) In
+   `idd-template/.github/workflows/post-merge-cleanup.yml`, change the `SPEC`
+   default and the header. Update the pinned commit in this subsection and the
+   constant in `tests/user-global-ci-dispatch.test.mts`. Then run
+   `node scripts/sync-docs.mjs --apply` and the CI-dispatch test.
 
 ### Pinning executable examples
 
