@@ -7489,7 +7489,8 @@ reflexively as any other CLI option.
   [Out-of-loop marker contract](#out-of-loop-marker-contract) above. An
   empty `closingIssuesReferences` field alone does not establish that a PR
   is unclaimed: on a non-default base branch, a PR for an active claimed
-  issue can have no closing references (#4697). For such a PR, pass the
+  issue can have no closing references (observed 2026-10-23, #4697).
+  For such a PR, pass the
   active claim's `--claim-issue` and `--claim-id` even when the field is
   empty, plus `--nonce` whenever one was recorded. `--claimless` cannot
   combine with `--claim-issue` or `--claim-id`; it skips claim
