@@ -169,6 +169,41 @@ function stepText(text: string, name: string, occurrence = 0): string {
   return found[occurrence] ?? '';
 }
 
+function stepPosition(text: string, name: string, occurrence = 0): number {
+  const found = [...text.matchAll(/^ {6}- name: (.+)$/gm)]
+    .filter((match) => match[1] === name)
+    .map((match) => match.index ?? -1);
+  assert.ok(
+    found[occurrence] !== undefined,
+    `missing step ${name} occurrence ${occurrence}`,
+  );
+  return found[occurrence] ?? -1;
+}
+
+test('stepPosition selects a repeated workflow step by occurrence', () => {
+  const text = [
+    'jobs:',
+    '  first:',
+    '    steps:',
+    '      - name: Install dependencies (package-manager profile)',
+    '        run: echo first',
+    '  second:',
+    '    steps:',
+    '      - name: Install dependencies (package-manager profile)',
+    '        run: echo second',
+  ].join('\n');
+  const header = '      - name: Install dependencies (package-manager profile)';
+
+  assert.equal(
+    stepPosition(text, 'Install dependencies (package-manager profile)', 0),
+    text.indexOf(header),
+  );
+  assert.equal(
+    stepPosition(text, 'Install dependencies (package-manager profile)', 1),
+    text.lastIndexOf(header),
+  );
+});
+
 function runBlock(step: string): string {
   const lines = step.split(/\r?\n/);
   const runIndex = lines.indexOf('        run: |');
@@ -260,10 +295,15 @@ function evaluate(site: WorkflowSite, scenario: Scenario): void {
     site.installOccurrence,
   );
   const helperSteps = site.helperSteps.map((name) => stepText(text, name));
-  const installPosition = text.indexOf(installStep);
-  for (const helperStep of helperSteps) {
+  const installPosition = stepPosition(
+    text,
+    'Install dependencies (package-manager profile)',
+    site.installOccurrence,
+  );
+  for (const [index, helperStep] of helperSteps.entries()) {
+    const helperName = site.helperSteps[index] ?? '';
     assert.ok(
-      text.indexOf(helperStep) > installPosition,
+      stepPosition(text, helperName) > installPosition,
       'helper must follow install',
     );
     assert.ok(
