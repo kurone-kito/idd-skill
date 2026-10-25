@@ -5361,6 +5361,109 @@ the verdict table or `post-rejected`. Exit status is 0 for `post` and
   unedited one, since ignoring an edit would lower the count and could
   lift the bound instead of tightening it.
 
+### Scope-overrun evidence marker
+
+Issue `#4674` adds a durable `scope-overrun` record for the candidate-file
+limit detected during B3 or push validation. It snapshots the issue number,
+the effort value observed at that time, and the canonical candidate-file set.
+The record does not reread the ordinary issue effort marker later, so an edit
+to that marker cannot rewrite the snapshot.
+
+This change does not invoke the helper automatically; the detecting session
+must run it explicitly. D2/F2 caller wiring is tracked by issue `#4676`.
+
+```sh
+node scripts/post-idd-marker.mjs --type scope-overrun --target issue <issue> \
+  --agent-id <agent> --effort <S|M|L> \
+  --candidate-files '["src/one.mts","src/two.mts"]' [--apply]
+```
+
+This first record is pre-push and has no PR fields. Once a pull request exists,
+append a post-push record with the same issue, effort, and candidate files, plus
+the observed PR number, branch, and full 40-character head SHA:
+
+```sh
+node scripts/post-idd-marker.mjs --type scope-overrun --target issue <issue> \
+  --agent-id <agent> --effort <S|M|L> \
+  --candidate-files '["src/one.mts","src/two.mts"]' \
+  --pull-request <pr> --branch <branch> --head-sha <40-hex> [--apply]
+```
+
+`--candidate-files` is a JSON array. The renderer sorts paths by UTF-8 byte
+order, rejects duplicates and non-canonical spellings such as absolute paths,
+backslashes, empty segments, `.` / `..` segments, or leading/trailing
+whitespace, and allows spaces inside a path. The visible note lists every
+sorted path in code spans so a reviewer can inspect the exact snapshot. This
+closes the aliasing and unreadable-list cases raised during review of pull
+request `#4688` on 2026-10-24 ([canonical path spellings](https://github.com/kurone-kito/idd-skill/pull/4688#discussion_r4368595793),
+[visible candidate list](https://github.com/kurone-kito/idd-skill/pull/4688#discussion_r4368595801)).
+
+For a local target, the marker prefix comes from this repository's configured
+`markerPrefix`; an explicit `--marker-prefix` must match it. When both
+`--owner` and `--repo` explicitly name a target repository, pass that
+repository's prefix with `--marker-prefix`; the helper does not fetch its
+configuration. Passing only one of `--owner` or `--repo`, or omitting the
+prefix for an explicit target, fails before posting. This avoids writing a
+record that the target repository cannot recognize, observed during review
+of pull request `#4688` on 2026-10-24
+([foreign marker prefix](https://github.com/kurone-kito/idd-skill/pull/4688#discussion_r4368602159)).
+
+The three PR flags are optional as a group and required together when
+recording a pushed head. The target must be an issue. Dry-run prints the exact
+body; `--apply` posts it as JSON after the caller runs its normal
+claim-revalidation gate.
+
+`parseScopeOverrunRecordComment(body, markerPrefix)` accepts only a canonical
+record under the supplied prefix. `resolveScopeOverrunEvidence()` additionally
+requires each record comment's author to be in the configured trusted marker
+actor list and `lastEditedAt` to be explicitly `null`. A pre-push record may be
+followed by post-push records only when issue, effort, candidate files, PR
+number, and branch stay the same. If the pushed head changes, the newest
+append-only record by GitHub's `createdAt` timestamp and numeric comment ID is
+active; earlier records remain for audit. A new head needs a new trusted-owner
+decision for that exact SHA; the previous decision does not carry forward, and
+an older decision leaves the result `pending` for a decision on the new head.
+Every record and decision requires GitHub `createdAt` and a positive numeric
+comment ID; missing ordering metadata is incomplete evidence and returns
+`invalid`. If ordering data is ambiguous, multiple heads remain conflicting
+and return `invalid`. This lets review-fix pushes record a new head without
+turning an earlier approval into approval of new code, while preserving a
+fail-closed result when the append order cannot be established. The dead-end
+case was raised during review of pull request `#4688` on 2026-10-24
+([changed-head record](https://github.com/kurone-kito/idd-skill/pull/4688#discussion_r4368595812)).
+Identical duplicate records are tolerated; malformed, edited, untrusted,
+incomplete, or conflicting evidence returns `invalid`.
+
+The owner decision is a separate comment whose exact first line is
+`Scope decision: accept head <full 40-character SHA>`. A worker never writes
+this decision. When an issue has detected or recorded scope-overrun evidence,
+append this self-reported suffix to every free-form comment you post there.
+Do not append it to operational-marker or owner-decision comments:
+
+```markdown
+<!-- idd-agent-authored: {agent-id} -->
+
+_{agent-id}: IDD automation comment; attribution is self-reported._
+```
+
+A decision-shaped comment with this suffix is invalid even when its GitHub
+author is in `trustedMarkerActors`. This is workflow attribution, not identity
+proof: a marker can be omitted or forged, so an unmarked comment does not prove
+that a human wrote it. This is useful when agents and maintainers share a
+GitHub login, but GitHub still records that login rather than which process
+wrote the comment. This ambiguity was raised during review of pull request
+`#4688` on 2026-10-24
+([attribution marker](https://github.com/kurone-kito/idd-skill/pull/4688#discussion_r4368595779)).
+The decision is also valid only from a configured trusted
+actor, with an explicitly unedited comment, and only when the SHA equals both
+the recorded post-push SHA and the live PR head. A changed live head leaves the
+decision pending because acceptance remains bound to the recorded SHA; the
+evidence cannot accept a different head. Editing the issue's ordinary effort
+marker does not change the stored scope or decision.
+
+This record is durable issue evidence: it is not added to the transient
+`OPERATIONAL_MARKERS` cleanup or hide-at-post-time registries.
+
 ### Local validation evidence helper
 
 - Command:
@@ -6677,6 +6780,11 @@ cleanup script is in
   `renderF4HeadProofBody` (`f4-head-proof.mts`), and its command reads the
   live state before it renders (see the
   [F4 head-proof marker contract](#f4-head-proof-marker-contract)).
+  `scope-overrun` is also a special issue-targeted type: its body comes from
+  `renderScopeOverrunRecordComment` (`marker-helpers.mts`) and it remains
+  persistent evidence rather than entering the transient operational-marker
+  cleanup list (see the
+  [scope-overrun evidence marker](#scope-overrun-evidence-marker)).
 - The `claim` / `unclaim` / `activation-nonce` / `watermark` / `baseline` /
   `idd-hold` bodies are HTML-comment-first with a visible "Do not edit" note;
   `advisory` / `advisory-recovery` / `advisory-reroll` are the
@@ -6697,6 +6805,10 @@ cleanup script is in
   `--agent-id --claim-id --worktree` and only `--target issue`, and reads every
   proof value live (see the
   [F4 head-proof marker contract](#f4-head-proof-marker-contract)).
+- Scope-overrun (`scope-overrun`) takes `--agent-id --effort
+  --candidate-files '<JSON array>'` and only `--target issue`; optionally
+  add `--pull-request --branch --head-sha` together for the post-push record
+  (see the [scope-overrun evidence marker](#scope-overrun-evidence-marker)).
 - One-command watermark (`watermark` only): `--from-pr <n>` derives
   `--head-sha` / `--max-activity-at` / `--total-item-count` /
   `--ci-completed-at` from a fresh `review-activity-snapshot` of PR `<n>` and

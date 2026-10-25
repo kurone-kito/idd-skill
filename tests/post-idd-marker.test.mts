@@ -22,6 +22,7 @@ import type { ActivationResult } from '../src/scripts/idd-activation.mts';
 import {
   detectMalformedOperationalMarker,
   parseAuthoringOwnerComment,
+  parseScopeOverrunRecordComment,
 } from '../src/scripts/marker-helpers.mts';
 import {
   buildMarkerBody,
@@ -1110,7 +1111,7 @@ test('buildMarkerBody throws on an invalid field set (renderer validation)', () 
   );
 });
 
-test('MARKER_TYPES lists exactly the fifteen supported types', () => {
+test('MARKER_TYPES lists exactly the sixteen supported types', () => {
   assert.deepEqual(
     [...MARKER_TYPES],
     [
@@ -1127,6 +1128,7 @@ test('MARKER_TYPES lists exactly the fifteen supported types', () => {
       'out-of-loop',
       'idd-hold',
       'f4-head-proof',
+      'scope-overrun',
       'authoring-owner',
       'authoring-publication-intent',
     ],
@@ -2909,20 +2911,33 @@ const FULL_FIELDS_BY_TYPE: Record<string, Record<string, string>> = {
   // value here could never match that for every test environment. See the
   // dedicated authoring-publication-intent CLI tests below (using
   // authoringArgv, which pins the destination explicitly) instead.
+  'scope-overrun': {
+    'agent-id': 'worker-1',
+    effort: 'M',
+    'candidate-files': '["src/z.mts","src/a.mts"]',
+  },
 };
 
 function postIddMarkerArgv(
   type: string,
   fields: Record<string, string>,
+  destination: { owner?: string; repo?: string } = {},
 ): string[] {
+  const scopeOverrun = type === 'scope-overrun';
   const argv = [
     join(REPO_ROOT, 'scripts/post-idd-marker.mjs'),
     '--type',
     type,
     '--target',
-    'pr',
-    '1722',
+    scopeOverrun ? 'issue' : 'pr',
+    scopeOverrun ? '4674' : '1722',
   ];
+  if (destination.owner !== undefined) {
+    argv.push('--owner', destination.owner);
+  }
+  if (destination.repo !== undefined) {
+    argv.push('--repo', destination.repo);
+  }
   for (const [flag, value] of Object.entries(fields)) {
     argv.push(`--${flag}`, value);
   }
@@ -2980,6 +2995,107 @@ test('post-idd-marker CLI: the full flag set for every marker type succeeds (dry
     assert.equal(parsed.mode, 'dry-run', `${type} should dry-run cleanly`);
     assert.equal(parsed.type, type);
   }
+});
+
+test('post-idd-marker CLI: scope-overrun renders both pre-push and post-push records', () => {
+  const preOutput = JSON.parse(
+    execFileSync(
+      process.execPath,
+      postIddMarkerArgv('scope-overrun', FULL_FIELDS_BY_TYPE['scope-overrun']),
+      { cwd: REPO_ROOT, encoding: 'utf8' },
+    ),
+  );
+  assert.deepEqual(
+    parseScopeOverrunRecordComment(preOutput.body, 'idd-skill')?.kind,
+    'pre-push',
+  );
+  assert.equal(
+    parseScopeOverrunRecordComment(preOutput.body, 'idd-skill')?.issueNumber,
+    4674,
+  );
+
+  const postOutput = JSON.parse(
+    execFileSync(
+      process.execPath,
+      postIddMarkerArgv('scope-overrun', {
+        ...FULL_FIELDS_BY_TYPE['scope-overrun'],
+        'pull-request': '4399',
+        branch: 'issue/4674-scope-overrun',
+        'head-sha': SHA,
+      }),
+      { cwd: REPO_ROOT, encoding: 'utf8' },
+    ),
+  );
+  const parsedPost = parseScopeOverrunRecordComment(
+    postOutput.body,
+    'idd-skill',
+  );
+  assert.equal(parsedPost?.kind, 'post-push');
+  if (parsedPost?.kind === 'post-push') {
+    assert.equal(parsedPost.pullRequestNumber, 4399);
+    assert.equal(parsedPost.branch, 'issue/4674-scope-overrun');
+    assert.equal(parsedPost.headSha, SHA);
+  }
+});
+
+test('post-idd-marker CLI: scope-overrun requires an issue target and complete PR tuple', () => {
+  const preArgs = postIddMarkerArgv(
+    'scope-overrun',
+    FULL_FIELDS_BY_TYPE['scope-overrun'],
+  );
+  const prArgs = [...preArgs];
+  prArgs[prArgs.indexOf('--target') + 1] = 'pr';
+  assert.match(runCliExpectingFailure(prArgs), /requires --target issue/);
+
+  assert.match(
+    runCliExpectingFailure(
+      postIddMarkerArgv('scope-overrun', {
+        ...FULL_FIELDS_BY_TYPE['scope-overrun'],
+        'pull-request': '4399',
+      }),
+    ),
+    /--pull-request, --branch, and --head-sha must be provided together/,
+  );
+});
+
+test('post-idd-marker CLI: scope-overrun uses explicit target-repository prefixes', () => {
+  const fields = FULL_FIELDS_BY_TYPE['scope-overrun'];
+  const destination = { owner: 'other-owner', repo: 'other-repo' };
+  const missingPrefix = runCliExpectingFailure(
+    postIddMarkerArgv('scope-overrun', fields, destination),
+  );
+  assert.match(missingPrefix, /requires an explicit non-empty --marker-prefix/);
+
+  const targetPrefix = JSON.parse(
+    execFileSync(
+      process.execPath,
+      postIddMarkerArgv(
+        'scope-overrun',
+        { ...fields, 'marker-prefix': 'other-idd' },
+        destination,
+      ),
+      { cwd: REPO_ROOT, encoding: 'utf8' },
+    ),
+  );
+  assert.match(targetPrefix.body, /^<!-- other-idd-scope-overrun:/);
+  assert.equal(
+    parseScopeOverrunRecordComment(targetPrefix.body, 'other-idd')?.issueNumber,
+    4674,
+  );
+
+  const localMismatch = runCliExpectingFailure(
+    postIddMarkerArgv('scope-overrun', {
+      ...fields,
+      'marker-prefix': 'other-idd',
+    }),
+  );
+  assert.match(localMismatch, /must match configured markerPrefix/);
+  assert.match(
+    runCliExpectingFailure(
+      postIddMarkerArgv('scope-overrun', fields, { owner: 'other-owner' }),
+    ),
+    /--owner and --repo must be provided together/,
+  );
 });
 
 test('post-idd-marker CLI: claim without --timestamp names --timestamp (issue example)', () => {
