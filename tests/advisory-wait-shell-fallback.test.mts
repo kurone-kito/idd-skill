@@ -251,6 +251,7 @@ interface Fixtures {
   timelineFail?: boolean;
   prEditExit?: number;
   markerPrefixConfig?: string;
+  advisoryBotLogins?: string[];
 }
 
 interface RunResult {
@@ -794,11 +795,21 @@ interface F2Result {
 
 function runF2(fixtures: Fixtures, env: Record<string, string> = {}): F2Result {
   const root = makeSandbox(fixtures);
-  if (fixtures.markerPrefixConfig !== undefined) {
+  if (
+    fixtures.markerPrefixConfig !== undefined ||
+    fixtures.advisoryBotLogins !== undefined
+  ) {
     mkdirSync(join(root, '.github', 'idd'), { recursive: true });
     writeFileSync(
       join(root, '.github', 'idd', 'config.json'),
-      JSON.stringify({ markerPrefix: fixtures.markerPrefixConfig }),
+      JSON.stringify({
+        ...(fixtures.markerPrefixConfig !== undefined
+          ? { markerPrefix: fixtures.markerPrefixConfig }
+          : {}),
+        ...(fixtures.advisoryBotLogins !== undefined
+          ? { advisoryBotLogins: fixtures.advisoryBotLogins }
+          : {}),
+      }),
     );
   }
   const block = inlineGraphqlVariables(
@@ -1634,6 +1645,7 @@ function runF2Differential(c: F2DifferentialCase): {
       ),
       threads: threadsResponse(threads),
       markerPrefixConfig: c.markerPrefix,
+      advisoryBotLogins: c.advisoryBotLogins,
     },
     c.env ?? {},
   );
@@ -2796,5 +2808,52 @@ test('differential: an IDD pending-decision reply on a human thread is IDD-origi
     },
     0,
     1,
+  );
+});
+
+test('differential: a bot listed only in the repository config is advisory origin (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      threads: [
+        f2Thread([
+          f2ThreadComment(
+            'my-review-bot[bot]',
+            'please rename',
+            F2_CASE_TIME_1,
+          ),
+          f2ThreadComment('human-reviewer', 'agreed', F2_CASE_TIME_2),
+        ]),
+      ],
+      advisoryBotLogins: ['my-review-bot[bot]'],
+    },
+    0,
+    1,
+  );
+});
+
+test('differential: an inline triple-backtick span does not hide a top-level pending marker (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 8001,
+          login: 'coderabbitai[bot]',
+          body: 'nit: keep the marker',
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 8002,
+          login: AGENT_LOGIN,
+          body: '**Accepted** — ok ```x```\n**Awaiting maintainer decision** pick one.',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+    },
+    1,
+    0,
   );
 });

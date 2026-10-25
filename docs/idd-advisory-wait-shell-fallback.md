@@ -1245,7 +1245,7 @@ DISPOSITION_JSON=$(printf '%s' "${COMMENTS_JSON}" | jq -c --argjson agents "${RE
   def strip_all($re):
     if test($re) then sub($re; "") | strip_all($re) else . end;
   def pending_marker:
-    (.body | strip_all("(?s)\\x60\\x60\\x60.*?\\x60\\x60\\x60") | strip_all("\\x60[^\\x60\\n]*\\x60") | strip_all("(?m)^>.*$")
+    (.body | strip_all("(?ms)^ {0,3}\\x60\\x60\\x60.*?^ {0,3}\\x60\\x60\\x60") | strip_all("\\x60[^\\x60\\n]*\\x60") | strip_all("(?m)^>.*$")
       | test("(^|\\n)\\*\\*Awaiting maintainer decision\\*\\*"; "i"));
   map(select(
     (.body | test("^\\*\\*(Accepted|Rejected)[.!:]?\\*\\*"))
@@ -1259,8 +1259,14 @@ DISPOSITION_JSON=$(printf '%s' "${COMMENTS_JSON}" | jq -c --argjson agents "${RE
 # the known review bots plus IDD_ADVISORY_BOT_LOGINS (comma-separated
 # advisoryBotLogins, optional). `[bot]` is stripped on both sides, and every
 # Copilot spelling reads as `copilot`, the same set AW1 uses.
+# Configured advisoryBotLogins come from the repository config as well as the
+# environment (the helper reads both), so a config-only bot is advisory here too.
+CONFIG_ADVISORY_LOGINS=""
+if [ -f .github/idd/config.json ]; then
+  CONFIG_ADVISORY_LOGINS=$(jq -r '(.advisoryBotLogins // [])[]' .github/idd/config.json) || exit 2
+fi
 ADVISORY_TOKEN_JSON=$(
-  printf '%s\n' "${IDD_ADVISORY_BOT_LOGINS:-}" | tr ',' '\n' | jq -Rsc '
+  { printf '%s\n' "${IDD_ADVISORY_BOT_LOGINS:-}" | tr ',' '\n'; printf '%s\n' "${CONFIG_ADVISORY_LOGINS}"; } | jq -Rsc '
     split("\n")
     | map(ascii_downcase | sub("^\\s+"; "") | sub("\\s+$"; "")
         | if endswith("[bot]") then .[0:(length - 5)] else . end)
@@ -1389,7 +1395,7 @@ MISSING_THREADS=$(printf '%s' "${THREADS_JSON}" | jq -rs --argjson agents "${IDD
   def strip_all($re):
     if test($re) then sub($re; "") | strip_all($re) else . end;
   def pending_marker:
-    (.body | strip_all("(?s)\\x60\\x60\\x60.*?\\x60\\x60\\x60") | strip_all("\\x60[^\\x60\\n]*\\x60") | strip_all("(?m)^>.*$")
+    (.body | strip_all("(?ms)^ {0,3}\\x60\\x60\\x60.*?^ {0,3}\\x60\\x60\\x60") | strip_all("\\x60[^\\x60\\n]*\\x60") | strip_all("(?m)^>.*$")
       | test("(^|\\n)\\*\\*Awaiting maintainer decision\\*\\*"; "i"));
   def is_disp:
     (.body | test("^\\*\\*(Accepted|Rejected)[.!:]?\\*\\*"))
