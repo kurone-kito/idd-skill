@@ -20,7 +20,7 @@ interface WorkflowSite {
   file: string;
   installOccurrence: number;
   ambiguousOccurrence: number | null;
-  helperStep: string;
+  helperSteps: string[];
 }
 
 interface Scenario {
@@ -37,25 +37,25 @@ const WORKFLOW_SITES: readonly WorkflowSite[] = [
     file: 'post-merge-cleanup.yml',
     installOccurrence: 0,
     ambiguousOccurrence: null,
-    helperStep: 'Run F4 cleanup (server-side fallback)',
+    helperSteps: ['Run F4 cleanup (server-side fallback)'],
   },
   {
     file: 'idd-advisory-convergence.yml',
     installOccurrence: 0,
     ambiguousOccurrence: 0,
-    helperStep: 'Run advisory-convergence check',
+    helperSteps: ['Run advisory-convergence check'],
   },
   {
     file: 'idd-advisory-convergence.yml',
     installOccurrence: 1,
     ambiguousOccurrence: 1,
-    helperStep: 'Post the self-referential-bootstrap-auto waiver',
+    helperSteps: ['Post the self-referential-bootstrap-auto waiver'],
   },
   {
     file: 'idd-advisory-convergence-comment.yml',
     installOccurrence: 0,
     ambiguousOccurrence: null,
-    helperStep: 'Classify review comment',
+    helperSteps: ['Classify review comment', 'Rerun required HEAD check'],
   },
 ];
 
@@ -210,6 +210,28 @@ function runShell(code: string, cwd: string, env: NodeJS.ProcessEnv) {
   });
 }
 
+function helperCanRunAfterInstallFailure(
+  installStep: string,
+  helperStep: string,
+): boolean {
+  const condition = helperStep.match(/^\s+if:\s*(.+)$/m)?.[1] ?? '';
+  const hasStatusCheck =
+    /\b(?:success|failure|cancelled|always)\s*\(\s*\)/i.test(condition);
+  const installId = installStep.match(/^\s+id:\s*([A-Za-z0-9_-]+)/m)?.[1];
+  const failureOutcomeGuard = installId
+    ? new RegExp(
+        `steps\\.${installId}\\.outcome\\s*!=\\s*['"]failure['"]`,
+        'i',
+      ).test(condition)
+    : false;
+  if (failureOutcomeGuard) return false;
+
+  const installCanConcealFailure = /^\s+continue-on-error\s*:/m.test(
+    installStep,
+  );
+  return installCanConcealFailure || hasStatusCheck;
+}
+
 function evaluate(site: WorkflowSite, scenario: Scenario): void {
   const text = workflowText(site.file);
   const installStep = stepText(
@@ -222,16 +244,20 @@ function evaluate(site: WorkflowSite, scenario: Scenario): void {
     'Detect package manager',
     site.installOccurrence,
   );
-  const helperStep = stepText(text, site.helperStep);
+  const helperSteps = site.helperSteps.map((name) => stepText(text, name));
   const installPosition = text.indexOf(installStep);
-  assert.ok(
-    text.indexOf(helperStep) > installPosition,
-    'helper must follow install',
-  );
-  assert.ok(
-    !/\b(always|failure|cancelled)\s*\(\s*\)/i.test(helperStep),
-    'helper must honor prior step failure',
-  );
+  for (const helperStep of helperSteps) {
+    assert.ok(
+      text.indexOf(helperStep) > installPosition,
+      'helper must follow install',
+    );
+    assert.ok(
+      !/\b(always|failure|cancelled)\s*\(\s*\)/i.test(
+        helperStep.match(/^\s+if:\s*(.+)$/m)?.[1] ?? '',
+      ),
+      'helper condition must not override a failed prior step',
+    );
+  }
 
   const fixture = mkdtempSync(join(tmpdir(), 'idd-pm-install-'));
   try {
@@ -298,11 +324,13 @@ function evaluate(site: WorkflowSite, scenario: Scenario): void {
           /if:.*steps\.manager\.outputs\.manager != 'ambiguous'/,
           `${site.file}: ambiguous manager must skip installation`,
         );
-        assert.match(
-          helperStep,
-          /if:.*steps\.manager\.outputs\.manager != 'ambiguous'/,
-          `${site.file}: ambiguous manager must skip the helper`,
-        );
+        for (const helperStep of helperSteps) {
+          assert.match(
+            helperStep,
+            /if:.*steps\.manager\.outputs\.manager != 'ambiguous'/,
+            `${site.file}: ambiguous manager must skip the helper`,
+          );
+        }
       }
       assert.equal(
         readFileSync(log, 'utf8'),
@@ -332,6 +360,13 @@ function evaluate(site: WorkflowSite, scenario: Scenario): void {
         '',
         'refusal must start no install or helper',
       );
+      for (const helperStep of helperSteps) {
+        assert.equal(
+          helperCanRunAfterInstallFailure(installStep, helperStep),
+          false,
+          `${site.file} / ${scenario.name}: helper condition must keep a rejected install from running the helper`,
+        );
+      }
       return;
     }
 
@@ -347,19 +382,24 @@ function evaluate(site: WorkflowSite, scenario: Scenario): void {
       `${site.file} / ${scenario.name}`,
     );
 
-    const helper = spawnSync('idd-workflow-helper', ['run'], {
-      cwd: fixture,
-      env,
-      encoding: 'utf8',
-    });
-    assert.equal(
-      helper.status,
-      0,
-      `${site.file} / ${scenario.name}: helper sentinel failed`,
-    );
+    for (const _helperStep of helperSteps) {
+      const helper = spawnSync('idd-workflow-helper', ['run'], {
+        cwd: fixture,
+        env,
+        encoding: 'utf8',
+      });
+      assert.equal(
+        helper.status,
+        0,
+        `${site.file} / ${scenario.name}: helper sentinel failed`,
+      );
+    }
     assert.deepEqual(
       readFileSync(log, 'utf8').trim().split(/\r?\n/),
-      [...scenario.expectedInstall, 'idd-workflow-helper run'],
+      [
+        ...scenario.expectedInstall,
+        ...helperSteps.map(() => 'idd-workflow-helper run'),
+      ],
       `${site.file} / ${scenario.name}: downstream helper order`,
     );
   } finally {

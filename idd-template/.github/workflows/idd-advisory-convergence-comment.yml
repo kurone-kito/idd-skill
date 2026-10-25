@@ -356,6 +356,7 @@ jobs:
           fi
           echo "manager=$MANAGER" >> "$GITHUB_OUTPUT"
       - name: Install dependencies (package-manager profile)
+        id: install-dependencies
         if: steps.profile.outputs.profile == 'package-manager' && steps.manager.outputs.manager != 'ambiguous'
         env:
           MANAGER: ${{ steps.manager.outputs.manager }}
@@ -537,13 +538,12 @@ jobs:
         # review branch's own "always proceeds" guarantee for the exact
         # trigger that guarantee exists to protect. Calling success()
         # explicitly here suppresses that implicit prepend and lets the
-        # `pull_request_review` disjunct genuinely short-circuit
-        # regardless of any earlier step's own outcome (profile/manager
-        # readiness still applies to both branches via the leading
-        # `&&`), while the comment-family branch still requires it,
-        # matching this step's pre-existing (implicit) behavior for
-        # that path unchanged.
-        if: steps.profile.outputs.profile != 'instructions-only' && steps.manager.outputs.manager != 'ambiguous' && (github.event_name == 'pull_request_review' || (success() && steps.origin.outputs.idd_originated == 'true' && steps.debounce.outputs.skip != 'true'))
+        # `pull_request_review` disjunct bypasses classifier failure only;
+        # its leading install-outcome guard keeps a rejected package install
+        # from reaching this helper (Copilot review on #4719).
+        # The comment-family branch still requires success(), matching this
+        # step's pre-existing (implicit) behavior for that path unchanged.
+        if: steps.profile.outputs.profile != 'instructions-only' && steps.manager.outputs.manager != 'ambiguous' && steps.install-dependencies.outcome != 'failure' && (github.event_name == 'pull_request_review' || (success() && steps.origin.outputs.idd_originated == 'true' && steps.debounce.outputs.skip != 'true'))
         env:
           GH_TOKEN: ${{ github.token }}
           GH_ENTERPRISE_TOKEN: ${{ github.token }}
