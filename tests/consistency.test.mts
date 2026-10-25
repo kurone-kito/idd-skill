@@ -28,7 +28,12 @@ import {
   stripGeneratedFromBanner,
 } from '../src/scripts/consistency-helpers.mts';
 import { findPlaceholders } from '../src/scripts/idd-doctor.mts';
-import { normalizeWhitespace, readJson, readText } from './test-utils.mts';
+import {
+  extractSection,
+  normalizeWhitespace,
+  readJson,
+  readText,
+} from './test-utils.mts';
 
 test('placeholder scenarios detect clean and dirty post-onboarding fixtures', () => {
   const clean = collectPlaceholderHits(
@@ -3066,4 +3071,125 @@ test('docs idd-workflow fan-out variant carries a delegation brief template for 
       }
     }
   }
+});
+
+// #4711: the ledger storage bootstrap in the bundle, its SKILL entry, and the
+// docs copy. These are structural text checks that pin the rules; they never
+// run an authoring session. Only a live authoring run shows that the procedure
+// allocates a namespace and writes a ledger.
+const LEDGER_STORAGE_CONTRACT = 'skills/issue-authoring/references/contract.md';
+const LEDGER_STORAGE_SKILL = 'skills/issue-authoring/SKILL.md';
+const LEDGER_STORAGE_DOCS = 'docs/issue-authoring-skill.md';
+const LEDGER_STORAGE_END = '\n## Mechanical pre-publish gate';
+const LEDGER_STORAGE_CASES = [
+  '**Owned and unchanged.**',
+  '**Owned but edited.**',
+  '**Missing (lost).**',
+  '**Unowned.**',
+  '**Replaced.**',
+  '**Linked leaf.**',
+  '**Linked parent.**',
+  '**Partial first ledger.**',
+  '**Rename to the issue number.**',
+  '**A review that cannot finish.**',
+];
+
+// Returns the subsection body after its heading line, so the two copies can be
+// compared even though the docs copy nests it one level deeper.
+function ledgerStorageSection(path: string, heading: string): string {
+  return extractSection(readText(path), heading, LEDGER_STORAGE_END).slice(
+    heading.length,
+  );
+}
+
+test('issue-authoring contract defines ledger storage verdicts, allocation, and every ownership case (#4711)', () => {
+  const section = ledgerStorageSection(
+    LEDGER_STORAGE_CONTRACT,
+    '### Ledger storage\n',
+  );
+  const text = normalizeWhitespace(section);
+  for (const verdict of [
+    'Supplied verified storage',
+    'No previously supplied allocation',
+    'Unsafe, conflicting, or unreadable storage',
+  ]) {
+    assert.ok(text.includes(verdict), `missing verdict: ${verdict}`);
+  }
+  for (const label of LEDGER_STORAGE_CASES) {
+    assert.ok(section.includes(label), `missing ownership case: ${label}`);
+  }
+  // Allocation is exclusive: a non-recursive mkdir, and `mkdir -p` appears only
+  // in the sentence that forbids it.
+  assert.match(
+    text,
+    /a non-recursive `mkdir` that fails when the name already exists, never `mkdir -p`/,
+  );
+  assert.equal(section.match(/mkdir -p/g)?.length, 1);
+  assert.match(text, /exclusive creation/);
+  assert.match(text, /mkdir -m 700/);
+  // Nothing is deleted, recursed into, adopted, or registered.
+  assert.match(
+    text,
+    /never deletes anything, never recurses into a directory, and never adopts an entry this session did not create/,
+  );
+  assert.match(
+    text,
+    /adds no mandatory durable session registry, no automatic deletion, and no operator recovery gate/,
+  );
+});
+
+test('ledger storage needs no orchestrator, environment variable, helper, or session ID (#4711)', () => {
+  const text = normalizeWhitespace(
+    ledgerStorageSection(LEDGER_STORAGE_CONTRACT, '### Ledger storage\n'),
+  );
+  assert.match(
+    text,
+    /no orchestrator, no particular environment variable, no helper package, and no stable harness session ID/,
+  );
+  assert.match(text, /instructions-only and same-response self-critique runs/);
+});
+
+test('ledger rules keep namespaces, rejection carry-forward, and lost-ledger semantics in bundle and docs (#4711)', () => {
+  for (const path of [LEDGER_STORAGE_CONTRACT, LEDGER_STORAGE_DOCS]) {
+    const text = normalizeWhitespace(readText(path));
+    for (const needle of [
+      'keep a findings ledger in the namespace that [Ledger storage](#ledger-storage) allocates',
+      'No two drafts or concurrent workers share a ledger file.',
+      'The ledger is never written to the repository or to a marker.',
+      'If the namespace or the ledger is lost, for example after a restart, the ledger is empty and the review runs as it does without one.',
+      'For each `rejected` entry that has evidence, add one string',
+    ]) {
+      assert.ok(text.includes(needle), `${path}: missing "${needle}"`);
+    }
+    assert.doesNotMatch(text, /session scratchpad/);
+  }
+});
+
+test('SKILL entry carries the ledger storage summary and link for instructions-only runs (#4711)', () => {
+  const skill = normalizeWhitespace(readText(LEDGER_STORAGE_SKILL));
+  for (const needle of [
+    '## Findings ledger storage',
+    '[Ledger storage](references/contract.md#ledger-storage)',
+    '[Findings ledger storage](#findings-ledger-storage)',
+    "never reuse another session's namespace",
+    'Instructions-only and same-response self-critique runs follow the same procedure; no orchestrator, environment variable, or helper is needed.',
+  ]) {
+    assert.ok(skill.includes(needle), `SKILL.md: missing "${needle}"`);
+  }
+  assert.doesNotMatch(skill, /session scratchpad/);
+});
+
+test('docs copy mirrors the ledger storage subsection and separates structural checks from a live run (#4711)', () => {
+  const contract = normalizeWhitespace(
+    ledgerStorageSection(LEDGER_STORAGE_CONTRACT, '### Ledger storage\n'),
+  );
+  const docs = normalizeWhitespace(
+    ledgerStorageSection(LEDGER_STORAGE_DOCS, '#### Ledger storage\n'),
+  );
+  assert.ok(
+    docs.startsWith(contract),
+    'the docs copy must hold the contract subsection verbatim',
+  );
+  assert.match(docs, /Structural checks and a live run differ/);
+  assert.match(docs, /they never run an authoring session/);
 });
