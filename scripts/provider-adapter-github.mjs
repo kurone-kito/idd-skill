@@ -1257,6 +1257,13 @@ function listOpenChangeRequestClosingIssueNumbers(deps, owner, repo, limit) {
         record?.closingIssuesReferences,
         label,
       );
+      if (refs.hasNextPage && !refs.endCursor) {
+        // Reject a missing cursor before the fallback read, which ignores this
+        // page's cursor, so a malformed page cannot be accepted as complete.
+        throw new Error(
+          `${label}: pull request #${pullNumber} reported hasNextPage without endCursor`,
+        );
+      }
       const pullRefs = refs.hasNextPage
         ? fetchChangeRequestClosingIssueReferences(
             deps,

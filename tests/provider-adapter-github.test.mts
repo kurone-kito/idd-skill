@@ -3838,6 +3838,28 @@ test('listIssueNumbersClosedByOpenChangeRequests fails on a malformed page inste
       },
       /hasNextPage with no nodes/,
     ],
+    [
+      'inner closing-reference page with hasNextPage and no cursor',
+      {
+        data: {
+          repository: {
+            pullRequests: {
+              nodes: [
+                {
+                  number: 1001,
+                  closingIssuesReferences: {
+                    nodes: [closingRefNode(10)],
+                    pageInfo: { hasNextPage: true, endCursor: null },
+                  },
+                },
+              ],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        },
+      },
+      /pull request #1001 reported hasNextPage without endCursor/,
+    ],
   ] as const;
   for (const [label, payload, pattern] of malformed) {
     const fake = ghClosingRefFake({
