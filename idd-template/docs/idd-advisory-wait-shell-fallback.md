@@ -948,8 +948,9 @@ The advisory-bot set that decides thread origin is the known review bots
 plus `IDD_ADVISORY_BOT_LOGINS` (comma-separated, the configured
 `advisoryBotLogins`); export it when the configuration lists bots beyond
 the defaults. A Bot-typed originating author also counts as advisory, so an
-unlisted bot fails closed. `IDD_AGENT_LOGINS` and
-`IDD_TRUSTED_MARKER_ACTORS` are read the same way.
+unlisted bot fails closed. The review-reply stamp that marks an IDD reply uses
+`IDD_MARKER_PREFIX` (default `idd-skill`, the canonical marker prefix).
+`IDD_AGENT_LOGINS` and `IDD_TRUSTED_MARKER_ACTORS` are read the same way.
 
 ```sh
 OWNER=$(gh repo view --json owner --jq '.owner.login')
@@ -1344,10 +1345,12 @@ MISSING_REGULAR=$(printf '%s\n' "${COMMENTS_JSON}" "${DISPOSITION_JSON}" | jq -s
 # alone decides the origin, so a later bot reply never flips a human thread.
 # presence_only: a human-origin thread with a later reply and no IDD-originated
 # reply. is_idd_reply approximates canonical isIddOriginatedThreadReply: a
-# review-reply stamp from any author, or an IDD-agent disposition, rejection
+# review-reply stamp with the configured prefix (IDD_MARKER_PREFIX, default
+# idd-skill) from any author, or an IDD-agent disposition, rejection
 # confirmation, or pending decision. Feedback activity is the later of
 # createdAt and lastEditedAt, so an edit after a disposition reopens the thread.
-MISSING_THREADS=$(printf '%s' "${THREADS_JSON}" | jq -rs --argjson agents "${IDD_AGENT_LOGIN_JSON}" --argjson advisory "${ADVISORY_TOKEN_JSON}" '
+MARKER_PREFIX="${IDD_MARKER_PREFIX:-idd-skill}"
+MISSING_THREADS=$(printf '%s' "${THREADS_JSON}" | jq -rs --argjson agents "${IDD_AGENT_LOGIN_JSON}" --argjson advisory "${ADVISORY_TOKEN_JSON}" --arg prefix "${MARKER_PREFIX}" '
   def author_login: (.author.login // .user.login // "");
   def advisory_token:
     (ascii_downcase
@@ -1362,17 +1365,27 @@ MISSING_THREADS=$(printf '%s' "${THREADS_JSON}" | jq -rs --argjson agents "${IDD
     and (has("lastEditedAt") and (.lastEditedAt == null))
     and ((.body | test("(^|\\n)\\*\\*Awaiting maintainer decision\\*\\*"; "i")) | not);
   def is_idd_reply:
-    (.body | test("<!--\\s*[a-z0-9][a-z0-9_-]*-review-reply\\s*-->"))
+    (.body | test("<!--\\s*" + $prefix + "-review-reply\\s*-->"))
     or (is_idd_agent
       and (.body | (test("^\\*\\*(Accepted|Rejected)[.!:]?\\*\\*")
         or startswith("**Rejection confirmed by maintainer**")
         or test("(^|\\n)\\*\\*Awaiting maintainer decision\\*\\*"; "i"))));
-  def latest_feedback:
-    [.comments.nodes[] | select(is_disp | not) | ([.createdAt, (.lastEditedAt // "")] | max)]
+  # A rejection confirmation settles a thread only once the thread is resolved
+  # (canonical hasFreshDisposition with isRejectionConfirmedDisposition).
+  def is_rejection_confirmed:
+    (.body | startswith("**Rejection confirmed by maintainer**"))
+    and is_idd_agent
+    and (has("lastEditedAt") and (.lastEditedAt == null))
+    and ((.body | test("(^|\\n)\\*\\*Awaiting maintainer decision\\*\\*"; "i")) | not);
+  def counts_as_disp($res):
+    is_disp or ($res and is_rejection_confirmed);
+  def latest_feedback($res):
+    [.comments.nodes[] | select(counts_as_disp($res) | not) | ([.createdAt, (.lastEditedAt // "")] | max)]
     | if length == 0 then null else max end;
   def has_fresh_disp:
-    latest_feedback as $fb
-    | .comments.nodes | any(is_disp and ($fb == null or .createdAt > $fb));
+    (.isResolved // false) as $res
+    | latest_feedback($res) as $fb
+    | .comments.nodes | any(counts_as_disp($res) and ($fb == null or .createdAt > $fb));
   # A Bot-typed originating author is advisory even when no list names it. That
   # fails closed for an unconfigured bot (canonical would call it human).
   def is_advisory_origin:

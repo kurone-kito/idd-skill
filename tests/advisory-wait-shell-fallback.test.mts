@@ -2504,3 +2504,45 @@ test('differential: an ordinary reply that mentions the no-find phrase still cle
     0,
   );
 });
+
+test('differential: a rejection confirmation clears a resolved advisory thread only (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  const thread = (isResolved: boolean) => ({
+    isResolved,
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        COPILOT_THREAD_FINDING,
+        f2ThreadComment(
+          AGENT_LOGIN,
+          '**Rejection confirmed by maintainer** — agreed',
+          F2_CASE_TIME_2,
+        ),
+      ],
+    },
+  });
+  assertF2Parity({ threads: [thread(true)] }, 0, 0);
+  assertF2Parity({ threads: [thread(false)] }, 0, 1);
+});
+
+test('differential: a review-reply stamp with another prefix is not an IDD reply (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      threads: [
+        f2Thread([
+          f2ThreadComment('human-reviewer', 'please rename', F2_CASE_TIME_1),
+          f2ThreadComment(
+            'someone-else',
+            'done <!-- other-review-reply -->',
+            F2_CASE_TIME_2,
+          ),
+        ]),
+      ],
+    },
+    0,
+    0,
+  );
+});
