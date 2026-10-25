@@ -2219,8 +2219,9 @@ export function renderCliUsageError(error: unknown): {
     return {
       error: message,
       hint:
-        'pass --claim-issue <issue-number> (with --claim-id), or --claimless ' +
-        'for a PR with no closingIssuesReferences',
+        'pass --claim-issue <issue-number> and --claim-id for an active claim, ' +
+        'even when closingIssuesReferences is empty (#4697); use --claimless only ' +
+        'for a verified PR with no active IDD claim',
     };
   }
   return { error: message };
@@ -2480,12 +2481,15 @@ function printHelp(): void {
                     AND the trusted base ref has no
                     .github/workflows/idd-advisory-convergence.yml. Otherwise the
                     check stays required.
-  --claimless      skip claim fetch/revalidation (#2017). For a PR whose
-                    closingIssuesReferences is empty, or (#3328) one that
+  --claimless      skip claim fetch/revalidation (#2017); use only for a
+                    verified PR with no active IDD claim, such as a no-issue
+                    PR (closingIssuesReferences empty) or (#3328) one that
                     carries a valid, trusted, unedited <!-- idd-out-of-loop:
                     ... reason:bootstrap ... --> marker naming this PR and
-                    whose closing issue(s) have no active claim; cannot
-                    combine with --claim-issue or --claim-id.
+                    whose closing issue(s) have no active claim. Empty
+                    closingIssuesReferences alone (#4697) does not establish
+                    that an active claim is absent; cannot combine with --claim-issue
+                    or --claim-id.
                     Claim-ownership in the report is the not-applicable /
                     unclaimed shape.
   --closing-issues <n>[,<n>...]  (#3298) the deliberate multi-issue closing

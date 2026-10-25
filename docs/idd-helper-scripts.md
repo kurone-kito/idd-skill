@@ -7481,13 +7481,19 @@ reflexively as any other CLI option.
   nonce was recorded for the active claim, which stays backward
   compatible), and
   `--trusted-marker-logins "<trusted-login-1>,<trusted-login-2>"`.
-  `--claimless` (#2017) is the no-issue alternative: it cannot combine
-  with `--claim-issue` or `--claim-id`, and it is honored when the PR's
-  `closingIssuesReferences` is empty, or (kurone-kito/idd-skill#3328)
-  when the PR carries a valid, trusted, unedited out-of-loop marker --
-  see the [Out-of-loop marker contract](#out-of-loop-marker-contract)
-  above (otherwise fail closed and pass `--claim-issue`). It skips
-  claim fetch/revalidation and emits
+  `--claimless` (#2017) is the no-claim alternative: use it only after
+  verifying that the PR has no active IDD claim, such as a no-issue PR
+  (`closingIssuesReferences` empty) or (kurone-kito/idd-skill#3328) a PR
+  with a valid, trusted, unedited out-of-loop marker whose linked issue(s)
+  have no active claim -- see the
+  [Out-of-loop marker contract](#out-of-loop-marker-contract) above. An
+  empty `closingIssuesReferences` field alone does not establish that a PR
+  is unclaimed: on a non-default base branch, a PR for an active claimed
+  issue can have no closing references (#4697). For such a PR, pass the
+  active claim's `--claim-issue` and `--claim-id` even when the field is
+  empty, plus `--nonce` whenever one was recorded. `--claimless` cannot
+  combine with `--claim-issue` or `--claim-id`; it skips claim
+  fetch/revalidation and emits
   the not-applicable / unclaimed ownership shape (claim-id `none`); CI,
   review, advisory, thread, and branch-currency gates still run.
   `idd-merge-execute` also requires `--claim-id` (or the deprecated
@@ -7497,6 +7503,33 @@ reflexively as any other CLI option.
   below; it must include `--claim-issue`'s own number and cannot
   combine with `--claimless`. Omit it for the ordinary single-issue
   case, where the claimed issue alone is the deliberate set.
+
+#### Readiness branch fixture (#4697)
+
+Suppose the live default branch is `main`, effective policy sets
+`developmentBranch` to `release/1.x`, issue `#123` has an active claim, and
+its PR is `#456`:
+
+Compare the live base and default for D3.5 with
+`gh pr view 456 --json baseRefName --jq '.baseRefName'` and
+`gh repo view --json defaultBranchRef --jq '.defaultBranchRef.name'`.
+
+- **Create and resume on the development branch**: create with
+  `gh pr create --base release/1.x ...`; on resume, require
+  `gh pr view 456 --json baseRefName --jq '.baseRefName'` to return
+  `release/1.x`. Run readiness with
+  `--pr 456 --claim-issue 123 --claim-id "$CLAIM_ID" --nonce "$NONCE"`
+  plus the usual trusted-marker arguments, even when closing references are
+  empty. D3.5 is skipped entirely because this base is not the live
+  default. After F3, revalidate the claim and explicitly close with
+  `gh issue close 123 --comment "Merged via #456."` per F4.
+- **Create and resume on the default branch**: when policy selects `main`
+  (or `developmentBranch` is absent), create with `gh pr create --base main
+  ...` and require the resumed PR base to equal `main`. Use the same
+  claim-bound readiness arguments. D3.5 verifies the closing keyword and exact
+  closing set, including the existing async-registration wait; GitHub closes
+  the issue on merge.
+
 - Stable contract:
   [`pre-merge-readiness.schema.json`][pre-merge-readiness-schema]
 - Stable sections consumed by the instructions: `reviewCurrency`,
