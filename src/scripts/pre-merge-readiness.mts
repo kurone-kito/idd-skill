@@ -2220,7 +2220,8 @@ export function renderCliUsageError(error: unknown): {
       error: message,
       hint:
         'pass --claim-issue <issue-number> and --claim-id for an active claim, ' +
-        'even when closingIssuesReferences is empty (#4697); use --claimless only ' +
+        'plus --nonce <token> if that claim has a recorded nonce, even when ' +
+        'closingIssuesReferences is empty (#4697); use --claimless only ' +
         'for a verified PR with no active IDD claim',
     };
   }
