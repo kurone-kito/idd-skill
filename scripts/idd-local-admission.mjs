@@ -78,7 +78,7 @@ const ACQUIRED_LINE = 'acquired\n';
  * it until every live member of the supervised process group has exited.
  */
 const ACQUIRED_WRAPPER =
-  '"$1" "$2" "$3" "$4" "$5" "$6"; flock_status=$?; if [ "$flock_status" -ne 0 ]; then exit "$flock_status"; fi; trap ":" INT TERM; printf "acquired\\n" >&4; exec 4>&-; process_state_tool=$7; node_path=$8; guardian_script=$9; shift 9; "$@" 3>&-; command_status=$?; while :; do "$node_path" -e "$guardian_script" "$$" "$process_state_tool" & guardian_pid=$!; while :; do wait "$guardian_pid"; guardian_status=$?; if ! kill -0 "$guardian_pid" 2>/dev/null; then break; fi; done; if [ "$guardian_status" -eq 0 ]; then break; fi; printf "local-admission: process-group guardian did not start; keeping the validation slot held\\n" >&2; sleep 1; done; exit "$command_status"';
+  '"$1" "$2" "$3" "$4" "$5" "$6"; flock_status=$?; if [ "$flock_status" -ne 0 ]; then exit "$flock_status"; fi; trap ":" INT TERM; printf "acquired\\n" >&4; exec 4>&-; process_state_tool=$7; node_path=$8; guardian_script=$9; shift 9; (exec "$@" 3>&-); command_status=$?; while :; do "$node_path" -e "$guardian_script" "$$" "$process_state_tool" & guardian_pid=$!; while :; do wait "$guardian_pid"; guardian_status=$?; if ! kill -0 "$guardian_pid" 2>/dev/null; then break; fi; done; if [ "$guardian_status" -eq 0 ]; then break; fi; printf "local-admission: process-group guardian did not start; keeping the validation slot held\\n" >&2; sleep 1; done; exit "$command_status"';
 /**
  * This guardian shares the supervised process group and keeps the inherited
  * lock descriptor until every live member except the wrapper has left it. Its

@@ -911,6 +911,20 @@ test('a command that cannot be found exits 127 after the lock is taken', {
   assert.equal(result.status, 127);
 });
 
+test('shell builtins are not executed as wrapper commands', {
+  skip: !REAL_LOCK,
+}, () => {
+  const h = makeHarness();
+  for (const command of [['cd', makeWorkDir()], ['exit']]) {
+    const result = runBinSync(['--', ...command], makeWorkDir(), h.env);
+    assert.equal(
+      result.status,
+      127,
+      `expected ${command[0]} to use direct exec`,
+    );
+  }
+});
+
 test('an admitted command sees IDD_LOCAL_ADMISSION=1, and a set variable skips the lock', {
   skip: !REAL_LOCK,
 }, () => {
@@ -2217,6 +2231,7 @@ test('a detached descendant cannot retain the validation slot', {
     h.env,
   );
   let daemonPid: number | undefined;
+  let next: ReturnType<typeof runBin> | undefined;
   try {
     assert.equal((await first.done).status, 0);
     await waitFor(() => existsSync(ready));
@@ -2230,7 +2245,7 @@ test('a detached descendant cannot retain the validation slot', {
     assert.equal(flockStatus(join(h.state, LOCK_RELATIVE)), 0);
 
     const nextScript = `require('node:fs').writeFileSync(${JSON.stringify(nextReady)}, 'started');`;
-    const next = runBin(
+    next = runBin(
       ['--', process.execPath, '-e', nextScript],
       makeWorkDir(),
       h.env,
@@ -2249,6 +2264,14 @@ test('a detached descendant cannot retain the validation slot', {
     }
     if (daemonPid !== undefined) {
       await stopProcess(daemonPid, stopFile, exitFile);
+    }
+    if (
+      next !== undefined &&
+      next.child.exitCode === null &&
+      next.child.signalCode === null
+    ) {
+      next.child.kill('SIGTERM');
+      await next.done;
     }
   }
 });
