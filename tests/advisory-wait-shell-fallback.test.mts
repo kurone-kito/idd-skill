@@ -2955,3 +2955,28 @@ test('differential: a closing fence may be longer than its opener (#4696)', {
     0,
   );
 });
+
+test('differential: a tilde fence masks a pending marker, and a backtick line inside it does not close it (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 8401,
+          login: 'coderabbitai[bot]',
+          body: 'nit: show the example',
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 8402,
+          login: AGENT_LOGIN,
+          body: '**Accepted** — example:\n~~~\n```\n**Awaiting maintainer decision** inside\n~~~',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+    },
+    0,
+    0,
+  );
+});
