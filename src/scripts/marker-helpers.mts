@@ -681,6 +681,9 @@ export function resolveScopeOverrunEvidence(options: {
       if (comment?.lastEditedAt !== null) {
         return scopeOverrunResolution('invalid', 'record-edited-or-unknown');
       }
+      if (!scopeOverrunCommentOrder(comment)) {
+        return scopeOverrunResolution('invalid', 'record-malformed');
+      }
       const record = parseScopeOverrunRecordComment(body, markerPrefix);
       if (!record) {
         return scopeOverrunResolution('invalid', 'record-malformed');
@@ -701,6 +704,9 @@ export function resolveScopeOverrunEvidence(options: {
       }
       if (comment?.lastEditedAt !== null) {
         return scopeOverrunResolution('invalid', 'decision-edited-or-unknown');
+      }
+      if (!scopeOverrunCommentOrder(comment)) {
+        return scopeOverrunResolution('invalid', 'decision-malformed');
       }
       const firstLine = body.split(/\r?\n/, 1)[0];
       const match = firstLine.match(
@@ -797,7 +803,7 @@ export function resolveScopeOverrunEvidence(options: {
   }
   if (decisionHeadSha !== record.headSha) {
     return scopeOverrunResolution(
-      'invalid',
+      'pending',
       'decision-head-mismatch',
       record,
       decisionHeadSha,

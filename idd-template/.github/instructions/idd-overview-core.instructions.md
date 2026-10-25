@@ -105,10 +105,10 @@ Repository-local actor policy and any forced-handoff settings live in
 
 ## Scope-overrun comment attribution
 
-On a scope-overrun issue, append the documented self-reported
-`idd-agent-authored` suffix to every free-form issue comment. Follow the
-[scope-overrun evidence marker](../../docs/idd-helper-scripts.md#scope-overrun-evidence-marker)
-rule; workers never post the owner's decision.
+If B3 or push validation detects an over-limit candidate set, or a
+`scope-overrun` record exists, suffix free-form comments with
+`idd-agent-authored`. Exempt operational markers and owner decisions. See
+[the marker contract](../../docs/idd-helper-scripts.md#scope-overrun-evidence-marker).
 
 ## Payload-served placeholders
 

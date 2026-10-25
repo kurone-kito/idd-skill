@@ -5305,6 +5305,9 @@ the effort value observed at that time, and the canonical candidate-file set.
 The record does not reread the ordinary issue effort marker later, so an edit
 to that marker cannot rewrite the snapshot.
 
+This change does not invoke the helper automatically; the detecting session
+must run it explicitly. D2/F2 caller wiring is tracked by issue `#4676`.
+
 ```sh
 node scripts/post-idd-marker.mjs --type scope-overrun --target issue <issue> \
   --agent-id <agent> --effort <S|M|L> \
@@ -5354,8 +5357,11 @@ followed by post-push records only when issue, effort, candidate files, PR
 number, and branch stay the same. If the pushed head changes, the newest
 append-only record by GitHub's `createdAt` timestamp and numeric comment ID is
 active; earlier records remain for audit. A new head needs a new trusted-owner
-decision for that exact SHA; the previous decision does not carry forward. If
-GitHub ordering data is missing or ambiguous, multiple heads remain conflicting
+decision for that exact SHA; the previous decision does not carry forward, and
+an older decision leaves the result `pending` for a decision on the new head.
+Every record and decision requires GitHub `createdAt` and a positive numeric
+comment ID; missing ordering metadata is incomplete evidence and returns
+`invalid`. If ordering data is ambiguous, multiple heads remain conflicting
 and return `invalid`. This lets review-fix pushes record a new head without
 turning an earlier approval into approval of new code, while preserving a
 fail-closed result when the append order cannot be established. The dead-end
@@ -5368,7 +5374,7 @@ The owner decision is a separate comment whose exact first line is
 `Scope decision: accept head <full 40-character SHA>`. A worker never writes
 this decision. When an issue has detected or recorded scope-overrun evidence,
 append this self-reported suffix to every free-form comment you post there.
-Do not append it to operational-marker comments:
+Do not append it to operational-marker or owner-decision comments:
 
 ```markdown
 <!-- idd-agent-authored: {agent-id} -->

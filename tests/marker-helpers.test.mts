@@ -12,6 +12,7 @@ const OTHER_HEAD = 'b'.repeat(40);
 const PREFIX = 'idd-skill';
 const TRUSTED = ['kurone-kito'];
 const FILES = ['src/z.mts', 'src/a.mts'];
+let nextEvidenceId = 1;
 
 function prePushRecord(files = FILES): string {
   return renderScopeOverrunRecordComment({
@@ -45,13 +46,15 @@ function evidenceComment(
     createdAt?: string | null;
   } = {},
 ) {
+  const id = nextEvidenceId++;
   return {
     body,
     authorLogin: overrides.authorLogin ?? 'kurone-kito',
-    ...(overrides.id === undefined ? {} : { id: overrides.id }),
-    ...(overrides.createdAt === undefined
-      ? {}
-      : { createdAt: overrides.createdAt }),
+    id: overrides.id === undefined ? id : overrides.id,
+    createdAt:
+      overrides.createdAt === undefined
+        ? '2026-10-24T18:00:00Z'
+        : overrides.createdAt,
     lastEditedAt:
       overrides.lastEditedAt === undefined ? null : overrides.lastEditedAt,
   };
@@ -241,6 +244,20 @@ test('scope-overrun fails closed for malformed, edited, or conflicting evidence'
   });
   assert.equal(edited.reason, 'record-edited-or-unknown');
 
+  const editedDecision = resolveScopeOverrunEvidence({
+    comments: [
+      evidenceComment(postPushRecord()),
+      evidenceComment(`Scope decision: accept head ${HEAD}`, {
+        lastEditedAt: '2026-10-24T18:00:00Z',
+      }),
+    ],
+    markerPrefix: PREFIX,
+    trustedMarkerLogins: TRUSTED,
+    issueNumber: ISSUE,
+    currentHeadSha: HEAD,
+  });
+  assert.equal(editedDecision.reason, 'decision-edited-or-unknown');
+
   const conflictingRecord = resolveScopeOverrunEvidence({
     comments: [
       evidenceComment(prePushRecord()),
@@ -255,8 +272,14 @@ test('scope-overrun fails closed for malformed, edited, or conflicting evidence'
   const conflictingDecision = resolveScopeOverrunEvidence({
     comments: [
       evidenceComment(postPushRecord()),
-      evidenceComment(`Scope decision: accept head ${HEAD}`),
-      evidenceComment(`Scope decision: accept head ${OTHER_HEAD}`),
+      evidenceComment(`Scope decision: accept head ${HEAD}`, {
+        id: 250,
+        createdAt: '2026-10-24T18:00:00Z',
+      }),
+      evidenceComment(`Scope decision: accept head ${OTHER_HEAD}`, {
+        id: 250,
+        createdAt: '2026-10-24T18:00:00Z',
+      }),
     ],
     markerPrefix: PREFIX,
     trustedMarkerLogins: TRUSTED,
@@ -264,6 +287,30 @@ test('scope-overrun fails closed for malformed, edited, or conflicting evidence'
     currentHeadSha: HEAD,
   });
   assert.equal(conflictingDecision.reason, 'decision-conflict');
+});
+
+test('scope-overrun rejects incomplete GitHub ordering metadata', () => {
+  for (const missing of [{ id: null }, { id: 0 }, { createdAt: null }]) {
+    const record = resolveScopeOverrunEvidence({
+      comments: [evidenceComment(postPushRecord(), missing)],
+      markerPrefix: PREFIX,
+      trustedMarkerLogins: TRUSTED,
+      issueNumber: ISSUE,
+    });
+    assert.equal(record.reason, 'record-malformed');
+
+    const decision = resolveScopeOverrunEvidence({
+      comments: [
+        evidenceComment(postPushRecord()),
+        evidenceComment(`Scope decision: accept head ${HEAD}`, missing),
+      ],
+      markerPrefix: PREFIX,
+      trustedMarkerLogins: TRUSTED,
+      issueNumber: ISSUE,
+      currentHeadSha: HEAD,
+    });
+    assert.equal(decision.reason, 'decision-malformed');
+  }
 });
 
 test('scope-overrun decision cannot accept a pre-push record or a different recorded head', () => {
@@ -289,6 +336,7 @@ test('scope-overrun decision cannot accept a pre-push record or a different reco
     issueNumber: ISSUE,
     currentHeadSha: OTHER_HEAD,
   });
+  assert.equal(mismatchedDecision.status, 'pending');
   assert.equal(mismatchedDecision.reason, 'decision-head-mismatch');
 });
 
@@ -365,18 +413,18 @@ test('scope-overrun tolerates identical duplicate evidence', () => {
   assert.equal(result.status, 'accepted');
 });
 
-test('scope-overrun append-only head revisions require a fresh exact-head decision', () => {
+test('scope-overrun uses numeric comment IDs to order same-time head revisions', () => {
   const firstHead = evidenceComment(postPushRecord(HEAD), {
     id: 100,
     createdAt: '2026-10-24T18:00:00Z',
   });
-  const revisedHead = evidenceComment(postPushRecord(OTHER_HEAD), {
-    id: 101,
-    createdAt: '2026-10-24T18:01:00Z',
-  });
   const oldDecision = evidenceComment(`Scope decision: accept head ${HEAD}`, {
+    id: 101,
+    createdAt: '2026-10-24T18:00:00Z',
+  });
+  const revisedHead = evidenceComment(postPushRecord(OTHER_HEAD), {
     id: 102,
-    createdAt: '2026-10-24T18:02:00Z',
+    createdAt: '2026-10-24T18:00:00Z',
   });
   const pending = resolveScopeOverrunEvidence({
     comments: [firstHead, oldDecision, revisedHead],
@@ -385,6 +433,7 @@ test('scope-overrun append-only head revisions require a fresh exact-head decisi
     issueNumber: ISSUE,
     currentHeadSha: OTHER_HEAD,
   });
+  assert.equal(pending.status, 'pending');
   assert.equal(pending.reason, 'decision-head-mismatch');
   assert.equal(
     pending.record?.kind === 'post-push' && pending.record.headSha,
@@ -409,11 +458,15 @@ test('scope-overrun append-only head revisions require a fresh exact-head decisi
   assert.equal(accepted.status, 'accepted');
 });
 
-test('scope-overrun changed heads without ordering evidence stay conflicting', () => {
+test('scope-overrun keeps conflicts with ambiguous comment ordering', () => {
+  const ambiguous = {
+    id: 200,
+    createdAt: '2026-10-24T18:00:00Z',
+  };
   const recordConflict = resolveScopeOverrunEvidence({
     comments: [
-      evidenceComment(postPushRecord(HEAD)),
-      evidenceComment(postPushRecord(OTHER_HEAD)),
+      evidenceComment(postPushRecord(HEAD), ambiguous),
+      evidenceComment(postPushRecord(OTHER_HEAD), ambiguous),
     ],
     markerPrefix: PREFIX,
     trustedMarkerLogins: TRUSTED,
@@ -425,8 +478,8 @@ test('scope-overrun changed heads without ordering evidence stay conflicting', (
   const decisionConflict = resolveScopeOverrunEvidence({
     comments: [
       evidenceComment(postPushRecord(HEAD)),
-      evidenceComment(`Scope decision: accept head ${HEAD}`),
-      evidenceComment(`Scope decision: accept head ${OTHER_HEAD}`),
+      evidenceComment(`Scope decision: accept head ${HEAD}`, ambiguous),
+      evidenceComment(`Scope decision: accept head ${OTHER_HEAD}`, ambiguous),
     ],
     markerPrefix: PREFIX,
     trustedMarkerLogins: TRUSTED,
