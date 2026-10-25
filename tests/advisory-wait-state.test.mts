@@ -1017,6 +1017,122 @@ test("the required-field lists match the schema's `required` array", () => {
   }
 });
 
+test('staleRequestRecovery stays claim-bound and validates its action contract', () => {
+  const schema = advisoryWaitStateSchema as {
+    required: string[];
+    properties: Record<
+      string,
+      {
+        required?: string[];
+        properties?: Record<string, { enum?: string[] }>;
+      }
+    >;
+  };
+  const staleRequestRecovery = schema.properties.staleRequestRecovery;
+  assert.ok(staleRequestRecovery);
+  assert.equal(schema.required.includes('staleRequestRecovery'), false);
+  assert.deepEqual(staleRequestRecovery.required, ['action', 'reason']);
+  assert.deepEqual(staleRequestRecovery.properties?.action?.enum, [
+    'attempt',
+    'cap-exhausted',
+    'not-applicable',
+  ]);
+
+  const valid = { action: 'attempt', reason: 'recovery-attempt-eligible' };
+  assert.deepEqual(
+    validate({ staleRequestRecovery: valid }, relaxedAdvisoryWaitStateSchema),
+    [],
+  );
+  assert.notDeepEqual(
+    validate(
+      { staleRequestRecovery: { reason: valid.reason } },
+      relaxedAdvisoryWaitStateSchema,
+    ),
+    [],
+  );
+  assert.notDeepEqual(
+    validate(
+      { staleRequestRecovery: { ...valid, action: 'unknown' } },
+      relaxedAdvisoryWaitStateSchema,
+    ),
+    [],
+  );
+
+  const standard = readFileSync(
+    join(REPO_ROOT, STANDARD_ADVISORY_WAIT_DOC),
+    'utf8',
+  );
+  const eligibility = standard.slice(
+    standard.indexOf('**Eligibility.**', standard.indexOf('AW3-S')),
+    standard.indexOf('**Bounded cycle**', standard.indexOf('AW3-S')),
+  );
+  const normalizedEligibility = eligibility.replace(/\s+/g, ' ');
+  assert.match(
+    normalizedEligibility,
+    /With `--claim-id`\/`--agent-id` set for the active claim, require/,
+  );
+  assert.match(
+    normalizedEligibility,
+    /schema-valid `staleRequestRecovery` and known `action`/,
+  );
+  assert.match(
+    normalizedEligibility,
+    /missing\/invalid evidence uses the existing fail-closed fallback\/hold before recovery or merge/,
+  );
+  assert.match(
+    normalizedEligibility,
+    /Without both, use the full budget and `"not-applicable"`\/`active-claim-not-provided`/,
+  );
+
+  const helperDocs = readFileSync(
+    join(REPO_ROOT, HELPER_REFERENCE_DOC),
+    'utf8',
+  );
+  const helperContract = helperDocs.slice(
+    helperDocs.indexOf('### Advisory-wait evidence'),
+    helperDocs.indexOf('### Caller mapping'),
+  );
+  const normalizedHelperContract = helperContract.replace(/\s+/g, ' ');
+  assert.match(
+    normalizedHelperContract,
+    /required with a schema-valid object and recognized `action`/,
+  );
+  assert.match(
+    normalizedHelperContract,
+    /incomplete or unknown evidence uses AW3-S's fail-closed fallback\/hold before recovery or merge/,
+  );
+});
+
+test('stale-request recovery cannot attempt when either claim argument is absent', () => {
+  const evidence = {
+    copilotPending: true,
+    copilotPendingCoversHead: false,
+    sameHeadMarkerPresent: false,
+  };
+  for (const options of [
+    { ...BASE_OPTIONS, claimId: '' },
+    { ...BASE_OPTIONS, agentId: '' },
+  ]) {
+    const copilotRecovery = buildCopilotRecoverySummary(
+      { comments: [], prHeadSha: SHA, lastCopilotCommit: '' },
+      options,
+    );
+    assert.equal(copilotRecovery.activeClaimProvided, false);
+    assert.equal(copilotRecovery.remainingBudget, copilotRecovery.cap);
+    assert.deepEqual(
+      evaluateStaleRequestRecoveryAction({
+        ...evidence,
+        remainingBudget: copilotRecovery.remainingBudget,
+        activeClaimProvided: copilotRecovery.activeClaimProvided,
+      }),
+      {
+        action: 'not-applicable',
+        reason: 'active-claim-not-provided',
+      },
+    );
+  }
+});
+
 // --- Copilot "wasn't able to review any files" decline (#4142) -----------
 // A declined head is terminal at once: no recovery marker, no clock anchor,
 // and no cap or window wait. Without a claim binding it still fails closed.

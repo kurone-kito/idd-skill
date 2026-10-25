@@ -250,11 +250,12 @@ the
 (default 2), not `REQUEST_CAP` (30) —
 [why two paths](../../docs/idd-design-rationale.md#aw3-s-vs-aw3-r-why-two-recovery-paths).
 
-**Eligibility.** Run `advisory-wait-state` with `--claim-id`/`--agent-id`
-set to the active claim (omitting either reads the budget as the full
-un-decremented cap — the classifier fails closed to
-`"not-applicable"`/`active-claim-not-provided`) and read
-`staleRequestRecovery`: `"not-applicable"` → ordinary handling
+**Eligibility.** With `--claim-id`/`--agent-id` set for the active
+claim, require schema-valid `staleRequestRecovery` and known `action`;
+missing/invalid evidence uses the existing fail-closed fallback/hold
+before recovery or merge. Without both, use the full budget and
+`"not-applicable"`/`active-claim-not-provided`. Then:
+`"not-applicable"` → ordinary handling
 unchanged; `"cap-exhausted"` → do **not** remove or re-request, handle
 like `CAP_EXHAUSTED` (`CAP_EXHAUSTED_ROUTE`); `"attempt"` → run the
 cycle below. Without helper runtime, derive the same decision from

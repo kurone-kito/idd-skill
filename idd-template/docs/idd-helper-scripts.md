@@ -6908,7 +6908,9 @@ cleanup script is in
   either flag leaves `copilotRecovery.state` at `NOT_TERMINAL` and makes
   the recovery-cycle budget read as the full un-decremented cap — always
   pass both when consulting `staleRequestRecovery` for a mutation
-  decision (see `idd-advisory-wait.instructions.md`'s `AW3-S`).
+  decision. It is then required with a schema-valid object and recognized
+  `action`; incomplete or unknown evidence uses AW3-S's fail-closed
+  fallback/hold before recovery or merge.
 - Optional `--wait <duration>` and `--poll-interval <duration>`
   (kurone-kito/idd-skill#4378): `--wait` (at most `PT8M`) makes the helper
   read the full state and, while `outcome` is `WAIT`, sleep and read again,
