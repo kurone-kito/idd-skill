@@ -3255,7 +3255,11 @@ test('fan-out scratchpad preflight provisions and recovers one session root (#46
     assert.match(text, /worker missing-parent guard/);
     assert.match(
       text,
-      /Verify outcome on live GitHub outside the worktree; set `verifiedAt`, append-time `recordedAt`, roster `workerHandle`, and applicable `reviewRounds`\. Validate and append with the profile-selected `idd-worker-report append --file <path>`, then dispose per table/,
+      /Verify outcome on live GitHub outside the worktree; set `verifiedAt`, append-time `recordedAt`, roster `workerHandle`, and applicable `reviewRounds`\. Validate and append with the profile-selected `idd-worker-report append --file <path>`, then dispose per table and mark the roster entry `disposed`\./,
+    );
+    assert.match(
+      text,
+      /mark `stalled`, and follow \[fan-out recovery\]\[fv\]\./,
     );
   }
 });

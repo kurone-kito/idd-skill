@@ -6,9 +6,8 @@ Requirements: [fan-out variant][fv] and
 
 ## 1. Activation
 
-A restarted session with a unique session-suffixed agent id skips this section.
-Any other restart neither activates fan-out nor refills: it follows
-recovery (section 2).
+A unique session-suffixed agent id skips activation on restart; all other
+restarts use section 2 recovery without refill.
 
 Activate fan-out only when all conditions hold:
 
@@ -23,8 +22,8 @@ Activate fan-out only when all conditions hold:
   request;
 - `GITHUB_ACTIONS` is not `true`.
 
-Otherwise, continue with idd-discover.instructions.md unchanged.
-Cap is per session, not host.
+Otherwise, use idd-discover.instructions.md unchanged. The cap is per
+session, not host.
 
 ## 2. Session scratchpad preflight and roster
 
@@ -34,34 +33,31 @@ stop on holds. It revalidates already-claimed/no-dispatch work without new
 claims or nonces. Derive worker paths from the verified root; keep the worker
 missing-parent guard.
 
-Track each worker's issue, claim, branch, handle, report path, and state
-(`running`, `reporting`, `disposed`, `stalled`). On restart, see
+Track each worker's issue, claim, branch, handle, report path, and lifecycle
+state. On restart, see
 [recovery](../../docs/idd-workflow.md#orchestrator-restart).
 
 ## 3. Dispatch
 
-1. Run Discover A0 through A4 Step 1.5 (A0-C runs once per Discover run,
-   before the first dispatch; refills skip it); survivors are the startable
-   candidates.
-2. Call the profile-selected `idd-worker-budget` with `--running
-   <count not disposed>` and `--startable <candidate count>`. Add
-   `--harness-limit <limit>` when the table gives this harness a numeric
-   limit. Its `slots` is the number to start now.
-3. If `slots` is `0`, go to section 4. Otherwise pick that many candidates with
-   `discover-shared-file-overlap`, passing survivors as `--issues`,
+1. Run Discover A0 through A4 Step 1.5; A0-C runs once before first dispatch
+   per Discover run, never during refills. Survivors are startable candidates.
+2. Call profile-selected `idd-worker-budget` with `--running <count not
+   disposed>` and `--startable <candidate count>`. Add `--harness-limit
+   <limit>` if the worker table sets one. Start its `slots`.
+3. If `slots` is `0`, go to section 4. Otherwise, pick that many survivors
+   with `discover-shared-file-overlap`, passing them as `--issues`,
    `--batch <slots>`, one `--in-flight` per entry not `disposed`, and
-   `--check-overlap`. When `discover.selectionDesync` is `session-offset`, also
-   pass `--desync-token` (generated at Discover entry) on every refill.
+   `--check-overlap`. For `session-offset`, pass the Discover-entry
+   `--desync-token` on every refill.
 4. For each pick in batch order, run A4.5, then the fresh-claim order in
-   idd-claim.instructions.md through claim verification only (worktree first;
-   B1 is the worker's). Start a worker with the delegation brief, a section 5
-   report request naming a per-worker report path, and the pre-created worktree
-   it reuses without B1. Record a `running` entry whose handle is the identifier
-   the start returned.
-5. A pick that fails A4.5, or A5 before the claim marker is posted, has its
-   worktree and branch removed (deleting its lock). A failure after the marker
-   is contested: follow idd-claim.instructions.md and keep its claim and
-   worktree. Either way no worker starts, so no entry exists.
+   idd-claim.instructions.md through verification only (worktree first; the
+   worker runs B1). Start it with the delegation brief, a section 5 report
+   request naming its report path, and the pre-created worktree it reuses
+   without B1. Record a `running` entry with the returned handle.
+5. A pre-marker A4.5/A5 failure removes its worktree and branch, including the
+   lock. A post-marker failure is contested: follow idd-claim.instructions.md
+   and keep its claim and worktree. Neither failure starts a worker or creates
+   an entry.
 6. Dispatched and failed picks leave `--issues` before a refill.
 
 ## 4. Waiting and refill
@@ -94,9 +90,10 @@ Track each worker's issue, claim, branch, handle, report path, and state
 Verify outcome on live GitHub outside the worktree; set `verifiedAt`,
 append-time `recordedAt`, roster `workerHandle`, and applicable
 `reviewRounds`. Validate and append with the profile-selected
-`idd-worker-report append --file <path>`, then dispose per table.
+`idd-worker-report append --file <path>`, then dispose per table and mark the
+roster entry `disposed`.
 Without a start handle or after verification/append failure, append nothing,
-mark `stalled`, and follow fan-out recovery.
+mark `stalled`, and follow [fan-out recovery][fv].
 
 ## 6. Worker span
 
