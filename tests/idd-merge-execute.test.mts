@@ -2698,3 +2698,145 @@ test('--apply through the real collector refuses to merge while the PR never nam
     namedGates.join(),
   );
 });
+
+// kurone-kito/idd-skill#4717: the claim-bound, off-head stale-request recovery
+// gate. The off-head report's latest Copilot review names a commit other than
+// HEAD, and the claim section carries both active-claim ids.
+const STALE_GATE = 'stale-request-recovery';
+const OFF_HEAD = '3333333333333333333333333333333333333333';
+const CLAIM_BOUND_ARGS = [...BASE_ARGS, '--agent-id', 'a-1'];
+
+function claimBoundReport(
+  staleRequestRecovery: unknown,
+  overrides: {
+    claim?: Record<string, unknown>;
+    lastCopilotCommit?: string;
+  } = {},
+): Record<string, unknown> {
+  const report: Record<string, unknown> = {
+    ...readyReport(),
+    claim: {
+      matchesExpectedClaim: true,
+      reason: 'match',
+      expectedClaimId: 'c-1',
+      expectedAgentId: 'a-1',
+      ...overrides.claim,
+    },
+    advisoryWait: {
+      f3Outcome: 'SATISFIED',
+      lastCopilotCommit: overrides.lastCopilotCommit ?? OFF_HEAD,
+    },
+  };
+  if (staleRequestRecovery !== undefined) {
+    report.staleRequestRecovery = staleRequestRecovery;
+  }
+  return report;
+}
+
+function staleGateOf(report: Record<string, unknown>) {
+  return evaluateMergeGates(report).find((b) => b.gate === STALE_GATE);
+}
+
+test('#4717: a claim-bound off-head attempt is not ready and never merges', () => {
+  const report = claimBoundReport({
+    action: 'attempt',
+    reason: 'recovery-attempt-eligible',
+  });
+  const gate = staleGateOf(report);
+  assert.ok(gate, 'the stale-request-recovery gate must fire');
+  assert.match(gate.detail, /attempt/);
+  const { deps, calls } = depsFor(report);
+  const { verdict, exitCode } = runMergeExecute(
+    [...CLAIM_BOUND_ARGS, '--apply'],
+    deps,
+  );
+  assert.equal(verdict.ready, false);
+  assert.equal(verdict.merged, false);
+  assert.deepEqual(calls.merged, []);
+  assert.notEqual(exitCode, 0);
+});
+
+test('#4717: a claim-bound off-head cap-exhausted holds and never merges', () => {
+  const report = claimBoundReport({
+    action: 'cap-exhausted',
+    reason: 'recovery-cap-exhausted',
+  });
+  const gate = staleGateOf(report);
+  assert.ok(gate, 'the stale-request-recovery gate must fire');
+  assert.match(gate.detail, /cap-exhausted/);
+  const { deps, calls } = depsFor(report);
+  const { verdict } = runMergeExecute([...CLAIM_BOUND_ARGS, '--apply'], deps);
+  assert.equal(verdict.ready, false);
+  assert.deepEqual(calls.merged, []);
+});
+
+test('#4717: a claim-bound off-head not-applicable keeps the ordinary F3 mapping and merges', () => {
+  const report = claimBoundReport({
+    action: 'not-applicable',
+    reason: 'not-pending',
+  });
+  assert.equal(staleGateOf(report), undefined);
+  assert.deepEqual(evaluateMergeGates(report), []);
+  const { deps, calls } = depsFor(report);
+  const { verdict } = runMergeExecute([...CLAIM_BOUND_ARGS, '--apply'], deps);
+  assert.equal(verdict.merged, true);
+  assert.deepEqual(calls.merged, [`994:${HEAD}`]);
+});
+
+// Each malformed shape: absent, a non-object, an incomplete object, an empty
+// reason, an extra field, and an unknown action. Each must fail closed.
+const MALFORMED_RECOVERY: Array<[string, unknown]> = [
+  ['absent', undefined],
+  ['a string', 'attempt'],
+  ['null', null],
+  ['an array', ['not-applicable', 'not-pending']],
+  ['only an action', { action: 'not-applicable' }],
+  ['an empty reason', { action: 'not-applicable', reason: '' }],
+  ['a whitespace reason', { action: 'not-applicable', reason: '   ' }],
+  [
+    'an extra field',
+    { action: 'not-applicable', reason: 'not-pending', extra: true },
+  ],
+  ['an unknown action', { action: 'retry', reason: 'x' }],
+  ['a non-string reason', { action: 'not-applicable', reason: 3 }],
+];
+
+for (const [label, value] of MALFORMED_RECOVERY) {
+  test(`#4717: a claim-bound off-head report with ${label} recovery evidence is not ready and never merges`, () => {
+    const report = claimBoundReport(value);
+    assert.ok(
+      staleGateOf(report),
+      `the stale-request-recovery gate must fire for ${label}`,
+    );
+    const { deps, calls } = depsFor(report);
+    const { verdict } = runMergeExecute([...CLAIM_BOUND_ARGS, '--apply'], deps);
+    assert.equal(verdict.ready, false);
+    assert.equal(verdict.merged, false);
+    assert.deepEqual(calls.merged, []);
+  });
+}
+
+test('#4717: an on-head report does not check the recovery object (decision 2)', () => {
+  const report = claimBoundReport(
+    { action: 'attempt', reason: 'recovery-attempt-eligible' },
+    { lastCopilotCommit: HEAD },
+  );
+  assert.equal(staleGateOf(report), undefined);
+  assert.deepEqual(evaluateMergeGates(report), []);
+});
+
+test('#4717: a claim-id-only run never requires the recovery object (decision 4, known residual)', () => {
+  const report = claimBoundReport(undefined, {
+    claim: { expectedAgentId: '' },
+  });
+  assert.equal(staleGateOf(report), undefined);
+  assert.deepEqual(evaluateMergeGates(report), []);
+});
+
+test('#4717: a claimless off-head run never requires the recovery object', () => {
+  const report = claimBoundReport(undefined, {
+    claim: { expectedClaimId: 'none', expectedAgentId: '' },
+  });
+  assert.equal(staleGateOf(report), undefined);
+  assert.deepEqual(evaluateMergeGates(report), []);
+});

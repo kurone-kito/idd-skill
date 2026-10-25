@@ -27,7 +27,10 @@ import {
   resolveProviderOutageTerminalWindowMinutes,
   SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
 } from './advisory-wait-policy.mts';
-import { buildCopilotRecoverySummary } from './advisory-wait-state.mts';
+import {
+  buildCopilotRecoverySummary,
+  evaluateStaleRequestRecoveryAction,
+} from './advisory-wait-state.mts';
 import { resolveAuthoringGuardPolicy } from './authoring-label-guard.mts';
 import { parseCanonicalIntegerOrNull, parseCliArgs } from './cli-args.mts';
 import type { CollaboratorPermissionCache } from './collaborator-permission.mts';
@@ -70,6 +73,7 @@ import type {
   PrClosingIssueClaimState,
   PrCommitPayload,
   PrLoopMembershipResult,
+  StaleRequestRecoveryEvidence,
   TrustedMarkerActorResolution,
 } from './protocol-helpers.mts';
 import {
@@ -450,6 +454,10 @@ export type PreMergeReadinessReport = ReturnType<
   // dispositionNoticeCommandHint). Declared here so a caller can read it
   // without a cast; the shared gate-summary type is unchanged.
   dispositionEvidence?: DispositionEvidenceWithHint;
+  // kurone-kito/idd-skill#4717: the claim-bound, off-head recovery object
+  // (see buildPreMergeReadinessSummary). Absent for claimless and claim-id-only
+  // runs, and for on-head reports.
+  staleRequestRecovery?: { action: string; reason: string };
   trustedMarkerActors: string[];
   trustedMarkerActorsSource: TrustedMarkerActorResolution['source'];
 };
@@ -1618,6 +1626,24 @@ export function collectPreMergeReadiness(
     }
   }
 
+  // kurone-kito/idd-skill#4717: the claim-bound stale-request recovery object is
+  // computed only when both active-claim arguments are supplied, the same
+  // predicate as copilotRecovery.activeClaimProvided, through the existing
+  // classifier (advisory-wait-state.mts). The builder injects this closure
+  // because protocol-helpers.mts cannot import that module.
+  const evaluateStaleRequestRecovery =
+    !args.claimless &&
+    args.expectedClaimId !== '' &&
+    args.expectedAgentId !== ''
+      ? (evidence: StaleRequestRecoveryEvidence) =>
+          evaluateStaleRequestRecoveryAction({
+            ...evidence,
+            remainingBudget: copilotRecovery.remainingBudget,
+            activeClaimProvided: copilotRecovery.activeClaimProvided,
+            copilotDeclinedHead,
+          })
+      : undefined;
+
   const summary = buildPreMergeReadinessSummary(
     {
       prHeadSha,
@@ -1684,6 +1710,7 @@ export function collectPreMergeReadiness(
       developmentBranchTarget,
       closingSet: closingSetEvidence,
       deferFollowUps,
+      evaluateStaleRequestRecovery,
       copilotUnavailable,
       // kurone-kito/idd-skill#2919: caller-precomputed by the enrichment
       // block above -- see its doc comment for the full rationale.

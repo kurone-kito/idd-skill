@@ -10406,6 +10406,100 @@ export const NEWER_ACTIVITY_HINT =
 function preMergeAsRecord(value) {
   return value && typeof value === 'object' ? value : {};
 }
+const STALE_REQUEST_RECOVERY_ACTIONS = [
+  'attempt',
+  'cap-exhausted',
+  'not-applicable',
+];
+/**
+ * kurone-kito/idd-skill#4717: validate the claim-bound stale-request recovery
+ * object against the nested contract in the advisory-wait-state schema: the
+ * object holds exactly `action` and `reason`, `action` is one of the three
+ * recognized values, and `reason` is non-empty. Anything else fails closed
+ * with a problem description.
+ */
+export function validateStaleRequestRecoveryEvidence(value) {
+  if (value === undefined) {
+    return { valid: false, problem: 'is absent' };
+  }
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return { valid: false, problem: 'is not an object' };
+  }
+  const keys = Object.keys(value).sort();
+  if (keys.length !== 2 || keys[0] !== 'action' || keys[1] !== 'reason') {
+    return {
+      valid: false,
+      problem: 'must hold exactly the action and reason fields',
+    };
+  }
+  const { action, reason } = value;
+  if (
+    typeof action !== 'string' ||
+    !STALE_REQUEST_RECOVERY_ACTIONS.includes(action)
+  ) {
+    return {
+      valid: false,
+      problem: `has an unrecognized action ${JSON.stringify(action)}`,
+    };
+  }
+  if (typeof reason !== 'string' || reason.trim() === '') {
+    return { valid: false, problem: 'has an empty reason' };
+  }
+  return {
+    valid: true,
+    action: action,
+  };
+}
+/**
+ * kurone-kito/idd-skill#4717: the stale-request recovery gate. Applies only
+ * to a claim-bound run (both `claim.expectedClaimId` and
+ * `claim.expectedAgentId` supplied, not the claimless `none` sentinel) on an
+ * off-head report (`advisoryWait.lastCopilotCommit` differs from
+ * `prHeadSha`), matching the Lite E1 contract. Every other run returns null:
+ * an on-head report keeps the `f3Outcome` gate alone, and a claim-id-only or
+ * claimless run never requires the object (a known residual; see the issue
+ * hold decisions 2 and 4).
+ */
+export function staleRequestRecoveryGateBlocker(report) {
+  const claim = preMergeAsRecord(report.claim);
+  const expectedClaimId = String(claim.expectedClaimId ?? '');
+  const expectedAgentId = String(claim.expectedAgentId ?? '');
+  const claimBound =
+    expectedClaimId !== '' &&
+    expectedClaimId !== 'none' &&
+    expectedAgentId !== '';
+  const advisoryWait = preMergeAsRecord(report.advisoryWait);
+  const prHeadSha = String(report.prHeadSha ?? '');
+  const offHead = String(advisoryWait.lastCopilotCommit ?? '') !== prHeadSha;
+  if (!claimBound || !offHead) {
+    return null;
+  }
+  const gate = 'stale-request-recovery';
+  const verdict = validateStaleRequestRecoveryEvidence(
+    report.staleRequestRecovery,
+  );
+  if (!verdict.valid) {
+    return {
+      gate,
+      detail: `staleRequestRecovery ${verdict.problem} on a claim-bound off-head run; the recovery evidence is required before readiness or merge`,
+    };
+  }
+  if (verdict.action === 'attempt') {
+    return {
+      gate,
+      detail:
+        'staleRequestRecovery.action is "attempt": the Copilot request for this off-head HEAD is unproven, so run the bounded AW3-S recovery through F2 first; do not merge',
+    };
+  }
+  if (verdict.action === 'cap-exhausted') {
+    return {
+      gate,
+      detail:
+        'staleRequestRecovery.action is "cap-exhausted": keep the cap-exhausted hold (CAP_EXHAUSTED_ROUTE); do not recover or merge',
+    };
+  }
+  return null;
+}
 /**
  * #4011: the setting path a global-only zero-required-check pass names in the
  * readiness output (`ci.allowedByPolicySetting`).
@@ -10589,6 +10683,13 @@ export function computePreMergeReadinessBlockers(report) {
       gate: 'advisory-wait',
       detail: `f3Outcome is "${f3Outcome}" (expected "SATISFIED")`,
     });
+  }
+  // kurone-kito/idd-skill#4717: the claim-bound, off-head stale-request
+  // recovery object. The shared rollup serves both readiness and
+  // idd-merge-execute, so `ready` and the merge call stay consistent.
+  const staleRequestRecoveryBlocker = staleRequestRecoveryGateBlocker(report);
+  if (staleRequestRecoveryBlocker !== null) {
+    blockers.push(staleRequestRecoveryBlocker);
   }
   // #1570: a settled-but-unreviewed Copilot request (`f3Outcome:
   // "SATISFIED"` once `copilotPending` goes `false`, per
@@ -12296,6 +12397,23 @@ export function buildPreMergeReadinessSummary(
   // the malformed evidence closed instead of it vanishing here.
   if (options.deferFollowUps !== undefined) {
     summary.deferFollowUps = options.deferFollowUps;
+  }
+  // kurone-kito/idd-skill#4717: the claim-bound recovery object is set before
+  // the rollup below, so the embedded `ready` already reflects it. Omitted when
+  // the caller injects no classifier; a malformed value is kept as-is so the
+  // blocker fails it closed.
+  if (options.evaluateStaleRequestRecovery !== undefined) {
+    summary.staleRequestRecovery = options.evaluateStaleRequestRecovery({
+      copilotPending: advisoryWait.copilotPending,
+      copilotPendingCoversHead: advisoryWait.copilotPendingCoversHead,
+      sameHeadMarkerPresent: advisoryWait.sameHeadMarkerPresent,
+      sameHeadRequestMarkerPresent: advisoryWait.sameHeadRequestMarkerPresent,
+      elapsedMinutes: advisoryWait.elapsedMinutes,
+      settledWindowMinutes: advisoryWait.settledWindowMinutes,
+      currentHeadReviewExists:
+        String(advisoryWait.lastCopilotCommit ?? '').toLowerCase() ===
+        prHeadSha,
+    });
   }
   // Top-level rollup so a consumer reads one `ready` boolean + `blockers[]`
   // instead of hand-ANDing ~8 nested gates (a dropped clause would fail open).
