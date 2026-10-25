@@ -2929,3 +2929,29 @@ test('differential: a closing fence with trailing text does not close the fence 
     0,
   );
 });
+
+test('differential: a closing fence may be longer than its opener (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  // A three-backtick block closed by four backticks ends before the top-level marker.
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 8301,
+          login: 'coderabbitai[bot]',
+          body: 'nit: show the example',
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 8302,
+          login: AGENT_LOGIN,
+          body: '**Accepted** — example:\n```\nsample\n````\n**Awaiting maintainer decision** live',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+    },
+    1,
+    0,
+  );
+});
