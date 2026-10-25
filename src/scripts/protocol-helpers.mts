@@ -2650,6 +2650,34 @@ export function isCodeRabbitLogin(login: string): boolean {
 export const CODERABBIT_SUMMARY_MARKER =
   '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->';
 
+// The one leading wrapper CodeRabbit emits ahead of its summary marker
+// (observed on kurone-kito/dotfiles PR 683, comment 6356207376). Matched
+// exactly, so an unknown wrapper version fails closed rather than being guessed
+// (#4701).
+export const CODERABBIT_GENERATED_WRAPPER_MARKER =
+  '<!-- coderabbit-ai-generated:v1 -->';
+
+// True when `text` opens with CodeRabbit's summary marker, directly or after
+// the observed generated wrapper and whitespace. Anchored to the leading region
+// only: a marker quoted in prose, a second wrapper, and a wrapper that follows
+// other text all fail to match. A wrapper placed after the summary marker is
+// not consulted at all, because the summary marker already leads the body.
+// Single-sourced so the planner's classifier, the disposition-evidence
+// predicate, and settlement agree (#4701).
+export function startsWithCodeRabbitSummaryMarker(text: string): boolean {
+  const trimmed = text.trimStart();
+  if (trimmed.startsWith(CODERABBIT_SUMMARY_MARKER)) {
+    return true;
+  }
+  if (!trimmed.startsWith(CODERABBIT_GENERATED_WRAPPER_MARKER)) {
+    return false;
+  }
+  return trimmed
+    .slice(CODERABBIT_GENERATED_WRAPPER_MARKER.length)
+    .trimStart()
+    .startsWith(CODERABBIT_SUMMARY_MARKER);
+}
+
 // #2161: CodeRabbit nests this inner marker inside a comment that also
 // starts with `CODERABBIT_SUMMARY_MARKER` when no review content exists
 // (billing failure, or a repository below the star-count manual-trigger
@@ -2805,7 +2833,7 @@ export function isCodeRabbitAlreadyReviewedAcknowledgement(
 export function isCodeRabbitCompletedReviewSummary(body: unknown): boolean {
   const text = String(body ?? '').trimStart();
   return (
-    text.startsWith(CODERABBIT_SUMMARY_MARKER) &&
+    startsWithCodeRabbitSummaryMarker(text) &&
     !CODERABBIT_SKIP_REVIEW_MARKER_RE.test(text) &&
     !CODERABBIT_REVIEW_PAUSED_MARKER_RE.test(text) &&
     !isCodeRabbitReviewInProgressSummary(text)
@@ -3813,7 +3841,7 @@ export function classifyRegularBotComment(
 
   const body = (comment.body ?? '').trimStart();
 
-  if (body.startsWith(CODERABBIT_SUMMARY_MARKER)) {
+  if (startsWithCodeRabbitSummaryMarker(body)) {
     // #3260: an in-progress or paused revision must never resolve, even
     // when an older "No actionable comments were generated" sentence (or a
     // stale matching disposition) is still present from the review this
@@ -6089,8 +6117,10 @@ export const PENDING_DECISION_THREAD_HINT =
 // #1122 CodeRabbit summary-walkthrough auto-disposition classifiers.
 //
 // The CodeRabbit summary walkthrough is a regular comment whose body starts with
-// `CODERABBIT_SUMMARY_MARKER`. Unlike a non-review notice it IS a completed
-// review, so it is dispositioned `**Accepted**` (never `**Rejected**`). The gate
+// `CODERABBIT_SUMMARY_MARKER`, or with the observed generated wrapper followed
+// by it (#4701). Unlike a non-review notice it IS a completed
+// review, so it is dispositioned `**Accepted**`, unless it also carries a
+// rate-limit or usage-limit notice, which the notice path `**Rejected**`s. The gate
 // scores it through its general updatedAt-aware 1:1 pairing, and CodeRabbit edits
 // the summary on each re-review, so the disposition-non-review-notices helper
 // re-dispositions the CURRENT summary per HEAD rather than carrying an old
@@ -6102,7 +6132,9 @@ export const PENDING_DECISION_THREAD_HINT =
 // any future bot in `REVIEW_SUMMARY_MARKERS_BY_BOT_IDENTITY`). Detection is
 // start-anchored on the exact single-sourced marker (after trimming leading
 // whitespace) so a comment that merely quotes a marker in prose is not
-// matched. The caller is expected to have already filtered by advisory-bot
+// matched. For CodeRabbit the marker may follow the observed generated
+// wrapper, per `startsWithCodeRabbitSummaryMarker` (#4701). The caller is
+// expected to have already filtered by advisory-bot
 // login (as every call site in this file and in
 // `disposition-non-review-notices.mts` does) -- this function only tells
 // apart a summary body from every other body. It does NOT imply the review
@@ -6125,7 +6157,11 @@ export const PENDING_DECISION_THREAD_HINT =
 export function isReviewSummaryComment(body: unknown): boolean {
   const text = String(body ?? '').trimStart();
   for (const [identity, marker] of REVIEW_SUMMARY_MARKERS_BY_BOT_IDENTITY) {
-    if (!text.startsWith(marker)) {
+    const startsWithMarker =
+      identity === 'coderabbitai'
+        ? startsWithCodeRabbitSummaryMarker(text)
+        : text.startsWith(marker);
+    if (!startsWithMarker) {
       continue;
     }
     if (

@@ -273,6 +273,29 @@ test('computeSecondaryAdvisoryReviewSettlement: genuine review at/after HEAD -> 
   });
 });
 
+// #4701: the observed generated wrapper ahead of the summary marker is the same
+// completed review for settlement, so it settles exactly like the unwrapped one.
+test('computeSecondaryAdvisoryReviewSettlement: wrapped genuine review at/after HEAD -> settled, not declined (#4701)', () => {
+  const result = computeSecondaryAdvisoryReviewSettlement(
+    [
+      comment(
+        'coderabbitai[bot]',
+        `<!-- coderabbit-ai-generated:v1 -->\n\n${CODERABBIT_SUMMARY}`,
+        '2026-09-02T12:05:00Z',
+      ),
+    ],
+    {
+      secondaryBotLogin: 'coderabbitai[bot]',
+      headCommittedAt: HEAD_COMMITTED_AT,
+    },
+  );
+  assert.deepEqual(result, {
+    settled: true,
+    settledAt: '2026-09-02T12:05:00Z',
+    declined: false,
+  });
+});
+
 test('computeSecondaryAdvisoryReviewSettlement: genuine review BEFORE HEAD (stale prior HEAD) -> not settled, not declined (still pending)', () => {
   const result = computeSecondaryAdvisoryReviewSettlement(
     [comment('coderabbitai[bot]', CODERABBIT_SUMMARY, '2026-09-02T11:00:00Z')],

@@ -22,8 +22,9 @@
 //
 // It also auto-dispositions the CodeRabbit summary walkthrough (#1122): a
 // completed-review regular comment that recurs on every autopilot PR and the
-// gate scores through its general updatedAt-aware 1:1 pairing. Unlike a notice it
-// is `**Accepted**` (not `**Rejected**`), and because CodeRabbit edits the summary
+// gate scores through its general updatedAt-aware 1:1 pairing. It is
+// `**Accepted**` unless it also carries a rate-limit or usage-limit notice, which
+// the notice path `**Rejected**`s instead. Because CodeRabbit edits the summary
 // each re-review the helper re-dispositions the CURRENT summary per HEAD by
 // timestamp (not a count carry-forward), so a stale acceptance can never mask a
 // finding folded into a later summary body.
