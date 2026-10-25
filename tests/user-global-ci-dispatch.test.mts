@@ -107,4 +107,20 @@ test('post-merge cleanup names exactly one full-SHA default, never the mutable m
     [CLEANUP_PINNED_COMMIT],
     'the cleanup workflow must name exactly one full-SHA default',
   );
+  const pinnedUrl = `https://codeload.github.com/kurone-kito/idd-skill/tar.gz/${CLEANUP_PINNED_COMMIT}`;
+  assert.equal(
+    text.split(pinnedUrl).length - 1,
+    2,
+    'the cleanup workflow must name the pinned archive once in its header and once in its SPEC default',
+  );
+});
+
+test('the helper-scripts doc names the same reviewed cleanup pin as the workflow (#4700)', () => {
+  const doc = readWorkflow('idd-template/docs/idd-helper-scripts.md');
+  assert.ok(
+    doc.includes(
+      `https://codeload.github.com/kurone-kito/idd-skill/tar.gz/${CLEANUP_PINNED_COMMIT}`,
+    ),
+    'the helper-scripts doc must name the pinned cleanup archive',
+  );
 });
