@@ -25,9 +25,11 @@ import { hasReviewReplyStamp } from '../src/scripts/marker-helpers.mts';
 import {
   CODERABBIT_REVIEW_IN_PROGRESS_MARKER,
   CODERABBIT_REVIEW_PAUSED_MARKER,
+  classifyRegularBotComment,
   dispositionNamesAdvisoryBot,
   isAdvisoryNonReviewNotice,
   isCodeRabbitAlreadyReviewedAcknowledgement,
+  isCodeRabbitCompletedReviewSummary,
   isCodexNoFindResultDisposition,
   isCodexNoFindResultForHeadSha,
   isDispositionComment,
@@ -3150,6 +3152,222 @@ test('#2161: isReviewSummaryComment and isAdvisoryNonReviewNotice agree on a cas
 test('#2161: a genuine walkthrough (no inner skip-review marker) is still a summary walkthrough, not a notice', () => {
   assert.equal(isReviewSummaryComment(CODERABBIT_SUMMARY), true);
   assert.equal(isAdvisoryNonReviewNotice(CODERABBIT_SUMMARY), false);
+});
+
+// #4701: CodeRabbit can prefix its summary with a generated wrapper (observed
+// on kurone-kito/dotfiles PR 683, comment 6356207376). The wrapper is accepted
+// only as a leading region, and a wrapped body must get the same verdict as
+// its unwrapped twin everywhere the summary is consumed.
+const CODERABBIT_GENERATED_WRAPPER = '<!-- coderabbit-ai-generated:v1 -->';
+const CODERABBIT_WRAPPED_WITH_FINDINGS =
+  `${CODERABBIT_GENERATED_WRAPPER}\n\n` +
+  '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n' +
+  '<!-- review_stack_entry_start -->\n\n' +
+  '## Walkthrough\n\nActionable comments posted: 1';
+const CODERABBIT_WRAPPED_NO_ACTIONABLE = `${CODERABBIT_GENERATED_WRAPPER}\n\n${CODERABBIT_COMPLETED_NO_ACTIONABLE}`;
+const CODERABBIT_GATE_OPTIONS = {
+  iddAgentLogins: ['kurone-kito'],
+  advisoryBotLogins: [CODERABBIT, CODEX],
+};
+
+function codeRabbitGateMissing(comments: NoticeComment[]): number {
+  return summarizeDispositionEvidenceForGate(
+    {
+      comments: comments.map((comment) => ({
+        id: comment.id,
+        author: { login: comment.login },
+        body: comment.body,
+        createdAt: comment.createdAt,
+        updatedAt: comment.updatedAt ?? comment.createdAt,
+        lastEditedAt: comment.lastEditedAt,
+      })),
+      threads: [],
+    },
+    CODERABBIT_GATE_OPTIONS,
+  ).missingRegularCommentCount;
+}
+
+// The planner verdict and the classifier verdict for one CodeRabbit body.
+function codeRabbitVerdict(body: string) {
+  const plan = buildDispositionPlan(
+    { headSha: 'abc1234', comments: [notice(1, CODERABBIT, body)] },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  const comment = {
+    id: '1',
+    author: { login: CODERABBIT },
+    body,
+    createdAt: '2026-05-12T00:00:01Z',
+    updatedAt: '2026-05-12T00:00:01Z',
+  };
+  return {
+    planned: plan.planned.map((entry) => entry.body.slice(0, 12)),
+    skipped: plan.skipped.map((entry) => entry.reason),
+    classification: classifyRegularBotComment(comment, [comment], []) ?? null,
+  };
+}
+
+test('#4701: a wrapped CodeRabbit summary with findings is a summary and plans its **Accepted**', () => {
+  assert.equal(isReviewSummaryComment(CODERABBIT_WRAPPED_WITH_FINDINGS), true);
+  const plan = buildDispositionPlan(
+    {
+      headSha: 'abc1234',
+      comments: [notice(1, CODERABBIT, CODERABBIT_WRAPPED_WITH_FINDINGS)],
+    },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.equal(plan.planned.length, 1);
+  assert.equal(plan.planned[0].botLogin, CODERABBIT);
+  assert.ok(plan.planned[0].body.startsWith('**Accepted**'));
+  assert.match(
+    plan.planned[0].body,
+    /coderabbitai\[bot\] summary walkthrough at HEAD abc1234/,
+  );
+  assert.equal(plan.skipped.length, 0);
+});
+
+test('#4701: the planned Accepted clears a wrapped summary from the gate, and a second plan is empty', () => {
+  const source = notice(
+    1,
+    CODERABBIT,
+    CODERABBIT_WRAPPED_WITH_FINDINGS,
+    '2026-05-12T00:00:00Z',
+    '2026-05-12T00:00:00Z',
+  );
+  assert.equal(codeRabbitGateMissing([source]), 1);
+  const first = buildDispositionPlan(
+    { headSha: 'abc1234', comments: [source] },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.equal(first.planned.length, 1);
+  const accepted = notice(
+    2,
+    'kurone-kito',
+    first.planned[0].body,
+    '2026-05-12T01:00:00Z',
+    '2026-05-12T01:00:00Z',
+  );
+  assert.equal(codeRabbitGateMissing([source, accepted]), 0);
+  const second = buildDispositionPlan(
+    { headSha: 'abc1234', comments: [source, accepted] },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.equal(second.planned.length, 0);
+});
+
+test('#4701: the observed wrapped no-actionable body is skipped as RESOLVED and clears the gate', () => {
+  const verdict = codeRabbitVerdict(CODERABBIT_WRAPPED_NO_ACTIONABLE);
+  assert.deepEqual(verdict.planned, []);
+  assert.deepEqual(verdict.skipped, [
+    'summary-resolved-no-actionable-comments',
+  ]);
+  assert.equal(verdict.classification?.classifier, 'RESOLVED');
+  assert.equal(
+    codeRabbitGateMissing([
+      notice(1, CODERABBIT, CODERABBIT_WRAPPED_NO_ACTIONABLE),
+    ]),
+    0,
+  );
+});
+
+test('#4701: a wrapped body and its unwrapped twin get the same planner and classifier verdict', () => {
+  const bodies = {
+    completedWithFindings: CODERABBIT_SUMMARY,
+    noActionable: CODERABBIT_COMPLETED_NO_ACTIONABLE,
+    staleSentenceWithFindings: `${CODERABBIT_SUMMARY}\n\nNo actionable comments were generated in the recent review.`,
+    inProgress: CODERABBIT_IN_PROGRESS,
+    inProgressWithStaleSentence: CODERABBIT_IN_PROGRESS_WITH_STALE_SENTENCE,
+    paused: CODERABBIT_PAUSED,
+    skipReview: CODERABBIT_SKIP_REVIEW,
+    walkthrough: CODERABBIT_COMPLETED_WALKTHROUGH,
+  };
+  for (const [name, body] of Object.entries(bodies)) {
+    assert.deepEqual(
+      codeRabbitVerdict(`${CODERABBIT_GENERATED_WRAPPER}\n\n${body}`),
+      codeRabbitVerdict(body),
+      name,
+    );
+  }
+});
+
+test('#4701: a wrapped skip-review or paused notice is never a completed summary acceptance', () => {
+  for (const body of [CODERABBIT_SKIP_REVIEW, CODERABBIT_PAUSED]) {
+    const wrapped = `${CODERABBIT_GENERATED_WRAPPER}\n\n${body}`;
+    assert.equal(isReviewSummaryComment(wrapped), false);
+    assert.equal(isCodeRabbitCompletedReviewSummary(wrapped), false);
+    const plan = buildDispositionPlan(
+      { headSha: 'abc1234', comments: [notice(1, CODERABBIT, wrapped)] },
+      { trustedMarkerLogins: ['kurone-kito'] },
+    );
+    assert.equal(plan.planned.length, 1);
+    assert.ok(plan.planned[0].body.startsWith('**Rejected**'));
+    assert.equal(
+      plan.planned.some((entry) => entry.body.startsWith('**Accepted**')),
+      false,
+    );
+  }
+});
+
+test('#4701: a wrapped in-progress revision is pending everywhere and never planned as Accepted', () => {
+  const wrapped = `${CODERABBIT_GENERATED_WRAPPER}\n\n${CODERABBIT_IN_PROGRESS}`;
+  assert.equal(isCodeRabbitCompletedReviewSummary(wrapped), false);
+  const verdict = codeRabbitVerdict(wrapped);
+  assert.deepEqual(verdict.planned, []);
+  assert.deepEqual(verdict.skipped, ['coderabbit-review-in-progress']);
+  assert.equal(verdict.classification, null);
+});
+
+test('#4701: only a leading wrapper of the observed version is recognized', () => {
+  const recognized = [
+    `${CODERABBIT_GENERATED_WRAPPER}\r\n\r\n${CODERABBIT_SUMMARY}`,
+    `\n  ${CODERABBIT_GENERATED_WRAPPER}\n\n\n${CODERABBIT_SUMMARY}`,
+  ];
+  for (const body of recognized) {
+    assert.equal(isReviewSummaryComment(body), true);
+  }
+  const rejected = [
+    `Prose quoting ${CODERABBIT_GENERATED_WRAPPER} before ${CODERABBIT_SUMMARY}`,
+    `${CODERABBIT_GENERATED_WRAPPER}\n\n${CODERABBIT_GENERATED_WRAPPER}\n\n${CODERABBIT_SUMMARY}`,
+    `<!-- coderabbit-ai-generated:v2 -->\n\n${CODERABBIT_SUMMARY}`,
+    `${CODERABBIT_GENERATED_WRAPPER}\n\nSome ordinary reply.`,
+  ];
+  for (const body of rejected) {
+    assert.equal(isReviewSummaryComment(body), false);
+  }
+});
+
+test('#4701: a wrapped summary from a human author is not planned', () => {
+  const plan = buildDispositionPlan(
+    {
+      headSha: 'abc1234',
+      comments: [notice(1, 'octocat', CODERABBIT_WRAPPED_WITH_FINDINGS)],
+    },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.equal(plan.planned.length, 0);
+});
+
+test('#4701: settlement recognizes a wrapped completed summary, not a wrapped skip, paused, or in-progress revision', () => {
+  assert.equal(
+    isCodeRabbitCompletedReviewSummary(CODERABBIT_WRAPPED_WITH_FINDINGS),
+    true,
+  );
+  assert.equal(
+    isCodeRabbitCompletedReviewSummary(CODERABBIT_WRAPPED_NO_ACTIONABLE),
+    true,
+  );
+  for (const body of [
+    CODERABBIT_SKIP_REVIEW,
+    CODERABBIT_PAUSED,
+    CODERABBIT_IN_PROGRESS,
+  ]) {
+    assert.equal(
+      isCodeRabbitCompletedReviewSummary(
+        `${CODERABBIT_GENERATED_WRAPPER}\n\n${body}`,
+      ),
+      false,
+    );
+  }
 });
 
 test('#2695: isReviewSummaryComment recognizes a Codex review-status comment in both "Running" and "Completed" table states', () => {
