@@ -210,21 +210,36 @@ function runShell(code: string, cwd: string, env: NodeJS.ProcessEnv) {
   });
 }
 
-function helperCanRunAfterInstallFailure(
+function helperCanRunAfterInstallOutcome(
   installStep: string,
   helperStep: string,
+  profile: 'package-manager' | 'ephemeral-npx',
+  outcome: 'success' | 'failure' | 'skipped',
 ): boolean {
   const condition = helperStep.match(/^\s+if:\s*(.+)$/m)?.[1] ?? '';
   const hasStatusCheck =
     /\b(?:success|failure|cancelled|always)\s*\(\s*\)/i.test(condition);
   const installId = installStep.match(/^\s+id:\s*([A-Za-z0-9_-]+)/m)?.[1];
-  const failureOutcomeGuard = installId
+  const packageManagerSuccessGuard = installId
     ? new RegExp(
-        `steps\\.${installId}\\.outcome\\s*!=\\s*['"]failure['"]`,
+        `(?:^|&&)\\s*\\(\\s*steps\\.profile\\.outputs\\.profile\\s*!=\\s*['"]package-manager['"]\\s*\\|\\|\\s*steps\\.${installId}\\.outcome\\s*==\\s*['"]success['"]\\s*\\)\\s*(?:&&|$)`,
         'i',
       ).test(condition)
     : false;
-  if (failureOutcomeGuard) return false;
+  if (
+    packageManagerSuccessGuard &&
+    profile === 'package-manager' &&
+    outcome !== 'success'
+  ) {
+    return false;
+  }
+  const failureOutcomeGuard = installId
+    ? new RegExp(
+        `steps\\.${installId}\\.outcome\\s*!=\\s*['"]${outcome}['"]`,
+        'i',
+      ).test(condition)
+    : false;
+  if (outcome !== 'success' && failureOutcomeGuard) return false;
 
   const installCanConcealFailure = /^\s+continue-on-error\s*:/m.test(
     installStep,
@@ -362,9 +377,39 @@ function evaluate(site: WorkflowSite, scenario: Scenario): void {
       );
       for (const helperStep of helperSteps) {
         assert.equal(
-          helperCanRunAfterInstallFailure(installStep, helperStep),
+          helperCanRunAfterInstallOutcome(
+            installStep,
+            helperStep,
+            'package-manager',
+            'failure',
+          ),
           false,
           `${site.file} / ${scenario.name}: helper condition must keep a rejected install from running the helper`,
+        );
+        assert.equal(
+          helperCanRunAfterInstallOutcome(
+            installStep,
+            helperStep,
+            'package-manager',
+            'skipped',
+          ),
+          false,
+          `${site.file} / ${scenario.name}: helper condition must keep a skipped package-manager install from running the helper`,
+        );
+      }
+      const rerunStep = helperSteps.find((step) =>
+        step.includes('Rerun required HEAD check'),
+      );
+      if (rerunStep) {
+        assert.equal(
+          helperCanRunAfterInstallOutcome(
+            installStep,
+            rerunStep,
+            'ephemeral-npx',
+            'skipped',
+          ),
+          true,
+          'a skipped package-manager install must not block other runnable profiles',
         );
       }
       return;

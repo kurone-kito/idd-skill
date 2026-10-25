@@ -539,11 +539,12 @@ jobs:
         # trigger that guarantee exists to protect. Calling success()
         # explicitly here suppresses that implicit prepend and lets the
         # `pull_request_review` disjunct bypasses classifier failure only;
-        # its leading install-outcome guard keeps a rejected package install
-        # from reaching this helper (Copilot review on #4719).
+        # its package-manager install-success guard keeps both failed and
+        # skipped installs from reaching this helper (Copilot review on
+        # #4719). Other profiles can legitimately skip that install.
         # The comment-family branch still requires success(), matching this
         # step's pre-existing (implicit) behavior for that path unchanged.
-        if: steps.profile.outputs.profile != 'instructions-only' && steps.manager.outputs.manager != 'ambiguous' && steps.install-dependencies.outcome != 'failure' && (github.event_name == 'pull_request_review' || (success() && steps.origin.outputs.idd_originated == 'true' && steps.debounce.outputs.skip != 'true'))
+        if: steps.profile.outputs.profile != 'instructions-only' && steps.manager.outputs.manager != 'ambiguous' && (steps.profile.outputs.profile != 'package-manager' || steps.install-dependencies.outcome == 'success') && (github.event_name == 'pull_request_review' || (success() && steps.origin.outputs.idd_originated == 'true' && steps.debounce.outputs.skip != 'true'))
         env:
           GH_TOKEN: ${{ github.token }}
           GH_ENTERPRISE_TOKEN: ${{ github.token }}
