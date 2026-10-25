@@ -3031,3 +3031,28 @@ test('differential: a backtick fence opener cannot carry backticks in its info s
     0,
   );
 });
+
+test('differential: a pending-decision marker inside an HTML comment does not block a settled reply (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 8701,
+          login: 'coderabbitai[bot]',
+          body: 'nit: note the marker',
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 8702,
+          login: AGENT_LOGIN,
+          body: '**Accepted** — done\n<!-- **Awaiting maintainer decision** kept for the record -->',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+    },
+    0,
+    0,
+  );
+});
