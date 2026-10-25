@@ -2731,3 +2731,48 @@ test('differential: the configured marker prefix, not the default, names an IDD 
     1,
   );
 });
+
+test('differential: a pending-decision marker inside code or quoted text does not block a settled reply (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 7901,
+          login: 'coderabbitai[bot]',
+          body: 'nit: show the marker',
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 7902,
+          login: AGENT_LOGIN,
+          body: '**Accepted** — added the example:\n```\n**Awaiting maintainer decision**\n```',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+    },
+    0,
+    0,
+  );
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 7903,
+          login: 'coderabbitai[bot]',
+          body: 'nit: quote the marker',
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 7904,
+          login: AGENT_LOGIN,
+          body: '**Accepted** — quoted it\n> **Awaiting maintainer decision** example',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+    },
+    0,
+    0,
+  );
+});

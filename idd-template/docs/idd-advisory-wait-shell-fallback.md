@@ -1239,12 +1239,20 @@ COMMENTS_JSON=$(
   '
 ) || exit 2
 DISPOSITION_JSON=$(printf '%s' "${COMMENTS_JSON}" | jq -c --argjson agents "${REG_AGENT_LOGIN_JSON}" '
+  # A pending-decision marker counts only outside code and quoted text (the
+  # canonical hasPendingDecisionMarker masks those): fenced blocks, inline code,
+  # and quote lines are removed before the top-level marker is searched.
+  def strip_all($re):
+    if test($re) then sub($re; "") | strip_all($re) else . end;
+  def pending_marker:
+    (.body | strip_all("(?s)\\x60\\x60\\x60.*?\\x60\\x60\\x60") | strip_all("\\x60[^\\x60\\n]*\\x60") | strip_all("(?m)^>.*$")
+      | test("(^|\\n)\\*\\*Awaiting maintainer decision\\*\\*"; "i"));
   map(select(
     (.body | test("^\\*\\*(Accepted|Rejected)[.!:]?\\*\\*"))
     and (((.user.login // "") | ascii_downcase) as $u
       | ($agents | map(ascii_downcase) | index($u)) != null)
     and (has("lastEditedAt") and (.lastEditedAt == null))
-    and ((.body | test("(^|\\n)\\*\\*Awaiting maintainer decision\\*\\*"; "i")) | not)
+    and (pending_marker | not)
   ))
 ') || exit 2
 # Advisory-bot identity for thread origin (canonical isGateAdvisoryBotLogin):
@@ -1377,24 +1385,30 @@ MISSING_THREADS=$(printf '%s' "${THREADS_JSON}" | jq -rs --argjson agents "${IDD
   def is_idd_agent:
     ((author_login | ascii_downcase) as $u
       | ($agents | map(ascii_downcase) | index($u)) != null);
+  # Code-aware pending-decision marker (see DISPOSITION_JSON above).
+  def strip_all($re):
+    if test($re) then sub($re; "") | strip_all($re) else . end;
+  def pending_marker:
+    (.body | strip_all("(?s)\\x60\\x60\\x60.*?\\x60\\x60\\x60") | strip_all("\\x60[^\\x60\\n]*\\x60") | strip_all("(?m)^>.*$")
+      | test("(^|\\n)\\*\\*Awaiting maintainer decision\\*\\*"; "i"));
   def is_disp:
     (.body | test("^\\*\\*(Accepted|Rejected)[.!:]?\\*\\*"))
     and is_idd_agent
     and (has("lastEditedAt") and (.lastEditedAt == null))
-    and ((.body | test("(^|\\n)\\*\\*Awaiting maintainer decision\\*\\*"; "i")) | not);
+    and (pending_marker | not);
   def is_idd_reply:
     (.body | test("<!--\\s*" + $prefix + "-review-reply\\s*-->"; "i"))
     or (is_idd_agent
       and (.body | (test("^\\*\\*(Accepted|Rejected)[.!:]?\\*\\*")
         or test("^\\s*\\*\\*Rejection confirmed by maintainer\\*\\*\\s+—")
-        or test("(^|\\n)\\*\\*Awaiting maintainer decision\\*\\*"; "i"))));
+        or pending_marker)));
   # A rejection confirmation settles a thread only once the thread is resolved
   # (canonical hasFreshDisposition with isRejectionConfirmedDisposition).
   def is_rejection_confirmed:
     (.body | test("^\\s*\\*\\*Rejection confirmed by maintainer\\*\\*\\s+—"))
     and is_idd_agent
     and (has("lastEditedAt") and (.lastEditedAt == null))
-    and ((.body | test("(^|\\n)\\*\\*Awaiting maintainer decision\\*\\*"; "i")) | not);
+    and (pending_marker | not);
   def counts_as_disp($res):
     is_disp or ($res and is_rejection_confirmed);
   def latest_feedback($res):
