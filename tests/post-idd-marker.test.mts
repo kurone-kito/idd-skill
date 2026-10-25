@@ -37,6 +37,7 @@ import {
   parseArgs,
   parseIssueReference,
   readWatermarkRequiredCiAgreement,
+  reconcileFormerChildMemberships,
   runOperationLocalSnapshotWatermark,
   selectAuthoringOwnerOpeningMarkers,
   selectLatestAuthoringOwnerMarker,
@@ -4897,19 +4898,35 @@ test('post-idd-marker CLI: every required flag of authoring-owner other than bod
   }
 });
 
-/** Stub `gh api repos/<owner>/<repo>/issues/<n>` (the exact call
- * `createGithubProviderAdapter(...).getWorkItem` makes, and thus the
- * authoring-owner body-sha256 live-fetch source, #2931) to return `{ body
- * }`, and fail loudly on any other invocation. */
+/** Stub the authoring-owner live-body fetch and its paginated anchor-log
+ * preflight. A caller may supply a specific anchor history; otherwise the
+ * GraphQL log is empty. */
 function stubGhIssueBody(
   owner: string,
   repo: string,
   number: number,
   body: string,
+  comments: OwnerIdComment[] = [],
+  commentsByIssueNumber: Record<number, OwnerIdComment[]> = {},
 ): () => void {
+  const pagesByIssueNumber = Object.fromEntries(
+    Object.entries(commentsByIssueNumber).map(
+      ([issueNumber, issueComments]) => [
+        issueNumber,
+        ownerIdCommentPage(issueComments),
+      ],
+    ),
+  );
   return stubExecutable(
     'gh',
     `const args = process.argv.slice(2);
+if (args.includes('graphql')) {
+  const numberArg = args.find((arg) => arg.startsWith('number='));
+  const issueNumber = numberArg ? Number(numberArg.slice('number='.length)) : NaN;
+  const pages = ${JSON.stringify(pagesByIssueNumber)};
+  process.stdout.write(pages[issueNumber] ?? ${JSON.stringify(ownerIdCommentPage(comments))});
+  process.exit(0);
+}
 if (args[0] === 'api' && args[1] === 'repos/${owner}/${repo}/issues/${number}') {
   process.stdout.write(JSON.stringify({ number: ${number}, body: ${JSON.stringify(body)} }));
   process.exit(0);
@@ -5330,7 +5347,24 @@ test('authoring-owner CLI tolerates a mismatching --anchor for a non-anchor-only
   const correctDigest = createHash('sha256')
     .update(LIVE_BODY, 'utf8')
     .digest('hex');
-  const restore = stubGhIssueBody('o', 'r', 42, LIVE_BODY);
+  const anchorOpener: OwnerIdComment = {
+    id: 101,
+    body: buildMarkerBody('authoring-owner', {
+      'marker-prefix': 'idd-skill',
+      'marker-target': 'o/r#7',
+      anchor: 'o/r#7',
+      mode: 'acquire',
+      'marker-owner': 'owner-anchor',
+      set: 'set-1',
+      session: 'session-1',
+      'body-sha256': 'a'.repeat(64),
+      'snapshot-sha256': 'none',
+      supersedes: 'none',
+    }),
+  };
+  const restore = stubGhIssueBody('o', 'r', 42, LIVE_BODY, [], {
+    7: [anchorOpener],
+  });
   try {
     const { 'body-sha256': _omit, ...rest } = AUTHORING_OWNER_FULL_FIELDS;
     const output = execFileSync(
@@ -5609,6 +5643,10 @@ test('kurone-kito/idd-skill#2925 regression: authoring-owner body-sha256 derivat
   const restore = stubExecutable(
     'gh',
     `const args = process.argv.slice(2);
+if (args.includes('graphql')) {
+  process.stdout.write(${JSON.stringify(ownerIdCommentPage([]))});
+  process.exit(0);
+}
 if (args[0] === 'api' && args[1] === 'repos/kurone-kito/idd-skill/issues/2925' && args.includes('--jq')) {
   process.stdout.write(${JSON.stringify(LIVE_BODY)} + '\\n');
   process.exit(0);
@@ -5697,18 +5735,22 @@ test('--apply --type authoring-owner POSTs the byte-exact body with the live-der
     join(tmpdir(), 'idd-post-idd-marker-authoring-owner-apply-'),
   );
   const stdinFile = join(tempRoot, 'gh-stdin.txt');
-  // Any THIRD gh invocation beyond the GET (digest derivation) and the POST
-  // falls through to the catch-all failure below -- including a
-  // hide-at-post-time comments-listing call, which authoring-owner must
-  // never trigger (it is deliberately not in HIDE_AT_POST_TIME_MARKER_TYPES,
-  // #2931).
+  const readsFile = join(tempRoot, 'graphql-reads.txt');
+  // The only GraphQL invocation is the acquisition preflight; a second one
+  // would be an unexpected post-time read (authoring-owner is not in
+  // HIDE_AT_POST_TIME_MARKER_TYPES, #2931).
   const restore = stubExecutable(
     'gh',
     `const fs = require('node:fs');
 const args = process.argv.slice(2);
 function out(s) { fs.writeSync(1, s); process.exit(0); }
 function fail(s) { fs.writeSync(2, s); process.exit(1); }
-if (args[0] === 'api' && args[1] === 'repos/o/r/issues/42') {
+if (args.includes('graphql')) {
+  const previous = fs.existsSync(${JSON.stringify(readsFile)}) ? Number(fs.readFileSync(${JSON.stringify(readsFile)}, 'utf8')) : 0;
+  if (previous > 0) fail('unexpected extra GraphQL read');
+  fs.writeFileSync(${JSON.stringify(readsFile)}, String(previous + 1));
+  out(${JSON.stringify(ownerIdCommentPage([]))});
+} else if (args[0] === 'api' && args[1] === 'repos/o/r/issues/42') {
   out(JSON.stringify({ number: 42, body: ${JSON.stringify(LIVE_BODY)} }));
 } else if (args[0] === 'api' && args[1] === '--method' && args[2] === 'POST') {
   const raw = fs.readFileSync(0, 'utf8');
@@ -5757,6 +5799,7 @@ if (args[0] === 'api' && args[1] === 'repos/o/r/issues/42') {
     const parsed = JSON.parse(output);
     assert.equal(parsed.mode, 'apply');
     assert.equal(parsed.commentId, 555);
+    assert.deepEqual(readOwnerIdLines(readsFile), ['1']);
     assert.deepEqual(JSON.parse(readFileSync(stdinFile, 'utf8')), {
       body: buildMarkerBody('authoring-owner', {
         'marker-prefix': 'idd-skill',
@@ -7544,6 +7587,7 @@ interface OwnerIdComment {
   id: number;
   body: string;
   author?: string;
+  createdAt?: string;
   lastEditedAt?: string | null;
   minimizedReason?: string | null;
 }
@@ -7582,8 +7626,8 @@ function ownerIdCommentPage(comments: OwnerIdComment[]): string {
   const nodes = comments.map((comment) => ({
     databaseId: comment.id,
     lastEditedAt: comment.lastEditedAt ?? null,
-    createdAt: TS,
-    updatedAt: TS,
+    createdAt: comment.createdAt ?? TS,
+    updatedAt: comment.createdAt ?? TS,
     body: comment.body,
     author: { login: comment.author ?? 'kurone-kito' },
     isMinimized: (comment.minimizedReason ?? null) !== null,
@@ -7605,17 +7649,33 @@ function ownerIdCommentPage(comments: OwnerIdComment[]): string {
 
 function withOwnerIdStub(options: {
   comments?: OwnerIdComment[];
+  commentsByIssueNumber?: Record<number, OwnerIdComment[]>;
   graphqlReply?: { stdout: string } | { stderr: string };
+  graphqlFailureIssueNumber?: number;
 }): { postsFile: string; readsFile: string; restore: () => void } {
   const tempRoot = mkdtempSync(join(tmpdir(), 'idd-post-idd-marker-identity-'));
   const postsFile = join(tempRoot, 'posts.txt');
   const readsFile = join(tempRoot, 'reads.txt');
   const page = ownerIdCommentPage(options.comments ?? []);
+  const pagesByIssueNumber = Object.fromEntries(
+    Object.entries(options.commentsByIssueNumber ?? {}).map(
+      ([number, comments]) => [number, ownerIdCommentPage(comments)],
+    ),
+  );
   const reply = options.graphqlReply ?? { stdout: page };
   const replyCode =
     'stdout' in reply
       ? `out(${JSON.stringify(reply.stdout)});`
       : `fail(${JSON.stringify(reply.stderr)});`;
+  const dynamicFailureCode =
+    options.graphqlFailureIssueNumber === undefined
+      ? ''
+      : `if (number === ${JSON.stringify(String(options.graphqlFailureIssueNumber))}) fail('gh: Service Unavailable (HTTP 503)');`;
+  const dynamicReplyCode = `const numberArg = args.find((arg) => arg.startsWith('number='));
+const number = numberArg ? numberArg.slice('number='.length) : '';
+const pages = ${JSON.stringify(pagesByIssueNumber)};
+${dynamicFailureCode}
+out(pages[number] ?? ${JSON.stringify(page)});`;
   const restore = stubExecutable(
     'gh',
     `const fs = require('node:fs');
@@ -7624,10 +7684,11 @@ function out(s) { fs.writeSync(1, s); process.exit(0); }
 function fail(s) { fs.writeSync(2, s); process.exit(1); }
 if (args.includes('graphql')) {
   fs.appendFileSync(${JSON.stringify(readsFile)}, 'graphql\\n');
-  ${replyCode}
+  ${options.graphqlReply === undefined ? dynamicReplyCode : replyCode}
 }
-if (args[0] === 'api' && args[1] === 'repos/o/r/issues/42') {
-  out(JSON.stringify({ number: 42, body: ${JSON.stringify(OWNER_ID_LIVE_BODY)} }));
+if (args[0] === 'api' && args[1].startsWith('repos/o/r/issues/')) {
+  const number = Number(args[1].slice('repos/o/r/issues/'.length));
+  out(JSON.stringify({ number, body: ${JSON.stringify(OWNER_ID_LIVE_BODY)} }));
 }
 if (args[0] === 'api' && args[1] === '--method' && args[2] === 'POST') {
   const raw = fs.readFileSync(0, 'utf8');
@@ -7655,13 +7716,22 @@ function readOwnerIdLines(file: string): string[] {
 
 function runOwnerIdPost(
   flags: Record<string, string>,
-  options: { apply?: boolean; cwd?: string; trustedLogins?: string } = {},
+  options: {
+    apply?: boolean;
+    cwd?: string;
+    trustedLogins?: string;
+    githubActions?: boolean;
+    targetNumber?: number;
+  } = {},
 ): { status: number | null; stderr: string; kind: string | undefined } {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     IDD_HELPER_ERROR_ENVELOPE: '1',
   };
   delete env.IDD_TRUSTED_MARKER_ACTORS;
+  if (options.githubActions === true) {
+    env.GITHUB_ACTIONS = 'true';
+  }
   const result = spawnSync(
     process.execPath,
     [
@@ -7670,7 +7740,7 @@ function runOwnerIdPost(
       'authoring-owner',
       '--target',
       'issue',
-      '42',
+      String(options.targetNumber ?? 42),
       '--owner',
       'o',
       '--repo',
@@ -7701,6 +7771,183 @@ const OWNER_ID_ACQUIRE_OPENER: OwnerIdComment = {
   id: 101,
   body: ownerIdBody(ownerIdFlags('acquire')),
 };
+
+const OWNER_ID_ANCHOR_TARGET = 'o/r#43';
+const OWNER_ID_ANCHOR_SET = 'set-anchor-43';
+const OWNER_ID_ANCHOR_SESSION = 'session-anchor-43';
+
+function ownerIdAnchorMarker(
+  mode: string,
+  overrides: Record<string, string> = {},
+): string {
+  const owner = overrides['marker-owner'] ?? 'owner-anchor-43';
+  const supersedes =
+    overrides.supersedes ??
+    (mode === 'acquire' || mode === 'bootstrap' ? 'none' : owner);
+  return ownerIdBody(
+    ownerIdFlags(mode, {
+      'marker-target': OWNER_ID_ANCHOR_TARGET,
+      anchor: OWNER_ID_ANCHOR_TARGET,
+      'marker-owner': owner,
+      set: OWNER_ID_ANCHOR_SET,
+      session: OWNER_ID_ANCHOR_SESSION,
+      supersedes,
+      ...overrides,
+    }),
+  );
+}
+
+const OWNER_ID_CHILD_SET = OWNER_ID_ANCHOR_SET;
+const OWNER_ID_CHILD_OWNER = 'owner-child-42';
+
+function ownerIdChildMarker(
+  mode: string,
+  overrides: Record<string, string> = {},
+): string {
+  const supersedes =
+    overrides.supersedes ??
+    (mode === 'acquire' || mode === 'bootstrap'
+      ? 'none'
+      : OWNER_ID_CHILD_OWNER);
+  return ownerIdBody(
+    ownerIdFlags(mode, {
+      anchor: OWNER_ID_ANCHOR_TARGET,
+      'marker-owner': OWNER_ID_CHILD_OWNER,
+      set: OWNER_ID_CHILD_SET,
+      session: OWNER_ID_ANCHOR_SESSION,
+      supersedes,
+      ...overrides,
+    }),
+  );
+}
+
+function ownerIdHistoryMarker(input: {
+  mode: string;
+  target: string;
+  anchor: string;
+  owner: string;
+  set: string;
+  session: string;
+  supersedes?: string;
+}): string {
+  const opening = input.mode === 'acquire' || input.mode === 'bootstrap';
+  return ownerIdBody(
+    ownerIdFlags(input.mode, {
+      'marker-target': input.target,
+      anchor: input.anchor,
+      'marker-owner': input.owner,
+      set: input.set,
+      session: input.session,
+      supersedes: opening ? 'none' : (input.supersedes ?? input.owner),
+    }),
+  );
+}
+
+function formerChildHistory(
+  target: string,
+  anchor: string,
+): {
+  child: OwnerIdComment[];
+  formerAnchor: OwnerIdComment[];
+} {
+  const set = 'set-former-child';
+  const session = 'session-former-child';
+  const childOwner = 'owner-former-child';
+  const formerAnchorOwner = 'owner-former-anchor';
+  return {
+    child: [
+      {
+        id: 201,
+        body: ownerIdHistoryMarker({
+          mode: 'acquire',
+          target,
+          anchor,
+          owner: childOwner,
+          set,
+          session,
+        }),
+      },
+      {
+        id: 202,
+        body: ownerIdHistoryMarker({
+          mode: 'release',
+          target,
+          anchor,
+          owner: childOwner,
+          set,
+          session,
+        }),
+      },
+    ],
+    formerAnchor: [
+      {
+        id: 101,
+        body: ownerIdHistoryMarker({
+          mode: 'acquire',
+          target: anchor,
+          anchor,
+          owner: formerAnchorOwner,
+          set,
+          session,
+        }),
+      },
+      {
+        id: 102,
+        body: ownerIdHistoryMarker({
+          mode: 'release',
+          target: anchor,
+          anchor,
+          owner: formerAnchorOwner,
+          set,
+          session,
+        }),
+      },
+      {
+        id: 103,
+        body: ownerIdHistoryMarker({
+          mode: 'release-guard',
+          target: anchor,
+          anchor,
+          owner: formerAnchorOwner,
+          set,
+          session,
+        }),
+      },
+      {
+        id: 204,
+        body: ownerIdHistoryMarker({
+          mode: 'release-complete',
+          target: anchor,
+          anchor,
+          owner: formerAnchorOwner,
+          set,
+          session,
+        }),
+      },
+    ],
+  };
+}
+
+function ownerIdClosedHistory(
+  target = OWNER_ID_TARGET,
+  set = OWNER_ID_SET,
+  session = OWNER_ID_SESSION,
+): OwnerIdComment[] {
+  const marker = (mode: string) =>
+    ownerIdBody(
+      ownerIdFlags(mode, {
+        'marker-target': target,
+        anchor: target,
+        set,
+        session,
+      }),
+    );
+  return [
+    { id: 101, body: marker('acquire') },
+    { id: 102, body: marker('release') },
+    { id: 103, body: marker('release-complete') },
+  ];
+}
 
 test('authoring-owner --apply refuses a release whose set id lost two characters, names both ids, and sends nothing (#3910)', () => {
   const stub = withOwnerIdStub({ comments: [OWNER_ID_ACQUIRE_OPENER] });
@@ -8065,6 +8312,26 @@ test('authoring-owner --apply counts any login when the working directory config
   }
 });
 
+test('authoring-owner acquire fails closed when no trusted marker actors are configured (#4669)', () => {
+  const isolatedCwd = mkdtempSync(join(tmpdir(), 'idd-post-idd-marker-cwd-'));
+  const stub = withOwnerIdStub({
+    comments: [{ ...OWNER_ID_ACQUIRE_OPENER, author: 'stranger' }],
+  });
+  try {
+    const run = runOwnerIdPost(ownerIdFlags('acquire'), {
+      cwd: isolatedCwd,
+    });
+    assert.equal(run.status, 1);
+    assert.equal(run.kind, 'gate');
+    assert.match(run.stderr, /trusted marker actor list is empty/);
+    assert.deepEqual(readOwnerIdLines(stub.readsFile), []);
+    assert.deepEqual(readOwnerIdLines(stub.postsFile), []);
+  } finally {
+    stub.restore();
+    rmSync(isolatedCwd, { recursive: true, force: true });
+  }
+});
+
 test('authoring-owner --apply checks release-guard and release-complete against the anchor opening marker (#3910)', () => {
   for (const mode of ['release-guard', 'release-complete']) {
     const matching = withOwnerIdStub({ comments: [OWNER_ID_ACQUIRE_OPENER] });
@@ -8094,13 +8361,13 @@ test('authoring-owner --apply checks release-guard and release-complete against 
   }
 });
 
-test('authoring-owner --apply sends acquire and bootstrap posts with no GraphQL read (#3910)', () => {
+test('authoring-owner --apply sends acquire and bootstrap after reading an empty self-anchor log (#4669)', () => {
   for (const mode of ['acquire', 'bootstrap']) {
     const stub = withOwnerIdStub({ comments: [] });
     try {
       const run = runOwnerIdPost(ownerIdFlags(mode));
       assert.equal(run.status, 0, mode);
-      assert.deepEqual(readOwnerIdLines(stub.readsFile), [], mode);
+      assert.equal(readOwnerIdLines(stub.readsFile).length, 1, mode);
       assert.equal(readOwnerIdLines(stub.postsFile).length, 1, mode);
     } finally {
       stub.restore();
@@ -8144,15 +8411,2684 @@ test('authoring-owner dry run refuses a heartbeat whose set differs from the lat
   }
 });
 
-test('authoring-owner dry run of acquire and bootstrap makes no read (#3899)', () => {
+test('authoring-owner dry run of acquire and bootstrap reads the empty self-anchor log (#4669)', () => {
   for (const mode of ['acquire', 'bootstrap']) {
     const stub = withOwnerIdStub({ comments: [] });
     try {
       const run = runOwnerIdPost(ownerIdFlags(mode), { apply: false });
       assert.equal(run.status, 0, mode);
-      assert.deepEqual(readOwnerIdLines(stub.readsFile), [], mode);
+      assert.equal(readOwnerIdLines(stub.readsFile).length, 1, mode);
+      assert.deepEqual(readOwnerIdLines(stub.postsFile), [], mode);
     } finally {
       stub.restore();
+    }
+  }
+});
+
+test('authoring-owner acquire and bootstrap reject a trusted closed set in dry-run and apply (#4669)', () => {
+  const comments = ownerIdClosedHistory();
+  for (const mode of ['acquire', 'bootstrap']) {
+    for (const apply of [false, true]) {
+      const stub = withOwnerIdStub({ comments });
+      try {
+        const run = runOwnerIdPost(ownerIdFlags(mode), { apply });
+        assert.equal(run.status, 1, `${mode}, apply=${apply}`);
+        assert.equal(run.kind, 'gate', `${mode}, apply=${apply}`);
+        assert.match(
+          run.stderr,
+          /already closed by a trusted release-complete/,
+        );
+        assert.equal(readOwnerIdLines(stub.readsFile).length, 1);
+        assert.deepEqual(readOwnerIdLines(stub.postsFile), []);
+      } finally {
+        stub.restore();
+      }
+    }
+  }
+});
+
+test('authoring-owner acquire and bootstrap fail closed when no trusted logins are configured (#4669)', () => {
+  for (const mode of ['acquire', 'bootstrap']) {
+    for (const apply of [false, true]) {
+      const isolatedCwd = mkdtempSync(
+        join(tmpdir(), 'idd-post-idd-marker-cwd-'),
+      );
+      const stub = withOwnerIdStub({ comments: ownerIdClosedHistory() });
+      try {
+        const run = runOwnerIdPost(ownerIdFlags(mode), {
+          apply,
+          cwd: isolatedCwd,
+          githubActions: true,
+        });
+        assert.equal(run.status, 1, `${mode}, apply=${apply}`);
+        assert.equal(run.kind, 'gate', `${mode}, apply=${apply}`);
+        assert.match(run.stderr, /trusted marker actor list is empty/);
+        assert.deepEqual(readOwnerIdLines(stub.readsFile), []);
+        assert.deepEqual(readOwnerIdLines(stub.postsFile), []);
+      } finally {
+        stub.restore();
+        rmSync(isolatedCwd, { recursive: true, force: true });
+      }
+    }
+  }
+});
+
+test('authoring-owner acquire may start a fresh self-anchored set after release-complete (#4669)', () => {
+  const stub = withOwnerIdStub({ comments: ownerIdClosedHistory() });
+  try {
+    const run = runOwnerIdPost(
+      ownerIdFlags('acquire', {
+        'marker-owner': 'owner-next',
+        set: 'set-next',
+      }),
+    );
+    assert.equal(run.status, 0, run.stderr);
+    assert.equal(readOwnerIdLines(stub.readsFile).length, 1);
+    const posted = readOwnerIdLines(stub.postsFile).map((line) =>
+      JSON.parse(line),
+    );
+    assert.equal(posted.length, 1);
+    assert.match(
+      posted[0].body,
+      /mode=acquire; owner=owner-next; set=set-next/,
+    );
+  } finally {
+    stub.restore();
+  }
+});
+
+test('authoring-owner acquire refuses an outdated release-complete as closure evidence (#4669)', () => {
+  const comments = ownerIdClosedHistory().map((comment) =>
+    comment.id === 103 ? { ...comment, minimizedReason: 'outdated' } : comment,
+  );
+  for (const apply of [false, true]) {
+    const stub = withOwnerIdStub({ comments });
+    try {
+      const run = runOwnerIdPost(
+        ownerIdFlags('acquire', {
+          'marker-owner': 'owner-next',
+          set: 'set-next',
+        }),
+        { apply },
+      );
+      assert.equal(run.status, 1, `apply=${apply}`);
+      assert.equal(run.kind, 'gate', `apply=${apply}`);
+      assert.match(run.stderr, /release-complete.*minimized as outdated/);
+      assert.deepEqual(readOwnerIdLines(stub.postsFile), []);
+    } finally {
+      stub.restore();
+    }
+  }
+});
+
+test('authoring-owner child acquire accepts an outdated completion superseded by a verified generation (#4669)', () => {
+  const oldHistory = ownerIdClosedHistory(
+    OWNER_ID_ANCHOR_TARGET,
+    'set-old',
+    'session-old',
+  ).map((comment) =>
+    comment.id === 103 ? { ...comment, minimizedReason: 'outdated' } : comment,
+  );
+  const comments = [
+    ...oldHistory,
+    {
+      id: 104,
+      body: ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: OWNER_ID_ANCHOR_TARGET,
+        anchor: OWNER_ID_ANCHOR_TARGET,
+        owner: 'owner-next',
+        set: 'set-next',
+        session: 'session-next',
+      }),
+    },
+  ];
+  const stub = withOwnerIdStub({
+    comments: [],
+    commentsByIssueNumber: { 43: comments },
+  });
+  try {
+    const run = runOwnerIdPost(
+      ownerIdFlags('acquire', {
+        anchor: OWNER_ID_ANCHOR_TARGET,
+        'marker-owner': 'owner-child-next',
+        set: 'set-next',
+        session: 'session-next',
+      }),
+    );
+    assert.equal(run.status, 0, run.stderr);
+    assert.equal(readOwnerIdLines(stub.postsFile).length, 1);
+  } finally {
+    stub.restore();
+  }
+});
+
+test('authoring-owner acquire lets a completed child become a fresh self-anchor (#4669)', () => {
+  const targetComments = [
+    { id: 101, body: ownerIdChildMarker('acquire') },
+    { id: 102, body: ownerIdChildMarker('release') },
+  ];
+  const formerAnchorComments = [
+    { id: 201, body: ownerIdAnchorMarker('acquire') },
+    { id: 202, body: ownerIdAnchorMarker('release') },
+    { id: 203, body: ownerIdAnchorMarker('release-guard') },
+    { id: 204, body: ownerIdAnchorMarker('release-complete') },
+  ];
+
+  for (const apply of [false, true]) {
+    const stub = withOwnerIdStub({
+      comments: targetComments,
+      commentsByIssueNumber: { 43: formerAnchorComments },
+    });
+    try {
+      const run = runOwnerIdPost(
+        ownerIdFlags('acquire', {
+          'marker-owner': 'owner-next',
+          set: 'set-next',
+        }),
+        { apply },
+      );
+      assert.equal(run.status, 0, run.stderr);
+      assert.equal(
+        readOwnerIdLines(stub.readsFile).length,
+        2,
+        `apply=${apply}`,
+      );
+      const posted = readOwnerIdLines(stub.postsFile).map((line) =>
+        JSON.parse(line),
+      );
+      assert.equal(posted.length, apply ? 1 : 0, `apply=${apply}`);
+      if (apply) {
+        assert.match(
+          posted[0].body,
+          /mode=acquire; owner=owner-next; set=set-next/,
+        );
+      }
+    } finally {
+      stub.restore();
+    }
+  }
+});
+
+test('authoring-owner acquire preserves child release through a removal heartbeat (#4669)', () => {
+  const targetComments = [
+    { id: 101, body: ownerIdChildMarker('acquire') },
+    {
+      id: 102,
+      body: ownerIdChildMarker('release', { session: 'session-release' }),
+    },
+    {
+      id: 103,
+      body: ownerIdChildMarker('heartbeat', { session: 'session-heartbeat' }),
+    },
+  ];
+  const formerAnchorComments = [
+    { id: 201, body: ownerIdAnchorMarker('acquire') },
+    { id: 202, body: ownerIdAnchorMarker('release') },
+    { id: 203, body: ownerIdAnchorMarker('release-guard') },
+    { id: 204, body: ownerIdAnchorMarker('release-complete') },
+  ];
+
+  for (const apply of [false, true]) {
+    const stub = withOwnerIdStub({
+      comments: targetComments,
+      commentsByIssueNumber: { 43: formerAnchorComments },
+    });
+    try {
+      const run = runOwnerIdPost(
+        ownerIdFlags('acquire', {
+          'marker-owner': 'owner-next',
+          set: 'set-next',
+        }),
+        { apply },
+      );
+      assert.equal(run.status, 0, run.stderr);
+      assert.equal(
+        readOwnerIdLines(stub.readsFile).length,
+        2,
+        `apply=${apply}`,
+      );
+      const posted = readOwnerIdLines(stub.postsFile).map((line) =>
+        JSON.parse(line),
+      );
+      assert.equal(posted.length, apply ? 1 : 0, `apply=${apply}`);
+      if (apply) {
+        assert.match(
+          posted[0].body,
+          /mode=acquire; owner=owner-next; set=set-next/,
+        );
+      }
+    } finally {
+      stub.restore();
+    }
+  }
+});
+
+test('authoring-owner acquire cannot reuse a former child set ID (#4669)', () => {
+  const history = formerChildHistory(OWNER_ID_TARGET, OWNER_ID_ANCHOR_TARGET);
+  const targetComments = [
+    ...history.child,
+    {
+      id: 205,
+      body: ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: OWNER_ID_TARGET,
+        anchor: OWNER_ID_TARGET,
+        owner: 'owner-promoted',
+        set: 'set-former-child',
+        session: 'session-promoted',
+      }),
+    },
+  ];
+  const stub = withOwnerIdStub({
+    comments: targetComments,
+    commentsByIssueNumber: { 43: history.formerAnchor },
+  });
+  try {
+    const run = runOwnerIdPost(
+      ownerIdFlags('acquire', {
+        'marker-owner': 'owner-next',
+        set: 'set-former-child',
+      }),
+    );
+    assert.equal(run.status, 1);
+    assert.equal(run.kind, 'gate');
+    assert.match(
+      run.stderr,
+      /already closed by a verified former-child membership/,
+    );
+    assert.deepEqual(readOwnerIdLines(stub.postsFile), []);
+  } finally {
+    stub.restore();
+  }
+});
+
+test('authoring-owner child acquire reconciles a promoted anchor log (#4669)', () => {
+  const formerAnchorRef = 'o/r#44';
+  const history = formerChildHistory(OWNER_ID_ANCHOR_TARGET, formerAnchorRef);
+  const promotedAnchorComments = [
+    ...history.child,
+    {
+      id: 205,
+      body: ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: OWNER_ID_ANCHOR_TARGET,
+        anchor: OWNER_ID_ANCHOR_TARGET,
+        owner: 'owner-anchor-43',
+        set: OWNER_ID_ANCHOR_SET,
+        session: OWNER_ID_ANCHOR_SESSION,
+      }),
+    },
+  ];
+
+  for (const apply of [false, true]) {
+    const stub = withOwnerIdStub({
+      commentsByIssueNumber: {
+        43: promotedAnchorComments,
+        44: history.formerAnchor,
+      },
+    });
+    try {
+      const run = runOwnerIdPost(
+        ownerIdFlags('acquire', {
+          anchor: OWNER_ID_ANCHOR_TARGET,
+          'marker-owner': 'owner-child-next',
+          set: OWNER_ID_ANCHOR_SET,
+          session: OWNER_ID_ANCHOR_SESSION,
+        }),
+        { apply },
+      );
+      assert.equal(run.status, 0, run.stderr);
+      assert.equal(
+        readOwnerIdLines(stub.readsFile).length,
+        3,
+        `apply=${apply}`,
+      );
+      const posted = readOwnerIdLines(stub.postsFile).map((line) =>
+        JSON.parse(line),
+      );
+      assert.equal(posted.length, apply ? 1 : 0, `apply=${apply}`);
+      if (apply) {
+        assert.match(
+          posted[0].body,
+          new RegExp(
+            `target=${OWNER_ID_TARGET}; anchor=${OWNER_ID_ANCHOR_TARGET}; mode=acquire; owner=owner-child-next; set=${OWNER_ID_ANCHOR_SET}; session=${OWNER_ID_ANCHOR_SESSION}`,
+          ),
+        );
+      }
+    } finally {
+      stub.restore();
+    }
+  }
+});
+
+test('authoring-owner promotes a child whose completed release is minimized as outdated (#4669)', () => {
+  const history = formerChildHistory(OWNER_ID_TARGET, OWNER_ID_ANCHOR_TARGET);
+  const targetComments = [
+    { ...history.child[0], id: 101 },
+    {
+      ...history.child[1],
+      id: 102,
+      minimizedReason: 'outdated',
+    },
+  ];
+
+  for (const apply of [false, true]) {
+    const stub = withOwnerIdStub({
+      comments: targetComments,
+      commentsByIssueNumber: { 43: history.formerAnchor },
+    });
+    try {
+      const run = runOwnerIdPost(
+        ownerIdFlags('acquire', {
+          'marker-owner': 'owner-promoted',
+          set: 'set-promoted',
+          session: 'session-promoted',
+        }),
+        { apply },
+      );
+      assert.equal(run.status, 0, run.stderr);
+      assert.equal(
+        readOwnerIdLines(stub.readsFile).length,
+        2,
+        `apply=${apply}`,
+      );
+      const posted = readOwnerIdLines(stub.postsFile).map((line) =>
+        JSON.parse(line),
+      );
+      assert.equal(posted.length, apply ? 1 : 0, `apply=${apply}`);
+      if (apply) {
+        assert.match(posted[0].body, /mode=acquire; owner=owner-promoted/);
+      }
+    } finally {
+      stub.restore();
+    }
+  }
+});
+
+test('authoring-owner ignores a losing child release after an outdated winning release (#4669)', () => {
+  const formerAnchor = 'o/r#44';
+  const set = 'set-raced-former-child';
+  const winningOwner = 'owner-winning-child';
+  const winningSession = 'session-winning-child';
+  const comment = (
+    id: number,
+    body: string,
+    second: number,
+    minimizedReason: string | null = null,
+  ) => {
+    const createdAt = `2026-10-24T10:00:0${second}Z`;
+    return {
+      id,
+      authorLogin: 'kurone-kito',
+      body,
+      createdAt,
+      updatedAt: createdAt,
+      lastEditedAt: null,
+      isMinimized: minimizedReason !== null,
+      minimizedReason,
+    };
+  };
+  const targetComments = [
+    comment(
+      101,
+      ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: OWNER_ID_ANCHOR_TARGET,
+        anchor: formerAnchor,
+        owner: winningOwner,
+        set,
+        session: winningSession,
+      }),
+      0,
+    ),
+    comment(
+      102,
+      ownerIdHistoryMarker({
+        mode: 'release',
+        target: OWNER_ID_ANCHOR_TARGET,
+        anchor: formerAnchor,
+        owner: winningOwner,
+        set,
+        session: winningSession,
+      }),
+      1,
+      'outdated',
+    ),
+    comment(
+      103,
+      ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: OWNER_ID_ANCHOR_TARGET,
+        anchor: formerAnchor,
+        owner: 'owner-losing-child',
+        set,
+        session: 'session-losing-child',
+      }),
+      2,
+    ),
+    comment(
+      104,
+      ownerIdHistoryMarker({
+        mode: 'release',
+        target: OWNER_ID_ANCHOR_TARGET,
+        anchor: formerAnchor,
+        owner: 'owner-losing-child',
+        set,
+        session: 'session-losing-child',
+      }),
+      3,
+    ),
+  ];
+  const formerAnchorComments = [
+    'acquire',
+    'release',
+    'release-guard',
+    'release-complete',
+  ].map((mode, index) => ({
+    id: 201 + index,
+    body: ownerIdHistoryMarker({
+      mode,
+      target: formerAnchor,
+      anchor: formerAnchor,
+      owner: 'owner-former-anchor',
+      set,
+      session: winningSession,
+    }),
+    createdAt: `2026-10-24T10:00:0${index + 2}Z`,
+  }));
+  const stub = withOwnerIdStub({
+    commentsByIssueNumber: { 44: formerAnchorComments },
+  });
+  try {
+    const result = reconcileFormerChildMemberships({
+      comments: targetComments,
+      historyTargetRef: OWNER_ID_ANCHOR_TARGET,
+      markerPrefix: 'idd-skill',
+      trusted: ['kurone-kito'],
+    });
+    assert.ok(!('problem' in result));
+    if (!('problem' in result)) {
+      assert.deepEqual(result.comments, []);
+      assert.ok(result.closedSets.has(set));
+    }
+  } finally {
+    stub.restore();
+  }
+});
+
+test('authoring-owner child acquire accepts an outdated former-child release only after a verified promotion (#4669)', () => {
+  const history = formerChildHistory(OWNER_ID_TARGET, OWNER_ID_ANCHOR_TARGET);
+  const promotedAnchorComments = [
+    { ...history.child[0], id: 101 },
+    {
+      ...history.child[1],
+      id: 102,
+      minimizedReason: 'outdated',
+    },
+    {
+      id: 205,
+      body: ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: OWNER_ID_TARGET,
+        anchor: OWNER_ID_TARGET,
+        owner: 'owner-promoted',
+        set: 'set-promoted',
+        session: 'session-promoted',
+      }),
+    },
+  ];
+  const stub = withOwnerIdStub({
+    commentsByIssueNumber: {
+      42: promotedAnchorComments,
+      43: history.formerAnchor,
+    },
+  });
+  try {
+    const run = runOwnerIdPost(
+      ownerIdFlags('acquire', {
+        'marker-target': OWNER_ID_ANCHOR_TARGET,
+        anchor: OWNER_ID_TARGET,
+        'marker-owner': 'owner-child-next',
+        set: 'set-promoted',
+        session: 'session-promoted',
+      }),
+      { targetNumber: 43 },
+    );
+    assert.equal(run.status, 0, run.stderr);
+    assert.equal(readOwnerIdLines(stub.readsFile).length, 3);
+    const posted = readOwnerIdLines(stub.postsFile).map((line) =>
+      JSON.parse(line),
+    );
+    assert.equal(posted.length, 1);
+    assert.match(
+      posted[0].body,
+      /target=o\/r#43; anchor=o\/r#42; mode=acquire; owner=owner-child-next; set=set-promoted; session=session-promoted/,
+    );
+  } finally {
+    stub.restore();
+  }
+});
+
+test('authoring-owner child acquire accepts an outdated former-child release after exact completion (#4669)', () => {
+  const history = formerChildHistory(OWNER_ID_TARGET, OWNER_ID_ANCHOR_TARGET);
+  const formerChildOnlyComments = [
+    { ...history.child[0], id: 101 },
+    {
+      ...history.child[1],
+      id: 102,
+      minimizedReason: 'outdated',
+    },
+  ];
+  const newAnchorRef = 'o/r#44';
+  const newAnchorComments = [
+    {
+      id: 301,
+      body: ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: newAnchorRef,
+        anchor: newAnchorRef,
+        owner: 'owner-new-anchor',
+        set: 'set-new-anchor',
+        session: 'session-new-anchor',
+      }),
+    },
+  ];
+  for (const apply of [false, true]) {
+    const stub = withOwnerIdStub({
+      comments: formerChildOnlyComments,
+      commentsByIssueNumber: {
+        43: history.formerAnchor,
+        44: newAnchorComments,
+      },
+    });
+    try {
+      const run = runOwnerIdPost(
+        ownerIdFlags('acquire', {
+          'marker-target': OWNER_ID_TARGET,
+          anchor: newAnchorRef,
+          'marker-owner': 'owner-child-next',
+          set: 'set-new-anchor',
+          session: 'session-new-anchor',
+        }),
+        { apply, targetNumber: 42 },
+      );
+      assert.equal(run.status, 0, `apply=${apply}: ${run.stderr}`);
+      const posted = readOwnerIdLines(stub.postsFile).map((line) =>
+        JSON.parse(line),
+      );
+      assert.equal(posted.length, apply ? 1 : 0, `apply=${apply}`);
+      if (apply) {
+        assert.match(
+          posted[0].body,
+          /target=o\/r#42; anchor=o\/r#44; mode=acquire; owner=owner-child-next; set=set-new-anchor; session=session-new-anchor/,
+        );
+      }
+    } finally {
+      stub.restore();
+    }
+  }
+});
+
+test('authoring-owner acquire recursively reconciles nested former anchors (#4669)', () => {
+  const formerAnchorRef = 'o/r#43';
+  const earlierAnchorRef = 'o/r#44';
+  const aSet = 'set-a-under-b';
+  const aSession = 'session-a-under-b';
+  const bSet = 'set-b-under-c';
+  const bSession = 'session-b-under-c';
+  const at = (seconds: number) =>
+    new Date(Date.parse(TS) + seconds * 1000).toISOString();
+  const targetComments = [
+    {
+      id: 401,
+      createdAt: at(6),
+      body: ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: OWNER_ID_TARGET,
+        anchor: formerAnchorRef,
+        owner: 'owner-a-child',
+        set: aSet,
+        session: aSession,
+      }),
+    },
+    {
+      id: 402,
+      createdAt: at(7),
+      body: ownerIdHistoryMarker({
+        mode: 'release',
+        target: OWNER_ID_TARGET,
+        anchor: formerAnchorRef,
+        owner: 'owner-a-child',
+        set: aSet,
+        session: aSession,
+      }),
+    },
+  ];
+  const formerAnchorComments = [
+    {
+      id: 101,
+      createdAt: at(2),
+      body: ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: formerAnchorRef,
+        anchor: earlierAnchorRef,
+        owner: 'owner-b-child',
+        set: bSet,
+        session: bSession,
+      }),
+    },
+    {
+      id: 102,
+      createdAt: at(3),
+      body: ownerIdHistoryMarker({
+        mode: 'release',
+        target: formerAnchorRef,
+        anchor: earlierAnchorRef,
+        owner: 'owner-b-child',
+        set: bSet,
+        session: bSession,
+      }),
+    },
+    ...(
+      ['acquire', 'release', 'release-guard', 'release-complete'] as const
+    ).map((mode, index) => ({
+      id: 201 + index,
+      createdAt: at([5, 8, 9, 10][index] ?? 5),
+      body: ownerIdHistoryMarker({
+        mode,
+        target: formerAnchorRef,
+        anchor: formerAnchorRef,
+        owner: 'owner-b-self',
+        set: aSet,
+        session: aSession,
+      }),
+    })),
+  ];
+  const earlierAnchorComments = (
+    ['acquire', 'release', 'release-guard', 'release-complete'] as const
+  ).map((mode, index) => ({
+    id: 301 + index,
+    createdAt: at([0, 1, 2, 4][index] ?? 0),
+    body: ownerIdHistoryMarker({
+      mode,
+      target: earlierAnchorRef,
+      anchor: earlierAnchorRef,
+      owner: 'owner-c-self',
+      set: bSet,
+      session: bSession,
+    }),
+  }));
+  const stub = withOwnerIdStub({
+    comments: targetComments,
+    commentsByIssueNumber: {
+      43: formerAnchorComments,
+      44: earlierAnchorComments,
+    },
+  });
+  try {
+    const run = runOwnerIdPost(
+      ownerIdFlags('acquire', {
+        'marker-owner': 'owner-a-self',
+        set: 'set-a-new',
+        session: 'session-a-new',
+      }),
+    );
+    assert.equal(run.status, 0, run.stderr);
+    assert.equal(readOwnerIdLines(stub.readsFile).length, 3);
+    assert.equal(readOwnerIdLines(stub.postsFile).length, 1);
+  } finally {
+    stub.restore();
+  }
+});
+
+test('authoring-owner acquire keeps nested former-anchor sets closed after promotion (#4669)', () => {
+  const formerAnchorRef = 'o/r#43';
+  const earlierAnchorRef = 'o/r#44';
+  const nestedSet = 'set-nested-under-b';
+  const nestedSession = 'session-nested-under-b';
+  const directSet = 'set-direct-under-a';
+  const directSession = 'session-direct-under-a';
+  const at = (seconds: number) =>
+    new Date(Date.parse(TS) + seconds * 1000).toISOString();
+  const targetComments = [
+    {
+      id: 401,
+      createdAt: at(11),
+      body: ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: OWNER_ID_TARGET,
+        anchor: formerAnchorRef,
+        owner: 'owner-target-child',
+        set: directSet,
+        session: directSession,
+      }),
+    },
+    {
+      id: 402,
+      createdAt: at(12),
+      body: ownerIdHistoryMarker({
+        mode: 'release',
+        target: OWNER_ID_TARGET,
+        anchor: formerAnchorRef,
+        owner: 'owner-target-child',
+        set: directSet,
+        session: directSession,
+      }),
+    },
+  ];
+  const formerAnchorComments = [
+    {
+      id: 101,
+      createdAt: at(2),
+      body: ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: formerAnchorRef,
+        anchor: earlierAnchorRef,
+        owner: 'owner-former-anchor-child',
+        set: nestedSet,
+        session: nestedSession,
+      }),
+    },
+    {
+      id: 102,
+      createdAt: at(3),
+      body: ownerIdHistoryMarker({
+        mode: 'release',
+        target: formerAnchorRef,
+        anchor: earlierAnchorRef,
+        owner: 'owner-former-anchor-child',
+        set: nestedSet,
+        session: nestedSession,
+      }),
+    },
+    ...(
+      ['acquire', 'release', 'release-guard', 'release-complete'] as const
+    ).map((mode, index) => ({
+      id: 201 + index,
+      createdAt: at([7, 14, 15, 16][index] ?? 7),
+      body: ownerIdHistoryMarker({
+        mode,
+        target: formerAnchorRef,
+        anchor: formerAnchorRef,
+        owner: 'owner-former-anchor-self',
+        set: directSet,
+        session: directSession,
+      }),
+    })),
+  ];
+  const earlierAnchorComments = (
+    ['acquire', 'release', 'release-guard', 'release-complete'] as const
+  ).map((mode, index) => ({
+    id: 301 + index,
+    createdAt: at([0, 4, 5, 6][index] ?? 0),
+    body: ownerIdHistoryMarker({
+      mode,
+      target: earlierAnchorRef,
+      anchor: earlierAnchorRef,
+      owner: 'owner-earlier-anchor-self',
+      set: nestedSet,
+      session: nestedSession,
+    }),
+  }));
+  const stub = withOwnerIdStub({
+    comments: targetComments,
+    commentsByIssueNumber: {
+      43: formerAnchorComments,
+      44: earlierAnchorComments,
+    },
+  });
+  try {
+    const run = runOwnerIdPost(
+      ownerIdFlags('acquire', {
+        'marker-owner': 'owner-promoted-target',
+        set: nestedSet,
+        session: 'session-promoted-target',
+      }),
+    );
+    assert.equal(run.status, 1);
+    assert.equal(run.kind, 'gate');
+    assert.match(
+      run.stderr,
+      /already closed by a trusted release-complete marker in the verified history of anchor o\/r#42/,
+    );
+    assert.equal(readOwnerIdLines(stub.readsFile).length, 3);
+    assert.deepEqual(readOwnerIdLines(stub.postsFile), []);
+  } finally {
+    stub.restore();
+  }
+});
+
+test('authoring-owner acquire accepts an outdated child release after its former anchor resumes (#4669)', () => {
+  const formerAnchorRef = 'o/r#43';
+  const earlierAnchorRef = 'o/r#44';
+  const nestedSet = 'set-nested-under-b';
+  const nestedSession = 'session-nested-under-b';
+  const directSet = 'set-direct-under-a';
+  const initialSession = 'session-direct-initial';
+  const resumedSession = 'session-direct-resumed';
+  const at = (seconds: number) =>
+    new Date(Date.parse(TS) + seconds * 1000).toISOString();
+  const targetComments = [
+    {
+      id: 401,
+      createdAt: at(11),
+      body: ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: OWNER_ID_TARGET,
+        anchor: formerAnchorRef,
+        owner: 'owner-target-child',
+        set: directSet,
+        session: resumedSession,
+      }),
+    },
+    {
+      id: 402,
+      createdAt: at(12),
+      body: ownerIdHistoryMarker({
+        mode: 'release',
+        target: OWNER_ID_TARGET,
+        anchor: formerAnchorRef,
+        owner: 'owner-target-child',
+        set: directSet,
+        session: resumedSession,
+      }),
+    },
+  ];
+  const formerAnchorComments = [
+    {
+      id: 101,
+      createdAt: at(2),
+      body: ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: formerAnchorRef,
+        anchor: earlierAnchorRef,
+        owner: 'owner-former-anchor-child',
+        set: nestedSet,
+        session: nestedSession,
+      }),
+    },
+    {
+      id: 102,
+      createdAt: at(3),
+      minimizedReason: 'outdated',
+      body: ownerIdHistoryMarker({
+        mode: 'release',
+        target: formerAnchorRef,
+        anchor: earlierAnchorRef,
+        owner: 'owner-former-anchor-child',
+        set: nestedSet,
+        session: nestedSession,
+      }),
+    },
+    {
+      id: 201,
+      createdAt: at(7),
+      body: ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: formerAnchorRef,
+        anchor: formerAnchorRef,
+        owner: 'owner-former-anchor-initial',
+        set: directSet,
+        session: initialSession,
+      }),
+    },
+    {
+      id: 202,
+      createdAt: at(8),
+      body: ownerIdBody(
+        ownerIdFlags('resume', {
+          'marker-target': formerAnchorRef,
+          anchor: formerAnchorRef,
+          'marker-owner': 'owner-former-anchor-resumed',
+          set: directSet,
+          session: resumedSession,
+          supersedes: 'owner-former-anchor-initial',
+        }),
+      ),
+    },
+    ...(['release', 'release-guard', 'release-complete'] as const).map(
+      (mode, index) => ({
+        id: 203 + index,
+        createdAt: at([14, 15, 16][index] ?? 14),
+        body: ownerIdHistoryMarker({
+          mode,
+          target: formerAnchorRef,
+          anchor: formerAnchorRef,
+          owner: 'owner-former-anchor-resumed',
+          set: directSet,
+          session: resumedSession,
+        }),
+      }),
+    ),
+  ];
+  const earlierAnchorComments = (
+    ['acquire', 'release', 'release-guard', 'release-complete'] as const
+  ).map((mode, index) => ({
+    id: 301 + index,
+    createdAt: at([0, 4, 5, 6][index] ?? 0),
+    body: ownerIdHistoryMarker({
+      mode,
+      target: earlierAnchorRef,
+      anchor: earlierAnchorRef,
+      owner: 'owner-earlier-anchor-self',
+      set: nestedSet,
+      session: nestedSession,
+    }),
+  }));
+  const stub = withOwnerIdStub({
+    comments: targetComments,
+    commentsByIssueNumber: {
+      43: formerAnchorComments,
+      44: earlierAnchorComments,
+    },
+  });
+  try {
+    const run = runOwnerIdPost(
+      ownerIdFlags('acquire', {
+        'marker-owner': 'owner-target-promoted',
+        set: 'set-target-promoted',
+        session: 'session-target-promoted',
+      }),
+    );
+    assert.equal(run.status, 0, run.stderr);
+    assert.equal(readOwnerIdLines(stub.readsFile).length, 3);
+    assert.equal(readOwnerIdLines(stub.postsFile).length, 1);
+  } finally {
+    stub.restore();
+  }
+});
+
+test('authoring-owner acquire fails closed when former-anchor replay cycles (#4669)', () => {
+  const formerAnchorRef = 'o/r#43';
+  const earlierAnchorRef = 'o/r#44';
+  const targetComments = [
+    {
+      id: 401,
+      body: ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: OWNER_ID_TARGET,
+        anchor: formerAnchorRef,
+        owner: 'owner-a-child',
+        set: 'set-a-under-b',
+        session: 'session-a-under-b',
+      }),
+    },
+    {
+      id: 402,
+      body: ownerIdHistoryMarker({
+        mode: 'release',
+        target: OWNER_ID_TARGET,
+        anchor: formerAnchorRef,
+        owner: 'owner-a-child',
+        set: 'set-a-under-b',
+        session: 'session-a-under-b',
+      }),
+    },
+  ];
+  const formerAnchorComments = [
+    {
+      id: 101,
+      body: ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: formerAnchorRef,
+        anchor: earlierAnchorRef,
+        owner: 'owner-b-child',
+        set: 'set-b-under-c',
+        session: 'session-b-under-c',
+      }),
+    },
+    {
+      id: 102,
+      body: ownerIdHistoryMarker({
+        mode: 'release',
+        target: formerAnchorRef,
+        anchor: earlierAnchorRef,
+        owner: 'owner-b-child',
+        set: 'set-b-under-c',
+        session: 'session-b-under-c',
+      }),
+    },
+  ];
+  const earlierAnchorComments = [
+    {
+      id: 201,
+      body: ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: earlierAnchorRef,
+        anchor: formerAnchorRef,
+        owner: 'owner-c-child',
+        set: 'set-c-under-b',
+        session: 'session-c-under-b',
+      }),
+    },
+    {
+      id: 202,
+      body: ownerIdHistoryMarker({
+        mode: 'release',
+        target: earlierAnchorRef,
+        anchor: formerAnchorRef,
+        owner: 'owner-c-child',
+        set: 'set-c-under-b',
+        session: 'session-c-under-b',
+      }),
+    },
+  ];
+  const stub = withOwnerIdStub({
+    comments: targetComments,
+    commentsByIssueNumber: {
+      43: formerAnchorComments,
+      44: earlierAnchorComments,
+    },
+  });
+  try {
+    const run = runOwnerIdPost(ownerIdFlags('acquire', { set: 'set-a-new' }));
+    assert.equal(run.status, 1);
+    assert.equal(run.kind, 'gate');
+    assert.match(run.stderr, /former-anchor reconciliation cycle detected/);
+    assert.deepEqual(readOwnerIdLines(stub.postsFile), []);
+  } finally {
+    stub.restore();
+  }
+});
+
+test('authoring-owner acquire fails closed when former-anchor replay exceeds its depth bound (#4669)', () => {
+  const anchorRefs = Array.from(
+    { length: 36 },
+    (_, index) => `o/r#${43 + index}`,
+  );
+  const commentsByIssueNumber: Record<number, OwnerIdComment[]> = {};
+  for (let index = 0; index < anchorRefs.length - 1; index += 1) {
+    const target = anchorRefs[index];
+    const anchor = anchorRefs[index + 1];
+    assert.ok(target);
+    assert.ok(anchor);
+    const set = `set-depth-${index}`;
+    const session = `session-depth-${index}`;
+    commentsByIssueNumber[43 + index] = [
+      {
+        id: 1000 + index * 2,
+        body: ownerIdHistoryMarker({
+          mode: 'acquire',
+          target,
+          anchor,
+          owner: `owner-child-${index}`,
+          set,
+          session,
+        }),
+      },
+      {
+        id: 1001 + index * 2,
+        body: ownerIdHistoryMarker({
+          mode: 'release',
+          target,
+          anchor,
+          owner: `owner-child-${index}`,
+          set,
+          session,
+        }),
+      },
+    ];
+  }
+  const stub = withOwnerIdStub({
+    comments: [
+      {
+        id: 401,
+        body: ownerIdHistoryMarker({
+          mode: 'acquire',
+          target: OWNER_ID_TARGET,
+          anchor: anchorRefs[0] ?? 'o/r#43',
+          owner: 'owner-a-child',
+          set: 'set-a-under-depth',
+          session: 'session-a-under-depth',
+        }),
+      },
+      {
+        id: 402,
+        body: ownerIdHistoryMarker({
+          mode: 'release',
+          target: OWNER_ID_TARGET,
+          anchor: anchorRefs[0] ?? 'o/r#43',
+          owner: 'owner-a-child',
+          set: 'set-a-under-depth',
+          session: 'session-a-under-depth',
+        }),
+      },
+    ],
+    commentsByIssueNumber,
+  });
+  try {
+    const run = runOwnerIdPost(ownerIdFlags('acquire', { set: 'set-a-new' }));
+    assert.equal(run.status, 1);
+    assert.equal(run.kind, 'gate');
+    assert.match(run.stderr, /exceeded the maximum depth of 32/);
+    assert.deepEqual(readOwnerIdLines(stub.postsFile), []);
+  } finally {
+    stub.restore();
+  }
+});
+
+test('authoring-owner acquire bounds former-anchor history reads across siblings (#4669)', () => {
+  const membershipCount = 33;
+  const commentsByIssueNumber: Record<number, OwnerIdComment[]> = {};
+  const targetComments: OwnerIdComment[] = [];
+  const at = (seconds: number) =>
+    new Date(Date.parse(TS) + seconds * 1000).toISOString();
+
+  for (let index = 0; index < membershipCount; index += 1) {
+    const anchorNumber = 43 + index;
+    const anchorRef = `o/r#${anchorNumber}`;
+    const set = `set-budget-${index}`;
+    const session = `session-budget-${index}`;
+    const childOwner = `owner-child-${index}`;
+    const anchorOwner = `owner-anchor-${index}`;
+    const firstChildCommentId = 1000 + index * 2;
+
+    targetComments.push(
+      {
+        id: firstChildCommentId,
+        createdAt: at(index * 10 + 1),
+        body: ownerIdHistoryMarker({
+          mode: 'acquire',
+          target: OWNER_ID_TARGET,
+          anchor: anchorRef,
+          owner: childOwner,
+          set,
+          session,
+        }),
+      },
+      {
+        id: firstChildCommentId + 1,
+        createdAt: at(index * 10 + 2),
+        body: ownerIdHistoryMarker({
+          mode: 'release',
+          target: OWNER_ID_TARGET,
+          anchor: anchorRef,
+          owner: childOwner,
+          set,
+          session,
+        }),
+      },
+    );
+
+    const firstAnchorCommentId = 10_000 + index * 4;
+    commentsByIssueNumber[anchorNumber] = [
+      {
+        id: firstAnchorCommentId,
+        createdAt: at(index * 10),
+        body: ownerIdHistoryMarker({
+          mode: 'acquire',
+          target: anchorRef,
+          anchor: anchorRef,
+          owner: anchorOwner,
+          set,
+          session,
+        }),
+      },
+      {
+        id: firstAnchorCommentId + 1,
+        createdAt: at(index * 10 + 3),
+        body: ownerIdHistoryMarker({
+          mode: 'release',
+          target: anchorRef,
+          anchor: anchorRef,
+          owner: anchorOwner,
+          set,
+          session,
+        }),
+      },
+      {
+        id: firstAnchorCommentId + 2,
+        createdAt: at(index * 10 + 4),
+        body: ownerIdHistoryMarker({
+          mode: 'release-guard',
+          target: anchorRef,
+          anchor: anchorRef,
+          owner: anchorOwner,
+          set,
+          session,
+        }),
+      },
+      {
+        id: firstAnchorCommentId + 3,
+        createdAt: at(index * 10 + 5),
+        body: ownerIdHistoryMarker({
+          mode: 'release-complete',
+          target: anchorRef,
+          anchor: anchorRef,
+          owner: anchorOwner,
+          set,
+          session,
+        }),
+      },
+    ];
+  }
+
+  const stub = withOwnerIdStub({
+    comments: targetComments,
+    commentsByIssueNumber,
+  });
+  try {
+    const run = runOwnerIdPost(ownerIdFlags('acquire', { set: 'set-new' }));
+    assert.equal(run.status, 1);
+    assert.equal(run.kind, 'gate');
+    assert.match(
+      run.stderr,
+      /former-anchor reconciliation exceeded the maximum of 32 former-anchor history reads/,
+    );
+    assert.equal(readOwnerIdLines(stub.readsFile).length, 33);
+    assert.deepEqual(readOwnerIdLines(stub.postsFile), []);
+  } finally {
+    stub.restore();
+  }
+});
+
+test('authoring-owner child acquire refuses promotion before release-complete (#4669)', () => {
+  const formerAnchorRef = 'o/r#44';
+  const history = formerChildHistory(OWNER_ID_ANCHOR_TARGET, formerAnchorRef);
+  const promotedAnchorComments = [
+    ...history.child,
+    {
+      id: 203,
+      body: ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: OWNER_ID_ANCHOR_TARGET,
+        anchor: OWNER_ID_ANCHOR_TARGET,
+        owner: 'owner-anchor-43',
+        set: OWNER_ID_ANCHOR_SET,
+        session: OWNER_ID_ANCHOR_SESSION,
+      }),
+    },
+  ];
+  const stub = withOwnerIdStub({
+    commentsByIssueNumber: {
+      43: promotedAnchorComments,
+      44: history.formerAnchor,
+    },
+  });
+  try {
+    const run = runOwnerIdPost(
+      ownerIdFlags('acquire', {
+        anchor: OWNER_ID_ANCHOR_TARGET,
+        'marker-owner': 'owner-child-next',
+        set: OWNER_ID_ANCHOR_SET,
+        session: OWNER_ID_ANCHOR_SESSION,
+      }),
+    );
+    assert.equal(run.status, 1);
+    assert.equal(run.kind, 'gate');
+    assert.match(
+      run.stderr,
+      /anchor o\/r#43 has no open owner generation to join/,
+    );
+    assert.deepEqual(readOwnerIdLines(stub.postsFile), []);
+  } finally {
+    stub.restore();
+  }
+});
+
+test('authoring-owner acquire refuses an unreconciled former-child generation (#4669)', () => {
+  const scenarios: {
+    name: string;
+    targetComments: OwnerIdComment[];
+    formerAnchorComments: OwnerIdComment[];
+  }[] = [
+    {
+      name: 'same-timestamp completion sorts before the child release',
+      targetComments: [
+        { id: 201, body: ownerIdChildMarker('acquire') },
+        { id: 202, body: ownerIdChildMarker('release') },
+      ],
+      formerAnchorComments: [
+        { id: 101, body: ownerIdAnchorMarker('acquire') },
+        { id: 102, body: ownerIdAnchorMarker('release') },
+        { id: 103, body: ownerIdAnchorMarker('release-guard') },
+        { id: 150, body: ownerIdAnchorMarker('release-complete') },
+      ],
+    },
+    {
+      name: 'former anchor has no release-complete',
+      targetComments: [
+        { id: 101, body: ownerIdChildMarker('acquire') },
+        { id: 102, body: ownerIdChildMarker('release') },
+      ],
+      formerAnchorComments: [
+        { id: 201, body: ownerIdAnchorMarker('acquire') },
+        { id: 202, body: ownerIdAnchorMarker('release') },
+      ],
+    },
+    {
+      name: 'child generation session does not match the former anchor completion',
+      targetComments: [
+        {
+          id: 101,
+          body: ownerIdChildMarker('acquire', { session: 'session-child' }),
+        },
+        {
+          id: 102,
+          body: ownerIdChildMarker('release', { session: 'session-other' }),
+        },
+      ],
+      formerAnchorComments: [
+        { id: 201, body: ownerIdAnchorMarker('acquire') },
+        { id: 202, body: ownerIdAnchorMarker('release') },
+        { id: 203, body: ownerIdAnchorMarker('release-guard') },
+        { id: 204, body: ownerIdAnchorMarker('release-complete') },
+      ],
+    },
+  ];
+
+  for (const scenario of scenarios) {
+    for (const apply of [false, true]) {
+      const stub = withOwnerIdStub({
+        comments: scenario.targetComments,
+        commentsByIssueNumber: { 43: scenario.formerAnchorComments },
+      });
+      try {
+        const run = runOwnerIdPost(
+          ownerIdFlags('acquire', {
+            'marker-owner': 'owner-next',
+            set: 'set-next',
+          }),
+          { apply },
+        );
+        assert.equal(run.status, 1, `${scenario.name}, apply=${apply}`);
+        assert.equal(run.kind, 'gate', `${scenario.name}, apply=${apply}`);
+        assert.match(run.stderr, /former child membership/);
+        assert.deepEqual(readOwnerIdLines(stub.postsFile), [], scenario.name);
+      } finally {
+        stub.restore();
+      }
+    }
+  }
+});
+
+test('authoring-owner acquire fails closed when a former anchor log cannot be read (#4669)', () => {
+  for (const apply of [false, true]) {
+    const stub = withOwnerIdStub({
+      comments: [
+        { id: 101, body: ownerIdChildMarker('acquire') },
+        { id: 102, body: ownerIdChildMarker('release') },
+      ],
+      graphqlFailureIssueNumber: 43,
+    });
+    try {
+      const run = runOwnerIdPost(
+        ownerIdFlags('acquire', {
+          'marker-owner': 'owner-next',
+          set: 'set-next',
+        }),
+        { apply },
+      );
+      assert.equal(run.status, 1, `apply=${apply}`);
+      assert.equal(run.kind, 'gate', `apply=${apply}`);
+      assert.match(
+        run.stderr,
+        /former anchor o\/r#43 owner history cannot be read/,
+      );
+      assert.equal(
+        readOwnerIdLines(stub.readsFile).length,
+        2,
+        `apply=${apply}`,
+      );
+      assert.deepEqual(readOwnerIdLines(stub.postsFile), []);
+    } finally {
+      stub.restore();
+    }
+  }
+});
+
+test('authoring-owner acquire and bootstrap refuse a trusted history that cannot be replayed conclusively in dry-run and apply (#4669)', () => {
+  const comments = [
+    OWNER_ID_ACQUIRE_OPENER,
+    {
+      id: 102,
+      body: ownerIdBody(ownerIdFlags('release-complete')),
+    },
+  ];
+  for (const mode of ['acquire', 'bootstrap']) {
+    for (const apply of [false, true]) {
+      const stub = withOwnerIdStub({ comments });
+      try {
+        const run = runOwnerIdPost(ownerIdFlags(mode), { apply });
+        assert.equal(run.status, 1, `${mode}, apply=${apply}`);
+        assert.equal(run.kind, 'gate', `${mode}, apply=${apply}`);
+        assert.match(
+          run.stderr,
+          /closes a generation with no accepted release marker in progress/,
+        );
+        assert.deepEqual(readOwnerIdLines(stub.postsFile), []);
+      } finally {
+        stub.restore();
+      }
+    }
+  }
+});
+
+test('authoring-owner ignores an untrusted release-complete and keeps a releasing set closed to acquisition (#4669)', () => {
+  const comments = [
+    OWNER_ID_ACQUIRE_OPENER,
+    { id: 102, body: ownerIdBody(ownerIdFlags('release')) },
+    {
+      id: 103,
+      body: ownerIdBody(ownerIdFlags('release-complete')),
+      author: 'stranger',
+    },
+  ];
+  const stub = withOwnerIdStub({ comments });
+  try {
+    const run = runOwnerIdPost(ownerIdFlags('acquire'));
+    assert.equal(run.status, 1);
+    assert.equal(run.kind, 'gate');
+    assert.match(
+      run.stderr,
+      /already has open set .* with release in progress/,
+    );
+    assert.deepEqual(readOwnerIdLines(stub.postsFile), []);
+  } finally {
+    stub.restore();
+  }
+});
+
+test('authoring-owner child acquire joins only the matching non-releasing anchor set (#4669)', () => {
+  for (const apply of [false, true]) {
+    const stub = withOwnerIdStub({
+      comments: [],
+      commentsByIssueNumber: {
+        43: [{ id: 101, body: ownerIdAnchorMarker('acquire') }],
+      },
+    });
+    try {
+      const flags = ownerIdFlags('acquire', {
+        anchor: OWNER_ID_ANCHOR_TARGET,
+        'marker-owner': 'owner-child-42',
+        set: OWNER_ID_ANCHOR_SET,
+        session: OWNER_ID_ANCHOR_SESSION,
+      });
+      const run = runOwnerIdPost(flags, { apply });
+      assert.equal(run.status, 0, run.stderr);
+      const posts = readOwnerIdLines(stub.postsFile).map((line) =>
+        JSON.parse(line),
+      );
+      assert.equal(posts.length, apply ? 1 : 0);
+      if (apply) assert.match(posts[0].body, /owner=owner-child-42/);
+      assert.equal(readOwnerIdLines(stub.readsFile).length, 2);
+    } finally {
+      stub.restore();
+    }
+  }
+});
+
+test('authoring-owner child acquire reconciles the target history before joining a different anchor (#4669)', () => {
+  const priorChildMembership = [
+    { id: 101, body: ownerIdChildMarker('acquire') },
+    { id: 102, body: ownerIdChildMarker('release') },
+  ];
+  const priorAnchorHistory = [
+    { id: 201, body: ownerIdAnchorMarker('acquire') },
+    { id: 202, body: ownerIdAnchorMarker('release') },
+  ];
+
+  for (const mode of ['acquire', 'bootstrap']) {
+    for (const apply of [false, true]) {
+      const stub = withOwnerIdStub({
+        comments: priorChildMembership,
+        commentsByIssueNumber: { 43: priorAnchorHistory, 44: [] },
+      });
+      try {
+        const run = runOwnerIdPost(
+          ownerIdFlags(mode, {
+            anchor: 'o/r#44',
+            'marker-owner': 'owner-new-child',
+            set: 'set-new-child',
+            session: 'session-new-child',
+          }),
+          { apply },
+        );
+        assert.equal(run.status, 1, `${mode}, apply=${apply}`);
+        assert.equal(run.kind, 'gate', `${mode}, apply=${apply}`);
+        assert.match(run.stderr, /former child membership/);
+        assert.equal(readOwnerIdLines(stub.readsFile).length, 2);
+        assert.deepEqual(readOwnerIdLines(stub.postsFile), []);
+      } finally {
+        stub.restore();
+      }
+    }
+  }
+});
+
+test('authoring-owner child acquire ignores a losing foreign opener after a same-token self-anchor win (#4669)', () => {
+  const targetComments = [
+    { id: 101, body: ownerIdAnchorMarker('acquire') },
+    {
+      id: 102,
+      body: ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: OWNER_ID_ANCHOR_TARGET,
+        anchor: 'o/r#44',
+        owner: 'owner-anchor-43',
+        set: 'set-losing-child',
+        session: 'session-losing-child',
+      }),
+    },
+    {
+      id: 103,
+      body: ownerIdHistoryMarker({
+        mode: 'heartbeat',
+        target: OWNER_ID_ANCHOR_TARGET,
+        anchor: 'o/r#44',
+        owner: 'owner-anchor-43',
+        set: 'set-losing-child',
+        session: 'session-losing-child',
+      }),
+    },
+  ];
+  for (const apply of [false, true]) {
+    const stub = withOwnerIdStub({
+      comments: [],
+      commentsByIssueNumber: { 43: targetComments },
+    });
+    try {
+      const run = runOwnerIdPost(
+        ownerIdFlags('acquire', {
+          anchor: OWNER_ID_ANCHOR_TARGET,
+          'marker-owner': 'owner-child-42',
+          set: OWNER_ID_ANCHOR_SET,
+          session: OWNER_ID_ANCHOR_SESSION,
+        }),
+        { apply },
+      );
+      assert.equal(run.status, 0, run.stderr);
+      assert.equal(
+        readOwnerIdLines(stub.readsFile).length,
+        2,
+        `apply=${apply}`,
+      );
+      const posted = readOwnerIdLines(stub.postsFile).map((line) =>
+        JSON.parse(line),
+      );
+      assert.equal(posted.length, apply ? 1 : 0, `apply=${apply}`);
+      if (apply) assert.match(posted[0].body, /owner=owner-child-42/);
+    } finally {
+      stub.restore();
+    }
+  }
+});
+
+test('authoring-owner acquire ignores a losing self opener after an earlier child generation (#4669)', () => {
+  const formerAnchorRef = 'o/r#44';
+  const set = 'set-child-first';
+  const session = 'session-child-first';
+  const at = (seconds: number) =>
+    new Date(Date.parse(TS) + seconds * 1000).toISOString();
+  const targetComments = [
+    {
+      id: 101,
+      createdAt: at(1),
+      body: ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: OWNER_ID_ANCHOR_TARGET,
+        anchor: formerAnchorRef,
+        owner: 'owner-child-first',
+        set,
+        session,
+      }),
+    },
+    {
+      id: 102,
+      createdAt: at(2),
+      body: ownerIdAnchorMarker('acquire', {
+        'marker-owner': 'owner-losing-self',
+        set: 'set-losing-self',
+        session: 'session-losing-self',
+      }),
+    },
+    {
+      id: 103,
+      createdAt: at(3),
+      body: ownerIdAnchorMarker('acquire', {
+        'marker-owner': 'owner-losing-self-second',
+        set: 'set-losing-self-second',
+        session: 'session-losing-self-second',
+      }),
+    },
+    {
+      id: 104,
+      createdAt: at(4),
+      body: ownerIdHistoryMarker({
+        mode: 'release',
+        target: OWNER_ID_ANCHOR_TARGET,
+        anchor: formerAnchorRef,
+        owner: 'owner-child-first',
+        set,
+        session,
+      }),
+    },
+  ];
+  const formerAnchorComments = (
+    ['acquire', 'release', 'release-guard', 'release-complete'] as const
+  ).map((mode, index) => ({
+    id: 201 + index,
+    createdAt: at([0, 4, 5, 6][index] ?? 0),
+    body: ownerIdHistoryMarker({
+      mode,
+      target: formerAnchorRef,
+      anchor: formerAnchorRef,
+      owner: 'owner-former-anchor',
+      set,
+      session,
+    }),
+  }));
+
+  for (const apply of [false, true]) {
+    const stub = withOwnerIdStub({
+      comments: targetComments,
+      commentsByIssueNumber: { 44: formerAnchorComments },
+    });
+    try {
+      const run = runOwnerIdPost(
+        ownerIdFlags('acquire', {
+          'marker-target': OWNER_ID_ANCHOR_TARGET,
+          anchor: OWNER_ID_ANCHOR_TARGET,
+          'marker-owner': 'owner-self-next',
+          set: 'set-self-next',
+          session: 'session-self-next',
+        }),
+        { apply, targetNumber: 43 },
+      );
+      assert.equal(run.status, 0, `apply=${apply}: ${run.stderr}`);
+      const posted = readOwnerIdLines(stub.postsFile).map((line) =>
+        JSON.parse(line),
+      );
+      assert.equal(posted.length, apply ? 1 : 0, `apply=${apply}`);
+      if (apply) {
+        assert.match(
+          posted[0].body,
+          /mode=acquire; owner=owner-self-next; set=set-self-next/,
+        );
+      }
+    } finally {
+      stub.restore();
+    }
+  }
+});
+
+test('former-child reconciliation preserves winning self-anchor closure after a losing opener (#4669)', () => {
+  const targetRef = OWNER_ID_TARGET;
+  const formerAnchor = OWNER_ID_ANCHOR_TARGET;
+  const childSet = 'set-former-child-before-self-race';
+  const childSession = 'session-former-child-before-self-race';
+  const winningSet = 'set-winning-self-race';
+  const winningSession = 'session-winning-self-race';
+  const at = (seconds: number) =>
+    new Date(Date.parse(TS) + seconds * 1000).toISOString();
+  const targetComments = [
+    {
+      id: 101,
+      createdAt: at(1),
+      body: ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: targetRef,
+        anchor: formerAnchor,
+        owner: 'owner-former-child-race',
+        set: childSet,
+        session: childSession,
+      }),
+    },
+    {
+      id: 102,
+      createdAt: at(2),
+      body: ownerIdHistoryMarker({
+        mode: 'release',
+        target: targetRef,
+        anchor: formerAnchor,
+        owner: 'owner-former-child-race',
+        set: childSet,
+        session: childSession,
+      }),
+    },
+    {
+      id: 103,
+      createdAt: at(5),
+      body: ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: targetRef,
+        anchor: targetRef,
+        owner: 'owner-winning-self-race',
+        set: winningSet,
+        session: winningSession,
+      }),
+    },
+    {
+      id: 104,
+      createdAt: at(6),
+      body: ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: targetRef,
+        anchor: targetRef,
+        owner: 'owner-losing-self-race',
+        set: 'set-losing-self-race',
+        session: 'session-losing-self-race',
+      }),
+    },
+    {
+      id: 105,
+      createdAt: at(6.25),
+      body: ownerIdHistoryMarker({
+        mode: 'release',
+        target: targetRef,
+        anchor: targetRef,
+        owner: 'owner-losing-self-race',
+        set: 'set-losing-self-race',
+        session: 'session-losing-self-race-release',
+      }),
+    },
+    {
+      id: 106,
+      createdAt: at(6.5),
+      body: ownerIdHistoryMarker({
+        mode: 'resume',
+        target: targetRef,
+        anchor: targetRef,
+        owner: 'owner-losing-self-race-resumed',
+        set: 'set-losing-self-race',
+        session: 'session-losing-self-race-resumed',
+        supersedes: 'owner-losing-self-race',
+      }),
+    },
+    {
+      id: 107,
+      createdAt: at(7),
+      body: ownerIdHistoryMarker({
+        mode: 'release',
+        target: targetRef,
+        anchor: targetRef,
+        owner: 'owner-winning-self-race',
+        set: winningSet,
+        session: winningSession,
+      }),
+    },
+    {
+      id: 108,
+      createdAt: at(8),
+      body: ownerIdHistoryMarker({
+        mode: 'release-complete',
+        target: targetRef,
+        anchor: targetRef,
+        owner: 'owner-winning-self-race',
+        set: winningSet,
+        session: winningSession,
+      }),
+    },
+  ];
+  const formerAnchorComments = (
+    ['acquire', 'release', 'release-guard', 'release-complete'] as const
+  ).map((mode, index) => ({
+    id: 201 + index,
+    createdAt: at([0, 3, 3.5, 4][index] ?? 0),
+    body: ownerIdHistoryMarker({
+      mode,
+      target: formerAnchor,
+      anchor: formerAnchor,
+      owner: 'owner-former-anchor-race',
+      set: childSet,
+      session: childSession,
+    }),
+  }));
+  const stub = withOwnerIdStub({
+    commentsByIssueNumber: { 43: formerAnchorComments },
+  });
+  try {
+    const result = reconcileFormerChildMemberships({
+      comments: targetComments.map((comment) => ({
+        ...comment,
+        authorLogin: 'kurone-kito',
+        updatedAt: comment.createdAt,
+        lastEditedAt: null,
+        isMinimized: false,
+        minimizedReason: null,
+      })),
+      historyTargetRef: targetRef,
+      markerPrefix: 'idd-skill',
+      trusted: ['kurone-kito'],
+    });
+    assert.ok(!('problem' in result));
+    if (!('problem' in result)) {
+      assert.deepEqual(
+        result.comments.map((comment) => comment.id),
+        [103, 107, 108],
+      );
+      assert.ok(result.closedSets.has(childSet));
+    }
+  } finally {
+    stub.restore();
+  }
+});
+
+test('former-child replay filters losing self-owner lineages before later openings (#4669)', () => {
+  const targetRef = OWNER_ID_TARGET;
+  const formerAnchor = OWNER_ID_ANCHOR_TARGET;
+  const childSet = 'set-former-child-before-losing-self';
+  const childSession = 'session-former-child-before-losing-self';
+  const losingSet = 'set-losing-self-before-child-completion';
+  const losingOwner = 'owner-losing-self-before-child-completion';
+  const resumedOwner = 'owner-losing-self-resumed-before-completion';
+  const freshSet = 'set-fresh-self-after-child-completion';
+  const freshSession = 'session-fresh-self-after-child-completion';
+  const at = (seconds: number) =>
+    new Date(Date.parse(TS) + seconds * 1000).toISOString();
+  const targetComments = [
+    {
+      id: 101,
+      createdAt: at(1),
+      body: ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: targetRef,
+        anchor: formerAnchor,
+        owner: 'owner-former-child-before-losing-self',
+        set: childSet,
+        session: childSession,
+      }),
+    },
+    {
+      id: 102,
+      createdAt: at(2),
+      body: ownerIdHistoryMarker({
+        mode: 'release',
+        target: targetRef,
+        anchor: formerAnchor,
+        owner: 'owner-former-child-before-losing-self',
+        set: childSet,
+        session: childSession,
+      }),
+    },
+    {
+      id: 103,
+      createdAt: at(3),
+      body: ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: targetRef,
+        anchor: targetRef,
+        owner: losingOwner,
+        set: losingSet,
+        session: 'session-losing-self-before-child-completion',
+      }),
+    },
+    {
+      id: 104,
+      createdAt: at(3.25),
+      body: ownerIdHistoryMarker({
+        mode: 'release',
+        target: targetRef,
+        anchor: targetRef,
+        owner: losingOwner,
+        set: losingSet,
+        session: 'session-losing-self-before-child-completion-release',
+      }),
+    },
+    {
+      id: 105,
+      createdAt: at(3.5),
+      body: ownerIdHistoryMarker({
+        mode: 'resume',
+        target: targetRef,
+        anchor: targetRef,
+        owner: resumedOwner,
+        set: losingSet,
+        session: 'session-losing-self-before-child-completion-resumed',
+        supersedes: losingOwner,
+      }),
+    },
+    {
+      id: 106,
+      createdAt: at(5),
+      body: ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: targetRef,
+        anchor: targetRef,
+        owner: 'owner-fresh-self-after-child-completion',
+        set: freshSet,
+        session: freshSession,
+      }),
+    },
+  ];
+  const formerAnchorComments = (
+    ['acquire', 'release', 'release-guard', 'release-complete'] as const
+  ).map((mode, index) => ({
+    id: 201 + index,
+    createdAt: at([0, 3, 3.5, 4][index] ?? 0),
+    body: ownerIdHistoryMarker({
+      mode,
+      target: formerAnchor,
+      anchor: formerAnchor,
+      owner: 'owner-former-anchor-before-losing-self',
+      set: childSet,
+      session: childSession,
+    }),
+  }));
+  const stub = withOwnerIdStub({
+    commentsByIssueNumber: { 43: formerAnchorComments },
+  });
+  try {
+    const result = reconcileFormerChildMemberships({
+      comments: targetComments.map((comment) => ({
+        ...comment,
+        authorLogin: 'kurone-kito',
+        updatedAt: comment.createdAt,
+        lastEditedAt: null,
+        isMinimized: false,
+        minimizedReason: null,
+      })),
+      historyTargetRef: targetRef,
+      markerPrefix: 'idd-skill',
+      trusted: ['kurone-kito'],
+    });
+    assert.ok(
+      !('problem' in result),
+      'problem' in result ? result.problem : '',
+    );
+    if (!('problem' in result)) {
+      assert.deepEqual(
+        result.comments.map((comment) => comment.id),
+        [106],
+      );
+      assert.ok(result.closedSets.has(childSet));
+    }
+  } finally {
+    stub.restore();
+  }
+});
+
+test('former-child reconciliation retains the winning release across same-set openers (#4669)', () => {
+  const targetRef = OWNER_ID_TARGET;
+  const formerAnchor = OWNER_ID_ANCHOR_TARGET;
+  const set = 'set-same-anchor-race';
+  const winningSession = 'session-winning-child';
+  const at = (seconds: number) =>
+    new Date(Date.parse(TS) + seconds * 1000).toISOString();
+  const targetComments = [
+    {
+      id: 101,
+      createdAt: at(1),
+      body: ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: targetRef,
+        anchor: formerAnchor,
+        owner: 'owner-winning-child',
+        set,
+        session: winningSession,
+      }),
+    },
+    {
+      id: 102,
+      createdAt: at(2),
+      body: ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: targetRef,
+        anchor: formerAnchor,
+        owner: 'owner-losing-child',
+        set,
+        session: 'session-losing-child',
+      }),
+    },
+    {
+      id: 103,
+      createdAt: at(3),
+      body: ownerIdHistoryMarker({
+        mode: 'release',
+        target: targetRef,
+        anchor: formerAnchor,
+        owner: 'owner-winning-child',
+        set,
+        session: winningSession,
+      }),
+    },
+  ];
+  const formerAnchorComments = (
+    ['acquire', 'release', 'release-guard', 'release-complete'] as const
+  ).map((mode, index) => ({
+    id: 201 + index,
+    createdAt: at([0, 4, 5, 6][index] ?? 0),
+    body: ownerIdHistoryMarker({
+      mode,
+      target: formerAnchor,
+      anchor: formerAnchor,
+      owner: 'owner-former-anchor',
+      set,
+      session: winningSession,
+    }),
+  }));
+  const stub = withOwnerIdStub({
+    commentsByIssueNumber: { 43: formerAnchorComments },
+  });
+  try {
+    const result = reconcileFormerChildMemberships({
+      comments: targetComments.map((comment) => ({
+        ...comment,
+        authorLogin: 'kurone-kito',
+        updatedAt: comment.createdAt,
+        lastEditedAt: null,
+        isMinimized: false,
+        minimizedReason: null,
+      })),
+      historyTargetRef: targetRef,
+      markerPrefix: 'idd-skill',
+      trusted: ['kurone-kito'],
+    });
+    assert.ok(!('problem' in result));
+    if (!('problem' in result)) {
+      assert.deepEqual(result.comments, []);
+      assert.ok(result.closedSets.has(set));
+      assert.deepEqual(
+        result.supersedingOpenings.map((opening) => opening.id),
+        [101],
+      );
+    }
+  } finally {
+    stub.restore();
+  }
+});
+
+test('former-child reconciliation ignores a target-wide loser continuation in a later candidate (#4669)', () => {
+  const targetRef = OWNER_ID_TARGET;
+  const formerAnchor = 'o/r#44';
+  const childSet = 'set-later-child-winner';
+  const childSession = 'session-later-child-winner';
+  const at = (seconds: number) =>
+    new Date(Date.parse(TS) + seconds * 1000).toISOString();
+  const targetComments = [
+    {
+      id: 101,
+      createdAt: at(0),
+      body: ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: targetRef,
+        anchor: targetRef,
+        owner: 'owner-self-first',
+        set: 'set-self-first',
+        session: 'session-self-first',
+      }),
+    },
+    {
+      id: 102,
+      createdAt: at(1),
+      body: ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: targetRef,
+        anchor: formerAnchor,
+        owner: 'owner-child-losing',
+        set: childSet,
+        session: 'session-child-losing',
+      }),
+    },
+    ...(['release', 'release-guard', 'release-complete'] as const).map(
+      (mode, index) => ({
+        id: 103 + index,
+        createdAt: at([2, 2.5, 3][index] ?? 2),
+        body: ownerIdHistoryMarker({
+          mode,
+          target: targetRef,
+          anchor: targetRef,
+          owner: 'owner-self-first',
+          set: 'set-self-first',
+          session: 'session-self-first',
+        }),
+      }),
+    ),
+    {
+      id: 106,
+      createdAt: at(3.5),
+      body: ownerIdHistoryMarker({
+        mode: 'resume',
+        target: targetRef,
+        anchor: formerAnchor,
+        owner: 'owner-child-resumed-loser',
+        set: childSet,
+        session: 'session-child-resumed-loser',
+        supersedes: 'owner-child-losing',
+      }),
+    },
+    {
+      id: 107,
+      createdAt: at(4),
+      body: ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: targetRef,
+        anchor: formerAnchor,
+        owner: 'owner-child-winning',
+        set: childSet,
+        session: childSession,
+      }),
+    },
+    {
+      id: 108,
+      createdAt: at(5),
+      body: ownerIdHistoryMarker({
+        mode: 'release',
+        target: targetRef,
+        anchor: formerAnchor,
+        owner: 'owner-child-resumed-loser',
+        set: childSet,
+        session: 'session-child-loser-release',
+      }),
+    },
+    {
+      id: 109,
+      createdAt: at(6),
+      body: ownerIdHistoryMarker({
+        mode: 'release',
+        target: targetRef,
+        anchor: formerAnchor,
+        owner: 'owner-child-winning',
+        set: childSet,
+        session: childSession,
+      }),
+    },
+  ];
+  const formerAnchorComments = (
+    ['acquire', 'release', 'release-guard', 'release-complete'] as const
+  ).map((mode, index) => ({
+    id: 201 + index,
+    createdAt: at([0, 7, 8, 9][index] ?? 0),
+    body: ownerIdHistoryMarker({
+      mode,
+      target: formerAnchor,
+      anchor: formerAnchor,
+      owner: 'owner-former-anchor',
+      set: childSet,
+      session: childSession,
+    }),
+  }));
+  const stub = withOwnerIdStub({
+    commentsByIssueNumber: { 44: formerAnchorComments },
+  });
+  try {
+    const result = reconcileFormerChildMemberships({
+      comments: targetComments.map((comment) => ({
+        ...comment,
+        authorLogin: 'kurone-kito',
+        updatedAt: comment.createdAt,
+        lastEditedAt: null,
+        isMinimized: false,
+        minimizedReason: null,
+      })),
+      historyTargetRef: targetRef,
+      markerPrefix: 'idd-skill',
+      trusted: ['kurone-kito'],
+    });
+    assert.ok(
+      !('problem' in result),
+      'problem' in result ? result.problem : '',
+    );
+    if (!('problem' in result)) {
+      assert.deepEqual(
+        result.comments.map((comment) => comment.id),
+        [101, 103, 104, 105],
+      );
+      assert.ok(result.closedSets.has(childSet));
+      assert.deepEqual(
+        result.supersedingOpenings.map((opening) => opening.id),
+        [107],
+      );
+    }
+  } finally {
+    stub.restore();
+  }
+});
+
+test('former-child reconciliation rejects a same-set opener after release-complete (#4669)', () => {
+  const targetRef = OWNER_ID_TARGET;
+  const formerAnchor = OWNER_ID_ANCHOR_TARGET;
+  const set = 'set-child-reopen-after-completion';
+  const session = 'session-child-before-reopen';
+  const at = (seconds: number) =>
+    new Date(Date.parse(TS) + seconds * 1000).toISOString();
+  const targetComments = [
+    {
+      id: 101,
+      createdAt: at(1),
+      body: ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: targetRef,
+        anchor: formerAnchor,
+        owner: 'owner-child-first',
+        set,
+        session,
+      }),
+    },
+    {
+      id: 102,
+      createdAt: at(2),
+      body: ownerIdHistoryMarker({
+        mode: 'release',
+        target: targetRef,
+        anchor: formerAnchor,
+        owner: 'owner-child-first',
+        set,
+        session,
+      }),
+    },
+    {
+      id: 103,
+      createdAt: at(4),
+      body: ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: targetRef,
+        anchor: formerAnchor,
+        owner: 'owner-child-later',
+        set,
+        session: 'session-child-later',
+      }),
+    },
+  ];
+  const formerAnchorComments = (
+    ['acquire', 'release', 'release-guard', 'release-complete'] as const
+  ).map((mode, index) => ({
+    id: 201 + index,
+    createdAt: at([0, 2.5, 2.75, 3][index] ?? 0),
+    body: ownerIdHistoryMarker({
+      mode,
+      target: formerAnchor,
+      anchor: formerAnchor,
+      owner: 'owner-former-anchor',
+      set,
+      session,
+    }),
+  }));
+  const stub = withOwnerIdStub({
+    commentsByIssueNumber: { 43: formerAnchorComments },
+  });
+  try {
+    const result = reconcileFormerChildMemberships({
+      comments: targetComments.map((comment) => ({
+        ...comment,
+        authorLogin: 'kurone-kito',
+        updatedAt: comment.createdAt,
+        lastEditedAt: null,
+        isMinimized: false,
+        minimizedReason: null,
+      })),
+      historyTargetRef: targetRef,
+      markerPrefix: 'idd-skill',
+      trusted: ['kurone-kito'],
+    });
+    assert.ok('problem' in result);
+    if ('problem' in result) {
+      assert.match(
+        result.problem,
+        /reopens after its matching release-complete/,
+      );
+    }
+  } finally {
+    stub.restore();
+  }
+});
+
+test('former-child reconciliation arbitrates foreign openers across anchors (#4669)', () => {
+  const targetRef = OWNER_ID_TARGET;
+  const anchorA = OWNER_ID_ANCHOR_TARGET;
+  const anchorB = 'o/r#44';
+  const at = (seconds: number) =>
+    new Date(Date.parse(TS) + seconds * 1000).toISOString();
+  const targetComments = [
+    {
+      id: 101,
+      createdAt: at(1),
+      body: ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: targetRef,
+        anchor: anchorA,
+        owner: 'owner-child-a',
+        set: 'set-anchor-a',
+        session: 'session-anchor-a',
+      }),
+    },
+    {
+      id: 102,
+      createdAt: at(2),
+      body: ownerIdHistoryMarker({
+        mode: 'release',
+        target: targetRef,
+        anchor: anchorA,
+        owner: 'owner-child-a',
+        set: 'set-anchor-a',
+        session: 'session-anchor-a',
+      }),
+    },
+    {
+      id: 103,
+      createdAt: at(3),
+      body: ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: targetRef,
+        anchor: anchorB,
+        owner: 'owner-child-b',
+        set: 'set-anchor-b',
+        session: 'session-anchor-b',
+      }),
+    },
+    {
+      id: 104,
+      createdAt: at(5),
+      body: ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: targetRef,
+        anchor: targetRef,
+        owner: 'owner-self-after-a',
+        set: 'set-self-after-a',
+        session: 'session-self-after-a',
+      }),
+    },
+    ...(['release', 'release-guard', 'release-complete'] as const).map(
+      (mode, index) => ({
+        id: 105 + index,
+        createdAt: at([5.2, 5.4, 5.6][index] ?? 5.2),
+        body: ownerIdHistoryMarker({
+          mode,
+          target: targetRef,
+          anchor: targetRef,
+          owner: 'owner-self-after-a',
+          set: 'set-self-after-a',
+          session: 'session-self-after-a',
+        }),
+      }),
+    ),
+    {
+      id: 108,
+      createdAt: at(6),
+      body: ownerIdHistoryMarker({
+        mode: 'release',
+        target: targetRef,
+        anchor: anchorB,
+        owner: 'owner-child-b',
+        set: 'set-anchor-b',
+        session: 'session-anchor-b',
+      }),
+    },
+  ];
+  const makeAnchorHistory = (
+    anchor: string,
+    set: string,
+    session: string,
+    owner: string,
+    atTimes: readonly number[],
+  ) =>
+    (['acquire', 'release', 'release-guard', 'release-complete'] as const).map(
+      (mode, index) => ({
+        id: 201 + index,
+        createdAt: at(atTimes[index] ?? 0),
+        body: ownerIdHistoryMarker({
+          mode,
+          target: anchor,
+          anchor,
+          owner,
+          set,
+          session,
+        }),
+      }),
+    );
+  const stub = withOwnerIdStub({
+    commentsByIssueNumber: {
+      43: makeAnchorHistory(
+        anchorA,
+        'set-anchor-a',
+        'session-anchor-a',
+        'owner-anchor-a',
+        [0, 2.5, 3, 4],
+      ),
+      44: makeAnchorHistory(
+        anchorB,
+        'set-anchor-b',
+        'session-anchor-b',
+        'owner-anchor-b',
+        [2, 6.5, 7, 8],
+      ),
+    },
+  });
+  try {
+    const result = reconcileFormerChildMemberships({
+      comments: targetComments.map((comment) => ({
+        ...comment,
+        authorLogin: 'kurone-kito',
+        updatedAt: comment.createdAt,
+        lastEditedAt: null,
+        isMinimized: false,
+        minimizedReason: null,
+      })),
+      historyTargetRef: targetRef,
+      markerPrefix: 'idd-skill',
+      trusted: ['kurone-kito'],
+    });
+    assert.ok(!('problem' in result));
+    if (!('problem' in result)) {
+      assert.deepEqual(
+        result.comments.map((comment) => comment.id),
+        [104, 105, 106, 107],
+      );
+      assert.deepEqual(
+        result.supersedingOpenings.map((opening) => opening.id),
+        [101],
+      );
+    }
+  } finally {
+    stub.restore();
+  }
+});
+
+test('former-child reconciliation rejects a foreign continuation without an opener (#4669)', () => {
+  const targetRef = OWNER_ID_TARGET;
+  const formerAnchor = OWNER_ID_ANCHOR_TARGET;
+  const selfSet = 'set-self-orphan-continuation';
+  const selfSession = 'session-self-orphan-continuation';
+  const at = (seconds: number) =>
+    new Date(Date.parse(TS) + seconds * 1000).toISOString();
+  const comment = (
+    id: number,
+    mode:
+      | 'acquire'
+      | 'release'
+      | 'release-guard'
+      | 'release-complete'
+      | 'heartbeat',
+    anchor: string,
+    set: string,
+    session: string,
+    seconds: number,
+  ) => {
+    const createdAt = at(seconds);
+    return {
+      id,
+      authorLogin: 'kurone-kito',
+      body: ownerIdHistoryMarker({
+        mode,
+        target: targetRef,
+        anchor,
+        owner: 'owner-orphan-continuation',
+        set,
+        session,
+      }),
+      createdAt,
+      updatedAt: createdAt,
+      lastEditedAt: null,
+      isMinimized: false,
+      minimizedReason: null,
+    };
+  };
+  const stub = withOwnerIdStub({});
+  try {
+    const result = reconcileFormerChildMemberships({
+      comments: [
+        comment(101, 'acquire', targetRef, selfSet, selfSession, 1),
+        comment(102, 'release', targetRef, selfSet, selfSession, 2),
+        comment(
+          103,
+          'heartbeat',
+          formerAnchor,
+          'set-orphan-continuation',
+          'session-orphan-continuation',
+          3,
+        ),
+        comment(104, 'release-guard', targetRef, selfSet, selfSession, 4),
+        comment(105, 'release-complete', targetRef, selfSet, selfSession, 5),
+      ],
+      historyTargetRef: targetRef,
+      markerPrefix: 'idd-skill',
+      trusted: ['kurone-kito'],
+    });
+    assert.ok('problem' in result);
+    if ('problem' in result) {
+      assert.match(result.problem, /has no acquisition marker/);
+    }
+  } finally {
+    stub.restore();
+  }
+});
+
+test('authoring-owner acquire replays a later foreign opener after the self generation closes (#4669)', () => {
+  const set = 'set-losing-child';
+  const targetComments = [
+    { id: 101, body: ownerIdAnchorMarker('acquire') },
+    {
+      id: 102,
+      body: ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: OWNER_ID_ANCHOR_TARGET,
+        anchor: 'o/r#44',
+        owner: 'owner-losing-child',
+        set,
+        session: 'session-losing-child',
+      }),
+    },
+    {
+      id: 103,
+      body: ownerIdHistoryMarker({
+        mode: 'heartbeat',
+        target: OWNER_ID_ANCHOR_TARGET,
+        anchor: 'o/r#44',
+        owner: 'owner-losing-child',
+        set,
+        session: 'session-losing-child',
+      }),
+    },
+    { id: 104, body: ownerIdAnchorMarker('release') },
+    { id: 105, body: ownerIdAnchorMarker('release-guard') },
+    { id: 106, body: ownerIdAnchorMarker('release-complete') },
+    {
+      id: 107,
+      body: ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: OWNER_ID_ANCHOR_TARGET,
+        anchor: 'o/r#44',
+        owner: 'owner-later-child',
+        set,
+        session: 'session-later-child',
+      }),
+    },
+  ];
+  const stub = withOwnerIdStub({
+    comments: [],
+    commentsByIssueNumber: { 43: targetComments },
+  });
+  try {
+    const run = runOwnerIdPost(
+      ownerIdFlags('acquire', {
+        'marker-target': OWNER_ID_ANCHOR_TARGET,
+        anchor: OWNER_ID_ANCHOR_TARGET,
+        'marker-owner': 'owner-self-next',
+        set: 'set-self-next',
+        session: 'session-self-next',
+      }),
+      { targetNumber: 43 },
+    );
+    assert.equal(run.status, 1);
+    assert.equal(run.kind, 'gate');
+    assert.match(run.stderr, /no trusted release marker in progress/);
+    assert.deepEqual(readOwnerIdLines(stub.postsFile), []);
+  } finally {
+    stub.restore();
+  }
+});
+
+test('authoring-owner child acquire refuses a closed, mismatched, or releasing anchor before POST (#4669)', () => {
+  const scenarios: {
+    name: string;
+    comments: OwnerIdComment[];
+    overrides?: Record<string, string>;
+    expected: RegExp;
+  }[] = [
+    {
+      name: 'closed anchor',
+      comments: ownerIdClosedHistory(
+        OWNER_ID_ANCHOR_TARGET,
+        OWNER_ID_ANCHOR_SET,
+        OWNER_ID_ANCHOR_SESSION,
+      ),
+      overrides: { set: 'set-next' },
+      expected: /has no open owner generation to join/,
+    },
+    {
+      name: 'set mismatch',
+      comments: [{ id: 101, body: ownerIdAnchorMarker('acquire') }],
+      overrides: { set: 'set-other' },
+      expected: /does not match anchor .* open generation/,
+    },
+    {
+      name: 'session mismatch',
+      comments: [{ id: 101, body: ownerIdAnchorMarker('acquire') }],
+      overrides: { session: 'session-other' },
+      expected: /does not match anchor .* open generation/,
+    },
+    {
+      name: 'release in progress',
+      comments: [
+        { id: 101, body: ownerIdAnchorMarker('acquire') },
+        { id: 102, body: ownerIdAnchorMarker('release') },
+      ],
+      expected: /is being released/,
+    },
+  ];
+  for (const scenario of scenarios) {
+    for (const apply of [false, true]) {
+      const stub = withOwnerIdStub({
+        comments: [],
+        commentsByIssueNumber: { 43: scenario.comments },
+      });
+      try {
+        const run = runOwnerIdPost(
+          ownerIdFlags('acquire', {
+            anchor: OWNER_ID_ANCHOR_TARGET,
+            set: OWNER_ID_ANCHOR_SET,
+            session: OWNER_ID_ANCHOR_SESSION,
+            ...scenario.overrides,
+          }),
+          { apply },
+        );
+        assert.equal(run.status, 1, `${scenario.name}, apply=${apply}`);
+        assert.equal(run.kind, 'gate', `${scenario.name}, apply=${apply}`);
+        assert.match(run.stderr, scenario.expected, scenario.name);
+        assert.deepEqual(readOwnerIdLines(stub.postsFile), [], scenario.name);
+      } finally {
+        stub.restore();
+      }
+    }
+  }
+});
+
+test('authoring-owner acquire refuses an incomplete anchor read before dry-run output or POST (#4669)', () => {
+  for (const mode of ['acquire', 'bootstrap']) {
+    for (const apply of [false, true]) {
+      const stub = withOwnerIdStub({
+        graphqlReply: { stderr: 'gh: Service Unavailable (HTTP 503)' },
+      });
+      try {
+        const run = runOwnerIdPost(ownerIdFlags(mode), { apply });
+        assert.equal(run.status, 1, `${mode}, apply=${apply}`);
+        assert.equal(run.kind, 'transport', `${mode}, apply=${apply}`);
+        assert.match(run.stderr, /anchor owner history cannot be checked/);
+        assert.deepEqual(readOwnerIdLines(stub.postsFile), []);
+      } finally {
+        stub.restore();
+      }
     }
   }
 });
@@ -8837,6 +11773,25 @@ test('post-idd-marker --help describes the authoring-owner identity check (#3910
     help,
     /latest\s+trusted owner marker on\s+--marker-target \(#3899\)/,
   );
+  assert.match(
+    help,
+    /Acquire and bootstrap read the declared\s+anchor's paginated owner log/,
+  );
+  assert.match(
+    help,
+    /unreadable history\s+that\s+cannot be replayed\s+conclusively\s+refuses the post/,
+  );
+  assert.match(
+    help,
+    /former anchor's owner log is\s+also read recursively, with cycle and depth guards,\s+and must show the matching\s+set\/session release-complete/,
+  );
+  assert.match(help, /before the next\s+self-anchored generation/);
+  assert.match(
+    help,
+    /child's release marker is minimized\s+as outdated, so a fresh acquisition may use a new set/,
+  );
+  assert.match(help, /self opener posted after a foreign child opener/);
+  assert.match(help, /recursively, with cycle and depth guards/);
 });
 
 // --- #4442: the optional supersedes field of f4-head-proof -------------------
