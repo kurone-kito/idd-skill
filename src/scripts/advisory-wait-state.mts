@@ -482,7 +482,8 @@ export function buildCopilotRecoverySummary(
  *    `advisory-wait:` request marker already exists, Copilot never shows
  *    pending at all, and the existing `SETTLED_WINDOW_MINUTES` re-check
  *    budget has elapsed with no `review_requested` event ever proving the
- *    request reached Copilot. Below that budget the gap reads as ordinary
+ *    request reached Copilot, and no completed Copilot review names the current
+ *    HEAD (#4718). Below that budget the gap reads as ordinary
  *    lag, not failure.
  */
 export interface StaleRequestRecoveryAction {
@@ -496,8 +497,9 @@ export interface StaleRequestRecoveryAction {
    * handling instead.
    * `'not-applicable'` -- no stale-request recovery decision applies (no
    * claim-bound evidence, nothing was ever requested, the request is already
-   * proven to cover HEAD, a pending same-head marker already anchors the
-   * clock, or a non-pending re-check budget has not yet elapsed).
+   * proven to cover HEAD (a `review_requested` event, or a completed Copilot
+   * review of the current HEAD), a pending same-head marker already anchors
+   * the clock, or a non-pending re-check budget has not yet elapsed).
    */
   action: 'attempt' | 'cap-exhausted' | 'not-applicable';
   /** Machine-readable reason for `action`. */
@@ -509,6 +511,8 @@ const STALE_REQUEST_RECOVERY_REASONS = {
   activeClaimNotProvided: 'active-claim-not-provided',
   notPending: 'not-pending',
   sameHeadMarkerPresent: 'same-head-marker-present',
+  // A review_requested event or a completed Copilot review (#4718) proves the
+  // request reached the reviewer for the current HEAD.
   provenCoversHead: 'proven-covers-head',
   capExhausted: 'recovery-cap-exhausted',
   attemptEligible: 'recovery-attempt-eligible',
@@ -565,6 +569,15 @@ export function evaluateStaleRequestRecoveryAction(input: {
    * threshold. Same fail-closed-on-ambiguous treatment as `elapsedMinutes`.
    */
   settledWindowMinutes?: number;
+  /**
+   * True when the latest completed Copilot review (the caller's
+   * `lastCopilotCommit`, after the #3265 overview-body filter) names the
+   * current PR HEAD. Such a review proves the request reached the reviewer,
+   * so the non-pending path returns `not-applicable` before the elapsed or
+   * cap checks. Omitted or `false` keeps the existing routing. Consulted only
+   * on the non-pending path, not the pending path.
+   */
+  currentHeadReviewExists?: boolean;
 }): StaleRequestRecoveryAction {
   if (!input.activeClaimProvided) {
     return {
@@ -636,6 +649,16 @@ export function evaluateStaleRequestRecoveryAction(input: {
   // commit -- Copilot genuinely received the request and is simply no longer
   // pending (completed or silently declined), not a failed-to-register case.
   if (input.copilotPendingCoversHead) {
+    return {
+      action: 'not-applicable',
+      reason: STALE_REQUEST_RECOVERY_REASONS.provenCoversHead,
+    };
+  }
+  // A completed Copilot review of this HEAD is the same kind of proof: the
+  // request reached the reviewer, so the same-head marker's elapsed budget
+  // cannot mean a failed registration. Checked before the elapsed and cap
+  // checks below, and only on this non-pending path (#4718).
+  if (input.currentHeadReviewExists === true) {
     return {
       action: 'not-applicable',
       reason: STALE_REQUEST_RECOVERY_REASONS.provenCoversHead,
@@ -1179,6 +1202,12 @@ export function readAdvisoryWaitState(
     activeClaimProvided: copilotRecovery.activeClaimProvided,
     elapsedMinutes: summary.elapsedMinutes,
     settledWindowMinutes: summary.settledWindowMinutes,
+    // #4718: findLastCopilotReviewCommit returns the raw commit_id, so the
+    // comparison lowercases it, the same normalization
+    // buildCopilotRecoverySummary applies. Unlike the copilotDeclinedHead
+    // comparison above, this one does not rely on the caller's casing.
+    currentHeadReviewExists:
+      String(summary.lastCopilotCommit ?? '').toLowerCase() === prHeadSha,
   });
 
   return {
