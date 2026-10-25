@@ -1357,7 +1357,13 @@ MISSING_REGULAR=$(printf '%s\n' "${COMMENTS_JSON}" "${DISPOSITION_JSON}" | jq -s
 # idd-skill) from any author, or an IDD-agent disposition, rejection
 # confirmation, or pending decision. Feedback activity is the later of
 # createdAt and lastEditedAt, so an edit after a disposition reopens the thread.
-MARKER_PREFIX="${IDD_MARKER_PREFIX:-idd-skill}"
+# The stamp prefix is IDD_MARKER_PREFIX, else the repository config's
+# markerPrefix (the helper reads the same field), else the canonical default.
+MARKER_PREFIX="${IDD_MARKER_PREFIX:-}"
+if [ -z "${MARKER_PREFIX}" ] && [ -f .github/idd/config.json ]; then
+  MARKER_PREFIX=$(jq -r '.markerPrefix // empty' .github/idd/config.json) || exit 2
+fi
+MARKER_PREFIX="${MARKER_PREFIX:-idd-skill}"
 # The prefix is spliced into a jq regex, so only marker-safe characters pass.
 case "${MARKER_PREFIX}" in
   *[!A-Za-z0-9_-]*|"") echo "IDD_MARKER_PREFIX must be letters, digits, '_' or '-'; not converged" >&2; exit 2 ;;

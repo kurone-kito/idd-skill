@@ -250,6 +250,7 @@ interface Fixtures {
   timeline?: string;
   timelineFail?: boolean;
   prEditExit?: number;
+  markerPrefixConfig?: string;
 }
 
 interface RunResult {
@@ -793,6 +794,13 @@ interface F2Result {
 
 function runF2(fixtures: Fixtures, env: Record<string, string> = {}): F2Result {
   const root = makeSandbox(fixtures);
+  if (fixtures.markerPrefixConfig !== undefined) {
+    mkdirSync(join(root, '.github', 'idd'), { recursive: true });
+    writeFileSync(
+      join(root, '.github', 'idd', 'config.json'),
+      JSON.stringify({ markerPrefix: fixtures.markerPrefixConfig }),
+    );
+  }
   const block = inlineGraphqlVariables(
     substitutePlaceholders(fencedBlock('## F2')),
   );
@@ -1552,6 +1560,7 @@ interface F2DifferentialCase {
   env?: Record<string, string>;
   advisoryBotLogins?: string[];
   trustedMarkerLogins?: string[];
+  markerPrefix?: string;
 }
 
 interface F2CanonicalComment {
@@ -1624,6 +1633,7 @@ function runF2Differential(c: F2DifferentialCase): {
         })),
       ),
       threads: threadsResponse(threads),
+      markerPrefixConfig: c.markerPrefix,
     },
     c.env ?? {},
   );
@@ -1645,7 +1655,7 @@ function runF2Differential(c: F2DifferentialCase): {
       trustedMarkerLogins: c.trustedMarkerLogins ?? [AGENT_LOGIN],
       advisoryBotLogins: c.advisoryBotLogins ?? [],
       prHeadSha: HEAD_SHA,
-      markerPrefix: 'idd-skill',
+      markerPrefix: c.markerPrefix ?? 'idd-skill',
     },
   );
   return { shell, canonical };
@@ -2695,5 +2705,29 @@ test('differential: leading whitespace does not turn a current Codex no-find int
     },
     0,
     0,
+  );
+});
+
+test('differential: the configured marker prefix, not the default, names an IDD reply (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  // With a custom configured prefix, a stamp with that prefix is an IDD reply.
+  assertF2Parity(
+    {
+      markerPrefix: 'custom',
+      threads: [
+        f2Thread([
+          f2ThreadComment('human-reviewer', 'please rename', F2_CASE_TIME_1),
+          f2ThreadComment(
+            'someone-else',
+            'done <!-- custom-review-reply -->',
+            F2_CASE_TIME_2,
+          ),
+          f2ThreadComment('human-reviewer', 'still wrong', F2_CASE_TIME_3),
+        ]),
+      ],
+    },
+    0,
+    1,
   );
 });
