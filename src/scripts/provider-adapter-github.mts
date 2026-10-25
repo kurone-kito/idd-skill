@@ -1256,6 +1256,282 @@ function fetchChangeRequestBranchAndChecks(
   );
 }
 
+/** Bounds the forward-pagination loop for one pull request's closing-issue
+ * references: 20 pages of 100, the same cap as the status-check rollup. */
+const CLOSING_ISSUE_REFERENCES_MAX_PAGES = 20;
+
+/** Page size of the open-pull-request scan behind
+ * {@link listOpenChangeRequestClosingIssueNumbers}. */
+const OPEN_CHANGE_REQUEST_SCAN_PAGE_SIZE = 100;
+
+/** One closing-issue reference, reduced to the fields its callers read: the
+ * issue number and the repository it belongs to. */
+interface ClosingIssueReference {
+  number: number;
+  repository: { name: string; owner: { login: string } };
+}
+
+/**
+ * Validates one `closingIssuesReferences` node (kurone-kito/idd-skill#4721).
+ * A node with no usable number or repository identity fails the lookup: a
+ * caller that defaults a missing `repository` to the same repository would
+ * otherwise read a cross-repository close as a same-repository one.
+ */
+function closingIssueReferenceFromNode(node: unknown): ClosingIssueReference {
+  const record = node as {
+    number?: unknown;
+    repository?: { name?: unknown; owner?: { login?: unknown } | null } | null;
+  } | null;
+  const number =
+    typeof record?.number === 'number' ? record.number : Number.NaN;
+  const name = record?.repository?.name;
+  const login = record?.repository?.owner?.login;
+  if (
+    !Number.isInteger(number) ||
+    number <= 0 ||
+    typeof name !== 'string' ||
+    name === '' ||
+    typeof login !== 'string' ||
+    login === ''
+  ) {
+    throw new Error(
+      'closingIssuesReferences lookup: a reference has no usable number or repository identity',
+    );
+  }
+  return { number, repository: { name, owner: { login } } };
+}
+
+/**
+ * Validates one GraphQL connection page (kurone-kito/idd-skill#4721) and
+ * returns its nodes. A null connection, a non-array `nodes`, or a `pageInfo`
+ * without a boolean `hasNextPage` fails the lookup, so an incomplete response
+ * is never read as an empty result. `label` names the caller in the error.
+ */
+function graphqlConnectionPage(
+  connection: unknown,
+  label: string,
+): { nodes: unknown[]; hasNextPage: boolean; endCursor: string } {
+  const typed = connection as {
+    nodes?: unknown;
+    pageInfo?: { hasNextPage?: unknown; endCursor?: unknown } | null;
+  } | null;
+  const pageInfo = typed?.pageInfo;
+  if (
+    !typed ||
+    !Array.isArray(typed.nodes) ||
+    pageInfo == null ||
+    typeof pageInfo !== 'object' ||
+    typeof pageInfo.hasNextPage !== 'boolean'
+  ) {
+    throw new Error(
+      `${label}: connection is null/absent or malformed (missing nodes/pageInfo/hasNextPage)`,
+    );
+  }
+  return {
+    nodes: typed.nodes,
+    hasNextPage: pageInfo.hasNextPage,
+    endCursor: typeof pageInfo.endCursor === 'string' ? pageInfo.endCursor : '',
+  };
+}
+
+/**
+ * Reads every closing-issue reference of one pull request through GraphQL,
+ * paging the whole connection (kurone-kito/idd-skill#4721). `gh pr view
+ * --json` no longer names `closingIssuesReferences`, because older GitHub CLI
+ * releases reject that field. When `expectedHeadSha` is set, the GraphQL head
+ * must equal it, so a snapshot never mixes references from one head with the
+ * rest of its view taken from another.
+ */
+function fetchChangeRequestClosingIssueReferences(
+  deps: GithubProviderAdapterDeps,
+  owner: string,
+  repo: string,
+  number: number,
+  expectedHeadSha: string | null,
+): ClosingIssueReference[] {
+  const label = 'closingIssuesReferences lookup';
+  const references: ClosingIssueReference[] = [];
+  let after: string | null = null;
+  let headSha = '';
+
+  for (let page = 0; page < CLOSING_ISSUE_REFERENCES_MAX_PAGES; page += 1) {
+    const query = `query($owner:String!,$repo:String!,$number:Int!,$after:String){
+  repository(owner:$owner,name:$repo){
+    pullRequest(number:$number){
+      headRefOid
+      closingIssuesReferences(first:100,after:$after){
+        nodes{number repository{name owner{login}}}
+        pageInfo{hasNextPage endCursor}
+      }
+    }
+  }
+}`;
+    const apiArgs = [
+      'api',
+      'graphql',
+      ...graphqlHostnameArgs(),
+      '-f',
+      `query=${query}`,
+      '-f',
+      `owner=${owner}`,
+      '-f',
+      `repo=${repo}`,
+      '-F',
+      `number=${number}`,
+    ];
+    if (after) {
+      apiArgs.push('-f', `after=${after}`);
+    }
+    const raw = JSON.parse(deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS));
+    assertNoGraphqlErrors(raw, label);
+    const pullRequest = raw?.data?.repository?.pullRequest as
+      | { headRefOid?: unknown; closingIssuesReferences?: unknown }
+      | null
+      | undefined;
+    if (!pullRequest) {
+      throw new Error(`${label} failed: pull request #${number} was not found`);
+    }
+    const pageHeadSha = String(pullRequest.headRefOid ?? '');
+    if (pageHeadSha === '') {
+      throw new Error(`${label}: pull request #${number} returned no head SHA`);
+    }
+    if (page === 0) {
+      headSha = pageHeadSha;
+      if (expectedHeadSha !== null && pageHeadSha !== expectedHeadSha) {
+        throw new Error(
+          `${label}: pull request #${number} head is ${pageHeadSha}, expected ${expectedHeadSha}`,
+        );
+      }
+    } else if (pageHeadSha !== headSha) {
+      throw new Error(
+        `${label}: pull request #${number} head changed during pagination`,
+      );
+    }
+    const connection = graphqlConnectionPage(
+      pullRequest.closingIssuesReferences,
+      label,
+    );
+    for (const node of connection.nodes) {
+      references.push(closingIssueReferenceFromNode(node));
+    }
+    if (!connection.hasNextPage) {
+      return references;
+    }
+    if (!connection.endCursor) {
+      throw new Error(`${label}: page reported hasNextPage without endCursor`);
+    }
+    after = connection.endCursor;
+  }
+
+  throw new Error(
+    `${label}: exceeded ${CLOSING_ISSUE_REFERENCES_MAX_PAGES} pages`,
+  );
+}
+
+/**
+ * The open-pull-request scan behind
+ * {@link ProviderPort.listIssueNumbersClosedByOpenChangeRequests}
+ * (kurone-kito/idd-skill#4721). Reads up to `limit` open pull requests, newest
+ * first (the order `gh pr list` uses), and returns every issue number that any
+ * of them closes. A pull request whose first inner page reports more
+ * references is read in full through
+ * {@link fetchChangeRequestClosingIssueReferences}. Pull requests beyond
+ * `limit` are dropped, as the port documents.
+ */
+function listOpenChangeRequestClosingIssueNumbers(
+  deps: GithubProviderAdapterDeps,
+  owner: string,
+  repo: string,
+  limit: number,
+): number[] {
+  const label = 'open pull request scan';
+  if (!Number.isInteger(limit) || limit < 0) {
+    throw new Error(`${label}: limit must be a non-negative integer`);
+  }
+  const numbers = new Set<number>();
+  let remaining = limit;
+  let after: string | null = null;
+
+  while (remaining > 0) {
+    const pageSize = Math.min(OPEN_CHANGE_REQUEST_SCAN_PAGE_SIZE, remaining);
+    const query = `query($owner:String!,$repo:String!,$first:Int!,$after:String){
+  repository(owner:$owner,name:$repo){
+    pullRequests(states:OPEN,first:$first,after:$after,orderBy:{field:CREATED_AT,direction:DESC}){
+      nodes{
+        number
+        closingIssuesReferences(first:100){
+          nodes{number repository{name owner{login}}}
+          pageInfo{hasNextPage endCursor}
+        }
+      }
+      pageInfo{hasNextPage endCursor}
+    }
+  }
+}`;
+    const apiArgs = [
+      'api',
+      'graphql',
+      ...graphqlHostnameArgs(),
+      '-f',
+      `query=${query}`,
+      '-f',
+      `owner=${owner}`,
+      '-f',
+      `repo=${repo}`,
+      '-F',
+      `first=${pageSize}`,
+    ];
+    if (after) {
+      apiArgs.push('-f', `after=${after}`);
+    }
+    const raw = JSON.parse(deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS));
+    assertNoGraphqlErrors(raw, label);
+    const pulls = graphqlConnectionPage(
+      raw?.data?.repository?.pullRequests,
+      label,
+    );
+    if (pulls.nodes.length === 0 && pulls.hasNextPage) {
+      throw new Error(`${label}: page reported hasNextPage with no nodes`);
+    }
+    for (const pull of pulls.nodes) {
+      const record = pull as {
+        number?: unknown;
+        closingIssuesReferences?: unknown;
+      } | null;
+      const pullNumber =
+        typeof record?.number === 'number' ? record.number : Number.NaN;
+      if (!Number.isInteger(pullNumber) || pullNumber <= 0) {
+        throw new Error(`${label}: a pull request has no usable number`);
+      }
+      const refs = graphqlConnectionPage(
+        record?.closingIssuesReferences,
+        label,
+      );
+      const pullRefs = refs.hasNextPage
+        ? fetchChangeRequestClosingIssueReferences(
+            deps,
+            owner,
+            repo,
+            pullNumber,
+            null,
+          )
+        : refs.nodes.map(closingIssueReferenceFromNode);
+      for (const ref of pullRefs) {
+        numbers.add(ref.number);
+      }
+    }
+    remaining -= pulls.nodes.length;
+    if (!pulls.hasNextPage) {
+      break;
+    }
+    if (!pulls.endCursor) {
+      throw new Error(`${label}: page reported hasNextPage without endCursor`);
+    }
+    after = pulls.endCursor;
+  }
+  return [...numbers];
+}
+
 /**
  * One page of {@link listCheckRunWorkflowPaths}'s check-suite connection,
  * flattened into `{detailsUrl, workflowPath}` entries.
@@ -3019,38 +3295,9 @@ export function createGithubProviderAdapter(
     },
 
     listIssueNumbersClosedByOpenChangeRequests(limit: number): number[] {
-      // Uses `gh pr list`, not `gh api`, matching
-      // discover-shared-file-overlap.mts's existing call shape exactly: one
-      // best-effort scan of every open PR's closingIssuesReferences, bounded
-      // by the caller's own limit.
-      const raw = deps.ghText(
-        [
-          'pr',
-          'list',
-          '--repo',
-          `${owner}/${repo}`,
-          '--state',
-          'open',
-          '--limit',
-          String(limit),
-          '--json',
-          'closingIssuesReferences',
-        ],
-        GH_TEXT_LOOP_OPTIONS,
-      );
-      const list = JSON.parse(raw || '[]') as {
-        closingIssuesReferences?: { number?: unknown }[];
-      }[];
-      const numbers = new Set<number>();
-      for (const pr of list) {
-        for (const ref of pr.closingIssuesReferences ?? []) {
-          const value = Number(ref.number);
-          if (Number.isInteger(value) && value > 0) {
-            numbers.add(value);
-          }
-        }
-      }
-      return [...numbers];
+      // GraphQL, not `gh pr list --json closingIssuesReferences`: older GitHub
+      // CLI releases reject that field (kurone-kito/idd-skill#4721).
+      return listOpenChangeRequestClosingIssueNumbers(deps, owner, repo, limit);
     },
 
     listIssueBranchRefs(): string[] {
@@ -3744,21 +3991,27 @@ export function createGithubProviderAdapter(
         '-R',
         `${owner}/${repo}`,
         '--json',
-        'headRefOid,headRefName,closingIssuesReferences,author,url',
+        'headRefOid,headRefName,author,url',
       ]);
       const parsed = JSON.parse(raw) as {
         headRefOid?: unknown;
         headRefName?: unknown;
         author?: { login?: unknown } | null;
         url?: unknown;
-        closingIssuesReferences?: unknown;
       };
+      const headSha = String(parsed.headRefOid ?? '');
       return {
-        headSha: String(parsed.headRefOid ?? ''),
+        headSha,
         headRefName: String(parsed.headRefName ?? ''),
         authorLogin: String(parsed.author?.login ?? ''),
         url: String(parsed.url ?? ''),
-        closingIssuesReferences: parsed.closingIssuesReferences,
+        closingIssuesReferences: fetchChangeRequestClosingIssueReferences(
+          deps,
+          owner,
+          repo,
+          number,
+          headSha,
+        ),
       };
     },
 
@@ -3772,7 +4025,7 @@ export function createGithubProviderAdapter(
         '-R',
         `${owner}/${repo}`,
         '--json',
-        'headRefOid,baseRefName,url,author,reviewDecision,statusCheckRollup,mergeable,mergeStateStatus,closingIssuesReferences,body',
+        'headRefOid,baseRefName,url,author,reviewDecision,statusCheckRollup,mergeable,mergeStateStatus,body',
       ]);
       const parsed = JSON.parse(raw) as {
         headRefOid?: unknown;
@@ -3783,11 +4036,11 @@ export function createGithubProviderAdapter(
         statusCheckRollup?: unknown;
         mergeable?: unknown;
         mergeStateStatus?: unknown;
-        closingIssuesReferences?: unknown;
         body?: unknown;
       };
+      const headSha = String(parsed.headRefOid ?? '');
       return {
-        headSha: String(parsed.headRefOid ?? ''),
+        headSha,
         baseRefName: String(parsed.baseRefName ?? ''),
         url: String(parsed.url ?? ''),
         authorLogin: String(parsed.author?.login ?? ''),
@@ -3796,7 +4049,13 @@ export function createGithubProviderAdapter(
         statusCheckRollup: parsed.statusCheckRollup,
         mergeable: String(parsed.mergeable ?? ''),
         mergeStateStatus: String(parsed.mergeStateStatus ?? ''),
-        closingIssuesReferences: parsed.closingIssuesReferences,
+        closingIssuesReferences: fetchChangeRequestClosingIssueReferences(
+          deps,
+          owner,
+          repo,
+          number,
+          headSha,
+        ),
         body: String(parsed.body ?? ''),
       };
     },

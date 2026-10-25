@@ -927,6 +927,11 @@ if (args[0] === 'pr' && args[1] === 'view') {
   }));
   process.exit(0);
 }
+// kurone-kito/idd-skill#4721: the closing-reference read is GraphQL.
+if (args[0] === 'api' && args[1] === 'graphql' && args.join(' ').includes('closingIssuesReferences')) {
+  fs.writeSync(1, JSON.stringify({ data: { repository: { pullRequest: { headRefOid: 'deadbeef', closingIssuesReferences: { nodes: [{ number: 5, repository: { name: 'r', owner: { login: 'o' } } }], pageInfo: { hasNextPage: false, endCursor: null } } } } } }));
+  process.exit(0);
+}
 fs.writeSync(2, 'unexpected gh invocation: ' + args.join(' '));
 process.exit(1);
 `,
@@ -960,7 +965,7 @@ process.exit(1);
     assert.equal(failure.status, 1);
     // #3328: a non-empty closingIssuesReferences with no out-of-loop
     // marker evidence still fails closed -- the stub `gh` above answers
-    // only `pr view`, so isClaimlessEligible's own attempts to read
+    // only `pr view` and the closing-reference GraphQL read, so isClaimlessEligible's own attempts to read
     // closing issue #5's comments and this PR's comments both fail
     // (caught internally), landing on the same refusal as before.
     assert.match(
@@ -995,6 +1000,9 @@ if (args[0] === 'pr' && args[1] === 'view') {
     url: 'https://example.invalid/pr/42',
     closingIssuesReferences: [],
   }));
+}
+if (args[0] === 'api' && args[1] === 'graphql' && joined.includes('closingIssuesReferences')) {
+  out(JSON.stringify({ data: { repository: { pullRequest: { headRefOid: 'deadbeef', closingIssuesReferences: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } } } }));
 }
 if (args[0] === 'api' && args[1] === 'graphql') {
   if (joined.includes('reviewThreads')) {
@@ -2462,6 +2470,9 @@ if (args[0] === 'api' && joined.includes('/pulls/42/reviews')) {
 }
 if (args[0] === 'api' && args[1] === 'user') out('kurone-kito\\n');
 if (args[0] === 'api' && joined.includes('/pulls/42') && joined.includes('.head.ref')) out('issue/5-triage-fixture\\n');
+if (args[0] === 'api' && args[1] === 'graphql' && joined.includes('closingIssuesReferences')) {
+  out(JSON.stringify({ data: { repository: { pullRequest: { headRefOid: '${TRIAGE_HEAD}', closingIssuesReferences: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } } } }));
+}
 if (args[0] === 'api' && args[1] === 'graphql' && joined.includes('issue(number:$number)')) {
   const createdAt = new Date(Date.now() - 60000).toISOString();
   const markerTime = createdAt.replace(/\\.\\d{3}Z$/u, 'Z');

@@ -655,19 +655,39 @@ test('getChangeRequestReadinessSnapshot: GitHub and fake adapters agree on the n
     'o',
     'r',
     fakeDeps({
-      ghText: () =>
-        JSON.stringify({
-          headRefOid: 'deadbeef',
-          baseRefName: 'main',
-          url: 'https://github.com/o/r/pull/42',
-          author: { login: 'author-user' },
-          reviewDecision: 'APPROVED',
-          statusCheckRollup: [{ name: 'lint', conclusion: 'SUCCESS' }],
-          mergeable: 'MERGEABLE',
-          mergeStateStatus: 'CLEAN',
-          closingIssuesReferences: [{ number: 7 }],
-          body: 'Closes #7',
-        }),
+      // kurone-kito/idd-skill#4721: closing references come from GraphQL, not
+      // from the `pr view --json` list, so route the mock by command.
+      ghText: (args) =>
+        args.includes('graphql')
+          ? JSON.stringify({
+              data: {
+                repository: {
+                  pullRequest: {
+                    headRefOid: 'deadbeef',
+                    closingIssuesReferences: {
+                      nodes: [
+                        {
+                          number: 7,
+                          repository: { name: 'r', owner: { login: 'o' } },
+                        },
+                      ],
+                      pageInfo: { hasNextPage: false, endCursor: null },
+                    },
+                  },
+                },
+              },
+            })
+          : JSON.stringify({
+              headRefOid: 'deadbeef',
+              baseRefName: 'main',
+              url: 'https://github.com/o/r/pull/42',
+              author: { login: 'author-user' },
+              reviewDecision: 'APPROVED',
+              statusCheckRollup: [{ name: 'lint', conclusion: 'SUCCESS' }],
+              mergeable: 'MERGEABLE',
+              mergeStateStatus: 'CLEAN',
+              body: 'Closes #7',
+            }),
     }),
   );
   const fakePort = createFakeProviderAdapter({
@@ -681,7 +701,9 @@ test('getChangeRequestReadinessSnapshot: GitHub and fake adapters agree on the n
         statusCheckRollup: [{ name: 'lint', conclusion: 'SUCCESS' }],
         mergeable: 'MERGEABLE',
         mergeStateStatus: 'CLEAN',
-        closingIssuesReferences: [{ number: 7 }],
+        closingIssuesReferences: [
+          { number: 7, repository: { name: 'r', owner: { login: 'o' } } },
+        ],
         body: 'Closes #7',
       },
     },
