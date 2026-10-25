@@ -2479,3 +2479,28 @@ test('differential: a settled reply that mentions the pending phrase still settl
     0,
   );
 });
+
+test('differential: an ordinary reply that mentions the no-find phrase still clears an ordinary comment (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 7701,
+          login: 'coderabbitai[bot]',
+          body: 'nit: check the wording',
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 7702,
+          login: AGENT_LOGIN,
+          body: '**Accepted** — the no-find result at HEAD was reviewed by hand',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+    },
+    0,
+    0,
+  );
+});

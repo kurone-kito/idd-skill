@@ -1300,6 +1300,11 @@ MISSING_REGULAR=$(printf '%s\n' "${COMMENTS_JSON}" "${DISPOSITION_JSON}" | jq -s
   # login must belong to this comment, the disposition HEAD must prefix the
   # current HEAD, and this comment must itself be a current-HEAD no-find (its
   # reviewed commit prefixes the current HEAD).
+  # Only the exact canonical source-bound disposition sentence leaves the generic
+  # pairing pool (canonical CODEX_NO_FIND_DISPOSITION_RE); an ordinary reply that
+  # merely mentions the phrase does not.
+  def is_codex_disposition_shape:
+    (.body | test("^\\*\\*Accepted[.!:]?\\*\\*\\s+—\\s+[^\\s]+\\s+no-find result at HEAD\\s+[0-9a-f]{7,64};\\s+no actionable findings were reported\\s+\\(source: #issuecomment-[0-9]+\\)(?:\\s*\\n<!--\\s*[a-z0-9][a-z0-9_-]*-review-reply\\s*-->)?\\s*$"; "i"));
   def is_codex_source_bound($src):
     ((.body | capture("^\\*\\*Accepted[.!:]?\\*\\*\\s+—\\s+(?<login>[^\\s]+)\\s+no-find result at HEAD\\s+(?<h>[0-9a-f]{7,64});\\s+no actionable findings were reported\\s+\\(source: #issuecomment-(?<id>[0-9]+)\\)(?:\\s*\\n<!--\\s*[a-z0-9][a-z0-9_-]*-review-reply\\s*-->)?\\s*$"; "i")) // null) as $m
     | ($m != null)
@@ -1324,7 +1329,7 @@ MISSING_REGULAR=$(printf '%s\n' "${COMMENTS_JSON}" "${DISPOSITION_JSON}" | jq -s
         | map(select(.value.act > $c.act
             and (if ($c | is_codex_no_find_current)
                  then (.value | is_codex_source_bound($c))
-                 else (.value.body | test("no-find result at HEAD"; "i") | not)
+                 else (.value | is_codex_disposition_shape | not)
                  end)))
         | first) as $hit
       | if $hit == null then .missing += 1
