@@ -119,11 +119,11 @@ This section's rebase only applies **before the branch's first push**.
      unsure) — it already accounts for whether a merely-`BEHIND` head
      needs a resync (an up-to-date-head branch-protection requirement)
      rather than treating every non-`CLEAN` state the same:
-     - `syncRecommendation: "none"`: D1-D3 already happened in an
-       earlier session. Run D3.5's closing-keyword check first — it is
-       idempotent, and a session that crashed between D3 and D3.5 would
-       otherwise never verify the keyword — then continue to D4 (wait for
-       CI).
+     - `syncRecommendation: "none"`: D1-D3 are complete. Before D3.5,
+       verify the live base with
+       `gh pr view <pr-number> --json baseRefName`. Require the
+       `{development-branch}` resolved at B1; on read failure or mismatch,
+       hold and do not retarget. On a match, run D3.5, then D4 (CI).
      - `syncRecommendation: "recheck"` (mergeability still computing):
        re-run the helper after a short wait, up to 3 attempts; only a
        result still `"recheck"` after that budget falls through to stop
