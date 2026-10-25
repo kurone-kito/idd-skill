@@ -290,6 +290,10 @@ export type ParsedScopeOverrunRecord =
 
 /** Comment fields required to resolve scope-overrun and decision evidence. */
 export interface ScopeOverrunEvidenceComment {
+  /** GitHub issue-comment id, used only to break same-second ordering ties. */
+  id?: number | string | null;
+  /** GitHub server timestamp, used to select the active append-only record. */
+  createdAt?: string | null;
   body?: string | null;
   authorLogin?: string | null;
   /** Only explicit null proves the body has not been edited. */
@@ -329,14 +333,85 @@ export interface ScopeOverrunEvidenceResolution {
   decisionHeadSha: string | null;
 }
 
+interface ScopeOverrunCommentOrder {
+  createdAtMs: number;
+  id: number;
+}
+
+function scopeOverrunCommentOrder(
+  comment: ScopeOverrunEvidenceComment,
+): ScopeOverrunCommentOrder | null {
+  const createdAt = comment?.createdAt;
+  if (
+    typeof createdAt !== 'string' ||
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(createdAt)
+  ) {
+    return null;
+  }
+  const createdAtMs = Date.parse(createdAt);
+  const id = normalizePositiveIntegerToken(
+    typeof comment?.id === 'number' ? String(comment.id) : comment?.id,
+  );
+  return Number.isFinite(createdAtMs) && id !== null
+    ? { createdAtMs, id }
+    : null;
+}
+
+function latestScopeOverrunValue<T>(
+  entries: Array<{
+    comment: ScopeOverrunEvidenceComment;
+    value: T;
+  }>,
+): T | null {
+  const ordered: Array<{
+    comment: ScopeOverrunEvidenceComment;
+    value: T;
+    order: ScopeOverrunCommentOrder;
+  }> = [];
+  for (const entry of entries) {
+    const order = scopeOverrunCommentOrder(entry.comment);
+    if (!order) {
+      return null;
+    }
+    ordered.push({ ...entry, order });
+  }
+  ordered.sort(
+    (left, right) =>
+      left.order.createdAtMs - right.order.createdAtMs ||
+      left.order.id - right.order.id,
+  );
+  for (let index = 1; index < ordered.length; index += 1) {
+    if (
+      ordered[index - 1].order.createdAtMs ===
+        ordered[index].order.createdAtMs &&
+      ordered[index - 1].order.id === ordered[index].order.id
+    ) {
+      return null;
+    }
+  }
+  return ordered.at(-1)?.value ?? null;
+}
+
 function normalizeScopeOverrunFiles(value: unknown): string[] | null {
   if (!Array.isArray(value) || value.length === 0) {
     return null;
   }
   const files: string[] = [];
   for (const entry of value) {
-    const file = normalizeNonWhitespaceToken(entry);
+    const file = typeof entry === 'string' ? entry : '';
     if (!file || /[`\r\n\uFFFD]/u.test(file)) {
+      return null;
+    }
+    if (
+      file !== file.trim() ||
+      file.startsWith('/') ||
+      /^[A-Za-z]:/u.test(file) ||
+      file.includes('\\') ||
+      /[\p{Cc}\p{Zl}\p{Zp}]/u.test(file) ||
+      file
+        .split('/')
+        .some((segment) => !segment || segment === '.' || segment === '..')
+    ) {
       return null;
     }
     files.push(file);
@@ -399,23 +474,36 @@ export function renderScopeOverrunRecordComment(payload: {
     !candidateFiles ||
     (hasAnyPullRequestField && !hasCompletePullRequestFields)
   ) {
-    throw new Error('invalid scope overrun record payload');
+    throw new Error(
+      'invalid scope overrun record payload: provide a marker prefix, agent ID, positive issue number, S/M/L effort, a non-empty array of unique repository-relative POSIX paths, and either no PR fields or a PR number, branch, and full 40-character HEAD together',
+    );
   }
   const files = encodeURIComponent(JSON.stringify(candidateFiles));
   const postFields = hasCompletePullRequestFields
     ? ` pr=${pullRequestNumber} branch=${encodeURIComponent(branch)} head=${headSha}`
     : '';
-  const record =
-    `<!-- ${markerPrefix}-scope-overrun: v1 agent=${agentId} issue=${issueNumber} ` +
-    `effort=${effort} files=${files}${postFields} -->`;
+  const codeSpan = String.fromCharCode(0x60);
   const postNote = hasCompletePullRequestFields
     ? `; PR #${pullRequestNumber}, branch \`${branch}\`, HEAD \`${headSha}\``
     : '';
-  return [
-    record,
-    '',
-    `_${agentId}: scope overrun snapshot for issue #${issueNumber} (${effort}; ${candidateFiles.length} candidate file(s)${postNote}) — IDD automation marker. Do not edit._`,
-  ].join('\n');
+  const visibleFiles = candidateFiles
+    .map((file) => codeSpan + file + codeSpan)
+    .join(', ');
+  const visibleNote =
+    '_' +
+    agentId +
+    ': scope overrun snapshot for issue #' +
+    issueNumber +
+    ' (' +
+    effort +
+    '; candidate files: ' +
+    visibleFiles +
+    postNote +
+    ') — IDD automation marker. Do not edit._';
+  const record =
+    `<!-- ${markerPrefix}-scope-overrun: v1 agent=${agentId} issue=${issueNumber} ` +
+    `effort=${effort} files=${files}${postFields} -->`;
+  return [record, '', visibleNote].join('\n');
 }
 
 /** Parse a canonical scope-overrun record using the configured marker prefix. */
@@ -446,7 +534,12 @@ export function parseScopeOverrunRecordComment(
     return null;
   }
   const files = normalizeScopeOverrunFiles(candidateFiles);
-  if (!agentId || issueNumber === null || !files) {
+  if (
+    !agentId ||
+    issueNumber === null ||
+    !files ||
+    JSON.stringify(candidateFiles) !== JSON.stringify(files)
+  ) {
     return null;
   }
   let parsed: ParsedScopeOverrunRecord;
@@ -568,8 +661,14 @@ export function resolveScopeOverrunEvidence(options: {
       .map((login) => normalizeNonWhitespaceToken(login).toLowerCase())
       .filter(Boolean),
   );
-  const records: ParsedScopeOverrunRecord[] = [];
-  const decisionHeads = new Set<string>();
+  const records: Array<{
+    record: ParsedScopeOverrunRecord;
+    comment: ScopeOverrunEvidenceComment;
+  }> = [];
+  const decisions: Array<{
+    headSha: string;
+    comment: ScopeOverrunEvidenceComment;
+  }> = [];
   let hasDecision = false;
 
   for (const comment of options?.comments ?? []) {
@@ -589,7 +688,7 @@ export function resolveScopeOverrunEvidence(options: {
       if (record.issueNumber !== issueNumber) {
         return scopeOverrunResolution('invalid', 'record-issue-mismatch');
       }
-      records.push(record);
+      records.push({ record, comment });
     }
     if (isScopeOverrunDecisionShaped(body)) {
       hasDecision = true;
@@ -610,7 +709,7 @@ export function resolveScopeOverrunEvidence(options: {
       if (!match) {
         return scopeOverrunResolution('invalid', 'decision-malformed');
       }
-      decisionHeads.add(match[1]);
+      decisions.push({ headSha: match[1], comment });
     }
   }
 
@@ -621,12 +720,20 @@ export function resolveScopeOverrunEvidence(options: {
     return scopeOverrunResolution('invalid', 'decision-without-record');
   }
   const prePush = records.filter(
-    (record): record is ParsedPrePushScopeOverrunRecord =>
-      record.kind === 'pre-push',
+    (
+      entry,
+    ): entry is {
+      record: ParsedPrePushScopeOverrunRecord;
+      comment: ScopeOverrunEvidenceComment;
+    } => entry.record.kind === 'pre-push',
   );
   const postPush = records.filter(
-    (record): record is ParsedPostPushScopeOverrunRecord =>
-      record.kind === 'post-push',
+    (
+      entry,
+    ): entry is {
+      record: ParsedPostPushScopeOverrunRecord;
+      comment: ScopeOverrunEvidenceComment;
+    } => entry.record.kind === 'post-push',
   );
   const sameSnapshot = (
     left: ScopeOverrunRecordBase,
@@ -639,22 +746,43 @@ export function resolveScopeOverrunEvidence(options: {
       (file, index) => file === right.candidateFiles[index],
     );
   if (
-    prePush.some((record) => !sameSnapshot(record, records[0])) ||
-    postPush.some((record) => !sameSnapshot(record, records[0])) ||
-    postPush.some((record) =>
-      postPush.some(
-        (other) =>
-          other.pullRequestNumber !== record.pullRequestNumber ||
-          other.branch !== record.branch ||
-          other.headSha !== record.headSha,
+    prePush.some((entry) => !sameSnapshot(entry.record, records[0].record)) ||
+    postPush.some((entry) => !sameSnapshot(entry.record, records[0].record)) ||
+    new Set(
+      postPush.map((entry) =>
+        JSON.stringify([entry.record.pullRequestNumber, entry.record.branch]),
       ),
-    )
+    ).size > 1
   ) {
     return scopeOverrunResolution('invalid', 'record-conflict');
   }
-  const record = postPush[0] ?? prePush[0] ?? null;
+  const postPushHeads = new Set(postPush.map((entry) => entry.record.headSha));
+  let record: ParsedScopeOverrunRecord | null =
+    postPush[0]?.record ?? prePush[0]?.record ?? null;
+  if (postPushHeads.size > 1) {
+    const latestRecord = latestScopeOverrunValue(
+      postPush.map((entry) => ({
+        comment: entry.comment,
+        value: entry.record,
+      })),
+    );
+    if (!latestRecord) {
+      return scopeOverrunResolution('invalid', 'record-conflict');
+    }
+    record = latestRecord;
+  }
+  const decisionHeads = new Set(decisions.map((decision) => decision.headSha));
+  let decisionHeadSha: string | null = decisions[0]?.headSha ?? null;
   if (decisionHeads.size > 1) {
-    return scopeOverrunResolution('invalid', 'decision-conflict', record);
+    decisionHeadSha = latestScopeOverrunValue(
+      decisions.map((decision) => ({
+        comment: decision.comment,
+        value: decision.headSha,
+      })),
+    );
+    if (!decisionHeadSha) {
+      return scopeOverrunResolution('invalid', 'decision-conflict', record);
+    }
   }
   if (decisionHeads.size === 0) {
     return scopeOverrunResolution('pending', 'no-decision', record);
@@ -664,10 +792,9 @@ export function resolveScopeOverrunEvidence(options: {
       'invalid',
       'pre-push-record-has-no-head',
       record,
-      [...decisionHeads][0],
+      decisionHeadSha,
     );
   }
-  const decisionHeadSha = [...decisionHeads][0];
   if (decisionHeadSha !== record.headSha) {
     return scopeOverrunResolution(
       'invalid',

@@ -2921,6 +2921,7 @@ const FULL_FIELDS_BY_TYPE: Record<string, Record<string, string>> = {
 function postIddMarkerArgv(
   type: string,
   fields: Record<string, string>,
+  destination: { owner?: string; repo?: string } = {},
 ): string[] {
   const scopeOverrun = type === 'scope-overrun';
   const argv = [
@@ -2931,6 +2932,12 @@ function postIddMarkerArgv(
     scopeOverrun ? 'issue' : 'pr',
     scopeOverrun ? '4674' : '1722',
   ];
+  if (destination.owner !== undefined) {
+    argv.push('--owner', destination.owner);
+  }
+  if (destination.repo !== undefined) {
+    argv.push('--repo', destination.repo);
+  }
   for (const [flag, value] of Object.entries(fields)) {
     argv.push(`--${flag}`, value);
   }
@@ -3048,6 +3055,46 @@ test('post-idd-marker CLI: scope-overrun requires an issue target and complete P
       }),
     ),
     /--pull-request, --branch, and --head-sha must be provided together/,
+  );
+});
+
+test('post-idd-marker CLI: scope-overrun uses explicit target-repository prefixes', () => {
+  const fields = FULL_FIELDS_BY_TYPE['scope-overrun'];
+  const destination = { owner: 'other-owner', repo: 'other-repo' };
+  const missingPrefix = runCliExpectingFailure(
+    postIddMarkerArgv('scope-overrun', fields, destination),
+  );
+  assert.match(missingPrefix, /requires an explicit non-empty --marker-prefix/);
+
+  const targetPrefix = JSON.parse(
+    execFileSync(
+      process.execPath,
+      postIddMarkerArgv(
+        'scope-overrun',
+        { ...fields, 'marker-prefix': 'other-idd' },
+        destination,
+      ),
+      { cwd: REPO_ROOT, encoding: 'utf8' },
+    ),
+  );
+  assert.match(targetPrefix.body, /^<!-- other-idd-scope-overrun:/);
+  assert.equal(
+    parseScopeOverrunRecordComment(targetPrefix.body, 'other-idd')?.issueNumber,
+    4674,
+  );
+
+  const localMismatch = runCliExpectingFailure(
+    postIddMarkerArgv('scope-overrun', {
+      ...fields,
+      'marker-prefix': 'other-idd',
+    }),
+  );
+  assert.match(localMismatch, /must match configured markerPrefix/);
+  assert.match(
+    runCliExpectingFailure(
+      postIddMarkerArgv('scope-overrun', fields, { owner: 'other-owner' }),
+    ),
+    /--owner and --repo must be provided together/,
   );
 });
 

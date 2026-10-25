@@ -3915,20 +3915,40 @@ function main() {
       return { exitCode: 1, kind: 'usage', message };
     }
     args.fields.issue = String(args.number);
-    const configuredPrefix = normalizeMarkerPrefix(
-      loadIddConfig()?.markerPrefix ?? DEFAULT_MARKER_PREFIX,
-    );
     const suppliedPrefix = args.fields['marker-prefix'];
-    if (
-      suppliedPrefix !== undefined &&
-      normalizeMarkerPrefix(suppliedPrefix) !== configuredPrefix
-    ) {
+    if (Boolean(args.owner) !== Boolean(args.repo)) {
       const message =
-        '--marker-prefix for scope-overrun must match configured markerPrefix';
+        '--owner and --repo must be provided together for scope-overrun';
       process.stderr.write(`${message}\n`);
       return { exitCode: 1, kind: 'usage', message };
     }
-    args.fields['marker-prefix'] = configuredPrefix;
+    if (args.owner && args.repo) {
+      const targetPrefix =
+        typeof suppliedPrefix === 'string' && suppliedPrefix.trim()
+          ? normalizeMarkerPrefix(suppliedPrefix)
+          : '';
+      if (!targetPrefix) {
+        const message =
+          'scope-overrun with --owner/--repo requires an explicit non-empty --marker-prefix for the target repository';
+        process.stderr.write(`${message}\n`);
+        return { exitCode: 1, kind: 'usage', message };
+      }
+      args.fields['marker-prefix'] = targetPrefix;
+    } else {
+      const configuredPrefix = normalizeMarkerPrefix(
+        loadIddConfig()?.markerPrefix ?? DEFAULT_MARKER_PREFIX,
+      );
+      if (
+        suppliedPrefix !== undefined &&
+        normalizeMarkerPrefix(suppliedPrefix) !== configuredPrefix
+      ) {
+        const message =
+          '--marker-prefix for scope-overrun must match configured markerPrefix';
+        process.stderr.write(`${message}\n`);
+        return { exitCode: 1, kind: 'usage', message };
+      }
+      args.fields['marker-prefix'] = configuredPrefix;
+    }
     const pullRequestFields = ['pull-request', 'branch', 'head-sha'].filter(
       (field) => args.fields[field] !== undefined,
     );

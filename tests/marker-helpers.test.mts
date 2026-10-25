@@ -38,11 +38,20 @@ function postPushRecord(headSha = HEAD, files = FILES): string {
 
 function evidenceComment(
   body: string,
-  overrides: { authorLogin?: string; lastEditedAt?: string | null } = {},
+  overrides: {
+    authorLogin?: string;
+    lastEditedAt?: string | null;
+    id?: number | string | null;
+    createdAt?: string | null;
+  } = {},
 ) {
   return {
     body,
     authorLogin: overrides.authorLogin ?? 'kurone-kito',
+    ...(overrides.id === undefined ? {} : { id: overrides.id }),
+    ...(overrides.createdAt === undefined
+      ? {}
+      : { createdAt: overrides.createdAt }),
     lastEditedAt:
       overrides.lastEditedAt === undefined ? null : overrides.lastEditedAt,
   };
@@ -73,6 +82,48 @@ test('scope-overrun post-push record round-trips PR, branch, and full HEAD', () 
     branch: 'issue/4674-scope-overrun',
     headSha: HEAD,
   });
+});
+
+test('scope-overrun permits internal spaces and visibly lists sorted paths', () => {
+  const body = prePushRecord(['src/z file.mts', 'src/a file.mts']);
+  assert.equal(
+    parseScopeOverrunRecordComment(body, PREFIX)?.candidateFiles.join(','),
+    'src/a file.mts,src/z file.mts',
+  );
+  assert.match(body, /candidate files: `src\/a file\.mts`, `src\/z file\.mts`/);
+});
+
+test('scope-overrun rejects non-canonical candidate path spellings', () => {
+  for (const file of [
+    '/src/file.mts',
+    'C:/src/file.mts',
+    'src\\file.mts',
+    'src//file.mts',
+    'src/./file.mts',
+    'src/../file.mts',
+    ' src/file.mts',
+    'src/file.mts ',
+    'src/`file`.mts',
+    'src/file\n.mts',
+    'src/\u0001file.mts',
+  ]) {
+    assert.throws(() => prePushRecord([file]), file);
+  }
+  assert.throws(() => prePushRecord(['src/file.mts', 'src/file.mts']));
+});
+
+test('scope-overrun parser rejects unsorted candidate-file payloads', () => {
+  const sorted = encodeURIComponent(JSON.stringify(['src/a.mts', 'src/z.mts']));
+  const unsorted = encodeURIComponent(
+    JSON.stringify(['src/z.mts', 'src/a.mts']),
+  );
+  assert.equal(
+    parseScopeOverrunRecordComment(
+      prePushRecord().replace(sorted, unsorted),
+      PREFIX,
+    ),
+    null,
+  );
 });
 
 test('scope-overrun requires the configured marker prefix and canonical body', () => {
@@ -239,4 +290,148 @@ test('scope-overrun decision cannot accept a pre-push record or a different reco
     currentHeadSha: OTHER_HEAD,
   });
   assert.equal(mismatchedDecision.reason, 'decision-head-mismatch');
+});
+
+test('scope-overrun requires a complete PR tuple and matching issue number', () => {
+  assert.throws(
+    () =>
+      renderScopeOverrunRecordComment({
+        markerPrefix: PREFIX,
+        agentId: 'worker-1',
+        issueNumber: ISSUE,
+        effort: 'M',
+        candidateFiles: FILES,
+        pullRequestNumber: 4399,
+      }),
+    /either no PR fields or a PR number, branch, and full 40-character HEAD together/,
+  );
+  const wrongIssueRecord = renderScopeOverrunRecordComment({
+    markerPrefix: PREFIX,
+    agentId: 'worker-1',
+    issueNumber: ISSUE + 1,
+    effort: 'M',
+    candidateFiles: FILES,
+    pullRequestNumber: 4399,
+    branch: 'issue/4674-scope-overrun',
+    headSha: HEAD,
+  });
+  const result = resolveScopeOverrunEvidence({
+    comments: [evidenceComment(wrongIssueRecord)],
+    markerPrefix: PREFIX,
+    trustedMarkerLogins: TRUSTED,
+    issueNumber: ISSUE,
+  });
+  assert.equal(result.reason, 'record-issue-mismatch');
+});
+
+test('scope-overrun needs a well-formed decision and a live current head', () => {
+  const malformed = resolveScopeOverrunEvidence({
+    comments: [
+      evidenceComment(postPushRecord()),
+      evidenceComment(`Scope decision: accept head ${HEAD.slice(0, 39)}`),
+    ],
+    markerPrefix: PREFIX,
+    trustedMarkerLogins: TRUSTED,
+    issueNumber: ISSUE,
+    currentHeadSha: HEAD,
+  });
+  assert.equal(malformed.reason, 'decision-malformed');
+
+  const unavailable = resolveScopeOverrunEvidence({
+    comments: [
+      evidenceComment(postPushRecord()),
+      evidenceComment(`Scope decision: accept head ${HEAD}`),
+    ],
+    markerPrefix: PREFIX,
+    trustedMarkerLogins: TRUSTED,
+    issueNumber: ISSUE,
+  });
+  assert.equal(unavailable.reason, 'current-head-unavailable');
+});
+
+test('scope-overrun tolerates identical duplicate evidence', () => {
+  const result = resolveScopeOverrunEvidence({
+    comments: [
+      evidenceComment(postPushRecord()),
+      evidenceComment(postPushRecord()),
+      evidenceComment(`Scope decision: accept head ${HEAD}`),
+      evidenceComment(`Scope decision: accept head ${HEAD}`),
+    ],
+    markerPrefix: PREFIX,
+    trustedMarkerLogins: TRUSTED,
+    issueNumber: ISSUE,
+    currentHeadSha: HEAD,
+  });
+  assert.equal(result.status, 'accepted');
+});
+
+test('scope-overrun append-only head revisions require a fresh exact-head decision', () => {
+  const firstHead = evidenceComment(postPushRecord(HEAD), {
+    id: 100,
+    createdAt: '2026-10-24T18:00:00Z',
+  });
+  const revisedHead = evidenceComment(postPushRecord(OTHER_HEAD), {
+    id: 101,
+    createdAt: '2026-10-24T18:01:00Z',
+  });
+  const oldDecision = evidenceComment(`Scope decision: accept head ${HEAD}`, {
+    id: 102,
+    createdAt: '2026-10-24T18:02:00Z',
+  });
+  const pending = resolveScopeOverrunEvidence({
+    comments: [firstHead, oldDecision, revisedHead],
+    markerPrefix: PREFIX,
+    trustedMarkerLogins: TRUSTED,
+    issueNumber: ISSUE,
+    currentHeadSha: OTHER_HEAD,
+  });
+  assert.equal(pending.reason, 'decision-head-mismatch');
+  assert.equal(
+    pending.record?.kind === 'post-push' && pending.record.headSha,
+    OTHER_HEAD,
+  );
+
+  const accepted = resolveScopeOverrunEvidence({
+    comments: [
+      firstHead,
+      oldDecision,
+      revisedHead,
+      evidenceComment(`Scope decision: accept head ${OTHER_HEAD}`, {
+        id: 103,
+        createdAt: '2026-10-24T18:03:00Z',
+      }),
+    ],
+    markerPrefix: PREFIX,
+    trustedMarkerLogins: TRUSTED,
+    issueNumber: ISSUE,
+    currentHeadSha: OTHER_HEAD,
+  });
+  assert.equal(accepted.status, 'accepted');
+});
+
+test('scope-overrun changed heads without ordering evidence stay conflicting', () => {
+  const recordConflict = resolveScopeOverrunEvidence({
+    comments: [
+      evidenceComment(postPushRecord(HEAD)),
+      evidenceComment(postPushRecord(OTHER_HEAD)),
+    ],
+    markerPrefix: PREFIX,
+    trustedMarkerLogins: TRUSTED,
+    issueNumber: ISSUE,
+    currentHeadSha: OTHER_HEAD,
+  });
+  assert.equal(recordConflict.reason, 'record-conflict');
+
+  const decisionConflict = resolveScopeOverrunEvidence({
+    comments: [
+      evidenceComment(postPushRecord(HEAD)),
+      evidenceComment(`Scope decision: accept head ${HEAD}`),
+      evidenceComment(`Scope decision: accept head ${OTHER_HEAD}`),
+    ],
+    markerPrefix: PREFIX,
+    trustedMarkerLogins: TRUSTED,
+    issueNumber: ISSUE,
+    currentHeadSha: OTHER_HEAD,
+  });
+  assert.equal(decisionConflict.reason, 'decision-conflict');
 });

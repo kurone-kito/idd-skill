@@ -5323,19 +5323,46 @@ node scripts/post-idd-marker.mjs --type scope-overrun --target issue <issue> \
 ```
 
 `--candidate-files` is a JSON array. The renderer sorts paths by UTF-8 byte
-order, rejects duplicates and paths that cannot safely appear in the visible
-record, and uses the repository's configured `markerPrefix`. The three PR
-flags are optional as a group and required together when recording a pushed
-head. The target must be an issue. Dry-run prints the exact body; `--apply`
-posts it as JSON after the caller runs its normal claim-revalidation gate.
+order, rejects duplicates and non-canonical spellings such as absolute paths,
+backslashes, empty segments, `.` / `..` segments, or leading/trailing
+whitespace, and allows spaces inside a path. The visible note lists every
+sorted path in code spans so a reviewer can inspect the exact snapshot. This
+closes the aliasing and unreadable-list cases raised during review of pull
+request `#4688` on 2026-10-24 ([canonical path spellings](https://github.com/kurone-kito/idd-skill/pull/4688#discussion_r4368595793),
+[visible candidate list](https://github.com/kurone-kito/idd-skill/pull/4688#discussion_r4368595801)).
+
+For a local target, the marker prefix comes from this repository's configured
+`markerPrefix`; an explicit `--marker-prefix` must match it. When both
+`--owner` and `--repo` explicitly name a target repository, pass that
+repository's prefix with `--marker-prefix`; the helper does not fetch its
+configuration. Passing only one of `--owner` or `--repo`, or omitting the
+prefix for an explicit target, fails before posting. This avoids writing a
+record that the target repository cannot recognize, observed during review
+of pull request `#4688` on 2026-10-24
+([foreign marker prefix](https://github.com/kurone-kito/idd-skill/pull/4688#discussion_r4368602159)).
+
+The three PR flags are optional as a group and required together when
+recording a pushed head. The target must be an issue. Dry-run prints the exact
+body; `--apply` posts it as JSON after the caller runs its normal
+claim-revalidation gate.
 
 `parseScopeOverrunRecordComment(body, markerPrefix)` accepts only a canonical
 record under the supplied prefix. `resolveScopeOverrunEvidence()` additionally
 requires each record comment's author to be in the configured trusted marker
 actor list and `lastEditedAt` to be explicitly `null`. A pre-push record may be
-followed by one post-push record only when the snapshot fields match. Identical
-duplicate records are tolerated; malformed, edited, untrusted, incomplete,
-or conflicting evidence returns `invalid`.
+followed by post-push records only when issue, effort, candidate files, PR
+number, and branch stay the same. If the pushed head changes, the newest
+append-only record by GitHub's `createdAt` timestamp and numeric comment ID is
+active; earlier records remain for audit. A new head needs a new trusted-owner
+decision for that exact SHA; the previous decision does not carry forward. If
+GitHub ordering data is missing or ambiguous, multiple heads remain conflicting
+and return `invalid`. This lets review-fix pushes record a new head without
+turning an earlier approval into approval of new code, while preserving a
+fail-closed result when the append order cannot be established. The dead-end
+case was raised during review of pull request `#4688` on 2026-10-24
+([changed-head record](https://github.com/kurone-kito/idd-skill/pull/4688#discussion_r4368595812)).
+Identical duplicate records are tolerated; malformed, edited, untrusted,
+incomplete, or conflicting evidence returns `invalid`.
 
 The owner decision is a separate comment whose exact first line is
 `Scope decision: accept head <full 40-character SHA>`. A worker never writes
@@ -5351,7 +5378,12 @@ _{agent-id}: IDD automation comment; attribution is self-reported._
 A decision-shaped comment with this suffix is invalid even when its GitHub
 author is in `trustedMarkerActors`. This is workflow attribution, not identity
 proof: a marker can be omitted or forged, so an unmarked comment does not prove
-that a human wrote it. The decision is also valid only from a configured trusted
+that a human wrote it. This is useful when agents and maintainers share a
+GitHub login, but GitHub still records that login rather than which process
+wrote the comment. This ambiguity was raised during review of pull request
+`#4688` on 2026-10-24
+([attribution marker](https://github.com/kurone-kito/idd-skill/pull/4688#discussion_r4368595779)).
+The decision is also valid only from a configured trusted
 actor, with an explicitly unedited comment, and only when the SHA equals both
 the recorded post-push SHA and the live PR head. A changed live head leaves the
 decision pending because acceptance remains bound to the recorded SHA; the
@@ -6676,7 +6708,7 @@ cleanup script is in
   `f4-head-proof` is not in that list: its body comes from
   `renderF4HeadProofBody` (`f4-head-proof.mts`), and its command reads the
   live state before it renders (see the
-  [F4 head-proof marker contract](#f4-head-proof-marker-contract).
+  [F4 head-proof marker contract](#f4-head-proof-marker-contract)).
   `scope-overrun` is also a special issue-targeted type: its body comes from
   `renderScopeOverrunRecordComment` (`marker-helpers.mts`) and it remains
   persistent evidence rather than entering the transient operational-marker
