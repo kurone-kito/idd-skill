@@ -206,7 +206,7 @@ test('stalled-session-quiet-check.mjs CLI: parses multi-line NDJSON output from 
   assert.equal(report.evidence.activity_count_in_window, 4);
 });
 
-test('review-activity-snapshot.mjs CLI: parses multi-line NDJSON output from paginated review/comment endpoints', () => {
+test('review-activity-snapshot.mjs CLI: parses paginated activity and refuses incomplete CI rollups', () => {
   const responses = new Map<string, string>([
     [
       // #1833: review-activity-snapshot.mts now reads `author.login`
@@ -359,6 +359,36 @@ test('review-activity-snapshot.mjs CLI: parses multi-line NDJSON output from pag
   // mode on gh versions where multi-page output isn't newline-separated.
   assert.equal(report.counts.reviews, 2);
   assert.equal(report.counts.comments, 2);
+
+  const incompleteGraphql = JSON.parse(graphqlResponse) as {
+    data: {
+      repository: {
+        pullRequest: {
+          statusCheckRollup: { contexts: unknown };
+        };
+      };
+    };
+  };
+  incompleteGraphql.data.repository.pullRequest.statusCheckRollup.contexts =
+    null;
+  assert.throws(
+    () =>
+      runStubbedCli(
+        'scripts/review-activity-snapshot.mjs',
+        ['--pr', '42', '--owner', OWNER, '--repo', REPO],
+        responses,
+        JSON.stringify(incompleteGraphql),
+      ),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      const stderr = (error as Error & { stderr?: Buffer | string }).stderr;
+      assert.match(
+        `${error.message}\n${stderr?.toString() ?? ''}`,
+        /status-check rollup contexts connection is missing or incomplete/,
+      );
+      return true;
+    },
+  );
 });
 
 function claimApprovalGateResponses(timelineBody: string): Map<string, string> {

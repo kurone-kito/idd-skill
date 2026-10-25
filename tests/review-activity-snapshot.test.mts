@@ -777,6 +777,8 @@ function latestPort(options: {
   fetchReviews?: () => unknown;
   comments?: object[];
   viewerLogin?: string;
+  baseRefName?: string;
+  checksBaseRefName?: string;
 }) {
   const port: Record<string, unknown> = {
     resolveViewerLoginSafe: () =>
@@ -786,11 +788,11 @@ function latestPort(options: {
     getChangeRequestHeadShaAndAuthor: () => ({
       headSha: LATEST_HEAD,
       authorLogin: 'someone',
-      baseRefName: 'main',
+      baseRefName: options.baseRefName ?? 'main',
     }),
     getChangeRequestBranchAndChecks: () => ({
       headSha: LATEST_HEAD,
-      baseRefName: 'main',
+      baseRefName: options.checksBaseRefName ?? options.baseRefName ?? 'main',
       statusCheckRollup: [],
     }),
     listReviews: () => [],
@@ -810,6 +812,8 @@ function latestSnapshot(
     trustedMarkerLoginsFlag?: string;
     headSha?: string;
     config?: object;
+    baseRefName?: string;
+    checksBaseRefName?: string;
   },
 ) {
   const port = latestPort(options) as Parameters<
@@ -820,11 +824,11 @@ function latestSnapshot(
       () => ({
         headSha: options.headSha,
         authorLogin: 'someone',
-        baseRefName: 'main',
+        baseRefName: options.baseRefName ?? 'main',
       });
     (port as Record<string, unknown>).getChangeRequestBranchAndChecks = () => ({
       headSha: options.headSha,
-      baseRefName: 'main',
+      baseRefName: options.checksBaseRefName ?? options.baseRefName ?? 'main',
       statusCheckRollup: [],
     });
   }
@@ -842,6 +846,18 @@ function latestSnapshot(
     port,
   });
 }
+
+test('the snapshot fails closed when the provider check read changes the base ref', () => {
+  assert.throws(
+    () =>
+      latestSnapshot({
+        include: false,
+        baseRefName: 'main',
+        checksBaseRefName: 'release/2',
+      }),
+    /base ref release\/2 does not match the activity snapshot base ref main/,
+  );
+});
 
 function providerReviewNode(
   id: string,

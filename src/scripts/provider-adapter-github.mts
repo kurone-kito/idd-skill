@@ -1232,13 +1232,23 @@ function fetchChangeRequestBranchAndChecks(
       );
     }
     const contexts = pullRequest.statusCheckRollup?.contexts;
-    for (const node of Array.isArray(contexts?.nodes) ? contexts.nodes : []) {
+    if (
+      !contexts ||
+      !Array.isArray(contexts.nodes) ||
+      !contexts.pageInfo ||
+      typeof contexts.pageInfo.hasNextPage !== 'boolean'
+    ) {
+      throw new Error(
+        'getChangeRequestBranchAndChecks: status-check rollup contexts connection is missing or incomplete',
+      );
+    }
+    for (const node of contexts.nodes) {
       const normalized = normalizeStatusCheckRollupNode(node);
       if (normalized) {
         statusCheckRollup.push(normalized);
       }
     }
-    const hasNextPage = contexts?.pageInfo?.hasNextPage === true;
+    const hasNextPage = contexts.pageInfo.hasNextPage;
     if (!hasNextPage) {
       return { headSha, baseRefName, statusCheckRollup };
     }

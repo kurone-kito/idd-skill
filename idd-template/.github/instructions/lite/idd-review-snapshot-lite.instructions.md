@@ -133,13 +133,12 @@ three boundaries. `refuse` or moved HEAD: do not post; repeat Step 1 and
 re-triage. `defer`: do not post; follow the CI-incomplete route and
 refresh Step 1.
 
-Manual six-field fallback works when `--from-pr` cannot run, but cannot
-use `--operation-local`. Before posting, read the
-current HEAD and complete activity set; compare Step 1's HEAD, item
-count, and max time, and check for new uncovered comments, threads, or
-review-body findings. Any change, incomplete/error read, or uncertainty:
-do not post; repeat Step 1 and re-triage. Require producer-aware passing
-CI evidence for the captured HEAD; names alone are insufficient.
+Manual six-field fallback cannot use `--operation-local`. Capture
+Step 1's `baseRefName` with HEAD. Before posting, require a complete
+read to match both refs, item count, and max activity time, with no new
+uncovered items; any mismatch or uncertainty means no post — repeat
+Step 1 and re-triage. Require producer-aware passing CI; names alone
+are insufficient.
 Otherwise skip Step 2 and use E15/E14.
 
 Exact body: `<!-- review-watermark: {agent-id} {claim-id} {head-SHA}
