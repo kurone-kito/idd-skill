@@ -3116,7 +3116,7 @@ test('fan-out scratchpad preflight provisions and recovers one session root (#46
       evidence:
         'exact prior record is valid; the token is absent because this is a restarted or unknown invocation; a trusted maintainer confirms no live same-session orchestrator and grants this resumer sole control in the current operator-run LWR step 2 interaction; all collision and settled-evidence checks pass',
       action:
-        'Reuse the recorded root read-only, leave any reservation untouched, and recover report locations before refill',
+        'During recovery preflight, reuse the recorded root read-only and leave its reservation untouched; after sole control, use the normal brief/report path',
     },
     {
       evidence:
@@ -3200,7 +3200,7 @@ test('fan-out scratchpad preflight provisions and recovers one session root (#46
       'Follow the liveness check in [LWR](idd-resume-detail.md#lwr--local-worktree-recovery) before resuming.',
       "Verify the record's exact session, repository, and canonical root",
       'If a reservation remains, require its full tuple to match the record; if none remains, do not recreate it',
-      'Reuse the recorded root read-only; leave any reservation untouched',
+      'During recovery preflight, reuse the recorded root read-only and leave any reservation untouched',
       'Matching files alone never authorize reuse',
       'elapsed time and process ids do not prove liveness',
       'no new marker or automatic unlink is used',
@@ -3316,6 +3316,14 @@ test('fan-out scratchpad preflight provisions and recovers one session root (#46
     );
     assert.match(text, /directly in the resolved session scratchpad root/);
     assert.match(text, /the verified root from the session\s+record/);
+    assert.match(
+      normalizeWhitespace(text),
+      /During recovery preflight, reuse the recorded root read-only and leave any reservation untouched\. After sole control is established, an eligible never-dispatched resume may use the normal brief\/report path and write only to verified child issue directories and report drafts under that root\./,
+    );
+    assert.match(
+      normalizeWhitespace(text),
+      /Before dispatch, the orchestrator uses `lstat` to require `\{report-path\}` to be absent; hold and preserve any existing entry\. The worker, as the eventual writer, must create its final report draft atomically as a new regular file without following links, with current-user-only permissions \(POSIX `O_CREAT \| O_EXCL`, mode `0600`; equivalent create-new, current-user-only access on Windows\)\. If a symlink, non-regular entry, or conflicting draft appears before creation, or exclusive creation fails, hold and preserve it; never truncate, replace, or rename it\./,
+    );
     assert.match(
       normalizeWhitespace(text),
       /On restart, enumerate direct-child JSON drafts with that issue number prefix and select only the unique draft matching both `issue` and `claimId`; hold on unreadable or ambiguous matches/,

@@ -1233,11 +1233,13 @@ Follow the liveness check in
 Verify the record's exact session, repository, and canonical root. If a
 reservation remains, require its full tuple to match the record; if none
 remains, do not recreate it. Scan every record for root collisions and require
-settled worker, artifact, and report evidence. Reuse the recorded root
-read-only; leave any reservation untouched. Matching files alone never
-authorize reuse, elapsed time and process ids do not prove liveness, and no new
-marker or automatic unlink is used. Hold and preserve on any mismatch or
-uncertainty.
+settled worker, artifact, and report evidence. During recovery preflight,
+reuse the recorded root read-only and leave any reservation untouched. After
+sole control is established, an eligible never-dispatched resume may use the
+normal brief/report path and write only to verified child issue directories
+and report drafts under that root. Matching files alone never authorize
+reuse, elapsed time and process ids do not prove liveness, and no new marker or
+automatic unlink is used. Hold and preserve on any mismatch or uncertainty.
 A per-session exclusive record does not serialize the first allocation scan:
 two sessions could otherwise accept one canonical root (preventive; no
 observed runtime incident yet; identified during E1 review on 2026-10-25, PR
@@ -1267,7 +1269,7 @@ session-and-repository record, and live worker and artifact evidence:
 | A root reservation exists without an exact valid record for this session, does not match that record, or cannot be read or verified                                                                                                                                                                             | Hold and preserve it; do not accept or allocate the root                                                                                                       |
 | A session record is unreadable or invalid, or another session records the canonical candidate root                                                                                                                                                                                                              | Hold and preserve evidence; do not accept or allocate a colliding root                                                                                         |
 | The exact record matches this session, repository, and canonical root; the same uninterrupted allocator carries its invocation-local owner token from successful exclusive reservation acquisition; the full collision scan is clear; root and worker, artifact, and report evidence are valid and settled      | Continue this invocation on the recorded root; leave any reservation untouched and recover report locations before refill                                      |
-| The exact prior record is valid; the token is absent because this is a restarted or unknown invocation; a trusted maintainer confirms no live same-session orchestrator and grants this resumer sole control in the current operator-run LWR step 2 interaction; all collision and settled-evidence checks pass | Reuse the recorded root read-only, leave any reservation untouched, and recover report locations before refill                                                 |
+| The exact prior record is valid; the token is absent because this is a restarted or unknown invocation; a trusted maintainer confirms no live same-session orchestrator and grants this resumer sole control in the current operator-run LWR step 2 interaction; all collision and settled-evidence checks pass | During recovery preflight, reuse the recorded root read-only and leave its reservation untouched; after sole control, use the normal brief/report path         |
 | The exact record is valid in a restarted or unknown invocation, but the trusted maintainer has not confirmed no live same-session orchestrator and sole-resumer control in the current recovery                                                                                                                 | Hold and preserve the record and any reservation until that operator confirmation                                                                              |
 | Claims already exist, but live evidence establishes that no worker was dispatched                                                                                                                                                                                                                               | Revalidate every claim, winning nonce, worktree lock, and token record first; then bootstrap the root and resume those claims without minting a claim or nonce |
 | A worker dispatch is proven, but no safe root or matching session record can be recovered                                                                                                                                                                                                                       | Hold and preserve briefs and reports; do not allocate or redispatch until ownership and report locations are reconciled                                        |
@@ -1808,9 +1810,19 @@ because the orchestrator checks it against live GitHub state first. The
 
 Fill note: set `{report-path}` to a file whose name starts with the issue number,
 for example `2878-worker-report.json`, directly under the resolved session
-scratchpad root. On restart, enumerate direct-child JSON drafts with that issue
-number prefix and select only the unique draft matching both `issue` and
-`claimId`; hold on unreadable or ambiguous matches. The durable record lets an
+scratchpad root. Before dispatch, the orchestrator uses `lstat` to require
+`{report-path}` to be absent; hold and preserve any existing entry. The worker,
+as the eventual writer, must create its final report draft atomically as a new
+regular file without following links, with current-user-only permissions
+(POSIX `O_CREAT | O_EXCL`, mode `0600`; equivalent create-new, current-user-only
+access on Windows). If a symlink, non-regular entry, or conflicting draft
+appears before creation, or exclusive creation fails, hold and preserve it;
+never truncate, replace, or rename it.
+
+On restart, enumerate direct-child JSON drafts with that issue number prefix
+and select only the unique draft matching both `issue` and `claimId`; hold on
+unreadable or ambiguous matches. The orchestrator reads only that unique
+regular draft and never rewrites an existing one. The durable record lets an
 orchestrator restart rediscover this same root and report draft without
 depending on a fresh harness path. At verification, the orchestrator computes
 `reviewRounds` from the complete review list for a non-null `pullRequest`:
