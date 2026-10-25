@@ -1463,21 +1463,22 @@ issue `#4101`): the pin list for the policy audit was flagged in two rounds,
 and the recovery path for an empty handle in three rounds, each time with
 different wording, at about 100,000 reviewer tokens per round.
 
-**Ledger.** During a drafting session, keep a findings ledger in the session
-scratchpad, one JSON file per draft, named for that draft: its issue number
-once one exists, or, before then, a token that no other draft uses, such as a
-freshly generated UUID. When the draft gets its issue number, rename the file
-to that number and keep every entry. No two drafts or concurrent workers share
-a ledger file. The ledger is never written to the repository or to a marker.
-Each entry has these members: `claim` (one sentence), `draftSection` (the
-heading the finding concerns), `round`, `draftVersion` (the draft revision the
-finding was raised against, counted from 1; recorded for audit only),
-`disposition` (`fixed`, `rejected`, or `deferred`), `evidence` (required for
-`rejected`: a file and line, or a read-only command and its output), and
-`decidedAt`. If the scratchpad is lost, for example after a restart, the
-ledger is empty and the review runs as it does without one. Record an entry
-for every finding as soon as its disposition is decided, before the next
-review round. A later disposition of the same finding updates that entry.
+**Ledger.** During a drafting session, keep a findings ledger in the namespace
+that [Ledger storage](#ledger-storage) allocates, one JSON file per draft, named
+for that draft: its issue number once one exists, or, before then, a token that
+no other draft uses, such as a freshly generated UUID. When the draft gets its
+issue number, rename the file to that number and keep every entry. No two drafts
+or concurrent workers share a ledger file. The ledger is never written to the
+repository or to a marker. Each entry has these members: `claim` (one sentence),
+`draftSection` (the heading the finding concerns), `round`, `draftVersion` (the
+draft revision the finding was raised against, counted from 1; recorded for
+audit only), `disposition` (`fixed`, `rejected`, or `deferred`), `evidence`
+(required for `rejected`: a file and line, or a read-only command and its
+output), and `decidedAt`. If the namespace or the ledger is lost, for example
+after a restart, the ledger is empty and the review runs as it does without one.
+Record an entry for every finding as soon as its disposition is decided, before
+the next review round. A later disposition of the same finding updates that
+entry.
 
 **Packet.** For each `rejected` entry that has evidence, add one string to the
 packet's existing `evidence` array, in every review mode:
@@ -1518,6 +1519,126 @@ finding reopens as a new finding.
   against its claim again.
 - A deferred entry stays open until the author decides, and a draft with an
   open deferred entry is not published.
+
+### Ledger storage
+
+A drafting session needs a private place for its ledger before the first ledger
+write. This procedure needs no orchestrator, no particular environment variable,
+no helper package, and no stable harness session ID, so it works the same in
+instructions-only and same-response self-critique runs. Run it once per drafting
+session, before the first disposition is recorded. Every check below fails
+closed: when a platform cannot supply one of the evidence values named here, the
+storage is unreadable and the procedure stops.
+
+**Evidence.** For each path, record its canonical path (symbolic links
+resolved), its file type, its owner, its mode (POSIX) or ACL (Windows), its link
+count, and its file identity (device and inode on POSIX, volume serial and file
+index on Windows). A ledger's content is identified by its SHA-256. This
+identity record lives only in the session's working context, never in a file, a
+marker, or the repository.
+
+**Roots.** A root is a directory that holds namespaces. Use a root that the user
+or the runtime supplies, such as a named scratch directory or harness scratch
+metadata, when one exists. Otherwise try the operating system's temporary
+directory, then the user state directory (`$XDG_STATE_HOME` when it is a
+qualified absolute path, else `$HOME/.local/state`; on Windows,
+`%LOCALAPPDATA%`). An environment variable is an optional lookup, and a
+candidate that is absent is skipped. The user state directory is used only when
+it already exists; this procedure never creates it.
+
+**Root checks.** A root must be an existing directory, not a symbolic link or
+reparse point, whose canonical path lies outside every path that `git worktree
+list --porcelain` reports and outside every git directory. Confirm the last part
+by running `git -C <canonical root> rev-parse --git-dir` and requiring it to
+fail. The root must be owned by the current user, or be a sticky-bit shared
+temporary directory, and must be writable by the current user.
+
+**Storage verdicts.** Classify each supplied root and namespace with exactly one
+verdict:
+
+| Input                                                                                                                                                       | Verdict                                    | Action                                                                                                                                                                               |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| A supplied root that exists and passes the root checks                                                                                                      | Supplied verified storage                  | Create a new namespace under it (step 1).                                                                                                                                            |
+| No root is supplied, and this session has no identity record                                                                                                | No previously supplied allocation          | Allocate under the first candidate root that passes the root checks (step 1).                                                                                                        |
+| A supplied root that is missing or fails a check, or a namespace or ledger of this session whose identity differs from its record (see the ownership cases) | Unsafe, conflicting, or unreadable storage | Preserve everything, report the canonical path and the exact failing evidence, and treat the review as one that cannot finish (see below). Never fall back to another root silently. |
+
+A namespace from another session is never reused, and a new session has no
+identity record to reuse. An older namespace is left untouched as evidence.
+
+**Step 1 — allocate a namespace.** Create `issue-authoring-<uuid>` inside the
+root with exclusive creation: a non-recursive `mkdir` that fails when the name
+already exists, never `mkdir -p`. Create it owner-only (POSIX `mkdir -m 700`, or
+a private ACL on Windows), then check its owner and mode again; a namespace that
+is not owner-only is unsafe and stops. Retry with a fresh UUID only when the
+name already exists, at most three times. Any other failure ends that candidate,
+and the next candidate is tried. When every candidate fails, stop and report
+each attempt's path and error. Record the namespace's canonical path and file
+identity.
+
+**Step 2 — create the first ledger.** Each draft has its own ledger file,
+`<uuid>.json`, in the namespace. Create it with exclusive creation, containing
+`[]`, and record its canonical path, file identity, and SHA-256. If this step
+fails, the partial-state rule below applies.
+
+**Ownership check before each write.** Before every ledger write, compare the
+namespace and the ledger with their records:
+
+- The namespace's canonical path matches its record, no component of that path
+  is a symbolic link or reparse point, and its file identity matches.
+- The ledger is a regular file, not a symbolic link or reparse point, with a
+  link count of 1 and the recorded file identity.
+
+Each mismatch falls under one of the cases below. The procedure never deletes
+anything, never recurses into a directory, and never adopts an entry this
+session did not create.
+
+- **Owned and unchanged.** The file identity and SHA-256 both match. Continue:
+  write the complete new JSON to a new exclusively created temporary file in the
+  namespace, check the ledger record again, replace the ledger by renaming the
+  temporary file over it, and record the new identity and SHA-256. Remove the
+  temporary file only if this write created it and the rename failed.
+- **Owned but edited.** The file identity matches but the SHA-256 differs. Do
+  not overwrite it. Preserve it, treat the review as one that cannot finish, and
+  report its canonical path.
+- **Missing (lost).** The record says this session created the ledger, but its
+  path is now absent. Treat it as a lost ledger: recreate an empty ledger at the
+  same path with exclusive creation, and the review starts empty under the
+  existing loss rule in the Ledger paragraph above. A missing destination
+  therefore succeeds. If the namespace itself is absent, allocate a new one
+  (step 1).
+- **Unowned.** Something already exists at the name this session would create,
+  or a file appears in the namespace that this session did not record. Refuse.
+  Do not read it as a ledger, adopt it, rename it, or delete it. Preserve it,
+  treat the review as one that cannot finish, and report.
+- **Replaced.** The path exists with a file identity or file type that differs
+  from its record. Treat it as a conflict with another owner. Refuse, preserve
+  both entries, and report.
+- **Linked leaf.** The ledger is a symbolic link or reparse point, or its link
+  count is above 1. Refuse. Never follow it or write through it. Report.
+- **Linked parent.** A component of the namespace path is a symbolic link or
+  reparse point, or the canonical path differs from the record. Refuse. Report.
+
+**Partial first ledger.** When allocation succeeds but the first ledger cannot
+be created safely (its exclusive creation fails, or its first write fails), keep
+the namespace and any partial file, delete nothing, and report the exact path
+and error. The review counts as one that cannot finish.
+
+**Rename to the issue number.** Once the draft has its issue number, copy the
+verified ledger to `<number>.json` with exclusive creation, write the same
+content, and check that the copy's SHA-256 matches. Only then remove the
+`<uuid>.json` file. If `<number>.json` already exists, keep the `<uuid>.json`
+file, never overwrite or adopt the existing file, and stop before publication to
+report the conflict.
+
+**A review that cannot finish.** A storage stop, an unowned or conflicting
+ledger, a failed first ledger, or a copy that does not match its source means
+the review cannot finish. The target is then not published as reviewed: its
+drafts go into a draft carrier marked `Review: not reviewed` (see
+[Draft carrier](#draft-carrier)), and the final message reports the namespace
+path, the exact failing evidence, and the drafts' local paths.
+
+**Scope.** The procedure adds no mandatory durable session registry, no
+automatic deletion, and no operator recovery gate for a lost ledger.
 
 ## Mechanical pre-publish gate
 
