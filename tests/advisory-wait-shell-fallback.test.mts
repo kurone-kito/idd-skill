@@ -199,7 +199,9 @@ case "$*" in
       *reviewThreads*)
         if [ "\${STUB_THREADS_FAIL:-0}" = 1 ]; then exit 1; fi
         answer "$STUB_THREADS" ;;
-      *"comments(first"*) answer "$STUB_EDIT" ;;
+      *"comments(first"*)
+        if [ "\${STUB_EDIT_FAIL:-0}" = 1 ]; then exit 1; fi
+        answer "$STUB_EDIT" ;;
       *) echo "stub: unrecognised graphql query" >&2; exit 1 ;;
     esac ;;
   *"/pulls/"*"/reviews/"*"/comments"*)
@@ -1549,6 +1551,7 @@ interface F2DifferentialCase {
   threads?: unknown[];
   env?: Record<string, string>;
   advisoryBotLogins?: string[];
+  trustedMarkerLogins?: string[];
 }
 
 interface F2CanonicalComment {
@@ -1639,7 +1642,7 @@ function runF2Differential(c: F2DifferentialCase): {
     } as unknown as F2CanonicalInput,
     {
       iddAgentLogins: [AGENT_LOGIN],
-      trustedMarkerLogins: [AGENT_LOGIN],
+      trustedMarkerLogins: c.trustedMarkerLogins ?? [AGENT_LOGIN],
       advisoryBotLogins: c.advisoryBotLogins ?? [],
       prHeadSha: HEAD_SHA,
       markerPrefix: 'idd-skill',
@@ -2130,4 +2133,156 @@ test('differential: a review-reply stamp from a human counts as an IDD-originate
     0,
     1,
   );
+});
+
+test('differential: an Accepted. or Rejected** variant with a dot still counts as an IDD disposition (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  // A dotted **Accepted.** reply clears the regular comment it answers.
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 6801,
+          login: 'coderabbitai[bot]',
+          body: 'nit: rename this',
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 6802,
+          login: AGENT_LOGIN,
+          body: '**Accepted.** renamed',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+    },
+    0,
+    0,
+  );
+  // A dotted IDD reply on a human thread is IDD-originated, so presence-only does not apply.
+  assertF2Parity(
+    {
+      threads: [
+        f2Thread([
+          f2ThreadComment('human-reviewer', 'please rename', F2_CASE_TIME_1),
+          f2ThreadComment(AGENT_LOGIN, '**Accepted.** renamed', F2_CASE_TIME_2),
+          f2ThreadComment('human-reviewer', 'still wrong', F2_CASE_TIME_3),
+        ]),
+      ],
+    },
+    0,
+    1,
+  );
+});
+
+test('differential: a source-bound Codex clearance must name the current HEAD (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 6901,
+          login: 'chatgpt-codex-connector[bot]',
+          body: CODEX_NO_FIND_BODY,
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 6902,
+          login: AGENT_LOGIN,
+          body: '**Accepted** — chatgpt-codex-connector[bot] no-find result at HEAD 2222222; no actionable findings were reported (source: #issuecomment-6901)',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+    },
+    1,
+    0,
+  );
+});
+
+test('differential: a source-bound Codex clearance must name the same bot login (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 6911,
+          login: 'chatgpt-codex-connector[bot]',
+          body: CODEX_NO_FIND_BODY,
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 6912,
+          login: AGENT_LOGIN,
+          body: '**Accepted** — coderabbitai[bot] no-find result at HEAD 1111111; no actionable findings were reported (source: #issuecomment-6911)',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+    },
+    1,
+    0,
+  );
+});
+
+test('differential: a trusted-marker actor that is not an IDD agent clears no regular comment (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 6921,
+          login: 'alice',
+          body: 'please change this',
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 6922,
+          login: 'alice',
+          body: '**Accepted** — changed',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+      env: { IDD_TRUSTED_MARKER_ACTORS: `${AGENT_LOGIN},alice` },
+      trustedMarkerLogins: [AGENT_LOGIN, 'alice'],
+    },
+    2,
+    0,
+  );
+});
+
+test('a Bot-typed originating author is advisory even when no list names it (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  // Shell-only: the canonical helper knows only configured bots, so this case
+  // documents the fail-closed direction rather than a parity check.
+  const run = runF2({
+    threads: threadsResponse([
+      f2Thread([
+        {
+          author: { login: 'my-review-bot[bot]', __typename: 'Bot' },
+          body: 'please rename',
+          createdAt: F2_CASE_TIME_1,
+          commit: null,
+          lastEditedAt: null,
+        },
+        f2ThreadComment('human-reviewer', 'agreed', F2_CASE_TIME_2),
+      ]),
+    ]),
+    edit: f2Edit([]),
+  });
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.missingThreads, 1);
+});
+
+test('F2 stops when the edit-state read fails (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  const run = runF2(
+    { rest: regularRest(), threads: emptyThreads(), edit: f2Edit([]) },
+    { STUB_EDIT_FAIL: '1' },
+  );
+  assert.equal(run.status, 2, run.stderr);
+  assert.match(run.stderr, /edit-state read failed/);
 });

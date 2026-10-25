@@ -947,8 +947,9 @@ re-derive it here.
 The advisory-bot set that decides thread origin is the known review bots
 plus `IDD_ADVISORY_BOT_LOGINS` (comma-separated, the configured
 `advisoryBotLogins`); export it when the configuration lists bots beyond
-the defaults. `IDD_AGENT_LOGINS` and `IDD_TRUSTED_MARKER_ACTORS` are read
-the same way.
+the defaults. A Bot-typed originating author also counts as advisory, so an
+unlisted bot fails closed. `IDD_AGENT_LOGINS` and
+`IDD_TRUSTED_MARKER_ACTORS` are read the same way.
 
 ```sh
 OWNER=$(gh repo view --json owner --jq '.owner.login')
@@ -1114,7 +1115,7 @@ THREADS_JSON=$(gh api graphql --paginate -f query='
             isResolved
             comments(first:100) {
               pageInfo { hasNextPage }
-              nodes { author { login } body createdAt commit { oid } lastEditedAt }
+              nodes { author { login __typename } body createdAt commit { oid } lastEditedAt }
             }
           }
         }
@@ -1138,6 +1139,17 @@ IDD_AGENT_LOGIN_JSON=$(
   {
     printf '%s\n' "${IDD_AGENT_LOGINS:-}" | tr ',' '\n'
     printf '%s\n' "${IDD_TRUSTED_MARKER_ACTORS:-}" | tr ',' '\n'
+    if [ -n "${CURRENT_MARKER_ACTOR}" ]; then
+      printf '%s\n' "${CURRENT_MARKER_ACTOR}"
+    fi
+  } | sed '/^[[:space:]]*$/d' | sort -fu | jq -Rsc 'split("\n") | map(select(length > 0))'
+)
+# Regular comments use the narrower set (canonical deriveIddAgentLogins): only
+# IDD_AGENT_LOGINS and the viewer. A trusted-marker actor that is not an agent
+# clears no regular comment (fails closed); thread freshness still accepts it.
+REG_AGENT_LOGIN_JSON=$(
+  {
+    printf '%s\n' "${IDD_AGENT_LOGINS:-}" | tr ',' '\n'
     if [ -n "${CURRENT_MARKER_ACTOR}" ]; then
       printf '%s\n' "${CURRENT_MARKER_ACTOR}"
     fi
@@ -1225,15 +1237,15 @@ COMMENTS_JSON=$(
       | if ($edit | has($k)) then $edit[$k] else "unresolved" end)})
   '
 ) || exit 2
-DISPOSITION_JSON=$(printf '%s' "${COMMENTS_JSON}" | jq -c --argjson agents "${IDD_AGENT_LOGIN_JSON}" '
+DISPOSITION_JSON=$(printf '%s' "${COMMENTS_JSON}" | jq -c --argjson agents "${REG_AGENT_LOGIN_JSON}" '
   map(select(
-    (.body | startswith("**Accepted**") or startswith("**Rejected**"))
+    (.body | test("^\\*\\*(Accepted|Rejected)[.!:]?\\*\\*"))
     and (((.user.login // "") | ascii_downcase) as $u
       | ($agents | map(ascii_downcase) | index($u)) != null)
     and (has("lastEditedAt") and (.lastEditedAt == null))
     and ((.body | test("awaiting maintainer decision"; "i")) | not)
   ))
-')
+') || exit 2
 # Advisory-bot identity for thread origin (canonical isGateAdvisoryBotLogin):
 # the known review bots plus IDD_ADVISORY_BOT_LOGINS (comma-separated
 # advisoryBotLogins, optional). `[bot]` is stripped on both sides, and every
@@ -1257,7 +1269,7 @@ ADVISORY_TOKEN_JSON=$(
 # unedited disposition (1:1, E6). A Codex no-find result is cleared only by a
 # disposition that names its source comment; other comments skip those
 # source-bound dispositions.
-MISSING_REGULAR=$(printf '%s\n' "${COMMENTS_JSON}" "${DISPOSITION_JSON}" | jq -s --argjson agents "${IDD_AGENT_LOGIN_JSON}" '
+MISSING_REGULAR=$(printf '%s\n' "${COMMENTS_JSON}" "${DISPOSITION_JSON}" | jq -s --argjson agents "${REG_AGENT_LOGIN_JSON}" --arg sha "${PR_HEAD_SHA}" '
   def activity: [.created_at, (.updated_at // "")] | max;
   def is_codex_no_find:
     (((.user.login // "") | ascii_downcase) | test("^chatgpt-codex-connector(\\[bot\\])?$"))
@@ -1267,6 +1279,17 @@ MISSING_REGULAR=$(printf '%s\n' "${COMMENTS_JSON}" "${DISPOSITION_JSON}" | jq -s
     and ((.body | sub("^\\s+"; "")) as $b
       | ($b | startswith("<!-- idd-cleanup-evidence:")
           or startswith("<!-- idd-external-check-waiver:")));
+  # Source-bound Codex clearance (canonical CODEX_NO_FIND_DISPOSITION_RE and the
+  # sticky matcher): an accepted disposition that names the source
+  # id and login, and whose abbreviated HEAD prefixes the current PR HEAD.
+  # (No apostrophes in jq comments: the program sits inside a single-quoted shell string.)
+  def is_codex_source_bound($src):
+    (.body | test("^\\*\\*Accepted[.!:]?\\*\\*"))
+    and (.body | contains("(source: #issuecomment-" + ($src.id | tostring) + ")"))
+    and (.body | contains(($src.user.login // "") + " no-find result at HEAD "))
+    and (((.body | capture("no-find result at HEAD (?<h>[0-9a-f]{7,64});")) // {h: ""})
+      as $m
+      | ($m.h != "") and ($sha | ascii_downcase | startswith($m.h | ascii_downcase)));
   .[0] as $comments | .[1] as $disp
   | ($comments
      | map(select(
@@ -1282,7 +1305,7 @@ MISSING_REGULAR=$(printf '%s\n' "${COMMENTS_JSON}" "${DISPOSITION_JSON}" | jq -s
       ((.unused | to_entries
         | map(select(.value.act > $c.act
             and (if ($c | is_codex_no_find)
-                 then (.value.body | contains("(source: #issuecomment-" + ($c.id | tostring) + ")"))
+                 then (.value | is_codex_source_bound($c))
                  else (.value.body | test("no-find result at HEAD") | not)
                  end)))
         | first) as $hit
@@ -1291,7 +1314,7 @@ MISSING_REGULAR=$(printf '%s\n' "${COMMENTS_JSON}" "${DISPOSITION_JSON}" | jq -s
         end)
     )
   | .missing
-')
+') || exit 2
 # Review threads (canonical summarizeDispositionEvidenceForGate, missingThreads).
 # A thread is missing when it is truncated, or when it has neither a fresh
 # disposition nor the presence-only exception. The originating comment (nodes[0])
@@ -1311,14 +1334,14 @@ MISSING_THREADS=$(printf '%s' "${THREADS_JSON}" | jq -rs --argjson agents "${IDD
     ((author_login | ascii_downcase) as $u
       | ($agents | map(ascii_downcase) | index($u)) != null);
   def is_disp:
-    ((.body | startswith("**Accepted**") or startswith("**Rejected**")))
+    (.body | test("^\\*\\*(Accepted|Rejected)[.!:]?\\*\\*"))
     and is_idd_agent
     and (has("lastEditedAt") and (.lastEditedAt == null))
     and ((.body | test("awaiting maintainer decision"; "i")) | not);
   def is_idd_reply:
     (.body | test("<!--\\s*[a-z0-9][a-z0-9_-]*-review-reply\\s*-->"))
     or (is_idd_agent
-      and (.body | (startswith("**Accepted**") or startswith("**Rejected**")
+      and (.body | (test("^\\*\\*(Accepted|Rejected)[.!:]?\\*\\*")
         or startswith("**Rejection confirmed by maintainer**")
         or test("awaiting maintainer decision"; "i"))));
   def latest_feedback:
@@ -1327,9 +1350,12 @@ MISSING_THREADS=$(printf '%s' "${THREADS_JSON}" | jq -rs --argjson agents "${IDD
   def has_fresh_disp:
     latest_feedback as $fb
     | .comments.nodes | any(is_disp and ($fb == null or .createdAt > $fb));
+  # A Bot-typed originating author is advisory even when no list names it. That
+  # fails closed for an unconfigured bot (canonical would call it human).
   def is_advisory_origin:
-    ((.comments.nodes[0].author.login // "") | advisory_token) as $t
-    | ($advisory | index($t)) != null;
+    (((.comments.nodes[0].author.login // "") | advisory_token) as $t
+      | ($advisory | index($t)) != null)
+    or ((.comments.nodes[0].author.__typename // "") == "Bot");
   def presence_only:
     (is_advisory_origin | not)
     and ((.comments.nodes | length) > 1)
@@ -1340,7 +1366,7 @@ MISSING_THREADS=$(printf '%s' "${THREADS_JSON}" | jq -rs --argjson agents "${IDD
       or ((has_fresh_disp | not) and (presence_only | not))
     ))
   | length
-')
+') || exit 2
 
 echo "converged=${CONVERGED} conjuncts=${CONJUNCT1},${CONJUNCT2},${CONJUNCT3}"
 echo "missingRegularComments=${MISSING_REGULAR} missingThreads=${MISSING_THREADS}"
