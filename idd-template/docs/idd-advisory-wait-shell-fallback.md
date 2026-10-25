@@ -1330,8 +1330,8 @@ MISSING_REGULAR=$(printf '%s\n' "${COMMENTS_JSON}" "${DISPOSITION_JSON}" | jq -s
   | ([$comments[] | select(
         ((((.user.login // "") | ascii_downcase) as $u | ($agents | map(ascii_downcase) | index($u)) != null))
         and (has("lastEditedAt") and (.lastEditedAt == null))
-        and is_codex_disposition_shape)]) as $ctrim
-  | (($disp + $ctrim) | unique_by(.id) | map(. + {act: activity}) | sort_by(.act)) as $ds
+        and is_codex_disposition_shape)]) as $codex_trimmed
+  | (($disp + $codex_trimmed) | unique_by(.id) | map(. + {act: activity}) | sort_by(.act)) as $ds
   | reduce $out[] as $c (
       {unused: $ds, missing: 0};
       ((.unused | to_entries
