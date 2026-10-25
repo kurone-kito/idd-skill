@@ -302,11 +302,14 @@ jobs:
         id: manager
         if: steps.profile.outputs.profile == 'package-manager'
         run: |
-          # Mirror helper-runtime-manifest.mts: a supported package.json
+          # Workflow-specific selector: a supported package.json
           # packageManager field wins; otherwise detect the manager from
-          # its supported frozen-install lockfile(s). package-lock.json
-          # and npm-shrinkwrap.json are both npm evidence. Distinct
-          # managers without a declaration remain ambiguous. Unsupported
+          # this workflow's frozen-install lockfiles. package-lock.json
+          # and npm-shrinkwrap.json are both npm evidence here. This
+          # workflow-only support does not change helper-runtime profile
+          # recommendations; that detector is separate.
+          # Different manager lockfiles without a declaration remain
+          # ambiguous. Unsupported
           # declarations also fail closed. No evidence
           # yields "unusable"; issue #4699 showed npm availability does
           # not make npm ci viable without a lockfile. The install step
@@ -649,6 +652,7 @@ jobs:
               ALLOWLIST+=(
                 "package.json"
                 "package-lock.json"
+                "npm-shrinkwrap.json"
                 "pnpm-lock.yaml"
                 "yarn.lock"
               )

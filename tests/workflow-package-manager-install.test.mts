@@ -143,6 +143,15 @@ function workflowText(file: string): string {
   return readFileSync(join(WORKFLOW_DIR, file), 'utf8');
 }
 
+test('package-manager self-waiver allowlist includes npm shrinkwrap', () => {
+  const workflow = workflowText('idd-advisory-convergence.yml');
+  const allowlist = workflow.match(
+    /package-manager\)\s*\n\s+ALLOWLIST\+=\(\s*([\s\S]*?)\s+\)\s*\n\s+;;/,
+  );
+  assert.ok(allowlist, 'missing package-manager self-waiver allowlist');
+  assert.match(allowlist?.[1] ?? '', /"npm-shrinkwrap\.json"/);
+});
+
 function steps(text: string): string[] {
   const starts = [...text.matchAll(/^ {6}- name: (.+)$/gm)].map(
     (match) => match.index ?? -1,
