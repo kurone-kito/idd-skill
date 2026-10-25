@@ -3211,7 +3211,7 @@ function codeRabbitVerdict(body: string) {
     updatedAt: '2026-05-12T00:00:01Z',
   };
   return {
-    planned: plan.planned.map((entry) => entry.body.slice(0, 12)),
+    planned: plan.planned.map((entry) => entry.body),
     skipped: plan.skipped.map((entry) => entry.reason),
     classification: classifyRegularBotComment(comment, [comment], []) ?? null,
     summary: isReviewSummaryComment(body),
@@ -3293,6 +3293,7 @@ test('#4701: a wrapped body and its unwrapped twin get the same planner and clas
     paused: CODERABBIT_PAUSED,
     skipReview: CODERABBIT_SKIP_REVIEW,
     walkthrough: CODERABBIT_COMPLETED_WALKTHROUGH,
+    summaryWithRateLimitNotice: `${CODERABBIT_SUMMARY}\n${CODERABBIT_NOTICE}`,
     // The trimmed live body already carries the wrapper; its twin is the rest.
     observedPr683: CODERABBIT_WRAPPED_PR683_TRIMMED.replace(
       `${CODERABBIT_GENERATED_WRAPPER}\n\n`,
@@ -3366,7 +3367,22 @@ test('#4701: a wrapped summary from a human author is not planned', () => {
   assert.equal(plan.planned.length, 0);
 });
 
-test('#4701: settlement recognizes a wrapped completed summary, not a wrapped skip, paused, or in-progress revision', () => {
+test('#4701: a wrapped summary that also carries a rate-limit notice is Rejected, never Accepted', () => {
+  const wrapped = `${CODERABBIT_GENERATED_WRAPPER}\n\n${CODERABBIT_SUMMARY}\n${CODERABBIT_NOTICE}`;
+  assert.equal(isReviewSummaryComment(wrapped), true);
+  const plan = buildDispositionPlan(
+    { headSha: 'abc1234', comments: [notice(1, CODERABBIT, wrapped)] },
+    { trustedMarkerLogins: ['kurone-kito'] },
+  );
+  assert.equal(plan.planned.length, 1);
+  assert.ok(plan.planned[0].body.startsWith('**Rejected**'));
+  assert.equal(
+    plan.planned.some((entry) => entry.body.startsWith('**Accepted**')),
+    false,
+  );
+});
+
+test('#4701: the completion predicate recognizes a wrapped completed summary, not a wrapped skip, paused, or in-progress revision', () => {
   assert.equal(
     isCodeRabbitCompletedReviewSummary(CODERABBIT_WRAPPED_WITH_FINDINGS),
     true,

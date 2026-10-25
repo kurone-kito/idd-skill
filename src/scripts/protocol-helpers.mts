@@ -6117,7 +6117,8 @@ export const PENDING_DECISION_THREAD_HINT =
 // #1122 CodeRabbit summary-walkthrough auto-disposition classifiers.
 //
 // The CodeRabbit summary walkthrough is a regular comment whose body starts with
-// `CODERABBIT_SUMMARY_MARKER`. Unlike a non-review notice it IS a completed
+// `CODERABBIT_SUMMARY_MARKER`, or with the observed generated wrapper followed
+// by it (#4701). Unlike a non-review notice it IS a completed
 // review, so it is dispositioned `**Accepted**` (never `**Rejected**`). The gate
 // scores it through its general updatedAt-aware 1:1 pairing, and CodeRabbit edits
 // the summary on each re-review, so the disposition-non-review-notices helper
