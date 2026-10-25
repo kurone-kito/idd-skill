@@ -2904,7 +2904,7 @@ const BRIEF_PART_BODY_REQUIREMENTS: Readonly<
     'the orchestrator sets `verifiedAt` to that check',
     'sets `recordedAt` immediately before append',
     'derives `reviewRounds` from the complete review list',
-    'Validate the completed record against the schema before appending it',
+    'The orchestrator validates the completed record against the schema after filling the required fields and before appending it',
     '(#worker-report-outcomes)',
   ],
 };
@@ -3082,7 +3082,7 @@ test('fan-out scratchpad preflight provisions and recovers one session root (#46
   const routingCases = [
     {
       evidence:
-        'harness supplies an existing valid root and there is no prior record',
+        'harness supplies an existing valid root with no prior record on first entry before claims or dispatch; complete worker and artifact evidence shows no prior start',
       action:
         'Verify the root, create and verify the record exclusively, then reuse it',
     },
@@ -3154,6 +3154,7 @@ test('fan-out scratchpad preflight provisions and recovers one session root (#46
       'name different roots, treat that as a contradiction and hold',
       'actual harness context',
       'live worker and artifact evidence',
+      "worker only receives session-scratchpad paths under the root; the Worker brief's named critique scratch directory is the explicit exception",
       '<state-base>/idd-skill/orchestrator-sessions/records/<session-id>.json',
       '<state-base>/idd-skill/orchestrator-sessions/<session-id>/',
       'canonical repository root',

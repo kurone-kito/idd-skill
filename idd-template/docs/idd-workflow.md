@@ -1123,8 +1123,10 @@ worker's own final report carries for each way a run can end is listed under
 The orchestrator owns one scratchpad root for the full runtime session. Resolve
 and record it before Discover starts, before any fresh A5 claim, and before any
 worker dispatch. On restart, resolve the same root before rebuilding the roster
-or refilling. A worker only receives paths under the root; it never provisions
-the session root. This parent preflight closes the gap observed on issues
+or refilling. A worker only receives session-scratchpad paths under the root;
+the Worker brief's named critique scratch directory is the explicit exception.
+The worker never provisions the session root. This parent preflight closes the
+gap observed on issues
 `#4668` and `#4675`: no harness path had ever been allocated, so the missing
 value was not an operator setting to recover.
 
@@ -1184,7 +1186,7 @@ session-and-repository record, and live worker and artifact evidence:
 
 | Evidence                                                                                                                                                                           | Verdict and next action                                                                                                                                        |
 | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| The harness supplies an existing valid root and there is no prior record                                                                                                           | Verify the root, create and verify the record exclusively, then reuse it                                                                                       |
+| The harness supplies an existing valid root with no prior record on first entry before claims or dispatch; complete worker and artifact evidence shows no prior start              | Verify the root, create and verify the record exclusively, then reuse it                                                                                       |
 | There is no supplied root or record, and harness context identifies a first entry before claims or dispatch; the complete worker listing and session artifacts show no prior start | Allocate the private fallback root and record before Discover                                                                                                  |
 | The exact record matches this session and repository, and its root is valid                                                                                                        | Reuse that root and recover its report locations before refill                                                                                                 |
 | Claims already exist, but live evidence establishes that no worker was dispatched                                                                                                  | Revalidate every claim, winning nonce, worktree lock, and token record first; then bootstrap the root and resume those claims without minting a claim or nonce |
@@ -1711,8 +1713,9 @@ entry. Leave `verifiedAt`, `recordedAt`, and `reviewRounds` out: after
 checking the outcome against live GitHub, the orchestrator sets `verifiedAt`
 to that check, sets `recordedAt` immediately before append, and derives
 `reviewRounds` from the complete review list for a non-null pull request.
-Validate the completed record against the schema before appending it. Do not
-append the draft to the
+The orchestrator validates the completed record against the schema after
+filling the required fields and before appending it. Do not append the draft
+to the
 [worker final report store](idd-helper-scripts.md#worker-final-report-store),
 because the orchestrator checks it against live GitHub state first. The
 `outcome` that the draft proposes follows
