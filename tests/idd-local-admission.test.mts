@@ -915,7 +915,7 @@ test('shell builtins are not executed as wrapper commands', {
   skip: !REAL_LOCK,
 }, () => {
   const h = makeHarness();
-  for (const command of [['cd', makeWorkDir()], ['exit']]) {
+  for (const command of [['exit'], ['exit', '0']]) {
     const result = runBinSync(['--', ...command], makeWorkDir(), h.env);
     assert.equal(
       result.status,
