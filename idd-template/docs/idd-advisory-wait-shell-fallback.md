@@ -1240,14 +1240,27 @@ COMMENTS_JSON=$(
   '
 ) || exit 2
 DISPOSITION_JSON=$(printf '%s' "${COMMENTS_JSON}" | jq -c --argjson agents "${REG_AGENT_LOGIN_JSON}" '
-  # A pending-decision marker counts only outside code and quoted text (the
-  # canonical hasPendingDecisionMarker masks those): fenced blocks, inline code,
-  # and quote lines are removed before the top-level marker is searched.
+  # A pending-decision marker counts only outside code and comments, and only
+  # where the canonical hasPendingDecisionMarker run model reads it as top
+  # level: fenced blocks, inline code, and HTML comments are removed first, then
+  # a line walk runs. A blank line, an empty quote line, a heading, a thematic
+  # break, or an HTML block start ends a block-quote or list run, and a line that
+  # opens one starts a run, so a marker inside a run is lazy text. HTML blocks are
+  # not masked, so a marker inside one still counts here (fail-closed).
   def strip_all($re):
     if test($re) then sub($re; "") | strip_all($re) else . end;
+  def html_start_re: "^ {0,3}(?:<!--|<\\?|<![A-Z]|<!\\[CDATA\\[|<\\/?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|meta|nav|noframes|ol|optgroup|option|p|param|pre|script|search|section|source|style|summary|table|tbody|td|textarea|tfoot|th|thead|title|tr|track|ul)(?:[ \\t]|\\/?>|$))";
   def pending_marker:
-    (.body | strip_all("(?ms)^ {0,3}(\\x60{3,})(?=[^\\x60\\n]*$).*?(?:^ {0,3}\\1\\x60*[ \\t\\r]*$|\\z)") | strip_all("(?ms)^ {0,3}(~{3,}).*?(?:^ {0,3}\\1~*[ \\t\\r]*$|\\z)") | strip_all("\\x60[^\\x60\\n]*\\x60") | strip_all("(?m)^>.*$") | strip_all("(?s)<!--.*?-->")
-      | test("(^|\\n)\\*\\*Awaiting maintainer decision\\*\\*"; "i"));
+    (.body | strip_all("(?ms)^ {0,3}(\\x60{3,})(?=[^\\x60\\n]*$).*?(?:^ {0,3}\\1\\x60*[ \\t\\r]*$|\\z)") | strip_all("(?ms)^ {0,3}(~{3,}).*?(?:^ {0,3}\\1~*[ \\t\\r]*$|\\z)") | strip_all("\\x60[^\\x60\\n]*\\x60") | strip_all("(?s)<!--.*?-->")
+      | split("\n")
+      | reduce .[] as $l ({run: false, hit: false};
+          if .hit then .
+          elif ($l | test("^\\s*$")) or ($l | test("^ {0,3}>[ \\t>]*$")) or ($l | test("^ {0,3}#{1,6}([ \\t]|$)")) or ($l | test("^ {0,3}([-_*])([ \\t]*\\1){2,}[ \\t]*$")) or ($l | test(html_start_re; "i"))
+            then .run = false
+          elif (.run | not) and ($l | test("^\\*\\*Awaiting maintainer decision\\*\\*"; "i")) then .hit = true
+          elif ($l | test("^ {0,3}(>|[-+*][ \\t]|[0-9]{1,9}[.)][ \\t])")) then .run = true
+          else . end)
+      | .hit);
   map(select(
     (.body | test("^\\*\\*(Accepted|Rejected)[.!:]?\\*\\*"))
     and (((.user.login // "") | ascii_downcase) as $u
@@ -1279,13 +1292,16 @@ ADVISORY_TOKEN_JSON=$(
 ) || exit 2
 # Regular comments (canonical summarizeRegularCommentsForGate): every comment
 # from a non-IDD-agent author is outstanding, advisory bots included, except
-# the operational markers GitHub Actions posts (waiver and cleanup evidence).
+# the operational comments that are never feedback: the GitHub Actions waiver
+# and cleanup evidence, and the PR operational markers a trusted login posts
+# (the IDD agent set is narrower for disposition pairing, so the operational
+# exclusion uses the wider trusted set).
 # Activity is the later of created_at and updated_at, so an edit after a
 # disposition reopens the comment. Each comment consumes at most one later
 # unedited disposition (1:1, E6). A Codex no-find result is cleared only by a
 # disposition that names its source comment; other comments skip those
 # source-bound dispositions.
-MISSING_REGULAR=$(printf '%s\n' "${COMMENTS_JSON}" "${DISPOSITION_JSON}" | jq -s --argjson agents "${REG_AGENT_LOGIN_JSON}" --arg sha "${PR_HEAD_SHA}" '
+MISSING_REGULAR=$(printf '%s\n' "${COMMENTS_JSON}" "${DISPOSITION_JSON}" | jq -s --argjson agents "${REG_AGENT_LOGIN_JSON}" --argjson trusted "${IDD_AGENT_LOGIN_JSON}" --arg sha "${PR_HEAD_SHA}" '
   def activity: [.created_at, (.updated_at // "")] | max;
   # The reviewed commit of a terminal Codex no-find result (exact opening line,
   # reviewed-commit line, and the About Codex details block), or "" when the
@@ -1308,6 +1324,24 @@ MISSING_REGULAR=$(printf '%s\n' "${COMMENTS_JSON}" "${DISPOSITION_JSON}" | jq -s
     and ((.body | sub("^\\s+"; "")) as $b
       | ($b | startswith("<!-- idd-cleanup-evidence:")
           or startswith("<!-- idd-external-check-waiver:")));
+  # Trusted operational comments (canonical classifyIddPrComment, trusted branch):
+  # a comment from a trusted login (IDD agents and trusted marker actors) whose
+  # body starts with a PR operational marker, whose first line is a live-status
+  # digest marker, or that starts with the cleanup-evidence marker. A github-actions
+  # author never takes this branch (canonical else-if). forced-handoff is left out
+  # on purpose: the canonical check also validates it, so a malformed one stays
+  # outstanding here (fail-closed).
+  def is_trusted_operational:
+    ((.user.login // "") | ascii_downcase) as $u
+    | (($u | sub("\\[bot\\]$"; "")) != "github-actions")
+      and (($trusted | map(ascii_downcase) | index($u)) != null)
+      and (((.body | sub("^\\s+"; "")) as $b
+          | $b | (test("^<!--\\s*(claimed-by|unclaimed-by|review-watermark|review-baseline|zero-accepted-path-a-gate|idd-external-check-waiver|idd-local-validation-evidence):"; "i")
+              or test("^<!--\\s*advisory-wait:")
+              or test("^(advisory-wait:|advisory-wait-recovery:|advisory-reroll:|review-ack:|copilot-unavailable:)")
+              or startswith("<!-- idd-cleanup-evidence:")))
+        or ((.body | sub("^﻿"; "") | (split("\n") | .[0]) | sub("\\r$"; "") | sub("\\s+$"; ""))
+            | IN("<!-- idd-live-status: current -->", "<!-- idd-live-status: historical -->", "<!-- idd-live-status-repair: v1 -->")));
   # Source-bound Codex clearance (canonical CODEX_NO_FIND_DISPOSITION_RE and the
   # sticky matcher): an accepted disposition that names the source
   # id and login, and whose abbreviated HEAD prefixes the current PR HEAD.
@@ -1335,6 +1369,7 @@ MISSING_REGULAR=$(printf '%s\n' "${COMMENTS_JSON}" "${DISPOSITION_JSON}" | jq -s
          ((.user.login // "") | ascii_downcase) as $u
          | ($agents | map(ascii_downcase) | index($u)) == null
          and (is_actions_operational | not)
+         and (is_trusted_operational | not)
        ))
      | map(. + {act: activity})
      | sort_by(.act)) as $out
@@ -1395,9 +1430,18 @@ MISSING_THREADS=$(printf '%s' "${THREADS_JSON}" | jq -rs --argjson agents "${IDD
   # Code-aware pending-decision marker (see DISPOSITION_JSON above).
   def strip_all($re):
     if test($re) then sub($re; "") | strip_all($re) else . end;
+  def html_start_re: "^ {0,3}(?:<!--|<\\?|<![A-Z]|<!\\[CDATA\\[|<\\/?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|meta|nav|noframes|ol|optgroup|option|p|param|pre|script|search|section|source|style|summary|table|tbody|td|textarea|tfoot|th|thead|title|tr|track|ul)(?:[ \\t]|\\/?>|$))";
   def pending_marker:
-    (.body | strip_all("(?ms)^ {0,3}(\\x60{3,})(?=[^\\x60\\n]*$).*?(?:^ {0,3}\\1\\x60*[ \\t\\r]*$|\\z)") | strip_all("(?ms)^ {0,3}(~{3,}).*?(?:^ {0,3}\\1~*[ \\t\\r]*$|\\z)") | strip_all("\\x60[^\\x60\\n]*\\x60") | strip_all("(?m)^>.*$") | strip_all("(?s)<!--.*?-->")
-      | test("(^|\\n)\\*\\*Awaiting maintainer decision\\*\\*"; "i"));
+    (.body | strip_all("(?ms)^ {0,3}(\\x60{3,})(?=[^\\x60\\n]*$).*?(?:^ {0,3}\\1\\x60*[ \\t\\r]*$|\\z)") | strip_all("(?ms)^ {0,3}(~{3,}).*?(?:^ {0,3}\\1~*[ \\t\\r]*$|\\z)") | strip_all("\\x60[^\\x60\\n]*\\x60") | strip_all("(?s)<!--.*?-->")
+      | split("\n")
+      | reduce .[] as $l ({run: false, hit: false};
+          if .hit then .
+          elif ($l | test("^\\s*$")) or ($l | test("^ {0,3}>[ \\t>]*$")) or ($l | test("^ {0,3}#{1,6}([ \\t]|$)")) or ($l | test("^ {0,3}([-_*])([ \\t]*\\1){2,}[ \\t]*$")) or ($l | test(html_start_re; "i"))
+            then .run = false
+          elif (.run | not) and ($l | test("^\\*\\*Awaiting maintainer decision\\*\\*"; "i")) then .hit = true
+          elif ($l | test("^ {0,3}(>|[-+*][ \\t]|[0-9]{1,9}[.)][ \\t])")) then .run = true
+          else . end)
+      | .hit);
   def is_disp:
     (.body | test("^\\*\\*(Accepted|Rejected)[.!:]?\\*\\*"))
     and is_idd_agent

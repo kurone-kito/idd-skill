@@ -3056,3 +3056,181 @@ test('differential: a pending-decision marker inside an HTML comment does not bl
     0,
   );
 });
+
+test('differential: a trusted-only operational marker is not an outstanding comment (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 8801,
+          login: 'alice',
+          body: '<!-- review-watermark: 1 2 3 -->',
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 8802,
+          login: 'alice',
+          body: '<!-- idd-live-status: current -->\nStatus digest',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+      env: { IDD_TRUSTED_MARKER_ACTORS: `${AGENT_LOGIN},alice` },
+      trustedMarkerLogins: [AGENT_LOGIN, 'alice'],
+    },
+    0,
+    0,
+  );
+});
+
+test('differential: an untrusted operational-looking comment stays outstanding, and a trusted plain advisory-wait line is operational (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 8803,
+          login: 'mallory',
+          body: '<!-- review-watermark: 1 2 3 -->',
+          at: F2_CASE_TIME_1,
+        },
+      ],
+    },
+    1,
+    0,
+  );
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 8804,
+          login: 'alice',
+          body: 'advisory-wait: pending',
+          at: F2_CASE_TIME_1,
+        },
+      ],
+      env: { IDD_TRUSTED_MARKER_ACTORS: `${AGENT_LOGIN},alice` },
+      trustedMarkerLogins: [AGENT_LOGIN, 'alice'],
+    },
+    0,
+    0,
+  );
+});
+
+test('differential: a lazy list continuation does not make a settled reply pending (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 8811,
+          login: 'coderabbitai[bot]',
+          body: 'nit: list it',
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 8812,
+          login: AGENT_LOGIN,
+          body: '**Accepted** — kept the list\n- context\n**Awaiting maintainer decision**',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+    },
+    0,
+    0,
+  );
+});
+
+test('differential: a lazy block-quote continuation does not make a settled reply pending (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 8821,
+          login: 'coderabbitai[bot]',
+          body: 'nit: quote it',
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 8822,
+          login: AGENT_LOGIN,
+          body: '**Accepted** — quoted it\n> cited text\n**Awaiting maintainer decision**',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+    },
+    0,
+    0,
+  );
+});
+
+test('differential: a blank line or a heading ends a list run, so a later marker is pending (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 8831,
+          login: 'coderabbitai[bot]',
+          body: 'nit: blank line',
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 8832,
+          login: AGENT_LOGIN,
+          body: '**Accepted** — note\n- item\n\n**Awaiting maintainer decision**',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+    },
+    1,
+    0,
+  );
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 8833,
+          login: 'coderabbitai[bot]',
+          body: 'nit: heading',
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 8834,
+          login: AGENT_LOGIN,
+          body: '**Accepted** — note\n- item\n# Heading\n**Awaiting maintainer decision**',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+    },
+    1,
+    0,
+  );
+});
+
+test('differential: a lazy list continuation does not make a thread disposition pending (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      threads: [
+        f2Thread([
+          COPILOT_THREAD_FINDING,
+          f2ThreadComment(
+            AGENT_LOGIN,
+            '**Accepted** — renamed\n- note\n**Awaiting maintainer decision**',
+            F2_CASE_TIME_2,
+          ),
+        ]),
+      ],
+    },
+    0,
+    0,
+  );
+});
