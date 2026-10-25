@@ -1035,21 +1035,20 @@ export interface ProviderPort {
   ): ProviderChangeRequestHeadShaAndAuthor;
 
   /**
-   * change-requests. `pr view --json
-   * headRefOid,headRefName,closingIssuesReferences,author,url` -- the
-   * distinct five-field shape `advisory-convergence.mts` uses.
+   * change-requests. `pr view --json headRefOid,headRefName,author,url`
+   * plus a GraphQL read of `closingIssuesReferences` (#4721) -- the distinct
+   * shape `advisory-convergence.mts` uses.
    */
   getChangeRequestConvergenceView(
     number: number,
   ): ProviderChangeRequestConvergenceView;
 
   /**
-   * change-requests. `pr view --json
-   * headRefOid,baseRefName,url,author,reviewDecision,statusCheckRollup,
-   * mergeable,mergeStateStatus,closingIssuesReferences,body` -- the distinct
-   * ten-field shape `pre-merge-readiness.mts` uses (deliberately folds
-   * check status into this one call rather than a second `pr checks`
-   * round trip, #1483).
+   * change-requests. `pr view --json headRefOid,baseRefName,url,author,
+   * reviewDecision,statusCheckRollup,mergeable,mergeStateStatus,body` plus a
+   * GraphQL read of `closingIssuesReferences` (#4721) -- the distinct shape
+   * `pre-merge-readiness.mts` uses (deliberately folds check status into the
+   * `pr view` call rather than a second `pr checks` round trip, #1483).
    */
   getChangeRequestReadinessSnapshot(
     number: number,
