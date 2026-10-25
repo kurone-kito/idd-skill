@@ -95,30 +95,29 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
    ```
 
    Use `PR_HEAD_SHA_F3` as `PR_HEAD_SHA`. Run **AW1**
-   (`idd-advisory-wait.instructions.md`):
+   (`idd-advisory-wait.instructions.md`) with both current
+   `--claim-id {claim-id}` and `--agent-id {agent-id}` arguments; F3
+   already established the active claim, so neither argument may be
+   omitted and the claimless path does not apply:
    - If any same-head review is not a v2 overview, has suppressed
      items, or holds a cited item: hold (AW4).
-   - If **SATISFIED** (`LAST_COPILOT_COMMIT == PR_HEAD_SHA_F3`) → proceed
-     with the merge.
-   - If `COPILOT_PENDING` is `"false"` and neither bullet above held:
-     proceed with the merge.
-   - Otherwise (`COPILOT_PENDING` is `"true"`, not yet reviewed): run
-     **AW2** and apply **AW3** — do not skip even if F2 already ran
-     them, since F3 is a self-contained blocking gate:
-     - **SATISFIED** → proceed with the merge.
-     - **HOLD** → post the hold comment from **AW4** and stop.
-     - **RECOVERY_NEEDED** → post the recovery marker from **AW3-R** and
-       return to the F2 advisory bot wait check; do not merge in the
-       same F3 pass that creates a recovery marker.
-     - **CAP_EXHAUSTED** → post the cap-exhausted hold comment from
-       **AW4** and stop.
-     - **DISPOSITION_NEEDED** → do not merge; return to E14.
-     - **REQUEST_NEEDED** → return to E14 to refresh/request Copilot
-       review and post a request marker; do not merge.
-     - **WAIT** → do NOT execute the merge; return to the **F2 advisory
-       bot wait check** in `idd-pre-merge.instructions.md` (go back to
-       the first condition in F2), which reuses the existing same-HEAD
-       marker — do not post a new one.
+   - Before any result permits a merge, validate the claim-bound
+     `staleRequestRecovery` object and its recognized `action` and
+     `reason` as required by AW3-S. Route `attempt` through AW3-S and
+     return to F2 without merging in this F3 pass; route
+     `cap-exhausted` through AW4 and stop; only `not-applicable`
+     continues through ordinary F3 outcome handling.
+   - If **SATISFIED** (`LAST_COPILOT_COMMIT == PR_HEAD_SHA_F3`) and the
+     recovery action above permits ordinary handling → proceed with the
+     merge.
+   - If `COPILOT_PENDING` is `"false"`, neither hold above applies, and
+     the recovery action permits ordinary handling → proceed with the
+     merge.
+   - Otherwise, run **AW2/AW3** even if F2 already did. **SATISFIED** →
+     merge; **HOLD/CAP_EXHAUSTED** → AW4 and stop; **RECOVERY_NEEDED** →
+     AW3-R, then F2 without merging; **DISPOSITION_NEEDED** or
+     **REQUEST_NEEDED** → E14 (refresh/request Copilot and mark the
+     request); **WAIT** → F2, reusing the same-HEAD marker.
 
 4. Merge the PR using a **merge commit**, binding to the validated SHA
    to prevent a race where a new push lands between the F3 freshness
@@ -154,10 +153,11 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
      one-time check; a mismatch is a wrong-base hold, not a merge;
    - review-currency route is `proceed`;
    - `F3_UNRESOLVED_ACTIONABLE_COUNT` is `0`;
-   - advisory `f3Outcome` is `SATISFIED` (the authoritative advisory
-     gate — do not add stricter sub-conditions; e.g. a pending-window
+   - advisory `f3Outcome` is `SATISFIED`, and the claim-bound
+     `staleRequestRecovery` evidence has passed the AW3-S check above;
+     `f3Outcome` alone does not authorize a merge. A pending-window
      `SATISFIED` can keep `copilotPending` true and
-     `LAST_COPILOT_COMMIT` off the head). **Manual-fallback
+     `LAST_COPILOT_COMMIT` off the head. **Manual-fallback
      equivalent** (helper unavailable or discarded): the AW1/AW2/AW3
      decision table (`idd-advisory-wait.instructions.md`), run in full
      for `PR_HEAD_SHA_F3`, returns `SATISFIED` — not merely any step 3
