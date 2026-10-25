@@ -324,7 +324,7 @@
         ".github/instructions/idd-overview-appendix.instructions.md",
         ".github/instructions/idd-overview-core.instructions.md"
       ],
-      "limitBytes": 26500
+      "limitBytes": 29000
     },
     {
       "id": "bundle-discovery-phase",
@@ -492,9 +492,9 @@
     "nearCeilingRaiseApprovals": [
       {
         "bundle": "bundle-core",
-        "limitBytes": 26500,
-        "issue": 3840,
-        "reason": "Maintainer decision: the orchestrator routing row adds about 140 bytes to bundle-core, and trimming governed guidance to stay at 26,000 was judged to cost more than the raise."
+        "limitBytes": 29000,
+        "issue": 4674,
+        "reason": "Maintainer-approved on 2026-10-25 after E12 step 1: issue #4674 measures 26,285 bytes with the required worker-comment instruction in shared core. This replaces the #3840 approval at 26,500; 29,000 provides 10.33% headroom (90.64% utilization)."
       },
       {
         "bundle": "bundle-review-fix-phase",

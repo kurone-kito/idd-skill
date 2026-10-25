@@ -5366,8 +5366,9 @@ incomplete, or conflicting evidence returns `invalid`.
 
 The owner decision is a separate comment whose exact first line is
 `Scope decision: accept head <full 40-character SHA>`. A worker never writes
-this decision. Free-form autonomous worker comments on the affected issue
-carry this self-reported suffix after their message:
+this decision. When an issue has detected or recorded scope-overrun evidence,
+append this self-reported suffix to every free-form comment you post there.
+Do not append it to operational-marker comments:
 
 ```markdown
 <!-- idd-agent-authored: {agent-id} -->

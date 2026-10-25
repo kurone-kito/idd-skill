@@ -103,6 +103,13 @@ marker being authored by a trusted actor, and the GitHub server
 Repository-local actor policy and any forced-handoff settings live in
 `docs/customization.md`.
 
+## Scope-overrun comment attribution
+
+On a scope-overrun issue, append the documented self-reported
+`idd-agent-authored` suffix to every free-form issue comment. Follow the
+[scope-overrun evidence marker](../../docs/idd-helper-scripts.md#scope-overrun-evidence-marker)
+rule; workers never post the owner's decision.
+
 ## Payload-served placeholders
 
 When these instructions are read from the installed payload rather than
