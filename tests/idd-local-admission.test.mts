@@ -2281,11 +2281,15 @@ test('a live supervised process group holds the slot after command exit', {
 }, async () => {
   const h = makeHarness();
   const ready = join(h.state, 'group.ready');
+  const stopFile = join(h.state, 'group.stop');
   const pidFile = join(h.state, 'group.pid');
   const pgidFile = join(h.state, 'group.pgid');
   const groupEnded = join(h.state, 'group.ended');
   const nextReady = join(h.state, 'next.ready');
-  const commandScript = `(sleep 1; touch "$1") & echo "$!" > "$2"; echo "$PPID" > "$3"; touch "$4"`;
+  const lockPath = join(h.state, LOCK_RELATIVE);
+  const commandScript =
+    `(while [ ! -e "$2" ]; do sleep 0.02; done; touch "$1") & ` +
+    `echo "$!" > "$3"; echo "$PPID" > "$4"; touch "$5"`;
   const first = runBin(
     [
       '--',
@@ -2294,6 +2298,7 @@ test('a live supervised process group holds the slot after command exit', {
       commandScript,
       'sh',
       groupEnded,
+      stopFile,
       pidFile,
       pgidFile,
       ready,
@@ -2318,15 +2323,17 @@ test('a live supervised process group holds the slot after command exit', {
       makeWorkDir(),
       h.env,
     );
-    await new Promise((resolveWait) => setTimeout(resolveWait, 150));
+    assert.equal(flockStatus(lockPath), 1);
     assert.equal(existsSync(nextReady), false);
     assert.equal(first.child.exitCode, null);
 
+    writeFileSync(stopFile, 'stop\n');
     assert.equal((await first.done).status, 0);
     assert.equal(existsSync(groupEnded), true);
     assert.equal((await next.done).status, 0);
     assert.equal(existsSync(nextReady), true);
   } finally {
+    writeFileSync(stopFile, 'stop\n');
     if (supervisedPgid !== undefined) {
       try {
         process.kill(-supervisedPgid, 'SIGTERM');
@@ -2353,23 +2360,55 @@ test('the wrapper holds the slot after its helper is killed', {
   skip: !REAL_LOCK,
 }, async () => {
   const h = makeHarness();
+  const processStateTool = findExecutableOnPath('ps', h.env);
+  assert.ok(processStateTool, 'ps is needed for the process-group guardian');
+  const psDir = tempDir('guardian-probe-');
+  const guardianReady = join(h.state, 'killed-helper.guardian-ready');
+  const psShim = join(psDir, 'ps');
+  writeFileSync(
+    psShim,
+    `#!/usr/bin/env node\n` +
+      `const fs = require('node:fs');\n` +
+      `const { spawnSync } = require('node:child_process');\n` +
+      `const args = process.argv.slice(2);\n` +
+      `if (args.includes('pid=,pgid=,stat=')) fs.writeFileSync(${JSON.stringify(guardianReady)}, 'ready\\n');\n` +
+      `const result = spawnSync(${JSON.stringify(processStateTool)}, args, { encoding: 'utf8' });\n` +
+      `if (result.stdout) process.stdout.write(result.stdout);\n` +
+      `if (result.stderr) process.stderr.write(result.stderr);\n` +
+      `process.exitCode = result.status ?? 1;\n`,
+  );
+  chmodSync(psShim, 0o755);
+  const env = { ...h.env, PATH: `${psDir}:${h.env.PATH ?? ''}` };
+  const stopFile = join(h.state, 'killed-helper.stop');
   const groupEnded = join(h.state, 'killed-helper.group-ended');
   const pgidFile = join(h.state, 'killed-helper.pgid');
   const ready = join(h.state, 'killed-helper.ready');
   const nextReady = join(h.state, 'killed-helper.next-ready');
+  const lockPath = join(h.state, LOCK_RELATIVE);
   const commandScript =
-    `(sleep 1.5; touch "$1") & ` + `echo "$PPID" > "$2"; touch "$3"`;
+    `(while [ ! -e "$2" ]; do sleep 0.02; done; touch "$1") & ` +
+    `echo "$PPID" > "$3"; touch "$4"`;
   const first = runBin(
-    ['--', 'sh', '-c', commandScript, 'sh', groupEnded, pgidFile, ready],
+    [
+      '--',
+      'sh',
+      '-c',
+      commandScript,
+      'sh',
+      groupEnded,
+      stopFile,
+      pgidFile,
+      ready,
+    ],
     makeWorkDir(),
-    h.env,
+    env,
   );
   let supervisedPgid: number | undefined;
   let next: ReturnType<typeof runBin> | undefined;
   try {
     await waitFor(() => existsSync(ready));
     supervisedPgid = Number(readFileSync(pgidFile, 'utf8'));
-    await new Promise((resolveWait) => setTimeout(resolveWait, 100));
+    await waitFor(() => existsSync(guardianReady));
     first.child.kill('SIGKILL');
 
     next = runBin(
@@ -2380,17 +2419,18 @@ test('the wrapper holds the slot after its helper is killed', {
         `require('node:fs').writeFileSync(${JSON.stringify(nextReady)}, 'started');`,
       ],
       makeWorkDir(),
-      h.env,
+      env,
     );
-    await new Promise((resolveWait) => setTimeout(resolveWait, 200));
-    assert.equal(flockStatus(join(h.state, LOCK_RELATIVE)), 1);
+    assert.equal(flockStatus(lockPath), 1);
     assert.equal(existsSync(nextReady), false);
 
+    writeFileSync(stopFile, 'stop\n');
     await waitFor(() => existsSync(groupEnded), 5000);
     assert.equal((await first.done).signal, 'SIGKILL');
     assert.equal((await next.done).status, 0);
     assert.equal(existsSync(nextReady), true);
   } finally {
+    writeFileSync(stopFile, 'stop\n');
     if (supervisedPgid !== undefined) {
       try {
         process.kill(-supervisedPgid, 'SIGTERM');
@@ -2419,13 +2459,16 @@ test('SIGTERM keeps the slot until the signalled process group exits', {
   const h = makeHarness();
   const ready = join(h.state, 'signal.ready');
   const termed = join(h.state, 'signal.termed');
+  const releaseFile = join(h.state, 'signal.release');
   const groupEnded = join(h.state, 'signal.ended');
   const nextReady = join(h.state, 'next.ready');
+  const lockPath = join(h.state, LOCK_RELATIVE);
   const script =
-    `trap 'touch "$1"; sleep 0.8; touch "$2"; exit 0' TERM; ` +
+    `trap 'touch "$1"; while [ ! -e "$4" ]; do sleep 0.02; done; ` +
+    `touch "$2"; exit 0' TERM; ` +
     `touch "$3"; while :; do sleep 1; done`;
   const first = runBin(
-    ['--', 'sh', '-c', script, 'sh', termed, groupEnded, ready],
+    ['--', 'sh', '-c', script, 'sh', termed, groupEnded, ready, releaseFile],
     makeWorkDir(),
     h.env,
   );
@@ -2444,14 +2487,16 @@ test('SIGTERM keeps the slot until the signalled process group exits', {
       makeWorkDir(),
       h.env,
     );
-    await new Promise((resolveWait) => setTimeout(resolveWait, 150));
+    assert.equal(flockStatus(lockPath), 1);
     assert.equal(existsSync(nextReady), false);
 
+    writeFileSync(releaseFile, 'release\n');
     assert.equal((await first.done).status, 143);
     assert.equal(existsSync(groupEnded), true);
     assert.equal((await next.done).status, 0);
     assert.equal(existsSync(nextReady), true);
   } finally {
+    writeFileSync(releaseFile, 'release\n');
     if (first.child.exitCode === null && first.child.signalCode === null) {
       first.child.kill('SIGTERM');
       await first.done;
