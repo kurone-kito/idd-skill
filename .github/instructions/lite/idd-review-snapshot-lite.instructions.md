@@ -120,28 +120,32 @@ E1.
 
 ### Step 2 — Record the watermark
 
-After deferral, rerun Step 1 for fresh `latest-ci-completed-at`; never
-reuse deferred value.
+After deferral, repeat Step 1 for fresh CI time and activity boundary.
 
-Post a marker per E1 pass when satisfied. Prefer
-the one-command path: `node
-scripts/post-idd-marker.mjs --type watermark --from-pr {pr-number}
---expected-head-sha {head-SHA} --agent-id <id> --claim-id <id>
---trusted-marker-logins "<trusted-login-1>,<trusted-login-2>" --apply`
-(plus `--global-only` if global-only; or the package-manager
-equivalent). Always pass `--expected-head-sha`
-with the exact Step 1 `{head-SHA}`; the helper fails closed (posts
-nothing) when the branch moved since Step 1 — on that failure, return
-to Step 1 and re-snapshot the moved branch, not a Step 2 retry.
+Prefer the one-command path:
 
-The manual six-field fallback — `--type watermark --target pr
-{pr-number} --agent-id <id> --claim-id <id> --head-sha {head-SHA}
---max-activity-at {max-activity-updatedAt|none} --total-item-count
-{total-item-count} --ci-completed-at {latest-ci-completed-at|none}
---apply` — stays available when `--from-pr` cannot run. Before using it,
-require each required `(checkName, workflowName)`
-producer to pass for `{head-SHA}` and verify advisory identity/event;
-raw names are insufficient. Otherwise skip Step 2 and use E15/E14.
+```sh
+node scripts/post-idd-marker.mjs --type watermark --from-pr {pr-number} \
+  --expected-head-sha {head-SHA} --agent-id <id> --claim-id <id> \
+  --trusted-marker-logins "<trusted-login-1>,<trusted-login-2>" \
+  --operation-local --prior-head-sha {head-SHA} \
+  --prior-total-item-count {total-item-count} \
+  --prior-max-activity-at {max-activity-updatedAt} --apply
+```
+
+Add `--global-only` if needed. Use the exact Step 1 HEAD and all
+three boundaries. `refuse` or moved HEAD: do not post; repeat Step 1 and
+re-triage. `defer`: do not post; follow the CI-incomplete route and
+refresh Step 1.
+
+Manual six-field fallback works when `--from-pr` cannot run, but cannot
+use `--operation-local`. Before posting, read the
+current HEAD and complete activity set; compare Step 1's HEAD, item
+count, and max time, and check for new uncovered comments, threads, or
+review-body findings. Any change, incomplete/error read, or uncertainty:
+do not post; repeat Step 1 and re-triage. Require producer-aware passing
+CI evidence for the captured HEAD; names alone are insufficient.
+Otherwise skip Step 2 and use E15/E14.
 
 Exact body: `<!-- review-watermark: {agent-id} {claim-id} {head-SHA}
 {max-activity-updatedAt|none} {total-item-count}

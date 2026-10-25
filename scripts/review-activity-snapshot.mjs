@@ -74,6 +74,66 @@ if (import.meta.main) {
   }
 }
 /**
+ * Convert the provider's workflow-preserving status-check rollup into the
+ * small shape the activity summary consumes. Keep every row: checks with the
+ * same display name can come from different workflows, and their individual
+ * completion times determine the latest passing watermark.
+ */
+function normalizeActivitySnapshotChecks(statusCheckRollup) {
+  if (!Array.isArray(statusCheckRollup)) {
+    throw new Error(
+      'review activity snapshot: status check rollup is not an array',
+    );
+  }
+  return statusCheckRollup.map((value, index) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      throw new Error(
+        `review activity snapshot: status check rollup entry ${index} is not an object`,
+      );
+    }
+    const entry = value;
+    const typename = String(entry.__typename ?? '');
+    const timestamp = (candidate) =>
+      typeof candidate === 'string' && candidate.trim() ? candidate : null;
+    if (typename === 'CheckRun') {
+      const status = String(entry.status ?? '')
+        .trim()
+        .toUpperCase();
+      const conclusion = String(entry.conclusion ?? '')
+        .trim()
+        .toUpperCase();
+      return {
+        name: String(entry.name ?? ''),
+        state:
+          status === 'COMPLETED'
+            ? conclusion || 'UNKNOWN'
+            : status || 'UNKNOWN',
+        completedAt: timestamp(entry.completedAt),
+        startedAt: timestamp(entry.startedAt),
+        type: 'CheckRun',
+        workflowName: String(entry.workflowName ?? ''),
+        workflowPath: timestamp(entry.workflowPath),
+      };
+    }
+    if (typename === 'StatusContext') {
+      return {
+        name: String(entry.context ?? ''),
+        state: String(entry.state ?? '')
+          .trim()
+          .toUpperCase(),
+        completedAt: timestamp(entry.completedAt),
+        startedAt: timestamp(entry.startedAt),
+        type: 'StatusContext',
+        workflowName: '',
+        workflowPath: null,
+      };
+    }
+    throw new Error(
+      `review activity snapshot: unsupported status check rollup entry type ${JSON.stringify(typename)}`,
+    );
+  });
+}
+/**
  * The policy file, read at the PR's base ref (#3958). The working tree is
  * never read: a PR branch could edit its own trusted actors and advisory bot
  * logins and then judge its own snapshot by them. An empty base ref falls back
@@ -132,7 +192,22 @@ export function collectReviewActivitySnapshot(input) {
     );
   const headSha = rawHeadSha;
   const prAuthorLogin = rawAuthorLogin.trim().toLowerCase();
-  const checks = input.port.listChangeRequestChecks(input.prNumber);
+  const branchAndChecks = input.port.getChangeRequestBranchAndChecks(
+    input.prNumber,
+  );
+  if (branchAndChecks.headSha !== rawHeadSha) {
+    throw new Error(
+      `review activity snapshot: PR #${input.prNumber} checks HEAD ${branchAndChecks.headSha} does not match the activity snapshot HEAD ${rawHeadSha}`,
+    );
+  }
+  if (branchAndChecks.baseRefName !== baseRefName) {
+    throw new Error(
+      `review activity snapshot: PR #${input.prNumber} base ref ${branchAndChecks.baseRefName} does not match the activity snapshot base ref ${baseRefName}`,
+    );
+  }
+  const checks = normalizeActivitySnapshotChecks(
+    branchAndChecks.statusCheckRollup,
+  );
   const reviews = input.port.listReviews(input.prNumber);
   const comments = input.port.listWorkItemComments(input.prNumber, {
     includeEditState: true,

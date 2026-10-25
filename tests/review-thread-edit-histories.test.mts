@@ -65,6 +65,9 @@ function fixture(laterText = FINDING): FakeProviderFixture {
         closingIssuesReferences: [],
       },
     },
+    changeRequestBranchAndChecks: {
+      1: { headSha: HEAD, baseRefName: 'main', statusCheckRollup: [] },
+    },
     branchRules: { 'o/r/main': [] },
     branchProtection: { 'o/r/main': {} },
     reviewsWithHeadCommitDate: {

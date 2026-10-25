@@ -70,11 +70,11 @@ GitHub state in this phase, discard helper output and run the portable
 gh/jq/API procedure below. The written instruction rules remain the
 authoritative decision path.
 
-Also fetch the **current CI state** for `{head-SHA}`:
-`gh pr checks {pr-number} --json name,state,completedAt`. Record the
-`completedAt` of the most recently completed successful (or
-treated-as-passed) CI run as `{latest-ci-completed-at}`, or `none` if no
-CI pass exists yet for this HEAD.
+Manual CI: `gh pr view {pr-number} --json headRefOid,statusCheckRollup`;
+verify `{head-SHA}`, preserve same-named workflow producers (`gh pr
+checks` may collapse them), and use the newest valid pass-equivalent
+`completedAt`. Only a complete matching-HEAD read with no pass yields
+`none`. Missing evidence means no post; repeat Step 1.
 
 **Non-Copilot safety:** snapshot/watermark and F2 cover bot activity.
 

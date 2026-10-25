@@ -245,22 +245,6 @@ test('review-activity-snapshot.mjs CLI: parses multi-line NDJSON output from pag
       ).toString('base64'),
     ],
     [
-      // #2267: routed through provider-port.mts's listChangeRequestChecks
-      // now -- `--repo` (not `-R`) and no trailing `--jq '.'` (a no-op
-      // identity filter on the already-JSON `--json` array), but the same
-      // underlying `gh pr checks` call.
-      JSON.stringify([
-        'pr',
-        'checks',
-        '42',
-        '--repo',
-        REPO_REF,
-        '--json',
-        'name,state,completedAt',
-      ]),
-      '[]',
-    ],
-    [
       JSON.stringify([
         'api',
         `repos/${REPO_REF}/pulls/42/reviews`,
@@ -313,6 +297,14 @@ test('review-activity-snapshot.mjs CLI: parses multi-line NDJSON output from pag
     data: {
       repository: {
         pullRequest: {
+          headRefOid: HEAD_SHA,
+          baseRefName: 'main',
+          statusCheckRollup: {
+            contexts: {
+              nodes: [],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
           reviewThreads: {
             pageInfo: { hasNextPage: false, endCursor: null },
             nodes: [],

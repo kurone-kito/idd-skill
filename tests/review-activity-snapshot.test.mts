@@ -45,7 +45,7 @@ test('importing review-activity-snapshot.mts has no import-time side effect', as
   }
 });
 
-test('collectReviewActivitySnapshot calls each rich loader once', () => {
+test('collectReviewActivitySnapshot preserves check producers and calls each rich loader once', () => {
   const calls: string[] = [];
   const snapshot = collectReviewActivitySnapshot({
     prNumber: 3592,
@@ -70,9 +70,41 @@ test('collectReviewActivitySnapshot calls each rich loader once', () => {
         };
       },
       getRepositoryDefaultBranch: () => 'main',
-      listChangeRequestChecks: () => {
+      getChangeRequestBranchAndChecks: () => {
         calls.push('checks');
-        return [];
+        return {
+          headSha: 'c'.repeat(40),
+          baseRefName: 'main',
+          statusCheckRollup: [
+            {
+              __typename: 'CheckRun',
+              name: 'ci',
+              status: 'COMPLETED',
+              conclusion: 'SUCCESS',
+              completedAt: '2026-10-25T11:00:00Z',
+              workflowName: 'push workflow',
+              workflowPath: '.github/workflows/push.yml',
+            },
+            {
+              __typename: 'CheckRun',
+              name: 'ci',
+              status: 'COMPLETED',
+              conclusion: 'SUCCESS',
+              completedAt: '2026-10-25T11:30:00Z',
+              workflowName: 'release workflow',
+              workflowPath: '.github/workflows/release.yml',
+            },
+            {
+              __typename: 'CheckRun',
+              name: 'lint',
+              status: 'COMPLETED',
+              conclusion: 'FAILURE',
+              completedAt: '2026-10-25T11:45:00Z',
+              workflowName: 'lint workflow',
+              workflowPath: '.github/workflows/lint.yml',
+            },
+          ],
+        };
       },
       listReviews: () => {
         calls.push('reviews');
@@ -101,6 +133,8 @@ test('collectReviewActivitySnapshot calls each rich loader once', () => {
     'threads',
   ]);
   assert.equal(snapshot.headSha, 'c'.repeat(40));
+  assert.equal(snapshot.latestCiCompletedAt, '2026-10-25T11:45:00Z');
+  assert.equal(snapshot.latestPassingCiCompletedAt, '2026-10-25T11:30:00Z');
   assert.equal(
     (snapshot.dispositionEvidence as { missingRegularCommentCount: number })
       .missingRegularCommentCount,
@@ -279,6 +313,9 @@ if (args[0] === 'pr' && args[1] === 'view') {
 }
 if (args[0] === 'api' && String(args[1]).includes('/contents/.github/idd/config.json')) out(${JSON.stringify(POLICY_B64)});
 if (args[0] === 'pr' && args[1] === 'checks') out('[]');
+if (args[0] === 'api' && args[1] === 'graphql' && args.join(' ').includes('contexts(first:100')) {
+  out(JSON.stringify({ data: { repository: { pullRequest: { headRefOid: ${JSON.stringify(SNAPSHOT_HEAD)}, baseRefName: 'main', statusCheckRollup: { contexts: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } } } } }));
+}
 if (args[0] === 'api' && args[1] === 'graphql' && args.join(' ').includes('databaseId')) {
   const raw = ${JSON.stringify(commentNdjson)};
   const rows = raw.trim() === ''
@@ -751,7 +788,11 @@ function latestPort(options: {
       authorLogin: 'someone',
       baseRefName: 'main',
     }),
-    listChangeRequestChecks: () => [],
+    getChangeRequestBranchAndChecks: () => ({
+      headSha: LATEST_HEAD,
+      baseRefName: 'main',
+      statusCheckRollup: [],
+    }),
     listReviews: () => [],
     listWorkItemComments: () => options.comments ?? [],
     listChangeRequestReviewThreadsWithComments: () => [],
@@ -781,6 +822,11 @@ function latestSnapshot(
         authorLogin: 'someone',
         baseRefName: 'main',
       });
+    (port as Record<string, unknown>).getChangeRequestBranchAndChecks = () => ({
+      headSha: options.headSha,
+      baseRefName: 'main',
+      statusCheckRollup: [],
+    });
   }
   return collectReviewActivitySnapshot({
     prNumber: 3907,
@@ -1138,7 +1184,11 @@ function snapshotWithReviews(reviews: readonly object[]) {
         baseRefName: 'main',
       }),
       getRepositoryDefaultBranch: () => 'main',
-      listChangeRequestChecks: () => [],
+      getChangeRequestBranchAndChecks: () => ({
+        headSha: 'c'.repeat(40),
+        baseRefName: 'main',
+        statusCheckRollup: [],
+      }),
       listReviews: () => [...reviews],
       listWorkItemComments: () => [],
       listChangeRequestReviewThreadsWithComments: () => [],
@@ -1488,7 +1538,11 @@ function policyPort(options: {
     }),
     getRepositoryDefaultBranch: () =>
       options.defaultBranch === undefined ? 'trunk' : options.defaultBranch,
-    listChangeRequestChecks: () => [],
+    getChangeRequestBranchAndChecks: () => ({
+      headSha: 'c'.repeat(40),
+      baseRefName: options.baseRefName ?? 'main',
+      statusCheckRollup: [],
+    }),
     listReviews: () => [],
     listWorkItemComments: () => [],
     listChangeRequestReviewThreadsWithComments: () => [],
