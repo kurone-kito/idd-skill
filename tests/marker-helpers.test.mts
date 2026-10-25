@@ -86,6 +86,25 @@ test('scope-overrun requires the configured marker prefix and canonical body', (
   );
 });
 
+test('scope-overrun rejects a worker-marked exact-head decision', () => {
+  const result = resolveScopeOverrunEvidence({
+    comments: [
+      evidenceComment(postPushRecord()),
+      evidenceComment(
+        `Scope decision: accept head ${HEAD}\n\n<!-- idd-agent-authored: codex-worker -->\n\n_codex-worker: IDD automation comment; attribution is self-reported._`,
+      ),
+    ],
+    markerPrefix: PREFIX,
+    trustedMarkerLogins: TRUSTED,
+    issueNumber: ISSUE,
+    currentHeadSha: HEAD,
+  });
+  assert.deepEqual(
+    { status: result.status, reason: result.reason },
+    { status: 'invalid', reason: 'decision-agent-authored' },
+  );
+});
+
 test('scope-overrun accepts only a trusted exact-head first-line decision', () => {
   const decision = `Scope decision: accept head ${HEAD}\nReviewed scope.`;
   const result = resolveScopeOverrunEvidence({

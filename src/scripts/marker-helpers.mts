@@ -311,6 +311,7 @@ export type ScopeOverrunEvidenceReason =
   | 'record-conflict'
   | 'decision-without-record'
   | 'decision-untrusted'
+  | 'decision-agent-authored'
   | 'decision-edited-or-unknown'
   | 'decision-malformed'
   | 'decision-conflict'
@@ -525,6 +526,10 @@ function isScopeOverrunDecisionShaped(body: string): boolean {
   return body.trimStart().startsWith('Scope decision:');
 }
 
+function hasIddAgentAuthoredMarker(body: string): boolean {
+  return /<!--\s*idd-agent-authored\s*:/i.test(body);
+}
+
 function scopeOverrunResolution(
   status: ScopeOverrunEvidenceStatus,
   reason: ScopeOverrunEvidenceReason,
@@ -536,8 +541,11 @@ function scopeOverrunResolution(
 
 /**
  * Resolve trusted, unedited scope evidence and an owner's exact-head
- * decision. Ordinary issue-body edits are intentionally not an input, so
- * they cannot rewrite the effort or candidate-file snapshot.
+ * decision. A decision-shaped comment carrying the self-reported
+ * `idd-agent-authored` marker is rejected even when its GitHub author is
+ * trusted. The marker is operational attribution, not authentication.
+ * Ordinary issue-body edits are intentionally not an input, so they cannot
+ * rewrite the effort or candidate-file snapshot.
  */
 // audit:ignore-dead-export: public evidence resolver for downstream claim/resume/readiness checks; those callers are outside #4674
 export function resolveScopeOverrunEvidence(options: {
@@ -585,6 +593,9 @@ export function resolveScopeOverrunEvidence(options: {
     }
     if (isScopeOverrunDecisionShaped(body)) {
       hasDecision = true;
+      if (hasIddAgentAuthoredMarker(body)) {
+        return scopeOverrunResolution('invalid', 'decision-agent-authored');
+      }
       const authorLogin = normalizeNonWhitespaceToken(comment?.authorLogin);
       if (!authorLogin || !trusted.has(authorLogin.toLowerCase())) {
         return scopeOverrunResolution('invalid', 'decision-untrusted');

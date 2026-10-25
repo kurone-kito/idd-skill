@@ -5261,12 +5261,24 @@ or conflicting evidence returns `invalid`.
 
 The owner decision is a separate comment whose exact first line is
 `Scope decision: accept head <full 40-character SHA>`. A worker never writes
-this decision. It is valid only from a configured trusted actor, with an
-explicitly unedited comment, and only when the SHA equals both the recorded
-post-push SHA and the live PR head. A changed live head leaves the decision
-pending because acceptance remains bound to the recorded SHA; the evidence
-cannot accept a different head. Editing the issue's ordinary effort marker
-does not change the stored scope or decision.
+this decision. Free-form autonomous worker comments on the affected issue
+carry this self-reported suffix after their message:
+
+```markdown
+<!-- idd-agent-authored: {agent-id} -->
+
+_{agent-id}: IDD automation comment; attribution is self-reported._
+```
+
+A decision-shaped comment with this suffix is invalid even when its GitHub
+author is in `trustedMarkerActors`. This is workflow attribution, not identity
+proof: a marker can be omitted or forged, so an unmarked comment does not prove
+that a human wrote it. The decision is also valid only from a configured trusted
+actor, with an explicitly unedited comment, and only when the SHA equals both
+the recorded post-push SHA and the live PR head. A changed live head leaves the
+decision pending because acceptance remains bound to the recorded SHA; the
+evidence cannot accept a different head. Editing the issue's ordinary effort
+marker does not change the stored scope or decision.
 
 This record is durable issue evidence: it is not added to the transient
 `OPERATIONAL_MARKERS` cleanup or hide-at-post-time registries.
