@@ -2609,3 +2609,23 @@ test('differential: a rejection confirmation without the em-dash sentence does n
   };
   assertF2Parity({ threads: [thread] }, 0, 1);
 });
+
+test('differential: leading whitespace before a rejection confirmation still settles a resolved thread (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  const thread = {
+    isResolved: true,
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        COPILOT_THREAD_FINDING,
+        f2ThreadComment(
+          AGENT_LOGIN,
+          '\n**Rejection confirmed by maintainer** — agreed',
+          F2_CASE_TIME_2,
+        ),
+      ],
+    },
+  };
+  assertF2Parity({ threads: [thread] }, 0, 0);
+});
