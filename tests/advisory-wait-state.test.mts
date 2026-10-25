@@ -1115,25 +1115,27 @@ test('staleRequestRecovery stays claim-bound and validates its action contract',
   const normalizedF3Advisory = f3Advisory.replace(/\s+/g, ' ');
   assert.match(
     normalizedF3Advisory,
-    /With both claim args, validate AW3-S's recovery object before either direct merge/,
-  );
-  assert.match(normalizedF3Advisory, /missing or invalid data stops F3/);
-  assert.match(
-    normalizedF3Advisory,
-    /`attempt` runs AW2\/AW3-S then returns to F2 without a same-pass merge/,
-  );
-  assert.match(normalizedF3Advisory, /`cap-exhausted` follows AW4 and stops/);
-  assert.match(
-    normalizedF3Advisory,
-    /Only `not-applicable` uses ordinary mapping/,
+    /Before any result permits a merge, validate the claim-bound `staleRequestRecovery` object and its recognized `action` and `reason` as required by AW3-S/,
   );
   assert.match(
     normalizedF3Advisory,
-    /If \*\*SATISFIED\*\*[^.]*either claim argument is omitted or its action is `not-applicable` → merge/,
+    /Route `attempt` through AW3-S and return to F2 without merging in this F3 pass/,
   );
   assert.match(
     normalizedF3Advisory,
-    /If `COPILOT_PENDING` is `"false"`[^.]*either claim argument is omitted or its action is `not-applicable` → merge/,
+    /route `cap-exhausted` through AW4 and stop/,
+  );
+  assert.match(
+    normalizedF3Advisory,
+    /only `not-applicable` continues through ordinary F3 outcome handling/,
+  );
+  assert.match(
+    normalizedF3Advisory,
+    /If \*\*SATISFIED\*\*[^.]*recovery action above permits ordinary handling → proceed with the merge/,
+  );
+  assert.match(
+    normalizedF3Advisory,
+    /If `COPILOT_PENDING` is `"false"`[^.]*recovery action permits ordinary handling → proceed with the merge/,
   );
 });
 
@@ -2020,6 +2022,10 @@ const ADVISORY_WAIT_DOC_COPIES = [
   STANDARD_ADVISORY_WAIT_DOC,
   '.github/instructions/idd-advisory-wait.instructions.md',
 ] as const;
+const MERGE_INSTRUCTION_DOC_COPIES = [
+  'idd-template/.github/instructions/idd-merge.instructions.md',
+  '.github/instructions/idd-merge.instructions.md',
+] as const;
 const CALLER_MAPPING_END = '<!-- dprint-ignore-end -->';
 const WAIT_ROW =
   "| `WAIT` | wait for Copilot's review; rerun `idd-advisory-convergence`; resume D4 | continue polling | poll then restart F2 from top | do not merge; return to F2 |";
@@ -2067,5 +2073,28 @@ test('the helper reference documents --wait, --poll-interval, waitedSeconds and 
     '`bound-elapsed`',
   ]) {
     assert.ok(doc.includes(needle), `missing ${needle}`);
+  }
+});
+
+test('F3 requires claim-bound stale recovery evidence before allowing a merge', () => {
+  for (const path of MERGE_INSTRUCTION_DOC_COPIES) {
+    const doc = readFileSync(join(REPO_ROOT, path), 'utf8').replace(
+      /\s+/g,
+      ' ',
+    );
+    for (const needle of [
+      '`--claim-id {claim-id}` and `--agent-id {agent-id}` arguments',
+      '`staleRequestRecovery` object and its recognized `action` and `reason`',
+      'Route `attempt` through AW3-S',
+      '`f3Outcome` alone does not authorize a merge',
+    ]) {
+      assert.ok(doc.includes(needle), `${path} is missing ${needle}`);
+    }
+    assert.ok(
+      !doc.includes(
+        'the authoritative advisory gate — do not add stricter sub-conditions',
+      ),
+      `${path} retains the obsolete f3Outcome-only authority wording`,
+    );
   }
 });
