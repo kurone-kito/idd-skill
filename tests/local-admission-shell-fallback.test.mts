@@ -380,7 +380,7 @@ test('SIGINT during the command is forwarded and the slot waits for the group', 
     const queued = startWrapper(
       dir,
       'queued',
-      `if kill -s 0 -- -${rootPid} 2>/dev/null; then echo alive > ${sq(order)}; else echo gone > ${sq(order)}; fi; exit 0`,
+      `if kill -0 -${rootPid} 2>/dev/null; then echo alive > ${sq(order)}; else echo gone > ${sq(order)}; fi; exit 0`,
       env,
       60,
     );
