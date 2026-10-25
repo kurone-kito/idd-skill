@@ -95,30 +95,26 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
    ```
 
    Use `PR_HEAD_SHA_F3` as `PR_HEAD_SHA`. Run **AW1**
-   (`idd-advisory-wait.instructions.md`):
+   (`idd-advisory-wait.instructions.md`) with both active-claim
+   arguments when available:
    - If any same-head review is not a v2 overview, has suppressed
      items, or holds a cited item: hold (AW4).
-   - If **SATISFIED** (`LAST_COPILOT_COMMIT == PR_HEAD_SHA_F3`) → proceed
-     with the merge.
-   - If `COPILOT_PENDING` is `"false"` and neither bullet above held:
-     proceed with the merge.
-   - Otherwise (`COPILOT_PENDING` is `"true"`, not yet reviewed): run
-     **AW2** and apply **AW3** — do not skip even if F2 already ran
-     them, since F3 is a self-contained blocking gate:
-     - **SATISFIED** → proceed with the merge.
-     - **HOLD** → post the hold comment from **AW4** and stop.
-     - **RECOVERY_NEEDED** → post the recovery marker from **AW3-R** and
-       return to the F2 advisory bot wait check; do not merge in the
-       same F3 pass that creates a recovery marker.
-     - **CAP_EXHAUSTED** → post the cap-exhausted hold comment from
-       **AW4** and stop.
-     - **DISPOSITION_NEEDED** → do not merge; return to E14.
-     - **REQUEST_NEEDED** → return to E14 to refresh/request Copilot
-       review and post a request marker; do not merge.
-     - **WAIT** → do NOT execute the merge; return to the **F2 advisory
-       bot wait check** in `idd-pre-merge.instructions.md` (go back to
-       the first condition in F2), which reuses the existing same-HEAD
-       marker — do not post a new one.
+   - With both claim args, validate AW3-S's recovery object before
+     either direct merge; missing or invalid data stops F3. `attempt`
+     runs AW2/AW3-S then returns to F2 without a same-pass merge;
+     `cap-exhausted` follows AW4 and stops. Only `not-applicable`
+     uses ordinary mapping; claimless behavior and required schema fields
+     stay unchanged.
+   - If **SATISFIED** (`LAST_COPILOT_COMMIT == PR_HEAD_SHA_F3`) and either
+     claim argument is omitted or its action is `not-applicable` → merge.
+   - If `COPILOT_PENDING` is `"false"`, neither the first bullet nor an
+     earlier recovery route held, and either claim argument is omitted
+     or its action is `not-applicable` → merge.
+   - Otherwise, run **AW2/AW3** even if F2 already did. **SATISFIED** →
+     merge; **HOLD/CAP_EXHAUSTED** → AW4 and stop; **RECOVERY_NEEDED** →
+     AW3-R, then F2 without merging; **DISPOSITION_NEEDED** or
+     **REQUEST_NEEDED** → E14 (refresh/request Copilot and mark the
+     request); **WAIT** → F2, reusing the same-HEAD marker.
 
 4. Merge the PR using a **merge commit**, binding to the validated SHA
    to prevent a race where a new push lands between the F3 freshness

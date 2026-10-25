@@ -922,6 +922,8 @@ test('bin/idd-advisory-wait-state.mjs: a malformed --now classifies as a usage e
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 const STANDARD_ADVISORY_WAIT_DOC =
   'idd-template/.github/instructions/idd-advisory-wait.instructions.md';
+const MERGE_INSTRUCTIONS_DOC =
+  'idd-template/.github/instructions/idd-merge.instructions.md';
 const LITE_ADVISORY_WAIT_DOC =
   'idd-template/.github/instructions/lite/idd-advisory-wait-lite.instructions.md';
 const HELPER_REFERENCE_DOC = 'idd-template/docs/idd-helper-scripts.md';
@@ -1069,19 +1071,19 @@ test('staleRequestRecovery stays claim-bound and validates its action contract',
   const normalizedEligibility = eligibility.replace(/\s+/g, ' ');
   assert.match(
     normalizedEligibility,
-    /With `--claim-id`\/`--agent-id` set for the active claim, require/,
+    /With both active-claim arguments, require/,
   );
   assert.match(
     normalizedEligibility,
-    /schema-valid `staleRequestRecovery` and known `action`/,
+    /schema-valid `staleRequestRecovery` \(`action`, `reason`\) and a recognized `action`/,
   );
   assert.match(
     normalizedEligibility,
-    /missing\/invalid evidence uses the existing fail-closed fallback\/hold before recovery or merge/,
+    /missing\/invalid evidence fails closed before recovery or merge/,
   );
   assert.match(
     normalizedEligibility,
-    /Without both, use the full budget and `"not-applicable"`\/`active-claim-not-provided`/,
+    /Without both, keep the full budget and `not-applicable` behavior/,
   );
 
   const helperDocs = readFileSync(
@@ -1095,11 +1097,43 @@ test('staleRequestRecovery stays claim-bound and validates its action contract',
   const normalizedHelperContract = helperContract.replace(/\s+/g, ' ');
   assert.match(
     normalizedHelperContract,
-    /required with a schema-valid object and recognized `action`/,
+    /When both claim arguments are supplied, it is required with a schema-valid object containing the schema-required `action` and `reason` fields and a recognized `action`/,
   );
   assert.match(
     normalizedHelperContract,
-    /incomplete or unknown evidence uses AW3-S's fail-closed fallback\/hold before recovery or merge/,
+    /Validate it before AW3-S recovery and before either F3 direct-merge branch; incomplete or unknown evidence uses the fail-closed route before recovery or merge/,
+  );
+
+  const merge = readFileSync(join(REPO_ROOT, MERGE_INSTRUCTIONS_DOC), 'utf8');
+  const f3Advisory = merge.slice(
+    merge.indexOf('**Advisory state revalidation (blocking)**'),
+    merge.indexOf(
+      '\n4. Merge the PR',
+      merge.indexOf('**Advisory state revalidation (blocking)**'),
+    ),
+  );
+  const normalizedF3Advisory = f3Advisory.replace(/\s+/g, ' ');
+  assert.match(
+    normalizedF3Advisory,
+    /With both claim args, validate AW3-S's recovery object before either direct merge/,
+  );
+  assert.match(normalizedF3Advisory, /missing or invalid data stops F3/);
+  assert.match(
+    normalizedF3Advisory,
+    /`attempt` runs AW2\/AW3-S then returns to F2 without a same-pass merge/,
+  );
+  assert.match(normalizedF3Advisory, /`cap-exhausted` follows AW4 and stops/);
+  assert.match(
+    normalizedF3Advisory,
+    /Only `not-applicable` uses ordinary mapping/,
+  );
+  assert.match(
+    normalizedF3Advisory,
+    /If \*\*SATISFIED\*\*[^.]*either claim argument is omitted or its action is `not-applicable` → merge/,
+  );
+  assert.match(
+    normalizedF3Advisory,
+    /If `COPILOT_PENDING` is `"false"`[^.]*either claim argument is omitted or its action is `not-applicable` → merge/,
   );
 });
 

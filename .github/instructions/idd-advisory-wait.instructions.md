@@ -255,11 +255,11 @@ the
 (default 2), not `REQUEST_CAP` (30) —
 [why two paths](../../docs/idd-design-rationale.md#aw3-s-vs-aw3-r-why-two-recovery-paths).
 
-**Eligibility.** With `--claim-id`/`--agent-id` set for the active
-claim, require schema-valid `staleRequestRecovery` and known `action`;
-missing/invalid evidence uses the existing fail-closed fallback/hold
-before recovery or merge. Without both, use the full budget and
-`"not-applicable"`/`active-claim-not-provided`. Then:
+**Eligibility.** With both active-claim arguments, require
+schema-valid `staleRequestRecovery` (`action`, `reason`) and a
+recognized `action`; missing/invalid evidence fails closed before
+recovery or merge. Without both, keep the full budget and
+`not-applicable` behavior. Then:
 `"not-applicable"` → ordinary handling
 unchanged; `"cap-exhausted"` → do **not** remove or re-request, handle
 like `CAP_EXHAUSTED` (`CAP_EXHAUSTED_ROUTE`); `"attempt"` → run the
