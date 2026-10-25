@@ -29,8 +29,7 @@ session, not host.
 
 Before Discover, A5, restart, refill, or dispatch, follow the
 [session scratchpad lifecycle](../../docs/idd-workflow.md#session-scratchpad-lifecycle);
-stop on holds. It revalidates already-claimed/no-dispatch work without new
-claims or nonces. Derive worker paths from the verified root; keep the worker
+stop on holds. Derive worker paths from the verified root; keep the worker
 missing-parent guard.
 
 Track each worker's issue, claim, branch, handle, report path, and lifecycle
@@ -39,8 +38,10 @@ state. On restart, see
 
 ## 3. Dispatch
 
-1. Run Discover A0 through A4 Step 1.5; A0-C runs once before first dispatch
-   per Discover run, never during refills. Survivors are startable candidates.
+1. Use the lifecycle's budgeted route for eligible already-claimed/no-dispatch
+   resumes; run Discover A0 through A4 Step 1.5 only after that set is empty.
+   A0-C runs once before first dispatch per Discover run, never during refills.
+   Survivors are startable.
 2. Call profile-selected `idd-worker-budget` with `--running <count not
    disposed>` and `--startable <candidate count>`. Add `--harness-limit
    <limit>` if the worker table sets one. Start its `slots`.

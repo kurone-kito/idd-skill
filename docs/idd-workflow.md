@@ -1187,7 +1187,8 @@ seven fields and rejects missing or additional fields:
 - `sessionId`: non-empty JSON string containing one path-safe component,
   excluding `.`/`..`, path separators, and control characters.
 - `repository`: non-empty JSON string in `owner/repo` form, equal to the
-  current repository slug.
+  current repository slug after normalizing both owner and repo components
+  case-insensitively before comparison.
 - `repositoryRoot`, `gitCommonDir`, and `scratchpadRoot`: non-empty JSON
   strings containing canonical absolute paths for the current operating
   system.
@@ -1681,11 +1682,16 @@ confirm that its parent path already exists. When the parent path is missing,
 create nothing and end the run as a hold: post the hold marker of the Hold
 marker part, and let your report draft carry `held`, as for any hold; if
 `{report-path}` cannot be written because the parent path is missing, the hold
-marker alone is the report. Create the directory with a plain mkdir and never
-use mkdir -p, which would build a mistyped parent path instead of failing. If
-the directory already exists, reuse it. If it cannot be created although the
-parent path exists, fall back to prefixing each scratch file you write in that
-parent path with the issue number, for example `2878-pr-body.md`.
+marker alone is the report. Create the issue directory exclusively with private
+permissions (POSIX mode `0700`; equivalent current-user-only ACL on Windows),
+using a plain mkdir and never `mkdir -p`. Before reusing an existing issue
+directory, inspect it without following links (`lstat`); require a real
+directory owned by the current user with private permissions, then verify its
+canonical path remains beneath the verified session root. Hold and preserve an
+entry that is a symlink, non-directory, owned by another user, too broadly
+accessible, or outside that root. If safe creation fails for another reason
+while the parent exists, fall back to prefixing each scratch file written in
+that parent path with the issue number, for example `2878-pr-body.md`.
 
 Fill note: run the Session scratchpad lifecycle preflight and use its verified
 root to derive `{scratchpad-dir}`. Treat a harness-reported path as input to
@@ -2056,7 +2062,8 @@ own.
    matched worker is still running gets no record and is reported in step 5.
    In the verified root from the session record, enumerate direct-child report
    drafts whose filename starts with the issue number and ends in `.json`;
-   issue-numbered scratch files remain in that root's matching issue directory.
+   other issue-numbered scratch files remain in that root's matching issue
+   directory.
    If a candidate is a symlink or non-regular file, hold and preserve it without
    following it. Read each regular candidate and use only one whose `issue` and
    `claimId` match the claim. If a candidate is unreadable, or multiple

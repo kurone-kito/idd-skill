@@ -2827,7 +2827,7 @@ const BRIEF_PART_REQUIREMENTS: Readonly<Record<string, readonly string[]>> = {
     'issue-numbered',
     'parent path',
     'held',
-    'never use mkdir -p',
+    'never `mkdir -p`',
   ],
   '**Execution timeout.**': [
     'execution-timeout',
@@ -2862,7 +2862,7 @@ const BRIEF_PART_BODY_REQUIREMENTS: Readonly<
     'issue-numbered',
     'parent path',
     'held',
-    'never use mkdir -p',
+    'never `mkdir -p`',
     '(#orchestrator-fan-out-variant)',
   ],
   '**Critique allowance.**': [
@@ -3178,6 +3178,7 @@ test('fan-out scratchpad preflight provisions and recovers one session root (#46
       '`sessionId`: non-empty JSON string containing one path-safe component',
       'excluding `.`/`..`, path separators, and control characters',
       '`repository`: non-empty JSON string in `owner/repo` form',
+      'normalizing both owner and repo components case-insensitively before comparison',
       '`repositoryRoot`, `gitCommonDir`, and `scratchpadRoot`',
       'non-empty JSON strings containing canonical absolute paths',
       '`allocationSource`: JSON string exactly `harness` or `parent`',
@@ -3233,7 +3234,15 @@ test('fan-out scratchpad preflight provisions and recovers one session root (#46
       scratchpad,
       /When the parent path is missing,\s+create nothing/,
     );
-    assert.match(scratchpad, /never\s+use mkdir -p/);
+    assert.match(scratchpad, /never `mkdir -p`/);
+    assert.match(
+      normalizeWhitespace(scratchpad),
+      /inspect it without following links \(`lstat`\); require a real directory owned by the current user with private permissions, then verify its canonical path remains beneath the verified session root/,
+    );
+    assert.match(
+      normalizeWhitespace(scratchpad),
+      /Hold and preserve an entry that is a symlink, non-directory, owned by another user, too broadly accessible, or outside that root/,
+    );
     assert.match(
       text,
       /issue-numbered subdirectory of the resolved session\s+scratchpad root/,
@@ -3247,6 +3256,10 @@ test('fan-out scratchpad preflight provisions and recovers one session root (#46
     assert.match(
       normalizeWhitespace(text),
       /If a candidate is a symlink or non-regular file, hold and preserve it without following it/,
+    );
+    assert.match(
+      normalizeWhitespace(text),
+      /enumerate direct-child report drafts whose filename starts with the issue number and ends in `.json`; other issue-numbered scratch files remain in that root's matching issue directory/,
     );
     assert.match(
       normalizeWhitespace(text),
@@ -3270,11 +3283,11 @@ test('fan-out scratchpad preflight provisions and recovers one session root (#46
     const text = normalizeWhitespace(readText(path));
     assert.match(
       text,
-      /Before Discover, A5, restart, refill, or dispatch, follow the \[session scratchpad lifecycle\]/,
+      /Use the lifecycle's budgeted route for eligible already-claimed\/no-dispatch resumes; run Discover A0 through A4 Step 1\.5 only after that set is empty/,
     );
     assert.match(
       text,
-      /already-claimed\/no-dispatch work without new claims or nonces/,
+      /Before Discover, A5, restart, refill, or dispatch, follow the \[session scratchpad lifecycle\]/,
     );
     assert.match(text, /worker missing-parent guard/);
     assert.match(
