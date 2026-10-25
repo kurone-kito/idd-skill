@@ -10,6 +10,9 @@ const TEMPLATE_WORKFLOW_PATHS = [
   'idd-template/.github/workflows/post-merge-cleanup.yml',
 ] as const;
 
+const CLEANUP_WORKFLOW_PATH =
+  'idd-template/.github/workflows/post-merge-cleanup.yml';
+
 // One `ephemeral-npx|user-global` arm per dispatch site: six in total.
 const EXPECTED_ARM_COUNTS: Record<
   (typeof TEMPLATE_WORKFLOW_PATHS)[number],
@@ -20,7 +23,13 @@ const EXPECTED_ARM_COUNTS: Record<
   'idd-template/.github/workflows/post-merge-cleanup.yml': 1,
 };
 
-const PINNED_OR_DEFAULT_SPEC =
+// The post-merge cleanup default is a reviewed full commit (issue #4700).
+const CLEANUP_PINNED_COMMIT = '966b89c0c925a30d771a3063d6cf0fc628dcc27a';
+const CLEANUP_PINNED_SPEC_LINE = `SPEC="\${PACKAGE_SPEC:-https://codeload.github.com/kurone-kito/idd-skill/tar.gz/${CLEANUP_PINNED_COMMIT}}"`;
+
+// The advisory-convergence templates keep the mutable main archive (the
+// default adopted in issue #3888; issue #4700 leaves them out of scope).
+const ADVISORY_MUTABLE_SPEC_LINE =
   /SPEC="\$\{PACKAGE_SPEC:-https:\/\/codeload\.github\.com\/kurone-kito\/idd-skill\/tar\.gz\/refs\/heads\/main\}"/;
 
 function readWorkflow(rel: string): string {
@@ -62,11 +71,18 @@ test('every ephemeral-npx dispatch arm also serves user-global through the same 
     );
     for (const arm of arms) {
       const body = arm[2] ?? '';
-      assert.match(
-        body,
-        PINNED_OR_DEFAULT_SPEC,
-        `${path} user-global arm must use the same SPEC default as ephemeral-npx`,
-      );
+      if (path === CLEANUP_WORKFLOW_PATH) {
+        assert.ok(
+          body.includes(CLEANUP_PINNED_SPEC_LINE),
+          `${path} user-global arm must default to the pinned reviewed commit`,
+        );
+      } else {
+        assert.match(
+          body,
+          ADVISORY_MUTABLE_SPEC_LINE,
+          `${path} user-global arm must keep the mutable advisory default`,
+        );
+      }
       assert.match(
         body,
         /npx --yes --package "\$SPEC" /,
@@ -74,4 +90,21 @@ test('every ephemeral-npx dispatch arm also serves user-global through the same 
       );
     }
   }
+});
+
+test('post-merge cleanup names exactly one full-SHA default, never the mutable main archive (#4700)', () => {
+  const text = readWorkflow(CLEANUP_WORKFLOW_PATH);
+  assert.doesNotMatch(
+    text,
+    /refs\/heads\/main/,
+    'the cleanup workflow must not reference the mutable main archive',
+  );
+  const pins = [...text.matchAll(/tar\.gz\/([0-9a-f]{40})\}"/g)].map(
+    (match) => match[1],
+  );
+  assert.deepEqual(
+    pins,
+    [CLEANUP_PINNED_COMMIT],
+    'the cleanup workflow must name exactly one full-SHA default',
+  );
 });
