@@ -1271,9 +1271,19 @@ ADVISORY_TOKEN_JSON=$(
 # source-bound dispositions.
 MISSING_REGULAR=$(printf '%s\n' "${COMMENTS_JSON}" "${DISPOSITION_JSON}" | jq -s --argjson agents "${REG_AGENT_LOGIN_JSON}" --arg sha "${PR_HEAD_SHA}" '
   def activity: [.created_at, (.updated_at // "")] | max;
-  def is_codex_no_find:
-    (((.user.login // "") | ascii_downcase) | test("^chatgpt-codex-connector(\\[bot\\])?$"))
-    and (.body | test("Codex Review: Didn.t find any major issues"; "i"));
+  # The reviewed commit of a terminal Codex no-find result (exact opening line,
+  # reviewed-commit line, and the About Codex details block), or "" when the
+  # comment is not one. Older-HEAD results are not current: they clear like any
+  # other comment (canonical), so only a current-HEAD result needs its source.
+  def codex_no_find_reviewed:
+    if ((.user.login // "") | ascii_downcase | test("^chatgpt-codex-connector(\\[bot\\])?$"))
+       and (.body | test("^(?:<!-- codex-review-receipt:v1 -->\\s*)?Codex Review: Didn\\x27t find any major issues\\. (?:You\\x27re on a roll\\.|What shall we delve into next\\?|:\\+1:|:rocket:)"; "i"))
+       and (.body | contains("About Codex in GitHub</summary>"))
+    then ((.body | capture("\\*\\*Reviewed commit:\\*\\*\\s*`(?<r>[0-9a-f]{7,64})`"; "i")) // {r: ""}).r
+    else "" end;
+  def is_codex_no_find_current:
+    (codex_no_find_reviewed) as $r
+    | ($r != "") and ($sha | ascii_downcase | startswith($r | ascii_downcase));
   def is_actions_operational:
     (((.user.login // "") | ascii_downcase) == "github-actions[bot]")
     and ((.body | sub("^\\s+"; "")) as $b
@@ -1309,7 +1319,7 @@ MISSING_REGULAR=$(printf '%s\n' "${COMMENTS_JSON}" "${DISPOSITION_JSON}" | jq -s
       {unused: $ds, missing: 0};
       ((.unused | to_entries
         | map(select(.value.act > $c.act
-            and (if ($c | is_codex_no_find)
+            and (if ($c | is_codex_no_find_current)
                  then (.value | is_codex_source_bound($c))
                  else (.value.body | test("no-find result at HEAD"; "i") | not)
                  end)))

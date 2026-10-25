@@ -2341,3 +2341,70 @@ test('differential: a Codex no-find whose reviewed commit is not the current HEA
     0,
   );
 });
+
+test('differential: an older-HEAD Codex no-find is cleared by a generic IDD reply, not a source-bound one (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  const older = CODEX_NO_FIND_BODY.replace('1111111', '0000000');
+  // Alone, the older result stays missing.
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 7301,
+          login: 'chatgpt-codex-connector[bot]',
+          body: older,
+          at: F2_CASE_TIME_1,
+        },
+      ],
+    },
+    1,
+    0,
+  );
+  // An unedited IDD rejection after it clears it, as canonical does.
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 7302,
+          login: 'chatgpt-codex-connector[bot]',
+          body: older,
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 7303,
+          login: AGENT_LOGIN,
+          body: '**Rejected** — superseded by a newer HEAD',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+    },
+    0,
+    0,
+  );
+});
+
+test('differential: a Codex comment with the phrase but no terminal no-find shape is an ordinary comment (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 7401,
+          login: 'chatgpt-codex-connector[bot]',
+          body: "Codex Review: Didn't find any major issues. Some other text.",
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 7402,
+          login: AGENT_LOGIN,
+          body: '**Accepted** — fixed',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+    },
+    0,
+    0,
+  );
+});

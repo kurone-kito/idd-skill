@@ -446,8 +446,7 @@ is diagnostic and never changes the verdict.
   comments, or any later IDD-agent body for a human comment) and
   `missingThreads` (any review thread still lacking a clearing reply)
   are empty). Evaluation splits by origin: a **human-authored** thread
-  with no IDD-originated reply, whose latest item is unmarked human
-  prose, is presence-only and is not
+  with no IDD-originated reply is presence-only and is not
   `unresolved-without-fresh-disposition` solely for lacking
   `**Accepted**`; later human feedback after an IDD reply needs a fresh
   disposition; a **Copilot / configured-advisory-bot** thread still
