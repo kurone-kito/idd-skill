@@ -1243,7 +1243,7 @@ DISPOSITION_JSON=$(printf '%s' "${COMMENTS_JSON}" | jq -c --argjson agents "${RE
     and (((.user.login // "") | ascii_downcase) as $u
       | ($agents | map(ascii_downcase) | index($u)) != null)
     and (has("lastEditedAt") and (.lastEditedAt == null))
-    and ((.body | test("awaiting maintainer decision"; "i")) | not)
+    and ((.body | test("(^|\\n)\\*\\*Awaiting maintainer decision\\*\\*"; "i")) | not)
   ))
 ') || exit 2
 # Advisory-bot identity for thread origin (canonical isGateAdvisoryBotLogin):
@@ -1275,11 +1275,14 @@ MISSING_REGULAR=$(printf '%s\n' "${COMMENTS_JSON}" "${DISPOSITION_JSON}" | jq -s
   # reviewed-commit line, and the About Codex details block), or "" when the
   # comment is not one. Older-HEAD results are not current: they clear like any
   # other comment (canonical), so only a current-HEAD result needs its source.
+  # The :rocket: opening is valid only with the receipt marker (canonical
+  # CODEX_NO_FIND_RESULT_RE). The trailing details block must match the
+  # canonical About Codex block (CODEX_NO_FIND_DETAILS_RE) in full.
   def codex_no_find_reviewed:
     if ((.user.login // "") | ascii_downcase | test("^chatgpt-codex-connector(\\[bot\\])?$"))
-       and (.body | test("^(?:<!-- codex-review-receipt:v1 -->\\s*)?Codex Review: Didn\\x27t find any major issues\\. (?:You\\x27re on a roll\\.|What shall we delve into next\\?|:\\+1:|:rocket:)"; "i"))
-       and (.body | contains("About Codex in GitHub</summary>"))
-    then ((.body | capture("\\*\\*Reviewed commit:\\*\\*\\s*`(?<r>[0-9a-f]{7,64})`"; "i")) // {r: ""}).r
+    then ((.body | capture("^(?:<!-- codex-review-receipt:v1 -->\\s*Codex Review: Didn\\x27t find any major issues\\. :rocket:|Codex Review: Didn\\x27t find any major issues\\. (?:You\\x27re on a roll\\.|What shall we delve into next\\?|:\\+1:))\\s*\\n+\\s*\\*\\*Reviewed commit:\\*\\*\\s*`(?<r>[0-9a-f]{7,64})`\\s*\\n+\\s*(?<d>[\\s\\S]*)$"; "i")) // null) as $m
+         | if ($m != null) and ($m.d | test("^\\s*<details>\\s*<summary>\\x{2139}\\x{FE0F} About Codex in GitHub</summary>\\s*<br/>\\s*\\[Your team has set up Codex to review pull requests in this repo\\]\\(https://chatgpt\\.com/codex/cloud/settings/general\\)\\.?\\s*Reviews are triggered when you\\s*- Open a pull request for review\\s*- Mark a draft as ready\\s*- Comment \\x22@codex review\\x22(?: or \\x22@codex security review\\x22)?\\.\\s*(?:If Codex has suggestions, it will comment; otherwise it will react with \\x{1F44D}\\.\\s*)?(?:Codex can also answer questions or update the PR\\. Try commenting \\x22@codex address that feedback\\x22\\.\\s*)?</details>\\s*$"; "i"))
+           then $m.r else "" end
     else "" end;
   def is_codex_no_find_current:
     (codex_no_find_reviewed) as $r
@@ -1352,13 +1355,13 @@ MISSING_THREADS=$(printf '%s' "${THREADS_JSON}" | jq -rs --argjson agents "${IDD
     (.body | test("^\\*\\*(Accepted|Rejected)[.!:]?\\*\\*"))
     and is_idd_agent
     and (has("lastEditedAt") and (.lastEditedAt == null))
-    and ((.body | test("awaiting maintainer decision"; "i")) | not);
+    and ((.body | test("(^|\\n)\\*\\*Awaiting maintainer decision\\*\\*"; "i")) | not);
   def is_idd_reply:
     (.body | test("<!--\\s*[a-z0-9][a-z0-9_-]*-review-reply\\s*-->"))
     or (is_idd_agent
       and (.body | (test("^\\*\\*(Accepted|Rejected)[.!:]?\\*\\*")
         or startswith("**Rejection confirmed by maintainer**")
-        or test("awaiting maintainer decision"; "i"))));
+        or test("(^|\\n)\\*\\*Awaiting maintainer decision\\*\\*"; "i"))));
   def latest_feedback:
     [.comments.nodes[] | select(is_disp | not) | ([.createdAt, (.lastEditedAt // "")] | max)]
     | if length == 0 then null else max end;

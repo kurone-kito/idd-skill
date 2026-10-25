@@ -2408,3 +2408,74 @@ test('differential: a Codex comment with the phrase but no terminal no-find shap
     0,
   );
 });
+
+test('differential: a Codex result is terminal only with its exact opening and details shape (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  const generic = {
+    id: 7502,
+    login: AGENT_LOGIN,
+    body: '**Accepted** — fixed',
+    at: F2_CASE_TIME_2,
+  };
+  // An unprefixed :rocket: opening is not a terminal result.
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 7501,
+          login: 'chatgpt-codex-connector[bot]',
+          body: CODEX_NO_FIND_BODY.replace(
+            "Codex Review: Didn't find any major issues. You're on a roll.",
+            "Codex Review: Didn't find any major issues. :rocket:",
+          ),
+          at: F2_CASE_TIME_1,
+        },
+        generic,
+      ],
+    },
+    0,
+    0,
+  );
+  // A details block that is not the canonical one is not a terminal result.
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 7503,
+          login: 'chatgpt-codex-connector[bot]',
+          body: CODEX_NO_FIND_BODY.replace('Mark a draft as ready\n', ''),
+          at: F2_CASE_TIME_1,
+        },
+        { ...generic, id: 7504 },
+      ],
+    },
+    0,
+    0,
+  );
+});
+
+test('differential: a settled reply that mentions the pending phrase still settles (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 7601,
+          login: 'coderabbitai[bot]',
+          body: 'nit: stale message',
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 7602,
+          login: AGENT_LOGIN,
+          body: '**Accepted** — removed the stale awaiting maintainer decision message.',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+    },
+    0,
+    0,
+  );
+});
