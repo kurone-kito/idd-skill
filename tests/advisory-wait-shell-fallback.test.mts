@@ -2776,3 +2776,25 @@ test('differential: a pending-decision marker inside code or quoted text does no
     0,
   );
 });
+
+test('differential: an IDD pending-decision reply on a human thread is IDD-originated (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      threads: [
+        f2Thread([
+          f2ThreadComment('human-reviewer', 'please rename', F2_CASE_TIME_1),
+          f2ThreadComment(
+            AGENT_LOGIN,
+            '**Awaiting maintainer decision**\n\nPick one.',
+            F2_CASE_TIME_2,
+          ),
+          f2ThreadComment('human-reviewer', 'still open', F2_CASE_TIME_3),
+        ]),
+      ],
+    },
+    0,
+    1,
+  );
+});

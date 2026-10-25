@@ -1399,9 +1399,9 @@ MISSING_THREADS=$(printf '%s' "${THREADS_JSON}" | jq -rs --argjson agents "${IDD
   def is_idd_reply:
     (.body | test("<!--\\s*" + $prefix + "-review-reply\\s*-->"; "i"))
     or (is_idd_agent
-      and (.body | (test("^\\*\\*(Accepted|Rejected)[.!:]?\\*\\*")
-        or test("^\\s*\\*\\*Rejection confirmed by maintainer\\*\\*\\s+—")
-        or pending_marker)));
+      and (pending_marker
+        or (.body | (test("^\\*\\*(Accepted|Rejected)[.!:]?\\*\\*")
+          or test("^\\s*\\*\\*Rejection confirmed by maintainer\\*\\*\\s+—")))));
   # A rejection confirmation settles a thread only once the thread is resolved
   # (canonical hasFreshDisposition with isRejectionConfirmedDisposition).
   def is_rejection_confirmed:
