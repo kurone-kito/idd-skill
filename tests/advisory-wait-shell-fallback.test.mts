@@ -2629,3 +2629,71 @@ test('differential: leading whitespace before a rejection confirmation still set
   };
   assertF2Parity({ threads: [thread] }, 0, 0);
 });
+
+test('differential: leading whitespace does not turn a current Codex no-find into an ordinary comment (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  // A generic accepted reply cannot clear a current no-find, even with leading whitespace.
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 7801,
+          login: 'chatgpt-codex-connector[bot]',
+          body: `\n${CODEX_NO_FIND_BODY}`,
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 7802,
+          login: AGENT_LOGIN,
+          body: '**Accepted** — fixed',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+    },
+    1,
+    0,
+  );
+  // The helper trims the source-bound reply, so a leading newline still clears it.
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 7803,
+          login: 'chatgpt-codex-connector[bot]',
+          body: `\n${CODEX_NO_FIND_BODY}`,
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 7804,
+          login: AGENT_LOGIN,
+          body: '\n**Accepted** — chatgpt-codex-connector[bot] no-find result at HEAD 1111111; no actionable findings were reported (source: #issuecomment-7803)',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+    },
+    0,
+    0,
+  );
+  // An untrimmed source-bound reply with no leading newline still clears it.
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 7805,
+          login: 'chatgpt-codex-connector[bot]',
+          body: `\n${CODEX_NO_FIND_BODY}`,
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 7806,
+          login: AGENT_LOGIN,
+          body: '**Accepted** — chatgpt-codex-connector[bot] no-find result at HEAD 1111111; no actionable findings were reported (source: #issuecomment-7805)',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+    },
+    0,
+    0,
+  );
+});

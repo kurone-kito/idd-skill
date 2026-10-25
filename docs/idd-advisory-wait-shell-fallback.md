@@ -1281,7 +1281,7 @@ MISSING_REGULAR=$(printf '%s\n' "${COMMENTS_JSON}" "${DISPOSITION_JSON}" | jq -s
   # canonical About Codex block (CODEX_NO_FIND_DETAILS_RE) in full.
   def codex_no_find_reviewed:
     if ((.user.login // "") | ascii_downcase | test("^chatgpt-codex-connector(\\[bot\\])?$"))
-    then ((.body | capture("^(?:<!-- codex-review-receipt:v1 -->\\s*Codex Review: Didn\\x27t find any major issues\\. :rocket:|Codex Review: Didn\\x27t find any major issues\\. (?:You\\x27re on a roll\\.|What shall we delve into next\\?|:\\+1:))\\s*\\n+\\s*\\*\\*Reviewed commit:\\*\\*\\s*`(?<r>[0-9a-f]{7,64})`\\s*\\n+\\s*(?<d>[\\s\\S]*)$"; "i")) // null) as $m
+    then ((.body | sub("^\\s+"; "") | capture("^(?:<!-- codex-review-receipt:v1 -->\\s*Codex Review: Didn\\x27t find any major issues\\. :rocket:|Codex Review: Didn\\x27t find any major issues\\. (?:You\\x27re on a roll\\.|What shall we delve into next\\?|:\\+1:))\\s*\\n+\\s*\\*\\*Reviewed commit:\\*\\*\\s*`(?<r>[0-9a-f]{7,64})`\\s*\\n+\\s*(?<d>[\\s\\S]*)$"; "i")) // null) as $m
          | if ($m != null) and ($m.d | test("^\\s*<details>\\s*<summary>\\x{2139}\\x{FE0F} About Codex in GitHub</summary>\\s*<br/>\\s*\\[Your team has set up Codex to review pull requests in this repo\\]\\(https://chatgpt\\.com/codex/cloud/settings/general\\)\\.?\\s*Reviews are triggered when you\\s*- Open a pull request for review\\s*- Mark a draft as ready\\s*- Comment \\x22@codex review\\x22(?: or \\x22@codex security review\\x22)?\\.\\s*(?:If Codex has suggestions, it will comment; otherwise it will react with \\x{1F44D}\\.\\s*)?(?:Codex can also answer questions or update the PR\\. Try commenting \\x22@codex address that feedback\\x22\\.\\s*)?</details>\\s*$"; "i"))
            then $m.r else "" end
     else "" end;
@@ -1305,9 +1305,9 @@ MISSING_REGULAR=$(printf '%s\n' "${COMMENTS_JSON}" "${DISPOSITION_JSON}" | jq -s
   # pairing pool (canonical CODEX_NO_FIND_DISPOSITION_RE); an ordinary reply that
   # merely mentions the phrase does not.
   def is_codex_disposition_shape:
-    (.body | test("^\\*\\*Accepted[.!:]?\\*\\*\\s+—\\s+[^\\s]+\\s+no-find result at HEAD\\s+[0-9a-f]{7,64};\\s+no actionable findings were reported\\s+\\(source: #issuecomment-[0-9]+\\)(?:\\s*\\n<!--\\s*[a-z0-9][a-z0-9_-]*-review-reply\\s*-->)?\\s*$"; "i"));
+    (.body | sub("^\\s+"; "") | test("^\\*\\*Accepted[.!:]?\\*\\*\\s+—\\s+[^\\s]+\\s+no-find result at HEAD\\s+[0-9a-f]{7,64};\\s+no actionable findings were reported\\s+\\(source: #issuecomment-[0-9]+\\)(?:\\s*\\n<!--\\s*[a-z0-9][a-z0-9_-]*-review-reply\\s*-->)?\\s*$"; "i"));
   def is_codex_source_bound($src):
-    ((.body | capture("^\\*\\*Accepted[.!:]?\\*\\*\\s+—\\s+(?<login>[^\\s]+)\\s+no-find result at HEAD\\s+(?<h>[0-9a-f]{7,64});\\s+no actionable findings were reported\\s+\\(source: #issuecomment-(?<id>[0-9]+)\\)(?:\\s*\\n<!--\\s*[a-z0-9][a-z0-9_-]*-review-reply\\s*-->)?\\s*$"; "i")) // null) as $m
+    ((.body | sub("^\\s+"; "") | capture("^\\*\\*Accepted[.!:]?\\*\\*\\s+—\\s+(?<login>[^\\s]+)\\s+no-find result at HEAD\\s+(?<h>[0-9a-f]{7,64});\\s+no actionable findings were reported\\s+\\(source: #issuecomment-(?<id>[0-9]+)\\)(?:\\s*\\n<!--\\s*[a-z0-9][a-z0-9_-]*-review-reply\\s*-->)?\\s*$"; "i")) // null) as $m
     | ($m != null)
       and ($m.id == ($src.id | tostring))
       and (($m.login | ascii_downcase | sub("\\[bot\\]$"; "")) == (($src.user.login // "") | ascii_downcase | sub("\\[bot\\]$"; "")))
@@ -1323,7 +1323,15 @@ MISSING_REGULAR=$(printf '%s\n' "${COMMENTS_JSON}" "${DISPOSITION_JSON}" | jq -s
        ))
      | map(. + {act: activity})
      | sort_by(.act)) as $out
-  | ($disp | map(. + {act: activity}) | sort_by(.act)) as $ds
+  # Source-bound Codex sentences are matched after trimming (canonical trims the
+  # source-bound reply), so an unedited agent reply of that exact shape joins the
+  # pool even with leading whitespace. Generic replies never see it: the
+  # generic branch below excludes that same trimmed shape.
+  | ([$comments[] | select(
+        ((((.user.login // "") | ascii_downcase) as $u | ($agents | map(ascii_downcase) | index($u)) != null))
+        and (has("lastEditedAt") and (.lastEditedAt == null))
+        and is_codex_disposition_shape)]) as $ctrim
+  | (($disp + $ctrim) | unique_by(.id) | map(. + {act: activity}) | sort_by(.act)) as $ds
   | reduce $out[] as $c (
       {unused: $ds, missing: 0};
       ((.unused | to_entries
