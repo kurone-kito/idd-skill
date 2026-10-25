@@ -3082,13 +3082,13 @@ test('fan-out scratchpad preflight provisions and recovers one session root (#46
   const routingCases = [
     {
       evidence:
-        'harness supplies an existing valid root with no prior record on first entry before claims or dispatch; a complete worker listing and artifact evidence show no prior start, and all session records show no canonical root collision',
+        'harness supplies an existing valid root with no prior record or reservation on first entry before claims or dispatch; a complete worker listing and artifact evidence show no prior start, and all session records show no canonical root collision',
       action:
-        'Verify the root, create and verify the record exclusively, then reuse it',
+        'Verify the root, reserve it, create and verify the record exclusively, then reuse it',
     },
     {
       evidence:
-        'harness context identifies a first entry before claims or dispatch; the complete live worker listing and session artifacts show no prior start, and all session records show no canonical root collision',
+        'There is no supplied root, record, reservation, or fallback directory, and harness context identifies a first entry before claims or dispatch; the complete live worker listing and session artifacts show no prior start, and all session records show no canonical root collision',
       action: 'Allocate the private fallback root and record before Discover',
     },
     {
@@ -3098,8 +3098,8 @@ test('fan-out scratchpad preflight provisions and recovers one session root (#46
     },
     {
       evidence:
-        'root reservation for the canonical candidate path already exists or cannot be acquired, read, or verified',
-      action: 'do not accept or allocate the root',
+        'root reservation exists without an exact valid record for this session, does not match that record, or cannot be read or verified',
+      action: 'Hold and preserve it; do not accept or allocate the root',
     },
     {
       evidence:
@@ -3108,8 +3108,15 @@ test('fan-out scratchpad preflight provisions and recovers one session root (#46
     },
     {
       evidence:
-        'exact record matches this session and repository, its root is valid, and complete live worker and artifact evidence shows no unresolved worker, dispatch, or report state',
-      action: 'Reuse that root and recover its report locations before refill',
+        'exact record matches this session, repository, and canonical root; any existing reservation also matches; a trusted maintainer confirms no live same-session orchestrator and grants one resumer sole control; the full collision scan is clear; root and worker, artifact, and report evidence are valid and settled',
+      action:
+        'Reuse the recorded root read-only, leave any reservation untouched, and recover report locations before refill',
+    },
+    {
+      evidence:
+        'exact record is valid, but the trusted maintainer has not confirmed no live same-session orchestrator and sole-resumer control',
+      action:
+        'Hold and preserve the record and any reservation; resume only after that explicit operator attestation',
     },
     {
       evidence:
@@ -3171,16 +3178,26 @@ test('fan-out scratchpad preflight provisions and recovers one session root (#46
       'live worker and artifact evidence',
       'If the listing is unavailable or incomplete, treat prior-worker state as uncertain',
       'Absence of scratchpad artifacts alone does not prove that no worker start was attempted',
-      'Keep the reservation while enumerating every session record and comparing its canonical `scratchpadRoot`',
-      'Hold if another session claims the root or any record is unreadable or invalid',
+      'Keep a first-allocation reservation while scanning every session record',
+      'An existing reservation without an exact, valid record for this session is a hold',
+      'Remove only the reservation this invocation created, after the record is verified',
+      'trusted maintainer replies in the existing hold thread',
+      'confirming no orchestrator for this session is live',
+      'granting one resumer sole control',
+      'Follow the liveness check in [LWR](idd-resume-detail.md#lwr--local-worktree-recovery) before resuming.',
+      "Verify the record's exact session, repository, and canonical root",
+      'If a reservation remains, require its full tuple to match the record; if none remains, do not recreate it',
+      'Reuse the recorded root read-only; leave any reservation untouched',
+      'Matching files alone never authorize reuse',
+      'elapsed time and process ids do not prove liveness',
+      'no new marker or automatic unlink is used',
+      'Hold and preserve on any mismatch or uncertainty',
       'root-reservations/<root-key>.lock',
-      "canonicalize it with the operating system's filesystem comparison rules",
+      "canonicalize the candidate root with the operating system's filesystem comparison rules",
       'case normalization on case-insensitive filesystems',
       "SHA-256 digest of the canonical path's UTF-8 bytes",
-      'checking worker and artifact evidence, and creating or validating and reading back the exact session record',
-      'Release the reservation by removing only the entry this invocation created, and only after record verification or after rejecting the candidate before dispatch',
+      'checking worker and artifact evidence, and exclusively creating and verifying the session record',
       'never overwrite or remove it automatically',
-      'preventive; no observed runtime incident yet',
       "worker only receives session-scratchpad paths under the root; the Worker brief's named critique scratch directory is the explicit exception",
       '<state-base>/idd-skill/orchestrator-sessions/records/<session-id>.json',
       '<state-base>/idd-skill/orchestrator-sessions/scratchpads/<session-id>/',
@@ -3225,6 +3242,30 @@ test('fan-out scratchpad preflight provisions and recovers one session root (#46
         `${path}: lifecycle must include ${required}`,
       );
     }
+    const allocationRaceStart = lifecycleText.indexOf(
+      'A per-session exclusive record does not serialize the first allocation scan:',
+    );
+    const allocationRaceEnd = lifecycleText.indexOf(
+      '\n\nCreate each parent-owned directory',
+      allocationRaceStart,
+    );
+    assert.ok(
+      allocationRaceStart >= 0 && allocationRaceEnd > allocationRaceStart,
+      `${path}: allocation race rationale not found`,
+    );
+    const allocationRace = normalizeWhitespace(
+      lifecycleText.slice(allocationRaceStart, allocationRaceEnd),
+    );
+    const allocationRaceRationale = [
+      'two sessions could otherwise accept one canonical root (preventive;',
+      'no observed runtime incident yet; identified during E1 review on',
+      '2026-10-25, PR `#4690`, issue `#4685`). Apply collision checks to',
+      'harness-supplied and parent-fallback roots.',
+    ].join(' ');
+    assert.ok(
+      allocationRace.includes(allocationRaceRationale),
+      `${path}: allocation race rationale must cite its observed review finding`,
+    );
     const routingRows = lifecycleText
       .split('\n')
       .filter((line) => line.startsWith('|'))
@@ -3305,7 +3346,7 @@ test('fan-out scratchpad preflight provisions and recovers one session root (#46
     assert.match(text, /worker missing-parent guard/);
     assert.match(
       text,
-      /Verify outcome on live GitHub outside the worktree; set `verifiedAt`, append-time `recordedAt`, roster `workerHandle`, and applicable `reviewRounds`\. Validate and append with the profile-selected `idd-worker-report append --file <path>`, then dispose per table and mark the roster entry `disposed`\./,
+      /Verify outcome on live GitHub outside the worktree; copy the roster's `workerHandle` into the report, then set `verifiedAt`, append-time `recordedAt`, and applicable `reviewRounds`\. Validate and append with the profile-selected `idd-worker-report append --file <path>`, then dispose per table and mark the roster entry `disposed`\./,
     );
     assert.match(
       text,

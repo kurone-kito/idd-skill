@@ -93,9 +93,9 @@ state. On restart, see
 
 ## 5. Report and disposal
 
-Verify outcome on live GitHub outside the worktree; set `verifiedAt`,
-append-time `recordedAt`, roster `workerHandle`, and applicable
-`reviewRounds`. Validate and append with the profile-selected
+Verify outcome on live GitHub outside the worktree; copy the roster's
+`workerHandle` into the report, then set `verifiedAt`, append-time
+`recordedAt`, and applicable `reviewRounds`. Validate and append with the profile-selected
 `idd-worker-report append --file <path>`, then dispose per table and mark the
 roster entry `disposed`.
 Without a start handle or after verification/append failure, append nothing,
