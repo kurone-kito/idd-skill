@@ -1176,8 +1176,22 @@ not change its permissions.
 
 The JSON record has `schemaVersion`, `sessionId`, `repository`,
 `repositoryRoot`, `gitCommonDir`, `scratchpadRoot`, and `allocationSource`
-(`harness` or `parent`). A record is valid only when every identity field
-matches this live session and repository and its root still passes the safety
+(`harness` or `parent`). Its strict version 1 shape requires exactly these
+seven fields and rejects missing or additional fields:
+
+- `schemaVersion`: JSON integer exactly `1`.
+- `sessionId`: non-empty JSON string containing one path-safe component,
+  excluding `.`/`..`, path separators, and control characters.
+- `repository`: non-empty JSON string in `owner/repo` form, equal to the
+  current repository slug.
+- `repositoryRoot`, `gitCommonDir`, and `scratchpadRoot`: non-empty JSON
+  strings containing canonical absolute paths for the current operating
+  system.
+- `allocationSource`: JSON string exactly `harness` or `parent`.
+
+Reject an unsupported schema version, wrong JSON type, malformed value, or
+unknown property before trusting the record. Then require every identity field
+to match this live session and repository and the root to pass the safety
 checks. Existing valid records take precedence over any new allocation. If a
 record and the current harness context name different roots, treat that as a
 contradiction and hold. If the harness supplies a root, verify the canonical
