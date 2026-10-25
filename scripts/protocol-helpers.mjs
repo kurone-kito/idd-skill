@@ -1528,9 +1528,11 @@ export const CODERABBIT_GENERATED_WRAPPER_MARKER =
   '<!-- coderabbit-ai-generated:v1 -->';
 // True when `text` opens with CodeRabbit's summary marker, directly or after
 // the observed generated wrapper and whitespace. Anchored to the leading region
-// only: a marker quoted in prose, a wrapper that follows the summary marker,
-// and a second wrapper all fail to match. Single-sourced so the planner's
-// classifier, the disposition-evidence predicate, and settlement agree (#4701).
+// only: a marker quoted in prose, a second wrapper, and a wrapper that follows
+// other text all fail to match. A wrapper placed after the summary marker is
+// not consulted at all, because the summary marker already leads the body.
+// Single-sourced so the planner's classifier, the disposition-evidence
+// predicate, and settlement agree (#4701).
 export function startsWithCodeRabbitSummaryMarker(text) {
   const trimmed = text.trimStart();
   if (trimmed.startsWith(CODERABBIT_SUMMARY_MARKER)) {

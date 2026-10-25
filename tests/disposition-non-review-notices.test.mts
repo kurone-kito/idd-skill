@@ -3165,6 +3165,16 @@ const CODERABBIT_WRAPPED_WITH_FINDINGS =
   '<!-- review_stack_entry_start -->\n\n' +
   '## Walkthrough\n\nActionable comments posted: 1';
 const CODERABBIT_WRAPPED_NO_ACTIONABLE = `${CODERABBIT_GENERATED_WRAPPER}\n\n${CODERABBIT_COMPLETED_NO_ACTIONABLE}`;
+// Trimmed from the live comment on kurone-kito/dotfiles PR 683 (comment
+// 6356207376): the exact wrapper and marker lines, the stack-entry markers, and
+// the "No actionable" sentence, with the links and tips removed.
+const CODERABBIT_WRAPPED_PR683_TRIMMED =
+  `${CODERABBIT_GENERATED_WRAPPER}\n\n` +
+  '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n' +
+  '<!-- review_stack_entry_start -->\n\n' +
+  '<!-- review_stack_entry_end -->\n' +
+  '<!-- recent_review_start -->\n\n' +
+  'No actionable comments were generated in the recent review. 🎉';
 const CODERABBIT_GATE_OPTIONS = {
   iddAgentLogins: ['kurone-kito'],
   advisoryBotLogins: [CODERABBIT, CODEX],
@@ -3204,6 +3214,8 @@ function codeRabbitVerdict(body: string) {
     planned: plan.planned.map((entry) => entry.body.slice(0, 12)),
     skipped: plan.skipped.map((entry) => entry.reason),
     classification: classifyRegularBotComment(comment, [comment], []) ?? null,
+    summary: isReviewSummaryComment(body),
+    completed: isCodeRabbitCompletedReviewSummary(body),
   };
 }
 
@@ -3256,18 +3268,19 @@ test('#4701: the planned Accepted clears a wrapped summary from the gate, and a 
 });
 
 test('#4701: the observed wrapped no-actionable body is skipped as RESOLVED and clears the gate', () => {
-  const verdict = codeRabbitVerdict(CODERABBIT_WRAPPED_NO_ACTIONABLE);
-  assert.deepEqual(verdict.planned, []);
-  assert.deepEqual(verdict.skipped, [
-    'summary-resolved-no-actionable-comments',
-  ]);
-  assert.equal(verdict.classification?.classifier, 'RESOLVED');
-  assert.equal(
-    codeRabbitGateMissing([
-      notice(1, CODERABBIT, CODERABBIT_WRAPPED_NO_ACTIONABLE),
-    ]),
-    0,
-  );
+  for (const body of [
+    CODERABBIT_WRAPPED_NO_ACTIONABLE,
+    CODERABBIT_WRAPPED_PR683_TRIMMED,
+  ]) {
+    const verdict = codeRabbitVerdict(body);
+    assert.equal(verdict.summary, true);
+    assert.deepEqual(verdict.planned, []);
+    assert.deepEqual(verdict.skipped, [
+      'summary-resolved-no-actionable-comments',
+    ]);
+    assert.equal(verdict.classification?.classifier, 'RESOLVED');
+    assert.equal(codeRabbitGateMissing([notice(1, CODERABBIT, body)]), 0);
+  }
 });
 
 test('#4701: a wrapped body and its unwrapped twin get the same planner and classifier verdict', () => {
@@ -3280,6 +3293,11 @@ test('#4701: a wrapped body and its unwrapped twin get the same planner and clas
     paused: CODERABBIT_PAUSED,
     skipReview: CODERABBIT_SKIP_REVIEW,
     walkthrough: CODERABBIT_COMPLETED_WALKTHROUGH,
+    // The trimmed live body already carries the wrapper; its twin is the rest.
+    observedPr683: CODERABBIT_WRAPPED_PR683_TRIMMED.replace(
+      `${CODERABBIT_GENERATED_WRAPPER}\n\n`,
+      '',
+    ),
   };
   for (const [name, body] of Object.entries(bodies)) {
     assert.deepEqual(
@@ -3330,6 +3348,7 @@ test('#4701: only a leading wrapper of the observed version is recognized', () =
     `${CODERABBIT_GENERATED_WRAPPER}\n\n${CODERABBIT_GENERATED_WRAPPER}\n\n${CODERABBIT_SUMMARY}`,
     `<!-- coderabbit-ai-generated:v2 -->\n\n${CODERABBIT_SUMMARY}`,
     `${CODERABBIT_GENERATED_WRAPPER}\n\nSome ordinary reply.`,
+    `${CODERABBIT_GENERATED_WRAPPER}\n\nSome prose first.\n\n${CODERABBIT_SUMMARY}`,
   ];
   for (const body of rejected) {
     assert.equal(isReviewSummaryComment(body), false);
