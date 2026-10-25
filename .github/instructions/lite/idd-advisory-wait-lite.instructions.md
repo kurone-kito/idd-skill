@@ -42,9 +42,12 @@ but `advisoryWait.primaryBotLogin`.
 
 ## Stop-and-ask conditions
 
-- A required field or `staleRequestRecovery` is missing, the helper
-  exits non-zero, returns invalid JSON, or its evidence disagrees with
-  live state.
+- A required field is missing, the helper exits non-zero, returns invalid
+  JSON, or its evidence disagrees with live state.
+- Off-head (`lastCopilotCommit` differs from `prHeadSha`): `staleRequestRecovery`
+  is missing, or is not an object with exactly `action` (`attempt`,
+  `cap-exhausted`, or `not-applicable`) and a non-empty `reason`. Stop and
+  ask before routing.
 - `outcome` is `CAP_EXHAUSTED` with the `hold` route (`HOLD`'s only
   route — see Helper-first canonical path below).
 - `earliestSameHeadAt` empties during active polling (marker
@@ -82,11 +85,10 @@ Required fields (stop and ask if any are missing): `protocolVersion`,
 `requestMarkerCount`, `requestCap`, `pendingWindowMinutes`,
 `settledWindowMinutes`, `pollIntervalMinutes`, `capExhaustedRoute`,
 `trustedMarkerSummary`. Every field is always present, even
-empty/false/`[]` — validate presence, not truthiness; include
-`staleRequestRecovery`; reject unbound output.
+empty/false/`[]` — validate presence, not truthiness; reject unbound
+output.
 
-The helper computes `outcome` directly from live evidence — never by
-hand from raw timestamps. Allowed values: `SATISFIED`,
+The helper computes `outcome` directly from live evidence. Allowed values: `SATISFIED`,
 `REQUEST_NEEDED`, `RECOVERY_NEEDED`, `CAP_EXHAUSTED`, `WAIT`,
 `DISPOSITION_NEEDED` (#4070). `HOLD` is
 caller-derived, never emitted.
@@ -144,17 +146,14 @@ moved HEAD is the caller's job (E14 in `idd-review-fix-lite`).
 3. If `earliestSameHeadAt` is now empty, stop and ask (see
    Stop-and-ask conditions).
 4. If `outcome` is now `SATISFIED`, exit this wait and continue. The
-   helper folds the window values into `outcome` on every call; never
-   re-derive that by hand.
+   helper folds the window values into `outcome`; never re-derive it.
 5. If `outcome` is `DISPOSITION_NEEDED` (#4070), exit this wait and
    answer the cited items per the E14 table; never keep polling.
-   Otherwise (`outcome` is `WAIT`, or any other non-terminal value),
-   keep polling.
+   Otherwise keep polling.
 
 ## Secondary advisory bot(s) (non-gating, optional)
 
-`advisoryWait.secondaryBotLogin` accepts one login or a list. When
-`secondaryRequestNeeded` is `true`, request **every** login in
+When `secondaryRequestNeeded` is `true`, request **every** login in
 `secondaryRequestLogins` once each (never only the first), using the
 same mechanics above. Post no `advisory-wait:` marker for any — none
 satisfy the primary gate or consume its cap. Skip when

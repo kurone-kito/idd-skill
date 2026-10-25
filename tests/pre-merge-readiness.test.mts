@@ -19753,15 +19753,16 @@ test('#3998: an issue-plus-PR handoff does not depend on the linked-PR lookup', 
 // the stale-request-recovery gate. The clean fixture is claim-bound
 // (claim-123 / github-copilot-cli) and on-head; withCopilotCommit moves the
 // Copilot review to another commit to make the head off-head.
-function withCopilotCommit(input: Record<string, unknown>, commit: string) {
-  const reviews = (input.reviews as Array<Record<string, unknown>>).map(
-    (review) =>
-      (review.author as { login?: string } | undefined)?.login ===
-      'copilot-pull-request-reviewer[bot]'
-        ? { ...review, commitId: commit }
-        : review,
+function withCopilotCommit<T extends object>(input: T, commit: string): T {
+  const reviews = (
+    input as { reviews: Array<Record<string, unknown>> }
+  ).reviews.map((review) =>
+    (review.author as { login?: string } | undefined)?.login ===
+    'copilot-pull-request-reviewer[bot]'
+      ? { ...review, commitId: commit }
+      : review,
   );
-  return { ...input, reviews };
+  return { ...input, reviews } as T;
 }
 
 test('#4717: the readiness builder carries the injected claim-bound recovery object and gates its off-head ready', () => {
@@ -19843,4 +19844,23 @@ test('#4717: without an injected classifier no staleRequestRecovery property is 
   );
   assert.equal('staleRequestRecovery' in summary, false);
   assert.equal(blockerNamed(summary, 'stale-request-recovery'), undefined);
+});
+
+// kurone-kito/idd-skill#4717: both lite advisory-wait copies validate the
+// off-head recovery object (presence, the supported action, and a non-empty
+// reason) in their stop-and-ask list before routing. Whitespace is normalized
+// so the check survives re-wrapping.
+test('#4717: both lite advisory-wait copies validate the off-head recovery object before routing', () => {
+  const rule =
+    '- Off-head (`lastCopilotCommit` differs from `prHeadSha`): `staleRequestRecovery` is missing, or is not an object with exactly `action` (`attempt`, `cap-exhausted`, or `not-applicable`) and a non-empty `reason`. Stop and ask before routing.';
+  for (const doc of [
+    'idd-template/.github/instructions/lite/idd-advisory-wait-lite.instructions.md',
+    '.github/instructions/lite/idd-advisory-wait-lite.instructions.md',
+  ]) {
+    const text = readFileSync(
+      fileURLToPath(new URL(`../${doc}`, import.meta.url)),
+      'utf8',
+    );
+    assert.ok(text.replace(/\s+/g, ' ').includes(rule), doc);
+  }
 });
