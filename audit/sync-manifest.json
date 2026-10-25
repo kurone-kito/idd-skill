@@ -494,7 +494,7 @@
         "bundle": "bundle-core",
         "limitBytes": 29000,
         "issue": 4674,
-        "reason": "Maintainer-approved on 2026-10-25 after E12 step 1: issue #4674 measures 26,285 bytes with the required worker-comment instruction in shared core. This replaces the #3840 approval at 26,500; 29,000 provides 10.33% headroom (90.64% utilization)."
+        "reason": "Maintainer approved in issue #4674 comment 6394597936 on 2026-10-25 after E12 step 1: bundle-core measures 26,512 bytes. The 29,000-byte limit gives 2,488 bytes (9.38%) headroom over measured need and 91.42% utilization, replacing the #3840 approval at 26,500."
       },
       {
         "bundle": "bundle-review-fix-phase",
