@@ -3005,3 +3005,29 @@ test('differential: CRLF line endings do not hide a fenced block close (#4696)',
     0,
   );
 });
+
+test('differential: a backtick fence opener cannot carry backticks in its info string (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  // "```example `literal`" is not a fence opener, so the marker after it stays live.
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 8601,
+          login: 'coderabbitai[bot]',
+          body: 'nit: show the example',
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 8602,
+          login: AGENT_LOGIN,
+          body: '**Accepted** — example:\n```example `literal`\n**Awaiting maintainer decision** live\n```',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+    },
+    1,
+    0,
+  );
+});

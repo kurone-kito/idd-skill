@@ -1246,7 +1246,7 @@ DISPOSITION_JSON=$(printf '%s' "${COMMENTS_JSON}" | jq -c --argjson agents "${RE
   def strip_all($re):
     if test($re) then sub($re; "") | strip_all($re) else . end;
   def pending_marker:
-    (.body | strip_all("(?ms)^ {0,3}(\\x60{3,}).*?(?:^ {0,3}\\1\\x60*[ \\t\\r]*$|\\z)") | strip_all("(?ms)^ {0,3}(~{3,}).*?(?:^ {0,3}\\1~*[ \\t\\r]*$|\\z)") | strip_all("\\x60[^\\x60\\n]*\\x60") | strip_all("(?m)^>.*$")
+    (.body | strip_all("(?ms)^ {0,3}(\\x60{3,})(?=[^\\x60\\n]*$).*?(?:^ {0,3}\\1\\x60*[ \\t\\r]*$|\\z)") | strip_all("(?ms)^ {0,3}(~{3,}).*?(?:^ {0,3}\\1~*[ \\t\\r]*$|\\z)") | strip_all("\\x60[^\\x60\\n]*\\x60") | strip_all("(?m)^>.*$")
       | test("(^|\\n)\\*\\*Awaiting maintainer decision\\*\\*"; "i"));
   map(select(
     (.body | test("^\\*\\*(Accepted|Rejected)[.!:]?\\*\\*"))
@@ -1396,7 +1396,7 @@ MISSING_THREADS=$(printf '%s' "${THREADS_JSON}" | jq -rs --argjson agents "${IDD
   def strip_all($re):
     if test($re) then sub($re; "") | strip_all($re) else . end;
   def pending_marker:
-    (.body | strip_all("(?ms)^ {0,3}(\\x60{3,}).*?(?:^ {0,3}\\1\\x60*[ \\t\\r]*$|\\z)") | strip_all("(?ms)^ {0,3}(~{3,}).*?(?:^ {0,3}\\1~*[ \\t\\r]*$|\\z)") | strip_all("\\x60[^\\x60\\n]*\\x60") | strip_all("(?m)^>.*$")
+    (.body | strip_all("(?ms)^ {0,3}(\\x60{3,})(?=[^\\x60\\n]*$).*?(?:^ {0,3}\\1\\x60*[ \\t\\r]*$|\\z)") | strip_all("(?ms)^ {0,3}(~{3,}).*?(?:^ {0,3}\\1~*[ \\t\\r]*$|\\z)") | strip_all("\\x60[^\\x60\\n]*\\x60") | strip_all("(?m)^>.*$")
       | test("(^|\\n)\\*\\*Awaiting maintainer decision\\*\\*"; "i"));
   def is_disp:
     (.body | test("^\\*\\*(Accepted|Rejected)[.!:]?\\*\\*"))
