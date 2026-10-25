@@ -2310,6 +2310,9 @@ test('a live supervised process group holds the slot after command exit', {
   const groupEnded = join(h.state, 'group.ended');
   const nextReady = join(h.state, 'next.ready');
   const lockPath = join(h.state, LOCK_RELATIVE);
+  const contenderRepo = makeRepo({
+    localExec: { admission: { maxWait: 'PT10S' } },
+  });
   const commandScript =
     `(while [ ! -e "$2" ]; do sleep 0.02; done; touch "$1") & ` +
     `echo "$!" > "$3"; echo "$PPID" > "$4"; touch "$5"`;
@@ -2343,7 +2346,7 @@ test('a live supervised process group holds the slot after command exit', {
         '-e',
         `require('node:fs').writeFileSync(${JSON.stringify(nextReady)}, 'started');`,
       ],
-      makeWorkDir(),
+      contenderRepo,
       h.env,
     );
     assert.equal(flockStatus(lockPath), 1);
@@ -2408,6 +2411,9 @@ test('the wrapper holds the slot after its helper is killed', {
   const ready = join(h.state, 'killed-helper.ready');
   const nextReady = join(h.state, 'killed-helper.next-ready');
   const lockPath = join(h.state, LOCK_RELATIVE);
+  const contenderRepo = makeRepo({
+    localExec: { admission: { maxWait: 'PT10S' } },
+  });
   const commandScript =
     `(while [ ! -e "$2" ]; do sleep 0.02; done; touch "$1") & ` +
     `echo "$PPID" > "$3"; touch "$4"`;
@@ -2442,7 +2448,7 @@ test('the wrapper holds the slot after its helper is killed', {
         '-e',
         `require('node:fs').writeFileSync(${JSON.stringify(nextReady)}, 'started');`,
       ],
-      makeWorkDir(),
+      contenderRepo,
       env,
     );
     assert.equal(flockStatus(lockPath), 1);
@@ -2487,6 +2493,9 @@ test('SIGTERM keeps the slot until the signalled process group exits', {
   const groupEnded = join(h.state, 'signal.ended');
   const nextReady = join(h.state, 'next.ready');
   const lockPath = join(h.state, LOCK_RELATIVE);
+  const contenderRepo = makeRepo({
+    localExec: { admission: { maxWait: 'PT10S' } },
+  });
   const script =
     `trap 'touch "$1"; while [ ! -e "$4" ]; do sleep 0.02; done; ` +
     `touch "$2"; exit 0' TERM; ` +
@@ -2508,7 +2517,7 @@ test('SIGTERM keeps the slot until the signalled process group exits', {
         '-e',
         `require('node:fs').writeFileSync(${JSON.stringify(nextReady)}, 'started');`,
       ],
-      makeWorkDir(),
+      contenderRepo,
       h.env,
     );
     assert.equal(flockStatus(lockPath), 1);
