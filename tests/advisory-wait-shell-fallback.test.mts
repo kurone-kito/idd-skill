@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url';
 import {
   type AdvisoryWaitMarkerSummary,
   summarizeAdvisoryWaitMarkers,
+  summarizeDispositionEvidenceForGate,
 } from '../src/scripts/protocol-helpers.mts';
 
 // Runs the fenced shell blocks of the shell fallback document under bash and
@@ -195,7 +196,9 @@ case "$*" in
         else
           cat "$STUB_PROOF"
         fi ;;
-      *reviewThreads*) answer "$STUB_THREADS" ;;
+      *reviewThreads*)
+        if [ "\${STUB_THREADS_FAIL:-0}" = 1 ]; then exit 1; fi
+        answer "$STUB_THREADS" ;;
       *"comments(first"*) answer "$STUB_EDIT" ;;
       *) echo "stub: unrecognised graphql query" >&2; exit 1 ;;
     esac ;;
@@ -786,13 +789,13 @@ interface F2Result {
   ghCalls: string[];
 }
 
-function runF2(fixtures: Fixtures): F2Result {
+function runF2(fixtures: Fixtures, env: Record<string, string> = {}): F2Result {
   const root = makeSandbox(fixtures);
   const block = inlineGraphqlVariables(
     substitutePlaceholders(fencedBlock('## F2')),
   );
   const script = 'PR_HEAD_SHA=' + HEAD_SHA + '\n' + block;
-  const result = runScript(root, script, {});
+  const result = runScript(root, script, env);
   rmSync(root, { recursive: true, force: true });
   const conjuncts =
     /conjuncts=(\S+)/.exec(result.stdout)?.[1]?.split(',') ?? [];
@@ -1520,4 +1523,611 @@ test('differential: an edited request marker reads the same in shell and runtime
   const summary = runtimeAw2(rows, aw2Edit('2026-10-08T10:05:00Z'));
   assertAw2Parity(run, summary);
   assert.equal(summary.requestMarkerCount, 1);
+});
+
+// ---------------------------------------------------------------------------
+// F2 origin-specific dispositions (#4696): each case runs the shell block and
+// the runtime helper on the same fixture, and the missing counts must agree.
+// ---------------------------------------------------------------------------
+
+const F2_CASE_TIME_1 = '2026-10-08T09:00:00Z';
+const F2_CASE_TIME_2 = '2026-10-08T09:10:00Z';
+const F2_CASE_TIME_3 = '2026-10-08T09:20:00Z';
+const F2_EDITED_AT = '2026-10-08T09:50:00Z';
+
+interface F2RegularRow {
+  id: number;
+  login: string;
+  body: string;
+  at: string;
+  edited?: boolean;
+  updatedAt?: string;
+}
+
+interface F2DifferentialCase {
+  regular?: F2RegularRow[];
+  threads?: unknown[];
+  env?: Record<string, string>;
+  advisoryBotLogins?: string[];
+}
+
+interface F2CanonicalComment {
+  id: string;
+  author: { login: string };
+  body: string;
+  createdAt: string;
+  updatedAt: string;
+  lastEditedAt: string | null;
+}
+
+type F2CanonicalInput = Parameters<
+  typeof summarizeDispositionEvidenceForGate
+>[0];
+
+/** One GraphQL review-thread comment, as the shell and the runtime both read it. */
+function f2ThreadComment(
+  login: string,
+  body: string,
+  createdAt: string,
+  lastEditedAt: string | null = null,
+): Record<string, unknown> {
+  return {
+    author: { login },
+    body,
+    createdAt,
+    commit: null,
+    lastEditedAt,
+    updatedAt: lastEditedAt,
+  };
+}
+
+/** A review thread whose comment list may be truncated. */
+function f2Thread(
+  comments: Array<Record<string, unknown>>,
+  hasNextPage = false,
+): unknown {
+  return {
+    isResolved: false,
+    comments: {
+      pageInfo: { hasNextPage },
+      nodes: comments,
+    },
+  };
+}
+
+/**
+ * Runs the F2 shell block and the runtime helper on one fixture and returns
+ * both results, so each test can assert the shell agrees with the runtime.
+ */
+function runF2Differential(c: F2DifferentialCase): {
+  shell: F2Result;
+  canonical: ReturnType<typeof summarizeDispositionEvidenceForGate>;
+} {
+  const regular = c.regular ?? [];
+  const threads = c.threads ?? [];
+  const shell = runF2(
+    {
+      rest: regular.map((row) => ({
+        id: row.id,
+        user: { login: row.login },
+        body: row.body,
+        created_at: row.at,
+        updated_at: row.updatedAt ?? row.at,
+      })),
+      edit: f2Edit(
+        regular.map((row) => ({
+          databaseId: row.id,
+          lastEditedAt: row.edited ? F2_EDITED_AT : null,
+        })),
+      ),
+      threads: threadsResponse(threads),
+    },
+    c.env ?? {},
+  );
+  const canonicalComments: F2CanonicalComment[] = regular.map((row) => ({
+    id: String(row.id),
+    author: { login: row.login },
+    body: row.body,
+    createdAt: row.at,
+    updatedAt: row.updatedAt ?? row.at,
+    lastEditedAt: row.edited ? F2_EDITED_AT : null,
+  }));
+  const canonical = summarizeDispositionEvidenceForGate(
+    {
+      comments: canonicalComments,
+      threads: threads,
+    } as unknown as F2CanonicalInput,
+    {
+      iddAgentLogins: [AGENT_LOGIN],
+      trustedMarkerLogins: [AGENT_LOGIN],
+      advisoryBotLogins: c.advisoryBotLogins ?? [],
+      prHeadSha: HEAD_SHA,
+      markerPrefix: 'idd-skill',
+    },
+  );
+  return { shell, canonical };
+}
+
+function assertF2Parity(
+  c: F2DifferentialCase,
+  expectedRegular: number,
+  expectedThreads: number,
+): void {
+  const { shell, canonical } = runF2Differential(c);
+  assert.equal(shell.status, 0, shell.stderr);
+  assert.equal(canonical.missingRegularCommentCount, expectedRegular);
+  assert.equal(canonical.missingThreadCount, expectedThreads);
+  assert.equal(shell.missingRegularComments, expectedRegular, shell.stdout);
+  assert.equal(shell.missingThreads, expectedThreads, shell.stdout);
+}
+
+const COPILOT_THREAD_FINDING = f2ThreadComment(
+  `${BOT_LOGIN}[bot]`,
+  'please fix',
+  F2_CASE_TIME_1,
+);
+
+test('differential: an advisory-bot regular comment with no disposition is missing (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 6001,
+          login: 'coderabbitai[bot]',
+          body: 'nit: rename this',
+          at: F2_CASE_TIME_1,
+        },
+      ],
+    },
+    1,
+    0,
+  );
+});
+
+test('differential: a fresh unedited disposition settles one advisory comment and no other (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 6002,
+          login: 'coderabbitai[bot]',
+          body: 'nit: rename this',
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 6003,
+          login: AGENT_LOGIN,
+          body: '**Accepted** — renamed',
+          at: F2_CASE_TIME_2,
+        },
+        {
+          id: 6004,
+          login: 'coderabbitai[bot]',
+          body: 'nit: fix the typo',
+          at: F2_CASE_TIME_3,
+        },
+      ],
+    },
+    1,
+    0,
+  );
+});
+
+test('differential: an edited advisory disposition does not settle its comment (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 6005,
+          login: 'coderabbitai[bot]',
+          body: 'nit: rename this',
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 6006,
+          login: AGENT_LOGIN,
+          body: '**Accepted** — renamed',
+          at: F2_CASE_TIME_2,
+          edited: true,
+        },
+      ],
+    },
+    1,
+    0,
+  );
+});
+
+test('differential: a human-origin thread with only human follow-up is presence-only (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      threads: [
+        f2Thread([
+          f2ThreadComment('human-reviewer', 'please rename', F2_CASE_TIME_1),
+          f2ThreadComment('human-reviewer', 'ping, still open', F2_CASE_TIME_2),
+        ]),
+      ],
+    },
+    0,
+    0,
+  );
+});
+
+test('differential: a bot reply after a human-origin thread keeps the human origin (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      threads: [
+        f2Thread([
+          f2ThreadComment('human-reviewer', 'please rename', F2_CASE_TIME_1),
+          f2ThreadComment('coderabbitai[bot]', 'Looks good', F2_CASE_TIME_2),
+        ]),
+      ],
+    },
+    0,
+    0,
+  );
+});
+
+test('differential: a human thread with a later IDD reply needs a fresh disposition (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      threads: [
+        f2Thread([
+          f2ThreadComment('human-reviewer', 'please rename', F2_CASE_TIME_1),
+          f2ThreadComment(
+            AGENT_LOGIN,
+            '**Accepted** — renamed',
+            F2_CASE_TIME_2,
+          ),
+          f2ThreadComment('human-reviewer', 'still wrong', F2_CASE_TIME_3),
+        ]),
+      ],
+    },
+    0,
+    1,
+  );
+});
+
+test('differential: a bot-origin thread with only a later human reply is missing (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      threads: [
+        f2Thread([
+          f2ThreadComment('coderabbitai[bot]', 'please rename', F2_CASE_TIME_1),
+          f2ThreadComment('human-reviewer', 'agreed', F2_CASE_TIME_2),
+        ]),
+      ],
+    },
+    0,
+    1,
+  );
+});
+
+test('differential: a bot-origin thread with a fresh unedited disposition is settled (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      threads: [
+        f2Thread([
+          f2ThreadComment(`${BOT_LOGIN}[bot]`, 'please rename', F2_CASE_TIME_1),
+          f2ThreadComment(
+            AGENT_LOGIN,
+            '**Accepted** — renamed',
+            F2_CASE_TIME_2,
+          ),
+        ]),
+      ],
+    },
+    0,
+    0,
+  );
+});
+
+test('differential: an edited, untrusted, or stale thread disposition stays missing (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  // Edited: the disposition's edit state is not unedited.
+  assertF2Parity(
+    {
+      threads: [
+        f2Thread([
+          COPILOT_THREAD_FINDING,
+          f2ThreadComment(
+            AGENT_LOGIN,
+            '**Accepted** — renamed',
+            F2_CASE_TIME_2,
+            F2_EDITED_AT,
+          ),
+        ]),
+      ],
+    },
+    0,
+    1,
+  );
+  // Untrusted: a disposition from a login that is not an IDD agent.
+  assertF2Parity(
+    {
+      threads: [
+        f2Thread([
+          COPILOT_THREAD_FINDING,
+          f2ThreadComment(
+            'someone-else',
+            '**Accepted** — renamed',
+            F2_CASE_TIME_2,
+          ),
+        ]),
+      ],
+    },
+    0,
+    1,
+  );
+  // Stale: later feedback postdates the disposition.
+  assertF2Parity(
+    {
+      threads: [
+        f2Thread([
+          COPILOT_THREAD_FINDING,
+          f2ThreadComment(
+            AGENT_LOGIN,
+            '**Accepted** — renamed',
+            F2_CASE_TIME_2,
+          ),
+          f2ThreadComment(`${BOT_LOGIN}[bot]`, 'still broken', F2_CASE_TIME_3),
+        ]),
+      ],
+    },
+    0,
+    1,
+  );
+});
+
+test('differential: a truncated human thread stays missing despite presence-only follow-up (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      threads: [
+        f2Thread(
+          [
+            f2ThreadComment('human-reviewer', 'please rename', F2_CASE_TIME_1),
+            f2ThreadComment('human-reviewer', 'ping', F2_CASE_TIME_2),
+          ],
+          true,
+        ),
+      ],
+    },
+    0,
+    1,
+  );
+});
+
+test('differential: a configured advisory bot from IDD_ADVISORY_BOT_LOGINS is advisory origin (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      threads: [
+        f2Thread([
+          f2ThreadComment(
+            'my-review-bot[bot]',
+            'please rename',
+            F2_CASE_TIME_1,
+          ),
+          f2ThreadComment('human-reviewer', 'agreed', F2_CASE_TIME_2),
+        ]),
+      ],
+      env: { IDD_ADVISORY_BOT_LOGINS: 'other-bot, my-review-bot[bot]' },
+      advisoryBotLogins: ['my-review-bot[bot]'],
+    },
+    0,
+    1,
+  );
+});
+
+test('differential: a failed review-thread read blocks, never a clean zero (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  const run = runF2(
+    { rest: [], edit: f2Edit([]), threads: threadsResponse([]) },
+    { STUB_THREADS_FAIL: '1' },
+  );
+  assert.equal(run.status, 2, run.stderr);
+  assert.match(run.stderr, /review-thread read failed/);
+});
+
+test('differential: a pending-decision reply after a disposition does not settle the thread (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      threads: [
+        f2Thread([
+          COPILOT_THREAD_FINDING,
+          f2ThreadComment(
+            AGENT_LOGIN,
+            '**Accepted** — renamed',
+            F2_CASE_TIME_2,
+          ),
+          f2ThreadComment(
+            AGENT_LOGIN,
+            '**Awaiting maintainer decision**\n\nPick one.',
+            F2_CASE_TIME_3,
+          ),
+        ]),
+      ],
+    },
+    0,
+    1,
+  );
+});
+
+test('differential: feedback edited after a disposition reopens the thread (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      threads: [
+        f2Thread([
+          COPILOT_THREAD_FINDING,
+          f2ThreadComment(
+            AGENT_LOGIN,
+            '**Accepted** — renamed',
+            F2_CASE_TIME_2,
+          ),
+          f2ThreadComment(
+            'human-reviewer',
+            'still broken',
+            F2_CASE_TIME_1,
+            F2_EDITED_AT,
+          ),
+        ]),
+      ],
+    },
+    0,
+    1,
+  );
+});
+
+test('differential: an advisory comment edited after its disposition is missing again (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 6010,
+          login: 'coderabbitai[bot]',
+          body: 'nit: rename this',
+          at: F2_CASE_TIME_1,
+          updatedAt: F2_EDITED_AT,
+        },
+        {
+          id: 6011,
+          login: AGENT_LOGIN,
+          body: '**Accepted** — renamed',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+    },
+    1,
+    0,
+  );
+});
+
+// A terminal Codex no-find result: the canonical recognizer needs the exact
+// "About Codex" details block after the reviewed-commit line (#4696).
+const CODEX_NO_FIND_BODY = [
+  "Codex Review: Didn't find any major issues. You're on a roll.",
+  '',
+  '**Reviewed commit:** `1111111`',
+  '',
+  '<details>',
+  '<summary>ℹ️ About Codex in GitHub</summary>',
+  '<br/>',
+  '[Your team has set up Codex to review pull requests in this repo](https://chatgpt.com/codex/cloud/settings/general)',
+  'Reviews are triggered when you',
+  '- Open a pull request for review',
+  '- Mark a draft as ready',
+  '- Comment "@codex review".',
+  '</details>',
+].join('\n');
+
+test('differential: a Codex no-find result is cleared only by a disposition naming its source (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 6601,
+          login: 'chatgpt-codex-connector[bot]',
+          body: CODEX_NO_FIND_BODY,
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 6602,
+          login: AGENT_LOGIN,
+          body: '**Accepted** — fixed',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+    },
+    1,
+    0,
+  );
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 6603,
+          login: 'chatgpt-codex-connector[bot]',
+          body: CODEX_NO_FIND_BODY,
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 6604,
+          login: AGENT_LOGIN,
+          body: '**Accepted** — chatgpt-codex-connector[bot] no-find result at HEAD 1111111; no actionable findings were reported (source: #issuecomment-6603)',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+    },
+    0,
+    0,
+  );
+});
+
+test('differential: a GitHub Actions waiver marker is not an outstanding comment (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 6701,
+          login: 'github-actions[bot]',
+          body: '<!-- idd-external-check-waiver: run-1 -->\n\nWaiver recorded.',
+          at: F2_CASE_TIME_1,
+        },
+      ],
+    },
+    0,
+    0,
+  );
+});
+
+test('differential: a review-reply stamp from a human counts as an IDD-originated reply (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      threads: [
+        f2Thread([
+          f2ThreadComment('human-reviewer', 'please rename', F2_CASE_TIME_1),
+          f2ThreadComment(
+            'someone-else',
+            'done <!-- idd-skill-review-reply -->',
+            F2_CASE_TIME_2,
+          ),
+          f2ThreadComment('human-reviewer', 'still wrong', F2_CASE_TIME_3),
+        ]),
+      ],
+    },
+    0,
+    1,
+  );
 });
