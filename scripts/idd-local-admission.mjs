@@ -566,7 +566,7 @@ function runLocked(
   let child;
   try {
     child = deps.spawn(
-      'sh',
+      '/bin/sh',
       [
         '-c',
         ACQUIRED_WRAPPER,

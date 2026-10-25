@@ -678,7 +678,7 @@ function runLocked(
   let child: ChildProcess;
   try {
     child = deps.spawn(
-      'sh',
+      '/bin/sh',
       [
         '-c',
         ACQUIRED_WRAPPER,

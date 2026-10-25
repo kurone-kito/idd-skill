@@ -925,6 +925,29 @@ test('shell builtins are not executed as wrapper commands', {
   }
 });
 
+test('locked wrapper ignores caller PATH for its shell', {
+  skip: !REAL_LOCK,
+}, async () => {
+  const h = makeHarness();
+  const untrustedBin = tempDir('untrusted-shell-');
+  const invoked = join(h.state, 'untrusted-shell-invoked');
+  writeFileSync(
+    join(untrustedBin, 'sh'),
+    `#!/bin/sh\ntouch '${invoked}'\nexit 91\n`,
+  );
+  chmodSync(join(untrustedBin, 'sh'), 0o755);
+  const separator = process.platform === 'win32' ? ';' : ':';
+  const env = {
+    ...h.env,
+    PATH: `${untrustedBin}${separator}${h.env.PATH ?? ''}`,
+  };
+
+  const result = await runBin(['--', 'true'], makeWorkDir(), env).done;
+
+  assert.equal(result.status, 0);
+  assert.equal(existsSync(invoked), false);
+});
+
 test('an admitted command sees IDD_LOCAL_ADMISSION=1, and a set variable skips the lock', {
   skip: !REAL_LOCK,
 }, () => {
@@ -2410,6 +2433,7 @@ test('the wrapper holds the slot after its helper is killed', {
     supervisedPgid = Number(readFileSync(pgidFile, 'utf8'));
     await waitFor(() => existsSync(guardianReady));
     first.child.kill('SIGKILL');
+    await waitFor(() => first.child.signalCode === 'SIGKILL', 5000);
 
     next = runBin(
       [
