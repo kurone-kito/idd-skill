@@ -302,25 +302,18 @@ jobs:
         id: manager
         if: steps.profile.outputs.profile == 'package-manager'
         run: |
-          # Same precedence as helper-runtime-manifest.mts's own
-          # collectHelperRuntimeEvidence for the "declared field" and
-          # "exactly one lockfile" cases: an explicit package.json
-          # "packageManager" field wins, then lockfile presence when
-          # exactly one supported lockfile exists. When more than one
-          # supported lockfile coexists with no declared field, this
-          # mirrors collectHelperRuntimeEvidence's own "do not guess an
-          # install path" stance (ambiguousPackageManager) instead of
-          # silently picking by a fixed pnpm/npm/yarn priority order,
-          # which could select a manager whose lockfile lacks the IDD
-          # helper dependency and fail with a confusing error. When
-          # there is no evidence at all (no declared field, no
-          # lockfile), this is a workflow-specific fallback to npm, NOT
-          # a mirror of collectHelperRuntimeEvidence (which leaves the
-          # manager unset in that case, cascading to instructions-only
-          # via recommendHelperRuntimeProfile) -- npm ships with every
-          # setup-node Node.js install, so defaulting to it here is
-          # safe even though the canonical onboarding recommender is
-          # more conservative about "no evidence" (idd-skill#2392).
+          # Workflow-specific selector: a supported package.json
+          # packageManager field wins; otherwise detect the manager from
+          # this workflow's frozen-install lockfiles. package-lock.json
+          # and npm-shrinkwrap.json are both npm evidence here. This
+          # workflow-only support does not change helper-runtime profile
+          # recommendations; that detector is separate.
+          # Different manager lockfiles without a declaration remain
+          # ambiguous. Unsupported
+          # declarations also fail closed. No evidence
+          # yields "unusable"; issue #4699 showed npm availability does
+          # not make npm ci viable without a lockfile. The install step
+          # rejects missing evidence before invoking a package manager.
           MANAGER=$(node -e "
             const fs = require('node:fs');
             let declared = '';
@@ -332,16 +325,22 @@ jobs:
             }
             if (['npm', 'pnpm', 'yarn'].includes(declared)) {
               console.log(declared);
+            } else if (declared) {
+              console.log('unsupported');
             } else {
-              const lockfiles = [
+              const managers = [
                 ['pnpm-lock.yaml', 'pnpm'],
                 ['package-lock.json', 'npm'],
+                ['npm-shrinkwrap.json', 'npm'],
                 ['yarn.lock', 'yarn'],
-              ].filter(([file]) => fs.existsSync(file));
-              if (lockfiles.length === 1) {
-                console.log(lockfiles[0][1]);
-              } else if (lockfiles.length === 0) {
-                console.log('npm');
+              ]
+                .filter(([file]) => fs.existsSync(file))
+                .map(([, manager]) => manager);
+              const uniqueManagers = [...new Set(managers)];
+              if (uniqueManagers.length === 1) {
+                console.log(uniqueManagers[0]);
+              } else if (uniqueManagers.length === 0) {
+                console.log('unusable');
               } else {
                 console.log('ambiguous');
               }
@@ -363,15 +362,43 @@ jobs:
         run: |
           case "$MANAGER" in
             pnpm)
+              if [ ! -f pnpm-lock.yaml ]; then
+                echo "::error::package-manager profile selected pnpm, but pnpm-lock.yaml is missing; add matching frozen-install evidence before using this profile."
+                exit 1
+              fi
               corepack enable
               pnpm install --frozen-lockfile
               ;;
             yarn)
+              if [ ! -f yarn.lock ]; then
+                echo "::error::package-manager profile selected yarn, but yarn.lock is missing; add matching frozen-install evidence before using this profile."
+                exit 1
+              fi
               corepack enable
               yarn install --frozen-lockfile
               ;;
-            *)
+            npm)
+              if [ ! -f package-lock.json ] && [ ! -f npm-shrinkwrap.json ]; then
+                echo "::error::package-manager profile selected npm, but neither package-lock.json nor npm-shrinkwrap.json exists; npm ci requires one of these frozen-install lockfiles."
+                exit 1
+              fi
               npm ci
+              ;;
+            unusable)
+              echo "::error::No supported package-manager lockfile or supported packageManager declaration is available; refusing to guess an install strategy."
+              exit 1
+              ;;
+            ambiguous)
+              echo "::error::Multiple package-manager types are evidenced by lockfiles without a declared packageManager field; refusing to guess an install strategy."
+              exit 1
+              ;;
+            unsupported)
+              echo "::error::package.json declares a packageManager value unsupported by this workflow; use npm, pnpm, or yarn instead of silently switching to another lockfile."
+              exit 1
+              ;;
+            *)
+              echo "::error::The package-manager selector returned an unsupported value; refusing to change install strategy."
+              exit 1
               ;;
           esac
       - name: Run advisory-convergence check
@@ -625,6 +652,7 @@ jobs:
               ALLOWLIST+=(
                 "package.json"
                 "package-lock.json"
+                "npm-shrinkwrap.json"
                 "pnpm-lock.yaml"
                 "yarn.lock"
               )
@@ -750,16 +778,22 @@ jobs:
             }
             if (['npm', 'pnpm', 'yarn'].includes(declared)) {
               console.log(declared);
+            } else if (declared) {
+              console.log('unsupported');
             } else {
-              const lockfiles = [
+              const managers = [
                 ['pnpm-lock.yaml', 'pnpm'],
                 ['package-lock.json', 'npm'],
+                ['npm-shrinkwrap.json', 'npm'],
                 ['yarn.lock', 'yarn'],
-              ].filter(([file]) => fs.existsSync(file));
-              if (lockfiles.length === 1) {
-                console.log(lockfiles[0][1]);
-              } else if (lockfiles.length === 0) {
-                console.log('npm');
+              ]
+                .filter(([file]) => fs.existsSync(file))
+                .map(([, manager]) => manager);
+              const uniqueManagers = [...new Set(managers)];
+              if (uniqueManagers.length === 1) {
+                console.log(uniqueManagers[0]);
+              } else if (uniqueManagers.length === 0) {
+                console.log('unusable');
               } else {
                 console.log('ambiguous');
               }
@@ -781,15 +815,43 @@ jobs:
         run: |
           case "$MANAGER" in
             pnpm)
+              if [ ! -f pnpm-lock.yaml ]; then
+                echo "::error::package-manager profile selected pnpm, but pnpm-lock.yaml is missing; add matching frozen-install evidence before using this profile."
+                exit 1
+              fi
               corepack enable
               pnpm install --frozen-lockfile
               ;;
             yarn)
+              if [ ! -f yarn.lock ]; then
+                echo "::error::package-manager profile selected yarn, but yarn.lock is missing; add matching frozen-install evidence before using this profile."
+                exit 1
+              fi
               corepack enable
               yarn install --frozen-lockfile
               ;;
-            *)
+            npm)
+              if [ ! -f package-lock.json ] && [ ! -f npm-shrinkwrap.json ]; then
+                echo "::error::package-manager profile selected npm, but neither package-lock.json nor npm-shrinkwrap.json exists; npm ci requires one of these frozen-install lockfiles."
+                exit 1
+              fi
               npm ci
+              ;;
+            unusable)
+              echo "::error::No supported package-manager lockfile or supported packageManager declaration is available; refusing to guess an install strategy."
+              exit 1
+              ;;
+            ambiguous)
+              echo "::error::Multiple package-manager types are evidenced by lockfiles without a declared packageManager field; refusing to guess an install strategy."
+              exit 1
+              ;;
+            unsupported)
+              echo "::error::package.json declares a packageManager value unsupported by this workflow; use npm, pnpm, or yarn instead of silently switching to another lockfile."
+              exit 1
+              ;;
+            *)
+              echo "::error::The package-manager selector returned an unsupported value; refusing to change install strategy."
+              exit 1
               ;;
           esac
       - name: Post the self-referential-bootstrap-auto waiver
