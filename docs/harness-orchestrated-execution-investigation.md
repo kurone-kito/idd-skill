@@ -250,10 +250,11 @@ model occasionally misreading a rule it could in principle re-read.
 | `emit-marker` | **No** — pure/offline | "Emit-only: performs no network write"; renders body text only, does not post |
 | `ci-wait-policy` | **No** — pure/offline (policy-resolution mode) | reads only `.github/idd/config.json`; contrast with `ci-wait-state` below, which needs a live PR |
 | `post-idd-marker` (plain dry-run: no `--apply`, no `--from-pr`) | **No** — pure/offline, except the `authoring-owner` checked modes (see the `authoring-owner` rows below) and `--type f4-head-proof` (see its row below) | per `src/scripts/post-idd-marker.mts`, the plain dry-run path exits after rendering — it never reaches the `gh repo view` owner/repo resolution at all, regardless of whether `--owner`/`--repo` are passed; prints a JSON envelope whose `body` field holds the rendered marker (not the raw body text directly) — a harness must parse that field. `--type authoring-owner`/`authoring-publication-intent` dry-runs keep the no-`gh repo view` part of this guarantee: the `--marker-target`/`--journal` destination-equality check (#2931) only resolves `--owner`/`--repo` via `gh repo view` when `--apply` is set or those flags are already explicit, never for a plain omitted-flag dry-run preview |
-| `post-idd-marker --type authoring-owner` dry-run (no `--apply`) with a non-`none` `--body-sha256` (or omitted, triggering auto-derive) | **Yes** | fetches `--marker-target`'s live body via the provider adapter to derive/verify `body-sha256` (#2931) — not offline even without `--apply`, unlike every other dry-run-eligible invocation below `--from-pr` |
-| `post-idd-marker --type authoring-owner` dry-run (no `--apply`) of a heartbeat, release, release-guard, release-complete or resume | **Yes** | reads `--marker-target`'s comment log over GraphQL for the identity check (#3899), so the dry run is not offline; acquire and bootstrap dry-runs make no read |
+| `post-idd-marker --type authoring-owner` dry-run (no `--apply`) with a non-`none` `--body-sha256` (or omitted, triggering auto-derive) | **Yes** | fetches `--marker-target`'s live body via the provider adapter to derive/verify `body-sha256` (#2931) — not offline even without `--apply`; acquire/bootstrap also read owner history (see the next row) |
+| `post-idd-marker --type authoring-owner` dry-run (no `--apply`) of a heartbeat, release, release-guard, release-complete or resume | **Yes** | reads `--marker-target`'s comment log over GraphQL for the identity check (#3899), so the dry run is not offline |
+| `post-idd-marker --type authoring-owner --mode acquire` or `--mode bootstrap` dry-run (no `--apply`) | **Yes** | reads the declared `--anchor`'s paginated trusted owner-marker history before dry-run output. Child targets also read their current and former membership history; incomplete history or a state that cannot be replayed conclusively refuses both dry-run and `--apply` before output or POST. Plain `post-idd-marker` dry-runs remain offline (see the row above) |
 | `post-idd-marker --type f4-head-proof` dry-run (no `--apply`) | **Yes** | reads the live state it would decide on, then posts nothing (#4368): the stored activation nonce and the claim lock of `--worktree`, `resume-claim-routing --assert`, `git worktree list`, the merged pull request and its merge commit over REST, the local branch ref, and the comments of the claimed issue and of its pull request. It reads owner/repo from the current checkout's origin remote, locally and with no `gh` call, and checks that the origin names them (`--owner` and `--repo` are refused). The dry-run envelope names the verdict (`post`, `proceed`, `stop`, or `hold`), so it is the one `post-idd-marker` dry run whose answer depends on live state |
-| `post-idd-marker --from-pr` (watermark derivation, even without `--apply`) | **Yes** | resolves owner/repo via `gh repo view` and runs a live `review-activity-snapshot` child to derive the watermark fields — this is the one dry-run-eligible invocation (besides `authoring-owner`'s body-sha256 fetch above) that is not offline |
+| `post-idd-marker --from-pr` (watermark derivation, even without `--apply`) | **Yes** | resolves owner/repo via `gh repo view` and runs a live `review-activity-snapshot` child to derive the watermark fields — also not offline; the `authoring-owner` rows above describe their separate live reads |
 | `post-idd-marker` (`--apply`) | **Yes** — writes | resolves owner/repo via `gh repo view` (unless `--owner`/`--repo` are passed; `--type f4-head-proof` has its own row above) and POSTs to the issue/PR comments API; requires live claim-revalidation immediately before the call |
 | `claim-approval-gate` | **Yes** | reads live issue state and timeline events |
 | `resume-claim-routing --fresh-claim-gate` | **Yes** | reads live issue comment stream |
@@ -269,10 +270,10 @@ model occasionally misreading a rule it could in principle re-read.
 The implication: a harness can rehearse its own control flow, marker
 rendering, and branch-naming **fully offline** with `branch-name`,
 `emit-marker`, `ci-wait-policy`, and a **plain** `post-idd-marker` dry-run
-(no `--from-pr`, not an `authoring-owner` heartbeat, release,
-release-guard, release-complete or resume, which reads the comment log, and
-not `--type f4-head-proof`, which reads the live state it decides on) —
-enough to smoke-test that the runner constructs
+(no `--from-pr`, not an `authoring-owner` dry-run, which fetches its live
+body digest or reads owner history as required by its mode, and not
+`--type f4-head-proof`, which reads the live state it decides on) — enough
+to smoke-test that the runner constructs
 correct marker bodies and branch names before ever touching a
 credential — but there is no fully offline dry run of an actual
 single-issue pass. Every gate that decides whether to proceed (claim state,
