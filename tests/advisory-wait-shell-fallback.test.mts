@@ -2546,3 +2546,46 @@ test('differential: a review-reply stamp with another prefix is not an IDD reply
     0,
   );
 });
+
+test('differential: an upper-case review-reply stamp is an IDD-originated reply (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      threads: [
+        f2Thread([
+          f2ThreadComment('human-reviewer', 'please rename', F2_CASE_TIME_1),
+          f2ThreadComment(
+            'someone-else',
+            'done <!-- IDD-SKILL-review-reply -->',
+            F2_CASE_TIME_2,
+          ),
+          f2ThreadComment('human-reviewer', 'still wrong', F2_CASE_TIME_3),
+        ]),
+      ],
+    },
+    0,
+    1,
+  );
+});
+
+test('differential: a stamp with a longer suffix is not an IDD-originated reply (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      threads: [
+        f2Thread([
+          f2ThreadComment('human-reviewer', 'please rename', F2_CASE_TIME_1),
+          f2ThreadComment(
+            'someone-else',
+            'done <!-- idd-skill-review-reply-extra -->',
+            F2_CASE_TIME_2,
+          ),
+        ]),
+      ],
+    },
+    0,
+    0,
+  );
+});

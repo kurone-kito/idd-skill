@@ -1350,6 +1350,10 @@ MISSING_REGULAR=$(printf '%s\n' "${COMMENTS_JSON}" "${DISPOSITION_JSON}" | jq -s
 # confirmation, or pending decision. Feedback activity is the later of
 # createdAt and lastEditedAt, so an edit after a disposition reopens the thread.
 MARKER_PREFIX="${IDD_MARKER_PREFIX:-idd-skill}"
+# The prefix is spliced into a jq regex, so only marker-safe characters pass.
+case "${MARKER_PREFIX}" in
+  *[!A-Za-z0-9_-]*|"") echo "IDD_MARKER_PREFIX must be letters, digits, '_' or '-'; not converged" >&2; exit 2 ;;
+esac
 MISSING_THREADS=$(printf '%s' "${THREADS_JSON}" | jq -rs --argjson agents "${IDD_AGENT_LOGIN_JSON}" --argjson advisory "${ADVISORY_TOKEN_JSON}" --arg prefix "${MARKER_PREFIX}" '
   def author_login: (.author.login // .user.login // "");
   def advisory_token:
@@ -1365,7 +1369,7 @@ MISSING_THREADS=$(printf '%s' "${THREADS_JSON}" | jq -rs --argjson agents "${IDD
     and (has("lastEditedAt") and (.lastEditedAt == null))
     and ((.body | test("(^|\\n)\\*\\*Awaiting maintainer decision\\*\\*"; "i")) | not);
   def is_idd_reply:
-    (.body | test("<!--\\s*" + $prefix + "-review-reply\\s*-->"))
+    (.body | test("<!--\\s*" + $prefix + "-review-reply\\s*-->"; "i"))
     or (is_idd_agent
       and (.body | (test("^\\*\\*(Accepted|Rejected)[.!:]?\\*\\*")
         or startswith("**Rejection confirmed by maintainer**")
