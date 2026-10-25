@@ -2980,3 +2980,28 @@ test('differential: a tilde fence masks a pending marker, and a backtick line in
     0,
   );
 });
+
+test('differential: CRLF line endings do not hide a fenced block close (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 8501,
+          login: 'coderabbitai[bot]',
+          body: 'nit: show the example',
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 8502,
+          login: AGENT_LOGIN,
+          body: '**Accepted** — example:\r\n```\r\n**Awaiting maintainer decision** inside\r\n```\r\n**Awaiting maintainer decision** live',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+    },
+    1,
+    0,
+  );
+});
