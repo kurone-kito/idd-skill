@@ -1273,7 +1273,7 @@ MISSING_REGULAR=$(printf '%s\n' "${COMMENTS_JSON}" "${DISPOSITION_JSON}" | jq -s
   def activity: [.created_at, (.updated_at // "")] | max;
   def is_codex_no_find:
     (((.user.login // "") | ascii_downcase) | test("^chatgpt-codex-connector(\\[bot\\])?$"))
-    and (.body | test("Codex Review: Didn.t find any major issues"));
+    and (.body | test("Codex Review: Didn.t find any major issues"; "i"));
   def is_actions_operational:
     (((.user.login // "") | ascii_downcase) == "github-actions[bot]")
     and ((.body | sub("^\\s+"; "")) as $b
@@ -1283,13 +1283,18 @@ MISSING_REGULAR=$(printf '%s\n' "${COMMENTS_JSON}" "${DISPOSITION_JSON}" | jq -s
   # sticky matcher): an accepted disposition that names the source
   # id and login, and whose abbreviated HEAD prefixes the current PR HEAD.
   # (No apostrophes in jq comments: the program sits inside a single-quoted shell string.)
+  # The disposition must match the canonical sentence exactly, the source id and
+  # login must belong to this comment, the disposition HEAD must prefix the
+  # current HEAD, and this comment must itself be a current-HEAD no-find (its
+  # reviewed commit prefixes the current HEAD).
   def is_codex_source_bound($src):
-    (.body | test("^\\*\\*Accepted[.!:]?\\*\\*"))
-    and (.body | contains("(source: #issuecomment-" + ($src.id | tostring) + ")"))
-    and (.body | contains(($src.user.login // "") + " no-find result at HEAD "))
-    and (((.body | capture("no-find result at HEAD (?<h>[0-9a-f]{7,64});")) // {h: ""})
-      as $m
-      | ($m.h != "") and ($sha | ascii_downcase | startswith($m.h | ascii_downcase)));
+    ((.body | capture("^\\*\\*Accepted[.!:]?\\*\\*\\s+—\\s+(?<login>[^\\s]+)\\s+no-find result at HEAD\\s+(?<h>[0-9a-f]{7,64});\\s+no actionable findings were reported\\s+\\(source: #issuecomment-(?<id>[0-9]+)\\)(?:\\s*\\n<!--\\s*[a-z0-9][a-z0-9_-]*-review-reply\\s*-->)?\\s*$"; "i")) // null) as $m
+    | ($m != null)
+      and ($m.id == ($src.id | tostring))
+      and (($m.login | ascii_downcase | sub("\\[bot\\]$"; "")) == (($src.user.login // "") | ascii_downcase | sub("\\[bot\\]$"; "")))
+      and ($sha | ascii_downcase | startswith($m.h | ascii_downcase))
+      and ((((($src.body | capture("\\*\\*Reviewed commit:\\*\\*\\s*`(?<r>[0-9a-f]{7,64})`"; "i")) // {r: ""}) as $sr
+        | ($sr.r != "") and ($sha | ascii_downcase | startswith($sr.r | ascii_downcase)))));
   .[0] as $comments | .[1] as $disp
   | ($comments
      | map(select(
@@ -1306,7 +1311,7 @@ MISSING_REGULAR=$(printf '%s\n' "${COMMENTS_JSON}" "${DISPOSITION_JSON}" | jq -s
         | map(select(.value.act > $c.act
             and (if ($c | is_codex_no_find)
                  then (.value | is_codex_source_bound($c))
-                 else (.value.body | test("no-find result at HEAD") | not)
+                 else (.value.body | test("no-find result at HEAD"; "i") | not)
                  end)))
         | first) as $hit
       | if $hit == null then .missing += 1

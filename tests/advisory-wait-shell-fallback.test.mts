@@ -2286,3 +2286,58 @@ test('F2 stops when the edit-state read fails (#4696)', {
   assert.equal(run.status, 2, run.stderr);
   assert.match(run.stderr, /edit-state read failed/);
 });
+
+test('differential: a source-bound Codex clearance must match the canonical sentence exactly (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  const dispositions = [
+    // Trailing text after the sentence: the canonical anchored regex rejects it.
+    '**Accepted** — chatgpt-codex-connector[bot] no-find result at HEAD 1111111; no actionable findings were reported (source: #issuecomment-7101) extra text',
+    // No em dash.
+    '**Accepted** chatgpt-codex-connector[bot] no-find result at HEAD 1111111; no actionable findings were reported (source: #issuecomment-7101)',
+    // A login that only ends in the bot name.
+    '**Accepted** — not-chatgpt-codex-connector[bot] no-find result at HEAD 1111111; no actionable findings were reported (source: #issuecomment-7101)',
+  ];
+  for (const body of dispositions) {
+    assertF2Parity(
+      {
+        regular: [
+          {
+            id: 7101,
+            login: 'chatgpt-codex-connector[bot]',
+            body: CODEX_NO_FIND_BODY,
+            at: F2_CASE_TIME_1,
+          },
+          { id: 7102, login: AGENT_LOGIN, body, at: F2_CASE_TIME_2 },
+        ],
+      },
+      1,
+      0,
+    );
+  }
+});
+
+test('differential: a Codex no-find whose reviewed commit is not the current HEAD is not clearable (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 7201,
+          login: 'chatgpt-codex-connector[bot]',
+          body: CODEX_NO_FIND_BODY.replace('1111111', '0000000'),
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 7202,
+          login: AGENT_LOGIN,
+          body: '**Accepted** — chatgpt-codex-connector[bot] no-find result at HEAD 1111111; no actionable findings were reported (source: #issuecomment-7201)',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+    },
+    1,
+    0,
+  );
+});
