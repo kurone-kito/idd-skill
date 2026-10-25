@@ -126,21 +126,21 @@ function manualBlockAfter(heading: string, marker: string): string {
   const lines = readFileSync(DOC, 'utf8').split('\n');
   const start = lines.indexOf(heading);
   if (start < 0) {
-    throw new Error('heading not found: ' + heading);
+    throw new Error(`heading not found: ${heading}`);
   }
   const markerIndex = lines.findIndex(
     (line, index) => index > start && line.includes(marker),
   );
   const fence = String.fromCharCode(96).repeat(3);
-  const previousOpen = lines.lastIndexOf(fence + 'sh', markerIndex);
+  const previousOpen = lines.lastIndexOf(`${fence}sh`, markerIndex);
   const previousClose = lines.lastIndexOf(fence, markerIndex);
   const markerIsInsideBlock = previousOpen > previousClose;
   const open = markerIsInsideBlock
     ? previousOpen
-    : lines.indexOf(fence + 'sh', markerIndex);
+    : lines.indexOf(`${fence}sh`, markerIndex);
   const close = lines.indexOf(fence, open + 1);
   if (markerIndex < 0 || open < 0 || close < 0) {
-    throw new Error('no manual sh block after ' + marker);
+    throw new Error(`no manual sh block after ${marker}`);
   }
   return lines
     .slice(markerIsInsideBlock ? markerIndex + 1 : open + 1, close)
@@ -303,7 +303,7 @@ function makeSandbox(fixtures: Fixtures): string {
   write('repo-url.json', {
     owner: { login: OWNER },
     name: REPO,
-    url: fixtures.repoUrl ?? 'https://github.com/' + OWNER + '/' + REPO,
+    url: fixtures.repoUrl ?? `https://github.com/${OWNER}/${REPO}`,
   });
   write('auth-status-exit.txt', String(fixtures.authStatusExit ?? 0));
   const proof =
@@ -815,7 +815,7 @@ function runF2(fixtures: Fixtures, env: Record<string, string> = {}): F2Result {
   const block = inlineGraphqlVariables(
     substitutePlaceholders(fencedBlock('## F2')),
   );
-  const script = 'PR_HEAD_SHA=' + HEAD_SHA + '\n' + block;
+  const script = `PR_HEAD_SHA=${HEAD_SHA}\n${block}`;
   const result = runScript(root, script, env);
   rmSync(root, { recursive: true, force: true });
   const conjuncts =
@@ -859,7 +859,7 @@ test('F2 rejects empty, malformed, and unexpected review-list data (#4638)', {
   }
 
   const botReview = {
-    user: { login: BOT_LOGIN + '[bot]' },
+    user: { login: `${BOT_LOGIN}[bot]` },
     submitted_at: '2026-10-08T09:00:00Z',
     commit_id: HEAD_SHA,
     id: 901,
@@ -890,7 +890,7 @@ test('F2 selects the latest review and counts comments across valid pages (#4638
     JSON.stringify([
       { user: null },
       {
-        user: { login: BOT_LOGIN + '[bot]' },
+        user: { login: `${BOT_LOGIN}[bot]` },
         submitted_at: '2026-10-08T09:00:00Z',
         commit_id: '0'.repeat(40),
         id: 900,
@@ -899,14 +899,13 @@ test('F2 selects the latest review and counts comments across valid pages (#4638
     '\n' +
     JSON.stringify([
       {
-        user: { login: BOT_LOGIN + '[bot]' },
+        user: { login: `${BOT_LOGIN}[bot]` },
         submitted_at: '2026-10-08T09:00:00.123Z',
         commit_id: HEAD_SHA,
         id: 901,
       },
     ]);
-  const reviewComments =
-    '[]\n' + JSON.stringify([{ id: 1, path: 'src/one.mts', body: 'finding' }]);
+  const reviewComments = `[]\n${JSON.stringify([{ id: 1, path: 'src/one.mts', body: 'finding' }])}`;
   const run = runF2({ reviews, reviewComments });
   assert.equal(run.status, 0, run.stderr);
   assert.deepEqual(
@@ -916,7 +915,7 @@ test('F2 selects the latest review and counts comments across valid pages (#4638
   );
   assert.ok(
     run.ghCalls.some((call) =>
-      call.includes('/pulls/' + PR_NUMBER + '/reviews/901/comments'),
+      call.includes(`/pulls/${PR_NUMBER}/reviews/901/comments`),
     ),
   );
 });
@@ -983,11 +982,11 @@ for (const example of [
 ]) {
   for (const route of [
     {
-      url: 'https://github.com/' + OWNER + '/' + REPO,
+      url: `https://github.com/${OWNER}/${REPO}`,
       authHost: 'github.com',
     },
     {
-      url: 'https://ghe.example.test/' + OWNER + '/' + REPO,
+      url: `https://ghe.example.test/${OWNER}/${REPO}`,
       authHost: 'ghe.example.test',
     },
   ]) {
@@ -1005,15 +1004,15 @@ for (const example of [
       assert.equal(result.status, 0, result.stderr);
       assert.ok(
         result.ghCalls.some((call) =>
-          call.includes('auth status --active --hostname ' + route.authHost),
+          call.includes(`auth status --active --hostname ${route.authHost}`),
         ),
       );
-      const apiEndpoint = 'repos/' + OWNER + '/' + REPO;
+      const apiEndpoint = `repos/${OWNER}/${REPO}`;
       assert.ok(
         result.ghCalls.some(
           (call) =>
-            call.includes('api --hostname ' + route.authHost) &&
-            call.includes(apiEndpoint + '/issues/' + PR_NUMBER + '/comments') &&
+            call.includes(`api --hostname ${route.authHost}`) &&
+            call.includes(`${apiEndpoint}/issues/${PR_NUMBER}/comments`) &&
             call.includes('--method POST') &&
             call.includes('--silent'),
         ),
@@ -1024,13 +1023,13 @@ for (const example of [
     });
   }
 
-  test(example.heading + ' fails closed for a ported GHES URL (#4638)', {
+  test(`${example.heading} fails closed for a ported GHES URL (#4638)`, {
     skip: SKIP_REASON ?? false,
   }, () => {
     const result = runManualRecoveryPost(
       example.heading,
       example.marker,
-      'https://ghe.example.test:8443/' + OWNER + '/' + REPO,
+      `https://ghe.example.test:8443/${OWNER}/${REPO}`,
     );
     assert.equal(result.status, 2, result.stdout + result.stderr);
     assert.match(
@@ -1109,13 +1108,13 @@ test('manual recovery POST stops before authentication for invalid or mismatched
   skip: SKIP_REASON ?? false,
 }, () => {
   for (const repoUrl of [
-    'http://ghe.example.test/' + OWNER + '/' + REPO,
-    'https://ghe.example.test:65536/' + OWNER + '/' + REPO,
+    `http://ghe.example.test/${OWNER}/${REPO}`,
+    `https://ghe.example.test:65536/${OWNER}/${REPO}`,
     'https://ghe.example.test:8443/other/repo',
-    'https://ghe.example.test:8443.evil.test/' + OWNER + '/' + REPO,
+    `https://ghe.example.test:8443.evil.test/${OWNER}/${REPO}`,
   ]) {
     const result = runManualRecoveryPost('## AW3-R', 'or manually:', repoUrl);
-    assert.equal(result.status, 2, repoUrl + '\n' + result.stderr);
+    assert.equal(result.status, 2, `${repoUrl}\n${result.stderr}`);
     assert.ok(
       !result.ghCalls.some((call) => call.startsWith('auth status')),
       repoUrl,
@@ -2901,6 +2900,32 @@ test('differential: a fence closes only on a matching backtick count (#4696)', {
       ],
     },
     1,
+    0,
+  );
+});
+
+test('differential: a closing fence with trailing text does not close the fence (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  // "````x" is not a closing fence; an unclosed fence runs to the end, so the marker stays masked.
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 8201,
+          login: 'coderabbitai[bot]',
+          body: 'nit: show the example',
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 8202,
+          login: AGENT_LOGIN,
+          body: '**Accepted** — example:\n````\n**Awaiting maintainer decision** inside\n````x\nstill inside',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+    },
+    0,
     0,
   );
 });
