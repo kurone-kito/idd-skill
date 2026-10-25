@@ -584,7 +584,6 @@ function superviseChild(
       try {
         deps.killProcessGroup(pgid, signal);
         forwarded ??= signal;
-        signalForwardFailed = false;
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'ESRCH') {
           return;

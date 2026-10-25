@@ -477,7 +477,6 @@ function superviseChild(child, deps, options) {
       try {
         deps.killProcessGroup(pgid, signal);
         forwarded ??= signal;
-        signalForwardFailed = false;
       } catch (error) {
         if (error.code === 'ESRCH') {
           return;

@@ -2573,6 +2573,70 @@ test('a signal before child close after group exit preserves command status', {
   );
 });
 
+test('a later successful signal does not clear an earlier forwarding failure', {
+  skip: process.platform === 'win32' || !REAL_LOCK,
+}, async () => {
+  const h = makeHarness();
+  const repo = makeRepo({ localExec: { admission: { enabled: true } } });
+  const acknowledgement = new PassThrough();
+  const processGroupId = 2_147_483_002;
+  const child = Object.assign(new EventEmitter(), {
+    pid: processGroupId,
+    stdio: [null, null, null, null, acknowledgement],
+    kill: () => true,
+  }) as unknown as ChildProcess;
+  const notes: string[] = [];
+  const signals: NodeJS.Signals[] = [];
+  const listenersBefore = new Map(
+    (['SIGINT', 'SIGTERM'] as const).map((signal) => [
+      signal,
+      new Set(process.listeners(signal)),
+    ]),
+  );
+  const status = runLocalAdmission(['--', 'true'], {
+    cwd: repo,
+    env: h.env,
+    platform: 'linux',
+    stderr: (text) => notes.push(text),
+    findFlock: (env) => findExecutableOnPath('flock', env),
+    findPs: (env) => findExecutableOnPath('ps', env),
+    spawn: () => child,
+    killProcessGroup: (pgid, signal) => {
+      assert.equal(pgid, processGroupId);
+      signals.push(signal);
+      if (signal === 'SIGINT') {
+        throw Object.assign(new Error('signal denied'), { code: 'EPERM' });
+      }
+    },
+  });
+
+  acknowledgement.write('acquired\n');
+  try {
+    for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+      const handler = process
+        .listeners(signal)
+        .filter((listener) => !listenersBefore.get(signal)?.has(listener))
+        .at(-1);
+      assert.equal(typeof handler, 'function');
+      (handler as (...args: unknown[]) => void)(signal);
+    }
+    child.emit('close', 0, null);
+
+    assert.equal(await status, 2);
+    assert.deepEqual(signals, ['SIGINT', 'SIGTERM']);
+    assert.equal(notes.length, 1);
+    assert.match(notes[0] ?? '', /could not signal the admitted command/);
+  } finally {
+    for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+      for (const listener of process.listeners(signal)) {
+        if (!listenersBefore.get(signal)?.has(listener)) {
+          process.off(signal, listener);
+        }
+      }
+    }
+  }
+});
+
 test('SIGKILL to the helper leaves the slot held until the admitted command exits', {
   skip: !REAL_LOCK,
 }, async () => {
