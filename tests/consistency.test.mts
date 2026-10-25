@@ -3093,7 +3093,7 @@ test('fan-out scratchpad preflight provisions and recovers one session root (#46
     },
     {
       evidence:
-        'exact record matches this session and repository, and its root is valid',
+        'exact record matches this session and repository, its root is valid, and complete live worker and artifact evidence shows no unresolved worker, dispatch, or report state',
       action: 'Reuse that root and recover its report locations before refill',
     },
     {
@@ -3162,6 +3162,7 @@ test('fan-out scratchpad preflight provisions and recovers one session root (#46
       'strict version 1 shape requires exactly these seven fields',
       '`schemaVersion`: JSON integer exactly `1`',
       '`sessionId`: non-empty JSON string containing one path-safe component',
+      'excluding `.`/`..`, path separators, and control characters',
       '`repository`: non-empty JSON string in `owner/repo` form',
       '`repositoryRoot`, `gitCommonDir`, and `scratchpadRoot`',
       'non-empty JSON strings containing canonical absolute paths',
