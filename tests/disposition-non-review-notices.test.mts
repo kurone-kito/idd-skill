@@ -3197,7 +3197,7 @@ function codeRabbitGateMissing(comments: NoticeComment[]): number {
   ).missingRegularCommentCount;
 }
 
-// The planner verdict and the classifier verdict for one CodeRabbit body.
+// The planner, classifier, and recognition verdicts for one CodeRabbit body.
 function codeRabbitVerdict(body: string) {
   const plan = buildDispositionPlan(
     { headSha: 'abc1234', comments: [notice(1, CODERABBIT, body)] },
@@ -3283,7 +3283,13 @@ test('#4701: the observed wrapped no-actionable body is skipped as RESOLVED and 
   }
 });
 
-test('#4701: a wrapped body and its unwrapped twin get the same planner and classifier verdict', () => {
+test('#4701: a wrapped body and its unwrapped twin get the same planner, classifier, and recognition verdicts', () => {
+  // The twin below is built by stripping this prefix, so it must be present.
+  assert.ok(
+    CODERABBIT_WRAPPED_PR683_TRIMMED.startsWith(
+      `${CODERABBIT_GENERATED_WRAPPER}\n\n`,
+    ),
+  );
   const bodies = {
     completedWithFindings: CODERABBIT_SUMMARY,
     noActionable: CODERABBIT_COMPLETED_NO_ACTIONABLE,
