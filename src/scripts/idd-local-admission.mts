@@ -77,13 +77,116 @@ const FALLBACK_MAX_WAIT_MS = 2 * 60 * 60 * 1000;
 const LOCK_PARENT_DIRECTORY = 'idd-skill';
 const LOCK_DIRECTORY = 'local-admission';
 const LOCK_FILE_NAME = 'validate.lock';
-/** Descriptor the flock child reads the lock through, as `/dev/fd/3`. */
+/** Inherited descriptor that the wrapper and helper keep locked. */
 const LOCK_FD = 3;
 /** Descriptor the wrapper reports `acquired` on, through a dedicated pipe. */
 const ACQUIRED_FD = 4;
 const ACQUIRED_LINE = 'acquired\n';
-/** Runs before the child: report the lock, close the pipe, then exec the argv. */
-const ACQUIRED_WRAPPER = 'printf "acquired\\n" >&4; exec 4>&-; exec "$@"';
+/**
+ * Acquire the inherited FD in descriptor mode, report it, then run argv with
+ * the lock FD closed only in the command process. The wrapper keeps the lock
+ * alive if the helper exits before its command, then a same-group guardian keeps
+ * it until every live member of the supervised process group has exited.
+ */
+const ACQUIRED_WRAPPER =
+  '"$1" "$2" "$3" "$4" "$5" "$6"; flock_status=$?; if [ "$flock_status" -ne 0 ]; then exit "$flock_status"; fi; trap ":" INT TERM; printf "acquired\\n" >&4; exec 4>&-; process_state_tool=$7; node_path=$8; guardian_script=$9; shift 9; (exec "$@" 3>&-); command_status=$?; while :; do "$node_path" -e "$guardian_script" "$$" "$process_state_tool" & guardian_pid=$!; while :; do wait "$guardian_pid"; guardian_status=$?; if ! kill -0 "$guardian_pid" 2>/dev/null; then break; fi; done; if [ "$guardian_status" -eq 0 ]; then break; fi; printf "local-admission: process-group guardian did not start; keeping the validation slot held\\n" >&2; sleep 1; done; exit "$command_status"';
+
+/**
+ * This guardian shares the supervised process group and keeps the inherited
+ * lock descriptor until every live member except the wrapper has left it. Its
+ * short-lived process-state probes use a separate group without the lock FD.
+ */
+const GROUP_DRAIN_GUARDIAN = String.raw`
+const { spawn } = require('node:child_process');
+const pgid = Number(process.argv[1]);
+const wrapperPid = pgid;
+const processStateTool = process.argv[2];
+for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => {});
+const poll = () => {
+  let child;
+  try {
+    child = spawn(processStateTool, ['-A', '-o', 'pid=,pgid=,stat='], {
+      detached: true,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+  } catch {
+    setTimeout(poll, 1000);
+    return;
+  }
+  let output = '';
+  let settled = false;
+  const finish = (processOutput) => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(timeout);
+    if (processOutput === null) {
+      setTimeout(poll, 1000);
+      return;
+    }
+    const rows = processOutput.split(/\r?\n/);
+    if (rows.at(-1) === '') rows.pop();
+    if (rows.length === 0) {
+      setTimeout(poll, 1000);
+      return;
+    }
+    let valid = true;
+    let liveMember = false;
+    for (const row of rows) {
+      const fields = row.trim().split(/\s+/);
+      const [pid, processGroup, state] = fields;
+      if (
+        fields.length !== 3 ||
+        pid === undefined ||
+        !/^\d+$/.test(pid) ||
+        processGroup === undefined ||
+        !/^\d+$/.test(processGroup) ||
+        state === undefined ||
+        !/^[A-Za-z?]/.test(state)
+      ) {
+        valid = false;
+        break;
+      }
+      if (
+        processGroup === String(pgid) &&
+        pid !== String(wrapperPid) &&
+        pid !== String(process.pid) &&
+        !/^[ZzXx]/.test(state)
+      ) {
+        liveMember = true;
+      }
+    }
+    if (!valid || liveMember) {
+      setTimeout(poll, 1000);
+      return;
+    }
+    process.exit(0);
+  };
+  const timeout = setTimeout(() => {
+    try {
+      child.kill('SIGKILL');
+    } catch {}
+    finish(null);
+  }, 1000);
+  if (child.stdout === null) {
+    finish(null);
+    return;
+  }
+  child.stdout.setEncoding('utf8');
+  child.stdout.on('data', (chunk) => {
+    if (settled) return;
+    output += chunk;
+    if (output.length > 4 * 1024 * 1024) {
+      try {
+        child.kill('SIGKILL');
+      } catch {}
+      finish(null);
+    }
+  });
+  child.once('error', () => finish(null));
+  child.once('close', (code) => finish(code === 0 ? output : null));
+};
+poll();
+`;
 
 /**
  * Flags for the lock descriptor: read-only, so the helper never writes or
@@ -132,6 +235,8 @@ export interface LocalAdmissionDeps {
   findPueue: (env: NodeJS.ProcessEnv) => string | null;
   /** Absolute path of the ps utility, or null when it is not installed. */
   findPs: (env: NodeJS.ProcessEnv) => string | null;
+  /** Sends process-group signals; injectable for deterministic race tests. */
+  killProcessGroup: (pgid: number, signal: NodeJS.Signals) => void;
   spawn: (
     command: string,
     args: string[],
@@ -160,6 +265,7 @@ function defaultDependencies(): LocalAdmissionDeps {
     findFlock: (env) => findExecutableOnPath('flock', env),
     findPueue: (env) => findExecutableOnPath('pueue', env),
     findPs: (env) => findExecutableOnPath('ps', env),
+    killProcessGroup: (pgid, signal) => process.kill(-pgid, signal),
     spawn: (command, args, options) => spawn(command, args, options),
     waitNoticeIntervalMs: DEFAULT_WAIT_NOTICE_INTERVAL_MS,
     pueueClientTimeoutMs: DEFAULT_PUEUE_CLIENT_TIMEOUT_MS,
@@ -192,7 +298,7 @@ function closeQuietly(fd: number): void {
   try {
     closeSync(fd);
   } catch {
-    // Already closed: the child keeps its own copy of the descriptor.
+    // It may already be closed after a failed spawn or cleanup.
   }
 }
 
@@ -266,25 +372,18 @@ function loadRawPolicy(deps: LocalAdmissionDeps): unknown {
 }
 
 /**
- * Arguments for the `flock` spawn. The lock is `/dev/fd/3`, not a path, and no
- * `--` precedes it: `flock` stops option parsing at the first non-option.
+ * Arguments for `flock`'s inherited-descriptor form. The descriptor number
+ * follows the options; `flock` exits after acquiring it, and the wrapper and
+ * helper keep the shared open-file description alive through supervision.
  */
-export function buildFlockArguments(
-  command: readonly string[],
-  maxWaitMs: number,
-): string[] {
+export function buildFlockArguments(maxWaitMs: number): string[] {
   const timeoutSeconds = Math.max(1, Math.ceil(maxWaitMs / 1000));
   return [
     '--timeout',
     String(timeoutSeconds),
     '--conflict-exit-code',
     String(EXPIRED_EXIT_CODE),
-    `/dev/fd/${LOCK_FD}`,
-    'sh',
-    '-c',
-    ACQUIRED_WRAPPER,
-    'sh',
-    ...command,
+    String(LOCK_FD),
   ];
 }
 
@@ -452,7 +551,8 @@ interface SuperviseOptions {
 /**
  * Forward SIGINT and SIGTERM to the child, and settle one promise with the
  * exit status. A forwarded signal ends with 128 plus its number, after the
- * group is gone. A failed group signal settles 2 at once, without waiting.
+ * group is gone. If forwarding a group signal fails, the helper returns 2
+ * only after the group is gone.
  */
 function superviseChild(
   child: ChildProcess,
@@ -461,6 +561,7 @@ function superviseChild(
 ): Promise<number> {
   return new Promise<number>((resolveOutcome) => {
     let forwarded: NodeJS.Signals | null = null;
+    let signalForwardFailed = false;
     let closed = false;
     let settled = false;
     const handlers: Array<{ signal: NodeJS.Signals; handler: () => void }> = [];
@@ -472,21 +573,25 @@ function superviseChild(
       resolveOutcome(status);
     };
     const forward = (signal: NodeJS.Signals): void => {
-      if (settled || closed) return;
-      forwarded ??= signal;
+      if (settled || (closed && !options.group)) return;
       if (!options.group) {
+        forwarded ??= signal;
         child.kill(signal);
         return;
       }
       const pgid = child.pid;
       if (pgid === undefined) return;
       try {
-        process.kill(-pgid, signal);
+        deps.killProcessGroup(pgid, signal);
+        forwarded ??= signal;
       } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ESRCH') {
+          return;
+        }
+        signalForwardFailed = true;
         deps.stderr(
-          `local-admission: could not signal the admitted command (process group ${pgid}): ${errorMessage(error)}; the lock stays held until the command exits\n`,
+          `local-admission: could not signal the admitted command (process group ${pgid}): ${errorMessage(error)}; the lock stays held until the process group exits\n`,
         );
-        settle(REFUSED_EXIT_CODE);
       }
     };
     for (const signal of ['SIGINT', 'SIGTERM'] as const) {
@@ -501,21 +606,25 @@ function superviseChild(
     child.on('close', (code: number | null, signal: NodeJS.Signals | null) => {
       if (settled) return;
       closed = true;
-      if (forwarded !== null) {
-        const status = signalStatus(forwarded);
-        const pgid = child.pid;
-        if (options.group && pgid !== undefined) {
-          void waitForGroupToEnd(
-            pgid,
-            options.processStateTool ?? null,
-            deps.env,
-          ).then(() => settle(status));
-        } else {
-          settle(status);
-        }
-        return;
+      const finish = (): void => {
+        settle(
+          signalForwardFailed
+            ? REFUSED_EXIT_CODE
+            : forwarded === null
+              ? options.onClose(code, signal)
+              : signalStatus(forwarded),
+        );
+      };
+      const pgid = child.pid;
+      if (options.group && pgid !== undefined) {
+        void waitForGroupToEnd(
+          pgid,
+          options.processStateTool ?? null,
+          deps.env,
+        ).then(finish);
+      } else {
+        finish();
       }
-      settle(options.onClose(code, signal));
     });
   });
 }
@@ -568,12 +677,26 @@ function runLocked(
 ): Promise<number> {
   let child: ChildProcess;
   try {
-    child = deps.spawn(flockPath, buildFlockArguments(command, maxWaitMs), {
-      detached: true,
-      stdio: ['inherit', 'inherit', 'inherit', lockFd, 'pipe'],
-      env: { ...deps.env, [LOCAL_ADMISSION_ENV_VAR]: '1' },
-      cwd: deps.cwd,
-    });
+    child = deps.spawn(
+      '/bin/sh',
+      [
+        '-c',
+        ACQUIRED_WRAPPER,
+        'sh',
+        flockPath,
+        ...buildFlockArguments(maxWaitMs),
+        processStateTool,
+        process.execPath,
+        GROUP_DRAIN_GUARDIAN,
+        ...command,
+      ],
+      {
+        detached: true,
+        stdio: ['inherit', 'inherit', 'inherit', lockFd, 'pipe'],
+        env: { ...deps.env, [LOCAL_ADMISSION_ENV_VAR]: '1' },
+        cwd: deps.cwd,
+      },
+    );
   } catch (error) {
     closeQuietly(lockFd);
     deps.stderr(
@@ -581,7 +704,6 @@ function runLocked(
     );
     return Promise.resolve(REFUSED_EXIT_CODE);
   }
-  closeQuietly(lockFd);
   let acquired = false;
   let ackText = '';
   const notice = setInterval(() => {
@@ -624,7 +746,7 @@ function runLocked(
       );
       return REFUSED_EXIT_CODE;
     },
-  });
+  }).finally(() => closeQuietly(lockFd));
 }
 
 interface PueueCallResult {
