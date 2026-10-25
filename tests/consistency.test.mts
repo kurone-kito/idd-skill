@@ -3108,15 +3108,21 @@ test('fan-out scratchpad preflight provisions and recovers one session root (#46
     },
     {
       evidence:
-        'exact record matches this session, repository, and canonical root; any existing reservation also matches; a trusted maintainer confirms no live same-session orchestrator and grants one resumer sole control; the full collision scan is clear; root and worker, artifact, and report evidence are valid and settled',
+        'exact record matches this session, repository, and canonical root; the same uninterrupted allocator carries its invocation-local owner token from successful exclusive reservation acquisition; the full collision scan is clear; root and worker, artifact, and report evidence are valid and settled',
+      action:
+        'Continue this invocation on the recorded root; leave any reservation untouched and recover report locations before refill',
+    },
+    {
+      evidence:
+        'exact prior record is valid; the token is absent because this is a restarted or unknown invocation; a trusted maintainer confirms no live same-session orchestrator and grants this resumer sole control in the current operator-run LWR step 2 interaction; all collision and settled-evidence checks pass',
       action:
         'Reuse the recorded root read-only, leave any reservation untouched, and recover report locations before refill',
     },
     {
       evidence:
-        'exact record is valid, but the trusted maintainer has not confirmed no live same-session orchestrator and sole-resumer control',
+        'exact record is valid in a restarted or unknown invocation, but the trusted maintainer has not confirmed no live same-session orchestrator and sole-resumer control in the current recovery',
       action:
-        'Hold and preserve the record and any reservation; resume only after that explicit operator attestation',
+        'Hold and preserve the record and any reservation until that operator confirmation',
     },
     {
       evidence:
@@ -3181,9 +3187,16 @@ test('fan-out scratchpad preflight provisions and recovers one session root (#46
       'Keep a first-allocation reservation while scanning every session record',
       'An existing reservation without an exact, valid record for this session is a hold',
       'Remove only the reservation this invocation created, after the record is verified',
-      'trusted maintainer replies in the existing hold thread',
-      'confirming no orchestrator for this session is live',
-      'granting one resumer sole control',
+      'same uninterrupted allocator invocation may continue only when it carries the invocation-local owner token',
+      'created after that invocation successfully acquired the exclusive reservation',
+      'never persist or reconstruct it from a matching session id, record, manifest, or copied context',
+      'A missing token means the invocation restarted or is unknown',
+      "obtain a trusted maintainer's explicit confirmation in the current operator-run recovery",
+      'confirms no orchestrator for this exact session is live and grants this resumer sole control',
+      'operator confirmation in step 2 of [LWR]',
+      'human assertion rather than a machine-checked liveness result',
+      'No issue thread or new marker is required',
+      'do not infer confirmation from prior comments or matching session identifiers',
       'Follow the liveness check in [LWR](idd-resume-detail.md#lwr--local-worktree-recovery) before resuming.',
       "Verify the record's exact session, repository, and canonical root",
       'If a reservation remains, require its full tuple to match the record; if none remains, do not recreate it',
