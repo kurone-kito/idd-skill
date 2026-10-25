@@ -1130,10 +1130,14 @@ gap observed on issues
 `#4668` and `#4675`: no harness path had ever been allocated, so the missing
 value was not an operator setting to recover.
 
-Use the stable session identifier supplied by the current harness context, and
-the live harness worker listing, where available. Do not derive an identity or
-root from the issue, branch, worktree, worker agent id, current directory, or a
-path that is absent. Require the supplied session id to be a non-empty,
+Use the stable session identifier supplied by the current harness context and
+obtain a complete live harness worker listing. If the listing is unavailable or
+incomplete, treat prior-worker state as uncertain; hold for reconciliation
+before reuse, first allocation, or dispatch. Absence of scratchpad artifacts
+alone does not prove that no worker start was attempted. Do not derive an
+identity or root from the issue, branch, worktree, worker agent id, current
+directory, or a path that is absent. Require the supplied session id to be a
+non-empty,
 path-safe single component; reject separators and `.` or `..`. Bind the record
 to the exact session id, repository slug,
 canonical repository root, and canonical git common directory. Resolve the
@@ -1183,6 +1187,12 @@ outside every worktree for this repository. If the harness supplies no root,
 the parent may create the fallback root below the verified state base, outside
 every worktree. Require a stable session id and a writable state base first.
 
+Before accepting a root when this session has no record, enumerate every
+session record and compare its canonical `scratchpadRoot` with the candidate.
+Hold if another session claims that root or any record is unreadable or
+invalid, because root uniqueness cannot be established. Apply this check to
+harness-supplied roots and the parent fallback root.
+
 Create each parent-owned directory exclusively with private permissions
 (POSIX mode `0700`; equivalent current-user-only ACL on Windows), refusing
 symlinks and conflicting existing entries. Create the record exclusively too
@@ -1198,19 +1208,21 @@ deletion.
 Classify the entry using the actual harness context, this exact
 session-and-repository record, and live worker and artifact evidence:
 
-| Evidence                                                                                                                                                                           | Verdict and next action                                                                                                                                        |
-| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| The harness supplies an existing valid root with no prior record on first entry before claims or dispatch; complete worker and artifact evidence shows no prior start              | Verify the root, create and verify the record exclusively, then reuse it                                                                                       |
-| There is no supplied root or record, and harness context identifies a first entry before claims or dispatch; the complete worker listing and session artifacts show no prior start | Allocate the private fallback root and record before Discover                                                                                                  |
-| The exact record matches this session and repository, its root is valid, and complete live worker and artifact evidence shows no unresolved worker, dispatch, or report state      | Reuse that root and recover its report locations before refill                                                                                                 |
-| Claims already exist, but live evidence establishes that no worker was dispatched                                                                                                  | Revalidate every claim, winning nonce, worktree lock, and token record first; then bootstrap the root and resume those claims without minting a claim or nonce |
-| A worker dispatch is proven, but no safe root or matching session record can be recovered                                                                                          | Hold and preserve briefs and reports; do not allocate or redispatch until ownership and report locations are reconciled                                        |
-| The fallback directory already exists without a valid record                                                                                                                       | Hold and preserve it; do not reuse or overwrite it                                                                                                             |
-| A record is unreadable, invalid, linked unsafely, for another session or repository, or its root is missing, contradictory, or unsafe                                              | Hold and preserve all evidence; do not allocate a replacement                                                                                                  |
-| Worker launch or prior-worker state is uncertain                                                                                                                                   | Reconcile the live worker list and existing briefs and reports; hold while any dispatch or ownership remains unresolved                                        |
-| Allocation succeeded but the durable record cannot be verified                                                                                                                     | Keep the directory and known path, start no worker, and hold for reconciliation                                                                                |
-| Stable session identity or a verified writable root cannot be resolved                                                                                                             | Hold with the missing prerequisite; do not guess a harness capability or ask for a path that was never issued                                                  |
-| A worker receives a missing parent path                                                                                                                                            | Hold in the worker, create nothing, and never use `mkdir -p`                                                                                                   |
+| Evidence                                                                                                                                                                                                                                          | Verdict and next action                                                                                                                                        |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The harness supplies an existing valid root with no prior record on first entry before claims or dispatch; a complete worker listing and artifact evidence show no prior start, and all session records show no canonical root collision          | Verify the root, create and verify the record exclusively, then reuse it                                                                                       |
+| There is no supplied root or record, and harness context identifies a first entry before claims or dispatch; the complete live worker listing and session artifacts show no prior start, and all session records show no canonical root collision | Allocate the private fallback root and record before Discover                                                                                                  |
+| The live worker listing is unavailable or incomplete                                                                                                                                                                                              | Treat prior-worker state as uncertain and hold for reconciliation before reuse, allocation, or dispatch                                                        |
+| A session record is unreadable or invalid, or another session records the canonical candidate root                                                                                                                                                | Hold and preserve evidence; do not accept or allocate a colliding root                                                                                         |
+| The exact record matches this session and repository, its root is valid, and complete live worker and artifact evidence shows no unresolved worker, dispatch, or report state                                                                     | Reuse that root and recover its report locations before refill                                                                                                 |
+| Claims already exist, but live evidence establishes that no worker was dispatched                                                                                                                                                                 | Revalidate every claim, winning nonce, worktree lock, and token record first; then bootstrap the root and resume those claims without minting a claim or nonce |
+| A worker dispatch is proven, but no safe root or matching session record can be recovered                                                                                                                                                         | Hold and preserve briefs and reports; do not allocate or redispatch until ownership and report locations are reconciled                                        |
+| The fallback directory already exists without a valid record                                                                                                                                                                                      | Hold and preserve it; do not reuse or overwrite it                                                                                                             |
+| A record is unreadable, invalid, linked unsafely, for another session or repository, or its root is missing, contradictory, or unsafe                                                                                                             | Hold and preserve all evidence; do not allocate a replacement                                                                                                  |
+| Worker launch or prior-worker state is uncertain                                                                                                                                                                                                  | Reconcile the live worker list and existing briefs and reports; hold while any dispatch or ownership remains unresolved                                        |
+| Allocation succeeded but the durable record cannot be verified                                                                                                                                                                                    | Keep the directory and known path, start no worker, and hold for reconciliation                                                                                |
+| Stable session identity or a verified writable root cannot be resolved                                                                                                                                                                            | Hold with the missing prerequisite; do not guess a harness capability or ask for a path that was never issued                                                  |
+| A worker receives a missing parent path                                                                                                                                                                                                           | Hold in the worker, create nothing, and never use `mkdir -p`                                                                                                   |
 
 On the already-claimed, never-dispatched recovery route, do not repeat A5 or
 mint another activation nonce. Verify each existing claim against the live

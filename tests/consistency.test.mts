@@ -3082,14 +3082,24 @@ test('fan-out scratchpad preflight provisions and recovers one session root (#46
   const routingCases = [
     {
       evidence:
-        'harness supplies an existing valid root with no prior record on first entry before claims or dispatch; complete worker and artifact evidence shows no prior start',
+        'harness supplies an existing valid root with no prior record on first entry before claims or dispatch; a complete worker listing and artifact evidence show no prior start, and all session records show no canonical root collision',
       action:
         'Verify the root, create and verify the record exclusively, then reuse it',
     },
     {
       evidence:
-        'harness context identifies a first entry before claims or dispatch',
+        'harness context identifies a first entry before claims or dispatch; the complete live worker listing and session artifacts show no prior start, and all session records show no canonical root collision',
       action: 'Allocate the private fallback root and record before Discover',
+    },
+    {
+      evidence: 'live worker listing is unavailable or incomplete',
+      action:
+        'Treat prior-worker state as uncertain and hold for reconciliation before reuse, allocation, or dispatch',
+    },
+    {
+      evidence:
+        'A session record is unreadable or invalid, or another session records the canonical candidate root',
+      action: 'do not accept or allocate a colliding root',
     },
     {
       evidence:
@@ -3154,6 +3164,10 @@ test('fan-out scratchpad preflight provisions and recovers one session root (#46
       'name different roots, treat that as a contradiction and hold',
       'actual harness context',
       'live worker and artifact evidence',
+      'If the listing is unavailable or incomplete, treat prior-worker state as uncertain',
+      'Absence of scratchpad artifacts alone does not prove that no worker start was attempted',
+      'enumerate every session record and compare its canonical `scratchpadRoot` with the candidate',
+      'Hold if another session claims that root or any record is unreadable or invalid',
       "worker only receives session-scratchpad paths under the root; the Worker brief's named critique scratch directory is the explicit exception",
       '<state-base>/idd-skill/orchestrator-sessions/records/<session-id>.json',
       '<state-base>/idd-skill/orchestrator-sessions/<session-id>/',
