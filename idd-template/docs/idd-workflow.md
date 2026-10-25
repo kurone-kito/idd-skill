@@ -1146,19 +1146,25 @@ per-user state base the same way as `resolveStateBase` in
 `XDG_STATE_HOME`, otherwise `~/.local/state`; on Windows, use an absolute
 `LOCALAPPDATA`, otherwise `%USERPROFILE%/AppData/Local`.
 
-Keep the discovery record outside the scratchpad root, so a missing or
-unavailable scratchpad does not hide its own recovery record:
+Keep the discovery record and root-reservation entry outside the scratchpad
+root, so a missing or unavailable scratchpad does not hide its own recovery
+state:
 
 ```text
 <state-base>/idd-skill/orchestrator-sessions/records/<session-id>.json
-<state-base>/idd-skill/orchestrator-sessions/<session-id>/
+<state-base>/idd-skill/orchestrator-sessions/root-reservations/<root-key>.lock
+<state-base>/idd-skill/orchestrator-sessions/scratchpads/<session-id>/
 ```
 
-Verify the canonical state base, record directory, and scratchpad root all lie
-outside every worktree. Reject symlink components along each managed path.
-Reuse an existing namespace only when it is a directory owned by the current
-user with private permissions; hold on a broad or conflicting namespace and do
-not change its permissions.
+The separate `scratchpads/` parent prevents a session id such as `records`
+from aliasing the record index (preventive; no observed runtime incident yet;
+identified during E1 review on 2026-10-25, PR `#4690`, issue `#4685`).
+
+Verify the canonical state base, record directory, reservation directory, and
+scratchpad root all lie outside every worktree. Reject symlink components along
+each managed path. Reuse an existing namespace only when it is a directory
+owned by the current user with private permissions; hold on a broad or
+conflicting namespace and do not change its permissions.
 
 The JSON record has `schemaVersion`, `sessionId`, `repository`,
 `repositoryRoot`, `gitCommonDir`, `scratchpadRoot`, and `allocationSource`
@@ -1188,10 +1194,27 @@ outside every worktree for this repository. If the harness supplies no root,
 the parent may create the fallback root below the verified state base, outside
 every worktree. Require a stable session id and a writable state base first.
 
-Before accepting a root when this session has no record, enumerate every
-session record and compare its canonical `scratchpadRoot` with the candidate.
-Hold if another session claims that root or any record is unreadable or
-invalid, because root uniqueness cannot be established. Apply this check to
+Before accepting or reusing a candidate root, canonicalize it with the operating
+system's filesystem comparison rules (including case normalization on
+case-insensitive filesystems), then atomically create an exclusive reservation
+keyed by that path in the private `root-reservations/` directory. Create each
+lock entry with private permissions (POSIX mode `0600`; equivalent
+current-user-only ACL on Windows). Name it with the SHA-256 digest of the
+canonical path's UTF-8 bytes, and store the full path, session id, and repository
+for exact read-back verification. If the entry
+already exists or cannot be acquired, read, or verified, hold and preserve it;
+never overwrite or remove it automatically.
+
+Keep the reservation while enumerating every session record and comparing its
+canonical `scratchpadRoot`, checking worker and artifact evidence, and creating
+or validating and reading back the exact session record. Release the reservation
+by removing only the entry this invocation created, and only after record
+verification or after rejecting the candidate before dispatch.
+A per-session exclusive record does not serialize this prior scan: two sessions
+could otherwise accept one canonical root (preventive; no observed runtime
+incident yet; identified during E1 review on 2026-10-25, PR `#4690`, issue
+`#4685`). Hold if another session claims the root or any record is unreadable
+or invalid, because root uniqueness cannot be established. Apply this check to
 harness-supplied roots and the parent fallback root.
 
 Create each parent-owned directory exclusively with private permissions
@@ -1204,7 +1227,7 @@ allocation succeeds but exclusive record creation or read-back fails, keep the
 allocated directory and any known path, start no worker, and hold for
 reconciliation. The worker-side missing-parent guard remains in force (issue
 `#4377`). This documented lifecycle adds no helper, policy key, or automatic
-deletion.
+scratchpad deletion.
 
 Classify the entry using the actual harness context, this exact
 session-and-repository record, and live worker and artifact evidence:
@@ -1214,6 +1237,7 @@ session-and-repository record, and live worker and artifact evidence:
 | The harness supplies an existing valid root with no prior record on first entry before claims or dispatch; a complete worker listing and artifact evidence show no prior start, and all session records show no canonical root collision          | Verify the root, create and verify the record exclusively, then reuse it                                                                                       |
 | There is no supplied root or record, and harness context identifies a first entry before claims or dispatch; the complete live worker listing and session artifacts show no prior start, and all session records show no canonical root collision | Allocate the private fallback root and record before Discover                                                                                                  |
 | The live worker listing is unavailable or incomplete                                                                                                                                                                                              | Treat prior-worker state as uncertain and hold for reconciliation before reuse, allocation, or dispatch                                                        |
+| A root reservation for the canonical candidate path already exists or cannot be acquired, read, or verified                                                                                                                                       | Hold and preserve it; do not accept or allocate the root                                                                                                       |
 | A session record is unreadable or invalid, or another session records the canonical candidate root                                                                                                                                                | Hold and preserve evidence; do not accept or allocate a colliding root                                                                                         |
 | The exact record matches this session and repository, its root is valid, and complete live worker and artifact evidence shows no unresolved worker, dispatch, or report state                                                                     | Reuse that root and recover its report locations before refill                                                                                                 |
 | Claims already exist, but live evidence establishes that no worker was dispatched                                                                                                                                                                 | Revalidate every claim, winning nonce, worktree lock, and token record first; then bootstrap the root and resume those claims without minting a claim or nonce |
