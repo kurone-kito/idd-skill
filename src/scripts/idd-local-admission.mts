@@ -586,7 +586,7 @@ function superviseChild(
         forwarded ??= signal;
         signalForwardFailed = false;
       } catch (error) {
-        if (closed && (error as NodeJS.ErrnoException).code === 'ESRCH') {
+        if ((error as NodeJS.ErrnoException).code === 'ESRCH') {
           return;
         }
         signalForwardFailed = true;

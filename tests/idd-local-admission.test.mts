@@ -2520,6 +2520,59 @@ test('a late signal after group exit preserves the command status on ESRCH', {
   );
 });
 
+test('a signal before child close after group exit preserves command status', {
+  skip: process.platform === 'win32' || !REAL_LOCK,
+}, async () => {
+  const h = makeHarness();
+  const repo = makeRepo({ localExec: { admission: { enabled: true } } });
+  const acknowledgement = new PassThrough();
+  const processGroupId = 2_147_483_001;
+  const child = Object.assign(new EventEmitter(), {
+    pid: processGroupId,
+    stdio: [null, null, null, null, acknowledgement],
+    kill: () => true,
+  }) as unknown as ChildProcess;
+  const notes: string[] = [];
+  let signalAttempts = 0;
+  const signalListenersBefore = new Set(process.listeners('SIGTERM'));
+  const status = runLocalAdmission(['--', 'true'], {
+    cwd: repo,
+    env: h.env,
+    platform: 'linux',
+    stderr: (text) => notes.push(text),
+    findFlock: (env) => findExecutableOnPath('flock', env),
+    findPs: (env) => findExecutableOnPath('ps', env),
+    spawn: () => child,
+    killProcessGroup: (pgid, signal) => {
+      assert.equal(pgid, processGroupId);
+      assert.equal(signal, 'SIGTERM');
+      signalAttempts += 1;
+      throw Object.assign(new Error('process group no longer exists'), {
+        code: 'ESRCH',
+      });
+    },
+  });
+
+  acknowledgement.write('acquired\n');
+  const signalHandler = process
+    .listeners('SIGTERM')
+    .filter((listener) => !signalListenersBefore.has(listener))
+    .at(-1);
+  assert.equal(typeof signalHandler, 'function');
+  (signalHandler as (...args: unknown[]) => void)('SIGTERM');
+  child.emit('close', 0, null);
+
+  assert.equal(await status, 0);
+  assert.equal(signalAttempts, 1);
+  assert.deepEqual(notes, []);
+  assert.equal(
+    process
+      .listeners('SIGTERM')
+      .some((listener) => !signalListenersBefore.has(listener)),
+    false,
+  );
+});
+
 test('SIGKILL to the helper leaves the slot held until the admitted command exits', {
   skip: !REAL_LOCK,
 }, async () => {

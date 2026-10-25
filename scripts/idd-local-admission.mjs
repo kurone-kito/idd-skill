@@ -479,7 +479,7 @@ function superviseChild(child, deps, options) {
         forwarded ??= signal;
         signalForwardFailed = false;
       } catch (error) {
-        if (closed && error.code === 'ESRCH') {
+        if (error.code === 'ESRCH') {
           return;
         }
         signalForwardFailed = true;
