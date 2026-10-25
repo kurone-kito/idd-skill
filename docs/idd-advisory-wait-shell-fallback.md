@@ -944,11 +944,12 @@ reply, which is presence-only) are empty. A missing or malformed result is
 unmet. The ack-only override stays in the instruction file; do not
 re-derive it here.
 
-The advisory-bot set that decides thread origin is the known review bots
-plus `IDD_ADVISORY_BOT_LOGINS` (comma-separated, the configured
-`advisoryBotLogins`); export it when the configuration lists bots beyond
-the defaults. A Bot-typed originating author also counts as advisory, so an
-unlisted bot fails closed. The review-reply stamp that marks an IDD reply uses
+The advisory-bot set that decides thread origin is the known review bots,
+plus the `advisoryBotLogins` read from `.github/idd/config.json`, plus any
+`IDD_ADVISORY_BOT_LOGINS` (comma-separated). The block reads the config
+itself, so export the variable only for bots the config does not list. A
+Bot-typed originating author also counts as advisory, so an unlisted bot
+fails closed. The review-reply stamp that marks an IDD reply uses
 `IDD_MARKER_PREFIX` (default `idd-skill`, the canonical marker prefix).
 `IDD_AGENT_LOGINS` and `IDD_TRUSTED_MARKER_ACTORS` are read the same way.
 
@@ -1245,7 +1246,7 @@ DISPOSITION_JSON=$(printf '%s' "${COMMENTS_JSON}" | jq -c --argjson agents "${RE
   def strip_all($re):
     if test($re) then sub($re; "") | strip_all($re) else . end;
   def pending_marker:
-    (.body | strip_all("(?ms)^ {0,3}\\x60\\x60\\x60.*?^ {0,3}\\x60\\x60\\x60") | strip_all("\\x60[^\\x60\\n]*\\x60") | strip_all("(?m)^>.*$")
+    (.body | strip_all("(?ms)^ {0,3}(\\x60{3,}).*?^ {0,3}\\1") | strip_all("\\x60[^\\x60\\n]*\\x60") | strip_all("(?m)^>.*$")
       | test("(^|\\n)\\*\\*Awaiting maintainer decision\\*\\*"; "i"));
   map(select(
     (.body | test("^\\*\\*(Accepted|Rejected)[.!:]?\\*\\*"))
@@ -1395,7 +1396,7 @@ MISSING_THREADS=$(printf '%s' "${THREADS_JSON}" | jq -rs --argjson agents "${IDD
   def strip_all($re):
     if test($re) then sub($re; "") | strip_all($re) else . end;
   def pending_marker:
-    (.body | strip_all("(?ms)^ {0,3}\\x60\\x60\\x60.*?^ {0,3}\\x60\\x60\\x60") | strip_all("\\x60[^\\x60\\n]*\\x60") | strip_all("(?m)^>.*$")
+    (.body | strip_all("(?ms)^ {0,3}(\\x60{3,}).*?^ {0,3}\\1") | strip_all("\\x60[^\\x60\\n]*\\x60") | strip_all("(?m)^>.*$")
       | test("(^|\\n)\\*\\*Awaiting maintainer decision\\*\\*"; "i"));
   def is_disp:
     (.body | test("^\\*\\*(Accepted|Rejected)[.!:]?\\*\\*"))

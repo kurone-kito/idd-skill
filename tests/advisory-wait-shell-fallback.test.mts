@@ -2857,3 +2857,50 @@ test('differential: an inline triple-backtick span does not hide a top-level pen
     0,
   );
 });
+
+test('differential: a fence closes only on a matching backtick count (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  // The marker sits inside a four-backtick fence that holds a three-backtick line: masked.
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 8101,
+          login: 'coderabbitai[bot]',
+          body: 'nit: show the example',
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 8102,
+          login: AGENT_LOGIN,
+          body: '**Accepted** — example:\n````\n```\n**Awaiting maintainer decision** inside\n````',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+    },
+    0,
+    0,
+  );
+  // The same marker after the closing four-backtick fence is a live top-level marker.
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 8103,
+          login: 'coderabbitai[bot]',
+          body: 'nit: show the example',
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 8104,
+          login: AGENT_LOGIN,
+          body: '**Accepted** — example:\n````\n```\n````\n**Awaiting maintainer decision** live',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+    },
+    1,
+    0,
+  );
+});
