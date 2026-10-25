@@ -235,6 +235,8 @@ export interface LocalAdmissionDeps {
   findPueue: (env: NodeJS.ProcessEnv) => string | null;
   /** Absolute path of the ps utility, or null when it is not installed. */
   findPs: (env: NodeJS.ProcessEnv) => string | null;
+  /** Sends process-group signals; injectable for deterministic race tests. */
+  killProcessGroup: (pgid: number, signal: NodeJS.Signals) => void;
   spawn: (
     command: string,
     args: string[],
@@ -263,6 +265,7 @@ function defaultDependencies(): LocalAdmissionDeps {
     findFlock: (env) => findExecutableOnPath('flock', env),
     findPueue: (env) => findExecutableOnPath('pueue', env),
     findPs: (env) => findExecutableOnPath('ps', env),
+    killProcessGroup: (pgid, signal) => process.kill(-pgid, signal),
     spawn: (command, args, options) => spawn(command, args, options),
     waitNoticeIntervalMs: DEFAULT_WAIT_NOTICE_INTERVAL_MS,
     pueueClientTimeoutMs: DEFAULT_PUEUE_CLIENT_TIMEOUT_MS,
@@ -571,15 +574,16 @@ function superviseChild(
     };
     const forward = (signal: NodeJS.Signals): void => {
       if (settled || (closed && !options.group)) return;
-      forwarded ??= signal;
       if (!options.group) {
+        forwarded ??= signal;
         child.kill(signal);
         return;
       }
       const pgid = child.pid;
       if (pgid === undefined) return;
       try {
-        process.kill(-pgid, signal);
+        deps.killProcessGroup(pgid, signal);
+        forwarded ??= signal;
         signalForwardFailed = false;
       } catch (error) {
         if (closed && (error as NodeJS.ErrnoException).code === 'ESRCH') {
