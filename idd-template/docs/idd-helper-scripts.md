@@ -2866,6 +2866,18 @@ or its output is not a successful, well-formed process listing. For a direct
 run, use process-group isolation only when that probe succeeds; otherwise
 continue without group isolation.
 
+On an admitted run, the wrapper also waits for the group to drain after the
+command's root exits normally, and it releases the slot only after that. A
+signal during that wait is forwarded to the group, as above, and the run ends
+with that signal's status. The drain has no bound of its own, and `maxWait`
+does not apply to it: a group member that never exits keeps the slot held until
+it ends, so end that member to release the slot. Direct runs do not wait after
+a normal exit. The admitted command runs without the lock descriptor (fd 9), so
+a descendant that leaves the group cannot keep the slot through an inherited
+descriptor. Observed 2026-10-23 in adopter field feedback (finding 10, issue
+`#4702`): a same-group child outlived a normally exiting root, and a contender
+entered while it was still alive.
+
 ```sh
 child_pid=
 child_group=false
@@ -2952,7 +2964,9 @@ run_child() {
     fi
     child_group=true
     child_reset_signals=true
-    IDD_LOCAL_ADMISSION=1 env --default-signal=INT --default-signal=TERM setsid "$shell" -c "$command" &
+    # The command runs without the lock descriptor (fd 9), so a descendant
+    # that leaves the group cannot keep the slot.
+    IDD_LOCAL_ADMISSION=1 env --default-signal=INT --default-signal=TERM setsid "$shell" -c "$command" 9>&- &
   elif command -v setsid >/dev/null 2>&1; then
     group_ready=false
     if set +m 2>/dev/null; then
@@ -2984,6 +2998,9 @@ run_child() {
   child_pid=$!
   if [ -n "$pending_signal" ]; then forward_signal "$pending_signal"; fi
   if wait "$child_pid"; then status=0; else status=$?; fi
+  if [ "$run_mode" = admitted ]; then
+    while group_has_live_member "$child_pid"; do sleep 1; done
+  fi
   child_pid=
   return "$status"
 }
