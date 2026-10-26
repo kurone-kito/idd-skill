@@ -119,11 +119,11 @@ This section's rebase only applies **before the branch's first push**.
      unsure) — it already accounts for whether a merely-`BEHIND` head
      needs a resync (an up-to-date-head branch-protection requirement)
      rather than treating every non-`CLEAN` state the same:
-     - `syncRecommendation: "none"`: D1-D3 already happened in an
-       earlier session. Run D3.5's closing-keyword check first — it is
-       idempotent, and a session that crashed between D3 and D3.5 would
-       otherwise never verify the keyword — then continue to D4 (wait for
-       CI).
+     - `syncRecommendation: "none"`: D1-D3 are complete. Before D3.5,
+       verify the live base with
+       `gh pr view <pr-number> --json baseRefName`. Require the
+       `{development-branch}` resolved at B1; on read failure or mismatch,
+       hold and do not retarget. On a match, run D3.5, then D4 (CI).
      - `syncRecommendation: "recheck"` (mergeability still computing):
        re-run the helper after a short wait, up to 3 attempts; only a
        result still `"recheck"` after that budget falls through to stop
@@ -198,6 +198,12 @@ instead of returning to this D1 rebase path.
 
 ## D3 — Create PR
 
+Use B1's `{development-branch}`: only absent `developmentBranch` falls back
+to live default; unreadable or invalid policy stops. Create with
+`gh pr create --base {development-branch}`. On resume, stop unless live
+`baseRefName` matches (no retarget). See `idd-helper-scripts.md` for the
+branch fixture.
+
 1. Before drafting the body, check whether
    `.github/pull_request_template.md` exists; if it does, shape the
    body to that template's sections from the start.
@@ -248,43 +254,32 @@ instead of returning to this D1 rebase path.
 
 ### D3.5 — Verify closing keyword detection
 
-1. Fetch the PR body: `gh pr view {pr-number} --json body --jq '.body'`.
-2. Strip fenced code blocks, inline-code spans, and block-quoted lines
-   from the body.
-3. Search the remaining plain text for the claimed issue number `<N>`
-   with this pattern, kept on one line (do not reflow it — a line break
-   inside the alternation would silently break the `resolve` branch):
+Read PR base and repo default live; missing or unreadable stops. If unequal,
+keep D3 keyword, skip all D3.5 steps below, then close the issue after F3
+under F4 (#4697): non-default bases have no closing refs or auto-close.
+Compare against the live default, not the configured base.
+
+1. Fetch body, closing references, and `createdAt` with `gh pr view`; strip
+   fenced code blocks, inline-code spans, and block-quoted lines from body.
+2. Search the remaining plain text for the claimed issue `<N>` with this
+   one-line pattern; do not wrap it inside the alternation:
 
    ```text
    (?im)\b(close[sd]?|fix(e[sd])?|resolve[sd]?):?\s+#<N>\b
    ```
 
-   Matching case-insensitively (`Closes`, `CLOSES`, and `closes` all
-   count).
-4. If no match: edit the PR body to add a correctly placed plain-text
-   closing line, then repeat steps 1-3 once. If it still fails, stop and
-   post a hold note citing the PR URL.
-5. Confirm the closing set matches exactly: `gh pr view {pr-number}
-   --json closingIssuesReferences --jq
-   '.closingIssuesReferences[].number'` must list precisely the
-   deliberate closing set (normally just `<N>`).
-   - An extra entry usually means an unrelated `#M` sits next to a
-     keyword elsewhere in the body — separate them.
-   - A missing entry whose keyword matches step 3's regex for that
-     number, on a PR whose `createdAt` (`gh pr view {pr-number} --json
-     createdAt`) is under 4 hours before now (UTC), is GitHub's async
-     registration (`kurone-kito/idd-skill#3632`): do not edit the body,
-     toggle draft, or close and reopen; go on to D4 and poll
-     `closingIssuesReferences` the same way. Otherwise (keyword absent,
-     or still missing at 4 hours) apply step 4's path, re-placing the
-     keyword line.
-   - Repeat once after any edit. If it still fails (pending registration
-     excepted), stop and post a hold note citing the PR URL.
-6. A commit message closing keyword counts too: never place one next
-   to an issue outside the closing set. F2's `closing-set` blocker
-   re-checks the set and messages against final HEAD (skipped on a
-   non-default `{development-branch}`), blocking the handoff on a
-   stray match.
+   Matching is case-insensitive. If absent, add a plain-text closing line
+   and repeat steps 1-2 once; if still absent, post a hold with the PR URL.
+3. Require `closingIssuesReferences` to equal D3's deliberate closing set
+   (normally just `<N>`). Separate any extra issue reference from a keyword.
+   A missing reference is async registration (#3632) only when the body has
+   the matching keyword and `createdAt` is under 4 hours old: do not edit, toggle
+   draft, or reopen; continue to D4 and poll the field. Otherwise, fix the
+   body and repeat this check once; if it still mismatches, hold with the PR
+   URL.
+4. A commit message closing keyword counts too: never place one next
+   to an issue outside the closing set. F2's `closing-set` rechecks the
+   final HEAD and blocks on a stray close.
 
 ## D4 — Wait for CI
 
