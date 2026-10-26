@@ -2840,3 +2840,14 @@ test('#4717: a claimless off-head run never requires the recovery object', () =>
   assert.equal(staleGateOf(report), undefined);
   assert.deepEqual(evaluateMergeGates(report), []);
 });
+
+test('#4717: a claim-id none sentinel with an agent id is claim-bound, so the gate still fires off-head', () => {
+  const report = claimBoundReport(
+    { action: 'attempt', reason: 'recovery-attempt-eligible' },
+    { claim: { expectedClaimId: 'none' } },
+  );
+  assert.ok(
+    staleGateOf(report),
+    'the gate must not fail open on --claim-id none --agent-id <id>',
+  );
+});

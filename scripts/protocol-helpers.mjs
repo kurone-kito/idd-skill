@@ -10453,8 +10453,9 @@ export function validateStaleRequestRecoveryEvidence(value) {
 /**
  * kurone-kito/idd-skill#4717: the stale-request recovery gate. Applies only
  * to a claim-bound run (both `claim.expectedClaimId` and
- * `claim.expectedAgentId` supplied, not the claimless `none` sentinel) on an
- * off-head report (`advisoryWait.lastCopilotCommit` differs from
+ * `claim.expectedAgentId` supplied; the collector sets the object on the same
+ * predicate, and a claimless run has an empty agent id) on an off-head report
+ * (`advisoryWait.lastCopilotCommit` differs from
  * `prHeadSha`), matching the Lite E1 contract. Every other run returns null:
  * an on-head report keeps the `f3Outcome` gate alone, and a claim-id-only or
  * claimless run never requires the object (a known residual; see the issue
@@ -10464,10 +10465,7 @@ export function staleRequestRecoveryGateBlocker(report) {
   const claim = preMergeAsRecord(report.claim);
   const expectedClaimId = String(claim.expectedClaimId ?? '');
   const expectedAgentId = String(claim.expectedAgentId ?? '');
-  const claimBound =
-    expectedClaimId !== '' &&
-    expectedClaimId !== 'none' &&
-    expectedAgentId !== '';
+  const claimBound = expectedClaimId !== '' && expectedAgentId !== '';
   const advisoryWait = preMergeAsRecord(report.advisoryWait);
   const prHeadSha = String(report.prHeadSha ?? '');
   const offHead = String(advisoryWait.lastCopilotCommit ?? '') !== prHeadSha;

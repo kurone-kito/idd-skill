@@ -1969,7 +1969,7 @@
     },
     "staleRequestRecovery": {
       "type": "object",
-      "description": "#1571 bounded stale-request recovery eligibility. Independent of outcome/f3Outcome and of copilotRecovery above: distinguishes the unproven-coverage (copilotPendingCoversHead=false) case PR #1562 identified from the pre-existing RECOVERY_NEEDED/AW3-R marker-anchor-only path (copilotPendingCoversHead=true). Consumed by AW3-S to decide whether the bounded cycle may run -- either E14's REQUEST_NEEDED-with-pending sub-path, or (#2327) the non-pending failed-to-register case: a same-head request marker exists, Copilot is not pending, and the settled-window re-check budget elapsed with no proof the request ever reached it.",
+      "description": "#4717: the recovery object of a claim-bound run, produced by the stale-request classifier (its full definition is in advisory-wait-state.schema.json). It is present on every claim-bound report. An off-head claim-bound report is gated on it through the stale-request-recovery blocker: attempt blocks for the bounded AW3-S recovery through F2, cap-exhausted keeps the cap hold, and not-applicable keeps ordinary F3 handling. It is absent for claimless and claim-id-only runs.",
       "required": [
         "action",
         "reason"
