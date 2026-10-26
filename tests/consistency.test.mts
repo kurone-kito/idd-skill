@@ -3127,6 +3127,17 @@ test('issue-authoring contract defines ledger storage verdicts, allocation, and 
   assert.equal(section.match(/mkdir -p/g)?.length, 1);
   assert.match(text, /exclusive creation/);
   assert.match(text, /mkdir -m 700/);
+  // The post-creation check removes only the one empty directory this step
+  // created, never recursively, and the ownership cases are attributed as
+  // preventive, since no observed incident is cited for them.
+  assert.match(
+    text,
+    /remove only that one empty directory this step created \(a non-recursive `rmdir`, never a recursive removal\)/,
+  );
+  assert.match(
+    text,
+    /The cases below are preventive; no observed incident yet/,
+  );
   // Nothing is deleted, recursed into, adopted, or registered.
   assert.match(
     text,

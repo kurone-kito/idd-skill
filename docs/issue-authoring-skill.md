@@ -1090,15 +1090,24 @@ verdict:
 A namespace from another session is never reused, and a new session has no
 identity record to reuse. An older namespace is left untouched as evidence.
 
-**Step 1 — allocate a namespace.** Create `issue-authoring-<uuid>` inside the
-root with exclusive creation: a non-recursive `mkdir` that fails when the name
-already exists, never `mkdir -p`. Create it owner-only (POSIX `mkdir -m 700`, or
-a private ACL on Windows), then check its owner and mode again; a namespace that
-is not owner-only is unsafe and stops. Retry with a fresh UUID only when the
-name already exists, at most three times. Any other failure ends that candidate,
-and the next candidate is tried. When every candidate fails, stop and report
-each attempt's path and error. Record the namespace's canonical path and file
-identity.
+**Step 1 — allocate a namespace.** Re-check the root before creating anything in
+it: its canonical path and identity must match the root checks, or the procedure
+stops. Create `issue-authoring-<uuid>` inside the root with a non-recursive
+`mkdir` that fails when the name already exists, never `mkdir -p`. Run it with
+the root as the working directory and a bare name, so no path through the root
+is resolved again. Create the namespace owner-only (POSIX `mkdir -m 700`, or a
+private ACL on Windows), then check its owner and mode again; a namespace that
+is not owner-only is unsafe and stops. Right after creation, check that its
+canonical path is the root path plus the bare name, that it lies outside every
+worktree and git directory, and that it is on the same device as the root. If
+any check fails, remove only that one empty directory this step created (a
+non-recursive `rmdir`, never a recursive removal), report both paths, and stop.
+Retry with a fresh UUID only when the name already exists, at most three times.
+Any other failure ends that candidate, and the next candidate is tried. When
+every candidate fails, stop and report each attempt's path and error. Record the
+namespace's canonical path and file identity. This narrows the race with a
+same-user process that replaces the root between the check and the creation; the
+post-creation check limits the damage to one empty directory, which is removed.
 
 **Step 2 — create the first ledger.** Each draft has its own ledger file,
 `<uuid>.json`, in the namespace. Create it with exclusive creation, containing
@@ -1113,9 +1122,10 @@ namespace and the ledger with their records:
 - The ledger is a regular file, not a symbolic link or reparse point, with a
   link count of 1 and the recorded file identity.
 
-Each mismatch falls under one of the cases below. The procedure never deletes
-anything, never recurses into a directory, and never adopts an entry this
-session did not create.
+The cases below are preventive; no observed incident yet records any of them, so
+none is cited. Each mismatch falls under one of the cases below. The procedure
+never deletes anything, never recurses into a directory, and never adopts an
+entry this session did not create.
 
 - **Owned and unchanged.** The file identity and SHA-256 both match. Continue:
   write the complete new JSON to a new exclusively created temporary file in the
