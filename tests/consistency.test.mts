@@ -2728,10 +2728,8 @@ const BRIEF_ELEMENT_ROWS: readonly {
   },
   {
     element: 'worker report request',
-    source:
-      'idd-template/.github/instructions/idd-orchestrator.instructions.md',
-    anchor:
-      '- The brief asks for a per-worker `schemas/worker-report.schema.json`',
+    source: 'idd-template/docs/idd-workflow.md',
+    anchor: 'Fill the worker-supplied fields of',
     label: '**Worker report.**',
   },
   {
@@ -2834,7 +2832,7 @@ const BRIEF_PART_REQUIREMENTS: Readonly<Record<string, readonly string[]>> = {
     'issue-numbered',
     'parent path',
     'held',
-    'never use mkdir -p',
+    'never `mkdir -p`',
   ],
   '**Execution timeout.**': [
     'execution-timeout',
@@ -2869,7 +2867,7 @@ const BRIEF_PART_BODY_REQUIREMENTS: Readonly<
     'issue-numbered',
     'parent path',
     'held',
-    'never use mkdir -p',
+    'never `mkdir -p`',
     '(#orchestrator-fan-out-variant)',
   ],
   '**Critique allowance.**': [
@@ -2907,7 +2905,11 @@ const BRIEF_PART_BODY_REQUIREMENTS: Readonly<
   '**Worker report.**': [
     'schemas/worker-report.schema.json',
     'any non-empty value',
-    'leave `verifiedAt` and `recordedAt` out',
+    'Leave `verifiedAt`, `recordedAt`, and `reviewRounds` out',
+    'the orchestrator sets `verifiedAt` to that check',
+    'sets `recordedAt` immediately before append',
+    'derives `reviewRounds` from the complete review list',
+    'The orchestrator validates the completed record against the schema after filling the required fields and before appending it',
     '(#worker-report-outcomes)',
   ],
 };
@@ -3070,6 +3072,312 @@ test('docs idd-workflow fan-out variant carries a delegation brief template for 
         );
       }
     }
+  }
+});
+
+test('fan-out scratchpad preflight provisions and recovers one session root (#4685)', () => {
+  const workflowCopies = [
+    'idd-template/docs/idd-workflow.md',
+    'docs/idd-workflow.md',
+  ];
+  const orchestratorCopies = [
+    'idd-template/.github/instructions/idd-orchestrator.instructions.md',
+    '.github/instructions/idd-orchestrator.instructions.md',
+  ];
+  const routingCases = [
+    {
+      evidence:
+        'harness supplies an existing valid root with no prior record or reservation on first entry before claims or dispatch; a complete worker listing and artifact evidence show no prior start, and all session records show no canonical root collision',
+      action:
+        'Verify the root, reserve it, create and verify the record exclusively, then reuse it',
+    },
+    {
+      evidence:
+        'There is no supplied root, record, reservation, or fallback directory, and harness context identifies a first entry before claims or dispatch; the complete live worker listing and session artifacts show no prior start, and all session records show no canonical root collision',
+      action: 'Allocate the private fallback root and record before Discover',
+    },
+    {
+      evidence: 'live worker listing is unavailable or incomplete',
+      action:
+        'Treat prior-worker state as uncertain and hold for reconciliation before reuse, allocation, or dispatch',
+    },
+    {
+      evidence:
+        'root reservation exists without an exact valid record for this session, does not match that record, or cannot be read or verified',
+      action: 'Hold and preserve it; do not accept or allocate the root',
+    },
+    {
+      evidence:
+        'A session record is unreadable or invalid, or another session records the canonical candidate root',
+      action: 'do not accept or allocate a colliding root',
+    },
+    {
+      evidence:
+        'exact record matches this session, repository, and canonical root; the same uninterrupted allocator carries its invocation-local owner token from successful exclusive reservation acquisition; the full collision scan is clear; root and worker, artifact, and report evidence are valid and settled',
+      action:
+        'Continue this invocation on the recorded root; leave any reservation untouched and recover report locations before refill',
+    },
+    {
+      evidence:
+        'exact prior record is valid; the token is absent because this is a restarted or unknown invocation; a trusted maintainer confirms no live same-session orchestrator and grants this resumer sole control in the current operator-run LWR step 2 interaction; all collision and settled-evidence checks pass',
+      action:
+        'During recovery preflight, reuse the recorded root read-only and leave its reservation untouched; after sole control, use the normal brief/report path',
+    },
+    {
+      evidence:
+        'exact record is valid in a restarted or unknown invocation, but the trusted maintainer has not confirmed no live same-session orchestrator and sole-resumer control in the current recovery',
+      action:
+        'Hold and preserve the record and any reservation until that operator confirmation',
+    },
+    {
+      evidence:
+        'Claims already exist, but live evidence establishes that no worker was dispatched',
+      action: 'resume those claims without minting a claim or nonce',
+    },
+    {
+      evidence:
+        'A worker dispatch is proven, but no safe root or matching session record can be recovered',
+      action:
+        'do not allocate or redispatch until ownership and report locations are reconciled',
+    },
+    {
+      evidence: 'fallback directory already exists without a valid record',
+      action: 'Hold and preserve it; do not reuse or overwrite it',
+    },
+    {
+      evidence:
+        'record is unreadable, invalid, linked unsafely, for another session or repository',
+      action: 'Hold and preserve all evidence; do not allocate a replacement',
+    },
+    {
+      evidence: 'Worker launch or prior-worker state is uncertain',
+      action: 'hold while any dispatch or ownership remains unresolved',
+    },
+    {
+      evidence:
+        'Allocation succeeded but the durable record cannot be verified',
+      action:
+        'Keep the directory and known path, start no worker, and hold for reconciliation',
+    },
+    {
+      evidence:
+        'Stable session identity or a verified writable root cannot be resolved',
+      action:
+        'Hold with the missing prerequisite; do not guess a harness capability',
+    },
+    {
+      evidence: 'A worker receives a missing parent path',
+      action: 'Hold in the worker, create nothing, and never use `mkdir -p`',
+    },
+  ];
+
+  for (const path of workflowCopies) {
+    const text = readText(path);
+    const start = text.indexOf('#### Session scratchpad lifecycle\n');
+    const end = text.indexOf('\nRunning this variant safely requires:', start);
+    assert.ok(
+      start >= 0 && end > start,
+      `${path}: lifecycle section not found`,
+    );
+    const lifecycleText = text.slice(start, end);
+    const lifecycle = normalizeWhitespace(lifecycleText);
+    for (const required of [
+      'stable session identifier supplied by the current harness context',
+      'path-safe single component',
+      'name different roots, treat that as a contradiction and hold',
+      'actual harness context',
+      'live worker and artifact evidence',
+      'If the listing is unavailable or incomplete, treat prior-worker state as uncertain',
+      'Absence of scratchpad artifacts alone does not prove that no worker start was attempted',
+      'Keep a first-allocation reservation while scanning every session record',
+      'An existing reservation without an exact, valid record for this session is a hold',
+      'Remove only the reservation this invocation created, after the record is verified',
+      'same uninterrupted allocator invocation may continue only when it carries the invocation-local owner token',
+      'created after that invocation successfully acquired the exclusive reservation',
+      'never persist or reconstruct it from a matching session id, record, manifest, or copied context',
+      'A missing token means the invocation restarted or is unknown',
+      "obtain a trusted maintainer's explicit confirmation in the current operator-run recovery",
+      'confirms no orchestrator for this exact session is live and grants this resumer sole control',
+      'operator confirmation in step 2 of [LWR]',
+      'human assertion rather than a machine-checked liveness result',
+      'No issue thread or new marker is required',
+      'do not infer confirmation from prior comments or matching session identifiers',
+      'Follow the liveness check in [LWR](idd-resume-detail.md#lwr--local-worktree-recovery) before resuming.',
+      "Verify the record's exact session, repository, and canonical root",
+      'If a reservation remains, require its full tuple to match the record; if none remains, do not recreate it',
+      'During recovery preflight, reuse the recorded root read-only and leave any reservation untouched',
+      'Matching files alone never authorize reuse',
+      'elapsed time and process ids do not prove liveness',
+      'no new marker or automatic unlink is used',
+      'Hold and preserve on any mismatch or uncertainty',
+      'root-reservations/<root-key>.lock',
+      "canonicalize the candidate root with the operating system's filesystem comparison rules",
+      'case normalization on case-insensitive filesystems',
+      "SHA-256 digest of the canonical path's UTF-8 bytes",
+      'checking worker and artifact evidence, and exclusively creating and verifying the session record',
+      'never overwrite or remove it automatically',
+      "worker only receives session-scratchpad paths under the root; the Worker brief's named critique scratch directory is the explicit exception",
+      '<state-base>/idd-skill/orchestrator-sessions/records/<session-id>.json',
+      '<state-base>/idd-skill/orchestrator-sessions/scratchpads/<session-id>/',
+      'canonical repository root',
+      'canonical git common directory',
+      'strict version 1 shape requires exactly these seven fields',
+      '`schemaVersion`: JSON integer exactly `1`',
+      '`sessionId`: non-empty JSON string containing one path-safe component',
+      'excluding `.`/`..`, path separators, and control characters',
+      '`repository`: non-empty JSON string in `owner/repo` form',
+      'normalizing both owner and repo components case-insensitively before comparison',
+      '`repositoryRoot`, `gitCommonDir`, and `scratchpadRoot`',
+      'non-empty JSON strings containing canonical absolute paths',
+      '`allocationSource`: JSON string exactly `harness` or `parent`',
+      'rejects missing or additional fields',
+      'Reject an unsupported schema version, wrong JSON type, malformed value, or unknown property before trusting the record',
+      'canonical state base, record directory, reservation directory, and scratchpad root all lie',
+      'Reject symlink components along each managed path',
+      'directory owned by the current user with private permissions',
+      'Create each parent-owned directory exclusively',
+      'Create the record exclusively too',
+      'current-user-only access',
+      'Never overwrite a record',
+      'adds no helper, policy key, or automatic scratchpad deletion',
+      'keep the allocated directory and any known path',
+      'resume those claims without minting a claim or nonce',
+      'Resume only claims classified by the no-dispatch route',
+      'a complete worker listing and session artifacts with no matching worker',
+      'eligible resumes bypass step 4',
+      'run the profile-selected `idd-worker-budget` with `--running <n> --startable <resume-count>`',
+      'Add `--harness-limit <limit>` when the worker mechanism row gives one',
+      'Pass resume IDs to the profile-selected `discover-shared-file-overlap`',
+      '`--issues <ids> --batch <slots> --check-overlap`',
+      '`--desync-token <session-agent-id>` when `discover.selectionDesync` is `session-offset`',
+      'existing claim, nonce, branch, and worktree; skip A4.5/A5',
+      'until no resume remains, then Discover fresh candidates',
+      'zero-slot result follows the normal budget wait/stop rule; no pick preserves the claim',
+      'hold for reconciliation',
+    ]) {
+      assert.ok(
+        lifecycle.includes(required),
+        `${path}: lifecycle must include ${required}`,
+      );
+    }
+    const allocationRaceStart = lifecycleText.indexOf(
+      'A per-session exclusive record does not serialize the first allocation scan:',
+    );
+    const allocationRaceEnd = lifecycleText.indexOf(
+      '\n\nCreate each parent-owned directory',
+      allocationRaceStart,
+    );
+    assert.ok(
+      allocationRaceStart >= 0 && allocationRaceEnd > allocationRaceStart,
+      `${path}: allocation race rationale not found`,
+    );
+    const allocationRace = normalizeWhitespace(
+      lifecycleText.slice(allocationRaceStart, allocationRaceEnd),
+    );
+    const allocationRaceRationale = [
+      'two sessions could otherwise accept one canonical root (preventive;',
+      'no observed runtime incident yet; identified during E1 review on',
+      '2026-10-25, PR `#4690`, issue `#4685`). Apply collision checks to',
+      'harness-supplied and parent-fallback roots.',
+    ].join(' ');
+    assert.ok(
+      allocationRace.includes(allocationRaceRationale),
+      `${path}: allocation race rationale must cite its observed review finding`,
+    );
+    const routingRows = lifecycleText
+      .split('\n')
+      .filter((line) => line.startsWith('|'))
+      .map(normalizeWhitespace);
+    for (const { evidence, action } of routingCases) {
+      assert.ok(
+        routingRows.some(
+          (row) => row.includes(evidence) && row.includes(action),
+        ),
+        path + ': missing scratchpad evidence/action pair for ' + evidence,
+      );
+    }
+
+    const scratchpad = text.slice(
+      text.indexOf('**Scratchpad.**'),
+      text.indexOf('**Critique allowance.**'),
+    );
+    assert.match(scratchpad, /parent path already exists/);
+    assert.match(
+      scratchpad,
+      /When the parent path is missing,\s+create nothing/,
+    );
+    assert.match(scratchpad, /never `mkdir -p`/);
+    assert.match(
+      normalizeWhitespace(scratchpad),
+      /inspect it without following links \(`lstat`\); require a real directory owned by the current user with private permissions, then verify its canonical path remains beneath the verified session root/,
+    );
+    assert.match(
+      normalizeWhitespace(scratchpad),
+      /Hold and preserve an entry that is a symlink, non-directory, owned by another user, too broadly accessible, or outside that root/,
+    );
+    assert.match(
+      text,
+      /issue-numbered subdirectory of the resolved session\s+scratchpad root/,
+    );
+    assert.match(text, /directly in the resolved session scratchpad root/);
+    assert.match(text, /the verified root from the session\s+record/);
+    assert.match(
+      normalizeWhitespace(text),
+      /During recovery preflight, reuse the recorded root read-only and leave any reservation untouched\. After sole control is established, an eligible never-dispatched resume may use the normal brief\/report path and write only to verified child issue directories and report drafts under that root\./,
+    );
+    assert.match(
+      normalizeWhitespace(text),
+      /Before dispatch, the orchestrator uses `lstat` to require `\{report-path\}` to be absent; hold and preserve any existing entry\. The worker, as the eventual writer, must create its final report draft atomically as a new regular file without following links, with current-user-only permissions \(POSIX `O_CREAT \| O_EXCL`, mode `0600`; equivalent create-new, current-user-only access on Windows\)\. If a symlink, non-regular entry, or conflicting draft appears before creation, or exclusive creation fails, hold and preserve it; never truncate, replace, or rename it\./,
+    );
+    assert.match(
+      normalizeWhitespace(text),
+      /On restart, enumerate direct-child JSON drafts with that issue number prefix and select only the unique draft matching both `issue` and `claimId`; hold on unreadable or ambiguous matches/,
+    );
+    assert.match(
+      normalizeWhitespace(text),
+      /If a candidate is a symlink or non-regular file, hold and preserve it without following it/,
+    );
+    assert.match(
+      normalizeWhitespace(text),
+      /enumerate direct-child report drafts whose filename starts with the issue number and ends in `.json`; other issue-numbered scratch files remain in that root's matching issue directory/,
+    );
+    assert.match(
+      normalizeWhitespace(text),
+      /`--issues <ids> --batch <slots> --check-overlap`/,
+    );
+    assert.match(
+      normalizeWhitespace(text),
+      /An own claim that matches no worker is an unmatched claim unless the session-scratchpad lifecycle has positively classified it as an eligible never-dispatched resume/,
+    );
+    assert.match(
+      normalizeWhitespace(text),
+      /If the resume set is non-empty, use the lifecycle's budgeted resume route before fresh candidates and do not run step 4 on those claims before dispatch/,
+    );
+    assert.doesNotMatch(
+      text,
+      /copy the scratchpad path that your harness reports/,
+    );
+  }
+
+  for (const path of orchestratorCopies) {
+    const text = normalizeWhitespace(readText(path));
+    assert.match(
+      text,
+      /Use the lifecycle's budgeted route for eligible already-claimed\/no-dispatch resumes; run Discover A0 through A4 Step 1\.5 only after that set is empty/,
+    );
+    assert.match(
+      text,
+      /Before Discover, A5, restart, refill, or dispatch, follow the \[session scratchpad lifecycle\]/,
+    );
+    assert.match(text, /worker missing-parent guard/);
+    assert.match(
+      text,
+      /Verify outcome on live GitHub outside the worktree; copy the roster's `workerHandle` into the report, then set `verifiedAt`, append-time `recordedAt`, and applicable `reviewRounds`\. Validate and append with the profile-selected `idd-worker-report append --file <path>`, then dispose per table and mark the roster entry `disposed`\./,
+    );
+    assert.match(
+      text,
+      /mark `stalled`, and follow \[fan-out recovery\]\[fv\]\./,
+    );
   }
 });
 

@@ -108,6 +108,13 @@ marker being authored by a trusted actor, and the GitHub server
 Repository-local actor policy and any forced-handoff settings live in
 `docs/customization.md`.
 
+## Scope-overrun comment attribution
+
+If B3 or push validation detects an over-limit candidate set, or a
+`scope-overrun` record exists, suffix free-form comments with
+`idd-agent-authored`. Exempt operational markers and owner decisions. See
+[the marker contract](../../docs/idd-helper-scripts.md#scope-overrun-evidence-marker).
+
 ## Payload-served placeholders
 
 When these instructions are read from the installed payload rather than

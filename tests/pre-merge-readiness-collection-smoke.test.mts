@@ -296,6 +296,26 @@ function buildStubGhScript(
     mergeStateStatus: 'CLEAN',
     body: options.prBody ?? '',
   };
+  // kurone-kito/idd-skill#4721: the closing-reference read is GraphQL, not a
+  // `pr view --json` field. A reference without its own repository defaults
+  // to this repository, the same-repository close these fixtures describe.
+  const [refOwner = '', refName = ''] = REPO_REF.split('/');
+  const closingReferencesPayload = {
+    data: {
+      repository: {
+        pullRequest: {
+          headRefOid: prView.headRefOid,
+          closingIssuesReferences: {
+            nodes: (options.closingIssuesReferences ?? []).map((ref) => ({
+              repository: { name: refName, owner: { login: refOwner } },
+              ...(ref as Record<string, unknown>),
+            })),
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        },
+      },
+    },
+  };
   const searchIssues = options.searchIssues ?? [];
   const reviews = [
     {
@@ -425,6 +445,7 @@ if (a(0) === 'api' && a(1) === '${`repos/${REPO_REF}/issues/${PR_NUMBER}/comment
 if (a(0) === 'api' && a(1) === '${`repos/${REPO_REF}/issues/${CLAIM_ISSUE}/comments`}') {
   ${options.failOnClaimComments ? "process.stderr.write('claim comments must not be fetched under --claimless\\\\n'); process.exit(1);" : `out(${JSON.stringify(ndjson(claimComments))});`}
 }
+if (a(0) === 'api' && a(1) === 'graphql' && args.join(' ').includes('closingIssuesReferences')) out(${JSON.stringify(JSON.stringify(closingReferencesPayload))});
 if (a(0) === 'api' && a(1) === 'graphql' && args.join(' ').includes('reviewThreads')) out(${JSON.stringify(JSON.stringify(reviewThreadsPayload))});
 if (a(0) === 'api' && a(1) === 'graphql' && args.join(' ').includes('committedDate')) out(${JSON.stringify(JSON.stringify(reviewsAndHeadCommitPayload))});
 // #3590: includeEditState pages a GraphQL comments connection. The

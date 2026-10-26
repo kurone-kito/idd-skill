@@ -20,10 +20,441 @@
 // resolution machinery there (normalizeTrustedMarkerLogins and friends), and
 // moving them here would force exactly that forbidden back-import. Only the
 // single-marker parse/render primitives move in this wave.
+import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
 import { parseF4HeadProofBody } from './f4-head-proof.mjs';
 import { createMarkerRegex, escapeRegex } from './marker-regex.mjs';
 
+function scopeOverrunCommentOrder(comment) {
+  const createdAt = comment?.createdAt;
+  if (
+    typeof createdAt !== 'string' ||
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(createdAt)
+  ) {
+    return null;
+  }
+  const createdAtMs = Date.parse(createdAt);
+  const id = normalizePositiveIntegerToken(
+    typeof comment?.id === 'number' ? String(comment.id) : comment?.id,
+  );
+  return Number.isFinite(createdAtMs) && id !== null
+    ? { createdAtMs, id }
+    : null;
+}
+function latestScopeOverrunValue(entries) {
+  const ordered = [];
+  for (const entry of entries) {
+    const order = scopeOverrunCommentOrder(entry.comment);
+    if (!order) {
+      return null;
+    }
+    ordered.push({ ...entry, order });
+  }
+  ordered.sort(
+    (left, right) =>
+      left.order.createdAtMs - right.order.createdAtMs ||
+      left.order.id - right.order.id,
+  );
+  for (let index = 1; index < ordered.length; index += 1) {
+    if (
+      ordered[index - 1].order.createdAtMs ===
+        ordered[index].order.createdAtMs &&
+      ordered[index - 1].order.id === ordered[index].order.id
+    ) {
+      return null;
+    }
+  }
+  return ordered.at(-1)?.value ?? null;
+}
+function normalizeScopeOverrunFiles(value) {
+  if (!Array.isArray(value) || value.length === 0) {
+    return null;
+  }
+  const files = [];
+  for (const entry of value) {
+    const file = typeof entry === 'string' ? entry : '';
+    if (!file || /[`\r\n\uFFFD]/u.test(file)) {
+      return null;
+    }
+    if (
+      file !== file.trim() ||
+      file.startsWith('/') ||
+      /^[A-Za-z]:/u.test(file) ||
+      file.includes('\\') ||
+      /[\p{Cc}\p{Zl}\p{Zp}]/u.test(file) ||
+      file
+        .split('/')
+        .some((segment) => !segment || segment === '.' || segment === '..')
+    ) {
+      return null;
+    }
+    files.push(file);
+  }
+  if (new Set(files).size !== files.length) {
+    return null;
+  }
+  return files.sort((left, right) =>
+    Buffer.compare(Buffer.from(left, 'utf8'), Buffer.from(right, 'utf8')),
+  );
+}
+/**
+ * Render the append-only scope-overrun snapshot for an issue. The first
+ * record has only issue scope; the optional PR tuple is all-or-nothing and
+ * binds the snapshot to one branch and full observed HEAD.
+ */
+export function renderScopeOverrunRecordComment(payload) {
+  const markerPrefix = normalizeNonWhitespaceToken(payload?.markerPrefix);
+  const agentId = normalizeNonWhitespaceToken(payload?.agentId);
+  const issueNumber = normalizePositiveIntegerToken(payload?.issueNumber);
+  const effort = String(payload?.effort ?? '').trim();
+  const candidateFiles = normalizeScopeOverrunFiles(payload?.candidateFiles);
+  const pullRequestNumber =
+    payload?.pullRequestNumber === undefined ||
+    payload?.pullRequestNumber === null ||
+    payload?.pullRequestNumber === ''
+      ? null
+      : normalizePositiveIntegerToken(payload.pullRequestNumber);
+  const branch =
+    payload?.branch === undefined || payload?.branch === null
+      ? ''
+      : normalizeNonWhitespaceToken(payload.branch);
+  const headSha =
+    payload?.headSha === undefined || payload?.headSha === null
+      ? ''
+      : normalizeNonWhitespaceToken(payload.headSha).toLowerCase();
+  const hasAnyPullRequestField =
+    payload?.pullRequestNumber !== undefined ||
+    payload?.branch !== undefined ||
+    payload?.headSha !== undefined;
+  const hasCompletePullRequestFields =
+    pullRequestNumber !== null &&
+    Boolean(branch) &&
+    /^[0-9a-f]{40}$/.test(headSha);
+  if (
+    !markerPrefix ||
+    !agentId ||
+    issueNumber === null ||
+    (effort !== 'S' && effort !== 'M' && effort !== 'L') ||
+    !candidateFiles ||
+    (hasAnyPullRequestField && !hasCompletePullRequestFields)
+  ) {
+    throw new Error(
+      'invalid scope overrun record payload: provide a marker prefix, agent ID, positive issue number, S/M/L effort, a non-empty array of unique repository-relative POSIX paths, and either no PR fields or a PR number, branch, and full 40-character HEAD together',
+    );
+  }
+  const files = encodeURIComponent(JSON.stringify(candidateFiles));
+  const postFields = hasCompletePullRequestFields
+    ? ` pr=${pullRequestNumber} branch=${encodeURIComponent(branch)} head=${headSha}`
+    : '';
+  const codeSpan = String.fromCharCode(0x60);
+  const postNote = hasCompletePullRequestFields
+    ? `; PR #${pullRequestNumber}, branch \`${branch}\`, HEAD \`${headSha}\``
+    : '';
+  const visibleFiles = candidateFiles
+    .map((file) => codeSpan + file + codeSpan)
+    .join(', ');
+  const visibleNote =
+    '_' +
+    agentId +
+    ': scope overrun snapshot for issue #' +
+    issueNumber +
+    ' (' +
+    effort +
+    '; candidate files: ' +
+    visibleFiles +
+    postNote +
+    ') — IDD automation marker. Do not edit._';
+  const record =
+    `<!-- ${markerPrefix}-scope-overrun: v1 agent=${agentId} issue=${issueNumber} ` +
+    `effort=${effort} files=${files}${postFields} -->`;
+  return [record, '', visibleNote].join('\n');
+}
+/** Parse a canonical scope-overrun record using the configured marker prefix. */
+export function parseScopeOverrunRecordComment(body, markerPrefix) {
+  const prefix = normalizeNonWhitespaceToken(markerPrefix);
+  if (!prefix || typeof body !== 'string') {
+    return null;
+  }
+  const match = body.match(
+    new RegExp(
+      `^<!-- ${escapeRegex(prefix)}-scope-overrun: v1 agent=(\\S+) issue=(\\d+) ` +
+        `effort=([SML]) files=(\\S+)(?: pr=(\\d+) branch=(\\S+) head=([0-9a-f]{40}))? -->\\n\\n`,
+    ),
+  );
+  if (!match) {
+    return null;
+  }
+  const agentId = normalizeNonWhitespaceToken(match[1]);
+  const issueNumber = normalizePositiveIntegerToken(match[2]);
+  const effort = match[3];
+  let candidateFiles;
+  try {
+    candidateFiles = JSON.parse(decodeURIComponent(match[4]));
+  } catch {
+    return null;
+  }
+  const files = normalizeScopeOverrunFiles(candidateFiles);
+  if (
+    !agentId ||
+    issueNumber === null ||
+    !files ||
+    JSON.stringify(candidateFiles) !== JSON.stringify(files)
+  ) {
+    return null;
+  }
+  let parsed;
+  if (
+    match[5] === undefined &&
+    match[6] === undefined &&
+    match[7] === undefined
+  ) {
+    parsed = {
+      kind: 'pre-push',
+      agentId,
+      issueNumber,
+      effort,
+      candidateFiles: files,
+    };
+  } else {
+    const pullRequestNumber = normalizePositiveIntegerToken(match[5]);
+    let branch = '';
+    try {
+      branch = decodeURIComponent(match[6] ?? '');
+    } catch {
+      return null;
+    }
+    const normalizedBranch = normalizeNonWhitespaceToken(branch);
+    const headSha = normalizeNonWhitespaceToken(match[7]).toLowerCase();
+    if (
+      pullRequestNumber === null ||
+      !normalizedBranch ||
+      !/^[0-9a-f]{40}$/.test(headSha)
+    ) {
+      return null;
+    }
+    parsed = {
+      kind: 'post-push',
+      agentId,
+      issueNumber,
+      effort,
+      candidateFiles: files,
+      pullRequestNumber,
+      branch: normalizedBranch,
+      headSha,
+    };
+  }
+  try {
+    return renderScopeOverrunRecordComment({
+      markerPrefix: prefix,
+      agentId: parsed.agentId,
+      issueNumber: parsed.issueNumber,
+      effort: parsed.effort,
+      candidateFiles: parsed.candidateFiles,
+      ...(parsed.kind === 'post-push'
+        ? {
+            pullRequestNumber: parsed.pullRequestNumber,
+            branch: parsed.branch,
+            headSha: parsed.headSha,
+          }
+        : {}),
+    }) === body.trimEnd()
+      ? parsed
+      : null;
+  } catch {
+    return null;
+  }
+}
+function isScopeOverrunRecordShaped(body, markerPrefix) {
+  return new RegExp(
+    `^<!--\\s*${escapeRegex(markerPrefix)}-scope-overrun\\b`,
+    'i',
+  ).test(body.trimStart());
+}
+function isScopeOverrunDecisionShaped(body) {
+  return body.trimStart().startsWith('Scope decision:');
+}
+function hasIddAgentAuthoredMarker(body) {
+  return /<!--\s*idd-agent-authored\s*:/i.test(body);
+}
+function scopeOverrunResolution(
+  status,
+  reason,
+  record = null,
+  decisionHeadSha = null,
+) {
+  return { status, reason, record, decisionHeadSha };
+}
+/**
+ * Resolve trusted, unedited scope evidence and an owner's exact-head
+ * decision. A decision-shaped comment carrying the self-reported
+ * `idd-agent-authored` marker is rejected even when its GitHub author is
+ * trusted. The marker is operational attribution, not authentication.
+ * Ordinary issue-body edits are intentionally not an input, so they cannot
+ * rewrite the effort or candidate-file snapshot.
+ */
+// audit:ignore-dead-export: public evidence resolver for downstream claim/resume/readiness checks; those callers are outside #4674
+export function resolveScopeOverrunEvidence(options) {
+  const markerPrefix = normalizeNonWhitespaceToken(options?.markerPrefix);
+  const issueNumber = normalizePositiveIntegerToken(options?.issueNumber);
+  if (!markerPrefix || issueNumber === null) {
+    return scopeOverrunResolution('invalid', 'record-malformed');
+  }
+  const trusted = new Set(
+    (Array.isArray(options?.trustedMarkerLogins)
+      ? options.trustedMarkerLogins
+      : []
+    )
+      .map((login) => normalizeNonWhitespaceToken(login).toLowerCase())
+      .filter(Boolean),
+  );
+  const records = [];
+  const decisions = [];
+  let hasDecision = false;
+  for (const comment of options?.comments ?? []) {
+    const body = typeof comment?.body === 'string' ? comment.body : '';
+    if (isScopeOverrunRecordShaped(body, markerPrefix)) {
+      const authorLogin = normalizeNonWhitespaceToken(comment?.authorLogin);
+      if (!authorLogin || !trusted.has(authorLogin.toLowerCase())) {
+        return scopeOverrunResolution('invalid', 'record-untrusted');
+      }
+      if (comment?.lastEditedAt !== null) {
+        return scopeOverrunResolution('invalid', 'record-edited-or-unknown');
+      }
+      if (!scopeOverrunCommentOrder(comment)) {
+        return scopeOverrunResolution('invalid', 'record-malformed');
+      }
+      const record = parseScopeOverrunRecordComment(body, markerPrefix);
+      if (!record) {
+        return scopeOverrunResolution('invalid', 'record-malformed');
+      }
+      if (record.issueNumber !== issueNumber) {
+        return scopeOverrunResolution('invalid', 'record-issue-mismatch');
+      }
+      records.push({ record, comment });
+    }
+    if (isScopeOverrunDecisionShaped(body)) {
+      hasDecision = true;
+      if (hasIddAgentAuthoredMarker(body)) {
+        return scopeOverrunResolution('invalid', 'decision-agent-authored');
+      }
+      const authorLogin = normalizeNonWhitespaceToken(comment?.authorLogin);
+      if (!authorLogin || !trusted.has(authorLogin.toLowerCase())) {
+        return scopeOverrunResolution('invalid', 'decision-untrusted');
+      }
+      if (comment?.lastEditedAt !== null) {
+        return scopeOverrunResolution('invalid', 'decision-edited-or-unknown');
+      }
+      if (!scopeOverrunCommentOrder(comment)) {
+        return scopeOverrunResolution('invalid', 'decision-malformed');
+      }
+      const firstLine = body.split(/\r?\n/, 1)[0];
+      const match = firstLine.match(
+        /^Scope decision: accept head ([0-9a-f]{40})$/,
+      );
+      if (!match) {
+        return scopeOverrunResolution('invalid', 'decision-malformed');
+      }
+      decisions.push({ headSha: match[1], comment });
+    }
+  }
+  if (records.length === 0 && !hasDecision) {
+    return scopeOverrunResolution('absent', 'no-record');
+  }
+  if (records.length === 0) {
+    return scopeOverrunResolution('invalid', 'decision-without-record');
+  }
+  const prePush = records.filter((entry) => entry.record.kind === 'pre-push');
+  const postPush = records.filter((entry) => entry.record.kind === 'post-push');
+  const sameSnapshot = (left, right) =>
+    left.issueNumber === right.issueNumber &&
+    left.effort === right.effort &&
+    left.candidateFiles.length === right.candidateFiles.length &&
+    left.candidateFiles.every(
+      (file, index) => file === right.candidateFiles[index],
+    );
+  if (
+    prePush.some((entry) => !sameSnapshot(entry.record, records[0].record)) ||
+    postPush.some((entry) => !sameSnapshot(entry.record, records[0].record)) ||
+    new Set(
+      postPush.map((entry) =>
+        JSON.stringify([entry.record.pullRequestNumber, entry.record.branch]),
+      ),
+    ).size > 1
+  ) {
+    return scopeOverrunResolution('invalid', 'record-conflict');
+  }
+  const postPushHeads = new Set(postPush.map((entry) => entry.record.headSha));
+  let record = postPush[0]?.record ?? prePush[0]?.record ?? null;
+  if (postPushHeads.size > 1) {
+    const latestRecord = latestScopeOverrunValue(
+      postPush.map((entry) => ({
+        comment: entry.comment,
+        value: entry.record,
+      })),
+    );
+    if (!latestRecord) {
+      return scopeOverrunResolution('invalid', 'record-conflict');
+    }
+    record = latestRecord;
+  }
+  const decisionHeads = new Set(decisions.map((decision) => decision.headSha));
+  let decisionHeadSha = decisions[0]?.headSha ?? null;
+  if (decisionHeads.size > 1) {
+    decisionHeadSha = latestScopeOverrunValue(
+      decisions.map((decision) => ({
+        comment: decision.comment,
+        value: decision.headSha,
+      })),
+    );
+    if (!decisionHeadSha) {
+      return scopeOverrunResolution('invalid', 'decision-conflict', record);
+    }
+  }
+  if (decisionHeads.size === 0) {
+    return scopeOverrunResolution('pending', 'no-decision', record);
+  }
+  if (record?.kind !== 'post-push') {
+    return scopeOverrunResolution(
+      'invalid',
+      'pre-push-record-has-no-head',
+      record,
+      decisionHeadSha,
+    );
+  }
+  if (decisionHeadSha !== record.headSha) {
+    return scopeOverrunResolution(
+      'pending',
+      'decision-head-mismatch',
+      record,
+      decisionHeadSha,
+    );
+  }
+  const currentHeadSha = normalizeNonWhitespaceToken(
+    options?.currentHeadSha,
+  ).toLowerCase();
+  if (!/^[0-9a-f]{40}$/.test(currentHeadSha)) {
+    return scopeOverrunResolution(
+      'pending',
+      'current-head-unavailable',
+      record,
+      decisionHeadSha,
+    );
+  }
+  if (currentHeadSha !== record.headSha) {
+    return scopeOverrunResolution(
+      'pending',
+      'current-head-mismatch',
+      record,
+      decisionHeadSha,
+    );
+  }
+  return scopeOverrunResolution(
+    'accepted',
+    'accepted',
+    record,
+    decisionHeadSha,
+  );
+}
 const ISO8601_UTC_PATTERN = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z/;
 const OPTIONAL_IDD_VISIBLE_NOTE_PATTERN = String.raw`(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)`;
 const LEGACY_CLAIM_PATTERN =

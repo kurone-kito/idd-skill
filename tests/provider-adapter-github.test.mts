@@ -3392,28 +3392,85 @@ test('getChangeRequestRequestedReviewerLoginsGraphql never throws, returning nul
   assert.equal(port.getChangeRequestRequestedReviewerLoginsGraphql(7), null);
 });
 
-test('getChangeRequestReadinessSnapshot maps all ten fields from a single pr view call', () => {
-  let capturedArgs: string[] | undefined;
+// kurone-kito/idd-skill#4721: closing references are read through GraphQL, and
+// no `gh pr view` or `gh pr list` JSON list names the field. These helpers
+// answer a fake `gh` by command so each test sees every call it makes.
+function closingRefNode(number: number) {
+  return { number, repository: { name: 'r', owner: { login: 'o' } } };
+}
+
+function singleClosingPage(nodes: unknown[]) {
+  return { nodes, pageInfo: { hasNextPage: false, endCursor: null } };
+}
+
+function pullRequestClosingPayload(
+  headRefOid: string,
+  closingIssuesReferences: unknown,
+) {
+  return {
+    data: {
+      repository: {
+        pullRequest: { headRefOid, closingIssuesReferences },
+      },
+    },
+  };
+}
+
+function ghClosingRefFake(options: {
+  prView: unknown;
+  pullRequest?: (args: string[]) => unknown;
+  scan?: (args: string[]) => unknown;
+}): { calls: string[][]; ghText: GithubProviderAdapterDeps['ghText'] } {
+  const calls: string[][] = [];
+  const ghText = ((args: string[]) => {
+    calls.push(args);
+    if (args[0] === 'pr' && args[1] === 'view') {
+      return JSON.stringify(options.prView);
+    }
+    const query = args.find((arg) => arg.startsWith('query=')) ?? '';
+    if (args[0] === 'api' && args[1] === 'graphql') {
+      if (query.includes('pullRequests(') && options.scan) {
+        return JSON.stringify(options.scan(args));
+      }
+      if (query.includes('pullRequest(number') && options.pullRequest) {
+        return JSON.stringify(options.pullRequest(args));
+      }
+    }
+    throw new Error(`unexpected gh call: ${args.join(' ')}`);
+  }) as GithubProviderAdapterDeps['ghText'];
+  return { calls, ghText };
+}
+
+const CLOSING_REF_PR_VIEW = {
+  headRefOid: 'deadbeef',
+  headRefName: 'issue/7-example',
+  baseRefName: 'main',
+  url: 'https://example.invalid/pull/7',
+  author: { login: 'contributor' },
+  reviewDecision: null,
+  statusCheckRollup: [],
+  mergeable: 'MERGEABLE',
+  mergeStateStatus: 'CLEAN',
+  body: 'Closes #7',
+};
+
+test('getChangeRequestReadinessSnapshot maps all ten fields from pr view plus one GraphQL closing-reference read', () => {
+  const fake = ghClosingRefFake({
+    prView: {
+      ...CLOSING_REF_PR_VIEW,
+      reviewDecision: 'APPROVED',
+      statusCheckRollup: [{ name: 'ci', state: 'SUCCESS' }],
+    },
+    pullRequest: () =>
+      pullRequestClosingPayload(
+        'deadbeef',
+        singleClosingPage([closingRefNode(7)]),
+      ),
+  });
   const port = createGithubProviderAdapter(
     'o',
     'r',
-    fakeDeps({
-      ghText: (args) => {
-        capturedArgs = args;
-        return JSON.stringify({
-          headRefOid: 'deadbeef',
-          baseRefName: 'main',
-          url: 'https://example.invalid/pull/7',
-          author: { login: 'contributor' },
-          reviewDecision: 'APPROVED',
-          statusCheckRollup: [{ name: 'ci', state: 'SUCCESS' }],
-          mergeable: 'MERGEABLE',
-          mergeStateStatus: 'CLEAN',
-          closingIssuesReferences: { nodes: [] },
-          body: 'Closes #7',
-        });
-      },
-    }),
+    fakeDeps({ ghText: fake.ghText }),
   );
   assert.deepEqual(port.getChangeRequestReadinessSnapshot(7), {
     headSha: 'deadbeef',
@@ -3424,39 +3481,401 @@ test('getChangeRequestReadinessSnapshot maps all ten fields from a single pr vie
     statusCheckRollup: [{ name: 'ci', state: 'SUCCESS' }],
     mergeable: 'MERGEABLE',
     mergeStateStatus: 'CLEAN',
-    closingIssuesReferences: { nodes: [] },
+    closingIssuesReferences: [closingRefNode(7)],
     body: 'Closes #7',
   });
-  assert.ok(capturedArgs?.includes('-R'));
+  const prView = fake.calls.find(
+    (args) => args[0] === 'pr' && args[1] === 'view',
+  );
+  assert.ok(prView?.includes('-R'));
   assert.ok(
-    capturedArgs?.includes(
-      'headRefOid,baseRefName,url,author,reviewDecision,statusCheckRollup,mergeable,mergeStateStatus,closingIssuesReferences,body',
+    prView?.includes(
+      'headRefOid,baseRefName,url,author,reviewDecision,statusCheckRollup,mergeable,mergeStateStatus,body',
     ),
   );
 });
 
 test('getChangeRequestReadinessSnapshot reports an absent or null pull request body as an empty string (#3624)', () => {
   for (const body of [undefined, null]) {
+    const prView: Record<string, unknown> = { ...CLOSING_REF_PR_VIEW };
+    delete prView.body;
+    if (body !== undefined) {
+      prView.body = body;
+    }
+    const fake = ghClosingRefFake({
+      prView,
+      pullRequest: () =>
+        pullRequestClosingPayload('deadbeef', singleClosingPage([])),
+    });
     const port = createGithubProviderAdapter(
       'o',
       'r',
-      fakeDeps({
-        ghText: () =>
-          JSON.stringify({
-            headRefOid: 'deadbeef',
-            baseRefName: 'main',
-            url: 'https://example.invalid/pull/7',
-            author: { login: 'contributor' },
-            reviewDecision: null,
-            statusCheckRollup: [],
-            mergeable: 'MERGEABLE',
-            mergeStateStatus: 'CLEAN',
-            closingIssuesReferences: [],
-            ...(body === undefined ? {} : { body }),
-          }),
-      }),
+      fakeDeps({ ghText: fake.ghText }),
     );
     assert.equal(port.getChangeRequestReadinessSnapshot(7).body, '');
+  }
+});
+
+test('closing-reference reads never name closingIssuesReferences in a gh pr --json list and never call gh pr list (#4721)', () => {
+  const fake = ghClosingRefFake({
+    prView: CLOSING_REF_PR_VIEW,
+    pullRequest: () =>
+      pullRequestClosingPayload(
+        'deadbeef',
+        singleClosingPage([closingRefNode(7)]),
+      ),
+    scan: () => ({
+      data: {
+        repository: {
+          pullRequests: {
+            nodes: [
+              {
+                number: 42,
+                closingIssuesReferences: singleClosingPage([closingRefNode(7)]),
+              },
+            ],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        },
+      },
+    }),
+  });
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({ ghText: fake.ghText }),
+  );
+  port.getChangeRequestConvergenceView(42);
+  port.getChangeRequestReadinessSnapshot(42);
+  assert.deepEqual(port.listIssueNumbersClosedByOpenChangeRequests(500), [7]);
+  const ghPrCalls = fake.calls.filter((args) => args[0] === 'pr');
+  assert.equal(ghPrCalls.length, 2);
+  for (const args of ghPrCalls) {
+    assert.ok(
+      !args.some((arg) => arg.includes('closingIssuesReferences')),
+      args.join(' '),
+    );
+  }
+  assert.equal(
+    fake.calls.some((args) => args[0] === 'pr' && args[1] === 'list'),
+    false,
+  );
+});
+
+test('getChangeRequestConvergenceView reads closing references across GraphQL pages (#4721)', () => {
+  const fake = ghClosingRefFake({
+    prView: CLOSING_REF_PR_VIEW,
+    pullRequest: (args) =>
+      args.includes('after=cursor-1')
+        ? pullRequestClosingPayload(
+            'deadbeef',
+            singleClosingPage([closingRefNode(9)]),
+          )
+        : pullRequestClosingPayload('deadbeef', {
+            nodes: [closingRefNode(7)],
+            pageInfo: { hasNextPage: true, endCursor: 'cursor-1' },
+          }),
+  });
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({ ghText: fake.ghText }),
+  );
+  const view = port.getChangeRequestConvergenceView(42);
+  assert.equal(view.headSha, 'deadbeef');
+  assert.deepEqual(view.closingIssuesReferences, [
+    closingRefNode(7),
+    closingRefNode(9),
+  ]);
+  assert.equal(fake.calls.filter((args) => args.includes('graphql')).length, 2);
+});
+
+test('closing-reference lookup fails closed on error, malformed, or partial responses (#4721)', () => {
+  const cases: [string, unknown, RegExp][] = [
+    [
+      'GraphQL errors',
+      { errors: [{ message: 'Could not resolve to a PullRequest' }] },
+      /closingIssuesReferences lookup failed: Could not resolve/,
+    ],
+    [
+      'missing pull request',
+      { data: { repository: { pullRequest: null } } },
+      /pull request #42 was not found/,
+    ],
+    [
+      'null connection',
+      pullRequestClosingPayload('deadbeef', null),
+      /connection is null\/absent or malformed/,
+    ],
+    [
+      'non-array nodes',
+      pullRequestClosingPayload('deadbeef', {
+        nodes: 'x',
+        pageInfo: { hasNextPage: false, endCursor: null },
+      }),
+      /connection is null\/absent or malformed/,
+    ],
+    [
+      'missing pageInfo',
+      pullRequestClosingPayload('deadbeef', { nodes: [] }),
+      /connection is null\/absent or malformed/,
+    ],
+    [
+      'non-boolean hasNextPage',
+      pullRequestClosingPayload('deadbeef', {
+        nodes: [],
+        pageInfo: { hasNextPage: 'yes', endCursor: null },
+      }),
+      /connection is null\/absent or malformed/,
+    ],
+    [
+      'null node',
+      pullRequestClosingPayload('deadbeef', singleClosingPage([null])),
+      /no usable number or repository identity/,
+    ],
+    [
+      'reference without repository identity',
+      pullRequestClosingPayload('deadbeef', singleClosingPage([{ number: 7 }])),
+      /no usable number or repository identity/,
+    ],
+    [
+      'reference without owner login',
+      pullRequestClosingPayload(
+        'deadbeef',
+        singleClosingPage([{ number: 7, repository: { name: 'r' } }]),
+      ),
+      /no usable number or repository identity/,
+    ],
+    [
+      'hasNextPage without endCursor',
+      pullRequestClosingPayload('deadbeef', {
+        nodes: [closingRefNode(7)],
+        pageInfo: { hasNextPage: true, endCursor: null },
+      }),
+      /hasNextPage without endCursor/,
+    ],
+    [
+      'head SHA absent',
+      pullRequestClosingPayload('', singleClosingPage([])),
+      /returned no head SHA/,
+    ],
+    [
+      'head drift against pr view',
+      pullRequestClosingPayload('bbbb', singleClosingPage([])),
+      /head is bbbb, expected deadbeef/,
+    ],
+  ];
+  for (const [label, payload, pattern] of cases) {
+    const fake = ghClosingRefFake({
+      prView: CLOSING_REF_PR_VIEW,
+      pullRequest: () => payload,
+    });
+    const port = createGithubProviderAdapter(
+      'o',
+      'r',
+      fakeDeps({ ghText: fake.ghText }),
+    );
+    assert.throws(
+      () => port.getChangeRequestConvergenceView(42),
+      pattern,
+      label,
+    );
+  }
+});
+
+test('closing-reference lookup fails on head drift during pagination and on a page cap overrun (#4721)', () => {
+  const driftFake = ghClosingRefFake({
+    prView: CLOSING_REF_PR_VIEW,
+    pullRequest: (args) =>
+      args.includes('after=cursor-1')
+        ? pullRequestClosingPayload('feedface', singleClosingPage([]))
+        : pullRequestClosingPayload('deadbeef', {
+            nodes: [closingRefNode(7)],
+            pageInfo: { hasNextPage: true, endCursor: 'cursor-1' },
+          }),
+  });
+  const driftPort = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({ ghText: driftFake.ghText }),
+  );
+  assert.throws(
+    () => driftPort.getChangeRequestConvergenceView(42),
+    /head changed during pagination/,
+  );
+
+  const capFake = ghClosingRefFake({
+    prView: CLOSING_REF_PR_VIEW,
+    pullRequest: () =>
+      pullRequestClosingPayload('deadbeef', {
+        nodes: [closingRefNode(7)],
+        pageInfo: { hasNextPage: true, endCursor: 'cursor-x' },
+      }),
+  });
+  const capPort = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({ ghText: capFake.ghText }),
+  );
+  assert.throws(
+    () => capPort.getChangeRequestConvergenceView(42),
+    /exceeded 20 pages/,
+  );
+});
+
+test('listIssueNumbersClosedByOpenChangeRequests pages open pull requests and reads overflow references in full (#4721)', () => {
+  const fake = ghClosingRefFake({
+    prView: CLOSING_REF_PR_VIEW,
+    scan: (args) => {
+      if (args.includes('after=page-1')) {
+        return {
+          data: {
+            repository: {
+              pullRequests: {
+                nodes: [
+                  {
+                    number: 1003,
+                    closingIssuesReferences: singleClosingPage([
+                      closingRefNode(12),
+                    ]),
+                  },
+                ],
+                pageInfo: { hasNextPage: true, endCursor: 'page-2' },
+              },
+            },
+          },
+        };
+      }
+      return {
+        data: {
+          repository: {
+            pullRequests: {
+              nodes: [
+                {
+                  number: 1001,
+                  closingIssuesReferences: singleClosingPage([
+                    closingRefNode(10),
+                  ]),
+                },
+                {
+                  number: 1002,
+                  closingIssuesReferences: {
+                    nodes: [closingRefNode(11)],
+                    pageInfo: { hasNextPage: true, endCursor: 'inner-1' },
+                  },
+                },
+              ],
+              pageInfo: { hasNextPage: true, endCursor: 'page-1' },
+            },
+          },
+        },
+      };
+    },
+    pullRequest: (args) =>
+      args.includes('after=inner-1')
+        ? pullRequestClosingPayload(
+            'feedface',
+            singleClosingPage([closingRefNode(13)]),
+          )
+        : pullRequestClosingPayload('feedface', {
+            nodes: [closingRefNode(11)],
+            pageInfo: { hasNextPage: true, endCursor: 'inner-1' },
+          }),
+  });
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({ ghText: fake.ghText }),
+  );
+  const numbers = port.listIssueNumbersClosedByOpenChangeRequests(3);
+  assert.deepEqual(
+    [...numbers].sort((a, b) => a - b),
+    [10, 11, 12, 13],
+  );
+  assert.ok(
+    fake.calls.some((args) => args.includes('number=1002')),
+    'the overflowing pull request was read in full',
+  );
+  assert.ok(
+    fake.calls.some((args) => args.includes('after=page-1')),
+    'the scan followed the pull-request cursor',
+  );
+  assert.deepEqual(port.listIssueNumbersClosedByOpenChangeRequests(0), []);
+});
+
+test('listIssueNumbersClosedByOpenChangeRequests fails on a malformed page instead of returning an empty set (#4721)', () => {
+  const malformed = [
+    [
+      'null pullRequests connection',
+      { data: { repository: { pullRequests: null } } },
+      /open pull request scan: connection is null\/absent or malformed/,
+    ],
+    [
+      'pull request without a number',
+      {
+        data: {
+          repository: {
+            pullRequests: {
+              nodes: [{ closingIssuesReferences: singleClosingPage([]) }],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        },
+      },
+      /a pull request has no usable number/,
+    ],
+    [
+      'hasNextPage with no nodes',
+      {
+        data: {
+          repository: {
+            pullRequests: {
+              nodes: [],
+              pageInfo: { hasNextPage: true, endCursor: 'page-1' },
+            },
+          },
+        },
+      },
+      /hasNextPage with no nodes/,
+    ],
+    [
+      'inner closing-reference page with hasNextPage and no cursor',
+      {
+        data: {
+          repository: {
+            pullRequests: {
+              nodes: [
+                {
+                  number: 1001,
+                  closingIssuesReferences: {
+                    nodes: [closingRefNode(10)],
+                    pageInfo: { hasNextPage: true, endCursor: null },
+                  },
+                },
+              ],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        },
+      },
+      /pull request #1001 reported hasNextPage without endCursor/,
+    ],
+  ] as const;
+  for (const [label, payload, pattern] of malformed) {
+    const fake = ghClosingRefFake({
+      prView: CLOSING_REF_PR_VIEW,
+      scan: () => payload,
+    });
+    const port = createGithubProviderAdapter(
+      'o',
+      'r',
+      fakeDeps({ ghText: fake.ghText }),
+    );
+    assert.throws(
+      () => port.listIssueNumbersClosedByOpenChangeRequests(10),
+      pattern,
+      label,
+    );
   }
 });
 

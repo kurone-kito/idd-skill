@@ -170,9 +170,11 @@
   //   "launcher": "npx",
   //   // The helper package: a pinned npm spec, tarball URL, or reviewed
   //   // commit archive. Default: omitted, which uses the mutable archive of
-  //   // the main branch. The example is a placeholder: replace its last
-  //   // segment with a reviewed commit or release tag. Only letters, digits,
-  //   // and @:/_.+^#%- are allowed.
+  //   // the main branch for emitted helper commands and the advisory
+  //   // workflows; the post-merge cleanup workflow uses its own reviewed
+  //   // commit instead under ephemeral-npx or user-global. The example is a
+  //   // placeholder: replace its last segment with a reviewed commit or
+  //   // release tag. Only letters, digits, and @:/_.+^#%- are allowed.
   //   "packageSpec": "https://codeload.github.com/kurone-kito/idd-skill/tar.gz/REPLACE_WITH_REVIEWED_COMMIT"
   // },
 

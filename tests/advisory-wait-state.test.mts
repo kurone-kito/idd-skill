@@ -922,6 +922,8 @@ test('bin/idd-advisory-wait-state.mjs: a malformed --now classifies as a usage e
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 const STANDARD_ADVISORY_WAIT_DOC =
   'idd-template/.github/instructions/idd-advisory-wait.instructions.md';
+const MERGE_INSTRUCTIONS_DOC =
+  'idd-template/.github/instructions/idd-merge.instructions.md';
 const LITE_ADVISORY_WAIT_DOC =
   'idd-template/.github/instructions/lite/idd-advisory-wait-lite.instructions.md';
 const HELPER_REFERENCE_DOC = 'idd-template/docs/idd-helper-scripts.md';
@@ -1017,6 +1019,156 @@ test("the required-field lists match the schema's `required` array", () => {
   }
 });
 
+test('staleRequestRecovery stays claim-bound and validates its action contract', () => {
+  const schema = advisoryWaitStateSchema as {
+    required: string[];
+    properties: Record<
+      string,
+      {
+        required?: string[];
+        properties?: Record<string, { enum?: string[] }>;
+      }
+    >;
+  };
+  const staleRequestRecovery = schema.properties.staleRequestRecovery;
+  assert.ok(staleRequestRecovery);
+  assert.equal(schema.required.includes('staleRequestRecovery'), false);
+  assert.deepEqual(staleRequestRecovery.required, ['action', 'reason']);
+  assert.deepEqual(staleRequestRecovery.properties?.action?.enum, [
+    'attempt',
+    'cap-exhausted',
+    'not-applicable',
+  ]);
+
+  const valid = { action: 'attempt', reason: 'recovery-attempt-eligible' };
+  assert.deepEqual(
+    validate({ staleRequestRecovery: valid }, relaxedAdvisoryWaitStateSchema),
+    [],
+  );
+  assert.notDeepEqual(
+    validate(
+      { staleRequestRecovery: { reason: valid.reason } },
+      relaxedAdvisoryWaitStateSchema,
+    ),
+    [],
+  );
+  assert.notDeepEqual(
+    validate(
+      { staleRequestRecovery: { ...valid, action: 'unknown' } },
+      relaxedAdvisoryWaitStateSchema,
+    ),
+    [],
+  );
+
+  const standard = readFileSync(
+    join(REPO_ROOT, STANDARD_ADVISORY_WAIT_DOC),
+    'utf8',
+  );
+  const eligibility = standard.slice(
+    standard.indexOf('**Eligibility.**', standard.indexOf('AW3-S')),
+    standard.indexOf('**Bounded cycle**', standard.indexOf('AW3-S')),
+  );
+  const normalizedEligibility = eligibility.replace(/\s+/g, ' ');
+  assert.match(
+    normalizedEligibility,
+    /With both active-claim arguments, require/,
+  );
+  assert.match(
+    normalizedEligibility,
+    /schema-valid `staleRequestRecovery` \(`action`, `reason`\) and a recognized `action`/,
+  );
+  assert.match(
+    normalizedEligibility,
+    /missing\/invalid evidence fails closed before recovery or merge/,
+  );
+  assert.match(
+    normalizedEligibility,
+    /Without both, keep the full budget and `not-applicable` behavior/,
+  );
+
+  const helperDocs = readFileSync(
+    join(REPO_ROOT, HELPER_REFERENCE_DOC),
+    'utf8',
+  );
+  const helperContract = helperDocs.slice(
+    helperDocs.indexOf('### Advisory-wait evidence'),
+    helperDocs.indexOf('### Caller mapping'),
+  );
+  const normalizedHelperContract = helperContract.replace(/\s+/g, ' ');
+  assert.match(
+    normalizedHelperContract,
+    /When both claim arguments are supplied, it is required with a schema-valid object containing the schema-required `action` and `reason` fields and a recognized `action`/,
+  );
+  assert.match(
+    normalizedHelperContract,
+    /Validate it before AW3-S recovery and before either F3 direct-merge branch; incomplete or unknown evidence uses the fail-closed route before recovery or merge/,
+  );
+
+  const merge = readFileSync(join(REPO_ROOT, MERGE_INSTRUCTIONS_DOC), 'utf8');
+  const f3Advisory = merge.slice(
+    merge.indexOf('**Advisory state revalidation (blocking)**'),
+    merge.indexOf(
+      '\n4. Merge the PR',
+      merge.indexOf('**Advisory state revalidation (blocking)**'),
+    ),
+  );
+  const normalizedF3Advisory = f3Advisory.replace(/\s+/g, ' ');
+  assert.match(
+    normalizedF3Advisory,
+    /Before any result permits a merge, validate the claim-bound `staleRequestRecovery` object and its recognized `action` and `reason` as required by AW3-S/,
+  );
+  assert.match(
+    normalizedF3Advisory,
+    /Route `attempt` through AW3-S and return to F2 without merging in this F3 pass/,
+  );
+  assert.match(
+    normalizedF3Advisory,
+    /route `cap-exhausted` through AW4 and stop/,
+  );
+  assert.match(
+    normalizedF3Advisory,
+    /only `not-applicable` continues through ordinary F3 outcome handling/,
+  );
+  assert.match(
+    normalizedF3Advisory,
+    /If \*\*SATISFIED\*\*[^.]*recovery action above permits ordinary handling → proceed with the merge/,
+  );
+  assert.match(
+    normalizedF3Advisory,
+    /If `COPILOT_PENDING` is `"false"`[^.]*recovery action permits ordinary handling → proceed with the merge/,
+  );
+});
+
+test('stale-request recovery cannot attempt when either claim argument is absent', () => {
+  const evidence = {
+    copilotPending: true,
+    copilotPendingCoversHead: false,
+    sameHeadMarkerPresent: false,
+  };
+  for (const options of [
+    { ...BASE_OPTIONS, claimId: '' },
+    { ...BASE_OPTIONS, agentId: '' },
+  ]) {
+    const copilotRecovery = buildCopilotRecoverySummary(
+      { comments: [], prHeadSha: SHA, lastCopilotCommit: '' },
+      options,
+    );
+    assert.equal(copilotRecovery.activeClaimProvided, false);
+    assert.equal(copilotRecovery.remainingBudget, copilotRecovery.cap);
+    assert.deepEqual(
+      evaluateStaleRequestRecoveryAction({
+        ...evidence,
+        remainingBudget: copilotRecovery.remainingBudget,
+        activeClaimProvided: copilotRecovery.activeClaimProvided,
+      }),
+      {
+        action: 'not-applicable',
+        reason: 'active-claim-not-provided',
+      },
+    );
+  }
+});
+
 // --- Copilot "wasn't able to review any files" decline (#4142) -----------
 // A declined head is terminal at once: no recovery marker, no clock anchor,
 // and no cap or window wait. Without a claim binding it still fails closed.
@@ -1078,6 +1230,152 @@ test('decline (#4142): a declined head never yields a recovery attempt, while th
     }).action,
     'attempt',
   );
+});
+
+// --- Completed review of the current HEAD (#4718) ---------------------------
+// A completed Copilot review that names the current HEAD proves the request
+// reached the reviewer, so an elapsed same-head request marker is not a failed
+// registration. Only the non-pending path is affected.
+
+const COPILOT_REVIEW_AUTHOR = {
+  login: 'copilot-pull-request-reviewer[bot]',
+  type: 'Bot',
+};
+const CLEAN_OVERVIEW_V2_BODY =
+  '<!-- ccr-overview-v2 -->\n\n## Copilot review overview\n\n**Findings:** None\n';
+
+function completedCopilotReview(commitId: string) {
+  return {
+    state: 'COMMENTED',
+    user: COPILOT_REVIEW_AUTHOR,
+    submitted_at: '2026-10-16T00:00:00Z',
+    commit_id: commitId,
+    body: CLEAN_OVERVIEW_V2_BODY,
+  };
+}
+
+// A claim-bound caller run whose same-head request marker is 11 minutes old,
+// past the 10-minute settled window, with the given Copilot reviews.
+function staleRecoveryReport(reviews: unknown[]) {
+  return withEmptyCwd(() =>
+    readAdvisoryWaitState(
+      meteredPort(waitFixture({ markerAgeMinutes: 11, reviews })).port,
+      { ...CLAIMED_WAIT_INPUT, now: '', clock: () => WAIT_START_MS },
+    ),
+  );
+}
+
+const ELAPSED_NON_PENDING_EVIDENCE = {
+  copilotPending: false,
+  copilotPendingCoversHead: false,
+  sameHeadMarkerPresent: true,
+  sameHeadRequestMarkerPresent: true,
+  remainingBudget: 2,
+  activeClaimProvided: true,
+  elapsedMinutes: 30,
+  settledWindowMinutes: 10,
+};
+
+test('#4718 classifier: a completed current-HEAD review makes the elapsed non-pending case not-applicable', () => {
+  assert.deepEqual(
+    evaluateStaleRequestRecoveryAction({
+      ...ELAPSED_NON_PENDING_EVIDENCE,
+      currentHeadReviewExists: true,
+    }),
+    { action: 'not-applicable', reason: 'proven-covers-head' },
+  );
+  assert.deepEqual(
+    evaluateStaleRequestRecoveryAction({
+      ...ELAPSED_NON_PENDING_EVIDENCE,
+      currentHeadReviewExists: false,
+    }),
+    { action: 'attempt', reason: 'non-pending-recovery-attempt-eligible' },
+  );
+  assert.deepEqual(
+    evaluateStaleRequestRecoveryAction({ ...ELAPSED_NON_PENDING_EVIDENCE }),
+    { action: 'attempt', reason: 'non-pending-recovery-attempt-eligible' },
+  );
+});
+
+test('#4718 classifier: the current-HEAD review check precedes the cap and window checks', () => {
+  assert.deepEqual(
+    evaluateStaleRequestRecoveryAction({
+      ...ELAPSED_NON_PENDING_EVIDENCE,
+      remainingBudget: 0,
+      currentHeadReviewExists: true,
+    }),
+    { action: 'not-applicable', reason: 'proven-covers-head' },
+  );
+  assert.deepEqual(
+    evaluateStaleRequestRecoveryAction({
+      ...ELAPSED_NON_PENDING_EVIDENCE,
+      remainingBudget: 0,
+    }),
+    { action: 'cap-exhausted', reason: 'recovery-cap-exhausted' },
+  );
+  assert.deepEqual(
+    evaluateStaleRequestRecoveryAction({
+      ...ELAPSED_NON_PENDING_EVIDENCE,
+      elapsedMinutes: 3,
+      currentHeadReviewExists: true,
+    }),
+    { action: 'not-applicable', reason: 'proven-covers-head' },
+  );
+});
+
+test('#4718 classifier: a claimless input stays active-claim-not-provided even with a current-HEAD review', () => {
+  assert.deepEqual(
+    evaluateStaleRequestRecoveryAction({
+      ...ELAPSED_NON_PENDING_EVIDENCE,
+      activeClaimProvided: false,
+      currentHeadReviewExists: true,
+    }),
+    { action: 'not-applicable', reason: 'active-claim-not-provided' },
+  );
+});
+
+test('#4718 caller: a completed review of the current HEAD keeps the F3 path and reports not-applicable', () => {
+  const report = staleRecoveryReport([completedCopilotReview(WAIT_SHA)]);
+  assert.deepEqual(report.staleRequestRecovery, {
+    action: 'not-applicable',
+    reason: 'proven-covers-head',
+  });
+  assert.equal(report.f3Outcome, 'SATISFIED');
+  assert.deepEqual(validate(report, advisoryWaitStateSchema), []);
+});
+
+test('#4718 caller: a completed review of an earlier HEAD keeps the existing attempt routing', () => {
+  const report = staleRecoveryReport([completedCopilotReview(WAIT_OTHER_SHA)]);
+  assert.deepEqual(report.staleRequestRecovery, {
+    action: 'attempt',
+    reason: 'non-pending-recovery-attempt-eligible',
+  });
+});
+
+test('#4718 caller: with no completed review the existing attempt routing is kept', () => {
+  const report = staleRecoveryReport([]);
+  assert.deepEqual(report.staleRequestRecovery, {
+    action: 'attempt',
+    reason: 'non-pending-recovery-attempt-eligible',
+  });
+});
+
+test('#4718 caller: a claimless run with a current-HEAD review stays active-claim-not-provided', () => {
+  const report = withEmptyCwd(() =>
+    readAdvisoryWaitState(
+      meteredPort(
+        waitFixture({
+          markerAgeMinutes: 11,
+          reviews: [completedCopilotReview(WAIT_SHA)],
+        }),
+      ).port,
+      { ...WAIT_INPUT, now: '', clock: () => WAIT_START_MS },
+    ),
+  );
+  assert.deepEqual(report.staleRequestRecovery, {
+    action: 'not-applicable',
+    reason: 'active-claim-not-provided',
+  });
 });
 
 // --- CLI baseline (#4378): the printed state of a run without --wait ---------
@@ -1870,6 +2168,10 @@ const ADVISORY_WAIT_DOC_COPIES = [
   STANDARD_ADVISORY_WAIT_DOC,
   '.github/instructions/idd-advisory-wait.instructions.md',
 ] as const;
+const MERGE_INSTRUCTION_DOC_COPIES = [
+  'idd-template/.github/instructions/idd-merge.instructions.md',
+  '.github/instructions/idd-merge.instructions.md',
+] as const;
 const CALLER_MAPPING_END = '<!-- dprint-ignore-end -->';
 const WAIT_ROW =
   "| `WAIT` | wait for Copilot's review; rerun `idd-advisory-convergence`; resume D4 | continue polling | poll then restart F2 from top | do not merge; return to F2 |";
@@ -1917,5 +2219,28 @@ test('the helper reference documents --wait, --poll-interval, waitedSeconds and 
     '`bound-elapsed`',
   ]) {
     assert.ok(doc.includes(needle), `missing ${needle}`);
+  }
+});
+
+test('F3 requires claim-bound stale recovery evidence before allowing a merge', () => {
+  for (const path of MERGE_INSTRUCTION_DOC_COPIES) {
+    const doc = readFileSync(join(REPO_ROOT, path), 'utf8').replace(
+      /\s+/g,
+      ' ',
+    );
+    for (const needle of [
+      '`--claim-id {claim-id}` and `--agent-id {agent-id}` arguments',
+      '`staleRequestRecovery` object and its recognized `action` and `reason`',
+      'Route `attempt` through AW3-S',
+      '`f3Outcome` alone does not authorize a merge',
+    ]) {
+      assert.ok(doc.includes(needle), `${path} is missing ${needle}`);
+    }
+    assert.ok(
+      !doc.includes(
+        'the authoritative advisory gate — do not add stricter sub-conditions',
+      ),
+      `${path} retains the obsolete f3Outcome-only authority wording`,
+    );
   }
 });
