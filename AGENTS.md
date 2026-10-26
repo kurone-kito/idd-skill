@@ -26,6 +26,23 @@ the reasoning behind this layout.
   exact decision or action needed in the same message. If you offer
   options, identify the recommended option and the main cost of each.
   Keep the ask concise and do not repeat context already present in the same message.
+- For user-facing questions about idd-skill decisions, actions, and
+  clarifications during issue authoring and ordinary IDD execution,
+  including scope, hold/recovery, and approval questions, assume an
+  engineer skilled in manual issue-driven development and GitHub Flow
+  who is unfamiliar with the idd-skill product and its automation
+  conventions.
+- When a question uses an idd-skill-specific term, briefly explain the
+  meaning or automation constraint needed for that decision. For
+  example, phase codes describe workflow state; `Candidate files` lists
+  editable paths; an authoring hold pauses automation; and claim/nonce
+  evidence gates who may act. State the exact action requested. Do not
+  infer product knowledge from the IDD acronym, technical vocabulary,
+  repeated use, or prior sessions; an explicit operator request can
+  change the presentation level. This question-writing rule does not
+  change issue/PR prose or execution authority, approvals, ownership, CI,
+  or review. The fixed audience reflects the operator report in issue
+  #4743.
 
 ## Minimum requirements
 
