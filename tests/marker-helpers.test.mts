@@ -177,6 +177,51 @@ test('scope-overrun accepts only a trusted exact-head first-line decision', () =
   assert.equal(result.decisionHeadSha, HEAD);
 });
 
+test('scope-overrun without records is absent and cannot be accepted', () => {
+  const result = resolveScopeOverrunEvidence({
+    comments: [],
+    markerPrefix: PREFIX,
+    trustedMarkerLogins: TRUSTED,
+    issueNumber: ISSUE,
+    currentHeadSha: HEAD,
+  });
+  assert.deepEqual(
+    { status: result.status, reason: result.reason },
+    { status: 'absent', reason: 'no-record' },
+  );
+  assert.notEqual(result.status, 'accepted');
+});
+
+test('scope-overrun decision without record is invalid and not accepted', () => {
+  const result = resolveScopeOverrunEvidence({
+    comments: [evidenceComment(`Scope decision: accept head ${HEAD}`)],
+    markerPrefix: PREFIX,
+    trustedMarkerLogins: TRUSTED,
+    issueNumber: ISSUE,
+    currentHeadSha: HEAD,
+  });
+  assert.deepEqual(
+    { status: result.status, reason: result.reason },
+    { status: 'invalid', reason: 'decision-without-record' },
+  );
+  assert.notEqual(result.status, 'accepted');
+});
+
+test('scope-overrun record without decision is pending and not accepted', () => {
+  const result = resolveScopeOverrunEvidence({
+    comments: [evidenceComment(postPushRecord())],
+    markerPrefix: PREFIX,
+    trustedMarkerLogins: TRUSTED,
+    issueNumber: ISSUE,
+    currentHeadSha: HEAD,
+  });
+  assert.deepEqual(
+    { status: result.status, reason: result.reason },
+    { status: 'pending', reason: 'no-decision' },
+  );
+  assert.notEqual(result.status, 'accepted');
+});
+
 test('scope-overrun rejects acceptance when the current PR head changes', () => {
   const result = resolveScopeOverrunEvidence({
     comments: [

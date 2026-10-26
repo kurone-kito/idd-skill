@@ -5416,13 +5416,26 @@ claim-revalidation gate.
 `parseScopeOverrunRecordComment(body, markerPrefix)` accepts only a canonical
 record under the supplied prefix. `resolveScopeOverrunEvidence()` additionally
 requires each record comment's author to be in the configured trusted marker
-actor list and `lastEditedAt` to be explicitly `null`. A pre-push record may be
-followed by post-push records only when issue, effort, candidate files, PR
-number, and branch stay the same. If the pushed head changes, the newest
-append-only record by GitHub's `createdAt` timestamp and numeric comment ID is
-active; earlier records remain for audit. A new head needs a new trusted-owner
-decision for that exact SHA; the previous decision does not carry forward, and
-an older decision leaves the result `pending` for a decision on the new head.
+actor list and `lastEditedAt` to be explicitly `null`.
+
+The immutable snapshot for a lineage is its issue number, effort, and canonical
+candidate-file set. Every record in that lineage must keep those values.
+Changed candidate files or effort return `invalid` with `record-conflict`; a
+record for another issue returns `invalid` with `record-issue-mismatch`. Keep
+the original issue's record lineage intact. If the candidate-file set changes,
+create a new issue with a new initial pre-push snapshot instead of editing or
+replacing the original snapshot. These mismatches remain fail-closed.
+This changed-scope dead end was raised during review of pull request `#4688`
+on 2026-10-24 ([immutable snapshot contract](https://github.com/kurone-kito/idd-skill/pull/4688#discussion_r4370115461)).
+
+A pre-push record may be followed by post-push records only when the issue,
+effort, and candidate-file set stay the same. Every post-push record in that
+lineage also keeps the same PR number and branch. When the pushed head changes,
+the newest append-only record by GitHub's `createdAt` timestamp and numeric
+comment ID is active; earlier records remain for audit. A new head needs a new
+trusted-owner decision for that exact SHA; the previous decision does not carry
+forward, and an older decision leaves the result `pending` for a decision on
+the new head.
 Every record and decision requires GitHub `createdAt` and a positive numeric
 comment ID; missing ordering metadata is incomplete evidence and returns
 `invalid`. If ordering data is ambiguous, multiple heads remain conflicting
