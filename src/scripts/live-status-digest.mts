@@ -57,7 +57,11 @@ import {
   retireLiveStatusDigestBody,
   summarizeClaimValidationForWriteGate,
 } from './protocol-helpers.mts';
-import { fetchLastEditedAtByNodeId } from './provider-adapter-github.mts';
+import {
+  type ClosingIssueReference,
+  fetchLastEditedAtByNodeId,
+  readChangeRequestClosingIssueReferences,
+} from './provider-adapter-github.mts';
 
 /** Author reference embedded in GitHub REST payloads. */
 interface GhAuthorPayload {
@@ -1245,19 +1249,41 @@ function assertRepairClaimBoundToTarget(
     return;
   }
 
-  let payload: { closingIssuesReferences?: unknown };
+  // kurone-kito/idd-skill#4737: the closing references come from the provider
+  // adapter's pinned reader, not `gh pr view --json closingIssuesReferences`,
+  // which older GitHub CLI releases reject. The head is read first, and the
+  // reader pins its GraphQL read to it, so an empty or malformed head is
+  // rejected before any closing-reference read.
+  let headRefOid: unknown;
   try {
-    payload = JSON.parse(
-      ghText([
-        'pr',
-        'view',
-        String(targetNumber),
-        '--repo',
-        `${owner}/${repo}`,
-        '--json',
-        'closingIssuesReferences',
-      ]),
-    ) as { closingIssuesReferences?: unknown };
+    headRefOid = (
+      JSON.parse(
+        ghText([
+          'pr',
+          'view',
+          String(targetNumber),
+          '--repo',
+          `${owner}/${repo}`,
+          '--json',
+          'headRefOid',
+        ]),
+      ) as { headRefOid?: unknown } | null
+    )?.headRefOid;
+  } catch (error) {
+    throw new Error(
+      `could not read headRefOid for PR #${targetNumber}: ${(error as Error).message}`,
+      { cause: error },
+    );
+  }
+  let closingReferences: ClosingIssueReference[];
+  try {
+    closingReferences = readChangeRequestClosingIssueReferences(
+      ghText,
+      owner,
+      repo,
+      targetNumber,
+      typeof headRefOid === 'string' ? headRefOid : null,
+    );
   } catch (error) {
     // #3346 review finding: preserve the original gh-exec.mts-tagged error
     // as `.cause` so classifyHelperError's cause-chain walk can still
@@ -1268,16 +1294,9 @@ function assertRepairClaimBoundToTarget(
       { cause: error },
     );
   }
-  if (!Array.isArray(payload.closingIssuesReferences)) {
-    throw new Error(
-      `PR #${targetNumber} returned no usable closingIssuesReferences`,
-    );
-  }
-  const linkedIssueNumbers = payload.closingIssuesReferences
-    .map((reference) =>
-      String((reference as { number?: unknown } | null)?.number ?? '').trim(),
-    )
-    .filter(Boolean);
+  const linkedIssueNumbers = closingReferences.map((reference) =>
+    String(reference.number),
+  );
   // A PR-repair coordination lease must be unique to this PR: accepting any
   // one of several linked issues' claims would let two maintainers each
   // legitimately claim a different linked issue and both authorize a repair
