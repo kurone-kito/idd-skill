@@ -19,6 +19,27 @@ For reference content and implementation detail, see
 
 ---
 
+## Questions for operators
+
+When a user-facing question is already required, assume the operator is
+skilled in manual issue-driven development and GitHub Flow, but unfamiliar
+with idd-skill-specific automation. Treat issue triage and planning,
+branches, commits, pull requests, CI, reviews, and merges as known. A
+current explicit operator instruction may specialize this presentation;
+otherwise use explicit repository-local audience guidance, then this
+baseline. Repeated use alone does not establish expertise or a standing
+preference. Explain the relevant idd-skill convention and its practical
+effect, state the exact decision or action needed, and recommend an option
+with its main cost when alternatives matter. Keep each question to the
+context needed for that decision.
+
+This shared rule reaches both full and Lite sessions; Lite does not need
+the appendix for it. It also covers onboarding, issue authoring, and
+ordinary execution follow-ups. Fixed CLI prompt catalogs are outside this
+presentation change. The rule does not change when questions are asked,
+who can approve, or required safety and quality evidence. It adds no new
+approval gate or policy field. For examples, see [Questions for operators](../../docs/idd-workflow.md#questions-for-operators).
+
 ## Claim format
 
 Post this comment to an issue to claim it, heartbeat it, or take it

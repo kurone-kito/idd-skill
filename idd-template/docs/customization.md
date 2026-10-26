@@ -2282,6 +2282,33 @@ location:
   - Never manually edit idd-template/ files — they represent the source
     template and may be re-imported
 
+### Operator question audience
+
+To specialize the question audience for one adopter, add a local
+instruction to its root `AGENTS.md`, outside every block managed by the
+installer. For example:
+
+```markdown
+## Operator question audience
+
+Assume operators know manual issue-driven development and GitHub Flow,
+but are unfamiliar with this repository's IDD-skill automation. Explain
+IDD-specific terms and their effects before asking for an action.
+```
+
+The importer manifest excludes root entry files such as `AGENTS.md`,
+`CLAUDE.md`, and `GEMINI.md`, so normal initial or forced re-import leaves
+them repository-owned. Keep existing thin agent-entry adapters pointing
+to `AGENTS.md`; they can reuse the guidance without duplicating it. The
+user-global installer replaces only its managed span and preserves text
+around it. By contrast, an explicitly forced
+`--record-policy --apply --write-policy-doc <path> --force` write can replace the
+whole document at `<path>`; it does not provide managed-span preservation
+for an arbitrary destination. No question-audience field exists in
+`.github/idd/config.json` or is added here. This is instruction
+customization, not a new layered configuration resolver, and
+`authoringLanguage` remains scoped to issue/PR prose.
+
 ### Exception: this repository is the source of a reusable IDD distribution
 
 The guidance above assumes an **adopter repository** — one that has
