@@ -15,6 +15,7 @@ import {
   resolveAdvisorySecondaryQuietWindowMinutes,
   SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
 } from '../src/scripts/advisory-wait-policy.mts';
+import { evaluateStaleRequestRecoveryAction } from '../src/scripts/advisory-wait-state.mts';
 import {
   GH_API_PAGINATED_MAX_BYTES,
   GhPaginatedResponseLimitError,
@@ -19851,8 +19852,15 @@ test('#4717: without an injected classifier no staleRequestRecovery property is 
 // reason) in their stop-and-ask list before routing. Whitespace is normalized
 // so the check survives re-wrapping.
 test('#4717: both lite advisory-wait copies validate the off-head recovery object before routing', () => {
-  const rule =
-    '- Off-head (`lastCopilotCommit` differs from `prHeadSha`): `staleRequestRecovery` is missing, or is not an object with exactly `action` (`attempt`, `cap-exhausted`, or `not-applicable`) and a non-empty `reason`. Stop and ask before routing.';
+  // The off-head shape rule, plus the presence and guardrail wording that the
+  // same file must keep (the byte budget forbids dropping them).
+  const required = [
+    '- Off-head, `staleRequestRecovery` must be an object with exactly `action` (`attempt`, `cap-exhausted`, or `not-applicable`) and a non-empty `reason`; else stop and ask before routing.',
+    'include `staleRequestRecovery`; reject unbound output.',
+    'never by hand from raw timestamps',
+    'Otherwise (`outcome` is `WAIT`, or any other non-terminal value), keep polling.',
+    '`advisoryWait.secondaryBotLogin` accepts one login or a list.',
+  ];
   for (const doc of [
     'idd-template/.github/instructions/lite/idd-advisory-wait-lite.instructions.md',
     '.github/instructions/lite/idd-advisory-wait-lite.instructions.md',
@@ -19860,7 +19868,137 @@ test('#4717: both lite advisory-wait copies validate the off-head recovery objec
     const text = readFileSync(
       fileURLToPath(new URL(`../${doc}`, import.meta.url)),
       'utf8',
-    );
-    assert.ok(text.replace(/\s+/g, ' ').includes(rule), doc);
+    ).replace(/\s+/g, ' ');
+    for (const sentence of required) {
+      assert.ok(text.includes(sentence), `${doc}: ${sentence}`);
+    }
   }
+});
+
+// kurone-kito/idd-skill#4717: the on-head branch of currentHeadReviewExists,
+// with the real classifier. The forced inputs make the non-pending path reach
+// the elapsed-budget check, so only a true currentHeadReviewExists yields
+// not-applicable. An inverted comparison would yield attempt and fail here.
+test('#4717: a completed current-head review reaches the real classifier as currentHeadReviewExists and stays not-applicable', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const seen: Array<Record<string, unknown>> = [];
+  const summary = JSON.parse(
+    JSON.stringify(
+      buildPreMergeReadinessSummary(fixture.input, {
+        ...fixture.options,
+        evaluateStaleRequestRecovery: (evidence) => {
+          seen.push(evidence as unknown as Record<string, unknown>);
+          return evaluateStaleRequestRecoveryAction({
+            ...evidence,
+            sameHeadMarkerPresent: true,
+            sameHeadRequestMarkerPresent: true,
+            copilotPendingCoversHead: false,
+            elapsedMinutes: 999,
+            settledWindowMinutes: 10,
+            remainingBudget: 2,
+            activeClaimProvided: true,
+            copilotDeclinedHead: false,
+          });
+        },
+      }),
+    ),
+  );
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].currentHeadReviewExists, true);
+  assert.deepEqual(summary.staleRequestRecovery, {
+    action: 'not-applicable',
+    reason: 'proven-covers-head',
+  });
+  assert.equal(blockerNamed(summary, 'stale-request-recovery'), undefined);
+});
+
+// kurone-kito/idd-skill#4717: the collector wiring. The forced-handoff port has
+// no Copilot review, so its head is off-head, and the claim arguments are the
+// only thing that changes between the three runs below.
+function collectRecoveryWiringReport(
+  port: ProviderPort,
+  claimArgs: string[],
+): Record<string, unknown> {
+  const restore = stubExecutable('gh', FORCED_HANDOFF_GH_STUB);
+  try {
+    return collectPreMergeReadiness(
+      [
+        '--pr',
+        '1',
+        '--owner',
+        'o',
+        '--repo',
+        'r',
+        '--now',
+        '2026-05-12T11:00:00Z',
+        ...claimArgs,
+      ],
+      () => port,
+      () =>
+        ({
+          forcedHandoff: { mode: 'human-gated' },
+          trustedMarkerActors: ['kurone-kito', 'maintainer'],
+        }) as never,
+    ) as unknown as Record<string, unknown>;
+  } finally {
+    restore();
+  }
+}
+
+test('#4717: the collector sets the recovery object only for a claim-bound run', () => {
+  const portFor = () =>
+    forcedHandoffMergeFakePort({
+      scope: 'issue-only',
+      earlierLinkedPr: false,
+      linkedLookupFails: false,
+    });
+  const claimBound = collectRecoveryWiringReport(portFor(), [
+    '--claim-issue',
+    '7',
+    '--claim-id',
+    'claim-new',
+    '--agent-id',
+    'copilot',
+  ]);
+  assert.deepEqual(claimBound.staleRequestRecovery, {
+    action: 'not-applicable',
+    reason: 'not-pending',
+  });
+  const claimIdOnly = collectRecoveryWiringReport(portFor(), [
+    '--claim-issue',
+    '7',
+    '--claim-id',
+    'claim-new',
+  ]);
+  assert.equal('staleRequestRecovery' in claimIdOnly, false);
+  // --claimless needs a PR with no closing references, so it gets its own port.
+  const claimlessPort = createFakeProviderAdapter({
+    changeRequestReadinessSnapshots: {
+      1: {
+        headSha: 'a'.repeat(40),
+        baseRefName: 'main',
+        url: 'https://github.com/o/r/pull/1',
+        authorLogin: 'author-user',
+        reviewDecision: null,
+        statusCheckRollup: [],
+        mergeable: 'MERGEABLE',
+        mergeStateStatus: 'CLEAN',
+        closingIssuesReferences: [],
+      },
+    },
+    branchRules: { 'o/r/main': [] },
+    branchProtection: { 'o/r/main': {} },
+    reviewThreadsWithComments: { 1: [] },
+    reviewsWithHeadCommitDate: {
+      1: { reviews: [], headCommittedAt: '2026-05-12T10:30:00Z' },
+    },
+    repositoryDefaultBranch: 'main',
+    comments: {},
+    closingPullRequestPages: {},
+    changeRequestCommits: {
+      1: [{ commit: { committer: { date: '2026-05-12T10:30:00Z' } } }],
+    },
+  } as never);
+  const claimless = collectRecoveryWiringReport(claimlessPort, ['--claimless']);
+  assert.equal('staleRequestRecovery' in claimless, false);
 });
