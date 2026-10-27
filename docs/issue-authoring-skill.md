@@ -1121,17 +1121,17 @@ operations below.
 
 **Step 2 — create the first ledger.** Each draft has its own ledger file,
 `<uuid>.json`, in the namespace. Create it through the verified namespace
-handle below, with exclusive creation and no-follow behavior, containing `[]`.
+handle below, with exclusive creation and no-follow behavior.
 Make every ledger file owner-only at creation: use POSIX mode 600, or on
 Windows pass an explicit protected security descriptor through
 `OBJECT_ATTRIBUTES.SecurityDescriptor`, with a DACL granting access only to the
 current user and both `SE_DACL_PRESENT` and `SE_DACL_PROTECTED` set on that
 descriptor. After opening the new file, verify its owner and owner-only mode or
-ACL before writing its first byte; record its canonical path, file identity,
-type, link count, owner, mode or ACL, and SHA-256. If the platform cannot bind
-creation to the namespace handle or make the file private before it is visible,
-treat storage as unreadable. If this step fails, the partial-state rule below
-applies.
+ACL before writing its first byte. Record its canonical path, file identity,
+type, link count, owner, mode or ACL. Write `[]`, then record its SHA-256. If the
+platform cannot bind creation to the namespace handle or make the file private
+before it is visible, treat storage as unreadable. If this step fails, the
+partial-state rule below applies.
 
 **Ownership check before each ledger operation.** Before every ledger read,
 write, rename, or unlink, compare the namespace and ledger with their records:

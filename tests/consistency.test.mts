@@ -3487,6 +3487,7 @@ test('issue-authoring contract defines ledger storage verdicts, allocation, and 
     text,
     /After opening the new file, verify its owner and owner-only mode or ACL before writing its first byte/,
   );
+  assert.match(text, /Write `\[\]`, then record its SHA-256/);
   assert.match(
     text,
     /the recorded file identity, and its recorded owner-only mode or ACL/,
