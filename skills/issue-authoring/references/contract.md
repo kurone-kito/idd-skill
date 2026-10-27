@@ -2130,7 +2130,12 @@ only approval boundary.
   order pending without an issue, pending with the issue, member, and only
   then cleanup and abandoned, with any conflicting or out-of-order record
   failing closed. That is how this command verifies the set's originating
-  Stage 1 hold, so it cannot extend a set whose hold lives elsewhere. After
+  Stage 1 hold, so it cannot extend a set whose hold lives elsewhere. For
+  `--shape child`, the anchor's hold is read from `issueAuthoring.journalIssue`
+  and from every journal listed in `issueAuthoring.retiredJournalIssues`, the
+  records merged in time order; every record this command writes still goes
+  to `issueAuthoring.journalIssue`, and a hold in any other issue is refused.
+  After
   the identity attach and before its own `acquire` marker, it appends a
   same-owner heartbeat on the anchor (or reuses a fresh matching marker
   under the coalescing rule below), waits `claim.verifySettleDelay`, and
@@ -2209,11 +2214,17 @@ only approval boundary.
   Append `abandoned` only after closed/label-absent verification. On resume,
   paginate the hold log and select the latest valid record for the exact token
   tuple; missing, conflicting, or out-of-order records fail closed, while
-  `pending` and `cleanup` remain recovery holds.
+  `pending` and `cleanup` remain recovery holds. When the set's originating
+  hold is in a retired journal (a journal listed in
+  `issueAuthoring.retiredJournalIssues`), paginate `issueAuthoring.journalIssue`
+  and every listed retired journal, and merge the records in time order before
+  selecting.
 
   `journal` is the durable record location. For an existing set, use the
-  verified originating Stage 1 hold; for a standalone set with no existing
-  issue or anchor, use the repository-level authoring journal target
+  verified originating Stage 1 hold, or `issueAuthoring.journalIssue` when that
+  hold is in a retired journal, since a retired journal takes no new records;
+  for a standalone set with no existing issue or anchor, use the
+  repository-level authoring journal target
   configured at `issueAuthoring.journalIssue` in `.github/idd/config.json`
   (an `owner/repo#number` reference to a pre-existing, durable, comment-only
   issue) -- an unset `issueAuthoring.journalIssue` only blocks a standalone
@@ -2221,7 +2232,9 @@ only approval boundary.
   configuration at all. The one narrower reader is `publish-authoring-hold`:
   it resolves the hold as `issueAuthoring.journalIssue` for every shape, so
   it needs that setting even for a child and verifies the anchor's token
-  there, and it cannot extend a set whose hold lives elsewhere. Do not create
+  there. For a child it also verifies the token in each journal listed in
+  `issueAuthoring.retiredJournalIssues`, and it cannot extend a set whose hold
+  lives in any other issue. Do not create
   that journal as part of the same set.
   If the applicable location cannot be resolved -- no verified Stage 1 hold
   for an existing set, or `issueAuthoring.journalIssue` unset or
@@ -2310,7 +2323,9 @@ only approval boundary.
   and same-call label rule described in the narrow exception below.
 - An atomically labeled publication is not set membership until its owner
   marker is verified. Persist each returned target identity in the durable
-  originating Stage 1 hold before appending the marker. On resume, reconcile
+  originating Stage 1 hold before appending the marker; when that hold is in a
+  retired journal, persist it in `issueAuthoring.journalIssue` instead, the
+  only journal that takes new records. On resume, reconcile
   recorded identities and only issues carrying this set's exact publication
   token; an incomplete scan or unmarked match is a recovery hold, so never
   infer membership or completion from the shared label alone. If the final
@@ -2676,8 +2691,9 @@ only approval boundary.
   retried or resumed release (which reuses an existing `release` marker
   and never appends a new one) still runs the sweep every time this
   preflight step is reached -- run the single fetch-driven sweep command
-  against the target issue and the journal issue named in this session's
-  own records:
+  against the target issue and every journal named in this session's own
+  records (`issueAuthoring.journalIssue`, and each retired journal that holds
+  one of the set's records):
 
   ```sh
   node scripts/sweep-authoring-markers.mjs --issue <target-issue-number> \
@@ -2686,6 +2702,10 @@ only approval boundary.
     --trusted-marker-logins <trusted-login-1,...> \
     --deadline-ms 300000 --apply || true
   ```
+
+  For each retired journal that holds one of the set's records, add one
+  `--issue <retired-journal>` to the same invocation; the same flags apply to
+  every `--issue`, and a retired journal is swept like the current one.
 
   The trailing `|| true` keeps this step's own non-zero exit (a fetch or
   mutation failure) from aborting an automated `set -e` release script:
@@ -2816,7 +2836,8 @@ only approval boundary.
   reuse-or-append decision below, repeat the same mandatory sweep once
   more -- the same `sweep-authoring-markers.mjs` command above, now
   scoped to `--issue <anchor-issue-number> --issue <journal-issue-number>`
-  -- covering the anchor's own owner-marker log and the journal's
+  plus one `--issue` for each retired journal that holds one of the set's
+  records -- covering the anchor's own owner-marker log and each journal's
   publication-intent log -- idempotent with every earlier target's own
   sweep above, since a comment either was already minimized or was not
   yet the newest for its own continuity-chain identity within the family
@@ -2859,7 +2880,8 @@ only approval boundary.
   loop, the "when it is distinct" branch for a target heartbeat). The
   reduced sequence, in order: (1) release-marker preflight -- re-fetch
   owner comments, then run the mandatory sweep against that one issue
-  and the journal issue **before** the reuse-or-append decision (a
+  and every journal that holds one of the set's records **before** the
+  reuse-or-append decision (a
   retried or resumed release still re-runs it), then reuse or append
   the sole target/anchor's own `mode=release` marker and verify it;
   (2) the anchor-only `mode=release-guard` marker on the same issue,
@@ -2905,8 +2927,8 @@ only approval boundary.
   "<authoring label>"` (the release bullet above gives the reason) and
   re-fetching to verify the release marker, absent label, and expected body
   snapshot; (6) the mandatory sweep again, against
-  the same issue and the journal issue, before the release-complete
-  reuse-or-append decision; (7) the anchor-only `mode=release-complete`
+  the same issue and every journal that holds one of the set's records,
+  before the release-complete reuse-or-append decision; (7) the anchor-only `mode=release-complete`
   marker, verified via bounded-retry paginated re-fetch; (8) the
   closing sweep below. Every general-case safety requirement still
   applies unchanged: paginated owner-marker log reads with bounded
@@ -2938,8 +2960,9 @@ only approval boundary.
   `release-complete` marker is found and every label is confirmed
   absent), attempt the mandatory sweep one more time, in a single
   invocation covering every target's now-final owner-marker log (the
-  anchor's included this time, not just its own) and the journal's
-  publication-intent log:
+  anchor's included this time, not just its own) and each journal's
+  publication-intent log -- one `--issue` for `issueAuthoring.journalIssue`
+  and one more for each retired journal that holds a record of the set:
 
   ```sh
   node scripts/sweep-authoring-markers.mjs --issue <target-1> \
@@ -2964,6 +2987,13 @@ only approval boundary.
   own eligibility rule matches what the sweep could actually clear;
   omitting it makes the count overstate the real backlog by including
   untrusted-authored matches the sweep was never going to touch.
+  For each retired journal that holds a record of the set, run that same check
+  once more, with `--trusted-marker-logins` set as above and
+  `--journal-comments-file` holding only that journal's comments, with the
+  sweep's post-mutation result applied to that snapshot as described below.
+  Report each journal's count separately; a retired journal's count is never
+  added to the current journal's. Each of the three sweep attempts still counts
+  once, and each attempt covers every listed journal.
   **Normalize the author field before writing the comments-file JSON**
   (#2896 review, Codex): the paginated GitHub REST/GraphQL response
   this section already fetches exposes a comment's author nested as
@@ -3183,6 +3213,41 @@ requires the marker, matching expected `Refs` origin, configured
 authoring label, bucket, and sole `Refs` line, but does not check these
 five headings for a bucket body; the completed-draft review checks the
 full body shape.
+
+- **Journal rotation.** Observed 2026-10-27 on issue `#2674`: the journal
+  reached GitHub's limit of 2,500 comments, and the next post was refused
+  with HTTP 403 (commenting is disabled on issues with more than 2500
+  comments). Rotate a full journal as follows.
+  1. A 403 from a full journal is an uncertain post, because the record may
+     have landed before the refusal. Replay the journal before anything else:
+     paginate each journal that holds the failed run's records and look for
+     the run's exact publication token.
+  2. Act on the replay outcome:
+     - no record for the token: nothing was sent, so the command may be rerun
+       once the new journal in step 3 is configured (the helper reports
+       `retry: permitted` in this case);
+     - an issue was created by the failed run: do not rerun the command. Write
+       that issue's remaining records by hand to the new journal, each naming
+       it: the attached `pending` and `member` records after their usual
+       checks, or `cleanup` and `abandoned`;
+     - a `pending` record without an issue and no created issue: no rule in
+       this contract covers that case, so it stays a recovery hold, reported
+       to the operator for a decision.
+  3. Create a new comment-only journal issue. In one commit, set
+     `issueAuthoring.journalIssue` to it and add the old reference to
+     `issueAuthoring.retiredJournalIssues`. Until that commit is merged,
+     publish with `--policy` and a copy of the policy file that carries both
+     changes. A retired journal may name another repository, as
+     `journalIssue` may.
+  4. Close the retired journal. This is required by policy: Discover excludes
+     only the configured `journalIssue`, so a retired journal left open can
+     be offered as work.
+  5. Never post a new record or comment to a retired journal. Minimizing its
+     comments through the sweeps is still allowed.
+  6. A journal may also be rotated before it reaches the limit.
+  7. The helper's carrier release sweeps only the carrier and `journalIssue`.
+     For a carrier whose hold is in a retired journal, run the extra sweep and
+     backlog check for that journal by hand, as in the closing sweep above.
 
 ## Draft carrier
 
