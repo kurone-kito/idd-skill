@@ -230,10 +230,9 @@ Exit 0 means no conflict; 1 means conflict. Any other exit is unknown: hold
 without merging or pushing.
 
 - **No conflict:** run `git merge --no-ff` with
-  `origin/{development-branch}`. Use the
-  [signed-commit merge wrapper](../../docs/idd-helper-scripts.md) for
-  non-interactive-hostile primary signing; no confirmation, even with open
-  review threads.
+  `origin/{development-branch}` and the conventional `-m` subject in the
+  [signed-commit merge wrapper](../../docs/idd-helper-scripts.md). No
+  confirmation, even with open review threads.
 - **Conflict:** apply the active-review gate. Unresolved threads, unreplied
   comments, or a `CHANGES_REQUESTED` reviewer require explicit confirmation
   before merging, resolving, and completing; otherwise hold unchanged.
@@ -306,6 +305,8 @@ falls outside the touched-file scope; or either bound is reached.
 
 **Non-goals**: no E15 delay or PATH/triage change; E14 re-review,
 watermark invalidation, and E6 replies stay unchanged.
+
+A cross-round commit invalidates E11; repeat E11 before pushing.
 
 **PR body sync.** If this round's fix changes a claim the PR body
 makes (round count, a documented residual limitation, a scope

@@ -9970,7 +9970,7 @@ because the helper sees the last pushed head (#4759).
 
 ```sh
 git fetch origin +refs/heads/{development-branch}:refs/remotes/origin/{development-branch} \
-  && git merge --no-ff origin/{development-branch}
+  && git merge --no-ff -m "chore: merge origin/{development-branch} into the claimed branch" origin/{development-branch}
 ```
 
 On a repo whose primary commit signing is non-interactive-hostile (GPG

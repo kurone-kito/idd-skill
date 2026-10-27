@@ -236,8 +236,9 @@ command error, stop-and-ask.
 When behind, run `git merge-tree --write-tree HEAD origin/{development-branch}`.
 Only exit 0 means no conflict; exit 1 means conflict. Any other exit is
 unknown and stop-and-ask. With no conflict, run `git merge --no-ff` with
-`origin/{development-branch}`. For non-interactive-hostile primary signing,
-use the [signed-commit merge wrapper](../../../docs/idd-helper-scripts.md).
+`origin/{development-branch}` and the conventional `-m` subject documented
+in the [signed-commit merge wrapper](../../../docs/idd-helper-scripts.md).
+For non-interactive-hostile primary signing, use that wrapper.
 Do not ask for confirmation, even with open review threads. For a conflict,
 apply the active-review gate: unresolved threads,
 unreplied comments, or a `CHANGES_REQUESTED` reviewer require explicit
@@ -271,7 +272,8 @@ the merged tree.
    and E6 reply for the next E1/E4-E7 pass; E14 re-review and
    `review-watermark` invalidation still apply.
 
-10. Apply the pre-mutation guard immediately before this push.
+10. A cross-round commit invalidates E11; repeat E11 before pushing. Apply
+    the pre-mutation guard immediately before this push.
 11. Re-apply the pre-mutation guard immediately before this edit —
     it is a separate mutation after the already-guarded push. If this
     round's fix changes a claim the PR body makes (round count, a
