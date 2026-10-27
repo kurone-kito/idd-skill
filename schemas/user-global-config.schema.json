@@ -453,6 +453,9 @@
         "e10MaxPasses": {
           "$ref": "policy.schema.json#/properties/critiqueLoop/properties/e10MaxPasses"
         },
+        "e10SkipOnAdvisoryConvergence": {
+          "$ref": "policy.schema.json#/properties/critiqueLoop/properties/e10SkipOnAdvisoryConvergence"
+        },
         "deferAfterRounds": {
           "$ref": "policy.schema.json#/properties/critiqueLoop/properties/deferAfterRounds"
         },

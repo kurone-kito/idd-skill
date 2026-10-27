@@ -790,6 +790,10 @@
           "minimum": 1,
           "description": "Per-issue cap on E10 review-fix critique passes, counted across E9 fix batches. Once this many passes have run, no High or Medium Accepted finding is open, and fix-validate has passed on the current HEAD, the loop stops and files the remaining Low findings into a follow-up issue instead of fixing them in the loop. An unestablished count does not count as reached. Optional; defaults to `2`."
         },
+        "e10SkipOnAdvisoryConvergence": {
+          "type": "boolean",
+          "description": "When true, the standard profile skips E10 only for an eligible advisory-only Accepted PATH A batch after advisory convergence matches the current E1 pull-request head. Optional; defaults to `false`. The lite profile always runs E10."
+        },
         "deferAfterRounds": {
           "type": "integer",
           "minimum": 1,

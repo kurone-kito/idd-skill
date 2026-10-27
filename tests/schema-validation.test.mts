@@ -1479,6 +1479,41 @@ test('policy schema rejects a non-positive or non-integer critiqueLoop.e10MaxPas
   }
 });
 
+test('policy schema accepts critiqueLoop.e10SkipOnAdvisoryConvergence booleans (#4760)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  for (const e10SkipOnAdvisoryConvergence of [true, false]) {
+    const instance = JSON.parse(
+      JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+    );
+    instance.critiqueLoop = {
+      ...instance.critiqueLoop,
+      e10SkipOnAdvisoryConvergence,
+    };
+    assert.deepEqual(
+      validate(instance, schema),
+      [],
+      `expected e10SkipOnAdvisoryConvergence ${e10SkipOnAdvisoryConvergence} to validate`,
+    );
+  }
+});
+
+test('policy schema rejects non-booleans for critiqueLoop.e10SkipOnAdvisoryConvergence (#4760)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  for (const e10SkipOnAdvisoryConvergence of ['true', 1, null]) {
+    const instance = JSON.parse(
+      JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+    );
+    instance.critiqueLoop = {
+      ...instance.critiqueLoop,
+      e10SkipOnAdvisoryConvergence,
+    };
+    assert.ok(
+      validate(instance, schema).length > 0,
+      `expected e10SkipOnAdvisoryConvergence ${String(e10SkipOnAdvisoryConvergence)} to be rejected`,
+    );
+  }
+});
+
 test('policy schema accepts every critiqueLoop.deferByUrgency value (#3311)', () => {
   const schema = loadJson('schemas/policy.schema.json');
   for (const deferByUrgency of [
