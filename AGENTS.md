@@ -41,8 +41,7 @@ the reasoning behind this layout.
   repeated use, or prior sessions; an explicit operator request can
   change the presentation level. This question-writing rule does not
   change issue/PR prose or execution authority, approvals, ownership, CI,
-  or review. The fixed audience reflects the operator report in issue
-  #4743.
+  or review. The fixed audience reflects the operator report in issue `#4743`.
 
 ## Minimum requirements
 
