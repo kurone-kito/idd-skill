@@ -5,6 +5,8 @@ description: Provides the verbatim gh, gh api, and jq commands the advisory-wait
 tags: [advisory-wait, shell-fallback]
 ---
 
+<!-- cspell:ignore gsub -->
+
 # IDD — Advisory-Wait Shell Fallback (AW1 / AW2 / AW3-R / AW3-S / AW3-H / F2 detail)
 
 This document contains the verbatim commands used by the shell
