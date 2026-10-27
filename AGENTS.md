@@ -668,10 +668,12 @@ Prerequisites:
 - A clone whose git common directory is owned by uid and gid 1000:1000.
   The script checks this and stops with a message otherwise. The jobs run
   as the image's `node` user, which has a writable HOME. The script uses
-  GNU `stat -c`, so it needs Linux or WSL.
-- Network access on the first run, to pull the image and fetch the
-  actions, and on every run for the two `pnpm-boundary` jobs, which
-  install pnpm and Node at run time.
+  GNU `stat -c`, so it needs Linux or WSL. The common directory's path
+  must contain no spaces or colons, because the script passes it to act
+  and docker inside option strings.
+- Network access when the image is absent locally, to pull it, and when
+  an action is not yet cached, to fetch it. The two `pnpm-boundary` jobs
+  install pnpm and Node at run time, so they need network on every run.
 - A warm pnpm store or network access for the host install that
   `pnpm run` performs in a fresh clone or worktree.
 - A local `origin/main` ref. `node scripts/audit-docs.mjs` diffs against
@@ -679,11 +681,12 @@ Prerequisites:
   `git fetch origin main`.
 
 Each job runs in the image `node:24.21.0-trixie`, selected by tag rather
-than by digest. `--pull=false` uses a local copy that carries the tag as
-it is. The full tag is used rather than the `-slim` variant, because the
-slim image has no `git`; a 2026-10-27 check showed `git` missing from the
-slim image and present in the full tag. The script runs these jobs in
-order and stops at the first failure:
+than by digest. `--pull=false` pulls only when the tag is absent locally;
+a local copy with the tag is used as it is. The full tag is used rather
+than the `-slim` variant, because the slim image has no `git`; a
+2026-10-27 check showed `git` missing from the slim image and present in
+the full tag. The script runs these jobs in order and stops at the first
+failure:
 
 - `lint`: the bare-Node lane, which runs the audits and the protocol
   tests with no dependency installed.
@@ -705,18 +708,21 @@ code defect.
 
 A linked worktree mounts the git common directory read-only at the same
 path, so the checkout inside the container can read the worktree's git
-metadata; the 2026-10-27 probe showed that the mount makes that path
-present. A clone needs no extra mount. The job uid matches the owner of
-the common directory, so git accepts the mounted repository without a
-`safe.directory` setting.
+metadata. Without that mount, git in the container fails with "not a git
+repository" for the worktree's git directory; the 2026-10-27 probe
+recorded in issue `#4756` showed this. A clone needs no extra mount. The
+job uid matches the owner of the common directory, so git accepts the
+mounted repository without a `safe.directory` setting.
 
 The container runs with `--init`. Without an init process, the container
 that act starts keeps a killed child process as a zombie, so a liveness
-check still sees the process. In `tests/idd-critique-telemetry-hook.test.mts`,
-two tests that wait for a killed hook to disappear failed in two runs
-without the flag and passed in a third run with it. Separately, a
-container whose PID 1 was a plain `tail -f` process reproduced the same
-two failures, and `--init` cleared them.
+check still sees the process. On 2026-10-27, in the runs recorded in issue
+`#4756`, two tests in `tests/idd-critique-telemetry-hook.test.mts` failed
+in two runs without the flag: one waits for a hung hook to be killed, the
+other for a backgrounded descendant to be killed. They passed in a third
+run with the flag. A container whose PID 1 was a plain `tail -f` process
+reproduced the same two failures on the same day, and `--init` cleared
+them.
 
 The jobs the script does not run, and why:
 
@@ -737,9 +743,11 @@ The image sets no user, so a container would run the jobs as root, and
 root ignores the POSIX permission bits that some tests rely on. The
 script therefore passes `--user 1000:1000`. In the 2026-10-27 probe, the
 grok test that reads a file with mode `000` failed as root in
-`node:24.21.0-trixie-slim` with `2 !== 1`, and passed as uid 1000. Three
-other tests read or write under such permission bits, so the uid is part
-of the design, not a convenience.
+`node:24.21.0-trixie-slim` with `2 !== 1`, and passed as uid 1000. Other
+test files, such as `tests/idd-config.test.mts` and
+`tests/token-cost-event.test.mts`, depend on the same bits. Some of them
+skip rather than fail as root, so a root run would lose their coverage
+without any failure. The uid is part of the design, not a convenience.
 
 ## For IDD work
 
