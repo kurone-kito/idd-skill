@@ -298,25 +298,40 @@ layered on top of the distributed IDD defaults:
   [docs/idd-design-rationale.md](docs/idd-design-rationale.md#e4e5-adopt-now-urgency-defer)
   for the baseline and the severity-tiered matrix.
 - **Triage record opt-in**: This source repository sets
-  `critiqueLoop.triageRecord` to `"record"` as a local IDD dogfooding
-  policy (applies only to `kurone-kito/idd-skill`), since pull
-  request `#4508` (issue `#4461`), merged 2026-10-18; `idd-template/`
-  keeps the distributed default `"off"`, so adopters are unchanged. The
-  opt-in was first deferred because `advisory-convergence` printed
+  `critiqueLoop.triageRecord` to `"enforce"` as a local IDD dogfooding
+  policy (applies only to `kurone-kito/idd-skill`), switched under issue
+  `#4208` from the `"record"` value set by pull request `#4508` (issue
+  `#4461`), merged 2026-10-18; `idd-template/` keeps the distributed
+  default `"off"`, so adopters are unchanged. The opt-in was first
+  deferred because `advisory-convergence` printed
   `resolve-review-thread --apply` pointers without the `--tier` and
   `--urgency` flags that `record` requires for an Accepted or Rejected
   reply, so `resolve-review-thread` refused those pointers. Observed
   2026-10-16 on pull request `#4405` (Copilot discussion `r4288841711`).
   Pull request `#4500` (issue `#4481`), merged 2026-10-18, made
   `advisory-convergence` add both flags to those pointers when the value
-  is `record` or `enforce`, which unblocked the opt-in. With `record`,
-  `resolve-review-thread` requires `--tier` and `--urgency` on each
+  is `record` or `enforce`, which unblocked the opt-in. With `record` or
+  `enforce`, `resolve-review-thread` requires `--tier` and `--urgency` on each
   applied Accepted or Rejected PATH A reply, except a `--path-b` reply or
   a `**Rejection confirmed by maintainer**` reply. The helper writes a
   `Triage:` line for
-  each reply that carries both flags, in any mode. The switch to
-  `"enforce"` waits for the weekly audit data and is decided in issue
-  `#4208`. Evidence for the `record` opt-in: among the 100
+  each reply that carries both flags, in any mode. The reason for the
+  switch: `record` posts an Accepted reply whose verdict is `defer`, and
+  the weekly review-policy audit counts each one as a recorded triage
+  contradiction. The scheduled run of 2026-10-26 (
+  [run `40284373227`](https://github.com/kurone-kito/idd-skill/actions/runs/40284373227))
+  failed with `5 recorded triage contradiction(s)`. The scheduled run of
+  2026-10-19 (
+  [run `39214309218`](https://github.com/kurone-kito/idd-skill/actions/runs/39214309218))
+  failed on parser drift that pull request `#4543` fixed, so it does not
+  count toward the switch. With `"enforce"`, an applied (`--apply`)
+  Accepted reply whose verdict is `defer` is refused by
+  `resolve-review-thread` unless `--override "<reason>"` gives a reason.
+  Replies posted without the helper are not covered. This applies here
+  because `critiqueLoop.deferByUrgency` is
+  `"severity-tiered"`; under any other mode the helper treats `enforce`
+  as `record`. To opt out, set the field back to `"record"` or `"off"`,
+  or remove it. Evidence for the `record` opt-in: among the 100
   pull requests that were merged at or before 2026-10-13T06:58:55Z and
   are numbered `#3936` to `#4158`, six
   deferral-form replies appeared on four pull requests, and one of 535
