@@ -3525,6 +3525,14 @@ test('issue-authoring contract defines ledger storage verdicts, allocation, and 
       'the destination is a regular file with link count 1, the recorded identity and SHA-256, and the canonical path `<namespace>/<number>.json`',
     ),
   );
+  assert.match(
+    text,
+    /confirm that the copy's SHA-256 equals the source ledger's recorded SHA-256/,
+  );
+  assert.match(
+    text,
+    /confirm that the destination's SHA-256 still equals the source ledger's recorded SHA-256/,
+  );
   // Failed post-creation checks preserve the new namespace instead of deleting
   // it by path; no other session's entry is adopted or removed.
   assert.match(

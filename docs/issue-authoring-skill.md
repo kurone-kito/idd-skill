@@ -1232,16 +1232,19 @@ and error. The review counts as one that cannot finish.
 
 **Rename to the issue number.** Once the draft has its issue number, copy the
 verified ledger to `<number>.json` with exclusive, owner-only creation, write
-the same content, verify the resulting mode or ACL, and record the copy's
-canonical path, identity, type, link count, owner, mode or ACL, and SHA-256. If
+the same content, verify the resulting mode or ACL, and confirm that the copy's
+SHA-256 equals the source ledger's recorded SHA-256. Record the copy's canonical
+path, identity, type, link count, owner, mode or ACL, and SHA-256. If
 `<number>.json` already exists, keep the `<uuid>.json` file, never
 overwrite or adopt the existing file, and stop before publication to report the
 conflict. Immediately before unlinking the source, verify that the namespace
 identity still matches, the source identity and SHA-256 still match their
 records, and the destination is a regular file with link count 1, the recorded
-identity and SHA-256, and the canonical path `<namespace>/<number>.json`. If
-any check fails, preserve both files and stop. Unlink the source only after all
-checks pass; if the unlink fails, preserve both files and report the error.
+identity and SHA-256, and the canonical path `<namespace>/<number>.json`; also
+confirm that the destination's SHA-256 still equals the source ledger's
+recorded SHA-256. If any check fails, preserve both files and stop. Unlink the
+source only after all checks pass; if the unlink fails, preserve both files and
+report the error.
 
 **A review that cannot finish.** A storage stop, an unowned or conflicting
 ledger, a failed first ledger, or a copy that does not match its source means
