@@ -1148,7 +1148,7 @@ function checkAnchorHold(input: {
     input.markerPrefix,
   );
   if (publication === null) {
-    return `the body of the anchor ${input.anchorRef} carries no authoring-publication line, so its hold in the journal ${input.journal.ref} cannot be matched`;
+    return `the body of the anchor ${input.anchorRef} carries no authoring-publication line, so its hold in the journal ${input.journal.ref} or a listed retired journal cannot be matched`;
   }
   if (publication.anchor !== publication.target) {
     return `the authoring-publication line of ${input.anchorRef} names another anchor (${publication.anchor}), so it is not a set anchor`;

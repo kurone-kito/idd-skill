@@ -3318,6 +3318,22 @@ test('hold replay: a record that names another journal, or a second pending reco
     ]) ?? '',
     /names journal o\/r#4748, but it was read from o\/r#2674/,
   );
+  // a retired-journal record that names the configured journal conflicts too
+  assert.match(
+    replayAcross([
+      {
+        ref: CONFIGURED_JOURNAL,
+        comments: [intentComment(1, 'pending', { issue: 'none' })],
+      },
+      {
+        ref: RETIRED_JOURNAL,
+        comments: [
+          intentComment(2, 'pending', { journal: CONFIGURED_JOURNAL }),
+        ],
+      },
+    ]) ?? '',
+    /names journal o\/r#2674, but it was read from o\/r#4748/,
+  );
   // the first pending record of the publication is in both journals
   assert.match(
     replayAcross([
@@ -3423,7 +3439,9 @@ for (const [name, retiredJournalIssues] of RETIRED_JOURNAL_REFUSALS) {
       seedAnchor(fixture);
       const result = fixture.run([...childArgs(fixture), '--apply']);
       assert.equal(result.status, 2, `${result.stdout}\n${result.stderr}`);
-      assert.equal(JSON.parse(result.stdout).outcome, 'blocked-by-human');
+      const report = JSON.parse(result.stdout);
+      assert.equal(report.outcome, 'blocked-by-human');
+      assert.match(report.reason, /retiredJournalIssues/);
       assert.deepEqual(writes(fixture.log()), []);
       assert.deepEqual(childComments(fixture), []);
     } finally {
