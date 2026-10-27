@@ -2135,8 +2135,7 @@ only approval boundary.
   and from every journal listed in `issueAuthoring.retiredJournalIssues`, the
   records merged in time order; every record this command writes still goes
   to `issueAuthoring.journalIssue`, and a hold in any other issue is refused.
-  After
-  the identity attach and before its own `acquire` marker, it appends a
+  After the identity attach and before its own `acquire` marker, it appends a
   same-owner heartbeat on the anchor (or reuses a fresh matching marker
   under the coalescing rule below), waits `claim.verifySettleDelay`, and
   replays the anchor's log. After its own marker it re-reads the anchor and
@@ -2326,9 +2325,9 @@ only approval boundary.
   marker is verified. Persist each returned target identity in the durable
   originating Stage 1 hold before appending the marker; when that hold is in a
   retired journal, persist it in `issueAuthoring.journalIssue` instead, the
-  only journal that takes new records. On resume, reconcile
-  recorded identities and only issues carrying this set's exact publication
-  token; an incomplete scan or unmarked match is a recovery hold, so never
+  only journal that takes new records. On resume, reconcile recorded
+  identities and only issues carrying this set's exact publication token; an
+  incomplete scan or unmarked match is a recovery hold, so never
   infer membership or completion from the shared label alone. If the final
   safe-close read proves no competing claim or marker, append `state=cleanup`
   before closing the issue or removing its authoring label. Re-fetch and verify
@@ -2991,14 +2990,14 @@ only approval boundary.
   own eligibility rule matches what the sweep could actually clear;
   omitting it makes the count overstate the real backlog by including
   untrusted-authored matches the sweep was never going to touch.
-  For each listed retired journal, run that same check
-  once more, with `--trusted-marker-logins` set as above and
+  Immediately after each of the three sweep attempts, also run that check for
+  each listed retired journal, with `--trusted-marker-logins` set as above and
   `--journal-comments-file` holding only that journal's comments, with the
   sweep's post-mutation result applied to that snapshot as described below.
   Report each journal's count separately; a retired journal's count is never
-  added to the current journal's. The three sweep attempts each count once.
-  Operator-run attempts cover every listed retired journal; the helper's
-  carrier release covers only the carrier and `journalIssue`.
+  added to the current journal's. The helper's carrier release runs only the
+  carrier and `journalIssue`, so a carrier whose hold is in a retired journal
+  needs these runs by hand (see the journal-rotation bullet).
   **Normalize the author field before writing the comments-file JSON**
   (#2896 review, Codex): the paginated GitHub REST/GraphQL response
   this section already fetches exposes a comment's author nested as
@@ -3205,8 +3204,10 @@ only approval boundary.
      with `--policy` and a copy of the policy file that carries both changes. A
      retired journal may name another repository, as `journalIssue` may.
   3. Act on the replay outcome:
-     - no record for the token: nothing was sent, so the command may be rerun
-       once step 2 is merged and the operator has confirmed the replay;
+     - no record for the token on replay: the record did not land, but the
+       helper still reports the 403 as uncertain (`nothingSent` stays false),
+       so a rerun is the operator's decision on the replay evidence, made with
+       `--policy` until step 2 is merged;
      - the failed run created an issue (its own report names the issue, or a
        replayed record names one): do not rerun the command. Write that issue's
        remaining records by hand to the new journal, each record's `journal`
@@ -3224,7 +3225,9 @@ only approval boundary.
   6. A journal may also be rotated before it reaches the limit.
   7. The helper's carrier release sweeps only the carrier and `journalIssue`.
      For a carrier whose hold is in a retired journal, run the extra sweep and
-     backlog check for that journal by hand, as in the closing sweep above.
+     backlog check for that journal by hand at each of the three sweep points
+     above: the per-target preflight, the anchor before release-complete, and
+     the closing sweep.
 
 ### Needs-decision follow-up body
 

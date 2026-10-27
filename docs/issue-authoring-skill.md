@@ -1425,9 +1425,9 @@ An atomically labeled publication is not set membership until its owner marker
 is verified. Persist each returned target identity in the durable journal before
 appending the marker; when the set's originating hold is in a retired journal,
 persist it in `issueAuthoring.journalIssue` instead. On resume, reconcile
-recorded
-identities and only issues carrying this set's exact publication token; an
-incomplete scan or unmarked match is a recovery hold, so never infer membership
+recorded identities and only issues carrying this set's exact publication
+token; an incomplete scan or unmarked match is a recovery hold, so never infer
+membership
 or completion from the shared label alone.
 
 ### Per-target ownership and conflict handling
@@ -2183,14 +2183,14 @@ eligibility rule matches what the sweep could actually clear; omitting
 it makes the count overstate the real backlog by including
 untrusted-authored matches the sweep was never going to touch.
 
-For each listed retired journal, run that same check
-once more, with `--trusted-marker-logins` set as above and
+Immediately after each of the three sweep attempts, also run that check for
+each listed retired journal, with `--trusted-marker-logins` set as above and
 `--journal-comments-file` holding only that journal's comments, with the sweep's
 post-mutation result applied to that snapshot as described below. Report each
 journal's count separately; a retired journal's count is never added to the
-current journal's. The three sweep attempts each count once. Operator-run
-attempts cover every listed retired journal; the helper's carrier release
-covers only the carrier and `journalIssue`.
+current journal's. The helper's carrier release runs only the carrier and
+`journalIssue`, so a carrier whose hold is in a retired journal needs these runs
+by hand (see the journal-rotation bullet in the contract).
 
 **Normalize the author field before writing the comments-file JSON**
 (#2896 review, Codex): the paginated GitHub REST/GraphQL response this
