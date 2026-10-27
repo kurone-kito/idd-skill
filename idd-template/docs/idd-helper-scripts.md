@@ -1444,9 +1444,9 @@ in this preamble, since the fallback differs per helper.
   order; a retired journal that cannot be read refuses the child (exit `1`).
   Every write still goes to `issueAuthoring.journalIssue`. At step 2 the
   helper checks only the format of each retired-journal entry, not that the
-  journal exists or is closed. It then puts the
-  `authoring-publication` line first in the
-  body, lints that exact body with `audit-authored-issue.mjs --new-issue`
+  journal exists or is closed. It then puts the `authoring-publication` line
+  first in the body, lints that exact body with
+  `audit-authored-issue.mjs --new-issue`
   and looks up the labels it applies. Without `--apply` it renders the
   pending publication-intent record through `post-idd-marker.mjs`'s dry
   run and prints the plan (exit `0`), with no trust or permission
@@ -1465,8 +1465,10 @@ in this preamble, since the fallback differs per helper.
   status 401, 404 or 422; any other failure reports the journal as
   `uncertain: replay the journal` (an owner marker reports
   `"ownerMarker": "uncertain"`), and an uncertain pending record stops
-  before the create. Every policy value comes from the repository policy
-  file only, and `--marker-prefix` is required when the issue or the
+  before the create. An uncertain post also reports
+  `retry: "replay the journal first"`, and `retry: "permitted"` appears only
+  with `"nothingSent": true`. Every policy value comes from the repository
+  policy file only, and `--marker-prefix` is required when the issue or the
   journal is in another repository.
 
   For `--shape carrier`, after `state=member` the helper runs the carrier
