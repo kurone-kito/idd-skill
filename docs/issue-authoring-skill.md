@@ -42,7 +42,8 @@ operator is skilled in manual issue-driven development and GitHub Flow,
 but unfamiliar with idd-skill-specific automation. Treat issue triage and
 planning, branches, commits, pull requests, CI, reviews, and merges as
 known. Explain the relevant idd-skill convention (for example, that
-`## Candidate files` limits expected edit paths), say how the answer
+`## Candidate files` lists expected edit paths, and an unlisted path may
+trigger the effort limit), say how the answer
 changes the task, and request the exact action. When alternatives matter,
 list each meaningful option with its main cost and recommend one. A current
 explicit operator
