@@ -657,27 +657,39 @@ and it is not distributed through `idd-template/`.
 pnpm run ci:act
 ```
 
+Run it from a clean clone or from a linked worktree. The script tests the
+working tree as it stands: act copies the tree into the container, so
+uncommitted changes and untracked files that are not ignored are tested
+too, not only the commit.
+
 Prerequisites:
 
 - act (tested with act 0.2.89) and a running Docker daemon.
-- A clone owned by uid 1000. The jobs run as the image's `node` user,
-  which has a writable HOME. The script stops with a message for any
-  other owner.
-- Network access on the first run, to pull the image and the actions,
-  and on every run for the two `pnpm-boundary` jobs, which install pnpm
-  at run time.
+- A clone whose git common directory is owned by uid and gid 1000:1000.
+  The script checks this and stops with a message otherwise. The jobs run
+  as the image's `node` user, which has a writable HOME. The script uses
+  GNU `stat -c`, so it needs Linux or WSL.
+- Network access on the first run, to pull the image and fetch the
+  actions, and on every run for the two `pnpm-boundary` jobs, which
+  install pnpm and Node at run time.
 - A warm pnpm store or network access for the host install that
   `pnpm run` performs in a fresh clone or worktree.
+- A local `origin/main` ref. `node scripts/audit-docs.mjs` diffs against
+  it, because act's default event carries no base. Fetch it first with
+  `git fetch origin main`.
 
-Each job runs in the image `node:24.21.0-trixie`, pinned by tag. The
-full tag is used rather than the `-slim` variant, because the slim image
-has no `git`. The script runs these jobs in order and stops at the first
-failure:
+Each job runs in the image `node:24.21.0-trixie`, selected by tag rather
+than by digest. `--pull=false` uses a local copy that carries the tag as
+it is. The full tag is used rather than the `-slim` variant, because the
+slim image has no `git`; a 2026-10-27 check showed `git` missing from the
+slim image and present in the full tag. The script runs these jobs in
+order and stops at the first failure:
 
 - `lint`: the bare-Node lane, which runs the audits and the protocol
   tests with no dependency installed.
-- `pnpm-boundary`: a `pnpm install --frozen-lockfile`, `pnpm run check`,
-  and `node scripts/check-pnpm-boundary.mjs`.
+- `pnpm-boundary`: `pnpm install --frozen-lockfile --prefer-offline` with
+  `HUSKY=0`, then `pnpm run check`, then
+  `node scripts/check-pnpm-boundary.mjs`.
 - `pnpm-boundary-node22-floor`: the same reusable workflow on Node
   22.23.2. It is the only one of the three jobs that covers Node 22.
 
@@ -686,18 +698,25 @@ bare-Node run with no installed dependency, the frozen-lockfile install
 with the pnpm boundary check, and the Node 22.23.2 run. The pre-push
 command set performs none of those.
 
+The lint job's protocol-tests step can fail when the host is under heavy
+load, because a few tests use wall-clock limits such as 700 ms and 2000
+ms. Rerun the job on a quieter host before treating such a failure as a
+code defect.
+
 A linked worktree mounts the git common directory read-only at the same
 path, so the checkout inside the container can read the worktree's git
-metadata. A clone needs no extra mount. The job uid matches the owner of
+metadata; the 2026-10-27 probe showed that the mount makes that path
+present. A clone needs no extra mount. The job uid matches the owner of
 the common directory, so git accepts the mounted repository without a
 `safe.directory` setting.
 
 The container runs with `--init`. Without an init process, the container
-that act starts keeps a killed child process as a zombie, so a process
-that a test has killed still answers a liveness check. A 2026-10-28
-probe reproduced this: the two critique telemetry hook tests that wait
-for a killed process to disappear failed without the flag and passed
-with it.
+that act starts keeps a killed child process as a zombie, so a liveness
+check still sees the process. In `tests/idd-critique-telemetry-hook.test.mts`,
+two tests that wait for a killed hook to disappear failed in two runs
+without the flag and passed in a third run with it. Separately, a
+container whose PID 1 was a plain `tail -f` process reproduced the same
+two failures, and `--init` cleared them.
 
 The jobs the script does not run, and why:
 
@@ -714,12 +733,13 @@ The jobs the script does not run, and why:
   a local run would act on that state (preventive; no observed incident
   yet).
 
-The image runs as uid 1000, not root. In the 2026-10-27 probe, the grok
-test that reads a file with mode `000` failed as root in
-`node:24.21.0-trixie-slim` with `2 !== 1`, because root ignores the POSIX
-permission bits that the test relies on. The same test passed as uid
-1000. Three other tests read or write under such permission bits, so
-the uid is part of the design, not a convenience.
+The image sets no user, so a container would run the jobs as root, and
+root ignores the POSIX permission bits that some tests rely on. The
+script therefore passes `--user 1000:1000`. In the 2026-10-27 probe, the
+grok test that reads a file with mode `000` failed as root in
+`node:24.21.0-trixie-slim` with `2 !== 1`, and passed as uid 1000. Three
+other tests read or write under such permission bits, so the uid is part
+of the design, not a convenience.
 
 ## For IDD work
 
