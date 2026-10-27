@@ -441,7 +441,13 @@ deferred: conditions (a) and (b) of the E5 Defer rule's adopt-now test
 still apply. At S3 and S4 the stop itself is the trigger, because the
 loop cannot land the fix. There the stop test below alone decides and the
 S1 and S2 carve-out in this paragraph does not apply, since Tier 3's
-open-ended gaps are the acceptance criterion itself and may be deferred. Below the review-count cap, the rule above holds as written. At or above the cap (`critiqueLoop.deferAllAfterRounds`), under `severity-tiered` without `--lite`, a non-safety finding of an unmet criterion or a regression defers through the cap, as the [Review-count cap](#wave-gradient-urgency-defer) paragraph states. The cap does not move a needs-decision item off this route, so the never-bundled rule above still applies to it.
+open-ended gaps are the acceptance criterion itself and may be deferred.
+Below the review-count cap, the rule above holds as written. At or above
+the cap (`critiqueLoop.deferAllAfterRounds`), under `severity-tiered` without
+`--lite`, a non-safety finding of an unmet criterion or a regression defers
+through the cap, as the [Review-count cap](#wave-gradient-urgency-defer)
+paragraph states. The cap does not move a needs-decision item off this
+route, so the never-bundled rule above still applies to it.
 
 **Stop test.** Judge it assuming the finding is correct. Hold, as today
 (the existing hold comment and its resume condition, and the
@@ -634,10 +640,15 @@ required-reviewer item, an item in the maintainer-decision hold, and an
 Accepted item mid-fix. Validity and the E4 severity are still judged
 first, and a false claim is Rejected, not deferred.
 
-**Never deferred from step 1, below the cap.** From step 1 on, a High-tier finding of
+**Never deferred from step 1, below the cap.** From step 1 on, a
+High-tier finding of
 `high` urgency never defers, and neither does a finding of the safety
-class. At or above the review-count cap, a High-tier finding of `high` urgency defers unless it is safety class or an exclusion in the Review-count cap paragraph holds. The ceilings already exclude the first at every step below the cap, and it is
-named here because below the cap the final step must never defer it. The safety class
+class. At or above the review-count cap, a High-tier finding of `high`
+urgency defers unless it is safety class or an exclusion in the
+Review-count cap paragraph holds. The ceilings already exclude the first
+at every step below the cap, and it is
+named here because below the cap the final step must never defer it.
+The safety class
 is a finding that, assuming it is correct and merging the pull request as
 it stands, would hit item 1, 2 or 4 of the numbered stop test in
 [Needs-decision deferral](#needs-decision-deferral): the CI-or-unmergeable
@@ -650,13 +661,17 @@ and the gradient would never act. The safety class applies whatever
 `deferByUrgency` trigger only; the separate trigger
 `critiqueLoop.deferAfterRounds` is unchanged.
 
-**Step 0 is unchanged.** Below the review-count cap, the exclusion above starts at step 1, not at step
+**Step 0 is unchanged.** Below the review-count cap, the exclusion above
+starts at step 1, not at step
 0: at step 0 the rule is exactly the rule without the gradient, so a
 safety-class Low-tier finding still defers at step 0 as it does today,
-and a pull request whose field is absent changes nothing. At or above the review-count cap, a safety-class finding never defers at step 0 either. The consequence
+and a pull request whose field is absent changes nothing. At or above the
+review-count cap, a safety-class finding never defers at step 0 either.
+The consequence
 to keep in mind is that from step 1 on, a Medium-tier finding of `high`
 urgency that rests on adopt-now condition (a), (b) or (c) but is not
-safety class defers to the bundled follow-up. Below the review-count cap, at any step under
+safety class defers to the bundled follow-up. Below the review-count cap,
+at any step under
 `"severity-tiered"`, the agent reports adopt-now condition (d) with
 `resolve-review-thread --adopt-now`, which turns a `defer` verdict into
 `keep`; the helper refuses the flag when `critiqueLoop.deferByUrgency` is

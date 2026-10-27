@@ -1952,12 +1952,14 @@ supports these keys:
 - `critiqueLoop.deferByUrgency` (default `off`; `low`,
   `low-and-medium`, or `severity-tiered`). High stays ineligible under
   `low` and `low-and-medium`. Under `low`, `low-and-medium`, and
-  `severity-tiered`, clause (d) of the adopt-now test cascades (under `severity-tiered`, only below `deferAllAfterRounds`): once one
+  `severity-tiered`, clause (d) of the adopt-now test cascades (under
+  `severity-tiered`, only below `deferAllAfterRounds`): once one
   finding of a pass is Accepted, another finding of that pass whose fix
   stays within that push's files is adopt-now and is not deferred. Under
   `severity-tiered` the agent reports (d) with
   `resolve-review-thread --adopt-now`, which turns a `defer` verdict into
-  `keep` below `deferAllAfterRounds` (at or above it, the flag changes nothing); its `high` urgency still reads adopt-now conditions (a)-(c).
+  `keep` below `deferAllAfterRounds` (at or above it, the flag changes
+  nothing); its `high` urgency still reads adopt-now conditions (a)-(c).
 - `critiqueLoop.deferRelaxAtRounds` (optional array of one or two
   positive integers, strictly ascending, at most two; recommended
   `[4, 7]`; omit the key to turn it off). The thresholds are PR-wide
