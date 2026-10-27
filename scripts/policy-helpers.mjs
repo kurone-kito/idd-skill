@@ -2109,8 +2109,8 @@ function severityTieredDefers(eligibility, urgency, step) {
  * a known E4 tier, and the floor never stands in for it. `relaxStep` and
  * `safetyClass` apply to `severity-tiered` only (#3796): from step 1 a
  * safety-class finding never defers (nor, once the cap is reached, at any
- * step), and each step raises the highest
- * urgency a tier may defer at; the other modes ignore both.
+ * step), and each step raises the highest urgency a tier may defer at; the
+ * other modes ignore both.
  */
 export function decideUrgencyDefer(input) {
   if (input.mode === 'off') {

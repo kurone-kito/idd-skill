@@ -2535,8 +2535,9 @@ interface UrgencyDeferInput {
   /**
    * The review-count cap is reached (#4750): the pull request's PR-wide
    * Copilot review count is at or above `deferAllAfterRounds`. Under
-   * `severity-tiered` it defers every finding except a safety-class one, at
-   * any relax step, and it skips the matrix. Defaults to false.
+   * `severity-tiered` it defers every finding that the exclusions above do
+   * not block, except a safety-class one, at any relax step, and it skips the
+   * matrix. Defaults to false.
    */
   capReached?: boolean;
 }
@@ -2898,8 +2899,8 @@ function severityTieredDefers(
  * a known E4 tier, and the floor never stands in for it. `relaxStep` and
  * `safetyClass` apply to `severity-tiered` only (#3796): from step 1 a
  * safety-class finding never defers (nor, once the cap is reached, at any
- * step), and each step raises the highest
- * urgency a tier may defer at; the other modes ignore both.
+ * step), and each step raises the highest urgency a tier may defer at; the
+ * other modes ignore both.
  */
 export function decideUrgencyDefer(
   input: UrgencyDeferInput,

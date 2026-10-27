@@ -4815,18 +4815,15 @@ test('policy schema defines critiqueLoop.deferAllAfterRounds as an integer with 
     );
   }
   // The two sibling descriptions say the cap takes precedence at or above it.
-  for (const sibling of [
-    properties.deferByUrgency.description,
-    properties.deferRelaxAtRounds.description,
-  ]) {
-    const text = sibling.replace(/\s+/g, ' ');
-    assert.ok(
-      text.includes('deferAllAfterRounds') &&
-        text.includes('at or above') &&
-        text.includes('precedence'),
-      'expected the sibling description to say the cap takes precedence at or above deferAllAfterRounds',
-    );
-  }
+  const flat = (text: string) => text.replace(/\s+/g, ' ');
+  assert.match(
+    flat(properties.deferByUrgency.description),
+    /at or above `deferAllAfterRounds`, the cap takes precedence/u,
+  );
+  assert.match(
+    flat(properties.deferRelaxAtRounds.description),
+    /cap takes precedence over this gradient at or above `deferAllAfterRounds`/u,
+  );
 });
 
 test('user-global partial critiqueLoop refers to deferAllAfterRounds from the policy schema (#4750)', () => {
