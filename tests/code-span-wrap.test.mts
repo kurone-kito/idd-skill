@@ -1454,240 +1454,252 @@ test('findCorruptingProseWraps: a real fixture file with emphasis markup has no 
 
 // #3705: the inline code span pattern cost about the cube of a backtick run's
 // length when the run had no closer: 11 s for 4,000 backticks, where the
-// scanner now needs a few milliseconds. Each test times its first, smaller
-// size and asserts it before the 100,000 call, so a regression fails after
-// seconds instead of hanging the suite. The ceiling stays far above the
-// measured cost. Use process CPU time so scheduling delays on a loaded shared
-// host do not inflate the measurement; a wall-clock false alarm occurred on
-// issue #4600. On a failure here, rerun this file alone before suspecting a
-// regression.
-const INLINE_CODE_SPAN_LINEAR_CEILING_MS = 2000;
-const INLINE_CODE_SPAN_LARGE_RUN = 100_000;
+// scanner now needs a few milliseconds. The guards below judge growth, not
+// elapsed time. An absolute ceiling on elapsed time failed a correct change on
+// a loaded runner (issue #4739: 2128 ms against a 2000 ms ceiling). Each guard
+// times the scan at a size and at ten times that size, as the minimum over
+// several batches of process CPU time, and bounds the growth exponent between
+// them: a linear scan grows about as n^1 and a quadratic regression about n^2.
+// A ratio cancels out a uniformly slower host, but process CPU time still
+// includes GC and JIT threads and stays load-sensitive, so each guard's bound
+// sits between the honest noise and the regression it must catch. Every guard
+// measures its larger size before judging, so a failing guard costs about six
+// large runs, and a steep regression takes longer to report than the old
+// ceiling did.
+const LINEAR_SCAN_SIZE_RATIO = 10;
+const LINEAR_SCAN_MAX_GROWTH_EXPONENT = 1.4;
+// A batch repeats the scan until it has accumulated this much CPU time, then
+// averages those runs. A disturbed batch raises its own average, so only the
+// minimum over batches can suppress such an outlier.
+const LINEAR_SCAN_BATCH_MS = 10;
+const LINEAR_SCAN_MAX_BATCH_RUNS = 10_000;
+const LINEAR_SCAN_BATCHES = 5;
 
-function assertWrapScanLinear(
+type Violations = ReturnType<typeof findCorruptingCodeSpanWraps>;
+type ViolationCheck = (violations: Violations, size: number) => void;
+
+const expectNoViolations: ViolationCheck = (violations) => {
+  assert.deepEqual(violations, []);
+};
+const acceptAnyViolations: ViolationCheck = () => undefined;
+
+interface TimedScan {
+  cpuMs: number;
+  violations: Violations;
+}
+
+function timeScan(text: string): TimedScan {
+  const start = process.cpuUsage();
+  const violations = findCorruptingCodeSpanWraps(text);
+  const usage = process.cpuUsage(start);
+  return { cpuMs: (usage.user + usage.system) / 1000, violations };
+}
+
+// Averages the runs of one batch, and keeps the violations of its last run.
+function batchCpuMs(text: string): TimedScan {
+  let runs = 0;
+  let totalMs = 0;
+  let last: TimedScan;
+  do {
+    last = timeScan(text);
+    totalMs += last.cpuMs;
+    runs += 1;
+  } while (totalMs < LINEAR_SCAN_BATCH_MS && runs < LINEAR_SCAN_MAX_BATCH_RUNS);
+  return { cpuMs: totalMs / runs, violations: last.violations };
+}
+
+function minimumBatch(text: string): TimedScan {
+  let best = batchCpuMs(text);
+  for (let batch = 1; batch < LINEAR_SCAN_BATCHES; batch += 1) {
+    const current = batchCpuMs(text);
+    if (current.cpuMs < best.cpuMs) best = current;
+  }
+  return best;
+}
+
+function assertLinearGrowth(
   label: string,
   firstSize: number,
   buildText: (size: number) => string,
-  expectNoViolations: boolean,
+  checkViolations: ViolationCheck,
+  maxExponent = LINEAR_SCAN_MAX_GROWTH_EXPONENT,
 ): void {
-  for (const size of [firstSize, INLINE_CODE_SPAN_LARGE_RUN]) {
-    const text = buildText(size);
-    const start = process.cpuUsage();
-    const violations = findCorruptingCodeSpanWraps(text);
-    const usage = process.cpuUsage(start);
-    const elapsedMs = (usage.user + usage.system) / 1000;
-    assert.ok(
-      elapsedMs < INLINE_CODE_SPAN_LINEAR_CEILING_MS,
-      `${label} took ${Math.round(elapsedMs)} ms for n = ${size} (ceiling ${INLINE_CODE_SPAN_LINEAR_CEILING_MS} ms)`,
-    );
-    if (expectNoViolations) assert.deepEqual(violations, []);
-  }
+  const smallText = buildText(firstSize);
+  const largeText = buildText(firstSize * LINEAR_SCAN_SIZE_RATIO);
+  // Untimed batches at both sizes warm the JIT, so compilation is not counted
+  // as growth. Warming only one size leaves the other cold. A cold smaller
+  // baseline lowers the exponent and could hide a regression, and a cold larger
+  // run raises it into a false failure.
+  batchCpuMs(largeText);
+  batchCpuMs(smallText);
+  const small = minimumBatch(smallText);
+  const large = minimumBatch(largeText);
+  // A zero reading has no finite exponent, so it fails here instead of passing.
+  assert.ok(
+    small.cpuMs > 0 && large.cpuMs > 0,
+    `${label} measured ${small.cpuMs} ms and ${large.cpuMs} ms of CPU time`,
+  );
+  const exponent =
+    Math.log(large.cpuMs / small.cpuMs) /
+    Math.log(largeText.length / smallText.length);
+  assert.ok(
+    Number.isFinite(exponent) && exponent < maxExponent,
+    `${label} grew as about n^${exponent.toFixed(2)} (bound ${maxExponent}): ${small.cpuMs.toFixed(3)} ms for ${smallText.length} characters, ${large.cpuMs.toFixed(2)} ms for ${largeText.length}`,
+  );
+  checkViolations(small.violations, firstSize);
+  checkViolations(large.violations, firstSize * LINEAR_SCAN_SIZE_RATIO);
 }
 
+// At 500 backticks these two scans take a fraction of a millisecond, so timer
+// noise under load moves their exponent more than the others. The looser bound
+// sits above that noise and below the 1.95 that an injected quadratic produces.
+const LINEAR_SCAN_SUB_MILLISECOND_MAX_EXPONENT = 1.6;
+// The helper takes every exponent over text length. This guard's input grows as
+// n squared, so its length ratio is about 97 rather than 10. A scan to the end
+// of the text per run grows as length^1.5, which the tighter bound catches (1.44
+// injected), while honest runs stay between 0.90 and 0.98 under load.
+const LINEAR_SCAN_DISTINCT_RUNS_MAX_EXPONENT = 1.2;
+
 test('findCorruptingCodeSpanWraps stays linear on an unclosed backtick run before a letter and a newline (#3705)', () => {
-  assertWrapScanLinear(
+  assertLinearGrowth(
     'findCorruptingCodeSpanWraps',
-    4000,
+    500,
     (size) => `text ${'`'.repeat(size)}a\n`,
-    true,
+    expectNoViolations,
+    LINEAR_SCAN_SUB_MILLISECOND_MAX_EXPONENT,
   );
 });
 
 test('findCorruptingCodeSpanWraps stays linear on an unclosed backtick run before a blank line, twice (#3705)', () => {
-  assertWrapScanLinear(
+  assertLinearGrowth(
     'findCorruptingCodeSpanWraps',
-    1200,
+    500,
     (size) => `text ${'`'.repeat(size)}\n\ntext ${'`'.repeat(size)}\n`,
-    true,
+    expectNoViolations,
+    LINEAR_SCAN_SUB_MILLISECOND_MAX_EXPONENT,
   );
 });
 
 test('findCorruptingCodeSpanWraps stays linear on a long backtick run followed by many one-backtick closers (#3705)', () => {
-  // Spans are found here, so only the time is asserted.
-  assertWrapScanLinear(
+  // Spans are found here, so only growth is asserted.
+  assertLinearGrowth(
     'findCorruptingCodeSpanWraps',
     1000,
     (size) => `text ${'`'.repeat(size)}${'a`'.repeat(size)}`,
-    false,
+    acceptAnyViolations,
   );
 });
 
 test('findCorruptingCodeSpanWraps stays linear on a long qualified throws list', () => {
-  assertWrapScanLinear(
+  assertLinearGrowth(
     'qualified throws list',
-    1000,
+    2000,
     (size) =>
       `\`class C { void f() throws ${Array(size).fill('com.example. MyException').join(', ')} {} }\``,
-    false,
+    acceptAnyViolations,
   );
 });
 
 test('findCorruptingCodeSpanWraps scales linearly across sibling throws methods', () => {
-  const buildText = (size: number): string =>
-    `\`class C { ${Array.from(
-      { length: size },
-      (_, index) => `void run${index}() throws com.example. MyException {}`,
-    ).join(' ')} }\``;
-  const measure = (size: number): number => {
-    const text = buildText(size);
-    const start = process.cpuUsage();
-    const violations = findCorruptingCodeSpanWraps(text);
-    const usage = process.cpuUsage(start);
-    const elapsedMs = (usage.user + usage.system) / 1000;
-    assert.equal(violations.length, size);
-    return elapsedMs;
-  };
-
-  const smallerElapsedMs = measure(800);
-  const largerElapsedMs = measure(1600);
-  assert.ok(
-    largerElapsedMs < smallerElapsedMs * 3.2 + 100,
-    `doubling sibling methods took ${Math.round(smallerElapsedMs)} ms then ${Math.round(largerElapsedMs)} ms`,
+  assertLinearGrowth(
+    'sibling throws methods',
+    800,
+    (size) =>
+      `\`class C { ${Array.from(
+        { length: size },
+        (_, index) => `void run${index}() throws com.example. MyException {}`,
+      ).join(' ')} }\``,
+    (violations, size) => assert.equal(violations.length, size),
   );
 });
 
 test('findCorruptingCodeSpanWraps scales linearly across dollar-prefixed throws methods', () => {
-  const buildText = (size: number): string =>
-    `\`class C { ${Array.from(
-      { length: size },
-      (_, index) =>
-        `void run${index}() throws com.example. $GeneratedException {}`,
-    ).join(' ')} }\``;
-  const measure = (size: number): number => {
-    const text = buildText(size);
-    const start = process.cpuUsage();
-    const violations = findCorruptingCodeSpanWraps(text);
-    const usage = process.cpuUsage(start);
-    const elapsedMs = (usage.user + usage.system) / 1000;
-    assert.equal(violations.length, size);
-    return elapsedMs;
-  };
-
-  const smallerElapsedMs = measure(800);
-  const largerElapsedMs = measure(1600);
-  assert.ok(
-    largerElapsedMs < smallerElapsedMs * 3.2 + 100,
-    `doubling dollar-prefixed throws methods took ${Math.round(smallerElapsedMs)} ms then ${Math.round(largerElapsedMs)} ms`,
+  assertLinearGrowth(
+    'dollar-prefixed throws methods',
+    800,
+    (size) =>
+      `\`class C { ${Array.from(
+        { length: size },
+        (_, index) =>
+          `void run${index}() throws com.example. $GeneratedException {}`,
+      ).join(' ')} }\``,
+    (violations, size) => assert.equal(violations.length, size),
   );
 });
 
 test('findCorruptingCodeSpanWraps scales linearly across sibling classes', () => {
-  const buildText = (size: number): string =>
-    `\`class Outer { ${Array.from(
-      { length: size },
-      (_, index) => `class C${index} extends com.example. MyClass {}`,
-    ).join(' ')} }\``;
-  const measure = (size: number): number => {
-    const text = buildText(size);
-    const start = process.cpuUsage();
-    const violations = findCorruptingCodeSpanWraps(text);
-    const usage = process.cpuUsage(start);
-    const elapsedMs = (usage.user + usage.system) / 1000;
-    assert.equal(violations.length, size);
-    return elapsedMs;
-  };
-
-  const smallerElapsedMs = measure(800);
-  const largerElapsedMs = measure(1600);
-  assert.ok(
-    largerElapsedMs < smallerElapsedMs * 3.2 + 100,
-    `doubling sibling classes took ${Math.round(smallerElapsedMs)} ms then ${Math.round(largerElapsedMs)} ms`,
+  assertLinearGrowth(
+    'sibling classes',
+    800,
+    (size) =>
+      `\`class Outer { ${Array.from(
+        { length: size },
+        (_, index) => `class C${index} extends com.example. MyClass {}`,
+      ).join(' ')} }\``,
+    (violations, size) => assert.equal(violations.length, size),
   );
 });
 
 test('findCorruptingCodeSpanWraps scales linearly across sentence punctuation', () => {
-  const buildText = (size: number): string =>
-    `\`${'word. Capital prose '.repeat(size)}\``;
-  const measure = (size: number): number => {
-    const text = buildText(size);
-    const start = process.cpuUsage();
-    const violations = findCorruptingCodeSpanWraps(text);
-    const usage = process.cpuUsage(start);
-    const elapsedMs = (usage.user + usage.system) / 1000;
-    assert.deepEqual(violations, []);
-    return elapsedMs;
-  };
-
-  const smallerElapsedMs = measure(8000);
-  const largerElapsedMs = measure(16000);
-  assert.ok(
-    largerElapsedMs < smallerElapsedMs * 3.2 + 100,
-    `doubling sentence candidates took ${Math.round(smallerElapsedMs)} ms then ${Math.round(largerElapsedMs)} ms`,
+  assertLinearGrowth(
+    'sentence punctuation',
+    800,
+    (size) => `\`${'word. Capital prose '.repeat(size)}\``,
+    expectNoViolations,
   );
 });
 
 test('findCorruptingCodeSpanWraps stays linear with deeply nested declaration contexts', () => {
-  assertWrapScanLinear(
+  assertLinearGrowth(
     'deeply nested declaration contexts',
     1000,
     (size) =>
       `\`class C { void f() throws com.example. MyException { ${'if (ready) {'.repeat(size)} work(); ${'}'.repeat(size)} } }\``,
-    false,
+    acceptAnyViolations,
   );
 });
 
 test('findCorruptingCodeSpanWraps scales linearly across nested classes with split extends types', () => {
-  const buildText = (size: number): string =>
-    `\`${Array.from(
-      { length: size },
-      (_, index) => `class C${index} extends com.example. MyClass {`,
-    ).join(' ')} work(); ${'}'.repeat(size)}\``;
-  const measure = (size: number): number => {
-    const text = buildText(size);
-    const start = process.cpuUsage();
-    const violations = findCorruptingCodeSpanWraps(text);
-    const usage = process.cpuUsage(start);
-    const elapsedMs = (usage.user + usage.system) / 1000;
-    assert.equal(violations.length, size);
-    return elapsedMs;
-  };
-
-  const smallerElapsedMs = measure(3200);
-  const largerElapsedMs = measure(6400);
-  assert.ok(
-    largerElapsedMs < smallerElapsedMs * 3.2 + 100,
-    `doubling nested split declarations took ${Math.round(smallerElapsedMs)} ms then ${Math.round(largerElapsedMs)} ms`,
+  assertLinearGrowth(
+    'nested split declarations',
+    800,
+    (size) =>
+      `\`${Array.from(
+        { length: size },
+        (_, index) => `class C${index} extends com.example. MyClass {`,
+      ).join(' ')} work(); ${'}'.repeat(size)}\``,
+    (violations, size) => assert.equal(violations.length, size),
   );
 });
 
-// Both guards pass before and after the change (the old pattern takes 7 and
-// 9 ms): they catch a replacement that does work per match in proportion to
-// the text length, or that scans to the end of the text instead of stopping
-// at a blank line.
+// These guards catch a replacement that does work per match in proportion to
+// the text length, or that scans to the end of the text instead of stopping at
+// a blank line.
 test('findCorruptingCodeSpanWraps stays linear on many short spans (#3705)', () => {
-  const text = '`a`\n'.repeat(25_000);
-  const start = performance.now();
-  const violations = findCorruptingCodeSpanWraps(text);
-  const elapsedMs = performance.now() - start;
-  assert.ok(
-    elapsedMs < INLINE_CODE_SPAN_LINEAR_CEILING_MS,
-    `findCorruptingCodeSpanWraps took ${Math.round(elapsedMs)} ms for 25,000 short spans`,
+  assertLinearGrowth(
+    'findCorruptingCodeSpanWraps',
+    2500,
+    (size) => '`a`\n'.repeat(size),
+    expectNoViolations,
   );
-  assert.deepEqual(violations, []);
 });
 
 test('findCorruptingCodeSpanWraps stays linear on many unclosed runs each followed by a blank line (#3705)', () => {
-  const text = '``a\n\n'.repeat(25_000);
-  const start = performance.now();
-  const violations = findCorruptingCodeSpanWraps(text);
-  const elapsedMs = performance.now() - start;
-  assert.ok(
-    elapsedMs < INLINE_CODE_SPAN_LINEAR_CEILING_MS,
-    `findCorruptingCodeSpanWraps took ${Math.round(elapsedMs)} ms for 25,000 unclosed runs`,
+  assertLinearGrowth(
+    'findCorruptingCodeSpanWraps',
+    2500,
+    (size) => '``a\n\n'.repeat(size),
+    expectNoViolations,
   );
-  assert.deepEqual(violations, []);
 });
 
 test('findCorruptingCodeSpanWraps stays linear on distinct unmatched backtick runs before a literal split', () => {
-  for (const size of [100, 1000]) {
-    const text = `${Array.from({ length: size }, (_, index) => `${'`'.repeat(index + 1)}x`).join('')}- x`;
-    const start = performance.now();
-    const violations = findCorruptingCodeSpanWraps(text);
-    const elapsedMs = performance.now() - start;
-    assert.ok(
-      elapsedMs < INLINE_CODE_SPAN_LINEAR_CEILING_MS,
-      `findCorruptingCodeSpanWraps took ${Math.round(elapsedMs)} ms for ${size} distinct unmatched runs`,
-    );
-    assert.deepEqual(violations, []);
-  }
+  assertLinearGrowth(
+    'findCorruptingCodeSpanWraps',
+    100,
+    (size) =>
+      `${Array.from({ length: size }, (_, index) => `${'`'.repeat(index + 1)}x`).join('')}- x`,
+    expectNoViolations,
+    LINEAR_SCAN_DISTINCT_RUNS_MAX_EXPONENT,
+  );
 });

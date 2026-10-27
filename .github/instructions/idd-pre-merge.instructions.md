@@ -106,13 +106,12 @@ kurone-kito/idd-skill#1529). Omitting `--nonce` silently skips the
 merge-time comparison rather than failing closed, so pass it whenever a
 nonce was recorded for the active claim.
 
-**No claimed issue**: the readiness collector requires
-`--claim-issue <issue-number>` (with `--claim-id`) or `--claimless`
-(#2017) — pass `--claimless` for a PR with no linked issue
-(`closingIssuesReferences` empty) or a valid `reason:bootstrap`
-out-of-loop marker; it cannot combine with `--claim-issue`/`--claim-id`,
-and otherwise fails closed on a non-empty `closingIssuesReferences`. See
-[docs/idd-helper-scripts.md's Readiness command](../../docs/idd-helper-scripts.md).
+**Claim identity with empty references**: an active claimed PR targeting a
+non-default branch can have empty `closingIssuesReferences` (#4697). Always
+pass an active claim's `--claim-issue`, `--claim-id`, and recorded `--nonce`,
+regardless of that field. Use `--claimless` (#2017) only for a verified
+no-claim PR (no-issue or qualified bootstrap); it skips claim revalidation.
+See the [Readiness command](../../docs/idd-helper-scripts.md).
 
 **Multi-issue close**: pass `--closing-issues <n>,<m>` (D3) with the
 full set (else a `closing-set` mismatch).
