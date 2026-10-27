@@ -3001,6 +3001,40 @@ test('differential: a tilde fence masks a pending marker, and a backtick line in
     0,
     0,
   );
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 8403,
+          login: 'coderabbitai[bot]',
+          body: 'nit: show the example',
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 8404,
+          login: AGENT_LOGIN,
+          body: '**Accepted** — example:\n~~~lang~x\n**Awaiting maintainer decision** inside\n~~~',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+      threads: [
+        f2Thread(
+          [
+            f2ThreadComment('human-reviewer', 'please rename', F2_CASE_TIME_1),
+            f2ThreadComment(
+              AGENT_LOGIN,
+              '**Accepted** — example:\n~~~lang~x\n**Awaiting maintainer decision** inside\n~~~',
+              F2_CASE_TIME_2,
+            ),
+          ],
+          false,
+          true,
+        ),
+      ],
+    },
+    0,
+    0,
+  );
 });
 
 test('differential: CRLF line endings do not hide a fenced block close (#4696)', {
@@ -3228,45 +3262,54 @@ test('differential: inline code spans stop at Markdown block boundaries (#4696)'
   const bodies = [
     '**Accepted** — noted\nbefore \u0060\n# Heading\n**Awaiting maintainer decision** choose one\nafter \u0060',
     '**Accepted** — noted\nbefore \u0060\n---\n**Awaiting maintainer decision** choose one\nafter \u0060',
+    '**Accepted** — noted\nbefore \u0060\nHeading\n===\n**Awaiting maintainer decision** choose one\nafter \u0060',
+    '**Accepted** — noted\r\nbefore \u0060\r\n---\r\n**Awaiting maintainer decision** choose one\r\nafter \u0060',
+    '**Accepted** — noted\r\nbefore \u0060\r\n# Heading\r\n**Awaiting maintainer decision** choose one\r\nafter \u0060',
     '**Accepted** — noted\nbefore \u0060\n```text\nexample\n```\n**Awaiting maintainer decision** choose one\nafter \u0060',
     '**Accepted** — noted\nbefore \u0060\n~~~text\nexample\n~~~\n**Awaiting maintainer decision** choose one\nafter \u0060',
   ];
 
   for (const [index, body] of bodies.entries()) {
-    assertF2Parity(
-      {
-        regular: [
-          {
-            id: 6101 + index * 2,
-            login: 'coderabbitai[bot]',
-            body: 'nit: rename this',
-            at: F2_CASE_TIME_1,
-          },
-          {
-            id: 6102 + index * 2,
-            login: AGENT_LOGIN,
-            body,
-            at: F2_CASE_TIME_2,
-          },
-        ],
-        threads: [
-          f2Thread(
-            [
-              f2ThreadComment(
-                'human-reviewer',
-                'please rename',
-                F2_CASE_TIME_1,
-              ),
-              f2ThreadComment(AGENT_LOGIN, body, F2_CASE_TIME_2),
-            ],
-            false,
-            true,
-          ),
-        ],
-      },
-      1,
-      1,
-    );
+    try {
+      assertF2Parity(
+        {
+          regular: [
+            {
+              id: 6101 + index * 2,
+              login: 'coderabbitai[bot]',
+              body: 'nit: rename this',
+              at: F2_CASE_TIME_1,
+            },
+            {
+              id: 6102 + index * 2,
+              login: AGENT_LOGIN,
+              body,
+              at: F2_CASE_TIME_2,
+            },
+          ],
+          threads: [
+            f2Thread(
+              [
+                f2ThreadComment(
+                  'human-reviewer',
+                  'please rename',
+                  F2_CASE_TIME_1,
+                ),
+                f2ThreadComment(AGENT_LOGIN, body, F2_CASE_TIME_2),
+              ],
+              false,
+              true,
+            ),
+          ],
+        },
+        1,
+        1,
+      );
+    } catch (error) {
+      throw new Error(`Markdown block boundary case ${index} failed`, {
+        cause: error,
+      });
+    }
   }
 });
 

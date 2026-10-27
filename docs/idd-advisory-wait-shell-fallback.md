@@ -1261,13 +1261,15 @@ DISPOSITION_JSON=$(printf '%s' "${COMMENTS_JSON}" | jq -c --argjson agents "${RE
   def interrupts_paragraph:
     test("^ {0,3}#{1,6}([ \\t]|$)")
     or test("^ {0,3}([-_*])([ \\t]*\\1){2,}[ \\t]*$")
+    or test("^ {0,3}(?:={1,}|-{1,2})[ \\t]*$")
     or test(html_start_re; "i");
+  # Keep an empty line at block boundaries so inline-code matching cannot cross one.
   def mask_interrupting_lines:
     split("\n")
-    | map(if interrupts_paragraph then gsub("."; " ") else . end)
+    | map(if interrupts_paragraph then "" else . end)
     | join("\n");
   def pending_marker:
-    (.body | strip_all("(?ms)^ {0,3}(\\x60{3,})(?=[^\\x60\\n]*$).*?(?:^ {0,3}\\1\\x60*[ \\t\\r]*$|\\z)") | strip_all("(?ms)^ {0,3}(~{3,}).*?(?:^ {0,3}\\1~*[ \\t\\r]*$|\\z)") | mask_html_comments | mask_interrupting_lines | mask_inline_code
+    (.body | gsub("\\r\\n"; "\n") | strip_all("(?ms)^ {0,3}(\\x60{3,})(?=[^\\x60\\n]*$).*?(?:^ {0,3}\\1\\x60*[ \\t\\r]*$|\\z)") | strip_all("(?ms)^ {0,3}(~{3,}).*?(?:^ {0,3}\\1~*[ \\t\\r]*$|\\z)") | mask_html_comments | mask_interrupting_lines | mask_inline_code
       | split("\n")
       | reduce .[] as $l ({run: false, hit: false};
           if .hit then .
@@ -1456,13 +1458,15 @@ MISSING_THREADS=$(printf '%s' "${THREADS_JSON}" | jq -rs --argjson agents "${IDD
   def interrupts_paragraph:
     test("^ {0,3}#{1,6}([ \\t]|$)")
     or test("^ {0,3}([-_*])([ \\t]*\\1){2,}[ \\t]*$")
+    or test("^ {0,3}(?:={1,}|-{1,2})[ \\t]*$")
     or test(html_start_re; "i");
+  # Keep an empty line at block boundaries so inline-code matching cannot cross one.
   def mask_interrupting_lines:
     split("\n")
-    | map(if interrupts_paragraph then gsub("."; " ") else . end)
+    | map(if interrupts_paragraph then "" else . end)
     | join("\n");
   def pending_marker:
-    (.body | strip_all("(?ms)^ {0,3}(\\x60{3,})(?=[^\\x60\\n]*$).*?(?:^ {0,3}\\1\\x60*[ \\t\\r]*$|\\z)") | strip_all("(?ms)^ {0,3}(~{3,})(?=[^~\\n]*$).*?(?:^ {0,3}\\1~*[ \\t\\r]*$|\\z)") | mask_html_comments | mask_interrupting_lines | mask_inline_code
+    (.body | gsub("\\r\\n"; "\n") | strip_all("(?ms)^ {0,3}(\\x60{3,})(?=[^\\x60\\n]*$).*?(?:^ {0,3}\\1\\x60*[ \\t\\r]*$|\\z)") | strip_all("(?ms)^ {0,3}(~{3,}).*?(?:^ {0,3}\\1~*[ \\t\\r]*$|\\z)") | mask_html_comments | mask_interrupting_lines | mask_inline_code
       | split("\n")
       | reduce .[] as $l ({run: false, hit: false};
           if .hit then .
