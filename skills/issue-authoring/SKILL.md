@@ -412,9 +412,9 @@ fails, stop without trying another root. When no root is supplied, allocate a
 new `issue-authoring-<uuid>` directory with exclusive creation (a non-recursive
 `mkdir`, never `mkdir -p`) in the OS temporary directory, or in the user state
 directory if it already exists, outside every worktree and git directory. Keep
-one `<uuid>.json` ledger per draft, created with exclusive creation, and rename
-it to the issue number without overwriting another file. Never share a ledger,
-never write one to the repository or a marker, and never reuse another session's
+one owner-only `<uuid>.json` ledger per draft, created with exclusive creation;
+rename it to the issue number without overwriting another file. Never share a
+ledger, write one to the repository or a marker, or reuse another session's
 namespace. A lost ledger starts empty. Unsafe, conflicting, or unreadable
 storage stops the review: report the path and preserve unverified entries; the
 contract permits cleanup only for entries this session created whose identity

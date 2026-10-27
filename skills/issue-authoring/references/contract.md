@@ -1596,10 +1596,17 @@ operations below.
 
 **Step 2 — create the first ledger.** Each draft has its own ledger file,
 `<uuid>.json`, in the namespace. Create it through the verified namespace
-handle below, with exclusive creation and no-follow behavior, containing `[]`;
-record its canonical path, file identity, type, link count, and SHA-256. If the
-platform cannot bind creation to that handle, treat storage as unreadable. If
-this step fails, the partial-state rule below applies.
+handle below, with exclusive creation and no-follow behavior, containing `[]`.
+Make every ledger file owner-only at creation: use POSIX mode 600, or on
+Windows pass an explicit protected security descriptor through
+`OBJECT_ATTRIBUTES.SecurityDescriptor`, with a DACL granting access only to the
+current user and both `SE_DACL_PRESENT` and `SE_DACL_PROTECTED` set on that
+descriptor. After opening the new file, verify its owner and owner-only mode or
+ACL before writing its first byte; record its canonical path, file identity,
+type, link count, owner, mode or ACL, and SHA-256. If the platform cannot bind
+creation to the namespace handle or make the file private before it is visible,
+treat storage as unreadable. If this step fails, the partial-state rule below
+applies.
 
 **Ownership check before each ledger operation.** Before every ledger read,
 write, rename, or unlink, compare the namespace and ledger with their records:
@@ -1607,7 +1614,8 @@ write, rename, or unlink, compare the namespace and ledger with their records:
 - The namespace's canonical path matches its record, no component of that path
   is a symbolic link or reparse point, and its file identity matches.
 - The ledger is a regular file, not a symbolic link or reparse point, with a
-  link count of 1 and the recorded file identity.
+  link count of 1, the recorded file identity, and its recorded owner-only mode
+  or ACL.
 
 Path checks alone do not bind a later operation to the checked directory. Use
 native handle-relative operations with exclusive creation and no-follow checks
@@ -1624,11 +1632,18 @@ On Windows, use a native binding that opens or creates child names with
 `NtCreateFile`, setting `OBJECT_ATTRIBUTES.RootDirectory` to the verified
 directory handle and `OBJ_DONT_REPARSE` in its attributes. Use
 `CreateDisposition=FILE_CREATE` for exclusive child creation; create a
-directory with `FILE_DIRECTORY_FILE`. After the final identity and SHA-256
-checks, replace the owned ledger by calling `SetFileInformationByHandle` on the
-verified temporary-file handle with `FileRenameInfo`,
-`ReplaceIfExists=TRUE`, and `FILE_RENAME_INFO.RootDirectory` set to the
-namespace handle. Open that file handle with `DELETE` access. After verifying
+directory with `FILE_DIRECTORY_FILE`. For every ledger file creation — the
+initial or recreated ledger, temporary replacement, and issue-number copy —
+also pass an explicit protected owner-only security descriptor through
+`OBJECT_ATTRIBUTES.SecurityDescriptor`. The namespace DACL does not establish
+that a child file is private. Verify each created file's resulting owner-only
+DACL before writing to it, and preserve that ACL in the ownership record. If
+the descriptor cannot be applied at creation or the resulting ACL is not
+owner-only, fail closed and preserve the entry. After the final identity and
+SHA-256 checks, replace the owned ledger via `SetFileInformationByHandle` on
+the verified temporary-file handle with `FileRenameInfo`,
+`ReplaceIfExists=TRUE`, and `FILE_RENAME_INFO.RootDirectory` set to the namespace
+handle. Open that file handle with `DELETE` access. After verifying
 the copied issue-number file, mark the verified source handle for deletion with
 `SetFileInformationByHandle` and `FileDispositionInfo` (`DeleteFile=TRUE`); it
 also requires `DELETE` access. If access or an operation fails, preserve the
@@ -1654,11 +1669,12 @@ report it.
 
 - **Owned and unchanged.** The file identity and SHA-256 both match. Continue:
   write the complete new JSON to a new exclusively created, owner-only
-  temporary file in the namespace, then record its canonical path, identity,
-  type, link count, and SHA-256. Immediately before replacement, repeat the
-  ownership check and verify that the existing ledger's identity and SHA-256
-  still match the records, and that the temporary file still matches its
-  records. On any mismatch, preserve both files and stop without replacement.
+  temporary file in the namespace, then verify and record its canonical path,
+  identity, type, link count, owner, mode or ACL, and SHA-256. Immediately before
+  replacement, repeat the ownership check and verify that the existing ledger's
+  identity and SHA-256 still match the records, and that the temporary file
+  still matches its records. On any mismatch, preserve both files and stop
+  without replacement.
   Replace the ledger
   by renaming the verified temporary file over it, then record the new identity
   and SHA-256. Remove the temporary file only when this write created it, its
@@ -1690,9 +1706,10 @@ the namespace and any partial file, delete nothing, and report the exact path
 and error. The review counts as one that cannot finish.
 
 **Rename to the issue number.** Once the draft has its issue number, copy the
-verified ledger to `<number>.json` with exclusive creation, write the same
-content, and record the copy's canonical path, identity, type, link count, and
-SHA-256. If `<number>.json` already exists, keep the `<uuid>.json` file, never
+verified ledger to `<number>.json` with exclusive, owner-only creation, write
+the same content, verify the resulting mode or ACL, and record the copy's
+canonical path, identity, type, link count, owner, mode or ACL, and SHA-256. If
+`<number>.json` already exists, keep the `<uuid>.json` file, never
 overwrite or adopt the existing file, and stop before publication to report the
 conflict. Immediately before unlinking the source, verify that the namespace
 identity still matches, the source identity and SHA-256 still match their
