@@ -612,6 +612,13 @@
   //   // other deferByUrgency values. docs/customization.md recommends the
   //   // example value.
   //   "deferRelaxAtRounds": [4, 7],
+  //   // Review-count cap for severity-tiered. Default: omitted, which turns
+  //   // the cap off. Under severity-tiered only. At or above the value, every
+  //   // non-safety-class finding goes to a follow-up issue whatever the step,
+  //   // except PATH B, --scope-fence, --protected-authority, and
+  //   // --accepted-mid-fix, which keep their verdicts. Adopt-now condition (d)
+  //   // and --adopt-now keep none of the others.
+  //   "deferAllAfterRounds": 3,
   //   // - "on" (default): a finding that needs a person's judgment may go to
   //   //   a needs-decision follow-up issue when merging is safe.
   //   // - "off": the loop stops for a person instead.
