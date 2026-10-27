@@ -1465,9 +1465,10 @@ in this preamble, since the fallback differs per helper.
   status 401, 404 or 422; any other failure reports the journal as
   `uncertain: replay the journal` (an owner marker reports
   `"ownerMarker": "uncertain"`), and an uncertain pending record stops
-  before the create. An uncertain post also reports
-  `retry: "replay the journal first"`, and `retry: "permitted"` appears only
-  with `"nothingSent": true`. Every policy value comes from the repository
+  before the create. Before the create, an uncertain pending-record post also
+  reports `retry: "replay the journal first"`, and `retry: "permitted"` appears
+  only with `"nothingSent": true`; after the create the report has no `retry`
+  field. Every policy value comes from the repository
   policy file only, and `--marker-prefix` is required when the issue or the
   journal is in another repository.
 
