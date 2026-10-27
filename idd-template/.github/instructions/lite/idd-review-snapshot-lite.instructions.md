@@ -71,10 +71,11 @@ E1.
 
 ### Step 1 — Snapshot the activity universe
 
-1. Read the current PR HEAD SHA once — `gh pr view {pr-number} --json
-   headRefOid --jq '.headRefOid'` — and store it as `{head-SHA}`. Never
-   re-read it elsewhere in E1 — reuse this value, except for the
-   deferred E3 check below.
+1. Read the current PR HEAD SHA and base ref once — `gh pr view
+   {pr-number} --json headRefOid,baseRefName --jq
+   '[.headRefOid,.baseRefName] | @tsv'` — and store them as
+   `{head-SHA}` and `{base-ref-name}`. Never re-read either ref elsewhere
+   in E1 — reuse these values, except for the deferred E3 HEAD check below.
 2. Run the profile-selected `review-activity-snapshot` helper for
    `{head-SHA}`, `{max-activity-updatedAt}`, `{total-item-count}`, and
    `{latest-ci-completed-at}`: `node

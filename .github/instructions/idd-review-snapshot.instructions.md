@@ -74,11 +74,50 @@ GitHub state in this phase, discard helper output and run the portable
 gh/jq/API procedure below. The written instruction rules remain the
 authoritative decision path.
 
-Manual CI: `gh pr view {pr-number} --json headRefOid,baseRefName,statusCheckRollup`;
-require a complete read matching Step 1's HEAD and base. Keep same-named
-workflow producers separate (`gh pr checks` may collapse them); use the
-newest pass-equivalent `completedAt`. A complete matching read with no
-pass yields `none`; missing evidence means no post — repeat Step 1.
+Manual CI must use a paginated GraphQL read. `gh pr view --json
+statusCheckRollup` does not show page-completeness evidence, so it cannot
+prove that all checks were read. For example:
+
+```sh
+gh api graphql --paginate --slurp \
+  -f query='query($owner:String!,$repo:String!,$number:Int!,$endCursor:String){
+    repository(owner:$owner,name:$repo){
+      pullRequest(number:$number){
+        headRefOid
+        baseRefName
+        statusCheckRollup{
+          contexts(first:100,after:$endCursor){
+            nodes{
+              __typename
+              ... on CheckRun{
+                name status conclusion startedAt completedAt
+                checkSuite{
+                  app{slug}
+                  workflowRun{file{path} workflow{name}}
+                }
+              }
+              ... on StatusContext{context state targetUrl createdAt updatedAt}
+            }
+            pageInfo{hasNextPage endCursor}
+          }
+        }
+      }
+    }
+  }' \
+  -F owner={owner} -F repo={repo} -F number={pr-number}
+```
+
+Inspect every response in the slurped page array. Require each page to
+match Step 1's HEAD and base, every page to include its `contexts` and
+`pageInfo`, each non-final page to have `hasNextPage: true` and a
+non-empty cursor, and the final page to have `hasNextPage: false`.
+Keep CheckRun producers separate using their workflow name and file path;
+`gh pr checks` may collapse same-named producers. A `StatusContext` is
+complete only for `SUCCESS`, `FAILURE`, or `ERROR`, using its `updatedAt`;
+`PENDING` and `EXPECTED` are not completed checks. Use the newest
+pass-equivalent completion time. A complete matching read with no pass
+yields `none`; if any page or completeness evidence is missing, do not
+post and repeat Step 1.
 
 **Non-Copilot safety:** snapshot/watermark and F2 cover bot activity.
 
