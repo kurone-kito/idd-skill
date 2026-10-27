@@ -1837,13 +1837,17 @@ test('missing and empty commit IDs stay unknown rather than matching as the same
         ...review(3, '2026-01-03T00:00:00Z', NO_FINDINGS_FIXTURE),
         commitId: '',
       },
-      review(4, '2026-01-04T00:00:00Z', NO_FINDINGS_FIXTURE),
+      {
+        ...review(4, '2026-01-04T00:00:00Z', NO_FINDINGS_FIXTURE),
+        commitId: '',
+      },
+      review(5, '2026-01-05T00:00:00Z', NO_FINDINGS_FIXTURE),
     ],
     [],
   );
   assert.deepEqual(
     report.reviews.map((entry) => entry.trigger),
-    ['first', 'unknown', 'unknown', 'unknown'],
+    ['first', 'unknown', 'unknown', 'unknown', 'unknown'],
   );
 });
 
