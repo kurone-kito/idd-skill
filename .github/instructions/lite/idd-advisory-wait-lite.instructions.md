@@ -14,7 +14,7 @@ off-head `SATISFIED` requires active-claim `staleRequestRecovery` to be
 ## Helper runtime contract
 
 - Helper-enabled profiles: use the named helper commands below. If the
-  advisory-wait-state evidence/decision helper is missing, fails,
+  advisory-wait-state helper is missing, fails,
   returns invalid JSON, or disagrees with live state, stop and ask —
   never a manual per-field fetch or hand-derived decision. Marker
   posting is not restricted (see Markers).
@@ -25,7 +25,7 @@ off-head `SATISFIED` requires active-claim `staleRequestRecovery` to be
 
 ## Scope boundary (E1 Step 2 and E14; F2/F3 excluded)
 
-This file covers E14 and E1's Step 2 precondition: fast/helper-first
+This file covers E14 and E1 Step 2: fast/helper-first
 paths plus terminal `SATISFIED`/phase-specific `CAP_EXHAUSTED`
 eligibility. E1 does not inherit E14 request/poll actions. F2's
 live-fetch fallback, F3's merge call, stall recovery, and same-HEAD
@@ -33,8 +33,8 @@ reroll are out of scope; E14's settled-elapsed case (`#2327`) has its
 own table.
 
 A lite session excludes A0-A4.5/E4-E8 and F3-F5; it uses only E1 Step
-2, E14, lite F1-F2 read-only helpers, and F2.5 handoff-stop. If it
-reaches an excluded call site, stop and ask a stronger session/human.
+2, E14, lite F1-F2 read-only helpers, and F2.5 handoff-stop. Excluded
+call sites: stop and ask a stronger session/human.
 
 **Do not build a substitute wait for a non-primary bot** (full-size Scope
 section): rely on the standard E1 safety net, never a custom poll on any bot
@@ -45,6 +45,9 @@ but `advisoryWait.primaryBotLogin`.
 - A required field or `staleRequestRecovery` is missing, the helper
   exits non-zero, returns invalid JSON, or its evidence disagrees with
   live state.
+- Off-head, `staleRequestRecovery` must be an object with exactly `action`
+  (`attempt`, `cap-exhausted`, or `not-applicable`) and a non-empty
+  `reason`; else stop and ask before routing.
 - `outcome` is `CAP_EXHAUSTED` with the `hold` route (`HOLD`'s only
   route — see Helper-first canonical path below).
 - `earliestSameHeadAt` empties during active polling (marker
@@ -126,16 +129,15 @@ Helper-first posting: `post-idd-marker --type advisory --target pr
 <pr-number> --agent-id <id> --head-sha <sha> --timestamp <ts> --apply`
 (request) or `--type advisory-recovery` with the same fields
 (recovery). Resolve the package-manager equivalent from
-`docs/idd-helper-scripts.md`. The manual JSON `POST` is the fallback
-when the helper is unavailable.
+`docs/idd-helper-scripts.md`. The manual JSON `POST` is the fallback.
 
-Only a trusted marker actor's comment `created_at` counts for the
-clock — never commit author/committer timestamps.
+Only a trusted marker actor's `created_at` counts for the clock, never
+commit timestamps.
 
 ## Polling guidance (protocol-level only)
 
-This section covers only what the AW3 protocol defines. Early abort on a
-moved HEAD is the caller's job (E14 in `idd-review-fix-lite`).
+This section covers only the AW3 protocol. Early abort on a moved HEAD
+is the caller's job (E14 in `idd-review-fix-lite`).
 
 1. Reuse the existing same-head marker (`earliestSameHeadAt`) instead
    of posting a new one, unless none exists yet.
@@ -144,8 +146,7 @@ moved HEAD is the caller's job (E14 in `idd-review-fix-lite`).
 3. If `earliestSameHeadAt` is now empty, stop and ask (see
    Stop-and-ask conditions).
 4. If `outcome` is now `SATISFIED`, exit this wait and continue. The
-   helper folds the window values into `outcome` on every call; never
-   re-derive that by hand.
+   helper folds the window values into `outcome`; never re-derive it.
 5. If `outcome` is `DISPOSITION_NEEDED` (#4070), exit this wait and
    answer the cited items per the E14 table; never keep polling.
    Otherwise (`outcome` is `WAIT`, or any other non-terminal value),
@@ -162,7 +163,7 @@ satisfy the primary gate or consume its cap. Skip when
 
 ## Marker hygiene (optional)
 
-After a new marker is verified to exist for the current HEAD, minimize
+After a new marker is verified for the current HEAD, minimize
 every trusted prior advisory-wait-family marker whose embedded HEAD
 differs, as `OUTDATED`:
 
@@ -175,4 +176,4 @@ node scripts/minimize-superseded-markers.mjs \
 ```
 
 Skip (not stop-and-ask) when the candidate set is empty or the helper
-is unavailable — later cleanup catches leftovers.
+is unavailable.

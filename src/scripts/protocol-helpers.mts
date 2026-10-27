@@ -12792,6 +12792,124 @@ function preMergeAsRecord(value: unknown): Record<string, unknown> {
 }
 
 /**
+ * kurone-kito/idd-skill#4717: the evidence the stale-request classifier
+ * (`evaluateStaleRequestRecoveryAction` in advisory-wait-state.mts) reads from
+ * this builder's own advisory-wait summary. The caller injects the classifier,
+ * because this file cannot import advisory-wait-state.mts (it imports FROM
+ * this file).
+ */
+export interface StaleRequestRecoveryEvidence {
+  copilotPending: boolean;
+  copilotPendingCoversHead: boolean;
+  sameHeadMarkerPresent: boolean;
+  sameHeadRequestMarkerPresent: boolean;
+  elapsedMinutes: number;
+  settledWindowMinutes: number;
+  currentHeadReviewExists: boolean;
+}
+
+const STALE_REQUEST_RECOVERY_ACTIONS = [
+  'attempt',
+  'cap-exhausted',
+  'not-applicable',
+] as const;
+
+/**
+ * kurone-kito/idd-skill#4717: validate the claim-bound stale-request recovery
+ * object against the nested contract in the advisory-wait-state schema: the
+ * object holds exactly `action` and `reason`, `action` is one of the three
+ * recognized values, and `reason` is non-empty. Anything else fails closed
+ * with a problem description.
+ */
+export function validateStaleRequestRecoveryEvidence(
+  value: unknown,
+):
+  | { valid: true; action: (typeof STALE_REQUEST_RECOVERY_ACTIONS)[number] }
+  | { valid: false; problem: string } {
+  if (value === undefined) {
+    return { valid: false, problem: 'is absent' };
+  }
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return { valid: false, problem: 'is not an object' };
+  }
+  const keys = Object.keys(value).sort();
+  if (keys.length !== 2 || keys[0] !== 'action' || keys[1] !== 'reason') {
+    return {
+      valid: false,
+      problem: 'must hold exactly the action and reason fields',
+    };
+  }
+  const { action, reason } = value as Record<string, unknown>;
+  if (
+    typeof action !== 'string' ||
+    !(STALE_REQUEST_RECOVERY_ACTIONS as readonly string[]).includes(action)
+  ) {
+    return {
+      valid: false,
+      problem: `has an unrecognized action ${JSON.stringify(action)}`,
+    };
+  }
+  if (typeof reason !== 'string' || reason.trim() === '') {
+    return { valid: false, problem: 'has an empty reason' };
+  }
+  return {
+    valid: true,
+    action: action as (typeof STALE_REQUEST_RECOVERY_ACTIONS)[number],
+  };
+}
+
+/**
+ * kurone-kito/idd-skill#4717: the stale-request recovery gate. Applies only
+ * to a claim-bound run (both `claim.expectedClaimId` and
+ * `claim.expectedAgentId` supplied; the collector sets the object on the same
+ * predicate, and a claimless run has an empty agent id) on an off-head report
+ * (`advisoryWait.lastCopilotCommit` differs from
+ * `prHeadSha`), matching the Lite E1 contract. Every other run returns null:
+ * an on-head report keeps the `f3Outcome` gate alone, and a claim-id-only or
+ * claimless run never requires the object (a known residual; see the issue
+ * hold decisions 2 and 4).
+ */
+export function staleRequestRecoveryGateBlocker(
+  report: Record<string, unknown>,
+): PreMergeBlocker | null {
+  const claim = preMergeAsRecord(report.claim);
+  const expectedClaimId = String(claim.expectedClaimId ?? '');
+  const expectedAgentId = String(claim.expectedAgentId ?? '');
+  const claimBound = expectedClaimId !== '' && expectedAgentId !== '';
+  const advisoryWait = preMergeAsRecord(report.advisoryWait);
+  const prHeadSha = String(report.prHeadSha ?? '');
+  const offHead = String(advisoryWait.lastCopilotCommit ?? '') !== prHeadSha;
+  if (!claimBound || !offHead) {
+    return null;
+  }
+  const gate = 'stale-request-recovery';
+  const verdict = validateStaleRequestRecoveryEvidence(
+    report.staleRequestRecovery,
+  );
+  if (!verdict.valid) {
+    return {
+      gate,
+      detail: `staleRequestRecovery ${verdict.problem} on a claim-bound off-head run; the recovery evidence is required before readiness or merge`,
+    };
+  }
+  if (verdict.action === 'attempt') {
+    return {
+      gate,
+      detail:
+        'staleRequestRecovery.action is "attempt": the Copilot request for this off-head HEAD is unproven, so run the bounded AW3-S recovery through F2 first; do not merge',
+    };
+  }
+  if (verdict.action === 'cap-exhausted') {
+    return {
+      gate,
+      detail:
+        'staleRequestRecovery.action is "cap-exhausted": keep the cap-exhausted hold (CAP_EXHAUSTED_ROUTE); do not recover or merge',
+    };
+  }
+  return null;
+}
+
+/**
  * #4011: the setting path a global-only zero-required-check pass names in the
  * readiness output (`ci.allowedByPolicySetting`).
  */
@@ -12997,6 +13115,14 @@ export function computePreMergeReadinessBlockers(
       gate: 'advisory-wait',
       detail: `f3Outcome is "${f3Outcome}" (expected "SATISFIED")`,
     });
+  }
+
+  // kurone-kito/idd-skill#4717: the claim-bound, off-head stale-request
+  // recovery object. The shared rollup serves both readiness and
+  // idd-merge-execute, so `ready` and the merge call stay consistent.
+  const staleRequestRecoveryBlocker = staleRequestRecoveryGateBlocker(report);
+  if (staleRequestRecoveryBlocker !== null) {
+    blockers.push(staleRequestRecoveryBlocker);
   }
 
   // #1570: a settled-but-unreviewed Copilot request (`f3Outcome:
@@ -13812,6 +13938,12 @@ export function buildPreMergeReadinessSummary(
     pollIntervalMinutes?: number;
     capExhaustedRoute?: string;
     primaryBotLogin?: string;
+    // #4717: the collector's latest review commit from the GraphQL evidence
+    // shared with advisory-convergence. When supplied, it replaces the
+    // REST/submittedAt-derived value in the readiness summary so stale
+    // recovery classification and its off-head gate use the same review.
+    // Omitted by builder-only callers, which retain the existing summary.
+    latestCopilotReviewCommit?: string | null;
     waivableCheckSelectors?:
       | { selector?: unknown; matchMode?: unknown }[]
       | null;
@@ -13828,6 +13960,14 @@ export function buildPreMergeReadinessSummary(
     // unavailable` blocker below, so an unmigrated caller sees unchanged
     // behavior.
     copilotUnavailable?: boolean;
+    // kurone-kito/idd-skill#4717: the caller-injected stale-request classifier
+    // for the claim-bound recovery object. Injected because this file cannot
+    // import `evaluateStaleRequestRecoveryAction` (advisory-wait-state.mts
+    // already imports FROM this file). Omitted, no `staleRequestRecovery`
+    // property is set, which is the claimless and claim-id-only result.
+    evaluateStaleRequestRecovery?: (
+      evidence: StaleRequestRecoveryEvidence,
+    ) => unknown;
     // kurone-kito/idd-skill#2919 (round 2): the caller-precomputed verdict
     // that this collection pass could NOT fully resolve real
     // `workflowPath` producer-identity for the `idd-advisory-convergence`
@@ -14271,6 +14411,16 @@ export function buildPreMergeReadinessSummary(
       primaryBotLogin: options.primaryBotLogin,
     },
   );
+  // #4717: `collectPreMergeReadiness` passes the latest Copilot review commit
+  // selected from the GraphQL evidence used by advisory-convergence. The
+  // recovery classifier and its shared blocker both read this summary field,
+  // so force-push/revert ordering cannot make them disagree with the
+  // collector's recovery evidence. `f3Outcome` retains its existing mapping.
+  if (options.latestCopilotReviewCommit !== undefined) {
+    advisoryWait.lastCopilotCommit = String(
+      options.latestCopilotReviewCommit ?? '',
+    );
+  }
   // kurone-kito/idd-skill#2911: captures `resolveActiveClaimWithForcedHandoff
   // Trace`'s `activeSince` (the non-mutable claim-identity-transition
   // anchor `summarizeClaimValidation`'s own `captureTraceInto` parameter
@@ -15142,6 +15292,24 @@ export function buildPreMergeReadinessSummary(
   // the malformed evidence closed instead of it vanishing here.
   if (options.deferFollowUps !== undefined) {
     summary.deferFollowUps = options.deferFollowUps;
+  }
+
+  // kurone-kito/idd-skill#4717: the claim-bound recovery object is set before
+  // the rollup below, so the embedded `ready` already reflects it. Omitted when
+  // the caller injects no classifier; a malformed value is kept as-is so the
+  // blocker fails it closed.
+  if (options.evaluateStaleRequestRecovery !== undefined) {
+    summary.staleRequestRecovery = options.evaluateStaleRequestRecovery({
+      copilotPending: advisoryWait.copilotPending,
+      copilotPendingCoversHead: advisoryWait.copilotPendingCoversHead,
+      sameHeadMarkerPresent: advisoryWait.sameHeadMarkerPresent,
+      sameHeadRequestMarkerPresent: advisoryWait.sameHeadRequestMarkerPresent,
+      elapsedMinutes: advisoryWait.elapsedMinutes,
+      settledWindowMinutes: advisoryWait.settledWindowMinutes,
+      currentHeadReviewExists:
+        String(advisoryWait.lastCopilotCommit ?? '').toLowerCase() ===
+        prHeadSha,
+    });
   }
 
   // Top-level rollup so a consumer reads one `ready` boolean + `blockers[]`

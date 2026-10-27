@@ -15,6 +15,7 @@ import {
   resolveAdvisorySecondaryQuietWindowMinutes,
   SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
 } from '../src/scripts/advisory-wait-policy.mts';
+import { evaluateStaleRequestRecoveryAction } from '../src/scripts/advisory-wait-state.mts';
 import {
   GH_API_PAGINATED_MAX_BYTES,
   GhPaginatedResponseLimitError,
@@ -91,6 +92,7 @@ import { GH_SEARCH_RESULT_CAP } from '../src/scripts/provider-adapter-github.mts
 import type {
   ProviderComment,
   ProviderPort,
+  ProviderReviewClauseNode,
 } from '../src/scripts/provider-port.mts';
 import {
   computeClosingSetEvidence,
@@ -11577,11 +11579,13 @@ test('buildPreMergeReadinessSummary embeds a strict ready/blockers rollup', () =
 function advisoryWaitOf(summary: unknown): {
   copilotUnavailable: boolean;
   copilotUnavailableWaived: boolean;
+  lastCopilotCommit?: string | null;
 } {
   return (summary as { advisoryWait: Record<string, unknown> })
     .advisoryWait as {
     copilotUnavailable: boolean;
     copilotUnavailableWaived: boolean;
+    lastCopilotCommit?: string | null;
   };
 }
 
@@ -19582,6 +19586,10 @@ function forcedHandoffMergeFakePort(options: {
   scope: 'issue-only' | 'issue-plus-pr';
   earlierLinkedPr: boolean;
   linkedLookupFails: boolean;
+  claimless?: boolean;
+  restReviews?: unknown[];
+  graphQlReviews?: ProviderReviewClauseNode[];
+  prRequestMarker?: string;
 }): ProviderPort {
   const handoffPayload = {
     oldAgentId: 'copilot',
@@ -19606,17 +19614,35 @@ function forcedHandoffMergeFakePort(options: {
         statusCheckRollup: [],
         mergeable: 'MERGEABLE',
         mergeStateStatus: 'CLEAN',
-        closingIssuesReferences: [{ number: 7 }],
+        closingIssuesReferences: options.claimless ? [] : [{ number: 7 }],
       },
     },
     branchRules: { 'o/r/main': [] },
     branchProtection: { 'o/r/main': {} },
     reviewThreadsWithComments: { 1: [] },
     reviewsWithHeadCommitDate: {
-      1: { reviews: [], headCommittedAt: '2026-05-12T10:30:00Z' },
+      1: {
+        reviews: options.graphQlReviews ?? [],
+        headCommittedAt: '2026-05-12T10:30:00Z',
+      },
     },
+    reviews: { 1: options.restReviews ?? [] },
     repositoryDefaultBranch: 'main',
     comments: {
+      ...(options.prRequestMarker
+        ? {
+            1: [
+              {
+                id: 99,
+                body: options.prRequestMarker,
+                createdAt: '2026-05-12T00:00:00Z',
+                updatedAt: '2026-05-12T00:00:00Z',
+                authorLogin: 'kurone-kito',
+                lastEditedAt: null,
+              },
+            ],
+          }
+        : {}),
       7: [
         {
           id: 1,
@@ -19746,4 +19772,421 @@ test('#3998: an issue-plus-PR handoff does not depend on the linked-PR lookup', 
     }),
   );
   assert.equal(report.claim.activeClaim?.claimId, 'claim-new');
+});
+
+// kurone-kito/idd-skill#4717: the builder sets the injected, claim-bound
+// recovery object before its ready rollup, so the embedded ready agrees with
+// the stale-request-recovery gate. The clean fixture is claim-bound
+// (claim-123 / github-copilot-cli) and on-head; withCopilotCommit moves the
+// Copilot review to another commit to make the head off-head.
+function withCopilotCommit<T extends object>(input: T, commit: string): T {
+  const reviews = (
+    input as { reviews: Array<Record<string, unknown>> }
+  ).reviews.map((review) =>
+    (review.author as { login?: string } | undefined)?.login ===
+    'copilot-pull-request-reviewer[bot]'
+      ? { ...review, commitId: commit }
+      : review,
+  );
+  return { ...input, reviews } as T;
+}
+
+test('#4717: the readiness builder carries the injected claim-bound recovery object and gates its off-head ready', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const seen: Array<Record<string, unknown>> = [];
+  const verdict = { action: 'attempt', reason: 'recovery-attempt-eligible' };
+  const summary = JSON.parse(
+    JSON.stringify(
+      buildPreMergeReadinessSummary(
+        withCopilotCommit(
+          fixture.input,
+          '2222222222222222222222222222222222222222',
+        ),
+        {
+          ...fixture.options,
+          evaluateStaleRequestRecovery: (evidence) => {
+            seen.push(evidence as unknown as Record<string, unknown>);
+            return verdict;
+          },
+        },
+      ),
+    ),
+  );
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].currentHeadReviewExists, false);
+  assert.deepEqual(summary.staleRequestRecovery, verdict);
+  assert.ok(
+    blockerNamed(summary, 'stale-request-recovery'),
+    JSON.stringify(summary.blockers),
+  );
+  assert.equal(summary.ready, false);
+  assert.equal(summary.ready, summary.blockers.length === 0);
+  assert.deepEqual(validate(summary, readinessSchema), []);
+});
+
+test('#4717: an on-head report carries the object but no stale-request-recovery gate (decision 2)', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const summary = JSON.parse(
+    JSON.stringify(
+      buildPreMergeReadinessSummary(fixture.input, {
+        ...fixture.options,
+        evaluateStaleRequestRecovery: () => ({
+          action: 'attempt',
+          reason: 'recovery-attempt-eligible',
+        }),
+      }),
+    ),
+  );
+  assert.equal(summary.staleRequestRecovery.action, 'attempt');
+  assert.equal(blockerNamed(summary, 'stale-request-recovery'), undefined);
+});
+
+test('#4717: a malformed injected recovery object fails the off-head gate closed', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const summary = JSON.parse(
+    JSON.stringify(
+      buildPreMergeReadinessSummary(
+        withCopilotCommit(
+          fixture.input,
+          '2222222222222222222222222222222222222222',
+        ),
+        {
+          ...fixture.options,
+          evaluateStaleRequestRecovery: () => ({ action: 'not-applicable' }),
+        },
+      ),
+    ),
+  );
+  assert.ok(blockerNamed(summary, 'stale-request-recovery'));
+  assert.equal(summary.ready, false);
+});
+
+test('#4717: without an injected classifier no staleRequestRecovery property is set', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const summary = JSON.parse(
+    JSON.stringify(
+      buildPreMergeReadinessSummary(fixture.input, fixture.options),
+    ),
+  );
+  assert.equal('staleRequestRecovery' in summary, false);
+  assert.equal(blockerNamed(summary, 'stale-request-recovery'), undefined);
+});
+
+// kurone-kito/idd-skill#4717: both lite advisory-wait copies validate the
+// off-head recovery object (presence, the supported action, and a non-empty
+// reason) in their stop-and-ask list before routing. Whitespace is normalized
+// so the check survives re-wrapping.
+test('#4717: both lite advisory-wait copies validate the off-head recovery object before routing', () => {
+  // The off-head shape rule, plus the presence and guardrail wording that the
+  // same file must keep (the byte budget forbids dropping them).
+  const required = [
+    '- Off-head, `staleRequestRecovery` must be an object with exactly `action` (`attempt`, `cap-exhausted`, or `not-applicable`) and a non-empty `reason`; else stop and ask before routing.',
+    'include `staleRequestRecovery`; reject unbound output.',
+    'never by hand from raw timestamps',
+    'Otherwise (`outcome` is `WAIT`, or any other non-terminal value), keep polling.',
+    '`advisoryWait.secondaryBotLogin` accepts one login or a list.',
+  ];
+  for (const doc of [
+    'idd-template/.github/instructions/lite/idd-advisory-wait-lite.instructions.md',
+    '.github/instructions/lite/idd-advisory-wait-lite.instructions.md',
+  ]) {
+    const text = readFileSync(
+      fileURLToPath(new URL(`../${doc}`, import.meta.url)),
+      'utf8',
+    ).replace(/\s+/g, ' ');
+    for (const sentence of required) {
+      assert.ok(text.includes(sentence), `${doc}: ${sentence}`);
+    }
+  }
+});
+
+// kurone-kito/idd-skill#4717: the on-head branch of currentHeadReviewExists,
+// with the real classifier. The forced inputs make the non-pending path reach
+// the elapsed-budget check, so only a true currentHeadReviewExists yields
+// not-applicable. An inverted comparison would yield attempt and fail here.
+test('#4717: a completed current-head review reaches the real classifier as currentHeadReviewExists and stays not-applicable', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const seen: Array<Record<string, unknown>> = [];
+  const summary = JSON.parse(
+    JSON.stringify(
+      buildPreMergeReadinessSummary(fixture.input, {
+        ...fixture.options,
+        evaluateStaleRequestRecovery: (evidence) => {
+          seen.push(evidence as unknown as Record<string, unknown>);
+          return evaluateStaleRequestRecoveryAction({
+            ...evidence,
+            sameHeadMarkerPresent: true,
+            sameHeadRequestMarkerPresent: true,
+            copilotPendingCoversHead: false,
+            elapsedMinutes: 999,
+            settledWindowMinutes: 10,
+            remainingBudget: 2,
+            activeClaimProvided: true,
+            copilotDeclinedHead: false,
+          });
+        },
+      }),
+    ),
+  );
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].currentHeadReviewExists, true);
+  assert.deepEqual(summary.staleRequestRecovery, {
+    action: 'not-applicable',
+    reason: 'proven-covers-head',
+  });
+  assert.equal(blockerNamed(summary, 'stale-request-recovery'), undefined);
+});
+
+// kurone-kito/idd-skill#4717: the collector wiring. The forced-handoff port has
+// no Copilot review, so its head is off-head, and the claim arguments are the
+// only thing that changes between the three runs below.
+function collectRecoveryWiringReport(
+  port: ProviderPort,
+  claimArgs: string[],
+): Record<string, unknown> {
+  const restore = stubExecutable('gh', FORCED_HANDOFF_GH_STUB);
+  try {
+    return collectPreMergeReadiness(
+      [
+        '--pr',
+        '1',
+        '--owner',
+        'o',
+        '--repo',
+        'r',
+        '--now',
+        '2026-05-12T11:00:00Z',
+        ...claimArgs,
+      ],
+      () => port,
+      () =>
+        ({
+          forcedHandoff: { mode: 'human-gated' },
+          trustedMarkerActors: ['kurone-kito', 'maintainer'],
+        }) as never,
+    ) as unknown as Record<string, unknown>;
+  } finally {
+    restore();
+  }
+}
+
+test('#4717: the collector sets the recovery object only for a claim-bound run', () => {
+  const portFor = () =>
+    forcedHandoffMergeFakePort({
+      scope: 'issue-only',
+      earlierLinkedPr: false,
+      linkedLookupFails: false,
+    });
+  const claimBound = collectRecoveryWiringReport(portFor(), [
+    '--claim-issue',
+    '7',
+    '--claim-id',
+    'claim-new',
+    '--agent-id',
+    'copilot',
+  ]);
+  assert.deepEqual(claimBound.staleRequestRecovery, {
+    action: 'not-applicable',
+    reason: 'not-pending',
+  });
+  const claimIdOnly = collectRecoveryWiringReport(portFor(), [
+    '--claim-issue',
+    '7',
+    '--claim-id',
+    'claim-new',
+  ]);
+  assert.equal('staleRequestRecovery' in claimIdOnly, false);
+  // --claimless needs a PR with no closing references, so it gets its own port.
+  const claimlessPort = createFakeProviderAdapter({
+    changeRequestReadinessSnapshots: {
+      1: {
+        headSha: 'a'.repeat(40),
+        baseRefName: 'main',
+        url: 'https://github.com/o/r/pull/1',
+        authorLogin: 'author-user',
+        reviewDecision: null,
+        statusCheckRollup: [],
+        mergeable: 'MERGEABLE',
+        mergeStateStatus: 'CLEAN',
+        closingIssuesReferences: [],
+      },
+    },
+    branchRules: { 'o/r/main': [] },
+    branchProtection: { 'o/r/main': {} },
+    reviewThreadsWithComments: { 1: [] },
+    reviewsWithHeadCommitDate: {
+      1: { reviews: [], headCommittedAt: '2026-05-12T10:30:00Z' },
+    },
+    repositoryDefaultBranch: 'main',
+    comments: {},
+    closingPullRequestPages: {},
+    changeRequestCommits: {
+      1: [{ commit: { committer: { date: '2026-05-12T10:30:00Z' } } }],
+    },
+  } as never);
+  const claimless = collectRecoveryWiringReport(claimlessPort, ['--claimless']);
+  assert.equal('staleRequestRecovery' in claimless, false);
+});
+
+// #4717: REST/submittedAt order can disagree with the absolute-latest
+// GraphQL review after a force-push/revert. The collector's GraphQL commit
+// must drive both currentHeadReviewExists and the shared off-head blocker.
+test('#4717: collector recovery classification and gate use the same GraphQL review after a force-push reorder', () => {
+  const headSha = 'a'.repeat(40);
+  const offHeadSha = 'b'.repeat(40);
+  const requestMarker = `advisory-wait: kurone-kito ${headSha} 2026-05-12T00:00:00Z`;
+  const restReview = (commitId: string, submittedAt: string) => ({
+    user: { login: 'copilot-pull-request-reviewer[bot]', type: 'Bot' },
+    state: 'COMMENTED',
+    commit_id: commitId,
+    submitted_at: submittedAt,
+    body: MINIMAL_V2_REVIEW_BODY,
+  });
+  const graphQlReview = (
+    commitId: string,
+    submittedAt: string,
+    id: string,
+  ): ProviderReviewClauseNode => ({
+    id,
+    authorLogin: 'copilot-pull-request-reviewer[bot]',
+    authorTypename: 'Bot',
+    state: 'COMMENTED',
+    commitId,
+    submittedAt,
+    commentCount: 0,
+    body: '',
+  });
+  const claimArgs = [
+    '--claim-issue',
+    '7',
+    '--claim-id',
+    'claim-new',
+    '--agent-id',
+    'copilot',
+  ];
+
+  const graphQlOffHead = collectRecoveryWiringReport(
+    forcedHandoffMergeFakePort({
+      scope: 'issue-only',
+      earlierLinkedPr: false,
+      linkedLookupFails: false,
+      prRequestMarker: requestMarker,
+      // REST says HEAD is covered by the later timestamp. GraphQL's final
+      // row is an older off-head review, as after a force-push/revert.
+      restReviews: [
+        restReview(offHeadSha, '2026-05-12T10:45:00Z'),
+        restReview(headSha, '2026-05-12T10:50:00Z'),
+      ],
+      graphQlReviews: [
+        graphQlReview(headSha, '2026-05-12T10:50:00Z', 'head-review'),
+        graphQlReview(offHeadSha, '2026-05-12T10:45:00Z', 'off-head-review'),
+      ],
+    }),
+    claimArgs,
+  );
+  assert.equal(advisoryWaitOf(graphQlOffHead).lastCopilotCommit, offHeadSha);
+  assert.deepEqual(graphQlOffHead.staleRequestRecovery, {
+    action: 'attempt',
+    reason: 'non-pending-recovery-attempt-eligible',
+  });
+  assert.ok(blockerNamed(graphQlOffHead, 'stale-request-recovery'));
+
+  const graphQlOnHead = collectRecoveryWiringReport(
+    forcedHandoffMergeFakePort({
+      scope: 'issue-only',
+      earlierLinkedPr: false,
+      linkedLookupFails: false,
+      prRequestMarker: requestMarker,
+      // REST's timestamp order says off-head; the last GraphQL row proves
+      // that the latest completed review actually covers this HEAD.
+      restReviews: [
+        restReview(headSha, '2026-05-12T10:45:00Z'),
+        restReview(offHeadSha, '2026-05-12T10:50:00Z'),
+      ],
+      graphQlReviews: [
+        graphQlReview(offHeadSha, '2026-05-12T10:50:00Z', 'off-head-review'),
+        graphQlReview(headSha, '2026-05-12T10:45:00Z', 'head-review'),
+      ],
+    }),
+    claimArgs,
+  );
+  assert.equal(advisoryWaitOf(graphQlOnHead).lastCopilotCommit, headSha);
+  assert.deepEqual(graphQlOnHead.staleRequestRecovery, {
+    action: 'not-applicable',
+    reason: 'proven-covers-head',
+  });
+  assert.equal(
+    blockerNamed(graphQlOnHead, 'stale-request-recovery'),
+    undefined,
+  );
+
+  // A GraphQL/REST ordering disagreement must not change claim-id-only or
+  // claimless reports: those runs do not evaluate stale-request recovery, so
+  // their shared advisoryWait field remains based on the collector's REST
+  // evidence.
+  const nonClaimModes = [
+    {
+      name: 'claim-id-only',
+      claimArgs: ['--claim-issue', '7', '--claim-id', 'claim-new'],
+      claimless: false,
+    },
+    {
+      name: 'claimless',
+      claimArgs: ['--claimless'],
+      claimless: true,
+    },
+  ] as const;
+  for (const mode of nonClaimModes) {
+    const makePort = (
+      restReviews: unknown[],
+      graphQlReviews: ProviderReviewClauseNode[],
+    ) =>
+      forcedHandoffMergeFakePort({
+        scope: 'issue-only',
+        earlierLinkedPr: false,
+        linkedLookupFails: false,
+        claimless: mode.claimless,
+        prRequestMarker: requestMarker,
+        restReviews,
+        graphQlReviews,
+      });
+    const restOnHead = [
+      restReview(offHeadSha, '2026-05-12T10:45:00Z'),
+      restReview(headSha, '2026-05-12T10:50:00Z'),
+    ];
+    const graphQlOffHead = [
+      graphQlReview(headSha, '2026-05-12T10:50:00Z', 'head-review'),
+      graphQlReview(offHeadSha, '2026-05-12T10:45:00Z', 'off-head-review'),
+    ];
+    const restOffHead = [
+      restReview(headSha, '2026-05-12T10:45:00Z'),
+      restReview(offHeadSha, '2026-05-12T10:50:00Z'),
+    ];
+    const graphQlOnHead = [
+      graphQlReview(offHeadSha, '2026-05-12T10:50:00Z', 'off-head-review'),
+      graphQlReview(headSha, '2026-05-12T10:45:00Z', 'head-review'),
+    ];
+
+    const restOnHeadReport = collectRecoveryWiringReport(
+      makePort(restOnHead, graphQlOffHead),
+      [...mode.claimArgs],
+    );
+    assert.equal(
+      advisoryWaitOf(restOnHeadReport).lastCopilotCommit,
+      headSha,
+      `${mode.name}: GraphQL off-head result must not replace REST on-head result`,
+    );
+    assert.equal('staleRequestRecovery' in restOnHeadReport, false);
+
+    const restOffHeadReport = collectRecoveryWiringReport(
+      makePort(restOffHead, graphQlOnHead),
+      [...mode.claimArgs],
+    );
+    assert.equal(
+      advisoryWaitOf(restOffHeadReport).lastCopilotCommit,
+      offHeadSha,
+      `${mode.name}: GraphQL on-head result must not replace REST off-head result`,
+    );
+    assert.equal('staleRequestRecovery' in restOffHeadReport, false);
+  }
 });

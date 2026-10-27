@@ -25,7 +25,10 @@ import {
   resolveProviderOutageTerminalWindowMinutes,
   SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
 } from './advisory-wait-policy.mjs';
-import { buildCopilotRecoverySummary } from './advisory-wait-state.mjs';
+import {
+  buildCopilotRecoverySummary,
+  evaluateStaleRequestRecoveryAction,
+} from './advisory-wait-state.mjs';
 import { resolveAuthoringGuardPolicy } from './authoring-label-guard.mjs';
 import { parseCanonicalIntegerOrNull, parseCliArgs } from './cli-args.mjs';
 import { isAuthorizedForcedHandoffActor } from './collaborator-permission.mjs';
@@ -1337,6 +1340,23 @@ export function collectPreMergeReadiness(
       }
     }
   }
+  // kurone-kito/idd-skill#4717: the claim-bound stale-request recovery object is
+  // computed only when both active-claim arguments are supplied, the same
+  // predicate as copilotRecovery.activeClaimProvided, through the existing
+  // classifier (advisory-wait-state.mts). The builder injects this closure
+  // because protocol-helpers.mts cannot import that module.
+  const evaluateStaleRequestRecovery =
+    !args.claimless &&
+    args.expectedClaimId !== '' &&
+    args.expectedAgentId !== ''
+      ? (evidence) =>
+          evaluateStaleRequestRecoveryAction({
+            ...evidence,
+            remainingBudget: copilotRecovery.remainingBudget,
+            activeClaimProvided: copilotRecovery.activeClaimProvided,
+            copilotDeclinedHead,
+          })
+      : undefined;
   const summary = buildPreMergeReadinessSummary(
     {
       prHeadSha,
@@ -1403,6 +1423,13 @@ export function collectPreMergeReadiness(
       developmentBranchTarget,
       closingSet: closingSetEvidence,
       deferFollowUps,
+      evaluateStaleRequestRecovery,
+      // A decline is terminal availability evidence, not a completed review;
+      // preserve the summary's completed-review commit field (#4142).
+      latestCopilotReviewCommit:
+        evaluateStaleRequestRecovery === undefined || copilotDeclinedHead
+          ? undefined
+          : lastCopilotCommit,
       copilotUnavailable,
       // kurone-kito/idd-skill#2919: caller-precomputed by the enrichment
       // block above -- see its doc comment for the full rationale.
