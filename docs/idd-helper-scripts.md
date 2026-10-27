@@ -1442,8 +1442,9 @@ in this preamble, since the fallback differs per helper.
   `--shape child` only, the anchor check also reads each listed retired journal
   and no other issue, merging those records with the current journal in time
   order; a retired journal that cannot be read refuses the child (exit `1`).
-  Every write still goes to `issueAuthoring.journalIssue`. The helper does not
-  check that a retired journal exists or is closed. It then puts the
+  Every write still goes to `issueAuthoring.journalIssue`. At step 2 the
+  helper checks only the format of each retired-journal entry, not that the
+  journal exists or is closed. It then puts the
   `authoring-publication` line first in the
   body, lints that exact body with `audit-authored-issue.mjs --new-issue`
   and looks up the labels it applies. Without `--apply` it renders the
