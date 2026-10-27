@@ -2528,7 +2528,8 @@ interface UrgencyDeferInput {
    * the pull request unmergeable, a defect in claim, lock, merge-gate,
    * security, secret-handling or data-destroying code or behavior, or a
    * change impossible to reverse in a follow-up pull request. From relax
-   * step 1 on it blocks a `severity-tiered` deferral. Defaults to false.
+   * step 1, or once the review-count cap is reached (#4750), it blocks a
+   * `severity-tiered` deferral. Defaults to false.
    */
   safetyClass?: boolean;
   /**
@@ -2896,7 +2897,8 @@ function severityTieredDefers(
  * only raises eligibility. `low` and `low-and-medium` do not: they need
  * a known E4 tier, and the floor never stands in for it. `relaxStep` and
  * `safetyClass` apply to `severity-tiered` only (#3796): from step 1 a
- * safety-class finding never defers, and each step raises the highest
+ * safety-class finding never defers (nor, once the cap is reached, at any
+ * step), and each step raises the highest
  * urgency a tier may defer at; the other modes ignore both.
  */
 export function decideUrgencyDefer(

@@ -4819,9 +4819,12 @@ test('policy schema defines critiqueLoop.deferAllAfterRounds as an integer with 
     properties.deferByUrgency.description,
     properties.deferRelaxAtRounds.description,
   ]) {
+    const text = sibling.replace(/\s+/g, ' ');
     assert.ok(
-      sibling.replace(/\s+/g, ' ').includes('deferAllAfterRounds'),
-      'expected the sibling description to name deferAllAfterRounds',
+      text.includes('deferAllAfterRounds') &&
+        text.includes('at or above') &&
+        text.includes('precedence'),
+      'expected the sibling description to say the cap takes precedence at or above deferAllAfterRounds',
     );
   }
 });

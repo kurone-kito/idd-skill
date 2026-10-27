@@ -727,9 +727,12 @@ function scoreTriageRecord(input: {
     const copilotReviews = reviews.filter((review) =>
       isCopilotReviewerLogin(reviewAuthorLogin(review)),
     ).length;
+    const cap = input.deferAllAfterRounds;
     capReached =
-      typeof input.deferAllAfterRounds === 'number' &&
-      copilotReviews >= input.deferAllAfterRounds;
+      cap !== undefined &&
+      Number.isInteger(cap) &&
+      cap >= 1 &&
+      copilotReviews >= cap;
     let converged = false;
     let head = '';
     if (flags.advisoryConverged !== '') {

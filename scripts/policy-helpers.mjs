@@ -2108,7 +2108,8 @@ function severityTieredDefers(eligibility, urgency, step) {
  * only raises eligibility. `low` and `low-and-medium` do not: they need
  * a known E4 tier, and the floor never stands in for it. `relaxStep` and
  * `safetyClass` apply to `severity-tiered` only (#3796): from step 1 a
- * safety-class finding never defers, and each step raises the highest
+ * safety-class finding never defers (nor, once the cap is reached, at any
+ * step), and each step raises the highest
  * urgency a tier may defer at; the other modes ignore both.
  */
 export function decideUrgencyDefer(input) {

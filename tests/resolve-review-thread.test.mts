@@ -4805,6 +4805,15 @@ test('the review-count cap defers at or above deferAllAfterRounds and keeps the 
     'Triage: tier medium; urgency high; step 1; verdict keep; blocked scope-fence',
   );
   assert.equal(
+    buildTriage(
+      triagePort(4),
+      ACCEPTED_FIXED,
+      { tier: 'medium', urgency: 'high', scopeFence: true },
+      { deferAllAfterRounds: 3 },
+    ).verdict?.eligibility,
+    null,
+  );
+  assert.equal(
     line(
       triagePort(4),
       { tier: 'high', urgency: 'high', acceptedMidFix: true },
@@ -4961,7 +4970,7 @@ test('enforce refuses a capped defer without --override and posts it with one (#
   );
   assert.equal(overridden.status, 0, overridden.stderr);
   assert.equal(overridden.posted.length, 1);
-  assert.match(overridden.posted[0], /; override: capped at three reviews/u);
+  assert.match(overridden.posted[0], /; override: capped at three reviews$/mu);
 });
 
 test('enforce judges the cap at post time, so a count that reaches the cap before the post is refused (#4750)', () => {
