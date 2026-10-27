@@ -1,6 +1,14 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -1721,10 +1729,12 @@ test('summarizeCohort triage: sums the per-PR triage objects key by key', () => 
   assert.equal(summary.triage.byStep['2'].urgency.medium, 1);
 });
 
-test('computePrAudit: report keys are the existing fields plus triage, findingLocality, and mergedAt', () => {
+test('computePrAudit: report keys include the trigger and generated-path metrics', () => {
   const report = computePrAudit(1, [], []);
   assert.deepEqual(Object.keys(report).sort(), [
+    'approvals',
     'findingLocality',
+    'findingPathClass',
     'legacyCount',
     'mergedAt',
     'openAppearances',
@@ -1735,10 +1745,350 @@ test('computePrAudit: report keys are the existing fields plus triage, findingLo
     'threads',
     'transitions',
     'triage',
+    'triggers',
     'unparsedCount',
     'v2Count',
   ]);
   assert.equal(report.mergedAt, null);
+});
+
+test('review triggers classify the graph delta without depending on commit-list order', () => {
+  const reviews: RawReview[] = [
+    {
+      ...review(1, '2026-01-01T00:00:00Z', NO_FINDINGS_FIXTURE),
+      commitId: 'a',
+    },
+    {
+      ...review(2, '2026-01-02T00:00:00Z', NO_FINDINGS_FIXTURE),
+      commitId: 'a',
+    },
+    {
+      ...review(3, '2026-01-03T00:00:00Z', NO_FINDINGS_FIXTURE),
+      commitId: 'b',
+    },
+    {
+      ...review(4, '2026-01-04T00:00:00Z', NO_FINDINGS_FIXTURE),
+      commitId: 'c',
+    },
+    {
+      ...review(5, '2026-01-05T00:00:00Z', NO_FINDINGS_FIXTURE),
+      commitId: 'x',
+    },
+    {
+      ...review(6, '2026-01-06T00:00:00Z', NO_FINDINGS_FIXTURE),
+      commitId: null,
+    },
+  ];
+  const commitParents = new Map<string, readonly string[]>([
+    ['a', []],
+    ['b', ['a']],
+    ['c', ['b', 'outside']],
+    ['e', ['c']],
+    ['d', ['e', 'outside']],
+  ]);
+  const report = computePrAudit(1, reviews, [], new Map(), commitParents);
+  assert.deepEqual(
+    report.reviews.map((entry) => entry.trigger),
+    ['first', 'sameHead', 'newHead', 'mergeCommitHead', 'unknown', 'unknown'],
+  );
+  assert.deepEqual(report.triggers, {
+    first: 1,
+    sameHead: 1,
+    newHead: 1,
+    mergeCommitHead: 1,
+    unknown: 2,
+  });
+  assert.equal(
+    Object.values(report.triggers).reduce((sum, count) => sum + count, 0),
+    report.reviewCount,
+  );
+  const afterMerge = computePrAudit(
+    2,
+    [
+      {
+        ...review(4, '2026-01-04T00:00:00Z', NO_FINDINGS_FIXTURE),
+        commitId: 'c',
+      },
+      {
+        ...review(7, '2026-01-07T00:00:00Z', NO_FINDINGS_FIXTURE),
+        commitId: 'd',
+      },
+    ],
+    [],
+    new Map(),
+    commitParents,
+  );
+  assert.equal(afterMerge.reviews[1]?.trigger, 'newHead');
+});
+
+test('missing and empty commit IDs stay unknown rather than matching as the same head', () => {
+  const report = computePrAudit(
+    1,
+    [
+      {
+        ...review(1, '2026-01-01T00:00:00Z', NO_FINDINGS_FIXTURE),
+        commitId: 'a',
+      },
+      {
+        ...review(2, '2026-01-02T00:00:00Z', NO_FINDINGS_FIXTURE),
+        commitId: null,
+      },
+      {
+        ...review(3, '2026-01-03T00:00:00Z', NO_FINDINGS_FIXTURE),
+        commitId: '',
+      },
+      {
+        ...review(4, '2026-01-04T00:00:00Z', NO_FINDINGS_FIXTURE),
+        commitId: '',
+      },
+      review(5, '2026-01-05T00:00:00Z', NO_FINDINGS_FIXTURE),
+    ],
+    [],
+  );
+  assert.deepEqual(
+    report.reviews.map((entry) => entry.trigger),
+    ['first', 'unknown', 'unknown', 'unknown', 'unknown'],
+  );
+});
+
+test('review verdict ignores code regions and aliases, keeps legacy null, and reads unparsed marker bodies', () => {
+  const unparsedApproval = OPEN_WITH_NEW_FIXTURE.replace(
+    '### 🟡 Changes recommended',
+    '### 🟢 Approval recommended',
+  ).replace(openLine('Medium', 4083347840, true), '');
+  const fencedApproval = `<!-- ccr-overview-v2 -->\n\`\`\`md\n### 🟢 Approval recommended\n\`\`\`\n`;
+  const report = computePrAudit(
+    1,
+    [
+      review(1, '2026-01-01T00:00:00Z', NO_FINDINGS_FIXTURE),
+      review(2, '2026-01-02T00:00:00Z', NEW_FORMAT_FIXTURE),
+      review(3, '2026-01-03T00:00:00Z', NO_OPEN_ISSUES_FIXTURE),
+      review(4, '2026-01-04T00:00:00Z', fencedApproval),
+      review(5, '2026-01-05T00:00:00Z', LEGACY_FIXTURE),
+      review(6, '2026-01-06T00:00:00Z', unparsedApproval),
+      review(
+        7,
+        '2026-01-07T00:00:00Z',
+        NEW_FORMAT_FIXTURE.replace(
+          '### 🟡 Changes recommended',
+          '### Changes requested',
+        ),
+      ),
+      review(
+        8,
+        '2026-01-08T00:00:00Z',
+        NO_FINDINGS_FIXTURE.replace(
+          '### 🟢 Approval recommended',
+          '### Closer look recommended',
+        ),
+      ),
+      review(
+        9,
+        '2026-01-09T00:00:00Z',
+        NO_FINDINGS_FIXTURE.replace(
+          '### 🟢 Approval recommended',
+          '### Closer look',
+        ),
+      ),
+    ],
+    [],
+  );
+  assert.deepEqual(
+    report.reviews.map((entry) => entry.verdict),
+    [
+      'approval',
+      'changes',
+      'closerLook',
+      null,
+      null,
+      'approval',
+      null,
+      null,
+      null,
+    ],
+  );
+  assert.equal(report.reviews[5]?.kind, 'unparsed');
+});
+
+test('approval audit records whether another review followed and its trigger', () => {
+  const reviews: RawReview[] = [
+    {
+      ...review(1, '2026-01-01T00:00:00Z', NO_FINDINGS_FIXTURE),
+      commitId: 'a',
+    },
+    { ...review(2, '2026-01-02T00:00:00Z', NEW_FORMAT_FIXTURE), commitId: 'b' },
+  ];
+  const report = computePrAudit(
+    1,
+    reviews,
+    [],
+    new Map(),
+    new Map<string, readonly string[]>([
+      ['a', []],
+      ['b', ['a']],
+    ]),
+  );
+  assert.deepEqual(report.approvals, {
+    total: 1,
+    followed: 1,
+    nextTrigger: { sameHead: 0, newHead: 1, mergeCommitHead: 0, unknown: 0 },
+  });
+  const lastApproval = computePrAudit(
+    2,
+    [review(3, '2026-01-03T00:00:00Z', NO_FINDINGS_FIXTURE)],
+    [],
+  );
+  assert.deepEqual(lastApproval.approvals, {
+    total: 1,
+    followed: 0,
+    nextTrigger: { sameHead: 0, newHead: 0, mergeCommitHead: 0, unknown: 0 },
+  });
+});
+
+test('What changed table paths normalize line endings, code spans, and zero-width characters', () => {
+  const body = [
+    '<!-- ccr-overview-v2 -->',
+    '### 🟢 Approval recommended',
+    '**0 open findings**',
+    '',
+    '<details>',
+    '<summary><strong>What changed in this PR</strong></summary>',
+    '',
+    '| Path |',
+    '| --- |',
+    '| `scripts/copilot-review-wave-audit.mjs` |',
+    '| `.github/\u200Binstructions/\u200Bidd-ci.instructions.md` |',
+    '</details>',
+  ].join('\r\n');
+  const report = computePrAudit(
+    1,
+    [review(1, '2026-01-01T00:00:00Z', body)],
+    [],
+    new Map(),
+    new Map(),
+    new Set(['.github/instructions/idd-ci.instructions.md']),
+  );
+  assert.deepEqual(report.reviews[0]?.whatChanged, {
+    paths: [
+      'scripts/copilot-review-wave-audit.mjs',
+      '.github/instructions/idd-ci.instructions.md',
+    ],
+    generatedHelperPaths: ['scripts/copilot-review-wave-audit.mjs'],
+    syncMirrorPaths: ['.github/instructions/idd-ci.instructions.md'],
+  });
+  const mirrorReport = computePrAudit(
+    2,
+    [review(2, '2026-01-02T00:00:00Z', body)],
+    [],
+    new Map(),
+    new Map(),
+    new Set(['.github/instructions/idd-ci.instructions.md']),
+  );
+  assert.deepEqual(mirrorReport.reviews[0]?.whatChanged?.syncMirrorPaths, [
+    '.github/instructions/idd-ci.instructions.md',
+  ]);
+  assert.equal(
+    computePrAudit(
+      3,
+      [review(3, '2026-01-03T00:00:00Z', NO_FINDINGS_FIXTURE)],
+      [],
+    ).reviews[0]?.whatChanged,
+    null,
+  );
+  const realBodyReport = computePrAudit(
+    4,
+    [review(4, '2026-01-04T00:00:00Z', REAL_CRLF_FIXTURE)],
+    [],
+  );
+  assert.deepEqual(realBodyReport.reviews[0]?.whatChanged?.paths, [
+    'tests/merged-pr-feedback-sweep.test.mts',
+    'src/scripts/merged-pr-feedback-sweep.mts',
+    'scripts/merged-pr-feedback-sweep.mjs',
+  ]);
+  assert.deepEqual(
+    realBodyReport.reviews[0]?.whatChanged?.generatedHelperPaths,
+    ['scripts/merged-pr-feedback-sweep.mjs'],
+  );
+  const realSummary = summarizeCohort([realBodyReport]);
+  assert.deepEqual(realSummary.whatChanged, {
+    tables: 1,
+    listingGeneratedHelper: 1,
+    listingSyncMirror: 0,
+  });
+  assert.deepEqual(summarizeCohort([mirrorReport]).whatChanged, {
+    tables: 1,
+    listingGeneratedHelper: 1,
+    listingSyncMirror: 1,
+  });
+});
+
+test('findingPathClass partitions inline Copilot findings by generated, mirror, other, and absent paths', () => {
+  const comments = [
+    inlineFinding(1, 99, 'scripts/audit.mjs', 1),
+    inlineFinding(2, 99, 'bin/nested/helper.mjs', 1),
+    inlineFinding(3, 99, 'docs/mirror.md', 1),
+    inlineFinding(4, 99, 'src/main.mts', 1),
+    inlineFinding(5, 99, null, 1),
+  ];
+  const report = computePrAudit(
+    1,
+    [review(99, '2026-01-01T00:00:00Z', NO_FINDINGS_FIXTURE)],
+    comments,
+    new Map(),
+    new Map(),
+    new Set(['docs/mirror.md']),
+  );
+  assert.deepEqual(report.findingPathClass, {
+    generatedHelper: 2,
+    syncMirror: 1,
+    other: 1,
+    noPath: 1,
+  });
+});
+
+test('summarizeCohort groups dispositions by the PR review-count bucket', () => {
+  const reports = [1, 3, 5, 10].map((reviewCount, index) => {
+    const reviews = Array.from({ length: reviewCount }, (_, reviewIndex) =>
+      review(
+        reviewIndex + 1,
+        `2026-01-${String(reviewIndex + 1).padStart(2, '0')}T00:00:00Z`,
+        reviewIndex === 0
+          ? openReviewBody([openLine('Medium', 9100 + index)])
+          : '',
+      ),
+    );
+    return computePrAudit(index + 1, reviews, []);
+  });
+  const summary = summarizeCohort(reports);
+  assert.deepEqual(summary.dispositionsByReviewCount, {
+    '1-2': { deferred: 0, rejected: 0, accepted: 0, other: 0, none: 1 },
+    '3-4': { deferred: 0, rejected: 0, accepted: 0, other: 0, none: 1 },
+    '5-9': { deferred: 0, rejected: 0, accepted: 0, other: 0, none: 1 },
+    '10+': { deferred: 0, rejected: 0, accepted: 0, other: 0, none: 1 },
+  });
+  assert.deepEqual(summary.triggers, {
+    first: 4,
+    sameHead: 0,
+    newHead: 0,
+    mergeCommitHead: 0,
+    unknown: 15,
+  });
+  assert.deepEqual(summary.approvals, {
+    total: 0,
+    followed: 0,
+    nextTrigger: { sameHead: 0, newHead: 0, mergeCommitHead: 0, unknown: 0 },
+  });
+  assert.deepEqual(summary.findingPathClass, {
+    generatedHelper: 0,
+    syncMirror: 0,
+    other: 0,
+    noPath: 0,
+  });
+  assert.deepEqual(summary.whatChanged, {
+    tables: 0,
+    listingGeneratedHelper: 0,
+    listingSyncMirror: 0,
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -2297,6 +2647,7 @@ test('CLI: --help lists the check-mode flags', () => {
 const GH_FIXTURE_STUB = `const fs = require('node:fs');
 const args = process.argv.slice(2);
 const fixture = JSON.parse(fs.readFileSync(process.env.WAVE_AUDIT_FIXTURE, 'utf8'));
+if (args[0] === 'api') fs.appendFileSync(process.env.WAVE_AUDIT_CALLS, String(args[1]) + '\\n');
 if (args[0] === 'api' && args[1] === 'graphql') {
   const ids = args.filter((a) => a.startsWith('ids[]=')).map((a) => a.slice('ids[]='.length));
   process.stdout.write(JSON.stringify({ data: { nodes: ids.map((id) => ({ id, lastEditedAt: null })) } }));
@@ -2304,6 +2655,14 @@ if (args[0] === 'api' && args[1] === 'graphql') {
 }
 if (args[0] === 'api' && String(args[1]).includes('/pulls/42/reviews')) {
   for (const r of fixture.reviews) process.stdout.write(JSON.stringify(r) + '\\n');
+  process.exit(0);
+}
+if (args[0] === 'api' && String(args[1]).includes('/pulls/42/commits')) {
+  if (fixture.failCommits) {
+    process.stderr.write('commit list unavailable\\n');
+    process.exit(1);
+  }
+  for (const c of fixture.commits ?? []) process.stdout.write(JSON.stringify(c) + '\\n');
   process.exit(0);
 }
 if (args[0] === 'api' && String(args[1]).includes('/pulls/42/comments')) {
@@ -2346,13 +2705,17 @@ function runCheckWithFixture(
     comments: unknown[];
     prs?: unknown[];
     compare?: Record<string, unknown>;
+    commits?: unknown[];
+    failCommits?: boolean;
   },
   extraArgs: string[],
   selector: string[] = ['--prs', '42'],
-): { status: number | null; stdout: string; stderr: string } {
+): { status: number | null; stdout: string; stderr: string; calls: string[] } {
   const dir = mkdtempSync(join(tmpdir(), 'idd-wave-audit-check-'));
   const fixturePath = join(dir, 'fixture.json');
+  const callsPath = join(dir, 'calls.txt');
   writeFileSync(fixturePath, JSON.stringify(fixture));
+  writeFileSync(callsPath, '');
   const restore = stubExecutable('gh', GH_FIXTURE_STUB);
   try {
     const result = spawnSync(
@@ -2360,19 +2723,76 @@ function runCheckWithFixture(
       [CLI_PATH, '--repo', 'kurone-kito/idd-skill', ...selector, ...extraArgs],
       {
         encoding: 'utf8',
-        env: { ...process.env, WAVE_AUDIT_FIXTURE: fixturePath },
+        env: {
+          ...process.env,
+          WAVE_AUDIT_FIXTURE: fixturePath,
+          WAVE_AUDIT_CALLS: callsPath,
+        },
       },
     );
     return {
       status: result.status,
       stdout: result.stdout,
       stderr: result.stderr,
+      calls: readFileSync(callsPath, 'utf8').trim().split('\n').filter(Boolean),
     };
   } finally {
     restore();
     rmSync(dir, { recursive: true, force: true });
   }
 }
+
+test('CLI fails closed on a missing or malformed sync manifest before contacting GitHub', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-wave-audit-manifest-'));
+  const tempScripts = join(tempRoot, 'scripts');
+  const manifestPath = join(tempRoot, 'audit', 'sync-manifest.json');
+  const fixturePath = join(tempRoot, 'fixture.json');
+  const callsPath = join(tempRoot, 'calls.txt');
+  mkdirSync(join(tempRoot, 'audit'), { recursive: true });
+  cpSync(join(REPO_ROOT, 'scripts'), tempScripts, { recursive: true });
+  cpSync(join(REPO_ROOT, 'schemas'), join(tempRoot, 'schemas'), {
+    recursive: true,
+  });
+  writeFileSync(join(tempRoot, 'package.json'), '{"private":true}\n');
+  writeFileSync(fixturePath, JSON.stringify({ reviews: [], comments: [] }));
+  writeFileSync(callsPath, '');
+  const restore = stubExecutable('gh', GH_FIXTURE_STUB);
+  try {
+    for (const contents of [null, '{']) {
+      if (contents === null) {
+        rmSync(manifestPath, { force: true });
+      } else {
+        writeFileSync(manifestPath, contents);
+      }
+      writeFileSync(callsPath, '');
+      const result = spawnSync(
+        process.execPath,
+        [
+          join(tempScripts, 'copilot-review-wave-audit.mjs'),
+          '--repo',
+          'kurone-kito/idd-skill',
+          '--prs',
+          '42',
+          '--check',
+        ],
+        {
+          encoding: 'utf8',
+          env: {
+            ...process.env,
+            WAVE_AUDIT_FIXTURE: fixturePath,
+            WAVE_AUDIT_CALLS: callsPath,
+          },
+        },
+      );
+      assert.equal(result.status, 2, result.stderr);
+      assert.match(result.stderr, /cannot read or parse .*sync-manifest\.json/);
+      assert.equal(readFileSync(callsPath, 'utf8'), '');
+    }
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
 
 test('CLI --check: a clean PR writes the report to stdout, nothing to stderr, and exits 0', () => {
   const result = runCheckWithFixture(
@@ -2406,6 +2826,93 @@ test('CLI --check: a clean PR writes the report to stdout, nothing to stderr, an
   assert.equal(parsed.reports[0]?.v2Count, 1);
   assert.equal(parsed.reports[0]?.triage.contradictions, 0);
   assert.equal(parsed.summary.prCount, 1);
+  assert.equal(
+    result.calls.some((path) => path.includes('/pulls/42/commits')),
+    false,
+  );
+});
+
+test('CLI fetches one paginated PR commits list and no individual commit data', () => {
+  const result = runCheckWithFixture(
+    {
+      reviews: [
+        {
+          id: 1,
+          submitted_at: '2026-01-01T00:00:00Z',
+          body: NO_FINDINGS_FIXTURE,
+          commit_id: 'a',
+          user: { login: COPILOT_LOGIN },
+        },
+        {
+          id: 2,
+          submitted_at: '2026-01-02T00:00:00Z',
+          body: NO_FINDINGS_FIXTURE,
+          commit_id: 'c',
+          user: { login: COPILOT_LOGIN },
+        },
+      ],
+      comments: [],
+      commits: [
+        { sha: 'a', parents: [] },
+        { sha: 'c', parents: [{ sha: 'a' }, { sha: 'outside' }] },
+      ],
+    },
+    ['--check'],
+  );
+  assert.equal(result.status, 0, result.stderr);
+  const parsed = JSON.parse(result.stdout) as {
+    reports: Array<{ reviews: Array<{ trigger: string }> }>;
+  };
+  assert.deepEqual(
+    parsed.reports[0]?.reviews.map((entry) => entry.trigger),
+    ['first', 'mergeCommitHead'],
+  );
+  const commitCalls = result.calls.filter((path) =>
+    path.includes('/pulls/42/commits'),
+  );
+  assert.equal(commitCalls.length, 1);
+  assert.match(commitCalls[0] ?? '', /\/pulls\/42\/commits\?per_page=100$/);
+  assert.equal(
+    result.calls.some((path) => /\/commits\/[a-f0-9]{7,}/.test(path)),
+    false,
+  );
+});
+
+test('CLI continues with unknown triggers when the PR commits list lookup fails', () => {
+  const result = runCheckWithFixture(
+    {
+      reviews: [
+        {
+          id: 1,
+          submitted_at: '2026-01-01T00:00:00Z',
+          body: NO_FINDINGS_FIXTURE,
+          commit_id: 'a',
+          user: { login: COPILOT_LOGIN },
+        },
+        {
+          id: 2,
+          submitted_at: '2026-01-02T00:00:00Z',
+          body: NO_FINDINGS_FIXTURE,
+          commit_id: 'b',
+          user: { login: COPILOT_LOGIN },
+        },
+      ],
+      comments: [],
+      failCommits: true,
+    },
+    ['--check'],
+  );
+  assert.equal(result.status, 0, result.stderr);
+  const parsed = JSON.parse(result.stdout) as {
+    reports: Array<{ triggers: { first: number; unknown: number } }>;
+  };
+  assert.deepEqual(parsed.reports[0]?.triggers, {
+    first: 1,
+    sameHead: 0,
+    newHead: 0,
+    mergeCommitHead: 0,
+    unknown: 1,
+  });
 });
 
 test('CLI --check: a contradiction writes the report to stdout, the message to stderr, and exits 1', () => {
