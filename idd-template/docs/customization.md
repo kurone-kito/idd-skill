@@ -1952,12 +1952,12 @@ supports these keys:
 - `critiqueLoop.deferByUrgency` (default `off`; `low`,
   `low-and-medium`, or `severity-tiered`). High stays ineligible under
   `low` and `low-and-medium`. Under `low`, `low-and-medium`, and
-  `severity-tiered`, clause (d) of the adopt-now test cascades: once one
+  `severity-tiered`, clause (d) of the adopt-now test cascades (under `severity-tiered` only below `deferAllAfterRounds`): once one
   finding of a pass is Accepted, another finding of that pass whose fix
   stays within that push's files is adopt-now and is not deferred. Under
   `severity-tiered` the agent reports (d) with
   `resolve-review-thread --adopt-now`, which turns a `defer` verdict into
-  `keep`; its `high` urgency still reads adopt-now conditions (a)-(c).
+  `keep` below `deferAllAfterRounds` (at or above it, the flag changes nothing); its `high` urgency still reads adopt-now conditions (a)-(c).
 - `critiqueLoop.deferRelaxAtRounds` (optional array of one or two
   positive integers, strictly ascending, at most two; recommended
   `[4, 7]`; omit the key to turn it off). The thresholds are PR-wide
@@ -1972,6 +1972,16 @@ supports these keys:
   and the clause suffix. A converged advisory gate adds one further
   step, still capped at 2, only when `reviewPolicy` is absent or
   `copilot-advisory`.
+- `critiqueLoop.deferAllAfterRounds` (optional positive integer, at least
+  1; omit the key to turn the cap off). At or above this many PR-wide
+  Copilot review counts, under `severity-tiered` and without `--lite`,
+  every scored PATH A finding that no block reason holds defers at any
+  step, except a safety-class finding, which never defers. An invalid
+  value means off. The cap acts whether or not
+  `critiqueLoop.deferRelaxAtRounds` is set. See
+  [the review-count cap](idd-review-policy-profiles.md#wave-gradient-urgency-defer)
+  of the review policy profiles for the exclusions and the adopt-now
+  limit.
 - `critiqueLoop.triageRecord` (default `off`; `record` or `enforce`).
   `record` makes `resolve-review-thread` require `--tier` and
   `--urgency` on every Accepted or Rejected PATH A reply it posts, and

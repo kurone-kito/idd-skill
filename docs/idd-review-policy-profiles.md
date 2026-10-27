@@ -438,7 +438,7 @@ Verify-before-accept. A verified-true finding that an acceptance
 criterion of the claimed issue is unmet, or that reports a regression
 this pull request introduced, is Accepted and fixed and is never
 deferred: conditions (a) and (b) of the E5 Defer rule's adopt-now test
-still apply. At S3 and S4 the stop itself is the trigger, because the
+still apply. At or above the review-count cap (`critiqueLoop.deferAllAfterRounds`), under `severity-tiered` without `--lite`, such a finding that is not safety class still defers through the cap; see the [Review-count cap](#wave-gradient-urgency-defer) paragraph. At S3 and S4 the stop itself is the trigger, because the
 loop cannot land the fix. There the stop test below alone decides and the
 S1 and S2 carve-out in this paragraph does not apply, since Tier 3's
 open-ended gaps are the acceptance criterion itself and may be deferred.
@@ -575,7 +575,7 @@ shape.
 | 13 | An unverifiable High-severity security claim                                         | Holds                                                                                        | Stop test, item 2                                  |
 | 14 | A finding whose defect is an instruction contradiction that would misguide the agent | Holds                                                                                        | Stop test, item 3                                  |
 | 15 | A finding whose merge as it stands would be irreversible in a follow-up pull request | Holds                                                                                        | Stop test, item 4                                  |
-| 16 | At S1 or S2, a verified-true finding that an acceptance criterion is unmet           | Accepted and fixed, never deferred                                                           | What counts, conditions (a) and (b)                |
+| 16 | At S1 or S2, a verified-true finding that an acceptance criterion is unmet           | Accepted and fixed, never deferred below the review-count cap                                | What counts, conditions (a) and (b)                |
 | 17 | A stop whose outstanding findings include a CODEOWNER's                              | Holds                                                                                        | When it applies                                    |
 | 18 | The fourth distinct follow-up on one pull request                                    | Holds                                                                                        | Cap                                                |
 | 19 | A claimless pull request                                                             | Holds                                                                                        | Claimless                                          |
@@ -592,7 +592,7 @@ relaxes the matrix in at most two steps as the pull request's review
 count grows. The
 review-triage file carries only a short pointer, so a session that does
 not read this section, and any configuration that leaves the field unset
-or invalid, behaves as it did before the gradient existed. The decision
+or invalid and `deferAllAfterRounds` unset or invalid, behaves as it did before the gradient existed. The decision
 record is in the
 [design rationale](idd-design-rationale.md#wave-gradient-urgency-defer-kurone-kitoidd-skill3796).
 
@@ -633,7 +633,7 @@ first, and a false claim is Rejected, not deferred.
 
 **Never deferred from step 1.** From step 1 on, a High-tier finding of
 `high` urgency never defers, and neither does a finding of the safety
-class. The ceilings already exclude the first at every step, and it is
+class. At or above the review-count cap, a High-tier finding of `high` urgency defers unless it is safety class or an exclusion in the Review-count cap paragraph holds. The ceilings already exclude the first at every step below the cap, and it is
 named here because the final step must never defer it. The safety class
 is a finding that, assuming it is correct and merging the pull request as
 it stands, would hit item 1, 2 or 4 of the numbered stop test in
@@ -647,13 +647,13 @@ and the gradient would never act. The safety class applies whatever
 `deferByUrgency` trigger only; the separate trigger
 `critiqueLoop.deferAfterRounds` is unchanged.
 
-**Step 0 is unchanged.** The exclusion above starts at step 1, not at step
+**Step 0 is unchanged.** Below the review-count cap, the exclusion above starts at step 1, not at step
 0: at step 0 the rule is exactly the rule without the gradient, so a
 safety-class Low-tier finding still defers at step 0 as it does today,
-and a pull request whose field is absent changes nothing. The consequence
+and a pull request whose field is absent changes nothing. At or above the review-count cap, a safety-class finding never defers at step 0 either. The consequence
 to keep in mind is that from step 1 on, a Medium-tier finding of `high`
 urgency that rests on adopt-now condition (a), (b) or (c) but is not
-safety class defers to the bundled follow-up. At any step under
+safety class defers to the bundled follow-up. Below the review-count cap, at any step under
 `"severity-tiered"`, the agent reports adopt-now condition (d) with
 `resolve-review-thread --adopt-now`, which turns a `defer` verdict into
 `keep`; the helper refuses the flag when `critiqueLoop.deferByUrgency` is
@@ -691,6 +691,8 @@ convergence reaches step 2, which is above that array's own final
 step. The reply keeps `step <k>`, and only when convergence raised the
 step it also carries `converged <short-sha>` (the first 7 hex digits
 of `prHeadSha`).
+
+**Review-count cap.** `critiqueLoop.deferAllAfterRounds` is an optional integer of at least 1, and it is unset by default; leaving it out turns the cap off, and an invalid value means off too. The cap compares the same PR-wide Copilot review count the relax step uses, at or above the field's value. It acts only under `critiqueLoop.deferByUrgency` `"severity-tiered"` and never with `--lite`, and it acts whether or not `critiqueLoop.deferRelaxAtRounds` is set. At or above the cap, each new PATH A finding with a scored urgency and no block reason takes the `defer` verdict at any relax step and any urgency, except a safety-class finding, which keeps at every step including step 0. The block reasons of the matrix keep their own verdicts: `path-b`, `scope-fence`, `protected-authority`, `awaiting-maintainer-decision`, `accepted-mid-fix`, and `unknown-urgency`. The cap takes precedence over the step ceilings and the step rules of this section. It also ends the adopt-now conversion: at or above the cap, adopt-now condition (d) no longer turns a `defer` verdict into `keep`, so `--adopt-now` changes nothing there. For condition (d), see the E5 Defer rule in the [review triage instruction](../.github/instructions/idd-review-triage.instructions.md).
 
 ## What counts as a regression
 
