@@ -1119,7 +1119,7 @@ THREADS_JSON=$(gh api graphql --paginate -f query='
             isResolved
             comments(first:100) {
               pageInfo { hasNextPage }
-              nodes { author { login __typename } body createdAt commit { oid } lastEditedAt }
+              nodes { author { login __typename } body createdAt updatedAt commit { oid } lastEditedAt }
             }
           }
         }
@@ -1476,8 +1476,12 @@ MISSING_THREADS=$(printf '%s' "${THREADS_JSON}" | jq -rs --argjson agents "${IDD
     and (pending_marker | not);
   def counts_as_disp($res):
     is_disp or ($res and is_rejection_confirmed);
+  def activity_at:
+    if has("lastEditedAt") and .lastEditedAt == null
+    then (.createdAt // .updatedAt // "")
+    else (.updatedAt // .createdAt // "") end;
   def latest_feedback($res):
-    [.comments.nodes[] | select(counts_as_disp($res) | not) | ([.createdAt, (.lastEditedAt // "")] | max)]
+    [.comments.nodes[] | select(counts_as_disp($res) | not) | activity_at]
     | if length == 0 then null else max end;
   def has_fresh_disp:
     (.isResolved // false) as $res

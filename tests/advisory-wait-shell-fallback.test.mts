@@ -1592,6 +1592,7 @@ function f2ThreadComment(
   body: string,
   createdAt: string,
   lastEditedAt: string | null = null,
+  updatedAt: string | null = lastEditedAt ?? createdAt,
 ): Record<string, unknown> {
   return {
     author: { login },
@@ -1599,7 +1600,7 @@ function f2ThreadComment(
     createdAt,
     commit: null,
     lastEditedAt,
-    updatedAt: lastEditedAt,
+    updatedAt,
   };
 }
 
@@ -3089,6 +3090,37 @@ test('differential: inline code masking preserves pending-marker columns (#4696)
               AGENT_LOGIN,
               '**Accepted** — noted\n\u0060note\u0060 - example\n**Awaiting maintainer decision** choose one',
               F2_CASE_TIME_2,
+            ),
+          ],
+          false,
+          true,
+        ),
+      ],
+    },
+    0,
+    1,
+  );
+});
+
+test('differential: thread activity uses updatedAt for edited feedback (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      threads: [
+        f2Thread(
+          [
+            f2ThreadComment(
+              'human-reviewer',
+              'please rename',
+              F2_CASE_TIME_1,
+              F2_CASE_TIME_2,
+              F2_EDITED_AT,
+            ),
+            f2ThreadComment(
+              AGENT_LOGIN,
+              '**Accepted** — addressed',
+              F2_CASE_TIME_3,
             ),
           ],
           false,
