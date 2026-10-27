@@ -1435,7 +1435,16 @@ in this preamble, since the fallback differs per helper.
   be a JSON object whose `completed` is a boolean and whose `findings`, if
   present, is an array of objects. The helper stops with the `blocked-by-human`
   outcome (exit `2`) when `issueAuthoring.journalIssue` is unset or
-  unverifiable. It then puts the `authoring-publication` line first in the
+  unverifiable. `issueAuthoring.retiredJournalIssues`, when set, is checked
+  for every shape: it must be a non-empty array of `owner/repo#N` entries,
+  with no entry repeated and none equal to `issueAuthoring.journalIssue`, and
+  a malformed value stops the helper with `blocked-by-human` (exit `2`). For
+  `--shape child` only, the anchor check also reads each listed retired journal
+  and no other issue, merging those records with the current journal in time
+  order; a retired journal that cannot be read refuses the child (exit `1`).
+  Every write still goes to `issueAuthoring.journalIssue`. The helper does not
+  check that a retired journal exists or is closed. It then puts the
+  `authoring-publication` line first in the
   body, lints that exact body with `audit-authored-issue.mjs --new-issue`
   and looks up the labels it applies. Without `--apply` it renders the
   pending publication-intent record through `post-idd-marker.mjs`'s dry
