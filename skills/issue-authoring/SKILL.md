@@ -419,6 +419,10 @@ session's namespace. A lost ledger starts empty. Unsafe, conflicting, or unreada
 storage stops the review: report the path and preserve unverified entries; the
 contract permits cleanup only for entries this session created whose identity
 still matches. Send the drafts to a carrier marked `Review: not reviewed`.
+Resolve every root path component without following links, and require each
+ledger read, write, copy, replacement, and unlink to hold the namespace's
+verified exclusive lock while rechecking ownership and hashes. Fail closed if
+the complete path or lock cannot be verified.
 Instructions-only and same-response self-critique runs follow the same
 procedure; no orchestrator, environment variable, or helper is needed.
 

@@ -1560,19 +1560,29 @@ entries. If this permission evidence is unreadable, stop.
 **Storage verdicts.** Classify each supplied root and namespace with exactly one
 verdict:
 
-| Input                                                                                                                                                       | Verdict                                    | Action                                                                                                                                                                               |
-| ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| A supplied root that exists and passes the root checks                                                                                                      | Supplied verified storage                  | Create a new namespace under it (step 1).                                                                                                                                            |
-| No root is supplied, and this session has no identity record                                                                                                | No previously supplied allocation          | Allocate under the first candidate root that passes the root checks (step 1).                                                                                                        |
-| A supplied root that is missing or fails a check, or a namespace or ledger of this session whose identity differs from its record (see the ownership cases) | Unsafe, conflicting, or unreadable storage | Preserve everything, report the canonical path and the exact failing evidence, and treat the review as one that cannot finish (see below). Never fall back to another root silently. |
+| Input                                                                                                                                                                   | Verdict                                    | Action                                                                                                                                                                               |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| A supplied root that exists and passes the root checks                                                                                                                  | Supplied verified storage                  | Create a new namespace under it (step 1).                                                                                                                                            |
+| No root is supplied, and this session has no identity record                                                                                                            | No previously supplied allocation          | Allocate under the first candidate root that passes the root checks (step 1).                                                                                                        |
+| A supplied root that is missing or fails a check, or a namespace, ledger, or lock file of this session whose identity differs from its record (see the ownership cases) | Unsafe, conflicting, or unreadable storage | Preserve everything, report the canonical path and the exact failing evidence, and treat the review as one that cannot finish (see below). Never fall back to another root silently. |
 
 A namespace from another session is never reused, and a new session has no
 identity record to reuse. An older namespace is left untouched as evidence.
 
 **Step 1 — allocate a namespace.** Re-check the root before creating anything in
 it: its canonical path and identity must match the root checks, or the procedure
-stops. Open the root as a directory handle without following a symbolic link or
-reparse point, and confirm its identity and canonical path. Create
+stops. Resolve the whole root path from a trusted filesystem root or volume handle:
+on POSIX, open each component relative to the preceding verified handle with
+`O_DIRECTORY | O_NOFOLLOW`, or use Linux `openat2(2)` with
+`RESOLVE_NO_SYMLINKS | RESOLVE_IN_ROOT` from a trusted `/` descriptor (see
+[openat2(2)](https://man7.org/linux/man-pages/man2/openat2.2.html)).
+On Windows, open each component relative to a trusted volume or root handle
+with `NtCreateFile` and `OBJ_DONT_REPARSE`.
+Applying `O_NOFOLLOW` only to the final component is insufficient. If the
+platform cannot prove that no component was followed, fail closed. Then open
+the root as a directory handle without following a symbolic link or reparse
+point through that verified component walk, and confirm its identity and
+canonical path. Create
 `issue-authoring-<uuid>` relative to that handle with exclusive, non-recursive
 directory creation, never `mkdir -p`. Make the namespace owner-only as part of
 creation: use POSIX mode 700, or on Windows pass an explicit security descriptor
@@ -1592,7 +1602,11 @@ Any other failure ends that attempt. If a root was supplied, stop and report
 its path and error; do not try another root. Only when no root was supplied may
 the next candidate be tried. When every candidate fails, stop and report each
 attempt's path and error. Keep the namespace handle open for the ledger
-operations below.
+operations below. Create a stable `ledger.lock` file relative to this handle
+with exclusive, no-follow, owner-only creation. Record its canonical path,
+identity, type, owner, and mode or ACL; verify those values before use. Never
+replace or unlink this lock file. If it cannot be created and verified,
+preserve the namespace and stop.
 
 **Step 2 — create the first ledger.** Each draft has its own ledger file,
 `<uuid>.json`, in the namespace. Create it through the verified namespace
@@ -1609,10 +1623,13 @@ before it is visible, treat storage as unreadable. If this step fails, the
 partial-state rule below applies.
 
 **Ownership check before each ledger operation.** Before every ledger read,
-write, rename, or unlink, compare the namespace and ledger with their records:
+write, copy, rename, or unlink, acquire the namespace lock and compare the
+namespace, lock file, and ledger with their records:
 
 - The namespace's canonical path matches its record, no component of that path
   is a symbolic link or reparse point, and its file identity matches.
+- The `ledger.lock` file is a regular file with its recorded identity,
+  canonical path, owner, and owner-only mode or ACL, and has link count 1.
 - The ledger is a regular file, not a symbolic link or reparse point, with a
   link count of 1, the recorded file identity, and its recorded owner-only mode
   or ACL.
@@ -1621,6 +1638,19 @@ Path checks alone do not bind a later operation to the checked directory. Use
 native handle-relative operations with exclusive creation and no-follow checks
 for child reads, temporary-file creation, replacement, copy, and unlink; never
 reopen a child through the namespace path between validation and the operation.
+All implementations must use this same stable lock for every ledger operation.
+Acquire it exclusively before reading or changing ledger entries, recheck
+ownership and hashes while holding it, and keep it held through the replacement
+or unlink and its verification. On POSIX, use Python's
+[`fcntl.flock`](https://docs.python.org/3/library/fcntl.html#fcntl.flock) with
+`LOCK_EX` on the verified lock handle; on Windows, use Microsoft's
+[`LockFileEx`](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-lockfileex)
+with an exclusive lock
+on a fixed byte range of that handle. If the lock file identity changes, the
+lock cannot be acquired, or the platform cannot provide the required exclusive
+lock, preserve all entries and fail closed. POSIX locks are advisory, so every
+writer following this contract must acquire this lock; the lock file remains
+with the namespace.
 On POSIX, a standard-library Python implementation can use `os.open`,
 `os.mkdir`, `os.stat`, `os.rename`, and `os.unlink` with directory-descriptor
 parameters. Before allocation, confirm that every required function supports
@@ -1671,7 +1701,8 @@ report it.
   write the complete new JSON to a new exclusively created, owner-only
   temporary file in the namespace, then verify and record its canonical path,
   identity, type, link count, owner, mode or ACL, and SHA-256. Immediately before
-  replacement, repeat the ownership check and verify that the existing ledger's
+  replacement, while holding the exclusive namespace lock, repeat the ownership
+  check and verify that the existing ledger's
   identity and SHA-256 still match the records, and that the temporary file
   still matches its records. On any mismatch, preserve both files and stop
   without replacement.
@@ -1705,7 +1736,9 @@ be created safely (its exclusive creation fails, or its first write fails), keep
 the namespace and any partial file, delete nothing, and report the exact path
 and error. The review counts as one that cannot finish.
 
-**Rename to the issue number.** Once the draft has its issue number, copy the
+**Rename to the issue number.** Once the draft has its issue number, hold the
+exclusive namespace lock from before creating the destination through its
+verification and the final source unlink. Copy the
 verified ledger to `<number>.json` with exclusive, owner-only creation, write
 the same content, verify the resulting mode or ACL, and confirm that the copy's
 SHA-256 equals the source ledger's recorded SHA-256. Record the copy's canonical

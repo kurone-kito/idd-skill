@@ -3457,12 +3457,63 @@ test('issue-authoring contract defines ledger storage verdicts, allocation, and 
   );
   assert.match(
     text,
-    /Open the root as a directory handle without following a symbolic link or reparse point/,
+    /Then open the root as a directory handle without following a symbolic link or reparse point/,
+  );
+  assert.ok(
+    text.includes(
+      'Resolve the whole root path from a trusted filesystem root or volume handle:',
+    ),
+  );
+  assert.ok(
+    text.includes(
+      'on POSIX, open each component relative to the preceding verified handle with',
+    ),
+  );
+  assert.ok(
+    text.includes('`O_DIRECTORY | O_NOFOLLOW`, or use Linux `openat2(2)` with'),
+  );
+  assert.ok(
+    text.includes(
+      '`RESOLVE_NO_SYMLINKS | RESOLVE_IN_ROOT` from a trusted `/` descriptor (see',
+    ),
+  );
+  assert.ok(
+    text.includes(
+      '[openat2(2)](https://man7.org/linux/man-pages/man2/openat2.2.html)',
+    ),
+  );
+  assert.ok(
+    text.includes(
+      'On Windows, open each component relative to a trusted volume or root handle with',
+    ),
+  );
+  assert.ok(text.includes('with `NtCreateFile` and `OBJ_DONT_REPARSE`.'));
+  assert.ok(
+    text.includes(
+      'Applying `O_NOFOLLOW` only to the final component is insufficient.',
+    ),
   );
   assert.match(
     text,
     /Open it relative to the root handle without following links, then record its canonical path, file identity, type, link count, owner, and mode or ACL/,
   );
+  assert.ok(
+    text.includes(
+      'Create a stable `ledger.lock` file relative to this handle with exclusive, no-follow, owner-only creation.',
+    ),
+  );
+  assert.ok(
+    text.includes(
+      'canonical path, owner, and owner-only mode or ACL, and has link count 1.',
+    ),
+  );
+  assert.ok(
+    text.includes(
+      'Before every ledger read, write, copy, rename, or unlink, acquire the namespace lock',
+    ),
+  );
+  assert.ok(text.includes("On POSIX, use Python's [`fcntl.flock`]"));
+  assert.ok(text.includes("on Windows, use Microsoft's [`LockFileEx`]"));
   assert.match(
     text,
     /Use native handle-relative operations with exclusive creation and no-follow checks/,
@@ -3515,7 +3566,7 @@ test('issue-authoring contract defines ledger storage verdicts, allocation, and 
   );
   assert.match(
     text,
-    /Immediately before replacement, repeat the ownership check and verify that the existing ledger's identity and SHA-256 still match the records/,
+    /replacement, while holding the exclusive namespace lock, repeat the ownership check and verify that the existing ledger's identity and SHA-256 still match the records/,
   );
   assert.match(
     text,
