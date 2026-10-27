@@ -24,8 +24,10 @@
         "advisory-reroll",
         "review-ack",
         "copilot-unavailable",
+        "out-of-loop",
         "idd-hold",
         "f4-head-proof",
+        "scope-overrun",
         "authoring-owner",
         "authoring-publication-intent"
       ],
