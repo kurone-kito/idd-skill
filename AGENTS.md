@@ -702,8 +702,10 @@ command set performs none of those.
 The lint job's protocol-tests step can fail when the host is under heavy
 load, because some tests use wall-clock limits: a 2000 ms limit in
 `tests/resume-route-selection.test.mts` and a 700 ms read budget in
-`tests/provider-outage-park-read-runtime.test.mts`. Rerun the job on a
-quieter host before treating such a failure as a code defect.
+`tests/provider-outage-park-read-runtime.test.mts`. Local act runs of this
+change on 2026-10-27 hit this failure, as recorded in pull request `#4773`.
+Rerun the job on a quieter host before treating such a failure as a code
+defect.
 
 A linked worktree mounts the git common directory read-only at the same
 path, so the checkout inside the container can read the worktree's git
@@ -718,7 +720,7 @@ and docker inside an option string.
 The container runs with `--init`. Without an init process, the container
 that act starts keeps a killed child process as a zombie, so a liveness
 check still sees the process. On 2026-10-27, in local runs of this change
-(not recorded in an issue), two tests in
+recorded in pull request `#4773`, two tests in
 `tests/idd-critique-telemetry-hook.test.mts` failed in two runs without the
 flag: one waits for a hung hook to be killed, the other for a backgrounded
 descendant to be killed. They passed in a third run with the flag. A
