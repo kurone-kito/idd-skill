@@ -3426,34 +3426,117 @@ test('issue-authoring contract defines ledger storage verdicts, allocation, and 
   for (const label of LEDGER_STORAGE_CASES) {
     assert.ok(section.includes(label), `missing ownership case: ${label}`);
   }
-  // Allocation is exclusive: a non-recursive mkdir, and `mkdir -p` appears only
-  // in the sentence that forbids it.
+  // Allocation is exclusive and non-recursive, and `mkdir -p` appears only in
+  // the sentence that forbids it.
   assert.match(
     text,
-    /a non-recursive `mkdir` that fails when the name already exists, never `mkdir -p`/,
+    /Create `issue-authoring-<uuid>` relative to that handle with exclusive, non-recursive directory creation, never `mkdir -p`/,
+  );
+  assert.match(
+    text,
+    /Retry with a fresh UUID only when the name already exists, at most three times/,
   );
   assert.equal(section.match(/mkdir -p/g)?.length, 1);
   assert.match(text, /exclusive creation/);
-  assert.match(text, /mkdir -m 700/);
-  // The post-creation check removes only the one empty directory this step
-  // created, never recursively, and the ownership cases are attributed as
-  // preventive, since no observed incident is cited for them.
+  assert.match(text, /use POSIX mode 700/);
   assert.match(
     text,
-    /remove only that one empty directory this step created \(a non-recursive `rmdir`, never a recursive removal\)/,
+    /On POSIX, reject a root that grants group or other users write and search permission without the sticky bit/,
   );
+  assert.match(
+    text,
+    /On Windows, reject a root whose ACL lets another user rename or delete child entries/,
+  );
+  assert.match(
+    text,
+    /If a root was supplied, stop and report its path and error; do not try another root/,
+  );
+  assert.match(
+    text,
+    /Only when no root was supplied may the next candidate be tried/,
+  );
+  assert.match(
+    text,
+    /Open the root as a directory handle without following a symbolic link or reparse point/,
+  );
+  assert.match(
+    text,
+    /Open it relative to the root handle without following links, then record its canonical path, file identity, type, link count, owner, and mode or ACL/,
+  );
+  assert.match(
+    text,
+    /Use native handle-relative operations with exclusive creation and no-follow checks/,
+  );
+  assert.match(
+    text,
+    /On POSIX, a standard-library Python implementation can use `os\.open`, `os\.mkdir`, `os\.stat`, `os\.rename`, and `os\.unlink` with directory-descriptor parameters/,
+  );
+  assert.match(
+    text,
+    /On Windows, use a native binding that opens or creates child names with `NtCreateFile`, setting `OBJECT_ATTRIBUTES\.RootDirectory` to the verified directory handle and `OBJ_DONT_REPARSE` in its attributes\. Use `CreateDisposition=FILE_CREATE` for exclusive child creation; create a directory with `FILE_DIRECTORY_FILE`/,
+  );
+  assert.match(
+    text,
+    /Make the namespace owner-only as part of creation: use POSIX mode 700, or on Windows pass an explicit security descriptor through `OBJECT_ATTRIBUTES\.SecurityDescriptor`, with a DACL granting access only to the current user and both `SE_DACL_PRESENT` and `SE_DACL_PROTECTED` set on that descriptor/,
+  );
+  assert.match(
+    text,
+    /If the platform cannot apply this restriction before the directory is visible, fail closed/,
+  );
+  assert.match(
+    text,
+    /After the final identity and SHA-256 checks, replace the owned ledger by calling `SetFileInformationByHandle` on the verified temporary-file handle with `FileRenameInfo`, `ReplaceIfExists=TRUE`, and `FILE_RENAME_INFO\.RootDirectory` set to the namespace handle/,
+  );
+  assert.match(text, /Open that file handle with `DELETE` access/);
+  assert.match(
+    text,
+    /mark the verified source handle for deletion with `SetFileInformationByHandle` and `FileDispositionInfo` \(`DeleteFile=TRUE`\); it also requires `DELETE` access/,
+  );
+  assert.match(
+    text,
+    /If the host cannot bind an operation to the verified handle or supply the required evidence, treat the storage as unreadable and stop/,
+  );
+  assert.match(
+    text,
+    /Immediately before replacement, repeat the ownership check and verify that the existing ledger's identity and SHA-256 still match the records/,
+  );
+  assert.match(
+    text,
+    /Immediately before unlinking the source, verify that the namespace identity still matches, the source identity and SHA-256 still match their records/,
+  );
+  assert.ok(
+    text.includes(
+      'the destination is a regular file with link count 1, the recorded identity and SHA-256, and the canonical path `<namespace>/<number>.json`',
+    ),
+  );
+  // Failed post-creation checks preserve the new namespace instead of deleting
+  // it by path; no other session's entry is adopted or removed.
+  assert.match(
+    text,
+    /If any check fails, preserve the namespace and report its path and the exact failing evidence; mark this candidate failed\. Do not remove it by path/,
+  );
+  assert.doesNotMatch(section, /rmdir/);
   assert.match(
     text,
     /The cases below are preventive; no observed incident yet/,
   );
-  // Nothing is deleted, recursed into, adopted, or registered.
+  // Mismatches preserve unverified entries, and cleanup is restricted to
+  // session-created entries whose identity still matches.
   assert.match(
     text,
-    /never deletes anything, never recurses into a directory, and never adopts an entry this session did not create/,
+    /On a mismatch, preserve the ledger and any unverified temporary entry; never recurse into a directory or adopt an entry this session did not create/,
   );
   assert.match(
     text,
-    /adds no mandatory durable session registry, no automatic deletion, and no operator recovery gate/,
+    /Cleanup may remove only an entry created by this session whose recorded identity still matches/,
+  );
+  assert.match(
+    text,
+    /never automatically deletes an older or abandoned namespace/,
+  );
+  assert.match(
+    text,
+    /It may remove only a newly created entry whose recorded identity still matches/,
   );
 });
 
@@ -3491,11 +3574,15 @@ test('SKILL entry carries the ledger storage summary and link for instructions-o
     '[Ledger storage](references/contract.md#ledger-storage)',
     '[Findings ledger storage](#findings-ledger-storage)',
     "never reuse another session's namespace",
+    'if a supplied root fails, stop without trying another root',
+    'When no root is supplied, allocate a',
+    'preserve unverified entries; the contract permits cleanup only for entries this session created whose identity still matches.',
     'Instructions-only and same-response self-critique runs follow the same procedure; no orchestrator, environment variable, or helper is needed.',
   ]) {
     assert.ok(skill.includes(needle), `SKILL.md: missing "${needle}"`);
   }
   assert.doesNotMatch(skill, /session scratchpad/);
+  assert.doesNotMatch(skill, /delete nothing|or otherwise create/);
 });
 
 test('docs copy mirrors the ledger storage subsection and separates structural checks from a live run (#4711)', () => {
