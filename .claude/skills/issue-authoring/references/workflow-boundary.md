@@ -556,11 +556,12 @@ cover that path; follow the contract for it.
 1. **Preflight, every target.** Run the contract's sweep against the target
    and the journal first (attempted, not blocking, so the command ends in
    `|| true`). Use `owner/repo#number` for a journal in another repository.
-   Add one `--issue` for each retired journal that holds a record of the set.
+   Add one `--issue` for each listed retired journal.
 
    ```sh
    node scripts/sweep-authoring-markers.mjs --issue <target-issue-number> \
      --issue <journal-issue-number> \
+     --issue <retired-journal-owner/repo#number> \
      --marker-prefix <resolved-target-prefix> \
      --trusted-marker-logins <trusted-login-1,...> \
      --deadline-ms 300000 --apply || true
@@ -641,12 +642,13 @@ cover that path; follow the contract for it.
    ```sh
    node scripts/sweep-authoring-markers.mjs --issue <anchor-issue-number> \
      --issue <journal-issue-number> \
+     --issue <retired-journal-owner/repo#number> \
      --marker-prefix <resolved-target-prefix> \
      --trusted-marker-logins <trusted-login-1,...> \
      --deadline-ms 300000 --apply || true
    ```
 
-   Add one `--issue` for each retired journal that holds a record of the set.
+   Add one `--issue` for each listed retired journal.
 
    Then compute `<snapshot-sha256>` with the set-snapshot algorithm in the
    same contract section, and post the completion marker.

@@ -1826,11 +1826,12 @@ cover that path; follow the contract for it.
 1. **Preflight, every target.** Run the contract's sweep against the target
    and the journal first (attempted, not blocking, so the command ends in
    `|| true`). Use `owner/repo#number` for a journal in another repository.
-   Add one `--issue` for each retired journal that holds a record of the set.
+   Add one `--issue` for each listed retired journal.
 
    ```sh
    node scripts/sweep-authoring-markers.mjs --issue <target-issue-number> \
      --issue <journal-issue-number> \
+     --issue <retired-journal-owner/repo#number> \
      --marker-prefix <resolved-target-prefix> \
      --trusted-marker-logins <trusted-login-1,...> \
      --deadline-ms 300000 --apply || true
@@ -1911,12 +1912,13 @@ cover that path; follow the contract for it.
    ```sh
    node scripts/sweep-authoring-markers.mjs --issue <anchor-issue-number> \
      --issue <journal-issue-number> \
+     --issue <retired-journal-owner/repo#number> \
      --marker-prefix <resolved-target-prefix> \
      --trusted-marker-logins <trusted-login-1,...> \
      --deadline-ms 300000 --apply || true
    ```
 
-   Add one `--issue` for each retired journal that holds a record of the set.
+   Add one `--issue` for each listed retired journal.
 
    Then compute `<snapshot-sha256>` with the set-snapshot algorithm in the
    same contract section, and post the completion marker.
@@ -1946,12 +1948,13 @@ retried or resumed release (which reuses an existing `release` marker
 and never appends a new one) still runs the sweep every time this
 preflight step is reached -- run the single fetch-driven sweep command
 against the target issue and every journal named in this session's own
-records (`issueAuthoring.journalIssue`, and each retired journal that holds one
-of the set's records):
+records (`issueAuthoring.journalIssue`, and each retired journal listed in
+`issueAuthoring.retiredJournalIssues`):
 
 ```sh
 node scripts/sweep-authoring-markers.mjs --issue <target-issue-number> \
   --issue <journal-issue-number> \
+  --issue <retired-journal-owner/repo#number> \
   --marker-prefix <resolved-target-prefix> \
   --trusted-marker-logins <trusted-login-1,...> \
   --deadline-ms 300000 --apply || true
@@ -2096,8 +2099,8 @@ release-complete reuse-or-append decision below, repeat the same
 mandatory sweep once more -- the same `sweep-authoring-markers.mjs`
 command above, now scoped to `--issue <anchor-issue-number> --issue
 <journal-issue-number>` -- covering the anchor's own owner-marker log
-and each journal's publication-intent log (plus one `--issue` for each retired
-journal that holds a record of the set) -- idempotent with every
+and each journal's publication-intent log (plus one `--issue` for each listed
+retired journal) -- idempotent with every
 earlier target's own sweep above, since a comment either was already
 minimized or was not yet the newest for its own continuity-chain
 identity within the family either way. Then
@@ -2153,12 +2156,13 @@ confirmed absent), attempt the mandatory sweep one more time (#2935), in
 a single invocation covering every target's now-final owner-marker log
 (the anchor's included this time, not just its own) and each journal's
 publication-intent log -- one `--issue` for `issueAuthoring.journalIssue` and
-one more for each retired journal that holds a record of the set:
+one more for each listed retired journal:
 
 ```sh
 node scripts/sweep-authoring-markers.mjs --issue <target-1> \
   --issue <target-2> ... --issue <anchor-issue-number> \
   --issue <journal-issue-number-or-owner/repo#number> \
+  --issue <retired-journal-owner/repo#number> \
   --marker-prefix <resolved-target-prefix> \
   --trusted-marker-logins <trusted-login-1,...> \
   --deadline-ms 300000 --apply || true
@@ -2179,13 +2183,14 @@ eligibility rule matches what the sweep could actually clear; omitting
 it makes the count overstate the real backlog by including
 untrusted-authored matches the sweep was never going to touch.
 
-For each retired journal that holds a record of the set, run that same check
+For each listed retired journal, run that same check
 once more, with `--trusted-marker-logins` set as above and
 `--journal-comments-file` holding only that journal's comments, with the sweep's
 post-mutation result applied to that snapshot as described below. Report each
 journal's count separately; a retired journal's count is never added to the
-current journal's. Each of the three sweep attempts still counts once, and each
-attempt covers every listed journal.
+current journal's. The three sweep attempts each count once. Operator-run
+attempts cover every listed retired journal; the helper's carrier release
+covers only the carrier and `journalIssue`.
 
 **Normalize the author field before writing the comments-file JSON**
 (#2896 review, Codex): the paginated GitHub REST/GraphQL response this
