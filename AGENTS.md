@@ -291,15 +291,19 @@ layered on top of the distributed IDD defaults:
   dogfooding policy (applies only to `kurone-kito/idd-skill`).
   `low` and `low-and-medium` still never defer High.
   `severity-tiered` scores urgency `very-low` < `low` < `medium` <
-  `high` and, below the first threshold, defers High only at
-  `very-low` (issue `#3589`). The gradient acts only when
+  `high` and, below both the first threshold and the
+  review-count cap, defers High only at `very-low` (issue `#3589`).
+  At review count 3, below the first threshold 4 but at the cap, the
+  cap defers High findings at every urgency. The gradient acts only when
   `deferByUrgency` is `severity-tiered`. This repository opts in
   with `critiqueLoop.deferRelaxAtRounds: [4, 7]`. Over the 100
   merged pull requests numbered #3561 to #3781 (merged 2026-09-27
   to 2026-10-05), the median PR-wide Copilot review count was 2,
   and 30 reached a 4th review, 25 a 5th, 14 a 7th and 10 a 9th, so
   the first threshold leaves a typical pull request unchanged and
-  the second acts only on the long tail. A follow-up filed by the
+  the second acts only on the long tail. With the cap at 3, these
+  thresholds act only through the converged extra step at review counts
+  1 and 2. A follow-up filed by the
   gradient carries the existing `review-fix-loop-cutoff` marker.
   The motivating observation is
   [kurone-kito/setup.ubuntu#201](https://github.com/kurone-kito/setup.ubuntu/issues/201).
@@ -315,6 +319,32 @@ layered on top of the distributed IDD defaults:
   carries a `round <r>/5` clause. See
   [docs/idd-design-rationale.md](docs/idd-design-rationale.md#e4e5-adopt-now-urgency-defer)
   for the baseline and the severity-tiered matrix.
+- **Review-count cap**: This source repository sets
+  `critiqueLoop.deferAllAfterRounds: 3` only for
+  `kurone-kito/idd-skill`; `idd-template/` leaves the field unset (cap
+  off). Under `critiqueLoop.deferByUrgency: "severity-tiered"` and
+  outside Lite, a scored PATH A finding at or above the PR-wide
+  Copilot review-count cap defers at every urgency unless it is
+  safety-class or another documented block reason applies; adopt-now
+  condition (d) does not turn the verdict into `keep`. The cap acts
+  regardless of whether `deferRelaxAtRounds` is configured. See the
+  [Review-count cap paragraph](docs/idd-review-policy-profiles.md#wave-gradient-urgency-defer).
+  Evidence measured 2026-10-27 across at least 1,777 Copilot reviews
+  on 464 pull requests (only the first 100 reviews per pull request,
+  so review counts are lower bounds): caps 2, 3, 4, and 5 would have
+  removed at most 1,004, 806, 659, and 547 counted reviews
+  (56.5%, 45.4%, 37.1%, and 30.8% of reviews; 73.4%, 62.8%, 53.1%,
+  and 44.7% weighted by changed lines). Those shares are upper bounds
+  over the lower-bound counts, assuming no review after each cap.
+  With `deferRelaxAtRounds: [4, 7]`, at counts 3 and above findings
+  either defer through the cap or remain kept by an existing block,
+  so the relax steps change no verdict. The thresholds act only
+  through the converged extra step at counts 1 and 2.
+  `deferAfterRounds: 5` still acts on Lite-profile claims because the
+  cap is off there. With `triageRecord: "enforce"`, fixing a
+  non-safety finding at count 3 or above needs
+  `--override "<reason>"`, which the weekly audit records as an
+  override. Remove `critiqueLoop.deferAllAfterRounds` to opt out.
 - **Triage record opt-in**: This source repository sets
   `critiqueLoop.triageRecord` to `"enforce"` as a local IDD dogfooding
   policy (applies only to `kurone-kito/idd-skill`), switched under issue
