@@ -19586,6 +19586,7 @@ function forcedHandoffMergeFakePort(options: {
   scope: 'issue-only' | 'issue-plus-pr';
   earlierLinkedPr: boolean;
   linkedLookupFails: boolean;
+  claimless?: boolean;
   restReviews?: unknown[];
   graphQlReviews?: ProviderReviewClauseNode[];
   prRequestMarker?: string;
@@ -19613,7 +19614,7 @@ function forcedHandoffMergeFakePort(options: {
         statusCheckRollup: [],
         mergeable: 'MERGEABLE',
         mergeStateStatus: 'CLEAN',
-        closingIssuesReferences: [{ number: 7 }],
+        closingIssuesReferences: options.claimless ? [] : [{ number: 7 }],
       },
     },
     branchRules: { 'o/r/main': [] },
@@ -20039,7 +20040,7 @@ test('#4717: collector recovery classification and gate use the same GraphQL rev
     state: 'COMMENTED',
     commit_id: commitId,
     submitted_at: submittedAt,
-    body: '',
+    body: MINIMAL_V2_REVIEW_BODY,
   });
   const graphQlReview = (
     commitId: string,
@@ -20118,4 +20119,74 @@ test('#4717: collector recovery classification and gate use the same GraphQL rev
     blockerNamed(graphQlOnHead, 'stale-request-recovery'),
     undefined,
   );
+
+  // A GraphQL/REST ordering disagreement must not change claim-id-only or
+  // claimless reports: those runs do not evaluate stale-request recovery, so
+  // their shared advisoryWait field remains based on the collector's REST
+  // evidence.
+  const nonClaimModes = [
+    {
+      name: 'claim-id-only',
+      claimArgs: ['--claim-issue', '7', '--claim-id', 'claim-new'],
+      claimless: false,
+    },
+    {
+      name: 'claimless',
+      claimArgs: ['--claimless'],
+      claimless: true,
+    },
+  ] as const;
+  for (const mode of nonClaimModes) {
+    const makePort = (
+      restReviews: unknown[],
+      graphQlReviews: ProviderReviewClauseNode[],
+    ) =>
+      forcedHandoffMergeFakePort({
+        scope: 'issue-only',
+        earlierLinkedPr: false,
+        linkedLookupFails: false,
+        claimless: mode.claimless,
+        prRequestMarker: requestMarker,
+        restReviews,
+        graphQlReviews,
+      });
+    const restOnHead = [
+      restReview(offHeadSha, '2026-05-12T10:45:00Z'),
+      restReview(headSha, '2026-05-12T10:50:00Z'),
+    ];
+    const graphQlOffHead = [
+      graphQlReview(headSha, '2026-05-12T10:50:00Z', 'head-review'),
+      graphQlReview(offHeadSha, '2026-05-12T10:45:00Z', 'off-head-review'),
+    ];
+    const restOffHead = [
+      restReview(headSha, '2026-05-12T10:45:00Z'),
+      restReview(offHeadSha, '2026-05-12T10:50:00Z'),
+    ];
+    const graphQlOnHead = [
+      graphQlReview(offHeadSha, '2026-05-12T10:50:00Z', 'off-head-review'),
+      graphQlReview(headSha, '2026-05-12T10:45:00Z', 'head-review'),
+    ];
+
+    const restOnHeadReport = collectRecoveryWiringReport(
+      makePort(restOnHead, graphQlOffHead),
+      [...mode.claimArgs],
+    );
+    assert.equal(
+      advisoryWaitOf(restOnHeadReport).lastCopilotCommit,
+      headSha,
+      `${mode.name}: GraphQL off-head result must not replace REST on-head result`,
+    );
+    assert.equal('staleRequestRecovery' in restOnHeadReport, false);
+
+    const restOffHeadReport = collectRecoveryWiringReport(
+      makePort(restOffHead, graphQlOnHead),
+      [...mode.claimArgs],
+    );
+    assert.equal(
+      advisoryWaitOf(restOffHeadReport).lastCopilotCommit,
+      offHeadSha,
+      `${mode.name}: GraphQL on-head result must not replace REST off-head result`,
+    );
+    assert.equal('staleRequestRecovery' in restOffHeadReport, false);
+  }
 });

@@ -1424,7 +1424,12 @@ export function collectPreMergeReadiness(
       closingSet: closingSetEvidence,
       deferFollowUps,
       evaluateStaleRequestRecovery,
-      latestCopilotReviewCommit: lastCopilotCommit,
+      // A decline is terminal availability evidence, not a completed review;
+      // preserve the summary's completed-review commit field (#4142).
+      latestCopilotReviewCommit:
+        evaluateStaleRequestRecovery === undefined || copilotDeclinedHead
+          ? undefined
+          : lastCopilotCommit,
       copilotUnavailable,
       // kurone-kito/idd-skill#2919: caller-precomputed by the enrichment
       // block above -- see its doc comment for the full rationale.
