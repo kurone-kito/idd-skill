@@ -11552,6 +11552,16 @@ export function buildPreMergeReadinessSummary(
       primaryBotLogin: options.primaryBotLogin,
     },
   );
+  // #4717: `collectPreMergeReadiness` passes the latest Copilot review commit
+  // selected from the GraphQL evidence used by advisory-convergence. The
+  // recovery classifier and its shared blocker both read this summary field,
+  // so force-push/revert ordering cannot make them disagree with the
+  // collector's recovery evidence. `f3Outcome` retains its existing mapping.
+  if (options.latestCopilotReviewCommit !== undefined) {
+    advisoryWait.lastCopilotCommit = String(
+      options.latestCopilotReviewCommit ?? '',
+    );
+  }
   // kurone-kito/idd-skill#2911: captures `resolveActiveClaimWithForcedHandoff
   // Trace`'s `activeSince` (the non-mutable claim-identity-transition
   // anchor `summarizeClaimValidation`'s own `captureTraceInto` parameter

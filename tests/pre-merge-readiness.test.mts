@@ -92,6 +92,7 @@ import { GH_SEARCH_RESULT_CAP } from '../src/scripts/provider-adapter-github.mts
 import type {
   ProviderComment,
   ProviderPort,
+  ProviderReviewClauseNode,
 } from '../src/scripts/provider-port.mts';
 import {
   computeClosingSetEvidence,
@@ -19583,6 +19584,9 @@ function forcedHandoffMergeFakePort(options: {
   scope: 'issue-only' | 'issue-plus-pr';
   earlierLinkedPr: boolean;
   linkedLookupFails: boolean;
+  restReviews?: unknown[];
+  graphQlReviews?: ProviderReviewClauseNode[];
+  prRequestMarker?: string;
 }): ProviderPort {
   const handoffPayload = {
     oldAgentId: 'copilot',
@@ -19614,10 +19618,28 @@ function forcedHandoffMergeFakePort(options: {
     branchProtection: { 'o/r/main': {} },
     reviewThreadsWithComments: { 1: [] },
     reviewsWithHeadCommitDate: {
-      1: { reviews: [], headCommittedAt: '2026-05-12T10:30:00Z' },
+      1: {
+        reviews: options.graphQlReviews ?? [],
+        headCommittedAt: '2026-05-12T10:30:00Z',
+      },
     },
+    reviews: { 1: options.restReviews ?? [] },
     repositoryDefaultBranch: 'main',
     comments: {
+      ...(options.prRequestMarker
+        ? {
+            1: [
+              {
+                id: 99,
+                body: options.prRequestMarker,
+                createdAt: '2026-05-12T00:00:00Z',
+                updatedAt: '2026-05-12T00:00:00Z',
+                authorLogin: 'kurone-kito',
+                lastEditedAt: null,
+              },
+            ],
+          }
+        : {}),
       7: [
         {
           id: 1,
@@ -20001,4 +20023,97 @@ test('#4717: the collector sets the recovery object only for a claim-bound run',
   } as never);
   const claimless = collectRecoveryWiringReport(claimlessPort, ['--claimless']);
   assert.equal('staleRequestRecovery' in claimless, false);
+});
+
+// #4717: REST/submittedAt order can disagree with the absolute-latest
+// GraphQL review after a force-push/revert. The collector's GraphQL commit
+// must drive both currentHeadReviewExists and the shared off-head blocker.
+test('#4717: collector recovery classification and gate use the same GraphQL review after a force-push reorder', () => {
+  const headSha = 'a'.repeat(40);
+  const offHeadSha = 'b'.repeat(40);
+  const requestMarker = `advisory-wait: kurone-kito ${headSha} 2026-05-12T00:00:00Z`;
+  const restReview = (commitId: string, submittedAt: string) => ({
+    user: { login: 'copilot-pull-request-reviewer[bot]', type: 'Bot' },
+    state: 'COMMENTED',
+    commit_id: commitId,
+    submitted_at: submittedAt,
+    body: '',
+  });
+  const graphQlReview = (
+    commitId: string,
+    submittedAt: string,
+    id: string,
+  ): ProviderReviewClauseNode => ({
+    id,
+    authorLogin: 'copilot-pull-request-reviewer[bot]',
+    authorTypename: 'Bot',
+    state: 'COMMENTED',
+    commitId,
+    submittedAt,
+    commentCount: 0,
+    body: '',
+  });
+  const claimArgs = [
+    '--claim-issue',
+    '7',
+    '--claim-id',
+    'claim-new',
+    '--agent-id',
+    'copilot',
+  ];
+
+  const graphQlOffHead = collectRecoveryWiringReport(
+    forcedHandoffMergeFakePort({
+      scope: 'issue-only',
+      earlierLinkedPr: false,
+      linkedLookupFails: false,
+      prRequestMarker: requestMarker,
+      // REST says HEAD is covered by the later timestamp. GraphQL's final
+      // row is an older off-head review, as after a force-push/revert.
+      restReviews: [
+        restReview(offHeadSha, '2026-05-12T10:45:00Z'),
+        restReview(headSha, '2026-05-12T10:50:00Z'),
+      ],
+      graphQlReviews: [
+        graphQlReview(headSha, '2026-05-12T10:50:00Z', 'head-review'),
+        graphQlReview(offHeadSha, '2026-05-12T10:45:00Z', 'off-head-review'),
+      ],
+    }),
+    claimArgs,
+  );
+  assert.equal(graphQlOffHead.advisoryWait.lastCopilotCommit, offHeadSha);
+  assert.deepEqual(graphQlOffHead.staleRequestRecovery, {
+    action: 'attempt',
+    reason: 'non-pending-recovery-attempt-eligible',
+  });
+  assert.ok(blockerNamed(graphQlOffHead, 'stale-request-recovery'));
+
+  const graphQlOnHead = collectRecoveryWiringReport(
+    forcedHandoffMergeFakePort({
+      scope: 'issue-only',
+      earlierLinkedPr: false,
+      linkedLookupFails: false,
+      prRequestMarker: requestMarker,
+      // REST's timestamp order says off-head; the last GraphQL row proves
+      // that the latest completed review actually covers this HEAD.
+      restReviews: [
+        restReview(headSha, '2026-05-12T10:45:00Z'),
+        restReview(offHeadSha, '2026-05-12T10:50:00Z'),
+      ],
+      graphQlReviews: [
+        graphQlReview(offHeadSha, '2026-05-12T10:50:00Z', 'off-head-review'),
+        graphQlReview(headSha, '2026-05-12T10:45:00Z', 'head-review'),
+      ],
+    }),
+    claimArgs,
+  );
+  assert.equal(graphQlOnHead.advisoryWait.lastCopilotCommit, headSha);
+  assert.deepEqual(graphQlOnHead.staleRequestRecovery, {
+    action: 'not-applicable',
+    reason: 'proven-covers-head',
+  });
+  assert.equal(
+    blockerNamed(graphQlOnHead, 'stale-request-recovery'),
+    undefined,
+  );
 });

@@ -1712,6 +1712,7 @@ export function collectPreMergeReadiness(
       closingSet: closingSetEvidence,
       deferFollowUps,
       evaluateStaleRequestRecovery,
+      latestCopilotReviewCommit: lastCopilotCommit,
       copilotUnavailable,
       // kurone-kito/idd-skill#2919: caller-precomputed by the enrichment
       // block above -- see its doc comment for the full rationale.
