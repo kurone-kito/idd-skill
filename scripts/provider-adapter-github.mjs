@@ -938,13 +938,22 @@ function normalizeStatusCheckRollupNode(node) {
     };
   }
   if (type === 'StatusContext') {
+    const state = String(raw.state ?? '')
+      .trim()
+      .toUpperCase();
+    const completedAt =
+      ['SUCCESS', 'FAILURE', 'ERROR'].includes(state) &&
+      typeof raw.updatedAt === 'string'
+        ? raw.updatedAt
+        : null;
     return {
       __typename: 'StatusContext',
       context: raw.context,
       state: raw.state,
       targetUrl: raw.targetUrl,
-      // StatusContext has no startedAt field in GraphQL. Its creation time is
-      // the closest equivalent and preserves the ordering signal gh exposes.
+      ...(completedAt === null ? {} : { completedAt }),
+      // StatusContext has no startedAt field in GraphQL. Its creation time
+      // preserves the ordering signal the provider exposes.
       startedAt: raw.createdAt,
     };
   }
@@ -976,7 +985,7 @@ function fetchChangeRequestBranchAndChecks(deps, owner, repo, number) {
                 }
               }
             }
-            ... on StatusContext{context state targetUrl createdAt}
+            ... on StatusContext{context state targetUrl createdAt updatedAt}
           }
           pageInfo{hasNextPage endCursor}
         }
@@ -1018,7 +1027,21 @@ function fetchChangeRequestBranchAndChecks(deps, owner, repo, number) {
         'getChangeRequestBranchAndChecks: PR head or base ref changed during status-check pagination',
       );
     }
-    const contexts = pullRequest.statusCheckRollup?.contexts;
+    if (!Object.hasOwn(pullRequest, 'statusCheckRollup')) {
+      throw new Error(
+        'getChangeRequestBranchAndChecks: status-check rollup field is missing',
+      );
+    }
+    const rollup = pullRequest.statusCheckRollup;
+    if (rollup === null) {
+      if (page !== 0 || after !== null || statusCheckRollup.length > 0) {
+        throw new Error(
+          'getChangeRequestBranchAndChecks: status-check rollup became null during pagination',
+        );
+      }
+      return { headSha, baseRefName, statusCheckRollup };
+    }
+    const contexts = rollup?.contexts;
     if (
       !contexts ||
       !Array.isArray(contexts.nodes) ||
