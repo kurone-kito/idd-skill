@@ -11579,11 +11579,13 @@ test('buildPreMergeReadinessSummary embeds a strict ready/blockers rollup', () =
 function advisoryWaitOf(summary: unknown): {
   copilotUnavailable: boolean;
   copilotUnavailableWaived: boolean;
+  lastCopilotCommit?: string | null;
 } {
   return (summary as { advisoryWait: Record<string, unknown> })
     .advisoryWait as {
     copilotUnavailable: boolean;
     copilotUnavailableWaived: boolean;
+    lastCopilotCommit?: string | null;
   };
 }
 
@@ -20081,7 +20083,7 @@ test('#4717: collector recovery classification and gate use the same GraphQL rev
     }),
     claimArgs,
   );
-  assert.equal(graphQlOffHead.advisoryWait.lastCopilotCommit, offHeadSha);
+  assert.equal(advisoryWaitOf(graphQlOffHead).lastCopilotCommit, offHeadSha);
   assert.deepEqual(graphQlOffHead.staleRequestRecovery, {
     action: 'attempt',
     reason: 'non-pending-recovery-attempt-eligible',
@@ -20107,7 +20109,7 @@ test('#4717: collector recovery classification and gate use the same GraphQL rev
     }),
     claimArgs,
   );
-  assert.equal(graphQlOnHead.advisoryWait.lastCopilotCommit, headSha);
+  assert.equal(advisoryWaitOf(graphQlOnHead).lastCopilotCommit, headSha);
   assert.deepEqual(graphQlOnHead.staleRequestRecovery, {
     action: 'not-applicable',
     reason: 'proven-covers-head',
