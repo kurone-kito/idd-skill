@@ -645,6 +645,82 @@ fix: update code
 feat: add auth system and refactor database layer and update docs
 ```
 
+## Local Linux CI with nektos/act
+
+`pnpm run ci:act` runs three of this repository's Linux pull-request CI
+jobs locally through [nektos/act](https://github.com/nektos/act), so a
+problem can be caught before a push. It is opt-in and repository-local:
+it is not part of `commands.pre-push-validate` or any other command set,
+and it is not distributed through `idd-template/`.
+
+```sh
+pnpm run ci:act
+```
+
+Prerequisites:
+
+- act (tested with act 0.2.89) and a running Docker daemon.
+- A clone owned by uid 1000. The jobs run as the image's `node` user,
+  which has a writable HOME. The script stops with a message for any
+  other owner.
+- Network access on the first run, to pull the image and the actions,
+  and on every run for the two `pnpm-boundary` jobs, which install pnpm
+  at run time.
+- A warm pnpm store or network access for the host install that
+  `pnpm run` performs in a fresh clone or worktree.
+
+Each job runs in the image `node:24.21.0-trixie`, pinned by tag. The
+full tag is used rather than the `-slim` variant, because the slim image
+has no `git`. The script runs these jobs in order and stops at the first
+failure:
+
+- `lint`: the bare-Node lane, which runs the audits and the protocol
+  tests with no dependency installed.
+- `pnpm-boundary`: a `pnpm install --frozen-lockfile`, `pnpm run check`,
+  and `node scripts/check-pnpm-boundary.mjs`.
+- `pnpm-boundary-node22-floor`: the same reusable workflow on Node
+  22.23.2. It is the only one of the three jobs that covers Node 22.
+
+Compared with `commands.pre-push-validate`, the script adds the
+bare-Node run with no installed dependency, the frozen-lockfile install
+with the pnpm boundary check, and the Node 22.23.2 run. The pre-push
+command set performs none of those.
+
+A linked worktree mounts the git common directory read-only at the same
+path, so the checkout inside the container can read the worktree's git
+metadata. A clone needs no extra mount. The job uid matches the owner of
+the common directory, so git accepts the mounted repository without a
+`safe.directory` setting.
+
+The container runs with `--init`. Without an init process, the container
+that act starts keeps a killed child process as a zombie, so a process
+that a test has killed still answers a liveness check. A 2026-10-28
+probe reproduced this: the two critique telemetry hook tests that wait
+for a killed process to disappear failed without the flag and passed
+with it.
+
+The jobs the script does not run, and why:
+
+- `idd-doctor`: its checkout pins the commit under test. A 2026-10-27
+  probe showed act downloading that commit from GitHub, so the job checks
+  the pushed commit, not the local tree. `pnpm run doctor:github` checks
+  the local tree as part of `commands.pre-push-validate`.
+- `lint-windows`: act's Docker containers cannot provide a Windows
+  runner (preventive; no observed incident yet).
+- `analyze`: CodeQL uploads its results to code scanning with
+  `security-events: write` (preventive; no observed incident yet).
+- `idd-advisory-convergence` and the workflows that review, comment,
+  label, merge, or run on a schedule: they read or write GitHub state, so
+  a local run would act on that state (preventive; no observed incident
+  yet).
+
+The image runs as uid 1000, not root. In the 2026-10-27 probe, the grok
+test that reads a file with mode `000` failed as root in
+`node:24.21.0-trixie-slim` with `2 !== 1`, because root ignores the POSIX
+permission bits that the test relies on. The same test passed as uid
+1000. Three other tests read or write under such permission bits, so
+the uid is part of the design, not a convenience.
+
 ## For IDD work
 
 Open `.github/instructions/idd-overview-core.instructions.md` and the
