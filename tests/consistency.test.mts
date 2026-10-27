@@ -3501,7 +3501,7 @@ test('issue-authoring contract defines ledger storage verdicts, allocation, and 
   );
   assert.match(
     text,
-    /After the final identity and SHA-256 checks, replace the owned ledger by calling `SetFileInformationByHandle` on the verified temporary-file handle with `FileRenameInfo`, `ReplaceIfExists=TRUE`, and `FILE_RENAME_INFO\.RootDirectory` set to the namespace handle/,
+    /After the final identity and SHA-256 checks, replace the owned ledger via `SetFileInformationByHandle` on the verified temporary-file handle with `FileRenameInfo`, `ReplaceIfExists=TRUE`, and `FILE_RENAME_INFO\.RootDirectory` set to the namespace handle/,
   );
   assert.match(text, /Open that file handle with `DELETE` access/);
   assert.match(
