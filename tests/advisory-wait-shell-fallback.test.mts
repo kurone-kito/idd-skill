@@ -3102,6 +3102,56 @@ test('differential: inline code masking preserves pending-marker columns (#4696)
   );
 });
 
+test('differential: HTML comment masking preserves pending-marker columns (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      threads: [
+        f2Thread(
+          [
+            f2ThreadComment('human-reviewer', 'please rename', F2_CASE_TIME_1),
+            f2ThreadComment(
+              AGENT_LOGIN,
+              '**Accepted** — noted\n<!-- note -->- example\n**Awaiting maintainer decision** choose one',
+              F2_CASE_TIME_2,
+            ),
+          ],
+          true,
+          true,
+        ),
+      ],
+    },
+    0,
+    1,
+  );
+});
+
+test('differential: inline code masking matches multi-backtick spans (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      threads: [
+        f2Thread(
+          [
+            f2ThreadComment('human-reviewer', 'please rename', F2_CASE_TIME_1),
+            f2ThreadComment(
+              AGENT_LOGIN,
+              '**Accepted** — noted\n\u0060\u0060- example\u0060\u0060\n**Awaiting maintainer decision** choose one',
+              F2_CASE_TIME_2,
+            ),
+          ],
+          true,
+          true,
+        ),
+      ],
+    },
+    0,
+    1,
+  );
+});
+
 test('differential: thread activity uses updatedAt for edited feedback (#4696)', {
   skip: SKIP_REASON ?? false,
 }, () => {
