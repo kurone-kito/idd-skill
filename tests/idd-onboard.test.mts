@@ -1657,6 +1657,18 @@ test('resolveCoreTemplateFiles includes post-merge-cleanup.yml in the core (auto
   }
 });
 
+test('resolveImportFiles never manages root agent entry files for any profile', () => {
+  for (const profile of [undefined, ...PROFILE_NAMES]) {
+    const files = resolveImportFiles(REPO_ROOT, profile).files;
+    for (const entryPath of ['AGENTS.md', 'CLAUDE.md', 'GEMINI.md']) {
+      assert.ok(
+        !files.some((file) => file.targetPath === entryPath),
+        `profile ${String(profile)} must leave root ${entryPath} repository-owned`,
+      );
+    }
+  }
+});
+
 test('resolveCoreTemplateFiles rejects a source tree without a readable manifest', () => {
   assert.throws(
     () => resolveCoreTemplateFiles(makeFixtureDir()),
@@ -2705,6 +2717,45 @@ test('bin/idd-onboard.mjs --import without --dry-run copies exactly the planned 
       `not copied: ${entry.targetPath}`,
     );
   }
+});
+
+test('bin/idd-onboard.mjs preserves root AGENTS.md across initial and forced imports while refreshing imported instructions', () => {
+  const targetRoot = makeFixtureDir();
+  const agentsPath = join(targetRoot, 'AGENTS.md');
+  const localAudienceParagraph =
+    '# Local agent guidance\n\nAssume readers know GitHub Flow but not this repository automation.\n';
+  writeFileSync(agentsPath, localAudienceParagraph);
+
+  const initial = runCliBin([
+    '--import',
+    '--source',
+    REPO_ROOT,
+    '--target',
+    targetRoot,
+  ]);
+  assert.equal(initial.status, 0, JSON.stringify(initial.verdict));
+  assert.equal(readFileSync(agentsPath, 'utf8'), localAudienceParagraph);
+
+  const importedWorkflow = join(targetRoot, 'docs', 'idd-workflow.md');
+  writeFileSync(importedWorkflow, '# Stale imported workflow\n');
+  const forced = runCliBin([
+    '--import',
+    '--source',
+    REPO_ROOT,
+    '--target',
+    targetRoot,
+    '--force',
+  ]);
+  assert.equal(forced.status, 0, JSON.stringify(forced.verdict));
+  assert.equal(readFileSync(agentsPath, 'utf8'), localAudienceParagraph);
+  assert.equal(
+    readFileSync(importedWorkflow, 'utf8'),
+    readFileSync(
+      join(REPO_ROOT, 'idd-template', 'docs', 'idd-workflow.md'),
+      'utf8',
+    ),
+    'forced import must refresh stale imported instructions from the template',
+  );
 });
 
 test('bin/idd-onboard.mjs --import verdict omits heldTargets entirely when --hold is not passed (Copilot review, PR #3224)', () => {

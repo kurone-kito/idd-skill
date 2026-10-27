@@ -35,6 +35,26 @@ It is a source bundle, not the execution loop itself: the bundle lives
 in `skills/issue-authoring/` here, while installed copies belong in the
 skill directory for the runtime that will load them.
 
+## Questions for operators
+
+When an issue-authoring interview already needs a decision, assume the
+operator is skilled in manual issue-driven development and GitHub Flow,
+but unfamiliar with idd-skill-specific automation. Treat issue triage and
+planning, branches, commits, pull requests, CI, reviews, and merges as
+known. Explain the relevant idd-skill convention (for example, that
+`## Candidate files` lists expected edit paths, and an unlisted path may
+trigger the effort limit), say how the answer
+changes the task, and request the exact action. When alternatives matter,
+list each meaningful option with its main cost and recommend one. A current
+explicit operator
+instruction may specialize this presentation; otherwise use explicit
+repository-local audience guidance, then this baseline. Repeated use alone
+does not establish expertise or a standing preference (observed 2026-10-26
+in issue `#4743`). Keep each question
+self-contained and concise, without repeating context already present in
+the same ask. This changes question wording only, not when
+the workflow asks, who may approve, required evidence, or policy fields.
+
 ## Trigger policy
 
 Invoke the skill when one or more of the following are true:
