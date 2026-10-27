@@ -1254,9 +1254,12 @@ DISPOSITION_JSON=$(printf '%s' "${COMMENTS_JSON}" | jq -c --argjson agents "${RE
   def mask_html_comments:
     # Keep every line break so HTML comments cannot join Markdown block lines.
     gsub("(?<comment>(?s:<!--.*?-->))"; "\(.comment | gsub("[^\n]"; ""))");
+  def mask_inline_code:
+    # Keep code spans at their original columns so marker block context is preserved.
+    gsub("(?<code>\\x60[^\\x60\\n]*\\x60)"; "\(.code | gsub("[^\n]"; " "))");
   def html_start_re: "^ {0,3}(?:<!--|<\\?|<![A-Z]|<!\\[CDATA\\[|<\\/?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|meta|nav|noframes|ol|optgroup|option|p|param|pre|script|search|section|source|style|summary|table|tbody|td|textarea|tfoot|th|thead|title|tr|track|ul)(?:[ \\t]|\\/?>|$))";
   def pending_marker:
-    (.body | strip_all("(?ms)^ {0,3}(\\x60{3,})(?=[^\\x60\\n]*$).*?(?:^ {0,3}\\1\\x60*[ \\t\\r]*$|\\z)") | strip_all("(?ms)^ {0,3}(~{3,}).*?(?:^ {0,3}\\1~*[ \\t\\r]*$|\\z)") | strip_all("\\x60[^\\x60\\n]*\\x60") | mask_html_comments
+    (.body | strip_all("(?ms)^ {0,3}(\\x60{3,})(?=[^\\x60\\n]*$).*?(?:^ {0,3}\\1\\x60*[ \\t\\r]*$|\\z)") | strip_all("(?ms)^ {0,3}(~{3,}).*?(?:^ {0,3}\\1~*[ \\t\\r]*$|\\z)") | mask_inline_code | mask_html_comments
       | split("\n")
       | reduce .[] as $l ({run: false, hit: false};
           if .hit then .
@@ -1438,9 +1441,12 @@ MISSING_THREADS=$(printf '%s' "${THREADS_JSON}" | jq -rs --argjson agents "${IDD
   def mask_html_comments:
     # Keep every line break so HTML comments cannot join Markdown block lines.
     gsub("(?<comment>(?s:<!--.*?-->))"; "\(.comment | gsub("[^\n]"; ""))");
+  def mask_inline_code:
+    # Keep code spans at their original columns so marker block context is preserved.
+    gsub("(?<code>\\x60[^\\x60\\n]*\\x60)"; "\(.code | gsub("[^\n]"; " "))");
   def html_start_re: "^ {0,3}(?:<!--|<\\?|<![A-Z]|<!\\[CDATA\\[|<\\/?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|meta|nav|noframes|ol|optgroup|option|p|param|pre|script|search|section|source|style|summary|table|tbody|td|textarea|tfoot|th|thead|title|tr|track|ul)(?:[ \\t]|\\/?>|$))";
   def pending_marker:
-    (.body | strip_all("(?ms)^ {0,3}(\\x60{3,})(?=[^\\x60\\n]*$).*?(?:^ {0,3}\\1\\x60*[ \\t\\r]*$|\\z)") | strip_all("(?ms)^ {0,3}(~{3,}).*?(?:^ {0,3}\\1~*[ \\t\\r]*$|\\z)") | strip_all("\\x60[^\\x60\\n]*\\x60") | mask_html_comments
+    (.body | strip_all("(?ms)^ {0,3}(\\x60{3,})(?=[^\\x60\\n]*$).*?(?:^ {0,3}\\1\\x60*[ \\t\\r]*$|\\z)") | strip_all("(?ms)^ {0,3}(~{3,}).*?(?:^ {0,3}\\1~*[ \\t\\r]*$|\\z)") | mask_inline_code | mask_html_comments
       | split("\n")
       | reduce .[] as $l ({run: false, hit: false};
           if .hit then .
