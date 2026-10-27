@@ -923,6 +923,15 @@
           "pattern": "^[\\w.-]+/[\\w.-]+#[1-9][0-9]*$",
           "description": "Pre-existing repository-level authoring journal target (`owner/repo#number`) used as the publication-intent record location for a standalone authoring set with no existing issue or anchor. The issue number must be a positive integer with no leading zero (GitHub issue numbers start at 1). Optional; no default -- when absent, the issue-authoring skill stops with `blocked-by-human` before creating a standalone target rather than guessing a journal."
         },
+        "retiredJournalIssues": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "pattern": "^[\\w.-]+/[\\w.-]+#[1-9][0-9]*$"
+          },
+          "description": "Journals that no longer receive publication-intent records but still hold the records of existing authoring sets, each as `owner/repo#number` with the same format as `journalIssue`. An anchor's records are read from `journalIssue` and every listed journal, so an existing set still verifies after `journalIssue` moves. Must not repeat an entry or name the `journalIssue` issue. Optional; no default -- when absent, only `journalIssue` is read."
+        },
         "adversarialReview": {
           "type": "object",
           "additionalProperties": false,
