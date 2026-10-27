@@ -67,7 +67,9 @@ Examples of how to explain a term, consequence, and requested action:
 
 - **Scope choice — `Candidate files`.** This section lists the paths an
   issue expects implementation to edit. If the acceptance criteria also
-  require an unlisted path, explain that the scope check blocks editing it.
+  require an unlisted path, describe it as an expanded scope that may
+  trigger the effort limit rather than saying the scope check blocks editing
+  it.
   Ask: “May I add `src/path.ts` to `Candidate files`? I recommend adding
   it so the acceptance criteria stay intact; that expands the review
   surface. The alternative is to revise or defer that criterion, which
