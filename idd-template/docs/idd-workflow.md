@@ -74,14 +74,14 @@ Examples of how to explain a term, consequence, and requested action:
   it so the acceptance criteria stay intact; that expands the review
   surface. The alternative is to revise or defer that criterion, which
   leaves this behavior for later.” Scope overrun returned to authoring on
-  issues [#4064 and #3824](idd-design-rationale.md#b3--scope-overrun-returns-to-authoring).
+  issues [#4064 (2026-10-12) and #3824 (2026-10-10)](idd-design-rationale.md#b3--scope-overrun-returns-to-authoring).
 - **Authoring release — `status:authoring`.** This label holds a draft
   outside execution claims until its Stage 2 release checklist passes.
   Ask: “The draft body and child membership are ready. May I run Stage 2
   release? I recommend doing so after your review; it removes the hold and
   makes the issue claimable, so automation can start work. Leaving it held
   avoids a claim now but delays execution.” The release delay was observed
-  on issues [#3372 and #3426](idd-design-rationale.md#e4e5-adopt-now-urgency-defer).
+  on 2026-09-25 in issues [#3372 and #3426](idd-design-rationale.md#e4e5-adopt-now-urgency-defer).
 - **Unknown-owner recovery — `owner_evidence_required`.** This result
   means the helper could not prove that this session owns the local claim
   and stops before mutation. Inspect the linked worktree, claim lock, and
@@ -91,7 +91,7 @@ Examples of how to explain a term, consequence, and requested action:
   ownership is proven; that delays the task but avoids changing another
   session's work. If you identify the expected worktree, I will re-check
   the evidence before continuing.” An observed forced-handoff case is
-  documented for [issue #3597](idd-resume-detail.md).
+  documented for [issue #3597](idd-resume-detail.md), observed 2026-09-30.
 
 ## Entry points and auto-load expectations
 
