@@ -686,6 +686,9 @@
   //   // for a standalone authoring set. Default: omitted; such a set then
   //   // stops for a person instead of guessing a journal.
   //   "journalIssue": "example-owner/example-repo#1",
+  //   // Journals that no longer receive records but still hold the records
+  //   // of existing sets; the anchor check reads them too. Default: omitted.
+  //   "retiredJournalIssues": ["example-owner/example-repo#2"],
   //   // The adversarial review of a finished issue draft.
   //   "adversarialReview": {
   //     // The longest the caller waits for a delegated draft review.

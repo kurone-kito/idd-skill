@@ -3930,6 +3930,51 @@ test('policy schema rejects issueAuthoring journalIssue with a leading-zero issu
   );
 });
 
+test('policy schema accepts issueAuthoring retiredJournalIssues', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  instance.issueAuthoring = {
+    journalIssue: 'kurone-kito/idd-skill#4748',
+    retiredJournalIssues: ['kurone-kito/idd-skill#2674'],
+  };
+  const errors = validate(instance, schema);
+  assert.deepEqual(errors, []);
+});
+
+test('policy schema rejects a malformed or empty issueAuthoring retiredJournalIssues', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  for (const retiredJournalIssues of [['not-a-valid-ref'], []]) {
+    const instance = JSON.parse(
+      JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+    );
+    instance.issueAuthoring = { retiredJournalIssues };
+    const errors = validate(instance, schema);
+    assert.ok(
+      errors.some((e) => e.includes('issueAuthoring.retiredJournalIssues')),
+      `${JSON.stringify(retiredJournalIssues)}: ${errors.join('\n')}`,
+    );
+  }
+});
+
+test('policy schema retiredJournalIssues items use the journalIssue pattern', () => {
+  const schema = loadJson('schemas/policy.schema.json') as {
+    properties: {
+      issueAuthoring: {
+        properties: Record<string, { pattern?: string; items?: unknown }>;
+      };
+    };
+  };
+  const properties = schema.properties.issueAuthoring.properties;
+  const journalPattern = properties.journalIssue?.pattern;
+  assert.ok(journalPattern);
+  assert.equal(
+    (properties.retiredJournalIssues?.items as { pattern?: string })?.pattern,
+    journalPattern,
+  );
+});
+
 test('policy schema accepts issueAuthoring.adversarialReview delegate and wait ceiling (#3599)', () => {
   const schema = loadJson('schemas/policy.schema.json');
   const instance = JSON.parse(

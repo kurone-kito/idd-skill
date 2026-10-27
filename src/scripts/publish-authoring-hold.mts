@@ -438,6 +438,46 @@ export function parseJournalReference(
   return { owner: match[1], repo: match[2], number, ref: value };
 }
 
+/** Parse issueAuthoring.retiredJournalIssues. An unset field lists no journal.
+ * Otherwise it must be a non-empty array of owner/repo#N references, with no
+ * entry repeated and none naming the configured journal. */
+function parseRetiredJournals(
+  setting: unknown,
+  journal: { ref: string },
+):
+  | { refs: { owner: string; repo: string; number: number; ref: string }[] }
+  | { problem: string } {
+  if (setting === undefined) {
+    return { refs: [] };
+  }
+  if (!Array.isArray(setting) || setting.length === 0) {
+    return {
+      problem:
+        'issueAuthoring.retiredJournalIssues must be a non-empty array of owner/repo#N references',
+    };
+  }
+  const refs: { owner: string; repo: string; number: number; ref: string }[] =
+    [];
+  for (const entry of setting) {
+    const parsed = parseJournalReference(entry);
+    if (parsed === null) {
+      return {
+        problem: `issueAuthoring.retiredJournalIssues entry ${JSON.stringify(entry)} is not an owner/repo#N reference`,
+      };
+    }
+    if (
+      sameIssueRef(parsed.ref, journal.ref) ||
+      refs.some((earlier) => sameIssueRef(earlier.ref, parsed.ref))
+    ) {
+      return {
+        problem: `issueAuthoring.retiredJournalIssues entry ${parsed.ref} repeats another entry or names issueAuthoring.journalIssue`,
+      };
+    }
+    refs.push(parsed);
+  }
+  return { refs };
+}
+
 function printHelp(): void {
   process.stdout.write(`Usage:
   node scripts/publish-authoring-hold.mjs --title <text> --body-file <path> [--review-result <path>] [--shape orphan|carrier|roadmap|child] [--anchor <owner>/<repo>#<number>] [--bucket ready|needs-decision|blocked-by-human] [--owner <owner> --repo <repo>] [--policy <path>] [--marker-prefix <prefix>] [--apply]
@@ -461,7 +501,10 @@ roadmap's Tracks list stays a separate reviewed edit.
      as the repository is resolved, before anything is written;
   2. check issueAuthoring.journalIssue in the repository policy file: it
      must be set, match owner/repo#N, and name an existing issue (it may be
-     closed). Otherwise report the blocked-by-human outcome and exit 2;
+     closed). issueAuthoring.retiredJournalIssues, when set, must be a
+     non-empty array of owner/repo#N journals that no longer take records,
+     with no entry repeated and none equal to journalIssue. Otherwise
+     report the blocked-by-human outcome and exit 2;
   3. generate the opaque target, anchor (= target), set, session, token and
      owner ids and put the authoring-publication line first in the body. A
      child instead takes the anchor's own set and session, uses the
@@ -475,10 +518,12 @@ roadmap's Tracks list stays a separate reviewed edit.
      a later one loses; no reuse of a completed set; a resume keeps a
      release in progress). The token of
      the anchor's own publication line must also replay to state=member in
-     the journal (trusted, unedited records that match the line on target,
-     anchor, set, session and token, in order, with a conflicting or
-     out-of-order record failing closed), which is how the set's
-     originating hold is verified. Otherwise the report is a refusal and
+     the journal, or in the retired journals listed by
+     issueAuthoring.retiredJournalIssues (the records of all of them are
+     read and replayed in time order; trusted, unedited records that match
+     the line on target, anchor, set, session and token, in order, with a
+     conflicting or out-of-order record failing closed), which is how the
+     set's originating hold is verified. Otherwise the report is a refusal and
      nothing is written. The command does not serialize concurrent calls
      of one session, so publish the children of a set one call at a time
      (preventive; no observed incident yet);
@@ -923,14 +968,19 @@ type AnchorGeneration = Omit<
  * exact token tuple; missing, conflicting, or out-of-order records fail
  * closed"). Every record that carries the token must be written by a trusted
  * author who is the actor it names, be unedited, and repeat the publication
- * line's target, anchor, set and session and this journal. The records, in
- * comment order, must run `pending` (no issue yet), `pending` with the
+ * line's target, anchor, set and session, and name the journal they were read
+ * from. The records of every journal read are merged and replayed in time
+ * order, and must run `pending` (no issue yet), `pending` with the
  * issue, `member`, and only then `cleanup` and `abandoned`; the issue never
  * changes once attached. The replay must end at `member` for the anchor.
  * Returns a problem, or null.
  */
 export function replayAnchorHold(input: {
-  comments: readonly AuthoringOwnerProvenanceComment[];
+  /** Each journal read, with its reference, the configured one first. */
+  journals: readonly {
+    ref: string;
+    comments: readonly AuthoringOwnerProvenanceComment[];
+  }[];
   publication: {
     target: string;
     anchor: string;
@@ -939,7 +989,6 @@ export function replayAnchorHold(input: {
     token: string;
   };
   anchorRef: string;
-  journalRef: string;
   markerPrefix: string;
   trusted: readonly string[];
 }): string | null {
@@ -952,7 +1001,10 @@ export function replayAnchorHold(input: {
     issue: string;
     outdated: boolean;
   }[] = [];
-  for (const comment of input.comments) {
+  const entries = input.journals.flatMap((journal) =>
+    journal.comments.map((comment) => ({ journal, comment })),
+  );
+  for (const { journal, comment } of entries) {
     const lower = comment.body.toLowerCase();
     // A record that mentions the token anywhere is a candidate, whatever its
     // spacing, so the token is read from the parsed field, not from bytes.
@@ -962,7 +1014,7 @@ export function replayAnchorHold(input: {
     ) {
       continue;
     }
-    const where = `publication-intent record ${comment.id} of the token`;
+    const where = `publication-intent record ${comment.id} of the token in ${journal.ref}`;
     const intent = parseAuthoringPublicationIntentComment(
       comment.body,
       input.markerPrefix,
@@ -989,12 +1041,14 @@ export function replayAnchorHold(input: {
     ) {
       return `${where} has no readable minimization state`;
     }
+    if (!sameIssueRef(intent.journal, journal.ref)) {
+      return `${where} conflicts with the anchor's publication line, this journal, or its own author: it names journal ${intent.journal}, but it was read from ${journal.ref}`;
+    }
     if (
       intent.target !== input.publication.target ||
       intent.anchor !== input.publication.anchor ||
       intent.set !== input.publication.set ||
       intent.session !== input.publication.session ||
-      !sameIssueRef(intent.journal, input.journalRef) ||
       intent.actor.toLowerCase() !== author
     ) {
       return `${where} conflicts with the anchor's publication line, this journal, or its own author`;
@@ -1012,7 +1066,8 @@ export function replayAnchorHold(input: {
     });
   }
   if (records.length === 0) {
-    return `no publication-intent record of the anchor's token is in the journal ${input.journalRef}`;
+    const refs = input.journals.map((journal) => journal.ref).join(', ');
+    return `no publication-intent record of the anchor's token is in ${input.journals.length === 1 ? 'the journal' : 'the journals'} ${refs}`;
   }
   records.sort((a, b) => a.time - b.time || a.id - b.id);
   let state: string | null = null;
@@ -1065,7 +1120,8 @@ export function replayAnchorHold(input: {
 /**
  * Verify the originating Stage 1 hold of a child's anchor (#4251). This command
  * records a set in `issueAuthoring.journalIssue`, so an anchor it can extend has
- * its own publication-intent records there: the replay of the token in the
+ * its own publication-intent records there or in a retired journal listed by
+ * `issueAuthoring.retiredJournalIssues`: the replay of the token in the
  * anchor's own publication line (self-anchored, in the open generation's set)
  * must end at `state=member` (see {@link replayAnchorHold}). An anchor whose
  * hold is elsewhere, whose body carries no publication line, or whose records
@@ -1074,6 +1130,13 @@ export function replayAnchorHold(input: {
  */
 function checkAnchorHold(input: {
   journal: { owner: string; repo: string; number: number; ref: string };
+  /** The retired journals of issueAuthoring.retiredJournalIssues, read too. */
+  retired: readonly {
+    owner: string;
+    repo: string;
+    number: number;
+    ref: string;
+  }[];
   anchorRef: string;
   anchorBody: string;
   set: string;
@@ -1085,7 +1148,7 @@ function checkAnchorHold(input: {
     input.markerPrefix,
   );
   if (publication === null) {
-    return `the body of the anchor ${input.anchorRef} carries no authoring-publication line, so its hold in the journal ${input.journal.ref} cannot be matched`;
+    return `the body of the anchor ${input.anchorRef} carries no authoring-publication line, so its hold in the journal ${input.journal.ref} or a listed retired journal cannot be matched`;
   }
   if (publication.anchor !== publication.target) {
     return `the authoring-publication line of ${input.anchorRef} names another anchor (${publication.anchor}), so it is not a set anchor`;
@@ -1093,27 +1156,37 @@ function checkAnchorHold(input: {
   if (publication.set !== input.set) {
     return `the authoring-publication line of ${input.anchorRef} names set ${publication.set}, not the open generation's set ${input.set}`;
   }
-  let comments: AuthoringOwnerProvenanceComment[];
-  try {
-    comments = fetchProvenanceCommentsGraphql(
-      input.journal.owner,
-      input.journal.repo,
-      input.journal.number,
-    );
-  } catch (error) {
-    return `the journal ${input.journal.ref} cannot be read, so the hold of the anchor ${input.anchorRef} is not verified: ${messageOf(error)}`;
+  // The configured journal and each listed retired journal, and no other
+  // issue: a failed read of any of them refuses the child.
+  const journals: {
+    ref: string;
+    comments: AuthoringOwnerProvenanceComment[];
+  }[] = [];
+  for (const journal of [input.journal, ...input.retired]) {
+    try {
+      journals.push({
+        ref: journal.ref,
+        comments: fetchProvenanceCommentsGraphql(
+          journal.owner,
+          journal.repo,
+          journal.number,
+        ),
+      });
+    } catch (error) {
+      return `the journal ${journal.ref} cannot be read, so the hold of the anchor ${input.anchorRef} is not verified: ${messageOf(error)}`;
+    }
   }
   const problem = replayAnchorHold({
-    comments,
+    journals,
     publication,
     anchorRef: input.anchorRef,
-    journalRef: input.journal.ref,
     markerPrefix: input.markerPrefix,
     trusted: input.trusted,
   });
+  const read = journals.map((journal) => journal.ref).join(', ');
   return problem === null
     ? null
-    : `the originating hold of the anchor ${input.anchorRef} is not verified in the journal ${input.journal.ref}: ${problem}`;
+    : `the originating hold of the anchor ${input.anchorRef} is not verified in ${journals.length === 1 ? 'the journal' : 'the journals'} ${read}: ${problem}`;
 }
 
 /** The verified set anchor of a child (#4251). */
@@ -1490,6 +1563,7 @@ function runCli(): HelperCliResult {
   // comes from the repository's own policy file only, never from a
   // user-global layer (contract.md, "Target marker prefix").
   let journalSetting: unknown;
+  let retiredSetting: unknown;
   let policyError = '';
   let config: {
     markerPrefix?: unknown;
@@ -1504,10 +1578,14 @@ function runCli(): HelperCliResult {
       markerPrefix?: unknown;
       trustedMarkerActors?: unknown;
       claim?: { verifySettleDelay?: unknown };
-      issueAuthoring?: { journalIssue?: unknown };
+      issueAuthoring?: {
+        journalIssue?: unknown;
+        retiredJournalIssues?: unknown;
+      };
     } | null;
     config = repositoryPolicy;
     journalSetting = repositoryPolicy?.issueAuthoring?.journalIssue;
+    retiredSetting = repositoryPolicy?.issueAuthoring?.retiredJournalIssues;
   } catch (error) {
     policyError = (error as Error).message;
   }
@@ -1545,6 +1623,14 @@ function runCli(): HelperCliResult {
       `issueAuthoring.journalIssue ${journal.ref} cannot be verified: ${(error as Error).message}`,
     );
   }
+
+  // The retired journals are checked here too, before any write: a malformed,
+  // repeated or configured-journal entry stops the helper with no gh write.
+  const retired = parseRetiredJournals(retiredSetting, journal);
+  if ('problem' in retired) {
+    return blockedByHuman(retired.problem);
+  }
+  const retiredJournals = retired.refs;
 
   // The records this command writes are trusted later through the
   // repository's own trustedMarkerActors, so no flag or environment value may
@@ -1631,6 +1717,7 @@ function runCli(): HelperCliResult {
     }
     const holdProblem = checkAnchorHold({
       journal,
+      retired: retiredJournals,
       anchorRef: ref,
       anchorBody: checked.snapshot.body,
       set: checked.generation.set,
