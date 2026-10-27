@@ -218,6 +218,50 @@ review comments (`gh api repos/{owner}/{repo}/pulls/{n}/reviews` and
   place: a `LEFT` side, a missing commit or patch, a failed compare
   lookup, or a compare response at GitHub's 300-file cap, which may hide
   a changed file.
+- **Review triggers** (`triggers`, each review's `trigger`, and the raw
+  REST review `commit_id` as `commitId` in JSON):
+  the first Copilot review is `first`; subsequent reviews are `sameHead`
+  when their commit IDs match, or are classified from the PR commits graph
+  as `newHead` when the new reachable commits include a one-parent commit,
+  or `mergeCommitHead` when every new reachable commit has at least two
+  parents. Missing commit IDs, a failed or incomplete commits lookup, a
+  review commit absent from the PR commits list, or an empty graph difference
+  yields `unknown`. The helper makes at most one paginated commits request
+  per PR and does not fetch commits individually.
+- **Approval follow-up** (`approvals` in JSON): labels each review whose
+  first matching ATX heading says `Approval recommended`, `Changes
+  recommended`, or `Needs a closer look` with verdict `approval`, `changes`,
+  or `closerLook`. It counts approvals and how many were followed by another
+  Copilot review, including `nextTrigger` counts for `sameHead`, `newHead`,
+  `mergeCommitHead`, and `unknown` (all keys are present when zero). `total`
+  includes terminal approvals; `followed` includes only approvals with a
+  later Copilot review. A missing heading or a legacy body has verdict
+  `null`; headings inside Markdown code regions are ignored.
+- **Generated and mirrored paths** (`findingPathClass` in JSON): counts each
+  Copilot inline finding as `generatedHelper` for a top-level
+  `scripts/*.mjs` or any `bin/**/*.mjs`, `syncMirror` for an exact/concreted
+  target in the repository's current `audit/sync-manifest.json`, `other` for
+  another named path, or `noPath` when GitHub supplied no path. The helper
+  reads the manifest once before making GitHub requests and exits 2 if it
+  cannot read or parse it.
+- **What-changed listings** (`whatChanged` in each review and in the cohort
+  summary): when a v2 or unparsed review has the exact
+  `What changed in this PR` details heading and a Markdown table, JSON records
+  its first-column paths plus the generated-helper and sync-mirror subsets.
+  Cohort `tables` counts parsed tables; `listingGeneratedHelper` and
+  `listingSyncMirror` count tables that list at least one path in that class.
+  This table reports the reviewer's listing and is not a review signal.
+- **Disposition by review count** (`dispositionsByReviewCount` in the cohort
+  summary): counts each finding thread's final disposition in the PR review
+  count buckets `1-2`, `3-4`, `5-9`, and `10+`, using the same five
+  dispositions (`deferred`, `rejected`, `accepted`, `other`, and `none`) as
+  `dispositionsBySeverity`.
+
+`syncMirror` and `syncMirrorPaths` use the manifest as it exists when the
+audit runs. A path that was mirrored when an older review was written but is
+no longer an exact/concreted target is reported as `other` today. These
+metrics describe the current classification rules and should not be read as
+historical repository state.
 
 ### Check mode
 

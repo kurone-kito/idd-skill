@@ -38,6 +38,8 @@
 // findings**` line with no `alt=` at all. Section-scoped extraction (below)
 // never widens the "Open" item scan to include either line, avoiding a
 // double-count.
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { parseCanonicalIntegerOrThrow, parseCliArgs } from './cli-args.mjs';
 import {
   emptySeverityCounts,
@@ -50,6 +52,7 @@ import {
   ghTextUnbounded,
   resolveGhApiHostname,
 } from './gh-exec.mjs';
+import { stripMarkdownCodeRegions } from './markdown-code.mjs';
 import { parseTriageLine } from './policy-helpers.mjs';
 import {
   AMD_MARKER_PATTERN,
@@ -67,6 +70,19 @@ import { fetchLastEditedAtByNodeId } from './provider-adapter-github.mjs';
 // ---------------------------------------------------------------------------
 const SEVERITIES = ['high', 'medium', 'low'];
 const TRANSITION_KEYS = ['none', 'low', 'medium', 'high'];
+const REVIEW_TRIGGERS = [
+  'first',
+  'sameHead',
+  'newHead',
+  'mergeCommitHead',
+  'unknown',
+];
+const NEXT_REVIEW_TRIGGERS = [
+  'sameHead',
+  'newHead',
+  'mergeCommitHead',
+  'unknown',
+];
 const DISPOSITIONS = ['deferred', 'rejected', 'accepted', 'other', 'none'];
 function emptyDispositionCounts() {
   return { deferred: 0, rejected: 0, accepted: 0, other: 0, none: 0 };
@@ -415,6 +431,139 @@ function emptyFindingLocality() {
     unknown: 0,
   };
 }
+function emptyReviewTriggerCounts() {
+  return { first: 0, sameHead: 0, newHead: 0, mergeCommitHead: 0, unknown: 0 };
+}
+function emptyApprovalAudit() {
+  return {
+    total: 0,
+    followed: 0,
+    nextTrigger: { sameHead: 0, newHead: 0, mergeCommitHead: 0, unknown: 0 },
+  };
+}
+function emptyFindingPathClass() {
+  return { generatedHelper: 0, syncMirror: 0, other: 0, noPath: 0 };
+}
+function emptyDispositionsByReviewCount() {
+  return {
+    '1-2': emptyDispositionCounts(),
+    '3-4': emptyDispositionCounts(),
+    '5-9': emptyDispositionCounts(),
+    '10+': emptyDispositionCounts(),
+  };
+}
+function dispositionReviewCountBucket(reviewCount) {
+  if (reviewCount >= 1 && reviewCount <= 2) return '1-2';
+  if (reviewCount <= 4 && reviewCount >= 3) return '3-4';
+  if (reviewCount <= 9 && reviewCount >= 5) return '5-9';
+  if (reviewCount >= 10) return '10+';
+  return null;
+}
+function reachablePrCommits(head, commitParents) {
+  if (!commitParents.has(head)) return null;
+  const reached = new Set();
+  const pending = [head];
+  while (pending.length > 0) {
+    const sha = pending.pop();
+    if (!sha || reached.has(sha)) continue;
+    const parents = commitParents.get(sha);
+    if (!parents) continue;
+    reached.add(sha);
+    for (const parent of parents) {
+      if (commitParents.has(parent) && !reached.has(parent))
+        pending.push(parent);
+    }
+  }
+  return reached;
+}
+function classifyReviewTrigger(reviewIndex, reviews, commitParents) {
+  if (reviewIndex === 0) return 'first';
+  const previous = reviews[reviewIndex - 1];
+  const current = reviews[reviewIndex];
+  const base = previous?.commitId;
+  const head = current?.commitId;
+  if (!base || !head) return 'unknown';
+  if (base === head) return 'sameHead';
+  if (!commitParents) return 'unknown';
+  const baseReachable = reachablePrCommits(base, commitParents);
+  const headReachable = reachablePrCommits(head, commitParents);
+  if (!baseReachable || !headReachable) return 'unknown';
+  const newCommits = [...headReachable].filter(
+    (sha) => !baseReachable.has(sha),
+  );
+  if (newCommits.length === 0) return 'unknown';
+  const newParents = newCommits.map((sha) => commitParents.get(sha) ?? []);
+  if (newParents.some((parents) => parents.length === 1)) return 'newHead';
+  if (newParents.every((parents) => parents.length >= 2)) {
+    return 'mergeCommitHead';
+  }
+  return 'unknown';
+}
+function parseReviewVerdict(body, kind) {
+  if (kind === 'legacy') return null;
+  const text = stripMarkdownCodeRegions(body);
+  const heading = /^[ \t]{0,3}#{1,6}[ \t]+(.+?)[ \t]*#*[ \t]*$/gm;
+  for (const match of text.matchAll(heading)) {
+    const title = (match[1] ?? '')
+      .replace(
+        /^(?:\p{Extended_Pictographic}(?:\uFE0F|\u200D\p{Extended_Pictographic})*\s*)/u,
+        '',
+      )
+      .trim()
+      .replace(/\s+/g, ' ')
+      .toLowerCase();
+    if (title === 'approval recommended') return 'approval';
+    if (title === 'changes recommended') {
+      return 'changes';
+    }
+    if (title === 'needs a closer look') {
+      return 'closerLook';
+    }
+  }
+  return null;
+}
+function isGeneratedHelperPath(path) {
+  return /^scripts\/[^/]+\.mjs$/.test(path) || /^bin\/.+\.mjs$/.test(path);
+}
+function parseWhatChanged(body, kind, syncMirrorTargets) {
+  if (kind === 'legacy') return null;
+  const text = body;
+  const summary =
+    /<summary>\s*<strong>What changed in this PR<\/strong>\s*<\/summary>/i.exec(
+      text,
+    );
+  if (!summary || summary.index === undefined) return null;
+  const sectionStart = summary.index + summary[0].length;
+  const sectionEnd = text.indexOf('</details>', sectionStart);
+  if (sectionEnd === -1) return null;
+  const rows = text
+    .slice(sectionStart, sectionEnd)
+    .split(/\n/)
+    .map((line) => line.replace(/\r$/, '').trimStart())
+    .filter((line) => line.startsWith('|'));
+  if (rows.length < 2) return null;
+  const paths = rows
+    .slice(2)
+    .map((row) => {
+      const firstCell = row.split('|')[1] ?? '';
+      return firstCell
+        .replace(/`/g, '')
+        .replace(/[\u200B-\u200D\u2060\uFEFF]/g, '')
+        .trim();
+    })
+    .filter((path) => path !== '');
+  return {
+    paths,
+    generatedHelperPaths: paths.filter(isGeneratedHelperPath),
+    syncMirrorPaths: paths.filter((path) => syncMirrorTargets.has(path)),
+  };
+}
+function classifyFindingPath(comment, syncMirrorTargets) {
+  if (!comment.path) return 'noPath';
+  if (isGeneratedHelperPath(comment.path)) return 'generatedHelper';
+  if (syncMirrorTargets.has(comment.path)) return 'syncMirror';
+  return 'other';
+}
 /** Only Copilot's own inline finding comments count, never replies. */
 function isCopilotInlineFinding(comment) {
   return isCopilotReviewerLogin(comment.login) && comment.inReplyToId === null;
@@ -480,11 +629,14 @@ export function computePrAudit(
   copilotReviewsInOrder,
   comments,
   compareFiles = new Map(),
+  commitParents = new Map(),
+  syncMirrorTargets = new Set(),
 ) {
   const parsedReviews = copilotReviewsInOrder.map((review) =>
     parseOverviewBody(review.body),
   );
   const findingLocality = emptyFindingLocality();
+  const findingPathClass = emptyFindingPathClass();
   const reviewIndexById = new Map(
     copilotReviewsInOrder.map((review, index) => [review.id, index]),
   );
@@ -498,6 +650,7 @@ export function computePrAudit(
           compareFiles,
         )
       ] += 1;
+      findingPathClass[classifyFindingPath(comment, syncMirrorTargets)] += 1;
     }
   }
   let v2Count = 0;
@@ -527,12 +680,45 @@ export function computePrAudit(
     parsedReviews.map((parsed) => ({ kind: parsed.kind, open: parsed.open })),
   );
   const triage = computeTriageAudit(threads, comments);
+  const triggers = emptyReviewTriggerCounts();
+  const approvals = emptyApprovalAudit();
   const reviews = copilotReviewsInOrder.map((review, index) => {
     const parsed = parsedReviews[index];
+    const trigger = classifyReviewTrigger(
+      index,
+      copilotReviewsInOrder,
+      commitParents,
+    );
+    triggers[trigger] += 1;
+    const verdict = parseReviewVerdict(review.body, parsed.kind);
+    const whatChanged = parseWhatChanged(
+      review.body,
+      parsed.kind,
+      syncMirrorTargets,
+    );
+    if (verdict === 'approval') {
+      approvals.total += 1;
+      const next =
+        index < copilotReviewsInOrder.length - 1
+          ? classifyReviewTrigger(
+              index + 1,
+              copilotReviewsInOrder,
+              commitParents,
+            )
+          : null;
+      if (next && next !== 'first') {
+        approvals.followed += 1;
+        approvals.nextTrigger[next] += 1;
+      }
+    }
     return {
       reviewId: review.id,
       submittedAt: review.submittedAt,
       kind: parsed.kind,
+      commitId: review.commitId ?? null,
+      trigger,
+      verdict,
+      whatChanged,
       open: parsed.open,
       previouslyMissed: parsed.previouslyMissed,
       ...(parsed.unparsedReason
@@ -553,6 +739,9 @@ export function computePrAudit(
     transitions,
     triage,
     findingLocality,
+    triggers,
+    approvals,
+    findingPathClass,
     mergedAt: null,
   };
 }
@@ -576,10 +765,47 @@ export function summarizeCohort(reports) {
   }
   const triage = emptyTriageAudit();
   const findingLocality = emptyFindingLocality();
+  const triggers = emptyReviewTriggerCounts();
+  const approvals = emptyApprovalAudit();
+  const findingPathClass = emptyFindingPathClass();
+  const whatChanged = {
+    tables: 0,
+    listingGeneratedHelper: 0,
+    listingSyncMirror: 0,
+  };
+  const dispositionsByReviewCount = emptyDispositionsByReviewCount();
   for (const report of reports) {
     addTriageAudit(triage, report.triage);
     for (const key of Object.keys(findingLocality)) {
       findingLocality[key] += report.findingLocality[key];
+    }
+    for (const trigger of REVIEW_TRIGGERS) {
+      triggers[trigger] += report.triggers[trigger];
+    }
+    approvals.total += report.approvals.total;
+    approvals.followed += report.approvals.followed;
+    for (const trigger of NEXT_REVIEW_TRIGGERS) {
+      approvals.nextTrigger[trigger] += report.approvals.nextTrigger[trigger];
+    }
+    for (const key of Object.keys(findingPathClass)) {
+      findingPathClass[key] += report.findingPathClass[key];
+    }
+    const reviewCountBucket = dispositionReviewCountBucket(report.reviewCount);
+    if (reviewCountBucket) {
+      for (const thread of report.threads) {
+        dispositionsByReviewCount[reviewCountBucket][thread.disposition] += 1;
+      }
+    }
+    for (const review of report.reviews) {
+      if (review.whatChanged) {
+        whatChanged.tables += 1;
+        if (review.whatChanged.generatedHelperPaths.length > 0) {
+          whatChanged.listingGeneratedHelper += 1;
+        }
+        if (review.whatChanged.syncMirrorPaths.length > 0) {
+          whatChanged.listingSyncMirror += 1;
+        }
+      }
     }
     reviewCount += report.reviewCount;
     v2Count += report.v2Count;
@@ -626,6 +852,11 @@ export function summarizeCohort(reports) {
     })),
     triage,
     findingLocality,
+    triggers,
+    approvals,
+    findingPathClass,
+    whatChanged,
+    dispositionsByReviewCount,
   };
 }
 function toRawReview(raw) {
@@ -709,7 +940,7 @@ function ghApiPaginatedUnbounded(path) {
  * report. The only network-touching function in this file besides the
  * PR-number resolvers below.
  */
-export function auditPr(owner, repo, prNumber) {
+export function auditPr(owner, repo, prNumber, syncMirrorTargets = new Set()) {
   const rawReviews = ghApiPaginatedUnbounded(
     `repos/${owner}/${repo}/pulls/${prNumber}/reviews?per_page=100`,
   );
@@ -721,6 +952,16 @@ export function auditPr(owner, repo, prNumber) {
       .map(toRawReview)
       .filter((review) => isCopilotReviewerLogin(review.login)),
   );
+  const needsCommitGraph = copilotReviews.some((review, index) => {
+    if (index === 0) return false;
+    const previousCommit = copilotReviews[index - 1]?.commitId;
+    return Boolean(
+      previousCommit && review.commitId && previousCommit !== review.commitId,
+    );
+  });
+  const commitParents = needsCommitGraph
+    ? fetchCommitParents(owner, repo, prNumber)
+    : new Map();
   const nodeIds = rawComments.map((comment) => String(comment.node_id ?? ''));
   if (nodeIds.some((nodeId) => nodeId === '')) {
     throw new Error(
@@ -742,7 +983,43 @@ export function auditPr(owner, repo, prNumber) {
     copilotReviews,
     comments,
     fetchCompareFilesForFindings(owner, repo, copilotReviews, comments),
+    commitParents,
+    syncMirrorTargets,
   );
+}
+function toCommitParents(rawCommits) {
+  const commitParents = new Map();
+  for (const raw of rawCommits) {
+    if (raw === null || typeof raw !== 'object') return null;
+    const commit = raw;
+    if (typeof commit.sha !== 'string' || !Array.isArray(commit.parents)) {
+      return null;
+    }
+    const parents = [];
+    for (const rawParent of commit.parents) {
+      if (
+        rawParent === null ||
+        typeof rawParent !== 'object' ||
+        typeof rawParent.sha !== 'string'
+      ) {
+        return null;
+      }
+      parents.push(rawParent.sha);
+    }
+    commitParents.set(commit.sha, parents);
+  }
+  return commitParents;
+}
+function fetchCommitParents(owner, repo, prNumber) {
+  try {
+    return toCommitParents(
+      ghApiPaginatedUnbounded(
+        `repos/${owner}/${repo}/pulls/${prNumber}/commits?per_page=100`,
+      ),
+    );
+  } catch {
+    return null;
+  }
 }
 /**
  * One `compare/{base}...{head}` lookup. The response is not paginated and
@@ -805,6 +1082,45 @@ function fetchCompareFilesForFindings(owner, repo, reviewsInOrder, comments) {
 function fail(message) {
   process.stderr.write(`copilot-review-wave-audit: ${message}\n`);
   process.exit(2);
+}
+function resolveRepoRoot(fromDir) {
+  let dir = fromDir;
+  for (let depth = 0; depth < 16; depth += 1) {
+    if (existsSync(join(dir, 'package.json'))) return dir;
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  throw new Error(`cannot find package.json above ${fromDir}`);
+}
+function loadSyncMirrorTargets() {
+  const manifestPath = join(
+    resolveRepoRoot(import.meta.dirname),
+    'audit/sync-manifest.json',
+  );
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  } catch (error) {
+    throw new Error(`cannot read or parse ${manifestPath}: ${error.message}`);
+  }
+  if (!Array.isArray(parsed.syncPairs)) {
+    throw new Error(`${manifestPath} must contain a syncPairs array`);
+  }
+  const targets = new Set();
+  for (const pair of parsed.syncPairs) {
+    if (pair === null || typeof pair !== 'object') {
+      throw new Error(`${manifestPath} contains an invalid syncPairs entry`);
+    }
+    const record = pair;
+    if (typeof record.mode !== 'string' || typeof record.target !== 'string') {
+      throw new Error(`${manifestPath} contains an invalid syncPairs entry`);
+    }
+    if (record.mode === 'exact' || record.mode === 'concreted') {
+      targets.add(record.target);
+    }
+  }
+  return targets;
 }
 function detectRepository() {
   if (process.env.GITHUB_REPOSITORY) {
@@ -1224,6 +1540,12 @@ if (import.meta.main) {
     }
     minRecordedShare = value;
   }
+  let syncMirrorTargets;
+  try {
+    syncMirrorTargets = loadSyncMirrorTargets();
+  } catch (error) {
+    fail(error.message);
+  }
   let repository;
   try {
     repository = combineOwnerRepoFlags(values) ?? detectRepository();
@@ -1240,7 +1562,7 @@ if (import.meta.main) {
       );
   const prNumbers = recent ? recent.numbers : parsePrNumberList(prsFlag);
   const reports = prNumbers.map((prNumber) => ({
-    ...auditPr(owner, repo, prNumber),
+    ...auditPr(owner, repo, prNumber, syncMirrorTargets),
     mergedAt: recent?.mergedAtByNumber.get(prNumber) ?? null,
   }));
   const summary = summarizeCohort(reports);
