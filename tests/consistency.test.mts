@@ -3481,6 +3481,22 @@ test('issue-authoring contract defines ledger storage verdicts, allocation, and 
   );
   assert.match(
     text,
+    /Make every ledger file owner-only at creation: use POSIX mode 600, or on Windows pass an explicit protected security descriptor through `OBJECT_ATTRIBUTES\.SecurityDescriptor`, with a DACL granting access only to the current user and both `SE_DACL_PRESENT` and `SE_DACL_PROTECTED` set on that descriptor/,
+  );
+  assert.match(
+    text,
+    /After opening the new file, verify its owner and owner-only mode or ACL before writing its first byte/,
+  );
+  assert.match(
+    text,
+    /the recorded file identity, and its recorded owner-only mode or ACL/,
+  );
+  assert.match(
+    text,
+    /For every ledger file creation — the initial or recreated ledger, temporary replacement, and issue-number copy — also pass an explicit protected owner-only security descriptor through `OBJECT_ATTRIBUTES\.SecurityDescriptor`\. The namespace DACL does not establish that a child file is private\. Verify each created file's resulting owner-only DACL before writing to it/,
+  );
+  assert.match(
+    text,
     /If the platform cannot apply this restriction before the directory is visible, fail closed/,
   );
   assert.match(
