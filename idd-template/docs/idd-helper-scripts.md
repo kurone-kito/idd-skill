@@ -4153,7 +4153,8 @@ Flags, one line each:
 - `--adopt-now`: adopt-now condition (d) of the E5 Defer rule holds: another
   item in the same E5 pass is already Accepted, so a push is certain, and this
   fix stays within that push's files. It turns a `defer` verdict into `keep`
-  with `blocked adopt-now`. See the rules below.
+  with `blocked adopt-now` below the review-count cap. At or above the
+  cap it changes nothing. See the rules below.
 - `--override <reason>`: posts an Accepted reply that the defer matrix
   refuses, and records the reason as the line's last part, after
   `override:`. See the rules below.
@@ -4181,7 +4182,17 @@ Rules:
   matrix decides first, and the flag changes only a `defer` verdict: a `keep`
   from the matrix or from a blocking flag such as `--scope-fence` keeps its
   own `blocked` reason. An Accepted reply with the flag needs no `--override`,
-  since its verdict is `keep`.
+  since its verdict is `keep` below the review-count cap. At or above the
+  cap, the flag changes nothing, so an Accepted reply whose verdict is
+  `defer` still needs `--override` under `enforce`.
+- **Review-count cap.** Under `severity-tiered` without `--lite`, the
+  helper reads `critiqueLoop.deferAllAfterRounds` and compares it with the
+  Copilot review count it already reads for the relax step. At or above the
+  cap it returns `verdict defer` with no `blocked` part for each scored
+  finding that no block reason holds, except the safety class, which
+  keeps with `blocked safety-class`.
+  An unset or invalid field means off. See the
+  [Review-count cap paragraph](idd-review-policy-profiles.md#wave-gradient-urgency-defer).
 - **Override.** `--override` needs `record` or `enforce`, `deferByUrgency`
   `severity-tiered`, the pair, an `**Accepted**` body, and a `defer` verdict.
   A `keep` verdict is refused with a usage error. The reason must be one
