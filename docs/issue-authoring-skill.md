@@ -1427,8 +1427,7 @@ appending the marker; when the set's originating hold is in a retired journal,
 persist it in `issueAuthoring.journalIssue` instead. On resume, reconcile
 recorded identities and only issues carrying this set's exact publication
 token; an incomplete scan or unmarked match is a recovery hold, so never infer
-membership
-or completion from the shared label alone.
+membership or completion from the shared label alone.
 
 ### Per-target ownership and conflict handling
 
@@ -2183,7 +2182,8 @@ eligibility rule matches what the sweep could actually clear; omitting
 it makes the count overstate the real backlog by including
 untrusted-authored matches the sweep was never going to touch.
 
-Immediately after each of the three sweep attempts, also run that check for
+Immediately after every sweep attempt above (each target's preflight, the
+anchor before release-complete, and the closing sweep), also run that check for
 each listed retired journal, with `--trusted-marker-logins` set as above and
 `--journal-comments-file` holding only that journal's comments, with the sweep's
 post-mutation result applied to that snapshot as described below. Report each

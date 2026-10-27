@@ -2990,9 +2990,10 @@ only approval boundary.
   own eligibility rule matches what the sweep could actually clear;
   omitting it makes the count overstate the real backlog by including
   untrusted-authored matches the sweep was never going to touch.
-  Immediately after each of the three sweep attempts, also run that check for
-  each listed retired journal, with `--trusted-marker-logins` set as above and
-  `--journal-comments-file` holding only that journal's comments, with the
+  Immediately after every sweep attempt above (each target's preflight, the
+  anchor before release-complete, and the closing sweep), also run that check
+  for each listed retired journal, with `--trusted-marker-logins` set as above
+  and `--journal-comments-file` holding only that journal's comments, with the
   sweep's post-mutation result applied to that snapshot as described below.
   Report each journal's count separately; a retired journal's count is never
   added to the current journal's. The helper's carrier release runs only the
@@ -3196,18 +3197,20 @@ only approval boundary.
   1. A 403 from a full journal is an uncertain post, because the record may
      have landed before the refusal. Replay the journal before anything else:
      paginate each journal that holds the failed run's records and look for the
-     run's exact publication token. The helper reports `replay the journal
-     first` for this case, never `retry: permitted`.
+     run's exact publication token. For a 403 on the pending record, before the
+     create, the helper's `retry` field is `replay the journal first`, never
+     `permitted`; after the create the report has no `retry` field.
   2. Create a new comment-only journal issue. In one commit, set
      `issueAuthoring.journalIssue` to it and add the old reference to
      `issueAuthoring.retiredJournalIssues`. Until that commit is merged, publish
      with `--policy` and a copy of the policy file that carries both changes. A
      retired journal may name another repository, as `journalIssue` may.
   3. Act on the replay outcome:
-     - no record for the token on replay: the record did not land, but the
-       helper still reports the 403 as uncertain (`nothingSent` stays false),
-       so a rerun is the operator's decision on the replay evidence, made with
-       `--policy` until step 2 is merged;
+     - no record for the token on replay: the replay does not prove the record
+       is absent, because reads can lag, and the helper still reports the 403 as
+       uncertain (`nothingSent` stays false), so a rerun is the operator's
+       decision on the replay evidence, made with `--policy` until step 2 is
+       merged;
      - the failed run created an issue (its own report names the issue, or a
        replayed record names one): do not rerun the command. Write that issue's
        remaining records by hand to the new journal, each record's `journal`

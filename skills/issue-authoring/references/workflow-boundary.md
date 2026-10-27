@@ -162,8 +162,8 @@ approval boundary that hands off to IDD execution.
   retired journal, persist it in `issueAuthoring.journalIssue` instead. On
   resume, reconcile recorded identities and only issues carrying this set's
   exact publication token; an incomplete scan or unmarked match is a recovery
-  hold, so never
-  infer membership or completion from the shared label alone. If the final
+  hold, so never infer membership or completion from the shared label alone.
+  If the final
   safe-close read proves no competing claim or marker, append `state=cleanup`
   before closing the issue or removing its authoring label. Re-fetch and verify
   closed/label-absent state, then append `state=abandoned`; otherwise leave the
