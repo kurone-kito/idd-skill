@@ -9972,12 +9972,20 @@ a destructive re-run.
 
 ## Signed-Commit Merge Wrapper (Shared Git Procedure)
 
-`idd-review-triage.instructions.md`'s E-phase sync path and
-`idd-review-fix.instructions.md`'s E11 both merge `{development-branch}`
-into the feature branch. E11 reads the PR base and current Git refs before
-each fix push, so a conflict-free sync rides with that push instead of
-creating a sync-only push; its helper field remains for compatibility
-because the helper sees the last pushed head (#4759).
+This section documents review-fix E11 only.
+
+`idd-review-fix.instructions.md`'s E11 merges `{development-branch}` into
+the feature branch. It reads the PR base and current Git refs before each
+fix push, so a conflict-free sync rides with that push instead of creating
+a sync-only push; its helper field remains for compatibility because the
+helper sees the last pushed head (#4759).
+
+For a conflict, unresolved threads, unreplied comments, or a
+`CHANGES_REQUESTED` review require explicit confirmation before merging,
+resolving, and completing. Then use this wrapper for both the merge and
+`git merge --continue`. After a wrapper timeout, terminate and wait for its
+full process tree before aborting; if it remains live or its exit is
+unconfirmed, hold without aborting or pushing.
 
 ```sh
 git fetch origin +refs/heads/{development-branch}:refs/remotes/origin/{development-branch} \

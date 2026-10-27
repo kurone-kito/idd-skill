@@ -240,12 +240,13 @@ unknown and stop-and-ask. With no conflict, run `git merge --no-ff` with
 in the [signed-commit merge wrapper](../../../docs/idd-helper-scripts.md).
 For non-interactive-hostile primary signing, use that wrapper.
 Do not ask for confirmation, even with open review threads. For a conflict,
-apply the active-review gate: unresolved threads,
-unreplied comments, or a `CHANGES_REQUESTED` reviewer require explicit
-confirmation before merging, resolving, and completing. Otherwise hold
-unchanged. On any merge failure, run `git merge --abort` and stop-and-ask
-without pushing. Continue to E12 after a successful merge so validation covers
-the merged tree.
+unresolved threads, unreplied comments, or `CHANGES_REQUESTED` require explicit
+confirmation before merging, resolving, and completing; otherwise hold. Use
+the signed wrapper for merge and `--continue`. On command/signing/hook failure,
+run `git merge --abort` and stop-and-ask. After a wrapper timeout, terminate
+and wait for its full process tree before aborting; if unconfirmed, hold
+without aborting or pushing. Continue to E12 after a successful merge so
+validation covers the merged tree.
 
 ## E12 — Lint, test, push
 
@@ -272,7 +273,8 @@ the merged tree.
    and E6 reply for the next E1/E4-E7 pass; E14 re-review and
    `review-watermark` invalidation still apply.
 
-10. A cross-round commit invalidates E11; repeat E11 before pushing. Apply
+10. A cross-round commit invalidates E11; repeat it before pushing, then rerun
+    `post-fix-validate` if it merged. Apply
     the pre-mutation guard immediately before this push.
 11. Re-apply the pre-mutation guard immediately before this edit —
     it is a separate mutation after the already-guarded push. If this

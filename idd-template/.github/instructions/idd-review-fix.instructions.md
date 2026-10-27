@@ -204,10 +204,9 @@ follow-up kurone-kito/idd-skill#2865 (see [the rationale example](../../docs/idd
 
 ## E11 — Sync with {development-branch} before every push
 
-Read the PR base before each E12 push:
-`gh pr view {pr-number} --json baseRefName --jq .baseRefName`. On failure,
-report and hold. A different base uses D3's wrong-base hold; do not merge or
-push.
+Read PR base with `gh pr view {pr-number} --json baseRefName --jq .baseRefName`;
+on failure, report and hold. A mismatch uses D3's wrong-base hold; do not
+merge or push.
 
 Fetch with the exact refspec:
 
@@ -228,14 +227,15 @@ without merging or pushing.
   `origin/{development-branch}` and the conventional `-m` subject in the
   [signed-commit merge wrapper](../../docs/idd-helper-scripts.md). No
   confirmation, even with open review threads.
-- **Conflict:** apply the active-review gate. Unresolved threads, unreplied
-  comments, or a `CHANGES_REQUESTED` reviewer require explicit confirmation
-  before merging, resolving, and completing; otherwise hold unchanged.
-- **Merge failure:** on merge, signing, hook, or wrapper-timeout failure, run
-  `git merge --abort`; report and hold without pushing.
+- **Conflict:** follow the E11 conflict path in the
+  [signed-commit merge wrapper](../../docs/idd-helper-scripts.md#signed-commit-merge-wrapper-shared-git-procedure).
+- **Merge failure:** on merge, signing, or hook failure, run
+  `git merge --abort`, report, and hold. After a wrapper timeout, follow the
+  linked process-tree procedure before aborting; if its tree is live or
+  unconfirmed, hold without aborting or pushing.
 
-E12's `post-fix-validate` checks the merged tree. All holds follow shared
-Hold / suspend rules and never push.
+E12 validates the merged tree; follow shared Hold / suspend rules and never
+push.
 
 ## E12 — Lint, test, push
 
@@ -265,8 +265,7 @@ For a per-file cap, apply step 1. If the file is still above its cap
 (`phaseLimitBytes`, or `alwaysLoadedLimitBytes` for an always-loaded
 file), stop and ask once. Never raise a per-file cap.
 
-Then push the feature branch normally (E11 uses merge commits, not
-rebase, so no force push is required).
+Push normally; E11 merge commits need no force push.
 
 E11-only files do not widen E12's fold-in scope.
 
@@ -301,7 +300,8 @@ falls outside the touched-file scope; or either bound is reached.
 **Non-goals**: no E15 delay or PATH/triage change; E14 re-review,
 watermark invalidation, and E6 replies stay unchanged.
 
-A cross-round commit invalidates E11; repeat E11 before pushing.
+A cross-round commit invalidates E11; repeat it before pushing, then rerun
+post-fix-validate if it merged.
 
 **PR body sync.** If this round's fix changes a claim the PR body
 makes (round count, a documented residual limitation, a scope
