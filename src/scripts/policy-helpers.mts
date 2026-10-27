@@ -35,6 +35,13 @@ interface CritiqueLoopPolicy {
    * or two strictly ascending positive integers, `[]` when off or invalid.
    */
   deferRelaxAtRounds: readonly number[];
+  /**
+   * Review-count cap for `severity-tiered` (#4750): an integer of at least 1,
+   * or absent when unset. At or above it every non-safety-class PATH A finding
+   * defers at any relax step, and adopt-now condition (d) no longer converts
+   * that defer into keep. Absent means the cap is off.
+   */
+  deferAllAfterRounds?: number;
   deferNeedsDecision: 'on' | 'off';
   subagentWaitCeiling: string;
   delegate?: CritiqueLoopDelegate;
@@ -560,6 +567,7 @@ interface RawConfig {
     deferByUrgency?: unknown;
     triageRecord?: unknown;
     deferRelaxAtRounds?: unknown;
+    deferAllAfterRounds?: unknown;
     deferNeedsDecision?: unknown;
     subagentWaitCeiling?: unknown;
     delegate?: { command?: unknown; mode?: unknown };
@@ -1126,6 +1134,17 @@ export function normalizePolicyConfig(config: unknown) {
   // why POLICY_DEFAULTS itself never carries an undefined-valued key.
   if (critiqueLoopDelegate) {
     critiqueLoop.delegate = critiqueLoopDelegate;
+  }
+  // #4750: the review-count cap is off unless the raw value is an integer of
+  // at least 1. Any other value leaves the own property out, the same shape
+  // `critiqueLoop.delegate` uses above.
+  const rawDeferAllAfterRounds = c?.critiqueLoop?.deferAllAfterRounds;
+  if (
+    typeof rawDeferAllAfterRounds === 'number' &&
+    Number.isInteger(rawDeferAllAfterRounds) &&
+    rawDeferAllAfterRounds >= 1
+  ) {
+    critiqueLoop.deferAllAfterRounds = rawDeferAllAfterRounds;
   }
   // #2320: `declarationTarget` is a positive integer issue number, or
   // absent -- absence disables the outage-relief declaration path
@@ -2512,6 +2531,13 @@ interface UrgencyDeferInput {
    * step 1 on it blocks a `severity-tiered` deferral. Defaults to false.
    */
   safetyClass?: boolean;
+  /**
+   * The review-count cap is reached (#4750): the pull request's PR-wide
+   * Copilot review count is at or above `deferAllAfterRounds`. Under
+   * `severity-tiered` it defers every finding except a safety-class one, at
+   * any relax step, and it skips the matrix. Defaults to false.
+   */
+  capReached?: boolean;
 }
 
 interface UrgencyDeferDecision {
@@ -2901,12 +2927,16 @@ export function decideUrgencyDefer(
   if (input.mode === 'severity-tiered') {
     const eligibility = higherSeverity(e4 ?? 'medium', copilot) ?? 'medium';
     const step = normalizeRelaxStep(input.relaxStep);
-    if (step >= 1 && input.safetyClass === true) {
+    const capReached = input.capReached === true;
+    if ((step >= 1 || capReached) && input.safetyClass === true) {
       return denyUrgencyDefer('safety-class', eligibility);
     }
     const urgency = knownUrgency(input.urgency);
     if (urgency === null) {
       return denyUrgencyDefer('unknown-urgency', eligibility);
+    }
+    if (capReached) {
+      return { defer: true, eligibility, blockedBy: null };
     }
     if (!severityTieredDefers(eligibility, urgency, step)) {
       return denyUrgencyDefer('matrix', eligibility);

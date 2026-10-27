@@ -295,6 +295,7 @@ interface PolicyConfigFile {
     deferByUrgency?: 'off' | 'low' | 'low-and-medium' | 'severity-tiered';
     triageRecord?: 'off' | 'record' | 'enforce';
     deferRelaxAtRounds?: readonly number[];
+    deferAllAfterRounds?: number;
     deferNeedsDecision?: 'on' | 'off';
     subagentWaitCeiling?: string;
     delegate?: {

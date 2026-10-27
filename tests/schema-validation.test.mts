@@ -4746,3 +4746,96 @@ test('discover-roadmap-union schema rejects malformed localWorktree objects', ()
     );
   }
 });
+
+test('policy schema accepts critiqueLoop.deferAllAfterRounds integers of at least 1 (#4750)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  for (const deferAllAfterRounds of [1, 3]) {
+    const instance = JSON.parse(
+      JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+    );
+    instance.critiqueLoop = { ...instance.critiqueLoop, deferAllAfterRounds };
+    assert.deepEqual(
+      validate(instance, schema),
+      [],
+      `expected deferAllAfterRounds ${deferAllAfterRounds} to validate`,
+    );
+  }
+});
+
+test('policy schema rejects an invalid critiqueLoop.deferAllAfterRounds value (#4750)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  for (const deferAllAfterRounds of [0, 1.5, '3', null]) {
+    const instance = JSON.parse(
+      JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+    );
+    instance.critiqueLoop = { ...instance.critiqueLoop, deferAllAfterRounds };
+    const errors = validate(instance, schema);
+    assert.ok(
+      errors.some((error) =>
+        error.includes('$.critiqueLoop.deferAllAfterRounds'),
+      ),
+      `expected deferAllAfterRounds ${JSON.stringify(deferAllAfterRounds)} to be rejected: ${errors.join('\n')}`,
+    );
+  }
+});
+
+test('policy schema defines critiqueLoop.deferAllAfterRounds as an integer with minimum 1 and its unset default in words (#4750)', () => {
+  const schema = loadJson('schemas/policy.schema.json') as {
+    properties: {
+      critiqueLoop: {
+        properties: {
+          deferAllAfterRounds: {
+            type?: string;
+            minimum?: number;
+            default?: unknown;
+            description: string;
+          };
+          deferByUrgency: { description: string };
+          deferRelaxAtRounds: { description: string };
+        };
+      };
+    };
+  };
+  const { properties } = schema.properties.critiqueLoop;
+  const property = properties.deferAllAfterRounds;
+  assert.equal(property.type, 'integer');
+  assert.equal(property.minimum, 1);
+  assert.equal('default' in property, false);
+  const description = property.description.replace(/\s+/g, ' ');
+  for (const phrase of [
+    'unset',
+    'at or above',
+    'severity-tiered',
+    '--lite',
+    'safety-class',
+  ]) {
+    assert.ok(
+      description.includes(phrase),
+      `expected the deferAllAfterRounds description to mention ${phrase}`,
+    );
+  }
+  // The two sibling descriptions say the cap takes precedence at or above it.
+  for (const sibling of [
+    properties.deferByUrgency.description,
+    properties.deferRelaxAtRounds.description,
+  ]) {
+    assert.ok(
+      sibling.replace(/\s+/g, ' ').includes('deferAllAfterRounds'),
+      'expected the sibling description to name deferAllAfterRounds',
+    );
+  }
+});
+
+test('user-global partial critiqueLoop refers to deferAllAfterRounds from the policy schema (#4750)', () => {
+  const userGlobal = loadJson('schemas/user-global-config.schema.json') as {
+    $defs: {
+      partialCritiqueLoop: {
+        properties: Record<string, { $ref?: string }>;
+      };
+    };
+  };
+  assert.equal(
+    userGlobal.$defs.partialCritiqueLoop.properties.deferAllAfterRounds?.$ref,
+    'policy.schema.json#/properties/critiqueLoop/properties/deferAllAfterRounds',
+  );
+});
