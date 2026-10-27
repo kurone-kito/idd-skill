@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import {
+  cpSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -1819,7 +1821,7 @@ test('review triggers classify the graph delta without depending on commit-list 
   assert.equal(afterMerge.reviews[1]?.trigger, 'newHead');
 });
 
-test('missing commit IDs stay unknown rather than matching as the same head', () => {
+test('missing and empty commit IDs stay unknown rather than matching as the same head', () => {
   const report = computePrAudit(
     1,
     [
@@ -1831,13 +1833,17 @@ test('missing commit IDs stay unknown rather than matching as the same head', ()
         ...review(2, '2026-01-02T00:00:00Z', NO_FINDINGS_FIXTURE),
         commitId: null,
       },
-      review(3, '2026-01-03T00:00:00Z', NO_FINDINGS_FIXTURE),
+      {
+        ...review(3, '2026-01-03T00:00:00Z', NO_FINDINGS_FIXTURE),
+        commitId: '',
+      },
+      review(4, '2026-01-04T00:00:00Z', NO_FINDINGS_FIXTURE),
     ],
     [],
   );
   assert.deepEqual(
     report.reviews.map((entry) => entry.trigger),
-    ['first', 'unknown', 'unknown'],
+    ['first', 'unknown', 'unknown', 'unknown'],
   );
 });
 
@@ -2731,6 +2737,58 @@ function runCheckWithFixture(
     rmSync(dir, { recursive: true, force: true });
   }
 }
+
+test('CLI fails closed on a missing or malformed sync manifest before contacting GitHub', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-wave-audit-manifest-'));
+  const tempScripts = join(tempRoot, 'scripts');
+  const manifestPath = join(tempRoot, 'audit', 'sync-manifest.json');
+  const fixturePath = join(tempRoot, 'fixture.json');
+  const callsPath = join(tempRoot, 'calls.txt');
+  mkdirSync(join(tempRoot, 'audit'), { recursive: true });
+  cpSync(join(REPO_ROOT, 'scripts'), tempScripts, { recursive: true });
+  cpSync(join(REPO_ROOT, 'schemas'), join(tempRoot, 'schemas'), {
+    recursive: true,
+  });
+  writeFileSync(join(tempRoot, 'package.json'), '{"private":true}\n');
+  writeFileSync(fixturePath, JSON.stringify({ reviews: [], comments: [] }));
+  writeFileSync(callsPath, '');
+  const restore = stubExecutable('gh', GH_FIXTURE_STUB);
+  try {
+    for (const contents of [null, '{']) {
+      if (contents === null) {
+        rmSync(manifestPath, { force: true });
+      } else {
+        writeFileSync(manifestPath, contents);
+      }
+      writeFileSync(callsPath, '');
+      const result = spawnSync(
+        process.execPath,
+        [
+          join(tempScripts, 'copilot-review-wave-audit.mjs'),
+          '--repo',
+          'kurone-kito/idd-skill',
+          '--prs',
+          '42',
+          '--check',
+        ],
+        {
+          encoding: 'utf8',
+          env: {
+            ...process.env,
+            WAVE_AUDIT_FIXTURE: fixturePath,
+            WAVE_AUDIT_CALLS: callsPath,
+          },
+        },
+      );
+      assert.equal(result.status, 2, result.stderr);
+      assert.match(result.stderr, /cannot read or parse .*sync-manifest\.json/);
+      assert.equal(readFileSync(callsPath, 'utf8'), '');
+    }
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
 
 test('CLI --check: a clean PR writes the report to stdout, nothing to stderr, and exits 0', () => {
   const result = runCheckWithFixture(
