@@ -3211,8 +3211,9 @@ only approval boundary.
        uncertain (`nothingSent` stays false), so a rerun is the operator's
        decision on the replay evidence, made with `--policy` until step 2 is
        merged. A rerun uses fresh ids, so a record for the abandoned token that
-       lands later matches nothing the rerun writes: report it under the last
-       rule below and do not treat it as the rerun's record;
+       lands later matches nothing the rerun writes: report it to the operator
+       as a record of the failed run, keep it separate from the rerun's records,
+       and do not treat it as the rerun's record;
      - the failed run created an issue (its own report names the issue, or a
        replayed record names one): do not rerun the command. Write that issue's
        remaining records by hand to the new journal, each record's `journal`
