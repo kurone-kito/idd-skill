@@ -40,7 +40,7 @@
 // never widens the "Open" item scan to include either line, avoiding a
 // double-count.
 
-import { existsSync, readFileSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { parseCanonicalIntegerOrThrow, parseCliArgs } from './cli-args.mts';
 import {
@@ -296,7 +296,7 @@ export interface PrAuditReport {
   triggers: Record<ReviewTrigger, number>;
   approvals: ApprovalAudit;
   findingPathClass: FindingPathClass;
-  /** Merge time from `gh pr list` under `--limit`; `null` under `--prs`. */
+  /** Merge time from `gh pr list` under `--limit` or a merge window. */
   mergedAt: string | null;
 }
 
@@ -1733,20 +1733,85 @@ function resolveRecentMergedPrNumbers(
   };
 }
 
+function shiftCalendarDate(value: string, days: number, flag: string): string {
+  const shifted = new Date(
+    Date.parse(`${value}T00:00:00Z`) + days * 24 * 60 * 60 * 1000,
+  );
+  const year = shifted.getUTCFullYear();
+  if (!Number.isFinite(shifted.getTime()) || year < 0 || year > 9999) {
+    fail(`${flag} cannot be expanded to the neighboring calendar date`);
+  }
+  return [
+    String(year).padStart(4, '0'),
+    String(shifted.getUTCMonth() + 1).padStart(2, '0'),
+    String(shifted.getUTCDate()).padStart(2, '0'),
+  ].join('-');
+}
+
+function resolveMergedWindowPrNumbers(
+  owner: string,
+  repo: string,
+  mergedFrom: string,
+  mergedTo: string,
+): RecentMergedPrs {
+  const search = `merged:${shiftCalendarDate(mergedFrom, -1, '--merged-from')}..${shiftCalendarDate(mergedTo, 1, '--merged-to')}`;
+  const raw = ghText([
+    'pr',
+    'list',
+    '--repo',
+    `${owner}/${repo}`,
+    '--state',
+    'merged',
+    '--search',
+    search,
+    '--limit',
+    String(RECENT_MERGED_OVER_FETCH_MAX),
+    '--json',
+    'number,mergedAt',
+  ]);
+  const parsed = JSON.parse(raw) as MergedPrCandidate[];
+  if (parsed.length === RECENT_MERGED_OVER_FETCH_MAX) {
+    fail(
+      `merge window ${mergedFrom} through ${mergedTo} returned ${RECENT_MERGED_OVER_FETCH_MAX} pull requests, the search cap; use a shorter window`,
+    );
+  }
+
+  const startMs = Date.parse(`${mergedFrom}T00:00:00Z`);
+  const endMs = Date.parse(
+    `${shiftCalendarDate(mergedTo, 1, '--merged-to')}T00:00:00Z`,
+  );
+  const inWindow = parsed.filter((candidate) => {
+    if (candidate.mergedAt === null) return false;
+    const mergedMs = Date.parse(candidate.mergedAt);
+    return mergedMs >= startMs && mergedMs < endMs;
+  });
+  return {
+    numbers: selectMostRecentlyMerged(inWindow, inWindow.length),
+    mergedAtByNumber: new Map(
+      inWindow.map((candidate) => [candidate.number, candidate.mergedAt]),
+    ),
+  };
+}
+
 const COPILOT_REVIEW_WAVE_AUDIT_FLAG_SPEC = {
   '--prs': { type: 'string' },
   '--limit': { type: 'string' },
+  '--merged-from': { type: 'string' },
+  '--merged-to': { type: 'string' },
   '--format': { type: 'string', default: 'json' },
   '--repo': { type: 'string' },
   '--owner': { type: 'string' },
   '--check': { type: 'boolean', default: false },
   '--since': { type: 'string' },
   '--min-recorded-share': { type: 'string' },
+  '--baseline-reviews-per-pr': { type: 'string' },
+  '--step-summary': { type: 'string' },
   '--help': { type: 'boolean', short: 'h', default: false },
 } as const;
 
 const DEFAULT_MIN_RECORDED_SHARE = 0.9;
 const DECIMAL_SHARE_RE = /^(\d+(\.\d+)?|\.\d+)$/u;
+const POSITIVE_DECIMAL_RE = /^(\d+(\.\d+)?|\.\d+)$/u;
 const CALENDAR_DATE_RE = /^\d{4}-\d{2}-\d{2}$/u;
 
 export interface CheckOptions {
@@ -1809,31 +1874,41 @@ export function checkFailures(
   return failures;
 }
 
-function parseSinceDate(value: string): string {
+function parseCalendarDate(value: string, flag: string): string {
   const parsed = new Date(`${value}T00:00:00Z`);
   if (
     !CALENDAR_DATE_RE.test(value) ||
     Number.isNaN(parsed.getTime()) ||
     parsed.toISOString().slice(0, 10) !== value
   ) {
-    fail(`--since must be a real calendar date as YYYY-MM-DD, got "${value}"`);
+    fail(`${flag} must be a real calendar date as YYYY-MM-DD, got "${value}"`);
   }
   return value;
+}
+
+function parseSinceDate(value: string): string {
+  return parseCalendarDate(value, '--since');
 }
 
 function printHelp(): void {
   process.stdout.write(`Usage:
   node scripts/copilot-review-wave-audit.mjs --prs <n,n,...> [options]
   node scripts/copilot-review-wave-audit.mjs --limit <N> [options]
+  node scripts/copilot-review-wave-audit.mjs --merged-from <YYYY-MM-DD> --merged-to <YYYY-MM-DD> [options]
 
   --prs <n,n,...>     Audit these merged PR numbers (mutually exclusive
-                      with --limit).
+                      with --limit and the merge window).
   --limit <N>         Audit the N most recently merged PRs, sorted by
                       merge date (best-effort: over-fetches and
                       re-sorts client-side, since GitHub has no
                       merge-date sort of its own -- use --prs for a
                       fully precise, reproducible number set).
-                      Mutually exclusive with --prs.
+                      Mutually exclusive with --prs and the merge window.
+  --merged-from <date> First UTC calendar date in an inclusive merge window.
+                      Requires --merged-to; mutually exclusive with --prs
+                      and --limit. The search cap is 1,000 PRs.
+  --merged-to <date>   Last UTC calendar date in an inclusive merge window.
+                      Requires --merged-from.
   --format <json|tsv> Output format (default: json).
   --repo <owner/name> Repository override, combined form.
   --owner <owner>     Repository override, split form (use with
@@ -1844,11 +1919,16 @@ function printHelp(): void {
                       contradiction, or a recorded share below
                       --min-recorded-share with --since). The report is still
                       printed; each failure is written to stderr.
-  --since <YYYY-MM-DD> With --check and --limit only: count only PRs merged on
-                      or after this UTC date in the recorded-share check.
+  --since <YYYY-MM-DD> With --check and --limit or the merge window: count only
+                      PRs merged on or after this UTC date in the recorded-share check.
   --min-recorded-share <n>
                       Minimum recorded share from 0 to 1 (default 0.9). Valid
                       only with --check and --since.
+  --baseline-reviews-per-pr <n>
+                      Show reviews per PR and its ratio to this positive
+                      decimal baseline in the step summary.
+  --step-summary <path>
+                      Append the cohort summary as Markdown to this file.
   --help, -h          Show this help.
 
 Computes, per PR and as a cohort summary: Copilot review count (v2 vs.
@@ -1882,8 +1962,92 @@ function formatDispositionCounts(counts: Record<Disposition, number>): string {
 function writeJsonReport(
   reports: PrAuditReport[],
   summary: CohortSummary,
+  failedPrs: FailedPr[],
 ): void {
-  process.stdout.write(`${JSON.stringify({ reports, summary }, null, 2)}\n`);
+  process.stdout.write(
+    `${JSON.stringify({ reports, summary, failedPrs }, null, 2)}\n`,
+  );
+}
+
+interface FailedPr {
+  pr: number;
+  message: string;
+}
+
+function formatStepSummary(
+  selector: string,
+  summary: CohortSummary,
+  failedPrs: readonly FailedPr[],
+  baselineReviewsPerPr: number | null,
+): string {
+  const reviewsPerPr =
+    summary.prCount === 0
+      ? 'n/a'
+      : String(summary.reviewCount / summary.prCount);
+  const lines = [
+    '## Copilot review-wave audit',
+    '',
+    `- Selector: \`${selector}\``,
+    `- Pull requests audited: ${summary.prCount}`,
+    `- Copilot reviews: ${summary.reviewCount} (v2=${summary.v2Count}, legacy=${summary.legacyCount}, unparsed=${summary.unparsedCount})`,
+    `- Pull requests that could not be audited: ${failedPrs.length}`,
+    `- Reviews per pull request: ${reviewsPerPr}`,
+  ];
+  if (baselineReviewsPerPr !== null) {
+    const ratio =
+      reviewsPerPr === 'n/a'
+        ? 'n/a'
+        : String(Number(reviewsPerPr) / baselineReviewsPerPr);
+    lines.push(
+      `- Baseline reviews per pull request: ${baselineReviewsPerPr}`,
+      `- Ratio to baseline: ${ratio}`,
+    );
+  }
+  lines.push(
+    '',
+    `- Review triggers: ${Object.entries(summary.triggers)
+      .map(([key, value]) => `${key}=${value}`)
+      .join(', ')}`,
+    `- Approvals: total=${summary.approvals.total}, followed=${summary.approvals.followed}; next trigger: ${Object.entries(
+      summary.approvals.nextTrigger,
+    )
+      .map(([key, value]) => `${key}=${value}`)
+      .join(', ')}`,
+    '',
+    '### Dispositions by PR review-count bucket',
+    '',
+    '| Reviews per PR | Deferred | Rejected | Accepted | Other | None |',
+    '| --- | ---: | ---: | ---: | ---: | ---: |',
+  );
+  for (const bucket of ['1-2', '3-4', '5-9', '10+'] as const) {
+    const counts = summary.dispositionsByReviewCount[bucket];
+    lines.push(
+      `| ${bucket} | ${counts.deferred} | ${counts.rejected} | ${counts.accepted} | ${counts.other} | ${counts.none} |`,
+    );
+  }
+  lines.push(
+    '',
+    `- What-changed tables: ${summary.whatChanged.tables}; listing generated helpers: ${summary.whatChanged.listingGeneratedHelper}; listing sync mirrors: ${summary.whatChanged.listingSyncMirror}`,
+    `- Inline findings by path class: ${Object.entries(summary.findingPathClass)
+      .map(([key, value]) => `${key}=${value}`)
+      .join(', ')}`,
+    `- Triage: recorded=${summary.triage.recorded}, unrecorded=${summary.triage.unrecorded}, contradictions=${summary.triage.contradictions}`,
+  );
+  return lines.join('\n');
+}
+
+function appendStepSummary(
+  path: string,
+  selector: string,
+  summary: CohortSummary,
+  failedPrs: readonly FailedPr[],
+  baselineReviewsPerPr: number | null,
+): void {
+  appendFileSync(
+    path,
+    `${formatStepSummary(selector, summary, failedPrs, baselineReviewsPerPr)}\n`,
+    'utf8',
+  );
 }
 
 function writeTsvReport(
@@ -2006,8 +2170,30 @@ if (import.meta.main) {
 
   const prsFlag = values.prs as string | undefined;
   const limitFlag = values.limit as string | undefined;
-  if (Boolean(prsFlag) === Boolean(limitFlag)) {
-    fail('choose exactly one of --prs <n,n,...> or --limit <N>');
+  const mergedFromFlag = values['merged-from'] as string | undefined;
+  const mergedToFlag = values['merged-to'] as string | undefined;
+  const hasMergedWindow =
+    mergedFromFlag !== undefined || mergedToFlag !== undefined;
+  if ((mergedFromFlag === undefined) !== (mergedToFlag === undefined)) {
+    fail('--merged-from and --merged-to must be given together');
+  }
+  const selectorCount =
+    Number(prsFlag !== undefined) +
+    Number(limitFlag !== undefined) +
+    Number(hasMergedWindow);
+  if (selectorCount !== 1) {
+    fail(
+      'choose exactly one of --prs <n,n,...>, --limit <N>, or the --merged-from/--merged-to window',
+    );
+  }
+  let mergedFrom: string | null = null;
+  let mergedTo: string | null = null;
+  if (hasMergedWindow) {
+    mergedFrom = parseCalendarDate(mergedFromFlag as string, '--merged-from');
+    mergedTo = parseCalendarDate(mergedToFlag as string, '--merged-to');
+    if (mergedFrom > mergedTo) {
+      fail('--merged-from must be on or before --merged-to');
+    }
   }
   const format = values.format as string;
   if (format !== 'json' && format !== 'tsv') {
@@ -2021,8 +2207,10 @@ if (import.meta.main) {
     if (!checkMode) {
       fail('--since is only valid with --check');
     }
-    if (prsFlag) {
-      fail('--since is not valid with --prs; merge dates come from --limit');
+    if (prsFlag !== undefined) {
+      fail(
+        '--since is not valid with --prs; use --limit or --merged-from/--merged-to',
+      );
     }
     parseSinceDate(sinceFlag);
   }
@@ -2040,6 +2228,20 @@ if (import.meta.main) {
     }
     minRecordedShare = value;
   }
+  const baselineFlag = values['baseline-reviews-per-pr'] as string | undefined;
+  let baselineReviewsPerPr: number | null = null;
+  if (baselineFlag !== undefined) {
+    const value = POSITIVE_DECIMAL_RE.test(baselineFlag)
+      ? Number(baselineFlag)
+      : Number.NaN;
+    if (!Number.isFinite(value) || value <= 0) {
+      fail(
+        `--baseline-reviews-per-pr must be a positive decimal, got "${baselineFlag}"`,
+      );
+    }
+    baselineReviewsPerPr = value;
+  }
+  const stepSummaryPath = values['step-summary'] as string | undefined;
 
   let syncMirrorTargets: ReadonlySet<string>;
   try {
@@ -2058,39 +2260,91 @@ if (import.meta.main) {
   }
   const [owner, repo] = parseRepository(repository);
 
-  const recent = prsFlag
-    ? null
-    : resolveRecentMergedPrNumbers(
-        owner,
-        repo,
-        parseCanonicalIntegerOrThrow(limitFlag, '--limit'),
-      );
-  const prNumbers = recent
-    ? recent.numbers
-    : parsePrNumberList(prsFlag as string);
+  const recent =
+    limitFlag === undefined
+      ? null
+      : resolveRecentMergedPrNumbers(
+          owner,
+          repo,
+          parseCanonicalIntegerOrThrow(limitFlag, '--limit'),
+        );
+  const mergedWindow =
+    mergedFrom === null || mergedTo === null
+      ? null
+      : resolveMergedWindowPrNumbers(owner, repo, mergedFrom, mergedTo);
+  const prNumbers =
+    prsFlag !== undefined
+      ? parsePrNumberList(prsFlag)
+      : (recent?.numbers ?? mergedWindow?.numbers ?? []);
+  const mergedAtByNumber =
+    recent?.mergedAtByNumber ?? mergedWindow?.mergedAtByNumber ?? new Map();
+  const selector =
+    mergedFrom !== null && mergedTo !== null
+      ? `--merged-from ${mergedFrom} --merged-to ${mergedTo}`
+      : limitFlag !== undefined
+        ? `--limit ${limitFlag}`
+        : `--prs (${prNumbers.length} pull requests)`;
 
-  const reports = prNumbers.map((prNumber) => ({
-    ...auditPr(owner, repo, prNumber, syncMirrorTargets),
-    mergedAt: recent?.mergedAtByNumber.get(prNumber) ?? null,
-  }));
+  const reports: PrAuditReport[] = [];
+  const failedPrs: FailedPr[] = [];
+  for (const prNumber of prNumbers) {
+    try {
+      const report = auditPr(owner, repo, prNumber, syncMirrorTargets);
+      report.mergedAt = mergedAtByNumber.get(prNumber) ?? null;
+      reports.push(report);
+    } catch (error) {
+      failedPrs.push({
+        pr: prNumber,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
   const summary = summarizeCohort(reports);
 
   if (format === 'tsv') {
     writeTsvReport(reports, summary);
   } else {
-    writeJsonReport(reports, summary);
+    writeJsonReport(reports, summary, failedPrs);
   }
 
-  if (checkMode) {
-    const failures = checkFailures(summary, reports, {
-      since: sinceFlag ?? null,
-      minRecordedShare,
-    });
-    for (const message of failures) {
-      process.stderr.write(`copilot-review-wave-audit: check: ${message}\n`);
+  let stepSummaryFailed = false;
+  if (stepSummaryPath !== undefined) {
+    try {
+      appendStepSummary(
+        stepSummaryPath,
+        selector,
+        summary,
+        failedPrs,
+        baselineReviewsPerPr,
+      );
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      process.stderr.write(
+        `copilot-review-wave-audit: cannot write step summary ${stepSummaryPath}: ${reason}\n`,
+      );
+      process.exitCode = 2;
+      stepSummaryFailed = true;
     }
-    if (failures.length > 0) {
-      // Not process.exit: piped stdout may still be flushing (Windows CI).
+  }
+
+  if (!stepSummaryFailed) {
+    if (checkMode) {
+      const failures = checkFailures(summary, reports, {
+        since: sinceFlag ?? null,
+        minRecordedShare,
+      });
+      for (const message of failures) {
+        process.stderr.write(`copilot-review-wave-audit: check: ${message}\n`);
+      }
+      if (failures.length > 0) {
+        // Not process.exit: piped stdout may still be flushing (Windows CI).
+        process.exitCode = 1;
+      }
+    }
+    if (failedPrs.length > 0) {
+      process.stderr.write(
+        `copilot-review-wave-audit: ${failedPrs.length} pull request(s) could not be audited\n`,
+      );
       process.exitCode = 1;
     }
   }
