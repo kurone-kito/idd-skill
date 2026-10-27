@@ -4181,7 +4181,7 @@ Rules:
   matrix decides first, and the flag changes only a `defer` verdict: a `keep`
   from the matrix or from a blocking flag such as `--scope-fence` keeps its
   own `blocked` reason. An Accepted reply with the flag needs no `--override`,
-  since its verdict is `keep` below the review-count cap. At or above the cap, the flag changes nothing, so an Accepted reply under `enforce` still needs `--override`.
+  since its verdict is `keep` below the review-count cap. At or above the cap, the flag changes nothing, so an Accepted reply whose verdict is `defer` still needs `--override` under `enforce`.
 - **Review-count cap.** Under `severity-tiered` without `--lite`, the
   helper reads `critiqueLoop.deferAllAfterRounds` and compares it with the
   Copilot review count it already reads for the relax step. At or above the

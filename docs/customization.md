@@ -1952,7 +1952,7 @@ supports these keys:
 - `critiqueLoop.deferByUrgency` (default `off`; `low`,
   `low-and-medium`, or `severity-tiered`). High stays ineligible under
   `low` and `low-and-medium`. Under `low`, `low-and-medium`, and
-  `severity-tiered`, clause (d) of the adopt-now test cascades (under `severity-tiered` only below `deferAllAfterRounds`): once one
+  `severity-tiered`, clause (d) of the adopt-now test cascades (under `severity-tiered`, only below `deferAllAfterRounds`): once one
   finding of a pass is Accepted, another finding of that pass whose fix
   stays within that push's files is adopt-now and is not deferred. Under
   `severity-tiered` the agent reports (d) with
