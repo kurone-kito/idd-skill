@@ -42,6 +42,64 @@ test('the lite fresh claim adopts the claim-phase worktree through step 7', () =
   );
 });
 
+test('the lite B1 resolves and validates the development branch first', () => {
+  const lite = readTemplate(
+    'idd-template/.github/instructions/lite/idd-work-lite.instructions.md',
+  ).replace(/\s+/g, ' ');
+  const resolution = lite.indexOf(
+    'Before step 1, resolve `{development-branch}`',
+  );
+  assert.notEqual(resolution, -1, 'the resolution paragraph');
+  assert.ok(
+    resolution <
+      lite.indexOf('1. On the primary worktree, run `git fetch origin`.'),
+    'the resolution precedes step 1',
+  );
+  for (const phrase of [
+    '`idd-effective-config --key developmentBranch`',
+    'Stop if it fails or reports unreadable policy.',
+    'Use its `value` when `found` is `true`',
+    'only when `found` is `false`, use `gh repo view --json defaultBranchRef --jq .defaultBranchRef.name`.',
+    'Stop unless the name matches `^(?!refs/heads/)[A-Za-z0-9._/][A-Za-z0-9._/-]*$`',
+    '`git ls-remote --exit-code --heads origin <name>` lists it.',
+    'Steps 15, 16, 21, and 25 use only this value.',
+  ]) {
+    assert.ok(lite.includes(phrase), phrase);
+  }
+});
+
+test('each lite fresh-worktree creation step uses the resolved branch', () => {
+  const lite = readTemplate(
+    'idd-template/.github/instructions/lite/idd-work-lite.instructions.md',
+  );
+  const stepBody = (number: number) => {
+    const match = new RegExp(
+      `^${number}\\. ([\\s\\S]*?)(?=^${number + 1}\\. )`,
+      'm',
+    ).exec(lite);
+    assert.ok(match, `lite step ${number}`);
+    return match[1];
+  };
+  assert.match(stepBody(15), /\{development-branch\}/);
+  assert.match(stepBody(16), /\{development-branch\}/);
+  assert.match(stepBody(21), /origin\/\{development-branch\}/);
+  assert.match(stepBody(25), /fresh claim per step 21/);
+});
+
+test('the lite work root copy matches its template body', () => {
+  const body = (text: string) => text.slice(text.indexOf('# IDD —'));
+  assert.equal(
+    body(
+      readTemplate('.github/instructions/lite/idd-work-lite.instructions.md'),
+    ),
+    body(
+      readTemplate(
+        'idd-template/.github/instructions/lite/idd-work-lite.instructions.md',
+      ),
+    ),
+  );
+});
+
 test('the claim instructions state the worktree-first steps in sequence', () => {
   const claim = readTemplate(
     'idd-template/.github/instructions/idd-claim.instructions.md',
