@@ -2981,6 +2981,26 @@ test('differential: a tilde fence masks a pending marker, and a backtick line in
     0,
     0,
   );
+  assertF2Parity(
+    {
+      threads: [
+        f2Thread(
+          [
+            f2ThreadComment('human-reviewer', 'please rename', F2_CASE_TIME_1),
+            f2ThreadComment(
+              AGENT_LOGIN,
+              '**Accepted** — example:\n~~~\n**Awaiting maintainer decision** inside\n~~~',
+              F2_CASE_TIME_2,
+            ),
+          ],
+          false,
+          true,
+        ),
+      ],
+    },
+    0,
+    0,
+  );
 });
 
 test('differential: CRLF line endings do not hide a fenced block close (#4696)', {
@@ -3150,6 +3170,104 @@ test('differential: inline code masking matches multi-backtick spans (#4696)', {
     0,
     1,
   );
+});
+
+test('differential: HTML comment backticks do not mask a live marker (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      threads: [
+        f2Thread(
+          [
+            f2ThreadComment('human-reviewer', 'please rename', F2_CASE_TIME_1),
+            f2ThreadComment(
+              AGENT_LOGIN,
+              '**Accepted** — noted\n<!-- \u0060 -->\n**Awaiting maintainer decision** choose one\n<!-- \u0060 -->',
+              F2_CASE_TIME_2,
+            ),
+          ],
+          false,
+          true,
+        ),
+      ],
+    },
+    0,
+    1,
+  );
+});
+
+test('differential: inline code spans stop at paragraph boundaries (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      threads: [
+        f2Thread(
+          [
+            f2ThreadComment('human-reviewer', 'please rename', F2_CASE_TIME_1),
+            f2ThreadComment(
+              AGENT_LOGIN,
+              '**Accepted** — noted\nunmatched \u0060 in this paragraph\n\n**Awaiting maintainer decision** choose one\n\nlater \u0060',
+              F2_CASE_TIME_2,
+            ),
+          ],
+          false,
+          true,
+        ),
+      ],
+    },
+    0,
+    1,
+  );
+});
+
+test('differential: inline code spans stop at Markdown block boundaries (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  const bodies = [
+    '**Accepted** — noted\nbefore \u0060\n# Heading\n**Awaiting maintainer decision** choose one\nafter \u0060',
+    '**Accepted** — noted\nbefore \u0060\n---\n**Awaiting maintainer decision** choose one\nafter \u0060',
+    '**Accepted** — noted\nbefore \u0060\n```text\nexample\n```\n**Awaiting maintainer decision** choose one\nafter \u0060',
+    '**Accepted** — noted\nbefore \u0060\n~~~text\nexample\n~~~\n**Awaiting maintainer decision** choose one\nafter \u0060',
+  ];
+
+  for (const [index, body] of bodies.entries()) {
+    assertF2Parity(
+      {
+        regular: [
+          {
+            id: 6101 + index * 2,
+            login: 'coderabbitai[bot]',
+            body: 'nit: rename this',
+            at: F2_CASE_TIME_1,
+          },
+          {
+            id: 6102 + index * 2,
+            login: AGENT_LOGIN,
+            body,
+            at: F2_CASE_TIME_2,
+          },
+        ],
+        threads: [
+          f2Thread(
+            [
+              f2ThreadComment(
+                'human-reviewer',
+                'please rename',
+                F2_CASE_TIME_1,
+              ),
+              f2ThreadComment(AGENT_LOGIN, body, F2_CASE_TIME_2),
+            ],
+            false,
+            true,
+          ),
+        ],
+      },
+      1,
+      1,
+    );
+  }
 });
 
 test('differential: thread activity uses updatedAt for edited feedback (#4696)', {

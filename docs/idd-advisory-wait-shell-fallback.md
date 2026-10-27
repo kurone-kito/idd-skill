@@ -1250,16 +1250,24 @@ DISPOSITION_JSON=$(printf '%s' "${COMMENTS_JSON}" | jq -c --argjson agents "${RE
   # opens one starts a run, so a marker inside a run is lazy text. HTML blocks are
   # not masked, so a marker inside one still counts here (fail-closed).
   def strip_all($re):
-    if test($re) then sub($re; "") | strip_all($re) else . end;
+    if test($re) then sub($re; "\n\n") | strip_all($re) else . end;
   def mask_html_comments:
     # Keep line breaks and columns so comments cannot change Markdown block context.
     gsub("(?<comment>(?s:<!--.*?-->))"; "\(.comment | gsub("[^\n]"; " "))");
   def mask_inline_code:
-    # Match equal-length backtick runs and keep spans at their original columns.
-    gsub("(?<code>(?<!\\x60)(?<ticks>\\x60+)(?!\\x60)(?:(?!(?<!\\x60)\\k<ticks>(?!\\x60))[\\s\\S])*?(?<!\\x60)\\k<ticks>(?!\\x60))"; "\(.code | gsub("[^\n]"; " "))");
+    # Match equal-length backtick runs within one paragraph and keep their columns.
+    gsub("(?<code>(?<!\\x60)(?<ticks>\\x60+)(?!\\x60)(?:(?!(?<!\\x60)\\k<ticks>(?!\\x60))(?!(?:\\r?\\n)[ \\t\\r]*(?:\\r?\\n))[\\s\\S])*?(?<!\\x60)\\k<ticks>(?!\\x60))"; "\(.code | gsub("[^\n]"; " "))");
   def html_start_re: "^ {0,3}(?:<!--|<\\?|<![A-Z]|<!\\[CDATA\\[|<\\/?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|meta|nav|noframes|ol|optgroup|option|p|param|pre|script|search|section|source|style|summary|table|tbody|td|textarea|tfoot|th|thead|title|tr|track|ul)(?:[ \\t]|\\/?>|$))";
+  def interrupts_paragraph:
+    test("^ {0,3}#{1,6}([ \\t]|$)")
+    or test("^ {0,3}([-_*])([ \\t]*\\1){2,}[ \\t]*$")
+    or test(html_start_re; "i");
+  def mask_interrupting_lines:
+    split("\n")
+    | map(if interrupts_paragraph then gsub("."; " ") else . end)
+    | join("\n");
   def pending_marker:
-    (.body | strip_all("(?ms)^ {0,3}(\\x60{3,})(?=[^\\x60\\n]*$).*?(?:^ {0,3}\\1\\x60*[ \\t\\r]*$|\\z)") | strip_all("(?ms)^ {0,3}(~{3,}).*?(?:^ {0,3}\\1~*[ \\t\\r]*$|\\z)") | mask_inline_code | mask_html_comments
+    (.body | strip_all("(?ms)^ {0,3}(\\x60{3,})(?=[^\\x60\\n]*$).*?(?:^ {0,3}\\1\\x60*[ \\t\\r]*$|\\z)") | strip_all("(?ms)^ {0,3}(~{3,}).*?(?:^ {0,3}\\1~*[ \\t\\r]*$|\\z)") | mask_html_comments | mask_interrupting_lines | mask_inline_code
       | split("\n")
       | reduce .[] as $l ({run: false, hit: false};
           if .hit then .
@@ -1437,16 +1445,24 @@ MISSING_THREADS=$(printf '%s' "${THREADS_JSON}" | jq -rs --argjson agents "${IDD
       | ($agents | map(ascii_downcase) | index($u)) != null);
   # Code-aware pending-decision marker (see DISPOSITION_JSON above).
   def strip_all($re):
-    if test($re) then sub($re; "") | strip_all($re) else . end;
+    if test($re) then sub($re; "\n\n") | strip_all($re) else . end;
   def mask_html_comments:
     # Keep line breaks and columns so comments cannot change Markdown block context.
     gsub("(?<comment>(?s:<!--.*?-->))"; "\(.comment | gsub("[^\n]"; " "))");
   def mask_inline_code:
-    # Match equal-length backtick runs and keep spans at their original columns.
-    gsub("(?<code>(?<!\\x60)(?<ticks>\\x60+)(?!\\x60)(?:(?!(?<!\\x60)\\k<ticks>(?!\\x60))[\\s\\S])*?(?<!\\x60)\\k<ticks>(?!\\x60))"; "\(.code | gsub("[^\n]"; " "))");
+    # Match equal-length backtick runs within one paragraph and keep their columns.
+    gsub("(?<code>(?<!\\x60)(?<ticks>\\x60+)(?!\\x60)(?:(?!(?<!\\x60)\\k<ticks>(?!\\x60))(?!(?:\\r?\\n)[ \\t\\r]*(?:\\r?\\n))[\\s\\S])*?(?<!\\x60)\\k<ticks>(?!\\x60))"; "\(.code | gsub("[^\n]"; " "))");
   def html_start_re: "^ {0,3}(?:<!--|<\\?|<![A-Z]|<!\\[CDATA\\[|<\\/?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|meta|nav|noframes|ol|optgroup|option|p|param|pre|script|search|section|source|style|summary|table|tbody|td|textarea|tfoot|th|thead|title|tr|track|ul)(?:[ \\t]|\\/?>|$))";
+  def interrupts_paragraph:
+    test("^ {0,3}#{1,6}([ \\t]|$)")
+    or test("^ {0,3}([-_*])([ \\t]*\\1){2,}[ \\t]*$")
+    or test(html_start_re; "i");
+  def mask_interrupting_lines:
+    split("\n")
+    | map(if interrupts_paragraph then gsub("."; " ") else . end)
+    | join("\n");
   def pending_marker:
-    (.body | strip_all("(?ms)^ {0,3}(\\x60{3,})(?=[^\\x60\\n]*$).*?(?:^ {0,3}\\1\\x60*[ \\t\\r]*$|\\z)") | strip_all("(?ms)^ {0,3}(~{3,}).*?(?:^ {0,3}\\1~*[ \\t\\r]*$|\\z)") | mask_inline_code | mask_html_comments
+    (.body | strip_all("(?ms)^ {0,3}(\\x60{3,})(?=[^\\x60\\n]*$).*?(?:^ {0,3}\\1\\x60*[ \\t\\r]*$|\\z)") | strip_all("(?ms)^ {0,3}(~{3,})(?=[^~\\n]*$).*?(?:^ {0,3}\\1~*[ \\t\\r]*$|\\z)") | mask_html_comments | mask_interrupting_lines | mask_inline_code
       | split("\n")
       | reduce .[] as $l ({run: false, hit: false};
           if .hit then .
