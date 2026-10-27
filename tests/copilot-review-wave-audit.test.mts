@@ -1841,7 +1841,7 @@ test('missing commit IDs stay unknown rather than matching as the same head', ()
   );
 });
 
-test('review verdict ignores code regions, keeps legacy null, and reads unparsed marker bodies', () => {
+test('review verdict ignores code regions and aliases, keeps legacy null, and reads unparsed marker bodies', () => {
   const unparsedApproval = OPEN_WITH_NEW_FIXTURE.replace(
     '### 🟡 Changes recommended',
     '### 🟢 Approval recommended',
@@ -1856,12 +1856,46 @@ test('review verdict ignores code regions, keeps legacy null, and reads unparsed
       review(4, '2026-01-04T00:00:00Z', fencedApproval),
       review(5, '2026-01-05T00:00:00Z', LEGACY_FIXTURE),
       review(6, '2026-01-06T00:00:00Z', unparsedApproval),
+      review(
+        7,
+        '2026-01-07T00:00:00Z',
+        NEW_FORMAT_FIXTURE.replace(
+          '### 🟡 Changes recommended',
+          '### Changes requested',
+        ),
+      ),
+      review(
+        8,
+        '2026-01-08T00:00:00Z',
+        NO_FINDINGS_FIXTURE.replace(
+          '### 🟢 Approval recommended',
+          '### Closer look recommended',
+        ),
+      ),
+      review(
+        9,
+        '2026-01-09T00:00:00Z',
+        NO_FINDINGS_FIXTURE.replace(
+          '### 🟢 Approval recommended',
+          '### Closer look',
+        ),
+      ),
     ],
     [],
   );
   assert.deepEqual(
     report.reviews.map((entry) => entry.verdict),
-    ['approval', 'changes', 'closerLook', null, null, 'approval'],
+    [
+      'approval',
+      'changes',
+      'closerLook',
+      null,
+      null,
+      'approval',
+      null,
+      null,
+      null,
+    ],
   );
   assert.equal(report.reviews[5]?.kind, 'unparsed');
 });

@@ -513,14 +513,10 @@ function parseReviewVerdict(body, kind) {
       .replace(/\s+/g, ' ')
       .toLowerCase();
     if (title === 'approval recommended') return 'approval';
-    if (title === 'changes recommended' || title === 'changes requested') {
+    if (title === 'changes recommended') {
       return 'changes';
     }
-    if (
-      title === 'needs a closer look' ||
-      title === 'closer look recommended' ||
-      title === 'closer look'
-    ) {
+    if (title === 'needs a closer look') {
       return 'closerLook';
     }
   }
