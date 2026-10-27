@@ -207,33 +207,41 @@ kurone-kito/idd-skill#2840) ran 27 review rounds; the operator
 accepted three remaining findings as a documented limitation and filed
 follow-up kurone-kito/idd-skill#2865 (see [the rationale example](../../docs/idd-design-rationale.md#review-fix-escalation-examples)).
 
-## E11 — Resolve conflicts with {development-branch}
+## E11 — Sync with {development-branch} before every push
 
-Same read-only check as
-`idd-review-triage.instructions.md`'s E-phase branch-sync check and
-`idd-pre-merge.instructions.md`'s F1 (`idd-branch-conflict-state --pr
-{pr-number}`, or `gh pr view {pr-number} --json
-mergeable,mergeStateStatus` with the helper contract's table) — reflects
-the last pushed head, not unpushed E9 fixes.
+Read the PR base before each E12 push:
+`gh pr view {pr-number} --json baseRefName --jq .baseRefName`. On failure,
+report and hold. A different base uses D3's wrong-base hold; do not merge or
+push.
 
-- **`callSiteRouting.e11` is `merge-development-branch`** (branch state
-  `content-conflict`; without helper runtime, `mergeable` `CONFLICTING`):
-  pass the active review gate, merge
-  `{development-branch}` into the feature branch, resolve, complete the
-  merge:
+Fetch with the exact refspec:
 
-  ```sh
-  git fetch origin +refs/heads/{development-branch}:refs/remotes/origin/{development-branch} \
-    && git merge origin/{development-branch}
-  ```
+```sh
+git fetch origin +refs/heads/{development-branch}:refs/remotes/origin/{development-branch}
+```
 
-  Non-interactive-hostile signing: use the
-  [signed-commit merge wrapper](../../docs/idd-helper-scripts.md#signed-commit-merge-wrapper-shared-git-procedure)
-  instead.
-- Otherwise (`callSiteRouting.e11` is `skip-merge`; without helper
-  runtime, any `mergeable` other than `CONFLICTING`): skip the merge, proceed
-  to E12 — the E-phase branch-sync check and F1 handle those
-  downstream.
+On failure, report and hold. Compare `git merge-base HEAD
+origin/{development-branch}` with `git rev-parse origin/{development-branch}`.
+If equal, the branch is current: do not merge and continue to E12. On either
+command error, report and hold.
+
+If behind, run `git merge-tree --write-tree HEAD origin/{development-branch}`.
+Exit 0 means no conflict; 1 means conflict. Any other exit is unknown: hold
+without merging or pushing.
+
+- **No conflict:** run `git merge --no-ff` with
+  `origin/{development-branch}`. Use the
+  [signed-commit merge wrapper](../../docs/idd-helper-scripts.md) for
+  non-interactive-hostile primary signing; no confirmation, even with open
+  review threads.
+- **Conflict:** apply the active-review gate. Unresolved threads, unreplied
+  comments, or a `CHANGES_REQUESTED` reviewer require explicit confirmation
+  before merging, resolving, and completing; otherwise hold unchanged.
+- **Merge failure:** on merge, signing, hook, or wrapper-timeout failure, run
+  `git merge --abort`; report and hold without pushing.
+
+E12's `post-fix-validate` checks the merged tree. All holds follow shared
+Hold / suspend rules and never push.
 
 ## E12 — Lint, test, push
 
@@ -266,19 +274,18 @@ file), stop and ask once. Never raise a per-file cap.
 Then push the feature branch normally (E11 uses merge commits, not
 rebase, so no force push is required).
 
+E11-only files do not widen E12's fold-in scope.
+
 **Bounded cross-round batching allowance.** A small number of review
 comments can arrive before this push that fall outside this round's
 scope and haven't gone through triage yet. Fold them into this same
 pending push — each its own atomic commit — instead of starting a
 fresh round per arrival, but only when **all** hold:
 
-- Every comment since the last push is **bot-sourced**: the primary
-  advisory bot's login (default Copilot: `copilot` /
-  `copilot-pull-request-reviewer*`, matched via `isCopilotReviewerLogin`
-  in `scripts/protocol-helpers.mjs`) or an `advisoryBotLogins` login,
-  **regardless of PATH A/B** (Copilot's inline thread comments are
-  PATH A under E4; an overlap with any configured
-  `advisoryWait.secondaryBotLogin` login still qualifies).
+- Every comment since the last push is by primary advisory logins (`copilot` or
+  `copilot-pull-request-reviewer*` via `isCopilotReviewerLogin`),
+  `advisoryBotLogins`, or configured `advisoryWait.secondaryBotLogin`,
+  regardless of PATH.
 - Each comment is a small, confirmable fix whose claim was checked
   against live evidence (linter run, actual file/runtime behavior)
   before folding it in — the same **verify-before-accept discipline** E5
@@ -297,11 +304,8 @@ PATH A item from a **human or CODEOWNER** arrives (bot-sourced alone
 does not); any item requests a substantive code/logic change; any item
 falls outside the touched-file scope; or either bound is reached.
 
-**Non-goals**: never delays an in-flight CI wait (E15's mid-wait
-fold-in rule is unchanged); never changes PATH A/B routing or triage
-timing (still happens at the next E1 pass — only push timing changes);
-and relaxes nothing else: E14 re-review, `review-watermark`
-invalidation, and individual E6 replies stay as before.
+**Non-goals**: no E15 delay or PATH/triage change; E14 re-review,
+watermark invalidation, and E6 replies stay unchanged.
 
 **PR body sync.** If this round's fix changes a claim the PR body
 makes (round count, a documented residual limitation, a scope

@@ -8990,9 +8990,12 @@ same as `AW4`/`AW5`.
 - `callSiteRouting` (required object): the next step for each call site.
   `eBranchSync` is `proceed-to-f1`, `sync-path`, `retry`, or `hold`; `e11`
   is `skip-merge` or `merge-development-branch`; `f1` is `proceed-to-f2`,
-  `return-to-e-phase-branch-sync`, `retry`, or `hold`. Each call site reads
-  its own key, and the phase files do not restate the routing.
-- Routing table (the single statement of branch-state routing).
+  `return-to-e-phase-branch-sync`, `retry`, or `hold`. Other helper call sites
+  read their own key. E11 instead makes its documented live PR-base and Git checks:
+  this helper reflects the last pushed head, not unpushed fixes, so
+  `callSiteRouting.e11` remains compatibility output (#4759).
+- The routing table is authoritative for the other branch-state call sites;
+  E11's routing is defined in the review-fix phase file.
   `requiresUpToDateHead` is not emitted. The helper derives it from the base
   branch's policy, and a failed or unreadable read counts as `true`, which is
   fail closed.
@@ -9960,11 +9963,14 @@ a destructive re-run.
 
 `idd-review-triage.instructions.md`'s E-phase sync path and
 `idd-review-fix.instructions.md`'s E11 both merge `{development-branch}`
-into the feature branch:
+into the feature branch. E11 reads the PR base and current Git refs before
+each fix push, so a conflict-free sync rides with that push instead of
+creating a sync-only push; its helper field remains for compatibility
+because the helper sees the last pushed head (#4759).
 
 ```sh
 git fetch origin +refs/heads/{development-branch}:refs/remotes/origin/{development-branch} \
-  && git merge origin/{development-branch}
+  && git merge --no-ff origin/{development-branch}
 ```
 
 On a repo whose primary commit signing is non-interactive-hostile (GPG
@@ -9974,7 +9980,7 @@ arbitrary git subcommands, run the **merge** step — including a
 plain command (`git fetch` creates no commit and needs no signing):
 
 ```sh
-git -c gpg.format=ssh -c user.signingkey=<abs-path> -c commit.gpgsign=true merge -m "chore: merge origin/{development-branch} into the claimed branch" origin/{development-branch}
+git -c gpg.format=ssh -c user.signingkey=<abs-path> -c commit.gpgsign=true merge --no-ff -m "chore: merge origin/{development-branch} into the claimed branch" origin/{development-branch}
 # resolve conflicts if any, then:
 git -c gpg.format=ssh -c user.signingkey=<abs-path> -c commit.gpgsign=true merge --continue
 ```
