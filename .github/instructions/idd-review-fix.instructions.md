@@ -158,13 +158,11 @@ never applies while a High or Medium Accepted finding is open. If the count
 cannot be established, the cap is not reached.
 
 **Round-count heuristic for genuinely-new findings (Tier 1).** The no-progress
-guard covers repeats, not distinct, real findings. After roughly 3-4
-consecutive rounds find new issues in the same area, check for a shared root
-cause and whether one structural fix (such as auditing every helper caller
-against its contract) will converge faster than another incremental patch.
-Once the root cause is fixed and remaining comments are speculative or
-non-blocking hardening, treat them as PATH B (disposition-only, E4-E7), not
-another E9-E10 round.
+guard covers repeats, not distinct findings. After roughly 3-4
+consecutive rounds find new issues in one area, look for a shared root
+cause and whether one structural fix will converge faster. Once fixed, only
+speculation requiring no change or decision is PATH B; actionable findings
+stay PATH A under E4, even if non-blocking.
 
 **Second escalation tier (Tier 2; heuristic, not a hard rule): when the
 structural fix itself doesn't converge** (new same-area findings keep
