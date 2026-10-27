@@ -1607,9 +1607,10 @@ function f2ThreadComment(
 function f2Thread(
   comments: Array<Record<string, unknown>>,
   hasNextPage = false,
+  isResolved = false,
 ): unknown {
   return {
-    isResolved: false,
+    isResolved,
     comments: {
       pageInfo: { hasNextPage },
       nodes: comments,
@@ -3029,6 +3030,49 @@ test('differential: a backtick fence opener cannot carry backticks in its info s
     },
     1,
     0,
+  );
+});
+
+test('differential: HTML comment masking preserves pending-decision line boundaries in regular comments and threads (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  const replyBody =
+    '**Accepted** — fixed the list\n- example <!--\ncomment -->\n**Awaiting maintainer decision**';
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 8901,
+          login: 'coderabbitai[bot]',
+          body: 'please rename',
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 8902,
+          login: AGENT_LOGIN,
+          body: replyBody,
+          at: F2_CASE_TIME_2,
+        },
+      ],
+    },
+    1,
+    0,
+  );
+  assertF2Parity(
+    {
+      threads: [
+        f2Thread(
+          [
+            f2ThreadComment('human-reviewer', 'please rename', F2_CASE_TIME_1),
+            f2ThreadComment(AGENT_LOGIN, replyBody, F2_CASE_TIME_2),
+          ],
+          false,
+          true,
+        ),
+      ],
+    },
+    0,
+    1,
   );
 });
 
