@@ -4186,7 +4186,7 @@ Rules:
   helper reads `critiqueLoop.deferAllAfterRounds` and compares it with the
   Copilot review count it already reads for the relax step. At or above the
   cap it returns `verdict defer` with no `blocked` part for each scored
-  finding that no block reason holds, except the safety class, which keeps.
+  finding that no block reason holds, except the safety class, which keeps with `blocked safety-class`.
   An unset or invalid field means off. See the
   [Review-count cap paragraph](idd-review-policy-profiles.md#wave-gradient-urgency-defer).
 - **Override.** `--override` needs `record` or `enforce`, `deferByUrgency`

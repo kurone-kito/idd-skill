@@ -441,7 +441,7 @@ deferred: conditions (a) and (b) of the E5 Defer rule's adopt-now test
 still apply. At S3 and S4 the stop itself is the trigger, because the
 loop cannot land the fix. There the stop test below alone decides and the
 S1 and S2 carve-out in this paragraph does not apply, since Tier 3's
-open-ended gaps are the acceptance criterion itself and may be deferred. This rule governs the needs-decision route. At or above the review-count cap (`critiqueLoop.deferAllAfterRounds`), under `severity-tiered` without `--lite`, a finding of this kind that is not safety class does defer through the cap; see the [Review-count cap](#wave-gradient-urgency-defer) paragraph.
+open-ended gaps are the acceptance criterion itself and may be deferred. Below the review-count cap, the rule above holds as written. At or above the cap (`critiqueLoop.deferAllAfterRounds`), under `severity-tiered` without `--lite`, a non-safety finding of an unmet criterion or a regression defers through the cap, as the [Review-count cap](#wave-gradient-urgency-defer) paragraph states. The cap does not move a needs-decision item off this route, so the never-bundled rule above still applies to it.
 
 **Stop test.** Judge it assuming the finding is correct. Hold, as today
 (the existing hold comment and its resume condition, and the
@@ -634,7 +634,7 @@ required-reviewer item, an item in the maintainer-decision hold, and an
 Accepted item mid-fix. Validity and the E4 severity are still judged
 first, and a false claim is Rejected, not deferred.
 
-**Never deferred from step 1.** From step 1 on, a High-tier finding of
+**Never deferred from step 1, below the cap.** From step 1 on, a High-tier finding of
 `high` urgency never defers, and neither does a finding of the safety
 class. At or above the review-count cap, a High-tier finding of `high` urgency defers unless it is safety class or an exclusion in the Review-count cap paragraph holds. The ceilings already exclude the first at every step below the cap, and it is
 named here because below the cap the final step must never defer it. The safety class
