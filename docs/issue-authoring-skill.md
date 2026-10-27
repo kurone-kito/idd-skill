@@ -1075,8 +1075,12 @@ it already exists; this procedure never creates it.
 reparse point, whose canonical path lies outside every path that `git worktree
 list --porcelain` reports and outside every git directory. Confirm the last part
 by running `git -C <canonical root> rev-parse --git-dir` and requiring it to
-fail. The root must be owned by the current user, or be a sticky-bit shared
-temporary directory, and must be writable by the current user.
+fail. The root must be owned by the current user or, on POSIX, be a sticky-bit
+shared temporary directory, and must be writable by the current user. On
+POSIX, reject a root that grants group or other users write and search
+permission without the sticky bit, even when the current user owns it. On
+Windows, reject a root whose ACL lets another user rename or delete child
+entries. If this permission evidence is unreadable, stop.
 
 **Storage verdicts.** Classify each supplied root and namespace with exactly one
 verdict:
@@ -1092,46 +1096,98 @@ identity record to reuse. An older namespace is left untouched as evidence.
 
 **Step 1 — allocate a namespace.** Re-check the root before creating anything in
 it: its canonical path and identity must match the root checks, or the procedure
-stops. Create `issue-authoring-<uuid>` inside the root with a non-recursive
-`mkdir` that fails when the name already exists, never `mkdir -p`. Run it with
-the root as the working directory and a bare name, so no path through the root
-is resolved again. Create the namespace owner-only (POSIX `mkdir -m 700`, or a
-private ACL on Windows), then check its owner and mode again; a namespace that
-is not owner-only is unsafe and stops. Right after creation, check that its
-canonical path is the root path plus the bare name, that it lies outside every
-worktree and git directory, and that it is on the same device as the root. If
-any check fails, remove only that one empty directory this step created (a
-non-recursive `rmdir`, never a recursive removal), report both paths, and stop.
+stops. Open the root as a directory handle without following a symbolic link or
+reparse point, and confirm its identity and canonical path. Create
+`issue-authoring-<uuid>` relative to that handle with exclusive, non-recursive
+directory creation, never `mkdir -p`. Make the namespace owner-only as part of
+creation: use POSIX mode 700, or on Windows pass an explicit security descriptor
+through `OBJECT_ATTRIBUTES.SecurityDescriptor`, with a DACL granting access
+only to the current user and both `SE_DACL_PRESENT` and `SE_DACL_PROTECTED` set
+on that descriptor. If the platform cannot apply this restriction before the
+directory is visible, fail closed. Open it relative to the root handle
+without following links, then
+record its canonical path, file identity, type, link count, owner, and mode or
+ACL. Check that the mode or ACL is owner-only, its canonical path is the root
+path plus the bare name, it lies outside every worktree and git directory, and
+it is on the same device as the root. If any check fails, preserve the namespace
+and report its path and the exact failing evidence; mark this candidate failed.
+Do not remove it by path.
 Retry with a fresh UUID only when the name already exists, at most three times.
-Any other failure ends that candidate, and the next candidate is tried. When
-every candidate fails, stop and report each attempt's path and error. Record the
-namespace's canonical path and file identity. This narrows the race with a
-same-user process that replaces the root between the check and the creation; the
-post-creation check limits the damage to one empty directory, which is removed.
+Any other failure ends that attempt. If a root was supplied, stop and report
+its path and error; do not try another root. Only when no root was supplied may
+the next candidate be tried. When every candidate fails, stop and report each
+attempt's path and error. Keep the namespace handle open for the ledger
+operations below.
 
 **Step 2 — create the first ledger.** Each draft has its own ledger file,
-`<uuid>.json`, in the namespace. Create it with exclusive creation, containing
-`[]`, and record its canonical path, file identity, and SHA-256. If this step
-fails, the partial-state rule below applies.
+`<uuid>.json`, in the namespace. Create it through the verified namespace
+handle below, with exclusive creation and no-follow behavior, containing `[]`;
+record its canonical path, file identity, type, link count, and SHA-256. If the
+platform cannot bind creation to that handle, treat storage as unreadable. If
+this step fails, the partial-state rule below applies.
 
-**Ownership check before each write.** Before every ledger write, compare the
-namespace and the ledger with their records:
+**Ownership check before each ledger operation.** Before every ledger read,
+write, rename, or unlink, compare the namespace and ledger with their records:
 
 - The namespace's canonical path matches its record, no component of that path
   is a symbolic link or reparse point, and its file identity matches.
 - The ledger is a regular file, not a symbolic link or reparse point, with a
   link count of 1 and the recorded file identity.
 
+Path checks alone do not bind a later operation to the checked directory. Use
+native handle-relative operations with exclusive creation and no-follow checks
+for child reads, temporary-file creation, replacement, copy, and unlink; never
+reopen a child through the namespace path between validation and the operation.
+On POSIX, a standard-library Python implementation can use `os.open`,
+`os.mkdir`, `os.stat`, `os.rename`, and `os.unlink` with directory-descriptor
+parameters. Before allocation, confirm that every required function supports
+the relevant descriptor parameters and that `os.stat` supports
+`follow_symlinks=False`; open directories with `O_DIRECTORY | O_NOFOLLOW` and
+new files with `O_CREAT | O_EXCL | O_NOFOLLOW`. Python documents `dir_fd` as
+Unix-only in its [`os` reference](https://docs.python.org/3/library/os.html#os-supports-dir-fd).
+On Windows, use a native binding that opens or creates child names with
+`NtCreateFile`, setting `OBJECT_ATTRIBUTES.RootDirectory` to the verified
+directory handle and `OBJ_DONT_REPARSE` in its attributes. Use
+`CreateDisposition=FILE_CREATE` for exclusive child creation; create a
+directory with `FILE_DIRECTORY_FILE`. After the final identity and SHA-256
+checks, replace the owned ledger by calling `SetFileInformationByHandle` on the
+verified temporary-file handle with `FileRenameInfo`,
+`ReplaceIfExists=TRUE`, and `FILE_RENAME_INFO.RootDirectory` set to the
+namespace handle. Open that file handle with `DELETE` access. After verifying
+the copied issue-number file, mark the verified source handle for deletion with
+`SetFileInformationByHandle` and `FileDispositionInfo` (`DeleteFile=TRUE`); it
+also requires `DELETE` access. If access or an operation fails, preserve the
+files and stop. See Microsoft's [`OBJECT_ATTRIBUTES`](https://learn.microsoft.com/en-us/windows/win32/api/ntdef/ns-ntdef-_object_attributes),
+[`FILE_RENAME_INFO`](https://learn.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-file_rename_info),
+[`NtCreateFile`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-ntcreatefile),
+[`Security Descriptors for New Objects`](https://learn.microsoft.com/en-us/windows/win32/secauthz/security-descriptors-for-new-objects),
+and [`SetFileInformationByHandle`](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-setfileinformationbyhandle)
+references. Keep the directory handle open through each operation, then verify
+that its path still resolves to the same canonical location outside every
+worktree and git directory. If any value changes, preserve the ledger and all
+copies, stop, and report. If the host cannot bind an operation to the verified
+handle or supply the required evidence, treat the storage as unreadable and
+stop.
+
 The cases below are preventive; no observed incident yet records any of them, so
-none is cited. Each mismatch falls under one of the cases below. The procedure
-never deletes anything, never recurses into a directory, and never adopts an
-entry this session did not create.
+none is cited. Each mismatch falls under one of the cases below. On a mismatch,
+preserve the ledger and any unverified temporary entry; never recurse into a
+directory or adopt an entry this session did not create. Cleanup may remove only
+an entry created by this session whose recorded identity still matches, under
+the specific rules below. If cleanup cannot be verified, leave the entry and
+report it.
 
 - **Owned and unchanged.** The file identity and SHA-256 both match. Continue:
-  write the complete new JSON to a new exclusively created temporary file in the
-  namespace, check the ledger record again, replace the ledger by renaming the
-  temporary file over it, and record the new identity and SHA-256. Remove the
-  temporary file only if this write created it and the rename failed.
+  write the complete new JSON to a new exclusively created, owner-only
+  temporary file in the namespace, then record its canonical path, identity,
+  type, link count, and SHA-256. Immediately before replacement, repeat the
+  ownership check and verify that the existing ledger's identity and SHA-256
+  still match the records, and that the temporary file still matches its
+  records. On any mismatch, preserve both files and stop without replacement.
+  Replace the ledger
+  by renaming the verified temporary file over it, then record the new identity
+  and SHA-256. Remove the temporary file only when this write created it, its
+  recorded identity still matches, and the rename failed.
 - **Owned but edited.** The file identity matches but the SHA-256 differs. Do
   not overwrite it. Preserve it, treat the review as one that cannot finish, and
   report its canonical path.
@@ -1160,10 +1216,15 @@ and error. The review counts as one that cannot finish.
 
 **Rename to the issue number.** Once the draft has its issue number, copy the
 verified ledger to `<number>.json` with exclusive creation, write the same
-content, and check that the copy's SHA-256 matches. Only then remove the
-`<uuid>.json` file. If `<number>.json` already exists, keep the `<uuid>.json`
-file, never overwrite or adopt the existing file, and stop before publication to
-report the conflict.
+content, and record the copy's canonical path, identity, type, link count, and
+SHA-256. If `<number>.json` already exists, keep the `<uuid>.json` file, never
+overwrite or adopt the existing file, and stop before publication to report the
+conflict. Immediately before unlinking the source, verify that the namespace
+identity still matches, the source identity and SHA-256 still match their
+records, and the destination is a regular file with link count 1, the recorded
+identity and SHA-256, and the canonical path `<namespace>/<number>.json`. If
+any check fails, preserve both files and stop. Unlink the source only after all
+checks pass; if the unlink fails, preserve both files and report the error.
 
 **A review that cannot finish.** A storage stop, an unowned or conflicting
 ledger, a failed first ledger, or a copy that does not match its source means
@@ -1172,8 +1233,10 @@ drafts go into a draft carrier marked `Review: not reviewed` (see
 [Draft carrier](#draft-carrier)), and the final message reports the namespace
 path, the exact failing evidence, and the drafts' local paths.
 
-**Scope.** The procedure adds no mandatory durable session registry, no
-automatic deletion, and no operator recovery gate for a lost ledger.
+**Scope.** The procedure never automatically deletes an older or abandoned
+namespace. It adds no mandatory durable session registry or operator recovery
+gate for a lost ledger. It may remove only a newly created entry whose recorded
+identity still matches, as stated above.
 
 Structural checks and a live run differ: the repository tests in
 `tests/consistency.test.mts` confirm that these rules stay written in the

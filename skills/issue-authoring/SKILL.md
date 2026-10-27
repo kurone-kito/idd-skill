@@ -407,18 +407,20 @@ needs-decision, blocked-by-human, and out-of-scope.
 
 Before the first ledger write, read
 [Ledger storage](references/contract.md#ledger-storage) and follow it. In brief:
-use a supplied scratch root that passes its checks, or otherwise create a new
-`issue-authoring-<uuid>` directory with exclusive creation (a non-recursive
+use a supplied scratch root only if it passes its checks; if a supplied root
+fails, stop without trying another root. When no root is supplied, allocate a
+new `issue-authoring-<uuid>` directory with exclusive creation (a non-recursive
 `mkdir`, never `mkdir -p`) in the OS temporary directory, or in the user state
 directory if it already exists, outside every worktree and git directory. Keep
 one `<uuid>.json` ledger per draft, created with exclusive creation, and rename
 it to the issue number without overwriting another file. Never share a ledger,
 never write one to the repository or a marker, and never reuse another session's
 namespace. A lost ledger starts empty. Unsafe, conflicting, or unreadable
-storage stops the review: report the path, delete nothing, and send the drafts
-to a carrier marked `Review: not reviewed`. Instructions-only and same-response
-self-critique runs follow the same procedure; no orchestrator, environment
-variable, or helper is needed.
+storage stops the review: report the path and preserve unverified entries; the
+contract permits cleanup only for entries this session created whose identity
+still matches. Send the drafts to a carrier marked `Review: not reviewed`.
+Instructions-only and same-response self-critique runs follow the same
+procedure; no orchestrator, environment variable, or helper is needed.
 
 ## Reference Routing
 
