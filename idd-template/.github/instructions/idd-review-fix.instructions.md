@@ -234,7 +234,7 @@ without merging or pushing.
   linked process-tree procedure before aborting; if its tree is live or
   unconfirmed, hold without aborting or pushing.
 
-On E11 failure or hold, follow shared Hold / suspend rules; do not push.
+On failure or hold, follow shared Hold / suspend rules; do not push.
 Otherwise, continue to E12.
 
 ## E12 — Lint, test, push
@@ -265,8 +265,8 @@ For a per-file cap, apply step 1. If the file is still above its cap
 (`phaseLimitBytes`, or `alwaysLoadedLimitBytes` for an always-loaded
 file), stop and ask once. Never raise a per-file cap.
 
-Then push normally. Files changed only by E11's merge do not widen E12's
-fold-in scope.
+Then push the feature branch normally. Files touched only in E11 don't
+widen E12's fold-in scope.
 
 **Bounded cross-round batching allowance.** A small number of review
 comments can arrive before this push that fall outside this round's
