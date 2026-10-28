@@ -35,6 +35,26 @@ It is a source bundle, not the execution loop itself: the bundle lives
 in `skills/issue-authoring/` here, while installed copies belong in the
 skill directory for the runtime that will load them.
 
+## Questions for operators
+
+When an issue-authoring interview already needs a decision, assume the
+operator is skilled in manual issue-driven development and GitHub Flow,
+but unfamiliar with idd-skill-specific automation. Treat issue triage and
+planning, branches, commits, pull requests, CI, reviews, and merges as
+known. Explain the relevant idd-skill convention (for example, that
+`## Candidate files` lists expected edit paths, and an unlisted path may
+trigger the effort limit), say how the answer
+changes the task, and request the exact action. When alternatives matter,
+list each meaningful option with its main cost and recommend one. A current
+explicit operator
+instruction may specialize this presentation; otherwise use explicit
+repository-local audience guidance, then this baseline. Repeated use alone
+does not establish expertise or a standing preference (observed 2026-10-26
+in issue `#4743`). Keep each question
+self-contained and concise, without repeating context already present in
+the same ask. This changes question wording only, not when
+the workflow asks, who may approve, required evidence, or policy fields.
+
 ## Trigger policy
 
 Invoke the skill when one or more of the following are true:
@@ -1349,10 +1369,14 @@ verified, and append `cleanup` before any safe-close mutation. Append
 `abandoned` only after closed/label-absent verification. On resume, paginate
 the hold log and select the latest valid record for the exact token tuple;
 missing, conflicting, or out-of-order records fail closed, while `pending`
-and `cleanup` remain recovery holds.
+and `cleanup` remain recovery holds. When the originating hold is in a retired
+journal (listed in `issueAuthoring.retiredJournalIssues`), paginate
+`journalIssue` and every listed retired journal, and merge the records in time
+order before selecting.
 
 `journal` is the durable record location. For an existing set, use the
-verified originating Stage 1 hold; for a standalone set with no existing issue
+verified originating Stage 1 hold, or `issueAuthoring.journalIssue` when that
+hold is in a retired journal; for a standalone set with no existing issue
 or anchor, use the repository-level authoring journal target configured at
 `issueAuthoring.journalIssue` in `.github/idd/config.json` (an
 `owner/repo#number` reference to a pre-existing, durable, comment-only issue)
@@ -1399,10 +1423,11 @@ report the recovery hold.
 
 An atomically labeled publication is not set membership until its owner marker
 is verified. Persist each returned target identity in the durable journal before
-appending the marker. On resume, reconcile recorded
-identities and only issues carrying this set's exact publication token; an
-incomplete scan or unmarked match is a recovery hold, so never infer membership
-or completion from the shared label alone.
+appending the marker; when the set's originating hold is in a retired journal,
+persist it in `issueAuthoring.journalIssue` instead. On resume, reconcile
+recorded identities and only issues carrying this set's exact publication
+token; an incomplete scan or unmarked match is a recovery hold, so never infer
+membership or completion from the shared label alone.
 
 ### Per-target ownership and conflict handling
 
@@ -1800,10 +1825,12 @@ cover that path; follow the contract for it.
 1. **Preflight, every target.** Run the contract's sweep against the target
    and the journal first (attempted, not blocking, so the command ends in
    `|| true`). Use `owner/repo#number` for a journal in another repository.
+   Add one `--issue` for each listed retired journal.
 
    ```sh
    node scripts/sweep-authoring-markers.mjs --issue <target-issue-number> \
      --issue <journal-issue-number> \
+     --issue <retired-journal-owner/repo#number> \
      --marker-prefix <resolved-target-prefix> \
      --trusted-marker-logins <trusted-login-1,...> \
      --deadline-ms 300000 --apply || true
@@ -1884,10 +1911,13 @@ cover that path; follow the contract for it.
    ```sh
    node scripts/sweep-authoring-markers.mjs --issue <anchor-issue-number> \
      --issue <journal-issue-number> \
+     --issue <retired-journal-owner/repo#number> \
      --marker-prefix <resolved-target-prefix> \
      --trusted-marker-logins <trusted-login-1,...> \
      --deadline-ms 300000 --apply || true
    ```
+
+   Add one `--issue` for each listed retired journal.
 
    Then compute `<snapshot-sha256>` with the set-snapshot algorithm in the
    same contract section, and post the completion marker.
@@ -1916,12 +1946,14 @@ this same point -- before the reuse-or-append decision below, so a
 retried or resumed release (which reuses an existing `release` marker
 and never appends a new one) still runs the sweep every time this
 preflight step is reached -- run the single fetch-driven sweep command
-against the target issue and the journal issue named in this session's
-own records:
+against the target issue and every journal named in this session's own
+records (`issueAuthoring.journalIssue`, and each retired journal listed in
+`issueAuthoring.retiredJournalIssues`):
 
 ```sh
 node scripts/sweep-authoring-markers.mjs --issue <target-issue-number> \
   --issue <journal-issue-number> \
+  --issue <retired-journal-owner/repo#number> \
   --marker-prefix <resolved-target-prefix> \
   --trusted-marker-logins <trusted-login-1,...> \
   --deadline-ms 300000 --apply || true
@@ -2066,7 +2098,8 @@ release-complete reuse-or-append decision below, repeat the same
 mandatory sweep once more -- the same `sweep-authoring-markers.mjs`
 command above, now scoped to `--issue <anchor-issue-number> --issue
 <journal-issue-number>` -- covering the anchor's own owner-marker log
-and the journal's publication-intent log -- idempotent with every
+and each journal's publication-intent log (plus one `--issue` for each listed
+retired journal) -- idempotent with every
 earlier target's own sweep above, since a comment either was already
 minimized or was not yet the newest for its own continuity-chain
 identity within the family either way. Then
@@ -2120,13 +2153,15 @@ Once the set-level release actually closes (the successful-close branch
 above: the trusted `release-complete` marker is found and every label is
 confirmed absent), attempt the mandatory sweep one more time (#2935), in
 a single invocation covering every target's now-final owner-marker log
-(the anchor's included this time, not just its own) and the journal's
-publication-intent log:
+(the anchor's included this time, not just its own) and each journal's
+publication-intent log -- one `--issue` for `issueAuthoring.journalIssue` and
+one more for each listed retired journal:
 
 ```sh
 node scripts/sweep-authoring-markers.mjs --issue <target-1> \
   --issue <target-2> ... --issue <anchor-issue-number> \
   --issue <journal-issue-number-or-owner/repo#number> \
+  --issue <retired-journal-owner/repo#number> \
   --marker-prefix <resolved-target-prefix> \
   --trusted-marker-logins <trusted-login-1,...> \
   --deadline-ms 300000 --apply || true
@@ -2146,6 +2181,16 @@ set to the same trusted actors the sweep itself used, so the check's own
 eligibility rule matches what the sweep could actually clear; omitting
 it makes the count overstate the real backlog by including
 untrusted-authored matches the sweep was never going to touch.
+
+Immediately after every sweep attempt above (each target's preflight, the
+anchor before release-complete, and the closing sweep), also run that check for
+each listed retired journal, with `--trusted-marker-logins` set as above and
+`--journal-comments-file` holding only that journal's comments, with the sweep's
+post-mutation result applied to that snapshot as described below. Report each
+journal's count separately; a retired journal's count is never added to the
+current journal's. The helper's carrier release runs only the carrier and
+`journalIssue`, so a carrier whose hold is in a retired journal needs these runs
+by hand (see the journal-rotation bullet in the contract).
 
 **Normalize the author field before writing the comments-file JSON**
 (#2896 review, Codex): the paginated GitHub REST/GraphQL response this

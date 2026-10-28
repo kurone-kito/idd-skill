@@ -468,6 +468,9 @@
         "deferRelaxAtRounds": {
           "$ref": "policy.schema.json#/properties/critiqueLoop/properties/deferRelaxAtRounds"
         },
+        "deferAllAfterRounds": {
+          "$ref": "policy.schema.json#/properties/critiqueLoop/properties/deferAllAfterRounds"
+        },
         "deferNeedsDecision": {
           "$ref": "policy.schema.json#/properties/critiqueLoop/properties/deferNeedsDecision"
         },
@@ -524,6 +527,9 @@
         },
         "journalIssue": {
           "$ref": "policy.schema.json#/properties/issueAuthoring/properties/journalIssue"
+        },
+        "retiredJournalIssues": {
+          "$ref": "policy.schema.json#/properties/issueAuthoring/properties/retiredJournalIssues"
         },
         "adversarialReview": {
           "type": "object",

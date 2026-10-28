@@ -1370,11 +1370,17 @@ export function collectHelperRuntimeEvidence(
   const lockfileMatches = [
     { filename: 'pnpm-lock.yaml', manager: 'pnpm' },
     { filename: 'package-lock.json', manager: 'npm' },
+    { filename: 'npm-shrinkwrap.json', manager: 'npm' },
     { filename: 'yarn.lock', manager: 'yarn' },
   ].filter(({ filename }) => existsSync(resolve(root, filename)));
+  // Count distinct managers, not matching files: package-lock.json and
+  // npm-shrinkwrap.json together are one npm signal (issue #4720).
+  const lockfileManagers = new Set(
+    lockfileMatches.map(({ manager }) => manager),
+  );
   const detectedPackageManager =
     declaredPackageManager ||
-    (lockfileMatches.length === 1 ? lockfileMatches[0].manager : '');
+    (lockfileManagers.size === 1 ? lockfileMatches[0].manager : '');
 
   return {
     hasPackageJson,
@@ -1384,7 +1390,7 @@ export function collectHelperRuntimeEvidence(
     packageJsonOnly:
       hasPackageJson && !declaredPackageManager && lockfileMatches.length === 0,
     ambiguousPackageManager:
-      !declaredPackageManager && lockfileMatches.length > 1,
+      !declaredPackageManager && lockfileManagers.size > 1,
   };
 }
 
@@ -1398,7 +1404,7 @@ export function recommendHelperRuntimeProfile(
       packageManager: evidence.detectedPackageManager,
       reason: evidence.declaredPackageManager
         ? 'Detected supported packageManager metadata.'
-        : 'Detected exactly one supported package-manager lockfile.',
+        : 'Detected exactly one supported package manager from lockfile evidence.',
       evidence,
     };
   }

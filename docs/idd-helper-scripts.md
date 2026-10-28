@@ -1435,8 +1435,18 @@ in this preamble, since the fallback differs per helper.
   be a JSON object whose `completed` is a boolean and whose `findings`, if
   present, is an array of objects. The helper stops with the `blocked-by-human`
   outcome (exit `2`) when `issueAuthoring.journalIssue` is unset or
-  unverifiable. It then puts the `authoring-publication` line first in the
-  body, lints that exact body with `audit-authored-issue.mjs --new-issue`
+  unverifiable. `issueAuthoring.retiredJournalIssues`, when set, is checked
+  for every shape: it must be a non-empty array of `owner/repo#N` entries,
+  with no entry repeated and none equal to `issueAuthoring.journalIssue`, and
+  a malformed value stops the helper with `blocked-by-human` (exit `2`). For
+  `--shape child` only, the anchor check also reads each listed retired journal
+  and no other issue, merging those records with the current journal in time
+  order; a retired journal that cannot be read refuses the child (exit `1`).
+  Every write still goes to `issueAuthoring.journalIssue`. At step 2 the
+  helper checks only the format of each retired-journal entry, not that the
+  journal exists or is closed. It then puts the `authoring-publication` line
+  first in the body, lints that exact body with
+  `audit-authored-issue.mjs --new-issue`
   and looks up the labels it applies. Without `--apply` it renders the
   pending publication-intent record through `post-idd-marker.mjs`'s dry
   run and prints the plan (exit `0`), with no trust or permission
@@ -1455,8 +1465,11 @@ in this preamble, since the fallback differs per helper.
   status 401, 404 or 422; any other failure reports the journal as
   `uncertain: replay the journal` (an owner marker reports
   `"ownerMarker": "uncertain"`), and an uncertain pending record stops
-  before the create. Every policy value comes from the repository policy
-  file only, and `--marker-prefix` is required when the issue or the
+  before the create. Before the create, an uncertain pending-record post also
+  reports `retry: "replay the journal first"`, and `retry: "permitted"` appears
+  only with `"nothingSent": true`; after the create the report has no `retry`
+  field. Every policy value comes from the repository
+  policy file only, and `--marker-prefix` is required when the issue or the
   journal is in another repository.
 
   For `--shape carrier`, after `state=member` the helper runs the carrier
@@ -4153,7 +4166,8 @@ Flags, one line each:
 - `--adopt-now`: adopt-now condition (d) of the E5 Defer rule holds: another
   item in the same E5 pass is already Accepted, so a push is certain, and this
   fix stays within that push's files. It turns a `defer` verdict into `keep`
-  with `blocked adopt-now`. See the rules below.
+  with `blocked adopt-now` below the review-count cap. At or above the
+  cap it changes nothing. See the rules below.
 - `--override <reason>`: posts an Accepted reply that the defer matrix
   refuses, and records the reason as the line's last part, after
   `override:`. See the rules below.
@@ -4181,7 +4195,17 @@ Rules:
   matrix decides first, and the flag changes only a `defer` verdict: a `keep`
   from the matrix or from a blocking flag such as `--scope-fence` keeps its
   own `blocked` reason. An Accepted reply with the flag needs no `--override`,
-  since its verdict is `keep`.
+  since its verdict is `keep` below the review-count cap. At or above the
+  cap, the flag changes nothing, so an Accepted reply whose verdict is
+  `defer` still needs `--override` under `enforce`.
+- **Review-count cap.** Under `severity-tiered` without `--lite`, the
+  helper reads `critiqueLoop.deferAllAfterRounds` and compares it with the
+  Copilot review count it already reads for the relax step. At or above the
+  cap it returns `verdict defer` with no `blocked` part for each scored
+  finding that no block reason holds, except the safety class, which
+  keeps with `blocked safety-class`.
+  An unset or invalid field means off. See the
+  [Review-count cap paragraph](idd-review-policy-profiles.md#wave-gradient-urgency-defer).
 - **Override.** `--override` needs `record` or `enforce`, `deferByUrgency`
   `severity-tiered`, the pair, an `**Accepted**` body, and a `defer` verdict.
   A `keep` verdict is refused with a usage error. The reason must be one

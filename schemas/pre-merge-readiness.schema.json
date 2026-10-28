@@ -1967,6 +1967,31 @@
         }
       }
     },
+    "staleRequestRecovery": {
+      "type": "object",
+      "description": "#4717: the recovery object of a claim-bound run, produced by the stale-request classifier (its full definition is in advisory-wait-state.schema.json). It is present on every claim-bound report. An off-head claim-bound report is gated on it through the stale-request-recovery blocker: attempt blocks for the bounded AW3-S recovery through F2, cap-exhausted keeps the cap hold, and not-applicable keeps ordinary F3 handling. It is absent for claimless and claim-id-only runs.",
+      "required": [
+        "action",
+        "reason"
+      ],
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "attempt",
+            "cap-exhausted",
+            "not-applicable"
+          ],
+          "description": "'attempt': an unproven request for this HEAD (pending, or non-pending with the re-check budget spent) and recovery-cycle budget remains -- run AW3-S. 'cap-exhausted': same unproven condition, but the independent #1572 recovery-cycle cap is exhausted for this HEAD -- do not mutate; fall back to CAP_EXHAUSTED_ROUTE. 'not-applicable': no stale-request recovery decision applies."
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Machine-readable reason: active-claim-not-provided, not-pending, same-head-marker-present, recovery-marker-only-no-request-marker (#2327), proven-covers-head, recovery-cap-exhausted, recovery-attempt-eligible, recheck-budget-unspent (#2327), non-pending-recovery-attempt-eligible (#2327), or copilot-declined-no-reviewable-files (#4142, a declined head, which never yields an attempt)."
+        }
+      },
+      "additionalProperties": false
+    },
     "ready": {
       "description": "Strict merge-gate rollup: true only when blockers is empty. Does NOT apply the dispositionEvidence.soleCauseAckOnlyPostDisposition override (a separate flag the F2 checklist layers on top).",
       "type": "boolean"

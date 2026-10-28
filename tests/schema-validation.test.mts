@@ -3965,6 +3965,51 @@ test('policy schema rejects issueAuthoring journalIssue with a leading-zero issu
   );
 });
 
+test('policy schema accepts issueAuthoring retiredJournalIssues', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  instance.issueAuthoring = {
+    journalIssue: 'kurone-kito/idd-skill#4748',
+    retiredJournalIssues: ['kurone-kito/idd-skill#2674'],
+  };
+  const errors = validate(instance, schema);
+  assert.deepEqual(errors, []);
+});
+
+test('policy schema rejects a malformed or empty issueAuthoring retiredJournalIssues', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  for (const retiredJournalIssues of [['not-a-valid-ref'], []]) {
+    const instance = JSON.parse(
+      JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+    );
+    instance.issueAuthoring = { retiredJournalIssues };
+    const errors = validate(instance, schema);
+    assert.ok(
+      errors.some((e) => e.includes('issueAuthoring.retiredJournalIssues')),
+      `${JSON.stringify(retiredJournalIssues)}: ${errors.join('\n')}`,
+    );
+  }
+});
+
+test('policy schema retiredJournalIssues items use the journalIssue pattern', () => {
+  const schema = loadJson('schemas/policy.schema.json') as {
+    properties: {
+      issueAuthoring: {
+        properties: Record<string, { pattern?: string; items?: unknown }>;
+      };
+    };
+  };
+  const properties = schema.properties.issueAuthoring.properties;
+  const journalPattern = properties.journalIssue?.pattern;
+  assert.ok(journalPattern);
+  assert.equal(
+    (properties.retiredJournalIssues?.items as { pattern?: string })?.pattern,
+    journalPattern,
+  );
+});
+
 test('policy schema accepts issueAuthoring.adversarialReview delegate and wait ceiling (#3599)', () => {
   const schema = loadJson('schemas/policy.schema.json');
   const instance = JSON.parse(
@@ -4780,4 +4825,97 @@ test('discover-roadmap-union schema rejects malformed localWorktree objects', ()
       `localWorktree ${JSON.stringify(localWorktree)} should be rejected`,
     );
   }
+});
+
+test('policy schema accepts critiqueLoop.deferAllAfterRounds integers of at least 1 (#4750)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  for (const deferAllAfterRounds of [1, 3]) {
+    const instance = JSON.parse(
+      JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+    );
+    instance.critiqueLoop = { ...instance.critiqueLoop, deferAllAfterRounds };
+    assert.deepEqual(
+      validate(instance, schema),
+      [],
+      `expected deferAllAfterRounds ${deferAllAfterRounds} to validate`,
+    );
+  }
+});
+
+test('policy schema rejects an invalid critiqueLoop.deferAllAfterRounds value (#4750)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  for (const deferAllAfterRounds of [0, 1.5, '3', null]) {
+    const instance = JSON.parse(
+      JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+    );
+    instance.critiqueLoop = { ...instance.critiqueLoop, deferAllAfterRounds };
+    const errors = validate(instance, schema);
+    assert.ok(
+      errors.some((error) =>
+        error.includes('$.critiqueLoop.deferAllAfterRounds'),
+      ),
+      `expected deferAllAfterRounds ${JSON.stringify(deferAllAfterRounds)} to be rejected: ${errors.join('\n')}`,
+    );
+  }
+});
+
+test('policy schema defines critiqueLoop.deferAllAfterRounds as an integer with minimum 1 and its unset default in words (#4750)', () => {
+  const schema = loadJson('schemas/policy.schema.json') as {
+    properties: {
+      critiqueLoop: {
+        properties: {
+          deferAllAfterRounds: {
+            type?: string;
+            minimum?: number;
+            default?: unknown;
+            description: string;
+          };
+          deferByUrgency: { description: string };
+          deferRelaxAtRounds: { description: string };
+        };
+      };
+    };
+  };
+  const { properties } = schema.properties.critiqueLoop;
+  const property = properties.deferAllAfterRounds;
+  assert.equal(property.type, 'integer');
+  assert.equal(property.minimum, 1);
+  assert.equal('default' in property, false);
+  const description = property.description.replace(/\s+/g, ' ');
+  for (const phrase of [
+    'unset',
+    'at or above',
+    'severity-tiered',
+    '--lite',
+    'safety-class',
+  ]) {
+    assert.ok(
+      description.includes(phrase),
+      `expected the deferAllAfterRounds description to mention ${phrase}`,
+    );
+  }
+  // The two sibling descriptions say the cap takes precedence at or above it.
+  const flat = (text: string) => text.replace(/\s+/g, ' ');
+  assert.match(
+    flat(properties.deferByUrgency.description),
+    /at or above `deferAllAfterRounds`, the cap takes precedence/u,
+  );
+  assert.match(
+    flat(properties.deferRelaxAtRounds.description),
+    /cap takes precedence over this gradient at or above `deferAllAfterRounds`/u,
+  );
+});
+
+test('user-global partial critiqueLoop refers to deferAllAfterRounds from the policy schema (#4750)', () => {
+  const userGlobal = loadJson('schemas/user-global-config.schema.json') as {
+    $defs: {
+      partialCritiqueLoop: {
+        properties: Record<string, { $ref?: string }>;
+      };
+    };
+  };
+  assert.equal(
+    userGlobal.$defs.partialCritiqueLoop.properties.deferAllAfterRounds?.$ref,
+    'policy.schema.json#/properties/critiqueLoop/properties/deferAllAfterRounds',
+  );
 });

@@ -160,6 +160,7 @@ if (args.includes('graphql')) {
   }
   const numberArg = args.find((arg) => arg.startsWith('number='));
   const number = Number(numberArg.slice('number='.length));
+  if (state.readsFailFor === number) fail('gh: HTTP 502 Bad Gateway (read ' + number + ')');
   const queryArg = args.find((arg) => arg.startsWith('query=')) || '';
   const page = (key, nodes) => out({ data: { repository: { issue: { [key]: { nodes, pageInfo: { hasNextPage: false, endCursor: null } } } } } });
   if (queryArg.includes('closedByPullRequestsReferences')) {
@@ -405,6 +406,7 @@ function setup(
     dropAuthoringOnlyOnRemove?: boolean;
     failReadsAfterRemove?: boolean;
     mutateBodyOnSweep?: string;
+    retiredJournalIssues?: unknown;
   } = {},
 ): Fixture {
   const dir = mkdtempSync(join(tmpdir(), 'idd-publish-authoring-hold-test-'));
@@ -422,6 +424,12 @@ function setup(
   }
   if (options.journal !== null) {
     config.issueAuthoring = { journalIssue: options.journal ?? 'o/r#2674' };
+  }
+  if (options.retiredJournalIssues !== undefined) {
+    config.issueAuthoring = {
+      ...((config.issueAuthoring as object | undefined) ?? {}),
+      retiredJournalIssues: options.retiredJournalIssues,
+    };
   }
   if (options.authoringOnlyLabelName !== undefined) {
     config.labels = { authoringOnlyLabelName: options.authoringOnlyLabelName };
@@ -2578,6 +2586,8 @@ function seedAnchor(
     createdAt?: string;
     /** The anchor's records in the journal; by default one member record. */
     journalRecords?: string[];
+    /** The journal issue number of each of `journalRecords`; default 2674. */
+    recordJournals?: number[];
     /** The anchor's body; by default its publication line and roadmap shell. */
     body?: string;
   } = {},
@@ -2593,7 +2603,7 @@ function seedAnchor(
     for (const [index, text] of hold.entries()) {
       stored.comments.push({
         id: 4090 + index,
-        issue: 2674,
+        issue: options.recordJournals?.[index] ?? 2674,
         body: text,
         user: 'kurone-kito',
         createdAt: new Date(Date.UTC(2026, 9, 12, 0, 0, index)).toISOString(),
@@ -3203,9 +3213,12 @@ function intentComment(
   };
 }
 
-function holdReplay(comments: AuthoringOwnerProvenanceComment[]) {
+/** Replay the anchor's token over several journals, the configured one first. */
+function replayAcross(
+  journals: { ref: string; comments: AuthoringOwnerProvenanceComment[] }[],
+) {
   return replayAnchorHold({
-    comments,
+    journals,
     publication: {
       target: 'target-anchor',
       anchor: 'target-anchor',
@@ -3214,11 +3227,397 @@ function holdReplay(comments: AuthoringOwnerProvenanceComment[]) {
       token: 'token-anchor',
     },
     anchorRef: ANCHOR_REF,
-    journalRef: 'o/r#2674',
     markerPrefix: 'idd-skill',
     trusted: ['kurone-kito'],
   });
 }
+
+function holdReplay(comments: AuthoringOwnerProvenanceComment[]) {
+  return replayAcross([{ ref: 'o/r#2674', comments }]);
+}
+
+const CONFIGURED_JOURNAL = 'o/r#2674';
+const RETIRED_JOURNAL = 'o/r#4748';
+
+test('hold replay: a hold that lives only in a retired journal, or is split across journals, verifies', () => {
+  const retiredOnly = [
+    intentComment(1, 'pending', { issue: 'none', journal: RETIRED_JOURNAL }),
+    intentComment(2, 'pending', { journal: RETIRED_JOURNAL }),
+    intentComment(3, 'member', { journal: RETIRED_JOURNAL }),
+  ];
+  assert.equal(
+    replayAcross([
+      { ref: CONFIGURED_JOURNAL, comments: [] },
+      { ref: RETIRED_JOURNAL, comments: retiredOnly },
+    ]),
+    null,
+  );
+  // pending in the retired journal, member in the configured one
+  assert.equal(
+    replayAcross([
+      {
+        ref: CONFIGURED_JOURNAL,
+        comments: [intentComment(3, 'member')],
+      },
+      {
+        ref: RETIRED_JOURNAL,
+        comments: [
+          intentComment(1, 'pending', {
+            issue: 'none',
+            journal: RETIRED_JOURNAL,
+          }),
+          intentComment(2, 'pending', { journal: RETIRED_JOURNAL }),
+        ],
+      },
+    ]),
+    null,
+  );
+  // the records may sit in two retired journals, merged in time order
+  assert.equal(
+    replayAcross([
+      {
+        ref: 'o/r#4800',
+        comments: [intentComment(2, 'pending', { journal: 'o/r#4800' })],
+      },
+      {
+        ref: RETIRED_JOURNAL,
+        comments: [
+          intentComment(1, 'pending', {
+            issue: 'none',
+            journal: RETIRED_JOURNAL,
+          }),
+        ],
+      },
+      {
+        ref: CONFIGURED_JOURNAL,
+        comments: [intentComment(3, 'member')],
+      },
+    ]),
+    null,
+  );
+});
+
+test('hold replay: a record that names another journal, or a second pending record across journals, fails closed', () => {
+  // the configured journal holds a record that names the retired journal
+  assert.match(
+    replayAcross([
+      {
+        ref: CONFIGURED_JOURNAL,
+        comments: [intentComment(3, 'member', { journal: RETIRED_JOURNAL })],
+      },
+      {
+        ref: RETIRED_JOURNAL,
+        comments: [
+          intentComment(1, 'pending', {
+            issue: 'none',
+            journal: RETIRED_JOURNAL,
+          }),
+          intentComment(2, 'pending', { journal: RETIRED_JOURNAL }),
+        ],
+      },
+    ]) ?? '',
+    /names journal o\/r#4748, but it was read from o\/r#2674/,
+  );
+  // a retired-journal record that names the configured journal conflicts too
+  assert.match(
+    replayAcross([
+      {
+        ref: CONFIGURED_JOURNAL,
+        comments: [intentComment(1, 'pending', { issue: 'none' })],
+      },
+      {
+        ref: RETIRED_JOURNAL,
+        comments: [
+          intentComment(2, 'pending', { journal: CONFIGURED_JOURNAL }),
+        ],
+      },
+    ]) ?? '',
+    /names journal o\/r#2674, but it was read from o\/r#4748/,
+  );
+  // the first pending record of the publication is in both journals
+  assert.match(
+    replayAcross([
+      {
+        ref: CONFIGURED_JOURNAL,
+        comments: [intentComment(1, 'pending', { issue: 'none' })],
+      },
+      {
+        ref: RETIRED_JOURNAL,
+        comments: [
+          intentComment(2, 'pending', {
+            issue: 'none',
+            journal: RETIRED_JOURNAL,
+          }),
+          intentComment(3, 'pending', { journal: RETIRED_JOURNAL }),
+          intentComment(4, 'member', { journal: RETIRED_JOURNAL }),
+        ],
+      },
+    ]) ?? '',
+    /repeats a pending record/,
+  );
+  // a retired chain that ends at pending, or at cleanup
+  const retiredChain = [
+    intentComment(1, 'pending', { issue: 'none', journal: RETIRED_JOURNAL }),
+    intentComment(2, 'pending', { journal: RETIRED_JOURNAL }),
+  ];
+  assert.match(
+    replayAcross([{ ref: RETIRED_JOURNAL, comments: retiredChain }]) ?? '',
+    /is pending, not member/,
+  );
+  assert.match(
+    replayAcross([
+      {
+        ref: RETIRED_JOURNAL,
+        comments: [
+          ...retiredChain,
+          intentComment(3, 'member', { journal: RETIRED_JOURNAL }),
+          intentComment(4, 'cleanup', { journal: RETIRED_JOURNAL }),
+        ],
+      },
+    ]) ?? '',
+    /is cleanup, not member/,
+  );
+  // a retired record by an untrusted author, and an edited one
+  assert.match(
+    replayAcross([
+      {
+        ref: RETIRED_JOURNAL,
+        comments: [
+          intentComment(
+            1,
+            'pending',
+            { issue: 'none', journal: RETIRED_JOURNAL },
+            { authorLogin: 'mallory' },
+          ),
+        ],
+      },
+    ]) ?? '',
+    /is written by mallory, who is not a trusted marker actor/,
+  );
+  assert.match(
+    replayAcross([
+      {
+        ref: RETIRED_JOURNAL,
+        comments: [
+          intentComment(
+            1,
+            'pending',
+            { issue: 'none', journal: RETIRED_JOURNAL },
+            { lastEditedAt: '2026-10-13T01:00:00.000Z' },
+          ),
+        ],
+      },
+    ]) ?? '',
+    /was edited after posting/,
+  );
+  // no record: the problem names every journal read
+  assert.match(
+    replayAcross([
+      { ref: CONFIGURED_JOURNAL, comments: [] },
+      { ref: RETIRED_JOURNAL, comments: [] },
+    ]) ?? '',
+    /is in the journals o\/r#2674, o\/r#4748/,
+  );
+});
+
+const RETIRED_JOURNAL_REFUSALS: [string, unknown][] = [
+  ['a string', 'o/r#4748'],
+  ['null', null],
+  ['an empty array', []],
+  ['a malformed entry', ['not-a-valid-ref']],
+  ['a repeated entry', ['o/r#4748', 'o/r#4748']],
+  ['an entry equal to journalIssue', ['o/r#2674']],
+];
+
+for (const [name, retiredJournalIssues] of RETIRED_JOURNAL_REFUSALS) {
+  test(`CLI: retiredJournalIssues given as ${name} stops with blocked-by-human before any write`, () => {
+    const fixture = setup({
+      labels: ['status:authoring'],
+      retiredJournalIssues,
+    });
+    try {
+      seedAnchor(fixture);
+      const result = fixture.run([...childArgs(fixture), '--apply']);
+      assert.equal(result.status, 2, `${result.stdout}\n${result.stderr}`);
+      const report = JSON.parse(result.stdout);
+      assert.equal(report.outcome, 'blocked-by-human');
+      assert.match(report.reason, /retiredJournalIssues/);
+      assert.deepEqual(writes(fixture.log()), []);
+      assert.deepEqual(childComments(fixture), []);
+    } finally {
+      fixture.restore();
+    }
+  });
+}
+
+test('CLI: an anchor whose hold lives only in a retired journal passes the child check', () => {
+  const fixture = setup({
+    labels: ['status:authoring'],
+    retiredJournalIssues: [RETIRED_JOURNAL],
+  });
+  try {
+    seedAnchor(fixture, {
+      journalRecords: [
+        journalIntentText('pending', {
+          issue: 'none',
+          journal: RETIRED_JOURNAL,
+        }),
+        journalIntentText('pending', { journal: RETIRED_JOURNAL }),
+        journalIntentText('member', { journal: RETIRED_JOURNAL }),
+      ],
+      recordJournals: [4748, 4748, 4748],
+    });
+    const result = fixture.run(childArgs(fixture));
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.equal(JSON.parse(result.stdout).outcome, 'planned');
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('CLI: an anchor split between a retired journal and the configured one passes the child check', () => {
+  const fixture = setup({
+    labels: ['status:authoring'],
+    retiredJournalIssues: [RETIRED_JOURNAL],
+  });
+  try {
+    seedAnchor(fixture, {
+      journalRecords: [
+        journalIntentText('pending', {
+          issue: 'none',
+          journal: RETIRED_JOURNAL,
+        }),
+        journalIntentText('pending', { journal: RETIRED_JOURNAL }),
+        journalIntentText('member'),
+      ],
+      recordJournals: [4748, 4748, 2674],
+    });
+    const result = fixture.run(childArgs(fixture));
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.equal(JSON.parse(result.stdout).outcome, 'planned');
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('CLI: a retired journal that ends pending refuses the child, and no record names every journal read', () => {
+  const fixture = setup({
+    labels: ['status:authoring'],
+    retiredJournalIssues: [RETIRED_JOURNAL],
+  });
+  try {
+    seedAnchor(fixture, {
+      journalRecords: [
+        journalIntentText('pending', {
+          issue: 'none',
+          journal: RETIRED_JOURNAL,
+        }),
+        journalIntentText('pending', { journal: RETIRED_JOURNAL }),
+      ],
+      recordJournals: [4748, 4748],
+    });
+    const pending = fixture.run(childArgs(fixture));
+    assert.equal(pending.status, 1, pending.stdout);
+    assert.match(JSON.parse(pending.stdout).reason, /is pending, not member/);
+  } finally {
+    fixture.restore();
+  }
+  const empty = setup({
+    labels: ['status:authoring'],
+    retiredJournalIssues: [RETIRED_JOURNAL],
+  });
+  try {
+    seedAnchor(empty, { journalRecords: [] });
+    const result = empty.run(childArgs(empty));
+    assert.equal(result.status, 1, result.stdout);
+    assert.match(
+      JSON.parse(result.stdout).reason,
+      /is not verified in the journals o\/r#2674, o\/r#4748/,
+    );
+    assert.deepEqual(writes(empty.log()), []);
+  } finally {
+    empty.restore();
+  }
+});
+
+test('CLI: a failed read of a retired journal refuses the child and names that journal', () => {
+  const fixture = setup({
+    labels: ['status:authoring'],
+    retiredJournalIssues: [RETIRED_JOURNAL],
+  });
+  try {
+    seedAnchor(fixture);
+    fixture.seed((stored) => {
+      stored.readsFailFor = 4748;
+    });
+    const result = fixture.run([...childArgs(fixture), '--apply']);
+    assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
+    assert.match(
+      JSON.parse(result.stdout).reason,
+      /the journal o\/r#4748 cannot be read/,
+    );
+    assert.deepEqual(writes(fixture.log()), []);
+    assert.deepEqual(childComments(fixture), []);
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('CLI: a child reads only the configured and retired journals and writes only to the configured one', () => {
+  const fixture = setup({
+    labels: ['status:authoring'],
+    retiredJournalIssues: [RETIRED_JOURNAL],
+  });
+  try {
+    seedAnchor(fixture);
+    const result = fixture.run([...childArgs(fixture), '--apply']);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    const read = new Set(
+      fixture
+        .log()
+        .filter((entry) => entry.args.includes('graphql'))
+        .map((entry) => entry.args.find((arg) => arg.startsWith('number='))),
+    );
+    assert.ok(read.has('number=2674'));
+    assert.ok(read.has('number=4748'));
+    // Only the anchor, the child and the two journals are read.
+    for (const value of read) {
+      assert.ok(
+        ['number=4000', 'number=5000', 'number=2674', 'number=4748'].includes(
+          value ?? '',
+        ),
+        `unexpected read ${value}`,
+      );
+    }
+    const postsTo = (issue: number) =>
+      fixture
+        .log()
+        .filter(
+          (entry) =>
+            entry.args.includes('POST') &&
+            entry.args.includes(`repos/o/r/issues/${issue}/comments`),
+        ).length;
+    assert.equal(postsTo(4748), 0);
+    assert.ok(postsTo(2674) > 0);
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('CLI: --help names retiredJournalIssues in the journal and anchor steps', () => {
+  const fixture = setup();
+  try {
+    const result = fixture.run(['--help']);
+    assert.equal(result.status, 0);
+    assert.equal(
+      result.stdout.split('retiredJournalIssues').length - 1,
+      2,
+      result.stdout,
+    );
+  } finally {
+    fixture.restore();
+  }
+});
 
 test('hold replay: the exact token must run pending, attached, member without a gap', () => {
   const sequence = [

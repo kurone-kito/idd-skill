@@ -533,11 +533,20 @@ function scoreTriageRecord(input) {
   const { flags } = input;
   let step = 0;
   let convergedHead = null;
+  // The review-count cap (#4750) reads the same count as the relax step, so it
+  // adds no GitHub read. It stays off under --lite, which reads no reviews.
+  let capReached = false;
   if (input.deferByUrgency === 'severity-tiered' && !flags.lite) {
     const reviews = readTriageInput(() => input.port.listReviews(input.pr));
     const copilotReviews = reviews.filter((review) =>
       isCopilotReviewerLogin(reviewAuthorLogin(review)),
     ).length;
+    const cap = input.deferAllAfterRounds;
+    capReached =
+      cap !== undefined &&
+      Number.isInteger(cap) &&
+      cap >= 1 &&
+      copilotReviews >= cap;
     let converged = false;
     let head = '';
     if (flags.advisoryConverged !== '') {
@@ -572,7 +581,7 @@ function scoreTriageRecord(input) {
   };
   const verdict =
     input.deferByUrgency === 'severity-tiered'
-      ? computeTriageVerdict(record, flags)
+      ? computeTriageVerdict(record, flags, capReached)
       : null;
   if (verdict !== null) {
     record.verdict = verdict.verdict;
@@ -591,7 +600,16 @@ function scoreTriageRecord(input) {
  * matrix: `--adopt-now` turns a defer into `keep` blocked by `adopt-now`, and
  * every other verdict keeps its own eligibility and reason (#4436).
  */
-export function computeTriageVerdict(record, flags) {
+export function computeTriageVerdict(
+  record,
+  flags,
+  /**
+   * The review-count cap is reached (#4750). It defers every non-safety
+   * finding and turns off the adopt-now conversion below, so `--adopt-now`
+   * changes no verdict at or past `deferAllAfterRounds`.
+   */
+  capReached = false,
+) {
   const decision = decideUrgencyDefer({
     mode: 'severity-tiered',
     path: 'A',
@@ -600,6 +618,7 @@ export function computeTriageVerdict(record, flags) {
     urgency: record.urgency,
     relaxStep: record.step,
     safetyClass: record.safety,
+    capReached,
     scopeFence: flags.scopeFence,
     protectedAuthority: flags.protectedAuthority,
     acceptedMidFix: flags.acceptedMidFix,
@@ -607,7 +626,7 @@ export function computeTriageVerdict(record, flags) {
     // Ignored under `severity-tiered`; condition (d) is applied below (#4436).
     adoptNow: false,
   });
-  if (decision.defer && flags.adoptNow) {
+  if (decision.defer && flags.adoptNow && !capReached) {
     return {
       verdict: 'keep',
       eligibility: decision.eligibility,
@@ -811,7 +830,8 @@ reply with the same flags would carry, and posts nothing. For example:
                                  blocks a deferral (optional)
   --adopt-now                    adopt-now condition (d) holds: turns a defer verdict into
                                  keep (severity-tiered only; needs --tier and --urgency;
-                                 not with --path-b)
+                                 not with --path-b; changes no verdict at or past
+                                 critiqueLoop.deferAllAfterRounds)
   --override <reason>            post an Accepted reply the defer matrix refuses, with the
                                  reason recorded on its Triage line (needs a defer verdict)
   --apply                        post the reply and resolve the thread, or post the
@@ -1146,6 +1166,7 @@ function runComputeOnlyTriage(args, pr) {
       pr,
       deferByUrgency: triagePolicy.deferByUrgency,
       deferRelaxAtRounds: triagePolicy.deferRelaxAtRounds,
+      deferAllAfterRounds: triagePolicy.deferAllAfterRounds,
       flags,
     });
     triage = formatTriageLine(record);
@@ -1389,6 +1410,7 @@ function main() {
         typeof markerPrefixRaw === 'string' ? markerPrefixRaw : undefined,
       deferByUrgency: triagePolicy.deferByUrgency,
       deferRelaxAtRounds: triagePolicy.deferRelaxAtRounds,
+      deferAllAfterRounds: triagePolicy.deferAllAfterRounds,
       flags: triageFlags,
     });
   } catch (error) {
@@ -1445,6 +1467,7 @@ function main() {
         typeof markerPrefixRaw === 'string' ? markerPrefixRaw : undefined,
       deferByUrgency: triagePolicy.deferByUrgency,
       deferRelaxAtRounds: triagePolicy.deferRelaxAtRounds,
+      deferAllAfterRounds: triagePolicy.deferAllAfterRounds,
       flags: triageFlags,
     });
     if (fresh.verdict !== null) {

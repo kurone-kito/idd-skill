@@ -291,15 +291,21 @@ layered on top of the distributed IDD defaults:
   dogfooding policy (applies only to `kurone-kito/idd-skill`).
   `low` and `low-and-medium` still never defer High.
   `severity-tiered` scores urgency `very-low` < `low` < `medium` <
-  `high` and, below the first threshold, defers High only at
-  `very-low` (issue `#3589`). The gradient acts only when
+  `high` and, below both the first threshold and the
+  review-count cap, defers High only at `very-low` (issue `#3589`).
+  At review count 3, below the first threshold 4 but at the cap, the
+  cap defers otherwise-unblocked High findings at every urgency;
+  safety-class findings and other block reasons retain their verdicts.
+  The gradient acts only when
   `deferByUrgency` is `severity-tiered`. This repository opts in
   with `critiqueLoop.deferRelaxAtRounds: [4, 7]`. Over the 100
   merged pull requests numbered #3561 to #3781 (merged 2026-09-27
   to 2026-10-05), the median PR-wide Copilot review count was 2,
   and 30 reached a 4th review, 25 a 5th, 14 a 7th and 10 a 9th, so
   the first threshold leaves a typical pull request unchanged and
-  the second acts only on the long tail. A follow-up filed by the
+  the second acts only on the long tail. With the cap at 3, these
+  thresholds act only through the converged extra step at review counts
+  1 and 2. A follow-up filed by the
   gradient carries the existing `review-fix-loop-cutoff` marker.
   The motivating observation is
   [kurone-kito/setup.ubuntu#201](https://github.com/kurone-kito/setup.ubuntu/issues/201).
@@ -315,6 +321,34 @@ layered on top of the distributed IDD defaults:
   carries a `round <r>/5` clause. See
   [docs/idd-design-rationale.md](docs/idd-design-rationale.md#e4e5-adopt-now-urgency-defer)
   for the baseline and the severity-tiered matrix.
+- **Review-count cap**: This source repository sets
+  `critiqueLoop.deferAllAfterRounds: 3` only for
+  `kurone-kito/idd-skill`; `idd-template/` leaves the field unset (cap
+  off). Under `critiqueLoop.deferByUrgency: "severity-tiered"` and
+  outside Lite, a scored PATH A finding at or above the PR-wide
+  Copilot review-count cap defers at every urgency unless it is
+  safety-class or another documented block reason applies; adopt-now
+  condition (d) does not turn the verdict into `keep`. The cap acts
+  regardless of whether `deferRelaxAtRounds` is configured. See the
+  [Review-count cap paragraph](docs/idd-review-policy-profiles.md#wave-gradient-urgency-defer).
+  Evidence measured 2026-10-27 across at least 1,777 Copilot reviews
+  on 464 pull requests (only the first 100 reviews per pull request,
+  so review counts are lower bounds): caps 2, 3, 4, and 5 would have
+  removed at most 1,004, 806, 659, and 547 counted reviews
+  (56.5%, 45.4%, 37.1%, and 30.8% of reviews; 73.4%, 62.8%, 53.1%,
+  and 44.7% weighted by changed lines). Those shares are upper bounds
+  over the lower-bound counts, assuming no review after each cap.
+  With `deferRelaxAtRounds: [4, 7]`, at counts 3 and above findings
+  either defer through the cap or remain kept by an existing block,
+  so the relax steps change no verdict. The thresholds act only
+  through the converged extra step at counts 1 and 2.
+  `deferAfterRounds: 5` still acts on Lite-profile claims because the
+  cap is off there. With `triageRecord: "enforce"`, an Accepted reply
+  whose otherwise-unblocked verdict is `defer` needs
+  `--override "<reason>"`; existing block reasons retain their verdict
+  and do not need an override. The weekly audit records a reply with the
+  override as an override. Remove `critiqueLoop.deferAllAfterRounds`
+  to opt out.
 - **Triage record opt-in**: This source repository sets
   `critiqueLoop.triageRecord` to `"enforce"` as a local IDD dogfooding
   policy (applies only to `kurone-kito/idd-skill`), switched under issue
@@ -421,24 +455,18 @@ layered on top of the distributed IDD defaults:
   `orchestrator` field and the `orchestrator-worker-cap-dogfood` rule together,
   because the rule pins the value to exactly 4 and the field alone is not
   enough (refs `#3839`).
-- **Live status digest**: This source repository also records, as a
-  local IDD dogfooding policy (applies only to `kurone-kito/idd-skill`),
-  that every A5 issue claim and the pull request opened for it use a live
-  status digest. This is the repository's choice under the
-  [Live Status Digest Contract](docs/idd-comment-minimization.md#live-status-digest-contract).
-  It adds no digest step to a phase that has none, so the coordination
-  claims taken before A5 (A0-C draft-carrier, A1.5 roadmap-audit, and
-  A4.5 suitability-close) keep their current behavior. `idd-template/` is
+- **Live status digest**: This source repository does not use a live
+  status digest. This is the operator's recorded choice (option 2,
+  decided in an issue-authoring hearing outside this repository; see
+  issue `#4736`). The recorded choice overrides the auto-detection in
+  the [Live Status Digest Contract](docs/idd-comment-minimization.md#live-status-digest-contract),
+  which applies only when neither the operator nor the repository has
+  chosen. The per-run summary is no longer posted, and the A5 claims on
+  issues `#4468`, `#4502`, and `#4721` already ran without a digest
+  (checked 2026-10-28). Existing digests are not edited, and the digest
+  helper stays available for explicit use. This bullet replaces the
+  earlier digest-use statement from PR `#4527`. `idd-template/` is
   unchanged, so adopters keep the distributed behavior.
-  Pull request `#4505` (issue `#4494`), merged 2026-10-18, added the
-  digest-use paragraph to that contract and listed recording this
-  repository's choice here as a follow-up. Before that merge, each of the
-  18 issues numbered `#4455` to `#4505` that were claimed before it
-  carried exactly one digest comment (checked 2026-10-18). After it, the
-  claim on issue `#4502` (2026-10-18) found no digest and created none,
-  and that issue and its pull request `#4507` closed without one. Without
-  this bullet, this repository records no choice, and the linked contract
-  decides what applies.
 
 ## Branch strategy
 
@@ -644,6 +672,114 @@ fix: update code
 ```txt
 feat: add auth system and refactor database layer and update docs
 ```
+
+## Local Linux CI with nektos/act
+
+`pnpm run ci:act` runs three of this repository's Linux pull-request CI
+jobs locally through [nektos/act](https://github.com/nektos/act), so a
+problem can be caught before a push. It is opt-in and repository-local:
+it is not part of `commands.pre-push-validate` or any other command set,
+and it is not distributed through `idd-template/`.
+
+```sh
+pnpm run ci:act
+```
+
+Run it from a clone or from a linked worktree. The script tests the
+working tree as it stands: act copies the tree into the container, so
+uncommitted changes and untracked files that are not ignored are tested
+too, not only the commit.
+
+Prerequisites:
+
+- act (tested with act 0.2.89) and a running Docker daemon.
+- A clone whose git common directory is owned by uid and gid 1000:1000.
+  The script checks this and stops with a message otherwise. The jobs run
+  as the image's `node` user, which has a writable HOME. The script uses
+  GNU `stat -c`, so it needs Linux or WSL.
+- Network access when the image is absent locally, to pull it, and when
+  an action is not yet cached, to fetch it. The two `pnpm-boundary` jobs
+  install pnpm and Node at run time, so they need network on every run.
+- A warm pnpm store or network access for the config-dependency install
+  that the first `pnpm run` in a fresh clone or worktree performs.
+- A local `origin/main` ref. `node scripts/audit-docs.mjs` diffs against
+  it, because act's default event carries no base. Fetch it first with
+  `git fetch origin main`.
+
+Each job runs in the image `node:24.21.0-trixie`, selected by tag rather
+than by digest. `--pull=false` pulls only when the tag is absent locally;
+a local copy with the tag is used as it is. The full tag is used rather
+than the `-slim` variant, because the slim image has no `git`; a
+local 2026-10-27 check found `git` missing from the slim image and present
+in the full tag. The script runs these jobs in order and stops at the first
+failure:
+
+- `lint`: the bare-Node lane, which runs the audits and the protocol
+  tests with no dependency installed.
+- `pnpm-boundary`: `pnpm install --frozen-lockfile --prefer-offline` with
+  `HUSKY=0`, then `pnpm run check`, then
+  `node scripts/check-pnpm-boundary.mjs`.
+- `pnpm-boundary-node22-floor`: the same reusable workflow on Node
+  22.23.2. It is the only one of the three jobs that covers Node 22.
+
+Compared with `commands.pre-push-validate`, the script adds the
+bare-Node run with no installed dependency, the frozen-lockfile install
+with the pnpm boundary check, and the Node 22.23.2 run. The pre-push
+command set performs none of those.
+
+The lint job's protocol-tests step can fail when the host is under heavy
+load, because some tests use wall-clock limits: a 2000 ms limit in
+`tests/resume-route-selection.test.mts` and a 700 ms read budget in
+`tests/provider-outage-park-read-runtime.test.mts`. Local act runs of this
+change on 2026-10-27 hit this failure, as recorded in pull request `#4773`.
+Rerun the job on a quieter host before treating such a failure as a code
+defect.
+
+A linked worktree mounts the git common directory read-only at the same
+path, so the checkout inside the container can read the worktree's git
+metadata. The 2026-10-27 probe recorded in issue `#4756` found that the
+worktree's git directory path is absent in the container without the
+mount. A clone needs no extra mount. The job uid matches the owner of the
+common directory, so git accepts the mounted repository without a
+`safe.directory` setting. For a linked worktree, the common directory's
+path must contain no spaces or colons, because the mount is passed to act
+and docker inside an option string.
+
+The container runs with `--init`. Without an init process, the container
+that act starts keeps a killed child process as a zombie, so a liveness
+check still sees the process. On 2026-10-27, in local runs of this change
+recorded in pull request `#4773`, two tests in
+`tests/idd-critique-telemetry-hook.test.mts` failed in two runs without the
+flag: one waits for a hung hook to be killed, the other for a backgrounded
+descendant to be killed. They passed in a third run with the flag. A
+container whose PID 1 was a plain `tail -f` process reproduced the same two
+failures on the same day, and `--init` cleared them.
+
+The jobs the script does not run, and why:
+
+- `idd-doctor`: its checkout pins the commit under test. A 2026-10-27
+  probe showed act downloading that commit from GitHub, so the job checks
+  the pushed commit, not the local tree. `commands.pre-push-validate`
+  runs the same check on the local tree through `pnpm run doctor:github`.
+- `lint-windows`: act's Docker containers cannot provide a Windows
+  runner (preventive; no observed incident yet).
+- `analyze`: CodeQL uploads its results to code scanning with
+  `security-events: write` (preventive; no observed incident yet).
+- `idd-advisory-convergence` and the workflows that review, comment,
+  label, or merge: they read or write GitHub state, so
+  a local run would act on that state (preventive; no observed incident
+  yet).
+
+The image sets no user, so a container would run the jobs as root, and
+root ignores the POSIX permission bits that some tests rely on. The
+script therefore passes `--user 1000:1000`. In the 2026-10-27 probe, the
+grok test in `tests/token-cost-adapter-grok.test.mts`, which reads a file
+with mode `000`, failed as root in `node:24.21.0-trixie-slim` with
+`2 !== 1`, and passed as uid 1000. Other test files, such as
+`tests/idd-config.test.mts` and
+`tests/token-cost-event.test.mts`, depend on the same bits. Some of them
+skip rather than fail as root, so a root run would lose their coverage
+without any failure. The uid is part of the design, not a convenience.
 
 ## For IDD work
 

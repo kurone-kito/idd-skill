@@ -232,6 +232,88 @@ test('detectPackageManager respects package metadata and lockfiles', () => {
   assert.equal(detectPackageManager(ambiguousRoot), '');
 });
 
+test('npm-shrinkwrap.json is npm lockfile evidence, counted by manager (issue #4720)', () => {
+  const shrinkwrapRoot = makeTempDir(
+    join(tmpdir(), 'idd-helper-runtime-shrinkwrap-'),
+  );
+  writeFileSync(
+    join(shrinkwrapRoot, 'package.json'),
+    JSON.stringify({ name: 'target-app' }),
+  );
+  writeFileSync(join(shrinkwrapRoot, 'npm-shrinkwrap.json'), '{}');
+  assert.equal(detectPackageManager(shrinkwrapRoot), 'npm');
+  assert.deepEqual(recommendHelperRuntimeProfile(shrinkwrapRoot), {
+    profile: 'package-manager',
+    packageManager: 'npm',
+    reason:
+      'Detected exactly one supported package manager from lockfile evidence.',
+    evidence: {
+      hasPackageJson: true,
+      declaredPackageManager: '',
+      lockfileMatches: [{ filename: 'npm-shrinkwrap.json', manager: 'npm' }],
+      detectedPackageManager: 'npm',
+      packageJsonOnly: false,
+      ambiguousPackageManager: false,
+    },
+  });
+
+  // package-lock.json and npm-shrinkwrap.json together are one npm manager.
+  const bothNpmRoot = makeTempDir(
+    join(tmpdir(), 'idd-helper-runtime-both-npm-'),
+  );
+  writeFileSync(join(bothNpmRoot, 'package-lock.json'), '{}');
+  writeFileSync(join(bothNpmRoot, 'npm-shrinkwrap.json'), '{}');
+  assert.deepEqual(collectHelperRuntimeEvidence(bothNpmRoot), {
+    hasPackageJson: false,
+    declaredPackageManager: '',
+    lockfileMatches: [
+      { filename: 'package-lock.json', manager: 'npm' },
+      { filename: 'npm-shrinkwrap.json', manager: 'npm' },
+    ],
+    detectedPackageManager: 'npm',
+    packageJsonOnly: false,
+    ambiguousPackageManager: false,
+  });
+
+  // A supported declaration still wins over a shrinkwrap and another lockfile.
+  const declaredRoot = makeTempDir(
+    join(tmpdir(), 'idd-helper-runtime-declared-shrinkwrap-'),
+  );
+  writeFileSync(
+    join(declaredRoot, 'package.json'),
+    JSON.stringify({ packageManager: 'pnpm@9.15.0' }),
+  );
+  writeFileSync(join(declaredRoot, 'npm-shrinkwrap.json'), '{}');
+  writeFileSync(join(declaredRoot, 'yarn.lock'), '# lockfile');
+  assert.equal(detectPackageManager(declaredRoot), 'pnpm');
+  assert.equal(
+    collectHelperRuntimeEvidence(declaredRoot).ambiguousPackageManager,
+    false,
+  );
+
+  // An undeclared shrinkwrap plus a different manager's lockfile is ambiguous.
+  const ambiguousLockfiles = [
+    { filename: 'yarn.lock', content: '# lockfile' },
+    { filename: 'pnpm-lock.yaml', content: "lockfileVersion: '9.0'" },
+  ];
+  for (const { filename, content } of ambiguousLockfiles) {
+    const ambiguousRoot = makeTempDir(
+      join(tmpdir(), 'idd-helper-runtime-shrinkwrap-ambiguous-'),
+    );
+    writeFileSync(join(ambiguousRoot, 'npm-shrinkwrap.json'), '{}');
+    writeFileSync(join(ambiguousRoot, filename), content);
+    assert.equal(detectPackageManager(ambiguousRoot), '');
+    assert.equal(
+      recommendHelperRuntimeProfile(ambiguousRoot).profile,
+      'vendored-node',
+    );
+    assert.equal(
+      collectHelperRuntimeEvidence(ambiguousRoot).ambiguousPackageManager,
+      true,
+    );
+  }
+});
+
 test('helper runtime evidence and recommendation stay fail-closed around package-manager detection', () => {
   const packageJsonRoot = makeTempDir(
     join(tmpdir(), 'idd-helper-runtime-recommend-package-json-'),
@@ -261,7 +343,8 @@ test('helper runtime evidence and recommendation stay fail-closed around package
   assert.deepEqual(recommendHelperRuntimeProfile(lockfileRoot), {
     profile: 'package-manager',
     packageManager: 'pnpm',
-    reason: 'Detected exactly one supported package-manager lockfile.',
+    reason:
+      'Detected exactly one supported package manager from lockfile evidence.',
     evidence: {
       hasPackageJson: false,
       declaredPackageManager: '',

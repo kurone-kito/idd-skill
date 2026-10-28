@@ -3013,3 +3013,135 @@ test('AUTHORING_JOURNAL_REFERENCE_PATTERN keeps the policy schema grammar (#4115
     schema.properties.issueAuthoring.properties.journalIssue.pattern,
   );
 });
+
+test('decideUrgencyDefer applies the review-count cap before the matrix (#4750)', () => {
+  const base = {
+    mode: 'severity-tiered' as const,
+    path: 'A' as const,
+    e4Severity: 'high' as const,
+    copilotLabel: null,
+    urgency: 'high' as const,
+    scopeFence: false,
+    protectedAuthority: false,
+    awaitingMaintainerDecision: false,
+    acceptedMidFix: false,
+    adoptNow: false,
+  };
+  // The matrix alone keeps a high-tier, high-urgency finding at step 0.
+  assert.deepEqual(decideUrgencyDefer({ ...base, relaxStep: 0 }), {
+    defer: false,
+    eligibility: 'high',
+    blockedBy: 'matrix',
+  });
+  // With the cap reached every non-safety finding defers, whatever the step.
+  assert.deepEqual(
+    decideUrgencyDefer({ ...base, relaxStep: 0, capReached: true }),
+    { defer: true, eligibility: 'high', blockedBy: null },
+  );
+  assert.deepEqual(
+    decideUrgencyDefer({
+      ...base,
+      e4Severity: 'low',
+      urgency: 'very-low',
+      adoptNow: true,
+      capReached: true,
+    }),
+    { defer: true, eligibility: 'low', blockedBy: null },
+  );
+  // The safety class is excepted at every step once the cap is reached.
+  assert.deepEqual(
+    decideUrgencyDefer({
+      ...base,
+      e4Severity: 'low',
+      urgency: 'medium',
+      relaxStep: 0,
+      safetyClass: true,
+      capReached: true,
+    }),
+    { defer: false, eligibility: 'low', blockedBy: 'safety-class' },
+  );
+  // Below the cap, the safety class still defers at step 0 (wave gradient).
+  assert.deepEqual(
+    decideUrgencyDefer({
+      ...base,
+      e4Severity: 'low',
+      urgency: 'medium',
+      relaxStep: 0,
+      safetyClass: true,
+      capReached: false,
+    }),
+    { defer: true, eligibility: 'low', blockedBy: null },
+  );
+  // An unscored urgency still fails toward not deferring.
+  assert.deepEqual(
+    decideUrgencyDefer({ ...base, urgency: null, capReached: true }),
+    { defer: false, eligibility: 'high', blockedBy: 'unknown-urgency' },
+  );
+  // Existing exclusions keep their block reasons under the cap.
+  assert.equal(
+    decideUrgencyDefer({
+      ...base,
+      capReached: true,
+      awaitingMaintainerDecision: true,
+    }).blockedBy,
+    'awaiting-maintainer-decision',
+  );
+  assert.equal(
+    decideUrgencyDefer({ ...base, capReached: true, scopeFence: true })
+      .blockedBy,
+    'scope-fence',
+  );
+  assert.equal(
+    decideUrgencyDefer({ ...base, capReached: true, protectedAuthority: true })
+      .blockedBy,
+    'protected-authority',
+  );
+  assert.equal(
+    decideUrgencyDefer({ ...base, capReached: true, acceptedMidFix: true })
+      .blockedBy,
+    'accepted-mid-fix',
+  );
+  assert.equal(
+    decideUrgencyDefer({ ...base, capReached: true, path: 'B' }).blockedBy,
+    'path-b',
+  );
+  assert.equal(
+    decideUrgencyDefer({ ...base, capReached: true, mode: 'off' }).blockedBy,
+    'mode-off',
+  );
+});
+
+test('critiqueLoop.deferAllAfterRounds is unset by default and keeps only integers of at least 1 (#4750)', () => {
+  assert.equal(
+    Object.hasOwn(
+      normalizePolicyConfig({}).critiqueLoop,
+      'deferAllAfterRounds',
+    ),
+    false,
+  );
+  assert.equal(
+    Object.hasOwn(POLICY_DEFAULTS.critiqueLoop, 'deferAllAfterRounds'),
+    false,
+  );
+  assert.equal(
+    normalizePolicyConfig({ critiqueLoop: { deferAllAfterRounds: 3 } })
+      .critiqueLoop.deferAllAfterRounds,
+    3,
+  );
+  assert.equal(
+    normalizePolicyConfig({ critiqueLoop: { deferAllAfterRounds: 1 } })
+      .critiqueLoop.deferAllAfterRounds,
+    1,
+  );
+  for (const value of [0, -1, 1.5, '3', null, [3]]) {
+    assert.equal(
+      Object.hasOwn(
+        normalizePolicyConfig({ critiqueLoop: { deferAllAfterRounds: value } })
+          .critiqueLoop,
+        'deferAllAfterRounds',
+      ),
+      false,
+      `invalid ${JSON.stringify(value)} must leave the cap off`,
+    );
+  }
+});
