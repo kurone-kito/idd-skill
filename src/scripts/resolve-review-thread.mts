@@ -1113,12 +1113,31 @@ const IDD_ISSUE_BRANCH_PREFIX = /^issue\//i;
 const IDD_ISSUE_BRANCH_PATTERN = /^issue\/([1-9]\d*)-/i;
 
 /**
- * A head name that can be a git branch name: non-empty and free of whitespace
- * and the characters git refuses. A coerced non-string (`[object Object]`) or
- * a missing name fails this check, so it cannot read as a non-issue branch
- * (kurone-kito/idd-skill#4735, Copilot review).
+ * Whether a head name is a valid git branch name, by the `git check-ref-format`
+ * rules (kurone-kito/idd-skill#4735, Copilot review). A coerced non-string
+ * (`[object Object]`), a missing name, or a Git-invalid name fails here, so it
+ * cannot read as a non-issue branch, and a Git-invalid `issue/` name cannot
+ * match the issue-branch pattern.
  */
-const GIT_BRANCH_NAME_PATTERN = /^[^\s~^:?*[\\]+$/;
+function isGitBranchName(name: string): boolean {
+  if (name === '' || name === '@' || name.endsWith('.')) {
+    return false;
+  }
+  for (const char of name) {
+    const code = char.charCodeAt(0);
+    if (code < 0x20 || code === 0x7f || /[\s~^:?*[\\]/.test(char)) {
+      return false;
+    }
+  }
+  if (name.includes('..') || name.includes('@{')) {
+    return false;
+  }
+  return name
+    .split('/')
+    .every(
+      (part) => part !== '' && !part.startsWith('.') && !part.endsWith('.lock'),
+    );
+}
 
 /**
  * A `--claimless` verdict. `refusal` is set only when the branch-identity
@@ -1173,7 +1192,7 @@ export function evaluateClaimless(
   // through to the classifier, which fails it closed to `in-loop`.
   let branchIssue: number | null = null;
   if (Array.isArray(closingRefs) && closingRefs.length === 0) {
-    if (typeof headRef !== 'string' || !GIT_BRANCH_NAME_PATTERN.test(headRef)) {
+    if (typeof headRef !== 'string' || !isGitBranchName(headRef)) {
       return {
         eligible: false,
         refusal: `${CLAIMLESS_REFUSAL_PREFIX} PR #${pr}'s head branch name is missing or not a valid branch name, so an issue claim cannot be ruled out; pass --claim-issue <n> --claim-id <claim-id> for the claim that owns this PR instead.`,

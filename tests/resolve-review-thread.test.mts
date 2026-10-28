@@ -336,6 +336,9 @@ for (const headRefName of [
   'issue/abc-x',
   'issue/0-x',
   'issue/9007199254740993-task',
+  'issue/4735-fix..review',
+  'issue/4735-x.lock',
+  'issue/4735-x/',
   'issue/4735-fix review',
   '[object Object]',
 ]) {
