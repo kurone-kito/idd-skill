@@ -7846,6 +7846,59 @@ reflexively as any other CLI option.
   live GitHub state, discard helper output and use the portable manual
   fetch path.
 
+### Manual CI read
+
+Use this read only when the helper runtime is unavailable or its output is
+discarded (the manual fallbacks in `idd-review-snapshot.instructions.md`,
+E1 Steps 1-2). `gh pr view --json statusCheckRollup` does not show
+page-completeness evidence, so it cannot prove that all checks were read.
+
+```sh
+gh api graphql --paginate --slurp \
+  -f query='query($owner:String!,$repo:String!,$number:Int!,$endCursor:String){
+    repository(owner:$owner,name:$repo){
+      pullRequest(number:$number){
+        headRefOid
+        baseRefName
+        statusCheckRollup{
+          contexts(first:100,after:$endCursor){
+            nodes{
+              __typename
+              ... on CheckRun{
+                name status conclusion startedAt completedAt
+                checkSuite{
+                  app{slug}
+                  workflowRun{file{path} workflow{name}}
+                }
+              }
+              ... on StatusContext{context state targetUrl createdAt updatedAt}
+            }
+            pageInfo{hasNextPage endCursor}
+          }
+        }
+      }
+    }
+  }' \
+  -f owner={owner} -f repo={repo} -F number={pr-number}
+```
+
+Inspect every response in the slurped page array:
+
+- Each page must match Step 1's HEAD and base.
+- Every page must include its `contexts` and `pageInfo`. Each non-final
+  page needs `hasNextPage: true` and a non-empty cursor; the final page
+  needs `hasNextPage: false`.
+- A first page whose `statusCheckRollup` is `null` is a complete read with
+  no checks when it is the only page. A later `null` rollup, or a `null` or
+  missing `contexts`, is incomplete.
+
+Keep CheckRun producers separate by workflow name and file path. A
+`StatusContext` is complete only for `SUCCESS`, `FAILURE`, or `ERROR`,
+using its `updatedAt`; `PENDING` and `EXPECTED` are not completed checks.
+Use the newest pass-equivalent completion time. A complete matching read
+with no pass yields `none`. Any missing page or completeness evidence means
+no post: repeat Step 1.
+
 ### Advisory-item scope
 
 Which advisory items the readiness gate reads. This is the detail behind

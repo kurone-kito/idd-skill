@@ -74,8 +74,8 @@ E1.
 1. Read the current PR HEAD SHA and base ref once — `gh pr view
    {pr-number} --json headRefOid,baseRefName --jq
    '[.headRefOid,.baseRefName] | @tsv'` — and store them as
-   `{head-SHA}` and `{base-ref-name}`. Never re-read either ref elsewhere
-   in E1 — reuse these values, except for the deferred E3 HEAD check below.
+   `{head-SHA}` and `{base-ref-name}`. Re-read either ref only for the
+   manual Step 2 comparison or the deferred E3 HEAD check; otherwise reuse.
 2. Run the profile-selected `review-activity-snapshot` helper for
    `{head-SHA}`, `{max-activity-updatedAt}`, `{total-item-count}`, and
    `{latest-ci-completed-at}`: `node
