@@ -273,10 +273,14 @@ needs-decision, blocked-by-human, and out-of-scope.
      Append `abandoned` only after closed/label-absent verification. On
      resume, paginate the hold log and select the latest valid record for the
      exact token tuple; missing, conflicting, or out-of-order records fail
-     closed, while `pending` and `cleanup` remain recovery holds.
+     closed, while `pending` and `cleanup` remain recovery holds. When the
+     originating hold is in a retired journal (listed in
+     `issueAuthoring.retiredJournalIssues`), paginate `journalIssue` and every
+     listed retired journal and merge the records in time order first.
 
      `journal` is the durable record location. For an existing set, use the
-     verified originating Stage 1 hold; for a standalone set with no existing
+     verified originating Stage 1 hold, or `issueAuthoring.journalIssue` when
+     that hold is in a retired journal; for a standalone set with no existing
      issue or anchor, use the repository-level authoring journal target
      configured at `issueAuthoring.journalIssue` in `.github/idd/config.json`
      (an `owner/repo#number` reference to a pre-existing, durable,
@@ -313,8 +317,10 @@ needs-decision, blocked-by-human, and out-of-scope.
      labels, body, and owner comments before treating it as a set member
    - an atomically labeled publication is not set membership until its owner
      marker is verified; persist each returned target identity in the journal
-     before appending the marker. On resume, reconcile
-     recorded identities and only issues carrying this set's exact publication
+     before appending the marker; when the set's originating hold is in a
+     retired journal, persist it in `issueAuthoring.journalIssue` instead. On
+     resume, reconcile recorded identities and only issues carrying this set's
+     exact publication
      token; an incomplete scan or unmarked match is a recovery hold, so never
      infer membership or completion from the shared label alone
    - if owner-marker append or verification is uncertain for a new issue,

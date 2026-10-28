@@ -96,10 +96,14 @@ approval boundary that hands off to IDD execution.
   `abandoned` only after closed/label-absent verification. The append-only
   replay selects the latest valid record for the exact token tuple; missing,
   conflicting, or out-of-order records fail closed, while `pending` and
-  `cleanup` remain recovery holds.
+  `cleanup` remain recovery holds. When the originating hold is in a retired
+  journal (listed in `issueAuthoring.retiredJournalIssues`), paginate
+  `journalIssue` and every listed retired journal, and merge the records in
+  time order before selecting.
 
   `journal` is the durable record location. For an existing set, use the
-  verified originating Stage 1 hold; for a standalone set with no existing
+  verified originating Stage 1 hold, or `issueAuthoring.journalIssue` when
+  that hold is in a retired journal; for a standalone set with no existing
   issue or anchor, use the repository-level authoring journal target
   configured at `issueAuthoring.journalIssue` in `.github/idd/config.json`
   (an `owner/repo#number` reference to a pre-existing, durable, comment-only
@@ -154,10 +158,12 @@ approval boundary that hands off to IDD execution.
   `state=cleanup`, leave the issue held, and report the recovery hold.
 - An atomically labeled publication is not set membership until its owner
   marker is verified. Persist each returned target identity in the durable
-  originating Stage 1 hold before appending the marker. On resume, reconcile
-  recorded identities and only issues carrying this set's exact publication
-  token; an incomplete scan or unmarked match is a recovery hold, so never
-  infer membership or completion from the shared label alone. If the final
+  originating Stage 1 hold before appending the marker; when that hold is in a
+  retired journal, persist it in `issueAuthoring.journalIssue` instead. On
+  resume, reconcile recorded identities and only issues carrying this set's
+  exact publication token; an incomplete scan or unmarked match is a recovery
+  hold, so never infer membership or completion from the shared label alone.
+  If the final
   safe-close read proves no competing claim or marker, append `state=cleanup`
   before closing the issue or removing its authoring label. Re-fetch and verify
   closed/label-absent state, then append `state=abandoned`; otherwise leave the
@@ -550,10 +556,12 @@ cover that path; follow the contract for it.
 1. **Preflight, every target.** Run the contract's sweep against the target
    and the journal first (attempted, not blocking, so the command ends in
    `|| true`). Use `owner/repo#number` for a journal in another repository.
+   Add one `--issue` for each listed retired journal.
 
    ```sh
    node scripts/sweep-authoring-markers.mjs --issue <target-issue-number> \
      --issue <journal-issue-number> \
+     --issue <retired-journal-owner/repo#number> \
      --marker-prefix <resolved-target-prefix> \
      --trusted-marker-logins <trusted-login-1,...> \
      --deadline-ms 300000 --apply || true
@@ -634,10 +642,13 @@ cover that path; follow the contract for it.
    ```sh
    node scripts/sweep-authoring-markers.mjs --issue <anchor-issue-number> \
      --issue <journal-issue-number> \
+     --issue <retired-journal-owner/repo#number> \
      --marker-prefix <resolved-target-prefix> \
      --trusted-marker-logins <trusted-login-1,...> \
      --deadline-ms 300000 --apply || true
    ```
+
+   Add one `--issue` for each listed retired journal.
 
    Then compute `<snapshot-sha256>` with the set-snapshot algorithm in the
    same contract section, and post the completion marker.

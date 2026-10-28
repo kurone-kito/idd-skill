@@ -1435,8 +1435,18 @@ in this preamble, since the fallback differs per helper.
   be a JSON object whose `completed` is a boolean and whose `findings`, if
   present, is an array of objects. The helper stops with the `blocked-by-human`
   outcome (exit `2`) when `issueAuthoring.journalIssue` is unset or
-  unverifiable. It then puts the `authoring-publication` line first in the
-  body, lints that exact body with `audit-authored-issue.mjs --new-issue`
+  unverifiable. `issueAuthoring.retiredJournalIssues`, when set, is checked
+  for every shape: it must be a non-empty array of `owner/repo#N` entries,
+  with no entry repeated and none equal to `issueAuthoring.journalIssue`, and
+  a malformed value stops the helper with `blocked-by-human` (exit `2`). For
+  `--shape child` only, the anchor check also reads each listed retired journal
+  and no other issue, merging those records with the current journal in time
+  order; a retired journal that cannot be read refuses the child (exit `1`).
+  Every write still goes to `issueAuthoring.journalIssue`. At step 2 the
+  helper checks only the format of each retired-journal entry, not that the
+  journal exists or is closed. It then puts the `authoring-publication` line
+  first in the body, lints that exact body with
+  `audit-authored-issue.mjs --new-issue`
   and looks up the labels it applies. Without `--apply` it renders the
   pending publication-intent record through `post-idd-marker.mjs`'s dry
   run and prints the plan (exit `0`), with no trust or permission
@@ -1455,8 +1465,11 @@ in this preamble, since the fallback differs per helper.
   status 401, 404 or 422; any other failure reports the journal as
   `uncertain: replay the journal` (an owner marker reports
   `"ownerMarker": "uncertain"`), and an uncertain pending record stops
-  before the create. Every policy value comes from the repository policy
-  file only, and `--marker-prefix` is required when the issue or the
+  before the create. Before the create, an uncertain pending-record post also
+  reports `retry: "replay the journal first"`, and `retry: "permitted"` appears
+  only with `"nothingSent": true`; after the create the report has no `retry`
+  field. Every policy value comes from the repository
+  policy file only, and `--marker-prefix` is required when the issue or the
   journal is in another repository.
 
   For `--shape carrier`, after `state=member` the helper runs the carrier
