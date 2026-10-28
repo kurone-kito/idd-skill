@@ -294,7 +294,9 @@ layered on top of the distributed IDD defaults:
   `high` and, below both the first threshold and the
   review-count cap, defers High only at `very-low` (issue `#3589`).
   At review count 3, below the first threshold 4 but at the cap, the
-  cap defers High findings at every urgency. The gradient acts only when
+  cap defers otherwise-unblocked High findings at every urgency;
+  safety-class findings and other block reasons retain their verdicts.
+  The gradient acts only when
   `deferByUrgency` is `severity-tiered`. This repository opts in
   with `critiqueLoop.deferRelaxAtRounds: [4, 7]`. Over the 100
   merged pull requests numbered #3561 to #3781 (merged 2026-09-27
@@ -341,10 +343,12 @@ layered on top of the distributed IDD defaults:
   so the relax steps change no verdict. The thresholds act only
   through the converged extra step at counts 1 and 2.
   `deferAfterRounds: 5` still acts on Lite-profile claims because the
-  cap is off there. With `triageRecord: "enforce"`, fixing a
-  non-safety finding at count 3 or above needs
-  `--override "<reason>"`, which the weekly audit records as an
-  override. Remove `critiqueLoop.deferAllAfterRounds` to opt out.
+  cap is off there. With `triageRecord: "enforce"`, an Accepted reply
+  whose otherwise-unblocked verdict is `defer` needs
+  `--override "<reason>"`; existing block reasons retain their verdict
+  and do not need an override. The weekly audit records a reply with the
+  override as an override. Remove `critiqueLoop.deferAllAfterRounds`
+  to opt out.
 - **Triage record opt-in**: This source repository sets
   `critiqueLoop.triageRecord` to `"enforce"` as a local IDD dogfooding
   policy (applies only to `kurone-kito/idd-skill`), switched under issue
