@@ -411,8 +411,9 @@ use a supplied scratch root only if it passes its checks; if a supplied root
 fails, stop without trying another root. When no root is supplied, allocate a
 new `issue-authoring-<uuid>` directory with exclusive creation (a non-recursive
 `mkdir`, never `mkdir -p`) in the OS temporary directory, or in the user state
-directory if it already exists, outside every worktree and git directory. Keep
-one owner-only `<uuid>.json` ledger per draft, created with exclusive creation;
+directory if it already exists, outside every worktree and git directory,
+including mount aliases verified by native filesystem evidence. Keep one
+owner-only `<uuid>.json` ledger per draft, created with exclusive creation;
 rename it to the issue number without overwriting another file. Never share a
 ledger or write one to the repository or a marker, and never reuse another
 session's namespace. A lost ledger starts empty. Unsafe, conflicting, or unreadable

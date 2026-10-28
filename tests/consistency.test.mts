@@ -3390,16 +3390,51 @@ const LEDGER_STORAGE_SKILL = 'skills/issue-authoring/SKILL.md';
 const LEDGER_STORAGE_DOCS = 'docs/issue-authoring-skill.md';
 const LEDGER_STORAGE_END = '\n## Mechanical pre-publish gate';
 const LEDGER_STORAGE_CASES = [
-  '**Owned and unchanged.**',
-  '**Owned but edited.**',
-  '**Missing (lost).**',
-  '**Unowned.**',
-  '**Replaced.**',
-  '**Linked leaf.**',
-  '**Linked parent.**',
-  '**Partial first ledger.**',
-  '**Rename to the issue number.**',
-  '**A review that cannot finish.**',
+  {
+    label: '**Owned and unchanged.**',
+    expectedAction:
+      'Continue: write the complete new JSON to a new exclusively created, owner-only temporary file',
+  },
+  {
+    label: '**Owned but edited.**',
+    expectedAction: 'Do not overwrite it.',
+  },
+  {
+    label: '**Missing (lost).**',
+    expectedAction:
+      'Treat it as a lost ledger: recreate an empty ledger at the same path with exclusive creation',
+  },
+  {
+    label: '**Unowned.**',
+    expectedAction:
+      'Refuse. Do not read it as a ledger, adopt it, rename it, or delete it.',
+  },
+  {
+    label: '**Replaced.**',
+    expectedAction:
+      'Treat it as a conflict with another owner. Refuse, preserve both entries, and report.',
+  },
+  {
+    label: '**Linked leaf.**',
+    expectedAction: 'Refuse. Never follow it or write through it.',
+  },
+  {
+    label: '**Linked parent.**',
+    expectedAction: 'Refuse. Report.',
+  },
+  {
+    label: '**Partial first ledger.**',
+    expectedAction: 'keep the namespace and any partial file, delete nothing',
+  },
+  {
+    label: '**Rename to the issue number.**',
+    expectedAction:
+      'keep the `<uuid>.json` file, never overwrite or adopt the existing file',
+  },
+  {
+    label: '**A review that cannot finish.**',
+    expectedAction: 'The target is then not published as reviewed',
+  },
 ];
 
 // Returns the subsection body after its heading line, so the two copies can be
@@ -3423,8 +3458,19 @@ test('issue-authoring contract defines ledger storage verdicts, allocation, and 
   ]) {
     assert.ok(text.includes(verdict), `missing verdict: ${verdict}`);
   }
-  for (const label of LEDGER_STORAGE_CASES) {
-    assert.ok(section.includes(label), `missing ownership case: ${label}`);
+  for (const [index, scenario] of LEDGER_STORAGE_CASES.entries()) {
+    const start = section.indexOf(scenario.label);
+    assert.notEqual(start, -1, `missing ownership case: ${scenario.label}`);
+    const nextStart = LEDGER_STORAGE_CASES.slice(index + 1)
+      .map((next) => section.indexOf(next.label, start + scenario.label.length))
+      .find((position) => position !== -1);
+    const caseText = normalizeWhitespace(
+      section.slice(start, nextStart ?? section.length),
+    );
+    assert.ok(
+      caseText.includes(scenario.expectedAction),
+      `missing expected action for ${scenario.label}: ${scenario.expectedAction}`,
+    );
   }
   // Allocation is exclusive and non-recursive, and `mkdir -p` appears only in
   // the sentence that forbids it.
@@ -3446,6 +3492,23 @@ test('issue-authoring contract defines ledger storage verdicts, allocation, and 
   assert.match(
     text,
     /On Windows, reject a root whose ACL lets another user rename or delete child entries/,
+  );
+  assert.ok(
+    text.includes(
+      "For Linux root checks, also record the root and protected paths' mount IDs, matching mountinfo fields, and derived backing locations; repeat that comparison whenever the root checks run.",
+    ),
+  );
+  assert.match(
+    text,
+    /On Linux, obtain `STATX_MNT_ID` from already-open directory handles using `statx\(2\)` with `AT_EMPTY_PATH` for the candidate root and each protected path, then read the matching entries in `\/proc\/self\/mountinfo`/,
+  );
+  assert.match(
+    text,
+    /Reject the candidate root when its backing location is equal to or below a protected path's backing location on the same device/,
+  );
+  assert.match(
+    text,
+    /Do not use `RESOLVE_NO_XDEV` as a blanket cross-mount rejection/,
   );
   assert.match(
     text,
@@ -3652,6 +3715,7 @@ test('SKILL entry carries the ledger storage summary and link for instructions-o
     "never reuse another session's namespace",
     'if a supplied root fails, stop without trying another root',
     'When no root is supplied, allocate a',
+    'including mount aliases verified by native filesystem evidence.',
     'preserve unverified entries; the contract permits cleanup only for entries this session created whose identity still matches.',
     'Instructions-only and same-response self-critique runs follow the same procedure; no orchestrator, environment variable, or helper is needed.',
   ]) {

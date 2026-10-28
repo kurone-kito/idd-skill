@@ -1060,7 +1060,9 @@ resolved), its file type, its owner, its mode (POSIX) or ACL (Windows), its link
 count, and its file identity (device and inode on POSIX, volume serial and file
 index on Windows). A ledger's content is identified by its SHA-256. This
 identity record lives only in the session's working context, never in a file, a
-marker, or the repository.
+marker, or the repository. For Linux root checks, also record the root and
+protected paths' mount IDs, matching mountinfo fields, and derived backing
+locations; repeat that comparison whenever the root checks run.
 
 **Roots.** A root is a directory that holds namespaces. Use a root that the user
 or the runtime supplies, such as a named scratch directory or harness scratch
@@ -1081,6 +1083,28 @@ POSIX, reject a root that grants group or other users write and search
 permission without the sticky bit, even when the current user owns it. On
 Windows, reject a root whose ACL lets another user rename or delete child
 entries. If this permission evidence is unreadable, stop.
+
+**Mount aliases.** A canonical pathname can look external while a bind mount
+exposes a worktree or git-administration directory; this is preventive; no
+observed incident yet. Check the backing location as well as the visible path.
+On Linux, obtain `STATX_MNT_ID` from already-open directory handles using
+`statx(2)` with `AT_EMPTY_PATH` for the candidate root and each protected path,
+then read the matching entries in `/proc/self/mountinfo`. Decode its escaped
+fields, and require each path to be at or below its entry's mount point. Map a
+path to its backing location by joining the entry's `root` with the path
+relative to its `mount point`, paired with the entry's `major:minor` device
+identity. Reject the candidate root when its backing location is equal to or
+below a protected path's backing location on the same device. This detects a
+bind-mounted alias without rejecting a candidate merely because it is on a
+different mount from `/`. Do not use `RESOLVE_NO_XDEV` as a blanket
+cross-mount rejection: an operating-system temporary or state directory may
+legitimately be on another mount. If `statx` or mountinfo cannot be read, a
+mount entry cannot be matched, or the mapping is ambiguous, treat the root as
+unreadable and fail closed. On other platforms, use native mount or volume
+evidence to make the same backing-location comparison; if it cannot be
+established, fail closed. See [`statx(2)`](https://man7.org/linux/man-pages/man2/statx.2.html),
+[`/proc/self/mountinfo`](https://www.man7.org/linux/man-pages/man5/proc_pid_mountinfo.5.html),
+and [`openat2(2)`](https://man7.org/linux/man-pages/man2/openat2.2.html).
 
 **Storage verdicts.** Classify each supplied root and namespace with exactly one
 verdict:
@@ -1106,8 +1130,8 @@ with `NtCreateFile` and `OBJ_DONT_REPARSE`.
 Applying `O_NOFOLLOW` only to the final component is insufficient. If the
 platform cannot prove that no component was followed, fail closed. Then open
 the root as a directory handle without following a symbolic link or reparse
-point through that verified component walk, and confirm its identity and
-canonical path. Create
+point through that verified component walk, and confirm its identity, canonical
+path, and backing location from the root checks. Create
 `issue-authoring-<uuid>` relative to that handle with exclusive, non-recursive
 directory creation, never `mkdir -p`. Make the namespace owner-only as part of
 creation: use POSIX mode 700, or on Windows pass an explicit security descriptor
@@ -1209,10 +1233,10 @@ files and stop. See Microsoft's [`OBJECT_ATTRIBUTES`](https://learn.microsoft.co
 and [`SetFileInformationByHandle`](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-setfileinformationbyhandle)
 references. Keep the directory handle open through each operation, then verify
 that its path still resolves to the same canonical location outside every
-worktree and git directory. If any value changes, preserve the ledger and all
-copies, stop, and report. If the host cannot bind an operation to the verified
-handle or supply the required evidence, treat the storage as unreadable and
-stop.
+worktree and git directory, including by backing-location comparison. If any
+value changes, preserve the ledger and all copies, stop, and report. If the
+host cannot bind an operation to the verified handle or supply the required
+evidence, treat the storage as unreadable and stop.
 
 The cases below are preventive; no observed incident yet records any of them, so
 none is cited. Each mismatch falls under one of the cases below. On a mismatch,
