@@ -3529,18 +3529,33 @@ test('issue-authoring contract defines ledger storage verdicts, allocation, and 
     text,
     /For every protected path \(each reported worktree path and each discovered Git directory\), first compare its normalized absolute lexical path against the candidate root using component-aware containment/,
   );
-  assert.match(
-    text,
-    /If that walk confirms a registered worktree path is absent after checking its readable ancestors, retain the Git worktree record and skip only the handle and backing-location comparison for that absent path; its Git common directory remains protected\. Never prune or edit Git metadata/,
+  assert.ok(
+    text.includes(
+      'If that walk confirms a registered worktree path is absent after checking its readable ancestors, retain the worktree record and its Git common directory, mark the protected-path inventory incomplete, and stop before evaluating any candidate root. A missing checkout does not rule out an external bind mount of one of its subdirectories; a ledger in that alias could be staged after the checkout is remounted. This control gap was identified during review of PR #4728 on 2026-10-28',
+    ),
   );
   assert.ok(
     text.includes(
-      "For Linux root checks, also record the root and protected paths' mount IDs, matching mountinfo fields, and derived backing locations; repeat that comparison whenever the root checks run.",
+      'The root must be owned by the current user or a trusted system principal (POSIX UID 0 or the Windows LocalSystem SID), and must be writable by the current user.',
+    ),
+  );
+  assert.ok(
+    text.includes(
+      'A sticky bit does not make a root owned by another local user trustworthy: that directory owner can rename entries in the session namespace.',
+    ),
+  );
+  assert.ok(
+    text.includes(
+      "For Linux root checks, also record the candidate root, each existing protected path, and every nested mount point's mount ID, matching mountinfo fields, and derived backing location; repeat the full inventory and comparison whenever the root checks run.",
     ),
   );
   assert.match(
     text,
-    /On Linux, obtain a mount ID from already-open directory handles using `statx\(2\)` with `AT_EMPTY_PATH` for the candidate root and each existing protected path/,
+    /On Linux, enumerate every `\/proc\/self\/mountinfo` entry whose decoded mount point is equal to or component-contained beneath an existing protected path/,
+  );
+  assert.match(
+    text,
+    /For the candidate root, each existing protected path, and every such nested mount point, obtain a mount ID from an already-open directory handle using `statx\(2\)` with `AT_EMPTY_PATH/,
   );
   assert.match(
     text,
@@ -3548,7 +3563,7 @@ test('issue-authoring contract defines ledger storage verdicts, allocation, and 
   );
   assert.match(
     text,
-    /Reject the candidate root when its backing location is equal to or below a protected path's backing location on the same device/,
+    /Reject the candidate root when its backing location is equal to or below any protected backing location on the same device, including each nested mount point's backing location/,
   );
   assert.match(
     text,

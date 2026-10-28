@@ -1535,9 +1535,10 @@ resolved), its file type, its owner, its mode (POSIX) or ACL (Windows), its link
 count, and its file identity (device and inode on POSIX, volume serial and file
 index on Windows). A ledger's content is identified by its SHA-256. This
 identity record lives only in the session's working context, never in a file, a
-marker, or the repository. For Linux root checks, also record the root and
-protected paths' mount IDs, matching mountinfo fields, and derived backing
-locations; repeat that comparison whenever the root checks run.
+marker, or the repository. For Linux root checks, also record the candidate
+root, each existing protected path, and every nested mount point's mount ID,
+matching mountinfo fields, and derived backing location; repeat the full
+inventory and comparison whenever the root checks run.
 
 **Roots.** A root is a directory that holds namespaces. Use a root that the user
 or the runtime supplies, such as a named scratch directory or harness scratch
@@ -1593,51 +1594,87 @@ If the walk finds Git metadata, cannot inspect an ancestor, or sees malformed
 or ambiguous Git metadata, stop. Any other exit status or diagnostic,
 including missing Git, permission, I/O, malformed repository metadata, or an
 unclassifiable error, means the root is unreadable and must stop. Never treat
-an arbitrary Git failure as proof that the path is outside a repository. This
-is preventive; no observed incident yet. The root must be owned by the current
-user or, on POSIX, be a sticky-bit shared temporary directory, and must be
-writable by the current user. On POSIX, reject a root that grants group or
-other users write and search permission without the sticky bit, even when the
-current user owns it. On Windows, reject a root whose ACL lets another user
+an arbitrary Git failure as proof that the path is outside a repository.
+
+The root-ownership gap was identified during security review of PR #4728
+on 2026-10-28; no user-data loss was observed. See the review comment:
+
+<https://github.com/kurone-kito/idd-skill/pull/4728#discussion_r4401322925>
+
+A sticky bit does not make a root owned by another local user trustworthy:
+that directory owner can rename entries in the session namespace. The root
+must be owned by the current user or a trusted system principal (POSIX UID
+0 or the Windows LocalSystem SID), and must be writable by the current
+user. On POSIX, reject a root that grants group or other users write and
+search permission without the sticky bit, even when the current user owns
+it. On Windows, reject a root whose ACL lets another user
 rename or delete child entries. If this permission evidence is unreadable,
 stop.
 
 **Mount aliases.** A canonical pathname can look external while a bind mount
-exposes a worktree or git-administration directory; this is preventive; no
-observed incident yet. Check the backing location as well as the visible path.
-For every protected path (each reported worktree path and each discovered Git
-directory), first compare its normalized absolute lexical path against the
-candidate root using component-aware containment, even when a worktree path
-cannot be opened. Then walk each existing component without following
-symbolic links or reparse points. If that walk confirms a registered
-worktree path is absent after checking its readable ancestors, retain the Git
-worktree record and skip only the handle and backing-location comparison for
-that absent path; its Git common directory remains protected. Never prune or
-edit Git metadata. Access denial, an I/O or device error, a symbolic link or
-reparse point, or any ambiguous result makes the root unreadable and fails
-closed. An existing protected path still needs the full canonical-path and
-backing-location checks below. Missing-path handling is preventive; no
+exposes a worktree or Git administration directory, or while a nested mount
+inside a worktree is also reachable through an external path. The nested-mount
+gap was reproduced in an isolated Linux mount namespace during review of PR
+`#4728` on 2026-10-28 ([review comment](https://github.com/kurone-kito/idd-skill/pull/4728#discussion_r4401240053));
+the reproduction demonstrates the control gap, not user-data loss. Check the
+backing location as well as the visible path. For every protected path (each
+reported worktree path and each discovered Git directory), first compare its
+normalized absolute lexical path against the candidate root using
+component-aware containment, even when a worktree path cannot be opened. Then
+walk each existing component without following symbolic links or reparse
+points.
+
+If that walk confirms a registered worktree path is absent after checking
+its readable ancestors, retain the worktree record and its Git common
+directory, mark the protected-path inventory incomplete, and stop before
+evaluating any candidate root. A missing checkout does not rule out an
+external bind mount of one of its subdirectories; a ledger in that alias
+could be staged after the checkout is remounted. This control gap was
+identified during review of PR #4728 on 2026-10-28; no user-data loss was
+observed. See the review comment:
+
+<https://github.com/kurone-kito/idd-skill/pull/4728#discussion_r4401322963>
+
+Never prune or edit Git metadata. Access denial,
+an I/O or device error, a symbolic link or reparse point, or any ambiguous
+result makes the root unreadable and fails closed. An existing protected path
+still needs the full canonical-path and backing-location checks below. For
+each existing protected path, also inventory every mounted filesystem whose
+mount point is equal to or component-contained beneath that path. Validate each
+nested mount point by a no-follow walk rooted at its protected-path handle, and
+include it as a separate protected backing location. A nested mount that has
+disappeared, cannot be opened, or cannot be matched unambiguously makes the
+root unreadable and fails closed. Missing-path handling is preventive; no
 observed incident yet.
 
-On Linux, obtain a mount ID from already-open directory handles using
-`statx(2)` with `AT_EMPTY_PATH` for the candidate root and each existing
-protected path. When `statx` fails or does not provide `STATX_MNT_ID`, read the
-single decimal `mnt_id` field from `/proc/self/fdinfo/<fd>` for that same open
+On Linux, enumerate every `/proc/self/mountinfo` entry whose decoded mount
+point is equal to or component-contained beneath an existing protected path.
+For the candidate root, each existing protected path, and every such nested
+mount point, obtain a mount ID from an already-open directory handle using
+`statx(2)` with `AT_EMPTY_PATH`. When `statx` fails or does not provide
+`STATX_MNT_ID`, read the single decimal
+`mnt_id` field from `/proc/self/fdinfo/<fd>` for that same open
 handle. Require either source to yield a valid ID, then read the matching
-entries in `/proc/self/mountinfo`. Decode its escaped fields, and require each
-path to be at or below its entry's mount point. Map a path to its backing
-location by joining the entry's `root` with the path relative to its `mount
-point`, paired with the entry's `major:minor` device identity. Reject the
-candidate root when its backing location is equal to or below a protected
-path's backing location on the same device. This detects a bind-mounted alias
+entries in `/proc/self/mountinfo` and verify that each handle's canonical path
+and mount ID match the parsed entry. Dedupe repeated entries by mount ID;
+conflicting mappings are ambiguous. Decode mountinfo's escaped fields, and
+require each path to be at or below its entry's mount point. Map a path to its
+backing location by joining the entry's `root` with the path relative to
+its `mount point`, paired with the entry's `major:minor` device identity.
+Reject the
+candidate root when its backing location is equal to or below any protected
+backing location on the same device, including each nested mount point's
+backing location. This detects a bind-mounted alias
 without rejecting a candidate merely because it is on a different mount from
 `/`. Do not use `RESOLVE_NO_XDEV` as a blanket cross-mount rejection: an
 operating-system temporary or state directory may legitimately be on another
 mount. If neither mount-ID source works, mountinfo cannot be read, a mount
 entry cannot be matched, or the mapping is ambiguous, treat the root as
 unreadable and fail closed. On other platforms, use native mount or volume
-evidence to make the same backing-location comparison; if it cannot be
-established, fail closed. The mount-ID fallback is preventive; no observed
+evidence to enumerate nested mount points beneath each existing protected path
+and make the same backing-location comparison; if the full inventory or
+comparison cannot be established, fail closed. The mount-ID fallback is
+preventive; no observed
 incident yet. See [`statx(2)`](https://man7.org/linux/man-pages/man2/statx.2.html),
 [`/proc/self/fdinfo/<fd>`](https://man7.org/linux/man-pages/man5/proc_pid_fdinfo.5.html),
 [`/proc/self/mountinfo`](https://www.man7.org/linux/man-pages/man5/proc_pid_mountinfo.5.html),
