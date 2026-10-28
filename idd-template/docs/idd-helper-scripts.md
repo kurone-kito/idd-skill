@@ -4057,7 +4057,8 @@ The adopted helper boundaries are intentionally narrow:
   `--claimless` instead of `--claim-issue`/`--claim-id` (#2616, mirrors
   `pre-merge-readiness.mjs`'s `--claimless`, #2017). An empty
   `closingIssuesReferences` is claimless only when the head branch does not
-  name an issue; see the fail-closed bullet below (kurone-kito/idd-skill#4735).
+  name an issue, or names one with no active claim and a valid out-of-loop
+  marker; see the fail-closed bullet below (kurone-kito/idd-skill#4735).
 - Maps `--comment-id` (the review comment's REST id) to its owning review
   thread by matching it against the `databaseId` of the comments inside each
   GraphQL `reviewThreads` node (both the threads and the nested comments
@@ -4118,8 +4119,11 @@ The adopted helper boundaries are intentionally narrow:
   stays claimless with no viewer-identity lookup; an `issue/<n>-...` name is
   checked against issue `<n>`'s claim, as if it were the closing issue, so an
   active claim refuses `--claimless`, and the refusal names the claim-bound
-  route `--claim-issue <n> --claim-id <claim-id>`; an empty, unreadable, or
-  malformed name, or incomplete claim evidence, fails closed.
+  route `--claim-issue <n> --claim-id <claim-id>`; with no active claim, a
+  valid trusted out-of-loop marker on the PR still applies (the bootstrap
+  exception). An empty, unreadable, or malformed name (not a valid branch name,
+  or an issue number that is not a safe integer), or incomplete claim
+  evidence, fails closed.
   GraphQL `errors` fail fast rather than masquerading as a missing thread,
   and a partial apply (reply posted, resolve not confirmed) still reports
   the posted `replyId`.
