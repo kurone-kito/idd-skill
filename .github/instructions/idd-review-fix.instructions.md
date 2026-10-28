@@ -270,7 +270,7 @@ For a per-file cap, apply step 1. If the file is still above its cap
 (`phaseLimitBytes`, or `alwaysLoadedLimitBytes` for an always-loaded
 file), stop and ask once. Never raise a per-file cap.
 
-Push normally; E11 merge commits need no force push.
+Then push the feature branch normally
 
 E11-only files do not widen E12's fold-in scope.
 
