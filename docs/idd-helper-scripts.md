@@ -9570,13 +9570,35 @@ and that helper detail is the next action.
     does not require an up-to-date head, with `mergeable` resolved to
     `MERGEABLE`, is listed, so a conflicting, blocked, unstable,
     still-computing, or draft head is not.
-    A pull request that closes no issue is checked with `--claimless`;
-    otherwise each same-repository closing issue is tried as
-    `--claim-issue`, with no `--claim-id`. Each check also receives this
-    run's `--trusted-marker-logins`, `--advisory-bot-logins`, and
+    A pull request that closes no issue is checked with `--claimless` when
+    its head branch is not blank and does not start with `issue/`, after
+    optional leading whitespace, in any ASCII letter case. When the closing
+    references are
+    empty and the head branch is the
+    canonical lowercase `issue/<number>-...`, the pull request is checked
+    with `--claim-issue <number>` instead (issue `#4734`). GitHub can leave
+    the closing references empty for a claimed issue branch on a non-default
+    base (issue `#4697`, observed 2026-10-23), so an empty field does not
+    show that no claim exists. A head branch that is missing, that starts
+    with `issue/` in another ASCII letter case or after leading whitespace,
+    or that starts with the canonical `issue/` without a parseable issue
+    number, is listed in `openReadyUncheckedPrs` with a `reason`, because a
+    claimless check would skip the claim on it. Otherwise
+    each same-repository closing issue is tried as `--claim-issue`, with no
+    `--claim-id`. Each check also receives this run's
+    `--trusted-marker-logins`, `--advisory-bot-logins`, and
     `--idd-agent-logins` values when they are given. Readiness still
     requires an active claim on that issue, so a pull request whose claim
-    was released reads as not ready and is not listed. A pull request that
+    was released reads as not ready and is not listed. For a head branch
+    with empty closing references this narrows the list deliberately: an
+    issue branch with no active claim was listed through `--claimless`
+    before. The check confirms only that an active claim exists on that
+    issue. It does not compare the claim's recorded branch with the pull
+    request head, and without `--claim-id` it does not check the claim's
+    agent or nonce. On a default-branch base the expected closing set is
+    that issue, so a pull request without a closing keyword reads as not
+    ready, and a `none` claimless waiver does not bind on this path. A pull
+    request that
     closes an issue but merges out of loop under a valid out-of-loop marker
     is not tried with `--claimless`, so it is not listed either. A pull
     request whose readiness check fails, or whose closing references
