@@ -9555,14 +9555,19 @@ and that helper detail is the next action.
     `MERGEABLE`, is listed, so a conflicting, blocked, unstable,
     still-computing, or draft head is not.
     A pull request that closes no issue is checked with `--claimless` when
-    its head branch is not an `issue/<number>-...` branch. When the closing
-    references are empty and the head branch is `issue/<number>-...`, the
-    pull request is checked with `--claim-issue <number>` instead (issue
-    `#4734`). GitHub can leave the closing references empty for a claimed
-    issue branch on a non-default base (issue `#4697`, observed 2026-10-23),
-    so an empty field does not show that no claim exists. A head branch that
-    is missing, or that starts with `issue/` without a parseable issue
-    number, is listed in `openReadyUncheckedPrs` with a `reason`. Otherwise
+    its head branch is not blank and does not start with `issue/`, after
+    optional leading whitespace, in any ASCII letter case. When the closing
+    references are
+    empty and the head branch is the
+    canonical lowercase `issue/<number>-...`, the pull request is checked
+    with `--claim-issue <number>` instead (issue `#4734`). GitHub can leave
+    the closing references empty for a claimed issue branch on a non-default
+    base (issue `#4697`, observed 2026-10-23), so an empty field does not
+    show that no claim exists. A head branch that is missing, that starts
+    with `issue/` in another ASCII letter case or after leading whitespace,
+    or that starts with the canonical `issue/` without a parseable issue
+    number, is listed in `openReadyUncheckedPrs` with a `reason`, because a
+    claimless check would skip the claim on it. Otherwise
     each same-repository closing issue is tried as `--claim-issue`, with no
     `--claim-id`. Each check also receives this run's
     `--trusted-marker-logins`, `--advisory-bot-logins`, and
