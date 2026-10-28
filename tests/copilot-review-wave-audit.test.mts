@@ -2652,6 +2652,38 @@ const GH_FIXTURE_STUB = `const fs = require('node:fs');
 const args = process.argv.slice(2);
 const fixture = JSON.parse(fs.readFileSync(process.env.WAVE_AUDIT_FIXTURE, 'utf8'));
 if (args[0] === 'api') fs.appendFileSync(process.env.WAVE_AUDIT_CALLS, String(args[1]) + '\\n');
+if (args[0] === 'api' && args[1] === 'repos/kurone-kito/idd-skill/actions/workflows') {
+  if (!args.includes('--paginate') || args[args.indexOf('--jq') + 1] !== '.workflows[]') {
+    process.stderr.write('workflow list must be paginated with the workflow selector\\n');
+    process.exit(1);
+  }
+  if (fixture.failReviewerWorkflowList) {
+    process.stderr.write(fixture.failReviewerWorkflowList + '\\n');
+    process.exit(1);
+  }
+  for (const workflow of fixture.reviewerWorkflows ?? []) {
+    process.stdout.write(JSON.stringify(workflow) + '\\n');
+  }
+  process.exit(0);
+}
+if (args[0] === 'api' && String(args[1]).includes('/actions/workflows/') && String(args[1]).includes('/runs?created=')) {
+  const runPath = String(args[1]);
+  const day = runPath.match(/[?&]created=(\\d{4}-\\d{2}-\\d{2})/)?.[1] ?? '';
+  if (!args.includes('--paginate') || args[args.indexOf('--jq') + 1] !== '.total_count, .workflow_runs[]') {
+    process.stderr.write('reviewer run list must be paginated with the run selector\\n');
+    process.exit(1);
+  }
+  const failure = fixture.failReviewerRunsByDay?.[day];
+  if (failure) {
+    process.stderr.write(failure + '\\n');
+    process.exit(1);
+  }
+  const runs = fixture.reviewerRunsByDay?.[day] ?? [];
+  const totalCount = fixture.reviewerRunCountsByDay?.[day] ?? runs.length;
+  process.stdout.write(String(totalCount) + '\\n');
+  for (const run of runs) process.stdout.write(JSON.stringify(run) + '\\n');
+  process.exit(0);
+}
 if (args[0] === 'api' && args[1] === 'graphql') {
   const ids = args.filter((a) => a.startsWith('ids[]=')).map((a) => a.slice('ids[]='.length));
   process.stdout.write(JSON.stringify({ data: { nodes: ids.map((id) => ({ id, lastEditedAt: null })) } }));
@@ -2758,6 +2790,383 @@ function runCheckWithFixture(
     rmSync(dir, { recursive: true, force: true });
   }
 }
+
+function runReviewerRunsWithFixture(
+  fixture: {
+    reviewerWorkflows?: Array<{ id: number; path: string }>;
+    reviewerRunsByDay?: Record<string, unknown[]>;
+    reviewerRunCountsByDay?: Record<string, number>;
+    failReviewerWorkflowList?: string;
+    failReviewerRunsByDay?: Record<string, string>;
+  },
+  args: string[],
+): { status: number | null; stdout: string; stderr: string; calls: string[] } {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-wave-audit-reviewer-runs-'));
+  const fixturePath = join(dir, 'fixture.json');
+  const callsPath = join(dir, 'calls.txt');
+  writeFileSync(fixturePath, JSON.stringify(fixture));
+  writeFileSync(callsPath, '');
+  const restore = stubExecutable('gh', GH_FIXTURE_STUB);
+  try {
+    const result = spawnSync(
+      process.execPath,
+      [CLI_PATH, '--repo', 'kurone-kito/idd-skill', ...args],
+      {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          WAVE_AUDIT_FIXTURE: fixturePath,
+          WAVE_AUDIT_CALLS: callsPath,
+        },
+      },
+    );
+    return {
+      status: result.status,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      calls: readFileSync(callsPath, 'utf8').trim().split('\n').filter(Boolean),
+    };
+  } finally {
+    restore();
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const REVIEWER_WORKFLOW_FIXTURE = {
+  id: 283812949,
+  path: 'dynamic/agents/copilot-pull-request-reviewer',
+};
+
+test('CLI reviewer runs: fetches each day and reports duration and branch metrics', () => {
+  const result = runReviewerRunsWithFixture(
+    {
+      reviewerWorkflows: [REVIEWER_WORKFLOW_FIXTURE],
+      reviewerRunsByDay: {
+        '2026-10-01': [
+          {
+            id: 1,
+            status: 'completed',
+            conclusion: 'success',
+            head_branch: 'p',
+            run_started_at: '2026-10-01T00:00:00Z',
+            updated_at: '2026-10-01T00:01:40Z',
+          },
+          {
+            id: 4,
+            status: 'in_progress',
+            conclusion: null,
+            head_branch: 'p',
+            run_started_at: null,
+            updated_at: null,
+          },
+        ],
+        '2026-10-02': [
+          {
+            id: 2,
+            status: 'completed',
+            conclusion: 'failure',
+            head_branch: 'q',
+            run_started_at: '2026-10-02T00:00:00Z',
+            updated_at: '2026-10-02T00:03:20Z',
+          },
+          {
+            id: 3,
+            status: 'completed',
+            conclusion: 'skipped',
+            head_branch: 'q',
+            run_started_at: '2026-10-02T01:00:00Z',
+            updated_at: '2026-10-02T01:06:40Z',
+          },
+        ],
+      },
+    },
+    ['--reviewer-runs-from', '2026-10-01', '--reviewer-runs-to', '2026-10-02'],
+  );
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, '');
+  assert.deepEqual(JSON.parse(result.stdout), {
+    reviewerRuns: {
+      workflowPath: 'dynamic/agents/copilot-pull-request-reviewer',
+      workflowId: 283812949,
+      from: '2026-10-01',
+      to: '2026-10-02',
+      runs: 4,
+      completed: 3,
+      byConclusion: { success: 1, failure: 1, cancelled: 0, other: 1 },
+      totalDurationMs: 700000,
+      medianDurationMs: 200000,
+      headBranches: 2,
+      medianRunsPerHeadBranch: 2,
+    },
+  });
+  assert.ok(
+    result.calls.includes(
+      'repos/kurone-kito/idd-skill/actions/workflows/283812949/runs?created=2026-10-01&per_page=100',
+    ),
+  );
+  assert.ok(
+    result.calls.includes(
+      'repos/kurone-kito/idd-skill/actions/workflows/283812949/runs?created=2026-10-02&per_page=100',
+    ),
+  );
+});
+
+test('CLI reviewer runs: uses the lower middle for even-sized medians', () => {
+  const result = runReviewerRunsWithFixture(
+    {
+      reviewerWorkflows: [REVIEWER_WORKFLOW_FIXTURE],
+      reviewerRunsByDay: {
+        '2026-10-01': [
+          {
+            id: 11,
+            status: 'completed',
+            conclusion: 'success',
+            head_branch: 'p',
+            run_started_at: '2026-10-01T00:00:00Z',
+            updated_at: '2026-10-01T00:01:40Z',
+          },
+          {
+            id: 12,
+            status: 'completed',
+            conclusion: 'success',
+            head_branch: 'q',
+            run_started_at: '2026-10-01T01:00:00Z',
+            updated_at: '2026-10-01T01:03:20Z',
+          },
+          {
+            id: 13,
+            status: 'completed',
+            conclusion: 'failure',
+            head_branch: 'q',
+            run_started_at: '2026-10-01T02:00:00Z',
+            updated_at: '2026-10-01T02:05:00Z',
+          },
+          {
+            id: 14,
+            status: 'completed',
+            conclusion: 'cancelled',
+            head_branch: 'q',
+            run_started_at: '2026-10-01T03:00:00Z',
+            updated_at: '2026-10-01T03:06:40Z',
+          },
+        ],
+      },
+    },
+    ['--reviewer-runs-from', '2026-10-01', '--reviewer-runs-to', '2026-10-01'],
+  );
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout).reviewerRuns;
+  assert.equal(report.medianDurationMs, 200000);
+  assert.equal(report.medianRunsPerHeadBranch, 1);
+});
+
+test('CLI reviewer runs: fails when a run has no head branch', () => {
+  for (const headBranch of [null, undefined, '']) {
+    const result = runReviewerRunsWithFixture(
+      {
+        reviewerWorkflows: [REVIEWER_WORKFLOW_FIXTURE],
+        reviewerRunsByDay: {
+          '2026-10-01': [
+            {
+              id: 15,
+              status: 'in_progress',
+              conclusion: null,
+              head_branch: headBranch,
+              run_started_at: null,
+              updated_at: null,
+            },
+          ],
+        },
+      },
+      [
+        '--reviewer-runs-from',
+        '2026-10-01',
+        '--reviewer-runs-to',
+        '2026-10-01',
+      ],
+    );
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /run 15 has no valid head_branch/);
+  }
+});
+
+test('CLI reviewer runs: missing workflow fails clearly', () => {
+  const result = runReviewerRunsWithFixture(
+    { reviewerWorkflows: [{ id: 1, path: 'another/workflow' }] },
+    ['--reviewer-runs-from', '2026-10-01', '--reviewer-runs-to', '2026-10-01'],
+  );
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /no Copilot reviewer workflow/);
+  assert.equal(result.calls.length, 1);
+});
+
+test('CLI reviewer runs: rejects a day at the 1,000-run cap', () => {
+  const result = runReviewerRunsWithFixture(
+    {
+      reviewerWorkflows: [REVIEWER_WORKFLOW_FIXTURE],
+      reviewerRunCountsByDay: { '2026-10-01': 1000 },
+    },
+    ['--reviewer-runs-from', '2026-10-01', '--reviewer-runs-to', '2026-10-01'],
+  );
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /2026-10-01/);
+});
+
+test('CLI reviewer runs: reports workflow and run-list API failures with paths', () => {
+  const workflowFailure = runReviewerRunsWithFixture(
+    { failReviewerWorkflowList: 'workflow list unavailable' },
+    ['--reviewer-runs-from', '2026-10-01', '--reviewer-runs-to', '2026-10-01'],
+  );
+  assert.equal(workflowFailure.status, 1);
+  assert.ok(
+    workflowFailure.stderr.includes(
+      'reviewer runs: repos/kurone-kito/idd-skill/actions/workflows:',
+    ),
+  );
+  assert.ok(workflowFailure.stderr.includes('workflow list unavailable'));
+
+  const runsFailure = runReviewerRunsWithFixture(
+    {
+      reviewerWorkflows: [REVIEWER_WORKFLOW_FIXTURE],
+      failReviewerRunsByDay: { '2026-10-01': 'run list unavailable' },
+    },
+    ['--reviewer-runs-from', '2026-10-01', '--reviewer-runs-to', '2026-10-01'],
+  );
+  assert.equal(runsFailure.status, 1);
+  assert.ok(
+    runsFailure.stderr.includes(
+      'reviewer runs: repos/kurone-kito/idd-skill/actions/workflows/283812949/runs?created=2026-10-01&per_page=100:',
+    ),
+  );
+  assert.ok(runsFailure.stderr.includes('run list unavailable'));
+});
+
+test('CLI reviewer runs: invalid and incompatible options fail before gh', () => {
+  const invalidArgs = [
+    ['--reviewer-runs-from', '2026-10-01'],
+    ['--reviewer-runs-from', '2026-10-02', '--reviewer-runs-to', '2026-10-01'],
+    ['--reviewer-runs-from', '2026-02-30', '--reviewer-runs-to', '2026-03-01'],
+    [
+      '--reviewer-runs-from',
+      '2026-10-01',
+      '--reviewer-runs-to',
+      '2026-10-01',
+      '--prs',
+      '42',
+    ],
+    [
+      '--reviewer-runs-from',
+      '2026-10-01',
+      '--reviewer-runs-to',
+      '2026-10-01',
+      '--limit',
+      '2',
+    ],
+    [
+      '--reviewer-runs-from',
+      '2026-10-01',
+      '--reviewer-runs-to',
+      '2026-10-01',
+      '--merged-from',
+      '2026-10-01',
+    ],
+    [
+      '--reviewer-runs-from',
+      '2026-10-01',
+      '--reviewer-runs-to',
+      '2026-10-01',
+      '--check',
+    ],
+    [
+      '--reviewer-runs-from',
+      '2026-10-01',
+      '--reviewer-runs-to',
+      '2026-10-01',
+      '--since',
+      '2026-10-01',
+    ],
+    [
+      '--reviewer-runs-from',
+      '2026-10-01',
+      '--reviewer-runs-to',
+      '2026-10-01',
+      '--min-recorded-share',
+      '0.9',
+    ],
+    [
+      '--reviewer-runs-from',
+      '2026-10-01',
+      '--reviewer-runs-to',
+      '2026-10-01',
+      '--baseline-reviews-per-pr',
+      '3.9',
+    ],
+    [
+      '--reviewer-runs-from',
+      '2026-10-01',
+      '--reviewer-runs-to',
+      '2026-10-01',
+      '--format',
+      'tsv',
+    ],
+  ];
+  for (const args of invalidArgs) {
+    const result = runReviewerRunsWithFixture({}, args);
+    assert.equal(result.status, 2, args.join(' ') + ': ' + result.stderr);
+    assert.deepEqual(result.calls, [], args.join(' '));
+  }
+});
+
+test('CLI reviewer runs: step summary reports the created-run window', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-wave-audit-reviewer-summary-'));
+  const summaryPath = join(dir, 'summary.md');
+  try {
+    const result = runReviewerRunsWithFixture(
+      {
+        reviewerWorkflows: [REVIEWER_WORKFLOW_FIXTURE],
+        reviewerRunsByDay: {
+          '2026-10-01': [
+            {
+              id: 1,
+              status: 'completed',
+              conclusion: 'success',
+              head_branch: 'p',
+              run_started_at: '2026-10-01T00:00:00Z',
+              updated_at: '2026-10-01T00:01:40Z',
+            },
+          ],
+        },
+      },
+      [
+        '--reviewer-runs-from',
+        '2026-10-01',
+        '--reviewer-runs-to',
+        '2026-10-01',
+        '--step-summary',
+        summaryPath,
+      ],
+    );
+    assert.equal(result.status, 0, result.stderr);
+    const summary = readFileSync(summaryPath, 'utf8');
+    assert.match(summary, /^## Copilot reviewer runs/m);
+    assert.match(summary, /Runs: 1/);
+    assert.match(summary, /Median duration: 100 seconds/);
+    assert.match(
+      summary,
+      /runs created in the range, not the runs of the pull requests merged in it/,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('CLI help lists both reviewer-run flags', () => {
+  const output = execFileSync(process.execPath, [CLI_PATH, '--help'], {
+    encoding: 'utf8',
+  });
+  assert.match(output, /--reviewer-runs-from <YYYY-MM-DD>/);
+  assert.match(output, /--reviewer-runs-to <YYYY-MM-DD>/);
+});
 
 test('CLI fails closed on a missing or malformed sync manifest before contacting GitHub', () => {
   const tempRoot = mkdtempSync(join(tmpdir(), 'idd-wave-audit-manifest-'));

@@ -384,6 +384,44 @@ pull request `#3782`, merged 2026-10-08.
 | Inline finding path classes | generated helper 57; sync mirror 109; other 1,449; no path 0                                     |
 | Triage                      | recorded 223; unrecorded 1,305; malformed 0; contradictions 27                                   |
 
+#### Copilot reviewer runs
+
+This separate measurement counts the runs created by the dynamic
+`dynamic/agents/copilot-pull-request-reviewer` workflow during the UTC
+date range; it does not count review runs belonging to the pull requests
+merged in that range. The workflow's `pull_requests` field was empty
+on 1,795 of the 1,821 October runs, while `head_branch` was present
+on every run, so this mode reports head-branch counts instead of assigning
+runs to PRs. This limitation was measured for
+[issue #4753](https://github.com/kurone-kito/idd-skill/issues/4753).
+
+The run list has no duration field. This mode uses
+`updated_at - run_started_at`; on 25 runs from 2026-10-20, that
+matched `run_duration_ms` from
+`actions/runs/<id>/timing` to the second, without one timing request
+per run. Run duration is a cost proxy: the closest cost-side measure
+available to the workflow's `GITHUB_TOKEN`. GitHub reports no
+billable Actions time for this public repository, and does not document
+whether run duration tracks model usage.
+
+The workflow runs endpoint caps a `created` filter at 1,000 results.
+The helper therefore queries one UTC day at a time with
+`per_page=100` and pagination, and fails closed when a day's
+`total_count` reaches 1,000 rather than publish a truncated result.
+
+| Measurement                 | Value                                                                                                      |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| Command                     | `node scripts/copilot-review-wave-audit.mjs --reviewer-runs-from 2026-10-01 --reviewer-runs-to 2026-10-26` |
+| Run date                    | 2026-10-28                                                                                                 |
+| Run window (UTC, inclusive) | 2026-10-01 through 2026-10-26                                                                              |
+| Workflow                    | `dynamic/agents/copilot-pull-request-reviewer` (283812949)                                                 |
+| Runs / completed            | 1,821 / 1,821                                                                                              |
+| Conclusions                 | success 1,814; failure 3; cancelled 4; other 0                                                             |
+| Total duration              | 467,662,000 ms (129.9 hours)                                                                               |
+| Median duration             | 247,000 ms (247 seconds)                                                                                   |
+| Distinct head branches      | 463                                                                                                        |
+| Median runs per head branch | 2                                                                                                          |
+
 Dispositions by PR review-count bucket:
 
 | Reviews per PR | Deferred | Rejected | Accepted | Other | None |
