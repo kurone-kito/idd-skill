@@ -579,6 +579,10 @@
   //   // Medium accepted finding is open and fix-validate passes on the
   //   // current head, the remaining Low findings go to a follow-up issue.
   //   "e10MaxPasses": 2,
+  //   // Default: omitted, which behaves as `false`.
+  //   // - true: skip eligible standard-profile E10 batches after advisory convergence.
+  //   // - false: run E10 for every batch.
+  //   "e10SkipOnAdvisoryConvergence": false,
   //   // From this pull-request-wide Copilot review count, a wording-only Low
   //   // finding that is not adopt-now goes to a follow-up issue instead of
   //   // being fixed.

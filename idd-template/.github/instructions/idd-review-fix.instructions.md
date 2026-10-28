@@ -47,6 +47,17 @@ E5's "Verify before accept" rule):
 
 ## E10 — Validate fixes with critique pass
 
+**Standard-profile skip.** Before the batch's first pass and delegate resolution,
+check `critiqueLoop.e10SkipOnAdvisoryConvergence` and the
+[E10 entry condition in policy constants](../../docs/policy-constants.md)
+(opt-in, policy, advisory batch, E1 head, warm E9, exact convergence). On match,
+do not resolve/run the delegate
+or run per-agent critique; no vacuous-result hold or
+batch/`critiqueLoop.e10MaxPasses`/`e10-recurrence` passes-file count. Continue
+to E11; add its record sentence before `Triage:` and the reply-identity stamp
+to each E13 `**Accepted**` reply. Check once per batch; after a pass, continue
+as today.
+
 Run a critique pass to verify that the fixes in E9 address the root
 causes and are correct (see `idd-overview-appendix.instructions.md` for per-agent
 implementation). As at C1, if possible, a per-agent subagent's brief
@@ -116,9 +127,9 @@ Convergence guardrails:
   redirected by a maintainer or deferred under the needs-decision route.
 - If the critique pass reports zero issues, proceed to E11.
 
-**No confidence exception.** Fix scope or confidence never excuses
-skipping this pass — always run it before E11. Pushed and skipped
-one? Disclose on the PR, name the round(s), run E10 on the
+**No confidence exception.** For non-skipped batches, fix scope or
+confidence never excuses skipping this pass — always run it before E11.
+Pushed and skipped one? Disclose on the PR, name the round(s), run E10 on the
 accumulated diff to a clean pass, then return to E1.
 
 **E10 per-issue pass cap (the one exception to the paragraph above).** Count
@@ -141,20 +152,12 @@ rule's exclusion of an Accepted item mid-fix. Then continue to E11. The cap
 never applies while a High or Medium Accepted finding is open. If the count
 cannot be established, the cap is not reached.
 
-**Round-count heuristic for genuinely-new findings (Tier 1).** The guard above
-covers a _repeating_ finding; a different pattern is each round
-surfacing a genuinely new, real finding — that is convergence, not
-stagnation, so the no-progress guard never fires. This is a heuristic,
-not a hard cap: after several consecutive rounds (roughly 3-4) each
-finding something new in the _same area_, treat it as a signal that a
-shared root cause may be producing each new instance, and check
-whether one structural fix (e.g., auditing every caller of a helper
-against its contract, instead of patching one caller per round) would
-converge the loop faster than another incremental patch. Once fixes
-materially address the
-finding's root cause and further comments are speculative or
-non-blocking hardening, treat them as PATH B (disposition-only,
-E4-E7) rather than opening another E9-E10 round.
+**Round-count heuristic for genuinely-new findings (Tier 1).** The no-progress
+guard covers repeats, not distinct findings. After roughly 3-4
+consecutive rounds find new issues in one area, look for a shared root
+cause and whether one structural fix will converge faster. Once fixed, only
+speculation requiring no change or decision is PATH B; actionable findings
+stay PATH A under E4, even if non-blocking.
 
 **Second escalation tier (Tier 2; heuristic, not a hard rule): when the
 structural fix itself doesn't converge** (new same-area findings keep
@@ -170,8 +173,7 @@ any part of the mechanism's behavior, check the issue's acceptance
 criteria and any established external contract for whether that
 behavior was actually required; if so, stop for a maintainer decision
 instead of dropping it to converge review. That stop stands unless the
-[needs-decision route] applies. Worked example: issue
-kurone-kito/idd-skill#2223 (PR kurone-kito/idd-skill#2389); see
+[needs-decision route] applies. See
 [the rationale example](../../docs/idd-design-rationale.md#review-fix-escalation-examples).
 
 **Third escalation tier (heuristic, not a hard rule): open-ended
@@ -196,11 +198,7 @@ finding the same way this workflow already disposes of any review
 item or resolves any hold (`idd-review-triage.instructions.md`,
 `idd-overview-appendix.instructions.md`), and file any follow-up
 through `idd-review-triage.instructions.md`'s E6 follow-up-issue rule,
-rather than continuing rounds indefinitely. Worked example: issue
-kurone-kito/idd-skill#2767 (PR
-kurone-kito/idd-skill#2840) ran 27 review rounds; the operator
-accepted three remaining findings as a documented limitation and filed
-follow-up kurone-kito/idd-skill#2865 (see [the rationale example](../../docs/idd-design-rationale.md#review-fix-escalation-examples)).
+rather than continuing rounds indefinitely. See [the rationale example](../../docs/idd-design-rationale.md#review-fix-escalation-examples).
 
 ## E11 — Resolve conflicts with {development-branch}
 

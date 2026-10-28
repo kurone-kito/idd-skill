@@ -1951,6 +1951,9 @@ supports these keys:
 - `critiqueLoop.e10NoProgressHoldAfter` (default `3`)
 - `critiqueLoop.e10MaxPasses` (default `2`; per-issue cap on E10 passes,
   active only while no High or Medium Accepted finding is open)
+- `critiqueLoop.e10SkipOnAdvisoryConvergence` (default `false`; standard
+  profile only; skips eligible advisory-only E10 batches after convergence
+  matches the E1 head. Lite always runs E10.)
 - `critiqueLoop.deferAfterRounds` (default `12`)
 - `critiqueLoop.deferByUrgency` (default `off`; `low`,
   `low-and-medium`, or `severity-tiered`). High stays ineligible under
