@@ -1267,9 +1267,14 @@ function fetchChangeRequestBranchAndChecks(
     }
     for (const node of contexts.nodes) {
       const normalized = normalizeStatusCheckRollupNode(node);
-      if (normalized) {
-        statusCheckRollup.push(normalized);
+      if (!normalized) {
+        // A null entry can hide a check; never drop it and report the page
+        // as complete.
+        throw new Error(
+          'getChangeRequestBranchAndChecks: status-check rollup contains a null or unreadable node',
+        );
       }
+      statusCheckRollup.push(normalized);
     }
     const hasNextPage = contexts.pageInfo.hasNextPage;
     if (!hasNextPage) {

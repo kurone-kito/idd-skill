@@ -421,6 +421,28 @@ test('review-activity-snapshot.mjs CLI: parses paginated activity and validates 
   assert.equal(noCheckReport.latestCiCompletedAt, 'none');
   assert.equal(noCheckReport.latestPassingCiCompletedAt, 'none');
 
+  // An explicit complete empty connection is a valid read with no checks,
+  // unlike a missing or null connection, which must fail closed below.
+  const emptyConnectionOutput = runStubbedCli(
+    'scripts/review-activity-snapshot.mjs',
+    ['--pr', '42', '--owner', OWNER, '--repo', REPO],
+    responses,
+    withGraphql((pullRequest) => {
+      pullRequest.statusCheckRollup = {
+        contexts: {
+          nodes: [],
+          pageInfo: { hasNextPage: false, endCursor: null },
+        },
+      };
+    }),
+  );
+  const emptyConnectionReport = JSON.parse(emptyConnectionOutput) as {
+    latestCiCompletedAt: string;
+    latestPassingCiCompletedAt: string;
+  };
+  assert.equal(emptyConnectionReport.latestCiCompletedAt, 'none');
+  assert.equal(emptyConnectionReport.latestPassingCiCompletedAt, 'none');
+
   const legacyStatusContextOutput = runStubbedCli(
     'scripts/review-activity-snapshot.mjs',
     ['--pr', '42', '--owner', OWNER, '--repo', REPO],
@@ -451,6 +473,14 @@ test('review-activity-snapshot.mjs CLI: parses paginated activity and validates 
             targetUrl: 'https://example.test/pending',
             createdAt: '2026-10-26T09:20:00Z',
             updatedAt: '2026-10-26T09:45:00Z',
+          },
+          {
+            __typename: 'StatusContext',
+            context: 'legacy-failure',
+            state: 'FAILURE',
+            targetUrl: 'https://example.test/failure',
+            createdAt: '2026-10-26T09:05:00Z',
+            updatedAt: '2026-10-26T09:08:00Z',
           },
         ];
       }),
@@ -570,6 +600,13 @@ test('review-activity-snapshot.mjs CLI: parses paginated activity and validates 
         };
       },
       expected: /page reported hasNextPage without endCursor/,
+    },
+    {
+      name: 'null node inside a complete page',
+      mutate: (pullRequest) => {
+        (contexts(pullRequest).nodes as unknown[]).push(null);
+      },
+      expected: /null or unreadable node/,
     },
   ];
 
