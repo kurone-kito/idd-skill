@@ -1070,7 +1070,9 @@ reply with the same flags would carry, and posts nothing. For example:
   --trusted-marker-logins a,b    logins whose claim markers are trusted
                                  (default: your gh login)
   --claimless                    skip claim fetch/revalidation (#2616). For a PR with no
-                                 closingIssuesReferences, or (#3328) one that carries a
+                                 closingIssuesReferences whose head branch is not an
+                                 issue/<n>-... branch (#4735: such a branch is checked
+                                 against issue <n>'s claim), or (#3328) one that carries a
                                  valid, trusted, unedited <!-- idd-out-of-loop: ...
                                  reason:bootstrap ... --> marker naming this PR and whose
                                  closing issue(s) have no active claim; cannot combine
@@ -1101,37 +1103,52 @@ reply with the same flags would carry, and posts nothing. For example:
   -h, --help                     show this help
 `;
 
+/** Refusal prefix for a `--claimless` call the branch-identity check refuses (#4735). */
+const CLAIMLESS_REFUSAL_PREFIX = '--claimless refused:';
+
+/** An `issue/` head name, case-insensitive, as an IDD claim branch carries it (#4735). */
+const IDD_ISSUE_BRANCH_PREFIX = /^issue\//i;
+
+/** The `issue/<number>-<slug>` head name of an IDD claim branch (#4735). */
+const IDD_ISSUE_BRANCH_PATTERN = /^issue\/([1-9]\d*)-/i;
+
 /**
- * #2616: `--claimless` scoping rule (mirrors `pre-merge-readiness.mjs`'s
- * #2017 flag, and shares its `classifyPrLoopMembership` definition,
- * kurone-kito/idd-skill#3328) -- true when the PR has no
- * `closingIssuesReferences` at all (the unchanged #2017 fast path, no
- * viewer/trust resolution needed -- #2616's own Codex-review guarantee for
- * an installation-token credential that cannot resolve a viewer identity),
- * or when it does but carries a valid, trusted, unedited
- * `<!-- idd-out-of-loop: ... reason:bootstrap ... -->` marker naming this
- * PR and every closing issue has no active claim. Re-fetches live on every
- * call rather than caching a single snapshot: a caller (dry-run, then
- * again before each `--apply` mutation) must see a closing issue linked
- * in the window between checks, matching the existing per-mutation
- * claim-revalidation pattern (Codex review on this PR: a maintainer
- * linking an issue between checks must not let a `--claimless` mutation
- * still proceed).
- *
- * `options.trustedMarkerLogins` defaults to this session's own viewer
- * login (`port.resolveViewerLogin()`), mirroring the claimed path further
- * below in this file -- only reached on the non-empty-closing-refs branch,
- * never the fast path, so the #2616 no-viewer-identity guarantee above
- * still holds for the common (no closing references) case. Any failure
- * on this branch -- an unresolvable viewer identity, a closing-issue or
- * PR-comment read failure -- fails closed to "not eligible" (`false`),
- * per the fail-closed default
- * (`idd-overview-core.instructions.md#fail-closed-default`), rather than
- * letting a partial read manufacture a false accept. A tagged `gh`
- * transport or not-found error is rethrown so the CLI envelope keeps
- * that kind.
+ * A `--claimless` verdict. `refusal` is set only when the branch-identity
+ * check (#4735) refuses, and names the claim-bound route for the caller.
  */
-export function isClaimlessEligible(
+export interface ClaimlessVerdict {
+  eligible: boolean;
+  refusal?: string;
+}
+
+/**
+ * #2616 / #3328 / #4735: `--claimless` scoping rule. Shares its
+ * `classifyPrLoopMembership` definition with `pre-merge-readiness.mts`
+ * (kurone-kito/idd-skill#3328). Re-fetches live on every call rather than
+ * caching a snapshot, so a closing issue linked between two checks is seen
+ * by the later one (Codex review on #2616).
+ *
+ * An empty `closingIssuesReferences` no longer proves the PR runs outside the
+ * claim loop by itself (kurone-kito/idd-skill#4735: GitHub can leave the set
+ * empty for a claimed issue branch that targets a non-default development
+ * branch). The head branch decides:
+ *
+ * - A name that does not start with `issue/` is the genuine no-issue route.
+ *   It is eligible with no viewer-identity lookup (the #2616 credential
+ *   guarantee).
+ * - An empty, unreadable, or malformed `issue/` name is refused. Its claim
+ *   cannot be ruled out, so it fails closed.
+ * - An `issue/<number>-...` name is classified as though that issue were the
+ *   closing issue. An active claim refuses, and an unclaimed issue needs a
+ *   valid trusted out-of-loop marker. Incomplete claim evidence fails closed.
+ *
+ * `options.trustedMarkerLogins` defaults to this session's own viewer login.
+ * Any other failure on the classifier path fails closed to "not eligible"
+ * (`idd-overview-core.instructions.md#fail-closed-default`), rather than
+ * letting a partial read manufacture a false accept. A tagged `gh` transport
+ * or not-found error is rethrown so the CLI envelope keeps that kind.
+ */
+export function evaluateClaimless(
   port: ProviderPort,
   pr: number,
   options: {
@@ -1139,37 +1156,47 @@ export function isClaimlessEligible(
     repo?: string;
     trustedMarkerLogins?: string[];
   } = {},
-): boolean {
-  const closingRefs =
-    port.getChangeRequestConvergenceView(pr).closingIssuesReferences;
-  // Copilot review, PR #3421: only a PROVEN, genuinely empty array takes
-  // the fast eligible-without-classification path -- a non-array
-  // `closingRefs` (the field itself unreadable/malformed) must not
-  // silently read as "no closing references" the way coercing straight
-  // to `[]` and checking `.length === 0` would. It instead falls through
-  // to the try block below, where `resolveClosingIssueNumbersForClassifier`
-  // reports `null` for a non-array input, which the classifier fails
-  // closed to `in-loop` for.
+): ClaimlessVerdict {
+  const view = port.getChangeRequestConvergenceView(pr);
+  const closingRefs = view.closingIssuesReferences;
+  const headRef = view.headRefName;
+  // Copilot review, PR #3421: only a PROVEN, genuinely empty array takes the
+  // branch-identity path. A non-array `closingRefs` is unreadable and falls
+  // through to the classifier, which fails it closed to `in-loop`.
+  let branchIssue: number | null = null;
   if (Array.isArray(closingRefs) && closingRefs.length === 0) {
-    return true;
+    if (typeof headRef !== 'string' || headRef === '') {
+      return {
+        eligible: false,
+        refusal: `${CLAIMLESS_REFUSAL_PREFIX} PR #${pr}'s head branch name could not be read, so an issue claim cannot be ruled out; pass --claim-issue <n> --claim-id <claim-id> for the claim that owns this PR instead.`,
+      };
+    }
+    if (!IDD_ISSUE_BRANCH_PREFIX.test(headRef)) {
+      return { eligible: true };
+    }
+    const match = IDD_ISSUE_BRANCH_PATTERN.exec(headRef);
+    if (!match) {
+      return {
+        eligible: false,
+        refusal: `${CLAIMLESS_REFUSAL_PREFIX} PR #${pr}'s head branch "${headRef}" is an issue branch without a valid issue number (expected issue/<number>-<slug>), so an issue claim cannot be ruled out; pass --claim-issue <n> --claim-id <claim-id> for the claim that owns this PR instead.`,
+      };
+    }
+    branchIssue = Number(match[1]);
   }
   try {
-    // C1 critique pass (live-reproduced) + Copilot review, PR #3421: a
-    // same-repo-only extraction fed straight to the classifier would
-    // silently read a cross-repo-only, partially-unresolvable, or
-    // unreadable closing reference as "no closing references", accepting
-    // --claimless with NO marker required for a PR the pre-#3328 code
-    // always refused (kurone-kito/idd-skill#3328).
-    // resolveClosingIssueNumbersForClassifier reports `null` (unreadable)
-    // for exactly those cases instead, which the classifier fails closed
-    // to `in-loop` for -- reproducing the original refusal. Pass the RAW
-    // `closingRefs` (not a pre-coerced array) so the function's own
-    // `Array.isArray` check sees the real shape.
-    const closingIssueNumbers = resolveClosingIssueNumbersForClassifier(
-      closingRefs,
-      options.owner ?? '',
-      options.repo ?? '',
-    );
+    // C1 critique pass (live-reproduced) + Copilot review, PR #3421: an
+    // unreadable or cross-repo-only closing reference reports `null` here,
+    // which the classifier fails closed to `in-loop`. Pass the RAW
+    // `closingRefs` so the function's own `Array.isArray` check sees the real
+    // shape.
+    const closingIssueNumbers =
+      branchIssue === null
+        ? resolveClosingIssueNumbersForClassifier(
+            closingRefs,
+            options.owner ?? '',
+            options.repo ?? '',
+          )
+        : [branchIssue];
     const trustedLogins = normalizeTrustedMarkerLogins(
       options.trustedMarkerLogins?.length
         ? options.trustedMarkerLogins
@@ -1213,7 +1240,17 @@ export function isClaimlessEligible(
       prComments,
       trustedMarkerLogins: trustedLogins,
     });
-    return result.membership !== 'in-loop';
+    if (branchIssue !== null && result.membership === 'in-loop') {
+      const detail =
+        closingIssueClaimState === 'present'
+          ? `names issue #${branchIssue}, which has an active claim; pass --claim-issue ${branchIssue} --claim-id <claim-id> instead.`
+          : `names issue #${branchIssue}, which has no active claim and no valid out-of-loop marker; an issue branch needs a valid out-of-loop marker to use --claimless.`;
+      return {
+        eligible: false,
+        refusal: `${CLAIMLESS_REFUSAL_PREFIX} PR #${pr}'s head branch "${headRef}" ${detail}`,
+      };
+    }
+    return { eligible: result.membership !== 'in-loop' };
   } catch (error) {
     const classified = classifyHelperError(error);
     // A gh failure is not an eligibility verdict. Rethrow so the CLI can
@@ -1221,7 +1258,7 @@ export function isClaimlessEligible(
     if (classified.kind === 'transport' || classified.kind === 'not-found') {
       throw error;
     }
-    return false;
+    return { eligible: false };
   }
 }
 
@@ -1672,15 +1709,16 @@ function main(): HelperCliResult {
     const claimlessMessage =
       '--claimless requires a PR with no closingIssuesReferences, or a valid out-of-loop marker; pass --claim-issue instead';
     try {
-      if (
-        !isClaimlessEligible(port, pr, {
-          owner,
-          repo,
-          trustedMarkerLogins: args.trustedMarkerLogins,
-        })
-      ) {
-        writeStderrSync(`${claimlessMessage}\n`);
-        exitClassified(1, 'gate', claimlessMessage);
+      const verdict = evaluateClaimless(port, pr, {
+        owner,
+        repo,
+        trustedMarkerLogins: args.trustedMarkerLogins,
+      });
+      if (!verdict.eligible) {
+        // #4735: a branch-identity refusal names its own claim-bound route.
+        const refusal = verdict.refusal ?? claimlessMessage;
+        writeStderrSync(`${refusal}\n`);
+        exitClassified(1, 'gate', refusal);
       }
     } catch (error) {
       const classified = classifyHelperError(error);
@@ -1922,7 +1960,8 @@ function classifyMutationErrorKind(error: unknown): IddHelperErrorKind {
     ? classified.kind
     : message.startsWith('claim revalidation failed:') ||
         message.startsWith('claim/PR mismatch:') ||
-        message.startsWith('--claimless requires a PR')
+        message.startsWith('--claimless requires a PR') ||
+        message.startsWith(CLAIMLESS_REFUSAL_PREFIX)
       ? 'gate'
       : classified.kind;
 }
@@ -2021,15 +2060,15 @@ function buildClaimAssertion(
     // this mutation and the last one must still abort, mirroring
     // the non-claimless path's own per-mutation claim recheck.
     if (args.claimless) {
-      if (
-        !isClaimlessEligible(port, pr, {
-          owner,
-          repo,
-          trustedMarkerLogins: args.trustedMarkerLogins,
-        })
-      ) {
+      const verdict = evaluateClaimless(port, pr, {
+        owner,
+        repo,
+        trustedMarkerLogins: args.trustedMarkerLogins,
+      });
+      if (!verdict.eligible) {
         throw new Error(
-          '--claimless requires a PR with no closingIssuesReferences, or a valid out-of-loop marker; pass --claim-issue instead',
+          verdict.refusal ??
+            '--claimless requires a PR with no closingIssuesReferences, or a valid out-of-loop marker; pass --claim-issue instead',
         );
       }
       return;
