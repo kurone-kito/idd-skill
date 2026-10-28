@@ -77,9 +77,8 @@ authoritative decision path.
 Manual CI: paginate `statusCheckRollup.contexts` until `hasNextPage` is
 false, matching Step 1's HEAD and base on every page;
 `gh pr view --json statusCheckRollup` cannot prove completeness. Keep
-same-named producers separate and use the newest pass-equivalent
-completion. A complete matching read with no pass yields `none`;
-incomplete evidence means no post: repeat Step 1.
+same-named producers separate; a complete read with no pass yields
+`none`. Incomplete evidence means no post: repeat Step 1.
 
 **Non-Copilot safety:** snapshot/watermark and F2 cover bot activity.
 
@@ -131,10 +130,10 @@ posting nothing; return to Step 1 and re-snapshot, do not retry Step 2
 as-is. `decision: defer` exits 0 (`mode: "dry-run"`), posting nothing
 (required checks not passing): skip the after-posting steps and follow
 the CI-incomplete routing above.
-Manual fallback: before posting, re-read both PR refs and complete
-activity. Require the HEAD, base, item count, and max activity time to
-match Step 1, with no new uncovered items; otherwise do not post and
-repeat Step 1 and triage. Use the producer-aware CI proof above.
+Manual fallback: before posting, re-read both refs and complete
+activity; HEAD, base, item count, and max activity time must match
+Step 1, with no new uncovered items. Otherwise do not post: repeat Step 1
+and triage. Use the producer-aware CI proof above.
 
 ```markdown
 <!-- review-watermark: {agent-id} {claim-id} {head-SHA} {max-activity-updatedAt|none} {total-item-count} {latest-ci-completed-at|none} -->
