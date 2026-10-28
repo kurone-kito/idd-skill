@@ -69,12 +69,11 @@ GitHub state in this phase, discard helper output and run the portable
 gh/jq/API procedure below. The written instruction rules remain the
 authoritative decision path.
 
-Manual CI: paginate `statusCheckRollup.contexts` until `hasNextPage` is
-false, matching Step 1's HEAD and base on every page. Keep same-named
-producers separate. Record the newest successful or treated-as-passed
-`completedAt` as `{latest-ci-completed-at}` (not a later failing
-completion); a complete read with no passing completion yields `none`.
-Incomplete evidence means no post: repeat Step 1.
+Manual CI: read every `statusCheckRollup.contexts` page, matching Step 1's HEAD
+and base. Keep same-named producers separate. Record the newest passing
+`completedAt` (successful or treated-as-passed, never a later failure) as
+`{latest-ci-completed-at}`; a complete read with no pass yields `none`.
+Incomplete: no post, repeat Step 1.
 
 **Non-Copilot safety:** snapshot/watermark and F2 cover bot activity.
 
