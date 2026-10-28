@@ -56,15 +56,42 @@ test('the lite B1 resolves and validates the development branch first', () => {
     'the resolution precedes step 1',
   );
   for (const phrase of [
-    '`idd-effective-config --key developmentBranch`',
-    'Stop if it fails or reports unreadable policy.',
-    'Use its `value` when `found` is `true`',
-    'only when `found` is `false`, use `gh repo view --json defaultBranchRef --jq .defaultBranchRef.name`.',
+    'profile-selected `idd-effective-config` without `--key`',
+    'Stop if it fails or `repository.policyDiagnostic` is not `null`.',
+    'Use `config.developmentBranch` when set; only when it is absent, use `gh repo view --json defaultBranchRef --jq .defaultBranchRef.name`.',
     'Stop unless the name matches `^(?!refs/heads/)[A-Za-z0-9._/][A-Za-z0-9._/-]*$`',
     '`git ls-remote --exit-code --heads origin <name>` lists it.',
     'Steps 15, 16, 21, and 25 use only this value.',
   ]) {
     assert.ok(lite.includes(phrase), phrase);
+  }
+});
+
+test('the policy helper exposes a malformed repository policy to the fallback', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-policy-'));
+  try {
+    mkdirSync(join(dir, '.github', 'idd'), { recursive: true });
+    const read = (contents: string) => {
+      writeFileSync(join(dir, '.github', 'idd', 'config.json'), contents);
+      const run = spawnSync(
+        process.execPath,
+        [
+          join(REPO_ROOT, 'scripts', 'idd-effective-config.mjs'),
+          '--no-user-global',
+        ],
+        { cwd: dir, encoding: 'utf8' },
+      );
+      assert.equal(run.status, 0, run.stderr);
+      return JSON.parse(run.stdout);
+    };
+    const malformed = read('{ "developmentBranch": "develop", ');
+    assert.notEqual(malformed.repository.policyDiagnostic, null);
+    assert.equal(malformed.config.developmentBranch, undefined);
+    const valid = read('{ "developmentBranch": "develop" }');
+    assert.equal(valid.repository.policyDiagnostic, null);
+    assert.equal(valid.config.developmentBranch, 'develop');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });
 

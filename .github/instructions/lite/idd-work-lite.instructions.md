@@ -78,12 +78,12 @@ worktree removal) behind the
 [clone-scoped lock](../../../docs/idd-helper-scripts.md#clone-scoped-lock).
 
 Before step 1, resolve `{development-branch}`, failing closed. Run
-profile-selected `idd-effective-config --key developmentBranch` (in the
-vendored profile, `node scripts/idd-effective-config.mjs --key
-developmentBranch`). Stop if it fails or reports unreadable policy. Use its
-`value` when `found` is `true`; only when `found` is `false`, use `gh repo view
---json defaultBranchRef --jq .defaultBranchRef.name`. Stop unless the name
-matches `^(?!refs/heads/)[A-Za-z0-9._/][A-Za-z0-9._/-]*$` (see
+profile-selected `idd-effective-config` without `--key` (in the vendored
+profile, `node scripts/idd-effective-config.mjs`). Stop if it fails or
+`repository.policyDiagnostic` is not `null`. Use `config.developmentBranch`
+when set; only when it is absent, use `gh repo view --json
+defaultBranchRef --jq .defaultBranchRef.name`. Stop unless the name matches
+`^(?!refs/heads/)[A-Za-z0-9._/][A-Za-z0-9._/-]*$` (see
 `docs/policy-constants.md`) and `git ls-remote --exit-code --heads origin
 <name>` lists it. Steps 15, 16, 21, and 25 use only this value.
 
