@@ -49,6 +49,7 @@
     "deferAllAfterRounds": 3,
     "deferByUrgency": "severity-tiered",
     "triageRecord": "enforce",
+    "e10SkipOnAdvisoryConvergence": true,
     "deferRelaxAtRounds": [4, 7],
     "telemetryHook": {
       "command": "idd-critique-telemetry"

@@ -393,6 +393,28 @@ layered on top of the distributed IDD defaults:
   See the
   [review-loop audit (2026-10-13)](docs/idd-design-rationale.md#review-loop-audit-2026-10-13)
   subsection of the design rationale.
+- **E10 converged-review opt-in**: This source repository sets
+  `critiqueLoop.e10SkipOnAdvisoryConvergence` to `true` as a local IDD
+  dogfooding policy (applies only to `kurone-kito/idd-skill`, opted in on
+  2026-10-27; issue `#4761`). `idd-template/` keeps the distributed default
+  `false`, so adopters are unchanged. On the standard profile, a review-fix
+  batch whose Accepted PATH A items all come from `advisoryBotLogins` bots
+  other than the primary advisory bot skips E10 once advisory-convergence has
+  converged on the pushed head. The lite profile always runs E10. Evidence,
+  from the pull requests that received Copilot reviews from 2026-10-01 to
+  2026-10-26 and measured on 2026-10-27 (lower bounds, because at most 100
+  reviews per pull request were read): of at least 1,311 Copilot re-reviews
+  of a new head, 112 followed a Copilot review with no inline comment and a
+  Codex or CodeRabbit review of that same earlier head, and in 103 of those
+  the Codex or CodeRabbit review had an inline comment. The trade-off
+  (preventive; no observed incident yet): a defect that E10 would have found
+  before the push is found after it, by Copilot or by E2, and its fix costs
+  another push. Turn the opt-in off when a Copilot or other advisory bot
+  finding on a later head points at a fix commit of a skipped batch. Find
+  that batch through the `E10 critique skipped` sentence in its E13 replies.
+  E2 findings stay in the session and are not posted, so they are not a
+  signal. Removing the field or setting it to `false` restores E10 for every
+  batch.
 - **Effort L refusal opt-in**: This source repository also records
   `autopilotSuitability.effortL: "refuse"` as a local IDD dogfooding
   policy (applies only to `kurone-kito/idd-skill`); `idd-template/` keeps
