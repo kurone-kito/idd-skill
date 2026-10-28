@@ -234,8 +234,8 @@ without merging or pushing.
   linked process-tree procedure before aborting; if its tree is live or
   unconfirmed, hold without aborting or pushing.
 
-E12 validates the merged tree; follow shared Hold / suspend rules and never
-push.
+On E11 failure or hold, follow shared Hold / suspend rules; do not push.
+Otherwise, continue to E12.
 
 ## E12 — Lint, test, push
 
