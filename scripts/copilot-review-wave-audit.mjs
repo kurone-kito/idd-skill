@@ -935,6 +935,219 @@ function ghApiPaginatedUnbounded(path) {
   });
   return parsePaginatedGhNdjson(raw);
 }
+function ghApiPaginatedItemsUnbounded(path, jqFilter) {
+  const hostname = resolveGhApiHostname();
+  const args = [
+    'api',
+    path,
+    ...(hostname ? ['--hostname', hostname] : []),
+    '--paginate',
+    '--jq',
+    jqFilter,
+  ];
+  const raw = ghTextUnbounded(args, {
+    timeout: DEFAULT_GH_PAGINATED_TIMEOUT_MS,
+  });
+  return parsePaginatedGhNdjson(raw);
+}
+const COPILOT_REVIEWER_WORKFLOW_PATH =
+  'dynamic/agents/copilot-pull-request-reviewer';
+function failReviewerRuns(message) {
+  process.stderr.write('copilot-review-wave-audit: ' + message + '\n');
+  process.exit(1);
+}
+function lowerMiddleMedian(values) {
+  if (values.length === 0) {
+    return null;
+  }
+  const sorted = values.slice().sort((a, b) => a - b);
+  return sorted[Math.floor((sorted.length - 1) / 2)] ?? null;
+}
+function nextReviewerRunsDate(date) {
+  const next = new Date(date + 'T00:00:00Z');
+  next.setUTCDate(next.getUTCDate() + 1);
+  return next.toISOString().slice(0, 10);
+}
+function auditReviewerRuns(owner, repo, from, to) {
+  const workflowListPath = 'repos/' + owner + '/' + repo + '/actions/workflows';
+  let workflows;
+  try {
+    workflows = ghApiPaginatedItemsUnbounded(workflowListPath, '.workflows[]');
+  } catch (error) {
+    failReviewerRuns(
+      'reviewer runs: ' +
+        workflowListPath +
+        ': ' +
+        (error instanceof Error ? error.message : String(error)),
+    );
+  }
+  const workflow = workflows.find(
+    (candidate) =>
+      typeof candidate === 'object' &&
+      candidate !== null &&
+      candidate.path === COPILOT_REVIEWER_WORKFLOW_PATH,
+  );
+  if (!workflow) {
+    failReviewerRuns(
+      'no Copilot reviewer workflow (' +
+        COPILOT_REVIEWER_WORKFLOW_PATH +
+        ') in ' +
+        owner +
+        '/' +
+        repo,
+    );
+  }
+  if (!Number.isSafeInteger(workflow.id) || workflow.id <= 0) {
+    failReviewerRuns(
+      'reviewer runs: ' +
+        workflowListPath +
+        ': Copilot reviewer workflow did not include a valid id',
+    );
+  }
+  const runs = [];
+  for (let day = from; day <= to; day = nextReviewerRunsDate(day)) {
+    const runsPath =
+      'repos/' +
+      owner +
+      '/' +
+      repo +
+      '/actions/workflows/' +
+      workflow.id +
+      '/runs?created=' +
+      day +
+      '&per_page=100';
+    let pageItems;
+    try {
+      pageItems = ghApiPaginatedItemsUnbounded(
+        runsPath,
+        '.total_count, .workflow_runs[]',
+      );
+    } catch (error) {
+      failReviewerRuns(
+        'reviewer runs: ' +
+          runsPath +
+          ': ' +
+          (error instanceof Error ? error.message : String(error)),
+      );
+    }
+    const totalCount = pageItems.find((item) => typeof item === 'number');
+    if (totalCount === undefined || !Number.isSafeInteger(totalCount)) {
+      failReviewerRuns(
+        'reviewer runs: ' + runsPath + ': response has no valid total_count',
+      );
+    }
+    if (totalCount >= 1000) {
+      failReviewerRuns(
+        'reviewer runs: ' +
+          runsPath +
+          ': total_count for ' +
+          day +
+          ' is ' +
+          totalCount +
+          ', reaching the 1,000-run limit',
+      );
+    }
+    for (const item of pageItems) {
+      if (typeof item === 'object' && item !== null && !Array.isArray(item)) {
+        runs.push(item);
+      }
+    }
+  }
+  const byConclusion = {
+    success: 0,
+    failure: 0,
+    cancelled: 0,
+    other: 0,
+  };
+  const branchCounts = new Map();
+  const durations = [];
+  let completed = 0;
+  let totalDurationMs = 0;
+  for (const run of runs) {
+    const headBranch = run.head_branch;
+    if (typeof headBranch !== 'string' || headBranch.length === 0) {
+      failReviewerRuns(`reviewer runs: run ${run.id} has no valid head_branch`);
+    }
+    branchCounts.set(headBranch, (branchCounts.get(headBranch) ?? 0) + 1);
+    if (run.status !== 'completed') {
+      continue;
+    }
+    completed += 1;
+    if (run.conclusion === 'success') {
+      byConclusion.success += 1;
+    } else if (run.conclusion === 'failure') {
+      byConclusion.failure += 1;
+    } else if (run.conclusion === 'cancelled') {
+      byConclusion.cancelled += 1;
+    } else {
+      byConclusion.other += 1;
+    }
+    const startedAt = Date.parse(run.run_started_at ?? '');
+    const updatedAt = Date.parse(run.updated_at ?? '');
+    const durationMs = updatedAt - startedAt;
+    if (
+      !Number.isFinite(startedAt) ||
+      !Number.isFinite(updatedAt) ||
+      !Number.isFinite(durationMs) ||
+      durationMs < 0
+    ) {
+      failReviewerRuns(
+        'reviewer runs: completed run ' +
+          run.id +
+          ' has invalid run_started_at or updated_at values',
+      );
+    }
+    durations.push(durationMs);
+    totalDurationMs += durationMs;
+  }
+  return {
+    workflowPath: COPILOT_REVIEWER_WORKFLOW_PATH,
+    workflowId: workflow.id,
+    from,
+    to,
+    runs: runs.length,
+    completed,
+    byConclusion,
+    totalDurationMs,
+    medianDurationMs: lowerMiddleMedian(durations),
+    headBranches: branchCounts.size,
+    medianRunsPerHeadBranch: lowerMiddleMedian([...branchCounts.values()]),
+  };
+}
+function formatReviewerRunsStepSummary(report) {
+  const totalHours = (report.totalDurationMs / 3_600_000).toFixed(1);
+  const medianSeconds =
+    report.medianDurationMs === null
+      ? 'n/a'
+      : String(report.medianDurationMs / 1000);
+  return [
+    '## Copilot reviewer runs',
+    '',
+    '- Created from: ' +
+      report.from +
+      ' through ' +
+      report.to +
+      ' (UTC, inclusive)',
+    '- Runs: ' + report.runs,
+    '- Total duration: ' + totalHours + ' hours',
+    '- Median duration: ' + medianSeconds + ' seconds',
+    '- Distinct head branches: ' + report.headBranches,
+    '- Median runs per head branch: ' +
+      (report.medianRunsPerHeadBranch ?? 'n/a'),
+    '',
+    'These are the runs created in the range, not the runs of the pull requests merged in it.',
+  ].join('\n');
+}
+function appendReviewerRunsStepSummary(path, report) {
+  const existingSummary = existsSync(path) ? readFileSync(path, 'utf8') : '';
+  const separator =
+    existingSummary.length > 0 && !existingSummary.endsWith('\n') ? '\n' : '';
+  appendFileSync(
+    path,
+    separator + formatReviewerRunsStepSummary(report) + '\n',
+    'utf8',
+  );
+}
 /**
  * Fetch one PR's reviews and review comments and compute the PR's audit
  * report. The only network-touching function in this file besides the
@@ -1317,6 +1530,8 @@ const COPILOT_REVIEW_WAVE_AUDIT_FLAG_SPEC = {
   '--limit': { type: 'string' },
   '--merged-from': { type: 'string' },
   '--merged-to': { type: 'string' },
+  '--reviewer-runs-from': { type: 'string' },
+  '--reviewer-runs-to': { type: 'string' },
   '--format': { type: 'string', default: 'json' },
   '--repo': { type: 'string' },
   '--owner': { type: 'string' },
@@ -1399,6 +1614,7 @@ function printHelp() {
   node scripts/copilot-review-wave-audit.mjs --prs <n,n,...> [options]
   node scripts/copilot-review-wave-audit.mjs --limit <N> [options]
   node scripts/copilot-review-wave-audit.mjs --merged-from <YYYY-MM-DD> --merged-to <YYYY-MM-DD> [options]
+  node scripts/copilot-review-wave-audit.mjs --reviewer-runs-from <YYYY-MM-DD> --reviewer-runs-to <YYYY-MM-DD> [options]
 
   --prs <n,n,...>     Audit these merged PR numbers (mutually exclusive
                       with --limit and the merge window).
@@ -1413,6 +1629,13 @@ function printHelp() {
                       and --limit. The search cap is 1,000 PRs.
   --merged-to <date>   Last UTC calendar date in an inclusive merge window.
                       Requires --merged-from.
+  --reviewer-runs-from <date>
+                      First UTC calendar date in an inclusive Copilot
+                      reviewer workflow run window; requires --reviewer-runs-to.
+  --reviewer-runs-to <date>
+                      Last UTC calendar date in an inclusive Copilot
+                      reviewer workflow run window; requires --reviewer-runs-from.
+                      Mutually exclusive with pull-request audit options.
   --format <json|tsv> Output format (default: json).
   --repo <owner/name> Repository override, combined form.
   --owner <owner>     Repository override, split form (use with
@@ -1650,174 +1873,255 @@ if (import.meta.main) {
     printHelp();
     process.exit(0);
   }
-  const prsFlag = values.prs;
-  const limitFlag = values.limit;
-  const mergedFromFlag = values['merged-from'];
-  const mergedToFlag = values['merged-to'];
-  const hasMergedWindow =
-    mergedFromFlag !== undefined || mergedToFlag !== undefined;
-  if ((mergedFromFlag === undefined) !== (mergedToFlag === undefined)) {
-    fail('--merged-from and --merged-to must be given together');
+  const reviewerFormat = values.format;
+  if (reviewerFormat !== 'json' && reviewerFormat !== 'tsv') {
+    fail('--format must be "json" or "tsv", got "' + reviewerFormat + '"');
   }
-  const selectorCount =
-    Number(prsFlag !== undefined) +
-    Number(limitFlag !== undefined) +
-    Number(hasMergedWindow);
-  if (selectorCount !== 1) {
-    fail(
-      'choose exactly one of --prs <n,n,...>, --limit <N>, or the --merged-from/--merged-to window',
+  const reviewerRunsFromFlag = values['reviewer-runs-from'];
+  const reviewerRunsToFlag = values['reviewer-runs-to'];
+  const reviewerRunsMode =
+    reviewerRunsFromFlag !== undefined || reviewerRunsToFlag !== undefined;
+  if (reviewerRunsMode) {
+    if (
+      (reviewerRunsFromFlag === undefined) !==
+      (reviewerRunsToFlag === undefined)
+    ) {
+      fail(
+        '--reviewer-runs-from and --reviewer-runs-to must be given together',
+      );
+    }
+    const reviewerRunsFrom = parseCalendarDate(
+      reviewerRunsFromFlag,
+      '--reviewer-runs-from',
     );
-  }
-  let mergedFrom = null;
-  let mergedTo = null;
-  if (hasMergedWindow) {
-    mergedFrom = parseCalendarDate(mergedFromFlag, '--merged-from');
-    mergedTo = parseCalendarDate(mergedToFlag, '--merged-to');
-    if (mergedFrom > mergedTo) {
-      fail('--merged-from must be on or before --merged-to');
+    const reviewerRunsTo = parseCalendarDate(
+      reviewerRunsToFlag,
+      '--reviewer-runs-to',
+    );
+    if (reviewerRunsFrom > reviewerRunsTo) {
+      fail('--reviewer-runs-from must be on or before --reviewer-runs-to');
     }
-  }
-  const format = values.format;
-  if (format !== 'json' && format !== 'tsv') {
-    fail(`--format must be "json" or "tsv", got "${format}"`);
-  }
-  // Validated before detectRepository, so no misuse below reaches gh (#4189).
-  const checkMode = values.check === true;
-  const sinceFlag = values.since;
-  if (sinceFlag !== undefined) {
-    if (!checkMode) {
-      fail('--since is only valid with --check');
+    const incompatibleFlags = [
+      ['--prs', values.prs !== undefined],
+      ['--limit', values.limit !== undefined],
+      ['--merged-from', values['merged-from'] !== undefined],
+      ['--merged-to', values['merged-to'] !== undefined],
+      ['--check', values.check === true],
+      ['--since', values.since !== undefined],
+      ['--min-recorded-share', values['min-recorded-share'] !== undefined],
+      [
+        '--baseline-reviews-per-pr',
+        values['baseline-reviews-per-pr'] !== undefined,
+      ],
+      ['--format tsv', reviewerFormat === 'tsv'],
+    ];
+    const incompatible = incompatibleFlags.find(([, present]) => present);
+    if (incompatible) {
+      fail('reviewer-run mode cannot be combined with ' + incompatible[0]);
     }
-    if (prsFlag !== undefined) {
-      fail(
-        '--since is not valid with --prs; use --limit or --merged-from/--merged-to',
-      );
+    let reviewerRepository;
+    try {
+      reviewerRepository = combineOwnerRepoFlags(values) ?? detectRepository();
+    } catch (error) {
+      fail(error.message);
     }
-    parseSinceDate(sinceFlag);
-  }
-  const shareFlag = values['min-recorded-share'];
-  let minRecordedShare = DEFAULT_MIN_RECORDED_SHARE;
-  if (shareFlag !== undefined) {
-    if (!checkMode || sinceFlag === undefined) {
-      fail('--min-recorded-share is only valid with --check and --since');
-    }
-    const value = DECIMAL_SHARE_RE.test(shareFlag) ? Number(shareFlag) : NaN;
-    if (!(value >= 0 && value <= 1)) {
-      fail(
-        `--min-recorded-share must be a decimal from 0 to 1, got "${shareFlag}"`,
-      );
-    }
-    minRecordedShare = value;
-  }
-  const baselineFlag = values['baseline-reviews-per-pr'];
-  let baselineReviewsPerPr = null;
-  if (baselineFlag !== undefined) {
-    const value = POSITIVE_DECIMAL_RE.test(baselineFlag)
-      ? Number(baselineFlag)
-      : Number.NaN;
-    if (!Number.isFinite(value) || value <= 0) {
-      fail(
-        `--baseline-reviews-per-pr must be a positive decimal, got "${baselineFlag}"`,
-      );
-    }
-    baselineReviewsPerPr = value;
-  }
-  const stepSummaryPath = values['step-summary'];
-  let syncMirrorTargets;
-  try {
-    syncMirrorTargets = loadSyncMirrorTargets();
-  } catch (error) {
-    fail(error.message);
-  }
-  let repository;
-  try {
-    repository = combineOwnerRepoFlags(values) ?? detectRepository();
-  } catch (error) {
-    fail(error.message);
-  }
-  const [owner, repo] = parseRepository(repository);
-  const recent =
-    limitFlag === undefined
-      ? null
-      : resolveRecentMergedPrNumbers(
-          owner,
-          repo,
-          parseCanonicalIntegerOrThrow(limitFlag, '--limit'),
+    const [reviewerOwner, reviewerRepo] = parseRepository(reviewerRepository);
+    const reviewerRuns = auditReviewerRuns(
+      reviewerOwner,
+      reviewerRepo,
+      reviewerRunsFrom,
+      reviewerRunsTo,
+    );
+    process.stdout.write(JSON.stringify({ reviewerRuns }, null, 2) + '\n');
+    const reviewerStepSummaryPath = values['step-summary'];
+    if (reviewerStepSummaryPath !== undefined) {
+      try {
+        appendReviewerRunsStepSummary(reviewerStepSummaryPath, reviewerRuns);
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        process.stderr.write(
+          'copilot-review-wave-audit: cannot write step summary ' +
+            reviewerStepSummaryPath +
+            ': ' +
+            reason +
+            '\n',
         );
-  const mergedWindow =
-    mergedFrom === null || mergedTo === null
-      ? null
-      : resolveMergedWindowPrNumbers(owner, repo, mergedFrom, mergedTo);
-  const prNumbers =
-    prsFlag !== undefined
-      ? parsePrNumberList(prsFlag)
-      : (recent?.numbers ?? mergedWindow?.numbers ?? []);
-  const mergedAtByNumber =
-    recent?.mergedAtByNumber ?? mergedWindow?.mergedAtByNumber ?? new Map();
-  const selector =
-    mergedFrom !== null && mergedTo !== null
-      ? `--merged-from ${mergedFrom} --merged-to ${mergedTo}`
-      : limitFlag !== undefined
-        ? `--limit ${limitFlag}`
-        : `--prs (${prNumbers.length} pull requests)`;
-  const reports = [];
-  const failedPrs = [];
-  for (const prNumber of prNumbers) {
-    try {
-      const report = auditPr(owner, repo, prNumber, syncMirrorTargets);
-      report.mergedAt = mergedAtByNumber.get(prNumber) ?? null;
-      reports.push(report);
-    } catch (error) {
-      failedPrs.push({
-        pr: prNumber,
-        message: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
-  const summary = summarizeCohort(reports);
-  if (format === 'tsv') {
-    writeTsvReport(reports, summary);
-  } else {
-    writeJsonReport(reports, summary, failedPrs);
-  }
-  let stepSummaryFailed = false;
-  if (stepSummaryPath !== undefined) {
-    try {
-      appendStepSummary(
-        stepSummaryPath,
-        selector,
-        summary,
-        failedPrs,
-        baselineReviewsPerPr,
-      );
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
-      process.stderr.write(
-        `copilot-review-wave-audit: cannot write step summary ${stepSummaryPath}: ${reason}\n`,
-      );
-      process.exitCode = 2;
-      stepSummaryFailed = true;
-    }
-  }
-  if (!stepSummaryFailed) {
-    if (checkMode) {
-      const failures = checkFailures(summary, reports, {
-        since: sinceFlag ?? null,
-        minRecordedShare,
-      });
-      for (const message of failures) {
-        process.stderr.write(`copilot-review-wave-audit: check: ${message}\n`);
+        process.exitCode = 2;
       }
-      if (failures.length > 0) {
-        // Not process.exit: piped stdout may still be flushing (Windows CI).
+    }
+  }
+  if (!reviewerRunsMode) {
+    const prsFlag = values.prs;
+    const limitFlag = values.limit;
+    const mergedFromFlag = values['merged-from'];
+    const mergedToFlag = values['merged-to'];
+    const hasMergedWindow =
+      mergedFromFlag !== undefined || mergedToFlag !== undefined;
+    if ((mergedFromFlag === undefined) !== (mergedToFlag === undefined)) {
+      fail('--merged-from and --merged-to must be given together');
+    }
+    const selectorCount =
+      Number(prsFlag !== undefined) +
+      Number(limitFlag !== undefined) +
+      Number(hasMergedWindow);
+    if (selectorCount !== 1) {
+      fail(
+        'choose exactly one of --prs <n,n,...>, --limit <N>, or the --merged-from/--merged-to window',
+      );
+    }
+    let mergedFrom = null;
+    let mergedTo = null;
+    if (hasMergedWindow) {
+      mergedFrom = parseCalendarDate(mergedFromFlag, '--merged-from');
+      mergedTo = parseCalendarDate(mergedToFlag, '--merged-to');
+      if (mergedFrom > mergedTo) {
+        fail('--merged-from must be on or before --merged-to');
+      }
+    }
+    const format = values.format;
+    if (format !== 'json' && format !== 'tsv') {
+      fail(`--format must be "json" or "tsv", got "${format}"`);
+    }
+    // Validated before detectRepository, so no misuse below reaches gh (#4189).
+    const checkMode = values.check === true;
+    const sinceFlag = values.since;
+    if (sinceFlag !== undefined) {
+      if (!checkMode) {
+        fail('--since is only valid with --check');
+      }
+      if (prsFlag !== undefined) {
+        fail(
+          '--since is not valid with --prs; use --limit or --merged-from/--merged-to',
+        );
+      }
+      parseSinceDate(sinceFlag);
+    }
+    const shareFlag = values['min-recorded-share'];
+    let minRecordedShare = DEFAULT_MIN_RECORDED_SHARE;
+    if (shareFlag !== undefined) {
+      if (!checkMode || sinceFlag === undefined) {
+        fail('--min-recorded-share is only valid with --check and --since');
+      }
+      const value = DECIMAL_SHARE_RE.test(shareFlag) ? Number(shareFlag) : NaN;
+      if (!(value >= 0 && value <= 1)) {
+        fail(
+          `--min-recorded-share must be a decimal from 0 to 1, got "${shareFlag}"`,
+        );
+      }
+      minRecordedShare = value;
+    }
+    const baselineFlag = values['baseline-reviews-per-pr'];
+    let baselineReviewsPerPr = null;
+    if (baselineFlag !== undefined) {
+      const value = POSITIVE_DECIMAL_RE.test(baselineFlag)
+        ? Number(baselineFlag)
+        : Number.NaN;
+      if (!Number.isFinite(value) || value <= 0) {
+        fail(
+          `--baseline-reviews-per-pr must be a positive decimal, got "${baselineFlag}"`,
+        );
+      }
+      baselineReviewsPerPr = value;
+    }
+    const stepSummaryPath = values['step-summary'];
+    let syncMirrorTargets;
+    try {
+      syncMirrorTargets = loadSyncMirrorTargets();
+    } catch (error) {
+      fail(error.message);
+    }
+    let repository;
+    try {
+      repository = combineOwnerRepoFlags(values) ?? detectRepository();
+    } catch (error) {
+      fail(error.message);
+    }
+    const [owner, repo] = parseRepository(repository);
+    const recent =
+      limitFlag === undefined
+        ? null
+        : resolveRecentMergedPrNumbers(
+            owner,
+            repo,
+            parseCanonicalIntegerOrThrow(limitFlag, '--limit'),
+          );
+    const mergedWindow =
+      mergedFrom === null || mergedTo === null
+        ? null
+        : resolveMergedWindowPrNumbers(owner, repo, mergedFrom, mergedTo);
+    const prNumbers =
+      prsFlag !== undefined
+        ? parsePrNumberList(prsFlag)
+        : (recent?.numbers ?? mergedWindow?.numbers ?? []);
+    const mergedAtByNumber =
+      recent?.mergedAtByNumber ?? mergedWindow?.mergedAtByNumber ?? new Map();
+    const selector =
+      mergedFrom !== null && mergedTo !== null
+        ? `--merged-from ${mergedFrom} --merged-to ${mergedTo}`
+        : limitFlag !== undefined
+          ? `--limit ${limitFlag}`
+          : `--prs (${prNumbers.length} pull requests)`;
+    const reports = [];
+    const failedPrs = [];
+    for (const prNumber of prNumbers) {
+      try {
+        const report = auditPr(owner, repo, prNumber, syncMirrorTargets);
+        report.mergedAt = mergedAtByNumber.get(prNumber) ?? null;
+        reports.push(report);
+      } catch (error) {
+        failedPrs.push({
+          pr: prNumber,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    const summary = summarizeCohort(reports);
+    if (format === 'tsv') {
+      writeTsvReport(reports, summary);
+    } else {
+      writeJsonReport(reports, summary, failedPrs);
+    }
+    let stepSummaryFailed = false;
+    if (stepSummaryPath !== undefined) {
+      try {
+        appendStepSummary(
+          stepSummaryPath,
+          selector,
+          summary,
+          failedPrs,
+          baselineReviewsPerPr,
+        );
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        process.stderr.write(
+          `copilot-review-wave-audit: cannot write step summary ${stepSummaryPath}: ${reason}\n`,
+        );
+        process.exitCode = 2;
+        stepSummaryFailed = true;
+      }
+    }
+    if (!stepSummaryFailed) {
+      if (checkMode) {
+        const failures = checkFailures(summary, reports, {
+          since: sinceFlag ?? null,
+          minRecordedShare,
+        });
+        for (const message of failures) {
+          process.stderr.write(
+            `copilot-review-wave-audit: check: ${message}\n`,
+          );
+        }
+        if (failures.length > 0) {
+          // Not process.exit: piped stdout may still be flushing (Windows CI).
+          process.exitCode = 1;
+        }
+      }
+      if (failedPrs.length > 0) {
+        process.stderr.write(
+          `copilot-review-wave-audit: ${failedPrs.length} pull request(s) could not be audited\n`,
+        );
         process.exitCode = 1;
       }
-    }
-    if (failedPrs.length > 0) {
-      process.stderr.write(
-        `copilot-review-wave-audit: ${failedPrs.length} pull request(s) could not be audited\n`,
-      );
-      process.exitCode = 1;
     }
   }
 }

@@ -36,6 +36,7 @@ on:
         required: false
         type: string
 permissions:
+  actions: read
   contents: read
   pull-requests: read
 concurrency:
@@ -101,4 +102,24 @@ jobs:
             --check \
             --since 2026-10-25 \
             --baseline-reviews-per-pr "$BASELINE_REVIEWS_PER_PR" \
+            --step-summary "$GITHUB_STEP_SUMMARY"
+      - name: Report Copilot reviewer runs
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MERGED_FROM_INPUT: ${{ inputs['merged-from'] }}
+          MERGED_TO_INPUT: ${{ inputs['merged-to'] }}
+        shell: bash
+        run: |
+          if [[ -n "$MERGED_FROM_INPUT" && -n "$MERGED_TO_INPUT" ]]; then
+            merged_from="$MERGED_FROM_INPUT"
+            merged_to="$MERGED_TO_INPUT"
+          else
+            merged_from="$(date -u -d '7 days ago' +%F)"
+            merged_to="$(date -u -d '1 day ago' +%F)"
+          fi
+          printf 'Auditing Copilot reviewer runs created from %s through %s (UTC)\n' "$merged_from" "$merged_to"
+          node scripts/copilot-review-wave-audit.mjs \
+            --reviewer-runs-from "$merged_from" \
+            --reviewer-runs-to "$merged_to" \
             --step-summary "$GITHUB_STEP_SUMMARY"
