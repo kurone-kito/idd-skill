@@ -3160,6 +3160,50 @@ test('CLI reviewer runs: step summary reports the created-run window', () => {
   }
 });
 
+test('CLI reviewer runs: a step-summary target that cannot be appended exits 2 with the diagnostic', () => {
+  // A directory cannot be read or appended as a file (EISDIR), with or
+  // without root, unlike a chmod-based case.
+  const dir = mkdtempSync(
+    join(tmpdir(), 'idd-wave-audit-reviewer-summary-fail-'),
+  );
+  try {
+    const result = runReviewerRunsWithFixture(
+      {
+        reviewerWorkflows: [REVIEWER_WORKFLOW_FIXTURE],
+        reviewerRunsByDay: {
+          '2026-10-01': [
+            {
+              id: 1,
+              status: 'completed',
+              conclusion: 'success',
+              head_branch: 'p',
+              run_started_at: '2026-10-01T00:00:00Z',
+              updated_at: '2026-10-01T00:01:40Z',
+            },
+          ],
+        },
+      },
+      [
+        '--reviewer-runs-from',
+        '2026-10-01',
+        '--reviewer-runs-to',
+        '2026-10-01',
+        '--step-summary',
+        dir,
+      ],
+    );
+    assert.equal(result.status, 2, result.stderr);
+    assert.ok(
+      result.stderr.startsWith(
+        'copilot-review-wave-audit: cannot write step summary ' + dir + ': ',
+      ),
+      result.stderr,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('CLI help lists both reviewer-run flags', () => {
   const output = execFileSync(process.execPath, [CLI_PATH, '--help'], {
     encoding: 'utf8',
