@@ -5,6 +5,8 @@ description: Provides the verbatim gh, gh api, and jq commands the advisory-wait
 tags: [advisory-wait, shell-fallback]
 ---
 
+<!-- cspell:ignore gsub -->
+
 # IDD — Advisory-Wait Shell Fallback (AW1 / AW2 / AW3-R / AW3-S / AW3-H / F2 detail)
 
 This document contains the verbatim commands used by the shell
@@ -937,11 +939,21 @@ relax a conjunct. Treat a missing review, an unreadable
 conclusion F2 names in prose: `route` is `proceed` only when
 `blockingCount == 0`, meaning both `missingRegularComments` (any
 outstanding non-thread regular PR comment from a non-agent author,
-including the PR author, lacking a fresh disposition marker) and
-`missingThreads` (any review thread, resolved or unresolved, still
-lacking one) are empty. A missing or malformed result is unmet. The
-ack-only override stays in the instruction file; do not re-derive it
-here.
+including the PR author and advisory bots, lacking a fresh disposition
+marker) and `missingThreads` (any review thread, resolved or unresolved,
+still lacking one, except a human-origin thread with no IDD-originated
+reply, which is presence-only) are empty. A missing or malformed result is
+unmet. The ack-only override stays in the instruction file; do not
+re-derive it here.
+
+The advisory-bot set that decides thread origin is the known review bots,
+plus the `advisoryBotLogins` read from `.github/idd/config.json`, plus any
+`IDD_ADVISORY_BOT_LOGINS` (comma-separated). The block reads the config
+itself, so export the variable only for bots the config does not list. A
+Bot-typed originating author also counts as advisory, so an unlisted bot
+fails closed. The review-reply stamp that marks an IDD reply uses
+`IDD_MARKER_PREFIX` (default `idd-skill`, the canonical marker prefix).
+`IDD_AGENT_LOGINS` and `IDD_TRUSTED_MARKER_ACTORS` are read the same way.
 
 ```sh
 OWNER=$(gh repo view --json owner --jq '.owner.login')
@@ -1107,14 +1119,22 @@ THREADS_JSON=$(gh api graphql --paginate -f query='
             isResolved
             comments(first:100) {
               pageInfo { hasNextPage }
-              nodes { author { login } body createdAt commit { oid } lastEditedAt }
+              nodes { author { login __typename } body createdAt updatedAt commit { oid } lastEditedAt }
             }
           }
         }
       }
     }
   }' -F owner="${OWNER}" -F repo="${REPO}" -F number={pr-number} \
-  --jq '.data.repository.pullRequest.reviewThreads.nodes')
+  --jq '.data.repository.pullRequest.reviewThreads.nodes') || {
+  echo "F2 review-thread read failed; not converged (#4696)" >&2
+  exit 2
+}
+# An empty read is unmet too: a failed page must never read as "no threads".
+[ -n "$THREADS_JSON" ] || {
+  echo "F2 review-thread read empty; not converged (#4696)" >&2
+  exit 2
+}
 
 # F2 accepts only IDD-agent / trusted-marker authors (same set the helper
 # reuses as iddAgentLogins). Empty set fails closed.
@@ -1123,6 +1143,17 @@ IDD_AGENT_LOGIN_JSON=$(
   {
     printf '%s\n' "${IDD_AGENT_LOGINS:-}" | tr ',' '\n'
     printf '%s\n' "${IDD_TRUSTED_MARKER_ACTORS:-}" | tr ',' '\n'
+    if [ -n "${CURRENT_MARKER_ACTOR}" ]; then
+      printf '%s\n' "${CURRENT_MARKER_ACTOR}"
+    fi
+  } | sed '/^[[:space:]]*$/d' | sort -fu | jq -Rsc 'split("\n") | map(select(length > 0))'
+)
+# Regular comments use the narrower set (canonical deriveIddAgentLogins): only
+# IDD_AGENT_LOGINS and the viewer. A trusted-marker actor that is not an agent
+# clears no regular comment (fails closed); thread freshness still accepts it.
+REG_AGENT_LOGIN_JSON=$(
+  {
+    printf '%s\n' "${IDD_AGENT_LOGINS:-}" | tr ',' '\n'
     if [ -n "${CURRENT_MARKER_ACTOR}" ]; then
       printf '%s\n' "${CURRENT_MARKER_ACTOR}"
     fi
@@ -1161,8 +1192,9 @@ CONJUNCT3=$(printf '%s' "${THREADS_JSON}" | jq -rs --arg sha "${PR_HEAD_SHA}" --
 
 CONVERGED=$([ "${CONJUNCT1}" = true ] && [ "${CONJUNCT2}" = true ] && [ "${CONJUNCT3}" = true ] && echo true || echo false)
 
-# dispositionEvidence: later **Accepted** / **Rejected** markers, 1:1
-# by count (E6). Non-agent regular comments and every review thread.
+# dispositionEvidence: unedited IDD-agent **Accepted** / **Rejected** markers,
+# 1:1 by count (E6), clear the non-agent regular comments (advisory bots
+# included). Review threads need a fresh disposition unless presence-only.
 # A failed or empty REST read stops here (#3860 review): `jq -s` over no input
 # yields [], which would read as "no regular comments" and let F2 converge.
 COMMENTS_RAW=$(gh api "repos/${OWNER}/${REPO}/issues/{pr-number}/comments" --paginate) || {
@@ -1209,56 +1241,289 @@ COMMENTS_JSON=$(
       | if ($edit | has($k)) then $edit[$k] else "unresolved" end)})
   '
 ) || exit 2
-DISPOSITION_JSON=$(printf '%s' "${COMMENTS_JSON}" | jq -c --argjson agents "${IDD_AGENT_LOGIN_JSON}" '
+DISPOSITION_JSON=$(printf '%s' "${COMMENTS_JSON}" | jq -c --argjson agents "${REG_AGENT_LOGIN_JSON}" '
+  # A pending-decision marker counts only outside code and comments, and only
+  # where the canonical hasPendingDecisionMarker run model reads it as top
+  # level: fenced blocks, inline code, and HTML comments are removed first, then
+  # a line walk runs. A blank line, an empty quote line, a heading, a thematic
+  # break, or an HTML block start ends a block-quote or list run, and a line that
+  # opens one starts a run, so a marker inside a run is lazy text. HTML blocks are
+  # not masked, so a marker inside one still counts here (fail-closed).
+  def strip_all($re):
+    if test($re) then sub($re; "\n\n") | strip_all($re) else . end;
+  def mask_html_comments:
+    # Keep line breaks and columns so comments cannot change Markdown block context.
+    gsub("(?<comment>(?s:<!--.*?-->))"; "\(.comment | gsub("[^\n]"; " "))");
+  def mask_inline_code:
+    # Match equal-length backtick runs within one paragraph and keep their columns.
+    gsub("(?<code>(?<!\\x60)(?<ticks>\\x60+)(?!\\x60)(?:(?!(?<!\\x60)\\k<ticks>(?!\\x60))(?!(?:\\r?\\n)[ \\t\\r]*(?:\\r?\\n))[\\s\\S])*?(?<!\\x60)\\k<ticks>(?!\\x60))"; "\(.code | gsub("[^\n]"; " "))");
+  def html_start_re: "^ {0,3}(?:<!--|<\\?|<![A-Z]|<!\\[CDATA\\[|<\\/?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|meta|nav|noframes|ol|optgroup|option|p|param|pre|script|search|section|source|style|summary|table|tbody|td|textarea|tfoot|th|thead|title|tr|track|ul)(?:[ \\t]|\\/?>|$))";
+  def interrupts_paragraph:
+    test("^ {0,3}#{1,6}([ \\t]|$)")
+    or test("^ {0,3}([-_*])([ \\t]*\\1){2,}[ \\t]*$")
+    or test("^ {0,3}(?:={1,}|-{1,2})[ \\t]*$")
+    or test(html_start_re; "i");
+  # Keep an empty line at block boundaries so inline-code matching cannot cross one.
+  def mask_interrupting_lines:
+    split("\n")
+    | map(if interrupts_paragraph then "" else . end)
+    | join("\n");
+  def pending_marker:
+    (.body | gsub("\\r\\n"; "\n") | strip_all("(?ms)^ {0,3}(\\x60{3,})(?=[^\\x60\\n]*$).*?(?:^ {0,3}\\1\\x60*[ \\t\\r]*$|\\z)") | strip_all("(?ms)^ {0,3}(~{3,}).*?(?:^ {0,3}\\1~*[ \\t\\r]*$|\\z)") | mask_html_comments | mask_interrupting_lines | mask_inline_code
+      | split("\n")
+      | reduce .[] as $l ({run: false, hit: false};
+          if .hit then .
+          elif ($l | test("^\\s*$")) or ($l | test("^ {0,3}>[ \\t>]*$")) or ($l | test("^ {0,3}#{1,6}([ \\t]|$)")) or ($l | test("^ {0,3}([-_*])([ \\t]*\\1){2,}[ \\t]*$")) or ($l | test(html_start_re; "i"))
+            then .run = false
+          elif (.run | not) and ($l | test("^\\*\\*Awaiting maintainer decision\\*\\*"; "i")) then .hit = true
+          elif ($l | test("^ {0,3}(>|[-+*][ \\t]|[0-9]{1,9}[.)][ \\t])")) then .run = true
+          else . end)
+      | .hit);
   map(select(
-    (.body | startswith("**Accepted**") or startswith("**Rejected**"))
+    (.body | test("^\\*\\*(Accepted|Rejected)[.!:]?\\*\\*"))
     and (((.user.login // "") | ascii_downcase) as $u
       | ($agents | map(ascii_downcase) | index($u)) != null)
     and (has("lastEditedAt") and (.lastEditedAt == null))
+    and (pending_marker | not)
   ))
-')
-MISSING_REGULAR=$(printf '%s\n' "${COMMENTS_JSON}" "${DISPOSITION_JSON}" | jq -s --argjson bots '["copilot-pull-request-reviewer","copilot-pull-request-reviewer[bot]","coderabbitai[bot]","coderabbitai","chatgpt-codex-connector","chatgpt-codex-connector[bot]"]' --argjson agents "${IDD_AGENT_LOGIN_JSON}" '
+') || exit 2
+# Advisory-bot identity for thread origin (canonical isGateAdvisoryBotLogin):
+# the known review bots plus IDD_ADVISORY_BOT_LOGINS (comma-separated
+# advisoryBotLogins, optional). `[bot]` is stripped on both sides, and every
+# Copilot spelling reads as `copilot`, the same set AW1 uses.
+# Configured advisoryBotLogins come from the repository config as well as the
+# environment (the helper reads both), so a config-only bot is advisory here too.
+CONFIG_ADVISORY_LOGINS=""
+if [ -f .github/idd/config.json ]; then
+  CONFIG_ADVISORY_LOGINS=$(jq -r '(.advisoryBotLogins // [])[]' .github/idd/config.json) || exit 2
+fi
+ADVISORY_TOKEN_JSON=$(
+  { printf '%s\n' "${IDD_ADVISORY_BOT_LOGINS:-}" | tr ',' '\n'; printf '%s\n' "${CONFIG_ADVISORY_LOGINS}"; } | jq -Rsc '
+    split("\n")
+    | map(ascii_downcase | sub("^\\s+"; "") | sub("\\s+$"; "")
+        | if endswith("[bot]") then .[0:(length - 5)] else . end)
+    | ["copilot", "copilot-pull-request-reviewer", "coderabbitai", "chatgpt-codex-connector"] + .
+    | map(if . == "copilot-pull-request-reviewer" then "copilot" else . end)
+    | map(select(length > 0))
+    | unique
+  '
+) || exit 2
+# Regular comments (canonical summarizeRegularCommentsForGate): every comment
+# from a non-IDD-agent author is outstanding, advisory bots included, except
+# the operational comments that are never feedback: the GitHub Actions waiver
+# and cleanup evidence, and the PR operational markers a trusted login posts
+# (the IDD agent set is narrower for disposition pairing, so the operational
+# exclusion uses the wider trusted set).
+# Activity is the later of created_at and updated_at, so an edit after a
+# disposition reopens the comment. Each comment consumes at most one later
+# unedited disposition (1:1, E6). A Codex no-find result is cleared only by a
+# disposition that names its source comment; other comments skip those
+# source-bound dispositions.
+MISSING_REGULAR=$(printf '%s\n' "${COMMENTS_JSON}" "${DISPOSITION_JSON}" | jq -s --argjson agents "${REG_AGENT_LOGIN_JSON}" --argjson trusted "${IDD_AGENT_LOGIN_JSON}" --arg sha "${PR_HEAD_SHA}" '
+  def activity: [.created_at, (.updated_at // "")] | max;
+  # The reviewed commit of a terminal Codex no-find result (exact opening line,
+  # reviewed-commit line, and the About Codex details block), or "" when the
+  # comment is not one. Older-HEAD results are not current: they clear like any
+  # other comment (canonical), so only a current-HEAD result needs its source.
+  # The :rocket: opening is valid only with the receipt marker (canonical
+  # CODEX_NO_FIND_RESULT_RE). The trailing details block must match the
+  # canonical About Codex block (CODEX_NO_FIND_DETAILS_RE) in full.
+  def codex_no_find_reviewed:
+    if ((.user.login // "") | ascii_downcase | test("^chatgpt-codex-connector(\\[bot\\])?$"))
+    then ((.body | sub("^\\s+"; "") | capture("^(?:<!-- codex-review-receipt:v1 -->\\s*Codex Review: Didn\\x27t find any major issues\\. :rocket:|Codex Review: Didn\\x27t find any major issues\\. (?:You\\x27re on a roll\\.|What shall we delve into next\\?|:\\+1:))\\s*\\n+\\s*\\*\\*Reviewed commit:\\*\\*\\s*`(?<r>[0-9a-f]{7,64})`\\s*\\n+\\s*(?<d>[\\s\\S]*)$"; "i")) // null) as $m
+         | if ($m != null) and ($m.d | test("^\\s*<details>\\s*<summary>\\x{2139}\\x{FE0F} About Codex in GitHub</summary>\\s*<br/>\\s*\\[Your team has set up Codex to review pull requests in this repo\\]\\(https://chatgpt\\.com/codex/cloud/settings/general\\)\\.?\\s*Reviews are triggered when you\\s*- Open a pull request for review\\s*- Mark a draft as ready\\s*- Comment \\x22@codex review\\x22(?: or \\x22@codex security review\\x22)?\\.\\s*(?:If Codex has suggestions, it will comment; otherwise it will react with \\x{1F44D}\\.\\s*)?(?:Codex can also answer questions or update the PR\\. Try commenting \\x22@codex address that feedback\\x22\\.\\s*)?</details>\\s*$"; "i"))
+           then $m.r else "" end
+    else "" end;
+  def is_codex_no_find_current:
+    (codex_no_find_reviewed) as $r
+    | ($r != "") and ($sha | ascii_downcase | startswith($r | ascii_downcase));
+  def is_actions_operational:
+    (((.user.login // "") | ascii_downcase) == "github-actions[bot]")
+    and ((.body | sub("^\\s+"; "")) as $b
+      | ($b | startswith("<!-- idd-cleanup-evidence:")
+          or startswith("<!-- idd-external-check-waiver:")));
+  # Trusted operational comments (canonical classifyIddPrComment, trusted branch):
+  # a comment from a trusted login (IDD agents and trusted marker actors) whose
+  # body starts with a PR operational marker, whose first line is a live-status
+  # digest marker, or that starts with the cleanup-evidence marker. A github-actions
+  # author never takes this branch (canonical else-if). forced-handoff is left out
+  # on purpose: the canonical check also validates it, so a malformed one stays
+  # outstanding here (fail-closed).
+  def is_trusted_operational:
+    ((.user.login // "") | ascii_downcase) as $u
+    | (($u | sub("\\[bot\\]$"; "")) != "github-actions")
+      and (($trusted | map(ascii_downcase) | index($u)) != null)
+      and (((.body | sub("^\\s+"; "")) as $b
+          | $b | (test("^<!--\\s*(claimed-by|unclaimed-by|review-watermark|review-baseline|zero-accepted-path-a-gate|idd-external-check-waiver|idd-local-validation-evidence):"; "i")
+              or test("^<!--\\s*advisory-wait:")
+              or test("^(advisory-wait:|advisory-wait-recovery:|advisory-reroll:|review-ack:|copilot-unavailable:)")
+              or startswith("<!-- idd-cleanup-evidence:")))
+        or ((.body | sub("^﻿"; "") | (split("\n") | .[0]) | sub("\\r$"; "") | sub("\\s+$"; ""))
+            | IN("<!-- idd-live-status: current -->", "<!-- idd-live-status: historical -->", "<!-- idd-live-status-repair: v1 -->")));
+  # Source-bound Codex clearance (canonical CODEX_NO_FIND_DISPOSITION_RE and the
+  # sticky matcher): an accepted disposition that names the source
+  # id and login, and whose abbreviated HEAD prefixes the current PR HEAD.
+  # (No apostrophes in jq comments: the program sits inside a single-quoted shell string.)
+  # The disposition must match the canonical sentence exactly, the source id and
+  # login must belong to this comment, the disposition HEAD must prefix the
+  # current HEAD, and this comment must itself be a current-HEAD no-find (its
+  # reviewed commit prefixes the current HEAD).
+  # Only the exact canonical source-bound disposition sentence leaves the generic
+  # pairing pool (canonical CODEX_NO_FIND_DISPOSITION_RE); an ordinary reply that
+  # merely mentions the phrase does not.
+  def is_codex_disposition_shape:
+    (.body | sub("^\\s+"; "") | test("^\\*\\*Accepted[.!:]?\\*\\*\\s+—\\s+[^\\s]+\\s+no-find result at HEAD\\s+[0-9a-f]{7,64};\\s+no actionable findings were reported\\s+\\(source: #issuecomment-[0-9]+\\)(?:\\s*\\n<!--\\s*[a-z0-9][a-z0-9_-]*-review-reply\\s*-->)?\\s*$"; "i"));
+  def is_codex_source_bound($src):
+    ((.body | sub("^\\s+"; "") | capture("^\\*\\*Accepted[.!:]?\\*\\*\\s+—\\s+(?<login>[^\\s]+)\\s+no-find result at HEAD\\s+(?<h>[0-9a-f]{7,64});\\s+no actionable findings were reported\\s+\\(source: #issuecomment-(?<id>[0-9]+)\\)(?:\\s*\\n<!--\\s*[a-z0-9][a-z0-9_-]*-review-reply\\s*-->)?\\s*$"; "i")) // null) as $m
+    | ($m != null)
+      and ($m.id == ($src.id | tostring))
+      and (($m.login | ascii_downcase | sub("\\[bot\\]$"; "")) == (($src.user.login // "") | ascii_downcase | sub("\\[bot\\]$"; "")))
+      and ($sha | ascii_downcase | startswith($m.h | ascii_downcase))
+      and ((((($src.body | capture("\\*\\*Reviewed commit:\\*\\*\\s*`(?<r>[0-9a-f]{7,64})`"; "i")) // {r: ""}) as $sr
+        | ($sr.r != "") and ($sha | ascii_downcase | startswith($sr.r | ascii_downcase)))));
   .[0] as $comments | .[1] as $disp
   | ($comments
      | map(select(
-         (.user.login as $u | ($bots | index($u) | not))
-         and (((.user.login // "") | ascii_downcase) as $u
-           | ($agents | map(ascii_downcase) | index($u)) == null)
-         and (.body | startswith("**Accepted**") or startswith("**Rejected**") | not)
-         and (.body | startswith("<!--") | not)
+         ((.user.login // "") | ascii_downcase) as $u
+         | ($agents | map(ascii_downcase) | index($u)) == null
+         and (is_actions_operational | not)
+         and (is_trusted_operational | not)
        ))
-     | sort_by(.created_at)) as $out
-  | ($disp | sort_by(.created_at)) as $ds
+     | map(. + {act: activity})
+     | sort_by(.act)) as $out
+  # Source-bound Codex sentences are matched after trimming (canonical trims the
+  # source-bound reply), so an unedited agent reply of that exact shape joins the
+  # pool even with leading whitespace. Generic replies never see it: the
+  # generic branch below excludes that same trimmed shape.
+  | ([$comments[] | select(
+        ((((.user.login // "") | ascii_downcase) as $u | ($agents | map(ascii_downcase) | index($u)) != null))
+        and (has("lastEditedAt") and (.lastEditedAt == null))
+        and is_codex_disposition_shape)]) as $codex_trimmed
+  | (($disp + $codex_trimmed) | unique_by(.id) | map(. + {act: activity}) | sort_by(.act)) as $ds
   | reduce $out[] as $c (
       {unused: $ds, missing: 0};
       ((.unused | to_entries
-        | map(select(.value.created_at > $c.created_at))
+        | map(select(.value.act > $c.act
+            and (if ($c | is_codex_no_find_current)
+                 then (.value | is_codex_source_bound($c))
+                 else (.value | is_codex_disposition_shape | not)
+                 end)))
         | first) as $hit
       | if $hit == null then .missing += 1
         else .unused |= del(.[$hit.key])
         end)
     )
   | .missing
-')
-MISSING_THREADS=$(printf '%s' "${THREADS_JSON}" | jq -rs --argjson agents "${IDD_AGENT_LOGIN_JSON}" '
+') || exit 2
+# Review threads (canonical summarizeDispositionEvidenceForGate, missingThreads).
+# A thread is missing when it is truncated, or when it has neither a fresh
+# disposition nor the presence-only exception. The originating comment (nodes[0])
+# alone decides the origin, so a later bot reply never flips a human thread.
+# presence_only: a human-origin thread with a later reply and no IDD-originated
+# reply. is_idd_reply approximates canonical isIddOriginatedThreadReply: a
+# review-reply stamp with the configured prefix (IDD_MARKER_PREFIX, default
+# idd-skill) from any author, or an IDD-agent disposition, rejection
+# confirmation, or pending decision. Feedback activity is the later of
+# createdAt and lastEditedAt, so an edit after a disposition reopens the thread.
+# The stamp prefix is IDD_MARKER_PREFIX, else the repository config's
+# markerPrefix (the helper reads the same field), else the canonical default.
+MARKER_PREFIX="${IDD_MARKER_PREFIX:-}"
+if [ -z "${MARKER_PREFIX}" ] && [ -f .github/idd/config.json ]; then
+  MARKER_PREFIX=$(jq -r '.markerPrefix // empty' .github/idd/config.json) || exit 2
+fi
+MARKER_PREFIX="${MARKER_PREFIX:-idd-skill}"
+# The prefix is spliced into a jq regex, so only marker-safe characters pass.
+case "${MARKER_PREFIX}" in
+  *[!A-Za-z0-9_-]*|"") echo "IDD_MARKER_PREFIX must be letters, digits, '_' or '-'; not converged" >&2; exit 2 ;;
+esac
+MISSING_THREADS=$(printf '%s' "${THREADS_JSON}" | jq -rs --argjson agents "${IDD_AGENT_LOGIN_JSON}" --argjson advisory "${ADVISORY_TOKEN_JSON}" --arg prefix "${MARKER_PREFIX}" '
   def author_login: (.author.login // .user.login // "");
+  def advisory_token:
+    (ascii_downcase
+      | if endswith("[bot]") then .[0:(length - 5)] else . end
+      | if . == "copilot-pull-request-reviewer" then "copilot" else . end);
   def is_idd_agent:
     ((author_login | ascii_downcase) as $u
       | ($agents | map(ascii_downcase) | index($u)) != null);
+  # Code-aware pending-decision marker (see DISPOSITION_JSON above).
+  def strip_all($re):
+    if test($re) then sub($re; "\n\n") | strip_all($re) else . end;
+  def mask_html_comments:
+    # Keep line breaks and columns so comments cannot change Markdown block context.
+    gsub("(?<comment>(?s:<!--.*?-->))"; "\(.comment | gsub("[^\n]"; " "))");
+  def mask_inline_code:
+    # Match equal-length backtick runs within one paragraph and keep their columns.
+    gsub("(?<code>(?<!\\x60)(?<ticks>\\x60+)(?!\\x60)(?:(?!(?<!\\x60)\\k<ticks>(?!\\x60))(?!(?:\\r?\\n)[ \\t\\r]*(?:\\r?\\n))[\\s\\S])*?(?<!\\x60)\\k<ticks>(?!\\x60))"; "\(.code | gsub("[^\n]"; " "))");
+  def html_start_re: "^ {0,3}(?:<!--|<\\?|<![A-Z]|<!\\[CDATA\\[|<\\/?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|meta|nav|noframes|ol|optgroup|option|p|param|pre|script|search|section|source|style|summary|table|tbody|td|textarea|tfoot|th|thead|title|tr|track|ul)(?:[ \\t]|\\/?>|$))";
+  def interrupts_paragraph:
+    test("^ {0,3}#{1,6}([ \\t]|$)")
+    or test("^ {0,3}([-_*])([ \\t]*\\1){2,}[ \\t]*$")
+    or test("^ {0,3}(?:={1,}|-{1,2})[ \\t]*$")
+    or test(html_start_re; "i");
+  # Keep an empty line at block boundaries so inline-code matching cannot cross one.
+  def mask_interrupting_lines:
+    split("\n")
+    | map(if interrupts_paragraph then "" else . end)
+    | join("\n");
+  def pending_marker:
+    (.body | gsub("\\r\\n"; "\n") | strip_all("(?ms)^ {0,3}(\\x60{3,})(?=[^\\x60\\n]*$).*?(?:^ {0,3}\\1\\x60*[ \\t\\r]*$|\\z)") | strip_all("(?ms)^ {0,3}(~{3,}).*?(?:^ {0,3}\\1~*[ \\t\\r]*$|\\z)") | mask_html_comments | mask_interrupting_lines | mask_inline_code
+      | split("\n")
+      | reduce .[] as $l ({run: false, hit: false};
+          if .hit then .
+          elif ($l | test("^\\s*$")) or ($l | test("^ {0,3}>[ \\t>]*$")) or ($l | test("^ {0,3}#{1,6}([ \\t]|$)")) or ($l | test("^ {0,3}([-_*])([ \\t]*\\1){2,}[ \\t]*$")) or ($l | test(html_start_re; "i"))
+            then .run = false
+          elif (.run | not) and ($l | test("^\\*\\*Awaiting maintainer decision\\*\\*"; "i")) then .hit = true
+          elif ($l | test("^ {0,3}(>|[-+*][ \\t]|[0-9]{1,9}[.)][ \\t])")) then .run = true
+          else . end)
+      | .hit);
   def is_disp:
-    ((.body | startswith("**Accepted**") or startswith("**Rejected**")))
+    (.body | test("^\\*\\*(Accepted|Rejected)[.!:]?\\*\\*"))
     and is_idd_agent
-    and (has("lastEditedAt") and (.lastEditedAt == null));
-  def latest_feedback:
-    [.comments.nodes[] | select(is_disp | not) | .createdAt]
+    and (has("lastEditedAt") and (.lastEditedAt == null))
+    and (pending_marker | not);
+  def is_idd_reply:
+    (.body | test("<!--\\s*" + $prefix + "-review-reply\\s*-->"; "i"))
+    or (is_idd_agent
+      and (pending_marker
+        or (.body | (test("^\\*\\*(Accepted|Rejected)[.!:]?\\*\\*")
+          or test("^\\s*\\*\\*Rejection confirmed by maintainer\\*\\*\\s+—")))));
+  # A rejection confirmation settles a thread only once the thread is resolved
+  # (canonical hasFreshDisposition with isRejectionConfirmedDisposition).
+  def is_rejection_confirmed:
+    (.body | test("^\\s*\\*\\*Rejection confirmed by maintainer\\*\\*\\s+—"))
+    and is_idd_agent
+    and (has("lastEditedAt") and (.lastEditedAt == null))
+    and (pending_marker | not);
+  def counts_as_disp($res):
+    is_disp or ($res and is_rejection_confirmed);
+  def activity_at:
+    if has("lastEditedAt") and .lastEditedAt == null
+    then (.createdAt // .updatedAt // "")
+    else (.updatedAt // .createdAt // "") end;
+  def latest_feedback($res):
+    [.comments.nodes[] | select(counts_as_disp($res) | not) | activity_at]
     | if length == 0 then null else max end;
   def has_fresh_disp:
-    latest_feedback as $fb
-    | .comments.nodes | any(is_disp and ($fb == null or .createdAt > $fb));
+    (.isResolved // false) as $res
+    | latest_feedback($res) as $fb
+    | .comments.nodes | any(counts_as_disp($res) and ($fb == null or .createdAt > $fb));
+  # A Bot-typed originating author is advisory even when no list names it. That
+  # fails closed for an unconfigured bot (canonical would call it human).
+  def is_advisory_origin:
+    (((.comments.nodes[0].author.login // "") | advisory_token) as $t
+      | ($advisory | index($t)) != null)
+    or ((.comments.nodes[0].author.__typename // "") == "Bot");
+  def presence_only:
+    (is_advisory_origin | not)
+    and ((.comments.nodes | length) > 1)
+    and ([.comments.nodes[1:][] | select(is_idd_reply)] | length == 0);
   add
-  | map(select(.comments.pageInfo.hasNextPage or (has_fresh_disp | not)))
+  | map(select(
+      .comments.pageInfo.hasNextPage
+      or ((has_fresh_disp | not) and (presence_only | not))
+    ))
   | length
-')
+') || exit 2
 
 echo "converged=${CONVERGED} conjuncts=${CONJUNCT1},${CONJUNCT2},${CONJUNCT3}"
 echo "missingRegularComments=${MISSING_REGULAR} missingThreads=${MISSING_THREADS}"
