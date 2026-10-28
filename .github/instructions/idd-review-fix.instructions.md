@@ -217,19 +217,17 @@ Fetch with the exact refspec:
 git fetch origin +refs/heads/{development-branch}:refs/remotes/origin/{development-branch}
 ```
 
-On failure, report and hold. Compare `git merge-base HEAD
-origin/{development-branch}` with `git rev-parse origin/{development-branch}`.
-If equal, the branch is current: do not merge and continue to E12. On either
-command error, report and hold.
+After fetching, capture the target once as `target_sha` per the [E11 helper](../../docs/idd-helper-scripts.md).
+Fetch/capture/comparison errors report and hold.
+Compare `HEAD` with `"$target_sha"` per the helper.
+If equal, the branch is current: do not merge and continue to E12.
+If behind, probe `git merge-tree` and sign the merge with this SHA; never
+refetch or re-resolve. Unknown outcomes report and hold without merge or
+push.
 
-If behind, run `git merge-tree --write-tree HEAD origin/{development-branch}`.
-Exit 0 means no conflict; 1 means conflict. Any other exit is unknown: hold
-without merging or pushing.
-
-- **No conflict:** run `git merge --no-ff` with
-  `origin/{development-branch}` and the conventional `-m` subject in the
-  [signed-commit merge wrapper](../../docs/idd-helper-scripts.md). No
-  confirmation, even with open review threads.
+- **No conflict:** signed `git merge --no-ff` with `"$target_sha"` and
+  conventional `-m` subject via the wrapper; no confirmation, even with
+  open review threads.
 - **Conflict:** follow the E11 conflict path in the
   [signed-commit merge wrapper](../../docs/idd-helper-scripts.md#signed-commit-merge-wrapper-shared-git-procedure).
 - **Merge failure:** on merge, signing, or hook failure, run

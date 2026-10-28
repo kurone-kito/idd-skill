@@ -223,16 +223,24 @@ Fetch with this exact refspec:
 git fetch origin +refs/heads/{development-branch}:refs/remotes/origin/{development-branch}
 ```
 
-On failure, stop-and-ask. Compare `git merge-base HEAD
-origin/{development-branch}` with `git rev-parse origin/{development-branch}`.
-If equal, the branch is current: do not merge and continue to E12. On either
-command error, stop-and-ask.
+On failure, stop-and-ask. After the fetch, capture the fetched commit once
+in `target_sha`:
 
-When behind, run `git merge-tree --write-tree HEAD origin/{development-branch}`.
-Only exit 0 means no conflict; exit 1 means conflict. Any other exit is
-unknown and stop-and-ask. With no conflict, run `git merge --no-ff` with
-`origin/{development-branch}` and the conventional `-m` subject documented
-in the [signed-commit merge wrapper](../../../docs/idd-helper-scripts.md).
+```sh
+target_sha=$(git rev-parse --verify 'origin/{development-branch}^{commit}')
+```
+
+If that command fails, stop-and-ask. Compare `git merge-base HEAD
+"$target_sha"` with `"$target_sha"`.
+If equal, the branch is current: do not merge and continue to E12.
+On a comparison command error, stop-and-ask.
+
+When behind, run `git merge-tree --write-tree HEAD "$target_sha"`. Only exit
+0 means no conflict; exit 1 means conflict. Any other exit is unknown and
+stop-and-ask. With no conflict, run `git merge --no-ff` with the same
+`"$target_sha"` and the conventional `-m` subject documented in the
+[signed-commit merge wrapper](../../../docs/idd-helper-scripts.md). Do not
+fetch or resolve the branch ref again between the probe and merge.
 For non-interactive-hostile primary signing, use that wrapper.
 Do not ask for confirmation, even with open review threads. For a conflict,
 unresolved threads, unreplied comments, or `CHANGES_REQUESTED` require explicit

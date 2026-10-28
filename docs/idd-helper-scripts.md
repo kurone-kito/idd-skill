@@ -9030,7 +9030,7 @@ same as `AW4`/`AW5`.
   `return-to-e-phase-branch-sync`, `retry`, or `hold`. Other helper call sites
   read their own key. E11 instead makes its documented live PR-base and Git checks:
   this helper reflects the last pushed head, not unpushed fixes, so
-  `callSiteRouting.e11` remains compatibility output (#4759).
+  `callSiteRouting.e11` remains compatibility output (kurone-kito/idd-skill#4759).
 - The routing table is authoritative for the other branch-state call sites;
   E11's routing is defined in the review-fix phase file.
   `requiresUpToDateHead` is not emitted. The helper derives it from the base
@@ -10026,7 +10026,7 @@ This section documents review-fix E11 only.
 the feature branch. It reads the PR base and current Git refs before each
 fix push, so a conflict-free sync rides with that push instead of creating
 a sync-only push; its helper field remains for compatibility because the
-helper sees the last pushed head (#4759).
+helper sees the last pushed head (kurone-kito/idd-skill#4759).
 
 For a conflict, unresolved threads, unreplied comments, or a
 `CHANGES_REQUESTED` review require explicit confirmation before merging,
@@ -10035,19 +10035,49 @@ resolving, and completing. Then use this wrapper for both the merge and
 full process tree before aborting; if it remains live or its exit is
 unconfirmed, hold without aborting or pushing.
 
+E11 first fetches the target with this exact refspec:
+
 ```sh
-git fetch origin +refs/heads/{development-branch}:refs/remotes/origin/{development-branch} \
-  && git merge --no-ff -m "chore: merge origin/{development-branch} into the claimed branch" origin/{development-branch}
+git fetch origin +refs/heads/{development-branch}:refs/remotes/origin/{development-branch}
+```
+
+Capture the fetched commit once in `target_sha`:
+
+```sh
+target_sha=$(git rev-parse --verify 'origin/{development-branch}^{commit}')
+```
+
+Compare `git merge-base HEAD "$target_sha"` with `"$target_sha"`; equality
+skips the merge. When behind, probe with:
+
+```sh
+git merge-tree --write-tree HEAD "$target_sha"
+```
+
+Exit 0 means no conflict; 1 means conflict. Any other exit is unknown, so
+hold without merging or pushing. A failed fetch, capture, or comparison also
+holds. Use the captured SHA for both the probe and merge below; do not fetch
+or resolve the branch ref again. Keep `target_sha` available across E11, or
+pass its recorded value if the commands run in separate shells.
+
+```sh
+git merge --no-ff \
+  -m "chore: merge origin/{development-branch} into the claimed branch" \
+  "$target_sha"
 ```
 
 On a repo whose primary commit signing is non-interactive-hostile (GPG
 pinentry / hardware-touch) and that configures a fallback signing wrapper for
 arbitrary git subcommands, run the **merge** step — including a
 `--continue` after conflict resolution — through that wrapper, never the
-plain command (`git fetch` creates no commit and needs no signing):
+plain merge command (the separate `git fetch` creates no commit and needs no
+signing):
 
 ```sh
-git -c gpg.format=ssh -c user.signingkey=<abs-path> -c commit.gpgsign=true merge --no-ff -m "chore: merge origin/{development-branch} into the claimed branch" origin/{development-branch}
+git -c gpg.format=ssh -c user.signingkey=<abs-path> \
+  -c commit.gpgsign=true merge --no-ff \
+  -m "chore: merge origin/{development-branch} into the claimed branch" \
+  "$target_sha"
 # resolve conflicts if any, then:
 git -c gpg.format=ssh -c user.signingkey=<abs-path> -c commit.gpgsign=true merge --continue
 ```
