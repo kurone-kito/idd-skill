@@ -480,7 +480,7 @@ test('review-activity-snapshot.mjs CLI: parses paginated activity and validates 
             state: 'FAILURE',
             targetUrl: 'https://example.test/failure',
             createdAt: '2026-10-26T09:05:00Z',
-            updatedAt: '2026-10-26T09:08:00Z',
+            updatedAt: '2026-10-26T09:20:00Z',
           },
         ];
       }),
