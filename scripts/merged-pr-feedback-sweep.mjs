@@ -846,24 +846,66 @@ function isReadyReport(report) {
     mergeable === 'MERGEABLE'
   );
 }
+/** Positive integer token with no leading zero, as in `issue/<token>-`. */
+const HEAD_ISSUE_TOKEN_PATTERN = /^[1-9][0-9]*$/;
+/**
+ * Classify a pull request head branch for readiness argv selection. An
+ * `issue/` prefix is matched case-insensitively, so a near-miss name such as
+ * `Issue/12-x` cannot reach the claimless path (#4734). The token after it,
+ * up to the first dash, must be a positive safe integer without a leading
+ * zero, as in `check-stray-commit-closes.mts`. A missing, non-string, or
+ * empty head name is `malformed`, not `none`: the GitHub adapter coerces an
+ * absent head name to an empty string, and that must fail closed rather
+ * than read as a no-issue branch.
+ */
+function classifyHeadBranch(headRefName) {
+  if (typeof headRefName !== 'string' || headRefName.trim() === '') {
+    return { kind: 'malformed' };
+  }
+  if (!/^issue\//i.test(headRefName)) {
+    return { kind: 'none' };
+  }
+  const rest = headRefName.slice('issue/'.length);
+  const dash = rest.indexOf('-');
+  if (dash < 0) {
+    return { kind: 'malformed' };
+  }
+  const token = rest.slice(0, dash);
+  const value = Number(token);
+  if (!HEAD_ISSUE_TOKEN_PATTERN.test(token) || !Number.isSafeInteger(value)) {
+    return { kind: 'malformed' };
+  }
+  return { kind: 'issue', number: value };
+}
 /**
  * The readiness argv to try for one open PR, or `null` when its closing
- * references cannot be used. A PR that closes no issue is checked with
- * `--claimless`. A PR that closes issues in this repository is checked with
- * each of them as `--claim-issue` in turn (the claim may live on any one),
- * and `--closing-issues` names the whole set when there is more than one.
- * References that are unreadable, or that include any entry that is not a
- * same-repository issue (another repository's issue or a malformed entry,
- * even next to a readable one), give `null`: `--claimless` would refuse
- * them, and checking only the readable part would test an incomplete
- * closing set. This is the `resolveClosingIssueNumbersForClassifier`
- * contract that pre-merge-readiness itself applies.
+ * references or head branch cannot be used. A PR that closes issues in this
+ * repository is checked with each of them as `--claim-issue` in turn (the
+ * claim may live on any one), and `--closing-issues` names the whole set
+ * when there is more than one. References that are unreadable, or that
+ * include any entry that is not a same-repository issue (another
+ * repository's issue or a malformed entry, even next to a readable one),
+ * give `null`: `--claimless` would refuse them, and checking only the
+ * readable part would test an incomplete closing set. This is the
+ * `resolveClosingIssueNumbersForClassifier` contract that pre-merge-readiness
+ * itself applies.
+ *
+ * A PR that closes no issue depends on its head branch (#4734). An
+ * `issue/<number>-...` branch is checked with `--claim-issue <number>`,
+ * because GitHub can leave `closingIssuesReferences` empty for a claimed
+ * issue branch on a non-default base (#4697); readiness then requires an
+ * active claim on that issue and fails closed without one. Any other named
+ * branch is a genuine no-issue pull request and is checked with
+ * `--claimless`. A head branch that is missing, or that starts with `issue/`
+ * without a parseable issue number, gives `null`, since no claim can be
+ * identified for it.
  */
 export function openPrReadinessArgvCandidates(
   number,
   owner,
   repo,
   closingIssuesReferences,
+  headRefName,
 ) {
   const base = ['--pr', String(number), '--owner', owner, '--repo', repo];
   const resolved = resolveClosingIssueNumbersForClassifier(
@@ -875,7 +917,14 @@ export function openPrReadinessArgvCandidates(
     return null;
   }
   if (resolved.length === 0) {
-    return [[...base, '--claimless']];
+    const head = classifyHeadBranch(headRefName);
+    if (head.kind === 'malformed') {
+      return null;
+    }
+    if (head.kind === 'none') {
+      return [[...base, '--claimless']];
+    }
+    return [[...base, '--claim-issue', String(head.number)]];
   }
   const issues = [...new Set(resolved)];
   if (issues.length === 1) {
@@ -912,6 +961,23 @@ export function openPrReadinessIdentityArgv(args) {
   return argv;
 }
 /**
+ * Why `openPrReadinessArgvCandidates` gave `null`. Closing references are
+ * the first cause, since they are read before the head branch. Otherwise a
+ * head branch that is missing or does not name an issue number is the cause
+ * (#4734), so the report names the field that failed.
+ */
+function openPrUncheckedReason(closingIssuesReferences, owner, repo) {
+  const resolved = resolveClosingIssueNumbersForClassifier(
+    closingIssuesReferences,
+    owner,
+    repo,
+  );
+  if (resolved === null) {
+    return 'closing issue references are unreadable or include an entry that is not an issue in this repository';
+  }
+  return 'head branch is missing or is an issue branch without a parseable issue number, so its claimed issue cannot be identified';
+}
+/**
  * Check every open PR with the read-only readiness collector. A failure on
  * one PR is recorded in `unchecked` rather than stopping the sweep, so a
  * stuck PR is never silently dropped. Reads only: no merge, claim, or post.
@@ -934,12 +1000,16 @@ export function collectOpenReadyPrs(
         owner,
         repo,
         view.closingIssuesReferences,
+        view.headRefName,
       );
       if (candidates === null) {
         unchecked.push({
           number: pr.number,
-          reason:
-            'closing issue references are unreadable or include an entry that is not an issue in this repository',
+          reason: openPrUncheckedReason(
+            view.closingIssuesReferences,
+            owner,
+            repo,
+          ),
         });
         continue;
       }

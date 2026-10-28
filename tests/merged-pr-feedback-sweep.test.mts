@@ -2102,10 +2102,13 @@ test('summary aggregates across PRs and skips clean PRs', () => {
 
 const OPEN_NOW_MS = Date.parse('2026-10-13T12:00:00Z');
 
-function convergenceView(closingIssuesReferences: unknown) {
+function convergenceView(
+  closingIssuesReferences: unknown,
+  headRefName = 'feature/no-issue',
+) {
   return {
     headSha: 'a'.repeat(40),
-    headRefName: 'issue/branch',
+    headRefName,
     authorLogin: 'kurone-kito',
     url: '',
     closingIssuesReferences,
@@ -2331,37 +2334,111 @@ test('#4162: a missing createdAt leaves the age unknown', () => {
 
 test('#4162: readiness argv covers no, one, several, and unreadable closing issues', () => {
   const base = ['--pr', '7', '--owner', 'o', '--repo', 'r'];
-  assert.deepEqual(openPrReadinessArgvCandidates(7, 'o', 'r', []), [
-    [...base, '--claimless'],
-  ]);
+  const noIssueHead = 'feature/no-issue';
   assert.deepEqual(
-    openPrReadinessArgvCandidates(7, 'o', 'r', [{ number: 3 }]),
+    openPrReadinessArgvCandidates(7, 'o', 'r', [], noIssueHead),
+    [[...base, '--claimless']],
+  );
+  assert.deepEqual(
+    openPrReadinessArgvCandidates(7, 'o', 'r', [{ number: 3 }], noIssueHead),
     [[...base, '--claim-issue', '3']],
   );
   assert.deepEqual(
-    openPrReadinessArgvCandidates(7, 'o', 'r', [
-      { number: 3 },
-      { number: 4 },
-      { number: 3 },
-    ]),
+    openPrReadinessArgvCandidates(
+      7,
+      'o',
+      'r',
+      [{ number: 3 }, { number: 4 }, { number: 3 }],
+      noIssueHead,
+    ),
     [
       [...base, '--claim-issue', '3', '--closing-issues', '3,4'],
       [...base, '--claim-issue', '4', '--closing-issues', '3,4'],
     ],
   );
-  assert.equal(openPrReadinessArgvCandidates(7, 'o', 'r', null), null);
+  assert.equal(
+    openPrReadinessArgvCandidates(7, 'o', 'r', null, noIssueHead),
+    null,
+  );
   // A readable same-repository issue next to a foreign or malformed entry
   // is an incomplete closing set, so the PR is not checked at all.
   assert.equal(
-    openPrReadinessArgvCandidates(7, 'o', 'r', [
-      { number: 3 },
-      { number: 5, repository: { name: 'other', owner: { login: 'o' } } },
-    ]),
+    openPrReadinessArgvCandidates(
+      7,
+      'o',
+      'r',
+      [
+        { number: 3 },
+        { number: 5, repository: { name: 'other', owner: { login: 'o' } } },
+      ],
+      noIssueHead,
+    ),
     null,
   );
   assert.equal(
-    openPrReadinessArgvCandidates(7, 'o', 'r', [{ number: 3 }, 'bad']),
+    openPrReadinessArgvCandidates(
+      7,
+      'o',
+      'r',
+      [{ number: 3 }, 'bad'],
+      noIssueHead,
+    ),
     null,
+  );
+});
+
+// #4734: empty closing references do not establish a no-issue pull request.
+// The head branch decides: an issue branch is checked against its claimed
+// issue, a named non-issue branch stays claimless, and an unparseable head
+// fails closed.
+test('#4734: empty closing references are routed by the head branch', () => {
+  const base = ['--pr', '7', '--owner', 'o', '--repo', 'r'];
+  assert.deepEqual(
+    openPrReadinessArgvCandidates(7, 'o', 'r', [], 'issue/12-some-slug'),
+    [[...base, '--claim-issue', '12']],
+  );
+  assert.deepEqual(
+    openPrReadinessArgvCandidates(7, 'o', 'r', [], 'Issue/12-x'),
+    [[...base, '--claim-issue', '12']],
+  );
+  assert.deepEqual(
+    openPrReadinessArgvCandidates(7, 'o', 'r', [], 'issue/9007199254740991-x'),
+    [[...base, '--claim-issue', '9007199254740991']],
+  );
+  for (const head of ['feature/x', 'docs/no-issue', 'release/1.x']) {
+    assert.deepEqual(
+      openPrReadinessArgvCandidates(7, 'o', 'r', [], head),
+      [[...base, '--claimless']],
+      head,
+    );
+  }
+  for (const head of [
+    'issue/abc-x',
+    'issue/-x',
+    'issue/0-x',
+    'issue/012-x',
+    'issue/12',
+    'issue/9007199254740992-x',
+    '',
+    '   ',
+    undefined,
+    null,
+    12,
+  ]) {
+    assert.equal(
+      openPrReadinessArgvCandidates(7, 'o', 'r', [], head),
+      null,
+      String(head),
+    );
+  }
+  // Non-empty references decide the argv, whatever the head branch says.
+  assert.deepEqual(
+    openPrReadinessArgvCandidates(7, 'o', 'r', [{ number: 3 }], 'issue/12-x'),
+    [[...base, '--claim-issue', '3']],
+  );
+  assert.deepEqual(
+    openPrReadinessArgvCandidates(7, 'o', 'r', [{ number: 3 }], 'issue/abc'),
+    [[...base, '--claim-issue', '3']],
   );
 });
 
@@ -2392,6 +2469,105 @@ test('#4162: a PR with a mixed closing-reference list is listed as unchecked', (
     [10],
   );
   assert.ok(readiness.seenArgv.every((argv) => !argv.includes('10')));
+  assertNoMergeOrWrite(fixture, calls);
+});
+
+test('#4734: an issue-branch PR with empty closing references is checked with its claim issue, never claimless', () => {
+  const fixture = openPrFixture();
+  fixture.changeRequestConvergenceViews = {
+    ...fixture.changeRequestConvergenceViews,
+    11: convergenceView([], 'issue/11-empty-closing-refs'),
+  };
+  const { port, calls } = recordingPort(fixture);
+  const readiness = fakeReadiness([10, 11]);
+  const report = runMergedPrFeedbackSweep(parseArgs(['--days', '7']), {
+    port,
+    owner: 'o',
+    repo: 'r',
+    nowMs: OPEN_NOW_MS,
+    readiness: readiness.check,
+  });
+  assert.deepEqual(
+    report.openReadyPrs?.map((pr) => pr.number),
+    [10, 11],
+  );
+  assert.deepEqual(report.openReadyUncheckedPrs, []);
+  assert.deepEqual(
+    readiness.seenArgv.filter(
+      (argv) => argv[argv.indexOf('--pr') + 1] === '11',
+    ),
+    [['--pr', '11', '--owner', 'o', '--repo', 'r', '--claim-issue', '11']],
+  );
+  assertNoMergeOrWrite(fixture, calls);
+});
+
+test('#4734: a missing or unparseable head branch with empty closing references is unchecked, never ready', () => {
+  for (const head of ['issue/abc-not-a-number', '']) {
+    const fixture = openPrFixture();
+    fixture.changeRequestConvergenceViews = {
+      ...fixture.changeRequestConvergenceViews,
+      11: convergenceView([], head),
+    };
+    const { port, calls } = recordingPort(fixture);
+    const readiness = fakeReadiness([10, 11]);
+    const report = runMergedPrFeedbackSweep(parseArgs(['--days', '7']), {
+      port,
+      owner: 'o',
+      repo: 'r',
+      nowMs: OPEN_NOW_MS,
+      readiness: readiness.check,
+    });
+    assert.deepEqual(
+      report.openReadyPrs?.map((pr) => pr.number),
+      [10],
+      head,
+    );
+    assert.deepEqual(
+      report.openReadyUncheckedPrs?.map((pr) => pr.number),
+      [11],
+      head,
+    );
+    assert.match(
+      report.openReadyUncheckedPrs?.[0]?.reason ?? '',
+      /head branch/,
+      head,
+    );
+    assert.ok(
+      readiness.seenArgv.every(
+        (argv) => argv[argv.indexOf('--pr') + 1] !== '11',
+      ),
+      head,
+    );
+    assertNoMergeOrWrite(fixture, calls);
+  }
+});
+
+test('#4734: unreadable closing references keep the closing-reference reason', () => {
+  const fixture = openPrFixture();
+  fixture.changeRequestConvergenceViews = {
+    ...fixture.changeRequestConvergenceViews,
+    11: convergenceView(null, 'issue/11-x'),
+  };
+  const { port, calls } = recordingPort(fixture);
+  const readiness = fakeReadiness([10, 11]);
+  const report = runMergedPrFeedbackSweep(parseArgs(['--days', '7']), {
+    port,
+    owner: 'o',
+    repo: 'r',
+    nowMs: OPEN_NOW_MS,
+    readiness: readiness.check,
+  });
+  assert.deepEqual(
+    report.openReadyUncheckedPrs?.map((pr) => pr.number),
+    [11],
+  );
+  assert.match(
+    report.openReadyUncheckedPrs?.[0]?.reason ?? '',
+    /closing issue references/,
+  );
+  assert.ok(
+    readiness.seenArgv.every((argv) => argv[argv.indexOf('--pr') + 1] !== '11'),
+  );
   assertNoMergeOrWrite(fixture, calls);
 });
 
@@ -2486,27 +2662,43 @@ test('#4162: every readiness argv the sweep builds passes the real readiness par
     [{ number: 3 }],
     [{ number: 3 }, { number: 4 }],
   ]) {
-    for (const argv of openPrReadinessArgvCandidates(7, 'o', 'r', references) ??
-      []) {
-      const parsed = parseReadinessArgs(argv);
-      assert.equal(parsed.prNumber, 7);
-      assert.equal(parsed.owner, 'o');
-      assert.equal(parsed.repo, 'r');
+    for (const head of ['issue/7-x', 'feature/no-issue']) {
+      for (const argv of openPrReadinessArgvCandidates(
+        7,
+        'o',
+        'r',
+        references,
+        head,
+      ) ?? []) {
+        const parsed = parseReadinessArgs(argv);
+        assert.equal(parsed.prNumber, 7);
+        assert.equal(parsed.owner, 'o');
+        assert.equal(parsed.repo, 'r');
+      }
     }
   }
   const [first, second] =
-    openPrReadinessArgvCandidates(7, 'o', 'r', [
-      { number: 3 },
-      { number: 4 },
-    ]) ?? [];
+    openPrReadinessArgvCandidates(
+      7,
+      'o',
+      'r',
+      [{ number: 3 }, { number: 4 }],
+      'feature/no-issue',
+    ) ?? [];
   assert.equal(parseReadinessArgs(first).claimIssueNumber, 3);
   assert.deepEqual(parseReadinessArgs(second).closingIssueNumbers, [3, 4]);
   assert.equal(
     parseReadinessArgs(
-      (openPrReadinessArgvCandidates(7, 'o', 'r', []) ?? [])[0],
+      (openPrReadinessArgvCandidates(7, 'o', 'r', [], 'feature/no-issue') ??
+        [])[0],
     ).claimless,
     true,
   );
+  // #4734: an issue branch with empty references is claim-bound, not claimless.
+  const [claimBound] =
+    openPrReadinessArgvCandidates(7, 'o', 'r', [], 'issue/7-x') ?? [];
+  assert.equal(parseReadinessArgs(claimBound).claimIssueNumber, 7);
+  assert.equal(parseReadinessArgs(claimBound).claimless, false);
 });
 
 test('#4162: a failure on one claim issue does not hide a ready result on another, and a failed age read still lists the PR', () => {
