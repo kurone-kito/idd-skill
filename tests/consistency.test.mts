@@ -3493,6 +3493,30 @@ test('issue-authoring contract defines ledger storage verdicts, allocation, and 
     text,
     /On Windows, reject a root whose ACL lets another user rename or delete child entries/,
   );
+  assert.match(
+    text,
+    /complete, successful `git worktree list --porcelain` run/,
+  );
+  assert.match(
+    text,
+    /A missing executable, nonzero status, malformed record, or incomplete output makes the protected-path inventory unreadable/,
+  );
+  assert.match(
+    text,
+    /A nonzero result proves non-membership only when it is the exact standard `fatal: not a git repository/,
+  );
+  assert.match(
+    text,
+    /Never treat an arbitrary Git failure as proof that the path is outside a repository/,
+  );
+  assert.match(
+    text,
+    /For each reported worktree path, first compare its normalized absolute lexical path against the candidate root using component-aware containment/,
+  );
+  assert.match(
+    text,
+    /If that walk confirms a registered worktree path is absent after checking its readable ancestors, retain the Git worktree record and skip only the handle and backing-location comparison for that absent path; never prune or edit Git metadata/,
+  );
   assert.ok(
     text.includes(
       "For Linux root checks, also record the root and protected paths' mount IDs, matching mountinfo fields, and derived backing locations; repeat that comparison whenever the root checks run.",
@@ -3500,7 +3524,11 @@ test('issue-authoring contract defines ledger storage verdicts, allocation, and 
   );
   assert.match(
     text,
-    /On Linux, obtain `STATX_MNT_ID` from already-open directory handles using `statx\(2\)` with `AT_EMPTY_PATH` for the candidate root and each protected path, then read the matching entries in `\/proc\/self\/mountinfo`/,
+    /On Linux, obtain a mount ID from already-open directory handles using `statx\(2\)` with `AT_EMPTY_PATH` for the candidate root and each existing protected path/,
+  );
+  assert.match(
+    text,
+    /When `statx` fails or does not provide `STATX_MNT_ID`, read the single decimal `mnt_id` field from `\/proc\/self\/fdinfo\/<fd>` for that same open handle/,
   );
   assert.match(
     text,
