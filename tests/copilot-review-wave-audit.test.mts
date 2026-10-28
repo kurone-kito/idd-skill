@@ -2639,6 +2639,10 @@ test('CLI: --help lists the check-mode flags', () => {
   assert.match(output, /--check/);
   assert.match(output, /--since <YYYY-MM-DD>/);
   assert.match(output, /--min-recorded-share <n>/);
+  assert.match(output, /--merged-from <YYYY-MM-DD>/);
+  assert.match(output, /--merged-to <YYYY-MM-DD>/);
+  assert.match(output, /--baseline-reviews-per-pr <n>/);
+  assert.match(output, /--step-summary <path>/);
 });
 
 // A gh stub that answers the three calls auditPr makes from one JSON fixture
@@ -2653,8 +2657,15 @@ if (args[0] === 'api' && args[1] === 'graphql') {
   process.stdout.write(JSON.stringify({ data: { nodes: ids.map((id) => ({ id, lastEditedAt: null })) } }));
   process.exit(0);
 }
-if (args[0] === 'api' && String(args[1]).includes('/pulls/42/reviews')) {
-  for (const r of fixture.reviews) process.stdout.write(JSON.stringify(r) + '\\n');
+if (args[0] === 'api' && String(args[1]).includes('/pulls/') && String(args[1]).includes('/reviews')) {
+  const pr = String(args[1]).match(/\\/pulls\\/(\\d+)\\//)?.[1] ?? '';
+  const failure = fixture.failReviewsByPr?.[pr];
+  if (failure) {
+    process.stderr.write(failure + '\\n');
+    process.exit(1);
+  }
+  const reviews = fixture.reviewsByPr?.[pr] ?? (pr === '42' ? fixture.reviews : []);
+  for (const r of reviews) process.stdout.write(JSON.stringify(r) + '\\n');
   process.exit(0);
 }
 if (args[0] === 'api' && String(args[1]).includes('/pulls/42/commits')) {
@@ -2665,8 +2676,10 @@ if (args[0] === 'api' && String(args[1]).includes('/pulls/42/commits')) {
   for (const c of fixture.commits ?? []) process.stdout.write(JSON.stringify(c) + '\\n');
   process.exit(0);
 }
-if (args[0] === 'api' && String(args[1]).includes('/pulls/42/comments')) {
-  for (const c of fixture.comments) process.stdout.write(JSON.stringify(c) + '\\n');
+if (args[0] === 'api' && String(args[1]).includes('/pulls/') && String(args[1]).includes('/comments')) {
+  const pr = String(args[1]).match(/\\/pulls\\/(\\d+)\\//)?.[1] ?? '';
+  const comments = fixture.commentsByPr?.[pr] ?? (pr === '42' ? fixture.comments : []);
+  for (const c of comments) process.stdout.write(JSON.stringify(c) + '\\n');
   process.exit(0);
 }
 if (args[0] === 'api' && String(args[1]).includes('/compare/')) {
@@ -2680,6 +2693,7 @@ if (args[0] === 'api' && String(args[1]).includes('/compare/')) {
   process.exit(0);
 }
 if (args[0] === 'pr' && args[1] === 'list') {
+  fs.appendFileSync(process.env.WAVE_AUDIT_CALLS, 'pr list ' + args.slice(2).join(' ') + '\\n');
   // Pin the flags the CLI must send, so the stub cannot pass for wrong ones.
   const flagAt = (flag) => {
     const at = args.indexOf(flag);
@@ -2704,6 +2718,9 @@ function runCheckWithFixture(
     reviews: unknown[];
     comments: unknown[];
     prs?: unknown[];
+    reviewsByPr?: Record<string, unknown[]>;
+    commentsByPr?: Record<string, unknown[]>;
+    failReviewsByPr?: Record<string, string>;
     compare?: Record<string, unknown>;
     commits?: unknown[];
     failCommits?: boolean;
@@ -2977,6 +2994,324 @@ test('CLI --check --limit: the merge time from gh pr list reaches the report', (
   assert.equal(parsed.reports[0]?.mergedAt, '2026-10-02T00:00:00Z');
 });
 
+test('CLI merge window: pads search dates, filters the inclusive UTC window, sorts by merge time, and reports mergedAt', () => {
+  const result = runCheckWithFixture(
+    {
+      reviews: [
+        {
+          id: 1,
+          submitted_at: '2026-01-01T00:00:00Z',
+          body: NO_FINDINGS_FIXTURE,
+          user: { login: COPILOT_LOGIN },
+        },
+      ],
+      comments: [],
+      prs: [
+        { number: 42, mergedAt: '2026-10-07T23:59:59Z' },
+        { number: 43, mergedAt: '2026-10-06T12:00:00Z' },
+        { number: 44, mergedAt: '2026-09-30T23:59:59Z' },
+        { number: 45, mergedAt: '2026-10-08T00:00:00Z' },
+      ],
+    },
+    [],
+    ['--merged-from', '2026-10-01', '--merged-to', '2026-10-07'],
+  );
+  assert.equal(result.status, 0, result.stderr);
+  const listCall = result.calls.find((call) => call.startsWith('pr list '));
+  assert.ok(listCall);
+  assert.match(listCall, /--search merged:2026-09-30\.\.2026-10-08/);
+  assert.match(listCall, /--limit 1000/);
+  const parsed = JSON.parse(result.stdout) as {
+    reports: Array<{ pr: number; mergedAt: string | null }>;
+  };
+  assert.deepEqual(
+    parsed.reports.map((report) => report.pr),
+    [42, 43],
+  );
+  assert.equal(parsed.reports[0]?.mergedAt, '2026-10-07T23:59:59Z');
+  assert.equal(parsed.reports[1]?.mergedAt, '2026-10-06T12:00:00Z');
+  assert.equal(
+    result.calls.some((call) => call.includes('/pulls/44/')) ||
+      result.calls.some((call) => call.includes('/pulls/45/')),
+    false,
+  );
+});
+
+test('CLI merge window misuse and invalid dates fail with exit 2 before any gh call', () => {
+  const fixture = { reviews: [], comments: [] };
+  const cases: Array<{ name: string; selector: string[] }> = [
+    {
+      name: 'missing --merged-to',
+      selector: ['--merged-from', '2026-10-01'],
+    },
+    {
+      name: 'reversed dates',
+      selector: ['--merged-from', '2026-10-08', '--merged-to', '2026-10-01'],
+    },
+    {
+      name: 'impossible calendar date',
+      selector: ['--merged-from', '2026-02-30', '--merged-to', '2026-03-01'],
+    },
+    {
+      name: 'window with --prs',
+      selector: [
+        '--merged-from',
+        '2026-10-01',
+        '--merged-to',
+        '2026-10-07',
+        '--prs',
+        '42',
+      ],
+    },
+    {
+      name: 'window with --limit',
+      selector: [
+        '--merged-from',
+        '2026-10-01',
+        '--merged-to',
+        '2026-10-07',
+        '--limit',
+        '30',
+      ],
+    },
+  ];
+  for (const entry of cases) {
+    const result = runCheckWithFixture(fixture, [], entry.selector);
+    assert.equal(result.status, 2, entry.name);
+    assert.deepEqual(result.calls, [], entry.name);
+  }
+});
+
+test('CLI merge window: a 1,000-result search cap fails before auditing PRs', () => {
+  const result = runCheckWithFixture(
+    {
+      reviews: [],
+      comments: [],
+      prs: Array.from({ length: 1000 }, (_, index) => ({
+        number: index + 1,
+        mergedAt: '2026-10-01T00:00:00Z',
+      })),
+    },
+    [],
+    ['--merged-from', '2026-10-01', '--merged-to', '2026-10-07'],
+  );
+  assert.equal(result.status, 2, result.stderr);
+  assert.match(result.stderr, /search cap; use a shorter window/);
+  assert.equal(
+    result.calls.filter((call) => call.startsWith('pr list ')).length,
+    1,
+  );
+  assert.equal(
+    result.calls.some((call) => call.includes('/pulls/')),
+    false,
+  );
+});
+
+test('CLI --check --since applies the recorded-share check to a merge window', () => {
+  const result = runCheckWithFixture(
+    {
+      reviews: [
+        {
+          id: 1,
+          submitted_at: '2026-01-01T00:00:00Z',
+          body: openReviewBody([openLine('Medium', 9750)]),
+          user: { login: COPILOT_LOGIN },
+        },
+      ],
+      comments: [
+        {
+          id: 10,
+          in_reply_to_id: 9750,
+          body: '**Accepted** — fixed',
+          created_at: '2026-01-02T00:00:00Z',
+          node_id: 'PRRC_10',
+        },
+      ],
+      prs: [{ number: 42, mergedAt: '2026-10-02T00:00:00Z' }],
+    },
+    ['--check', '--since', '2026-10-01', '--min-recorded-share', '0.9'],
+    ['--merged-from', '2026-10-01', '--merged-to', '2026-10-07'],
+  );
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /recorded triage share 0\.000 since 2026-10-01/);
+});
+
+test('CLI isolates a PR failure, prints a partial report, appends summary, and exits 1', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-wave-audit-failed-pr-'));
+  const summaryPath = join(dir, 'summary.md');
+  try {
+    writeFileSync(summaryPath, 'existing summary line');
+    const result = runCheckWithFixture(
+      {
+        reviews: [
+          {
+            id: 1,
+            submitted_at: '2026-01-01T00:00:00Z',
+            body: NO_FINDINGS_FIXTURE,
+            user: { login: COPILOT_LOGIN },
+          },
+        ],
+        comments: [],
+        prs: [
+          { number: 42, mergedAt: '2026-10-02T00:00:00Z' },
+          { number: 43, mergedAt: '2026-10-03T00:00:00Z' },
+        ],
+        failReviewsByPr: { '43': 'HTTP 403: rate limit exceeded' },
+      },
+      ['--step-summary', summaryPath],
+      ['--merged-from', '2026-10-01', '--merged-to', '2026-10-07'],
+    );
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(
+      result.stderr,
+      /copilot-review-wave-audit: 1 pull request\(s\) could not be audited/,
+    );
+    const parsed = JSON.parse(result.stdout) as {
+      reports: Array<{ pr: number }>;
+      summary: { prCount: number };
+      failedPrs: Array<{ pr: number; message: string }>;
+    };
+    assert.deepEqual(
+      parsed.reports.map((report) => report.pr),
+      [42],
+    );
+    assert.equal(parsed.summary.prCount, 1);
+    assert.equal(parsed.failedPrs[0]?.pr, 43);
+    assert.match(parsed.failedPrs[0]?.message ?? '', /HTTP 403/);
+    const stepSummary = readFileSync(summaryPath, 'utf8');
+    assert.match(
+      stepSummary,
+      /^existing summary line\n## Copilot review-wave audit/,
+    );
+    assert.match(stepSummary, /## Copilot review-wave audit/);
+    assert.match(stepSummary, /Pull requests that could not be audited: 1/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('CLI --check --step-summary appends cohort counts even when check fails', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-wave-audit-check-summary-'));
+  const summaryPath = join(dir, 'summary.md');
+  try {
+    writeFileSync(summaryPath, 'keep this line\n');
+    const result = runCheckWithFixture(
+      {
+        reviews: [
+          {
+            id: 1,
+            submitted_at: '2026-01-01T00:00:00Z',
+            body: openReviewBody([openLine('Medium', 9760)]),
+            user: { login: COPILOT_LOGIN },
+          },
+        ],
+        comments: [
+          {
+            id: 11,
+            in_reply_to_id: 9760,
+            body: `**Accepted** — fixed\n\n${TRIAGE_DEFER_LINE}`,
+            created_at: '2026-01-02T00:00:00Z',
+            node_id: 'PRRC_11',
+          },
+        ],
+      },
+      ['--check', '--step-summary', summaryPath],
+    );
+    assert.equal(result.status, 1, result.stderr);
+    const stepSummary = readFileSync(summaryPath, 'utf8');
+    assert.ok(stepSummary.startsWith('keep this line\n'));
+    assert.match(stepSummary, /## Copilot review-wave audit/);
+    assert.match(stepSummary, /Selector: `--prs \(1 pull requests\)`/);
+    assert.match(stepSummary, /Review triggers: first=1/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('CLI step-summary write failure exits 2 ahead of check failures', () => {
+  const result = runCheckWithFixture(
+    {
+      reviews: [
+        {
+          id: 1,
+          submitted_at: '2026-01-01T00:00:00Z',
+          body: NO_FINDINGS_FIXTURE,
+          user: { login: COPILOT_LOGIN },
+        },
+      ],
+      comments: [],
+    },
+    ['--check', '--step-summary', REPO_ROOT],
+  );
+  assert.equal(result.status, 2, result.stderr);
+  assert.match(
+    result.stderr,
+    /copilot-review-wave-audit: cannot write step summary .*idd-skill:.*directory|cannot write step summary .*EISDIR/,
+  );
+});
+
+test('CLI baseline reviews-per-PR reports average and ratio, or n/a for an empty window', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-wave-audit-baseline-'));
+  const summaryPath = join(dir, 'summary.md');
+  const threeReviews = Array.from({ length: 3 }, (_, index) => ({
+    id: index + 1,
+    submitted_at: `2026-01-0${index + 1}T00:00:00Z`,
+    body: NO_FINDINGS_FIXTURE,
+    user: { login: COPILOT_LOGIN },
+  }));
+  try {
+    const populated = runCheckWithFixture(
+      {
+        reviews: threeReviews,
+        comments: [],
+        reviewsByPr: {
+          '43': threeReviews.map((review) => ({
+            ...review,
+            id: Number(review.id) + 10,
+          })),
+        },
+        prs: [
+          { number: 42, mergedAt: '2026-10-02T00:00:00Z' },
+          { number: 43, mergedAt: '2026-10-03T00:00:00Z' },
+        ],
+      },
+      ['--baseline-reviews-per-pr', '4', '--step-summary', summaryPath],
+      ['--merged-from', '2026-10-01', '--merged-to', '2026-10-07'],
+    );
+    assert.equal(populated.status, 0, populated.stderr);
+    const populatedSummary = readFileSync(summaryPath, 'utf8');
+    assert.match(populatedSummary, /Reviews per pull request: 3/);
+    assert.match(populatedSummary, /Ratio to baseline: 0\.75/);
+
+    const empty = runCheckWithFixture(
+      { reviews: [], comments: [], prs: [] },
+      ['--baseline-reviews-per-pr', '4', '--step-summary', summaryPath],
+      ['--merged-from', '2026-10-01', '--merged-to', '2026-10-07'],
+    );
+    assert.equal(empty.status, 0, empty.stderr);
+    const fullSummary = readFileSync(summaryPath, 'utf8');
+    assert.match(fullSummary, /Reviews per pull request: n\/a/);
+    assert.match(fullSummary, /Ratio to baseline: n\/a/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('CLI invalid baseline reviews-per-PR exits 2 with no gh call', () => {
+  for (const value of ['0', 'abc']) {
+    const result = runCheckWithFixture({ reviews: [], comments: [] }, [
+      '--baseline-reviews-per-pr',
+      value,
+    ]);
+    assert.equal(result.status, 2, value);
+    assert.match(
+      result.stderr,
+      /--baseline-reviews-per-pr must be a positive decimal/,
+    );
+    assert.deepEqual(result.calls, [], value);
+  }
+});
+
 // Two Copilot reviews on distinct commits, and one inline finding on the
 // second review (issue #4190). The compare fixture decides the lookup result.
 const LOCALITY_CLI_REVIEWS = (): unknown[] => [
@@ -3047,6 +3382,10 @@ test('CLI: --help exits 0 with no gh call', () => {
   });
   assert.match(output, /Usage:/);
   assert.match(output, /--prs <n,n,\.\.\.>/);
+  assert.match(output, /--merged-from <YYYY-MM-DD>/);
+  assert.match(output, /--merged-to <YYYY-MM-DD>/);
+  assert.match(output, /--baseline-reviews-per-pr <n>/);
+  assert.match(output, /--step-summary <path>/);
 });
 
 test('CLI: --prs and --limit together fails with exit 2', () => {
