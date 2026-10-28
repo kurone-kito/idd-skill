@@ -351,6 +351,27 @@ for (const headRefName of [
   });
 }
 
+test('evaluateClaimless refuses a non-string head name instead of reading it as a no-issue branch (#4735)', () => {
+  // A numeric head name from malformed provider data must not become the
+  // valid-looking branch "123" on the no-issue route.
+  const port = emptyClosingPort('placeholder');
+  const malformed = new Proxy(port, {
+    get: (target, prop, receiver) =>
+      prop === 'getChangeRequestConvergenceView'
+        ? () => ({
+            headSha: 'a'.repeat(40),
+            headRefName: 123,
+            authorLogin: 'author-user',
+            url: 'https://example.invalid/pr/42',
+            closingIssuesReferences: [],
+          })
+        : Reflect.get(target, prop, receiver),
+  });
+  const verdict = evaluateClaimless(malformed, 42, { owner: 'o', repo: 'r' });
+  assert.equal(verdict.eligible, false);
+  assert.match(verdict.refusal ?? '', /^--claimless refused: PR #42/);
+});
+
 test('isClaimlessEligible fails closed when the branch issue claim evidence cannot be read (#4735)', () => {
   const base = emptyClosingPort('issue/4735-fix-review-thread-verify-claims');
   const port = new Proxy(base, {

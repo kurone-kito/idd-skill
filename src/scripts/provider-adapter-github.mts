@@ -4009,7 +4009,11 @@ export function createGithubProviderAdapter(
       const headSha = String(parsed.headRefOid ?? '');
       return {
         headSha,
-        headRefName: String(parsed.headRefName ?? ''),
+        // A non-string head name is unreadable, not a name: pass it through as
+        // empty so the claimless check refuses it, instead of coercing it into
+        // a valid-looking branch name (kurone-kito/idd-skill#4735, Copilot review).
+        headRefName:
+          typeof parsed.headRefName === 'string' ? parsed.headRefName : '',
         authorLogin: String(parsed.author?.login ?? ''),
         url: String(parsed.url ?? ''),
         closingIssuesReferences: fetchChangeRequestClosingIssueReferences(
