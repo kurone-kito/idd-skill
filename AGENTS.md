@@ -461,9 +461,11 @@ through a pull request.
   first D-phase push, branch-state checks stay read-only until a later
   phase decides an update is required.
 - **Default post-push sync: merge `main` into the PR branch** — before each
-  review-fix push, E11 merges `main` when behind so the sync rides with
-  that push; a `BEHIND` state never gets a push of its own (#4759).
-  Esync's standalone sync still goes through normal CI and review gates.
+  E12 review-fix push, E11 merges `main` when behind so the sync rides
+  with that push; E11 does not make a standalone push (#4759). Esync can
+  still push its standalone sync when branch protection or policy
+  requires an up-to-date head; that push goes through normal CI and
+  review gates.
   Do not rebase or force-push merely because the PR is `BEHIND`. This
   active branch-policy contract is enforced end to end by
   `idd-review-triage.instructions.md`'s E-phase branch-sync check
