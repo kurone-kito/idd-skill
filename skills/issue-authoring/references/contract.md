@@ -1551,46 +1551,73 @@ it already exists; this procedure never creates it.
 **Root checks.** A root must be an existing directory, not a symbolic link or
 reparse point, whose canonical path lies outside every path reported by a
 complete, successful `git worktree list --porcelain` run and outside every Git
-directory. Run that command with the repository's trusted Git executable,
-require exit status 0, and parse all records. A missing executable, nonzero
-status, malformed record, or incomplete output makes the protected-path
-inventory unreadable; stop instead of treating it as empty.
+directory. Run that command from the current worktree with the repository's
+trusted Git executable, `GIT_DIR`, `GIT_WORK_TREE`, `GIT_COMMON_DIR`,
+`GIT_CEILING_DIRECTORIES`, and `GIT_DISCOVERY_ACROSS_FILESYSTEM` unset, and
+Git's diagnostic locale fixed to C (`LC_ALL=C` where supported). Require exit
+status 0 and parse all records. A missing executable, nonzero status,
+malformed record, or incomplete output makes the protected-path inventory
+unreadable; stop instead of treating it as empty.
+
+For each existing reported worktree, run
+`git -C <worktree> rev-parse --path-format=absolute --git-dir` and
+`git -C <worktree> rev-parse --path-format=absolute --git-common-dir` with the
+same trusted executable and sanitized environment. Require each command to
+exit 0 and return exactly one absolute directory path; include both paths in
+the protected-path inventory and deduplicate by filesystem identity. Any
+failure, missing common directory, or malformed output makes the inventory
+unreadable. A common directory protects linked-worktree administrative
+records under its `worktrees/` subtree, including records for a registered
+worktree whose checkout path is confirmed absent. Keep that common directory
+in the inventory. The separate Git-administration-directory gap was identified
+during security review of PR #4728 on 2026-10-28
+([review comment](https://github.com/kurone-kito/idd-skill/pull/4728#issuecomment-6397812741)).
 
 Confirm the last part by running `git -C <canonical root> rev-parse --git-dir`
 with `GIT_DIR`, `GIT_WORK_TREE`, `GIT_COMMON_DIR`, `GIT_CEILING_DIRECTORIES`,
 and `GIT_DISCOVERY_ACROSS_FILESYSTEM` unset, and Git's diagnostic locale fixed
 to C (`LC_ALL=C` where supported). A successful result means the root is
 inside a repository and fails the root check. A nonzero result proves
-non-membership only when it is the exact standard `fatal: not a git repository
-(or any of the parent directories): .git` diagnostic and a no-follow walk from
-the root through its ancestors confirms that each is readable and none is a Git
-directory or contains a `.git` entry (file or directory). If that walk finds
-Git metadata, cannot inspect an ancestor, or sees malformed or ambiguous Git
-metadata, stop. Any other exit status or diagnostic, including missing Git,
-permission, I/O, malformed repository metadata, or an unclassifiable error,
-means the root is unreadable and must stop. Never treat an arbitrary Git
-failure as proof that the path is outside a repository. This is preventive;
-no observed incident yet. The root must be owned by the current user or, on
-POSIX, be a sticky-bit shared temporary directory, and must be writable by the
-current user. On POSIX, reject a root that grants group or other users write
-and search permission without the sticky bit, even when the current user owns
-it. On Windows, reject a root whose ACL lets another user rename or delete
-child entries. If this permission evidence is unreadable, stop.
+non-membership only when it is either the exact standard `fatal: not a git
+repository (or any of the parent directories): .git` diagnostic, or the exact
+two-line filesystem-boundary diagnostic whose first line is `fatal: not a git
+repository (or any parent up to mount point <path>)` and whose second line is
+`Stopping at filesystem boundary (GIT_DISCOVERY_ACROSS_FILESYSTEM not set).`.
+For the filesystem-boundary form, the reported mount point must be a verified
+ancestor mount point of the canonical root. In either case, a no-follow walk
+from the root through its ancestors must confirm that each is readable and
+none is a Git directory or contains a `.git` entry (file or directory). The
+filesystem-boundary diagnostic was reproduced with `/dev/shm` during review of
+PR #4728 on 2026-10-28 ([review comment](https://github.com/kurone-kito/idd-skill/pull/4728#discussion_r4400867073)).
+If the walk finds Git metadata, cannot inspect an ancestor, or sees malformed
+or ambiguous Git metadata, stop. Any other exit status or diagnostic,
+including missing Git, permission, I/O, malformed repository metadata, or an
+unclassifiable error, means the root is unreadable and must stop. Never treat
+an arbitrary Git failure as proof that the path is outside a repository. This
+is preventive; no observed incident yet. The root must be owned by the current
+user or, on POSIX, be a sticky-bit shared temporary directory, and must be
+writable by the current user. On POSIX, reject a root that grants group or
+other users write and search permission without the sticky bit, even when the
+current user owns it. On Windows, reject a root whose ACL lets another user
+rename or delete child entries. If this permission evidence is unreadable,
+stop.
 
 **Mount aliases.** A canonical pathname can look external while a bind mount
 exposes a worktree or git-administration directory; this is preventive; no
 observed incident yet. Check the backing location as well as the visible path.
-For each reported worktree path, first compare its normalized absolute lexical
-path against the candidate root using component-aware containment, even when
-the worktree path cannot be opened. Then walk each existing component without
-following symbolic links or reparse points. If that walk confirms a registered
+For every protected path (each reported worktree path and each discovered Git
+directory), first compare its normalized absolute lexical path against the
+candidate root using component-aware containment, even when a worktree path
+cannot be opened. Then walk each existing component without following
+symbolic links or reparse points. If that walk confirms a registered
 worktree path is absent after checking its readable ancestors, retain the Git
 worktree record and skip only the handle and backing-location comparison for
-that absent path; never prune or edit Git metadata. Access denial, an I/O or
-device error, a symbolic link or reparse point, or any ambiguous result makes
-the root unreadable and fails closed. A path that exists still needs the full
-canonical-path and backing-location checks below. Missing-path handling is
-preventive; no observed incident yet.
+that absent path; its Git common directory remains protected. Never prune or
+edit Git metadata. Access denial, an I/O or device error, a symbolic link or
+reparse point, or any ambiguous result makes the root unreadable and fails
+closed. An existing protected path still needs the full canonical-path and
+backing-location checks below. Missing-path handling is preventive; no
+observed incident yet.
 
 On Linux, obtain a mount ID from already-open directory handles using
 `statx(2)` with `AT_EMPTY_PATH` for the candidate root and each existing

@@ -3499,11 +3499,27 @@ test('issue-authoring contract defines ledger storage verdicts, allocation, and 
   );
   assert.match(
     text,
+    /For each existing reported worktree, run `git -C <worktree> rev-parse --path-format=absolute --git-dir` and `git -C <worktree> rev-parse --path-format=absolute --git-common-dir`/,
+  );
+  assert.match(
+    text,
+    /A common directory protects linked-worktree administrative records under its `worktrees\/` subtree, including records for a registered worktree whose checkout path is confirmed absent/,
+  );
+  assert.match(
+    text,
     /A missing executable, nonzero status, malformed record, or incomplete output makes the protected-path inventory unreadable/,
   );
   assert.match(
     text,
-    /A nonzero result proves non-membership only when it is the exact standard `fatal: not a git repository/,
+    /A nonzero result proves non-membership only when it is either the exact standard `fatal: not a git repository/,
+  );
+  assert.match(
+    text,
+    /exact two-line filesystem-boundary diagnostic whose first line is `fatal: not a git repository \(or any parent up to mount point <path>\)` and whose second line is `Stopping at filesystem boundary \(GIT_DISCOVERY_ACROSS_FILESYSTEM not set\)\.`/,
+  );
+  assert.match(
+    text,
+    /For the filesystem-boundary form, the reported mount point must be a verified ancestor mount point of the canonical root/,
   );
   assert.match(
     text,
@@ -3511,11 +3527,11 @@ test('issue-authoring contract defines ledger storage verdicts, allocation, and 
   );
   assert.match(
     text,
-    /For each reported worktree path, first compare its normalized absolute lexical path against the candidate root using component-aware containment/,
+    /For every protected path \(each reported worktree path and each discovered Git directory\), first compare its normalized absolute lexical path against the candidate root using component-aware containment/,
   );
   assert.match(
     text,
-    /If that walk confirms a registered worktree path is absent after checking its readable ancestors, retain the Git worktree record and skip only the handle and backing-location comparison for that absent path; never prune or edit Git metadata/,
+    /If that walk confirms a registered worktree path is absent after checking its readable ancestors, retain the Git worktree record and skip only the handle and backing-location comparison for that absent path; its Git common directory remains protected\. Never prune or edit Git metadata/,
   );
   assert.ok(
     text.includes(
