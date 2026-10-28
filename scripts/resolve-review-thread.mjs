@@ -847,6 +847,13 @@ const IDD_ISSUE_BRANCH_PREFIX = /^issue\//i;
 /** The `issue/<number>-<slug>` head name of an IDD claim branch (#4735). */
 const IDD_ISSUE_BRANCH_PATTERN = /^issue\/([1-9]\d*)-/i;
 /**
+ * A head name that can be a git branch name: non-empty and free of whitespace
+ * and the characters git refuses. A coerced non-string (`[object Object]`) or
+ * a missing name fails this check, so it cannot read as a non-issue branch
+ * (kurone-kito/idd-skill#4735, Copilot review).
+ */
+const GIT_BRANCH_NAME_PATTERN = /^[^\s~^:?*[\\]+$/;
+/**
  * #2616 / #3328 / #4735: `--claimless` scoping rule. Shares its
  * `classifyPrLoopMembership` definition with `pre-merge-readiness.mts`
  * (kurone-kito/idd-skill#3328). Re-fetches live on every call rather than
@@ -882,17 +889,19 @@ export function evaluateClaimless(port, pr, options = {}) {
   // through to the classifier, which fails it closed to `in-loop`.
   let branchIssue = null;
   if (Array.isArray(closingRefs) && closingRefs.length === 0) {
-    if (typeof headRef !== 'string' || headRef === '') {
+    if (typeof headRef !== 'string' || !GIT_BRANCH_NAME_PATTERN.test(headRef)) {
       return {
         eligible: false,
-        refusal: `${CLAIMLESS_REFUSAL_PREFIX} PR #${pr}'s head branch name could not be read, so an issue claim cannot be ruled out; pass --claim-issue <n> --claim-id <claim-id> for the claim that owns this PR instead.`,
+        refusal: `${CLAIMLESS_REFUSAL_PREFIX} PR #${pr}'s head branch name is missing or not a valid branch name, so an issue claim cannot be ruled out; pass --claim-issue <n> --claim-id <claim-id> for the claim that owns this PR instead.`,
       };
     }
     if (!IDD_ISSUE_BRANCH_PREFIX.test(headRef)) {
       return { eligible: true };
     }
     const match = IDD_ISSUE_BRANCH_PATTERN.exec(headRef);
-    if (!match) {
+    // Number() rounds an oversized decimal, so a non-safe number fails closed
+    // rather than naming a different issue (Copilot review, #4735).
+    if (!match || !Number.isSafeInteger(Number(match[1]))) {
       return {
         eligible: false,
         refusal: `${CLAIMLESS_REFUSAL_PREFIX} PR #${pr}'s head branch "${headRef}" is an issue branch without a valid issue number (expected issue/<number>-<slug>), so an issue claim cannot be ruled out; pass --claim-issue <n> --claim-id <claim-id> for the claim that owns this PR instead.`,

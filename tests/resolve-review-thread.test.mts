@@ -330,7 +330,15 @@ test('evaluateClaimless accepts an unclaimed issue branch with a valid trusted b
   });
 });
 
-for (const headRefName of ['', 'issue/4735', 'issue/abc-x', 'issue/0-x']) {
+for (const headRefName of [
+  '',
+  'issue/4735',
+  'issue/abc-x',
+  'issue/0-x',
+  'issue/9007199254740993-task',
+  'issue/4735-fix review',
+  '[object Object]',
+]) {
   test(`evaluateClaimless fails closed on an empty closing set with an unreadable or malformed head name ${JSON.stringify(headRefName)} (#4735)`, () => {
     const port = emptyClosingPort(headRefName);
     const verdict = evaluateClaimless(port, 42, { owner: 'o', repo: 'r' });
