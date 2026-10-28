@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-
 // idd-generated-from: src/scripts/copilot-review-wave-audit.mts
 //
 // The scripts/copilot-review-wave-audit.mjs copy is generated from the .mts
