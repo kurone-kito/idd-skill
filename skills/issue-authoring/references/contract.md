@@ -1549,35 +1549,70 @@ candidate that is absent is skipped. The user state directory is used only when
 it already exists; this procedure never creates it.
 
 **Root checks.** A root must be an existing directory, not a symbolic link or
-reparse point, whose canonical path lies outside every path that `git worktree
-list --porcelain` reports and outside every git directory. Confirm the last part
-by running `git -C <canonical root> rev-parse --git-dir` and requiring it to
-fail. The root must be owned by the current user or, on POSIX, be a sticky-bit
-shared temporary directory, and must be writable by the current user. On
-POSIX, reject a root that grants group or other users write and search
-permission without the sticky bit, even when the current user owns it. On
-Windows, reject a root whose ACL lets another user rename or delete child
-entries. If this permission evidence is unreadable, stop.
+reparse point, whose canonical path lies outside every path reported by a
+complete, successful `git worktree list --porcelain` run and outside every Git
+directory. Run that command with the repository's trusted Git executable,
+require exit status 0, and parse all records. A missing executable, nonzero
+status, malformed record, or incomplete output makes the protected-path
+inventory unreadable; stop instead of treating it as empty.
+
+Confirm the last part by running `git -C <canonical root> rev-parse --git-dir`
+with `GIT_DIR`, `GIT_WORK_TREE`, `GIT_COMMON_DIR`, `GIT_CEILING_DIRECTORIES`,
+and `GIT_DISCOVERY_ACROSS_FILESYSTEM` unset, and Git's diagnostic locale fixed
+to C (`LC_ALL=C` where supported). A successful result means the root is
+inside a repository and fails the root check. A nonzero result proves
+non-membership only when it is the exact standard `fatal: not a git repository
+(or any of the parent directories): .git` diagnostic and a no-follow walk from
+the root through its ancestors confirms that each is readable and none is a Git
+directory or contains a `.git` entry (file or directory). If that walk finds
+Git metadata, cannot inspect an ancestor, or sees malformed or ambiguous Git
+metadata, stop. Any other exit status or diagnostic, including missing Git,
+permission, I/O, malformed repository metadata, or an unclassifiable error,
+means the root is unreadable and must stop. Never treat an arbitrary Git
+failure as proof that the path is outside a repository. This is preventive;
+no observed incident yet. The root must be owned by the current user or, on
+POSIX, be a sticky-bit shared temporary directory, and must be writable by the
+current user. On POSIX, reject a root that grants group or other users write
+and search permission without the sticky bit, even when the current user owns
+it. On Windows, reject a root whose ACL lets another user rename or delete
+child entries. If this permission evidence is unreadable, stop.
 
 **Mount aliases.** A canonical pathname can look external while a bind mount
 exposes a worktree or git-administration directory; this is preventive; no
 observed incident yet. Check the backing location as well as the visible path.
-On Linux, obtain `STATX_MNT_ID` from already-open directory handles using
-`statx(2)` with `AT_EMPTY_PATH` for the candidate root and each protected path,
-then read the matching entries in `/proc/self/mountinfo`. Decode its escaped
-fields, and require each path to be at or below its entry's mount point. Map a
-path to its backing location by joining the entry's `root` with the path
-relative to its `mount point`, paired with the entry's `major:minor` device
-identity. Reject the candidate root when its backing location is equal to or
-below a protected path's backing location on the same device. This detects a
-bind-mounted alias without rejecting a candidate merely because it is on a
-different mount from `/`. Do not use `RESOLVE_NO_XDEV` as a blanket
-cross-mount rejection: an operating-system temporary or state directory may
-legitimately be on another mount. If `statx` or mountinfo cannot be read, a
-mount entry cannot be matched, or the mapping is ambiguous, treat the root as
+For each reported worktree path, first compare its normalized absolute lexical
+path against the candidate root using component-aware containment, even when
+the worktree path cannot be opened. Then walk each existing component without
+following symbolic links or reparse points. If that walk confirms a registered
+worktree path is absent after checking its readable ancestors, retain the Git
+worktree record and skip only the handle and backing-location comparison for
+that absent path; never prune or edit Git metadata. Access denial, an I/O or
+device error, a symbolic link or reparse point, or any ambiguous result makes
+the root unreadable and fails closed. A path that exists still needs the full
+canonical-path and backing-location checks below. Missing-path handling is
+preventive; no observed incident yet.
+
+On Linux, obtain a mount ID from already-open directory handles using
+`statx(2)` with `AT_EMPTY_PATH` for the candidate root and each existing
+protected path. When `statx` fails or does not provide `STATX_MNT_ID`, read the
+single decimal `mnt_id` field from `/proc/self/fdinfo/<fd>` for that same open
+handle. Require either source to yield a valid ID, then read the matching
+entries in `/proc/self/mountinfo`. Decode its escaped fields, and require each
+path to be at or below its entry's mount point. Map a path to its backing
+location by joining the entry's `root` with the path relative to its `mount
+point`, paired with the entry's `major:minor` device identity. Reject the
+candidate root when its backing location is equal to or below a protected
+path's backing location on the same device. This detects a bind-mounted alias
+without rejecting a candidate merely because it is on a different mount from
+`/`. Do not use `RESOLVE_NO_XDEV` as a blanket cross-mount rejection: an
+operating-system temporary or state directory may legitimately be on another
+mount. If neither mount-ID source works, mountinfo cannot be read, a mount
+entry cannot be matched, or the mapping is ambiguous, treat the root as
 unreadable and fail closed. On other platforms, use native mount or volume
 evidence to make the same backing-location comparison; if it cannot be
-established, fail closed. See [`statx(2)`](https://man7.org/linux/man-pages/man2/statx.2.html),
+established, fail closed. The mount-ID fallback is preventive; no observed
+incident yet. See [`statx(2)`](https://man7.org/linux/man-pages/man2/statx.2.html),
+[`/proc/self/fdinfo/<fd>`](https://man7.org/linux/man-pages/man5/proc_pid_fdinfo.5.html),
 [`/proc/self/mountinfo`](https://www.man7.org/linux/man-pages/man5/proc_pid_mountinfo.5.html),
 and [`openat2(2)`](https://man7.org/linux/man-pages/man2/openat2.2.html).
 
