@@ -265,8 +265,8 @@ For a per-file cap, apply step 1. If the file is still above its cap
 (`phaseLimitBytes`, or `alwaysLoadedLimitBytes` for an always-loaded
 file), stop and ask once. Never raise a per-file cap.
 
-Then push the feature branch normally. Files changed only by E11's merge
-do not count toward E12's bounded cross-round fold-in scope below.
+Then push normally. Files changed only by E11's merge do not widen E12's
+fold-in scope.
 
 **Bounded cross-round batching allowance.** A small number of review
 comments can arrive before this push that fall outside this round's

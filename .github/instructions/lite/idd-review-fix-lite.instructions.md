@@ -251,9 +251,9 @@ validation covers the merged tree.
 ## E12 — Lint, test, push
 
 1. Run `post-fix-validate`.
-2. Push the feature branch normally; E11 uses merge commits, so no force
-   push is required. Files changed only by E11's merge do not count toward
-   E12's bounded cross-round fold-in scope below.
+2. Push the feature branch normally; E11's merge commit needs no force
+   push. Files changed only by E11's merge do not widen E12's fold-in
+   scope.
 3. Before this push, fold a small batch of out-of-scope comments awaiting
    triage into the same push, each as its own atomic commit, only if
    steps 4-7 all hold.
