@@ -5672,6 +5672,7 @@ test('resolveSelfReferentialTriggerFiles: a package-manager adopter resolves its
   assert.deepEqual(resolved, [
     'package.json',
     'package-lock.json',
+    'npm-shrinkwrap.json',
     'pnpm-lock.yaml',
     'yarn.lock',
     '.github/idd/config.json',
@@ -5802,6 +5803,93 @@ test('self-referential-bootstrap-auto: a package-manager adopter touching packag
   );
   assert.equal(verdict.waiver.autoWaiverValid, true);
   assert.equal(verdict.ready, true);
+});
+
+test('self-referential-bootstrap-auto: a package-manager adopter whose only changed path is npm-shrinkwrap.json is accepted (issue #4724)', () => {
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      reviews: [],
+      claimEvents: [claimComment()],
+      comments: [
+        {
+          author: { login: BOT_LOGIN },
+          body: autoWaiverBody(),
+          createdAt: RECENT,
+          lastEditedAt: null,
+        },
+      ],
+      autoWaiverRunLookups: {
+        [RUN_ID]: {
+          ...acceptedRunLookup(),
+          repositoryFullName: 'someone-else/adopter-repo',
+        },
+      },
+      autoWaiverRunJobLookups: { [RUN_ID]: acceptedRunJobLookup() },
+      autoWaiverRunIdCandidates: acceptedRunIdCandidates(),
+      autoWaiverRunArtifactBindings: acceptedTrustedBindings(),
+      changedFilePaths: ['npm-shrinkwrap.json'],
+    }),
+    baseOptions({
+      headCommittedAt: RECENT,
+      headObservedAt: RECENT,
+      waiverMode: 'maintainer-authorized',
+      waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+      repositoryFullName: 'someone-else/adopter-repo',
+      helperRuntimeProfile: 'package-manager',
+    }),
+  );
+  assert.equal(verdict.waiver.autoWaiverValid, true);
+  assert.equal(verdict.ready, true);
+});
+
+test('self-referential-bootstrap-auto: the shrinkwrap trigger keeps the profile-specific allowlists (issue #4724)', () => {
+  // Each row is one changed path under one helper-runtime profile. Only
+  // the package-manager profile lists npm-shrinkwrap.json, so a
+  // vendored-node adopter's shrinkwrap-only change stays rejected, and an
+  // unrelated package-manager change (README.md) is rejected too.
+  const matrix = [
+    { profile: 'package-manager', path: 'package-lock.json', accepted: true },
+    { profile: 'package-manager', path: 'npm-shrinkwrap.json', accepted: true },
+    { profile: 'package-manager', path: 'README.md', accepted: false },
+    { profile: 'vendored-node', path: 'npm-shrinkwrap.json', accepted: false },
+  ];
+  for (const row of matrix) {
+    const verdict = computeAdvisoryConvergenceVerdict(
+      baseInputs({
+        reviews: [],
+        claimEvents: [claimComment()],
+        comments: [
+          {
+            author: { login: BOT_LOGIN },
+            body: autoWaiverBody(),
+            createdAt: RECENT,
+            lastEditedAt: null,
+          },
+        ],
+        autoWaiverRunLookups: {
+          [RUN_ID]: {
+            ...acceptedRunLookup(),
+            repositoryFullName: 'someone-else/adopter-repo',
+          },
+        },
+        autoWaiverRunJobLookups: { [RUN_ID]: acceptedRunJobLookup() },
+        autoWaiverRunIdCandidates: acceptedRunIdCandidates(),
+        autoWaiverRunArtifactBindings: acceptedTrustedBindings(),
+        changedFilePaths: [row.path],
+      }),
+      baseOptions({
+        headCommittedAt: RECENT,
+        headObservedAt: RECENT,
+        waiverMode: 'maintainer-authorized',
+        waivableSelectors: ADVISORY_CONVERGENCE_WAIVABLE,
+        repositoryFullName: 'someone-else/adopter-repo',
+        helperRuntimeProfile: row.profile,
+      }),
+    );
+    const label = `${row.profile} ${row.path}`;
+    assert.equal(verdict.waiver.autoWaiverValid, row.accepted, label);
+    assert.equal(verdict.ready, row.accepted, label);
+  }
 });
 
 test("self-referential-bootstrap-auto: a non-origin repository touching this source repository's own .mts path is rejected (no cross-profile union, Codex + Copilot review, PR #2895)", () => {

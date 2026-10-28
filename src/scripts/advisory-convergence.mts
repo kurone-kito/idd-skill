@@ -592,6 +592,7 @@ export function resolveSelfReferentialTriggerFiles(
       return [
         'package.json',
         'package-lock.json',
+        'npm-shrinkwrap.json',
         'pnpm-lock.yaml',
         'yarn.lock',
         ...basePaths,
