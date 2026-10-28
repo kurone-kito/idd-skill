@@ -507,8 +507,9 @@ model and the backlog F3 searches (preventive; no observed incident yet).
 **Resume.** At S1 and S2 the deferral is one more Reject inside the
 triage pass: finish the remaining E5 decisions and E6 replies, then E7
 and E8, as after any other Reject. At S3 and S4, continue at E11 after
-the record: E11 only checks the branch and E12 pushes only what is
-unpushed, and an E10 or Tier stop can leave unpushed E9 commits. Deferred
+the record: E11 checks the live PR target and may merge it when behind
+before E12 pushes the pending fixes and sync together. An E10 or Tier stop
+can leave unpushed E9 commits. Deferred
 findings leave the E10 same-findings comparison. After a Tier 3
 deferral, all outstanding gaps go in one follow-up and further findings
 of the same domain reuse it.

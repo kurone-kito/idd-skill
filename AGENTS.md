@@ -510,15 +510,17 @@ through a pull request.
 - **Treat pushed PR branches as published review history** — after the
   first D-phase push, branch-state checks stay read-only until a later
   phase decides an update is required.
-- **Default post-push sync: merge `main` into the PR branch** — when an
-  already-pushed branch needs synchronization or conflict resolution,
-  merge `main` into the PR branch and send that follow-up through the
-  normal CI and review gates. Do not rebase or force-push merely
-  because the PR is `BEHIND`. This is the active branch-policy
-  contract, enforced end to end by
+- **Default post-push sync: merge `main` into the PR branch** — before each
+  E12 review-fix push, E11 merges `main` when behind so the sync rides
+  with that push; E11 does not make a standalone push (#4759). Esync can
+  still push its standalone sync when branch protection or policy
+  requires an up-to-date head; that push goes through normal CI and
+  review gates.
+  Do not rebase or force-push merely because the PR is `BEHIND`. This
+  active branch-policy contract is enforced end to end by
   `idd-review-triage.instructions.md`'s E-phase branch-sync check
-  (`Esync`), which uses the `branch-conflict-state` helper when
-  helper runtime is enabled.
+  (`Esync`), which uses the `branch-conflict-state` helper when helper
+  runtime is enabled.
 - **Force-push exceptions stay narrow** — use rebase and
   `--force-with-lease` after publication only when repository policy
   explicitly permits it and merge-based recovery cannot safely fix the
