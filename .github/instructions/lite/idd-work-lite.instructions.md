@@ -55,15 +55,15 @@ check, and steps 19 and 26's lock acquisition and token recording.
 2. If this session posted an activation nonce for the current claim,
    confirm it still wins (no later trusted marker for this claim id
    won the tie-break instead).
-3. The current directory is the sibling worktree for the claimed branch. A
-   harness whose file tools stay bound to the launch workspace (Grok Build
-   observed) uses the sibling's absolute path for them, not `cd`/`pwd`.
+3. The current directory is the sibling worktree for the claimed branch.
+   Launch-bound file tools (Grok Build observed) use its absolute path, not
+   `cd`/`pwd`.
 4. `git branch --show-current` equals the claimed branch.
 5. Acquire the worktree-local claim lock with the profile-selected
    `claim-lock` helper (`node scripts/claim-lock.mjs --acquire
    --worktree <this-worktree-path> --agent-id <id> --claim-id <id>`; the
-   package-manager profile's `idd:claim-lock` takes the same arguments; resolve
-   any other form from `docs/idd-helper-scripts.md`). A `collision` is
+   `idd:claim-lock` (package-manager profiles); other forms in
+   `docs/idd-helper-scripts.md`). A `collision` is
    fail-closed: stop. Then, separately, run `--read-tokens --worktree
    <this-worktree-path> --claim-id <id>` and require `present: true` with no
    `malformed`; otherwise recover per `docs/idd-helper-scripts.md` (gated: each
@@ -77,6 +77,16 @@ Concurrent workers sharing one clone: serialize every `fetch`/`merge
 worktree removal) behind the
 [clone-scoped lock](../../../docs/idd-helper-scripts.md#clone-scoped-lock).
 
+Before step 1, resolve `{development-branch}`, failing closed. Run
+profile-selected `idd-effective-config` without `--key` (in the vendored
+profile, `node scripts/idd-effective-config.mjs`). Stop if it fails or
+`repository.policyDiagnostic` is not `null`. Use `config.developmentBranch`
+when set; only when it is absent, use `gh repo view --json
+defaultBranchRef --jq .defaultBranchRef.name`. Stop unless the name matches
+`^(?!refs/heads/)[A-Za-z0-9._/][A-Za-z0-9._/-]*$` (see
+`docs/policy-constants.md`) and `git ls-remote --exit-code --heads origin
+<name>` lists it. Steps 15, 16, 21, and 25 use only this value.
+
 1. On the primary worktree, run `git fetch origin`.
 2. On the primary worktree, run `git log
    origin/{default-branch}..{default-branch} --oneline`.
@@ -88,16 +98,14 @@ worktree removal) behind the
    `git switch -c <branch-name>`, `git checkout -b <branch-name>`, or a
    standalone `git branch <branch-name>` followed by in-place commits there.
 6. Reuse the existing branch name verbatim for takeover.
-7. Run `git worktree list` (and `git worktree list --porcelain` for prunable
-   entries). If a sibling worktree exists, inspect and acquire its
-   worktree-local claim lock with the profile-selected `claim-lock` helper
-   before reuse or removal. A `collision` is fail-closed: do not reuse or
-   remove the path; resolve it via the Claim-state rule in
-   `idd-claim.instructions.md`, and remove the path only once the current claim
-   is authorized to take it over. On a fresh claim whose worktree the claim
-   phase created, adopt it: skip steps 8-26,
-   run step 27 (install dependencies), and continue at step 28. Never delete or
-   recreate that branch.
+7. Run `git worktree list` (`--porcelain` for prunable entries). For a sibling
+   worktree, acquire its worktree-local claim lock with the profile-selected
+   `claim-lock` helper before reuse or removal. A `collision` is fail-closed: do
+   not reuse or remove the path; resolve it per `idd-claim.instructions.md`'s
+   Claim-state rule, and remove it only once the current claim is authorized to
+   take it over. On a fresh claim whose worktree the claim phase created, adopt
+   it: skip steps 8-26, run step 27 (install dependencies), and
+   continue at step 28. Never delete or recreate that branch.
 8. If `git worktree list --porcelain` marks the entry `prunable` and its path
    is already absent, remove that stale entry with
    `git worktree remove --force <path-from-list>` and continue.
@@ -110,54 +118,47 @@ worktree removal) behind the
 11. If the target path exists but is not listed in `git worktree list`, stop
     and report for manual cleanup.
 12. Create the sibling worktree at `../<repo-name>.<normalized-branch>`.
-13. Define `normalized-branch` as the branch name with each `/` replaced by
-    `-`.
+13. `normalized-branch` is the branch name with each `/` replaced by `-`.
 14. Use WorkTrunk if available.
 15. In automation, use `wt switch --create -b {development-branch} <branch-name>
-    -x true` (`{development-branch}` is the base branch).
+    -x true`.
 16. On Windows, use `git-wt switch --create -b {development-branch}
     <branch-name> -x true`, or the same `wt switch` form if `git-wt` is
     unavailable.
-17. If the `[pre-start]` hook's install command is not yet approved,
-    `wt switch --create` hangs non-interactively, even with `-x <noop>`. Before
-    the first one, run `wt config approvals add --yes` once from the primary
-    worktree (issue `#2797`; project-scoped, so siblings inherit it). Do not
-    use the global `-y`/`--yes`.
+17. If the `[pre-start]` hook's install is unapproved, `wt switch --create`
+    hangs non-interactively, even with `-x <noop>`. Before the first one, run
+    `wt config approvals add --yes` once from the primary worktree (issue
+    `#2797`; project-scoped). Never use the global `-y`/`--yes`.
 18. Do not use `wt new`.
-19. If WorkTrunk's pre-start hook installs, its first command must acquire the
-    worktree lock, then, as a separate call, run `--record-tokens --worktree
-    <this-worktree-path> --agent-id <id> --claim-id <id> --nonce <nonce>` (same
-    nonce as the A5 write; omitting it drops it, since the helper overwrites)
-    for this worktree's copy, before any install. After the hook succeeds, `cd`
-    into the new sibling (`-x <noop>` does not change directory; take the path
-    from `git worktree list`) before steps 28-30.
+19. If WorkTrunk's pre-start hook installs, its first command acquires the
+    worktree lock, then, as a separate call before any install, runs
+    `--record-tokens --worktree <this-worktree-path> --agent-id <id> --claim-id
+    <id> --nonce <nonce>` (the A5 nonce; omitting it drops the record). After
+    the hook succeeds, `cd` into the sibling (`-x <noop>` keeps the directory;
+    take the path from `git worktree list`) before steps 28-30.
 20. If the hook cannot acquire the lock or record tokens, create the
     worktree without the hook.
-21. If WorkTrunk is unavailable, use `git worktree add --no-track <path> -b
-    <branch-name> origin/{development-branch}` for a fresh claim.
-22. If WorkTrunk is unavailable and this is a takeover, use
-    `git worktree add <path> <branch-name>` with the local branch.
-23. If WorkTrunk is unavailable and only the remote branch exists, run
-    `git fetch origin <branch-name>`.
-24. If WorkTrunk is unavailable and only the remote branch exists, use
-    `git worktree add <path> -b <branch-name> origin/<branch-name>`.
-25. If WorkTrunk is unavailable and neither a local nor a remote branch
-    exists (rare), treat it as a fresh claim while preserving the inherited
-    branch name.
-26. For manual `git worktree add` or WorkTrunk without a hook, acquire the
+21. Without WorkTrunk, fresh claim: `git worktree add --no-track <path> -b
+    <branch-name> origin/{development-branch}`.
+22. Without WorkTrunk, takeover with the local branch: `git worktree add <path>
+    <branch-name>`.
+23. Without WorkTrunk, remote-only branch: `git fetch origin <branch-name>`.
+24. Then, without WorkTrunk: `git worktree add <path> -b <branch-name>
+    origin/<branch-name>`.
+25. Without WorkTrunk and with no branch (rare): fresh claim per step 21,
+    keeping the inherited name.
+26. Manual `git worktree add`, or WorkTrunk without a hook: acquire the
     worktree lock with the profile-selected `claim-lock` helper, then, as a
     separate call, run `--record-tokens --worktree <this-worktree-path>
-    --agent-id <id> --claim-id <id> --nonce <nonce>` (same nonce as the A5
-    write; omitting it drops it) for this worktree's copy, right after creation
-    and before any install or other mutation.
-27. On the manual/no-hook path, `cd` into the new sibling worktree first,
-    then run `install-deps` there — never from the primary worktree,
-    whose lifecycle hooks would otherwise mutate the primary checkout.
+    --agent-id <id> --claim-id <id> --nonce <nonce>` (the A5 nonce) right after
+    creation and before any install or other mutation.
+27. On the manual/no-hook path, `cd` into the sibling first, then run
+    `install-deps` there, never from the primary worktree (its lifecycle hooks
+    would mutate the primary checkout).
 28. Verify the primary worktree's HEAD is still on `{default-branch}`.
 29. Verify `git worktree list` shows the new path.
-30. Verify the current directory is the new sibling worktree. A harness whose
-    file tools stay bound to the launch workspace (Grok Build observed) uses the
-    sibling's absolute path for them, not `cd`/`pwd`.
+30. Verify the current directory is the new sibling worktree. Launch-bound file
+    tools (Grok Build observed) use its absolute path, not `cd`/`pwd`.
 31. If any of steps 28-30 fails, the worktree-creation contract is violated:
     stop, post a hold note naming the failed check, and do not continue to
     B2 from the primary worktree.
