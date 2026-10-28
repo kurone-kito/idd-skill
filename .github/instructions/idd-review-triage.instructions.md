@@ -285,11 +285,10 @@ reviewer feedback:
   file or line written as plain text (observed 2026-10-14 on PR `#4307`). When
   helper runtime is enabled, the profile-selected resolve-review-thread command
   (`--pr <number> --comment-id <id> --apply`, with
-  `--body`/`--claim-issue`/`--claim-id` or `--claimless`; see
-  `docs/idd-helper-scripts.md`) posts the reply and resolves in one call,
-  replying before resolving so a failed reply never leaves a silently-resolved
-  thread; the manual REST + GraphQL `resolveReviewThread` sequence is the
-  fallback.
+  `--body`/`--claim-issue`/`--claim-id` or `--claimless`, which a claimed issue
+  branch refuses; see `docs/idd-helper-scripts.md`) posts the reply and
+  resolves in one call, reply first, so a failed reply never leaves a
+  silently-resolved thread; the manual REST + GraphQL sequence is the fallback.
 - **Exception to immediate resolution**: for a review-thread AMD, leave
   it unresolved (do **NOT** resolve) so F2's "Unresolved threads = 0"
   gate blocks merge until the maintainer responds, and post a separate

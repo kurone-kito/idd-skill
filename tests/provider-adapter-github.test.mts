@@ -3590,6 +3590,35 @@ test('getChangeRequestConvergenceView reads closing references across GraphQL pa
   assert.equal(fake.calls.filter((args) => args.includes('graphql')).length, 2);
 });
 
+test('getChangeRequestConvergenceView passes a non-string head name through as empty, and a real branch name unchanged (#4735)', () => {
+  const numeric = ghClosingRefFake({
+    prView: { ...CLOSING_REF_PR_VIEW, headRefName: 123 },
+    pullRequest: () =>
+      pullRequestClosingPayload('deadbeef', singleClosingPage([])),
+  });
+  const numericPort = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({ ghText: numeric.ghText }),
+  );
+  assert.equal(numericPort.getChangeRequestConvergenceView(42).headRefName, '');
+
+  const named = ghClosingRefFake({
+    prView: CLOSING_REF_PR_VIEW,
+    pullRequest: () =>
+      pullRequestClosingPayload('deadbeef', singleClosingPage([])),
+  });
+  const namedPort = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({ ghText: named.ghText }),
+  );
+  assert.equal(
+    namedPort.getChangeRequestConvergenceView(42).headRefName,
+    'issue/7-example',
+  );
+});
+
 test('closing-reference lookup fails closed on error, malformed, or partial responses (#4721)', () => {
   const cases: [string, unknown, RegExp][] = [
     [

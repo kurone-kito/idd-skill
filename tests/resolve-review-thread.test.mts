@@ -30,11 +30,11 @@ import {
   applyResolveReviewThread,
   assertNoGraphqlErrors,
   buildTriageReplyBody,
+  evaluateClaimless,
   findBodyItem,
   findThreadForComment,
   hasBodyItemDispositionPrefix,
   hasKnownDispositionMarkerPrefix,
-  isClaimlessEligible,
   parseArgs,
   type ResolveReviewThreadReport,
   type ReviewThreadNode,
@@ -106,11 +106,25 @@ test('parseArgs reads --claimless, defaulting to false', () => {
   );
 });
 
+/** The boolean verdict of the claimless gate, which these tests assert on. */
+function isClaimlessEligible(
+  port: ProviderPort,
+  pr: number,
+  options: {
+    owner?: string;
+    repo?: string;
+    trustedMarkerLogins?: string[];
+  } = {},
+): boolean {
+  return evaluateClaimless(port, pr, options).eligible;
+}
+
 test('isClaimlessEligible reflects live closingIssuesReferences on every call, not a cached snapshot (#2616, Codex P2)', () => {
   let refs: unknown[] = [];
   const port = {
     getChangeRequestConvergenceView: () => ({
       closingIssuesReferences: refs,
+      headRefName: 'feature/no-issue',
     }),
   } as unknown as ProviderPort;
   assert.equal(isClaimlessEligible(port, 42), true);
@@ -206,6 +220,167 @@ test('isClaimlessEligible refuses a closing reference whose issue has an active 
         authorLogin: OUT_OF_LOOP_VIEWER_LOGIN,
       },
     ],
+  });
+  assert.equal(isClaimlessEligible(port, 42, { owner: 'o', repo: 'r' }), false);
+});
+
+// --- kurone-kito/idd-skill#4735: an empty closing set does not bypass an issue claim ---
+
+const BRANCH_CLAIM_ID = 'f2275963-a829-42cf-9593-5e002d7378a6';
+
+function branchClaimComment(issue: number, id: number): ProviderComment {
+  return {
+    id,
+    body: `<!-- claimed-by: claude-code-fb560b17 ${BRANCH_CLAIM_ID} supersedes: none 2026-07-01T00:00:00Z branch: issue/${issue}-fix-review-thread -->\n\n_claude-code-fb560b17: issue claim — IDD automation marker. Do not edit._`,
+    createdAt: '2026-07-01T00:00:00Z',
+    updatedAt: '2026-07-01T00:00:00Z',
+    authorLogin: OUT_OF_LOOP_VIEWER_LOGIN,
+    lastEditedAt: null,
+  };
+}
+
+/** A PR with an empty closing set whose head branch is `headRefName`. */
+function emptyClosingPort(
+  headRefName: string,
+  overrides: {
+    prComments?: ProviderComment[];
+    issueComments?: ProviderComment[];
+  } = {},
+): ProviderPort {
+  return createFakeProviderAdapter({
+    viewerLogin: OUT_OF_LOOP_VIEWER_LOGIN,
+    changeRequestConvergenceViews: {
+      42: {
+        headSha: 'a'.repeat(40),
+        headRefName,
+        authorLogin: 'author-user',
+        url: 'https://example.invalid/pr/42',
+        closingIssuesReferences: [],
+      },
+    },
+    comments: {
+      42: overrides.prComments ?? [],
+      4735: overrides.issueComments ?? [],
+    },
+  });
+}
+
+test('isClaimlessEligible keeps the genuine no-issue route for an empty closing set and reads no viewer identity (#4735, #2616)', () => {
+  const base = emptyClosingPort('feature/unrelated-branch');
+  const port = new Proxy(base, {
+    get: (target, prop, receiver) =>
+      prop === 'resolveViewerLogin'
+        ? () => {
+            throw new Error('viewer identity must not be read here');
+          }
+        : Reflect.get(target, prop, receiver),
+  });
+  assert.equal(isClaimlessEligible(port, 42, { owner: 'o', repo: 'r' }), true);
+});
+
+test('evaluateClaimless refuses an empty closing set when the issue branch has an active claim, and names the claim-bound route (#4735)', () => {
+  const port = emptyClosingPort('issue/4735-fix-review-thread-verify-claims', {
+    issueComments: [branchClaimComment(4735, 2)],
+  });
+  const verdict = evaluateClaimless(port, 42, { owner: 'o', repo: 'r' });
+  assert.equal(verdict.eligible, false);
+  assert.match(verdict.refusal ?? '', /^--claimless refused: /);
+  assert.match(
+    verdict.refusal ?? '',
+    /names issue #4735, which has an active claim/,
+  );
+  assert.match(
+    verdict.refusal ?? '',
+    /--claim-issue 4735 --claim-id <claim-id>/,
+  );
+  assert.equal(isClaimlessEligible(port, 42, { owner: 'o', repo: 'r' }), false);
+});
+
+test('evaluateClaimless refuses an empty closing set on an unclaimed issue branch without a valid out-of-loop marker (#4735)', () => {
+  const port = emptyClosingPort('issue/4735-fix-review-thread-verify-claims');
+  const verdict = evaluateClaimless(port, 42, { owner: 'o', repo: 'r' });
+  assert.equal(verdict.eligible, false);
+  assert.match(
+    verdict.refusal ?? '',
+    /no active claim and no valid out-of-loop marker/,
+  );
+});
+
+test('evaluateClaimless accepts an unclaimed issue branch with a valid trusted bootstrap marker (#4735, #3328 exception)', () => {
+  const markerBody = renderOutOfLoopMarker({
+    agentId: OUT_OF_LOOP_VIEWER_LOGIN,
+    prNumber: 42,
+    reason: 'bootstrap',
+    at: '2026-07-01T00:00:00Z',
+  });
+  const port = emptyClosingPort('issue/4735-fix-review-thread-verify-claims', {
+    prComments: [
+      {
+        id: 1,
+        body: markerBody,
+        createdAt: '2026-07-01T00:00:01Z',
+        updatedAt: '2026-07-01T00:00:01Z',
+        authorLogin: OUT_OF_LOOP_VIEWER_LOGIN,
+        lastEditedAt: null,
+      },
+    ],
+  });
+  assert.deepEqual(evaluateClaimless(port, 42, { owner: 'o', repo: 'r' }), {
+    eligible: true,
+  });
+});
+
+for (const headRefName of [
+  '',
+  'issue/4735',
+  'issue/abc-x',
+  'issue/0-x',
+  'issue/9007199254740993-task',
+  'issue/4735-fix..review',
+  'issue/4735-x.lock',
+  'issue/4735-x/',
+  'issue/4735-fix review',
+  '[object Object]',
+]) {
+  test(`evaluateClaimless fails closed on an empty closing set with an unreadable or malformed head name ${JSON.stringify(headRefName)} (#4735)`, () => {
+    const port = emptyClosingPort(headRefName);
+    const verdict = evaluateClaimless(port, 42, { owner: 'o', repo: 'r' });
+    assert.equal(verdict.eligible, false);
+    assert.match(verdict.refusal ?? '', /^--claimless refused: PR #42/);
+    assert.match(verdict.refusal ?? '', /--claim-issue <n> --claim-id/);
+  });
+}
+
+test('evaluateClaimless refuses a non-string head name instead of reading it as a no-issue branch (#4735)', () => {
+  // A numeric head name from malformed provider data must not become the
+  // valid-looking branch "123" on the no-issue route.
+  const port = emptyClosingPort('placeholder');
+  const malformed = new Proxy(port, {
+    get: (target, prop, receiver) =>
+      prop === 'getChangeRequestConvergenceView'
+        ? () => ({
+            headSha: 'a'.repeat(40),
+            headRefName: 123,
+            authorLogin: 'author-user',
+            url: 'https://example.invalid/pr/42',
+            closingIssuesReferences: [],
+          })
+        : Reflect.get(target, prop, receiver),
+  });
+  const verdict = evaluateClaimless(malformed, 42, { owner: 'o', repo: 'r' });
+  assert.equal(verdict.eligible, false);
+  assert.match(verdict.refusal ?? '', /^--claimless refused: PR #42/);
+});
+
+test('isClaimlessEligible fails closed when the branch issue claim evidence cannot be read (#4735)', () => {
+  const base = emptyClosingPort('issue/4735-fix-review-thread-verify-claims');
+  const port = new Proxy(base, {
+    get: (target, prop, receiver) =>
+      prop === 'listWorkItemComments'
+        ? () => {
+            throw new Error('comment list unavailable');
+          }
+        : Reflect.get(target, prop, receiver),
   });
   assert.equal(isClaimlessEligible(port, 42, { owner: 'o', repo: 'r' }), false);
 });
