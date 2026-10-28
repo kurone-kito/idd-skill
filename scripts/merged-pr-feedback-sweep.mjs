@@ -849,21 +849,29 @@ function isReadyReport(report) {
 /** Positive integer token with no leading zero, as in `issue/<token>-`. */
 const HEAD_ISSUE_TOKEN_PATTERN = /^[1-9][0-9]*$/;
 /**
- * Classify a pull request head branch for readiness argv selection. An
- * `issue/` prefix is matched case-insensitively, so a near-miss name such as
- * `Issue/12-x` cannot reach the claimless path (#4734). The token after it,
- * up to the first dash, must be a positive safe integer without a leading
- * zero, as in `check-stray-commit-closes.mts`. A missing, non-string, or
- * empty head name is `malformed`, not `none`: the GitHub adapter coerces an
- * absent head name to an empty string, and that must fail closed rather
- * than read as a no-issue branch.
+ * Classify a pull request head branch for readiness argv selection. Only the
+ * canonical lowercase `issue/` prefix, as in `check-stray-commit-closes.mts`,
+ * takes the claim-bound route. A name that starts with `issue/` in another
+ * ASCII letter case, or after leading whitespace, is `malformed`, not `none`:
+ * a claimless check would skip the claim on it, so it stays unchecked
+ * (#4734). A name that does not start with `issue/`, after optional leading
+ * whitespace, in any ASCII letter case, such as `issues/12-x`, is an ordinary
+ * no-issue branch. The token after the
+ * canonical prefix, up to the first dash, must be a positive safe integer
+ * without a leading zero. A missing, non-string, empty, or blank head name is also
+ * `malformed`, not `none`: the GitHub adapter coerces an absent head name to
+ * an empty string, and that must fail closed rather than read as a no-issue
+ * branch.
  */
 function classifyHeadBranch(headRefName) {
   if (typeof headRefName !== 'string' || headRefName.trim() === '') {
     return { kind: 'malformed' };
   }
-  if (!/^issue\//i.test(headRefName)) {
+  if (!/^\s*issue\//i.test(headRefName)) {
     return { kind: 'none' };
+  }
+  if (!headRefName.startsWith('issue/')) {
+    return { kind: 'malformed' };
   }
   const rest = headRefName.slice('issue/'.length);
   const dash = rest.indexOf('-');
@@ -896,9 +904,10 @@ function classifyHeadBranch(headRefName) {
  * issue branch on a non-default base (#4697); readiness then requires an
  * active claim on that issue and fails closed without one. Any other named
  * branch is a genuine no-issue pull request and is checked with
- * `--claimless`. A head branch that is missing, or that starts with `issue/`
- * without a parseable issue number, gives `null`, since no claim can be
- * identified for it.
+ * `--claimless`. A head branch that is missing or blank, or that starts with `issue/`
+ * in another ASCII letter case (or after leading whitespace), or is the
+ * canonical `issue/` form without a parseable issue number, gives `null`, since
+ * no claim can be identified for it.
  */
 export function openPrReadinessArgvCandidates(
   number,
@@ -963,8 +972,8 @@ export function openPrReadinessIdentityArgv(args) {
 /**
  * Why `openPrReadinessArgvCandidates` gave `null`. Closing references are
  * the first cause, since they are read before the head branch. Otherwise a
- * head branch that is missing or does not name an issue number is the cause
- * (#4734), so the report names the field that failed.
+ * head branch that is missing or blank, or is an `issue/` name that is not
+ * canonical, is the cause (#4734), so the report names the field that failed.
  */
 function openPrUncheckedReason(closingIssuesReferences, owner, repo) {
   const resolved = resolveClosingIssueNumbersForClassifier(
@@ -975,7 +984,7 @@ function openPrUncheckedReason(closingIssuesReferences, owner, repo) {
   if (resolved === null) {
     return 'closing issue references are unreadable or include an entry that is not an issue in this repository';
   }
-  return 'head branch is missing or is an issue branch without a parseable issue number, so its claimed issue cannot be identified';
+  return 'head branch is missing or blank, or is an issue/ name that is not a canonical lowercase issue/<number>- branch, so its claimed issue cannot be identified';
 }
 /**
  * Check every open PR with the read-only readiness collector. A failure on

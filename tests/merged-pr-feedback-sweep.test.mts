@@ -2398,14 +2398,18 @@ test('#4734: empty closing references are routed by the head branch', () => {
     [[...base, '--claim-issue', '12']],
   );
   assert.deepEqual(
-    openPrReadinessArgvCandidates(7, 'o', 'r', [], 'Issue/12-x'),
-    [[...base, '--claim-issue', '12']],
-  );
-  assert.deepEqual(
     openPrReadinessArgvCandidates(7, 'o', 'r', [], 'issue/9007199254740991-x'),
     [[...base, '--claim-issue', '9007199254740991']],
   );
-  for (const head of ['feature/x', 'docs/no-issue', 'release/1.x']) {
+  // `issues/` and `issue-` are different prefixes, so they are no-issue names.
+  for (const head of [
+    'feature/x',
+    'docs/no-issue',
+    'release/1.x',
+    'issues/12-x',
+    'issue-12-x',
+    '  feature/x',
+  ]) {
     assert.deepEqual(
       openPrReadinessArgvCandidates(7, 'o', 'r', [], head),
       [[...base, '--claimless']],
@@ -2419,6 +2423,11 @@ test('#4734: empty closing references are routed by the head branch', () => {
     'issue/012-x',
     'issue/12',
     'issue/9007199254740992-x',
+    // A hand-named near miss is not a canonical claimed branch, but a
+    // claimless check would skip the claim on it, so it stays unchecked.
+    'Issue/12-x',
+    'ISSUE/12-x',
+    '  issue/12-x',
     '',
     '   ',
     undefined,
@@ -2501,8 +2510,8 @@ test('#4734: an issue-branch PR with empty closing references is checked with it
   assertNoMergeOrWrite(fixture, calls);
 });
 
-test('#4734: a missing or unparseable head branch with empty closing references is unchecked, never ready', () => {
-  for (const head of ['issue/abc-not-a-number', '']) {
+test('#4734: a missing, unparseable, or near-miss head branch with empty closing references is unchecked, never ready', () => {
+  for (const head of ['issue/abc-not-a-number', 'Issue/11-x', '']) {
     const fixture = openPrFixture();
     fixture.changeRequestConvergenceViews = {
       ...fixture.changeRequestConvergenceViews,
