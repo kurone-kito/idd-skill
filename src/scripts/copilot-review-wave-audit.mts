@@ -2043,9 +2043,12 @@ function appendStepSummary(
   failedPrs: readonly FailedPr[],
   baselineReviewsPerPr: number | null,
 ): void {
+  const existingSummary = existsSync(path) ? readFileSync(path, 'utf8') : '';
+  const separator =
+    existingSummary.length > 0 && !existingSummary.endsWith('\n') ? '\n' : '';
   appendFileSync(
     path,
-    `${formatStepSummary(selector, summary, failedPrs, baselineReviewsPerPr)}\n`,
+    `${separator}${formatStepSummary(selector, summary, failedPrs, baselineReviewsPerPr)}\n`,
     'utf8',
   );
 }

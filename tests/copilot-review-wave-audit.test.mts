@@ -3140,7 +3140,7 @@ test('CLI isolates a PR failure, prints a partial report, appends summary, and e
   const dir = mkdtempSync(join(tmpdir(), 'idd-wave-audit-failed-pr-'));
   const summaryPath = join(dir, 'summary.md');
   try {
-    writeFileSync(summaryPath, 'existing summary line\n');
+    writeFileSync(summaryPath, 'existing summary line');
     const result = runCheckWithFixture(
       {
         reviews: [
@@ -3179,7 +3179,10 @@ test('CLI isolates a PR failure, prints a partial report, appends summary, and e
     assert.equal(parsed.failedPrs[0]?.pr, 43);
     assert.match(parsed.failedPrs[0]?.message ?? '', /HTTP 403/);
     const stepSummary = readFileSync(summaryPath, 'utf8');
-    assert.ok(stepSummary.startsWith('existing summary line\n'));
+    assert.match(
+      stepSummary,
+      /^existing summary line\n## Copilot review-wave audit/,
+    );
     assert.match(stepSummary, /## Copilot review-wave audit/);
     assert.match(stepSummary, /Pull requests that could not be audited: 1/);
   } finally {
