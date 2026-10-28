@@ -46,6 +46,7 @@
   },
   "critiqueLoop": {
     "deferAfterRounds": 5,
+    "deferAllAfterRounds": 3,
     "deferByUrgency": "severity-tiered",
     "triageRecord": "enforce",
     "deferRelaxAtRounds": [4, 7],
