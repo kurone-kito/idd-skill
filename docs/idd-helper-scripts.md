@@ -4055,7 +4055,9 @@ The adopted helper boundaries are intentionally narrow:
   valid out-of-loop marker (kurone-kito/idd-skill#3328 -- see the
   [Out-of-loop marker contract](#out-of-loop-marker-contract)), pass
   `--claimless` instead of `--claim-issue`/`--claim-id` (#2616, mirrors
-  `pre-merge-readiness.mjs`'s `--claimless`, #2017).
+  `pre-merge-readiness.mjs`'s `--claimless`, #2017). An empty
+  `closingIssuesReferences` is claimless only when the head branch does not
+  name an issue; see the fail-closed bullet below (kurone-kito/idd-skill#4735).
 - Maps `--comment-id` (the review comment's REST id) to its owning review
   thread by matching it against the `databaseId` of the comments inside each
   GraphQL `reviewThreads` node (both the threads and the nested comments
@@ -4111,6 +4113,13 @@ The adopted helper boundaries are intentionally narrow:
   the active claim's branch to equal the PR's head branch. `--claimless`
   itself fails closed against a non-empty `closingIssuesReferences`
   unless a valid out-of-loop marker applies (kurone-kito/idd-skill#3328).
+  With an empty `closingIssuesReferences`, the PR's head branch decides
+  (kurone-kito/idd-skill#4735): a name that does not start with `issue/`
+  stays claimless with no viewer-identity lookup; an `issue/<n>-...` name is
+  checked against issue `<n>`'s claim, as if it were the closing issue, so an
+  active claim refuses `--claimless`, and the refusal names the claim-bound
+  route `--claim-issue <n> --claim-id <claim-id>`; an empty, unreadable, or
+  malformed name, or incomplete claim evidence, fails closed.
   GraphQL `errors` fail fast rather than masquerading as a missing thread,
   and a partial apply (reply posted, resolve not confirmed) still reports
   the posted `replyId`.
