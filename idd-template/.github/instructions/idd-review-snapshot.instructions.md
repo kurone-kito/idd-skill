@@ -69,12 +69,12 @@ GitHub state in this phase, discard helper output and run the portable
 gh/jq/API procedure below. The written instruction rules remain the
 authoritative decision path.
 
-Manual CI: use the paginated read rules in
-[Manual CI read](../../docs/idd-helper-scripts.md#manual-ci-read), matching
-Step 1's HEAD and base; `gh pr view --json statusCheckRollup` cannot prove
-completeness. Keep same-named producers separate and use the newest
-pass-equivalent completion. A complete matching read with no pass yields
-`none`; incomplete evidence means no post: repeat Step 1.
+Manual CI: paginate `statusCheckRollup.contexts` until `hasNextPage` is
+false, matching Step 1's HEAD and base on every page;
+`gh pr view --json statusCheckRollup` cannot prove completeness. Keep
+same-named producers separate and use the newest pass-equivalent
+completion. A complete matching read with no pass yields `none`;
+incomplete evidence means no post: repeat Step 1.
 
 **Non-Copilot safety:** snapshot/watermark and F2 cover bot activity.
 
