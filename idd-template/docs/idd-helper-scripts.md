@@ -10698,9 +10698,11 @@ node scripts/claimed-push.mjs --issue <n> --claim-id <id> [--nonce <nonce>] [--a
   the claimed sibling path and its current branch is the claimed branch,
   using the cwd-vs-claim check in the
   [claim revalidation gate](../.github/instructions/idd-overview-core.instructions.md#claim-revalidation-gate).
-  Compare the changed paths with the issue's Candidate files, as the B3
-  scope check does. Commit any validation or formatter output first, so
-  the tree is clean.
+  Apply the `effort-candidate-file-limit` check that the scope step runs:
+  count the issue's parsed Candidate files and the canonical changed paths
+  separately, apply B3's canonical-path exclusions, and stop without
+  pushing when either count fails. Commit any validation or formatter
+  output first, so the tree is clean.
 
 ## Dead-export audit (kurone-kito/idd-skill#3478)
 
