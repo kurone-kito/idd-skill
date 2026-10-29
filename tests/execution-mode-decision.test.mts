@@ -72,7 +72,10 @@ test('the orchestrator phase links the decision and states that static support i
     orchestrator,
     /\.\.\/\.\.\/docs\/idd-workflow\.md#live-capability-decision/,
   );
-  assert.match(orchestrator, /[Ss]tatic support or missing tools/);
+  assert.match(
+    orchestrator,
+    /support or missing tools do not prove live capability/,
+  );
   assert.match(orchestrator, /do not prove live capability/);
 });
 
