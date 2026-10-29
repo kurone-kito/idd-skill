@@ -255,14 +255,15 @@ validation covers the merged tree.
 
 1. Run `post-fix-validate`.
 2. With helper runtime, inspect and commit any validation or formatter
-   output so the tree is clean. Then run `claimed-push` from the claimed
-   worktree with `--issue {issue-number} --claim-id {claim-id}`, plus
-   `--nonce {nonce}` when one is recorded. Its dry run (no `--apply`)
-   must pass before `--apply`, which must report `pushed: true`. Under
-   `instructions-only`, verify the active claim and location, run
-   **pre-push-validate**, then push normally. E11's merge commit needs no
-   force push. Files changed only by E11's merge do not widen E12's
-   fold-in scope.
+   output so the tree is clean. Then run the profile-selected
+   `claimed-push` (see `docs/idd-helper-scripts.md`, Claimed push) from
+   the claimed worktree with `--issue {issue-number} --claim-id
+   {claim-id}`, plus `--nonce {nonce}` when one is recorded. Its dry run
+   (no `--apply`) must pass before `--apply`, which must report
+   `pushed: true`. Under `instructions-only`, verify the active claim,
+   location, and scope, run **pre-push-validate**, then push normally.
+   E11's merge commit needs no force push. Files changed only by E11's
+   merge do not widen E12's fold-in scope.
 3. Before this push, fold a small batch of out-of-scope comments awaiting
    triage into the same push, each as its own atomic commit, only if
    steps 4-7 all hold.
