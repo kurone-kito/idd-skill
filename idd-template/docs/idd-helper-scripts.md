@@ -10032,10 +10032,13 @@ helper sees the last pushed head (kurone-kito/idd-skill#4759).
 
 For a conflict, unresolved threads, unreplied comments, or a
 `CHANGES_REQUESTED` review require explicit confirmation before merging,
-resolving, and completing. Then use this wrapper for both the merge and
-`git merge --continue`. After a wrapper timeout, terminate and wait for its
-full process tree before aborting; if it remains live or its exit is
-unconfirmed, hold without aborting or pushing.
+resolving, and completing; without confirmation, leave the branch unchanged
+and hold. Then use this wrapper for both the merge and `git merge --continue`.
+If a confirmed conflict cannot be resolved cleanly,
+run `git merge --abort`, report the failure, and hold without pushing
+(observed 2026-10-28 in PR #4774 review comment #4396449337). After a wrapper
+timeout, terminate and wait for its full process tree before aborting; if it
+remains live or its exit is unconfirmed, hold without aborting or pushing.
 
 E11 first fetches the target with this exact refspec:
 
@@ -10056,11 +10059,15 @@ skips the merge. When behind, probe with:
 git merge-tree --write-tree HEAD "$target_sha"
 ```
 
-Exit 0 means no conflict; 1 means conflict. Any other exit is unknown, so
-hold without merging or pushing. A failed fetch, capture, or comparison also
-holds. Use the captured SHA for both the probe and merge below; do not fetch
-or resolve the branch ref again. Keep `target_sha` available across E11, or
-pass its recorded value if the commands run in separate shells.
+Exit 0 means no conflict; 1 means conflict. This `--write-tree` mode
+requires Git 2.38 or later; on older Git, an unsupported-option error is one
+likely unknown result. Every other unexpected exit remains unknown: report
+and hold without merge or push (PR #4774 review comment #4396614907,
+2026-10-28; preventive; no older-Git failure observed). A failed fetch,
+capture, or comparison also holds. Use the captured SHA for both the probe
+and merge below; do not fetch or resolve the branch ref again. Keep
+`target_sha` available across E11, or pass its recorded value if commands
+run in separate shells.
 
 ```sh
 git merge --no-ff \
