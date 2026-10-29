@@ -10020,7 +10020,9 @@ a destructive re-run.
 
 ## Signed-Commit Merge Wrapper (Shared Git Procedure)
 
-This section documents review-fix E11 only.
+The fetch and merge procedure below is specific to review-fix E11. The shared
+SSH-signing guidance also applies to ordinary B3 commits, as shown in the B3
+`git commit` example below.
 
 `idd-review-fix.instructions.md`'s E11 merges `{development-branch}` into
 the feature branch. It reads the PR base and current Git refs before each
