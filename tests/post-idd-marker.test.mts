@@ -1884,6 +1884,8 @@ function runWatermarkFromPr(apply: boolean): string {
       'watermark',
       '--from-pr',
       '1200',
+      '--prior-base-ref',
+      'main',
       '--owner',
       'o',
       '--repo',
@@ -1978,6 +1980,8 @@ function runGlobalOnlyWatermark(
       'watermark',
       '--from-pr',
       '1200',
+      '--prior-base-ref',
+      'main',
       '--owner',
       'o',
       '--repo',
@@ -2169,6 +2173,8 @@ test('--from-pr CLI composes review-activity-snapshot and prints the derived wat
         'watermark',
         '--from-pr',
         '1200',
+        '--prior-base-ref',
+        'main',
         '--owner',
         'o',
         '--repo',
@@ -2228,6 +2234,8 @@ test('--from-pr CLI omits warnings when the live snapshot has nothing missing a 
         'watermark',
         '--from-pr',
         '1200',
+        '--prior-base-ref',
+        'main',
         '--owner',
         'o',
         '--repo',
@@ -2274,6 +2282,8 @@ test('--expected-head-sha lets a matching (even differently-cased) --from-pr sna
             'watermark',
             '--from-pr',
             '1200',
+            '--prior-base-ref',
+            'main',
             '--expected-head-sha',
             expectedHeadSha,
             '--owner',
@@ -2340,6 +2350,8 @@ test('--expected-head-sha fails closed (no post) when the live snapshot HEAD has
           'watermark',
           '--from-pr',
           '1200',
+          '--prior-base-ref',
+          'main',
           '--expected-head-sha',
           staleSha,
           '--owner',
@@ -7188,14 +7200,13 @@ function runWatermarkCli(
   stdout: string;
   stderr: string;
 } {
-  // #4803: --operation-local requires the Step 1 base ref. The stubs report
-  // `main` as the PR base, so default to it unless a test overrides or omits it.
+  // #4803: every --from-pr watermark publish requires the Step 1 base ref. The
+  // stubs report `main` as the PR base, so default to it unless a test
+  // overrides or omits it.
   const priorBaseRef =
     options.priorBaseRef === undefined ? 'main' : options.priorBaseRef;
   const baseRefFlags =
-    extra.includes('--operation-local') &&
-    !extra.includes('--prior-base-ref') &&
-    priorBaseRef !== null
+    !extra.includes('--prior-base-ref') && priorBaseRef !== null
       ? ['--prior-base-ref', priorBaseRef]
       : [];
   const result = spawnSync(
@@ -7240,20 +7251,15 @@ function ghPostCalls(logFile: string): string[] {
     .filter((line) => line.includes('--input'));
 }
 
-test('#4803: --operation-local needs --prior-base-ref, and the flag needs --operation-local', () => {
-  const missing = runWatermarkCli(['--operation-local'], {
-    priorBaseRef: null,
-  });
-  assert.equal(missing.status, 1);
-  assert.match(missing.stderr, /--operation-local requires --prior-base-ref/u);
-  const stray = runWatermarkCli(['--prior-base-ref', 'main'], {
-    priorBaseRef: null,
-  });
-  assert.equal(stray.status, 1);
-  assert.match(
-    stray.stderr,
-    /--prior-base-ref is only valid with --operation-local/u,
-  );
+test('#4803: a --from-pr watermark needs --prior-base-ref, with or without --operation-local', () => {
+  for (const extra of [['--operation-local'], []]) {
+    const missing = runWatermarkCli(extra, { priorBaseRef: null });
+    assert.equal(missing.status, 1, missing.stderr);
+    assert.match(
+      missing.stderr,
+      /--type watermark --from-pr requires --prior-base-ref/u,
+    );
+  }
 });
 
 test('--prior-* flags must be passed together and only with --operation-local (#3592)', () => {

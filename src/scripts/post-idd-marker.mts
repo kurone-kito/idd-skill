@@ -2039,8 +2039,11 @@ below).
                        posts nothing; refuse exits 1, posts nothing, and
                        prints the same envelope on stdout next to the reason
                        on stderr.
-  --prior-head-sha <sha>
   --prior-base-ref <name>
+                       --type watermark --from-pr only, and required there: the
+                       PR base ref E1 Step 1 saw. Refuses (exit 1) when the
+                       publish-time base ref or the activity capture differs.
+  --prior-head-sha <sha>
   --prior-total-item-count <n>
   --prior-max-activity-at <iso|none>
                        --operation-local only, and only together: the head-SHA,
@@ -4358,8 +4361,12 @@ function main(): HelperCliResult {
     process.stderr.write(`${message}\n`);
     return { exitCode: 1, kind: 'usage', message };
   }
-  if (args.priorBaseRef !== '' && !args.operationLocal) {
-    const message = '--prior-base-ref is only valid with --operation-local';
+  if (
+    args.priorBaseRef !== '' &&
+    (args.type !== 'watermark' || args.fromPr === null)
+  ) {
+    const message =
+      '--prior-base-ref is only valid with --type watermark --from-pr';
     process.stderr.write(`${message}\n`);
     return { exitCode: 1, kind: 'usage', message };
   }
@@ -4443,18 +4450,16 @@ function main(): HelperCliResult {
       args.owner = args.owner || currentRepo?.owner || '';
       args.repo = args.repo || currentRepo?.repo || '';
       if (isWatermark) {
-        if (args.operationLocal && args.priorBaseRef === '') {
+        if (args.priorBaseRef === '') {
           const message =
-            '--operation-local requires --prior-base-ref <Step 1 base ref>: the publish-time base ref is compared with it';
+            '--type watermark --from-pr requires --prior-base-ref <Step 1 base ref>: the publish-time base ref is compared with it';
           process.stderr.write(`${message}\n`);
           return { exitCode: 1, kind: 'usage', message };
         }
         const local = runOperationLocalSnapshotWatermark({
           prNumber: args.fromPr,
           expectedHeadSha: args.expectedHeadSha || undefined,
-          expectedBaseRefName: args.operationLocal
-            ? args.priorBaseRef
-            : undefined,
+          expectedBaseRefName: args.priorBaseRef,
           priorBoundary:
             args.priorTotalItemCount === null
               ? null

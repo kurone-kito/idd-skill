@@ -60,7 +60,7 @@ author is a trusted marker actor per
 Never exclude an untrusted-author marker-shaped comment; flag it as
 suspicious if it affects a decision.
 
-When helper runtime is enabled, prefer the profile-selected read-only helper
+With helpers, prefer the profile-selected read-only helper
 `node scripts/review-activity-snapshot.mjs --pr {pr-number}` to collect
 `{head-SHA}`, `{max-activity-updatedAt}`, `{total-item-count}`, and CI
 completion timestamps. Pass trusted marker actors with
@@ -126,7 +126,8 @@ posting nothing; return to Step 1 and re-snapshot, do not retry Step 2
 as-is. `decision: defer` exits 0 (`mode: "dry-run"`), posting nothing
 (required checks not passing): skip the after-posting steps and follow
 the CI-incomplete routing above.
-The manual six-field fallback requires `idd-ci` producer-aware proof:
+Manual six-field fallback: the PR base ref must equal `{base-ref}`, plus
+`idd-ci` producer-aware proof:
 required `(checkName, workflowName)` producers pass and advisory
 identity/event verify; raw `gh pr checks` is insufficient. Emit/manual
 POST inherit it (see `docs/idd-helper-scripts.md`):

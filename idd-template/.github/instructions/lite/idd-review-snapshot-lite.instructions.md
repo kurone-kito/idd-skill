@@ -71,8 +71,9 @@ E1.
 
 ### Step 1 — Snapshot the activity universe
 
-1. Read the current PR HEAD SHA once — `gh pr view {pr-number} --json
-   headRefOid --jq '.headRefOid'` — and store it as `{head-SHA}`. Never
+1. Read the current PR HEAD SHA and base ref once — `gh pr view
+   {pr-number} --json headRefOid,baseRefName` — and store them as
+   `{head-SHA}` and `{base-ref}`. Never
    re-read it elsewhere in E1 — reuse this value, except for the
    deferred E3 check below.
 2. Run the profile-selected `review-activity-snapshot` helper for
@@ -121,11 +122,11 @@ reuse deferred value.
 Post a marker per E1 pass when satisfied. Prefer
 the one-command path: `node
 scripts/post-idd-marker.mjs --type watermark --from-pr {pr-number}
---expected-head-sha {head-SHA} --agent-id <id> --claim-id <id>
---trusted-marker-logins "<trusted-login-1>,<trusted-login-2>" --apply`
-(plus `--global-only` if global-only; or the package-manager
-equivalent). Always pass `--expected-head-sha`
-with the exact Step 1 `{head-SHA}`; the helper fails closed (posts
+--expected-head-sha {head-SHA} --prior-base-ref {base-ref} --agent-id <id>
+--claim-id <id> --trusted-marker-logins "<trusted-login-1>,<trusted-login-2>"
+--apply` (plus `--global-only` if global-only; or the package-manager
+equivalent). Always pass `--expected-head-sha` and `--prior-base-ref`
+with the exact Step 1 values; the helper fails closed (posts
 nothing) when the branch moved since Step 1 — on that failure, return
 to Step 1 and re-snapshot the moved branch, not a Step 2 retry.
 
@@ -134,8 +135,9 @@ The manual six-field fallback — `--type watermark --target pr
 --max-activity-at {max-activity-updatedAt|none} --total-item-count
 {total-item-count} --ci-completed-at {latest-ci-completed-at|none}
 --apply` — stays available when `--from-pr` cannot run. Before using it,
-require each required `(checkName, workflowName)`
-producer to pass for `{head-SHA}` and verify advisory identity/event;
+require the PR base ref to equal `{base-ref}`, and each required
+`(checkName, workflowName)` producer to pass for `{head-SHA}` and verify
+advisory identity/event;
 raw names are insufficient. Otherwise skip Step 2 and use E15/E14.
 
 Exact body: `<!-- review-watermark: {agent-id} {claim-id} {head-SHA}
@@ -146,8 +148,7 @@ in the PR's language (English if ambiguous). Nothing follows the note.
 
 After watermark verification, re-fetch all review pages before cleanup
 or Step 3. Compare human rows to Step 1 by ID, author, state, commit,
-submission time, and body; any change restarts E1. The operation-local
-helper guard does not classify human rows.
+submission time, and body; any change restarts E1.
 
 On resume, restore only the latest trusted same-claim watermark.
 Missing/legacy means rerun E1; never use or hide another claim's marker.
@@ -161,10 +162,9 @@ Skip this cleanup (not a stop condition) when the watermark is
 unverified, no candidate exists, or the helper is unavailable; F4 catches
 leftovers. Never hide a different-claim watermark here.
 
-Do not touch the PR live status digest after posting this watermark
-unless the next route is E1, an F3-blocked reroute to F1/D4, a
-hold/stop, or post-merge cleanup — a digest edit after the watermark
-counts as new activity, forcing a fresh E1 snapshot before F2.
+Do not edit the live status digest after this watermark unless the next
+route is E1, an F3-blocked reroute to F1/D4, a hold/stop, or post-merge
+cleanup; an edit counts as new activity and forces a fresh E1 snapshot.
 
 ### Step 3 — Filter into ReviewItems_snapshot
 
