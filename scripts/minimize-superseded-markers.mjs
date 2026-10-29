@@ -103,6 +103,10 @@ const MINIMIZABLE_TYPENAMES = new Set([
   'PullRequestReview',
   'PullRequestReviewComment',
 ]);
+const TAKEOVER_CLAIM_MARKER_PATTERN =
+  /^<!--\s*claimed-by:\s+(\S+)\s+(\S+)\s+supersedes:\s+\S+\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)\s+branch:\s+[^\s>]+\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i;
+const TAKEOVER_RELEASE_MARKER_PATTERN =
+  /^<!--\s*unclaimed-by:\s+(\S+)\s+(\S+)\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i;
 // GitHub's GraphQL node(id:) query returns this message (independent of
 // subject type) whenever an id cannot be resolved — including, but NOT
 // limited to, a REST numeric id passed where a GraphQL global node id is
@@ -233,7 +237,7 @@ function main() {
     console.error(`error: ${message}`);
     return { exitCode: 2, kind: 'usage', message };
   }
-  if (args.subjectIds.length === 0) {
+  if (args.issue === undefined && args.subjectIds.length === 0) {
     const message = '--subject-ids must contain at least one ID';
     console.error(`error: ${message}`);
     return { exitCode: 2, kind: 'usage', message };
@@ -251,14 +255,78 @@ function main() {
     console.error(`error: ${message}`);
     return { exitCode: 2, kind: 'usage', message };
   }
-  const report = runMinimize({
-    subjectIds: args.subjectIds,
-    classifier: args.classifier,
-    trustedSet,
-    apply: args.apply,
-    allowUntrusted: args.allowUntrusted,
-    deadlineMs: args.deadlineMs,
-  });
+  let report;
+  if (args.issue !== undefined && args.repo !== undefined) {
+    let comments;
+    try {
+      comments = fetchIssueComments(args.repo, args.issue);
+    } catch (error) {
+      const message = `issue comment listing failed: ${error instanceof Error ? error.message : String(error)}`;
+      console.error(`error: ${message}`);
+      return { exitCode: 1, kind: 'internal', message };
+    }
+    const entries = selectTakeoverComments(
+      comments,
+      args.priorClaimId,
+      trustedSet,
+    );
+    report = runMinimize({
+      subjectIds: entries
+        .filter((entry) => entry.rejectionReason === undefined)
+        .map((entry) => entry.subjectId),
+      classifier: args.classifier,
+      trustedSet,
+      apply: args.apply,
+      allowUntrusted: false,
+    });
+    const minimizedById = new Map(
+      report.items.map((item) => [item.subjectId, item]),
+    );
+    report.items = entries.map((entry) => {
+      if (entry.rejectionReason !== undefined) {
+        return {
+          subjectId: entry.subjectId,
+          url: entry.url,
+          status: 'not-selected',
+          reason: entry.rejectionReason,
+          ...(entry.markerKind === undefined
+            ? {}
+            : { markerKind: entry.markerKind }),
+          ...(entry.claimId === undefined ? {} : { claimId: entry.claimId }),
+        };
+      }
+      const item = minimizedById.get(entry.subjectId);
+      if (item === undefined) {
+        report.counts.failed += 1;
+        return {
+          subjectId: entry.subjectId,
+          url: entry.url,
+          status: 'failed',
+          reason: 'selection-result-missing',
+          markerKind: entry.markerKind,
+          claimId: entry.claimId,
+        };
+      }
+      return {
+        ...item,
+        url: entry.url,
+        markerKind: entry.markerKind,
+        claimId: entry.claimId,
+      };
+    });
+    report.counts.selected = entries.filter(
+      (entry) => entry.rejectionReason === undefined,
+    ).length;
+  } else {
+    report = runMinimize({
+      subjectIds: args.subjectIds,
+      classifier: args.classifier,
+      trustedSet,
+      apply: args.apply,
+      allowUntrusted: args.allowUntrusted,
+      deadlineMs: args.deadlineMs,
+    });
+  }
   report.trustedMarkerActors = [...trustedSet].sort();
   report.trustedMarkerActorsSource = trustedMarkerActorsSource;
   if (args.format === 'table') {
@@ -267,6 +335,121 @@ function main() {
     console.log(JSON.stringify(report, null, 2));
   }
   return computeExitCode(report);
+}
+function fetchIssueComments(repository, issue) {
+  const [owner, repo] = repository.split('/');
+  const result = runGh([
+    'api',
+    ...resolveGhHostnameArgs(),
+    '--method',
+    'GET',
+    '--paginate',
+    '--slurp',
+    `repos/${owner}/${repo}/issues/${issue}/comments`,
+    '-F',
+    'per_page=100',
+  ]);
+  if (!result.ok) {
+    throw new Error(result.stderr);
+  }
+  let pages;
+  try {
+    pages = JSON.parse(result.stdout);
+  } catch (error) {
+    throw new Error(
+      `invalid paginated JSON: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  if (!Array.isArray(pages) || !pages.every(Array.isArray)) {
+    throw new Error('paginated response must be an array of comment pages');
+  }
+  const comments = [];
+  const seenNodeIds = new Set();
+  for (const page of pages) {
+    for (const value of page) {
+      if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+        throw new Error('comment page contains a non-object row');
+      }
+      const row = value;
+      if (
+        typeof row.node_id !== 'string' ||
+        row.node_id.length === 0 ||
+        typeof row.html_url !== 'string' ||
+        row.html_url.length === 0 ||
+        typeof row.body !== 'string'
+      ) {
+        throw new Error(
+          'comment page contains a row missing node_id, html_url, or body',
+        );
+      }
+      if (REST_SHAPED_SUBJECT_ID_PATTERN.test(row.node_id)) {
+        throw new Error('comment node_id is a REST numeric ID');
+      }
+      if (seenNodeIds.has(row.node_id)) {
+        throw new Error(`comment listing repeated node_id ${row.node_id}`);
+      }
+      seenNodeIds.add(row.node_id);
+      const user = row.user;
+      const authorLogin =
+        typeof user === 'object' && user !== null && !Array.isArray(user)
+          ? String(user.login ?? '')
+          : '';
+      comments.push({
+        nodeId: row.node_id,
+        url: row.html_url,
+        body: row.body,
+        authorLogin,
+      });
+    }
+  }
+  return comments;
+}
+function selectTakeoverComments(comments, priorClaimId, trustedSet) {
+  const entries = [];
+  for (const comment of comments) {
+    if (!comment.body.includes(priorClaimId)) {
+      continue;
+    }
+    const marker = parseTakeoverMarker(comment.body);
+    const rejectionReason =
+      marker === null
+        ? 'grammar'
+        : !isTrustedAuthor(comment.authorLogin, trustedSet)
+          ? 'untrusted-author'
+          : marker.claimId !== priorClaimId
+            ? 'claim-id-mismatch'
+            : undefined;
+    entries.push({
+      subjectId: comment.nodeId,
+      url: comment.url,
+      ...(marker === null
+        ? {}
+        : { markerKind: marker.markerKind, claimId: marker.claimId }),
+      ...(rejectionReason === undefined ? {} : { rejectionReason }),
+    });
+  }
+  return entries;
+}
+/** Local, standalone copy of the live claim/release marker parser contract. */
+export function parseTakeoverMarker(body) {
+  const normalizedBody = body.trimEnd();
+  const claimedBy = normalizedBody.match(TAKEOVER_CLAIM_MARKER_PATTERN);
+  if (claimedBy && isValidTakeoverTimestamp(claimedBy[3])) {
+    return { markerKind: 'claimed-by', claimId: claimedBy[2] };
+  }
+  const unclaimedBy = normalizedBody.match(TAKEOVER_RELEASE_MARKER_PATTERN);
+  if (unclaimedBy && isValidTakeoverTimestamp(unclaimedBy[3])) {
+    return { markerKind: 'unclaimed-by', claimId: unclaimedBy[2] };
+  }
+  return null;
+}
+function isValidTakeoverTimestamp(value) {
+  const time = Date.parse(value);
+  if (!Number.isFinite(time)) {
+    return false;
+  }
+  const normalize = (timestamp) => timestamp.replace('.000Z', 'Z');
+  return normalize(new Date(time).toISOString()) === normalize(value);
 }
 export function runMinimize({
   subjectIds,
@@ -863,6 +1046,7 @@ function printTable(report) {
     c.deadlineSkipped === undefined
       ? ''
       : `deadlineSkipped=${c.deadlineSkipped}`,
+    c.selected === undefined ? '' : `selected=${c.selected}`,
   ]
     .filter(Boolean)
     .join(' ');
@@ -870,7 +1054,13 @@ function printTable(report) {
   for (const item of report.items) {
     const url = item.url ?? '(no url)';
     const reason = item.reason ?? '';
-    console.log(`  [${item.status}] ${item.subjectId}  ${url}  ${reason}`);
+    const marker =
+      item.markerKind === undefined
+        ? ''
+        : `  ${item.markerKind}  claimId=${item.claimId ?? ''}`;
+    console.log(
+      `  [${item.status}] ${item.subjectId}  ${url}  ${reason}${marker}`,
+    );
   }
 }
 function runGh(argv, timeoutMs = GH_TIMEOUT_MS) {
@@ -987,6 +1177,10 @@ function parseMinimizeArgs(argv) {
       apply: { type: 'boolean' },
       'allow-untrusted': { type: 'boolean' },
       'subject-ids': { type: 'string' },
+      issue: { type: 'string' },
+      repo: { type: 'string' },
+      'prior-claim-id': { type: 'string' },
+      'active-claim-id': { type: 'string' },
       classifier: { type: 'string', default: 'OUTDATED' },
       // '--trusted-marker-logins' is the one flag whose empty string is a
       // meaningful, accepted value (an explicit empty override in
@@ -1004,9 +1198,66 @@ function parseMinimizeArgs(argv) {
   // a genuinely missing value throws), but --subject-ids/--classifier/
   // --format never treated '' as meaningful -- reproduce that rejection
   // explicitly, matching the original `if (!value)` guards' exact message.
-  for (const flag of ['subject-ids', 'classifier', 'format']) {
+  for (const flag of [
+    'subject-ids',
+    'issue',
+    'repo',
+    'prior-claim-id',
+    'active-claim-id',
+    'classifier',
+    'format',
+  ]) {
     if (values[flag] === '') {
       throw new Error(`--${flag} requires a value`);
+    }
+  }
+  const takeoverFlags = [
+    values.issue,
+    values.repo,
+    values['prior-claim-id'],
+    values['active-claim-id'],
+  ];
+  const takeoverRequested = takeoverFlags.some((value) => value !== undefined);
+  let issue;
+  if (takeoverRequested && !values.help) {
+    if (
+      takeoverFlags.some((value) => value === undefined) ||
+      values['subject-ids'] !== undefined
+    ) {
+      throw new Error(
+        'takeover mode requires --issue, --repo, --prior-claim-id, and --active-claim-id, and cannot be combined with --subject-ids',
+      );
+    }
+    if (values['allow-untrusted']) {
+      throw new Error('--allow-untrusted is not allowed in takeover mode');
+    }
+    if (values.classifier !== 'OUTDATED') {
+      throw new Error('takeover mode only supports --classifier OUTDATED');
+    }
+    if (values['deadline-ms'] !== undefined) {
+      throw new Error('--deadline-ms is not allowed in takeover mode');
+    }
+    if (!/^[1-9]\d*$/.test(values.issue)) {
+      throw new Error('--issue must be a positive integer');
+    }
+    issue = Number(values.issue);
+    if (!Number.isSafeInteger(issue)) {
+      throw new Error('--issue must be a positive safe integer');
+    }
+    const repo = values.repo;
+    if (!/^[A-Za-z0-9-]+\/[A-Za-z0-9_.-]+$/.test(repo)) {
+      throw new Error('--repo must be in owner/repo form');
+    }
+    const priorClaimId = values['prior-claim-id'];
+    const activeClaimId = values['active-claim-id'];
+    if (/\s/.test(priorClaimId) || /\s/.test(activeClaimId)) {
+      throw new Error('claim IDs must not contain whitespace');
+    }
+    if (priorClaimId.toLowerCase() === 'none') {
+      throw new Error('--prior-claim-id must not be none');
+    }
+    if (priorClaimId === activeClaimId) {
+      throw new Error('--prior-claim-id and --active-claim-id must differ');
     }
   }
   // --deadline-ms is optional (undefined keeps runMinimize's pre-existing
@@ -1048,6 +1299,10 @@ function parseMinimizeArgs(argv) {
       .split(',')
       .map((id) => id.trim())
       .filter((id) => id.length > 0),
+    issue,
+    repo: values.repo,
+    priorClaimId: values['prior-claim-id'],
+    activeClaimId: values['active-claim-id'],
     classifier: values.classifier ?? 'OUTDATED',
     trustedMarkerLogins: values['trusted-marker-logins'] ?? '',
     apply: values.apply ?? false,
@@ -1058,7 +1313,7 @@ function parseMinimizeArgs(argv) {
   };
 }
 function printUsage() {
-  console.log(`Usage: minimize-superseded-markers --subject-ids <id1,id2,...> [--classifier OUTDATED|RESOLVED] [--trusted-marker-logins login1,login2] [--allow-untrusted] [--apply] [--format json|table] [--deadline-ms <milliseconds>]
+  console.log(`Usage: minimize-superseded-markers (--subject-ids <id1,id2,...> | --issue <number> --repo <owner/repo> --prior-claim-id <id> --active-claim-id <id>) [--classifier OUTDATED|RESOLVED] [--trusted-marker-logins login1,login2] [--allow-untrusted] [--apply] [--format json|table] [--deadline-ms <milliseconds>]
 
 The trusted-author gate is mandatory by default: supply trusted logins
 via --trusted-marker-logins, IDD_TRUSTED_MARKER_ACTORS, or the
@@ -1073,6 +1328,11 @@ IC_kwDOSWpaqs8AAAABIk9VAg), not REST numeric IDs (e.g. 4870591746).
 Convert a REST ID to its node ID first, using the command for the
 subject type:
 ${NODE_ID_CONVERSION_COMMANDS}
+
+Takeover mode selects displaced trusted claim markers by exact prior
+claim ID and requires the verified successor's active claim ID. It
+accepts only OUTDATED, disallows --allow-untrusted and --deadline-ms,
+and reports selected comments with marker kind and claim ID.
 
 --deadline-ms bounds the whole pass to an overall wall-clock budget
 (non-negative integer milliseconds); omit it to keep the default unbounded
