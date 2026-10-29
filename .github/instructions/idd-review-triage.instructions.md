@@ -227,9 +227,10 @@ Reply
   Clause: `urgency <level>; severity <tier>[, Copilot <label>]`, plus
   `; step <k>` above step 0. Read `converged` once per pass; if true,
   add one step ([wave gradient]). The agent reports adopt-now condition
-  (d) with `--adopt-now`, which turns a `defer` verdict into `keep`: (d)
-  another item in the same E5 pass is already Accepted (any severity),
-  so a push is certain, and this fix stays within that push's files.
+  (d) with `--adopt-now`, which turns a `defer` verdict into `keep` (see (d)
+  above). At or above `deferAllAfterRounds` Copilot reviews ([wave gradient]),
+  every unblocked scored finding but the safety class defers at any step,
+  and (d) and `--adopt-now` keep none; not with `--lite`.
 
 **Triage record.** With `triageRecord` on, before deciding each PATH A
 item run `resolve-review-thread --pr <n>` with `--tier`, `--urgency`,
@@ -284,11 +285,10 @@ reviewer feedback:
   file or line written as plain text (observed 2026-10-14 on PR `#4307`). When
   helper runtime is enabled, the profile-selected resolve-review-thread command
   (`--pr <number> --comment-id <id> --apply`, with
-  `--body`/`--claim-issue`/`--claim-id` or `--claimless`; see
-  `docs/idd-helper-scripts.md`) posts the reply and resolves in one call,
-  replying before resolving so a failed reply never leaves a silently-resolved
-  thread; the manual REST + GraphQL `resolveReviewThread` sequence is the
-  fallback.
+  `--body`/`--claim-issue`/`--claim-id` or `--claimless`, which a claimed issue
+  branch refuses; see `docs/idd-helper-scripts.md`) posts the reply and
+  resolves in one call, reply first, so a failed reply never leaves a
+  silently-resolved thread; the manual REST + GraphQL sequence is the fallback.
 - **Exception to immediate resolution**: for a review-thread AMD, leave
   it unresolved (do **NOT** resolve) so F2's "Unresolved threads = 0"
   gate blocks merge until the maintainer responds, and post a separate

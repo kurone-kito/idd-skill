@@ -1223,6 +1223,20 @@
       ]
     },
     {
+      "id": "review-fix-e11-current-branch",
+      "phase": "E11",
+      "standard": {
+        "file": "idd-template/.github/instructions/idd-review-fix.instructions.md",
+        "heading": "E11 — Sync with {development-branch} before every push",
+        "contains": "the branch is current: do not merge and continue to E12"
+      },
+      "lite": {
+        "file": "idd-template/.github/instructions/lite/idd-review-fix-lite.instructions.md",
+        "heading": "E11 — Sync with {development-branch} before every push",
+        "contains": "the branch is current: do not merge and continue to E12"
+      }
+    },
+    {
       "id": "validation-exit-status",
       "phase": "B3",
       "standard": {

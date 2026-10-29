@@ -141,6 +141,7 @@ script.
 ```sh
 node scripts/copilot-review-wave-audit.mjs --prs <n,n,...> [--format json|tsv]
 node scripts/copilot-review-wave-audit.mjs --limit <N> [--format json|tsv]
+node scripts/copilot-review-wave-audit.mjs --merged-from <YYYY-MM-DD> --merged-to <YYYY-MM-DD> [--format json|tsv]
 ```
 
 Given a set of merged PRs, the helper fetches each PR's reviews and
@@ -203,8 +204,8 @@ review comments (`gh api repos/{owner}/{repo}/pulls/{n}/reviews` and
   says `verdict defer`. Deferrals are not checked against their verdict,
   so a deferral whose text does not match the urgency matrix is not
   flagged. Threads with other or no dispositions are not counted.
-  `mergedAt` is the PR's merge time under `--limit` and `null` under
-  `--prs`.
+  `mergedAt` is the PR's merge time under `--limit` or a merge window,
+  and `null` under `--prs`.
 - **Finding locality** (`findingLocality` in the JSON output): each
   Copilot inline finding (a review comment from the `Copilot` login with
   no reply link) is placed relative to the previous push. Findings on
@@ -218,11 +219,56 @@ review comments (`gh api repos/{owner}/{repo}/pulls/{n}/reviews` and
   place: a `LEFT` side, a missing commit or patch, a failed compare
   lookup, or a compare response at GitHub's 300-file cap, which may hide
   a changed file.
+- **Review triggers** (`triggers`, each review's `trigger`, and the raw
+  REST review `commit_id` as `commitId` in JSON):
+  the first Copilot review is `first`; subsequent reviews are `sameHead`
+  when their commit IDs match, or are classified from the PR commits graph
+  as `newHead` when the new reachable commits include a one-parent commit,
+  or `mergeCommitHead` when every new reachable commit has at least two
+  parents. Missing commit IDs, a failed or incomplete commits lookup, a
+  review commit absent from the PR commits list, or an empty graph difference
+  yields `unknown`. The helper makes at most one paginated commits request
+  per PR and does not fetch commits individually.
+- **Approval follow-up** (`approvals` in JSON): labels each review whose
+  first matching ATX heading says `Approval recommended`, `Changes
+  recommended`, or `Needs a closer look` with verdict `approval`, `changes`,
+  or `closerLook`. It counts approvals and how many were followed by another
+  Copilot review, including `nextTrigger` counts for `sameHead`, `newHead`,
+  `mergeCommitHead`, and `unknown` (all keys are present when zero). `total`
+  includes terminal approvals; `followed` includes only approvals with a
+  later Copilot review. A missing heading or a legacy body has verdict
+  `null`; headings inside Markdown code regions are ignored.
+- **Generated and mirrored paths** (`findingPathClass` in JSON): counts each
+  Copilot inline finding as `generatedHelper` for a top-level
+  `scripts/*.mjs` or any `bin/**/*.mjs`, `syncMirror` for an exact/concreted
+  target in the repository's current `audit/sync-manifest.json`, `other` for
+  another named path, or `noPath` when GitHub supplied no path. The helper
+  reads the manifest once before making GitHub requests and exits 2 if it
+  cannot read or parse it.
+- **What-changed listings** (`whatChanged` in each review and in the cohort
+  summary): when a v2 or unparsed review has the exact
+  `What changed in this PR` details heading and a Markdown table, JSON records
+  its first-column paths plus the generated-helper and sync-mirror subsets.
+  Cohort `tables` counts parsed tables; `listingGeneratedHelper` and
+  `listingSyncMirror` count tables that list at least one path in that class.
+  This table reports the reviewer's listing and is not a review signal.
+- **Disposition by review count** (`dispositionsByReviewCount` in the cohort
+  summary): counts each finding thread's final disposition in the PR review
+  count buckets `1-2`, `3-4`, `5-9`, and `10+`, using the same five
+  dispositions (`deferred`, `rejected`, `accepted`, `other`, and `none`) as
+  `dispositionsBySeverity`.
+
+`syncMirror` and `syncMirrorPaths` use the manifest as it exists when the
+audit runs. A path that was mirrored when an older review was written but is
+no longer an exact/concreted target is reported as `other` today. These
+metrics describe the current classification rules and should not be read as
+historical repository state.
 
 ### Check mode
 
 ```sh
 node scripts/copilot-review-wave-audit.mjs --limit <N> --check [--since <YYYY-MM-DD>] [--min-recorded-share <n>]
+node scripts/copilot-review-wave-audit.mjs --merged-from <YYYY-MM-DD> --merged-to <YYYY-MM-DD> --check [--since <YYYY-MM-DD>] [--min-recorded-share <n>]
 ```
 
 `--check` still prints the report on stdout. Each failed check is written
@@ -233,9 +279,42 @@ malformed `Triage:` line, and a recorded-triage contradiction. With
 PRs merged on or after that UTC date is below `--min-recorded-share`
 (default `0.9`). A PR with no merge time is left out of that share, and a
 share is not checked when no thread in the window has a recorded or
-unrecorded disposition. `--since` needs `--check` and `--limit`, because
-`--prs` carries no merge dates. `--min-recorded-share` needs `--check` and
-`--since`. Misuse of either exits 2 before any `gh` call.
+unrecorded disposition. `--since` needs `--check` and either `--limit` or
+a merge window, because `--prs` carries no merge dates.
+`--min-recorded-share` needs `--check` and `--since`. Misuse of either
+exits 2 before any `gh` call.
+
+### Merge windows, failed pull requests, and step summaries
+
+Use `--merged-from <YYYY-MM-DD> --merged-to <YYYY-MM-DD>` to audit an
+inclusive UTC calendar-date window. Both flags are required together and
+are mutually exclusive with `--prs` and `--limit`. The helper queries a
+one-day-padded merged-date search range, filters the results by exact
+UTC merge timestamps, and sorts the selected pull requests newest first.
+If GitHub returns 1,000 candidates, the search may be incomplete, so the
+helper exits 2 and asks for a shorter window before auditing any pull
+request.
+
+The JSON report includes `failedPrs`, a list of `{ "pr": <number>,
+"message": <reason> }` entries for pull requests whose audit failed.
+Other pull requests still appear in `reports`, and the cohort `summary`
+covers those successful audits. The helper prints the report and writes
+the step summary before returning exit 1 for any non-empty `failedPrs`,
+even when `--check` passes.
+
+`--step-summary <path>` appends a `## Copilot review-wave audit`
+Markdown section to the given file. It records the selector, audited
+pull-request and review counts, failed count, review triggers, approval
+follow-ups, disposition counts by review-count bucket, what-changed
+tables, inline-finding path classes, and the triage check counts. The
+existing file is preserved. A write error exits 2 and takes precedence
+over `--check` and `failedPrs` results.
+
+`--baseline-reviews-per-pr <n>` accepts a positive decimal and adds the
+cohort's Copilot reviews per audited pull request and its ratio to that
+baseline. With zero audited pull requests both values are `n/a`; without
+the flag only reviews per pull request is shown. Invalid values exit 2
+before any `gh` call.
 
 ### Known limitation: a legacy listing carries no severity or thread data
 
@@ -277,3 +356,77 @@ merge and reproduces every figure exactly, with zero unparsed reviews:
 | Low-thread dispositions                             | Accepted 36 / Rejected 0 / None 3      |
 | All-Low-severity reviews followed by another review | 11 / 11                                |
 | "Previously missed" findings                        | 41 (Low 29 / Medium 12 / High 0)       |
+
+### 2026-10 baseline
+
+Reproducing command:
+
+```sh
+node scripts/copilot-review-wave-audit.mjs --merged-from 2026-10-01 --merged-to 2026-10-26
+```
+
+Run on 2026-10-27. The audit covered 458 pull requests, from
+pull request `#3648` through pull request `#4740`, and counted 1,790
+Copilot reviews, or 3.908296943231441 reviews per pull request. It
+includes all Copilot review pages for pull requests merged in the
+window, unlike the throwaway October measurement, which read at most
+100 reviews per pull request and therefore reported lower bounds. The
+`failedPrs` list was empty. One unparsed Copilot review was counted on
+pull request `#3782`, merged 2026-10-08.
+
+| Metric                      | Value                                                                                            |
+| --------------------------- | ------------------------------------------------------------------------------------------------ |
+| Copilot reviews             | 1,790 total: v2 1,781; legacy 8; unparsed 1                                                      |
+| Reviews per pull request    | 3.908296943231441                                                                                |
+| Review triggers             | first 457; same-head 6; new-head 1,295; merge-commit-head 30; unknown 2                          |
+| Approvals                   | total 391; followed 121; next trigger: same-head 1; new-head 115; merge-commit-head 3; unknown 2 |
+| What-changed tables         | 457; listing generated helpers 255; listing sync mirrors 262                                     |
+| Inline finding path classes | generated helper 57; sync mirror 109; other 1,449; no path 0                                     |
+| Triage                      | recorded 223; unrecorded 1,305; malformed 0; contradictions 27                                   |
+
+#### Copilot reviewer runs
+
+This separate measurement counts the runs created by the dynamic
+`dynamic/agents/copilot-pull-request-reviewer` workflow during the UTC
+date range; it does not count review runs belonging to the pull requests
+merged in that range. The workflow's `pull_requests` field was empty
+on 1,795 of the 1,821 October runs, while `head_branch` was present
+on every run, so this mode reports head-branch counts instead of assigning
+runs to PRs. This limitation was measured for
+[issue #4753](https://github.com/kurone-kito/idd-skill/issues/4753).
+
+The run list has no duration field. This mode uses
+`updated_at - run_started_at`; on 25 runs from 2026-10-20, that
+matched `run_duration_ms` from
+`actions/runs/<id>/timing` to the second, without one timing request
+per run. Run duration is a cost proxy: the closest cost-side measure
+available to the workflow's `GITHUB_TOKEN`. GitHub reports no
+billable Actions time for this public repository, and does not document
+whether run duration tracks model usage.
+
+The workflow runs endpoint caps a `created` filter at 1,000 results.
+The helper therefore queries one UTC day at a time with
+`per_page=100` and pagination, and fails closed when a day's
+`total_count` reaches 1,000 rather than publish a truncated result.
+
+| Measurement                 | Value                                                                                                      |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| Command                     | `node scripts/copilot-review-wave-audit.mjs --reviewer-runs-from 2026-10-01 --reviewer-runs-to 2026-10-26` |
+| Run date                    | 2026-10-28                                                                                                 |
+| Run window (UTC, inclusive) | 2026-10-01 through 2026-10-26                                                                              |
+| Workflow                    | `dynamic/agents/copilot-pull-request-reviewer` (283812949)                                                 |
+| Runs / completed            | 1,821 / 1,821                                                                                              |
+| Conclusions                 | success 1,814; failure 3; cancelled 4; other 0                                                             |
+| Total duration              | 467,662,000 ms (129.9 hours)                                                                               |
+| Median duration             | 247,000 ms (247 seconds)                                                                                   |
+| Distinct head branches      | 463                                                                                                        |
+| Median runs per head branch | 2                                                                                                          |
+
+Dispositions by PR review-count bucket:
+
+| Reviews per PR | Deferred | Rejected | Accepted | Other | None |
+| -------------- | -------: | -------: | -------: | ----: | ---: |
+| 1–2            |        5 |       35 |      133 |     0 |    7 |
+| 3–4            |        3 |       17 |      193 |     0 |    2 |
+| 5–9            |        4 |       43 |      296 |     0 |   21 |
+| 10+            |        3 |       55 |      741 |     4 |   47 |

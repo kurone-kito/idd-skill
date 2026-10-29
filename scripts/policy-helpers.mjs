@@ -618,6 +618,17 @@ export function normalizePolicyConfig(config) {
   if (critiqueLoopDelegate) {
     critiqueLoop.delegate = critiqueLoopDelegate;
   }
+  // #4750: the review-count cap is off unless the raw value is an integer of
+  // at least 1. Any other value leaves the own property out, the same shape
+  // `critiqueLoop.delegate` uses above.
+  const rawDeferAllAfterRounds = c?.critiqueLoop?.deferAllAfterRounds;
+  if (
+    typeof rawDeferAllAfterRounds === 'number' &&
+    Number.isInteger(rawDeferAllAfterRounds) &&
+    rawDeferAllAfterRounds >= 1
+  ) {
+    critiqueLoop.deferAllAfterRounds = rawDeferAllAfterRounds;
+  }
   // #2320: `declarationTarget` is a positive integer issue number, or
   // absent -- absence disables the outage-relief declaration path
   // entirely rather than falling back to some issue number. Same
@@ -2097,8 +2108,9 @@ function severityTieredDefers(eligibility, urgency, step) {
  * only raises eligibility. `low` and `low-and-medium` do not: they need
  * a known E4 tier, and the floor never stands in for it. `relaxStep` and
  * `safetyClass` apply to `severity-tiered` only (#3796): from step 1 a
- * safety-class finding never defers, and each step raises the highest
- * urgency a tier may defer at; the other modes ignore both.
+ * safety-class finding never defers (nor, once the cap is reached, at any
+ * step), and each step raises the highest urgency a tier may defer at; the
+ * other modes ignore both.
  */
 export function decideUrgencyDefer(input) {
   if (input.mode === 'off') {
@@ -2124,12 +2136,16 @@ export function decideUrgencyDefer(input) {
   if (input.mode === 'severity-tiered') {
     const eligibility = higherSeverity(e4 ?? 'medium', copilot) ?? 'medium';
     const step = normalizeRelaxStep(input.relaxStep);
-    if (step >= 1 && input.safetyClass === true) {
+    const capReached = input.capReached === true;
+    if ((step >= 1 || capReached) && input.safetyClass === true) {
       return denyUrgencyDefer('safety-class', eligibility);
     }
     const urgency = knownUrgency(input.urgency);
     if (urgency === null) {
       return denyUrgencyDefer('unknown-urgency', eligibility);
+    }
+    if (capReached) {
+      return { defer: true, eligibility, blockedBy: null };
     }
     if (!severityTieredDefers(eligibility, urgency, step)) {
       return denyUrgencyDefer('matrix', eligibility);

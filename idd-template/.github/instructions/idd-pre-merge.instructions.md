@@ -101,13 +101,12 @@ kurone-kito/idd-skill#1529). Omitting `--nonce` silently skips the
 merge-time comparison rather than failing closed, so pass it whenever a
 nonce was recorded for the active claim.
 
-**No claimed issue**: the readiness collector requires
-`--claim-issue <issue-number>` (with `--claim-id`) or `--claimless`
-(#2017) — pass `--claimless` for a PR with no linked issue
-(`closingIssuesReferences` empty) or a valid `reason:bootstrap`
-out-of-loop marker; it cannot combine with `--claim-issue`/`--claim-id`,
-and otherwise fails closed on a non-empty `closingIssuesReferences`. See
-[docs/idd-helper-scripts.md's Readiness command](../../docs/idd-helper-scripts.md).
+**Claim identity with empty references**: an active claimed PR targeting a
+non-default branch can have empty `closingIssuesReferences` (#4697). Always
+pass an active claim's `--claim-issue`, `--claim-id`, and recorded `--nonce`,
+regardless of that field. Use `--claimless` (#2017) only for a verified
+no-claim PR (no-issue or qualified bootstrap); it skips claim revalidation.
+See the [Readiness command](../../docs/idd-helper-scripts.md).
 
 **Multi-issue close**: pass `--closing-issues <n>,<m>` (D3) with the
 full set (else a `closing-set` mismatch).
@@ -446,17 +445,17 @@ is diagnostic and never changes the verdict.
   comments, or any later IDD-agent body for a human comment) and
   `missingThreads` (any review thread still lacking a clearing reply)
   are empty). Evaluation splits by origin: a **human-authored** thread
-  whose latest item is unmarked human prose is presence-only and is
-  not `unresolved-without-fresh-disposition` solely for lacking
-  `**Accepted**`; a **Copilot / configured-advisory-bot** thread still
+  with no IDD-originated reply is presence-only and is not
+  `unresolved-without-fresh-disposition` solely for lacking
+  `**Accepted**`; later human feedback after an IDD reply needs a fresh
+  disposition; a **Copilot / configured-advisory-bot** thread still
   needs a stamped or legacy trusted IDD disposition (or resolution for
   Clause 2). An unmarked human `ok` must not clear those advisory
-  threads. The `advisory-convergence.mjs --assert` check above only
-  enforces the _unresolved_ Copilot-authored subset of `missingThreads`
-  (resolution alone satisfies its own Clause 2 without a fresh
-  disposition); it never covers a non-Copilot thread or any
-  `missingRegularComments` entry, so this check stays necessary even
-  when that one passes. Treat
+  threads. That `--assert` check only enforces the _unresolved_
+  Copilot-authored subset of `missingThreads` (resolution alone satisfies
+  its own Clause 2 without a fresh disposition); it never covers a
+  non-Copilot thread or any `missingRegularComments` entry, so this check
+  stays necessary even when that one passes. Treat
   a missing or malformed `dispositionEvidence` object, or a non-list
   `missingRegularComments`/`missingThreads`, as unmet, never vacuously
   satisfied. A `route: return-to-e1` result routes to E1/E4 with that

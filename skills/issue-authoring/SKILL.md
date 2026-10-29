@@ -119,7 +119,8 @@ needs-decision, blocked-by-human, and out-of-scope.
    `issueAuthoring.adversarialReview.waitCeiling`
    (default `PT20M`) using the caller's own wait and cleanup, and do
    not wrap the command in a timeout utility. Dispose of every finding.
-   Keep a findings ledger in the session scratchpad, never in the
+   Keep a findings ledger in the namespace allocated under
+   [Findings ledger storage](#findings-ledger-storage), never in the
    repository, and send each `rejected` finding that has evidence as a
    `previously rejected:` string in the packet's `evidence` array
    ([carry-forward rule](references/contract.md#carry-forward-of-rejected-findings)).
@@ -273,10 +274,14 @@ needs-decision, blocked-by-human, and out-of-scope.
      Append `abandoned` only after closed/label-absent verification. On
      resume, paginate the hold log and select the latest valid record for the
      exact token tuple; missing, conflicting, or out-of-order records fail
-     closed, while `pending` and `cleanup` remain recovery holds.
+     closed, while `pending` and `cleanup` remain recovery holds. When the
+     originating hold is in a retired journal (listed in
+     `issueAuthoring.retiredJournalIssues`), paginate `journalIssue` and every
+     listed retired journal and merge the records in time order first.
 
      `journal` is the durable record location. For an existing set, use the
-     verified originating Stage 1 hold; for a standalone set with no existing
+     verified originating Stage 1 hold, or `issueAuthoring.journalIssue` when
+     that hold is in a retired journal; for a standalone set with no existing
      issue or anchor, use the repository-level authoring journal target
      configured at `issueAuthoring.journalIssue` in `.github/idd/config.json`
      (an `owner/repo#number` reference to a pre-existing, durable,
@@ -313,8 +318,10 @@ needs-decision, blocked-by-human, and out-of-scope.
      labels, body, and owner comments before treating it as a set member
    - an atomically labeled publication is not set membership until its owner
      marker is verified; persist each returned target identity in the journal
-     before appending the marker. On resume, reconcile
-     recorded identities and only issues carrying this set's exact publication
+     before appending the marker; when the set's originating hold is in a
+     retired journal, persist it in `issueAuthoring.journalIssue` instead. On
+     resume, reconcile recorded identities and only issues carrying this set's
+     exact publication
      token; an incomplete scan or unmarked match is a recovery hold, so never
      infer membership or completion from the shared label alone
    - if owner-marker append or verification is uncertain for a new issue,
@@ -401,6 +408,30 @@ needs-decision, blocked-by-human, and out-of-scope.
    A released `review-needs-decision` follow-up remains out of Discover
    while the label configured as `labels.needsDecisionLabelName` is
    present (default: `status:needs-decision`).
+
+## Findings ledger storage
+
+Before the first ledger write, read
+[Ledger storage](references/contract.md#ledger-storage) and follow it. In brief:
+use a supplied scratch root only if it passes its checks; if a supplied root
+fails, stop without trying another root. When no root is supplied, allocate a
+new `issue-authoring-<uuid>` directory with exclusive creation (a non-recursive
+`mkdir`, never `mkdir -p`) in the OS temporary directory, or in the user state
+directory if it already exists, outside every worktree and git directory,
+including mount aliases verified by native filesystem evidence. Keep one
+owner-only `<uuid>.json` ledger per draft, created with exclusive creation;
+rename it to the issue number without overwriting another file. Never share a
+ledger or write one to the repository or a marker, and never reuse another
+session's namespace. A lost ledger starts empty. Unsafe, conflicting, or unreadable
+storage stops the review: report the path and preserve unverified entries; the
+contract permits cleanup only for entries this session created whose identity
+still matches. Send the drafts to a carrier marked `Review: not reviewed`.
+Resolve every root path component without following links, and require each
+ledger read, write, copy, replacement, and unlink to hold the namespace's
+verified exclusive lock while rechecking ownership and hashes. Fail closed if
+the complete path or lock cannot be verified.
+Instructions-only and same-response self-critique runs follow the same
+procedure; no orchestrator, environment variable, or helper is needed.
 
 ## Reference Routing
 

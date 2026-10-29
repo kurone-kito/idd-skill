@@ -1,6 +1,14 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -1721,10 +1729,12 @@ test('summarizeCohort triage: sums the per-PR triage objects key by key', () => 
   assert.equal(summary.triage.byStep['2'].urgency.medium, 1);
 });
 
-test('computePrAudit: report keys are the existing fields plus triage, findingLocality, and mergedAt', () => {
+test('computePrAudit: report keys include the trigger and generated-path metrics', () => {
   const report = computePrAudit(1, [], []);
   assert.deepEqual(Object.keys(report).sort(), [
+    'approvals',
     'findingLocality',
+    'findingPathClass',
     'legacyCount',
     'mergedAt',
     'openAppearances',
@@ -1735,10 +1745,350 @@ test('computePrAudit: report keys are the existing fields plus triage, findingLo
     'threads',
     'transitions',
     'triage',
+    'triggers',
     'unparsedCount',
     'v2Count',
   ]);
   assert.equal(report.mergedAt, null);
+});
+
+test('review triggers classify the graph delta without depending on commit-list order', () => {
+  const reviews: RawReview[] = [
+    {
+      ...review(1, '2026-01-01T00:00:00Z', NO_FINDINGS_FIXTURE),
+      commitId: 'a',
+    },
+    {
+      ...review(2, '2026-01-02T00:00:00Z', NO_FINDINGS_FIXTURE),
+      commitId: 'a',
+    },
+    {
+      ...review(3, '2026-01-03T00:00:00Z', NO_FINDINGS_FIXTURE),
+      commitId: 'b',
+    },
+    {
+      ...review(4, '2026-01-04T00:00:00Z', NO_FINDINGS_FIXTURE),
+      commitId: 'c',
+    },
+    {
+      ...review(5, '2026-01-05T00:00:00Z', NO_FINDINGS_FIXTURE),
+      commitId: 'x',
+    },
+    {
+      ...review(6, '2026-01-06T00:00:00Z', NO_FINDINGS_FIXTURE),
+      commitId: null,
+    },
+  ];
+  const commitParents = new Map<string, readonly string[]>([
+    ['a', []],
+    ['b', ['a']],
+    ['c', ['b', 'outside']],
+    ['e', ['c']],
+    ['d', ['e', 'outside']],
+  ]);
+  const report = computePrAudit(1, reviews, [], new Map(), commitParents);
+  assert.deepEqual(
+    report.reviews.map((entry) => entry.trigger),
+    ['first', 'sameHead', 'newHead', 'mergeCommitHead', 'unknown', 'unknown'],
+  );
+  assert.deepEqual(report.triggers, {
+    first: 1,
+    sameHead: 1,
+    newHead: 1,
+    mergeCommitHead: 1,
+    unknown: 2,
+  });
+  assert.equal(
+    Object.values(report.triggers).reduce((sum, count) => sum + count, 0),
+    report.reviewCount,
+  );
+  const afterMerge = computePrAudit(
+    2,
+    [
+      {
+        ...review(4, '2026-01-04T00:00:00Z', NO_FINDINGS_FIXTURE),
+        commitId: 'c',
+      },
+      {
+        ...review(7, '2026-01-07T00:00:00Z', NO_FINDINGS_FIXTURE),
+        commitId: 'd',
+      },
+    ],
+    [],
+    new Map(),
+    commitParents,
+  );
+  assert.equal(afterMerge.reviews[1]?.trigger, 'newHead');
+});
+
+test('missing and empty commit IDs stay unknown rather than matching as the same head', () => {
+  const report = computePrAudit(
+    1,
+    [
+      {
+        ...review(1, '2026-01-01T00:00:00Z', NO_FINDINGS_FIXTURE),
+        commitId: 'a',
+      },
+      {
+        ...review(2, '2026-01-02T00:00:00Z', NO_FINDINGS_FIXTURE),
+        commitId: null,
+      },
+      {
+        ...review(3, '2026-01-03T00:00:00Z', NO_FINDINGS_FIXTURE),
+        commitId: '',
+      },
+      {
+        ...review(4, '2026-01-04T00:00:00Z', NO_FINDINGS_FIXTURE),
+        commitId: '',
+      },
+      review(5, '2026-01-05T00:00:00Z', NO_FINDINGS_FIXTURE),
+    ],
+    [],
+  );
+  assert.deepEqual(
+    report.reviews.map((entry) => entry.trigger),
+    ['first', 'unknown', 'unknown', 'unknown', 'unknown'],
+  );
+});
+
+test('review verdict ignores code regions and aliases, keeps legacy null, and reads unparsed marker bodies', () => {
+  const unparsedApproval = OPEN_WITH_NEW_FIXTURE.replace(
+    '### 🟡 Changes recommended',
+    '### 🟢 Approval recommended',
+  ).replace(openLine('Medium', 4083347840, true), '');
+  const fencedApproval = `<!-- ccr-overview-v2 -->\n\`\`\`md\n### 🟢 Approval recommended\n\`\`\`\n`;
+  const report = computePrAudit(
+    1,
+    [
+      review(1, '2026-01-01T00:00:00Z', NO_FINDINGS_FIXTURE),
+      review(2, '2026-01-02T00:00:00Z', NEW_FORMAT_FIXTURE),
+      review(3, '2026-01-03T00:00:00Z', NO_OPEN_ISSUES_FIXTURE),
+      review(4, '2026-01-04T00:00:00Z', fencedApproval),
+      review(5, '2026-01-05T00:00:00Z', LEGACY_FIXTURE),
+      review(6, '2026-01-06T00:00:00Z', unparsedApproval),
+      review(
+        7,
+        '2026-01-07T00:00:00Z',
+        NEW_FORMAT_FIXTURE.replace(
+          '### 🟡 Changes recommended',
+          '### Changes requested',
+        ),
+      ),
+      review(
+        8,
+        '2026-01-08T00:00:00Z',
+        NO_FINDINGS_FIXTURE.replace(
+          '### 🟢 Approval recommended',
+          '### Closer look recommended',
+        ),
+      ),
+      review(
+        9,
+        '2026-01-09T00:00:00Z',
+        NO_FINDINGS_FIXTURE.replace(
+          '### 🟢 Approval recommended',
+          '### Closer look',
+        ),
+      ),
+    ],
+    [],
+  );
+  assert.deepEqual(
+    report.reviews.map((entry) => entry.verdict),
+    [
+      'approval',
+      'changes',
+      'closerLook',
+      null,
+      null,
+      'approval',
+      null,
+      null,
+      null,
+    ],
+  );
+  assert.equal(report.reviews[5]?.kind, 'unparsed');
+});
+
+test('approval audit records whether another review followed and its trigger', () => {
+  const reviews: RawReview[] = [
+    {
+      ...review(1, '2026-01-01T00:00:00Z', NO_FINDINGS_FIXTURE),
+      commitId: 'a',
+    },
+    { ...review(2, '2026-01-02T00:00:00Z', NEW_FORMAT_FIXTURE), commitId: 'b' },
+  ];
+  const report = computePrAudit(
+    1,
+    reviews,
+    [],
+    new Map(),
+    new Map<string, readonly string[]>([
+      ['a', []],
+      ['b', ['a']],
+    ]),
+  );
+  assert.deepEqual(report.approvals, {
+    total: 1,
+    followed: 1,
+    nextTrigger: { sameHead: 0, newHead: 1, mergeCommitHead: 0, unknown: 0 },
+  });
+  const lastApproval = computePrAudit(
+    2,
+    [review(3, '2026-01-03T00:00:00Z', NO_FINDINGS_FIXTURE)],
+    [],
+  );
+  assert.deepEqual(lastApproval.approvals, {
+    total: 1,
+    followed: 0,
+    nextTrigger: { sameHead: 0, newHead: 0, mergeCommitHead: 0, unknown: 0 },
+  });
+});
+
+test('What changed table paths normalize line endings, code spans, and zero-width characters', () => {
+  const body = [
+    '<!-- ccr-overview-v2 -->',
+    '### 🟢 Approval recommended',
+    '**0 open findings**',
+    '',
+    '<details>',
+    '<summary><strong>What changed in this PR</strong></summary>',
+    '',
+    '| Path |',
+    '| --- |',
+    '| `scripts/copilot-review-wave-audit.mjs` |',
+    '| `.github/\u200Binstructions/\u200Bidd-ci.instructions.md` |',
+    '</details>',
+  ].join('\r\n');
+  const report = computePrAudit(
+    1,
+    [review(1, '2026-01-01T00:00:00Z', body)],
+    [],
+    new Map(),
+    new Map(),
+    new Set(['.github/instructions/idd-ci.instructions.md']),
+  );
+  assert.deepEqual(report.reviews[0]?.whatChanged, {
+    paths: [
+      'scripts/copilot-review-wave-audit.mjs',
+      '.github/instructions/idd-ci.instructions.md',
+    ],
+    generatedHelperPaths: ['scripts/copilot-review-wave-audit.mjs'],
+    syncMirrorPaths: ['.github/instructions/idd-ci.instructions.md'],
+  });
+  const mirrorReport = computePrAudit(
+    2,
+    [review(2, '2026-01-02T00:00:00Z', body)],
+    [],
+    new Map(),
+    new Map(),
+    new Set(['.github/instructions/idd-ci.instructions.md']),
+  );
+  assert.deepEqual(mirrorReport.reviews[0]?.whatChanged?.syncMirrorPaths, [
+    '.github/instructions/idd-ci.instructions.md',
+  ]);
+  assert.equal(
+    computePrAudit(
+      3,
+      [review(3, '2026-01-03T00:00:00Z', NO_FINDINGS_FIXTURE)],
+      [],
+    ).reviews[0]?.whatChanged,
+    null,
+  );
+  const realBodyReport = computePrAudit(
+    4,
+    [review(4, '2026-01-04T00:00:00Z', REAL_CRLF_FIXTURE)],
+    [],
+  );
+  assert.deepEqual(realBodyReport.reviews[0]?.whatChanged?.paths, [
+    'tests/merged-pr-feedback-sweep.test.mts',
+    'src/scripts/merged-pr-feedback-sweep.mts',
+    'scripts/merged-pr-feedback-sweep.mjs',
+  ]);
+  assert.deepEqual(
+    realBodyReport.reviews[0]?.whatChanged?.generatedHelperPaths,
+    ['scripts/merged-pr-feedback-sweep.mjs'],
+  );
+  const realSummary = summarizeCohort([realBodyReport]);
+  assert.deepEqual(realSummary.whatChanged, {
+    tables: 1,
+    listingGeneratedHelper: 1,
+    listingSyncMirror: 0,
+  });
+  assert.deepEqual(summarizeCohort([mirrorReport]).whatChanged, {
+    tables: 1,
+    listingGeneratedHelper: 1,
+    listingSyncMirror: 1,
+  });
+});
+
+test('findingPathClass partitions inline Copilot findings by generated, mirror, other, and absent paths', () => {
+  const comments = [
+    inlineFinding(1, 99, 'scripts/audit.mjs', 1),
+    inlineFinding(2, 99, 'bin/nested/helper.mjs', 1),
+    inlineFinding(3, 99, 'docs/mirror.md', 1),
+    inlineFinding(4, 99, 'src/main.mts', 1),
+    inlineFinding(5, 99, null, 1),
+  ];
+  const report = computePrAudit(
+    1,
+    [review(99, '2026-01-01T00:00:00Z', NO_FINDINGS_FIXTURE)],
+    comments,
+    new Map(),
+    new Map(),
+    new Set(['docs/mirror.md']),
+  );
+  assert.deepEqual(report.findingPathClass, {
+    generatedHelper: 2,
+    syncMirror: 1,
+    other: 1,
+    noPath: 1,
+  });
+});
+
+test('summarizeCohort groups dispositions by the PR review-count bucket', () => {
+  const reports = [1, 3, 5, 10].map((reviewCount, index) => {
+    const reviews = Array.from({ length: reviewCount }, (_, reviewIndex) =>
+      review(
+        reviewIndex + 1,
+        `2026-01-${String(reviewIndex + 1).padStart(2, '0')}T00:00:00Z`,
+        reviewIndex === 0
+          ? openReviewBody([openLine('Medium', 9100 + index)])
+          : '',
+      ),
+    );
+    return computePrAudit(index + 1, reviews, []);
+  });
+  const summary = summarizeCohort(reports);
+  assert.deepEqual(summary.dispositionsByReviewCount, {
+    '1-2': { deferred: 0, rejected: 0, accepted: 0, other: 0, none: 1 },
+    '3-4': { deferred: 0, rejected: 0, accepted: 0, other: 0, none: 1 },
+    '5-9': { deferred: 0, rejected: 0, accepted: 0, other: 0, none: 1 },
+    '10+': { deferred: 0, rejected: 0, accepted: 0, other: 0, none: 1 },
+  });
+  assert.deepEqual(summary.triggers, {
+    first: 4,
+    sameHead: 0,
+    newHead: 0,
+    mergeCommitHead: 0,
+    unknown: 15,
+  });
+  assert.deepEqual(summary.approvals, {
+    total: 0,
+    followed: 0,
+    nextTrigger: { sameHead: 0, newHead: 0, mergeCommitHead: 0, unknown: 0 },
+  });
+  assert.deepEqual(summary.findingPathClass, {
+    generatedHelper: 0,
+    syncMirror: 0,
+    other: 0,
+    noPath: 0,
+  });
+  assert.deepEqual(summary.whatChanged, {
+    tables: 0,
+    listingGeneratedHelper: 0,
+    listingSyncMirror: 0,
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -2289,6 +2639,10 @@ test('CLI: --help lists the check-mode flags', () => {
   assert.match(output, /--check/);
   assert.match(output, /--since <YYYY-MM-DD>/);
   assert.match(output, /--min-recorded-share <n>/);
+  assert.match(output, /--merged-from <YYYY-MM-DD>/);
+  assert.match(output, /--merged-to <YYYY-MM-DD>/);
+  assert.match(output, /--baseline-reviews-per-pr <n>/);
+  assert.match(output, /--step-summary <path>/);
 });
 
 // A gh stub that answers the three calls auditPr makes from one JSON fixture
@@ -2297,17 +2651,67 @@ test('CLI: --help lists the check-mode flags', () => {
 const GH_FIXTURE_STUB = `const fs = require('node:fs');
 const args = process.argv.slice(2);
 const fixture = JSON.parse(fs.readFileSync(process.env.WAVE_AUDIT_FIXTURE, 'utf8'));
+if (args[0] === 'api') fs.appendFileSync(process.env.WAVE_AUDIT_CALLS, String(args[1]) + '\\n');
+if (args[0] === 'api' && args[1] === 'repos/kurone-kito/idd-skill/actions/workflows') {
+  if (!args.includes('--paginate') || args[args.indexOf('--jq') + 1] !== '.workflows[]') {
+    process.stderr.write('workflow list must be paginated with the workflow selector\\n');
+    process.exit(1);
+  }
+  if (fixture.failReviewerWorkflowList) {
+    process.stderr.write(fixture.failReviewerWorkflowList + '\\n');
+    process.exit(1);
+  }
+  for (const workflow of fixture.reviewerWorkflows ?? []) {
+    process.stdout.write(JSON.stringify(workflow) + '\\n');
+  }
+  process.exit(0);
+}
+if (args[0] === 'api' && String(args[1]).includes('/actions/workflows/') && String(args[1]).includes('/runs?created=')) {
+  const runPath = String(args[1]);
+  const day = runPath.match(/[?&]created=(\\d{4}-\\d{2}-\\d{2})/)?.[1] ?? '';
+  if (!args.includes('--paginate') || args[args.indexOf('--jq') + 1] !== '.total_count, .workflow_runs[]') {
+    process.stderr.write('reviewer run list must be paginated with the run selector\\n');
+    process.exit(1);
+  }
+  const failure = fixture.failReviewerRunsByDay?.[day];
+  if (failure) {
+    process.stderr.write(failure + '\\n');
+    process.exit(1);
+  }
+  const runs = fixture.reviewerRunsByDay?.[day] ?? [];
+  const totalCount = fixture.reviewerRunCountsByDay?.[day] ?? runs.length;
+  process.stdout.write(String(totalCount) + '\\n');
+  for (const run of runs) process.stdout.write(JSON.stringify(run) + '\\n');
+  process.exit(0);
+}
 if (args[0] === 'api' && args[1] === 'graphql') {
   const ids = args.filter((a) => a.startsWith('ids[]=')).map((a) => a.slice('ids[]='.length));
   process.stdout.write(JSON.stringify({ data: { nodes: ids.map((id) => ({ id, lastEditedAt: null })) } }));
   process.exit(0);
 }
-if (args[0] === 'api' && String(args[1]).includes('/pulls/42/reviews')) {
-  for (const r of fixture.reviews) process.stdout.write(JSON.stringify(r) + '\\n');
+if (args[0] === 'api' && String(args[1]).includes('/pulls/') && String(args[1]).includes('/reviews')) {
+  const pr = String(args[1]).match(/\\/pulls\\/(\\d+)\\//)?.[1] ?? '';
+  const failure = fixture.failReviewsByPr?.[pr];
+  if (failure) {
+    process.stderr.write(failure + '\\n');
+    process.exit(1);
+  }
+  const reviews = fixture.reviewsByPr?.[pr] ?? (pr === '42' ? fixture.reviews : []);
+  for (const r of reviews) process.stdout.write(JSON.stringify(r) + '\\n');
   process.exit(0);
 }
-if (args[0] === 'api' && String(args[1]).includes('/pulls/42/comments')) {
-  for (const c of fixture.comments) process.stdout.write(JSON.stringify(c) + '\\n');
+if (args[0] === 'api' && String(args[1]).includes('/pulls/42/commits')) {
+  if (fixture.failCommits) {
+    process.stderr.write('commit list unavailable\\n');
+    process.exit(1);
+  }
+  for (const c of fixture.commits ?? []) process.stdout.write(JSON.stringify(c) + '\\n');
+  process.exit(0);
+}
+if (args[0] === 'api' && String(args[1]).includes('/pulls/') && String(args[1]).includes('/comments')) {
+  const pr = String(args[1]).match(/\\/pulls\\/(\\d+)\\//)?.[1] ?? '';
+  const comments = fixture.commentsByPr?.[pr] ?? (pr === '42' ? fixture.comments : []);
+  for (const c of comments) process.stdout.write(JSON.stringify(c) + '\\n');
   process.exit(0);
 }
 if (args[0] === 'api' && String(args[1]).includes('/compare/')) {
@@ -2321,6 +2725,7 @@ if (args[0] === 'api' && String(args[1]).includes('/compare/')) {
   process.exit(0);
 }
 if (args[0] === 'pr' && args[1] === 'list') {
+  fs.appendFileSync(process.env.WAVE_AUDIT_CALLS, 'pr list ' + args.slice(2).join(' ') + '\\n');
   // Pin the flags the CLI must send, so the stub cannot pass for wrong ones.
   const flagAt = (flag) => {
     const at = args.indexOf(flag);
@@ -2345,14 +2750,21 @@ function runCheckWithFixture(
     reviews: unknown[];
     comments: unknown[];
     prs?: unknown[];
+    reviewsByPr?: Record<string, unknown[]>;
+    commentsByPr?: Record<string, unknown[]>;
+    failReviewsByPr?: Record<string, string>;
     compare?: Record<string, unknown>;
+    commits?: unknown[];
+    failCommits?: boolean;
   },
   extraArgs: string[],
   selector: string[] = ['--prs', '42'],
-): { status: number | null; stdout: string; stderr: string } {
+): { status: number | null; stdout: string; stderr: string; calls: string[] } {
   const dir = mkdtempSync(join(tmpdir(), 'idd-wave-audit-check-'));
   const fixturePath = join(dir, 'fixture.json');
+  const callsPath = join(dir, 'calls.txt');
   writeFileSync(fixturePath, JSON.stringify(fixture));
+  writeFileSync(callsPath, '');
   const restore = stubExecutable('gh', GH_FIXTURE_STUB);
   try {
     const result = spawnSync(
@@ -2360,19 +2772,497 @@ function runCheckWithFixture(
       [CLI_PATH, '--repo', 'kurone-kito/idd-skill', ...selector, ...extraArgs],
       {
         encoding: 'utf8',
-        env: { ...process.env, WAVE_AUDIT_FIXTURE: fixturePath },
+        env: {
+          ...process.env,
+          WAVE_AUDIT_FIXTURE: fixturePath,
+          WAVE_AUDIT_CALLS: callsPath,
+        },
       },
     );
     return {
       status: result.status,
       stdout: result.stdout,
       stderr: result.stderr,
+      calls: readFileSync(callsPath, 'utf8').trim().split('\n').filter(Boolean),
     };
   } finally {
     restore();
     rmSync(dir, { recursive: true, force: true });
   }
 }
+
+function runReviewerRunsWithFixture(
+  fixture: {
+    reviewerWorkflows?: Array<{ id: number; path: string }>;
+    reviewerRunsByDay?: Record<string, unknown[]>;
+    reviewerRunCountsByDay?: Record<string, number>;
+    failReviewerWorkflowList?: string;
+    failReviewerRunsByDay?: Record<string, string>;
+  },
+  args: string[],
+): { status: number | null; stdout: string; stderr: string; calls: string[] } {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-wave-audit-reviewer-runs-'));
+  const fixturePath = join(dir, 'fixture.json');
+  const callsPath = join(dir, 'calls.txt');
+  writeFileSync(fixturePath, JSON.stringify(fixture));
+  writeFileSync(callsPath, '');
+  const restore = stubExecutable('gh', GH_FIXTURE_STUB);
+  try {
+    const result = spawnSync(
+      process.execPath,
+      [CLI_PATH, '--repo', 'kurone-kito/idd-skill', ...args],
+      {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          WAVE_AUDIT_FIXTURE: fixturePath,
+          WAVE_AUDIT_CALLS: callsPath,
+        },
+      },
+    );
+    return {
+      status: result.status,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      calls: readFileSync(callsPath, 'utf8').trim().split('\n').filter(Boolean),
+    };
+  } finally {
+    restore();
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const REVIEWER_WORKFLOW_FIXTURE = {
+  id: 283812949,
+  path: 'dynamic/agents/copilot-pull-request-reviewer',
+};
+
+test('CLI reviewer runs: fetches each day and reports duration and branch metrics', () => {
+  const result = runReviewerRunsWithFixture(
+    {
+      reviewerWorkflows: [REVIEWER_WORKFLOW_FIXTURE],
+      reviewerRunsByDay: {
+        '2026-10-01': [
+          {
+            id: 1,
+            status: 'completed',
+            conclusion: 'success',
+            head_branch: 'p',
+            run_started_at: '2026-10-01T00:00:00Z',
+            updated_at: '2026-10-01T00:01:40Z',
+          },
+          {
+            id: 4,
+            status: 'in_progress',
+            conclusion: null,
+            head_branch: 'p',
+            run_started_at: null,
+            updated_at: null,
+          },
+        ],
+        '2026-10-02': [
+          {
+            id: 2,
+            status: 'completed',
+            conclusion: 'failure',
+            head_branch: 'q',
+            run_started_at: '2026-10-02T00:00:00Z',
+            updated_at: '2026-10-02T00:03:20Z',
+          },
+          {
+            id: 3,
+            status: 'completed',
+            conclusion: 'skipped',
+            head_branch: 'q',
+            run_started_at: '2026-10-02T01:00:00Z',
+            updated_at: '2026-10-02T01:06:40Z',
+          },
+        ],
+      },
+    },
+    ['--reviewer-runs-from', '2026-10-01', '--reviewer-runs-to', '2026-10-02'],
+  );
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, '');
+  assert.deepEqual(JSON.parse(result.stdout), {
+    reviewerRuns: {
+      workflowPath: 'dynamic/agents/copilot-pull-request-reviewer',
+      workflowId: 283812949,
+      from: '2026-10-01',
+      to: '2026-10-02',
+      runs: 4,
+      completed: 3,
+      byConclusion: { success: 1, failure: 1, cancelled: 0, other: 1 },
+      totalDurationMs: 700000,
+      medianDurationMs: 200000,
+      headBranches: 2,
+      medianRunsPerHeadBranch: 2,
+    },
+  });
+  assert.ok(
+    result.calls.includes(
+      'repos/kurone-kito/idd-skill/actions/workflows/283812949/runs?created=2026-10-01&per_page=100',
+    ),
+  );
+  assert.ok(
+    result.calls.includes(
+      'repos/kurone-kito/idd-skill/actions/workflows/283812949/runs?created=2026-10-02&per_page=100',
+    ),
+  );
+});
+
+test('CLI reviewer runs: uses the lower middle for even-sized medians', () => {
+  const result = runReviewerRunsWithFixture(
+    {
+      reviewerWorkflows: [REVIEWER_WORKFLOW_FIXTURE],
+      reviewerRunsByDay: {
+        '2026-10-01': [
+          {
+            id: 11,
+            status: 'completed',
+            conclusion: 'success',
+            head_branch: 'p',
+            run_started_at: '2026-10-01T00:00:00Z',
+            updated_at: '2026-10-01T00:01:40Z',
+          },
+          {
+            id: 12,
+            status: 'completed',
+            conclusion: 'success',
+            head_branch: 'q',
+            run_started_at: '2026-10-01T01:00:00Z',
+            updated_at: '2026-10-01T01:03:20Z',
+          },
+          {
+            id: 13,
+            status: 'completed',
+            conclusion: 'failure',
+            head_branch: 'q',
+            run_started_at: '2026-10-01T02:00:00Z',
+            updated_at: '2026-10-01T02:05:00Z',
+          },
+          {
+            id: 14,
+            status: 'completed',
+            conclusion: 'cancelled',
+            head_branch: 'q',
+            run_started_at: '2026-10-01T03:00:00Z',
+            updated_at: '2026-10-01T03:06:40Z',
+          },
+        ],
+      },
+    },
+    ['--reviewer-runs-from', '2026-10-01', '--reviewer-runs-to', '2026-10-01'],
+  );
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout).reviewerRuns;
+  assert.equal(report.medianDurationMs, 200000);
+  assert.equal(report.medianRunsPerHeadBranch, 1);
+});
+
+test('CLI reviewer runs: fails when a run has no head branch', () => {
+  for (const headBranch of [null, undefined, '']) {
+    const result = runReviewerRunsWithFixture(
+      {
+        reviewerWorkflows: [REVIEWER_WORKFLOW_FIXTURE],
+        reviewerRunsByDay: {
+          '2026-10-01': [
+            {
+              id: 15,
+              status: 'in_progress',
+              conclusion: null,
+              head_branch: headBranch,
+              run_started_at: null,
+              updated_at: null,
+            },
+          ],
+        },
+      },
+      [
+        '--reviewer-runs-from',
+        '2026-10-01',
+        '--reviewer-runs-to',
+        '2026-10-01',
+      ],
+    );
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /run 15 has no valid head_branch/);
+  }
+});
+
+test('CLI reviewer runs: missing workflow fails clearly', () => {
+  const result = runReviewerRunsWithFixture(
+    { reviewerWorkflows: [{ id: 1, path: 'another/workflow' }] },
+    ['--reviewer-runs-from', '2026-10-01', '--reviewer-runs-to', '2026-10-01'],
+  );
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /no Copilot reviewer workflow/);
+  assert.equal(result.calls.length, 1);
+});
+
+test('CLI reviewer runs: rejects a day at the 1,000-run cap', () => {
+  const result = runReviewerRunsWithFixture(
+    {
+      reviewerWorkflows: [REVIEWER_WORKFLOW_FIXTURE],
+      reviewerRunCountsByDay: { '2026-10-01': 1000 },
+    },
+    ['--reviewer-runs-from', '2026-10-01', '--reviewer-runs-to', '2026-10-01'],
+  );
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /2026-10-01/);
+});
+
+test('CLI reviewer runs: reports workflow and run-list API failures with paths', () => {
+  const workflowFailure = runReviewerRunsWithFixture(
+    { failReviewerWorkflowList: 'workflow list unavailable' },
+    ['--reviewer-runs-from', '2026-10-01', '--reviewer-runs-to', '2026-10-01'],
+  );
+  assert.equal(workflowFailure.status, 1);
+  assert.ok(
+    workflowFailure.stderr.includes(
+      'reviewer runs: repos/kurone-kito/idd-skill/actions/workflows:',
+    ),
+  );
+  assert.ok(workflowFailure.stderr.includes('workflow list unavailable'));
+
+  const runsFailure = runReviewerRunsWithFixture(
+    {
+      reviewerWorkflows: [REVIEWER_WORKFLOW_FIXTURE],
+      failReviewerRunsByDay: { '2026-10-01': 'run list unavailable' },
+    },
+    ['--reviewer-runs-from', '2026-10-01', '--reviewer-runs-to', '2026-10-01'],
+  );
+  assert.equal(runsFailure.status, 1);
+  assert.ok(
+    runsFailure.stderr.includes(
+      'reviewer runs: repos/kurone-kito/idd-skill/actions/workflows/283812949/runs?created=2026-10-01&per_page=100:',
+    ),
+  );
+  assert.ok(runsFailure.stderr.includes('run list unavailable'));
+});
+
+test('CLI reviewer runs: invalid and incompatible options fail before gh', () => {
+  const invalidArgs = [
+    ['--reviewer-runs-from', '2026-10-01'],
+    ['--reviewer-runs-from', '2026-10-02', '--reviewer-runs-to', '2026-10-01'],
+    ['--reviewer-runs-from', '2026-02-30', '--reviewer-runs-to', '2026-03-01'],
+    [
+      '--reviewer-runs-from',
+      '2026-10-01',
+      '--reviewer-runs-to',
+      '2026-10-01',
+      '--prs',
+      '42',
+    ],
+    [
+      '--reviewer-runs-from',
+      '2026-10-01',
+      '--reviewer-runs-to',
+      '2026-10-01',
+      '--limit',
+      '2',
+    ],
+    [
+      '--reviewer-runs-from',
+      '2026-10-01',
+      '--reviewer-runs-to',
+      '2026-10-01',
+      '--merged-from',
+      '2026-10-01',
+    ],
+    [
+      '--reviewer-runs-from',
+      '2026-10-01',
+      '--reviewer-runs-to',
+      '2026-10-01',
+      '--check',
+    ],
+    [
+      '--reviewer-runs-from',
+      '2026-10-01',
+      '--reviewer-runs-to',
+      '2026-10-01',
+      '--since',
+      '2026-10-01',
+    ],
+    [
+      '--reviewer-runs-from',
+      '2026-10-01',
+      '--reviewer-runs-to',
+      '2026-10-01',
+      '--min-recorded-share',
+      '0.9',
+    ],
+    [
+      '--reviewer-runs-from',
+      '2026-10-01',
+      '--reviewer-runs-to',
+      '2026-10-01',
+      '--baseline-reviews-per-pr',
+      '3.9',
+    ],
+    [
+      '--reviewer-runs-from',
+      '2026-10-01',
+      '--reviewer-runs-to',
+      '2026-10-01',
+      '--format',
+      'tsv',
+    ],
+  ];
+  for (const args of invalidArgs) {
+    const result = runReviewerRunsWithFixture({}, args);
+    assert.equal(result.status, 2, args.join(' ') + ': ' + result.stderr);
+    assert.deepEqual(result.calls, [], args.join(' '));
+  }
+});
+
+test('CLI reviewer runs: step summary reports the created-run window', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-wave-audit-reviewer-summary-'));
+  const summaryPath = join(dir, 'summary.md');
+  try {
+    const result = runReviewerRunsWithFixture(
+      {
+        reviewerWorkflows: [REVIEWER_WORKFLOW_FIXTURE],
+        reviewerRunsByDay: {
+          '2026-10-01': [
+            {
+              id: 1,
+              status: 'completed',
+              conclusion: 'success',
+              head_branch: 'p',
+              run_started_at: '2026-10-01T00:00:00Z',
+              updated_at: '2026-10-01T00:01:40Z',
+            },
+          ],
+        },
+      },
+      [
+        '--reviewer-runs-from',
+        '2026-10-01',
+        '--reviewer-runs-to',
+        '2026-10-01',
+        '--step-summary',
+        summaryPath,
+      ],
+    );
+    assert.equal(result.status, 0, result.stderr);
+    const summary = readFileSync(summaryPath, 'utf8');
+    assert.match(summary, /^## Copilot reviewer runs/m);
+    assert.match(summary, /Runs: 1/);
+    assert.match(summary, /Median duration: 100 seconds/);
+    assert.match(
+      summary,
+      /runs created in the range, not the runs of the pull requests merged in it/,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('CLI reviewer runs: a step-summary target that cannot be appended exits 2 with the diagnostic', () => {
+  // A directory cannot be read or appended as a file (EISDIR), with or
+  // without root, unlike a chmod-based case.
+  const dir = mkdtempSync(
+    join(tmpdir(), 'idd-wave-audit-reviewer-summary-fail-'),
+  );
+  try {
+    const result = runReviewerRunsWithFixture(
+      {
+        reviewerWorkflows: [REVIEWER_WORKFLOW_FIXTURE],
+        reviewerRunsByDay: {
+          '2026-10-01': [
+            {
+              id: 1,
+              status: 'completed',
+              conclusion: 'success',
+              head_branch: 'p',
+              run_started_at: '2026-10-01T00:00:00Z',
+              updated_at: '2026-10-01T00:01:40Z',
+            },
+          ],
+        },
+      },
+      [
+        '--reviewer-runs-from',
+        '2026-10-01',
+        '--reviewer-runs-to',
+        '2026-10-01',
+        '--step-summary',
+        dir,
+      ],
+    );
+    assert.equal(result.status, 2, result.stderr);
+    assert.ok(
+      result.stderr.startsWith(
+        'copilot-review-wave-audit: cannot write step summary ' + dir + ': ',
+      ),
+      result.stderr,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('CLI help lists both reviewer-run flags', () => {
+  const output = execFileSync(process.execPath, [CLI_PATH, '--help'], {
+    encoding: 'utf8',
+  });
+  assert.match(output, /--reviewer-runs-from <YYYY-MM-DD>/);
+  assert.match(output, /--reviewer-runs-to <YYYY-MM-DD>/);
+});
+
+test('CLI fails closed on a missing or malformed sync manifest before contacting GitHub', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-wave-audit-manifest-'));
+  const tempScripts = join(tempRoot, 'scripts');
+  const manifestPath = join(tempRoot, 'audit', 'sync-manifest.json');
+  const fixturePath = join(tempRoot, 'fixture.json');
+  const callsPath = join(tempRoot, 'calls.txt');
+  mkdirSync(join(tempRoot, 'audit'), { recursive: true });
+  cpSync(join(REPO_ROOT, 'scripts'), tempScripts, { recursive: true });
+  cpSync(join(REPO_ROOT, 'schemas'), join(tempRoot, 'schemas'), {
+    recursive: true,
+  });
+  writeFileSync(join(tempRoot, 'package.json'), '{"private":true}\n');
+  writeFileSync(fixturePath, JSON.stringify({ reviews: [], comments: [] }));
+  writeFileSync(callsPath, '');
+  const restore = stubExecutable('gh', GH_FIXTURE_STUB);
+  try {
+    for (const contents of [null, '{']) {
+      if (contents === null) {
+        rmSync(manifestPath, { force: true });
+      } else {
+        writeFileSync(manifestPath, contents);
+      }
+      writeFileSync(callsPath, '');
+      const result = spawnSync(
+        process.execPath,
+        [
+          join(tempScripts, 'copilot-review-wave-audit.mjs'),
+          '--repo',
+          'kurone-kito/idd-skill',
+          '--prs',
+          '42',
+          '--check',
+        ],
+        {
+          encoding: 'utf8',
+          env: {
+            ...process.env,
+            WAVE_AUDIT_FIXTURE: fixturePath,
+            WAVE_AUDIT_CALLS: callsPath,
+          },
+        },
+      );
+      assert.equal(result.status, 2, result.stderr);
+      assert.match(result.stderr, /cannot read or parse .*sync-manifest\.json/);
+      assert.equal(readFileSync(callsPath, 'utf8'), '');
+    }
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
 
 test('CLI --check: a clean PR writes the report to stdout, nothing to stderr, and exits 0', () => {
   const result = runCheckWithFixture(
@@ -2406,6 +3296,93 @@ test('CLI --check: a clean PR writes the report to stdout, nothing to stderr, an
   assert.equal(parsed.reports[0]?.v2Count, 1);
   assert.equal(parsed.reports[0]?.triage.contradictions, 0);
   assert.equal(parsed.summary.prCount, 1);
+  assert.equal(
+    result.calls.some((path) => path.includes('/pulls/42/commits')),
+    false,
+  );
+});
+
+test('CLI fetches one paginated PR commits list and no individual commit data', () => {
+  const result = runCheckWithFixture(
+    {
+      reviews: [
+        {
+          id: 1,
+          submitted_at: '2026-01-01T00:00:00Z',
+          body: NO_FINDINGS_FIXTURE,
+          commit_id: 'a',
+          user: { login: COPILOT_LOGIN },
+        },
+        {
+          id: 2,
+          submitted_at: '2026-01-02T00:00:00Z',
+          body: NO_FINDINGS_FIXTURE,
+          commit_id: 'c',
+          user: { login: COPILOT_LOGIN },
+        },
+      ],
+      comments: [],
+      commits: [
+        { sha: 'a', parents: [] },
+        { sha: 'c', parents: [{ sha: 'a' }, { sha: 'outside' }] },
+      ],
+    },
+    ['--check'],
+  );
+  assert.equal(result.status, 0, result.stderr);
+  const parsed = JSON.parse(result.stdout) as {
+    reports: Array<{ reviews: Array<{ trigger: string }> }>;
+  };
+  assert.deepEqual(
+    parsed.reports[0]?.reviews.map((entry) => entry.trigger),
+    ['first', 'mergeCommitHead'],
+  );
+  const commitCalls = result.calls.filter((path) =>
+    path.includes('/pulls/42/commits'),
+  );
+  assert.equal(commitCalls.length, 1);
+  assert.match(commitCalls[0] ?? '', /\/pulls\/42\/commits\?per_page=100$/);
+  assert.equal(
+    result.calls.some((path) => /\/commits\/[a-f0-9]{7,}/.test(path)),
+    false,
+  );
+});
+
+test('CLI continues with unknown triggers when the PR commits list lookup fails', () => {
+  const result = runCheckWithFixture(
+    {
+      reviews: [
+        {
+          id: 1,
+          submitted_at: '2026-01-01T00:00:00Z',
+          body: NO_FINDINGS_FIXTURE,
+          commit_id: 'a',
+          user: { login: COPILOT_LOGIN },
+        },
+        {
+          id: 2,
+          submitted_at: '2026-01-02T00:00:00Z',
+          body: NO_FINDINGS_FIXTURE,
+          commit_id: 'b',
+          user: { login: COPILOT_LOGIN },
+        },
+      ],
+      comments: [],
+      failCommits: true,
+    },
+    ['--check'],
+  );
+  assert.equal(result.status, 0, result.stderr);
+  const parsed = JSON.parse(result.stdout) as {
+    reports: Array<{ triggers: { first: number; unknown: number } }>;
+  };
+  assert.deepEqual(parsed.reports[0]?.triggers, {
+    first: 1,
+    sameHead: 0,
+    newHead: 0,
+    mergeCommitHead: 0,
+    unknown: 1,
+  });
 });
 
 test('CLI --check: a contradiction writes the report to stdout, the message to stderr, and exits 1', () => {
@@ -2468,6 +3445,324 @@ test('CLI --check --limit: the merge time from gh pr list reaches the report', (
   };
   assert.equal(parsed.reports[0]?.pr, 42);
   assert.equal(parsed.reports[0]?.mergedAt, '2026-10-02T00:00:00Z');
+});
+
+test('CLI merge window: pads search dates, filters the inclusive UTC window, sorts by merge time, and reports mergedAt', () => {
+  const result = runCheckWithFixture(
+    {
+      reviews: [
+        {
+          id: 1,
+          submitted_at: '2026-01-01T00:00:00Z',
+          body: NO_FINDINGS_FIXTURE,
+          user: { login: COPILOT_LOGIN },
+        },
+      ],
+      comments: [],
+      prs: [
+        { number: 42, mergedAt: '2026-10-07T23:59:59Z' },
+        { number: 43, mergedAt: '2026-10-06T12:00:00Z' },
+        { number: 44, mergedAt: '2026-09-30T23:59:59Z' },
+        { number: 45, mergedAt: '2026-10-08T00:00:00Z' },
+      ],
+    },
+    [],
+    ['--merged-from', '2026-10-01', '--merged-to', '2026-10-07'],
+  );
+  assert.equal(result.status, 0, result.stderr);
+  const listCall = result.calls.find((call) => call.startsWith('pr list '));
+  assert.ok(listCall);
+  assert.match(listCall, /--search merged:2026-09-30\.\.2026-10-08/);
+  assert.match(listCall, /--limit 1000/);
+  const parsed = JSON.parse(result.stdout) as {
+    reports: Array<{ pr: number; mergedAt: string | null }>;
+  };
+  assert.deepEqual(
+    parsed.reports.map((report) => report.pr),
+    [42, 43],
+  );
+  assert.equal(parsed.reports[0]?.mergedAt, '2026-10-07T23:59:59Z');
+  assert.equal(parsed.reports[1]?.mergedAt, '2026-10-06T12:00:00Z');
+  assert.equal(
+    result.calls.some((call) => call.includes('/pulls/44/')) ||
+      result.calls.some((call) => call.includes('/pulls/45/')),
+    false,
+  );
+});
+
+test('CLI merge window misuse and invalid dates fail with exit 2 before any gh call', () => {
+  const fixture = { reviews: [], comments: [] };
+  const cases: Array<{ name: string; selector: string[] }> = [
+    {
+      name: 'missing --merged-to',
+      selector: ['--merged-from', '2026-10-01'],
+    },
+    {
+      name: 'reversed dates',
+      selector: ['--merged-from', '2026-10-08', '--merged-to', '2026-10-01'],
+    },
+    {
+      name: 'impossible calendar date',
+      selector: ['--merged-from', '2026-02-30', '--merged-to', '2026-03-01'],
+    },
+    {
+      name: 'window with --prs',
+      selector: [
+        '--merged-from',
+        '2026-10-01',
+        '--merged-to',
+        '2026-10-07',
+        '--prs',
+        '42',
+      ],
+    },
+    {
+      name: 'window with --limit',
+      selector: [
+        '--merged-from',
+        '2026-10-01',
+        '--merged-to',
+        '2026-10-07',
+        '--limit',
+        '30',
+      ],
+    },
+  ];
+  for (const entry of cases) {
+    const result = runCheckWithFixture(fixture, [], entry.selector);
+    assert.equal(result.status, 2, entry.name);
+    assert.deepEqual(result.calls, [], entry.name);
+  }
+});
+
+test('CLI merge window: a 1,000-result search cap fails before auditing PRs', () => {
+  const result = runCheckWithFixture(
+    {
+      reviews: [],
+      comments: [],
+      prs: Array.from({ length: 1000 }, (_, index) => ({
+        number: index + 1,
+        mergedAt: '2026-10-01T00:00:00Z',
+      })),
+    },
+    [],
+    ['--merged-from', '2026-10-01', '--merged-to', '2026-10-07'],
+  );
+  assert.equal(result.status, 2, result.stderr);
+  assert.match(result.stderr, /search cap; use a shorter window/);
+  assert.equal(
+    result.calls.filter((call) => call.startsWith('pr list ')).length,
+    1,
+  );
+  assert.equal(
+    result.calls.some((call) => call.includes('/pulls/')),
+    false,
+  );
+});
+
+test('CLI --check --since applies the recorded-share check to a merge window', () => {
+  const result = runCheckWithFixture(
+    {
+      reviews: [
+        {
+          id: 1,
+          submitted_at: '2026-01-01T00:00:00Z',
+          body: openReviewBody([openLine('Medium', 9750)]),
+          user: { login: COPILOT_LOGIN },
+        },
+      ],
+      comments: [
+        {
+          id: 10,
+          in_reply_to_id: 9750,
+          body: '**Accepted** — fixed',
+          created_at: '2026-01-02T00:00:00Z',
+          node_id: 'PRRC_10',
+        },
+      ],
+      prs: [{ number: 42, mergedAt: '2026-10-02T00:00:00Z' }],
+    },
+    ['--check', '--since', '2026-10-01', '--min-recorded-share', '0.9'],
+    ['--merged-from', '2026-10-01', '--merged-to', '2026-10-07'],
+  );
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /recorded triage share 0\.000 since 2026-10-01/);
+});
+
+test('CLI isolates a PR failure, prints a partial report, appends summary, and exits 1', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-wave-audit-failed-pr-'));
+  const summaryPath = join(dir, 'summary.md');
+  try {
+    writeFileSync(summaryPath, 'existing summary line');
+    const result = runCheckWithFixture(
+      {
+        reviews: [
+          {
+            id: 1,
+            submitted_at: '2026-01-01T00:00:00Z',
+            body: NO_FINDINGS_FIXTURE,
+            user: { login: COPILOT_LOGIN },
+          },
+        ],
+        comments: [],
+        prs: [
+          { number: 42, mergedAt: '2026-10-02T00:00:00Z' },
+          { number: 43, mergedAt: '2026-10-03T00:00:00Z' },
+        ],
+        failReviewsByPr: { '43': 'HTTP 403: rate limit exceeded' },
+      },
+      ['--step-summary', summaryPath],
+      ['--merged-from', '2026-10-01', '--merged-to', '2026-10-07'],
+    );
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(
+      result.stderr,
+      /copilot-review-wave-audit: 1 pull request\(s\) could not be audited/,
+    );
+    const parsed = JSON.parse(result.stdout) as {
+      reports: Array<{ pr: number }>;
+      summary: { prCount: number };
+      failedPrs: Array<{ pr: number; message: string }>;
+    };
+    assert.deepEqual(
+      parsed.reports.map((report) => report.pr),
+      [42],
+    );
+    assert.equal(parsed.summary.prCount, 1);
+    assert.equal(parsed.failedPrs[0]?.pr, 43);
+    assert.match(parsed.failedPrs[0]?.message ?? '', /HTTP 403/);
+    const stepSummary = readFileSync(summaryPath, 'utf8');
+    assert.match(
+      stepSummary,
+      /^existing summary line\n## Copilot review-wave audit/,
+    );
+    assert.match(stepSummary, /## Copilot review-wave audit/);
+    assert.match(stepSummary, /Pull requests that could not be audited: 1/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('CLI --check --step-summary appends cohort counts even when check fails', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-wave-audit-check-summary-'));
+  const summaryPath = join(dir, 'summary.md');
+  try {
+    writeFileSync(summaryPath, 'keep this line\n');
+    const result = runCheckWithFixture(
+      {
+        reviews: [
+          {
+            id: 1,
+            submitted_at: '2026-01-01T00:00:00Z',
+            body: openReviewBody([openLine('Medium', 9760)]),
+            user: { login: COPILOT_LOGIN },
+          },
+        ],
+        comments: [
+          {
+            id: 11,
+            in_reply_to_id: 9760,
+            body: `**Accepted** — fixed\n\n${TRIAGE_DEFER_LINE}`,
+            created_at: '2026-01-02T00:00:00Z',
+            node_id: 'PRRC_11',
+          },
+        ],
+      },
+      ['--check', '--step-summary', summaryPath],
+    );
+    assert.equal(result.status, 1, result.stderr);
+    const stepSummary = readFileSync(summaryPath, 'utf8');
+    assert.ok(stepSummary.startsWith('keep this line\n'));
+    assert.match(stepSummary, /## Copilot review-wave audit/);
+    assert.match(stepSummary, /Selector: `--prs \(1 pull requests\)`/);
+    assert.match(stepSummary, /Review triggers: first=1/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('CLI step-summary write failure exits 2 ahead of check failures', () => {
+  const result = runCheckWithFixture(
+    {
+      reviews: [
+        {
+          id: 1,
+          submitted_at: '2026-01-01T00:00:00Z',
+          body: NO_FINDINGS_FIXTURE,
+          user: { login: COPILOT_LOGIN },
+        },
+      ],
+      comments: [],
+    },
+    ['--check', '--step-summary', REPO_ROOT],
+  );
+  assert.equal(result.status, 2, result.stderr);
+  assert.match(
+    result.stderr,
+    /copilot-review-wave-audit: cannot write step summary .*idd-skill:.*directory|cannot write step summary .*EISDIR/,
+  );
+});
+
+test('CLI baseline reviews-per-PR reports average and ratio, or n/a for an empty window', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'idd-wave-audit-baseline-'));
+  const summaryPath = join(dir, 'summary.md');
+  const threeReviews = Array.from({ length: 3 }, (_, index) => ({
+    id: index + 1,
+    submitted_at: `2026-01-0${index + 1}T00:00:00Z`,
+    body: NO_FINDINGS_FIXTURE,
+    user: { login: COPILOT_LOGIN },
+  }));
+  try {
+    const populated = runCheckWithFixture(
+      {
+        reviews: threeReviews,
+        comments: [],
+        reviewsByPr: {
+          '43': threeReviews.map((review) => ({
+            ...review,
+            id: Number(review.id) + 10,
+          })),
+        },
+        prs: [
+          { number: 42, mergedAt: '2026-10-02T00:00:00Z' },
+          { number: 43, mergedAt: '2026-10-03T00:00:00Z' },
+        ],
+      },
+      ['--baseline-reviews-per-pr', '4', '--step-summary', summaryPath],
+      ['--merged-from', '2026-10-01', '--merged-to', '2026-10-07'],
+    );
+    assert.equal(populated.status, 0, populated.stderr);
+    const populatedSummary = readFileSync(summaryPath, 'utf8');
+    assert.match(populatedSummary, /Reviews per pull request: 3/);
+    assert.match(populatedSummary, /Ratio to baseline: 0\.75/);
+
+    const empty = runCheckWithFixture(
+      { reviews: [], comments: [], prs: [] },
+      ['--baseline-reviews-per-pr', '4', '--step-summary', summaryPath],
+      ['--merged-from', '2026-10-01', '--merged-to', '2026-10-07'],
+    );
+    assert.equal(empty.status, 0, empty.stderr);
+    const fullSummary = readFileSync(summaryPath, 'utf8');
+    assert.match(fullSummary, /Reviews per pull request: n\/a/);
+    assert.match(fullSummary, /Ratio to baseline: n\/a/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('CLI invalid baseline reviews-per-PR exits 2 with no gh call', () => {
+  for (const value of ['0', 'abc']) {
+    const result = runCheckWithFixture({ reviews: [], comments: [] }, [
+      '--baseline-reviews-per-pr',
+      value,
+    ]);
+    assert.equal(result.status, 2, value);
+    assert.match(
+      result.stderr,
+      /--baseline-reviews-per-pr must be a positive decimal/,
+    );
+    assert.deepEqual(result.calls, [], value);
+  }
 });
 
 // Two Copilot reviews on distinct commits, and one inline finding on the
@@ -2540,6 +3835,10 @@ test('CLI: --help exits 0 with no gh call', () => {
   });
   assert.match(output, /Usage:/);
   assert.match(output, /--prs <n,n,\.\.\.>/);
+  assert.match(output, /--merged-from <YYYY-MM-DD>/);
+  assert.match(output, /--merged-to <YYYY-MM-DD>/);
+  assert.match(output, /--baseline-reviews-per-pr <n>/);
+  assert.match(output, /--step-summary <path>/);
 });
 
 test('CLI: --prs and --limit together fails with exit 2', () => {

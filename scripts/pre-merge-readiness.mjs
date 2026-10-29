@@ -25,7 +25,10 @@ import {
   resolveProviderOutageTerminalWindowMinutes,
   SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
 } from './advisory-wait-policy.mjs';
-import { buildCopilotRecoverySummary } from './advisory-wait-state.mjs';
+import {
+  buildCopilotRecoverySummary,
+  evaluateStaleRequestRecoveryAction,
+} from './advisory-wait-state.mjs';
 import { resolveAuthoringGuardPolicy } from './authoring-label-guard.mjs';
 import { parseCanonicalIntegerOrNull, parseCliArgs } from './cli-args.mjs';
 import { isAuthorizedForcedHandoffActor } from './collaborator-permission.mjs';
@@ -1337,6 +1340,23 @@ export function collectPreMergeReadiness(
       }
     }
   }
+  // kurone-kito/idd-skill#4717: the claim-bound stale-request recovery object is
+  // computed only when both active-claim arguments are supplied, the same
+  // predicate as copilotRecovery.activeClaimProvided, through the existing
+  // classifier (advisory-wait-state.mts). The builder injects this closure
+  // because protocol-helpers.mts cannot import that module.
+  const evaluateStaleRequestRecovery =
+    !args.claimless &&
+    args.expectedClaimId !== '' &&
+    args.expectedAgentId !== ''
+      ? (evidence) =>
+          evaluateStaleRequestRecoveryAction({
+            ...evidence,
+            remainingBudget: copilotRecovery.remainingBudget,
+            activeClaimProvided: copilotRecovery.activeClaimProvided,
+            copilotDeclinedHead,
+          })
+      : undefined;
   const summary = buildPreMergeReadinessSummary(
     {
       prHeadSha,
@@ -1403,6 +1423,13 @@ export function collectPreMergeReadiness(
       developmentBranchTarget,
       closingSet: closingSetEvidence,
       deferFollowUps,
+      evaluateStaleRequestRecovery,
+      // A decline is terminal availability evidence, not a completed review;
+      // preserve the summary's completed-review commit field (#4142).
+      latestCopilotReviewCommit:
+        evaluateStaleRequestRecovery === undefined || copilotDeclinedHead
+          ? undefined
+          : lastCopilotCommit,
       copilotUnavailable,
       // kurone-kito/idd-skill#2919: caller-precomputed by the enrichment
       // block above -- see its doc comment for the full rationale.
@@ -1832,8 +1859,10 @@ export function renderCliUsageError(error) {
     return {
       error: message,
       hint:
-        'pass --claim-issue <issue-number> (with --claim-id), or --claimless ' +
-        'for a PR with no closingIssuesReferences',
+        'pass --claim-issue <issue-number> and --claim-id for an active claim, ' +
+        'plus --nonce <token> if that claim has a recorded nonce, even when ' +
+        'closingIssuesReferences is empty (#4697); use --claimless only ' +
+        'for a verified PR with no active IDD claim',
     };
   }
   return { error: message };
@@ -2069,12 +2098,15 @@ function printHelp() {
                     AND the trusted base ref has no
                     .github/workflows/idd-advisory-convergence.yml. Otherwise the
                     check stays required.
-  --claimless      skip claim fetch/revalidation (#2017). For a PR whose
-                    closingIssuesReferences is empty, or (#3328) one that
+  --claimless      skip claim fetch/revalidation (#2017); use only for a
+                    verified PR with no active IDD claim, such as a no-issue
+                    PR (closingIssuesReferences empty) or (#3328) one that
                     carries a valid, trusted, unedited <!-- idd-out-of-loop:
                     ... reason:bootstrap ... --> marker naming this PR and
-                    whose closing issue(s) have no active claim; cannot
-                    combine with --claim-issue or --claim-id.
+                    whose closing issue(s) have no active claim. Empty
+                    closingIssuesReferences alone (#4697) does not establish
+                    that an active claim is absent; cannot combine with --claim-issue
+                    or --claim-id.
                     Claim-ownership in the report is the not-applicable /
                     unclaimed shape.
   --closing-issues <n>[,<n>...]  (#3298) the deliberate multi-issue closing

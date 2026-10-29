@@ -48,10 +48,8 @@ severity or decides Accept/Reject.
   helper could not run (step 6).
 - E10's `critiqueLoop.delegate` under `on-success` or `never` left no
   readable findings list (vacuous verdict, not a clean zero-issue round).
-- E11 merge conflicts cannot be resolved cleanly, or the PR has
-  unresolved review threads, unreplied comments, or a
-  `CHANGES_REQUESTED` reviewer and no explicit operator confirmation
-  exists to merge `{development-branch}` into the feature branch anyway.
+- a conflicting merge without the confirmation, or any failed E11 read,
+  fetch, probe, or merge.
 - A CI failure is neither clearly code-caused nor recognized
   infra-flaky/pre-existing, **except** the sole-failing
   `idd-advisory-convergence` check with `pending: false` and outstanding
@@ -212,68 +210,76 @@ self-critique and record risk.
     round count in a hold comment and stop for a maintainer decision
     (`#2865`).
 
-## E11 — Resolve conflicts with {development-branch}
+## E11 — Sync with {development-branch} before every push
 
-1. Check state with the profile-selected branch-conflict-state helper:
-   `node scripts/branch-conflict-state.mjs --pr {pr-number}`, or the
-   package-manager-profile `idd:branch-conflict-state` command
-   (resolve the exact command from `docs/idd-helper-scripts.md` if
-   unsure) — reflects the last pushed head, not local unpushed fixes.
-   Missing, failing, or disagreeing? Stop and ask (Helper runtime
-   contract above) — no non-helper fallback here.
-2. Not a confirmed conflict (clean, behind-no-conflict, computing,
-   dirty, force-push-exception, unknown)? Skip the merge, continue to
-   E12 — F1 (`idd-pre-merge-lite.instructions.md`) handles those
-   downstream.
-3. Conflict (`mergeable` `CONFLICTING`)? Unresolved review threads,
-   unreplied comments, or reviewer state `CHANGES_REQUESTED`: get
-   explicit operator confirmation first — the merge commit will appear
-   in the PR history.
-4. Run `git fetch origin {development-branch} && git merge
-   origin/{development-branch}`. On non-interactive-hostile primary signing (GPG
-   pinentry or hardware-touch) with a fallback wrapper, run the whole merge
-   (including `--continue`) through that wrapper instead — see
-   `docs/idd-helper-scripts.md#signed-commit-merge-wrapper-shared-git-procedure`
-   for the command form and the commitlint `-m` requirement.
-5. Resolve conflicts, complete the merge.
+Immediately before each E12 push, read the PR base:
+`gh pr view {pr-number} --json baseRefName --jq .baseRefName`. A failed read
+or base other than `{development-branch}` is stop-and-ask under D3; do not
+merge, push, or retarget.
+
+Fetch with this exact refspec:
+
+```sh
+git fetch origin +refs/heads/{development-branch}:refs/remotes/origin/{development-branch}
+```
+
+On failure, stop-and-ask. After the fetch, capture the fetched commit once
+in `target_sha`:
+
+```sh
+target_sha=$(git rev-parse --verify 'origin/{development-branch}^{commit}')
+```
+
+If that command fails, stop-and-ask. Compare `git merge-base HEAD
+"$target_sha"` with `"$target_sha"`.
+If equal, the branch is current: do not merge and continue to E12.
+On a comparison command error, stop-and-ask.
+
+When behind, run `git merge-tree --write-tree HEAD "$target_sha"`. Only exit
+0 means no conflict; exit 1 means conflict. Any other exit is unknown and
+stop-and-ask. With no conflict, run `git merge --no-ff` with the same
+`"$target_sha"` and the conventional `-m` subject documented in the
+[signed-commit merge wrapper](../../../docs/idd-helper-scripts.md). Do not
+fetch or resolve the branch ref again between the probe and merge.
+For non-interactive-hostile primary signing, use that wrapper.
+Do not ask for confirmation, even with open review threads. For a conflict,
+unresolved threads, unreplied comments, or `CHANGES_REQUESTED` require explicit
+confirmation before merging, resolving, and completing; otherwise hold. Use
+the signed wrapper for merge and `--continue`. On command/signing/hook failure,
+run `git merge --abort` and stop-and-ask. After a wrapper timeout, terminate
+and wait for its full process tree before aborting; if unconfirmed, hold
+without aborting or pushing. Continue to E12 after a successful merge so
+validation covers the merged tree.
 
 ## E12 — Lint, test, push
 
 1. Run `post-fix-validate`.
-2. Push the feature branch normally — E11 uses merge commits, so no
-   force push is required.
-3. Before this push, a small number of review comments may arrive that
-   fall outside this round's scope and have not yet gone through
-   triage. Fold them into this same pending push, each as its own
-   atomic commit, only when every one of steps 4-7 holds.
-4. Every comment that arrived since the last push is bot-sourced:
-   authored by the primary advisory bot's login — for the Copilot
-   default, any login equal to `copilot` or starting with
-   `copilot-pull-request-reviewer` counts, matching
-   `isCopilotReviewerLogin` — or an `advisoryBotLogins` login,
-   regardless of PATH A/B. A configured `advisoryWait.secondaryBotLogin`
-   login still qualifies as bot-sourced.
-5. Each such comment is a small, confirmable fix whose claim you
-   checked against live evidence (a linter run, actual file content,
-   actual runtime behavior) before folding it in. Never fold in a
-   bot-asserted-only finding.
-6. The resulting commit touches only files this round's pending fixes
-   already touch, and you re-ran `post-fix-validate` first.
-7. No CI-wait poll (E15) is currently in flight for this branch.
-8. Stop accumulating and push immediately once any of these happens: a
-   PATH A item from a human or CODEOWNER reviewer arrives (bot-sourced
-   alone does not count); any item requests a substantive code/logic
-   change, not a small textual fix; any item falls outside the
-   touched-file scope from step 6; you have accumulated 3 additional
-   commits; or 10 minutes have passed since the first accumulated
-   commit.
-9. This never delays/holds/interrupts an in-flight CI wait, or changes
-   PATH A/B routing/triage timing — only push timing changes. A
-   folded-in comment gets **no** disposition reply this round; it
-   keeps its PATH classification and individual E6 reply for
-   E1/E4-E7. E14 still requests a fresh primary-bot re-review each
-   push; `review-watermark` still invalidates too.
-10. Apply the pre-mutation guard immediately before this push.
+2. Push the feature branch normally; E11's merge commit needs no force
+   push. Files changed only by E11's merge do not widen E12's fold-in
+   scope.
+3. Before this push, fold a small batch of out-of-scope comments awaiting
+   triage into the same push, each as its own atomic commit, only if
+   steps 4-7 all hold.
+4. Every comment since the last push is by the primary advisory bot
+   (`copilot` or `copilot-pull-request-reviewer*`, via
+   `isCopilotReviewerLogin`) or `advisoryBotLogins`; configured
+   `advisoryWait.secondaryBotLogin` also qualifies, on either PATH.
+5. Each is a small, confirmable fix verified against live evidence;
+   never fold in a bot-asserted-only finding.
+6. The result touches only files already touched by this round's fixes,
+   and `post-fix-validate` is rerun first.
+7. No E15 CI-wait poll is in flight for this branch.
+8. Stop accumulating and push at once when a human/CODEOWNER PATH A
+   item arrives, an item needs a substantive change or an out-of-scope
+   file, 3 extra commits accumulate, or 10 minutes pass.
+9. This changes only push timing: do not delay or interrupt E15 or
+   change PATH routing/triage timing. Folded comments keep their PATH
+   and E6 reply for the next E1/E4-E7 pass; E14 re-review and
+   `review-watermark` invalidation still apply.
+
+10. A cross-round commit invalidates E11; repeat it before pushing, then rerun
+    `post-fix-validate` if it merged. Apply
+    the pre-mutation guard immediately before this push.
 11. Re-apply the pre-mutation guard immediately before this edit —
     it is a separate mutation after the already-guarded push. If this
     round's fix changes a claim the PR body makes (round count, a

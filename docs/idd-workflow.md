@@ -42,6 +42,57 @@ you are reading this guide first, start at step 1.
 5. If you are editing package-specific code, also follow the matching
    scoped instruction file in `.github/instructions/`.
 
+## Questions for operators
+
+When an IDD step already requires a user decision or action, use the
+shared baseline: the operator is skilled in manual issue-driven
+development and GitHub Flow, but unfamiliar with idd-skill-specific
+automation. Treat issue triage and planning, branches, commits, pull
+requests, CI, reviews, and merges as known. This applies to agent-authored
+questions and explanatory follow-ups in full and Lite sessions, onboarding,
+issue-authoring interviews, and ordinary execution. Fixed CLI prompt
+catalogs are outside this presentation policy.
+
+For presentation, follow a current explicit operator instruction first;
+otherwise use explicit repository-local audience guidance, then the shared
+baseline. Repeated use alone does not establish expertise or a standing
+audience preference (preventive; no observed incident yet). Each question
+should explain the relevant idd-skill convention and its practical
+decision effect, request the exact action, and recommend an option with its
+main cost when alternatives matter. Keep the ask concise and self-contained.
+These conventions do not change when the workflow asks, who can approve,
+or the safety and quality evidence required.
+
+Examples of how to explain a term, consequence, and requested action:
+
+- **Scope choice — `Candidate files`.** This section lists the paths an
+  issue expects implementation to edit. If the acceptance criteria also
+  require an unlisted path, describe it as an expanded scope that may
+  trigger the effort limit rather than saying the scope check blocks editing
+  it.
+  Ask: “May I add `src/path.ts` to `Candidate files`? I recommend adding
+  it so the acceptance criteria stay intact; that expands the review
+  surface. The alternative is to revise or defer that criterion, which
+  leaves this behavior for later.” Scope overrun returned to authoring on
+  issues [#4064 (2026-10-12) and #3824 (2026-10-10)](idd-design-rationale.md#b3--scope-overrun-returns-to-authoring).
+- **Authoring release — `status:authoring`.** This label holds a draft
+  outside execution claims until its Stage 2 release checklist passes.
+  Ask: “The draft body and child membership are ready. May I run Stage 2
+  release? I recommend doing so after your review; it removes the hold and
+  makes the issue claimable, so automation can start work. Leaving it held
+  avoids a claim now but delays execution.” The release delay was observed
+  on 2026-09-25 in issues [#3372 and #3426](idd-design-rationale.md#e4e5-adopt-now-urgency-defer).
+- **Unknown-owner recovery — `owner_evidence_required`.** This result
+  means the helper could not prove that this session owns the local claim
+  and stops before mutation. Inspect the linked worktree, claim lock, and
+  generated token record first. Ask: “I cannot match the active claim to
+  this worktree's ownership records. Do you recognize this worktree or
+  know the intended recovery owner? I recommend leaving it untouched until
+  ownership is proven; that delays the task but avoids changing another
+  session's work. If you identify the expected worktree, I will re-check
+  the evidence before continuing.” An observed forced-handoff case is
+  documented for [issue #3597](idd-resume-detail.md), observed 2026-09-30.
+
 ## Entry points and auto-load expectations
 
 | Agent / surface         | Read first                        | Automatically available IDD context                                                                                                                                                                                                                                                                                                                            | Open manually                                                                                                                                                                                                                                                                                      |

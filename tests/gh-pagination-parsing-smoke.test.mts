@@ -42,19 +42,50 @@ function ndjson(items: unknown[]): string {
  * `fetchReviewThreads`'s query text is unrelated to this file's pagination
  * fix and reproducing it byte-for-byte here would be needlessly brittle.
  */
+type GraphqlStubResponse =
+  | string
+  | {
+      firstPage: string;
+      subsequentStatusCheckPage: string;
+      requireStatusContextUpdatedAt?: boolean;
+    };
+
 function buildStubGh(
   responses: Map<string, string>,
-  graphqlResponse?: string,
+  graphqlResponse?: GraphqlStubResponse,
 ): string {
   const table = JSON.stringify([...responses.entries()]);
+  const graphqlResponseExpression =
+    typeof graphqlResponse === 'string'
+      ? JSON.stringify(graphqlResponse)
+      : graphqlResponse === undefined
+        ? null
+        : [
+            '(() => {',
+            "  const queryArg = args.find((arg) => arg.startsWith('query=')) ?? '';",
+            '  if (' +
+              JSON.stringify(
+                graphqlResponse.requireStatusContextUpdatedAt === true,
+              ) +
+              " && queryArg.includes('statusCheckRollup') && !queryArg.includes('... on StatusContext{context state targetUrl createdAt updatedAt}')) {",
+            "    throw new Error('status-check query omits StatusContext.updatedAt');",
+            '  }',
+            "  const isSubsequentStatusCheckPage = queryArg.includes('statusCheckRollup') && args.some((arg) => arg.startsWith('after='));",
+            '  return isSubsequentStatusCheckPage',
+            '    ? ' +
+              JSON.stringify(graphqlResponse.subsequentStatusCheckPage),
+            '    : ' + JSON.stringify(graphqlResponse.firstPage),
+            '})()',
+          ].join('\n');
   const graphqlLine =
-    graphqlResponse === undefined
+    graphqlResponseExpression === null
       ? ''
-      : `if (args[0] === 'api' && args[1] === 'graphql') {
-  process.stdout.write(${JSON.stringify(graphqlResponse)});
-  process.exit(0);
-}
-`;
+      : [
+          "if (args[0] === 'api' && args[1] === 'graphql') {",
+          '  process.stdout.write(' + graphqlResponseExpression + ');',
+          '  process.exit(0);',
+          '}',
+        ].join('\n') + '\n';
   return `const args = process.argv.slice(2);
 ${graphqlLine}const table = new Map(${table});
 const key = JSON.stringify(args);
@@ -71,7 +102,7 @@ function runStubbedCli(
   scriptRelPath: string,
   cliArgs: string[],
   responses: Map<string, string>,
-  graphqlResponse?: string,
+  graphqlResponse?: GraphqlStubResponse,
 ): string {
   const cwdRoot = mkdtempSync(join(tmpdir(), 'idd-gh-pagination-cwd-'));
   const restore = stubExecutable('gh', buildStubGh(responses, graphqlResponse));
@@ -206,7 +237,7 @@ test('stalled-session-quiet-check.mjs CLI: parses multi-line NDJSON output from 
   assert.equal(report.evidence.activity_count_in_window, 4);
 });
 
-test('review-activity-snapshot.mjs CLI: parses multi-line NDJSON output from paginated review/comment endpoints', () => {
+test('review-activity-snapshot.mjs CLI: parses paginated activity and validates CI rollups', () => {
   const responses = new Map<string, string>([
     [
       // #1833: review-activity-snapshot.mts now reads `author.login`
@@ -243,22 +274,6 @@ test('review-activity-snapshot.mjs CLI: parses multi-line NDJSON output from pag
       Buffer.from(
         readFileSync(join(REPO_ROOT, '.github/idd/config.json'), 'utf8'),
       ).toString('base64'),
-    ],
-    [
-      // #2267: routed through provider-port.mts's listChangeRequestChecks
-      // now -- `--repo` (not `-R`) and no trailing `--jq '.'` (a no-op
-      // identity filter on the already-JSON `--json` array), but the same
-      // underlying `gh pr checks` call.
-      JSON.stringify([
-        'pr',
-        'checks',
-        '42',
-        '--repo',
-        REPO_REF,
-        '--json',
-        'name,state,completedAt',
-      ]),
-      '[]',
     ],
     [
       JSON.stringify([
@@ -313,6 +328,14 @@ test('review-activity-snapshot.mjs CLI: parses multi-line NDJSON output from pag
     data: {
       repository: {
         pullRequest: {
+          headRefOid: HEAD_SHA,
+          baseRefName: 'main',
+          statusCheckRollup: {
+            contexts: {
+              nodes: [],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
           reviewThreads: {
             pageInfo: { hasNextPage: false, endCursor: null },
             nodes: [],
@@ -367,6 +390,248 @@ test('review-activity-snapshot.mjs CLI: parses multi-line NDJSON output from pag
   // mode on gh versions where multi-page output isn't newline-separated.
   assert.equal(report.counts.reviews, 2);
   assert.equal(report.counts.comments, 2);
+
+  type PullRequestGraphql = {
+    data: { repository: { pullRequest: Record<string, unknown> } };
+  };
+  const withGraphql = (
+    mutate: (pullRequest: Record<string, unknown>) => void,
+  ) => {
+    const payload = JSON.parse(graphqlResponse) as PullRequestGraphql;
+    mutate(payload.data.repository.pullRequest);
+    return JSON.stringify(payload);
+  };
+  const rollup = (pullRequest: Record<string, unknown>) =>
+    pullRequest.statusCheckRollup as Record<string, unknown>;
+  const contexts = (pullRequest: Record<string, unknown>) =>
+    rollup(pullRequest).contexts as Record<string, unknown>;
+
+  const noCheckOutput = runStubbedCli(
+    'scripts/review-activity-snapshot.mjs',
+    ['--pr', '42', '--owner', OWNER, '--repo', REPO],
+    responses,
+    withGraphql((pullRequest) => {
+      pullRequest.statusCheckRollup = null;
+    }),
+  );
+  const noCheckReport = JSON.parse(noCheckOutput) as {
+    latestCiCompletedAt: string;
+    latestPassingCiCompletedAt: string;
+  };
+  assert.equal(noCheckReport.latestCiCompletedAt, 'none');
+  assert.equal(noCheckReport.latestPassingCiCompletedAt, 'none');
+
+  // An explicit complete empty connection is a valid read with no checks,
+  // unlike a missing or null connection, which must fail closed below.
+  const emptyConnectionOutput = runStubbedCli(
+    'scripts/review-activity-snapshot.mjs',
+    ['--pr', '42', '--owner', OWNER, '--repo', REPO],
+    responses,
+    withGraphql((pullRequest) => {
+      pullRequest.statusCheckRollup = {
+        contexts: {
+          nodes: [],
+          pageInfo: { hasNextPage: false, endCursor: null },
+        },
+      };
+    }),
+  );
+  const emptyConnectionReport = JSON.parse(emptyConnectionOutput) as {
+    latestCiCompletedAt: string;
+    latestPassingCiCompletedAt: string;
+  };
+  assert.equal(emptyConnectionReport.latestCiCompletedAt, 'none');
+  assert.equal(emptyConnectionReport.latestPassingCiCompletedAt, 'none');
+
+  const legacyStatusContextOutput = runStubbedCli(
+    'scripts/review-activity-snapshot.mjs',
+    ['--pr', '42', '--owner', OWNER, '--repo', REPO],
+    responses,
+    {
+      firstPage: withGraphql((pullRequest) => {
+        contexts(pullRequest).nodes = [
+          {
+            __typename: 'StatusContext',
+            context: 'legacy-success',
+            state: 'SUCCESS',
+            targetUrl: 'https://example.test/success',
+            createdAt: '2026-10-26T09:00:00Z',
+            updatedAt: '2026-10-26T09:15:00Z',
+          },
+          {
+            __typename: 'StatusContext',
+            context: 'legacy-error',
+            state: 'ERROR',
+            targetUrl: 'https://example.test/error',
+            createdAt: '2026-10-26T09:10:00Z',
+            updatedAt: '2026-10-26T09:30:00Z',
+          },
+          {
+            __typename: 'StatusContext',
+            context: 'legacy-pending',
+            state: 'PENDING',
+            targetUrl: 'https://example.test/pending',
+            createdAt: '2026-10-26T09:20:00Z',
+            updatedAt: '2026-10-26T09:45:00Z',
+          },
+          {
+            __typename: 'StatusContext',
+            context: 'legacy-failure',
+            state: 'FAILURE',
+            targetUrl: 'https://example.test/failure',
+            createdAt: '2026-10-26T09:05:00Z',
+            updatedAt: '2026-10-26T09:20:00Z',
+          },
+        ];
+      }),
+      subsequentStatusCheckPage: withGraphql(() => {}),
+      requireStatusContextUpdatedAt: true,
+    },
+  );
+  const legacyStatusContextReport = JSON.parse(legacyStatusContextOutput) as {
+    latestCiCompletedAt: string;
+    latestPassingCiCompletedAt: string;
+  };
+  assert.equal(
+    legacyStatusContextReport.latestCiCompletedAt,
+    '2026-10-26T09:30:00Z',
+  );
+  assert.equal(
+    legacyStatusContextReport.latestPassingCiCompletedAt,
+    '2026-10-26T09:15:00Z',
+  );
+
+  assert.throws(
+    () =>
+      runStubbedCli(
+        'scripts/review-activity-snapshot.mjs',
+        ['--pr', '42', '--owner', OWNER, '--repo', REPO],
+        responses,
+        {
+          firstPage: withGraphql((pullRequest) => {
+            contexts(pullRequest).nodes = [];
+            contexts(pullRequest).pageInfo = {
+              hasNextPage: true,
+              endCursor: 'status-check-page-2',
+            };
+          }),
+          subsequentStatusCheckPage: withGraphql((pullRequest) => {
+            pullRequest.statusCheckRollup = null;
+          }),
+        },
+      ),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      const stderr = (error as Error & { stderr?: Buffer | string }).stderr;
+      assert.match(
+        error.message + '\n' + (stderr?.toString() ?? ''),
+        /status-check rollup became null during pagination/,
+      );
+      return true;
+    },
+    'a null rollup after pagination starts is rejected',
+  );
+
+  const incompleteConnectionError =
+    /status-check rollup contexts connection is missing or incomplete/;
+  const malformedCases: Array<{
+    name: string;
+    mutate(pullRequest: Record<string, unknown>): void;
+    expected: RegExp;
+  }> = [
+    {
+      name: 'missing rollup field',
+      mutate: (pullRequest) => {
+        delete pullRequest.statusCheckRollup;
+      },
+      expected: /status-check rollup field is missing/,
+    },
+    {
+      name: 'missing contexts connection',
+      mutate: (pullRequest) => {
+        delete rollup(pullRequest).contexts;
+      },
+      expected: incompleteConnectionError,
+    },
+    {
+      name: 'null contexts connection',
+      mutate: (pullRequest) => {
+        rollup(pullRequest).contexts = null;
+      },
+      expected: incompleteConnectionError,
+    },
+    {
+      name: 'missing nodes',
+      mutate: (pullRequest) => {
+        delete contexts(pullRequest).nodes;
+      },
+      expected: incompleteConnectionError,
+    },
+    {
+      name: 'missing pageInfo',
+      mutate: (pullRequest) => {
+        delete contexts(pullRequest).pageInfo;
+      },
+      expected: incompleteConnectionError,
+    },
+    {
+      name: 'missing hasNextPage',
+      mutate: (pullRequest) => {
+        delete (contexts(pullRequest).pageInfo as Record<string, unknown>)
+          .hasNextPage;
+      },
+      expected: incompleteConnectionError,
+    },
+    {
+      name: 'non-boolean hasNextPage',
+      mutate: (pullRequest) => {
+        (
+          contexts(pullRequest).pageInfo as Record<string, unknown>
+        ).hasNextPage = 'false';
+      },
+      expected: incompleteConnectionError,
+    },
+    {
+      name: 'hasNextPage without endCursor',
+      mutate: (pullRequest) => {
+        contexts(pullRequest).pageInfo = {
+          hasNextPage: true,
+          endCursor: null,
+        };
+      },
+      expected: /page reported hasNextPage without endCursor/,
+    },
+    {
+      name: 'null node inside a complete page',
+      mutate: (pullRequest) => {
+        (contexts(pullRequest).nodes as unknown[]).push(null);
+      },
+      expected: /null or unreadable node/,
+    },
+  ];
+
+  for (const malformedCase of malformedCases) {
+    assert.throws(
+      () =>
+        runStubbedCli(
+          'scripts/review-activity-snapshot.mjs',
+          ['--pr', '42', '--owner', OWNER, '--repo', REPO],
+          responses,
+          withGraphql(malformedCase.mutate),
+        ),
+      (error: unknown) => {
+        assert.ok(error instanceof Error, malformedCase.name);
+        const stderr = (error as Error & { stderr?: Buffer | string }).stderr;
+        assert.match(
+          `${error.message}\n${stderr?.toString() ?? ''}`,
+          malformedCase.expected,
+          malformedCase.name,
+        );
+        return true;
+      },
+      malformedCase.name,
+    );
+  }
 });
 
 function claimApprovalGateResponses(timelineBody: string): Map<string, string> {

@@ -1129,13 +1129,22 @@ function normalizeStatusCheckRollupNode(
     };
   }
   if (type === 'StatusContext') {
+    const state = String(raw.state ?? '')
+      .trim()
+      .toUpperCase();
+    const completedAt =
+      ['SUCCESS', 'FAILURE', 'ERROR'].includes(state) &&
+      typeof raw.updatedAt === 'string'
+        ? raw.updatedAt
+        : null;
     return {
       __typename: 'StatusContext',
       context: raw.context,
       state: raw.state,
       targetUrl: raw.targetUrl,
-      // StatusContext has no startedAt field in GraphQL. Its creation time is
-      // the closest equivalent and preserves the ordering signal gh exposes.
+      ...(completedAt === null ? {} : { completedAt }),
+      // StatusContext has no startedAt field in GraphQL. Its creation time
+      // preserves the ordering signal the provider exposes.
       startedAt: raw.createdAt,
     };
   }
@@ -1174,7 +1183,7 @@ function fetchChangeRequestBranchAndChecks(
                 }
               }
             }
-            ... on StatusContext{context state targetUrl createdAt}
+            ... on StatusContext{context state targetUrl createdAt updatedAt}
           }
           pageInfo{hasNextPage endCursor}
         }
@@ -1231,14 +1240,43 @@ function fetchChangeRequestBranchAndChecks(
         'getChangeRequestBranchAndChecks: PR head or base ref changed during status-check pagination',
       );
     }
-    const contexts = pullRequest.statusCheckRollup?.contexts;
-    for (const node of Array.isArray(contexts?.nodes) ? contexts.nodes : []) {
-      const normalized = normalizeStatusCheckRollupNode(node);
-      if (normalized) {
-        statusCheckRollup.push(normalized);
-      }
+    if (!Object.hasOwn(pullRequest, 'statusCheckRollup')) {
+      throw new Error(
+        'getChangeRequestBranchAndChecks: status-check rollup field is missing',
+      );
     }
-    const hasNextPage = contexts?.pageInfo?.hasNextPage === true;
+    const rollup = pullRequest.statusCheckRollup;
+    if (rollup === null) {
+      if (page !== 0 || after !== null || statusCheckRollup.length > 0) {
+        throw new Error(
+          'getChangeRequestBranchAndChecks: status-check rollup became null during pagination',
+        );
+      }
+      return { headSha, baseRefName, statusCheckRollup };
+    }
+    const contexts = rollup?.contexts;
+    if (
+      !contexts ||
+      !Array.isArray(contexts.nodes) ||
+      !contexts.pageInfo ||
+      typeof contexts.pageInfo.hasNextPage !== 'boolean'
+    ) {
+      throw new Error(
+        'getChangeRequestBranchAndChecks: status-check rollup contexts connection is missing or incomplete',
+      );
+    }
+    for (const node of contexts.nodes) {
+      const normalized = normalizeStatusCheckRollupNode(node);
+      if (!normalized) {
+        // A null entry can hide a check; never drop it and report the page
+        // as complete.
+        throw new Error(
+          'getChangeRequestBranchAndChecks: status-check rollup contains a null or unreadable node',
+        );
+      }
+      statusCheckRollup.push(normalized);
+    }
+    const hasNextPage = contexts.pageInfo.hasNextPage;
     if (!hasNextPage) {
       return { headSha, baseRefName, statusCheckRollup };
     }
@@ -1265,21 +1303,25 @@ const CLOSING_ISSUE_REFERENCES_MAX_PAGES = 20;
 const OPEN_CHANGE_REQUEST_SCAN_PAGE_SIZE = 100;
 
 /** One closing-issue reference, reduced to the fields its callers read: the
- * issue number and the repository it belongs to. */
-interface ClosingIssueReference {
+ * issue number, the repository it belongs to, and its URL when GitHub reports
+ * one. `url` is absent (not `undefined`) when the node has none. */
+export interface ClosingIssueReference {
   number: number;
   repository: { name: string; owner: { login: string } };
+  url?: string;
 }
 
 /**
  * Validates one `closingIssuesReferences` node (kurone-kito/idd-skill#4721).
  * A node with no usable number or repository identity fails the lookup: a
  * caller that defaults a missing `repository` to the same repository would
- * otherwise read a cross-repository close as a same-repository one.
+ * otherwise read a cross-repository close as a same-repository one. A
+ * non-empty `url` is carried through as an additive field (kurone-kito/idd-skill#4737).
  */
 function closingIssueReferenceFromNode(node: unknown): ClosingIssueReference {
   const record = node as {
     number?: unknown;
+    url?: unknown;
     repository?: { name?: unknown; owner?: { login?: unknown } | null } | null;
   } | null;
   const number =
@@ -1298,7 +1340,12 @@ function closingIssueReferenceFromNode(node: unknown): ClosingIssueReference {
       'closingIssuesReferences lookup: a reference has no usable number or repository identity',
     );
   }
-  return { number, repository: { name, owner: { login } } };
+  const url = record?.url;
+  return {
+    number,
+    repository: { name, owner: { login } },
+    ...(typeof url === 'string' && url !== '' ? { url } : {}),
+  };
 }
 
 /**
@@ -1360,7 +1407,7 @@ function fetchChangeRequestClosingIssueReferences(
     pullRequest(number:$number){
       headRefOid
       closingIssuesReferences(first:100,after:$after){
-        nodes{number repository{name owner{login}}}
+        nodes{number url repository{name owner{login}}}
         pageInfo{hasNextPage endCursor}
       }
     }
@@ -1426,6 +1473,52 @@ function fetchChangeRequestClosingIssueReferences(
   throw new Error(
     `${label}: exceeded ${CLOSING_ISSUE_REFERENCES_MAX_PAGES} pages`,
   );
+}
+
+/**
+ * Reads one pull request's closing-issue references for a caller outside this
+ * adapter (kurone-kito/idd-skill#4737), through the private paginated reader
+ * above, with `ghTextFn` as the gh text runner. `expectedHeadSha` pins the
+ * read to one head: a null, empty, or non-40-character hexadecimal value is
+ * rejected before any read, and an upper-case value is lower-cased first,
+ * because the private reader compares the head strictly. Every returned
+ * reference must carry a non-empty `url`; a reference without one fails the
+ * read, so a caller never receives an empty set for a failed lookup. A reader
+ * error propagates with its own message.
+ */
+export function readChangeRequestClosingIssueReferences(
+  ghTextFn: typeof ghText,
+  owner: string,
+  repo: string,
+  number: number,
+  expectedHeadSha: string | null,
+): ClosingIssueReference[] {
+  if (typeof expectedHeadSha !== 'string') {
+    throw new Error(
+      'closingIssuesReferences lookup: the expected head SHA is missing',
+    );
+  }
+  const head = expectedHeadSha.toLowerCase();
+  if (!/^[0-9a-f]{40}$/.test(head)) {
+    throw new Error(
+      'closingIssuesReferences lookup: the expected head SHA must be 40 hexadecimal characters',
+    );
+  }
+  const references = fetchChangeRequestClosingIssueReferences(
+    { ...DEFAULT_DEPS, ghText: ghTextFn },
+    owner,
+    repo,
+    number,
+    head,
+  );
+  for (const reference of references) {
+    if (reference.url === undefined) {
+      throw new Error(
+        `closingIssuesReferences lookup: reference #${reference.number} has no url`,
+      );
+    }
+  }
+  return references;
 }
 
 /**
@@ -4009,7 +4102,11 @@ export function createGithubProviderAdapter(
       const headSha = String(parsed.headRefOid ?? '');
       return {
         headSha,
-        headRefName: String(parsed.headRefName ?? ''),
+        // A non-string head name is unreadable, not a name: pass it through as
+        // empty so the claimless check refuses it, instead of coercing it into
+        // a valid-looking branch name (kurone-kito/idd-skill#4735, Copilot review).
+        headRefName:
+          typeof parsed.headRefName === 'string' ? parsed.headRefName : '',
         authorLogin: String(parsed.author?.login ?? ''),
         url: String(parsed.url ?? ''),
         closingIssuesReferences: fetchChangeRequestClosingIssueReferences(

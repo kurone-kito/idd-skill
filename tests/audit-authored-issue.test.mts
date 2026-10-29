@@ -6089,7 +6089,7 @@ test('cleanup evidence CLI accepts direct and complete sweep report inputs (#374
         {
           owner: 'kurone-kito',
           repo: 'idd-skill',
-          issue: 2674,
+          issue: 4748,
           comments: [],
         },
       ],

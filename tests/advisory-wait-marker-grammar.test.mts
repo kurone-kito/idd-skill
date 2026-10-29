@@ -406,14 +406,20 @@ function decodeJqStringLiteral(raw: string): string {
  * passes below never double-count the same call.
  */
 function extractJqTestPatterns(mdText: string): ExtractedJqPattern[] {
+  // Scope to the AW2 section: the F2 block (#4696) carries its own test(...)
+  // calls, which this AW2 agreement check does not cover.
+  const aw2Start = mdText.indexOf('\n## AW2\n');
+  const aw2End = mdText.indexOf('\n## AW3-R\n');
+  assert.ok(aw2Start >= 0 && aw2End > aw2Start, 'AW2 section must exist');
+  const aw2Text = mdText.slice(aw2Start, aw2End);
   const results: ExtractedJqPattern[] = [];
   const literalRe = /test\("((?:[^"\\]|\\.)*)"\)/g;
-  for (const m of mdText.matchAll(literalRe)) {
+  for (const m of aw2Text.matchAll(literalRe)) {
     results.push({ index: m.index, source: decodeJqStringLiteral(m[1]) });
   }
   const concatRe =
     /test\("((?:[^"\\]|\\.)*)"\s*\+\s*\$sha\s*\+\s*"((?:[^"\\]|\\.)*)"\)/g;
-  for (const m of mdText.matchAll(concatRe)) {
+  for (const m of aw2Text.matchAll(concatRe)) {
     const prefix = decodeJqStringLiteral(m[1]);
     const suffix = decodeJqStringLiteral(m[2]);
     results.push({ index: m.index, source: prefix + PR_HEAD_SHA + suffix });

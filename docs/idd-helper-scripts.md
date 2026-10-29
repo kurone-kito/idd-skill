@@ -1435,8 +1435,18 @@ in this preamble, since the fallback differs per helper.
   be a JSON object whose `completed` is a boolean and whose `findings`, if
   present, is an array of objects. The helper stops with the `blocked-by-human`
   outcome (exit `2`) when `issueAuthoring.journalIssue` is unset or
-  unverifiable. It then puts the `authoring-publication` line first in the
-  body, lints that exact body with `audit-authored-issue.mjs --new-issue`
+  unverifiable. `issueAuthoring.retiredJournalIssues`, when set, is checked
+  for every shape: it must be a non-empty array of `owner/repo#N` entries,
+  with no entry repeated and none equal to `issueAuthoring.journalIssue`, and
+  a malformed value stops the helper with `blocked-by-human` (exit `2`). For
+  `--shape child` only, the anchor check also reads each listed retired journal
+  and no other issue, merging those records with the current journal in time
+  order; a retired journal that cannot be read refuses the child (exit `1`).
+  Every write still goes to `issueAuthoring.journalIssue`. At step 2 the
+  helper checks only the format of each retired-journal entry, not that the
+  journal exists or is closed. It then puts the `authoring-publication` line
+  first in the body, lints that exact body with
+  `audit-authored-issue.mjs --new-issue`
   and looks up the labels it applies. Without `--apply` it renders the
   pending publication-intent record through `post-idd-marker.mjs`'s dry
   run and prints the plan (exit `0`), with no trust or permission
@@ -1455,8 +1465,11 @@ in this preamble, since the fallback differs per helper.
   status 401, 404 or 422; any other failure reports the journal as
   `uncertain: replay the journal` (an owner marker reports
   `"ownerMarker": "uncertain"`), and an uncertain pending record stops
-  before the create. Every policy value comes from the repository policy
-  file only, and `--marker-prefix` is required when the issue or the
+  before the create. Before the create, an uncertain pending-record post also
+  reports `retry: "replay the journal first"`, and `retry: "permitted"` appears
+  only with `"nothingSent": true`; after the create the report has no `retry`
+  field. Every policy value comes from the repository
+  policy file only, and `--marker-prefix` is required when the issue or the
   journal is in another repository.
 
   For `--shape carrier`, after `state=member` the helper runs the carrier
@@ -2866,6 +2879,18 @@ or its output is not a successful, well-formed process listing. For a direct
 run, use process-group isolation only when that probe succeeds; otherwise
 continue without group isolation.
 
+On an admitted run, the wrapper also waits for the group to drain after the
+command's root exits normally, and it releases the slot only after that. A
+signal during that wait is forwarded to the group, as above, and the run ends
+with that signal's status. The drain has no bound of its own, and `maxWait`
+does not apply to it: a group member that never exits keeps the slot held until
+it ends, so end that member to release the slot. Direct runs do not wait after
+a normal exit. The admitted command runs without the lock descriptor (fd 9), so
+a descendant that leaves the group cannot keep the slot through an inherited
+descriptor. Observed 2026-10-23 in adopter field feedback (finding 10, issue
+`#4702`): a same-group child outlived a normally exiting root, and a contender
+entered while it was still alive.
+
 ```sh
 child_pid=
 child_group=false
@@ -2952,7 +2977,9 @@ run_child() {
     fi
     child_group=true
     child_reset_signals=true
-    IDD_LOCAL_ADMISSION=1 env --default-signal=INT --default-signal=TERM setsid "$shell" -c "$command" &
+    # The command runs without the lock descriptor (fd 9), so a descendant
+    # that leaves the group cannot keep the slot.
+    IDD_LOCAL_ADMISSION=1 env --default-signal=INT --default-signal=TERM setsid "$shell" -c "$command" 9>&- &
   elif command -v setsid >/dev/null 2>&1; then
     group_ready=false
     if set +m 2>/dev/null; then
@@ -2984,6 +3011,9 @@ run_child() {
   child_pid=$!
   if [ -n "$pending_signal" ]; then forward_signal "$pending_signal"; fi
   if wait "$child_pid"; then status=0; else status=$?; fi
+  if [ "$run_mode" = admitted ]; then
+    while group_has_live_member "$child_pid"; do sleep 1; done
+  fi
   child_pid=
   return "$status"
 }
@@ -4025,7 +4055,10 @@ The adopted helper boundaries are intentionally narrow:
   valid out-of-loop marker (kurone-kito/idd-skill#3328 -- see the
   [Out-of-loop marker contract](#out-of-loop-marker-contract)), pass
   `--claimless` instead of `--claim-issue`/`--claim-id` (#2616, mirrors
-  `pre-merge-readiness.mjs`'s `--claimless`, #2017).
+  `pre-merge-readiness.mjs`'s `--claimless`, #2017). An empty
+  `closingIssuesReferences` is claimless only when the head branch does not
+  name an issue, or names one with no active claim and a valid out-of-loop
+  marker; see the fail-closed bullet below (kurone-kito/idd-skill#4735).
 - Maps `--comment-id` (the review comment's REST id) to its owning review
   thread by matching it against the `databaseId` of the comments inside each
   GraphQL `reviewThreads` node (both the threads and the nested comments
@@ -4081,6 +4114,16 @@ The adopted helper boundaries are intentionally narrow:
   the active claim's branch to equal the PR's head branch. `--claimless`
   itself fails closed against a non-empty `closingIssuesReferences`
   unless a valid out-of-loop marker applies (kurone-kito/idd-skill#3328).
+  With an empty `closingIssuesReferences`, the PR's head branch decides
+  (kurone-kito/idd-skill#4735): a name that does not start with `issue/`
+  stays claimless with no viewer-identity lookup; an `issue/<n>-...` name is
+  checked against issue `<n>`'s claim, as if it were the closing issue, so an
+  active claim refuses `--claimless`, and the refusal names the claim-bound
+  route `--claim-issue <n> --claim-id <claim-id>`; with no active claim, a
+  valid trusted out-of-loop marker on the PR still applies (the bootstrap
+  exception). An empty, unreadable, or malformed name (not a valid branch name,
+  or an issue number that is not a safe integer), or incomplete claim
+  evidence, fails closed.
   GraphQL `errors` fail fast rather than masquerading as a missing thread,
   and a partial apply (reply posted, resolve not confirmed) still reports
   the posted `replyId`.
@@ -4136,7 +4179,8 @@ Flags, one line each:
 - `--adopt-now`: adopt-now condition (d) of the E5 Defer rule holds: another
   item in the same E5 pass is already Accepted, so a push is certain, and this
   fix stays within that push's files. It turns a `defer` verdict into `keep`
-  with `blocked adopt-now`. See the rules below.
+  with `blocked adopt-now` below the review-count cap. At or above the
+  cap it changes nothing. See the rules below.
 - `--override <reason>`: posts an Accepted reply that the defer matrix
   refuses, and records the reason as the line's last part, after
   `override:`. See the rules below.
@@ -4164,7 +4208,17 @@ Rules:
   matrix decides first, and the flag changes only a `defer` verdict: a `keep`
   from the matrix or from a blocking flag such as `--scope-fence` keeps its
   own `blocked` reason. An Accepted reply with the flag needs no `--override`,
-  since its verdict is `keep`.
+  since its verdict is `keep` below the review-count cap. At or above the
+  cap, the flag changes nothing, so an Accepted reply whose verdict is
+  `defer` still needs `--override` under `enforce`.
+- **Review-count cap.** Under `severity-tiered` without `--lite`, the
+  helper reads `critiqueLoop.deferAllAfterRounds` and compares it with the
+  Copilot review count it already reads for the relax step. At or above the
+  cap it returns `verdict defer` with no `blocked` part for each scored
+  finding that no block reason holds, except the safety class, which
+  keeps with `blocked safety-class`.
+  An unset or invalid field means off. See the
+  [Review-count cap paragraph](idd-review-policy-profiles.md#wave-gradient-urgency-defer).
 - **Override.** `--override` needs `record` or `enforce`, `deferByUrgency`
   `severity-tiered`, the pair, an `**Accepted**` body, and a `defer` verdict.
   A `keep` verdict is refused with a usage error. The reason must be one
@@ -5416,13 +5470,26 @@ claim-revalidation gate.
 `parseScopeOverrunRecordComment(body, markerPrefix)` accepts only a canonical
 record under the supplied prefix. `resolveScopeOverrunEvidence()` additionally
 requires each record comment's author to be in the configured trusted marker
-actor list and `lastEditedAt` to be explicitly `null`. A pre-push record may be
-followed by post-push records only when issue, effort, candidate files, PR
-number, and branch stay the same. If the pushed head changes, the newest
-append-only record by GitHub's `createdAt` timestamp and numeric comment ID is
-active; earlier records remain for audit. A new head needs a new trusted-owner
-decision for that exact SHA; the previous decision does not carry forward, and
-an older decision leaves the result `pending` for a decision on the new head.
+actor list and `lastEditedAt` to be explicitly `null`.
+
+The immutable snapshot for a lineage is its issue number, effort, and canonical
+candidate-file set. Every record in that lineage must keep those values.
+Changed candidate files or effort return `invalid` with `record-conflict`; a
+record for another issue returns `invalid` with `record-issue-mismatch`. Keep
+the original issue's record lineage intact. If the candidate-file set changes,
+create a new issue with a new initial pre-push snapshot instead of editing or
+replacing the original snapshot. These mismatches remain fail-closed.
+This changed-scope dead end was raised during review of pull request `#4688`
+on 2026-10-24 ([immutable snapshot contract](https://github.com/kurone-kito/idd-skill/pull/4688#discussion_r4370115461)).
+
+A pre-push record may be followed by post-push records only when the issue,
+effort, and candidate-file set stay the same. Every post-push record in that
+lineage also keeps the same PR number and branch. When the pushed head changes,
+the newest append-only record by GitHub's `createdAt` timestamp and numeric
+comment ID is active; earlier records remain for audit. A new head needs a new
+trusted-owner decision for that exact SHA; the previous decision does not carry
+forward, and an older decision leaves the result `pending` for a decision on
+the new head.
 Every record and decision requires GitHub `createdAt` and a positive numeric
 comment ID; missing ordering metadata is incomplete evidence and returns
 `invalid`. If ordering data is ambiguous, multiple heads remain conflicting
@@ -7661,13 +7728,20 @@ reflexively as any other CLI option.
   nonce was recorded for the active claim, which stays backward
   compatible), and
   `--trusted-marker-logins "<trusted-login-1>,<trusted-login-2>"`.
-  `--claimless` (#2017) is the no-issue alternative: it cannot combine
-  with `--claim-issue` or `--claim-id`, and it is honored when the PR's
-  `closingIssuesReferences` is empty, or (kurone-kito/idd-skill#3328)
-  when the PR carries a valid, trusted, unedited out-of-loop marker --
-  see the [Out-of-loop marker contract](#out-of-loop-marker-contract)
-  above (otherwise fail closed and pass `--claim-issue`). It skips
-  claim fetch/revalidation and emits
+  `--claimless` (#2017) is the no-claim alternative: use it only after
+  verifying that the PR has no active IDD claim, such as a no-issue PR
+  (`closingIssuesReferences` empty) or (kurone-kito/idd-skill#3328) a PR
+  with a valid, trusted, unedited out-of-loop marker whose linked issue(s)
+  have no active claim -- see the
+  [Out-of-loop marker contract](#out-of-loop-marker-contract) above. An
+  empty `closingIssuesReferences` field alone does not establish that a PR
+  is unclaimed: on a non-default base branch, a PR for an active claimed
+  issue can have no closing references (observed 2026-10-23, #4697).
+  For such a PR, pass the
+  active claim's `--claim-issue` and `--claim-id` even when the field is
+  empty, plus `--nonce` whenever one was recorded. `--claimless` cannot
+  combine with `--claim-issue` or `--claim-id`; it skips claim
+  fetch/revalidation and emits
   the not-applicable / unclaimed ownership shape (claim-id `none`); CI,
   review, advisory, thread, and branch-currency gates still run.
   `idd-merge-execute` also requires `--claim-id` (or the deprecated
@@ -7677,6 +7751,33 @@ reflexively as any other CLI option.
   below; it must include `--claim-issue`'s own number and cannot
   combine with `--claimless`. Omit it for the ordinary single-issue
   case, where the claimed issue alone is the deliberate set.
+
+#### Readiness branch fixture (#4697)
+
+Suppose the live default branch is `main`, effective policy sets
+`developmentBranch` to `release/1.x`, issue `#123` has an active claim, and
+its PR is `#456`:
+
+Compare the live base and default for D3.5 with
+`gh pr view 456 --json baseRefName --jq '.baseRefName'` and
+`gh repo view --json defaultBranchRef --jq '.defaultBranchRef.name'`.
+
+- **Create and resume on the development branch**: create with
+  `gh pr create --base release/1.x ...`; on resume, require
+  `gh pr view 456 --json baseRefName --jq '.baseRefName'` to return
+  `release/1.x`. Run readiness with
+  `--pr 456 --claim-issue 123 --claim-id "$CLAIM_ID" --nonce "$NONCE"`
+  plus the usual trusted-marker arguments, even when closing references are
+  empty. D3.5 is skipped entirely because this base is not the live
+  default. After F3, revalidate the claim and explicitly close with
+  `gh issue close 123 --comment "Merged via #456."` per F4.
+- **Create and resume on the default branch**: when policy selects `main`
+  (or `developmentBranch` is absent), create with `gh pr create --base main
+  ...` and require the resumed PR base to equal `main`. Use the same
+  claim-bound readiness arguments. D3.5 verifies the closing keyword and exact
+  closing set, including the existing async-registration wait; GitHub closes
+  the issue on merge.
+
 - Stable contract:
   [`pre-merge-readiness.schema.json`][pre-merge-readiness-schema]
 - Stable sections consumed by the instructions: `reviewCurrency`,
@@ -8926,9 +9027,12 @@ same as `AW4`/`AW5`.
 - `callSiteRouting` (required object): the next step for each call site.
   `eBranchSync` is `proceed-to-f1`, `sync-path`, `retry`, or `hold`; `e11`
   is `skip-merge` or `merge-development-branch`; `f1` is `proceed-to-f2`,
-  `return-to-e-phase-branch-sync`, `retry`, or `hold`. Each call site reads
-  its own key, and the phase files do not restate the routing.
-- Routing table (the single statement of branch-state routing).
+  `return-to-e-phase-branch-sync`, `retry`, or `hold`. Other helper call sites
+  read their own key. E11 instead makes its documented live PR-base and Git checks:
+  this helper reflects the last pushed head, not unpushed fixes, so
+  `callSiteRouting.e11` remains compatibility output (kurone-kito/idd-skill#4759).
+- The routing table is authoritative for the other branch-state call sites;
+  E11's routing is defined in the review-fix phase file.
   `requiresUpToDateHead` is not emitted. The helper derives it from the base
   branch's policy, and a failed or unreadable read counts as `true`, which is
   fail closed.
@@ -9466,13 +9570,35 @@ and that helper detail is the next action.
     does not require an up-to-date head, with `mergeable` resolved to
     `MERGEABLE`, is listed, so a conflicting, blocked, unstable,
     still-computing, or draft head is not.
-    A pull request that closes no issue is checked with `--claimless`;
-    otherwise each same-repository closing issue is tried as
-    `--claim-issue`, with no `--claim-id`. Each check also receives this
-    run's `--trusted-marker-logins`, `--advisory-bot-logins`, and
+    A pull request that closes no issue is checked with `--claimless` when
+    its head branch is not blank and does not start with `issue/`, after
+    optional leading whitespace, in any ASCII letter case. When the closing
+    references are
+    empty and the head branch is the
+    canonical lowercase `issue/<number>-...`, the pull request is checked
+    with `--claim-issue <number>` instead (issue `#4734`). GitHub can leave
+    the closing references empty for a claimed issue branch on a non-default
+    base (issue `#4697`, observed 2026-10-23), so an empty field does not
+    show that no claim exists. A head branch that is missing, that starts
+    with `issue/` in another ASCII letter case or after leading whitespace,
+    or that starts with the canonical `issue/` without a parseable issue
+    number, is listed in `openReadyUncheckedPrs` with a `reason`, because a
+    claimless check would skip the claim on it. Otherwise
+    each same-repository closing issue is tried as `--claim-issue`, with no
+    `--claim-id`. Each check also receives this run's
+    `--trusted-marker-logins`, `--advisory-bot-logins`, and
     `--idd-agent-logins` values when they are given. Readiness still
     requires an active claim on that issue, so a pull request whose claim
-    was released reads as not ready and is not listed. A pull request that
+    was released reads as not ready and is not listed. For a head branch
+    with empty closing references this narrows the list deliberately: an
+    issue branch with no active claim was listed through `--claimless`
+    before. The check confirms only that an active claim exists on that
+    issue. It does not compare the claim's recorded branch with the pull
+    request head, and without `--claim-id` it does not check the claim's
+    agent or nonce. On a default-branch base the expected closing set is
+    that issue, so a pull request without a closing keyword reads as not
+    ready, and a `none` claimless waiver does not bind on this path. A pull
+    request that
     closes an issue but merges out of loop under a valid out-of-loop marker
     is not tried with `--claimless`, so it is not listed either. A pull
     request whose readiness check fails, or whose closing references
@@ -9894,23 +10020,64 @@ a destructive re-run.
 
 ## Signed-Commit Merge Wrapper (Shared Git Procedure)
 
-`idd-review-triage.instructions.md`'s E-phase sync path and
-`idd-review-fix.instructions.md`'s E11 both merge `{development-branch}`
-into the feature branch:
+This section documents review-fix E11 only.
+
+`idd-review-fix.instructions.md`'s E11 merges `{development-branch}` into
+the feature branch. It reads the PR base and current Git refs before each
+fix push, so a conflict-free sync rides with that push instead of creating
+a sync-only push; its helper field remains for compatibility because the
+helper sees the last pushed head (kurone-kito/idd-skill#4759).
+
+For a conflict, unresolved threads, unreplied comments, or a
+`CHANGES_REQUESTED` review require explicit confirmation before merging,
+resolving, and completing. Then use this wrapper for both the merge and
+`git merge --continue`. After a wrapper timeout, terminate and wait for its
+full process tree before aborting; if it remains live or its exit is
+unconfirmed, hold without aborting or pushing.
+
+E11 first fetches the target with this exact refspec:
 
 ```sh
-git fetch origin +refs/heads/{development-branch}:refs/remotes/origin/{development-branch} \
-  && git merge origin/{development-branch}
+git fetch origin +refs/heads/{development-branch}:refs/remotes/origin/{development-branch}
+```
+
+Capture the fetched commit once in `target_sha`:
+
+```sh
+target_sha=$(git rev-parse --verify 'origin/{development-branch}^{commit}')
+```
+
+Compare `git merge-base HEAD "$target_sha"` with `"$target_sha"`; equality
+skips the merge. When behind, probe with:
+
+```sh
+git merge-tree --write-tree HEAD "$target_sha"
+```
+
+Exit 0 means no conflict; 1 means conflict. Any other exit is unknown, so
+hold without merging or pushing. A failed fetch, capture, or comparison also
+holds. Use the captured SHA for both the probe and merge below; do not fetch
+or resolve the branch ref again. Keep `target_sha` available across E11, or
+pass its recorded value if the commands run in separate shells.
+
+```sh
+git merge --no-ff \
+  -m "chore: merge origin/{development-branch} into the claimed branch" \
+  "$target_sha"
 ```
 
 On a repo whose primary commit signing is non-interactive-hostile (GPG
 pinentry / hardware-touch) and that configures a fallback signing wrapper for
 arbitrary git subcommands, run the **merge** step — including a
 `--continue` after conflict resolution — through that wrapper, never the
-plain command (`git fetch` creates no commit and needs no signing):
+plain merge command (the separate `git fetch` creates no commit and needs no
+signing):
 
 ```sh
-git -c gpg.format=ssh -c user.signingkey=<abs-path> -c commit.gpgsign=true merge -m "chore: merge origin/{development-branch} into the claimed branch" origin/{development-branch}
+git -c gpg.format=ssh -c user.signingkey=<abs-path> \
+  -c commit.gpgsign=true merge --no-ff \
+  -m "chore: merge origin/{development-branch} into the claimed branch" \
+  "$target_sha"
 # resolve conflicts if any, then:
 git -c gpg.format=ssh -c user.signingkey=<abs-path> -c commit.gpgsign=true merge --continue
 ```

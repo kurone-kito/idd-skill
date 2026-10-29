@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url';
 import {
   type AdvisoryWaitMarkerSummary,
   summarizeAdvisoryWaitMarkers,
+  summarizeDispositionEvidenceForGate,
 } from '../src/scripts/protocol-helpers.mts';
 
 // Runs the fenced shell blocks of the shell fallback document under bash and
@@ -125,21 +126,21 @@ function manualBlockAfter(heading: string, marker: string): string {
   const lines = readFileSync(DOC, 'utf8').split('\n');
   const start = lines.indexOf(heading);
   if (start < 0) {
-    throw new Error('heading not found: ' + heading);
+    throw new Error(`heading not found: ${heading}`);
   }
   const markerIndex = lines.findIndex(
     (line, index) => index > start && line.includes(marker),
   );
   const fence = String.fromCharCode(96).repeat(3);
-  const previousOpen = lines.lastIndexOf(fence + 'sh', markerIndex);
+  const previousOpen = lines.lastIndexOf(`${fence}sh`, markerIndex);
   const previousClose = lines.lastIndexOf(fence, markerIndex);
   const markerIsInsideBlock = previousOpen > previousClose;
   const open = markerIsInsideBlock
     ? previousOpen
-    : lines.indexOf(fence + 'sh', markerIndex);
+    : lines.indexOf(`${fence}sh`, markerIndex);
   const close = lines.indexOf(fence, open + 1);
   if (markerIndex < 0 || open < 0 || close < 0) {
-    throw new Error('no manual sh block after ' + marker);
+    throw new Error(`no manual sh block after ${marker}`);
   }
   return lines
     .slice(markerIsInsideBlock ? markerIndex + 1 : open + 1, close)
@@ -195,8 +196,12 @@ case "$*" in
         else
           cat "$STUB_PROOF"
         fi ;;
-      *reviewThreads*) answer "$STUB_THREADS" ;;
-      *"comments(first"*) answer "$STUB_EDIT" ;;
+      *reviewThreads*)
+        if [ "\${STUB_THREADS_FAIL:-0}" = 1 ]; then exit 1; fi
+        answer "$STUB_THREADS" ;;
+      *"comments(first"*)
+        if [ "\${STUB_EDIT_FAIL:-0}" = 1 ]; then exit 1; fi
+        answer "$STUB_EDIT" ;;
       *) echo "stub: unrecognised graphql query" >&2; exit 1 ;;
     esac ;;
   *"/pulls/"*"/reviews/"*"/comments"*)
@@ -245,6 +250,8 @@ interface Fixtures {
   timeline?: string;
   timelineFail?: boolean;
   prEditExit?: number;
+  markerPrefixConfig?: string;
+  advisoryBotLogins?: string[];
 }
 
 interface RunResult {
@@ -296,7 +303,7 @@ function makeSandbox(fixtures: Fixtures): string {
   write('repo-url.json', {
     owner: { login: OWNER },
     name: REPO,
-    url: fixtures.repoUrl ?? 'https://github.com/' + OWNER + '/' + REPO,
+    url: fixtures.repoUrl ?? `https://github.com/${OWNER}/${REPO}`,
   });
   write('auth-status-exit.txt', String(fixtures.authStatusExit ?? 0));
   const proof =
@@ -786,13 +793,30 @@ interface F2Result {
   ghCalls: string[];
 }
 
-function runF2(fixtures: Fixtures): F2Result {
+function runF2(fixtures: Fixtures, env: Record<string, string> = {}): F2Result {
   const root = makeSandbox(fixtures);
+  if (
+    fixtures.markerPrefixConfig !== undefined ||
+    fixtures.advisoryBotLogins !== undefined
+  ) {
+    mkdirSync(join(root, '.github', 'idd'), { recursive: true });
+    writeFileSync(
+      join(root, '.github', 'idd', 'config.json'),
+      JSON.stringify({
+        ...(fixtures.markerPrefixConfig !== undefined
+          ? { markerPrefix: fixtures.markerPrefixConfig }
+          : {}),
+        ...(fixtures.advisoryBotLogins !== undefined
+          ? { advisoryBotLogins: fixtures.advisoryBotLogins }
+          : {}),
+      }),
+    );
+  }
   const block = inlineGraphqlVariables(
     substitutePlaceholders(fencedBlock('## F2')),
   );
-  const script = 'PR_HEAD_SHA=' + HEAD_SHA + '\n' + block;
-  const result = runScript(root, script, {});
+  const script = `PR_HEAD_SHA=${HEAD_SHA}\n${block}`;
+  const result = runScript(root, script, env);
   rmSync(root, { recursive: true, force: true });
   const conjuncts =
     /conjuncts=(\S+)/.exec(result.stdout)?.[1]?.split(',') ?? [];
@@ -835,7 +859,7 @@ test('F2 rejects empty, malformed, and unexpected review-list data (#4638)', {
   }
 
   const botReview = {
-    user: { login: BOT_LOGIN + '[bot]' },
+    user: { login: `${BOT_LOGIN}[bot]` },
     submitted_at: '2026-10-08T09:00:00Z',
     commit_id: HEAD_SHA,
     id: 901,
@@ -866,7 +890,7 @@ test('F2 selects the latest review and counts comments across valid pages (#4638
     JSON.stringify([
       { user: null },
       {
-        user: { login: BOT_LOGIN + '[bot]' },
+        user: { login: `${BOT_LOGIN}[bot]` },
         submitted_at: '2026-10-08T09:00:00Z',
         commit_id: '0'.repeat(40),
         id: 900,
@@ -875,14 +899,13 @@ test('F2 selects the latest review and counts comments across valid pages (#4638
     '\n' +
     JSON.stringify([
       {
-        user: { login: BOT_LOGIN + '[bot]' },
+        user: { login: `${BOT_LOGIN}[bot]` },
         submitted_at: '2026-10-08T09:00:00.123Z',
         commit_id: HEAD_SHA,
         id: 901,
       },
     ]);
-  const reviewComments =
-    '[]\n' + JSON.stringify([{ id: 1, path: 'src/one.mts', body: 'finding' }]);
+  const reviewComments = `[]\n${JSON.stringify([{ id: 1, path: 'src/one.mts', body: 'finding' }])}`;
   const run = runF2({ reviews, reviewComments });
   assert.equal(run.status, 0, run.stderr);
   assert.deepEqual(
@@ -892,7 +915,7 @@ test('F2 selects the latest review and counts comments across valid pages (#4638
   );
   assert.ok(
     run.ghCalls.some((call) =>
-      call.includes('/pulls/' + PR_NUMBER + '/reviews/901/comments'),
+      call.includes(`/pulls/${PR_NUMBER}/reviews/901/comments`),
     ),
   );
 });
@@ -959,11 +982,11 @@ for (const example of [
 ]) {
   for (const route of [
     {
-      url: 'https://github.com/' + OWNER + '/' + REPO,
+      url: `https://github.com/${OWNER}/${REPO}`,
       authHost: 'github.com',
     },
     {
-      url: 'https://ghe.example.test/' + OWNER + '/' + REPO,
+      url: `https://ghe.example.test/${OWNER}/${REPO}`,
       authHost: 'ghe.example.test',
     },
   ]) {
@@ -981,15 +1004,15 @@ for (const example of [
       assert.equal(result.status, 0, result.stderr);
       assert.ok(
         result.ghCalls.some((call) =>
-          call.includes('auth status --active --hostname ' + route.authHost),
+          call.includes(`auth status --active --hostname ${route.authHost}`),
         ),
       );
-      const apiEndpoint = 'repos/' + OWNER + '/' + REPO;
+      const apiEndpoint = `repos/${OWNER}/${REPO}`;
       assert.ok(
         result.ghCalls.some(
           (call) =>
-            call.includes('api --hostname ' + route.authHost) &&
-            call.includes(apiEndpoint + '/issues/' + PR_NUMBER + '/comments') &&
+            call.includes(`api --hostname ${route.authHost}`) &&
+            call.includes(`${apiEndpoint}/issues/${PR_NUMBER}/comments`) &&
             call.includes('--method POST') &&
             call.includes('--silent'),
         ),
@@ -1000,13 +1023,13 @@ for (const example of [
     });
   }
 
-  test(example.heading + ' fails closed for a ported GHES URL (#4638)', {
+  test(`${example.heading} fails closed for a ported GHES URL (#4638)`, {
     skip: SKIP_REASON ?? false,
   }, () => {
     const result = runManualRecoveryPost(
       example.heading,
       example.marker,
-      'https://ghe.example.test:8443/' + OWNER + '/' + REPO,
+      `https://ghe.example.test:8443/${OWNER}/${REPO}`,
     );
     assert.equal(result.status, 2, result.stdout + result.stderr);
     assert.match(
@@ -1085,13 +1108,13 @@ test('manual recovery POST stops before authentication for invalid or mismatched
   skip: SKIP_REASON ?? false,
 }, () => {
   for (const repoUrl of [
-    'http://ghe.example.test/' + OWNER + '/' + REPO,
-    'https://ghe.example.test:65536/' + OWNER + '/' + REPO,
+    `http://ghe.example.test/${OWNER}/${REPO}`,
+    `https://ghe.example.test:65536/${OWNER}/${REPO}`,
     'https://ghe.example.test:8443/other/repo',
-    'https://ghe.example.test:8443.evil.test/' + OWNER + '/' + REPO,
+    `https://ghe.example.test:8443.evil.test/${OWNER}/${REPO}`,
   ]) {
     const result = runManualRecoveryPost('## AW3-R', 'or manually:', repoUrl);
-    assert.equal(result.status, 2, repoUrl + '\n' + result.stderr);
+    assert.equal(result.status, 2, `${repoUrl}\n${result.stderr}`);
     assert.ok(
       !result.ghCalls.some((call) => call.startsWith('auth status')),
       repoUrl,
@@ -1520,4 +1543,2006 @@ test('differential: an edited request marker reads the same in shell and runtime
   const summary = runtimeAw2(rows, aw2Edit('2026-10-08T10:05:00Z'));
   assertAw2Parity(run, summary);
   assert.equal(summary.requestMarkerCount, 1);
+});
+
+// ---------------------------------------------------------------------------
+// F2 origin-specific dispositions (#4696): each case runs the shell block and
+// the runtime helper on the same fixture, and the missing counts must agree.
+// ---------------------------------------------------------------------------
+
+const F2_CASE_TIME_1 = '2026-10-08T09:00:00Z';
+const F2_CASE_TIME_2 = '2026-10-08T09:10:00Z';
+const F2_CASE_TIME_3 = '2026-10-08T09:20:00Z';
+const F2_EDITED_AT = '2026-10-08T09:50:00Z';
+
+interface F2RegularRow {
+  id: number;
+  login: string;
+  body: string;
+  at: string;
+  edited?: boolean;
+  updatedAt?: string;
+}
+
+interface F2DifferentialCase {
+  regular?: F2RegularRow[];
+  threads?: unknown[];
+  env?: Record<string, string>;
+  advisoryBotLogins?: string[];
+  trustedMarkerLogins?: string[];
+  markerPrefix?: string;
+}
+
+interface F2CanonicalComment {
+  id: string;
+  author: { login: string };
+  body: string;
+  createdAt: string;
+  updatedAt: string;
+  lastEditedAt: string | null;
+}
+
+type F2CanonicalInput = Parameters<
+  typeof summarizeDispositionEvidenceForGate
+>[0];
+
+/** One GraphQL review-thread comment, as the shell and the runtime both read it. */
+function f2ThreadComment(
+  login: string,
+  body: string,
+  createdAt: string,
+  lastEditedAt: string | null = null,
+  updatedAt: string | null = lastEditedAt ?? createdAt,
+): Record<string, unknown> {
+  return {
+    author: { login },
+    body,
+    createdAt,
+    commit: null,
+    lastEditedAt,
+    updatedAt,
+  };
+}
+
+/** A review thread whose comment list may be truncated. */
+function f2Thread(
+  comments: Array<Record<string, unknown>>,
+  hasNextPage = false,
+  isResolved = false,
+): unknown {
+  return {
+    isResolved,
+    comments: {
+      pageInfo: { hasNextPage },
+      nodes: comments,
+    },
+  };
+}
+
+/**
+ * Runs the F2 shell block and the runtime helper on one fixture and returns
+ * both results, so each test can assert the shell agrees with the runtime.
+ */
+function runF2Differential(c: F2DifferentialCase): {
+  shell: F2Result;
+  canonical: ReturnType<typeof summarizeDispositionEvidenceForGate>;
+} {
+  const regular = c.regular ?? [];
+  const threads = c.threads ?? [];
+  const shell = runF2(
+    {
+      rest: regular.map((row) => ({
+        id: row.id,
+        user: { login: row.login },
+        body: row.body,
+        created_at: row.at,
+        updated_at: row.updatedAt ?? row.at,
+      })),
+      edit: f2Edit(
+        regular.map((row) => ({
+          databaseId: row.id,
+          lastEditedAt: row.edited ? F2_EDITED_AT : null,
+        })),
+      ),
+      threads: threadsResponse(threads),
+      markerPrefixConfig: c.markerPrefix,
+      advisoryBotLogins: c.advisoryBotLogins,
+    },
+    c.env ?? {},
+  );
+  const canonicalComments: F2CanonicalComment[] = regular.map((row) => ({
+    id: String(row.id),
+    author: { login: row.login },
+    body: row.body,
+    createdAt: row.at,
+    updatedAt: row.updatedAt ?? row.at,
+    lastEditedAt: row.edited ? F2_EDITED_AT : null,
+  }));
+  const canonical = summarizeDispositionEvidenceForGate(
+    {
+      comments: canonicalComments,
+      threads: threads,
+    } as unknown as F2CanonicalInput,
+    {
+      iddAgentLogins: [AGENT_LOGIN],
+      trustedMarkerLogins: c.trustedMarkerLogins ?? [AGENT_LOGIN],
+      advisoryBotLogins: c.advisoryBotLogins ?? [],
+      prHeadSha: HEAD_SHA,
+      markerPrefix: c.markerPrefix ?? 'idd-skill',
+    },
+  );
+  return { shell, canonical };
+}
+
+function assertF2Parity(
+  c: F2DifferentialCase,
+  expectedRegular: number,
+  expectedThreads: number,
+): void {
+  const { shell, canonical } = runF2Differential(c);
+  assert.equal(shell.status, 0, shell.stderr);
+  assert.equal(canonical.missingRegularCommentCount, expectedRegular);
+  assert.equal(canonical.missingThreadCount, expectedThreads);
+  assert.equal(shell.missingRegularComments, expectedRegular, shell.stdout);
+  assert.equal(shell.missingThreads, expectedThreads, shell.stdout);
+}
+
+const COPILOT_THREAD_FINDING = f2ThreadComment(
+  `${BOT_LOGIN}[bot]`,
+  'please fix',
+  F2_CASE_TIME_1,
+);
+
+test('differential: an advisory-bot regular comment with no disposition is missing (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 6001,
+          login: 'coderabbitai[bot]',
+          body: 'nit: rename this',
+          at: F2_CASE_TIME_1,
+        },
+      ],
+    },
+    1,
+    0,
+  );
+});
+
+test('differential: a fresh unedited disposition settles one advisory comment and no other (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 6002,
+          login: 'coderabbitai[bot]',
+          body: 'nit: rename this',
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 6003,
+          login: AGENT_LOGIN,
+          body: '**Accepted** — renamed',
+          at: F2_CASE_TIME_2,
+        },
+        {
+          id: 6004,
+          login: 'coderabbitai[bot]',
+          body: 'nit: fix the typo',
+          at: F2_CASE_TIME_3,
+        },
+      ],
+    },
+    1,
+    0,
+  );
+});
+
+test('differential: an edited advisory disposition does not settle its comment (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 6005,
+          login: 'coderabbitai[bot]',
+          body: 'nit: rename this',
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 6006,
+          login: AGENT_LOGIN,
+          body: '**Accepted** — renamed',
+          at: F2_CASE_TIME_2,
+          edited: true,
+        },
+      ],
+    },
+    1,
+    0,
+  );
+});
+
+test('differential: a human-origin thread with only human follow-up is presence-only (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      threads: [
+        f2Thread([
+          f2ThreadComment('human-reviewer', 'please rename', F2_CASE_TIME_1),
+          f2ThreadComment('human-reviewer', 'ping, still open', F2_CASE_TIME_2),
+        ]),
+      ],
+    },
+    0,
+    0,
+  );
+});
+
+test('differential: a bot reply after a human-origin thread keeps the human origin (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      threads: [
+        f2Thread([
+          f2ThreadComment('human-reviewer', 'please rename', F2_CASE_TIME_1),
+          f2ThreadComment('coderabbitai[bot]', 'Looks good', F2_CASE_TIME_2),
+        ]),
+      ],
+    },
+    0,
+    0,
+  );
+});
+
+test('differential: a human thread with a later IDD reply needs a fresh disposition (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      threads: [
+        f2Thread([
+          f2ThreadComment('human-reviewer', 'please rename', F2_CASE_TIME_1),
+          f2ThreadComment(
+            AGENT_LOGIN,
+            '**Accepted** — renamed',
+            F2_CASE_TIME_2,
+          ),
+          f2ThreadComment('human-reviewer', 'still wrong', F2_CASE_TIME_3),
+        ]),
+      ],
+    },
+    0,
+    1,
+  );
+});
+
+test('differential: a bot-origin thread with only a later human reply is missing (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      threads: [
+        f2Thread([
+          f2ThreadComment('coderabbitai[bot]', 'please rename', F2_CASE_TIME_1),
+          f2ThreadComment('human-reviewer', 'agreed', F2_CASE_TIME_2),
+        ]),
+      ],
+    },
+    0,
+    1,
+  );
+});
+
+test('differential: a bot-origin thread with a fresh unedited disposition is settled (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      threads: [
+        f2Thread([
+          f2ThreadComment(`${BOT_LOGIN}[bot]`, 'please rename', F2_CASE_TIME_1),
+          f2ThreadComment(
+            AGENT_LOGIN,
+            '**Accepted** — renamed',
+            F2_CASE_TIME_2,
+          ),
+        ]),
+      ],
+    },
+    0,
+    0,
+  );
+});
+
+test('differential: an edited, untrusted, or stale thread disposition stays missing (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  // Edited: the disposition's edit state is not unedited.
+  assertF2Parity(
+    {
+      threads: [
+        f2Thread([
+          COPILOT_THREAD_FINDING,
+          f2ThreadComment(
+            AGENT_LOGIN,
+            '**Accepted** — renamed',
+            F2_CASE_TIME_2,
+            F2_EDITED_AT,
+          ),
+        ]),
+      ],
+    },
+    0,
+    1,
+  );
+  // Untrusted: a disposition from a login that is not an IDD agent.
+  assertF2Parity(
+    {
+      threads: [
+        f2Thread([
+          COPILOT_THREAD_FINDING,
+          f2ThreadComment(
+            'someone-else',
+            '**Accepted** — renamed',
+            F2_CASE_TIME_2,
+          ),
+        ]),
+      ],
+    },
+    0,
+    1,
+  );
+  // Stale: later feedback postdates the disposition.
+  assertF2Parity(
+    {
+      threads: [
+        f2Thread([
+          COPILOT_THREAD_FINDING,
+          f2ThreadComment(
+            AGENT_LOGIN,
+            '**Accepted** — renamed',
+            F2_CASE_TIME_2,
+          ),
+          f2ThreadComment(`${BOT_LOGIN}[bot]`, 'still broken', F2_CASE_TIME_3),
+        ]),
+      ],
+    },
+    0,
+    1,
+  );
+});
+
+test('differential: a truncated human thread stays missing despite presence-only follow-up (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      threads: [
+        f2Thread(
+          [
+            f2ThreadComment('human-reviewer', 'please rename', F2_CASE_TIME_1),
+            f2ThreadComment('human-reviewer', 'ping', F2_CASE_TIME_2),
+          ],
+          true,
+        ),
+      ],
+    },
+    0,
+    1,
+  );
+});
+
+test('differential: a configured advisory bot from IDD_ADVISORY_BOT_LOGINS is advisory origin (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      threads: [
+        f2Thread([
+          f2ThreadComment(
+            'my-review-bot[bot]',
+            'please rename',
+            F2_CASE_TIME_1,
+          ),
+          f2ThreadComment('human-reviewer', 'agreed', F2_CASE_TIME_2),
+        ]),
+      ],
+      env: { IDD_ADVISORY_BOT_LOGINS: 'other-bot, my-review-bot[bot]' },
+      advisoryBotLogins: ['my-review-bot[bot]'],
+    },
+    0,
+    1,
+  );
+});
+
+test('differential: a failed review-thread read blocks, never a clean zero (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  const run = runF2(
+    { rest: [], edit: f2Edit([]), threads: threadsResponse([]) },
+    { STUB_THREADS_FAIL: '1' },
+  );
+  assert.equal(run.status, 2, run.stderr);
+  assert.match(run.stderr, /review-thread read failed/);
+});
+
+test('differential: a pending-decision reply after a disposition does not settle the thread (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      threads: [
+        f2Thread([
+          COPILOT_THREAD_FINDING,
+          f2ThreadComment(
+            AGENT_LOGIN,
+            '**Accepted** — renamed',
+            F2_CASE_TIME_2,
+          ),
+          f2ThreadComment(
+            AGENT_LOGIN,
+            '**Awaiting maintainer decision**\n\nPick one.',
+            F2_CASE_TIME_3,
+          ),
+        ]),
+      ],
+    },
+    0,
+    1,
+  );
+});
+
+test('differential: feedback edited after a disposition reopens the thread (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      threads: [
+        f2Thread([
+          COPILOT_THREAD_FINDING,
+          f2ThreadComment(
+            AGENT_LOGIN,
+            '**Accepted** — renamed',
+            F2_CASE_TIME_2,
+          ),
+          f2ThreadComment(
+            'human-reviewer',
+            'still broken',
+            F2_CASE_TIME_1,
+            F2_EDITED_AT,
+          ),
+        ]),
+      ],
+    },
+    0,
+    1,
+  );
+});
+
+test('differential: an advisory comment edited after its disposition is missing again (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 6010,
+          login: 'coderabbitai[bot]',
+          body: 'nit: rename this',
+          at: F2_CASE_TIME_1,
+          updatedAt: F2_EDITED_AT,
+        },
+        {
+          id: 6011,
+          login: AGENT_LOGIN,
+          body: '**Accepted** — renamed',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+    },
+    1,
+    0,
+  );
+});
+
+// A terminal Codex no-find result: the canonical recognizer needs the exact
+// "About Codex" details block after the reviewed-commit line (#4696).
+const CODEX_NO_FIND_BODY = [
+  "Codex Review: Didn't find any major issues. You're on a roll.",
+  '',
+  '**Reviewed commit:** `1111111`',
+  '',
+  '<details>',
+  '<summary>ℹ️ About Codex in GitHub</summary>',
+  '<br/>',
+  '[Your team has set up Codex to review pull requests in this repo](https://chatgpt.com/codex/cloud/settings/general)',
+  'Reviews are triggered when you',
+  '- Open a pull request for review',
+  '- Mark a draft as ready',
+  '- Comment "@codex review".',
+  '</details>',
+].join('\n');
+
+test('differential: a Codex no-find result is cleared only by a disposition naming its source (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 6601,
+          login: 'chatgpt-codex-connector[bot]',
+          body: CODEX_NO_FIND_BODY,
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 6602,
+          login: AGENT_LOGIN,
+          body: '**Accepted** — fixed',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+    },
+    1,
+    0,
+  );
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 6603,
+          login: 'chatgpt-codex-connector[bot]',
+          body: CODEX_NO_FIND_BODY,
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 6604,
+          login: AGENT_LOGIN,
+          body: '**Accepted** — chatgpt-codex-connector[bot] no-find result at HEAD 1111111; no actionable findings were reported (source: #issuecomment-6603)',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+    },
+    0,
+    0,
+  );
+});
+
+test('differential: a GitHub Actions waiver marker is not an outstanding comment (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 6701,
+          login: 'github-actions[bot]',
+          body: '<!-- idd-external-check-waiver: run-1 -->\n\nWaiver recorded.',
+          at: F2_CASE_TIME_1,
+        },
+      ],
+    },
+    0,
+    0,
+  );
+});
+
+test('differential: a review-reply stamp from a human counts as an IDD-originated reply (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      threads: [
+        f2Thread([
+          f2ThreadComment('human-reviewer', 'please rename', F2_CASE_TIME_1),
+          f2ThreadComment(
+            'someone-else',
+            'done <!-- idd-skill-review-reply -->',
+            F2_CASE_TIME_2,
+          ),
+          f2ThreadComment('human-reviewer', 'still wrong', F2_CASE_TIME_3),
+        ]),
+      ],
+    },
+    0,
+    1,
+  );
+});
+
+test('differential: an Accepted. or Rejected** variant with a dot still counts as an IDD disposition (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  // A dotted **Accepted.** reply clears the regular comment it answers.
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 6801,
+          login: 'coderabbitai[bot]',
+          body: 'nit: rename this',
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 6802,
+          login: AGENT_LOGIN,
+          body: '**Accepted.** renamed',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+    },
+    0,
+    0,
+  );
+  // A dotted IDD reply on a human thread is IDD-originated, so presence-only does not apply.
+  assertF2Parity(
+    {
+      threads: [
+        f2Thread([
+          f2ThreadComment('human-reviewer', 'please rename', F2_CASE_TIME_1),
+          f2ThreadComment(AGENT_LOGIN, '**Accepted.** renamed', F2_CASE_TIME_2),
+          f2ThreadComment('human-reviewer', 'still wrong', F2_CASE_TIME_3),
+        ]),
+      ],
+    },
+    0,
+    1,
+  );
+});
+
+test('differential: a source-bound Codex clearance must name the current HEAD (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 6901,
+          login: 'chatgpt-codex-connector[bot]',
+          body: CODEX_NO_FIND_BODY,
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 6902,
+          login: AGENT_LOGIN,
+          body: '**Accepted** — chatgpt-codex-connector[bot] no-find result at HEAD 2222222; no actionable findings were reported (source: #issuecomment-6901)',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+    },
+    1,
+    0,
+  );
+});
+
+test('differential: a source-bound Codex clearance must name the same bot login (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 6911,
+          login: 'chatgpt-codex-connector[bot]',
+          body: CODEX_NO_FIND_BODY,
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 6912,
+          login: AGENT_LOGIN,
+          body: '**Accepted** — coderabbitai[bot] no-find result at HEAD 1111111; no actionable findings were reported (source: #issuecomment-6911)',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+    },
+    1,
+    0,
+  );
+});
+
+test('differential: a trusted-marker actor that is not an IDD agent clears no regular comment (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 6921,
+          login: 'alice',
+          body: 'please change this',
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 6922,
+          login: 'alice',
+          body: '**Accepted** — changed',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+      env: { IDD_TRUSTED_MARKER_ACTORS: `${AGENT_LOGIN},alice` },
+      trustedMarkerLogins: [AGENT_LOGIN, 'alice'],
+    },
+    2,
+    0,
+  );
+});
+
+test('a Bot-typed originating author is advisory even when no list names it (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  // Shell-only: the canonical helper knows only configured bots, so this case
+  // documents the fail-closed direction rather than a parity check.
+  const run = runF2({
+    threads: threadsResponse([
+      f2Thread([
+        {
+          author: { login: 'my-review-bot[bot]', __typename: 'Bot' },
+          body: 'please rename',
+          createdAt: F2_CASE_TIME_1,
+          commit: null,
+          lastEditedAt: null,
+        },
+        f2ThreadComment('human-reviewer', 'agreed', F2_CASE_TIME_2),
+      ]),
+    ]),
+    edit: f2Edit([]),
+  });
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.missingThreads, 1);
+});
+
+test('F2 stops when the edit-state read fails (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  const run = runF2(
+    { rest: regularRest(), threads: emptyThreads(), edit: f2Edit([]) },
+    { STUB_EDIT_FAIL: '1' },
+  );
+  assert.equal(run.status, 2, run.stderr);
+  assert.match(run.stderr, /edit-state read failed/);
+});
+
+test('differential: a source-bound Codex clearance must match the canonical sentence exactly (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  const dispositions = [
+    // Trailing text after the sentence: the canonical anchored regex rejects it.
+    '**Accepted** — chatgpt-codex-connector[bot] no-find result at HEAD 1111111; no actionable findings were reported (source: #issuecomment-7101) extra text',
+    // No em dash.
+    '**Accepted** chatgpt-codex-connector[bot] no-find result at HEAD 1111111; no actionable findings were reported (source: #issuecomment-7101)',
+    // A login that only ends in the bot name.
+    '**Accepted** — not-chatgpt-codex-connector[bot] no-find result at HEAD 1111111; no actionable findings were reported (source: #issuecomment-7101)',
+  ];
+  for (const body of dispositions) {
+    assertF2Parity(
+      {
+        regular: [
+          {
+            id: 7101,
+            login: 'chatgpt-codex-connector[bot]',
+            body: CODEX_NO_FIND_BODY,
+            at: F2_CASE_TIME_1,
+          },
+          { id: 7102, login: AGENT_LOGIN, body, at: F2_CASE_TIME_2 },
+        ],
+      },
+      1,
+      0,
+    );
+  }
+});
+
+test('differential: a Codex no-find whose reviewed commit is not the current HEAD is not clearable (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 7201,
+          login: 'chatgpt-codex-connector[bot]',
+          body: CODEX_NO_FIND_BODY.replace('1111111', '0000000'),
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 7202,
+          login: AGENT_LOGIN,
+          body: '**Accepted** — chatgpt-codex-connector[bot] no-find result at HEAD 1111111; no actionable findings were reported (source: #issuecomment-7201)',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+    },
+    1,
+    0,
+  );
+});
+
+test('differential: an older-HEAD Codex no-find is cleared by a generic IDD reply, not a source-bound one (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  const older = CODEX_NO_FIND_BODY.replace('1111111', '0000000');
+  // Alone, the older result stays missing.
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 7301,
+          login: 'chatgpt-codex-connector[bot]',
+          body: older,
+          at: F2_CASE_TIME_1,
+        },
+      ],
+    },
+    1,
+    0,
+  );
+  // An unedited IDD rejection after it clears it, as canonical does.
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 7302,
+          login: 'chatgpt-codex-connector[bot]',
+          body: older,
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 7303,
+          login: AGENT_LOGIN,
+          body: '**Rejected** — superseded by a newer HEAD',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+    },
+    0,
+    0,
+  );
+});
+
+test('differential: a Codex comment with the phrase but no terminal no-find shape is an ordinary comment (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 7401,
+          login: 'chatgpt-codex-connector[bot]',
+          body: "Codex Review: Didn't find any major issues. Some other text.",
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 7402,
+          login: AGENT_LOGIN,
+          body: '**Accepted** — fixed',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+    },
+    0,
+    0,
+  );
+});
+
+test('differential: a Codex result is terminal only with its exact opening and details shape (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  const generic = {
+    id: 7502,
+    login: AGENT_LOGIN,
+    body: '**Accepted** — fixed',
+    at: F2_CASE_TIME_2,
+  };
+  // An unprefixed :rocket: opening is not a terminal result.
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 7501,
+          login: 'chatgpt-codex-connector[bot]',
+          body: CODEX_NO_FIND_BODY.replace(
+            "Codex Review: Didn't find any major issues. You're on a roll.",
+            "Codex Review: Didn't find any major issues. :rocket:",
+          ),
+          at: F2_CASE_TIME_1,
+        },
+        generic,
+      ],
+    },
+    0,
+    0,
+  );
+  // A details block that is not the canonical one is not a terminal result.
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 7503,
+          login: 'chatgpt-codex-connector[bot]',
+          body: CODEX_NO_FIND_BODY.replace('Mark a draft as ready\n', ''),
+          at: F2_CASE_TIME_1,
+        },
+        { ...generic, id: 7504 },
+      ],
+    },
+    0,
+    0,
+  );
+});
+
+test('differential: a settled reply that mentions the pending phrase still settles (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 7601,
+          login: 'coderabbitai[bot]',
+          body: 'nit: stale message',
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 7602,
+          login: AGENT_LOGIN,
+          body: '**Accepted** — removed the stale awaiting maintainer decision message.',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+    },
+    0,
+    0,
+  );
+});
+
+test('differential: an ordinary reply that mentions the no-find phrase still clears an ordinary comment (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 7701,
+          login: 'coderabbitai[bot]',
+          body: 'nit: check the wording',
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 7702,
+          login: AGENT_LOGIN,
+          body: '**Accepted** — the no-find result at HEAD was reviewed by hand',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+    },
+    0,
+    0,
+  );
+});
+
+test('differential: a rejection confirmation clears a resolved advisory thread only (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  const thread = (isResolved: boolean) => ({
+    isResolved,
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        COPILOT_THREAD_FINDING,
+        f2ThreadComment(
+          AGENT_LOGIN,
+          '**Rejection confirmed by maintainer** — agreed',
+          F2_CASE_TIME_2,
+        ),
+      ],
+    },
+  });
+  assertF2Parity({ threads: [thread(true)] }, 0, 0);
+  assertF2Parity({ threads: [thread(false)] }, 0, 1);
+});
+
+test('differential: a review-reply stamp with another prefix is not an IDD reply (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      threads: [
+        f2Thread([
+          f2ThreadComment('human-reviewer', 'please rename', F2_CASE_TIME_1),
+          f2ThreadComment(
+            'someone-else',
+            'done <!-- other-review-reply -->',
+            F2_CASE_TIME_2,
+          ),
+        ]),
+      ],
+    },
+    0,
+    0,
+  );
+});
+
+test('differential: an upper-case review-reply stamp is an IDD-originated reply (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      threads: [
+        f2Thread([
+          f2ThreadComment('human-reviewer', 'please rename', F2_CASE_TIME_1),
+          f2ThreadComment(
+            'someone-else',
+            'done <!-- IDD-SKILL-review-reply -->',
+            F2_CASE_TIME_2,
+          ),
+          f2ThreadComment('human-reviewer', 'still wrong', F2_CASE_TIME_3),
+        ]),
+      ],
+    },
+    0,
+    1,
+  );
+});
+
+test('differential: a stamp with a longer suffix is not an IDD-originated reply (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      threads: [
+        f2Thread([
+          f2ThreadComment('human-reviewer', 'please rename', F2_CASE_TIME_1),
+          f2ThreadComment(
+            'someone-else',
+            'done <!-- idd-skill-review-reply-extra -->',
+            F2_CASE_TIME_2,
+          ),
+        ]),
+      ],
+    },
+    0,
+    0,
+  );
+});
+
+test('differential: a rejection confirmation without the em-dash sentence does not settle a resolved thread (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  const thread = {
+    isResolved: true,
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        COPILOT_THREAD_FINDING,
+        f2ThreadComment(
+          AGENT_LOGIN,
+          '**Rejection confirmed by maintainer**? Still waiting for confirmation.',
+          F2_CASE_TIME_2,
+        ),
+      ],
+    },
+  };
+  assertF2Parity({ threads: [thread] }, 0, 1);
+});
+
+test('differential: leading whitespace before a rejection confirmation still settles a resolved thread (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  const thread = {
+    isResolved: true,
+    comments: {
+      pageInfo: { hasNextPage: false },
+      nodes: [
+        COPILOT_THREAD_FINDING,
+        f2ThreadComment(
+          AGENT_LOGIN,
+          '\n**Rejection confirmed by maintainer** — agreed',
+          F2_CASE_TIME_2,
+        ),
+      ],
+    },
+  };
+  assertF2Parity({ threads: [thread] }, 0, 0);
+});
+
+test('differential: leading whitespace does not turn a current Codex no-find into an ordinary comment (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  // A generic accepted reply cannot clear a current no-find, even with leading whitespace.
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 7801,
+          login: 'chatgpt-codex-connector[bot]',
+          body: `\n${CODEX_NO_FIND_BODY}`,
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 7802,
+          login: AGENT_LOGIN,
+          body: '**Accepted** — fixed',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+    },
+    1,
+    0,
+  );
+  // The helper trims the source-bound reply, so a leading newline still clears it.
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 7803,
+          login: 'chatgpt-codex-connector[bot]',
+          body: `\n${CODEX_NO_FIND_BODY}`,
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 7804,
+          login: AGENT_LOGIN,
+          body: '\n**Accepted** — chatgpt-codex-connector[bot] no-find result at HEAD 1111111; no actionable findings were reported (source: #issuecomment-7803)',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+    },
+    0,
+    0,
+  );
+  // An untrimmed source-bound reply with no leading newline still clears it.
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 7805,
+          login: 'chatgpt-codex-connector[bot]',
+          body: `\n${CODEX_NO_FIND_BODY}`,
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 7806,
+          login: AGENT_LOGIN,
+          body: '**Accepted** — chatgpt-codex-connector[bot] no-find result at HEAD 1111111; no actionable findings were reported (source: #issuecomment-7805)',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+    },
+    0,
+    0,
+  );
+});
+
+test('differential: the configured marker prefix, not the default, names an IDD reply (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  // With a custom configured prefix, a stamp with that prefix is an IDD reply.
+  assertF2Parity(
+    {
+      markerPrefix: 'custom',
+      threads: [
+        f2Thread([
+          f2ThreadComment('human-reviewer', 'please rename', F2_CASE_TIME_1),
+          f2ThreadComment(
+            'someone-else',
+            'done <!-- custom-review-reply -->',
+            F2_CASE_TIME_2,
+          ),
+          f2ThreadComment('human-reviewer', 'still wrong', F2_CASE_TIME_3),
+        ]),
+      ],
+    },
+    0,
+    1,
+  );
+});
+
+test('differential: a pending-decision marker inside code or quoted text does not block a settled reply (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 7901,
+          login: 'coderabbitai[bot]',
+          body: 'nit: show the marker',
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 7902,
+          login: AGENT_LOGIN,
+          body: '**Accepted** — added the example:\n```\n**Awaiting maintainer decision**\n```',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+    },
+    0,
+    0,
+  );
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 7903,
+          login: 'coderabbitai[bot]',
+          body: 'nit: quote the marker',
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 7904,
+          login: AGENT_LOGIN,
+          body: '**Accepted** — quoted it\n> **Awaiting maintainer decision** example',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+    },
+    0,
+    0,
+  );
+});
+
+test('differential: an IDD pending-decision reply on a human thread is IDD-originated (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      threads: [
+        f2Thread([
+          f2ThreadComment('human-reviewer', 'please rename', F2_CASE_TIME_1),
+          f2ThreadComment(
+            AGENT_LOGIN,
+            '**Awaiting maintainer decision**\n\nPick one.',
+            F2_CASE_TIME_2,
+          ),
+          f2ThreadComment('human-reviewer', 'still open', F2_CASE_TIME_3),
+        ]),
+      ],
+    },
+    0,
+    1,
+  );
+});
+
+test('differential: a bot listed only in the repository config is advisory origin (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      threads: [
+        f2Thread([
+          f2ThreadComment(
+            'my-review-bot[bot]',
+            'please rename',
+            F2_CASE_TIME_1,
+          ),
+          f2ThreadComment('human-reviewer', 'agreed', F2_CASE_TIME_2),
+        ]),
+      ],
+      advisoryBotLogins: ['my-review-bot[bot]'],
+    },
+    0,
+    1,
+  );
+});
+
+test('differential: an inline triple-backtick span does not hide a top-level pending marker (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 8001,
+          login: 'coderabbitai[bot]',
+          body: 'nit: keep the marker',
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 8002,
+          login: AGENT_LOGIN,
+          body: '**Accepted** — ok ```x```\n**Awaiting maintainer decision** pick one.',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+    },
+    1,
+    0,
+  );
+});
+
+test('differential: a fence closes only on a matching backtick count (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  // The marker sits inside a four-backtick fence that holds a three-backtick line: masked.
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 8101,
+          login: 'coderabbitai[bot]',
+          body: 'nit: show the example',
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 8102,
+          login: AGENT_LOGIN,
+          body: '**Accepted** — example:\n````\n```\n**Awaiting maintainer decision** inside\n````',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+    },
+    0,
+    0,
+  );
+  // The same marker after the closing four-backtick fence is a live top-level marker.
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 8103,
+          login: 'coderabbitai[bot]',
+          body: 'nit: show the example',
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 8104,
+          login: AGENT_LOGIN,
+          body: '**Accepted** — example:\n````\n```\n````\n**Awaiting maintainer decision** live',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+    },
+    1,
+    0,
+  );
+});
+
+test('differential: a closing fence with trailing text does not close the fence (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  // "````x" is not a closing fence; an unclosed fence runs to the end, so the marker stays masked.
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 8201,
+          login: 'coderabbitai[bot]',
+          body: 'nit: show the example',
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 8202,
+          login: AGENT_LOGIN,
+          body: '**Accepted** — example:\n````\n**Awaiting maintainer decision** inside\n````x\nstill inside',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+    },
+    0,
+    0,
+  );
+});
+
+test('differential: a closing fence may be longer than its opener (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  // A three-backtick block closed by four backticks ends before the top-level marker.
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 8301,
+          login: 'coderabbitai[bot]',
+          body: 'nit: show the example',
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 8302,
+          login: AGENT_LOGIN,
+          body: '**Accepted** — example:\n```\nsample\n````\n**Awaiting maintainer decision** live',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+    },
+    1,
+    0,
+  );
+});
+
+test('differential: a tilde fence masks a pending marker, and a backtick line inside it does not close it (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 8401,
+          login: 'coderabbitai[bot]',
+          body: 'nit: show the example',
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 8402,
+          login: AGENT_LOGIN,
+          body: '**Accepted** — example:\n~~~\n```\n**Awaiting maintainer decision** inside\n~~~',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+    },
+    0,
+    0,
+  );
+  assertF2Parity(
+    {
+      threads: [
+        f2Thread(
+          [
+            f2ThreadComment('human-reviewer', 'please rename', F2_CASE_TIME_1),
+            f2ThreadComment(
+              AGENT_LOGIN,
+              '**Accepted** — example:\n~~~\n**Awaiting maintainer decision** inside\n~~~',
+              F2_CASE_TIME_2,
+            ),
+          ],
+          false,
+          true,
+        ),
+      ],
+    },
+    0,
+    0,
+  );
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 8403,
+          login: 'coderabbitai[bot]',
+          body: 'nit: show the example',
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 8404,
+          login: AGENT_LOGIN,
+          body: '**Accepted** — example:\n~~~lang~x\n**Awaiting maintainer decision** inside\n~~~',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+      threads: [
+        f2Thread(
+          [
+            f2ThreadComment('human-reviewer', 'please rename', F2_CASE_TIME_1),
+            f2ThreadComment(
+              AGENT_LOGIN,
+              '**Accepted** — example:\n~~~lang~x\n**Awaiting maintainer decision** inside\n~~~',
+              F2_CASE_TIME_2,
+            ),
+          ],
+          false,
+          true,
+        ),
+      ],
+    },
+    0,
+    0,
+  );
+});
+
+test('differential: CRLF line endings do not hide a fenced block close (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 8501,
+          login: 'coderabbitai[bot]',
+          body: 'nit: show the example',
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 8502,
+          login: AGENT_LOGIN,
+          body: '**Accepted** — example:\r\n```\r\n**Awaiting maintainer decision** inside\r\n```\r\n**Awaiting maintainer decision** live',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+    },
+    1,
+    0,
+  );
+});
+
+test('differential: a backtick fence opener cannot carry backticks in its info string (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  // "```example `literal`" is not a fence opener, so the marker after it stays live.
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 8601,
+          login: 'coderabbitai[bot]',
+          body: 'nit: show the example',
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 8602,
+          login: AGENT_LOGIN,
+          body: '**Accepted** — example:\n```example `literal`\n**Awaiting maintainer decision** live\n```',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+    },
+    1,
+    0,
+  );
+});
+
+test('differential: HTML comment masking preserves pending-decision line boundaries in regular comments and threads (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  const replyBody =
+    '**Accepted** — fixed the list\n- example <!--\ncomment -->\n**Awaiting maintainer decision**';
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 8901,
+          login: 'coderabbitai[bot]',
+          body: 'please rename',
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 8902,
+          login: AGENT_LOGIN,
+          body: replyBody,
+          at: F2_CASE_TIME_2,
+        },
+      ],
+    },
+    1,
+    0,
+  );
+  assertF2Parity(
+    {
+      threads: [
+        f2Thread(
+          [
+            f2ThreadComment('human-reviewer', 'please rename', F2_CASE_TIME_1),
+            f2ThreadComment(AGENT_LOGIN, replyBody, F2_CASE_TIME_2),
+          ],
+          false,
+          true,
+        ),
+      ],
+    },
+    0,
+    1,
+  );
+});
+
+test('differential: inline code masking preserves pending-marker columns (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      threads: [
+        f2Thread(
+          [
+            f2ThreadComment('human-reviewer', 'please rename', F2_CASE_TIME_1),
+            f2ThreadComment(
+              AGENT_LOGIN,
+              '**Accepted** — noted\n\u0060note\u0060 - example\n**Awaiting maintainer decision** choose one',
+              F2_CASE_TIME_2,
+            ),
+          ],
+          false,
+          true,
+        ),
+      ],
+    },
+    0,
+    1,
+  );
+});
+
+test('differential: HTML comment masking preserves pending-marker columns (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      threads: [
+        f2Thread(
+          [
+            f2ThreadComment('human-reviewer', 'please rename', F2_CASE_TIME_1),
+            f2ThreadComment(
+              AGENT_LOGIN,
+              '**Accepted** — noted\n<!-- note -->- example\n**Awaiting maintainer decision** choose one',
+              F2_CASE_TIME_2,
+            ),
+          ],
+          true,
+          true,
+        ),
+      ],
+    },
+    0,
+    1,
+  );
+});
+
+test('differential: inline code masking matches multi-backtick spans (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      threads: [
+        f2Thread(
+          [
+            f2ThreadComment('human-reviewer', 'please rename', F2_CASE_TIME_1),
+            f2ThreadComment(
+              AGENT_LOGIN,
+              '**Accepted** — noted\n\u0060\u0060- example\u0060\u0060\n**Awaiting maintainer decision** choose one',
+              F2_CASE_TIME_2,
+            ),
+          ],
+          true,
+          true,
+        ),
+      ],
+    },
+    0,
+    1,
+  );
+});
+
+test('differential: HTML comment backticks do not mask a live marker (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      threads: [
+        f2Thread(
+          [
+            f2ThreadComment('human-reviewer', 'please rename', F2_CASE_TIME_1),
+            f2ThreadComment(
+              AGENT_LOGIN,
+              '**Accepted** — noted\n<!-- \u0060 -->\n**Awaiting maintainer decision** choose one\n<!-- \u0060 -->',
+              F2_CASE_TIME_2,
+            ),
+          ],
+          false,
+          true,
+        ),
+      ],
+    },
+    0,
+    1,
+  );
+});
+
+test('differential: inline code spans stop at paragraph boundaries (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      threads: [
+        f2Thread(
+          [
+            f2ThreadComment('human-reviewer', 'please rename', F2_CASE_TIME_1),
+            f2ThreadComment(
+              AGENT_LOGIN,
+              '**Accepted** — noted\nunmatched \u0060 in this paragraph\n\n**Awaiting maintainer decision** choose one\n\nlater \u0060',
+              F2_CASE_TIME_2,
+            ),
+          ],
+          false,
+          true,
+        ),
+      ],
+    },
+    0,
+    1,
+  );
+});
+
+test('differential: inline code spans stop at Markdown block boundaries (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  const bodies = [
+    '**Accepted** — noted\nbefore \u0060\n# Heading\n**Awaiting maintainer decision** choose one\nafter \u0060',
+    '**Accepted** — noted\nbefore \u0060\n---\n**Awaiting maintainer decision** choose one\nafter \u0060',
+    '**Accepted** — noted\nbefore \u0060\nHeading\n===\n**Awaiting maintainer decision** choose one\nafter \u0060',
+    '**Accepted** — noted\r\nbefore \u0060\r\n---\r\n**Awaiting maintainer decision** choose one\r\nafter \u0060',
+    '**Accepted** — noted\r\nbefore \u0060\r\n# Heading\r\n**Awaiting maintainer decision** choose one\r\nafter \u0060',
+    '**Accepted** — noted\nbefore \u0060\n```text\nexample\n```\n**Awaiting maintainer decision** choose one\nafter \u0060',
+    '**Accepted** — noted\nbefore \u0060\n~~~text\nexample\n~~~\n**Awaiting maintainer decision** choose one\nafter \u0060',
+  ];
+
+  for (const [index, body] of bodies.entries()) {
+    try {
+      assertF2Parity(
+        {
+          regular: [
+            {
+              id: 6101 + index * 2,
+              login: 'coderabbitai[bot]',
+              body: 'nit: rename this',
+              at: F2_CASE_TIME_1,
+            },
+            {
+              id: 6102 + index * 2,
+              login: AGENT_LOGIN,
+              body,
+              at: F2_CASE_TIME_2,
+            },
+          ],
+          threads: [
+            f2Thread(
+              [
+                f2ThreadComment(
+                  'human-reviewer',
+                  'please rename',
+                  F2_CASE_TIME_1,
+                ),
+                f2ThreadComment(AGENT_LOGIN, body, F2_CASE_TIME_2),
+              ],
+              false,
+              true,
+            ),
+          ],
+        },
+        1,
+        1,
+      );
+    } catch (error) {
+      throw new Error(`Markdown block boundary case ${index} failed`, {
+        cause: error,
+      });
+    }
+  }
+});
+
+test('differential: thread activity uses updatedAt for edited feedback (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      threads: [
+        f2Thread(
+          [
+            f2ThreadComment(
+              'human-reviewer',
+              'please rename',
+              F2_CASE_TIME_1,
+              F2_CASE_TIME_2,
+              F2_EDITED_AT,
+            ),
+            f2ThreadComment(
+              AGENT_LOGIN,
+              '**Accepted** — addressed',
+              F2_CASE_TIME_3,
+            ),
+          ],
+          false,
+          true,
+        ),
+      ],
+    },
+    0,
+    1,
+  );
+});
+
+test('differential: a pending-decision marker inside an HTML comment does not block a settled reply (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 8701,
+          login: 'coderabbitai[bot]',
+          body: 'nit: note the marker',
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 8702,
+          login: AGENT_LOGIN,
+          body: '**Accepted** — done\n<!-- **Awaiting maintainer decision** kept for the record -->',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+    },
+    0,
+    0,
+  );
+});
+
+test('differential: a trusted-only operational marker is not an outstanding comment (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 8801,
+          login: 'alice',
+          body: '<!-- review-watermark: 1 2 3 -->',
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 8802,
+          login: 'alice',
+          body: '<!-- idd-live-status: current -->\nStatus digest',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+      env: { IDD_TRUSTED_MARKER_ACTORS: `${AGENT_LOGIN},alice` },
+      trustedMarkerLogins: [AGENT_LOGIN, 'alice'],
+    },
+    0,
+    0,
+  );
+});
+
+test('differential: an untrusted operational-looking comment stays outstanding, and a trusted plain advisory-wait line is operational (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 8803,
+          login: 'mallory',
+          body: '<!-- review-watermark: 1 2 3 -->',
+          at: F2_CASE_TIME_1,
+        },
+      ],
+    },
+    1,
+    0,
+  );
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 8804,
+          login: 'alice',
+          body: 'advisory-wait: pending',
+          at: F2_CASE_TIME_1,
+        },
+      ],
+      env: { IDD_TRUSTED_MARKER_ACTORS: `${AGENT_LOGIN},alice` },
+      trustedMarkerLogins: [AGENT_LOGIN, 'alice'],
+    },
+    0,
+    0,
+  );
+});
+
+test('differential: a lazy list continuation does not make a settled reply pending (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 8811,
+          login: 'coderabbitai[bot]',
+          body: 'nit: list it',
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 8812,
+          login: AGENT_LOGIN,
+          body: '**Accepted** — kept the list\n- context\n**Awaiting maintainer decision**',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+    },
+    0,
+    0,
+  );
+});
+
+test('differential: a lazy block-quote continuation does not make a settled reply pending (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 8821,
+          login: 'coderabbitai[bot]',
+          body: 'nit: quote it',
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 8822,
+          login: AGENT_LOGIN,
+          body: '**Accepted** — quoted it\n> cited text\n**Awaiting maintainer decision**',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+    },
+    0,
+    0,
+  );
+});
+
+test('differential: a blank line or a heading ends a list run, so a later marker is pending (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 8831,
+          login: 'coderabbitai[bot]',
+          body: 'nit: blank line',
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 8832,
+          login: AGENT_LOGIN,
+          body: '**Accepted** — note\n- item\n\n**Awaiting maintainer decision**',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+    },
+    1,
+    0,
+  );
+  assertF2Parity(
+    {
+      regular: [
+        {
+          id: 8833,
+          login: 'coderabbitai[bot]',
+          body: 'nit: heading',
+          at: F2_CASE_TIME_1,
+        },
+        {
+          id: 8834,
+          login: AGENT_LOGIN,
+          body: '**Accepted** — note\n- item\n# Heading\n**Awaiting maintainer decision**',
+          at: F2_CASE_TIME_2,
+        },
+      ],
+    },
+    1,
+    0,
+  );
+});
+
+test('differential: a lazy list continuation does not make a thread disposition pending (#4696)', {
+  skip: SKIP_REASON ?? false,
+}, () => {
+  assertF2Parity(
+    {
+      threads: [
+        f2Thread([
+          COPILOT_THREAD_FINDING,
+          f2ThreadComment(
+            AGENT_LOGIN,
+            '**Accepted** — renamed\n- note\n**Awaiting maintainer decision**',
+            F2_CASE_TIME_2,
+          ),
+        ]),
+      ],
+    },
+    0,
+    0,
+  );
 });

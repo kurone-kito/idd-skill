@@ -52,6 +52,17 @@ E5's "Verify before accept" rule):
 
 ## E10 — Validate fixes with critique pass
 
+**Standard-profile skip.** Before the batch's first pass and delegate resolution,
+check `critiqueLoop.e10SkipOnAdvisoryConvergence` and the
+[E10 entry condition in policy constants](../../docs/policy-constants.md)
+(opt-in, policy, advisory batch, E1 head, warm E9, exact convergence). On match,
+do not resolve/run the delegate
+or run per-agent critique; no vacuous-result hold or
+batch/`critiqueLoop.e10MaxPasses`/`e10-recurrence` passes-file count. Continue
+to E11; add its record sentence before `Triage:` and the reply-identity stamp
+to each E13 `**Accepted**` reply. Check once per batch; after a pass, continue
+as today.
+
 Run a critique pass to verify that the fixes in E9 address the root
 causes and are correct (see `idd-overview-appendix.instructions.md` for per-agent
 implementation). As at C1, if possible, a per-agent subagent's brief
@@ -121,9 +132,9 @@ Convergence guardrails:
   redirected by a maintainer or deferred under the needs-decision route.
 - If the critique pass reports zero issues, proceed to E11.
 
-**No confidence exception.** Fix scope or confidence never excuses
-skipping this pass — always run it before E11. Pushed and skipped
-one? Disclose on the PR, name the round(s), run E10 on the
+**No confidence exception.** For non-skipped batches, fix scope or
+confidence never excuses skipping this pass — always run it before E11.
+Pushed and skipped one? Disclose on the PR, name the round(s), run E10 on the
 accumulated diff to a clean pass, then return to E1.
 
 **E10 per-issue pass cap (the one exception to the paragraph above).** Count
@@ -146,20 +157,12 @@ rule's exclusion of an Accepted item mid-fix. Then continue to E11. The cap
 never applies while a High or Medium Accepted finding is open. If the count
 cannot be established, the cap is not reached.
 
-**Round-count heuristic for genuinely-new findings (Tier 1).** The guard above
-covers a _repeating_ finding; a different pattern is each round
-surfacing a genuinely new, real finding — that is convergence, not
-stagnation, so the no-progress guard never fires. This is a heuristic,
-not a hard cap: after several consecutive rounds (roughly 3-4) each
-finding something new in the _same area_, treat it as a signal that a
-shared root cause may be producing each new instance, and check
-whether one structural fix (e.g., auditing every caller of a helper
-against its contract, instead of patching one caller per round) would
-converge the loop faster than another incremental patch. Once fixes
-materially address the
-finding's root cause and further comments are speculative or
-non-blocking hardening, treat them as PATH B (disposition-only,
-E4-E7) rather than opening another E9-E10 round.
+**Round-count heuristic for genuinely-new findings (Tier 1).** The no-progress
+guard covers repeats, not distinct findings. After roughly 3-4
+consecutive rounds find new issues in one area, look for a shared root
+cause and whether one structural fix will converge faster. Once fixed, only
+speculation requiring no change or decision is PATH B; actionable findings
+stay PATH A under E4, even if non-blocking.
 
 **Second escalation tier (Tier 2; heuristic, not a hard rule): when the
 structural fix itself doesn't converge** (new same-area findings keep
@@ -175,8 +178,7 @@ any part of the mechanism's behavior, check the issue's acceptance
 criteria and any established external contract for whether that
 behavior was actually required; if so, stop for a maintainer decision
 instead of dropping it to converge review. That stop stands unless the
-[needs-decision route] applies. Worked example: issue
-kurone-kito/idd-skill#2223 (PR kurone-kito/idd-skill#2389); see
+[needs-decision route] applies. See
 [the rationale example](../../docs/idd-design-rationale.md#review-fix-escalation-examples).
 
 **Third escalation tier (heuristic, not a hard rule): open-ended
@@ -201,39 +203,40 @@ finding the same way this workflow already disposes of any review
 item or resolves any hold (`idd-review-triage.instructions.md`,
 `idd-overview-appendix.instructions.md`), and file any follow-up
 through `idd-review-triage.instructions.md`'s E6 follow-up-issue rule,
-rather than continuing rounds indefinitely. Worked example: issue
-kurone-kito/idd-skill#2767 (PR
-kurone-kito/idd-skill#2840) ran 27 review rounds; the operator
-accepted three remaining findings as a documented limitation and filed
-follow-up kurone-kito/idd-skill#2865 (see [the rationale example](../../docs/idd-design-rationale.md#review-fix-escalation-examples)).
+rather than continuing rounds indefinitely. See [the rationale example](../../docs/idd-design-rationale.md#review-fix-escalation-examples).
 
-## E11 — Resolve conflicts with {development-branch}
+## E11 — Sync with {development-branch} before every push
 
-Same read-only check as
-`idd-review-triage.instructions.md`'s E-phase branch-sync check and
-`idd-pre-merge.instructions.md`'s F1 (`idd-branch-conflict-state --pr
-{pr-number}`, or `gh pr view {pr-number} --json
-mergeable,mergeStateStatus` with the helper contract's table) — reflects
-the last pushed head, not unpushed E9 fixes.
+Read PR base with `gh pr view {pr-number} --json baseRefName --jq .baseRefName`;
+on failure, report and hold. A mismatch uses D3's wrong-base hold; do not
+merge or push.
 
-- **`callSiteRouting.e11` is `merge-development-branch`** (branch state
-  `content-conflict`; without helper runtime, `mergeable` `CONFLICTING`):
-  pass the active review gate, merge
-  `{development-branch}` into the feature branch, resolve, complete the
-  merge:
+Fetch with the exact refspec:
 
-  ```sh
-  git fetch origin +refs/heads/{development-branch}:refs/remotes/origin/{development-branch} \
-    && git merge origin/{development-branch}
-  ```
+```sh
+git fetch origin +refs/heads/{development-branch}:refs/remotes/origin/{development-branch}
+```
 
-  Non-interactive-hostile signing: use the
-  [signed-commit merge wrapper](../../docs/idd-helper-scripts.md#signed-commit-merge-wrapper-shared-git-procedure)
-  instead.
-- Otherwise (`callSiteRouting.e11` is `skip-merge`; without helper
-  runtime, any `mergeable` other than `CONFLICTING`): skip the merge, proceed
-  to E12 — the E-phase branch-sync check and F1 handle those
-  downstream.
+After fetching, capture the target once as `target_sha` per the [E11 helper](../../docs/idd-helper-scripts.md).
+Fetch/capture/comparison errors report and hold.
+Compare `HEAD` with `"$target_sha"` per the helper.
+If equal, the branch is current: do not merge and continue to E12.
+If behind, probe `git merge-tree` and sign the merge with this SHA; never
+refetch or re-resolve. Unknown outcomes report and hold without merge or
+push.
+
+- **No conflict:** signed `git merge --no-ff` with `"$target_sha"` and
+  conventional `-m` subject via the wrapper; no confirmation, even with
+  open review threads.
+- **Conflict:** follow the E11 conflict path in the
+  [signed-commit merge wrapper](../../docs/idd-helper-scripts.md#signed-commit-merge-wrapper-shared-git-procedure).
+- **Merge failure:** on merge, signing, or hook failure, run
+  `git merge --abort`, report, and hold. After a wrapper timeout, follow the
+  linked process-tree procedure before aborting; if its tree is live or
+  unconfirmed, hold without aborting or pushing.
+
+On failure or hold, follow shared Hold / suspend rules; do not push.
+Otherwise, continue to E12.
 
 ## E12 — Lint, test, push
 
@@ -263,8 +266,8 @@ For a per-file cap, apply step 1. If the file is still above its cap
 (`phaseLimitBytes`, or `alwaysLoadedLimitBytes` for an always-loaded
 file), stop and ask once. Never raise a per-file cap.
 
-Then push the feature branch normally (E11 uses merge commits, not
-rebase, so no force push is required).
+Then push the feature branch normally. Files touched only in E11 don't
+widen E12's fold-in scope.
 
 **Bounded cross-round batching allowance.** A small number of review
 comments can arrive before this push that fall outside this round's
@@ -272,13 +275,10 @@ scope and haven't gone through triage yet. Fold them into this same
 pending push — each its own atomic commit — instead of starting a
 fresh round per arrival, but only when **all** hold:
 
-- Every comment since the last push is **bot-sourced**: the primary
-  advisory bot's login (default Copilot: `copilot` /
-  `copilot-pull-request-reviewer*`, matched via `isCopilotReviewerLogin`
-  in `scripts/protocol-helpers.mjs`) or an `advisoryBotLogins` login,
-  **regardless of PATH A/B** (Copilot's inline thread comments are
-  PATH A under E4; an overlap with any configured
-  `advisoryWait.secondaryBotLogin` login still qualifies).
+- Every comment since the last push is by primary advisory logins (`copilot` or
+  `copilot-pull-request-reviewer*` via `isCopilotReviewerLogin`),
+  `advisoryBotLogins`, or configured `advisoryWait.secondaryBotLogin`,
+  regardless of PATH.
 - Each comment is a small, confirmable fix whose claim was checked
   against live evidence (linter run, actual file/runtime behavior)
   before folding it in — the same **verify-before-accept discipline** E5
@@ -297,11 +297,11 @@ PATH A item from a **human or CODEOWNER** arrives (bot-sourced alone
 does not); any item requests a substantive code/logic change; any item
 falls outside the touched-file scope; or either bound is reached.
 
-**Non-goals**: never delays an in-flight CI wait (E15's mid-wait
-fold-in rule is unchanged); never changes PATH A/B routing or triage
-timing (still happens at the next E1 pass — only push timing changes);
-and relaxes nothing else: E14 re-review, `review-watermark`
-invalidation, and individual E6 replies stay as before.
+**Non-goals**: no E15 delay or PATH/triage change; E14 re-review,
+watermark invalidation, and E6 replies stay unchanged.
+
+A cross-round commit invalidates E11; repeat it before pushing, then rerun
+post-fix-validate if it merged.
 
 **PR body sync.** If this round's fix changes a claim the PR body
 makes (round count, a documented residual limitation, a scope

@@ -32,7 +32,8 @@
   "issueScope": "roadmap-first",
   "orphanFirstPolicy": "none",
   "issueAuthoring": {
-    "journalIssue": "kurone-kito/idd-skill#2674"
+    "journalIssue": "kurone-kito/idd-skill#4748",
+    "retiredJournalIssues": ["kurone-kito/idd-skill#2674"]
   },
   "advisoryWait": {
     "convergenceScope": "idd-claimed",
@@ -45,8 +46,10 @@
   },
   "critiqueLoop": {
     "deferAfterRounds": 5,
+    "deferAllAfterRounds": 3,
     "deferByUrgency": "severity-tiered",
-    "triageRecord": "record",
+    "triageRecord": "enforce",
+    "e10SkipOnAdvisoryConvergence": true,
     "deferRelaxAtRounds": [4, 7],
     "telemetryHook": {
       "command": "idd-critique-telemetry"

@@ -28,6 +28,26 @@ an afterthought once a marker is already half-drafted.
   context" — even before it is committed anywhere in the target
   repository's tree — and does not require asking again.
 
+## Questions for operators
+
+When an issue-authoring interview already needs a decision, assume the
+operator is skilled in manual issue-driven development and GitHub Flow,
+but unfamiliar with idd-skill-specific automation. Treat issue triage and
+planning, branches, commits, pull requests, CI, reviews, and merges as
+known. Explain the relevant idd-skill convention (for example, that
+`## Candidate files` lists expected edit paths, and an unlisted path may
+trigger the effort limit), say how the answer
+changes the task, and request the exact action. When alternatives matter,
+list each meaningful option with its main cost and recommend one. A current
+explicit operator
+instruction may specialize this presentation; otherwise use explicit
+repository-local audience guidance, then this baseline. Repeated use alone
+does not establish expertise or a standing preference (observed 2026-10-26
+in issue `#4743`). Keep each question
+self-contained and concise, without repeating context already present in
+the same ask. This changes question wording only, not when
+the workflow asks, who may approve, required evidence, or policy fields.
+
 ## Trigger policy
 
 Use this bundle when direct implementation would skip the issue hygiene
@@ -1463,21 +1483,22 @@ issue `#4101`): the pin list for the policy audit was flagged in two rounds,
 and the recovery path for an empty handle in three rounds, each time with
 different wording, at about 100,000 reviewer tokens per round.
 
-**Ledger.** During a drafting session, keep a findings ledger in the session
-scratchpad, one JSON file per draft, named for that draft: its issue number
-once one exists, or, before then, a token that no other draft uses, such as a
-freshly generated UUID. When the draft gets its issue number, rename the file
-to that number and keep every entry. No two drafts or concurrent workers share
-a ledger file. The ledger is never written to the repository or to a marker.
-Each entry has these members: `claim` (one sentence), `draftSection` (the
-heading the finding concerns), `round`, `draftVersion` (the draft revision the
-finding was raised against, counted from 1; recorded for audit only),
-`disposition` (`fixed`, `rejected`, or `deferred`), `evidence` (required for
-`rejected`: a file and line, or a read-only command and its output), and
-`decidedAt`. If the scratchpad is lost, for example after a restart, the
-ledger is empty and the review runs as it does without one. Record an entry
-for every finding as soon as its disposition is decided, before the next
-review round. A later disposition of the same finding updates that entry.
+**Ledger.** During a drafting session, keep a findings ledger in the namespace
+that [Ledger storage](#ledger-storage) allocates, one JSON file per draft, named
+for that draft: its issue number once one exists, or, before then, a token that
+no other draft uses, such as a freshly generated UUID. When the draft gets its
+issue number, rename the file to that number and keep every entry. No two drafts
+or concurrent workers share a ledger file. The ledger is never written to the
+repository or to a marker. Each entry has these members: `claim` (one sentence),
+`draftSection` (the heading the finding concerns), `round`, `draftVersion` (the
+draft revision the finding was raised against, counted from 1; recorded for
+audit only), `disposition` (`fixed`, `rejected`, or `deferred`), `evidence`
+(required for `rejected`: a file and line, or a read-only command and its
+output), and `decidedAt`. If the namespace or the ledger is lost, for example
+after a restart, the ledger is empty and the review runs as it does without one.
+Record an entry for every finding as soon as its disposition is decided, before
+the next review round. A later disposition of the same finding updates that
+entry.
 
 **Packet.** For each `rejected` entry that has evidence, add one string to the
 packet's existing `evidence` array, in every review mode:
@@ -1518,6 +1539,375 @@ finding reopens as a new finding.
   against its claim again.
 - A deferred entry stays open until the author decides, and a draft with an
   open deferred entry is not published.
+
+### Ledger storage
+
+A drafting session needs a private place for its ledger before the first ledger
+write. This procedure needs no orchestrator, no particular environment variable,
+no helper package, and no stable harness session ID, so it works the same in
+instructions-only and same-response self-critique runs. Run it once per drafting
+session, before the first disposition is recorded. Every check below fails
+closed: when a platform cannot supply one of the evidence values named here, the
+storage is unreadable and the procedure stops.
+
+**Evidence.** For each path, record its canonical path (symbolic links
+resolved), its file type, its owner, its mode (POSIX) or ACL (Windows), its link
+count, and its file identity (device and inode on POSIX, volume serial and file
+index on Windows). A ledger's content is identified by its SHA-256. This
+identity record lives only in the session's working context, never in a file, a
+marker, or the repository. For Linux root checks, also record the candidate
+root, each existing protected path, and every nested mount point's mount ID,
+matching mountinfo fields, and derived backing location; repeat the full
+inventory and comparison whenever the root checks run.
+
+**Roots.** A root is a directory that holds namespaces. Use a root that the user
+or the runtime supplies, such as a named scratch directory or harness scratch
+metadata, when one exists. Otherwise try the operating system's temporary
+directory, then the user state directory (`$XDG_STATE_HOME` when it is a
+qualified absolute path, else `$HOME/.local/state`; on Windows,
+`%LOCALAPPDATA%`). An environment variable is an optional lookup, and a
+candidate that is absent is skipped. The user state directory is used only when
+it already exists; this procedure never creates it.
+
+**Root checks.** A root must be an existing directory, not a symbolic link or
+reparse point, whose canonical path lies outside every path reported by a
+complete, successful `git worktree list --porcelain` run and outside every Git
+directory. Run that command from the current worktree with the repository's
+trusted Git executable, `GIT_DIR`, `GIT_WORK_TREE`, `GIT_COMMON_DIR`,
+`GIT_CEILING_DIRECTORIES`, and `GIT_DISCOVERY_ACROSS_FILESYSTEM` unset, and
+Git's diagnostic locale fixed to C (`LC_ALL=C` where supported). Require exit
+status 0 and parse all records. A missing executable, nonzero status,
+malformed record, or incomplete output makes the protected-path inventory
+unreadable; stop instead of treating it as empty.
+
+For each existing reported worktree, run
+`git -C <worktree> rev-parse --path-format=absolute --git-dir` and
+`git -C <worktree> rev-parse --path-format=absolute --git-common-dir` with the
+same trusted executable and sanitized environment. Require each command to
+exit 0 and return exactly one absolute directory path; include both paths in
+the protected-path inventory and deduplicate by filesystem identity. Any
+failure, missing common directory, or malformed output makes the inventory
+unreadable. A common directory protects linked-worktree administrative
+records under its `worktrees/` subtree, including records for a registered
+worktree whose checkout path is confirmed absent. Keep that common directory
+in the inventory. The separate Git-administration-directory gap was identified
+during security review of PR #4728 on 2026-10-28
+([review comment](https://github.com/kurone-kito/idd-skill/pull/4728#issuecomment-6397812741)).
+
+Confirm the last part by running `git -C <canonical root> rev-parse --git-dir`
+with `GIT_DIR`, `GIT_WORK_TREE`, `GIT_COMMON_DIR`, `GIT_CEILING_DIRECTORIES`,
+and `GIT_DISCOVERY_ACROSS_FILESYSTEM` unset, and Git's diagnostic locale fixed
+to C (`LC_ALL=C` where supported). A successful result means the root is
+inside a repository and fails the root check. A nonzero result proves
+non-membership only when it is either the exact standard `fatal: not a git
+repository (or any of the parent directories): .git` diagnostic, or the exact
+two-line filesystem-boundary diagnostic whose first line is `fatal: not a git
+repository (or any parent up to mount point <path>)` and whose second line is
+`Stopping at filesystem boundary (GIT_DISCOVERY_ACROSS_FILESYSTEM not set).`.
+For the filesystem-boundary form, the reported mount point must be a verified
+ancestor mount point of the canonical root. In either case, a no-follow walk
+from the root through its ancestors must confirm that each is readable and
+none is a Git directory or contains a `.git` entry (file or directory). The
+filesystem-boundary diagnostic was reproduced with `/dev/shm` during review of
+PR #4728 on 2026-10-28 ([review comment](https://github.com/kurone-kito/idd-skill/pull/4728#discussion_r4400867073)).
+If the walk finds Git metadata, cannot inspect an ancestor, or sees malformed
+or ambiguous Git metadata, stop. Any other exit status or diagnostic,
+including missing Git, permission, I/O, malformed repository metadata, or an
+unclassifiable error, means the root is unreadable and must stop. Never treat
+an arbitrary Git failure as proof that the path is outside a repository.
+
+The root-ownership gap was identified during security review of PR #4728
+on 2026-10-28; no user-data loss was observed. See the review comment:
+
+<https://github.com/kurone-kito/idd-skill/pull/4728#discussion_r4401322925>
+
+A sticky bit does not make a root owned by another local user trustworthy:
+that directory owner can rename entries in the session namespace. The root
+must be owned by the current user or a trusted system principal (POSIX UID
+0 or the Windows LocalSystem SID), and must be writable by the current
+user. On POSIX, reject a root that grants group or other users write and
+search permission without the sticky bit, even when the current user owns
+it. On Windows, reject a root whose ACL lets another user
+rename or delete child entries. If this permission evidence is unreadable,
+stop.
+
+**Mount aliases.** A canonical pathname can look external while a bind mount
+exposes a worktree or Git administration directory, or while a nested mount
+inside a worktree is also reachable through an external path. The nested-mount
+gap was reproduced in an isolated Linux mount namespace during review of PR
+`#4728` on 2026-10-28 ([review comment](https://github.com/kurone-kito/idd-skill/pull/4728#discussion_r4401240053));
+the reproduction demonstrates the control gap, not user-data loss. Check the
+backing location as well as the visible path. For every protected path (each
+reported worktree path and each discovered Git directory), first compare its
+normalized absolute lexical path against the candidate root using
+component-aware containment, even when a worktree path cannot be opened. Then
+walk each existing component without following symbolic links or reparse
+points.
+
+If that walk confirms a registered worktree path is absent after checking
+its readable ancestors, retain the worktree record and its Git common
+directory, mark the protected-path inventory incomplete, and stop before
+evaluating any candidate root. A missing checkout does not rule out an
+external bind mount of one of its subdirectories; a ledger in that alias
+could be staged after the checkout is remounted. This control gap was
+identified during review of PR #4728 on 2026-10-28; no user-data loss was
+observed. See the review comment:
+
+<https://github.com/kurone-kito/idd-skill/pull/4728#discussion_r4401322963>
+
+Never prune or edit Git metadata. Access denial,
+an I/O or device error, a symbolic link or reparse point, or any ambiguous
+result makes the root unreadable and fails closed. An existing protected path
+still needs the full canonical-path and backing-location checks below. For
+each existing protected path, also inventory every mounted filesystem whose
+mount point is equal to or component-contained beneath that path. Validate each
+nested mount point by a no-follow walk rooted at its protected-path handle, and
+include it as a separate protected backing location. A nested mount that has
+disappeared, cannot be opened, or cannot be matched unambiguously makes the
+root unreadable and fails closed. Missing-path handling is preventive; no
+observed incident yet.
+
+On Linux, enumerate every `/proc/self/mountinfo` entry whose decoded mount
+point is equal to or component-contained beneath an existing protected path.
+For the candidate root, each existing protected path, and every such nested
+mount point, obtain a mount ID from an already-open directory handle using
+`statx(2)` with `AT_EMPTY_PATH`. When `statx` fails or does not provide
+`STATX_MNT_ID`, read the single decimal
+`mnt_id` field from `/proc/self/fdinfo/<fd>` for that same open
+handle. Require either source to yield a valid ID, then read the matching
+entries in `/proc/self/mountinfo` and verify that each handle's canonical path
+and mount ID match the parsed entry. Dedupe repeated entries by mount ID;
+conflicting mappings are ambiguous. Decode mountinfo's escaped fields, and
+require each path to be at or below its entry's mount point. Map a path to its
+backing location by joining the entry's `root` with the path relative to
+its `mount point`, paired with the entry's `major:minor` device identity.
+Reject the
+candidate root when its backing location is equal to or below any protected
+backing location on the same device, including each nested mount point's
+backing location. This detects a bind-mounted alias
+without rejecting a candidate merely because it is on a different mount from
+`/`. Do not use `RESOLVE_NO_XDEV` as a blanket cross-mount rejection: an
+operating-system temporary or state directory may legitimately be on another
+mount. If neither mount-ID source works, mountinfo cannot be read, a mount
+entry cannot be matched, or the mapping is ambiguous, treat the root as
+unreadable and fail closed. On other platforms, use native mount or volume
+evidence to enumerate nested mount points beneath each existing protected path
+and make the same backing-location comparison; if the full inventory or
+comparison cannot be established, fail closed. The mount-ID fallback is
+preventive; no observed
+incident yet. See [`statx(2)`](https://man7.org/linux/man-pages/man2/statx.2.html),
+[`/proc/self/fdinfo/<fd>`](https://man7.org/linux/man-pages/man5/proc_pid_fdinfo.5.html),
+[`/proc/self/mountinfo`](https://www.man7.org/linux/man-pages/man5/proc_pid_mountinfo.5.html),
+and [`openat2(2)`](https://man7.org/linux/man-pages/man2/openat2.2.html).
+
+**Storage verdicts.** Classify each supplied root and namespace with exactly one
+verdict:
+
+| Input                                                                                                                                                                   | Verdict                                    | Action                                                                                                                                                                               |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| A supplied root that exists and passes the root checks                                                                                                                  | Supplied verified storage                  | Create a new namespace under it (step 1).                                                                                                                                            |
+| No root is supplied, and this session has no identity record                                                                                                            | No previously supplied allocation          | Allocate under the first candidate root that passes the root checks (step 1).                                                                                                        |
+| A supplied root that is missing or fails a check, or a namespace, ledger, or lock file of this session whose identity differs from its record (see the ownership cases) | Unsafe, conflicting, or unreadable storage | Preserve everything, report the canonical path and the exact failing evidence, and treat the review as one that cannot finish (see below). Never fall back to another root silently. |
+
+A namespace from another session is never reused, and a new session has no
+identity record to reuse. An older namespace is left untouched as evidence.
+
+**Step 1 — allocate a namespace.** Re-check the root before creating anything in
+it: its canonical path and identity must match the root checks, or the procedure
+stops. Resolve the whole root path from a trusted filesystem root or volume handle:
+on POSIX, open each component relative to the preceding verified handle with
+`O_DIRECTORY | O_NOFOLLOW`, or use Linux `openat2(2)` with
+`RESOLVE_NO_SYMLINKS | RESOLVE_IN_ROOT` from a trusted `/` descriptor (see
+[openat2(2)](https://man7.org/linux/man-pages/man2/openat2.2.html)).
+On Windows, open each component relative to a trusted volume or root handle
+with `NtCreateFile` and `OBJ_DONT_REPARSE`.
+Applying `O_NOFOLLOW` only to the final component is insufficient. If the
+platform cannot prove that no component was followed, fail closed. Then open
+the root as a directory handle without following a symbolic link or reparse
+point through that verified component walk, and confirm its identity, canonical
+path, and backing location from the root checks. Create
+`issue-authoring-<uuid>` relative to that handle with exclusive, non-recursive
+directory creation, never `mkdir -p`. Make the namespace owner-only as part of
+creation: use POSIX mode 700, or on Windows pass an explicit security descriptor
+through `OBJECT_ATTRIBUTES.SecurityDescriptor`, with a DACL granting access
+only to the current user and both `SE_DACL_PRESENT` and `SE_DACL_PROTECTED` set
+on that descriptor. If the platform cannot apply this restriction before the
+directory is visible, fail closed. Open it relative to the root handle
+without following links, then
+record its canonical path, file identity, type, link count, owner, and mode or
+ACL. Check that the mode or ACL is owner-only, its canonical path is the root
+path plus the bare name, it lies outside every worktree and git directory, and
+it is on the same device as the root. If any check fails, preserve the namespace
+and report its path and the exact failing evidence; mark this candidate failed.
+Do not remove it by path.
+Retry with a fresh UUID only when the name already exists, at most three times.
+Any other failure ends that attempt. If a root was supplied, stop and report
+its path and error; do not try another root. Only when no root was supplied may
+the next candidate be tried. When every candidate fails, stop and report each
+attempt's path and error. Keep the namespace handle open for the ledger
+operations below. Create a stable `ledger.lock` file relative to this handle
+with exclusive, no-follow, owner-only creation. Record its canonical path,
+identity, type, owner, and mode or ACL; verify those values before use. Never
+replace or unlink this lock file. If it cannot be created and verified,
+preserve the namespace and stop.
+
+**Step 2 — create the first ledger.** Each draft has its own ledger file,
+`<uuid>.json`, in the namespace. Create it through the verified namespace
+handle below, with exclusive creation and no-follow behavior.
+Make every ledger file owner-only at creation: use POSIX mode 600, or on
+Windows pass an explicit protected security descriptor through
+`OBJECT_ATTRIBUTES.SecurityDescriptor`, with a DACL granting access only to the
+current user and both `SE_DACL_PRESENT` and `SE_DACL_PROTECTED` set on that
+descriptor. After opening the new file, verify its owner and owner-only mode or
+ACL before writing its first byte. Record its canonical path, file identity,
+type, link count, owner, mode or ACL. Write `[]`, then record its SHA-256. If the
+platform cannot bind creation to the namespace handle or make the file private
+before it is visible, treat storage as unreadable. If this step fails, the
+partial-state rule below applies.
+
+**Ownership check before each ledger operation.** Before every ledger read,
+write, copy, rename, or unlink, acquire the namespace lock and compare the
+namespace, lock file, and ledger with their records:
+
+- The namespace's canonical path matches its record, no component of that path
+  is a symbolic link or reparse point, and its file identity matches.
+- The `ledger.lock` file is a regular file with its recorded identity,
+  canonical path, owner, and owner-only mode or ACL, and has link count 1.
+- The ledger is a regular file, not a symbolic link or reparse point, with a
+  link count of 1, the recorded file identity, and its recorded owner-only mode
+  or ACL.
+
+Path checks alone do not bind a later operation to the checked directory. Use
+native handle-relative operations with exclusive creation and no-follow checks
+for child reads, temporary-file creation, replacement, copy, and unlink; never
+reopen a child through the namespace path between validation and the operation.
+All implementations must use this same stable lock for every ledger operation.
+Acquire it exclusively before reading or changing ledger entries, recheck
+ownership and hashes while holding it, and keep it held through the replacement
+or unlink and its verification. On POSIX, use Python's
+[`fcntl.flock`](https://docs.python.org/3/library/fcntl.html#fcntl.flock) with
+`LOCK_EX` on the verified lock handle; on Windows, use Microsoft's
+[`LockFileEx`](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-lockfileex)
+with an exclusive lock
+on a fixed byte range of that handle. If the lock file identity changes, the
+lock cannot be acquired, or the platform cannot provide the required exclusive
+lock, preserve all entries and fail closed. POSIX locks are advisory, so every
+writer following this contract must acquire this lock; the lock file remains
+with the namespace.
+On POSIX, a standard-library Python implementation can use `os.open`,
+`os.mkdir`, `os.stat`, `os.rename`, and `os.unlink` with directory-descriptor
+parameters. Before allocation, confirm that every required function supports
+the relevant descriptor parameters and that `os.stat` supports
+`follow_symlinks=False`; open directories with `O_DIRECTORY | O_NOFOLLOW` and
+new files with `O_CREAT | O_EXCL | O_NOFOLLOW`. Python documents `dir_fd` as
+Unix-only in its [`os` reference](https://docs.python.org/3/library/os.html#os-supports-dir-fd).
+On Windows, use a native binding that opens or creates child names with
+`NtCreateFile`, setting `OBJECT_ATTRIBUTES.RootDirectory` to the verified
+directory handle and `OBJ_DONT_REPARSE` in its attributes. Use
+`CreateDisposition=FILE_CREATE` for exclusive child creation; create a
+directory with `FILE_DIRECTORY_FILE`. For every ledger file creation — the
+initial or recreated ledger, temporary replacement, and issue-number copy —
+also pass an explicit protected owner-only security descriptor through
+`OBJECT_ATTRIBUTES.SecurityDescriptor`. The namespace DACL does not establish
+that a child file is private. Verify each created file's resulting owner-only
+DACL before writing to it, and preserve that ACL in the ownership record. If
+the descriptor cannot be applied at creation or the resulting ACL is not
+owner-only, fail closed and preserve the entry. After the final identity and
+SHA-256 checks, replace the owned ledger via `SetFileInformationByHandle` on
+the verified temporary-file handle with `FileRenameInfo`,
+`ReplaceIfExists=TRUE`, and `FILE_RENAME_INFO.RootDirectory` set to the namespace
+handle. Open that file handle with `DELETE` access. After verifying
+the copied issue-number file, mark the verified source handle for deletion with
+`SetFileInformationByHandle` and `FileDispositionInfo` (`DeleteFile=TRUE`); it
+also requires `DELETE` access. If access or an operation fails, preserve the
+files and stop. See Microsoft's [`OBJECT_ATTRIBUTES`](https://learn.microsoft.com/en-us/windows/win32/api/ntdef/ns-ntdef-_object_attributes),
+[`FILE_RENAME_INFO`](https://learn.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-file_rename_info),
+[`NtCreateFile`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-ntcreatefile),
+[`Security Descriptors for New Objects`](https://learn.microsoft.com/en-us/windows/win32/secauthz/security-descriptors-for-new-objects),
+and [`SetFileInformationByHandle`](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-setfileinformationbyhandle)
+references. Keep the directory handle open through each operation, then verify
+that its path still resolves to the same canonical location outside every
+worktree and git directory, including by backing-location comparison. If any
+value changes, preserve the ledger and all copies, stop, and report. If the
+host cannot bind an operation to the verified handle or supply the required
+evidence, treat the storage as unreadable and stop.
+
+The cases below are preventive; no observed incident yet records any of them, so
+none is cited. Each mismatch falls under one of the cases below. On a mismatch,
+preserve the ledger and any unverified temporary entry; never recurse into a
+directory or adopt an entry this session did not create. Cleanup may remove only
+an entry created by this session whose recorded identity still matches, under
+the specific rules below. If cleanup cannot be verified, leave the entry and
+report it.
+
+- **Owned and unchanged.** The file identity and SHA-256 both match. Continue:
+  write the complete new JSON to a new exclusively created, owner-only
+  temporary file in the namespace, then verify and record its canonical path,
+  identity, type, link count, owner, mode or ACL, and SHA-256. Immediately before
+  replacement, while holding the exclusive namespace lock, repeat the ownership
+  check and verify that the existing ledger's
+  identity and SHA-256 still match the records, and that the temporary file
+  still matches its records. On any mismatch, preserve both files and stop
+  without replacement.
+  Replace the ledger
+  by renaming the verified temporary file over it, then record the new identity
+  and SHA-256. Remove the temporary file only when this write created it, its
+  recorded identity still matches, and the rename failed.
+- **Owned but edited.** The file identity matches but the SHA-256 differs. Do
+  not overwrite it. Preserve it, treat the review as one that cannot finish, and
+  report its canonical path.
+- **Missing (lost).** The record says this session created the ledger, but its
+  path is now absent. Treat it as a lost ledger: recreate an empty ledger at the
+  same path with exclusive creation, and the review starts empty under the
+  existing loss rule in the Ledger paragraph above. A missing destination
+  therefore succeeds. If the namespace itself is absent, allocate a new one
+  (step 1).
+- **Unowned.** Something already exists at the name this session would create,
+  or a file appears in the namespace that this session did not record. Refuse.
+  Do not read it as a ledger, adopt it, rename it, or delete it. Preserve it,
+  treat the review as one that cannot finish, and report.
+- **Replaced.** The path exists with a file identity or file type that differs
+  from its record. Treat it as a conflict with another owner. Refuse, preserve
+  both entries, and report.
+- **Linked leaf.** The ledger is a symbolic link or reparse point, or its link
+  count is above 1. Refuse. Never follow it or write through it. Report.
+- **Linked parent.** A component of the namespace path is a symbolic link or
+  reparse point, or the canonical path differs from the record. Refuse. Report.
+
+**Partial first ledger.** When allocation succeeds but the first ledger cannot
+be created safely (its exclusive creation fails, or its first write fails), keep
+the namespace and any partial file, delete nothing, and report the exact path
+and error. The review counts as one that cannot finish.
+
+**Rename to the issue number.** Once the draft has its issue number, hold the
+exclusive namespace lock from before creating the destination through its
+verification and the final source unlink. Copy the
+verified ledger to `<number>.json` with exclusive, owner-only creation, write
+the same content, verify the resulting mode or ACL, and confirm that the copy's
+SHA-256 equals the source ledger's recorded SHA-256. Record the copy's canonical
+path, identity, type, link count, owner, mode or ACL, and SHA-256. If
+`<number>.json` already exists, keep the `<uuid>.json` file, never
+overwrite or adopt the existing file, and stop before publication to report the
+conflict. Immediately before unlinking the source, verify that the namespace
+identity still matches, the source identity and SHA-256 still match their
+records, and the destination is a regular file with link count 1, the recorded
+identity and SHA-256, and the canonical path `<namespace>/<number>.json`; also
+confirm that the destination's SHA-256 still equals the source ledger's
+recorded SHA-256. If any check fails, preserve both files and stop. Unlink the
+source only after all checks pass; if the unlink fails, preserve both files and
+report the error.
+
+**A review that cannot finish.** A storage stop, an unowned or conflicting
+ledger, a failed first ledger, or a copy that does not match its source means
+the review cannot finish. The target is then not published as reviewed: its
+drafts go into a draft carrier marked `Review: not reviewed` (see
+[Draft carrier](#draft-carrier)), and the final message reports the namespace
+path, the exact failing evidence, and the drafts' local paths.
+
+**Scope.** The procedure never automatically deletes an older or abandoned
+namespace. It adds no mandatory durable session registry or operator recovery
+gate for a lost ledger. It may remove only a newly created entry whose recorded
+identity still matches, as stated above.
 
 ## Mechanical pre-publish gate
 
@@ -2110,8 +2500,12 @@ only approval boundary.
   order pending without an issue, pending with the issue, member, and only
   then cleanup and abandoned, with any conflicting or out-of-order record
   failing closed. That is how this command verifies the set's originating
-  Stage 1 hold, so it cannot extend a set whose hold lives elsewhere. After
-  the identity attach and before its own `acquire` marker, it appends a
+  Stage 1 hold, so it cannot extend a set whose hold lives elsewhere. For
+  `--shape child`, the anchor's hold is read from `issueAuthoring.journalIssue`
+  and from every journal listed in `issueAuthoring.retiredJournalIssues`, the
+  records merged in time order; every record this command writes still goes
+  to `issueAuthoring.journalIssue`, and a hold in any other issue is refused.
+  After the identity attach and before its own `acquire` marker, it appends a
   same-owner heartbeat on the anchor (or reuses a fresh matching marker
   under the coalescing rule below), waits `claim.verifySettleDelay`, and
   replays the anchor's log. After its own marker it re-reads the anchor and
@@ -2189,11 +2583,17 @@ only approval boundary.
   Append `abandoned` only after closed/label-absent verification. On resume,
   paginate the hold log and select the latest valid record for the exact token
   tuple; missing, conflicting, or out-of-order records fail closed, while
-  `pending` and `cleanup` remain recovery holds.
+  `pending` and `cleanup` remain recovery holds. When the set's originating
+  hold is in a retired journal (a journal listed in
+  `issueAuthoring.retiredJournalIssues`), paginate `issueAuthoring.journalIssue`
+  and every listed retired journal, and merge the records in time order before
+  selecting.
 
   `journal` is the durable record location. For an existing set, use the
-  verified originating Stage 1 hold; for a standalone set with no existing
-  issue or anchor, use the repository-level authoring journal target
+  verified originating Stage 1 hold, or `issueAuthoring.journalIssue` when that
+  hold is in a retired journal, since a retired journal takes no new records;
+  for a standalone set with no existing issue or anchor, use the
+  repository-level authoring journal target
   configured at `issueAuthoring.journalIssue` in `.github/idd/config.json`
   (an `owner/repo#number` reference to a pre-existing, durable, comment-only
   issue) -- an unset `issueAuthoring.journalIssue` only blocks a standalone
@@ -2201,8 +2601,11 @@ only approval boundary.
   configuration at all. The one narrower reader is `publish-authoring-hold`:
   it resolves the hold as `issueAuthoring.journalIssue` for every shape, so
   it needs that setting even for a child and verifies the anchor's token
-  there, and it cannot extend a set whose hold lives elsewhere. Do not create
-  that journal as part of the same set.
+  there. For a child it also verifies the token in each journal listed in
+  `issueAuthoring.retiredJournalIssues`, and it cannot extend a set whose hold
+  lives in any other issue. Every write it makes still goes to
+  `issueAuthoring.journalIssue`. Do not create that journal as part of the
+  same set.
   If the applicable location cannot be resolved -- no verified Stage 1 hold
   for an existing set, or `issueAuthoring.journalIssue` unset or
   unverifiable for a standalone set -- stop with `blocked-by-human` before
@@ -2290,9 +2693,11 @@ only approval boundary.
   and same-call label rule described in the narrow exception below.
 - An atomically labeled publication is not set membership until its owner
   marker is verified. Persist each returned target identity in the durable
-  originating Stage 1 hold before appending the marker. On resume, reconcile
-  recorded identities and only issues carrying this set's exact publication
-  token; an incomplete scan or unmarked match is a recovery hold, so never
+  originating Stage 1 hold before appending the marker; when that hold is in a
+  retired journal, persist it in `issueAuthoring.journalIssue` instead, the
+  only journal that takes new records. On resume, reconcile recorded
+  identities and only issues carrying this set's exact publication token; an
+  incomplete scan or unmarked match is a recovery hold, so never
   infer membership or completion from the shared label alone. If the final
   safe-close read proves no competing claim or marker, append `state=cleanup`
   before closing the issue or removing its authoring label. Re-fetch and verify
@@ -2656,16 +3061,22 @@ only approval boundary.
   retried or resumed release (which reuses an existing `release` marker
   and never appends a new one) still runs the sweep every time this
   preflight step is reached -- run the single fetch-driven sweep command
-  against the target issue and the journal issue named in this session's
-  own records:
+  against the target issue and every journal named in this session's own
+  records (`issueAuthoring.journalIssue`, and each retired journal listed in
+  `issueAuthoring.retiredJournalIssues`):
 
   ```sh
   node scripts/sweep-authoring-markers.mjs --issue <target-issue-number> \
     --issue <journal-issue-number> \
+    --issue <retired-journal-owner/repo#number> \
     --marker-prefix <resolved-target-prefix> \
     --trusted-marker-logins <trusted-login-1,...> \
     --deadline-ms 300000 --apply || true
   ```
+
+  For each listed retired journal, add one `--issue <retired-journal>` to the
+  same invocation; the same flags apply to every `--issue`, and a retired
+  journal is swept like the current one.
 
   The trailing `|| true` keeps this step's own non-zero exit (a fetch or
   mutation failure) from aborting an automated `set -e` release script:
@@ -2796,8 +3207,9 @@ only approval boundary.
   reuse-or-append decision below, repeat the same mandatory sweep once
   more -- the same `sweep-authoring-markers.mjs` command above, now
   scoped to `--issue <anchor-issue-number> --issue <journal-issue-number>`
-  -- covering the anchor's own owner-marker log and the journal's
-  publication-intent log -- idempotent with every earlier target's own
+  plus one `--issue` for each listed retired journal -- covering the anchor's
+  own owner-marker log and each journal's publication-intent log --
+  idempotent with every earlier target's own
   sweep above, since a comment either was already minimized or was not
   yet the newest for its own continuity-chain identity within the family
   either way. Then
@@ -2839,7 +3251,8 @@ only approval boundary.
   loop, the "when it is distinct" branch for a target heartbeat). The
   reduced sequence, in order: (1) release-marker preflight -- re-fetch
   owner comments, then run the mandatory sweep against that one issue
-  and the journal issue **before** the reuse-or-append decision (a
+  `journalIssue`, and every listed retired journal, **before** the
+  reuse-or-append decision (a
   retried or resumed release still re-runs it), then reuse or append
   the sole target/anchor's own `mode=release` marker and verify it;
   (2) the anchor-only `mode=release-guard` marker on the same issue,
@@ -2885,9 +3298,10 @@ only approval boundary.
   "<authoring label>"` (the release bullet above gives the reason) and
   re-fetching to verify the release marker, absent label, and expected body
   snapshot; (6) the mandatory sweep again, against
-  the same issue and the journal issue, before the release-complete
-  reuse-or-append decision; (7) the anchor-only `mode=release-complete`
-  marker, verified via bounded-retry paginated re-fetch; (8) the
+  the same issue, `journalIssue`, and every listed retired journal, before the
+  release-complete reuse-or-append decision; (7) the anchor-only
+  `mode=release-complete` marker, verified via bounded-retry paginated
+  re-fetch; (8) the
   closing sweep below. Every general-case safety requirement still
   applies unchanged: paginated owner-marker log reads with bounded
   retries, the trusted-marker-actor and Write/Maintain/Admin
@@ -2918,13 +3332,15 @@ only approval boundary.
   `release-complete` marker is found and every label is confirmed
   absent), attempt the mandatory sweep one more time, in a single
   invocation covering every target's now-final owner-marker log (the
-  anchor's included this time, not just its own) and the journal's
-  publication-intent log:
+  anchor's included this time, not just its own) and each journal's
+  publication-intent log -- one `--issue` for `issueAuthoring.journalIssue`
+  and one more for each listed retired journal:
 
   ```sh
   node scripts/sweep-authoring-markers.mjs --issue <target-1> \
     --issue <target-2> ... --issue <anchor-issue-number> \
     --issue <journal-issue-number-or-owner/repo#number> \
+    --issue <retired-journal-owner/repo#number> \
     --marker-prefix <resolved-target-prefix> \
     --trusted-marker-logins <trusted-login-1,...> \
     --deadline-ms 300000 --apply || true
@@ -2944,6 +3360,15 @@ only approval boundary.
   own eligibility rule matches what the sweep could actually clear;
   omitting it makes the count overstate the real backlog by including
   untrusted-authored matches the sweep was never going to touch.
+  Immediately after every sweep attempt above (each target's preflight, the
+  anchor before release-complete, and the closing sweep), also run that check
+  for each listed retired journal, with `--trusted-marker-logins` set as above
+  and `--journal-comments-file` holding only that journal's comments, with the
+  sweep's post-mutation result applied to that snapshot as described below.
+  Report each journal's count separately; a retired journal's count is never
+  added to the current journal's. The helper's carrier release runs only the
+  carrier and `journalIssue`, so a carrier whose hold is in a retired journal
+  needs these runs by hand (see the journal-rotation bullet).
   **Normalize the author field before writing the comments-file JSON**
   (#2896 review, Codex): the paginated GitHub REST/GraphQL response
   this section already fetches exposes a comment's author nested as
@@ -3134,6 +3559,51 @@ only approval boundary.
   The release never closes the carrier and never removes the authoring-only
   label. Its outcomes, label restore and reapply rules, and report fields are
   those of the general case, as implemented by `publish-authoring-hold`.
+
+- **Journal rotation.** Observed 2026-10-27 on issue `#2674`: the journal
+  reached GitHub's limit of 2,500 comments, and the next post was refused with
+  HTTP 403 (commenting is disabled on issues with more than 2500 comments).
+  Rotate a full journal as follows.
+  1. A 403 from a full journal is an uncertain post, because the record may
+     have landed before the refusal. Replay the journal before anything else:
+     paginate each journal that holds the failed run's records and look for the
+     run's exact publication token. For a 403 on the pending record, before the
+     create, the helper's `retry` field is `replay the journal first`, never
+     `permitted`; after the create the report has no `retry` field.
+  2. Create a new comment-only journal issue. In one commit, set
+     `issueAuthoring.journalIssue` to it and add the old reference to
+     `issueAuthoring.retiredJournalIssues`. Until that commit is merged, publish
+     with `--policy` and a copy of the policy file that carries both changes. A
+     retired journal may name another repository, as `journalIssue` may.
+  3. Act on the replay outcome:
+     - no record for the token on replay: the replay does not prove the record
+       is absent, because reads can lag, and the helper still reports the 403 as
+       uncertain (`nothingSent` stays false), so a rerun is the operator's
+       decision on the replay evidence, made with `--policy` until step 2 is
+       merged. A rerun uses fresh ids, so a record for the abandoned token that
+       lands later matches nothing the rerun writes: report it to the operator
+       as a record of the failed run, keep it separate from the rerun's records,
+       and do not treat it as the rerun's record;
+     - the failed run created an issue (its own report names the issue, or a
+       replayed record names one): do not rerun the command. Write that issue's
+       remaining records by hand to the new journal, each record's `journal`
+       field naming the new journal, which the anchor replay requires: the
+       attached `pending` and `member` records after their usual checks, or
+       `cleanup` and `abandoned`;
+     - a `pending` record without an issue and no created issue: no rule in
+       this contract covers that case, so it stays a recovery hold, reported to
+       the operator for a decision.
+  4. Close the retired journal. This is required by policy: Discover excludes
+     only the configured `journalIssue`, so a retired journal left open can be
+     offered as work.
+  5. Never post a new record or comment to a retired journal. Minimizing its
+     comments through the sweeps is still allowed.
+  6. A journal may also be rotated before it reaches the limit.
+  7. The helper's carrier release sweeps only the carrier and `journalIssue`.
+     For a carrier whose hold is in a retired journal, run the extra sweep and
+     backlog check for that journal by hand at each of the three sweep points
+     above: the per-target preflight, the anchor before release-complete, and
+     the closing sweep.
 
 ### Needs-decision follow-up body
 

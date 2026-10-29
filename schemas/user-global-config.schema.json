@@ -453,6 +453,9 @@
         "e10MaxPasses": {
           "$ref": "policy.schema.json#/properties/critiqueLoop/properties/e10MaxPasses"
         },
+        "e10SkipOnAdvisoryConvergence": {
+          "$ref": "policy.schema.json#/properties/critiqueLoop/properties/e10SkipOnAdvisoryConvergence"
+        },
         "deferAfterRounds": {
           "$ref": "policy.schema.json#/properties/critiqueLoop/properties/deferAfterRounds"
         },
@@ -464,6 +467,9 @@
         },
         "deferRelaxAtRounds": {
           "$ref": "policy.schema.json#/properties/critiqueLoop/properties/deferRelaxAtRounds"
+        },
+        "deferAllAfterRounds": {
+          "$ref": "policy.schema.json#/properties/critiqueLoop/properties/deferAllAfterRounds"
         },
         "deferNeedsDecision": {
           "$ref": "policy.schema.json#/properties/critiqueLoop/properties/deferNeedsDecision"
@@ -521,6 +527,9 @@
         },
         "journalIssue": {
           "$ref": "policy.schema.json#/properties/issueAuthoring/properties/journalIssue"
+        },
+        "retiredJournalIssues": {
+          "$ref": "policy.schema.json#/properties/issueAuthoring/properties/retiredJournalIssues"
         },
         "adversarialReview": {
           "type": "object",

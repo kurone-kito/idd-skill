@@ -25,11 +25,10 @@ before E8 when it is missing.
 
 ## E1 — Fetch review items into ReviewItems_snapshot
 
-**Step 1 — Snapshot the activity universe.** First, read the current PR
-HEAD SHA from the GitHub API and store it as `{head-SHA}`. Do not
-re-read the HEAD SHA during Steps 1–3; use this single stored value
-throughout; E3 rereads. Then fetch all of the following from GitHub
-in a single pass
+**Step 1 — Snapshot the activity universe.** Read the PR HEAD SHA and
+`baseRefName` once; store them as `{head-SHA}` and `{base-ref-name}`.
+Use that HEAD through Steps 1–3; E3 rereads it. Then fetch all of the
+following from GitHub in a single pass
 (before applying any exclusion filters):
 
 - All review threads (resolved or not) — paginate until `hasNextPage` is
@@ -75,11 +74,11 @@ GitHub state in this phase, discard helper output and run the portable
 gh/jq/API procedure below. The written instruction rules remain the
 authoritative decision path.
 
-Also fetch the **current CI state** for `{head-SHA}`:
-`gh pr checks {pr-number} --json name,state,completedAt`. Record the
-`completedAt` of the most recently completed successful (or
-treated-as-passed) CI run as `{latest-ci-completed-at}`, or `none` if no
-CI pass exists yet for this HEAD.
+Manual CI: read every `statusCheckRollup.contexts` page, matching Step 1's HEAD
+and base. Keep same-named producers separate. Record the newest passing
+`completedAt` (successful or treated-as-passed, never a later failure) as
+`{latest-ci-completed-at}`; a complete read with no pass yields `none`.
+Incomplete: no post, repeat Step 1.
 
 **Non-Copilot safety:** snapshot/watermark and F2 cover bot activity.
 
@@ -131,10 +130,10 @@ posting nothing; return to Step 1 and re-snapshot, do not retry Step 2
 as-is. `decision: defer` exits 0 (`mode: "dry-run"`), posting nothing
 (required checks not passing): skip the after-posting steps and follow
 the CI-incomplete routing above.
-The manual six-field fallback requires `idd-ci` producer-aware proof:
-required `(checkName, workflowName)` producers pass and advisory
-identity/event verify; raw `gh pr checks` is insufficient. Emit/manual
-POST inherit it (see `docs/idd-helper-scripts.md`):
+Manual fallback: before posting, re-read both refs and complete
+activity; HEAD, base, item count, and max activity time must match
+Step 1, with no new uncovered items. Otherwise do not post: repeat Step 1
+and triage. Use the producer-aware CI proof above.
 
 ```markdown
 <!-- review-watermark: {agent-id} {claim-id} {head-SHA} {max-activity-updatedAt|none} {total-item-count} {latest-ci-completed-at|none} -->

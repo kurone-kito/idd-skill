@@ -790,6 +790,10 @@
           "minimum": 1,
           "description": "Per-issue cap on E10 review-fix critique passes, counted across E9 fix batches. Once this many passes have run, no High or Medium Accepted finding is open, and fix-validate has passed on the current HEAD, the loop stops and files the remaining Low findings into a follow-up issue instead of fixing them in the loop. An unestablished count does not count as reached. Optional; defaults to `2`."
         },
+        "e10SkipOnAdvisoryConvergence": {
+          "type": "boolean",
+          "description": "When true, the standard profile skips E10 only for an eligible advisory-only Accepted PATH A batch after advisory convergence matches the current E1 pull-request head. Optional; defaults to `false`. The lite profile always runs E10."
+        },
         "deferAfterRounds": {
           "type": "integer",
           "minimum": 1,
@@ -798,12 +802,17 @@
         "deferByUrgency": {
           "type": "string",
           "enum": ["off", "low", "low-and-medium", "severity-tiered"],
-          "description": "Independent E4/E5 defer trigger, active from round 1, that disposes a PATH A item `Reject (defer)` and is not gated by round count. `off` (default): the trigger is disabled and E4/E5 behavior is unchanged. `low` and `low-and-medium`: a PATH A item that is not adopt-now (see `idd-review-triage.instructions.md`'s Defer rule) defers when its defer-eligibility severity is within the mode's ceiling. `low`: Low-severity items only. `low-and-medium`: Low or Medium. High is never eligible under either. `severity-tiered`: it replaces the binary adopt-now gate, except clause (d) below, with the severity-and-urgency matrix, whose `high` urgency still reads adopt-now conditions (a)-(c). At relax step 0 (the whole matrix while `deferRelaxAtRounds` below is unset or invalid) that includes High only at urgency `very-low`. Under `low`, `low-and-medium`, and `severity-tiered`, clause (d) of the adopt-now test cascades: once one finding of a pass is Accepted, another finding of that pass whose fix stays within that push's files is adopt-now and is not deferred. Under `severity-tiered` the agent reports (d) with `resolve-review-thread --adopt-now`, which turns a `defer` verdict into `keep`. Independent of, and does not change, `deferAfterRounds` above. Optional; defaults to `off`."
+          "description": "Independent E4/E5 defer trigger, active from round 1, that disposes a PATH A item `Reject (defer)` and is not gated by round count. `off` (default): the trigger is disabled and E4/E5 behavior is unchanged. `low` and `low-and-medium`: a PATH A item that is not adopt-now (see `idd-review-triage.instructions.md`'s Defer rule) defers when its defer-eligibility severity is within the mode's ceiling. `low`: Low-severity items only. `low-and-medium`: Low or Medium. High is never eligible under either. `severity-tiered`: it replaces the binary adopt-now gate, except clause (d) below, with the severity-and-urgency matrix, whose `high` urgency still reads adopt-now conditions (a)-(c). At relax step 0 (the whole matrix while `deferRelaxAtRounds` below is unset or invalid) that includes High only at urgency `very-low`. Under `low`, `low-and-medium`, and `severity-tiered`, clause (d) of the adopt-now test cascades: once one finding of a pass is Accepted, another finding of that pass whose fix stays within that push's files is adopt-now and is not deferred. Under `severity-tiered` the agent reports (d) with `resolve-review-thread --adopt-now`, which turns a `defer` verdict into `keep`. Independent of, and does not change, `deferAfterRounds` above. Under `severity-tiered`, at or above `deferAllAfterRounds`, the cap takes precedence: every finding except a safety-class one defers whatever the relax step or urgency, except that PATH B, `--scope-fence`, `--protected-authority`, `--accepted-mid-fix`, and an awaiting-maintainer-decision hold keep their own verdicts, and condition (d) and `--adopt-now` keep none. Optional; defaults to `off`."
         },
         "triageRecord": {
           "type": "string",
           "enum": ["off", "record", "enforce"],
           "description": "Triage recording for PATH A replies made through the `resolve-review-thread` helper. `off` (default): the helper records no tier or urgency. `record`: the helper requires the tier and urgency on every applied (`--apply`) Accepted or Rejected PATH A reply, except `--path-b` replies and `**Rejection confirmed by maintainer**` thread replies, and records the tier and urgency with the relax step in a `Triage:` line on any reply that carries both. `enforce`: like `record`, and the helper also refuses an Accepted reply that the defer matrix says to defer, unless a reason is given; it takes effect only when `deferByUrgency` is `severity-tiered`, and otherwise behaves as `record`. `resolve-review-thread` reads `triageRecord`: with `record` or `enforce`, an applied (`--apply`) Accepted or Rejected PATH A disposition requires `--tier` and `--urgency`; `--path-b` replies and `**Rejection confirmed by maintainer**` thread replies are exempt. Optional; defaults to \"off\"."
+        },
+        "deferAllAfterRounds": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Review-count cap for `deferByUrgency: \"severity-tiered\"` (#4750). An integer of at least 1, compared with the same pull-request-wide, paginated `copilot-pull-request-reviewer[bot]` review count that `deferRelaxAtRounds` uses. Default: unset, which turns the cap off. The cap is reached at or above the value: every PATH A finding defers at any relax step, except a safety-class finding, which is kept. The existing exclusions keep their verdicts: PATH B, `--scope-fence`, `--protected-authority`, `--accepted-mid-fix`, and an awaiting-maintainer-decision hold (which this helper never sets). Adopt-now condition (d) and `--adopt-now` then turn no defer into keep. The cap acts only under `severity-tiered` and never with `--lite`, which reads no review count. Optional."
         },
         "deferRelaxAtRounds": {
           "type": "array",
@@ -812,7 +821,7 @@
             "type": "integer",
             "minimum": 1
           },
-          "description": "Wave gradient for `deferByUrgency: \"severity-tiered\"`: one or two strictly ascending positive integers, the pull request's PR-wide, paginated `copilot-pull-request-reviewer[bot]` review counts (the same count `deferAfterRounds` uses) at which the rule relaxes. A pull request's relax step is the number of thresholds less than or equal to its review count, so `[4, 7]` gives step 1 at counts 4 to 6 and step 2 at 7 and above. Each step raises the highest urgency at which a tier may still defer, and from step 1 a High-tier finding of `high` urgency and a safety-class finding never defer under `deferByUrgency` (`deferAfterRounds` is unchanged); see `docs/idd-review-policy-profiles.md`. Has no effect unless `deferByUrgency` is `severity-tiered`. Optional; when the key is omitted the gradient is off, which is the default, and the helper treats an invalid value, such as more than two entries or entries that are not strictly ascending, the same way (the schema cannot express that length and order, so the helper enforces it)."
+          "description": "Wave gradient for `deferByUrgency: \"severity-tiered\"`: one or two strictly ascending positive integers, the pull request's PR-wide, paginated `copilot-pull-request-reviewer[bot]` review counts (the same count `deferAfterRounds` uses) at which the rule relaxes. A pull request's relax step is the number of thresholds less than or equal to its review count, so `[4, 7]` gives step 1 at counts 4 to 6 and step 2 at 7 and above. Each step raises the highest urgency at which a tier may still defer, and from step 1 a High-tier finding of `high` urgency and a safety-class finding never defer under `deferByUrgency` (`deferAfterRounds` is unchanged); see `docs/idd-review-policy-profiles.md`. The cap takes precedence over this gradient at or above `deferAllAfterRounds` (see `deferByUrgency`). Has no effect unless `deferByUrgency` is `severity-tiered`. Optional; when the key is omitted the gradient is off, which is the default, and the helper treats an invalid value, such as more than two entries or entries that are not strictly ascending, the same way (the schema cannot express that length and order, so the helper enforces it)."
         },
         "deferNeedsDecision": {
           "type": "string",
@@ -922,6 +931,15 @@
           "type": "string",
           "pattern": "^[\\w.-]+/[\\w.-]+#[1-9][0-9]*$",
           "description": "Pre-existing repository-level authoring journal target (`owner/repo#number`) used as the publication-intent record location for a standalone authoring set with no existing issue or anchor. The issue number must be a positive integer with no leading zero (GitHub issue numbers start at 1). Optional; no default -- when absent, the issue-authoring skill stops with `blocked-by-human` before creating a standalone target rather than guessing a journal."
+        },
+        "retiredJournalIssues": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "pattern": "^[\\w.-]+/[\\w.-]+#[1-9][0-9]*$"
+          },
+          "description": "Journals that no longer receive publication-intent records but still hold the records of existing authoring sets, each as `owner/repo#number` with the same format as `journalIssue`. An anchor's records are read from `journalIssue` and every listed journal, so an existing set still verifies after `journalIssue` moves. Must not repeat an entry or name the `journalIssue` issue. Optional; no default -- when absent, only `journalIssue` is read."
         },
         "adversarialReview": {
           "type": "object",

@@ -298,6 +298,8 @@ const STALE_REQUEST_RECOVERY_REASONS = {
   activeClaimNotProvided: 'active-claim-not-provided',
   notPending: 'not-pending',
   sameHeadMarkerPresent: 'same-head-marker-present',
+  // A review_requested event or a completed Copilot review (#4718) proves the
+  // request reached the reviewer for the current HEAD.
   provenCoversHead: 'proven-covers-head',
   capExhausted: 'recovery-cap-exhausted',
   attemptEligible: 'recovery-attempt-eligible',
@@ -373,6 +375,16 @@ export function evaluateStaleRequestRecoveryAction(input) {
   // commit -- Copilot genuinely received the request and is simply no longer
   // pending (completed or silently declined), not a failed-to-register case.
   if (input.copilotPendingCoversHead) {
+    return {
+      action: 'not-applicable',
+      reason: STALE_REQUEST_RECOVERY_REASONS.provenCoversHead,
+    };
+  }
+  // A completed Copilot review of this HEAD is the same kind of proof: the
+  // request reached the reviewer, so the same-head marker's elapsed budget
+  // cannot mean a failed registration. Checked before the elapsed and cap
+  // checks below, and only on this non-pending path (#4718).
+  if (input.currentHeadReviewExists === true) {
     return {
       action: 'not-applicable',
       reason: STALE_REQUEST_RECOVERY_REASONS.provenCoversHead,
@@ -819,6 +831,12 @@ export function readAdvisoryWaitState(port, input) {
     activeClaimProvided: copilotRecovery.activeClaimProvided,
     elapsedMinutes: summary.elapsedMinutes,
     settledWindowMinutes: summary.settledWindowMinutes,
+    // #4718: findLastCopilotReviewCommit returns the raw commit_id, so the
+    // comparison lowercases it, the same normalization
+    // buildCopilotRecoverySummary applies. Unlike the copilotDeclinedHead
+    // comparison above, this one does not rely on the caller's casing.
+    currentHeadReviewExists:
+      String(summary.lastCopilotCommit ?? '').toLowerCase() === prHeadSha,
   });
   return {
     ...summary,

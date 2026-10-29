@@ -579,6 +579,10 @@
   //   // Medium accepted finding is open and fix-validate passes on the
   //   // current head, the remaining Low findings go to a follow-up issue.
   //   "e10MaxPasses": 2,
+  //   // Default: omitted, which behaves as `false`.
+  //   // - true: skip eligible standard-profile E10 batches after advisory convergence.
+  //   // - false: run E10 for every batch.
+  //   "e10SkipOnAdvisoryConvergence": false,
   //   // From this pull-request-wide Copilot review count, a wording-only Low
   //   // finding that is not adopt-now goes to a follow-up issue instead of
   //   // being fixed.
@@ -612,6 +616,13 @@
   //   // other deferByUrgency values. docs/customization.md recommends the
   //   // example value.
   //   "deferRelaxAtRounds": [4, 7],
+  //   // Review-count cap for severity-tiered. Default: omitted, which turns
+  //   // the cap off. Under severity-tiered only. At or above the value, every
+  //   // non-safety-class finding goes to a follow-up issue whatever the step,
+  //   // except PATH B, --scope-fence, --protected-authority, and
+  //   // --accepted-mid-fix, which keep their verdicts. Adopt-now condition (d)
+  //   // and --adopt-now keep none of the others.
+  //   "deferAllAfterRounds": 3,
   //   // - "on" (default): a finding that needs a person's judgment may go to
   //   //   a needs-decision follow-up issue when merging is safe.
   //   // - "off": the loop stops for a person instead.
@@ -679,6 +690,9 @@
   //   // for a standalone authoring set. Default: omitted; such a set then
   //   // stops for a person instead of guessing a journal.
   //   "journalIssue": "example-owner/example-repo#1",
+  //   // Journals that no longer receive records but still hold the records
+  //   // of existing sets; the anchor check reads them too. Default: omitted.
+  //   "retiredJournalIssues": ["example-owner/example-repo#2"],
   //   // The adversarial review of a finished issue draft.
   //   "adversarialReview": {
   //     // The longest the caller waits for a delegated draft review.

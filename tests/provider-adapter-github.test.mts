@@ -14,6 +14,7 @@ import {
   fetchLastEditedAtByNodeId,
   fetchReviewThreadCommentUserContentEdits,
   type GithubProviderAdapterDeps,
+  readChangeRequestClosingIssueReferences,
 } from '../src/scripts/provider-adapter-github.mts';
 
 // #3335: realistic gh 2.101.0 HTTP-failure shapes, shared with
@@ -3590,6 +3591,35 @@ test('getChangeRequestConvergenceView reads closing references across GraphQL pa
   assert.equal(fake.calls.filter((args) => args.includes('graphql')).length, 2);
 });
 
+test('getChangeRequestConvergenceView passes a non-string head name through as empty, and a real branch name unchanged (#4735)', () => {
+  const numeric = ghClosingRefFake({
+    prView: { ...CLOSING_REF_PR_VIEW, headRefName: 123 },
+    pullRequest: () =>
+      pullRequestClosingPayload('deadbeef', singleClosingPage([])),
+  });
+  const numericPort = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({ ghText: numeric.ghText }),
+  );
+  assert.equal(numericPort.getChangeRequestConvergenceView(42).headRefName, '');
+
+  const named = ghClosingRefFake({
+    prView: CLOSING_REF_PR_VIEW,
+    pullRequest: () =>
+      pullRequestClosingPayload('deadbeef', singleClosingPage([])),
+  });
+  const namedPort = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({ ghText: named.ghText }),
+  );
+  assert.equal(
+    namedPort.getChangeRequestConvergenceView(42).headRefName,
+    'issue/7-example',
+  );
+});
+
 test('closing-reference lookup fails closed on error, malformed, or partial responses (#4721)', () => {
   const cases: [string, unknown, RegExp][] = [
     [
@@ -3721,6 +3751,172 @@ test('closing-reference lookup fails on head drift during pagination and on a pa
     () => capPort.getChangeRequestConvergenceView(42),
     /exceeded 20 pages/,
   );
+});
+
+function closingRefNodeWithUrl(number: number) {
+  return {
+    number,
+    url: `https://example.invalid/issues/${number}`,
+    repository: { name: 'r', owner: { login: 'o' } },
+  };
+}
+
+const WRAPPER_HEAD = 'a'.repeat(40);
+
+test('readChangeRequestClosingIssueReferences returns url and repository identity through the injected runner (#4737)', () => {
+  const fake = ghClosingRefFake({
+    prView: CLOSING_REF_PR_VIEW,
+    pullRequest: () =>
+      pullRequestClosingPayload(
+        WRAPPER_HEAD,
+        singleClosingPage([closingRefNodeWithUrl(7)]),
+      ),
+  });
+  assert.deepEqual(
+    readChangeRequestClosingIssueReferences(
+      fake.ghText,
+      'o',
+      'r',
+      42,
+      WRAPPER_HEAD,
+    ),
+    [closingRefNodeWithUrl(7)],
+  );
+  const graphql = fake.calls.filter((args) => args.includes('graphql'));
+  assert.equal(graphql.length, 1);
+  assert.ok(
+    graphql[0]?.some((arg) =>
+      arg.includes('nodes{number url repository{name owner{login}}}'),
+    ),
+  );
+  assert.equal(
+    fake.calls.some((args) => args[0] === 'pr'),
+    false,
+  );
+});
+
+test('readChangeRequestClosingIssueReferences validates the expected head before any read and lower-cases an upper-case head (#4737)', () => {
+  const fake = ghClosingRefFake({
+    prView: CLOSING_REF_PR_VIEW,
+    pullRequest: () =>
+      pullRequestClosingPayload(
+        WRAPPER_HEAD,
+        singleClosingPage([closingRefNodeWithUrl(7)]),
+      ),
+  });
+  const rejected: (string | null)[] = [
+    null,
+    '',
+    'deadbeef',
+    'a'.repeat(39),
+    'a'.repeat(41),
+    'g'.repeat(40),
+    ` ${'a'.repeat(40)}`,
+  ];
+  for (const head of rejected) {
+    assert.throws(
+      () =>
+        readChangeRequestClosingIssueReferences(
+          fake.ghText,
+          'o',
+          'r',
+          42,
+          head,
+        ),
+      /expected head SHA/,
+      `head ${JSON.stringify(head)}`,
+    );
+  }
+  assert.equal(fake.calls.length, 0);
+  assert.deepEqual(
+    readChangeRequestClosingIssueReferences(
+      fake.ghText,
+      'o',
+      'r',
+      42,
+      'A'.repeat(40),
+    ),
+    [closingRefNodeWithUrl(7)],
+  );
+});
+
+test('readChangeRequestClosingIssueReferences fails rather than returning a reference without a url, or a head mismatch (#4737)', () => {
+  const noUrl = ghClosingRefFake({
+    prView: CLOSING_REF_PR_VIEW,
+    pullRequest: () =>
+      pullRequestClosingPayload(
+        WRAPPER_HEAD,
+        singleClosingPage([closingRefNode(7)]),
+      ),
+  });
+  assert.throws(
+    () =>
+      readChangeRequestClosingIssueReferences(
+        noUrl.ghText,
+        'o',
+        'r',
+        42,
+        WRAPPER_HEAD,
+      ),
+    /reference #7 has no url/,
+  );
+
+  const mismatch = ghClosingRefFake({
+    prView: CLOSING_REF_PR_VIEW,
+    pullRequest: () =>
+      pullRequestClosingPayload(
+        'b'.repeat(40),
+        singleClosingPage([closingRefNodeWithUrl(7)]),
+      ),
+  });
+  assert.throws(
+    () =>
+      readChangeRequestClosingIssueReferences(
+        mismatch.ghText,
+        'o',
+        'r',
+        42,
+        WRAPPER_HEAD,
+      ),
+    /head is b+, expected a+/,
+  );
+});
+
+test('readChangeRequestClosingIssueReferences propagates GraphQL errors and malformed connections (#4737)', () => {
+  const cases: [unknown, RegExp][] = [
+    [
+      { errors: [{ message: 'Could not resolve to a PullRequest' }] },
+      /closingIssuesReferences lookup failed: Could not resolve/,
+    ],
+    [
+      pullRequestClosingPayload(WRAPPER_HEAD, null),
+      /connection is null\/absent or malformed/,
+    ],
+    [
+      pullRequestClosingPayload(WRAPPER_HEAD, {
+        nodes: [closingRefNodeWithUrl(7)],
+        pageInfo: { hasNextPage: true, endCursor: null },
+      }),
+      /reported hasNextPage without endCursor/,
+    ],
+  ];
+  for (const [payload, pattern] of cases) {
+    const fake = ghClosingRefFake({
+      prView: CLOSING_REF_PR_VIEW,
+      pullRequest: () => payload,
+    });
+    assert.throws(
+      () =>
+        readChangeRequestClosingIssueReferences(
+          fake.ghText,
+          'o',
+          'r',
+          42,
+          WRAPPER_HEAD,
+        ),
+      pattern,
+    );
+  }
 });
 
 test('listIssueNumbersClosedByOpenChangeRequests pages open pull requests and reads overflow references in full (#4721)', () => {
