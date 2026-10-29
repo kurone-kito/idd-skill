@@ -11214,17 +11214,12 @@ test('authoring-owner dry run refuses, posting nothing, when the GraphQL read fa
   }
 });
 
-test('authoring-owner --apply refuses a post whose set or anchor differs from the latest marker, in every checked mode (#3899)', () => {
+test('authoring-owner --apply refuses heartbeat or release when set or anchor differs from the latest marker (#3899)', () => {
   const differing: Record<string, string>[] = [
     { set: OWNER_ID_OTHER_SET },
     { anchor: 'o/r#7' },
   ];
-  for (const mode of [
-    'heartbeat',
-    'release',
-    'release-guard',
-    'release-complete',
-  ]) {
+  for (const mode of ['heartbeat', 'release']) {
     for (const latestOverrides of differing) {
       const stub = withOwnerIdStub({
         comments: [
@@ -11252,13 +11247,8 @@ test('authoring-owner --apply refuses a post whose set or anchor differs from th
   }
 });
 
-test('authoring-owner --apply sends a checked mode from another session with the latest marker set and anchor (#3899)', () => {
-  for (const mode of [
-    'heartbeat',
-    'release',
-    'release-guard',
-    'release-complete',
-  ]) {
+test('authoring-owner --apply keeps cross-session heartbeat and release behavior (#3899)', () => {
+  for (const mode of ['heartbeat', 'release']) {
     // The latest marker carries the same set and anchor but session-1, so only
     // the session differs and the post must still be sent.
     const stub = withOwnerIdStub({
@@ -11273,6 +11263,122 @@ test('authoring-owner --apply sends a checked mode from another session with the
       assert.equal(readOwnerIdLines(stub.postsFile).length, 1, mode);
     } finally {
       stub.restore();
+    }
+  }
+});
+
+test('anchor-only release modes reject a session different from the open generation before output or POST (#4804)', () => {
+  const scenarios = [
+    { mode: 'release-guard', latestMode: 'heartbeat' },
+    { mode: 'release-complete', latestMode: 'release' },
+  ] as const;
+  for (const { mode, latestMode } of scenarios) {
+    const comments = [
+      OWNER_ID_ACQUIRE_OPENER,
+      {
+        id: 102,
+        body: ownerIdBody(ownerIdFlags(latestMode, { session: 'session-2' })),
+      },
+    ];
+    for (const apply of [false, true]) {
+      const stub = withOwnerIdStub({ comments });
+      try {
+        const run = runOwnerIdPost(
+          ownerIdFlags(mode, { session: 'session-2' }),
+          { apply },
+        );
+        assert.equal(run.status, 1, `${mode}, apply=${apply}`);
+        assert.equal(run.kind, 'gate', `${mode}, apply=${apply}`);
+        assert.match(
+          run.stderr,
+          /requested session session-2 does not match anchor .* open generation session session-1/,
+          `${mode}, apply=${apply}`,
+        );
+        assert.deepEqual(
+          readOwnerIdLines(stub.postsFile),
+          [],
+          `${mode}, apply=${apply}`,
+        );
+      } finally {
+        stub.restore();
+      }
+    }
+  }
+});
+
+test('anchor-only release modes use the open generation session, not the latest marker session (#4804)', () => {
+  const scenarios = [
+    { mode: 'release-guard', latestMode: 'heartbeat' },
+    // The accepted release marker keeps this generation open for completion.
+    { mode: 'release-complete', latestMode: 'release' },
+  ] as const;
+  for (const { mode, latestMode } of scenarios) {
+    const comments = [
+      OWNER_ID_ACQUIRE_OPENER,
+      {
+        id: 102,
+        body: ownerIdBody(ownerIdFlags(latestMode, { session: 'session-2' })),
+      },
+    ];
+    for (const apply of [false, true]) {
+      const stub = withOwnerIdStub({ comments });
+      try {
+        const run = runOwnerIdPost(
+          ownerIdFlags(mode, { session: OWNER_ID_SESSION }),
+          { apply },
+        );
+        assert.equal(run.status, 0, `${mode}, apply=${apply}`);
+        assert.equal(
+          readOwnerIdLines(stub.postsFile).length,
+          apply ? 1 : 0,
+          `${mode}, apply=${apply}`,
+        );
+      } finally {
+        stub.restore();
+      }
+    }
+  }
+});
+
+test('anchor-only release modes fail closed on unreadable or unreplayable anchor history (#4804)', () => {
+  for (const mode of ['release-guard', 'release-complete']) {
+    for (const apply of [false, true]) {
+      const unreadable = withOwnerIdStub({
+        graphqlReply: { stderr: 'gh: Service Unavailable (HTTP 503)' },
+      });
+      try {
+        const run = runOwnerIdPost(ownerIdFlags(mode), { apply });
+        assert.equal(run.status, 1, `${mode} unreadable, apply=${apply}`);
+        assert.equal(
+          run.kind,
+          'transport',
+          `${mode} unreadable, apply=${apply}`,
+        );
+        assert.deepEqual(readOwnerIdLines(unreadable.postsFile), []);
+      } finally {
+        unreadable.restore();
+      }
+
+      const unreplayable = withOwnerIdStub({
+        comments: [
+          {
+            id: 101,
+            body: ownerIdBody(ownerIdFlags('release')),
+          },
+        ],
+      });
+      try {
+        const run = runOwnerIdPost(ownerIdFlags(mode), { apply });
+        assert.equal(run.status, 1, `${mode} unreplayable, apply=${apply}`);
+        assert.equal(run.kind, 'gate', `${mode} unreplayable, apply=${apply}`);
+        assert.match(
+          run.stderr,
+          /owner history of anchor .* cannot be replayed/,
+        );
+        assert.deepEqual(readOwnerIdLines(unreplayable.postsFile), []);
+      } finally {
+        unreplayable.restore();
+      }
     }
   }
 });

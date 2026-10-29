@@ -1263,6 +1263,14 @@ const AUTHORING_OWNER_IDENTITY_CHECKED_MODES = new Set([
   'resume',
 ]);
 /**
+ * #4804: these anchor-only release modes must retain the session of the
+ * anchor's current open generation, not merely its latest owner marker.
+ */
+const AUTHORING_OWNER_ANCHOR_SESSION_CHECKED_MODES = new Set([
+  'release-guard',
+  'release-complete',
+]);
+/**
  * Appended to every identity refusal. A post made right after its opening
  * marker can read stale, so waiting out the settle delay and retrying tells a
  * lagging read apart from a real mismatch. The delay is
@@ -3093,7 +3101,10 @@ function checkAuthoringOwnerPostIdentity(input) {
     const readRef = `${anchorTarget.owner}/${anchorTarget.repo}#${anchorTarget.number}`;
     const purpose = acquisitionMode
       ? 'the anchor owner history cannot be checked'
-      : 'its opening markers cannot be checked';
+      : AUTHORING_OWNER_ANCHOR_SESSION_CHECKED_MODES.has(post.mode) &&
+          sameIssueRef(post.target, post.anchor)
+        ? 'its anchor owner history cannot be replayed'
+        : 'its opening markers cannot be checked';
     const message = `refusing to post authoring-owner marker (mode=${post.mode}): the comments of ${readRef} could not be read, so ${purpose}: ${error.message}`;
     process.stderr.write(`${message}\n`);
     return { exitCode: 1, ...classifyHelperError(error), message };
@@ -3148,6 +3159,73 @@ function checkAuthoringOwnerPostIdentity(input) {
     }
     process.stderr.write(`${refusal}\n`);
     return { exitCode: 1, kind: 'gate', message: refusal };
+  }
+  if (AUTHORING_OWNER_ANCHOR_SESSION_CHECKED_MODES.has(post.mode)) {
+    const anchorRef = parseIssueReference(post.anchor);
+    if (anchorRef === null) {
+      const refusal =
+        `refusing to post authoring-owner marker (mode=${post.mode}) on ${post.target}: ` +
+        `anchor ${post.anchor} is not a readable issue reference`;
+      process.stderr.write(`${refusal}\n`);
+      return { exitCode: 1, kind: 'gate', message: refusal };
+    }
+    let anchorComments = comments;
+    if (!sameIssueRef(post.target, post.anchor)) {
+      try {
+        anchorComments = fetchProvenanceCommentsGraphql(
+          anchorRef.owner,
+          anchorRef.repo,
+          anchorRef.number,
+        );
+      } catch (error) {
+        const readRef = `${anchorRef.owner}/${anchorRef.repo}#${anchorRef.number}`;
+        const refusal =
+          `refusing to post authoring-owner marker (mode=${post.mode}) on ${post.target}: ` +
+          `the owner history of anchor ${readRef} could not be read, so its open generation session cannot be verified: ${error.message}`;
+        process.stderr.write(`${refusal}\n`);
+        return { exitCode: 1, ...classifyHelperError(error), message: refusal };
+      }
+    }
+    const reconciliation = reconcileFormerChildMembershipsWithBudget(
+      {
+        comments: anchorComments,
+        historyTargetRef: post.anchor,
+        markerPrefix: input.markerPrefix,
+        trusted: actors,
+      },
+      formerChildReadBudget,
+    );
+    let refusal = null;
+    if ('problem' in reconciliation) {
+      refusal =
+        `refusing to post authoring-owner marker (mode=${post.mode}) on ${post.target}: ` +
+        `the owner history of anchor ${post.anchor} cannot be reconciled: ${reconciliation.problem}`;
+    } else {
+      const replay = resolveAnchorOwnerGeneration({
+        comments: reconciliation.comments,
+        anchorRef: post.anchor,
+        markerPrefix: input.markerPrefix,
+        trusted: actors,
+        supersedingOpenings: reconciliation.supersedingOpenings,
+      });
+      if ('problem' in replay) {
+        refusal =
+          `refusing to post authoring-owner marker (mode=${post.mode}) on ${post.target}: ` +
+          `the owner history of anchor ${post.anchor} cannot be replayed: ${replay.problem}`;
+      } else if (replay.generation === null) {
+        refusal =
+          `refusing to post authoring-owner marker (mode=${post.mode}) on ${post.target}: ` +
+          `anchor ${post.anchor} has no open owner generation whose session can be verified`;
+      } else if (replay.generation.session !== post.session) {
+        refusal =
+          `refusing to post authoring-owner marker (mode=${post.mode}) on ${post.target}: ` +
+          `requested session ${post.session} does not match anchor ${post.anchor}'s open generation session ${replay.generation.session}`;
+      }
+    }
+    if (refusal !== null) {
+      process.stderr.write(`${refusal}\n`);
+      return { exitCode: 1, kind: 'gate', message: refusal };
+    }
   }
   const refusal = validateAuthoringOwnerPostIdentity(
     post,
