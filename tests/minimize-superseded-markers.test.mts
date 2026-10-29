@@ -1436,6 +1436,9 @@ function makeTakeoverGhStub(pages: unknown[][]): string {
     '  record({ type: "rest", args });',
     '  if (process.env.IDD_TEST_GH_FAIL === "1") { fs.writeSync(2, "simulated comment listing failure"); process.exit(1); }',
     '  if (process.env.IDD_TEST_GH_BAD_LISTING === "1") { process.stdout.write(JSON.stringify([[{ html_url: "https://example.test/comment", body: "incomplete" }]])); process.exit(0); }',
+    '  if (process.env.IDD_TEST_GH_BAD_LISTING === "missing-user") { process.stdout.write(JSON.stringify([[{ node_id: "IC_missing_user", html_url: "https://example.test/comment", body: "incomplete" }]])); process.exit(0); }',
+    '  if (process.env.IDD_TEST_GH_BAD_LISTING === "null-user") { process.stdout.write(JSON.stringify([[{ node_id: "IC_null_user", html_url: "https://example.test/comment", body: "incomplete", user: null }]])); process.exit(0); }',
+    '  if (process.env.IDD_TEST_GH_BAD_LISTING === "missing-login") { process.stdout.write(JSON.stringify([[{ node_id: "IC_missing_login", html_url: "https://example.test/comment", body: "incomplete", user: {} }]])); process.exit(0); }',
     '  process.stdout.write(JSON.stringify(pages));',
     '  process.exit(0);',
     '}',
@@ -1875,6 +1878,27 @@ test('takeover listing failure or incomplete rows stop before any GraphQL probe 
         },
         message: /"kind":"internal"/,
       },
+      {
+        env: {
+          IDD_TEST_GH_BAD_LISTING: 'missing-user',
+          IDD_HELPER_ERROR_ENVELOPE: '1',
+        },
+        message: /"kind":"internal".*user\.login/,
+      },
+      {
+        env: {
+          IDD_TEST_GH_BAD_LISTING: 'null-user',
+          IDD_HELPER_ERROR_ENVELOPE: '1',
+        },
+        message: /"kind":"internal".*user\.login/,
+      },
+      {
+        env: {
+          IDD_TEST_GH_BAD_LISTING: 'missing-login',
+          IDD_HELPER_ERROR_ENVELOPE: '1',
+        },
+        message: /"kind":"internal".*user\.login/,
+      },
     ]) {
       const tracePath = join(tempRoot, 'trace-' + Math.random() + '.jsonl');
       const result = runTakeoverCli(
@@ -1956,6 +1980,8 @@ test('takeover argument errors and missing trusted actors make no GitHub request
       [...valid, '--deadline-ms', '1'],
       ['--subject-ids', 'IC_existing', ...valid],
       ['--issue', '42', '--repo', 'owner/repo'],
+      [...valid.slice(0, 2), '--repo', 'owner/.', ...valid.slice(4)],
+      [...valid.slice(0, 2), '--repo', 'owner/..', ...valid.slice(4)],
     ];
     for (const args of invalidInputs) {
       const result = runTakeoverCli(args, tracePath);
@@ -1989,6 +2015,47 @@ test('takeover argument errors and missing trusted actors make no GitHub request
     assert.equal(noTrusted.status, 2, noTrusted.stderr);
     assert.match(noTrusted.stderr, /no trusted marker logins supplied/);
     assert.equal(existsSync(tracePath), false);
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('takeover listing handles responses larger than the default pipe buffer', () => {
+  const tempRoot = mkdtempSync(
+    join(tmpdir(), 'idd-minimize-takeover-large-listing-'),
+  );
+  const tracePath = join(tempRoot, 'gh-trace.jsonl');
+  const comments = Array.from({ length: 24 }, (_, index) =>
+    takeoverIssueComment(`IC_large_${index}`, 'x'.repeat(50_000)),
+  );
+  const restore = stubExecutable('gh', makeTakeoverGhStub([comments]));
+  try {
+    const result = runTakeoverCli(
+      [
+        '--issue',
+        '42',
+        '--repo',
+        'owner/repo',
+        '--prior-claim-id',
+        TAKEOVER_PRIOR_ID,
+        '--active-claim-id',
+        TAKEOVER_ACTIVE_ID,
+        '--trusted-marker-logins',
+        'kurone-kito',
+      ],
+      tracePath,
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    const report = JSON.parse(result.stdout) as {
+      counts: { selected: number };
+    };
+    assert.equal(report.counts.selected, 0);
+    assert.deepEqual(
+      readGhTrace(tracePath).map((call) => call.type),
+      ['rest'],
+    );
   } finally {
     restore();
     rmSync(tempRoot, { recursive: true, force: true });

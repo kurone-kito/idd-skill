@@ -5,8 +5,17 @@
 // .mts source named above by `pnpm run build`. Edit the .mts source,
 // never the generated .mjs. See docs/typescript-sources.md.
 
-import { execFileSync } from 'node:child_process';
-import { readFileSync, writeSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import {
+  closeSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  rmSync,
+  writeSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 
 // Deliberately NOT importing the shared config-loader module (see #1208's
@@ -519,7 +528,7 @@ function fetchIssueComments(
   issue: number,
 ): IssueCommentForSelection[] {
   const [owner, repo] = repository.split('/');
-  const result = runGh([
+  const result = runGhWithFileBackedStdout([
     'api',
     ...resolveGhHostnameArgs(),
     '--method',
@@ -574,10 +583,13 @@ function fetchIssueComments(
       seenNodeIds.add(row.node_id);
 
       const user = row.user;
-      const authorLogin =
-        typeof user === 'object' && user !== null && !Array.isArray(user)
-          ? String((user as Record<string, unknown>).login ?? '')
-          : '';
+      if (typeof user !== 'object' || user === null || Array.isArray(user)) {
+        throw new Error('comment page contains a row missing user.login');
+      }
+      const authorLogin = (user as Record<string, unknown>).login;
+      if (typeof authorLogin !== 'string' || authorLogin.length === 0) {
+        throw new Error('comment page contains a row missing user.login');
+      }
       comments.push({
         nodeId: row.node_id,
         url: row.html_url,
@@ -1425,6 +1437,43 @@ function runGh(argv: string[], timeoutMs: number = GH_TIMEOUT_MS): GhResult {
   }
 }
 
+function runGhWithFileBackedStdout(
+  argv: string[],
+  timeoutMs: number = GH_TIMEOUT_MS,
+): GhResult {
+  const tempDir = mkdtempSync(join(tmpdir(), 'idd-minimize-comments-'));
+  const stdoutPath = join(tempDir, 'stdout.json');
+  try {
+    const result = (() => {
+      const stdoutFd = openSync(stdoutPath, 'w');
+      try {
+        return spawnSync('gh', argv, {
+          encoding: 'utf8',
+          timeout: timeoutMs,
+          stdio: ['ignore', stdoutFd, 'pipe'],
+        });
+      } finally {
+        closeSync(stdoutFd);
+      }
+    })();
+    const stdout = readFileSync(stdoutPath, 'utf8');
+    if (result.error || result.status !== 0) {
+      return {
+        ok: false,
+        stderr: String(
+          result.stderr ||
+            result.error?.message ||
+            `gh exited with status ${result.status}`,
+        ),
+        stdout,
+      };
+    }
+    return { ok: true, stdout };
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
 // Calls node:util's parseArgs directly rather than the shared
 // src/scripts/cli-args.mts wrapper: cli-args.mts is a `./`-relative
 // import, which would break this file's self-contained invariant (see the
@@ -1579,7 +1628,12 @@ function parseMinimizeArgs(argv: string[]): MinimizeArgs {
       throw new Error('--issue must be a positive safe integer');
     }
     const repo = values.repo as string;
-    if (!/^[A-Za-z0-9-]+\/[A-Za-z0-9_.-]+$/.test(repo)) {
+    const repositoryName = repo.split('/')[1];
+    if (
+      !/^[A-Za-z0-9-]+\/[A-Za-z0-9_.-]+$/.test(repo) ||
+      repositoryName === '.' ||
+      repositoryName === '..'
+    ) {
       throw new Error('--repo must be in owner/repo form');
     }
     const priorClaimId = values['prior-claim-id'] as string;
