@@ -691,11 +691,6 @@ export function readWatermarkRequiredCiAgreement(input) {
     ),
   );
 }
-/** #4803: the base ref the activity capture reports, or empty when absent. */
-function snapshotBaseRefName(snapshot) {
-  const base = snapshot?.baseRefName;
-  return typeof base === 'string' ? base.trim() : '';
-}
 /**
  * Derive watermark fields from one fresh activity capture, then compare a
  * separate required-CI/HEAD agreement read. Does not accept a saved snapshot.
@@ -770,12 +765,7 @@ export function runOperationLocalSnapshotWatermark(input) {
   if (input.expectedBaseRefName !== undefined) {
     const expectedBase = input.expectedBaseRefName;
     const liveBase = (agreement.baseRefName ?? '').trim();
-    const captureBase = snapshotBaseRefName(snapshot);
-    if (
-      expectedBase === '' ||
-      liveBase !== expectedBase ||
-      captureBase !== expectedBase
-    ) {
+    if (expectedBase === '' || liveBase !== expectedBase) {
       return {
         snapshot,
         watermarkFields,
@@ -784,9 +774,9 @@ export function runOperationLocalSnapshotWatermark(input) {
         reasonCode: 'base-ref',
         reason:
           `refusing to post watermark: PR ${input.prNumber}'s base ref is ` +
-          `${liveBase || '(empty)'} (activity capture ${captureBase || '(empty)'}), ` +
-          `but Step 1 recorded ${expectedBase || '(none)'}. The base branch ` +
-          `moved since Step 1; re-run E1 from Step 1 against the current base.`,
+          `${liveBase || '(empty)'}, but Step 1 recorded ` +
+          `${expectedBase || '(none)'}. The base branch moved since Step 1; ` +
+          `re-run E1 from Step 1 against the current base.`,
       };
     }
   }

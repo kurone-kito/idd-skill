@@ -870,12 +870,6 @@ export function readWatermarkRequiredCiAgreement(input: {
   );
 }
 
-/** #4803: the base ref the activity capture reports, or empty when absent. */
-function snapshotBaseRefName(snapshot: unknown): string {
-  const base = (snapshot as { baseRefName?: unknown } | null)?.baseRefName;
-  return typeof base === 'string' ? base.trim() : '';
-}
-
 /**
  * Derive watermark fields from one fresh activity capture, then compare a
  * separate required-CI/HEAD agreement read. Does not accept a saved snapshot.
@@ -888,8 +882,8 @@ export function runOperationLocalSnapshotWatermark(input: {
   expectedHeadSha?: string;
   /**
    * #4803: the Step 1 base ref. When given (even empty, which refuses), the
-   * publish-time agreement read and the activity capture must both report
-   * this exact base ref. Omitted means the guard is not applied.
+   * publish-time required-CI agreement read must report this exact base ref.
+   * Omitted means the guard is not applied.
    */
   expectedBaseRefName?: string;
   priorBoundary?: OperationLocalPriorBoundary | null;
@@ -964,12 +958,7 @@ export function runOperationLocalSnapshotWatermark(input: {
   if (input.expectedBaseRefName !== undefined) {
     const expectedBase = input.expectedBaseRefName;
     const liveBase = (agreement.baseRefName ?? '').trim();
-    const captureBase = snapshotBaseRefName(snapshot);
-    if (
-      expectedBase === '' ||
-      liveBase !== expectedBase ||
-      captureBase !== expectedBase
-    ) {
+    if (expectedBase === '' || liveBase !== expectedBase) {
       return {
         snapshot,
         watermarkFields,
@@ -978,9 +967,9 @@ export function runOperationLocalSnapshotWatermark(input: {
         reasonCode: 'base-ref',
         reason:
           `refusing to post watermark: PR ${input.prNumber}'s base ref is ` +
-          `${liveBase || '(empty)'} (activity capture ${captureBase || '(empty)'}), ` +
-          `but Step 1 recorded ${expectedBase || '(none)'}. The base branch ` +
-          `moved since Step 1; re-run E1 from Step 1 against the current base.`,
+          `${liveBase || '(empty)'}, but Step 1 recorded ` +
+          `${expectedBase || '(none)'}. The base branch moved since Step 1; ` +
+          `re-run E1 from Step 1 against the current base.`,
       };
     }
   }

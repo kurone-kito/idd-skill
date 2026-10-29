@@ -29,9 +29,8 @@ before E8 when it is missing.
 HEAD SHA and base ref name from the GitHub API and store them as
 `{head-SHA}` and `{base-ref}`. Do not
 re-read the HEAD SHA during Steps 1–3; use this single stored value
-throughout; E3 rereads. Then fetch all of the following from GitHub
-in a single pass
-(before applying any exclusion filters):
+throughout; E3 rereads. Then fetch, in one pass before any exclusion
+filters:
 
 - All review threads (resolved or not) — paginate until `hasNextPage` is
   `false`; do not stop at a fixed page size such as `first: 20`, as that
@@ -84,9 +83,9 @@ CI pass exists yet for this HEAD.
 
 **CI precondition.** Run profile-selected AW1 `advisory-wait-state` with
 `--pr {pr-number}`, `--claim-id {claim-id}`, `--agent-id {agent-id}`,
-and `--trusted-marker-logins <trusted-logins>`; then profile-selected
-`ci-wait-state` with `--pr {pr-number}` (add `--global-only` on a
-global-only run; see `docs/idd-helper-scripts.md`). Require
+and `--trusted-marker-logins <trusted-logins>`; then `ci-wait-state` with
+`--pr {pr-number}` (add `--global-only` on a global-only run; see
+`docs/idd-helper-scripts.md`). Require
 `outcome: SATISFIED`, or
 `CAP_EXHAUSTED` with `capExhaustedRoute: phase-specific`; otherwise
 defer. Require `copilotRecovery.activeClaimProvided: true`,
@@ -131,8 +130,9 @@ posting nothing; return to Step 1 and re-snapshot, do not retry Step 2
 as-is. `decision: defer` exits 0 (`mode: "dry-run"`), posting nothing
 (required checks not passing): skip the after-posting steps and follow
 the CI-incomplete routing above.
-Manual six-field fallback: the PR base ref must equal `{base-ref}`, plus
-`idd-ci` producer-aware proof:
+Manual six-field fallback: re-read the PR base ref just before posting; it
+must equal `{base-ref}` (else return to Step 1), plus `idd-ci`
+producer-aware proof:
 required `(checkName, workflowName)` producers pass and advisory
 identity/event verify; raw `gh pr checks` is insufficient. Emit/manual
 POST inherit it (see `docs/idd-helper-scripts.md`):

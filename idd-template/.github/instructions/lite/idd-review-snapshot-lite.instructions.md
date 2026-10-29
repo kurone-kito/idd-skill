@@ -74,8 +74,8 @@ E1.
 1. Read the current PR HEAD SHA and base ref once — `gh pr view
    {pr-number} --json headRefOid,baseRefName` — and store them as
    `{head-SHA}` and `{base-ref}`. Never
-   re-read it elsewhere in E1 — reuse this value, except for the
-   deferred E3 check below.
+   re-read it elsewhere in E1 — reuse it, except for the deferred E3
+   check.
 2. Run the profile-selected `review-activity-snapshot` helper for
    `{head-SHA}`, `{max-activity-updatedAt}`, `{total-item-count}`, and
    `{latest-ci-completed-at}`: `node
@@ -124,20 +124,20 @@ the one-command path: `node
 scripts/post-idd-marker.mjs --type watermark --from-pr {pr-number}
 --expected-head-sha {head-SHA} --prior-base-ref {base-ref} --agent-id <id>
 --claim-id <id> --trusted-marker-logins "<trusted-login-1>,<trusted-login-2>"
---apply` (plus `--global-only` if global-only; or the package-manager
-equivalent). Always pass `--expected-head-sha` and `--prior-base-ref`
+--apply` (plus `--global-only` if global-only, or the package-manager form).
+Always pass `--expected-head-sha` and `--prior-base-ref`
 with the exact Step 1 values; the helper fails closed (posts
 nothing) when the branch moved since Step 1 — on that failure, return
-to Step 1 and re-snapshot the moved branch, not a Step 2 retry.
+to Step 1 and re-snapshot, not a Step 2 retry.
 
 The manual six-field fallback — `--type watermark --target pr
 {pr-number} --agent-id <id> --claim-id <id> --head-sha {head-SHA}
 --max-activity-at {max-activity-updatedAt|none} --total-item-count
 {total-item-count} --ci-completed-at {latest-ci-completed-at|none}
 --apply` — stays available when `--from-pr` cannot run. Before using it,
-require the PR base ref to equal `{base-ref}`, and each required
-`(checkName, workflowName)` producer to pass for `{head-SHA}` and verify
-advisory identity/event;
+re-read the PR base ref before posting; it must equal `{base-ref}`
+(else back to Step 1), and each required `(checkName, workflowName)`
+producer to pass for `{head-SHA}` and verify advisory identity/event;
 raw names are insufficient. Otherwise skip Step 2 and use E15/E14.
 
 Exact body: `<!-- review-watermark: {agent-id} {claim-id} {head-SHA}
