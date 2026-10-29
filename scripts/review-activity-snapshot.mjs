@@ -195,6 +195,7 @@ export function collectReviewActivitySnapshot(input) {
     : undefined;
   return {
     headSha,
+    baseRefName,
     trustedMarkerActors: trustedMarkerLogins,
     trustedMarkerActorsSource,
     totalItemCount: summary.totalItemCount,

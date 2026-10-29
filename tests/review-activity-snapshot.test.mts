@@ -101,6 +101,8 @@ test('collectReviewActivitySnapshot calls each rich loader once', () => {
     'threads',
   ]);
   assert.equal(snapshot.headSha, 'c'.repeat(40));
+  // #4803: the Step 1 base ref is recorded beside the head SHA.
+  assert.equal(snapshot.baseRefName, 'main');
   assert.equal(
     (snapshot.dispositionEvidence as { missingRegularCommentCount: number })
       .missingRegularCommentCount,

@@ -21,7 +21,8 @@ before E8 when it is missing.
 ## E1 — Fetch review items into ReviewItems_snapshot
 
 **Step 1 — Snapshot the activity universe.** First, read the current PR
-HEAD SHA from the GitHub API and store it as `{head-SHA}`. Do not
+HEAD SHA and base ref name from the GitHub API and store them as
+`{head-SHA}` and `{base-ref}`. Do not
 re-read the HEAD SHA during Steps 1–3; use this single stored value
 throughout; E3 rereads. Then fetch all of the following from GitHub
 in a single pass
@@ -64,11 +65,9 @@ When helper runtime is enabled, prefer the profile-selected read-only helper
 `{head-SHA}`, `{max-activity-updatedAt}`, `{total-item-count}`, and CI
 completion timestamps. Pass trusted marker actors with
 `--trusted-marker-logins "<trusted-login-1>,<trusted-login-2>"`.
-Helpers remain evidence collectors only: if helper execution fails,
-returns invalid JSON, omits required fields, or conflicts with live
-GitHub state in this phase, discard helper output and run the portable
-gh/jq/API procedure below. The written instruction rules remain the
-authoritative decision path.
+Helpers are evidence collectors only: on failure, invalid JSON, missing
+fields, or a conflict with live GitHub state, discard their output and run
+the portable gh/jq/API procedure below; the written rules decide.
 
 Also fetch the **current CI state** for `{head-SHA}`:
 `gh pr checks {pr-number} --json name,state,completedAt`. Record the
@@ -110,17 +109,18 @@ start of Step 1, compute `{max-activity-updatedAt}` as the highest
 `updatedAt` server timestamp across the **entire snapshot** (not just
 the items in ReviewItems_snapshot; `none` if empty), and
 `{total-item-count}` as the snapshot's total item count (0 if empty).
-Persist all six values by posting a PR comment with this format (when
-helper runtime is enabled, prefer the **one-command** profile-selected
-post-idd-marker watermark path — `--type watermark --from-pr <pr-number>
---expected-head-sha {head-SHA} --agent-id <id> --claim-id <id>
---apply --operation-local` (add `--global-only` on a global-only run) — one
-capture derives the fields; forward
-`--trusted-marker-logins` and Step 1's boundary as `--prior-head-sha
-{head-SHA} --prior-total-item-count {total-item-count}
---prior-max-activity-at {max-activity-updatedAt}`). **Always pass
+Persist all six values by posting a PR comment with this format (with
+helpers, prefer the **one-command** post-idd-marker watermark path —
+`--type watermark --from-pr <pr-number> --expected-head-sha {head-SHA}
+--agent-id <id> --claim-id <id> --apply --operation-local` (add
+`--global-only` on a global-only run) — one capture derives the fields;
+forward `--trusted-marker-logins` and Step 1's boundary as
+`--prior-head-sha {head-SHA} --prior-total-item-count {total-item-count}
+--prior-max-activity-at {max-activity-updatedAt}` and Step 1's base ref as
+`--prior-base-ref {base-ref}`). **Always pass
 `--expected-head-sha` with the exact `{head-SHA}` from Step 1**: a moved
-HEAD or `operationLocal.decision: refuse` (`same-head-activity`: new
+HEAD or base ref, or `operationLocal.decision: refuse`
+(`same-head-activity`: new
 undispositioned or uncovered review-body activity since Step 1) exits 1,
 posting nothing; return to Step 1 and re-snapshot, do not retry Step 2
 as-is. `decision: defer` exits 0 (`mode: "dry-run"`), posting nothing

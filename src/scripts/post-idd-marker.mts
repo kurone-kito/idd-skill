@@ -377,7 +377,8 @@ export type OperationLocalReasonCode =
   | 'ci-completion'
   | 'ci-read'
   | 'prior-head'
-  | 'same-head-activity';
+  | 'same-head-activity'
+  | 'base-ref';
 
 /**
  * Stored watermark boundary from an earlier, separate operation. It bounds
@@ -869,6 +870,12 @@ export function readWatermarkRequiredCiAgreement(input: {
   );
 }
 
+/** #4803: the base ref the activity capture reports, or empty when absent. */
+function snapshotBaseRefName(snapshot: unknown): string {
+  const base = (snapshot as { baseRefName?: unknown } | null)?.baseRefName;
+  return typeof base === 'string' ? base.trim() : '';
+}
+
 /**
  * Derive watermark fields from one fresh activity capture, then compare a
  * separate required-CI/HEAD agreement read. Does not accept a saved snapshot.
@@ -879,6 +886,12 @@ export function readWatermarkRequiredCiAgreement(input: {
 export function runOperationLocalSnapshotWatermark(input: {
   prNumber: number;
   expectedHeadSha?: string;
+  /**
+   * #4803: the Step 1 base ref. When given (even empty, which refuses), the
+   * publish-time agreement read and the activity capture must both report
+   * this exact base ref. Omitted means the guard is not applied.
+   */
+  expectedBaseRefName?: string;
   priorBoundary?: OperationLocalPriorBoundary | null;
   collectRichActivity: () => unknown;
   readRequiredCiAgreement: () => RequiredCiHeadAgreement;
@@ -947,6 +960,29 @@ export function runOperationLocalSnapshotWatermark(input: {
         `read is for HEAD ${ciHead || '(empty)'}, which does not match the ` +
         `activity snapshot HEAD ${liveHeadSha}. Re-run --from-pr.`,
     };
+  }
+  if (input.expectedBaseRefName !== undefined) {
+    const expectedBase = input.expectedBaseRefName;
+    const liveBase = (agreement.baseRefName ?? '').trim();
+    const captureBase = snapshotBaseRefName(snapshot);
+    if (
+      expectedBase === '' ||
+      liveBase !== expectedBase ||
+      captureBase !== expectedBase
+    ) {
+      return {
+        snapshot,
+        watermarkFields,
+        warnings,
+        decision: 'refuse',
+        reasonCode: 'base-ref',
+        reason:
+          `refusing to post watermark: PR ${input.prNumber}'s base ref is ` +
+          `${liveBase || '(empty)'} (activity capture ${captureBase || '(empty)'}), ` +
+          `but Step 1 recorded ${expectedBase || '(none)'}. The base branch ` +
+          `moved since Step 1; re-run E1 from Step 1 against the current base.`,
+      };
+    }
   }
   if (
     input.priorBoundary &&
@@ -1093,6 +1129,8 @@ interface CliArgs {
    */
   globalOnly: boolean;
   priorHeadSha: string;
+  /** #4803: the Step 1 base ref; required with --operation-local. */
+  priorBaseRef: string;
   priorTotalItemCount: number | null;
   priorMaxActivityAt: string;
   apply: boolean;
@@ -1863,6 +1901,7 @@ export function parseArgs(rawArgv: string[]): CliArgs {
     operationLocal: false,
     globalOnly: false,
     priorHeadSha: '',
+    priorBaseRef: '',
     priorTotalItemCount: null,
     priorMaxActivityAt: '',
     apply: false,
@@ -1918,6 +1957,8 @@ export function parseArgs(rawArgv: string[]): CliArgs {
       args.expectedHeadSha = value;
     } else if (token === '--prior-head-sha') {
       args.priorHeadSha = value;
+    } else if (token === '--prior-base-ref') {
+      args.priorBaseRef = value;
     } else if (token === '--prior-total-item-count') {
       args.priorTotalItemCount = parseNonNegativeIntToken(
         value,
@@ -1999,6 +2040,7 @@ below).
                        prints the same envelope on stdout next to the reason
                        on stderr.
   --prior-head-sha <sha>
+  --prior-base-ref <name>
   --prior-total-item-count <n>
   --prior-max-activity-at <iso|none>
                        --operation-local only, and only together: the head-SHA,
@@ -4316,6 +4358,11 @@ function main(): HelperCliResult {
     process.stderr.write(`${message}\n`);
     return { exitCode: 1, kind: 'usage', message };
   }
+  if (args.priorBaseRef !== '' && !args.operationLocal) {
+    const message = '--prior-base-ref is only valid with --operation-local';
+    process.stderr.write(`${message}\n`);
+    return { exitCode: 1, kind: 'usage', message };
+  }
   if (hasAnyPrior && !args.operationLocal) {
     const message =
       '--prior-head-sha, --prior-total-item-count and --prior-max-activity-at are only valid with --operation-local';
@@ -4396,9 +4443,18 @@ function main(): HelperCliResult {
       args.owner = args.owner || currentRepo?.owner || '';
       args.repo = args.repo || currentRepo?.repo || '';
       if (isWatermark) {
+        if (args.operationLocal && args.priorBaseRef === '') {
+          const message =
+            '--operation-local requires --prior-base-ref <Step 1 base ref>: the publish-time base ref is compared with it';
+          process.stderr.write(`${message}\n`);
+          return { exitCode: 1, kind: 'usage', message };
+        }
         const local = runOperationLocalSnapshotWatermark({
           prNumber: args.fromPr,
           expectedHeadSha: args.expectedHeadSha || undefined,
+          expectedBaseRefName: args.operationLocal
+            ? args.priorBaseRef
+            : undefined,
           priorBoundary:
             args.priorTotalItemCount === null
               ? null

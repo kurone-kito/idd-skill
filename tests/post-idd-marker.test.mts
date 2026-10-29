@@ -940,6 +940,7 @@ test('--help documents --operation-local and its --prior-* flags (#3592)', () =>
   for (const flag of [
     '--operation-local',
     '--prior-head-sha',
+    '--prior-base-ref',
     '--prior-total-item-count',
     '--prior-max-activity-at',
   ]) {
@@ -6377,6 +6378,75 @@ test('#4053: the watermark CI read resolves the global-only profile only when --
   }
 });
 
+// --- #4803: a base-ref change after Step 1 must refuse the watermark, even
+// when HEAD and the activity boundary are unchanged.
+
+function baseRefAgreement(baseRefName: string) {
+  return { ...passingAgreement(), baseRefName };
+}
+
+test('#4803: the watermark publishes when the base ref matches Step 1 in both reads', () => {
+  const result = runOperationLocalSnapshotWatermark({
+    prNumber: 3592,
+    expectedHeadSha: OPERATION_LOCAL_SHA,
+    expectedBaseRefName: 'main',
+    collectRichActivity: () => operationLocalSnapshot({ baseRefName: 'main' }),
+    readRequiredCiAgreement: () => baseRefAgreement('main'),
+  });
+  assert.equal(result.decision, 'publish');
+});
+
+test('#4803: a base-only retarget since Step 1 refuses the watermark', () => {
+  const result = runOperationLocalSnapshotWatermark({
+    prNumber: 3592,
+    expectedHeadSha: OPERATION_LOCAL_SHA,
+    expectedBaseRefName: 'main',
+    collectRichActivity: () =>
+      operationLocalSnapshot({ baseRefName: 'release/x' }),
+    readRequiredCiAgreement: () => baseRefAgreement('release/x'),
+  });
+  assert.equal(result.decision, 'refuse');
+  assert.equal(result.reasonCode, 'base-ref');
+  assert.match(
+    String((result as { reason?: string }).reason),
+    /base ref is release\/x[\s\S]*Step 1 recorded main/u,
+  );
+});
+
+test('#4803: a base change seen only by the publish-time CI read refuses', () => {
+  const result = runOperationLocalSnapshotWatermark({
+    prNumber: 3592,
+    expectedHeadSha: OPERATION_LOCAL_SHA,
+    expectedBaseRefName: 'main',
+    collectRichActivity: () => operationLocalSnapshot({ baseRefName: 'main' }),
+    readRequiredCiAgreement: () => baseRefAgreement('release/x'),
+  });
+  assert.equal(result.decision, 'refuse');
+  assert.equal(result.reasonCode, 'base-ref');
+});
+
+test('#4803: an empty Step 1 base ref refuses even when both reads agree', () => {
+  const result = runOperationLocalSnapshotWatermark({
+    prNumber: 3592,
+    expectedHeadSha: OPERATION_LOCAL_SHA,
+    expectedBaseRefName: '',
+    collectRichActivity: () => operationLocalSnapshot({ baseRefName: '' }),
+    readRequiredCiAgreement: () => baseRefAgreement(''),
+  });
+  assert.equal(result.decision, 'refuse');
+  assert.equal(result.reasonCode, 'base-ref');
+});
+
+test('#4803: the base-ref guard is not applied when no Step 1 base ref is supplied', () => {
+  const result = runOperationLocalSnapshotWatermark({
+    prNumber: 3592,
+    expectedHeadSha: OPERATION_LOCAL_SHA,
+    collectRichActivity: () => operationLocalSnapshot(),
+    readRequiredCiAgreement: () => passingAgreement(),
+  });
+  assert.equal(result.decision, 'publish');
+});
+
 test('operation-local watermark uses one rich capture and one CI agreement read', () => {
   let rich = 0;
   let agreement = 0;
@@ -7110,11 +7180,24 @@ test('operation-local refuses a prior boundary recorded for a different HEAD (#3
 
 const POST_IDD_MARKER_CLI = join(REPO_ROOT, 'scripts/post-idd-marker.mjs');
 
-function runWatermarkCli(extra: string[]): {
+function runWatermarkCli(
+  extra: string[],
+  options: { priorBaseRef?: string | null } = {},
+): {
   status: number | null;
   stdout: string;
   stderr: string;
 } {
+  // #4803: --operation-local requires the Step 1 base ref. The stubs report
+  // `main` as the PR base, so default to it unless a test overrides or omits it.
+  const priorBaseRef =
+    options.priorBaseRef === undefined ? 'main' : options.priorBaseRef;
+  const baseRefFlags =
+    extra.includes('--operation-local') &&
+    !extra.includes('--prior-base-ref') &&
+    priorBaseRef !== null
+      ? ['--prior-base-ref', priorBaseRef]
+      : [];
   const result = spawnSync(
     process.execPath,
     [
@@ -7132,6 +7215,7 @@ function runWatermarkCli(extra: string[]): {
       '--claim-id',
       'claim-1134-02f8159e',
       ...extra,
+      ...baseRefFlags,
     ],
     { cwd: REPO_ROOT, encoding: 'utf8', env: { ...process.env } },
   );
@@ -7155,6 +7239,22 @@ function ghPostCalls(logFile: string): string[] {
     .split('\n')
     .filter((line) => line.includes('--input'));
 }
+
+test('#4803: --operation-local needs --prior-base-ref, and the flag needs --operation-local', () => {
+  const missing = runWatermarkCli(['--operation-local'], {
+    priorBaseRef: null,
+  });
+  assert.equal(missing.status, 1);
+  assert.match(missing.stderr, /--operation-local requires --prior-base-ref/u);
+  const stray = runWatermarkCli(['--prior-base-ref', 'main'], {
+    priorBaseRef: null,
+  });
+  assert.equal(stray.status, 1);
+  assert.match(
+    stray.stderr,
+    /--prior-base-ref is only valid with --operation-local/u,
+  );
+});
 
 test('--prior-* flags must be passed together and only with --operation-local (#3592)', () => {
   const partial = runWatermarkCli([
@@ -7396,6 +7496,8 @@ test('--operation-local keeps a required-CI read failure classified in the error
         '--claim-id',
         'claim-1134-02f8159e',
         '--operation-local',
+        '--prior-base-ref',
+        'main',
       ],
       {
         cwd: REPO_ROOT,
