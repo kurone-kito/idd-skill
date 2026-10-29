@@ -83,6 +83,24 @@ test('the overview routing states the live execution-mode decision before fan-ou
   const overview = readRepoText(OVERVIEW);
   assert.match(overview, /Fan-out mode selection/);
   assert.match(overview, /before scratchpad setup, claim, or worker launch/);
+  const routeRow = overview
+    .split('\n')
+    .find((line) =>
+      line.startsWith('| Starting fresh with a static fan-out candidate'),
+    );
+  assert.ok(routeRow, 'the static fan-out routing row is present');
+  assert.match(
+    routeRow,
+    /\[live execution-mode decision\]\(\.\.\/\.\.\/docs\/idd-workflow\.md#live-capability-decision\)/,
+  );
+  assert.doesNotMatch(
+    routeRow,
+    /Eligibility `orchestrator`|`orchestrator\.maxWorkers`/,
+  );
+  assert.match(
+    overview,
+    /apply its \[live-capability\s+decision\]\(\.\.\/\.\.\/docs\/idd-workflow\.md#live-capability-decision\)/,
+  );
 });
 
 test('the refill row switches to single-agent only on capability loss, with every worker disposed and no live writer', () => {
