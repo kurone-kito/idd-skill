@@ -1089,7 +1089,8 @@ const OPEN_CHANGE_REQUEST_SCAN_PAGE_SIZE = 100;
  * Validates one `closingIssuesReferences` node (kurone-kito/idd-skill#4721).
  * A node with no usable number or repository identity fails the lookup: a
  * caller that defaults a missing `repository` to the same repository would
- * otherwise read a cross-repository close as a same-repository one.
+ * otherwise read a cross-repository close as a same-repository one. A
+ * non-empty `url` is carried through as an additive field (kurone-kito/idd-skill#4737).
  */
 function closingIssueReferenceFromNode(node) {
   const record = node;
@@ -1109,7 +1110,12 @@ function closingIssueReferenceFromNode(node) {
       'closingIssuesReferences lookup: a reference has no usable number or repository identity',
     );
   }
-  return { number, repository: { name, owner: { login } } };
+  const url = record?.url;
+  return {
+    number,
+    repository: { name, owner: { login } },
+    ...(typeof url === 'string' && url !== '' ? { url } : {}),
+  };
 }
 /**
  * Validates one GraphQL connection page (kurone-kito/idd-skill#4721) and
@@ -1162,7 +1168,7 @@ function fetchChangeRequestClosingIssueReferences(
     pullRequest(number:$number){
       headRefOid
       closingIssuesReferences(first:100,after:$after){
-        nodes{number repository{name owner{login}}}
+        nodes{number url repository{name owner{login}}}
         pageInfo{hasNextPage endCursor}
       }
     }
@@ -1224,6 +1230,51 @@ function fetchChangeRequestClosingIssueReferences(
   throw new Error(
     `${label}: exceeded ${CLOSING_ISSUE_REFERENCES_MAX_PAGES} pages`,
   );
+}
+/**
+ * Reads one pull request's closing-issue references for a caller outside this
+ * adapter (kurone-kito/idd-skill#4737), through the private paginated reader
+ * above, with `ghTextFn` as the gh text runner. `expectedHeadSha` pins the
+ * read to one head: a null, empty, or non-40-character hexadecimal value is
+ * rejected before any read, and an upper-case value is lower-cased first,
+ * because the private reader compares the head strictly. Every returned
+ * reference must carry a non-empty `url`; a reference without one fails the
+ * read, so a caller never receives an empty set for a failed lookup. A reader
+ * error propagates with its own message.
+ */
+export function readChangeRequestClosingIssueReferences(
+  ghTextFn,
+  owner,
+  repo,
+  number,
+  expectedHeadSha,
+) {
+  if (typeof expectedHeadSha !== 'string') {
+    throw new Error(
+      'closingIssuesReferences lookup: the expected head SHA is missing',
+    );
+  }
+  const head = expectedHeadSha.toLowerCase();
+  if (!/^[0-9a-f]{40}$/.test(head)) {
+    throw new Error(
+      'closingIssuesReferences lookup: the expected head SHA must be 40 hexadecimal characters',
+    );
+  }
+  const references = fetchChangeRequestClosingIssueReferences(
+    { ...DEFAULT_DEPS, ghText: ghTextFn },
+    owner,
+    repo,
+    number,
+    head,
+  );
+  for (const reference of references) {
+    if (reference.url === undefined) {
+      throw new Error(
+        `closingIssuesReferences lookup: reference #${reference.number} has no url`,
+      );
+    }
+  }
+  return references;
 }
 /**
  * The open-pull-request scan behind
