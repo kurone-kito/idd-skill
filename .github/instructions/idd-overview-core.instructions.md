@@ -331,7 +331,7 @@ Read this file, the appendix unless routed to `lite/`, then your phase file.
 <!-- dprint-ignore-start -->
 | Situation | Read this file |
 | --- | --- |
-| Starting fresh, and fan-out holds: helper support installed, a worker-table harness with Eligibility `orchestrator`, `orchestrator.maxWorkers` at least 2, not lite, not one explicit issue or single-issue request, not `GITHUB_ACTIONS` | `idd-orchestrator.instructions.md`, then `idd-discover.instructions.md` |
+| Starting fresh, and static fan-out conditions hold: helper support installed, a worker-table harness with Eligibility `orchestrator`, `orchestrator.maxWorkers` at least 2, not lite, not one explicit issue or single-issue request, not `GITHUB_ACTIONS` | `idd-orchestrator.instructions.md` (select the live execution mode before fan-out setup), then `idd-discover.instructions.md` |
 | Starting fresh (no active claim) | `idd-discover.instructions.md`, then `idd-claim.instructions.md` |
 | Starting fresh with one explicit issue target | `idd-discover.instructions.md` A0-T, then `idd-claim.instructions.md` |
 | Orchestrating session restarted with claims or workers it started (roster lost) | `idd-orchestrator.instructions.md`, then [Orchestrator restart](../../docs/idd-workflow.md#orchestrator-restart); `idd-discover.instructions.md` only for the Discover pass that restart step 3 runs after its gate |
@@ -348,6 +348,13 @@ Read this file, the appendix unless routed to `lite/`, then your phase file.
 | All pre-merge conditions satisfied | `idd-merge-handoff.instructions.md` (F2.5) |
 | Autonomous merge path confirmed | `idd-merge.instructions.md` (F3–F5) |
 <!-- dprint-ignore-end -->
+
+**Fan-out mode selection:** A worker-table row is a support hint, not proof
+that the current session can use that mechanism. For a static fan-out
+candidate, read the orchestrator phase and apply its live-capability
+decision before scratchpad setup, claim, or worker launch. A single-agent
+result follows ordinary Discover and Claim; unresolved prior-worker state
+follows the restart/recovery route.
 
 **Note**: A1 reads `idd-roadmap-audit.instructions.md` (A1.5) before
 A2.
