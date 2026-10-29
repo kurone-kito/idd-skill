@@ -28,7 +28,12 @@ import {
   stripGeneratedFromBanner,
 } from '../src/scripts/consistency-helpers.mts';
 import { findPlaceholders } from '../src/scripts/idd-doctor.mts';
-import { normalizeWhitespace, readJson, readText } from './test-utils.mts';
+import {
+  extractSection,
+  normalizeWhitespace,
+  readJson,
+  readText,
+} from './test-utils.mts';
 
 test('placeholder scenarios detect clean and dirty post-onboarding fixtures', () => {
   const clean = collectPlaceholderHits(
@@ -3374,4 +3379,422 @@ test('fan-out scratchpad preflight provisions and recovers one session root (#46
       /mark `stalled`, and follow \[fan-out recovery\]\[fv\]\./,
     );
   }
+});
+
+// #4711: the ledger storage bootstrap in the bundle, its SKILL entry, and the
+// docs copy. These are structural text checks that pin the rules; they never
+// run an authoring session. Only a live authoring run shows that the procedure
+// allocates a namespace and writes a ledger.
+const LEDGER_STORAGE_CONTRACT = 'skills/issue-authoring/references/contract.md';
+const LEDGER_STORAGE_SKILL = 'skills/issue-authoring/SKILL.md';
+const LEDGER_STORAGE_DOCS = 'docs/issue-authoring-skill.md';
+const LEDGER_STORAGE_END = '\n## Mechanical pre-publish gate';
+const LEDGER_STORAGE_CASES = [
+  {
+    label: '**Owned and unchanged.**',
+    expectedAction:
+      'Continue: write the complete new JSON to a new exclusively created, owner-only temporary file',
+  },
+  {
+    label: '**Owned but edited.**',
+    expectedAction: 'Do not overwrite it.',
+  },
+  {
+    label: '**Missing (lost).**',
+    expectedAction:
+      'Treat it as a lost ledger: recreate an empty ledger at the same path with exclusive creation',
+  },
+  {
+    label: '**Unowned.**',
+    expectedAction:
+      'Refuse. Do not read it as a ledger, adopt it, rename it, or delete it.',
+  },
+  {
+    label: '**Replaced.**',
+    expectedAction:
+      'Treat it as a conflict with another owner. Refuse, preserve both entries, and report.',
+  },
+  {
+    label: '**Linked leaf.**',
+    expectedAction: 'Refuse. Never follow it or write through it.',
+  },
+  {
+    label: '**Linked parent.**',
+    expectedAction: 'Refuse. Report.',
+  },
+  {
+    label: '**Partial first ledger.**',
+    expectedAction: 'keep the namespace and any partial file, delete nothing',
+  },
+  {
+    label: '**Rename to the issue number.**',
+    expectedAction:
+      'keep the `<uuid>.json` file, never overwrite or adopt the existing file',
+  },
+  {
+    label: '**A review that cannot finish.**',
+    expectedAction: 'The target is then not published as reviewed',
+  },
+];
+
+// Returns the subsection body after its heading line, so the two copies can be
+// compared even though the docs copy nests it one level deeper.
+function ledgerStorageSection(path: string, heading: string): string {
+  return extractSection(readText(path), heading, LEDGER_STORAGE_END).slice(
+    heading.length,
+  );
+}
+
+test('issue-authoring contract defines ledger storage verdicts, allocation, and every ownership case (#4711)', () => {
+  const section = ledgerStorageSection(
+    LEDGER_STORAGE_CONTRACT,
+    '### Ledger storage\n',
+  );
+  const text = normalizeWhitespace(section);
+  for (const verdict of [
+    'Supplied verified storage',
+    'No previously supplied allocation',
+    'Unsafe, conflicting, or unreadable storage',
+  ]) {
+    assert.ok(text.includes(verdict), `missing verdict: ${verdict}`);
+  }
+  for (const [index, scenario] of LEDGER_STORAGE_CASES.entries()) {
+    const start = section.indexOf(scenario.label);
+    assert.notEqual(start, -1, `missing ownership case: ${scenario.label}`);
+    const nextStart = LEDGER_STORAGE_CASES.slice(index + 1)
+      .map((next) => section.indexOf(next.label, start + scenario.label.length))
+      .find((position) => position !== -1);
+    const caseText = normalizeWhitespace(
+      section.slice(start, nextStart ?? section.length),
+    );
+    assert.ok(
+      caseText.includes(scenario.expectedAction),
+      `missing expected action for ${scenario.label}: ${scenario.expectedAction}`,
+    );
+  }
+  // Allocation is exclusive and non-recursive, and `mkdir -p` appears only in
+  // the sentence that forbids it.
+  assert.match(
+    text,
+    /Create `issue-authoring-<uuid>` relative to that handle with exclusive, non-recursive directory creation, never `mkdir -p`/,
+  );
+  assert.match(
+    text,
+    /Retry with a fresh UUID only when the name already exists, at most three times/,
+  );
+  assert.equal(section.match(/mkdir -p/g)?.length, 1);
+  assert.match(text, /exclusive creation/);
+  assert.match(text, /use POSIX mode 700/);
+  assert.match(
+    text,
+    /On POSIX, reject a root that grants group or other users write and search permission without the sticky bit/,
+  );
+  assert.match(
+    text,
+    /On Windows, reject a root whose ACL lets another user rename or delete child entries/,
+  );
+  assert.match(
+    text,
+    /complete, successful `git worktree list --porcelain` run/,
+  );
+  assert.match(
+    text,
+    /For each existing reported worktree, run `git -C <worktree> rev-parse --path-format=absolute --git-dir` and `git -C <worktree> rev-parse --path-format=absolute --git-common-dir`/,
+  );
+  assert.match(
+    text,
+    /A common directory protects linked-worktree administrative records under its `worktrees\/` subtree, including records for a registered worktree whose checkout path is confirmed absent/,
+  );
+  assert.match(
+    text,
+    /A missing executable, nonzero status, malformed record, or incomplete output makes the protected-path inventory unreadable/,
+  );
+  assert.match(
+    text,
+    /A nonzero result proves non-membership only when it is either the exact standard `fatal: not a git repository/,
+  );
+  assert.match(
+    text,
+    /exact two-line filesystem-boundary diagnostic whose first line is `fatal: not a git repository \(or any parent up to mount point <path>\)` and whose second line is `Stopping at filesystem boundary \(GIT_DISCOVERY_ACROSS_FILESYSTEM not set\)\.`/,
+  );
+  assert.match(
+    text,
+    /For the filesystem-boundary form, the reported mount point must be a verified ancestor mount point of the canonical root/,
+  );
+  assert.match(
+    text,
+    /Never treat an arbitrary Git failure as proof that the path is outside a repository/,
+  );
+  assert.match(
+    text,
+    /For every protected path \(each reported worktree path and each discovered Git directory\), first compare its normalized absolute lexical path against the candidate root using component-aware containment/,
+  );
+  assert.ok(
+    text.includes(
+      'If that walk confirms a registered worktree path is absent after checking its readable ancestors, retain the worktree record and its Git common directory, mark the protected-path inventory incomplete, and stop before evaluating any candidate root. A missing checkout does not rule out an external bind mount of one of its subdirectories; a ledger in that alias could be staged after the checkout is remounted. This control gap was identified during review of PR #4728 on 2026-10-28',
+    ),
+  );
+  assert.ok(
+    text.includes(
+      'The root must be owned by the current user or a trusted system principal (POSIX UID 0 or the Windows LocalSystem SID), and must be writable by the current user.',
+    ),
+  );
+  assert.ok(
+    text.includes(
+      'A sticky bit does not make a root owned by another local user trustworthy: that directory owner can rename entries in the session namespace.',
+    ),
+  );
+  assert.ok(
+    text.includes(
+      "For Linux root checks, also record the candidate root, each existing protected path, and every nested mount point's mount ID, matching mountinfo fields, and derived backing location; repeat the full inventory and comparison whenever the root checks run.",
+    ),
+  );
+  assert.match(
+    text,
+    /On Linux, enumerate every `\/proc\/self\/mountinfo` entry whose decoded mount point is equal to or component-contained beneath an existing protected path/,
+  );
+  assert.match(
+    text,
+    /For the candidate root, each existing protected path, and every such nested mount point, obtain a mount ID from an already-open directory handle using `statx\(2\)` with `AT_EMPTY_PATH/,
+  );
+  assert.match(
+    text,
+    /When `statx` fails or does not provide `STATX_MNT_ID`, read the single decimal `mnt_id` field from `\/proc\/self\/fdinfo\/<fd>` for that same open handle/,
+  );
+  assert.match(
+    text,
+    /Reject the candidate root when its backing location is equal to or below any protected backing location on the same device, including each nested mount point's backing location/,
+  );
+  assert.match(
+    text,
+    /Do not use `RESOLVE_NO_XDEV` as a blanket cross-mount rejection/,
+  );
+  assert.match(
+    text,
+    /If a root was supplied, stop and report its path and error; do not try another root/,
+  );
+  assert.match(
+    text,
+    /Only when no root was supplied may the next candidate be tried/,
+  );
+  assert.match(
+    text,
+    /Then open the root as a directory handle without following a symbolic link or reparse point/,
+  );
+  assert.ok(
+    text.includes(
+      'Resolve the whole root path from a trusted filesystem root or volume handle:',
+    ),
+  );
+  assert.ok(
+    text.includes(
+      'on POSIX, open each component relative to the preceding verified handle with',
+    ),
+  );
+  assert.ok(
+    text.includes('`O_DIRECTORY | O_NOFOLLOW`, or use Linux `openat2(2)` with'),
+  );
+  assert.ok(
+    text.includes(
+      '`RESOLVE_NO_SYMLINKS | RESOLVE_IN_ROOT` from a trusted `/` descriptor (see',
+    ),
+  );
+  assert.ok(
+    text.includes(
+      '[openat2(2)](https://man7.org/linux/man-pages/man2/openat2.2.html)',
+    ),
+  );
+  assert.ok(
+    text.includes(
+      'On Windows, open each component relative to a trusted volume or root handle with',
+    ),
+  );
+  assert.ok(text.includes('with `NtCreateFile` and `OBJ_DONT_REPARSE`.'));
+  assert.ok(
+    text.includes(
+      'Applying `O_NOFOLLOW` only to the final component is insufficient.',
+    ),
+  );
+  assert.match(
+    text,
+    /Open it relative to the root handle without following links, then record its canonical path, file identity, type, link count, owner, and mode or ACL/,
+  );
+  assert.ok(
+    text.includes(
+      'Create a stable `ledger.lock` file relative to this handle with exclusive, no-follow, owner-only creation.',
+    ),
+  );
+  assert.ok(
+    text.includes(
+      'canonical path, owner, and owner-only mode or ACL, and has link count 1.',
+    ),
+  );
+  assert.ok(
+    text.includes(
+      'Before every ledger read, write, copy, rename, or unlink, acquire the namespace lock',
+    ),
+  );
+  assert.ok(text.includes("On POSIX, use Python's [`fcntl.flock`]"));
+  assert.ok(text.includes("on Windows, use Microsoft's [`LockFileEx`]"));
+  assert.match(
+    text,
+    /Use native handle-relative operations with exclusive creation and no-follow checks/,
+  );
+  assert.match(
+    text,
+    /On POSIX, a standard-library Python implementation can use `os\.open`, `os\.mkdir`, `os\.stat`, `os\.rename`, and `os\.unlink` with directory-descriptor parameters/,
+  );
+  assert.match(
+    text,
+    /On Windows, use a native binding that opens or creates child names with `NtCreateFile`, setting `OBJECT_ATTRIBUTES\.RootDirectory` to the verified directory handle and `OBJ_DONT_REPARSE` in its attributes\. Use `CreateDisposition=FILE_CREATE` for exclusive child creation; create a directory with `FILE_DIRECTORY_FILE`/,
+  );
+  assert.match(
+    text,
+    /Make the namespace owner-only as part of creation: use POSIX mode 700, or on Windows pass an explicit security descriptor through `OBJECT_ATTRIBUTES\.SecurityDescriptor`, with a DACL granting access only to the current user and both `SE_DACL_PRESENT` and `SE_DACL_PROTECTED` set on that descriptor/,
+  );
+  assert.match(
+    text,
+    /Make every ledger file owner-only at creation: use POSIX mode 600, or on Windows pass an explicit protected security descriptor through `OBJECT_ATTRIBUTES\.SecurityDescriptor`, with a DACL granting access only to the current user and both `SE_DACL_PRESENT` and `SE_DACL_PROTECTED` set on that descriptor/,
+  );
+  assert.match(
+    text,
+    /After opening the new file, verify its owner and owner-only mode or ACL before writing its first byte/,
+  );
+  assert.match(text, /Write `\[\]`, then record its SHA-256/);
+  assert.match(
+    text,
+    /the recorded file identity, and its recorded owner-only mode or ACL/,
+  );
+  assert.match(
+    text,
+    /For every ledger file creation — the initial or recreated ledger, temporary replacement, and issue-number copy — also pass an explicit protected owner-only security descriptor through `OBJECT_ATTRIBUTES\.SecurityDescriptor`\. The namespace DACL does not establish that a child file is private\. Verify each created file's resulting owner-only DACL before writing to it/,
+  );
+  assert.match(
+    text,
+    /If the platform cannot apply this restriction before the directory is visible, fail closed/,
+  );
+  assert.match(
+    text,
+    /After the final identity and SHA-256 checks, replace the owned ledger via `SetFileInformationByHandle` on the verified temporary-file handle with `FileRenameInfo`, `ReplaceIfExists=TRUE`, and `FILE_RENAME_INFO\.RootDirectory` set to the namespace handle/,
+  );
+  assert.match(text, /Open that file handle with `DELETE` access/);
+  assert.match(
+    text,
+    /mark the verified source handle for deletion with `SetFileInformationByHandle` and `FileDispositionInfo` \(`DeleteFile=TRUE`\); it also requires `DELETE` access/,
+  );
+  assert.match(
+    text,
+    /If the host cannot bind an operation to the verified handle or supply the required evidence, treat the storage as unreadable and stop/,
+  );
+  assert.match(
+    text,
+    /replacement, while holding the exclusive namespace lock, repeat the ownership check and verify that the existing ledger's identity and SHA-256 still match the records/,
+  );
+  assert.match(
+    text,
+    /Immediately before unlinking the source, verify that the namespace identity still matches, the source identity and SHA-256 still match their records/,
+  );
+  assert.ok(
+    text.includes(
+      'the destination is a regular file with link count 1, the recorded identity and SHA-256, and the canonical path `<namespace>/<number>.json`',
+    ),
+  );
+  assert.match(
+    text,
+    /confirm that the copy's SHA-256 equals the source ledger's recorded SHA-256/,
+  );
+  assert.match(
+    text,
+    /confirm that the destination's SHA-256 still equals the source ledger's recorded SHA-256/,
+  );
+  // Failed post-creation checks preserve the new namespace instead of deleting
+  // it by path; no other session's entry is adopted or removed.
+  assert.match(
+    text,
+    /If any check fails, preserve the namespace and report its path and the exact failing evidence; mark this candidate failed\. Do not remove it by path/,
+  );
+  assert.doesNotMatch(section, /rmdir/);
+  assert.match(
+    text,
+    /The cases below are preventive; no observed incident yet/,
+  );
+  // Mismatches preserve unverified entries, and cleanup is restricted to
+  // session-created entries whose identity still matches.
+  assert.match(
+    text,
+    /On a mismatch, preserve the ledger and any unverified temporary entry; never recurse into a directory or adopt an entry this session did not create/,
+  );
+  assert.match(
+    text,
+    /Cleanup may remove only an entry created by this session whose recorded identity still matches/,
+  );
+  assert.match(
+    text,
+    /never automatically deletes an older or abandoned namespace/,
+  );
+  assert.match(
+    text,
+    /It may remove only a newly created entry whose recorded identity still matches/,
+  );
+});
+
+test('ledger storage needs no orchestrator, environment variable, helper, or session ID (#4711)', () => {
+  const text = normalizeWhitespace(
+    ledgerStorageSection(LEDGER_STORAGE_CONTRACT, '### Ledger storage\n'),
+  );
+  assert.match(
+    text,
+    /no orchestrator, no particular environment variable, no helper package, and no stable harness session ID/,
+  );
+  assert.match(text, /instructions-only and same-response self-critique runs/);
+});
+
+test('ledger rules keep namespaces, rejection carry-forward, and lost-ledger semantics in bundle and docs (#4711)', () => {
+  for (const path of [LEDGER_STORAGE_CONTRACT, LEDGER_STORAGE_DOCS]) {
+    const text = normalizeWhitespace(readText(path));
+    for (const needle of [
+      'keep a findings ledger in the namespace that [Ledger storage](#ledger-storage) allocates',
+      'No two drafts or concurrent workers share a ledger file.',
+      'The ledger is never written to the repository or to a marker.',
+      'If the namespace or the ledger is lost, for example after a restart, the ledger is empty and the review runs as it does without one.',
+      'For each `rejected` entry that has evidence, add one string',
+    ]) {
+      assert.ok(text.includes(needle), `${path}: missing "${needle}"`);
+    }
+    assert.doesNotMatch(text, /session scratchpad/);
+  }
+});
+
+test('SKILL entry carries the ledger storage summary and link for instructions-only runs (#4711)', () => {
+  const skill = normalizeWhitespace(readText(LEDGER_STORAGE_SKILL));
+  for (const needle of [
+    '## Findings ledger storage',
+    '[Ledger storage](references/contract.md#ledger-storage)',
+    '[Findings ledger storage](#findings-ledger-storage)',
+    "never reuse another session's namespace",
+    'if a supplied root fails, stop without trying another root',
+    'When no root is supplied, allocate a',
+    'including mount aliases verified by native filesystem evidence.',
+    'preserve unverified entries; the contract permits cleanup only for entries this session created whose identity still matches.',
+    'Instructions-only and same-response self-critique runs follow the same procedure; no orchestrator, environment variable, or helper is needed.',
+  ]) {
+    assert.ok(skill.includes(needle), `SKILL.md: missing "${needle}"`);
+  }
+  assert.doesNotMatch(skill, /session scratchpad/);
+  assert.doesNotMatch(skill, /delete nothing|or otherwise create/);
+});
+
+test('docs copy mirrors the ledger storage subsection and separates structural checks from a live run (#4711)', () => {
+  const contract = normalizeWhitespace(
+    ledgerStorageSection(LEDGER_STORAGE_CONTRACT, '### Ledger storage\n'),
+  );
+  const docs = normalizeWhitespace(
+    ledgerStorageSection(LEDGER_STORAGE_DOCS, '#### Ledger storage\n'),
+  );
+  assert.ok(
+    docs.startsWith(contract),
+    'the docs copy must hold the contract subsection verbatim',
+  );
+  assert.match(docs, /Structural checks and a live run differ/);
+  assert.match(docs, /they never run an authoring session/);
 });
