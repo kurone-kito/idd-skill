@@ -227,9 +227,11 @@ re-fetch/re-resolve; unknown outcomes report and hold without merge or push.
 
 - **No conflict:** wrapper-signed merge with `"$target_sha"`; no confirmation,
   even with open review threads.
-- **Conflict or merge failure:** follow the
-  [signed-commit merge wrapper](../../docs/idd-helper-scripts.md#signed-commit-merge-wrapper-shared-git-procedure);
-  hold without pushing.
+- **Conflict:** follow the
+  [signed-commit merge wrapper](../../docs/idd-helper-scripts.md#signed-commit-merge-wrapper-shared-git-procedure)
+  for confirmation and failed-resolution abort, then hold without pushing.
+- **Merge failure:** run `git merge --abort`, report, and hold on a merge,
+  signing, or hook failure; after a timeout, follow the wrapper.
 
 On failure or hold, follow shared Hold / suspend rules; do not push.
 Otherwise, continue to E12.
