@@ -54,7 +54,7 @@ test('an unavailable mechanism and an unknown prior state take different routes'
   assert.ok(unknown, 'the unknown-roster recovery row is present');
   assert.notEqual(singleAgent[1], unknown[1]);
   assert.match(unknown[1], /do not prove that no worker exists/);
-  assert.match(singleAgent[1], /do not call a missing roster tool/);
+  assert.match(singleAgent[1], /not call a missing roster tool/);
 });
 
 test('ambiguous launches and live writers stay on the recovery or hold route', () => {
@@ -130,4 +130,27 @@ test('the execution-mode report line is required in every report', () => {
   const workflow = readRepoText(WORKFLOW);
   assert.match(workflow, /\*\*Execution mode\.\*\*/);
   assert.match(workflow, /Required in every report\./);
+});
+
+test('the explicit-issue fallback is guarded by unresolved worker state, and the table states precedence', () => {
+  const workflow = readRepoText(WORKFLOW);
+  const rows = decisionRows(workflow);
+  const explicit = rows.find(([evidence]) =>
+    evidence.includes('one explicit issue'),
+  );
+  assert.ok(explicit, 'the explicit-issue fallback row is present');
+  assert.match(
+    explicit[1],
+    /only when no launch, own claim, or potentially live writer is unresolved/,
+  );
+  assert.match(workflow, /takes precedence over every static\s+fallback/);
+});
+
+test('the mode decision is stated before A5, not as a claim phase', () => {
+  const workflow = readRepoText(WORKFLOW);
+  assert.match(workflow, /Mode decision before A5; then ordinary single-issue/);
+  assert.doesNotMatch(
+    workflow,
+    /Ordinary single-issue Discover\/Claim\/Work before A5/,
+  );
 });
