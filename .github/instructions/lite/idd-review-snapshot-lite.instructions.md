@@ -76,10 +76,11 @@ E1.
 
 ### Step 1 — Snapshot the activity universe
 
-1. Read the current PR HEAD SHA once — `gh pr view {pr-number} --json
-   headRefOid --jq '.headRefOid'` — and store it as `{head-SHA}`. Never
-   re-read it elsewhere in E1 — reuse this value, except for the
-   deferred E3 check below.
+1. Read the current PR HEAD SHA and base ref once — `gh pr view
+   {pr-number} --json headRefOid,baseRefName --jq
+   '[.headRefOid,.baseRefName] | @tsv'` — and store them as
+   `{head-SHA}` and `{base-ref-name}`. Re-read either ref only for the
+   manual Step 2 comparison or the deferred E3 HEAD check; otherwise reuse.
 2. Run the profile-selected `review-activity-snapshot` helper for
    `{head-SHA}`, `{max-activity-updatedAt}`, `{total-item-count}`, and
    `{latest-ci-completed-at}`: `node
@@ -120,28 +121,31 @@ E1.
 
 ### Step 2 — Record the watermark
 
-After deferral, rerun Step 1 for fresh `latest-ci-completed-at`; never
-reuse deferred value.
+After deferral, repeat Step 1 for fresh CI time and activity boundary.
 
-Post a marker per E1 pass when satisfied. Prefer
-the one-command path: `node
-scripts/post-idd-marker.mjs --type watermark --from-pr {pr-number}
---expected-head-sha {head-SHA} --agent-id <id> --claim-id <id>
---trusted-marker-logins "<trusted-login-1>,<trusted-login-2>" --apply`
-(plus `--global-only` if global-only; or the package-manager
-equivalent). Always pass `--expected-head-sha`
-with the exact Step 1 `{head-SHA}`; the helper fails closed (posts
-nothing) when the branch moved since Step 1 — on that failure, return
-to Step 1 and re-snapshot the moved branch, not a Step 2 retry.
+Prefer the one-command path:
 
-The manual six-field fallback — `--type watermark --target pr
-{pr-number} --agent-id <id> --claim-id <id> --head-sha {head-SHA}
---max-activity-at {max-activity-updatedAt|none} --total-item-count
-{total-item-count} --ci-completed-at {latest-ci-completed-at|none}
---apply` — stays available when `--from-pr` cannot run. Before using it,
-require each required `(checkName, workflowName)`
-producer to pass for `{head-SHA}` and verify advisory identity/event;
-raw names are insufficient. Otherwise skip Step 2 and use E15/E14.
+```sh
+node scripts/post-idd-marker.mjs --type watermark --from-pr {pr-number} \
+  --expected-head-sha {head-SHA} --agent-id <id> --claim-id <id> \
+  --trusted-marker-logins "<trusted-login-1>,<trusted-login-2>" \
+  --operation-local --prior-head-sha {head-SHA} \
+  --prior-total-item-count {total-item-count} \
+  --prior-max-activity-at {max-activity-updatedAt} --apply
+```
+
+Add `--global-only` if needed. Use the exact Step 1 HEAD and all
+three boundaries. `refuse` or moved HEAD: do not post; repeat Step 1 and
+re-triage. `defer`: do not post; follow the CI-incomplete route and
+refresh Step 1.
+
+Manual six-field fallback cannot use `--operation-local`. Capture
+Step 1's `baseRefName` with HEAD. Before posting, require a complete
+read to match both refs, item count, and max activity time, with no new
+uncovered items; any mismatch or uncertainty means no post — repeat
+Step 1 and re-triage. Require producer-aware passing CI; names alone
+are insufficient.
+Otherwise skip Step 2 and use E15/E14.
 
 Exact body: `<!-- review-watermark: {agent-id} {claim-id} {head-SHA}
 {max-activity-updatedAt|none} {total-item-count}

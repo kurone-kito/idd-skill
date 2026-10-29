@@ -1731,10 +1731,10 @@ function statusCheckRollupResponse(
 }
 
 /**
- * Offline `gh` for a `--from-pr` watermark. The review-activity snapshot
- * answers stay as they were; the extra branches answer `ci-wait-state`'s
- * required-check read (#3465) so the shared pre-merge predicate sees one
- * passing present run and no required-check names.
+ * Offline `gh` for a `--from-pr` watermark. The GraphQL status-check
+ * rollup answers both the review-activity snapshot and the later
+ * `ci-wait-state` required-check read (#3465); sequence options model
+ * checks changing between those reads.
  */
 // The watermark path reads the policy file at the PR base ref (#3958); the
 // stub answers that read with the repository's own file.
@@ -1747,6 +1747,10 @@ function watermarkFromPrGhStub(
   options: {
     rollupNodes?: readonly Record<string, unknown>[];
     rollupHeadSha?: string;
+    /** Persisted counter path for tests that need the later CI read to differ. */
+    rollupReadStatePath?: string;
+    subsequentRollupNodes?: readonly Record<string, unknown>[];
+    failSubsequentRollupRead?: string;
     rulesBody?: string;
     commentsBody?: string;
     /** REST `pulls/<n>/reviews` payload (JSON text); default no reviews. */
@@ -1801,7 +1805,18 @@ if (args[0] === 'pr' && args[1] === 'checks') {
   out(JSON.stringify([{ name: 'ci', state: 'SUCCESS', completedAt: '2026-06-25T11:00:00Z' }]));
 }
 if (args[0] === 'api' && args[1] === 'graphql' && args.join(' ').includes('statusCheckRollup')) {
-  out(${rollup});
+  const rollupReadStatePath = ${JSON.stringify(options.rollupReadStatePath ?? '')};
+  const rollupReadCount = rollupReadStatePath && fs.existsSync(rollupReadStatePath)
+    ? Number(fs.readFileSync(rollupReadStatePath, 'utf8')) || 0
+    : 0;
+  if (rollupReadStatePath) fs.writeFileSync(rollupReadStatePath, String(rollupReadCount + 1));
+  if (rollupReadCount > 0 && ${JSON.stringify(options.failSubsequentRollupRead ?? '')}) {
+    fs.writeSync(2, ${JSON.stringify(options.failSubsequentRollupRead ?? '')});
+    process.exit(1);
+  }
+  out(rollupReadCount > 0 && ${JSON.stringify(options.subsequentRollupNodes !== undefined)}
+    ? ${JSON.stringify(statusCheckRollupResponse(headSha, options.subsequentRollupNodes ?? []))}
+    : ${rollup});
 }
 if (args[0] === 'api' && args[1] === 'graphql' && args.join(' ').includes('databaseId')) {
   const raw = ${commentsBody};
@@ -2067,10 +2082,16 @@ test('#3465: --from-pr watermark refuses when the required-check HEAD differs fr
 });
 
 test('#3465: --from-pr watermark refuses when the live passing completion moved past the snapshot', () => {
+  const tempRoot = mkdtempSync(
+    join(tmpdir(), 'idd-post-idd-marker-rollup-sequence-'),
+  );
+  const rollupReadStatePath = join(tempRoot, 'rollup-read-count');
   const restore = stubExecutable(
     'gh',
     watermarkFromPrGhStub(SHA, {
-      rollupNodes: [
+      rollupNodes: [PASSING_CHECK_RUN],
+      rollupReadStatePath,
+      subsequentRollupNodes: [
         {
           ...PASSING_CHECK_RUN,
           completedAt: '2026-06-25T12:00:00Z',
@@ -2090,8 +2111,41 @@ test('#3465: --from-pr watermark refuses when the live passing completion moved 
     return;
   } finally {
     restore();
+    rmSync(tempRoot, { recursive: true, force: true });
   }
   throw new Error('expected the CLI to exit non-zero');
+});
+
+test('#4698: --from-pr watermark keeps same-named workflows distinct for the passing timestamp', () => {
+  const workflowCheck = (workflowName: string, completedAt: string) => ({
+    ...PASSING_CHECK_RUN,
+    completedAt,
+    checkSuite: {
+      ...PASSING_CHECK_RUN.checkSuite,
+      workflowRun: {
+        ...PASSING_CHECK_RUN.checkSuite.workflowRun,
+        workflow: { name: workflowName },
+      },
+    },
+  });
+  const earlier = '2026-06-25T11:00:00Z';
+  const newer = '2026-06-25T11:30:00Z';
+  const restore = stubExecutable(
+    'gh',
+    watermarkFromPrGhStub(SHA, {
+      rollupNodes: [
+        workflowCheck('push workflow', earlier),
+        workflowCheck('release workflow', newer),
+      ],
+    }),
+  );
+  try {
+    const body = JSON.parse(runWatermarkFromPr(false)).body as string;
+    assert.ok(body.includes(newer + ' -->'));
+    assert.ok(!body.includes(earlier + ' -->'));
+  } finally {
+    restore();
+  }
 });
 
 test('#3465: a non-required failure does not refuse a passing required check', () => {
@@ -7373,10 +7427,14 @@ test('--operation-local keeps a required-CI read failure classified in the error
   // Before the operation-local refactor a failed required-check read reached
   // classifyHelperError; folding it into a `ci-read` refusal must not turn a
   // tagged 503 into a generic gate exit under IDD_HELPER_ERROR_ENVELOPE=1.
-  const failingRollup = watermarkFromPrGhStub(SHA).replace(
-    'const args = process.argv.slice(2);',
-    `const args = process.argv.slice(2);\nif (args[0] === 'api' && args[1] === 'graphql' && args.join(' ').includes('statusCheckRollup')) { process.stderr.write('gh: Service Unavailable (HTTP 503)'); process.exit(1); }`,
+  const tempRoot = mkdtempSync(
+    join(tmpdir(), 'idd-post-idd-marker-rollup-error-'),
   );
+  const rollupReadStatePath = join(tempRoot, 'rollup-read-count');
+  const failingRollup = watermarkFromPrGhStub(SHA, {
+    rollupReadStatePath,
+    failSubsequentRollupRead: 'gh: Service Unavailable (HTTP 503)',
+  });
   const restore = stubExecutable('gh', failingRollup);
   try {
     const result = spawnSync(
@@ -7421,6 +7479,7 @@ test('--operation-local keeps a required-CI read failure classified in the error
     assert.equal(error.httpStatus, 503);
   } finally {
     restore();
+    rmSync(tempRoot, { recursive: true, force: true });
   }
 });
 

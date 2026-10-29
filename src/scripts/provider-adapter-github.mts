@@ -1129,13 +1129,22 @@ function normalizeStatusCheckRollupNode(
     };
   }
   if (type === 'StatusContext') {
+    const state = String(raw.state ?? '')
+      .trim()
+      .toUpperCase();
+    const completedAt =
+      ['SUCCESS', 'FAILURE', 'ERROR'].includes(state) &&
+      typeof raw.updatedAt === 'string'
+        ? raw.updatedAt
+        : null;
     return {
       __typename: 'StatusContext',
       context: raw.context,
       state: raw.state,
       targetUrl: raw.targetUrl,
-      // StatusContext has no startedAt field in GraphQL. Its creation time is
-      // the closest equivalent and preserves the ordering signal gh exposes.
+      ...(completedAt === null ? {} : { completedAt }),
+      // StatusContext has no startedAt field in GraphQL. Its creation time
+      // preserves the ordering signal the provider exposes.
       startedAt: raw.createdAt,
     };
   }
@@ -1174,7 +1183,7 @@ function fetchChangeRequestBranchAndChecks(
                 }
               }
             }
-            ... on StatusContext{context state targetUrl createdAt}
+            ... on StatusContext{context state targetUrl createdAt updatedAt}
           }
           pageInfo{hasNextPage endCursor}
         }
@@ -1231,14 +1240,43 @@ function fetchChangeRequestBranchAndChecks(
         'getChangeRequestBranchAndChecks: PR head or base ref changed during status-check pagination',
       );
     }
-    const contexts = pullRequest.statusCheckRollup?.contexts;
-    for (const node of Array.isArray(contexts?.nodes) ? contexts.nodes : []) {
-      const normalized = normalizeStatusCheckRollupNode(node);
-      if (normalized) {
-        statusCheckRollup.push(normalized);
-      }
+    if (!Object.hasOwn(pullRequest, 'statusCheckRollup')) {
+      throw new Error(
+        'getChangeRequestBranchAndChecks: status-check rollup field is missing',
+      );
     }
-    const hasNextPage = contexts?.pageInfo?.hasNextPage === true;
+    const rollup = pullRequest.statusCheckRollup;
+    if (rollup === null) {
+      if (page !== 0 || after !== null || statusCheckRollup.length > 0) {
+        throw new Error(
+          'getChangeRequestBranchAndChecks: status-check rollup became null during pagination',
+        );
+      }
+      return { headSha, baseRefName, statusCheckRollup };
+    }
+    const contexts = rollup?.contexts;
+    if (
+      !contexts ||
+      !Array.isArray(contexts.nodes) ||
+      !contexts.pageInfo ||
+      typeof contexts.pageInfo.hasNextPage !== 'boolean'
+    ) {
+      throw new Error(
+        'getChangeRequestBranchAndChecks: status-check rollup contexts connection is missing or incomplete',
+      );
+    }
+    for (const node of contexts.nodes) {
+      const normalized = normalizeStatusCheckRollupNode(node);
+      if (!normalized) {
+        // A null entry can hide a check; never drop it and report the page
+        // as complete.
+        throw new Error(
+          'getChangeRequestBranchAndChecks: status-check rollup contains a null or unreadable node',
+        );
+      }
+      statusCheckRollup.push(normalized);
+    }
+    const hasNextPage = contexts.pageInfo.hasNextPage;
     if (!hasNextPage) {
       return { headSha, baseRefName, statusCheckRollup };
     }
