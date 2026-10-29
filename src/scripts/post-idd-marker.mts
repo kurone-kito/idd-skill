@@ -2031,7 +2031,7 @@ below).
   --prior-base-ref <name>
                        --type watermark --from-pr only, and required there: the
                        PR base ref E1 Step 1 saw. Refuses (exit 1) when the
-                       publish-time base ref or the activity capture differs.
+                       publish-time base ref differs.
   --prior-head-sha <sha>
   --prior-total-item-count <n>
   --prior-max-activity-at <iso|none>
