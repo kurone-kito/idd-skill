@@ -99,7 +99,7 @@ test('the overview routing states the live execution-mode decision before fan-ou
   );
   assert.match(
     overview,
-    /apply its \[live-capability\s+decision\]\(\.\.\/\.\.\/docs\/idd-workflow\.md#live-capability-decision\)/,
+    /apply its\s+\[live-capability\s+decision\]\(\.\.\/\.\.\/docs\/idd-workflow\.md#live-capability-decision\)/,
   );
 });
 
