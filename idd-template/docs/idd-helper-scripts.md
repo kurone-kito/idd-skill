@@ -10675,8 +10675,8 @@ node scripts/claimed-push.mjs --issue <n> --claim-id <id> [--nonce <nonce>] [--a
   creates a commit. D2 runs its normal push through the helper; the
   `--force-with-lease` route that D2 allows after publication stays a
   manual route, which checks `assert`, `location`, and `scope` with the
-  helper's dry run first. Adopting the helper in the E-phase push steps is
-  a separate change, because those bundles are size-budgeted.
+  helper's dry run first. E12's push adopts the helper through issue
+  `#4564`; its instructions-only checks are in the E12 bullet below.
 - **Known limit**: git resolves the branch argument of the push when the
   push starts, after the `reassert` step has compared HEAD and the branch
   tip. The helper keeps the branch argument because a SHA source does not
@@ -10691,6 +10691,18 @@ node scripts/claimed-push.mjs --issue <n> --claim-id <id> [--nonce <nonce>] [--a
   to the helper's own process therefore does not reach the admitted gate,
   which keeps the validation slot until it ends. Making the helper forward
   signals is not part of issue `#4525`.
+- **E12 under `instructions-only`**: without the helper, E12's push checks
+  the active claim, the location, and the scope, then runs
+  **pre-push-validate** and pushes normally. Re-read the issue and confirm
+  the active claim still uses your `{claim-id}`. Confirm the worktree is
+  the claimed sibling path and its current branch is the claimed branch,
+  using the cwd-vs-claim check in the
+  [claim revalidation gate](../.github/instructions/idd-overview-core.instructions.md#claim-revalidation-gate).
+  Apply the `effort-candidate-file-limit` check that the scope step runs:
+  count the issue's parsed Candidate files and the canonical changed paths
+  separately, apply B3's canonical-path exclusions, and stop without
+  pushing when either count fails. Commit any validation or formatter
+  output first, so the tree is clean.
 
 ## Dead-export audit (kurone-kito/idd-skill#3478)
 
