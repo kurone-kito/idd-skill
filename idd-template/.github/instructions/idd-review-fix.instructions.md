@@ -261,8 +261,11 @@ For a per-file cap, apply step 1. If the file is still above its cap
 (`phaseLimitBytes`, or `alwaysLoadedLimitBytes` for an always-loaded
 file), stop and ask once. Never raise a per-file cap.
 
-Then push the feature branch normally. Files touched only in E11 don't
-widen E12's fold-in scope.
+Then push the feature branch. With helper runtime, inspect and commit
+any validation or formatter output first so the tree is clean, then push
+through `claimed-push` as D2 does. Under `instructions-only`, run D2's
+steps 1-2, then push normally. Files touched only in E11 don't widen
+E12's fold-in scope.
 
 **Bounded cross-round batching allowance.** A small number of review
 comments can arrive before this push that fall outside this round's

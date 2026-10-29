@@ -20,7 +20,7 @@ const TEMPLATE_FILES = [REVIEW_FIX_COPIES[0], PR_SUBMIT_COPIES[0]];
 function budgetBreachBlock(path: string): string {
   const text = readFileSync(path, 'utf8');
   const start = text.indexOf('**Budget breach.**');
-  const end = text.indexOf('Then push the feature branch normally', start);
+  const end = text.indexOf('Then push the feature branch', start);
   assert.ok(start >= 0 && end > start, `${path} has the budget-breach block`);
   return text.slice(start, end).replace(/\s+/g, ' ');
 }
