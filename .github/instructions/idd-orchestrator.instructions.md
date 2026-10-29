@@ -15,21 +15,20 @@ Requirements: [fan-out variant][fv] and
 A unique session-suffixed agent id skips activation on restart; all other
 restarts use section 2 recovery without refill.
 
-Before fan-out setup, A5, claim, launch, or refill, follow the
-[live execution-mode decision](../../docs/idd-workflow.md#live-capability-decision).
-Check this session's required lifecycle calls, wait/lifetime behavior, and
-worker cap; static support or missing tools/scratch files do not prove live
-capability or that no worker started. Use fan-out only when the table permits;
-otherwise follow its single-agent or recovery/hold route. The cap is per
-session, not host.
+A session is a static fan-out candidate only when the static requirements in
+the [live execution-mode decision](../../docs/idd-workflow.md#live-capability-decision)
+hold. Before fan-out setup, A5, claim, launch, or refill, follow that decision.
+Static support or missing tools do not prove live capability. Use fan-out only
+when the table permits. The cap is per session, not host.
 
 ## 2. Session scratchpad preflight and roster
 
 Fan-out selection comes first. Before Discover, A5, restart, refill, or
 dispatch, follow the
-[session scratchpad lifecycle](../../docs/idd-workflow.md#session-scratchpad-lifecycle);
-stop on holds. Derive worker paths from the verified root; keep the worker
-missing-parent guard.
+[session scratchpad lifecycle](../../docs/idd-workflow.md#session-scratchpad-lifecycle)
+for a fan-out session; stop on holds. A single-agent result does not provision
+fan-out scratch space. Derive worker paths from the verified root; keep the
+worker missing-parent guard.
 
 Track each worker's issue, claim, branch, handle, report path, and lifecycle
 state. On restart, see
@@ -67,9 +66,11 @@ state. On restart, see
 - After each completion or wave, process `reporting` entries (§5), then re-run
   `idd-worker-budget` with `--instructions-since`, re-read changed files
   ([fv]), and refill from the cached graph, on the Discover re-run cadence.
-- Before a refill claim or launch, recheck the live decision. Switch to
-  single-agent only when all prior workers are disposed and no launch, own
-  claim, or writer is unresolved; otherwise follow recovery and hold.
+- Before a refill claim or launch, recheck the live decision. Keep fan-out
+  refills while its capability remains usable, even with known workers running.
+  Switch to single-agent only when that capability is lost, every prior worker
+  is disposed, and no launch, own claim, or writer is unresolved; otherwise
+  recover and hold.
 - When `slots` is `0` but candidates remain: apply stalled recovery to
   `stalled` entries first. If an entry is not `disposed`, wait for a `running`
   completion, or repeat recovery when none is running. Otherwise, if

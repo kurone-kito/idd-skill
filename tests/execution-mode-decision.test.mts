@@ -72,12 +72,59 @@ test('the orchestrator phase links the decision and states that static support i
     orchestrator,
     /\.\.\/\.\.\/docs\/idd-workflow\.md#live-capability-decision/,
   );
-  assert.match(orchestrator, /static support/);
-  assert.match(orchestrator, /do not prove/);
+  assert.match(orchestrator, /[Ss]tatic support or missing tools/);
+  assert.match(orchestrator, /do not prove live capability/);
 });
 
 test('the overview routing states the live execution-mode decision before fan-out setup', () => {
   const overview = readRepoText(OVERVIEW);
   assert.match(overview, /Fan-out mode selection/);
   assert.match(overview, /before scratchpad setup, claim, or worker launch/);
+});
+
+test('the refill row switches to single-agent only on capability loss, with every worker disposed and no live writer', () => {
+  const rows = decisionRows(readRepoText(WORKFLOW));
+  const refill = rows.find(([evidence]) =>
+    evidence.includes('At a later refill'),
+  );
+  assert.ok(refill, 'the refill row is present');
+  const [evidence, route] = refill;
+  assert.match(evidence, /capability is lost/);
+  assert.match(evidence, /every prior worker is verified disposed/);
+  assert.match(evidence, /potentially live writer remains/);
+  assert.match(route, /single-agent/);
+});
+
+test('a healthy fan-out refill is not routed to single-agent', () => {
+  const rows = decisionRows(readRepoText(WORKFLOW));
+  const fanOut = rows.find(([, route]) => route.startsWith('Fan-out'));
+  assert.ok(fanOut, 'the fan-out row is present');
+  assert.match(fanOut[0], /known running workers continue/);
+  assert.doesNotMatch(fanOut[1], /single-agent/);
+});
+
+test('the static candidacy conditions sit in the decision section, before its table', () => {
+  const workflow = readRepoText(WORKFLOW);
+  const start = workflow.indexOf('#### Live capability decision');
+  const table = workflow.indexOf('| Evidence', start);
+  const conditions = workflow.indexOf(
+    'static fan-out candidate only when',
+    start,
+  );
+  assert.ok(
+    conditions > start && conditions < table,
+    'the conditions precede the table',
+  );
+  const section = workflow.slice(conditions, table);
+  assert.match(section, /`maxWorkers`/);
+  assert.match(section, /`GITHUB_ACTIONS`/);
+  const orchestrator = readRepoText(ORCHESTRATOR);
+  assert.match(orchestrator, /static requirements in/);
+  assert.match(orchestrator, /Static support or missing tools do not prove/);
+});
+
+test('the execution-mode report line is required in every report', () => {
+  const workflow = readRepoText(WORKFLOW);
+  assert.match(workflow, /\*\*Execution mode\.\*\*/);
+  assert.match(workflow, /Required in every report\./);
 });
