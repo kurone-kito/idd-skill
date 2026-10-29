@@ -1866,6 +1866,57 @@ const CLOSING_READ_FAILURE_RESPONSES: [string, unknown, RegExp][] = [
   ],
 ];
 
+test('duplicate repair --pr refuses a same-numbered issue from another repository as the claim issue (#4737)', () => {
+  const fixture = repairPrFixture({
+    closingRawResponse: {
+      data: {
+        repository: {
+          pullRequest: {
+            headRefOid: REPAIR_STUB_HEAD,
+            closingIssuesReferences: {
+              nodes: [
+                {
+                  number: 123,
+                  url: 'https://github.com/other/repo/issues/123',
+                  repository: { name: 'repo', owner: { login: 'other' } },
+                },
+              ],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        },
+      },
+    },
+  });
+  try {
+    const preflight = repairDryRunPreflight(fixture.baseArgs);
+    assert.throws(
+      () =>
+        execFileSync(
+          process.execPath,
+          repairApplyArgs(fixture.baseArgs, preflight),
+          {
+            cwd: REPO_ROOT,
+            encoding: 'utf8',
+          },
+        ),
+      (error: unknown) => {
+        const report = JSON.parse(
+          String((error as { stdout?: string | Buffer }).stdout ?? ''),
+        ) as { action: string; repair: { recoveryHold: string } };
+        assert.equal(report.action, 'repair-recovery-hold');
+        assert.match(
+          report.repair.recoveryHold,
+          /does not link claim issue #123; expected other\/repo#123/,
+        );
+        return true;
+      },
+    );
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test('duplicate repair --pr holds at the up-front check, and fails at the re-check, on every closing-read failure (#4737)', () => {
   for (const [label, response, pattern] of CLOSING_READ_FAILURE_RESPONSES) {
     // Up-front: every closing read returns the bad response, so the first

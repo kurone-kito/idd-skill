@@ -1294,9 +1294,17 @@ function assertRepairClaimBoundToTarget(
       { cause: error },
     );
   }
-  const linkedIssueNumbers = closingReferences.map((reference) =>
-    String(reference.number),
-  );
+  // A reference from another repository keeps its repository in the key, so
+  // a same-numbered issue elsewhere cannot satisfy the claim-issue match.
+  const linkedIssueNumbers = closingReferences.map((reference) => {
+    const { name, owner: refOwner } = reference.repository;
+    const sameRepository =
+      refOwner.login.toLowerCase() === owner.toLowerCase() &&
+      name.toLowerCase() === repo.toLowerCase();
+    return sameRepository
+      ? String(reference.number)
+      : `${refOwner.login}/${name}#${reference.number}`;
+  });
   // A PR-repair coordination lease must be unique to this PR: accepting any
   // one of several linked issues' claims would let two maintainers each
   // legitimately claim a different linked issue and both authorize a repair
