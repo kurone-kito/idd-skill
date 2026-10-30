@@ -1786,7 +1786,12 @@ Running this variant safely requires:
   valid `claimed-by` (one the claim parser recognizes as a heartbeat for this
   claim, so a trusted, unedited comment with the active claim's ids and
   branch; an anomalous or invalid one is ignored), when the entry is
-  `disposed`, or when the claim is released or superseded. A resumed worker
+  `disposed` under the ordinary fan-out lifecycle, or when the claim is
+  released or superseded. The verified pre-B1 parent-continuation route is
+  stricter: it disposes the child only after a hold-ending heartbeat is
+  verified or complete trusted history proves that no hold is active. There,
+  disposal records the verified hold state; it does not prove that the hold
+  ended. A resumed worker
   follows the normal report path. A released or superseded claim cannot be
   renewed, so the orchestrator marks its entry `stalled` and follows the
   worker-specific recovery, which re-verifies the claim and reports its state
@@ -2092,7 +2097,11 @@ At minimum it lists:
   hold marker defines (the worker's valid `claimed-by` or, after a restart, any
   valid `claimed-by` newer than the marker, which can be the earlier run's own
   renewal; a release other than the cap release; a supersession; or the
-  entry's disposal). Once no living orchestrator renews a hold, the stale clock
+  entry's disposal under the ordinary fan-out lifecycle). For the verified
+  pre-B1 parent-continuation route, report an active hold as ended only after
+  its hold-ending heartbeat is verified. When complete trusted history proves
+  no hold is active, report that no active hold exists; do not attribute that
+  state to disposal. Once no living orchestrator renews a hold, the stale clock
   (`claim-stale-age`, 24 h by default) counts from the latest valid
   `claimed-by`.
 - **Failures.** Each renewal or release that failed since the run began, even

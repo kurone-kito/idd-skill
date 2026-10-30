@@ -3167,23 +3167,59 @@ test('orchestrator restart scans continuation records before roster rebuild and 
 });
 
 test('pre-B1 continuation ownership matrix requires verified hold completion (#4714)', () => {
-  const matrix = normalizeWhitespace(readText('docs/idd-concept-ownership.md'));
-  assert.ok(
-    matrix.includes('disposal alone is not hold-ending evidence'),
-    'the ownership matrix must not treat a disposed roster entry as hold-ending proof',
-  );
-  assert.ok(
-    matrix.includes(
-      'the uninterrupted owning parent creates a pending continuation record and adds a `parent-continuation` entry only under the [verified pre-B1 route]',
-    ),
-    'the ownership matrix must limit parent continuation to its verified route',
-  );
-  assert.ok(
-    matrix.includes(
-      'when a hold is active, a verified hold-ending heartbeat before roster disposal',
-    ),
-    'the ownership matrix must gate disposal on verified hold completion',
-  );
+  for (const path of [
+    'idd-template/docs/idd-concept-ownership.md',
+    'docs/idd-concept-ownership.md',
+  ]) {
+    const matrix = normalizeWhitespace(readText(path));
+    assert.ok(
+      matrix.includes(
+        'under the ordinary fan-out lifecycle, ended by a later valid `claimed-by`',
+      ),
+      `${path}: the ownership matrix must preserve ordinary fan-out disposal as a hold-ending cause`,
+    );
+    assert.ok(
+      matrix.includes(
+        'For the verified pre-B1 continuation route only, dispose the child after complete trusted history proves no active hold or a valid hold-ending heartbeat is verified; disposal alone proves neither',
+      ),
+      `${path}: the ownership matrix must scope the stricter disposal proof to pre-B1 continuation`,
+    );
+    assert.ok(
+      matrix.includes(
+        'the uninterrupted owning parent creates a pending continuation record and adds a `parent-continuation` entry only under the [verified pre-B1 route]',
+      ),
+      `${path}: the ownership matrix must limit parent continuation to its verified route`,
+    );
+    assert.ok(
+      matrix.includes(
+        'when a hold is active, a verified hold-ending heartbeat before roster disposal',
+      ),
+      `${path}: the ownership matrix must gate disposal on verified hold completion`,
+    );
+  }
+
+  for (const path of [
+    'idd-template/docs/idd-workflow.md',
+    'docs/idd-workflow.md',
+  ]) {
+    const workflow = normalizeWhitespace(readText(path));
+    assert.ok(
+      workflow.includes('`disposed` under the ordinary fan-out lifecycle'),
+      `${path}: ordinary fan-out disposal must remain a hold-ending cause`,
+    );
+    assert.ok(
+      workflow.includes(
+        'The verified pre-B1 parent-continuation route is stricter: it disposes the child only after a hold-ending heartbeat is verified or complete trusted history proves that no hold is active.',
+      ),
+      `${path}: the pre-B1 route must verify the hold end before disposal`,
+    );
+    assert.ok(
+      workflow.includes(
+        'report an active hold as ended only after its hold-ending heartbeat is verified. When complete trusted history proves no hold is active, report that no active hold exists; do not attribute that state to disposal',
+      ),
+      `${path}: run reports must preserve the verified pre-B1 disposal condition`,
+    );
+  }
 });
 
 test('docs idd-workflow fan-out variant carries a delegation brief template for every brief element (#4377)', () => {
