@@ -88,8 +88,8 @@
                   "path": {
                     "type": "string",
                     "minLength": 1,
-                    "pattern": "^(?!/)(?!.*\\\\)(?!.*(?:^|/)\\.\\.(?:/|$)).+$",
-                    "description": "Proves identity. Names one non-empty relative file path using slash separators without a parent-directory segment."
+                    "pattern": "^(?!/)(?!.*\\\\)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*[\\r\\n\\u2028\\u2029]).+$",
+                    "description": "Proves identity. Names one non-empty relative file path using slash separators without a parent-directory segment or line terminator."
                   },
                   "sha256": {
                     "type": "string",
@@ -171,8 +171,8 @@
                       "path": {
                         "type": "string",
                         "minLength": 1,
-                        "pattern": "^(?!/)(?!.*\\\\)(?!.*(?:^|/)\\.\\.(?:/|$)).+$",
-                        "description": "Proves identity. Names one non-empty relative file path using slash separators without a parent-directory segment."
+                        "pattern": "^(?!/)(?!.*\\\\)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*[\\r\\n\\u2028\\u2029]).+$",
+                        "description": "Proves identity. Names one non-empty relative file path using slash separators without a parent-directory segment or line terminator."
                       },
                       "sha256": {
                         "type": "string",
@@ -245,8 +245,8 @@
                       "path": {
                         "type": "string",
                         "minLength": 1,
-                        "pattern": "^(?!/)(?!.*\\\\)(?!.*(?:^|/)\\.\\.(?:/|$)).+$",
-                        "description": "Proves identity. Names one non-empty relative file path using slash separators without a parent-directory segment."
+                        "pattern": "^(?!/)(?!.*\\\\)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*[\\r\\n\\u2028\\u2029]).+$",
+                        "description": "Proves identity. Names one non-empty relative file path using slash separators without a parent-directory segment or line terminator."
                       },
                       "sha256": {
                         "type": "string",
@@ -322,8 +322,8 @@
                   "path": {
                     "type": "string",
                     "minLength": 1,
-                    "pattern": "^(?!/)(?!.*\\\\)(?!.*(?:^|/)\\.\\.(?:/|$)).+$",
-                    "description": "Proves identity. Names one non-empty relative file path using slash separators without a parent-directory segment."
+                    "pattern": "^(?!/)(?!.*\\\\)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*[\\r\\n\\u2028\\u2029]).+$",
+                    "description": "Proves identity. Names one non-empty relative file path using slash separators without a parent-directory segment or line terminator."
                   },
                   "sha256": {
                     "type": "string",

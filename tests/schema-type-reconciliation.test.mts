@@ -2352,6 +2352,9 @@ function distributionListingDigest(
     if (file.path.includes('\\')) {
       throw new Error('file path must use slash separators');
     }
+    if (/[\r\n\u2028\u2029]/.test(file.path)) {
+      throw new Error('file path must not contain a line terminator');
+    }
     if (file.path.split('/').includes('..')) {
       throw new Error('file path must not contain a parent-directory segment');
     }
@@ -2578,6 +2581,25 @@ test('distribution manifest fixture, identity rules, and listing digest are expl
   assert.throws(() =>
     distributionListingDigest([{ path: 'x/../y', sha256: fileHash('one') }]),
   );
+  for (const lineTerminator of ['\n', '\r', '\u2028', '\u2029']) {
+    for (const path of [
+      `line${lineTerminator}break`,
+      `trailing${lineTerminator}`,
+    ]) {
+      assert.throws(() =>
+        distributionListingDigest([{ path, sha256: fileHash('line') }]),
+      );
+      const manifestWithLineTerminator = cloneDistributionManifest();
+      const firstFile =
+        manifestWithLineTerminator.components.instructions.files[0];
+      assert.ok(firstFile);
+      firstFile.path = path;
+      assert.match(
+        validate(manifestWithLineTerminator, schema, '$', context).join('\n'),
+        /does not match pattern/,
+      );
+    }
+  }
   assert.doesNotThrow(() =>
     distributionListingDigest([{ path: 'a..b', sha256: fileHash('one') }]),
   );
