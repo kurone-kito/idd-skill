@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "repository": "kurone-kito/idd-skill",
+  "session": {
+    "id": "repository-local-session",
+    "binding": "unbound"
+  },
+  "verdict": "migration-required",
+  "selected": null,
+  "previousVerifiedSet": null,
+  "packageVersion": null,
+  "preparation": "not-applicable",
+  "compatibility": "unknown",
+  "source": "repository-local",
+  "recovery": "migrate",
+  "receipt": {
+    "status": "unsupported-legacy"
+  },
+  "mutation": "none"
+}
