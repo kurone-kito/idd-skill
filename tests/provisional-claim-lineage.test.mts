@@ -2,10 +2,12 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import {
+  renderActivationNonceMarker,
   renderClaimedByMarker,
   renderForcedHandoffComment,
   renderUnclaimedByMarker,
 } from '../src/scripts/marker-helpers.mts';
+import { resolveActiveClaimWithForcedHandoffTrace } from '../src/scripts/protocol-helpers.mts';
 import {
   type BuildVerifiedClaimLineageInput,
   buildVerifiedClaimLineage,
@@ -160,6 +162,39 @@ function replayComment(
   };
 }
 
+function assertLineageMatchesClaimFold(
+  result: ReturnType<typeof buildVerifiedClaimLineage>,
+  comments: readonly ProvisionalClaimLineageComment[],
+): void {
+  assert.equal(result.status, 'ok');
+  if (result.status !== 'ok') return;
+
+  const fold = resolveActiveClaimWithForcedHandoffTrace(
+    comments.map((value) => ({
+      id: value.id,
+      url: value.url,
+      body: value.body,
+      createdAt: value.createdAt,
+      author: { login: value.authorLogin ?? '' },
+      lastEditedAt: value.lastEditedAt,
+    })),
+    () => true,
+  );
+  assert.deepEqual(
+    result.active && {
+      claimId: result.active.claimId,
+      agentId: result.active.agentId,
+      branch: result.active.branch,
+    },
+    fold.activeClaim && {
+      claimId: fold.activeClaim.claimId,
+      agentId: fold.activeClaim.agentId,
+      branch: fold.activeClaim.branch,
+    },
+  );
+  assert.equal(result.activeSince, result.active ? fold.activeSince : null);
+}
+
 test('builds active verified lineage with source comment timestamps and IDs', () => {
   const first = claimComment('101', 'claim-4599-1', '2026-10-20T00:00:00.100Z');
   const release = comment(
@@ -205,6 +240,32 @@ test('builds active verified lineage with source comment timestamps and IDs', ()
     },
     activeSince: second.createdAt,
   });
+});
+
+test('keeps a same-claim heartbeat and activation nonce within one claim start', () => {
+  const first = claimComment('107', 'claim-4599-1', '2026-10-20T00:00:00Z');
+  const heartbeat = claimComment('108', 'claim-4599-1', '2026-10-20T00:00:01Z');
+  const activation = comment(
+    '109',
+    renderActivationNonceMarker({
+      agentId: 'agent-claim-4599-1',
+      claimId: 'claim-4599-1',
+      nonce: 'nonce-1',
+      timestamp: '2026-10-20T00:00:02Z',
+    }),
+    '2026-10-20T00:00:02Z',
+  );
+  const history = [first, heartbeat, activation];
+  const result = buildVerifiedClaimLineage(input(history));
+
+  assertLineageMatchesClaimFold(result, history);
+  assert.equal(result.status, 'ok');
+  if (result.status === 'ok') {
+    assert.equal(result.claims.length, 1);
+    assert.equal(result.claims[0]?.claimedAt, first.createdAt);
+    assert.equal(result.active?.claimId, 'claim-4599-1');
+    assert.equal(result.activeSince, first.createdAt);
+  }
 });
 
 test('returns null active state and active-since after a released claim', () => {
@@ -292,6 +353,7 @@ test('replay accepts the verified claim prefix at every record position', () => 
     const prefixLineage = buildVerifiedClaimLineage(input(beforeRecord));
     assert.equal(prefixLineage.status, 'ok');
     if (prefixLineage.status !== 'ok') continue;
+    assertLineageMatchesClaimFold(prefixLineage, beforeRecord);
     const recordClaims: ProvisionalDecisionClaim[] = prefixLineage.claims.map(
       ({ commentId: _commentId, ...claim }) => claim,
     );
@@ -312,6 +374,7 @@ test('replay accepts the verified claim prefix at every record position', () => 
     const lineage = buildVerifiedClaimLineage(input(history));
     assert.equal(lineage.status, 'ok');
     if (lineage.status !== 'ok') continue;
+    assertLineageMatchesClaimFold(lineage, history);
     const replay = replayProvisionalDecisionHistory({
       comments: history.map(replayComment),
       completeHistory: true,
@@ -363,6 +426,16 @@ test('refuses legacy and malformed recognized claim markers', () => {
       comment(
         '601',
         '<!-- claimed-by: old-agent 2026-10-20T00:00:00Z branch: issue/4599-old -->',
+        '2026-10-20T00:00:00Z',
+      ),
+    ],
+    'legacy-claim-marker',
+  );
+  reason(
+    [
+      comment(
+        '603',
+        '<!-- unclaimed-by: old-agent 2026-10-20T00:00:00Z -->',
         '2026-10-20T00:00:00Z',
       ),
     ],
@@ -493,6 +566,22 @@ test('refuses noncanonical branches, late forced handoffs, and empty lineage', (
     '2026-10-20T00:00:01Z',
   );
   reason([claim, handoff], 'forced-handoff-after-last-claim');
+  const handoffWithoutClaimStart = comment(
+    '905',
+    renderForcedHandoffComment({
+      oldAgentId: 'agent-prior',
+      oldClaimId: 'claim-prior',
+      newAgentId: 'agent-next',
+      newClaimId: 'claim-next',
+      branch: `issue/${issueNumber}-feat-lineage`,
+      forcedBy: 'maintainer',
+      reason: 'The prior claim start is absent from history.',
+      timestamp: '2026-10-20T00:00:01Z',
+      contextScope: 'issue-only',
+    }),
+    '2026-10-20T00:00:01Z',
+  );
+  reason([handoffWithoutClaimStart], 'empty-lineage');
   reason(
     [comment('904', 'ordinary note', '2026-10-20T00:00:00Z')],
     'empty-lineage',
