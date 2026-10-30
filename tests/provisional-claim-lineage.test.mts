@@ -207,6 +207,35 @@ test('builds active verified lineage with source comment timestamps and IDs', ()
   });
 });
 
+test('returns null active state and active-since after a released claim', () => {
+  const claim = claimComment('104', 'claim-4599-1', '2026-10-20T00:00:00.100Z');
+  const release = comment(
+    '105',
+    renderUnclaimedByMarker({
+      agentId: 'agent-claim-4599-1',
+      claimId: 'claim-4599-1',
+      timestamp: '2026-10-20T00:00:01Z',
+    }),
+    '2026-10-20T00:00:01.200Z',
+  );
+
+  assert.deepEqual(buildVerifiedClaimLineage(input([claim, release])), {
+    status: 'ok',
+    claims: [
+      {
+        claimId: 'claim-4599-1',
+        agentId: 'agent-claim-4599-1',
+        branch: `issue/${issueNumber}-feat-lineage`,
+        claimedAt: claim.createdAt,
+        supersedes: 'none',
+        commentId: claim.id,
+      },
+    ],
+    active: null,
+    activeSince: null,
+  });
+});
+
 test('filters untrusted claim markers before folding and normalizes trusted logins', () => {
   const ignored = claimComment(
     '201',
@@ -235,25 +264,8 @@ test('filters untrusted claim markers before folding and normalizes trusted logi
   }
 });
 
-test('replay accepts the verified lineage at every source-history prefix', () => {
+test('replay accepts the verified claim prefix at every record position', () => {
   const first = claimComment('301', 'claim-4599-1', '2026-10-20T00:00:00.100Z');
-  const selectionTime = '2026-10-20T00:00:01.200Z';
-  const selectionId = '302';
-  const selectionUrl = `https://github.com/${repository}/issues/${issueNumber}#issuecomment-${selectionId}`;
-  const recordClaims: ProvisionalDecisionClaim[] = [
-    {
-      claimId: 'claim-4599-1',
-      agentId: 'agent-claim-4599-1',
-      branch: `issue/${issueNumber}-feat-lineage`,
-      claimedAt: first.createdAt,
-      supersedes: 'none',
-    },
-  ];
-  const selection = comment(
-    selectionId,
-    `${PROVISIONAL_DECISION_RECORD_MARKER}\n${JSON.stringify(decisionRecord(recordClaims))}`,
-    selectionTime,
-  );
   const release = comment(
     '303',
     renderUnclaimedByMarker({
@@ -268,15 +280,40 @@ test('replay accepts the verified lineage at every source-history prefix', () =>
     'claim-4599-2',
     '2026-10-20T00:00:03.400Z',
   );
-  const history = [first, selection, release, second];
+  const sourceHistory = [first, release, second];
+  const positions = [
+    { prefixLength: 1, id: '302', createdAt: '2026-10-20T00:00:00.200Z' },
+    { prefixLength: 2, id: '305', createdAt: '2026-10-20T00:00:02.400Z' },
+    { prefixLength: 3, id: '306', createdAt: '2026-10-20T00:00:03.500Z' },
+  ];
 
-  for (let length = 1; length <= history.length; length += 1) {
-    const prefix = history.slice(0, length);
-    const lineage = buildVerifiedClaimLineage(input(prefix));
+  for (const position of positions) {
+    const beforeRecord = sourceHistory.slice(0, position.prefixLength);
+    const prefixLineage = buildVerifiedClaimLineage(input(beforeRecord));
+    assert.equal(prefixLineage.status, 'ok');
+    if (prefixLineage.status !== 'ok') continue;
+    const recordClaims: ProvisionalDecisionClaim[] = prefixLineage.claims.map(
+      ({ commentId: _commentId, ...claim }) => claim,
+    );
+    const selection = comment(
+      position.id,
+      `${PROVISIONAL_DECISION_RECORD_MARKER}\n${JSON.stringify(decisionRecord(recordClaims))}`,
+      position.createdAt,
+    );
+    assert.equal(
+      selection.url,
+      `https://github.com/${repository}/issues/${issueNumber}#issuecomment-${position.id}`,
+    );
+    const history = [
+      ...beforeRecord,
+      selection,
+      ...sourceHistory.slice(position.prefixLength),
+    ];
+    const lineage = buildVerifiedClaimLineage(input(history));
     assert.equal(lineage.status, 'ok');
     if (lineage.status !== 'ok') continue;
     const replay = replayProvisionalDecisionHistory({
-      comments: prefix.map(replayComment),
+      comments: history.map(replayComment),
       completeHistory: true,
       currentSource: source,
       verifiedClaimLineage: lineage.claims,
@@ -285,25 +322,6 @@ test('replay accepts the verified lineage at every source-history prefix', () =>
     });
     assert.equal(replay.valid, true, JSON.stringify(replay.issues));
     assert.deepEqual(replay.issues, []);
-  }
-
-  const completeLineage = buildVerifiedClaimLineage(input(history));
-  assert.equal(completeLineage.status, 'ok');
-  if (completeLineage.status === 'ok') {
-    const claimsWithoutCommentIds = completeLineage.claims.map(
-      ({ commentId: _commentId, ...claim }) => claim,
-    );
-    assert.deepEqual(claimsWithoutCommentIds, [
-      recordClaims[0],
-      {
-        claimId: 'claim-4599-2',
-        agentId: 'agent-claim-4599-2',
-        branch: `issue/${issueNumber}-feat-lineage`,
-        claimedAt: second.createdAt,
-        supersedes: 'none',
-      },
-    ]);
-    assert.equal(selection.url, selectionUrl);
   }
 });
 
@@ -379,6 +397,23 @@ test('refuses two claim starts in one UTC second despite release and fractions',
     '2026-10-20T00:00:00.900Z',
   );
   reason([first, release, second], 'same-second-claims');
+});
+
+test('refuses fresh same-second starts without a release', () => {
+  reason(
+    [
+      claimComment('704', 'claim-4599-2', '2026-10-20T00:00:00Z'),
+      claimComment('705', 'claim-4599-1', '2026-10-20T00:00:00Z'),
+    ],
+    'same-second-claims',
+  );
+  reason(
+    [
+      claimComment('706', 'claim-4599-2', '2026-10-20T00:00:00.100Z'),
+      claimComment('707', 'claim-4599-1', '2026-10-20T00:00:00.900Z'),
+    ],
+    'same-second-claims',
+  );
 });
 
 test('refuses an accepted stale takeover and repeated claim IDs', () => {
