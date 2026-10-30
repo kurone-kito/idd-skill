@@ -1256,7 +1256,9 @@ The parent keeps the existing claim and activation nonce in the same worktree
 but does not enter B1 Step 3 yet. Before changing the per-issue role, posting a
 heartbeat, or changing either roster entry, persist a `pending` continuation
 recovery record as `issue-<n>-pre-b1-continuation.json` under the verified
-session scratchpad root. Never overwrite an existing or symlinked record.
+session scratchpad root. Create it exclusively; never overwrite or follow a
+pre-existing or symlinked file at that path. Later state changes replace only
+this record, using the atomic write and read-back step.
 Record the session id, issue, agent id, claim id, nonce, branch, exact worktree,
 child handle,
 pre-transition roster state, transition stage, intended parent role, intended
@@ -1265,9 +1267,10 @@ final roster pair, and either the trusted active hold marker id and GitHub
 Write the record atomically and read it back. A conflicting, incomplete, or
 unreadable record uses existing recovery/hold. A pending record keeps the issue
 occupied exactly once and in-flight exactly once, pauses new refills/claims,
-and blocks further mutation or implementation until its exact effects are
-reconciled. A restarted parent treats a pending record as recovery/hold; it does
-not authorize this same-session shortcut.
+and permits only the verified transition steps below; it blocks all other
+mutation or implementation until its exact effects are reconciled. A restarted
+parent treats a pending record as recovery/hold; it does not authorize this
+same-session shortcut.
 
 If the record proves an active child hold, first record the per-issue role
 change to `parent-continuation` in the pending recovery record. The parent then

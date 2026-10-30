@@ -2960,10 +2960,12 @@ test('pre-B1 parent continuation keeps same-claim safety and truthful reports (#
     'only a complete trusted history read can prove that none exists',
     'A missing, edited, untrusted, or unreadable marker is not proof of absence',
     'persist a `pending` continuation recovery record as `issue-<n>-pre-b1-continuation.json` under the verified session scratchpad root',
-    'Never overwrite an existing or symlinked record',
+    'Create it exclusively; never overwrite or follow a pre-existing or symlinked file at that path',
+    'Later state changes replace only this record, using the atomic write and read-back step',
     'transition stage, intended parent role, intended final roster pair',
     'Write the record atomically and read it back',
     'A restarted parent treats a pending record as recovery/hold',
+    'and permits only the verified transition steps below; it blocks all other',
     'first record the per-issue role change to `parent-continuation` in the pending recovery record',
     'posts an ordinary `claimed-by` heartbeat as the continuation worker',
     'the heartbeat ends the hold only when the claim parser recognizes it as a valid worker heartbeat newer than the trusted marker',
@@ -3122,6 +3124,26 @@ test('pre-B1 parent continuation keeps same-claim safety and truthful reports (#
       assert.ok(text.includes(required), `${path}: missing "${required}"`);
     }
   }
+});
+
+test('pre-B1 continuation ownership matrix requires verified hold completion (#4714)', () => {
+  const matrix = normalizeWhitespace(readText('docs/idd-concept-ownership.md'));
+  assert.ok(
+    matrix.includes('disposal alone is not hold-ending evidence'),
+    'the ownership matrix must not treat a disposed roster entry as hold-ending proof',
+  );
+  assert.ok(
+    matrix.includes(
+      'the uninterrupted owning parent creates a pending continuation record and adds a `parent-continuation` entry only under the [verified pre-B1 route]',
+    ),
+    'the ownership matrix must limit parent continuation to its verified route',
+  );
+  assert.ok(
+    matrix.includes(
+      'when a hold is active, a verified hold-ending heartbeat before roster disposal',
+    ),
+    'the ownership matrix must gate disposal on verified hold completion',
+  );
 });
 
 test('docs idd-workflow fan-out variant carries a delegation brief template for every brief element (#4377)', () => {
