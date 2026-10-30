@@ -418,7 +418,7 @@
         ".github/instructions/lite/idd-ci-lite.instructions.md",
         ".github/instructions/lite/idd-review-fix-lite.instructions.md"
       ],
-      "limitBytes": 46800
+      "limitBytes": 50800
     },
     {
       "id": "bundle-review-snapshot-lite",
@@ -491,6 +491,12 @@
     "exemptBundles": [],
     "nearCeilingRaiseApprovals": [
       {
+        "bundle": "bundle-review-fix-lite",
+        "limitBytes": 50800,
+        "issue": 4817,
+        "reason": "Operator chose option B (raise the lite limit) in the IDD takeover session on 2026-10-30, after main's documentation audit failed on 3c72308cf (PR #4816). Measured 46,183 bytes before this change; 50,800 is about 10% above that total, rounded to the nearest 100, and stays under the 95% notice band at 90.9%. Full bundle-review-fix-phase keeps its limit (82,600) after moving the added full-path detail to docs/idd-helper-scripts.md."
+      },
+      {
         "bundle": "bundle-core",
         "limitBytes": 29000,
         "issue": 4674,
@@ -501,12 +507,6 @@
         "limitBytes": 82600,
         "issue": 3943,
         "reason": "Maintainer-approved option 1 on issue #3943, sized by the docs convention (roughly 10% headroom over measured need, not an exact fit): the E10 per-issue pass cap text adds about 1,000 bytes to review-fix, which sat at 97.56% of its limit before. Measured 75,105 bytes on the current tree; raised to 82,600, about 10% above measured and rounded up to the nearest 100. Stays under the 95% notice band at 90.9%."
-      },
-      {
-        "bundle": "bundle-review-fix-lite",
-        "limitBytes": 46800,
-        "issue": 3943,
-        "reason": "Maintainer-approved option 1 on issue #3943, sized by the docs convention (roughly 10% headroom over measured need, not an exact fit): the lite E10 cap wording adds about 370 bytes to review-fix-lite, which sat at 97.92% of its limit before. Measured 43,387 bytes on the current tree; raised to 46,800, about 10% above measured and rounded up to the nearest 100. Stays under the 95% notice band at 92.7%."
       },
       {
         "bundle": "bundle-onboarding-companions",
