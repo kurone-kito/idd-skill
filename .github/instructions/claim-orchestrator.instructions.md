@@ -9,15 +9,13 @@ Read this file only when this session is an orchestrator that delegates a
 verified claim to a subagent worker. [idd-claim.instructions.md](idd-claim.instructions.md)
 points here from its Orchestrator delegation section.
 
-An orchestrating session that has posted and verified a claim's
-`{agent-id}` / `{claim-id}` pair may delegate it verbatim to an
-isolated subagent worker in the delegation brief. The worker adopts
-both fields verbatim as its own claim token — mirroring the adopt-verbatim
-rule in [idd-claim.instructions.md](idd-claim.instructions.md) — instead of
-minting a fresh claim or being treated as claim-less; see the
-ownership-proof exception in
-[Claim-state parsing](idd-claim.instructions.md#claim-state-parsing).
-No separate `claimed-by` post is required for the delegation itself.
+After verifying `{agent-id}` / `{claim-id}`, an orchestrator may delegate
+them verbatim to an isolated worker in the brief. The worker adopts both
+fields; no fresh claim or separate `claimed-by` post is needed, under the
+[ownership-proof exception](idd-claim.instructions.md#claim-state-parsing).
+Continuation after a confirmed pre-B1 stop is not a new activation; follow the
+[canonical parent-continuation proof](../../docs/idd-workflow.md#verified-pre-b1-parent-continuation)
+and keep the same claim and nonce.
 
 **Carry the nonce, don't mint one — and still revalidate it.** The
 brief must also carry the orchestrator's current activation nonce

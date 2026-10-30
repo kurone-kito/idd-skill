@@ -1203,6 +1203,10 @@ The table below then decides the route.
 | Scratchpad metadata is missing while fan-out remains usable                                                                                                                                                                                                    | Resolve or provision it through the session scratchpad lifecycle below before any claim or dispatch                                                                            |
 | Ownership, workspace, host/API admission, CI, review, or merge evidence is ambiguous or fails its gate                                                                                                                                                         | Keep the existing safety stop or wait; execution-mode selection does not waive a gate                                                                                          |
 
+Final pre-B1 worker stops use this route only if all proofs below pass. Use
+the verified pre-B1 parent-continuation route below; otherwise use existing
+recovery/hold.
+
 When more than one row matches, a row that leaves a launch, own claim, or
 potentially live writer unresolved takes precedence over every static
 fallback.
@@ -1210,6 +1214,120 @@ fallback.
 Observed 2026-10-25 in issues #4698 and #4712: static eligibility alone did
 not establish whether the current session could start, observe, wait for, or
 control a worker. The table records the selected response.
+
+##### Verified pre-B1 parent continuation
+
+Use this narrow route only when the original parent is still in the same
+uninterrupted session that dispatched the worker and every proof below passes.
+A pre-B1 stop by itself does not qualify. A runtime result must be final, not
+interim. Reconcile the complete worker/launch history and live process evidence
+to prove the child stopped before B1 and no child process or other writer
+remains. Revalidate the original claim and winning nonce, branch, exact
+worktree, lock, and generated tokens. Inspect the worktree, commit history,
+linked PRs, child report state, and session artifacts for post-B1 work or
+unresolved allocation; a clean `git status` alone is not proof. Any restart,
+incomplete listing, unknown launch, mismatch, unreadable worktree,
+implementation change/commit, existing PR, or unresolved report artifact uses
+existing recovery/hold and never this shortcut. Observed 2026-10-25 on issue
+`#4698`; follow-up issue `#4714` records this narrow recovery.
+
+Reconcile scratch separately. Reuse a valid existing session record and its
+exact canonical root read-only. Use the first-allocation procedure from issue
+`#4685` only
+when complete process, session, and artifact evidence proves no earlier root,
+record, reservation, or child scratch/report artifact was created or used.
+Missing artifacts by themselves do not prove first use; unknown allocation or
+report history is a hold. Never overwrite, delete, unlink, or replace uncertain
+storage.
+
+After the initial evidence passes, read the complete trusted claim/hold
+history for the active claim and classify the child's hold before changing its
+roster state or posting a heartbeat. An active child hold requires a trusted,
+unedited `idd-hold` marker for the active claim under the
+[fan-out hold rule](#orchestrator-fan-out-variant): the trusted actor, agent
+and claim ids, and claim recorded for the roster entry must match, and
+GraphQL `lastEditedAt` must be explicitly `null`. The complete history must
+show that the marker is still active. If no trusted active hold exists, only a
+complete trusted history read can prove that none exists. A missing, edited,
+untrusted, or unreadable marker is not proof of absence; use existing
+recovery/hold. Observed 2026-10-30 on pull request `#4832` for issue `#4714`.
+
+The parent keeps the existing claim and activation nonce in the same worktree
+but does not enter B1 Step 3 yet. Before changing the per-issue role, posting a
+heartbeat, or changing either roster entry, persist a `pending` continuation
+recovery record as `issue-<n>-pre-b1-continuation.json` under the verified
+session scratchpad root. Create it exclusively; never overwrite or follow a
+pre-existing or symlinked file at that path. Later state changes replace only
+this record, using the atomic write and read-back step.
+Record the session id, issue, agent id, claim id, nonce, branch, exact worktree,
+child handle,
+pre-transition roster state, transition stage, intended parent role, intended
+final roster pair, and either the trusted active hold marker id and GitHub
+`created_at` or the complete-history evidence that no active hold exists.
+Write the record atomically and read it back. A conflicting, incomplete, or
+unreadable record uses existing recovery/hold. A pending record keeps the issue
+occupied exactly once and in-flight exactly once, pauses new refills/claims,
+and permits only the verified transition steps below; it blocks all other
+mutation or implementation until its exact effects are reconciled. A restarted
+parent treats a pending record as recovery/hold; it does not authorize this
+same-session shortcut.
+
+If the record proves an active child hold, first record the per-issue role
+change to `parent-continuation` in the pending recovery record. The parent then
+stops renewing that child as its orchestrator and posts an ordinary
+`claimed-by` heartbeat as the continuation worker. Verify the exact returned
+comment when available and the complete trusted claim/hold history; the
+heartbeat ends the hold only when the claim parser recognizes it as a valid
+worker heartbeat newer than the trusted marker. An orchestrator renewal does
+not end the hold. A complete read proving the heartbeat absent follows the
+existing bounded retry. If POST or read-back remains uncertain, keep the
+pending record and the existing child roster entry counted, preserve claim,
+worktree, and storage, and make no further mutation, budget/overlap call,
+refill, or implementation change. If the complete history proves no active
+hold, no hold-ending heartbeat is needed.
+
+If claim freshness requires a heartbeat and there is no active child hold,
+revalidate the claim and post the ordinary parent heartbeat under the existing
+claim rule, including its bounded retry. This renewal does not replace the
+complete-history proof that no hold exists. With an active hold, use the
+continuation-worker heartbeat above after recording the role change; a prior
+orchestrator renewal does not satisfy the hold-ending requirement. Any
+uncertain heartbeat remains pending.
+
+Only after the hold-ending heartbeat is verified, or complete trusted history
+proves no active hold, replace the roster atomically in one update: retain the
+child entry as `disposed` with its handle as history, and add one separate
+`parent-continuation` entry for the same issue, claim, and branch as `running`.
+The continuation entry represents the parent's active execution slot, not a
+dispatched worker; it has no worker handle or report path. Do not dispose the
+child and add the parent entry as separate roster writes. If the atomic update
+or its read-back is incomplete or uncertain, keep the pending record, retain
+the pre-transition child entry as the counted slot, and make no further
+mutation, budget/overlap call, refill, or implementation change until the
+exact effects are reconciled. After verifying both roster entries, atomically
+mark the recovery record `reconciled` and read it back. An uncertain record
+update remains pending and blocks B1.
+
+Count the continuation entry once in `--running`, pass its issue exactly once
+as `--in-flight`, and never count the disposed child. Keep the continuation
+entry active through the parent's terminal phase, then mark it `disposed`.
+Record both entries and the role transition in the run report. Do not enter B1
+Step 3 or start implementation until the hold-ending heartbeat is verified or
+complete trusted history proves no active hold, the recovery record is
+`reconciled`, and current ownership, storage/record state, both roster entries,
+and parent role are reconciled. A `disposed` child entry alone does not prove
+that the hold ended (observed on PR `#4832` for issue `#4714`). Only then
+continue in the same worktree with the original claim and nonce. Keep the
+issue as one occupied slot and in-flight through the
+parent's terminal phase. Pause new refills/claims while the parent implements,
+while managing known siblings normally; a hold on another issue is local, not
+global exhaustion. Resume ordinary discovery/refill after the parent reaches
+terminal and let normal budget/overlap checks choose eligible work. Never
+restart the ended child or mint a claim, nonce, or forced handoff. Do not
+delete a branch/worktree, take over a lock automatically, or reset lost work.
+Report the child's actual pre-work stop and the parent's later result
+separately. Do not append a terminal worker report or F4 result for the pre-B1
+child, and do not change the worker-report schema.
 
 #### Session scratchpad lifecycle
 
@@ -1668,7 +1786,12 @@ Running this variant safely requires:
   valid `claimed-by` (one the claim parser recognizes as a heartbeat for this
   claim, so a trusted, unedited comment with the active claim's ids and
   branch; an anomalous or invalid one is ignored), when the entry is
-  `disposed`, or when the claim is released or superseded. A resumed worker
+  `disposed` under the ordinary fan-out lifecycle, or when the claim is
+  released or superseded. The verified pre-B1 parent-continuation route is
+  stricter: it disposes the child only after a hold-ending heartbeat is
+  verified or complete trusted history proves that no hold is active. There,
+  disposal records the verified hold state; it does not prove that the hold
+  ended. A resumed worker
   follows the normal report path. A released or superseded claim cannot be
   renewed, so the orchestrator marks its entry `stalled` and follows the
   worker-specific recovery, which re-verifies the claim and reports its state
@@ -1962,6 +2085,11 @@ At minimum it lists:
   state it is in when the report is written: `running`, `reporting`,
   `disposed`, or `stalled`, as section 2 of the orchestrator phase file lists
   them.
+- **Pre-B1 parent continuation.** When used, report the child's actual stop,
+  its `disposed` roster entry and historical handle, and the separate active
+  `parent-continuation` entry and its final state. Report the parent's later
+  issue result separately. The child gets no terminal worker report or F4
+  result.
 - **Holds.** Each hold, with its issue number, its start as the hold marker
   defines it, its cap time (72 h after the start, per the held-worker renewal
   rule), the GitHub `created_at` of the latest valid `claimed-by` on its claim,
@@ -1969,7 +2097,11 @@ At minimum it lists:
   hold marker defines (the worker's valid `claimed-by` or, after a restart, any
   valid `claimed-by` newer than the marker, which can be the earlier run's own
   renewal; a release other than the cap release; a supersession; or the
-  entry's disposal). Once no living orchestrator renews a hold, the stale clock
+  entry's disposal under the ordinary fan-out lifecycle). For the verified
+  pre-B1 parent-continuation route, report an active hold as ended only after
+  its hold-ending heartbeat is verified. When complete trusted history proves
+  no hold is active, report that no active hold exists; do not attribute that
+  state to disposal. Once no living orchestrator renews a hold, the stale clock
   (`claim-stale-age`, 24 h by default) counts from the latest valid
   `claimed-by`.
 - **Failures.** Each renewal or release that failed since the run began, even
@@ -2066,6 +2198,10 @@ orchestrator phase's session scratchpad preflight to discover the durable record
 from the session identity and recover the exact report-draft root. A session
 with a new id cannot identify its old claims, and step 1 treats them as not its
 own.
+
+Before roster reconstruction or any Discover/refill step, follow the
+[orchestrator restart scan](idd-helper-scripts.md#orchestrator-restart-scan)
+contract for continuation records.
 
 1. **Find own claims.** For each worktree in `git worktree list --porcelain`,
    list `idd-generated-tokens-*.json` in that worktree's private admin directory

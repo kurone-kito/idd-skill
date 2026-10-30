@@ -9858,6 +9858,34 @@ and that helper detail is the next action.
   worker and no draft, and a draft's own handle when the draft matches the
   claim but no worker is listed: see
   [Orchestrator restart](idd-workflow.md#orchestrator-restart).
+- **Pre-B1 parent continuation:** retain the stopped child's handle as history
+  and replace its roster state atomically with one running
+  `parent-continuation` row. Count that row once for `--running` and its issue
+  once for `--in-flight`; do not create a terminal worker report for the
+  pre-B1 stop. The hold proof and transition record are in
+  [Verified pre-B1 parent continuation](idd-workflow.md#verified-pre-b1-parent-continuation).
+
+### Orchestrator restart scan
+
+Before rebuilding the roster or running Discover, budget, overlap, refill, or
+worker launch after a restart, scan the direct children of the exact verified
+root for `issue-<n>-pre-b1-continuation.json` records. Read matches without
+following symlinks and validate all continuation fields and the transition
+stage. Preserve and hold on non-regular, unreadable, malformed, contradictory,
+or foreign records.
+
+A `pending` record requires existing recovery or a hold and blocks roster
+reconstruction and refill. A `reconciled` record does not authorize the
+uninterrupted-session shortcut after restart; reconcile the original claim,
+nonce, worktree, and parent-continuation state through existing recovery or a
+hold before rebuilding the roster or refilling. Treat these records as
+recovery state, never as worker report drafts or report-store entries. Resume
+ordinary processing only after the scan completes and no record requires
+recovery.
+
+This ordering is preventive; no observed incident yet. The parent-continuation
+scope was documented on 2026-10-25 for issue `#4714`.
+
 - `scope-stopped`: the run ended at a phase boundary that the operator or
   coordinator scoped it to end at (for example, "stop at F2"), with no gate
   blocking it. `held` stays for a gate hold; before this outcome existed, a
