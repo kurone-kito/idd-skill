@@ -7829,7 +7829,12 @@ function runOwnerIdPost(
     githubActions?: boolean;
     targetNumber?: number;
   } = {},
-): { status: number | null; stderr: string; kind: string | undefined } {
+): {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+  kind: string | undefined;
+} {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     IDD_HELPER_ERROR_ENVELOPE: '1',
@@ -7870,7 +7875,12 @@ function runOwnerIdPost(
   } catch {
     kind = undefined;
   }
-  return { status: result.status, stderr: result.stderr, kind };
+  return {
+    status: result.status,
+    stdout: result.stdout,
+    stderr: result.stderr,
+    kind,
+  };
 }
 
 const OWNER_ID_ACQUIRE_OPENER: OwnerIdComment = {
@@ -8438,9 +8448,16 @@ test('authoring-owner acquire fails closed when no trusted marker actors are con
   }
 });
 
-test('authoring-owner --apply checks release-guard and release-complete against the anchor opening marker (#3910)', () => {
+test('authoring-owner --apply checks release modes against the anchor generation (#3910/#4804)', () => {
   for (const mode of ['release-guard', 'release-complete']) {
-    const matching = withOwnerIdStub({ comments: [OWNER_ID_ACQUIRE_OPENER] });
+    const comments =
+      mode === 'release-complete'
+        ? [
+            OWNER_ID_ACQUIRE_OPENER,
+            { id: 102, body: ownerIdBody(ownerIdFlags('release')) },
+          ]
+        : [OWNER_ID_ACQUIRE_OPENER];
+    const matching = withOwnerIdStub({ comments });
     try {
       assert.equal(runOwnerIdPost(ownerIdFlags(mode)).status, 0, mode);
       assert.equal(readOwnerIdLines(matching.postsFile).length, 1, mode);
@@ -8452,9 +8469,7 @@ test('authoring-owner --apply checks release-guard and release-complete against 
       { 'marker-owner': 'owner-other', supersedes: 'owner-other' },
     ];
     for (const overrides of differingOverrides) {
-      const differing = withOwnerIdStub({
-        comments: [OWNER_ID_ACQUIRE_OPENER],
-      });
+      const differing = withOwnerIdStub({ comments });
       try {
         const run = runOwnerIdPost(ownerIdFlags(mode, overrides));
         assert.equal(run.status, 1, mode);
@@ -8540,6 +8555,7 @@ test('authoring-owner acquire and bootstrap reject a trusted closed set in dry-r
         const run = runOwnerIdPost(ownerIdFlags(mode), { apply });
         assert.equal(run.status, 1, `${mode}, apply=${apply}`);
         assert.equal(run.kind, 'gate', `${mode}, apply=${apply}`);
+        assert.equal(run.stdout, '', `${mode}, apply=${apply}`);
         assert.match(
           run.stderr,
           /already closed by a trusted release-complete/,
@@ -11214,17 +11230,12 @@ test('authoring-owner dry run refuses, posting nothing, when the GraphQL read fa
   }
 });
 
-test('authoring-owner --apply refuses a post whose set or anchor differs from the latest marker, in every checked mode (#3899)', () => {
+test('authoring-owner --apply refuses heartbeat or release when set or anchor differs from the latest marker (#3899)', () => {
   const differing: Record<string, string>[] = [
     { set: OWNER_ID_OTHER_SET },
     { anchor: 'o/r#7' },
   ];
-  for (const mode of [
-    'heartbeat',
-    'release',
-    'release-guard',
-    'release-complete',
-  ]) {
+  for (const mode of ['heartbeat', 'release']) {
     for (const latestOverrides of differing) {
       const stub = withOwnerIdStub({
         comments: [
@@ -11252,13 +11263,8 @@ test('authoring-owner --apply refuses a post whose set or anchor differs from th
   }
 });
 
-test('authoring-owner --apply sends a checked mode from another session with the latest marker set and anchor (#3899)', () => {
-  for (const mode of [
-    'heartbeat',
-    'release',
-    'release-guard',
-    'release-complete',
-  ]) {
+test('authoring-owner --apply keeps cross-session heartbeat and release behavior (#3899)', () => {
+  for (const mode of ['heartbeat', 'release']) {
     // The latest marker carries the same set and anchor but session-1, so only
     // the session differs and the post must still be sent.
     const stub = withOwnerIdStub({
@@ -11273,6 +11279,212 @@ test('authoring-owner --apply sends a checked mode from another session with the
       assert.equal(readOwnerIdLines(stub.postsFile).length, 1, mode);
     } finally {
       stub.restore();
+    }
+  }
+});
+
+test('anchor-only release modes reject a session different from the open generation before output or POST (#4804)', () => {
+  const scenarios = [
+    { mode: 'release-guard', latestMode: 'heartbeat' },
+    { mode: 'release-complete', latestMode: 'release' },
+  ] as const;
+  for (const { mode, latestMode } of scenarios) {
+    const comments = [
+      OWNER_ID_ACQUIRE_OPENER,
+      {
+        id: 102,
+        body: ownerIdBody(ownerIdFlags(latestMode, { session: 'session-2' })),
+      },
+    ];
+    for (const apply of [false, true]) {
+      const stub = withOwnerIdStub({ comments });
+      try {
+        const run = runOwnerIdPost(
+          ownerIdFlags(mode, { session: 'session-2' }),
+          { apply },
+        );
+        assert.equal(run.status, 1, `${mode}, apply=${apply}`);
+        assert.equal(run.kind, 'gate', `${mode}, apply=${apply}`);
+        assert.equal(run.stdout, '', `${mode}, apply=${apply}`);
+        assert.match(
+          run.stderr,
+          /requested session session-2 does not match anchor .* open generation session session-1/,
+          `${mode}, apply=${apply}`,
+        );
+        assert.deepEqual(
+          readOwnerIdLines(stub.postsFile),
+          [],
+          `${mode}, apply=${apply}`,
+        );
+      } finally {
+        stub.restore();
+      }
+    }
+  }
+});
+
+test('anchor-only release modes use the open generation session, not the latest marker session (#4804)', () => {
+  const scenarios = [
+    { mode: 'release-guard', latestMode: 'heartbeat' },
+    // The accepted release marker keeps this generation open for completion.
+    { mode: 'release-complete', latestMode: 'release' },
+  ] as const;
+  for (const { mode, latestMode } of scenarios) {
+    const comments = [
+      OWNER_ID_ACQUIRE_OPENER,
+      {
+        id: 102,
+        body: ownerIdBody(ownerIdFlags(latestMode, { session: 'session-2' })),
+      },
+    ];
+    for (const apply of [false, true]) {
+      const stub = withOwnerIdStub({ comments });
+      try {
+        const run = runOwnerIdPost(
+          ownerIdFlags(mode, { session: OWNER_ID_SESSION }),
+          { apply },
+        );
+        assert.equal(run.status, 0, `${mode}, apply=${apply}`);
+        assert.equal(
+          readOwnerIdLines(stub.postsFile).length,
+          apply ? 1 : 0,
+          `${mode}, apply=${apply}`,
+        );
+      } finally {
+        stub.restore();
+      }
+    }
+  }
+});
+
+test('release-complete requires an accepted release marker before output or POST (#4804)', () => {
+  const comments = [
+    OWNER_ID_ACQUIRE_OPENER,
+    // A release guard starts the phase but is not an accepted release.
+    { id: 102, body: ownerIdBody(ownerIdFlags('release-guard')) },
+  ];
+  for (const apply of [false, true]) {
+    const stub = withOwnerIdStub({ comments });
+    try {
+      const run = runOwnerIdPost(ownerIdFlags('release-complete'), { apply });
+      assert.equal(run.status, 1, `apply=${apply}`);
+      assert.equal(run.kind, 'gate', `apply=${apply}`);
+      assert.match(run.stderr, /no accepted release marker in progress/);
+      assert.equal(run.stdout, '', `apply=${apply}`);
+      assert.deepEqual(readOwnerIdLines(stub.postsFile), []);
+    } finally {
+      stub.restore();
+    }
+  }
+});
+
+test('anchor-only release modes match the winning generation owner and set (#4804)', () => {
+  const scenarios = [
+    {
+      mode: 'release-guard',
+      comments: [
+        OWNER_ID_ACQUIRE_OPENER,
+        {
+          id: 102,
+          body: ownerIdBody(
+            ownerIdFlags('acquire', {
+              'marker-owner': 'owner-loser',
+              set: 'set-loser',
+            }),
+          ),
+        },
+      ],
+    },
+    {
+      mode: 'release-complete',
+      comments: [
+        OWNER_ID_ACQUIRE_OPENER,
+        { id: 102, body: ownerIdBody(ownerIdFlags('release')) },
+        {
+          id: 103,
+          body: ownerIdBody(
+            ownerIdFlags('acquire', {
+              'marker-owner': 'owner-loser',
+              set: 'set-loser',
+            }),
+          ),
+        },
+      ],
+    },
+  ] as const;
+  for (const { mode, comments } of scenarios) {
+    for (const apply of [false, true]) {
+      const stub = withOwnerIdStub({ comments: [...comments] });
+      try {
+        const run = runOwnerIdPost(
+          ownerIdFlags(mode, {
+            'marker-owner': 'owner-loser',
+            set: 'set-loser',
+            supersedes: 'owner-loser',
+          }),
+          { apply },
+        );
+        assert.equal(run.status, 1, `${mode}, apply=${apply}`);
+        assert.equal(run.kind, 'gate', `${mode}, apply=${apply}`);
+        assert.match(
+          run.stderr,
+          /requested owner.set owner-loser.set-loser does not match anchor .* winning open generation /,
+          `${mode}, apply=${apply}`,
+        );
+        assert.equal(run.stdout, '', `${mode}, apply=${apply}`);
+        assert.deepEqual(readOwnerIdLines(stub.postsFile), []);
+      } finally {
+        stub.restore();
+      }
+    }
+  }
+});
+
+test('anchor-only release modes fail closed on unreadable or invalid anchor history (#4804)', () => {
+  for (const mode of ['release-guard', 'release-complete']) {
+    for (const apply of [false, true]) {
+      const unreadable = withOwnerIdStub({
+        graphqlReply: { stderr: 'gh: Service Unavailable (HTTP 503)' },
+      });
+      try {
+        const run = runOwnerIdPost(ownerIdFlags(mode), { apply });
+        assert.equal(run.status, 1, `${mode} unreadable, apply=${apply}`);
+        assert.equal(
+          run.kind,
+          'transport',
+          `${mode} unreadable, apply=${apply}`,
+        );
+        assert.equal(run.stdout, '', `${mode} unreadable, apply=${apply}`);
+        assert.deepEqual(readOwnerIdLines(unreadable.postsFile), []);
+      } finally {
+        unreadable.restore();
+      }
+
+      const invalidHistory = withOwnerIdStub({
+        comments: [
+          {
+            id: 101,
+            body: ownerIdBody(ownerIdFlags('release')),
+          },
+        ],
+      });
+      try {
+        const run = runOwnerIdPost(ownerIdFlags(mode), { apply });
+        assert.equal(run.status, 1, `${mode} invalid history, apply=${apply}`);
+        assert.equal(
+          run.kind,
+          'gate',
+          `${mode} invalid history, apply=${apply}`,
+        );
+        assert.match(
+          run.stderr,
+          /owner history of anchor .* cannot be replayed/,
+        );
+        assert.equal(run.stdout, '', `${mode} invalid history, apply=${apply}`);
+        assert.deepEqual(readOwnerIdLines(invalidHistory.postsFile), []);
+      } finally {
+        invalidHistory.restore();
+      }
     }
   }
 });
@@ -11890,6 +12102,10 @@ test('post-idd-marker --help describes the authoring-owner identity check (#3910
   assert.match(
     help,
     /former anchor's owner log is\s+also read recursively, with cycle and depth guards,\s+and must show the matching\s+set\/session release-complete/,
+  );
+  assert.match(
+    help,
+    /session is not compared for heartbeat, release, and resume, so a\s+release from another session stays allowed[\s\S]*anchor-only\s+release-guard and release-complete modes must match the winning open\s+generation's owner, set, and session[\s\S]*release-complete mode also requires\s+an\s+accepted release marker in progress/,
   );
   assert.match(help, /before the next\s+self-anchored generation/);
   assert.match(
