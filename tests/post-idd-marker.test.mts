@@ -10057,6 +10057,18 @@ test('the reviewed legacy closure of #4722 closes its generation only on an exac
   }
   assert.equal(exact.generation, null);
 
+  // The same closure with equivalent casing names the same anchor, so the
+  // exception treats it the same way as the other identity checks do.
+  const casingVariant = replayAnchorLog(
+    legacyClosureLog({ anchor: 'Kurone-Kito/IDD-Skill#4722' }),
+    'Kurone-Kito/IDD-Skill#4722',
+  );
+  assert.equal(
+    'problem' in casingVariant,
+    false,
+    JSON.stringify(casingVariant),
+  );
+
   const refused: Array<[string, AuthoringOwnerProvenanceComment[], string]> = [
     [
       'a release-complete comment ID off by one',

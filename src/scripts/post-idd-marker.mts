@@ -2384,7 +2384,7 @@ export function isAcceptedLegacyClosure(
 ): boolean {
   return ACCEPTED_LEGACY_CLOSURES.some(
     (entry) =>
-      entry.anchor === parsed.anchor &&
+      sameIssueRef(entry.anchor, parsed.anchor) &&
       entry.set === parsed.set &&
       entry.session === parsed.session &&
       entry.owner === parsed.owner &&
