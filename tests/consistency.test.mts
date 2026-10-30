@@ -3106,7 +3106,7 @@ test('pre-B1 parent continuation keeps same-claim safety and truthful reports (#
     for (const required of [
       'A pre-B1 stop may use the [parent-continuation route]',
       'only after its complete proof passes; otherwise use existing recovery/hold',
-      'On restart, scan continuation records before rebuilding the roster or running',
+      '[restart scan](../../docs/idd-helper-scripts.md#orchestrator-restart-scan)',
     ]) {
       assert.ok(text.includes(required), `${path}: missing "${required}"`);
     }
@@ -3137,7 +3137,7 @@ test('orchestrator restart scans continuation records before roster rebuild and 
       'This subsection covers an orchestrating session that restarts',
     );
     const scanStart = text.indexOf(
-      'Before roster reconstruction, Discover, budget, overlap, refill, or worker launch',
+      'Before roster reconstruction or any Discover/refill step, follow the [orchestrator restart scan]',
       restartStart,
     );
     const findClaims = text.indexOf('1. **Find own claims.**', restartStart);
@@ -3152,14 +3152,27 @@ test('orchestrator restart scans continuation records before roster rebuild and 
         reattachWorkers > scanStart,
       `${path}: continuation-record validation must precede restart roster reconstruction`,
     );
-    const scan = text.slice(scanStart, findClaims);
+  }
+
+  for (const path of [
+    'idd-template/docs/idd-helper-scripts.md',
+    'docs/idd-helper-scripts.md',
+  ]) {
+    const text = normalizeWhitespace(readText(path));
+    const scanStart = text.indexOf('### Orchestrator restart scan');
+    assert.ok(scanStart >= 0, `${path}: restart scan contract missing`);
+    const nextHeading = text.indexOf('\n### ', scanStart + 1);
+    const scan = text.slice(
+      scanStart,
+      nextHeading < 0 ? undefined : nextHeading,
+    );
     for (const required of [
       '`issue-<n>-pre-b1-continuation.json` records',
       'without following symlinks',
-      'A `pending` record requires existing recovery/hold',
+      'A `pending` record requires existing recovery or a hold',
       'A `reconciled` record does not authorize the uninterrupted-session shortcut after restart',
-      'Never treat these records as worker report drafts',
-      'no continuation state requires recovery',
+      'never as worker report drafts or report-store entries',
+      'no record requires recovery',
     ]) {
       assert.ok(scan.includes(required), `${path}: missing "${required}"`);
     }
@@ -3652,7 +3665,7 @@ test('fan-out scratchpad preflight provisions and recovers one session root (#46
     );
     assert.match(
       text,
-      /Before Discover, A5, restart, refill, or dispatch, follow the \[session scratchpad lifecycle\]/,
+      /Before Discover, A5, \[restart scan\]\([^)]*\), refill, or dispatch, follow the \[session scratchpad lifecycle\]/,
     );
     assert.match(text, /worker missing-parent guard/);
     assert.match(
