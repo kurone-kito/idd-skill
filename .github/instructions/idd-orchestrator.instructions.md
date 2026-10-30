@@ -29,11 +29,10 @@ dispatch, follow the
 for fan-out; stop on holds. Single-agent skips its scratch. Derive worker
 paths from the verified root; keep the worker missing-parent guard.
 
-Track workers by issue, claim, branch, handle, report path, and state. A
-pre-B1 stop uses the [parent-continuation route](../../docs/idd-workflow.md#verified-pre-b1-parent-continuation);
-it keeps one parent slot and in-flight entry, the child's handle historical,
-and skips its report. On restart, see
-[recovery](../../docs/idd-workflow.md#orchestrator-restart).
+Track workers by issue, claim, branch, handle, report path, and state. A pre-B1
+stop may use the
+[parent-continuation route](../../docs/idd-workflow.md#verified-pre-b1-parent-continuation)
+only after its complete proof passes; otherwise use existing recovery/hold.
 
 ## 3. Dispatch
 

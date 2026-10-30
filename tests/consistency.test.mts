@@ -2954,19 +2954,29 @@ test('pre-B1 parent continuation keeps same-claim safety and truthful reports (#
     'Reuse a valid existing session record and its exact canonical root read-only',
     'complete process, session, and artifact evidence proves no earlier root',
     'unknown allocation or report history is a hold',
-    "an uninterrupted orchestrator's own `claimed-by` renewals do not end a worker hold",
-    "mark the child worker's roster entry `disposed`",
-    'disposal is an existing hold-ending event',
-    'If either roster update is incomplete or uncertain, keep it pending',
-    'If a parent `claimed-by` heartbeat is due for claim freshness',
-    'The parent renewal is not evidence that a hold ended',
-    'the complete trusted claim/hold history',
-    'A complete read proving the parent heartbeat absent follows the existing bounded retry',
+    'A pre-B1 stop by itself does not qualify',
+    'An active child hold requires a trusted, unedited `idd-hold` marker',
+    'GraphQL `lastEditedAt` must be explicitly `null`',
+    'only a complete trusted history read can prove that none exists',
+    'A missing, edited, untrusted, or unreadable marker is not proof of absence',
+    'persist a `pending` continuation recovery record as `issue-<n>-pre-b1-continuation.json` under the verified session scratchpad root',
+    'Never overwrite an existing or symlinked record',
+    'transition stage, intended parent role, intended final roster pair',
+    'Write the record atomically and read it back',
+    'A restarted parent treats a pending record as recovery/hold',
+    'first record the per-issue role change to `parent-continuation` in the pending recovery record',
+    'posts an ordinary `claimed-by` heartbeat as the continuation worker',
+    'the heartbeat ends the hold only when the claim parser recognizes it as a valid worker heartbeat newer than the trusted marker',
+    'An orchestrator renewal does not end the hold',
+    'A complete read proving the heartbeat absent follows the existing bounded retry',
+    'If the complete history proves no active hold, no hold-ending heartbeat is needed',
+    'replace the roster atomically in one update',
+    'Do not dispose the child and add the parent entry as separate roster writes',
+    'If the atomic update or its read-back is incomplete or uncertain',
+    'atomically mark the recovery record `reconciled` and read it back',
     'preserve claim, worktree, and storage',
-    'retain exactly one execution slot and the issue once in the in-flight overlap set',
-    'make no budget or overlap call, refill, or further mutation until the exact effects are reconciled',
-    'keep two distinct roster entries',
-    'one separate `parent-continuation` entry for the same issue, claim, and branch is `running`',
+    'make no further mutation, budget/overlap call, refill, or implementation change',
+    'add one separate `parent-continuation` entry for the same issue, claim, and branch as `running`',
     'it has no worker handle or report path',
     'Count the continuation entry once in `--running`',
     'pass its issue exactly once as `--in-flight`',
@@ -3004,22 +3014,24 @@ test('pre-B1 parent continuation keeps same-claim safety and truthful reports (#
       );
     }
     const noEarlyB1 = route.indexOf('but does not enter B1 Step 3 yet');
-    const parentRenewalRule = route.indexOf(
-      "an uninterrupted orchestrator's own `claimed-by` renewals do not end a worker hold",
+    const holdProof = route.indexOf(
+      'An active child hold requires a trusted, unedited `idd-hold` marker',
     );
-    const disposal = route.indexOf(
-      "mark the child worker's roster entry `disposed`",
+    const pendingRecord = route.indexOf(
+      'persist a `pending` continuation recovery record',
     );
-    const parentHeartbeat = route.indexOf(
-      'If a parent `claimed-by` heartbeat is due for claim freshness',
+    const roleChange = route.indexOf(
+      'first record the per-issue role change to `parent-continuation`',
     );
-    const positiveRead = route.indexOf(
-      'The parent renewal is not evidence that a hold ended',
+    const heartbeat = route.indexOf(
+      'posts an ordinary `claimed-by` heartbeat as the continuation worker',
     );
-    const absentRead = route.indexOf(
-      'A complete read proving the parent heartbeat absent',
+    const atomicRoster = route.indexOf(
+      'replace the roster atomically in one update',
     );
-    const pairedRosterState = route.indexOf('keep two distinct roster entries');
+    const reconciledRecord = route.indexOf(
+      'atomically mark the recovery record `reconciled` and read it back',
+    );
     const budgetCount = route.indexOf(
       'Count the continuation entry once in `--running`',
     );
@@ -3036,23 +3048,25 @@ test('pre-B1 parent continuation keeps same-claim safety and truthful reports (#
       'Only then continue in the same worktree with the original claim and nonce.',
     );
     assert.ok(
-      noEarlyB1 >= 0 &&
-        parentRenewalRule > noEarlyB1 &&
-        disposal > parentRenewalRule &&
-        parentHeartbeat > disposal &&
-        positiveRead > parentHeartbeat &&
-        absentRead > positiveRead &&
-        pairedRosterState > absentRead &&
-        budgetCount > pairedRosterState &&
+      holdProof >= 0 &&
+        noEarlyB1 > holdProof &&
+        pendingRecord > noEarlyB1 &&
+        roleChange > pendingRecord &&
+        heartbeat > roleChange &&
+        atomicRoster > heartbeat &&
+        reconciledRecord > atomicRoster &&
+        budgetCount > reconciledRecord &&
         overlapCount > budgetCount &&
         parentRole > overlapCount &&
         b1Gate > parentRole &&
         b1Continuation > b1Gate,
-      `${path}: B1 must begin only after the hold and ownership/storage/role reconciliation`,
+      `${path}: B1 must follow hold proof, pending record, verified transition, and atomic roster reconciliation`,
     );
     const b1GateText = route.slice(b1Gate, b1Continuation);
     for (const requirement of [
-      'until the child hold is confirmed ended by a valid worker heartbeat or the verified `disposed` roster state (or complete trusted history confirms there is no active hold)',
+      'until the hold-ending heartbeat is verified or complete trusted history proves no active hold',
+      'the recovery record is `reconciled`',
+      'A `disposed` child entry alone does not prove that the hold ended',
       'current ownership, storage/record state, both roster entries, and parent role are reconciled',
     ]) {
       assert.ok(
@@ -3088,10 +3102,8 @@ test('pre-B1 parent continuation keeps same-claim safety and truthful reports (#
   ]) {
     const text = normalizeWhitespace(readText(path));
     for (const required of [
-      'pre-B1 stop uses the [parent-continuation route]',
-      'one parent slot and in-flight entry',
-      "the child's handle historical",
-      'skips its report',
+      'A pre-B1 stop may use the [parent-continuation route]',
+      'only after its complete proof passes; otherwise use existing recovery/hold',
     ]) {
       assert.ok(text.includes(required), `${path}: missing "${required}"`);
     }

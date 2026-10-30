@@ -9858,6 +9858,12 @@ and that helper detail is the next action.
   worker and no draft, and a draft's own handle when the draft matches the
   claim but no worker is listed: see
   [Orchestrator restart](idd-workflow.md#orchestrator-restart).
+- **Pre-B1 parent continuation:** retain the stopped child's handle as history
+  and replace its roster state atomically with one running
+  `parent-continuation` row. Count that row once for `--running` and its issue
+  once for `--in-flight`; do not create a terminal worker report for the
+  pre-B1 stop. The hold proof and transition record are in
+  [Verified pre-B1 parent continuation](idd-workflow.md#verified-pre-b1-parent-continuation).
 - `scope-stopped`: the run ended at a phase boundary that the operator or
   coordinator scoped it to end at (for example, "stop at F2"), with no gate
   blocking it. `held` stays for a gate hold; before this outcome existed, a
