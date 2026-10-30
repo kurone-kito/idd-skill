@@ -1949,6 +1949,30 @@ function ownerMarkerReplayFieldProblem(parsed) {
     validateAuthoringOwnerSupersedesModeCoupling(fields)
   );
 }
+export const ACCEPTED_LEGACY_CLOSURES = [
+  {
+    anchor: 'kurone-kito/idd-skill#4722',
+    set: 'set-d90fd2d2-e9b0-4279-be22-c14f5e531ded',
+    session: 'session-b4d93e49-f4a2-4cc1-b195-f6ebf48355bb',
+    owner: 'owner-a0bfac08-125e-4c1a-bea7-473cc6a3f793',
+    releaseCompleteId: 6509470897,
+    snapshotSha256:
+      '6a706e6192793af16bba8d7598046b5069e508368c62c7769c285b87fe2e2843',
+    childReleaseMarkerId: 6509444207,
+  },
+];
+/** True only when the release-complete matches a reviewed closure exactly. */
+export function isAcceptedLegacyClosure(parsed, releaseCompleteId) {
+  return ACCEPTED_LEGACY_CLOSURES.some(
+    (entry) =>
+      sameIssueRef(entry.anchor, parsed.anchor) &&
+      entry.set === parsed.set &&
+      entry.session === parsed.session &&
+      entry.owner === parsed.owner &&
+      entry.releaseCompleteId === releaseCompleteId &&
+      entry.snapshotSha256 === parsed.snapshotSha256,
+  );
+}
 function advanceAnchorOwnerGeneration(state, parsed, latest) {
   const { open, closedSets, closedGenerations, losers } = state;
   const malformed = ownerMarkerReplayFieldProblem(parsed);
@@ -2048,7 +2072,14 @@ function advanceAnchorOwnerGeneration(state, parsed, latest) {
         };
       }
       if (parsed.mode === 'release-complete') {
-        if (!open.releasing || open.releaseMarker === null) {
+        const acceptedLegacy =
+          open.releasing &&
+          open.releaseMarker === null &&
+          isAcceptedLegacyClosure(parsed, latest.id);
+        if (
+          !acceptedLegacy &&
+          (!open.releasing || open.releaseMarker === null)
+        ) {
           return {
             problem: `owner marker ${latest.id} (mode=release-complete) closes a generation with no accepted release marker in progress`,
           };

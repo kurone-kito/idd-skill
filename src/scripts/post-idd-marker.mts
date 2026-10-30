@@ -2355,6 +2355,56 @@ function ownerMarkerReplayFieldProblem(
   );
 }
 
+/**
+ * One reviewed closure that the replay accepts without an anchor
+ * `mode=release` marker. The set was released on 2026-10-29 with a
+ * `release-guard` and a `release-complete`, but its anchor log has no
+ * anchor release marker, which the release preflight in
+ * `skills/issue-authoring/references/contract.md` requires. The closure is
+ * recorded in kurone-kito/idd-skill#4834, and option A there, a narrow
+ * accepted closure, was approved on 2026-10-30 (implemented in
+ * kurone-kito/idd-skill#4837). Only the exact identities below are accepted.
+ */
+export interface AcceptedLegacyClosure {
+  readonly anchor: string;
+  readonly set: string;
+  readonly session: string;
+  readonly owner: string;
+  readonly releaseCompleteId: number;
+  readonly snapshotSha256: string;
+  /** Audit record: the child release marker that the release recorded on #4792. */
+  readonly childReleaseMarkerId: number;
+}
+
+export const ACCEPTED_LEGACY_CLOSURES: readonly AcceptedLegacyClosure[] = [
+  {
+    anchor: 'kurone-kito/idd-skill#4722',
+    set: 'set-d90fd2d2-e9b0-4279-be22-c14f5e531ded',
+    session: 'session-b4d93e49-f4a2-4cc1-b195-f6ebf48355bb',
+    owner: 'owner-a0bfac08-125e-4c1a-bea7-473cc6a3f793',
+    releaseCompleteId: 6509470897,
+    snapshotSha256:
+      '6a706e6192793af16bba8d7598046b5069e508368c62c7769c285b87fe2e2843',
+    childReleaseMarkerId: 6509444207,
+  },
+];
+
+/** True only when the release-complete matches a reviewed closure exactly. */
+export function isAcceptedLegacyClosure(
+  parsed: ParsedAuthoringOwnerMarker,
+  releaseCompleteId: number,
+): boolean {
+  return ACCEPTED_LEGACY_CLOSURES.some(
+    (entry) =>
+      sameIssueRef(entry.anchor, parsed.anchor) &&
+      entry.set === parsed.set &&
+      entry.session === parsed.session &&
+      entry.owner === parsed.owner &&
+      entry.releaseCompleteId === releaseCompleteId &&
+      entry.snapshotSha256 === parsed.snapshotSha256,
+  );
+}
+
 function advanceAnchorOwnerGeneration(
   state: AnchorOwnerReplayState,
   parsed: ParsedAuthoringOwnerMarker,
@@ -2458,7 +2508,14 @@ function advanceAnchorOwnerGeneration(
         };
       }
       if (parsed.mode === 'release-complete') {
-        if (!open.releasing || open.releaseMarker === null) {
+        const acceptedLegacy =
+          open.releasing &&
+          open.releaseMarker === null &&
+          isAcceptedLegacyClosure(parsed, latest.id);
+        if (
+          !acceptedLegacy &&
+          (!open.releasing || open.releaseMarker === null)
+        ) {
           return {
             problem: `owner marker ${latest.id} (mode=release-complete) closes a generation with no accepted release marker in progress`,
           };
