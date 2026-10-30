@@ -202,6 +202,12 @@ export const SCHEMA_TYPE_CATALOG = [
       'docs/issue-authoring-skill.md (caller-composed stdin payload)',
   },
   {
+    schemaFile: 'distribution-manifest.schema.json',
+    exportedType: 'DistributionManifest (test-local; no runtime type)',
+    owningModule:
+      'tests/schema-type-reconciliation.test.mts (test-local; no runtime module)',
+  },
+  {
     schemaFile: 'provisional-decision-record.schema.json',
     exportedType: 'ProvisionalDecisionRecord',
     owningModule: 'src/scripts/provisional-decision-state.mts',
@@ -320,6 +326,12 @@ export const SCHEMA_OUTPUT_COVERAGE: readonly CoverageEntry[] = [
       'token-cost-event.schema.json is a source-repo measurement contract, ' +
       'not a helper stdout envelope -- fixture coverage lives in ' +
       'discoverSchemaCases / scripts/validate-schemas.mjs.',
+  },
+  {
+    schema: 'distribution-manifest.schema.json',
+    status: 'uncovered',
+    reason:
+      'no runtime builder for the manifest yet; the listing digest runs only in the test',
   },
   {
     schema: 'token-cost-sample.schema.json',
