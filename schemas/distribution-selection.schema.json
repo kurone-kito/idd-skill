@@ -1,0 +1,875 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kurone-kito.github.io/idd-skill/schemas/distribution-selection.schema.json",
+  "title": "IDD resolved distribution selection",
+  "description": "Reports the immutable set selected for a repository and session, the rule that selected it, and any required recovery action without changing state.",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "repository",
+    "session",
+    "verdict",
+    "selected",
+    "previousVerifiedSet",
+    "packageVersion",
+    "preparation",
+    "compatibility",
+    "source",
+    "recovery",
+    "receipt",
+    "mutation"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {
+      "type": "integer",
+      "enum": [
+        1
+      ],
+      "description": "Selects the resolved-selection report contract version."
+    },
+    "repository": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$(?![\\s\\S])",
+      "description": "Names the exact owner/repo for which the report applies, or is null when no repository applies, including outside Git. Exact matching prevents a report for one repository from applying to another; resolver children enforce it at run time."
+    },
+    "session": {
+      "type": "object",
+      "required": [
+        "id",
+        "binding"
+      ],
+      "additionalProperties": false,
+      "description": "Identifies the session whose immutable selection is reported.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Names the non-empty session identifier."
+        },
+        "binding": {
+          "type": "string",
+          "enum": [
+            "bound",
+            "unbound"
+          ],
+          "description": "Reports whether this session already has a binding. A `session-bound` verdict requires `bound` (rule 3); `bound` requires a verdict of `session-bound`, `preparation-missing`, `migration-required`, or `not-verified-usable` (rule 13)."
+        }
+      }
+    },
+    "verdict": {
+      "type": "string",
+      "enum": [
+        "coherent-candidate",
+        "distinct-builds",
+        "not-verified-usable",
+        "pin-preserved",
+        "session-bound",
+        "migration-required",
+        "preparation-missing"
+      ],
+      "description": "Reports the first of the following values that holds, in this order: `not-verified-usable` when a manifest fact fails or receipt is `conflict`; `migration-required` when installed instructions have unknown provenance or bytes that differ from manifest files, or source is `legacy-receipt` or `unknown`, or receipt is `unsupported-legacy`; `preparation-missing`; `session-bound` when session.binding is `bound`; `pin-preserved` when source is `repository-pin`; `distinct-builds` when compared packageVersion strings are equal but commits differ; otherwise `coherent-candidate`. `coherent-candidate` means every component shares one sourceCommit and carries the files and digest required by child A. `distinct-builds` is not compatibility: a matching package version or bin name alone is insufficient. `not-verified-usable` covers missing commands, incompatible flags, schema or markers, absent identity, schema-invalid manifests including missing or unknown manifest provenance, equal sourceCommit with different component digests, and components from mixed commits; mixed commits are never compatible. An identity absent only because installed instructions have unknown or mismatched provenance is `migration-required`. `pin-preserved` means an explicit repository pin wins over a newer global default. `session-bound` keeps an existing session set when the current link moves. `migration-required` never invents an identity. `preparation-missing` identifies a proved set whose required preparation is absent."
+    },
+    "selected": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "required": [
+        "sourceCommit",
+        "components"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "sourceCommit": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$(?![\\s\\S])",
+          "description": "Proves identity. Names the full source commit from which every component was built."
+        },
+        "components": {
+          "type": "object",
+          "description": "Groups the immutable instructions, skill bundle, and helper components.",
+          "required": [
+            "instructions",
+            "skillBundles",
+            "helper"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "instructions": {
+              "type": "object",
+              "description": "Proves identity. Defines the complete installed instruction component rooted at idd-template/.",
+              "required": [
+                "location",
+                "provenance",
+                "files",
+                "digest"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "location": {
+                  "type": "string",
+                  "format": "uri",
+                  "pattern": "^https://[^/?#]+/[^/?#]+/[^/?#]+/(tree|blob)/[0-9a-f]{40}/idd-template$(?![\\s\\S])",
+                  "description": "Proves usability only. Gives a commit-pinned forge URL whose path names the instructions component root; its commit must equal sourceCommit."
+                },
+                "provenance": {
+                  "type": "object",
+                  "description": "Proves identity. Records how the instruction component bytes were read and their source commit.",
+                  "required": [
+                    "kind",
+                    "commit"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "checkout",
+                        "archive"
+                      ],
+                      "description": "Records the provenance method as checkout or archive; it does not change build identity."
+                    },
+                    "commit": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{40}$(?![\\s\\S])",
+                      "description": "Proves identity. Records the source commit and must equal sourceCommit."
+                    }
+                  }
+                },
+                "files": {
+                  "type": "array",
+                  "minItems": 1,
+                  "description": "Proves identity. Lists every instructions file relative to the component root with its SHA-256.",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "path",
+                      "sha256"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "path": {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "^(?!/)(?!.*\\\\)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*[\\r\\n\\u2028\\u2029]).+$",
+                        "description": "Proves identity. Names one non-empty relative file path using slash separators without a parent-directory segment or line terminator."
+                      },
+                      "sha256": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$(?![\\s\\S])",
+                        "description": "Proves identity. Gives the lowercase SHA-256 of this file's bytes."
+                      }
+                    }
+                  }
+                },
+                "digest": {
+                  "type": "string",
+                  "pattern": "^sha256:[0-9a-f]{64}$(?![\\s\\S])",
+                  "description": "Proves identity. Hashes the bytewise path-sorted listing of file SHA-256 values and paths."
+                }
+              }
+            },
+            "skillBundles": {
+              "type": "object",
+              "description": "Groups the two independently identified skill bundle components.",
+              "required": [
+                "issue-authoring",
+                "idd-spec-audit"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "issue-authoring": {
+                  "type": "object",
+                  "description": "Proves identity. Defines every file in the issue-authoring skill bundle.",
+                  "required": [
+                    "location",
+                    "provenance",
+                    "files",
+                    "digest"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "location": {
+                      "type": "string",
+                      "format": "uri",
+                      "pattern": "^https://[^/?#]+/[^/?#]+/[^/?#]+/(tree|blob)/[0-9a-f]{40}/skills/issue-authoring$(?![\\s\\S])",
+                      "description": "Proves usability only. Gives a commit-pinned forge URL whose path names the issue-authoring bundle root; its commit must equal sourceCommit."
+                    },
+                    "provenance": {
+                      "type": "object",
+                      "description": "Proves identity. Records how the issue-authoring bundle bytes were read and their source commit.",
+                      "required": [
+                        "kind",
+                        "commit"
+                      ],
+                      "additionalProperties": false,
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "checkout",
+                            "archive"
+                          ],
+                          "description": "Records the provenance method as checkout or archive; it does not change build identity."
+                        },
+                        "commit": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{40}$(?![\\s\\S])",
+                          "description": "Proves identity. Records the source commit and must equal sourceCommit."
+                        }
+                      }
+                    },
+                    "files": {
+                      "type": "array",
+                      "minItems": 1,
+                      "description": "Proves identity. Lists every issue-authoring bundle file relative to the component root with its SHA-256.",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "path",
+                          "sha256"
+                        ],
+                        "additionalProperties": false,
+                        "properties": {
+                          "path": {
+                            "type": "string",
+                            "minLength": 1,
+                            "pattern": "^(?!/)(?!.*\\\\)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*[\\r\\n\\u2028\\u2029]).+$",
+                            "description": "Proves identity. Names one non-empty relative file path using slash separators without a parent-directory segment or line terminator."
+                          },
+                          "sha256": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{64}$(?![\\s\\S])",
+                            "description": "Proves identity. Gives the lowercase SHA-256 of this file's bytes."
+                          }
+                        }
+                      }
+                    },
+                    "digest": {
+                      "type": "string",
+                      "pattern": "^sha256:[0-9a-f]{64}$(?![\\s\\S])",
+                      "description": "Proves identity. Hashes the bytewise path-sorted listing of file SHA-256 values and paths."
+                    }
+                  }
+                },
+                "idd-spec-audit": {
+                  "type": "object",
+                  "description": "Proves identity. Defines every file in the idd-spec-audit skill bundle.",
+                  "required": [
+                    "location",
+                    "provenance",
+                    "files",
+                    "digest"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "location": {
+                      "type": "string",
+                      "format": "uri",
+                      "pattern": "^https://[^/?#]+/[^/?#]+/[^/?#]+/(tree|blob)/[0-9a-f]{40}/skills/idd-spec-audit$(?![\\s\\S])",
+                      "description": "Proves usability only. Gives a commit-pinned forge URL whose path names the idd-spec-audit bundle root; its commit must equal sourceCommit."
+                    },
+                    "provenance": {
+                      "type": "object",
+                      "description": "Proves identity. Records how the idd-spec-audit bundle bytes were read and their source commit.",
+                      "required": [
+                        "kind",
+                        "commit"
+                      ],
+                      "additionalProperties": false,
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "checkout",
+                            "archive"
+                          ],
+                          "description": "Records the provenance method as checkout or archive; it does not change build identity."
+                        },
+                        "commit": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{40}$(?![\\s\\S])",
+                          "description": "Proves identity. Records the source commit and must equal sourceCommit."
+                        }
+                      }
+                    },
+                    "files": {
+                      "type": "array",
+                      "minItems": 1,
+                      "description": "Proves identity. Lists every idd-spec-audit bundle file relative to the component root with its SHA-256.",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "path",
+                          "sha256"
+                        ],
+                        "additionalProperties": false,
+                        "properties": {
+                          "path": {
+                            "type": "string",
+                            "minLength": 1,
+                            "pattern": "^(?!/)(?!.*\\\\)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*[\\r\\n\\u2028\\u2029]).+$",
+                            "description": "Proves identity. Names one non-empty relative file path using slash separators without a parent-directory segment or line terminator."
+                          },
+                          "sha256": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{64}$(?![\\s\\S])",
+                            "description": "Proves identity. Gives the lowercase SHA-256 of this file's bytes."
+                          }
+                        }
+                      }
+                    },
+                    "digest": {
+                      "type": "string",
+                      "pattern": "^sha256:[0-9a-f]{64}$(?![\\s\\S])",
+                      "description": "Proves identity. Hashes the bytewise path-sorted listing of file SHA-256 values and paths."
+                    }
+                  }
+                }
+              }
+            },
+            "helper": {
+              "type": "object",
+              "description": "Proves identity. Defines the helper entry's runtime closure and invocation.",
+              "required": [
+                "location",
+                "provenance",
+                "files",
+                "digest",
+                "invocation"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "location": {
+                  "type": "string",
+                  "format": "uri",
+                  "pattern": "^https://[^/?#]+/[^/?#]+/[^/?#]+/(tree|blob)/[0-9a-f]{40}$(?![\\s\\S])",
+                  "description": "Proves usability only. Gives a commit-pinned forge URL for the repository root with no path after the commit; its commit must equal sourceCommit."
+                },
+                "provenance": {
+                  "type": "object",
+                  "description": "Proves identity. Records how the helper component bytes were read and their source commit.",
+                  "required": [
+                    "kind",
+                    "commit"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "checkout",
+                        "archive"
+                      ],
+                      "description": "Records the provenance method as checkout or archive; it does not change build identity."
+                    },
+                    "commit": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{40}$(?![\\s\\S])",
+                      "description": "Proves identity. Records the source commit and must equal sourceCommit."
+                    }
+                  }
+                },
+                "files": {
+                  "type": "array",
+                  "minItems": 1,
+                  "description": "Proves identity. Lists the helper entry's runtime closure files relative to the repository root with their SHA-256 values.",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "path",
+                      "sha256"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "path": {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "^(?!/)(?!.*\\\\)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*[\\r\\n\\u2028\\u2029]).+$",
+                        "description": "Proves identity. Names one non-empty relative file path using slash separators without a parent-directory segment or line terminator."
+                      },
+                      "sha256": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$(?![\\s\\S])",
+                        "description": "Proves identity. Gives the lowercase SHA-256 of this file's bytes."
+                      }
+                    }
+                  }
+                },
+                "digest": {
+                  "type": "string",
+                  "pattern": "^sha256:[0-9a-f]{64}$(?![\\s\\S])",
+                  "description": "Proves identity. Hashes the bytewise path-sorted listing of file SHA-256 values and paths."
+                },
+                "invocation": {
+                  "type": "object",
+                  "description": "Proves usability only. Names the executable helper command and its arguments.",
+                  "required": [
+                    "command",
+                    "argv"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "command": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "Proves usability only. Names the helper entry and must equal one path in helper.files."
+                    },
+                    "argv": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Proves usability only. Gives the arguments following the helper command and may be empty."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "description": "Reports the selected identity for `coherent-candidate`, `pin-preserved`, `session-bound`, and `preparation-missing`, and is null for `distinct-builds`, `not-verified-usable`, and `migration-required` (rule 1). For `preparation-missing`, it identifies the set to prepare. Identity equality is decided by sourceCommit with each component digest and provenance.commit; location and invocation prove usability only. `compatibility: compatible` requires a non-null selected identity (rule 11)."
+    },
+    "previousVerifiedSet": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "required": [
+        "sourceCommit",
+        "components"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "sourceCommit": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$(?![\\s\\S])",
+          "description": "Proves identity. Names the full source commit from which every component was built."
+        },
+        "components": {
+          "type": "object",
+          "description": "Groups the immutable instructions, skill bundle, and helper components.",
+          "required": [
+            "instructions",
+            "skillBundles",
+            "helper"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "instructions": {
+              "type": "object",
+              "description": "Proves identity. Defines the complete installed instruction component rooted at idd-template/.",
+              "required": [
+                "location",
+                "provenance",
+                "files",
+                "digest"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "location": {
+                  "type": "string",
+                  "format": "uri",
+                  "pattern": "^https://[^/?#]+/[^/?#]+/[^/?#]+/(tree|blob)/[0-9a-f]{40}/idd-template$(?![\\s\\S])",
+                  "description": "Proves usability only. Gives a commit-pinned forge URL whose path names the instructions component root; its commit must equal sourceCommit."
+                },
+                "provenance": {
+                  "type": "object",
+                  "description": "Proves identity. Records how the instruction component bytes were read and their source commit.",
+                  "required": [
+                    "kind",
+                    "commit"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "checkout",
+                        "archive"
+                      ],
+                      "description": "Records the provenance method as checkout or archive; it does not change build identity."
+                    },
+                    "commit": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{40}$(?![\\s\\S])",
+                      "description": "Proves identity. Records the source commit and must equal sourceCommit."
+                    }
+                  }
+                },
+                "files": {
+                  "type": "array",
+                  "minItems": 1,
+                  "description": "Proves identity. Lists every instructions file relative to the component root with its SHA-256.",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "path",
+                      "sha256"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "path": {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "^(?!/)(?!.*\\\\)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*[\\r\\n\\u2028\\u2029]).+$",
+                        "description": "Proves identity. Names one non-empty relative file path using slash separators without a parent-directory segment or line terminator."
+                      },
+                      "sha256": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$(?![\\s\\S])",
+                        "description": "Proves identity. Gives the lowercase SHA-256 of this file's bytes."
+                      }
+                    }
+                  }
+                },
+                "digest": {
+                  "type": "string",
+                  "pattern": "^sha256:[0-9a-f]{64}$(?![\\s\\S])",
+                  "description": "Proves identity. Hashes the bytewise path-sorted listing of file SHA-256 values and paths."
+                }
+              }
+            },
+            "skillBundles": {
+              "type": "object",
+              "description": "Groups the two independently identified skill bundle components.",
+              "required": [
+                "issue-authoring",
+                "idd-spec-audit"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "issue-authoring": {
+                  "type": "object",
+                  "description": "Proves identity. Defines every file in the issue-authoring skill bundle.",
+                  "required": [
+                    "location",
+                    "provenance",
+                    "files",
+                    "digest"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "location": {
+                      "type": "string",
+                      "format": "uri",
+                      "pattern": "^https://[^/?#]+/[^/?#]+/[^/?#]+/(tree|blob)/[0-9a-f]{40}/skills/issue-authoring$(?![\\s\\S])",
+                      "description": "Proves usability only. Gives a commit-pinned forge URL whose path names the issue-authoring bundle root; its commit must equal sourceCommit."
+                    },
+                    "provenance": {
+                      "type": "object",
+                      "description": "Proves identity. Records how the issue-authoring bundle bytes were read and their source commit.",
+                      "required": [
+                        "kind",
+                        "commit"
+                      ],
+                      "additionalProperties": false,
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "checkout",
+                            "archive"
+                          ],
+                          "description": "Records the provenance method as checkout or archive; it does not change build identity."
+                        },
+                        "commit": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{40}$(?![\\s\\S])",
+                          "description": "Proves identity. Records the source commit and must equal sourceCommit."
+                        }
+                      }
+                    },
+                    "files": {
+                      "type": "array",
+                      "minItems": 1,
+                      "description": "Proves identity. Lists every issue-authoring bundle file relative to the component root with its SHA-256.",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "path",
+                          "sha256"
+                        ],
+                        "additionalProperties": false,
+                        "properties": {
+                          "path": {
+                            "type": "string",
+                            "minLength": 1,
+                            "pattern": "^(?!/)(?!.*\\\\)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*[\\r\\n\\u2028\\u2029]).+$",
+                            "description": "Proves identity. Names one non-empty relative file path using slash separators without a parent-directory segment or line terminator."
+                          },
+                          "sha256": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{64}$(?![\\s\\S])",
+                            "description": "Proves identity. Gives the lowercase SHA-256 of this file's bytes."
+                          }
+                        }
+                      }
+                    },
+                    "digest": {
+                      "type": "string",
+                      "pattern": "^sha256:[0-9a-f]{64}$(?![\\s\\S])",
+                      "description": "Proves identity. Hashes the bytewise path-sorted listing of file SHA-256 values and paths."
+                    }
+                  }
+                },
+                "idd-spec-audit": {
+                  "type": "object",
+                  "description": "Proves identity. Defines every file in the idd-spec-audit skill bundle.",
+                  "required": [
+                    "location",
+                    "provenance",
+                    "files",
+                    "digest"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "location": {
+                      "type": "string",
+                      "format": "uri",
+                      "pattern": "^https://[^/?#]+/[^/?#]+/[^/?#]+/(tree|blob)/[0-9a-f]{40}/skills/idd-spec-audit$(?![\\s\\S])",
+                      "description": "Proves usability only. Gives a commit-pinned forge URL whose path names the idd-spec-audit bundle root; its commit must equal sourceCommit."
+                    },
+                    "provenance": {
+                      "type": "object",
+                      "description": "Proves identity. Records how the idd-spec-audit bundle bytes were read and their source commit.",
+                      "required": [
+                        "kind",
+                        "commit"
+                      ],
+                      "additionalProperties": false,
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "checkout",
+                            "archive"
+                          ],
+                          "description": "Records the provenance method as checkout or archive; it does not change build identity."
+                        },
+                        "commit": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{40}$(?![\\s\\S])",
+                          "description": "Proves identity. Records the source commit and must equal sourceCommit."
+                        }
+                      }
+                    },
+                    "files": {
+                      "type": "array",
+                      "minItems": 1,
+                      "description": "Proves identity. Lists every idd-spec-audit bundle file relative to the component root with its SHA-256.",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "path",
+                          "sha256"
+                        ],
+                        "additionalProperties": false,
+                        "properties": {
+                          "path": {
+                            "type": "string",
+                            "minLength": 1,
+                            "pattern": "^(?!/)(?!.*\\\\)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*[\\r\\n\\u2028\\u2029]).+$",
+                            "description": "Proves identity. Names one non-empty relative file path using slash separators without a parent-directory segment or line terminator."
+                          },
+                          "sha256": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{64}$(?![\\s\\S])",
+                            "description": "Proves identity. Gives the lowercase SHA-256 of this file's bytes."
+                          }
+                        }
+                      }
+                    },
+                    "digest": {
+                      "type": "string",
+                      "pattern": "^sha256:[0-9a-f]{64}$(?![\\s\\S])",
+                      "description": "Proves identity. Hashes the bytewise path-sorted listing of file SHA-256 values and paths."
+                    }
+                  }
+                }
+              }
+            },
+            "helper": {
+              "type": "object",
+              "description": "Proves identity. Defines the helper entry's runtime closure and invocation.",
+              "required": [
+                "location",
+                "provenance",
+                "files",
+                "digest",
+                "invocation"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "location": {
+                  "type": "string",
+                  "format": "uri",
+                  "pattern": "^https://[^/?#]+/[^/?#]+/[^/?#]+/(tree|blob)/[0-9a-f]{40}$(?![\\s\\S])",
+                  "description": "Proves usability only. Gives a commit-pinned forge URL for the repository root with no path after the commit; its commit must equal sourceCommit."
+                },
+                "provenance": {
+                  "type": "object",
+                  "description": "Proves identity. Records how the helper component bytes were read and their source commit.",
+                  "required": [
+                    "kind",
+                    "commit"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "checkout",
+                        "archive"
+                      ],
+                      "description": "Records the provenance method as checkout or archive; it does not change build identity."
+                    },
+                    "commit": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{40}$(?![\\s\\S])",
+                      "description": "Proves identity. Records the source commit and must equal sourceCommit."
+                    }
+                  }
+                },
+                "files": {
+                  "type": "array",
+                  "minItems": 1,
+                  "description": "Proves identity. Lists the helper entry's runtime closure files relative to the repository root with their SHA-256 values.",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "path",
+                      "sha256"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "path": {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "^(?!/)(?!.*\\\\)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*[\\r\\n\\u2028\\u2029]).+$",
+                        "description": "Proves identity. Names one non-empty relative file path using slash separators without a parent-directory segment or line terminator."
+                      },
+                      "sha256": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$(?![\\s\\S])",
+                        "description": "Proves identity. Gives the lowercase SHA-256 of this file's bytes."
+                      }
+                    }
+                  }
+                },
+                "digest": {
+                  "type": "string",
+                  "pattern": "^sha256:[0-9a-f]{64}$(?![\\s\\S])",
+                  "description": "Proves identity. Hashes the bytewise path-sorted listing of file SHA-256 values and paths."
+                },
+                "invocation": {
+                  "type": "object",
+                  "description": "Proves usability only. Names the executable helper command and its arguments.",
+                  "required": [
+                    "command",
+                    "argv"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "command": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "Proves usability only. Names the helper entry and must equal one path in helper.files."
+                    },
+                    "argv": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Proves usability only. Gives the arguments following the helper command and may be empty."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "description": "Holds the last set verified and compatible for this repository. When compatibility is `unknown`, a non-null previousVerifiedSet keeps that identity available; null is allowed when no verified set has existed, so no identity is invented."
+    },
+    "packageVersion": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Informational package version used for comparison, never an identity key. The `distinct-builds` verdict requires a non-null packageVersion (rule 6)."
+    },
+    "preparation": {
+      "type": "string",
+      "enum": [
+        "prepared",
+        "preparation-missing",
+        "not-applicable"
+      ],
+      "description": "`prepared` means every file of the selected set is present in the prepared-set layout; the report does not name that layout owner. `preparation-missing` means at least one file is absent. `not-applicable` means selected is null. Rule 2 requires `prepared` for `coherent-candidate`, `pin-preserved`, and `session-bound`, `preparation-missing` for that verdict, and `not-applicable` exactly when selected is null."
+    },
+    "compatibility": {
+      "type": "string",
+      "enum": [
+        "compatible",
+        "incompatible",
+        "unknown"
+      ],
+      "description": "`compatible` means every compatibility check passed and requires non-null selected (rule 11). `incompatible` means a check failed and requires verdict `not-verified-usable` (rule 7). `unknown` means a check could not run and fails before any workflow mutation."
+    },
+    "source": {
+      "type": "string",
+      "enum": [
+        "repository-pin",
+        "repository-local",
+        "global-current",
+        "installed-bundle",
+        "legacy-receipt",
+        "unknown"
+      ],
+      "description": "`repository-pin` means an explicit repository pin and requires a non-null repository plus one of the allowed pin-preserving, session-bound, preparation-missing, migration-required, or not-verified-usable verdicts (rule 14). `repository-local` names local instructions, which keep precedence in routing. `global-current` is the set selected by the current global link or default when no repository pin or session binding applies. `installed-bundle` is the immutable bundle recorded by a verified installation. `legacy-receipt` and `unknown` require `migration-required` or `not-verified-usable` (rule 10). `pin-preserved` requires `repository-pin` (rule 4)."
+    },
+    "recovery": {
+      "type": "string",
+      "enum": [
+        "none",
+        "prepare",
+        "migrate",
+        "reselect"
+      ],
+      "description": "`none` means no action. `prepare` means required preparation is missing and holds exactly for verdict `preparation-missing` (rule 5). `migrate` means migration is required, whatever the source, and holds exactly for `migration-required` (rule 9). `reselect` means the chosen set is no longer verified and requires `not-verified-usable` (rule 8), whether bound, pinned, or globally current."
+    },
+    "receipt": {
+      "type": "object",
+      "required": [
+        "status"
+      ],
+      "additionalProperties": false,
+      "description": "Reports persisted receipt state. `readReceipt` and `writeReceipt` in `src/scripts/user-global-receipt.mts` use the existing no-follow read guard and receipt guard for any persisted state; this schema adds no guard. `unsupported-legacy` requires `migration-required` or `not-verified-usable`, and `conflict` requires `not-verified-usable` (rule 12).",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "verified",
+            "absent",
+            "unsupported-legacy",
+            "conflict"
+          ],
+          "description": "`verified` means a receipt exists and passes the receipt guard. `absent` means no receipt exists. `unsupported-legacy` means the resolver cannot use the existing legacy format. `conflict` means a receipt disagrees with the selected identity or another receipt."
+        }
+      }
+    },
+    "mutation": {
+      "type": "string",
+      "enum": [
+        "none"
+      ],
+      "description": "Holds only `none`; inspection performs no mutation."
+    }
+  }
+}

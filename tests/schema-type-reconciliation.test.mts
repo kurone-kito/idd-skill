@@ -193,6 +193,43 @@ interface DistributionManifest {
   };
 }
 
+interface DistributionSelection {
+  schemaVersion: 1;
+  repository: string | null;
+  session: { id: string; binding: 'bound' | 'unbound' };
+  verdict:
+    | 'coherent-candidate'
+    | 'distinct-builds'
+    | 'not-verified-usable'
+    | 'pin-preserved'
+    | 'session-bound'
+    | 'migration-required'
+    | 'preparation-missing';
+  selected: {
+    sourceCommit: string;
+    components: DistributionManifest['components'];
+  } | null;
+  previousVerifiedSet: {
+    sourceCommit: string;
+    components: DistributionManifest['components'];
+  } | null;
+  packageVersion: string | null;
+  preparation: 'prepared' | 'preparation-missing' | 'not-applicable';
+  compatibility: 'compatible' | 'incompatible' | 'unknown';
+  source:
+    | 'repository-pin'
+    | 'repository-local'
+    | 'global-current'
+    | 'installed-bundle'
+    | 'legacy-receipt'
+    | 'unknown';
+  recovery: 'none' | 'prepare' | 'migrate' | 'reselect';
+  receipt: {
+    status: 'verified' | 'absent' | 'unsupported-legacy' | 'conflict';
+  };
+  mutation: 'none';
+}
+
 type ApprovalActorPolicy =
   | 'owners-and-maintainers-only'
   | 'all-write-permission-actors';
@@ -620,6 +657,22 @@ const distributionManifestKeys = [
   'components',
 ] as const satisfies readonly (keyof DistributionManifest)[];
 
+const distributionSelectionKeys = [
+  'schemaVersion',
+  'repository',
+  'session',
+  'verdict',
+  'selected',
+  'previousVerifiedSet',
+  'packageVersion',
+  'preparation',
+  'compatibility',
+  'source',
+  'recovery',
+  'receipt',
+  'mutation',
+] as const satisfies readonly (keyof DistributionSelection)[];
+
 export const provisionalDecisionRecordKeys = [
   'schemaVersion',
   'recordId',
@@ -967,6 +1020,10 @@ const exhaustivenessWitnesses: {
     DistributionManifest,
     (typeof distributionManifestKeys)[number]
   >;
+  distributionSelection: CoversAllKeysOf<
+    DistributionSelection,
+    (typeof distributionSelectionKeys)[number]
+  >;
   provisionalDecisionRecord: CoversAllKeysOf<
     ProvisionalDecisionRecord,
     (typeof provisionalDecisionRecordKeys)[number]
@@ -1025,6 +1082,7 @@ const exhaustivenessWitnesses: {
   phaseGraph: true,
   issueAuthoringReviewInput: true,
   distributionManifest: true,
+  distributionSelection: true,
   provisionalDecisionRecord: true,
   onboardingHearingCatalog: true,
   onboardingHearingTranscript: true,
@@ -1560,6 +1618,25 @@ const distributionManifestFixture = {
     },
   },
 } satisfies DistributionManifest;
+
+const distributionSelectionFixture = {
+  schemaVersion: 1,
+  repository: 'kurone-kito/idd-skill',
+  session: { id: 'session-4821', binding: 'bound' },
+  verdict: 'session-bound',
+  selected: {
+    sourceCommit: distributionManifestFixture.sourceCommit,
+    components: distributionManifestFixture.components,
+  },
+  previousVerifiedSet: null,
+  packageVersion: '1.0.0',
+  preparation: 'prepared',
+  compatibility: 'compatible',
+  source: 'repository-pin',
+  recovery: 'none',
+  receipt: { status: 'verified' },
+  mutation: 'none',
+} satisfies DistributionSelection;
 
 const provisionalDecisionRecordFixture = {
   schemaVersion: 1,
@@ -2299,6 +2376,10 @@ const SCHEMA_TEST_DATA: Record<CatalogSchemaFile, SchemaTestData> = {
     keys: distributionManifestKeys,
     fixture: distributionManifestFixture,
   },
+  'distribution-selection.schema.json': {
+    keys: distributionSelectionKeys,
+    fixture: distributionSelectionFixture,
+  },
   'provisional-decision-record.schema.json': {
     keys: provisionalDecisionRecordKeys,
     fixture: provisionalDecisionRecordFixture,
@@ -2764,6 +2845,244 @@ test('distribution manifest pins component roots and describes identity fields',
       status: 'uncovered',
       reason:
         'no runtime builder for the manifest yet; the listing digest runs only in the test',
+    },
+  );
+});
+
+test('distribution selection schema records the exact resolved-selection contract', () => {
+  type SchemaNode = {
+    $id?: string;
+    $schema?: string;
+    title?: string;
+    description?: string;
+    type?: string | readonly string[];
+    enum?: readonly unknown[];
+    pattern?: string;
+    required?: readonly string[];
+    additionalProperties?: boolean;
+    properties?: Record<string, SchemaNode>;
+    items?: SchemaNode;
+  };
+  const schema = loadJson(
+    'schemas/distribution-selection.schema.json',
+  ) as SchemaNode;
+  const context = {
+    root: process.cwd(),
+    schemaPath: 'schemas/distribution-selection.schema.json',
+  };
+  const properties = schema.properties ?? {};
+  const validFixture = loadJson(
+    'fixtures/schemas/distribution-selection.valid.json',
+  );
+  const invalidFixture = loadJson(
+    'fixtures/schemas/distribution-selection.invalid.json',
+  );
+  const validRecord = validFixture as Record<string, unknown>;
+  assert.equal(validRecord.verdict, 'session-bound');
+  assert.equal(
+    (validRecord.session as Record<string, unknown>).binding,
+    'bound',
+  );
+  assert.equal(validRecord.preparation, 'prepared');
+  assert.equal(validRecord.source, 'repository-pin');
+  assert.ok(validRecord.selected && typeof validRecord.selected === 'object');
+  assert.deepEqual(invalidFixture, { ...validRecord, mutation: 'applied' });
+
+  assert.equal(schema.$schema, 'https://json-schema.org/draft/2020-12/schema');
+  assert.equal(
+    schema.$id,
+    'https://kurone-kito.github.io/idd-skill/schemas/distribution-selection.schema.json',
+  );
+  assert.ok(schema.title);
+  assert.ok(schema.description);
+  assert.equal(properties.schemaVersion.type, 'integer');
+  assert.deepEqual(properties.schemaVersion.enum, [1]);
+  assert.deepEqual(
+    Object.keys(properties).sort(),
+    [...distributionSelectionKeys].sort(),
+  );
+  assert.deepEqual(schema.required, [...distributionSelectionKeys]);
+  assert.equal(schema.additionalProperties, false);
+
+  const walk = (node: SchemaNode, path: string): void => {
+    if (
+      node.type === 'object' ||
+      (Array.isArray(node.type) && node.type.includes('object'))
+    ) {
+      assert.equal(node.additionalProperties, false, `${path} must be closed`);
+    }
+    for (const [name, property] of Object.entries(node.properties ?? {})) {
+      assert.ok(
+        property.description?.trim(),
+        `${path}.${name} needs a description`,
+      );
+      walk(property, `${path}.${name}`);
+    }
+    if (node.items) walk(node.items, `${path}[]`);
+  };
+  walk(schema, '$');
+
+  const verdictValues = [
+    'coherent-candidate',
+    'distinct-builds',
+    'not-verified-usable',
+    'pin-preserved',
+    'session-bound',
+    'migration-required',
+    'preparation-missing',
+  ];
+  assert.deepEqual(properties.verdict.enum, verdictValues);
+  for (const value of verdictValues) {
+    assert.ok(
+      properties.verdict.description?.includes(`\`${value}\``),
+      `verdict description must name \`${value}\``,
+    );
+  }
+  assert.ok(properties.verdict.description?.includes('first of the following'));
+  assert.deepEqual(properties.preparation.enum, [
+    'prepared',
+    'preparation-missing',
+    'not-applicable',
+  ]);
+  assert.ok(properties.preparation.description?.includes('not-applicable'));
+  assert.deepEqual(properties.compatibility.enum, [
+    'compatible',
+    'incompatible',
+    'unknown',
+  ]);
+  assert.deepEqual(properties.source.enum, [
+    'repository-pin',
+    'repository-local',
+    'global-current',
+    'installed-bundle',
+    'legacy-receipt',
+    'unknown',
+  ]);
+  assert.deepEqual(properties.recovery.enum, [
+    'none',
+    'prepare',
+    'migrate',
+    'reselect',
+  ]);
+  assert.deepEqual(properties.receipt.properties?.status.enum, [
+    'verified',
+    'absent',
+    'unsupported-legacy',
+    'conflict',
+  ]);
+
+  const manifestSchema = loadJson(
+    'schemas/distribution-manifest.schema.json',
+  ) as SchemaNode;
+  assert.deepEqual(
+    properties.selected.properties?.sourceCommit,
+    manifestSchema.properties?.sourceCommit,
+  );
+  assert.deepEqual(
+    properties.selected.properties?.components,
+    manifestSchema.properties?.components,
+  );
+
+  for (const repository of [null, 'owner/repo']) {
+    assert.deepEqual(
+      validate(
+        { ...distributionSelectionFixture, repository },
+        schema,
+        '$',
+        context,
+      ),
+      [],
+    );
+  }
+  for (const repository of ['ownerrepo', 'owner/repo\n']) {
+    assert.match(
+      validate(
+        { ...distributionSelectionFixture, repository },
+        schema,
+        '$',
+        context,
+      ).join('\n'),
+      /does not match pattern/,
+    );
+  }
+
+  assert.deepEqual(validate(validFixture, schema, '$', context), []);
+  const invalidErrors = validate(invalidFixture, schema, '$', context);
+  assert.equal(invalidErrors.length, 1);
+  assert.match(invalidErrors.join('\n'), /mutation/);
+
+  const extraRootKey = {
+    ...(validFixture as Record<string, unknown>),
+    extra: true,
+  };
+  assert.match(
+    validate(extraRootKey, schema, '$', context).join('\n'),
+    /additional property "extra" not allowed/,
+  );
+
+  const unknownCompatibility: DistributionSelection = structuredClone(
+    distributionSelectionFixture,
+  );
+  unknownCompatibility.compatibility = 'unknown';
+  unknownCompatibility.previousVerifiedSet = structuredClone(
+    distributionSelectionFixture.selected,
+  );
+  assert.deepEqual(validate(unknownCompatibility, schema, '$', context), []);
+
+  assert.ok(properties.verdict.description?.includes('mixed commits'));
+  assert.ok(properties.verdict.description?.includes('mismatched'));
+  assert.ok(properties.verdict.description?.includes('unknown'));
+  assert.ok(properties.compatibility.description?.includes('unknown'));
+  assert.ok(
+    properties.previousVerifiedSet.description?.includes('previousVerifiedSet'),
+  );
+  assert.ok(properties.previousVerifiedSet.description?.includes('unknown'));
+  assert.ok(
+    properties.session.properties?.binding.description?.includes(
+      'session-bound',
+    ),
+  );
+  assert.ok(
+    properties.session.properties?.binding.description?.includes('bound'),
+  );
+  for (const token of [
+    'repository-pin',
+    'repository-local',
+    'legacy-receipt',
+  ]) {
+    assert.ok(properties.source.description?.includes(token));
+  }
+  for (const token of ['prepare', 'reselect', 'migrate']) {
+    assert.ok(properties.recovery.description?.includes(token));
+  }
+  for (const token of ['incompatible', 'compatible', 'selected']) {
+    assert.ok(properties.compatibility.description?.includes(token));
+  }
+  for (const token of ['unsupported-legacy', 'conflict']) {
+    assert.ok(properties.receipt.description?.includes(token));
+  }
+  assert.ok(properties.packageVersion.description?.includes('distinct-builds'));
+
+  assert.deepEqual(
+    SCHEMA_TYPE_CATALOG.find(
+      (entry) => entry.schemaFile === 'distribution-selection.schema.json',
+    ),
+    {
+      schemaFile: 'distribution-selection.schema.json',
+      exportedType: 'DistributionSelection (test-local; no runtime type)',
+      owningModule:
+        'tests/schema-type-reconciliation.test.mts (test-local; no runtime module)',
+    },
+  );
+  assert.deepEqual(
+    SCHEMA_OUTPUT_COVERAGE.find(
+      (entry) => entry.schema === 'distribution-selection.schema.json',
+    ),
+    {
+      schema: 'distribution-selection.schema.json',
+      status: 'uncovered',
+      reason:
+        'no runtime builder for the selection report yet; the resolver children add it',
     },
   );
 });
