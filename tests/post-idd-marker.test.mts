@@ -25,6 +25,7 @@ import {
   parseScopeOverrunRecordComment,
 } from '../src/scripts/marker-helpers.mts';
 import {
+  ACCEPTED_LEGACY_CLOSURES,
   buildMarkerBody,
   describeUnaddressedActivity,
   FROM_PR_MARKER_TYPES,
@@ -38,6 +39,7 @@ import {
   parseIssueReference,
   readWatermarkRequiredCiAgreement,
   reconcileFormerChildMemberships,
+  resolveAnchorOwnerGeneration,
   runOperationLocalSnapshotWatermark,
   selectAuthoringOwnerOpeningMarkers,
   selectLatestAuthoringOwnerMarker,
@@ -2141,8 +2143,8 @@ test('#4698: --from-pr watermark keeps same-named workflows distinct for the pas
   );
   try {
     const body = JSON.parse(runWatermarkFromPr(false)).body as string;
-    assert.ok(body.includes(newer + ' -->'));
-    assert.ok(!body.includes(earlier + ' -->'));
+    assert.ok(body.includes(`${newer} -->`));
+    assert.ok(!body.includes(`${earlier} -->`));
   } finally {
     restore();
   }
@@ -9968,6 +9970,129 @@ test('authoring-owner acquire and bootstrap refuse a trusted history that cannot
         stub.restore();
       }
     }
+  }
+});
+
+const LEGACY_ANCHOR = 'kurone-kito/idd-skill#4722';
+const LEGACY_SET = 'set-d90fd2d2-e9b0-4279-be22-c14f5e531ded';
+const LEGACY_SESSION = 'session-b4d93e49-f4a2-4cc1-b195-f6ebf48355bb';
+const LEGACY_OWNER = 'owner-a0bfac08-125e-4c1a-bea7-473cc6a3f793';
+const LEGACY_SNAPSHOT =
+  '6a706e6192793af16bba8d7598046b5069e508368c62c7769c285b87fe2e2843';
+const LEGACY_RELEASE_COMPLETE = 6509470897;
+
+/**
+ * The 2026-10-29 closure of #4722: an acquire and a release-guard, with no
+ * anchor release marker, and then a release-complete. Each field can be
+ * changed to test that only the exact reviewed identity is accepted.
+ */
+function legacyClosureLog(
+  overrides: {
+    anchor?: string;
+    set?: string;
+    session?: string;
+    owner?: string;
+    releaseCompleteId?: number;
+    snapshot?: string;
+  } = {},
+): AuthoringOwnerProvenanceComment[] {
+  const anchor = overrides.anchor ?? LEGACY_ANCHOR;
+  const owner = overrides.owner ?? LEGACY_OWNER;
+  const flags = {
+    'marker-target': anchor,
+    anchor,
+    'marker-owner': owner,
+    set: overrides.set ?? LEGACY_SET,
+    session: overrides.session ?? LEGACY_SESSION,
+  };
+  const entries: Array<[number, string]> = [
+    [6509426392, ownerIdBody(ownerIdFlags('acquire', flags))],
+    [
+      6509446766,
+      ownerIdBody(
+        ownerIdFlags('release-guard', { ...flags, supersedes: owner }),
+      ),
+    ],
+    [
+      overrides.releaseCompleteId ?? LEGACY_RELEASE_COMPLETE,
+      ownerIdBody(
+        ownerIdFlags('release-complete', {
+          ...flags,
+          supersedes: owner,
+          'snapshot-sha256': overrides.snapshot ?? LEGACY_SNAPSHOT,
+        }),
+      ),
+    ],
+  ];
+  return entries.map(([id, body], index) => ({
+    id,
+    authorLogin: 'kurone-kito',
+    body,
+    createdAt: `2026-10-29T22:0${index + 1}:00Z`,
+    updatedAt: `2026-10-29T22:0${index + 1}:00Z`,
+    lastEditedAt: null,
+    isMinimized: false,
+    minimizedReason: null,
+  }));
+}
+
+function replayAnchorLog(
+  comments: AuthoringOwnerProvenanceComment[],
+  anchorRef = LEGACY_ANCHOR,
+) {
+  return resolveAnchorOwnerGeneration({
+    comments,
+    anchorRef,
+    markerPrefix: 'idd-skill',
+    trusted: ['kurone-kito'],
+  });
+}
+
+test('the reviewed legacy closure of #4722 closes its generation only on an exact match (#4837)', () => {
+  assert.equal(ACCEPTED_LEGACY_CLOSURES.length, 1);
+  const exact = replayAnchorLog(legacyClosureLog());
+  assert.equal('problem' in exact, false, JSON.stringify(exact));
+  if ('problem' in exact) {
+    return;
+  }
+  assert.equal(exact.generation, null);
+
+  const refused: Array<[string, AuthoringOwnerProvenanceComment[], string]> = [
+    [
+      'a release-complete comment ID off by one',
+      legacyClosureLog({ releaseCompleteId: LEGACY_RELEASE_COMPLETE + 1 }),
+      LEGACY_ANCHOR,
+    ],
+    [
+      'a different snapshot digest',
+      legacyClosureLog({ snapshot: 'f'.repeat(64) }),
+      LEGACY_ANCHOR,
+    ],
+    ['a different set', legacyClosureLog({ set: 'set-other' }), LEGACY_ANCHOR],
+    [
+      'a different session',
+      legacyClosureLog({ session: 'session-other' }),
+      LEGACY_ANCHOR,
+    ],
+    [
+      'a different owner',
+      legacyClosureLog({ owner: 'owner-other' }),
+      LEGACY_ANCHOR,
+    ],
+    [
+      'another anchor that carries the same identities',
+      legacyClosureLog({ anchor: 'kurone-kito/idd-skill#4723' }),
+      'kurone-kito/idd-skill#4723',
+    ],
+  ];
+  for (const [name, comments, anchorRef] of refused) {
+    const result = replayAnchorLog(comments, anchorRef);
+    assert.ok('problem' in result, name);
+    assert.match(
+      result.problem,
+      /closes a generation with no accepted release marker in progress/,
+      name,
+    );
   }
 });
 
