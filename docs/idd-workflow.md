@@ -2205,6 +2205,20 @@ from the session identity and recover the exact report-draft root. A session
 with a new id cannot identify its old claims, and step 1 treats them as not its
 own.
 
+Before roster reconstruction, Discover, budget, overlap, refill, or worker
+launch, scan the direct children of this exact verified root for
+`issue-<n>-pre-b1-continuation.json` records. Read each match without following
+symlinks and validate its complete continuation fields and transition stage.
+Preserve and hold on a non-regular, unreadable, malformed, contradictory, or
+foreign record. A `pending` record requires existing recovery/hold and blocks
+roster reconstruction and refill. A `reconciled` record does not authorize the
+uninterrupted-session shortcut after restart; reconcile the original claim,
+nonce, worktree, and parent-continuation state through existing recovery/hold
+before rebuilding the roster or refilling. Never treat these records as worker
+report drafts or append them to the report store. Continue with ordinary
+restart processing only after the scan is complete and no continuation state
+requires recovery.
+
 1. **Find own claims.** For each worktree in `git worktree list --porcelain`,
    list `idd-generated-tokens-*.json` in that worktree's private admin directory
    (`git -C <worktree> rev-parse --absolute-git-dir`). A `prunable` entry, or

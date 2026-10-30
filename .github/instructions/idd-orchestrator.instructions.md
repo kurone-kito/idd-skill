@@ -27,7 +27,10 @@ Select fan-out first. Before Discover, A5, restart, refill, or
 dispatch, follow the
 [session scratchpad lifecycle](../../docs/idd-workflow.md#session-scratchpad-lifecycle)
 for fan-out; stop on holds. Single-agent skips its scratch. Derive worker
-paths from the verified root; keep the worker missing-parent guard.
+paths from the verified root; keep the worker missing-parent guard. On
+restart, scan continuation records before rebuilding the roster or running
+Discover, budget, overlap, or refill; a record needing recovery keeps those
+steps blocked under the existing recovery/hold route.
 
 Track workers by issue, claim, branch, handle, report path, and state. A pre-B1
 stop may use the

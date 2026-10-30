@@ -3106,6 +3106,7 @@ test('pre-B1 parent continuation keeps same-claim safety and truthful reports (#
     for (const required of [
       'A pre-B1 stop may use the [parent-continuation route]',
       'only after its complete proof passes; otherwise use existing recovery/hold',
+      'On restart, scan continuation records before rebuilding the roster or running',
     ]) {
       assert.ok(text.includes(required), `${path}: missing "${required}"`);
     }
@@ -3122,6 +3123,45 @@ test('pre-B1 parent continuation keeps same-claim safety and truthful reports (#
       'keep the same claim and nonce',
     ]) {
       assert.ok(text.includes(required), `${path}: missing "${required}"`);
+    }
+  }
+});
+
+test('orchestrator restart scans continuation records before roster rebuild and refill (#4714)', () => {
+  for (const path of [
+    'idd-template/docs/idd-workflow.md',
+    'docs/idd-workflow.md',
+  ]) {
+    const text = normalizeWhitespace(readText(path));
+    const restartStart = text.indexOf(
+      'This subsection covers an orchestrating session that restarts',
+    );
+    const scanStart = text.indexOf(
+      'Before roster reconstruction, Discover, budget, overlap, refill, or worker launch',
+      restartStart,
+    );
+    const findClaims = text.indexOf('1. **Find own claims.**', restartStart);
+    const reattachWorkers = text.indexOf(
+      '3. **Re-attach workers.**',
+      restartStart,
+    );
+    assert.ok(
+      restartStart >= 0 &&
+        scanStart > restartStart &&
+        findClaims > scanStart &&
+        reattachWorkers > scanStart,
+      `${path}: continuation-record validation must precede restart roster reconstruction`,
+    );
+    const scan = text.slice(scanStart, findClaims);
+    for (const required of [
+      '`issue-<n>-pre-b1-continuation.json` records',
+      'without following symlinks',
+      'A `pending` record requires existing recovery/hold',
+      'A `reconciled` record does not authorize the uninterrupted-session shortcut after restart',
+      'Never treat these records as worker report drafts',
+      'no continuation state requires recovery',
+    ]) {
+      assert.ok(scan.includes(required), `${path}: missing "${required}"`);
     }
   }
 });
