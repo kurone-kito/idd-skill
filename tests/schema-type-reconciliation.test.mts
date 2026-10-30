@@ -2421,7 +2421,24 @@ test('distribution manifest fixture, identity rules, and listing digest are expl
   malformedCommit.sourceCommit = 'not-a-commit';
   assert.match(
     validate(malformedCommit, schema, '$', context).join('\n'),
-    /does not match pattern \/\^\[0-9a-f\]\{40\}\$\//,
+    /does not match pattern/,
+  );
+
+  const commitWithTrailingLineFeed = cloneDistributionManifest();
+  commitWithTrailingLineFeed.sourceCommit += '\n';
+  assert.match(
+    validate(commitWithTrailingLineFeed, schema, '$', context).join('\n'),
+    /does not match pattern/,
+  );
+
+  const provenanceCommitWithTrailingLineFeed = cloneDistributionManifest();
+  provenanceCommitWithTrailingLineFeed.components.instructions.provenance.commit +=
+    '\n';
+  assert.match(
+    validate(provenanceCommitWithTrailingLineFeed, schema, '$', context).join(
+      '\n',
+    ),
+    /does not match pattern/,
   );
 
   const missingProvenance = cloneDistributionManifest();
@@ -2437,7 +2454,24 @@ test('distribution manifest fixture, identity rules, and listing digest are expl
   malformedDigest.components.instructions.digest = 'sha256:broken';
   assert.match(
     validate(malformedDigest, schema, '$', context).join('\n'),
-    /does not match pattern \/\^sha256:\[0-9a-f\]\{64\}\$\//,
+    /does not match pattern/,
+  );
+
+  const digestWithTrailingLineFeed = cloneDistributionManifest();
+  digestWithTrailingLineFeed.components.instructions.digest += '\n';
+  assert.match(
+    validate(digestWithTrailingLineFeed, schema, '$', context).join('\n'),
+    /does not match pattern/,
+  );
+
+  const fileHashWithTrailingLineFeed = cloneDistributionManifest();
+  const firstInstructionFile =
+    fileHashWithTrailingLineFeed.components.instructions.files[0];
+  assert.ok(firstInstructionFile);
+  firstInstructionFile.sha256 += '\n';
+  assert.match(
+    validate(fileHashWithTrailingLineFeed, schema, '$', context).join('\n'),
+    /does not match pattern/,
   );
 
   const unknownProvenanceKind = cloneDistributionManifest();
@@ -2550,26 +2584,12 @@ test('distribution manifest fixture, identity rules, and listing digest are expl
 });
 
 test('distribution manifest pins component roots and describes identity fields', () => {
+  type SchemaNode = {
+    description?: string;
+    properties?: Record<string, SchemaNode>;
+  };
   const schema = loadJson('schemas/distribution-manifest.schema.json') as {
-    properties: Record<
-      string,
-      {
-        description?: string;
-        properties?: Record<
-          string,
-          {
-            description?: string;
-            properties?: Record<
-              string,
-              {
-                description?: string;
-                properties?: Record<string, { description?: string }>;
-              }
-            >;
-          }
-        >;
-      }
-    >;
+    properties: Record<string, SchemaNode>;
   };
   const rootProperties = schema.properties;
   assert.match(
@@ -2577,17 +2597,35 @@ test('distribution manifest pins component roots and describes identity fields',
     /^Proves identity\./,
   );
   const components = rootProperties.components.properties ?? {};
-  const instructions = components.instructions.properties ?? {};
-  assert.match(
-    instructions.location.description ?? '',
-    /^Proves usability only\./,
-  );
-  assert.match(instructions.provenance.description ?? '', /^Proves identity\./);
-  assert.match(instructions.files.description ?? '', /^Proves identity\./);
-  assert.match(instructions.digest.description ?? '', /^Proves identity\./);
-
   const helper = components.helper.properties ?? {};
   assert.match(helper.invocation.description ?? '', /^Proves usability only\./);
+  const componentSchemas = [
+    ['instructions', components.instructions],
+    [
+      'skillBundles.issue-authoring',
+      components.skillBundles.properties?.['issue-authoring'] ?? {},
+    ],
+    [
+      'skillBundles.idd-spec-audit',
+      components.skillBundles.properties?.['idd-spec-audit'] ?? {},
+    ],
+    ['helper', components.helper],
+  ] as const;
+  for (const [componentName, componentSchema] of componentSchemas) {
+    const properties = componentSchema.properties ?? {};
+    assert.match(
+      properties.location?.description ?? '',
+      /^Proves usability only\./,
+      `${componentName}.location must describe usability`,
+    );
+    for (const propertyName of ['provenance', 'files', 'digest']) {
+      assert.match(
+        properties[propertyName]?.description ?? '',
+        /^Proves identity\./,
+        `${componentName}.${propertyName} must describe identity`,
+      );
+    }
+  }
   const instructionsComponent =
     distributionManifestFixture.components.instructions;
   const issueAuthoring =

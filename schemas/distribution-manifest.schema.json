@@ -19,7 +19,7 @@
     },
     "sourceCommit": {
       "type": "string",
-      "pattern": "^[0-9a-f]{40}$",
+      "pattern": "^[0-9a-f]{40}$(?![\\s\\S])",
       "description": "Proves identity. Names the full source commit from which every component was built."
     },
     "components": {
@@ -68,7 +68,7 @@
                 },
                 "commit": {
                   "type": "string",
-                  "pattern": "^[0-9a-f]{40}$",
+                  "pattern": "^[0-9a-f]{40}$(?![\\s\\S])",
                   "description": "Proves identity. Records the source commit and must equal sourceCommit."
                 }
               }
@@ -93,7 +93,7 @@
                   },
                   "sha256": {
                     "type": "string",
-                    "pattern": "^[0-9a-f]{64}$",
+                    "pattern": "^[0-9a-f]{64}$(?![\\s\\S])",
                     "description": "Proves identity. Gives the lowercase SHA-256 of this file's bytes."
                   }
                 }
@@ -101,7 +101,7 @@
             },
             "digest": {
               "type": "string",
-              "pattern": "^sha256:[0-9a-f]{64}$",
+              "pattern": "^sha256:[0-9a-f]{64}$(?![\\s\\S])",
               "description": "Proves identity. Hashes the bytewise path-sorted listing of file SHA-256 values and paths."
             }
           }
@@ -151,7 +151,7 @@
                     },
                     "commit": {
                       "type": "string",
-                      "pattern": "^[0-9a-f]{40}$",
+                      "pattern": "^[0-9a-f]{40}$(?![\\s\\S])",
                       "description": "Proves identity. Records the source commit and must equal sourceCommit."
                     }
                   }
@@ -176,7 +176,7 @@
                       },
                       "sha256": {
                         "type": "string",
-                        "pattern": "^[0-9a-f]{64}$",
+                        "pattern": "^[0-9a-f]{64}$(?![\\s\\S])",
                         "description": "Proves identity. Gives the lowercase SHA-256 of this file's bytes."
                       }
                     }
@@ -184,7 +184,7 @@
                 },
                 "digest": {
                   "type": "string",
-                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "pattern": "^sha256:[0-9a-f]{64}$(?![\\s\\S])",
                   "description": "Proves identity. Hashes the bytewise path-sorted listing of file SHA-256 values and paths."
                 }
               }
@@ -225,7 +225,7 @@
                     },
                     "commit": {
                       "type": "string",
-                      "pattern": "^[0-9a-f]{40}$",
+                      "pattern": "^[0-9a-f]{40}$(?![\\s\\S])",
                       "description": "Proves identity. Records the source commit and must equal sourceCommit."
                     }
                   }
@@ -250,7 +250,7 @@
                       },
                       "sha256": {
                         "type": "string",
-                        "pattern": "^[0-9a-f]{64}$",
+                        "pattern": "^[0-9a-f]{64}$(?![\\s\\S])",
                         "description": "Proves identity. Gives the lowercase SHA-256 of this file's bytes."
                       }
                     }
@@ -258,7 +258,7 @@
                 },
                 "digest": {
                   "type": "string",
-                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "pattern": "^sha256:[0-9a-f]{64}$(?![\\s\\S])",
                   "description": "Proves identity. Hashes the bytewise path-sorted listing of file SHA-256 values and paths."
                 }
               }
@@ -302,7 +302,7 @@
                 },
                 "commit": {
                   "type": "string",
-                  "pattern": "^[0-9a-f]{40}$",
+                  "pattern": "^[0-9a-f]{40}$(?![\\s\\S])",
                   "description": "Proves identity. Records the source commit and must equal sourceCommit."
                 }
               }
@@ -327,7 +327,7 @@
                   },
                   "sha256": {
                     "type": "string",
-                    "pattern": "^[0-9a-f]{64}$",
+                    "pattern": "^[0-9a-f]{64}$(?![\\s\\S])",
                     "description": "Proves identity. Gives the lowercase SHA-256 of this file's bytes."
                   }
                 }
@@ -335,7 +335,7 @@
             },
             "digest": {
               "type": "string",
-              "pattern": "^sha256:[0-9a-f]{64}$",
+              "pattern": "^sha256:[0-9a-f]{64}$(?![\\s\\S])",
               "description": "Proves identity. Hashes the bytewise path-sorted listing of file SHA-256 values and paths."
             },
             "invocation": {
