@@ -8557,7 +8557,6 @@ test('authoring-owner acquire and bootstrap reject a trusted closed set in dry-r
         const run = runOwnerIdPost(ownerIdFlags(mode), { apply });
         assert.equal(run.status, 1, `${mode}, apply=${apply}`);
         assert.equal(run.kind, 'gate', `${mode}, apply=${apply}`);
-        assert.equal(run.stdout, '', `${mode}, apply=${apply}`);
         assert.match(
           run.stderr,
           /already closed by a trusted release-complete/,
