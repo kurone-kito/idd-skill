@@ -1203,6 +1203,10 @@ The table below then decides the route.
 | Scratchpad metadata is missing while fan-out remains usable                                                                                                                                                                                                    | Resolve or provision it through the session scratchpad lifecycle below before any claim or dispatch                                                                            |
 | Ownership, workspace, host/API admission, CI, review, or merge evidence is ambiguous or fails its gate                                                                                                                                                         | Keep the existing safety stop or wait; execution-mode selection does not waive a gate                                                                                          |
 
+Final pre-B1 worker stops use this route only if all proofs below pass. Use
+the verified pre-B1 parent-continuation route below; otherwise use existing
+recovery/hold.
+
 When more than one row matches, a row that leaves a launch, own claim, or
 potentially live writer unresolved takes precedence over every static
 fallback.
@@ -1210,6 +1214,77 @@ fallback.
 Observed 2026-10-25 in issues #4698 and #4712: static eligibility alone did
 not establish whether the current session could start, observe, wait for, or
 control a worker. The table records the selected response.
+
+##### Verified pre-B1 parent continuation
+
+Use this narrow route only when the original parent is still in the same
+uninterrupted session that dispatched the worker. A runtime result must be
+final, not interim. Reconcile the complete worker/launch history and live
+process evidence to prove the child stopped before B1 and no child process or
+other writer remains. Revalidate the original claim and winning nonce, branch,
+exact worktree, lock, and generated tokens. Inspect the worktree, commit
+history, linked PRs, child report state, and session artifacts for post-B1 work
+or unresolved allocation; a clean `git status` alone is not proof. Any restart,
+incomplete listing, unknown launch, mismatch, unreadable worktree,
+implementation change/commit, existing PR, or unresolved report artifact uses
+existing recovery/hold and never this shortcut. Observed 2026-10-25 on issue
+`#4698`; follow-up issue `#4714` records this narrow recovery.
+
+Reconcile scratch separately. Reuse a valid existing session record and its
+exact canonical root read-only. Use the first-allocation procedure from issue
+`#4685` only
+when complete process, session, and artifact evidence proves no earlier root,
+record, reservation, or child scratch/report artifact was created or used.
+Missing artifacts by themselves do not prove first use; unknown allocation or
+report history is a hold. Never overwrite, delete, unlink, or replace uncertain
+storage.
+
+After all initial evidence passes, the parent keeps the existing claim and
+activation nonce in the same worktree but does not enter B1 Step 3 yet. Per the
+[fan-out hold rule](#orchestrator-fan-out-variant), an uninterrupted
+orchestrator's own `claimed-by` renewals do not end a worker hold. After the
+final pre-B1 stop, no-live-child, ownership, and artifact proofs pass, mark the
+child worker's roster entry `disposed`; disposal is an existing hold-ending
+event, not a worker terminal report or F4 result. If either roster update is
+incomplete or uncertain, keep it pending: preserve claim, worktree, and storage;
+retain exactly one execution slot and the issue once in the in-flight overlap
+set; make no budget or overlap call, refill, or further mutation until the
+exact effects are reconciled; report the missing evidence.
+
+If a parent `claimed-by` heartbeat is due for claim freshness, revalidate the
+claim and post the ordinary heartbeat. Read back the exact returned comment
+when available and the complete trusted claim/hold history. The parent renewal
+is not evidence that a hold ended. A complete read proving the parent heartbeat
+absent follows the existing bounded retry. If POST or read-back remains
+uncertain, keep the transition pending with the same preservation and
+no-further-mutation rule above. When no trusted active hold exists, complete
+trusted history must confirm its absence.
+
+After the hold-ending evidence is complete, keep two distinct roster entries:
+the child worker entry is `disposed`, and one separate `parent-continuation`
+entry for the same issue, claim, and branch is `running`. The continuation
+entry represents the parent's active execution slot, not a dispatched worker;
+it has no worker handle or report path. Keep the child's handle only as
+history. Count the continuation entry once in `--running`, pass its issue
+exactly once as `--in-flight`, and never count the disposed child. Keep the
+continuation entry active through the parent's terminal phase, then mark it
+`disposed`. Record both entries and the role transition in the run report.
+Do not enter B1 Step 3 or start implementation until the child hold is
+confirmed ended by a valid worker heartbeat or the verified `disposed` roster
+state (or complete trusted history confirms there is no active hold), and
+current ownership, storage/record state, both roster entries, and parent role
+are reconciled. Only then continue in the same worktree with the original claim
+and nonce. Keep the issue as one occupied slot and in-flight through the
+parent's terminal phase. Pause new
+refills/claims while the parent implements, while managing known siblings
+normally; a hold on another issue is local, not global exhaustion. Resume
+ordinary discovery/refill after the parent reaches terminal and let normal
+budget/overlap checks choose eligible work. Never restart the ended child or
+mint a claim, nonce, or forced handoff. Do not delete a branch/worktree, take
+over a lock automatically, or reset lost work. Report the child's actual
+pre-work stop and the parent's later result separately. Do not append a
+terminal worker report or F4 result for the pre-B1 child, and do not change the
+worker-report schema.
 
 #### Session scratchpad lifecycle
 
@@ -1962,6 +2037,11 @@ At minimum it lists:
   state it is in when the report is written: `running`, `reporting`,
   `disposed`, or `stalled`, as section 2 of the orchestrator phase file lists
   them.
+- **Pre-B1 parent continuation.** When used, report the child's actual stop,
+  its `disposed` roster entry and historical handle, and the separate active
+  `parent-continuation` entry and its final state. Report the parent's later
+  issue result separately. The child gets no terminal worker report or F4
+  result.
 - **Holds.** Each hold, with its issue number, its start as the hold marker
   defines it, its cap time (72 h after the start, per the held-worker renewal
   rule), the GitHub `created_at` of the latest valid `claimed-by` on its claim,

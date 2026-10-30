@@ -2937,6 +2937,181 @@ function sliceBriefTemplate(path: string, text: string) {
   return { variantStart, start, section: text.slice(start, end) };
 }
 
+test('pre-B1 parent continuation keeps same-claim safety and truthful reports (#4714)', () => {
+  const workflowCopies = [
+    'idd-template/docs/idd-workflow.md',
+    'docs/idd-workflow.md',
+  ];
+  const continuationRequirements = [
+    'original parent is still in the same uninterrupted session',
+    'A runtime result must be final, not interim',
+    'complete worker/launch history and live process evidence',
+    'no child process or other writer remains',
+    'original claim and winning nonce, branch, exact worktree, lock, and generated tokens',
+    'a clean `git status` alone is not proof',
+    'incomplete listing, unknown launch, mismatch, unreadable worktree',
+    'implementation change/commit, existing PR, or unresolved report artifact',
+    'Reuse a valid existing session record and its exact canonical root read-only',
+    'complete process, session, and artifact evidence proves no earlier root',
+    'unknown allocation or report history is a hold',
+    "an uninterrupted orchestrator's own `claimed-by` renewals do not end a worker hold",
+    "mark the child worker's roster entry `disposed`",
+    'disposal is an existing hold-ending event',
+    'If either roster update is incomplete or uncertain, keep it pending',
+    'If a parent `claimed-by` heartbeat is due for claim freshness',
+    'The parent renewal is not evidence that a hold ended',
+    'the complete trusted claim/hold history',
+    'A complete read proving the parent heartbeat absent follows the existing bounded retry',
+    'preserve claim, worktree, and storage',
+    'retain exactly one execution slot and the issue once in the in-flight overlap set',
+    'make no budget or overlap call, refill, or further mutation until the exact effects are reconciled',
+    'keep two distinct roster entries',
+    'one separate `parent-continuation` entry for the same issue, claim, and branch is `running`',
+    'it has no worker handle or report path',
+    'Count the continuation entry once in `--running`',
+    'pass its issue exactly once as `--in-flight`',
+    'never count the disposed child',
+    'then mark it `disposed`',
+    'Record both entries and the role transition in the run report',
+    'Pause new refills/claims while the parent implements',
+    'a hold on another issue is local, not global exhaustion',
+    'Resume ordinary discovery/refill after the parent reaches terminal',
+    'Never restart the ended child or mint a claim, nonce, or forced handoff',
+    'Do not delete a branch/worktree, take over a lock automatically, or reset lost work',
+    'Do not append a terminal worker report or F4 result for the pre-B1 child',
+    'do not change the worker-report schema',
+  ];
+
+  for (const path of workflowCopies) {
+    const text = normalizeWhitespace(readText(path));
+    assert.ok(
+      text.includes(
+        'Use the verified pre-B1 parent-continuation route below; otherwise use existing recovery/hold',
+      ),
+      `${path}: the live capability table must route only to the narrow continuation proof`,
+    );
+    const start = text.indexOf('##### Verified pre-B1 parent continuation');
+    const end = text.indexOf('#### Session scratchpad lifecycle', start);
+    assert.ok(
+      start >= 0 && end > start,
+      `${path}: continuation section missing`,
+    );
+    const route = text.slice(start, end);
+    for (const requirement of continuationRequirements) {
+      assert.ok(
+        route.includes(requirement),
+        `${path}: continuation proof must include "${requirement}"`,
+      );
+    }
+    const noEarlyB1 = route.indexOf('but does not enter B1 Step 3 yet');
+    const parentRenewalRule = route.indexOf(
+      "an uninterrupted orchestrator's own `claimed-by` renewals do not end a worker hold",
+    );
+    const disposal = route.indexOf(
+      "mark the child worker's roster entry `disposed`",
+    );
+    const parentHeartbeat = route.indexOf(
+      'If a parent `claimed-by` heartbeat is due for claim freshness',
+    );
+    const positiveRead = route.indexOf(
+      'The parent renewal is not evidence that a hold ended',
+    );
+    const absentRead = route.indexOf(
+      'A complete read proving the parent heartbeat absent',
+    );
+    const pairedRosterState = route.indexOf('keep two distinct roster entries');
+    const budgetCount = route.indexOf(
+      'Count the continuation entry once in `--running`',
+    );
+    const overlapCount = route.indexOf(
+      'pass its issue exactly once as `--in-flight`',
+    );
+    const parentRole = route.indexOf(
+      'Record both entries and the role transition',
+    );
+    const b1Gate = route.indexOf(
+      'Do not enter B1 Step 3 or start implementation until',
+    );
+    const b1Continuation = route.indexOf(
+      'Only then continue in the same worktree with the original claim and nonce.',
+    );
+    assert.ok(
+      noEarlyB1 >= 0 &&
+        parentRenewalRule > noEarlyB1 &&
+        disposal > parentRenewalRule &&
+        parentHeartbeat > disposal &&
+        positiveRead > parentHeartbeat &&
+        absentRead > positiveRead &&
+        pairedRosterState > absentRead &&
+        budgetCount > pairedRosterState &&
+        overlapCount > budgetCount &&
+        parentRole > overlapCount &&
+        b1Gate > parentRole &&
+        b1Continuation > b1Gate,
+      `${path}: B1 must begin only after the hold and ownership/storage/role reconciliation`,
+    );
+    const b1GateText = route.slice(b1Gate, b1Continuation);
+    for (const requirement of [
+      'until the child hold is confirmed ended by a valid worker heartbeat or the verified `disposed` roster state (or complete trusted history confirms there is no active hold)',
+      'current ownership, storage/record state, both roster entries, and parent role are reconciled',
+    ]) {
+      assert.ok(
+        b1GateText.includes(requirement),
+        `${path}: B1 gate must require "${requirement}" before continuation`,
+      );
+    }
+
+    const reportStart = text.indexOf('### Orchestrator run report');
+    const reportEnd = text.indexOf('### Worker report outcomes', reportStart);
+    assert.ok(
+      reportStart >= 0 && reportEnd > reportStart,
+      `${path}: run report missing`,
+    );
+    const report = text.slice(reportStart, reportEnd);
+    for (const required of [
+      '**Pre-B1 parent continuation.**',
+      'historical handle',
+      'separate active `parent-continuation` entry',
+      'final state',
+      'no terminal worker report or F4 result',
+    ]) {
+      assert.ok(
+        report.includes(required),
+        `${path}: run report must include "${required}"`,
+      );
+    }
+  }
+
+  for (const path of [
+    'idd-template/.github/instructions/idd-orchestrator.instructions.md',
+    '.github/instructions/idd-orchestrator.instructions.md',
+  ]) {
+    const text = normalizeWhitespace(readText(path));
+    for (const required of [
+      'pre-B1 stop uses the [parent-continuation route]',
+      'one parent slot and in-flight entry',
+      "the child's handle historical",
+      'skips its report',
+    ]) {
+      assert.ok(text.includes(required), `${path}: missing "${required}"`);
+    }
+  }
+
+  for (const path of [
+    'idd-template/.github/instructions/claim-orchestrator.instructions.md',
+    '.github/instructions/claim-orchestrator.instructions.md',
+  ]) {
+    const text = normalizeWhitespace(readText(path));
+    for (const required of [
+      'Continuation after a confirmed pre-B1 stop is not a new activation',
+      '[canonical parent-continuation proof]',
+      'keep the same claim and nonce',
+    ]) {
+      assert.ok(text.includes(required), `${path}: missing "${required}"`);
+    }
+  }
+});
+
 test('docs idd-workflow fan-out variant carries a delegation brief template for every brief element (#4377)', () => {
   const sourceTexts = new Map<string, string>();
   for (const row of BRIEF_ELEMENT_ROWS) {

@@ -15,23 +15,24 @@ Requirements: [fan-out variant][fv] and
 A unique session-suffixed agent id skips activation on restart; all other
 restarts use section 2 recovery without refill.
 
-A session is a static fan-out candidate only when the static requirements in
-the [live execution-mode decision](../../docs/idd-workflow.md#live-capability-decision)
-hold. Before fan-out setup, A5, claim, launch, or refill, follow that decision.
-Static support or missing tools do not prove live capability. Use fan-out only
-when the table permits. The cap is per session, not host.
+Use the [live execution-mode decision](../../docs/idd-workflow.md#live-capability-decision)
+and its static requirements in that table before fan-out setup, A5, claim,
+launch, or refill.
+Static support or missing tools do not prove live capability;
+use fan-out only when permitted. Cap is per session, not host.
 
 ## 2. Session scratchpad preflight and roster
 
-Fan-out selection comes first. Before Discover, A5, restart, refill, or
+Select fan-out first. Before Discover, A5, restart, refill, or
 dispatch, follow the
 [session scratchpad lifecycle](../../docs/idd-workflow.md#session-scratchpad-lifecycle)
-for a fan-out session; stop on holds. A single-agent result does not provision
-fan-out scratch space. Derive worker paths from the verified root; keep the
-worker missing-parent guard.
+for fan-out; stop on holds. Single-agent skips its scratch. Derive worker
+paths from the verified root; keep the worker missing-parent guard.
 
-Track each worker's issue, claim, branch, handle, report path, and lifecycle
-state. On restart, see
+Track workers by issue, claim, branch, handle, report path, and state. A
+pre-B1 stop uses the [parent-continuation route](../../docs/idd-workflow.md#verified-pre-b1-parent-continuation);
+it keeps one parent slot and in-flight entry, the child's handle historical,
+and skips its report. On restart, see
 [recovery](../../docs/idd-workflow.md#orchestrator-restart).
 
 ## 3. Dispatch
