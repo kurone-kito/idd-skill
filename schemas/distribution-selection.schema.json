@@ -832,7 +832,7 @@
         "legacy-receipt",
         "unknown"
       ],
-      "description": "`repository-pin` means an explicit repository pin and requires a non-null repository plus one of the allowed pin-preserving, session-bound, preparation-missing, migration-required, or not-verified-usable verdicts (rule 14). `repository-local` names local instructions, which keep precedence in routing. `global-current` is the set selected by the current global link or default when no repository pin or session binding applies. `installed-bundle` is the immutable bundle recorded by a verified installation. `legacy-receipt` and `unknown` require `migration-required` or `not-verified-usable` (rule 10). `pin-preserved` requires `repository-pin` (rule 4)."
+      "description": "`repository-pin` means an explicit repository pin and requires a non-null repository plus one of the allowed pin-preserved, session-bound, preparation-missing, migration-required, or not-verified-usable verdicts (rule 14). `repository-local` names local instructions, which keep precedence in routing. `global-current` is the set selected by the current global link or default when no repository pin or session binding applies. `installed-bundle` is the immutable bundle recorded by a verified installation. `legacy-receipt` and `unknown` require `migration-required` or `not-verified-usable` (rule 10). `pin-preserved` requires `repository-pin` (rule 4)."
     },
     "recovery": {
       "type": "string",

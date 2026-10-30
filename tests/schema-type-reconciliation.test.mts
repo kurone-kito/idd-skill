@@ -3052,6 +3052,17 @@ test('distribution selection schema records the exact resolved-selection contrac
   ]) {
     assert.ok(properties.source.description?.includes(token));
   }
+  const rule14AllowedVerdicts = properties.source.description?.match(
+    /one of the allowed (.+?) verdicts \(rule 14\)/u,
+  )?.[1];
+  assert.ok(rule14AllowedVerdicts, 'rule 14 allowed-verdict clause exists');
+  assert.deepEqual(rule14AllowedVerdicts.split(/, (?:or )?/u), [
+    'pin-preserved',
+    'session-bound',
+    'preparation-missing',
+    'migration-required',
+    'not-verified-usable',
+  ]);
   for (const token of ['prepare', 'reselect', 'migrate']) {
     assert.ok(properties.recovery.description?.includes(token));
   }
