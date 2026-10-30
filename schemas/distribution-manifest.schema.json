@@ -1,0 +1,370 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kurone-kito.github.io/idd-skill/schemas/distribution-manifest.schema.json",
+  "title": "IDD distribution manifest",
+  "description": "Pins one source commit and records immutable component identities and usability locations.",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "sourceCommit",
+    "components"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "integer",
+      "enum": [
+        1
+      ],
+      "description": "Selects the distribution manifest contract version."
+    },
+    "sourceCommit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$",
+      "description": "Proves identity. Names the full source commit from which every component was built."
+    },
+    "components": {
+      "type": "object",
+      "description": "Groups the immutable instructions, skill bundle, and helper components.",
+      "required": [
+        "instructions",
+        "skillBundles",
+        "helper"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "instructions": {
+          "type": "object",
+          "description": "Proves identity. Defines the complete installed instruction component rooted at idd-template/.",
+          "required": [
+            "location",
+            "provenance",
+            "files",
+            "digest"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "location": {
+              "type": "string",
+              "format": "uri",
+              "pattern": "^https://[^/]+/[^/]+/[^/]+/(tree|blob)/[0-9a-f]{40}(/.+)?$",
+              "description": "Proves usability only. Gives a commit-pinned forge URL whose optional path names the instructions component root; its commit must equal sourceCommit."
+            },
+            "provenance": {
+              "type": "object",
+              "description": "Proves identity. Records how the instruction component bytes were read and their source commit.",
+              "required": [
+                "kind",
+                "commit"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "checkout",
+                    "archive"
+                  ],
+                  "description": "Proves identity. Records whether these bytes were read from a Git checkout or a source archive."
+                },
+                "commit": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{40}$",
+                  "description": "Proves identity. Records the source commit and must equal sourceCommit."
+                }
+              }
+            },
+            "files": {
+              "type": "array",
+              "minItems": 1,
+              "description": "Proves identity. Lists every instructions file relative to the component root with its SHA-256.",
+              "items": {
+                "type": "object",
+                "required": [
+                  "path",
+                  "sha256"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^(?!/)(?!.*\\\\)(?!.*(?:^|/)\\.\\.(?:/|$)).+$",
+                    "description": "Proves identity. Names one non-empty relative file path using slash separators without a parent-directory segment."
+                  },
+                  "sha256": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$",
+                    "description": "Proves identity. Gives the lowercase SHA-256 of this file's bytes."
+                  }
+                }
+              }
+            },
+            "digest": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "description": "Proves identity. Hashes the bytewise path-sorted listing of file SHA-256 values and paths."
+            }
+          }
+        },
+        "skillBundles": {
+          "type": "object",
+          "description": "Groups the two independently identified skill bundle components.",
+          "required": [
+            "issue-authoring",
+            "idd-spec-audit"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "issue-authoring": {
+              "type": "object",
+              "description": "Proves identity. Defines every file in the issue-authoring skill bundle.",
+              "required": [
+                "location",
+                "provenance",
+                "files",
+                "digest"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "location": {
+                  "type": "string",
+                  "format": "uri",
+                  "pattern": "^https://[^/]+/[^/]+/[^/]+/(tree|blob)/[0-9a-f]{40}(/.+)?$",
+                  "description": "Proves usability only. Gives a commit-pinned forge URL whose optional path names the issue-authoring bundle root; its commit must equal sourceCommit."
+                },
+                "provenance": {
+                  "type": "object",
+                  "description": "Proves identity. Records how the issue-authoring bundle bytes were read and their source commit.",
+                  "required": [
+                    "kind",
+                    "commit"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "checkout",
+                        "archive"
+                      ],
+                      "description": "Proves identity. Records whether these bytes were read from a Git checkout or a source archive."
+                    },
+                    "commit": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{40}$",
+                      "description": "Proves identity. Records the source commit and must equal sourceCommit."
+                    }
+                  }
+                },
+                "files": {
+                  "type": "array",
+                  "minItems": 1,
+                  "description": "Proves identity. Lists every issue-authoring bundle file relative to the component root with its SHA-256.",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "path",
+                      "sha256"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "path": {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "^(?!/)(?!.*\\\\)(?!.*(?:^|/)\\.\\.(?:/|$)).+$",
+                        "description": "Proves identity. Names one non-empty relative file path using slash separators without a parent-directory segment."
+                      },
+                      "sha256": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$",
+                        "description": "Proves identity. Gives the lowercase SHA-256 of this file's bytes."
+                      }
+                    }
+                  }
+                },
+                "digest": {
+                  "type": "string",
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "description": "Proves identity. Hashes the bytewise path-sorted listing of file SHA-256 values and paths."
+                }
+              }
+            },
+            "idd-spec-audit": {
+              "type": "object",
+              "description": "Proves identity. Defines every file in the idd-spec-audit skill bundle.",
+              "required": [
+                "location",
+                "provenance",
+                "files",
+                "digest"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "location": {
+                  "type": "string",
+                  "format": "uri",
+                  "pattern": "^https://[^/]+/[^/]+/[^/]+/(tree|blob)/[0-9a-f]{40}(/.+)?$",
+                  "description": "Proves usability only. Gives a commit-pinned forge URL whose optional path names the idd-spec-audit bundle root; its commit must equal sourceCommit."
+                },
+                "provenance": {
+                  "type": "object",
+                  "description": "Proves identity. Records how the idd-spec-audit bundle bytes were read and their source commit.",
+                  "required": [
+                    "kind",
+                    "commit"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "checkout",
+                        "archive"
+                      ],
+                      "description": "Proves identity. Records whether these bytes were read from a Git checkout or a source archive."
+                    },
+                    "commit": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{40}$",
+                      "description": "Proves identity. Records the source commit and must equal sourceCommit."
+                    }
+                  }
+                },
+                "files": {
+                  "type": "array",
+                  "minItems": 1,
+                  "description": "Proves identity. Lists every idd-spec-audit bundle file relative to the component root with its SHA-256.",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "path",
+                      "sha256"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "path": {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "^(?!/)(?!.*\\\\)(?!.*(?:^|/)\\.\\.(?:/|$)).+$",
+                        "description": "Proves identity. Names one non-empty relative file path using slash separators without a parent-directory segment."
+                      },
+                      "sha256": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$",
+                        "description": "Proves identity. Gives the lowercase SHA-256 of this file's bytes."
+                      }
+                    }
+                  }
+                },
+                "digest": {
+                  "type": "string",
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "description": "Proves identity. Hashes the bytewise path-sorted listing of file SHA-256 values and paths."
+                }
+              }
+            }
+          }
+        },
+        "helper": {
+          "type": "object",
+          "description": "Proves identity. Defines the helper entry's runtime closure and invocation.",
+          "required": [
+            "location",
+            "provenance",
+            "files",
+            "digest",
+            "invocation"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "location": {
+              "type": "string",
+              "format": "uri",
+              "pattern": "^https://[^/]+/[^/]+/[^/]+/(tree|blob)/[0-9a-f]{40}(/.+)?$",
+              "description": "Proves usability only. Gives a commit-pinned forge URL for the repository root with no path after the commit; its commit must equal sourceCommit."
+            },
+            "provenance": {
+              "type": "object",
+              "description": "Proves identity. Records how the helper component bytes were read and their source commit.",
+              "required": [
+                "kind",
+                "commit"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "checkout",
+                    "archive"
+                  ],
+                  "description": "Proves identity. Records whether these bytes were read from a Git checkout or a source archive."
+                },
+                "commit": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{40}$",
+                  "description": "Proves identity. Records the source commit and must equal sourceCommit."
+                }
+              }
+            },
+            "files": {
+              "type": "array",
+              "minItems": 1,
+              "description": "Proves identity. Lists the helper entry's runtime closure files relative to the repository root with their SHA-256 values.",
+              "items": {
+                "type": "object",
+                "required": [
+                  "path",
+                  "sha256"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^(?!/)(?!.*\\\\)(?!.*(?:^|/)\\.\\.(?:/|$)).+$",
+                    "description": "Proves identity. Names one non-empty relative file path using slash separators without a parent-directory segment."
+                  },
+                  "sha256": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$",
+                    "description": "Proves identity. Gives the lowercase SHA-256 of this file's bytes."
+                  }
+                }
+              }
+            },
+            "digest": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "description": "Proves identity. Hashes the bytewise path-sorted listing of file SHA-256 values and paths."
+            },
+            "invocation": {
+              "type": "object",
+              "description": "Proves usability only. Names the executable helper command and its arguments.",
+              "required": [
+                "command",
+                "argv"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "command": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Proves usability only. Names the helper entry and must equal one path in helper.files."
+                },
+                "argv": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "Proves usability only. Gives the arguments following the helper command and may be empty."
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "additionalProperties": false
+}

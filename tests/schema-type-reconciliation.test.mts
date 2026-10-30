@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { test } from 'node:test';
 
 import type { AdvisoryConvergenceVerdict } from '../src/scripts/advisory-convergence.mts';
@@ -31,6 +32,7 @@ import type { ProviderHealthReport } from '../src/scripts/provider-health.mts';
 import type { ProvisionalDecisionRecord } from '../src/scripts/provisional-decision-state.mts';
 import {
   type CatalogSchemaFile,
+  SCHEMA_OUTPUT_COVERAGE,
   SCHEMA_TYPE_CATALOG,
 } from '../src/scripts/repository-schema-audit.mts';
 import type { ResolveReviewThreadReport } from '../src/scripts/resolve-review-thread.mts';
@@ -157,6 +159,37 @@ interface IssueAuthoringReviewInput {
     evidence: readonly string[];
     relationships: readonly string[];
     checklist: readonly string[];
+  };
+}
+
+interface DistributionComponent {
+  location: string;
+  provenance: {
+    kind: 'checkout' | 'archive';
+    commit: string;
+  };
+  files: {
+    path: string;
+    sha256: string;
+  }[];
+  digest: string;
+}
+
+interface DistributionManifest {
+  schemaVersion: 1;
+  sourceCommit: string;
+  components: {
+    instructions: DistributionComponent;
+    skillBundles: {
+      'issue-authoring': DistributionComponent;
+      'idd-spec-audit': DistributionComponent;
+    };
+    helper: DistributionComponent & {
+      invocation: {
+        command: string;
+        argv: string[];
+      };
+    };
   };
 }
 
@@ -581,6 +614,12 @@ export const issueAuthoringReviewInputKeys = [
   'packet',
 ] as const satisfies readonly (keyof IssueAuthoringReviewInput)[];
 
+const distributionManifestKeys = [
+  'schemaVersion',
+  'sourceCommit',
+  'components',
+] as const satisfies readonly (keyof DistributionManifest)[];
+
 export const provisionalDecisionRecordKeys = [
   'schemaVersion',
   'recordId',
@@ -924,6 +963,10 @@ const exhaustivenessWitnesses: {
     IssueAuthoringReviewInput,
     (typeof issueAuthoringReviewInputKeys)[number]
   >;
+  distributionManifest: CoversAllKeysOf<
+    DistributionManifest,
+    (typeof distributionManifestKeys)[number]
+  >;
   provisionalDecisionRecord: CoversAllKeysOf<
     ProvisionalDecisionRecord,
     (typeof provisionalDecisionRecordKeys)[number]
@@ -981,6 +1024,7 @@ const exhaustivenessWitnesses: {
   liveStatusDigest: true,
   phaseGraph: true,
   issueAuthoringReviewInput: true,
+  distributionManifest: true,
   provisionalDecisionRecord: true,
   onboardingHearingCatalog: true,
   onboardingHearingTranscript: true,
@@ -1432,6 +1476,90 @@ const issueAuthoringReviewInputFixture = {
     checklist: ['a concrete surface and an objective verification are named'],
   },
 } satisfies IssueAuthoringReviewInput;
+
+const distributionManifestSourceCommit =
+  'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+
+const distributionManifestFixture = {
+  schemaVersion: 1,
+  sourceCommit: distributionManifestSourceCommit,
+  components: {
+    instructions: {
+      location:
+        'https://github.com/kurone-kito/idd-skill/tree/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/idd-template',
+      provenance: {
+        kind: 'checkout',
+        commit: distributionManifestSourceCommit,
+      },
+      files: [
+        {
+          path: 'README.md',
+          sha256:
+            'fe6a4289e91f5fce0ed74f0e191cd51848c4656ef8bcbf7f73bc6d47d16fec8f',
+        },
+      ],
+      digest:
+        'sha256:3d7a9226864bc649dce68f96f0f3bfd991b65fd75c011977a3e54114016858de',
+    },
+    skillBundles: {
+      'issue-authoring': {
+        location:
+          'https://github.com/kurone-kito/idd-skill/tree/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/skills/issue-authoring',
+        provenance: {
+          kind: 'archive',
+          commit: distributionManifestSourceCommit,
+        },
+        files: [
+          {
+            path: 'SKILL.md',
+            sha256:
+              'e981ea06de48e9f781a9da801821b0bb38f4eaf5a434f9be10894e5a63f3b843',
+          },
+        ],
+        digest:
+          'sha256:a55e5a9ca10d682c928f85b27337c78b9a5cf657ef2b4768d7c11dc9163b1d4f',
+      },
+      'idd-spec-audit': {
+        location:
+          'https://github.com/kurone-kito/idd-skill/tree/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/skills/idd-spec-audit',
+        provenance: {
+          kind: 'checkout',
+          commit: distributionManifestSourceCommit,
+        },
+        files: [
+          {
+            path: 'SKILL.md',
+            sha256:
+              '3b9454ec1abc2fefc37671fa724ce2d22cb96733c37511ce1d3b1c9c297e8afc',
+          },
+        ],
+        digest:
+          'sha256:3b608e876cf5f4724facbe6180d9764a9499191811435fcbb235a66c54fc4e83',
+      },
+    },
+    helper: {
+      location:
+        'https://github.com/kurone-kito/idd-skill/tree/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      provenance: {
+        kind: 'checkout',
+        commit: distributionManifestSourceCommit,
+      },
+      files: [
+        {
+          path: 'bin/idd-activation.mjs',
+          sha256:
+            '38549b6fcc11af28c49a41ec2a1712483c8e10061b1240c21d89d9b5e8d86497',
+        },
+      ],
+      digest:
+        'sha256:772230827337910adad6aedced8b3e157cb8b9b945fcf8d936c291bdb6e66658',
+      invocation: {
+        command: 'bin/idd-activation.mjs',
+        argv: [],
+      },
+    },
+  },
+} satisfies DistributionManifest;
 
 const provisionalDecisionRecordFixture = {
   schemaVersion: 1,
@@ -2167,6 +2295,10 @@ const SCHEMA_TEST_DATA: Record<CatalogSchemaFile, SchemaTestData> = {
     keys: issueAuthoringReviewInputKeys,
     fixture: issueAuthoringReviewInputFixture,
   },
+  'distribution-manifest.schema.json': {
+    keys: distributionManifestKeys,
+    fixture: distributionManifestFixture,
+  },
   'provisional-decision-record.schema.json': {
     keys: provisionalDecisionRecordKeys,
     fixture: provisionalDecisionRecordFixture,
@@ -2205,6 +2337,275 @@ const SCHEMA_TEST_DATA: Record<CatalogSchemaFile, SchemaTestData> = {
 const SCHEMA_TYPE_MAP: readonly SchemaTypeMapping[] = SCHEMA_TYPE_CATALOG.map(
   (entry) => ({ ...entry, ...SCHEMA_TEST_DATA[entry.schemaFile] }),
 );
+
+function distributionListingDigest(
+  files: readonly { path: string; sha256: string }[],
+): string {
+  const seenPaths = new Set<string>();
+  for (const file of files) {
+    if (file.path.length === 0) {
+      throw new Error('file path must not be empty');
+    }
+    if (file.path.startsWith('/')) {
+      throw new Error('file path must be relative');
+    }
+    if (file.path.includes('\\')) {
+      throw new Error('file path must use slash separators');
+    }
+    if (file.path.split('/').includes('..')) {
+      throw new Error('file path must not contain a parent-directory segment');
+    }
+    if (seenPaths.has(file.path)) {
+      throw new Error('file paths must be unique');
+    }
+    seenPaths.add(file.path);
+  }
+  const listing = [...files]
+    .sort((left, right) =>
+      Buffer.compare(
+        Buffer.from(left.path, 'utf8'),
+        Buffer.from(right.path, 'utf8'),
+      ),
+    )
+    .map((file) => file.sha256 + ' ' + file.path + '\n')
+    .join('');
+  const digest = createHash('sha256').update(listing, 'utf8').digest('hex');
+  return 'sha256:' + digest;
+}
+
+function cloneDistributionManifest(): DistributionManifest {
+  return structuredClone(distributionManifestFixture);
+}
+
+test('distribution manifest fixture, identity rules, and listing digest are explicit', () => {
+  const schema = loadJson('schemas/distribution-manifest.schema.json');
+  const context = {
+    root: process.cwd(),
+    schemaPath: 'schemas/distribution-manifest.schema.json',
+  };
+  const invalidFixture = loadJson(
+    'fixtures/schemas/distribution-manifest.invalid.json',
+  );
+  const invalidErrorList = validate(invalidFixture, schema, '$', context);
+  const invalidErrors = invalidErrorList.join('\n');
+  assert.match(invalidErrors, /missing required property "helper"/);
+  assert.equal(invalidErrorList.length, 1);
+
+  const { sourceCommit: _sourceCommit, ...withoutSourceCommit } =
+    distributionManifestFixture;
+  const missingSourceErrors = validate(
+    withoutSourceCommit,
+    schema,
+    '$',
+    context,
+  ).join('\n');
+  assert.match(missingSourceErrors, /missing required property "sourceCommit"/);
+
+  const rootVersion = cloneDistributionManifest();
+  Object.assign(rootVersion, { version: '1.0.0' });
+  assert.match(
+    validate(rootVersion, schema, '$', context).join('\n'),
+    /additional property "version" not allowed/,
+  );
+
+  const provenanceVersion = cloneDistributionManifest();
+  Object.assign(provenanceVersion.components.instructions.provenance, {
+    version: '1.0.0',
+  });
+  assert.match(
+    validate(provenanceVersion, schema, '$', context).join('\n'),
+    /additional property "version" not allowed/,
+  );
+
+  const malformedCommit = cloneDistributionManifest();
+  malformedCommit.sourceCommit = 'not-a-commit';
+  assert.match(
+    validate(malformedCommit, schema, '$', context).join('\n'),
+    /does not match pattern \/\^\[0-9a-f\]\{40\}\$\//,
+  );
+
+  const missingProvenance = cloneDistributionManifest();
+  delete (
+    missingProvenance.components.instructions as Partial<DistributionComponent>
+  ).provenance;
+  assert.match(
+    validate(missingProvenance, schema, '$', context).join('\n'),
+    /missing required property "provenance"/,
+  );
+
+  const malformedDigest = cloneDistributionManifest();
+  malformedDigest.components.instructions.digest = 'sha256:broken';
+  assert.match(
+    validate(malformedDigest, schema, '$', context).join('\n'),
+    /does not match pattern \/\^sha256:\[0-9a-f\]\{64\}\$\//,
+  );
+
+  const unknownProvenanceKind = cloneDistributionManifest();
+  Object.assign(unknownProvenanceKind.components.instructions.provenance, {
+    kind: 'unknown',
+  });
+  assert.match(
+    validate(unknownProvenanceKind, schema, '$', context).join('\n'),
+    /"unknown" not in enum \[checkout, archive\]/,
+  );
+
+  const secondCommit = cloneDistributionManifest();
+  secondCommit.sourceCommit = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+  const componentsFor = (manifest: DistributionManifest) => [
+    manifest.components.instructions,
+    manifest.components.skillBundles['issue-authoring'],
+    manifest.components.skillBundles['idd-spec-audit'],
+    manifest.components.helper,
+  ];
+  for (const component of componentsFor(secondCommit)) {
+    component.provenance.commit = secondCommit.sourceCommit;
+    component.location = component.location.replace(
+      /\/[0-9a-f]{40}(?=\/|$)/,
+      '/' + secondCommit.sourceCommit,
+    );
+  }
+  for (const manifest of [distributionManifestFixture, secondCommit]) {
+    for (const component of componentsFor(manifest)) {
+      assert.equal(component.provenance.commit, manifest.sourceCommit);
+      assert.equal(
+        component.digest,
+        distributionListingDigest(component.files),
+      );
+      const locationCommit = new URL(component.location).pathname.match(
+        /\/(?:tree|blob)\/([0-9a-f]{40})(?:\/|$)/,
+      )?.[1];
+      assert.equal(locationCommit, manifest.sourceCommit);
+    }
+  }
+  assert.deepEqual(
+    validate(distributionManifestFixture, schema, '$', context),
+    [],
+  );
+  assert.deepEqual(validate(secondCommit, schema, '$', context), []);
+  assert.notEqual(
+    distributionManifestFixture.sourceCommit,
+    secondCommit.sourceCommit,
+  );
+
+  const fileHash = (bytes: string): string =>
+    createHash('sha256').update(bytes, 'utf8').digest('hex');
+  assert.equal(
+    distributionListingDigest([
+      { path: 'b/c', sha256: fileHash('charlie\n') },
+      { path: 'a', sha256: fileHash('alpha\n') },
+    ]),
+    'sha256:f34839f1f9e7e4459a680c822c7a28c21e4281d92c9aa36631a1f2327ce2c169',
+  );
+  assert.throws(() =>
+    distributionListingDigest([
+      { path: 'duplicate', sha256: fileHash('one') },
+      { path: 'duplicate', sha256: fileHash('two') },
+    ]),
+  );
+  assert.throws(() =>
+    distributionListingDigest([{ path: '/absolute', sha256: fileHash('one') }]),
+  );
+  assert.throws(() =>
+    distributionListingDigest([
+      { path: 'back\\slash', sha256: fileHash('one') },
+    ]),
+  );
+  assert.throws(() =>
+    distributionListingDigest([{ path: 'x/../y', sha256: fileHash('one') }]),
+  );
+  assert.doesNotThrow(() =>
+    distributionListingDigest([{ path: 'a..b', sha256: fileHash('one') }]),
+  );
+});
+
+test('distribution manifest pins component roots and describes identity fields', () => {
+  const schema = loadJson('schemas/distribution-manifest.schema.json') as {
+    properties: Record<
+      string,
+      {
+        description?: string;
+        properties?: Record<
+          string,
+          {
+            description?: string;
+            properties?: Record<
+              string,
+              {
+                description?: string;
+                properties?: Record<string, { description?: string }>;
+              }
+            >;
+          }
+        >;
+      }
+    >;
+  };
+  const rootProperties = schema.properties;
+  assert.match(
+    rootProperties.sourceCommit.description ?? '',
+    /^Proves identity\./,
+  );
+  const components = rootProperties.components.properties ?? {};
+  const instructions = components.instructions.properties ?? {};
+  assert.match(
+    instructions.location.description ?? '',
+    /^Proves usability only\./,
+  );
+  assert.match(instructions.provenance.description ?? '', /^Proves identity\./);
+  assert.match(instructions.files.description ?? '', /^Proves identity\./);
+  assert.match(instructions.digest.description ?? '', /^Proves identity\./);
+
+  const helper = components.helper.properties ?? {};
+  assert.match(helper.invocation.description ?? '', /^Proves usability only\./);
+  const instructionsComponent =
+    distributionManifestFixture.components.instructions;
+  const issueAuthoring =
+    distributionManifestFixture.components.skillBundles['issue-authoring'];
+  const specAudit =
+    distributionManifestFixture.components.skillBundles['idd-spec-audit'];
+  const helperComponent = distributionManifestFixture.components.helper;
+  assert.ok(
+    new URL(instructionsComponent.location).pathname.endsWith('/idd-template'),
+  );
+  assert.ok(
+    new URL(issueAuthoring.location).pathname.endsWith(
+      '/skills/issue-authoring',
+    ),
+  );
+  assert.ok(
+    new URL(specAudit.location).pathname.endsWith('/skills/idd-spec-audit'),
+  );
+  assert.equal(
+    new URL(helperComponent.location).pathname.split('/').at(-1),
+    distributionManifestSourceCommit,
+  );
+  assert.ok(
+    helperComponent.files.some(
+      (file) => file.path === helperComponent.invocation.command,
+    ),
+  );
+
+  const catalogEntry = SCHEMA_TYPE_CATALOG.find(
+    (entry) => entry.schemaFile === 'distribution-manifest.schema.json',
+  );
+  assert.deepEqual(catalogEntry, {
+    schemaFile: 'distribution-manifest.schema.json',
+    exportedType: 'DistributionManifest (test-local; no runtime type)',
+    owningModule:
+      'tests/schema-type-reconciliation.test.mts (test-local; no runtime module)',
+  });
+  assert.deepEqual(
+    SCHEMA_OUTPUT_COVERAGE.find(
+      (entry) => entry.schema === 'distribution-manifest.schema.json',
+    ),
+    {
+      schema: 'distribution-manifest.schema.json',
+      status: 'uncovered',
+      reason:
+        'no runtime builder for the manifest yet; the listing digest runs only in the test',
+    },
+  );
+});
 
 test('policy schema accepts only boolean dangerouslyAutoDecide values (#4529)', () => {
   const schema = loadJson('schemas/policy.schema.json');
