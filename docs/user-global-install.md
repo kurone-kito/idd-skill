@@ -423,10 +423,12 @@ preparation is missing, the report uses `preparation-missing` and leaves the
 pin unchanged.
 
 A verified and prepared session binding keeps its set when the current link
-moves; the report uses `session-bound`. Equal version strings do not
-make builds identical. Different source commits are `distinct-builds`, and a
-package version or matching bin name alone is insufficient to establish
-compatibility. Components from mixed commits are `not-verified-usable` and
+moves; the report uses `session-bound`. Equal version strings do not make
+builds identical. When compared `packageVersion` strings are equal but source
+commits differ, the report uses `distinct-builds`. Different source commits
+alone do not establish that verdict. A package version or matching bin name
+alone is insufficient to establish compatibility. Components from mixed
+commits are `not-verified-usable` and
 are never treated as compatible. A coherent older build continues to work
 through its own manifest; it does not need a new selector. These examples
 reflect finding 12, where the global IDD skill needed a publisher that an older
@@ -449,12 +451,14 @@ There are three standalone routes:
    `repository-local`. Unknown or mismatched provenance gets an explicit
    migration diagnosis before any authoring mutation.
 
-A failed manifest fact is `not-verified-usable`. Unknown provenance for
-installed instructions, or installed bytes that differ from the manifest,
-requires `migration-required` with recovery `migrate`. When an identity is
-absent only because instruction provenance is unknown or mismatched, the
-result is `migration-required`, not `not-verified-usable`. If a manifest fact
-fails at the same time, `not-verified-usable` takes precedence. Unknown,
+A failed manifest fact or a conflicting receipt is `not-verified-usable`.
+Unknown provenance for installed instructions, or installed bytes that
+differ from the manifest, requires `migration-required` with recovery
+`migrate`. When an identity is absent only because instruction provenance is
+unknown or mismatched, the result is `migration-required`, not
+`not-verified-usable`. If a manifest fact fails or `receipt.status` is
+`conflict` at the same time as a migration condition, `not-verified-usable`
+takes precedence. Unknown,
 mismatched, or locally modified instruction provenance, and an unsupported
 legacy receipt,
 must never cause an identity to be invented (preventive; no observed incident
@@ -464,8 +468,9 @@ observed incident yet).
 Source values are `repository-pin`, `repository-local`, `global-current`,
 `installed-bundle`, `legacy-receipt`, and `unknown`. The unsupported sources
 are `legacy-receipt` and `unknown`. Recovery values are `none`, `prepare`,
-`migrate`, and `reselect`. `reselect` means a bound or pinned set is no longer
-verified and the verdict is `not-verified-usable`. Preparation
+`migrate`, and `reselect`. `reselect` means a bound, pinned, or
+`global-current` set is no longer verified and the verdict is
+`not-verified-usable`. Preparation
 `not-applicable` means that no set is selected.
 
 Persisted state uses the existing no-follow read guard and the receipt guard

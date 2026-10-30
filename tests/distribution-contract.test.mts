@@ -315,6 +315,16 @@ test('distribution selection section states route precedence and provenance', ()
   for (const phrase of phrases) {
     assert.ok(section.includes(phrase), phrase);
   }
+  const semanticStatements = [
+    'When compared `packageVersion` strings are equal but source commits differ, the report uses `distinct-builds`.',
+    'Different source commits alone do not establish that verdict.',
+    'A failed manifest fact or a conflicting receipt is `not-verified-usable`.',
+    'If a manifest fact fails or `receipt.status` is `conflict` at the same time as a migration condition, `not-verified-usable` takes precedence.',
+    '`reselect` means a bound, pinned, or `global-current` set is no longer verified and the verdict is `not-verified-usable`.',
+  ];
+  for (const statement of semanticStatements) {
+    assert.ok(section.includes(statement), statement);
+  }
 });
 
 test('four route fixtures match their expected reports and validate', () => {
