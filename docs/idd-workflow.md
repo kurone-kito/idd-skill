@@ -1187,6 +1187,48 @@ The orchestrator's end-of-run report is defined under
 worker's own final report carries for each way a run can end is listed under
 [Worker report outcomes](#worker-report-outcomes).
 
+#### Live capability decision
+
+The orchestrator instructions use this table before scratchpad setup, a fresh
+claim, or worker launch. Its inputs are the current session's callable tools,
+their documented lifecycle behavior, and the session's launch/roster history.
+The vendor worker table is a support hint; a row marked `orchestrator` does not
+prove that its tools are callable in the current session. Evaluate only the
+lifecycle operations required by the selected mechanism, along with its
+confirmed wait model, documented lifetime, and the existing concurrency cap.
+
+A session is a static fan-out candidate only when all of these hold:
+
+- the harness worker mechanism table row has Eligibility `orchestrator`;
+- helper support is installed (`instructions-only` has none), so the
+  profile-selected `idd-worker-budget` exists;
+- the effective `orchestrator.maxWorkers` is at least 2 (read `maxWorkers`
+  from `idd-worker-budget --running 0 --startable 0`);
+- the session is not on the lite profile;
+- the session was not started for one explicit issue (A0-T) or a single-issue
+  request;
+- `GITHUB_ACTIONS` is not `true`.
+
+The table below then decides the route.
+
+| Evidence                                                                                                                                                                                                                                                       | Route                                                                                                                                                                          |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Static fan-out requirements pass and a documented mechanism's required live tools, wait model, and multi-hour lifetime are confirmed; prior-worker state is known; at a refill, known running workers continue on this row while the capability remains usable | Fan-out, then resolve and verify the session scratchpad through the lifecycle below before Discover, A5, or dispatch                                                           |
+| This uninterrupted session positively shows no launch was attempted, but no eligible multi-hour mechanism is callable, or a required wait/lifetime condition is not met                                                                                        | Mode decision before A5; then ordinary single-issue Discover/Claim/Work. Do not call a missing roster tool, provision fan-out scratch space, launch a worker, or claim a batch |
+| The request is one explicit issue, the profile is lite, `GITHUB_ACTIONS` is `true`, helper support is absent, `maxWorkers` is below 2, or the worker table says `one issue per session`                                                                        | Ordinary single-agent route under the existing activation rules, only when no launch, own claim, or potentially live writer is unresolved; otherwise the recovery and hold row |
+| At a later refill, the fan-out capability is lost (a required lifecycle tool, wait model, or lifetime condition is no longer met), every prior worker is verified disposed, and no uncertain launch, unmatched own claim, or potentially live writer remains   | Continue in the current session as single-agent before the next A5; process one issue to its normal terminal phase, then return to Discover                                    |
+| The session restarted or a launch was attempted, but the roster is unavailable/incomplete, or any worker, claim, or writer remains unresolved                                                                                                                  | Existing restart/recovery and hold; missing tools or scratch files do not prove that no worker exists                                                                          |
+| Scratchpad metadata is missing while fan-out remains usable                                                                                                                                                                                                    | Resolve or provision it through the session scratchpad lifecycle below before any claim or dispatch                                                                            |
+| Ownership, workspace, host/API admission, CI, review, or merge evidence is ambiguous or fails its gate                                                                                                                                                         | Keep the existing safety stop or wait; execution-mode selection does not waive a gate                                                                                          |
+
+When more than one row matches, a row that leaves a launch, own claim, or
+potentially live writer unresolved takes precedence over every static
+fallback.
+
+Observed 2026-10-25 in issues #4698 and #4712: static eligibility alone did
+not establish whether the current session could start, observe, wait for, or
+control a worker. The table records the selected response.
+
 #### Session scratchpad lifecycle
 
 The orchestrator owns one scratchpad root for the full runtime session. Resolve
@@ -1924,9 +1966,13 @@ wait for the operator (its turn ends awaiting an operator reply), and the
 operator reads it there. Each report lists the whole state, not only what
 changed since the last one. Waiting for a worker's completion, a host-load
 re-check, or a renewal due time is neither a stop nor a pause.
+A session that considered fan-out but selected single-agent still uses this
+report when it stops or pauses.
 
 At minimum it lists:
 
+- **Execution mode.** `fan-out` or `single-agent`, plus the evidence-based
+  reason for the initial choice or later switch. Required in every report.
 - **Roster.** Each roster entry, with its issue number and its final state, the
   state it is in when the report is written: `running`, `reporting`,
   `disposed`, or `stalled`, as section 2 of the orchestrator phase file lists
