@@ -2449,6 +2449,37 @@ test('distribution manifest fixture, identity rules, and listing digest are expl
     /"unknown" not in enum \[checkout, archive\]/,
   );
 
+  const wrongInstructionsRoot = cloneDistributionManifest();
+  wrongInstructionsRoot.components.instructions.location =
+    wrongInstructionsRoot.components.instructions.location.replace(
+      '/idd-template',
+      '/wrong-root',
+    );
+  const wrongIssueAuthoringRoot = cloneDistributionManifest();
+  wrongIssueAuthoringRoot.components.skillBundles['issue-authoring'].location =
+    wrongIssueAuthoringRoot.components.skillBundles[
+      'issue-authoring'
+    ].location.replace('/skills/issue-authoring', '/skills/wrong-root');
+  const wrongSpecAuditRoot = cloneDistributionManifest();
+  wrongSpecAuditRoot.components.skillBundles['idd-spec-audit'].location =
+    wrongSpecAuditRoot.components.skillBundles[
+      'idd-spec-audit'
+    ].location.replace('/skills/idd-spec-audit', '/skills/wrong-root');
+  const helperLocationWithSuffix = cloneDistributionManifest();
+  helperLocationWithSuffix.components.helper.location +=
+    '/bin/idd-activation.mjs';
+  for (const invalidLocation of [
+    wrongInstructionsRoot,
+    wrongIssueAuthoringRoot,
+    wrongSpecAuditRoot,
+    helperLocationWithSuffix,
+  ]) {
+    assert.match(
+      validate(invalidLocation, schema, '$', context).join('\n'),
+      /does not match pattern/,
+    );
+  }
+
   const secondCommit = cloneDistributionManifest();
   secondCommit.sourceCommit = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
   const componentsFor = (manifest: DistributionManifest) => [

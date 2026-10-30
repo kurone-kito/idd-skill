@@ -46,8 +46,8 @@
             "location": {
               "type": "string",
               "format": "uri",
-              "pattern": "^https://[^/]+/[^/]+/[^/]+/(tree|blob)/[0-9a-f]{40}(/.+)?$",
-              "description": "Proves usability only. Gives a commit-pinned forge URL whose optional path names the instructions component root; its commit must equal sourceCommit."
+              "pattern": "^https://[^/]+/[^/]+/[^/]+/(tree|blob)/[0-9a-f]{40}/idd-template$",
+              "description": "Proves usability only. Gives a commit-pinned forge URL whose path names the instructions component root; its commit must equal sourceCommit."
             },
             "provenance": {
               "type": "object",
@@ -64,7 +64,7 @@
                     "checkout",
                     "archive"
                   ],
-                  "description": "Proves identity. Records whether these bytes were read from a Git checkout or a source archive."
+                  "description": "Records the provenance method as checkout or archive; it does not change build identity."
                 },
                 "commit": {
                   "type": "string",
@@ -129,8 +129,8 @@
                 "location": {
                   "type": "string",
                   "format": "uri",
-                  "pattern": "^https://[^/]+/[^/]+/[^/]+/(tree|blob)/[0-9a-f]{40}(/.+)?$",
-                  "description": "Proves usability only. Gives a commit-pinned forge URL whose optional path names the issue-authoring bundle root; its commit must equal sourceCommit."
+                  "pattern": "^https://[^/]+/[^/]+/[^/]+/(tree|blob)/[0-9a-f]{40}/skills/issue-authoring$",
+                  "description": "Proves usability only. Gives a commit-pinned forge URL whose path names the issue-authoring bundle root; its commit must equal sourceCommit."
                 },
                 "provenance": {
                   "type": "object",
@@ -147,7 +147,7 @@
                         "checkout",
                         "archive"
                       ],
-                      "description": "Proves identity. Records whether these bytes were read from a Git checkout or a source archive."
+                      "description": "Records the provenance method as checkout or archive; it does not change build identity."
                     },
                     "commit": {
                       "type": "string",
@@ -203,8 +203,8 @@
                 "location": {
                   "type": "string",
                   "format": "uri",
-                  "pattern": "^https://[^/]+/[^/]+/[^/]+/(tree|blob)/[0-9a-f]{40}(/.+)?$",
-                  "description": "Proves usability only. Gives a commit-pinned forge URL whose optional path names the idd-spec-audit bundle root; its commit must equal sourceCommit."
+                  "pattern": "^https://[^/]+/[^/]+/[^/]+/(tree|blob)/[0-9a-f]{40}/skills/idd-spec-audit$",
+                  "description": "Proves usability only. Gives a commit-pinned forge URL whose path names the idd-spec-audit bundle root; its commit must equal sourceCommit."
                 },
                 "provenance": {
                   "type": "object",
@@ -221,7 +221,7 @@
                         "checkout",
                         "archive"
                       ],
-                      "description": "Proves identity. Records whether these bytes were read from a Git checkout or a source archive."
+                      "description": "Records the provenance method as checkout or archive; it does not change build identity."
                     },
                     "commit": {
                       "type": "string",
@@ -280,7 +280,7 @@
             "location": {
               "type": "string",
               "format": "uri",
-              "pattern": "^https://[^/]+/[^/]+/[^/]+/(tree|blob)/[0-9a-f]{40}(/.+)?$",
+              "pattern": "^https://[^/]+/[^/]+/[^/]+/(tree|blob)/[0-9a-f]{40}$",
               "description": "Proves usability only. Gives a commit-pinned forge URL for the repository root with no path after the commit; its commit must equal sourceCommit."
             },
             "provenance": {
@@ -298,7 +298,7 @@
                     "checkout",
                     "archive"
                   ],
-                  "description": "Proves identity. Records whether these bytes were read from a Git checkout or a source archive."
+                  "description": "Records the provenance method as checkout or archive; it does not change build identity."
                 },
                 "commit": {
                   "type": "string",
