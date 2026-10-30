@@ -208,6 +208,12 @@ export const SCHEMA_TYPE_CATALOG = [
       'tests/schema-type-reconciliation.test.mts (test-local; no runtime module)',
   },
   {
+    schemaFile: 'distribution-selection.schema.json',
+    exportedType: 'DistributionSelection (test-local; no runtime type)',
+    owningModule:
+      'tests/schema-type-reconciliation.test.mts (test-local; no runtime module)',
+  },
+  {
     schemaFile: 'provisional-decision-record.schema.json',
     exportedType: 'ProvisionalDecisionRecord',
     owningModule: 'src/scripts/provisional-decision-state.mts',
@@ -332,6 +338,12 @@ export const SCHEMA_OUTPUT_COVERAGE: readonly CoverageEntry[] = [
     status: 'uncovered',
     reason:
       'no runtime builder for the manifest yet; the listing digest runs only in the test',
+  },
+  {
+    schema: 'distribution-selection.schema.json',
+    status: 'uncovered',
+    reason:
+      'no runtime builder for the selection report yet; the resolver children add it',
   },
   {
     schema: 'token-cost-sample.schema.json',
