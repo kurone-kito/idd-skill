@@ -3382,6 +3382,10 @@ test('fan-out scratchpad preflight provisions and recovers one session root (#46
     'idd-template/.github/instructions/idd-orchestrator.instructions.md',
     '.github/instructions/idd-orchestrator.instructions.md',
   ];
+  const overviewCopies = [
+    'idd-template/.github/instructions/idd-overview-core.instructions.md',
+    '.github/instructions/idd-overview-core.instructions.md',
+  ];
   const routingCases = [
     {
       evidence:
@@ -3406,8 +3410,26 @@ test('fan-out scratchpad preflight provisions and recovers one session root (#46
     },
     {
       evidence:
-        'A session record is unreadable or invalid, or another session records the canonical candidate root',
-      action: 'do not accept or allocate a colliding root',
+        'scanned session record is unreadable, malformed, unsafe, or its canonical root identity cannot be compared reliably',
+      action: 'Hold and preserve the record; do not skip or delete it',
+    },
+    {
+      evidence:
+        'valid foreign record has an unambiguously distinct canonical root that is missing',
+      action:
+        'If exact-session and candidate-root reservation checks pass, proceed with first allocation; preserve the foreign record, with no foreign-runner liveness or worker, artifact, or report inspection',
+    },
+    {
+      evidence:
+        'valid foreign record has an unambiguously distinct canonical root that exists',
+      action:
+        'Use the same first-allocation verdict as for a distinct missing root; preserve the foreign record, with no foreign-runner liveness or worker, artifact, or report inspection',
+    },
+    {
+      evidence:
+        'Another session records or aliases the canonical candidate root, even when that root is absent',
+      action:
+        'Hold and preserve evidence; do not accept or allocate the colliding root',
     },
     {
       evidence:
@@ -3444,7 +3466,7 @@ test('fan-out scratchpad preflight provisions and recovers one session root (#46
     },
     {
       evidence:
-        'record is unreadable, invalid, linked unsafely, for another session or repository',
+        'exact current-session record is unreadable, invalid, linked unsafely, for another session or repository, or its root is missing, contradictory, or unsafe',
       action: 'Hold and preserve all evidence; do not allocate a replacement',
     },
     {
@@ -3487,9 +3509,18 @@ test('fan-out scratchpad preflight provisions and recovers one session root (#46
       'live worker and artifact evidence',
       'If the listing is unavailable or incomplete, treat prior-worker state as uncertain',
       'Absence of scratchpad artifacts alone does not prove that no worker start was attempted',
-      'Keep a first-allocation reservation while scanning every session record',
+      "Keep a first-allocation reservation while strictly parsing every session record and comparing the candidate root with each record's validated canonical root identity",
+      'For a foreign record, this is a collision check only',
+      'do not require its root to exist, prove its runner stopped, or inspect its worker, artifact, or report state',
+      'A valid foreign record with an unambiguously distinct root does not block allocation even when that root is absent',
+      'Hold and preserve unreadable, malformed, or unsafe records; records whose canonical root identity cannot be compared reliably; and any record naming or aliasing the candidate root',
+      'Apply the full session, repository, root-safety, worker, artifact, report, and recovery checks to the exact current-session record',
+      'Observed 2026-10-30 on issue `#4827`',
+      'this prose and its consistency assertions do not establish a completed live autonomous run',
+      "Classify the current session's entry using the actual harness context, its exact session-and-repository record, and live worker and artifact evidence",
+      'Use foreign session records only for the collision checks described above',
       'An existing reservation without an exact, valid record for this session is a hold',
-      'Remove only the reservation this invocation created, after the record is verified',
+      'remove only the reservation this invocation created after verification',
       'same uninterrupted allocator invocation may continue only when it carries the invocation-local owner token',
       'created after that invocation successfully acquired the exclusive reservation',
       'never persist or reconstruct it from a matching session id, record, manifest, or copied context',
@@ -3512,7 +3543,7 @@ test('fan-out scratchpad preflight provisions and recovers one session root (#46
       "canonicalize the candidate root with the operating system's filesystem comparison rules",
       'case normalization on case-insensitive filesystems',
       "SHA-256 digest of the canonical path's UTF-8 bytes",
-      'checking worker and artifact evidence, and exclusively creating and verifying the session record',
+      'Exclusively create and verify the current session record',
       'never overwrite or remove it automatically',
       "worker only receives session-scratchpad paths under the root; the Worker brief's named critique scratch directory is the explicit exception",
       '<state-base>/idd-skill/orchestrator-sessions/records/<session-id>.json',
@@ -3654,6 +3685,18 @@ test('fan-out scratchpad preflight provisions and recovers one session root (#46
     assert.doesNotMatch(
       text,
       /copy the scratchpad path that your harness reports/,
+    );
+  }
+
+  for (const path of overviewCopies) {
+    const text = normalizeWhitespace(readText(path));
+    assert.match(
+      text,
+      /Starting fresh with a static fan-out candidate.*`idd-orchestrator\.instructions\.md`.*`idd-discover\.instructions\.md`/,
+    );
+    assert.match(
+      text,
+      /For a static fan-out candidate, read the orchestrator phase and apply its \[live-capability decision\].*before scratchpad setup, claim, or worker launch/,
     );
   }
 
