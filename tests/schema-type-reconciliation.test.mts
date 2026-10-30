@@ -2514,6 +2514,15 @@ test('distribution manifest fixture, identity rules, and listing digest are expl
     wrongSpecAuditRoot.components.skillBundles[
       'idd-spec-audit'
     ].location.replace('/skills/idd-spec-audit', '/skills/wrong-root');
+  const instructionsRootWithSuffix = cloneDistributionManifest();
+  instructionsRootWithSuffix.components.instructions.location += '/extra';
+  const issueAuthoringRootWithSuffix = cloneDistributionManifest();
+  issueAuthoringRootWithSuffix.components.skillBundles[
+    'issue-authoring'
+  ].location += '/extra';
+  const specAuditRootWithSuffix = cloneDistributionManifest();
+  specAuditRootWithSuffix.components.skillBundles['idd-spec-audit'].location +=
+    '/extra';
   const helperLocationWithSuffix = cloneDistributionManifest();
   helperLocationWithSuffix.components.helper.location +=
     '/bin/idd-activation.mjs';
@@ -2541,15 +2550,37 @@ test('distribution manifest fixture, identity rules, and listing digest are expl
       '/idd-skill/',
       '/idd-skill#x/',
     );
+  const instructionsLocationWithTrailingLf = cloneDistributionManifest();
+  instructionsLocationWithTrailingLf.components.instructions.location += '\n';
+  const issueAuthoringLocationWithTrailingCr = cloneDistributionManifest();
+  issueAuthoringLocationWithTrailingCr.components.skillBundles[
+    'issue-authoring'
+  ].location += '\r';
+  const specAuditLocationWithTrailingLineSeparator =
+    cloneDistributionManifest();
+  specAuditLocationWithTrailingLineSeparator.components.skillBundles[
+    'idd-spec-audit'
+  ].location += '\u2028';
+  const helperLocationWithTrailingParagraphSeparator =
+    cloneDistributionManifest();
+  helperLocationWithTrailingParagraphSeparator.components.helper.location +=
+    '\u2029';
   for (const invalidLocation of [
     wrongInstructionsRoot,
     wrongIssueAuthoringRoot,
     wrongSpecAuditRoot,
+    instructionsRootWithSuffix,
+    issueAuthoringRootWithSuffix,
+    specAuditRootWithSuffix,
     helperLocationWithSuffix,
     hostQueryInLocation,
     hostFragmentInLocation,
     ownerQueryInLocation,
     repoFragmentInLocation,
+    instructionsLocationWithTrailingLf,
+    issueAuthoringLocationWithTrailingCr,
+    specAuditLocationWithTrailingLineSeparator,
+    helperLocationWithTrailingParagraphSeparator,
   ]) {
     assert.match(
       validate(invalidLocation, schema, '$', context).join('\n'),
@@ -2695,21 +2726,20 @@ test('distribution manifest pins component roots and describes identity fields',
   const specAudit =
     distributionManifestFixture.components.skillBundles['idd-spec-audit'];
   const helperComponent = distributionManifestFixture.components.helper;
-  assert.ok(
-    new URL(instructionsComponent.location).pathname.endsWith('/idd-template'),
-  );
-  assert.ok(
-    new URL(issueAuthoring.location).pathname.endsWith(
-      '/skills/issue-authoring',
-    ),
-  );
-  assert.ok(
-    new URL(specAudit.location).pathname.endsWith('/skills/idd-spec-audit'),
+  const pathAfterCommit = (location: string): string | undefined =>
+    new URL(location).pathname.match(
+      /\/(?:tree|blob)\/[0-9a-f]{40}(\/.*)?$/,
+    )?.[1];
+  assert.equal(
+    pathAfterCommit(instructionsComponent.location),
+    '/idd-template',
   );
   assert.equal(
-    new URL(helperComponent.location).pathname.split('/').at(-1),
-    distributionManifestSourceCommit,
+    pathAfterCommit(issueAuthoring.location),
+    '/skills/issue-authoring',
   );
+  assert.equal(pathAfterCommit(specAudit.location), '/skills/idd-spec-audit');
+  assert.equal(pathAfterCommit(helperComponent.location), undefined);
   assert.ok(
     helperComponent.files.some(
       (file) => file.path === helperComponent.invocation.command,

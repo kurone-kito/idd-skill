@@ -46,7 +46,7 @@
             "location": {
               "type": "string",
               "format": "uri",
-              "pattern": "^https://[^/?#]+/[^/?#]+/[^/?#]+/(tree|blob)/[0-9a-f]{40}/idd-template$",
+              "pattern": "^https://[^/?#]+/[^/?#]+/[^/?#]+/(tree|blob)/[0-9a-f]{40}/idd-template$(?![\\s\\S])",
               "description": "Proves usability only. Gives a commit-pinned forge URL whose path names the instructions component root; its commit must equal sourceCommit."
             },
             "provenance": {
@@ -129,7 +129,7 @@
                 "location": {
                   "type": "string",
                   "format": "uri",
-                  "pattern": "^https://[^/?#]+/[^/?#]+/[^/?#]+/(tree|blob)/[0-9a-f]{40}/skills/issue-authoring$",
+                  "pattern": "^https://[^/?#]+/[^/?#]+/[^/?#]+/(tree|blob)/[0-9a-f]{40}/skills/issue-authoring$(?![\\s\\S])",
                   "description": "Proves usability only. Gives a commit-pinned forge URL whose path names the issue-authoring bundle root; its commit must equal sourceCommit."
                 },
                 "provenance": {
@@ -203,7 +203,7 @@
                 "location": {
                   "type": "string",
                   "format": "uri",
-                  "pattern": "^https://[^/?#]+/[^/?#]+/[^/?#]+/(tree|blob)/[0-9a-f]{40}/skills/idd-spec-audit$",
+                  "pattern": "^https://[^/?#]+/[^/?#]+/[^/?#]+/(tree|blob)/[0-9a-f]{40}/skills/idd-spec-audit$(?![\\s\\S])",
                   "description": "Proves usability only. Gives a commit-pinned forge URL whose path names the idd-spec-audit bundle root; its commit must equal sourceCommit."
                 },
                 "provenance": {
@@ -280,7 +280,7 @@
             "location": {
               "type": "string",
               "format": "uri",
-              "pattern": "^https://[^/?#]+/[^/?#]+/[^/?#]+/(tree|blob)/[0-9a-f]{40}$",
+              "pattern": "^https://[^/?#]+/[^/?#]+/[^/?#]+/(tree|blob)/[0-9a-f]{40}$(?![\\s\\S])",
               "description": "Proves usability only. Gives a commit-pinned forge URL for the repository root with no path after the commit; its commit must equal sourceCommit."
             },
             "provenance": {
