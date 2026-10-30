@@ -2422,9 +2422,15 @@ test('distribution manifest fixture, identity rules, and listing digest are expl
 
   const malformedCommit = cloneDistributionManifest();
   malformedCommit.sourceCommit = 'not-a-commit';
+  const malformedCommitErrors = validate(
+    malformedCommit,
+    schema,
+    '$',
+    context,
+  ).join('\n');
   assert.match(
-    validate(malformedCommit, schema, '$', context).join('\n'),
-    /does not match pattern/,
+    malformedCommitErrors,
+    /does not match pattern \/\^\[0-9a-f\]\{40\}\$\(\?!\[\\s\\S\]\)\//,
   );
 
   const commitWithTrailingLineFeed = cloneDistributionManifest();
@@ -2455,9 +2461,15 @@ test('distribution manifest fixture, identity rules, and listing digest are expl
 
   const malformedDigest = cloneDistributionManifest();
   malformedDigest.components.instructions.digest = 'sha256:broken';
+  const malformedDigestErrors = validate(
+    malformedDigest,
+    schema,
+    '$',
+    context,
+  ).join('\n');
   assert.match(
-    validate(malformedDigest, schema, '$', context).join('\n'),
-    /does not match pattern/,
+    malformedDigestErrors,
+    /does not match pattern \/\^sha256:\[0-9a-f\]\{64\}\$\(\?!\[\\s\\S\]\)\//,
   );
 
   const digestWithTrailingLineFeed = cloneDistributionManifest();
@@ -2505,11 +2517,39 @@ test('distribution manifest fixture, identity rules, and listing digest are expl
   const helperLocationWithSuffix = cloneDistributionManifest();
   helperLocationWithSuffix.components.helper.location +=
     '/bin/idd-activation.mjs';
+  const hostQueryInLocation = cloneDistributionManifest();
+  hostQueryInLocation.components.instructions.location =
+    hostQueryInLocation.components.instructions.location.replace(
+      'https://github.com/',
+      'https://github.com?x/',
+    );
+  const hostFragmentInLocation = cloneDistributionManifest();
+  hostFragmentInLocation.components.instructions.location =
+    hostFragmentInLocation.components.instructions.location.replace(
+      'https://github.com/',
+      'https://github.com#x/',
+    );
+  const ownerQueryInLocation = cloneDistributionManifest();
+  ownerQueryInLocation.components.instructions.location =
+    ownerQueryInLocation.components.instructions.location.replace(
+      '/kurone-kito/',
+      '/kurone-kito?x/',
+    );
+  const repoFragmentInLocation = cloneDistributionManifest();
+  repoFragmentInLocation.components.instructions.location =
+    repoFragmentInLocation.components.instructions.location.replace(
+      '/idd-skill/',
+      '/idd-skill#x/',
+    );
   for (const invalidLocation of [
     wrongInstructionsRoot,
     wrongIssueAuthoringRoot,
     wrongSpecAuditRoot,
     helperLocationWithSuffix,
+    hostQueryInLocation,
+    hostFragmentInLocation,
+    ownerQueryInLocation,
+    repoFragmentInLocation,
   ]) {
     assert.match(
       validate(invalidLocation, schema, '$', context).join('\n'),
