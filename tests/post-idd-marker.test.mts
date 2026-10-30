@@ -11340,7 +11340,7 @@ test('anchor-only release modes use the open generation session, not the latest 
   }
 });
 
-test('anchor-only release modes fail closed on unreadable or unreplayable anchor history (#4804)', () => {
+test('anchor-only release modes fail closed on unreadable or invalid anchor history (#4804)', () => {
   for (const mode of ['release-guard', 'release-complete']) {
     for (const apply of [false, true]) {
       const unreadable = withOwnerIdStub({
@@ -11359,7 +11359,7 @@ test('anchor-only release modes fail closed on unreadable or unreplayable anchor
         unreadable.restore();
       }
 
-      const unreplayable = withOwnerIdStub({
+      const invalidHistory = withOwnerIdStub({
         comments: [
           {
             id: 101,
@@ -11369,15 +11369,19 @@ test('anchor-only release modes fail closed on unreadable or unreplayable anchor
       });
       try {
         const run = runOwnerIdPost(ownerIdFlags(mode), { apply });
-        assert.equal(run.status, 1, `${mode} unreplayable, apply=${apply}`);
-        assert.equal(run.kind, 'gate', `${mode} unreplayable, apply=${apply}`);
+        assert.equal(run.status, 1, `${mode} invalid history, apply=${apply}`);
+        assert.equal(
+          run.kind,
+          'gate',
+          `${mode} invalid history, apply=${apply}`,
+        );
         assert.match(
           run.stderr,
           /owner history of anchor .* cannot be replayed/,
         );
-        assert.deepEqual(readOwnerIdLines(unreplayable.postsFile), []);
+        assert.deepEqual(readOwnerIdLines(invalidHistory.postsFile), []);
       } finally {
-        unreplayable.restore();
+        invalidHistory.restore();
       }
     }
   }
