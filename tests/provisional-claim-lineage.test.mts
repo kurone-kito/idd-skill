@@ -34,6 +34,9 @@ const source: ProvisionalDecisionSource = {
   },
 };
 const trustedLogins = ['Kurone-Kito'];
+const trustedLoginSet = new Set(
+  trustedLogins.map((login) => login.trim().toLowerCase()).filter(Boolean),
+);
 
 function comment(
   id: string,
@@ -169,8 +172,12 @@ function assertLineageMatchesClaimFold(
   assert.equal(result.status, 'ok');
   if (result.status !== 'ok') return;
 
+  const trustedComments = comments.filter((value) => {
+    const login = value.authorLogin?.trim().toLowerCase() ?? '';
+    return value.trustedAuthor && login !== '' && trustedLoginSet.has(login);
+  });
   const fold = resolveActiveClaimWithForcedHandoffTrace(
-    comments.map((value) => ({
+    trustedComments.map((value) => ({
       id: value.id,
       url: value.url,
       body: value.body,
@@ -178,7 +185,10 @@ function assertLineageMatchesClaimFold(
       author: { login: value.authorLogin ?? '' },
       lastEditedAt: value.lastEditedAt,
     })),
-    () => true,
+    {
+      isTrustedAuthor: (login) =>
+        trustedLoginSet.has(login.trim().toLowerCase()),
+    },
   );
   assert.deepEqual(
     result.active && {
@@ -211,8 +221,11 @@ test('builds active verified lineage with source comment timestamps and IDs', ()
     'claim-4599-2',
     '2026-10-20T00:00:02.300Z',
   );
+  const history = [first, release, second];
 
-  assert.deepEqual(buildVerifiedClaimLineage(input([first, release, second])), {
+  const result = buildVerifiedClaimLineage(input(history));
+  assertLineageMatchesClaimFold(result, history);
+  assert.deepEqual(result, {
     status: 'ok',
     claims: [
       {
@@ -279,8 +292,11 @@ test('returns null active state and active-since after a released claim', () => 
     }),
     '2026-10-20T00:00:01.200Z',
   );
+  const history = [claim, release];
 
-  assert.deepEqual(buildVerifiedClaimLineage(input([claim, release])), {
+  const result = buildVerifiedClaimLineage(input(history));
+  assertLineageMatchesClaimFold(result, history);
+  assert.deepEqual(result, {
     status: 'ok',
     claims: [
       {
@@ -309,12 +325,12 @@ test('filters untrusted claim markers before folding and normalizes trusted logi
     'claim-4599-real',
     '2026-10-20T00:00:01Z',
   );
-  const result = buildVerifiedClaimLineage(
-    input([
-      { ...ignored, authorLogin: 'untrusted', trustedAuthor: false },
-      trusted,
-    ]),
-  );
+  const history = [
+    { ...ignored, authorLogin: 'untrusted', trustedAuthor: false },
+    trusted,
+  ];
+  const result = buildVerifiedClaimLineage(input(history));
+  assertLineageMatchesClaimFold(result, history);
   assert.equal(result.status, 'ok');
   if (result.status === 'ok') {
     assert.deepEqual(
@@ -520,7 +536,9 @@ test('keeps a fresh takeover out of lineage and uses the configured stale age', 
     '2026-10-20T00:30:00Z',
     { agentId: 'fresh-takeover-agent', supersedes: 'claim-4599-1' },
   );
-  const ignored = buildVerifiedClaimLineage(input([first, freshTakeover]));
+  const history = [first, freshTakeover];
+  const ignored = buildVerifiedClaimLineage(input(history));
+  assertLineageMatchesClaimFold(ignored, history);
   assert.equal(ignored.status, 'ok');
   if (ignored.status === 'ok') {
     assert.deepEqual(
