@@ -95,7 +95,7 @@ Each page's HEAD/base must match Step 1. Errors, incomplete pagination,
 or moved refs: no post; repeat Step 1 (issue #4803). Keep producers
 separate: CheckRun app/workflow; StatusContext `context`/`targetUrl`.
 Use CheckRun `completedAt` and terminal StatusContext `updatedAt`.
-Passing: CheckRun `SUCCESS`/`SKIPPED`/`NEUTRAL`/`NOT_APPLICABLE`;
+Passing: CheckRun `SUCCESS`/`SKIPPED`/`NEUTRAL`;
 StatusContext `SUCCESS`. Record latest pass or `none`; ignore later
 failures.
 
