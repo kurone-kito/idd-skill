@@ -22,6 +22,7 @@ import {
   loadLayeredLocalPolicy,
 } from './idd-config.mjs';
 import { deriveRepositoryIdentity } from './layered-policy.mjs';
+import { inspectHelperRuntimeConfig } from './policy-helpers.mjs';
 import {
   assertRealChain,
   checkContainment,
@@ -221,10 +222,13 @@ function resolveContext(options) {
     env,
     homedir: home ?? undefined,
   });
-  const helperRuntime = policyLoad.config?.helperRuntime;
+  const helperRuntimeInspection =
+    policyLoad.config === null
+      ? { status: 'absent' }
+      : inspectHelperRuntimeConfig(policyLoad.config);
   const packageSpec =
-    isObject(helperRuntime) && typeof helperRuntime.packageSpec === 'string'
-      ? helperRuntime.packageSpec
+    helperRuntimeInspection.status === 'ok'
+      ? (helperRuntimeInspection.packageSpec ?? null)
       : null;
   return {
     cwd,
@@ -241,7 +245,10 @@ function resolveContext(options) {
     policyDiagnostic:
       repository !== null && worktreeRoot === null
         ? 'cannot resolve repository worktree root'
-        : (policyLoad.local.diagnostic ?? null),
+        : (policyLoad.local.diagnostic ??
+          (helperRuntimeInspection.status === 'invalid'
+            ? helperRuntimeInspection.reason
+            : null)),
     packageSpec,
     sessionId: options.sessionId,
     runtimeRoot,

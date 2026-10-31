@@ -26,6 +26,7 @@ import {
   deriveRepositoryIdentity,
   type GitTextRunner,
 } from './layered-policy.mts';
+import { inspectHelperRuntimeConfig } from './policy-helpers.mts';
 import {
   assertRealChain,
   type ContainmentResult,
@@ -357,10 +358,13 @@ function resolveContext(
     env,
     homedir: home ?? undefined,
   });
-  const helperRuntime = policyLoad.config?.helperRuntime;
+  const helperRuntimeInspection =
+    policyLoad.config === null
+      ? { status: 'absent' as const }
+      : inspectHelperRuntimeConfig(policyLoad.config);
   const packageSpec =
-    isObject(helperRuntime) && typeof helperRuntime.packageSpec === 'string'
-      ? helperRuntime.packageSpec
+    helperRuntimeInspection.status === 'ok'
+      ? (helperRuntimeInspection.packageSpec ?? null)
       : null;
   return {
     cwd,
@@ -377,7 +381,10 @@ function resolveContext(
     policyDiagnostic:
       repository !== null && worktreeRoot === null
         ? 'cannot resolve repository worktree root'
-        : (policyLoad.local.diagnostic ?? null),
+        : (policyLoad.local.diagnostic ??
+          (helperRuntimeInspection.status === 'invalid'
+            ? helperRuntimeInspection.reason
+            : null)),
     packageSpec,
     sessionId: options.sessionId,
     runtimeRoot,

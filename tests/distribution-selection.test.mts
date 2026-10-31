@@ -360,6 +360,27 @@ test('an unreadable repository policy cannot fall through to global current', ()
   assert.equal(report.recovery, 'reselect');
 });
 
+test('a non-string repository package pin cannot fall through to global current', () => {
+  const fixture = makeFixture();
+  fixture.addPreparedSet(COMMIT_A, 'one');
+  fixture.installCurrent(COMMIT_A, '1.0.0', 'one');
+  const policyPath = join(fixture.repo, '.github', 'idd', 'config.json');
+  fs.mkdirSync(dirname(policyPath), { recursive: true });
+  fs.writeFileSync(
+    policyPath,
+    JSON.stringify({
+      helperRuntime: { profile: 'vendored-node', packageSpec: 17 },
+    }),
+  );
+
+  const report = inspectDistributionSelection(fixture.options());
+  assert.equal(report.verdict, 'not-verified-usable');
+  assert.equal(report.source, 'repository-local');
+  assert.equal(report.selected, null);
+  assert.equal(report.compatibility, 'incompatible');
+  assert.equal(report.recovery, 'reselect');
+});
+
 test('installed component files need matching receipt ownership', () => {
   const fixture = makeFixture();
   fixture.addPreparedSet(COMMIT_A, 'one');
