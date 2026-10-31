@@ -400,6 +400,22 @@ test('a no-repository inspection selects the verified installed bundle', () => {
   assert.equal(report.compatibility, 'compatible');
 });
 
+test('a local pin cannot fall through when GitHub identity is unavailable', () => {
+  const fixture = makeFixture();
+  fixture.addPreparedSet(COMMIT_A, 'same');
+  fixture.installCurrent(COMMIT_A, '1.0.0', 'same');
+  fixture.pin('@acme/idd-skill@1.0.0');
+  execFileSync('git', ['remote', 'remove', 'origin'], { cwd: fixture.repo });
+
+  const report = inspectDistributionSelection(fixture.options());
+  assert.equal(report.repository, null);
+  assert.equal(report.verdict, 'not-verified-usable');
+  assert.equal(report.source, 'unknown');
+  assert.equal(report.selected, null);
+  assert.equal(report.compatibility, 'unknown');
+  assert.equal(report.recovery, 'reselect');
+});
+
 test('an exact repository commit pin wins over a different global current', () => {
   const fixture = makeFixture();
   fixture.addPreparedSet(COMMIT_A, 'one');
@@ -694,6 +710,8 @@ test('a corrupt helper invocation makes its prepared set unusable', () => {
   const report = inspectDistributionSelection(fixture.options());
   assert.equal(report.verdict, 'not-verified-usable');
   assert.equal(report.receipt.status, 'conflict');
+  assert.equal(report.preparation, 'not-applicable');
+  assert.equal(report.recovery, 'reselect');
   assert.equal(report.selected, null);
 });
 
@@ -787,6 +805,7 @@ test('an invalid bound manifest is not reported as a migration requirement', () 
   const report = inspectDistributionSelection(fixture.options());
   assert.equal(report.session.binding, 'bound');
   assert.equal(report.verdict, 'not-verified-usable');
+  assert.equal(report.receipt.status, 'conflict');
   assert.equal(report.previousVerifiedSet?.sourceCommit, COMMIT_A);
   assert.equal(report.selected, null);
   assert.equal(report.compatibility, 'incompatible');

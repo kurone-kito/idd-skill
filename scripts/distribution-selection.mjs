@@ -767,7 +767,7 @@ function inspectWithContext(ctx) {
       typeof selectedCommit === 'string' &&
       loaded.invalidCommits.has(selectedCommit)
     ) {
-      return baseReport(ctx, receipt.status, {
+      return baseReport(ctx, 'conflict', {
         session: { id: ctx.sessionId, binding: 'bound' },
         source: bound.source,
         verdict: 'not-verified-usable',
@@ -841,9 +841,22 @@ function inspectWithContext(ctx) {
       });
     }
   }
+  if (
+    ctx.repository === null &&
+    ctx.worktreeRoot !== null &&
+    ctx.packageSpec !== null
+  ) {
+    return baseReport(ctx, receipt.status, {
+      source: 'unknown',
+      verdict: 'not-verified-usable',
+      compatibility: 'unknown',
+      recovery: 'reselect',
+      packageVersion: version,
+    });
+  }
   if (ctx.repository === null || ctx.mainWorktreeRoot === null) {
     if (loaded.errors.length > 0) {
-      return baseReport(ctx, receipt.status, {
+      return baseReport(ctx, 'conflict', {
         source: 'installed-bundle',
         verdict: 'not-verified-usable',
         compatibility: 'incompatible',
@@ -895,7 +908,7 @@ function inspectWithContext(ctx) {
     });
   }
   if (loaded.errors.length > 0) {
-    return baseReport(ctx, receipt.status, {
+    return baseReport(ctx, 'conflict', {
       source: ctx.packageSpec === null ? 'unknown' : 'repository-pin',
       verdict: 'not-verified-usable',
       compatibility: 'incompatible',
