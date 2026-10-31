@@ -312,9 +312,16 @@ function detectEntryContracts(files) {
       /\(added in Node \d+\.\d+\.\d+ \/ \d+\.\d+\.\d+\)/,
       '',
     );
+    const guardMessageInterpolations = Array.from(
+      guardMessage.matchAll(/\$\{\s*([^}]+?)\s*\}/g),
+      (match) => match[1]?.trim(),
+    );
     if (
       guardMessageEnd === -1 ||
-      enginesVersionToken.test(guardMessageWithoutFeatureVersions)
+      enginesVersionToken.test(guardMessageWithoutFeatureVersions) ||
+      guardMessageInterpolations.some(
+        (expression) => expression !== 'process.version',
+      )
     ) {
       result.push(
         violation(

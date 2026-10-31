@@ -194,6 +194,41 @@ test('standalone guard contract scans the complete diagnostic expression', () =>
     fixture.cleanup();
   }
 });
+test('standalone guard contract rejects an interpolated engines range', () => {
+  const fixture = makeFixture();
+  const sourcePath = join(
+    fixture.root,
+    'src/scripts/minimize-superseded-markers.mts',
+  );
+  try {
+    const source = readFileSync(sourcePath, 'utf8');
+    const message =
+      "Node version satisfying idd-skill's own package.json engines.node requirement.";
+    const sourceWithRangeConstant = source.replace(
+      'function assertNodeRuntimeSupportsEntrySignal(): void {',
+      "const ENGINES_RANGE = '^22.24.0 || ^24.3.0 || >=26.0.0';\n" +
+        'function assertNodeRuntimeSupportsEntrySignal(): void {',
+    );
+    assert.notEqual(sourceWithRangeConstant, source);
+    const mutatedSource = sourceWithRangeConstant.replace(
+      message,
+      `${message} \${ENGINES_RANGE}`,
+    );
+    assert.notEqual(mutatedSource, sourceWithRangeConstant);
+    writeFileSync(sourcePath, mutatedSource);
+    const before = snapshot(fixture.root);
+    const result = runAudit(fixture.root);
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(
+      result.stderr,
+      /RUNTIME-GUARD-STANDALONE-EXEMPTION src\/scripts\/minimize-superseded-markers\.mts:/,
+    );
+    assert.match(result.stderr, /must not copy an engines\.node range/);
+    assert.equal(snapshot(fixture.root), before, 'the audit must be read-only');
+  } finally {
+    fixture.cleanup();
+  }
+});
 test('entry-order violation fails from the CLI with a rule ID and relative path', () => {
   const fixture = makeFixture();
   const sourcePath = join(fixture.root, 'src/scripts/contract-entry.mts');
