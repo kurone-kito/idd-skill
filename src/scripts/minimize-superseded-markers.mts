@@ -5,8 +5,17 @@
 // .mts source named above by `pnpm run build`. Edit the .mts source,
 // never the generated .mjs. See docs/typescript-sources.md.
 
-import { execFileSync } from 'node:child_process';
-import { readFileSync, writeSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import {
+  closeSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  rmSync,
+  writeSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 
 // Deliberately NOT importing the shared config-loader module (see #1208's
@@ -111,6 +120,10 @@ const MINIMIZABLE_TYPENAMES = new Set([
   'PullRequestReview',
   'PullRequestReviewComment',
 ]);
+const TAKEOVER_CLAIM_MARKER_PATTERN =
+  /^<!--\s*claimed-by:\s+(\S+)\s+(\S+)\s+supersedes:\s+\S+\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)\s+branch:\s+[^\s>]+\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i;
+const TAKEOVER_RELEASE_MARKER_PATTERN =
+  /^<!--\s*unclaimed-by:\s+(\S+)\s+(\S+)\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i;
 
 // GitHub's GraphQL node(id:) query returns this message (independent of
 // subject type) whenever an id cannot be resolved — including, but NOT
@@ -159,6 +172,8 @@ interface ReportItem {
   status: string;
   reason?: string;
   author?: unknown;
+  markerKind?: 'claimed-by' | 'unclaimed-by';
+  claimId?: string;
 }
 
 interface MinimizeReport {
@@ -180,6 +195,8 @@ interface MinimizeReport {
      * literal (e.g. `computeExitCode`'s own tests) do not need updating.
      */
     deadlineSkipped?: number;
+    /** Number of displaced claim comments selected before minimization. */
+    selected?: number;
   };
   items: ReportItem[];
   trustedMarkerActors?: string[];
@@ -188,6 +205,10 @@ interface MinimizeReport {
 
 interface MinimizeArgs {
   subjectIds: string[];
+  issue?: number;
+  repo?: string;
+  priorClaimId?: string;
+  activeClaimId?: string;
   classifier: string;
   trustedMarkerLogins: string;
   apply: boolean;
@@ -213,6 +234,26 @@ interface MinimizeArgs {
    * unbounded behavior.
    */
   deadlineMs?: number;
+}
+
+interface IssueCommentForSelection {
+  nodeId: string;
+  url: string;
+  body: string;
+  authorLogin: string;
+}
+
+export interface TakeoverMarker {
+  markerKind: 'claimed-by' | 'unclaimed-by';
+  claimId: string;
+}
+
+interface TakeoverSelectionEntry {
+  subjectId: string;
+  url: string;
+  markerKind?: TakeoverMarker['markerKind'];
+  claimId?: string;
+  rejectionReason?: 'grammar' | 'untrusted-author' | 'claim-id-mismatch';
 }
 
 // ---------------------------------------------------------------------------
@@ -376,7 +417,7 @@ function main(): LocalHelperCliResult {
     return { exitCode: 2, kind: 'usage', message };
   }
 
-  if (args.subjectIds.length === 0) {
+  if (args.issue === undefined && args.subjectIds.length === 0) {
     const message = '--subject-ids must contain at least one ID';
     console.error(`error: ${message}`);
     return { exitCode: 2, kind: 'usage', message };
@@ -396,14 +437,80 @@ function main(): LocalHelperCliResult {
     return { exitCode: 2, kind: 'usage', message };
   }
 
-  const report = runMinimize({
-    subjectIds: args.subjectIds,
-    classifier: args.classifier,
-    trustedSet,
-    apply: args.apply,
-    allowUntrusted: args.allowUntrusted,
-    deadlineMs: args.deadlineMs,
-  });
+  let report: MinimizeReport;
+  if (args.issue !== undefined && args.repo !== undefined) {
+    let comments: IssueCommentForSelection[];
+    try {
+      comments = fetchIssueComments(args.repo, args.issue);
+    } catch (error) {
+      const message = `issue comment listing failed: ${error instanceof Error ? error.message : String(error)}`;
+      console.error(`error: ${message}`);
+      return { exitCode: 1, kind: 'internal', message };
+    }
+
+    const entries = selectTakeoverComments(
+      comments,
+      args.priorClaimId as string,
+      trustedSet,
+    );
+    report = runMinimize({
+      subjectIds: entries
+        .filter((entry) => entry.rejectionReason === undefined)
+        .map((entry) => entry.subjectId),
+      classifier: args.classifier,
+      trustedSet,
+      apply: args.apply,
+      allowUntrusted: false,
+    });
+    const minimizedById = new Map(
+      report.items.map((item) => [item.subjectId, item]),
+    );
+    report.items = entries.map((entry) => {
+      if (entry.rejectionReason !== undefined) {
+        return {
+          subjectId: entry.subjectId,
+          url: entry.url,
+          status: 'not-selected',
+          reason: entry.rejectionReason,
+          ...(entry.markerKind === undefined
+            ? {}
+            : { markerKind: entry.markerKind }),
+          ...(entry.claimId === undefined ? {} : { claimId: entry.claimId }),
+        };
+      }
+
+      const item = minimizedById.get(entry.subjectId);
+      if (item === undefined) {
+        report.counts.failed += 1;
+        return {
+          subjectId: entry.subjectId,
+          url: entry.url,
+          status: 'failed',
+          reason: 'selection-result-missing',
+          markerKind: entry.markerKind,
+          claimId: entry.claimId,
+        };
+      }
+      return {
+        ...item,
+        url: entry.url,
+        markerKind: entry.markerKind,
+        claimId: entry.claimId,
+      };
+    });
+    report.counts.selected = entries.filter(
+      (entry) => entry.rejectionReason === undefined,
+    ).length;
+  } else {
+    report = runMinimize({
+      subjectIds: args.subjectIds,
+      classifier: args.classifier,
+      trustedSet,
+      apply: args.apply,
+      allowUntrusted: args.allowUntrusted,
+      deadlineMs: args.deadlineMs,
+    });
+  }
   report.trustedMarkerActors = [...trustedSet].sort();
   report.trustedMarkerActorsSource = trustedMarkerActorsSource;
 
@@ -414,6 +521,142 @@ function main(): LocalHelperCliResult {
   }
 
   return computeExitCode(report);
+}
+
+function fetchIssueComments(
+  repository: string,
+  issue: number,
+): IssueCommentForSelection[] {
+  const [owner, repo] = repository.split('/');
+  // `--slurp` needs gh >= 2.48.0, but Ubuntu 24.04 ships gh 2.45.0. The
+  // NDJSON form of `--jq '.[]'` works on both, so parse it line by line.
+  const result = runGhWithFileBackedStdout([
+    'api',
+    ...resolveGhHostnameArgs(),
+    '--method',
+    'GET',
+    '--paginate',
+    '--jq',
+    '.[]',
+    `repos/${owner}/${repo}/issues/${issue}/comments`,
+    '-F',
+    'per_page=100',
+  ]);
+  if (!result.ok) {
+    throw new Error(result.stderr);
+  }
+
+  const rows: unknown[] = [];
+  for (const line of result.stdout.split(/\r?\n/)) {
+    if (line.trim().length === 0) {
+      continue;
+    }
+    try {
+      rows.push(JSON.parse(line));
+    } catch (error) {
+      throw new Error(
+        `invalid paginated JSON: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  const comments: IssueCommentForSelection[] = [];
+  const seenNodeIds = new Set<string>();
+  for (const value of rows) {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+      throw new Error('comment page contains a non-object row');
+    }
+    const row = value as Record<string, unknown>;
+    if (
+      typeof row.node_id !== 'string' ||
+      row.node_id.length === 0 ||
+      typeof row.html_url !== 'string' ||
+      row.html_url.length === 0 ||
+      typeof row.body !== 'string'
+    ) {
+      throw new Error(
+        'comment page contains a row missing node_id, html_url, or body',
+      );
+    }
+    if (REST_SHAPED_SUBJECT_ID_PATTERN.test(row.node_id)) {
+      throw new Error('comment node_id is a REST numeric ID');
+    }
+    if (seenNodeIds.has(row.node_id)) {
+      throw new Error(`comment listing repeated node_id ${row.node_id}`);
+    }
+    seenNodeIds.add(row.node_id);
+
+    const user = row.user;
+    if (typeof user !== 'object' || user === null || Array.isArray(user)) {
+      throw new Error('comment page contains a row missing user.login');
+    }
+    const authorLogin = (user as Record<string, unknown>).login;
+    if (typeof authorLogin !== 'string' || authorLogin.length === 0) {
+      throw new Error('comment page contains a row missing user.login');
+    }
+    comments.push({
+      nodeId: row.node_id,
+      url: row.html_url,
+      body: row.body,
+      authorLogin,
+    });
+  }
+  return comments;
+}
+
+function selectTakeoverComments(
+  comments: readonly IssueCommentForSelection[],
+  priorClaimId: string,
+  trustedSet: Set<string>,
+): TakeoverSelectionEntry[] {
+  const entries: TakeoverSelectionEntry[] = [];
+  for (const comment of comments) {
+    if (!comment.body.includes(priorClaimId)) {
+      continue;
+    }
+
+    const marker = parseTakeoverMarker(comment.body);
+    const rejectionReason =
+      marker === null
+        ? 'grammar'
+        : !isTrustedAuthor(comment.authorLogin, trustedSet)
+          ? 'untrusted-author'
+          : marker.claimId !== priorClaimId
+            ? 'claim-id-mismatch'
+            : undefined;
+    entries.push({
+      subjectId: comment.nodeId,
+      url: comment.url,
+      ...(marker === null
+        ? {}
+        : { markerKind: marker.markerKind, claimId: marker.claimId }),
+      ...(rejectionReason === undefined ? {} : { rejectionReason }),
+    });
+  }
+  return entries;
+}
+
+/** Local, standalone copy of the live claim/release marker parser contract. */
+export function parseTakeoverMarker(body: string): TakeoverMarker | null {
+  const normalizedBody = body.trimEnd();
+  const claimedBy = normalizedBody.match(TAKEOVER_CLAIM_MARKER_PATTERN);
+  if (claimedBy && isValidTakeoverTimestamp(claimedBy[3])) {
+    return { markerKind: 'claimed-by', claimId: claimedBy[2] };
+  }
+  const unclaimedBy = normalizedBody.match(TAKEOVER_RELEASE_MARKER_PATTERN);
+  if (unclaimedBy && isValidTakeoverTimestamp(unclaimedBy[3])) {
+    return { markerKind: 'unclaimed-by', claimId: unclaimedBy[2] };
+  }
+  return null;
+}
+
+function isValidTakeoverTimestamp(value: string): boolean {
+  const time = Date.parse(value);
+  if (!Number.isFinite(time)) {
+    return false;
+  }
+  const normalize = (timestamp: string) => timestamp.replace('.000Z', 'Z');
+  return normalize(new Date(time).toISOString()) === normalize(value);
 }
 
 export function runMinimize({
@@ -1144,6 +1387,7 @@ function printTable(report: MinimizeReport): void {
     c.deadlineSkipped === undefined
       ? ''
       : `deadlineSkipped=${c.deadlineSkipped}`,
+    c.selected === undefined ? '' : `selected=${c.selected}`,
   ]
     .filter(Boolean)
     .join(' ');
@@ -1151,7 +1395,13 @@ function printTable(report: MinimizeReport): void {
   for (const item of report.items) {
     const url = item.url ?? '(no url)';
     const reason = item.reason ?? '';
-    console.log(`  [${item.status}] ${item.subjectId}  ${url}  ${reason}`);
+    const marker =
+      item.markerKind === undefined
+        ? ''
+        : `  ${item.markerKind}  claimId=${item.claimId ?? ''}`;
+    console.log(
+      `  [${item.status}] ${item.subjectId}  ${url}  ${reason}${marker}`,
+    );
   }
 }
 
@@ -1187,6 +1437,43 @@ function runGh(argv: string[], timeoutMs: number = GH_TIMEOUT_MS): GhResult {
       stderr: String(e.stderr?.toString?.() || e.message || 'unknown error'),
       stdout: String(e.stdout?.toString?.() || ''),
     };
+  }
+}
+
+function runGhWithFileBackedStdout(
+  argv: string[],
+  timeoutMs: number = GH_TIMEOUT_MS,
+): GhResult {
+  const tempDir = mkdtempSync(join(tmpdir(), 'idd-minimize-comments-'));
+  const stdoutPath = join(tempDir, 'stdout.json');
+  try {
+    const result = (() => {
+      const stdoutFd = openSync(stdoutPath, 'w');
+      try {
+        return spawnSync('gh', argv, {
+          encoding: 'utf8',
+          timeout: timeoutMs,
+          stdio: ['ignore', stdoutFd, 'pipe'],
+        });
+      } finally {
+        closeSync(stdoutFd);
+      }
+    })();
+    const stdout = readFileSync(stdoutPath, 'utf8');
+    if (result.error || result.status !== 0) {
+      return {
+        ok: false,
+        stderr: String(
+          result.stderr ||
+            result.error?.message ||
+            `gh exited with status ${result.status}`,
+        ),
+        stdout,
+      };
+    }
+    return { ok: true, stdout };
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
   }
 }
 
@@ -1274,6 +1561,10 @@ function parseMinimizeArgs(argv: string[]): MinimizeArgs {
       apply: { type: 'boolean' },
       'allow-untrusted': { type: 'boolean' },
       'subject-ids': { type: 'string' },
+      issue: { type: 'string' },
+      repo: { type: 'string' },
+      'prior-claim-id': { type: 'string' },
+      'active-claim-id': { type: 'string' },
       classifier: { type: 'string', default: 'OUTDATED' },
       // '--trusted-marker-logins' is the one flag whose empty string is a
       // meaningful, accepted value (an explicit empty override in
@@ -1292,9 +1583,72 @@ function parseMinimizeArgs(argv: string[]): MinimizeArgs {
   // a genuinely missing value throws), but --subject-ids/--classifier/
   // --format never treated '' as meaningful -- reproduce that rejection
   // explicitly, matching the original `if (!value)` guards' exact message.
-  for (const flag of ['subject-ids', 'classifier', 'format'] as const) {
+  for (const flag of [
+    'subject-ids',
+    'issue',
+    'repo',
+    'prior-claim-id',
+    'active-claim-id',
+    'classifier',
+    'format',
+  ] as const) {
     if (values[flag] === '') {
       throw new Error(`--${flag} requires a value`);
+    }
+  }
+
+  const takeoverFlags = [
+    values.issue,
+    values.repo,
+    values['prior-claim-id'],
+    values['active-claim-id'],
+  ];
+  const takeoverRequested = takeoverFlags.some((value) => value !== undefined);
+  let issue: number | undefined;
+  if (takeoverRequested && !values.help) {
+    if (
+      takeoverFlags.some((value) => value === undefined) ||
+      values['subject-ids'] !== undefined
+    ) {
+      throw new Error(
+        'takeover mode requires --issue, --repo, --prior-claim-id, and --active-claim-id, and cannot be combined with --subject-ids',
+      );
+    }
+    if (values['allow-untrusted']) {
+      throw new Error('--allow-untrusted is not allowed in takeover mode');
+    }
+    if (values.classifier !== 'OUTDATED') {
+      throw new Error('takeover mode only supports --classifier OUTDATED');
+    }
+    if (values['deadline-ms'] !== undefined) {
+      throw new Error('--deadline-ms is not allowed in takeover mode');
+    }
+    if (!/^[1-9]\d*$/.test(values.issue as string)) {
+      throw new Error('--issue must be a positive integer');
+    }
+    issue = Number(values.issue);
+    if (!Number.isSafeInteger(issue)) {
+      throw new Error('--issue must be a positive safe integer');
+    }
+    const repo = values.repo as string;
+    const repositoryName = repo.split('/')[1];
+    if (
+      !/^[A-Za-z0-9-]+\/[A-Za-z0-9_.-]+$/.test(repo) ||
+      repositoryName === '.' ||
+      repositoryName === '..'
+    ) {
+      throw new Error('--repo must be in owner/repo form');
+    }
+    const priorClaimId = values['prior-claim-id'] as string;
+    const activeClaimId = values['active-claim-id'] as string;
+    if (/\s/.test(priorClaimId) || /\s/.test(activeClaimId)) {
+      throw new Error('claim IDs must not contain whitespace');
+    }
+    if (priorClaimId.toLowerCase() === 'none') {
+      throw new Error('--prior-claim-id must not be none');
+    }
+    if (priorClaimId === activeClaimId) {
+      throw new Error('--prior-claim-id and --active-claim-id must differ');
     }
   }
 
@@ -1338,6 +1692,10 @@ function parseMinimizeArgs(argv: string[]): MinimizeArgs {
       .split(',')
       .map((id) => id.trim())
       .filter((id) => id.length > 0),
+    issue,
+    repo: values.repo as string | undefined,
+    priorClaimId: values['prior-claim-id'] as string | undefined,
+    activeClaimId: values['active-claim-id'] as string | undefined,
     classifier: values.classifier ?? 'OUTDATED',
     trustedMarkerLogins: values['trusted-marker-logins'] ?? '',
     apply: values.apply ?? false,
@@ -1350,7 +1708,7 @@ function parseMinimizeArgs(argv: string[]): MinimizeArgs {
 
 function printUsage(): void {
   console.log(
-    `Usage: minimize-superseded-markers --subject-ids <id1,id2,...> [--classifier OUTDATED|RESOLVED] [--trusted-marker-logins login1,login2] [--allow-untrusted] [--apply] [--format json|table] [--deadline-ms <milliseconds>]
+    `Usage: minimize-superseded-markers (--subject-ids <id1,id2,...> | --issue <number> --repo <owner/repo> --prior-claim-id <id> --active-claim-id <id>) [--classifier OUTDATED|RESOLVED] [--trusted-marker-logins login1,login2] [--allow-untrusted] [--apply] [--format json|table] [--deadline-ms <milliseconds>]
 
 The trusted-author gate is mandatory by default: supply trusted logins
 via --trusted-marker-logins, IDD_TRUSTED_MARKER_ACTORS, or the
@@ -1365,6 +1723,11 @@ IC_kwDOSWpaqs8AAAABIk9VAg), not REST numeric IDs (e.g. 4870591746).
 Convert a REST ID to its node ID first, using the command for the
 subject type:
 ${NODE_ID_CONVERSION_COMMANDS}
+
+Takeover mode selects displaced trusted claim markers by exact prior
+claim ID and requires the verified successor's active claim ID. It
+accepts only OUTDATED, disallows --allow-untrusted and --deadline-ms,
+and reports selected comments with marker kind and claim ID.
 
 --deadline-ms bounds the whole pass to an overall wall-clock budget
 (non-negative integer milliseconds); omit it to keep the default unbounded

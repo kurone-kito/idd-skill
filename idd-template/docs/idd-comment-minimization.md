@@ -294,6 +294,10 @@ mechanisms:
   (`advisory-wait:`/`advisory-wait-recovery:`/`<!-- advisory-wait:`/
   `advisory-reroll:`, grouped by embedded HEAD SHA mismatch, AW3-H,
   `idd-advisory-wait.instructions.md`).
+  For a stale claim takeover, use the exact-ID selector documented in
+  `idd-claim.instructions.md`; do not select this chain with a substring
+  search. The takeover in issue `#4675` also matched the new claim's
+  `supersedes:` field and unrelated marker families.
 - **Code-automated inside the helper itself** (#2754, #2755) -- no
   agent-followed instruction step exists or is needed for these
   three, since their grouping keys are purely mechanical:

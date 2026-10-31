@@ -499,19 +499,18 @@ the [delegation brief](../../docs/idd-workflow.md#delegation-brief-template).
 
 ### Hide displaced claim chain on takeover
 
-When the verified new claim used `supersedes: <prior-id>` (stale
-takeover or forced-handoff recovery — **not** legacy migration, which
-always uses `supersedes: none`), minimize the displaced claim's marker
-chain as `OUTDATED` once this session's own `{claim-id}` is verified.
-Find every trusted `claimed-by`/`unclaimed-by`/heartbeat comment whose
-`{claim-id}` equals `<prior-id>` and call:
-
-`--subject-ids` takes a GraphQL node id, not a REST numeric
-id — see the [conversion note](idd-review-snapshot.instructions.md).
+After verifying this session's active claim, a stale takeover with
+`supersedes: <prior-id>` may hide only markers whose parsed claim ID
+equals `<prior-id>` (legacy migration uses `supersedes: none`). Use
+the exact-ID selector below; never substring-match: issue `#4675`
+also hid the new claim and unrelated markers.
 
 ```sh
 node scripts/minimize-superseded-markers.mjs \
-  --subject-ids "<id1>,<id2>,..." \
+  --issue <issue-number> \
+  --repo <owner>/<repo> \
+  --prior-claim-id "<prior-id>" \
+  --active-claim-id "<verified-active-id>" \
   --classifier OUTDATED \
   --trusted-marker-logins "<trusted-login-1>,<trusted-login-2>" \
   --apply

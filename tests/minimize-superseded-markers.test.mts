@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { type SpawnSyncReturns, spawnSync } from 'node:child_process';
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -11,11 +12,15 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-
+import {
+  parseClaimComment,
+  parseReleaseComment,
+} from '../src/scripts/marker-helpers.mts';
 import {
   applyMinimize,
   computeExitCode,
   isTrustedAuthor,
+  parseTakeoverMarker,
   probeSubject,
   probeSubjects,
   resolveGhHostnameArgs,
@@ -1365,5 +1370,698 @@ process.stdout.write(JSON.stringify({ data: { nodes } }));
     assert.equal(report.counts.failed, 0);
   } finally {
     restore();
+  }
+});
+
+const TAKEOVER_TIMESTAMP = '2026-10-28T12:00:00Z';
+const TAKEOVER_PRIOR_ID = 'prior-claim-123';
+const TAKEOVER_ACTIVE_ID = 'active-claim-456';
+
+function takeoverClaimBody(
+  agentId: string,
+  claimId: string,
+  supersedes: string,
+): string {
+  return (
+    '<!-- claimed-by: ' +
+    agentId +
+    ' ' +
+    claimId +
+    ' supersedes: ' +
+    supersedes +
+    ' ' +
+    TAKEOVER_TIMESTAMP +
+    ' branch: issue/42-task -->\n\n_' +
+    agentId +
+    ': issue claim — IDD automation marker. Do not edit._'
+  );
+}
+
+function takeoverReleaseBody(agentId: string, claimId: string): string {
+  return (
+    '<!-- unclaimed-by: ' +
+    agentId +
+    ' ' +
+    claimId +
+    ' ' +
+    TAKEOVER_TIMESTAMP +
+    ' -->\n\n_' +
+    agentId +
+    ': issue claim released — IDD automation marker. Do not edit._'
+  );
+}
+
+function takeoverIssueComment(
+  nodeId: string,
+  body: string,
+  login = 'kurone-kito',
+): Record<string, unknown> {
+  return {
+    id: 9000 + nodeId.length,
+    node_id: nodeId,
+    html_url: 'https://github.com/owner/repo/issues/42#issuecomment-' + nodeId,
+    body,
+    user: { login },
+  };
+}
+
+function makeTakeoverGhStub(pages: unknown[][]): string {
+  return [
+    "const fs = require('node:fs');",
+    'const args = process.argv.slice(2);',
+    'const pages = ' + JSON.stringify(pages) + ';',
+    'const tracePath = process.env.IDD_TEST_GH_TRACE;',
+    'const record = (value) => { if (tracePath) fs.appendFileSync(tracePath, JSON.stringify(value) + String.fromCharCode(10)); };',
+    'if (args[0] === "api" && args.includes("--paginate")) {',
+    '  record({ type: "rest", args });',
+    '  if (process.env.IDD_TEST_GH_FAIL === "1") { fs.writeSync(2, "simulated comment listing failure"); process.exit(1); }',
+    '  if (process.env.IDD_TEST_GH_BAD_LISTING === "1") { process.stdout.write(JSON.stringify({ html_url: "https://example.test/comment", body: "incomplete" }) + String.fromCharCode(10)); process.exit(0); }',
+    '  if (process.env.IDD_TEST_GH_BAD_LISTING === "missing-user") { process.stdout.write(JSON.stringify({ node_id: "IC_missing_user", html_url: "https://example.test/comment", body: "incomplete" }) + String.fromCharCode(10)); process.exit(0); }',
+    '  if (process.env.IDD_TEST_GH_BAD_LISTING === "null-user") { process.stdout.write(JSON.stringify({ node_id: "IC_null_user", html_url: "https://example.test/comment", body: "incomplete", user: null }) + String.fromCharCode(10)); process.exit(0); }',
+    '  if (process.env.IDD_TEST_GH_BAD_LISTING === "missing-login") { process.stdout.write(JSON.stringify({ node_id: "IC_missing_login", html_url: "https://example.test/comment", body: "incomplete", user: {} }) + String.fromCharCode(10)); process.exit(0); }',
+    '  process.stdout.write(pages.flat().map((row) => JSON.stringify(row) + String.fromCharCode(10)).join(""));',
+    '  process.exit(0);',
+    '}',
+    'if (args[0] === "api" && args.includes("graphql")) {',
+    '  const fields = [];',
+    '  for (let i = 0; i < args.length; i += 1) if (args[i] === "-f") fields.push(args[i + 1]);',
+    '  const ids = fields.filter((value) => value.startsWith("ids[]=")).map((value) => value.slice(6));',
+    '  const mutation = fields.find((value) => value.startsWith("query=mutation"));',
+    '  if (mutation) {',
+    '    const id = fields.find((value) => value.startsWith("id="))?.slice(3) ?? "";',
+    '    record({ type: "mutation", id });',
+    '    process.stdout.write(JSON.stringify({ data: { minimizeComment: { minimizedComment: { __typename: "IssueComment", id, isMinimized: true, minimizedReason: "OUTDATED" } } } }));',
+    '    process.exit(0);',
+    '  }',
+    '  record({ type: "graphql", ids });',
+    '  const nodes = ids.map((id) => ({ __typename: "IssueComment", id, url: "https://github.com/owner/repo/issues/42#issuecomment-" + id, isMinimized: false, viewerCanMinimize: true, author: { login: "kurone-kito" } }));',
+    '  process.stdout.write(JSON.stringify({ data: { nodes } }));',
+    '  process.exit(0);',
+    '}',
+    'fs.writeSync(2, "unexpected gh invocation: " + args.join(" "));',
+    'process.exit(1);',
+  ].join('\n');
+}
+
+function runTakeoverCli(
+  args: string[],
+  tracePath: string,
+  extraEnv: NodeJS.ProcessEnv = {},
+  cwd = process.cwd(),
+): SpawnSyncReturns<string> {
+  const script = join(
+    dirname(fileURLToPath(import.meta.url)),
+    '..',
+    'scripts',
+    'minimize-superseded-markers.mjs',
+  );
+  return spawnSync(process.execPath, [script, ...args], {
+    cwd,
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      ...extraEnv,
+      IDD_TEST_GH_TRACE: tracePath,
+    },
+  });
+}
+
+function readGhTrace(path: string): Record<string, unknown>[] {
+  if (!existsSync(path)) {
+    return [];
+  }
+  return readFileSync(path, 'utf8')
+    .trim()
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+}
+
+test('takeover marker matcher stays in parity with the live claim and release parsers', () => {
+  const fixtures = [
+    takeoverClaimBody('codex', TAKEOVER_PRIOR_ID, 'none'),
+    takeoverClaimBody('codex', TAKEOVER_ACTIVE_ID, TAKEOVER_PRIOR_ID),
+    takeoverReleaseBody('codex', TAKEOVER_PRIOR_ID),
+    takeoverClaimBody('codex', TAKEOVER_PRIOR_ID, 'none') + '\nextra',
+    'prefix ' + takeoverClaimBody('codex', TAKEOVER_PRIOR_ID, 'none'),
+    takeoverClaimBody('codex', TAKEOVER_PRIOR_ID, 'none').replace(
+      TAKEOVER_TIMESTAMP,
+      '2026-02-30T12:00:00Z',
+    ),
+  ];
+
+  for (const body of fixtures) {
+    const liveClaim = parseClaimComment(body, TAKEOVER_TIMESTAMP);
+    const liveRelease = parseReleaseComment(body);
+    const expected =
+      liveClaim !== null
+        ? { markerKind: 'claimed-by' as const, claimId: liveClaim.claimId }
+        : liveRelease !== null
+          ? {
+              markerKind: 'unclaimed-by' as const,
+              claimId: liveRelease.claimId,
+            }
+          : null;
+    assert.deepEqual(parseTakeoverMarker(body), expected, body);
+  }
+});
+
+test('takeover selector paginates, selects exact trusted markers, and reports non-selected matches', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-minimize-takeover-'));
+  const tracePath = join(tempRoot, 'gh-trace.jsonl');
+  const pages = [
+    [
+      takeoverIssueComment(
+        'IC_selected_claim',
+        takeoverClaimBody('kurone-kito', TAKEOVER_PRIOR_ID, 'none'),
+      ),
+      takeoverIssueComment(
+        'IC_active_heartbeat',
+        takeoverClaimBody('kurone-kito', TAKEOVER_ACTIVE_ID, TAKEOVER_PRIOR_ID),
+      ),
+      takeoverIssueComment(
+        'IC_untrusted',
+        takeoverClaimBody('unknown-user', TAKEOVER_PRIOR_ID, 'none'),
+        'unknown-user',
+      ),
+      takeoverIssueComment(
+        'IC_appended',
+        takeoverClaimBody('kurone-kito', TAKEOVER_PRIOR_ID, 'none') +
+          '\nextra ' +
+          TAKEOVER_PRIOR_ID,
+      ),
+      takeoverIssueComment(
+        'IC_not_first',
+        'prose ' +
+          TAKEOVER_PRIOR_ID +
+          '\n' +
+          takeoverClaimBody('kurone-kito', TAKEOVER_PRIOR_ID, 'none'),
+      ),
+      takeoverIssueComment(
+        'IC_hold_one',
+        '<!-- idd-hold: codex active ' +
+          TAKEOVER_TIMESTAMP +
+          ' --> ' +
+          TAKEOVER_PRIOR_ID,
+      ),
+      takeoverIssueComment(
+        'IC_hold_two',
+        '<!-- idd-hold: codex active ' +
+          TAKEOVER_TIMESTAMP +
+          ' --> ' +
+          TAKEOVER_PRIOR_ID,
+      ),
+      takeoverIssueComment(
+        'IC_nonce',
+        '<!-- activation-nonce: codex active nonce ' +
+          TAKEOVER_TIMESTAMP +
+          ' --> ' +
+          TAKEOVER_PRIOR_ID,
+      ),
+      takeoverIssueComment(
+        'IC_digest',
+        'live-status digest ' + TAKEOVER_PRIOR_ID,
+      ),
+      takeoverIssueComment('IC_prose', 'ordinary prose ' + TAKEOVER_PRIOR_ID),
+      takeoverIssueComment('IC_unrelated', 'does not name the displaced claim'),
+    ],
+    [
+      takeoverIssueComment(
+        'IC_selected_heartbeat',
+        takeoverClaimBody('kurone-kito', TAKEOVER_PRIOR_ID, 'none').replace(
+          TAKEOVER_TIMESTAMP,
+          '2026-10-29T12:00:00Z',
+        ),
+      ),
+      takeoverIssueComment(
+        'IC_selected_release',
+        takeoverReleaseBody('kurone-kito', TAKEOVER_PRIOR_ID),
+      ),
+    ],
+  ];
+  const restore = stubExecutable('gh', makeTakeoverGhStub(pages));
+  try {
+    const result = runTakeoverCli(
+      [
+        '--issue',
+        '42',
+        '--repo',
+        'owner/repo',
+        '--prior-claim-id',
+        TAKEOVER_PRIOR_ID,
+        '--active-claim-id',
+        TAKEOVER_ACTIVE_ID,
+        '--trusted-marker-logins',
+        'kurone-kito',
+        '--format',
+        'json',
+      ],
+      tracePath,
+      {
+        GH_HOST: '',
+        GITHUB_SERVER_URL: 'https://ghes.example.com/',
+      },
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    const report = JSON.parse(result.stdout) as {
+      counts: { selected: number };
+      items: Array<{
+        subjectId: string;
+        url: string;
+        status: string;
+        reason?: string;
+        markerKind?: string;
+        claimId?: string;
+      }>;
+    };
+    assert.equal(report.counts.selected, 3);
+    const selected = report.items.filter(
+      (item) => item.status === 'would-apply',
+    );
+    assert.deepEqual(
+      selected.map(({ subjectId, markerKind, claimId }) => ({
+        subjectId,
+        markerKind,
+        claimId,
+      })),
+      [
+        {
+          subjectId: 'IC_selected_claim',
+          markerKind: 'claimed-by',
+          claimId: TAKEOVER_PRIOR_ID,
+        },
+        {
+          subjectId: 'IC_selected_heartbeat',
+          markerKind: 'claimed-by',
+          claimId: TAKEOVER_PRIOR_ID,
+        },
+        {
+          subjectId: 'IC_selected_release',
+          markerKind: 'unclaimed-by',
+          claimId: TAKEOVER_PRIOR_ID,
+        },
+      ],
+    );
+    assert.ok(selected.every((item) => item.url.includes('#issuecomment-')));
+    const rejected = new Map(
+      report.items
+        .filter((item) => item.status === 'not-selected')
+        .map((item) => [item.subjectId, item.reason]),
+    );
+    assert.equal(rejected.get('IC_active_heartbeat'), 'claim-id-mismatch');
+    assert.equal(rejected.get('IC_untrusted'), 'untrusted-author');
+    for (const nodeId of [
+      'IC_appended',
+      'IC_not_first',
+      'IC_hold_one',
+      'IC_hold_two',
+      'IC_nonce',
+      'IC_digest',
+      'IC_prose',
+    ]) {
+      assert.equal(rejected.get(nodeId), 'grammar');
+    }
+    assert.equal(
+      report.items.some((item) => item.subjectId === 'IC_unrelated'),
+      false,
+    );
+
+    const calls = readGhTrace(tracePath);
+    const rest = calls.find((call) => call.type === 'rest');
+    assert.ok(rest);
+    const restArgs = rest.args as string[];
+    assert.ok(restArgs.includes('--paginate'));
+    const jqIndex = restArgs.indexOf('--jq');
+    assert.notEqual(jqIndex, -1);
+    assert.equal(restArgs[jqIndex + 1], '.[]');
+    assert.equal(restArgs.includes('--slurp'), false);
+    assert.ok(restArgs.includes('--method'));
+    assert.ok(restArgs.includes('GET'));
+    assert.ok(restArgs.includes('-F'));
+    assert.ok(restArgs.includes('per_page=100'));
+    const hostnameIndex = restArgs.indexOf('--hostname');
+    assert.notEqual(hostnameIndex, -1);
+    assert.equal(restArgs[hostnameIndex + 1], 'ghes.example.com');
+    const graphql = calls.find((call) => call.type === 'graphql');
+    assert.ok(graphql);
+    assert.deepEqual(graphql.ids, [
+      'IC_selected_claim',
+      'IC_selected_heartbeat',
+      'IC_selected_release',
+    ]);
+    assert.equal(
+      calls.some((call) => call.type === 'mutation'),
+      false,
+    );
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('takeover empty selection exits 0 and performs no GraphQL request or mutation', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-minimize-takeover-empty-'));
+  const tracePath = join(tempRoot, 'gh-trace.jsonl');
+  const pages = [
+    [takeoverIssueComment('IC_unrelated_empty', 'ordinary comment')],
+  ];
+  const restore = stubExecutable('gh', makeTakeoverGhStub(pages));
+  try {
+    const result = runTakeoverCli(
+      [
+        '--issue',
+        '42',
+        '--repo',
+        'owner/repo',
+        '--prior-claim-id',
+        TAKEOVER_PRIOR_ID,
+        '--active-claim-id',
+        TAKEOVER_ACTIVE_ID,
+        '--trusted-marker-logins',
+        'kurone-kito',
+        '--apply',
+      ],
+      tracePath,
+    );
+    assert.equal(result.status, 0, result.stderr);
+    const report = JSON.parse(result.stdout) as {
+      counts: { selected: number; applied: number };
+      items: unknown[];
+    };
+    assert.equal(report.counts.selected, 0);
+    assert.equal(report.counts.applied, 0);
+    assert.deepEqual(report.items, []);
+    const calls = readGhTrace(tracePath);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]?.type, 'rest');
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('takeover table output appends selected count and marker details', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-minimize-takeover-table-'));
+  const tracePath = join(tempRoot, 'gh-trace.jsonl');
+  const pages = [
+    [
+      takeoverIssueComment(
+        'IC_table_selected',
+        takeoverClaimBody('kurone-kito', TAKEOVER_PRIOR_ID, 'none'),
+      ),
+    ],
+  ];
+  const restore = stubExecutable('gh', makeTakeoverGhStub(pages));
+  try {
+    const result = runTakeoverCli(
+      [
+        '--issue',
+        '42',
+        '--repo',
+        'owner/repo',
+        '--prior-claim-id',
+        TAKEOVER_PRIOR_ID,
+        '--active-claim-id',
+        TAKEOVER_ACTIVE_ID,
+        '--trusted-marker-logins',
+        'kurone-kito',
+        '--format',
+        'table',
+      ],
+      tracePath,
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /counts: .*deadlineSkipped=0 selected=1/);
+    assert.match(result.stdout, /claimed-by {2}claimId=prior-claim-123/);
+    assert.match(
+      result.stdout,
+      /https:\/\/github\.com\/owner\/repo\/issues\/42#issuecomment-IC_table_selected/,
+    );
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('takeover apply mode minimizes exactly the selected GraphQL node IDs', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-minimize-takeover-apply-'));
+  const tracePath = join(tempRoot, 'gh-trace.jsonl');
+  const pages = [
+    [
+      takeoverIssueComment(
+        'IC_apply_selected',
+        takeoverClaimBody('kurone-kito', TAKEOVER_PRIOR_ID, 'none'),
+      ),
+      takeoverIssueComment(
+        'IC_apply_rejected',
+        takeoverClaimBody('kurone-kito', TAKEOVER_ACTIVE_ID, TAKEOVER_PRIOR_ID),
+      ),
+    ],
+  ];
+  const restore = stubExecutable('gh', makeTakeoverGhStub(pages));
+  try {
+    const result = runTakeoverCli(
+      [
+        '--issue',
+        '42',
+        '--repo',
+        'owner/repo',
+        '--prior-claim-id',
+        TAKEOVER_PRIOR_ID,
+        '--active-claim-id',
+        TAKEOVER_ACTIVE_ID,
+        '--trusted-marker-logins',
+        'kurone-kito',
+        '--apply',
+      ],
+      tracePath,
+    );
+    assert.equal(result.status, 0, result.stderr);
+    const report = JSON.parse(result.stdout) as {
+      counts: { selected: number; applied: number };
+    };
+    assert.equal(report.counts.selected, 1);
+    assert.equal(report.counts.applied, 1);
+    const calls = readGhTrace(tracePath);
+    const probe = calls.find((call) => call.type === 'graphql');
+    assert.deepEqual(probe?.ids, ['IC_apply_selected']);
+    assert.deepEqual(
+      calls.filter((call) => call.type === 'mutation').map((call) => call.id),
+      ['IC_apply_selected'],
+    );
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('takeover listing failure or incomplete rows stop before any GraphQL probe or mutation', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-minimize-takeover-fail-'));
+  const restore = stubExecutable(
+    'gh',
+    makeTakeoverGhStub([
+      [
+        takeoverIssueComment(
+          'IC_never_used',
+          takeoverClaimBody('kurone-kito', TAKEOVER_PRIOR_ID, 'none'),
+        ),
+      ],
+    ]),
+  );
+  try {
+    for (const scenario of [
+      {
+        env: { IDD_TEST_GH_FAIL: '1' },
+        message: /simulated comment listing failure/,
+      },
+      {
+        env: {
+          IDD_TEST_GH_BAD_LISTING: '1',
+          IDD_HELPER_ERROR_ENVELOPE: '1',
+        },
+        message: /"kind":"internal"/,
+      },
+      {
+        env: {
+          IDD_TEST_GH_BAD_LISTING: 'missing-user',
+          IDD_HELPER_ERROR_ENVELOPE: '1',
+        },
+        message: /"kind":"internal".*user\.login/,
+      },
+      {
+        env: {
+          IDD_TEST_GH_BAD_LISTING: 'null-user',
+          IDD_HELPER_ERROR_ENVELOPE: '1',
+        },
+        message: /"kind":"internal".*user\.login/,
+      },
+      {
+        env: {
+          IDD_TEST_GH_BAD_LISTING: 'missing-login',
+          IDD_HELPER_ERROR_ENVELOPE: '1',
+        },
+        message: /"kind":"internal".*user\.login/,
+      },
+    ]) {
+      const tracePath = join(tempRoot, 'trace-' + Math.random() + '.jsonl');
+      const result = runTakeoverCli(
+        [
+          '--issue',
+          '42',
+          '--repo',
+          'owner/repo',
+          '--prior-claim-id',
+          TAKEOVER_PRIOR_ID,
+          '--active-claim-id',
+          TAKEOVER_ACTIVE_ID,
+          '--trusted-marker-logins',
+          'kurone-kito',
+          '--apply',
+        ],
+        tracePath,
+        scenario.env,
+      );
+      assert.equal(result.status, 1);
+      assert.equal(result.stdout, '');
+      assert.match(result.stderr, scenario.message);
+      const calls = readGhTrace(tracePath);
+      assert.equal(calls.length, 1);
+      assert.equal(calls[0]?.type, 'rest');
+    }
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('takeover argument errors and missing trusted actors make no GitHub request', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-minimize-takeover-args-'));
+  const tracePath = join(tempRoot, 'gh-trace.jsonl');
+  const restore = stubExecutable(
+    'gh',
+    'const fs = require("node:fs"); if (process.env.IDD_TEST_GH_TRACE) fs.appendFileSync(process.env.IDD_TEST_GH_TRACE, "called\\\\n"); process.exit(1);',
+  );
+  try {
+    const valid = [
+      '--issue',
+      '42',
+      '--repo',
+      'owner/repo',
+      '--prior-claim-id',
+      TAKEOVER_PRIOR_ID,
+      '--active-claim-id',
+      TAKEOVER_ACTIVE_ID,
+      '--trusted-marker-logins',
+      'kurone-kito',
+    ];
+    const invalidInputs = [
+      [
+        '--issue',
+        '42',
+        '--repo',
+        'owner/repo',
+        '--prior-claim-id',
+        TAKEOVER_PRIOR_ID,
+      ],
+      [...valid.slice(0, 2), '--repo', 'owner', ...valid.slice(4)],
+      ['--issue', '0', ...valid.slice(2)],
+      [...valid.slice(0, 4), '--prior-claim-id', 'none', ...valid.slice(6)],
+      [
+        ...valid.slice(0, 6),
+        '--active-claim-id',
+        TAKEOVER_PRIOR_ID,
+        ...valid.slice(8),
+      ],
+      [
+        ...valid.slice(0, 6),
+        '--prior-claim-id',
+        'has whitespace',
+        ...valid.slice(6),
+      ],
+      [...valid, '--allow-untrusted'],
+      [...valid, '--classifier', 'RESOLVED'],
+      [...valid, '--deadline-ms', '1'],
+      ['--subject-ids', 'IC_existing', ...valid],
+      ['--issue', '42', '--repo', 'owner/repo'],
+      [...valid.slice(0, 2), '--repo', 'owner/.', ...valid.slice(4)],
+      [...valid.slice(0, 2), '--repo', 'owner/..', ...valid.slice(4)],
+    ];
+    for (const args of invalidInputs) {
+      const result = runTakeoverCli(args, tracePath);
+      assert.equal(result.status, 2, result.stderr);
+      assert.equal(result.stdout, '');
+      assert.equal(existsSync(tracePath), false);
+    }
+
+    const noTrustedRoot = join(tempRoot, 'no-trusted-config');
+    mkdirSync(noTrustedRoot);
+    const noTrusted = runTakeoverCli(
+      [
+        '--issue',
+        '42',
+        '--repo',
+        'owner/repo',
+        '--prior-claim-id',
+        TAKEOVER_PRIOR_ID,
+        '--active-claim-id',
+        TAKEOVER_ACTIVE_ID,
+        '--trusted-marker-logins',
+        '',
+      ],
+      tracePath,
+      {
+        IDD_TRUSTED_MARKER_ACTORS: '',
+        IDD_HELPER_ERROR_ENVELOPE: '',
+      },
+      noTrustedRoot,
+    );
+    assert.equal(noTrusted.status, 2, noTrusted.stderr);
+    assert.match(noTrusted.stderr, /no trusted marker logins supplied/);
+    assert.equal(existsSync(tracePath), false);
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('takeover listing handles responses larger than the default pipe buffer', () => {
+  const tempRoot = mkdtempSync(
+    join(tmpdir(), 'idd-minimize-takeover-large-listing-'),
+  );
+  const tracePath = join(tempRoot, 'gh-trace.jsonl');
+  const comments = Array.from({ length: 24 }, (_, index) =>
+    takeoverIssueComment(`IC_large_${index}`, 'x'.repeat(50_000)),
+  );
+  const restore = stubExecutable('gh', makeTakeoverGhStub([comments]));
+  try {
+    const result = runTakeoverCli(
+      [
+        '--issue',
+        '42',
+        '--repo',
+        'owner/repo',
+        '--prior-claim-id',
+        TAKEOVER_PRIOR_ID,
+        '--active-claim-id',
+        TAKEOVER_ACTIVE_ID,
+        '--trusted-marker-logins',
+        'kurone-kito',
+      ],
+      tracePath,
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    const report = JSON.parse(result.stdout) as {
+      counts: { selected: number };
+    };
+    assert.equal(report.counts.selected, 0);
+    assert.deepEqual(
+      readGhTrace(tracePath).map((call) => call.type),
+      ['rest'],
+    );
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
   }
 });
