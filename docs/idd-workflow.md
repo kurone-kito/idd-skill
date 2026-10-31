@@ -1412,11 +1412,15 @@ seven fields and rejects missing or additional fields:
 - `allocationSource`: JSON string exactly `harness` or `parent`.
 
 Reject an unsupported schema version, wrong JSON type, malformed value, or
-unknown property before trusting the record. Then require every identity field
-to match this live session and repository and the root to pass the safety
-checks. Existing valid records take precedence over any new allocation. If a
-record and the current harness context name different roots, treat that as a
-contradiction and hold. If the harness supplies a root, verify the canonical
+unknown property before trusting the record. After strict parsing, apply
+session and repository identity matching and full root-safety checks only to
+the exact current-session record. For foreign records, do not match identity
+fields to the live session; validate schema and path structure strictly, then
+use each safely comparable canonical root identity only for the candidate-root
+collision check below. An existing valid exact current-session record takes
+precedence over any new allocation. If that exact current-session record and
+the current harness context name different roots, treat that as a contradiction
+and hold. For the current session's harness-supplied root, verify the canonical
 path is an existing writable
 directory, has current-user-only access, contains no unsafe links, and lies
 outside every worktree for this repository. If the harness supplies no root,
