@@ -7,7 +7,11 @@ import {
   renderForcedHandoffComment,
   renderUnclaimedByMarker,
 } from '../src/scripts/marker-helpers.mts';
-import { resolveActiveClaimWithForcedHandoffTrace } from '../src/scripts/protocol-helpers.mts';
+import {
+  isStaleAt,
+  isStaleByAge,
+  resolveActiveClaimWithForcedHandoffTrace,
+} from '../src/scripts/protocol-helpers.mts';
 import {
   type BuildVerifiedClaimLineageInput,
   buildVerifiedClaimLineage,
@@ -164,13 +168,22 @@ function replayComment(
 
 function assertLineageMatchesClaimFold(
   result: ReturnType<typeof buildVerifiedClaimLineage>,
-  comments: readonly ProvisionalClaimLineageComment[],
+  lineageInput: BuildVerifiedClaimLineageInput,
 ): void {
   assert.equal(result.status, 'ok');
   if (result.status !== 'ok') return;
 
+  const trustedLogins = new Set(
+    lineageInput.trustedMarkerLogins
+      .map((login) => login.trim().toLowerCase())
+      .filter(Boolean),
+  );
+  const trustedComments = lineageInput.comments.filter((value) => {
+    const login = value.authorLogin?.trim().toLowerCase() ?? '';
+    return value.trustedAuthor && login !== '' && trustedLogins.has(login);
+  });
   const fold = resolveActiveClaimWithForcedHandoffTrace(
-    comments.map((value) => ({
+    trustedComments.map((value) => ({
       id: value.id,
       url: value.url,
       body: value.body,
@@ -178,7 +191,18 @@ function assertLineageMatchesClaimFold(
       author: { login: value.authorLogin ?? '' },
       lastEditedAt: value.lastEditedAt,
     })),
-    () => true,
+    {
+      isTrustedAuthor: (login) => trustedLogins.has(login.trim().toLowerCase()),
+      isStale:
+        Number.isFinite(lineageInput.staleAgeMs) && lineageInput.staleAgeMs > 0
+          ? (activeCreatedAt, nextCreatedAt) =>
+              isStaleByAge(
+                activeCreatedAt,
+                nextCreatedAt,
+                lineageInput.staleAgeMs,
+              )
+          : isStaleAt,
+    },
   );
   assert.deepEqual(
     result.active && {
@@ -211,8 +235,12 @@ test('builds active verified lineage with source comment timestamps and IDs', ()
     'claim-4599-2',
     '2026-10-20T00:00:02.300Z',
   );
+  const history = [first, release, second];
 
-  assert.deepEqual(buildVerifiedClaimLineage(input([first, release, second])), {
+  const lineageInput = input(history);
+  const result = buildVerifiedClaimLineage(lineageInput);
+  assertLineageMatchesClaimFold(result, lineageInput);
+  assert.deepEqual(result, {
     status: 'ok',
     claims: [
       {
@@ -256,9 +284,10 @@ test('keeps a same-claim heartbeat and activation nonce within one claim start',
     '2026-10-20T00:00:02Z',
   );
   const history = [first, heartbeat, activation];
-  const result = buildVerifiedClaimLineage(input(history));
+  const lineageInput = input(history);
+  const result = buildVerifiedClaimLineage(lineageInput);
 
-  assertLineageMatchesClaimFold(result, history);
+  assertLineageMatchesClaimFold(result, lineageInput);
   assert.equal(result.status, 'ok');
   if (result.status === 'ok') {
     assert.equal(result.claims.length, 1);
@@ -279,8 +308,12 @@ test('returns null active state and active-since after a released claim', () => 
     }),
     '2026-10-20T00:00:01.200Z',
   );
+  const history = [claim, release];
 
-  assert.deepEqual(buildVerifiedClaimLineage(input([claim, release])), {
+  const lineageInput = input(history);
+  const result = buildVerifiedClaimLineage(lineageInput);
+  assertLineageMatchesClaimFold(result, lineageInput);
+  assert.deepEqual(result, {
     status: 'ok',
     claims: [
       {
@@ -298,23 +331,31 @@ test('returns null active state and active-since after a released claim', () => 
 });
 
 test('filters untrusted claim markers before folding and normalizes trusted logins', () => {
-  const ignored = claimComment(
+  const ignoredByLogin = claimComment(
     '201',
     'claim-4599-forged',
     '2026-10-20T00:00:00Z',
     { agentId: 'forged-agent' },
   );
-  const trusted = claimComment(
+  const ignoredByTrustFlag = claimComment(
     '202',
+    'claim-4599-unverified',
+    '2026-10-20T00:00:00.500Z',
+    { agentId: 'unverified-agent' },
+  );
+  const trusted = claimComment(
+    '203',
     'claim-4599-real',
     '2026-10-20T00:00:01Z',
   );
-  const result = buildVerifiedClaimLineage(
-    input([
-      { ...ignored, authorLogin: 'untrusted', trustedAuthor: false },
-      trusted,
-    ]),
-  );
+  const history = [
+    { ...ignoredByLogin, authorLogin: 'untrusted', trustedAuthor: true },
+    { ...ignoredByTrustFlag, authorLogin: 'Kurone-Kito', trustedAuthor: false },
+    trusted,
+  ];
+  const lineageInput = input(history);
+  const result = buildVerifiedClaimLineage(lineageInput);
+  assertLineageMatchesClaimFold(result, lineageInput);
   assert.equal(result.status, 'ok');
   if (result.status === 'ok') {
     assert.deepEqual(
@@ -322,6 +363,25 @@ test('filters untrusted claim markers before folding and normalizes trusted logi
       ['claim-4599-real'],
     );
     assert.equal(result.active?.claimId, 'claim-4599-real');
+  }
+});
+
+test('uses the input trusted login policy when folding claim lineage', () => {
+  const claim = claimComment(
+    '204',
+    'claim-4599-alternate-trusted',
+    '2026-10-20T00:00:00Z',
+  );
+  const history = [{ ...claim, authorLogin: ' Alternate-Reviewer ' }];
+  const lineageInput = input(history, {
+    trustedMarkerLogins: ['alternate-reviewer'],
+  });
+  const result = buildVerifiedClaimLineage(lineageInput);
+
+  assertLineageMatchesClaimFold(result, lineageInput);
+  assert.equal(result.status, 'ok');
+  if (result.status === 'ok') {
+    assert.equal(result.active?.claimId, 'claim-4599-alternate-trusted');
   }
 });
 
@@ -350,10 +410,11 @@ test('replay accepts the verified claim prefix at every record position', () => 
 
   for (const position of positions) {
     const beforeRecord = sourceHistory.slice(0, position.prefixLength);
-    const prefixLineage = buildVerifiedClaimLineage(input(beforeRecord));
+    const prefixInput = input(beforeRecord);
+    const prefixLineage = buildVerifiedClaimLineage(prefixInput);
     assert.equal(prefixLineage.status, 'ok');
     if (prefixLineage.status !== 'ok') continue;
-    assertLineageMatchesClaimFold(prefixLineage, beforeRecord);
+    assertLineageMatchesClaimFold(prefixLineage, prefixInput);
     const recordClaims: ProvisionalDecisionClaim[] = prefixLineage.claims.map(
       ({ commentId: _commentId, ...claim }) => claim,
     );
@@ -371,10 +432,11 @@ test('replay accepts the verified claim prefix at every record position', () => 
       selection,
       ...sourceHistory.slice(position.prefixLength),
     ];
-    const lineage = buildVerifiedClaimLineage(input(history));
+    const lineageInput = input(history);
+    const lineage = buildVerifiedClaimLineage(lineageInput);
     assert.equal(lineage.status, 'ok');
     if (lineage.status !== 'ok') continue;
-    assertLineageMatchesClaimFold(lineage, history);
+    assertLineageMatchesClaimFold(lineage, lineageInput);
     const replay = replayProvisionalDecisionHistory({
       comments: history.map(replayComment),
       completeHistory: true,
@@ -520,7 +582,10 @@ test('keeps a fresh takeover out of lineage and uses the configured stale age', 
     '2026-10-20T00:30:00Z',
     { agentId: 'fresh-takeover-agent', supersedes: 'claim-4599-1' },
   );
-  const ignored = buildVerifiedClaimLineage(input([first, freshTakeover]));
+  const history = [first, freshTakeover];
+  const lineageInput = input(history);
+  const ignored = buildVerifiedClaimLineage(lineageInput);
+  assertLineageMatchesClaimFold(ignored, lineageInput);
   assert.equal(ignored.status, 'ok');
   if (ignored.status === 'ok') {
     assert.deepEqual(
@@ -539,6 +604,28 @@ test('keeps a fresh takeover out of lineage and uses the configured stale age', 
   reason([first, thresholdTakeover], 'takeover-accepted', {
     staleAgeMs: 60 * 60 * 1000,
   });
+});
+
+test('uses the default stale-age fallback for invalid configured ages', () => {
+  const first = claimComment('808', 'claim-4599-1', '2026-10-20T00:00:00Z');
+  const freshTakeover = claimComment(
+    '809',
+    'claim-4599-2',
+    '2026-10-20T00:30:00Z',
+    { agentId: 'fresh-takeover-agent', supersedes: 'claim-4599-1' },
+  );
+  const history = [first, freshTakeover];
+
+  for (const staleAgeMs of [0, Number.NaN, Number.POSITIVE_INFINITY]) {
+    const lineageInput = input(history, { staleAgeMs });
+    const result = buildVerifiedClaimLineage(lineageInput);
+
+    assertLineageMatchesClaimFold(result, lineageInput);
+    assert.equal(result.status, 'ok');
+    if (result.status === 'ok') {
+      assert.equal(result.active?.claimId, 'claim-4599-1');
+    }
+  }
 });
 
 test('refuses noncanonical branches, late forced handoffs, and empty lineage', () => {
