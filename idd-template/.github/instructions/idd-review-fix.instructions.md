@@ -243,9 +243,9 @@ Run **post-fix-validate**.
 98% of its `limitBytes`, settle it in this order before anyone is
 asked:
 
-1. Move the detail this change added into `docs/idd-helper-scripts.md`,
-   the adopter path. Skip this step for lite files, which are
-   self-contained. Do not trim shared, terminology-sensitive text.
+1. Move each obligation the change removes into `docs/idd-helper-scripts.md`
+   in the same change; a bare link is not a move. Skip for lite files.
+   Do not trim shared, terminology-sensitive text.
 2. If the bundle is still above 98%, read its base utilization (its
    total over `limitBytes` at the base ref):
    - If its base utilization was below 95%, raise the limit to about

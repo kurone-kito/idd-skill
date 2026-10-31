@@ -43,8 +43,9 @@ for (const path of REVIEW_FIX_COPIES) {
     const block = budgetBreachBlock(path);
     assertInOrder(block, [
       'above 98% of its `limitBytes`',
-      '1. Move the detail this change added into `docs/idd-helper-scripts.md`',
-      'Skip this step for lite files',
+      '1. Move each obligation the change removes into `docs/idd-helper-scripts.md`',
+      'in the same change; a bare link is not a move.',
+      'Skip for lite files.',
       'Do not trim shared, terminology-sensitive text.',
       '2. If the bundle is still above 98%, read its base utilization',
       'If its base utilization was below 95%, raise the limit to about 10% above the new total',
@@ -73,6 +74,20 @@ for (const path of REVIEW_FIX_COPIES) {
       'Then push the feature branch',
       '`claimed-push` as D2 does',
       'Under `instructions-only`, follow the E12 fallback in `docs/idd-helper-scripts.md`.',
+    ]);
+  });
+}
+
+for (const path of REVIEW_FIX_COPIES) {
+  test(`${path} keeps the E11 conflict and merge-failure outcomes (#4864)`, () => {
+    const text = readFileSync(path, 'utf8');
+    const start = text.indexOf('## E11 ');
+    const end = text.indexOf('## E12 ', start);
+    assert.ok(start >= 0 && end > start, `${path} has the E11 section`);
+    assertInOrder(text.slice(start, end).replace(/\s+/g, ' '), [
+      'Continue after a clean resolution;',
+      'abort, report, and hold without pushing.',
+      '**Merge failure:** run `git merge --abort`, report, and hold on a merge, signing, or hook failure;',
     ]);
   });
 }
