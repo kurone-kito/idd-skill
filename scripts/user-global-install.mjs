@@ -53,6 +53,7 @@ import {
 import { fileURLToPath } from 'node:url';
 import { resolveBundleRoot } from './bundle-root.mjs';
 import {
+  assertHelperEntryClosureResolvable,
   readHelperExtraRuntimeFiles,
   resolveHelperEntryClosure,
 } from './helper-runtime-manifest.mjs';
@@ -93,6 +94,7 @@ import {
 const VERSION_PATTERN = /^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$/;
 const SOURCE_COMMIT_PATTERN = /^[0-9a-f]{40}$/;
 const PREPARED_MANIFEST_NAME = 'manifest.json';
+const CHECKOUT_GIT_MAX_BUFFER_BYTES = 1024 * 1024 * 1024;
 const CURRENT = 'current';
 const PAYLOAD_BLOCK_ID = 'idd-template-core-files';
 const PAYLOAD_EXTRA_FILES = ['idd-template/user-global/entry.md'];
@@ -717,7 +719,10 @@ function verifyCheckoutFiles(sourceRoot, sourceCommit, files, skillComponents) {
   const treeBytes = execFileSync(
     'git',
     ['-C', sourceRoot, 'ls-tree', '-r', '-z', '--full-tree', sourceCommit],
-    { encoding: 'buffer' },
+    {
+      encoding: 'buffer',
+      maxBuffer: CHECKOUT_GIT_MAX_BUFFER_BYTES,
+    },
   );
   const tree = new Map();
   for (const record of treeBytes.toString('utf8').split('\0')) {
@@ -769,11 +774,14 @@ function verifyCheckoutFiles(sourceRoot, sourceCommit, files, skillComponents) {
       committedBytes = execFileSync(
         'git',
         ['-C', sourceRoot, 'cat-file', 'blob', entry.oid],
-        { encoding: 'buffer' },
+        {
+          encoding: 'buffer',
+          maxBuffer: CHECKOUT_GIT_MAX_BUFFER_BYTES,
+        },
       );
     } catch (error) {
       throw new Error(
-        `${path} is not present in source commit ${sourceCommit} (${describe(error)})`,
+        `${path} could not be read from source commit ${sourceCommit} (${describe(error)})`,
       );
     }
     if (!workingBytes.equals(committedBytes)) {
@@ -920,6 +928,10 @@ function buildPreparedSet(ctx, options) {
     sourceRoot,
     helperRuntimeManifestBytes,
   );
+  assertHelperEntryClosureResolvable(options.invocation.command, {
+    packageRoot: sourceRoot,
+    extraRuntimeFiles,
+  });
   const helperPaths = [
     ...new Set(
       resolveHelperEntryClosure(options.invocation.command, {

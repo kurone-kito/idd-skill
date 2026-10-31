@@ -56,6 +56,7 @@ import {
 import { fileURLToPath } from 'node:url';
 import { resolveBundleRoot } from './bundle-root.mts';
 import {
+  assertHelperEntryClosureResolvable,
   readHelperExtraRuntimeFiles,
   resolveHelperEntryClosure,
 } from './helper-runtime-manifest.mts';
@@ -177,6 +178,7 @@ interface Target {
 const VERSION_PATTERN = /^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$/;
 const SOURCE_COMMIT_PATTERN = /^[0-9a-f]{40}$/;
 const PREPARED_MANIFEST_NAME = 'manifest.json';
+const CHECKOUT_GIT_MAX_BUFFER_BYTES = 1024 * 1024 * 1024;
 
 const CURRENT = 'current';
 const PAYLOAD_BLOCK_ID = 'idd-template-core-files';
@@ -891,7 +893,10 @@ function verifyCheckoutFiles(
   const treeBytes = execFileSync(
     'git',
     ['-C', sourceRoot, 'ls-tree', '-r', '-z', '--full-tree', sourceCommit],
-    { encoding: 'buffer' },
+    {
+      encoding: 'buffer',
+      maxBuffer: CHECKOUT_GIT_MAX_BUFFER_BYTES,
+    },
   ) as Buffer;
   const tree = new Map<string, CheckoutTreeEntry>();
   for (const record of treeBytes.toString('utf8').split('\0')) {
@@ -945,11 +950,14 @@ function verifyCheckoutFiles(
       committedBytes = execFileSync(
         'git',
         ['-C', sourceRoot, 'cat-file', 'blob', entry.oid],
-        { encoding: 'buffer' },
+        {
+          encoding: 'buffer',
+          maxBuffer: CHECKOUT_GIT_MAX_BUFFER_BYTES,
+        },
       ) as Buffer;
     } catch (error) {
       throw new Error(
-        `${path} is not present in source commit ${sourceCommit} (${describe(error)})`,
+        `${path} could not be read from source commit ${sourceCommit} (${describe(error)})`,
       );
     }
     if (!workingBytes.equals(committedBytes)) {
@@ -1120,6 +1128,10 @@ function buildPreparedSet(
     sourceRoot,
     helperRuntimeManifestBytes,
   );
+  assertHelperEntryClosureResolvable(options.invocation.command, {
+    packageRoot: sourceRoot,
+    extraRuntimeFiles,
+  });
   const helperPaths = [
     ...new Set(
       resolveHelperEntryClosure(options.invocation.command, {

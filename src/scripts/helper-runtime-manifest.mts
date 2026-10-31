@@ -1341,13 +1341,15 @@ export function collectVendoredFiles(
   }));
 }
 
-// audit:ignore-dead-export: issue #4703 will call this helper.
-export function resolveHelperEntryClosure(
+interface HelperEntryClosureOptions {
+  packageRoot?: string;
+  extraRuntimeFiles?: ReadonlyMap<string, readonly string[]>;
+}
+
+function walkHelperEntryClosure(
   entryPath: string,
-  options: {
-    packageRoot?: string;
-    extraRuntimeFiles?: ReadonlyMap<string, readonly string[]>;
-  } = {},
+  options: HelperEntryClosureOptions,
+  requireResolvableImports: boolean,
 ): string[] {
   const packageRoot = resolve(options.packageRoot ?? PACKAGE_ROOT);
   const extraRuntimeFiles = options.extraRuntimeFiles ?? EXTRA_RUNTIME_FILES;
@@ -1377,11 +1379,24 @@ export function resolveHelperEntryClosure(
     const source = readFileSync(current, 'utf8');
     for (const specifier of findRelativeImports(source)) {
       const dependency = resolveRelativeImport(current, specifier);
-      if (!dependency || !isInsidePackageRoot(packageRoot, dependency)) {
+      if (!dependency) {
+        if (requireResolvableImports) {
+          throw new Error(
+            `relative import ${specifier} from ${currentPath} does not resolve to a file`,
+          );
+        }
+        continue;
+      }
+      if (!isInsidePackageRoot(packageRoot, dependency)) {
         continue;
       }
       const dependencyStat = statIfPresent(dependency);
       if (!dependencyStat?.isFile()) {
+        if (requireResolvableImports) {
+          throw new Error(
+            `relative import ${specifier} from ${currentPath} is not a regular file`,
+          );
+        }
         continue;
       }
       queue.push(dependency);
@@ -1391,6 +1406,22 @@ export function resolveHelperEntryClosure(
   return [...closure].sort((left, right) =>
     Buffer.compare(Buffer.from(left, 'utf8'), Buffer.from(right, 'utf8')),
   );
+}
+
+// audit:ignore-dead-export: issue #4703 will call this helper.
+export function resolveHelperEntryClosure(
+  entryPath: string,
+  options: HelperEntryClosureOptions = {},
+): string[] {
+  return walkHelperEntryClosure(entryPath, options, false);
+}
+
+// audit:ignore-dead-export: issue #4703 validates prepared helper inputs.
+export function assertHelperEntryClosureResolvable(
+  entryPath: string,
+  options: HelperEntryClosureOptions = {},
+): void {
+  walkHelperEntryClosure(entryPath, options, true);
 }
 
 // audit:ignore-dead-export: issue #4703 will call this helper.
@@ -2348,14 +2379,71 @@ function statIfPresent(filePath: string) {
   }
 }
 
+function maskJavaScriptComments(source: string): string {
+  const characters = source.split('');
+  let quote: "'" | '"' | '`' | null = null;
+  let escaped = false;
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index];
+    if (quote !== null) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === '\\') {
+        escaped = true;
+      } else if (character === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (character === "'" || character === '"' || character === '`') {
+      quote = character;
+      continue;
+    }
+    if (character !== '/' || index + 1 >= source.length) continue;
+    const next = source[index + 1];
+    if (next === '/') {
+      characters[index] = '\0';
+      characters[index + 1] = '\0';
+      index += 2;
+      while (
+        index < source.length &&
+        source[index] !== '\n' &&
+        source[index] !== '\r'
+      ) {
+        characters[index] = '\0';
+        index += 1;
+      }
+      index -= 1;
+    } else if (next === '*') {
+      characters[index] = '\0';
+      characters[index + 1] = '\0';
+      index += 2;
+      while (index < source.length) {
+        if (source[index] === '*' && source[index + 1] === '/') {
+          characters[index] = '\0';
+          characters[index + 1] = '\0';
+          index += 1;
+          break;
+        }
+        if (source[index] !== '\n' && source[index] !== '\r') {
+          characters[index] = '\0';
+        }
+        index += 1;
+      }
+    }
+  }
+  return characters.join('');
+}
+
 function findRelativeImports(source: string): string[] {
   const specifiers = new Set<string>();
+  const code = maskJavaScriptComments(source);
   const patterns = [
     /\b(?:import|export)\s+(?:[^"'`]+\s+from\s+)?["'](\.[^"']+)["']/g,
     /\bimport\s*\(\s*["'](\.[^"']+)["']\s*\)/g,
   ];
   for (const pattern of patterns) {
-    for (const match of source.matchAll(pattern)) {
+    for (const match of code.matchAll(pattern)) {
       specifiers.add(match[1]);
     }
   }

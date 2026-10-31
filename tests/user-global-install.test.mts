@@ -22,6 +22,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, test as nodeTest } from 'node:test';
 import {
+  assertHelperEntryClosureResolvable,
   readHelperExtraRuntimeFiles,
   resolveHelperEntryClosure,
 } from '../src/scripts/helper-runtime-manifest.mts';
@@ -452,6 +453,62 @@ test('checkout preparation refuses bytes that do not match the named commit', ()
     /differs from source commit/,
   );
   assert.equal(nodeFs.existsSync(dataRootOf(home)), false);
+});
+
+test('checkout preparation refuses a helper closure with a missing committed import', () => {
+  const home = makeHome();
+  const source = makePreparedSource();
+  nodeFs.writeFileSync(
+    join(source, 'scripts/sample.mjs'),
+    "import './dependency.mjs';\nexport const sample = true;\n",
+  );
+  nodeFs.writeFileSync(
+    join(source, 'scripts/dependency.mjs'),
+    'export const dependency = true;\n',
+  );
+  const sourceCommit = commitPreparedSource(source);
+  nodeFs.unlinkSync(join(source, 'scripts/dependency.mjs'));
+  const before = snapshot(home);
+
+  assert.throws(
+    () =>
+      prepareDistributionSet({
+        ...prepareOptions(home, source, sourceCommit),
+        provenance: { kind: 'checkout', commit: sourceCommit },
+      }),
+    /relative import \.\/dependency\.mjs from scripts\/sample\.mjs does not resolve to a file/,
+  );
+  assert.deepEqual(snapshot(home), before);
+});
+
+test('helper closure validation ignores generated comments that mention source imports', () => {
+  assert.doesNotThrow(() =>
+    assertHelperEntryClosureResolvable('scripts/protocol-helpers.mjs', {
+      packageRoot: REPO,
+    }),
+  );
+});
+
+test('checkout preparation verifies helper blobs larger than the git default buffer', () => {
+  const home = makeHome();
+  const source = makePreparedSource();
+  const largeHelper = Buffer.concat([
+    Buffer.from('export const sample = true;\n// '),
+    Buffer.alloc(1024 * 1024 + 1, 0x78),
+    Buffer.from('\n'),
+  ]);
+  nodeFs.writeFileSync(join(source, 'scripts/sample.mjs'), largeHelper);
+  const sourceCommit = commitPreparedSource(source);
+
+  const prepared = prepareDistributionSet({
+    ...prepareOptions(home, source, sourceCommit),
+    provenance: { kind: 'checkout', commit: sourceCommit },
+  });
+
+  assert.deepEqual(
+    nodeFs.readFileSync(join(prepared.preparedPath, 'scripts/sample.mjs')),
+    largeHelper,
+  );
 });
 
 test('checkout preparation detects missing committed files in a skill bundle', () => {
