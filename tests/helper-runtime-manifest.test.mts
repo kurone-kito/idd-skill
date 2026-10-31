@@ -8,19 +8,22 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import {
+  buildCommandCatalog,
   buildHelperRuntimeManifest,
   collectHelperRuntimeEvidence,
   collectVendoredFiles,
   detectPackageManager,
   detectPnpmMajor,
   PNPM_DLX_MIN_MAJOR,
+  readHelperExtraRuntimeFiles,
   recommendHelperRuntimeProfile,
   resolveHelperCommandForProfile,
+  resolveHelperEntryClosure,
   resolveLauncher,
   resolveSourcePackageMetadata,
 } from '../src/scripts/helper-runtime-manifest.mts';
@@ -32,6 +35,41 @@ const makeTempDir = trackTempDirectories();
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 const DEFAULT_PACKAGE_SPEC =
   'https://codeload.github.com/kurone-kito/idd-skill/tar.gz/refs/heads/main';
+
+function makeRuntimePackageFixture(prefix: string) {
+  const fixtureRoot = makeTempDir(join(tmpdir(), prefix));
+  const packageRoot = join(fixtureRoot, 'package');
+  mkdirSync(packageRoot, { recursive: true });
+  return { fixtureRoot, packageRoot };
+}
+
+function writeRuntimePackageFile(
+  packageRoot: string,
+  relativePath: string,
+  contents = '',
+): string {
+  const filePath = join(packageRoot, ...relativePath.split('/'));
+  mkdirSync(dirname(filePath), { recursive: true });
+  writeFileSync(filePath, contents);
+  return filePath;
+}
+
+function writeRuntimeInitializer(
+  packageRoot: string,
+  initializer: string,
+): void {
+  writeRuntimePackageFile(
+    packageRoot,
+    'src/scripts/helper-runtime-manifest.mts',
+    `const EXTRA_RUNTIME_FILES = new Map<string, string[]>(${initializer});\n`,
+  );
+}
+
+function sortUtf8Paths(paths: Iterable<string>): string[] {
+  return [...paths].sort((left, right) =>
+    Buffer.compare(Buffer.from(left, 'utf8'), Buffer.from(right, 'utf8')),
+  );
+}
 
 test('manifest records the package-manager-only verify-import-mirror exception', () => {
   const manifest = buildHelperRuntimeManifest({
@@ -167,6 +205,289 @@ test('vendored-node managed files include every validate-schemas runtime data fi
       managedFiles.has(dataFile),
       `vendored-node managedFiles omits ${dataFile}, which validate-schemas reads at runtime`,
     );
+  }
+});
+
+test('resolveHelperEntryClosure follows in-root static and dynamic imports and sorts unique files by UTF-8 bytes', () => {
+  const { fixtureRoot, packageRoot } = makeRuntimePackageFixture(
+    'idd-helper-entry-closure-',
+  );
+  const bmpName = '\uE000.mjs';
+  const supplementaryName = '\u{10000}.mjs';
+  writeRuntimePackageFile(
+    packageRoot,
+    'scripts/entry.mjs',
+    [
+      "import './static.mjs';",
+      "void import('./dynamic.mjs');",
+      "import '../outside.mjs';",
+      "import './missing.mjs';",
+      "import './directory';",
+      "import './data.json';",
+      `import './${bmpName}';`,
+      `import './${supplementaryName}';`,
+    ].join('\n'),
+  );
+  writeRuntimePackageFile(packageRoot, 'scripts/static.mjs', 'export {};');
+  writeRuntimePackageFile(packageRoot, 'scripts/dynamic.mjs', 'export {};');
+  writeRuntimePackageFile(packageRoot, 'scripts/data.json', '{}');
+  writeRuntimePackageFile(packageRoot, `scripts/${bmpName}`, 'export {};');
+  writeRuntimePackageFile(
+    packageRoot,
+    `scripts/${supplementaryName}`,
+    'export {};',
+  );
+  writeRuntimePackageFile(packageRoot, 'scripts/unused.mjs', 'export {};');
+  mkdirSync(join(packageRoot, 'scripts/directory'), { recursive: true });
+  writeFileSync(join(fixtureRoot, 'outside.mjs'), 'export {};');
+
+  const closure = resolveHelperEntryClosure('scripts/entry.mjs', {
+    packageRoot,
+    extraRuntimeFiles: new Map([
+      [
+        'scripts/entry.mjs',
+        ['scripts/data.json', 'scripts/static.mjs', 'scripts/data.json'],
+      ],
+    ]),
+  });
+  const expected = sortUtf8Paths([
+    'scripts/entry.mjs',
+    'scripts/static.mjs',
+    'scripts/dynamic.mjs',
+    'scripts/data.json',
+    `scripts/${bmpName}`,
+    `scripts/${supplementaryName}`,
+  ]);
+
+  assert.deepEqual(closure, expected);
+  assert.equal(new Set(closure).size, closure.length);
+  assert.notDeepEqual(closure, [...closure].sort());
+  assert.equal(closure.includes('scripts/unused.mjs'), false);
+  assert.equal(closure.includes('scripts/directory'), false);
+  assert.equal(closure.includes('../outside.mjs'), false);
+});
+
+test('resolveHelperEntryClosure rejects absent, outside, and non-file entries and data paths', () => {
+  const { fixtureRoot, packageRoot } = makeRuntimePackageFixture(
+    'idd-helper-entry-invalid-',
+  );
+  writeRuntimePackageFile(packageRoot, 'scripts/entry.mjs', 'export {};');
+  mkdirSync(join(packageRoot, 'scripts/directory'), { recursive: true });
+  mkdirSync(join(packageRoot, 'scripts/data-directory'), { recursive: true });
+  writeFileSync(join(fixtureRoot, 'outside.mjs'), 'export {};');
+  writeFileSync(join(fixtureRoot, 'outside-data.json'), '{}');
+
+  assert.throws(() =>
+    resolveHelperEntryClosure(undefined as unknown as string, { packageRoot }),
+  );
+  for (const entryPath of [
+    '',
+    'scripts/missing.mjs',
+    'scripts/directory',
+    '../outside.mjs',
+  ]) {
+    assert.throws(() => resolveHelperEntryClosure(entryPath, { packageRoot }));
+  }
+  for (const dataPath of [
+    'scripts/missing-data.json',
+    'scripts/data-directory',
+    '../outside-data.json',
+  ]) {
+    assert.throws(() =>
+      resolveHelperEntryClosure('scripts/entry.mjs', {
+        packageRoot,
+        extraRuntimeFiles: new Map([['scripts/entry.mjs', [dataPath]]]),
+      }),
+    );
+  }
+});
+
+test('resolveHelperEntryClosure defaults match the parsed extra runtime map and preserve aggregate closure parity', () => {
+  const extraRuntimeFiles = readHelperExtraRuntimeFiles(REPO_ROOT);
+  const defaultClosure = resolveHelperEntryClosure(
+    'scripts/ci-wait-policy.mjs',
+  );
+  const customMapClosure = resolveHelperEntryClosure(
+    'scripts/ci-wait-policy.mjs',
+    { extraRuntimeFiles },
+  );
+
+  assert.deepEqual(defaultClosure, customMapClosure);
+  assert.ok(defaultClosure.includes('scripts/validate-schemas.mjs'));
+  assert.ok(defaultClosure.includes('schemas/policy.schema.json'));
+  assert.deepEqual(defaultClosure, sortUtf8Paths(defaultClosure));
+  assert.equal(new Set(defaultClosure).size, defaultClosure.length);
+  for (const path of defaultClosure) {
+    assert.equal(existsSync(join(REPO_ROOT, ...path.split('/'))), true, path);
+  }
+
+  const advisoryClosure = resolveHelperEntryClosure(
+    'scripts/advisory-convergence.mjs',
+  );
+  assert.equal(
+    advisoryClosure.includes('schemas/advisory-convergence.schema.json'),
+    false,
+  );
+
+  const perEntryUnion = new Set(
+    buildCommandCatalog().flatMap((command) => [
+      ...resolveHelperEntryClosure(command.entryPath),
+      ...command.contractPaths,
+    ]),
+  );
+  const collected = collectVendoredFiles(REPO_ROOT).map(
+    (file) => file.targetPath,
+  );
+  assert.deepEqual(sortUtf8Paths(perEntryUnion), sortUtf8Paths(collected));
+});
+
+test('readHelperExtraRuntimeFiles parses comments, trailing commas, and multiple keys without evaluating source', () => {
+  const { packageRoot } = makeRuntimePackageFixture(
+    'idd-helper-runtime-map-valid-',
+  );
+  writeRuntimePackageFile(packageRoot, 'scripts/one.mjs', 'export {};');
+  writeRuntimePackageFile(packageRoot, 'scripts/two.mjs', 'export {};');
+  writeRuntimePackageFile(packageRoot, 'data/one.json', '{}');
+  writeRuntimePackageFile(packageRoot, 'data/two.json', '{}');
+  writeRuntimeInitializer(
+    packageRoot,
+    `[
+      // brackets in comments do not change the initializer span: [ ]
+      ['scripts/one.mjs', ['data/one.json',],],
+      ['scripts/two.mjs', ['data/two.json']] // trailing outer comma follows
+      ,]`,
+  );
+
+  assert.deepEqual(
+    readHelperExtraRuntimeFiles(packageRoot),
+    new Map([
+      ['scripts/one.mjs', ['data/one.json']],
+      ['scripts/two.mjs', ['data/two.json']],
+    ]),
+  );
+});
+
+test('readHelperExtraRuntimeFiles normalizes paths without traversing mapped data files', () => {
+  const { packageRoot } = makeRuntimePackageFixture(
+    'idd-helper-runtime-map-normalized-paths-',
+  );
+  writeRuntimePackageFile(
+    packageRoot,
+    'scripts/one.mjs',
+    "import './dependency.mjs';",
+  );
+  writeRuntimePackageFile(packageRoot, 'scripts/dependency.mjs', 'export {};');
+  writeRuntimePackageFile(
+    packageRoot,
+    'data/one.json',
+    `{"note":"import './not-traversed.mjs'"}`,
+  );
+  writeRuntimePackageFile(packageRoot, 'data/not-traversed.mjs', 'export {};');
+  writeRuntimeInitializer(
+    packageRoot,
+    "[['scripts/../scripts/one.mjs', ['data/./one.json']]]",
+  );
+
+  const extraRuntimeFiles = readHelperExtraRuntimeFiles(packageRoot);
+  assert.deepEqual(
+    extraRuntimeFiles,
+    new Map([['scripts/one.mjs', ['data/one.json']]]),
+  );
+  assert.deepEqual(
+    resolveHelperEntryClosure('scripts/one.mjs', {
+      packageRoot,
+      extraRuntimeFiles,
+    }),
+    ['data/one.json', 'scripts/dependency.mjs', 'scripts/one.mjs'],
+  );
+});
+
+test('readHelperExtraRuntimeFiles rejects missing, unclosed, unknown, malformed, and duplicate initializers', () => {
+  const cases = [
+    {
+      name: 'missing initializer',
+      source: 'export const OTHER = new Map([]);',
+    },
+    {
+      name: 'unclosed initializer',
+      source:
+        "const EXTRA_RUNTIME_FILES = new Map<string, string[]>([['scripts/one.mjs', []]",
+    },
+    {
+      name: 'unknown lexeme',
+      initializer: '[[identifier, []]]',
+    },
+    {
+      name: 'entry with no path',
+      initializer: '[[, []]]',
+    },
+    {
+      name: 'entry with two paths',
+      initializer: "[['scripts/one.mjs', 'scripts/two.mjs', []]]",
+    },
+    {
+      name: 'duplicate path',
+      initializer: "[['scripts/one.mjs', []], ['scripts/one.mjs', []]]",
+    },
+    {
+      name: 'duplicate normalized path',
+      initializer: "[['scripts/one.mjs', []], ['scripts/./one.mjs', []]]",
+    },
+  ];
+
+  for (const { name, source, initializer } of cases) {
+    const { packageRoot } = makeRuntimePackageFixture(
+      `idd-helper-runtime-map-invalid-${name.replaceAll(' ', '-')}-`,
+    );
+    writeRuntimePackageFile(packageRoot, 'scripts/one.mjs', 'export {};');
+    writeRuntimePackageFile(packageRoot, 'scripts/two.mjs', 'export {};');
+    writeRuntimePackageFile(
+      packageRoot,
+      'src/scripts/helper-runtime-manifest.mts',
+      source ??
+        `const EXTRA_RUNTIME_FILES = new Map<string, string[]>(${initializer});\n`,
+    );
+    assert.throws(() => readHelperExtraRuntimeFiles(packageRoot), name);
+  }
+});
+
+test('readHelperExtraRuntimeFiles rejects invalid entry and data file paths', () => {
+  const { fixtureRoot } = makeRuntimePackageFixture(
+    'idd-helper-runtime-map-paths-',
+  );
+  const cases = [
+    { entryPath: 'scripts/missing.mjs', dataPaths: [] },
+    { entryPath: 'scripts/directory', dataPaths: [] },
+    { entryPath: '../outside.mjs', dataPaths: [] },
+    { entryPath: 'scripts/entry.mjs', dataPaths: ['data/missing.json'] },
+    { entryPath: 'scripts/entry.mjs', dataPaths: ['data/directory'] },
+    { entryPath: 'scripts/entry.mjs', dataPaths: ['../outside-data.json'] },
+  ];
+
+  for (const { entryPath, dataPaths } of cases) {
+    const packageRoot = join(
+      fixtureRoot,
+      entryPath.includes('directory') ? 'dir-case' : 'case',
+    );
+    mkdirSync(packageRoot, { recursive: true });
+    writeRuntimePackageFile(packageRoot, 'scripts/entry.mjs', 'export {};');
+    if (entryPath === 'scripts/directory') {
+      mkdirSync(join(packageRoot, 'scripts/directory'), { recursive: true });
+    }
+    if (dataPaths.includes('data/directory')) {
+      mkdirSync(join(packageRoot, 'data/directory'), { recursive: true });
+    }
+    if (entryPath === '../outside.mjs') {
+      writeFileSync(join(fixtureRoot, 'outside.mjs'), 'export {};');
+    }
+    if (dataPaths.includes('../outside-data.json')) {
+      writeFileSync(join(fixtureRoot, 'outside-data.json'), '{}');
+    }
+    writeRuntimeInitializer(
+      packageRoot,
+      `[\n  [${JSON.stringify(entryPath)}, ${JSON.stringify(dataPaths)}],\n]`,
+    );
+    assert.throws(() => readHelperExtraRuntimeFiles(packageRoot));
   }
 });
 
