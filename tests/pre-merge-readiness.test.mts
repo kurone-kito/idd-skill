@@ -19872,8 +19872,11 @@ test('#4878: a claim-id-only report blocks on-head and off-head without recovery
       blockerNamed(summary, 'stale-request-recovery'),
       `${name}: ${JSON.stringify(summary.blockers)}`,
     );
+    const blocker = blockerNamed(summary, 'stale-request-recovery');
+    assert.ok(blocker, `${name}: expected a stale-request-recovery blocker`);
+    assert.ok(typeof blocker.detail === 'string');
     assert.match(
-      blockerNamed(summary, 'stale-request-recovery')?.detail ?? '',
+      blocker.detail,
       /--agent-id/,
       `${name}: blocker should explain the recovery path`,
     );
