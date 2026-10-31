@@ -678,7 +678,7 @@ function normalizeCheckEntry(
       required: requiredCheckNameSet.has(checkName),
       url: String(entry.targetUrl ?? ''),
       startedAt: String(entry.startedAt ?? ''),
-      completedAt: String(entry.updatedAt ?? ''),
+      completedAt: String(entry.updatedAt ?? entry.completedAt ?? ''),
     };
   }
 

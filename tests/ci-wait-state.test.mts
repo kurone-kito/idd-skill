@@ -925,18 +925,18 @@ test('mixed rollup selects the latest completion time independent of row order',
     {
       headRefOid: HEAD_SHA,
       statusCheckRollup: [
-        checkRun({
-          name: 'mixed-check',
-          conclusion: 'SUCCESS',
-          completedAt: later,
-        }),
         {
           __typename: 'StatusContext',
           context: 'mixed-check',
           state: 'ERROR',
           targetUrl: '',
-          updatedAt: earlier,
+          completedAt: earlier,
         },
+        checkRun({
+          name: 'mixed-check',
+          conclusion: 'SUCCESS',
+          completedAt: later,
+        }),
       ],
     },
     { requiredCheckNames: ['mixed-check'] },
@@ -948,8 +948,8 @@ test('mixed rollup selects the latest completion time independent of row order',
       completedAt,
     })),
     [
-      { type: 'check-run', completedAt: later },
       { type: 'status-context', completedAt: earlier },
+      { type: 'check-run', completedAt: later },
     ],
   );
   assert.equal(checkRunWins.requiredChecks.allRequiredPassing, true);
