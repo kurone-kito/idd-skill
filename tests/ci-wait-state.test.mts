@@ -930,7 +930,7 @@ test('mixed rollup selects the latest completion time independent of row order',
           context: 'mixed-check',
           state: 'ERROR',
           targetUrl: '',
-          completedAt: earlier,
+          updatedAt: earlier,
         },
         checkRun({
           name: 'mixed-check',
