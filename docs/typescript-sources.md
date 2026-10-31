@@ -23,7 +23,7 @@ fails CI (`tests/inventory-ordering.test.mts`).
 
 Node.js strips TypeScript types natively (default since 22.18; the
 repository's `engines` floor is
-`^22.23.2 || ^24.2.0 || >=26.0.0`), but it refuses to
+`^22.23.4 || ^24.2.0 || >=26.0.0`), but it refuses to
 do so for files resolved inside `node_modules`
 (`ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`). The helper bundle is
 consumed through the `package-manager` and `ephemeral-npx` profiles,
@@ -35,7 +35,7 @@ install-free bare-node CI lane working unchanged.
 ## `@types/node` vs. the engines floor
 
 `@types/node` is pinned to `26.1.2` — newer than the 22.x and 24.x
-floors of the `^22.23.2 || ^24.2.0 || >=26.0.0` engines range, and
+floors of the `^22.23.4 || ^24.2.0 || >=26.0.0` engines range, and
 within its `>=26.0.0` clause — so `pnpm run typecheck` validates
 against the Node 26 API surface, not the lowest version this
 repository actually ships on. This is a deliberate trade-off, not an
@@ -49,7 +49,7 @@ type-only layer.
 The actual backstop is runtime, not type-level: the Node 22 CI lane
 (`pnpm-boundary-node22-floor.yml`) runs the full `pnpm run check`
 suite — including the whole test suite and
-`verify-workshop-integrity.mts` — directly on Node 22.23.2. A helper
+`verify-workshop-integrity.mts` — directly on Node 22.23.4. A helper
 that calls an API present in the types-26 surface but missing or
 broken on the true floor version (the #1447 failure class) crashes
 there even though it typechecks cleanly, closing the gap that pinning

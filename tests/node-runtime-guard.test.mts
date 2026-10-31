@@ -58,7 +58,7 @@ test('assertEntrySignal({}) exits 1 with a stderr line naming process.version an
         `expected stderr to name process.version (${process.version}): ${stderr}`,
       );
       assert.ok(
-        stderr.includes('^22.23.2 || ^24.2.0 || >=26.0.0'),
+        stderr.includes('^22.23.4 || ^24.2.0 || >=26.0.0'),
         `expected stderr to name the engines.node range: ${stderr}`,
       );
       return true;
