@@ -3112,7 +3112,7 @@ test('CLI reviewer runs: invalid and incompatible options fail before gh', () =>
   ];
   for (const args of invalidArgs) {
     const result = runReviewerRunsWithFixture({}, args);
-    assert.equal(result.status, 2, args.join(' ') + ': ' + result.stderr);
+    assert.equal(result.status, 2, `${args.join(' ')}: ${result.stderr}`);
     assert.deepEqual(result.calls, [], args.join(' '));
   }
 });
@@ -3195,7 +3195,7 @@ test('CLI reviewer runs: a step-summary target that cannot be appended exits 2 w
     assert.equal(result.status, 2, result.stderr);
     assert.ok(
       result.stderr.startsWith(
-        'copilot-review-wave-audit: cannot write step summary ' + dir + ': ',
+        `copilot-review-wave-audit: cannot write step summary ${dir}: `,
       ),
       result.stderr,
     );

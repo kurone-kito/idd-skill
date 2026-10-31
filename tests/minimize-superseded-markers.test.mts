@@ -1419,7 +1419,7 @@ function takeoverIssueComment(
   return {
     id: 9000 + nodeId.length,
     node_id: nodeId,
-    html_url: 'https://github.com/owner/repo/issues/42#issuecomment-' + nodeId,
+    html_url: `https://github.com/owner/repo/issues/42#issuecomment-${nodeId}`,
     body,
     user: { login },
   };
@@ -1429,7 +1429,7 @@ function makeTakeoverGhStub(pages: unknown[][]): string {
   return [
     "const fs = require('node:fs');",
     'const args = process.argv.slice(2);',
-    'const pages = ' + JSON.stringify(pages) + ';',
+    `const pages = ${JSON.stringify(pages)};`,
     'const tracePath = process.env.IDD_TEST_GH_TRACE;',
     'const record = (value) => { if (tracePath) fs.appendFileSync(tracePath, JSON.stringify(value) + String.fromCharCode(10)); };',
     'if (args[0] === "api" && args.includes("--paginate")) {',
@@ -1502,8 +1502,8 @@ test('takeover marker matcher stays in parity with the live claim and release pa
     takeoverClaimBody('codex', TAKEOVER_PRIOR_ID, 'none'),
     takeoverClaimBody('codex', TAKEOVER_ACTIVE_ID, TAKEOVER_PRIOR_ID),
     takeoverReleaseBody('codex', TAKEOVER_PRIOR_ID),
-    takeoverClaimBody('codex', TAKEOVER_PRIOR_ID, 'none') + '\nextra',
-    'prefix ' + takeoverClaimBody('codex', TAKEOVER_PRIOR_ID, 'none'),
+    `${takeoverClaimBody('codex', TAKEOVER_PRIOR_ID, 'none')}\nextra`,
+    `prefix ${takeoverClaimBody('codex', TAKEOVER_PRIOR_ID, 'none')}`,
     takeoverClaimBody('codex', TAKEOVER_PRIOR_ID, 'none').replace(
       TAKEOVER_TIMESTAMP,
       '2026-02-30T12:00:00Z',
@@ -1580,9 +1580,9 @@ test('takeover selector paginates, selects exact trusted markers, and reports no
       ),
       takeoverIssueComment(
         'IC_digest',
-        'live-status digest ' + TAKEOVER_PRIOR_ID,
+        `live-status digest ${TAKEOVER_PRIOR_ID}`,
       ),
-      takeoverIssueComment('IC_prose', 'ordinary prose ' + TAKEOVER_PRIOR_ID),
+      takeoverIssueComment('IC_prose', `ordinary prose ${TAKEOVER_PRIOR_ID}`),
       takeoverIssueComment('IC_unrelated', 'does not name the displaced claim'),
     ],
     [
@@ -1904,7 +1904,7 @@ test('takeover listing failure or incomplete rows stop before any GraphQL probe 
         message: /"kind":"internal".*user\.login/,
       },
     ]) {
-      const tracePath = join(tempRoot, 'trace-' + Math.random() + '.jsonl');
+      const tracePath = join(tempRoot, `trace-${Math.random()}.jsonl`);
       const result = runTakeoverCli(
         [
           '--issue',
