@@ -44,6 +44,7 @@ for (const path of REVIEW_FIX_COPIES) {
     assertInOrder(block, [
       'above 98% of its `limitBytes`',
       '1. Move the detail this change added into `docs/idd-helper-scripts.md`',
+      'a bare link is not a move.',
       'Skip this step for lite files',
       'Do not trim shared, terminology-sensitive text.',
       '2. If the bundle is still above 98%, read its base utilization',
@@ -92,6 +93,20 @@ for (const path of MERGE_COPIES) {
       'any other outcome, including `fail` and `budget-fail`, holds: no merge, no push, no base merge.',
       `gh pr merge {pr-number} --merge --match-head-commit "\${PR_HEAD_SHA_F3}"`,
       `gh pr merge {pr-number} --merge --match-head-commit "\${PR_HEAD_SHA_F3}" --admin`,
+    ]);
+  });
+}
+
+for (const path of REVIEW_FIX_COPIES) {
+  test(`${path} keeps the E11 conflict and merge-failure outcomes (#4864)`, () => {
+    const text = readFileSync(path, 'utf8');
+    const start = text.indexOf('## E11 ');
+    const end = text.indexOf('## E12 ', start);
+    assert.ok(start >= 0 && end > start, `${path} has the E11 section`);
+    assertInOrder(text.slice(start, end).replace(/\s+/g, ' '), [
+      'Continue after a clean resolution;',
+      'abort, report, and hold without pushing.',
+      '**Merge failure:** run `git merge --abort`, report, and hold on a merge, signing, or hook failure;',
     ]);
   });
 }
