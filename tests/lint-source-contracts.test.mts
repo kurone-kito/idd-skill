@@ -99,6 +99,34 @@ test('bare-Node audit passes a positive scratch fixture without GitHub calls or 
   }
 });
 
+test('standalone guard contract rejects a copied engines range literal', () => {
+  const fixture = makeFixture();
+  const sourcePath = join(
+    fixture.root,
+    'src/scripts/minimize-superseded-markers.mts',
+  );
+  try {
+    const source = readFileSync(sourcePath, 'utf8');
+    const message =
+      'Node version satisfying the engines.node field in package.json.';
+    assert.ok(source.includes(message));
+    writeFileSync(sourcePath, source.replace(message, `${message} (22.23.2)`));
+    const before = snapshot(fixture.root);
+    const result = runAudit(fixture.root);
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(
+      result.stderr,
+      /RUNTIME-GUARD-STANDALONE-EXEMPTION src\/scripts\/minimize-superseded-markers\.mts:/,
+    );
+    assert.match(
+      result.stderr,
+      /must not copy the engines\.node range literal/,
+    );
+    assert.equal(snapshot(fixture.root), before, 'the audit must be read-only');
+  } finally {
+    fixture.cleanup();
+  }
+});
 test('entry-order violation fails from the CLI with a rule ID and relative path', () => {
   const fixture = makeFixture();
   const sourcePath = join(fixture.root, 'src/scripts/contract-entry.mts');
