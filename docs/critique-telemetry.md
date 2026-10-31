@@ -534,8 +534,10 @@ Sensitivity of the saved total to the definitions:
 - The late-fix field compares the files of every non-merge commit after the
   earlier head with that head's cumulative diff. It includes the selected
   re-review's own fix round. A narrower interval, from the secondary review to
-  the next Copilot review, was not measured, so the late-fix counts are a
-  disclosed upper bound on fixes that stayed in known files.
+  the next Copilot review, was not measured. Because the narrower interval is a
+  subset of the commits used here, every head that stayed under this read also
+  stays under the narrower one. The 130 heads counted here are therefore a
+  lower bound on the narrower count.
 - A saved head needs at least one Accepted thread from the secondary review.
   A head whose thread evidence is missing is counted as not saved, not as
   unknown. No head in the window lacked thread evidence.
