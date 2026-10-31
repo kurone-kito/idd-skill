@@ -3153,6 +3153,35 @@ test('user-global schema rejects dangerouslyAutoDecide in the base and overrides
   );
 });
 
+test('user-global schema rejects standingApprovals in the base and overrides (#4886)', () => {
+  const schema = loadJson('schemas/user-global-config.schema.json');
+  const context = {
+    root: process.cwd(),
+    schemaPath: 'schemas/user-global-config.schema.json',
+  };
+  const standingApprovals = { split: { enabled: true } };
+  assert.ok(
+    validate({ standingApprovals }, schema, '$', context).length > 0,
+    'expected the user-global base to reject the repository-owned key',
+  );
+  assert.ok(
+    validate(
+      {
+        overrides: [
+          {
+            match: { repo: 'owner/repo' },
+            config: { standingApprovals },
+          },
+        ],
+      },
+      schema,
+      '$',
+      context,
+    ).length > 0,
+    'expected user-global overrides to reject the repository-owned key',
+  );
+});
+
 // ---------------------------------------------------------------------------
 // Helpers.
 // ---------------------------------------------------------------------------

@@ -22,6 +22,8 @@ export const REPOSITORY_POLICY_FIELDS = Object.freeze({
   mergeGate: 'idd-merge-execute.mts',
   /** `dangerouslyAutoDecide` grants provisional-choice authority only from a trusted repository baseline. */
   dangerouslyAutoDecide: 'trusted repository decision-authority reader',
+  /** `standingApprovals` grants approval authority, so only the repository policy may set it (roadmap #4883). */
+  standingApprovals: 'standing-approval readers (roadmap #4883 children)',
   /** `advisoryConvergence` configures the convergence helper policy read. */
   advisoryConvergence: 'advisory-convergence.mts',
   /** `reviewPolicy` controls whether advisory convergence applies. */
@@ -85,6 +87,7 @@ export const REPOSITORY_POLICY_FIELDS = Object.freeze({
 /** These authority fields never inherit from user-global policy, even without a local file. */
 const ALWAYS_REPOSITORY_LOCAL_POLICY_FIELDS = new Set([
   'dangerouslyAutoDecide',
+  'standingApprovals',
 ]);
 
 /** Local delegate objects are validated as a whole by their consumers. */

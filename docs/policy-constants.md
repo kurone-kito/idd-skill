@@ -157,6 +157,10 @@ each with a ceiling. Every class is off by default. Only an explicit
 `enabled: true` turns a class on, and a malformed or out-of-range class
 behaves as disabled, so every approval keeps waiting for a reply.
 
+Only the repository policy can turn a class on. A user-global
+`standingApprovals` value is ignored, and the user-global schema rejects
+the key.
+
 | Class         | Key                             | Default                                        | Ceiling and unit                                  |
 | ------------- | ------------------------------- | ---------------------------------------------- | ------------------------------------------------- |
 | `budgetRaise` | `standingApprovals.budgetRaise` | `enabled: false`, `maxRaisePct: 10`            | whole percent; integer from 0 to 10               |

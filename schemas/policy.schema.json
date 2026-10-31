@@ -1086,7 +1086,7 @@
     "standingApprovals": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Operator-approved standing classes (issue #4883). Each class is off unless its enabled flag is explicitly true. An absent or malformed class behaves as disabled, so every approval waits for a reply as today. This key changes no behavior by itself; later children read it.",
+      "description": "Operator-approved standing classes (issue #4883). Each class is off unless its enabled flag is explicitly true. An absent or malformed class behaves as disabled, so every approval waits for a reply as today. This key changes no behavior by itself; later children read it. Repository-owned: a user-global value is ignored and rejected by the user-global schema.",
       "properties": {
         "budgetRaise": {
           "type": "object",
