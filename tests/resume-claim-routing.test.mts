@@ -1197,6 +1197,9 @@ test('evidence.forced_handoff is populated on a bare --issue call (no --claim-id
     old_claim_id: 'claim-old',
     new_agent_id: 'copilot',
     new_claim_id: 'claim-new',
+    branch: 'issue/11-task',
+    linked_pr: null,
+    context_scope: 'issue-only',
     forced_by: 'maintainer',
     timestamp: '2026-05-12T10:01:00Z',
   });
@@ -1291,6 +1294,9 @@ test('evidence.forced_handoff is not misattributed to a stale, never-applied dup
     old_claim_id: 'claim-9',
     new_agent_id: 'agent-B',
     new_claim_id: 'claim-2',
+    branch: 'issue/50-task',
+    linked_pr: null,
+    context_scope: 'issue-only',
     forced_by: 'maintainer',
     timestamp: '2026-06-02T11:10:00Z',
   });
@@ -1674,10 +1680,13 @@ test('baselines the competing-claim search by timestamp regardless of event orde
 
 // Forced-handoff events whose marker scope/linkedPr can be varied to test
 // the buildForcedHandoffEnabledGate behavior end-to-end.
-function forcedHandoffEvents(scope: {
-  contextScope: string;
-  linkedPr?: string;
-}) {
+function forcedHandoffEvents(
+  scope: {
+    contextScope: string;
+    linkedPr?: string;
+  },
+  handoffCreatedAt = '2026-05-12T10:01:00Z',
+) {
   const payload = {
     oldAgentId: 'copilot',
     oldClaimId: 'claim-old',
@@ -1696,7 +1705,7 @@ function forcedHandoffEvents(scope: {
       body: '<!-- claimed-by: copilot claim-old supersedes: none 2026-05-12T10:00:00Z branch: issue/11-task -->',
     },
     {
-      createdAt: '2026-05-12T10:01:00Z',
+      createdAt: handoffCreatedAt,
       author: { login: 'maintainer' },
       body: `<!-- forced-handoff: ${JSON.stringify(payload)} -->\n\n_maintainer: forced handoff — IDD automation marker. Do not edit._`,
     },
@@ -1749,6 +1758,25 @@ test('gate honors an issue-plus-pr forced handoff naming the backing PR', () => 
   );
   assert.equal(result.state, 'already_owned');
   assert.equal(result.active_claim?.claim_id, 'claim-new');
+  assert.equal(result.evidence.forced_handoff?.branch, 'issue/11-task');
+  assert.equal(result.evidence.forced_handoff?.context_scope, 'issue-plus-pr');
+  assert.equal(result.evidence.forced_handoff?.linked_pr, '77');
+});
+
+test('applied forced-handoff activation uses the GitHub comment created_at, not the payload timestamp', () => {
+  const githubCreatedAt = '2026-05-12T10:02:00Z';
+  const result = route(
+    forcedHandoffEvents(
+      { contextScope: 'issue-plus-pr', linkedPr: '77' },
+      githubCreatedAt,
+    ),
+    buildForcedHandoffEnabledGate({
+      forcedHandoffEnabled: true,
+      expectedLinkedPrReferences: new Set(['77']),
+    }),
+  );
+  assert.equal(result.active_claim?.claim_id, 'claim-new');
+  assert.equal(result.evidence.forced_handoff?.timestamp, githubCreatedAt);
 });
 
 test('gate rejects an issue-plus-pr handoff naming a different PR', () => {
@@ -1761,6 +1789,7 @@ test('gate rejects an issue-plus-pr handoff naming a different PR', () => {
     gate,
   );
   assert.equal(result.active_claim?.claim_id, 'claim-old');
+  assert.equal(result.evidence.forced_handoff, null);
 });
 
 test('gate honors an issue-only handoff when no open linked PR backs the claim', () => {

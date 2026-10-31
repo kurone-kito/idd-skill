@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import { renderF4HeadProofBody } from '../src/scripts/f4-head-proof.mts';
 import {
   type ClaimAssertRequest,
+  type ClaimForcedHandoffEvidence,
   collectTrustedMarkers,
   type F4HeadProofGateDeps,
   type F4HeadProofGateInput,
@@ -95,6 +96,23 @@ function claimComment(
   );
 }
 
+function forcedHandoff(
+  overrides: Partial<ClaimForcedHandoffEvidence> = {},
+): ClaimForcedHandoffEvidence {
+  return {
+    oldAgentId: 'agent-old',
+    oldClaimId: 'claim-old',
+    newAgentId: AGENT,
+    newClaimId: CLAIM,
+    branch: BRANCH,
+    linkedPr: String(PR),
+    contextScope: 'issue-plus-pr',
+    forcedBy: BOT,
+    timestamp: ACTIVATED,
+    ...overrides,
+  };
+}
+
 function watermarkComment(
   id = 50,
   extra: Partial<ProviderComment> = {},
@@ -175,7 +193,7 @@ function harness(overrides: Partial<F4HeadProofGateDeps> = {}): Harness {
     assertClaim: track(
       'assertClaim',
       (_request: ClaimAssertRequest) =>
-        ({ status: 'owned', branch: BRANCH }) as const,
+        ({ status: 'owned', branch: BRANCH, forcedHandoff: null }) as const,
     ),
     resolveTrustedLogins: track('resolveTrustedLogins', () => [BOT]),
     listIssueComments: track('listIssueComments', () => [
@@ -193,6 +211,10 @@ function harness(overrides: Partial<F4HeadProofGateDeps> = {}): Harness {
       mergeCommitSha: MERGE,
       headSha: HEAD,
     })),
+    readPullRequestFirstCommitAt: track(
+      'readPullRequestFirstCommitAt',
+      () => '2026-10-17T00:00:00Z',
+    ),
     readCommit: track('readCommit', () => ({
       sha: MERGE,
       parents: [BASE_PARENT, HEAD],
@@ -299,12 +321,12 @@ test('a dry run reads the live state, names the post verdict with a null reason,
   assert.ok(!h.calls.includes('postComment'));
 });
 
-test('the claim check receives the stored nonce, the claim ID, and the worktree', () => {
+test('the claim check receives the F4 agent ID, stored nonce, claim ID, and worktree', () => {
   const requests: ClaimAssertRequest[] = [];
   const h = harness({
     assertClaim: (request) => {
       requests.push(request);
-      return { status: 'owned', branch: BRANCH };
+      return { status: 'owned', branch: BRANCH, forcedHandoff: null };
     },
   });
   runF4HeadProofGate(INPUT, h.deps);
@@ -312,6 +334,7 @@ test('the claim check receives the stored nonce, the claim ID, and the worktree'
     {
       issueNumber: ISSUE,
       claimId: CLAIM,
+      agentId: AGENT,
       nonce: NONCE,
       worktree: WORKTREE,
     },
@@ -682,16 +705,139 @@ test('claim-activation-unknown: no trusted claimed-by marker for this claim and 
       ),
     ],
   ];
-  for (const comments of cases) {
-    const h = harness();
-    h.issueComments.splice(0, h.issueComments.length, ...comments);
+  for (const apply of [false, true]) {
+    for (const comments of cases) {
+      const h = harness();
+      h.issueComments.splice(0, h.issueComments.length, ...comments);
+      expectVerdict(
+        runF4HeadProofGate({ ...INPUT, apply }, h.deps),
+        'hold',
+        'claim-activation-unknown',
+        1,
+      );
+      assert.deepEqual(h.posts, []);
+    }
+  }
+});
+
+test('an accepted forced-handoff event supplies activation without a successor claimed-by marker', () => {
+  for (const apply of [false, true]) {
+    const h = harness({
+      assertClaim: () => ({
+        status: 'owned',
+        branch: BRANCH,
+        forcedHandoff: forcedHandoff(),
+      }),
+    });
+    h.issueComments.splice(0);
+    const output = expectVerdict(
+      runF4HeadProofGate({ ...INPUT, apply }, h.deps),
+      apply ? 'proceed' : 'post',
+      apply ? 'posted-confirmed' : null,
+      0,
+    );
+    assert.deepEqual(output.proof, {
+      pr: PR,
+      claim: CLAIM,
+      branch: BRANCH,
+      f2: F2,
+      branchTip: TIP,
+      merge: MERGE,
+      head: HEAD,
+    });
+    assert.equal(h.posts.length, apply ? 1 : 0);
+  }
+});
+
+test('a post-merge issue-plus-pr handoff must name the PR F4 is proving', () => {
+  for (const apply of [false, true]) {
+    const h = harness({
+      assertClaim: () => ({
+        status: 'owned',
+        branch: BRANCH,
+        forcedHandoff: forcedHandoff({ linkedPr: String(PR + 1) }),
+      }),
+    });
+    h.issueComments.splice(0);
     expectVerdict(
-      runF4HeadProofGate(APPLY, h.deps),
+      runF4HeadProofGate({ ...INPUT, apply }, h.deps),
       'hold',
       'claim-activation-unknown',
       1,
     );
     assert.deepEqual(h.posts, []);
+    assert.equal(h.calls.includes('readPullRequestFirstCommitAt'), false);
+  }
+});
+
+test('a post-merge issue-only handoff is accepted only before the PR first commit', () => {
+  const handoff = forcedHandoff({
+    linkedPr: null,
+    contextScope: 'issue-only',
+  });
+  let acceptedReads = 0;
+  const accepted = harness({
+    assertClaim: () => ({
+      status: 'owned',
+      branch: BRANCH,
+      forcedHandoff: handoff,
+    }),
+    readPullRequestFirstCommitAt: () => {
+      acceptedReads += 1;
+      return '2026-10-17T00:00:00Z';
+    },
+  });
+  accepted.issueComments.splice(0);
+  expectVerdict(
+    runF4HeadProofGate(APPLY, accepted.deps),
+    'proceed',
+    'posted-confirmed',
+    0,
+  );
+  assert.equal(accepted.posts.length, 1);
+  assert.equal(acceptedReads, 2);
+
+  for (const apply of [false, true]) {
+    for (const firstCommitAt of [ACTIVATED, null]) {
+      const rejected = harness({
+        assertClaim: () => ({
+          status: 'owned',
+          branch: BRANCH,
+          forcedHandoff: handoff,
+        }),
+        readPullRequestFirstCommitAt: () => firstCommitAt,
+      });
+      rejected.issueComments.splice(0);
+      expectVerdict(
+        runF4HeadProofGate({ ...INPUT, apply }, rejected.deps),
+        'hold',
+        'claim-activation-unknown',
+        1,
+      );
+      assert.deepEqual(rejected.posts, []);
+    }
+  }
+});
+
+test('an accepted handoff with missing or invalid created_at fails closed without falling back', () => {
+  for (const apply of [false, true]) {
+    for (const timestamp of [null, 'not-a-timestamp']) {
+      const h = harness({
+        assertClaim: () => ({
+          status: 'owned',
+          branch: BRANCH,
+          forcedHandoff: forcedHandoff({ timestamp }),
+        }),
+      });
+      h.issueComments.splice(0);
+      expectVerdict(
+        runF4HeadProofGate({ ...INPUT, apply }, h.deps),
+        'hold',
+        'claim-activation-unknown',
+        1,
+      );
+      assert.deepEqual(h.posts, []);
+    }
   }
 });
 
@@ -750,8 +896,8 @@ test('a confirmed write posts the rendered body once and is confirmed by one re-
   assert.equal(output.url, 'https://example.test/9001');
   assert.equal(output.body, undefined);
   assert.deepEqual(h.sleeps, []);
-  // The pre-write read, then exactly one re-fetch.
-  assert.equal(h.calls.filter((c) => c === 'listIssueComments').length, 2);
+  // The pre-write read, final activation recheck, then exactly one re-fetch.
+  assert.equal(h.calls.filter((c) => c === 'listIssueComments').length, 3);
 });
 
 test('posted-disagreed: the re-fetch does not match what was posted', () => {
@@ -780,7 +926,7 @@ test('posted-disagreed: the re-fetch fails or finds no proof', () => {
     const h = harness({
       listIssueComments: () => {
         reads += 1;
-        if (reads === 1) {
+        if (reads <= 2) {
           return [claimComment()];
         }
         if (refetch === 'throws') {
@@ -823,8 +969,8 @@ test('post-rejected: a load-control refusal, or HTTP 401, 404, or 422, posts not
       1,
     );
     assert.equal(attempts, 1);
-    // No re-read after the rejection: the pre-write read is the only one.
-    assert.equal(h.calls.filter((c) => c === 'listIssueComments').length, 1);
+    // No re-read after the rejection: only the initial and final claim reads.
+    assert.equal(h.calls.filter((c) => c === 'listIssueComments').length, 2);
     assert.match(output.nextAction ?? '', /Fix the cause/);
     assert.deepEqual(h.sleeps, []);
   }
@@ -879,8 +1025,8 @@ test('post-unconfirmed: three absent re-reads after an uncertain write', () => {
     'post-unconfirmed',
     1,
   );
-  // The pre-write read plus exactly three re-reads, and nothing posted again.
-  assert.equal(h.calls.filter((c) => c === 'listIssueComments').length, 4);
+  // The initial and final claim reads plus three re-reads after the uncertain write.
+  assert.equal(h.calls.filter((c) => c === 'listIssueComments').length, 5);
   assert.equal(postCalls, 1);
   assert.equal(h.sleeps.length, 2);
   assert.match(output.nextAction ?? '', /Do not post again/);
@@ -891,7 +1037,7 @@ test('reread-failed: a re-read that fails after an uncertain write', () => {
   const h = harness({
     listIssueComments: () => {
       reads += 1;
-      if (reads === 3) {
+      if (reads === 4) {
         throw new Error('read failed');
       }
       return [claimComment()];
@@ -901,7 +1047,7 @@ test('reread-failed: a re-read that fails after an uncertain write', () => {
     },
   });
   expectVerdict(runF4HeadProofGate(APPLY, h.deps), 'hold', 'reread-failed', 1);
-  assert.equal(reads, 4);
+  assert.equal(reads, 5);
 });
 
 test('reread-conflict: the re-reads disagree', () => {
@@ -1027,7 +1173,7 @@ test('each adapter error that does not prove nothing was sent is an uncertain wr
     assert.equal(h.posts.length, 1, name);
     assert.equal(
       h.calls.filter((c) => c === 'listIssueComments').length,
-      4,
+      5,
       `${name}: three re-reads`,
     );
     assert.match(output.nextAction ?? '', /Do not post again/, name);
@@ -1054,7 +1200,7 @@ test('the real adapter proves nothing was sent for a first-attempt 404 and for a
       'post-rejected',
       1,
     );
-    assert.equal(h.calls.filter((c) => c === 'listIssueComments').length, 1);
+    assert.equal(h.calls.filter((c) => c === 'listIssueComments').length, 2);
   }
 });
 
@@ -1472,7 +1618,7 @@ test('under --apply the claim and lock are read again right before the post', ()
     const h = harness({
       assertClaim: (request) => {
         seen.requests.push(request);
-        return { status: 'owned', branch: BRANCH };
+        return { status: 'owned', branch: BRANCH, forcedHandoff: null };
       },
       checkLock: () => {
         seen.locks += 1;
@@ -1514,7 +1660,7 @@ test('a claim lost between the first reads and the post is a stop and posts noth
       'the claim check says it is no longer ours',
       {
         assertClaim: sequence([
-          { status: 'owned', branch: BRANCH },
+          { status: 'owned', branch: BRANCH, forcedHandoff: null },
           { status: 'not-owned' },
         ]),
       },
@@ -1523,8 +1669,12 @@ test('a claim lost between the first reads and the post is a stop and posts noth
       'the claim moved to another branch',
       {
         assertClaim: sequence([
-          { status: 'owned', branch: BRANCH },
-          { status: 'owned', branch: 'issue/9-other' },
+          { status: 'owned', branch: BRANCH, forcedHandoff: null },
+          {
+            status: 'owned',
+            branch: 'issue/9-other',
+            forcedHandoff: null,
+          },
         ]),
       },
     ],
@@ -1594,7 +1744,7 @@ test('a claim lost between the first reads and the post is a stop and posts noth
 test('a claim that cannot be read again before the post is a hold and posts nothing', () => {
   const unreadable = harness({
     assertClaim: sequence([
-      { status: 'owned', branch: BRANCH },
+      { status: 'owned', branch: BRANCH, forcedHandoff: null },
       { status: 'unreadable', detail: 'timed out' },
     ]),
   });
@@ -1623,6 +1773,34 @@ test('a claim that cannot be read again before the post is a hold and posts noth
     1,
   );
   assert.deepEqual(malformed.posts, []);
+});
+
+test('a forced-handoff activation that changes or disappears before apply is a hold', () => {
+  const finalEvidence: Array<ClaimForcedHandoffEvidence | null> = [
+    null,
+    forcedHandoff({ timestamp: AFTER_ACTIVATION }),
+    forcedHandoff({ oldClaimId: 'another-old-claim' }),
+  ];
+  for (const final of finalEvidence) {
+    const h = harness({
+      assertClaim: sequence([
+        {
+          status: 'owned',
+          branch: BRANCH,
+          forcedHandoff: forcedHandoff(),
+        },
+        { status: 'owned', branch: BRANCH, forcedHandoff: final },
+      ]),
+    });
+    h.issueComments.splice(0);
+    expectVerdict(
+      runF4HeadProofGate(APPLY, h.deps),
+      'hold',
+      'claim-activation-unknown',
+      1,
+    );
+    assert.deepEqual(h.posts, []);
+  }
 });
 
 test('the command refuses --owner and --repo, which must not name another repository', () => {

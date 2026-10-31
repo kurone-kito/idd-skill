@@ -22,8 +22,11 @@ Select fan-out first. Before Discover, A5,
 [restart scan](../../docs/idd-helper-scripts.md#orchestrator-restart-scan),
 refill, or dispatch, follow the
 [session scratchpad lifecycle](../../docs/idd-workflow.md#session-scratchpad-lifecycle)
-for fan-out; stop on holds. Single-agent skips its scratch. Derive worker
-paths from the verified root; keep the worker missing-parent guard.
+for fan-out; stop on holds. Ordinary single-agent mode skips fan-out scratch
+provisioning; a verified parent continuation retains its proven scratchpad
+root instead, under the same no-overwrite and fail-closed allocation rules.
+Derive worker paths from the verified root; keep the worker missing-parent
+guard.
 
 Track workers by issue, claim, branch, handle, report path, and state. A pre-B1
 stop may use the
@@ -98,6 +101,10 @@ mark `stalled`, and follow [fan-out recovery][fv].
 ## 6. Worker span
 
 A worker runs from B1 to the merge policy's terminal phase: F4 under
-`fully_autonomous_merge`, else F2.5.
+`fully_autonomous_merge`, else F2.5. A verified pre-B1 parent continuation is
+the one exception: its owning parent runs that span with a
+`parent-continuation` roster entry. The continuation keeps the scope-stop rule
+of the [delegation brief](../../docs/idd-workflow.md#delegation-brief-template):
+a run scoped to stop earlier ends in a scope stop, not a hold.
 
 [fv]: ../../docs/idd-workflow.md#orchestrator-fan-out-variant
