@@ -99,7 +99,7 @@ test('bare-Node audit passes a positive scratch fixture without GitHub calls or 
   }
 });
 
-test('standalone guard contract rejects a copied engines range literal', () => {
+test('standalone guard contract rejects any copied engines range', () => {
   const fixture = makeFixture();
   const sourcePath = join(
     fixture.root,
@@ -108,9 +108,13 @@ test('standalone guard contract rejects a copied engines range literal', () => {
   try {
     const source = readFileSync(sourcePath, 'utf8');
     const message =
-      'Node version satisfying the engines.node field in package.json.';
+      "Node version satisfying idd-skill's own package.json engines.node requirement.";
+    const copiedRange = '(^22.24.0 || ^24.3.0 || >=26.0.0)';
     assert.ok(source.includes(message));
-    writeFileSync(sourcePath, source.replace(message, `${message} (22.23.2)`));
+    writeFileSync(
+      sourcePath,
+      source.replace(message, `${message} ${copiedRange}`),
+    );
     const before = snapshot(fixture.root);
     const result = runAudit(fixture.root);
     assert.equal(result.status, 1, result.stderr);
@@ -118,10 +122,7 @@ test('standalone guard contract rejects a copied engines range literal', () => {
       result.stderr,
       /RUNTIME-GUARD-STANDALONE-EXEMPTION src\/scripts\/minimize-superseded-markers\.mts:/,
     );
-    assert.match(
-      result.stderr,
-      /must not copy the engines\.node range literal/,
-    );
+    assert.match(result.stderr, /must not copy an engines\.node range/);
     assert.equal(snapshot(fixture.root), before, 'the audit must be read-only');
   } finally {
     fixture.cleanup();

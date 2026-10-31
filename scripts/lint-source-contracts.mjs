@@ -282,25 +282,32 @@ function detectEntryContracts(files) {
         ),
       );
     }
+    const guardMessageLines = text
+      .split('\n')
+      .filter((line) => line.includes('Node version satisfying'));
+    const enginesVersionToken =
+      /(?:^|[^\w])(?:[~^<>]=?\s*)?(?:v?\d+(?:\.(?:\d+|[xX*])){0,2}|\*)(?![\w])/;
     if (
-      !text.includes(
-        'Node version satisfying the engines.node field in package.json.',
+      !guardMessageLines.some((line) =>
+        line.includes(
+          "Node version satisfying idd-skill's own package.json engines.node requirement.",
+        ),
       )
     ) {
       result.push(
         violation(
           'RUNTIME-GUARD-STANDALONE-EXEMPTION',
           `src/scripts/${name}`,
-          'inlined guard message must name package.json and engines.node',
+          "inlined guard message must name idd-skill's own package.json engines.node requirement",
         ),
       );
     }
-    if (text.includes('22.23.2')) {
+    if (guardMessageLines.some((line) => enginesVersionToken.test(line))) {
       result.push(
         violation(
           'RUNTIME-GUARD-STANDALONE-EXEMPTION',
           `src/scripts/${name}`,
-          'inlined guard message must not copy the engines.node range literal',
+          'inlined guard message must not copy an engines.node range',
         ),
       );
     }

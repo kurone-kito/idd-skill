@@ -52,7 +52,7 @@ function assertNodeRuntimeSupportsEntrySignal(): void {
       `node-runtime-guard: this repository's CLI entry points require Node's ` +
         `\`import.meta.main\` (added in Node 22.18.0 / 24.2.0), which is not ` +
         `available on this runtime (Node ${process.version}). Upgrade to a ` +
-        `Node version satisfying the engines.node field in package.json.\n`,
+        `Node version satisfying idd-skill's own package.json engines.node requirement.\n`,
     );
     process.exit(1);
   }

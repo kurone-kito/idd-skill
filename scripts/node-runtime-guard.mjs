@@ -42,8 +42,8 @@
  */
 /**
  * Fails loudly, in one stderr line naming `process.version` and the
- * `engines.node` field in `package.json`, then exits 1 -- unless `meta.main`
- * is the boolean Node's `import.meta.main` provides on a supported
+ * `engines.node` requirement in idd-skill's own `package.json`, then exits
+ * 1 -- unless `meta.main` is the boolean Node's `import.meta.main` provides on a supported
  * runtime, in which case this returns without side effects regardless of
  * whether the boolean is `true` or `false`. Takes a narrow
  * `{ main?: unknown }` rather than the real `ImportMeta` so a synthetic
@@ -58,7 +58,7 @@ export function assertEntrySignal(meta) {
     `node-runtime-guard: this repository's CLI entry points require Node's ` +
       `\`import.meta.main\` (added in Node 22.18.0 / 24.2.0), which is not ` +
       `available on this runtime (Node ${process.version}). Upgrade to a ` +
-      `Node version satisfying the engines.node field in package.json.\n`,
+      `Node version satisfying idd-skill's own package.json engines.node requirement.\n`,
   );
   process.exit(1);
 }

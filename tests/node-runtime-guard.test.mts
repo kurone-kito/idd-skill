@@ -65,6 +65,10 @@ test('assertEntrySignal({}) exits 1 with a stderr line naming process.version an
         stderr.includes('engines.node'),
         `expected stderr to name engines.node: ${stderr}`,
       );
+      assert.ok(
+        stderr.includes("idd-skill's own package.json"),
+        `expected stderr to identify idd-skill's own package.json: ${stderr}`,
+      );
       return true;
     },
   );
