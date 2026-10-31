@@ -163,14 +163,16 @@ behaves as disabled, so every approval keeps waiting for a reply.
 | `split`       | `standingApprovals.split`       | `enabled: false`, `maxCandidateFiles: 8`       | whole number of candidate files; positive integer |
 | `release`     | `standingApprovals.release`     | `enabled: false`, `requireChecklistPass: true` | `checklist`; only `true` is accepted              |
 
-Each later use posts this record line. It is one line, wrapped here for
-width. Fields are separated by a semicolon and a space, and there is no free
-text:
+Each later use posts this record line. Fields are separated by a semicolon and
+a space, and there is no free text:
+
+<!-- markdownlint-disable MD013 -->
 
 ```text
-<!-- idd-skill-standing-approval: class=<budgetRaise|split|release>; set=<set-id|none>;
-     anchor=<owner/repo#n|none>; ceiling=<value>; option=<option-id> -->
+<!-- idd-skill-standing-approval: class=<budgetRaise|split|release>; set=<set-id|none>; anchor=<owner/repo#n|none>; ceiling=<value>; option=<option-id> -->
 ```
+
+<!-- markdownlint-enable MD013 -->
 
 This change only reads and reports the classes through
 `normalizePolicyConfig` and `inspectStandingApprovals`. No runtime path
