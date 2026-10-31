@@ -338,6 +338,10 @@ example issue and review-comment references with the claimed issue and
 the source comment; when an E10, Tier 2, or Tier 3 finding triggered the
 deferral, link the comment that states the stop.
 
+Decision issues require exactly one line beginning with Question: followed by a
+space inside the `## Decision needed` section; the remainder of that
+line is the question.
+
 ```markdown
 ## Background
 
@@ -346,8 +350,7 @@ should work. See the [source review comment](https://github.com/example/project/
 
 ## Decision needed
 
-Should the caller receive a retryable error, or should the operation
-wait for an explicit recovery action?
+Question: Should the caller receive a retryable error, or should the operation wait for an explicit recovery action?
 
 ## Options
 
