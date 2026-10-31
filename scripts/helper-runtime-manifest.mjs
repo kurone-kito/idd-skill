@@ -96,6 +96,8 @@ const NODE_ENGINES = '^22.23.2 || ^24.2.0 || >=26.0.0';
 // package-manager, and ephemeral-npx paths always read the real version.
 const PACKAGE_VERSION_FALLBACK = 'unknown';
 const SCRIPT_FILE_EXTENSIONS = ['.mjs', '.js', '.json'];
+const EXTRA_RUNTIME_FILES_INITIALIZER_LOCATOR =
+  'const EXTRA_RUNTIME_FILES = new Map<string, string[]>([';
 // Runtime data files a helper reads at execution time (not via `import`),
 // so the import-graph walk cannot discover them. A consumer that vendors
 // exactly `managedFiles` must still receive these or the helper crashes on a
@@ -1747,8 +1749,6 @@ function normalizePackageManager(packageManager, profile) {
   }
   return packageManager;
 }
-const EXTRA_RUNTIME_FILES_INITIALIZER_LOCATOR =
-  'const EXTRA_RUNTIME_FILES = new Map<string, string[]>([';
 function findExtraRuntimeFilesInitializer(source) {
   let index = 0;
   while (index < source.length) {
