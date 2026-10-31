@@ -156,11 +156,15 @@ function effectiveStandingApprovals(config) {
     budgetRaise: {
       enabled: status.get('budgetRaise') === 'enabled',
       maxRaisePct:
-        typeof budget.maxRaisePct === 'number' ? budget.maxRaisePct : 10,
+        status.get('budgetRaise') !== 'invalid' &&
+        typeof budget.maxRaisePct === 'number'
+          ? budget.maxRaisePct
+          : 10,
     },
     split: {
       enabled: status.get('split') === 'enabled',
       maxCandidateFiles:
+        status.get('split') !== 'invalid' &&
         typeof split.maxCandidateFiles === 'number'
           ? split.maxCandidateFiles
           : 8,

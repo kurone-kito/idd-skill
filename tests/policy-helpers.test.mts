@@ -3193,6 +3193,11 @@ test('standingApprovals: an out-of-range maxRaisePct disables the budget class a
     const diagnostic = inspectStandingApprovals(config)[0];
     assert.equal(diagnostic.status, 'invalid');
     assert.match(diagnostic.reason ?? '', /maxRaisePct/);
+    assert.equal(
+      normalized.standingApprovals.budgetRaise.maxRaisePct,
+      10,
+      'an invalid ceiling falls back to the default',
+    );
   }
   assert.equal(
     normalizePolicyConfig({
@@ -3216,6 +3221,11 @@ test('standingApprovals: a non-positive maxCandidateFiles disables the split cla
     const diagnostic = inspectStandingApprovals(config)[1];
     assert.equal(diagnostic.status, 'invalid');
     assert.match(diagnostic.reason ?? '', /maxCandidateFiles/);
+    assert.equal(
+      normalizePolicyConfig(config).standingApprovals.split.maxCandidateFiles,
+      8,
+      'an invalid ceiling falls back to the default',
+    );
   }
 });
 
