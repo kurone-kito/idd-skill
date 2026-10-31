@@ -1345,7 +1345,7 @@ step 1. This sequence does not repeat them.
          "$(git rev-parse "refs/remotes/origin/$1")" ] ||
          { echo "local $1 differs from origin/$1: hold" >&2; exit 1; }
      else
-       git branch -- "$1" "origin/$1" || exit 1
+       git branch -- "$1" "refs/remotes/origin/$1" || exit 1
      fi &&
      WT=$(git worktree list --porcelain) ||
        { echo "unreadable worktree list: hold" >&2; exit 1; }
