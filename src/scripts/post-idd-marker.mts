@@ -1560,6 +1560,15 @@ const AUTHORING_OWNER_IDENTITY_CHECKED_MODES = new Set([
 ]);
 
 /**
+ * #4804: these anchor-only release modes must match the anchor's winning open
+ * generation, not merely one of its opening markers or its latest owner marker.
+ */
+const AUTHORING_OWNER_ANCHOR_GENERATION_CHECKED_MODES = new Set([
+  'release-guard',
+  'release-complete',
+]);
+
+/**
  * Appended to every identity refusal. A post made right after its opening
  * marker can read stale, so waiting out the settle delay and retrying tells a
  * lagging read apart from a real mismatch. The delay is
@@ -2182,11 +2191,14 @@ id) order that carries the owner token, in any mode, is written by a trusted
 login when any are configured, and is not minimized as outdated. One that was
 edited, whose edit state is unknown, or that does not parse refuses the post,
 so a wrong marker that stays visible blocks later owner posts on its issue
-until it is minimized as outdated. The session is not compared, so a release
-from another session stays allowed
-(#3498). The comments are read over GraphQL, once per check, and a failed
-read refuses too. The contract's direct JSON post stays available where only
-REST works, and it is not checked.
+until it is minimized as outdated.
+The session is not compared for heartbeat, release, and resume, so a
+release from another session stays allowed (#3498). The anchor-only
+release-guard and release-complete modes must match the winning open
+generation's owner, set, and session. The release-complete mode also requires
+an accepted release marker in progress (#4804). The comments are read over
+GraphQL, once per check, and a failed read refuses too. The contract's direct
+JSON post stays available where only REST works, and it is not checked.
 Acquire and bootstrap read a child target's paginated owner log first,
 reconcile prior memberships, and refuse an open or unreconciled generation;
 they then replay the declared anchor's complete owner log before dry-run
@@ -2377,6 +2389,56 @@ function ownerMarkerReplayFieldProblem(
   );
 }
 
+/**
+ * One reviewed closure that the replay accepts without an anchor
+ * `mode=release` marker. The set was released on 2026-10-29 with a
+ * `release-guard` and a `release-complete`, but its anchor log has no
+ * anchor release marker, which the release preflight in
+ * `skills/issue-authoring/references/contract.md` requires. The closure is
+ * recorded in kurone-kito/idd-skill#4834, and option A there, a narrow
+ * accepted closure, was approved on 2026-10-30 (implemented in
+ * kurone-kito/idd-skill#4837). Only the exact identities below are accepted.
+ */
+export interface AcceptedLegacyClosure {
+  readonly anchor: string;
+  readonly set: string;
+  readonly session: string;
+  readonly owner: string;
+  readonly releaseCompleteId: number;
+  readonly snapshotSha256: string;
+  /** Audit record: the child release marker that the release recorded on #4792. */
+  readonly childReleaseMarkerId: number;
+}
+
+export const ACCEPTED_LEGACY_CLOSURES: readonly AcceptedLegacyClosure[] = [
+  {
+    anchor: 'kurone-kito/idd-skill#4722',
+    set: 'set-d90fd2d2-e9b0-4279-be22-c14f5e531ded',
+    session: 'session-b4d93e49-f4a2-4cc1-b195-f6ebf48355bb',
+    owner: 'owner-a0bfac08-125e-4c1a-bea7-473cc6a3f793',
+    releaseCompleteId: 6509470897,
+    snapshotSha256:
+      '6a706e6192793af16bba8d7598046b5069e508368c62c7769c285b87fe2e2843',
+    childReleaseMarkerId: 6509444207,
+  },
+];
+
+/** True only when the release-complete matches a reviewed closure exactly. */
+export function isAcceptedLegacyClosure(
+  parsed: ParsedAuthoringOwnerMarker,
+  releaseCompleteId: number,
+): boolean {
+  return ACCEPTED_LEGACY_CLOSURES.some(
+    (entry) =>
+      sameIssueRef(entry.anchor, parsed.anchor) &&
+      entry.set === parsed.set &&
+      entry.session === parsed.session &&
+      entry.owner === parsed.owner &&
+      entry.releaseCompleteId === releaseCompleteId &&
+      entry.snapshotSha256 === parsed.snapshotSha256,
+  );
+}
+
 function advanceAnchorOwnerGeneration(
   state: AnchorOwnerReplayState,
   parsed: ParsedAuthoringOwnerMarker,
@@ -2480,7 +2542,14 @@ function advanceAnchorOwnerGeneration(
         };
       }
       if (parsed.mode === 'release-complete') {
-        if (!open.releasing || open.releaseMarker === null) {
+        const acceptedLegacy =
+          open.releasing &&
+          open.releaseMarker === null &&
+          isAcceptedLegacyClosure(parsed, latest.id);
+        if (
+          !acceptedLegacy &&
+          (!open.releasing || open.releaseMarker === null)
+        ) {
           return {
             problem: `owner marker ${latest.id} (mode=release-complete) closes a generation with no accepted release marker in progress`,
           };
@@ -3682,7 +3751,10 @@ function checkAuthoringOwnerPostIdentity(input: {
     const readRef = `${anchorTarget.owner}/${anchorTarget.repo}#${anchorTarget.number}`;
     const purpose = acquisitionMode
       ? 'the anchor owner history cannot be checked'
-      : 'its opening markers cannot be checked';
+      : AUTHORING_OWNER_ANCHOR_GENERATION_CHECKED_MODES.has(post.mode) &&
+          sameIssueRef(post.target, post.anchor)
+        ? 'its anchor owner history cannot be replayed'
+        : 'its opening markers cannot be checked';
     const message = `refusing to post authoring-owner marker (mode=${post.mode}): the comments of ${readRef} could not be read, so ${purpose}: ${(error as Error).message}`;
     process.stderr.write(`${message}\n`);
     return { exitCode: 1, ...classifyHelperError(error), message };
@@ -3737,6 +3809,88 @@ function checkAuthoringOwnerPostIdentity(input: {
     }
     process.stderr.write(`${refusal}\n`);
     return { exitCode: 1, kind: 'gate', message: refusal };
+  }
+  if (AUTHORING_OWNER_ANCHOR_GENERATION_CHECKED_MODES.has(post.mode)) {
+    const anchorRef = parseIssueReference(post.anchor);
+    if (anchorRef === null) {
+      const refusal =
+        `refusing to post authoring-owner marker (mode=${post.mode}) on ${post.target}: ` +
+        `anchor ${post.anchor} is not a readable issue reference`;
+      process.stderr.write(`${refusal}\n`);
+      return { exitCode: 1, kind: 'gate', message: refusal };
+    }
+    let anchorComments = comments;
+    if (!sameIssueRef(post.target, post.anchor)) {
+      try {
+        anchorComments = fetchProvenanceCommentsGraphql(
+          anchorRef.owner,
+          anchorRef.repo,
+          anchorRef.number,
+        );
+      } catch (error) {
+        const readRef = `${anchorRef.owner}/${anchorRef.repo}#${anchorRef.number}`;
+        const refusal =
+          `refusing to post authoring-owner marker (mode=${post.mode}) on ${post.target}: ` +
+          `the owner history of anchor ${readRef} could not be read, so its open generation cannot be verified: ${(error as Error).message}`;
+        process.stderr.write(`${refusal}\n`);
+        return { exitCode: 1, ...classifyHelperError(error), message: refusal };
+      }
+    }
+    const reconciliation = reconcileFormerChildMembershipsWithBudget(
+      {
+        comments: anchorComments,
+        historyTargetRef: post.anchor,
+        markerPrefix: input.markerPrefix,
+        trusted: actors,
+      },
+      formerChildReadBudget,
+    );
+    let refusal: string | null = null;
+    if ('problem' in reconciliation) {
+      refusal =
+        `refusing to post authoring-owner marker (mode=${post.mode}) on ${post.target}: ` +
+        `the owner history of anchor ${post.anchor} cannot be reconciled: ${reconciliation.problem}`;
+    } else {
+      const replay = resolveAnchorOwnerGeneration({
+        comments: reconciliation.comments,
+        anchorRef: post.anchor,
+        markerPrefix: input.markerPrefix,
+        trusted: actors,
+        supersedingOpenings: reconciliation.supersedingOpenings,
+      });
+      if ('problem' in replay) {
+        refusal =
+          `refusing to post authoring-owner marker (mode=${post.mode}) on ${post.target}: ` +
+          `the owner history of anchor ${post.anchor} cannot be replayed: ${replay.problem}`;
+      } else if (replay.generation === null) {
+        refusal =
+          `refusing to post authoring-owner marker (mode=${post.mode}) on ${post.target}: ` +
+          `anchor ${post.anchor} has no open owner generation whose identity can be verified`;
+      } else if (
+        replay.generation.owner !== post.owner ||
+        replay.generation.set !== post.set
+      ) {
+        refusal =
+          `refusing to post authoring-owner marker (mode=${post.mode}) on ${post.target}: ` +
+          `requested owner/set ${post.owner}/${post.set} does not match anchor ${post.anchor}'s winning open generation ${replay.generation.owner}/${replay.generation.set}`;
+      } else if (replay.generation.session !== post.session) {
+        refusal =
+          `refusing to post authoring-owner marker (mode=${post.mode}) on ${post.target}: ` +
+          `requested session ${post.session} does not match anchor ${post.anchor}'s open generation session ${replay.generation.session}`;
+      } else if (
+        post.mode === 'release-complete' &&
+        (!replay.generation.releasing ||
+          replay.generation.releaseMarker === null)
+      ) {
+        refusal =
+          `refusing to post authoring-owner marker (mode=${post.mode}) on ${post.target}: ` +
+          `anchor ${post.anchor}'s winning open generation has no accepted release marker in progress`;
+      }
+    }
+    if (refusal !== null) {
+      process.stderr.write(`${refusal}\n`);
+      return { exitCode: 1, kind: 'gate', message: refusal };
+    }
   }
   const refusal = validateAuthoringOwnerPostIdentity(
     post,

@@ -1187,6 +1187,9 @@ if (apiArgs[0] === 'graphql') {
   }
 });
 
+/** The pull-request head the repair stub reports (kurone-kito/idd-skill#4737). */
+const REPAIR_STUB_HEAD = 'a'.repeat(40);
+
 function stubPrRepairGh(statePath: string, logPath: string) {
   return stubExecutable(
     'gh',
@@ -1197,13 +1200,15 @@ const args = process.argv.slice(2);
 fs.appendFileSync(logPath, JSON.stringify(args) + '\\n');
 const state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
 if (args[0] === 'pr' && args[1] === 'view') {
+  // kurone-kito/idd-skill#4737: the digest reads the head here, and the
+  // closing references through the GraphQL connection below.
   state.prViewCallCount = (state.prViewCallCount ?? 0) + 1;
-  const linkedIssues =
-    state.linkedIssuesAfterFirstView && state.prViewCallCount > 1
-      ? state.linkedIssuesAfterFirstView
-      : state.linkedIssues;
   fs.writeFileSync(statePath, JSON.stringify(state));
-  process.stdout.write(JSON.stringify({ closingIssuesReferences: linkedIssues }));
+  if (!args.includes('headRefOid')) {
+    process.stderr.write('stub: unexpected pr view fields: ' + args.join(' ') + '\\n');
+    process.exit(1);
+  }
+  process.stdout.write(JSON.stringify({ headRefOid: state.headRefOid ?? ${JSON.stringify(REPAIR_STUB_HEAD)} }));
   process.exit(0);
 }
 if (args[0] !== 'api') process.exit(1);
@@ -1215,6 +1220,35 @@ const requestBody = apiArgs.includes('--input')
   ? JSON.parse(fs.readFileSync(0, 'utf8')).body
   : bodyArgument?.slice('body='.length);
 const path = apiArgs.find((value) => value.startsWith('repos/')) ?? apiArgs[0];
+if (apiArgs[0] === 'graphql' && apiArgs.some((value) => value.startsWith('query=') && value.includes('closingIssuesReferences(first:100'))) {
+  // The closing-reference read: the first read is the up-front check, and a
+  // later read is the re-check before mutation (the drift swap answers there).
+  state.closingRefsReadCount = (state.closingRefsReadCount ?? 0) + 1;
+  const later = state.closingRefsReadCount > 1;
+  const rawResponse = later && state.closingRawResponseAfterFirstRead !== undefined
+    ? state.closingRawResponseAfterFirstRead
+    : state.closingRawResponse;
+  fs.writeFileSync(statePath, JSON.stringify(state));
+  if (rawResponse !== undefined) {
+    process.stdout.write(JSON.stringify(rawResponse));
+    process.exit(0);
+  }
+  const linked = later && state.linkedIssuesAfterFirstView
+    ? state.linkedIssuesAfterFirstView
+    : (state.linkedIssues ?? []);
+  // Each linked issue gets a URL and repository identity unless the test set
+  // them, so a test can drop either one on purpose.
+  const nodes = linked.map((item) => ({
+    number: item.number,
+    url: 'url' in item ? item.url : 'https://github.com/owner/repo/issues/' + item.number,
+    repository: 'repository' in item ? item.repository : { name: 'repo', owner: { login: 'owner' } },
+  }));
+  process.stdout.write(JSON.stringify({ data: { repository: { pullRequest: {
+    headRefOid: state.graphqlHeadRefOid ?? state.headRefOid ?? ${JSON.stringify(REPAIR_STUB_HEAD)},
+    closingIssuesReferences: { nodes, pageInfo: { hasNextPage: false, endCursor: null } },
+  } } } }));
+  process.exit(0);
+}
 if (apiArgs[0] === 'graphql') {
   const ids = apiArgs
     .filter((value) => value.startsWith('ids[]='))
@@ -1501,9 +1535,9 @@ test('duplicate repair --pr target re-checks the claim binding before every muta
 
     // The PR's linked issue changes partway through the apply run itself
     // (the closing reference is swapped to a different issue after the
-    // first `gh pr view` call the run makes) -- the initial upfront binding
-    // check passes against the original link, so only a re-check
-    // immediately before mutation can catch this.
+    // first closing-reference GraphQL read the run makes) -- the initial
+    // upfront binding check passes against the original link, so only a
+    // re-check immediately before mutation can catch this.
     const driftedState = JSON.parse(readFileSync(statePath, 'utf8')) as {
       linkedIssuesAfterFirstView?: { number: number }[];
     };
@@ -1551,6 +1585,442 @@ test('duplicate repair --pr target re-checks the claim binding before every muta
   } finally {
     restore();
     rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+/**
+ * A duplicate-repair fixture for the claim-binding read (kurone-kito/idd-skill#4737).
+ * `overrides` replaces the stub state fields a test needs to change.
+ */
+function repairPrFixture(overrides: Record<string, unknown>) {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-live-status-repair-4737-'));
+  const statePath = join(tempRoot, 'state.json');
+  const logPath = join(tempRoot, 'gh-args.jsonl');
+  writeFileSync(
+    statePath,
+    JSON.stringify({
+      comments: [currentDigestComment(201), currentDigestComment(202)],
+      mutations: 0,
+      evidence: 0,
+      viewer: 'maintainer',
+      prNumber: '55',
+      mergedAt: null,
+      linkedIssues: [{ number: 123 }],
+      claimIssueNumber: '123',
+      claimComments: [
+        {
+          id: 999,
+          body: '<!-- claimed-by: repair-agent repair-claim supersedes: none 2026-09-20T00:00:00Z branch: issue/123-task -->',
+          user: { login: 'maintainer' },
+        },
+      ],
+      ...overrides,
+    }),
+  );
+  const restore = stubPrRepairGh(statePath, logPath);
+  const baseArgs = [
+    join(REPO_ROOT, 'scripts/live-status-digest.mjs'),
+    '--repo',
+    'owner/repo',
+    '--pr',
+    '55',
+    '--repair-duplicate',
+    '--retain-comment-id',
+    '201',
+    '--format',
+    'json',
+  ];
+  const cleanup = () => {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  };
+  return { statePath, logPath, baseArgs, cleanup };
+}
+
+function repairDryRunPreflight(baseArgs: string[]) {
+  const dryRun = JSON.parse(
+    execFileSync(process.execPath, [...baseArgs, '--dry-run'], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+    }),
+  ) as {
+    repair: { preflight: { entries: { id: string }[]; sha256: string } };
+  };
+  return [
+    '--expected-current-digest-ids',
+    dryRun.repair.preflight.entries.map((entry) => entry.id).join(','),
+    '--expected-current-digest-sha256',
+    dryRun.repair.preflight.sha256,
+  ];
+}
+
+function repairApplyArgs(baseArgs: string[], preflight: string[]) {
+  return [
+    ...baseArgs,
+    '--apply',
+    '--claim-issue',
+    '123',
+    '--claim-id',
+    'repair-claim',
+    '--agent-id',
+    'repair-agent',
+    ...preflight,
+  ];
+}
+
+function readGhCalls(logPath: string): string[][] {
+  return readFileSync(logPath, 'utf8')
+    .split('\n')
+    .filter((line) => line !== '')
+    .map((line) => JSON.parse(line) as string[]);
+}
+
+function isClosingReferenceRead(args: string[]): boolean {
+  return args.some(
+    (arg) =>
+      arg.startsWith('query=') &&
+      arg.includes('closingIssuesReferences(first:100'),
+  );
+}
+
+test('duplicate repair --pr reads the head with pr view and the closing references through the pinned GraphQL read (#4737)', () => {
+  const fixture = repairPrFixture({});
+  try {
+    const preflight = repairDryRunPreflight(fixture.baseArgs);
+    const applied = JSON.parse(
+      execFileSync(
+        process.execPath,
+        repairApplyArgs(fixture.baseArgs, preflight),
+        { cwd: REPO_ROOT, encoding: 'utf8' },
+      ),
+    ) as { action: string };
+    assert.notEqual(applied.action, 'repair-recovery-hold');
+    const calls = readGhCalls(fixture.logPath);
+    const prViews = calls.filter(
+      (args) => args[0] === 'pr' && args[1] === 'view',
+    );
+    assert.ok(prViews.length >= 1, 'the claim binding reads the pull request');
+    for (const args of prViews) {
+      assert.equal(
+        args.some((arg) => arg.includes('closingIssuesReferences')),
+        false,
+        args.join(' '),
+      );
+      assert.ok(
+        args.some((arg) => arg.includes('headRefOid')),
+        args.join(' '),
+      );
+    }
+    assert.ok(
+      calls.some((args) => isClosingReferenceRead(args)),
+      'the closing references come from the pinned GraphQL read',
+    );
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+const CLOSING_READ_FAILURE_RESPONSES: [string, unknown, RegExp][] = [
+  [
+    'GraphQL error',
+    { errors: [{ message: 'Could not resolve to a PullRequest' }] },
+    /closingIssuesReferences lookup failed: Could not resolve/,
+  ],
+  [
+    'null connection',
+    {
+      data: {
+        repository: {
+          pullRequest: {
+            headRefOid: REPAIR_STUB_HEAD,
+            closingIssuesReferences: null,
+          },
+        },
+      },
+    },
+    /connection is null\/absent or malformed/,
+  ],
+  [
+    'non-array nodes',
+    {
+      data: {
+        repository: {
+          pullRequest: {
+            headRefOid: REPAIR_STUB_HEAD,
+            closingIssuesReferences: {
+              nodes: 'x',
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        },
+      },
+    },
+    /connection is null\/absent or malformed/,
+  ],
+  [
+    'incomplete page',
+    {
+      data: {
+        repository: {
+          pullRequest: {
+            headRefOid: REPAIR_STUB_HEAD,
+            closingIssuesReferences: {
+              nodes: [],
+              pageInfo: { hasNextPage: true, endCursor: null },
+            },
+          },
+        },
+      },
+    },
+    /hasNextPage without endCursor/,
+  ],
+  [
+    'head mismatch',
+    {
+      data: {
+        repository: {
+          pullRequest: {
+            headRefOid: 'b'.repeat(40),
+            closingIssuesReferences: {
+              nodes: [
+                {
+                  number: 123,
+                  url: 'https://github.com/owner/repo/issues/123',
+                  repository: { name: 'repo', owner: { login: 'owner' } },
+                },
+              ],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        },
+      },
+    },
+    /head is b+, expected a+/,
+  ],
+  [
+    'reference without a url',
+    {
+      data: {
+        repository: {
+          pullRequest: {
+            headRefOid: REPAIR_STUB_HEAD,
+            closingIssuesReferences: {
+              nodes: [
+                {
+                  number: 123,
+                  repository: { name: 'repo', owner: { login: 'owner' } },
+                },
+              ],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        },
+      },
+    },
+    /reference #123 has no url/,
+  ],
+  [
+    'reference without a repository identity',
+    {
+      data: {
+        repository: {
+          pullRequest: {
+            headRefOid: REPAIR_STUB_HEAD,
+            closingIssuesReferences: {
+              nodes: [
+                {
+                  number: 123,
+                  url: 'https://github.com/owner/repo/issues/123',
+                  repository: null,
+                },
+              ],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        },
+      },
+    },
+    /no usable number or repository identity/,
+  ],
+  [
+    'reference without a usable number',
+    {
+      data: {
+        repository: {
+          pullRequest: {
+            headRefOid: REPAIR_STUB_HEAD,
+            closingIssuesReferences: {
+              nodes: [
+                {
+                  url: 'https://github.com/owner/repo/issues/123',
+                  repository: { name: 'repo', owner: { login: 'owner' } },
+                },
+              ],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        },
+      },
+    },
+    /no usable number or repository identity/,
+  ],
+];
+
+test('duplicate repair --pr refuses a same-numbered issue from another repository as the claim issue (#4737)', () => {
+  const fixture = repairPrFixture({
+    closingRawResponse: {
+      data: {
+        repository: {
+          pullRequest: {
+            headRefOid: REPAIR_STUB_HEAD,
+            closingIssuesReferences: {
+              nodes: [
+                {
+                  number: 123,
+                  url: 'https://github.com/other/repo/issues/123',
+                  repository: { name: 'repo', owner: { login: 'other' } },
+                },
+              ],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        },
+      },
+    },
+  });
+  try {
+    const preflight = repairDryRunPreflight(fixture.baseArgs);
+    assert.throws(
+      () =>
+        execFileSync(
+          process.execPath,
+          repairApplyArgs(fixture.baseArgs, preflight),
+          {
+            cwd: REPO_ROOT,
+            encoding: 'utf8',
+          },
+        ),
+      (error: unknown) => {
+        const report = JSON.parse(
+          String((error as { stdout?: string | Buffer }).stdout ?? ''),
+        ) as { action: string; repair: { recoveryHold: string } };
+        assert.equal(report.action, 'repair-recovery-hold');
+        assert.match(
+          report.repair.recoveryHold,
+          /does not link claim issue #123; expected other\/repo#123/,
+        );
+        return true;
+      },
+    );
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('duplicate repair --pr holds at the up-front check, and fails at the re-check, on every closing-read failure (#4737)', () => {
+  for (const [label, response, pattern] of CLOSING_READ_FAILURE_RESPONSES) {
+    // Up-front: every closing read returns the bad response, so the first
+    // check holds the repair before any mutation.
+    const upFront = repairPrFixture({ closingRawResponse: response });
+    try {
+      const preflight = repairDryRunPreflight(upFront.baseArgs);
+      assert.throws(
+        () =>
+          execFileSync(
+            process.execPath,
+            repairApplyArgs(upFront.baseArgs, preflight),
+            { cwd: REPO_ROOT, encoding: 'utf8' },
+          ),
+        (error: unknown) => {
+          const report = JSON.parse(
+            String((error as { stdout?: string | Buffer }).stdout ?? ''),
+          ) as { action: string; repair: { recoveryHold: string } };
+          assert.equal(report.action, 'repair-recovery-hold', label);
+          assert.match(
+            report.repair.recoveryHold,
+            /could not read closingIssuesReferences/,
+            label,
+          );
+          assert.match(report.repair.recoveryHold, pattern, label);
+          return true;
+        },
+        label,
+      );
+      const after = JSON.parse(readFileSync(upFront.statePath, 'utf8')) as {
+        mutations: number;
+        evidence: number;
+      };
+      assert.equal(after.mutations, 0, label);
+      assert.equal(after.evidence, 0, label);
+    } finally {
+      upFront.cleanup();
+    }
+
+    // Re-check: the first read is good and the read before mutation is bad.
+    // The callback throws, so the apply fails with the reader's message and
+    // no mutation runs.
+    const reCheck = repairPrFixture({
+      closingRawResponseAfterFirstRead: response,
+    });
+    try {
+      const preflight = repairDryRunPreflight(reCheck.baseArgs);
+      let thrown: unknown;
+      try {
+        execFileSync(
+          process.execPath,
+          repairApplyArgs(reCheck.baseArgs, preflight),
+          { cwd: REPO_ROOT, encoding: 'utf8', stdio: 'pipe' },
+        );
+      } catch (error) {
+        thrown = error;
+      }
+      assert.ok(thrown, `${label}: the re-check must fail the apply`);
+      const output = `${String((thrown as { stdout?: unknown }).stdout ?? '')}${String((thrown as { stderr?: unknown }).stderr ?? '')}`;
+      assert.match(output, pattern, label);
+      assert.ok(
+        readGhCalls(reCheck.logPath).filter(isClosingReferenceRead).length >= 2,
+        `${label}: the up-front read must succeed before the re-check fails`,
+      );
+      const after = JSON.parse(readFileSync(reCheck.statePath, 'utf8')) as {
+        mutations: number;
+        evidence: number;
+      };
+      assert.equal(after.mutations, 0, label);
+      assert.equal(after.evidence, 0, label);
+    } finally {
+      reCheck.cleanup();
+    }
+  }
+});
+
+test('duplicate repair --pr rejects an empty pull-request head before any closing-reference read (#4737)', () => {
+  const fixture = repairPrFixture({ headRefOid: '' });
+  try {
+    const preflight = repairDryRunPreflight(fixture.baseArgs);
+    assert.throws(
+      () =>
+        execFileSync(
+          process.execPath,
+          repairApplyArgs(fixture.baseArgs, preflight),
+          { cwd: REPO_ROOT, encoding: 'utf8' },
+        ),
+      (error: unknown) => {
+        const report = JSON.parse(
+          String((error as { stdout?: string | Buffer }).stdout ?? ''),
+        ) as { action: string; repair: { recoveryHold: string } };
+        assert.equal(report.action, 'repair-recovery-hold');
+        assert.match(report.repair.recoveryHold, /40 hexadecimal characters/);
+        return true;
+      },
+    );
+    const calls = readGhCalls(fixture.logPath);
+    assert.equal(
+      calls.some((args) => isClosingReferenceRead(args)),
+      false,
+      'a malformed head must stop before the closing-reference read',
+    );
+  } finally {
+    fixture.cleanup();
   }
 });
 

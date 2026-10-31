@@ -20,12 +20,11 @@ before E8 when it is missing.
 
 ## E1 — Fetch review items into ReviewItems_snapshot
 
-**Step 1 — Snapshot the activity universe.** First, read the current PR
-HEAD SHA and base ref name from the GitHub API and store them as
-`{head-SHA}` and `{base-ref}`. Do not
-re-read the HEAD SHA during Steps 1–3; use this single stored value
-throughout; E3 rereads. Then fetch, in one pass before any exclusion
-filters:
+**Step 1 — Snapshot the activity universe.** Read the PR HEAD SHA and
+`baseRefName` once; store them as `{head-SHA}` and `{base-ref-name}`.
+Use that HEAD through Steps 1–3; E3 rereads it. Then fetch all of the
+following from GitHub in a single pass
+(before applying any exclusion filters):
 
 - All review threads (resolved or not) — paginate until `hasNextPage` is
   `false`; do not stop at a fixed page size such as `first: 20`, as that
@@ -68,11 +67,11 @@ Helpers are evidence collectors only: on failure, invalid JSON, missing
 fields, or a conflict with live GitHub state, discard their output and run
 the portable gh/jq/API procedure below; the written rules decide.
 
-Also fetch the **current CI state** for `{head-SHA}`:
-`gh pr checks {pr-number} --json name,state,completedAt`. Record the
-`completedAt` of the most recently completed successful (or
-treated-as-passed) CI run as `{latest-ci-completed-at}`, or `none` if no
-CI pass exists yet for this HEAD.
+Manual CI: read every `statusCheckRollup.contexts` page, matching Step 1's HEAD
+and base. Keep same-named producers separate. Record the newest passing
+`completedAt` (successful or treated-as-passed, never a later failure) as
+`{latest-ci-completed-at}`; a complete read with no pass yields `none`.
+Incomplete: no post, repeat Step 1.
 
 **Non-Copilot safety:** snapshot/watermark and F2 cover bot activity.
 
@@ -116,7 +115,7 @@ helpers, prefer the **one-command** post-idd-marker watermark path —
 forward `--trusted-marker-logins` and Step 1's boundary as
 `--prior-head-sha {head-SHA} --prior-total-item-count {total-item-count}
 --prior-max-activity-at {max-activity-updatedAt}` and Step 1's base ref as
-`--prior-base-ref {base-ref}`). **Always pass
+`--prior-base-ref {base-ref-name}`). **Always pass
 `--expected-head-sha` with the exact `{head-SHA}` from Step 1**: a moved
 HEAD or base ref, or `operationLocal.decision: refuse`
 (`same-head-activity`: new
@@ -125,12 +124,10 @@ posting nothing; return to Step 1 and re-snapshot, do not retry Step 2
 as-is. `decision: defer` exits 0 (`mode: "dry-run"`), posting nothing
 (required checks not passing): skip the after-posting steps and follow
 the CI-incomplete routing above.
-Manual six-field fallback: re-read the PR base ref just before posting; it
-must equal `{base-ref}` (else return to Step 1), plus `idd-ci`
-producer-aware proof:
-required `(checkName, workflowName)` producers pass and advisory
-identity/event verify; raw `gh pr checks` is insufficient. Emit/manual
-POST inherit it (see `docs/idd-helper-scripts.md`):
+Manual fallback: before posting, re-read both refs and complete
+activity; HEAD, base, item count, and max activity time must match
+Step 1, with no new uncovered items. Otherwise do not post: repeat Step 1
+and triage. Use the producer-aware CI proof above.
 
 ```markdown
 <!-- review-watermark: {agent-id} {claim-id} {head-SHA} {max-activity-updatedAt|none} {total-item-count} {latest-ci-completed-at|none} -->

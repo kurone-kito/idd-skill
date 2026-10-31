@@ -1,40 +1,34 @@
 # IDD — Orchestrator Phase (fan-out)
 
-Read this only when fan-out activates or its session restarts.
+Read this for a fresh session with static fan-out eligibility, active fan-out,
+or restart.
 Requirements: [fan-out variant][fv] and
 [delegation](idd-claim.instructions.md#orchestrator-delegation).
 
-## 1. Activation
+## 1. Mode selection and activation
 
 A unique session-suffixed agent id skips activation on restart; all other
 restarts use section 2 recovery without refill.
 
-Activate fan-out only when all conditions hold:
-
-- the harness's [worker mechanism table](../../docs/idd-workflow.md#worker-delegation)
-  row has Eligibility `orchestrator`;
-- helper support is installed (`instructions-only` has none), so the
-  profile-selected `idd-worker-budget` exists;
-- the effective `orchestrator.maxWorkers` is at least 2 (read `maxWorkers`
-  from `idd-worker-budget --running 0 --startable 0`);
-- the session is not on the lite profile;
-- the session was not started for one explicit issue (A0-T) or a single-issue
-  request;
-- `GITHUB_ACTIONS` is not `true`.
-
-Otherwise, use idd-discover.instructions.md unchanged. The cap is per
-session, not host.
+Use the [live execution-mode decision](../../docs/idd-workflow.md#live-capability-decision)
+and its static requirements in that table before fan-out setup, A5, claim,
+launch, or refill.
+Static support or missing tools do not prove live capability;
+use fan-out only when permitted. Cap is per session, not host.
 
 ## 2. Session scratchpad preflight and roster
 
-Before Discover, A5, restart, refill, or dispatch, follow the
-[session scratchpad lifecycle](../../docs/idd-workflow.md#session-scratchpad-lifecycle);
-stop on holds. Derive worker paths from the verified root; keep the worker
-missing-parent guard.
+Select fan-out first. Before Discover, A5,
+[restart scan](../../docs/idd-helper-scripts.md#orchestrator-restart-scan),
+refill, or dispatch, follow the
+[session scratchpad lifecycle](../../docs/idd-workflow.md#session-scratchpad-lifecycle)
+for fan-out; stop on holds. Single-agent skips its scratch. Derive worker
+paths from the verified root; keep the worker missing-parent guard.
 
-Track each worker's issue, claim, branch, handle, report path, and lifecycle
-state. On restart, see
-[recovery](../../docs/idd-workflow.md#orchestrator-restart).
+Track workers by issue, claim, branch, handle, report path, and state. A pre-B1
+stop may use the
+[parent-continuation route](../../docs/idd-workflow.md#verified-pre-b1-parent-continuation)
+only after its complete proof passes; otherwise use existing recovery/hold.
 
 ## 3. Dispatch
 
@@ -68,6 +62,11 @@ state. On restart, see
 - After each completion or wave, process `reporting` entries (§5), then re-run
   `idd-worker-budget` with `--instructions-since`, re-read changed files
   ([fv]), and refill from the cached graph, on the Discover re-run cadence.
+- Before a refill claim or launch, recheck the live decision. Keep fan-out
+  refills while its capability remains usable, even with known workers running.
+  Switch to single-agent only when that capability is lost, every prior worker
+  is disposed, and no launch, own claim, or writer is unresolved; otherwise
+  recover and hold.
 - When `slots` is `0` but candidates remain: apply stalled recovery to
   `stalled` entries first. If an entry is not `disposed`, wait for a `running`
   completion, or repeat recovery when none is running. Otherwise, if

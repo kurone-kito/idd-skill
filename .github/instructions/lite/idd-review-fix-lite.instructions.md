@@ -53,8 +53,10 @@ severity or decides Accept/Reject.
   helper could not run (step 6).
 - E10's `critiqueLoop.delegate` under `on-success` or `never` left no
   readable findings list (vacuous verdict, not a clean zero-issue round).
-- a conflicting merge without the confirmation, or any failed E11 read,
-  fetch, probe, or merge.
+- a conflict without confirmation, or a confirmed conflict that cannot be
+  resolved cleanly (abort, report, and stop without pushing; observed on
+  2026-10-28 in PR #4774 comment #4396449367); or any failed E11 read, fetch,
+  probe, or merge.
 - A CI failure is neither clearly code-caused nor recognized
   infra-flaky/pre-existing, **except** the sole-failing
   `idd-advisory-convergence` check with `pending: false` and outstanding
@@ -240,16 +242,20 @@ If that command fails, stop-and-ask. Compare `git merge-base HEAD
 If equal, the branch is current: do not merge and continue to E12.
 On a comparison command error, stop-and-ask.
 
-When behind, run `git merge-tree --write-tree HEAD "$target_sha"`. Only exit
-0 means no conflict; exit 1 means conflict. Any other exit is unknown and
-stop-and-ask. With no conflict, run `git merge --no-ff` with the same
+When behind, run `git merge-tree --write-tree HEAD "$target_sha"` (Git 2.38+).
+Exit 0 means no conflict; 1 means conflict. An unsupported-option error or
+other exit is unknown: stop-and-ask without merge or push. Preventive finding:
+PR #4774 comment #4396614924 (2026-10-28); no older-Git failure observed.
+With no conflict, run `git merge --no-ff` with the same
 `"$target_sha"` and the conventional `-m` subject documented in the
 [signed-commit merge wrapper](../../../docs/idd-helper-scripts.md). Do not
 fetch or resolve the branch ref again between the probe and merge.
 For non-interactive-hostile primary signing, use that wrapper.
-Do not ask for confirmation, even with open review threads. For a conflict,
-unresolved threads, unreplied comments, or `CHANGES_REQUESTED` require explicit
-confirmation before merging, resolving, and completing; otherwise hold. Use
+With no conflict, do not ask, even with open review threads. For a conflict,
+require explicit confirmation before merging or resolving; without it, leave
+the branch unchanged and stop-and-ask. If a confirmed conflict cannot be
+resolved cleanly, run `git merge --abort`, report failure, and stop-and-ask
+without pushing. Observed on 2026-10-28: PR #4774, comment #4396449367. Use
 the signed wrapper for merge and `--continue`. On command/signing/hook failure,
 run `git merge --abort` and stop-and-ask. After a wrapper timeout, terminate
 and wait for its full process tree before aborting; if unconfirmed, hold
@@ -259,9 +265,16 @@ validation covers the merged tree.
 ## E12 — Lint, test, push
 
 1. Run `post-fix-validate`.
-2. Push the feature branch normally; E11's merge commit needs no force
-   push. Files changed only by E11's merge do not widen E12's fold-in
-   scope.
+2. With helper runtime, inspect and commit any validation or formatter
+   output so the tree is clean. Then run the profile-selected
+   `claimed-push` (see `docs/idd-helper-scripts.md`, Claimed push) from
+   the claimed worktree with `--issue {issue-number} --claim-id
+   {claim-id}`, plus `--nonce {nonce}` when one is recorded. Its dry run
+   (no `--apply`) must pass before `--apply`, which must report
+   `pushed: true`. Under `instructions-only`, verify the active claim,
+   location, and scope, run **pre-push-validate**, then push normally.
+   E11's merge commit needs no force push. Files changed only by E11's
+   merge do not widen E12's fold-in scope.
 3. Before this push, fold a small batch of out-of-scope comments awaiting
    triage into the same push, each as its own atomic commit, only if
    steps 4-7 all hold.

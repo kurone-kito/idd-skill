@@ -1001,7 +1001,7 @@
         "exitCode": 1,
         "kind": "transport",
         "httpStatus": 503,
-        "ghScript": "const argv = process.argv.slice(2).join(' '); if (argv.includes('api user')) { process.stdout.write('someuser'); process.exit(0); } if (argv.includes('pr view')) { process.stdout.write(\"{\\\"number\\\":1,\\\"state\\\":\\\"OPEN\\\",\\\"url\\\":\\\"https://example.test/1\\\",\\\"headRefName\\\":\\\"branch\\\",\\\"headRefOid\\\":\\\"\\\",\\\"baseRefName\\\":\\\"main\\\",\\\"statusCheckRollup\\\":[],\\\"closingIssuesReferences\\\":[]}\"); process.exit(0); } process.stderr.write('gh: HTTP 503'); process.exit(1);"
+        "ghScript": "const argv = process.argv.slice(2).join(' '); if (argv.includes('api user')) { process.stdout.write('someuser'); process.exit(0); } if (argv.includes('pr view')) { process.stdout.write(\"{\\\"number\\\":1,\\\"state\\\":\\\"OPEN\\\",\\\"url\\\":\\\"https://example.test/1\\\",\\\"headRefName\\\":\\\"branch\\\",\\\"headRefOid\\\":\\\"8e3073e77f084d072432345722a8fa52b2c47ee0\\\",\\\"baseRefName\\\":\\\"main\\\",\\\"statusCheckRollup\\\":[],\\\"closingIssuesReferences\\\":[]}\"); process.exit(0); } process.stderr.write('gh: HTTP 503'); process.exit(1);"
       },
       {
         "name": "ghAuthorityLookupNotACollaborator404StaysInternal",
@@ -1022,7 +1022,7 @@
         "exitCode": 1,
         "kind": "internal",
         "httpStatus": null,
-        "ghScript": "const argv = process.argv.slice(2).join(' '); if (argv.includes('api user')) { process.stdout.write('someuser'); process.exit(0); } if (argv.includes('pr view')) { process.stdout.write(\"{\\\"number\\\":1,\\\"state\\\":\\\"OPEN\\\",\\\"url\\\":\\\"https://example.test/1\\\",\\\"headRefName\\\":\\\"branch\\\",\\\"headRefOid\\\":\\\"\\\",\\\"baseRefName\\\":\\\"main\\\",\\\"statusCheckRollup\\\":[],\\\"closingIssuesReferences\\\":[]}\"); process.exit(0); } process.stderr.write('gh: HTTP 404'); process.exit(1);"
+        "ghScript": "const argv = process.argv.slice(2).join(' '); if (argv.includes('api user')) { process.stdout.write('someuser'); process.exit(0); } if (argv.includes('pr view')) { process.stdout.write(\"{\\\"number\\\":1,\\\"state\\\":\\\"OPEN\\\",\\\"url\\\":\\\"https://example.test/1\\\",\\\"headRefName\\\":\\\"branch\\\",\\\"headRefOid\\\":\\\"20371a77d231dd4afc0408ea29be08b745d91f1b\\\",\\\"baseRefName\\\":\\\"main\\\",\\\"statusCheckRollup\\\":[],\\\"closingIssuesReferences\\\":[]}\"); process.exit(0); } process.stderr.write('gh: HTTP 404'); process.exit(1);"
       }
     ]
   }

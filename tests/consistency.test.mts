@@ -28,7 +28,12 @@ import {
   stripGeneratedFromBanner,
 } from '../src/scripts/consistency-helpers.mts';
 import { findPlaceholders } from '../src/scripts/idd-doctor.mts';
-import { normalizeWhitespace, readJson, readText } from './test-utils.mts';
+import {
+  extractSection,
+  normalizeWhitespace,
+  readJson,
+  readText,
+} from './test-utils.mts';
 
 test('placeholder scenarios detect clean and dirty post-onboarding fixtures', () => {
   const clean = collectPlaceholderHits(
@@ -2932,6 +2937,304 @@ function sliceBriefTemplate(path: string, text: string) {
   return { variantStart, start, section: text.slice(start, end) };
 }
 
+test('pre-B1 parent continuation keeps same-claim safety and truthful reports (#4714)', () => {
+  const workflowCopies = [
+    'idd-template/docs/idd-workflow.md',
+    'docs/idd-workflow.md',
+  ];
+  const continuationRequirements = [
+    'original parent is still in the same uninterrupted session',
+    'A runtime result must be final, not interim',
+    'complete worker/launch history and live process evidence',
+    'no child process or other writer remains',
+    'original claim and winning nonce, branch, exact worktree, lock, and generated tokens',
+    'a clean `git status` alone is not proof',
+    'incomplete listing, unknown launch, mismatch, unreadable worktree',
+    'implementation change/commit, existing PR, or unresolved report artifact',
+    'Reuse a valid existing session record and its exact canonical root read-only',
+    'complete process, session, and artifact evidence proves no earlier root',
+    'unknown allocation or report history is a hold',
+    'A pre-B1 stop by itself does not qualify',
+    'An active child hold requires a trusted, unedited `idd-hold` marker',
+    'GraphQL `lastEditedAt` must be explicitly `null`',
+    'only a complete trusted history read can prove that none exists',
+    'A missing, edited, untrusted, or unreadable marker is not proof of absence',
+    'persist a `pending` continuation recovery record as `issue-<n>-pre-b1-continuation.json` under the verified session scratchpad root',
+    'Create it exclusively; never overwrite or follow a pre-existing or symlinked file at that path',
+    'Later state changes replace only this record, using the atomic write and read-back step',
+    'transition stage, intended parent role, intended final roster pair',
+    'Write the record atomically and read it back',
+    'A restarted parent treats a pending record as recovery/hold',
+    'and permits only the verified transition steps below; it blocks all other',
+    'first record the per-issue role change to `parent-continuation` in the pending recovery record',
+    'posts an ordinary `claimed-by` heartbeat as the continuation worker',
+    'the heartbeat ends the hold only when the claim parser recognizes it as a valid worker heartbeat newer than the trusted marker',
+    'An orchestrator renewal does not end the hold',
+    'A complete read proving the heartbeat absent follows the existing bounded retry',
+    'If the complete history proves no active hold, no hold-ending heartbeat is needed',
+    'replace the roster atomically in one update',
+    'Do not dispose the child and add the parent entry as separate roster writes',
+    'If the atomic update or its read-back is incomplete or uncertain',
+    'atomically mark the recovery record `reconciled` and read it back',
+    'preserve claim, worktree, and storage',
+    'make no further mutation, budget/overlap call, refill, or implementation change',
+    'add one separate `parent-continuation` entry for the same issue, claim, and branch as `running`',
+    'it has no worker handle or report path',
+    'Count the continuation entry once in `--running`',
+    'pass its issue exactly once as `--in-flight`',
+    'never count the disposed child',
+    'then mark it `disposed`',
+    'Record both entries and the role transition in the run report',
+    'Pause new refills/claims while the parent implements',
+    'a hold on another issue is local, not global exhaustion',
+    'Resume ordinary discovery/refill after the parent reaches terminal',
+    'Never restart the ended child or mint a claim, nonce, or forced handoff',
+    'Do not delete a branch/worktree, take over a lock automatically, or reset lost work',
+    'Do not append a terminal worker report or F4 result for the pre-B1 child',
+    'do not change the worker-report schema',
+  ];
+
+  for (const path of workflowCopies) {
+    const text = normalizeWhitespace(readText(path));
+    assert.ok(
+      text.includes(
+        'Use the verified pre-B1 parent-continuation route below; otherwise use existing recovery/hold',
+      ),
+      `${path}: the live capability table must route only to the narrow continuation proof`,
+    );
+    const start = text.indexOf('##### Verified pre-B1 parent continuation');
+    const end = text.indexOf('#### Session scratchpad lifecycle', start);
+    assert.ok(
+      start >= 0 && end > start,
+      `${path}: continuation section missing`,
+    );
+    const route = text.slice(start, end);
+    for (const requirement of continuationRequirements) {
+      assert.ok(
+        route.includes(requirement),
+        `${path}: continuation proof must include "${requirement}"`,
+      );
+    }
+    const noEarlyB1 = route.indexOf('but does not enter B1 Step 3 yet');
+    const holdProof = route.indexOf(
+      'An active child hold requires a trusted, unedited `idd-hold` marker',
+    );
+    const pendingRecord = route.indexOf(
+      'persist a `pending` continuation recovery record',
+    );
+    const roleChange = route.indexOf(
+      'first record the per-issue role change to `parent-continuation`',
+    );
+    const heartbeat = route.indexOf(
+      'posts an ordinary `claimed-by` heartbeat as the continuation worker',
+    );
+    const atomicRoster = route.indexOf(
+      'replace the roster atomically in one update',
+    );
+    const reconciledRecord = route.indexOf(
+      'atomically mark the recovery record `reconciled` and read it back',
+    );
+    const budgetCount = route.indexOf(
+      'Count the continuation entry once in `--running`',
+    );
+    const overlapCount = route.indexOf(
+      'pass its issue exactly once as `--in-flight`',
+    );
+    const parentRole = route.indexOf(
+      'Record both entries and the role transition',
+    );
+    const b1Gate = route.indexOf(
+      'Do not enter B1 Step 3 or start implementation until',
+    );
+    const b1Continuation = route.indexOf(
+      'Only then continue in the same worktree with the original claim and nonce.',
+    );
+    assert.ok(
+      holdProof >= 0 &&
+        noEarlyB1 > holdProof &&
+        pendingRecord > noEarlyB1 &&
+        roleChange > pendingRecord &&
+        heartbeat > roleChange &&
+        atomicRoster > heartbeat &&
+        reconciledRecord > atomicRoster &&
+        budgetCount > reconciledRecord &&
+        overlapCount > budgetCount &&
+        parentRole > overlapCount &&
+        b1Gate > parentRole &&
+        b1Continuation > b1Gate,
+      `${path}: B1 must follow hold proof, pending record, verified transition, and atomic roster reconciliation`,
+    );
+    const b1GateText = route.slice(b1Gate, b1Continuation);
+    for (const requirement of [
+      'until the hold-ending heartbeat is verified or complete trusted history proves no active hold',
+      'the recovery record is `reconciled`',
+      'A `disposed` child entry alone does not prove that the hold ended',
+      'current ownership, storage/record state, both roster entries, and parent role are reconciled',
+    ]) {
+      assert.ok(
+        b1GateText.includes(requirement),
+        `${path}: B1 gate must require "${requirement}" before continuation`,
+      );
+    }
+
+    const reportStart = text.indexOf('### Orchestrator run report');
+    const reportEnd = text.indexOf('### Worker report outcomes', reportStart);
+    assert.ok(
+      reportStart >= 0 && reportEnd > reportStart,
+      `${path}: run report missing`,
+    );
+    const report = text.slice(reportStart, reportEnd);
+    for (const required of [
+      '**Pre-B1 parent continuation.**',
+      'historical handle',
+      'separate active `parent-continuation` entry',
+      'final state',
+      'no terminal worker report or F4 result',
+    ]) {
+      assert.ok(
+        report.includes(required),
+        `${path}: run report must include "${required}"`,
+      );
+    }
+  }
+
+  for (const path of [
+    'idd-template/.github/instructions/idd-orchestrator.instructions.md',
+    '.github/instructions/idd-orchestrator.instructions.md',
+  ]) {
+    const text = normalizeWhitespace(readText(path));
+    for (const required of [
+      'A pre-B1 stop may use the [parent-continuation route]',
+      'only after its complete proof passes; otherwise use existing recovery/hold',
+      '[restart scan](../../docs/idd-helper-scripts.md#orchestrator-restart-scan)',
+    ]) {
+      assert.ok(text.includes(required), `${path}: missing "${required}"`);
+    }
+  }
+
+  for (const path of [
+    'idd-template/.github/instructions/claim-orchestrator.instructions.md',
+    '.github/instructions/claim-orchestrator.instructions.md',
+  ]) {
+    const text = normalizeWhitespace(readText(path));
+    for (const required of [
+      'Continuation after a confirmed pre-B1 stop is not a new activation',
+      '[canonical parent-continuation proof]',
+      'keep the same claim and nonce',
+    ]) {
+      assert.ok(text.includes(required), `${path}: missing "${required}"`);
+    }
+  }
+});
+
+test('orchestrator restart scans continuation records before roster rebuild and refill (#4714)', () => {
+  for (const path of [
+    'idd-template/docs/idd-workflow.md',
+    'docs/idd-workflow.md',
+  ]) {
+    const text = normalizeWhitespace(readText(path));
+    const restartStart = text.indexOf(
+      'This subsection covers an orchestrating session that restarts',
+    );
+    const scanStart = text.indexOf(
+      'Before roster reconstruction or any Discover/refill step, follow the [orchestrator restart scan]',
+      restartStart,
+    );
+    const findClaims = text.indexOf('1. **Find own claims.**', restartStart);
+    const reattachWorkers = text.indexOf(
+      '3. **Re-attach workers.**',
+      restartStart,
+    );
+    assert.ok(
+      restartStart >= 0 &&
+        scanStart > restartStart &&
+        findClaims > scanStart &&
+        reattachWorkers > scanStart,
+      `${path}: continuation-record validation must precede restart roster reconstruction`,
+    );
+  }
+
+  for (const path of [
+    'idd-template/docs/idd-helper-scripts.md',
+    'docs/idd-helper-scripts.md',
+  ]) {
+    const text = normalizeWhitespace(readText(path));
+    const scanStart = text.indexOf('### Orchestrator restart scan');
+    assert.ok(scanStart >= 0, `${path}: restart scan contract missing`);
+    const nextHeading = text.indexOf('\n### ', scanStart + 1);
+    const scan = text.slice(
+      scanStart,
+      nextHeading < 0 ? undefined : nextHeading,
+    );
+    for (const required of [
+      '`issue-<n>-pre-b1-continuation.json` records',
+      'without following symlinks',
+      'A `pending` record requires existing recovery or a hold',
+      'A `reconciled` record does not authorize the uninterrupted-session shortcut after restart',
+      'never as worker report drafts or report-store entries',
+      'no record requires recovery',
+    ]) {
+      assert.ok(scan.includes(required), `${path}: missing "${required}"`);
+    }
+  }
+});
+
+test('pre-B1 continuation ownership matrix requires verified hold completion (#4714)', () => {
+  for (const path of [
+    'idd-template/docs/idd-concept-ownership.md',
+    'docs/idd-concept-ownership.md',
+  ]) {
+    const matrix = normalizeWhitespace(readText(path));
+    assert.ok(
+      matrix.includes(
+        'under the ordinary fan-out lifecycle, ended by a later valid `claimed-by`',
+      ),
+      `${path}: the ownership matrix must preserve ordinary fan-out disposal as a hold-ending cause`,
+    );
+    assert.ok(
+      matrix.includes(
+        'For the verified pre-B1 continuation route only, dispose the child after complete trusted history proves no active hold or a valid hold-ending heartbeat is verified; disposal alone proves neither',
+      ),
+      `${path}: the ownership matrix must scope the stricter disposal proof to pre-B1 continuation`,
+    );
+    assert.ok(
+      matrix.includes(
+        'the uninterrupted owning parent creates a pending continuation record and adds a `parent-continuation` entry only under the [verified pre-B1 route]',
+      ),
+      `${path}: the ownership matrix must limit parent continuation to its verified route`,
+    );
+    assert.ok(
+      matrix.includes(
+        'when a hold is active, a verified hold-ending heartbeat before roster disposal',
+      ),
+      `${path}: the ownership matrix must gate disposal on verified hold completion`,
+    );
+  }
+
+  for (const path of [
+    'idd-template/docs/idd-workflow.md',
+    'docs/idd-workflow.md',
+  ]) {
+    const workflow = normalizeWhitespace(readText(path));
+    assert.ok(
+      workflow.includes('`disposed` under the ordinary fan-out lifecycle'),
+      `${path}: ordinary fan-out disposal must remain a hold-ending cause`,
+    );
+    assert.ok(
+      workflow.includes(
+        'The verified pre-B1 parent-continuation route is stricter: it disposes the child only after a hold-ending heartbeat is verified or complete trusted history proves that no hold is active.',
+      ),
+      `${path}: the pre-B1 route must verify the hold end before disposal`,
+    );
+    assert.ok(
+      workflow.includes(
+        'report an active hold as ended only after its hold-ending heartbeat is verified. When complete trusted history proves no hold is active, report that no active hold exists; do not attribute that state to disposal',
+      ),
+      `${path}: run reports must preserve the verified pre-B1 disposal condition`,
+    );
+  }
+});
+
 test('docs idd-workflow fan-out variant carries a delegation brief template for every brief element (#4377)', () => {
   const sourceTexts = new Map<string, string>();
   for (const row of BRIEF_ELEMENT_ROWS) {
@@ -3079,6 +3382,10 @@ test('fan-out scratchpad preflight provisions and recovers one session root (#46
     'idd-template/.github/instructions/idd-orchestrator.instructions.md',
     '.github/instructions/idd-orchestrator.instructions.md',
   ];
+  const overviewCopies = [
+    'idd-template/.github/instructions/idd-overview-core.instructions.md',
+    '.github/instructions/idd-overview-core.instructions.md',
+  ];
   const routingCases = [
     {
       evidence:
@@ -3103,8 +3410,26 @@ test('fan-out scratchpad preflight provisions and recovers one session root (#46
     },
     {
       evidence:
-        'A session record is unreadable or invalid, or another session records the canonical candidate root',
-      action: 'do not accept or allocate a colliding root',
+        'scanned session record is unreadable, malformed, unsafe, or its canonical root identity cannot be compared reliably',
+      action: 'Hold and preserve the record; do not skip or delete it',
+    },
+    {
+      evidence:
+        'valid foreign record has an unambiguously distinct canonical root that is missing',
+      action:
+        'If exact-session and candidate-root reservation checks pass, proceed with first allocation; preserve the foreign record, with no foreign-runner liveness or worker, artifact, or report inspection',
+    },
+    {
+      evidence:
+        'valid foreign record has an unambiguously distinct canonical root that exists',
+      action:
+        'Use the same first-allocation verdict as for a distinct missing root; preserve the foreign record, with no foreign-runner liveness or worker, artifact, or report inspection',
+    },
+    {
+      evidence:
+        'Another session records or aliases the canonical candidate root, even when that root is absent',
+      action:
+        'Hold and preserve evidence; do not accept or allocate the colliding root',
     },
     {
       evidence:
@@ -3141,7 +3466,7 @@ test('fan-out scratchpad preflight provisions and recovers one session root (#46
     },
     {
       evidence:
-        'record is unreadable, invalid, linked unsafely, for another session or repository',
+        'exact current-session record is unreadable, invalid, linked unsafely, for another session or repository, or its root is missing, contradictory, or unsafe',
       action: 'Hold and preserve all evidence; do not allocate a replacement',
     },
     {
@@ -3184,9 +3509,18 @@ test('fan-out scratchpad preflight provisions and recovers one session root (#46
       'live worker and artifact evidence',
       'If the listing is unavailable or incomplete, treat prior-worker state as uncertain',
       'Absence of scratchpad artifacts alone does not prove that no worker start was attempted',
-      'Keep a first-allocation reservation while scanning every session record',
+      "Keep a first-allocation reservation while strictly parsing every session record and comparing the candidate root with each record's validated canonical root identity",
+      'For a foreign record, this is a collision check only',
+      'do not require its root to exist, prove its runner stopped, or inspect its worker, artifact, or report state',
+      'A valid foreign record with an unambiguously distinct root does not block allocation even when that root is absent',
+      'Hold and preserve unreadable, malformed, or unsafe records; records whose canonical root identity cannot be compared reliably; and any record naming or aliasing the candidate root',
+      'Apply the full session, repository, root-safety, worker, artifact, report, and recovery checks to the exact current-session record',
+      'Observed 2026-10-30 on issue `#4827`',
+      'this prose and its consistency assertions do not establish a completed live autonomous run',
+      "Classify the current session's entry using the actual harness context, its exact session-and-repository record, and live worker and artifact evidence",
+      'Use foreign session records only for the collision checks described above',
       'An existing reservation without an exact, valid record for this session is a hold',
-      'Remove only the reservation this invocation created, after the record is verified',
+      'remove only the reservation this invocation created after verification',
       'same uninterrupted allocator invocation may continue only when it carries the invocation-local owner token',
       'created after that invocation successfully acquired the exclusive reservation',
       'never persist or reconstruct it from a matching session id, record, manifest, or copied context',
@@ -3209,7 +3543,7 @@ test('fan-out scratchpad preflight provisions and recovers one session root (#46
       "canonicalize the candidate root with the operating system's filesystem comparison rules",
       'case normalization on case-insensitive filesystems',
       "SHA-256 digest of the canonical path's UTF-8 bytes",
-      'checking worker and artifact evidence, and exclusively creating and verifying the session record',
+      'Exclusively create and verify the current session record',
       'never overwrite or remove it automatically',
       "worker only receives session-scratchpad paths under the root; the Worker brief's named critique scratch directory is the explicit exception",
       '<state-base>/idd-skill/orchestrator-sessions/records/<session-id>.json',
@@ -3221,12 +3555,18 @@ test('fan-out scratchpad preflight provisions and recovers one session root (#46
       '`sessionId`: non-empty JSON string containing one path-safe component',
       'excluding `.`/`..`, path separators, and control characters',
       '`repository`: non-empty JSON string in `owner/repo` form',
-      'normalizing both owner and repo components case-insensitively before comparison',
+      'For the exact current-session record, it must equal the current repository slug after normalizing both owner and repo components case-insensitively before comparison',
+      'Foreign records retain their own repository slug',
       '`repositoryRoot`, `gitCommonDir`, and `scratchpadRoot`',
       'non-empty JSON strings containing canonical absolute paths',
       '`allocationSource`: JSON string exactly `harness` or `parent`',
       'rejects missing or additional fields',
       'Reject an unsupported schema version, wrong JSON type, malformed value, or unknown property before trusting the record',
+      'After strict parsing, apply session and repository identity matching and full root-safety checks only to the exact current-session record',
+      'For foreign records, do not match identity fields to the live session; validate schema and path structure strictly, then use each safely comparable canonical root identity only for the candidate-root collision check below',
+      'An existing valid exact current-session record takes precedence over any new allocation',
+      'If that exact current-session record and the current harness context name different roots, treat that as a contradiction and hold',
+      "For the current session's harness-supplied root, verify the canonical path is an existing writable directory",
       'canonical state base, record directory, reservation directory, and scratchpad root all lie',
       'Reject symlink components along each managed path',
       'directory owned by the current user with private permissions',
@@ -3354,6 +3694,18 @@ test('fan-out scratchpad preflight provisions and recovers one session root (#46
     );
   }
 
+  for (const path of overviewCopies) {
+    const text = normalizeWhitespace(readText(path));
+    assert.match(
+      text,
+      /Starting fresh with a static fan-out candidate.*`idd-orchestrator\.instructions\.md`.*`idd-discover\.instructions\.md`/,
+    );
+    assert.match(
+      text,
+      /For a static fan-out candidate, read the orchestrator phase and apply its \[live-capability decision\].*before scratchpad setup, claim, or worker launch/,
+    );
+  }
+
   for (const path of orchestratorCopies) {
     const text = normalizeWhitespace(readText(path));
     assert.match(
@@ -3362,7 +3714,7 @@ test('fan-out scratchpad preflight provisions and recovers one session root (#46
     );
     assert.match(
       text,
-      /Before Discover, A5, restart, refill, or dispatch, follow the \[session scratchpad lifecycle\]/,
+      /Before Discover, A5, \[restart scan\]\([^)]*\), refill, or dispatch, follow the \[session scratchpad lifecycle\]/,
     );
     assert.match(text, /worker missing-parent guard/);
     assert.match(
@@ -3374,4 +3726,456 @@ test('fan-out scratchpad preflight provisions and recovers one session root (#46
       /mark `stalled`, and follow \[fan-out recovery\]\[fv\]\./,
     );
   }
+});
+
+// #4711: the ledger storage bootstrap in the bundle, its SKILL entry, and the
+// docs copy. These are structural text checks that pin the rules; they never
+// run an authoring session. Only a live authoring run shows that the procedure
+// allocates a namespace and writes a ledger.
+const LEDGER_STORAGE_CONTRACT = 'skills/issue-authoring/references/contract.md';
+const LEDGER_STORAGE_SKILL = 'skills/issue-authoring/SKILL.md';
+const LEDGER_STORAGE_DOCS = 'docs/issue-authoring-skill.md';
+const LEDGER_STORAGE_END = '\n## Mechanical pre-publish gate';
+const LEDGER_STORAGE_CASES = [
+  {
+    label: '**Owned and unchanged.**',
+    expectedAction:
+      'Continue: write the complete new JSON to a new exclusively created, owner-only temporary file',
+  },
+  {
+    label: '**Owned but edited.**',
+    expectedAction: 'Do not overwrite it.',
+  },
+  {
+    label: '**Missing (lost).**',
+    expectedAction:
+      'Treat it as a lost ledger: recreate an empty ledger at the same path with exclusive creation',
+  },
+  {
+    label: '**Unowned.**',
+    expectedAction:
+      'Refuse. Do not read it as a ledger, adopt it, rename it, or delete it.',
+  },
+  {
+    label: '**Replaced.**',
+    expectedAction:
+      'Treat it as a conflict with another owner. Refuse, preserve both entries, and report.',
+  },
+  {
+    label: '**Linked leaf.**',
+    expectedAction: 'Refuse. Never follow it or write through it.',
+  },
+  {
+    label: '**Linked parent.**',
+    expectedAction: 'Refuse. Report.',
+  },
+  {
+    label: '**Partial first ledger.**',
+    expectedAction: 'keep the namespace and any partial file, delete nothing',
+  },
+  {
+    label: '**Rename to the issue number.**',
+    expectedAction:
+      'keep the `<uuid>.json` file, never overwrite or adopt the existing file',
+  },
+  {
+    label: '**A review that cannot finish.**',
+    expectedAction: 'The target is then not published as reviewed',
+  },
+];
+
+// Returns the subsection body after its heading line, so the two copies can be
+// compared even though the docs copy nests it one level deeper.
+function ledgerStorageSection(path: string, heading: string): string {
+  return extractSection(readText(path), heading, LEDGER_STORAGE_END).slice(
+    heading.length,
+  );
+}
+
+// The text of one ownership case runs from its heading to the nearest later
+// heading of any case. The heading order in the contract need not match the
+// order of `cases`, so the nearest heading is taken, not the first array entry
+// that appears later in the text.
+function ledgerCaseText(
+  section: string,
+  cases: readonly { readonly label: string }[],
+  index: number,
+): string {
+  const label = cases[index].label;
+  const start = section.indexOf(label);
+  assert.notEqual(start, -1, `missing ownership case: ${label}`);
+  const from = start + label.length;
+  let nextStart: number | undefined;
+  for (const next of cases) {
+    const position = section.indexOf(next.label, from);
+    if (position !== -1 && (nextStart === undefined || position < nextStart)) {
+      nextStart = position;
+    }
+  }
+  return normalizeWhitespace(section.slice(start, nextStart ?? section.length));
+}
+
+test('ownership case text ends at the nearest later heading, not the array order (#4801)', () => {
+  const [owned, edited, missing] = LEDGER_STORAGE_CASES;
+  // The contract lists `missing` between `owned` and `edited`, and places
+  // `owned`'s expected action under `missing`. Text under `missing` must not
+  // satisfy `owned`.
+  const section = [
+    owned.label,
+    'Other text.',
+    missing.label,
+    owned.expectedAction,
+    edited.label,
+    edited.expectedAction,
+  ].join('\n');
+  const caseText = ledgerCaseText(section, LEDGER_STORAGE_CASES, 0);
+  assert.equal(caseText.includes(owned.expectedAction), false);
+  assert.equal(caseText.includes(missing.label), false);
+});
+
+test('issue-authoring contract defines ledger storage verdicts, allocation, and every ownership case (#4711)', () => {
+  const section = ledgerStorageSection(
+    LEDGER_STORAGE_CONTRACT,
+    '### Ledger storage\n',
+  );
+  const text = normalizeWhitespace(section);
+  for (const verdict of [
+    'Supplied verified storage',
+    'No previously supplied allocation',
+    'Unsafe, conflicting, or unreadable storage',
+  ]) {
+    assert.ok(text.includes(verdict), `missing verdict: ${verdict}`);
+  }
+  for (const [index, scenario] of LEDGER_STORAGE_CASES.entries()) {
+    const caseText = ledgerCaseText(section, LEDGER_STORAGE_CASES, index);
+    assert.ok(
+      caseText.includes(scenario.expectedAction),
+      `missing expected action for ${scenario.label}: ${scenario.expectedAction}`,
+    );
+  }
+  // Allocation is exclusive and non-recursive, and `mkdir -p` appears only in
+  // the sentence that forbids it.
+  assert.match(
+    text,
+    /Create `issue-authoring-<uuid>` relative to that handle with exclusive, non-recursive directory creation, never `mkdir -p`/,
+  );
+  assert.match(
+    text,
+    /Retry with a fresh UUID only when the name already exists, at most three times/,
+  );
+  assert.equal(section.match(/mkdir -p/g)?.length, 1);
+  assert.match(text, /exclusive creation/);
+  assert.match(text, /use POSIX mode 700/);
+  assert.match(
+    text,
+    /On POSIX, reject a root that grants group or other users write and search permission without the sticky bit/,
+  );
+  assert.match(
+    text,
+    /On Windows, reject a root whose ACL lets another user rename or delete child entries/,
+  );
+  assert.match(
+    text,
+    /complete, successful `git worktree list --porcelain` run/,
+  );
+  assert.match(
+    text,
+    /For each existing reported worktree, run `git -C <worktree> rev-parse --path-format=absolute --git-dir` and `git -C <worktree> rev-parse --path-format=absolute --git-common-dir`/,
+  );
+  assert.match(
+    text,
+    /A common directory protects linked-worktree administrative records under its `worktrees\/` subtree, including records for a registered worktree whose checkout path is confirmed absent/,
+  );
+  assert.match(
+    text,
+    /A missing executable, nonzero status, malformed record, or incomplete output makes the protected-path inventory unreadable/,
+  );
+  assert.match(
+    text,
+    /A nonzero result proves non-membership only when it is either the exact standard `fatal: not a git repository/,
+  );
+  assert.match(
+    text,
+    /exact two-line filesystem-boundary diagnostic whose first line is `fatal: not a git repository \(or any parent up to mount point <path>\)` and whose second line is `Stopping at filesystem boundary \(GIT_DISCOVERY_ACROSS_FILESYSTEM not set\)\.`/,
+  );
+  assert.match(
+    text,
+    /For the filesystem-boundary form, the reported mount point must be a verified ancestor mount point of the canonical root/,
+  );
+  assert.match(
+    text,
+    /Never treat an arbitrary Git failure as proof that the path is outside a repository/,
+  );
+  assert.match(
+    text,
+    /For every protected path \(each reported worktree path and each discovered Git directory\), first compare its normalized absolute lexical path against the candidate root using component-aware containment/,
+  );
+  assert.ok(
+    text.includes(
+      'If that walk confirms a registered worktree path is absent after checking its readable ancestors, retain the worktree record and its Git common directory, mark the protected-path inventory incomplete, and stop before evaluating any candidate root. A missing checkout does not rule out an external bind mount of one of its subdirectories; a ledger in that alias could be staged after the checkout is remounted. This control gap was identified during review of PR #4728 on 2026-10-28',
+    ),
+  );
+  assert.ok(
+    text.includes(
+      'The root must be owned by the current user or a trusted system principal (POSIX UID 0 or the Windows LocalSystem SID), and must be writable by the current user.',
+    ),
+  );
+  assert.ok(
+    text.includes(
+      'A sticky bit does not make a root owned by another local user trustworthy: that directory owner can rename entries in the session namespace.',
+    ),
+  );
+  assert.ok(
+    text.includes(
+      "For Linux root checks, also record the candidate root, each existing protected path, and every nested mount point's mount ID, matching mountinfo fields, and derived backing location; repeat the full inventory and comparison whenever the root checks run.",
+    ),
+  );
+  assert.match(
+    text,
+    /On Linux, enumerate every `\/proc\/self\/mountinfo` entry whose decoded mount point is equal to or component-contained beneath an existing protected path/,
+  );
+  assert.match(
+    text,
+    /For the candidate root, each existing protected path, and every such nested mount point, obtain a mount ID from an already-open directory handle using `statx\(2\)` with `AT_EMPTY_PATH/,
+  );
+  assert.match(
+    text,
+    /When `statx` fails or does not provide `STATX_MNT_ID`, read the single decimal `mnt_id` field from `\/proc\/self\/fdinfo\/<fd>` for that same open handle/,
+  );
+  assert.match(
+    text,
+    /Reject the candidate root when its backing location is equal to or below any protected backing location on the same device, including each nested mount point's backing location/,
+  );
+  assert.match(
+    text,
+    /Do not use `RESOLVE_NO_XDEV` as a blanket cross-mount rejection/,
+  );
+  assert.match(
+    text,
+    /If a root was supplied, stop and report its path and error; do not try another root/,
+  );
+  assert.match(
+    text,
+    /Only when no root was supplied may the next candidate be tried/,
+  );
+  assert.match(
+    text,
+    /Then open the root as a directory handle without following a symbolic link or reparse point/,
+  );
+  assert.ok(
+    text.includes(
+      'Resolve the whole root path from a trusted filesystem root or volume handle:',
+    ),
+  );
+  assert.ok(
+    text.includes(
+      'on POSIX, open each component relative to the preceding verified handle with',
+    ),
+  );
+  assert.ok(
+    text.includes('`O_DIRECTORY | O_NOFOLLOW`, or use Linux `openat2(2)` with'),
+  );
+  assert.ok(
+    text.includes(
+      '`RESOLVE_NO_SYMLINKS | RESOLVE_IN_ROOT` from a trusted `/` descriptor (see',
+    ),
+  );
+  assert.ok(
+    text.includes(
+      '[openat2(2)](https://man7.org/linux/man-pages/man2/openat2.2.html)',
+    ),
+  );
+  assert.ok(
+    text.includes(
+      'On Windows, open each component relative to a trusted volume or root handle with',
+    ),
+  );
+  assert.ok(text.includes('with `NtCreateFile` and `OBJ_DONT_REPARSE`.'));
+  assert.ok(
+    text.includes(
+      'Applying `O_NOFOLLOW` only to the final component is insufficient.',
+    ),
+  );
+  assert.match(
+    text,
+    /Open it relative to the root handle without following links, then record its canonical path, file identity, type, link count, owner, and mode or ACL/,
+  );
+  assert.ok(
+    text.includes(
+      'Create a stable `ledger.lock` file relative to this handle with exclusive, no-follow, owner-only creation.',
+    ),
+  );
+  assert.ok(
+    text.includes(
+      'canonical path, owner, and owner-only mode or ACL, and has link count 1.',
+    ),
+  );
+  assert.ok(
+    text.includes(
+      'Before every ledger read, write, copy, rename, or unlink, acquire the namespace lock',
+    ),
+  );
+  assert.ok(text.includes("On POSIX, use Python's [`fcntl.flock`]"));
+  assert.ok(text.includes("on Windows, use Microsoft's [`LockFileEx`]"));
+  assert.match(
+    text,
+    /Use native handle-relative operations with exclusive creation and no-follow checks/,
+  );
+  assert.match(
+    text,
+    /On POSIX, a standard-library Python implementation can use `os\.open`, `os\.mkdir`, `os\.stat`, `os\.rename`, and `os\.unlink` with directory-descriptor parameters/,
+  );
+  assert.match(
+    text,
+    /On Windows, use a native binding that opens or creates child names with `NtCreateFile`, setting `OBJECT_ATTRIBUTES\.RootDirectory` to the verified directory handle and `OBJ_DONT_REPARSE` in its attributes\. Use `CreateDisposition=FILE_CREATE` for exclusive child creation; create a directory with `FILE_DIRECTORY_FILE`/,
+  );
+  assert.match(
+    text,
+    /Make the namespace owner-only as part of creation: use POSIX mode 700, or on Windows pass an explicit security descriptor through `OBJECT_ATTRIBUTES\.SecurityDescriptor`, with a DACL granting access only to the current user and both `SE_DACL_PRESENT` and `SE_DACL_PROTECTED` set on that descriptor/,
+  );
+  assert.match(
+    text,
+    /Make every ledger file owner-only at creation: use POSIX mode 600, or on Windows pass an explicit protected security descriptor through `OBJECT_ATTRIBUTES\.SecurityDescriptor`, with a DACL granting access only to the current user and both `SE_DACL_PRESENT` and `SE_DACL_PROTECTED` set on that descriptor/,
+  );
+  assert.match(
+    text,
+    /After opening the new file, verify its owner and owner-only mode or ACL before writing its first byte/,
+  );
+  assert.match(text, /Write `\[\]`, then record its SHA-256/);
+  assert.match(
+    text,
+    /the recorded file identity, and its recorded owner-only mode or ACL/,
+  );
+  assert.match(
+    text,
+    /For every ledger file creation — the initial or recreated ledger, temporary replacement, and issue-number copy — also pass an explicit protected owner-only security descriptor through `OBJECT_ATTRIBUTES\.SecurityDescriptor`\. The namespace DACL does not establish that a child file is private\. Verify each created file's resulting owner-only DACL before writing to it/,
+  );
+  assert.match(
+    text,
+    /If the platform cannot apply this restriction before the directory is visible, fail closed/,
+  );
+  assert.match(
+    text,
+    /After the final identity and SHA-256 checks, replace the owned ledger via `SetFileInformationByHandle` on the verified temporary-file handle with `FileRenameInfo`, `ReplaceIfExists=TRUE`, and `FILE_RENAME_INFO\.RootDirectory` set to the namespace handle/,
+  );
+  assert.match(text, /Open that file handle with `DELETE` access/);
+  assert.match(
+    text,
+    /mark the verified source handle for deletion with `SetFileInformationByHandle` and `FileDispositionInfo` \(`DeleteFile=TRUE`\); it also requires `DELETE` access/,
+  );
+  assert.match(
+    text,
+    /If the host cannot bind an operation to the verified handle or supply the required evidence, treat the storage as unreadable and stop/,
+  );
+  assert.match(
+    text,
+    /replacement, while holding the exclusive namespace lock, repeat the ownership check and verify that the existing ledger's identity and SHA-256 still match the records/,
+  );
+  assert.match(
+    text,
+    /Immediately before unlinking the source, verify that the namespace identity still matches, the source identity and SHA-256 still match their records/,
+  );
+  assert.ok(
+    text.includes(
+      'the destination is a regular file with link count 1, the recorded identity and SHA-256, and the canonical path `<namespace>/<number>.json`',
+    ),
+  );
+  assert.match(
+    text,
+    /confirm that the copy's SHA-256 equals the source ledger's recorded SHA-256/,
+  );
+  assert.match(
+    text,
+    /confirm that the destination's SHA-256 still equals the source ledger's recorded SHA-256/,
+  );
+  // Failed post-creation checks preserve the new namespace instead of deleting
+  // it by path; no other session's entry is adopted or removed.
+  assert.match(
+    text,
+    /If any check fails, preserve the namespace and report its path and the exact failing evidence; mark this candidate failed\. Do not remove it by path/,
+  );
+  assert.doesNotMatch(section, /rmdir/);
+  assert.match(
+    text,
+    /The cases below are preventive; no observed incident yet/,
+  );
+  // Mismatches preserve unverified entries, and cleanup is restricted to
+  // session-created entries whose identity still matches.
+  assert.match(
+    text,
+    /On a mismatch, preserve the ledger and any unverified temporary entry; never recurse into a directory or adopt an entry this session did not create/,
+  );
+  assert.match(
+    text,
+    /Cleanup may remove only an entry created by this session whose recorded identity still matches/,
+  );
+  assert.match(
+    text,
+    /never automatically deletes an older or abandoned namespace/,
+  );
+  assert.match(
+    text,
+    /It may remove only a newly created entry whose recorded identity still matches/,
+  );
+});
+
+test('ledger storage needs no orchestrator, environment variable, helper, or session ID (#4711)', () => {
+  const text = normalizeWhitespace(
+    ledgerStorageSection(LEDGER_STORAGE_CONTRACT, '### Ledger storage\n'),
+  );
+  assert.match(
+    text,
+    /no orchestrator, no particular environment variable, no helper package, and no stable harness session ID/,
+  );
+  assert.match(text, /instructions-only and same-response self-critique runs/);
+});
+
+test('ledger rules keep namespaces, rejection carry-forward, and lost-ledger semantics in bundle and docs (#4711)', () => {
+  for (const path of [LEDGER_STORAGE_CONTRACT, LEDGER_STORAGE_DOCS]) {
+    const text = normalizeWhitespace(readText(path));
+    for (const needle of [
+      'keep a findings ledger in the namespace that [Ledger storage](#ledger-storage) allocates',
+      'No two drafts or concurrent workers share a ledger file.',
+      'The ledger is never written to the repository or to a marker.',
+      'If the namespace or the ledger is lost, for example after a restart, the ledger is empty and the review runs as it does without one.',
+      'For each `rejected` entry that has evidence, add one string',
+    ]) {
+      assert.ok(text.includes(needle), `${path}: missing "${needle}"`);
+    }
+    assert.doesNotMatch(text, /session scratchpad/);
+  }
+});
+
+test('SKILL entry carries the ledger storage summary and link for instructions-only runs (#4711)', () => {
+  const skill = normalizeWhitespace(readText(LEDGER_STORAGE_SKILL));
+  for (const needle of [
+    '## Findings ledger storage',
+    '[Ledger storage](references/contract.md#ledger-storage)',
+    '[Findings ledger storage](#findings-ledger-storage)',
+    "never reuse another session's namespace",
+    'if a supplied root fails, stop without trying another root',
+    'When no root is supplied, allocate a',
+    'including mount aliases verified by native filesystem evidence.',
+    'preserve unverified entries; the contract permits cleanup only for entries this session created whose identity still matches.',
+    'Instructions-only and same-response self-critique runs follow the same procedure; no orchestrator, environment variable, or helper is needed.',
+  ]) {
+    assert.ok(skill.includes(needle), `SKILL.md: missing "${needle}"`);
+  }
+  assert.doesNotMatch(skill, /session scratchpad/);
+  assert.doesNotMatch(skill, /delete nothing|or otherwise create/);
+});
+
+test('docs copy mirrors the ledger storage subsection and separates structural checks from a live run (#4711)', () => {
+  const contract = normalizeWhitespace(
+    ledgerStorageSection(LEDGER_STORAGE_CONTRACT, '### Ledger storage\n'),
+  );
+  const docs = normalizeWhitespace(
+    ledgerStorageSection(LEDGER_STORAGE_DOCS, '#### Ledger storage\n'),
+  );
+  assert.ok(
+    docs.startsWith(contract),
+    'the docs copy must hold the contract subsection verbatim',
+  );
+  assert.match(docs, /Structural checks and a live run differ/);
+  assert.match(docs, /they never run an authoring session/);
 });

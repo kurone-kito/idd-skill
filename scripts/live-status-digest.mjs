@@ -48,7 +48,10 @@ import {
   retireLiveStatusDigestBody,
   summarizeClaimValidationForWriteGate,
 } from './protocol-helpers.mjs';
-import { fetchLastEditedAtByNodeId } from './provider-adapter-github.mjs';
+import {
+  fetchLastEditedAtByNodeId,
+  readChangeRequestClosingIssueReferences,
+} from './provider-adapter-github.mjs';
 
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
 // `issue:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
@@ -1067,9 +1070,14 @@ function assertRepairClaimBoundToTarget(
     }
     return;
   }
-  let payload;
+  // kurone-kito/idd-skill#4737: the closing references come from the provider
+  // adapter's pinned reader, not `gh pr view --json closingIssuesReferences`,
+  // which older GitHub CLI releases reject. The head is read first, and the
+  // reader pins its GraphQL read to it, so an empty or malformed head is
+  // rejected before any closing-reference read.
+  let headRefOid;
   try {
-    payload = JSON.parse(
+    headRefOid = JSON.parse(
       ghText([
         'pr',
         'view',
@@ -1077,8 +1085,23 @@ function assertRepairClaimBoundToTarget(
         '--repo',
         `${owner}/${repo}`,
         '--json',
-        'closingIssuesReferences',
+        'headRefOid',
       ]),
+    )?.headRefOid;
+  } catch (error) {
+    throw new Error(
+      `could not read headRefOid for PR #${targetNumber}: ${error.message}`,
+      { cause: error },
+    );
+  }
+  let closingReferences;
+  try {
+    closingReferences = readChangeRequestClosingIssueReferences(
+      ghText,
+      owner,
+      repo,
+      targetNumber,
+      typeof headRefOid === 'string' ? headRefOid : null,
     );
   } catch (error) {
     // #3346 review finding: preserve the original gh-exec.mts-tagged error
@@ -1090,14 +1113,17 @@ function assertRepairClaimBoundToTarget(
       { cause: error },
     );
   }
-  if (!Array.isArray(payload.closingIssuesReferences)) {
-    throw new Error(
-      `PR #${targetNumber} returned no usable closingIssuesReferences`,
-    );
-  }
-  const linkedIssueNumbers = payload.closingIssuesReferences
-    .map((reference) => String(reference?.number ?? '').trim())
-    .filter(Boolean);
+  // A reference from another repository keeps its repository in the key, so
+  // a same-numbered issue elsewhere cannot satisfy the claim-issue match.
+  const linkedIssueNumbers = closingReferences.map((reference) => {
+    const { name, owner: refOwner } = reference.repository;
+    const sameRepository =
+      refOwner.login.toLowerCase() === owner.toLowerCase() &&
+      name.toLowerCase() === repo.toLowerCase();
+    return sameRepository
+      ? String(reference.number)
+      : `${refOwner.login}/${name}#${reference.number}`;
+  });
   // A PR-repair coordination lease must be unique to this PR: accepting any
   // one of several linked issues' claims would let two maintainers each
   // legitimately claim a different linked issue and both authorize a repair
