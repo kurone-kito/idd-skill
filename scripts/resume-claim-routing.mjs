@@ -701,6 +701,9 @@ function toForcedHandoffEvidence(applied) {
     old_claim_id: applied.oldClaimId,
     new_agent_id: applied.newAgentId,
     new_claim_id: applied.newClaimId,
+    branch: applied.branch,
+    linked_pr: applied.linkedPr ?? null,
+    context_scope: applied.contextScope,
     forced_by: applied.forcedBy,
     timestamp: applied.createdAt ?? null,
   };

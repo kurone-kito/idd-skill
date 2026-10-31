@@ -37,10 +37,11 @@ import {
 } from './f4-head-proof-verdict.mts';
 import { deriveGhHttpStatus } from './gh-http-status.mts';
 import { findOwnLoadControlRefusal } from './github-api-refusal.mts';
-import { parseClaimComment } from './marker-helpers.mts';
+import { isValidIsoTimestamp, parseClaimComment } from './marker-helpers.mts';
 import {
   classifyCommentEditState,
   isTrustEvidenceComment,
+  normalizeLinkedPrReference,
   resolveLatestReviewWatermark,
 } from './protocol-helpers.mts';
 import type { ProviderComment } from './provider-port.mts';
@@ -73,8 +74,23 @@ export interface F4HeadProofGateInput {
 export interface ClaimAssertRequest {
   issueNumber: number;
   claimId: string;
+  agentId: string;
   nonce: string;
   worktree: string;
+}
+
+/** The accepted forced-handoff event returned by the claim resolver. */
+export interface ClaimForcedHandoffEvidence {
+  oldAgentId: string;
+  oldClaimId: string;
+  newAgentId: string;
+  newClaimId: string;
+  branch: string;
+  linkedPr: string | null;
+  contextScope: 'issue-only' | 'issue-plus-pr';
+  forcedBy: string;
+  /** GitHub comment created_at; null means the resolver could not read it. */
+  timestamp: string | null;
 }
 
 /**
@@ -83,7 +99,11 @@ export interface ClaimAssertRequest {
  * run or its output could not be read.
  */
 export type ClaimAssertOutcome =
-  | { status: 'owned'; branch: string }
+  | {
+      status: 'owned';
+      branch: string;
+      forcedHandoff: ClaimForcedHandoffEvidence | null;
+    }
   | { status: 'not-owned' }
   | { status: 'unreadable'; detail: string };
 
@@ -128,6 +148,8 @@ export interface F4HeadProofGateDeps {
   listPullRequests(branch: string): readonly PullRequestSummary[];
   listPullRequestComments(prNumber: number): readonly ProviderComment[];
   readPullRequest(prNumber: number): PullRequestRead;
+  /** Earliest commit date for a PR, or null when the commits are unreadable. */
+  readPullRequestFirstCommitAt(prNumber: number): string | null;
   readCommit(sha: string): CommitRead;
   isValidRefName(branch: string): boolean;
   readLocalRef(worktree: string, branch: string): LocalRef;
@@ -694,12 +716,20 @@ function readClaim(
   deps: F4HeadProofGateDeps,
   nonce: string,
   notes: string[],
-): { kind: 'refused' } | { kind: 'read'; claimOk: boolean; branch: string } {
+):
+  | { kind: 'refused' }
+  | {
+      kind: 'read';
+      claimOk: boolean;
+      branch: string;
+      forcedHandoff: ClaimForcedHandoffEvidence | null;
+    } {
   let assertion: ClaimAssertOutcome;
   try {
     assertion = deps.assertClaim({
       issueNumber: input.issueNumber,
       claimId: input.claimId,
+      agentId: input.agentId,
       nonce,
       worktree: input.worktree,
     });
@@ -728,7 +758,130 @@ function readClaim(
       lock.present &&
       lock.holder?.claimId === input.claimId,
     branch: assertion.status === 'owned' ? assertion.branch : '',
+    forcedHandoff:
+      assertion.status === 'owned' ? assertion.forcedHandoff : null,
   };
+}
+
+type ClaimActivationEvidence =
+  | {
+      source: 'forced-handoff';
+      createdAt: string | null;
+      forcedHandoff: ClaimForcedHandoffEvidence;
+    }
+  | {
+      source: 'claimed-by';
+      createdAt: string;
+      forcedHandoff: null;
+    }
+  | { source: 'unknown'; createdAt: null; forcedHandoff: null };
+
+function resolveClaimActivation(
+  forcedHandoff: ClaimForcedHandoffEvidence | null,
+  comments: readonly ProviderComment[],
+  claimId: string,
+  branch: string,
+  trusted: ReadonlySet<string>,
+): ClaimActivationEvidence {
+  if (forcedHandoff !== null) {
+    return {
+      source: 'forced-handoff',
+      createdAt: isValidIsoTimestamp(forcedHandoff.timestamp)
+        ? forcedHandoff.timestamp
+        : null,
+      forcedHandoff,
+    };
+  }
+  const createdAt = findClaimActivationTime(comments, claimId, branch, trusted);
+  return createdAt === null
+    ? { source: 'unknown', createdAt: null, forcedHandoff: null }
+    : { source: 'claimed-by', createdAt, forcedHandoff: null };
+}
+
+/**
+ * Bind an accepted handoff to the merged PR F4 is proving. Resume routing
+ * checks only open PRs, so after merge F4 must repeat the context check against
+ * its own resolved PR: an issue-plus-pr handoff must name that PR, while an
+ * issue-only handoff is usable only when its GitHub created_at predates the
+ * PR's first commit.
+ */
+function bindClaimActivationToPullRequest(
+  activation: ClaimActivationEvidence,
+  prNumber: number | null,
+  deps: F4HeadProofGateDeps,
+  notes: string[],
+): ClaimActivationEvidence {
+  if (activation.source !== 'forced-handoff') {
+    return activation;
+  }
+  const unknown: ClaimActivationEvidence = {
+    source: 'unknown',
+    createdAt: null,
+    forcedHandoff: null,
+  };
+  if (prNumber === null) {
+    notes.push(
+      'the accepted handoff could not be bound to a merged pull request',
+    );
+    return unknown;
+  }
+  const handoff = activation.forcedHandoff;
+  if (handoff.contextScope === 'issue-plus-pr') {
+    if (normalizeLinkedPrReference(handoff.linkedPr) !== String(prNumber)) {
+      notes.push(
+        `the accepted handoff names pull request ${handoff.linkedPr}, not merged pull request ${prNumber}`,
+      );
+      return unknown;
+    }
+    return activation;
+  }
+  if (!isValidIsoTimestamp(activation.createdAt)) {
+    return unknown;
+  }
+  let firstCommitAt: string | null;
+  try {
+    firstCommitAt = deps.readPullRequestFirstCommitAt(prNumber);
+  } catch (error) {
+    notes.push(
+      `the first commit time of pull request ${prNumber} could not be read: ${describeError(error)}`,
+    );
+    return unknown;
+  }
+  if (
+    !isValidIsoTimestamp(firstCommitAt) ||
+    Date.parse(activation.createdAt) >= Date.parse(firstCommitAt)
+  ) {
+    notes.push(
+      `the issue-only handoff does not have a verified timestamp before the first commit of pull request ${prNumber}`,
+    );
+    return unknown;
+  }
+  return activation;
+}
+
+function sameClaimActivation(
+  left: ClaimActivationEvidence,
+  right: ClaimActivationEvidence,
+): boolean {
+  if (left.source !== right.source || left.createdAt !== right.createdAt) {
+    return false;
+  }
+  if (left.source !== 'forced-handoff' || right.source !== 'forced-handoff') {
+    return true;
+  }
+  const a = left.forcedHandoff;
+  const b = right.forcedHandoff;
+  return (
+    a.oldAgentId === b.oldAgentId &&
+    a.oldClaimId === b.oldClaimId &&
+    a.newAgentId === b.newAgentId &&
+    a.newClaimId === b.newClaimId &&
+    a.branch === b.branch &&
+    a.linkedPr === b.linkedPr &&
+    a.contextScope === b.contextScope &&
+    a.forcedBy === b.forcedBy &&
+    a.timestamp === b.timestamp
+  );
 }
 
 /**
@@ -797,16 +950,21 @@ export function runF4HeadProofGate(
   if (claim.kind === 'refused') {
     return refusedClaim(input, notes);
   }
-  const { claimOk, branch } = claim;
+  const { claimOk, branch, forcedHandoff } = claim;
 
   let markersRead = true;
   let entries: IdentifiedMarker[] = [];
-  let claimActivatedAt: string | null = null;
+  let activation: ClaimActivationEvidence = {
+    source: 'unknown',
+    createdAt: null,
+    forcedHandoff: null,
+  };
   if (claimOk) {
     try {
       const issue = readIssueMarkers(deps, input.issueNumber, input.claimId);
       entries = issue.entries;
-      claimActivatedAt = findClaimActivationTime(
+      activation = resolveClaimActivation(
+        forcedHandoff,
         issue.comments,
         input.claimId,
         branch,
@@ -834,6 +992,12 @@ export function runF4HeadProofGate(
   const prNumber = claimOk
     ? lookupMergedPullRequest(deps, branch, notes)
     : null;
+  activation = bindClaimActivationToPullRequest(
+    activation,
+    prNumber,
+    deps,
+    notes,
+  );
   const livePr =
     prNumber === null ? UNREADABLE_PR : readLivePr(deps, prNumber, notes);
   const f2 =
@@ -849,7 +1013,7 @@ export function runF4HeadProofGate(
     livePr,
     refNameValid,
     localRef,
-    claimActivatedAt,
+    claimActivatedAt: activation.createdAt,
     markers: [],
     markersRead,
     watermarkAuthenticated: f2 !== null,
@@ -946,7 +1110,11 @@ export function runF4HeadProofGate(
     );
   }
 
-  const postedIdentity = identityOfPost(proofInput, claimActivatedAt, proof);
+  const postedIdentity = identityOfPost(
+    proofInput,
+    activation.createdAt,
+    proof,
+  );
 
   // The claim was read before a series of live reads. Read it again at the
   // write boundary, so a claim released or a lock replaced meanwhile stops
@@ -963,6 +1131,46 @@ export function runF4HeadProofGate(
       input,
       stopped.disposition,
       stopped.reason,
+      emptyProof(input.claimId),
+      {},
+      notes,
+    );
+  }
+  let finalActivation: ClaimActivationEvidence = {
+    source: 'unknown',
+    createdAt: null,
+    forcedHandoff: null,
+  };
+  const finalPrNumber = lookupMergedPullRequest(deps, final.branch, notes);
+  try {
+    const finalIssue = readIssueMarkers(deps, input.issueNumber, input.claimId);
+    if (finalPrNumber === prNumber) {
+      finalActivation = bindClaimActivationToPullRequest(
+        resolveClaimActivation(
+          final.forcedHandoff,
+          finalIssue.comments,
+          input.claimId,
+          final.branch,
+          finalIssue.trusted,
+        ),
+        finalPrNumber,
+        deps,
+        notes,
+      );
+    } else {
+      notes.push('the merged pull request changed before the post');
+    }
+  } catch (error) {
+    notes.push(
+      `the claim activation could not be rechecked before the post: ${describeError(error)}`,
+    );
+  }
+  if (!sameClaimActivation(activation, finalActivation)) {
+    notes.push('the claim activation evidence changed before the post');
+    return describeOutcome(
+      input,
+      'hold',
+      'claim-activation-unknown',
       emptyProof(input.claimId),
       {},
       notes,
