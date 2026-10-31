@@ -135,12 +135,13 @@ all three boundaries. `refuse` or moved HEAD: do not post; repeat Step 1 and
 re-triage. `defer`: do not post; follow the CI-incomplete route and
 refresh Step 1.
 
-Manual six-field fallback cannot use `--operation-local`. Capture
-Step 1's `baseRefName` with HEAD. Before posting, require a complete
-read to match both refs, item count, and max activity time, with no new
-uncovered items; any mismatch or uncertainty means no post — repeat
-Step 1 and re-triage. Require producer-aware passing CI; names alone
-are insufficient.
+Manual six-field: omit `--operation-local`; operator-selected. Run the
+[query](../idd-review-snapshot.instructions.md#manual-ci-fallback) and
+apply its page, ref, producer, and latest-pass rules. Post only if Step 1
+refs/activity/count match and the latest passing CI timestamp equals
+Step 1's `{latest-ci-completed-at}`, no new uncovered items exist, and CI
+passes; otherwise repeat Step 1 and re-triage.
+
 Otherwise skip Step 2 and use E15/E14.
 
 Exact body: `<!-- review-watermark: {agent-id} {claim-id} {head-SHA}

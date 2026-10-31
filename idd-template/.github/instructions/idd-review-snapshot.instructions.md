@@ -1,22 +1,18 @@
 # IDD — Review Snapshot Phase (E1–E3)
 
-Read this file according to the phase-routing table in
-`idd-overview-core.instructions.md`. It covers fetching review items
-(E1), running the critique pass (E2), and checking whether
-ReviewItems_snapshot is empty (E3).
+Follow phase routing in
+`idd-overview-core.instructions.md`.
 
-Before any E-phase mutation or GitHub side effect, apply the shared
+Before E-phase mutations or GitHub side effects, apply the
 [claim revalidation gate](idd-overview-core.instructions.md#claim-revalidation-gate).
-The active claim must still use your current `{claim-id}` — this also
-serves as E1's phase-entry self-check: E1 re-fetches all state from
-GitHub on every entry, so, unlike B1/B3, no local artifact can go stale.
+Require the current `{claim-id}`. E1 re-fetches GitHub on every entry,
+so no local artifact can go stale.
 
-After E3, empty → branch-sync unless Step 2 deferred → E15/E14 then E1.
-Non-empty → `idd-review-triage.instructions.md` (E4); a deferred handoff
-carries E1 Step 1 SHA, its activity baseline, `watermark deferred`, and
-reason; E14 uses that baseline (or its marker timestamp if empty) only as
-a temporary polling watermark, never a `review-watermark`, or reruns E1
-before E8 when it is missing.
+After E3, empty routes to branch-sync (or E15/E14 then E1 when
+deferred); non-empty routes to triage (E4). A deferred handoff carries
+E1 SHA, activity baseline, `watermark deferred`, and reason. E14 uses
+these (or its marker timestamp if empty) only as a temporary polling
+watermark, never a review-watermark; if missing, rerun E1 before E8.
 
 ## E1 — Fetch review items into ReviewItems_snapshot
 
@@ -58,46 +54,68 @@ author is a trusted marker actor per
 Never exclude an untrusted-author marker-shaped comment; flag it as
 suspicious if it affects a decision.
 
-With helpers, prefer the profile-selected read-only helper
-`node scripts/review-activity-snapshot.mjs --pr {pr-number}` to collect
-`{head-SHA}`, `{max-activity-updatedAt}`, `{total-item-count}`, and CI
-completion timestamps. Pass trusted marker actors with
-`--trusted-marker-logins "<trusted-login-1>,<trusted-login-2>"`.
-Helpers are evidence collectors only: on failure, invalid JSON, missing
-fields, or a conflict with live GitHub state, discard their output and run
-the portable gh/jq/API procedure below; the written rules decide.
+Profile-selected read-only
+`review-activity-snapshot --pr {pr-number}` collects `{head-SHA}`,
+`{max-activity-updatedAt}`, `{total-item-count}`, and CI time; pass
+`--trusted-marker-logins`. Discard failed/invalid/incomplete or
+GitHub-conflicting output; use the portable procedure. Helper output is
+evidence only. See [docs](../../docs/idd-helper-scripts.md).
 
-Manual CI: read every `statusCheckRollup.contexts` page, matching Step 1's HEAD
-and base. Keep same-named producers separate. Record the newest passing
-`completedAt` (successful or treated-as-passed, never a later failure) as
-`{latest-ci-completed-at}`; a complete read with no pass yields `none`.
-Incomplete: no post, repeat Step 1.
+### Manual CI fallback
+
+`--paginate` follows `endCursor`; `--slurp` collects all pages.
+
+```sh
+gh api graphql --paginate --slurp \
+  -f owner='{owner}' -f repo='{repo}' -F number={pr-number} \
+  -f query='
+query($owner:String!,$repo:String!,$number:Int!,$endCursor:String) {
+  repository(owner:$owner,name:$repo) { pullRequest(number:$number) {
+    headRefOid baseRefName
+    statusCheckRollup { contexts(first:100,after:$endCursor) {
+      nodes { __typename
+        ... on CheckRun { name status conclusion detailsUrl completedAt
+          checkSuite { app { slug } workflowRun { file { path } workflow { name } } }
+        }
+        ... on StatusContext { context state targetUrl updatedAt }
+      }
+      pageInfo { hasNextPage endCursor }
+    } }
+  } }
+}
+'
+```
+
+Each page's HEAD/base must match Step 1. Errors, incomplete pagination,
+or moved refs: no post; repeat Step 1 (issue #4803). Keep producers
+separate: CheckRun app/workflow; StatusContext `context`/`targetUrl`.
+Use CheckRun `completedAt` and terminal StatusContext `updatedAt`.
+Passing: CheckRun `SUCCESS`/`SKIPPED`/`NEUTRAL`;
+StatusContext `SUCCESS`. Record latest pass or `none`; ignore later
+failures.
 
 **Non-Copilot safety:** snapshot/watermark and F2 cover bot activity.
 
 **CI precondition.** Run profile-selected AW1 `advisory-wait-state` with
 `--pr {pr-number}`, `--claim-id {claim-id}`, `--agent-id {agent-id}`,
 and `--trusted-marker-logins <trusted-logins>`; then profile-selected
-`ci-wait-state` with `--pr {pr-number}` (add `--global-only` on a
-global-only run; see
-`docs/idd-helper-scripts.md`). Require
-`outcome: SATISFIED`, or
-`CAP_EXHAUSTED` with `capExhaustedRoute: phase-specific`; otherwise
-defer. Require `copilotRecovery.activeClaimProvided: true`,
-`staleRequestRecovery.action`, and `requiredChecks.status: success` (or
-`no-required-checks` with non-empty all-success `checks[]`, or
-`no-required-checks` with empty `checks[]` and the exact
-`allowedByPolicySetting: ciGate.allowNoRequiredChecksInGlobalOnly` marker
-(any other value defers), the global-only opt-in in
-[global-only profile](../../docs/global-only-profile.md)). No helper:
-finish AW1-AW3; missing CI contract:
-stop/ask; else read rulesets/protection and normalize
-`gh pr checks {pr-number} --json name,state,bucket,startedAt,completedAt,link`
-against their union, including opt-in steps; unreadable policy/non-pass
-defers; empty output is not `no-required-checks`. Post after CI. Old
-heads need `LAST_COPILOT_COMMIT == PR_HEAD_SHA`; off-head `SATISFIED`
-requires fresh AW1 and `staleRequestRecovery.action`
-`not-applicable`/completed AW3-S/cap; `attempt` defers.
+`ci-wait-state --pr {pr-number}` (`--global-only` when applicable).
+Require AW1 `outcome: SATISFIED` or `CAP_EXHAUSTED` with
+`capExhaustedRoute: phase-specific`,
+`copilotRecovery.activeClaimProvided: true`,
+`staleRequestRecovery.action`, and `requiredChecks.status: success`;
+else defer. Allow `no-required-checks` only with nonempty all-success
+`checks[]`, or empty `checks[]` plus exact
+`allowedByPolicySetting: ciGate.allowNoRequiredChecksInGlobalOnly` and
+the [global-only opt-in](../../docs/global-only-profile.md).
+
+No helpers: finish AW1-AW3. Missing CI contract: stop/ask. Otherwise
+compare `gh pr checks {pr-number} --json name,state,bucket,startedAt,completedAt,link`
+with rulesets/protection, including opt-in steps. Read errors or
+non-pass defer; empty output is not `no-required-checks`. Old heads
+require `LAST_COPILOT_COMMIT == PR_HEAD_SHA`; off-head `SATISFIED`
+requires fresh AW1 and stale action `not-applicable`, completed AW3-S,
+or cap; `attempt` defers.
 Incomplete: Steps 1/3, E2, E3—not F1/F2; E14 then E15. Empty
 E3/E8-zero-A: wait, re-snapshot E1, post without review; CI after
 watermark forces E1↔F2.
@@ -126,10 +144,10 @@ posting nothing; return to Step 1 and re-snapshot, do not retry Step 2
 as-is. `decision: defer` exits 0 (`mode: "dry-run"`), posting nothing
 (required checks not passing): skip the after-posting steps and follow
 the CI-incomplete routing above.
-Manual fallback: before posting, re-read both refs and complete
-activity; HEAD, base, item count, and max activity time must match
-Step 1, with no new uncovered items. Otherwise do not post: repeat Step 1
-and triage. Use the producer-aware CI proof above.
+Manual fallback: require matching Step 1 refs/activity/count, no new
+uncovered items, passing CI, and unchanged latest-pass timestamp;
+otherwise repeat Step 1. Follow the
+[manual fallback rules](../../docs/idd-helper-scripts.md#manual-e1-watermark-ci-fallback).
 
 ```markdown
 <!-- review-watermark: {agent-id} {claim-id} {head-SHA} {max-activity-updatedAt|none} {total-item-count} {latest-ci-completed-at|none} -->
@@ -137,8 +155,8 @@ and triage. Use the producer-aware CI proof above.
 _{agent-id}: review triage snapshot — IDD automation marker. Do not edit._
 ```
 
-The HTML comment is the machine-readable token; the italic line is a
-visible note in the PR body's language (English if ambiguous).
+The HTML comment is the marker; italic note uses PR language
+(English if ambiguous).
 
 **Nothing appended after the note.** As with `claimed-by`/`unclaimed-by`
 in `idd-claim.instructions.md`, a `review-watermark` (and
@@ -153,9 +171,8 @@ no-code-fence note.
 
 - **`{head-SHA}`**: the value read at the very start of Step 1. F2 uses
   it to detect pushes between E1's snapshot and the watermark post.
-- **`{latest-ci-completed-at}`**: the `completedAt` of the latest CI
-  pass observed during this E1 snapshot (or `none`). F2 uses it to
-  detect a new CI pass completed after the snapshot fetch.
+- **`{latest-ci-completed-at}`**: E1's latest passing timestamp, or
+  `none`; F2 uses the same producer rule.
 - **E1 execution marker**: the GitHub-assigned `createdAt` of this
   comment (set server-side), used only to verify watermark recency —
   activity/CI freshness are tracked via the data fields above.
