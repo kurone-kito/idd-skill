@@ -224,12 +224,6 @@ const ENGINES_RANGE_MIRRORS: EnginesRangeMirrorSpec[] = [
     file: '.github/workflows/idd-advisory-convergence-comment.yml',
     mode: 'full-range',
   },
-  { file: '.github/CONTRIBUTING.md', mode: 'full-range' },
-  { file: '.github/CONTRIBUTING.ja.md', mode: 'full-range' },
-  { file: '.github/CONTRIBUTING.zh.md', mode: 'full-range' },
-  { file: 'docs/typescript-sources.md', mode: 'full-range' },
-  { file: 'docs/workshop/README.md', mode: 'components' },
-  { file: 'docs/stalled-session-quiet-check.md', mode: 'components' },
   { file: 'src/scripts/helper-runtime-manifest.mts', mode: 'full-range' },
   {
     file: 'idd-template/.github/workflows/idd-advisory-convergence.yml',

@@ -41,9 +41,8 @@ agents use during the workshop:
 
 - Docker Desktop, or an equivalent Docker Engine setup with Docker
   Compose support, for PostgreSQL and the local app stack.
-- Node.js 22.23.2 or newer on the 22.x line, 24.2.0 or newer on the
-  24.x line, or 26.0.0 or newer, matching this repository's supported
-  runtime (the already-end-of-life 25.x line is excluded).
+- Node.js on a supported release line defined by `package.json`'s
+  `engines.node` field (the already-end-of-life 25.x line is excluded).
 - Corepack enabled, so it provisions this repository's pinned pnpm
   version (`packageManager` in `package.json`) automatically for
   validation commands (if your Node.js build does not bundle
