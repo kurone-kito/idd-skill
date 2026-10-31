@@ -11,7 +11,7 @@
 // #1447 standardized on) is simply falsy there: the helper exits 0
 // without ever running its body, instead of failing loudly on an
 // unsupported runtime. #1447 raised `engines.node` to
-// `^22.23.2 || ^24.2.0 || >=26.0.0`, but nothing enforced that range at
+// `^22.23.4 || ^24.2.0 || >=26.0.0`, but nothing enforced that range at
 // run time.
 //
 // This module is the one shared check nearly every entry point reaches --
@@ -46,7 +46,7 @@
  * including the toolless bare-node CI lane, can load it without a
  * package.json read.
  */
-const ENGINES_RANGE = '^22.23.2 || ^24.2.0 || >=26.0.0';
+const ENGINES_RANGE = '^22.23.4 || ^24.2.0 || >=26.0.0';
 
 /**
  * Fails loudly, in one stderr line naming `process.version` and this

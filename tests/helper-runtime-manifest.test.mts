@@ -827,7 +827,7 @@ test('source package metadata falls back when vendored into another repository',
   assert.deepEqual(resolveSourcePackageMetadata(foreignRoot), {
     name: '@kurone-kito/idd-skill',
     repository: 'github:kurone-kito/idd-skill',
-    nodeEngines: '^22.23.2 || ^24.2.0 || >=26.0.0',
+    nodeEngines: '^22.23.4 || ^24.2.0 || >=26.0.0',
     version: 'unknown',
   });
 
@@ -837,7 +837,7 @@ test('source package metadata falls back when vendored into another repository',
   assert.deepEqual(resolveSourcePackageMetadata(missingRoot), {
     name: '@kurone-kito/idd-skill',
     repository: 'github:kurone-kito/idd-skill',
-    nodeEngines: '^22.23.2 || ^24.2.0 || >=26.0.0',
+    nodeEngines: '^22.23.4 || ^24.2.0 || >=26.0.0',
     version: 'unknown',
   });
 });
@@ -855,7 +855,7 @@ test('source package metadata accepts repository objects with url', () => {
         url: 'https://github.com/kurone-kito/idd-skill.git',
       },
       engines: {
-        node: '^22.23.2 || ^24.2.0 || >=26.0.0',
+        node: '^22.23.4 || ^24.2.0 || >=26.0.0',
       },
       version: '9.9.9-test',
     }),
@@ -864,7 +864,7 @@ test('source package metadata accepts repository objects with url', () => {
   assert.deepEqual(resolveSourcePackageMetadata(sourceRoot), {
     name: '@kurone-kito/idd-skill',
     repository: 'https://github.com/kurone-kito/idd-skill.git',
-    nodeEngines: '^22.23.2 || ^24.2.0 || >=26.0.0',
+    nodeEngines: '^22.23.4 || ^24.2.0 || >=26.0.0',
     version: '9.9.9-test',
   });
 });
@@ -886,7 +886,7 @@ test('source package metadata falls back on a non-string version field', () => {
   assert.deepEqual(resolveSourcePackageMetadata(nonStringVersionRoot), {
     name: '@kurone-kito/idd-skill',
     repository: 'github:kurone-kito/idd-skill',
-    nodeEngines: '^22.23.2 || ^24.2.0 || >=26.0.0',
+    nodeEngines: '^22.23.4 || ^24.2.0 || >=26.0.0',
     version: 'unknown',
   });
 

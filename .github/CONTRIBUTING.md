@@ -31,7 +31,7 @@ before commit. Template adopters do not need pnpm — use your project's
 existing tooling instead (see
 [Tooling boundary](../docs/customization.md#tooling-boundary)).
 
-Requires Node.js `^22.23.2 || ^24.2.0 || >=26.0.0` (this repository's `engines`
+Requires Node.js `^22.23.4 || ^24.2.0 || >=26.0.0` (this repository's `engines`
 floor in `package.json`).
 
 ```sh

@@ -2504,7 +2504,7 @@ full entry under the same heading.
 
 The `ephemeral-npx` profile resolved every helper through
 `npx --yes --package <spec> idd-*`. On 2026-10-08, on WSL2 (Linux
-6.18.40.1-microsoft-standard-WSL2) with Node 22.23.2, npm 10.9.8, pnpm
+6.18.40.1-microsoft-standard-WSL2) with Node 22.23.4, npm 10.9.8, pnpm
 12.9.1 and bun 1.4.2 installed from the bun npm package, `idd-helper-bundle-manifest
 --help` ran against the default mutable spec
 `https://codeload.github.com/kurone-kito/idd-skill/tar.gz/refs/heads/main`

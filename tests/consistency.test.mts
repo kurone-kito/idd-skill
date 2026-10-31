@@ -1626,18 +1626,18 @@ test('collectEnginesRangeMirrorViolations: fails closed on an unrecognized range
 });
 
 test('collectEnginesRangeMirrorViolations: parses a three-clause range and requires all three components', () => {
-  const threeClause = '^22.23.2 || ^24.2.0 || >=26.0.0';
+  const threeClause = '^22.23.4 || ^24.2.0 || >=26.0.0';
   const passing = collectEnginesRangeMirrorViolations(
     threeClause,
     [{ file: 'prose.md', mode: 'components' }],
-    () => 'Requires 22.23.2, 24.2.0, or 26.0.0 or newer',
+    () => 'Requires 22.23.4, 24.2.0, or 26.0.0 or newer',
   );
   assert.deepEqual(passing, []);
 
   const missingMiddle = collectEnginesRangeMirrorViolations(
     threeClause,
     [{ file: 'prose.md', mode: 'components' }],
-    () => 'Requires 22.23.2 or 26.0.0 or newer',
+    () => 'Requires 22.23.4 or 26.0.0 or newer',
   );
   assert.deepEqual(missingMiddle, [
     'engines-range-mirrors: prose.md does not mention all engines.node clause versions "24.2.0"',
@@ -1651,29 +1651,29 @@ test('collectEnginesRangeMirrorViolations: parses a three-clause range and requi
     () => '22.20.0\n',
   );
   assert.deepEqual(lowBoundViolations, [
-    'engines-range-mirrors: .nvmrc pins "22.20.0", expected the engines.node low bound "22.23.2"',
+    'engines-range-mirrors: .nvmrc pins "22.20.0", expected the engines.node low bound "22.23.4"',
   ]);
 });
 
 test('collectEnginesRangeMirrorViolations: fails closed when a >= clause is not last', () => {
   const violations = collectEnginesRangeMirrorViolations(
-    '^22.23.2 || >=24.2.0 || ^26.0.0',
+    '^22.23.4 || >=24.2.0 || ^26.0.0',
     [],
     () => '',
   );
   assert.deepEqual(violations, [
-    'engines-range-mirrors: engines.node "^22.23.2 || >=24.2.0 || ^26.0.0" does not match the expected "^<v1> (|| ^<vN>)* || >=<high>" shape; cannot verify mirrors',
+    'engines-range-mirrors: engines.node "^22.23.4 || >=24.2.0 || ^26.0.0" does not match the expected "^<v1> (|| ^<vN>)* || >=<high>" shape; cannot verify mirrors',
   ]);
 });
 
 test('collectEnginesRangeMirrorViolations: fails closed on content after the trailing >= clause', () => {
   const violations = collectEnginesRangeMirrorViolations(
-    '^22.23.2 || >=24.2.0 || extra',
+    '^22.23.4 || >=24.2.0 || extra',
     [],
     () => '',
   );
   assert.deepEqual(violations, [
-    'engines-range-mirrors: engines.node "^22.23.2 || >=24.2.0 || extra" does not match the expected "^<v1> (|| ^<vN>)* || >=<high>" shape; cannot verify mirrors',
+    'engines-range-mirrors: engines.node "^22.23.4 || >=24.2.0 || extra" does not match the expected "^<v1> (|| ^<vN>)* || >=<high>" shape; cannot verify mirrors',
   ]);
 });
 

@@ -1170,7 +1170,7 @@ const NODE_FLOOR_ASSERTION_LINES = [
   'if (!ok) {',
   '  console.error(',
   '    "Node " + process.version + " does not satisfy this " +',
-  '    "repository\'s engines.node range (^22.23.2 || ^24.2.0 || >=26.0.0).",',
+  '    "repository\'s engines.node range (^22.23.4 || ^24.2.0 || >=26.0.0).",',
   '  );',
   '  process.exit(1);',
   '}',
