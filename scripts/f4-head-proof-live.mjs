@@ -196,6 +196,7 @@ export function classifyClaimAssertResult(exited, stdout, claimId, agentId) {
     const evidence = routing.evidence;
     if (
       evidence === undefined ||
+      evidence === null ||
       !Object.hasOwn(evidence, 'forced_handoff') ||
       (evidence.linked_pr_lookup !== 'ok' &&
         evidence.linked_pr_lookup !== 'failed')

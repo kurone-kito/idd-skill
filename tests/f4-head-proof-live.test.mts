@@ -211,6 +211,17 @@ test('classifyClaimAssertResult: output that is not a routing verdict is unreada
   }
 });
 
+test('classifyClaimAssertResult: null claim-lineage evidence is unreadable', () => {
+  assert.deepEqual(
+    classifyClaimAssertResult(0, routing({ evidence: null }), CLAIM, AGENT),
+    {
+      status: 'unreadable',
+      detail:
+        'resume-claim-routing --assert omitted the claim-lineage evidence',
+    },
+  );
+});
+
 test('classifyClaimAssertResult: a non-zero exit with a state or action outside the routing vocabulary is unreadable', () => {
   // Only the verdicts resume-claim-routing can print prove that the claim is
   // not this session's; a value it never prints does not, and holds instead.
