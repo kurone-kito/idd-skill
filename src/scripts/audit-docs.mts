@@ -224,10 +224,6 @@ const ENGINES_RANGE_MIRRORS: EnginesRangeMirrorSpec[] = [
     file: '.github/workflows/idd-advisory-convergence-comment.yml',
     mode: 'full-range',
   },
-  {
-    file: '.github/workflows/pnpm-boundary-node22-floor.yml',
-    mode: 'low-bound-contains',
-  },
   { file: '.github/CONTRIBUTING.md', mode: 'full-range' },
   { file: '.github/CONTRIBUTING.ja.md', mode: 'full-range' },
   { file: '.github/CONTRIBUTING.zh.md', mode: 'full-range' },
