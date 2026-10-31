@@ -21,24 +21,125 @@ import {
 // them are thin; what they conclude from their output is tested here.
 
 const CLAIM = '95ad0071-ebaa-4155-91ac-ceeae7897bf8';
+const AGENT = 'codex-f4-head-proof';
 const BRANCH = 'issue/4368-feat-post-idd-marker-add-f4-head-proof';
 const TIP = 'a'.repeat(40);
+const HANDOFF_TIMESTAMP = '2026-10-16T03:00:00Z';
+const APPLIED_HANDOFF = {
+  old_agent_id: 'agent-old',
+  old_claim_id: 'claim-old',
+  new_agent_id: AGENT,
+  new_claim_id: CLAIM,
+  branch: BRANCH,
+  linked_pr: '4390',
+  context_scope: 'issue-plus-pr',
+  forced_by: 'kurone-kito',
+  timestamp: HANDOFF_TIMESTAMP,
+};
 
 function routing(overrides: Record<string, unknown> = {}): string {
   return JSON.stringify({
     state: 'already_owned',
     action: 'keep',
     reason: 'claim-id-match',
-    active_claim: { claim_id: CLAIM, branch: BRANCH },
+    active_claim: { agent_id: AGENT, claim_id: CLAIM, branch: BRANCH },
+    evidence: { forced_handoff: null, linked_pr_lookup: 'ok' },
     ...overrides,
   });
 }
 
 test('classifyClaimAssertResult: exit 0 with an owned keep verdict for this claim is owned', () => {
-  assert.deepEqual(classifyClaimAssertResult(0, routing(), CLAIM), {
+  assert.deepEqual(classifyClaimAssertResult(0, routing(), CLAIM, AGENT), {
     status: 'owned',
     branch: BRANCH,
+    forcedHandoff: null,
   });
+});
+
+test('classifyClaimAssertResult carries only the accepted handoff tied to the active successor', () => {
+  assert.deepEqual(
+    classifyClaimAssertResult(
+      0,
+      routing({
+        evidence: {
+          forced_handoff: APPLIED_HANDOFF,
+          linked_pr_lookup: 'ok',
+        },
+      }),
+      CLAIM,
+      AGENT,
+    ),
+    {
+      status: 'owned',
+      branch: BRANCH,
+      forcedHandoff: {
+        oldAgentId: 'agent-old',
+        oldClaimId: 'claim-old',
+        newAgentId: AGENT,
+        newClaimId: CLAIM,
+        branch: BRANCH,
+        linkedPr: '4390',
+        contextScope: 'issue-plus-pr',
+        forcedBy: 'kurone-kito',
+        timestamp: HANDOFF_TIMESTAMP,
+      },
+    },
+  );
+});
+
+test('classifyClaimAssertResult refuses mismatched or malformed handoff evidence', () => {
+  const invalid = [
+    { ...APPLIED_HANDOFF, new_agent_id: 'another-agent' },
+    { ...APPLIED_HANDOFF, new_claim_id: 'another-claim' },
+    { ...APPLIED_HANDOFF, old_claim_id: CLAIM },
+    { ...APPLIED_HANDOFF, branch: 'issue/other-branch' },
+    { ...APPLIED_HANDOFF, context_scope: 'issue-plus-pr', linked_pr: null },
+    { ...APPLIED_HANDOFF, context_scope: 'issue-only', linked_pr: '4390' },
+    { ...APPLIED_HANDOFF, timestamp: 42 },
+  ];
+  for (const forcedHandoff of invalid) {
+    assert.equal(
+      classifyClaimAssertResult(
+        0,
+        routing({
+          evidence: { forced_handoff: forcedHandoff, linked_pr_lookup: 'ok' },
+        }),
+        CLAIM,
+        AGENT,
+      ).status,
+      'unreadable',
+      JSON.stringify(forcedHandoff),
+    );
+  }
+  assert.equal(
+    classifyClaimAssertResult(
+      0,
+      routing({
+        active_claim: {
+          agent_id: 'another-agent',
+          claim_id: CLAIM,
+          branch: BRANCH,
+        },
+      }),
+      CLAIM,
+      AGENT,
+    ).status,
+    'unreadable',
+  );
+  assert.equal(
+    classifyClaimAssertResult(
+      0,
+      routing({
+        evidence: {
+          forced_handoff: APPLIED_HANDOFF,
+          linked_pr_lookup: 'failed',
+        },
+      }),
+      CLAIM,
+      AGENT,
+    ).status,
+    'unreadable',
+  );
 });
 
 test('classifyClaimAssertResult: a non-zero exit is not-owned for every routing state and action', () => {
@@ -52,7 +153,12 @@ test('classifyClaimAssertResult: a non-zero exit is not-owned for every routing 
     'local_worktree_occupied',
   ]) {
     assert.deepEqual(
-      classifyClaimAssertResult(1, routing({ state, action: 'stop' }), CLAIM),
+      classifyClaimAssertResult(
+        1,
+        routing({ state, action: 'stop' }),
+        CLAIM,
+        AGENT,
+      ),
       { status: 'not-owned' },
       state,
     );
@@ -63,6 +169,7 @@ test('classifyClaimAssertResult: a non-zero exit is not-owned for every routing 
         1,
         routing({ state: 'disputed', action }),
         CLAIM,
+        AGENT,
       ),
       { status: 'not-owned' },
       action,
@@ -80,7 +187,7 @@ test('classifyClaimAssertResult: a non-zero exit with a routing verdict is not-o
     }),
     routing({ state: 'disputed', action: 'stop' }),
   ]) {
-    assert.deepEqual(classifyClaimAssertResult(1, body, CLAIM), {
+    assert.deepEqual(classifyClaimAssertResult(1, body, CLAIM, AGENT), {
       status: 'not-owned',
     });
   }
@@ -97,11 +204,22 @@ test('classifyClaimAssertResult: output that is not a routing verdict is unreada
     [1, JSON.stringify({ action: 'keep' })],
   ] as const) {
     assert.equal(
-      classifyClaimAssertResult(exited, stdout, CLAIM).status,
+      classifyClaimAssertResult(exited, stdout, CLAIM, AGENT).status,
       'unreadable',
       `${exited} ${stdout}`,
     );
   }
+});
+
+test('classifyClaimAssertResult: null claim-lineage evidence is unreadable', () => {
+  assert.deepEqual(
+    classifyClaimAssertResult(0, routing({ evidence: null }), CLAIM, AGENT),
+    {
+      status: 'unreadable',
+      detail:
+        'resume-claim-routing --assert omitted the claim-lineage evidence',
+    },
+  );
 });
 
 test('classifyClaimAssertResult: a non-zero exit with a state or action outside the routing vocabulary is unreadable', () => {
@@ -114,7 +232,7 @@ test('classifyClaimAssertResult: a non-zero exit with a state or action outside 
     routing({ state: 'disputed', action: 42 }),
   ]) {
     assert.equal(
-      classifyClaimAssertResult(1, body, CLAIM).status,
+      classifyClaimAssertResult(1, body, CLAIM, AGENT).status,
       'unreadable',
       body,
     );
@@ -126,7 +244,7 @@ test('classifyClaimAssertResult: an owned keep verdict with a non-zero exit was 
   // must not read as a claim that is lost.
   for (const exited of [1, 2, 137]) {
     assert.equal(
-      classifyClaimAssertResult(exited, routing(), CLAIM).status,
+      classifyClaimAssertResult(exited, routing(), CLAIM, AGENT).status,
       'unreadable',
       String(exited),
     );
@@ -141,7 +259,7 @@ test('classifyClaimAssertResult: exit 0 that does not prove this claim is unread
     routing({ active_claim: null }),
     routing({ state: 'stale', action: 'takeover' }),
   ]) {
-    const outcome = classifyClaimAssertResult(0, body, CLAIM);
+    const outcome = classifyClaimAssertResult(0, body, CLAIM, AGENT);
     assert.equal(outcome.status, 'unreadable', body);
   }
 });
@@ -1084,9 +1202,13 @@ test('a host that GH_HOST cannot name gets advice to use the active host, or the
 });
 
 test('an owned verdict is accepted only with the claim-id-match reason, and any other reason is unreadable', () => {
-  assert.equal(classifyClaimAssertResult(0, routing(), CLAIM).status, 'owned');
   assert.equal(
-    classifyClaimAssertResult(0, routing({ reason: undefined }), CLAIM).status,
+    classifyClaimAssertResult(0, routing(), CLAIM, AGENT).status,
+    'owned',
+  );
+  assert.equal(
+    classifyClaimAssertResult(0, routing({ reason: undefined }), CLAIM, AGENT)
+      .status,
     'unreadable',
   );
   assert.equal(
@@ -1094,6 +1216,7 @@ test('an owned verdict is accepted only with the claim-id-match reason, and any 
       0,
       routing({ reason: 'claim-id-match-without-independent-owner-evidence' }),
       CLAIM,
+      AGENT,
     ).status,
     'unreadable',
   );
@@ -1102,6 +1225,7 @@ test('an owned verdict is accepted only with the claim-id-match reason, and any 
       0,
       routing({ reason: 'some-other-reason' }),
       CLAIM,
+      AGENT,
     ).status,
     'unreadable',
   );
