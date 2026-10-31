@@ -228,6 +228,12 @@ const ENGINES_RANGE_MIRRORS: EnginesRangeMirrorSpec[] = [
     file: '.github/workflows/pnpm-boundary-node22-floor.yml',
     mode: 'low-bound-contains',
   },
+  { file: '.github/CONTRIBUTING.md', mode: 'full-range' },
+  { file: '.github/CONTRIBUTING.ja.md', mode: 'full-range' },
+  { file: '.github/CONTRIBUTING.zh.md', mode: 'full-range' },
+  { file: 'docs/typescript-sources.md', mode: 'full-range' },
+  { file: 'docs/workshop/README.md', mode: 'components' },
+  { file: 'docs/stalled-session-quiet-check.md', mode: 'components' },
   { file: 'src/scripts/helper-runtime-manifest.mts', mode: 'full-range' },
   // #3240: the distributed template's own "Assert Node.js floor" steps
   // mirror this repository's own (source-repo-only) inline floor-assert
