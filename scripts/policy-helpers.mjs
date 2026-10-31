@@ -137,6 +137,16 @@ export function inspectStandingApprovals(config) {
       reason: 'standingApprovals must be an object',
     }));
   }
+  const unknownRootKey = Object.keys(root).find(
+    (key) => !STANDING_APPROVAL_CLASSES.includes(key),
+  );
+  if (unknownRootKey !== undefined) {
+    return STANDING_APPROVAL_CLASSES.map((cls) => ({
+      class: cls,
+      status: 'invalid',
+      reason: `standingApprovals has an unknown key ${unknownRootKey}`,
+    }));
+  }
   return STANDING_APPROVAL_CLASSES.map((cls) =>
     inspectStandingApprovalClass(cls, root[cls]),
   );

@@ -3260,3 +3260,17 @@ test('standingApprovals: a malformed class and an unknown key fail closed (#4886
   );
   assert.equal(inspectStandingApprovals(unknownKey)[2].status, 'invalid');
 });
+
+test('standingApprovals: an unknown root key disables every class (#4886)', () => {
+  const config = { standingApprovals: { otherClass: { enabled: true } } };
+  const normalized = normalizePolicyConfig(config);
+  assert.equal(normalized.standingApprovals.budgetRaise.enabled, false);
+  assert.equal(normalized.standingApprovals.split.enabled, false);
+  assert.equal(normalized.standingApprovals.release.enabled, false);
+  const diagnostics = inspectStandingApprovals(config);
+  assert.deepEqual(
+    diagnostics.map((d) => d.status),
+    ['invalid', 'invalid', 'invalid'],
+  );
+  assert.match(diagnostics[0].reason ?? '', /unknown key otherClass/);
+});

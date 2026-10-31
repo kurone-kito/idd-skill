@@ -4919,3 +4919,19 @@ test('user-global partial critiqueLoop refers to deferAllAfterRounds from the po
     'policy.schema.json#/properties/critiqueLoop/properties/deferAllAfterRounds',
   );
 });
+
+test('policy schema rejects requireChecklistPass false in the release class (#4886)', () => {
+  const policy = loadJson('schemas/policy.schema.json') as {
+    properties: { standingApprovals: { properties: { release: unknown } } };
+  };
+  const release = policy.properties.standingApprovals.properties.release;
+  assert.deepEqual(
+    validate({ enabled: true, requireChecklistPass: true }, release),
+    [],
+  );
+  assert.ok(
+    validate({ enabled: true, requireChecklistPass: false }, release).length >
+      0,
+    'the schema must reject requireChecklistPass false',
+  );
+});
