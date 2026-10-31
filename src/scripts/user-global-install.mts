@@ -38,9 +38,11 @@
 // - a symbolic link above a declared root that root owns is trusted;
 // - a window remains between a containment check and the act that follows it.
 
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import type { Stats } from 'node:fs';
 import * as nodeFs from 'node:fs';
+import { hostname, tmpdir } from 'node:os';
 import {
   basename,
   dirname,
@@ -53,6 +55,11 @@ import {
 } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveBundleRoot } from './bundle-root.mts';
+import {
+  assertHelperEntryClosureResolvable,
+  readHelperExtraRuntimeFiles,
+  resolveHelperEntryClosure,
+} from './helper-runtime-manifest.mts';
 import { resolveInstalledPayloadRoot } from './idd-activation.mts';
 import { isQualifiedConfigRoot } from './idd-config.mts';
 import {
@@ -69,12 +76,14 @@ import {
   assertRealChain,
   type ContainmentResult,
   checkContainment,
+  createDirectory,
   type FsOps,
   removeSingleEntry,
   replaceFileByRename,
   repointCurrent,
   withCeilings,
   writeNewFile,
+  writeNewFileAtomically,
 } from './user-global-paths.mts';
 import {
   findStaleReceiptTemps,
@@ -82,6 +91,10 @@ import {
   readReceipt,
   writeReceipt,
 } from './user-global-receipt.mts';
+import {
+  checkSchemaKeywords,
+  validate as validateSchema,
+} from './validate-schemas.mts';
 
 /** Options shared by every entry point. Tests inject the fields they need. */
 export interface UserGlobalOptions {
@@ -109,6 +122,34 @@ export interface UserGlobalInstallResult extends UserGlobalResult {
   version: string;
 }
 
+/** Provenance attached to one immutable source tree. */
+export interface DistributionProvenance {
+  kind: 'checkout' | 'archive';
+  commit: string;
+}
+
+/** The command used to identify the helper component in a prepared set. */
+export interface DistributionInvocation {
+  command: string;
+  argv: string[];
+}
+
+/** Inputs to the explicit user-global distribution preparation operation. */
+export interface PrepareDistributionOptions extends UserGlobalOptions {
+  sourceRoot: string;
+  sourceCommit: string;
+  provenance: DistributionProvenance;
+  invocation: DistributionInvocation;
+}
+
+/** The verified immutable set that was created or safely reused. */
+export interface PreparedDistributionResult {
+  sourceCommit: string;
+  preparedPath: string;
+  fileCount: number;
+  reused: boolean;
+}
+
 interface Root {
   name: string;
   path: string;
@@ -117,6 +158,7 @@ interface Root {
 interface Context {
   fs: FsOps;
   dataRoot: string;
+  preparedRoot: string;
   currentPath: string;
   roots: Root[];
   /** The containment base each harness directory is walked from. */
@@ -134,6 +176,9 @@ interface Target {
  * it private. Keep it in step with `user-global-paths.mts`.
  */
 const VERSION_PATTERN = /^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$/;
+const SOURCE_COMMIT_PATTERN = /^[0-9a-f]{40}$/;
+const PREPARED_MANIFEST_NAME = 'manifest.json';
+const CHECKOUT_GIT_MAX_BUFFER_BYTES = 1024 * 1024 * 1024;
 
 const CURRENT = 'current';
 const PAYLOAD_BLOCK_ID = 'idd-template-core-files';
@@ -305,6 +350,7 @@ function resolveContext(options: UserGlobalOptions): Context {
   return {
     fs: withCeilings(fs, ceilings),
     dataRoot,
+    preparedRoot: join(dataRoot, 'prepared'),
     currentPath: join(dataRoot, CURRENT),
     entryBases: {
       claude: home,
@@ -315,6 +361,7 @@ function resolveContext(options: UserGlobalOptions): Context {
     },
     roots: [
       { name: 'data', path: dataRoot },
+      { name: 'prepared', path: join(dataRoot, 'prepared') },
       { name: 'claude', path: join(home, '.claude') },
       { name: 'claude-skills', path: join(home, '.claude', 'skills') },
       { name: 'agents-skills', path: join(home, '.agents', 'skills') },
@@ -344,6 +391,14 @@ function segmentsUnder(base: string, path: string): string[] | null {
  * other path is refused rather than trusted as the installer's.
  */
 function ownedShape(ctx: Context, entry: ReceiptEntry): boolean {
+  const data = segmentsUnder(ctx.dataRoot, entry.path);
+  if (data !== null && data[0] === 'prepared') {
+    if (entry.kind !== 'directory' && entry.kind !== 'file') return false;
+    if (data.length === 1) return entry.kind === 'directory';
+    if (!SOURCE_COMMIT_PATTERN.test(data[1])) return false;
+    if (data.length === 2) return entry.kind === 'directory';
+    return true;
+  }
   if (entry.kind === 'link') return true;
   if (entry.kind === 'managed-block' || entry.kind === 'json-instruction') {
     return entryFileOwned(ctx, entry);
@@ -351,7 +406,6 @@ function ownedShape(ctx: Context, entry: ReceiptEntry): boolean {
   if (entryFileOwned(ctx, entry)) return true;
   const isDir = entry.kind === 'directory';
   if (isDir && entry.path === ctx.dataRoot) return true;
-  const data = segmentsUnder(ctx.dataRoot, entry.path);
   if (
     data !== null &&
     VERSION_PATTERN.test(data[0]) &&
@@ -616,6 +670,1409 @@ function readSource(path: string, fs: FsOps): { text: string; sha256: string } {
     );
   }
   return { text, sha256: sha256Hex(bytes) };
+}
+
+interface PreparedSourceFile {
+  sourcePath: string;
+  storedPath: string;
+  componentPath: string;
+  bytes: Buffer;
+  sha256: string;
+  executable: boolean;
+}
+
+function compareUtf8(left: string, right: string): number {
+  return Buffer.compare(Buffer.from(left, 'utf8'), Buffer.from(right, 'utf8'));
+}
+
+function isSafeRelativeFilePath(path: string): boolean {
+  return (
+    path.length > 0 &&
+    !isAbsolute(path) &&
+    !path.includes('\\') &&
+    !/[\r\n\u2028\u2029]/.test(path) &&
+    path
+      .split('/')
+      .every((part) => part !== '' && part !== '.' && part !== '..')
+  );
+}
+
+/** Verify a supplied source path is a chain of real directories and a file. */
+function assertSourceFilePath(
+  sourceRoot: string,
+  path: string,
+  fs: FsOps,
+): string {
+  if (!isSafeRelativeFilePath(path)) {
+    throw new Error(`source path ${path} is not a safe relative file path`);
+  }
+  const rootStat = fs.lstatSync(sourceRoot);
+  if (!rootStat.isDirectory()) {
+    throw new Error(`${sourceRoot} is not a real source directory`);
+  }
+  const parts = path.split('/');
+  let current = sourceRoot;
+  for (let index = 0; index < parts.length; index++) {
+    current = join(current, parts[index]);
+    const stat = fs.lstatSync(current);
+    if (stat.isSymbolicLink()) {
+      throw new Error(`${current} is a symbolic link in the source tree`);
+    }
+    if (index < parts.length - 1 && !stat.isDirectory()) {
+      throw new Error(`${current} is not a directory in the source tree`);
+    }
+    if (index === parts.length - 1 && !stat.isFile()) {
+      throw new Error(`${current} is not a regular file in the source tree`);
+    }
+  }
+  return current;
+}
+
+function readSourceBytes(sourceRoot: string, path: string, fs: FsOps): Buffer {
+  return readNoFollowBytes(assertSourceFilePath(sourceRoot, path, fs), fs);
+}
+
+function parseJsonBytes(bytes: Buffer, label: string): unknown {
+  const text = bytes.toString('utf8');
+  if (!Buffer.from(text, 'utf8').equals(bytes)) {
+    throw new Error(`${label} is not UTF-8 JSON`);
+  }
+  try {
+    return JSON.parse(text) as unknown;
+  } catch (error) {
+    throw new Error(`${label} is invalid JSON (${describe(error)})`);
+  }
+}
+
+function repositoryWebUrl(packageJson: unknown): string {
+  if (
+    typeof packageJson !== 'object' ||
+    packageJson === null ||
+    !('repository' in packageJson)
+  ) {
+    throw new Error('package.json has no repository URL');
+  }
+  const repository = packageJson.repository;
+  const value =
+    typeof repository === 'string'
+      ? repository
+      : typeof repository === 'object' &&
+          repository !== null &&
+          'url' in repository &&
+          typeof repository.url === 'string'
+        ? repository.url
+        : '';
+  let url: URL;
+  if (value.startsWith('github:')) {
+    url = new URL(`https://github.com/${value.slice('github:'.length)}`);
+  } else {
+    const normalized = value.startsWith('git+') ? value.slice(4) : value;
+    try {
+      url = new URL(normalized);
+    } catch {
+      throw new Error(
+        `package.json repository ${value} is not an HTTPS forge URL`,
+      );
+    }
+  }
+  const segments = url.pathname.split('/').filter(Boolean);
+  if (
+    url.protocol !== 'https:' ||
+    url.username !== '' ||
+    url.password !== '' ||
+    url.search !== '' ||
+    url.hash !== '' ||
+    segments.length !== 2
+  ) {
+    throw new Error(
+      `package.json repository ${value} is not an HTTPS forge URL`,
+    );
+  }
+  const repo = segments[1].replace(/\.git$/, '');
+  if (
+    !/^[A-Za-z0-9_.-]+$/.test(segments[0]) ||
+    !/^[A-Za-z0-9_.-]+$/.test(repo)
+  ) {
+    throw new Error(
+      `package.json repository ${value} has invalid owner/repository segments`,
+    );
+  }
+  return `${url.origin}/${segments[0]}/${repo}`;
+}
+
+function componentListing(files: PreparedSourceFile[]): {
+  files: { path: string; sha256: string }[];
+  digest: string;
+} {
+  const sorted = [...files].sort((left, right) =>
+    compareUtf8(left.componentPath, right.componentPath),
+  );
+  const seen = new Set<string>();
+  for (const file of sorted) {
+    if (seen.has(file.componentPath)) {
+      throw new Error(`component path ${file.componentPath} is duplicated`);
+    }
+    seen.add(file.componentPath);
+  }
+  const listing = sorted
+    .map((file) => `${file.sha256} ${file.componentPath}\n`)
+    .join('');
+  return {
+    files: sorted.map(({ componentPath, sha256 }) => ({
+      path: componentPath,
+      sha256,
+    })),
+    digest: `sha256:${sha256Hex(listing)}`,
+  };
+}
+
+function readHelperExtraRuntimeFilesFromBytes(
+  sourceRoot: string,
+  sourceBytes: Buffer,
+): Map<string, string[]> {
+  if (!Buffer.from(sourceBytes.toString('utf8'), 'utf8').equals(sourceBytes)) {
+    throw new Error('helper runtime manifest is not UTF-8 text');
+  }
+  const availablePaths = readHelperExtraRuntimeFiles(sourceRoot);
+  const root = nodeFs.mkdtempSync(join(tmpdir(), 'idd-helper-runtime-'));
+  const path = join(root, 'src/scripts/helper-runtime-manifest.mts');
+  try {
+    nodeFs.mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    nodeFs.writeFileSync(path, sourceBytes, { flag: 'wx', mode: 0o600 });
+    const referencedPaths = new Set([
+      ...availablePaths.keys(),
+      ...[...availablePaths.values()].flat(),
+    ]);
+    for (const referencedPath of referencedPaths) {
+      if (referencedPath === 'src/scripts/helper-runtime-manifest.mts') {
+        continue;
+      }
+      if (!isSafeRelativeFilePath(referencedPath)) {
+        throw new Error(
+          `helper runtime manifest contains an unsafe path ${referencedPath}`,
+        );
+      }
+      const placeholder = join(root, referencedPath);
+      nodeFs.mkdirSync(dirname(placeholder), { recursive: true, mode: 0o700 });
+      nodeFs.writeFileSync(placeholder, Buffer.alloc(0), {
+        flag: 'wx',
+        mode: 0o600,
+      });
+    }
+    return readHelperExtraRuntimeFiles(root);
+  } finally {
+    nodeFs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+interface CheckoutTreeEntry {
+  mode: string;
+  type: string;
+  oid: string;
+}
+
+function verifyCheckoutFiles(
+  sourceRoot: string,
+  sourceCommit: string,
+  files: ReadonlyMap<string, Buffer>,
+  skillComponents: ReadonlyMap<string, PreparedSourceFile[]>,
+): Map<string, CheckoutTreeEntry> {
+  try {
+    execFileSync(
+      'git',
+      ['-C', sourceRoot, 'cat-file', '-e', `${sourceCommit}^{commit}`],
+      {
+        stdio: 'ignore',
+      },
+    );
+  } catch (error) {
+    throw new Error(
+      `checkout source commit ${sourceCommit} is unavailable (${describe(error)})`,
+    );
+  }
+  const treeBytes = execFileSync(
+    'git',
+    ['-C', sourceRoot, 'ls-tree', '-r', '-z', '--full-tree', sourceCommit],
+    {
+      encoding: 'buffer',
+      maxBuffer: CHECKOUT_GIT_MAX_BUFFER_BYTES,
+    },
+  ) as Buffer;
+  const tree = new Map<string, CheckoutTreeEntry>();
+  for (const record of treeBytes.toString('utf8').split('\0')) {
+    if (record.length === 0) continue;
+    const tab = record.indexOf('\t');
+    if (tab < 0) throw new Error('git ls-tree returned a malformed entry');
+    const [mode, type, oid] = record.slice(0, tab).split(' ');
+    const path = record.slice(tab + 1);
+    if (mode === undefined || type === undefined || oid === undefined) {
+      throw new Error('git ls-tree returned a malformed entry');
+    }
+    tree.set(path, { mode, type, oid });
+  }
+
+  for (const [skill, componentFiles] of skillComponents) {
+    const root = `skills/${skill}/`;
+    const committedPaths = [...tree.entries()]
+      .filter(([path]) => path.startsWith(root))
+      .map(([path, entry]) => {
+        if (
+          entry.type !== 'blob' ||
+          !['100644', '100755'].includes(entry.mode)
+        ) {
+          throw new Error(`${path} is not a regular committed skill file`);
+        }
+        return path;
+      })
+      .sort(compareUtf8);
+    const checkoutPaths = componentFiles
+      .map((file) => file.sourcePath)
+      .sort(compareUtf8);
+    if (
+      committedPaths.length !== checkoutPaths.length ||
+      committedPaths.some((path, index) => path !== checkoutPaths[index])
+    ) {
+      throw new Error(
+        `${root.slice(0, -1)} file inventory differs from source commit ${sourceCommit}`,
+      );
+    }
+  }
+
+  for (const [path, workingBytes] of files) {
+    const entry = tree.get(path);
+    if (entry === undefined || entry.type !== 'blob') {
+      throw new Error(
+        `${path} is not present as a file in source commit ${sourceCommit}`,
+      );
+    }
+    let committedBytes: Buffer;
+    try {
+      committedBytes = execFileSync(
+        'git',
+        ['-C', sourceRoot, 'cat-file', 'blob', entry.oid],
+        {
+          encoding: 'buffer',
+          maxBuffer: CHECKOUT_GIT_MAX_BUFFER_BYTES,
+        },
+      ) as Buffer;
+    } catch (error) {
+      throw new Error(
+        `${path} could not be read from source commit ${sourceCommit} (${describe(error)})`,
+      );
+    }
+    if (!workingBytes.equals(committedBytes)) {
+      throw new Error(`${path} differs from source commit ${sourceCommit}`);
+    }
+    if (!['100644', '100755'].includes(entry.mode)) {
+      throw new Error(
+        `${path} is not a regular file in source commit ${sourceCommit}`,
+      );
+    }
+  }
+  return tree;
+}
+
+interface PreparedSetBuild {
+  sourceCommit: string;
+  setRoot: string;
+  files: PreparedSourceFile[];
+  manifestBytes: Buffer;
+  manifestSha256: string;
+}
+
+function assertSourceDirectoryPath(
+  sourceRoot: string,
+  path: string,
+  fs: FsOps,
+): string {
+  if (!isSafeRelativeFilePath(path)) {
+    throw new Error(
+      `source path ${path} is not a safe relative directory path`,
+    );
+  }
+  const rootStat = fs.lstatSync(sourceRoot);
+  if (!rootStat.isDirectory()) {
+    throw new Error(`${sourceRoot} is not a real source directory`);
+  }
+  let current = sourceRoot;
+  for (const part of path.split('/')) {
+    current = join(current, part);
+    const stat = fs.lstatSync(current);
+    if (stat.isSymbolicLink() || !stat.isDirectory()) {
+      throw new Error(`${current} is not a real source directory`);
+    }
+  }
+  return current;
+}
+
+function buildPreparedSet(
+  ctx: Context,
+  options: PrepareDistributionOptions,
+): PreparedSetBuild {
+  const sourceCommit = options.sourceCommit;
+  if (!SOURCE_COMMIT_PATTERN.test(sourceCommit)) {
+    throw new Error(
+      'sourceCommit must be a full lowercase 40-character commit ID',
+    );
+  }
+  if (
+    !['checkout', 'archive'].includes(options.provenance.kind) ||
+    options.provenance.commit !== sourceCommit
+  ) {
+    throw new Error(
+      'provenance must name the same sourceCommit and use checkout or archive',
+    );
+  }
+  if (
+    !isSafeRelativeFilePath(options.invocation.command) ||
+    !Array.isArray(options.invocation.argv) ||
+    !options.invocation.argv.every((value) => typeof value === 'string')
+  ) {
+    throw new Error(
+      'invocation must name a safe relative helper path and string arguments',
+    );
+  }
+
+  const sourceRoot = resolve(options.sourceRoot);
+  const fs = ctx.fs;
+  const packageBytes = readSourceBytes(sourceRoot, 'package.json', fs);
+  const packageJson = parseJsonBytes(packageBytes, 'package.json');
+  const repositoryUrl = repositoryWebUrl(packageJson);
+  const syncBytes = readSourceBytes(sourceRoot, 'audit/sync-manifest.json', fs);
+  const syncManifest = parseJsonBytes(syncBytes, 'audit/sync-manifest.json');
+  if (
+    typeof syncManifest !== 'object' ||
+    syncManifest === null ||
+    !('generatedBlocks' in syncManifest)
+  ) {
+    throw new Error('the sync manifest has no generatedBlocks list');
+  }
+  const blocks = syncManifest.generatedBlocks;
+  if (!Array.isArray(blocks))
+    throw new Error('the sync manifest generatedBlocks is not an array');
+  const block = blocks.find(
+    (candidate) =>
+      typeof candidate === 'object' &&
+      candidate !== null &&
+      'id' in candidate &&
+      candidate.id === PAYLOAD_BLOCK_ID,
+  );
+  if (
+    typeof block !== 'object' ||
+    block === null ||
+    !('stripPrefix' in block) ||
+    block.stripPrefix !== 'idd-template/' ||
+    !('paths' in block) ||
+    !Array.isArray(block.paths) ||
+    !block.paths.every((path: unknown) => typeof path === 'string')
+  ) {
+    throw new Error(`the sync manifest has no valid ${PAYLOAD_BLOCK_ID} block`);
+  }
+
+  const makeFile = (
+    sourcePath: string,
+    storedPath: string,
+    componentPath: string,
+  ): PreparedSourceFile => {
+    if (
+      !isSafeRelativeFilePath(sourcePath) ||
+      !isSafeRelativeFilePath(storedPath) ||
+      !isSafeRelativeFilePath(componentPath)
+    ) {
+      throw new Error(
+        `distribution path ${sourcePath} is not a safe relative path`,
+      );
+    }
+    const sourcePathOnDisk = assertSourceFilePath(sourceRoot, sourcePath, fs);
+    const sourceStat = fs.lstatSync(sourcePathOnDisk);
+    const bytes = readNoFollowBytes(sourcePathOnDisk, fs);
+    return {
+      sourcePath,
+      storedPath,
+      componentPath,
+      bytes,
+      sha256: sha256Hex(bytes),
+      executable: (sourceStat.mode & 0o111) !== 0,
+    };
+  };
+
+  const instructions = [...block.paths, ...PAYLOAD_EXTRA_FILES].map((path) => {
+    if (!path.startsWith('idd-template/')) {
+      throw new Error(`payload path ${path} lacks the idd-template/ prefix`);
+    }
+    const componentPath = path.slice('idd-template/'.length);
+    return makeFile(path, `idd-template/${componentPath}`, componentPath);
+  });
+  const skillComponents = new Map<string, PreparedSourceFile[]>();
+  for (const skill of SKILL_NAMES) {
+    const skillRoot = `skills/${skill}`;
+    const skillDir = assertSourceDirectoryPath(sourceRoot, skillRoot, fs);
+    const paths = listSourceFiles(skillDir, fs).sort(compareUtf8);
+    if (!paths.includes('SKILL.md')) {
+      throw new Error(`${skillRoot} has no SKILL.md`);
+    }
+    skillComponents.set(
+      skill,
+      paths.map((path) =>
+        makeFile(`${skillRoot}/${path}`, `${skillRoot}/${path}`, path),
+      ),
+    );
+  }
+  const helperRuntimeManifestBytes = readSourceBytes(
+    sourceRoot,
+    'src/scripts/helper-runtime-manifest.mts',
+    fs,
+  );
+  assertSourceFilePath(sourceRoot, options.invocation.command, fs);
+  const extraRuntimeFiles = readHelperExtraRuntimeFilesFromBytes(
+    sourceRoot,
+    helperRuntimeManifestBytes,
+  );
+  assertHelperEntryClosureResolvable(options.invocation.command, {
+    packageRoot: sourceRoot,
+    extraRuntimeFiles,
+  });
+  const helperPaths = [
+    ...new Set(
+      resolveHelperEntryClosure(options.invocation.command, {
+        packageRoot: sourceRoot,
+        extraRuntimeFiles,
+      }),
+    ),
+  ].sort(compareUtf8);
+  const helper = helperPaths.map((path) => makeFile(path, path, path));
+  if (!helperPaths.includes(options.invocation.command)) {
+    throw new Error('invocation.command is not in the helper entry closure');
+  }
+
+  const allFiles = [
+    ...instructions,
+    ...skillComponents.values(),
+    ...helper,
+  ].flat();
+  const byStoredPath = new Set<string>();
+  for (const file of allFiles) {
+    if (
+      file.storedPath === PREPARED_MANIFEST_NAME ||
+      byStoredPath.has(file.storedPath)
+    ) {
+      throw new Error(
+        `distribution path ${file.storedPath} is duplicated or reserved`,
+      );
+    }
+    byStoredPath.add(file.storedPath);
+  }
+
+  const provenance = {
+    kind: options.provenance.kind,
+    commit: sourceCommit,
+  };
+  const location = (path: string): string =>
+    `${repositoryUrl}/tree/${sourceCommit}${path ? `/${path}` : ''}`;
+  const component = (path: string, files: PreparedSourceFile[]) => ({
+    location: location(path),
+    provenance,
+    ...componentListing(files),
+  });
+  const manifest = {
+    schemaVersion: 1,
+    sourceCommit,
+    components: {
+      instructions: component('idd-template', instructions),
+      skillBundles: {
+        'issue-authoring': component(
+          'skills/issue-authoring',
+          skillComponents.get('issue-authoring') ?? [],
+        ),
+        'idd-spec-audit': component(
+          'skills/idd-spec-audit',
+          skillComponents.get('idd-spec-audit') ?? [],
+        ),
+      },
+      helper: {
+        ...component('', helper),
+        invocation: {
+          command: options.invocation.command,
+          argv: [...options.invocation.argv],
+        },
+      },
+    },
+  };
+  const schemaBytes = readSourceBytes(
+    sourceRoot,
+    'schemas/distribution-manifest.schema.json',
+    fs,
+  );
+  const schema = parseJsonBytes(
+    schemaBytes,
+    'schemas/distribution-manifest.schema.json',
+  );
+  const schemaErrors = checkSchemaKeywords(schema);
+  if (schemaErrors.length > 0) {
+    throw new Error(
+      `distribution manifest schema has unsupported keywords: ${schemaErrors.join('; ')}`,
+    );
+  }
+  const manifestErrors = validateSchema(manifest, schema);
+  if (manifestErrors.length > 0) {
+    throw new Error(
+      `generated distribution manifest is invalid: ${manifestErrors.join('; ')}`,
+    );
+  }
+
+  if (options.provenance.kind === 'checkout') {
+    const checkoutFiles = new Map<string, Buffer>([
+      ['package.json', packageBytes],
+      ['audit/sync-manifest.json', syncBytes],
+      ['schemas/distribution-manifest.schema.json', schemaBytes],
+      ['src/scripts/helper-runtime-manifest.mts', helperRuntimeManifestBytes],
+      ...allFiles.map((file) => [file.sourcePath, file.bytes] as const),
+    ]);
+    const tree = verifyCheckoutFiles(
+      sourceRoot,
+      sourceCommit,
+      checkoutFiles,
+      skillComponents,
+    );
+    for (const file of allFiles) {
+      const entry = tree.get(file.sourcePath);
+      if (entry === undefined) {
+        throw new Error(
+          `${file.sourcePath} is absent from source commit ${sourceCommit}`,
+        );
+      }
+      file.executable = entry.mode === '100755';
+    }
+  }
+
+  const manifestBytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`);
+  return {
+    sourceCommit,
+    setRoot: join(ctx.preparedRoot, sourceCommit),
+    files: allFiles,
+    manifestBytes,
+    manifestSha256: sha256Hex(manifestBytes),
+  };
+}
+
+interface PreparedTreeSnapshot {
+  directories: Set<string>;
+  files: Set<string>;
+  temporaryFiles: Set<string>;
+}
+
+function scanPreparedTree(
+  root: string,
+  fs: FsOps,
+  expectedFiles: ReadonlyMap<string, Buffer>,
+): PreparedTreeSnapshot {
+  const directories = new Set<string>();
+  const files = new Set<string>();
+  const temporaryFiles = new Set<string>();
+  const stats = new Map<string, Stats>();
+  const visit = (directory: string): void => {
+    directories.add(directory);
+    for (const name of fs.readdirSync(directory)) {
+      const path = join(directory, name);
+      const stat = fs.lstatSync(path);
+      if (stat.isSymbolicLink()) {
+        throw new Error(`${path} is a symbolic link in the prepared set`);
+      }
+      if (stat.isDirectory()) {
+        visit(path);
+      } else if (stat.isFile()) {
+        stats.set(path, stat);
+        if (/\.idd-prepared-tmp-[0-9]+$/u.test(name)) {
+          temporaryFiles.add(path);
+        } else {
+          files.add(path);
+        }
+      } else {
+        throw new Error(`${path} is not a regular file or directory; refusing`);
+      }
+    }
+  };
+  visit(root);
+
+  for (const path of temporaryFiles) {
+    const suffix = basename(path).match(/^(.*)\.idd-prepared-tmp-[0-9]+$/u);
+    if (suffix === null)
+      throw new Error(`${path} has an invalid temporary name`);
+    const target = join(dirname(path), suffix[1] ?? '');
+    const expected = expectedFiles.get(target);
+    const stat = stats.get(path);
+    if (expected === undefined || stat === undefined) {
+      throw new Error(
+        `${path} is an unrecognized temporary file in the prepared set`,
+      );
+    }
+    const bytes = readNoFollowBytes(path, fs);
+    if (
+      bytes.length > expected.length ||
+      !expected.subarray(0, bytes.length).equals(bytes)
+    ) {
+      throw new Error(`${path} is not a prefix of its expected prepared file`);
+    }
+    if (stat.nlink > 1) {
+      const finalStat = stats.get(target);
+      if (
+        !bytes.equals(expected) ||
+        stat.nlink !== 2 ||
+        finalStat === undefined ||
+        finalStat.dev !== stat.dev ||
+        finalStat.ino !== stat.ino ||
+        finalStat.nlink !== 2
+      ) {
+        throw new Error(`${path} has more than one hard link; refusing`);
+      }
+    }
+  }
+  for (const path of files) {
+    const stat = stats.get(path);
+    if (stat === undefined) throw new Error(`${path} could not be inspected`);
+    if (stat.nlink > 1) {
+      const pairedTemp = [...temporaryFiles].some((tempPath) => {
+        const suffix = basename(tempPath).match(
+          /^(.*)\.idd-prepared-tmp-[0-9]+$/u,
+        );
+        const tempStat = stats.get(tempPath);
+        return (
+          suffix !== null &&
+          join(dirname(tempPath), suffix[1] ?? '') === path &&
+          tempStat !== undefined &&
+          tempStat.dev === stat.dev &&
+          tempStat.ino === stat.ino &&
+          tempStat.nlink === 2 &&
+          stat.nlink === 2
+        );
+      });
+      if (!pairedTemp)
+        throw new Error(`${path} has more than one hard link; refusing`);
+    }
+  }
+  return { directories, files, temporaryFiles };
+}
+
+function sameReceiptEntry(
+  actual: ReceiptEntry | undefined,
+  expected: ReceiptEntry,
+): boolean {
+  if (actual === undefined || actual.kind !== expected.kind) return false;
+  if (actual.kind === 'file' && expected.kind === 'file') {
+    return actual.sha256 === expected.sha256;
+  }
+  return actual.kind === 'directory' && expected.kind === 'directory';
+}
+
+function preparedExpectedEntries(build: PreparedSetBuild): {
+  directories: string[];
+  files: Map<string, Buffer>;
+  fileEntries: Map<string, ReceiptEntry>;
+  fileModes: Map<string, number>;
+  directoryEntries: Map<string, ReceiptEntry>;
+} {
+  const manifestPath = join(build.setRoot, PREPARED_MANIFEST_NAME);
+  const files = new Map<string, Buffer>();
+  const fileEntries = new Map<string, ReceiptEntry>();
+  const fileModes = new Map<string, number>();
+  const directorySet = new Set<string>([build.setRoot]);
+  for (const file of build.files) {
+    const destination = join(build.setRoot, file.storedPath);
+    files.set(destination, file.bytes);
+    fileEntries.set(destination, {
+      kind: 'file',
+      path: destination,
+      sha256: file.sha256,
+    });
+    fileModes.set(destination, file.executable ? 0o755 : 0o644);
+    let directory = dirname(destination);
+    while (
+      directory !== build.setRoot &&
+      directory.startsWith(`${build.setRoot}${sep}`)
+    ) {
+      directorySet.add(directory);
+      directory = dirname(directory);
+    }
+  }
+  files.set(manifestPath, build.manifestBytes);
+  fileEntries.set(manifestPath, {
+    kind: 'file',
+    path: manifestPath,
+    sha256: build.manifestSha256,
+  });
+  fileModes.set(manifestPath, 0o644);
+  const directories = [...directorySet].sort((left, right) => {
+    const depth = left.split(sep).length - right.split(sep).length;
+    return depth === 0 ? compareUtf8(left, right) : depth;
+  });
+  const directoryEntries = new Map<string, ReceiptEntry>([
+    [
+      dirname(build.setRoot),
+      { kind: 'directory', path: dirname(build.setRoot) },
+    ],
+    ...directories.map(
+      (path) => [path, { kind: 'directory', path } as ReceiptEntry] as const,
+    ),
+  ]);
+  for (const filePath of files.keys()) {
+    if (directorySet.has(filePath)) {
+      throw new Error(
+        `${filePath} is both a file and a directory in the prepared layout`,
+      );
+    }
+    let parent = dirname(filePath);
+    while (parent.startsWith(`${build.setRoot}${sep}`)) {
+      if (files.has(parent)) {
+        throw new Error(
+          `${parent} is both a file and a parent directory in the prepared layout`,
+        );
+      }
+      parent = dirname(parent);
+    }
+  }
+  return { directories, files, fileEntries, fileModes, directoryEntries };
+}
+
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function preparedManifestExpectedEntries(
+  setRoot: string,
+  sourceCommit: string,
+  manifestBytes: Buffer,
+): {
+  fileEntries: Map<string, ReceiptEntry>;
+  directoryEntries: Map<string, ReceiptEntry>;
+} {
+  const manifestPath = join(setRoot, PREPARED_MANIFEST_NAME);
+  const manifest = parseJsonBytes(manifestBytes, manifestPath);
+  if (
+    !isObjectRecord(manifest) ||
+    manifest.schemaVersion !== 1 ||
+    manifest.sourceCommit !== sourceCommit ||
+    !isObjectRecord(manifest.components)
+  ) {
+    throw new Error(
+      `${manifestPath} does not identify prepared commit ${sourceCommit}`,
+    );
+  }
+
+  const components = manifest.components;
+  const skillBundles = components.skillBundles;
+  if (!isObjectRecord(skillBundles)) {
+    throw new Error(`${manifestPath} has no valid skill bundle list`);
+  }
+  const expectedSkillNames = [...SKILL_NAMES].sort(compareUtf8);
+  const manifestSkillNames = Object.keys(skillBundles).sort(compareUtf8);
+  if (
+    expectedSkillNames.length !== manifestSkillNames.length ||
+    expectedSkillNames.some((name, index) => name !== manifestSkillNames[index])
+  ) {
+    throw new Error(`${manifestPath} has an unexpected skill bundle list`);
+  }
+
+  const componentFiles: Array<{ name: string; root: string; value: unknown }> =
+    [
+      {
+        name: 'instructions',
+        root: 'idd-template',
+        value: components.instructions,
+      },
+      ...SKILL_NAMES.map((name) => ({
+        name,
+        root: `skills/${name}`,
+        value: skillBundles[name],
+      })),
+      { name: 'helper', root: '', value: components.helper },
+    ];
+  const fileEntries = new Map<string, ReceiptEntry>();
+  for (const component of componentFiles) {
+    if (
+      !isObjectRecord(component.value) ||
+      !Array.isArray(component.value.files)
+    ) {
+      throw new Error(
+        `${manifestPath} has no valid ${component.name} file list`,
+      );
+    }
+    for (const candidate of component.value.files) {
+      if (
+        !isObjectRecord(candidate) ||
+        typeof candidate.path !== 'string' ||
+        !isSafeRelativeFilePath(candidate.path) ||
+        typeof candidate.sha256 !== 'string' ||
+        !/^[0-9a-f]{64}$/.test(candidate.sha256)
+      ) {
+        throw new Error(
+          `${manifestPath} has an invalid ${component.name} file entry`,
+        );
+      }
+      const storedPath = component.root
+        ? `${component.root}/${candidate.path}`
+        : candidate.path;
+      if (storedPath === PREPARED_MANIFEST_NAME) {
+        throw new Error(`${manifestPath} lists itself as a component file`);
+      }
+      const path = join(setRoot, storedPath);
+      if (fileEntries.has(path)) {
+        throw new Error(`${manifestPath} lists ${storedPath} more than once`);
+      }
+      fileEntries.set(path, {
+        kind: 'file',
+        path,
+        sha256: candidate.sha256,
+      });
+    }
+  }
+  fileEntries.set(manifestPath, {
+    kind: 'file',
+    path: manifestPath,
+    sha256: sha256Hex(manifestBytes),
+  });
+
+  const directoryPaths = new Set<string>([setRoot]);
+  for (const path of fileEntries.keys()) {
+    let directory = dirname(path);
+    while (directory === setRoot || directory.startsWith(`${setRoot}${sep}`)) {
+      directoryPaths.add(directory);
+      if (directory === setRoot) break;
+      directory = dirname(directory);
+    }
+  }
+  const directoryEntries = new Map<string, ReceiptEntry>(
+    [...directoryPaths].map((path) => [path, { kind: 'directory', path }]),
+  );
+  return { fileEntries, directoryEntries };
+}
+
+function assertPreparedReceiptEntriesMatchManifests(
+  ctx: Context,
+  entries: ReadonlyMap<string, ReceiptEntry>,
+  incompleteCommit?: string,
+): void {
+  const grouped = new Map<string, ReceiptEntry[]>();
+  for (const entry of entries.values()) {
+    const data = segmentsUnder(ctx.dataRoot, entry.path);
+    if (
+      data === null ||
+      data[0] !== 'prepared' ||
+      data.length < 2 ||
+      !SOURCE_COMMIT_PATTERN.test(data[1] ?? '')
+    ) {
+      continue;
+    }
+    const commit = data[1];
+    const group = grouped.get(commit) ?? [];
+    group.push(entry);
+    grouped.set(commit, group);
+  }
+
+  for (const [commit, group] of grouped) {
+    if (commit === incompleteCommit) continue;
+    const setRoot = join(ctx.preparedRoot, commit);
+    const manifestPath = join(setRoot, PREPARED_MANIFEST_NAME);
+    const receiptManifest = group.find((entry) => entry.path === manifestPath);
+    if (receiptManifest === undefined || receiptManifest.kind !== 'file') {
+      throw new Error(
+        `${setRoot} has no published manifest; refusing to trust its prepared receipt entries`,
+      );
+    }
+    const manifestWalk = checkContainment(
+      ctx.preparedRoot,
+      manifestPath,
+      ctx.fs,
+    );
+    if (manifestWalk.finalKind !== 'file') {
+      throw new Error(
+        `${manifestPath} is not a regular published manifest; refusing`,
+      );
+    }
+    const manifestBytes = readNoFollowBytes(manifestPath, ctx.fs);
+    const expectedManifestEntry: ReceiptEntry = {
+      kind: 'file',
+      path: manifestPath,
+      sha256: sha256Hex(manifestBytes),
+    };
+    if (!sameReceiptEntry(receiptManifest, expectedManifestEntry)) {
+      throw new Error(
+        `${manifestPath} does not match its prepared receipt entry; refusing`,
+      );
+    }
+    const expected = preparedManifestExpectedEntries(
+      setRoot,
+      commit,
+      manifestBytes,
+    );
+    const groupByPath = new Map(group.map((entry) => [entry.path, entry]));
+    for (const entry of group) {
+      const expectedEntry =
+        expected.fileEntries.get(entry.path) ??
+        expected.directoryEntries.get(entry.path);
+      if (expectedEntry === undefined) {
+        throw new Error(
+          `${entry.path} is an unexpected receipt entry for prepared set ${setRoot}; refusing`,
+        );
+      }
+      if (!sameReceiptEntry(entry, expectedEntry)) {
+        throw new Error(
+          `${entry.path} conflicts with its prepared manifest entry; refusing`,
+        );
+      }
+    }
+    for (const expectedEntry of [
+      ...expected.directoryEntries.values(),
+      ...expected.fileEntries.values(),
+    ]) {
+      if (
+        !sameReceiptEntry(groupByPath.get(expectedEntry.path), expectedEntry)
+      ) {
+        throw new Error(
+          `${expectedEntry.path} is absent from the receipt for prepared set ${setRoot}; refusing`,
+        );
+      }
+    }
+  }
+}
+
+function verifyPreparedTree(
+  ctx: Context,
+  build: PreparedSetBuild,
+  expected: ReturnType<typeof preparedExpectedEntries>,
+  receiptEntries: ReadonlyMap<string, ReceiptEntry>,
+  options: { requireRecordedExpected: boolean; manifestMustExist: boolean },
+): boolean {
+  const rootWalk = checkContainment(ctx.preparedRoot, build.setRoot, ctx.fs);
+  if (rootWalk.finalKind === 'absent') {
+    if (options.manifestMustExist) {
+      throw new Error(`${build.setRoot} is missing its published prepared set`);
+    }
+    return false;
+  }
+  if (rootWalk.finalKind !== 'directory') {
+    throw new Error(
+      `${build.setRoot} is ${rootWalk.finalKind}, not a real directory`,
+    );
+  }
+  const snapshot = scanPreparedTree(build.setRoot, ctx.fs, expected.files);
+  const expectedDirectories = new Set(expected.directories);
+  for (const path of snapshot.directories) {
+    if (!expectedDirectories.has(path)) {
+      throw new Error(`${path} is an unlisted directory in the prepared set`);
+    }
+    const expectedEntry = expected.directoryEntries.get(path);
+    if (
+      expectedEntry === undefined ||
+      !sameReceiptEntry(receiptEntries.get(path), expectedEntry)
+    ) {
+      throw new Error(
+        `${path} is not recorded as an owned directory in the receipt`,
+      );
+    }
+  }
+  for (const path of snapshot.files) {
+    const expectedEntry = expected.fileEntries.get(path);
+    if (expectedEntry === undefined || expectedEntry.kind !== 'file') {
+      throw new Error(`${path} is an unlisted file in the prepared set`);
+    }
+    if (!sameReceiptEntry(receiptEntries.get(path), expectedEntry)) {
+      throw new Error(
+        `${path} is not recorded with its expected hash in the receipt`,
+      );
+    }
+    const expectedMode = expected.fileModes.get(path);
+    if (
+      expectedMode === undefined ||
+      (ctx.fs.lstatSync(path).mode & 0o777) !== expectedMode
+    ) {
+      throw new Error(
+        `${path} has a mode that differs from the prepared source`,
+      );
+    }
+    if (sha256Hex(readNoFollowBytes(path, ctx.fs)) !== expectedEntry.sha256) {
+      throw new Error(
+        `${path} differs from the source bytes; refusing to reuse or overwrite it`,
+      );
+    }
+  }
+  const manifestPath = join(build.setRoot, PREPARED_MANIFEST_NAME);
+  const manifestPresent = snapshot.files.has(manifestPath);
+  if (options.manifestMustExist && !manifestPresent) {
+    throw new Error(
+      `${manifestPath} is absent; the prepared identity is not published`,
+    );
+  }
+  if (manifestPresent) {
+    const complete =
+      expected.directories.every((path) => snapshot.directories.has(path)) &&
+      [...expected.files.keys()].every((path) => snapshot.files.has(path));
+    if (!complete) {
+      throw new Error(
+        `${manifestPath} exists but the prepared set is incomplete; refusing`,
+      );
+    }
+  }
+  if (options.requireRecordedExpected) {
+    for (const entry of expected.directoryEntries.values()) {
+      if (!sameReceiptEntry(receiptEntries.get(entry.path), entry)) {
+        throw new Error(
+          `${entry.path} is not recorded as an owned directory in the receipt`,
+        );
+      }
+    }
+    for (const entry of expected.fileEntries.values()) {
+      if (!sameReceiptEntry(receiptEntries.get(entry.path), entry)) {
+        throw new Error(
+          `${entry.path} is not recorded with its expected hash in the receipt`,
+        );
+      }
+    }
+  }
+  return manifestPresent;
+}
+
+function prepareFailureMessage(
+  ctx: Context,
+  build: PreparedSetBuild,
+  expected: ReturnType<typeof preparedExpectedEntries>,
+  error: unknown,
+): string {
+  const marker = join(build.setRoot, PREPARED_MANIFEST_NAME);
+  let markerState = 'could not be inspected';
+  try {
+    const walk = checkContainment(ctx.preparedRoot, marker, ctx.fs);
+    markerState = walk.finalKind;
+  } catch (inspectError) {
+    markerState = `could not be inspected (${describe(inspectError)})`;
+  }
+  let stagedState = 'none';
+  let missingState = 'unavailable';
+  try {
+    const walk = checkContainment(ctx.preparedRoot, build.setRoot, ctx.fs);
+    if (walk.finalKind === 'directory') {
+      const snapshot = scanPreparedTree(build.setRoot, ctx.fs, expected.files);
+      const present = [
+        ...snapshot.directories,
+        ...snapshot.files,
+        ...snapshot.temporaryFiles,
+      ]
+        .map((path) => relative(build.setRoot, path).replaceAll(sep, '/'))
+        .sort(compareUtf8);
+      stagedState =
+        present.length > 0 ? present.join(', ') : 'empty candidate directory';
+      const expectedPaths = [...expected.directories, ...expected.files.keys()];
+      const presentPaths = new Set([
+        ...snapshot.directories,
+        ...snapshot.files,
+      ]);
+      const missing = expectedPaths
+        .filter((path) => !presentPaths.has(path))
+        .map((path) => relative(build.setRoot, path).replaceAll(sep, '/'))
+        .sort(compareUtf8);
+      missingState = missing.length > 0 ? missing.join(', ') : 'none';
+    }
+  } catch (stateError) {
+    stagedState = `could not be safely enumerated (${describe(stateError)})`;
+  }
+  let receiptState = 'could not be read';
+  try {
+    const receipt = readReceipt(ctx.dataRoot, ctx.fs);
+    receiptState = receipt.state === 'valid' ? 'valid' : 'missing';
+  } catch (receiptError) {
+    receiptState = `invalid (${describe(receiptError)})`;
+  }
+  return `preparing ${build.sourceCommit} failed (${describe(error)}); the completion manifest ${marker} is ${markerState}; staged paths under the candidate are ${stagedState}; expected paths still missing are ${missingState}; receipt state is ${receiptState}; one safe retry is to call prepareDistributionSet again with the identical sourceCommit, provenance and source bytes; if the source is unavailable, remove only candidate paths whose receipt hashes still match`;
+}
+
+function withReceiptMutationLock<T>(ctx: Context, operation: () => T): T {
+  const fs = ctx.fs;
+  const parent = dirname(ctx.dataRoot);
+  try {
+    assertRealChain(parent, fs);
+  } catch (error) {
+    throw new Error(`nothing was written or removed; ${describe(error)}`);
+  }
+  assertRealParent(ctx.dataRoot, fs);
+  const lockPath = join(
+    parent,
+    `.idd-user-global-${sha256Hex(ctx.dataRoot)}.lock`,
+  );
+  const lockWalk = checkContainment(parent, lockPath, fs);
+  if (lockWalk.finalKind !== 'absent') {
+    let owner = 'owner record unavailable';
+    if (lockWalk.finalKind === 'directory') {
+      try {
+        const ownerPath = join(lockPath, 'owner.json');
+        const ownerWalk = checkContainment(lockPath, ownerPath, fs);
+        if (ownerWalk.finalKind === 'file') {
+          owner = readNoFollowBytes(ownerPath, fs).toString('utf8').trim();
+        }
+      } catch (error) {
+        owner = `owner record could not be read (${describe(error)})`;
+      }
+    }
+    throw new Error(
+      `the prepared receipt lock ${lockPath} exists (${owner}); another preparation may be active, or another receipt mutation may be active, so refusing before receipt reads or writes; retry after it finishes, or inspect the owner and remove this exact lock directory only after confirming its process is gone`,
+    );
+  }
+  createDirectory(parent, lockPath, fs);
+  const ownerPath = join(lockPath, 'owner.json');
+  const ownerBytes = Buffer.from(
+    `${JSON.stringify({
+      pid: process.pid,
+      host: hostname(),
+      startedAt: new Date().toISOString(),
+    })}\n`,
+  );
+  let ownerWritten = false;
+  let result: T | undefined;
+  let operationError: unknown;
+  let operationFailed = false;
+  try {
+    writeNewFile(lockPath, ownerPath, ownerBytes, fs, 0o600);
+    ownerWritten = true;
+    result = operation();
+  } catch (error) {
+    operationFailed = true;
+    operationError = error;
+  }
+
+  let cleanupError: unknown;
+  try {
+    const ownerState = checkContainment(lockPath, ownerPath, fs);
+    if (ownerState.finalKind === 'file') {
+      if (
+        !ownerWritten ||
+        !readNoFollowBytes(ownerPath, fs).equals(ownerBytes)
+      ) {
+        throw new Error(`${ownerPath} changed; refusing to release the lock`);
+      }
+      removeSingleEntry(
+        lockPath,
+        ownerPath,
+        {
+          kind: 'file',
+          sha256: sha256Hex(ownerBytes),
+        },
+        fs,
+      );
+    } else if (ownerState.finalKind !== 'absent') {
+      throw new Error(
+        `${ownerPath} is ${ownerState.finalKind}; refusing to release the lock`,
+      );
+    }
+    removeSingleEntry(parent, lockPath, { kind: 'directory' }, fs);
+  } catch (error) {
+    cleanupError = error;
+  }
+  if (operationFailed && cleanupError !== undefined) {
+    throw new Error(
+      `${describe(operationError)}; receipt mutation lock cleanup also failed (${describe(cleanupError)})`,
+    );
+  }
+  if (operationFailed) throw operationError;
+  if (cleanupError !== undefined) {
+    throw new Error(
+      `receipt mutation completed but lock cleanup failed (${describe(cleanupError)})`,
+    );
+  }
+  return result as T;
+}
+
+/** Explicitly stage and verify one immutable user-global distribution set. */
+export function prepareDistributionSet(
+  options: PrepareDistributionOptions,
+): PreparedDistributionResult {
+  const ctx = resolveContext(options);
+  return withReceiptMutationLock(ctx, () =>
+    prepareDistributionSetWithContext(ctx, options),
+  );
+}
+
+function prepareDistributionSetWithContext(
+  ctx: Context,
+  options: PrepareDistributionOptions,
+): PreparedDistributionResult {
+  const build = buildPreparedSet(ctx, options);
+  const expected = preparedExpectedEntries(build);
+  const fs = ctx.fs;
+  assertRealChain(ctx.dataRoot, fs);
+  assertRealParent(ctx.dataRoot, fs);
+
+  const dataRootStat = lstatOrNull(ctx.dataRoot, fs);
+  if (dataRootStat !== null && !dataRootStat.isDirectory()) {
+    throw new Error(`${ctx.dataRoot} is not a real data directory`);
+  }
+  const staleReceiptTemps = findStaleReceiptTemps(ctx.dataRoot, fs);
+  if (staleReceiptTemps.length > 0) {
+    throw new Error(
+      `${staleReceiptTemps[0]} is a stale receipt temporary from an interrupted write; remove that exact temporary file after confirming no receipt write is active, then retry preparation`,
+    );
+  }
+  const prior = readReceipt(ctx.dataRoot, fs);
+  if (dataRootStat !== null && prior.state === 'missing') {
+    throw new Error(
+      `${ctx.dataRoot} already exists without an installer receipt; refusing to adopt unowned data`,
+    );
+  }
+
+  const entries = new Map<string, ReceiptEntry>();
+  if (prior.state === 'valid') {
+    for (const entry of prior.receipt.entries) entries.set(entry.path, entry);
+  }
+  assertPreparedReceiptEntriesMatchManifests(ctx, entries, build.sourceCommit);
+  const preparedRootStat = lstatOrNull(ctx.preparedRoot, fs);
+  if (
+    preparedRootStat !== null &&
+    !sameReceiptEntry(entries.get(ctx.preparedRoot), {
+      kind: 'directory',
+      path: ctx.preparedRoot,
+    })
+  ) {
+    throw new Error(
+      `${ctx.preparedRoot} exists without a matching directory entry in the receipt; refusing to adopt it`,
+    );
+  }
+
+  for (const entry of entries.values()) assertOwnedShape(ctx, entry);
+  const allowedTargetPaths = new Set([
+    ...expected.directoryEntries.keys(),
+    ...expected.fileEntries.keys(),
+  ]);
+  for (const entry of entries.values()) {
+    if (
+      entry.path === build.setRoot ||
+      entry.path.startsWith(`${build.setRoot}${sep}`)
+    ) {
+      if (!allowedTargetPaths.has(entry.path)) {
+        throw new Error(
+          `${entry.path} is an unexpected receipt entry in the prepared candidate`,
+        );
+      }
+    }
+  }
+  for (const [path, expectedEntry] of [
+    ...expected.directoryEntries,
+    ...expected.fileEntries,
+  ]) {
+    const current = entries.get(path);
+    if (current !== undefined && !sameReceiptEntry(current, expectedEntry)) {
+      throw new Error(
+        `${path} conflicts with a different existing receipt entry`,
+      );
+    }
+  }
+  const existingManifest = verifyPreparedTree(ctx, build, expected, entries, {
+    requireRecordedExpected: false,
+    manifestMustExist: false,
+  });
+  if (existingManifest) {
+    for (const [path, bytes] of expected.files) {
+      writeNewFileAtomically(
+        ctx.preparedRoot,
+        path,
+        bytes,
+        fs,
+        expected.fileModes.get(path),
+      );
+    }
+    verifyPreparedTree(ctx, build, expected, entries, {
+      requireRecordedExpected: true,
+      manifestMustExist: true,
+    });
+    return {
+      sourceCommit: build.sourceCommit,
+      preparedPath: build.setRoot,
+      fileCount: build.files.length,
+      reused: true,
+    };
+  }
+
+  const rootWasCreated = dataRootStat === null;
+  if (rootWasCreated) {
+    createDirectory(dirname(ctx.dataRoot), ctx.dataRoot, fs);
+    entries.set(ctx.dataRoot, { kind: 'directory', path: ctx.dataRoot });
+  }
+  for (const entry of expected.directoryEntries.values()) {
+    const current = entries.get(entry.path);
+    if (current === undefined) entries.set(entry.path, entry);
+  }
+  for (const entry of expected.fileEntries.values()) {
+    const current = entries.get(entry.path);
+    if (current === undefined) entries.set(entry.path, entry);
+  }
+
+  try {
+    writeReceipt(ctx.dataRoot, [...entries.values()], fs);
+    verifyPreparedTree(ctx, build, expected, entries, {
+      requireRecordedExpected: true,
+      manifestMustExist: false,
+    });
+    for (const directory of expected.directories) {
+      const walk = checkContainment(ctx.preparedRoot, directory, fs);
+      if (walk.finalKind === 'directory') continue;
+      if (walk.finalKind !== 'absent') {
+        throw new Error(`${directory} appeared as ${walk.finalKind}; refusing`);
+      }
+      createDirectory(ctx.preparedRoot, directory, fs);
+    }
+    const manifestPath = join(build.setRoot, PREPARED_MANIFEST_NAME);
+    for (const [path, bytes] of expected.files) {
+      if (path === manifestPath) continue;
+      writeNewFileAtomically(
+        ctx.preparedRoot,
+        path,
+        bytes,
+        fs,
+        expected.fileModes.get(path),
+      );
+    }
+    verifyPreparedTree(ctx, build, expected, entries, {
+      requireRecordedExpected: true,
+      manifestMustExist: false,
+    });
+    writeNewFileAtomically(
+      ctx.preparedRoot,
+      manifestPath,
+      build.manifestBytes,
+      fs,
+      expected.fileModes.get(manifestPath),
+    );
+  } catch (error) {
+    let rootNote = '';
+    if (rootWasCreated) {
+      try {
+        const receipt = readReceipt(ctx.dataRoot, fs);
+        if (receipt.state === 'missing') {
+          const remaining = fs.readdirSync(ctx.dataRoot);
+          if (remaining.length === 0) {
+            removeSingleEntry(
+              dirname(ctx.dataRoot),
+              ctx.dataRoot,
+              {
+                kind: 'directory',
+              },
+              fs,
+            );
+            rootNote = `; the newly created empty data root ${ctx.dataRoot} was removed`;
+          } else {
+            rootNote = `; the newly created data root ${ctx.dataRoot} remains with ${remaining.join(', ')} and no receipt`;
+          }
+        }
+      } catch (cleanupError) {
+        rootNote = `; cleanup of the newly created data root ${ctx.dataRoot} could not complete (${describe(cleanupError)})`;
+      }
+    }
+    throw new Error(
+      `${prepareFailureMessage(ctx, build, expected, error)}${rootNote}`,
+    );
+  }
+  return {
+    sourceCommit: build.sourceCommit,
+    preparedPath: build.setRoot,
+    fileCount: build.files.length,
+    reused: false,
+  };
 }
 
 function readPackageVersion(sourceRoot: string, fs: FsOps): string {
@@ -921,6 +2378,7 @@ function buildInstallPlan(
       entries.set(entry.path, entry);
     }
   }
+  assertPreparedReceiptEntriesMatchManifests(ctx, entries);
   const versionDir = join(ctx.dataRoot, version);
   const mkdirs: Mkdir[] = [];
   const seen = new Set<string>();
@@ -1631,12 +3089,13 @@ function priorTargetOf(plan: InstallPlan): string | null {
   return plan.current.action === 'repoint' ? plan.current.priorTarget : null;
 }
 
-function contextAndPlan(options: UserGlobalOptions): {
-  ctx: Context;
+function contextAndPlan(
+  ctx: Context,
+  options: UserGlobalOptions,
+): {
   plan: InstallPlan;
   version: string;
 } {
-  const ctx = resolveContext(options);
   const fs = ctx.fs;
   const sourceRoot = options.sourceRoot ?? resolveBundleRoot(HERE);
   const version = options.version ?? readPackageVersion(sourceRoot, fs);
@@ -1646,7 +3105,7 @@ function contextAndPlan(options: UserGlobalOptions): {
     version,
     options.harnesses ?? [],
   );
-  return { ctx, plan, version };
+  return { plan, version };
 }
 
 /**
@@ -1656,7 +3115,8 @@ function contextAndPlan(options: UserGlobalOptions): {
 export function planInstall(
   options: UserGlobalOptions = {},
 ): UserGlobalInstallResult {
-  const { plan, version } = contextAndPlan(options);
+  const ctx = resolveContext(options);
+  const { plan, version } = contextAndPlan(ctx, options);
   return {
     lines: plan.lines,
     priorCurrentTarget: priorTargetOf(plan),
@@ -1668,8 +3128,11 @@ export function planInstall(
 export function installPayload(
   options: UserGlobalOptions = {},
 ): UserGlobalInstallResult {
-  const { ctx, plan, version } = contextAndPlan(options);
-  return { ...applyInstall(ctx, plan, version), version };
+  const ctx = resolveContext(options);
+  return withReceiptMutationLock(ctx, () => {
+    const { plan, version } = contextAndPlan(ctx, options);
+    return { ...applyInstall(ctx, plan, version), version };
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -1755,6 +3218,7 @@ function buildUninstallPlan(ctx: Context): UninstallPlan {
   }
   const entries = new Map<string, ReceiptEntry>();
   for (const entry of read.receipt.entries) entries.set(entry.path, entry);
+  assertPreparedReceiptEntriesMatchManifests(ctx, entries);
 
   const decisions: Decision[] = [];
   const refusals: string[] = [];
@@ -1890,6 +3354,25 @@ export function uninstallPayload(
   options: UserGlobalOptions = {},
 ): UserGlobalResult {
   const ctx = resolveContext(options);
+  if (!uninstallDataRootExists(ctx)) {
+    const plan = buildUninstallPlan(ctx);
+    return { lines: uninstallLines(plan), priorCurrentTarget: null };
+  }
+  return withReceiptMutationLock(ctx, () => uninstallPayloadWithContext(ctx));
+}
+
+function uninstallDataRootExists(ctx: Context): boolean {
+  try {
+    assertRealChain(ctx.dataRoot, ctx.fs);
+  } catch (error) {
+    throw new Error(
+      `uninstall refused before any removal; nothing was removed: ${describe(error)}`,
+    );
+  }
+  return lstatOrNull(ctx.dataRoot, ctx.fs) !== null;
+}
+
+function uninstallPayloadWithContext(ctx: Context): UserGlobalResult {
   const fs = ctx.fs;
   const plan = buildUninstallPlan(ctx);
   if (plan.reason !== null)

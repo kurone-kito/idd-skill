@@ -27,10 +27,12 @@ import * as userGlobalPaths from '../src/scripts/user-global-paths.mts';
 const {
   assertRealChain,
   checkContainment,
+  createDirectory,
   removeSingleEntry,
   replaceFileByRename,
   repointCurrent,
   withCeilings,
+  writeNewFileAtomically,
   writeNewFile,
 } = userGlobalPaths;
 
@@ -175,15 +177,17 @@ function assertThrowsMatching(run: () => void, pattern: RegExp): void {
 
 // --- Exports and platform (every platform) ---------------------------------
 
-test('exports exactly the five containment entry points and the two ceiling helpers', () => {
+test('exports the containment entry points and the two ceiling helpers', () => {
   assert.deepEqual(Object.keys(userGlobalPaths).sort(), [
     'assertRealChain',
     'checkContainment',
+    'createDirectory',
     'removeSingleEntry',
     'replaceFileByRename',
     'repointCurrent',
     'withCeilings',
     'writeNewFile',
+    'writeNewFileAtomically',
   ]);
 });
 
@@ -197,7 +201,15 @@ test('every export refuses before any mutation when no-follow is unavailable', (
     const before = snapshot(box.home);
     const refusals: Array<() => void> = [
       () => checkContainment(box.dataRoot, join(box.dataRoot, 'x'), fs),
+      () => createDirectory(box.dataRoot, join(box.dataRoot, 'new-dir'), fs),
       () => writeNewFile(box.dataRoot, join(box.dataRoot, 'new.txt'), 'x', fs),
+      () =>
+        writeNewFileAtomically(
+          box.dataRoot,
+          join(box.dataRoot, 'new-atomic.txt'),
+          'x',
+          fs,
+        ),
       () => replaceFileByRename(box.dataRoot, file, sha('old'), 'new', fs),
       () =>
         removeSingleEntry(
@@ -262,6 +274,83 @@ posixTest('writeNewFile creates missing directories and the file', () => {
     );
   });
 });
+
+posixTest(
+  'writeNewFileAtomically recovers complete and partial temporary files',
+  () => {
+    withBox((box) => {
+      makeRoot(box);
+      const target = join(box.dataRoot, 'sub', 'file.txt');
+      nodeFs.mkdirSync(dirname(target), { recursive: true });
+      const completeTemp = `${target}.idd-prepared-tmp-123`;
+      writeFile(completeTemp, 'complete');
+      nodeFs.linkSync(completeTemp, target);
+      writeNewFileAtomically(box.dataRoot, target, 'complete');
+      assert.equal(nodeFs.readFileSync(target, 'utf8'), 'complete');
+      assert.equal(nodeFs.existsSync(completeTemp), false);
+      assert.equal(nodeFs.lstatSync(target).nlink, 1);
+
+      nodeFs.unlinkSync(target);
+      const partialTemp = `${target}.idd-prepared-tmp-456`;
+      writeFile(partialTemp, 'part');
+      writeNewFileAtomically(box.dataRoot, target, 'partial payload');
+      assert.equal(nodeFs.readFileSync(target, 'utf8'), 'partial payload');
+      assert.equal(nodeFs.existsSync(partialTemp), false);
+      assert.equal(nodeFs.lstatSync(target).nlink, 1);
+    });
+  },
+);
+
+posixTest(
+  'writeNewFileAtomically replaces a complete temporary file with the wrong mode',
+  () => {
+    withBox((box) => {
+      makeRoot(box);
+      const target = join(box.dataRoot, 'sub', 'executable.mjs');
+      const temporary = `${target}.idd-prepared-tmp-789`;
+      writeFile(temporary, 'complete');
+      nodeFs.chmodSync(temporary, 0o644);
+
+      writeNewFileAtomically(box.dataRoot, target, 'complete', nodeFs, 0o755);
+
+      assert.equal(nodeFs.readFileSync(target, 'utf8'), 'complete');
+      assert.equal(nodeFs.lstatSync(target).mode & 0o777, 0o755);
+      assert.equal(nodeFs.existsSync(temporary), false);
+    });
+  },
+);
+
+posixTest('writeNewFileAtomically preserves an existing different file', () => {
+  withBox((box) => {
+    makeRoot(box);
+    const target = join(box.dataRoot, 'existing.txt');
+    writeFile(target, 'user content');
+    assertThrowsMatching(
+      () => writeNewFileAtomically(box.dataRoot, target, 'installer content'),
+      /different bytes/,
+    );
+    assert.equal(nodeFs.readFileSync(target, 'utf8'), 'user content');
+  });
+});
+
+posixTest(
+  'createDirectory creates only absent directories and refuses reuse',
+  () => {
+    withBox((box) => {
+      makeRoot(box);
+      const target = join(box.dataRoot, 'prepared', 'commit');
+      assert.deepEqual(createDirectory(box.dataRoot, target), [
+        join(box.dataRoot, 'prepared'),
+        target,
+      ]);
+      assert.equal(nodeFs.statSync(target).isDirectory(), true);
+      assertThrowsMatching(
+        () => createDirectory(box.dataRoot, target),
+        /already exists as directory/,
+      );
+    });
+  },
+);
 
 posixTest(
   'replaceFileByRename replaces a file whose hash matches and leaves no temporary file',
