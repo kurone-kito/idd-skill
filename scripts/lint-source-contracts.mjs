@@ -282,16 +282,22 @@ function detectEntryContracts(files) {
         ),
       );
     }
-    const guardMessageLines = text
-      .split('\n')
-      .filter((line) => line.includes('Node version satisfying'));
+    const guardMessageStart = text.indexOf(
+      "node-runtime-guard: this repository's CLI entry points require",
+    );
+    const guardMessageEnd =
+      guardMessageStart === -1
+        ? -1
+        : text.indexOf('\n    );', guardMessageStart);
+    const guardMessage =
+      guardMessageStart === -1 || guardMessageEnd === -1
+        ? ''
+        : text.slice(guardMessageStart, guardMessageEnd);
     const enginesVersionToken =
       /(?:^|[^\w])(?:[~^<>]=?\s*)?(?:v?\d+(?:\.(?:\d+|[xX*])){0,2}|\*)(?![\w])/;
     if (
-      !guardMessageLines.some((line) =>
-        line.includes(
-          "Node version satisfying idd-skill's own package.json engines.node requirement.",
-        ),
+      !guardMessage.includes(
+        "Node version satisfying idd-skill's own package.json engines.node requirement.",
       )
     ) {
       result.push(
@@ -302,7 +308,14 @@ function detectEntryContracts(files) {
         ),
       );
     }
-    if (guardMessageLines.some((line) => enginesVersionToken.test(line))) {
+    const guardMessageWithoutFeatureVersions = guardMessage.replace(
+      /\(added in Node \d+\.\d+\.\d+ \/ \d+\.\d+\.\d+\)/,
+      '',
+    );
+    if (
+      guardMessageEnd === -1 ||
+      enginesVersionToken.test(guardMessageWithoutFeatureVersions)
+    ) {
       result.push(
         violation(
           'RUNTIME-GUARD-STANDALONE-EXEMPTION',

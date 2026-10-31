@@ -128,6 +128,49 @@ test('standalone guard contract rejects any copied engines range', () => {
     fixture.cleanup();
   }
 });
+test('standalone guard contract scans the complete diagnostic expression', () => {
+  const fixture = makeFixture();
+  const sourcePath = join(
+    fixture.root,
+    'src/scripts/minimize-superseded-markers.mts',
+  );
+  try {
+    const source = readFileSync(sourcePath, 'utf8');
+    const message = "Node version satisfying idd-skill's own package.json engines.node requirement.";
+    const copiedRange = '(^22.24.0 || ^24.3.0 || >=26.0.0)';
+    const tick = String.fromCharCode(96);
+    const beforePhrase = source.replace(
+      'Upgrade to a ' + tick + ' +\n        ' + tick + 'Node version satisfying',
+      'Upgrade to a ' + copiedRange + ' ' + tick + ' +\n        ' + tick + 'Node version satisfying',
+    );
+    const afterPhrase = source.replace(
+      message + '\\n' + tick,
+      message + ' ' + tick + ' +\n        ' + tick + ' ' + copiedRange + '\\n' + tick,
+    );
+    const afterTerminator = source.replace(
+      message + '\\n' + tick + ',',
+      message + '\\n' + tick + ' +\n        ' + tick + copiedRange + tick + ',',
+    );
+    assert.notEqual(beforePhrase, source);
+    assert.notEqual(afterPhrase, source);
+    assert.notEqual(afterTerminator, source);
+
+    for (const mutatedSource of [beforePhrase, afterPhrase, afterTerminator]) {
+      writeFileSync(sourcePath, mutatedSource);
+      const before = snapshot(fixture.root);
+      const result = runAudit(fixture.root);
+      assert.equal(result.status, 1, result.stderr);
+      assert.match(
+        result.stderr,
+        /RUNTIME-GUARD-STANDALONE-EXEMPTION src\/scripts\/minimize-superseded-markers\.mts:/,
+      );
+      assert.match(result.stderr, /must not copy an engines\.node range/);
+      assert.equal(snapshot(fixture.root), before, 'the audit must be read-only');
+    }
+  } finally {
+    fixture.cleanup();
+  }
+});
 test('entry-order violation fails from the CLI with a rule ID and relative path', () => {
   const fixture = makeFixture();
   const sourcePath = join(fixture.root, 'src/scripts/contract-entry.mts');
