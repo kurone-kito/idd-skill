@@ -275,6 +275,28 @@ function replacePreparedHelperInvocation(
   );
 }
 
+function replacePreparedSourceCommit(
+  fixture: Fixture,
+  commit: string,
+  sourceCommit: string,
+): void {
+  const manifestPath = join(fixture.preparedRoot, commit, 'manifest.json');
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as {
+    sourceCommit: string;
+  };
+  manifest.sourceCommit = sourceCommit;
+  const bytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`);
+  fs.writeFileSync(manifestPath, bytes);
+  const receipt = readReceipt(fixture.dataRoot);
+  assert.equal(receipt.state, 'valid');
+  writeReceipt(
+    fixture.dataRoot,
+    receipt.receipt.entries.map((entry) =>
+      entry.path === manifestPath ? { ...entry, sha256: sha256(bytes) } : entry,
+    ),
+  );
+}
+
 const COMMIT_A = 'a'.repeat(40);
 const COMMIT_B = 'b'.repeat(40);
 
@@ -293,6 +315,89 @@ test('inspection selects one byte-verified global-current set without writing', 
     fs.readFileSync(join(fixture.dataRoot, 'receipt.json')),
     before,
   );
+});
+
+test('repository policy and local instructions resolve from the worktree root', () => {
+  const fixture = makeFixture();
+  fixture.addPreparedSet(COMMIT_A, 'one');
+  fixture.addPreparedSet(COMMIT_B, 'two');
+  fixture.installCurrent(COMMIT_A, '1.0.0', 'one');
+  fixture.pin(`github:acme/app#${COMMIT_B}`);
+  const nested = join(fixture.repo, 'packages', 'nested');
+  fs.mkdirSync(nested, { recursive: true });
+  const options = { ...fixture.options(), cwd: nested };
+
+  const pinned = inspectDistributionSelection(options);
+  assert.equal(pinned.verdict, 'pin-preserved');
+  assert.equal(pinned.source, 'repository-pin');
+  assert.equal(pinned.selected?.sourceCommit, COMMIT_B);
+
+  const instructions = join(
+    fixture.repo,
+    '.github',
+    'instructions',
+    'idd-overview-core.instructions.md',
+  );
+  fs.mkdirSync(dirname(instructions), { recursive: true });
+  fs.writeFileSync(instructions, '# local instructions\n');
+  const local = inspectDistributionSelection(options);
+  assert.equal(local.verdict, 'migration-required');
+  assert.equal(local.source, 'repository-local');
+});
+
+test('an unreadable repository policy cannot fall through to global current', () => {
+  const fixture = makeFixture();
+  fixture.addPreparedSet(COMMIT_A, 'one');
+  fixture.installCurrent(COMMIT_A, '1.0.0', 'one');
+  const policyPath = join(fixture.repo, '.github', 'idd', 'config.json');
+  fs.mkdirSync(dirname(policyPath), { recursive: true });
+  fs.writeFileSync(policyPath, '{invalid json\n');
+
+  const report = inspectDistributionSelection(fixture.options());
+  assert.equal(report.verdict, 'not-verified-usable');
+  assert.equal(report.source, 'repository-local');
+  assert.equal(report.compatibility, 'incompatible');
+  assert.equal(report.recovery, 'reselect');
+});
+
+test('installed component files need matching receipt ownership', () => {
+  const fixture = makeFixture();
+  fixture.addPreparedSet(COMMIT_A, 'one');
+  fixture.installCurrent(COMMIT_A, '1.0.0', 'one');
+  const installedFile = join(
+    fixture.home,
+    '.claude',
+    'skills',
+    'issue-authoring',
+    'SKILL.md',
+  );
+  const receipt = readReceipt(fixture.dataRoot);
+  assert.equal(receipt.state, 'valid');
+  writeReceipt(
+    fixture.dataRoot,
+    receipt.receipt.entries.filter((entry) => entry.path !== installedFile),
+  );
+
+  const report = inspectDistributionSelection(fixture.options());
+  assert.equal(report.verdict, 'migration-required');
+  assert.equal(report.selected, null);
+  assert.equal(report.compatibility, 'unknown');
+});
+
+test('a no-repository inspection selects the verified installed bundle', () => {
+  const fixture = makeFixture();
+  fixture.addPreparedSet(COMMIT_A, 'one');
+  fixture.installCurrent(COMMIT_A, '1.0.0', 'one');
+
+  const report = inspectDistributionSelection({
+    ...fixture.options(),
+    cwd: fixture.root,
+  });
+  assert.equal(report.repository, null);
+  assert.equal(report.verdict, 'coherent-candidate');
+  assert.equal(report.source, 'installed-bundle');
+  assert.equal(report.selected?.sourceCommit, COMMIT_A);
+  assert.equal(report.compatibility, 'compatible');
 });
 
 test('an exact repository commit pin wins over a different global current', () => {
@@ -671,10 +776,26 @@ test('a bound identity stays visible when its prepared files go missing', () => 
   assert.equal(report.recovery, 'prepare');
 });
 
-test('a version-only pin cannot identify a prepared commit by itself', () => {
+test('an invalid bound manifest is not reported as a migration requirement', () => {
+  const fixture = makeFixture();
+  fixture.addPreparedSet(COMMIT_A, 'one');
+  fixture.installCurrent(COMMIT_A, '1.0.0', 'one');
+  const bound = bindDistributionSelection(fixture.options());
+  assert.equal(bound.status, 'created');
+  replacePreparedSourceCommit(fixture, COMMIT_A, COMMIT_B);
+
+  const report = inspectDistributionSelection(fixture.options());
+  assert.equal(report.session.binding, 'bound');
+  assert.equal(report.verdict, 'not-verified-usable');
+  assert.equal(report.previousVerifiedSet?.sourceCommit, COMMIT_A);
+  assert.equal(report.selected, null);
+  assert.equal(report.compatibility, 'incompatible');
+  assert.equal(report.recovery, 'reselect');
+});
+
+test('a version-only pin cannot preserve one matching prepared commit', () => {
   const fixture = makeFixture();
   fixture.addPreparedSet(COMMIT_A, 'same');
-  fixture.addPreparedSet(COMMIT_B, 'same');
   fixture.installCurrent(COMMIT_A, '1.0.0', 'same');
   fixture.pin('@acme/idd-skill@1.0.0');
   const report = inspectDistributionSelection(fixture.options());
