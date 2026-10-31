@@ -674,13 +674,13 @@ export function writeNewFileAtomically(
     ) {
       throw new Error(`${path} is not a prefix of the expected file; refusing`);
     }
-    if (mode !== undefined && (tempWalk.finalStat.mode & 0o777) !== mode) {
-      throw new Error(`${path} has an unexpected mode; refusing`);
-    }
+    const modeMatches =
+      mode === undefined || (tempWalk.finalStat.mode & 0o777) === mode;
     const current = walkTo(root, target, fs);
     if (tempWalk.finalStat.nlink > 1) {
       if (
         bytes.equals(expected) &&
+        modeMatches &&
         current.finalKind === 'file' &&
         current.finalStat !== null &&
         current.finalStat.dev === tempWalk.finalStat.dev &&
@@ -692,7 +692,7 @@ export function writeNewFileAtomically(
       }
       throw new Error(`${path} has more than one hard link; refusing`);
     }
-    if (bytes.equals(expected)) {
+    if (bytes.equals(expected) && modeMatches) {
       publishTemp(path, bytes);
       continue;
     }

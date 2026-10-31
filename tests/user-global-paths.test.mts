@@ -301,6 +301,25 @@ posixTest(
   },
 );
 
+posixTest(
+  'writeNewFileAtomically replaces a complete temporary file with the wrong mode',
+  () => {
+    withBox((box) => {
+      makeRoot(box);
+      const target = join(box.dataRoot, 'sub', 'executable.mjs');
+      const temporary = `${target}.idd-prepared-tmp-789`;
+      writeFile(temporary, 'complete');
+      nodeFs.chmodSync(temporary, 0o644);
+
+      writeNewFileAtomically(box.dataRoot, target, 'complete', nodeFs, 0o755);
+
+      assert.equal(nodeFs.readFileSync(target, 'utf8'), 'complete');
+      assert.equal(nodeFs.lstatSync(target).mode & 0o777, 0o755);
+      assert.equal(nodeFs.existsSync(temporary), false);
+    });
+  },
+);
+
 posixTest('writeNewFileAtomically preserves an existing different file', () => {
   withBox((box) => {
     makeRoot(box);
