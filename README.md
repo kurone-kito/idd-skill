@@ -15,8 +15,8 @@ branch, open a PR, handle review feedback, wait for CI, merge under the
 policy you select, and clean up. The phase rules ship as Markdown
 instruction files that live in your repository — yours to inspect,
 fork, and audit. With the default `instructions-only` helper runtime,
-Node.js is not required; a selected helper runtime adds Node gate
-helpers.
+Node.js is not required; a selected non-`instructions-only` helper
+runtime adds Node gate helpers.
 
 ## Why IDD exists
 

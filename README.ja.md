@@ -15,8 +15,8 @@ IDD Skill は、リポジトリへ移植できる Issue-Driven Development
 マージポリシーに従ってマージと後片づけまで進めます。フェーズのルールは、
 リポジトリ内に置かれた Markdown 指示ファイルとして配布されます —
 読むのも、フォークするのも、監査するのも自由です。既定の helper runtime
-(`instructions-only`)では Node.js は不要です。helper runtime を選ぶと、
-Node.js で動くゲート helper が加わります。
+(`instructions-only`)では Node.js は不要です。`instructions-only` 以外の
+helper runtime を選ぶと、Node.js で動くゲート helper が加わります。
 
 ## IDD が存在する理由
 
