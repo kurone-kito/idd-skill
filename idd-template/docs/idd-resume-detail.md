@@ -1244,6 +1244,32 @@ step 1. This sequence does not repeat them.
    The leading-hyphen test is needed because `git check-ref-format` accepts a
    name such as `-x`, but `git branch` refuses it.
 
+   Then run the preflight under the clone-scoped lock. It fetches the remote
+   tip and checks the local branch and worktrees. It writes no claim tokens
+   and posts no marker. A failure holds here, before any POST:
+
+   ```sh
+   node scripts/clone-lock.mjs --exec --agent-id <id> -- sh -c '
+     git fetch origin "+refs/heads/$1:refs/remotes/origin/$1" || exit 1
+     git rev-parse --verify --quiet "refs/remotes/origin/$1" > /dev/null ||
+       { echo "preflight: no readable origin/$1: hold" >&2; exit 1; }
+     if git show-ref --verify --quiet "refs/heads/$1"; then
+       [ "$(git rev-parse "refs/heads/$1")" = \
+         "$(git rev-parse "refs/remotes/origin/$1")" ] ||
+         { echo "preflight: local $1 differs from origin/$1: hold" >&2; exit 1; }
+     fi &&
+     if git worktree list --porcelain | grep -Fqx "branch refs/heads/$1"; then
+       echo "preflight: branch $1 is checked out in another worktree: hold" >&2
+       exit 1
+     fi
+   ' sh '<branch>'
+   ```
+
+   A missing local branch passes the preflight, and Step 5 then creates it from
+   origin. The preflight leaves the local branch and worktrees unchanged, and a
+   successful fetch may refresh the remote-tracking ref. Step 5 repeats the
+   same checks under the lock, immediately before attachment.
+
    Then record the tokens:
    `node scripts/claim-lock.mjs --record-tokens --worktree <primary>
    --agent-id <id> --claim-id <id>`. Immediately before the claim POST in
