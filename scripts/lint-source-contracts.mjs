@@ -282,12 +282,25 @@ function detectEntryContracts(files) {
         ),
       );
     }
-    if (!/\^22\.23\.2 \|\| \^24\.2\.0 \|\| >=26\.0\.0/.test(text)) {
+    if (
+      !text.includes(
+        'Node version satisfying the engines.node field in package.json.',
+      )
+    ) {
       result.push(
         violation(
           'RUNTIME-GUARD-STANDALONE-EXEMPTION',
           `src/scripts/${name}`,
-          'inlined guard message must retain the engines.node range literal',
+          'inlined guard message must name package.json and engines.node',
+        ),
+      );
+    }
+    if (text.includes('22.23.2')) {
+      result.push(
+        violation(
+          'RUNTIME-GUARD-STANDALONE-EXEMPTION',
+          `src/scripts/${name}`,
+          'inlined guard message must not copy the engines.node range literal',
         ),
       );
     }
