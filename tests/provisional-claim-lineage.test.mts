@@ -7,7 +7,10 @@ import {
   renderForcedHandoffComment,
   renderUnclaimedByMarker,
 } from '../src/scripts/marker-helpers.mts';
-import { resolveActiveClaimWithForcedHandoffTrace } from '../src/scripts/protocol-helpers.mts';
+import {
+  isStaleByAge,
+  resolveActiveClaimWithForcedHandoffTrace,
+} from '../src/scripts/protocol-helpers.mts';
 import {
   type BuildVerifiedClaimLineageInput,
   buildVerifiedClaimLineage,
@@ -167,12 +170,12 @@ function replayComment(
 
 function assertLineageMatchesClaimFold(
   result: ReturnType<typeof buildVerifiedClaimLineage>,
-  comments: readonly ProvisionalClaimLineageComment[],
+  lineageInput: BuildVerifiedClaimLineageInput,
 ): void {
   assert.equal(result.status, 'ok');
   if (result.status !== 'ok') return;
 
-  const trustedComments = comments.filter((value) => {
+  const trustedComments = lineageInput.comments.filter((value) => {
     const login = value.authorLogin?.trim().toLowerCase() ?? '';
     return value.trustedAuthor && login !== '' && trustedLoginSet.has(login);
   });
@@ -188,6 +191,8 @@ function assertLineageMatchesClaimFold(
     {
       isTrustedAuthor: (login) =>
         trustedLoginSet.has(login.trim().toLowerCase()),
+      isStale: (activeCreatedAt, nextCreatedAt) =>
+        isStaleByAge(activeCreatedAt, nextCreatedAt, lineageInput.staleAgeMs),
     },
   );
   assert.deepEqual(
@@ -223,8 +228,9 @@ test('builds active verified lineage with source comment timestamps and IDs', ()
   );
   const history = [first, release, second];
 
-  const result = buildVerifiedClaimLineage(input(history));
-  assertLineageMatchesClaimFold(result, history);
+  const lineageInput = input(history);
+  const result = buildVerifiedClaimLineage(lineageInput);
+  assertLineageMatchesClaimFold(result, lineageInput);
   assert.deepEqual(result, {
     status: 'ok',
     claims: [
@@ -269,9 +275,10 @@ test('keeps a same-claim heartbeat and activation nonce within one claim start',
     '2026-10-20T00:00:02Z',
   );
   const history = [first, heartbeat, activation];
-  const result = buildVerifiedClaimLineage(input(history));
+  const lineageInput = input(history);
+  const result = buildVerifiedClaimLineage(lineageInput);
 
-  assertLineageMatchesClaimFold(result, history);
+  assertLineageMatchesClaimFold(result, lineageInput);
   assert.equal(result.status, 'ok');
   if (result.status === 'ok') {
     assert.equal(result.claims.length, 1);
@@ -294,8 +301,9 @@ test('returns null active state and active-since after a released claim', () => 
   );
   const history = [claim, release];
 
-  const result = buildVerifiedClaimLineage(input(history));
-  assertLineageMatchesClaimFold(result, history);
+  const lineageInput = input(history);
+  const result = buildVerifiedClaimLineage(lineageInput);
+  assertLineageMatchesClaimFold(result, lineageInput);
   assert.deepEqual(result, {
     status: 'ok',
     claims: [
@@ -314,23 +322,31 @@ test('returns null active state and active-since after a released claim', () => 
 });
 
 test('filters untrusted claim markers before folding and normalizes trusted logins', () => {
-  const ignored = claimComment(
+  const ignoredByLogin = claimComment(
     '201',
     'claim-4599-forged',
     '2026-10-20T00:00:00Z',
     { agentId: 'forged-agent' },
   );
-  const trusted = claimComment(
+  const ignoredByTrustFlag = claimComment(
     '202',
+    'claim-4599-unverified',
+    '2026-10-20T00:00:00.500Z',
+    { agentId: 'unverified-agent' },
+  );
+  const trusted = claimComment(
+    '203',
     'claim-4599-real',
     '2026-10-20T00:00:01Z',
   );
   const history = [
-    { ...ignored, authorLogin: 'untrusted', trustedAuthor: false },
+    { ...ignoredByLogin, authorLogin: 'untrusted', trustedAuthor: true },
+    { ...ignoredByTrustFlag, authorLogin: 'Kurone-Kito', trustedAuthor: false },
     trusted,
   ];
-  const result = buildVerifiedClaimLineage(input(history));
-  assertLineageMatchesClaimFold(result, history);
+  const lineageInput = input(history);
+  const result = buildVerifiedClaimLineage(lineageInput);
+  assertLineageMatchesClaimFold(result, lineageInput);
   assert.equal(result.status, 'ok');
   if (result.status === 'ok') {
     assert.deepEqual(
@@ -366,10 +382,11 @@ test('replay accepts the verified claim prefix at every record position', () => 
 
   for (const position of positions) {
     const beforeRecord = sourceHistory.slice(0, position.prefixLength);
-    const prefixLineage = buildVerifiedClaimLineage(input(beforeRecord));
+    const prefixInput = input(beforeRecord);
+    const prefixLineage = buildVerifiedClaimLineage(prefixInput);
     assert.equal(prefixLineage.status, 'ok');
     if (prefixLineage.status !== 'ok') continue;
-    assertLineageMatchesClaimFold(prefixLineage, beforeRecord);
+    assertLineageMatchesClaimFold(prefixLineage, prefixInput);
     const recordClaims: ProvisionalDecisionClaim[] = prefixLineage.claims.map(
       ({ commentId: _commentId, ...claim }) => claim,
     );
@@ -387,10 +404,11 @@ test('replay accepts the verified claim prefix at every record position', () => 
       selection,
       ...sourceHistory.slice(position.prefixLength),
     ];
-    const lineage = buildVerifiedClaimLineage(input(history));
+    const lineageInput = input(history);
+    const lineage = buildVerifiedClaimLineage(lineageInput);
     assert.equal(lineage.status, 'ok');
     if (lineage.status !== 'ok') continue;
-    assertLineageMatchesClaimFold(lineage, history);
+    assertLineageMatchesClaimFold(lineage, lineageInput);
     const replay = replayProvisionalDecisionHistory({
       comments: history.map(replayComment),
       completeHistory: true,
@@ -537,8 +555,9 @@ test('keeps a fresh takeover out of lineage and uses the configured stale age', 
     { agentId: 'fresh-takeover-agent', supersedes: 'claim-4599-1' },
   );
   const history = [first, freshTakeover];
-  const ignored = buildVerifiedClaimLineage(input(history));
-  assertLineageMatchesClaimFold(ignored, history);
+  const lineageInput = input(history);
+  const ignored = buildVerifiedClaimLineage(lineageInput);
+  assertLineageMatchesClaimFold(ignored, lineageInput);
   assert.equal(ignored.status, 'ok');
   if (ignored.status === 'ok') {
     assert.deepEqual(
