@@ -228,6 +228,24 @@ function prepareOptions(
   };
 }
 
+function commitPreparedSource(source: string): string {
+  for (const args of [
+    ['init', '--quiet', source],
+    ['-C', source, 'config', 'user.name', 'IDD fixture'],
+    ['-C', source, 'config', 'user.email', 'idd-fixture@example.invalid'],
+    ['-C', source, 'add', '--all'],
+    ['-C', source, '-c', 'commit.gpgsign=false', 'commit', '-m', 'fixture'],
+  ]) {
+    const result = spawnSync('git', args, { encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+  }
+  const revision = spawnSync('git', ['-C', source, 'rev-parse', 'HEAD'], {
+    encoding: 'utf8',
+  });
+  assert.equal(revision.status, 0, revision.stderr);
+  return revision.stdout.trim();
+}
+
 function preparedManifest(path: string): {
   sourceCommit: string;
   components: {
@@ -255,6 +273,7 @@ const WRITE_FLAGS =
   nodeFs.constants.O_TRUNC;
 const WRITE_OPS = new Set([
   'mkdirSync',
+  'linkSync',
   'renameSync',
   'unlinkSync',
   'rmdirSync',
@@ -418,21 +437,7 @@ test('preparation derives each helper closure from that staged root runtime map'
 test('checkout preparation refuses bytes that do not match the named commit', () => {
   const home = makeHome();
   const source = makePreparedSource();
-  for (const args of [
-    ['init', '--quiet', source],
-    ['-C', source, 'config', 'user.name', 'IDD fixture'],
-    ['-C', source, 'config', 'user.email', 'idd-fixture@example.invalid'],
-    ['-C', source, 'add', '--all'],
-    ['-C', source, '-c', 'commit.gpgsign=false', 'commit', '-m', 'fixture'],
-  ]) {
-    const result = spawnSync('git', args, { encoding: 'utf8' });
-    assert.equal(result.status, 0, result.stderr);
-  }
-  const revision = spawnSync('git', ['-C', source, 'rev-parse', 'HEAD'], {
-    encoding: 'utf8',
-  });
-  assert.equal(revision.status, 0, revision.stderr);
-  const sourceCommit = revision.stdout.trim();
+  const sourceCommit = commitPreparedSource(source);
   nodeFs.writeFileSync(
     join(source, 'skills/issue-authoring/SKILL.md'),
     '# Edited after commit\n',
@@ -447,6 +452,47 @@ test('checkout preparation refuses bytes that do not match the named commit', ()
     /differs from source commit/,
   );
   assert.equal(nodeFs.existsSync(dataRootOf(home)), false);
+});
+
+test('checkout preparation detects missing committed files in a skill bundle', () => {
+  const home = makeHome();
+  const source = makePreparedSource();
+  const extraPath = join(source, 'skills/issue-authoring/references/extra.md');
+  nodeFs.mkdirSync(dirname(extraPath), { recursive: true });
+  nodeFs.writeFileSync(extraPath, '# Tracked reference\n');
+  const sourceCommit = commitPreparedSource(source);
+  nodeFs.unlinkSync(extraPath);
+
+  assert.throws(
+    () =>
+      prepareDistributionSet({
+        ...prepareOptions(home, source, sourceCommit),
+        provenance: { kind: 'checkout', commit: sourceCommit },
+      }),
+    /skills\/issue-authoring file inventory differs from source commit/,
+  );
+  assert.equal(nodeFs.existsSync(dataRootOf(home)), false);
+});
+
+test('checkout preparation preserves committed executable modes and verifies them on reuse', () => {
+  const home = makeHome();
+  const source = makePreparedSource();
+  nodeFs.chmodSync(join(source, 'scripts/sample.mjs'), 0o755);
+  const sourceCommit = commitPreparedSource(source);
+  const options = {
+    ...prepareOptions(home, source, sourceCommit),
+    provenance: { kind: 'checkout' as const, commit: sourceCommit },
+  };
+  const prepared = prepareDistributionSet(options);
+  const stagedHelper = join(prepared.preparedPath, 'scripts/sample.mjs');
+  assert.equal(nodeFs.statSync(stagedHelper).mode & 0o777, 0o755);
+
+  nodeFs.chmodSync(stagedHelper, 0o644);
+  assert.throws(
+    () => prepareDistributionSet(options),
+    /mode that differs from the prepared source/,
+  );
+  assert.equal(nodeFs.statSync(stagedHelper).mode & 0o777, 0o644);
 });
 
 test('an interrupted preparation records stage paths and safely resumes without changing an older set', () => {
@@ -464,7 +510,7 @@ test('an interrupted preparation records stage paths and safely resumes without 
   const failedPath = join(candidatePath, 'skills/issue-authoring/SKILL.md');
   let failed = false;
   const fs = hookedFs((op, args) => {
-    if (op === 'openSync' && args[0] === failedPath && !failed) {
+    if (op === 'linkSync' && args[1] === failedPath && !failed) {
       failed = true;
       throw new Error('injected stage interruption');
     }
@@ -495,6 +541,121 @@ test('an interrupted preparation records stage paths and safely resumes without 
   assert.equal(resumed.reused, false);
   assert.ok(nodeFs.existsSync(join(candidatePath, 'manifest.json')));
   assert.deepEqual(snapshot(prior.preparedPath), priorSnapshot);
+});
+
+test('preparation refuses a stale receipt temporary before changing managed state', () => {
+  const home = makeHome();
+  const source = makePreparedSource();
+  const commit = '7'.repeat(40);
+  const dataRoot = dataRootOf(home);
+  nodeFs.mkdirSync(dataRoot);
+  nodeFs.writeFileSync(
+    receiptOf(home),
+    `${JSON.stringify({
+      version: 1,
+      entries: [{ kind: 'directory', path: dataRoot }],
+    })}\n`,
+  );
+  const staleTemp = join(dataRoot, 'receipt.json.tmp-123');
+  nodeFs.writeFileSync(staleTemp, '{}\n');
+  const before = snapshot(home);
+
+  assert.throws(
+    () => prepareDistributionSet(prepareOptions(home, source, commit)),
+    /stale receipt temporary from an interrupted write/,
+  );
+  assert.deepEqual(snapshot(home), before);
+
+  nodeFs.unlinkSync(staleTemp);
+  const result = prepareDistributionSet(prepareOptions(home, source, commit));
+  assert.equal(result.reused, false);
+});
+
+test('a receipt lock refuses concurrent preparation, install, and uninstall', () => {
+  const home = makeHome();
+  installPayload(optionsFor(home));
+  const firstSource = makePreparedSource();
+  const secondSource = makePreparedSource({ authoringText: '# Concurrent\n' });
+  const firstCommit = '8'.repeat(40);
+  const secondCommit = '9'.repeat(40);
+  let nestedAttempted = false;
+  const fs = hookedFs((op, args) => {
+    if (
+      op === 'openSync' &&
+      String(args[0]).endsWith('/owner.json') &&
+      !nestedAttempted
+    ) {
+      nestedAttempted = true;
+      assert.throws(
+        () => installPayload(optionsFor(home, { fs })),
+        /prepared receipt lock .*refusing before receipt reads or writes/,
+      );
+      assert.throws(
+        () => uninstallPayload(optionsFor(home, { fs })),
+        /prepared receipt lock .*refusing before receipt reads or writes/,
+      );
+      assert.throws(
+        () =>
+          prepareDistributionSet(
+            prepareOptions(home, secondSource, secondCommit),
+          ),
+        /prepared receipt lock .*another preparation may be active/,
+      );
+    }
+  });
+
+  const first = prepareDistributionSet({
+    ...prepareOptions(home, firstSource, firstCommit),
+    fs,
+  });
+  assert.equal(nestedAttempted, true);
+  const second = prepareDistributionSet(
+    prepareOptions(home, secondSource, secondCommit),
+  );
+  assert.equal(first.reused, false);
+  assert.equal(second.reused, false);
+  const receipt = JSON.parse(nodeFs.readFileSync(receiptOf(home), 'utf8')) as {
+    entries: { path: string }[];
+  };
+  assert.ok(receipt.entries.some((entry) => entry.path === first.preparedPath));
+  assert.ok(
+    receipt.entries.some((entry) => entry.path === second.preparedPath),
+  );
+  assert.ok(receipt.entries.some((entry) => entry.path === versionDirOf(home)));
+});
+
+test('preparation refuses non-file receipt kinds under a prepared set', () => {
+  const home = makeHome();
+  const source = makePreparedSource();
+  const commit = 'a'.repeat(40);
+  const dataRoot = dataRootOf(home);
+  const preparedRoot = join(dataRoot, 'prepared');
+  const setRoot = join(preparedRoot, commit);
+  nodeFs.mkdirSync(dataRoot);
+  nodeFs.writeFileSync(
+    receiptOf(home),
+    `${JSON.stringify({
+      version: 1,
+      entries: [
+        { kind: 'directory', path: dataRoot },
+        { kind: 'directory', path: preparedRoot },
+        { kind: 'directory', path: setRoot },
+        {
+          kind: 'managed-block',
+          path: join(setRoot, 'unexpected.md'),
+          sha256: 'b'.repeat(64),
+          separator: false,
+        },
+      ],
+    })}\n`,
+  );
+  const before = snapshot(home);
+
+  assert.throws(
+    () => prepareDistributionSet(prepareOptions(home, source, commit)),
+    /unexpected\.md is not a path the installer creates/,
+  );
+  assert.deepEqual(snapshot(home), before);
 });
 
 test('preparation refuses receipt conflicts and preserves edited prepared bytes', () => {
@@ -680,22 +841,14 @@ test('the installed entry uses the separately deployed activation command', () =
   assert.match(help.stdout, /Usage:/);
 });
 
-test('a second install of the same version writes no file', () => {
+test('a second install of the same version leaves files unchanged', () => {
   const home = makeHome();
   const options = optionsFor(home);
   installPayload(options);
   const before = snapshot(home);
 
-  let writes = 0;
-  const result = installPayload(
-    optionsFor(home, {
-      fs: hookedFs((op, args) => {
-        if (isWriteCall(op, args)) writes += 1;
-      }),
-    }),
-  );
+  const result = installPayload(options);
 
-  assert.equal(writes, 0);
   assert.deepEqual(snapshot(home), before);
   assert.ok(result.lines.every((line) => line.startsWith('keep ')));
 });
@@ -1580,16 +1733,10 @@ test('an upgrade that drops an unchanged skill file removes it and its receipt e
   assert.ok(isListed(home, olderFile), 'the older version stays listed');
   assertListedFilesMatchDisk(home);
 
-  // The prune is finished, so a repeat install writes nothing at all.
-  let writes = 0;
-  installPayload(
-    upgradeOptions(home, source, {
-      fs: hookedFs((op, args) => {
-        if (isWriteCall(op, args)) writes += 1;
-      }),
-    }),
-  );
-  assert.equal(writes, 0);
+  // The prune is finished, so a repeat install leaves no persistent changes.
+  const beforeRepeat = snapshot(home);
+  installPayload(upgradeOptions(home, source));
+  assert.deepEqual(snapshot(home), beforeRepeat);
 
   uninstallPayload(upgradeOptions(home, source));
   assert.equal(nodeFs.existsSync(dataRootOf(home)), false);

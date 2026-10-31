@@ -32,6 +32,7 @@ const {
   replaceFileByRename,
   repointCurrent,
   withCeilings,
+  writeNewFileAtomically,
   writeNewFile,
 } = userGlobalPaths;
 
@@ -186,6 +187,7 @@ test('exports the containment entry points and the two ceiling helpers', () => {
     'repointCurrent',
     'withCeilings',
     'writeNewFile',
+    'writeNewFileAtomically',
   ]);
 });
 
@@ -201,6 +203,13 @@ test('every export refuses before any mutation when no-follow is unavailable', (
       () => checkContainment(box.dataRoot, join(box.dataRoot, 'x'), fs),
       () => createDirectory(box.dataRoot, join(box.dataRoot, 'new-dir'), fs),
       () => writeNewFile(box.dataRoot, join(box.dataRoot, 'new.txt'), 'x', fs),
+      () =>
+        writeNewFileAtomically(
+          box.dataRoot,
+          join(box.dataRoot, 'new-atomic.txt'),
+          'x',
+          fs,
+        ),
       () => replaceFileByRename(box.dataRoot, file, sha('old'), 'new', fs),
       () =>
         removeSingleEntry(
@@ -263,6 +272,45 @@ posixTest('writeNewFile creates missing directories and the file', () => {
       nodeFs.readFileSync(join(box.dataRoot, 'sub', 'file.txt'), 'utf8'),
       'payload',
     );
+  });
+});
+
+posixTest(
+  'writeNewFileAtomically recovers complete and partial temporary files',
+  () => {
+    withBox((box) => {
+      makeRoot(box);
+      const target = join(box.dataRoot, 'sub', 'file.txt');
+      nodeFs.mkdirSync(dirname(target), { recursive: true });
+      const completeTemp = `${target}.idd-prepared-tmp-123`;
+      writeFile(completeTemp, 'complete');
+      nodeFs.linkSync(completeTemp, target);
+      writeNewFileAtomically(box.dataRoot, target, 'complete');
+      assert.equal(nodeFs.readFileSync(target, 'utf8'), 'complete');
+      assert.equal(nodeFs.existsSync(completeTemp), false);
+      assert.equal(nodeFs.lstatSync(target).nlink, 1);
+
+      nodeFs.unlinkSync(target);
+      const partialTemp = `${target}.idd-prepared-tmp-456`;
+      writeFile(partialTemp, 'part');
+      writeNewFileAtomically(box.dataRoot, target, 'partial payload');
+      assert.equal(nodeFs.readFileSync(target, 'utf8'), 'partial payload');
+      assert.equal(nodeFs.existsSync(partialTemp), false);
+      assert.equal(nodeFs.lstatSync(target).nlink, 1);
+    });
+  },
+);
+
+posixTest('writeNewFileAtomically preserves an existing different file', () => {
+  withBox((box) => {
+    makeRoot(box);
+    const target = join(box.dataRoot, 'existing.txt');
+    writeFile(target, 'user content');
+    assertThrowsMatching(
+      () => writeNewFileAtomically(box.dataRoot, target, 'installer content'),
+      /different bytes/,
+    );
+    assert.equal(nodeFs.readFileSync(target, 'utf8'), 'user content');
   });
 });
 

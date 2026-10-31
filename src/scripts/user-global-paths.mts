@@ -398,6 +398,20 @@ function sha256Of(
   }
 }
 
+/** Read a regular file without following links or blocking on a special file. */
+function readNoFollowBytes(path: string, fs: FsOps): Buffer {
+  const flags = requirePlatformFlags(fs);
+  const fd = fs.openSync(path, O_RDONLY | flags.noFollow | flags.nonBlock);
+  try {
+    if (!fs.fstatSync(fd).isFile()) {
+      throw new Error(`${path} is not a regular file`);
+    }
+    return fs.readFileSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 function writeAll(fd: number, content: string | Uint8Array, fs: FsOps): void {
   const buffer =
     typeof content === 'string'
@@ -603,8 +617,15 @@ export function writeNewFile(
   target: string,
   content: string | Uint8Array,
   fs: FsOps = DEFAULT_FS,
+  mode?: number,
 ): void {
   const flags = requirePlatformFlags(fs);
+  if (
+    mode !== undefined &&
+    (!Number.isInteger(mode) || mode < 0 || mode > 0o777)
+  ) {
+    throw new Error(`invalid file mode ${mode}`);
+  }
   const walk = walkTo(root, target, fs);
   if (walk.finalKind !== 'absent') {
     throw new Error(
@@ -620,6 +641,9 @@ export function writeNewFile(
   let closed = false;
   try {
     writeAll(fd, content, fs);
+    if (mode !== undefined) {
+      fs.fchmodSync(fd, mode);
+    }
     fs.closeSync(fd);
     closed = true;
   } catch (error) {
@@ -632,6 +656,199 @@ export function writeNewFile(
     }
     discardOwnFile(target, error, fs, `write to ${target} failed`);
   }
+}
+
+/**
+ * Create a new file through a sibling temporary file and an exclusive hard
+ * link. A complete or partial temporary file from an interrupted preparation
+ * is reused or removed only when its bytes are a prefix of the expected file.
+ */
+export function writeNewFileAtomically(
+  root: string,
+  target: string,
+  content: string | Uint8Array,
+  fs: FsOps = DEFAULT_FS,
+  mode?: number,
+): void {
+  requirePlatformFlags(fs);
+  const expected = Buffer.from(content);
+  if (
+    mode !== undefined &&
+    (!Number.isInteger(mode) || mode < 0 || mode > 0o777)
+  ) {
+    throw new Error(`invalid file mode ${mode}`);
+  }
+  const directory = dirname(target);
+  const targetWalk = walkTo(root, target, fs);
+  createDirs(targetWalk.missingDirs, fs);
+
+  const tempPrefix = `${basename(target)}.idd-prepared-tmp-`;
+  let names: string[];
+  try {
+    names = fs.readdirSync(directory);
+  } catch (error) {
+    if (errorCode(error) === 'ENOENT') names = [];
+    else throw error;
+  }
+
+  const removeTemp = (path: string, bytes: Buffer): void => {
+    removeSingleEntry(
+      root,
+      path,
+      {
+        kind: 'file',
+        sha256: createHash('sha256').update(bytes).digest('hex'),
+      },
+      fs,
+    );
+  };
+
+  const publishTemp = (path: string, bytes: Buffer): void => {
+    const existing = walkTo(root, target, fs);
+    if (existing.finalKind === 'file' && existing.finalStat !== null) {
+      if (existing.finalStat.nlink > 1) {
+        throw new Error(`${target} has more than one hard link; refusing`);
+      }
+      const current = readNoFollowBytes(target, fs);
+      if (!current.equals(expected)) {
+        throw new Error(
+          `${target} already exists with different bytes; refusing`,
+        );
+      }
+      removeTemp(path, bytes);
+      return;
+    }
+    if (existing.finalKind !== 'absent') {
+      throw new Error(`${target} appeared as ${existing.finalKind}; refusing`);
+    }
+
+    try {
+      fs.linkSync(path, target);
+    } catch (error) {
+      if (errorCode(error) !== 'EEXIST') {
+        throw new Error(
+          `could not atomically publish ${target}: ${describe(error)}`,
+        );
+      }
+      const raced = walkTo(root, target, fs);
+      if (
+        raced.finalKind !== 'file' ||
+        raced.finalStat === null ||
+        raced.finalStat.nlink > 1
+      ) {
+        throw new Error(
+          `${target} appeared during atomic publication; refusing`,
+        );
+      }
+      if (!readNoFollowBytes(target, fs).equals(expected)) {
+        throw new Error(
+          `${target} appeared with different bytes during atomic publication; refusing`,
+        );
+      }
+      removeTemp(path, bytes);
+      return;
+    }
+
+    const published = walkTo(root, target, fs);
+    const temporary = walkTo(root, path, fs);
+    if (
+      published.finalKind !== 'file' ||
+      published.finalStat === null ||
+      temporary.finalKind !== 'file' ||
+      temporary.finalStat === null ||
+      published.finalStat.dev !== temporary.finalStat.dev ||
+      published.finalStat.ino !== temporary.finalStat.ino ||
+      published.finalStat.nlink !== 2 ||
+      !readNoFollowBytes(target, fs).equals(expected)
+    ) {
+      throw new Error(`${target} changed during atomic publication; refusing`);
+    }
+    // Both names were just verified as the same inode created above. Removing
+    // the temporary name leaves the published file with one link.
+    fs.unlinkSync(path);
+  };
+
+  for (const name of names) {
+    if (
+      !name.startsWith(tempPrefix) ||
+      !/^[0-9]+$/.test(name.slice(tempPrefix.length))
+    ) {
+      continue;
+    }
+    const path = join(directory, name);
+    const tempWalk = walkTo(root, path, fs);
+    if (tempWalk.finalKind !== 'file' || tempWalk.finalStat === null) {
+      throw new Error(
+        `${path} is not a regular preparation temporary file; refusing`,
+      );
+    }
+    const bytes = readNoFollowBytes(path, fs);
+    if (
+      bytes.length > expected.length ||
+      !expected.subarray(0, bytes.length).equals(bytes)
+    ) {
+      throw new Error(`${path} is not a prefix of the expected file; refusing`);
+    }
+    if (mode !== undefined && (tempWalk.finalStat.mode & 0o777) !== mode) {
+      throw new Error(`${path} has an unexpected mode; refusing`);
+    }
+    const current = walkTo(root, target, fs);
+    if (tempWalk.finalStat.nlink > 1) {
+      if (
+        bytes.equals(expected) &&
+        current.finalKind === 'file' &&
+        current.finalStat !== null &&
+        current.finalStat.dev === tempWalk.finalStat.dev &&
+        current.finalStat.ino === tempWalk.finalStat.ino &&
+        current.finalStat.nlink === 2
+      ) {
+        fs.unlinkSync(path);
+        continue;
+      }
+      throw new Error(`${path} has more than one hard link; refusing`);
+    }
+    if (bytes.equals(expected)) {
+      publishTemp(path, bytes);
+      continue;
+    }
+    removeTemp(path, bytes);
+  }
+
+  const afterRecovery = walkTo(root, target, fs);
+  if (afterRecovery.finalKind === 'file' && afterRecovery.finalStat !== null) {
+    if (afterRecovery.finalStat.nlink > 1) {
+      throw new Error(`${target} has more than one hard link; refusing`);
+    }
+    if (!readNoFollowBytes(target, fs).equals(expected)) {
+      throw new Error(
+        `${target} already exists with different bytes; refusing`,
+      );
+    }
+    if (mode !== undefined && (afterRecovery.finalStat.mode & 0o777) !== mode) {
+      throw new Error(`${target} has an unexpected mode; refusing`);
+    }
+    return;
+  }
+  if (afterRecovery.finalKind !== 'absent') {
+    throw new Error(`${target} is ${afterRecovery.finalKind}; refusing`);
+  }
+
+  const temp = `${target}.idd-prepared-tmp-${process.pid}`;
+  writeNewFile(root, temp, expected, fs, mode);
+  const tempWalk = walkTo(root, temp, fs);
+  if (
+    tempWalk.finalKind !== 'file' ||
+    tempWalk.finalStat === null ||
+    !readNoFollowBytes(temp, fs).equals(expected)
+  ) {
+    throw new Error(
+      `${temp} did not retain the complete expected bytes; refusing`,
+    );
+  }
+  if (mode !== undefined && (tempWalk.finalStat.mode & 0o777) !== mode) {
+    throw new Error(`${temp} did not retain the expected mode; refusing`);
+  }
+  publishTemp(temp, expected);
 }
 
 /**
