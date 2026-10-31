@@ -956,6 +956,42 @@ test('mixed rollup selects the latest completion time independent of row order',
   assert.equal(checkRunWins.requiredChecks.status, 'success');
 });
 
+test('pending StatusContext updatedAt is not treated as a completion time', () => {
+  const earlier = '2026-07-09T00:04:00Z';
+  const later = '2026-07-09T00:05:00Z';
+
+  for (const statusContextFirst of [true, false]) {
+    const pendingStatusContext = {
+      __typename: 'StatusContext',
+      context: 'mixed-check',
+      state: 'PENDING',
+      targetUrl: '',
+      updatedAt: earlier,
+    };
+    const completedCheckRun = checkRun({
+      name: 'mixed-check',
+      conclusion: 'SUCCESS',
+      completedAt: later,
+    });
+    const summary = buildCiWaitStateSummary(
+      {
+        headRefOid: HEAD_SHA,
+        statusCheckRollup: statusContextFirst
+          ? [pendingStatusContext, completedCheckRun]
+          : [completedCheckRun, pendingStatusContext],
+      },
+      { requiredCheckNames: ['mixed-check'] },
+    );
+
+    assert.equal(
+      summary.checks.find(({ type }) => type === 'status-context')?.completedAt,
+      '',
+    );
+    assert.equal(summary.requiredChecks.allRequiredPassing, false);
+    assert.equal(summary.requiredChecks.status, 'pending');
+  }
+});
+
 test('reports the live headRefOid unchanged, for caller-side HEAD-drift detection', () => {
   const summary = buildCiWaitStateSummary(
     { headRefOid: HEAD_SHA, statusCheckRollup: [] },

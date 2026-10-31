@@ -669,6 +669,9 @@ function normalizeCheckEntry(
     const state = String(entry.state ?? '')
       .trim()
       .toUpperCase();
+    const completedAt = ['SUCCESS', 'FAILURE', 'ERROR'].includes(state)
+      ? (entry.updatedAt ?? entry.completedAt)
+      : entry.completedAt;
     return {
       checkName,
       workflowName: '',
@@ -678,7 +681,7 @@ function normalizeCheckEntry(
       required: requiredCheckNameSet.has(checkName),
       url: String(entry.targetUrl ?? ''),
       startedAt: String(entry.startedAt ?? ''),
-      completedAt: String(entry.updatedAt ?? entry.completedAt ?? ''),
+      completedAt: String(completedAt ?? ''),
     };
   }
 
