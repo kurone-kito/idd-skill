@@ -43,9 +43,9 @@ for (const path of REVIEW_FIX_COPIES) {
     const block = budgetBreachBlock(path);
     assertInOrder(block, [
       'above 98% of its `limitBytes`',
-      '1. Move the detail this change added into `docs/idd-helper-scripts.md`',
-      'a bare link is not a move.',
-      'Skip this step for lite files',
+      '1. Move each obligation the change removes into `docs/idd-helper-scripts.md`',
+      'in the same change; a bare link is not a move.',
+      'Skip for lite files.',
       'Do not trim shared, terminology-sensitive text.',
       '2. If the bundle is still above 98%, read its base utilization',
       'If its base utilization was below 95%, raise the limit to about 10% above the new total',
