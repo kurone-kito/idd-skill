@@ -3792,6 +3792,47 @@ function ledgerStorageSection(path: string, heading: string): string {
   );
 }
 
+// The text of one ownership case runs from its heading to the nearest later
+// heading of any case. The heading order in the contract need not match the
+// order of `cases`, so the nearest heading is taken, not the first array entry
+// that appears later in the text.
+function ledgerCaseText(
+  section: string,
+  cases: readonly { readonly label: string }[],
+  index: number,
+): string {
+  const label = cases[index].label;
+  const start = section.indexOf(label);
+  assert.notEqual(start, -1, `missing ownership case: ${label}`);
+  const from = start + label.length;
+  let nextStart: number | undefined;
+  for (const next of cases) {
+    const position = section.indexOf(next.label, from);
+    if (position !== -1 && (nextStart === undefined || position < nextStart)) {
+      nextStart = position;
+    }
+  }
+  return normalizeWhitespace(section.slice(start, nextStart ?? section.length));
+}
+
+test('ownership case text ends at the nearest later heading, not the array order (#4801)', () => {
+  const [owned, edited, missing] = LEDGER_STORAGE_CASES;
+  // The contract lists `missing` between `owned` and `edited`, and places
+  // `owned`'s expected action under `missing`. Text under `missing` must not
+  // satisfy `owned`.
+  const section = [
+    owned.label,
+    'Other text.',
+    missing.label,
+    owned.expectedAction,
+    edited.label,
+    edited.expectedAction,
+  ].join('\n');
+  const caseText = ledgerCaseText(section, LEDGER_STORAGE_CASES, 0);
+  assert.equal(caseText.includes(owned.expectedAction), false);
+  assert.equal(caseText.includes(missing.label), false);
+});
+
 test('issue-authoring contract defines ledger storage verdicts, allocation, and every ownership case (#4711)', () => {
   const section = ledgerStorageSection(
     LEDGER_STORAGE_CONTRACT,
@@ -3806,14 +3847,7 @@ test('issue-authoring contract defines ledger storage verdicts, allocation, and 
     assert.ok(text.includes(verdict), `missing verdict: ${verdict}`);
   }
   for (const [index, scenario] of LEDGER_STORAGE_CASES.entries()) {
-    const start = section.indexOf(scenario.label);
-    assert.notEqual(start, -1, `missing ownership case: ${scenario.label}`);
-    const nextStart = LEDGER_STORAGE_CASES.slice(index + 1)
-      .map((next) => section.indexOf(next.label, start + scenario.label.length))
-      .find((position) => position !== -1);
-    const caseText = normalizeWhitespace(
-      section.slice(start, nextStart ?? section.length),
-    );
+    const caseText = ledgerCaseText(section, LEDGER_STORAGE_CASES, index);
     assert.ok(
       caseText.includes(scenario.expectedAction),
       `missing expected action for ${scenario.label}: ${scenario.expectedAction}`,
