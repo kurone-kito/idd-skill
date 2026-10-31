@@ -137,10 +137,11 @@ function selectedEvent() {
 
 function decisionRecord(
   claimLineage: readonly ProvisionalDecisionClaim[],
+  recordId = 'select-1',
 ): ProvisionalDecisionRecord {
   return {
     schemaVersion: 1,
-    recordId: 'select-1',
+    recordId,
     source,
     bundleGeneration: 1,
     decisionGeneration: 1,
@@ -418,9 +419,10 @@ test('replay accepts the verified claim prefix at every record position', () => 
     const recordClaims: ProvisionalDecisionClaim[] = prefixLineage.claims.map(
       ({ commentId: _commentId, ...claim }) => claim,
     );
+    const selectionRecordId = `selection-${position.id}`;
     const selection = comment(
       position.id,
-      `${PROVISIONAL_DECISION_RECORD_MARKER}\n${JSON.stringify(decisionRecord(recordClaims))}`,
+      `${PROVISIONAL_DECISION_RECORD_MARKER}\n${JSON.stringify(decisionRecord(recordClaims, selectionRecordId))}`,
       position.createdAt,
     );
     assert.equal(
@@ -447,6 +449,8 @@ test('replay accepts the verified claim prefix at every record position', () => 
     });
     assert.equal(replay.valid, true, JSON.stringify(replay.issues));
     assert.deepEqual(replay.issues, []);
+    assert.equal(replay.status, 'selected');
+    assert.equal(replay.decisions[0]?.selection.recordId, selectionRecordId);
   }
 });
 
@@ -480,6 +484,22 @@ test('refuses unknown or edited claim marker history before parsing it', () => {
     [{ ...marker, lastEditedAt: '2026-10-20T00:00:01Z' }],
     'edited-claim-marker',
   );
+});
+
+test('refuses an edited release marker after a valid claim start', () => {
+  const claim = claimComment('502', 'claim-4599-1', '2026-10-20T00:00:00Z');
+  const release = comment(
+    '503',
+    renderUnclaimedByMarker({
+      agentId: 'agent-claim-4599-1',
+      claimId: 'claim-4599-1',
+      timestamp: '2026-10-20T00:00:01Z',
+    }),
+    '2026-10-20T00:00:01Z',
+    { lastEditedAt: '2026-10-20T00:00:02Z' },
+  );
+
+  reason([claim, release], 'edited-claim-marker');
 });
 
 test('refuses legacy and malformed recognized claim markers', () => {
