@@ -1697,8 +1697,9 @@ test('takeover selector paginates, selects exact trusted markers, and reports no
     assert.ok(restArgs.includes('GET'));
     assert.ok(restArgs.includes('-F'));
     assert.ok(restArgs.includes('per_page=100'));
-    assert.ok(restArgs.includes('--hostname'));
-    assert.ok(restArgs.includes('ghes.example.com'));
+    const hostnameIndex = restArgs.indexOf('--hostname');
+    assert.notEqual(hostnameIndex, -1);
+    assert.equal(restArgs[hostnameIndex + 1], 'ghes.example.com');
     const graphql = calls.find((call) => call.type === 'graphql');
     assert.ok(graphql);
     assert.deepEqual(graphql.ids, [
