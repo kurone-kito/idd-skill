@@ -347,13 +347,16 @@ function main() {
 }
 function fetchIssueComments(repository, issue) {
   const [owner, repo] = repository.split('/');
+  // `--slurp` needs gh >= 2.48.0, but Ubuntu 24.04 ships gh 2.45.0. The
+  // NDJSON form of `--jq '.[]'` works on both, so parse it line by line.
   const result = runGhWithFileBackedStdout([
     'api',
     ...resolveGhHostnameArgs(),
     '--method',
     'GET',
     '--paginate',
-    '--slurp',
+    '--jq',
+    '.[]',
     `repos/${owner}/${repo}/issues/${issue}/comments`,
     '-F',
     'per_page=100',
@@ -361,58 +364,58 @@ function fetchIssueComments(repository, issue) {
   if (!result.ok) {
     throw new Error(result.stderr);
   }
-  let pages;
-  try {
-    pages = JSON.parse(result.stdout);
-  } catch (error) {
-    throw new Error(
-      `invalid paginated JSON: ${error instanceof Error ? error.message : String(error)}`,
-    );
-  }
-  if (!Array.isArray(pages) || !pages.every(Array.isArray)) {
-    throw new Error('paginated response must be an array of comment pages');
+  const rows = [];
+  for (const line of result.stdout.split(/\r?\n/)) {
+    if (line.trim().length === 0) {
+      continue;
+    }
+    try {
+      rows.push(JSON.parse(line));
+    } catch (error) {
+      throw new Error(
+        `invalid paginated JSON: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
   const comments = [];
   const seenNodeIds = new Set();
-  for (const page of pages) {
-    for (const value of page) {
-      if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-        throw new Error('comment page contains a non-object row');
-      }
-      const row = value;
-      if (
-        typeof row.node_id !== 'string' ||
-        row.node_id.length === 0 ||
-        typeof row.html_url !== 'string' ||
-        row.html_url.length === 0 ||
-        typeof row.body !== 'string'
-      ) {
-        throw new Error(
-          'comment page contains a row missing node_id, html_url, or body',
-        );
-      }
-      if (REST_SHAPED_SUBJECT_ID_PATTERN.test(row.node_id)) {
-        throw new Error('comment node_id is a REST numeric ID');
-      }
-      if (seenNodeIds.has(row.node_id)) {
-        throw new Error(`comment listing repeated node_id ${row.node_id}`);
-      }
-      seenNodeIds.add(row.node_id);
-      const user = row.user;
-      if (typeof user !== 'object' || user === null || Array.isArray(user)) {
-        throw new Error('comment page contains a row missing user.login');
-      }
-      const authorLogin = user.login;
-      if (typeof authorLogin !== 'string' || authorLogin.length === 0) {
-        throw new Error('comment page contains a row missing user.login');
-      }
-      comments.push({
-        nodeId: row.node_id,
-        url: row.html_url,
-        body: row.body,
-        authorLogin,
-      });
+  for (const value of rows) {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+      throw new Error('comment page contains a non-object row');
     }
+    const row = value;
+    if (
+      typeof row.node_id !== 'string' ||
+      row.node_id.length === 0 ||
+      typeof row.html_url !== 'string' ||
+      row.html_url.length === 0 ||
+      typeof row.body !== 'string'
+    ) {
+      throw new Error(
+        'comment page contains a row missing node_id, html_url, or body',
+      );
+    }
+    if (REST_SHAPED_SUBJECT_ID_PATTERN.test(row.node_id)) {
+      throw new Error('comment node_id is a REST numeric ID');
+    }
+    if (seenNodeIds.has(row.node_id)) {
+      throw new Error(`comment listing repeated node_id ${row.node_id}`);
+    }
+    seenNodeIds.add(row.node_id);
+    const user = row.user;
+    if (typeof user !== 'object' || user === null || Array.isArray(user)) {
+      throw new Error('comment page contains a row missing user.login');
+    }
+    const authorLogin = user.login;
+    if (typeof authorLogin !== 'string' || authorLogin.length === 0) {
+      throw new Error('comment page contains a row missing user.login');
+    }
+    comments.push({
+      nodeId: row.node_id,
+      url: row.html_url,
+      body: row.body,
+      authorLogin,
+    });
   }
   return comments;
 }

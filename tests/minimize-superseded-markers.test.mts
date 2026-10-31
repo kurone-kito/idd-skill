@@ -1435,11 +1435,11 @@ function makeTakeoverGhStub(pages: unknown[][]): string {
     'if (args[0] === "api" && args.includes("--paginate")) {',
     '  record({ type: "rest", args });',
     '  if (process.env.IDD_TEST_GH_FAIL === "1") { fs.writeSync(2, "simulated comment listing failure"); process.exit(1); }',
-    '  if (process.env.IDD_TEST_GH_BAD_LISTING === "1") { process.stdout.write(JSON.stringify([[{ html_url: "https://example.test/comment", body: "incomplete" }]])); process.exit(0); }',
-    '  if (process.env.IDD_TEST_GH_BAD_LISTING === "missing-user") { process.stdout.write(JSON.stringify([[{ node_id: "IC_missing_user", html_url: "https://example.test/comment", body: "incomplete" }]])); process.exit(0); }',
-    '  if (process.env.IDD_TEST_GH_BAD_LISTING === "null-user") { process.stdout.write(JSON.stringify([[{ node_id: "IC_null_user", html_url: "https://example.test/comment", body: "incomplete", user: null }]])); process.exit(0); }',
-    '  if (process.env.IDD_TEST_GH_BAD_LISTING === "missing-login") { process.stdout.write(JSON.stringify([[{ node_id: "IC_missing_login", html_url: "https://example.test/comment", body: "incomplete", user: {} }]])); process.exit(0); }',
-    '  process.stdout.write(JSON.stringify(pages));',
+    '  if (process.env.IDD_TEST_GH_BAD_LISTING === "1") { process.stdout.write(JSON.stringify({ html_url: "https://example.test/comment", body: "incomplete" }) + String.fromCharCode(10)); process.exit(0); }',
+    '  if (process.env.IDD_TEST_GH_BAD_LISTING === "missing-user") { process.stdout.write(JSON.stringify({ node_id: "IC_missing_user", html_url: "https://example.test/comment", body: "incomplete" }) + String.fromCharCode(10)); process.exit(0); }',
+    '  if (process.env.IDD_TEST_GH_BAD_LISTING === "null-user") { process.stdout.write(JSON.stringify({ node_id: "IC_null_user", html_url: "https://example.test/comment", body: "incomplete", user: null }) + String.fromCharCode(10)); process.exit(0); }',
+    '  if (process.env.IDD_TEST_GH_BAD_LISTING === "missing-login") { process.stdout.write(JSON.stringify({ node_id: "IC_missing_login", html_url: "https://example.test/comment", body: "incomplete", user: {} }) + String.fromCharCode(10)); process.exit(0); }',
+    '  process.stdout.write(pages.flat().map((row) => JSON.stringify(row) + String.fromCharCode(10)).join(""));',
     '  process.exit(0);',
     '}',
     'if (args[0] === "api" && args.includes("graphql")) {',
@@ -1692,7 +1692,10 @@ test('takeover selector paginates, selects exact trusted markers, and reports no
     assert.ok(rest);
     const restArgs = rest.args as string[];
     assert.ok(restArgs.includes('--paginate'));
-    assert.ok(restArgs.includes('--slurp'));
+    const jqIndex = restArgs.indexOf('--jq');
+    assert.notEqual(jqIndex, -1);
+    assert.equal(restArgs[jqIndex + 1], '.[]');
+    assert.equal(restArgs.includes('--slurp'), false);
     assert.ok(restArgs.includes('--method'));
     assert.ok(restArgs.includes('GET'));
     assert.ok(restArgs.includes('-F'));
