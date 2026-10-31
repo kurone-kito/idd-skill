@@ -5,8 +5,8 @@
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
-import { dirname, relative, resolve } from 'node:path';
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { resolveBundleRoot } from './bundle-root.mjs';
 import { parseCliArgs } from './cli-args.mjs';
 import {
@@ -96,6 +96,8 @@ const NODE_ENGINES = '^22.23.2 || ^24.2.0 || >=26.0.0';
 // package-manager, and ephemeral-npx paths always read the real version.
 const PACKAGE_VERSION_FALLBACK = 'unknown';
 const SCRIPT_FILE_EXTENSIONS = ['.mjs', '.js', '.json'];
+const EXTRA_RUNTIME_FILES_INITIALIZER_LOCATOR =
+  'const EXTRA_RUNTIME_FILES = new Map<string, string[]>([';
 // Runtime data files a helper reads at execution time (not via `import`),
 // so the import-graph walk cannot discover them. A consumer that vendors
 // exactly `managedFiles` must still receive these or the helper crashes on a
@@ -1171,6 +1173,89 @@ export function collectVendoredFiles(packageRoot = PACKAGE_ROOT) {
     targetPath,
   }));
 }
+// audit:ignore-dead-export: issue #4703 will call this helper.
+export function resolveHelperEntryClosure(entryPath, options = {}) {
+  const packageRoot = resolve(options.packageRoot ?? PACKAGE_ROOT);
+  const extraRuntimeFiles = options.extraRuntimeFiles ?? EXTRA_RUNTIME_FILES;
+  const entry = requirePackageFile(packageRoot, entryPath, 'entry path');
+  const queue = [entry];
+  const visited = new Set();
+  const closure = new Set();
+  while (queue.length > 0) {
+    const current = queue.pop();
+    if (!current || visited.has(current)) {
+      continue;
+    }
+    visited.add(current);
+    const currentPath = relativePath(packageRoot, current);
+    closure.add(currentPath);
+    for (const dataPath of extraRuntimeFiles.get(currentPath) ?? []) {
+      const dataFile = requirePackageFile(
+        packageRoot,
+        dataPath,
+        `extra runtime file for ${currentPath}`,
+      );
+      closure.add(relativePath(packageRoot, dataFile));
+    }
+    const source = readFileSync(current, 'utf8');
+    for (const specifier of findRelativeImports(source)) {
+      const dependency = resolveRelativeImport(current, specifier);
+      if (!dependency || !isInsidePackageRoot(packageRoot, dependency)) {
+        continue;
+      }
+      const dependencyStat = statIfPresent(dependency);
+      if (!dependencyStat?.isFile()) {
+        continue;
+      }
+      queue.push(dependency);
+    }
+  }
+  return [...closure].sort((left, right) =>
+    Buffer.compare(Buffer.from(left, 'utf8'), Buffer.from(right, 'utf8')),
+  );
+}
+// audit:ignore-dead-export: issue #4703 will call this helper.
+export function readHelperExtraRuntimeFiles(packageRoot) {
+  const resolvedRoot = resolve(packageRoot);
+  const sourcePath = requirePackageFile(
+    resolvedRoot,
+    'src/scripts/helper-runtime-manifest.mts',
+    'helper runtime manifest source',
+  );
+  const source = readFileSync(sourcePath, 'utf8');
+  const locatorIndex = findExtraRuntimeFilesInitializer(source);
+  if (locatorIndex < 0) {
+    throw new Error('EXTRA_RUNTIME_FILES initializer was not found');
+  }
+  const openingBracket =
+    locatorIndex + EXTRA_RUNTIME_FILES_INITIALIZER_LOCATOR.length - 1;
+  const tokens = scanExtraRuntimeFilesInitializer(source, openingBracket);
+  const entries = parseExtraRuntimeFilesInitializer(tokens);
+  const result = new Map();
+  for (const [entryPath, dataPaths] of entries) {
+    const canonicalEntryPath = relativePath(
+      resolvedRoot,
+      requirePackageFile(resolvedRoot, entryPath, 'EXTRA_RUNTIME_FILES entry'),
+    );
+    const canonicalDataPaths = dataPaths.map((dataPath) =>
+      relativePath(
+        resolvedRoot,
+        requirePackageFile(
+          resolvedRoot,
+          dataPath,
+          `EXTRA_RUNTIME_FILES data file for ${entryPath}`,
+        ),
+      ),
+    );
+    if (result.has(canonicalEntryPath)) {
+      throw new Error(
+        `EXTRA_RUNTIME_FILES entry is duplicated after path normalization: ${canonicalEntryPath}`,
+      );
+    }
+    result.set(canonicalEntryPath, canonicalDataPaths);
+  }
+  return result;
+}
 export function detectPackageManager(root = process.cwd()) {
   return collectHelperRuntimeEvidence(root).detectedPackageManager;
 }
@@ -1663,6 +1748,301 @@ function normalizePackageManager(packageManager, profile) {
     );
   }
   return packageManager;
+}
+function findExtraRuntimeFilesInitializer(source) {
+  let index = 0;
+  while (index < source.length) {
+    if (source.startsWith('//', index)) {
+      index = skipLineComment(source, index);
+      continue;
+    }
+    if (source.startsWith('/*', index)) {
+      const close = source.indexOf('*/', index + 2);
+      if (close < 0) {
+        return -1;
+      }
+      index = close + 2;
+      continue;
+    }
+    const character = source[index];
+    if (character === "'" || character === '"' || character === '`') {
+      index = skipSourceString(source, index);
+      continue;
+    }
+    if (source.startsWith(EXTRA_RUNTIME_FILES_INITIALIZER_LOCATOR, index)) {
+      return index;
+    }
+    index += 1;
+  }
+  return -1;
+}
+function skipLineComment(source, start) {
+  let index = start + 2;
+  while (
+    index < source.length &&
+    source[index] !== '\n' &&
+    source[index] !== '\r'
+  ) {
+    index += 1;
+  }
+  return index;
+}
+function skipSourceString(source, start) {
+  const quote = source[start];
+  let index = start + 1;
+  while (index < source.length) {
+    if (source[index] === '\\') {
+      index += 2;
+      continue;
+    }
+    if (source[index] === quote) {
+      return index + 1;
+    }
+    index += 1;
+  }
+  return source.length;
+}
+function scanExtraRuntimeFilesInitializer(source, openingBracket) {
+  const tokens = [];
+  let depth = 0;
+  let index = openingBracket;
+  while (index < source.length) {
+    const character = source[index];
+    if (/\s/.test(character)) {
+      index += 1;
+      continue;
+    }
+    if (source.startsWith('//', index)) {
+      index = skipLineComment(source, index);
+      continue;
+    }
+    if (character === "'" || character === '"') {
+      const literal = readExtraRuntimeString(source, index);
+      tokens.push({ type: 'string', value: literal.value });
+      index = literal.nextIndex;
+      continue;
+    }
+    if (character === '[') {
+      depth += 1;
+      tokens.push({ type: 'open' });
+      index += 1;
+      continue;
+    }
+    if (character === ']') {
+      depth -= 1;
+      tokens.push({ type: 'close' });
+      index += 1;
+      if (depth === 0) {
+        return tokens;
+      }
+      if (depth < 0) {
+        throw new Error('EXTRA_RUNTIME_FILES initializer has an unexpected ]');
+      }
+      continue;
+    }
+    if (character === ',') {
+      tokens.push({ type: 'comma' });
+      index += 1;
+      continue;
+    }
+    throw new Error(
+      `EXTRA_RUNTIME_FILES initializer has an unsupported lexeme at ${index}`,
+    );
+  }
+  throw new Error('EXTRA_RUNTIME_FILES initializer array is not closed');
+}
+function readExtraRuntimeString(source, start) {
+  const quote = source[start];
+  let value = '';
+  let index = start + 1;
+  while (index < source.length) {
+    const character = source[index];
+    if (character === quote) {
+      return { value, nextIndex: index + 1 };
+    }
+    if (
+      character === '\n' ||
+      character === '\r' ||
+      character === '\u2028' ||
+      character === '\u2029'
+    ) {
+      throw new Error(`EXTRA_RUNTIME_FILES string is not closed at ${start}`);
+    }
+    if (character !== '\\') {
+      value += character;
+      index += 1;
+      continue;
+    }
+    index += 1;
+    const escaped = source[index];
+    if (escaped === undefined) {
+      break;
+    }
+    if (escaped === '\n') {
+      index += 1;
+      continue;
+    }
+    if (escaped === '\r') {
+      index += source[index + 1] === '\n' ? 2 : 1;
+      continue;
+    }
+    if (escaped === 'x') {
+      const digits = source.slice(index + 1, index + 3);
+      if (!/^[\da-fA-F]{2}$/.test(digits)) {
+        throw new Error(
+          `EXTRA_RUNTIME_FILES has an invalid hex escape at ${index - 1}`,
+        );
+      }
+      value += String.fromCharCode(Number.parseInt(digits, 16));
+      index += 3;
+      continue;
+    }
+    if (escaped === 'u') {
+      if (source[index + 1] === '{') {
+        const close = source.indexOf('}', index + 2);
+        const digits = close < 0 ? '' : source.slice(index + 2, close);
+        const codePoint = Number.parseInt(digits, 16);
+        if (
+          close < 0 ||
+          !/^[\da-fA-F]{1,6}$/.test(digits) ||
+          codePoint > 0x10ffff
+        ) {
+          throw new Error(
+            `EXTRA_RUNTIME_FILES has an invalid Unicode escape at ${index - 1}`,
+          );
+        }
+        value += String.fromCodePoint(codePoint);
+        index = close + 1;
+        continue;
+      }
+      const digits = source.slice(index + 1, index + 5);
+      if (!/^[\da-fA-F]{4}$/.test(digits)) {
+        throw new Error(
+          `EXTRA_RUNTIME_FILES has an invalid Unicode escape at ${index - 1}`,
+        );
+      }
+      value += String.fromCharCode(Number.parseInt(digits, 16));
+      index += 5;
+      continue;
+    }
+    if (escaped === '0' && /\d/.test(source[index + 1] ?? '')) {
+      throw new Error(
+        `EXTRA_RUNTIME_FILES has an invalid numeric escape at ${index - 1}`,
+      );
+    }
+    const simpleEscapes = {
+      0: '\0',
+      b: '\b',
+      f: '\f',
+      n: '\n',
+      r: '\r',
+      t: '\t',
+      v: '\v',
+    };
+    value += simpleEscapes[escaped] ?? escaped;
+    index += 1;
+  }
+  throw new Error(`EXTRA_RUNTIME_FILES string is not closed at ${start}`);
+}
+function parseExtraRuntimeFilesInitializer(tokens) {
+  let index = 0;
+  const take = (type) => {
+    const token = tokens[index];
+    if (!token || token.type !== type) {
+      throw new Error(`EXTRA_RUNTIME_FILES initializer expected ${type}`);
+    }
+    index += 1;
+    return token;
+  };
+  const peek = () => tokens[index];
+  const result = new Map();
+  take('open');
+  while (peek()?.type !== 'close') {
+    take('open');
+    const entryPath = take('string').value;
+    if (entryPath === undefined) {
+      throw new Error('EXTRA_RUNTIME_FILES entry path is missing');
+    }
+    take('comma');
+    take('open');
+    const dataPaths = [];
+    while (peek()?.type === 'string') {
+      const dataPath = take('string').value;
+      if (dataPath === undefined) {
+        throw new Error(
+          `EXTRA_RUNTIME_FILES data file is missing for ${entryPath}`,
+        );
+      }
+      dataPaths.push(dataPath);
+      if (peek()?.type !== 'comma') {
+        break;
+      }
+      take('comma');
+      if (peek()?.type === 'close') {
+        break;
+      }
+    }
+    take('close');
+    if (peek()?.type === 'comma') {
+      take('comma');
+    }
+    take('close');
+    if (result.has(entryPath)) {
+      throw new Error(`EXTRA_RUNTIME_FILES entry is duplicated: ${entryPath}`);
+    }
+    result.set(entryPath, dataPaths);
+    if (peek()?.type === 'comma') {
+      take('comma');
+      if (peek()?.type === 'close') {
+        break;
+      }
+    } else if (peek()?.type !== 'close') {
+      throw new Error('EXTRA_RUNTIME_FILES entries must be comma-separated');
+    }
+  }
+  take('close');
+  if (index !== tokens.length) {
+    throw new Error('EXTRA_RUNTIME_FILES initializer has trailing tokens');
+  }
+  return result;
+}
+function requirePackageFile(packageRoot, packagePath, description) {
+  if (
+    typeof packagePath !== 'string' ||
+    packagePath.length === 0 ||
+    packagePath.includes('\\') ||
+    isAbsolute(packagePath)
+  ) {
+    throw new Error(`${description} must be a slash-separated relative path`);
+  }
+  const resolvedPath = resolve(packageRoot, packagePath);
+  if (!isInsidePackageRoot(packageRoot, resolvedPath)) {
+    throw new Error(
+      `${description} resolves outside the package root: ${packagePath}`,
+    );
+  }
+  const fileStat = statIfPresent(resolvedPath);
+  if (!fileStat?.isFile()) {
+    throw new Error(
+      `${description} is missing or is not a regular file: ${packagePath}`,
+    );
+  }
+  return resolvedPath;
+}
+function isInsidePackageRoot(packageRoot, targetPath) {
+  const relativeTarget = relative(packageRoot, targetPath);
+  return !isAbsolute(relativeTarget) && relativeTarget.split(sep)[0] !== '..';
+}
+function statIfPresent(filePath) {
+  try {
+    return statSync(filePath);
+  } catch (error) {
+    const code = error.code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') {
+      return undefined;
+    }
+    throw error;
+  }
 }
 function findRelativeImports(source) {
   const specifiers = new Set();
