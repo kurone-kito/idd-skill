@@ -74,18 +74,18 @@ function buildStubGh(
             '  return isSubsequentStatusCheckPage',
             '    ? ' +
               JSON.stringify(graphqlResponse.subsequentStatusCheckPage),
-            '    : ' + JSON.stringify(graphqlResponse.firstPage),
+            `    : ${JSON.stringify(graphqlResponse.firstPage)}`,
             '})()',
           ].join('\n');
   const graphqlLine =
     graphqlResponseExpression === null
       ? ''
-      : [
+      : `${[
           "if (args[0] === 'api' && args[1] === 'graphql') {",
-          '  process.stdout.write(' + graphqlResponseExpression + ');',
+          `  process.stdout.write(${graphqlResponseExpression});`,
           '  process.exit(0);',
           '}',
-        ].join('\n') + '\n';
+        ].join('\n')}\n`;
   return `const args = process.argv.slice(2);
 ${graphqlLine}const table = new Map(${table});
 const key = JSON.stringify(args);
@@ -524,7 +524,7 @@ test('review-activity-snapshot.mjs CLI: parses paginated activity and validates 
       assert.ok(error instanceof Error);
       const stderr = (error as Error & { stderr?: Buffer | string }).stderr;
       assert.match(
-        error.message + '\n' + (stderr?.toString() ?? ''),
+        `${error.message}\n${stderr?.toString() ?? ''}`,
         /status-check rollup became null during pagination/,
       );
       return true;

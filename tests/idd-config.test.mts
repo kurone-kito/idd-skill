@@ -2446,7 +2446,7 @@ test('dangerouslyAutoDecide defaults false and accepts only literal booleans (#4
       normalizePolicyConfig({ dangerouslyAutoDecide: value })
         .dangerouslyAutoDecide,
       false,
-      'invalid value ' + String(value) + ' must fail closed',
+      `invalid value ${String(value)} must fail closed`,
     );
   }
 });
