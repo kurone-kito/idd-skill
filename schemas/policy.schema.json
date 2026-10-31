@@ -1082,6 +1082,61 @@
         }
       },
       "description": "Container for the F3 solo-CODEOWNER admin-fallback policy (`soloCodeownerAdminFallback`). Optional; omitting it keeps the distributed default."
+    },
+    "standingApprovals": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Operator-approved standing classes (issue #4883). Each class is off unless its enabled flag is explicitly true. An absent or malformed class behaves as disabled, so every approval waits for a reply as today. This key changes no behavior by itself; later children read it. Repository-owned: a user-global value is ignored and rejected by the user-global schema.",
+      "properties": {
+        "budgetRaise": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Standing approval to raise the budget by a bounded percent. Default: disabled.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Enables the budgetRaise class only when true. Default: false."
+            },
+            "maxRaisePct": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 10,
+              "description": "Ceiling on the raise, as a whole percent. Default: 10. Out-of-range values disable the class."
+            }
+          }
+        },
+        "split": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Standing approval to split work into bounded candidate-file sets. Default: disabled.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Enables the split class only when true. Default: false."
+            },
+            "maxCandidateFiles": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Ceiling on candidate files per split child, a positive integer. Default: 8, the effort M candidate-file limit. Non-positive values disable the class."
+            }
+          }
+        },
+        "release": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Standing approval to release a held set after its checklist passes. Default: disabled.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Enables the release class only when true. Default: false."
+            },
+            "requireChecklistPass": {
+              "enum": [true],
+              "description": "Must be true. The only accepted value, so a false value is rejected and disables the class."
+            }
+          }
+        }
+      }
     }
   },
   "patternProperties": {

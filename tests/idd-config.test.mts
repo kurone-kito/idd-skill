@@ -403,6 +403,18 @@ test('repository leaves win over the user-global base, and a repository-owned fi
   });
 });
 
+test('standingApprovals is repository-owned: a user-global value never reaches the config (#4886)', () => {
+  withSandboxCwd(() =>
+    withUserGlobal(
+      '{"reviewPolicy":"copilot-advisory","standingApprovals":{"split":{"enabled":true,"maxCandidateFiles":8}}}',
+      undefined,
+      () => {
+        assert.deepEqual(loadIddConfig(), { reviewPolicy: 'copilot-advisory' });
+      },
+    ),
+  );
+});
+
 test('under GITHUB_ACTIONS=true the user-global layers are never read (#3820)', () => {
   withSandboxCwd((sandbox) => {
     withUserGlobal('{"reviewPolicy":"global-choice"}', 'true', () => {

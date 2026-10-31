@@ -150,6 +150,38 @@ instruction customizations aligned.
 | Explicit-target behavior           | Stop before claim when required approval is missing                                                                                                                                                                                                                   | [IDD workflow guide](idd-workflow.md), [Discover](../.github/instructions/idd-discover.instructions.md), [Claim](../.github/instructions/idd-claim.instructions.md)                                                                             | Treat missing approval as a pre-claim stop, not as a reason to guess or auto-claim anyway.                                                                                                              |
 | Discovery fallback behavior        | Keep unapproved underprivileged issues in an approval-needed fallback bucket after startable candidates are exhausted, while discovery keeps scanning already-authorized autonomous candidates first                                                                  | [Customizing IDD](customization.md#issue-author-approval-gate), [Issue Authoring Skill Contract](https://github.com/kurone-kito/idd-skill/blob/main/docs/issue-authoring-skill.md)                                                              | Unattended discovery stops when only the approval-needed fallback bucket remains; until then, the bucket stays visible but non-startable.                                                               |
 
+## Standing Approval Defaults
+
+Roadmap `#4883` lets an operator approve three classes of work in advance,
+each with a ceiling. Every class is off by default. Only an explicit
+`enabled: true` turns a class on, and a malformed or out-of-range class
+behaves as disabled, so every approval keeps waiting for a reply.
+
+Only the repository policy can turn a class on. A user-global
+`standingApprovals` value is ignored, and the user-global schema rejects
+the key.
+
+| Class         | Key                             | Default                                        | Ceiling and unit                                  |
+| ------------- | ------------------------------- | ---------------------------------------------- | ------------------------------------------------- |
+| `budgetRaise` | `standingApprovals.budgetRaise` | `enabled: false`, `maxRaisePct: 10`            | whole percent; integer from 0 to 10               |
+| `split`       | `standingApprovals.split`       | `enabled: false`, `maxCandidateFiles: 8`       | whole number of candidate files; positive integer |
+| `release`     | `standingApprovals.release`     | `enabled: false`, `requireChecklistPass: true` | `checklist`; only `true` is accepted              |
+
+Each later use posts this record line. Fields are separated by a semicolon and
+a space, and there is no free text:
+
+<!-- markdownlint-disable MD013 -->
+
+```text
+<!-- idd-skill-standing-approval: class=<budgetRaise|split|release>; set=<set-id|none>; anchor=<owner/repo#n|none>; ceiling=<value>; option=<option-id> -->
+```
+
+<!-- markdownlint-enable MD013 -->
+
+This change only reads and reports the classes through
+`normalizePolicyConfig` and `inspectStandingApprovals`. No runtime path
+posts the record line yet; the children that use the classes do that.
+
 ## Issue-Authoring Defaults
 
 | Policy default                   | Distributed value                                                                                                                                                                                                                                    | Owning surface                                                                                                                                                                                                                                                                                | Onboarding expectation                                                                                                                                                                                                                                                                                                                                                     |

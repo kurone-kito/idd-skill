@@ -895,6 +895,11 @@ test('policy normalization provides default-safe values and supports aliases', (
     },
     orphanFirstPolicy: 'none',
     skipIssueAuthorApprovalGate: false,
+    standingApprovals: {
+      budgetRaise: { enabled: false, maxRaisePct: 10 },
+      split: { enabled: false, maxCandidateFiles: 8 },
+      release: { enabled: false, requireChecklistPass: true },
+    },
     dangerouslyAutoDecide: false,
     maintainerApprovalActorPolicy: 'owners-and-maintainers-only',
     stallRecovery: {
@@ -1132,6 +1137,11 @@ test('policy normalization provides default-safe values and supports aliases', (
       },
       orphanFirstPolicy: 'maintainer-approved',
       skipIssueAuthorApprovalGate: true,
+      standingApprovals: {
+        budgetRaise: { enabled: false, maxRaisePct: 10 },
+        split: { enabled: false, maxCandidateFiles: 8 },
+        release: { enabled: false, requireChecklistPass: true },
+      },
       dangerouslyAutoDecide: false,
       maintainerApprovalActorPolicy: 'all-write-permission-actors',
       stallRecovery: {
