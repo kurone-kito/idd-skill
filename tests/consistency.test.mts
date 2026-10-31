@@ -3127,6 +3127,47 @@ test('pre-B1 parent continuation keeps same-claim safety and truthful reports (#
   }
 });
 
+test('parent role transition and scratchpad root are stated for both modes (#4833)', () => {
+  const orchestratorCopies = [
+    'idd-template/.github/instructions/idd-orchestrator.instructions.md',
+    '.github/instructions/idd-orchestrator.instructions.md',
+  ];
+  const ownershipCopies = [
+    'idd-template/docs/idd-concept-ownership.md',
+    'docs/idd-concept-ownership.md',
+  ];
+  const orchestratorRequirements = [
+    'Ordinary single-agent mode skips fan-out scratch provisioning',
+    'a verified parent continuation retains its proven scratchpad root instead',
+    'under the same no-overwrite and fail-closed allocation rules',
+    'A verified pre-B1 parent continuation is the one exception',
+    'its owning parent runs that span with a `parent-continuation` roster entry',
+  ];
+  const ownershipRequirements = [
+    'except as the owning parent of a verified pre-B1 continuation, which assumes the worker role for that claim',
+    'For a verified pre-B1 continuation, the owning parent takes the worker role instead.',
+  ];
+
+  for (const path of orchestratorCopies) {
+    const text = normalizeWhitespace(readText(path));
+    for (const requirement of orchestratorRequirements) {
+      assert.ok(
+        text.includes(requirement),
+        `${path}: orchestrator contract must include "${requirement}"`,
+      );
+    }
+  }
+  for (const path of ownershipCopies) {
+    const text = normalizeWhitespace(readText(path));
+    for (const requirement of ownershipRequirements) {
+      assert.ok(
+        text.includes(requirement),
+        `${path}: ownership matrix must include "${requirement}"`,
+      );
+    }
+  }
+});
+
 test('orchestrator restart scans continuation records before roster rebuild and refill (#4714)', () => {
   for (const path of [
     'idd-template/docs/idd-workflow.md',
