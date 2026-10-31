@@ -21,11 +21,17 @@ import * as nodeFs from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, test as nodeTest } from 'node:test';
+import {
+  readHelperExtraRuntimeFiles,
+  resolveHelperEntryClosure,
+} from '../src/scripts/helper-runtime-manifest.mts';
 import { PAYLOAD_PLACEHOLDER_FIELDS } from '../src/scripts/payload-placeholders.mts';
 import {
   installPayload,
+  type PrepareDistributionOptions,
   planInstall,
   planUninstall,
+  prepareDistributionSet,
   type UserGlobalOptions,
   uninstallPayload,
 } from '../src/scripts/user-global-install.mts';
@@ -142,6 +148,106 @@ function copySourceTree(): string {
   return dir;
 }
 
+interface PreparedFixtureOptions {
+  runtimeFile?: string;
+  runtimeBytes?: Buffer;
+  authoringText?: string;
+}
+
+function makePreparedSource(extra: PreparedFixtureOptions = {}): string {
+  const root = makeSandbox('user-global-prepared-source-');
+  const write = (path: string, content: string): void => {
+    const destination = join(root, path);
+    nodeFs.mkdirSync(dirname(destination), { recursive: true });
+    nodeFs.writeFileSync(destination, content);
+  };
+  const writeBytes = (path: string, content: Buffer): void => {
+    const destination = join(root, path);
+    nodeFs.mkdirSync(dirname(destination), { recursive: true });
+    nodeFs.writeFileSync(destination, content);
+  };
+  const runtimeFile = extra.runtimeFile ?? 'data/one.json';
+  write(
+    'package.json',
+    JSON.stringify({
+      name: 'idd-skill',
+      version: '0.17.0',
+      repository: 'github:kurone-kito/idd-skill',
+    }),
+  );
+  write(
+    'audit/sync-manifest.json',
+    JSON.stringify({
+      generatedBlocks: [
+        {
+          id: 'idd-template-core-files',
+          stripPrefix: 'idd-template/',
+          paths: ['idd-template/.github/instructions/core.md'],
+        },
+      ],
+    }),
+  );
+  write('idd-template/.github/instructions/core.md', '# Core instructions\n');
+  write('idd-template/user-global/entry.md', '# User global entry\n');
+  write(
+    'skills/issue-authoring/SKILL.md',
+    extra.authoringText ?? '# Authoring\n',
+  );
+  write('skills/idd-spec-audit/SKILL.md', '# Spec audit\n');
+  write(
+    'src/scripts/helper-runtime-manifest.mts',
+    `const EXTRA_RUNTIME_FILES = new Map<string, string[]>([\n  ['scripts/sample.mjs', ['${runtimeFile}']],\n]);\n`,
+  );
+  write('scripts/sample.mjs', 'export const sample = true;\n');
+  if (extra.runtimeBytes === undefined) {
+    write(runtimeFile, '{"prepared":true}\n');
+  } else {
+    writeBytes(runtimeFile, extra.runtimeBytes);
+  }
+  nodeFs.mkdirSync(join(root, 'schemas'), { recursive: true });
+  nodeFs.copyFileSync(
+    join(REPO, 'schemas/distribution-manifest.schema.json'),
+    join(root, 'schemas/distribution-manifest.schema.json'),
+  );
+  return root;
+}
+
+function prepareOptions(
+  home: string,
+  sourceRoot: string,
+  sourceCommit: string,
+  extra: Partial<PrepareDistributionOptions> = {},
+): PrepareDistributionOptions {
+  return {
+    ...optionsFor(home),
+    sourceRoot,
+    sourceCommit,
+    provenance: { kind: 'archive', commit: sourceCommit },
+    invocation: { command: 'scripts/sample.mjs', argv: [] },
+    ...extra,
+  };
+}
+
+function preparedManifest(path: string): {
+  sourceCommit: string;
+  components: {
+    instructions: PreparedManifestComponent;
+    skillBundles: Record<string, PreparedManifestComponent>;
+    helper: PreparedManifestComponent;
+  };
+} {
+  return JSON.parse(
+    nodeFs.readFileSync(join(path, 'manifest.json'), 'utf8'),
+  ) as ReturnType<typeof preparedManifest>;
+}
+
+interface PreparedManifestComponent {
+  location: string;
+  provenance: { kind: string; commit: string };
+  files: { path: string; sha256: string }[];
+  digest: string;
+}
+
 const WRITE_FLAGS =
   nodeFs.constants.O_WRONLY |
   nodeFs.constants.O_RDWR |
@@ -181,6 +287,325 @@ function isWriteCall(op: string, args: unknown[]): boolean {
   }
   return WRITE_OPS.has(op);
 }
+
+test('preparation keeps equal-version commits separately and reuses verified bytes', () => {
+  const home = makeHome();
+  const firstSource = makePreparedSource({ authoringText: '# First commit\n' });
+  const secondSource = makePreparedSource({
+    authoringText: '# Second commit\n',
+  });
+  const firstCommit = 'a'.repeat(40);
+  const secondCommit = 'b'.repeat(40);
+  const first = prepareDistributionSet(
+    prepareOptions(home, firstSource, firstCommit),
+  );
+  const firstBeforeReuse = snapshot(first.preparedPath);
+  const reused = prepareDistributionSet(
+    prepareOptions(home, firstSource, firstCommit),
+  );
+  const second = prepareDistributionSet(
+    prepareOptions(home, secondSource, secondCommit),
+  );
+
+  assert.equal(first.reused, false);
+  assert.equal(reused.reused, true);
+  assert.equal(second.reused, false);
+  assert.notEqual(first.preparedPath, second.preparedPath);
+  assert.deepEqual(snapshot(first.preparedPath), firstBeforeReuse);
+  assert.equal(
+    nodeFs.readFileSync(
+      join(second.preparedPath, 'skills/issue-authoring/SKILL.md'),
+      'utf8',
+    ),
+    '# Second commit\n',
+  );
+  assert.equal(nodeFs.existsSync(currentOf(home)), false);
+
+  const manifest = preparedManifest(first.preparedPath);
+  assert.equal(manifest.sourceCommit, firstCommit);
+  const components = [
+    [manifest.components.instructions, 'idd-template', 'idd-template'],
+    [
+      manifest.components.skillBundles['issue-authoring'],
+      'skills/issue-authoring',
+      'skills/issue-authoring',
+    ],
+    [
+      manifest.components.skillBundles['idd-spec-audit'],
+      'skills/idd-spec-audit',
+      'skills/idd-spec-audit',
+    ],
+    [manifest.components.helper, '', ''],
+  ] as const;
+  for (const [component, root, locationPath] of components) {
+    const listing = [...component.files]
+      .sort((left, right) =>
+        Buffer.compare(Buffer.from(left.path), Buffer.from(right.path)),
+      )
+      .map((file) => `${file.sha256} ${file.path}\n`)
+      .join('');
+    assert.equal(component.digest, `sha256:${sha256(listing)}`);
+    assert.equal(
+      component.location,
+      `https://github.com/kurone-kito/idd-skill/tree/${firstCommit}${locationPath ? `/${locationPath}` : ''}`,
+    );
+    assert.deepEqual(component.provenance, {
+      kind: 'archive',
+      commit: firstCommit,
+    });
+    for (const file of component.files) {
+      const path = join(first.preparedPath, root, file.path);
+      const bytes = nodeFs.readFileSync(path);
+      assert.equal(sha256(bytes), file.sha256);
+    }
+  }
+  assert.deepEqual(
+    manifest.components.instructions.files.map((file) => file.path),
+    ['.github/instructions/core.md', 'user-global/entry.md'],
+  );
+  installPayload(optionsFor(home));
+  assert.deepEqual(snapshot(first.preparedPath), firstBeforeReuse);
+});
+
+test('preparation derives each helper closure from that staged root runtime map', () => {
+  const home = makeHome();
+  const firstSource = makePreparedSource({ runtimeFile: 'data/one.json' });
+  const secondSource = makePreparedSource({ runtimeFile: 'data/two.json' });
+  const first = prepareDistributionSet(
+    prepareOptions(home, firstSource, 'c'.repeat(40)),
+  );
+  const second = prepareDistributionSet(
+    prepareOptions(home, secondSource, 'd'.repeat(40)),
+  );
+  const firstFiles = preparedManifest(first.preparedPath).components.helper
+    .files;
+  const secondFiles = preparedManifest(second.preparedPath).components.helper
+    .files;
+  const expectedFirst = resolveHelperEntryClosure('scripts/sample.mjs', {
+    packageRoot: firstSource,
+    extraRuntimeFiles: readHelperExtraRuntimeFiles(firstSource),
+  });
+  const expectedSecond = resolveHelperEntryClosure('scripts/sample.mjs', {
+    packageRoot: secondSource,
+    extraRuntimeFiles: readHelperExtraRuntimeFiles(secondSource),
+  });
+  assert.deepEqual(
+    firstFiles.map((file) => file.path),
+    expectedFirst,
+  );
+  assert.deepEqual(
+    secondFiles.map((file) => file.path),
+    expectedSecond,
+  );
+  assert.ok(expectedFirst.includes('data/one.json'));
+  assert.ok(expectedSecond.includes('data/two.json'));
+  assert.notDeepEqual(expectedFirst, expectedSecond);
+
+  const binaryBytes = Buffer.from([0, 255, 1, 128, 10]);
+  const binarySource = makePreparedSource({
+    runtimeFile: 'data/blob.bin',
+    runtimeBytes: binaryBytes,
+  });
+  const binary = prepareDistributionSet(
+    prepareOptions(home, binarySource, '5'.repeat(40)),
+  );
+  assert.deepEqual(
+    nodeFs.readFileSync(join(binary.preparedPath, 'data/blob.bin')),
+    binaryBytes,
+  );
+});
+
+test('checkout preparation refuses bytes that do not match the named commit', () => {
+  const home = makeHome();
+  const source = makePreparedSource();
+  for (const args of [
+    ['init', '--quiet', source],
+    ['-C', source, 'config', 'user.name', 'IDD fixture'],
+    ['-C', source, 'config', 'user.email', 'idd-fixture@example.invalid'],
+    ['-C', source, 'add', '--all'],
+    ['-C', source, '-c', 'commit.gpgsign=false', 'commit', '-m', 'fixture'],
+  ]) {
+    const result = spawnSync('git', args, { encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+  }
+  const revision = spawnSync('git', ['-C', source, 'rev-parse', 'HEAD'], {
+    encoding: 'utf8',
+  });
+  assert.equal(revision.status, 0, revision.stderr);
+  const sourceCommit = revision.stdout.trim();
+  nodeFs.writeFileSync(
+    join(source, 'skills/issue-authoring/SKILL.md'),
+    '# Edited after commit\n',
+  );
+
+  assert.throws(
+    () =>
+      prepareDistributionSet({
+        ...prepareOptions(home, source, sourceCommit),
+        provenance: { kind: 'checkout', commit: sourceCommit },
+      }),
+    /differs from source commit/,
+  );
+  assert.equal(nodeFs.existsSync(dataRootOf(home)), false);
+});
+
+test('an interrupted preparation records stage paths and safely resumes without changing an older set', () => {
+  const home = makeHome();
+  const priorSource = makePreparedSource({ authoringText: '# Prior\n' });
+  const candidateSource = makePreparedSource({
+    authoringText: '# Candidate\n',
+  });
+  const prior = prepareDistributionSet(
+    prepareOptions(home, priorSource, 'e'.repeat(40)),
+  );
+  const priorSnapshot = snapshot(prior.preparedPath);
+  const candidateCommit = 'f'.repeat(40);
+  const candidatePath = join(dataRootOf(home), 'prepared', candidateCommit);
+  const failedPath = join(candidatePath, 'skills/issue-authoring/SKILL.md');
+  let failed = false;
+  const fs = hookedFs((op, args) => {
+    if (op === 'openSync' && args[0] === failedPath && !failed) {
+      failed = true;
+      throw new Error('injected stage interruption');
+    }
+  });
+
+  assert.throws(
+    () =>
+      prepareDistributionSet({
+        ...prepareOptions(home, candidateSource, candidateCommit),
+        fs,
+      }),
+    /completion manifest .* is absent; staged paths .*receipt state is valid; one safe retry/,
+  );
+  assert.equal(nodeFs.existsSync(join(candidatePath, 'manifest.json')), false);
+  assert.deepEqual(snapshot(prior.preparedPath), priorSnapshot);
+  const receipt = JSON.parse(nodeFs.readFileSync(receiptOf(home), 'utf8')) as {
+    entries: { path: string; kind: string }[];
+  };
+  assert.ok(
+    receipt.entries.some(
+      (entry) => entry.path === failedPath && entry.kind === 'file',
+    ),
+  );
+
+  const resumed = prepareDistributionSet(
+    prepareOptions(home, candidateSource, candidateCommit),
+  );
+  assert.equal(resumed.reused, false);
+  assert.ok(nodeFs.existsSync(join(candidatePath, 'manifest.json')));
+  assert.deepEqual(snapshot(prior.preparedPath), priorSnapshot);
+});
+
+test('preparation refuses receipt conflicts and preserves edited prepared bytes', () => {
+  const home = makeHome();
+  const source = makePreparedSource();
+  const commit = '1'.repeat(40);
+  const dataRoot = dataRootOf(home);
+  nodeFs.mkdirSync(dataRoot);
+  const conflictPath = join(
+    dataRoot,
+    'prepared',
+    commit,
+    'idd-template/.github/instructions/core.md',
+  );
+  nodeFs.writeFileSync(
+    receiptOf(home),
+    `${JSON.stringify({
+      version: 1,
+      entries: [
+        { kind: 'directory', path: dataRoot },
+        { kind: 'file', path: conflictPath, sha256: '0'.repeat(64) },
+      ],
+    })}\n`,
+  );
+  assert.throws(
+    () => prepareDistributionSet(prepareOptions(home, source, commit)),
+    /conflicts with a different existing receipt entry/,
+  );
+  assert.equal(nodeFs.existsSync(join(dataRoot, 'prepared')), false);
+
+  const editedHome = makeHome();
+  const edited = prepareDistributionSet(
+    prepareOptions(editedHome, source, '2'.repeat(40)),
+  );
+  const editedPath = join(
+    edited.preparedPath,
+    'skills/idd-spec-audit/SKILL.md',
+  );
+  nodeFs.writeFileSync(editedPath, '# User edit\n');
+  assert.throws(
+    () =>
+      prepareDistributionSet(
+        prepareOptions(editedHome, source, '2'.repeat(40)),
+      ),
+    /differs from the source bytes/,
+  );
+  assert.equal(nodeFs.readFileSync(editedPath, 'utf8'), '# User edit\n');
+});
+
+test('preparation refuses an unsupported legacy receipt without changing it', () => {
+  const home = makeHome();
+  const source = makePreparedSource();
+  const dataRoot = dataRootOf(home);
+  nodeFs.mkdirSync(dataRoot);
+  const legacyReceipt = '{"version":0,"entries":[]}\n';
+  nodeFs.writeFileSync(receiptOf(home), legacyReceipt);
+
+  assert.throws(
+    () => prepareDistributionSet(prepareOptions(home, source, '6'.repeat(40))),
+    /receipt .* is corrupt/,
+  );
+  assert.equal(nodeFs.readFileSync(receiptOf(home), 'utf8'), legacyReceipt);
+  assert.equal(nodeFs.existsSync(join(dataRoot, 'prepared')), false);
+});
+
+test('preparation refuses linked roots and hard-linked managed files', () => {
+  const linkedHome = makeHome();
+  const linkedDataRoot = dataRootOf(linkedHome);
+  const outside = makeSandbox('user-global-prepared-outside-');
+  nodeFs.mkdirSync(linkedDataRoot);
+  nodeFs.symlinkSync(outside, join(linkedDataRoot, 'prepared'));
+  nodeFs.writeFileSync(
+    receiptOf(linkedHome),
+    `${JSON.stringify({
+      version: 1,
+      entries: [
+        { kind: 'directory', path: linkedDataRoot },
+        { kind: 'directory', path: join(linkedDataRoot, 'prepared') },
+      ],
+    })}\n`,
+  );
+  const outsideBefore = snapshot(outside);
+  assert.throws(
+    () =>
+      prepareDistributionSet(
+        prepareOptions(linkedHome, makePreparedSource(), '3'.repeat(40)),
+      ),
+    /symbolic link/,
+  );
+  assert.deepEqual(snapshot(outside), outsideBefore);
+
+  const hardlinkHome = makeHome();
+  const hardlinkSource = makePreparedSource();
+  const prepared = prepareDistributionSet(
+    prepareOptions(hardlinkHome, hardlinkSource, '4'.repeat(40)),
+  );
+  const managed = join(
+    prepared.preparedPath,
+    'skills/issue-authoring/SKILL.md',
+  );
+  const sentinel = join(hardlinkHome, 'user-file.txt');
+  nodeFs.linkSync(managed, sentinel);
+  assert.throws(
+    () =>
+      prepareDistributionSet(
+        prepareOptions(hardlinkHome, hardlinkSource, '4'.repeat(40)),
+      ),
+    /more than one hard link/,
+  );
+  assert.equal(nodeFs.readFileSync(sentinel, 'utf8'), '# Authoring\n');
+});
 
 test('a fresh install lays down the payload, skills, and receipt, and uninstall removes them', () => {
   const home = makeHome();

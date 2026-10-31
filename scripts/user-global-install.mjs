@@ -36,6 +36,7 @@
 // Open risks, accepted for the operator (see #4242 and #4303):
 // - a symbolic link above a declared root that root owns is trusted;
 // - a window remains between a containment check and the act that follows it.
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import * as nodeFs from 'node:fs';
 import {
@@ -50,6 +51,10 @@ import {
 } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveBundleRoot } from './bundle-root.mjs';
+import {
+  readHelperExtraRuntimeFiles,
+  resolveHelperEntryClosure,
+} from './helper-runtime-manifest.mjs';
 import { resolveInstalledPayloadRoot } from './idd-activation.mjs';
 import { isQualifiedConfigRoot } from './idd-config.mjs';
 import {
@@ -62,6 +67,7 @@ import {
 import {
   assertRealChain,
   checkContainment,
+  createDirectory,
   removeSingleEntry,
   replaceFileByRename,
   repointCurrent,
@@ -73,12 +79,18 @@ import {
   readReceipt,
   writeReceipt,
 } from './user-global-receipt.mjs';
+import {
+  checkSchemaKeywords,
+  validate as validateSchema,
+} from './validate-schemas.mjs';
 
 /**
  * The version pattern from issue #4242, duplicated here because #4242 keeps
  * it private. Keep it in step with `user-global-paths.mts`.
  */
 const VERSION_PATTERN = /^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$/;
+const SOURCE_COMMIT_PATTERN = /^[0-9a-f]{40}$/;
+const PREPARED_MANIFEST_NAME = 'manifest.json';
 const CURRENT = 'current';
 const PAYLOAD_BLOCK_ID = 'idd-template-core-files';
 const PAYLOAD_EXTRA_FILES = ['idd-template/user-global/entry.md'];
@@ -236,6 +248,7 @@ function resolveContext(options) {
   return {
     fs: withCeilings(fs, ceilings),
     dataRoot,
+    preparedRoot: join(dataRoot, 'prepared'),
     currentPath: join(dataRoot, CURRENT),
     entryBases: {
       claude: home,
@@ -246,6 +259,7 @@ function resolveContext(options) {
     },
     roots: [
       { name: 'data', path: dataRoot },
+      { name: 'prepared', path: join(dataRoot, 'prepared') },
       { name: 'claude', path: join(home, '.claude') },
       { name: 'claude-skills', path: join(home, '.claude', 'skills') },
       { name: 'agents-skills', path: join(home, '.agents', 'skills') },
@@ -286,6 +300,12 @@ function ownedShape(ctx, entry) {
     (isDir || data.length >= 2)
   ) {
     return true;
+  }
+  if (data !== null && data[0] === 'prepared') {
+    if (data.length === 1) return isDir;
+    if (!SOURCE_COMMIT_PATTERN.test(data[1])) return false;
+    if (data.length === 2) return isDir;
+    return isDir || data.length >= 3;
   }
   for (const name of SKILL_ROOT_NAMES) {
     const skill = segmentsUnder(rootNamed(ctx, name).path, entry.path);
@@ -510,6 +530,782 @@ function readSource(path, fs) {
     );
   }
   return { text, sha256: sha256Hex(bytes) };
+}
+function compareUtf8(left, right) {
+  return Buffer.compare(Buffer.from(left, 'utf8'), Buffer.from(right, 'utf8'));
+}
+function isSafeRelativeFilePath(path) {
+  return (
+    path.length > 0 &&
+    !isAbsolute(path) &&
+    !path.includes('\\') &&
+    !/[\r\n\u2028\u2029]/.test(path) &&
+    path
+      .split('/')
+      .every((part) => part !== '' && part !== '.' && part !== '..')
+  );
+}
+/** Verify a supplied source path is a chain of real directories and a file. */
+function assertSourceFilePath(sourceRoot, path, fs) {
+  if (!isSafeRelativeFilePath(path)) {
+    throw new Error(`source path ${path} is not a safe relative file path`);
+  }
+  const rootStat = fs.lstatSync(sourceRoot);
+  if (!rootStat.isDirectory()) {
+    throw new Error(`${sourceRoot} is not a real source directory`);
+  }
+  const parts = path.split('/');
+  let current = sourceRoot;
+  for (let index = 0; index < parts.length; index++) {
+    current = join(current, parts[index]);
+    const stat = fs.lstatSync(current);
+    if (stat.isSymbolicLink()) {
+      throw new Error(`${current} is a symbolic link in the source tree`);
+    }
+    if (index < parts.length - 1 && !stat.isDirectory()) {
+      throw new Error(`${current} is not a directory in the source tree`);
+    }
+    if (index === parts.length - 1 && !stat.isFile()) {
+      throw new Error(`${current} is not a regular file in the source tree`);
+    }
+  }
+  return current;
+}
+function readSourceBytes(sourceRoot, path, fs) {
+  return readNoFollowBytes(assertSourceFilePath(sourceRoot, path, fs), fs);
+}
+function parseJsonBytes(bytes, label) {
+  const text = bytes.toString('utf8');
+  if (!Buffer.from(text, 'utf8').equals(bytes)) {
+    throw new Error(`${label} is not UTF-8 JSON`);
+  }
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    throw new Error(`${label} is invalid JSON (${describe(error)})`);
+  }
+}
+function repositoryWebUrl(packageJson) {
+  if (
+    typeof packageJson !== 'object' ||
+    packageJson === null ||
+    !('repository' in packageJson)
+  ) {
+    throw new Error('package.json has no repository URL');
+  }
+  const repository = packageJson.repository;
+  const value =
+    typeof repository === 'string'
+      ? repository
+      : typeof repository === 'object' &&
+          repository !== null &&
+          'url' in repository &&
+          typeof repository.url === 'string'
+        ? repository.url
+        : '';
+  let url;
+  if (value.startsWith('github:')) {
+    url = new URL(`https://github.com/${value.slice('github:'.length)}`);
+  } else {
+    const normalized = value.startsWith('git+') ? value.slice(4) : value;
+    try {
+      url = new URL(normalized);
+    } catch {
+      throw new Error(
+        `package.json repository ${value} is not an HTTPS forge URL`,
+      );
+    }
+  }
+  const segments = url.pathname.split('/').filter(Boolean);
+  if (
+    url.protocol !== 'https:' ||
+    url.username !== '' ||
+    url.password !== '' ||
+    url.search !== '' ||
+    url.hash !== '' ||
+    segments.length !== 2
+  ) {
+    throw new Error(
+      `package.json repository ${value} is not an HTTPS forge URL`,
+    );
+  }
+  const repo = segments[1].replace(/\.git$/, '');
+  if (
+    !/^[A-Za-z0-9_.-]+$/.test(segments[0]) ||
+    !/^[A-Za-z0-9_.-]+$/.test(repo)
+  ) {
+    throw new Error(
+      `package.json repository ${value} has invalid owner/repository segments`,
+    );
+  }
+  return `${url.origin}/${segments[0]}/${repo}`;
+}
+function componentListing(files) {
+  const sorted = [...files].sort((left, right) =>
+    compareUtf8(left.componentPath, right.componentPath),
+  );
+  const seen = new Set();
+  for (const file of sorted) {
+    if (seen.has(file.componentPath)) {
+      throw new Error(`component path ${file.componentPath} is duplicated`);
+    }
+    seen.add(file.componentPath);
+  }
+  const listing = sorted
+    .map((file) => `${file.sha256} ${file.componentPath}\n`)
+    .join('');
+  return {
+    files: sorted.map(({ componentPath, sha256 }) => ({
+      path: componentPath,
+      sha256,
+    })),
+    digest: `sha256:${sha256Hex(listing)}`,
+  };
+}
+function verifyCheckoutFiles(sourceRoot, sourceCommit, paths) {
+  try {
+    execFileSync(
+      'git',
+      ['-C', sourceRoot, 'cat-file', '-e', `${sourceCommit}^{commit}`],
+      {
+        stdio: 'ignore',
+      },
+    );
+  } catch (error) {
+    throw new Error(
+      `checkout source commit ${sourceCommit} is unavailable (${describe(error)})`,
+    );
+  }
+  for (const path of new Set(paths)) {
+    const workingBytes = readSourceBytes(sourceRoot, path, nodeFs);
+    let committedBytes;
+    try {
+      committedBytes = execFileSync(
+        'git',
+        ['-C', sourceRoot, 'show', `${sourceCommit}:${path}`],
+        {
+          encoding: 'buffer',
+        },
+      );
+    } catch (error) {
+      throw new Error(
+        `${path} is not present in source commit ${sourceCommit} (${describe(error)})`,
+      );
+    }
+    if (!workingBytes.equals(committedBytes)) {
+      throw new Error(`${path} differs from source commit ${sourceCommit}`);
+    }
+  }
+}
+function assertSourceDirectoryPath(sourceRoot, path, fs) {
+  if (!isSafeRelativeFilePath(path)) {
+    throw new Error(
+      `source path ${path} is not a safe relative directory path`,
+    );
+  }
+  const rootStat = fs.lstatSync(sourceRoot);
+  if (!rootStat.isDirectory()) {
+    throw new Error(`${sourceRoot} is not a real source directory`);
+  }
+  let current = sourceRoot;
+  for (const part of path.split('/')) {
+    current = join(current, part);
+    const stat = fs.lstatSync(current);
+    if (stat.isSymbolicLink() || !stat.isDirectory()) {
+      throw new Error(`${current} is not a real source directory`);
+    }
+  }
+  return current;
+}
+function buildPreparedSet(ctx, options) {
+  const sourceCommit = options.sourceCommit;
+  if (!SOURCE_COMMIT_PATTERN.test(sourceCommit)) {
+    throw new Error(
+      'sourceCommit must be a full lowercase 40-character commit ID',
+    );
+  }
+  if (
+    !['checkout', 'archive'].includes(options.provenance.kind) ||
+    options.provenance.commit !== sourceCommit
+  ) {
+    throw new Error(
+      'provenance must name the same sourceCommit and use checkout or archive',
+    );
+  }
+  if (
+    !isSafeRelativeFilePath(options.invocation.command) ||
+    !Array.isArray(options.invocation.argv) ||
+    !options.invocation.argv.every((value) => typeof value === 'string')
+  ) {
+    throw new Error(
+      'invocation must name a safe relative helper path and string arguments',
+    );
+  }
+  const sourceRoot = resolve(options.sourceRoot);
+  const fs = ctx.fs;
+  const packageBytes = readSourceBytes(sourceRoot, 'package.json', fs);
+  const packageJson = parseJsonBytes(packageBytes, 'package.json');
+  const repositoryUrl = repositoryWebUrl(packageJson);
+  const syncBytes = readSourceBytes(sourceRoot, 'audit/sync-manifest.json', fs);
+  const syncManifest = parseJsonBytes(syncBytes, 'audit/sync-manifest.json');
+  if (
+    typeof syncManifest !== 'object' ||
+    syncManifest === null ||
+    !('generatedBlocks' in syncManifest)
+  ) {
+    throw new Error('the sync manifest has no generatedBlocks list');
+  }
+  const blocks = syncManifest.generatedBlocks;
+  if (!Array.isArray(blocks))
+    throw new Error('the sync manifest generatedBlocks is not an array');
+  const block = blocks.find(
+    (candidate) =>
+      typeof candidate === 'object' &&
+      candidate !== null &&
+      'id' in candidate &&
+      candidate.id === PAYLOAD_BLOCK_ID,
+  );
+  if (
+    typeof block !== 'object' ||
+    block === null ||
+    !('stripPrefix' in block) ||
+    block.stripPrefix !== 'idd-template/' ||
+    !('paths' in block) ||
+    !Array.isArray(block.paths) ||
+    !block.paths.every((path) => typeof path === 'string')
+  ) {
+    throw new Error(`the sync manifest has no valid ${PAYLOAD_BLOCK_ID} block`);
+  }
+  const makeFile = (sourcePath, storedPath, componentPath) => {
+    if (
+      !isSafeRelativeFilePath(sourcePath) ||
+      !isSafeRelativeFilePath(storedPath) ||
+      !isSafeRelativeFilePath(componentPath)
+    ) {
+      throw new Error(
+        `distribution path ${sourcePath} is not a safe relative path`,
+      );
+    }
+    const bytes = readSourceBytes(sourceRoot, sourcePath, fs);
+    return {
+      sourcePath,
+      storedPath,
+      componentPath,
+      bytes,
+      sha256: sha256Hex(bytes),
+    };
+  };
+  const instructions = [...block.paths, ...PAYLOAD_EXTRA_FILES].map((path) => {
+    if (!path.startsWith('idd-template/')) {
+      throw new Error(`payload path ${path} lacks the idd-template/ prefix`);
+    }
+    const componentPath = path.slice('idd-template/'.length);
+    return makeFile(path, `idd-template/${componentPath}`, componentPath);
+  });
+  const skillComponents = new Map();
+  for (const skill of SKILL_NAMES) {
+    const skillRoot = `skills/${skill}`;
+    const skillDir = assertSourceDirectoryPath(sourceRoot, skillRoot, fs);
+    const paths = listSourceFiles(skillDir, fs).sort(compareUtf8);
+    if (!paths.includes('SKILL.md')) {
+      throw new Error(`${skillRoot} has no SKILL.md`);
+    }
+    skillComponents.set(
+      skill,
+      paths.map((path) =>
+        makeFile(`${skillRoot}/${path}`, `${skillRoot}/${path}`, path),
+      ),
+    );
+  }
+  assertSourceFilePath(
+    sourceRoot,
+    'src/scripts/helper-runtime-manifest.mts',
+    fs,
+  );
+  assertSourceFilePath(sourceRoot, options.invocation.command, fs);
+  const extraRuntimeFiles = readHelperExtraRuntimeFiles(sourceRoot);
+  const helperPaths = [
+    ...new Set(
+      resolveHelperEntryClosure(options.invocation.command, {
+        packageRoot: sourceRoot,
+        extraRuntimeFiles,
+      }),
+    ),
+  ].sort(compareUtf8);
+  const helper = helperPaths.map((path) => makeFile(path, path, path));
+  if (!helperPaths.includes(options.invocation.command)) {
+    throw new Error('invocation.command is not in the helper entry closure');
+  }
+  const allFiles = [
+    ...instructions,
+    ...skillComponents.values(),
+    ...helper,
+  ].flat();
+  const byStoredPath = new Set();
+  for (const file of allFiles) {
+    if (
+      file.storedPath === PREPARED_MANIFEST_NAME ||
+      byStoredPath.has(file.storedPath)
+    ) {
+      throw new Error(
+        `distribution path ${file.storedPath} is duplicated or reserved`,
+      );
+    }
+    byStoredPath.add(file.storedPath);
+  }
+  const provenance = {
+    kind: options.provenance.kind,
+    commit: sourceCommit,
+  };
+  const location = (path) =>
+    `${repositoryUrl}/tree/${sourceCommit}${path ? `/${path}` : ''}`;
+  const component = (path, files) => ({
+    location: location(path),
+    provenance,
+    ...componentListing(files),
+  });
+  const manifest = {
+    schemaVersion: 1,
+    sourceCommit,
+    components: {
+      instructions: component('idd-template', instructions),
+      skillBundles: {
+        'issue-authoring': component(
+          'skills/issue-authoring',
+          skillComponents.get('issue-authoring') ?? [],
+        ),
+        'idd-spec-audit': component(
+          'skills/idd-spec-audit',
+          skillComponents.get('idd-spec-audit') ?? [],
+        ),
+      },
+      helper: {
+        ...component('', helper),
+        invocation: {
+          command: options.invocation.command,
+          argv: [...options.invocation.argv],
+        },
+      },
+    },
+  };
+  const schemaBytes = readSourceBytes(
+    sourceRoot,
+    'schemas/distribution-manifest.schema.json',
+    fs,
+  );
+  const schema = parseJsonBytes(
+    schemaBytes,
+    'schemas/distribution-manifest.schema.json',
+  );
+  const schemaErrors = checkSchemaKeywords(schema);
+  if (schemaErrors.length > 0) {
+    throw new Error(
+      `distribution manifest schema has unsupported keywords: ${schemaErrors.join('; ')}`,
+    );
+  }
+  const manifestErrors = validateSchema(manifest, schema);
+  if (manifestErrors.length > 0) {
+    throw new Error(
+      `generated distribution manifest is invalid: ${manifestErrors.join('; ')}`,
+    );
+  }
+  if (options.provenance.kind === 'checkout') {
+    verifyCheckoutFiles(sourceRoot, sourceCommit, [
+      'package.json',
+      'audit/sync-manifest.json',
+      'schemas/distribution-manifest.schema.json',
+      'src/scripts/helper-runtime-manifest.mts',
+      ...allFiles.map((file) => file.sourcePath),
+    ]);
+  }
+  const manifestBytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`);
+  return {
+    sourceCommit,
+    setRoot: join(ctx.preparedRoot, sourceCommit),
+    files: allFiles,
+    manifestBytes,
+    manifestSha256: sha256Hex(manifestBytes),
+  };
+}
+function scanPreparedTree(root, fs) {
+  const directories = new Set();
+  const files = new Set();
+  const visit = (directory) => {
+    directories.add(directory);
+    for (const name of fs.readdirSync(directory)) {
+      const path = join(directory, name);
+      const stat = fs.lstatSync(path);
+      if (stat.isSymbolicLink()) {
+        throw new Error(`${path} is a symbolic link in the prepared set`);
+      }
+      if (stat.isDirectory()) {
+        visit(path);
+      } else if (stat.isFile()) {
+        if (stat.nlink > 1) {
+          throw new Error(`${path} has more than one hard link; refusing`);
+        }
+        files.add(path);
+      } else {
+        throw new Error(`${path} is not a regular file or directory; refusing`);
+      }
+    }
+  };
+  visit(root);
+  return { directories, files };
+}
+function sameReceiptEntry(actual, expected) {
+  if (actual === undefined || actual.kind !== expected.kind) return false;
+  if (actual.kind === 'file' && expected.kind === 'file') {
+    return actual.sha256 === expected.sha256;
+  }
+  return actual.kind === 'directory' && expected.kind === 'directory';
+}
+function preparedExpectedEntries(build) {
+  const manifestPath = join(build.setRoot, PREPARED_MANIFEST_NAME);
+  const files = new Map();
+  const fileEntries = new Map();
+  const directorySet = new Set([build.setRoot]);
+  for (const file of build.files) {
+    const destination = join(build.setRoot, file.storedPath);
+    files.set(destination, file.bytes);
+    fileEntries.set(destination, {
+      kind: 'file',
+      path: destination,
+      sha256: file.sha256,
+    });
+    let directory = dirname(destination);
+    while (
+      directory !== build.setRoot &&
+      directory.startsWith(`${build.setRoot}${sep}`)
+    ) {
+      directorySet.add(directory);
+      directory = dirname(directory);
+    }
+  }
+  files.set(manifestPath, build.manifestBytes);
+  fileEntries.set(manifestPath, {
+    kind: 'file',
+    path: manifestPath,
+    sha256: build.manifestSha256,
+  });
+  const directories = [...directorySet].sort((left, right) => {
+    const depth = left.split(sep).length - right.split(sep).length;
+    return depth === 0 ? compareUtf8(left, right) : depth;
+  });
+  const directoryEntries = new Map([
+    [
+      dirname(build.setRoot),
+      { kind: 'directory', path: dirname(build.setRoot) },
+    ],
+    ...directories.map((path) => [path, { kind: 'directory', path }]),
+  ]);
+  for (const filePath of files.keys()) {
+    if (directorySet.has(filePath)) {
+      throw new Error(
+        `${filePath} is both a file and a directory in the prepared layout`,
+      );
+    }
+    let parent = dirname(filePath);
+    while (parent.startsWith(`${build.setRoot}${sep}`)) {
+      if (files.has(parent)) {
+        throw new Error(
+          `${parent} is both a file and a parent directory in the prepared layout`,
+        );
+      }
+      parent = dirname(parent);
+    }
+  }
+  return { directories, files, fileEntries, directoryEntries };
+}
+function verifyPreparedTree(ctx, build, expected, receiptEntries, options) {
+  const rootWalk = checkContainment(ctx.preparedRoot, build.setRoot, ctx.fs);
+  if (rootWalk.finalKind === 'absent') {
+    if (options.manifestMustExist) {
+      throw new Error(`${build.setRoot} is missing its published prepared set`);
+    }
+    return false;
+  }
+  if (rootWalk.finalKind !== 'directory') {
+    throw new Error(
+      `${build.setRoot} is ${rootWalk.finalKind}, not a real directory`,
+    );
+  }
+  const snapshot = scanPreparedTree(build.setRoot, ctx.fs);
+  const expectedDirectories = new Set(expected.directories);
+  for (const path of snapshot.directories) {
+    if (!expectedDirectories.has(path)) {
+      throw new Error(`${path} is an unlisted directory in the prepared set`);
+    }
+    const expectedEntry = expected.directoryEntries.get(path);
+    if (
+      expectedEntry === undefined ||
+      !sameReceiptEntry(receiptEntries.get(path), expectedEntry)
+    ) {
+      throw new Error(
+        `${path} is not recorded as an owned directory in the receipt`,
+      );
+    }
+  }
+  for (const path of snapshot.files) {
+    const expectedEntry = expected.fileEntries.get(path);
+    if (expectedEntry === undefined || expectedEntry.kind !== 'file') {
+      throw new Error(`${path} is an unlisted file in the prepared set`);
+    }
+    if (!sameReceiptEntry(receiptEntries.get(path), expectedEntry)) {
+      throw new Error(
+        `${path} is not recorded with its expected hash in the receipt`,
+      );
+    }
+    if (sha256Hex(readNoFollowBytes(path, ctx.fs)) !== expectedEntry.sha256) {
+      throw new Error(
+        `${path} differs from the source bytes; refusing to reuse or overwrite it`,
+      );
+    }
+  }
+  const manifestPath = join(build.setRoot, PREPARED_MANIFEST_NAME);
+  const manifestPresent = snapshot.files.has(manifestPath);
+  if (options.manifestMustExist && !manifestPresent) {
+    throw new Error(
+      `${manifestPath} is absent; the prepared identity is not published`,
+    );
+  }
+  if (manifestPresent) {
+    const complete =
+      expected.directories.every((path) => snapshot.directories.has(path)) &&
+      [...expected.files.keys()].every((path) => snapshot.files.has(path));
+    if (!complete) {
+      throw new Error(
+        `${manifestPath} exists but the prepared set is incomplete; refusing`,
+      );
+    }
+  }
+  if (options.requireRecordedExpected) {
+    for (const entry of expected.directoryEntries.values()) {
+      if (!sameReceiptEntry(receiptEntries.get(entry.path), entry)) {
+        throw new Error(
+          `${entry.path} is not recorded as an owned directory in the receipt`,
+        );
+      }
+    }
+    for (const entry of expected.fileEntries.values()) {
+      if (!sameReceiptEntry(receiptEntries.get(entry.path), entry)) {
+        throw new Error(
+          `${entry.path} is not recorded with its expected hash in the receipt`,
+        );
+      }
+    }
+  }
+  return manifestPresent;
+}
+function prepareFailureMessage(ctx, build, expected, error) {
+  const marker = join(build.setRoot, PREPARED_MANIFEST_NAME);
+  let markerState = 'could not be inspected';
+  try {
+    const walk = checkContainment(ctx.preparedRoot, marker, ctx.fs);
+    markerState = walk.finalKind;
+  } catch (inspectError) {
+    markerState = `could not be inspected (${describe(inspectError)})`;
+  }
+  let stagedState = 'none';
+  let missingState = 'unavailable';
+  try {
+    const walk = checkContainment(ctx.preparedRoot, build.setRoot, ctx.fs);
+    if (walk.finalKind === 'directory') {
+      const snapshot = scanPreparedTree(build.setRoot, ctx.fs);
+      const present = [...snapshot.directories, ...snapshot.files]
+        .map((path) => relative(build.setRoot, path).replaceAll(sep, '/'))
+        .sort(compareUtf8);
+      stagedState =
+        present.length > 0 ? present.join(', ') : 'empty candidate directory';
+      const expectedPaths = [...expected.directories, ...expected.files.keys()];
+      const presentPaths = new Set([
+        ...snapshot.directories,
+        ...snapshot.files,
+      ]);
+      const missing = expectedPaths
+        .filter((path) => !presentPaths.has(path))
+        .map((path) => relative(build.setRoot, path).replaceAll(sep, '/'))
+        .sort(compareUtf8);
+      missingState = missing.length > 0 ? missing.join(', ') : 'none';
+    }
+  } catch (stateError) {
+    stagedState = `could not be safely enumerated (${describe(stateError)})`;
+  }
+  let receiptState = 'could not be read';
+  try {
+    const receipt = readReceipt(ctx.dataRoot, ctx.fs);
+    receiptState = receipt.state === 'valid' ? 'valid' : 'missing';
+  } catch (receiptError) {
+    receiptState = `invalid (${describe(receiptError)})`;
+  }
+  return `preparing ${build.sourceCommit} failed (${describe(error)}); the completion manifest ${marker} is ${markerState}; staged paths under the candidate are ${stagedState}; expected paths still missing are ${missingState}; receipt state is ${receiptState}; one safe retry is to call prepareDistributionSet again with the identical sourceCommit, provenance and source bytes; if the source is unavailable, remove only candidate paths whose receipt hashes still match`;
+}
+/** Explicitly stage and verify one immutable user-global distribution set. */
+export function prepareDistributionSet(options) {
+  const ctx = resolveContext(options);
+  const build = buildPreparedSet(ctx, options);
+  const expected = preparedExpectedEntries(build);
+  const fs = ctx.fs;
+  assertRealChain(ctx.dataRoot, fs);
+  assertRealParent(ctx.dataRoot, fs);
+  const dataRootStat = lstatOrNull(ctx.dataRoot, fs);
+  const prior = readReceipt(ctx.dataRoot, fs);
+  if (dataRootStat !== null && prior.state === 'missing') {
+    throw new Error(
+      `${ctx.dataRoot} already exists without an installer receipt; refusing to adopt unowned data`,
+    );
+  }
+  if (dataRootStat !== null && !dataRootStat.isDirectory()) {
+    throw new Error(`${ctx.dataRoot} is not a real data directory`);
+  }
+  const entries = new Map();
+  if (prior.state === 'valid') {
+    for (const entry of prior.receipt.entries) entries.set(entry.path, entry);
+  }
+  const preparedRootStat = lstatOrNull(ctx.preparedRoot, fs);
+  if (
+    preparedRootStat !== null &&
+    !sameReceiptEntry(entries.get(ctx.preparedRoot), {
+      kind: 'directory',
+      path: ctx.preparedRoot,
+    })
+  ) {
+    throw new Error(
+      `${ctx.preparedRoot} exists without a matching directory entry in the receipt; refusing to adopt it`,
+    );
+  }
+  for (const entry of entries.values()) assertOwnedShape(ctx, entry);
+  const allowedTargetPaths = new Set([
+    ...expected.directoryEntries.keys(),
+    ...expected.fileEntries.keys(),
+  ]);
+  for (const entry of entries.values()) {
+    if (
+      entry.path === build.setRoot ||
+      entry.path.startsWith(`${build.setRoot}${sep}`)
+    ) {
+      if (!allowedTargetPaths.has(entry.path)) {
+        throw new Error(
+          `${entry.path} is an unexpected receipt entry in the prepared candidate`,
+        );
+      }
+    }
+  }
+  for (const [path, expectedEntry] of [
+    ...expected.directoryEntries,
+    ...expected.fileEntries,
+  ]) {
+    const current = entries.get(path);
+    if (current !== undefined && !sameReceiptEntry(current, expectedEntry)) {
+      throw new Error(
+        `${path} conflicts with a different existing receipt entry`,
+      );
+    }
+  }
+  const existingManifest = verifyPreparedTree(ctx, build, expected, entries, {
+    requireRecordedExpected: false,
+    manifestMustExist: false,
+  });
+  if (existingManifest) {
+    verifyPreparedTree(ctx, build, expected, entries, {
+      requireRecordedExpected: true,
+      manifestMustExist: true,
+    });
+    return {
+      sourceCommit: build.sourceCommit,
+      preparedPath: build.setRoot,
+      fileCount: build.files.length,
+      reused: true,
+    };
+  }
+  const rootWasCreated = dataRootStat === null;
+  if (rootWasCreated) {
+    createDirectory(dirname(ctx.dataRoot), ctx.dataRoot, fs);
+    entries.set(ctx.dataRoot, { kind: 'directory', path: ctx.dataRoot });
+  }
+  for (const entry of expected.directoryEntries.values()) {
+    const current = entries.get(entry.path);
+    if (current === undefined) entries.set(entry.path, entry);
+  }
+  for (const entry of expected.fileEntries.values()) {
+    const current = entries.get(entry.path);
+    if (current === undefined) entries.set(entry.path, entry);
+  }
+  try {
+    writeReceipt(ctx.dataRoot, [...entries.values()], fs);
+    verifyPreparedTree(ctx, build, expected, entries, {
+      requireRecordedExpected: true,
+      manifestMustExist: false,
+    });
+    for (const directory of expected.directories) {
+      const walk = checkContainment(ctx.preparedRoot, directory, fs);
+      if (walk.finalKind === 'directory') continue;
+      if (walk.finalKind !== 'absent') {
+        throw new Error(`${directory} appeared as ${walk.finalKind}; refusing`);
+      }
+      createDirectory(ctx.preparedRoot, directory, fs);
+    }
+    const manifestPath = join(build.setRoot, PREPARED_MANIFEST_NAME);
+    for (const [path, bytes] of expected.files) {
+      if (path === manifestPath) continue;
+      const walk = checkContainment(ctx.preparedRoot, path, fs);
+      if (walk.finalKind === 'file') {
+        const expectedEntry = expected.fileEntries.get(path);
+        if (
+          expectedEntry?.kind !== 'file' ||
+          sha256Hex(readNoFollowBytes(path, fs)) !== expectedEntry.sha256
+        ) {
+          throw new Error(
+            `${path} changed while the prepared set was staged; refusing`,
+          );
+        }
+        continue;
+      }
+      if (walk.finalKind !== 'absent') {
+        throw new Error(`${path} appeared as ${walk.finalKind}; refusing`);
+      }
+      writeNewFile(ctx.preparedRoot, path, bytes, fs);
+    }
+    verifyPreparedTree(ctx, build, expected, entries, {
+      requireRecordedExpected: true,
+      manifestMustExist: false,
+    });
+    writeNewFile(ctx.preparedRoot, manifestPath, build.manifestBytes, fs);
+  } catch (error) {
+    let rootNote = '';
+    if (rootWasCreated) {
+      try {
+        const receipt = readReceipt(ctx.dataRoot, fs);
+        if (receipt.state === 'missing') {
+          const remaining = fs.readdirSync(ctx.dataRoot);
+          if (remaining.length === 0) {
+            removeSingleEntry(
+              dirname(ctx.dataRoot),
+              ctx.dataRoot,
+              {
+                kind: 'directory',
+              },
+              fs,
+            );
+            rootNote = `; the newly created empty data root ${ctx.dataRoot} was removed`;
+          } else {
+            rootNote = `; the newly created data root ${ctx.dataRoot} remains with ${remaining.join(', ')} and no receipt`;
+          }
+        }
+      } catch (cleanupError) {
+        rootNote = `; cleanup of the newly created data root ${ctx.dataRoot} could not complete (${describe(cleanupError)})`;
+      }
+    }
+    throw new Error(
+      `${prepareFailureMessage(ctx, build, expected, error)}${rootNote}`,
+    );
+  }
+  return {
+    sourceCommit: build.sourceCommit,
+    preparedPath: build.setRoot,
+    fileCount: build.files.length,
+    reused: false,
+  };
 }
 function readPackageVersion(sourceRoot, fs) {
   const parsed = JSON.parse(

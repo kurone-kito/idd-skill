@@ -398,8 +398,11 @@ function sha256Of(
   }
 }
 
-function writeAll(fd: number, content: string, fs: FsOps): void {
-  const buffer = Buffer.from(content, 'utf8');
+function writeAll(fd: number, content: string | Uint8Array, fs: FsOps): void {
+  const buffer =
+    typeof content === 'string'
+      ? Buffer.from(content, 'utf8')
+      : Buffer.from(content);
   let offset = 0;
   while (offset < buffer.length) {
     offset += fs.writeSync(fd, buffer, offset, buffer.length - offset);
@@ -565,6 +568,32 @@ export function checkContainment(
 }
 
 /**
+ * Create one directory exclusively after checking every component without
+ * following links. Missing parents are created first; the returned paths are
+ * exactly the directories this call created.
+ */
+export function createDirectory(
+  root: string,
+  target: string,
+  fs: FsOps = DEFAULT_FS,
+): string[] {
+  requirePlatformFlags(fs);
+  const walk = walkTo(root, target, fs);
+  if (walk.finalKind !== 'absent') {
+    throw new Error(
+      `${target} already exists as ${walk.finalKind}; the create-only directory operation refuses it`,
+    );
+  }
+  createDirs(walk.missingDirs, fs);
+  try {
+    fs.mkdirSync(target);
+  } catch (error) {
+    throw new Error(`could not create ${target}: ${describe(error)}`);
+  }
+  return [...walk.missingDirs, target];
+}
+
+/**
  * Create `target` exclusively with `content`, creating missing directories
  * first. Refuses any existing final component, a link included. If the
  * content write fails after the create, the created file is removed.
@@ -572,7 +601,7 @@ export function checkContainment(
 export function writeNewFile(
   root: string,
   target: string,
-  content: string,
+  content: string | Uint8Array,
   fs: FsOps = DEFAULT_FS,
 ): void {
   const flags = requirePlatformFlags(fs);

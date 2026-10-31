@@ -331,7 +331,10 @@ function sha256Of(path, fs, flags) {
   }
 }
 function writeAll(fd, content, fs) {
-  const buffer = Buffer.from(content, 'utf8');
+  const buffer =
+    typeof content === 'string'
+      ? Buffer.from(content, 'utf8')
+      : Buffer.from(content);
   let offset = 0;
   while (offset < buffer.length) {
     offset += fs.writeSync(fd, buffer, offset, buffer.length - offset);
@@ -467,6 +470,27 @@ export function checkContainment(root, target, fs = DEFAULT_FS) {
   requirePlatformFlags(fs);
   const walk = walkTo(root, target, fs);
   return { finalKind: walk.finalKind, missingDirs: walk.missingDirs };
+}
+/**
+ * Create one directory exclusively after checking every component without
+ * following links. Missing parents are created first; the returned paths are
+ * exactly the directories this call created.
+ */
+export function createDirectory(root, target, fs = DEFAULT_FS) {
+  requirePlatformFlags(fs);
+  const walk = walkTo(root, target, fs);
+  if (walk.finalKind !== 'absent') {
+    throw new Error(
+      `${target} already exists as ${walk.finalKind}; the create-only directory operation refuses it`,
+    );
+  }
+  createDirs(walk.missingDirs, fs);
+  try {
+    fs.mkdirSync(target);
+  } catch (error) {
+    throw new Error(`could not create ${target}: ${describe(error)}`);
+  }
+  return [...walk.missingDirs, target];
 }
 /**
  * Create `target` exclusively with `content`, creating missing directories

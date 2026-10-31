@@ -27,6 +27,7 @@ import * as userGlobalPaths from '../src/scripts/user-global-paths.mts';
 const {
   assertRealChain,
   checkContainment,
+  createDirectory,
   removeSingleEntry,
   replaceFileByRename,
   repointCurrent,
@@ -175,10 +176,11 @@ function assertThrowsMatching(run: () => void, pattern: RegExp): void {
 
 // --- Exports and platform (every platform) ---------------------------------
 
-test('exports exactly the five containment entry points and the two ceiling helpers', () => {
+test('exports the containment entry points and the two ceiling helpers', () => {
   assert.deepEqual(Object.keys(userGlobalPaths).sort(), [
     'assertRealChain',
     'checkContainment',
+    'createDirectory',
     'removeSingleEntry',
     'replaceFileByRename',
     'repointCurrent',
@@ -197,6 +199,7 @@ test('every export refuses before any mutation when no-follow is unavailable', (
     const before = snapshot(box.home);
     const refusals: Array<() => void> = [
       () => checkContainment(box.dataRoot, join(box.dataRoot, 'x'), fs),
+      () => createDirectory(box.dataRoot, join(box.dataRoot, 'new-dir'), fs),
       () => writeNewFile(box.dataRoot, join(box.dataRoot, 'new.txt'), 'x', fs),
       () => replaceFileByRename(box.dataRoot, file, sha('old'), 'new', fs),
       () =>
@@ -262,6 +265,25 @@ posixTest('writeNewFile creates missing directories and the file', () => {
     );
   });
 });
+
+posixTest(
+  'createDirectory creates only absent directories and refuses reuse',
+  () => {
+    withBox((box) => {
+      makeRoot(box);
+      const target = join(box.dataRoot, 'prepared', 'commit');
+      assert.deepEqual(createDirectory(box.dataRoot, target), [
+        join(box.dataRoot, 'prepared'),
+        target,
+      ]);
+      assert.equal(nodeFs.statSync(target).isDirectory(), true);
+      assertThrowsMatching(
+        () => createDirectory(box.dataRoot, target),
+        /already exists as directory/,
+      );
+    });
+  },
+);
 
 posixTest(
   'replaceFileByRename replaces a file whose hash matches and leaves no temporary file',
