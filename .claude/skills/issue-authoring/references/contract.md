@@ -3612,6 +3612,9 @@ A `review-needs-decision` body uses these headings in this order:
 and `## Candidate files`. `Background` paraphrases the review finding,
 contains no quoted finding text, and links to the source review comment;
 for E10, Tier 2, or Tier 3, link to the comment that states the stop.
+Decision issues require exactly one line beginning with Question: followed by a
+space inside their `## Decision needed` section; the remainder of that
+line is the question.
 List one recommended option and the cost of each option under `Options`.
 Add exactly one `Refs #<claimed-issue>` line and one
 `Blocked by #<claimed-issue>` line, both naming the claimed issue rather
