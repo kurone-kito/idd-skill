@@ -350,7 +350,7 @@
       "files": [
         ".github/instructions/idd-orchestrator.instructions.md"
       ],
-      "limitBytes": 5600
+      "limitBytes": 6300
     },
     {
       "id": "bundle-resume-phase",
@@ -490,6 +490,12 @@
     "noticeUtilizationPct": 95,
     "exemptBundles": [],
     "nearCeilingRaiseApprovals": [
+      {
+        "bundle": "bundle-orchestrator-phase",
+        "limitBytes": 6300,
+        "issue": 4833,
+        "reason": "Operator chose to raise this limit, instead of trimming protocol text, in the IDD session on 2026-10-31, and chose split option A for issue #4833. The decision is recorded in comment 6541821441 on #4833, and the split proposal is in the scope-overrun comment (comment 6541487548). Measured before this change: 5,453 bytes, 97.4% of 5,600, which is 35 bytes under the 98% ceiling of 5,488. The parent-continuation wording adds 304 bytes, for a projected total of 5,757 bytes. 6,300 is about 10% above that projection, rounded to the nearest 100, and stays under the 95% notice band at 91.4%."
+      },
       {
         "bundle": "bundle-review-fix-lite",
         "limitBytes": 50800,
