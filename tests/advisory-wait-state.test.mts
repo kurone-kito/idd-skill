@@ -10,6 +10,7 @@ import {
   advisoryMarkerComment,
   buildCopilotRecoverySummary,
   evaluateStaleRequestRecoveryAction,
+  hasCurrentHeadCopilotReview,
   parseArgs,
   readAdvisoryWaitState,
   resolveNowFlag,
@@ -1425,6 +1426,48 @@ test('#4877 classifier: a claimless pending input stays active-claim-not-provide
     }),
     { action: 'not-applicable', reason: 'active-claim-not-provided' },
   );
+});
+
+const OLDER_COMMIT_SHA = '2'.repeat(40);
+
+test('#4877 helper: a current-head review still counts after a later review of an older commit', () => {
+  const reviews = [
+    {
+      ...completedCopilotReview(WAIT_SHA),
+      submitted_at: '2026-10-16T01:00:00Z',
+    },
+    {
+      ...completedCopilotReview(OLDER_COMMIT_SHA),
+      submitted_at: '2026-10-16T02:00:00Z',
+    },
+  ];
+  // The latest review names the older commit, which the latest-review
+  // comparison alone would have read as "no review of this head".
+  assert.equal(hasCurrentHeadCopilotReview(reviews, WAIT_SHA, 'copilot'), true);
+  assert.equal(
+    hasCurrentHeadCopilotReview(reviews.slice(1), WAIT_SHA, 'copilot'),
+    false,
+  );
+});
+
+test('#4877 helper: only a qualifying Copilot review of the current head counts', () => {
+  const notAnOverview = {
+    ...completedCopilotReview(WAIT_SHA),
+    body: 'Not a Copilot overview.',
+  };
+  const otherAuthor = {
+    ...completedCopilotReview(WAIT_SHA),
+    user: { login: 'someone', type: 'User' },
+  };
+  assert.equal(
+    hasCurrentHeadCopilotReview([notAnOverview], WAIT_SHA, 'copilot'),
+    false,
+  );
+  assert.equal(
+    hasCurrentHeadCopilotReview([otherAuthor], WAIT_SHA, 'copilot'),
+    false,
+  );
+  assert.equal(hasCurrentHeadCopilotReview([], WAIT_SHA, 'copilot'), false);
 });
 
 test('#4718 caller: a completed review of an earlier HEAD keeps the existing attempt routing', () => {
