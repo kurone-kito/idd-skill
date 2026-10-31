@@ -1385,9 +1385,10 @@ seven fields and rejects missing or additional fields:
 - `schemaVersion`: JSON integer exactly `1`.
 - `sessionId`: non-empty JSON string containing one path-safe component,
   excluding `.`/`..`, path separators, and control characters.
-- `repository`: non-empty JSON string in `owner/repo` form, equal to the
-  current repository slug after normalizing both owner and repo components
-  case-insensitively before comparison.
+- `repository`: non-empty JSON string in `owner/repo` form. For the exact
+  current-session record, it must equal the current repository slug after
+  normalizing both owner and repo components case-insensitively before
+  comparison. Foreign records retain their own repository slug.
 - `repositoryRoot`, `gitCommonDir`, and `scratchpadRoot`: non-empty JSON
   strings containing canonical absolute paths for the current operating
   system.
