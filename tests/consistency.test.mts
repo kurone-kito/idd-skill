@@ -3671,7 +3671,7 @@ test('fan-out scratchpad preflight provisions and recovers one session root (#46
         routingRows.some(
           (row) => row.includes(evidence) && row.includes(action),
         ),
-        path + ': missing scratchpad evidence/action pair for ' + evidence,
+        `${path}: missing scratchpad evidence/action pair for ${evidence}`,
       );
     }
 

@@ -953,7 +953,7 @@ function ghApiPaginatedItemsUnbounded(path, jqFilter) {
 const COPILOT_REVIEWER_WORKFLOW_PATH =
   'dynamic/agents/copilot-pull-request-reviewer';
 function failReviewerRuns(message) {
-  process.stderr.write('copilot-review-wave-audit: ' + message + '\n');
+  process.stderr.write(`copilot-review-wave-audit: ${message}\n`);
   process.exit(1);
 }
 function lowerMiddleMedian(values) {
@@ -964,12 +964,12 @@ function lowerMiddleMedian(values) {
   return sorted[Math.floor((sorted.length - 1) / 2)] ?? null;
 }
 function nextReviewerRunsDate(date) {
-  const next = new Date(date + 'T00:00:00Z');
+  const next = new Date(`${date}T00:00:00Z`);
   next.setUTCDate(next.getUTCDate() + 1);
   return next.toISOString().slice(0, 10);
 }
 function auditReviewerRuns(owner, repo, from, to) {
-  const workflowListPath = 'repos/' + owner + '/' + repo + '/actions/workflows';
+  const workflowListPath = `repos/${owner}/${repo}/actions/workflows`;
   let workflows;
   try {
     workflows = ghApiPaginatedItemsUnbounded(workflowListPath, '.workflows[]');
@@ -1033,7 +1033,7 @@ function auditReviewerRuns(owner, repo, from, to) {
     const totalCount = pageItems.find((item) => typeof item === 'number');
     if (totalCount === undefined || !Number.isSafeInteger(totalCount)) {
       failReviewerRuns(
-        'reviewer runs: ' + runsPath + ': response has no valid total_count',
+        `reviewer runs: ${runsPath}: response has no valid total_count`,
       );
     }
     if (totalCount >= 1000) {
@@ -1128,10 +1128,10 @@ function formatReviewerRunsStepSummary(report) {
       ' through ' +
       report.to +
       ' (UTC, inclusive)',
-    '- Runs: ' + report.runs,
-    '- Total duration: ' + totalHours + ' hours',
-    '- Median duration: ' + medianSeconds + ' seconds',
-    '- Distinct head branches: ' + report.headBranches,
+    `- Runs: ${report.runs}`,
+    `- Total duration: ${totalHours} hours`,
+    `- Median duration: ${medianSeconds} seconds`,
+    `- Distinct head branches: ${report.headBranches}`,
     '- Median runs per head branch: ' +
       (report.medianRunsPerHeadBranch ?? 'n/a'),
     '',
@@ -1144,7 +1144,7 @@ function appendReviewerRunsStepSummary(path, report) {
     existingSummary.length > 0 && !existingSummary.endsWith('\n') ? '\n' : '';
   appendFileSync(
     path,
-    separator + formatReviewerRunsStepSummary(report) + '\n',
+    `${separator + formatReviewerRunsStepSummary(report)}\n`,
     'utf8',
   );
 }
@@ -1875,7 +1875,7 @@ if (import.meta.main) {
   }
   const reviewerFormat = values.format;
   if (reviewerFormat !== 'json' && reviewerFormat !== 'tsv') {
-    fail('--format must be "json" or "tsv", got "' + reviewerFormat + '"');
+    fail(`--format must be "json" or "tsv", got "${reviewerFormat}"`);
   }
   const reviewerRunsFromFlag = values['reviewer-runs-from'];
   const reviewerRunsToFlag = values['reviewer-runs-to'];
@@ -1917,7 +1917,7 @@ if (import.meta.main) {
     ];
     const incompatible = incompatibleFlags.find(([, present]) => present);
     if (incompatible) {
-      fail('reviewer-run mode cannot be combined with ' + incompatible[0]);
+      fail(`reviewer-run mode cannot be combined with ${incompatible[0]}`);
     }
     let reviewerRepository;
     try {
@@ -1932,7 +1932,7 @@ if (import.meta.main) {
       reviewerRunsFrom,
       reviewerRunsTo,
     );
-    process.stdout.write(JSON.stringify({ reviewerRuns }, null, 2) + '\n');
+    process.stdout.write(`${JSON.stringify({ reviewerRuns }, null, 2)}\n`);
     const reviewerStepSummaryPath = values['step-summary'];
     if (reviewerStepSummaryPath !== undefined) {
       try {

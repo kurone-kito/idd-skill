@@ -2451,10 +2451,10 @@ function distributionListingDigest(
         Buffer.from(right.path, 'utf8'),
       ),
     )
-    .map((file) => file.sha256 + ' ' + file.path + '\n')
+    .map((file) => `${file.sha256} ${file.path}\n`)
     .join('');
   const digest = createHash('sha256').update(listing, 'utf8').digest('hex');
-  return 'sha256:' + digest;
+  return `sha256:${digest}`;
 }
 
 function cloneDistributionManifest(): DistributionManifest {
@@ -2681,7 +2681,7 @@ test('distribution manifest fixture, identity rules, and listing digest are expl
     component.provenance.commit = secondCommit.sourceCommit;
     component.location = component.location.replace(
       /\/[0-9a-f]{40}(?=\/|$)/,
-      '/' + secondCommit.sourceCommit,
+      `/${secondCommit.sourceCommit}`,
     );
   }
   for (const manifest of [distributionManifestFixture, secondCommit]) {

@@ -1405,7 +1405,7 @@ export interface ReviewerRunsReport {
 }
 
 function failReviewerRuns(message: string): never {
-  process.stderr.write('copilot-review-wave-audit: ' + message + '\n');
+  process.stderr.write(`copilot-review-wave-audit: ${message}\n`);
   process.exit(1);
 }
 
@@ -1418,7 +1418,7 @@ function lowerMiddleMedian(values: readonly number[]): number | null {
 }
 
 function nextReviewerRunsDate(date: string): string {
-  const next = new Date(date + 'T00:00:00Z');
+  const next = new Date(`${date}T00:00:00Z`);
   next.setUTCDate(next.getUTCDate() + 1);
   return next.toISOString().slice(0, 10);
 }
@@ -1429,7 +1429,7 @@ function auditReviewerRuns(
   from: string,
   to: string,
 ): ReviewerRunsReport {
-  const workflowListPath = 'repos/' + owner + '/' + repo + '/actions/workflows';
+  const workflowListPath = `repos/${owner}/${repo}/actions/workflows`;
   let workflows: unknown[];
   try {
     workflows = ghApiPaginatedItemsUnbounded(workflowListPath, '.workflows[]');
@@ -1496,7 +1496,7 @@ function auditReviewerRuns(
     );
     if (totalCount === undefined || !Number.isSafeInteger(totalCount)) {
       failReviewerRuns(
-        'reviewer runs: ' + runsPath + ': response has no valid total_count',
+        `reviewer runs: ${runsPath}: response has no valid total_count`,
       );
     }
     if (totalCount >= 1000) {
@@ -1594,10 +1594,10 @@ function formatReviewerRunsStepSummary(report: ReviewerRunsReport): string {
       ' through ' +
       report.to +
       ' (UTC, inclusive)',
-    '- Runs: ' + report.runs,
-    '- Total duration: ' + totalHours + ' hours',
-    '- Median duration: ' + medianSeconds + ' seconds',
-    '- Distinct head branches: ' + report.headBranches,
+    `- Runs: ${report.runs}`,
+    `- Total duration: ${totalHours} hours`,
+    `- Median duration: ${medianSeconds} seconds`,
+    `- Distinct head branches: ${report.headBranches}`,
     '- Median runs per head branch: ' +
       (report.medianRunsPerHeadBranch ?? 'n/a'),
     '',
@@ -1614,7 +1614,7 @@ function appendReviewerRunsStepSummary(
     existingSummary.length > 0 && !existingSummary.endsWith('\n') ? '\n' : '';
   appendFileSync(
     path,
-    separator + formatReviewerRunsStepSummary(report) + '\n',
+    `${separator + formatReviewerRunsStepSummary(report)}\n`,
     'utf8',
   );
 }
@@ -2452,7 +2452,7 @@ if (import.meta.main) {
 
   const reviewerFormat = values.format as string;
   if (reviewerFormat !== 'json' && reviewerFormat !== 'tsv') {
-    fail('--format must be "json" or "tsv", got "' + reviewerFormat + '"');
+    fail(`--format must be "json" or "tsv", got "${reviewerFormat}"`);
   }
   const reviewerRunsFromFlag = values['reviewer-runs-from'] as
     | string
@@ -2496,7 +2496,7 @@ if (import.meta.main) {
     ];
     const incompatible = incompatibleFlags.find(([, present]) => present);
     if (incompatible) {
-      fail('reviewer-run mode cannot be combined with ' + incompatible[0]);
+      fail(`reviewer-run mode cannot be combined with ${incompatible[0]}`);
     }
 
     let reviewerRepository: string;
@@ -2514,7 +2514,7 @@ if (import.meta.main) {
       reviewerRunsFrom,
       reviewerRunsTo,
     );
-    process.stdout.write(JSON.stringify({ reviewerRuns }, null, 2) + '\n');
+    process.stdout.write(`${JSON.stringify({ reviewerRuns }, null, 2)}\n`);
 
     const reviewerStepSummaryPath = values['step-summary'] as
       | string
