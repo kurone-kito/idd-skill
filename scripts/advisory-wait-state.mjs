@@ -339,6 +339,16 @@ export function evaluateStaleRequestRecoveryAction(input) {
         reason: STALE_REQUEST_RECOVERY_REASONS.provenCoversHead,
       };
     }
+    // A completed Copilot review of this HEAD is the same proof the
+    // non-pending path uses below (#4718): the pending request reached the
+    // reviewer. Checked before the cap, so an exhausted budget still yields
+    // proven-covers-head when that review exists (#4877).
+    if (input.currentHeadReviewExists === true) {
+      return {
+        action: 'not-applicable',
+        reason: STALE_REQUEST_RECOVERY_REASONS.provenCoversHead,
+      };
+    }
     if (input.remainingBudget <= 0) {
       return {
         action: 'cap-exhausted',
