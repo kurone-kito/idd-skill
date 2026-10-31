@@ -136,16 +136,35 @@ test('standalone guard contract scans the complete diagnostic expression', () =>
   );
   try {
     const source = readFileSync(sourcePath, 'utf8');
-    const message = "Node version satisfying idd-skill's own package.json engines.node requirement.";
+    const message =
+      "Node version satisfying idd-skill's own package.json engines.node requirement.";
     const copiedRange = '(^22.24.0 || ^24.3.0 || >=26.0.0)';
     const tick = String.fromCharCode(96);
     const beforePhrase = source.replace(
-      'Upgrade to a ' + tick + ' +\n        ' + tick + 'Node version satisfying',
-      'Upgrade to a ' + copiedRange + ' ' + tick + ' +\n        ' + tick + 'Node version satisfying',
+      'Upgrade to a ' +
+        tick +
+        ' +\n        ' +
+        tick +
+        'Node version satisfying',
+      'Upgrade to a ' +
+        copiedRange +
+        ' ' +
+        tick +
+        ' +\n        ' +
+        tick +
+        'Node version satisfying',
     );
     const afterPhrase = source.replace(
       message + '\\n' + tick,
-      message + ' ' + tick + ' +\n        ' + tick + ' ' + copiedRange + '\\n' + tick,
+      message +
+        ' ' +
+        tick +
+        ' +\n        ' +
+        tick +
+        ' ' +
+        copiedRange +
+        '\\n' +
+        tick,
     );
     const afterTerminator = source.replace(
       message + '\\n' + tick + ',',
@@ -165,7 +184,11 @@ test('standalone guard contract scans the complete diagnostic expression', () =>
         /RUNTIME-GUARD-STANDALONE-EXEMPTION src\/scripts\/minimize-superseded-markers\.mts:/,
       );
       assert.match(result.stderr, /must not copy an engines\.node range/);
-      assert.equal(snapshot(fixture.root), before, 'the audit must be read-only');
+      assert.equal(
+        snapshot(fixture.root),
+        before,
+        'the audit must be read-only',
+      );
     }
   } finally {
     fixture.cleanup();
