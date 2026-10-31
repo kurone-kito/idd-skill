@@ -108,6 +108,8 @@ mark `stalled`, and follow [fan-out recovery][fv].
 A worker runs from B1 to the merge policy's terminal phase: F4 under
 `fully_autonomous_merge`, else F2.5. A verified pre-B1 parent continuation is
 the one exception: its owning parent runs that span with a
-`parent-continuation` roster entry.
+`parent-continuation` roster entry. The continuation keeps the scope-stop rule
+of the [delegation brief](../../docs/idd-workflow.md#delegation-brief-template):
+a run scoped to stop earlier ends in a scope stop, not a hold.
 
 [fv]: ../../docs/idd-workflow.md#orchestrator-fan-out-variant
