@@ -202,6 +202,25 @@
   // - true: the gate is off for the whole repository.
   // "skipIssueAuthorApprovalGate": false,
 
+  // Standing approval classes (roadmap #4883). Each class is off unless its
+  // enabled flag is true, and a malformed class stays off.
+  // "standingApprovals": {
+  //   // budgetRaise: a bounded budget raise approved in advance.
+  //   // - true: the class is on, within maxRaisePct.
+  //   // - false (default): every raise waits for a reply.
+  //   // maxRaisePct is a whole percent, 0 to 10; 10 is the default.
+  //   "budgetRaise": { "enabled": false, "maxRaisePct": 10 },
+  //   // split: a split into candidate-file sets approved in advance.
+  //   // - true: the class is on, within maxCandidateFiles.
+  //   // - false (default): every split waits for a reply.
+  //   // maxCandidateFiles is a positive integer; 8 is the default.
+  //   "split": { "enabled": false, "maxCandidateFiles": 8 },
+  //   // release: a release of a held set approved in advance.
+  //   // - true: the class is on, once the checklist passes.
+  //   // - false (default): every release waits for a reply.
+  //   // requireChecklistPass must stay true; true is the default.
+  //   "release": { "enabled": false, "requireChecklistPass": true }
+  // },
   // Repository-only opt-in for provisional decision choices. User-global
   // values, issue text, and pull-request heads never grant this authority.
   // - true: allows the configured provisional-decision policy to act; it

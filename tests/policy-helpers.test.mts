@@ -14,6 +14,7 @@ import {
   inspectDevelopmentBranch,
   inspectIssueAuthoringDelegateLayer,
   inspectProvider,
+  inspectStandingApprovals,
   normalizePolicyConfig,
   POLICY_DEFAULTS,
   parseIsoDurationToMs,
@@ -3144,4 +3145,108 @@ test('critiqueLoop.deferAllAfterRounds is unset by default and keeps only intege
       `invalid ${JSON.stringify(value)} must leave the cap off`,
     );
   }
+});
+
+test('standingApprovals: absent keeps every class disabled (#4886)', () => {
+  const normalized = normalizePolicyConfig({});
+  assert.deepEqual(normalized.standingApprovals, {
+    budgetRaise: { enabled: false, maxRaisePct: 10 },
+    split: { enabled: false, maxCandidateFiles: 8 },
+    release: { enabled: false, requireChecklistPass: true },
+  });
+  assert.deepEqual(
+    inspectStandingApprovals({}).map((d) => d.status),
+    ['absent', 'absent', 'absent'],
+  );
+});
+
+test('standingApprovals: a class is enabled only by an explicit enabled: true (#4886)', () => {
+  const config = {
+    standingApprovals: {
+      budgetRaise: { maxRaisePct: 5 },
+      split: { enabled: true, maxCandidateFiles: 6 },
+      release: { enabled: true },
+    },
+  };
+  const normalized = normalizePolicyConfig(config);
+  assert.equal(normalized.standingApprovals.budgetRaise.enabled, false);
+  assert.equal(normalized.standingApprovals.split.enabled, true);
+  assert.equal(normalized.standingApprovals.split.maxCandidateFiles, 6);
+  assert.equal(normalized.standingApprovals.release.enabled, true);
+  assert.deepEqual(
+    inspectStandingApprovals(config).map((d) => d.status),
+    ['disabled', 'enabled', 'enabled'],
+  );
+});
+
+test('standingApprovals: an out-of-range maxRaisePct disables the budget class and is reported (#4886)', () => {
+  for (const maxRaisePct of [-1, 11, 2.5, '5']) {
+    const config = {
+      standingApprovals: { budgetRaise: { enabled: true, maxRaisePct } },
+    };
+    const normalized = normalizePolicyConfig(config);
+    assert.equal(
+      normalized.standingApprovals.budgetRaise.enabled,
+      false,
+      'maxRaisePct ' + JSON.stringify(maxRaisePct),
+    );
+    const diagnostic = inspectStandingApprovals(config)[0];
+    assert.equal(diagnostic.status, 'invalid');
+    assert.match(diagnostic.reason ?? '', /maxRaisePct/);
+  }
+  assert.equal(
+    normalizePolicyConfig({
+      standingApprovals: { budgetRaise: { enabled: true, maxRaisePct: 0 } },
+    }).standingApprovals.budgetRaise.enabled,
+    true,
+    '0 is a valid ceiling',
+  );
+});
+
+test('standingApprovals: a non-positive maxCandidateFiles disables the split class and is reported (#4886)', () => {
+  for (const maxCandidateFiles of [0, -3, 1.5, null]) {
+    const config = {
+      standingApprovals: { split: { enabled: true, maxCandidateFiles } },
+    };
+    assert.equal(
+      normalizePolicyConfig(config).standingApprovals.split.enabled,
+      false,
+      'maxCandidateFiles ' + JSON.stringify(maxCandidateFiles),
+    );
+    const diagnostic = inspectStandingApprovals(config)[1];
+    assert.equal(diagnostic.status, 'invalid');
+    assert.match(diagnostic.reason ?? '', /maxCandidateFiles/);
+  }
+});
+
+test('standingApprovals: requireChecklistPass false disables the release class and is reported (#4886)', () => {
+  const config = {
+    standingApprovals: {
+      release: { enabled: true, requireChecklistPass: false },
+    },
+  };
+  assert.equal(
+    normalizePolicyConfig(config).standingApprovals.release.enabled,
+    false,
+  );
+  const diagnostic = inspectStandingApprovals(config)[2];
+  assert.equal(diagnostic.status, 'invalid');
+  assert.match(diagnostic.reason ?? '', /requireChecklistPass/);
+});
+
+test('standingApprovals: a malformed class and an unknown key fail closed (#4886)', () => {
+  const notObject = { standingApprovals: { split: true } };
+  assert.equal(
+    normalizePolicyConfig(notObject).standingApprovals.split.enabled,
+    false,
+  );
+  assert.equal(inspectStandingApprovals(notObject)[1].status, 'invalid');
+  const unknownKey = {
+    standingApprovals: { release: { enabled: true, extra: 1 } },
+  };
+  assert.equal(
+    normalizePolicyConfig(unknownKey).standingApprovals.release.enabled,
+    false,
+  );
+  assert.equal(inspectStandingApprovals(unknownKey)[2].status, 'invalid');
 });

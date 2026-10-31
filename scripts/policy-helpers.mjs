@@ -59,6 +59,118 @@ export function inspectDevelopmentBranch(config) {
   }
   return { status: 'configured', branch: value };
 }
+/** The three standing-approval classes, in the order roadmap #4883 lists them. */
+export const STANDING_APPROVAL_CLASSES = ['budgetRaise', 'split', 'release'];
+const STANDING_APPROVAL_KEYS = {
+  budgetRaise: ['enabled', 'maxRaisePct'],
+  split: ['enabled', 'maxCandidateFiles'],
+  release: ['enabled', 'requireChecklistPass'],
+};
+function isStandingObject(value) {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+function inspectStandingApprovalClass(cls, raw) {
+  if (raw === undefined) {
+    return { class: cls, status: 'absent' };
+  }
+  const invalid = (reason) => ({
+    class: cls,
+    status: 'invalid',
+    reason,
+  });
+  if (!isStandingObject(raw)) {
+    return invalid(`standingApprovals.${cls} must be an object`);
+  }
+  for (const key of Object.keys(raw)) {
+    if (!STANDING_APPROVAL_KEYS[cls].includes(key)) {
+      return invalid(`standingApprovals.${cls} has an unknown key ${key}`);
+    }
+  }
+  if (raw.enabled !== undefined && typeof raw.enabled !== 'boolean') {
+    return invalid(`standingApprovals.${cls}.enabled must be a boolean`);
+  }
+  if (cls === 'budgetRaise' && raw.maxRaisePct !== undefined) {
+    const v = raw.maxRaisePct;
+    if (!(Number.isInteger(v) && v >= 0 && v <= 10)) {
+      return invalid(
+        'standingApprovals.budgetRaise.maxRaisePct must be an integer from 0 to 10',
+      );
+    }
+  }
+  if (cls === 'split' && raw.maxCandidateFiles !== undefined) {
+    const v = raw.maxCandidateFiles;
+    if (!(Number.isInteger(v) && v >= 1)) {
+      return invalid(
+        'standingApprovals.split.maxCandidateFiles must be a positive integer',
+      );
+    }
+  }
+  if (
+    cls === 'release' &&
+    raw.requireChecklistPass !== undefined &&
+    raw.requireChecklistPass !== true
+  ) {
+    return invalid(
+      'standingApprovals.release.requireChecklistPass must be true',
+    );
+  }
+  return { class: cls, status: raw.enabled === true ? 'enabled' : 'disabled' };
+}
+/**
+ * Inspect the three standing-approval classes on a raw policy document. A
+ * class is enabled only by an explicit `enabled: true` with valid ceilings;
+ * anything else is disabled, and a malformed class is reported as
+ * `invalid` so a test (or an operator) can read the reason.
+ */
+export function inspectStandingApprovals(config) {
+  const root = isStandingObject(config) ? config.standingApprovals : undefined;
+  if (root === undefined) {
+    return STANDING_APPROVAL_CLASSES.map((cls) => ({
+      class: cls,
+      status: 'absent',
+    }));
+  }
+  if (!isStandingObject(root)) {
+    return STANDING_APPROVAL_CLASSES.map((cls) => ({
+      class: cls,
+      status: 'invalid',
+      reason: 'standingApprovals must be an object',
+    }));
+  }
+  return STANDING_APPROVAL_CLASSES.map((cls) =>
+    inspectStandingApprovalClass(cls, root[cls]),
+  );
+}
+/** The effective class values that `normalizePolicyConfig` returns. */
+function effectiveStandingApprovals(config) {
+  const status = new Map(
+    inspectStandingApprovals(config).map((d) => [d.class, d.status]),
+  );
+  const root =
+    isStandingObject(config) && isStandingObject(config.standingApprovals)
+      ? config.standingApprovals
+      : {};
+  const budget = isStandingObject(root.budgetRaise) ? root.budgetRaise : {};
+  const split = isStandingObject(root.split) ? root.split : {};
+  return {
+    budgetRaise: {
+      enabled: status.get('budgetRaise') === 'enabled',
+      maxRaisePct:
+        typeof budget.maxRaisePct === 'number' ? budget.maxRaisePct : 10,
+    },
+    split: {
+      enabled: status.get('split') === 'enabled',
+      maxCandidateFiles:
+        typeof split.maxCandidateFiles === 'number'
+          ? split.maxCandidateFiles
+          : 8,
+    },
+    release: {
+      enabled: status.get('release') === 'enabled',
+      requireChecklistPass: true,
+    },
+  };
+}
 /**
  * Resolve the effective development-branch target for enforcement
  * (#2272): a configured `developmentBranch` policy value wins outright;
@@ -238,6 +350,13 @@ export const POLICY_DEFAULTS = Object.freeze({
   issueScope: 'roadmap-first',
   orphanFirstPolicy: 'none',
   skipIssueAuthorApprovalGate: false,
+  // Standing approval classes (issue #4886, roadmap #4883). Every class is
+  // off by default, so an absent key keeps today's per-request approval.
+  standingApprovals: Object.freeze({
+    budgetRaise: Object.freeze({ enabled: false, maxRaisePct: 10 }),
+    split: Object.freeze({ enabled: false, maxCandidateFiles: 8 }),
+    release: Object.freeze({ enabled: false, requireChecklistPass: true }),
+  }),
   dangerouslyAutoDecide: false,
   maintainerApprovalActorPolicy: 'owners-and-maintainers-only',
   stallRecovery: Object.freeze({
@@ -738,6 +857,7 @@ export function normalizePolicyConfig(config) {
         : POLICY_DEFAULTS.githubApi.loadControl.maxWait,
   };
   const githubApi = { telemetry, readCache, loadControl };
+  const standingApprovals = effectiveStandingApprovals(config);
   // #4427: only a literal `false` disables admission; every other value keeps
   // it on. The helper, not this parser, rejects `flock` with a cap above 1, so
   // the stored value stays visible here.
@@ -1033,6 +1153,7 @@ export function normalizePolicyConfig(config) {
     providerHealth,
     githubApi,
     localExec,
+    standingApprovals,
   };
 }
 export function resolveCollaboratorMarkerTrust(config, envValue = '') {

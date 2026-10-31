@@ -299,6 +299,11 @@ interface PolicyConfigFile {
   issueScope?: 'roadmap' | 'roadmap-first' | 'orphan-first';
   orphanFirstPolicy?: 'none' | 'maintainer-approved' | 'public-disabled';
   skipIssueAuthorApprovalGate?: boolean;
+  standingApprovals?: {
+    budgetRaise?: { enabled?: boolean; maxRaisePct?: number };
+    split?: { enabled?: boolean; maxCandidateFiles?: number };
+    release?: { enabled?: boolean; requireChecklistPass?: true };
+  };
   dangerouslyAutoDecide?: boolean;
   critiqueLoopProfile?: string;
   mergeHandoffActor?: string;
@@ -790,6 +795,7 @@ export const policyConfigKeys = [
   'issueScope',
   'orphanFirstPolicy',
   'skipIssueAuthorApprovalGate',
+  'standingApprovals',
   'dangerouslyAutoDecide',
   'critiqueLoopProfile',
   'mergeHandoffActor',
