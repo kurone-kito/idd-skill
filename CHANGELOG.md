@@ -1743,5 +1743,10 @@ Initial release of the distributed IDD workflow template
   review snapshots, advisory wait, pre-merge readiness, cleanup).
 - The issue-authoring skill bundle and workflow documentation.
 
+This entry is a retroactive summary of the template at the start of
+versioning, added later. It is not the original loop. That loop landed
+in the [initial pull request](https://github.com/kurone-kito/idd-skill/pull/2),
+which added the phase instruction files and no helper runtime.
+
 [0.2.0]: https://github.com/kurone-kito/idd-skill/releases/tag/v0.2.0
 [0.1.0]: https://github.com/kurone-kito/idd-skill/commit/f90a198f1750d674b9df452c35439806fb835dcd

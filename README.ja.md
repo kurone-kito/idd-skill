@@ -12,9 +12,11 @@
 IDD Skill は、リポジトリへ移植できる Issue-Driven Development
 ワークフローです。エージェントは着手できる issue を探して担当を宣言し、
 ブランチで実装し、PR を開き、レビュー指摘を反映し、CI を待ち、選択した
-マージポリシーに従ってマージと後片づけまで進めます。ループ全体は、
-リポジトリ内に置かれた素の Markdown 指示ファイルとして配布されます —
-読むのも、フォークするのも、監査するのも自由です。
+マージポリシーに従ってマージと後片づけまで進めます。フェーズのルールは、
+リポジトリ内に置かれた Markdown 指示ファイルとして配布されます —
+読むのも、フォークするのも、監査するのも自由です。既定の helper runtime
+(`instructions-only`)では Node.js は不要です。`instructions-only` 以外の
+helper runtime を選ぶと、Node.js で動くゲート helper が加わります。
 
 ## IDD が存在する理由
 
@@ -33,6 +35,10 @@ IDD は、これらの動きをひとつの監査可能な GitHub ネイティ�
 保留理由、後片づけのマーカーが残ります — どのエージェントも、状況を
 推測せずに作業を再開できます。
 
+このループの原型は、[最初のプルリクエスト](https://github.com/kurone-kito/idd-skill/pull/2)
+で導入されました。フェーズの指示ファイル 10 個と移植用の `idd-template/` が
+含まれ、helper runtime はまだありませんでした。
+
 ## 得られるもの
 
 - **衝突しにくい並列作業** — 担当宣言と heartbeat マーカーにより、中央の
@@ -40,7 +46,8 @@ IDD は、これらの動きをひとつの監査可能な GitHub ネイティ�
 - **止まりにくい PR** — PR を開いた後も、レビューコメント、CI、追加修正を
   追い続けます。
 - **ブラックボックスではない移植可能なルール** — 導入先リポジトリで
-  そのまま読める Markdown。閲覧も、フォークも、カスタマイズも自由です。
+  そのまま読める Markdown の指示ファイル。任意の helper スクリプトも
+  読んで監査できます。閲覧も、フォークも、カスタマイズも自由です。
 - **エージェントを選べる自由** — GitHub Copilot、Claude Code、OpenAI
   Codex CLI、OpenCode、Grok Build、Cursor CLI、Antigravity CLI
   (formerly Gemini CLI) で動作。
