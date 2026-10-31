@@ -743,12 +743,13 @@ failure:
 - `pnpm-boundary`: `pnpm install --frozen-lockfile --prefer-offline` with
   `HUSKY=0`, then `pnpm run check`, then
   `node scripts/check-pnpm-boundary.mjs`.
-- `pnpm-boundary-node22-floor`: the same reusable workflow on Node
-  22.23.2. It is the only one of the three jobs that covers Node 22.
+- `pnpm-boundary-node22-floor`: the same reusable workflow on the Node
+  version set by its `node-version` input. It is the only one of the three
+  jobs that covers Node 22.
 
 Compared with `commands.pre-push-validate`, the script adds the
 bare-Node run with no installed dependency, the frozen-lockfile install
-with the pnpm boundary check, and the Node 22.23.2 run. The pre-push
+with the pnpm boundary check, and the Node 22 floor run. The pre-push
 command set performs none of those.
 
 The lint job's protocol-tests step can fail when the host is under heavy

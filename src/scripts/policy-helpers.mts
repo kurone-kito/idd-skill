@@ -1798,7 +1798,7 @@ export function selectDesyncedIndex(token: unknown, bandSize: unknown): number {
  *
  * Exported only so its equivalence can be unit-tested directly; every
  * production call site stays inside this file. `structuredClone` (global
- * since Node 17, well below this repo's `^22.23.2 || ^24.2 || >=26` floor) replaces
+ * since Node 17, well below this repo's `engines.node` floor) replaces
  * the previous `JSON.parse(JSON.stringify(value))` round-trip.
  * `structuredClone` differs from a JSON round-trip on several axes —
  * non-exhaustively: it throws on functions; it preserves `Date`, `Map`,
