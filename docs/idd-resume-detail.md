@@ -1258,8 +1258,12 @@ step 1. This sequence does not repeat them.
      git fetch origin "+refs/heads/$1:refs/remotes/origin/$1" || exit 1
      git rev-parse --verify --quiet "refs/remotes/origin/$1" > /dev/null ||
        { echo "preflight: no readable origin/$1: hold" >&2; exit 1; }
-     LOCAL=$(git for-each-ref --format="%(objectname)" "refs/heads/$1") ||
-       { echo "unreadable local refs: hold" >&2; exit 1; }
+     git show-ref --verify --quiet "refs/heads/$1"
+     case $? in
+       0) LOCAL=present ;;
+       1) LOCAL= ;;
+       *) { echo "unreadable local refs: hold" >&2; exit 1; } ;;
+     esac
      if [ -n "$LOCAL" ]; then
        [ "$(git rev-parse "refs/heads/$1")" = \
          "$(git rev-parse "refs/remotes/origin/$1")" ] ||
@@ -1315,8 +1319,12 @@ step 1. This sequence does not repeat them.
    ```sh
    node scripts/clone-lock.mjs --exec --agent-id <id> -- sh -c '
      git fetch origin "+refs/heads/$1:refs/remotes/origin/$1" &&
-     LOCAL=$(git for-each-ref --format="%(objectname)" "refs/heads/$1") ||
-       { echo "unreadable local refs: hold" >&2; exit 1; }
+     git show-ref --verify --quiet "refs/heads/$1"
+     case $? in
+       0) LOCAL=present ;;
+       1) LOCAL= ;;
+       *) { echo "unreadable local refs: hold" >&2; exit 1; } ;;
+     esac
      if [ -n "$LOCAL" ]; then
        [ "$(git rev-parse "refs/heads/$1")" = \
          "$(git rev-parse "refs/remotes/origin/$1")" ] ||
