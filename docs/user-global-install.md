@@ -400,6 +400,94 @@ qualified data root) or `payload-not-installed` (the core instruction file is
 missing from the payload, is not a regular file, or cannot be checked). The
 `repository-instruction-files` rule does not check the payload.
 
+## Distribution selection
+
+The rules here are contract text. Storage and resolver implementations own
+run-time enforcement. Today, the installer keys payload storage by version, as
+the Payload row above shows.
+
+### Read-only selection and preparation
+
+Activation is a read-only opt-in decision, separate from preparation and
+downloads. Inspection also makes no mutation. Preparation and session binding
+are explicit steps; activation and inspection never prepare or bind
+(preventive; no observed incident yet).
+
+`global-current` is the set selected by the current global link or default
+when no repository pin or session binding applies. An explicit repository pin
+takes precedence over `global-current`, even when a newer global default
+exists. This preserves a known pin when a global default changes, as observed
+in adopter feedback finding 12. If the pinned set is verified and prepared,
+the report uses `pin-preserved` with source `repository-pin`. If its required
+preparation is missing, the report uses `preparation-missing` and leaves the
+pin unchanged.
+
+A verified and prepared session binding keeps its set when the current link
+moves; the report uses `session-bound`. Equal version strings do not make
+builds identical. When compared `packageVersion` strings are equal but source
+commits differ, the report uses `distinct-builds`. Different source commits
+alone do not establish that verdict. A package version or matching bin name
+alone is insufficient to establish compatibility. Components from mixed
+commits are `not-verified-usable` and
+are never treated as compatible. A coherent older build continues to work
+through its own manifest; it does not need a new selector. These examples
+reflect finding 12, where the global IDD skill needed a publisher that an older
+helper pin did not include.
+
+### Standalone routes and recovery
+
+There are three standalone routes:
+
+1. Outside Git or in an inactive repository, the installed spec-audit
+   dispatcher uses the immutable bundle recorded by its own verified
+   installation, reported as `installed-bundle`. This route is read-only and
+   starts no IDD loop or workflow mutation.
+2. Authoring requires the target repository's existing activation and
+   publication prerequisites. An inactive target keeps the existing
+   activation or publication diagnosis. If only preparation of the selected
+   set is missing, the report uses `preparation-missing` with recovery
+   `prepare`.
+3. A repository-local skill invocation keeps local precedence, reported as
+   `repository-local`. Unknown or mismatched provenance gets an explicit
+   migration diagnosis before any authoring mutation.
+
+A failed manifest fact or a conflicting receipt is `not-verified-usable`.
+Unknown provenance for installed instructions, or installed bytes that
+differ from the manifest, requires `migration-required` with recovery
+`migrate`. When an identity is absent only because instruction provenance is
+unknown or mismatched, the result is `migration-required`, not
+`not-verified-usable`. If a manifest fact fails or `receipt.status` is
+`conflict` at the same time as a migration condition, `not-verified-usable`
+takes precedence. Unknown,
+mismatched, or locally modified instruction provenance, and an unsupported
+legacy receipt,
+must never cause an identity to be invented (preventive; no observed incident
+yet). Repository-local instructions are not silently replaced (preventive; no
+observed incident yet).
+
+Source values are `repository-pin`, `repository-local`, `global-current`,
+`installed-bundle`, `legacy-receipt`, and `unknown`. The unsupported sources
+are `legacy-receipt` and `unknown`. Recovery values are `none`, `prepare`,
+`migrate`, and `reselect`. `reselect` means a bound, pinned, or
+`global-current` set is no longer verified and the verdict is
+`not-verified-usable`. Preparation
+`not-applicable` means that no set is selected.
+
+Persisted state uses the existing no-follow read guard and the receipt guard
+in `readReceipt` and `writeReceipt`. Repository matching is exact, so a
+report for one repository never applies to another (preventive; no observed
+incident yet). When compatibility is `unknown`, stop before any workflow
+mutation and keep the last verified set, if one exists, in
+`previousVerifiedSet` (preventive; no observed incident yet). There is no
+automatic state rewrite (preventive; no observed incident yet), and no global
+latest upgrade, which keeps a global default from overriding a pin as in
+finding 12. A state-format change requires an explicit migration and restart.
+
+The pin-precedence and distinct-build examples cite adopter feedback
+[finding 12](https://gist.github.com/kurone-kito/9f2d7871542cb2f7a255f92a7c1232d0),
+dated 2026-10-25 and tracked in issue `#4694`. The rules marked preventive
+have no observed incident yet.
+
 ## CI off switches
 
 - `GITHUB_ACTIONS=true` skips the user-global layers for the policy loader and
