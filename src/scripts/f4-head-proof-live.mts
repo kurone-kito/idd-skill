@@ -330,6 +330,7 @@ function parseAppliedForcedHandoffEvidence(
     oldAgentId === '' ||
     typeof oldClaimId !== 'string' ||
     oldClaimId === '' ||
+    oldClaimId === newClaimId ||
     newAgentId !== agentId ||
     newClaimId !== claimId ||
     handoffBranch !== branch ||
@@ -338,7 +339,8 @@ function parseAppliedForcedHandoffEvidence(
     typeof forcedBy !== 'string' ||
     forcedBy === '' ||
     (timestamp !== null && typeof timestamp !== 'string') ||
-    (contextScope === 'issue-plus-pr' && linkedPr === null)
+    (contextScope === 'issue-plus-pr' && linkedPr === null) ||
+    (contextScope === 'issue-only' && linkedPr !== null)
   ) {
     return undefined;
   }

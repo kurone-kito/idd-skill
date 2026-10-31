@@ -91,8 +91,10 @@ test('classifyClaimAssertResult refuses mismatched or malformed handoff evidence
   const invalid = [
     { ...APPLIED_HANDOFF, new_agent_id: 'another-agent' },
     { ...APPLIED_HANDOFF, new_claim_id: 'another-claim' },
+    { ...APPLIED_HANDOFF, old_claim_id: CLAIM },
     { ...APPLIED_HANDOFF, branch: 'issue/other-branch' },
     { ...APPLIED_HANDOFF, context_scope: 'issue-plus-pr', linked_pr: null },
+    { ...APPLIED_HANDOFF, context_scope: 'issue-only', linked_pr: '4390' },
     { ...APPLIED_HANDOFF, timestamp: 42 },
   ];
   for (const forcedHandoff of invalid) {
