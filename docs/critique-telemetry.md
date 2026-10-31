@@ -518,6 +518,27 @@ Sensitivity of the saved total to the definitions:
   definition, which does not require it. It is reported because a secondary
   review that arrives after the next Copilot review cannot have changed that
   review.
+- Treat a head with no next Copilot review as not saved: 43. No saved head
+  lacks a next Copilot review, so the total does not depend on that
+  convention.
+
+### Limitations
+
+- The specification's Saved predicate asks whether the secondary review came
+  after the first push. It does not ask whether that review was on the head
+  the first push produced, or whether it came before the selected re-review.
+  This read follows the specification. The head mapping of the first push is
+  not recorded, so the causal reading (a review on the pushed head, before the
+  selected re-review) is not measured. The before-next-review sensitivity above
+  is the closest reading that was computed.
+- The late-fix field compares the files of every non-merge commit after the
+  earlier head with that head's cumulative diff. It includes the selected
+  re-review's own fix round. A narrower interval, from the secondary review to
+  the next Copilot review, was not measured, so the late-fix counts are a
+  disclosed upper bound on fixes that stayed in known files.
+- A saved head needs at least one Accepted thread from the secondary review.
+  A head whose thread evidence is missing is counted as not saved, not as
+  unknown. No head in the window lacked thread evidence.
 
 ### Body-only heads (named, not measured)
 
