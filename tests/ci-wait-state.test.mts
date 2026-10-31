@@ -408,9 +408,10 @@ test('required-checks rollup: a same-instant StatusContext ERROR vs (CheckRun) s
   // cross-type tie under the same checkName (Copilot review, PR #1530;
   // the original version of this test fed ERROR through the generic
   // checkRun() CheckRun fixture, which never exercises the StatusContext
-  // branch at all). completedAt must be set explicitly and identically on
-  // both entries: normalizeCheckEntry defaults a StatusContext's
-  // completedAt to '' when absent, which parses to a *missing* timestamp
+  // branch at all). Completion time must be set explicitly and identically
+  // on both entries: normalizeCheckEntry maps a StatusContext's updatedAt to
+  // its normalized completedAt; if updatedAt is absent, the normalized
+  // timestamp parses to a *missing* timestamp
   // -- isNewerCheckInstance's incomplete-always-wins branch would then
   // make ERROR win for the wrong reason (treated as still-running, never
   // reaching the #1504 tie-break rank comparison this test means to
@@ -430,7 +431,7 @@ test('required-checks rollup: a same-instant StatusContext ERROR vs (CheckRun) s
             context: 'idd-advisory-convergence',
             state: 'ERROR',
             targetUrl: '',
-            completedAt: '2026-07-17T16:25:47Z',
+            updatedAt: '2026-07-17T16:25:47Z',
           },
           checkRun({
             name: 'idd-advisory-convergence',
@@ -453,9 +454,9 @@ test('required-checks rollup: a same-instant StatusContext ERROR vs (CheckRun) s
     // only inside buildRequiredChecksRollup's internal
     // selectLatestCheckEntryPerName call), so it always has both entries
     // here regardless of which one wins the tie -- not a signal of which
-    // instance was selected. The completedAt values above are explicit
-    // and identical on both entries by construction, which is what
-    // guarantees this exercises the rank-based tie-break rather than the
+    // instance was selected. The raw updatedAt/completedAt values above
+    // normalize to explicit, identical completion times by construction,
+    // which guarantees this exercises the rank-based tie-break rather than the
     // incomplete-always-wins path (see the comment at the top of this
     // test), independent of anything observable at runtime here.
   }
@@ -687,7 +688,7 @@ test('classifyCiChecks and ci-wait-state agree on the failure-family vocabulary 
           context: 'gated',
           state: 'ERROR',
           targetUrl: '',
-          completedAt,
+          updatedAt: completedAt,
         },
       ],
     },
@@ -867,7 +868,7 @@ test('a StatusContext entry is normalized alongside CheckRun entries', () => {
           context: 'CodeRabbit',
           state: 'SUCCESS',
           targetUrl: '',
-          startedAt: '2026-07-09T00:00:00Z',
+          updatedAt: '2026-07-09T00:05:00Z',
         },
       ],
     },
@@ -879,6 +880,80 @@ test('a StatusContext entry is normalized alongside CheckRun entries', () => {
   assert.equal(summary.checks[0]?.checkName, 'CodeRabbit');
   assert.equal(summary.checks[0]?.workflowName, '');
   assert.equal(summary.checks[0]?.status, 'success');
+  assert.equal(summary.checks[0]?.completedAt, '2026-07-09T00:05:00Z');
+});
+
+test('mixed rollup selects the latest completion time independent of row order', () => {
+  const earlier = '2026-07-09T00:04:00Z';
+  const later = '2026-07-09T00:05:00Z';
+
+  const statusContextWins = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [
+        {
+          __typename: 'StatusContext',
+          context: 'mixed-check',
+          state: 'SUCCESS',
+          targetUrl: '',
+          updatedAt: later,
+        },
+        checkRun({
+          name: 'mixed-check',
+          conclusion: 'FAILURE',
+          completedAt: earlier,
+        }),
+      ],
+    },
+    { requiredCheckNames: ['mixed-check'] },
+  );
+
+  assert.deepEqual(
+    statusContextWins.checks.map(({ type, completedAt }) => ({
+      type,
+      completedAt,
+    })),
+    [
+      { type: 'status-context', completedAt: later },
+      { type: 'check-run', completedAt: earlier },
+    ],
+  );
+  assert.equal(statusContextWins.requiredChecks.allRequiredPassing, true);
+  assert.equal(statusContextWins.requiredChecks.status, 'success');
+
+  const checkRunWins = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [
+        checkRun({
+          name: 'mixed-check',
+          conclusion: 'SUCCESS',
+          completedAt: later,
+        }),
+        {
+          __typename: 'StatusContext',
+          context: 'mixed-check',
+          state: 'ERROR',
+          targetUrl: '',
+          updatedAt: earlier,
+        },
+      ],
+    },
+    { requiredCheckNames: ['mixed-check'] },
+  );
+
+  assert.deepEqual(
+    checkRunWins.checks.map(({ type, completedAt }) => ({
+      type,
+      completedAt,
+    })),
+    [
+      { type: 'check-run', completedAt: later },
+      { type: 'status-context', completedAt: earlier },
+    ],
+  );
+  assert.equal(checkRunWins.requiredChecks.allRequiredPassing, true);
+  assert.equal(checkRunWins.requiredChecks.status, 'success');
 });
 
 test('reports the live headRefOid unchanged, for caller-side HEAD-drift detection', () => {

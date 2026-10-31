@@ -387,7 +387,7 @@ function normalizeCheckEntry(entry, requiredCheckNameSet) {
       required: requiredCheckNameSet.has(checkName),
       url: String(entry.targetUrl ?? ''),
       startedAt: String(entry.startedAt ?? ''),
-      completedAt: String(entry.completedAt ?? ''),
+      completedAt: String(entry.updatedAt ?? ''),
     };
   }
   const checkName = String(entry?.name ?? '').trim();

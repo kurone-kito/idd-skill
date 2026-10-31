@@ -126,6 +126,7 @@ interface StatusCheckRollupEntry {
   workflowRunPresent?: boolean;
   startedAt?: string | null;
   completedAt?: string | null;
+  updatedAt?: string | null;
 }
 
 /** One normalized, disambiguated per-check entry. */
@@ -677,7 +678,7 @@ function normalizeCheckEntry(
       required: requiredCheckNameSet.has(checkName),
       url: String(entry.targetUrl ?? ''),
       startedAt: String(entry.startedAt ?? ''),
-      completedAt: String(entry.completedAt ?? ''),
+      completedAt: String(entry.updatedAt ?? ''),
     };
   }
 
