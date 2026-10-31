@@ -25,6 +25,7 @@ import {
 import type {
   ClaimAssertOutcome,
   ClaimAssertRequest,
+  ClaimForcedHandoffEvidence,
   CommitRead,
   F4HeadProofGateDeps,
   PullRequestRead,
@@ -34,8 +35,13 @@ import type { LocalRef } from './f4-head-proof-verdict.mts';
 import { GH_TEXT_LOOP_OPTIONS, ghApiJson, ghText } from './gh-exec.mts';
 import { loadTrustedActorConfig } from './idd-config.mts';
 import { parseLocalWorktreeList } from './local-worktree-occupancy.mts';
+import { isValidIsoTimestamp } from './marker-helpers.mts';
 import { resolveCollaboratorMarkerTrust } from './policy-helpers.mts';
-import { composeGateTrustedMarkerLogins } from './protocol-helpers.mts';
+import {
+  composeGateTrustedMarkerLogins,
+  type PrCommitPayload,
+  resolvePrFirstCommitAt,
+} from './protocol-helpers.mts';
 import {
   activeGithubHost,
   createGithubProviderAdapter,
@@ -154,7 +160,12 @@ function assertClaim(
     exited = typeof failure.status === 'number' ? failure.status : 1;
     stdout = typeof failure.stdout === 'string' ? failure.stdout : '';
   }
-  return classifyClaimAssertResult(exited, stdout, request.claimId);
+  return classifyClaimAssertResult(
+    exited,
+    stdout,
+    request.claimId,
+    request.agentId,
+  );
 }
 
 /**
@@ -192,12 +203,21 @@ export function classifyClaimAssertResult(
   exited: number,
   stdout: string,
   claimId: string,
+  agentId: string,
 ): ClaimAssertOutcome {
   let routing: {
     state?: unknown;
     action?: unknown;
     reason?: unknown;
-    active_claim?: { claim_id?: unknown; branch?: unknown } | null;
+    active_claim?: {
+      agent_id?: unknown;
+      claim_id?: unknown;
+      branch?: unknown;
+    } | null;
+    evidence?: {
+      forced_handoff?: unknown;
+      linked_pr_lookup?: unknown;
+    };
   };
   try {
     routing = JSON.parse(stdout);
@@ -219,16 +239,47 @@ export function classifyClaimAssertResult(
     };
   }
   const branch = routing.active_claim?.branch;
+  const activeAgentId = routing.active_claim?.agent_id;
   if (
     exited === 0 &&
     routing.state === 'already_owned' &&
     routing.action === 'keep' &&
     routing.reason === 'claim-id-match' &&
     routing.active_claim?.claim_id === claimId &&
+    activeAgentId === agentId &&
     typeof branch === 'string' &&
     branch !== ''
   ) {
-    return { status: 'owned', branch };
+    const evidence = routing.evidence;
+    if (
+      evidence === undefined ||
+      !Object.hasOwn(evidence, 'forced_handoff') ||
+      (evidence.linked_pr_lookup !== 'ok' &&
+        evidence.linked_pr_lookup !== 'failed')
+    ) {
+      return {
+        status: 'unreadable',
+        detail:
+          'resume-claim-routing --assert omitted the claim-lineage evidence',
+      };
+    }
+    const forcedHandoff = parseAppliedForcedHandoffEvidence(
+      evidence.forced_handoff,
+      claimId,
+      agentId,
+      branch,
+    );
+    if (
+      forcedHandoff === undefined ||
+      (forcedHandoff !== null && evidence.linked_pr_lookup !== 'ok')
+    ) {
+      return {
+        status: 'unreadable',
+        detail:
+          'resume-claim-routing --assert returned malformed or mismatched forced-handoff evidence',
+      };
+    }
+    return { status: 'owned', branch, forcedHandoff };
   }
   // Exit 0 is the only exit that goes with `already_owned` / `keep`, so that
   // verdict with a non-zero exit means the run was cut short after printing.
@@ -250,6 +301,61 @@ export function classifyClaimAssertResult(
     };
   }
   return { status: 'not-owned' };
+}
+
+function parseAppliedForcedHandoffEvidence(
+  value: unknown,
+  claimId: string,
+  agentId: string,
+  branch: string,
+): ClaimForcedHandoffEvidence | null | undefined {
+  if (value === null) {
+    return null;
+  }
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    return undefined;
+  }
+  const evidence = value as Record<string, unknown>;
+  const oldAgentId = evidence.old_agent_id;
+  const oldClaimId = evidence.old_claim_id;
+  const newAgentId = evidence.new_agent_id;
+  const newClaimId = evidence.new_claim_id;
+  const handoffBranch = evidence.branch;
+  const linkedPr = evidence.linked_pr;
+  const contextScope = evidence.context_scope;
+  const forcedBy = evidence.forced_by;
+  const timestamp = evidence.timestamp;
+  if (
+    typeof oldAgentId !== 'string' ||
+    oldAgentId === '' ||
+    typeof oldClaimId !== 'string' ||
+    oldClaimId === '' ||
+    newAgentId !== agentId ||
+    newClaimId !== claimId ||
+    handoffBranch !== branch ||
+    (linkedPr !== null && (typeof linkedPr !== 'string' || linkedPr === '')) ||
+    (contextScope !== 'issue-only' && contextScope !== 'issue-plus-pr') ||
+    typeof forcedBy !== 'string' ||
+    forcedBy === '' ||
+    (timestamp !== null && typeof timestamp !== 'string') ||
+    (contextScope === 'issue-plus-pr' && linkedPr === null)
+  ) {
+    return undefined;
+  }
+  return {
+    oldAgentId,
+    oldClaimId,
+    newAgentId,
+    newClaimId,
+    branch: handoffBranch,
+    linkedPr,
+    contextScope,
+    forcedBy,
+    timestamp:
+      typeof timestamp === 'string' && isValidIsoTimestamp(timestamp)
+        ? timestamp
+        : null,
+  };
 }
 
 function runGit(args: string[]): { status: number | null; stdout: string } {
@@ -608,6 +714,16 @@ export function createLiveF4HeadProofDeps(options: {
           typeof pr.merge_commit_sha === 'string' ? pr.merge_commit_sha : null,
         headSha: typeof head.sha === 'string' ? head.sha : null,
       };
+    },
+    readPullRequestFirstCommitAt(prNumber: number): string | null {
+      const { owner, repo } = locate();
+      const commits = ghApiJson(
+        `repos/${owner}/${repo}/pulls/${prNumber}/commits`,
+        { paginate: true },
+      );
+      return Array.isArray(commits)
+        ? resolvePrFirstCommitAt(commits as PrCommitPayload[])
+        : null;
     },
     readCommit(sha: string): CommitRead {
       const { owner, repo } = locate();

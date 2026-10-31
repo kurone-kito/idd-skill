@@ -198,17 +198,20 @@ interface ResumeClaimRoutingOptions {
 
 /**
  * Evidence that a trusted, rule-7-valid `forced-handoff` marker transferred
- * the active claim to the pair currently active. `timestamp` is the
- * transferring comment's GitHub `created_at` (the same authority every other
- * marker in this file uses), not the marker's own embedded `timestamp`
- * field; `null` when that comment metadata is unavailable, never an empty
- * string.
+ * the active claim to the pair currently active. The branch and PR context
+ * come from the accepted marker. `timestamp` is the transferring comment's
+ * GitHub `created_at` (the same authority every other marker in this file
+ * uses), not the marker's own embedded `timestamp` field; `null` when that
+ * comment metadata is unavailable, never an empty string.
  */
 interface AppliedForcedHandoffEvidence {
   old_agent_id: string;
   old_claim_id: string;
   new_agent_id: string;
   new_claim_id: string;
+  branch: string;
+  linked_pr: string | null;
+  context_scope: string;
   forced_by: string;
   timestamp: string | null;
 }
@@ -943,6 +946,9 @@ function toForcedHandoffEvidence(
     old_claim_id: applied.oldClaimId,
     new_agent_id: applied.newAgentId,
     new_claim_id: applied.newClaimId,
+    branch: applied.branch,
+    linked_pr: applied.linkedPr ?? null,
+    context_scope: applied.contextScope,
     forced_by: applied.forcedBy,
     timestamp: applied.createdAt ?? null,
   };
