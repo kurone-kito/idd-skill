@@ -573,9 +573,10 @@ export function evaluateStaleRequestRecoveryAction(input: {
    * True when the latest completed Copilot review (the caller's
    * `lastCopilotCommit`, after the #3265 overview-body filter) names the
    * current PR HEAD. Such a review proves the request reached the reviewer,
-   * so the non-pending path returns `not-applicable` before the elapsed or
-   * cap checks. Omitted or `false` keeps the existing routing. Consulted only
-   * on the non-pending path, not the pending path.
+   * so the path returns `not-applicable` (`proven-covers-head`) before the
+   * cap check: on the pending path after its same-head and covers-head
+   * checks (#4877), and on the non-pending path before the elapsed and cap
+   * checks. Omitted or `false` keeps the existing routing.
    */
   currentHeadReviewExists?: boolean;
 }): StaleRequestRecoveryAction {
@@ -607,6 +608,16 @@ export function evaluateStaleRequestRecoveryAction(input: {
       };
     }
     if (input.copilotPendingCoversHead) {
+      return {
+        action: 'not-applicable',
+        reason: STALE_REQUEST_RECOVERY_REASONS.provenCoversHead,
+      };
+    }
+    // A completed Copilot review of this HEAD is the same proof the
+    // non-pending path uses below (#4718): the pending request reached the
+    // reviewer. Checked before the cap, so an exhausted budget still yields
+    // proven-covers-head when that review exists (#4877).
+    if (input.currentHeadReviewExists === true) {
       return {
         action: 'not-applicable',
         reason: STALE_REQUEST_RECOVERY_REASONS.provenCoversHead,

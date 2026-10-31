@@ -1235,7 +1235,8 @@ test('decline (#4142): a declined head never yields a recovery attempt, while th
 // --- Completed review of the current HEAD (#4718) ---------------------------
 // A completed Copilot review that names the current HEAD proves the request
 // reached the reviewer, so an elapsed same-head request marker is not a failed
-// registration. Only the non-pending path is affected.
+// registration. Only the non-pending path is affected here; the pending path
+// is covered by #4877 below.
 
 const COPILOT_REVIEW_AUTHOR = {
   login: 'copilot-pull-request-reviewer[bot]',
@@ -1342,6 +1343,88 @@ test('#4718 caller: a completed review of the current HEAD keeps the F3 path and
   });
   assert.equal(report.f3Outcome, 'SATISFIED');
   assert.deepEqual(validate(report, advisoryWaitStateSchema), []);
+});
+
+// --- Completed review of the current HEAD, pending path (#4877) -------------
+// A completed Copilot review that names the current HEAD also proves that a
+// pending request reached the reviewer. The check runs after the same-head and
+// covers-head returns, and before the recovery cap.
+
+const PENDING_EVIDENCE = {
+  copilotPending: true,
+  copilotPendingCoversHead: false,
+  sameHeadMarkerPresent: false,
+  remainingBudget: 2,
+  activeClaimProvided: true,
+};
+
+test('#4877 classifier: a completed current-HEAD review makes a pending request not-applicable', () => {
+  assert.deepEqual(
+    evaluateStaleRequestRecoveryAction({
+      ...PENDING_EVIDENCE,
+      currentHeadReviewExists: true,
+    }),
+    { action: 'not-applicable', reason: 'proven-covers-head' },
+  );
+  assert.deepEqual(
+    evaluateStaleRequestRecoveryAction({
+      ...PENDING_EVIDENCE,
+      currentHeadReviewExists: false,
+    }),
+    { action: 'attempt', reason: 'recovery-attempt-eligible' },
+  );
+  assert.deepEqual(
+    evaluateStaleRequestRecoveryAction({ ...PENDING_EVIDENCE }),
+    { action: 'attempt', reason: 'recovery-attempt-eligible' },
+  );
+});
+
+test('#4877 classifier: the pending current-HEAD review check precedes the cap', () => {
+  assert.deepEqual(
+    evaluateStaleRequestRecoveryAction({
+      ...PENDING_EVIDENCE,
+      remainingBudget: 0,
+      currentHeadReviewExists: true,
+    }),
+    { action: 'not-applicable', reason: 'proven-covers-head' },
+  );
+  assert.deepEqual(
+    evaluateStaleRequestRecoveryAction({
+      ...PENDING_EVIDENCE,
+      remainingBudget: 0,
+    }),
+    { action: 'cap-exhausted', reason: 'recovery-cap-exhausted' },
+  );
+});
+
+test('#4877 classifier: same-head and covers-head reasons keep priority on the pending path', () => {
+  assert.deepEqual(
+    evaluateStaleRequestRecoveryAction({
+      ...PENDING_EVIDENCE,
+      sameHeadMarkerPresent: true,
+      currentHeadReviewExists: true,
+    }),
+    { action: 'not-applicable', reason: 'same-head-marker-present' },
+  );
+  assert.deepEqual(
+    evaluateStaleRequestRecoveryAction({
+      ...PENDING_EVIDENCE,
+      copilotPendingCoversHead: true,
+      currentHeadReviewExists: true,
+    }),
+    { action: 'not-applicable', reason: 'proven-covers-head' },
+  );
+});
+
+test('#4877 classifier: a claimless pending input stays active-claim-not-provided', () => {
+  assert.deepEqual(
+    evaluateStaleRequestRecoveryAction({
+      ...PENDING_EVIDENCE,
+      activeClaimProvided: false,
+      currentHeadReviewExists: true,
+    }),
+    { action: 'not-applicable', reason: 'active-claim-not-provided' },
+  );
 });
 
 test('#4718 caller: a completed review of an earlier HEAD keeps the existing attempt routing', () => {
