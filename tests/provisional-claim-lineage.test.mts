@@ -8,6 +8,7 @@ import {
   renderUnclaimedByMarker,
 } from '../src/scripts/marker-helpers.mts';
 import {
+  isStaleAt,
   isStaleByAge,
   resolveActiveClaimWithForcedHandoffTrace,
 } from '../src/scripts/protocol-helpers.mts';
@@ -37,9 +38,6 @@ const source: ProvisionalDecisionSource = {
   },
 };
 const trustedLogins = ['Kurone-Kito'];
-const trustedLoginSet = new Set(
-  trustedLogins.map((login) => login.trim().toLowerCase()).filter(Boolean),
-);
 
 function comment(
   id: string,
@@ -175,9 +173,14 @@ function assertLineageMatchesClaimFold(
   assert.equal(result.status, 'ok');
   if (result.status !== 'ok') return;
 
+  const trustedLogins = new Set(
+    lineageInput.trustedMarkerLogins
+      .map((login) => login.trim().toLowerCase())
+      .filter(Boolean),
+  );
   const trustedComments = lineageInput.comments.filter((value) => {
     const login = value.authorLogin?.trim().toLowerCase() ?? '';
-    return value.trustedAuthor && login !== '' && trustedLoginSet.has(login);
+    return value.trustedAuthor && login !== '' && trustedLogins.has(login);
   });
   const fold = resolveActiveClaimWithForcedHandoffTrace(
     trustedComments.map((value) => ({
@@ -189,10 +192,16 @@ function assertLineageMatchesClaimFold(
       lastEditedAt: value.lastEditedAt,
     })),
     {
-      isTrustedAuthor: (login) =>
-        trustedLoginSet.has(login.trim().toLowerCase()),
-      isStale: (activeCreatedAt, nextCreatedAt) =>
-        isStaleByAge(activeCreatedAt, nextCreatedAt, lineageInput.staleAgeMs),
+      isTrustedAuthor: (login) => trustedLogins.has(login.trim().toLowerCase()),
+      isStale:
+        Number.isFinite(lineageInput.staleAgeMs) && lineageInput.staleAgeMs > 0
+          ? (activeCreatedAt, nextCreatedAt) =>
+              isStaleByAge(
+                activeCreatedAt,
+                nextCreatedAt,
+                lineageInput.staleAgeMs,
+              )
+          : isStaleAt,
     },
   );
   assert.deepEqual(
@@ -354,6 +363,25 @@ test('filters untrusted claim markers before folding and normalizes trusted logi
       ['claim-4599-real'],
     );
     assert.equal(result.active?.claimId, 'claim-4599-real');
+  }
+});
+
+test('uses the input trusted login policy when folding claim lineage', () => {
+  const claim = claimComment(
+    '204',
+    'claim-4599-alternate-trusted',
+    '2026-10-20T00:00:00Z',
+  );
+  const history = [{ ...claim, authorLogin: ' Alternate-Reviewer ' }];
+  const lineageInput = input(history, {
+    trustedMarkerLogins: ['alternate-reviewer'],
+  });
+  const result = buildVerifiedClaimLineage(lineageInput);
+
+  assertLineageMatchesClaimFold(result, lineageInput);
+  assert.equal(result.status, 'ok');
+  if (result.status === 'ok') {
+    assert.equal(result.active?.claimId, 'claim-4599-alternate-trusted');
   }
 });
 
@@ -576,6 +604,28 @@ test('keeps a fresh takeover out of lineage and uses the configured stale age', 
   reason([first, thresholdTakeover], 'takeover-accepted', {
     staleAgeMs: 60 * 60 * 1000,
   });
+});
+
+test('uses the default stale-age fallback for invalid configured ages', () => {
+  const first = claimComment('808', 'claim-4599-1', '2026-10-20T00:00:00Z');
+  const freshTakeover = claimComment(
+    '809',
+    'claim-4599-2',
+    '2026-10-20T00:30:00Z',
+    { agentId: 'fresh-takeover-agent', supersedes: 'claim-4599-1' },
+  );
+  const history = [first, freshTakeover];
+
+  for (const staleAgeMs of [0, Number.NaN, Number.POSITIVE_INFINITY]) {
+    const lineageInput = input(history, { staleAgeMs });
+    const result = buildVerifiedClaimLineage(lineageInput);
+
+    assertLineageMatchesClaimFold(result, lineageInput);
+    assert.equal(result.status, 'ok');
+    if (result.status === 'ok') {
+      assert.equal(result.active?.claimId, 'claim-4599-1');
+    }
+  }
 });
 
 test('refuses noncanonical branches, late forced handoffs, and empty lineage', () => {
