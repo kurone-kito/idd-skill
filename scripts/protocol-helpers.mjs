@@ -10471,7 +10471,7 @@ export function staleRequestRecoveryGateBlocker(report) {
     return {
       gate: 'stale-request-recovery',
       detail:
-        'claim.expectedClaimId is present without claim.expectedAgentId, so staleRequestRecovery is absent and readiness or merge cannot be proven',
+        'claim.expectedClaimId is present without claim.expectedAgentId; rerun readiness or merge with --agent-id to evaluate stale-request recovery safely',
     };
   }
   const claimBound = expectedClaimId !== '' && expectedAgentId !== '';
