@@ -12,9 +12,11 @@ that keeps going until the issue is closed.
 IDD Skill gives a repository a portable Issue-Driven Development
 workflow: agents discover ready issues, claim ownership, implement in a
 branch, open a PR, handle review feedback, wait for CI, merge under the
-policy you select, and clean up. The whole loop ships as plain Markdown
+policy you select, and clean up. The phase rules ship as Markdown
 instruction files that live in your repository — yours to inspect,
-fork, and audit.
+fork, and audit. With the default `instructions-only` helper runtime,
+Node.js is not required; a selected helper runtime adds Node gate
+helpers.
 
 ## Why IDD exists
 
@@ -33,14 +35,20 @@ IDD turns those moving parts into one auditable GitHub-native loop.
 Issue comments record claims, review snapshots, decisions, holds, and
 cleanup markers — so any agent can resume any work without guessing.
 
+The original shape of this loop landed in the
+[initial pull request](https://github.com/kurone-kito/idd-skill/pull/2):
+ten phase instruction files and the portable `idd-template/` copy,
+with no helper runtime.
+
 ## What you get
 
 - **Collision-resistant parallel work** — claim and heartbeat markers
   make issue ownership visible without a central coordinator.
 - **Fewer stalled PRs** — the loop keeps watching review comments, CI,
   and follow-up fixes after the pull request opens.
-- **Portable rules, not a black box** — plain Markdown you can
-  inspect, fork, and customize in your own repository.
+- **Portable rules, not a black box** — Markdown instruction files you
+  can inspect, fork, and customize in your own repository, plus optional
+  helper scripts you can read and audit.
 - **Agent choice** — works across GitHub Copilot, Claude Code, OpenAI
   Codex CLI, OpenCode, Grok Build, Cursor CLI, and Antigravity CLI
   (formerly Gemini CLI);
