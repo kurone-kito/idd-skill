@@ -1244,6 +1244,11 @@ step 1. This sequence does not repeat them.
    The leading-hyphen test is needed because `git check-ref-format` accepts a
    name such as `-x`, but `git branch` refuses it.
 
+   Observed 2026-10-28 on kurone-kito/idd-skill#4698: a claim was released 25
+   seconds after its markers were posted, and a new claim followed 11 seconds
+   later. The preflight runs before any marker, so a refusal there leaves no
+   claim to release.
+
    Then run the preflight under the clone-scoped lock. It fetches the remote
    tip and checks the local branch and worktrees. It writes no claim tokens
    and posts no marker. A failure holds here, before any POST:
@@ -1253,12 +1258,16 @@ step 1. This sequence does not repeat them.
      git fetch origin "+refs/heads/$1:refs/remotes/origin/$1" || exit 1
      git rev-parse --verify --quiet "refs/remotes/origin/$1" > /dev/null ||
        { echo "preflight: no readable origin/$1: hold" >&2; exit 1; }
-     if git show-ref --verify --quiet "refs/heads/$1"; then
+     LOCAL=$(git for-each-ref --format="%(objectname)" "refs/heads/$1") ||
+       { echo "unreadable local refs: hold" >&2; exit 1; }
+     if [ -n "$LOCAL" ]; then
        [ "$(git rev-parse "refs/heads/$1")" = \
          "$(git rev-parse "refs/remotes/origin/$1")" ] ||
          { echo "preflight: local $1 differs from origin/$1: hold" >&2; exit 1; }
      fi &&
-     if git worktree list --porcelain | grep -Fqx "branch refs/heads/$1"; then
+     WT=$(git worktree list --porcelain) ||
+       { echo "unreadable worktree list: hold" >&2; exit 1; }
+     if printf "%s\n" "$WT" | grep -Fqx "branch refs/heads/$1"; then
        echo "preflight: branch $1 is checked out in another worktree: hold" >&2
        exit 1
      fi
@@ -1306,14 +1315,18 @@ step 1. This sequence does not repeat them.
    ```sh
    node scripts/clone-lock.mjs --exec --agent-id <id> -- sh -c '
      git fetch origin "+refs/heads/$1:refs/remotes/origin/$1" &&
-     if git show-ref --verify --quiet "refs/heads/$1"; then
+     LOCAL=$(git for-each-ref --format="%(objectname)" "refs/heads/$1") ||
+       { echo "unreadable local refs: hold" >&2; exit 1; }
+     if [ -n "$LOCAL" ]; then
        [ "$(git rev-parse "refs/heads/$1")" = \
          "$(git rev-parse "refs/remotes/origin/$1")" ] ||
          { echo "local $1 differs from origin/$1: hold" >&2; exit 1; }
      else
        git branch -- "$1" "origin/$1"
      fi &&
-     if git worktree list --porcelain | grep -Fqx "branch refs/heads/$1"; then
+     WT=$(git worktree list --porcelain) ||
+       { echo "unreadable worktree list: hold" >&2; exit 1; }
+     if printf "%s\n" "$WT" | grep -Fqx "branch refs/heads/$1"; then
        echo "branch $1 is checked out in another worktree: hold" >&2
        exit 1
      fi &&
