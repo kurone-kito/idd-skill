@@ -1433,6 +1433,208 @@ function preparedExpectedEntries(build: PreparedSetBuild): {
   return { directories, files, fileEntries, fileModes, directoryEntries };
 }
 
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function preparedManifestExpectedEntries(
+  setRoot: string,
+  sourceCommit: string,
+  manifestBytes: Buffer,
+): {
+  fileEntries: Map<string, ReceiptEntry>;
+  directoryEntries: Map<string, ReceiptEntry>;
+} {
+  const manifestPath = join(setRoot, PREPARED_MANIFEST_NAME);
+  const manifest = parseJsonBytes(manifestBytes, manifestPath);
+  if (
+    !isObjectRecord(manifest) ||
+    manifest.schemaVersion !== 1 ||
+    manifest.sourceCommit !== sourceCommit ||
+    !isObjectRecord(manifest.components)
+  ) {
+    throw new Error(
+      `${manifestPath} does not identify prepared commit ${sourceCommit}`,
+    );
+  }
+
+  const components = manifest.components;
+  const skillBundles = components.skillBundles;
+  if (!isObjectRecord(skillBundles)) {
+    throw new Error(`${manifestPath} has no valid skill bundle list`);
+  }
+  const expectedSkillNames = [...SKILL_NAMES].sort(compareUtf8);
+  const manifestSkillNames = Object.keys(skillBundles).sort(compareUtf8);
+  if (
+    expectedSkillNames.length !== manifestSkillNames.length ||
+    expectedSkillNames.some((name, index) => name !== manifestSkillNames[index])
+  ) {
+    throw new Error(`${manifestPath} has an unexpected skill bundle list`);
+  }
+
+  const componentFiles: Array<{ name: string; root: string; value: unknown }> =
+    [
+      {
+        name: 'instructions',
+        root: 'idd-template',
+        value: components.instructions,
+      },
+      ...SKILL_NAMES.map((name) => ({
+        name,
+        root: `skills/${name}`,
+        value: skillBundles[name],
+      })),
+      { name: 'helper', root: '', value: components.helper },
+    ];
+  const fileEntries = new Map<string, ReceiptEntry>();
+  for (const component of componentFiles) {
+    if (
+      !isObjectRecord(component.value) ||
+      !Array.isArray(component.value.files)
+    ) {
+      throw new Error(
+        `${manifestPath} has no valid ${component.name} file list`,
+      );
+    }
+    for (const candidate of component.value.files) {
+      if (
+        !isObjectRecord(candidate) ||
+        typeof candidate.path !== 'string' ||
+        !isSafeRelativeFilePath(candidate.path) ||
+        typeof candidate.sha256 !== 'string' ||
+        !/^[0-9a-f]{64}$/.test(candidate.sha256)
+      ) {
+        throw new Error(
+          `${manifestPath} has an invalid ${component.name} file entry`,
+        );
+      }
+      const storedPath = component.root
+        ? `${component.root}/${candidate.path}`
+        : candidate.path;
+      if (storedPath === PREPARED_MANIFEST_NAME) {
+        throw new Error(`${manifestPath} lists itself as a component file`);
+      }
+      const path = join(setRoot, storedPath);
+      if (fileEntries.has(path)) {
+        throw new Error(`${manifestPath} lists ${storedPath} more than once`);
+      }
+      fileEntries.set(path, {
+        kind: 'file',
+        path,
+        sha256: candidate.sha256,
+      });
+    }
+  }
+  fileEntries.set(manifestPath, {
+    kind: 'file',
+    path: manifestPath,
+    sha256: sha256Hex(manifestBytes),
+  });
+
+  const directoryPaths = new Set<string>([setRoot]);
+  for (const path of fileEntries.keys()) {
+    let directory = dirname(path);
+    while (directory === setRoot || directory.startsWith(`${setRoot}${sep}`)) {
+      directoryPaths.add(directory);
+      if (directory === setRoot) break;
+      directory = dirname(directory);
+    }
+  }
+  const directoryEntries = new Map<string, ReceiptEntry>(
+    [...directoryPaths].map((path) => [path, { kind: 'directory', path }]),
+  );
+  return { fileEntries, directoryEntries };
+}
+
+function assertPreparedReceiptEntriesMatchManifests(
+  ctx: Context,
+  entries: ReadonlyMap<string, ReceiptEntry>,
+  incompleteCommit?: string,
+): void {
+  const grouped = new Map<string, ReceiptEntry[]>();
+  for (const entry of entries.values()) {
+    const data = segmentsUnder(ctx.dataRoot, entry.path);
+    if (
+      data === null ||
+      data[0] !== 'prepared' ||
+      data.length < 2 ||
+      !SOURCE_COMMIT_PATTERN.test(data[1] ?? '')
+    ) {
+      continue;
+    }
+    const commit = data[1];
+    const group = grouped.get(commit) ?? [];
+    group.push(entry);
+    grouped.set(commit, group);
+  }
+
+  for (const [commit, group] of grouped) {
+    if (commit === incompleteCommit) continue;
+    const setRoot = join(ctx.preparedRoot, commit);
+    const manifestPath = join(setRoot, PREPARED_MANIFEST_NAME);
+    const receiptManifest = group.find((entry) => entry.path === manifestPath);
+    if (receiptManifest === undefined || receiptManifest.kind !== 'file') {
+      throw new Error(
+        `${setRoot} has no published manifest; refusing to trust its prepared receipt entries`,
+      );
+    }
+    const manifestWalk = checkContainment(
+      ctx.preparedRoot,
+      manifestPath,
+      ctx.fs,
+    );
+    if (manifestWalk.finalKind !== 'file') {
+      throw new Error(
+        `${manifestPath} is not a regular published manifest; refusing`,
+      );
+    }
+    const manifestBytes = readNoFollowBytes(manifestPath, ctx.fs);
+    const expectedManifestEntry: ReceiptEntry = {
+      kind: 'file',
+      path: manifestPath,
+      sha256: sha256Hex(manifestBytes),
+    };
+    if (!sameReceiptEntry(receiptManifest, expectedManifestEntry)) {
+      throw new Error(
+        `${manifestPath} does not match its prepared receipt entry; refusing`,
+      );
+    }
+    const expected = preparedManifestExpectedEntries(
+      setRoot,
+      commit,
+      manifestBytes,
+    );
+    const groupByPath = new Map(group.map((entry) => [entry.path, entry]));
+    for (const entry of group) {
+      const expectedEntry =
+        expected.fileEntries.get(entry.path) ??
+        expected.directoryEntries.get(entry.path);
+      if (expectedEntry === undefined) {
+        throw new Error(
+          `${entry.path} is an unexpected receipt entry for prepared set ${setRoot}; refusing`,
+        );
+      }
+      if (!sameReceiptEntry(entry, expectedEntry)) {
+        throw new Error(
+          `${entry.path} conflicts with its prepared manifest entry; refusing`,
+        );
+      }
+    }
+    for (const expectedEntry of [
+      ...expected.directoryEntries.values(),
+      ...expected.fileEntries.values(),
+    ]) {
+      if (
+        !sameReceiptEntry(groupByPath.get(expectedEntry.path), expectedEntry)
+      ) {
+        throw new Error(
+          `${expectedEntry.path} is absent from the receipt for prepared set ${setRoot}; refusing`,
+        );
+      }
+    }
+  }
+}
+
 function verifyPreparedTree(
   ctx: Context,
   build: PreparedSetBuild,
@@ -1718,6 +1920,7 @@ function prepareDistributionSetWithContext(
   if (prior.state === 'valid') {
     for (const entry of prior.receipt.entries) entries.set(entry.path, entry);
   }
+  assertPreparedReceiptEntriesMatchManifests(ctx, entries, build.sourceCommit);
   const preparedRootStat = lstatOrNull(ctx.preparedRoot, fs);
   if (
     preparedRootStat !== null &&
@@ -2175,6 +2378,7 @@ function buildInstallPlan(
       entries.set(entry.path, entry);
     }
   }
+  assertPreparedReceiptEntriesMatchManifests(ctx, entries);
   const versionDir = join(ctx.dataRoot, version);
   const mkdirs: Mkdir[] = [];
   const seen = new Set<string>();
@@ -3014,6 +3218,7 @@ function buildUninstallPlan(ctx: Context): UninstallPlan {
   }
   const entries = new Map<string, ReceiptEntry>();
   for (const entry of read.receipt.entries) entries.set(entry.path, entry);
+  assertPreparedReceiptEntriesMatchManifests(ctx, entries);
 
   const decisions: Decision[] = [];
   const refusals: string[] = [];

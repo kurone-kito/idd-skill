@@ -715,6 +715,41 @@ test('preparation refuses non-file receipt kinds under a prepared set', () => {
   assert.deepEqual(snapshot(home), before);
 });
 
+test('preparation and uninstall refuse unlisted receipt paths under a published prepared set', () => {
+  const home = makeHome();
+  const firstSource = makePreparedSource();
+  const first = prepareDistributionSet(
+    prepareOptions(home, firstSource, 'a'.repeat(40)),
+  );
+  const unexpectedPath = join(first.preparedPath, 'unlisted.bin');
+  const unexpectedBytes = 'unlisted prepared content';
+  nodeFs.writeFileSync(unexpectedPath, unexpectedBytes);
+  const receipt = JSON.parse(nodeFs.readFileSync(receiptOf(home), 'utf8')) as {
+    entries: { kind: string; path: string; sha256?: string }[];
+  };
+  receipt.entries.push({
+    kind: 'file',
+    path: unexpectedPath,
+    sha256: sha256(unexpectedBytes),
+  });
+  nodeFs.writeFileSync(receiptOf(home), `${JSON.stringify(receipt)}\n`);
+  const before = snapshot(home);
+
+  assert.throws(
+    () =>
+      prepareDistributionSet(
+        prepareOptions(home, makePreparedSource(), 'b'.repeat(40)),
+      ),
+    /unlisted\.bin is an unexpected receipt entry for prepared set/,
+  );
+  assert.deepEqual(snapshot(home), before);
+  assert.throws(
+    () => uninstallPayload(optionsFor(home)),
+    /unlisted\.bin is an unexpected receipt entry for prepared set/,
+  );
+  assert.deepEqual(snapshot(home), before);
+});
+
 test('preparation refuses receipt conflicts and preserves edited prepared bytes', () => {
   const home = makeHome();
   const source = makePreparedSource();
