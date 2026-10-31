@@ -7006,6 +7006,17 @@ cleanup script is in
   failure.
 - Stable contract: [`post-idd-marker.schema.json`][post-idd-marker-schema].
 
+### Manual E1 watermark CI fallback
+
+The helper-free query is in the [review-snapshot procedure](../.github/instructions/idd-review-snapshot.instructions.md#manual-ci-fallback).
+Pass `owner` and `repo` as raw string fields (`-f`) and the numeric PR
+number as typed `-F`. Exhaust every page and require consistent HEAD/base
+refs. For passing rows, use CheckRun `completedAt` or terminal
+StatusContext `updatedAt`; ignore later failures and record the latest
+passing timestamp or `none`. Before posting the manual watermark, require
+that timestamp to equal Step 1's `{latest-ci-completed-at}`. A mismatch
+means restart E1; do not include a later CI pass in the watermark.
+
 ### Resume claim and route evidence
 
 - Claim routing command:

@@ -136,11 +136,11 @@ re-triage. `defer`: do not post; follow the CI-incomplete route and
 refresh Step 1.
 
 Manual six-field: omit `--operation-local`; operator-selected. Run the
-[query](../idd-review-snapshot.instructions.md#manual-ci-fallback)
-with PR owner/repo/number; apply its page/ref, identity,
-`CheckRun.completedAt`, `StatusContext.updatedAt`, and latest-pass
-rules. Post if Step 1 refs/count/activity match, no new uncovered
-items, and producer-aware CI passes; else repeat Step 1/re-triage.
+[query](../idd-review-snapshot.instructions.md#manual-ci-fallback) and
+apply its page, ref, producer, and latest-pass rules. Post only if Step 1
+refs/activity/count match and the latest passing CI timestamp equals
+Step 1's `{latest-ci-completed-at}`, no new uncovered items exist, and CI
+passes; otherwise repeat Step 1 and re-triage.
 
 Otherwise skip Step 2 and use E15/E14.
 

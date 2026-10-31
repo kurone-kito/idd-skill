@@ -67,7 +67,7 @@ evidence only. See [docs](../../docs/idd-helper-scripts.md).
 
 ```sh
 gh api graphql --paginate --slurp \
-  -F owner='{owner}' -F repo='{repo}' -F number={pr-number} \
+  -f owner='{owner}' -f repo='{repo}' -F number={pr-number} \
   -f query='
 query($owner:String!,$repo:String!,$number:Int!,$endCursor:String) {
   repository(owner:$owner,name:$repo) { pullRequest(number:$number) {
@@ -144,9 +144,10 @@ posting nothing; return to Step 1 and re-snapshot, do not retry Step 2
 as-is. `decision: defer` exits 0 (`mode: "dry-run"`), posting nothing
 (required checks not passing): skip the after-posting steps and follow
 the CI-incomplete routing above.
-Manual fallback: require Step 1 refs, activity, and count to match, no
-new uncovered items, and producer-aware CI before posting; otherwise
-repeat Step 1 and triage.
+Manual fallback: require matching Step 1 refs/activity/count, no new
+uncovered items, passing CI, and unchanged latest-pass timestamp;
+otherwise repeat Step 1. Follow the
+[manual fallback rules](../../docs/idd-helper-scripts.md#manual-e1-watermark-ci-fallback).
 
 ```markdown
 <!-- review-watermark: {agent-id} {claim-id} {head-SHA} {max-activity-updatedAt|none} {total-item-count} {latest-ci-completed-at|none} -->
@@ -170,9 +171,8 @@ no-code-fence note.
 
 - **`{head-SHA}`**: the value read at the very start of Step 1. F2 uses
   it to detect pushes between E1's snapshot and the watermark post.
-- **`{latest-ci-completed-at}`**: the `completedAt` of the latest CI
-  pass observed during this E1 snapshot (or `none`). F2 uses it to
-  detect a new CI pass completed after the snapshot fetch.
+- **`{latest-ci-completed-at}`**: E1's latest passing timestamp, or
+  `none`; F2 uses the same producer rule.
 - **E1 execution marker**: the GitHub-assigned `createdAt` of this
   comment (set server-side), used only to verify watermark recency —
   activity/CI freshness are tracked via the data fields above.
