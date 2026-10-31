@@ -1262,15 +1262,30 @@ step 1. This sequence does not repeat them.
      case $? in
        0) LOCAL=present ;;
        1) LOCAL= ;;
-       *) { echo "unreadable local refs: hold" >&2; exit 1; } ;;
+       *) { echo "preflight: unreadable local refs: hold" >&2; exit 1; } ;;
      esac
      if [ -n "$LOCAL" ]; then
        [ "$(git rev-parse "refs/heads/$1")" = \
          "$(git rev-parse "refs/remotes/origin/$1")" ] ||
          { echo "preflight: local $1 differs from origin/$1: hold" >&2; exit 1; }
-     fi &&
+     else
+       CHILD=$(git for-each-ref --format="%(refname)" "refs/heads/$1/") ||
+         { echo "preflight: unreadable refs: hold" >&2; exit 1; }
+       [ -z "$CHILD" ] ||
+         { echo "preflight: refs under $1 block the branch: hold" >&2; exit 1; }
+       P=$1
+       while [ "${P%/*}" != "$P" ]; do
+         P=${P%/*}
+         git show-ref --verify --quiet "refs/heads/$P"
+         case $? in
+           0) echo "preflight: parent ref refs/heads/$P blocks $1: hold" >&2; exit 1 ;;
+           1) ;;
+           *) echo "preflight: unreadable refs: hold" >&2; exit 1 ;;
+         esac
+       done
+     fi
      WT=$(git worktree list --porcelain) ||
-       { echo "unreadable worktree list: hold" >&2; exit 1; }
+       { echo "preflight: unreadable worktree list: hold" >&2; exit 1; }
      if printf "%s\n" "$WT" | grep -Fqx "branch refs/heads/$1"; then
        echo "preflight: branch $1 is checked out in another worktree: hold" >&2
        exit 1
@@ -1318,7 +1333,7 @@ step 1. This sequence does not repeat them.
 
    ```sh
    node scripts/clone-lock.mjs --exec --agent-id <id> -- sh -c '
-     git fetch origin "+refs/heads/$1:refs/remotes/origin/$1" &&
+     git fetch origin "+refs/heads/$1:refs/remotes/origin/$1" || exit 1
      git show-ref --verify --quiet "refs/heads/$1"
      case $? in
        0) LOCAL=present ;;
@@ -1330,7 +1345,7 @@ step 1. This sequence does not repeat them.
          "$(git rev-parse "refs/remotes/origin/$1")" ] ||
          { echo "local $1 differs from origin/$1: hold" >&2; exit 1; }
      else
-       git branch -- "$1" "origin/$1"
+       git branch -- "$1" "origin/$1" || exit 1
      fi &&
      WT=$(git worktree list --porcelain) ||
        { echo "unreadable worktree list: hold" >&2; exit 1; }
