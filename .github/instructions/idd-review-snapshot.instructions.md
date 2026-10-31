@@ -82,8 +82,9 @@ Incomplete: no post, repeat Step 1.
 
 **CI precondition.** Run profile-selected AW1 `advisory-wait-state` with
 `--pr {pr-number}`, `--claim-id {claim-id}`, `--agent-id {agent-id}`,
-and `--trusted-marker-logins <trusted-logins>`; then `ci-wait-state` with
-`--pr {pr-number}` (add `--global-only` on a global-only run; see
+and `--trusted-marker-logins <trusted-logins>`; then profile-selected
+`ci-wait-state` with `--pr {pr-number}` (add `--global-only` on a
+global-only run; see
 `docs/idd-helper-scripts.md`). Require
 `outcome: SATISFIED`, or
 `CAP_EXHAUSTED` with `capExhaustedRoute: phase-specific`; otherwise
@@ -115,7 +116,8 @@ the items in ReviewItems_snapshot; `none` if empty), and
 Persist all six values by posting a PR comment with this format (with
 helpers, prefer the **one-command** post-idd-marker watermark path —
 `--type watermark --from-pr <pr-number> --expected-head-sha {head-SHA}
---agent-id <id> --claim-id <id> --apply --operation-local` (add
+--prior-base-ref {base-ref-name} --agent-id <id> --claim-id <id> --apply
+--operation-local` (add
 `--global-only` on a global-only run) — one capture derives the fields;
 forward `--trusted-marker-logins` and Step 1's boundary as
 `--prior-head-sha {head-SHA} --prior-total-item-count {total-item-count}
