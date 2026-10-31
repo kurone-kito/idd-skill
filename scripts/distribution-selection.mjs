@@ -849,12 +849,11 @@ function inspectWithContext(ctx) {
     }
   }
   if (
-    ctx.repository === null &&
-    ctx.worktreeRoot !== null &&
+    (ctx.repository === null || ctx.mainWorktreeRoot === null) &&
     ctx.packageSpec !== null
   ) {
     return baseReport(ctx, receipt.status, {
-      source: 'unknown',
+      source: ctx.repository === null ? 'unknown' : 'repository-pin',
       verdict: 'not-verified-usable',
       compatibility: 'unknown',
       recovery: 'reselect',

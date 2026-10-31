@@ -421,6 +421,34 @@ test('a no-repository inspection selects the verified installed bundle', () => {
   assert.equal(report.compatibility, 'compatible');
 });
 
+test('a local package pin cannot fall through without a Git worktree', () => {
+  const fixture = makeFixture();
+  fixture.addPreparedSet(COMMIT_A, 'one');
+  fixture.installCurrent(COMMIT_A, '1.0.0', 'one');
+  const policyPath = join(fixture.root, '.github', 'idd', 'config.json');
+  fs.mkdirSync(dirname(policyPath), { recursive: true });
+  fs.writeFileSync(
+    policyPath,
+    JSON.stringify({
+      helperRuntime: {
+        profile: 'vendored-node',
+        packageSpec: `github:acme/app#${COMMIT_B}`,
+      },
+    }),
+  );
+
+  const report = inspectDistributionSelection({
+    ...fixture.options(),
+    cwd: fixture.root,
+  });
+  assert.equal(report.repository, null);
+  assert.equal(report.verdict, 'not-verified-usable');
+  assert.equal(report.source, 'unknown');
+  assert.equal(report.selected, null);
+  assert.equal(report.compatibility, 'unknown');
+  assert.equal(report.recovery, 'reselect');
+});
+
 test('a local pin cannot fall through when GitHub identity is unavailable', () => {
   const fixture = makeFixture();
   fixture.addPreparedSet(COMMIT_A, 'same');
