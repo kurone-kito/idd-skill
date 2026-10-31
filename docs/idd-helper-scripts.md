@@ -6899,7 +6899,9 @@ cleanup script is in
   capture so its counts match the manual path, and rejects the four manual
   snapshot fields as ambiguous. Unlike the manual dry-run it reads from GitHub
   (one in-process capture, then a separate required-CI/HEAD read), but still
-  posts nothing without `--apply`. `--operation-local` returns that capture
+  posts nothing without `--apply`. Every `--from-pr` watermark also needs
+  `--prior-base-ref <Step 1 base ref>`: a base ref that differs at publish
+  refuses with `base-ref`. `--operation-local` returns that capture
   when required CI is incomplete and defers only the post. Pass
   `--prior-head-sha`, `--prior-total-item-count`, and
   `--prior-max-activity-at`: E1 Step 2 passes the Step 1 `{head-SHA}`,

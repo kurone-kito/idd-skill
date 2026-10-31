@@ -63,16 +63,14 @@ author is a trusted marker actor per
 Never exclude an untrusted-author marker-shaped comment; flag it as
 suspicious if it affects a decision.
 
-When helper runtime is enabled, prefer the profile-selected read-only helper
+With helpers, prefer the profile-selected read-only helper
 `node scripts/review-activity-snapshot.mjs --pr {pr-number}` to collect
 `{head-SHA}`, `{max-activity-updatedAt}`, `{total-item-count}`, and CI
 completion timestamps. Pass trusted marker actors with
 `--trusted-marker-logins "<trusted-login-1>,<trusted-login-2>"`.
-Helpers remain evidence collectors only: if helper execution fails,
-returns invalid JSON, omits required fields, or conflicts with live
-GitHub state in this phase, discard helper output and run the portable
-gh/jq/API procedure below. The written instruction rules remain the
-authoritative decision path.
+Helpers are evidence collectors only: on failure, invalid JSON, missing
+fields, or a conflict with live GitHub state, discard their output and run
+the portable gh/jq/API procedure below; the written rules decide.
 
 Manual CI: read every `statusCheckRollup.contexts` page, matching Step 1's HEAD
 and base. Keep same-named producers separate. Record the newest passing
@@ -86,7 +84,8 @@ Incomplete: no post, repeat Step 1.
 `--pr {pr-number}`, `--claim-id {claim-id}`, `--agent-id {agent-id}`,
 and `--trusted-marker-logins <trusted-logins>`; then profile-selected
 `ci-wait-state` with `--pr {pr-number}` (add `--global-only` on a
-global-only run; see `docs/idd-helper-scripts.md`). Require
+global-only run; see
+`docs/idd-helper-scripts.md`). Require
 `outcome: SATISFIED`, or
 `CAP_EXHAUSTED` with `capExhaustedRoute: phase-specific`; otherwise
 defer. Require `copilotRecovery.activeClaimProvided: true`,
@@ -114,17 +113,19 @@ start of Step 1, compute `{max-activity-updatedAt}` as the highest
 `updatedAt` server timestamp across the **entire snapshot** (not just
 the items in ReviewItems_snapshot; `none` if empty), and
 `{total-item-count}` as the snapshot's total item count (0 if empty).
-Persist all six values by posting a PR comment with this format (when
-helper runtime is enabled, prefer the **one-command** profile-selected
-post-idd-marker watermark path — `--type watermark --from-pr <pr-number>
---expected-head-sha {head-SHA} --agent-id <id> --claim-id <id>
---apply --operation-local` (add `--global-only` on a global-only run) — one
-capture derives the fields; forward
-`--trusted-marker-logins` and Step 1's boundary as `--prior-head-sha
-{head-SHA} --prior-total-item-count {total-item-count}
---prior-max-activity-at {max-activity-updatedAt}`). **Always pass
+Persist all six values by posting a PR comment with this format (with
+helpers, prefer the **one-command** post-idd-marker watermark path —
+`--type watermark --from-pr <pr-number> --expected-head-sha {head-SHA}
+--prior-base-ref {base-ref-name} --agent-id <id> --claim-id <id> --apply
+--operation-local` (add
+`--global-only` on a global-only run) — one capture derives the fields;
+forward `--trusted-marker-logins` and Step 1's boundary as
+`--prior-head-sha {head-SHA} --prior-total-item-count {total-item-count}
+--prior-max-activity-at {max-activity-updatedAt}` and Step 1's base ref as
+`--prior-base-ref {base-ref-name}`). **Always pass
 `--expected-head-sha` with the exact `{head-SHA}` from Step 1**: a moved
-HEAD or `operationLocal.decision: refuse` (`same-head-activity`: new
+HEAD or base ref, or `operationLocal.decision: refuse`
+(`same-head-activity`: new
 undispositioned or uncovered review-body activity since Step 1) exits 1,
 posting nothing; return to Step 1 and re-snapshot, do not retry Step 2
 as-is. `decision: defer` exits 0 (`mode: "dry-run"`), posting nothing

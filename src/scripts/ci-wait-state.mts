@@ -256,6 +256,13 @@ export interface CiWaitStateSummary {
    * The pass predicate recomputes this itself and never trusts it on input.
    */
   allowedByPolicySetting?: string;
+  /**
+   * #4803: the PR's base ref name, read in the same provider call as the
+   * head. The operation-local watermark guard compares it with the Step 1
+   * base ref. Empty when the read returned none. Set by
+   * {@link collectCiWaitState}.
+   */
+  baseRefName?: string;
 }
 
 /** #4053: the resolved inputs of the zero-check global-only opt-in. */
@@ -562,6 +569,7 @@ export function collectCiWaitState(
     advisoryConvergenceIdentityUnresolved: advisoryIdentity.identityUnresolved,
     advisoryConvergenceNonTargetEventOnly: advisoryIdentity.nonTargetEventOnly,
     globalOnlyPolicy,
+    baseRefName,
   };
   // #4053: name the opt-in on the snapshot only when it actually passes this
   // summary, mirroring pre-merge readiness's `ci.allowedByPolicySetting`.
@@ -1141,6 +1149,11 @@ export interface RequiredCiHeadAgreement {
    */
   blockingPresentRunNames: string[];
   latestPassingCompletedAt: string;
+  /**
+   * #4803: the PR base ref read with the head. Empty or absent when none was
+   * returned; the base-ref guard treats both as a mismatch.
+   */
+  baseRefName?: string;
 }
 
 /** Project a CI-wait summary onto {@link RequiredCiHeadAgreement}. */
@@ -1162,6 +1175,7 @@ export function requiredCiHeadAgreementFromSummary(
         )
       : [],
     latestPassingCompletedAt: latestPassingCompletedAt(summary),
+    baseRefName: (summary.baseRefName ?? '').trim(),
   };
 }
 

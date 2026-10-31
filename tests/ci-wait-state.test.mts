@@ -1641,6 +1641,27 @@ test('#3670: the agreement carries noRequiredChecksConfigured and the blocking p
   assert.deepEqual(required.blockingPresentRunNames, []);
 });
 
+test('#4803: the PR base ref read with the head reaches the required-CI agreement', () => {
+  const green = [checkRun({ name: 'lint', conclusion: 'SUCCESS' })];
+  const summary = buildCiWaitStateSummary(
+    { headRefOid: HEAD_SHA, statusCheckRollup: green },
+    {},
+  );
+  assert.equal(requiredCiHeadAgreementFromSummary(summary).baseRefName, '');
+  assert.equal(
+    requiredCiHeadAgreementFromSummary({ ...summary, baseRefName: 'main' })
+      .baseRefName,
+    'main',
+  );
+  assert.equal(
+    requiredCiHeadAgreementFromSummary({
+      ...summary,
+      baseRefName: '  release/x  ',
+    }).baseRefName,
+    'release/x',
+  );
+});
+
 test('#3670: a green advisory-convergence run the downgrade blocks is named as blocking', () => {
   const green = [
     checkRun({ name: 'idd-advisory-convergence', conclusion: 'SUCCESS' }),

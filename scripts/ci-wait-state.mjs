@@ -316,6 +316,7 @@ export function collectCiWaitState(
     advisoryConvergenceIdentityUnresolved: advisoryIdentity.identityUnresolved,
     advisoryConvergenceNonTargetEventOnly: advisoryIdentity.nonTargetEventOnly,
     globalOnlyPolicy,
+    baseRefName,
   };
   // #4053: name the opt-in on the snapshot only when it actually passes this
   // summary, mirroring pre-merge readiness's `ci.allowedByPolicySetting`.
@@ -825,6 +826,7 @@ export function requiredCiHeadAgreementFromSummary(summary) {
         )
       : [],
     latestPassingCompletedAt: latestPassingCompletedAt(summary),
+    baseRefName: (summary.baseRefName ?? '').trim(),
   };
 }
 /**
