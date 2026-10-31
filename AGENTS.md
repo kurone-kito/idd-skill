@@ -744,8 +744,8 @@ failure:
   `HUSKY=0`, then `pnpm run check`, then
   `node scripts/check-pnpm-boundary.mjs`.
 - `pnpm-boundary-node22-floor`: the same reusable workflow on the Node
-  version in `.node-version`. It is the only one of the three jobs that
-  covers Node 22.
+  version set by its `node-version` input. It is the only one of the three
+  jobs that covers Node 22.
 
 Compared with `commands.pre-push-validate`, the script adds the
 bare-Node run with no installed dependency, the frozen-lockfile install
