@@ -1187,6 +1187,166 @@ The orchestrator's end-of-run report is defined under
 worker's own final report carries for each way a run can end is listed under
 [Worker report outcomes](#worker-report-outcomes).
 
+#### Live capability decision
+
+The orchestrator instructions use this table before scratchpad setup, a fresh
+claim, or worker launch. Its inputs are the current session's callable tools,
+their documented lifecycle behavior, and the session's launch/roster history.
+The vendor worker table is a support hint; a row marked `orchestrator` does not
+prove that its tools are callable in the current session. Evaluate only the
+lifecycle operations required by the selected mechanism, along with its
+confirmed wait model, documented lifetime, and the existing concurrency cap.
+
+A session is a static fan-out candidate only when all of these hold:
+
+- the harness worker mechanism table row has Eligibility `orchestrator`;
+- helper support is installed (`instructions-only` has none), so the
+  profile-selected `idd-worker-budget` exists;
+- the effective `orchestrator.maxWorkers` is at least 2 (read `maxWorkers`
+  from `idd-worker-budget --running 0 --startable 0`);
+- the session is not on the lite profile;
+- the session was not started for one explicit issue (A0-T) or a single-issue
+  request;
+- `GITHUB_ACTIONS` is not `true`.
+
+The table below then decides the route.
+
+| Evidence                                                                                                                                                                                                                                                       | Route                                                                                                                                                                          |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Static fan-out requirements pass and a documented mechanism's required live tools, wait model, and multi-hour lifetime are confirmed; prior-worker state is known; at a refill, known running workers continue on this row while the capability remains usable | Fan-out, then resolve and verify the session scratchpad through the lifecycle below before Discover, A5, or dispatch                                                           |
+| This uninterrupted session positively shows no launch was attempted, but no eligible multi-hour mechanism is callable, or a required wait/lifetime condition is not met                                                                                        | Mode decision before A5; then ordinary single-issue Discover/Claim/Work. Do not call a missing roster tool, provision fan-out scratch space, launch a worker, or claim a batch |
+| The request is one explicit issue, the profile is lite, `GITHUB_ACTIONS` is `true`, helper support is absent, `maxWorkers` is below 2, or the worker table says `one issue per session`                                                                        | Ordinary single-agent route under the existing activation rules, only when no launch, own claim, or potentially live writer is unresolved; otherwise the recovery and hold row |
+| At a later refill, the fan-out capability is lost (a required lifecycle tool, wait model, or lifetime condition is no longer met), every prior worker is verified disposed, and no uncertain launch, unmatched own claim, or potentially live writer remains   | Continue in the current session as single-agent before the next A5; process one issue to its normal terminal phase, then return to Discover                                    |
+| The session restarted or a launch was attempted, but the roster is unavailable/incomplete, or any worker, claim, or writer remains unresolved                                                                                                                  | Existing restart/recovery and hold; missing tools or scratch files do not prove that no worker exists                                                                          |
+| Scratchpad metadata is missing while fan-out remains usable                                                                                                                                                                                                    | Resolve or provision it through the session scratchpad lifecycle below before any claim or dispatch                                                                            |
+| Ownership, workspace, host/API admission, CI, review, or merge evidence is ambiguous or fails its gate                                                                                                                                                         | Keep the existing safety stop or wait; execution-mode selection does not waive a gate                                                                                          |
+
+Final pre-B1 worker stops use this route only if all proofs below pass. Use
+the verified pre-B1 parent-continuation route below; otherwise use existing
+recovery/hold.
+
+When more than one row matches, a row that leaves a launch, own claim, or
+potentially live writer unresolved takes precedence over every static
+fallback.
+
+Observed 2026-10-25 in issues #4698 and #4712: static eligibility alone did
+not establish whether the current session could start, observe, wait for, or
+control a worker. The table records the selected response.
+
+##### Verified pre-B1 parent continuation
+
+Use this narrow route only when the original parent is still in the same
+uninterrupted session that dispatched the worker and every proof below passes.
+A pre-B1 stop by itself does not qualify. A runtime result must be final, not
+interim. Reconcile the complete worker/launch history and live process evidence
+to prove the child stopped before B1 and no child process or other writer
+remains. Revalidate the original claim and winning nonce, branch, exact
+worktree, lock, and generated tokens. Inspect the worktree, commit history,
+linked PRs, child report state, and session artifacts for post-B1 work or
+unresolved allocation; a clean `git status` alone is not proof. Any restart,
+incomplete listing, unknown launch, mismatch, unreadable worktree,
+implementation change/commit, existing PR, or unresolved report artifact uses
+existing recovery/hold and never this shortcut. Observed 2026-10-25 on issue
+`#4698`; follow-up issue `#4714` records this narrow recovery.
+
+Reconcile scratch separately. Reuse a valid existing session record and its
+exact canonical root read-only. Use the first-allocation procedure from issue
+`#4685` only
+when complete process, session, and artifact evidence proves no earlier root,
+record, reservation, or child scratch/report artifact was created or used.
+Missing artifacts by themselves do not prove first use; unknown allocation or
+report history is a hold. Never overwrite, delete, unlink, or replace uncertain
+storage.
+
+After the initial evidence passes, read the complete trusted claim/hold
+history for the active claim and classify the child's hold before changing its
+roster state or posting a heartbeat. An active child hold requires a trusted,
+unedited `idd-hold` marker for the active claim under the
+[fan-out hold rule](#orchestrator-fan-out-variant): the trusted actor, agent
+and claim ids, and claim recorded for the roster entry must match, and
+GraphQL `lastEditedAt` must be explicitly `null`. The complete history must
+show that the marker is still active. If no trusted active hold exists, only a
+complete trusted history read can prove that none exists. A missing, edited,
+untrusted, or unreadable marker is not proof of absence; use existing
+recovery/hold. Observed 2026-10-30 on pull request `#4832` for issue `#4714`.
+
+The parent keeps the existing claim and activation nonce in the same worktree
+but does not enter B1 Step 3 yet. Before changing the per-issue role, posting a
+heartbeat, or changing either roster entry, persist a `pending` continuation
+recovery record as `issue-<n>-pre-b1-continuation.json` under the verified
+session scratchpad root. Create it exclusively; never overwrite or follow a
+pre-existing or symlinked file at that path. Later state changes replace only
+this record, using the atomic write and read-back step.
+Record the session id, issue, agent id, claim id, nonce, branch, exact worktree,
+child handle,
+pre-transition roster state, transition stage, intended parent role, intended
+final roster pair, and either the trusted active hold marker id and GitHub
+`created_at` or the complete-history evidence that no active hold exists.
+Write the record atomically and read it back. A conflicting, incomplete, or
+unreadable record uses existing recovery/hold. A pending record keeps the issue
+occupied exactly once and in-flight exactly once, pauses new refills/claims,
+and permits only the verified transition steps below; it blocks all other
+mutation or implementation until its exact effects are reconciled. A restarted
+parent treats a pending record as recovery/hold; it does not authorize this
+same-session shortcut.
+
+If the record proves an active child hold, first record the per-issue role
+change to `parent-continuation` in the pending recovery record. The parent then
+stops renewing that child as its orchestrator and posts an ordinary
+`claimed-by` heartbeat as the continuation worker. Verify the exact returned
+comment when available and the complete trusted claim/hold history; the
+heartbeat ends the hold only when the claim parser recognizes it as a valid
+worker heartbeat newer than the trusted marker. An orchestrator renewal does
+not end the hold. A complete read proving the heartbeat absent follows the
+existing bounded retry. If POST or read-back remains uncertain, keep the
+pending record and the existing child roster entry counted, preserve claim,
+worktree, and storage, and make no further mutation, budget/overlap call,
+refill, or implementation change. If the complete history proves no active
+hold, no hold-ending heartbeat is needed.
+
+If claim freshness requires a heartbeat and there is no active child hold,
+revalidate the claim and post the ordinary parent heartbeat under the existing
+claim rule, including its bounded retry. This renewal does not replace the
+complete-history proof that no hold exists. With an active hold, use the
+continuation-worker heartbeat above after recording the role change; a prior
+orchestrator renewal does not satisfy the hold-ending requirement. Any
+uncertain heartbeat remains pending.
+
+Only after the hold-ending heartbeat is verified, or complete trusted history
+proves no active hold, replace the roster atomically in one update: retain the
+child entry as `disposed` with its handle as history, and add one separate
+`parent-continuation` entry for the same issue, claim, and branch as `running`.
+The continuation entry represents the parent's active execution slot, not a
+dispatched worker; it has no worker handle or report path. Do not dispose the
+child and add the parent entry as separate roster writes. If the atomic update
+or its read-back is incomplete or uncertain, keep the pending record, retain
+the pre-transition child entry as the counted slot, and make no further
+mutation, budget/overlap call, refill, or implementation change until the
+exact effects are reconciled. After verifying both roster entries, atomically
+mark the recovery record `reconciled` and read it back. An uncertain record
+update remains pending and blocks B1.
+
+Count the continuation entry once in `--running`, pass its issue exactly once
+as `--in-flight`, and never count the disposed child. Keep the continuation
+entry active through the parent's terminal phase, then mark it `disposed`.
+Record both entries and the role transition in the run report. Do not enter B1
+Step 3 or start implementation until the hold-ending heartbeat is verified or
+complete trusted history proves no active hold, the recovery record is
+`reconciled`, and current ownership, storage/record state, both roster entries,
+and parent role are reconciled. A `disposed` child entry alone does not prove
+that the hold ended (observed on PR `#4832` for issue `#4714`). Only then
+continue in the same worktree with the original claim and nonce. Keep the
+issue as one occupied slot and in-flight through the
+parent's terminal phase. Pause new refills/claims while the parent implements,
+while managing known siblings normally; a hold on another issue is local, not
+global exhaustion. Resume ordinary discovery/refill after the parent reaches
+terminal and let normal budget/overlap checks choose eligible work. Never
+restart the ended child or mint a claim, nonce, or forced handoff. Do not
+delete a branch/worktree, take over a lock automatically, or reset lost work.
+Report the child's actual pre-work stop and the parent's later result
+separately. Do not append a terminal worker report or F4 result for the pre-B1
+child, and do not change the worker-report schema.
+
 #### Session scratchpad lifecycle
 
 The orchestrator owns one scratchpad root for the full runtime session. Resolve
@@ -1243,20 +1403,25 @@ seven fields and rejects missing or additional fields:
 - `schemaVersion`: JSON integer exactly `1`.
 - `sessionId`: non-empty JSON string containing one path-safe component,
   excluding `.`/`..`, path separators, and control characters.
-- `repository`: non-empty JSON string in `owner/repo` form, equal to the
-  current repository slug after normalizing both owner and repo components
-  case-insensitively before comparison.
+- `repository`: non-empty JSON string in `owner/repo` form. For the exact
+  current-session record, it must equal the current repository slug after
+  normalizing both owner and repo components case-insensitively before
+  comparison. Foreign records retain their own repository slug.
 - `repositoryRoot`, `gitCommonDir`, and `scratchpadRoot`: non-empty JSON
   strings containing canonical absolute paths for the current operating
   system.
 - `allocationSource`: JSON string exactly `harness` or `parent`.
 
 Reject an unsupported schema version, wrong JSON type, malformed value, or
-unknown property before trusting the record. Then require every identity field
-to match this live session and repository and the root to pass the safety
-checks. Existing valid records take precedence over any new allocation. If a
-record and the current harness context name different roots, treat that as a
-contradiction and hold. If the harness supplies a root, verify the canonical
+unknown property before trusting the record. After strict parsing, apply
+session and repository identity matching and full root-safety checks only to
+the exact current-session record. For foreign records, do not match identity
+fields to the live session; validate schema and path structure strictly, then
+use each safely comparable canonical root identity only for the candidate-root
+collision check below. An existing valid exact current-session record takes
+precedence over any new allocation. If that exact current-session record and
+the current harness context name different roots, treat that as a contradiction
+and hold. For the current session's harness-supplied root, verify the canonical
 path is an existing writable
 directory, has current-user-only access, contains no unsafe links, and lies
 outside every worktree for this repository. If the harness supplies no root,
@@ -1273,17 +1438,35 @@ bytes, and store the full path, session id, and repository for exact read-back
 verification. An existing reservation without an exact, valid record for this
 session is a hold: preserve it and never overwrite or remove it automatically.
 
-Keep a first-allocation reservation while scanning every session record,
-checking worker and artifact evidence, and exclusively creating and verifying
-the session record. Remove only the reservation this invocation created, after
-the record is verified. A later preflight in the same uninterrupted allocator
-invocation may continue only when it carries the invocation-local owner token
-created after that invocation successfully acquired the exclusive reservation.
-Require exact session, repository, canonical root, and record
-matches, plus the complete collision, worker, artifact, and report checks. Keep
-the token only in that live invocation; never persist or reconstruct it from a
-matching session id, record, manifest, or copied context. A missing token means
-the invocation restarted or is unknown.
+Keep a first-allocation reservation while strictly parsing every session
+record and comparing the candidate root with each record's validated
+canonical root identity. For a foreign record, this is a collision check only:
+do not require its root to exist, prove its runner stopped, or inspect its
+worker, artifact, or report state. A valid foreign record with an
+unambiguously distinct root does not block allocation even when that root is
+absent. Hold and preserve unreadable, malformed, or unsafe records; records
+whose canonical root identity cannot be compared reliably; and any record
+naming or aliasing the candidate root. Apply
+the full session, repository, root-safety, worker, artifact, report, and
+recovery checks to the exact current-session record; keep the candidate's own
+reservation and first-allocation safety checks in force. Exclusively create
+and verify the current session record, then remove only the reservation this
+invocation created after verification.
+
+Observed 2026-10-30 on issue `#4827`: an autopilot run stopped before fresh
+Discover after a read-only snapshot showed two missing foreign roots and no
+candidate-root collisions. This was an agent interpretation, not a reproduced
+allocator defect; this prose and its consistency assertions do not establish a
+completed live autonomous run.
+
+A later preflight in the same uninterrupted allocator invocation may continue
+only when it carries the invocation-local owner token created after that
+invocation successfully acquired the exclusive reservation. Require exact
+session, repository, canonical root, and record matches, plus the complete
+collision, worker, artifact, and report checks. Keep the token only in that
+live invocation; never persist or reconstruct it from a matching session id,
+record, manifest, or copied context. A missing token means the invocation
+restarted or is unknown.
 
 For a restarted or unknown invocation, the valid record identifies the root
 but does not prove its runner stopped. Before reuse, the resumer must obtain a
@@ -1326,27 +1509,31 @@ reconciliation. The worker-side missing-parent guard remains in force (issue
 `#4377`). This documented lifecycle adds no helper, policy key, or automatic
 scratchpad deletion.
 
-Classify the entry using the actual harness context, this exact
-session-and-repository record, and live worker and artifact evidence:
+Classify the current session's entry using the actual harness context, its
+exact session-and-repository record, and live worker and artifact evidence.
+Use foreign session records only for the collision checks described above:
 
-| Evidence                                                                                                                                                                                                                                                                                                        | Verdict and next action                                                                                                                                        |
-| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| The harness supplies an existing valid root with no prior record or reservation on first entry before claims or dispatch; a complete worker listing and artifact evidence show no prior start, and all session records show no canonical root collision                                                         | Verify the root, reserve it, create and verify the record exclusively, then reuse it                                                                           |
-| There is no supplied root, record, reservation, or fallback directory, and harness context identifies a first entry before claims or dispatch; the complete live worker listing and session artifacts show no prior start, and all session records show no canonical root collision                             | Allocate the private fallback root and record before Discover                                                                                                  |
-| The live worker listing is unavailable or incomplete                                                                                                                                                                                                                                                            | Treat prior-worker state as uncertain and hold for reconciliation before reuse, allocation, or dispatch                                                        |
-| A root reservation exists without an exact valid record for this session, does not match that record, or cannot be read or verified                                                                                                                                                                             | Hold and preserve it; do not accept or allocate the root                                                                                                       |
-| A session record is unreadable or invalid, or another session records the canonical candidate root                                                                                                                                                                                                              | Hold and preserve evidence; do not accept or allocate a colliding root                                                                                         |
-| The exact record matches this session, repository, and canonical root; the same uninterrupted allocator carries its invocation-local owner token from successful exclusive reservation acquisition; the full collision scan is clear; root and worker, artifact, and report evidence are valid and settled      | Continue this invocation on the recorded root; leave any reservation untouched and recover report locations before refill                                      |
-| The exact prior record is valid; the token is absent because this is a restarted or unknown invocation; a trusted maintainer confirms no live same-session orchestrator and grants this resumer sole control in the current operator-run LWR step 2 interaction; all collision and settled-evidence checks pass | During recovery preflight, reuse the recorded root read-only and leave its reservation untouched; after sole control, use the normal brief/report path         |
-| The exact record is valid in a restarted or unknown invocation, but the trusted maintainer has not confirmed no live same-session orchestrator and sole-resumer control in the current recovery                                                                                                                 | Hold and preserve the record and any reservation until that operator confirmation                                                                              |
-| Claims already exist, but live evidence establishes that no worker was dispatched                                                                                                                                                                                                                               | Revalidate every claim, winning nonce, worktree lock, and token record first; then bootstrap the root and resume those claims without minting a claim or nonce |
-| A worker dispatch is proven, but no safe root or matching session record can be recovered                                                                                                                                                                                                                       | Hold and preserve briefs and reports; do not allocate or redispatch until ownership and report locations are reconciled                                        |
-| The fallback directory already exists without a valid record                                                                                                                                                                                                                                                    | Hold and preserve it; do not reuse or overwrite it                                                                                                             |
-| A record is unreadable, invalid, linked unsafely, for another session or repository, or its root is missing, contradictory, or unsafe                                                                                                                                                                           | Hold and preserve all evidence; do not allocate a replacement                                                                                                  |
-| Worker launch or prior-worker state is uncertain                                                                                                                                                                                                                                                                | Reconcile the live worker list and existing briefs and reports; hold while any dispatch or ownership remains unresolved                                        |
-| Allocation succeeded but the durable record cannot be verified                                                                                                                                                                                                                                                  | Keep the directory and known path, start no worker, and hold for reconciliation                                                                                |
-| Stable session identity or a verified writable root cannot be resolved                                                                                                                                                                                                                                          | Hold with the missing prerequisite; do not guess a harness capability or ask for a path that was never issued                                                  |
-| A worker receives a missing parent path                                                                                                                                                                                                                                                                         | Hold in the worker, create nothing, and never use `mkdir -p`                                                                                                   |
+| Evidence                                                                                                                                                                                                                                                                                                        | Verdict and next action                                                                                                                                                                            |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The harness supplies an existing valid root with no prior record or reservation on first entry before claims or dispatch; a complete worker listing and artifact evidence show no prior start, and all session records show no canonical root collision                                                         | Verify the root, reserve it, create and verify the record exclusively, then reuse it                                                                                                               |
+| There is no supplied root, record, reservation, or fallback directory, and harness context identifies a first entry before claims or dispatch; the complete live worker listing and session artifacts show no prior start, and all session records show no canonical root collision                             | Allocate the private fallback root and record before Discover                                                                                                                                      |
+| The live worker listing is unavailable or incomplete                                                                                                                                                                                                                                                            | Treat prior-worker state as uncertain and hold for reconciliation before reuse, allocation, or dispatch                                                                                            |
+| A root reservation exists without an exact valid record for this session, does not match that record, or cannot be read or verified                                                                                                                                                                             | Hold and preserve it; do not accept or allocate the root                                                                                                                                           |
+| A scanned session record is unreadable, malformed, unsafe, or its canonical root identity cannot be compared reliably                                                                                                                                                                                           | Hold and preserve the record; do not skip or delete it                                                                                                                                             |
+| A valid foreign record has an unambiguously distinct canonical root that is missing                                                                                                                                                                                                                             | If exact-session and candidate-root reservation checks pass, proceed with first allocation; preserve the foreign record, with no foreign-runner liveness or worker, artifact, or report inspection |
+| A valid foreign record has an unambiguously distinct canonical root that exists                                                                                                                                                                                                                                 | Use the same first-allocation verdict as for a distinct missing root; preserve the foreign record, with no foreign-runner liveness or worker, artifact, or report inspection                       |
+| Another session records or aliases the canonical candidate root, even when that root is absent                                                                                                                                                                                                                  | Hold and preserve evidence; do not accept or allocate the colliding root                                                                                                                           |
+| The exact record matches this session, repository, and canonical root; the same uninterrupted allocator carries its invocation-local owner token from successful exclusive reservation acquisition; the full collision scan is clear; root and worker, artifact, and report evidence are valid and settled      | Continue this invocation on the recorded root; leave any reservation untouched and recover report locations before refill                                                                          |
+| The exact prior record is valid; the token is absent because this is a restarted or unknown invocation; a trusted maintainer confirms no live same-session orchestrator and grants this resumer sole control in the current operator-run LWR step 2 interaction; all collision and settled-evidence checks pass | During recovery preflight, reuse the recorded root read-only and leave its reservation untouched; after sole control, use the normal brief/report path                                             |
+| The exact record is valid in a restarted or unknown invocation, but the trusted maintainer has not confirmed no live same-session orchestrator and sole-resumer control in the current recovery                                                                                                                 | Hold and preserve the record and any reservation until that operator confirmation                                                                                                                  |
+| Claims already exist, but live evidence establishes that no worker was dispatched                                                                                                                                                                                                                               | Revalidate every claim, winning nonce, worktree lock, and token record first; then bootstrap the root and resume those claims without minting a claim or nonce                                     |
+| A worker dispatch is proven, but no safe root or matching session record can be recovered                                                                                                                                                                                                                       | Hold and preserve briefs and reports; do not allocate or redispatch until ownership and report locations are reconciled                                                                            |
+| The fallback directory already exists without a valid record                                                                                                                                                                                                                                                    | Hold and preserve it; do not reuse or overwrite it                                                                                                                                                 |
+| The exact current-session record is unreadable, invalid, linked unsafely, for another session or repository, or its root is missing, contradictory, or unsafe                                                                                                                                                   | Hold and preserve all evidence; do not allocate a replacement                                                                                                                                      |
+| Worker launch or prior-worker state is uncertain                                                                                                                                                                                                                                                                | Reconcile the live worker list and existing briefs and reports; hold while any dispatch or ownership remains unresolved                                                                            |
+| Allocation succeeded but the durable record cannot be verified                                                                                                                                                                                                                                                  | Keep the directory and known path, start no worker, and hold for reconciliation                                                                                                                    |
+| Stable session identity or a verified writable root cannot be resolved                                                                                                                                                                                                                                          | Hold with the missing prerequisite; do not guess a harness capability or ask for a path that was never issued                                                                                      |
+| A worker receives a missing parent path                                                                                                                                                                                                                                                                         | Hold in the worker, create nothing, and never use `mkdir -p`                                                                                                                                       |
 
 On the already-claimed, never-dispatched recovery route, do not repeat A5 or
 mint another activation nonce. Verify each existing claim against the live
@@ -1641,7 +1828,12 @@ Running this variant safely requires:
   valid `claimed-by` (one the claim parser recognizes as a heartbeat for this
   claim, so a trusted, unedited comment with the active claim's ids and
   branch; an anomalous or invalid one is ignored), when the entry is
-  `disposed`, or when the claim is released or superseded. A resumed worker
+  `disposed` under the ordinary fan-out lifecycle, or when the claim is
+  released or superseded. The verified pre-B1 parent-continuation route is
+  stricter: it disposes the child only after a hold-ending heartbeat is
+  verified or complete trusted history proves that no hold is active. There,
+  disposal records the verified hold state; it does not prove that the hold
+  ended. A resumed worker
   follows the normal report path. A released or superseded claim cannot be
   renewed, so the orchestrator marks its entry `stalled` and follows the
   worker-specific recovery, which re-verifies the claim and reports its state
@@ -1924,13 +2116,22 @@ wait for the operator (its turn ends awaiting an operator reply), and the
 operator reads it there. Each report lists the whole state, not only what
 changed since the last one. Waiting for a worker's completion, a host-load
 re-check, or a renewal due time is neither a stop nor a pause.
+A session that considered fan-out but selected single-agent still uses this
+report when it stops or pauses.
 
 At minimum it lists:
 
+- **Execution mode.** `fan-out` or `single-agent`, plus the evidence-based
+  reason for the initial choice or later switch. Required in every report.
 - **Roster.** Each roster entry, with its issue number and its final state, the
   state it is in when the report is written: `running`, `reporting`,
   `disposed`, or `stalled`, as section 2 of the orchestrator phase file lists
   them.
+- **Pre-B1 parent continuation.** When used, report the child's actual stop,
+  its `disposed` roster entry and historical handle, and the separate active
+  `parent-continuation` entry and its final state. Report the parent's later
+  issue result separately. The child gets no terminal worker report or F4
+  result.
 - **Holds.** Each hold, with its issue number, its start as the hold marker
   defines it, its cap time (72 h after the start, per the held-worker renewal
   rule), the GitHub `created_at` of the latest valid `claimed-by` on its claim,
@@ -1938,7 +2139,11 @@ At minimum it lists:
   hold marker defines (the worker's valid `claimed-by` or, after a restart, any
   valid `claimed-by` newer than the marker, which can be the earlier run's own
   renewal; a release other than the cap release; a supersession; or the
-  entry's disposal). Once no living orchestrator renews a hold, the stale clock
+  entry's disposal under the ordinary fan-out lifecycle). For the verified
+  pre-B1 parent-continuation route, report an active hold as ended only after
+  its hold-ending heartbeat is verified. When complete trusted history proves
+  no hold is active, report that no active hold exists; do not attribute that
+  state to disposal. Once no living orchestrator renews a hold, the stale clock
   (`claim-stale-age`, 24 h by default) counts from the latest valid
   `claimed-by`.
 - **Failures.** Each renewal or release that failed since the run began, even
@@ -2035,6 +2240,10 @@ orchestrator phase's session scratchpad preflight to discover the durable record
 from the session identity and recover the exact report-draft root. A session
 with a new id cannot identify its old claims, and step 1 treats them as not its
 own.
+
+Before roster reconstruction or any Discover/refill step, follow the
+[orchestrator restart scan](idd-helper-scripts.md#orchestrator-restart-scan)
+contract for continuation records.
 
 1. **Find own claims.** For each worktree in `git worktree list --porcelain`,
    list `idd-generated-tokens-*.json` in that worktree's private admin directory

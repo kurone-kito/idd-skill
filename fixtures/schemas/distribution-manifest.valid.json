@@ -1,0 +1,68 @@
+{
+  "schemaVersion": 1,
+  "sourceCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "components": {
+    "instructions": {
+      "location": "https://github.com/kurone-kito/idd-skill/tree/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/idd-template",
+      "provenance": {
+        "kind": "checkout",
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "files": [
+        {
+          "path": "README.md",
+          "sha256": "fe6a4289e91f5fce0ed74f0e191cd51848c4656ef8bcbf7f73bc6d47d16fec8f"
+        }
+      ],
+      "digest": "sha256:3d7a9226864bc649dce68f96f0f3bfd991b65fd75c011977a3e54114016858de"
+    },
+    "skillBundles": {
+      "issue-authoring": {
+        "location": "https://github.com/kurone-kito/idd-skill/tree/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/skills/issue-authoring",
+        "provenance": {
+          "kind": "archive",
+          "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "files": [
+          {
+            "path": "SKILL.md",
+            "sha256": "e981ea06de48e9f781a9da801821b0bb38f4eaf5a434f9be10894e5a63f3b843"
+          }
+        ],
+        "digest": "sha256:a55e5a9ca10d682c928f85b27337c78b9a5cf657ef2b4768d7c11dc9163b1d4f"
+      },
+      "idd-spec-audit": {
+        "location": "https://github.com/kurone-kito/idd-skill/tree/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/skills/idd-spec-audit",
+        "provenance": {
+          "kind": "checkout",
+          "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "files": [
+          {
+            "path": "SKILL.md",
+            "sha256": "3b9454ec1abc2fefc37671fa724ce2d22cb96733c37511ce1d3b1c9c297e8afc"
+          }
+        ],
+        "digest": "sha256:3b608e876cf5f4724facbe6180d9764a9499191811435fcbb235a66c54fc4e83"
+      }
+    },
+    "helper": {
+      "location": "https://github.com/kurone-kito/idd-skill/tree/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "provenance": {
+        "kind": "checkout",
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "files": [
+        {
+          "path": "bin/idd-activation.mjs",
+          "sha256": "38549b6fcc11af28c49a41ec2a1712483c8e10061b1240c21d89d9b5e8d86497"
+        }
+      ],
+      "digest": "sha256:772230827337910adad6aedced8b3e157cb8b9b945fcf8d936c291bdb6e66658",
+      "invocation": {
+        "command": "bin/idd-activation.mjs",
+        "argv": []
+      }
+    }
+  }
+}

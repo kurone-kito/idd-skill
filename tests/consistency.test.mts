@@ -2937,6 +2937,304 @@ function sliceBriefTemplate(path: string, text: string) {
   return { variantStart, start, section: text.slice(start, end) };
 }
 
+test('pre-B1 parent continuation keeps same-claim safety and truthful reports (#4714)', () => {
+  const workflowCopies = [
+    'idd-template/docs/idd-workflow.md',
+    'docs/idd-workflow.md',
+  ];
+  const continuationRequirements = [
+    'original parent is still in the same uninterrupted session',
+    'A runtime result must be final, not interim',
+    'complete worker/launch history and live process evidence',
+    'no child process or other writer remains',
+    'original claim and winning nonce, branch, exact worktree, lock, and generated tokens',
+    'a clean `git status` alone is not proof',
+    'incomplete listing, unknown launch, mismatch, unreadable worktree',
+    'implementation change/commit, existing PR, or unresolved report artifact',
+    'Reuse a valid existing session record and its exact canonical root read-only',
+    'complete process, session, and artifact evidence proves no earlier root',
+    'unknown allocation or report history is a hold',
+    'A pre-B1 stop by itself does not qualify',
+    'An active child hold requires a trusted, unedited `idd-hold` marker',
+    'GraphQL `lastEditedAt` must be explicitly `null`',
+    'only a complete trusted history read can prove that none exists',
+    'A missing, edited, untrusted, or unreadable marker is not proof of absence',
+    'persist a `pending` continuation recovery record as `issue-<n>-pre-b1-continuation.json` under the verified session scratchpad root',
+    'Create it exclusively; never overwrite or follow a pre-existing or symlinked file at that path',
+    'Later state changes replace only this record, using the atomic write and read-back step',
+    'transition stage, intended parent role, intended final roster pair',
+    'Write the record atomically and read it back',
+    'A restarted parent treats a pending record as recovery/hold',
+    'and permits only the verified transition steps below; it blocks all other',
+    'first record the per-issue role change to `parent-continuation` in the pending recovery record',
+    'posts an ordinary `claimed-by` heartbeat as the continuation worker',
+    'the heartbeat ends the hold only when the claim parser recognizes it as a valid worker heartbeat newer than the trusted marker',
+    'An orchestrator renewal does not end the hold',
+    'A complete read proving the heartbeat absent follows the existing bounded retry',
+    'If the complete history proves no active hold, no hold-ending heartbeat is needed',
+    'replace the roster atomically in one update',
+    'Do not dispose the child and add the parent entry as separate roster writes',
+    'If the atomic update or its read-back is incomplete or uncertain',
+    'atomically mark the recovery record `reconciled` and read it back',
+    'preserve claim, worktree, and storage',
+    'make no further mutation, budget/overlap call, refill, or implementation change',
+    'add one separate `parent-continuation` entry for the same issue, claim, and branch as `running`',
+    'it has no worker handle or report path',
+    'Count the continuation entry once in `--running`',
+    'pass its issue exactly once as `--in-flight`',
+    'never count the disposed child',
+    'then mark it `disposed`',
+    'Record both entries and the role transition in the run report',
+    'Pause new refills/claims while the parent implements',
+    'a hold on another issue is local, not global exhaustion',
+    'Resume ordinary discovery/refill after the parent reaches terminal',
+    'Never restart the ended child or mint a claim, nonce, or forced handoff',
+    'Do not delete a branch/worktree, take over a lock automatically, or reset lost work',
+    'Do not append a terminal worker report or F4 result for the pre-B1 child',
+    'do not change the worker-report schema',
+  ];
+
+  for (const path of workflowCopies) {
+    const text = normalizeWhitespace(readText(path));
+    assert.ok(
+      text.includes(
+        'Use the verified pre-B1 parent-continuation route below; otherwise use existing recovery/hold',
+      ),
+      `${path}: the live capability table must route only to the narrow continuation proof`,
+    );
+    const start = text.indexOf('##### Verified pre-B1 parent continuation');
+    const end = text.indexOf('#### Session scratchpad lifecycle', start);
+    assert.ok(
+      start >= 0 && end > start,
+      `${path}: continuation section missing`,
+    );
+    const route = text.slice(start, end);
+    for (const requirement of continuationRequirements) {
+      assert.ok(
+        route.includes(requirement),
+        `${path}: continuation proof must include "${requirement}"`,
+      );
+    }
+    const noEarlyB1 = route.indexOf('but does not enter B1 Step 3 yet');
+    const holdProof = route.indexOf(
+      'An active child hold requires a trusted, unedited `idd-hold` marker',
+    );
+    const pendingRecord = route.indexOf(
+      'persist a `pending` continuation recovery record',
+    );
+    const roleChange = route.indexOf(
+      'first record the per-issue role change to `parent-continuation`',
+    );
+    const heartbeat = route.indexOf(
+      'posts an ordinary `claimed-by` heartbeat as the continuation worker',
+    );
+    const atomicRoster = route.indexOf(
+      'replace the roster atomically in one update',
+    );
+    const reconciledRecord = route.indexOf(
+      'atomically mark the recovery record `reconciled` and read it back',
+    );
+    const budgetCount = route.indexOf(
+      'Count the continuation entry once in `--running`',
+    );
+    const overlapCount = route.indexOf(
+      'pass its issue exactly once as `--in-flight`',
+    );
+    const parentRole = route.indexOf(
+      'Record both entries and the role transition',
+    );
+    const b1Gate = route.indexOf(
+      'Do not enter B1 Step 3 or start implementation until',
+    );
+    const b1Continuation = route.indexOf(
+      'Only then continue in the same worktree with the original claim and nonce.',
+    );
+    assert.ok(
+      holdProof >= 0 &&
+        noEarlyB1 > holdProof &&
+        pendingRecord > noEarlyB1 &&
+        roleChange > pendingRecord &&
+        heartbeat > roleChange &&
+        atomicRoster > heartbeat &&
+        reconciledRecord > atomicRoster &&
+        budgetCount > reconciledRecord &&
+        overlapCount > budgetCount &&
+        parentRole > overlapCount &&
+        b1Gate > parentRole &&
+        b1Continuation > b1Gate,
+      `${path}: B1 must follow hold proof, pending record, verified transition, and atomic roster reconciliation`,
+    );
+    const b1GateText = route.slice(b1Gate, b1Continuation);
+    for (const requirement of [
+      'until the hold-ending heartbeat is verified or complete trusted history proves no active hold',
+      'the recovery record is `reconciled`',
+      'A `disposed` child entry alone does not prove that the hold ended',
+      'current ownership, storage/record state, both roster entries, and parent role are reconciled',
+    ]) {
+      assert.ok(
+        b1GateText.includes(requirement),
+        `${path}: B1 gate must require "${requirement}" before continuation`,
+      );
+    }
+
+    const reportStart = text.indexOf('### Orchestrator run report');
+    const reportEnd = text.indexOf('### Worker report outcomes', reportStart);
+    assert.ok(
+      reportStart >= 0 && reportEnd > reportStart,
+      `${path}: run report missing`,
+    );
+    const report = text.slice(reportStart, reportEnd);
+    for (const required of [
+      '**Pre-B1 parent continuation.**',
+      'historical handle',
+      'separate active `parent-continuation` entry',
+      'final state',
+      'no terminal worker report or F4 result',
+    ]) {
+      assert.ok(
+        report.includes(required),
+        `${path}: run report must include "${required}"`,
+      );
+    }
+  }
+
+  for (const path of [
+    'idd-template/.github/instructions/idd-orchestrator.instructions.md',
+    '.github/instructions/idd-orchestrator.instructions.md',
+  ]) {
+    const text = normalizeWhitespace(readText(path));
+    for (const required of [
+      'A pre-B1 stop may use the [parent-continuation route]',
+      'only after its complete proof passes; otherwise use existing recovery/hold',
+      '[restart scan](../../docs/idd-helper-scripts.md#orchestrator-restart-scan)',
+    ]) {
+      assert.ok(text.includes(required), `${path}: missing "${required}"`);
+    }
+  }
+
+  for (const path of [
+    'idd-template/.github/instructions/claim-orchestrator.instructions.md',
+    '.github/instructions/claim-orchestrator.instructions.md',
+  ]) {
+    const text = normalizeWhitespace(readText(path));
+    for (const required of [
+      'Continuation after a confirmed pre-B1 stop is not a new activation',
+      '[canonical parent-continuation proof]',
+      'keep the same claim and nonce',
+    ]) {
+      assert.ok(text.includes(required), `${path}: missing "${required}"`);
+    }
+  }
+});
+
+test('orchestrator restart scans continuation records before roster rebuild and refill (#4714)', () => {
+  for (const path of [
+    'idd-template/docs/idd-workflow.md',
+    'docs/idd-workflow.md',
+  ]) {
+    const text = normalizeWhitespace(readText(path));
+    const restartStart = text.indexOf(
+      'This subsection covers an orchestrating session that restarts',
+    );
+    const scanStart = text.indexOf(
+      'Before roster reconstruction or any Discover/refill step, follow the [orchestrator restart scan]',
+      restartStart,
+    );
+    const findClaims = text.indexOf('1. **Find own claims.**', restartStart);
+    const reattachWorkers = text.indexOf(
+      '3. **Re-attach workers.**',
+      restartStart,
+    );
+    assert.ok(
+      restartStart >= 0 &&
+        scanStart > restartStart &&
+        findClaims > scanStart &&
+        reattachWorkers > scanStart,
+      `${path}: continuation-record validation must precede restart roster reconstruction`,
+    );
+  }
+
+  for (const path of [
+    'idd-template/docs/idd-helper-scripts.md',
+    'docs/idd-helper-scripts.md',
+  ]) {
+    const text = normalizeWhitespace(readText(path));
+    const scanStart = text.indexOf('### Orchestrator restart scan');
+    assert.ok(scanStart >= 0, `${path}: restart scan contract missing`);
+    const nextHeading = text.indexOf('\n### ', scanStart + 1);
+    const scan = text.slice(
+      scanStart,
+      nextHeading < 0 ? undefined : nextHeading,
+    );
+    for (const required of [
+      '`issue-<n>-pre-b1-continuation.json` records',
+      'without following symlinks',
+      'A `pending` record requires existing recovery or a hold',
+      'A `reconciled` record does not authorize the uninterrupted-session shortcut after restart',
+      'never as worker report drafts or report-store entries',
+      'no record requires recovery',
+    ]) {
+      assert.ok(scan.includes(required), `${path}: missing "${required}"`);
+    }
+  }
+});
+
+test('pre-B1 continuation ownership matrix requires verified hold completion (#4714)', () => {
+  for (const path of [
+    'idd-template/docs/idd-concept-ownership.md',
+    'docs/idd-concept-ownership.md',
+  ]) {
+    const matrix = normalizeWhitespace(readText(path));
+    assert.ok(
+      matrix.includes(
+        'under the ordinary fan-out lifecycle, ended by a later valid `claimed-by`',
+      ),
+      `${path}: the ownership matrix must preserve ordinary fan-out disposal as a hold-ending cause`,
+    );
+    assert.ok(
+      matrix.includes(
+        'For the verified pre-B1 continuation route only, dispose the child after complete trusted history proves no active hold or a valid hold-ending heartbeat is verified; disposal alone proves neither',
+      ),
+      `${path}: the ownership matrix must scope the stricter disposal proof to pre-B1 continuation`,
+    );
+    assert.ok(
+      matrix.includes(
+        'the uninterrupted owning parent creates a pending continuation record and adds a `parent-continuation` entry only under the [verified pre-B1 route]',
+      ),
+      `${path}: the ownership matrix must limit parent continuation to its verified route`,
+    );
+    assert.ok(
+      matrix.includes(
+        'when a hold is active, a verified hold-ending heartbeat before roster disposal',
+      ),
+      `${path}: the ownership matrix must gate disposal on verified hold completion`,
+    );
+  }
+
+  for (const path of [
+    'idd-template/docs/idd-workflow.md',
+    'docs/idd-workflow.md',
+  ]) {
+    const workflow = normalizeWhitespace(readText(path));
+    assert.ok(
+      workflow.includes('`disposed` under the ordinary fan-out lifecycle'),
+      `${path}: ordinary fan-out disposal must remain a hold-ending cause`,
+    );
+    assert.ok(
+      workflow.includes(
+        'The verified pre-B1 parent-continuation route is stricter: it disposes the child only after a hold-ending heartbeat is verified or complete trusted history proves that no hold is active.',
+      ),
+      `${path}: the pre-B1 route must verify the hold end before disposal`,
+    );
+    assert.ok(
+      workflow.includes(
+        'report an active hold as ended only after its hold-ending heartbeat is verified. When complete trusted history proves no hold is active, report that no active hold exists; do not attribute that state to disposal',
+      ),
+      `${path}: run reports must preserve the verified pre-B1 disposal condition`,
+    );
+  }
+});
+
 test('docs idd-workflow fan-out variant carries a delegation brief template for every brief element (#4377)', () => {
   const sourceTexts = new Map<string, string>();
   for (const row of BRIEF_ELEMENT_ROWS) {
@@ -3084,6 +3382,10 @@ test('fan-out scratchpad preflight provisions and recovers one session root (#46
     'idd-template/.github/instructions/idd-orchestrator.instructions.md',
     '.github/instructions/idd-orchestrator.instructions.md',
   ];
+  const overviewCopies = [
+    'idd-template/.github/instructions/idd-overview-core.instructions.md',
+    '.github/instructions/idd-overview-core.instructions.md',
+  ];
   const routingCases = [
     {
       evidence:
@@ -3108,8 +3410,26 @@ test('fan-out scratchpad preflight provisions and recovers one session root (#46
     },
     {
       evidence:
-        'A session record is unreadable or invalid, or another session records the canonical candidate root',
-      action: 'do not accept or allocate a colliding root',
+        'scanned session record is unreadable, malformed, unsafe, or its canonical root identity cannot be compared reliably',
+      action: 'Hold and preserve the record; do not skip or delete it',
+    },
+    {
+      evidence:
+        'valid foreign record has an unambiguously distinct canonical root that is missing',
+      action:
+        'If exact-session and candidate-root reservation checks pass, proceed with first allocation; preserve the foreign record, with no foreign-runner liveness or worker, artifact, or report inspection',
+    },
+    {
+      evidence:
+        'valid foreign record has an unambiguously distinct canonical root that exists',
+      action:
+        'Use the same first-allocation verdict as for a distinct missing root; preserve the foreign record, with no foreign-runner liveness or worker, artifact, or report inspection',
+    },
+    {
+      evidence:
+        'Another session records or aliases the canonical candidate root, even when that root is absent',
+      action:
+        'Hold and preserve evidence; do not accept or allocate the colliding root',
     },
     {
       evidence:
@@ -3146,7 +3466,7 @@ test('fan-out scratchpad preflight provisions and recovers one session root (#46
     },
     {
       evidence:
-        'record is unreadable, invalid, linked unsafely, for another session or repository',
+        'exact current-session record is unreadable, invalid, linked unsafely, for another session or repository, or its root is missing, contradictory, or unsafe',
       action: 'Hold and preserve all evidence; do not allocate a replacement',
     },
     {
@@ -3189,9 +3509,18 @@ test('fan-out scratchpad preflight provisions and recovers one session root (#46
       'live worker and artifact evidence',
       'If the listing is unavailable or incomplete, treat prior-worker state as uncertain',
       'Absence of scratchpad artifacts alone does not prove that no worker start was attempted',
-      'Keep a first-allocation reservation while scanning every session record',
+      "Keep a first-allocation reservation while strictly parsing every session record and comparing the candidate root with each record's validated canonical root identity",
+      'For a foreign record, this is a collision check only',
+      'do not require its root to exist, prove its runner stopped, or inspect its worker, artifact, or report state',
+      'A valid foreign record with an unambiguously distinct root does not block allocation even when that root is absent',
+      'Hold and preserve unreadable, malformed, or unsafe records; records whose canonical root identity cannot be compared reliably; and any record naming or aliasing the candidate root',
+      'Apply the full session, repository, root-safety, worker, artifact, report, and recovery checks to the exact current-session record',
+      'Observed 2026-10-30 on issue `#4827`',
+      'this prose and its consistency assertions do not establish a completed live autonomous run',
+      "Classify the current session's entry using the actual harness context, its exact session-and-repository record, and live worker and artifact evidence",
+      'Use foreign session records only for the collision checks described above',
       'An existing reservation without an exact, valid record for this session is a hold',
-      'Remove only the reservation this invocation created, after the record is verified',
+      'remove only the reservation this invocation created after verification',
       'same uninterrupted allocator invocation may continue only when it carries the invocation-local owner token',
       'created after that invocation successfully acquired the exclusive reservation',
       'never persist or reconstruct it from a matching session id, record, manifest, or copied context',
@@ -3214,7 +3543,7 @@ test('fan-out scratchpad preflight provisions and recovers one session root (#46
       "canonicalize the candidate root with the operating system's filesystem comparison rules",
       'case normalization on case-insensitive filesystems',
       "SHA-256 digest of the canonical path's UTF-8 bytes",
-      'checking worker and artifact evidence, and exclusively creating and verifying the session record',
+      'Exclusively create and verify the current session record',
       'never overwrite or remove it automatically',
       "worker only receives session-scratchpad paths under the root; the Worker brief's named critique scratch directory is the explicit exception",
       '<state-base>/idd-skill/orchestrator-sessions/records/<session-id>.json',
@@ -3226,12 +3555,18 @@ test('fan-out scratchpad preflight provisions and recovers one session root (#46
       '`sessionId`: non-empty JSON string containing one path-safe component',
       'excluding `.`/`..`, path separators, and control characters',
       '`repository`: non-empty JSON string in `owner/repo` form',
-      'normalizing both owner and repo components case-insensitively before comparison',
+      'For the exact current-session record, it must equal the current repository slug after normalizing both owner and repo components case-insensitively before comparison',
+      'Foreign records retain their own repository slug',
       '`repositoryRoot`, `gitCommonDir`, and `scratchpadRoot`',
       'non-empty JSON strings containing canonical absolute paths',
       '`allocationSource`: JSON string exactly `harness` or `parent`',
       'rejects missing or additional fields',
       'Reject an unsupported schema version, wrong JSON type, malformed value, or unknown property before trusting the record',
+      'After strict parsing, apply session and repository identity matching and full root-safety checks only to the exact current-session record',
+      'For foreign records, do not match identity fields to the live session; validate schema and path structure strictly, then use each safely comparable canonical root identity only for the candidate-root collision check below',
+      'An existing valid exact current-session record takes precedence over any new allocation',
+      'If that exact current-session record and the current harness context name different roots, treat that as a contradiction and hold',
+      "For the current session's harness-supplied root, verify the canonical path is an existing writable directory",
       'canonical state base, record directory, reservation directory, and scratchpad root all lie',
       'Reject symlink components along each managed path',
       'directory owned by the current user with private permissions',
@@ -3359,6 +3694,18 @@ test('fan-out scratchpad preflight provisions and recovers one session root (#46
     );
   }
 
+  for (const path of overviewCopies) {
+    const text = normalizeWhitespace(readText(path));
+    assert.match(
+      text,
+      /Starting fresh with a static fan-out candidate.*`idd-orchestrator\.instructions\.md`.*`idd-discover\.instructions\.md`/,
+    );
+    assert.match(
+      text,
+      /For a static fan-out candidate, read the orchestrator phase and apply its \[live-capability decision\].*before scratchpad setup, claim, or worker launch/,
+    );
+  }
+
   for (const path of orchestratorCopies) {
     const text = normalizeWhitespace(readText(path));
     assert.match(
@@ -3367,7 +3714,7 @@ test('fan-out scratchpad preflight provisions and recovers one session root (#46
     );
     assert.match(
       text,
-      /Before Discover, A5, restart, refill, or dispatch, follow the \[session scratchpad lifecycle\]/,
+      /Before Discover, A5, \[restart scan\]\([^)]*\), refill, or dispatch, follow the \[session scratchpad lifecycle\]/,
     );
     assert.match(text, /worker missing-parent guard/);
     assert.match(
@@ -3445,6 +3792,47 @@ function ledgerStorageSection(path: string, heading: string): string {
   );
 }
 
+// The text of one ownership case runs from its heading to the nearest later
+// heading of any case. The heading order in the contract need not match the
+// order of `cases`, so the nearest heading is taken, not the first array entry
+// that appears later in the text.
+function ledgerCaseText(
+  section: string,
+  cases: readonly { readonly label: string }[],
+  index: number,
+): string {
+  const label = cases[index].label;
+  const start = section.indexOf(label);
+  assert.notEqual(start, -1, `missing ownership case: ${label}`);
+  const from = start + label.length;
+  let nextStart: number | undefined;
+  for (const next of cases) {
+    const position = section.indexOf(next.label, from);
+    if (position !== -1 && (nextStart === undefined || position < nextStart)) {
+      nextStart = position;
+    }
+  }
+  return normalizeWhitespace(section.slice(start, nextStart ?? section.length));
+}
+
+test('ownership case text ends at the nearest later heading, not the array order (#4801)', () => {
+  const [owned, edited, missing] = LEDGER_STORAGE_CASES;
+  // The contract lists `missing` between `owned` and `edited`, and places
+  // `owned`'s expected action under `missing`. Text under `missing` must not
+  // satisfy `owned`.
+  const section = [
+    owned.label,
+    'Other text.',
+    missing.label,
+    owned.expectedAction,
+    edited.label,
+    edited.expectedAction,
+  ].join('\n');
+  const caseText = ledgerCaseText(section, LEDGER_STORAGE_CASES, 0);
+  assert.equal(caseText.includes(owned.expectedAction), false);
+  assert.equal(caseText.includes(missing.label), false);
+});
+
 test('issue-authoring contract defines ledger storage verdicts, allocation, and every ownership case (#4711)', () => {
   const section = ledgerStorageSection(
     LEDGER_STORAGE_CONTRACT,
@@ -3459,14 +3847,7 @@ test('issue-authoring contract defines ledger storage verdicts, allocation, and 
     assert.ok(text.includes(verdict), `missing verdict: ${verdict}`);
   }
   for (const [index, scenario] of LEDGER_STORAGE_CASES.entries()) {
-    const start = section.indexOf(scenario.label);
-    assert.notEqual(start, -1, `missing ownership case: ${scenario.label}`);
-    const nextStart = LEDGER_STORAGE_CASES.slice(index + 1)
-      .map((next) => section.indexOf(next.label, start + scenario.label.length))
-      .find((position) => position !== -1);
-    const caseText = normalizeWhitespace(
-      section.slice(start, nextStart ?? section.length),
-    );
+    const caseText = ledgerCaseText(section, LEDGER_STORAGE_CASES, index);
     assert.ok(
       caseText.includes(scenario.expectedAction),
       `missing expected action for ${scenario.label}: ${scenario.expectedAction}`,

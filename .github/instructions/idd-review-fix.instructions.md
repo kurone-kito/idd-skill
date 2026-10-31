@@ -221,19 +221,18 @@ After fetching, capture the target once as `target_sha` per the [E11 helper](../
 Fetch/capture/comparison errors report and hold.
 Compare `HEAD` with `"$target_sha"` per the helper.
 If equal, the branch is current: do not merge and continue to E12.
-If behind, probe `git merge-tree` and sign the merge with this SHA; never
-refetch or re-resolve. Unknown outcomes report and hold without merge or
-push.
+If behind, follow the [E11 helper](../../docs/idd-helper-scripts.md) for its
+probe, wrapper-signed merge, and conflict or failure handling. Never
+re-fetch/re-resolve; unknown outcomes report and hold without merge or push.
 
-- **No conflict:** signed `git merge --no-ff` with `"$target_sha"` and
-  conventional `-m` subject via the wrapper; no confirmation, even with
-  open review threads.
-- **Conflict:** follow the E11 conflict path in the
-  [signed-commit merge wrapper](../../docs/idd-helper-scripts.md#signed-commit-merge-wrapper-shared-git-procedure).
-- **Merge failure:** on merge, signing, or hook failure, run
-  `git merge --abort`, report, and hold. After a wrapper timeout, follow the
-  linked process-tree procedure before aborting; if its tree is live or
-  unconfirmed, hold without aborting or pushing.
+- **No conflict:** wrapper-signed merge with `"$target_sha"`; no confirmation,
+  even with open threads.
+- **Conflict:** follow the
+  [signed-commit merge wrapper](../../docs/idd-helper-scripts.md#signed-commit-merge-wrapper-shared-git-procedure)
+  to confirm and resolve. Continue after a clean resolution; otherwise
+  abort, report, and hold without pushing.
+- **Merge failure:** run `git merge --abort`, report, and hold on a merge,
+  signing, or hook failure; after a timeout, follow the wrapper.
 
 On failure or hold, follow shared Hold / suspend rules; do not push.
 Otherwise, continue to E12.
@@ -266,8 +265,11 @@ For a per-file cap, apply step 1. If the file is still above its cap
 (`phaseLimitBytes`, or `alwaysLoadedLimitBytes` for an always-loaded
 file), stop and ask once. Never raise a per-file cap.
 
-Then push the feature branch normally. Files touched only in E11 don't
-widen E12's fold-in scope.
+Then push the feature branch. With helper runtime, inspect and commit
+any validation or formatter output first, then push through
+`claimed-push` as D2 does. Under `instructions-only`, follow the E12
+fallback in `docs/idd-helper-scripts.md`. Files touched only in E11
+don't widen E12's fold-in scope.
 
 **Bounded cross-round batching allowance.** A small number of review
 comments can arrive before this push that fall outside this round's

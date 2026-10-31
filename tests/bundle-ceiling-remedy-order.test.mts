@@ -20,7 +20,10 @@ const TEMPLATE_FILES = [REVIEW_FIX_COPIES[0], PR_SUBMIT_COPIES[0]];
 function budgetBreachBlock(path: string): string {
   const text = readFileSync(path, 'utf8');
   const start = text.indexOf('**Budget breach.**');
-  const end = text.indexOf('Then push the feature branch normally', start);
+  const end = text.indexOf(
+    '**Bounded cross-round batching allowance.**',
+    start,
+  );
   assert.ok(start >= 0 && end > start, `${path} has the budget-breach block`);
   return text.slice(start, end).replace(/\s+/g, ' ');
 }
@@ -62,6 +65,37 @@ for (const path of REVIEW_FIX_COPIES) {
     assert.match(stepTwo, /at or above 95%/);
   });
 }
+
+for (const path of REVIEW_FIX_COPIES) {
+  test(`${path} routes the E12 push through claimed-push, then pushes normally (#4564)`, () => {
+    const block = budgetBreachBlock(path);
+    assertInOrder(block.slice(block.indexOf('Then push the feature branch')), [
+      'Then push the feature branch',
+      '`claimed-push` as D2 does',
+      'Under `instructions-only`, follow the E12 fallback in `docs/idd-helper-scripts.md`.',
+    ]);
+  });
+}
+
+const LITE_REVIEW_FIX =
+  'idd-template/.github/instructions/lite/idd-review-fix-lite.instructions.md';
+
+test(`${LITE_REVIEW_FIX} runs post-fix-validate before the claimed-push steps (#4564)`, () => {
+  const text = readFileSync(LITE_REVIEW_FIX, 'utf8');
+  const start = text.indexOf('## E12 — Lint, test, push');
+  const end = text.indexOf('\n## ', start + 1);
+  assert.ok(
+    start >= 0 && end > start,
+    `${LITE_REVIEW_FIX} has the E12 section`,
+  );
+  assertInOrder(text.slice(start, end).replace(/\s+/g, ' '), [
+    '1. Run `post-fix-validate`.',
+    'profile-selected `claimed-push`',
+    '`pushed: true`.',
+    'Under `instructions-only`, verify the active claim, location, and scope,',
+    '**pre-push-validate**, then push normally.',
+  ]);
+});
 
 for (const path of TEMPLATE_FILES) {
   test(`${path} never names the approval key (#4128)`, () => {
