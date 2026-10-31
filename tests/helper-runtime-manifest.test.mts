@@ -220,7 +220,7 @@ test('resolveHelperEntryClosure follows in-root static and dynamic imports and s
     [
       "import './static.mjs';",
       "void import('./dynamic.mjs');",
-      "import '../outside.mjs';",
+      "import '../../outside.mjs';",
       "import './missing.mjs';",
       "import './directory';",
       "import './data.json';",
@@ -277,27 +277,60 @@ test('resolveHelperEntryClosure rejects absent, outside, and non-file entries an
   writeFileSync(join(fixtureRoot, 'outside.mjs'), 'export {};');
   writeFileSync(join(fixtureRoot, 'outside-data.json'), '{}');
 
-  assert.throws(() =>
-    resolveHelperEntryClosure(undefined as unknown as string, { packageRoot }),
-  );
-  for (const entryPath of [
-    '',
-    'scripts/missing.mjs',
-    'scripts/directory',
-    '../outside.mjs',
-  ]) {
-    assert.throws(() => resolveHelperEntryClosure(entryPath, { packageRoot }));
-  }
-  for (const dataPath of [
-    'scripts/missing-data.json',
-    'scripts/data-directory',
-    '../outside-data.json',
-  ]) {
-    assert.throws(() =>
-      resolveHelperEntryClosure('scripts/entry.mjs', {
+  assert.throws(
+    () =>
+      resolveHelperEntryClosure(undefined as unknown as string, {
         packageRoot,
-        extraRuntimeFiles: new Map([['scripts/entry.mjs', [dataPath]]]),
       }),
+    /entry path must be a slash-separated relative path/,
+  );
+  for (const { entryPath, error } of [
+    {
+      entryPath: '',
+      error: /entry path must be a slash-separated relative path/,
+    },
+    {
+      entryPath: 'scripts/missing.mjs',
+      error: /entry path is missing or is not a regular file/,
+    },
+    {
+      entryPath: 'scripts/directory',
+      error: /entry path is missing or is not a regular file/,
+    },
+    {
+      entryPath: '../outside.mjs',
+      error: /entry path resolves outside the package root/,
+    },
+  ]) {
+    assert.throws(
+      () => resolveHelperEntryClosure(entryPath, { packageRoot }),
+      error,
+    );
+  }
+  for (const { dataPath, error } of [
+    {
+      dataPath: 'scripts/missing-data.json',
+      error:
+        /extra runtime file for scripts\/entry\.mjs is missing or is not a regular file/,
+    },
+    {
+      dataPath: 'scripts/data-directory',
+      error:
+        /extra runtime file for scripts\/entry\.mjs is missing or is not a regular file/,
+    },
+    {
+      dataPath: '../outside-data.json',
+      error:
+        /extra runtime file for scripts\/entry\.mjs resolves outside the package root/,
+    },
+  ]) {
+    assert.throws(
+      () =>
+        resolveHelperEntryClosure('scripts/entry.mjs', {
+          packageRoot,
+          extraRuntimeFiles: new Map([['scripts/entry.mjs', [dataPath]]]),
+        }),
+      error,
     );
   }
 });
@@ -407,35 +440,43 @@ test('readHelperExtraRuntimeFiles rejects missing, unclosed, unknown, malformed,
     {
       name: 'missing initializer',
       source: 'export const OTHER = new Map([]);',
+      error: /EXTRA_RUNTIME_FILES initializer was not found/,
     },
     {
       name: 'unclosed initializer',
       source:
         "const EXTRA_RUNTIME_FILES = new Map<string, string[]>([['scripts/one.mjs', []]",
+      error: /EXTRA_RUNTIME_FILES initializer array is not closed/,
     },
     {
       name: 'unknown lexeme',
       initializer: '[[identifier, []]]',
+      error: /EXTRA_RUNTIME_FILES initializer has an unsupported lexeme/,
     },
     {
       name: 'entry with no path',
       initializer: '[[, []]]',
+      error: /EXTRA_RUNTIME_FILES initializer expected string/,
     },
     {
       name: 'entry with two paths',
       initializer: "[['scripts/one.mjs', 'scripts/two.mjs', []]]",
+      error: /EXTRA_RUNTIME_FILES initializer expected open/,
     },
     {
       name: 'duplicate path',
       initializer: "[['scripts/one.mjs', []], ['scripts/one.mjs', []]]",
+      error: /EXTRA_RUNTIME_FILES entry is duplicated: scripts\/one\.mjs/,
     },
     {
       name: 'duplicate normalized path',
       initializer: "[['scripts/one.mjs', []], ['scripts/./one.mjs', []]]",
+      error:
+        /EXTRA_RUNTIME_FILES entry is duplicated after path normalization: scripts\/one\.mjs/,
     },
   ];
 
-  for (const { name, source, initializer } of cases) {
+  for (const { name, source, initializer, error } of cases) {
     const { packageRoot } = makeRuntimePackageFixture(
       `idd-helper-runtime-map-invalid-${name.replaceAll(' ', '-')}-`,
     );
@@ -447,7 +488,7 @@ test('readHelperExtraRuntimeFiles rejects missing, unclosed, unknown, malformed,
       source ??
         `const EXTRA_RUNTIME_FILES = new Map<string, string[]>(${initializer});\n`,
     );
-    assert.throws(() => readHelperExtraRuntimeFiles(packageRoot), name);
+    assert.throws(() => readHelperExtraRuntimeFiles(packageRoot), error, name);
   }
 });
 
@@ -456,15 +497,42 @@ test('readHelperExtraRuntimeFiles rejects invalid entry and data file paths', ()
     'idd-helper-runtime-map-paths-',
   );
   const cases = [
-    { entryPath: 'scripts/missing.mjs', dataPaths: [] },
-    { entryPath: 'scripts/directory', dataPaths: [] },
-    { entryPath: '../outside.mjs', dataPaths: [] },
-    { entryPath: 'scripts/entry.mjs', dataPaths: ['data/missing.json'] },
-    { entryPath: 'scripts/entry.mjs', dataPaths: ['data/directory'] },
-    { entryPath: 'scripts/entry.mjs', dataPaths: ['../outside-data.json'] },
+    {
+      entryPath: 'scripts/missing.mjs',
+      dataPaths: [],
+      error: /EXTRA_RUNTIME_FILES entry is missing or is not a regular file/,
+    },
+    {
+      entryPath: 'scripts/directory',
+      dataPaths: [],
+      error: /EXTRA_RUNTIME_FILES entry is missing or is not a regular file/,
+    },
+    {
+      entryPath: '../outside.mjs',
+      dataPaths: [],
+      error: /EXTRA_RUNTIME_FILES entry resolves outside the package root/,
+    },
+    {
+      entryPath: 'scripts/entry.mjs',
+      dataPaths: ['data/missing.json'],
+      error:
+        /EXTRA_RUNTIME_FILES data file for scripts\/entry\.mjs is missing or is not a regular file/,
+    },
+    {
+      entryPath: 'scripts/entry.mjs',
+      dataPaths: ['data/directory'],
+      error:
+        /EXTRA_RUNTIME_FILES data file for scripts\/entry\.mjs is missing or is not a regular file/,
+    },
+    {
+      entryPath: 'scripts/entry.mjs',
+      dataPaths: ['../outside-data.json'],
+      error:
+        /EXTRA_RUNTIME_FILES data file for scripts\/entry\.mjs resolves outside the package root/,
+    },
   ];
 
-  for (const { entryPath, dataPaths } of cases) {
+  for (const { entryPath, dataPaths, error } of cases) {
     const packageRoot = join(
       fixtureRoot,
       entryPath.includes('directory') ? 'dir-case' : 'case',
@@ -487,7 +555,7 @@ test('readHelperExtraRuntimeFiles rejects invalid entry and data file paths', ()
       packageRoot,
       `[\n  [${JSON.stringify(entryPath)}, ${JSON.stringify(dataPaths)}],\n]`,
     );
-    assert.throws(() => readHelperExtraRuntimeFiles(packageRoot));
+    assert.throws(() => readHelperExtraRuntimeFiles(packageRoot), error);
   }
 });
 
