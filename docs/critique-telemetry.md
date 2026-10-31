@@ -450,45 +450,57 @@ workflow option.
   limit the positions.
 - **New-head re-review**: a Copilot review submitted from 2026-10-01 through
   2026-10-26 whose commit differs from the previous Copilot review's commit.
-- **Measured head**: a new-head re-review at Copilot position 2 or 3 that has
-  at least one inline comment (`PullRequestReview` comments total count above
-  zero). A re-review with no inline comment is not measured.
-- **First push**: the earliest check-suite `created_at` among the pull
-  request's commits after the earlier head, in pull-request commit order. A
-  head with no check suite would be unknown; none was.
-- **Secondary review after push**: a Codex or CodeRabbit review with at least
-  one inline comment, submitted after the first push.
-- **Accepted thread**: a thread opened by that secondary review whose
-  pull-request-author reply starts with `**Accepted**`. A reply that starts
-  with `**Rejected**` does not count as Accepted.
+- **Denominator**: the new-head re-reviews at Copilot position 2 or 3 (504).
+  The specification names this set as the denominator.
+- **Measured head**: a denominator head whose re-review has at least one
+  inline comment (`PullRequestReview` comments total count above zero). The
+  specification asks for this inline-only set to be measured (196 here). A
+  re-review with no inline comment is not measured.
+- **First push (proxy)**: the earliest check-suite `created_at` among the
+  pull request's commits after the earlier head, in pull-request commit
+  order. This is a proxy for the push time: check-suite creation time is not a
+  push-event timestamp, and no push-event timestamp was read. A head with no
+  check suite would be unknown; none was.
+- **Secondary review**: the first Codex or CodeRabbit review with at least one
+  inline comment that was submitted after the first push. The column shows
+  which bot it was.
+- **Threads A/R/none**: the threads that the secondary review opened, counted
+  by the pull-request author's reply. `A` is a reply starting with
+  `**Accepted**`, `R` one starting with `**Rejected**`, and `none` is a thread
+  with neither. A thread with both counts as `A`.
 - **Next Copilot review, nothing Accepted**: no thread opened by the next
   Copilot review has an Accepted reply. A head with no next Copilot review
   counts as nothing Accepted (20 heads).
 - **Late fixes stayed**: the files touched by non-merge commits after the
   earlier head were all files that the earlier head's cumulative diff already
   touched.
-- **Saved**: secondary review after the push, at least one Accepted thread,
-  and nothing Accepted in the next Copilot review.
+- **Saved**: a secondary review after the push, at least one Accepted thread
+  from it, and nothing Accepted in the next Copilot review.
 
 ### Result
 
-| Measure                                       |  Count |
-| --------------------------------------------- | -----: |
-| Pull requests in window                       |  1,162 |
-| Copilot reviews in window                     |  4,809 |
-| New-head re-reviews at position 2 or 3        |    504 |
-| Measured heads (inline-only, position 2 or 3) |    196 |
-| Saved                                         |     43 |
-| Not saved                                     |    153 |
-| Unknown                                       |      0 |
-| Saved over measured heads                     | 21.9 % |
+| Measure                                             |  Count |
+| --------------------------------------------------- | -----: |
+| Pull requests in window                             |  1,162 |
+| Copilot reviews in window                           |  4,809 |
+| Denominator: new-head re-reviews at position 2 or 3 |    504 |
+| Measured heads (inline-only, position 2 or 3)       |    196 |
+| Saved                                               |     43 |
+| Not saved                                           |    153 |
+| Unknown                                             |      0 |
+| Saved over the denominator (43 / 504)               |  8.5 % |
+| Saved over the measured heads (43 / 196)            | 21.9 % |
 
 The specification states that the 2026-10-27 count put 53 heads in the
 inline-only set. This read finds 196 under the definitions above. Three other
 readings did not reproduce 53: the position among inline-bearing reviews only,
 requiring the previous review to be inline too, and requiring the earlier
 commit to differ from every earlier review. The cause is not determined. The
-saved total and the denominator reported here are this read's own.
+figures here are this read's own.
+
+Of the 43 saved heads, 32 had a Codex secondary review and 11 a CodeRabbit
+one. Of the 196 measured heads, 124 had a secondary review after the push and
+72 had none.
 
 Per-field counts over the 196 measured heads: secondary review after the push
 124; at least one Accepted thread 91; the next Copilot review had nothing
@@ -501,6 +513,11 @@ Sensitivity of the saved total to the definitions:
 - Loose thread match (any comment from that review in the thread): 55.
 - Treat `Fixed in` or `Addressed in` replies as Accepted: 44.
 - Exclude heads with any Rejected thread: 41.
+- Require the secondary review to come before the next Copilot review, when
+  one exists: 32. This is a stricter reading than the specification's own
+  definition, which does not require it. It is reported because a secondary
+  review that arrives after the next Copilot review cannot have changed that
+  review.
 
 ### Body-only heads (named, not measured)
 
@@ -514,203 +531,204 @@ specification anticipated two.
 ### Per-head record
 
 Each row is one measured head. "Saved" is the column the result is counted
-from.
+from. The secondary-review and thread columns describe the same review that
+the Saved predicate uses.
 
-|   PR | Pos | Re-review (UTC)  | First push (UTC) | Secondary review after push | Accepted thread | Next Copilot: nothing Accepted | Late fixes stayed | Saved |
-| ---: | --: | ---------------- | ---------------- | :-------------------------: | :-------------: | :----------------------------: | :---------------: | :---: |
-| 3695 |   2 | 2026-10-01 00:08 | 2026-10-01 00:05 |             no              |       no        |              yes               |        yes        |  no   |
-| 3699 |   2 | 2026-10-01 01:22 | 2026-10-01 01:18 |             no              |       no        |              yes               |        yes        |  no   |
-| 3711 |   2 | 2026-10-01 14:56 | 2026-10-01 14:52 |             no              |       no        |              yes               |        yes        |  no   |
-| 3723 |   2 | 2026-10-02 01:05 | 2026-10-02 01:02 |             yes             |       no        |              yes               |        yes        |  no   |
-| 3730 |   2 | 2026-10-02 18:00 | 2026-10-02 17:58 |             no              |       no        |              yes               |        yes        |  no   |
-| 3737 |   2 | 2026-10-03 00:32 | 2026-10-03 00:28 |             yes             |       yes       |              yes               |        yes        |  yes  |
-| 3741 |   2 | 2026-10-03 11:23 | 2026-10-03 11:18 |             yes             |       yes       |               no               |        no         |  no   |
-| 3741 |   3 | 2026-10-03 13:13 | 2026-10-03 13:08 |             yes             |       yes       |               no               |        no         |  no   |
-| 3761 |   2 | 2026-10-04 01:17 | 2026-10-04 01:13 |             yes             |       yes       |              yes               |        yes        |  yes  |
-| 3762 |   3 | 2026-10-04 09:20 | 2026-10-04 09:15 |             yes             |       yes       |              yes               |        yes        |  yes  |
-| 3764 |   2 | 2026-10-04 12:16 | 2026-10-04 12:11 |             yes             |       yes       |              yes               |        no         |  yes  |
-| 3765 |   2 | 2026-10-04 12:22 | 2026-10-04 12:17 |             yes             |       no        |              yes               |        yes        |  no   |
-| 3767 |   2 | 2026-10-04 15:06 | 2026-10-04 15:02 |             no              |       no        |              yes               |        yes        |  no   |
-| 3782 |   2 | 2026-10-05 03:39 | 2026-10-05 03:35 |             yes             |       no        |               no               |        no         |  no   |
-| 3782 |   3 | 2026-10-05 04:34 | 2026-10-05 04:28 |             yes             |       no        |               no               |        no         |  no   |
-| 3784 |   2 | 2026-10-05 13:02 | 2026-10-05 12:58 |             no              |       no        |              yes               |        yes        |  no   |
-| 3786 |   2 | 2026-10-05 12:02 | 2026-10-05 11:57 |             yes             |       no        |              yes               |        yes        |  no   |
-| 3790 |   2 | 2026-10-05 14:14 | 2026-10-05 14:08 |             no              |       no        |              yes               |        yes        |  no   |
-| 3804 |   2 | 2026-10-05 20:09 | 2026-10-05 20:04 |             yes             |       yes       |               no               |        no         |  no   |
-| 3804 |   3 | 2026-10-05 20:55 | 2026-10-05 20:37 |             yes             |       yes       |               no               |        no         |  no   |
-| 3807 |   2 | 2026-10-05 22:22 | 2026-10-05 22:19 |             no              |       no        |              yes               |        yes        |  no   |
-| 3810 |   2 | 2026-10-06 15:38 | 2026-10-06 15:34 |             no              |       no        |              yes               |        yes        |  no   |
-| 3811 |   3 | 2026-10-06 14:43 | 2026-10-06 14:39 |             yes             |       no        |              yes               |        yes        |  no   |
-| 3813 |   2 | 2026-10-06 15:30 | 2026-10-06 15:26 |             no              |       no        |              yes               |        yes        |  no   |
-| 3842 |   3 | 2026-10-08 13:01 | 2026-10-08 12:56 |             yes             |       yes       |               no               |        yes        |  no   |
-| 3843 |   2 | 2026-10-08 13:25 | 2026-10-08 13:20 |             yes             |       no        |               no               |        yes        |  no   |
-| 3843 |   3 | 2026-10-08 13:40 | 2026-10-08 13:36 |             no              |       no        |               no               |        yes        |  no   |
-| 3844 |   2 | 2026-10-08 13:38 | 2026-10-08 13:30 |             yes             |       yes       |              yes               |        no         |  yes  |
-| 3848 |   2 | 2026-10-08 14:45 | 2026-10-08 14:31 |             no              |       no        |              yes               |        yes        |  no   |
-| 3850 |   3 | 2026-10-08 16:20 | 2026-10-08 16:16 |             yes             |       no        |              yes               |        yes        |  no   |
-| 3851 |   2 | 2026-10-08 22:05 | 2026-10-08 21:56 |             yes             |       yes       |               no               |        yes        |  no   |
-| 3851 |   3 | 2026-10-08 23:24 | 2026-10-08 23:15 |             yes             |       no        |               no               |        yes        |  no   |
-| 3884 |   2 | 2026-10-08 18:59 | 2026-10-08 18:53 |             yes             |       no        |               no               |        yes        |  no   |
-| 3884 |   3 | 2026-10-08 19:12 | 2026-10-08 19:07 |             no              |       no        |               no               |        yes        |  no   |
-| 3903 |   3 | 2026-10-08 23:45 | 2026-10-08 23:42 |             no              |       no        |              yes               |        yes        |  no   |
-| 3909 |   2 | 2026-10-09 00:42 | 2026-10-09 00:27 |             no              |       no        |              yes               |        yes        |  no   |
-| 3912 |   2 | 2026-10-09 00:42 | 2026-10-09 00:22 |             no              |       no        |               no               |        yes        |  no   |
-| 3912 |   3 | 2026-10-09 00:50 | 2026-10-09 00:47 |             no              |       no        |              yes               |        yes        |  no   |
-| 3921 |   3 | 2026-10-09 02:53 | 2026-10-09 02:48 |             no              |       no        |               no               |        yes        |  no   |
-| 3925 |   2 | 2026-10-09 03:22 | 2026-10-09 03:17 |             yes             |       yes       |               no               |        yes        |  no   |
-| 3925 |   3 | 2026-10-09 03:37 | 2026-10-09 03:31 |             yes             |       no        |               no               |        yes        |  no   |
-| 3926 |   2 | 2026-10-09 03:21 | 2026-10-09 03:19 |             no              |       no        |              yes               |        yes        |  no   |
-| 3926 |   3 | 2026-10-09 03:30 | 2026-10-09 03:27 |             no              |       no        |              yes               |        yes        |  no   |
-| 3929 |   2 | 2026-10-09 03:59 | 2026-10-09 03:57 |             no              |       no        |              yes               |        yes        |  no   |
-| 3934 |   2 | 2026-10-09 05:44 | 2026-10-09 05:40 |             no              |       no        |              yes               |        yes        |  no   |
-| 3935 |   2 | 2026-10-09 06:11 | 2026-10-09 06:06 |             yes             |       no        |              yes               |        yes        |  no   |
-| 3940 |   3 | 2026-10-09 09:19 | 2026-10-09 09:15 |             yes             |       no        |              yes               |        yes        |  no   |
-| 3963 |   3 | 2026-10-09 17:41 | 2026-10-09 17:34 |             no              |       no        |              yes               |        no         |  no   |
-| 3966 |   2 | 2026-10-09 17:53 | 2026-10-09 17:48 |             yes             |       yes       |              yes               |        yes        |  yes  |
-| 3967 |   2 | 2026-10-09 18:13 | 2026-10-09 18:10 |             no              |       no        |              yes               |        yes        |  no   |
-| 3968 |   2 | 2026-10-09 19:03 | 2026-10-09 18:58 |             no              |       no        |              yes               |        no         |  no   |
-| 3969 |   2 | 2026-10-09 19:13 | 2026-10-09 19:09 |             yes             |       yes       |               no               |        no         |  no   |
-| 3969 |   3 | 2026-10-09 19:26 | 2026-10-09 19:21 |             yes             |       yes       |               no               |        no         |  no   |
-| 3971 |   2 | 2026-10-09 20:53 | 2026-10-09 20:46 |             yes             |       yes       |              yes               |        no         |  yes  |
-| 3977 |   2 | 2026-10-10 10:49 | 2026-10-10 10:44 |             yes             |       yes       |               no               |        no         |  no   |
-| 3977 |   3 | 2026-10-10 11:02 | 2026-10-10 10:58 |             yes             |       yes       |              yes               |        no         |  yes  |
-| 3981 |   2 | 2026-10-10 11:41 | 2026-10-10 11:36 |             yes             |       yes       |               no               |        no         |  no   |
-| 3981 |   3 | 2026-10-10 12:05 | 2026-10-10 11:59 |             yes             |       yes       |               no               |        no         |  no   |
-| 3986 |   2 | 2026-10-10 12:09 | 2026-10-10 12:04 |             no              |       no        |              yes               |        yes        |  no   |
-| 3993 |   2 | 2026-10-10 14:59 | 2026-10-10 14:55 |             yes             |       no        |              yes               |        yes        |  no   |
-| 3993 |   3 | 2026-10-10 15:07 | 2026-10-10 15:03 |             yes             |       no        |              yes               |        yes        |  no   |
-| 3997 |   2 | 2026-10-10 17:30 | 2026-10-10 17:25 |             yes             |       no        |               no               |        no         |  no   |
-| 3997 |   3 | 2026-10-10 17:37 | 2026-10-10 17:32 |             yes             |       no        |              yes               |        no         |  no   |
-| 4000 |   2 | 2026-10-10 18:42 | 2026-10-10 18:37 |             yes             |       yes       |               no               |        no         |  no   |
-| 4000 |   3 | 2026-10-10 18:52 | 2026-10-10 18:48 |             yes             |       yes       |              yes               |        no         |  yes  |
-| 4004 |   2 | 2026-10-11 10:12 | 2026-10-11 10:05 |             yes             |       no        |              yes               |        no         |  no   |
-| 4004 |   3 | 2026-10-11 10:32 | 2026-10-11 10:26 |             yes             |       no        |              yes               |        no         |  no   |
-| 4016 |   2 | 2026-10-11 10:57 | 2026-10-11 10:53 |             yes             |       yes       |              yes               |        no         |  yes  |
-| 4018 |   2 | 2026-10-11 11:03 | 2026-10-11 11:00 |             yes             |       yes       |              yes               |        no         |  yes  |
-| 4023 |   2 | 2026-10-11 17:03 | 2026-10-11 16:59 |             yes             |       yes       |               no               |        yes        |  no   |
-| 4023 |   3 | 2026-10-11 17:18 | 2026-10-11 17:14 |             yes             |       yes       |              yes               |        yes        |  yes  |
-| 4030 |   2 | 2026-10-11 13:57 | 2026-10-11 13:49 |             yes             |       yes       |               no               |        no         |  no   |
-| 4030 |   3 | 2026-10-11 14:14 | 2026-10-11 14:07 |             yes             |       yes       |               no               |        no         |  no   |
-| 4040 |   2 | 2026-10-11 19:19 | 2026-10-11 19:16 |             no              |       no        |              yes               |        no         |  no   |
-| 4041 |   2 | 2026-10-11 20:11 | 2026-10-11 20:05 |             yes             |       yes       |              yes               |        yes        |  yes  |
-| 4044 |   2 | 2026-10-12 01:00 | 2026-10-12 00:53 |             yes             |       no        |              yes               |        no         |  no   |
-| 4045 |   2 | 2026-10-12 01:03 | 2026-10-12 00:57 |             yes             |       yes       |               no               |        yes        |  no   |
-| 4045 |   3 | 2026-10-12 01:17 | 2026-10-12 01:14 |             no              |       no        |              yes               |        yes        |  no   |
-| 4046 |   2 | 2026-10-12 02:00 | 2026-10-12 01:54 |             yes             |       yes       |               no               |        no         |  no   |
-| 4046 |   3 | 2026-10-12 02:28 | 2026-10-12 02:22 |             yes             |       no        |              yes               |        no         |  no   |
-| 4048 |   2 | 2026-10-12 01:23 | 2026-10-12 01:18 |             yes             |       yes       |               no               |        no         |  no   |
-| 4048 |   3 | 2026-10-12 10:29 | 2026-10-12 10:25 |             yes             |       yes       |               no               |        no         |  no   |
-| 4052 |   2 | 2026-10-12 02:29 | 2026-10-12 02:23 |             no              |       no        |              yes               |        no         |  no   |
-| 4058 |   2 | 2026-10-12 04:15 | 2026-10-12 04:10 |             yes             |       yes       |               no               |        yes        |  no   |
-| 4058 |   3 | 2026-10-12 04:20 | 2026-10-12 04:13 |             yes             |       yes       |               no               |        yes        |  no   |
-| 4069 |   2 | 2026-10-12 10:52 | 2026-10-12 10:48 |             yes             |       yes       |               no               |        no         |  no   |
-| 4069 |   3 | 2026-10-12 11:06 | 2026-10-12 11:02 |             yes             |       yes       |               no               |        yes        |  no   |
-| 4072 |   3 | 2026-10-12 11:33 | 2026-10-12 11:31 |             yes             |       yes       |              yes               |        yes        |  yes  |
-| 4073 |   2 | 2026-10-12 11:40 | 2026-10-12 11:34 |             yes             |       yes       |               no               |        yes        |  no   |
-| 4073 |   3 | 2026-10-12 12:36 | 2026-10-12 12:31 |             yes             |       yes       |               no               |        yes        |  no   |
-| 4074 |   2 | 2026-10-12 11:33 | 2026-10-12 11:29 |             yes             |       yes       |              yes               |        yes        |  yes  |
-| 4077 |   3 | 2026-10-12 13:45 | 2026-10-12 13:40 |             yes             |       yes       |               no               |        yes        |  no   |
-| 4082 |   2 | 2026-10-12 14:58 | 2026-10-12 14:53 |             yes             |       yes       |               no               |        no         |  no   |
-| 4082 |   3 | 2026-10-12 15:36 | 2026-10-12 15:32 |             yes             |       yes       |               no               |        no         |  no   |
-| 4092 |   2 | 2026-10-13 01:26 | 2026-10-13 01:22 |             no              |       no        |               no               |        no         |  no   |
-| 4092 |   3 | 2026-10-13 02:41 | 2026-10-13 02:35 |             no              |       no        |               no               |        no         |  no   |
-| 4100 |   2 | 2026-10-13 01:24 | 2026-10-13 01:21 |             no              |       no        |              yes               |        yes        |  no   |
-| 4125 |   2 | 2026-10-13 02:38 | 2026-10-13 02:34 |             no              |       no        |              yes               |        yes        |  no   |
-| 4147 |   2 | 2026-10-13 05:16 | 2026-10-13 05:10 |             no              |       no        |               no               |        no         |  no   |
-| 4147 |   3 | 2026-10-13 05:38 | 2026-10-13 05:33 |             no              |       no        |               no               |        no         |  no   |
-| 4148 |   3 | 2026-10-13 06:06 | 2026-10-13 06:03 |             no              |       no        |              yes               |        yes        |  no   |
-| 4149 |   2 | 2026-10-13 05:24 | 2026-10-13 05:20 |             no              |       no        |              yes               |        yes        |  no   |
-| 4153 |   2 | 2026-10-13 08:22 | 2026-10-13 08:20 |             no              |       no        |              yes               |        yes        |  no   |
-| 4155 |   2 | 2026-10-13 08:28 | 2026-10-13 08:24 |             yes             |       yes       |              yes               |        yes        |  yes  |
-| 4156 |   2 | 2026-10-13 06:48 | 2026-10-13 06:37 |             yes             |       yes       |              yes               |        yes        |  yes  |
-| 4156 |   3 | 2026-10-13 07:02 | 2026-10-13 06:57 |             no              |       no        |              yes               |        yes        |  no   |
-| 4159 |   2 | 2026-10-13 06:56 | 2026-10-13 06:50 |             yes             |       yes       |              yes               |        no         |  yes  |
-| 4160 |   2 | 2026-10-13 07:10 | 2026-10-13 07:06 |             no              |       no        |               no               |        yes        |  no   |
-| 4160 |   3 | 2026-10-13 07:26 | 2026-10-13 07:21 |             no              |       no        |               no               |        yes        |  no   |
-| 4176 |   3 | 2026-10-13 12:42 | 2026-10-13 12:37 |             no              |       no        |              yes               |        yes        |  no   |
-| 4178 |   2 | 2026-10-13 13:37 | 2026-10-13 13:33 |             no              |       no        |              yes               |        no         |  no   |
-| 4207 |   2 | 2026-10-13 20:25 | 2026-10-13 20:22 |             yes             |       no        |              yes               |        yes        |  no   |
-| 4229 |   2 | 2026-10-13 22:38 | 2026-10-13 22:34 |             no              |       no        |              yes               |        yes        |  no   |
-| 4231 |   2 | 2026-10-13 22:46 | 2026-10-13 22:41 |             no              |       no        |               no               |        no         |  no   |
-| 4231 |   3 | 2026-10-13 23:01 | 2026-10-13 22:56 |             no              |       no        |               no               |        no         |  no   |
-| 4246 |   2 | 2026-10-14 03:35 | 2026-10-14 03:32 |             yes             |       yes       |              yes               |        yes        |  yes  |
-| 4246 |   3 | 2026-10-14 03:49 | 2026-10-14 03:46 |             no              |       no        |              yes               |        yes        |  no   |
-| 4249 |   2 | 2026-10-14 07:00 | 2026-10-14 06:57 |             no              |       no        |               no               |        yes        |  no   |
-| 4249 |   3 | 2026-10-14 07:09 | 2026-10-14 07:05 |             no              |       no        |              yes               |        yes        |  no   |
-| 4262 |   3 | 2026-10-14 09:05 | 2026-10-14 08:52 |             yes             |       no        |              yes               |        yes        |  no   |
-| 4263 |   3 | 2026-10-14 09:35 | 2026-10-14 09:28 |             yes             |       yes       |              yes               |        no         |  yes  |
-| 4266 |   2 | 2026-10-14 12:35 | 2026-10-14 12:31 |             no              |       no        |              yes               |        yes        |  no   |
-| 4268 |   2 | 2026-10-14 12:04 | 2026-10-14 11:57 |             no              |       no        |               no               |        yes        |  no   |
-| 4268 |   3 | 2026-10-14 12:17 | 2026-10-14 12:13 |             no              |       no        |              yes               |        yes        |  no   |
-| 4271 |   3 | 2026-10-14 13:28 | 2026-10-14 13:21 |             yes             |       no        |              yes               |        yes        |  no   |
-| 4285 |   2 | 2026-10-14 15:41 | 2026-10-14 15:36 |             no              |       no        |               no               |        no         |  no   |
-| 4285 |   3 | 2026-10-14 16:05 | 2026-10-14 16:00 |             no              |       no        |               no               |        no         |  no   |
-| 4292 |   2 | 2026-10-14 16:40 | 2026-10-14 16:37 |             no              |       no        |              yes               |        no         |  no   |
-| 4317 |   2 | 2026-10-15 00:03 | 2026-10-14 23:57 |             yes             |       yes       |               no               |        yes        |  no   |
-| 4317 |   3 | 2026-10-15 00:32 | 2026-10-15 00:25 |             no              |       no        |               no               |        yes        |  no   |
-| 4322 |   2 | 2026-10-15 01:15 | 2026-10-15 01:11 |             no              |       no        |              yes               |        yes        |  no   |
-| 4325 |   2 | 2026-10-15 01:29 | 2026-10-15 01:22 |             no              |       no        |               no               |        no         |  no   |
-| 4325 |   3 | 2026-10-15 01:52 | 2026-10-15 01:46 |             no              |       no        |              yes               |        no         |  no   |
-| 4329 |   2 | 2026-10-15 01:51 | 2026-10-15 01:48 |             yes             |       yes       |               no               |        no         |  no   |
-| 4329 |   3 | 2026-10-15 13:38 | 2026-10-15 13:34 |             yes             |       yes       |              yes               |        no         |  yes  |
-| 4331 |   2 | 2026-10-15 02:16 | 2026-10-15 02:09 |             yes             |       yes       |               no               |        yes        |  no   |
-| 4331 |   3 | 2026-10-15 02:30 | 2026-10-15 02:24 |             yes             |       yes       |              yes               |        yes        |  yes  |
-| 4337 |   2 | 2026-10-15 03:54 | 2026-10-15 03:49 |             yes             |       yes       |               no               |        yes        |  no   |
-| 4337 |   3 | 2026-10-15 04:15 | 2026-10-15 04:10 |             yes             |       yes       |               no               |        yes        |  no   |
-| 4356 |   2 | 2026-10-15 07:17 | 2026-10-15 07:14 |             no              |       no        |              yes               |        yes        |  no   |
-| 4357 |   2 | 2026-10-15 07:08 | 2026-10-15 07:03 |             yes             |       yes       |               no               |        yes        |  no   |
-| 4357 |   3 | 2026-10-15 07:30 | 2026-10-15 07:25 |             yes             |       yes       |               no               |        yes        |  no   |
-| 4360 |   2 | 2026-10-15 08:16 | 2026-10-15 08:12 |             yes             |       yes       |               no               |        yes        |  no   |
-| 4360 |   3 | 2026-10-15 08:27 | 2026-10-15 08:23 |             no              |       no        |              yes               |        yes        |  no   |
-| 4363 |   3 | 2026-10-15 09:47 | 2026-10-15 09:43 |             no              |       no        |              yes               |        yes        |  no   |
-| 4385 |   3 | 2026-10-15 16:39 | 2026-10-15 16:35 |             yes             |       yes       |               no               |        yes        |  no   |
-| 4388 |   2 | 2026-10-15 16:23 | 2026-10-15 16:18 |             no              |       no        |              yes               |        yes        |  no   |
-| 4390 |   2 | 2026-10-15 17:12 | 2026-10-15 17:07 |             no              |       no        |              yes               |        no         |  no   |
-| 4403 |   2 | 2026-10-15 18:13 | 2026-10-15 18:08 |             yes             |       yes       |              yes               |        no         |  yes  |
-| 4405 |   2 | 2026-10-15 22:18 | 2026-10-15 22:15 |             no              |       no        |               no               |        yes        |  no   |
-| 4405 |   3 | 2026-10-15 23:20 | 2026-10-15 23:18 |             no              |       no        |              yes               |        yes        |  no   |
-| 4406 |   2 | 2026-10-15 23:43 | 2026-10-15 23:41 |             no              |       no        |              yes               |        yes        |  no   |
-| 4407 |   2 | 2026-10-15 22:19 | 2026-10-15 22:16 |             yes             |       yes       |              yes               |        no         |  yes  |
-| 4408 |   2 | 2026-10-15 23:11 | 2026-10-15 23:05 |             yes             |       yes       |               no               |        yes        |  no   |
-| 4408 |   3 | 2026-10-16 14:24 | 2026-10-16 14:19 |             yes             |       yes       |               no               |        yes        |  no   |
-| 4416 |   2 | 2026-10-16 00:01 | 2026-10-15 23:56 |             yes             |       yes       |               no               |        yes        |  no   |
-| 4416 |   3 | 2026-10-16 03:15 | 2026-10-16 03:10 |             yes             |       yes       |               no               |        yes        |  no   |
-| 4425 |   2 | 2026-10-16 05:22 | 2026-10-16 05:16 |             no              |       no        |              yes               |        no         |  no   |
-| 4443 |   3 | 2026-10-16 18:07 | 2026-10-16 18:04 |             no              |       no        |              yes               |        yes        |  no   |
-| 4448 |   2 | 2026-10-16 18:56 | 2026-10-16 18:50 |             no              |       no        |               no               |        yes        |  no   |
-| 4448 |   3 | 2026-10-17 07:02 | 2026-10-17 06:51 |             no              |       no        |              yes               |        yes        |  no   |
-| 4452 |   2 | 2026-10-16 21:32 | 2026-10-16 21:27 |             yes             |       yes       |               no               |        yes        |  no   |
-| 4452 |   3 | 2026-10-16 22:03 | 2026-10-16 21:57 |             yes             |       no        |               no               |        yes        |  no   |
-| 4455 |   2 | 2026-10-16 22:13 | 2026-10-16 22:05 |             yes             |       yes       |              yes               |        yes        |  yes  |
-| 4457 |   2 | 2026-10-17 04:19 | 2026-10-17 04:15 |             yes             |       no        |              yes               |        no         |  no   |
-| 4485 |   2 | 2026-10-17 19:50 | 2026-10-17 19:47 |             yes             |       yes       |              yes               |        no         |  yes  |
-| 4485 |   3 | 2026-10-17 20:09 | 2026-10-17 20:05 |             yes             |       yes       |              yes               |        no         |  yes  |
-| 4486 |   2 | 2026-10-17 20:44 | 2026-10-17 20:41 |             no              |       no        |              yes               |        yes        |  no   |
-| 4505 |   2 | 2026-10-18 11:21 | 2026-10-18 11:18 |             yes             |       yes       |              yes               |        no         |  yes  |
-| 4514 |   2 | 2026-10-18 16:00 | 2026-10-18 15:55 |             yes             |       no        |              yes               |        yes        |  no   |
-| 4558 |   2 | 2026-10-19 14:04 | 2026-10-19 13:28 |             yes             |       yes       |              yes               |        yes        |  yes  |
-| 4567 |   2 | 2026-10-19 18:46 | 2026-10-19 18:39 |             yes             |       yes       |              yes               |        yes        |  yes  |
-| 4572 |   3 | 2026-10-20 01:57 | 2026-10-20 01:53 |             yes             |       yes       |              yes               |        yes        |  yes  |
-| 4577 |   3 | 2026-10-20 06:39 | 2026-10-20 06:36 |             yes             |       yes       |               no               |        yes        |  no   |
-| 4578 |   3 | 2026-10-20 12:09 | 2026-10-20 12:07 |             yes             |       no        |              yes               |        yes        |  no   |
-| 4591 |   2 | 2026-10-21 03:55 | 2026-10-21 03:52 |             yes             |       yes       |               no               |        yes        |  no   |
-| 4591 |   3 | 2026-10-21 04:17 | 2026-10-21 04:13 |             yes             |       yes       |              yes               |        yes        |  yes  |
-| 4604 |   2 | 2026-10-21 11:28 | 2026-10-21 11:24 |             yes             |       yes       |              yes               |        yes        |  yes  |
-| 4604 |   3 | 2026-10-21 11:52 | 2026-10-21 11:47 |             yes             |       yes       |               no               |        yes        |  no   |
-| 4606 |   2 | 2026-10-21 11:44 | 2026-10-21 11:40 |             yes             |       yes       |              yes               |        yes        |  yes  |
-| 4606 |   3 | 2026-10-21 12:28 | 2026-10-21 12:23 |             yes             |       yes       |              yes               |        yes        |  yes  |
-| 4608 |   2 | 2026-10-21 12:19 | 2026-10-21 12:15 |             yes             |       yes       |              yes               |        yes        |  yes  |
-| 4608 |   3 | 2026-10-21 12:41 | 2026-10-21 12:37 |             yes             |       yes       |              yes               |        yes        |  yes  |
-| 4620 |   2 | 2026-10-22 11:56 | 2026-10-22 11:51 |             yes             |       yes       |               no               |        yes        |  no   |
-| 4620 |   3 | 2026-10-22 12:28 | 2026-10-22 12:23 |             yes             |       yes       |              yes               |        yes        |  yes  |
-| 4632 |   3 | 2026-10-23 01:59 | 2026-10-23 01:55 |             yes             |       yes       |              yes               |        yes        |  yes  |
-| 4633 |   2 | 2026-10-23 03:13 | 2026-10-23 03:08 |             yes             |       yes       |              yes               |        no         |  yes  |
-| 4651 |   2 | 2026-10-23 08:10 | 2026-10-23 08:04 |             yes             |       no        |              yes               |        yes        |  no   |
-| 4654 |   3 | 2026-10-23 10:45 | 2026-10-23 10:41 |             yes             |       no        |              yes               |        no         |  no   |
-| 4677 |   2 | 2026-10-24 11:16 | 2026-10-24 11:13 |             yes             |       yes       |              yes               |        yes        |  yes  |
-| 4688 |   2 | 2026-10-25 03:22 | 2026-10-25 03:18 |             yes             |       no        |              yes               |        no         |  no   |
-| 4690 |   2 | 2026-10-24 23:52 | 2026-10-24 23:48 |             yes             |       yes       |              yes               |        yes        |  yes  |
-| 4709 |   2 | 2026-10-25 07:47 | 2026-10-25 07:43 |             yes             |       no        |              yes               |        no         |  no   |
-| 4709 |   3 | 2026-10-25 08:48 | 2026-10-25 08:44 |             yes             |       no        |              yes               |        yes        |  no   |
-| 4719 |   3 | 2026-10-25 10:50 | 2026-10-25 10:47 |             yes             |       yes       |              yes               |        yes        |  yes  |
-| 4733 |   2 | 2026-10-25 14:55 | 2026-10-25 14:50 |             yes             |       yes       |               no               |        no         |  no   |
+|   PR | Pos | Re-review (UTC)  | First push (UTC) | Secondary bot | Secondary review (UTC) | Threads A/R/none | Next Copilot: nothing Accepted | Late fixes stayed | Saved |
+| ---: | --: | ---------------- | ---------------- | ------------- | ---------------------- | :--------------: | :----------------------------: | :---------------: | :---: |
+| 3695 |   2 | 2026-10-01 00:08 | 2026-10-01 00:05 | -             | -                      |        -         |              yes               |        yes        |  no   |
+| 3699 |   2 | 2026-10-01 01:22 | 2026-10-01 01:18 | -             | -                      |        -         |              yes               |        yes        |  no   |
+| 3711 |   2 | 2026-10-01 14:56 | 2026-10-01 14:52 | -             | -                      |        -         |              yes               |        yes        |  no   |
+| 3723 |   2 | 2026-10-02 01:05 | 2026-10-02 01:02 | CodeRabbit    | 2026-10-02 01:03       |        -         |              yes               |        yes        |  no   |
+| 3730 |   2 | 2026-10-02 18:00 | 2026-10-02 17:58 | -             | -                      |        -         |              yes               |        yes        |  no   |
+| 3737 |   2 | 2026-10-03 00:32 | 2026-10-03 00:28 | Codex         | 2026-10-03 00:30       |      1/0/0       |              yes               |        yes        |  yes  |
+| 3741 |   2 | 2026-10-03 11:23 | 2026-10-03 11:18 | Codex         | 2026-10-03 11:23       |      1/0/0       |               no               |        no         |  no   |
+| 3741 |   3 | 2026-10-03 13:13 | 2026-10-03 13:08 | Codex         | 2026-10-03 14:01       |      1/0/0       |               no               |        no         |  no   |
+| 3761 |   2 | 2026-10-04 01:17 | 2026-10-04 01:13 | Codex         | 2026-10-04 02:08       |      1/0/0       |              yes               |        yes        |  yes  |
+| 3762 |   3 | 2026-10-04 09:20 | 2026-10-04 09:15 | Codex         | 2026-10-04 09:21       |      1/0/0       |              yes               |        yes        |  yes  |
+| 3764 |   2 | 2026-10-04 12:16 | 2026-10-04 12:11 | Codex         | 2026-10-04 12:16       |      2/0/0       |              yes               |        no         |  yes  |
+| 3765 |   2 | 2026-10-04 12:22 | 2026-10-04 12:17 | Codex         | 2026-10-04 13:51       |      0/1/0       |              yes               |        yes        |  no   |
+| 3767 |   2 | 2026-10-04 15:06 | 2026-10-04 15:02 | -             | -                      |        -         |              yes               |        yes        |  no   |
+| 3782 |   2 | 2026-10-05 03:39 | 2026-10-05 03:35 | Codex         | 2026-10-05 03:37       |      0/1/0       |               no               |        no         |  no   |
+| 3782 |   3 | 2026-10-05 04:34 | 2026-10-05 04:28 | Codex         | 2026-10-05 04:31       |      0/1/0       |               no               |        no         |  no   |
+| 3784 |   2 | 2026-10-05 13:02 | 2026-10-05 12:58 | -             | -                      |        -         |              yes               |        yes        |  no   |
+| 3786 |   2 | 2026-10-05 12:02 | 2026-10-05 11:57 | CodeRabbit    | 2026-10-05 12:02       |        -         |              yes               |        yes        |  no   |
+| 3790 |   2 | 2026-10-05 14:14 | 2026-10-05 14:08 | -             | -                      |        -         |              yes               |        yes        |  no   |
+| 3804 |   2 | 2026-10-05 20:09 | 2026-10-05 20:04 | Codex         | 2026-10-05 20:11       |      1/0/0       |               no               |        no         |  no   |
+| 3804 |   3 | 2026-10-05 20:55 | 2026-10-05 20:37 | Codex         | 2026-10-05 20:41       |      1/0/0       |               no               |        no         |  no   |
+| 3807 |   2 | 2026-10-05 22:22 | 2026-10-05 22:19 | -             | -                      |        -         |              yes               |        yes        |  no   |
+| 3810 |   2 | 2026-10-06 15:38 | 2026-10-06 15:34 | -             | -                      |        -         |              yes               |        yes        |  no   |
+| 3811 |   3 | 2026-10-06 14:43 | 2026-10-06 14:39 | CodeRabbit    | 2026-10-06 14:47       |        -         |              yes               |        yes        |  no   |
+| 3813 |   2 | 2026-10-06 15:30 | 2026-10-06 15:26 | -             | -                      |        -         |              yes               |        yes        |  no   |
+| 3842 |   3 | 2026-10-08 13:01 | 2026-10-08 12:56 | Codex         | 2026-10-08 13:00       |      2/0/0       |               no               |        yes        |  no   |
+| 3843 |   2 | 2026-10-08 13:25 | 2026-10-08 13:20 | CodeRabbit    | 2026-10-08 13:24       |        -         |               no               |        yes        |  no   |
+| 3843 |   3 | 2026-10-08 13:40 | 2026-10-08 13:36 | -             | -                      |        -         |               no               |        yes        |  no   |
+| 3844 |   2 | 2026-10-08 13:38 | 2026-10-08 13:30 | Codex         | 2026-10-08 15:42       |      1/0/0       |              yes               |        no         |  yes  |
+| 3848 |   2 | 2026-10-08 14:45 | 2026-10-08 14:31 | -             | -                      |        -         |              yes               |        yes        |  no   |
+| 3850 |   3 | 2026-10-08 16:20 | 2026-10-08 16:16 | CodeRabbit    | 2026-10-08 16:17       |        -         |              yes               |        yes        |  no   |
+| 3851 |   2 | 2026-10-08 22:05 | 2026-10-08 21:56 | CodeRabbit    | 2026-10-08 21:59       |      1/0/0       |               no               |        yes        |  no   |
+| 3851 |   3 | 2026-10-08 23:24 | 2026-10-08 23:15 | CodeRabbit    | 2026-10-08 23:16       |        -         |               no               |        yes        |  no   |
+| 3884 |   2 | 2026-10-08 18:59 | 2026-10-08 18:53 | CodeRabbit    | 2026-10-08 18:54       |        -         |               no               |        yes        |  no   |
+| 3884 |   3 | 2026-10-08 19:12 | 2026-10-08 19:07 | -             | -                      |        -         |               no               |        yes        |  no   |
+| 3903 |   3 | 2026-10-08 23:45 | 2026-10-08 23:42 | -             | -                      |        -         |              yes               |        yes        |  no   |
+| 3909 |   2 | 2026-10-09 00:42 | 2026-10-09 00:27 | -             | -                      |        -         |              yes               |        yes        |  no   |
+| 3912 |   2 | 2026-10-09 00:42 | 2026-10-09 00:22 | -             | -                      |        -         |               no               |        yes        |  no   |
+| 3912 |   3 | 2026-10-09 00:50 | 2026-10-09 00:47 | -             | -                      |        -         |              yes               |        yes        |  no   |
+| 3921 |   3 | 2026-10-09 02:53 | 2026-10-09 02:48 | -             | -                      |        -         |               no               |        yes        |  no   |
+| 3925 |   2 | 2026-10-09 03:22 | 2026-10-09 03:17 | CodeRabbit    | 2026-10-09 03:22       |      1/0/0       |               no               |        yes        |  no   |
+| 3925 |   3 | 2026-10-09 03:37 | 2026-10-09 03:31 | CodeRabbit    | 2026-10-09 03:33       |        -         |               no               |        yes        |  no   |
+| 3926 |   2 | 2026-10-09 03:21 | 2026-10-09 03:19 | -             | -                      |        -         |              yes               |        yes        |  no   |
+| 3926 |   3 | 2026-10-09 03:30 | 2026-10-09 03:27 | -             | -                      |        -         |              yes               |        yes        |  no   |
+| 3929 |   2 | 2026-10-09 03:59 | 2026-10-09 03:57 | -             | -                      |        -         |              yes               |        yes        |  no   |
+| 3934 |   2 | 2026-10-09 05:44 | 2026-10-09 05:40 | -             | -                      |        -         |              yes               |        yes        |  no   |
+| 3935 |   2 | 2026-10-09 06:11 | 2026-10-09 06:06 | CodeRabbit    | 2026-10-09 06:08       |        -         |              yes               |        yes        |  no   |
+| 3940 |   3 | 2026-10-09 09:19 | 2026-10-09 09:15 | CodeRabbit    | 2026-10-09 09:16       |        -         |              yes               |        yes        |  no   |
+| 3963 |   3 | 2026-10-09 17:41 | 2026-10-09 17:34 | -             | -                      |        -         |              yes               |        no         |  no   |
+| 3966 |   2 | 2026-10-09 17:53 | 2026-10-09 17:48 | CodeRabbit    | 2026-10-09 18:03       |      1/0/0       |              yes               |        yes        |  yes  |
+| 3967 |   2 | 2026-10-09 18:13 | 2026-10-09 18:10 | -             | -                      |        -         |              yes               |        yes        |  no   |
+| 3968 |   2 | 2026-10-09 19:03 | 2026-10-09 18:58 | -             | -                      |        -         |              yes               |        no         |  no   |
+| 3969 |   2 | 2026-10-09 19:13 | 2026-10-09 19:09 | CodeRabbit    | 2026-10-09 20:24       |      2/0/0       |               no               |        no         |  no   |
+| 3969 |   3 | 2026-10-09 19:26 | 2026-10-09 19:21 | CodeRabbit    | 2026-10-09 20:24       |      2/0/0       |               no               |        no         |  no   |
+| 3971 |   2 | 2026-10-09 20:53 | 2026-10-09 20:46 | CodeRabbit    | 2026-10-09 21:28       |      2/0/0       |              yes               |        no         |  yes  |
+| 3977 |   2 | 2026-10-10 10:49 | 2026-10-10 10:44 | CodeRabbit    | 2026-10-10 11:43       |      1/0/0       |               no               |        no         |  no   |
+| 3977 |   3 | 2026-10-10 11:02 | 2026-10-10 10:58 | CodeRabbit    | 2026-10-10 11:43       |      1/0/0       |              yes               |        no         |  yes  |
+| 3981 |   2 | 2026-10-10 11:41 | 2026-10-10 11:36 | CodeRabbit    | 2026-10-10 12:43       |      2/0/0       |               no               |        no         |  no   |
+| 3981 |   3 | 2026-10-10 12:05 | 2026-10-10 11:59 | CodeRabbit    | 2026-10-10 12:43       |      2/0/0       |               no               |        no         |  no   |
+| 3986 |   2 | 2026-10-10 12:09 | 2026-10-10 12:04 | -             | -                      |        -         |              yes               |        yes        |  no   |
+| 3993 |   2 | 2026-10-10 14:59 | 2026-10-10 14:55 | CodeRabbit    | 2026-10-10 15:13       |        -         |              yes               |        yes        |  no   |
+| 3993 |   3 | 2026-10-10 15:07 | 2026-10-10 15:03 | CodeRabbit    | 2026-10-10 15:13       |        -         |              yes               |        yes        |  no   |
+| 3997 |   2 | 2026-10-10 17:30 | 2026-10-10 17:25 | CodeRabbit    | 2026-10-10 19:59       |        -         |               no               |        no         |  no   |
+| 3997 |   3 | 2026-10-10 17:37 | 2026-10-10 17:32 | CodeRabbit    | 2026-10-10 19:59       |        -         |              yes               |        no         |  no   |
+| 4000 |   2 | 2026-10-10 18:42 | 2026-10-10 18:37 | CodeRabbit    | 2026-10-10 19:16       |      1/0/0       |               no               |        no         |  no   |
+| 4000 |   3 | 2026-10-10 18:52 | 2026-10-10 18:48 | CodeRabbit    | 2026-10-10 19:16       |      1/0/0       |              yes               |        no         |  yes  |
+| 4004 |   2 | 2026-10-11 10:12 | 2026-10-11 10:05 | CodeRabbit    | 2026-10-11 10:16       |        -         |              yes               |        no         |  no   |
+| 4004 |   3 | 2026-10-11 10:32 | 2026-10-11 10:26 | CodeRabbit    | 2026-10-11 11:07       |        -         |              yes               |        no         |  no   |
+| 4016 |   2 | 2026-10-11 10:57 | 2026-10-11 10:53 | Codex         | 2026-10-11 10:56       |      1/0/0       |              yes               |        no         |  yes  |
+| 4018 |   2 | 2026-10-11 11:03 | 2026-10-11 11:00 | Codex         | 2026-10-11 11:03       |      1/0/0       |              yes               |        no         |  yes  |
+| 4023 |   2 | 2026-10-11 17:03 | 2026-10-11 16:59 | Codex         | 2026-10-11 17:02       |      1/0/0       |               no               |        yes        |  no   |
+| 4023 |   3 | 2026-10-11 17:18 | 2026-10-11 17:14 | Codex         | 2026-10-11 17:58       |      1/0/0       |              yes               |        yes        |  yes  |
+| 4030 |   2 | 2026-10-11 13:57 | 2026-10-11 13:49 | CodeRabbit    | 2026-10-11 14:25       |      1/0/0       |               no               |        no         |  no   |
+| 4030 |   3 | 2026-10-11 14:14 | 2026-10-11 14:07 | CodeRabbit    | 2026-10-11 14:25       |      1/0/0       |               no               |        no         |  no   |
+| 4040 |   2 | 2026-10-11 19:19 | 2026-10-11 19:16 | -             | -                      |        -         |              yes               |        no         |  no   |
+| 4041 |   2 | 2026-10-11 20:11 | 2026-10-11 20:05 | Codex         | 2026-10-11 20:09       |      2/0/0       |              yes               |        yes        |  yes  |
+| 4044 |   2 | 2026-10-12 01:00 | 2026-10-12 00:53 | Codex         | 2026-10-12 00:55       |      0/1/0       |              yes               |        no         |  no   |
+| 4045 |   2 | 2026-10-12 01:03 | 2026-10-12 00:57 | Codex         | 2026-10-12 01:01       |      2/0/0       |               no               |        yes        |  no   |
+| 4045 |   3 | 2026-10-12 01:17 | 2026-10-12 01:14 | -             | -                      |        -         |              yes               |        yes        |  no   |
+| 4046 |   2 | 2026-10-12 02:00 | 2026-10-12 01:54 | CodeRabbit    | 2026-10-12 02:06       |      4/0/0       |               no               |        no         |  no   |
+| 4046 |   3 | 2026-10-12 02:28 | 2026-10-12 02:22 | CodeRabbit    | 2026-10-12 02:23       |        -         |              yes               |        no         |  no   |
+| 4048 |   2 | 2026-10-12 01:23 | 2026-10-12 01:18 | Codex         | 2026-10-12 10:27       |      1/0/0       |               no               |        no         |  no   |
+| 4048 |   3 | 2026-10-12 10:29 | 2026-10-12 10:25 | Codex         | 2026-10-12 10:27       |      1/0/0       |               no               |        no         |  no   |
+| 4052 |   2 | 2026-10-12 02:29 | 2026-10-12 02:23 | -             | -                      |        -         |              yes               |        no         |  no   |
+| 4058 |   2 | 2026-10-12 04:15 | 2026-10-12 04:10 | Codex         | 2026-10-12 04:13       |      1/0/0       |               no               |        yes        |  no   |
+| 4058 |   3 | 2026-10-12 04:20 | 2026-10-12 04:13 | Codex         | 2026-10-12 04:17       |      1/0/0       |               no               |        yes        |  no   |
+| 4069 |   2 | 2026-10-12 10:52 | 2026-10-12 10:48 | Codex         | 2026-10-12 10:52       |      1/0/0       |               no               |        no         |  no   |
+| 4069 |   3 | 2026-10-12 11:06 | 2026-10-12 11:02 | Codex         | 2026-10-12 11:06       |      1/0/0       |               no               |        yes        |  no   |
+| 4072 |   3 | 2026-10-12 11:33 | 2026-10-12 11:31 | Codex         | 2026-10-12 11:34       |      1/0/0       |              yes               |        yes        |  yes  |
+| 4073 |   2 | 2026-10-12 11:40 | 2026-10-12 11:34 | Codex         | 2026-10-12 13:39       |      3/0/0       |               no               |        yes        |  no   |
+| 4073 |   3 | 2026-10-12 12:36 | 2026-10-12 12:31 | Codex         | 2026-10-12 13:39       |      3/0/0       |               no               |        yes        |  no   |
+| 4074 |   2 | 2026-10-12 11:33 | 2026-10-12 11:29 | Codex         | 2026-10-12 11:33       |      1/0/0       |              yes               |        yes        |  yes  |
+| 4077 |   3 | 2026-10-12 13:45 | 2026-10-12 13:40 | CodeRabbit    | 2026-10-12 15:05       |      1/1/0       |               no               |        yes        |  no   |
+| 4082 |   2 | 2026-10-12 14:58 | 2026-10-12 14:53 | Codex         | 2026-10-12 14:56       |      1/0/0       |               no               |        no         |  no   |
+| 4082 |   3 | 2026-10-12 15:36 | 2026-10-12 15:32 | Codex         | 2026-10-12 15:36       |      2/0/0       |               no               |        no         |  no   |
+| 4092 |   2 | 2026-10-13 01:26 | 2026-10-13 01:22 | -             | -                      |        -         |               no               |        no         |  no   |
+| 4092 |   3 | 2026-10-13 02:41 | 2026-10-13 02:35 | -             | -                      |        -         |               no               |        no         |  no   |
+| 4100 |   2 | 2026-10-13 01:24 | 2026-10-13 01:21 | -             | -                      |        -         |              yes               |        yes        |  no   |
+| 4125 |   2 | 2026-10-13 02:38 | 2026-10-13 02:34 | -             | -                      |        -         |              yes               |        yes        |  no   |
+| 4147 |   2 | 2026-10-13 05:16 | 2026-10-13 05:10 | -             | -                      |        -         |               no               |        no         |  no   |
+| 4147 |   3 | 2026-10-13 05:38 | 2026-10-13 05:33 | -             | -                      |        -         |               no               |        no         |  no   |
+| 4148 |   3 | 2026-10-13 06:06 | 2026-10-13 06:03 | -             | -                      |        -         |              yes               |        yes        |  no   |
+| 4149 |   2 | 2026-10-13 05:24 | 2026-10-13 05:20 | -             | -                      |        -         |              yes               |        yes        |  no   |
+| 4153 |   2 | 2026-10-13 08:22 | 2026-10-13 08:20 | -             | -                      |        -         |              yes               |        yes        |  no   |
+| 4155 |   2 | 2026-10-13 08:28 | 2026-10-13 08:24 | Codex         | 2026-10-13 10:16       |      1/0/0       |              yes               |        yes        |  yes  |
+| 4156 |   2 | 2026-10-13 06:48 | 2026-10-13 06:37 | Codex         | 2026-10-13 06:40       |      1/0/0       |              yes               |        yes        |  yes  |
+| 4156 |   3 | 2026-10-13 07:02 | 2026-10-13 06:57 | -             | -                      |        -         |              yes               |        yes        |  no   |
+| 4159 |   2 | 2026-10-13 06:56 | 2026-10-13 06:50 | CodeRabbit    | 2026-10-13 06:56       |      2/0/0       |              yes               |        no         |  yes  |
+| 4160 |   2 | 2026-10-13 07:10 | 2026-10-13 07:06 | -             | -                      |        -         |               no               |        yes        |  no   |
+| 4160 |   3 | 2026-10-13 07:26 | 2026-10-13 07:21 | -             | -                      |        -         |               no               |        yes        |  no   |
+| 4176 |   3 | 2026-10-13 12:42 | 2026-10-13 12:37 | -             | -                      |        -         |              yes               |        yes        |  no   |
+| 4178 |   2 | 2026-10-13 13:37 | 2026-10-13 13:33 | -             | -                      |        -         |              yes               |        no         |  no   |
+| 4207 |   2 | 2026-10-13 20:25 | 2026-10-13 20:22 | Codex         | 2026-10-13 20:45       |      0/1/0       |              yes               |        yes        |  no   |
+| 4229 |   2 | 2026-10-13 22:38 | 2026-10-13 22:34 | -             | -                      |        -         |              yes               |        yes        |  no   |
+| 4231 |   2 | 2026-10-13 22:46 | 2026-10-13 22:41 | -             | -                      |        -         |               no               |        no         |  no   |
+| 4231 |   3 | 2026-10-13 23:01 | 2026-10-13 22:56 | -             | -                      |        -         |               no               |        no         |  no   |
+| 4246 |   2 | 2026-10-14 03:35 | 2026-10-14 03:32 | Codex         | 2026-10-14 03:35       |      1/0/0       |              yes               |        yes        |  yes  |
+| 4246 |   3 | 2026-10-14 03:49 | 2026-10-14 03:46 | -             | -                      |        -         |              yes               |        yes        |  no   |
+| 4249 |   2 | 2026-10-14 07:00 | 2026-10-14 06:57 | -             | -                      |        -         |               no               |        yes        |  no   |
+| 4249 |   3 | 2026-10-14 07:09 | 2026-10-14 07:05 | -             | -                      |        -         |              yes               |        yes        |  no   |
+| 4262 |   3 | 2026-10-14 09:05 | 2026-10-14 08:52 | Codex         | 2026-10-14 08:56       |      0/1/0       |              yes               |        yes        |  no   |
+| 4263 |   3 | 2026-10-14 09:35 | 2026-10-14 09:28 | Codex         | 2026-10-14 09:32       |      1/0/0       |              yes               |        no         |  yes  |
+| 4266 |   2 | 2026-10-14 12:35 | 2026-10-14 12:31 | -             | -                      |        -         |              yes               |        yes        |  no   |
+| 4268 |   2 | 2026-10-14 12:04 | 2026-10-14 11:57 | -             | -                      |        -         |               no               |        yes        |  no   |
+| 4268 |   3 | 2026-10-14 12:17 | 2026-10-14 12:13 | -             | -                      |        -         |              yes               |        yes        |  no   |
+| 4271 |   3 | 2026-10-14 13:28 | 2026-10-14 13:21 | Codex         | 2026-10-14 13:25       |      0/0/2       |              yes               |        yes        |  no   |
+| 4285 |   2 | 2026-10-14 15:41 | 2026-10-14 15:36 | -             | -                      |        -         |               no               |        no         |  no   |
+| 4285 |   3 | 2026-10-14 16:05 | 2026-10-14 16:00 | -             | -                      |        -         |               no               |        no         |  no   |
+| 4292 |   2 | 2026-10-14 16:40 | 2026-10-14 16:37 | -             | -                      |        -         |              yes               |        no         |  no   |
+| 4317 |   2 | 2026-10-15 00:03 | 2026-10-14 23:57 | Codex         | 2026-10-15 00:01       |      2/0/0       |               no               |        yes        |  no   |
+| 4317 |   3 | 2026-10-15 00:32 | 2026-10-15 00:25 | -             | -                      |        -         |               no               |        yes        |  no   |
+| 4322 |   2 | 2026-10-15 01:15 | 2026-10-15 01:11 | -             | -                      |        -         |              yes               |        yes        |  no   |
+| 4325 |   2 | 2026-10-15 01:29 | 2026-10-15 01:22 | -             | -                      |        -         |               no               |        no         |  no   |
+| 4325 |   3 | 2026-10-15 01:52 | 2026-10-15 01:46 | -             | -                      |        -         |              yes               |        no         |  no   |
+| 4329 |   2 | 2026-10-15 01:51 | 2026-10-15 01:48 | CodeRabbit    | 2026-10-15 13:39       |      1/0/0       |               no               |        no         |  no   |
+| 4329 |   3 | 2026-10-15 13:38 | 2026-10-15 13:34 | CodeRabbit    | 2026-10-15 13:39       |      1/0/0       |              yes               |        no         |  yes  |
+| 4331 |   2 | 2026-10-15 02:16 | 2026-10-15 02:09 | CodeRabbit    | 2026-10-15 03:54       |      6/0/0       |               no               |        yes        |  no   |
+| 4331 |   3 | 2026-10-15 02:30 | 2026-10-15 02:24 | CodeRabbit    | 2026-10-15 03:54       |      6/0/0       |              yes               |        yes        |  yes  |
+| 4337 |   2 | 2026-10-15 03:54 | 2026-10-15 03:49 | CodeRabbit    | 2026-10-15 05:00       |      1/0/0       |               no               |        yes        |  no   |
+| 4337 |   3 | 2026-10-15 04:15 | 2026-10-15 04:10 | CodeRabbit    | 2026-10-15 05:00       |      1/0/0       |               no               |        yes        |  no   |
+| 4356 |   2 | 2026-10-15 07:17 | 2026-10-15 07:14 | -             | -                      |        -         |              yes               |        yes        |  no   |
+| 4357 |   2 | 2026-10-15 07:08 | 2026-10-15 07:03 | Codex         | 2026-10-15 07:08       |      2/0/0       |               no               |        yes        |  no   |
+| 4357 |   3 | 2026-10-15 07:30 | 2026-10-15 07:25 | Codex         | 2026-10-15 07:36       |      2/0/0       |               no               |        yes        |  no   |
+| 4360 |   2 | 2026-10-15 08:16 | 2026-10-15 08:12 | Codex         | 2026-10-15 08:16       |      1/0/0       |               no               |        yes        |  no   |
+| 4360 |   3 | 2026-10-15 08:27 | 2026-10-15 08:23 | -             | -                      |        -         |              yes               |        yes        |  no   |
+| 4363 |   3 | 2026-10-15 09:47 | 2026-10-15 09:43 | -             | -                      |        -         |              yes               |        yes        |  no   |
+| 4385 |   3 | 2026-10-15 16:39 | 2026-10-15 16:35 | Codex         | 2026-10-15 16:38       |      1/0/0       |               no               |        yes        |  no   |
+| 4388 |   2 | 2026-10-15 16:23 | 2026-10-15 16:18 | -             | -                      |        -         |              yes               |        yes        |  no   |
+| 4390 |   2 | 2026-10-15 17:12 | 2026-10-15 17:07 | -             | -                      |        -         |              yes               |        no         |  no   |
+| 4403 |   2 | 2026-10-15 18:13 | 2026-10-15 18:08 | CodeRabbit    | 2026-10-16 15:29       |      2/0/0       |              yes               |        no         |  yes  |
+| 4405 |   2 | 2026-10-15 22:18 | 2026-10-15 22:15 | -             | -                      |        -         |               no               |        yes        |  no   |
+| 4405 |   3 | 2026-10-15 23:20 | 2026-10-15 23:18 | -             | -                      |        -         |              yes               |        yes        |  no   |
+| 4406 |   2 | 2026-10-15 23:43 | 2026-10-15 23:41 | -             | -                      |        -         |              yes               |        yes        |  no   |
+| 4407 |   2 | 2026-10-15 22:19 | 2026-10-15 22:16 | Codex         | 2026-10-15 22:41       |      1/0/0       |              yes               |        no         |  yes  |
+| 4408 |   2 | 2026-10-15 23:11 | 2026-10-15 23:05 | Codex         | 2026-10-15 23:07       |      1/0/0       |               no               |        yes        |  no   |
+| 4408 |   3 | 2026-10-16 14:24 | 2026-10-16 14:19 | Codex         | 2026-10-16 14:23       |      1/0/0       |               no               |        yes        |  no   |
+| 4416 |   2 | 2026-10-16 00:01 | 2026-10-15 23:56 | Codex         | 2026-10-16 00:00       |      4/0/0       |               no               |        yes        |  no   |
+| 4416 |   3 | 2026-10-16 03:15 | 2026-10-16 03:10 | Codex         | 2026-10-16 03:16       |      1/0/0       |               no               |        yes        |  no   |
+| 4425 |   2 | 2026-10-16 05:22 | 2026-10-16 05:16 | -             | -                      |        -         |              yes               |        no         |  no   |
+| 4443 |   3 | 2026-10-16 18:07 | 2026-10-16 18:04 | -             | -                      |        -         |              yes               |        yes        |  no   |
+| 4448 |   2 | 2026-10-16 18:56 | 2026-10-16 18:50 | -             | -                      |        -         |               no               |        yes        |  no   |
+| 4448 |   3 | 2026-10-17 07:02 | 2026-10-17 06:51 | -             | -                      |        -         |              yes               |        yes        |  no   |
+| 4452 |   2 | 2026-10-16 21:32 | 2026-10-16 21:27 | CodeRabbit    | 2026-10-16 21:34       |      2/0/0       |               no               |        yes        |  no   |
+| 4452 |   3 | 2026-10-16 22:03 | 2026-10-16 21:57 | CodeRabbit    | 2026-10-16 21:59       |        -         |               no               |        yes        |  no   |
+| 4455 |   2 | 2026-10-16 22:13 | 2026-10-16 22:05 | CodeRabbit    | 2026-10-16 22:38       |      4/1/0       |              yes               |        yes        |  yes  |
+| 4457 |   2 | 2026-10-17 04:19 | 2026-10-17 04:15 | CodeRabbit    | 2026-10-17 04:16       |        -         |              yes               |        no         |  no   |
+| 4485 |   2 | 2026-10-17 19:50 | 2026-10-17 19:47 | Codex         | 2026-10-17 19:49       |      2/0/0       |              yes               |        no         |  yes  |
+| 4485 |   3 | 2026-10-17 20:09 | 2026-10-17 20:05 | Codex         | 2026-10-17 20:09       |      1/0/0       |              yes               |        no         |  yes  |
+| 4486 |   2 | 2026-10-17 20:44 | 2026-10-17 20:41 | -             | -                      |        -         |              yes               |        yes        |  no   |
+| 4505 |   2 | 2026-10-18 11:21 | 2026-10-18 11:18 | Codex         | 2026-10-18 11:21       |      2/0/0       |              yes               |        no         |  yes  |
+| 4514 |   2 | 2026-10-18 16:00 | 2026-10-18 15:55 | Codex         | 2026-10-18 15:58       |      0/2/0       |              yes               |        yes        |  no   |
+| 4558 |   2 | 2026-10-19 14:04 | 2026-10-19 13:28 | Codex         | 2026-10-19 14:17       |      1/0/0       |              yes               |        yes        |  yes  |
+| 4567 |   2 | 2026-10-19 18:46 | 2026-10-19 18:39 | Codex         | 2026-10-19 18:44       |      2/0/0       |              yes               |        yes        |  yes  |
+| 4572 |   3 | 2026-10-20 01:57 | 2026-10-20 01:53 | Codex         | 2026-10-20 01:56       |      1/0/0       |              yes               |        yes        |  yes  |
+| 4577 |   3 | 2026-10-20 06:39 | 2026-10-20 06:36 | Codex         | 2026-10-20 06:39       |      1/0/0       |               no               |        yes        |  no   |
+| 4578 |   3 | 2026-10-20 12:09 | 2026-10-20 12:07 | CodeRabbit    | 2026-10-20 12:08       |        -         |              yes               |        yes        |  no   |
+| 4591 |   2 | 2026-10-21 03:55 | 2026-10-21 03:52 | CodeRabbit    | 2026-10-21 03:56       |      1/0/0       |               no               |        yes        |  no   |
+| 4591 |   3 | 2026-10-21 04:17 | 2026-10-21 04:13 | Codex         | 2026-10-21 04:15       |      1/0/0       |              yes               |        yes        |  yes  |
+| 4604 |   2 | 2026-10-21 11:28 | 2026-10-21 11:24 | CodeRabbit    | 2026-10-21 11:29       |      1/0/0       |              yes               |        yes        |  yes  |
+| 4604 |   3 | 2026-10-21 11:52 | 2026-10-21 11:47 | Codex         | 2026-10-21 11:50       |      2/0/0       |               no               |        yes        |  no   |
+| 4606 |   2 | 2026-10-21 11:44 | 2026-10-21 11:40 | Codex         | 2026-10-21 12:28       |      1/0/0       |              yes               |        yes        |  yes  |
+| 4606 |   3 | 2026-10-21 12:28 | 2026-10-21 12:23 | Codex         | 2026-10-21 12:28       |      1/0/0       |              yes               |        yes        |  yes  |
+| 4608 |   2 | 2026-10-21 12:19 | 2026-10-21 12:15 | Codex         | 2026-10-21 12:18       |      3/0/0       |              yes               |        yes        |  yes  |
+| 4608 |   3 | 2026-10-21 12:41 | 2026-10-21 12:37 | Codex         | 2026-10-21 12:41       |      3/0/0       |              yes               |        yes        |  yes  |
+| 4620 |   2 | 2026-10-22 11:56 | 2026-10-22 11:51 | Codex         | 2026-10-22 11:59       |      1/0/0       |               no               |        yes        |  no   |
+| 4620 |   3 | 2026-10-22 12:28 | 2026-10-22 12:23 | Codex         | 2026-10-22 12:45       |      1/0/0       |              yes               |        yes        |  yes  |
+| 4632 |   3 | 2026-10-23 01:59 | 2026-10-23 01:55 | Codex         | 2026-10-23 01:58       |      1/0/0       |              yes               |        yes        |  yes  |
+| 4633 |   2 | 2026-10-23 03:13 | 2026-10-23 03:08 | Codex         | 2026-10-23 03:13       |      1/0/0       |              yes               |        no         |  yes  |
+| 4651 |   2 | 2026-10-23 08:10 | 2026-10-23 08:04 | CodeRabbit    | 2026-10-23 08:15       |      0/0/3       |              yes               |        yes        |  no   |
+| 4654 |   3 | 2026-10-23 10:45 | 2026-10-23 10:41 | CodeRabbit    | 2026-10-23 10:57       |        -         |              yes               |        no         |  no   |
+| 4677 |   2 | 2026-10-24 11:16 | 2026-10-24 11:13 | Codex         | 2026-10-24 11:14       |      1/0/0       |              yes               |        yes        |  yes  |
+| 4688 |   2 | 2026-10-25 03:22 | 2026-10-25 03:18 | CodeRabbit    | 2026-10-25 09:04       |        -         |              yes               |        no         |  no   |
+| 4690 |   2 | 2026-10-24 23:52 | 2026-10-24 23:48 | Codex         | 2026-10-25 06:26       |      1/0/0       |              yes               |        yes        |  yes  |
+| 4709 |   2 | 2026-10-25 07:47 | 2026-10-25 07:43 | Codex         | 2026-10-25 08:46       |      0/1/0       |              yes               |        no         |  no   |
+| 4709 |   3 | 2026-10-25 08:48 | 2026-10-25 08:44 | Codex         | 2026-10-25 08:46       |      0/1/0       |              yes               |        yes        |  no   |
+| 4719 |   3 | 2026-10-25 10:50 | 2026-10-25 10:47 | CodeRabbit    | 2026-10-25 11:08       |      1/1/0       |              yes               |        yes        |  yes  |
+| 4733 |   2 | 2026-10-25 14:55 | 2026-10-25 14:50 | Codex         | 2026-10-25 14:53       |      1/0/0       |               no               |        no         |  no   |
