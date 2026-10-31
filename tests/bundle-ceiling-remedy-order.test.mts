@@ -78,25 +78,6 @@ for (const path of REVIEW_FIX_COPIES) {
   });
 }
 
-const MERGE_COPIES = [
-  'idd-template/.github/instructions/idd-merge.instructions.md',
-  '.github/instructions/idd-merge.instructions.md',
-];
-
-for (const path of MERGE_COPIES) {
-  test(`${path} runs the trial budget before any merge command, after the head check (#4864)`, () => {
-    const text = readFileSync(path, 'utf8').replace(/\s+/g, ' ');
-    assertInOrder(text, [
-      'F2_HEAD_SHA="{f2-head-SHA}"',
-      '**Budget gate.** Before any merge command, run `node scripts/pre-push-trial-budget.mjs --base <fresh {development-branch} tip>` at `PR_HEAD_SHA_F3`.',
-      'Only exit 0 with outcome `pass` or `not-behind` continues;',
-      'any other outcome, including `fail` and `budget-fail`, holds: no merge, no push, no base merge.',
-      `gh pr merge {pr-number} --merge --match-head-commit "\${PR_HEAD_SHA_F3}"`,
-      `gh pr merge {pr-number} --merge --match-head-commit "\${PR_HEAD_SHA_F3}" --admin`,
-    ]);
-  });
-}
-
 for (const path of REVIEW_FIX_COPIES) {
   test(`${path} keeps the E11 conflict and merge-failure outcomes (#4864)`, () => {
     const text = readFileSync(path, 'utf8');

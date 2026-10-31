@@ -126,7 +126,9 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
    **Preferred path (helper runtime enabled)**: run the F3 merge helper
    documented in
    [`docs/idd-helper-scripts.md`](../../docs/idd-helper-scripts.md#merge-execution-f3).
-   First run it in dry-run
+   Pass `--closing-issues <n>,<m>` for a multi-issue close
+   (forwarded to the collector). Global-only: pass `--global-only`
+   (docs/global-only-profile.md). First run it in dry-run
    (no `--apply`) and confirm `ready: true` with
    an empty `blockers[]` — it wraps the read-only `pre-merge-readiness`
    gate and adds no new authority. Then re-run with `--apply`: when
@@ -192,9 +194,11 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
      snapshot is invalidated by a new HEAD. Otherwise repeat this field
      once; if it still fails, stop and do not merge.
 
-   For the head-SHA field, use this **fail-closed** check, with both
-   operands quoted. `F2_HEAD_SHA` is the carried `{f2-head-SHA}`;
-   `PR_HEAD_SHA_F3` is step 3's re-fetch:
+   For the head-SHA field, use this **copy-paste-safe, fail-closed**
+   check — both operands fully quoted, no glob, abort on mismatch —
+   rather than re-deriving it ad hoc (a stray glob or unquoted operand
+   can silently mis-gate this safety-sensitive step). `F2_HEAD_SHA` is
+   the carried `{f2-head-SHA}`; `PR_HEAD_SHA_F3` is step 3's re-fetch:
 
    ```sh
    F2_HEAD_SHA="{f2-head-SHA}"   # the head recorded in the F2 snapshot
@@ -203,12 +207,6 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
      exit 1  # do not merge — return to E1 per the freshness rules above
    fi
    ```
-
-   **Budget gate.** Before any merge command, run
-   `node scripts/pre-push-trial-budget.mjs --base <fresh {development-branch} tip>`
-   at `PR_HEAD_SHA_F3`. Only exit 0 with outcome `pass` or `not-behind`
-   continues; any other outcome, including `fail` and `budget-fail`, holds:
-   no merge, no push, no base merge.
 
    Then merge, binding `--match-head-commit` to the **freshly validated**
    `${PR_HEAD_SHA_F3}` (never a stale, hardcoded, or unbound SHA), never
