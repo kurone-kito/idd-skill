@@ -1323,8 +1323,11 @@ parent's terminal phase. Pause new refills/claims while the parent implements,
 while managing known siblings normally; a hold on another issue is local, not
 global exhaustion. Resume ordinary discovery/refill after the parent reaches
 terminal and let normal budget/overlap checks choose eligible work. Never
-restart the ended child or mint a claim, nonce, or forced handoff. Do not
-delete a branch/worktree, take over a lock automatically, or reset lost work.
+restart the ended child or mint a claim, nonce, or forced handoff. During
+recovery, do not delete the ended child's branch/worktree, take over a lock
+automatically, or reset lost work. After the parent reaches its terminal phase,
+the normal cleanup contract applies, including proof-bound F4 removal of the
+linked worktree and branch under `fully_autonomous_merge`.
 Report the child's actual pre-work stop and the parent's later result
 separately. Do not append a terminal worker report or F4 result for the pre-B1
 child, and do not change the worker-report schema.
