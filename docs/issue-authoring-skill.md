@@ -1131,7 +1131,18 @@ complete, successful `git worktree list --porcelain` run and outside every Git
 directory. The trusted Git executable is the single absolute executable
 resolved by the runtime's configured command lookup before the Git environment
 is sanitized. Resolve it once, do not use a shell alias or function, and use
-that same executable for every inventory command in this run. Run that command
+that same executable for every inventory command in this run. A command lookup
+can be steered by the session's `PATH`, so before trusting the executable's
+output, require that file and every directory on its canonical path to be owned
+by the current user or a system administrator principal (POSIX UID 0; on
+Windows, LocalSystem, TrustedInstaller, or the built-in Administrators group).
+No user other than those principals may be able to write the file, and no
+directory on that path may let another user rename or delete its entries: on
+POSIX, none may grant group or other users write and search permission without
+the sticky bit, and on Windows and macOS, none may have an ACL that lets another
+user rename or delete child entries. If any of this cannot be
+established, the protected-path inventory is unreadable. The executable check is
+preventive; no observed incident yet. Run that command
 from the current worktree with that executable, `GIT_DIR`, `GIT_WORK_TREE`, `GIT_COMMON_DIR`,
 `GIT_CEILING_DIRECTORIES`, and `GIT_DISCOVERY_ACROSS_FILESYSTEM` unset, and
 Git's diagnostic locale fixed to C (`LC_ALL=C` where supported). Require exit
