@@ -1607,6 +1607,9 @@ test('the package-based Node floor fails closed for malformed or unreadable mani
     extractNamedStepBody(workflow, 'lint', 'Assert Node.js floor'),
   );
   const malformedManifests: readonly [string, string][] = [
+    ['{}', '<unavailable>'],
+    ['{"engines":{}}', '<unavailable>'],
+    ['{"engines":{"node":24}}', '<unavailable>'],
     ['{"engines":{"node":"^22.23.2"}}', '^22.23.2'],
     ['{"engines":{"node":">=22.0.0 || ^24.0.0"}}', '>=22.0.0 || ^24.0.0'],
     ['{', '<unavailable>'],
