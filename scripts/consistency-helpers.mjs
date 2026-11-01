@@ -1269,6 +1269,10 @@ export function collectDuplicateSyncPairTargets(syncPairs) {
   return violations;
 }
 /**
+ * ENGINES_RANGE_MIRRORS lists files that still repeat package.json's
+ * `engines.node` range or its 22 low bound. Workflow floor assertions read
+ * package.json after checkout instead of joining that set.
+ *
  * Parses `^<v1>.<x>.<y> (|| ^<vN>.<x>.<y>)* || >=<high>.<x>.<y>` -- one or
  * more `^` clauses, in written order, followed by exactly one trailing `>=`
  * clause -- into an ordered list of version strings (the `>=` clause last).
