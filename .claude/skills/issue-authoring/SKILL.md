@@ -414,24 +414,40 @@ needs-decision, blocked-by-human, and out-of-scope.
 Before the first ledger write, read
 [Ledger storage](references/contract.md#ledger-storage) and follow it. In brief:
 use a supplied scratch root only if it passes its checks; if a supplied root
-fails, stop without trying another root. When no root is supplied, allocate a
-new `issue-authoring-<uuid>` directory with exclusive creation (a non-recursive
-`mkdir`, never `mkdir -p`) in the OS temporary directory, or in the user state
-directory if it already exists, outside every worktree and git directory,
-including mount aliases verified by native filesystem evidence. Keep one
-owner-only `<uuid>.json` ledger per draft, created with exclusive creation;
-rename it to the issue number without overwriting another file. Never share a
-ledger or write one to the repository or a marker, and never reuse another
-session's namespace. A lost ledger starts empty. Unsafe, conflicting, or unreadable
-storage stops the review: report the path and preserve unverified entries; the
-contract permits cleanup only for entries this session created whose identity
-still matches. Send the drafts to a carrier marked `Review: not reviewed`.
+fails, stop and report without trying another root. When no root is supplied,
+allocate a new `issue-authoring-<uuid>` directory with exclusive creation (a
+non-recursive `mkdir`, never `mkdir -p`) in the runtime's absolute temporary
+directory, or in the existing user state directory. Use `$XDG_STATE_HOME`,
+`$HOME`, or `%LOCALAPPDATA%` only when its value is a fully qualified absolute
+path, never resolved against the current directory. Keep
+the namespace outside every worktree and Git directory, including mount aliases
+checked through filesystem evidence. Keep one owner-only `<uuid>.json` ledger
+per draft; rename it to the issue number without overwriting another file.
+Never share a ledger or write one to the repository or a marker, and never reuse
+another session's namespace. Unsafe, conflicting, or unreadable storage stops
+the review: report its path and preserve unverified entries; cleanup is limited
+to entries this session created whose recorded identity still matches.
+
+A lost ledger starts empty. Losing the identity record, including after context
+compaction, loses the ledger: allocate a new namespace under the supplied root
+when retained history shows one; when history does not show whether a root was
+supplied, write no ledger and ask the operator. If a registered worktree
+checkout is absent, stop with a message that names the path and the operator
+step: the operator confirms the path is absent and runs `git worktree prune`,
+and the next run repeats the inventory. Automation never prunes and does not
+bypass claim or worktree recovery.
+
 Resolve every root path component without following links, and require each
 ledger read, write, copy, replacement, and unlink to hold the namespace's
-verified exclusive lock while rechecking ownership and hashes. Fail closed if
-the complete path or lock cannot be verified.
-Instructions-only and same-response self-critique runs follow the same
-procedure; no orchestrator, environment variable, or helper is needed.
+verified exclusive lock while rechecking ownership and hashes. An
+instructions-only or same-response self-critique run whose shell calls cannot
+keep the verified directory handle and exclusive lock open in one process must
+not start the procedure: it writes no ledger, never substitutes path-based
+operations, and runs the review without a ledger, as after a lost ledger. To
+keep a ledger, run the procedure in one long-lived process. On macOS, check the
+root's ACL through the verified handle, because the mode bits do not show it.
+When storage stops the review, send the drafts to a carrier marked
+`Review: not reviewed`.
 
 ## Reference Routing
 
