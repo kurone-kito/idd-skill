@@ -779,6 +779,19 @@ function localInstructionsMatchSet(
 
   const root = join(ctx.worktreeRoot, '.github', 'instructions');
   const actual = new Map<string, string>();
+  const generatedBannerStart = Buffer.from('<!-- idd-generated-from:\n');
+  const generatedBannerEnd = Buffer.from('-->\n\n');
+  const stripGeneratedBanner = (bytes: Buffer): Buffer => {
+    if (
+      !bytes
+        .subarray(0, generatedBannerStart.length)
+        .equals(generatedBannerStart)
+    ) {
+      return bytes;
+    }
+    const end = bytes.indexOf(generatedBannerEnd, generatedBannerStart.length);
+    return end < 0 ? bytes : bytes.subarray(end + generatedBannerEnd.length);
+  };
   const visit = (directory: string, relativePath: string): boolean => {
     let names: string[];
     try {
@@ -811,7 +824,7 @@ function localInstructionsMatchSet(
       try {
         actual.set(
           childRelative,
-          sha256(readNoFollowBytes(child, ctx.fs, true)),
+          sha256(stripGeneratedBanner(readNoFollowBytes(child, ctx.fs, true))),
         );
       } catch {
         return false;
@@ -1142,21 +1155,6 @@ function inspectWithContext(
     });
   }
   const bound = binding.record;
-  if (loaded.errors.length > 0) {
-    return baseReport(ctx, 'conflict', {
-      source: ctx.packageSpec === null ? 'unknown' : 'repository-pin',
-      verdict: 'not-verified-usable',
-      compatibility: 'incompatible',
-      recovery: 'reselect',
-      packageVersion: version,
-      ...(bound === null
-        ? {}
-        : {
-            session: { id: ctx.sessionId, binding: 'bound' as const },
-            previousVerifiedSet: cloneJson(bound.selected),
-          }),
-    });
-  }
   // Repository-local instructions keep routing precedence over any global
   // set, including one this session already bound. Verify their complete file
   // tree against that selected immutable set before allowing the local route.
@@ -1278,6 +1276,24 @@ function inspectWithContext(
         candidate = matches[0] ?? null;
       }
 
+      if (candidate === null && loaded.errors.length > 0) {
+        return baseReport(ctx, 'conflict', {
+          source: ctx.packageSpec === null ? 'unknown' : 'repository-pin',
+          verdict: 'not-verified-usable',
+          compatibility: 'incompatible',
+          recovery: 'reselect',
+          packageVersion: version,
+        });
+      }
+      if (candidate !== null && loaded.invalidCommits.has(candidate.commit)) {
+        return baseReport(ctx, 'conflict', {
+          source: 'repository-local',
+          verdict: 'not-verified-usable',
+          compatibility: 'incompatible',
+          recovery: 'reselect',
+          packageVersion: version,
+        });
+      }
       if (candidate === null) {
         return baseReport(ctx, receipt.status, {
           source: 'repository-local',
@@ -1313,6 +1329,18 @@ function inspectWithContext(
         recovery: 'none',
       });
     }
+  }
+  // An unrelated corrupt set must not override a verified local route or a
+  // bound session's per-commit integrity checks. Unbound global selection
+  // still requires a complete prepared-set inventory.
+  if (bound === null && loaded.errors.length > 0) {
+    return baseReport(ctx, 'conflict', {
+      source: ctx.packageSpec === null ? 'unknown' : 'repository-pin',
+      verdict: 'not-verified-usable',
+      compatibility: 'incompatible',
+      recovery: 'reselect',
+      packageVersion: version,
+    });
   }
   if (bound !== null) {
     const pinned = ctx.packageSpec;
