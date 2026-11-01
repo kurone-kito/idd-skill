@@ -12542,6 +12542,21 @@ test('bin/idd-onboard.mjs distribution inspect validates its report and writes n
   assert.equal(missingSession.status, 2);
   assert.match(missingSession.stderr, /requires a non-empty --session-id/u);
   assert.deepEqual(snapshotFull(sandbox.root), before);
+
+  const conflictingModes = runUserGlobal(sandbox, [
+    '--distribution',
+    'inspect',
+    '--session-id',
+    'cli-session',
+    '--distribution',
+    'bind',
+  ]);
+  assert.equal(conflictingModes.status, 2);
+  assert.match(
+    conflictingModes.stderr,
+    /--distribution may be specified only once/u,
+  );
+  assert.deepEqual(snapshotFull(sandbox.root), before);
 });
 
 test('Git repository overrides are sanitized case-insensitively on Windows', () => {

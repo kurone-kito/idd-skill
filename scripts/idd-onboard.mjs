@@ -6736,6 +6736,11 @@ function parseArgs(rawArgv) {
     };
     parsed.givenFlags.push(String(token));
     if (token === '--distribution') {
+      if (parsed.distribution !== undefined) {
+        throw markCliUsageError(
+          new Error('--distribution may be specified only once'),
+        );
+      }
       if (value === 'inspect' || value === 'prepare' || value === 'bind') {
         parsed.distribution = value;
         index += 1;
