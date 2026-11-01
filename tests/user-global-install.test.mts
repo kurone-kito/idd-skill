@@ -1007,6 +1007,219 @@ test('preparation refuses linked roots and hard-linked managed files', () => {
   assert.equal(nodeFs.readFileSync(sentinel, 'utf8'), '# Authoring\n');
 });
 
+interface InterruptedPreparedUninstall {
+  source: string;
+  setRoot: string;
+  manifestPath: string;
+  manifestBytes: Buffer;
+  continuationPath: string;
+  failedPath: string;
+  sentinels: Map<string, string>;
+}
+
+/**
+ * Install the payload, prepare one set, plant unlisted sentinel files, and
+ * run an uninstall whose unlink of a helper file fails after `manifest.json`
+ * was removed (#4917).
+ */
+function interruptPreparedUninstall(
+  home: string,
+  commit: string,
+): InterruptedPreparedUninstall {
+  installPayload(optionsFor(home));
+  const source = makePreparedSource();
+  const prepared = prepareDistributionSet(prepareOptions(home, source, commit));
+  const setRoot = prepared.preparedPath;
+  const manifestPath = join(setRoot, 'manifest.json');
+  const manifestBytes = nodeFs.readFileSync(manifestPath);
+  const continuationPath = join(
+    dataRootOf(home),
+    'prepared',
+    `${commit}.uninstall.json`,
+  );
+  const failedPath = join(setRoot, 'scripts/sample.mjs');
+  const sentinels = new Map([
+    [join(home, '.local', 'share', 'user-note.txt'), 'user note\n'],
+    [join(home, '.claude', 'user-file.md'), '# User file\n'],
+  ]);
+  for (const [path, text] of sentinels) nodeFs.writeFileSync(path, text);
+
+  let continuationBeforeManifest = false;
+  let failed = false;
+  const fs = hookedFs((op, args) => {
+    if (op !== 'unlinkSync') return;
+    if (args[0] === manifestPath) {
+      continuationBeforeManifest = nodeFs.existsSync(continuationPath);
+    }
+    if (args[0] === failedPath && !failed) {
+      failed = true;
+      throw new Error('injected unlink failure');
+    }
+  });
+  assert.throws(
+    () => uninstallPayload(optionsFor(home, { fs })),
+    /uninstall stopped at .*scripts\/sample\.mjs: .*injected unlink failure/,
+  );
+  assert.equal(continuationBeforeManifest, true);
+  return {
+    source,
+    setRoot,
+    manifestPath,
+    manifestBytes,
+    continuationPath,
+    failedPath,
+    sentinels,
+  };
+}
+
+test('an uninstall interrupted after the prepared manifest was removed resumes from its continuation record (#4917)', () => {
+  const home = makeHome();
+  const commit = 'e'.repeat(40);
+  const state = interruptPreparedUninstall(home, commit);
+
+  assert.equal(nodeFs.existsSync(state.manifestPath), false);
+  assert.ok(nodeFs.existsSync(state.failedPath));
+  assert.deepEqual(
+    nodeFs.readFileSync(state.continuationPath),
+    state.manifestBytes,
+  );
+  const listed = new Map(
+    readReceiptEntries(home).map((entry) => [entry.path, entry]),
+  );
+  assert.equal(listed.has(state.manifestPath), false);
+  assert.ok(listed.has(state.failedPath));
+  assert.deepEqual(listed.get(state.continuationPath), {
+    kind: 'file',
+    path: state.continuationPath,
+    sha256: sha256(state.manifestBytes),
+  });
+
+  const interrupted = snapshot(home);
+  assert.throws(
+    () => installPayload(optionsFor(home)),
+    /has an interrupted uninstall recorded at .*run uninstall again to finish removing it/,
+  );
+  assert.throws(
+    () => prepareDistributionSet(prepareOptions(home, state.source, commit)),
+    /has an interrupted uninstall recorded at /,
+  );
+  planUninstall(optionsFor(home));
+  assert.deepEqual(snapshot(home), interrupted);
+
+  const result = uninstallPayload(optionsFor(home));
+  assert.ok(result.lines.includes(`removed ${state.failedPath}`));
+  assert.ok(result.lines.includes(`removed ${state.continuationPath}`));
+  assert.equal(nodeFs.existsSync(dataRootOf(home)), false);
+  for (const [path, text] of state.sentinels) {
+    assert.equal(nodeFs.readFileSync(path, 'utf8'), text);
+  }
+});
+
+test('uninstall resumes from the published manifest when it stopped before writing its continuation record (#4917)', () => {
+  const home = makeHome();
+  const commit = 'f'.repeat(40);
+  const prepared = prepareDistributionSet(
+    prepareOptions(home, makePreparedSource(), commit),
+  );
+  const continuationPath = join(
+    dataRootOf(home),
+    'prepared',
+    `${commit}.uninstall.json`,
+  );
+  let failed = false;
+  const fs = hookedFs((op, args) => {
+    if (op === 'linkSync' && args[1] === continuationPath && !failed) {
+      failed = true;
+      throw new Error('injected publication failure');
+    }
+  });
+
+  assert.throws(
+    () => uninstallPayload(optionsFor(home, { fs })),
+    /uninstall stopped at .*\.uninstall\.json: .*injected publication failure/,
+  );
+  assert.equal(nodeFs.existsSync(continuationPath), false);
+  assert.ok(nodeFs.existsSync(join(prepared.preparedPath, 'manifest.json')));
+  assert.ok(
+    readReceiptEntries(home).some((entry) => entry.path === continuationPath),
+  );
+
+  uninstallPayload(optionsFor(home));
+  assert.equal(nodeFs.existsSync(dataRootOf(home)), false);
+});
+
+test('uninstall still refuses a prepared set whose manifest is missing without a continuation record (#4917)', () => {
+  const home = makeHome();
+  const prepared = prepareDistributionSet(
+    prepareOptions(home, makePreparedSource(), '1'.repeat(40)),
+  );
+  const manifestPath = join(prepared.preparedPath, 'manifest.json');
+  nodeFs.unlinkSync(manifestPath);
+  const unlisted = snapshot(home);
+  assert.throws(
+    () => uninstallPayload(optionsFor(home)),
+    /manifest\.json is not a regular published manifest; refusing/,
+  );
+  assert.deepEqual(snapshot(home), unlisted);
+
+  const receipt = JSON.parse(nodeFs.readFileSync(receiptOf(home), 'utf8')) as {
+    entries: { path: string }[];
+  };
+  receipt.entries = receipt.entries.filter(
+    (entry) => entry.path !== manifestPath,
+  );
+  nodeFs.writeFileSync(receiptOf(home), `${JSON.stringify(receipt)}\n`);
+  const unrecorded = snapshot(home);
+  assert.throws(
+    () => uninstallPayload(optionsFor(home)),
+    /has no published manifest; refusing to trust its prepared receipt entries/,
+  );
+  assert.deepEqual(snapshot(home), unrecorded);
+});
+
+test('a resumed uninstall refuses an edited or missing continuation record and an entry outside its inventory (#4917)', () => {
+  const home = makeHome();
+  const state = interruptPreparedUninstall(home, '2'.repeat(40));
+  const original = nodeFs.readFileSync(receiptOf(home));
+
+  nodeFs.writeFileSync(state.continuationPath, '{"edited":true}\n');
+  let before = snapshot(home);
+  assert.throws(
+    () => uninstallPayload(optionsFor(home)),
+    /\.uninstall\.json does not match its receipt entry/,
+  );
+  assert.deepEqual(snapshot(home), before);
+  nodeFs.writeFileSync(state.continuationPath, state.manifestBytes);
+
+  const extraPath = join(state.setRoot, 'extra.txt');
+  nodeFs.writeFileSync(extraPath, 'extra\n');
+  const receipt = JSON.parse(original.toString('utf8')) as {
+    entries: { kind: string; path: string; sha256?: string }[];
+  };
+  receipt.entries.push({
+    kind: 'file',
+    path: extraPath,
+    sha256: sha256('extra\n'),
+  });
+  nodeFs.writeFileSync(receiptOf(home), `${JSON.stringify(receipt)}\n`);
+  before = snapshot(home);
+  assert.throws(
+    () => uninstallPayload(optionsFor(home)),
+    /extra\.txt is not in the inventory the uninstall continuation .* records/,
+  );
+  assert.deepEqual(snapshot(home), before);
+  nodeFs.unlinkSync(extraPath);
+  nodeFs.writeFileSync(receiptOf(home), original);
+
+  nodeFs.unlinkSync(state.continuationPath);
+  before = snapshot(home);
+  assert.throws(
+    () => uninstallPayload(optionsFor(home)),
+    /has no published manifest and its uninstall continuation .* is absent/,
+  );
+  assert.deepEqual(snapshot(home), before);
+});
+
 test('a fresh install lays down the payload, skills, and receipt, and uninstall removes them', () => {
   const home = makeHome();
   const options = optionsFor(home);
