@@ -1470,6 +1470,38 @@ test('#4877 helper: only a qualifying Copilot review of the current head counts'
   assert.equal(hasCurrentHeadCopilotReview([], WAIT_SHA, 'copilot'), false);
 });
 
+test('#4877 caller: a pending request with a completed current-head review is proven-covers-head', () => {
+  // Copilot is still requested, so the pending path decides. The latest review
+  // names an older commit, so only the any-review check sees the head review.
+  const reviews = [
+    {
+      ...completedCopilotReview(WAIT_SHA),
+      submitted_at: '2026-10-16T01:00:00Z',
+    },
+    {
+      ...completedCopilotReview(OLDER_COMMIT_SHA),
+      submitted_at: '2026-10-16T02:00:00Z',
+    },
+  ];
+  const fixture = {
+    ...waitFixture({ markerAgeMinutes: null, reviews }),
+    requestedReviewerLogins: { [WAIT_PR]: [COPILOT_REVIEW_AUTHOR.login] },
+  };
+  const report = withEmptyCwd(() =>
+    readAdvisoryWaitState(meteredPort(fixture).port, {
+      ...CLAIMED_WAIT_INPUT,
+      now: '',
+      clock: () => WAIT_START_MS,
+    }),
+  );
+  assert.equal(report.copilotPending, true);
+  assert.deepEqual(report.staleRequestRecovery, {
+    action: 'not-applicable',
+    reason: 'proven-covers-head',
+  });
+  assert.deepEqual(validate(report, advisoryWaitStateSchema), []);
+});
+
 test('#4718 caller: a completed review of an earlier HEAD keeps the existing attempt routing', () => {
   const report = staleRecoveryReport([completedCopilotReview(WAIT_OTHER_SHA)]);
   assert.deepEqual(report.staleRequestRecovery, {
