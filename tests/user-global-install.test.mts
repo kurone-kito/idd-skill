@@ -1149,6 +1149,37 @@ test('uninstall resumes from the published manifest when it stopped before writi
   assert.equal(nodeFs.existsSync(dataRootOf(home)), false);
 });
 
+test('a retry finishes an uninstall that stopped while its continuation record still had a temporary link (#4917)', () => {
+  const home = makeHome();
+  const commit = '0'.repeat(40);
+  prepareDistributionSet(prepareOptions(home, makePreparedSource(), commit));
+  const continuationPath = join(
+    dataRootOf(home),
+    'prepared',
+    `${commit}.uninstall.json`,
+  );
+  let failed = false;
+  const fs = hookedFs((op, args) => {
+    if (
+      op === 'unlinkSync' &&
+      String(args[0]).startsWith(`${continuationPath}.idd-prepared-tmp-`) &&
+      !failed
+    ) {
+      failed = true;
+      throw new Error('injected temporary unlink failure');
+    }
+  });
+
+  assert.throws(
+    () => uninstallPayload(optionsFor(home, { fs })),
+    /uninstall stopped at .*\.uninstall\.json: .*injected temporary unlink failure/,
+  );
+  assert.equal(nodeFs.statSync(continuationPath).nlink, 2);
+
+  uninstallPayload(optionsFor(home));
+  assert.equal(nodeFs.existsSync(dataRootOf(home)), false);
+});
+
 test('uninstall still refuses a prepared set whose manifest is missing without a continuation record (#4917)', () => {
   const home = makeHome();
   const prepared = prepareDistributionSet(

@@ -3788,9 +3788,11 @@ function uninstallPayloadWithContext(ctx: Context): UserGlobalResult {
   // this plan validated (#4917). The receipt lists the record first, so a
   // failed write leaves an entry that a retry recognizes; the manifest is the
   // first file removed, and a retry after a later failure checks what is left
-  // against this record instead of refusing for the missing manifest.
+  // against this record instead of refusing for the missing manifest. A
+  // record that is already present goes through the same write, which only
+  // verifies it and drops a temporary file a crash left linked to it.
   for (const group of preparedGroups) {
-    if (group.continuationWritten || group.manifestBytes === null) continue;
+    if (group.manifestBytes === null) continue;
     if (!entries.has(group.continuationPath)) {
       entries.set(group.continuationPath, {
         kind: 'file',
@@ -3810,7 +3812,9 @@ function uninstallPayloadWithContext(ctx: Context): UserGlobalResult {
     } catch (error) {
       stopAt(group.continuationPath, error);
     }
-    lines.push(`recorded ${group.continuationPath}`);
+    if (!group.continuationWritten) {
+      lines.push(`recorded ${group.continuationPath}`);
+    }
   }
   // Remove a set's continuation record once nothing else of that set is
   // listed: after its set root, and before the prepared root is judged.
