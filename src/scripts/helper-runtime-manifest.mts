@@ -1462,7 +1462,7 @@ function walkHelperEntryClosure(
     }
     if (requireResolvableImports && dependencies.unresolvedDelegations > 0) {
       throw new Error(
-        `${currentPath} passes runHelper something other than one string literal, so the script it runs cannot be resolved; this wrapper is not supported`,
+        `${currentPath} uses runHelper in a way that does not name one script (a call without one string literal argument, an alias or a value passed on, or runHelper from a module other than run-helper), so the script it runs cannot be resolved; this wrapper is not supported`,
       );
     }
     for (const delegation of dependencies.delegated) {
@@ -2477,7 +2477,7 @@ function statIfPresent(filePath: string) {
 type SourceToken =
   | { type: 'name'; value: string; operator?: boolean }
   | { type: 'string'; value: string }
-  | { type: 'punct'; value: string; regexAfter?: boolean }
+  | { type: 'punct'; value: string; regexAfter?: boolean; openIndex?: number }
   | { type: 'template'; value: 'head' | 'middle' | 'tail' }
   | { type: 'literal' };
 
@@ -2540,13 +2540,19 @@ function scanRegexLiteral(source: string, start: number): number {
 
 function tokenizeJavaScript(source: string): SourceToken[] {
   const tokens: SourceToken[] = [];
-  // What each open `{` started: a statement block, an expression (an object
-  // literal), or a `${` template substitution.
-  const braces: ('block' | 'expression' | 'substitution')[] = [];
+  // What each open `{` started: a statement block, the body of a function
+  // or class expression (`body`, which ends an expression), an expression
+  // (an object literal), or a `${` template substitution.
+  const braces: ('block' | 'body' | 'expression' | 'substitution')[] = [];
   // Each open `(`: whether it is the head of an `if`, `for`, `while`, or
-  // `with` (`control`), whether it is a `for` head, and whether that head
-  // has already met its `of` operator.
-  const parens: { control: boolean; forHead: boolean; sawOf: boolean }[] = [];
+  // `with` (`control`), whether it is a `for` head, whether that head has
+  // already met its `of` operator, and the index of its own token.
+  const parens: {
+    control: boolean;
+    forHead: boolean;
+    sawOf: boolean;
+    openIndex: number;
+  }[] = [];
   let index = source.startsWith('#!') ? skipLineComment(source, 0) : 0;
 
   // A keyword right after `.` is a property name, as in `object.return`.
@@ -2588,6 +2594,55 @@ function tokenizeJavaScript(source: string): SourceToken[] {
     if (last.type !== 'punct') return false;
     if (last.value === '>' && isPunct(tokens.at(-2), '=')) return true;
     return [';', '{', '}', ')'].includes(last.value);
+  };
+
+  // Whether the token before index `at` leaves `function` or `class` in an
+  // expression rather than starting a declaration.
+  const inExpressionAt = (at: number): boolean => {
+    let before = at - 1;
+    if (isNameToken(tokens[before], 'async')) before -= 1;
+    const token = tokens[before];
+    if (token === undefined) return false;
+    if (token.type === 'punct')
+      return ![';', '{', '}', ')'].includes(token.value);
+    if (token.type === 'name') {
+      return !['default', 'do', 'else', 'export'].includes(token.value);
+    }
+    return true;
+  };
+
+  // A block `{` that opens the body of a function or class expression, as in
+  // `const f = function () {} / 2`, ends an expression, so a `/` after its
+  // `}` is division (issue #4917).
+  const blockIsExpressionBody = (): boolean => {
+    const last = tokens.at(-1);
+    if (last?.type === 'punct' && last.value === ')') {
+      let at = (last.openIndex ?? 0) - 1;
+      if (tokens[at]?.type === 'name' && !isNameToken(tokens[at], 'function')) {
+        at -= 1;
+      }
+      if (isPunct(tokens[at], '*')) at -= 1;
+      return (
+        isNameToken(tokens[at], 'function') &&
+        !isPunct(tokens[at - 1], '.') &&
+        inExpressionAt(at)
+      );
+    }
+    // `class {`, `class Name {`, or `class Name extends Base.member {`.
+    let at = tokens.length - 1;
+    while (
+      at >= 0 &&
+      at >= tokens.length - 8 &&
+      (tokens[at]?.type === 'name' || isPunct(tokens[at], '.')) &&
+      !isNameToken(tokens[at], 'class')
+    ) {
+      at -= 1;
+    }
+    return (
+      isNameToken(tokens[at], 'class') &&
+      !isPunct(tokens[at - 1], '.') &&
+      inExpressionAt(at)
+    );
   };
 
   // Template text from `start`, just after a backtick (`opening`) or after
@@ -2646,7 +2701,13 @@ function tokenizeJavaScript(source: string): SourceToken[] {
         index += 1;
       }
     } else if (character === '{') {
-      braces.push(braceOpensBlock() ? 'block' : 'expression');
+      braces.push(
+        braceOpensBlock()
+          ? blockIsExpressionBody()
+            ? 'body'
+            : 'block'
+          : 'expression',
+      );
       tokens.push({ type: 'punct', value: '{' });
       index += 1;
     } else if (character === '}') {
@@ -2669,6 +2730,7 @@ function tokenizeJavaScript(source: string): SourceToken[] {
           isNameToken(tokens.at(-2), 'for') &&
           !isPunct(tokens.at(-3), '.'));
       parens.push({
+        openIndex: tokens.length,
         control:
           forHead || (keyword !== null && CONTROL_HEAD_KEYWORDS.has(keyword)),
         forHead,
@@ -2677,10 +2739,12 @@ function tokenizeJavaScript(source: string): SourceToken[] {
       tokens.push({ type: 'punct', value: '(' });
       index += 1;
     } else if (character === ')') {
+      const opened = parens.pop();
       tokens.push({
         type: 'punct',
         value: ')',
-        regexAfter: parens.pop()?.control === true,
+        regexAfter: opened?.control === true,
+        openIndex: opened?.openIndex,
       });
       index += 1;
     } else if (
@@ -2916,36 +2980,52 @@ function findHelperSourceDependencies(
   // Every use of a runHelper binding must be a call with one string literal,
   // directly or through a run-helper namespace (`helpers.runHelper(...)`).
   // Any other use could run a script this scan cannot name, so it counts as
-  // unresolved and strict validation refuses the wrapper.
+  // unresolved and strict validation refuses the wrapper. So does a
+  // `.runHelper` member of anything but a run-helper namespace, such as a
+  // namespace or default import of another module.
   const delegated: HelperSourceDependencies['delegated'] = [];
-  if (runHelperBindings.size > 0 || runHelperNamespaces.size > 0) {
-    const inDeclaration = (index: number): boolean =>
-      declarations.some(([start, end]) => index >= start && index <= end);
-    for (let index = 0; index < tokens.length; index += 1) {
-      const token = tokens[index];
+  const inDeclaration = (index: number): boolean =>
+    declarations.some(([start, end]) => index >= start && index <= end);
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (
+      token.type !== 'name' ||
+      (token.value !== 'runHelper' &&
+        !runHelperBindings.has(token.value) &&
+        !runHelperNamespaces.has(token.value)) ||
+      inDeclaration(index)
+    ) {
+      continue;
+    }
+    if (isPunct(tokens[index - 1], '.')) {
+      const object = tokens[index - 2];
       if (
-        token.type !== 'name' ||
-        isPunct(tokens[index - 1], '.') ||
-        inDeclaration(index)
+        token.value === 'runHelper' &&
+        !(
+          object?.type === 'name' &&
+          runHelperNamespaces.has(object.value) &&
+          !isPunct(tokens[index - 3], '.')
+        )
       ) {
-        continue;
-      }
-      let module = runHelperBindings.get(token.value);
-      let callStart = index + 1;
-      if (module === undefined) {
-        module = runHelperNamespaces.get(token.value);
-        if (module === undefined) continue;
-        if (isPunct(tokens[index + 1], '.')) {
-          if (!isNameToken(tokens[index + 2], 'runHelper')) continue;
-          callStart = index + 3;
-        }
-      }
-      const path = readLiteralCallArgument(tokens, callStart);
-      if (path === null) {
         unresolvedDelegations += 1;
-      } else {
-        delegated.push({ module, path });
       }
+      continue;
+    }
+    let module = runHelperBindings.get(token.value);
+    let callStart = index + 1;
+    if (module === undefined) {
+      module = runHelperNamespaces.get(token.value);
+      if (module === undefined) continue;
+      if (isPunct(tokens[index + 1], '.')) {
+        if (!isNameToken(tokens[index + 2], 'runHelper')) continue;
+        callStart = index + 3;
+      }
+    }
+    const path = readLiteralCallArgument(tokens, callStart);
+    if (path === null) {
+      unresolvedDelegations += 1;
+    } else {
+      delegated.push({ module, path });
     }
   }
   return { imports: [...imports], delegated, unresolvedDelegations };

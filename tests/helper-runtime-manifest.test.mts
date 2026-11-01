@@ -495,7 +495,7 @@ test('strict closure validation refuses a wrapper whose runHelper script cannot 
   writeFileSync(join(fixtureRoot, 'outside.mjs'), 'export {};');
   const named = "import { runHelper } from './run-helper.mjs';\n";
   const unresolved =
-    /bin\/wrapper\.mjs passes runHelper something other than one string literal/;
+    /bin\/wrapper\.mjs uses runHelper in a way that does not name one script/;
   const cases = [
     {
       body: `${named}runHelper('../scripts/missing.mjs');`,
@@ -522,6 +522,14 @@ test('strict closure validation refuses a wrapper whose runHelper script cannot 
     },
     {
       body: "import { runHelper } from './middle.mjs';\nrunHelper('../scripts/missing.mjs');",
+      error: unresolved,
+    },
+    {
+      body: "import * as helpers from './middle.mjs';\nhelpers.runHelper('../scripts/missing.mjs');",
+      error: unresolved,
+    },
+    {
+      body: "import helpers from './run-helper.mjs';\nhelpers.runHelper('../scripts/missing.mjs');",
       error: unresolved,
     },
   ];
@@ -582,7 +590,7 @@ test('the closure follows runHelper through a namespace, an optional call, and a
   );
 });
 
-test('the closure scanner reads a regular expression after a control head, a block, and export default, and division after a keyword property (#4917)', () => {
+test('the closure scanner reads a regular expression after a control head, a block, and export default, and division after a keyword property or a function or class expression (#4917)', () => {
   const { packageRoot } = makeRuntimePackageFixture('idd-helper-entry-regex-');
   writeRuntimePackageFile(
     packageRoot,
@@ -600,12 +608,16 @@ test('the closure scanner reads a regular expression after a control head, a blo
       "const a = o.return / 2; import('./after-property.mjs'); const b = a / 3;",
       'export default /`/;',
       "import './after-default.mjs';",
+      "const fx = function () {} / 2; import('./after-function-expression.mjs'); const fy = fx / 3;",
+      "const cx = class {} / 2; import('./after-class-expression.mjs'); const cy = cx / 3;",
       '',
     ].join('\n'),
   );
   const names = [
     'after-block',
+    'after-class-expression',
     'after-default',
+    'after-function-expression',
     'after-for',
     'after-if',
     'after-property',
