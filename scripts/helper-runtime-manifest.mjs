@@ -96,6 +96,41 @@ const NODE_ENGINES = '^22.23.2 || ^24.2.0 || >=26.0.0';
 // package-manager, and ephemeral-npx paths always read the real version.
 const PACKAGE_VERSION_FALLBACK = 'unknown';
 const SCRIPT_FILE_EXTENSIONS = ['.mjs', '.js', '.json'];
+// The closure scanner's tables (issue #4917), declared above the
+// import.meta.main trigger for the same reason as the constants above. A `/`
+// after one of these keywords, or after any punctuator but these expression
+// ends, starts a regular expression literal.
+const REGEX_AFTER_KEYWORDS = new Set([
+  'await',
+  'case',
+  'default',
+  'delete',
+  'do',
+  'else',
+  'in',
+  'instanceof',
+  'new',
+  'of',
+  'return',
+  'throw',
+  'typeof',
+  'void',
+  'yield',
+]);
+const EXPRESSION_END_PUNCTUATORS = new Set([')', ']', '}', '++', '--']);
+// A `{` after one of these keywords opens an object literal, not a block.
+const EXPRESSION_KEYWORDS = new Set(
+  [...REGEX_AFTER_KEYWORDS].filter(
+    (keyword) => keyword !== 'do' && keyword !== 'else',
+  ),
+);
+// The `)` that closes one of these heads is followed by a statement.
+const CONTROL_HEAD_KEYWORDS = new Set(['for', 'if', 'while', 'with']);
+// A bin wrapper imports `runHelper` from bin/run-helper.mjs and passes it a
+// script path, which run-helper resolves against its own directory and spawns
+// rather than imports. The closure follows that script as a delegated entry,
+// because the wrapper cannot run without it.
+const RUN_HELPER_MODULE_PATTERN = /(?:^|\/)run-helper(?:\.[cm]?[jt]s)?$/;
 const EXTRA_RUNTIME_FILES_INITIALIZER_LOCATOR =
   'const EXTRA_RUNTIME_FILES = new Map<string, string[]>([';
 // Runtime data files a helper reads at execution time (not via `import`),
@@ -1159,13 +1194,28 @@ export function collectVendoredFiles(packageRoot = PACKAGE_ROOT) {
         relativePath(packageRoot, resolve(packageRoot, extraFile)),
       );
     }
-    const source = readFileSync(current, 'utf8');
-    for (const specifier of findRelativeImports(source)) {
+    const dependencies = findHelperSourceDependencies(
+      readFileSync(current, 'utf8'),
+    );
+    // A dependency outside the package root would become a `../` managed
+    // path that onboarding joins to its source and target roots, so it is
+    // skipped here, as the closure walk skips it (issue #4917).
+    for (const specifier of dependencies.imports) {
       const dependency = resolveRelativeImport(current, specifier);
-      if (!dependency) {
+      if (!dependency || !isInsidePackageRoot(packageRoot, dependency)) {
         continue;
       }
       queue.push(dependency);
+    }
+    for (const delegation of dependencies.delegated) {
+      const delegated = resolveDelegatedEntry(current, delegation);
+      if (
+        delegated &&
+        isInsidePackageRoot(packageRoot, delegated) &&
+        statIfPresent(delegated)?.isFile()
+      ) {
+        queue.push(delegated);
+      }
     }
   }
   for (const command of HELPER_COMMANDS) {
@@ -1203,8 +1253,10 @@ function walkHelperEntryClosure(entryPath, options, requireResolvableImports) {
       );
       closure.add(relativePath(packageRoot, dataFile));
     }
-    const source = readFileSync(current, 'utf8');
-    for (const specifier of findRelativeImports(source)) {
+    const dependencies = findHelperSourceDependencies(
+      readFileSync(current, 'utf8'),
+    );
+    for (const specifier of dependencies.imports) {
       const dependency = resolveRelativeImport(current, specifier);
       if (!dependency) {
         if (requireResolvableImports) {
@@ -1227,6 +1279,30 @@ function walkHelperEntryClosure(entryPath, options, requireResolvableImports) {
         continue;
       }
       queue.push(dependency);
+    }
+    if (requireResolvableImports && dependencies.unresolvedDelegations > 0) {
+      throw new Error(
+        `${currentPath} uses runHelper in a way that does not name one script (a call without one string literal argument, an alias or a value passed on, or runHelper from a module other than run-helper), so the script it runs cannot be resolved; this wrapper is not supported`,
+      );
+    }
+    for (const delegation of dependencies.delegated) {
+      const delegated = resolveDelegatedEntry(current, delegation);
+      const problem = !delegated
+        ? 'does not resolve to a file'
+        : !isInsidePackageRoot(packageRoot, delegated)
+          ? 'resolves outside the package root'
+          : !statIfPresent(delegated)?.isFile()
+            ? 'is not a regular file'
+            : null;
+      if (problem !== null) {
+        if (requireResolvableImports) {
+          throw new Error(
+            `delegated helper ${delegation.path} run by ${currentPath} ${problem}`,
+          );
+        }
+        continue;
+      }
+      queue.push(delegated);
     }
   }
   return [...closure].sort((left, right) =>
@@ -2071,74 +2147,505 @@ function statIfPresent(filePath) {
     throw error;
   }
 }
-function maskJavaScriptComments(source) {
-  const characters = source.split('');
-  let quote = null;
-  let escaped = false;
-  for (let index = 0; index < source.length; index += 1) {
-    const character = source[index];
-    if (quote !== null) {
-      if (escaped) {
-        escaped = false;
-      } else if (character === '\\') {
-        escaped = true;
-      } else if (character === quote) {
-        quote = null;
-      }
-      continue;
-    }
-    if (character === "'" || character === '"' || character === '`') {
-      quote = character;
-      continue;
-    }
-    if (character !== '/' || index + 1 >= source.length) continue;
-    const next = source[index + 1];
-    if (next === '/') {
-      characters[index] = '\0';
-      characters[index + 1] = '\0';
-      index += 2;
-      while (
-        index < source.length &&
-        source[index] !== '\n' &&
-        source[index] !== '\r'
-      ) {
-        characters[index] = '\0';
-        index += 1;
-      }
-      index -= 1;
-    } else if (next === '*') {
-      characters[index] = '\0';
-      characters[index + 1] = '\0';
-      index += 2;
-      while (index < source.length) {
-        if (source[index] === '*' && source[index + 1] === '/') {
-          characters[index] = '\0';
-          characters[index + 1] = '\0';
-          index += 1;
-          break;
-        }
-        if (source[index] !== '\n' && source[index] !== '\r') {
-          characters[index] = '\0';
-        }
-        index += 1;
-      }
-    }
-  }
-  return characters.join('');
+function isIdentifierPart(character) {
+  return (
+    character !== undefined &&
+    (/[A-Za-z0-9_$]/.test(character) || character.charCodeAt(0) > 0x7f)
+  );
 }
-function findRelativeImports(source) {
-  const specifiers = new Set();
-  const code = maskJavaScriptComments(source);
-  const patterns = [
-    /\b(?:import|export)\s+(?:[^"'`]+\s+from\s+)?["'](\.[^"']+)["']/g,
-    /\bimport\s*\(\s*["'](\.[^"']+)["']\s*\)/g,
-  ];
-  for (const pattern of patterns) {
-    for (const match of code.matchAll(pattern)) {
-      specifiers.add(match[1]);
+function readQuotedString(source, start) {
+  const quote = source[start];
+  let index = start + 1;
+  while (index < source.length) {
+    const character = source[index];
+    if (character === '\\') {
+      index += 2;
+      continue;
+    }
+    if (character === quote) {
+      return { value: source.slice(start + 1, index), nextIndex: index + 1 };
+    }
+    if (character === '\n' || character === '\r') {
+      break;
+    }
+    index += 1;
+  }
+  return { value: source.slice(start + 1, index), nextIndex: index };
+}
+/** The index after a regular expression literal, or -1 when `/` starts none. */
+function scanRegexLiteral(source, start) {
+  let index = start + 1;
+  let inClass = false;
+  while (index < source.length) {
+    const character = source[index];
+    if (character === '\n' || character === '\r') {
+      return -1;
+    }
+    if (character === '\\') {
+      index += 2;
+      continue;
+    }
+    if (inClass) {
+      if (character === ']') inClass = false;
+    } else if (character === '[') {
+      inClass = true;
+    } else if (character === '/') {
+      index += 1;
+      while (isIdentifierPart(source[index])) index += 1;
+      return index;
+    }
+    index += 1;
+  }
+  return -1;
+}
+function tokenizeJavaScript(source) {
+  const tokens = [];
+  // What each open `{` started: a statement block, the body of a function
+  // or class expression (`body`, which ends an expression), an expression
+  // (an object literal), or a `${` template substitution.
+  const braces = [];
+  // Each open `(`: whether it is the head of an `if`, `for`, `while`, or
+  // `with` (`control`), whether it is a `for` head, whether that head has
+  // already met its `of` operator, and the index of its own token.
+  const parens = [];
+  let index = source.startsWith('#!') ? skipLineComment(source, 0) : 0;
+  // A keyword right after `.` is a property name, as in `object.return`.
+  const lastKeyword = () => {
+    const last = tokens.at(-1);
+    return last?.type === 'name' && !isPunct(tokens.at(-2), '.')
+      ? last.value
+      : null;
+  };
+  const regexAllowed = () => {
+    const last = tokens.at(-1);
+    if (last === undefined) return true;
+    if (last.type === 'name') {
+      const keyword = lastKeyword();
+      if (keyword === 'of') return last.operator === true;
+      return keyword !== null && REGEX_AFTER_KEYWORDS.has(keyword);
+    }
+    if (last.type === 'punct') {
+      return (
+        last.regexAfter === true || !EXPRESSION_END_PUNCTUATORS.has(last.value)
+      );
+    }
+    if (last.type === 'template') return last.value !== 'tail';
+    return false;
+  };
+  // A `{` opens a block after a statement boundary, a `)`, an arrow, or a
+  // name that does not expect an expression (`else`, `try`, a class name);
+  // anywhere else it opens an object literal.
+  const braceOpensBlock = () => {
+    const last = tokens.at(-1);
+    if (last === undefined) return true;
+    if (last.type === 'name') {
+      const keyword = lastKeyword();
+      if (keyword === 'of') return last.operator !== true;
+      return keyword === null || !EXPRESSION_KEYWORDS.has(keyword);
+    }
+    if (last.type !== 'punct') return false;
+    if (last.value === '>' && isPunct(tokens.at(-2), '=')) return true;
+    return [';', '{', '}', ')'].includes(last.value);
+  };
+  // Whether the token before index `at` leaves `function` or `class` in an
+  // expression rather than starting a declaration.
+  const inExpressionAt = (at) => {
+    let before = at - 1;
+    if (isNameToken(tokens[before], 'async')) before -= 1;
+    const token = tokens[before];
+    if (token === undefined) return false;
+    if (token.type === 'punct')
+      return ![';', '{', '}', ')'].includes(token.value);
+    if (token.type === 'name') {
+      return !['default', 'do', 'else', 'export'].includes(token.value);
+    }
+    return true;
+  };
+  // A block `{` that opens the body of a function or class expression, as in
+  // `const f = function () {} / 2`, ends an expression, so a `/` after its
+  // `}` is division (issue #4917).
+  const blockIsExpressionBody = () => {
+    const last = tokens.at(-1);
+    if (last?.type === 'punct' && last.value === ')') {
+      let at = (last.openIndex ?? 0) - 1;
+      if (tokens[at]?.type === 'name' && !isNameToken(tokens[at], 'function')) {
+        at -= 1;
+      }
+      if (isPunct(tokens[at], '*')) at -= 1;
+      return (
+        isNameToken(tokens[at], 'function') &&
+        !isPunct(tokens[at - 1], '.') &&
+        inExpressionAt(at)
+      );
+    }
+    // `class {`, `class Name {`, or `class Name extends Base.member {`.
+    let at = tokens.length - 1;
+    while (
+      at >= 0 &&
+      at >= tokens.length - 8 &&
+      (tokens[at]?.type === 'name' || isPunct(tokens[at], '.')) &&
+      !isNameToken(tokens[at], 'class')
+    ) {
+      at -= 1;
+    }
+    return (
+      isNameToken(tokens[at], 'class') &&
+      !isPunct(tokens[at - 1], '.') &&
+      inExpressionAt(at)
+    );
+  };
+  // Template text from `start`, just after a backtick (`opening`) or after
+  // the `}` that closed a substitution. A template with no substitution is
+  // one string token; otherwise its text pieces are boundary tokens only.
+  const scanTemplate = (start, opening) => {
+    let cursor = start;
+    while (cursor < source.length) {
+      const character = source[cursor];
+      if (character === '\\') {
+        cursor += 2;
+        continue;
+      }
+      if (character === '`') {
+        tokens.push(
+          opening
+            ? { type: 'string', value: source.slice(start, cursor) }
+            : { type: 'template', value: 'tail' },
+        );
+        return cursor + 1;
+      }
+      if (character === '$' && source[cursor + 1] === '{') {
+        tokens.push({ type: 'template', value: opening ? 'head' : 'middle' });
+        braces.push('substitution');
+        return cursor + 2;
+      }
+      cursor += 1;
+    }
+    tokens.push({ type: 'template', value: 'tail' });
+    return source.length;
+  };
+  while (index < source.length) {
+    const character = source[index];
+    const next = source[index + 1];
+    if (/\s/.test(character)) {
+      index += 1;
+    } else if (character === '/' && next === '/') {
+      index = skipLineComment(source, index);
+    } else if (character === '/' && next === '*') {
+      const close = source.indexOf('*/', index + 2);
+      index = close < 0 ? source.length : close + 2;
+    } else if (character === "'" || character === '"') {
+      const literal = readQuotedString(source, index);
+      tokens.push({ type: 'string', value: literal.value });
+      index = literal.nextIndex;
+    } else if (character === '`') {
+      index = scanTemplate(index + 1, true);
+    } else if (character === '/') {
+      const end = regexAllowed() ? scanRegexLiteral(source, index) : -1;
+      if (end > 0) {
+        tokens.push({ type: 'literal' });
+        index = end;
+      } else {
+        tokens.push({ type: 'punct', value: '/' });
+        index += 1;
+      }
+    } else if (character === '{') {
+      braces.push(
+        braceOpensBlock()
+          ? blockIsExpressionBody()
+            ? 'body'
+            : 'block'
+          : 'expression',
+      );
+      tokens.push({ type: 'punct', value: '{' });
+      index += 1;
+    } else if (character === '}') {
+      const opened = braces.pop();
+      if (opened === 'substitution') {
+        index = scanTemplate(index + 1, false);
+      } else {
+        tokens.push({
+          type: 'punct',
+          value: '}',
+          regexAfter: opened === 'block',
+        });
+        index += 1;
+      }
+    } else if (character === '(') {
+      const keyword = lastKeyword();
+      const forHead =
+        keyword === 'for' ||
+        (keyword === 'await' &&
+          isNameToken(tokens.at(-2), 'for') &&
+          !isPunct(tokens.at(-3), '.'));
+      parens.push({
+        openIndex: tokens.length,
+        control:
+          forHead || (keyword !== null && CONTROL_HEAD_KEYWORDS.has(keyword)),
+        forHead,
+        sawOf: false,
+      });
+      tokens.push({ type: 'punct', value: '(' });
+      index += 1;
+    } else if (character === ')') {
+      const opened = parens.pop();
+      tokens.push({
+        type: 'punct',
+        value: ')',
+        regexAfter: opened?.control === true,
+        openIndex: opened?.openIndex,
+      });
+      index += 1;
+    } else if (
+      /[0-9]/.test(character) ||
+      (character === '.' && /[0-9]/.test(next ?? ''))
+    ) {
+      index += 1;
+      while (isIdentifierPart(source[index]) || source[index] === '.') {
+        index += 1;
+      }
+      tokens.push({ type: 'literal' });
+    } else if (character === '#' || isIdentifierPart(character)) {
+      const start = index;
+      index += 1;
+      while (isIdentifierPart(source[index])) index += 1;
+      const value = source.slice(start, index);
+      // `of` is an ordinary identifier except as the operator of a `for`
+      // head, where it follows the binding: a name other than a declaration
+      // or expression keyword (so `for (x in of / 2)` stays division), or the
+      // `]` or `}` of a destructuring pattern.
+      const previous = tokens.at(-1);
+      const head = parens.at(-1);
+      const operator =
+        value === 'of' &&
+        !isPunct(previous, '.') &&
+        head?.forHead === true &&
+        !head.sawOf &&
+        ((previous?.type === 'name' &&
+          !['const', 'let', 'var'].includes(previous.value) &&
+          !EXPRESSION_KEYWORDS.has(previous.value)) ||
+          isPunct(previous, ']') ||
+          isPunct(previous, '}'));
+      if (operator && head !== undefined) head.sawOf = true;
+      tokens.push(
+        operator ? { type: 'name', value, operator } : { type: 'name', value },
+      );
+    } else if ((character === '+' || character === '-') && next === character) {
+      tokens.push({ type: 'punct', value: `${character}${character}` });
+      index += 2;
+    } else {
+      tokens.push({ type: 'punct', value: character });
+      index += 1;
     }
   }
-  return [...specifiers];
+  return tokens;
+}
+function isPunct(token, value) {
+  return token?.type === 'punct' && token.value === value;
+}
+function isNameToken(token, value) {
+  return token?.type === 'name' && token.value === value;
+}
+/**
+ * The `from '<specifier>'` that ends an import or re-export clause starting at
+ * `start`, with the named bindings inside its braces, or null when the tokens
+ * are not such a clause (for example `export const value = ...`).
+ */
+function readModuleClause(tokens, start) {
+  const bindings = [];
+  let namespace = null;
+  let depth = 0;
+  let index = start;
+  while (index < tokens.length) {
+    const token = tokens[index];
+    if (token.type === 'name') {
+      const following = tokens[index + 1];
+      if (
+        token.value === 'from' &&
+        depth === 0 &&
+        following?.type === 'string'
+      ) {
+        return {
+          specifier: following.value,
+          bindings,
+          namespace,
+          end: index + 1,
+        };
+      }
+      if (depth > 0) {
+        const alias = tokens[index + 2];
+        if (isNameToken(following, 'as') && alias?.type === 'name') {
+          bindings.push({ imported: token.value, local: alias.value });
+          index += 3;
+          continue;
+        }
+        bindings.push({ imported: token.value, local: token.value });
+      }
+      index += 1;
+      continue;
+    }
+    if (token.type === 'string' && depth > 0) {
+      index += 1;
+      continue;
+    }
+    if (isPunct(token, '*') && depth === 0) {
+      const alias = tokens[index + 2];
+      if (isNameToken(tokens[index + 1], 'as') && alias?.type === 'name') {
+        namespace = alias.value;
+        index += 3;
+        continue;
+      }
+    }
+    if (isPunct(token, '{')) {
+      depth += 1;
+    } else if (isPunct(token, '}')) {
+      depth -= 1;
+      if (depth < 0) return null;
+    } else if (!isPunct(token, ',') && !isPunct(token, '*')) {
+      return null;
+    }
+    index += 1;
+  }
+  return null;
+}
+/**
+ * The string literal a call starting at `start` passes as its only argument
+ * (`(<literal>)`, `(<literal>,)`, or an optional call `?.(<literal>)`), or
+ * null when the tokens there are not such a call.
+ */
+function readLiteralCallArgument(tokens, start) {
+  let index = start;
+  if (isPunct(tokens[index], '?') && isPunct(tokens[index + 1], '.')) {
+    index += 2;
+  }
+  if (!isPunct(tokens[index], '(')) return null;
+  const argument = tokens[index + 1];
+  let close = index + 2;
+  if (isPunct(tokens[close], ',')) close += 1;
+  return argument?.type === 'string' && isPunct(tokens[close], ')')
+    ? argument.value
+    : null;
+}
+function findHelperSourceDependencies(source) {
+  const tokens = tokenizeJavaScript(source);
+  const imports = new Set();
+  const runHelperBindings = new Map();
+  const runHelperNamespaces = new Map();
+  // Token ranges of import declarations, whose binding names are not uses.
+  const declarations = [];
+  let unresolvedDelegations = 0;
+  const addImport = (specifier) => {
+    if (specifier.startsWith('.')) imports.add(specifier);
+  };
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (token.type !== 'name' || isPunct(tokens[index - 1], '.')) continue;
+    const next = tokens[index + 1];
+    if (token.value === 'import') {
+      if (isPunct(next, '.')) continue;
+      if (isPunct(next, '(')) {
+        const argument = tokens[index + 2];
+        const after = tokens[index + 3];
+        if (
+          argument?.type === 'string' &&
+          (isPunct(after, ')') || isPunct(after, ','))
+        ) {
+          addImport(argument.value);
+        }
+        continue;
+      }
+      if (next?.type === 'string') {
+        addImport(next.value);
+        continue;
+      }
+      const clause = readModuleClause(tokens, index + 1);
+      if (clause === null) continue;
+      addImport(clause.specifier);
+      declarations.push([index, clause.end]);
+      const fromRunHelper =
+        clause.specifier.startsWith('.') &&
+        RUN_HELPER_MODULE_PATTERN.test(clause.specifier);
+      for (const binding of clause.bindings) {
+        if (binding.imported !== 'runHelper') continue;
+        if (fromRunHelper) {
+          runHelperBindings.set(binding.local, clause.specifier);
+        } else {
+          unresolvedDelegations += 1;
+        }
+      }
+      if (fromRunHelper && clause.namespace !== null) {
+        runHelperNamespaces.set(clause.namespace, clause.specifier);
+      }
+    } else if (token.value === 'export') {
+      if (
+        !isPunct(next, '{') &&
+        !isPunct(next, '*') &&
+        !isNameToken(next, 'type')
+      ) {
+        continue;
+      }
+      const clause = readModuleClause(tokens, index + 1);
+      if (clause !== null) addImport(clause.specifier);
+    }
+  }
+  // Every use of a runHelper binding must be a call with one string literal,
+  // directly or through a run-helper namespace (`helpers.runHelper(...)`).
+  // Any other use could run a script this scan cannot name, so it counts as
+  // unresolved and strict validation refuses the wrapper. So does a
+  // `.runHelper` member of anything but a run-helper namespace, such as a
+  // namespace or default import of another module.
+  const delegated = [];
+  const inDeclaration = (index) =>
+    declarations.some(([start, end]) => index >= start && index <= end);
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (
+      token.type !== 'name' ||
+      (token.value !== 'runHelper' &&
+        !runHelperBindings.has(token.value) &&
+        !runHelperNamespaces.has(token.value)) ||
+      inDeclaration(index)
+    ) {
+      continue;
+    }
+    if (isPunct(tokens[index - 1], '.')) {
+      const object = tokens[index - 2];
+      if (
+        token.value === 'runHelper' &&
+        !(
+          object?.type === 'name' &&
+          runHelperNamespaces.has(object.value) &&
+          !isPunct(tokens[index - 3], '.')
+        )
+      ) {
+        unresolvedDelegations += 1;
+      }
+      continue;
+    }
+    let module = runHelperBindings.get(token.value);
+    let callStart = index + 1;
+    if (module === undefined) {
+      module = runHelperNamespaces.get(token.value);
+      if (module === undefined) continue;
+      if (isPunct(tokens[index + 1], '.')) {
+        if (!isNameToken(tokens[index + 2], 'runHelper')) continue;
+        callStart = index + 3;
+      }
+    }
+    const path = readLiteralCallArgument(tokens, callStart);
+    if (path === null) {
+      unresolvedDelegations += 1;
+    } else {
+      delegated.push({ module, path });
+    }
+  }
+  return { imports: [...imports], delegated, unresolvedDelegations };
+}
+/** The file a runHelper call spawns, resolved as bin/run-helper.mjs does. */
+function resolveDelegatedEntry(fromFile, delegation) {
+  const runHelperModule = resolveRelativeImport(fromFile, delegation.module);
+  return runHelperModule
+    ? resolve(dirname(runHelperModule), delegation.path)
+    : '';
 }
 function resolveRelativeImport(fromFile, specifier) {
   const directory = dirname(fromFile);

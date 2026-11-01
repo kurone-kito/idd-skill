@@ -3,6 +3,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import {
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -13,6 +14,7 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import {
+  assertHelperEntryClosureResolvable,
   buildCommandCatalog,
   buildHelperRuntimeManifest,
   collectHelperRuntimeEvidence,
@@ -376,6 +378,359 @@ test('resolveHelperEntryClosure defaults match the parsed extra runtime map and 
     (file) => file.targetPath,
   );
   assert.deepEqual(sortUtf8Paths(perEntryUnion), sortUtf8Paths(collected));
+});
+
+test('the closure scanner skips import text in strings, comments, regular expressions, and template text, and follows imports inside substitutions (#4917)', () => {
+  const { packageRoot } = makeRuntimePackageFixture('idd-helper-entry-lexer-');
+  // A template substitution in the generated source, spelled without a
+  // `${...}` inside this file's own string literals.
+  const substitution = (code: string): string => ['$', '{', code, '}'].join('');
+  writeRuntimePackageFile(
+    packageRoot,
+    'scripts/entry.mjs',
+    [
+      `const quoted = "import './quoted-missing.mjs'";`,
+      `const single = 'export * from "./single-missing.mjs"';`,
+      "const text = `import('./template-text-missing.mjs')`;",
+      "// import './comment-missing.mjs';",
+      "/* import './block-missing.mjs'; */",
+      `const pattern = /import ['"\`]\\.\\/regex-missing\\.mjs['"\`]/;`,
+      "import './after-regex.mjs';",
+      `const loaded = \`value ${substitution("await import('./interpolated.mjs')")} end\`;`,
+      `const nested = \`${substitution(`\`${substitution("import('./nested.mjs')")}\``)}\`;`,
+      `const braced = \`${substitution("{ key: import('./braced.mjs') }.key")}\`;`,
+      "const half = 1 / 2; import('./after-division.mjs');",
+      'const meta = import.meta.url;',
+      "export { half } from './re-export.mjs';",
+    ].join('\n'),
+  );
+  for (const name of [
+    'after-regex',
+    'interpolated',
+    'nested',
+    'braced',
+    'after-division',
+    're-export',
+  ]) {
+    writeRuntimePackageFile(packageRoot, `scripts/${name}.mjs`, 'export {};');
+  }
+
+  assert.doesNotThrow(() =>
+    assertHelperEntryClosureResolvable('scripts/entry.mjs', {
+      packageRoot,
+      extraRuntimeFiles: new Map(),
+    }),
+  );
+  assert.deepEqual(
+    resolveHelperEntryClosure('scripts/entry.mjs', {
+      packageRoot,
+      extraRuntimeFiles: new Map(),
+    }),
+    sortUtf8Paths([
+      'scripts/after-division.mjs',
+      'scripts/after-regex.mjs',
+      'scripts/braced.mjs',
+      'scripts/entry.mjs',
+      'scripts/interpolated.mjs',
+      'scripts/nested.mjs',
+      'scripts/re-export.mjs',
+    ]),
+  );
+});
+
+test('the closure of a bin wrapper includes the script it passes to runHelper and that script imports (#4917)', () => {
+  const { packageRoot } = makeRuntimePackageFixture(
+    'idd-helper-entry-wrapper-',
+  );
+  writeRuntimePackageFile(
+    packageRoot,
+    'bin/wrapper.mjs',
+    "import { runHelper as run } from './run-helper.mjs';\n\nrun('../scripts/delegated.mjs');\n",
+  );
+  writeRuntimePackageFile(
+    packageRoot,
+    'bin/run-helper.mjs',
+    'export function runHelper(relativeScriptPath) {\n  return relativeScriptPath;\n}\n',
+  );
+  writeRuntimePackageFile(
+    packageRoot,
+    'scripts/delegated.mjs',
+    "import './delegated-dependency.mjs';\n",
+  );
+  writeRuntimePackageFile(
+    packageRoot,
+    'scripts/delegated-dependency.mjs',
+    'export {};',
+  );
+  const options = { packageRoot, extraRuntimeFiles: new Map() };
+
+  assert.doesNotThrow(() =>
+    assertHelperEntryClosureResolvable('bin/wrapper.mjs', options),
+  );
+  assert.deepEqual(
+    resolveHelperEntryClosure('bin/wrapper.mjs', options),
+    sortUtf8Paths([
+      'bin/run-helper.mjs',
+      'bin/wrapper.mjs',
+      'scripts/delegated-dependency.mjs',
+      'scripts/delegated.mjs',
+    ]),
+  );
+});
+
+test('strict closure validation refuses a wrapper whose runHelper script cannot be resolved (#4917)', () => {
+  const { fixtureRoot, packageRoot } = makeRuntimePackageFixture(
+    'idd-helper-entry-wrapper-invalid-',
+  );
+  writeRuntimePackageFile(
+    packageRoot,
+    'bin/run-helper.mjs',
+    'export function runHelper() {}\n',
+  );
+  writeRuntimePackageFile(
+    packageRoot,
+    'bin/middle.mjs',
+    "export { runHelper } from './run-helper.mjs';\n",
+  );
+  writeFileSync(join(fixtureRoot, 'outside.mjs'), 'export {};');
+  const named = "import { runHelper } from './run-helper.mjs';\n";
+  const unresolved =
+    /bin\/wrapper\.mjs uses runHelper in a way that does not name one script/;
+  const cases = [
+    {
+      body: `${named}runHelper('../scripts/missing.mjs');`,
+      error:
+        /delegated helper \.\.\/scripts\/missing\.mjs run by bin\/wrapper\.mjs is not a regular file/,
+    },
+    {
+      body: `${named}runHelper('../../outside.mjs');`,
+      error:
+        /delegated helper \.\.\/\.\.\/outside\.mjs run by bin\/wrapper\.mjs resolves outside the package root/,
+    },
+    {
+      body: `${named}const script = '../scripts/missing.mjs';\nrunHelper(script);`,
+      error: unresolved,
+    },
+    {
+      body: `${named}const run = runHelper;\nrun('../scripts/missing.mjs');`,
+      error: unresolved,
+    },
+    {
+      body: "import * as helpers from './run-helper.mjs';\nhelpers.runHelper('../scripts/missing.mjs');",
+      error:
+        /delegated helper \.\.\/scripts\/missing\.mjs run by bin\/wrapper\.mjs is not a regular file/,
+    },
+    {
+      body: "import { runHelper } from './middle.mjs';\nrunHelper('../scripts/missing.mjs');",
+      error: unresolved,
+    },
+    {
+      body: "import * as helpers from './middle.mjs';\nhelpers.runHelper('../scripts/missing.mjs');",
+      error: unresolved,
+    },
+    {
+      body: "import helpers from './run-helper.mjs';\nhelpers.runHelper('../scripts/missing.mjs');",
+      error: unresolved,
+    },
+  ];
+  for (const { body, error } of cases) {
+    writeRuntimePackageFile(packageRoot, 'bin/wrapper.mjs', `${body}\n`);
+    const options = { packageRoot, extraRuntimeFiles: new Map() };
+    assert.throws(
+      () => assertHelperEntryClosureResolvable('bin/wrapper.mjs', options),
+      error,
+    );
+    assert.equal(
+      resolveHelperEntryClosure('bin/wrapper.mjs', options).includes(
+        'scripts/missing.mjs',
+      ),
+      false,
+    );
+  }
+});
+
+test('the closure follows runHelper through a namespace, an optional call, and a trailing comma (#4917)', () => {
+  const { packageRoot } = makeRuntimePackageFixture(
+    'idd-helper-entry-wrapper-forms-',
+  );
+  writeRuntimePackageFile(
+    packageRoot,
+    'bin/run-helper.mjs',
+    'export function runHelper() {}\n',
+  );
+  for (const name of ['one', 'two', 'three']) {
+    writeRuntimePackageFile(packageRoot, `scripts/${name}.mjs`, 'export {};');
+  }
+  writeRuntimePackageFile(
+    packageRoot,
+    'bin/wrapper.mjs',
+    [
+      "import * as helpers from './run-helper.mjs';",
+      "import { runHelper } from './run-helper.mjs';",
+      "helpers.runHelper('../scripts/one.mjs');",
+      "runHelper?.('../scripts/two.mjs');",
+      "runHelper('../scripts/three.mjs',);",
+      '',
+    ].join('\n'),
+  );
+  const options = { packageRoot, extraRuntimeFiles: new Map() };
+
+  assert.doesNotThrow(() =>
+    assertHelperEntryClosureResolvable('bin/wrapper.mjs', options),
+  );
+  assert.deepEqual(
+    resolveHelperEntryClosure('bin/wrapper.mjs', options),
+    sortUtf8Paths([
+      'bin/run-helper.mjs',
+      'bin/wrapper.mjs',
+      'scripts/one.mjs',
+      'scripts/three.mjs',
+      'scripts/two.mjs',
+    ]),
+  );
+});
+
+test('the closure scanner reads a regular expression after a control head, a block, and export default, and division after a keyword property or a function or class expression (#4917)', () => {
+  const { packageRoot } = makeRuntimePackageFixture('idd-helper-entry-regex-');
+  writeRuntimePackageFile(
+    packageRoot,
+    'scripts/entry.mjs',
+    [
+      "const s = 'x';",
+      'if (s) /`/.test(s);',
+      "import './after-if.mjs';",
+      'function f() {}',
+      "/`/.test('a');",
+      "import './after-block.mjs';",
+      'for (;;) /"/.test(s) && 0;',
+      "import './after-for.mjs';",
+      'const o = { return: 4 };',
+      "const a = o.return / 2; import('./after-property.mjs'); const b = a / 3;",
+      'export default /`/;',
+      "import './after-default.mjs';",
+      "const fx = function () {} / 2; import('./after-function-expression.mjs'); const fy = fx / 3;",
+      "const cx = class {} / 2; import('./after-class-expression.mjs'); const cy = cx / 3;",
+      '',
+    ].join('\n'),
+  );
+  const names = [
+    'after-block',
+    'after-class-expression',
+    'after-default',
+    'after-function-expression',
+    'after-for',
+    'after-if',
+    'after-property',
+  ];
+  for (const name of names) {
+    writeRuntimePackageFile(packageRoot, `scripts/${name}.mjs`, 'export {};');
+  }
+
+  assert.deepEqual(
+    resolveHelperEntryClosure('scripts/entry.mjs', {
+      packageRoot,
+      extraRuntimeFiles: new Map(),
+    }),
+    sortUtf8Paths([
+      'scripts/entry.mjs',
+      ...names.map((name) => `scripts/${name}.mjs`),
+    ]),
+  );
+});
+
+test('the closure scanner treats `of` as division outside a for...of head and as an operator inside one (#4917)', () => {
+  const { packageRoot } = makeRuntimePackageFixture('idd-helper-entry-of-');
+  writeRuntimePackageFile(
+    packageRoot,
+    'scripts/entry.mjs',
+    [
+      "const s = 'x';",
+      "const of = 4; const half = of / 2; import('./after-identifier.mjs'); const third = half / 3;",
+      'for (const item of /`/.exec(s) ?? []) {}',
+      "import './after-operator.mjs';",
+      'for (const of of [of / 2]) {}',
+      "import('./after-binding.mjs'); const rest = half / 4;",
+      "for (const key in of / 2) {} import('./after-in.mjs'); const last = half / 5;",
+      '',
+    ].join('\n'),
+  );
+  const names = [
+    'after-binding',
+    'after-identifier',
+    'after-in',
+    'after-operator',
+  ];
+  for (const name of names) {
+    writeRuntimePackageFile(packageRoot, `scripts/${name}.mjs`, 'export {};');
+  }
+
+  assert.deepEqual(
+    resolveHelperEntryClosure('scripts/entry.mjs', {
+      packageRoot,
+      extraRuntimeFiles: new Map(),
+    }),
+    sortUtf8Paths([
+      'scripts/entry.mjs',
+      ...names.map((name) => `scripts/${name}.mjs`),
+    ]),
+  );
+});
+
+test('collectVendoredFiles never emits a dependency outside the package root (#4917)', () => {
+  const { fixtureRoot, packageRoot } = makeRuntimePackageFixture(
+    'idd-helper-vendored-outside-',
+  );
+  const entryPaths = buildCommandCatalog().map((command) => command.entryPath);
+  for (const entryPath of entryPaths) {
+    writeRuntimePackageFile(packageRoot, entryPath, 'export {};\n');
+  }
+  writeRuntimePackageFile(
+    packageRoot,
+    entryPaths[0],
+    [
+      "import { runHelper } from './run-helper.mjs';",
+      "import '../../outside-import.mjs';",
+      "runHelper('../../outside-delegated.mjs');",
+      '',
+    ].join('\n'),
+  );
+  writeRuntimePackageFile(
+    packageRoot,
+    join(dirname(entryPaths[0]), 'run-helper.mjs'),
+    'export function runHelper() {}\n',
+  );
+  writeFileSync(join(fixtureRoot, 'outside-import.mjs'), 'export {};\n');
+  writeFileSync(join(fixtureRoot, 'outside-delegated.mjs'), 'export {};\n');
+
+  const managed = collectVendoredFiles(packageRoot).map(
+    (file) => file.targetPath,
+  );
+  assert.ok(managed.includes(entryPaths[0]));
+  assert.deepEqual(
+    managed.filter((path) => path.startsWith('..')),
+    [],
+  );
+});
+
+test('every catalog entry and bin wrapper in this repository passes strict closure validation (#4917)', () => {
+  const binEntries = readdirSync(join(REPO_ROOT, 'bin'))
+    .filter((name) => name.endsWith('.mjs'))
+    .map((name) => `bin/${name}`);
+  for (const entryPath of [
+    ...buildCommandCatalog().map((command) => command.entryPath),
+    ...binEntries,
+  ]) {
+    assert.doesNotThrow(
+      () => assertHelperEntryClosureResolvable(entryPath),
+      entryPath,
+    );
+  }
+
+  const wrapperClosure = resolveHelperEntryClosure('bin/idd-activation.mjs');
+  assert.ok(wrapperClosure.includes('bin/run-helper.mjs'));
+  for (const path of resolveHelperEntryClosure('scripts/idd-activation.mjs')) {
+    assert.ok(wrapperClosure.includes(path), path);
+  }
 });
 
 test('readHelperExtraRuntimeFiles parses comments, trailing commas, and multiple keys without evaluating source', () => {
