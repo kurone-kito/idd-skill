@@ -855,6 +855,17 @@
     }
   },
   "extraScenarios": {
+    "idd-onboard.mjs": [
+      {
+        "name": "distributionRequiresSessionId",
+        "args": [
+          "--distribution",
+          "inspect"
+        ],
+        "exitCode": 2,
+        "kind": "usage"
+      }
+    ],
     "idd-pre-merge-readiness.mjs": [
       {
         "name": "ghTransportFailure503",
