@@ -1,6 +1,7 @@
 {
   "$schema": "https://kurone-kito.github.io/idd-skill/schemas/policy.schema.json",
   "iddVersion": "0.17.0",
+  "dangerouslyAutoDecide": true,
   "markerPrefix": "idd-skill",
   "mergePolicy": "fully_autonomous_merge",
   "mergePolicyAck": "fully_autonomous_merge",
