@@ -4269,6 +4269,12 @@ test('issue-authoring contract defines ledger storage verdicts, allocation, and 
     text,
     /The trusted Git executable is the single absolute executable resolved by the runtime's configured command lookup/,
   );
+  // A supplied root is the only candidate; the defaults apply only when no
+  // root was supplied (#4810).
+  assert.match(
+    text,
+    /is the only candidate: if it is missing or fails a check, stop and report under the storage verdicts below, and never try another root\. Only when session history affirmatively establishes that no root was supplied, try the operating system's temporary directory/,
+  );
   assert.match(
     text,
     /The temporary directory is the absolute path returned by the runtime's standard-library temporary-directory resolver/,
@@ -4370,8 +4376,8 @@ test('SKILL entry carries the ledger storage summary and link for instructions-o
     '[Ledger storage](references/contract.md#ledger-storage)',
     '[Findings ledger storage](#findings-ledger-storage)',
     "never reuse another session's namespace",
-    'if a supplied root fails, stop and report without trying another root',
-    'When no root is supplied, allocate a',
+    'a supplied scratch root is the only candidate; if a supplied root is missing or fails, stop and report without trying another root.',
+    'Only when no root was supplied, allocate a',
     'including mount aliases checked through filesystem evidence.',
     'Unsafe, conflicting, or unreadable storage stops the review: report its path and preserve unverified entries; cleanup is limited to entries this session created whose recorded identity still matches.',
     'A lost ledger starts empty. Losing the identity record, including after context compaction, loses the ledger:',

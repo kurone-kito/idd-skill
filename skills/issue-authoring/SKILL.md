@@ -413,8 +413,9 @@ needs-decision, blocked-by-human, and out-of-scope.
 
 Before the first ledger write, read
 [Ledger storage](references/contract.md#ledger-storage) and follow it. In brief:
-use a supplied scratch root only if it passes its checks; if a supplied root
-fails, stop and report without trying another root. When no root is supplied,
+a supplied scratch root is the only candidate; if a supplied root is missing or
+fails, stop and report without trying another root. Only when no root was
+supplied,
 allocate a new `issue-authoring-<uuid>` directory with exclusive creation (a
 non-recursive `mkdir`, never `mkdir -p`) in the runtime's absolute temporary
 directory, or in the existing user state directory. Use `$XDG_STATE_HOME`,

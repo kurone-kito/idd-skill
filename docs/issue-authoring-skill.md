@@ -1107,10 +1107,13 @@ every nested mount point's mount ID, matching mountinfo fields, and derived
 backing location; repeat the full inventory and comparison whenever the root
 checks run.
 
-**Roots.** A root is a directory that holds namespaces. Use a root that the user
-or the runtime supplies, such as a named scratch directory or harness scratch
-metadata, when one exists. Otherwise try the operating system's temporary
-directory, then the user state directory. The temporary directory is the
+**Roots.** A root is a directory that holds namespaces. A root that the user or
+the runtime supplies, such as a named scratch directory or harness scratch
+metadata, is the only candidate: if it is missing or fails a check, stop and
+report under the storage verdicts below, and never try another root. Only when
+session history affirmatively establishes that no root was supplied, try the
+operating system's temporary directory, then the user state directory. The
+temporary directory is the
 absolute path returned by the runtime's standard-library temporary-directory
 resolver or the equivalent OS API. The user state directory is
 `$XDG_STATE_HOME`, else `$HOME/.local/state`, on POSIX, and `%LOCALAPPDATA%` on
