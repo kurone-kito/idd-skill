@@ -113,11 +113,6 @@ regardless of that field. Use `--claimless` (#2017) only for a verified
 no-claim PR (no-issue or qualified bootstrap); it skips claim revalidation.
 See the [Readiness command](../../docs/idd-helper-scripts.md).
 
-**Multi-issue close**: pass `--closing-issues <n>,<m>` (D3) with the
-full set (else a `closing-set` mismatch).
-
-**Global-only**: pass `--global-only`.
-
 **Polling loop failure mode**: a zero exit with the full readiness
 JSON (`ready: false` + `blockers`) is not-ready-yet — keep polling. A
 non-zero exit with `{ "error": ... }` is a **call failure**: a usage
@@ -197,11 +192,14 @@ is diagnostic and never changes the verdict.
   - The stored value is not `none`, and the live total item count
     exceeds `{total-item-count}` (new items at the same max timestamp,
     missed by the previous check).
-  - The current latest CI pass `completedAt` for HEAD differs from
+  - The current latest passing CI timestamp for HEAD, selected as in E1
+    (CheckRun `completedAt`; StatusContext
+    `updatedAt`; passing: CheckRun `SUCCESS`, `SKIPPED`, or `NEUTRAL`;
+    StatusContext `SUCCESS`; later failures ignored), differs from
     `{latest-ci-completed-at}` in the watermark (a new CI run completed
     after E1's snapshot; if `none`, any current CI pass triggers
-    re-evaluation) — commonly a late label-triggered job; sequence it
-    before E1, this is not a fault.
+    re-evaluation) — commonly a late label-triggered job;
+    sequence it before E1.
 
   Structural ack-only carve-out: when the only trigger above is newer
   activity/count growth that helper evidence proves is solely
@@ -533,6 +531,6 @@ and missing CODEOWNER approvals block. When satisfied, record the
 live-fetch result as the **F2 snapshot** — current PR HEAD SHA
 (`{f2-head-SHA}`), highest `updatedAt` across fetched items
 (`{f2-max-activity-updatedAt}`, `none` if empty), total item count
-(`{f2-total-item-count}`), latest CI pass `completedAt` for HEAD
+(`{f2-total-item-count}`), latest passing CI timestamp for HEAD, as E1 selects it
 (`{f2-latest-ci-completed-at|none}`) — carry all four into the handoff
 phase, then proceed to `idd-merge-handoff.instructions.md`.
