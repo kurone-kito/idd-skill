@@ -1441,6 +1441,96 @@ test('discardPreparedCandidate refuses edited, unlisted, unverifiable, published
   assert.deepEqual(snapshot(uninstallingHome), uninstallingBefore);
 });
 
+test('discardPreparedCandidate refuses an unlisted candidate directory instead of reporting nothing to discard (#4917)', () => {
+  const home = makeHome();
+  installPayload(optionsFor(home));
+  const commit = '9'.repeat(40);
+  const discard = () =>
+    discardPreparedCandidate({ ...optionsFor(home), sourceCommit: commit });
+  assert.deepEqual(discard().lines, [
+    `no receipt entries for ${join(dataRootOf(home), 'prepared', commit)}; nothing to discard`,
+  ]);
+
+  const unlisted = join(dataRootOf(home), 'prepared', commit);
+  nodeFs.mkdirSync(join(unlisted, 'idd-template'), { recursive: true });
+  nodeFs.writeFileSync(join(unlisted, 'manifest.json'), '{}\n');
+  const before = snapshot(home);
+  assert.throws(
+    discard,
+    /refused before any removal; nothing was removed: .* exists as a directory, but the receipt lists nothing under it/,
+  );
+  assert.deepEqual(snapshot(home), before);
+});
+
+test('discardPreparedCandidate removes a publication interrupted between its link and unlink, and refuses another hard link (#4917)', () => {
+  const home = makeHome();
+  const commit = 'a'.repeat(40);
+  const candidatePath = join(dataRootOf(home), 'prepared', commit);
+  const failedPath = join(candidatePath, 'scripts/sample.mjs');
+  let failed = false;
+  const fs = hookedFs((op, args) => {
+    if (
+      op === 'unlinkSync' &&
+      String(args[0]).startsWith(`${failedPath}.idd-prepared-tmp-`) &&
+      !failed
+    ) {
+      failed = true;
+      throw new Error('injected interruption after the link');
+    }
+  });
+  assert.throws(
+    () =>
+      prepareDistributionSet({
+        ...prepareOptions(home, makePreparedSource(), commit),
+        fs,
+      }),
+    /injected interruption after the link/,
+  );
+  assert.equal(nodeFs.statSync(failedPath).nlink, 2);
+
+  const pairedBytes = nodeFs.readFileSync(failedPath);
+  nodeFs.writeFileSync(failedPath, 'export const edited = true;\n');
+  const editedPair = snapshot(home);
+  assert.throws(
+    () =>
+      discardPreparedCandidate({ ...optionsFor(home), sourceCommit: commit }),
+    /sample\.mjs\.idd-prepared-tmp-[0-9]+ has more than one hard link/,
+  );
+  assert.deepEqual(snapshot(home), editedPair);
+  nodeFs.writeFileSync(failedPath, pairedBytes);
+  assert.equal(nodeFs.statSync(failedPath).nlink, 2);
+
+  const userLink = join(home, 'user-copy.mjs');
+  const editedTarget = join(
+    candidatePath,
+    'idd-template/.github/instructions/core.md',
+  );
+  nodeFs.linkSync(editedTarget, userLink);
+  const before = snapshot(home);
+  assert.throws(
+    () =>
+      discardPreparedCandidate({ ...optionsFor(home), sourceCommit: commit }),
+    /core\.md has more than one hard link; remove the extra link by hand after confirming no preparation is running, then retry/,
+  );
+  assert.deepEqual(snapshot(home), before);
+  nodeFs.unlinkSync(userLink);
+
+  const result = discardPreparedCandidate({
+    ...optionsFor(home),
+    sourceCommit: commit,
+  });
+  assert.ok(result.lines.includes(`removed ${failedPath}`));
+  assert.equal(nodeFs.existsSync(candidatePath), false);
+  assert.equal(
+    readReceiptEntries(home).some(
+      (entry) =>
+        entry.path === candidatePath ||
+        entry.path.startsWith(`${candidatePath}/`),
+    ),
+    false,
+  );
+});
+
 test('a fresh install lays down the payload, skills, and receipt, and uninstall removes them', () => {
   const home = makeHome();
   const options = optionsFor(home);

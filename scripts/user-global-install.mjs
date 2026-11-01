@@ -2024,7 +2024,16 @@ function discardPreparedCandidateWithContext(ctx, commit) {
     else if (entry.kind === 'directory') directoryEntries.push(entry.path);
     else refuse(`${entry.path} is listed as a ${entry.kind}`);
   }
+  const rootWalk = checkContainment(ctx.preparedRoot, setRoot, fs);
   if (fileEntries.size === 0 && directoryEntries.length === 0) {
+    // Nothing is listed, so nothing here is the installer's to remove; a
+    // candidate directory that exists anyway is refused rather than
+    // reported as nothing to discard.
+    if (rootWalk.finalKind !== 'absent') {
+      refuse(
+        `${setRoot} exists as a ${rootWalk.finalKind}, but the receipt lists nothing under it, so the installer does not own it; inspect it and remove it by hand if it is not needed`,
+      );
+    }
     return {
       lines: [`no receipt entries for ${setRoot}; nothing to discard`],
       priorCurrentTarget: null,
@@ -2042,13 +2051,21 @@ function discardPreparedCandidateWithContext(ctx, commit) {
   // listed hash. A preparation temporary file is removed only when it holds
   // the complete bytes of its listed target, which is what a failed
   // publication leaves; any other one cannot be checked against the receipt.
+  // A publication interrupted between its link and its unlink leaves the
+  // temporary name and the target as two links to one file (#4917); that
+  // pair is accepted when both names share the inode, each has exactly two
+  // links, and the bytes match the target's receipt hash.
   const refusals = [];
   const presentFiles = new Set();
   const presentDirectories = new Set();
   const temporaries = [];
-  const rootWalk = checkContainment(ctx.preparedRoot, setRoot, fs);
+  const pairedTemporaries = [];
+  const temporaryPattern = /^(.*)\.idd-prepared-tmp-[0-9]+$/u;
+  const extraLinkGuidance =
+    'remove the extra link by hand after confirming no preparation is running, then retry';
   if (rootWalk.finalKind === 'directory') {
     const listedDirectories = new Set(directoryEntries);
+    const regularFiles = new Map();
     const visit = (directory) => {
       presentDirectories.add(directory);
       if (!listedDirectories.has(directory)) {
@@ -2056,40 +2073,67 @@ function discardPreparedCandidateWithContext(ctx, commit) {
       }
       for (const name of fs.readdirSync(directory)) {
         const path = join(directory, name);
-        const stat = fs.lstatSync(path);
+        const stat = fs.lstatSync(path, { bigint: true });
         if (stat.isSymbolicLink()) {
           refusals.push(`${path} is a symbolic link`);
         } else if (stat.isDirectory()) {
           visit(path);
         } else if (!stat.isFile()) {
           refusals.push(`${path} is not a regular file or directory`);
-        } else if (stat.nlink > 1) {
-          refusals.push(`${path} has more than one hard link`);
         } else {
-          const sha256 = sha256Hex(readNoFollowBytes(path, fs));
-          const temporary = name.match(/^(.*)\.idd-prepared-tmp-[0-9]+$/u);
-          if (temporary !== null) {
-            const target = join(directory, temporary[1] ?? '');
-            if (fileEntries.get(target) === sha256) {
-              temporaries.push({ path, sha256 });
-            } else {
-              refusals.push(
-                `${path} is a preparation temporary file that does not hold the complete bytes of a listed file, so it cannot be checked against the receipt; remove that exact file by hand after confirming no preparation is running`,
-              );
-            }
-          } else if (!fileEntries.has(path)) {
-            refusals.push(`${path} is a file the receipt does not list`);
-          } else if (fileEntries.get(path) !== sha256) {
-            refusals.push(
-              `${path} differs from its receipt hash, so it may hold an edit`,
-            );
-          } else {
-            presentFiles.add(path);
-          }
+          regularFiles.set(path, { name, directory, stat });
         }
       }
     };
     visit(setRoot);
+    const pairedTargets = new Set();
+    for (const [path, { name, directory, stat }] of regularFiles) {
+      const temporary = name.match(temporaryPattern);
+      if (temporary === null || stat.nlink !== 2n) continue;
+      const target = join(directory, temporary[1] ?? '');
+      const targetFile = regularFiles.get(target);
+      if (
+        targetFile !== undefined &&
+        targetFile.stat.nlink === 2n &&
+        targetFile.stat.dev === stat.dev &&
+        targetFile.stat.ino === stat.ino &&
+        stat.ino !== 0n &&
+        fileEntries.get(target) === sha256Hex(readNoFollowBytes(path, fs))
+      ) {
+        pairedTemporaries.push({ path, target });
+        pairedTargets.add(target);
+      }
+    }
+    const paired = new Set(pairedTemporaries.map(({ path }) => path));
+    for (const [path, { name, directory, stat }] of regularFiles) {
+      if (paired.has(path)) continue;
+      if (stat.nlink > 1n && !pairedTargets.has(path)) {
+        refusals.push(
+          `${path} has more than one hard link; ${extraLinkGuidance}`,
+        );
+        continue;
+      }
+      const sha256 = sha256Hex(readNoFollowBytes(path, fs));
+      const temporary = name.match(temporaryPattern);
+      if (temporary !== null) {
+        const target = join(directory, temporary[1] ?? '');
+        if (fileEntries.get(target) === sha256) {
+          temporaries.push({ path, sha256 });
+        } else {
+          refusals.push(
+            `${path} is a preparation temporary file that does not hold the complete bytes of a listed file, so it cannot be checked against the receipt; remove that exact file by hand after confirming no preparation is running`,
+          );
+        }
+      } else if (!fileEntries.has(path)) {
+        refusals.push(`${path} is a file the receipt does not list`);
+      } else if (fileEntries.get(path) !== sha256) {
+        refusals.push(
+          `${path} differs from its receipt hash, so it may hold an edit`,
+        );
+      } else {
+        presentFiles.add(path);
+      }
+    }
   } else if (rootWalk.finalKind !== 'absent') {
     refuse(`${setRoot} is ${rootWalk.finalKind}, not a real directory`);
   }
@@ -2113,6 +2157,30 @@ function discardPreparedCandidateWithContext(ctx, commit) {
       stopAt(temporary.path, error);
     }
     lines.push(`removed ${temporary.path}`);
+  }
+  // Drop the temporary name of each interrupted publication pair, after
+  // checking again that both names are still the same file with two links,
+  // as the preparation's own atomic write does; the target then has one
+  // link and is removed with the other listed files.
+  for (const { path, target } of pairedTemporaries) {
+    try {
+      const walk = checkContainment(ctx.preparedRoot, path, fs);
+      const temporaryStat = fs.lstatSync(path, { bigint: true });
+      const targetStat = fs.lstatSync(target, { bigint: true });
+      if (
+        walk.finalKind !== 'file' ||
+        temporaryStat.nlink !== 2n ||
+        targetStat.nlink !== 2n ||
+        temporaryStat.dev !== targetStat.dev ||
+        temporaryStat.ino !== targetStat.ino
+      ) {
+        throw new Error(`${path} is no longer a second link to ${target}`);
+      }
+      fs.unlinkSync(path);
+    } catch (error) {
+      stopAt(path, error);
+    }
+    lines.push(`removed ${path}`);
   }
   for (const [path, sha256] of [...fileEntries].reverse()) {
     if (presentFiles.has(path)) {
