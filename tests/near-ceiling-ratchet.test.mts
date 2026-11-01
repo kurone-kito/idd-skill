@@ -30,14 +30,17 @@ interface AuditRunResult {
   stderr: string;
 }
 
-function runAuditDocs(cwd: string): AuditRunResult {
+function runAuditDocs(
+  cwd: string,
+  envOverrides: NodeJS.ProcessEnv = {},
+): AuditRunResult {
   try {
     const stdout = execFileSync(
       process.execPath,
       [join(AUDIT_REPO_ROOT, 'scripts', 'audit-docs.mjs'), '--check'],
       {
         cwd,
-        env: fixtureEnv(),
+        env: { ...fixtureEnv(), ...envOverrides },
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'pipe'],
       },
@@ -662,4 +665,51 @@ test('audit-docs applies an enabled standing approval when its bundle id is also
   assert.equal(result.status, 0, output);
   assert.match(result.stdout, /documentation audit passed/);
   assert.doesNotMatch(output, /near-ceiling-ratchet/);
+});
+
+test('audit-docs reports invalid standing entries when no base ref is available', (t) => {
+  const { dir, cleanup } = makeAuditFixture(
+    standingAuditManifest(1000),
+    standingAuditManifest(1000, {
+      standingApprovals: [
+        { ...STANDING_RAISE_TO_1100, ceilingPct: 11 },
+        { ...STANDING_RAISE_TO_1100, issue: 0 },
+        { ...STANDING_RAISE_TO_1100, reason: '' },
+        STANDING_RAISE_TO_1100,
+        STANDING_RAISE_TO_1100,
+      ],
+    }),
+    {
+      '.github/idd/config.json': standingBudgetPolicy(true),
+      '.github/instructions/idd-overview-core.instructions.md':
+        AUDIT_CONFIG_OVERVIEW,
+      [AUDIT_BUNDLE_MEMBER]: 'x'.repeat(1000),
+    },
+  );
+  t.after(cleanup);
+
+  execFileSync('git', ['update-ref', '-d', 'refs/remotes/origin/main'], {
+    cwd: dir,
+    env: fixtureEnv(),
+  });
+  const result = runAuditDocs(dir, {
+    GITHUB_BASE_REF: '',
+    GITHUB_EVENT_PATH: '',
+  });
+  const output = result.stdout + result.stderr;
+
+  assert.equal(result.status, 1, output);
+  assert.match(
+    result.stderr,
+    /near-ceiling-ratchet: .*ceilingPct 11 exceeds maxRaisePct 10/,
+  );
+  assert.match(
+    result.stderr,
+    /near-ceiling-ratchet: .*issue must be a positive integer/,
+  );
+  assert.match(
+    result.stderr,
+    /near-ceiling-ratchet: .*reason must be non-empty/,
+  );
+  assert.match(result.stderr, /near-ceiling-ratchet: .*all are invalid/);
 });

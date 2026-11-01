@@ -1785,6 +1785,19 @@ function checkNearCeilingRatchet(
     // Already reported by checkContextCeiling.
     return;
   }
+  // Standing entries can be validated from the current manifest and measured
+  // bundles even when a base-ref comparison is unavailable (#4887).
+  const standingApprovals = parseStandingRaiseApprovals(
+    config.standingRaiseApprovals,
+    currentBundleStats,
+    config.maxUtilizationPct,
+    budgetRaisePolicy,
+  );
+  errors.push(
+    ...standingApprovals.errors.map(
+      (message) => `near-ceiling-ratchet: ${message}`,
+    ),
+  );
   const baseRef = resolveNearCeilingBaseRef();
   if (!baseRef) {
     notices.push('near-ceiling-ratchet: could not resolve a base ref; skipped');
@@ -1816,17 +1829,6 @@ function checkNearCeilingRatchet(
   // explicitly and are validated against bundleBudgets above.
   const approvals = parseNearCeilingRaiseApprovals(
     config.nearCeilingRaiseApprovals,
-  );
-  const standingApprovals = parseStandingRaiseApprovals(
-    config.standingRaiseApprovals,
-    currentBundleStats,
-    config.maxUtilizationPct,
-    budgetRaisePolicy,
-  );
-  errors.push(
-    ...standingApprovals.errors.map(
-      (message) => `near-ceiling-ratchet: ${message}`,
-    ),
   );
   const bundleIds = new Set(currentBundleStats.map((stat) => stat.id));
   const instructionSizeBudgetIds = new Set(
