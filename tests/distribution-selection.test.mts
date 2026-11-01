@@ -295,6 +295,46 @@ function replacePreparedSourceCommit(
   );
 }
 
+function bindingEntryPath(fixture: Fixture): string {
+  const receipt = readReceipt(fixture.dataRoot);
+  assert.equal(receipt.state, 'valid');
+  const binding = receipt.receipt.entries.find(
+    (entry) => entry.kind === 'file' && entry.path.includes('/.idd-selection-'),
+  );
+  assert.ok(binding?.kind === 'file');
+  return binding.path;
+}
+
+interface BindingSelection {
+  components: {
+    instructions: { provenance?: { commit: string } };
+    skillBundles: Record<string, { provenance: { commit: string } }>;
+    helper?: unknown;
+  };
+}
+
+function rewriteBindingSelection(
+  fixture: Fixture,
+  mutate: (selected: BindingSelection) => void,
+): string {
+  const path = bindingEntryPath(fixture);
+  const record = JSON.parse(fs.readFileSync(path, 'utf8')) as {
+    selected: BindingSelection;
+  };
+  mutate(record.selected);
+  const bytes = Buffer.from(`${JSON.stringify(record, null, 2)}\n`);
+  fs.writeFileSync(path, bytes);
+  const receipt = readReceipt(fixture.dataRoot);
+  assert.equal(receipt.state, 'valid');
+  writeReceipt(
+    fixture.dataRoot,
+    receipt.receipt.entries.map((entry) =>
+      entry.path === path ? { ...entry, sha256: sha256(bytes) } : entry,
+    ),
+  );
+  return path;
+}
+
 const COMMIT_A = 'a'.repeat(40);
 const COMMIT_B = 'b'.repeat(40);
 
@@ -409,6 +449,44 @@ test('a symlinked local instruction path prevents global selection', () => {
   assert.equal(report.source, 'repository-local');
 });
 
+test('local instructions added after a global binding take precedence over reuse', () => {
+  const fixture = makeFixture();
+  fixture.addPreparedSet(COMMIT_A, 'one');
+  fixture.installCurrent(COMMIT_A, '1.0.0', 'one');
+  const created = bindDistributionSelection(fixture.options());
+  assert.equal(created.status, 'created');
+  assert.equal(created.report.source, 'global-current');
+  const bindingPath = bindingEntryPath(fixture);
+  const bindingBefore = fs.readFileSync(bindingPath);
+  const receiptBefore = fs.readFileSync(join(fixture.dataRoot, 'receipt.json'));
+  const instructions = join(
+    fixture.repo,
+    '.github',
+    'instructions',
+    'idd-overview-core.instructions.md',
+  );
+  fs.mkdirSync(dirname(instructions), { recursive: true });
+  fs.writeFileSync(instructions, '# local instructions\n');
+
+  const report = inspectDistributionSelection(fixture.options());
+  assert.equal(report.source, 'repository-local');
+  assert.equal(report.verdict, 'migration-required');
+  assert.equal(report.selected, null);
+  assert.equal(report.session.binding, 'bound');
+  assert.deepEqual(report.previousVerifiedSet, created.report.selected);
+  assert.equal(report.recovery, 'migrate');
+
+  const reuse = bindDistributionSelection(fixture.options());
+  assert.equal(reuse.status, 'refused');
+  assert.equal(reuse.authorized, false);
+  assert.equal(reuse.report.source, 'repository-local');
+  assert.deepEqual(fs.readFileSync(bindingPath), bindingBefore);
+  assert.deepEqual(
+    fs.readFileSync(join(fixture.dataRoot, 'receipt.json')),
+    receiptBefore,
+  );
+});
+
 test('an unreadable repository policy cannot fall through to global current', () => {
   const fixture = makeFixture();
   fixture.addPreparedSet(COMMIT_A, 'one');
@@ -422,6 +500,92 @@ test('an unreadable repository policy cannot fall through to global current', ()
   assert.equal(report.source, 'repository-local');
   assert.equal(report.compatibility, 'incompatible');
   assert.equal(report.recovery, 'reselect');
+});
+
+test('an unreadable repository policy keeps a verifiable binding visible without writes', () => {
+  const fixture = makeFixture();
+  fixture.addPreparedSet(COMMIT_A, 'one');
+  fixture.installCurrent(COMMIT_A, '1.0.0', 'one');
+  const created = bindDistributionSelection(fixture.options());
+  assert.equal(created.status, 'created');
+  const bindingPath = bindingEntryPath(fixture);
+  const bindingBefore = fs.readFileSync(bindingPath);
+  const receiptBefore = fs.readFileSync(join(fixture.dataRoot, 'receipt.json'));
+  const policyPath = join(fixture.repo, '.github', 'idd', 'config.json');
+  fs.mkdirSync(dirname(policyPath), { recursive: true });
+  fs.writeFileSync(policyPath, '{invalid json\n');
+
+  const report = inspectDistributionSelection(fixture.options());
+  assert.equal(report.verdict, 'not-verified-usable');
+  assert.equal(report.source, 'repository-local');
+  assert.equal(report.session.binding, 'bound');
+  assert.deepEqual(report.previousVerifiedSet, created.report.selected);
+  assert.equal(report.selected, null);
+  assert.equal(report.receipt.status, 'verified');
+  assert.equal(report.compatibility, 'incompatible');
+  assert.equal(report.recovery, 'reselect');
+
+  const refused = bindDistributionSelection(fixture.options());
+  assert.equal(refused.status, 'refused');
+  assert.equal(refused.authorized, false);
+  assert.deepEqual(fs.readFileSync(bindingPath), bindingBefore);
+  assert.deepEqual(
+    fs.readFileSync(join(fixture.dataRoot, 'receipt.json')),
+    receiptBefore,
+  );
+});
+
+test('an unreadable repository policy reports an unverifiable binding as a conflict', () => {
+  const fixture = makeFixture();
+  fixture.addPreparedSet(COMMIT_A, 'one');
+  fixture.installCurrent(COMMIT_A, '1.0.0', 'one');
+  const created = bindDistributionSelection(fixture.options());
+  assert.equal(created.status, 'created');
+  const bindingPath = bindingEntryPath(fixture);
+  fs.writeFileSync(bindingPath, '{"edited":true}\n');
+  const policyPath = join(fixture.repo, '.github', 'idd', 'config.json');
+  fs.mkdirSync(dirname(policyPath), { recursive: true });
+  fs.writeFileSync(policyPath, '{invalid json\n');
+
+  const report = inspectDistributionSelection(fixture.options());
+  assert.equal(report.verdict, 'not-verified-usable');
+  assert.equal(report.source, 'repository-local');
+  assert.equal(report.session.binding, 'bound');
+  assert.equal(report.receipt.status, 'conflict');
+  assert.equal(report.previousVerifiedSet, null);
+  assert.equal(fs.readFileSync(bindingPath, 'utf8'), '{"edited":true}\n');
+});
+
+test('an unresolvable worktree root keeps a verifiable binding visible', () => {
+  const fixture = makeFixture();
+  fixture.addPreparedSet(COMMIT_A, 'one');
+  fixture.installCurrent(COMMIT_A, '1.0.0', 'one');
+  const created = bindDistributionSelection(fixture.options());
+  assert.equal(created.status, 'created');
+  const runGit = (args: string[], cwd: string): string => {
+    if (args.includes('--show-toplevel')) {
+      throw new Error('injected worktree root failure');
+    }
+    return execFileSync('git', args, {
+      cwd,
+      encoding: 'utf8',
+      env: Object.fromEntries(
+        Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')),
+      ),
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+  };
+
+  const report = inspectDistributionSelection({
+    ...fixture.options(),
+    runGit,
+  });
+  assert.equal(report.repository, 'acme/app');
+  assert.equal(report.verdict, 'not-verified-usable');
+  assert.equal(report.source, 'repository-local');
+  assert.equal(report.session.binding, 'bound');
+  assert.deepEqual(report.previousVerifiedSet, created.report.selected);
+  assert.equal(report.selected, null);
 });
 
 test('a non-string repository package pin cannot fall through to global current', () => {
@@ -750,6 +914,59 @@ test('edited binding bytes are preserved and make the selection unusable', () =>
   assert.equal(refused.status, 'refused');
   assert.deepEqual(fs.readFileSync(binding.path), before);
 });
+
+for (const [label, mutate] of [
+  [
+    'missing a component identity',
+    (selected: BindingSelection) => {
+      delete selected.components.helper;
+    },
+  ],
+  [
+    'missing a component provenance',
+    (selected: BindingSelection) => {
+      delete selected.components.instructions.provenance;
+    },
+  ],
+  [
+    'with a component provenance from another commit',
+    (selected: BindingSelection) => {
+      selected.components.skillBundles['idd-spec-audit'].provenance.commit =
+        COMMIT_B;
+    },
+  ],
+] as const) {
+  test(`a receipt-owned binding selection ${label} is refused without an exception`, () => {
+    const fixture = makeFixture();
+    fixture.addPreparedSet(COMMIT_A, 'one');
+    fixture.installCurrent(COMMIT_A, '1.0.0', 'one');
+    const created = bindDistributionSelection(fixture.options());
+    assert.equal(created.status, 'created');
+    const path = rewriteBindingSelection(fixture, mutate);
+    const bindingBefore = fs.readFileSync(path);
+    const receiptBefore = fs.readFileSync(
+      join(fixture.dataRoot, 'receipt.json'),
+    );
+
+    const report = inspectDistributionSelection(fixture.options());
+    assert.equal(report.session.binding, 'bound');
+    assert.equal(report.verdict, 'not-verified-usable');
+    assert.equal(report.receipt.status, 'conflict');
+    assert.equal(report.selected, null);
+    assert.equal(report.previousVerifiedSet, null);
+    assert.equal(report.compatibility, 'incompatible');
+    assert.equal(report.recovery, 'reselect');
+
+    const refused = bindDistributionSelection(fixture.options());
+    assert.equal(refused.status, 'refused');
+    assert.equal(refused.authorized, false);
+    assert.deepEqual(fs.readFileSync(path), bindingBefore);
+    assert.deepEqual(
+      fs.readFileSync(join(fixture.dataRoot, 'receipt.json')),
+      receiptBefore,
+    );
+  });
+}
 
 test('a receipt binding path cannot traverse a symlink before opening', () => {
   const fixture = makeFixture();
