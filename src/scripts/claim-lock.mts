@@ -2052,8 +2052,9 @@ function runCli(): HelperCliResult {
     // reaches a new claim. A later re-record of an already-posted claim
     // passes the activation nonce and keeps accepting the claim's own
     // agent-id, so claims made before this rule keep their recovery routes.
-    // An empty --nonce (an unset shell variable) counts as no nonce.
-    if (!args.nonce && !isSessionQualifiedAgentId(args.agentId)) {
+    // An empty or whitespace-only --nonce (an unset shell variable) cannot
+    // be an activation nonce, so it counts as no nonce.
+    if (!args.nonce?.trim() && !isSessionQualifiedAgentId(args.agentId)) {
       throw markCliUsageError(
         new Error(
           `--record-tokens refuses --agent-id ${JSON.stringify(args.agentId)} for a new claim: use <family>-<suffix> with the runtime's unique session suffix or a generated UUID (a run of at least 8 letters or digits after the first '-'). A forced-handoff successor whose marker names such an id stops and asks a maintainer for a new marker`,

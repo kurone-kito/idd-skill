@@ -2563,8 +2563,10 @@ test('CLI: --record-tokens refuses a bare or short --agent-id and writes nothing
       ['claude', []],
       ['codex-cli', []],
       ['claude-a', []],
-      // An empty --nonce is no nonce, so it does not make this a re-record.
+      // An empty or whitespace-only --nonce is no nonce, so it does not
+      // make this a re-record.
       ['claude', ['--nonce', '']],
+      ['claude', ['--nonce', '  ']],
     ] as const) {
       await assert.rejects(
         execFileAsync(
