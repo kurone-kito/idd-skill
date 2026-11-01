@@ -489,6 +489,153 @@ test('helper closure validation ignores generated comments that mention source i
   );
 });
 
+/** A bin wrapper, a minimal run-helper that spawns its argument, and the script it runs. */
+function writeWrapperFixture(source: string, delegatedCall: string): void {
+  nodeFs.mkdirSync(join(source, 'bin'), { recursive: true });
+  nodeFs.writeFileSync(
+    join(source, 'bin/sample.mjs'),
+    `import { runHelper } from './run-helper.mjs';\n\n${delegatedCall}\n`,
+  );
+  nodeFs.writeFileSync(
+    join(source, 'bin/run-helper.mjs'),
+    [
+      "import { spawnSync } from 'node:child_process';",
+      "import { resolve } from 'node:path';",
+      'export function runHelper(relativeScriptPath) {',
+      '  const result = spawnSync(',
+      '    process.execPath,',
+      '    [resolve(import.meta.dirname, relativeScriptPath)],',
+      "    { stdio: 'inherit' },",
+      '  );',
+      '  process.exitCode = result.status ?? 1;',
+      '}',
+      '',
+    ].join('\n'),
+  );
+  nodeFs.writeFileSync(
+    join(source, 'scripts/sample.mjs'),
+    "import { readFileSync } from 'node:fs';\nprocess.stdout.write(readFileSync(new URL('../data/one.json', import.meta.url), 'utf8'));\n",
+  );
+}
+
+test('preparation includes the script a bin wrapper delegates to, and the prepared wrapper runs (#4917)', () => {
+  const home = makeHome();
+  const source = makePreparedSource();
+  writeWrapperFixture(source, "runHelper('../scripts/sample.mjs');");
+  const commit = 'a'.repeat(40);
+
+  const prepared = prepareDistributionSet(
+    prepareOptions(home, source, commit, {
+      invocation: { command: 'bin/sample.mjs', argv: [] },
+    }),
+  );
+
+  assert.deepEqual(
+    preparedManifest(prepared.preparedPath)
+      .components.helper.files.map((file) => file.path)
+      .sort(),
+    [
+      'bin/run-helper.mjs',
+      'bin/sample.mjs',
+      'data/one.json',
+      'scripts/sample.mjs',
+    ],
+  );
+  const run = spawnSync(
+    process.execPath,
+    [join(prepared.preparedPath, 'bin/sample.mjs')],
+    { cwd: home, encoding: 'utf8' },
+  );
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout, '{"prepared":true}\n');
+});
+
+test('preparation refuses a bin wrapper whose delegated script is missing or not a literal, before any write (#4917)', () => {
+  for (const { call, error } of [
+    {
+      call: "runHelper('../scripts/missing.mjs');",
+      error:
+        /delegated helper \.\.\/scripts\/missing\.mjs run by bin\/sample\.mjs is not a regular file/,
+    },
+    {
+      call: "const script = '../scripts/sample.mjs';\nrunHelper(script);",
+      error:
+        /bin\/sample\.mjs passes runHelper something other than one string literal/,
+    },
+  ]) {
+    const home = makeHome();
+    const source = makePreparedSource();
+    writeWrapperFixture(source, call);
+    const before = snapshot(home);
+
+    assert.throws(
+      () =>
+        prepareDistributionSet(
+          prepareOptions(home, source, 'b'.repeat(40), {
+            invocation: { command: 'bin/sample.mjs', argv: [] },
+          }),
+        ),
+      error,
+    );
+    assert.deepEqual(snapshot(home), before);
+  }
+});
+
+test('a prepared set of the repository activation wrapper runs without a missing module (#4917)', () => {
+  const home = makeHome();
+  const prepared = prepareDistributionSet(
+    prepareOptions(home, REPO, 'c'.repeat(40), {
+      invocation: { command: 'bin/idd-activation.mjs', argv: [] },
+    }),
+  );
+  const helperFiles = preparedManifest(
+    prepared.preparedPath,
+  ).components.helper.files.map((file) => file.path);
+  assert.ok(helperFiles.includes('scripts/idd-activation.mjs'));
+
+  const run = spawnSync(
+    process.execPath,
+    [join(prepared.preparedPath, 'bin/idd-activation.mjs')],
+    { cwd: home, encoding: 'utf8' },
+  );
+  assert.equal(run.status, 0, run.stderr);
+  assert.doesNotMatch(run.stderr, /MODULE_NOT_FOUND|Cannot find module/);
+});
+
+test('preparation follows a dynamic import inside a template substitution and ignores import text in a string (#4917)', () => {
+  const home = makeHome();
+  const source = makePreparedSource();
+  nodeFs.writeFileSync(
+    join(source, 'scripts/sample.mjs'),
+    [
+      `export const note = "import './quoted-missing.mjs'";`,
+      // `${import('./dependency.mjs')}` inside a template literal.
+      ['export const loaded = `$', "{import('./dependency.mjs')}`;"].join(''),
+      '',
+    ].join('\n'),
+  );
+  nodeFs.writeFileSync(
+    join(source, 'scripts/dependency.mjs'),
+    'export const dependency = true;\n',
+  );
+
+  const prepared = prepareDistributionSet(
+    prepareOptions(home, source, 'd'.repeat(40)),
+  );
+
+  const helperFiles = preparedManifest(
+    prepared.preparedPath,
+  ).components.helper.files.map((file) => file.path);
+  assert.ok(helperFiles.includes('scripts/dependency.mjs'));
+  assert.equal(
+    helperFiles.some((path) => path.includes('quoted-missing')),
+    false,
+  );
+  assert.ok(
+    nodeFs.existsSync(join(prepared.preparedPath, 'scripts/dependency.mjs')),
+  );
+});
+
 test('checkout preparation verifies helper blobs larger than the git default buffer', () => {
   const home = makeHome();
   const source = makePreparedSource();
