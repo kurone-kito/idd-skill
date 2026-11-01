@@ -474,7 +474,12 @@ test('the user-global entry names installed activation fallbacks', () => {
     /idd-onboard --distribution prepare --session-id <id> --source <checkout>/,
   );
   assert.match(text, /idd-onboard --distribution inspect --session-id <id>/);
-  assert.match(text, /rerun activation after recovery/);
+  assert.match(text, /After prepare, rerun activation/);
+  assert.match(text, /After repair, rerun activation/);
+  assert.match(
+    text,
+    /Stop unless ready, binding-required, or recovery is prepare/,
+  );
   assert.match(text, /~\/\.local\/bin\/idd-activation/);
   assert.ok(text.includes('& "$HOME\\.local\\bin\\idd-activation.cmd"'));
   assert.ok(text.includes('"%USERPROFILE%\\.local\\bin\\idd-activation.cmd"'));
