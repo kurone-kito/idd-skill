@@ -312,6 +312,14 @@ test('standalone guard contract rejects a range concatenated before the template
       '    process.stderr.write(ENGINES_RANGE);\n    process.stderr.write(\n',
     );
     assert.notEqual(earlierWriteCall, sourceWithRangeConstant);
+    const decoyWriteBeforePrefix = sameLinePrefix.replace(
+      '    process.stderr.write(\n',
+      '    process.stderr.write(\n' +
+        "      `Node version satisfying idd-skill's own package.json engines.node requirement.\\n`,\n" +
+        '    );\n' +
+        '    process.stderr.write(\n',
+    );
+    assert.notEqual(decoyWriteBeforePrefix, sameLinePrefix);
 
     for (const mutatedSource of [
       sameLinePrefix,
@@ -319,6 +327,7 @@ test('standalone guard contract rejects a range concatenated before the template
       decoyCallCommentPrefix,
       otherSinkPrefix,
       earlierWriteCall,
+      decoyWriteBeforePrefix,
     ]) {
       writeFileSync(sourcePath, mutatedSource);
       const before = snapshot(fixture.root);

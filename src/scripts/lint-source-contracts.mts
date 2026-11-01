@@ -357,10 +357,12 @@ function detectEntryContracts(
       guardWriteCallStart + guardWriteCall.length < guardMessageMarkerStart
         ? guardWriteCallStart + guardWriteCall.length
         : -1;
+    // Search the end from the marker, so the slice always holds the marker
+    // even when another complete write call comes before the guard's.
     const guardMessageEnd =
       guardMessageStart === -1
         ? -1
-        : text.indexOf('\n    );', guardMessageStart);
+        : text.indexOf('\n    );', guardMessageMarkerStart);
     const guardMessage =
       guardMessageStart === -1 || guardMessageEnd === -1
         ? ''
