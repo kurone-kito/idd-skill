@@ -62,6 +62,8 @@ import {
   closeSync,
   copyFileSync,
   existsSync,
+  constants as fsConstants,
+  fstatSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -77,6 +79,10 @@ import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { resolveBundleRoot } from './bundle-root.mjs';
 import { stripLeadingArgumentSeparator } from './cli-args.mjs';
+import {
+  bindDistributionSelection,
+  inspectDistributionSelection,
+} from './distribution-selection.mjs';
 import { safeGhText } from './gh-exec.mjs';
 import {
   applyHelperCliOutcomeWhenDisabled,
@@ -106,6 +112,7 @@ import {
   installPayload,
   planInstall,
   planUninstall,
+  prepareDistributionSet,
   uninstallPayload,
 } from './user-global-install.mjs';
 import {
@@ -6223,6 +6230,383 @@ function runUserGlobalCli(args) {
   }
 }
 // user-global modes: end
+const DISTRIBUTION_MANIFEST_NAME = 'manifest.json';
+const DISTRIBUTION_INVOCATION_COMMAND = 'bin/idd-activation.mjs';
+const SOURCE_COMMIT_PATTERN = /^[0-9a-f]{40}$/u;
+function validateDistributionReport(report, sessionId) {
+  const errors = validate(
+    report,
+    loadJson('schemas/distribution-selection.schema.json'),
+  );
+  if (errors.length > 0) {
+    throw new Error(
+      `distribution-selection report is invalid: ${errors.join('; ')}`,
+    );
+  }
+  if (report.session.id !== sessionId) {
+    throw new Error(
+      `distribution-selection report names session ${report.session.id}, expected ${sessionId}`,
+    );
+  }
+  return report;
+}
+function resolveDistributionCheckoutCommit(sourceRoot, requested) {
+  if (requested !== undefined && !SOURCE_COMMIT_PATTERN.test(requested)) {
+    throw new Error(
+      '--source-commit must be a full lowercase 40-character commit ID',
+    );
+  }
+  let resolvedCommit;
+  try {
+    resolvedCommit = execFileSync(
+      'git',
+      ['-C', sourceRoot, 'rev-parse', '--verify', 'HEAD^{commit}'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+    ).trim();
+  } catch (error) {
+    throw new Error(
+      `--source must be a Git checkout with a resolvable HEAD (${error instanceof Error ? error.message : String(error)})`,
+    );
+  }
+  if (!SOURCE_COMMIT_PATTERN.test(resolvedCommit)) {
+    throw new Error('--source did not resolve to a full immutable commit ID');
+  }
+  if (requested !== undefined && requested !== resolvedCommit) {
+    throw new Error(
+      `--source-commit ${requested} does not match the checkout HEAD ${resolvedCommit}`,
+    );
+  }
+  return resolvedCommit;
+}
+function readPreparedDistributionManifest(preparedPath) {
+  const noFollow = fsConstants.O_NOFOLLOW;
+  const nonBlock = fsConstants.O_NONBLOCK;
+  if (noFollow === undefined || nonBlock === undefined) {
+    throw new Error(
+      'this platform does not support the no-follow manifest read required for distribution preparation',
+    );
+  }
+  const manifestPath = join(preparedPath, DISTRIBUTION_MANIFEST_NAME);
+  const descriptor = openSync(
+    manifestPath,
+    fsConstants.O_RDONLY | noFollow | nonBlock,
+  );
+  try {
+    const stat = fstatSync(descriptor);
+    if (!stat.isFile() || stat.nlink !== 1) {
+      throw new Error(
+        `${manifestPath} is not a single-link regular manifest file`,
+      );
+    }
+    return JSON.parse(readFileSync(descriptor, 'utf8'));
+  } finally {
+    closeSync(descriptor);
+  }
+}
+function distributionFailure(operation, error, selection) {
+  const message = error instanceof Error ? error.message : String(error);
+  return {
+    output: {
+      protocolVersion: '1',
+      mode: 'distribution',
+      operation,
+      status: 'failed',
+      error: message,
+      recovery:
+        operation === 'bind'
+          ? 'inspect the same repository and session before retrying bind'
+          : operation === 'prepare'
+            ? 'inspect the reported state and retry only with the same immutable source commit'
+            : operation === 'inspect'
+              ? 'retry read-only inspection for the same repository and session'
+              : 'choose inspect, prepare, or bind; no operation was run',
+      ...(selection === undefined ? {} : { selection }),
+    },
+    exitCode: 1,
+    message,
+  };
+}
+/** Execute one explicit distribution operation; inspection calls no writer. */
+export function executeDistributionCli(
+  command,
+  services = {
+    inspect: inspectDistributionSelection,
+    prepare: prepareDistributionSet,
+    bind: bindDistributionSelection,
+    resolveCommit: resolveDistributionCheckoutCommit,
+    readManifest: readPreparedDistributionManifest,
+  },
+) {
+  if (!['inspect', 'prepare', 'bind'].includes(command.operation)) {
+    return distributionFailure(
+      String(command.operation),
+      new Error(
+        `unsupported distribution operation: ${String(command.operation)}`,
+      ),
+    );
+  }
+  const inspect = () =>
+    validateDistributionReport(
+      services.inspect({
+        cwd: command.targetRoot,
+        sessionId: command.sessionId,
+      }),
+      command.sessionId,
+    );
+  if (command.operation === 'inspect') {
+    try {
+      // The schema contract's mutation field is `none`; this route never calls
+      // preparation, binding, a package manager, or a network client.
+      return { output: inspect(), exitCode: 0 };
+    } catch (error) {
+      return distributionFailure('inspect', error);
+    }
+  }
+  if (command.operation === 'bind') {
+    try {
+      const binding = services.bind({
+        cwd: command.targetRoot,
+        sessionId: command.sessionId,
+      });
+      const selection = validateDistributionReport(
+        binding.report,
+        command.sessionId,
+      );
+      const authorized =
+        binding.authorized &&
+        (binding.status === 'created' || binding.status === 'reused');
+      return {
+        output: {
+          protocolVersion: '1',
+          mode: 'distribution',
+          operation: 'bind',
+          status: binding.status,
+          authorized,
+          ...(binding.reason === undefined ? {} : { reason: binding.reason }),
+          ...(binding.stagedPath === undefined
+            ? {}
+            : { stagedPath: binding.stagedPath }),
+          recovery:
+            binding.status === 'partial'
+              ? 'inspect the same repository and session before retrying bind'
+              : selection.recovery,
+          selection,
+        },
+        exitCode: authorized ? 0 : 1,
+        ...(authorized
+          ? {}
+          : { message: binding.reason ?? `binding was ${binding.status}` }),
+      };
+    } catch (error) {
+      let selection;
+      try {
+        selection = inspect();
+      } catch {
+        // Keep the binding failure as the primary result when the recovery
+        // inspection is also unavailable.
+      }
+      return distributionFailure('bind', error, selection);
+    }
+  }
+  if (command.sourceRoot === undefined) {
+    return distributionFailure(
+      'prepare',
+      new Error('prepare requires an explicit --source Git checkout'),
+    );
+  }
+  let before;
+  try {
+    before = inspect();
+  } catch (error) {
+    return distributionFailure('prepare', error);
+  }
+  let sourceCommit;
+  try {
+    sourceCommit = services.resolveCommit(
+      command.sourceRoot,
+      command.sourceCommit,
+    );
+  } catch (error) {
+    return distributionFailure('prepare', error, before);
+  }
+  try {
+    const prepared = services.prepare({
+      sourceRoot: command.sourceRoot,
+      sourceCommit,
+      provenance: { kind: 'checkout', commit: sourceCommit },
+      invocation: {
+        command: DISTRIBUTION_INVOCATION_COMMAND,
+        argv: [...(command.helperArgv ?? [])],
+      },
+    });
+    if (prepared.sourceCommit !== sourceCommit) {
+      throw new Error(
+        `preparation returned ${prepared.sourceCommit}, expected ${sourceCommit}`,
+      );
+    }
+    const manifest = services.readManifest(prepared.preparedPath);
+    const manifestErrors = validate(
+      manifest,
+      loadJson('schemas/distribution-manifest.schema.json'),
+    );
+    if (manifestErrors.length > 0) {
+      throw new Error(
+        `prepared distribution manifest is invalid: ${manifestErrors.join('; ')}`,
+      );
+    }
+    if (
+      typeof manifest !== 'object' ||
+      manifest === null ||
+      !('sourceCommit' in manifest) ||
+      manifest.sourceCommit !== sourceCommit
+    ) {
+      throw new Error(
+        `prepared distribution manifest does not identify ${sourceCommit}`,
+      );
+    }
+    const selection = inspect();
+    return {
+      output: {
+        protocolVersion: '1',
+        mode: 'distribution',
+        operation: 'prepare',
+        status: 'prepared',
+        preparation: {
+          sourceCommit,
+          preparedPath: prepared.preparedPath,
+          fileCount: prepared.fileCount,
+          reused: prepared.reused,
+          manifestSchemaValid: true,
+        },
+        before,
+        selection,
+      },
+      exitCode: 0,
+    };
+  } catch (error) {
+    let selection;
+    try {
+      selection = inspect();
+    } catch {
+      // The preparation error carries its staged-path recovery details.
+    }
+    return distributionFailure('prepare', error, selection ?? before);
+  }
+}
+function parseHelperArgvJson(value) {
+  let parsed;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw markCliUsageError(
+      new Error('--helper-argv-json must be a JSON array of strings'),
+    );
+  }
+  if (
+    !Array.isArray(parsed) ||
+    !parsed.every(
+      (argument) => typeof argument === 'string' && !argument.includes('\0'),
+    )
+  ) {
+    throw markCliUsageError(
+      new Error('--helper-argv-json must be a JSON array of NUL-free strings'),
+    );
+  }
+  return parsed;
+}
+function assertDistributionFlags(args) {
+  const allowed = new Set([
+    '--distribution',
+    '--session-id',
+    '--target',
+    '--allow-root',
+    '--source',
+    '--source-commit',
+    '--helper-argv-json',
+  ]);
+  const foreign = [...new Set(args.givenFlags)].filter(
+    (flag) => !allowed.has(flag),
+  );
+  if (foreign.length > 0) {
+    throw markCliUsageError(
+      new Error(
+        `--distribution does not accept flag(s): ${foreign.join(', ')}`,
+      ),
+    );
+  }
+  if (args.sessionId === undefined || args.sessionId.trim() === '') {
+    throw markCliUsageError(
+      new Error('--distribution requires a non-empty --session-id'),
+    );
+  }
+  if (/[\r\n\0]/u.test(args.sessionId)) {
+    throw markCliUsageError(
+      new Error('--session-id must not contain a line break or NUL'),
+    );
+  }
+  if (
+    args.sourceCommit !== undefined &&
+    !SOURCE_COMMIT_PATTERN.test(args.sourceCommit)
+  ) {
+    throw markCliUsageError(
+      new Error(
+        '--source-commit must be a full lowercase 40-character commit ID',
+      ),
+    );
+  }
+  if (
+    args.distribution !== 'prepare' &&
+    (args.source !== undefined ||
+      args.sourceCommit !== undefined ||
+      args.helperArgvJson !== undefined)
+  ) {
+    throw markCliUsageError(
+      new Error(
+        '--source, --source-commit, and --helper-argv-json require --distribution prepare',
+      ),
+    );
+  }
+  if (args.distribution === 'prepare' && args.source === undefined) {
+    throw markCliUsageError(
+      new Error('--distribution prepare requires --source <checkout>'),
+    );
+  }
+}
+function runDistributionCli(args) {
+  assertDistributionFlags(args);
+  const targetRoot = resolveConfinedDirectory(
+    args.target,
+    '--target',
+    args.allowRoots,
+  );
+  const sourceRoot =
+    args.source === undefined
+      ? undefined
+      : resolveConfinedDirectory(args.source, '--source', args.allowRoots);
+  const outcome = executeDistributionCli({
+    operation: args.distribution ?? 'inspect',
+    targetRoot,
+    sessionId: args.sessionId,
+    ...(sourceRoot === undefined ? {} : { sourceRoot }),
+    ...(args.sourceCommit === undefined
+      ? {}
+      : { sourceCommit: args.sourceCommit }),
+    ...(args.helperArgvJson === undefined
+      ? {}
+      : { helperArgv: parseHelperArgvJson(args.helperArgvJson) }),
+  });
+  process.stdout.write(`${JSON.stringify(outcome.output, null, 2)}\n`);
+  if (outcome.message !== undefined) {
+    process.stderr.write(`idd-onboard: ${outcome.message}\n`);
+  }
+  return outcome.exitCode === 0
+    ? 0
+    : {
+        exitCode: 1,
+        kind: 'gate',
+        message: outcome.message ?? 'distribution operation failed',
+      };
+}
 async function main() {
   try {
     return await runCli();
@@ -6255,6 +6639,10 @@ function parseArgs(rawArgv) {
   // wrapper (see the comment above) so it must call the strip directly.
   const argv = stripLeadingArgumentSeparator(rawArgv);
   const parsed = {
+    distribution: undefined,
+    sessionId: undefined,
+    sourceCommit: undefined,
+    helperArgvJson: undefined,
     substitute: false,
     importMode: false,
     verify: false,
@@ -6297,6 +6685,30 @@ function parseArgs(rawArgv) {
       return value;
     };
     parsed.givenFlags.push(String(token));
+    if (token === '--distribution') {
+      if (value === 'inspect' || value === 'prepare' || value === 'bind') {
+        parsed.distribution = value;
+        index += 1;
+      } else {
+        parsed.distribution = 'inspect';
+      }
+      continue;
+    }
+    if (token === '--session-id') {
+      parsed.sessionId = requireValue();
+      index += 1;
+      continue;
+    }
+    if (token === '--source-commit') {
+      parsed.sourceCommit = requireValue();
+      index += 1;
+      continue;
+    }
+    if (token === '--helper-argv-json') {
+      parsed.helperArgvJson = requireValue();
+      index += 1;
+      continue;
+    }
     if (token === '--substitute') {
       parsed.substitute = true;
       continue;
@@ -6525,6 +6937,9 @@ async function runCli() {
   if (args.installUserGlobal || args.uninstall) {
     return runUserGlobalCli(args);
   }
+  if (args.distribution !== undefined) {
+    return runDistributionCli(args);
+  }
   if (args.harness !== undefined) {
     // Every other stage rejects --harness the way it rejected any flag it
     // never reads, before the stage branches below could ignore it.
@@ -6625,7 +7040,7 @@ async function runCli() {
   if (!args.substitute) {
     throw markCliUsageError(
       new Error(
-        'pass --substitute, --import, --verify, --hear, --record-policy, --install-user-global, or --uninstall to select a stage',
+        'pass --substitute, --import, --verify, --hear, --record-policy, --distribution, --install-user-global, or --uninstall to select a stage',
       ),
     );
   }
@@ -6884,10 +7299,24 @@ function printHelp() {
        node scripts/idd-onboard.mjs --hear --apply --answers <file> --target <dir>
        node scripts/idd-onboard.mjs --hear --target <dir>   (interactive TTY wizard)
        node scripts/idd-onboard.mjs --record-policy --transcript <file> --target <dir> [--issue-mediated] [--apply] [--write-policy-doc <path>] [--force]
+       node scripts/idd-onboard.mjs --distribution [inspect|prepare|bind] --session-id <id> [--target <repo>]
+       node scripts/idd-onboard.mjs --distribution prepare --session-id <id> --source <checkout> [--source-commit <sha>] [--helper-argv-json <json-array>]
        node scripts/idd-onboard.mjs --install-user-global [--harness <list>] [--dry-run]
        node scripts/idd-onboard.mjs --uninstall [--dry-run]
 
 Onboarding automation.
+
+--distribution (issue #4705): inspect the exact repository/session selection
+read-only by default. Use --distribution prepare with a Git checkout to
+prepare one immutable source commit, or --distribution bind to explicitly
+persist a verified selection. Every operation requires a stable, caller-supplied
+--session-id; this command never mints one. Preparation verifies the checkout
+commit and generated manifest, preserves the repository pin, and does not bind.
+--helper-argv-json is parsed as JSON data and is never passed through a shell.
+Bare idd-onboard remains a usage error.
+
+Exit codes: 0 for a valid inspection or verified preparation/binding; 1 for a
+refused/partial/failed operation; 2 for invalid flags or configuration.
 
 --substitute (wave 1): resolves the seven template placeholders for a
 target tree that already contains the imported template files
