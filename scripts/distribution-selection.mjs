@@ -801,12 +801,31 @@ function inspectWithContext(ctx) {
     });
   }
   if (ctx.policyDiagnostic !== null) {
-    return baseReport(ctx, receipt.status, {
+    const refusal = {
       source: 'repository-local',
       verdict: 'not-verified-usable',
       compatibility: 'incompatible',
       recovery: 'reselect',
-    });
+    };
+    // A policy diagnostic leaves no set selectable, but a binding that the
+    // receipt still verifies keeps the session's prior identity visible.
+    if (receipt.status === 'verified') {
+      const binding = readBinding(ctx, receipt.entries);
+      if (binding.conflict !== null) {
+        return baseReport(ctx, 'conflict', {
+          ...refusal,
+          session: { id: ctx.sessionId, binding: 'bound' },
+        });
+      }
+      if (binding.record !== null) {
+        return baseReport(ctx, receipt.status, {
+          ...refusal,
+          session: { id: ctx.sessionId, binding: 'bound' },
+          previousVerifiedSet: cloneJson(binding.record.selected),
+        });
+      }
+    }
+    return baseReport(ctx, receipt.status, refusal);
   }
   if (receipt.status === 'unsupported-legacy') {
     return baseReport(ctx, receipt.status, { source: 'legacy-receipt' });

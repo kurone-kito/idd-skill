@@ -502,6 +502,92 @@ test('an unreadable repository policy cannot fall through to global current', ()
   assert.equal(report.recovery, 'reselect');
 });
 
+test('an unreadable repository policy keeps a verifiable binding visible without writes', () => {
+  const fixture = makeFixture();
+  fixture.addPreparedSet(COMMIT_A, 'one');
+  fixture.installCurrent(COMMIT_A, '1.0.0', 'one');
+  const created = bindDistributionSelection(fixture.options());
+  assert.equal(created.status, 'created');
+  const bindingPath = bindingEntryPath(fixture);
+  const bindingBefore = fs.readFileSync(bindingPath);
+  const receiptBefore = fs.readFileSync(join(fixture.dataRoot, 'receipt.json'));
+  const policyPath = join(fixture.repo, '.github', 'idd', 'config.json');
+  fs.mkdirSync(dirname(policyPath), { recursive: true });
+  fs.writeFileSync(policyPath, '{invalid json\n');
+
+  const report = inspectDistributionSelection(fixture.options());
+  assert.equal(report.verdict, 'not-verified-usable');
+  assert.equal(report.source, 'repository-local');
+  assert.equal(report.session.binding, 'bound');
+  assert.deepEqual(report.previousVerifiedSet, created.report.selected);
+  assert.equal(report.selected, null);
+  assert.equal(report.receipt.status, 'verified');
+  assert.equal(report.compatibility, 'incompatible');
+  assert.equal(report.recovery, 'reselect');
+
+  const refused = bindDistributionSelection(fixture.options());
+  assert.equal(refused.status, 'refused');
+  assert.equal(refused.authorized, false);
+  assert.deepEqual(fs.readFileSync(bindingPath), bindingBefore);
+  assert.deepEqual(
+    fs.readFileSync(join(fixture.dataRoot, 'receipt.json')),
+    receiptBefore,
+  );
+});
+
+test('an unreadable repository policy reports an unverifiable binding as a conflict', () => {
+  const fixture = makeFixture();
+  fixture.addPreparedSet(COMMIT_A, 'one');
+  fixture.installCurrent(COMMIT_A, '1.0.0', 'one');
+  const created = bindDistributionSelection(fixture.options());
+  assert.equal(created.status, 'created');
+  const bindingPath = bindingEntryPath(fixture);
+  fs.writeFileSync(bindingPath, '{"edited":true}\n');
+  const policyPath = join(fixture.repo, '.github', 'idd', 'config.json');
+  fs.mkdirSync(dirname(policyPath), { recursive: true });
+  fs.writeFileSync(policyPath, '{invalid json\n');
+
+  const report = inspectDistributionSelection(fixture.options());
+  assert.equal(report.verdict, 'not-verified-usable');
+  assert.equal(report.source, 'repository-local');
+  assert.equal(report.session.binding, 'bound');
+  assert.equal(report.receipt.status, 'conflict');
+  assert.equal(report.previousVerifiedSet, null);
+  assert.equal(fs.readFileSync(bindingPath, 'utf8'), '{"edited":true}\n');
+});
+
+test('an unresolvable worktree root keeps a verifiable binding visible', () => {
+  const fixture = makeFixture();
+  fixture.addPreparedSet(COMMIT_A, 'one');
+  fixture.installCurrent(COMMIT_A, '1.0.0', 'one');
+  const created = bindDistributionSelection(fixture.options());
+  assert.equal(created.status, 'created');
+  const runGit = (args: string[], cwd: string): string => {
+    if (args.includes('--show-toplevel')) {
+      throw new Error('injected worktree root failure');
+    }
+    return execFileSync('git', args, {
+      cwd,
+      encoding: 'utf8',
+      env: Object.fromEntries(
+        Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')),
+      ),
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+  };
+
+  const report = inspectDistributionSelection({
+    ...fixture.options(),
+    runGit,
+  });
+  assert.equal(report.repository, 'acme/app');
+  assert.equal(report.verdict, 'not-verified-usable');
+  assert.equal(report.source, 'repository-local');
+  assert.equal(report.session.binding, 'bound');
+  assert.deepEqual(report.previousVerifiedSet, created.report.selected);
+  assert.equal(report.selected, null);
+});
+
 test('a non-string repository package pin cannot fall through to global current', () => {
   const fixture = makeFixture();
   fixture.addPreparedSet(COMMIT_A, 'one');
