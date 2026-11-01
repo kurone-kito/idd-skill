@@ -2039,8 +2039,51 @@ function discardPreparedCandidateWithContext(ctx, commit) {
       priorCurrentTarget: null,
     };
   }
+  // Whether `target` and one unlisted `<target>.idd-prepared-tmp-<digits>`
+  // beside it are the two links a publication interrupted between its link
+  // and its unlink leaves: one inode, two links each, and the bytes of the
+  // target's receipt hash.
+  const isInterruptedPublication = (target) => {
+    const expected = fileEntries.get(target);
+    const targetStat = fs.lstatSync(target, { bigint: true });
+    if (
+      expected === undefined ||
+      !targetStat.isFile() ||
+      targetStat.nlink !== 2n ||
+      targetStat.ino === 0n
+    ) {
+      return false;
+    }
+    const prefix = `${basename(target)}.idd-prepared-tmp-`;
+    return fs.readdirSync(dirname(target)).some((name) => {
+      const path = join(dirname(target), name);
+      if (
+        !name.startsWith(prefix) ||
+        !/^[0-9]+$/.test(name.slice(prefix.length)) ||
+        fileEntries.has(path)
+      ) {
+        return false;
+      }
+      const stat = fs.lstatSync(path, { bigint: true });
+      return (
+        stat.isFile() &&
+        stat.nlink === 2n &&
+        stat.dev === targetStat.dev &&
+        stat.ino === targetStat.ino &&
+        sha256Hex(readNoFollowBytes(path, fs)) === expected
+      );
+    });
+  };
+  // A manifest published by an interrupted publication still has its second
+  // link, which uninstall refuses, so this recovery takes that set too.
   const manifestWalk = checkContainment(ctx.preparedRoot, manifestPath, fs);
-  if (manifestWalk.finalKind !== 'absent') {
+  if (
+    manifestWalk.finalKind !== 'absent' &&
+    !(
+      manifestWalk.finalKind === 'file' &&
+      isInterruptedPublication(manifestPath)
+    )
+  ) {
     refuse(
       manifestWalk.finalKind === 'file'
         ? `${manifestPath} is published, so ${setRoot} is a complete set; use uninstall to remove it`
@@ -2088,7 +2131,10 @@ function discardPreparedCandidateWithContext(ctx, commit) {
     visit(setRoot);
     const pairedTargets = new Set();
     for (const [path, { name, directory, stat }] of regularFiles) {
-      const temporary = name.match(temporaryPattern);
+      // A listed path is an ordinary file, whatever its name.
+      const temporary = fileEntries.has(path)
+        ? null
+        : name.match(temporaryPattern);
       if (temporary === null || stat.nlink !== 2n) continue;
       const target = join(directory, temporary[1] ?? '');
       const targetFile = regularFiles.get(target);
@@ -2114,7 +2160,9 @@ function discardPreparedCandidateWithContext(ctx, commit) {
         continue;
       }
       const sha256 = sha256Hex(readNoFollowBytes(path, fs));
-      const temporary = name.match(temporaryPattern);
+      const temporary = fileEntries.has(path)
+        ? null
+        : name.match(temporaryPattern);
       if (temporary !== null) {
         const target = join(directory, temporary[1] ?? '');
         if (fileEntries.get(target) === sha256) {
@@ -3171,6 +3219,18 @@ function buildUninstallPlan(ctx) {
   );
   const decisions = [];
   const refusals = [];
+  // A continuation path that exists without a receipt entry is not the
+  // installer's, so uninstall refuses it rather than adopting it as its
+  // record or listing a record it cannot then write (#4917).
+  for (const group of preparedGroups) {
+    if (entries.has(group.continuationPath)) continue;
+    const walk = checkContainment(ctx.preparedRoot, group.continuationPath, fs);
+    if (walk.finalKind !== 'absent') {
+      refusals.push(
+        `${group.continuationPath} exists as a ${walk.finalKind}, but the receipt does not list it, so uninstall will not adopt it as its continuation record; move it aside, then uninstall again`,
+      );
+    }
+  }
   for (const entry of read.receipt.entries) {
     try {
       assertOwnedShape(ctx, entry);

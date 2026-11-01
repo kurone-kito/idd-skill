@@ -561,7 +561,7 @@ test('preparation refuses a bin wrapper whose delegated script is missing or not
     {
       call: "const script = '../scripts/sample.mjs';\nrunHelper(script);",
       error:
-        /bin\/sample\.mjs passes runHelper something other than one string literal/,
+        /bin\/sample\.mjs uses runHelper in a way that does not name one script/,
     },
   ]) {
     const home = makeHome();
@@ -1529,6 +1529,112 @@ test('discardPreparedCandidate removes a publication interrupted between its lin
     ),
     false,
   );
+});
+
+test('discardPreparedCandidate takes a set whose manifest publication stopped between its link and unlink (#4917)', () => {
+  const home = makeHome();
+  const commit = 'b'.repeat(40);
+  const candidatePath = join(dataRootOf(home), 'prepared', commit);
+  const manifestPath = join(candidatePath, 'manifest.json');
+  let failed = false;
+  const fs = hookedFs((op, args) => {
+    if (
+      op === 'unlinkSync' &&
+      String(args[0]).startsWith(`${manifestPath}.idd-prepared-tmp-`) &&
+      !failed
+    ) {
+      failed = true;
+      throw new Error('injected interruption after the manifest link');
+    }
+  });
+  assert.throws(
+    () =>
+      prepareDistributionSet({
+        ...prepareOptions(home, makePreparedSource(), commit),
+        fs,
+      }),
+    /injected interruption after the manifest link/,
+  );
+  assert.equal(nodeFs.statSync(manifestPath).nlink, 2);
+  const before = snapshot(home);
+  assert.throws(
+    () => uninstallPayload(optionsFor(home)),
+    /manifest\.json has more than one hard link/,
+  );
+  assert.deepEqual(snapshot(home), before);
+
+  discardPreparedCandidate({ ...optionsFor(home), sourceCommit: commit });
+  assert.equal(nodeFs.existsSync(candidatePath), false);
+  assert.equal(
+    readReceiptEntries(home).some(
+      (entry) =>
+        entry.path === candidatePath ||
+        entry.path.startsWith(`${candidatePath}/`),
+    ),
+    false,
+  );
+});
+
+test('discardPreparedCandidate checks a listed file named like a temporary against its own receipt hash (#4917)', () => {
+  const home = makeHome();
+  const commit = 'c'.repeat(40);
+  const dataRoot = dataRootOf(home);
+  const preparedRoot = join(dataRoot, 'prepared');
+  const setRoot = join(preparedRoot, commit);
+  const target = join(setRoot, 'foo');
+  const temporaryNamed = join(setRoot, 'foo.idd-prepared-tmp-123');
+  nodeFs.mkdirSync(setRoot, { recursive: true });
+  nodeFs.writeFileSync(target, 'same\n');
+  nodeFs.writeFileSync(temporaryNamed, 'same\n');
+  nodeFs.writeFileSync(
+    receiptOf(home),
+    `${JSON.stringify({
+      version: 1,
+      entries: [
+        { kind: 'directory', path: dataRoot },
+        { kind: 'directory', path: preparedRoot },
+        { kind: 'directory', path: setRoot },
+        { kind: 'file', path: target, sha256: sha256('same\n') },
+        { kind: 'file', path: temporaryNamed, sha256: sha256('original\n') },
+      ],
+    })}\n`,
+  );
+  const before = snapshot(home);
+
+  assert.throws(
+    () =>
+      discardPreparedCandidate({ ...optionsFor(home), sourceCommit: commit }),
+    /foo\.idd-prepared-tmp-123 differs from its receipt hash/,
+  );
+  assert.deepEqual(snapshot(home), before);
+});
+
+test('uninstall refuses an unlisted file at a continuation path instead of adopting it (#4917)', () => {
+  const home = makeHome();
+  const commit = 'd'.repeat(40);
+  const prepared = prepareDistributionSet(
+    prepareOptions(home, makePreparedSource(), commit),
+  );
+  const continuationPath = join(
+    dataRootOf(home),
+    'prepared',
+    `${commit}.uninstall.json`,
+  );
+  for (const bytes of [
+    nodeFs.readFileSync(join(prepared.preparedPath, 'manifest.json')),
+    Buffer.from('{"user":true}\n'),
+  ]) {
+    nodeFs.writeFileSync(continuationPath, bytes);
+    const before = snapshot(home);
+    assert.throws(
+      () => uninstallPayload(optionsFor(home)),
+      /\.uninstall\.json exists as a file, but the receipt does not list it, so uninstall will not adopt it/,
+    );
+    assert.deepEqual(snapshot(home), before);
+  }
+  nodeFs.unlinkSync(continuationPath);
+  uninstallPayload(optionsFor(home));
+  assert.equal(nodeFs.existsSync(dataRootOf(home)), false);
 });
 
 test('a fresh install lays down the payload, skills, and receipt, and uninstall removes them', () => {
