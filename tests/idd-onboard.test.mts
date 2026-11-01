@@ -12512,7 +12512,11 @@ test('bin/idd-onboard.mjs distribution prepare and bind preserve CLI data and st
     join(sourceRoot, templateDoc),
     readFileSync(join(REPO_ROOT, templateDoc)),
   );
-  execFileSync('git', ['-C', sourceRoot, 'add', templateDoc], {
+  // Keep the fixture commit non-empty after the template doc has already
+  // landed on the current branch.
+  const sourceMarker = `.idd-test-distribution-source-${process.pid}-${Date.now()}.txt`;
+  writeFileSync(join(sourceRoot, sourceMarker), 'fixture source marker\n');
+  execFileSync('git', ['-C', sourceRoot, 'add', templateDoc, sourceMarker], {
     env: gitEnv,
     stdio: 'pipe',
   });
