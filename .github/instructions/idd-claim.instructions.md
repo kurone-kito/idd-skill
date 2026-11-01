@@ -251,6 +251,9 @@ Determine `{branch-name}`:
 - **Fresh claim**: compute a new name as `issue/<number>-<slug>` per
   the normalization algorithm in pre-check (e).
 
+Use the persisted session-qualified `{agent-id}` (Claim format); step 2's
+`--record-tokens` refuses a bare one.
+
 Generate a fresh `{claim-id}` — **except in forced-handoff recovery**, where
 the successor adopts the marker's pre-recorded `new-agent-id` / `new-claim-id`
 pair instead of minting a claim-id or keeping its own agent-id (see _Claim
@@ -297,8 +300,8 @@ Resolve the commands as A5(a) does.
    `claim-lock --record-tokens --nonce` for the same path and nonce before
    running the acquire.
 5. After the settle delay, `resume-claim-routing.mjs --issue <n> --assert
-   --claim-id {claim-id} --nonce {nonce} --worktree <path>`. This verification
-   alone counts.
+   --agent-id {agent-id} --claim-id {claim-id} --nonce {nonce} --worktree <path>`.
+   This verification alone counts.
 6. Continue B1 in that worktree at B1 Step 3: install dependencies with
    `install-deps`.
 
@@ -672,13 +675,14 @@ heartbeats — do not post a fresh takeover claim. If the session cannot
 prove ownership, the active claim is treated as owned by another live
 session until released or stale, even when `{agent-id}` matches.
 **Exception**: a worker that received the pair through a documented
-[orchestrator delegation](#orchestrator-delegation) is treated as
-having proven ownership through the orchestrator's own recorded
-verification. Self-signed forced-handoff markers from the same identity
-never transfer ownership: rule 7 rejects them unless the author is an
-authorized maintainer. After a successor posts a fresh claim,
-later heartbeats from the displaced old `{claim-id}` are ignored as
-stale — they do not reclaim ownership or refresh the stale clock.
+[orchestrator delegation](#orchestrator-delegation) and uses the brief's
+exact `{agent-id}` is treated as having proven ownership through the
+orchestrator's own recorded verification. Self-signed forced-handoff
+markers from the same identity never transfer ownership: rule 7 rejects
+them unless the author is an authorized maintainer. After a successor
+posts a fresh claim, later heartbeats from the displaced old `{claim-id}`
+are ignored as stale — they do not reclaim ownership or refresh the stale
+clock.
 
 ## Legacy claim migration
 
