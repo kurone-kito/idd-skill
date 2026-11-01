@@ -1939,7 +1939,7 @@ function prepareFailureMessage(
   } catch (receiptError) {
     receiptState = `invalid (${describe(receiptError)})`;
   }
-  return `preparing ${build.sourceCommit} failed (${describe(error)}); the completion manifest ${marker} is ${markerState}; staged paths under the candidate are ${stagedState}; expected paths still missing are ${missingState}; receipt state is ${receiptState}; one safe retry is to call prepareDistributionSet again with the identical sourceCommit, provenance and source bytes; if the source is unavailable, remove only candidate paths whose receipt hashes still match`;
+  return `preparing ${build.sourceCommit} failed (${describe(error)}); the completion manifest ${marker} is ${markerState}; staged paths under the candidate are ${stagedState}; expected paths still missing are ${missingState}; receipt state is ${receiptState}; one safe retry is to call prepareDistributionSet again with the identical sourceCommit, provenance and source bytes; if the source is unavailable, call discardPreparedCandidate with the same sourceCommit, which removes the candidate paths whose receipt hashes still match together with their receipt entries`;
 }
 
 function withReceiptMutationLock<T>(ctx: Context, operation: () => T): T {
@@ -2233,6 +2233,229 @@ function prepareDistributionSetWithContext(
     fileCount: build.files.length,
     reused: false,
   };
+}
+
+/** Inputs to the recovery that discards an incomplete prepared candidate. */
+export interface DiscardPreparedCandidateOptions extends UserGlobalOptions {
+  sourceCommit: string;
+}
+
+/**
+ * Remove an incomplete prepared candidate and its receipt entries when its
+ * source is unavailable for a retry (#4917). A failed preparation lists every
+ * candidate path in the receipt before it writes the first file, and install,
+ * uninstall, and the preparation of any other commit refuse a candidate whose
+ * manifest was never published, so removing the paths alone left the receipt
+ * entries behind. This runs under the receipt mutation lock and removes
+ * nothing until every path of the candidate passes the ownership, link, and
+ * hash checks. A published set, or one an uninstall has started to remove,
+ * is refused: uninstall removes those. The `prepared` directory and its
+ * receipt entry stay.
+ */
+export function discardPreparedCandidate(
+  options: DiscardPreparedCandidateOptions,
+): UserGlobalResult {
+  if (!SOURCE_COMMIT_PATTERN.test(options.sourceCommit)) {
+    throw new Error(
+      'sourceCommit must be a full lowercase 40-character commit ID',
+    );
+  }
+  const ctx = resolveContext(options);
+  return withReceiptMutationLock(ctx, () =>
+    discardPreparedCandidateWithContext(ctx, options.sourceCommit),
+  );
+}
+
+function discardPreparedCandidateWithContext(
+  ctx: Context,
+  commit: string,
+): UserGlobalResult {
+  const fs = ctx.fs;
+  const refuse = (reason: string): never => {
+    throw new Error(
+      `discarding prepared candidate ${commit} refused before any removal; nothing was removed: ${reason}`,
+    );
+  };
+  try {
+    assertRealChain(ctx.dataRoot, fs);
+  } catch (error) {
+    refuse(describe(error));
+  }
+  const rootStat = lstatOrNull(ctx.dataRoot, fs);
+  if (rootStat === null) {
+    return {
+      lines: ['no data root; nothing to discard'],
+      priorCurrentTarget: null,
+    };
+  }
+  if (!rootStat.isDirectory()) {
+    refuse(`${ctx.dataRoot} is not a real directory`);
+  }
+  const stale = findStaleReceiptTemps(ctx.dataRoot, fs);
+  if (stale.length > 0) {
+    refuse(
+      `${stale[0]} is a stale receipt temporary from an interrupted write; remove that exact file after confirming no receipt write is active`,
+    );
+  }
+  const read = readReceipt(ctx.dataRoot, fs);
+  if (read.state === 'missing') {
+    return {
+      lines: ['no receipt; nothing to discard'],
+      priorCurrentTarget: null,
+    };
+  }
+  const entries = new Map<string, ReceiptEntry>();
+  for (const entry of read.receipt.entries) {
+    assertOwnedShape(ctx, entry);
+    entries.set(entry.path, entry);
+  }
+  const setRoot = join(ctx.preparedRoot, commit);
+  const manifestPath = join(setRoot, PREPARED_MANIFEST_NAME);
+  const continuationPath = join(
+    ctx.preparedRoot,
+    `${commit}${UNINSTALL_CONTINUATION_SUFFIX}`,
+  );
+  if (entries.has(continuationPath)) {
+    refuse(
+      `${continuationPath} records an interrupted uninstall of ${setRoot}; run uninstall again to finish removing it`,
+    );
+  }
+  const fileEntries = new Map<string, string>();
+  const directoryEntries: string[] = [];
+  for (const entry of entries.values()) {
+    if (!isWithin(setRoot, entry.path)) continue;
+    if (entry.kind === 'file') fileEntries.set(entry.path, entry.sha256);
+    else if (entry.kind === 'directory') directoryEntries.push(entry.path);
+    else refuse(`${entry.path} is listed as a ${entry.kind}`);
+  }
+  if (fileEntries.size === 0 && directoryEntries.length === 0) {
+    return {
+      lines: [`no receipt entries for ${setRoot}; nothing to discard`],
+      priorCurrentTarget: null,
+    };
+  }
+  const manifestWalk = checkContainment(ctx.preparedRoot, manifestPath, fs);
+  if (manifestWalk.finalKind !== 'absent') {
+    refuse(
+      manifestWalk.finalKind === 'file'
+        ? `${manifestPath} is published, so ${setRoot} is a complete set; use uninstall to remove it`
+        : `${manifestPath} is a ${manifestWalk.finalKind}`,
+    );
+  }
+
+  // Every path under the candidate must be one the receipt lists, with the
+  // listed hash. A preparation temporary file is removed only when it holds
+  // the complete bytes of its listed target, which is what a failed
+  // publication leaves; any other one cannot be checked against the receipt.
+  const refusals: string[] = [];
+  const presentFiles = new Set<string>();
+  const presentDirectories = new Set<string>();
+  const temporaries: { path: string; sha256: string }[] = [];
+  const rootWalk = checkContainment(ctx.preparedRoot, setRoot, fs);
+  if (rootWalk.finalKind === 'directory') {
+    const listedDirectories = new Set(directoryEntries);
+    const visit = (directory: string): void => {
+      presentDirectories.add(directory);
+      if (!listedDirectories.has(directory)) {
+        refusals.push(`${directory} is a directory the receipt does not list`);
+      }
+      for (const name of fs.readdirSync(directory)) {
+        const path = join(directory, name);
+        const stat = fs.lstatSync(path);
+        if (stat.isSymbolicLink()) {
+          refusals.push(`${path} is a symbolic link`);
+        } else if (stat.isDirectory()) {
+          visit(path);
+        } else if (!stat.isFile()) {
+          refusals.push(`${path} is not a regular file or directory`);
+        } else if (stat.nlink > 1) {
+          refusals.push(`${path} has more than one hard link`);
+        } else {
+          const sha256 = sha256Hex(readNoFollowBytes(path, fs));
+          const temporary = name.match(/^(.*)\.idd-prepared-tmp-[0-9]+$/u);
+          if (temporary !== null) {
+            const target = join(directory, temporary[1] ?? '');
+            if (fileEntries.get(target) === sha256) {
+              temporaries.push({ path, sha256 });
+            } else {
+              refusals.push(
+                `${path} is a preparation temporary file that does not hold the complete bytes of a listed file, so it cannot be checked against the receipt; remove that exact file by hand after confirming no preparation is running`,
+              );
+            }
+          } else if (!fileEntries.has(path)) {
+            refusals.push(`${path} is a file the receipt does not list`);
+          } else if (fileEntries.get(path) !== sha256) {
+            refusals.push(
+              `${path} differs from its receipt hash, so it may hold an edit`,
+            );
+          } else {
+            presentFiles.add(path);
+          }
+        }
+      }
+    };
+    visit(setRoot);
+  } else if (rootWalk.finalKind !== 'absent') {
+    refuse(`${setRoot} is ${rootWalk.finalKind}, not a real directory`);
+  }
+  if (refusals.length > 0) refuse(refusals.join('; '));
+
+  const lines: string[] = [];
+  const persist = (): void => persistEntries(ctx, entries, fs);
+  const stopAt = (path: string, error: unknown): never => {
+    throw new Error(
+      `discarding prepared candidate ${commit} stopped at ${path}: ${describe(error)}; the entries not yet removed stay listed`,
+    );
+  };
+  for (const temporary of temporaries) {
+    try {
+      removeSingleEntry(
+        ctx.preparedRoot,
+        temporary.path,
+        { kind: 'file', sha256: temporary.sha256 },
+        fs,
+      );
+    } catch (error) {
+      stopAt(temporary.path, error);
+    }
+    lines.push(`removed ${temporary.path}`);
+  }
+  for (const [path, sha256] of [...fileEntries].reverse()) {
+    if (presentFiles.has(path)) {
+      try {
+        removeSingleEntry(ctx.preparedRoot, path, { kind: 'file', sha256 }, fs);
+      } catch (error) {
+        stopAt(path, error);
+      }
+    }
+    entries.delete(path);
+    persist();
+    lines.push(`${presentFiles.has(path) ? 'removed' : 'absent'} ${path}`);
+  }
+  const deepestFirst = [...directoryEntries].sort((left, right) => {
+    const depth = right.split(sep).length - left.split(sep).length;
+    return depth === 0 ? compareUtf8(right, left) : depth;
+  });
+  for (const directory of deepestFirst) {
+    if (presentDirectories.has(directory)) {
+      try {
+        removeSingleEntry(
+          ctx.preparedRoot,
+          directory,
+          { kind: 'directory' },
+          fs,
+        );
+      } catch (error) {
+        stopAt(directory, error);
+      }
+    }
+    entries.delete(directory);
+    persist();
+    lines.push(
+      `${presentDirectories.has(directory) ? 'removed' : 'absent'} ${directory}`,
+    );
+  }
+  return { lines, priorCurrentTarget: null };
 }
 
 function readPackageVersion(sourceRoot: string, fs: FsOps): string {
