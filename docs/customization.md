@@ -1314,13 +1314,24 @@ adapted for IDD boundary checks.
 
 Reusable inputs:
 
-| Input              | Default                                           | Purpose                                                  |
-| ------------------ | ------------------------------------------------- | -------------------------------------------------------- |
-| `runner`           | `ubuntu-slim`                                     | Runner label for the boundary job                        |
-| `node-version`     | `24.x`                                            | Node.js version used by `setup-node`                     |
-| `install-command`  | `pnpm install --frozen-lockfile --prefer-offline` | Dependency install step                                  |
-| `lint-command`     | `pnpm run check`                                  | Project lint/test command                                |
-| `boundary-command` | `node scripts/check-pnpm-boundary.mjs`            | Check that distributable command rows do not leak `pnpm` |
+| Input               | Default                                           | Purpose                                                                    |
+| ------------------- | ------------------------------------------------- | -------------------------------------------------------------------------- |
+| `runner`            | `ubuntu-slim`                                     | Runner label for the boundary job                                          |
+| `node-version`      | `24.x`                                            | Node.js version used by `setup-node`                                       |
+| `node-version-file` | `''` (empty)                                      | Version file used by `setup-node` instead of `node-version` when non-empty |
+| `install-command`   | `pnpm install --frozen-lockfile --prefer-offline` | Dependency install step                                                    |
+| `lint-command`      | `pnpm run check`                                  | Project lint/test command                                                  |
+| `boundary-command`  | `node scripts/check-pnpm-boundary.mjs`            | Check that distributable command rows do not leak `pnpm`                   |
+
+`node-version` and `node-version-file` select the Node.js version through
+two mutually exclusive `setup-node` steps. When `node-version-file` is
+empty, which is the default, the workflow passes `node-version` (default
+`24.x`). When `node-version-file` is non-empty, the workflow passes that
+file to `setup-node` and does not also set `node-version`, so any
+`node-version` value is ignored. The file path is read from the caller's
+checkout; this repository's Node 22 floor lane passes `.node-version`.
+`node-version-file` is not declared at v0.17.0 or earlier, so a caller
+that sets it must pin a later revision that declares the input.
 
 The `lint-command` and `boundary-command` defaults above are this
 repository's own commands and are source-repository-only:
@@ -1343,6 +1354,9 @@ jobs:
     uses: kurone-kito/idd-skill/.github/workflows/pnpm-boundary.yml@77befdd4030757464bed7f31c7dfe6d0a404a18b
     with:
       node-version: "24.x"
+      # To use a checked-in version file instead, replace the line above
+      # (this needs a revision that declares node-version-file):
+      # node-version-file: .node-version
       lint-command: npm run lint # replace with your own lint/test command
       boundary-command: "true" # replace with your own boundary check, if any
 ```

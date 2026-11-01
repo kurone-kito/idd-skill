@@ -20,6 +20,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, relative, sep } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { runInNewContext } from 'node:vm';
 
 const WORKFLOWS_DIR = 'workflows';
 
@@ -30,7 +31,7 @@ function readWorkflow(name: string): string {
   );
 }
 
-// Checkout is the only action before the Node floor assertion. Keep its
+// In the Linux `lint` job, checkout is the only action before the Node floor assertion. Keep its
 // immutable ref explicit: an earlier JavaScript/composite action can change
 // GITHUB_PATH for every later step, so an unreviewed action can replace node.
 // A matching ref can still check out other files. repository, ref, token,
@@ -1131,6 +1132,74 @@ function extractNamedStepBody(
   return lines.slice(start, nextStep === -1 ? undefined : nextStep).join('\n');
 }
 
+function workflowStepBlocks(workflow: string, jobId: string): string[] {
+  const stepsBlock = findJobStepsBlock(extractJobBody(workflow, jobId));
+  assert.ok(
+    stepsBlock !== undefined,
+    `steps mapping not found in job ${jobId}`,
+  );
+  const lines = stepsBlock.split('\n');
+  const scalarContent = yamlBlockScalarContentFlags(lines);
+  const starts = lines
+    .map((line, index) =>
+      !scalarContent[index] && /^ {6}- /.test(line) ? index : -1,
+    )
+    .filter((index) => index !== -1);
+  return starts.map((start, index) =>
+    lines.slice(start, starts[index + 1] ?? lines.length).join('\n'),
+  );
+}
+
+function assertFloorImmediatelyFollowsCheckout(
+  workflow: string,
+  jobId: string,
+): void {
+  const steps = workflowStepBlocks(workflow, jobId);
+  const checkoutIndex = steps.findIndex((step) =>
+    /^ {6}- uses: actions\/checkout@/m.test(step),
+  );
+  const floorIndex = steps.findIndex((step) =>
+    /^ {6}- name: Assert Node\.js floor$/m.test(step),
+  );
+  assert.notEqual(checkoutIndex, -1, `${jobId}: checkout step must be present`);
+  assert.notEqual(floorIndex, -1, `${jobId}: Node floor step must be present`);
+  assert.equal(
+    floorIndex,
+    checkoutIndex + 1,
+    `${jobId}: Node floor step must immediately follow checkout`,
+  );
+}
+
+function assertWindowsNodeSetupBeforeCheckout(workflow: string): void {
+  const steps = workflowStepBlocks(workflow, 'lint-windows');
+  const setupIndex = steps.findIndex((step) =>
+    /^ {6}- name: Setup Node\.js$/m.test(step),
+  );
+  const checkoutIndex = steps.findIndex((step) =>
+    /^ {6}- uses: actions\/checkout@/m.test(step),
+  );
+  assert.notEqual(
+    setupIndex,
+    -1,
+    'lint-windows: Node setup step must be present',
+  );
+  assert.ok(
+    setupIndex < checkoutIndex,
+    'lint-windows: Node setup must precede checkout',
+  );
+  assert.equal(
+    steps[setupIndex],
+    [
+      '      - name: Setup Node.js',
+      '        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0',
+      '        with:',
+      '          check-latest: true',
+      '          node-version: 24.x',
+    ].join('\n'),
+    'lint-windows: Node setup must retain its reviewed action pin and inputs',
+  );
+}
+
 /** Returns the raw lines from a step's literal run block. Keeping comments
  * and shell syntax intact lets the guard compare the whole script against
  * its one supported command shape instead of approximating a shell lexer. */
@@ -1161,17 +1230,46 @@ function literalRunLinesFromStep(stepBody: string): string[] {
   return scriptLines;
 }
 
-/** Exact engine-floor assertion expected in the workflow's node -e body. */
+/** Exact package-based floor assertion expected in every workflow copy. */
 const NODE_FLOOR_ASSERTION_LINES = [
-  'const versionParts = process.versions.node.split(".");',
-  'const [major, minor, patch] = versionParts.map(Number);',
-  'const isPrerelease = versionParts.some((part) => part.includes("-"));',
-  'const ok = !isPrerelease && ((major === 22 && (minor > 23 || (minor === 23 && patch >= 2))) || (major === 24 && minor >= 2) || major >= 26);',
-  'if (!ok) {',
-  '  console.error(',
-  '    "Node " + process.version + " does not satisfy this " +',
-  '    "repository\'s engines.node range (^22.23.2 || ^24.2.0 || >=26.0.0).",',
-  '  );',
+  'const fs = require("fs");',
+  'let enginesNode = "<unavailable>";',
+  'let accepted = false;',
+  'try {',
+  '  const manifest = JSON.parse(fs.readFileSync("package.json", "utf8"));',
+  '  const declaredEnginesNode = manifest && manifest.engines && manifest.engines.node;',
+  '  if (typeof declaredEnginesNode !== "string") throw new Error("missing engines.node");',
+  '  enginesNode = declaredEnginesNode;',
+  '  const clauses = enginesNode.trim().split(/\\s*\\|\\|\\s*/);',
+  '  if (clauses.length < 2) throw new Error("invalid engines.node shape");',
+  '  const versions = clauses.map((clause, index) => {',
+  '    const pattern = index === clauses.length - 1',
+  '      ? /^>=(\\d+)\\.(\\d+)\\.(\\d+)$/',
+  '      : /^\\^(\\d+)\\.(\\d+)\\.(\\d+)$/;',
+  '    const match = pattern.exec(clause);',
+  '    if (!match) throw new Error("invalid engines.node clause");',
+  '    const version = match.slice(1).map(Number);',
+  '    if (!version.every(Number.isSafeInteger)) throw new Error("invalid version number");',
+  '    return version;',
+  '  });',
+  '  const runtimeMatch = /^(\\d+)\\.(\\d+)\\.(\\d+)$/.exec(process.versions.node);',
+  '  if (!runtimeMatch) throw new Error("invalid runtime version");',
+  '  const runtime = runtimeMatch.slice(1).map(Number);',
+  '  const compare = (left, right) => {',
+  '    for (let index = 0; index < 3; index += 1) {',
+  '      if (left[index] !== right[index]) return left[index] - right[index];',
+  '    }',
+  '    return 0;',
+  '  };',
+  '  accepted = versions.slice(0, -1).some((version) =>',
+  '    runtime[0] === version[0] && compare(runtime, version) >= 0',
+  '  ) || compare(runtime, versions[versions.length - 1]) >= 0;',
+  '} catch (error) {',
+  '  accepted = false;',
+  '}',
+  'if (process.versions.node.includes("-")) accepted = false;',
+  'if (!accepted) {',
+  '  console.error("Node " + process.version + " does not satisfy package.json engines.node range: " + String(enginesNode));',
   '  process.exit(1);',
   '}',
 ];
@@ -1325,7 +1423,7 @@ function assertLintJobUsesDefaultShell(
 
 /** Asserts the named step logs Node before running the exact engine-floor
  * assertion. Synthetic steps exercise rejected shell shapes. */
-function assertNodeVersionLogBeforeFloor(stepBody: string): void {
+function assertNodeVersionLogBeforeFloor(stepBody: string): string {
   assertNoNodeExecutionOverrides(stepBody, 'Assert Node.js floor step');
   assert.equal(
     hasUnverifiableYamlKeyAtIndent(stepBody, 8),
@@ -1379,8 +1477,14 @@ function assertNodeVersionLogBeforeFloor(stepBody: string): void {
   assert.equal(
     normalizedAssertionScript,
     REQUIRED_NODE_FLOOR_ASSERTION,
-    'lint.yml: node -e must retain the Node engines.node floor assertion and its failing path',
+    'workflow: node -e must retain the Node engines.node floor assertion and its failing path while reading package.json',
   );
+  assert.equal(
+    normalizedAssertionScript.includes("'"),
+    false,
+    'workflow: inline JavaScript must not contain apostrophes that break the default Windows PowerShell shell',
+  );
+  return normalizedAssertionScript;
 }
 
 test('lint.yml logs Node.js version before asserting the Node floor', () => {
@@ -1388,6 +1492,7 @@ test('lint.yml logs Node.js version before asserting the Node floor', () => {
   const lintJob = extractJobBody(workflow, 'lint');
   assertLintJobEnforcesNodeFloor(lintJob);
   assertLintJobUsesDefaultShell(lintJob, workflow);
+  assertFloorImmediatelyFollowsCheckout(workflow, 'lint');
   assertNodeVersionLogBeforeFloor(
     extractNamedStepBody(workflow, 'lint', 'Assert Node.js floor'),
   );
@@ -1395,6 +1500,139 @@ test('lint.yml logs Node.js version before asserting the Node floor', () => {
     unpinnedPreFloorCommand(lintJob, REPO_ROOT),
     undefined,
     'lint.yml: a reviewed pre-floor run must execute the pinned closure',
+  );
+});
+
+test('all mirrored Node floor checks follow checkout and share one program', () => {
+  const workflowCases = [
+    ['lint.yml', 'lint'],
+    ['lint.yml', 'lint-windows'],
+    ['idd-advisory-convergence.yml', 'idd-advisory-convergence'],
+    ['idd-advisory-convergence.yml', 'idd-advisory-convergence-self-waiver'],
+    ['idd-advisory-convergence-comment.yml', 'refresh-if-idd-originated'],
+  ] as const;
+  const programs: string[] = [];
+
+  for (const [workflowName, jobId] of workflowCases) {
+    const workflow = readWorkflow(workflowName);
+    const jobBody = extractJobBody(workflow, jobId);
+    assertFloorImmediatelyFollowsCheckout(workflow, jobId);
+    assertLintJobUsesDefaultShell(jobBody, workflow);
+    programs.push(
+      assertNodeVersionLogBeforeFloor(
+        extractNamedStepBody(workflow, jobId, 'Assert Node.js floor'),
+      ),
+    );
+  }
+
+  assertWindowsNodeSetupBeforeCheckout(readWorkflow('lint.yml'));
+  assert.equal(new Set(programs).size, 1);
+});
+
+function evaluateNodeFloorProgram(
+  program: string,
+  runtimeVersion: string,
+  manifestText: string,
+  readError?: Error,
+): { exitCode: number | undefined; diagnostics: string[] } {
+  let exitCode: number | undefined;
+  const diagnostics: string[] = [];
+  runInNewContext(program, {
+    require: (moduleName: string) => {
+      assert.equal(moduleName, 'fs');
+      return {
+        readFileSync: (path: string, encoding: string) => {
+          assert.equal(path, 'package.json');
+          assert.equal(encoding, 'utf8');
+          if (readError !== undefined) throw readError;
+          return manifestText;
+        },
+      };
+    },
+    process: {
+      version: `v${runtimeVersion}`,
+      versions: { node: runtimeVersion },
+      exit: (code: number) => {
+        exitCode = code;
+      },
+    },
+    console: {
+      error: (message: string) => diagnostics.push(String(message)),
+    },
+  });
+  return { exitCode, diagnostics };
+}
+
+test('the package-based Node floor matches every documented runtime boundary', () => {
+  const workflow = readWorkflow('lint.yml');
+  const program = assertNodeVersionLogBeforeFloor(
+    extractNamedStepBody(workflow, 'lint', 'Assert Node.js floor'),
+  );
+  const manifestText = readFileSync(join(REPO_ROOT, 'package.json'), 'utf8');
+  const enginesRange = JSON.parse(manifestText).engines.node as string;
+  const cases: readonly [string, boolean][] = [
+    ['22.23.1', false],
+    ['22.23.2', true],
+    ['23.0.0', false],
+    ['24.1.9', false],
+    ['24.2.0', true],
+    ['25.0.0', false],
+    ['26.0.0', true],
+    ['22.23.2-rc.1', false],
+  ];
+
+  for (const [runtimeVersion, expectedToPass] of cases) {
+    const result = evaluateNodeFloorProgram(
+      program,
+      runtimeVersion,
+      manifestText,
+    );
+    assert.equal(
+      result.exitCode === undefined,
+      expectedToPass,
+      `unexpected Node floor result for ${runtimeVersion}`,
+    );
+    if (!expectedToPass) {
+      assert.equal(
+        result.diagnostics[0],
+        `Node v${runtimeVersion} does not satisfy package.json engines.node range: ${enginesRange}`,
+      );
+    }
+  }
+});
+
+test('the package-based Node floor fails closed for malformed or unreadable manifests', () => {
+  const workflow = readWorkflow('lint.yml');
+  const program = assertNodeVersionLogBeforeFloor(
+    extractNamedStepBody(workflow, 'lint', 'Assert Node.js floor'),
+  );
+  const malformedManifests: readonly [string, string][] = [
+    ['{}', '<unavailable>'],
+    ['{"engines":{}}', '<unavailable>'],
+    ['{"engines":{"node":24}}', '<unavailable>'],
+    ['{"engines":{"node":"^22.23.2"}}', '^22.23.2'],
+    ['{"engines":{"node":">=22.0.0 || ^24.0.0"}}', '>=22.0.0 || ^24.0.0'],
+    ['{', '<unavailable>'],
+  ];
+  for (const [manifestText, expectedRange] of malformedManifests) {
+    const result = evaluateNodeFloorProgram(program, '22.23.2', manifestText);
+    assert.equal(result.exitCode, 1);
+    assert.equal(
+      result.diagnostics[0],
+      `Node v22.23.2 does not satisfy package.json engines.node range: ${expectedRange}`,
+    );
+  }
+
+  const unreadable = evaluateNodeFloorProgram(
+    program,
+    '22.23.2',
+    '',
+    new Error('EACCES'),
+  );
+  assert.equal(unreadable.exitCode, 1);
+  assert.equal(
+    unreadable.diagnostics[0],
+    'Node v22.23.2 does not satisfy package.json engines.node range: <unavailable>',
   );
 });
 

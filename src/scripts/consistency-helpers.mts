@@ -319,6 +319,7 @@ export interface ContextCeilingConfig {
   noticeUtilizationPct?: unknown;
   exemptBundles?: unknown;
   nearCeilingRaiseApprovals?: unknown;
+  standingRaiseApprovals?: unknown;
 }
 
 /** Parse `contextCeiling.nearCeilingRaiseApprovals` into a bundle-id to
@@ -363,6 +364,204 @@ export interface ContextCeilingBundleStat {
   limitBytes: number;
   totalBytes: number;
   files?: readonly string[];
+}
+
+export interface StandingRaiseApprovalPolicy {
+  enabled: boolean;
+  maxRaisePct: number;
+}
+
+export interface StandingRaiseApprovalResolution {
+  approvals: Map<string, number>;
+  errors: string[];
+}
+
+/**
+ * Validate opt-in standing budget-raise approvals against measured bundles
+ * and their two independent percentage bounds. Disabled classes deliberately
+ * ignore the entire standing-entry value.
+ */
+export function parseStandingRaiseApprovals(
+  value: unknown,
+  bundles: readonly ContextCeilingBundleStat[],
+  maxUtilizationPct: unknown,
+  policy: StandingRaiseApprovalPolicy,
+): StandingRaiseApprovalResolution {
+  const approvals = new Map<string, number>();
+  const errors: string[] = [];
+  if (policy.enabled !== true || value === undefined) {
+    return { approvals, errors };
+  }
+  if (
+    !Number.isSafeInteger(policy.maxRaisePct) ||
+    policy.maxRaisePct < 0 ||
+    policy.maxRaisePct > 10
+  ) {
+    return {
+      approvals,
+      errors: [
+        'standingApprovals.budgetRaise.maxRaisePct is invalid; standing entries are ignored',
+      ],
+    };
+  }
+  if (
+    typeof maxUtilizationPct !== 'number' ||
+    !Number.isFinite(maxUtilizationPct) ||
+    maxUtilizationPct <= 0 ||
+    maxUtilizationPct > 100
+  ) {
+    return {
+      approvals,
+      errors: [
+        'contextCeiling.maxUtilizationPct must be between 0 and 100 to validate standing entries',
+      ],
+    };
+  }
+  if (!Array.isArray(value)) {
+    return {
+      approvals,
+      errors: ['contextCeiling.standingRaiseApprovals must be an array'],
+    };
+  }
+
+  const bundleById = new Map(bundles.map((bundle) => [bundle.id, bundle]));
+  const entriesByBundle = new Map<string, number[]>();
+  for (const [index, entry] of value.entries()) {
+    if (
+      typeof entry === 'object' &&
+      entry !== null &&
+      !Array.isArray(entry) &&
+      typeof (entry as Record<string, unknown>).bundle === 'string'
+    ) {
+      const bundle = (entry as Record<string, unknown>).bundle as string;
+      const indexes = entriesByBundle.get(bundle) ?? [];
+      indexes.push(index);
+      entriesByBundle.set(bundle, indexes);
+    }
+  }
+  const duplicateIndexes = new Set(
+    [...entriesByBundle.values()]
+      .filter((indexes) => indexes.length > 1)
+      .flat(),
+  );
+
+  const allowedKeys = new Set([
+    'bundle',
+    'standingClass',
+    'ceilingPct',
+    'limitBytes',
+    'issue',
+    'reason',
+  ]);
+  for (const [index, entry] of value.entries()) {
+    const entryErrors: string[] = [];
+    const reject = (message: string) => entryErrors.push(message);
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+      errors.push(
+        `standingRaiseApprovals entry ${index + 1} must be an object`,
+      );
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    for (const key of Object.keys(record)) {
+      if (!allowedKeys.has(key)) reject(`unknown field ${key}`);
+    }
+    const bundle = record.bundle;
+    if (typeof bundle !== 'string' || bundle.trim() === '') {
+      reject('bundle must be a non-empty string');
+    } else if (!bundleById.has(bundle)) {
+      reject(`bundle ${bundle} does not exist in bundleBudgets`);
+    }
+    if (record.standingClass !== 'budgetRaise') {
+      reject('standingClass must be budgetRaise');
+    }
+    const ceilingPct = record.ceilingPct;
+    if (
+      typeof ceilingPct !== 'number' ||
+      !Number.isSafeInteger(ceilingPct) ||
+      ceilingPct < 0
+    ) {
+      reject('ceilingPct must be a non-negative integer');
+    } else if (ceilingPct > policy.maxRaisePct) {
+      reject(
+        `ceilingPct ${ceilingPct} exceeds maxRaisePct ${policy.maxRaisePct}`,
+      );
+    }
+    const limitBytes = record.limitBytes;
+    if (
+      typeof limitBytes !== 'number' ||
+      !Number.isSafeInteger(limitBytes) ||
+      limitBytes <= 0 ||
+      limitBytes % 100 !== 0
+    ) {
+      reject('limitBytes must be a positive multiple of 100');
+    }
+    const issue = record.issue;
+    if (
+      typeof issue !== 'number' ||
+      !Number.isSafeInteger(issue) ||
+      issue <= 0
+    ) {
+      reject('issue must be a positive integer');
+    }
+    if (typeof record.reason !== 'string' || record.reason.trim() === '') {
+      reject('reason must be non-empty');
+    }
+    if (duplicateIndexes.has(index) && typeof bundle === 'string') {
+      reject(`bundle ${bundle} has multiple standing entries; all are invalid`);
+    }
+
+    const stat =
+      typeof bundle === 'string' ? bundleById.get(bundle) : undefined;
+    if (
+      stat &&
+      Number.isSafeInteger(stat.totalBytes) &&
+      stat.totalBytes >= 0 &&
+      typeof ceilingPct === 'number' &&
+      Number.isSafeInteger(ceilingPct) &&
+      ceilingPct >= 0 &&
+      typeof limitBytes === 'number' &&
+      Number.isSafeInteger(limitBytes) &&
+      limitBytes > 0 &&
+      limitBytes % 100 === 0
+    ) {
+      const minimumLimitBytes =
+        Math.ceil(stat.totalBytes / maxUtilizationPct) * 100;
+      const maximumLimitBytes =
+        Math.floor((stat.totalBytes * (100 + ceilingPct)) / 10_000) * 100;
+      if (minimumLimitBytes > maximumLimitBytes) {
+        reject(
+          `bundle ${bundle} has no 100-byte limit satisfying maxUtilizationPct and ceilingPct`,
+        );
+      } else if (limitBytes < minimumLimitBytes) {
+        reject(
+          `limitBytes ${limitBytes} is below the ${minimumLimitBytes} minimum for maxUtilizationPct`,
+        );
+      } else if (limitBytes > maximumLimitBytes) {
+        reject(
+          `limitBytes ${limitBytes} exceeds the ${maximumLimitBytes} maximum for ceilingPct`,
+        );
+      }
+    } else if (
+      stat &&
+      (!Number.isSafeInteger(stat.totalBytes) || stat.totalBytes < 0)
+    ) {
+      reject(`bundle ${bundle} has invalid measured bytes`);
+    }
+
+    if (entryErrors.length > 0) {
+      errors.push(
+        ...entryErrors.map(
+          (message) => `standingRaiseApprovals entry ${index + 1}: ${message}`,
+        ),
+      );
+      continue;
+    }
+    if (typeof bundle === 'string' && typeof limitBytes === 'number') {
+      approvals.set(bundle, limitBytes);
+    }
+  }
+  return { approvals, errors };
 }
 
 export function normalizeNonNegativeNumber(value: unknown): number | null {
@@ -1520,12 +1719,10 @@ export function collectDuplicateSyncPairTargets(
 
 // --- engines.node range mirror guard (#1706) --------------------------------
 //
-// `package.json`'s `engines.node` range is hand-mirrored across ~12 files
-// (two inline CI floor-assert scripts, a source-code default, prose in
-// three CONTRIBUTING translations and three docs pages, plus the plain
-// low-bound version pinned in .nvmrc/.node-version/.tool-versions) with no
-// guard. Sharing one drift check here means the next engines bump that
-// misses one mirror fails the audit instead of silently drifting.
+// `package.json`'s `engines.node` range is repeated in helper defaults,
+// documentation, and low-bound version files. Workflow floor assertions read
+// the checked-out package.json directly; ENGINES_RANGE_MIRRORS below covers
+// only the remaining copies that need a drift check.
 
 export type EnginesRangeMirrorMode =
   | 'full-range'
@@ -1539,6 +1736,10 @@ export interface EnginesRangeMirrorSpec {
 }
 
 /**
+ * ENGINES_RANGE_MIRRORS lists files that still repeat package.json's
+ * `engines.node` range or its 22 low bound. Workflow floor assertions read
+ * package.json after checkout instead of joining that set.
+ *
  * Parses `^<v1>.<x>.<y> (|| ^<vN>.<x>.<y>)* || >=<high>.<x>.<y>` -- one or
  * more `^` clauses, in written order, followed by exactly one trailing `>=`
  * clause -- into an ordered list of version strings (the `>=` clause last).

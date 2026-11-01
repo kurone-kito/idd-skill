@@ -74,16 +74,16 @@ is standard-profile evidence and is not run here.
 
 1. Run the pre-merge-readiness helper: `node
    scripts/pre-merge-readiness.mjs --pr <pr-number> --claim-issue
-   <issue-number> --claim-id <claim-id> --trusted-marker-logins
-   <trusted-login-1>,<trusted-login-2>` (add `--agent-id <agent-id>` if
-   known — it tightens the claim check but is optional; add `--nonce
-   <nonce>` too, this session's own locally-recorded activation-nonce
-   from claim time, whenever one was recorded for the active claim —
-   omitting it silently skips the merge-time activation-nonce
-   comparison), or the package-manager-profile
-   `idd:pre-merge-readiness` command, or the profile-selected equivalent
-   (resolve the exact command from `docs/idd-helper-scripts.md` if
-   unsure). This is the same helper the
+   <issue-number> --claim-id <claim-id> --agent-id <agent-id>
+   --trusted-marker-logins <trusted-login-1>,<trusted-login-2>`.
+   For claim-bound readiness, pass `--agent-id` with the real
+   `--claim-id`; omitting it returns a `stale-request-recovery` blocker.
+   Add `--nonce <nonce>` when this session recorded a local activation
+   nonce at claim time; omitting it silently skips the merge-time
+   activation-nonce comparison. Use the package-manager-profile
+   `idd:pre-merge-readiness` command or the profile-selected equivalent
+   when required (resolve the exact command from `docs/idd-helper-scripts.md`
+   if unsure). This is the same helper the
    standard F2 treats as the authoritative source for the merge
    decision. When D3 step 6 ("Multiple closes") closed more than one
    issue, also add `--closing-issues <n>,<m>` with the full deliberate
