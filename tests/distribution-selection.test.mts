@@ -449,6 +449,44 @@ test('a symlinked local instruction path prevents global selection', () => {
   assert.equal(report.source, 'repository-local');
 });
 
+test('local instructions added after a global binding take precedence over reuse', () => {
+  const fixture = makeFixture();
+  fixture.addPreparedSet(COMMIT_A, 'one');
+  fixture.installCurrent(COMMIT_A, '1.0.0', 'one');
+  const created = bindDistributionSelection(fixture.options());
+  assert.equal(created.status, 'created');
+  assert.equal(created.report.source, 'global-current');
+  const bindingPath = bindingEntryPath(fixture);
+  const bindingBefore = fs.readFileSync(bindingPath);
+  const receiptBefore = fs.readFileSync(join(fixture.dataRoot, 'receipt.json'));
+  const instructions = join(
+    fixture.repo,
+    '.github',
+    'instructions',
+    'idd-overview-core.instructions.md',
+  );
+  fs.mkdirSync(dirname(instructions), { recursive: true });
+  fs.writeFileSync(instructions, '# local instructions\n');
+
+  const report = inspectDistributionSelection(fixture.options());
+  assert.equal(report.source, 'repository-local');
+  assert.equal(report.verdict, 'migration-required');
+  assert.equal(report.selected, null);
+  assert.equal(report.session.binding, 'bound');
+  assert.deepEqual(report.previousVerifiedSet, created.report.selected);
+  assert.equal(report.recovery, 'migrate');
+
+  const reuse = bindDistributionSelection(fixture.options());
+  assert.equal(reuse.status, 'refused');
+  assert.equal(reuse.authorized, false);
+  assert.equal(reuse.report.source, 'repository-local');
+  assert.deepEqual(fs.readFileSync(bindingPath), bindingBefore);
+  assert.deepEqual(
+    fs.readFileSync(join(fixture.dataRoot, 'receipt.json')),
+    receiptBefore,
+  );
+});
+
 test('an unreadable repository policy cannot fall through to global current', () => {
   const fixture = makeFixture();
   fixture.addPreparedSet(COMMIT_A, 'one');

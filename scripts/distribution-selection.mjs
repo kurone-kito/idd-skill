@@ -825,6 +825,34 @@ function inspectWithContext(ctx) {
     });
   }
   const bound = binding.record;
+  // Repository-local instructions keep routing precedence over any global
+  // set, including one this session already bound, so check them first.
+  if (ctx.worktreeRoot !== null) {
+    const localInstruction = join(
+      ctx.worktreeRoot,
+      '.github',
+      'instructions',
+      'idd-overview-core.instructions.md',
+    );
+    const localWalk = checkContainment(
+      ctx.worktreeRoot,
+      localInstruction,
+      ctx.fs,
+    );
+    if (localWalk.finalKind !== 'absent') {
+      return baseReport(ctx, receipt.status, {
+        source: 'repository-local',
+        verdict: 'migration-required',
+        packageVersion: version,
+        ...(bound === null
+          ? {}
+          : {
+              session: { id: ctx.sessionId, binding: 'bound' },
+              previousVerifiedSet: cloneJson(bound.selected),
+            }),
+      });
+    }
+  }
   if (bound !== null) {
     const pinned = ctx.packageSpec;
     if (pinned !== null && pinCommit(pinned) === null) {
@@ -898,26 +926,6 @@ function inspectWithContext(ctx) {
       compatibility: 'compatible',
       recovery: 'none',
     });
-  }
-  if (ctx.worktreeRoot !== null) {
-    const localInstruction = join(
-      ctx.worktreeRoot,
-      '.github',
-      'instructions',
-      'idd-overview-core.instructions.md',
-    );
-    const localWalk = checkContainment(
-      ctx.worktreeRoot,
-      localInstruction,
-      ctx.fs,
-    );
-    if (localWalk.finalKind !== 'absent') {
-      return baseReport(ctx, receipt.status, {
-        source: 'repository-local',
-        verdict: 'migration-required',
-        packageVersion: version,
-      });
-    }
   }
   if (
     (ctx.repository === null || ctx.mainWorktreeRoot === null) &&
