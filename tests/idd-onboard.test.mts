@@ -8613,6 +8613,51 @@ test("bin/idd-onboard.mjs --hear rejects import/substitute-only flags (--source,
   }
 });
 
+test('legacy onboarding stages reject distribution-only options before execution', () => {
+  const root = makeFixtureDir();
+  const stages = [
+    { mode: '--import', extra: ['--source', root] },
+    { mode: '--verify', extra: [] },
+    { mode: '--substitute', extra: [] },
+    { mode: '--hear', extra: [] },
+    { mode: '--record-policy', extra: [] },
+  ];
+  const distributionOptions: [string, string][] = [
+    ['--session-id', 'unexpected-session'],
+    ['--source-commit', 'a'.repeat(40)],
+    ['--helper-argv-json', '[]'],
+  ];
+
+  for (const { mode, extra } of stages) {
+    for (const [flag, value] of distributionOptions) {
+      let failure: { status?: number; stderr?: string } | undefined;
+      try {
+        execFileSync(
+          process.execPath,
+          [
+            BIN_PATH,
+            mode,
+            '--target',
+            root,
+            ...extra,
+            flag,
+            value,
+            '--allow-root',
+            tmpdir(),
+          ],
+          { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+        );
+      } catch (error) {
+        failure = error as { status?: number; stderr?: string };
+      }
+      assert.ok(failure, `${mode} unexpectedly accepted ${flag}`);
+      assert.equal(failure.status, 2, `${mode} + ${flag}`);
+      assert.match(String(failure.stderr), /does not accept/u);
+      assert.ok(String(failure.stderr).includes(flag));
+    }
+  }
+});
+
 test('bin/idd-onboard.mjs rejects --hear-only flags (--propose, --apply, --answers) when --hear is not selected', () => {
   const root = makeFixtureDir();
   for (const [stage, extra] of [
@@ -12550,18 +12595,27 @@ test('bin/idd-onboard.mjs distribution prepare and bind preserve CLI data and st
   ];
   const sessionId = 'distribution-cli-session';
 
-  const prepared = runUserGlobal(sandbox, [
-    '--distribution',
-    'prepare',
-    '--session-id',
-    sessionId,
-    '--source',
-    sourceRoot,
-    '--source-commit',
-    sourceCommit,
-    '--helper-argv-json',
-    JSON.stringify(helperArgv),
-  ]);
+  const prepared = runUserGlobal(
+    sandbox,
+    [
+      '--distribution',
+      'prepare',
+      '--session-id',
+      sessionId,
+      '--source',
+      sourceRoot,
+      '--source-commit',
+      sourceCommit,
+      '--helper-argv-json',
+      JSON.stringify(helperArgv),
+    ],
+    {
+      env: {
+        GIT_DIR: join(targetRoot, '.git'),
+        GIT_WORK_TREE: targetRoot,
+      },
+    },
+  );
   assert.equal(prepared.status, 0, prepared.stderr);
   const preparedOutput = JSON.parse(prepared.stdout) as {
     operation: string;

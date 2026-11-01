@@ -4408,6 +4408,30 @@ function sanitizedGitEnvironment() {
   delete env.GIT_NO_REPLACE_OBJECTS;
   return env;
 }
+/** Temporarily remove caller-controlled Git overrides from synchronous work. */
+function withSanitizedGitEnvironment(operation) {
+  const sanitized = sanitizedGitEnvironment();
+  const originalValues = new Map();
+  const keys = new Set([
+    ...Object.keys(process.env),
+    ...Object.keys(sanitized),
+  ]);
+  for (const key of keys) {
+    if (!key.startsWith('GIT_')) continue;
+    originalValues.set(key, process.env[key]);
+    const value = sanitized[key];
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  try {
+    return operation();
+  } finally {
+    for (const [key, value] of originalValues) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+}
 function hasGitMetadataInAncestors(targetRoot) {
   let current = resolve(targetRoot);
   while (true) {
@@ -6261,7 +6285,11 @@ function resolveDistributionCheckoutCommit(sourceRoot, requested) {
     resolvedCommit = execFileSync(
       'git',
       ['-C', sourceRoot, 'rev-parse', '--verify', 'HEAD^{commit}'],
-      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+      {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: sanitizedGitEnvironment(),
+      },
     ).trim();
   } catch (error) {
     throw new Error(
@@ -6430,15 +6458,17 @@ export function executeDistributionCli(
     return distributionFailure('prepare', error, before);
   }
   try {
-    const prepared = services.prepare({
-      sourceRoot: command.sourceRoot,
-      sourceCommit,
-      provenance: { kind: 'checkout', commit: sourceCommit },
-      invocation: {
-        command: DISTRIBUTION_INVOCATION_COMMAND,
-        argv: [...(command.helperArgv ?? [])],
-      },
-    });
+    const prepared = withSanitizedGitEnvironment(() =>
+      services.prepare({
+        sourceRoot: command.sourceRoot,
+        sourceCommit,
+        provenance: { kind: 'checkout', commit: sourceCommit },
+        invocation: {
+          command: DISTRIBUTION_INVOCATION_COMMAND,
+          argv: [...(command.helperArgv ?? [])],
+        },
+      }),
+    );
     if (prepared.sourceCommit !== sourceCommit) {
       throw new Error(
         `preparation returned ${prepared.sourceCommit}, expected ${sourceCommit}`,
@@ -6843,6 +6873,20 @@ function importOnlyFlagsPresent(args) {
   }
   return present;
 }
+/** Distribution preparation fields are invalid in every legacy stage. */
+function distributionOnlyFlagsPresent(args) {
+  const present = [];
+  if (args.sessionId !== undefined) {
+    present.push('--session-id');
+  }
+  if (args.sourceCommit !== undefined) {
+    present.push('--source-commit');
+  }
+  if (args.helperArgvJson !== undefined) {
+    present.push('--helper-argv-json');
+  }
+  return present;
+}
 /**
  * Substitute-only flags the user explicitly passed: every placeholder
  * override flag, plus `--from-transcript`.
@@ -6880,6 +6924,7 @@ function recordPolicyOnlyFlagsPresent(args) {
  */
 function verifyForeignFlagsPresent(args) {
   const present = substituteOnlyFlagsPresent(args);
+  present.push(...distributionOnlyFlagsPresent(args));
   if (args.force) {
     present.push('--force');
   }
@@ -6923,6 +6968,7 @@ function hearOnlyFlagsPresent(args) {
 function hearForeignFlagsPresent(args) {
   return [
     ...importOnlyFlagsPresent(args),
+    ...distributionOnlyFlagsPresent(args),
     ...verifyOnlyFlagsPresent(args),
     ...substituteOnlyFlagsPresent(args),
     ...recordPolicyOnlyFlagsPresent(args),
@@ -6982,6 +7028,7 @@ async function runCli() {
     // --substitute below still reject it via the unfiltered helper.
     const foreign = [
       ...importOnlyFlagsPresent(args).filter((flag) => flag !== '--force'),
+      ...distributionOnlyFlagsPresent(args),
       ...verifyOnlyFlagsPresent(args),
       ...substituteOnlyFlagsPresent(args),
       ...(args.propose ? ['--propose'] : []),
@@ -7008,6 +7055,7 @@ async function runCli() {
     // so a stage-foreign flag (e.g. a placeholder override alongside
     // --import) would otherwise be silently ignored instead of reported.
     const foreign = [
+      ...distributionOnlyFlagsPresent(args),
       ...substituteOnlyFlagsPresent(args),
       ...hearOnlyFlagsPresent(args),
       ...verifyOnlyFlagsPresent(args),
@@ -7016,7 +7064,7 @@ async function runCli() {
     if (foreign.length > 0) {
       throw markCliUsageError(
         new Error(
-          `--import does not accept substitute-only flag(s), verify-only flag(s), hear-only flag(s), or record-policy-only flag(s): ${foreign.join(', ')}`,
+          `--import does not accept distribution-only flag(s), substitute-only flag(s), verify-only flag(s), hear-only flag(s), or record-policy-only flag(s): ${foreign.join(', ')}`,
         ),
       );
     }
@@ -7046,6 +7094,7 @@ async function runCli() {
   }
   const foreign = [
     ...importOnlyFlagsPresent(args),
+    ...distributionOnlyFlagsPresent(args),
     ...verifyOnlyFlagsPresent(args),
     ...hearOnlyFlagsPresent(args),
     ...recordPolicyOnlyFlagsPresent(args),
