@@ -219,14 +219,12 @@ if unclear (`#2806`).
     up-to-date". Prefer `git commit -F <file>` with a pre-wrapped body, and
     compare `git rev-parse HEAD` before and after (or check the reported commit
     hash) before treating a push as confirmation.
-11. If validation fails in files this diff did not touch, suspect baseline
-    drift or a stale install before blaming the change; verify with a fresh
-    `install-deps` run in a clean worktree or a fresh-vs-stale
-    `node_modules` comparison before assuming the failure traces to this diff.
-12. If a test this diff did not touch fails once locally but passes in
-    isolation while hosted CI is green, trust the hosted result and stop
-    chasing it as a regression. This does not waive the `fix-validate` /
-    `pre-push-validate` requirements.
+11. For failures in untouched files, rule out baseline drift/stale installs:
+    run `install-deps` in a clean worktree or compare fresh/stale
+    `node_modules` before blaming this diff.
+12. If an unrelated test fails once locally but passes in isolation with
+    hosted CI green, treat it as baseline; stop chasing it but still run
+    `fix-validate` and `pre-push-validate`.
 13. When consolidating a wrapper function used at multiple call sites into one
     shared function, check whether any call site's old delegate path added
     options or behavior the shared function does not replicate.
@@ -267,9 +265,11 @@ create it ad hoc or improvise worker-side authoring.
 fails `effort-candidate-file-limit` on the issue body or with
 `## Candidate files` set to the diff's canonical paths, stop coding without
 pushing. Standing split requires `standingApprovals.split.enabled`, children
-within effective `maxCandidateFiles`, and each checkbox-stripped parent
-criterion verbatim in exactly one child. Follow standard per-orphan
-dry-run/`--apply`, then parent-record order. On refusal, failure, recovery
+within effective `maxCandidateFiles`, and every checkbox-stripped parent
+acceptance-criteria line verbatim in exactly one child. Dry-run, then
+`--apply` each held orphan separately with
+`publish-authoring-hold --shape orphan`; post the parent record after all
+children publish. On refusal, failure, recovery
 hold, or failed/uncertain record POST, stop with parent claim/hold and published
 children held; no release. Reconcile uncertain POST before retry. After a
 successful record or if enabled but ineligible, use Lite's comment, claim
