@@ -454,10 +454,12 @@ export type PreMergeReadinessReport = ReturnType<
   // dispositionNoticeCommandHint). Declared here so a caller can read it
   // without a cast; the shared gate-summary type is unchanged.
   dispositionEvidence?: DispositionEvidenceWithHint;
-  // kurone-kito/idd-skill#4717: the recovery object of a claim-bound run (see
+  // kurone-kito/idd-skill#4717 / #4878: the recovery object of a claim-bound run (see
   // buildPreMergeReadinessSummary). Present on every claim-bound report, on-head
-  // included; only the stale-request-recovery gate is off-head-specific. Absent
-  // for claimless and claim-id-only runs.
+  // included; only the stale-request-recovery gate is off-head-specific. The
+  // object is omitted for claimless and claim-id-only runs. A real claim ID
+  // without an agent ID still fails closed through the stale-request-recovery
+  // blocker; the claimless `none` sentinel has no blocker from this rule.
   staleRequestRecovery?: { action: string; reason: string };
   trustedMarkerActors: string[];
   trustedMarkerActorsSource: TrustedMarkerActorResolution['source'];
