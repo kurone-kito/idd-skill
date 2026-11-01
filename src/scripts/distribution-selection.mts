@@ -789,6 +789,55 @@ function bindingPathCandidates(
     .map((entry) => entry.path);
 }
 
+let selectionSchemaCache: JsonObject | undefined;
+
+function selectionSchema(): JsonObject {
+  if (selectionSchemaCache === undefined) {
+    const parsed = JSON.parse(
+      nodeFs.readFileSync(
+        join(PACKAGE_ROOT, 'schemas', 'distribution-selection.schema.json'),
+        'utf8',
+      ),
+    ) as unknown;
+    if (!isObject(parsed))
+      throw new Error('the distribution selection schema is not an object');
+    selectionSchemaCache = parsed;
+  }
+  return selectionSchemaCache;
+}
+
+/**
+ * Explain why a persisted selected identity cannot be reported, or return
+ * null. The identity must have the exact shape a report requires, so copying
+ * it into previousVerifiedSet can never fail report validation, and every
+ * component must carry the provenance commit that identity matching relies on.
+ */
+function selectedIdentityProblem(selected: unknown): string | null {
+  if (!isObject(selected)) return 'selected identity is not an object';
+  const properties = selectionSchema().properties;
+  const identitySchema = isObject(properties) ? properties.selected : null;
+  if (!isObject(identitySchema)) {
+    return 'the selection schema defines no selected identity';
+  }
+  const errors = validateSchema(selected, identitySchema);
+  if (errors.length > 0) return errors.join('; ');
+  const components = selected.components as JsonObject;
+  const skillBundles = components.skillBundles as JsonObject;
+  const listed: Array<[string, unknown]> = [
+    ['instructions', components.instructions],
+    ['skillBundles.issue-authoring', skillBundles['issue-authoring']],
+    ['skillBundles.idd-spec-audit', skillBundles['idd-spec-audit']],
+    ['helper', components.helper],
+  ];
+  for (const [key, component] of listed) {
+    const provenance = (component as JsonObject).provenance as JsonObject;
+    if (provenance.commit !== selected.sourceCommit) {
+      return `component ${key} provenance differs from sourceCommit`;
+    }
+  }
+  return null;
+}
+
 function readBinding(
   ctx: SelectionContext,
   entries: readonly ReceiptEntry[],
@@ -833,14 +882,26 @@ function readBinding(
   const current = readCurrentLink(ctx, entries);
   if (current !== null) {
     const path = join(current.versionRoot, `.idd-selection-${key}.json`);
-    if (
-      !paths.includes(path) &&
-      checkContainment(current.versionRoot, path, ctx.fs).finalKind !== 'absent'
-    ) {
-      return {
-        record: null,
-        conflict: `an unowned session binding file already exists at ${path}`,
-      };
+    if (!paths.includes(path)) {
+      let currentState: ContainmentResult;
+      try {
+        currentState = checkContainment(current.versionRoot, path, ctx.fs);
+      } catch (error) {
+        return {
+          record: null,
+          conflict:
+            'could not safely inspect binding parent ' +
+            current.versionRoot +
+            ': ' +
+            String(error),
+        };
+      }
+      if (currentState.finalKind !== 'absent') {
+        return {
+          record: null,
+          conflict: `an unowned session binding file already exists at ${path}`,
+        };
+      }
     }
   }
   if (paths.length === 0) return { record: null, conflict: null };
@@ -877,6 +938,17 @@ function readBinding(
         conflict: `session binding identity is invalid at ${path}`,
       };
     }
+    const identityProblem = selectedIdentityProblem(record.selected);
+    if (identityProblem !== null) {
+      return {
+        record: null,
+        conflict:
+          'session binding selected identity is invalid at ' +
+          path +
+          ': ' +
+          identityProblem,
+      };
+    }
     return { record, conflict: null };
   } catch (error) {
     return {
@@ -889,13 +961,7 @@ function readBinding(
 function report(
   value: DistributionSelectionReport,
 ): DistributionSelectionReport {
-  const schema = JSON.parse(
-    nodeFs.readFileSync(
-      join(PACKAGE_ROOT, 'schemas', 'distribution-selection.schema.json'),
-      'utf8',
-    ),
-  ) as unknown;
-  const errors = validateSchema(value, schema);
+  const errors = validateSchema(value, selectionSchema());
   if (errors.length > 0)
     throw new Error(
       `selection report violates its schema: ${errors.join('; ')}`,
@@ -947,12 +1013,31 @@ function inspectWithContext(
     });
   }
   if (ctx.policyDiagnostic !== null) {
-    return baseReport(ctx, receipt.status, {
+    const refusal = {
       source: 'repository-local',
       verdict: 'not-verified-usable',
       compatibility: 'incompatible',
       recovery: 'reselect',
-    });
+    } as const;
+    // A policy diagnostic leaves no set selectable, but a binding that the
+    // receipt still verifies keeps the session's prior identity visible.
+    if (receipt.status === 'verified') {
+      const binding = readBinding(ctx, receipt.entries);
+      if (binding.conflict !== null) {
+        return baseReport(ctx, 'conflict', {
+          ...refusal,
+          session: { id: ctx.sessionId, binding: 'bound' },
+        });
+      }
+      if (binding.record !== null) {
+        return baseReport(ctx, receipt.status, {
+          ...refusal,
+          session: { id: ctx.sessionId, binding: 'bound' },
+          previousVerifiedSet: cloneJson(binding.record.selected),
+        });
+      }
+    }
+    return baseReport(ctx, receipt.status, refusal);
   }
   if (receipt.status === 'unsupported-legacy') {
     return baseReport(ctx, receipt.status, { source: 'legacy-receipt' });
@@ -971,6 +1056,34 @@ function inspectWithContext(
     });
   }
   const bound = binding.record;
+  // Repository-local instructions keep routing precedence over any global
+  // set, including one this session already bound, so check them first.
+  if (ctx.worktreeRoot !== null) {
+    const localInstruction = join(
+      ctx.worktreeRoot,
+      '.github',
+      'instructions',
+      'idd-overview-core.instructions.md',
+    );
+    const localWalk = checkContainment(
+      ctx.worktreeRoot,
+      localInstruction,
+      ctx.fs,
+    );
+    if (localWalk.finalKind !== 'absent') {
+      return baseReport(ctx, receipt.status, {
+        source: 'repository-local',
+        verdict: 'migration-required',
+        packageVersion: version,
+        ...(bound === null
+          ? {}
+          : {
+              session: { id: ctx.sessionId, binding: 'bound' as const },
+              previousVerifiedSet: cloneJson(bound.selected),
+            }),
+      });
+    }
+  }
   if (bound !== null) {
     const pinned = ctx.packageSpec;
     if (pinned !== null && pinCommit(pinned) === null) {
@@ -1044,26 +1157,6 @@ function inspectWithContext(
       compatibility: 'compatible',
       recovery: 'none',
     });
-  }
-  if (ctx.worktreeRoot !== null) {
-    const localInstruction = join(
-      ctx.worktreeRoot,
-      '.github',
-      'instructions',
-      'idd-overview-core.instructions.md',
-    );
-    const localWalk = checkContainment(
-      ctx.worktreeRoot,
-      localInstruction,
-      ctx.fs,
-    );
-    if (localWalk.finalKind !== 'absent') {
-      return baseReport(ctx, receipt.status, {
-        source: 'repository-local',
-        verdict: 'migration-required',
-        packageVersion: version,
-      });
-    }
   }
   if (
     (ctx.repository === null || ctx.mainWorktreeRoot === null) &&
