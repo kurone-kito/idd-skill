@@ -56,6 +56,7 @@ scripts/discover-roadmap-graph.mjs linguist-generated=true
 scripts/discover-shared-file-overlap.mjs linguist-generated=true
 scripts/discover-viability-gate.mjs linguist-generated=true
 scripts/disposition-non-review-notices.mjs linguist-generated=true
+scripts/distribution-selection.mjs linguist-generated=true
 scripts/e10-recurrence.mjs linguist-generated=true
 scripts/effort.mjs linguist-generated=true
 scripts/emit-marker.mjs linguist-generated=true
