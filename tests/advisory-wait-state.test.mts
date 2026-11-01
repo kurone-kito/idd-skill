@@ -1428,8 +1428,6 @@ test('#4877 classifier: a claimless pending input stays active-claim-not-provide
   );
 });
 
-const OLDER_COMMIT_SHA = '2'.repeat(40);
-
 test('#4877 helper: a current-head review still counts after a later review of an older commit', () => {
   const reviews = [
     {
@@ -1437,7 +1435,7 @@ test('#4877 helper: a current-head review still counts after a later review of a
       submitted_at: '2026-10-16T01:00:00Z',
     },
     {
-      ...completedCopilotReview(OLDER_COMMIT_SHA),
+      ...completedCopilotReview(WAIT_OTHER_SHA),
       submitted_at: '2026-10-16T02:00:00Z',
     },
   ];
@@ -1479,7 +1477,7 @@ test('#4877 caller: a pending request with a completed current-head review is pr
       submitted_at: '2026-10-16T01:00:00Z',
     },
     {
-      ...completedCopilotReview(OLDER_COMMIT_SHA),
+      ...completedCopilotReview(WAIT_OTHER_SHA),
       submitted_at: '2026-10-16T02:00:00Z',
     },
   ];
