@@ -1020,7 +1020,9 @@ draft revision the finding was raised against, counted from 1; recorded for
 audit only), `disposition` (`fixed`, `rejected`, or `deferred`), `evidence`
 (required for `rejected`: a file and line, or a read-only command and its
 output), and `decidedAt`. If the namespace or the ledger is lost, for example
-after a restart, the ledger is empty and the review runs as it does without one.
+after a restart, or after the session loses the identity record that
+[Ledger storage](#ledger-storage) keeps, including through context compaction,
+the ledger is empty and the review runs as it does without one.
 Record an entry for every finding as soon as its disposition is decided, before
 the next review round. A later disposition of the same finding updates that
 entry.
@@ -1068,45 +1070,57 @@ finding reopens as a new finding.
 #### Ledger storage
 
 A drafting session needs a private place for its ledger before the first ledger
-write. This procedure requires one process that can retain verified directory
-handles and an exclusive lock across every ledger operation. An
-instructions-only or same-response self-critique run that cannot do this across
-separate shell calls must stop before any ledger write, preserve its drafts as
-unreviewed, and report that it needs a helper-capable process or a single-process
-implementation with those capabilities. Do not substitute pathname-based
-operations. Run the procedure once per drafting session, before the first
-disposition is recorded. Every check below fails closed: when a platform cannot
-supply one of the evidence values named here, the storage is unreadable and the
-procedure stops.
+write. This procedure needs one process that keeps the verified directory
+handles and the exclusive lock open across every ledger operation of the
+drafting session. An instructions-only or same-response self-critique run whose
+commands run as separate shell calls cannot do this, because a handle or a lock
+does not survive from one call to the next. Such a run, or any other run that
+cannot keep them, decides this before any check below and stops the procedure
+there: it creates no namespace and writes no ledger, and it never substitutes
+pathname-based operations. It reports that no ledger is kept and runs the review
+under the loss rule in the **Ledger** paragraph of
+[Carry-forward of rejected findings](#carry-forward-of-rejected-findings): no
+finding is carried forward, and every finding gets a fresh disposition. This
+capability stop is not a storage stop: no storage was examined, so the review
+can still finish. To keep a ledger, run the procedure and every ledger operation
+in one long-lived process that follows the implementation notes below. If that
+process ends before the drafting session does, the ledger is lost under the same
+rule; never reopen the namespace by path. The rule against pathname-based
+substitutes is preventive; no observed incident yet. Run the procedure once per
+drafting session, before the first disposition is recorded. Every check below
+fails closed: when a platform cannot supply one of the evidence values named
+here, the storage is unreadable and the procedure stops.
 
 **Evidence.** For each path, record its canonical path (symbolic links
-resolved), its file type, its owner, its mode (POSIX) or ACL (Windows and
-macOS), its link count, and its file identity (device and inode on POSIX,
-volume serial and file index on Windows). A ledger's content is identified by
-its SHA-256. This
+resolved), its file type, its owner, its mode (POSIX) or ACL (Windows), plus
+its ACL on any POSIX platform where the root checks below read one, its link
+count, and its file identity (device and inode on POSIX, volume serial and file
+index on Windows). A ledger's content is identified by its SHA-256. This
 identity record lives only in the session's working context, never in a file, a
 marker, or the repository. Loss of this record, including after context
-compaction, is a lost-ledger trigger. If retained session history does not
-establish whether a root was supplied, stop before writing and recover the root
-and identity from retained evidence or ask the operator to provide them; a
-missing record does not prove that no root was supplied. For Linux root checks,
-also record the candidate root, each existing protected path, and every nested
-mount point's mount ID, matching mountinfo fields, and derived backing
-location; repeat the full inventory and comparison whenever the root checks
-run.
+compaction, is a lost-ledger trigger: the earlier namespace cannot be verified
+again, so it is left untouched as evidence, and any new ledger goes in a new
+namespace. The storage verdicts below decide whether to allocate one and under
+which root; a missing record does not prove that no root was supplied. For Linux
+root checks, also record the candidate root, each existing protected path, and
+every nested mount point's mount ID, matching mountinfo fields, and derived
+backing location; repeat the full inventory and comparison whenever the root
+checks run.
 
 **Roots.** A root is a directory that holds namespaces. Use a root that the user
 or the runtime supplies, such as a named scratch directory or harness scratch
 metadata, when one exists. Otherwise try the operating system's temporary
 directory, then the user state directory. The temporary directory is the
 absolute path returned by the runtime's standard-library temporary-directory
-resolver or the equivalent OS API. On POSIX, use `$XDG_STATE_HOME` only when
-it is nonempty and absolute; otherwise use `$HOME/.local/state` only when
-`$HOME` is nonempty and absolute. On Windows, use `%LOCALAPPDATA%` only when
-it is nonempty and fully qualified by a drive or UNC root; a drive-relative
-value is not qualified. Skip unset or unqualified environment values and never
-resolve them against the current directory. The user state directory is used
-only when it already exists; this procedure never creates it.
+resolver or the equivalent OS API. The user state directory is
+`$XDG_STATE_HOME`, else `$HOME/.local/state`, on POSIX, and `%LOCALAPPDATA%` on
+Windows. One rule applies to every base variable here (`$XDG_STATE_HOME`,
+`$HOME`, and `%LOCALAPPDATA%`): use it only when it is set, nonempty, and a fully
+qualified absolute path, which starts with `/` on POSIX, or with a drive letter
+and `:\` or with a UNC `\\` prefix on Windows. Skip any other value, including a
+relative, drive-relative, or root-relative one, and never resolve it against the
+current directory. The user state directory is used only when it already exists;
+this procedure never creates it.
 
 **Root checks.** A root must be an existing directory, not a symbolic link or
 reparse point, whose canonical path lies outside every path reported by a
@@ -1150,9 +1164,9 @@ For the filesystem-boundary form, the reported mount point must be a verified
 ancestor mount point of the canonical root. In either case, a no-follow walk
 from the root through its ancestors must confirm that each is readable and
 none is a Git directory or contains a `.git` entry (file or directory).
-The filesystem-boundary diagnostic was reproduced with `/dev/shm` during
-security review of PR #4728 on 2026-10-28; this was a control test, not a
-user-data-loss incident.
+The filesystem-boundary diagnostic was reproduced with `/dev/shm` as a control
+test during security review of PR #4728 on 2026-10-28 (preventive; no observed
+incident yet).
 If the walk finds Git metadata, cannot inspect an ancestor, or sees malformed
 or ambiguous Git metadata, stop. Any other exit status or diagnostic,
 including missing Git, permission, I/O, malformed repository metadata, or an
@@ -1169,19 +1183,27 @@ must be owned by the current user or a trusted system principal (POSIX UID
 user. On POSIX, reject a root that grants group or other users write and
 search permission without the sticky bit, even when the current user owns
 it. On Windows, reject a root whose ACL lets another user rename or delete child
-entries. On macOS, ACL entries can grant detailed rights such as deleting child
-entries beyond what BSD mode bits show. Unless the active helper evaluates ACL
-rights from the verified directory handle (for example, by retrieving the ACL
-with Apple's [`acl_get_fd_np`](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man3/acl_get_fd.3.html)
-API), treat privacy as detection-only and stop; mode bits alone do not prove
-owner-only access. If this permission evidence is unreadable, stop.
+entries. On Linux, a POSIX ACL entry for a named user or group is limited by the
+ACL mask, which the group permission bits show, so the mode check above already
+covers it. On macOS, an extended ACL entry can let another user delete child
+entries without any change to the BSD mode bits: read the root's ACL from the
+verified directory handle with Apple's
+[`acl_get_fd_np`](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man3/acl_get_fd.3.html)
+and reject a root whose ACL lets another user rename or delete child entries.
+On any other POSIX platform, the mode bits may not show ACL entries either, so
+apply the same check through that platform's handle-based ACL call. When that
+call reports that the root has no ACL (on macOS, `acl_get_fd_np` returns no ACL
+with `ENOENT`), the root has no extended entries and the mode check decides. On
+macOS or any other POSIX platform, any other failure to read the root's ACL
+through the verified handle fails this check. If this permission evidence is
+unreadable, stop.
 
 **Mount aliases.** A canonical pathname can look external while a bind mount
 exposes a worktree or Git administration directory, or while a nested mount
 inside a worktree is also reachable through an external path. The nested-mount
-gap was reproduced in an isolated Linux mount namespace during security
-review of PR #4728 on 2026-10-28; this control test did not involve user-data
-loss. Check the
+gap was reproduced as a control test in an isolated Linux mount namespace during
+security review of PR #4728 on 2026-10-28 (preventive; no observed incident
+yet). Check the
 backing location as well as the visible path. For every protected path (each
 reported worktree path and each discovered Git directory), first compare its
 normalized absolute lexical path against the candidate root using
@@ -1196,11 +1218,11 @@ evaluating any candidate root. A missing checkout does not rule out an
 external bind mount of one of its subdirectories; a ledger in that alias
 could be staged after the checkout is remounted.
 This control gap was identified during security review of PR #4728 on
-2026-10-28 (preventive; no observed incident yet). Stop and report the missing
-path. The operator must confirm the checkout directory is absent, then run
-`git worktree prune` from the primary worktree and retry the full inventory.
-Automation never prunes, and this recovery does not bypass claim or worktree
-recovery.
+2026-10-28 (preventive; no observed incident yet). The stop message names the
+missing path and this operator recovery step: the operator must confirm the
+checkout directory is absent, then run `git worktree prune` in that repository,
+and the next run repeats the full inventory. Automation never prunes, and this
+recovery does not bypass claim or worktree recovery.
 
 Automation must never prune or edit Git metadata. Access denial,
 an I/O or device error, a symbolic link or reparse point, or any ambiguous
@@ -1251,19 +1273,20 @@ For this contract, native mount or volume evidence means an OS-provided
 inventory of every nested mount beneath each existing protected path plus a
 stable volume identity and backing path for each verified open handle; device
 numbers alone are insufficient. If that inventory or comparison cannot be
-established, fail closed. On macOS, if a verified directory handle cannot yield
-a canonical path that can be compared with the inventory, stop; never reopen
-the path by name to establish it.
+established, fail closed. On macOS, get a verified handle's canonical path from
+the handle itself with `fcntl` and `F_GETPATH`, and compare that path with the
+inventory; if the call fails, stop. Never reopen the path by name to establish
+it.
 
 **Storage verdicts.** Classify each supplied root and namespace with exactly one
 verdict:
 
-| Input                                                                                                                                                                 | Verdict                                    | Action                                                                                                                                                                  |
-| --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| A supplied root that exists and passes the root checks                                                                                                                | Supplied verified storage                  | Create a new namespace under it (step 1).                                                                                                                               |
-| No root was supplied for this session, and the session has no identity record                                                                                         | No previously supplied allocation          | Allocate under the first candidate root that passes the root checks (step 1).                                                                                           |
-| The identity record is unavailable, including after context compaction, and retained history does not establish whether a root was supplied                           | Identity unknown                           | Stop before any ledger write; recover the root and identity from retained session evidence or ask the operator to provide them. Do not infer that no root was supplied. |
-| A supplied root is missing or fails a check, or a namespace, ledger, or lock file of this session has an identity different from its record (see the ownership cases) | Unsafe, conflicting, or unreadable storage | Preserve everything, report the canonical path and exact failing evidence, and treat the review as unable to finish (see below). Never fall back to another root.       |
+| Input                                                                                                                                                                 | Verdict                                    | Action                                                                                                                                                                                                                         |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| A supplied root that exists and passes the root checks                                                                                                                | Supplied verified storage                  | Create a new namespace under it (step 1).                                                                                                                                                                                      |
+| No root was supplied for this session, and the session has no identity record                                                                                         | No previously supplied allocation          | Allocate under the first candidate root that passes the root checks (step 1).                                                                                                                                                  |
+| The identity record is unavailable, including after context compaction, and retained history does not establish whether a root was supplied                           | Identity unknown                           | Stop before any ledger write and allocate nothing. Ask the operator whether a root was supplied, then classify again; until then, the review runs without a ledger under the loss rule. Never infer that no root was supplied. |
+| A supplied root is missing or fails a check, or a namespace, ledger, or lock file of this session has an identity different from its record (see the ownership cases) | Unsafe, conflicting, or unreadable storage | Preserve everything, report the canonical path and exact failing evidence, and treat the review as unable to finish (see below). Never fall back to another root.                                                              |
 
 A namespace from another session is never reused, and a new session has no
 identity record to reuse. An older namespace is left untouched as evidence.

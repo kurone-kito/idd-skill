@@ -417,9 +417,9 @@ use a supplied scratch root only if it passes its checks; if a supplied root
 fails, stop and report without trying another root. When no root is supplied,
 allocate a new `issue-authoring-<uuid>` directory with exclusive creation (a
 non-recursive `mkdir`, never `mkdir -p`) in the runtime's absolute temporary
-directory, or in the existing user state directory when its environment value
-is qualified and absolute. On POSIX, qualify both `$XDG_STATE_HOME` and
-`$HOME`; on Windows, qualify `%LOCALAPPDATA%` as a fully rooted path. Keep
+directory, or in the existing user state directory. Use `$XDG_STATE_HOME`,
+`$HOME`, or `%LOCALAPPDATA%` only when its value is a fully qualified absolute
+path, never resolved against the current directory. Keep
 the namespace outside every worktree and Git directory, including mount aliases
 checked through filesystem evidence. Keep one owner-only `<uuid>.json` ledger
 per draft; rename it to the issue number without overwriting another file.
@@ -428,23 +428,26 @@ another session's namespace. Unsafe, conflicting, or unreadable storage stops
 the review: report its path and preserve unverified entries; cleanup is limited
 to entries this session created whose recorded identity still matches.
 
-If the identity record is missing after context compaction and retained history
-does not establish whether a root was supplied, stop before any write and
-recover the root and identity from retained evidence or ask the operator. If a
-registered worktree checkout is absent, stop; only the operator may confirm the
-path is absent and run `git worktree prune`, after which the inventory must be
-repeated. Automation never prunes and does not bypass claim or worktree
-recovery.
+A lost ledger starts empty. Losing the identity record, including after context
+compaction, loses the ledger: allocate a new namespace under the supplied root
+when retained history shows one; when history does not show whether a root was
+supplied, write no ledger and ask the operator. If a registered worktree
+checkout is absent, stop with a message that names the path and the operator
+step: the operator confirms the path is absent and runs `git worktree prune`,
+and the next run repeats the inventory. Automation never prunes and does not
+bypass claim or worktree recovery.
 
 Resolve every root path component without following links, and require each
 ledger read, write, copy, replacement, and unlink to hold the namespace's
-verified exclusive lock while rechecking ownership and hashes. Any run that
-cannot hold the verified directory handle and exclusive lock in one process
-must stop before any ledger write and request a helper-capable process or a
-single-process implementation with those capabilities. On macOS, mode bits
-alone do not prove ACL privacy; stop unless the active helper evaluates ACL
-rights from the verified directory handle. Send unfinished drafts to a carrier
-marked `Review: not reviewed`.
+verified exclusive lock while rechecking ownership and hashes. An
+instructions-only or same-response self-critique run whose shell calls cannot
+keep the verified directory handle and exclusive lock open in one process must
+not start the procedure: it writes no ledger, never substitutes path-based
+operations, and runs the review without a ledger, as after a lost ledger. To
+keep a ledger, run the procedure in one long-lived process. On macOS, check the
+root's ACL through the verified handle, because the mode bits do not show it.
+When storage stops the review, send the drafts to a carrier marked
+`Review: not reviewed`.
 
 ## Reference Routing
 

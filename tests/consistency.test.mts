@@ -3840,41 +3840,52 @@ const LEDGER_STORAGE_CASES = [
 const LEDGER_STORAGE_VERDICTS = [
   {
     input: 'A supplied root that exists and passes',
+    verdict: 'Supplied verified storage',
     expectedAction: 'Create a new namespace under it (step 1).',
   },
   {
     input: 'No root was supplied for this session',
+    verdict: 'No previously supplied allocation',
     expectedAction:
       'Allocate under the first candidate root that passes the root checks (step 1).',
   },
   {
     input: 'The identity record is unavailable',
+    verdict: 'Identity unknown',
     expectedAction:
-      'Stop before any ledger write; recover the root and identity from retained session evidence or ask the operator to provide them. Do not infer that no root was supplied.',
+      'Stop before any ledger write and allocate nothing. Ask the operator whether a root was supplied, then classify again; until then, the review runs without a ledger under the loss rule. Never infer that no root was supplied.',
   },
   {
     input: 'A supplied root is missing or fails a check',
+    verdict: 'Unsafe, conflicting, or unreadable storage',
     expectedAction:
       'Preserve everything, report the canonical path and exact failing evidence, and treat the review as unable to finish (see below). Never fall back to another root.',
   },
 ];
 
-// Returns the subsection body after its heading line, so the two copies can be
-// compared even though the docs copy nests it one level deeper.
-function ledgerStorageVerdictAction(section: string, input: string): string {
-  const row = section
+// Returns the verdict and action cells of the one table row whose input cell
+// contains `input`, so a verdict's action cannot drift into another row.
+function ledgerStorageVerdictRow(
+  section: string,
+  input: string,
+): { verdict: string; action: string } {
+  const rows = section
     .split('\n')
-    .find((line) => line.trimStart().startsWith('|') && line.includes(input));
-  assert.ok(row, `missing verdict row: ${input}`);
-  const cells = row.split('|').slice(1, -1).map(normalizeWhitespace);
+    .filter((line) => line.trimStart().startsWith('|'))
+    .map((line) => line.split('|').slice(1, -1).map(normalizeWhitespace))
+    .filter((cells) => cells[0]?.includes(input));
+  assert.equal(rows.length, 1, `expected one verdict row for: ${input}`);
+  const cells = rows[0];
   assert.equal(
     cells.length,
     3,
     'verdict row must have input, verdict, and action',
   );
-  return cells[2];
+  return { verdict: cells[1], action: cells[2] };
 }
 
+// Returns the subsection body after its heading line, so the two copies can be
+// compared even though the docs copy nests it one level deeper.
 function ledgerStorageSection(path: string, heading: string): string {
   return extractSection(readText(path), heading, LEDGER_STORAGE_END).slice(
     heading.length,
@@ -3936,16 +3947,40 @@ test('issue-authoring contract defines ledger storage verdicts, allocation, and 
     assert.ok(text.includes(verdict), `missing verdict: ${verdict}`);
   }
   for (const scenario of LEDGER_STORAGE_VERDICTS) {
-    assert.equal(
-      ledgerStorageVerdictAction(section, scenario.input),
-      scenario.expectedAction,
-      `verdict action must remain in its own table row: ${scenario.input}`,
+    assert.deepEqual(
+      ledgerStorageVerdictRow(section, scenario.input),
+      { verdict: scenario.verdict, action: scenario.expectedAction },
+      `verdict and action must stay in their own table row: ${scenario.input}`,
     );
   }
-  assert.doesNotMatch(
-    section,
-    /https:\/\/github\.com\/kurone-kito\/idd-skill\/pull\/4728#(?:discussion_r|issuecomment-)/,
-  );
+  // A supplied root that fails never falls back to another root, reported or
+  // not (#4810).
+  assert.doesNotMatch(text, /fall back to another root silently/);
+  // Each gap passage carries the citation form from
+  // docs/idd-design-rationale.md, and no adopter-facing contract text links a
+  // PR review thread (#4810).
+  for (const lead of [
+    'The separate Git-administration-directory gap was identified',
+    'The filesystem-boundary diagnostic was reproduced',
+    'The root-ownership gap was identified',
+    'The nested-mount gap was reproduced',
+    'This control gap was identified',
+  ]) {
+    const start = text.indexOf(lead);
+    assert.notEqual(start, -1, `missing gap passage: ${lead}`);
+    const sentence = text.slice(start, text.indexOf('.', start));
+    assert.ok(
+      sentence.includes('(preventive; no observed incident yet)'),
+      `gap passage must use the citation form: ${lead}`,
+    );
+  }
+  for (const path of [LEDGER_STORAGE_CONTRACT, LEDGER_STORAGE_SKILL]) {
+    assert.doesNotMatch(
+      readText(path),
+      /github\.com\/[^\s)>]+\/pull\/\d+#(?:discussion_r|issuecomment-|pullrequestreview-)/,
+      `${path} must not link a PR review thread`,
+    );
+  }
   for (const [index, scenario] of LEDGER_STORAGE_CASES.entries()) {
     const caseText = ledgerCaseText(section, LEDGER_STORAGE_CASES, index);
     assert.ok(
@@ -4019,9 +4054,10 @@ test('issue-authoring contract defines ledger storage verdicts, allocation, and 
   );
   assert.match(
     text,
-    /operator must confirm the checkout directory is absent, then run `git worktree prune`/,
+    /The stop message names the missing path and this operator recovery step: the operator must confirm the checkout directory is absent, then run `git worktree prune`/,
   );
   assert.match(text, /Automation never prunes/);
+  assert.match(text, /Automation must never prune or edit Git metadata/);
   assert.ok(
     text.includes(
       'The root must be owned by the current user or a trusted system principal (POSIX UID 0 or the Windows LocalSystem SID), and must be writable by the current user.',
@@ -4122,6 +4158,8 @@ test('issue-authoring contract defines ledger storage verdicts, allocation, and 
       'Before every ledger read, write, copy, rename, or unlink, acquire the namespace lock',
     ),
   );
+  assert.ok(text.includes("On POSIX, use Python's [`fcntl.flock`]"));
+  assert.ok(text.includes("on Windows, use Microsoft's [`LockFileEx`]"));
   assert.match(
     text,
     /Use native handle-relative operations with exclusive creation and no-follow checks/,
@@ -4224,8 +4262,9 @@ test('issue-authoring contract defines ledger storage verdicts, allocation, and 
   );
   assert.match(
     text,
-    /If retained session history does not establish whether a root was supplied, stop before writing/,
+    /the earlier namespace cannot be verified again, so it is left untouched as evidence, and any new ledger goes in a new namespace\. The storage verdicts below decide whether to allocate one and under which root; a missing record does not prove that no root was supplied/,
   );
+  assert.doesNotMatch(text, /recover the root and identity/);
   assert.match(
     text,
     /The trusted Git executable is the single absolute executable resolved by the runtime's configured command lookup/,
@@ -4234,30 +4273,35 @@ test('issue-authoring contract defines ledger storage verdicts, allocation, and 
     text,
     /The temporary directory is the absolute path returned by the runtime's standard-library temporary-directory resolver/,
   );
+  // One qualification rule covers every base variable of the state root.
   assert.ok(
     text.includes(
-      'On POSIX, use `$XDG_STATE_HOME` only when it is nonempty and absolute; otherwise use `$HOME/.local/state` only when `$HOME` is nonempty and absolute',
+      'One rule applies to every base variable here (`$XDG_STATE_HOME`, `$HOME`, and `%LOCALAPPDATA%`): use it only when it is set, nonempty, and a fully qualified absolute path',
     ),
   );
   assert.match(
     text,
-    /On Windows, use `%LOCALAPPDATA%` only when it is nonempty and fully qualified by a drive or UNC root/,
+    /Skip any other value, including a relative, drive-relative, or root-relative one, and never resolve it against the current directory/,
   );
   assert.match(
     text,
     /For this contract, native mount or volume evidence means an OS-provided inventory/,
   );
+  // ACL coverage names each platform and its check (#4810).
+  for (const sentence of [
+    'On Linux, a POSIX ACL entry for a named user or group is limited by the ACL mask, which the group permission bits show, so the mode check above already covers it.',
+    "On macOS, an extended ACL entry can let another user delete child entries without any change to the BSD mode bits: read the root's ACL from the verified directory handle with Apple's",
+    'and reject a root whose ACL lets another user rename or delete child entries.',
+    "On any other POSIX platform, the mode bits may not show ACL entries either, so apply the same check through that platform's handle-based ACL call.",
+    'When that call reports that the root has no ACL (on macOS, `acl_get_fd_np` returns no ACL with `ENOENT`), the root has no extended entries and the mode check decides.',
+    "On macOS or any other POSIX platform, any other failure to read the root's ACL through the verified handle fails this check.",
+  ]) {
+    assert.ok(text.includes(sentence), `missing ACL rule: ${sentence}`);
+  }
+  assert.doesNotMatch(text, /detection-only/);
   assert.match(
     text,
-    /On macOS, ACL entries can grant detailed rights such as deleting child entries beyond what BSD mode bits show/,
-  );
-  assert.match(
-    normalizeWhitespace(text),
-    /Unless the active helper evaluates ACL rights from the verified directory handle .*? treat privacy as detection-only and stop; mode bits alone do not prove owner-only access/,
-  );
-  assert.match(
-    text,
-    /On macOS, if a verified directory handle cannot yield a canonical path/,
+    /On macOS, get a verified handle's canonical path from the handle itself with `fcntl` and `F_GETPATH`, and compare that path with the inventory; if the call fails, stop/,
   );
   assert.ok(
     text.includes(
@@ -4277,19 +4321,27 @@ test('ledger storage stops when a run cannot retain the required handle and lock
     ledgerStorageSection(LEDGER_STORAGE_CONTRACT, '### Ledger storage\n'),
   );
   const skill = normalizeWhitespace(readText(LEDGER_STORAGE_SKILL));
-  assert.match(
-    contract,
-    /requires one process that can retain verified directory handles and an exclusive lock/,
-  );
-  assert.match(contract, /must stop before any ledger write/);
-  assert.match(
-    skill,
-    /Any run that cannot hold the verified directory handle and exclusive lock in one process must stop before any ledger write/,
+  for (const needle of [
+    'This procedure needs one process that keeps the verified directory handles and the exclusive lock open across every ledger operation of the drafting session.',
+    'An instructions-only or same-response self-critique run whose commands run as separate shell calls cannot do this',
+    'decides this before any check below and stops the procedure there: it creates no namespace and writes no ledger, and it never substitutes pathname-based operations.',
+    'It reports that no ledger is kept and runs the review under the loss rule in the **Ledger** paragraph of [Carry-forward of rejected findings](#carry-forward-of-rejected-findings)',
+    'This capability stop is not a storage stop: no storage was examined, so the review can still finish.',
+    'To keep a ledger, run the procedure and every ledger operation in one long-lived process',
+    'If that process ends before the drafting session does, the ledger is lost under the same rule; never reopen the namespace by path.',
+  ]) {
+    assert.ok(contract.includes(needle), `contract: missing "${needle}"`);
+  }
+  assert.ok(
+    skill.includes(
+      'An instructions-only or same-response self-critique run whose shell calls cannot keep the verified directory handle and exclusive lock open in one process must not start the procedure: it writes no ledger, never substitutes path-based operations, and runs the review without a ledger, as after a lost ledger.',
+    ),
   );
   for (const text of [contract, skill]) {
-    assert.match(
+    assert.doesNotMatch(text, /helper-capable process/);
+    assert.doesNotMatch(
       text,
-      /helper-capable process or a single-process implementation/,
+      /no orchestrator, environment variable, or helper/,
     );
   }
   assert.doesNotMatch(contract, /no helper package.*works the same/);
@@ -4302,7 +4354,7 @@ test('ledger rules keep namespaces, rejection carry-forward, and lost-ledger sem
       'keep a findings ledger in the namespace that [Ledger storage](#ledger-storage) allocates',
       'No two drafts or concurrent workers share a ledger file.',
       'The ledger is never written to the repository or to a marker.',
-      'If the namespace or the ledger is lost, for example after a restart, the ledger is empty and the review runs as it does without one.',
+      'If the namespace or the ledger is lost, for example after a restart, or after the session loses the identity record that [Ledger storage](#ledger-storage) keeps, including through context compaction, the ledger is empty and the review runs as it does without one.',
       'For each `rejected` entry that has evidence, add one string',
     ]) {
       assert.ok(text.includes(needle), `${path}: missing "${needle}"`);
@@ -4322,10 +4374,15 @@ test('SKILL entry carries the ledger storage summary and link for instructions-o
     'When no root is supplied, allocate a',
     'including mount aliases checked through filesystem evidence.',
     'Unsafe, conflicting, or unreadable storage stops the review: report its path and preserve unverified entries; cleanup is limited to entries this session created whose recorded identity still matches.',
-    'Any run that cannot hold the verified directory handle and exclusive lock in one process must stop before any ledger write',
+    'A lost ledger starts empty. Losing the identity record, including after context compaction, loses the ledger:',
+    'when history does not show whether a root was supplied, write no ledger and ask the operator.',
+    'stop with a message that names the path and the operator step: the operator confirms the path is absent and runs `git worktree prune`',
+    'Use `$XDG_STATE_HOME`, `$HOME`, or `%LOCALAPPDATA%` only when its value is a fully qualified absolute path',
+    "On macOS, check the root's ACL through the verified handle, because the mode bits do not show it.",
   ]) {
     assert.ok(skill.includes(needle), `SKILL.md: missing "${needle}"`);
   }
+  assert.doesNotMatch(skill, /fall back to another root silently/);
   assert.doesNotMatch(skill, /session scratchpad/);
   assert.doesNotMatch(skill, /delete nothing|or otherwise create/);
 });
