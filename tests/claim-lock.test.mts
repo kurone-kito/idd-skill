@@ -24,6 +24,7 @@ import {
   acquireClaimLock,
   backfillGeneratedClaimTokens,
   checkClaimLock,
+  isSessionQualifiedAgentId,
   readGeneratedClaimTokens,
   recordGeneratedClaimTokens,
   resolveClaimLockPath,
@@ -2395,7 +2396,7 @@ test('CLI: --record-tokens on a non-worktree path names the remedy, not the raw 
           '--worktree',
           plain,
           '--agent-id',
-          'agent-a',
+          'agent-a1b2c3d4',
           '--claim-id',
           'claim-a',
         ],
@@ -2429,7 +2430,7 @@ test('CLI: --record-tokens keeps the git diagnostic when the path has a .git ent
           '--worktree',
           broken,
           '--agent-id',
-          'agent-a',
+          'agent-a1b2c3d4',
           '--claim-id',
           'claim-a',
         ],
@@ -2458,7 +2459,7 @@ test('CLI: --record-tokens then --read-tokens round trip via the compiled CLI', 
         '--worktree',
         fixture.worktree,
         '--agent-id',
-        'agent-a',
+        'agent-a1b2c3d4',
         '--claim-id',
         'claim-a',
         '--nonce',
@@ -2483,7 +2484,7 @@ test('CLI: --record-tokens then --read-tokens round trip via the compiled CLI', 
     );
     const readOutcome = JSON.parse(readResult.stdout);
     assert.equal(readOutcome.present, true);
-    assert.equal(readOutcome.record.agentId, 'agent-a');
+    assert.equal(readOutcome.record.agentId, 'agent-a1b2c3d4');
     assert.equal(readOutcome.record.claimId, 'claim-a');
     assert.equal(readOutcome.record.nonce, 'nonce-a');
 
@@ -2524,6 +2525,179 @@ test('CLI: --record-tokens then --read-tokens round trip via the compiled CLI', 
     const readMalformedOutcome = JSON.parse(readMalformedResult.stdout);
     assert.equal(readMalformedOutcome.present, true);
     assert.equal(readMalformedOutcome.malformed, true);
+  } finally {
+    teardown(fixture);
+  }
+});
+
+test('isSessionQualifiedAgentId accepts <family>-<suffix> and refuses shared ids (#4936)', () => {
+  for (const agentId of [
+    'claude-48429e70',
+    'copilot-8122ca35',
+    'claude-123e4567-e89b-12d3-a456-426614174000',
+    'github-copilot-cli-8122ca35',
+    'claude-ab73e126-4936',
+  ]) {
+    assert.equal(isSessionQualifiedAgentId(agentId), true, agentId);
+  }
+  for (const agentId of [
+    '',
+    'claude',
+    'codex-cli',
+    'github-copilot-cli',
+    'claude-a',
+    'claude-1234567',
+    '-48429e70',
+    'claude-',
+    'claude 48429e70',
+    'claude-48429e70 ',
+  ]) {
+    assert.equal(isSessionQualifiedAgentId(agentId), false, agentId);
+  }
+});
+
+test('CLI: --record-tokens refuses a bare or short --agent-id and writes nothing (#4936)', async () => {
+  const fixture = setupLinkedWorktree();
+  try {
+    for (const [agentId, extra] of [
+      ['claude', []],
+      ['codex-cli', []],
+      ['claude-a', []],
+      // An empty --nonce is no nonce, so it does not make this a re-record.
+      ['claude', ['--nonce', '']],
+    ] as const) {
+      await assert.rejects(
+        execFileAsync(
+          process.execPath,
+          [
+            CLI_PATH,
+            '--record-tokens',
+            '--worktree',
+            fixture.worktree,
+            '--agent-id',
+            agentId,
+            '--claim-id',
+            'claim-bare',
+            ...extra,
+          ],
+          { env: fixtureEnv() },
+        ),
+        (error: NodeJS.ErrnoException & { stderr?: string }) => {
+          assert.notEqual(error.code, 0);
+          assert.match(
+            error.stderr ?? '',
+            /--record-tokens refuses --agent-id .+ for a new claim: use <family>-<suffix>/,
+          );
+          return true;
+        },
+      );
+    }
+    assert.equal(
+      existsSync(resolveGeneratedTokensPath(fixture.worktree, 'claim-bare')),
+      false,
+    );
+    assert.equal(
+      readGeneratedClaimTokens(fixture.worktree, 'claim-bare').status,
+      'absent',
+    );
+
+    await execFileAsync(
+      process.execPath,
+      [
+        CLI_PATH,
+        '--record-tokens',
+        '--worktree',
+        fixture.worktree,
+        '--agent-id',
+        'claude-48429e70',
+        '--claim-id',
+        'claim-bare',
+      ],
+      { env: fixtureEnv() },
+    );
+    const read = readGeneratedClaimTokens(fixture.worktree, 'claim-bare');
+    assert.equal(read.status, 'present');
+    assert.equal(
+      read.status === 'present' ? read.record.agentId : null,
+      'claude-48429e70',
+    );
+  } finally {
+    teardown(fixture);
+  }
+});
+
+test('CLI: a --record-tokens re-record with --nonce keeps accepting a legacy agent-id (#4936)', async () => {
+  const fixture = setupLinkedWorktree();
+  try {
+    // A claim posted before the rule re-records its own id with the
+    // activation nonce at B1 or in a recovery route.
+    await execFileAsync(
+      process.execPath,
+      [
+        CLI_PATH,
+        '--record-tokens',
+        '--worktree',
+        fixture.worktree,
+        '--agent-id',
+        'copilot',
+        '--claim-id',
+        'claim-legacy',
+        '--nonce',
+        'nonce-legacy',
+      ],
+      { env: fixtureEnv() },
+    );
+    const read = readGeneratedClaimTokens(fixture.worktree, 'claim-legacy');
+    assert.equal(read.status, 'present');
+    assert.equal(
+      read.status === 'present' ? read.record.agentId : null,
+      'copilot',
+    );
+    assert.equal(
+      read.status === 'present' ? read.record.nonce : null,
+      'nonce-legacy',
+    );
+  } finally {
+    teardown(fixture);
+  }
+});
+
+test('CLI: modes other than --record-tokens keep accepting a legacy agent-id (#4936)', async () => {
+  const fixture = setupLinkedWorktree();
+  try {
+    const acquired = await execFileAsync(
+      process.execPath,
+      [
+        CLI_PATH,
+        '--acquire',
+        '--worktree',
+        fixture.worktree,
+        '--agent-id',
+        'copilot',
+        '--claim-id',
+        'claim-legacy',
+      ],
+      { env: fixtureEnv() },
+    );
+    assert.equal(JSON.parse(acquired.stdout).mode, 'acquired');
+    const backfilled = await execFileAsync(
+      process.execPath,
+      [
+        CLI_PATH,
+        '--backfill-tokens',
+        '--worktree',
+        fixture.worktree,
+        '--claim-id',
+        'claim-legacy',
+      ],
+      { env: fixtureEnv() },
+    );
+    assert.equal(JSON.parse(backfilled.stdout).status, 'backfilled');
+    const read = readGeneratedClaimTokens(fixture.worktree, 'claim-legacy');
+    assert.equal(
+      read.status === 'present' ? read.record.agentId : null,
+      'copilot',
+    );
   } finally {
     teardown(fixture);
   }

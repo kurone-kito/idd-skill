@@ -275,6 +275,23 @@ const GENERATED_TOKENS_WRITE_LOCK_RETRY_INTERVAL_MS = 5;
  */
 const MAX_SANITIZED_CLAIM_ID_LENGTH = 64;
 
+/**
+ * A session-qualified `{agent-id}` (#4936): `<family>-<suffix>`, with no
+ * whitespace, a non-empty family name before the first `-`, and a run of at
+ * least eight ASCII letters or digits after it -- the runtime's unique
+ * session suffix or a generated UUID, such as `claude-48429e70`. A bare
+ * family name (`claude`) or a short tag (`codex-cli`, `claude-a`) is shared
+ * across sessions, so it cannot bind a claim to one session. Declared above
+ * the `import.meta.main` trigger below, which runs `runCli()` at module
+ * evaluation.
+ */
+const SESSION_QUALIFIED_AGENT_ID_PATTERN = /^[^\s-]+-\S*[A-Za-z0-9]{8}\S*$/;
+
+/** True when `agentId` is session-qualified; see the pattern above. */
+export function isSessionQualifiedAgentId(agentId: string): boolean {
+  return SESSION_QUALIFIED_AGENT_ID_PATTERN.test(agentId);
+}
+
 const CLAIM_LOCK_FLAG_SPEC = {
   '--acquire': { type: 'boolean' },
   '--check': { type: 'boolean' },
@@ -2030,6 +2047,19 @@ function runCli(): HelperCliResult {
         new Error('--claim-id is required for --record-tokens'),
       );
     }
+    // #4936: the first record of a claim activation, made before its claim
+    // post, carries no nonce, so a shared bare id is refused there and never
+    // reaches a new claim. A later re-record of an already-posted claim
+    // passes the activation nonce and keeps accepting the claim's own
+    // agent-id, so claims made before this rule keep their recovery routes.
+    // An empty --nonce (an unset shell variable) counts as no nonce.
+    if (!args.nonce && !isSessionQualifiedAgentId(args.agentId)) {
+      throw markCliUsageError(
+        new Error(
+          `--record-tokens refuses --agent-id ${JSON.stringify(args.agentId)} for a new claim: use <family>-<suffix> with the runtime's unique session suffix or a generated UUID (a run of at least 8 letters or digits after the first '-'). A forced-handoff successor whose marker names such an id stops and asks a maintainer for a new marker`,
+        ),
+      );
+    }
     assertRecordTokensWorktree(args.worktree);
     const outcome = recordGeneratedClaimTokens(args.worktree, {
       agentId: args.agentId,
@@ -2128,7 +2158,14 @@ concurrent session in the same clone). Call it once right after
 generating --agent-id/--claim-id, before posting the \`claimed-by\`
 marker, and again with --nonce right before posting the activation-nonce
 marker. Unlike --acquire, this has no collision concept: re-invoking is
-always a safe, expected overwrite.
+always a safe, expected overwrite. Without --nonce (the first record of a
+new claim, before its claim post), --agent-id must be session-qualified
+(#4936): <family>-<suffix>, with a run of at least 8 letters or digits
+after the first '-' (the runtime's unique session suffix or a generated
+UUID, such as claude-48429e70). A bare family name such as claude, or a
+short tag such as codex-cli, is then a usage error and writes nothing. A
+re-record with --nonce, and the other modes, accept any --agent-id, so a
+claim made before this rule keeps its re-record and recovery routes.
 
 --read-tokens is read-only: it reports whether --claim-id was actually
 recorded on disk by this mechanism, distinguishing \`present\` (a
