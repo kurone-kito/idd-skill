@@ -191,8 +191,8 @@ is diagnostic and never changes the verdict.
     (CheckRun `completedAt`; StatusContext
     `updatedAt`; passing: CheckRun `SUCCESS`, `SKIPPED`, or `NEUTRAL`;
     StatusContext `SUCCESS`; later failures ignored), differs from
-    `{latest-ci-completed-at}` in the watermark (a new CI run completed
-    after E1's snapshot; if `none`, any current CI pass triggers
+    `{latest-ci-completed-at}` in the watermark (the selected timestamp
+    changed after E1's snapshot; if `none`, any current passing CI triggers
     re-evaluation) — commonly a late label-triggered job;
     sequence it before E1.
 
