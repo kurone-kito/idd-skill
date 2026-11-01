@@ -9,6 +9,7 @@ import { execFileSync } from 'node:child_process';
 import { statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parseCliArgs } from './cli-args.mjs';
+import { inspectDistributionRouting } from './distribution-selection.mjs';
 import {
   applyHelperCliOutcomeWhenDisabled,
   isHelperErrorEnvelopeEnabled,
@@ -49,6 +50,15 @@ export function resolveInstalledPayloadRoot(options) {
   if (home.length === 0 || !isQualifiedConfigRoot(home)) return undefined;
   return join(home, '.local', 'share', 'idd-skill', 'current');
 }
+/** Resolve the legacy current root only for non-session internal callers. */
+function readyPayloadRoot(options) {
+  const root = resolveInstalledPayloadRoot(options);
+  if (root === undefined) return { reason: 'payload-root-unresolved' };
+  if (!isRegularFile(join(root, INSTRUCTION_ENTRY))) {
+    return { reason: 'payload-not-installed' };
+  }
+  return { root };
+}
 /**
  * Run git from `cwd` with inherited `GIT_*` variables removed. A variable
  * such as `GIT_DIR` would redirect every query to another repository, so the
@@ -65,19 +75,6 @@ function defaultGitRunner(args, cwd) {
     stdio: ['ignore', 'pipe', 'ignore'],
   });
 }
-/**
- * Resolve the installed payload and confirm it holds the core instruction
- * file. A missing install fails closed rather than naming a directory that
- * does not exist.
- */
-function readyPayloadRoot(options) {
-  const root = resolveInstalledPayloadRoot(options);
-  if (root === undefined) return { reason: 'payload-root-unresolved' };
-  if (!isRegularFile(join(root, INSTRUCTION_ENTRY))) {
-    return { reason: 'payload-not-installed' };
-  }
-  return { root };
-}
 /** A directory at the instruction path cannot be opened as the overview. */
 function isRegularFile(path) {
   try {
@@ -90,7 +87,7 @@ function inactive(reason) {
   return { active: false, tier: 'none', instructionsRoot: null, reason };
 }
 /** Apply the activation rules in order and return the first match. */
-export function computeActivation(options) {
+function computeActivationOptIn(options) {
   const runGit = options.runGit ?? defaultGitRunner;
   const cwd = resolve(options.cwd);
   let topLevel;
@@ -115,12 +112,10 @@ export function computeActivation(options) {
     join(topLevel, 'idd-policy.json'),
   ];
   if (policyFiles.some(isRegularFile)) {
-    const payload = readyPayloadRoot(options);
-    if (!('root' in payload)) return inactive(payload.reason);
     return {
       active: true,
       tier: 'repository-local',
-      instructionsRoot: payload.root,
+      instructionsRoot: null,
       reason: 'repository-policy-minimal-import',
     };
   }
@@ -133,33 +128,153 @@ export function computeActivation(options) {
       userGlobalConfig: userGlobal.config,
     });
     if (resolved.selectedOverrideIndex !== null) {
-      const payload = readyPayloadRoot(options);
-      if (!('root' in payload)) return inactive(payload.reason);
       return {
         active: true,
         tier: 'user-global-override',
-        instructionsRoot: payload.root,
+        instructionsRoot: null,
         reason: 'user-global-override-match',
       };
     }
   }
   return inactive('no-activation-rule');
 }
+/** Preserve the legacy payload-served result for existing read-only callers. */
+export function computeActivation(options) {
+  const activation = computeActivationOptIn(options);
+  if (
+    !activation.active ||
+    activation.reason === 'repository-instruction-files'
+  ) {
+    return activation;
+  }
+  const payload = readyPayloadRoot(options);
+  if (!('root' in payload)) return inactive(payload.reason);
+  return { ...activation, instructionsRoot: payload.root };
+}
+/** Attach the session-bound routing decision used by the installed entry. */
+export function computeActivationForSession(options) {
+  const activation = computeActivationOptIn(options);
+  if (!activation.active) return activation;
+  const sessionId = options.sessionId;
+  if (
+    typeof sessionId !== 'string' ||
+    sessionId.trim() === '' ||
+    /[\r\n\0]/u.test(sessionId)
+  ) {
+    return {
+      ...activation,
+      instructionsRoot: null,
+      selection: {
+        status: 'not-ready',
+        recovery: 'inspect',
+        reason: 'session-id-required',
+      },
+    };
+  }
+  let routing;
+  try {
+    const inspect = options.inspectRouting ?? inspectDistributionRouting;
+    routing = inspect({
+      cwd: options.cwd,
+      sessionId,
+      ...(options.env === undefined ? {} : { env: options.env }),
+      ...(options.homedir === undefined ? {} : { homedir: options.homedir }),
+      ...(options.runGit === undefined ? {} : { runGit: options.runGit }),
+    });
+  } catch (error) {
+    return {
+      ...activation,
+      instructionsRoot: null,
+      selection: {
+        status: 'not-ready',
+        recovery: 'inspect',
+        reason: error instanceof Error ? error.message : String(error),
+      },
+    };
+  }
+  const report = routing.report;
+  if (report.session.id !== sessionId) {
+    return {
+      ...activation,
+      instructionsRoot: null,
+      selection: {
+        status: 'not-ready',
+        recovery: 'inspect',
+        reason: 'selection-session-mismatch',
+        report,
+      },
+    };
+  }
+  const routeReady =
+    routing.route !== 'none' && routing.instructionsRoot !== null;
+  if (!routeReady) {
+    return {
+      ...activation,
+      instructionsRoot: null,
+      selection: {
+        status: 'not-ready',
+        recovery: report.recovery,
+        reason: report.verdict,
+        report,
+      },
+    };
+  }
+  if (
+    report.session.binding === 'bound' &&
+    report.verdict === 'session-bound'
+  ) {
+    return {
+      ...activation,
+      instructionsRoot: routing.instructionsRoot,
+      selection: {
+        status: 'ready',
+        recovery: 'none',
+        report,
+      },
+    };
+  }
+  if (
+    report.session.binding === 'unbound' &&
+    ['coherent-candidate', 'pin-preserved'].includes(report.verdict)
+  ) {
+    return {
+      ...activation,
+      instructionsRoot: null,
+      selection: {
+        status: 'binding-required',
+        recovery: 'bind',
+        report,
+      },
+    };
+  }
+  return {
+    ...activation,
+    instructionsRoot: null,
+    selection: {
+      status: 'not-ready',
+      recovery: report.recovery,
+      reason: report.verdict,
+      report,
+    },
+  };
+}
 const ACTIVATION_FLAG_SPEC = {
   '--cwd': { type: 'string' },
+  '--session-id': { type: 'string' },
   '--help': { type: 'boolean', short: 'h' },
 };
 function printHelp() {
   process.stdout.write(`Usage:
-  node scripts/idd-activation.mjs [--cwd <path>]
+  node scripts/idd-activation.mjs [--cwd <path>] [--session-id <id>]
 
 Read-only gate for the user-global IDD entry text (#3821). Prints one JSON
-object with active, tier, instructionsRoot, and reason. It makes no network
+object with activation and session-selection status. It makes no network
 calls and writes nothing.
 
 Options:
-  --cwd <path>   directory to classify (default: the current directory)
-  -h, --help     show this help
+  --cwd <path>       directory to classify (default: the current directory)
+  --session-id <id>  stable identifier supplied by the current harness
+  -h, --help         show this help
 `);
 }
 function runCli() {
@@ -175,7 +290,16 @@ function runCli() {
   if (cwdValue !== undefined && cwdValue.length === 0) {
     throw markCliUsageError(new Error('--cwd must not be empty'));
   }
-  const result = computeActivation({ cwd: cwdValue ?? process.cwd() });
+  const sessionId = values['session-id'];
+  if (sessionId !== undefined && /[\r\n\0]/u.test(sessionId)) {
+    throw markCliUsageError(
+      new Error('--session-id must not contain a line break or NUL'),
+    );
+  }
+  const result = computeActivationForSession({
+    cwd: cwdValue ?? process.cwd(),
+    ...(sessionId === undefined ? {} : { sessionId }),
+  });
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   return 0;
 }

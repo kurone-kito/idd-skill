@@ -539,10 +539,10 @@ function currentMatches(ctx, current, set, entries) {
   // loadPreparedSets has already checked helper ownership and integrity. Keep
   // missing helper files visible so the caller can report preparation recovery.
   const instructions = componentListingAt(set.manifest, 'instructions');
-  if (
-    !Array.isArray(instructions.files) ||
-    !filesMatchAtRoot(current.versionRoot, instructions.files, entries, ctx.fs)
-  ) {
+  const instructionsMatch =
+    Array.isArray(instructions.files) &&
+    filesMatchAtRoot(current.versionRoot, instructions.files, entries, ctx.fs);
+  if (!instructionsMatch) {
     return false;
   }
   const home = ctx.home;
@@ -557,6 +557,80 @@ function currentMatches(ctx, current, set, entries) {
     ];
     if (!roots.every((root) => filesMatchAtRoot(root, files, entries, ctx.fs)))
       return false;
+  }
+  return true;
+}
+/**
+ * Compare the complete repository instruction tree with the instruction
+ * subset of a verified prepared manifest. A repository-local route is trusted
+ * only when every expected byte matches and no extra local instruction file
+ * is present.
+ */
+function localInstructionsMatchSet(ctx, set) {
+  if (ctx.worktreeRoot === null) return false;
+  const component = componentListingAt(set.manifest, 'instructions');
+  if (!Array.isArray(component.files)) return false;
+  const prefix = '.github/instructions/';
+  const expected = new Map();
+  for (const raw of component.files) {
+    if (!isObject(raw) || typeof raw.path !== 'string') return false;
+    if (!raw.path.startsWith(prefix)) continue;
+    const localPath = raw.path.slice(prefix.length);
+    if (
+      !safeRelativeFilePath(localPath) ||
+      typeof raw.sha256 !== 'string' ||
+      expected.has(localPath)
+    ) {
+      return false;
+    }
+    expected.set(localPath, raw.sha256);
+  }
+  if (!expected.has('idd-overview-core.instructions.md')) return false;
+  const root = join(ctx.worktreeRoot, '.github', 'instructions');
+  const actual = new Map();
+  const visit = (directory, relativePath) => {
+    let names;
+    try {
+      if (
+        checkContainment(ctx.worktreeRoot, directory, ctx.fs).finalKind !==
+        'directory'
+      ) {
+        return false;
+      }
+      names = ctx.fs.readdirSync(directory);
+    } catch {
+      return false;
+    }
+    for (const name of names) {
+      if (!safeRelativeFilePath(name)) return false;
+      const child = join(directory, name);
+      const childRelative =
+        relativePath.length === 0 ? name : `${relativePath}/${name}`;
+      let kind;
+      try {
+        kind = checkContainment(root, child, ctx.fs).finalKind;
+      } catch {
+        return false;
+      }
+      if (kind === 'directory') {
+        if (!visit(child, childRelative)) return false;
+        continue;
+      }
+      if (kind !== 'file') return false;
+      try {
+        actual.set(
+          childRelative,
+          sha256(readNoFollowBytes(child, ctx.fs, true)),
+        );
+      } catch {
+        return false;
+      }
+    }
+    return true;
+  };
+  if (!visit(root, '') || actual.size !== expected.size) return false;
+  for (const [path, digest] of expected) {
+    if (actual.get(path) !== digest) return false;
   }
   return true;
 }
@@ -844,8 +918,24 @@ function inspectWithContext(ctx) {
     });
   }
   const bound = binding.record;
+  if (loaded.errors.length > 0) {
+    return baseReport(ctx, 'conflict', {
+      source: ctx.packageSpec === null ? 'unknown' : 'repository-pin',
+      verdict: 'not-verified-usable',
+      compatibility: 'incompatible',
+      recovery: 'reselect',
+      packageVersion: version,
+      ...(bound === null
+        ? {}
+        : {
+            session: { id: ctx.sessionId, binding: 'bound' },
+            previousVerifiedSet: cloneJson(bound.selected),
+          }),
+    });
+  }
   // Repository-local instructions keep routing precedence over any global
-  // set, including one this session already bound, so check them first.
+  // set, including one this session already bound. Verify their complete file
+  // tree against that selected immutable set before allowing the local route.
   if (ctx.worktreeRoot !== null) {
     const localInstruction = join(
       ctx.worktreeRoot,
@@ -866,16 +956,134 @@ function inspectWithContext(ctx) {
       localPresent = true;
     }
     if (localPresent) {
+      if (bound !== null) {
+        const selectedCommit = bound.selected.sourceCommit;
+        if (
+          typeof selectedCommit === 'string' &&
+          loaded.invalidCommits.has(selectedCommit)
+        ) {
+          return baseReport(ctx, 'conflict', {
+            source: 'repository-local',
+            verdict: 'not-verified-usable',
+            compatibility: 'incompatible',
+            recovery: 'reselect',
+            packageVersion: version,
+            session: { id: ctx.sessionId, binding: 'bound' },
+            previousVerifiedSet: cloneJson(bound.selected),
+          });
+        }
+        if (bound.packageSpec !== ctx.packageSpec) {
+          return baseReport(ctx, receipt.status, {
+            source: 'repository-local',
+            verdict: 'migration-required',
+            packageVersion: version,
+            session: { id: ctx.sessionId, binding: 'bound' },
+            previousVerifiedSet: cloneJson(bound.selected),
+          });
+        }
+        const set = identityFromBinding(bound, loaded.sets);
+        if (set === null || !localInstructionsMatchSet(ctx, set)) {
+          return baseReport(ctx, receipt.status, {
+            source: 'repository-local',
+            verdict: 'migration-required',
+            packageVersion: version,
+            session: { id: ctx.sessionId, binding: 'bound' },
+            previousVerifiedSet: cloneJson(bound.selected),
+          });
+        }
+        if (set.preparationMissing) {
+          return baseReport(ctx, receipt.status, {
+            source: 'repository-local',
+            verdict: 'preparation-missing',
+            selected: cloneJson(bound.selected),
+            previousVerifiedSet: cloneJson(bound.selected),
+            packageVersion: version,
+            preparation: 'preparation-missing',
+            compatibility: 'compatible',
+            recovery: 'prepare',
+            session: { id: ctx.sessionId, binding: 'bound' },
+          });
+        }
+        return baseReport(ctx, receipt.status, {
+          source: 'repository-local',
+          verdict: 'session-bound',
+          selected: cloneJson(bound.selected),
+          previousVerifiedSet: cloneJson(bound.selected),
+          packageVersion: version,
+          preparation: 'prepared',
+          compatibility: 'compatible',
+          recovery: 'none',
+          session: { id: ctx.sessionId, binding: 'bound' },
+        });
+      }
+      let candidate = null;
+      let candidateVerdict = 'coherent-candidate';
+      if (ctx.packageSpec !== null) {
+        const pinnedCommit = pinCommit(ctx.packageSpec);
+        if (pinnedCommit === null) {
+          return baseReport(ctx, receipt.status, {
+            source: 'repository-local',
+            verdict: 'not-verified-usable',
+            packageVersion: version,
+            compatibility: 'unknown',
+            recovery: 'reselect',
+          });
+        }
+        candidate =
+          loaded.sets.find((set) => set.commit === pinnedCommit) ?? null;
+        candidateVerdict = 'pin-preserved';
+      } else if (current !== null) {
+        const matches = loaded.sets.filter((set) =>
+          currentMatches(ctx, current, set, receipt.entries),
+        );
+        if (matches.length > 1) {
+          const commits = new Set(matches.map((set) => set.commit));
+          return baseReport(ctx, receipt.status, {
+            source: 'repository-local',
+            verdict:
+              version !== null && commits.size > 1
+                ? 'distinct-builds'
+                : 'not-verified-usable',
+            packageVersion: version,
+            compatibility: 'unknown',
+            recovery: 'reselect',
+          });
+        }
+        candidate = matches[0] ?? null;
+      }
+      if (candidate === null) {
+        return baseReport(ctx, receipt.status, {
+          source: 'repository-local',
+          verdict: 'migration-required',
+          packageVersion: version,
+        });
+      }
+      if (candidate.preparationMissing) {
+        return baseReport(ctx, receipt.status, {
+          source: 'repository-local',
+          verdict: 'preparation-missing',
+          selected: cloneJson(candidate.identity),
+          packageVersion: version,
+          preparation: 'preparation-missing',
+          compatibility: 'compatible',
+          recovery: 'prepare',
+        });
+      }
+      if (!localInstructionsMatchSet(ctx, candidate)) {
+        return baseReport(ctx, receipt.status, {
+          source: 'repository-local',
+          verdict: 'migration-required',
+          packageVersion: version,
+        });
+      }
       return baseReport(ctx, receipt.status, {
         source: 'repository-local',
-        verdict: 'migration-required',
+        verdict: candidateVerdict,
+        selected: cloneJson(candidate.identity),
         packageVersion: version,
-        ...(bound === null
-          ? {}
-          : {
-              session: { id: ctx.sessionId, binding: 'bound' },
-              previousVerifiedSet: cloneJson(bound.selected),
-            }),
+        preparation: 'prepared',
+        compatibility: 'compatible',
+        recovery: 'none',
       });
     }
   }
@@ -1018,15 +1226,6 @@ function inspectWithContext(ctx) {
       packageVersion: version,
     });
   }
-  if (loaded.errors.length > 0) {
-    return baseReport(ctx, 'conflict', {
-      source: ctx.packageSpec === null ? 'unknown' : 'repository-pin',
-      verdict: 'not-verified-usable',
-      compatibility: 'incompatible',
-      recovery: 'reselect',
-      packageVersion: version,
-    });
-  }
   const explicitCommit = pinCommit(ctx.packageSpec);
   if (ctx.packageSpec !== null) {
     if (explicitCommit === null) {
@@ -1131,6 +1330,91 @@ function inspectWithContext(ctx) {
 export function inspectDistributionSelection(options) {
   const ctx = resolveContext(options);
   return inspectWithContext(ctx);
+}
+/**
+ * Resolve the verified local instruction root for activation without adding
+ * filesystem paths to the public selection report schema.
+ */
+export function inspectDistributionRouting(options) {
+  const ctx = resolveContext(options);
+  const selection = inspectWithContext(ctx);
+  if (
+    selection.selected === null ||
+    selection.compatibility !== 'compatible' ||
+    selection.preparation !== 'prepared' ||
+    !['coherent-candidate', 'pin-preserved', 'session-bound'].includes(
+      selection.verdict,
+    )
+  ) {
+    return {
+      report: selection,
+      route: 'none',
+      instructionsRoot: null,
+    };
+  }
+  const receipt = readReceiptSnapshot(ctx);
+  if (receipt.status !== 'verified') {
+    return {
+      report: selection,
+      route: 'none',
+      instructionsRoot: null,
+    };
+  }
+  const loaded = loadPreparedSets(ctx, receipt.entries);
+  const set = loaded.sets.find((candidate) =>
+    sameIdentity(candidate.identity, selection.selected),
+  );
+  if (set === undefined || set.preparationMissing) {
+    return {
+      report: selection,
+      route: 'none',
+      instructionsRoot: null,
+    };
+  }
+  if (selection.source === 'repository-local') {
+    if (!localInstructionsMatchSet(ctx, set) || ctx.worktreeRoot === null) {
+      return {
+        report: selection,
+        route: 'none',
+        instructionsRoot: null,
+      };
+    }
+    return {
+      report: selection,
+      route: 'repository-local',
+      instructionsRoot: ctx.worktreeRoot,
+    };
+  }
+  const root = join(set.root, 'idd-template');
+  const core = join(
+    root,
+    '.github',
+    'instructions',
+    'idd-overview-core.instructions.md',
+  );
+  try {
+    if (
+      checkContainment(set.root, root, ctx.fs).finalKind !== 'directory' ||
+      checkContainment(root, core, ctx.fs).finalKind !== 'file'
+    ) {
+      return {
+        report: selection,
+        route: 'none',
+        instructionsRoot: null,
+      };
+    }
+  } catch {
+    return {
+      report: selection,
+      route: 'none',
+      instructionsRoot: null,
+    };
+  }
+  return {
+    report: selection,
+    route: 'prepared-set',
+    instructionsRoot: root,
+  };
 }
 function withReceiptMutationLock(ctx, operation) {
   const fs = ctx.fs;
@@ -1331,7 +1615,7 @@ export function bindDistributionSelection(options) {
         sessionId: ctx.sessionId,
         packageSpec: ctx.packageSpec,
         source:
-          before.source === 'repository-pin'
+          pinCommit(ctx.packageSpec) !== null
             ? 'repository-pin'
             : 'global-current',
         selected: cloneJson(before.selected),

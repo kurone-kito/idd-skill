@@ -12647,7 +12647,7 @@ test('bin/idd-onboard.mjs distribution prepare and bind preserve CLI data and st
   assert.equal(installed.status, 0, installed.stderr);
 
   // Make a local, committed source checkout that matches the current payload
-  // bytes, including this issue's template documentation update. The helper
+  // bytes, including this issue's template documentation and entry updates. The helper
   // still proves every selected file against the explicit immutable commit.
   const sourceRoot = join(targetRoot, 'source');
   execFileSync(
@@ -12664,18 +12664,24 @@ test('bin/idd-onboard.mjs distribution prepare and bind preserve CLI data and st
     },
   );
   const templateDoc = 'idd-template/docs/idd-helper-scripts.md';
+  const templateEntry = 'idd-template/user-global/entry.md';
   writeFileSync(
     join(sourceRoot, templateDoc),
     readFileSync(join(REPO_ROOT, templateDoc)),
+  );
+  writeFileSync(
+    join(sourceRoot, templateEntry),
+    readFileSync(join(REPO_ROOT, templateEntry)),
   );
   // Keep the fixture commit non-empty after the template doc has already
   // landed on the current branch.
   const sourceMarker = `.idd-test-distribution-source-${process.pid}-${Date.now()}.txt`;
   writeFileSync(join(sourceRoot, sourceMarker), 'fixture source marker\n');
-  execFileSync('git', ['-C', sourceRoot, 'add', templateDoc, sourceMarker], {
-    env: gitEnv,
-    stdio: 'pipe',
-  });
+  execFileSync(
+    'git',
+    ['-C', sourceRoot, 'add', templateDoc, templateEntry, sourceMarker],
+    { env: gitEnv, stdio: 'pipe' },
+  );
   execFileSync(
     'git',
     [

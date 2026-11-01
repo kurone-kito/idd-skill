@@ -15,8 +15,13 @@ import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import type {
+  DistributionRoutingResult,
+  DistributionSelectionReport,
+} from '../src/scripts/distribution-selection.mts';
 import {
   computeActivation,
+  computeActivationForSession,
   resolveInstalledPayloadRoot,
 } from '../src/scripts/idd-activation.mts';
 
@@ -106,6 +111,33 @@ function listTree(dir: string): string[] {
   return entries;
 }
 
+function fakeRouting(
+  overrides: Partial<DistributionSelectionReport> = {},
+  route: DistributionRoutingResult['route'] = 'prepared-set',
+  instructionsRoot = '/prepared/idd-template',
+): DistributionRoutingResult {
+  return {
+    report: {
+      schemaVersion: 1,
+      repository: 'acme/app',
+      session: { id: 'session-one', binding: 'bound' },
+      verdict: 'session-bound',
+      selected: { sourceCommit: 'a'.repeat(40), components: {} },
+      previousVerifiedSet: null,
+      packageVersion: null,
+      preparation: 'prepared',
+      compatibility: 'compatible',
+      source: 'global-current',
+      recovery: 'none',
+      receipt: { status: 'verified' },
+      mutation: 'none',
+      ...overrides,
+    },
+    route,
+    instructionsRoot: route === 'none' ? null : instructionsRoot,
+  };
+}
+
 test('payload root prefers a qualified XDG_DATA_HOME', () => {
   assert.equal(
     resolveInstalledPayloadRoot({
@@ -168,6 +200,106 @@ test('a repository with its own instruction files is repository-local', () => {
       instructionsRoot: repo,
       reason: 'repository-instruction-files',
     });
+  } finally {
+    box.cleanup();
+  }
+});
+
+test('session activation opens only the selected route after binding', () => {
+  const box = sandbox();
+  try {
+    const repo = makeRepo(join(box.root, 'repo'));
+    writeFile(
+      join(repo, '.github/instructions/idd-overview-core.instructions.md'),
+      '# core\n',
+    );
+    const result = computeActivationForSession({
+      cwd: repo,
+      env: box.env,
+      sessionId: 'session-one',
+      inspectRouting: () => fakeRouting({}, 'repository-local', repo),
+    });
+    assert.equal(result.active, true);
+    assert.equal(result.selection?.status, 'ready');
+    assert.equal(result.instructionsRoot, repo);
+  } finally {
+    box.cleanup();
+  }
+});
+
+test('an unbound selected set requires explicit binding before opening', () => {
+  const box = sandbox();
+  try {
+    const repo = makeRepo(join(box.root, 'repo'));
+    writeFile(join(repo, '.github/idd/config.json'), '{}\n');
+    const result = computeActivationForSession({
+      cwd: repo,
+      env: box.env,
+      sessionId: 'session-one',
+      inspectRouting: () =>
+        fakeRouting({
+          session: { id: 'session-one', binding: 'unbound' },
+          verdict: 'coherent-candidate',
+        }),
+    });
+    assert.equal(result.active, true);
+    assert.equal(result.selection?.status, 'binding-required');
+    assert.equal(result.instructionsRoot, null);
+  } finally {
+    box.cleanup();
+  }
+});
+
+test('an active policy with non-ready selection stays active and has no root', () => {
+  const box = sandbox();
+  try {
+    const repo = makeRepo(join(box.root, 'repo'));
+    writeFile(join(repo, '.github/idd/config.json'), '{}\n');
+    const result = computeActivationForSession({
+      cwd: repo,
+      env: box.env,
+      sessionId: 'session-one',
+      inspectRouting: () =>
+        fakeRouting(
+          {
+            session: { id: 'session-one', binding: 'unbound' },
+            verdict: 'preparation-missing',
+            selected: null,
+            preparation: 'preparation-missing',
+            compatibility: 'unknown',
+            recovery: 'prepare',
+          },
+          'none',
+        ),
+    });
+    assert.equal(result.active, true);
+    assert.equal(result.selection?.status, 'not-ready');
+    assert.equal(result.selection?.recovery, 'prepare');
+    assert.equal(result.instructionsRoot, null);
+  } finally {
+    box.cleanup();
+  }
+});
+
+test('a missing stable session ID stops active routing without inspecting', () => {
+  const box = sandbox();
+  try {
+    const repo = makeRepo(join(box.root, 'repo'));
+    writeFile(join(repo, '.github/idd/config.json'), '{}\n');
+    let inspected = false;
+    const result = computeActivationForSession({
+      cwd: repo,
+      env: box.env,
+      inspectRouting: () => {
+        inspected = true;
+        return fakeRouting();
+      },
+    });
+    assert.equal(result.active, true);
+    assert.equal(result.selection?.status, 'not-ready');
+    assert.equal(result.selection?.reason, 'session-id-required');
+    assert.equal(result.instructionsRoot, null);
+    assert.equal(inspected, false);
   } finally {
     box.cleanup();
   }
@@ -333,6 +465,10 @@ test('the user-global entry names installed activation fallbacks', () => {
     `entry text must stay within ${ENTRY_LIMIT_BYTES} bytes`,
   );
   assert.match(text, /idd-activation/);
+  assert.match(text, /--session-id/);
+  assert.match(text, /binding-required/);
+  assert.match(text, /selection\.status: ready/);
+  assert.match(text, /selection\.recovery/);
   assert.match(text, /~\/\.local\/bin\/idd-activation/);
   assert.ok(text.includes('& "$HOME\\.local\\bin\\idd-activation.cmd"'));
   assert.ok(text.includes('"%USERPROFILE%\\.local\\bin\\idd-activation.cmd"'));
@@ -435,17 +571,29 @@ test('the activation CLI prints the JSON verdict for a directory', () => {
     );
     const script = resolve(REPO_ROOT, 'scripts/idd-activation.mjs');
     assert.ok(existsSync(script), 'the built helper must exist');
-    const result = spawnSync(process.execPath, [script, '--cwd', repo], {
-      env: box.env,
-      encoding: 'utf8',
-    });
+    const result = spawnSync(
+      process.execPath,
+      [script, '--cwd', repo, '--session-id', 'session-cli'],
+      {
+        env: box.env,
+        encoding: 'utf8',
+      },
+    );
     assert.equal(result.status, 0, result.stderr);
     const verdict = JSON.parse(result.stdout) as {
       active: boolean;
       tier: string;
+      instructionsRoot: string | null;
+      selection: {
+        status: string;
+        report?: { session: { id: string } };
+      };
     };
     assert.equal(verdict.active, true);
     assert.equal(verdict.tier, 'repository-local');
+    assert.equal(verdict.instructionsRoot, null);
+    assert.equal(verdict.selection.status, 'not-ready');
+    assert.equal(verdict.selection.report?.session.id, 'session-cli');
   } finally {
     box.cleanup();
   }

@@ -8,6 +8,7 @@ import { after, test } from 'node:test';
 import {
   bindDistributionSelection,
   type DistributionSelectionOptions,
+  inspectDistributionRouting,
   inspectDistributionSelection,
 } from '../src/scripts/distribution-selection.mts';
 import type { FsOps } from '../src/scripts/user-global-paths.mts';
@@ -26,8 +27,13 @@ interface Fixture {
   runtimeRoot: string;
   env: NodeJS.ProcessEnv;
   options(sessionId?: string): DistributionSelectionOptions;
-  addPreparedSet(commit: string, label: string): void;
-  installCurrent(commit: string, version: string, label: string): void;
+  addPreparedSet(commit: string, label: string, instructionPath?: string): void;
+  installCurrent(
+    commit: string,
+    version: string,
+    label: string,
+    instructionPath?: string,
+  ): void;
   pin(packageSpec: string): void;
 }
 
@@ -97,7 +103,11 @@ function makeFixture(): Fixture {
       sha256: sha256(Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes)),
     });
   };
-  const sourceComponents = (commit: string, label: string) => {
+  const sourceComponents = (
+    commit: string,
+    label: string,
+    instructionPath = 'user-global/entry.md',
+  ) => {
     const instructionsBytes = Buffer.from(`entry ${label}\n`);
     const issueAuthoringBytes = Buffer.from(`authoring ${label}\n`);
     const specAuditBytes = Buffer.from(`audit ${label}\n`);
@@ -117,12 +127,13 @@ function makeFixture(): Fixture {
     };
     return {
       instructionsBytes,
+      instructionPath,
       issueAuthoringBytes,
       specAuditBytes,
       helperBytes,
       components: {
         instructions: component(
-          'user-global/entry.md',
+          instructionPath,
           instructionsBytes,
           `https://github.com/acme/app/tree/${commit}/idd-template`,
         ),
@@ -164,8 +175,8 @@ function makeFixture(): Fixture {
     options(sessionId = 'session-one') {
       return { cwd: repo, sessionId, env, runtimeRoot };
     },
-    addPreparedSet(commit, label) {
-      const set = sourceComponents(commit, label);
+    addPreparedSet(commit, label, instructionPath) {
+      const set = sourceComponents(commit, label, instructionPath);
       const setRoot = join(preparedRoot, commit);
       const instructionsRoot = join(setRoot, 'idd-template');
       const skillsRoot = join(setRoot, 'skills');
@@ -176,15 +187,21 @@ function makeFixture(): Fixture {
         preparedRoot,
         setRoot,
         instructionsRoot,
-        join(instructionsRoot, 'user-global'),
         skillsRoot,
         issueAuthoringRoot,
         specAuditRoot,
         helperRoot,
       ])
         addDirectory(path);
+      const instructionParts = dirname(set.instructionPath).split('/');
+      let instructionDirectory = instructionsRoot;
+      for (const part of instructionParts) {
+        if (part === '.') continue;
+        instructionDirectory = join(instructionDirectory, part);
+        addDirectory(instructionDirectory);
+      }
       addFile(
-        join(instructionsRoot, 'user-global', 'entry.md'),
+        join(instructionsRoot, set.instructionPath),
         set.instructionsBytes,
       );
       addFile(join(issueAuthoringRoot, 'SKILL.md'), set.issueAuthoringBytes);
@@ -201,11 +218,11 @@ function makeFixture(): Fixture {
       );
       writeReceipt(dataRoot, [...entries.values()]);
     },
-    installCurrent(commit, version, label) {
-      const set = sourceComponents(commit, label);
+    installCurrent(commit, version, label, instructionPath) {
+      const set = sourceComponents(commit, label, instructionPath);
       const versionRoot = join(dataRoot, version);
       addDirectory(versionRoot);
-      const payloadFile = join(versionRoot, 'user-global', 'entry.md');
+      const payloadFile = join(versionRoot, set.instructionPath);
       addFile(payloadFile, set.instructionsBytes);
       for (const name of ['issue-authoring', 'idd-spec-audit']) {
         const bytes =
@@ -429,6 +446,114 @@ test('repository policy and local instructions resolve from the worktree root', 
   const local = inspectDistributionSelection(options);
   assert.equal(local.verdict, 'migration-required');
   assert.equal(local.source, 'repository-local');
+});
+
+test('verified repository-local instructions keep precedence and expose their root', () => {
+  const fixture = makeFixture();
+  const instructionPath =
+    '.github/instructions/idd-overview-core.instructions.md';
+  fixture.addPreparedSet(COMMIT_A, 'one', instructionPath);
+  fixture.installCurrent(COMMIT_A, '1.0.0', 'one', instructionPath);
+  const instructions = join(fixture.repo, instructionPath);
+  fs.mkdirSync(dirname(instructions), { recursive: true });
+  fs.writeFileSync(instructions, 'entry one\n');
+  const receiptBefore = fs.readFileSync(join(fixture.dataRoot, 'receipt.json'));
+
+  const routing = inspectDistributionRouting(fixture.options());
+  assert.equal(routing.report.source, 'repository-local');
+  assert.equal(routing.report.verdict, 'coherent-candidate');
+  assert.equal(routing.report.selected?.sourceCommit, COMMIT_A);
+  assert.equal(routing.route, 'repository-local');
+  assert.equal(routing.instructionsRoot, fixture.repo);
+  assert.deepEqual(
+    fs.readFileSync(join(fixture.dataRoot, 'receipt.json')),
+    receiptBefore,
+  );
+});
+
+test('verified local instructions keep an older repository pin over current', () => {
+  const fixture = makeFixture();
+  const instructionPath =
+    '.github/instructions/idd-overview-core.instructions.md';
+  fixture.addPreparedSet(COMMIT_A, 'one', instructionPath);
+  fixture.addPreparedSet(COMMIT_B, 'two', instructionPath);
+  fixture.installCurrent(COMMIT_A, '1.0.0', 'one', instructionPath);
+  fixture.pin(`github:acme/app#${COMMIT_B}`);
+  const instructions = join(fixture.repo, instructionPath);
+  fs.mkdirSync(dirname(instructions), { recursive: true });
+  fs.writeFileSync(instructions, 'entry two\n');
+
+  const routing = inspectDistributionRouting(fixture.options());
+  assert.equal(routing.report.verdict, 'pin-preserved');
+  assert.equal(routing.report.source, 'repository-local');
+  assert.equal(routing.report.selected?.sourceCommit, COMMIT_B);
+  assert.equal(routing.route, 'repository-local');
+  assert.equal(routing.instructionsRoot, fixture.repo);
+
+  const bound = bindDistributionSelection(fixture.options());
+  assert.equal(bound.status, 'created');
+  assert.equal(bound.report.verdict, 'session-bound');
+  assert.equal(bound.report.selected?.sourceCommit, COMMIT_B);
+});
+
+test('modified local instruction bytes require migration and expose no root', () => {
+  const fixture = makeFixture();
+  const instructionPath =
+    '.github/instructions/idd-overview-core.instructions.md';
+  fixture.addPreparedSet(COMMIT_A, 'one', instructionPath);
+  fixture.installCurrent(COMMIT_A, '1.0.0', 'one', instructionPath);
+  const instructions = join(fixture.repo, instructionPath);
+  fs.mkdirSync(dirname(instructions), { recursive: true });
+  fs.writeFileSync(instructions, 'locally changed\n');
+
+  const routing = inspectDistributionRouting(fixture.options());
+  assert.equal(routing.report.verdict, 'migration-required');
+  assert.equal(routing.route, 'none');
+  assert.equal(routing.instructionsRoot, null);
+});
+
+test('a local route stays bound to the verified set when current moves', () => {
+  const fixture = makeFixture();
+  const instructionPath =
+    '.github/instructions/idd-overview-core.instructions.md';
+  fixture.addPreparedSet(COMMIT_A, 'one', instructionPath);
+  fixture.addPreparedSet(COMMIT_B, 'two', instructionPath);
+  fixture.installCurrent(COMMIT_A, '1.0.0', 'one', instructionPath);
+  const instructions = join(fixture.repo, instructionPath);
+  fs.mkdirSync(dirname(instructions), { recursive: true });
+  fs.writeFileSync(instructions, 'entry one\n');
+
+  const created = bindDistributionSelection(fixture.options());
+  assert.equal(created.status, 'created');
+  assert.equal(created.report.source, 'repository-local');
+  fixture.installCurrent(COMMIT_B, '2.0.0', 'two', instructionPath);
+
+  const routing = inspectDistributionRouting(fixture.options());
+  assert.equal(routing.report.verdict, 'session-bound');
+  assert.equal(routing.report.selected?.sourceCommit, COMMIT_A);
+  assert.equal(routing.route, 'repository-local');
+  assert.equal(routing.instructionsRoot, fixture.repo);
+});
+
+test('prepared instruction root stays on the bound immutable set when current moves', () => {
+  const fixture = makeFixture();
+  const instructionPath =
+    '.github/instructions/idd-overview-core.instructions.md';
+  fixture.addPreparedSet(COMMIT_A, 'one', instructionPath);
+  fixture.addPreparedSet(COMMIT_B, 'two', instructionPath);
+  fixture.installCurrent(COMMIT_A, '1.0.0', 'one', instructionPath);
+  const created = bindDistributionSelection(fixture.options());
+  assert.equal(created.status, 'created');
+  fixture.installCurrent(COMMIT_B, '2.0.0', 'two', instructionPath);
+
+  const routing = inspectDistributionRouting(fixture.options());
+  assert.equal(routing.report.verdict, 'session-bound');
+  assert.equal(routing.report.selected?.sourceCommit, COMMIT_A);
+  assert.equal(routing.route, 'prepared-set');
+  assert.equal(
+    routing.instructionsRoot,
+    join(fixture.preparedRoot, COMMIT_A, 'idd-template'),
+  );
 });
 
 test('a symlinked local instruction path prevents global selection', () => {
