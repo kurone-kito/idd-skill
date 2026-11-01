@@ -4388,36 +4388,52 @@ function moduleReferencesManifestPath(text, targetPath, modulePath) {
  * Keep target baseline reads tied to the requested repository instead of
  * ambient Git overrides inherited from a hook, wrapper, or parent process.
  */
-function sanitizedGitEnvironment() {
+const GIT_REPOSITORY_OVERRIDE_NAMES = new Set([
+  'GIT_DIR',
+  'GIT_INDEX_FILE',
+  'GIT_WORK_TREE',
+  'GIT_COMMON_DIR',
+  'GIT_OBJECT_DIRECTORY',
+  'GIT_ALTERNATE_OBJECT_DIRECTORIES',
+  'GIT_CEILING_DIRECTORIES',
+  'GIT_NAMESPACE',
+  'GIT_QUARANTINE_PATH',
+  'GIT_REPLACE_REF_BASE',
+  'GIT_NO_REPLACE_OBJECTS',
+]);
+function normalizedGitEnvironmentName(key, platform) {
+  return platform === 'win32' ? key.toUpperCase() : key;
+}
+function isGitEnvironmentKey(key, platform) {
+  return normalizedGitEnvironmentName(key, platform).startsWith('GIT_');
+}
+function isGitRepositoryOverrideKey(key, platform) {
+  const normalizedKey = normalizedGitEnvironmentName(key, platform);
+  return (
+    normalizedKey.startsWith('GIT_CONFIG') ||
+    GIT_REPOSITORY_OVERRIDE_NAMES.has(normalizedKey)
+  );
+}
+export function sanitizedGitEnvironment(platform = process.platform) {
   const env = { ...process.env };
   for (const key of Object.keys(env)) {
-    if (key.startsWith('GIT_CONFIG')) {
-      delete env[key];
-    }
+    if (isGitRepositoryOverrideKey(key, platform)) delete env[key];
   }
-  delete env.GIT_DIR;
-  delete env.GIT_INDEX_FILE;
-  delete env.GIT_WORK_TREE;
-  delete env.GIT_COMMON_DIR;
-  delete env.GIT_OBJECT_DIRECTORY;
-  delete env.GIT_ALTERNATE_OBJECT_DIRECTORIES;
-  delete env.GIT_CEILING_DIRECTORIES;
-  delete env.GIT_NAMESPACE;
-  delete env.GIT_QUARANTINE_PATH;
-  delete env.GIT_REPLACE_REF_BASE;
-  delete env.GIT_NO_REPLACE_OBJECTS;
   return env;
 }
 /** Temporarily remove caller-controlled Git overrides from synchronous work. */
-function withSanitizedGitEnvironment(operation) {
-  const sanitized = sanitizedGitEnvironment();
+export function withSanitizedGitEnvironment(
+  operation,
+  platform = process.platform,
+) {
+  const sanitized = sanitizedGitEnvironment(platform);
   const originalValues = new Map();
   const keys = new Set([
     ...Object.keys(process.env),
     ...Object.keys(sanitized),
   ]);
   for (const key of keys) {
-    if (!key.startsWith('GIT_')) continue;
+    if (!isGitEnvironmentKey(key, platform)) continue;
     originalValues.set(key, process.env[key]);
     const value = sanitized[key];
     if (value === undefined) delete process.env[key];
@@ -7102,7 +7118,7 @@ async function runCli() {
   if (foreign.length > 0) {
     throw markCliUsageError(
       new Error(
-        `--substitute does not accept import-only flag(s), verify-only flag(s), hear-only flag(s), or record-policy-only flag(s): ${foreign.join(', ')}`,
+        `--substitute does not accept import-only flag(s), distribution-only flag(s), verify-only flag(s), hear-only flag(s), or record-policy-only flag(s): ${foreign.join(', ')}`,
       ),
     );
   }

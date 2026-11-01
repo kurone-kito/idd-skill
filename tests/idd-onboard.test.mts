@@ -72,8 +72,10 @@ import {
   runRecordPolicyCli,
   runVerify,
   SCAN_EXCLUDED_PATHS,
+  sanitizedGitEnvironment,
   scanPlaceholderTokens,
   UNTRUSTED_LABELER_GUARD_WORKFLOW_PATH,
+  withSanitizedGitEnvironment,
 } from '../src/scripts/idd-onboard.mts';
 import { loadOnboardingHearingCatalog } from '../src/scripts/onboarding-hearing.mts';
 import type { PromptFn } from '../src/scripts/readline-prompt.mts';
@@ -8654,6 +8656,9 @@ test('legacy onboarding stages reject distribution-only options before execution
       assert.equal(failure.status, 2, `${mode} + ${flag}`);
       assert.match(String(failure.stderr), /does not accept/u);
       assert.ok(String(failure.stderr).includes(flag));
+      if (mode === '--substitute') {
+        assert.match(String(failure.stderr), /distribution-only flag/u);
+      }
     }
   }
 });
@@ -12480,6 +12485,40 @@ test('bin/idd-onboard.mjs distribution inspect validates its report and writes n
   assert.equal(missingSession.status, 2);
   assert.match(missingSession.stderr, /requires a non-empty --session-id/u);
   assert.deepEqual(snapshotFull(sandbox.root), before);
+});
+
+test('Git repository overrides are sanitized case-insensitively on Windows', () => {
+  const names = ['git_dir', 'gIt_wOrK_tReE', 'git_config_global'] as const;
+  const previousValues = new Map(
+    names.map((name) => [name, process.env[name]] as const),
+  );
+  for (const [index, name] of names.entries()) {
+    process.env[name] = `windows-git-override-${index}`;
+  }
+
+  try {
+    const sanitized = sanitizedGitEnvironment('win32');
+    for (const name of names) {
+      assert.equal(sanitized[name], undefined);
+    }
+
+    const valuesDuringOperation = withSanitizedGitEnvironment(
+      () => names.map((name) => process.env[name]),
+      'win32',
+    );
+    assert.deepEqual(
+      valuesDuringOperation,
+      names.map(() => undefined),
+    );
+    for (const [index, name] of names.entries()) {
+      assert.equal(process.env[name], `windows-git-override-${index}`);
+    }
+  } finally {
+    for (const [name, value] of previousValues) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
 });
 
 test('bin/idd-onboard.mjs distribution prepare and bind preserve CLI data and status', {
