@@ -298,6 +298,18 @@ function qualifiedRoot(value: string | undefined): string | null {
   return resolve(value.trim());
 }
 
+function defaultGitTextRunner(args: string[], cwd: string): string {
+  const env = Object.fromEntries(
+    Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')),
+  );
+  return execFileSync('git', args, {
+    cwd,
+    encoding: 'utf8',
+    env,
+    stdio: ['ignore', 'pipe', 'ignore'],
+  });
+}
+
 function resolveContext(
   options: DistributionSelectionOptions,
 ): SelectionContext {
@@ -322,20 +334,16 @@ function resolveContext(
   let repository: string | null = null;
   let worktreeRoot: string | null = null;
   let mainWorktreeRoot: string | null = null;
+  const runGit = options.runGit ?? defaultGitTextRunner;
   try {
-    const identity = deriveRepositoryIdentity({ cwd, runGit: options.runGit });
+    const identity = deriveRepositoryIdentity({ cwd, runGit });
     repository = identity.githubSlug;
     mainWorktreeRoot = identity.mainWorktreeRoot;
   } catch {
     // Outside Git is a supported report route; it never binds a repository.
   }
   try {
-    const output = options.runGit
-      ? options.runGit(['rev-parse', '--show-toplevel'], cwd)
-      : execFileSync('git', ['rev-parse', '--show-toplevel'], {
-          cwd,
-          encoding: 'utf8',
-        });
+    const output = runGit(['rev-parse', '--show-toplevel'], cwd);
     const root = output.trim();
     if (root.length > 0) worktreeRoot = resolve(cwd, root);
   } catch {
@@ -702,20 +710,14 @@ function currentMatches(
   set: PreparedSet,
   entries: readonly ReceiptEntry[],
 ): boolean {
+  // loadPreparedSets has already checked helper ownership and integrity. Keep
+  // missing helper files visible so the caller can report preparation recovery.
   const instructions = componentListingAt(set.manifest, 'instructions');
-  const helper = componentListingAt(set.manifest, 'helper');
   if (
     !Array.isArray(instructions.files) ||
-    !Array.isArray(helper.files) ||
     !filesMatchAtRoot(
       current.versionRoot,
       instructions.files as ComponentFile[],
-      entries,
-      ctx.fs,
-    ) ||
-    !filesMatchAtRoot(
-      ctx.runtimeRoot,
-      helper.files as ComponentFile[],
       entries,
       ctx.fs,
     )
@@ -748,8 +750,8 @@ function packageVersion(
   packageSpec: string | null,
   current: CurrentLink | null,
 ): string | null {
-  if (current !== null) return current.version;
-  if (packageSpec === null) return null;
+  if (packageSpec === null) return current?.version ?? null;
+  if (pinCommit(packageSpec) !== null) return null;
   const match = /@([0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?)$/u.exec(
     packageSpec,
   );
@@ -845,6 +847,13 @@ function readBinding(
   const path = paths[0];
   const entry = receiptEntry(entries, path);
   try {
+    const walk = checkContainment(ctx.dataRoot, path, ctx.fs);
+    if (walk.finalKind !== 'file') {
+      return {
+        record: null,
+        conflict: `session binding is not a regular contained file at ${path}`,
+      };
+    }
     const bytes = readNoFollowBytes(path, ctx.fs, true);
     if (entry?.kind !== 'file' || entry.sha256 !== sha256(bytes)) {
       return {
@@ -1048,7 +1057,7 @@ function inspectWithContext(
       localInstruction,
       ctx.fs,
     );
-    if (localWalk.finalKind === 'file') {
+    if (localWalk.finalKind !== 'absent') {
       return baseReport(ctx, receipt.status, {
         source: 'repository-local',
         verdict: 'migration-required',
@@ -1325,7 +1334,31 @@ export function bindDistributionSelection(
     before.session.binding === 'bound' &&
     before.verdict === 'session-bound'
   ) {
-    return { status: 'reused', authorized: true, report: before };
+    try {
+      return withReceiptMutationLock(ctx, () => {
+        const after = inspectWithContext(ctx);
+        if (
+          after.session.binding !== 'bound' ||
+          after.verdict !== 'session-bound'
+        ) {
+          return {
+            status: 'refused',
+            authorized: false,
+            report: after,
+            reason:
+              'selection changed before reuse; re-inspect before any workflow mutation',
+          };
+        }
+        return { status: 'reused', authorized: true, report: after };
+      });
+    } catch (error) {
+      return {
+        status: 'refused',
+        authorized: false,
+        report: inspectWithContext(ctx),
+        reason: String(error),
+      };
+    }
   }
   if (
     !['coherent-candidate', 'pin-preserved'].includes(before.verdict) ||

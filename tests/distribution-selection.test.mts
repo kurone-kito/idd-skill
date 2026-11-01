@@ -221,8 +221,6 @@ function makeFixture(): Fixture {
           addFile(join(skillPath, 'SKILL.md'), bytes);
         }
       }
-      const helperFile = join(runtimeRoot, 'scripts', 'tool.mjs');
-      addFile(helperFile, set.helperBytes);
       const link = join(dataRoot, 'current');
       try {
         fs.unlinkSync(link);
@@ -317,6 +315,54 @@ test('inspection selects one byte-verified global-current set without writing', 
   );
 });
 
+test('global-current exposes the prepare route when a prepared helper is missing', () => {
+  const fixture = makeFixture();
+  fixture.addPreparedSet(COMMIT_A, 'one');
+  fixture.installCurrent(COMMIT_A, '1.0.0', 'one');
+  fs.unlinkSync(join(fixture.preparedRoot, COMMIT_A, 'scripts', 'tool.mjs'));
+
+  const report = inspectDistributionSelection(fixture.options());
+  assert.equal(report.verdict, 'preparation-missing');
+  assert.equal(report.source, 'global-current');
+  assert.equal(report.selected?.sourceCommit, COMMIT_A);
+  assert.equal(report.preparation, 'preparation-missing');
+  assert.equal(report.recovery, 'prepare');
+});
+
+test('Git identity ignores ambient Git environment overrides', () => {
+  const fixture = makeFixture();
+  fixture.addPreparedSet(COMMIT_A, 'one');
+  fixture.installCurrent(COMMIT_A, '1.0.0', 'one');
+  const other = join(fixture.root, 'other-repo');
+  fs.mkdirSync(other);
+  execFileSync('git', ['init', '--quiet'], { cwd: other });
+  execFileSync(
+    'git',
+    ['remote', 'add', 'origin', 'https://github.com/other/repo.git'],
+    { cwd: other },
+  );
+
+  const priorGitEnv = Object.fromEntries(
+    Object.entries(process.env).filter(([key]) => key.startsWith('GIT_')),
+  );
+  try {
+    for (const key of Object.keys(process.env)) {
+      if (key.startsWith('GIT_')) delete process.env[key];
+    }
+    process.env.GIT_DIR = join(other, '.git');
+    process.env.GIT_WORK_TREE = other;
+
+    const report = inspectDistributionSelection(fixture.options());
+    assert.equal(report.repository, 'acme/app');
+    assert.equal(report.verdict, 'coherent-candidate');
+  } finally {
+    for (const key of Object.keys(process.env)) {
+      if (key.startsWith('GIT_')) delete process.env[key];
+    }
+    Object.assign(process.env, priorGitEnv);
+  }
+});
+
 test('repository policy and local instructions resolve from the worktree root', () => {
   const fixture = makeFixture();
   fixture.addPreparedSet(COMMIT_A, 'one');
@@ -343,6 +389,24 @@ test('repository policy and local instructions resolve from the worktree root', 
   const local = inspectDistributionSelection(options);
   assert.equal(local.verdict, 'migration-required');
   assert.equal(local.source, 'repository-local');
+});
+
+test('a symlinked local instruction path prevents global selection', () => {
+  const fixture = makeFixture();
+  fixture.addPreparedSet(COMMIT_A, 'one');
+  fixture.installCurrent(COMMIT_A, '1.0.0', 'one');
+  const instructions = join(
+    fixture.repo,
+    '.github',
+    'instructions',
+    'idd-overview-core.instructions.md',
+  );
+  fs.mkdirSync(dirname(instructions), { recursive: true });
+  fs.symlinkSync(join(fixture.root, 'outside-instructions.md'), instructions);
+
+  const report = inspectDistributionSelection(fixture.options());
+  assert.equal(report.verdict, 'migration-required');
+  assert.equal(report.source, 'repository-local');
 });
 
 test('an unreadable repository policy cannot fall through to global current', () => {
@@ -475,6 +539,7 @@ test('an exact repository commit pin wins over a different global current', () =
   assert.equal(report.verdict, 'pin-preserved');
   assert.equal(report.source, 'repository-pin');
   assert.equal(report.selected?.sourceCommit, COMMIT_B);
+  assert.equal(report.packageVersion, null);
 });
 
 test('same-version prepared commits with matching bytes remain distinct', () => {
@@ -541,6 +606,24 @@ test('explicit binding preserves its invocation after current moves and pin chan
   const afterPinChange = inspectDistributionSelection(fixture.options());
   assert.equal(afterPinChange.verdict, 'migration-required');
   assert.equal(afterPinChange.previousVerifiedSet?.sourceCommit, COMMIT_A);
+});
+
+test('binding reuse refuses while the shared receipt lock is held', () => {
+  const fixture = makeFixture();
+  fixture.addPreparedSet(COMMIT_A, 'one');
+  fixture.installCurrent(COMMIT_A, '1.0.0', 'one');
+  const created = bindDistributionSelection(fixture.options());
+  assert.equal(created.status, 'created');
+
+  const lockPath = join(
+    dirname(fixture.dataRoot),
+    `.idd-user-global-${sha256(fixture.dataRoot)}.lock`,
+  );
+  fs.mkdirSync(lockPath);
+  const result = bindDistributionSelection(fixture.options());
+  assert.equal(result.status, 'refused');
+  assert.equal(result.authorized, false);
+  assert.match(result.reason ?? '', /prepared receipt lock exists/u);
 });
 
 test('bindings are distinct for separate sessions and repository clones', () => {
@@ -666,6 +749,41 @@ test('edited binding bytes are preserved and make the selection unusable', () =>
   const refused = bindDistributionSelection(fixture.options());
   assert.equal(refused.status, 'refused');
   assert.deepEqual(fs.readFileSync(binding.path), before);
+});
+
+test('a receipt binding path cannot traverse a symlink before opening', () => {
+  const fixture = makeFixture();
+  fixture.addPreparedSet(COMMIT_A, 'one');
+  fixture.installCurrent(COMMIT_A, '1.0.0', 'one');
+  const created = bindDistributionSelection(fixture.options());
+  assert.equal(created.status, 'created');
+  const receipt = readReceipt(fixture.dataRoot);
+  assert.equal(receipt.state, 'valid');
+  const binding = receipt.receipt.entries.find(
+    (entry) => entry.kind === 'file' && entry.path.includes('/.idd-selection-'),
+  );
+  assert.ok(binding?.kind === 'file');
+  const bytes = fs.readFileSync(binding.path);
+  const versionRoot = dirname(binding.path);
+  const bindingName = binding.path.slice(versionRoot.length + 1);
+  const outside = join(fixture.root, 'outside');
+  const outsideNested = join(outside, 'nested');
+  fs.mkdirSync(outsideNested, { recursive: true });
+  fs.symlinkSync(outsideNested, join(versionRoot, 'link'), 'dir');
+  fs.writeFileSync(join(outside, bindingName), bytes);
+  fs.unlinkSync(binding.path);
+  const traversingPath = `${versionRoot}/link/../${bindingName}`;
+  writeReceipt(
+    fixture.dataRoot,
+    receipt.receipt.entries.map((entry) =>
+      entry.path === binding.path ? { ...entry, path: traversingPath } : entry,
+    ),
+  );
+
+  const report = inspectDistributionSelection(fixture.options());
+  assert.equal(report.verdict, 'not-verified-usable');
+  assert.equal(report.receipt.status, 'conflict');
+  assert.equal(fs.readFileSync(join(outside, bindingName)).equals(bytes), true);
 });
 
 test('a receipt-write interruption reports the staged binding and never authorizes it', () => {
