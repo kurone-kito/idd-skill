@@ -588,18 +588,31 @@ function localInstructionsMatchSet(ctx, set) {
   if (!expected.has('idd-overview-core.instructions.md')) return false;
   const root = join(ctx.worktreeRoot, '.github', 'instructions');
   const actual = new Map();
-  const generatedBannerStart = Buffer.from('<!-- idd-generated-from:\n');
-  const generatedBannerEnd = Buffer.from('-->\n\n');
+  const generatedBannerStart = '<!-- idd-generated-from:\n';
+  const generatedBannerEnd = '-->\n\n';
+  const frontmatterPattern = /^(---\n[\s\S]*?\n---\n)/u;
   const stripGeneratedBanner = (bytes) => {
-    if (
-      !bytes
-        .subarray(0, generatedBannerStart.length)
-        .equals(generatedBannerStart)
-    ) {
+    const text = bytes.toString('utf8');
+    // Keep malformed UTF-8 byte-for-byte so it cannot become a different
+    // instruction body merely by decoding and re-encoding it.
+    if (!Buffer.from(text, 'utf8').equals(bytes)) return bytes;
+    const frontmatter = frontmatterPattern.exec(text);
+    if (frontmatter !== null) {
+      const front = frontmatter[1];
+      const after = text.slice(front.length);
+      const positionedBannerStart = `\n${generatedBannerStart}`;
+      if (!after.startsWith(positionedBannerStart)) return bytes;
+      const end = after.indexOf('-->\n', positionedBannerStart.length);
+      if (end < 0) return bytes;
+      return Buffer.from(`${front}${after.slice(end + '-->\n'.length)}`);
+    }
+    if (!text.startsWith(generatedBannerStart)) {
       return bytes;
     }
-    const end = bytes.indexOf(generatedBannerEnd, generatedBannerStart.length);
-    return end < 0 ? bytes : bytes.subarray(end + generatedBannerEnd.length);
+    const end = text.indexOf(generatedBannerEnd, generatedBannerStart.length);
+    return end < 0
+      ? bytes
+      : Buffer.from(text.slice(end + generatedBannerEnd.length));
   };
   const visit = (directory, relativePath) => {
     let names;
