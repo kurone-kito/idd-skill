@@ -487,6 +487,162 @@ test('local instructions added after a global binding take precedence over reuse
   );
 });
 
+/**
+ * Local instruction path shapes whose no-follow walk throws (issue #4940).
+ * Each one makes the instruction file uninspectable before it is reached.
+ */
+const UNINSPECTABLE_LOCAL_PATHS: ReadonlyArray<{
+  name: string;
+  arrange(fixture: Fixture): void;
+}> = [
+  {
+    name: '.github is a symbolic link to a directory',
+    arrange(fixture) {
+      const outside = join(fixture.root, 'outside-github');
+      fs.mkdirSync(join(outside, 'instructions'), { recursive: true });
+      fs.writeFileSync(
+        join(outside, 'instructions', 'idd-overview-core.instructions.md'),
+        '# outside instructions\n',
+      );
+      fs.symlinkSync(outside, join(fixture.repo, '.github'), 'dir');
+    },
+  },
+  {
+    name: '.github is a dangling symbolic link',
+    arrange(fixture) {
+      fs.symlinkSync(
+        join(fixture.root, 'missing-github'),
+        join(fixture.repo, '.github'),
+        'dir',
+      );
+    },
+  },
+  {
+    name: '.github/instructions is a symbolic link',
+    arrange(fixture) {
+      const outside = join(fixture.root, 'outside-instructions');
+      fs.mkdirSync(outside, { recursive: true });
+      fs.writeFileSync(
+        join(outside, 'idd-overview-core.instructions.md'),
+        '# outside instructions\n',
+      );
+      fs.mkdirSync(join(fixture.repo, '.github'), { recursive: true });
+      fs.symlinkSync(
+        outside,
+        join(fixture.repo, '.github', 'instructions'),
+        'dir',
+      );
+    },
+  },
+  {
+    name: '.github/instructions is not a directory',
+    arrange(fixture) {
+      fs.mkdirSync(join(fixture.repo, '.github'), { recursive: true });
+      fs.writeFileSync(
+        join(fixture.repo, '.github', 'instructions'),
+        'not a directory\n',
+      );
+    },
+  },
+];
+
+for (const shape of UNINSPECTABLE_LOCAL_PATHS) {
+  test(`an uninspectable local instruction path reports repository-local when ${shape.name}`, () => {
+    const fixture = makeFixture();
+    fixture.addPreparedSet(COMMIT_A, 'one');
+    fixture.installCurrent(COMMIT_A, '1.0.0', 'one');
+    shape.arrange(fixture);
+    const receiptBefore = fs.readFileSync(
+      join(fixture.dataRoot, 'receipt.json'),
+    );
+
+    const report = inspectDistributionSelection(fixture.options());
+    assert.equal(report.source, 'repository-local');
+    assert.equal(report.verdict, 'migration-required');
+    assert.equal(report.selected, null);
+    assert.equal(report.session.binding, 'unbound');
+    assert.equal(report.previousVerifiedSet, null);
+    assert.equal(report.recovery, 'migrate');
+
+    const refused = bindDistributionSelection(fixture.options());
+    assert.equal(refused.status, 'refused');
+    assert.equal(refused.authorized, false);
+    assert.equal(refused.report.source, 'repository-local');
+    assert.equal(refused.report.verdict, 'migration-required');
+    assert.equal(refused.report.session.binding, 'unbound');
+    assert.deepEqual(
+      fs.readFileSync(join(fixture.dataRoot, 'receipt.json')),
+      receiptBefore,
+    );
+  });
+
+  test(`an uninspectable local instruction path keeps a verifiable binding visible when ${shape.name}`, () => {
+    const fixture = makeFixture();
+    fixture.addPreparedSet(COMMIT_A, 'one');
+    fixture.installCurrent(COMMIT_A, '1.0.0', 'one');
+    const created = bindDistributionSelection(fixture.options());
+    assert.equal(created.status, 'created');
+    const bindingPath = bindingEntryPath(fixture);
+    const bindingBefore = fs.readFileSync(bindingPath);
+    const receiptBefore = fs.readFileSync(
+      join(fixture.dataRoot, 'receipt.json'),
+    );
+    shape.arrange(fixture);
+
+    const report = inspectDistributionSelection(fixture.options());
+    assert.equal(report.source, 'repository-local');
+    assert.equal(report.verdict, 'migration-required');
+    assert.equal(report.selected, null);
+    assert.equal(report.session.binding, 'bound');
+    assert.deepEqual(report.previousVerifiedSet, created.report.selected);
+    assert.equal(report.recovery, 'migrate');
+
+    const reuse = bindDistributionSelection(fixture.options());
+    assert.equal(reuse.status, 'refused');
+    assert.equal(reuse.authorized, false);
+    assert.equal(reuse.report.source, 'repository-local');
+    assert.equal(reuse.report.session.binding, 'bound');
+    assert.deepEqual(fs.readFileSync(bindingPath), bindingBefore);
+    assert.deepEqual(
+      fs.readFileSync(join(fixture.dataRoot, 'receipt.json')),
+      receiptBefore,
+    );
+  });
+}
+
+test('a non-directory .github is refused by the repository policy check without writes', () => {
+  const fixture = makeFixture();
+  fixture.addPreparedSet(COMMIT_A, 'one');
+  fixture.installCurrent(COMMIT_A, '1.0.0', 'one');
+  const created = bindDistributionSelection(fixture.options());
+  assert.equal(created.status, 'created');
+  const bindingPath = bindingEntryPath(fixture);
+  const bindingBefore = fs.readFileSync(bindingPath);
+  const receiptBefore = fs.readFileSync(join(fixture.dataRoot, 'receipt.json'));
+  fs.writeFileSync(join(fixture.repo, '.github'), 'not a directory\n');
+
+  // The repository policy read fails before the local instruction check, so
+  // the stricter policy refusal answers here, not migration-required.
+  const report = inspectDistributionSelection(fixture.options());
+  assert.equal(report.source, 'repository-local');
+  assert.equal(report.verdict, 'not-verified-usable');
+  assert.equal(report.selected, null);
+  assert.equal(report.session.binding, 'bound');
+  assert.deepEqual(report.previousVerifiedSet, created.report.selected);
+  assert.equal(report.receipt.status, 'verified');
+  assert.equal(report.compatibility, 'incompatible');
+  assert.equal(report.recovery, 'reselect');
+
+  const reuse = bindDistributionSelection(fixture.options());
+  assert.equal(reuse.status, 'refused');
+  assert.equal(reuse.authorized, false);
+  assert.deepEqual(fs.readFileSync(bindingPath), bindingBefore);
+  assert.deepEqual(
+    fs.readFileSync(join(fixture.dataRoot, 'receipt.json')),
+    receiptBefore,
+  );
+});
+
 test('an unreadable repository policy cannot fall through to global current', () => {
   const fixture = makeFixture();
   fixture.addPreparedSet(COMMIT_A, 'one');
