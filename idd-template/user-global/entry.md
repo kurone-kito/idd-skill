@@ -23,7 +23,11 @@ harness ID; read JSON. If absent from `PATH`, use
 
   - `migrate` / `reselect`: run
     `idd-onboard --distribution inspect --session-id <id>`, review it, then
-    rerun activation after recovery.
+    stop and ask the repository maintainer to restore trusted provenance or
+    choose a verified distribution. Inspection does not repair or select a
+    distribution; do not rerun activation or bind an unverified selection.
+    Inspect again after the maintainer's repair. Continue only when the status
+    is `ready`; if it is `binding-required`, follow the bind step above.
 
 Run no other IDD helper or change state unless active and ready, or binding is
 explicitly required above.
