@@ -64,16 +64,16 @@ phase-specific formats in `idd-review-snapshot.instructions.md`;
 `claimed-by`/`unclaimed-by` comments remain valid for parsing/migration,
 but never create new ones.
 
-- `{agent-id}` is session-qualified, `<family>-<suffix>`: the agent-family
-  name, then the runtime's unique session suffix or, if none, a UUID made
-  before A5 (a run of 8+ letters or digits). Persist it in this session's
-  continuation state before the first claim write. Never use a bare family
-  name, another session's ID, or one read from issue comments or worktree
-  records; forced-handoff adopt-verbatim and orchestrator delegation hand it
-  over. Pass it as `--agent-id` to every `resume-claim-routing --claim-id`
-  owner check unless the claim's agent-id predates this rule. `{claim-id}`
-  remains the authoritative ownership token — agent-id alone never proves
-  ownership.
+- `{agent-id}` is session-qualified: `<family>-<suffix>` with the runtime's
+  unique session suffix or else a UUID made before A5 (8+ alnum run). Persist
+  it in this session's continuation state before its first claim write.
+  Never use a bare family name, another session's ID, or one read from issue
+  comments or worktree records; forced-handoff adopt-verbatim and orchestrator
+  delegation hand it over. Pass it as `--agent-id` to every
+  `resume-claim-routing --claim-id` owner check you run, even if a command
+  omits it, unless the claim predates this rule; helpers do not pass it yet.
+  `{claim-id}` remains the authoritative ownership token — agent-id alone
+  never proves ownership.
 - `{claim-id}` is an opaque unique token for one active claim lineage
   and is the portable ownership token used with trusted actor and
   session-record checks. Generate a fresh value on every fresh claim or
