@@ -711,8 +711,8 @@ On refusal, failure, recovery hold, or uncertain parent-record POST, stop.\
 Retain the parent claim and hold, leave published children held, and do not
 release the parent. Reconcile an uncertain POST before retrying.\
 After every child succeeds, post the parent's standing-approval record:
-`idd-skill-standing-approval: class=split; set=none;
-anchor=<owner/repo#n>; ceiling=<maxCandidateFiles>; option=<option-id>`.
+`<!-- idd-skill-standing-approval: class=split; set=none;
+anchor=<owner/repo#n>; ceiling=<maxCandidateFiles>; option=<option-id> -->`.
 Use the split option ID recorded on the roadmap, then the existing
 estimate/candidate/changed-files/split-proposal comment, `unclaimed-by`, and
 `lost-claim-cleanup` sequence.\
