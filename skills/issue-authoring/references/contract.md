@@ -3569,11 +3569,11 @@ only approval boundary.
   decision of 2026-11-01 (option (a), roadmap `#4883`): the self-anchor
   fast path above may release a set without an explicit human release
   request when the repository policy enables
-  `standingApprovals.release` (defined by child `#4886`) and all five
+  `standingApprovals.release` (defined by child `#4886`) and all six
   conditions below hold. They are checked immediately before the label
   removal, as fast-path step (3) requires for its own preconditions. They
-  replace the two defer-source preconditions in step (3); the body-sha256
-  provenance check is not part of this case.
+  replace the two defer-source preconditions in step (3), and condition (f)
+  keeps the body-sha256 check that the defer-source path also runs.
   - (a) `standingApprovals.release.enabled` is `true` in the repository
     policy; a missing, malformed, or disabled value leaves the explicit
     request in force;
@@ -3584,21 +3584,30 @@ only approval boundary.
   - (c) `node scripts/authoring-set-members.mjs --set <set> --issue <target>`
     reports `soleMember: true`, as in fast-path step (3); a non-zero exit
     is inconclusive and falls back to the explicit request;
-  - (d) the target's labels include neither `status:needs-decision` nor
-    `status:blocked-by-human`;
-  - (e) every publication-intent record for the target in the journal is in
-    state `member`, with no `pending`, `cleanup`, or `abandoned`
-    record, and its owner-marker modes are only `acquire`, `heartbeat`,
-    `release`, `release-guard`, and `release-complete`.
+  - (d) the target's labels include neither the configured needs-decision
+    label nor the configured blocked-by-human label
+    (`labels.needsDecisionLabelName` and `labels.blockedByHumanLabelName`,
+    defaulting to `status:needs-decision` and `status:blocked-by-human`);
+    if either configured name cannot be read, the explicit request applies;
+  - (e) the latest valid publication-intent record in each publication-token
+    chain for the target is in state `member`, and no chain is unresolved or
+    conflicting. The journal is append-only, so earlier `pending` records do
+    not fail this condition. The owner-marker modes are only `acquire`,
+    `heartbeat`, `release`, `release-guard`, and `release-complete`;
+  - (f) a freshly recomputed body-sha256 equals the target's own
+    `mode=acquire` owner marker `body-sha256`, as
+    `node scripts/authoring-owner-provenance.mjs --issue <target>` reports,
+    and it is checked again immediately before the label removal.
 
   Every other fast-path step still runs unchanged, including the release
   checklist, the sweeps, and the verified label removal. The released issue
   then enters the handoff to execution like any other released issue. After
   the release, the anchor carries the standing-approval record line that
-  `docs/policy-constants.md` defines, with `class=release`,
+  `docs/policy-constants.md` defines: an HTML comment that starts with
+  `<!-- idd-skill-standing-approval:` and carries `class=release`,
   `set=<set>`, `anchor=<owner/repo#n>`, `ceiling=checklist`, and
-  `option=<option-id>`. The record is evidence only and is not a gate
-  condition. A roadmap set, a multi-target set, a draft carrier, or a target
+  `option=<option-id>`, in that order. The record is evidence only and is not
+  a gate condition. A roadmap set, a multi-target set, a draft carrier, or a target
   that fails any condition stays held for an explicit request. With the class
   disabled or absent, the explicit-request rule applies unchanged.
 

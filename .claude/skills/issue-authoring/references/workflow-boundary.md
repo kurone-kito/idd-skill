@@ -555,8 +555,8 @@ entries in this order: entry 1 for every target, entry 2 once, entries 3
 and 4 for each non-anchor target in turn, entries 3 and 4 for the anchor,
 and entry 5 last. The defer-source auto-release exception adds a
 sole-member check before the first label removal, and the standing release
-approval adds its own conditions there. This checklist does not cover either
-path; follow the contract for them.
+approval adds its own conditions there. The release checklist still runs for
+both paths; follow the contract for those additional conditions.
 
 1. **Preflight, every target.** Run the contract's sweep against the target
    and the journal first (attempted, not blocking, so the command ends in
