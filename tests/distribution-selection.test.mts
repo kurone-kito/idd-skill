@@ -295,6 +295,46 @@ function replacePreparedSourceCommit(
   );
 }
 
+function bindingEntryPath(fixture: Fixture): string {
+  const receipt = readReceipt(fixture.dataRoot);
+  assert.equal(receipt.state, 'valid');
+  const binding = receipt.receipt.entries.find(
+    (entry) => entry.kind === 'file' && entry.path.includes('/.idd-selection-'),
+  );
+  assert.ok(binding?.kind === 'file');
+  return binding.path;
+}
+
+interface BindingSelection {
+  components: {
+    instructions: { provenance?: { commit: string } };
+    skillBundles: Record<string, { provenance: { commit: string } }>;
+    helper?: unknown;
+  };
+}
+
+function rewriteBindingSelection(
+  fixture: Fixture,
+  mutate: (selected: BindingSelection) => void,
+): string {
+  const path = bindingEntryPath(fixture);
+  const record = JSON.parse(fs.readFileSync(path, 'utf8')) as {
+    selected: BindingSelection;
+  };
+  mutate(record.selected);
+  const bytes = Buffer.from(`${JSON.stringify(record, null, 2)}\n`);
+  fs.writeFileSync(path, bytes);
+  const receipt = readReceipt(fixture.dataRoot);
+  assert.equal(receipt.state, 'valid');
+  writeReceipt(
+    fixture.dataRoot,
+    receipt.receipt.entries.map((entry) =>
+      entry.path === path ? { ...entry, sha256: sha256(bytes) } : entry,
+    ),
+  );
+  return path;
+}
+
 const COMMIT_A = 'a'.repeat(40);
 const COMMIT_B = 'b'.repeat(40);
 
@@ -750,6 +790,59 @@ test('edited binding bytes are preserved and make the selection unusable', () =>
   assert.equal(refused.status, 'refused');
   assert.deepEqual(fs.readFileSync(binding.path), before);
 });
+
+for (const [label, mutate] of [
+  [
+    'missing a component identity',
+    (selected: BindingSelection) => {
+      delete selected.components.helper;
+    },
+  ],
+  [
+    'missing a component provenance',
+    (selected: BindingSelection) => {
+      delete selected.components.instructions.provenance;
+    },
+  ],
+  [
+    'with a component provenance from another commit',
+    (selected: BindingSelection) => {
+      selected.components.skillBundles['idd-spec-audit'].provenance.commit =
+        COMMIT_B;
+    },
+  ],
+] as const) {
+  test(`a receipt-owned binding selection ${label} is refused without an exception`, () => {
+    const fixture = makeFixture();
+    fixture.addPreparedSet(COMMIT_A, 'one');
+    fixture.installCurrent(COMMIT_A, '1.0.0', 'one');
+    const created = bindDistributionSelection(fixture.options());
+    assert.equal(created.status, 'created');
+    const path = rewriteBindingSelection(fixture, mutate);
+    const bindingBefore = fs.readFileSync(path);
+    const receiptBefore = fs.readFileSync(
+      join(fixture.dataRoot, 'receipt.json'),
+    );
+
+    const report = inspectDistributionSelection(fixture.options());
+    assert.equal(report.session.binding, 'bound');
+    assert.equal(report.verdict, 'not-verified-usable');
+    assert.equal(report.receipt.status, 'conflict');
+    assert.equal(report.selected, null);
+    assert.equal(report.previousVerifiedSet, null);
+    assert.equal(report.compatibility, 'incompatible');
+    assert.equal(report.recovery, 'reselect');
+
+    const refused = bindDistributionSelection(fixture.options());
+    assert.equal(refused.status, 'refused');
+    assert.equal(refused.authorized, false);
+    assert.deepEqual(fs.readFileSync(path), bindingBefore);
+    assert.deepEqual(
+      fs.readFileSync(join(fixture.dataRoot, 'receipt.json')),
+      receiptBefore,
+    );
+  });
+}
 
 test('a receipt binding path cannot traverse a symlink before opening', () => {
   const fixture = makeFixture();
