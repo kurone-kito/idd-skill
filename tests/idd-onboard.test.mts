@@ -22,6 +22,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { after, before, test } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import type { DistributionSelectionReport } from '../src/scripts/distribution-selection.mts';
 import {
   buildCommandCatalog,
   collectVendoredFiles,
@@ -45,11 +46,14 @@ import {
   checkPackagePinWarning,
   checkPlaceholderResidue,
   checkStaleImportSignal,
+  type DistributionCliCommand,
+  type DistributionCliServices,
   deriveDevelopmentBranchCandidate,
   deriveInstallDepsCommand,
   deriveMarkerPrefix,
   deriveValidateCommands,
   escapeJsonStringContent,
+  executeDistributionCli,
   HEAR_NON_TTY_ERROR,
   listSkippedPlaceholderPaths,
   MARKER_PREFIX_PATTERN,
@@ -68,14 +72,17 @@ import {
   runRecordPolicyCli,
   runVerify,
   SCAN_EXCLUDED_PATHS,
+  sanitizedGitEnvironment,
   scanPlaceholderTokens,
   UNTRUSTED_LABELER_GUARD_WORKFLOW_PATH,
+  withSanitizedGitEnvironment,
 } from '../src/scripts/idd-onboard.mts';
 import { loadOnboardingHearingCatalog } from '../src/scripts/onboarding-hearing.mts';
 import type { PromptFn } from '../src/scripts/readline-prompt.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
 import {
   type FixtureGhRule,
+  fixtureEnv,
   pinLoadControlOff,
   useFixtureGh,
 } from './test-utils.mts';
@@ -8608,6 +8615,54 @@ test("bin/idd-onboard.mjs --hear rejects import/substitute-only flags (--source,
   }
 });
 
+test('legacy onboarding stages reject distribution-only options before execution', () => {
+  const root = makeFixtureDir();
+  const stages = [
+    { mode: '--import', extra: ['--source', root] },
+    { mode: '--verify', extra: [] },
+    { mode: '--substitute', extra: [] },
+    { mode: '--hear', extra: [] },
+    { mode: '--record-policy', extra: [] },
+  ];
+  const distributionOptions: [string, string][] = [
+    ['--session-id', 'unexpected-session'],
+    ['--source-commit', 'a'.repeat(40)],
+    ['--helper-argv-json', '[]'],
+  ];
+
+  for (const { mode, extra } of stages) {
+    for (const [flag, value] of distributionOptions) {
+      let failure: { status?: number; stderr?: string } | undefined;
+      try {
+        execFileSync(
+          process.execPath,
+          [
+            BIN_PATH,
+            mode,
+            '--target',
+            root,
+            ...extra,
+            flag,
+            value,
+            '--allow-root',
+            tmpdir(),
+          ],
+          { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+        );
+      } catch (error) {
+        failure = error as { status?: number; stderr?: string };
+      }
+      assert.ok(failure, `${mode} unexpectedly accepted ${flag}`);
+      assert.equal(failure.status, 2, `${mode} + ${flag}`);
+      assert.match(String(failure.stderr), /does not accept/u);
+      assert.ok(String(failure.stderr).includes(flag));
+      if (mode === '--substitute') {
+        assert.match(String(failure.stderr), /distribution-only flag/u);
+      }
+    }
+  }
+});
+
 test('bin/idd-onboard.mjs rejects --hear-only flags (--propose, --apply, --answers) when --hear is not selected', () => {
   const root = makeFixtureDir();
   for (const [stage, extra] of [
@@ -12149,6 +12204,593 @@ test('a missing directory above an install root is a refusal that names it and w
 });
 
 // ---------------------------------------------------------------------------
+// #4705: distribution mode is explicit, session-bound, and read-only unless
+// the caller chooses preparation or binding.
+// ---------------------------------------------------------------------------
+
+const DISTRIBUTION_TEST_COMMIT = 'a'.repeat(40);
+
+function loadDistributionFixture(path: string): unknown {
+  return JSON.parse(JSON.stringify(loadJson(path))) as unknown;
+}
+
+function distributionReportFor(sessionId: string): DistributionSelectionReport {
+  const report = loadDistributionFixture(
+    'fixtures/schemas/distribution-selection.valid.json',
+  ) as DistributionSelectionReport;
+  report.session.id = sessionId;
+  return report;
+}
+
+function distributionServices(
+  overrides: Partial<DistributionCliServices> = {},
+): DistributionCliServices {
+  return {
+    inspect: ({ sessionId }) => distributionReportFor(sessionId),
+    prepare: () => {
+      throw new Error('unexpected preparation');
+    },
+    bind: () => {
+      throw new Error('unexpected binding');
+    },
+    resolveCommit: () => DISTRIBUTION_TEST_COMMIT,
+    readManifest: () =>
+      loadDistributionFixture(
+        'fixtures/schemas/distribution-manifest.valid.json',
+      ),
+    ...overrides,
+  };
+}
+
+test('distribution inspect returns a schema-valid report and calls no writer', () => {
+  const calls: string[] = [];
+  const outcome = executeDistributionCli(
+    {
+      operation: 'inspect',
+      targetRoot: '/target/repository',
+      sessionId: 'inspect-session',
+    },
+    distributionServices({
+      inspect: ({ cwd, sessionId }) => {
+        calls.push(`inspect:${cwd}:${sessionId}`);
+        return distributionReportFor(sessionId);
+      },
+      prepare: () => {
+        calls.push('prepare');
+        throw new Error('inspection called preparation');
+      },
+      bind: () => {
+        calls.push('bind');
+        throw new Error('inspection called binding');
+      },
+    }),
+  );
+
+  assert.equal(outcome.exitCode, 0);
+  assert.deepEqual(calls, ['inspect:/target/repository:inspect-session']);
+  assert.deepEqual(
+    validate(
+      outcome.output,
+      loadJson('schemas/distribution-selection.schema.json'),
+    ),
+    [],
+  );
+  assert.equal(
+    (outcome.output as DistributionSelectionReport).session.id,
+    'inspect-session',
+  );
+});
+
+test('distribution inspect and bind sanitize Git repository overrides', () => {
+  const environmentName = process.platform === 'win32' ? 'git_dir' : 'GIT_DIR';
+  const previousValue = process.env[environmentName];
+  process.env[environmentName] = 'caller-controlled-repository-override';
+  const valuesDuringResolution: (string | undefined)[] = [];
+
+  try {
+    const inspect = executeDistributionCli(
+      {
+        operation: 'inspect',
+        targetRoot: '/target/repository',
+        sessionId: 'sanitized-inspect-session',
+      },
+      distributionServices({
+        inspect: ({ sessionId }) => {
+          valuesDuringResolution.push(process.env[environmentName]);
+          return distributionReportFor(sessionId);
+        },
+      }),
+    );
+    assert.equal(inspect.exitCode, 0);
+    assert.equal(
+      process.env[environmentName],
+      'caller-controlled-repository-override',
+      'inspection restores the caller environment after resolution',
+    );
+
+    const bind = executeDistributionCli(
+      {
+        operation: 'bind',
+        targetRoot: '/target/repository',
+        sessionId: 'sanitized-bind-session',
+      },
+      distributionServices({
+        bind: ({ sessionId }) => {
+          valuesDuringResolution.push(process.env[environmentName]);
+          return {
+            status: 'created',
+            authorized: true,
+            report: distributionReportFor(sessionId),
+          };
+        },
+      }),
+    );
+    assert.equal(bind.exitCode, 0);
+    assert.deepEqual(valuesDuringResolution, [undefined, undefined]);
+    assert.equal(
+      process.env[environmentName],
+      'caller-controlled-repository-override',
+      'binding restores the caller environment after resolution',
+    );
+  } finally {
+    if (previousValue === undefined) delete process.env[environmentName];
+    else process.env[environmentName] = previousValue;
+  }
+});
+
+test('distribution inspect refuses a valid report for a different session', () => {
+  const outcome = executeDistributionCli(
+    {
+      operation: 'inspect',
+      targetRoot: '/target/repository',
+      sessionId: 'requested-session',
+    },
+    distributionServices({
+      inspect: () => distributionReportFor('other-session'),
+    }),
+  );
+
+  assert.equal(outcome.exitCode, 1);
+  assert.match(outcome.message ?? '', /expected requested-session/u);
+});
+
+test('distribution rejects an unsupported operation without invoking a writer', () => {
+  let calls = 0;
+  const command = {
+    operation: 'delete' as unknown as DistributionCliCommand['operation'],
+    targetRoot: '/target/repository',
+    sessionId: 'invalid-operation-session',
+  };
+  const outcome = executeDistributionCli(
+    command,
+    distributionServices({
+      inspect: () => {
+        calls += 1;
+        return distributionReportFor(command.sessionId);
+      },
+      prepare: () => {
+        calls += 1;
+        throw new Error('unsupported operation reached preparation');
+      },
+      bind: () => {
+        calls += 1;
+        throw new Error('unsupported operation reached binding');
+      },
+    }),
+  );
+
+  assert.equal(outcome.exitCode, 1);
+  assert.match(
+    outcome.message ?? '',
+    /unsupported distribution operation: delete/u,
+  );
+  assert.equal(calls, 0);
+  assert.equal((outcome.output as { operation: string }).operation, 'delete');
+});
+
+test('distribution prepare verifies an immutable commit and argv data, then re-inspects without binding', () => {
+  const calls: string[] = [];
+  let preparedOptions: unknown;
+  let manifestPath: string | undefined;
+  const outcome = executeDistributionCli(
+    {
+      operation: 'prepare',
+      targetRoot: '/target/repository',
+      sourceRoot: '/source/checkout',
+      sourceCommit: DISTRIBUTION_TEST_COMMIT,
+      sessionId: 'prepare-session',
+      helperArgv: ['--repo', 'owner/name with spaces', 'quote" and $HOME'],
+    },
+    distributionServices({
+      inspect: ({ sessionId }) => {
+        calls.push('inspect');
+        return distributionReportFor(sessionId);
+      },
+      prepare: (options) => {
+        calls.push('prepare');
+        preparedOptions = options;
+        return {
+          sourceCommit: DISTRIBUTION_TEST_COMMIT,
+          preparedPath: '/home/user/.local/share/idd-skill/prepared/test',
+          fileCount: 4,
+          reused: false,
+        };
+      },
+      bind: () => {
+        calls.push('bind');
+        throw new Error('preparation called binding');
+      },
+      resolveCommit: (sourceRoot, requested) => {
+        assert.equal(sourceRoot, '/source/checkout');
+        assert.equal(requested, DISTRIBUTION_TEST_COMMIT);
+        return DISTRIBUTION_TEST_COMMIT;
+      },
+      readManifest: (path) => {
+        manifestPath = path;
+        const manifest = loadDistributionFixture(
+          'fixtures/schemas/distribution-manifest.valid.json',
+        ) as { sourceCommit: string };
+        manifest.sourceCommit = DISTRIBUTION_TEST_COMMIT;
+        return manifest;
+      },
+    }),
+  );
+
+  assert.equal(outcome.exitCode, 0);
+  assert.deepEqual(calls, ['inspect', 'prepare', 'inspect']);
+  assert.deepEqual(preparedOptions, {
+    sourceRoot: '/source/checkout',
+    sourceCommit: DISTRIBUTION_TEST_COMMIT,
+    provenance: { kind: 'checkout', commit: DISTRIBUTION_TEST_COMMIT },
+    invocation: {
+      command: 'bin/idd-activation.mjs',
+      argv: ['--repo', 'owner/name with spaces', 'quote" and $HOME'],
+    },
+  });
+  assert.equal(manifestPath, '/home/user/.local/share/idd-skill/prepared/test');
+  assert.equal((outcome.output as { operation: string }).operation, 'prepare');
+});
+
+test('distribution prepare reports staged recovery state after a writer failure', () => {
+  let inspections = 0;
+  const outcome = executeDistributionCli(
+    {
+      operation: 'prepare',
+      targetRoot: '/target/repository',
+      sourceRoot: '/source/checkout',
+      sessionId: 'prepare-session',
+    },
+    distributionServices({
+      inspect: ({ sessionId }) => {
+        inspections += 1;
+        return distributionReportFor(sessionId);
+      },
+      prepare: () => {
+        throw new Error('receipt update stopped after staging');
+      },
+    }),
+  );
+
+  assert.equal(outcome.exitCode, 1);
+  assert.equal(inspections, 2);
+  assert.match(outcome.message ?? '', /receipt update stopped/u);
+  assert.equal(
+    (outcome.output as { selection?: DistributionSelectionReport }).selection
+      ?.session.id,
+    'prepare-session',
+  );
+});
+
+test('distribution bind reports partial and refused outcomes without success', () => {
+  for (const status of ['partial', 'refused'] as const) {
+    const outcome = executeDistributionCli(
+      {
+        operation: 'bind',
+        targetRoot: '/target/repository',
+        sessionId: `bind-${status}`,
+      },
+      distributionServices({
+        bind: ({ sessionId }) => ({
+          status,
+          authorized: false,
+          reason: `binding ${status} after filesystem refusal`,
+          ...(status === 'partial'
+            ? { stagedPath: '/global/.staging/binding-record' }
+            : {}),
+          report: distributionReportFor(sessionId),
+        }),
+      }),
+    );
+
+    assert.equal(outcome.exitCode, 1);
+    assert.match(outcome.message ?? '', new RegExp(`binding ${status}`, 'u'));
+    const output = outcome.output as {
+      status: string;
+      authorized: boolean;
+      stagedPath?: string;
+      selection: DistributionSelectionReport;
+    };
+    assert.equal(output.status, status);
+    assert.equal(output.authorized, false);
+    assert.equal(output.selection.session.id, `bind-${status}`);
+    if (status === 'partial') {
+      assert.equal(output.stagedPath, '/global/.staging/binding-record');
+    }
+  }
+});
+
+test('bin/idd-onboard.mjs distribution inspect validates its report and writes nothing', () => {
+  const sandbox = makeUserGlobalSandbox();
+  const before = snapshotFull(sandbox.root);
+  const run = runUserGlobal(sandbox, [
+    '--distribution',
+    'inspect',
+    '--session-id',
+    'cli-session',
+  ]);
+
+  assert.equal(run.status, 0, run.stderr);
+  const report = JSON.parse(run.stdout) as DistributionSelectionReport;
+  assert.deepEqual(
+    validate(report, loadJson('schemas/distribution-selection.schema.json')),
+    [],
+  );
+  assert.equal(report.session.id, 'cli-session');
+  assert.deepEqual(snapshotFull(sandbox.root), before);
+
+  const missingSession = runUserGlobal(sandbox, ['--distribution', 'inspect']);
+  assert.equal(missingSession.status, 2);
+  assert.match(missingSession.stderr, /requires a non-empty --session-id/u);
+  assert.deepEqual(snapshotFull(sandbox.root), before);
+
+  const conflictingModes = runUserGlobal(sandbox, [
+    '--distribution',
+    'inspect',
+    '--session-id',
+    'cli-session',
+    '--distribution',
+    'bind',
+  ]);
+  assert.equal(conflictingModes.status, 2);
+  assert.match(
+    conflictingModes.stderr,
+    /--distribution may be specified only once/u,
+  );
+  assert.deepEqual(snapshotFull(sandbox.root), before);
+});
+
+test('Git repository overrides are sanitized case-insensitively on Windows', () => {
+  const names = ['git_dir', 'gIt_wOrK_tReE', 'git_config_global'] as const;
+  const previousValues = new Map(
+    names.map((name) => [name, process.env[name]] as const),
+  );
+  for (const [index, name] of names.entries()) {
+    process.env[name] = `windows-git-override-${index}`;
+  }
+
+  try {
+    const sanitized = sanitizedGitEnvironment('win32');
+    for (const name of names) {
+      assert.equal(sanitized[name], undefined);
+    }
+
+    const valuesDuringOperation = withSanitizedGitEnvironment(
+      () => names.map((name) => process.env[name]),
+      'win32',
+    );
+    assert.deepEqual(
+      valuesDuringOperation,
+      names.map(() => undefined),
+    );
+    for (const [index, name] of names.entries()) {
+      assert.equal(process.env[name], `windows-git-override-${index}`);
+    }
+  } finally {
+    for (const [name, value] of previousValues) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+});
+
+test('bin/idd-onboard.mjs distribution prepare and bind preserve CLI data and status', {
+  skip: NO_USER_GLOBAL_INSTALL,
+}, () => {
+  const sandbox = makeUserGlobalSandbox();
+  const gitEnv = fixtureEnv();
+  const targetRoot = sandbox.root;
+  execFileSync(
+    'git',
+    ['init', '--quiet', '--initial-branch=main', targetRoot],
+    { env: gitEnv, stdio: 'pipe' },
+  );
+  writeFileSync(join(targetRoot, 'README.md'), 'fixture repository\n');
+  execFileSync('git', ['-C', targetRoot, 'add', 'README.md'], {
+    env: gitEnv,
+    stdio: 'pipe',
+  });
+  execFileSync(
+    'git',
+    [
+      '-C',
+      targetRoot,
+      '-c',
+      'user.name=IDD fixture',
+      '-c',
+      'user.email=idd-fixture@example.invalid',
+      '-c',
+      'commit.gpgsign=false',
+      'commit',
+      '--quiet',
+      '-m',
+      'create fixture repository',
+    ],
+    { env: gitEnv, stdio: 'pipe' },
+  );
+  execFileSync(
+    'git',
+    [
+      '-C',
+      targetRoot,
+      'remote',
+      'add',
+      'origin',
+      'https://github.com/fixture/distribution-cli.git',
+    ],
+    { env: gitEnv, stdio: 'pipe' },
+  );
+
+  // The installer and distribution CLI use only this fixture HOME. This
+  // supplies a current bundle that the prepared commit can be checked against
+  // without running a package manager or a live helper.
+  const installed = runUserGlobal(sandbox, ['--install-user-global']);
+  assert.equal(installed.status, 0, installed.stderr);
+
+  // Make a local, committed source checkout that matches the current payload
+  // bytes, including this issue's template documentation update. The helper
+  // still proves every selected file against the explicit immutable commit.
+  const sourceRoot = join(targetRoot, 'source');
+  execFileSync(
+    'git',
+    ['clone', '--quiet', '--shared', '--no-checkout', REPO_ROOT, sourceRoot],
+    { env: gitEnv, stdio: 'pipe' },
+  );
+  execFileSync(
+    'git',
+    ['-C', sourceRoot, 'checkout', '--quiet', '--detach', 'HEAD'],
+    {
+      env: gitEnv,
+      stdio: 'pipe',
+    },
+  );
+  const templateDoc = 'idd-template/docs/idd-helper-scripts.md';
+  writeFileSync(
+    join(sourceRoot, templateDoc),
+    readFileSync(join(REPO_ROOT, templateDoc)),
+  );
+  // Keep the fixture commit non-empty after the template doc has already
+  // landed on the current branch.
+  const sourceMarker = `.idd-test-distribution-source-${process.pid}-${Date.now()}.txt`;
+  writeFileSync(join(sourceRoot, sourceMarker), 'fixture source marker\n');
+  execFileSync('git', ['-C', sourceRoot, 'add', templateDoc, sourceMarker], {
+    env: gitEnv,
+    stdio: 'pipe',
+  });
+  execFileSync(
+    'git',
+    [
+      '-C',
+      sourceRoot,
+      '-c',
+      'user.name=IDD fixture',
+      '-c',
+      'user.email=idd-fixture@example.invalid',
+      '-c',
+      'commit.gpgsign=false',
+      'commit',
+      '--quiet',
+      '-m',
+      'prepare fixture distribution source',
+    ],
+    { env: gitEnv, stdio: 'pipe' },
+  );
+  const sourceCommit = execFileSync(
+    'git',
+    ['-C', sourceRoot, 'rev-parse', 'HEAD'],
+    { env: gitEnv, encoding: 'utf8', stdio: 'pipe' },
+  ).trim();
+  const helperArgv = [
+    '--repo',
+    'fixture/owner with spaces',
+    'literal "$HOME" ; echo ignored',
+  ];
+  const sessionId = 'distribution-cli-session';
+
+  const prepared = runUserGlobal(
+    sandbox,
+    [
+      '--distribution',
+      'prepare',
+      '--session-id',
+      sessionId,
+      '--source',
+      sourceRoot,
+      '--source-commit',
+      sourceCommit,
+      '--helper-argv-json',
+      JSON.stringify(helperArgv),
+    ],
+    {
+      env: {
+        GIT_DIR: join(targetRoot, '.git'),
+        GIT_WORK_TREE: targetRoot,
+      },
+    },
+  );
+  assert.equal(prepared.status, 0, prepared.stderr);
+  const preparedOutput = JSON.parse(prepared.stdout) as {
+    operation: string;
+    status: string;
+    preparation: { preparedPath: string; sourceCommit: string };
+    selection: DistributionSelectionReport;
+  };
+  assert.equal(preparedOutput.operation, 'prepare');
+  assert.equal(preparedOutput.status, 'prepared');
+  assert.equal(preparedOutput.preparation.sourceCommit, sourceCommit);
+  assert.deepEqual(
+    validate(
+      preparedOutput.selection,
+      loadJson('schemas/distribution-selection.schema.json'),
+    ),
+    [],
+  );
+  const manifest = JSON.parse(
+    readFileSync(
+      join(preparedOutput.preparation.preparedPath, 'manifest.json'),
+      'utf8',
+    ),
+  ) as {
+    components: { helper: { invocation: { command: string; argv: string[] } } };
+  };
+  assert.deepEqual(
+    validate(manifest, loadJson('schemas/distribution-manifest.schema.json')),
+    [],
+  );
+  assert.equal(
+    manifest.components.helper.invocation.command,
+    'bin/idd-activation.mjs',
+  );
+  assert.deepEqual(manifest.components.helper.invocation.argv, helperArgv);
+
+  const bound = runUserGlobal(sandbox, [
+    '--distribution',
+    'bind',
+    '--session-id',
+    sessionId,
+  ]);
+  assert.equal(bound.status, 0, bound.stderr);
+  const boundOutput = JSON.parse(bound.stdout) as {
+    operation: string;
+    status: string;
+    authorized: boolean;
+    selection: DistributionSelectionReport;
+  };
+  assert.equal(boundOutput.operation, 'bind');
+  assert.equal(boundOutput.status, 'created');
+  assert.equal(boundOutput.authorized, true);
+  assert.equal(boundOutput.selection.session.id, sessionId);
+  assert.equal(boundOutput.selection.session.binding, 'bound');
+  assert.equal(boundOutput.selection.verdict, 'session-bound');
+  assert.deepEqual(
+    validate(
+      boundOutput.selection,
+      loadJson('schemas/distribution-selection.schema.json'),
+    ),
+    [],
+  );
+});
+
+// ---------------------------------------------------------------------------
 // #4245: structural guard. The two user-global modes add no write or removal
 // of their own: the marked block of src/scripts/idd-onboard.mts calls only
 // the install, uninstall, and plan functions of user-global-install.mts.
@@ -12417,7 +13059,7 @@ test('structural guard: the user-global block calls only the install, uninstall,
   // install module are the four it exports for this CLI.
   assert.deepEqual(
     importedNames(source, './user-global-install.mts').sort(),
-    [...MODULE_FUNCTIONS].sort(),
+    [...MODULE_FUNCTIONS, 'prepareDistributionSet'].sort(),
   );
   assert.match(
     source.slice(0, begin) + source.slice(end),
