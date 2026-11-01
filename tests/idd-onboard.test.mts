@@ -12281,6 +12281,63 @@ test('distribution inspect returns a schema-valid report and calls no writer', (
   );
 });
 
+test('distribution inspect and bind sanitize Git repository overrides', () => {
+  const environmentName = process.platform === 'win32' ? 'git_dir' : 'GIT_DIR';
+  const previousValue = process.env[environmentName];
+  process.env[environmentName] = 'caller-controlled-repository-override';
+  const valuesDuringResolution: (string | undefined)[] = [];
+
+  try {
+    const inspect = executeDistributionCli(
+      {
+        operation: 'inspect',
+        targetRoot: '/target/repository',
+        sessionId: 'sanitized-inspect-session',
+      },
+      distributionServices({
+        inspect: ({ sessionId }) => {
+          valuesDuringResolution.push(process.env[environmentName]);
+          return distributionReportFor(sessionId);
+        },
+      }),
+    );
+    assert.equal(inspect.exitCode, 0);
+    assert.equal(
+      process.env[environmentName],
+      'caller-controlled-repository-override',
+      'inspection restores the caller environment after resolution',
+    );
+
+    const bind = executeDistributionCli(
+      {
+        operation: 'bind',
+        targetRoot: '/target/repository',
+        sessionId: 'sanitized-bind-session',
+      },
+      distributionServices({
+        bind: ({ sessionId }) => {
+          valuesDuringResolution.push(process.env[environmentName]);
+          return {
+            status: 'created',
+            authorized: true,
+            report: distributionReportFor(sessionId),
+          };
+        },
+      }),
+    );
+    assert.equal(bind.exitCode, 0);
+    assert.deepEqual(valuesDuringResolution, [undefined, undefined]);
+    assert.equal(
+      process.env[environmentName],
+      'caller-controlled-repository-override',
+      'binding restores the caller environment after resolution',
+    );
+  } finally {
+    if (previousValue === undefined) delete process.env[environmentName];
+    else process.env[environmentName] = previousValue;
+  }
+});
+
 test('distribution inspect refuses a valid report for a different session', () => {
   const outcome = executeDistributionCli(
     {

@@ -6391,10 +6391,12 @@ export function executeDistributionCli(
   }
   const inspect = () =>
     validateDistributionReport(
-      services.inspect({
-        cwd: command.targetRoot,
-        sessionId: command.sessionId,
-      }),
+      withSanitizedGitEnvironment(() =>
+        services.inspect({
+          cwd: command.targetRoot,
+          sessionId: command.sessionId,
+        }),
+      ),
       command.sessionId,
     );
   if (command.operation === 'inspect') {
@@ -6408,10 +6410,12 @@ export function executeDistributionCli(
   }
   if (command.operation === 'bind') {
     try {
-      const binding = services.bind({
-        cwd: command.targetRoot,
-        sessionId: command.sessionId,
-      });
+      const binding = withSanitizedGitEnvironment(() =>
+        services.bind({
+          cwd: command.targetRoot,
+          sessionId: command.sessionId,
+        }),
+      );
       const selection = validateDistributionReport(
         binding.report,
         command.sessionId,
