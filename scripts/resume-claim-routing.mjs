@@ -6,6 +6,7 @@
 // generated .mjs. See docs/typescript-sources.md.
 import { execFileSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
+import { isSessionQualifiedAgentId } from './claim-lock.mjs';
 import { parseCliArgs } from './cli-args.mjs';
 import { isAuthorizedForcedHandoffActor } from './collaborator-permission.mjs';
 import {
@@ -71,6 +72,7 @@ const RESUME_CLAIM_ROUTING_FLAG_SPEC = {
   '--token': { type: 'string' },
   '--claim-id': { type: 'string' },
   '--nonce': { type: 'string' },
+  '--agent-id': { type: 'string' },
   '--now': { type: 'string' },
   '--policy': { type: 'string' },
   '--stale-age-ms': { type: 'string' },
@@ -381,11 +383,28 @@ export function evaluateResumeClaimRouting(input, options = {}) {
   const activationNonceWinner =
     activationNonces.length > 0 ? activationNonces[0] : null;
   const nonceChecked = normalizeToken(input.nonce);
+  const agentIdChecked = normalizeToken(input.agentId);
+  // #4936: the claim-id alone names the claim lineage, not the session. When
+  // the caller passes its persisted session-qualified agent-id and it differs
+  // from the active claim's, a second session that read the public claim-id
+  // and nonce (or a shared worktree record) is not the owner: the owner path
+  // below is skipped and the claim is routed as another session's.
+  const sessionAgentMismatch = Boolean(
+    state.activeClaim &&
+      agentIdChecked &&
+      claimIdChecked === state.activeClaim.claimId &&
+      agentIdChecked !== state.activeClaim.agentId,
+  );
   const warnings = [...state.warnings];
   let routeState = 'unclaimed';
   let action = 're_claim';
   let reason = 'no-active-claim';
   let ownerCheck = null;
+  if (sessionAgentMismatch && state.activeClaim) {
+    warnings.push(
+      `session agent-id ${agentIdChecked} does not match active claim agent-id ${state.activeClaim.agentId}; claim ${claimIdChecked} is routed as another session's claim`,
+    );
+  }
   if (state.mode === 'legacy-only') {
     if (!state.legacyClaim) {
       routeState = 'unclaimed';
@@ -408,7 +427,11 @@ export function evaluateResumeClaimRouting(input, options = {}) {
     routeState = 'unclaimed';
     action = 're_claim';
     reason = 'no-active-claim';
-  } else if (claimIdChecked && claimIdChecked === state.activeClaim.claimId) {
+  } else if (
+    claimIdChecked &&
+    claimIdChecked === state.activeClaim.claimId &&
+    !sessionAgentMismatch
+  ) {
     // Owner-resume path: the checking session already proved ownership of
     // the active claim-id. A later trusted `claimed-by` with a different
     // claim-id never disputes an owner here (#3268): Claim-state parsing
@@ -627,6 +650,9 @@ export function evaluateResumeClaimRouting(input, options = {}) {
     action,
     reason,
     claim_id_checked: claimIdChecked || null,
+    // #4936: present only when the caller passed an agent-id, so a run
+    // without it keeps byte-identical output.
+    ...(agentIdChecked ? { agent_id_checked: agentIdChecked } : {}),
     active_claim: state.activeClaim
       ? {
           agent_id: state.activeClaim.agentId,
@@ -803,6 +829,18 @@ function runCli() {
       new Error('--own-worktree requires --fresh-claim-gate'),
     );
   }
+  // #4936: a shared bare agent-id cannot tell two sessions apart, so it is
+  // refused rather than compared.
+  if (args.agentId && !args.claimId) {
+    throw markCliUsageError(new Error('--agent-id requires --claim-id'));
+  }
+  if (args.agentId && !isSessionQualifiedAgentId(args.agentId)) {
+    throw markCliUsageError(
+      new Error(
+        `--agent-id ${JSON.stringify(args.agentId)} is not session-qualified: pass this session's persisted <family>-<suffix> agent-id (a run of at least 8 letters or digits after the first '-'), or omit --agent-id for a claim whose marker agent-id predates that rule`,
+      ),
+    );
+  }
   if (args.ghToken) {
     process.env.GH_TOKEN = args.ghToken;
     process.env.GITHUB_TOKEN = args.ghToken;
@@ -933,6 +971,7 @@ function runCli() {
       events: routingEvents,
       claimId: args.claimId,
       nonce: args.nonce || undefined,
+      agentId: args.agentId || undefined,
       staleAgeMs,
       now: args.now || undefined,
     },
@@ -1405,6 +1444,11 @@ function parseArgs(argv) {
       new Error('--own-worktree requires a non-empty path'),
     );
   }
+  // #4936: an empty value (an unset shell variable) would otherwise read as
+  // "flag absent" and silently skip the session agent-id comparison.
+  if (values['agent-id'] === '') {
+    throw markCliUsageError(new Error('--agent-id requires a non-empty value'));
+  }
   const format = values.format;
   if (format !== 'json') {
     throw markCliUsageError(
@@ -1427,6 +1471,7 @@ function parseArgs(argv) {
     ghToken: ghToken ?? '',
     claimId: values['claim-id'] ?? '',
     nonce: values.nonce ?? '',
+    agentId: values['agent-id'] ?? '',
     now: values.now ?? '',
     policy: values.policy ?? '',
     staleAgeMs:
@@ -1442,7 +1487,7 @@ function parseArgs(argv) {
 }
 function printHelp() {
   process.stdout.write(`Usage:
-  node scripts/resume-claim-routing.mjs --issue <number> [--owner <owner>] [--repo <repo>] [--gh-token <token>] [--claim-id <token>] [--nonce <token>] [--now <ISO8601>] [--policy <path>] [--stale-age-ms <ms>] [--trusted-marker-logins "<a,b,...>"] [--fresh-claim-gate] [--own-worktree <path>] [--assert] [--worktree <path>] [--format json]
+  node scripts/resume-claim-routing.mjs --issue <number> [--owner <owner>] [--repo <repo>] [--gh-token <token>] [--claim-id <token>] [--nonce <token>] [--agent-id <id>] [--now <ISO8601>] [--policy <path>] [--stale-age-ms <ms>] [--trusted-marker-logins "<a,b,...>"] [--fresh-claim-gate] [--own-worktree <path>] [--assert] [--worktree <path>] [--format json]
   Deprecated aliases (one release): --token -> --gh-token
 
   --format json       output format (default: json). JSON is the only
@@ -1488,6 +1533,17 @@ function printHelp() {
                       comparison. Omit --nonce when 2+ trusted nonces exist
                       and this session has no local nonce: route to
                       disputed/stop (cold-recovery collision, #1529).
+  --agent-id <id>     this session's own persisted, session-qualified
+                      agent-id (#4936): <family>-<suffix> with a run of at
+                      least 8 letters or digits after the first '-'. Requires
+                      --claim-id. When --claim-id matches the active claim,
+                      the agent-id must equal that claim's agent-id exactly;
+                      otherwise the claim is routed as another session's
+                      (non_inheritable, disputed, or stale behind the
+                      local-worktree check) and agent_id_checked reports the
+                      value. A bare family name, a short tag, or an empty
+                      value is a usage error. Omit it only for a claim whose
+                      marker agent-id predates that rule.
   --worktree <path>   read the independent owner-evidence proof (the claim
                       lock, the generated-tokens record, and the current
                       branch) from this path instead of process.cwd() when
@@ -1511,6 +1567,7 @@ warnings / evidence):
   "state": "unclaimed|already_owned|stale|local_worktree_occupied|non_inheritable|owner_evidence_required|disputed",
   "action": "re_claim|takeover|keep|stop",
   "reason": "...",
+  "agent_id_checked": "...",  // only with --agent-id
   "active_claim": {"agent_id":"...","claim_id":"...","created_at":"...","branch":"..."} | null,
   "evidence": {"...": "...", "activation_nonce_winner": "..."|null, "owner_evidence": {...}},  // owner_evidence: one field per owner proof, see docs/idd-helper-scripts.md
   "fresh_claim_gate": {"verdict":"claimable|already-claimed|stale-reclaimable","winning_claim_id":"..."|null}  // only with --fresh-claim-gate
