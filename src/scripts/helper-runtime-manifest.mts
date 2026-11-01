@@ -203,6 +203,7 @@ const SCRIPT_FILE_EXTENSIONS = ['.mjs', '.js', '.json'];
 const REGEX_AFTER_KEYWORDS = new Set([
   'await',
   'case',
+  'default',
   'delete',
   'do',
   'else',
@@ -217,6 +218,14 @@ const REGEX_AFTER_KEYWORDS = new Set([
   'yield',
 ]);
 const EXPRESSION_END_PUNCTUATORS = new Set([')', ']', '}', '++', '--']);
+// A `{` after one of these keywords opens an object literal, not a block.
+const EXPRESSION_KEYWORDS = new Set(
+  [...REGEX_AFTER_KEYWORDS].filter(
+    (keyword) => keyword !== 'do' && keyword !== 'else',
+  ),
+);
+// The `)` that closes one of these heads is followed by a statement.
+const CONTROL_HEAD_KEYWORDS = new Set(['for', 'if', 'while', 'with']);
 // A bin wrapper imports `runHelper` from bin/run-helper.mjs and passes it a
 // script path, which run-helper resolves against its own directory and spawns
 // rather than imports. The closure follows that script as a delegated entry,
@@ -2446,12 +2455,15 @@ function statIfPresent(filePath: string) {
 // expression literals out of the code tokens, and tokenizes the code inside
 // each `${...}` substitution. A `/` starts a regular expression only where an
 // expression cannot end, which is the usual heuristic for code without a
-// parser; the strict closure check over every catalog entry and bin wrapper in
-// tests/helper-runtime-manifest.test.mts guards it against this repository.
+// parser: after a keyword that is not a property name, after a punctuator
+// other than an expression end, and after the `)` of an `if`, `for`, `while`,
+// or `with` head or the `}` of a block. The strict closure check over every
+// catalog entry and bin wrapper in tests/helper-runtime-manifest.test.mts
+// guards it against this repository.
 type SourceToken =
   | { type: 'name'; value: string }
   | { type: 'string'; value: string }
-  | { type: 'punct'; value: string }
+  | { type: 'punct'; value: string; regexAfter?: boolean }
   | { type: 'template'; value: 'head' | 'middle' | 'tail' }
   | { type: 'literal' };
 
@@ -2514,19 +2526,50 @@ function scanRegexLiteral(source: string, start: number): number {
 
 function tokenizeJavaScript(source: string): SourceToken[] {
   const tokens: SourceToken[] = [];
-  // The brace depth at which each open `${` substitution started.
-  const substitutionDepths: number[] = [];
-  let braceDepth = 0;
+  // What each open `{` started: a statement block, an expression (an object
+  // literal), or a `${` template substitution.
+  const braces: ('block' | 'expression' | 'substitution')[] = [];
+  // Whether each open `(` is the head of an `if`, `for`, `while`, or `with`.
+  const parens: boolean[] = [];
   let index = source.startsWith('#!') ? skipLineComment(source, 0) : 0;
+
+  // A keyword right after `.` is a property name, as in `object.return`.
+  const lastKeyword = (): string | null => {
+    const last = tokens.at(-1);
+    return last?.type === 'name' && !isPunct(tokens.at(-2), '.')
+      ? last.value
+      : null;
+  };
 
   const regexAllowed = (): boolean => {
     const last = tokens.at(-1);
     if (last === undefined) return true;
-    if (last.type === 'name') return REGEX_AFTER_KEYWORDS.has(last.value);
-    if (last.type === 'punct')
-      return !EXPRESSION_END_PUNCTUATORS.has(last.value);
+    if (last.type === 'name') {
+      const keyword = lastKeyword();
+      return keyword !== null && REGEX_AFTER_KEYWORDS.has(keyword);
+    }
+    if (last.type === 'punct') {
+      return (
+        last.regexAfter === true || !EXPRESSION_END_PUNCTUATORS.has(last.value)
+      );
+    }
     if (last.type === 'template') return last.value !== 'tail';
     return false;
+  };
+
+  // A `{` opens a block after a statement boundary, a `)`, an arrow, or a
+  // name that does not expect an expression (`else`, `try`, a class name);
+  // anywhere else it opens an object literal.
+  const braceOpensBlock = (): boolean => {
+    const last = tokens.at(-1);
+    if (last === undefined) return true;
+    if (last.type === 'name') {
+      const keyword = lastKeyword();
+      return keyword === null || !EXPRESSION_KEYWORDS.has(keyword);
+    }
+    if (last.type !== 'punct') return false;
+    if (last.value === '>' && isPunct(tokens.at(-2), '=')) return true;
+    return [';', '{', '}', ')'].includes(last.value);
   };
 
   // Template text from `start`, just after a backtick (`opening`) or after
@@ -2550,7 +2593,7 @@ function tokenizeJavaScript(source: string): SourceToken[] {
       }
       if (character === '$' && source[cursor + 1] === '{') {
         tokens.push({ type: 'template', value: opening ? 'head' : 'middle' });
-        substitutionDepths.push(braceDepth);
+        braces.push('substitution');
         return cursor + 2;
       }
       cursor += 1;
@@ -2585,18 +2628,33 @@ function tokenizeJavaScript(source: string): SourceToken[] {
         index += 1;
       }
     } else if (character === '{') {
-      braceDepth += 1;
+      braces.push(braceOpensBlock() ? 'block' : 'expression');
       tokens.push({ type: 'punct', value: '{' });
       index += 1;
     } else if (character === '}') {
-      if (substitutionDepths.at(-1) === braceDepth) {
-        substitutionDepths.pop();
+      const opened = braces.pop();
+      if (opened === 'substitution') {
         index = scanTemplate(index + 1, false);
       } else {
-        braceDepth -= 1;
-        tokens.push({ type: 'punct', value: '}' });
+        tokens.push({
+          type: 'punct',
+          value: '}',
+          regexAfter: opened === 'block',
+        });
         index += 1;
       }
+    } else if (character === '(') {
+      const keyword = lastKeyword();
+      parens.push(keyword !== null && CONTROL_HEAD_KEYWORDS.has(keyword));
+      tokens.push({ type: 'punct', value: '(' });
+      index += 1;
+    } else if (character === ')') {
+      tokens.push({
+        type: 'punct',
+        value: ')',
+        regexAfter: parens.pop() === true,
+      });
+      index += 1;
     } else if (
       /[0-9]/.test(character) ||
       (character === '.' && /[0-9]/.test(next ?? ''))
@@ -2633,6 +2691,10 @@ function isNameToken(token: SourceToken | undefined, value: string): boolean {
 interface ModuleClause {
   specifier: string;
   bindings: { imported: string; local: string }[];
+  /** The local name of a `* as name` namespace binding, if any. */
+  namespace: string | null;
+  /** The index of the specifier token that ends the clause. */
+  end: number;
 }
 
 /**
@@ -2645,6 +2707,7 @@ function readModuleClause(
   start: number,
 ): ModuleClause | null {
   const bindings: ModuleClause['bindings'] = [];
+  let namespace: string | null = null;
   let depth = 0;
   let index = start;
   while (index < tokens.length) {
@@ -2656,7 +2719,12 @@ function readModuleClause(
         depth === 0 &&
         following?.type === 'string'
       ) {
-        return { specifier: following.value, bindings };
+        return {
+          specifier: following.value,
+          bindings,
+          namespace,
+          end: index + 1,
+        };
       }
       if (depth > 0) {
         const alias = tokens[index + 2];
@@ -2674,6 +2742,14 @@ function readModuleClause(
       index += 1;
       continue;
     }
+    if (isPunct(token, '*') && depth === 0) {
+      const alias = tokens[index + 2];
+      if (isNameToken(tokens[index + 1], 'as') && alias?.type === 'name') {
+        namespace = alias.value;
+        index += 3;
+        continue;
+      }
+    }
     if (isPunct(token, '{')) {
       depth += 1;
     } else if (isPunct(token, '}')) {
@@ -2687,12 +2763,39 @@ function readModuleClause(
   return null;
 }
 
+/**
+ * The string literal a call starting at `start` passes as its only argument
+ * (`(<literal>)`, `(<literal>,)`, or an optional call `?.(<literal>)`), or
+ * null when the tokens there are not such a call.
+ */
+function readLiteralCallArgument(
+  tokens: readonly SourceToken[],
+  start: number,
+): string | null {
+  let index = start;
+  if (isPunct(tokens[index], '?') && isPunct(tokens[index + 1], '.')) {
+    index += 2;
+  }
+  if (!isPunct(tokens[index], '(')) return null;
+  const argument = tokens[index + 1];
+  let close = index + 2;
+  if (isPunct(tokens[close], ',')) close += 1;
+  return argument?.type === 'string' && isPunct(tokens[close], ')')
+    ? argument.value
+    : null;
+}
+
 interface HelperSourceDependencies {
   /** Relative static and dynamic import specifiers. */
   imports: string[];
   /** Script paths passed to runHelper, with the run-helper module specifier. */
   delegated: { module: string; path: string }[];
-  /** How many runHelper calls pass something other than one string literal. */
+  /**
+   * How many uses of runHelper this scan cannot resolve to one script: a call
+   * without one string literal, a reference that is not a call (an alias or a
+   * value passed on), or `runHelper` imported from a module that is not
+   * run-helper itself.
+   */
   unresolvedDelegations: number;
 }
 
@@ -2702,6 +2805,10 @@ function findHelperSourceDependencies(
   const tokens = tokenizeJavaScript(source);
   const imports = new Set<string>();
   const runHelperBindings = new Map<string, string>();
+  const runHelperNamespaces = new Map<string, string>();
+  // Token ranges of import declarations, whose binding names are not uses.
+  const declarations: [number, number][] = [];
+  let unresolvedDelegations = 0;
   const addImport = (specifier: string): void => {
     if (specifier.startsWith('.')) imports.add(specifier);
   };
@@ -2730,15 +2837,20 @@ function findHelperSourceDependencies(
       const clause = readModuleClause(tokens, index + 1);
       if (clause === null) continue;
       addImport(clause.specifier);
-      if (
+      declarations.push([index, clause.end]);
+      const fromRunHelper =
         clause.specifier.startsWith('.') &&
-        RUN_HELPER_MODULE_PATTERN.test(clause.specifier)
-      ) {
-        for (const binding of clause.bindings) {
-          if (binding.imported === 'runHelper') {
-            runHelperBindings.set(binding.local, clause.specifier);
-          }
+        RUN_HELPER_MODULE_PATTERN.test(clause.specifier);
+      for (const binding of clause.bindings) {
+        if (binding.imported !== 'runHelper') continue;
+        if (fromRunHelper) {
+          runHelperBindings.set(binding.local, clause.specifier);
+        } else {
+          unresolvedDelegations += 1;
         }
+      }
+      if (fromRunHelper && clause.namespace !== null) {
+        runHelperNamespaces.set(clause.namespace, clause.specifier);
       }
     } else if (token.value === 'export') {
       if (
@@ -2753,29 +2865,38 @@ function findHelperSourceDependencies(
     }
   }
 
+  // Every use of a runHelper binding must be a call with one string literal,
+  // directly or through a run-helper namespace (`helpers.runHelper(...)`).
+  // Any other use could run a script this scan cannot name, so it counts as
+  // unresolved and strict validation refuses the wrapper.
   const delegated: HelperSourceDependencies['delegated'] = [];
-  let unresolvedDelegations = 0;
-  if (runHelperBindings.size > 0) {
+  if (runHelperBindings.size > 0 || runHelperNamespaces.size > 0) {
+    const inDeclaration = (index: number): boolean =>
+      declarations.some(([start, end]) => index >= start && index <= end);
     for (let index = 0; index < tokens.length; index += 1) {
       const token = tokens[index];
-      const previous = tokens[index - 1];
       if (
         token.type !== 'name' ||
-        !runHelperBindings.has(token.value) ||
-        !isPunct(tokens[index + 1], '(') ||
-        isPunct(previous, '.') ||
-        isNameToken(previous, 'function')
+        isPunct(tokens[index - 1], '.') ||
+        inDeclaration(index)
       ) {
         continue;
       }
-      const argument = tokens[index + 2];
-      if (argument?.type === 'string' && isPunct(tokens[index + 3], ')')) {
-        delegated.push({
-          module: runHelperBindings.get(token.value) ?? '',
-          path: argument.value,
-        });
-      } else {
+      let module = runHelperBindings.get(token.value);
+      let callStart = index + 1;
+      if (module === undefined) {
+        module = runHelperNamespaces.get(token.value);
+        if (module === undefined) continue;
+        if (isPunct(tokens[index + 1], '.')) {
+          if (!isNameToken(tokens[index + 2], 'runHelper')) continue;
+          callStart = index + 3;
+        }
+      }
+      const path = readLiteralCallArgument(tokens, callStart);
+      if (path === null) {
         unresolvedDelegations += 1;
+      } else {
+        delegated.push({ module, path });
       }
     }
   }

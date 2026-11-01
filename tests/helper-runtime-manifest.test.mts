@@ -483,40 +483,143 @@ test('strict closure validation refuses a wrapper whose runHelper script cannot 
     'bin/run-helper.mjs',
     'export function runHelper() {}\n',
   );
+  writeRuntimePackageFile(
+    packageRoot,
+    'bin/middle.mjs',
+    "export { runHelper } from './run-helper.mjs';\n",
+  );
   writeFileSync(join(fixtureRoot, 'outside.mjs'), 'export {};');
+  const named = "import { runHelper } from './run-helper.mjs';\n";
+  const unresolved =
+    /bin\/wrapper\.mjs passes runHelper something other than one string literal/;
   const cases = [
     {
-      body: "runHelper('../scripts/missing.mjs');",
+      body: `${named}runHelper('../scripts/missing.mjs');`,
       error:
         /delegated helper \.\.\/scripts\/missing\.mjs run by bin\/wrapper\.mjs is not a regular file/,
     },
     {
-      body: "runHelper('../../outside.mjs');",
+      body: `${named}runHelper('../../outside.mjs');`,
       error:
         /delegated helper \.\.\/\.\.\/outside\.mjs run by bin\/wrapper\.mjs resolves outside the package root/,
     },
     {
-      body: "const script = '../scripts/missing.mjs';\nrunHelper(script);",
+      body: `${named}const script = '../scripts/missing.mjs';\nrunHelper(script);`,
+      error: unresolved,
+    },
+    {
+      body: `${named}const run = runHelper;\nrun('../scripts/missing.mjs');`,
+      error: unresolved,
+    },
+    {
+      body: "import * as helpers from './run-helper.mjs';\nhelpers.runHelper('../scripts/missing.mjs');",
       error:
-        /bin\/wrapper\.mjs passes runHelper something other than one string literal/,
+        /delegated helper \.\.\/scripts\/missing\.mjs run by bin\/wrapper\.mjs is not a regular file/,
+    },
+    {
+      body: "import { runHelper } from './middle.mjs';\nrunHelper('../scripts/missing.mjs');",
+      error: unresolved,
     },
   ];
   for (const { body, error } of cases) {
-    writeRuntimePackageFile(
-      packageRoot,
-      'bin/wrapper.mjs',
-      `import { runHelper } from './run-helper.mjs';\n${body}\n`,
-    );
+    writeRuntimePackageFile(packageRoot, 'bin/wrapper.mjs', `${body}\n`);
     const options = { packageRoot, extraRuntimeFiles: new Map() };
     assert.throws(
       () => assertHelperEntryClosureResolvable('bin/wrapper.mjs', options),
       error,
     );
-    assert.deepEqual(resolveHelperEntryClosure('bin/wrapper.mjs', options), [
+    assert.equal(
+      resolveHelperEntryClosure('bin/wrapper.mjs', options).includes(
+        'scripts/missing.mjs',
+      ),
+      false,
+    );
+  }
+});
+
+test('the closure follows runHelper through a namespace, an optional call, and a trailing comma (#4917)', () => {
+  const { packageRoot } = makeRuntimePackageFixture(
+    'idd-helper-entry-wrapper-forms-',
+  );
+  writeRuntimePackageFile(
+    packageRoot,
+    'bin/run-helper.mjs',
+    'export function runHelper() {}\n',
+  );
+  for (const name of ['one', 'two', 'three']) {
+    writeRuntimePackageFile(packageRoot, `scripts/${name}.mjs`, 'export {};');
+  }
+  writeRuntimePackageFile(
+    packageRoot,
+    'bin/wrapper.mjs',
+    [
+      "import * as helpers from './run-helper.mjs';",
+      "import { runHelper } from './run-helper.mjs';",
+      "helpers.runHelper('../scripts/one.mjs');",
+      "runHelper?.('../scripts/two.mjs');",
+      "runHelper('../scripts/three.mjs',);",
+      '',
+    ].join('\n'),
+  );
+  const options = { packageRoot, extraRuntimeFiles: new Map() };
+
+  assert.doesNotThrow(() =>
+    assertHelperEntryClosureResolvable('bin/wrapper.mjs', options),
+  );
+  assert.deepEqual(
+    resolveHelperEntryClosure('bin/wrapper.mjs', options),
+    sortUtf8Paths([
       'bin/run-helper.mjs',
       'bin/wrapper.mjs',
-    ]);
+      'scripts/one.mjs',
+      'scripts/three.mjs',
+      'scripts/two.mjs',
+    ]),
+  );
+});
+
+test('the closure scanner reads a regular expression after a control head, a block, and export default, and division after a keyword property (#4917)', () => {
+  const { packageRoot } = makeRuntimePackageFixture('idd-helper-entry-regex-');
+  writeRuntimePackageFile(
+    packageRoot,
+    'scripts/entry.mjs',
+    [
+      "const s = 'x';",
+      'if (s) /`/.test(s);',
+      "import './after-if.mjs';",
+      'function f() {}',
+      "/`/.test('a');",
+      "import './after-block.mjs';",
+      'for (;;) /"/.test(s) && 0;',
+      "import './after-for.mjs';",
+      'const o = { return: 4 };',
+      "const a = o.return / 2; import('./after-property.mjs'); const b = a / 3;",
+      'export default /`/;',
+      "import './after-default.mjs';",
+      '',
+    ].join('\n'),
+  );
+  const names = [
+    'after-block',
+    'after-default',
+    'after-for',
+    'after-if',
+    'after-property',
+  ];
+  for (const name of names) {
+    writeRuntimePackageFile(packageRoot, `scripts/${name}.mjs`, 'export {};');
   }
+
+  assert.deepEqual(
+    resolveHelperEntryClosure('scripts/entry.mjs', {
+      packageRoot,
+      extraRuntimeFiles: new Map(),
+    }),
+    sortUtf8Paths([
+      'scripts/entry.mjs',
+      ...names.map((name) => `scripts/${name}.mjs`),
+    ]),
+  );
 });
 
 test('every catalog entry and bin wrapper in this repository passes strict closure validation (#4917)', () => {
