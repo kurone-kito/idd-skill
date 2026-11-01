@@ -191,14 +191,13 @@ defaultBranchRef --jq .defaultBranchRef.name`. Stop unless the name matches
 
 ## B2.1 — Premise verification
 
-Decision-transcription issues: verify claimed shipped facts in prior code/docs;
-if unverifiable or conflicting, hold with evidence and await a maintainer
-addendum.
+Decision-transcription: verify shipped claims in prior code/docs; if unclear,
+hold with evidence for a maintainer addendum.
 
 ## B2.2 — Example field-name verification
 
-Verify cited existing fields/config keys/tokens; correct/drop absent examples
-and hold if unclear (`#2806`).
+Verify cited fields/config keys/tokens exist; correct/drop absent examples; hold
+if unclear (`#2806`).
 
 ## B3 — Implement
 
@@ -267,14 +266,15 @@ create it ad hoc or improvise worker-side authoring.
 `audit-authored-issue --shape child --stdin --marker-prefix {markerPrefix}`
 fails `effort-candidate-file-limit` on the issue body or with
 `## Candidate files` set to the diff's canonical paths, stop coding without
-pushing. Standing split requires `standingApprovals.split.enabled`, each child
+pushing. Standing split requires `standingApprovals.split.enabled`, children
 within effective `maxCandidateFiles`, and each checkbox-stripped parent
-acceptance criterion verbatim in exactly one child. Follow standard work
-instructions for per-orphan dry-run/`--apply` and parent-record order. On
-refusal, failure, recovery hold, or failed/uncertain record POST, stop with
-parent claim/hold and published children held; do not release. Reconcile
-uncertain POST before retry. If enabled but ineligible, use Lite release steps
-without companion. When off/absent, use the existing route:
+criterion verbatim in exactly one child. Follow standard per-orphan
+dry-run/`--apply`, then parent-record order. On refusal, failure, recovery
+hold, or failed/uncertain record POST, stop with parent claim/hold and published
+children held; no release. Reconcile uncertain POST before retry. After a
+successful record or if enabled but ineligible, use Lite's comment, claim
+revalidation, digest update, `unclaimed-by`, and cleanup below; no companion.
+When off/absent, use the existing route:
 Comment the estimate, candidate files, changed files, and a split proposal;
 then revalidate ownership: only if the active claim still uses your current
 `{claim-id}`, update the digest (`Phase: aborted/released`, release in
