@@ -2063,9 +2063,11 @@ function checkNearCeilingRatchet(
     noticeUtilizationPct,
     baseManifest.contextCeiling?.noticeUtilizationPct,
   );
-  // Approval ids are scoped to their own array (audit/README.md). An id that
-  // names both a bundleBudgets bundle and an instructionSizeBudgets entry is
-  // ambiguous, so neither section takes that approval (fail closed).
+  // Manual approval ids are scoped to their own array (audit/README.md). An
+  // id that names both a bundleBudgets bundle and an
+  // instructionSizeBudgets entry is ambiguous, so neither manual section
+  // takes that approval (fail closed). Standing entries name their bundle
+  // explicitly and are validated against bundleBudgets above.
   const approvals = parseNearCeilingRaiseApprovals(
     config.nearCeilingRaiseApprovals,
   );
@@ -2090,7 +2092,7 @@ function checkNearCeilingRatchet(
     ),
   );
   for (const [id, limitBytes] of standingApprovals.approvals) {
-    if (bundleIds.has(id) && !instructionSizeBudgetIds.has(id)) {
+    if (bundleIds.has(id)) {
       bundleApprovals.set(id, limitBytes);
     }
   }
