@@ -206,11 +206,9 @@ if unclear (`#2806`).
 
 ## B3 — Implement
 
-1. Before the first implementation edit, confirm the final B2 plan comment
-   exists on the issue.
-2. If it does not exist, stop and return to B2 to post it.
-3. If code already landed before that checkpoint was noticed, disclose the
-   ordering deviation on the issue.
+1. Before coding, verify the final B2 plan comment exists on the issue.
+2. If absent, stop; return to B2 and post it.
+3. If code landed first, disclose the ordering deviation on the issue.
 4. Post the plan retroactively.
 5. Implement the plan.
 6. Critique the completed diff.
@@ -224,12 +222,10 @@ if unclear (`#2806`).
     up-to-date". Prefer `git commit -F <file>` with a pre-wrapped body, and
     compare `git rev-parse HEAD` before and after (or check the reported commit
     hash) before treating a push as confirmation.
-11. For failures in untouched files, rule out baseline drift/stale installs:
-    run `install-deps` in a clean worktree or compare fresh/stale
-    `node_modules` before blaming this diff.
-12. If an unrelated test fails once locally but passes in isolation with
-    hosted CI green, treat it as baseline; stop chasing it but still run
-    `fix-validate` and `pre-push-validate`.
+11. For untouched-file failures, rule out baseline drift/stale installs: run
+    `install-deps` in a clean worktree or compare fresh/stale `node_modules`.
+12. If an unrelated test fails once locally but passes isolated with hosted CI
+    green, stop chasing it as baseline; still run both validation gates.
 13. When consolidating a wrapper function used at multiple call sites into one
     shared function, check whether any call site's old delegate path added
     options or behavior the shared function does not replicate.
@@ -273,8 +269,11 @@ pushing. Standing split requires `standingApprovals.split.enabled`, children
 within effective `maxCandidateFiles`, and every checkbox-stripped parent
 acceptance-criteria line verbatim in exactly one child. Dry-run, then
 `--apply` each held orphan separately with
-`publish-authoring-hold --shape orphan`; post the parent record after all
-children publish. On refusal, failure, recovery
+`publish-authoring-hold --shape orphan`. After all children publish, post on
+the parent with `option` set to the roadmap's split option ID:
+`<!-- idd-skill-standing-approval: class=split; set=none;
+anchor=<owner/repo#n>; ceiling=<maxCandidateFiles>; option=<option-id> -->`
+On refusal, failure, recovery
 hold, or failed/uncertain record POST, stop with parent claim/hold and published
 children held; no release. Reconcile uncertain POST before retry. After a
 successful record or if enabled but ineligible, use Lite's comment, claim
