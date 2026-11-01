@@ -285,9 +285,9 @@ function detectEntryContracts(files) {
         ),
       );
     }
-    const guardMessageMarkerStart = text.indexOf(
-      "node-runtime-guard: this repository's CLI entry points require",
-    );
+    const guardMessageMarker =
+      "node-runtime-guard: this repository's CLI entry points require";
+    const guardMessageMarkerStart = text.indexOf(guardMessageMarker);
     // #4927: scan the whole write() argument, not only from the template
     // literal, so an expression concatenated before the template is caught.
     // Take the first write call after the guard condition, so call text in a
@@ -300,9 +300,12 @@ function detectEntryContracts(files) {
             guardWriteCall,
             guardCondition.index + guardCondition[0].length,
           );
+    // Require a single marker: a clean copy of the diagnostic would otherwise
+    // hide a prefixed second copy that the slice never reaches.
     const guardMessageStart =
       guardMessageMarkerStart > 0 &&
       text[guardMessageMarkerStart - 1] === '`' &&
+      text.indexOf(guardMessageMarker, guardMessageMarkerStart + 1) === -1 &&
       guardWriteCallStart !== -1 &&
       guardWriteCallStart + guardWriteCall.length < guardMessageMarkerStart
         ? guardWriteCallStart + guardWriteCall.length
