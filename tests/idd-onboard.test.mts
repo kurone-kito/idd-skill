@@ -19,7 +19,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, relative, resolve } from 'node:path';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 import { after, before, test } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { DistributionSelectionReport } from '../src/scripts/distribution-selection.mts';
@@ -27,6 +27,8 @@ import {
   buildCommandCatalog,
   collectVendoredFiles,
   PROFILE_NAMES,
+  readHelperExtraRuntimeFiles,
+  resolveHelperEntryClosure,
 } from '../src/scripts/helper-runtime-manifest.mts';
 // Importing the CLI module directly is only possible because its top-level
 // statements are guarded behind `import.meta.main` (#1210 pattern, migrated
@@ -12595,7 +12597,7 @@ test('Git repository overrides are sanitized case-insensitively on Windows', () 
 
 test('bin/idd-onboard.mjs distribution prepare and bind preserve CLI data and status', {
   skip: NO_USER_GLOBAL_INSTALL,
-}, () => {
+}, (t) => {
   const sandbox = makeUserGlobalSandbox();
   const gitEnv = fixtureEnv();
   const targetRoot = sandbox.root;
@@ -12640,15 +12642,8 @@ test('bin/idd-onboard.mjs distribution prepare and bind preserve CLI data and st
     { env: gitEnv, stdio: 'pipe' },
   );
 
-  // The installer and distribution CLI use only this fixture HOME. This
-  // supplies a current bundle that the prepared commit can be checked against
-  // without running a package manager or a live helper.
-  const installed = runUserGlobal(sandbox, ['--install-user-global']);
-  assert.equal(installed.status, 0, installed.stderr);
-
-  // Make a local, committed source checkout that matches the current payload
-  // bytes, including this issue's template documentation update. The helper
-  // still proves every selected file against the explicit immutable commit.
+  // This source clone stands in for the working tree used by both fixture
+  // installation and distribution preparation.
   const sourceRoot = join(targetRoot, 'source');
   execFileSync(
     'git',
@@ -12668,37 +12663,159 @@ test('bin/idd-onboard.mjs distribution prepare and bind preserve CLI data and st
     join(sourceRoot, templateDoc),
     readFileSync(join(REPO_ROOT, templateDoc)),
   );
-  // Keep the fixture commit non-empty after the template doc has already
-  // landed on the current branch.
-  const sourceMarker = `.idd-test-distribution-source-${process.pid}-${Date.now()}.txt`;
-  writeFileSync(join(sourceRoot, sourceMarker), 'fixture source marker\n');
-  execFileSync('git', ['-C', sourceRoot, 'add', templateDoc, sourceMarker], {
+  const trackedPayloadDoc = 'idd-template/docs/idd-workflow.md';
+  const payloadMarker = `<!-- tracked-payload-${process.pid}-${Date.now()} -->`;
+  writeFileSync(
+    join(sourceRoot, trackedPayloadDoc),
+    `${readFileSync(join(sourceRoot, trackedPayloadDoc), 'utf8')}\n${payloadMarker}\n`,
+  );
+
+  const syncManifest = JSON.parse(
+    readFileSync(join(sourceRoot, 'audit', 'sync-manifest.json'), 'utf8'),
+  ) as { generatedBlocks: { id: string; paths: string[] }[] };
+  const payloadBlock = syncManifest.generatedBlocks.find(
+    (block) => block.id === 'idd-template-core-files',
+  );
+  assert.ok(payloadBlock, 'the core template payload block exists');
+  assert.ok(
+    payloadBlock.paths.includes(trackedPayloadDoc),
+    'the tracked edit is part of the installed template payload',
+  );
+  const payloadPaths = new Set([
+    ...payloadBlock.paths,
+    'idd-template/user-global/entry.md',
+    ...resolveHelperEntryClosure('bin/idd-activation.mjs', {
+      packageRoot: sourceRoot,
+      extraRuntimeFiles: readHelperExtraRuntimeFiles(sourceRoot),
+    }),
+  ]);
+  const skillPayloadPrefixes = [
+    'skills/issue-authoring/',
+    'skills/idd-spec-audit/',
+  ];
+  const inspectTrackedPayloadSnapshot = () => {
+    const untrackedPayloadPaths = execFileSync(
+      'git',
+      ['-C', sourceRoot, 'ls-files', '--others', '-z'],
+      { env: gitEnv, encoding: 'utf8', stdio: 'pipe' },
+    )
+      .split('\0')
+      .filter(
+        (path) =>
+          path.length > 0 &&
+          (payloadPaths.has(path) ||
+            skillPayloadPrefixes.some((prefix) => path.startsWith(prefix))),
+      )
+      .sort();
+    if (untrackedPayloadPaths.length > 0) {
+      return {
+        kind: 'skip' as const,
+        reason: `Untracked payload files prevent a complete tracked source snapshot: ${untrackedPayloadPaths.join(', ')}`,
+      };
+    }
+    const sourceCommit = execFileSync(
+      'git',
+      [
+        '-C',
+        sourceRoot,
+        '-c',
+        'user.name=IDD fixture',
+        '-c',
+        'user.email=idd-fixture@example.invalid',
+        '-c',
+        'commit.gpgsign=false',
+        'stash',
+        'create',
+      ],
+      { env: gitEnv, encoding: 'utf8', stdio: 'pipe' },
+    ).trim();
+    assert.match(sourceCommit, /^[0-9a-f]{40}$/u);
+    return { kind: 'ready' as const, sourceCommit };
+  };
+
+  const untrackedPayloadFixture = join(
+    sourceRoot,
+    'skills',
+    'issue-authoring',
+    `.idd-test-untracked-${process.pid}-${Date.now()}.md`,
+  );
+  writeFileSync(untrackedPayloadFixture, 'untracked payload fixture\n');
+  try {
+    const skipped = inspectTrackedPayloadSnapshot();
+    assert.equal(skipped.kind, 'skip');
+    if (skipped.kind === 'skip') {
+      assert.equal(
+        skipped.reason,
+        `Untracked payload files prevent a complete tracked source snapshot: ${relative(sourceRoot, untrackedPayloadFixture).split(sep).join('/')}`,
+      );
+    }
+  } finally {
+    rmSync(untrackedPayloadFixture, { force: true });
+  }
+
+  const snapshot = inspectTrackedPayloadSnapshot();
+  if (snapshot.kind === 'skip') {
+    t.skip(snapshot.reason);
+    return;
+  }
+  const sourceCommit = snapshot.sourceCommit;
+
+  // Install from the same dirty tracked worktree whose full snapshot will be
+  // used for preparation. The snapshot helper itself leaves the worktree and
+  // index untouched; after verifying its tree, reset this temporary clone to
+  // the snapshot because the CLI requires HEAD to equal --source-commit.
+  const installed = runUserGlobal(sandbox, ['--install-user-global'], {
+    script: join(sourceRoot, 'bin', 'idd-onboard.mjs'),
+  });
+  assert.equal(installed.status, 0, installed.stderr);
+  assert.equal(
+    execFileSync(
+      'git',
+      ['-C', sourceRoot, 'show', `${sourceCommit}:${templateDoc}`],
+      {
+        env: gitEnv,
+        encoding: 'utf8',
+        stdio: 'pipe',
+      },
+    ),
+    readFileSync(join(sourceRoot, templateDoc), 'utf8'),
+  );
+  assert.equal(
+    execFileSync(
+      'git',
+      ['-C', sourceRoot, 'show', `${sourceCommit}:${trackedPayloadDoc}`],
+      {
+        env: gitEnv,
+        encoding: 'utf8',
+        stdio: 'pipe',
+      },
+    ),
+    readFileSync(join(sourceRoot, trackedPayloadDoc), 'utf8'),
+  );
+  assert.ok(
+    execFileSync(
+      'git',
+      ['-C', sourceRoot, 'show', `${sourceCommit}:${trackedPayloadDoc}`],
+      {
+        env: gitEnv,
+        encoding: 'utf8',
+        stdio: 'pipe',
+      },
+    ).includes(payloadMarker),
+    'the source commit contains the tracked template payload edit',
+  );
+  execFileSync('git', ['-C', sourceRoot, 'reset', '--hard', sourceCommit], {
     env: gitEnv,
     stdio: 'pipe',
   });
-  execFileSync(
-    'git',
-    [
-      '-C',
-      sourceRoot,
-      '-c',
-      'user.name=IDD fixture',
-      '-c',
-      'user.email=idd-fixture@example.invalid',
-      '-c',
-      'commit.gpgsign=false',
-      'commit',
-      '--quiet',
-      '-m',
-      'prepare fixture distribution source',
-    ],
-    { env: gitEnv, stdio: 'pipe' },
+  assert.equal(
+    execFileSync('git', ['-C', sourceRoot, 'rev-parse', 'HEAD'], {
+      env: gitEnv,
+      encoding: 'utf8',
+      stdio: 'pipe',
+    }).trim(),
+    sourceCommit,
   );
-  const sourceCommit = execFileSync(
-    'git',
-    ['-C', sourceRoot, 'rev-parse', 'HEAD'],
-    { env: gitEnv, encoding: 'utf8', stdio: 'pipe' },
-  ).trim();
   const helperArgv = [
     '--repo',
     'fixture/owner with spaces',
