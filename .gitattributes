@@ -151,6 +151,7 @@ scripts/review-thread-edit-histories.mjs linguist-generated=true
 scripts/select-desynced-index.mjs linguist-generated=true
 scripts/snapshot-issue-body-corpus.mjs linguist-generated=true
 scripts/stalled-session-quiet-check.mjs linguist-generated=true
+scripts/standing-approval-report.mjs linguist-generated=true
 scripts/suitability-close-execute.mjs linguist-generated=true
 scripts/suitability-triage.mjs linguist-generated=true
 scripts/supersession-detection.mjs linguist-generated=true

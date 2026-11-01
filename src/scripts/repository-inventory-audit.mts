@@ -168,6 +168,8 @@ const INTERNAL_ENTRY_REASONS: Readonly<Record<string, string>> = {
   'scripts/check-untracked-artifacts.mjs': 'build-internal artifact verifier',
   'scripts/token-cost-report.mjs': 'source-repository token-cost report',
   'scripts/actions-usage-report.mjs': 'source-repository Actions report',
+  'scripts/standing-approval-report.mjs':
+    'source-repository standing-approval report',
   'scripts/token-cost-event.mjs': 'source-repository token-cost event logger',
   'scripts/token-cost-harvest.mjs': 'source-repository token-cost log reader',
   'scripts/check-stray-commit-closes.mjs':
