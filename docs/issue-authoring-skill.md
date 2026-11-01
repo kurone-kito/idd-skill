@@ -2194,8 +2194,9 @@ preview it first. For an issue in another repository, pass `--owner` and
 entries in this order: entry 1 for every target, entry 2 once, entries 3
 and 4 for each non-anchor target in turn, entries 3 and 4 for the anchor,
 and entry 5 last. The defer-source auto-release exception adds a
-sole-member check before the first label removal. This checklist does not
-cover that path; follow the contract for it.
+sole-member check before the first label removal, and the standing release
+approval adds its own conditions there. The release checklist still runs for
+both paths; follow the contract for those additional conditions.
 
 1. **Preflight, every target.** Run the contract's sweep against the target
    and the journal first (attempted, not blocking, so the command ends in
@@ -2406,7 +2407,8 @@ found conclusively, leave all labels in place and stop. The guard suppresses
 Discover for the whole set during the provisional label-removal window; it
 does not close the set. When this release is proceeding under the narrow
 [defer-source auto-release exception](#narrow-auto-release-exception) (a draft
-carrier follows the carrier creation-hold exception's own sole-member check)
+carrier follows the carrier creation-hold exception's own sole-member check;
+a standing release approval follows its own conditions in the contract)
 instead of an explicit human release request, also verify here -- immediately before
 the first label removal below, whether that removal is a non-anchor
 target's or the anchor's own -- that the marked target is the sole member
@@ -2501,12 +2503,13 @@ state; leave every target generation open and stop. If restoration cannot be
 completed or a newer owner has appeared, record a set-level recovery hold and
 never claim a partial release. This release checklist plus the user's
 explicit request together form the single approval boundary in this
-contract, except for the narrow, marker-scoped exceptions below.
+contract, except for the narrow exceptions below.
 
 Removing the authoring label releases the Discover guard and
 authorizes IDD execution for the released issues. Do it only as part
 of that explicit release request, or one of the narrow auto-release
-exceptions below; nothing else removes the label or starts Discover,
+exceptions below, including the standing release approval for a single
+self-anchor target; nothing else removes the label or starts Discover,
 Claim, and Work on its own. A draft carrier's release authorizes no
 execution: the carrier keeps its authoring-only label and never enters
 the loop. A released `review-needs-decision` follow-up remains
@@ -3561,7 +3564,8 @@ relayed release claim must refuse it and require the party holding
 the actual request to act directly, even when that party is its own
 orchestrator. This rule does not extend to the
 [Narrow auto-release exception](#narrow-auto-release-exception)
-and the carrier creation-hold exception, which by design run with no user
+and the carrier creation-hold exception, or to the standing release approval,
+which by design run with no user
 release request for any party to hold in the first place (observed
 2026-09-17, kurone-kito/idd-skill#3102).
 

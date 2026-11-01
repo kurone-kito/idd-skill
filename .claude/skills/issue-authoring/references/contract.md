@@ -3238,8 +3238,10 @@ only approval boundary.
   stop. If restoration cannot be completed or a newer owner has appeared,
   record a set-level recovery hold and never claim a partial release. Release
   is a human action; nothing in this bundle auto-releases a held issue set,
-  except the two narrow, marker-scoped exceptions immediately below (the
-  defer-source exception and the carrier creation-hold exception).
+  except the narrow exceptions immediately below: the defer-source exception
+  and the carrier creation-hold exception, both marker-scoped, and the
+  standing release approval for a single self-anchor target, which only the
+  repository policy can enable.
 - **Fast path: `|set|==1` self-anchor Stage 2 release (observed
   2026-09-21, kurone-kito/dotfiles#465 via gist round 27;
   kurone-kito/idd-skill#3164).** A genuine standalone set -- exactly
@@ -3258,9 +3260,11 @@ only approval boundary.
   (2) the anchor-only `mode=release-guard` marker on the same issue,
   verified against its paginated owner-marker log; (3) **only** when
   this release is proceeding under the narrow defer-source auto-release
-  exception below instead of an explicit human release request (a draft
-  carrier is released under the carrier creation-hold exception bullet
-  below, with the preconditions that bullet lists instead of these) -- an
+  exception below, or under the standing release approval bullet below,
+  instead of an explicit human release request (a draft carrier is released
+  under the carrier creation-hold exception bullet below, with the
+  preconditions that bullet lists instead of these; a standing release is
+  checked by that bullet's own conditions instead of these) -- an
   ordinary human-gated release skips straight to step (4), since the human
   request already vouches for the set's scope -- run **both** of that
   exception's own preconditions here, immediately before the label
@@ -3315,7 +3319,8 @@ only approval boundary.
   shorter path to the same guarantee, never a weaker one: it grants no
   new exemption, and release stays a human action under the same
   precondition as the general case, subject to the same narrow
-  defer-source auto-release exception named in step (3) or, for a draft
+  defer-source auto-release exception named in step (3), the standing
+  release approval for a single self-anchor target, or, for a draft
   carrier, the carrier creation-hold exception. Pairs with the Stage 1
   acquire fast path above.
 - **Closing sweep (after Stage 2 closes, #2896 review, Codex; #2935).**
@@ -3559,6 +3564,52 @@ only approval boundary.
   The release never closes the carrier and never removes the authoring-only
   label. Its outcomes, label restore and reapply rules, and report fields are
   those of the general case, as implemented by `publish-authoring-hold`.
+
+- **Standing release approval (single self-anchor target).** Operator
+  decision of 2026-11-01 (option (a), roadmap `#4883`): the self-anchor
+  fast path above may release a set without an explicit human release
+  request when the repository policy enables
+  `standingApprovals.release` (defined by child `#4886`) and all six
+  conditions below hold. They are checked immediately before the label
+  removal, as fast-path step (3) requires for its own preconditions. They
+  replace the two defer-source preconditions in step (3), and condition (f)
+  keeps the body-sha256 check that the defer-source path also runs.
+  - (a) `standingApprovals.release.enabled` is `true` in the repository
+    policy; a missing, malformed, or disabled value leaves the explicit
+    request in force;
+  - (b) the set has exactly one target, the target is its own anchor, and
+    the target carries neither a `<marker-prefix>-roadmap-id` marker nor
+    a `<marker-prefix>-draft-carrier` marker outside code, so it is
+    neither a roadmap shell nor a draft carrier;
+  - (c) `node scripts/authoring-set-members.mjs --set <set> --issue <target>`
+    reports `soleMember: true`, as in fast-path step (3); a non-zero exit
+    is inconclusive and falls back to the explicit request;
+  - (d) the target's labels include neither the configured needs-decision
+    label nor the configured blocked-by-human label
+    (`labels.needsDecisionLabelName` and `labels.blockedByHumanLabelName`,
+    defaulting to `status:needs-decision` and `status:blocked-by-human`);
+    if either configured name cannot be read, the explicit request applies;
+  - (e) the latest valid publication-intent record in each publication-token
+    chain for the target is in state `member`, and no chain is unresolved or
+    conflicting. The journal is append-only, so earlier `pending` records do
+    not fail this condition. The owner-marker modes are only `acquire`,
+    `heartbeat`, `release`, `release-guard`, and `release-complete`;
+  - (f) a freshly recomputed body-sha256 equals the target's own
+    `mode=acquire` owner marker `body-sha256`, as
+    `node scripts/authoring-owner-provenance.mjs --issue <target>` reports,
+    and it is checked again immediately before the label removal.
+
+  Every other fast-path step still runs unchanged, including the release
+  checklist, the sweeps, and the verified label removal. The released issue
+  then enters the handoff to execution like any other released issue. After
+  the release, the anchor carries the standing-approval record line that
+  `docs/policy-constants.md` defines: an HTML comment that starts with
+  `<!-- idd-skill-standing-approval:` and carries `class=release`,
+  `set=<set>`, `anchor=<owner/repo#n>`, `ceiling=checklist`, and
+  `option=<option-id>`, in that order. The record is evidence only and is not
+  a gate condition. A roadmap set, a multi-target set, a draft carrier, or a target
+  that fails any condition stays held for an explicit request. With the class
+  disabled or absent, the explicit-request rule applies unchanged.
 
 - **Journal rotation.** Observed 2026-10-27 on issue `#2674`: the journal
   reached GitHub's limit of 2,500 comments, and the next post was refused with
@@ -3812,7 +3863,8 @@ files only in the two cases that section lists. Removing the authoring label
 and starting the IDD execution loop both require the user's explicit
 hold-release request, except the narrow defer-source auto-release exception
 documented in [Authoring hold and release](#authoring-hold-and-release)
-above; nothing else authorizes either. The carrier creation-hold exception
+above and the standing release approval for a single self-anchor target in
+that section; nothing else authorizes either. The carrier creation-hold exception
 in that section removes only a carrier's creation hold and authorizes no
 execution.
 
