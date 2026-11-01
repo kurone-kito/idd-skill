@@ -191,19 +191,14 @@ defaultBranchRef --jq .defaultBranchRef.name`. Stop unless the name matches
 
 ## B2.1 — Premise verification
 
-If the issue is a decision-transcription issue (it records or restates a prior
-human decision whose rationale asserts a checkable fact about shipped behavior),
-verify that fact against the prior change's actual code or docs before drafting
-the plan. If the prior change or the fact cannot be verified, stop and hold,
-with the primary-source evidence (file, line, or excerpt, or why it was
-inconclusive) in the hold comment, until a maintainer addendum resolves it.
+Decision-transcription issues: verify claimed shipped facts in prior code/docs;
+if unverifiable or conflicting, hold with evidence and await a maintainer
+addendum.
 
 ## B2.2 — Example field-name verification
 
-If the issue's "Proposed change" or "Acceptance criteria" cites an
-existing schema field, config key, or token as an example (not one it
-adds), verify it exists as cited before drafting the plan. Fix or drop
-the citation if it does not exist; stop and hold if unclear (`#2806`).
+Verify cited existing fields/config keys/tokens; correct/drop absent examples
+and hold if unclear (`#2806`).
 
 ## B3 — Implement
 
@@ -272,15 +267,23 @@ create it ad hoc or improvise worker-side authoring.
 `audit-authored-issue --shape child --stdin --marker-prefix {markerPrefix}`
 fails `effort-candidate-file-limit` on the issue body or with
 `## Candidate files` set to the diff's canonical paths, stop coding without
-pushing. Comment the estimate, candidate files, changed files, and a split
-proposal. Then revalidate ownership: only if the active claim still uses your
-current `{claim-id}`, update the digest (`Phase: aborted/released`, the release
-in `Next action`, the claim and reason in `Authoritative by`) and post
-`unclaimed-by` for that same `{claim-id}`; otherwise post no release. Then run
-`lost-claim-cleanup`. With the companion, hand it that proposal as a held split
-draft: it holds this issue, publishes a held roadmap whose children record
-`Split out of #<n>`, and comments its link; if refused, the comment stands.
-Never add needs-decision or ask a human.
+pushing. Standing split requires `standingApprovals.split.enabled`, each child
+within effective `maxCandidateFiles`, and each checkbox-stripped parent
+acceptance criterion verbatim in exactly one child. Follow standard work
+instructions for per-orphan dry-run/`--apply` and parent-record order. On
+refusal, failure, recovery hold, or failed/uncertain record POST, stop with
+parent claim/hold and published children held; do not release. Reconcile
+uncertain POST before retry. If enabled but ineligible, use Lite release steps
+without companion. When off/absent, use the existing route:
+Comment the estimate, candidate files, changed files, and a split proposal;
+then revalidate ownership: only if the active claim still uses your current
+`{claim-id}`, update the digest (`Phase: aborted/released`, release in
+`Next action`, claim/reason in `Authoritative by`) and post `unclaimed-by` for
+that same `{claim-id}`; else no release. Then run `lost-claim-cleanup`. With the
+companion, hand it that proposal as a held split draft: it holds this issue,
+publishes a held roadmap whose children record `Split out of #<n>`, and
+comments its link; if refused, the comment stands. Never add needs-decision or
+ask a human.
 
 ## C — Self-review
 

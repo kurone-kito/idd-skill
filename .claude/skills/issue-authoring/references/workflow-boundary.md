@@ -701,6 +701,25 @@ When these prevent-during-drafting checks are applied correctly, published
 issues will pass A4.5; if they do not, A4.5 will catch them at discover
 time and report the specific failure (unclear, invalid, duplicate).
 
+Worker-side authoring normally hands scope-overrun splits to the companion.\
+Its only exception is when `standingApprovals.split.enabled`, every child fits
+effective `maxCandidateFiles`, and each checkbox-stripped parent acceptance
+criterion appears whole/verbatim in exactly one child.\
+Dry-run, then apply each held orphan separately with
+`publish-authoring-hold --shape orphan`.\
+On refusal, failure, recovery hold, or uncertain parent-record POST, stop.\
+Retain the parent claim and hold, leave published children held, and do not
+release the parent. Reconcile an uncertain POST before retrying.\
+After every child succeeds, post the parent's standing-approval record:
+`idd-skill-standing-approval: class=split; set=none;
+anchor=<owner/repo#n>; ceiling=<maxCandidateFiles>; option=<option-id>`.
+Use the split option ID recorded on the roadmap, then the existing
+estimate/candidate/changed-files/split-proposal comment, `unclaimed-by`, and
+`lost-claim-cleanup` sequence.\
+Every other case follows the existing comment/release/stop rule. Companion
+handoff applies only when the class is off or absent; refusal leaves the
+comment.
+
 ## Use this bundle to
 
 - prepare IDD-ready orphan issues when the target repository discovers
