@@ -1,13 +1,185 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import {
   collectNearCeilingRatchetViolations,
   parseNearCeilingRaiseApprovals,
+  parseStandingRaiseApprovals,
   selectStricterNoticeUtilizationPct,
 } from '../src/scripts/consistency-helpers.mts';
+import { fixtureEnv } from './test-utils.mts';
 
 const NOTICE_PCT = 95;
+const AUDIT_REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
+const AUDIT_COMMIT_ENV = {
+  ...fixtureEnv(),
+  GIT_AUTHOR_NAME: 'test',
+  GIT_AUTHOR_EMAIL: 'test@example.com',
+  GIT_COMMITTER_NAME: 'test',
+  GIT_COMMITTER_EMAIL: 'test@example.com',
+};
+
+interface AuditRunResult {
+  status: number;
+  stdout: string;
+  stderr: string;
+}
+
+function runAuditDocs(
+  cwd: string,
+  envOverrides: NodeJS.ProcessEnv = {},
+): AuditRunResult {
+  try {
+    const stdout = execFileSync(
+      process.execPath,
+      [join(AUDIT_REPO_ROOT, 'scripts', 'audit-docs.mjs'), '--check'],
+      {
+        cwd,
+        env: { ...fixtureEnv(), ...envOverrides },
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    );
+    return { status: 0, stdout, stderr: '' };
+  } catch (error) {
+    const e = error as { status?: unknown; stdout?: unknown; stderr?: unknown };
+    return {
+      status: typeof e.status === 'number' ? e.status : 1,
+      stdout: typeof e.stdout === 'string' ? e.stdout : '',
+      stderr: typeof e.stderr === 'string' ? e.stderr : '',
+    };
+  }
+}
+
+function makeAuditFixture(
+  manifestAtBase: unknown,
+  manifestAtCurrent: unknown,
+  files: Record<string, string>,
+): { dir: string; cleanup: () => void } {
+  const dir = mkdtempSync(join(tmpdir(), 'near-ceiling-standing-audit-'));
+  execFileSync('git', ['init', '--quiet'], { cwd: dir, env: fixtureEnv() });
+  const manifestPath = join(dir, 'audit', 'sync-manifest.json');
+  mkdirSync(dirname(manifestPath), { recursive: true });
+  writeFileSync(manifestPath, JSON.stringify(manifestAtBase, null, 2), 'utf8');
+  for (const [path, content] of Object.entries(files)) {
+    mkdirSync(dirname(join(dir, path)), { recursive: true });
+    writeFileSync(join(dir, path), content, 'utf8');
+  }
+  execFileSync('git', ['add', '-A'], { cwd: dir, env: AUDIT_COMMIT_ENV });
+  execFileSync('git', ['commit', '--quiet', '-m', 'base'], {
+    cwd: dir,
+    env: AUDIT_COMMIT_ENV,
+  });
+  execFileSync('git', ['update-ref', 'refs/remotes/origin/main', 'HEAD'], {
+    cwd: dir,
+    env: fixtureEnv(),
+  });
+  writeFileSync(
+    manifestPath,
+    JSON.stringify(manifestAtCurrent, null, 2),
+    'utf8',
+  );
+  return {
+    dir,
+    cleanup: () => rmSync(dir, { recursive: true, force: true }),
+  };
+}
+
+const AUDIT_CONTEXT_CEILING = {
+  id: 'fixture-ceiling',
+  maxBundleLimitBytes: 1_000_000,
+  maxUtilizationPct: 100,
+  noticeUtilizationPct: NOTICE_PCT,
+};
+const AUDIT_BUNDLE_ID = 'fixture-bundle';
+const AUDIT_BUNDLE_MEMBER = 'docs/fixture-bundle-member.md';
+const AUDIT_CONFIG_OVERVIEW = [
+  '| **install-deps** | `true` |',
+  '| **fix-validate** | `true` |',
+  '| **pre-push-validate** | `true` |',
+  '| **post-fix-validate** | `true` |',
+  '| **issue-scope** | `roadmap-first` |',
+  '| **orphan-first-policy** | `none` |',
+].join('\n');
+
+function standingBudgetPolicy(enabled: boolean): string {
+  return `${JSON.stringify(
+    {
+      commands: {
+        'install-deps': 'true',
+        'fix-validate': 'true',
+        'pre-push-validate': 'true',
+        'post-fix-validate': 'true',
+      },
+      issueScope: 'roadmap-first',
+      orphanFirstPolicy: 'none',
+      standingApprovals: { budgetRaise: { enabled, maxRaisePct: 10 } },
+    },
+    null,
+    2,
+  )}\n`;
+}
+
+function standingAuditManifest(
+  bundleLimitBytes: number,
+  options: {
+    manualApprovals?: unknown[];
+    standingApprovals?: unknown[];
+    sharedInstructionBudgetId?: boolean;
+  } = {},
+) {
+  return {
+    contextCeiling: {
+      ...AUDIT_CONTEXT_CEILING,
+      ...(options.manualApprovals === undefined
+        ? {}
+        : { nearCeilingRaiseApprovals: options.manualApprovals }),
+      ...(options.standingApprovals === undefined
+        ? {}
+        : { standingRaiseApprovals: options.standingApprovals }),
+    },
+    bundleBudgets: [
+      {
+        id: AUDIT_BUNDLE_ID,
+        files: [AUDIT_BUNDLE_MEMBER],
+        limitBytes: bundleLimitBytes,
+      },
+    ],
+    ...(options.sharedInstructionBudgetId
+      ? {
+          instructionSizeBudgets: [
+            {
+              id: AUDIT_BUNDLE_ID,
+              glob: 'missing/*.instructions.md',
+              phaseLimitBytes: 1000,
+              alwaysLoadedLimitBytes: 1000,
+            },
+          ],
+        }
+      : {}),
+  };
+}
+
+const STANDING_RAISE_TO_1100 = {
+  bundle: AUDIT_BUNDLE_ID,
+  standingClass: 'budgetRaise',
+  ceilingPct: 10,
+  limitBytes: 1100,
+  issue: 4887,
+  reason: 'Fixture standing approval for the budget raise.',
+};
+
+const MANUAL_RAISE_TO_1100 = {
+  bundle: AUDIT_BUNDLE_ID,
+  limitBytes: 1100,
+  issue: 3840,
+  reason: 'Fixture manual approval for the budget raise.',
+};
 
 test('selectStricterNoticeUtilizationPct keeps the current value when the base value is missing', () => {
   assert.equal(selectStricterNoticeUtilizationPct(95, undefined), 95);
@@ -263,4 +435,281 @@ test('malformed approval entries never widen a limit', () => {
     [...parseNearCeilingRaiseApprovals(undefined).entries()],
     [],
   );
+});
+
+test('a valid standing budget approval resolves its measured limit', () => {
+  const result = parseStandingRaiseApprovals(
+    [
+      {
+        bundle: 'bundle-a',
+        standingClass: 'budgetRaise',
+        ceilingPct: 10,
+        limitBytes: 1000,
+        issue: 4887,
+        reason: 'supersedes manual approval issue 3840',
+      },
+    ],
+    [{ id: 'bundle-a', limitBytes: 1000, totalBytes: 950 }],
+    98,
+    { enabled: true, maxRaisePct: 10 },
+  );
+  assert.deepEqual([...result.approvals], [['bundle-a', 1000]]);
+  assert.deepEqual(result.errors, []);
+});
+
+test('a disabled or absent standing class ignores its entire approval array', () => {
+  const malformed = { not: 'an array' };
+  const disabled = parseStandingRaiseApprovals(
+    malformed,
+    [{ id: 'bundle-a', limitBytes: 1000, totalBytes: 950 }],
+    98,
+    { enabled: false, maxRaisePct: 10 },
+  );
+  const absent = parseStandingRaiseApprovals(
+    undefined,
+    [{ id: 'bundle-a', limitBytes: 1000, totalBytes: 950 }],
+    98,
+    { enabled: true, maxRaisePct: 10 },
+  );
+  assert.deepEqual([...disabled.approvals], []);
+  assert.deepEqual(disabled.errors, []);
+  assert.deepEqual([...absent.approvals], []);
+  assert.deepEqual(absent.errors, []);
+});
+
+test('an explicitly null standing approval value is invalid when enabled', () => {
+  const result = parseStandingRaiseApprovals(
+    null,
+    [{ id: 'bundle-a', limitBytes: 1000, totalBytes: 950 }],
+    98,
+    { enabled: true, maxRaisePct: 10 },
+  );
+  assert.deepEqual([...result.approvals], []);
+  assert.deepEqual(result.errors, [
+    'contextCeiling.standingRaiseApprovals must be an array',
+  ]);
+});
+
+test('standing entries reject each malformed field and an excessive ceiling', () => {
+  const valid = {
+    bundle: 'bundle-a',
+    standingClass: 'budgetRaise',
+    ceilingPct: 10,
+    limitBytes: 1000,
+    issue: 4887,
+    reason: 'records superseded issue 3840',
+  };
+  const bundles = [{ id: 'bundle-a', limitBytes: 1000, totalBytes: 950 }];
+  const cases: [Record<string, unknown>, RegExp][] = [
+    [{ ...valid, standingClass: 'split' }, /standingClass/],
+    [{ ...valid, ceilingPct: 11 }, /exceeds maxRaisePct/],
+    [{ ...valid, ceilingPct: 1.5 }, /non-negative integer/],
+    [{ ...valid, limitBytes: 1050 }, /multiple of 100/],
+    [{ ...valid, issue: 0 }, /positive integer/],
+    [{ ...valid, reason: '  ' }, /reason must be non-empty/],
+    [{ ...valid, bundle: 'bundle-missing' }, /does not exist in bundleBudgets/],
+    [{ ...valid, extra: true }, /unknown field extra/],
+  ];
+  for (const [entry, expectedError] of cases) {
+    const result = parseStandingRaiseApprovals([entry], bundles, 98, {
+      enabled: true,
+      maxRaisePct: 10,
+    });
+    assert.deepEqual([...result.approvals], []);
+    assert.ok(result.errors.some((error) => expectedError.test(error)));
+  }
+});
+
+test('standing entries reject limits outside either measured-byte bound', () => {
+  const base = {
+    bundle: 'bundle-a',
+    standingClass: 'budgetRaise',
+    ceilingPct: 10,
+    issue: 4887,
+    reason: 'records superseded issue 3840',
+  };
+  const bundles = [{ id: 'bundle-a', limitBytes: 1000, totalBytes: 950 }];
+  const belowMinimum = parseStandingRaiseApprovals(
+    [{ ...base, limitBytes: 900 }],
+    bundles,
+    98,
+    { enabled: true, maxRaisePct: 10 },
+  );
+  const aboveMaximum = parseStandingRaiseApprovals(
+    [{ ...base, limitBytes: 1100 }],
+    bundles,
+    98,
+    { enabled: true, maxRaisePct: 10 },
+  );
+  assert.ok(
+    belowMinimum.errors.some((error) =>
+      /minimum for maxUtilizationPct/.test(error),
+    ),
+  );
+  assert.ok(
+    aboveMaximum.errors.some((error) => /maximum for ceilingPct/.test(error)),
+  );
+});
+
+test('a standing ceiling with no feasible 100-byte limit is rejected', () => {
+  const result = parseStandingRaiseApprovals(
+    [
+      {
+        bundle: 'bundle-a',
+        standingClass: 'budgetRaise',
+        ceilingPct: 0,
+        limitBytes: 1000,
+        issue: 4887,
+        reason: 'records superseded issue 3840',
+      },
+    ],
+    [{ id: 'bundle-a', limitBytes: 1000, totalBytes: 950 }],
+    98,
+    { enabled: true, maxRaisePct: 10 },
+  );
+  assert.deepEqual([...result.approvals], []);
+  assert.ok(
+    result.errors.some((error) =>
+      /no 100-byte limit satisfying maxUtilizationPct and ceilingPct/.test(
+        error,
+      ),
+    ),
+  );
+});
+
+test('duplicate standing entries for one bundle are all rejected', () => {
+  const entry = {
+    bundle: 'bundle-a',
+    standingClass: 'budgetRaise',
+    ceilingPct: 10,
+    limitBytes: 1000,
+    issue: 4887,
+    reason: 'records superseded issue 3840',
+  };
+  const result = parseStandingRaiseApprovals(
+    [entry, entry],
+    [{ id: 'bundle-a', limitBytes: 1000, totalBytes: 950 }],
+    98,
+    { enabled: true, maxRaisePct: 10 },
+  );
+  assert.deepEqual([...result.approvals], []);
+  assert.equal(
+    result.errors.filter((error) => /all are invalid/.test(error)).length,
+    2,
+  );
+});
+
+test('audit-docs applies an enabled standing entry to a near-ceiling bundle raise', (t) => {
+  const { dir, cleanup } = makeAuditFixture(
+    standingAuditManifest(1000),
+    standingAuditManifest(1100, {
+      standingApprovals: [STANDING_RAISE_TO_1100],
+    }),
+    {
+      '.github/idd/config.json': standingBudgetPolicy(true),
+      '.github/instructions/idd-overview-core.instructions.md':
+        AUDIT_CONFIG_OVERVIEW,
+      [AUDIT_BUNDLE_MEMBER]: 'x'.repeat(1000),
+    },
+  );
+  t.after(cleanup);
+
+  const result = runAuditDocs(dir);
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 0, output);
+  assert.match(result.stdout, /documentation audit passed/);
+  assert.doesNotMatch(output, /near-ceiling-ratchet/);
+});
+
+test('audit-docs keeps a manual approval when the standing class is disabled', (t) => {
+  const { dir, cleanup } = makeAuditFixture(
+    standingAuditManifest(1000),
+    standingAuditManifest(1100, {
+      manualApprovals: [MANUAL_RAISE_TO_1100],
+      standingApprovals: [{ ...STANDING_RAISE_TO_1100, limitBytes: 1000 }],
+    }),
+    {
+      '.github/idd/config.json': standingBudgetPolicy(false),
+      '.github/instructions/idd-overview-core.instructions.md':
+        AUDIT_CONFIG_OVERVIEW,
+      [AUDIT_BUNDLE_MEMBER]: 'x'.repeat(1000),
+    },
+  );
+  t.after(cleanup);
+
+  const result = runAuditDocs(dir);
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 0, output);
+  assert.match(result.stdout, /documentation audit passed/);
+  assert.doesNotMatch(output, /near-ceiling-ratchet/);
+});
+
+test('audit-docs applies an enabled standing approval when its bundle id is also an instruction budget id', (t) => {
+  const { dir, cleanup } = makeAuditFixture(
+    standingAuditManifest(1000, { sharedInstructionBudgetId: true }),
+    standingAuditManifest(1100, {
+      sharedInstructionBudgetId: true,
+      standingApprovals: [STANDING_RAISE_TO_1100],
+    }),
+    {
+      '.github/idd/config.json': standingBudgetPolicy(true),
+      '.github/instructions/idd-overview-core.instructions.md':
+        AUDIT_CONFIG_OVERVIEW,
+      [AUDIT_BUNDLE_MEMBER]: 'x'.repeat(1000),
+    },
+  );
+  t.after(cleanup);
+
+  const result = runAuditDocs(dir);
+  const output = result.stdout + result.stderr;
+  assert.equal(result.status, 0, output);
+  assert.match(result.stdout, /documentation audit passed/);
+  assert.doesNotMatch(output, /near-ceiling-ratchet/);
+});
+
+test('audit-docs reports invalid standing entries when no base ref is available', (t) => {
+  const { dir, cleanup } = makeAuditFixture(
+    standingAuditManifest(1000),
+    standingAuditManifest(1000, {
+      standingApprovals: [
+        { ...STANDING_RAISE_TO_1100, ceilingPct: 11 },
+        { ...STANDING_RAISE_TO_1100, issue: 0 },
+        { ...STANDING_RAISE_TO_1100, reason: '' },
+        STANDING_RAISE_TO_1100,
+        STANDING_RAISE_TO_1100,
+      ],
+    }),
+    {
+      '.github/idd/config.json': standingBudgetPolicy(true),
+      '.github/instructions/idd-overview-core.instructions.md':
+        AUDIT_CONFIG_OVERVIEW,
+      [AUDIT_BUNDLE_MEMBER]: 'x'.repeat(1000),
+    },
+  );
+  t.after(cleanup);
+
+  execFileSync('git', ['update-ref', '-d', 'refs/remotes/origin/main'], {
+    cwd: dir,
+    env: fixtureEnv(),
+  });
+  const result = runAuditDocs(dir, {
+    GITHUB_BASE_REF: '',
+    GITHUB_EVENT_PATH: '',
+  });
+  const output = result.stdout + result.stderr;
+
+  assert.equal(result.status, 1, output);
+  assert.match(
+    result.stderr,
+    /near-ceiling-ratchet: .*ceilingPct 11 exceeds maxRaisePct 10/,
+  );
+  assert.match(
+    result.stderr,
+    /near-ceiling-ratchet: .*issue must be a positive integer/,
+  );
+  assert.match(
+    result.stderr,
+    /near-ceiling-ratchet: .*reason must be non-empty/,
+  );
+  assert.match(result.stderr, /near-ceiling-ratchet: .*all are invalid/);
 });
