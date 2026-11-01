@@ -1355,16 +1355,23 @@ export function collectVendoredFiles(
     const dependencies = findHelperSourceDependencies(
       readFileSync(current, 'utf8'),
     );
+    // A dependency outside the package root would become a `../` managed
+    // path that onboarding joins to its source and target roots, so it is
+    // skipped here, as the closure walk skips it (issue #4917).
     for (const specifier of dependencies.imports) {
       const dependency = resolveRelativeImport(current, specifier);
-      if (!dependency) {
+      if (!dependency || !isInsidePackageRoot(packageRoot, dependency)) {
         continue;
       }
       queue.push(dependency);
     }
     for (const delegation of dependencies.delegated) {
       const delegated = resolveDelegatedEntry(current, delegation);
-      if (delegated && statIfPresent(delegated)?.isFile()) {
+      if (
+        delegated &&
+        isInsidePackageRoot(packageRoot, delegated) &&
+        statIfPresent(delegated)?.isFile()
+      ) {
         queue.push(delegated);
       }
     }
@@ -2461,7 +2468,7 @@ function statIfPresent(filePath: string) {
 // catalog entry and bin wrapper in tests/helper-runtime-manifest.test.mts
 // guards it against this repository.
 type SourceToken =
-  | { type: 'name'; value: string }
+  | { type: 'name'; value: string; operator?: boolean }
   | { type: 'string'; value: string }
   | { type: 'punct'; value: string; regexAfter?: boolean }
   | { type: 'template'; value: 'head' | 'middle' | 'tail' }
@@ -2529,8 +2536,10 @@ function tokenizeJavaScript(source: string): SourceToken[] {
   // What each open `{` started: a statement block, an expression (an object
   // literal), or a `${` template substitution.
   const braces: ('block' | 'expression' | 'substitution')[] = [];
-  // Whether each open `(` is the head of an `if`, `for`, `while`, or `with`.
-  const parens: boolean[] = [];
+  // Each open `(`: whether it is the head of an `if`, `for`, `while`, or
+  // `with` (`control`), whether it is a `for` head, and whether that head
+  // has already met its `of` operator.
+  const parens: { control: boolean; forHead: boolean; sawOf: boolean }[] = [];
   let index = source.startsWith('#!') ? skipLineComment(source, 0) : 0;
 
   // A keyword right after `.` is a property name, as in `object.return`.
@@ -2546,6 +2555,7 @@ function tokenizeJavaScript(source: string): SourceToken[] {
     if (last === undefined) return true;
     if (last.type === 'name') {
       const keyword = lastKeyword();
+      if (keyword === 'of') return last.operator === true;
       return keyword !== null && REGEX_AFTER_KEYWORDS.has(keyword);
     }
     if (last.type === 'punct') {
@@ -2565,6 +2575,7 @@ function tokenizeJavaScript(source: string): SourceToken[] {
     if (last === undefined) return true;
     if (last.type === 'name') {
       const keyword = lastKeyword();
+      if (keyword === 'of') return last.operator !== true;
       return keyword === null || !EXPRESSION_KEYWORDS.has(keyword);
     }
     if (last.type !== 'punct') return false;
@@ -2645,14 +2656,24 @@ function tokenizeJavaScript(source: string): SourceToken[] {
       }
     } else if (character === '(') {
       const keyword = lastKeyword();
-      parens.push(keyword !== null && CONTROL_HEAD_KEYWORDS.has(keyword));
+      const forHead =
+        keyword === 'for' ||
+        (keyword === 'await' &&
+          isNameToken(tokens.at(-2), 'for') &&
+          !isPunct(tokens.at(-3), '.'));
+      parens.push({
+        control:
+          forHead || (keyword !== null && CONTROL_HEAD_KEYWORDS.has(keyword)),
+        forHead,
+        sawOf: false,
+      });
       tokens.push({ type: 'punct', value: '(' });
       index += 1;
     } else if (character === ')') {
       tokens.push({
         type: 'punct',
         value: ')',
-        regexAfter: parens.pop() === true,
+        regexAfter: parens.pop()?.control === true,
       });
       index += 1;
     } else if (
@@ -2668,7 +2689,27 @@ function tokenizeJavaScript(source: string): SourceToken[] {
       const start = index;
       index += 1;
       while (isIdentifierPart(source[index])) index += 1;
-      tokens.push({ type: 'name', value: source.slice(start, index) });
+      const value = source.slice(start, index);
+      // `of` is an ordinary identifier except as the operator of a `for`
+      // head, where it follows the binding: a name other than a declaration
+      // or expression keyword (so `for (x in of / 2)` stays division), or the
+      // `]` or `}` of a destructuring pattern.
+      const previous = tokens.at(-1);
+      const head = parens.at(-1);
+      const operator =
+        value === 'of' &&
+        !isPunct(previous, '.') &&
+        head?.forHead === true &&
+        !head.sawOf &&
+        ((previous?.type === 'name' &&
+          !['const', 'let', 'var'].includes(previous.value) &&
+          !EXPRESSION_KEYWORDS.has(previous.value)) ||
+          isPunct(previous, ']') ||
+          isPunct(previous, '}'));
+      if (operator && head !== undefined) head.sawOf = true;
+      tokens.push(
+        operator ? { type: 'name', value, operator } : { type: 'name', value },
+      );
     } else if ((character === '+' || character === '-') && next === character) {
       tokens.push({ type: 'punct', value: `${character}${character}` });
       index += 2;

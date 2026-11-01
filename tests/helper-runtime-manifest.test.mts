@@ -622,6 +622,80 @@ test('the closure scanner reads a regular expression after a control head, a blo
   );
 });
 
+test('the closure scanner treats `of` as division outside a for...of head and as an operator inside one (#4917)', () => {
+  const { packageRoot } = makeRuntimePackageFixture('idd-helper-entry-of-');
+  writeRuntimePackageFile(
+    packageRoot,
+    'scripts/entry.mjs',
+    [
+      "const s = 'x';",
+      "const of = 4; const half = of / 2; import('./after-identifier.mjs'); const third = half / 3;",
+      'for (const item of /`/.exec(s) ?? []) {}',
+      "import './after-operator.mjs';",
+      'for (const of of [of / 2]) {}',
+      "import('./after-binding.mjs'); const rest = half / 4;",
+      "for (const key in of / 2) {} import('./after-in.mjs'); const last = half / 5;",
+      '',
+    ].join('\n'),
+  );
+  const names = [
+    'after-binding',
+    'after-identifier',
+    'after-in',
+    'after-operator',
+  ];
+  for (const name of names) {
+    writeRuntimePackageFile(packageRoot, `scripts/${name}.mjs`, 'export {};');
+  }
+
+  assert.deepEqual(
+    resolveHelperEntryClosure('scripts/entry.mjs', {
+      packageRoot,
+      extraRuntimeFiles: new Map(),
+    }),
+    sortUtf8Paths([
+      'scripts/entry.mjs',
+      ...names.map((name) => `scripts/${name}.mjs`),
+    ]),
+  );
+});
+
+test('collectVendoredFiles never emits a dependency outside the package root (#4917)', () => {
+  const { fixtureRoot, packageRoot } = makeRuntimePackageFixture(
+    'idd-helper-vendored-outside-',
+  );
+  const entryPaths = buildCommandCatalog().map((command) => command.entryPath);
+  for (const entryPath of entryPaths) {
+    writeRuntimePackageFile(packageRoot, entryPath, 'export {};\n');
+  }
+  writeRuntimePackageFile(
+    packageRoot,
+    entryPaths[0],
+    [
+      "import { runHelper } from './run-helper.mjs';",
+      "import '../../outside-import.mjs';",
+      "runHelper('../../outside-delegated.mjs');",
+      '',
+    ].join('\n'),
+  );
+  writeRuntimePackageFile(
+    packageRoot,
+    join(dirname(entryPaths[0]), 'run-helper.mjs'),
+    'export function runHelper() {}\n',
+  );
+  writeFileSync(join(fixtureRoot, 'outside-import.mjs'), 'export {};\n');
+  writeFileSync(join(fixtureRoot, 'outside-delegated.mjs'), 'export {};\n');
+
+  const managed = collectVendoredFiles(packageRoot).map(
+    (file) => file.targetPath,
+  );
+  assert.ok(managed.includes(entryPaths[0]));
+  assert.deepEqual(
+    managed.filter((path) => path.startsWith('..')),
+    [],
+  );
+});
+
 test('every catalog entry and bin wrapper in this repository passes strict closure validation (#4917)', () => {
   const binEntries = readdirSync(join(REPO_ROOT, 'bin'))
     .filter((name) => name.endsWith('.mjs'))
