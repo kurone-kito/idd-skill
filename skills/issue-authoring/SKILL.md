@@ -357,7 +357,8 @@ needs-decision, blocked-by-human, and out-of-scope.
      release — or, under the narrow auto-release exceptions in
      [Authoring hold and release](references/contract.md#authoring-hold-and-release),
      for a single target whose body carried the defer-source marker at
-     Stage 1 publication time (never a marker added later), or for a draft
+     Stage 1 publication time (never a marker added later), for a single
+     self-anchor target under the standing release approval, or for a draft
      carrier, whose creation hold `publish-authoring-hold --shape carrier`
      releases itself — preflight and verify or reuse a matching
      `mode=release` marker for every target (with `supersedes` equal to the
@@ -401,7 +402,8 @@ needs-decision, blocked-by-human, and out-of-scope.
 9. Stop at the single approval boundary: release. Publishing under the
    hold does not by itself authorize starting the IDD execution loop —
    only the user's explicit release request does, except the narrow
-   defer-source auto-release exception in
+   defer-source auto-release exception and the standing release approval for a
+   single self-anchor target, both in
    [Authoring hold and release](references/contract.md#authoring-hold-and-release);
    its carrier creation-hold exception releases a carrier, which never
    enters the loop.
