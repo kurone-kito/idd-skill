@@ -5254,6 +5254,354 @@ process.exit(1);
   }
 });
 
+// #4936: owner records are bound to one session through a session-qualified
+// agent-id that the caller passes from its own persisted state.
+const SESSION_AGENT = 'claude-48429e70';
+const OTHER_SESSION_AGENT = 'claude-9f31c0d2';
+const SESSION_BRANCH = 'issue/3-task';
+
+function sessionClaimEvents(agentId = SESSION_AGENT) {
+  return [
+    {
+      createdAt: '2026-05-12T10:00:00Z',
+      author: { login: 'maintainer' },
+      body: `<!-- claimed-by: ${agentId} claim-session supersedes: none 2026-05-12T10:00:00Z branch: ${SESSION_BRANCH} -->`,
+    },
+    {
+      createdAt: '2026-05-12T10:00:01Z',
+      author: { login: 'maintainer' },
+      body: `<!-- activation-nonce: ${agentId} claim-session nonce-session 2026-05-12T10:00:01Z -->`,
+    },
+  ];
+}
+
+const OCCUPIED_SESSION_WORKTREE: LocalWorktreeInspection = {
+  status: 'occupied',
+  paths: ['/tmp/repo.issue-3-task'],
+  reason: `matching local worktree for ${SESSION_BRANCH}`,
+};
+
+/** Route as a session that read the public claim-id and nonce markers. */
+function routeAsSession(
+  agentId: string | undefined,
+  options: { now?: string; events?: unknown; ownerProof?: boolean } = {},
+) {
+  return evaluateResumeClaimRouting(
+    {
+      claimId: 'claim-session',
+      nonce: 'nonce-session',
+      agentId,
+      now: options.now ?? '2026-05-12T11:00:00Z',
+      events: options.events ?? sessionClaimEvents(),
+    },
+    {
+      isTrustedAuthor: trusted(['maintainer']),
+      inspectLocalWorktree: () => OCCUPIED_SESSION_WORKTREE,
+      // The shared worktree records name the claim's own agent-id, so a
+      // second session reading them would pass every local owner proof.
+      isCurrentSessionOwner: () => options.ownerProof ?? true,
+    },
+  );
+}
+
+test('#4936: the same session resumes its claim with its persisted agent-id', () => {
+  const result = routeAsSession(SESSION_AGENT);
+  assert.equal(result.state, 'already_owned');
+  assert.equal(result.action, 'keep');
+  assert.equal(result.reason, 'claim-id-match');
+  assert.equal(
+    (result as { agent_id_checked?: string }).agent_id_checked,
+    SESSION_AGENT,
+  );
+  assert.equal(
+    result.warnings.some((warning) => warning.includes('session agent-id')),
+    false,
+  );
+});
+
+test('#4936: a competing session of the same family cannot resume the claim even with matching local proofs', () => {
+  const owner = routeAsSession(SESSION_AGENT);
+  const competitor = routeAsSession(OTHER_SESSION_AGENT);
+  assert.equal(owner.state, 'already_owned');
+  assert.equal(competitor.state, 'non_inheritable');
+  assert.equal(competitor.action, 'stop');
+  assert.equal(competitor.reason, 'active-claim-non-stale');
+  assert.equal(
+    (competitor as { agent_id_checked?: string }).agent_id_checked,
+    OTHER_SESSION_AGENT,
+  );
+  assert.ok(
+    competitor.warnings.some((warning) =>
+      warning.includes(
+        `session agent-id ${OTHER_SESSION_AGENT} does not match active claim agent-id ${SESSION_AGENT}`,
+      ),
+    ),
+  );
+  // The owner path, and its owner evidence, never ran for the competitor.
+  assert.equal(competitor.evidence.owner_evidence, undefined);
+});
+
+test('#4936: a session whose agent-id lacks the suffix fails closed', () => {
+  const result = routeAsSession('claude');
+  assert.equal(result.state, 'non_inheritable');
+  assert.equal(result.action, 'stop');
+});
+
+test('#4936: a mismatched session on a stale claim takes the stale route behind the live-worktree guard', () => {
+  const result = routeAsSession(OTHER_SESSION_AGENT, {
+    now: '2026-05-14T11:00:00Z',
+  });
+  assert.equal(result.state, 'local_worktree_occupied');
+  assert.equal(result.action, 'stop');
+  assert.equal(result.reason, 'stale-claim-local-worktree-occupied');
+});
+
+test('#4936: a delegated worker resumes only with the exact agent-id from its brief', () => {
+  // The orchestrator posted the claim with its own session-qualified id and
+  // handed that id to the worker; the worker's own runtime id is different.
+  const withBriefId = routeAsSession(SESSION_AGENT);
+  const withOwnId = routeAsSession('claude-0c7d2e11');
+  assert.equal(withBriefId.state, 'already_owned');
+  assert.equal(withBriefId.action, 'keep');
+  assert.equal(withOwnId.state, 'non_inheritable');
+  assert.equal(withOwnId.action, 'stop');
+});
+
+test('#4936: a matching agent-id still needs the local owner proofs', () => {
+  const result = routeAsSession(SESSION_AGENT, { ownerProof: false });
+  assert.equal(result.state, 'owner_evidence_required');
+  assert.equal(result.action, 'stop');
+});
+
+test('#4936: a legacy claim keeps its route when the caller omits --agent-id', () => {
+  const legacyEvents = sessionClaimEvents('copilot');
+  const result = routeAsSession(undefined, { events: legacyEvents });
+  assert.equal(result.state, 'already_owned');
+  assert.equal(result.action, 'keep');
+  assert.equal('agent_id_checked' in result, false);
+  // Omitting the flag on a session-qualified claim keeps the prior verdict
+  // and output too.
+  const omitted = routeAsSession(undefined);
+  const before = evaluateResumeClaimRouting(
+    {
+      claimId: 'claim-session',
+      nonce: 'nonce-session',
+      now: '2026-05-12T11:00:00Z',
+      events: sessionClaimEvents(),
+    },
+    {
+      isTrustedAuthor: trusted(['maintainer']),
+      inspectLocalWorktree: () => OCCUPIED_SESSION_WORKTREE,
+      isCurrentSessionOwner: () => true,
+    },
+  );
+  assert.deepEqual(omitted, before);
+});
+
+test('#4936: a legacy claim without a claim-id is unaffected by --agent-id', () => {
+  const result = evaluateResumeClaimRouting(
+    {
+      claimId: 'claim-session',
+      agentId: SESSION_AGENT,
+      now: '2026-05-12T11:00:00Z',
+      events: [
+        {
+          createdAt: '2026-05-12T10:00:00Z',
+          author: { login: 'maintainer' },
+          body: `<!-- claimed-by: copilot 2026-05-12T10:00:00Z branch: ${SESSION_BRANCH} -->`,
+        },
+      ],
+    },
+    { isTrustedAuthor: trusted(['maintainer']) },
+  );
+  assert.equal(result.state, 'non_inheritable');
+  assert.equal(result.reason, 'legacy-claim-non-stale');
+});
+
+test('#4936: a forced-handoff successor resumes with the adopted new-agent-id only', () => {
+  const route = (agentId: string) =>
+    evaluateResumeClaimRouting(
+      {
+        claimId: 'claim-new',
+        nonce: 'nonce-new',
+        agentId,
+        now: '2026-05-12T11:00:00Z',
+        events: SUCCESSOR_EVENTS,
+      },
+      {
+        isTrustedAuthor: trusted(['maintainer']),
+        isForcedHandoffEnabled: () => true,
+        isAuthorizedForcedHandoff: (forcedBy) => forcedBy === 'maintainer',
+      },
+    );
+  // SUCCESSOR_EVENTS names `agent-new`, a pre-rule id; a session passing a
+  // different id is not the successor.
+  assert.equal(route('agent-new').state, 'already_owned');
+  assert.equal(route(OTHER_SESSION_AGENT).state, 'non_inheritable');
+});
+
+const SESSION_CLI_CLAIM = {
+  id: 1,
+  node_id: 'IC_session_claim',
+  body: `<!-- claimed-by: ${SESSION_AGENT} claim-session supersedes: none 2026-05-12T10:00:00Z branch: ${SUCCESSOR_BRANCH} -->`,
+  created_at: '2026-05-12T10:00:00Z',
+  user: { login: 'maintainer' },
+};
+
+/**
+ * A primary checkout plus a linked worktree on the claimed branch whose lock
+ * and generated-tokens record carry {@link SESSION_AGENT}, with a tracked
+ * change and an untracked file left by the session's unfinished work.
+ */
+function withSessionSandbox(
+  body: (sandbox: { primary: string; worktree: string }) => void,
+): void {
+  const primary = mkdtempSync(join(tmpdir(), 'idd-session-primary-'));
+  const worktree = join(primary, '..', `${basename(primary)}-wt`);
+  const env = hermeticGitEnv();
+  try {
+    gitIn(primary, ['init', '--quiet', '-b', 'main'], env);
+    writeFileSync(join(primary, 'tracked.txt'), 'base\n');
+    gitIn(primary, ['add', 'tracked.txt'], env);
+    gitIn(primary, ['commit', '--quiet', '-m', 'seed'], env);
+    gitIn(
+      primary,
+      ['worktree', 'add', '--quiet', '-b', SUCCESSOR_BRANCH, worktree, 'main'],
+      env,
+    );
+    acquireClaimLock(worktree, SESSION_AGENT, 'claim-session', false);
+    recordGeneratedClaimTokens(worktree, {
+      agentId: SESSION_AGENT,
+      claimId: 'claim-session',
+      nonce: 'nonce-session',
+    });
+    writeFileSync(join(worktree, 'tracked.txt'), 'unfinished edit\n');
+    writeFileSync(join(worktree, 'untracked.txt'), 'new file\n');
+    body({ primary, worktree });
+  } finally {
+    try {
+      gitIn(primary, ['worktree', 'remove', '--force', worktree], env);
+    } catch {
+      // best-effort; rmSync below still runs
+    }
+    rmSync(worktree, { recursive: true, force: true });
+    rmSync(primary, { recursive: true, force: true });
+  }
+}
+
+test('#4936: --assert --agent-id exits 0 for the owning session and leaves the worktree untouched', () => {
+  const fixture = assertCliFixture([SESSION_CLI_CLAIM]);
+  try {
+    withSessionSandbox(({ primary, worktree }) => {
+      const status = () =>
+        gitIn(
+          worktree,
+          ['status', '--porcelain', '--untracked-files=all'],
+          hermeticGitEnv(),
+        );
+      const head = () =>
+        gitIn(worktree, ['rev-parse', 'HEAD'], hermeticGitEnv());
+      const statusBefore = status();
+      const headBefore = head();
+      const result = runAssertCli(fixture, primary, [
+        '--claim-id',
+        'claim-session',
+        '--agent-id',
+        SESSION_AGENT,
+        '--worktree',
+        worktree,
+        '--assert',
+        ...ASSERT_NON_STALE,
+      ]);
+      assert.equal(result.status, 0, result.stderr);
+      const output = JSON.parse(result.stdout);
+      assert.equal(output.state, 'already_owned');
+      assert.equal(output.agent_id_checked, SESSION_AGENT);
+      assert.equal(output.evidence.owner_evidence.agent_and_branch_match, true);
+      assert.equal(status(), statusBefore);
+      assert.equal(head(), headBefore);
+      assert.equal(
+        readFileSync(join(worktree, 'tracked.txt'), 'utf8'),
+        'unfinished edit\n',
+      );
+      assert.equal(
+        readFileSync(join(worktree, 'untracked.txt'), 'utf8'),
+        'new file\n',
+      );
+    });
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('#4936: --assert --agent-id exits 1 for another session that reads the same markers and records', () => {
+  const fixture = assertCliFixture([SESSION_CLI_CLAIM]);
+  try {
+    withSessionSandbox(({ primary, worktree }) => {
+      const result = runAssertCli(fixture, primary, [
+        '--claim-id',
+        'claim-session',
+        '--agent-id',
+        OTHER_SESSION_AGENT,
+        '--worktree',
+        worktree,
+        '--assert',
+        ...ASSERT_NON_STALE,
+      ]);
+      assert.equal(result.status, 1);
+      assert.equal(
+        result.stderr,
+        'resume-claim-routing --assert: state=non_inheritable action=stop reason=active-claim-non-stale\n',
+      );
+      assert.equal(
+        JSON.parse(result.stdout).active_claim.agent_id,
+        SESSION_AGENT,
+      );
+    });
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('#4936: a bare, short, or empty --agent-id, or one without --claim-id, is a usage error before any gh call', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-resume-agent-id-usage-'));
+  const callLog = join(tempRoot, 'gh-called');
+  const restore = stubExecutable(
+    'gh',
+    `require('fs').writeFileSync(${JSON.stringify(callLog)}, 'called');
+process.exit(1);
+`,
+  );
+  try {
+    for (const [extraArgs, message] of [
+      [
+        ['--claim-id', 'claim-session', '--agent-id', 'claude', '--assert'],
+        /--agent-id "claude" is not session-qualified/,
+      ],
+      [
+        ['--claim-id', 'claim-session', '--agent-id', 'codex-cli'],
+        /--agent-id "codex-cli" is not session-qualified/,
+      ],
+      [
+        ['--claim-id', 'claim-session', '--agent-id', ''],
+        /--agent-id requires a non-empty value/,
+      ],
+      [['--agent-id', SESSION_AGENT], /--agent-id requires --claim-id/],
+    ] as const) {
+      const result = runAssertCli({ policyPath: devNull }, REPO_ROOT, [
+        ...extraArgs,
+      ]);
+      assert.notEqual(result.status, 0);
+      assert.equal(result.stdout, '');
+      assert.match(result.stderr, message);
+    }
+    assert.throws(() => readFileSync(callLog), /ENOENT/);
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 // #3871: fetchOpenLinkedPrReferences also reads the closing references, so a
 // pull request whose body closes the issue (no ConnectedEvent) backs the claim.
 const REPO = 'kurone-kito/idd-skill';

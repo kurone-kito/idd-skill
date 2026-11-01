@@ -69,11 +69,16 @@ phase-specific formats in `idd-review-snapshot.instructions.md`;
 `claimed-by`/`unclaimed-by` comments remain valid for parsing/migration,
 but never create new ones.
 
-- `{agent-id}` is a tool or agent identifier shared across concurrent
-  sessions of the same agent type. For auditability, appending a unique session
-  token is recommended. `{claim-id}`
-  remains the authoritative ownership token — agent-id alone never
-  proves ownership.
+- `{agent-id}` is session-qualified: `<family>-<suffix>` with the runtime's
+  unique session suffix or else a UUID made before A5 (8+ alnum run). Persist
+  it in this session's continuation state before its first claim write.
+  Never use a bare family name, another session's ID, or one read from issue
+  comments or worktree records; forced-handoff adopt-verbatim and orchestrator
+  delegation hand it over. Pass it as `--agent-id` to every
+  `resume-claim-routing --claim-id` owner check you run, even if a command
+  omits it, unless the claim predates this rule; helpers do not pass it yet.
+  `{claim-id}` remains the authoritative ownership token — agent-id alone
+  never proves ownership.
 - `{claim-id}` is an opaque unique token for one active claim lineage
   and is the portable ownership token used with trusted actor and
   session-record checks. Generate a fresh value on every fresh claim or
@@ -194,9 +199,9 @@ Before any step that can mutate git state or publish GitHub side effects
 plan comment, push, rebase, reply, resolve, reviewer request, merge),
 re-read the issue and parse the active claim using the rules in
 `idd-claim.instructions.md`. The active claim must still use your
-current `{claim-id}`. If it does not, the claim was lost. Stop, do not
-post further operational comments, and report the handoff or race. If
-loss came from handoff, the displaced session must not push,
+current `{claim-id}` and `{agent-id}`. If it does not, the claim was lost.
+Stop, do not post further operational comments, and report the handoff or
+race. If loss came from handoff, the displaced session must not push,
 comment, resolve reviews, request reviewers, or merge.
 
 If you posted an activation nonce, confirm it still wins for this
