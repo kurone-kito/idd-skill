@@ -414,24 +414,37 @@ needs-decision, blocked-by-human, and out-of-scope.
 Before the first ledger write, read
 [Ledger storage](references/contract.md#ledger-storage) and follow it. In brief:
 use a supplied scratch root only if it passes its checks; if a supplied root
-fails, stop without trying another root. When no root is supplied, allocate a
-new `issue-authoring-<uuid>` directory with exclusive creation (a non-recursive
-`mkdir`, never `mkdir -p`) in the OS temporary directory, or in the user state
-directory if it already exists, outside every worktree and git directory,
-including mount aliases verified by native filesystem evidence. Keep one
-owner-only `<uuid>.json` ledger per draft, created with exclusive creation;
-rename it to the issue number without overwriting another file. Never share a
-ledger or write one to the repository or a marker, and never reuse another
-session's namespace. A lost ledger starts empty. Unsafe, conflicting, or unreadable
-storage stops the review: report the path and preserve unverified entries; the
-contract permits cleanup only for entries this session created whose identity
-still matches. Send the drafts to a carrier marked `Review: not reviewed`.
+fails, stop and report without trying another root. When no root is supplied,
+allocate a new `issue-authoring-<uuid>` directory with exclusive creation (a
+non-recursive `mkdir`, never `mkdir -p`) in the runtime's absolute temporary
+directory, or in the existing user state directory when its environment value
+is qualified and absolute. On POSIX, qualify both `$XDG_STATE_HOME` and
+`$HOME`; on Windows, qualify `%LOCALAPPDATA%` as a fully rooted path. Keep
+the namespace outside every worktree and Git directory, including mount aliases
+checked through filesystem evidence. Keep one owner-only `<uuid>.json` ledger
+per draft; rename it to the issue number without overwriting another file.
+Never share a ledger or write one to the repository or a marker, and never reuse
+another session's namespace. Unsafe, conflicting, or unreadable storage stops
+the review: report its path and preserve unverified entries; cleanup is limited
+to entries this session created whose recorded identity still matches.
+
+If the identity record is missing after context compaction and retained history
+does not establish whether a root was supplied, stop before any write and
+recover the root and identity from retained evidence or ask the operator. If a
+registered worktree checkout is absent, stop; only the operator may confirm the
+path is absent and run `git worktree prune`, after which the inventory must be
+repeated. Automation never prunes and does not bypass claim or worktree
+recovery.
+
 Resolve every root path component without following links, and require each
 ledger read, write, copy, replacement, and unlink to hold the namespace's
-verified exclusive lock while rechecking ownership and hashes. Fail closed if
-the complete path or lock cannot be verified.
-Instructions-only and same-response self-critique runs follow the same
-procedure; no orchestrator, environment variable, or helper is needed.
+verified exclusive lock while rechecking ownership and hashes. Any run that
+cannot hold the verified directory handle and exclusive lock in one process
+must stop before any ledger write and request a helper-capable process or a
+single-process implementation with those capabilities. On macOS, mode bits
+alone do not prove ACL privacy; stop unless the active helper evaluates ACL
+rights from the verified directory handle. Send unfinished drafts to a carrier
+marked `Review: not reviewed`.
 
 ## Reference Routing
 

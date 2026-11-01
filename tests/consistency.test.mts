@@ -3837,8 +3837,44 @@ const LEDGER_STORAGE_CASES = [
   },
 ];
 
+const LEDGER_STORAGE_VERDICTS = [
+  {
+    input: 'A supplied root that exists and passes',
+    expectedAction: 'Create a new namespace under it (step 1).',
+  },
+  {
+    input: 'No root was supplied for this session',
+    expectedAction:
+      'Allocate under the first candidate root that passes the root checks (step 1).',
+  },
+  {
+    input: 'The identity record is unavailable',
+    expectedAction:
+      'Stop before any ledger write; recover the root and identity from retained session evidence or ask the operator to provide them. Do not infer that no root was supplied.',
+  },
+  {
+    input: 'A supplied root is missing or fails a check',
+    expectedAction:
+      'Preserve everything, report the canonical path and exact failing evidence, and treat the review as unable to finish (see below). Never fall back to another root.',
+  },
+];
+
 // Returns the subsection body after its heading line, so the two copies can be
 // compared even though the docs copy nests it one level deeper.
+function ledgerStorageVerdictAction(section: string, input: string): string {
+  const row = section
+    .split('\n')
+    .find((line) => line.trimStart().startsWith('|') && line.includes(input));
+  assert.ok(row, `missing verdict row: ${input}`);
+  const cells = row.split('|').slice(1, -1).map(normalizeWhitespace);
+  assert.equal(
+    cells.length,
+    3,
+    'verdict row must have input, verdict, and action',
+  );
+  return cells[2];
+}
+
 function ledgerStorageSection(path: string, heading: string): string {
   return extractSection(readText(path), heading, LEDGER_STORAGE_END).slice(
     heading.length,
@@ -3899,6 +3935,17 @@ test('issue-authoring contract defines ledger storage verdicts, allocation, and 
   ]) {
     assert.ok(text.includes(verdict), `missing verdict: ${verdict}`);
   }
+  for (const scenario of LEDGER_STORAGE_VERDICTS) {
+    assert.equal(
+      ledgerStorageVerdictAction(section, scenario.input),
+      scenario.expectedAction,
+      `verdict action must remain in its own table row: ${scenario.input}`,
+    );
+  }
+  assert.doesNotMatch(
+    section,
+    /https:\/\/github\.com\/kurone-kito\/idd-skill\/pull\/4728#(?:discussion_r|issuecomment-)/,
+  );
   for (const [index, scenario] of LEDGER_STORAGE_CASES.entries()) {
     const caseText = ledgerCaseText(section, LEDGER_STORAGE_CASES, index);
     assert.ok(
@@ -3917,7 +3964,6 @@ test('issue-authoring contract defines ledger storage verdicts, allocation, and 
     /Retry with a fresh UUID only when the name already exists, at most three times/,
   );
   assert.equal(section.match(/mkdir -p/g)?.length, 1);
-  assert.match(text, /exclusive creation/);
   assert.match(text, /use POSIX mode 700/);
   assert.match(
     text,
@@ -3963,11 +4009,19 @@ test('issue-authoring contract defines ledger storage verdicts, allocation, and 
     text,
     /For every protected path \(each reported worktree path and each discovered Git directory\), first compare its normalized absolute lexical path against the candidate root using component-aware containment/,
   );
-  assert.ok(
-    text.includes(
-      'If that walk confirms a registered worktree path is absent after checking its readable ancestors, retain the worktree record and its Git common directory, mark the protected-path inventory incomplete, and stop before evaluating any candidate root. A missing checkout does not rule out an external bind mount of one of its subdirectories; a ledger in that alias could be staged after the checkout is remounted. This control gap was identified during review of PR #4728 on 2026-10-28',
-    ),
+  assert.match(
+    text,
+    /If that walk confirms a registered worktree path is absent after checking its readable ancestors, retain the worktree record and its Git common directory, mark the protected-path inventory incomplete, and stop before evaluating any candidate root/,
   );
+  assert.match(
+    text,
+    /A missing checkout does not rule out an external bind mount/,
+  );
+  assert.match(
+    text,
+    /operator must confirm the checkout directory is absent, then run `git worktree prune`/,
+  );
+  assert.match(text, /Automation never prunes/);
   assert.ok(
     text.includes(
       'The root must be owned by the current user or a trusted system principal (POSIX UID 0 or the Windows LocalSystem SID), and must be writable by the current user.',
@@ -4009,7 +4063,7 @@ test('issue-authoring contract defines ledger storage verdicts, allocation, and 
   );
   assert.match(
     text,
-    /Only when no root was supplied may the next candidate be tried/,
+    /Only when session history affirmatively establishes that no root was supplied may the next candidate be tried/,
   );
   assert.match(
     text,
@@ -4068,8 +4122,6 @@ test('issue-authoring contract defines ledger storage verdicts, allocation, and 
       'Before every ledger read, write, copy, rename, or unlink, acquire the namespace lock',
     ),
   );
-  assert.ok(text.includes("On POSIX, use Python's [`fcntl.flock`]"));
-  assert.ok(text.includes("on Windows, use Microsoft's [`LockFileEx`]"));
   assert.match(
     text,
     /Use native handle-relative operations with exclusive creation and no-follow checks/,
@@ -4168,19 +4220,79 @@ test('issue-authoring contract defines ledger storage verdicts, allocation, and 
   );
   assert.match(
     text,
-    /It may remove only a newly created entry whose recorded identity still matches/,
-  );
-});
-
-test('ledger storage needs no orchestrator, environment variable, helper, or session ID (#4711)', () => {
-  const text = normalizeWhitespace(
-    ledgerStorageSection(LEDGER_STORAGE_CONTRACT, '### Ledger storage\n'),
+    /Loss of this record, including after context compaction, is a lost-ledger trigger/,
   );
   assert.match(
     text,
-    /no orchestrator, no particular environment variable, no helper package, and no stable harness session ID/,
+    /If retained session history does not establish whether a root was supplied, stop before writing/,
   );
-  assert.match(text, /instructions-only and same-response self-critique runs/);
+  assert.match(
+    text,
+    /The trusted Git executable is the single absolute executable resolved by the runtime's configured command lookup/,
+  );
+  assert.match(
+    text,
+    /The temporary directory is the absolute path returned by the runtime's standard-library temporary-directory resolver/,
+  );
+  assert.ok(
+    text.includes(
+      'On POSIX, use `$XDG_STATE_HOME` only when it is nonempty and absolute; otherwise use `$HOME/.local/state` only when `$HOME` is nonempty and absolute',
+    ),
+  );
+  assert.match(
+    text,
+    /On Windows, use `%LOCALAPPDATA%` only when it is nonempty and fully qualified by a drive or UNC root/,
+  );
+  assert.match(
+    text,
+    /For this contract, native mount or volume evidence means an OS-provided inventory/,
+  );
+  assert.match(
+    text,
+    /On macOS, ACL entries can grant detailed rights such as deleting child entries beyond what BSD mode bits show/,
+  );
+  assert.match(
+    normalizeWhitespace(text),
+    /Unless the active helper evaluates ACL rights from the verified directory handle .*? treat privacy as detection-only and stop; mode bits alone do not prove owner-only access/,
+  );
+  assert.match(
+    text,
+    /On macOS, if a verified directory handle cannot yield a canonical path/,
+  );
+  assert.ok(
+    text.includes(
+      'The destination `<namespace>/<number>.json` is authoritative only while its recorded identity and SHA-256 still match',
+    ),
+  );
+  assert.match(text, /failed source unlink means the review cannot finish/);
+  assert.match(text, /Structural checks and a live run differ/);
+  assert.match(
+    text,
+    /The procedure may remove only a newly created entry whose recorded identity still matches/,
+  );
+});
+
+test('ledger storage stops when a run cannot retain the required handle and lock (#4810)', () => {
+  const contract = normalizeWhitespace(
+    ledgerStorageSection(LEDGER_STORAGE_CONTRACT, '### Ledger storage\n'),
+  );
+  const skill = normalizeWhitespace(readText(LEDGER_STORAGE_SKILL));
+  assert.match(
+    contract,
+    /requires one process that can retain verified directory handles and an exclusive lock/,
+  );
+  assert.match(contract, /must stop before any ledger write/);
+  assert.match(
+    skill,
+    /Any run that cannot hold the verified directory handle and exclusive lock in one process must stop before any ledger write/,
+  );
+  for (const text of [contract, skill]) {
+    assert.match(
+      text,
+      /helper-capable process or a single-process implementation/,
+    );
+  }
+  assert.doesNotMatch(contract, /no helper package.*works the same/);
 });
 
 test('ledger rules keep namespaces, rejection carry-forward, and lost-ledger semantics in bundle and docs (#4711)', () => {
@@ -4206,11 +4318,11 @@ test('SKILL entry carries the ledger storage summary and link for instructions-o
     '[Ledger storage](references/contract.md#ledger-storage)',
     '[Findings ledger storage](#findings-ledger-storage)',
     "never reuse another session's namespace",
-    'if a supplied root fails, stop without trying another root',
+    'if a supplied root fails, stop and report without trying another root',
     'When no root is supplied, allocate a',
-    'including mount aliases verified by native filesystem evidence.',
-    'preserve unverified entries; the contract permits cleanup only for entries this session created whose identity still matches.',
-    'Instructions-only and same-response self-critique runs follow the same procedure; no orchestrator, environment variable, or helper is needed.',
+    'including mount aliases checked through filesystem evidence.',
+    'Unsafe, conflicting, or unreadable storage stops the review: report its path and preserve unverified entries; cleanup is limited to entries this session created whose recorded identity still matches.',
+    'Any run that cannot hold the verified directory handle and exclusive lock in one process must stop before any ledger write',
   ]) {
     assert.ok(skill.includes(needle), `SKILL.md: missing "${needle}"`);
   }
@@ -4225,10 +4337,12 @@ test('docs copy mirrors the ledger storage subsection and separates structural c
   const docs = normalizeWhitespace(
     ledgerStorageSection(LEDGER_STORAGE_DOCS, '#### Ledger storage\n'),
   );
-  assert.ok(
-    docs.startsWith(contract),
-    'the docs copy must hold the contract subsection verbatim',
+  assert.equal(
+    docs,
+    contract,
+    'the docs copy must exactly match the canonical subsection',
   );
+  assert.match(contract, /Structural checks and a live run differ/);
   assert.match(docs, /Structural checks and a live run differ/);
   assert.match(docs, /they never run an authoring session/);
 });
