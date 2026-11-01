@@ -521,6 +521,29 @@ const STALE_REQUEST_RECOVERY_REASONS = {
   recoveryMarkerOnly: 'recovery-marker-only-no-request-marker',
 } as const;
 
+/**
+ * #4877: true when a completed Copilot review names `prHeadSha`. The review
+ * list is narrowed to that head before the latest review is chosen, so a
+ * later review of an older commit cannot hide an earlier review of the
+ * current head. The pending path uses this; the non-pending path keeps
+ * comparing the latest review's commit.
+ */
+export function hasCurrentHeadCopilotReview(
+  reviews: ReviewPayload[],
+  prHeadSha: string,
+  primaryBotLogin: string,
+): boolean {
+  const headSha = prHeadSha.toLowerCase();
+  return (
+    findLastCopilotReviewCommit(
+      reviews.filter(
+        (review) => String(review.commit_id ?? '').toLowerCase() === headSha,
+      ),
+      primaryBotLogin,
+    ) !== ''
+  );
+}
+
 export function evaluateStaleRequestRecoveryAction(input: {
   copilotPending: boolean;
   copilotPendingCoversHead: boolean;
@@ -570,12 +593,15 @@ export function evaluateStaleRequestRecoveryAction(input: {
    */
   settledWindowMinutes?: number;
   /**
-   * True when the latest completed Copilot review (the caller's
-   * `lastCopilotCommit`, after the #3265 overview-body filter) names the
-   * current PR HEAD. Such a review proves the request reached the reviewer,
-   * so the non-pending path returns `not-applicable` before the elapsed or
-   * cap checks. Omitted or `false` keeps the existing routing. Consulted only
-   * on the non-pending path, not the pending path.
+   * True when a completed Copilot review names the current PR HEAD. On the
+   * non-pending path this is the latest review (the caller's
+   * `lastCopilotCommit`, after the #3265 overview-body filter). On the
+   * pending path it is any such review, found by
+   * {@link hasCurrentHeadCopilotReview} (#4877). Such a review proves the
+   * request reached the reviewer, so the path returns `not-applicable`
+   * (`proven-covers-head`) before the cap check: on the pending path after
+   * its same-head and covers-head checks, and on the non-pending path before
+   * the elapsed and cap checks. Omitted or `false` keeps the existing routing.
    */
   currentHeadReviewExists?: boolean;
 }): StaleRequestRecoveryAction {
@@ -607,6 +633,16 @@ export function evaluateStaleRequestRecoveryAction(input: {
       };
     }
     if (input.copilotPendingCoversHead) {
+      return {
+        action: 'not-applicable',
+        reason: STALE_REQUEST_RECOVERY_REASONS.provenCoversHead,
+      };
+    }
+    // A completed Copilot review of this HEAD is the same proof the
+    // non-pending path uses below (#4718): the pending request reached the
+    // reviewer. Checked before the cap, so an exhausted budget still yields
+    // proven-covers-head when that review exists (#4877).
+    if (input.currentHeadReviewExists === true) {
       return {
         action: 'not-applicable',
         reason: STALE_REQUEST_RECOVERY_REASONS.provenCoversHead,
@@ -1206,8 +1242,11 @@ export function readAdvisoryWaitState(
     // comparison lowercases it, the same normalization
     // buildCopilotRecoverySummary applies. Unlike the copilotDeclinedHead
     // comparison above, this one does not rely on the caller's casing.
-    currentHeadReviewExists:
-      String(summary.lastCopilotCommit ?? '').toLowerCase() === prHeadSha,
+    // #4877: on the pending path, any completed review of this head counts,
+    // not only the latest review, which may name an older commit.
+    currentHeadReviewExists: summary.copilotPending
+      ? hasCurrentHeadCopilotReview(reviews, prHeadSha, primaryBotLogin)
+      : String(summary.lastCopilotCommit ?? '').toLowerCase() === prHeadSha,
   });
 
   return {
