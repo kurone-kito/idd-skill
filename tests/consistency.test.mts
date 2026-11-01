@@ -4054,9 +4054,15 @@ test('issue-authoring contract defines ledger storage verdicts, allocation, and 
   );
   assert.match(
     text,
-    /The stop message names the missing path and this operator recovery step: the operator must confirm the checkout directory is absent, then run `git worktree prune`/,
+    /The stop message names the missing path and this operator recovery step: the operator must confirm the checkout directory is absent, then remove only that record with `git worktree remove --force <path>`/,
   );
-  assert.match(text, /Automation never prunes/);
+  // A plain prune is clone-wide, so the recovery never prescribes it (#4810).
+  assert.match(
+    text,
+    /Never use a plain `git worktree prune` here: it is clone-wide/,
+  );
+  assert.doesNotMatch(text, /then run `git worktree prune`/);
+  assert.match(text, /Automation never prunes or removes worktree records/);
   assert.match(text, /Automation must never prune or edit Git metadata/);
   assert.ok(
     text.includes(
@@ -4386,7 +4392,7 @@ test('SKILL entry carries the ledger storage summary and link for instructions-o
     'Unsafe, conflicting, or unreadable storage stops the review: report its path and preserve unverified entries; cleanup is limited to entries this session created whose recorded identity still matches.',
     'A lost ledger starts empty. Losing the identity record, including after context compaction, loses the ledger:',
     'when history does not show whether a root was supplied, write no ledger and ask the operator.',
-    'stop with a message that names the path and the operator step: the operator confirms the path is absent and runs `git worktree prune`',
+    'stop with a message that names the path and the operator step: the operator confirms the path is absent and removes only that record with `git worktree remove --force <path>`, never a clone-wide `git worktree prune`',
     'Use `$XDG_STATE_HOME`, `$HOME`, or `%LOCALAPPDATA%` only when its value is a fully qualified absolute path',
     "On macOS, check the root's ACL through the verified handle, because the mode bits do not show it.",
   ]) {

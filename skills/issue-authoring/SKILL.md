@@ -434,9 +434,11 @@ compaction, loses the ledger: allocate a new namespace under the supplied root
 when retained history shows one; when history does not show whether a root was
 supplied, write no ledger and ask the operator. If a registered worktree
 checkout is absent, stop with a message that names the path and the operator
-step: the operator confirms the path is absent and runs `git worktree prune`,
-and the next run repeats the inventory. Automation never prunes and does not
-bypass claim or worktree recovery.
+step: the operator confirms the path is absent and removes only that record
+with `git worktree remove --force <path>`, never a clone-wide
+`git worktree prune`, and the next run repeats the inventory. Automation never
+prunes or removes worktree records and does not bypass claim or worktree
+recovery.
 
 Resolve every root path component without following links, and require each
 ledger read, write, copy, replacement, and unlink to hold the namespace's

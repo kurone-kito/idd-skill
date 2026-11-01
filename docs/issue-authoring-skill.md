@@ -1234,9 +1234,15 @@ could be staged after the checkout is remounted.
 This control gap was identified during security review of PR #4728 on
 2026-10-28 (preventive; no observed incident yet). The stop message names the
 missing path and this operator recovery step: the operator must confirm the
-checkout directory is absent, then run `git worktree prune` in that repository,
-and the next run repeats the full inventory. Automation never prunes, and this
-recovery does not bypass claim or worktree recovery.
+checkout directory is absent, then remove only that record with
+`git worktree remove --force <path>`, and the next run repeats the full
+inventory. If the record is detached, the operator first points a ref at its
+`HEAD` commit, so removing the record cannot leave that commit unreachable.
+Never use a plain `git worktree prune` here: it is clone-wide, so it can also
+remove other records, such as one whose checkout is only on unmounted storage,
+before anyone has checked them (preventive; no observed incident yet).
+Automation never prunes or removes worktree records, and this recovery does not
+bypass claim or worktree recovery.
 
 Automation must never prune or edit Git metadata. Access denial,
 an I/O or device error, a symbolic link or reparse point, or any ambiguous
