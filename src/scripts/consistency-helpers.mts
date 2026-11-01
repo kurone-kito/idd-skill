@@ -1520,12 +1520,10 @@ export function collectDuplicateSyncPairTargets(
 
 // --- engines.node range mirror guard (#1706) --------------------------------
 //
-// `package.json`'s `engines.node` range is hand-mirrored across ~12 files
-// (two inline CI floor-assert scripts, a source-code default, prose in
-// three CONTRIBUTING translations and three docs pages, plus the plain
-// low-bound version pinned in .nvmrc/.node-version/.tool-versions) with no
-// guard. Sharing one drift check here means the next engines bump that
-// misses one mirror fails the audit instead of silently drifting.
+// `package.json`'s `engines.node` range is repeated in helper defaults,
+// documentation, and low-bound version files. Workflow floor assertions read
+// the checked-out package.json directly; ENGINES_RANGE_MIRRORS below covers
+// only the remaining copies that need a drift check.
 
 export type EnginesRangeMirrorMode =
   | 'full-range'
@@ -1539,6 +1537,10 @@ export interface EnginesRangeMirrorSpec {
 }
 
 /**
+ * ENGINES_RANGE_MIRRORS lists files that still repeat package.json's
+ * `engines.node` range or its 22 low bound. Workflow floor assertions read
+ * package.json after checkout instead of joining that set.
+ *
  * Parses `^<v1>.<x>.<y> (|| ^<vN>.<x>.<y>)* || >=<high>.<x>.<y>` -- one or
  * more `^` clauses, in written order, followed by exactly one trailing `>=`
  * clause -- into an ordered list of version strings (the `>=` clause last).
