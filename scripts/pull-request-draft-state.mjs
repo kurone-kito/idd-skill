@@ -264,6 +264,9 @@ export function evaluatePullRequestDraftTransition(request, deps) {
   const verifyRefusal = refusalFor(verify.state, request);
   const matchesTarget =
     verifyRefusal === null && verify.state.isDraft === wantDraft;
+  // A failed request whose state already matches is `unverified`, not
+  // `transitioned`: someone else may have made the change, so the helper does
+  // not claim its own success.
   if (matchesTarget) {
     return mutationOk
       ? {
@@ -283,7 +286,11 @@ export function evaluatePullRequestDraftTransition(request, deps) {
           mutationSent: true,
         };
   }
-  if (!mutationOk && verify.state.isDraft === first.state.isDraft) {
+  if (
+    !mutationOk &&
+    verifyRefusal === null &&
+    verify.state.isDraft === first.state.isDraft
+  ) {
     return {
       ...base,
       verdict: 'refused',

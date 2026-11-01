@@ -69,7 +69,7 @@ export interface DraftTransitionReport {
   verdict: DraftTransitionVerdict;
   target: DraftTarget;
   expectedHeadSha: string;
-  /** The last state read from GitHub, or `null` when no read succeeded. */
+  /** The state from the final read, or `null` when that read failed. */
   observed: PullRequestState | null;
   refusal: RefusalCode | null;
   /** Human-readable detail for the verdict or refusal. */
@@ -372,6 +372,9 @@ export function evaluatePullRequestDraftTransition(
   const matchesTarget =
     verifyRefusal === null && verify.state.isDraft === wantDraft;
 
+  // A failed request whose state already matches is `unverified`, not
+  // `transitioned`: someone else may have made the change, so the helper does
+  // not claim its own success.
   if (matchesTarget) {
     return mutationOk
       ? {
@@ -391,7 +394,11 @@ export function evaluatePullRequestDraftTransition(
           mutationSent: true,
         };
   }
-  if (!mutationOk && verify.state.isDraft === first.state.isDraft) {
+  if (
+    !mutationOk &&
+    verifyRefusal === null &&
+    verify.state.isDraft === first.state.isDraft
+  ) {
     return {
       ...base,
       verdict: 'refused',

@@ -354,6 +354,17 @@ test('a pre-mutation read that shows the pull request merged is refused with no 
   assert.equal(gh.mutationCalls().length, 0);
 });
 
+test('a failed mutation followed by a merged post-change read is unverified, not refused', () => {
+  const gh = fakeGh({
+    reads: [ok(pr()), ok(pr()), ok(pr({ state: 'closed', merged: true }))],
+    mutation: MUTATION_FAIL,
+  });
+  const report = evaluatePullRequestDraftTransition(request(), gh.deps);
+  assert.equal(report.verdict, 'unverified');
+  assert.equal(report.refusal, 'merged');
+  assert.equal(report.mutationSent, true);
+});
+
 test('a pre-mutation read that already shows the target state sends no mutation', () => {
   const gh = fakeGh({
     reads: [ok(pr({ draft: false })), ok(pr({ draft: true }))],
