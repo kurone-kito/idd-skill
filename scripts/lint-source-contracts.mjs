@@ -282,9 +282,13 @@ function detectEntryContracts(files) {
         ),
       );
     }
-    const guardMessageStart = text.indexOf(
+    const guardMessageMarkerStart = text.indexOf(
       "node-runtime-guard: this repository's CLI entry points require",
     );
+    const guardMessageStart =
+      guardMessageMarkerStart > 0 && text[guardMessageMarkerStart - 1] === '`'
+        ? guardMessageMarkerStart - 1
+        : -1;
     const guardMessageEnd =
       guardMessageStart === -1
         ? -1
@@ -316,9 +320,14 @@ function detectEntryContracts(files) {
       guardMessage.matchAll(/\$\{\s*([^}]+?)\s*\}/g),
       (match) => match[1]?.trim(),
     );
+    const guardMessageOutsideTemplateLiterals = guardMessage.replace(
+      /`(?:\\[\s\S]|[^`\\])*`/g,
+      '',
+    );
     if (
       guardMessageEnd === -1 ||
       enginesVersionToken.test(guardMessageWithoutFeatureVersions) ||
+      !/^[\s+]*,?$/.test(guardMessageOutsideTemplateLiterals) ||
       guardMessageInterpolations.some(
         (expression) => expression !== 'process.version',
       )
@@ -327,7 +336,7 @@ function detectEntryContracts(files) {
         violation(
           'RUNTIME-GUARD-STANDALONE-EXEMPTION',
           `src/scripts/${name}`,
-          'inlined guard message must not copy an engines.node range',
+          'inlined guard message must not copy an engines.node range or add nonliteral expressions',
         ),
       );
     }
