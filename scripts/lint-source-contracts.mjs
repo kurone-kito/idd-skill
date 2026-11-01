@@ -288,38 +288,36 @@ function detectEntryContracts(files) {
     const guardMessageMarker =
       "node-runtime-guard: this repository's CLI entry points require";
     const guardMessageMarkerStart = text.indexOf(guardMessageMarker);
-    // #4927: scan the whole write() argument, not only from the template
-    // literal, so an expression concatenated before the template is caught.
-    // Take the first write call after the guard condition, so call text in a
-    // comment or a second write before the template stays inside the slice.
-    const guardWriteCall = 'process.stderr.write(';
-    const guardWriteCallStart =
-      guardCondition === null
-        ? -1
-        : text.indexOf(
-            guardWriteCall,
-            guardCondition.index + guardCondition[0].length,
-          );
-    // Require a single marker: a clean copy of the diagnostic would otherwise
-    // hide a prefixed second copy that the slice never reaches.
+    // #4927: audit the guard block as one shape instead of searching for a
+    // start and an end. The block must open with `process.stderr.write(` and
+    // close with `);`, `process.exit(1);`, and `}`, with only whitespace
+    // between those parts. The captured write() argument is the slice, so a
+    // spaced call, another output call, or a statement before or after the
+    // write call either leaves code in the slice or matches nothing.
+    const guardBlock =
+      /typeof import\.meta\.main\s*!==\s*'boolean'\s*\)\s*\{\s*process\.stderr\.write\(([\s\S]*?)\);\s*process\.exit\(1\);\s*\}/d.exec(
+        text,
+      );
+    const guardArgument = guardBlock?.indices?.[1];
     const guardMessageStart =
-      guardMessageMarkerStart > 0 &&
-      text[guardMessageMarkerStart - 1] === '`' &&
-      text.indexOf(guardMessageMarker, guardMessageMarkerStart + 1) === -1 &&
-      guardWriteCallStart !== -1 &&
-      guardWriteCallStart + guardWriteCall.length < guardMessageMarkerStart
-        ? guardWriteCallStart + guardWriteCall.length
-        : -1;
-    // Search the end from the marker, so the slice always holds the marker
-    // even when another complete write call comes before the guard's.
+      guardArgument === undefined ? -1 : guardArgument[0];
+    // Drop the whitespace before `);` so the trailing comma ends the slice.
     const guardMessageEnd =
-      guardMessageStart === -1
+      guardArgument === undefined
         ? -1
-        : text.indexOf('\n    );', guardMessageMarkerStart);
-    const guardMessage =
-      guardMessageStart === -1 || guardMessageEnd === -1
-        ? ''
-        : text.slice(guardMessageStart, guardMessageEnd);
+        : guardMessageStart +
+          text.slice(guardMessageStart, guardArgument[1]).trimEnd().length;
+    // The marker must open a template inside the slice and appear only once:
+    // a clean copy of the diagnostic would otherwise hide a prefixed copy.
+    const guardMessageValid =
+      guardMessageStart !== -1 &&
+      guardMessageMarkerStart > guardMessageStart &&
+      guardMessageMarkerStart < guardMessageEnd &&
+      text[guardMessageMarkerStart - 1] === '`' &&
+      text.indexOf(guardMessageMarker, guardMessageMarkerStart + 1) === -1;
+    const guardMessage = guardMessageValid
+      ? text.slice(guardMessageStart, guardMessageEnd)
+      : '';
     const enginesVersionToken =
       /(?:^|[^\w])(?:[~^<>]=?\s*)?(?:v?\d+(?:\.(?:\d+|[xX*])){0,2}|\*)(?![\w])/;
     if (
@@ -348,7 +346,7 @@ function detectEntryContracts(files) {
       '',
     );
     if (
-      guardMessageEnd === -1 ||
+      !guardMessageValid ||
       enginesVersionToken.test(guardMessageWithoutFeatureVersions) ||
       !/^[\s+]*,?$/.test(guardMessageOutsideTemplateLiterals) ||
       guardMessageInterpolations.some(

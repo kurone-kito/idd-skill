@@ -340,6 +340,20 @@ test('standalone guard contract rejects a range concatenated before the template
       ) +
       sourceWithRangeConstant.slice(guardCallEnd);
     assert.ok(duplicatedPrefixedCall.includes('ENGINES_RANGE + `node-runtime'));
+    const spacedCallCommentDecoy = decoyCallCommentPrefix.replace(
+      '    process.stderr.write(\n',
+      '    process.stderr.write (\n',
+    );
+    assert.notEqual(spacedCallCommentDecoy, decoyCallCommentPrefix);
+    const statementAfterCall =
+      sourceWithRangeConstant.slice(0, guardCallEnd) +
+      '\n    process.stderr.write(ENGINES_RANGE);' +
+      sourceWithRangeConstant.slice(guardCallEnd);
+    const otherSinkBeforeCall = sourceWithRangeConstant.replace(
+      '    process.stderr.write(\n',
+      '    console.error(ENGINES_RANGE);\n    process.stderr.write(\n',
+    );
+    assert.notEqual(otherSinkBeforeCall, sourceWithRangeConstant);
 
     for (const mutatedSource of [
       sameLinePrefix,
@@ -349,6 +363,9 @@ test('standalone guard contract rejects a range concatenated before the template
       earlierWriteCall,
       decoyWriteBeforePrefix,
       duplicatedPrefixedCall,
+      spacedCallCommentDecoy,
+      statementAfterCall,
+      otherSinkBeforeCall,
     ]) {
       writeFileSync(sourcePath, mutatedSource);
       const before = snapshot(fixture.root);
