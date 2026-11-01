@@ -7,7 +7,7 @@
 import { parseCliArgs } from './cli-args.mts';
 import {
   GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-  ghApiJson,
+  ghTextUnbounded,
   resolveGhOwnerRepo,
 } from './gh-exec.mts';
 import type { HelperCliResult } from './helper-cli-runner.mts';
@@ -22,7 +22,7 @@ const SEARCH_PAGE_SIZE = 100;
 const SEARCH_RESULT_CAP = 1000;
 const MARKER_PREFIX = '<!-- idd-skill-standing-approval:';
 const MARKER_PATTERN =
-  /^<!-- idd-skill-standing-approval: class=(budgetRaise|split|release); set=(none|set-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}); anchor=(none|[A-Za-z0-9-]+\/[A-Za-z0-9_.-]+#[1-9][0-9]*); ceiling=([^;\s<>]+); option=([a-z0-9-]+) -->$/;
+  /^<!-- idd-skill-standing-approval: class=(budgetRaise|split|release); set=(none|[A-Za-z0-9][A-Za-z0-9._:-]{0,127}); anchor=(none|[A-Za-z0-9-]+\/[A-Za-z0-9_.-]+#[1-9][0-9]*); ceiling=([^;\s<>]+); option=([a-z0-9-]+) -->$/;
 
 export type StandingApprovalClass = 'budgetRaise' | 'split' | 'release';
 
@@ -57,12 +57,26 @@ interface IssueComment {
   body: string;
 }
 
-const FLAG_SPEC = {
+const STANDING_APPROVAL_REPORT_FLAG_SPEC = {
   '--owner': { type: 'string', default: '' },
   '--repo': { type: 'string', default: '' },
   '--format': { type: 'string', default: 'json' },
   '--help': { type: 'boolean', short: 'h' },
 } as const;
+
+/**
+ * Read one REST page without a fixed stdout buffer. Search results and
+ * comment bodies are user-authored and can exceed execFileSync's 1 MiB
+ * default even when the request is limited to 100 rows. ghTextUnbounded
+ * captures through a temporary file and keeps the normal load-control and
+ * GHES-host handling.
+ */
+function readGhApiJsonUnbounded(path: string): unknown {
+  const raw = ghTextUnbounded(['api', path], {
+    timeout: GH_TEXT_LOOP_TIMEOUT_OPTIONS.timeout,
+  });
+  return JSON.parse(raw.trim() || '{}');
+}
 
 /** Parse one complete record line using the grammar recorded in issue #4886. */
 export function parseStandingApprovalRecordLine(
@@ -224,7 +238,7 @@ function fetchIssueComments(
 export function fetchStandingApprovalReport(
   owner: string,
   repo: string,
-  api: StandingApprovalApi = ghApiJson,
+  api: StandingApprovalApi = readGhApiJsonUnbounded,
 ): StandingApprovalReport {
   const conversationNumbers = fetchCandidateConversationNumbers(
     owner,
@@ -310,7 +324,10 @@ function printHelp(): void {
 }
 
 function runCli(): HelperCliResult {
-  const { values, help } = parseCliArgs(process.argv.slice(2), FLAG_SPEC);
+  const { values, help } = parseCliArgs(
+    process.argv.slice(2),
+    STANDING_APPROVAL_REPORT_FLAG_SPEC,
+  );
   if (help) {
     printHelp();
     return 0;

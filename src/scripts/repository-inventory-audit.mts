@@ -101,6 +101,7 @@ export const COVERED_HELPERS = [
   'select-desynced-index',
   'snapshot-issue-body-corpus',
   'stalled-session-quiet-check',
+  'standing-approval-report',
   'suitability-close-execute',
   'suitability-triage',
   'sweep-authoring-markers',

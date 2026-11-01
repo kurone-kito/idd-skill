@@ -77,6 +77,13 @@ test('parseStandingApprovalRecordLine rejects malformed fields and class ceiling
   }
 });
 
+test('parseStandingApprovalRecordLine accepts an opaque persisted set ID', () => {
+  const parsed = parseStandingApprovalRecordLine(
+    VALID_BUDGET.replace(/set=[^;]+/, 'set=legacy:authoring_set.42'),
+  );
+  assert.equal(parsed?.set, 'legacy:authoring_set.42');
+});
+
 test('fetchStandingApprovalReport lists every parsed record and counts malformed lines', () => {
   const calls: string[] = [];
   const report = fetchStandingApprovalReport(
@@ -175,6 +182,40 @@ test('fetchStandingApprovalReport paginates complete search results', () => {
     /duplicate conversations/,
   );
   assert.equal(commentFetches, 0);
+});
+
+test('fetchStandingApprovalReport follows full comment pages', () => {
+  const calls: string[] = [];
+  const report = fetchStandingApprovalReport('acme', 'widgets', (path) => {
+    calls.push(path);
+    if (path.startsWith('search/issues?')) return searchPage([42]);
+    const page = Number(new URLSearchParams(path.split('?')[1]).get('page'));
+    if (page === 1) {
+      return Array.from({ length: 100 }, () => ({ body: 'ordinary comment' }));
+    }
+    if (page === 2) return [{ body: VALID_BUDGET }];
+    throw new Error(`unexpected comment page ${page}`);
+  });
+
+  assert.deepEqual(report.records, [
+    {
+      class: 'budgetRaise',
+      set: 'set-a734a6d5-f8d9-4d9a-a0c5-8eed2dcc1b12',
+      anchor: 'kurone-kito/idd-skill#4883',
+      ceiling: '5',
+      option: 'option-a',
+      issueNumber: 42,
+    },
+  ]);
+  assert.ok(
+    calls.some((path) => path.endsWith('/comments?per_page=100&page=2')),
+  );
+  assert.equal(
+    calls.filter((path) =>
+      path.startsWith('repos/acme/widgets/issues/42/comments?'),
+    ).length,
+    2,
+  );
 });
 
 test('fetchStandingApprovalReport returns an empty complete report for no matches', () => {
@@ -280,5 +321,38 @@ else { process.stderr.write('unexpected API path\\n'); process.exitCode = 4; }
   } finally {
     restore();
     rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('CLI reads oversized search and comment pages without a stdout buffer cap', () => {
+  const restore = stubExecutable(
+    'gh',
+    `const args = process.argv.slice(2);
+if (args[0] === 'auth' && args[1] === 'token') process.stdout.write('token');
+else if (args[0] === 'api' && args[1].startsWith('search/issues?')) {
+  process.stdout.write(JSON.stringify({total_count:1,incomplete_results:false,items:[{number:42,body:'x'.repeat(2*1024*1024)}]}));
+} else if (args[0] === 'api' && args[1].startsWith('repos/acme/widgets/issues/42/comments?')) {
+  process.stdout.write(JSON.stringify([{body:'x'.repeat(2*1024*1024)+'\\n'+${JSON.stringify(VALID_BUDGET)}}]));
+} else { process.stderr.write('unexpected gh command\\n'); process.exitCode = 4; }
+`,
+  );
+  try {
+    const result = spawnSync(
+      process.execPath,
+      [CLI_ENTRY, '--owner', 'acme', '--repo', 'widgets'],
+      { encoding: 'utf8' },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    const report = JSON.parse(result.stdout) as {
+      records: Array<{ issueNumber: number; set: string }>;
+    };
+    assert.equal(report.records.length, 1);
+    assert.equal(report.records[0]?.issueNumber, 42);
+    assert.equal(
+      report.records[0]?.set,
+      'set-a734a6d5-f8d9-4d9a-a0c5-8eed2dcc1b12',
+    );
+  } finally {
+    restore();
   }
 });

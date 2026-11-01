@@ -5,7 +5,7 @@
 import { parseCliArgs } from './cli-args.mjs';
 import {
   GH_TEXT_LOOP_TIMEOUT_OPTIONS,
-  ghApiJson,
+  ghTextUnbounded,
   resolveGhOwnerRepo,
 } from './gh-exec.mjs';
 import {
@@ -19,13 +19,26 @@ const SEARCH_PAGE_SIZE = 100;
 const SEARCH_RESULT_CAP = 1000;
 const MARKER_PREFIX = '<!-- idd-skill-standing-approval:';
 const MARKER_PATTERN =
-  /^<!-- idd-skill-standing-approval: class=(budgetRaise|split|release); set=(none|set-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}); anchor=(none|[A-Za-z0-9-]+\/[A-Za-z0-9_.-]+#[1-9][0-9]*); ceiling=([^;\s<>]+); option=([a-z0-9-]+) -->$/;
-const FLAG_SPEC = {
+  /^<!-- idd-skill-standing-approval: class=(budgetRaise|split|release); set=(none|[A-Za-z0-9][A-Za-z0-9._:-]{0,127}); anchor=(none|[A-Za-z0-9-]+\/[A-Za-z0-9_.-]+#[1-9][0-9]*); ceiling=([^;\s<>]+); option=([a-z0-9-]+) -->$/;
+const STANDING_APPROVAL_REPORT_FLAG_SPEC = {
   '--owner': { type: 'string', default: '' },
   '--repo': { type: 'string', default: '' },
   '--format': { type: 'string', default: 'json' },
   '--help': { type: 'boolean', short: 'h' },
 };
+/**
+ * Read one REST page without a fixed stdout buffer. Search results and
+ * comment bodies are user-authored and can exceed execFileSync's 1 MiB
+ * default even when the request is limited to 100 rows. ghTextUnbounded
+ * captures through a temporary file and keeps the normal load-control and
+ * GHES-host handling.
+ */
+function readGhApiJsonUnbounded(path) {
+  const raw = ghTextUnbounded(['api', path], {
+    timeout: GH_TEXT_LOOP_TIMEOUT_OPTIONS.timeout,
+  });
+  return JSON.parse(raw.trim() || '{}');
+}
 /** Parse one complete record line using the grammar recorded in issue #4886. */
 export function parseStandingApprovalRecordLine(line) {
   const match = MARKER_PATTERN.exec(line);
@@ -160,7 +173,11 @@ function fetchIssueComments(owner, repo, issueNumber, api) {
   }
 }
 /** Fetch and parse every comment thread identified by GitHub's comment search. */
-export function fetchStandingApprovalReport(owner, repo, api = ghApiJson) {
+export function fetchStandingApprovalReport(
+  owner,
+  repo,
+  api = readGhApiJsonUnbounded,
+) {
   const conversationNumbers = fetchCandidateConversationNumbers(
     owner,
     repo,
@@ -234,7 +251,10 @@ function printHelp() {
 `);
 }
 function runCli() {
-  const { values, help } = parseCliArgs(process.argv.slice(2), FLAG_SPEC);
+  const { values, help } = parseCliArgs(
+    process.argv.slice(2),
+    STANDING_APPROVAL_REPORT_FLAG_SPEC,
+  );
   if (help) {
     printHelp();
     return 0;

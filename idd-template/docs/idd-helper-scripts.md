@@ -4249,6 +4249,8 @@ Rules:
 
 - Command: `node scripts/standing-approval-report.mjs` with optional
   `--owner`, `--repo`, and `--format json|table` flags.
+- Source-repo internal helper; not distributed via the package-manager /
+  ephemeral-npx profiles.
 - Output: stable JSON by default, with one record per valid line, its
   issue/PR number, repository, conversation count, and malformed-line
   count. `--format table` is for operator reading.
@@ -4256,7 +4258,8 @@ Rules:
   reads each matched thread and validates actual lines against issue
   `#4886`'s grammar. It is read-only. Incomplete search, GitHub's
   1,000-result ceiling, malformed responses, or a failed comment-page
-  read produce an error and no partial report.
+  read produce an error and no partial report (preventive; no observed
+  incident yet).
 - Quick read-only fallback (prints marker lines for manual inspection):
 
   ```sh
