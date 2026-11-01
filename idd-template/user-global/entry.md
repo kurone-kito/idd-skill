@@ -1,33 +1,26 @@
 # IDD entry (user-global)
 
-Apply only in a Git repo for IDD issue/PR work.
+In Git repos; IDD issues/PRs only.
 
-Before IDD work, run `idd-activation --session-id <id>` with the stable
-harness ID; read JSON. If absent from `PATH`, use
-`~/.local/bin/idd-activation` on POSIX,
-`& "$HOME\.local\bin\idd-activation.cmd"` in PowerShell, or
-`"%USERPROFILE%\.local\bin\idd-activation.cmd"` in Command Prompt.
+Run `idd-activation --session-id <id>` with stable ID; read JSON.
+If off PATH: POSIX `~/.local/bin/idd-activation`; PowerShell
+`& "$HOME\.local\bin\idd-activation.cmd"`; Command Prompt
+`"%USERPROFILE%\.local\bin\idd-activation.cmd"`.
 
-- If `active` is `false`, do nothing IDD-specific.
-- If active with `selection.status: binding-required`, run
+- `active: false`: stop.
+- `selection.status: binding-required`: run
   `idd-onboard --distribution bind --session-id <id>`; rerun activation.
-- If active with `selection.status: ready`, open
+- `selection.status: ready`: open
   `.github/instructions/idd-overview-core.instructions.md` under
-  `instructionsRoot` and follow phase routing.
-- Otherwise stop and follow `selection.recovery`.
-  - `prepare`: choose a trusted immutable checkout, then run:
-
-    ```sh
-    idd-onboard --distribution prepare --session-id <id> --source <checkout>
-    ```
-
+  `instructionsRoot`; follow phase routing.
+- Otherwise stop; follow `selection.recovery`:
+  - `prepare`: choose a trusted immutable checkout; run
+    `idd-onboard --distribution prepare --session-id <id> --source <checkout>`.
   - `migrate` / `reselect`: run
-    `idd-onboard --distribution inspect --session-id <id>`, review it, then
-    stop and ask the repository maintainer to restore trusted provenance or
-    choose a verified distribution. Inspection does not repair or select a
-    distribution; do not rerun activation or bind an unverified selection.
-    Inspect again after the maintainer's repair. Continue only when the status
-    is `ready`; if it is `binding-required`, follow the bind step above.
+    `idd-onboard --distribution inspect --session-id <id>`; send its report
+    to the repository maintainer to repair provenance or select a trusted
+    distribution. Inspection is read-only; do not bind or rerun activation.
+    After repair, rerun activation after recovery; inspect; continue only at
+    `binding-required` (then bind above).
 
-Run no other IDD helper or change state unless active and ready, or binding is
-explicitly required above.
+Stop here unless ready or binding-required.
