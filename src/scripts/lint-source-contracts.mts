@@ -332,12 +332,61 @@ function detectEntryContracts(
         ),
       );
     }
-    if (!/\^22\.23\.2 \|\| \^24\.2\.0 \|\| >=26\.0\.0/.test(text)) {
+    const guardMessageMarkerStart = text.indexOf(
+      "node-runtime-guard: this repository's CLI entry points require",
+    );
+    const guardMessageStart =
+      guardMessageMarkerStart > 0 && text[guardMessageMarkerStart - 1] === '`'
+        ? guardMessageMarkerStart - 1
+        : -1;
+    const guardMessageEnd =
+      guardMessageStart === -1
+        ? -1
+        : text.indexOf('\n    );', guardMessageStart);
+    const guardMessage =
+      guardMessageStart === -1 || guardMessageEnd === -1
+        ? ''
+        : text.slice(guardMessageStart, guardMessageEnd);
+    const enginesVersionToken =
+      /(?:^|[^\w])(?:[~^<>]=?\s*)?(?:v?\d+(?:\.(?:\d+|[xX*])){0,2}|\*)(?![\w])/;
+    if (
+      !guardMessage.includes(
+        "Node version satisfying idd-skill's own package.json engines.node requirement.",
+      )
+    ) {
       result.push(
         violation(
           'RUNTIME-GUARD-STANDALONE-EXEMPTION',
           `src/scripts/${name}`,
-          'inlined guard message must retain the engines.node range literal',
+          "inlined guard message must name idd-skill's own package.json engines.node requirement",
+        ),
+      );
+    }
+    const guardMessageWithoutFeatureVersions = guardMessage.replace(
+      /\(added in Node \d+\.\d+\.\d+ \/ \d+\.\d+\.\d+\)/,
+      '',
+    );
+    const guardMessageInterpolations = Array.from(
+      guardMessage.matchAll(/\$\{\s*([^}]+?)\s*\}/g),
+      (match) => match[1]?.trim(),
+    );
+    const guardMessageOutsideTemplateLiterals = guardMessage.replace(
+      /`(?:\\[\s\S]|[^`\\])*`/g,
+      '',
+    );
+    if (
+      guardMessageEnd === -1 ||
+      enginesVersionToken.test(guardMessageWithoutFeatureVersions) ||
+      !/^[\s+]*,?$/.test(guardMessageOutsideTemplateLiterals) ||
+      guardMessageInterpolations.some(
+        (expression) => expression !== 'process.version',
+      )
+    ) {
+      result.push(
+        violation(
+          'RUNTIME-GUARD-STANDALONE-EXEMPTION',
+          `src/scripts/${name}`,
+          'inlined guard message must not copy an engines.node range or add nonliteral expressions',
         ),
       );
     }

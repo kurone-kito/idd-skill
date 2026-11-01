@@ -10,9 +10,8 @@
 // guard across this repository's `src/scripts/*.mts` helpers (the idiom
 // #1447 standardized on) is simply falsy there: the helper exits 0
 // without ever running its body, instead of failing loudly on an
-// unsupported runtime. #1447 raised `engines.node` to
-// `^22.23.2 || ^24.2.0 || >=26.0.0`, but nothing enforced that range at
-// run time.
+// unsupported runtime. #1447 raised the `engines.node` requirement in
+// package.json, but nothing enforced that requirement at run time.
 //
 // This module is the one shared check nearly every entry point reaches --
 // either transitively, by importing `cli-args.mts` (which 62 of the 69
@@ -37,19 +36,14 @@
 // body, so on an unsupported Node this module exits the process before
 // the importing entry point's own top-level code executes at all.
 /**
- * The exact literal this repository's `ENGINES_RANGE_MIRRORS`
- * ('full-range' mode, audit-docs.mts) keeps synchronized with
- * package.json's own `engines.node`. Hand-mirrored rather than imported
- * from package.json: this module must stay import-side-effect-only and
- * dependency-free (node: builtins only) so every one of its importers,
- * including the toolless bare-node CI lane, can load it without a
- * package.json read.
+ * Keep this module import-side-effect-only and dependency-free (node:
+ * builtins only). Every CLI entry point can load it without reading
+ * package.json or any other repository file.
  */
-const ENGINES_RANGE = '^22.23.2 || ^24.2.0 || >=26.0.0';
 /**
- * Fails loudly, in one stderr line naming `process.version` and this
- * repository's `engines.node` range, then exits 1 -- unless `meta.main`
- * is the boolean Node's `import.meta.main` provides on a supported
+ * Fails loudly, in one stderr line naming `process.version` and the
+ * `engines.node` requirement in idd-skill's own `package.json`, then exits
+ * 1 -- unless `meta.main` is the boolean Node's `import.meta.main` provides on a supported
  * runtime, in which case this returns without side effects regardless of
  * whether the boolean is `true` or `false`. Takes a narrow
  * `{ main?: unknown }` rather than the real `ImportMeta` so a synthetic
@@ -64,8 +58,7 @@ export function assertEntrySignal(meta) {
     `node-runtime-guard: this repository's CLI entry points require Node's ` +
       `\`import.meta.main\` (added in Node 22.18.0 / 24.2.0), which is not ` +
       `available on this runtime (Node ${process.version}). Upgrade to a ` +
-      `Node version satisfying this repository's engines.node range ` +
-      `(${ENGINES_RANGE}).\n`,
+      `Node version satisfying idd-skill's own package.json engines.node requirement.\n`,
   );
   process.exit(1);
 }

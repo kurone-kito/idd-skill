@@ -18,7 +18,7 @@ test('assertEntrySignal returns without exiting when meta.main is false', () => 
   assert.doesNotThrow(() => assertEntrySignal({ main: false }));
 });
 
-test('assertEntrySignal({}) exits 1 with a stderr line naming process.version and the engines range', () => {
+test('assertEntrySignal({}) exits 1 with a stderr line naming process.version and package.json engines.node', () => {
   // Spawned as a real subprocess (rather than stubbing process.exit in this
   // process) so the actual exit-code/stderr contract is what's asserted,
   // not a mocked stand-in for it. Dynamic import() of the real .mts module
@@ -58,8 +58,16 @@ test('assertEntrySignal({}) exits 1 with a stderr line naming process.version an
         `expected stderr to name process.version (${process.version}): ${stderr}`,
       );
       assert.ok(
-        stderr.includes('^22.23.2 || ^24.2.0 || >=26.0.0'),
-        `expected stderr to name the engines.node range: ${stderr}`,
+        stderr.includes('package.json'),
+        `expected stderr to name package.json: ${stderr}`,
+      );
+      assert.ok(
+        stderr.includes('engines.node'),
+        `expected stderr to name engines.node: ${stderr}`,
+      );
+      assert.ok(
+        stderr.includes("idd-skill's own package.json"),
+        `expected stderr to identify idd-skill's own package.json: ${stderr}`,
       );
       return true;
     },
