@@ -323,7 +323,10 @@ function detectEntryContracts(
       );
       continue;
     }
-    if (!/typeof import\.meta\.main\s*!==\s*'boolean'/.test(text)) {
+    const guardCondition = /typeof import\.meta\.main\s*!==\s*'boolean'/.exec(
+      text,
+    );
+    if (guardCondition === null) {
       result.push(
         violation(
           'RUNTIME-GUARD-STANDALONE-EXEMPTION',
@@ -332,21 +335,39 @@ function detectEntryContracts(
         ),
       );
     }
-    const guardMessageMarkerStart = text.indexOf(
-      "node-runtime-guard: this repository's CLI entry points require",
-    );
+    const guardMessageMarker =
+      "node-runtime-guard: this repository's CLI entry points require";
+    const guardMessageMarkerStart = text.indexOf(guardMessageMarker);
+    // #4927: audit the guard block as one shape instead of searching for a
+    // start and an end. The block must open with `process.stderr.write(` and
+    // close with `);`, `process.exit(1);`, and `}`, with only whitespace
+    // between those parts. The captured write() argument is the slice, so a
+    // spaced call, another output call, or a statement before or after the
+    // write call either leaves code in the slice or matches nothing.
+    const guardBlock =
+      /typeof import\.meta\.main\s*!==\s*'boolean'\s*\)\s*\{\s*process\.stderr\.write\(([\s\S]*?)\);\s*process\.exit\(1\);\s*\}/d.exec(
+        text,
+      );
+    const guardArgument = guardBlock?.indices?.[1];
     const guardMessageStart =
-      guardMessageMarkerStart > 0 && text[guardMessageMarkerStart - 1] === '`'
-        ? guardMessageMarkerStart - 1
-        : -1;
+      guardArgument === undefined ? -1 : guardArgument[0];
+    // Drop the whitespace before `);` so the trailing comma ends the slice.
     const guardMessageEnd =
-      guardMessageStart === -1
+      guardArgument === undefined
         ? -1
-        : text.indexOf('\n    );', guardMessageStart);
-    const guardMessage =
-      guardMessageStart === -1 || guardMessageEnd === -1
-        ? ''
-        : text.slice(guardMessageStart, guardMessageEnd);
+        : guardMessageStart +
+          text.slice(guardMessageStart, guardArgument[1]).trimEnd().length;
+    // The marker must open a template inside the slice and appear only once:
+    // a clean copy of the diagnostic would otherwise hide a prefixed copy.
+    const guardMessageValid =
+      guardMessageStart !== -1 &&
+      guardMessageMarkerStart > guardMessageStart &&
+      guardMessageMarkerStart < guardMessageEnd &&
+      text[guardMessageMarkerStart - 1] === '`' &&
+      text.indexOf(guardMessageMarker, guardMessageMarkerStart + 1) === -1;
+    const guardMessage = guardMessageValid
+      ? text.slice(guardMessageStart, guardMessageEnd)
+      : '';
     const enginesVersionToken =
       /(?:^|[^\w])(?:[~^<>]=?\s*)?(?:v?\d+(?:\.(?:\d+|[xX*])){0,2}|\*)(?![\w])/;
     if (
@@ -375,7 +396,7 @@ function detectEntryContracts(
       '',
     );
     if (
-      guardMessageEnd === -1 ||
+      !guardMessageValid ||
       enginesVersionToken.test(guardMessageWithoutFeatureVersions) ||
       !/^[\s+]*,?$/.test(guardMessageOutsideTemplateLiterals) ||
       guardMessageInterpolations.some(
