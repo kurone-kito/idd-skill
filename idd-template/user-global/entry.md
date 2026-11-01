@@ -1,22 +1,29 @@
 # IDD entry (user-global)
 
-Apply only inside a Git repository for IDD issue/PR work.
+Apply only in a Git repo for IDD issue/PR work.
 
-Before work, run `idd-activation` in the repository with the stable harness
-session ID as `--session-id`; read its JSON. If it is not on `PATH`, use
+Before IDD work, run `idd-activation --session-id <id>` with the stable
+harness ID; read JSON. If absent from `PATH`, use
 `~/.local/bin/idd-activation` on POSIX,
 `& "$HOME\.local\bin\idd-activation.cmd"` in PowerShell, or
 `"%USERPROFILE%\.local\bin\idd-activation.cmd"` in Command Prompt.
 
 - If `active` is `false`, do nothing IDD-specific.
 - If active with `selection.status: binding-required`, run
-  `idd-onboard --distribution bind`, passing the same value to `--session-id`,
-  then rerun activation. Wait for `ready` before opening phase instructions.
-- If active and `selection.status: ready`, open
+  `idd-onboard --distribution bind --session-id <id>`; rerun activation.
+- If active with `selection.status: ready`, open
   `.github/instructions/idd-overview-core.instructions.md` under
-  `instructionsRoot` and follow its phase routing.
-- Otherwise stop before phase mutation and follow `selection.recovery`.
-  Preparation needs an explicit immutable source; activation is read-only.
+  `instructionsRoot` and follow phase routing.
+- Otherwise stop and follow `selection.recovery`.
+  - `prepare`: choose a trusted immutable checkout, then run:
+
+    ```sh
+    idd-onboard --distribution prepare --session-id <id> --source <checkout>
+    ```
+
+  - `migrate` / `reselect`: run
+    `idd-onboard --distribution inspect --session-id <id>`, review it, then
+    rerun activation after recovery.
 
 Run no other IDD helper or change state unless active and ready, or binding is
 explicitly required above.
