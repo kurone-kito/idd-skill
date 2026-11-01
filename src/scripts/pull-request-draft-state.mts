@@ -335,6 +335,16 @@ export function evaluatePullRequestDraftTransition(
       false,
     );
   }
+  if (second.state.isDraft === wantDraft) {
+    return {
+      ...base,
+      verdict: 'already-in-target-state',
+      observed: second.state,
+      refusal: null,
+      detail: `already ${request.target} at the pre-mutation read; no transition request sent`,
+      mutationSent: false,
+    };
+  }
 
   const mutation = callGh(deps, [
     'api',

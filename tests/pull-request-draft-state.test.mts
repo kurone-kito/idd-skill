@@ -309,3 +309,57 @@ test('a mutation that throws and a failing verification read is unverified', () 
   assert.equal(report.verdict, 'unverified');
   assert.equal(report.observed, null);
 });
+
+test('a zero, negative, or non-integer pull request number is refused before any read', () => {
+  for (const number of [0, -1, 1.5, Number.NaN]) {
+    const gh = fakeGh({ reads: [] });
+    const report = evaluatePullRequestDraftTransition(
+      request({ number }),
+      gh.deps,
+    );
+    assert.equal(report.refusal, 'invalid-number', `number ${number}`);
+    assert.equal(report.mutationSent, false);
+    assert.equal(gh.mutationCalls().length, 0);
+  }
+});
+
+test('a pre-mutation read that fails is refused with no mutation', () => {
+  const gh = fakeGh({
+    reads: [ok(pr()), { status: 1, stdout: '', stderr: 'HTTP 503' }],
+  });
+  const report = evaluatePullRequestDraftTransition(request(), gh.deps);
+  assert.equal(report.verdict, 'refused');
+  assert.equal(report.refusal, 'inaccessible');
+  assert.equal(report.mutationSent, false);
+  assert.equal(gh.mutationCalls().length, 0);
+});
+
+test('a pre-mutation read that shows the pull request closed is refused with no mutation', () => {
+  const gh = fakeGh({
+    reads: [ok(pr()), ok(pr({ state: 'closed' }))],
+  });
+  const report = evaluatePullRequestDraftTransition(request(), gh.deps);
+  assert.equal(report.refusal, 'closed');
+  assert.equal(report.mutationSent, false);
+  assert.equal(gh.mutationCalls().length, 0);
+});
+
+test('a pre-mutation read that shows the pull request merged is refused with no mutation', () => {
+  const gh = fakeGh({
+    reads: [ok(pr()), ok(pr({ state: 'closed', merged: true }))],
+  });
+  const report = evaluatePullRequestDraftTransition(request(), gh.deps);
+  assert.equal(report.refusal, 'merged');
+  assert.equal(report.mutationSent, false);
+  assert.equal(gh.mutationCalls().length, 0);
+});
+
+test('a pre-mutation read that already shows the target state sends no mutation', () => {
+  const gh = fakeGh({
+    reads: [ok(pr({ draft: false })), ok(pr({ draft: true }))],
+  });
+  const report = evaluatePullRequestDraftTransition(request(), gh.deps);
+  assert.equal(report.verdict, 'already-in-target-state');
+  assert.equal(report.mutationSent, false);
+  assert.equal(gh.mutationCalls().length, 0);
+});
