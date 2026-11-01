@@ -273,7 +273,10 @@ function detectEntryContracts(files) {
       );
       continue;
     }
-    if (!/typeof import\.meta\.main\s*!==\s*'boolean'/.test(text)) {
+    const guardCondition = /typeof import\.meta\.main\s*!==\s*'boolean'/.exec(
+      text,
+    );
+    if (guardCondition === null) {
       result.push(
         violation(
           'RUNTIME-GUARD-STANDALONE-EXEMPTION',
@@ -285,9 +288,24 @@ function detectEntryContracts(files) {
     const guardMessageMarkerStart = text.indexOf(
       "node-runtime-guard: this repository's CLI entry points require",
     );
+    // #4927: scan the whole write() argument, not only from the template
+    // literal, so an expression concatenated before the template is caught.
+    // Take the first write call after the guard condition, so call text in a
+    // comment or a second write before the template stays inside the slice.
+    const guardWriteCall = 'process.stderr.write(';
+    const guardWriteCallStart =
+      guardCondition === null
+        ? -1
+        : text.indexOf(
+            guardWriteCall,
+            guardCondition.index + guardCondition[0].length,
+          );
     const guardMessageStart =
-      guardMessageMarkerStart > 0 && text[guardMessageMarkerStart - 1] === '`'
-        ? guardMessageMarkerStart - 1
+      guardMessageMarkerStart > 0 &&
+      text[guardMessageMarkerStart - 1] === '`' &&
+      guardWriteCallStart !== -1 &&
+      guardWriteCallStart + guardWriteCall.length < guardMessageMarkerStart
+        ? guardWriteCallStart + guardWriteCall.length
         : -1;
     const guardMessageEnd =
       guardMessageStart === -1
