@@ -67,23 +67,32 @@ is standard-profile evidence and is not run here.
 
 ## F2 — Pre-merge readiness (helper-read only)
 
-1. Run the pre-merge-readiness helper: `node
-   scripts/pre-merge-readiness.mjs --pr <pr-number> --claim-issue
-   <issue-number> --claim-id <claim-id> --agent-id <agent-id>
-   --trusted-marker-logins <trusted-login-1>,<trusted-login-2>`.
+1. Use the direct Node invocation below for a source checkout or the
+   `vendored-node` profile. The `package-manager` profile uses its
+   profile-selected `idd:pre-merge-readiness` command as the alternative;
+   `ephemeral-npx` and `user-global` use their own profile-selected
+   commands. See `docs/idd-helper-scripts.md` for the exact forms.
+
+   ```sh
+   node scripts/pre-merge-readiness.mjs \
+     --pr <pr-number> \
+     --claim-issue <issue-number> \
+     --claim-id <claim-id> \
+     --agent-id <agent-id> \
+     --trusted-marker-logins <trusted-login-1>,<trusted-login-2>
+   ```
+
    For claim-bound readiness, pass `--agent-id` with the real
    `--claim-id`; omitting it returns a `stale-request-recovery` blocker.
    Add `--nonce <nonce>` when this session recorded a local activation
    nonce at claim time; omitting it silently skips the merge-time
-   activation-nonce comparison. Use the package-manager-profile
-   `idd:pre-merge-readiness` command or the profile-selected equivalent
-   when required (resolve the exact command from `docs/idd-helper-scripts.md`
-   if unsure). This is the same helper the
-   standard F2 treats as the authoritative source for the merge
-   decision. When D3 step 6 ("Multiple closes") closed more than one
-   issue, also add `--closing-issues <n>,<m>` with the full deliberate
-   set — otherwise the helper's `closing-set` gate reports the extra
-   issue as a mismatch.
+   activation-nonce comparison. This is the same helper the standard F2
+   treats as the authoritative source for the merge decision.
+
+   When D3 step 6 ("Multiple closes") closed more than one issue, also
+   add
+   `--closing-issues <n>,<m>` with the full deliberate set — otherwise
+   the helper's `closing-set` gate reports the extra issue as a mismatch.
 2. If the helper fails, returns invalid or incomplete JSON (missing any
    of the required top-level fields listed in
    `schemas/pre-merge-readiness.schema.json`), or its evidence disagrees
