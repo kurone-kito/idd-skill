@@ -13,6 +13,11 @@ import { dirname, join } from 'node:path';
 import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { collectRepositoryWorkflowViolations } from '../src/scripts/repository-workflow-audit.mts';
+import {
+  parseWorkflowYamlSubset,
+  type WorkflowYamlMapping,
+  type WorkflowYamlValue,
+} from '../src/scripts/workflow-yaml-subset.mts';
 
 // Fixture roots are copies of the real inputs placed in a temporary
 // directory, so each rule is exercised on a scratch tree. The enforcement
@@ -4876,4 +4881,129 @@ test('the reusable pnpm-boundary lint-command defaults to pnpm run check and an 
 test('the Node 22 floor caller inherits the pnpm run check default and sets no lint-command', () => {
   const text = realText('.github/workflows/pnpm-boundary-node22-floor.yml');
   assert.doesNotMatch(text, /lint-command/);
+});
+
+// #4923: pnpm-boundary.yml selects the Node.js version through one of two
+// mutually exclusive actions/setup-node steps. An empty node-version-file
+// keeps node-version (default 24.x); a non-empty one selects the file and
+// passes no node-version. These tests read the parsed workflows, so a later
+// edit cannot break the 24.x fallback or the Node 22 floor's file-based
+// selection without failing here.
+function parsedWorkflowMapping(relativePath: string): WorkflowYamlMapping {
+  const parsed = parseWorkflowYamlSubset(realText(relativePath));
+  if (!parsed.ok) {
+    assert.fail(
+      `${relativePath} refused: ${parsed.violation.construct} at line ${parsed.violation.line}`,
+    );
+  }
+  return yamlMapping(parsed.value, relativePath);
+}
+
+function yamlMapping(
+  value: WorkflowYamlValue | undefined,
+  label: string,
+): WorkflowYamlMapping {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    assert.fail(`${label} is not a mapping`);
+  }
+  return value;
+}
+
+function pnpmBoundarySetupNodeSteps(): WorkflowYamlMapping[] {
+  const workflow = parsedWorkflowMapping('.github/workflows/pnpm-boundary.yml');
+  const job = yamlMapping(
+    yamlMapping(workflow.jobs, 'jobs')['pnpm-boundary'],
+    'jobs.pnpm-boundary',
+  );
+  const steps = job.steps;
+  assert.ok(Array.isArray(steps), 'jobs.pnpm-boundary.steps is not a list');
+  return steps
+    .map((step, index) => yamlMapping(step, `step ${index}`))
+    .filter(
+      (step) =>
+        typeof step.uses === 'string' &&
+        step.uses.startsWith('actions/setup-node@'),
+    );
+}
+
+const NODE_VERSION_FILE_CONDITION =
+  /^\$\{\{ inputs\.node-version-file (==|!=) '' \}\}$/;
+
+test('the reusable pnpm-boundary node-version-file input defaults to empty so node-version keeps its 24.x default', () => {
+  const workflow = parsedWorkflowMapping('.github/workflows/pnpm-boundary.yml');
+  const inputs = yamlMapping(
+    yamlMapping(yamlMapping(workflow.on, 'on').workflow_call, 'workflow_call')
+      .inputs,
+    'workflow_call.inputs',
+  );
+  const nodeVersionFile = yamlMapping(
+    inputs['node-version-file'],
+    'inputs.node-version-file',
+  );
+  // A quoted '' parses to the empty string; a bare `default:` would be null.
+  assert.equal(nodeVersionFile.default, '');
+  assert.equal(nodeVersionFile.required, 'false');
+  assert.equal(nodeVersionFile.type, 'string');
+  const nodeVersion = yamlMapping(
+    inputs['node-version'],
+    'inputs.node-version',
+  );
+  assert.equal(nodeVersion.default, '24.x');
+  assert.equal(nodeVersion.required, 'false');
+});
+
+test('the reusable pnpm-boundary setup-node steps are gated by complementary node-version-file conditions', () => {
+  const steps = pnpmBoundarySetupNodeSteps();
+  assert.equal(steps.length, 2, JSON.stringify(steps));
+  const operators = steps.map((step) => {
+    assert.equal(typeof step.if, 'string', JSON.stringify(step));
+    const match = NODE_VERSION_FILE_CONDITION.exec(String(step.if));
+    assert.ok(match, `unexpected setup-node if: ${String(step.if)}`);
+    return match[1];
+  });
+  // The same operand compared with == and != against '' means exactly one
+  // step runs for any node-version-file value.
+  assert.deepEqual([...operators].sort(), ['!=', '==']);
+});
+
+test('each pnpm-boundary setup-node path passes only its own version selector', () => {
+  const byOperator = new Map(
+    pnpmBoundarySetupNodeSteps().map((step) => [
+      NODE_VERSION_FILE_CONDITION.exec(String(step.if))?.[1],
+      yamlMapping(step.with, `with of ${String(step.name)}`),
+    ]),
+  );
+  const emptyFilePath = byOperator.get('==');
+  const filePath = byOperator.get('!=');
+  assert.ok(emptyFilePath, 'no setup-node step for an empty node-version-file');
+  assert.ok(filePath, 'no setup-node step for a non-empty node-version-file');
+  assert.equal(
+    emptyFilePath['node-version'],
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
+    "${{ inputs.node-version || '24.x' }}",
+  );
+  assert.equal(Object.hasOwn(emptyFilePath, 'node-version-file'), false);
+  assert.equal(
+    filePath['node-version-file'],
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
+    '${{ inputs.node-version-file }}',
+  );
+  assert.equal(Object.hasOwn(filePath, 'node-version'), false);
+});
+
+test('the Node 22 floor caller selects .node-version through node-version-file and sets no node-version', () => {
+  const workflow = parsedWorkflowMapping(
+    '.github/workflows/pnpm-boundary-node22-floor.yml',
+  );
+  const job = yamlMapping(
+    yamlMapping(workflow.jobs, 'jobs')['pnpm-boundary-node22-floor'],
+    'jobs.pnpm-boundary-node22-floor',
+  );
+  assert.equal(job.uses, './.github/workflows/pnpm-boundary.yml');
+  const callerWith = yamlMapping(
+    job.with,
+    'jobs.pnpm-boundary-node22-floor.with',
+  );
+  assert.equal(callerWith['node-version-file'], '.node-version');
+  assert.equal(Object.hasOwn(callerWith, 'node-version'), false);
 });
