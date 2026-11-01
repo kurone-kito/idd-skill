@@ -1065,12 +1065,19 @@ function inspectWithContext(
       'instructions',
       'idd-overview-core.instructions.md',
     );
-    const localWalk = checkContainment(
-      ctx.worktreeRoot,
-      localInstruction,
-      ctx.fs,
-    );
-    if (localWalk.finalKind !== 'absent') {
+    // Any failure of the no-follow walk counts as present, so it fails closed
+    // to the repository-local report instead of throwing: a symbolic-link or
+    // non-directory ancestor, an unreadable entry, a special file, or a
+    // refused ceiling chain.
+    let localPresent: boolean;
+    try {
+      localPresent =
+        checkContainment(ctx.worktreeRoot, localInstruction, ctx.fs)
+          .finalKind !== 'absent';
+    } catch {
+      localPresent = true;
+    }
+    if (localPresent) {
       return baseReport(ctx, receipt.status, {
         source: 'repository-local',
         verdict: 'migration-required',
