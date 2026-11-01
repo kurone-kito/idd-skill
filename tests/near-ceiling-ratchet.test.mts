@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import {
   collectNearCeilingRatchetViolations,
   parseNearCeilingRaiseApprovals,
+  parseStandingRaiseApprovals,
   selectStricterNoticeUtilizationPct,
 } from '../src/scripts/consistency-helpers.mts';
 
@@ -262,5 +263,167 @@ test('malformed approval entries never widen a limit', () => {
   assert.deepEqual(
     [...parseNearCeilingRaiseApprovals(undefined).entries()],
     [],
+  );
+});
+
+test('a valid standing budget approval resolves its measured limit', () => {
+  const result = parseStandingRaiseApprovals(
+    [
+      {
+        bundle: 'bundle-a',
+        standingClass: 'budgetRaise',
+        ceilingPct: 10,
+        limitBytes: 1000,
+        issue: 4887,
+        reason: 'supersedes manual approval issue 3840',
+      },
+    ],
+    [{ id: 'bundle-a', limitBytes: 1000, totalBytes: 950 }],
+    98,
+    { enabled: true, maxRaisePct: 10 },
+  );
+  assert.deepEqual([...result.approvals], [['bundle-a', 1000]]);
+  assert.deepEqual(result.errors, []);
+});
+
+test('a disabled or absent standing class ignores its entire approval array', () => {
+  const malformed = { not: 'an array' };
+  const disabled = parseStandingRaiseApprovals(
+    malformed,
+    [{ id: 'bundle-a', limitBytes: 1000, totalBytes: 950 }],
+    98,
+    { enabled: false, maxRaisePct: 10 },
+  );
+  const absent = parseStandingRaiseApprovals(
+    undefined,
+    [{ id: 'bundle-a', limitBytes: 1000, totalBytes: 950 }],
+    98,
+    { enabled: true, maxRaisePct: 10 },
+  );
+  assert.deepEqual([...disabled.approvals], []);
+  assert.deepEqual(disabled.errors, []);
+  assert.deepEqual([...absent.approvals], []);
+  assert.deepEqual(absent.errors, []);
+});
+
+test('an explicitly null standing approval value is invalid when enabled', () => {
+  const result = parseStandingRaiseApprovals(
+    null,
+    [{ id: 'bundle-a', limitBytes: 1000, totalBytes: 950 }],
+    98,
+    { enabled: true, maxRaisePct: 10 },
+  );
+  assert.deepEqual([...result.approvals], []);
+  assert.deepEqual(result.errors, [
+    'contextCeiling.standingRaiseApprovals must be an array',
+  ]);
+});
+
+test('standing entries reject each malformed field and an excessive ceiling', () => {
+  const valid = {
+    bundle: 'bundle-a',
+    standingClass: 'budgetRaise',
+    ceilingPct: 10,
+    limitBytes: 1000,
+    issue: 4887,
+    reason: 'records superseded issue 3840',
+  };
+  const bundles = [{ id: 'bundle-a', limitBytes: 1000, totalBytes: 950 }];
+  const cases: [Record<string, unknown>, RegExp][] = [
+    [{ ...valid, standingClass: 'split' }, /standingClass/],
+    [{ ...valid, ceilingPct: 11 }, /exceeds maxRaisePct/],
+    [{ ...valid, ceilingPct: 1.5 }, /non-negative integer/],
+    [{ ...valid, limitBytes: 1050 }, /multiple of 100/],
+    [{ ...valid, issue: 0 }, /positive integer/],
+    [{ ...valid, reason: '  ' }, /reason must be non-empty/],
+    [{ ...valid, bundle: 'bundle-missing' }, /does not exist in bundleBudgets/],
+    [{ ...valid, extra: true }, /unknown field extra/],
+  ];
+  for (const [entry, expectedError] of cases) {
+    const result = parseStandingRaiseApprovals([entry], bundles, 98, {
+      enabled: true,
+      maxRaisePct: 10,
+    });
+    assert.deepEqual([...result.approvals], []);
+    assert.ok(result.errors.some((error) => expectedError.test(error)));
+  }
+});
+
+test('standing entries reject limits outside either measured-byte bound', () => {
+  const base = {
+    bundle: 'bundle-a',
+    standingClass: 'budgetRaise',
+    ceilingPct: 10,
+    issue: 4887,
+    reason: 'records superseded issue 3840',
+  };
+  const bundles = [{ id: 'bundle-a', limitBytes: 1000, totalBytes: 950 }];
+  const belowMinimum = parseStandingRaiseApprovals(
+    [{ ...base, limitBytes: 900 }],
+    bundles,
+    98,
+    { enabled: true, maxRaisePct: 10 },
+  );
+  const aboveMaximum = parseStandingRaiseApprovals(
+    [{ ...base, limitBytes: 1100 }],
+    bundles,
+    98,
+    { enabled: true, maxRaisePct: 10 },
+  );
+  assert.ok(
+    belowMinimum.errors.some((error) =>
+      /minimum for maxUtilizationPct/.test(error),
+    ),
+  );
+  assert.ok(
+    aboveMaximum.errors.some((error) => /maximum for ceilingPct/.test(error)),
+  );
+});
+
+test('a standing ceiling with no feasible 100-byte limit is rejected', () => {
+  const result = parseStandingRaiseApprovals(
+    [
+      {
+        bundle: 'bundle-a',
+        standingClass: 'budgetRaise',
+        ceilingPct: 0,
+        limitBytes: 1000,
+        issue: 4887,
+        reason: 'records superseded issue 3840',
+      },
+    ],
+    [{ id: 'bundle-a', limitBytes: 1000, totalBytes: 950 }],
+    98,
+    { enabled: true, maxRaisePct: 10 },
+  );
+  assert.deepEqual([...result.approvals], []);
+  assert.ok(
+    result.errors.some((error) =>
+      /no 100-byte limit satisfying maxUtilizationPct and ceilingPct/.test(
+        error,
+      ),
+    ),
+  );
+});
+
+test('duplicate standing entries for one bundle are all rejected', () => {
+  const entry = {
+    bundle: 'bundle-a',
+    standingClass: 'budgetRaise',
+    ceilingPct: 10,
+    limitBytes: 1000,
+    issue: 4887,
+    reason: 'records superseded issue 3840',
+  };
+  const result = parseStandingRaiseApprovals(
+    [entry, entry],
+    [{ id: 'bundle-a', limitBytes: 1000, totalBytes: 950 }],
+    98,
+    { enabled: true, maxRaisePct: 10 },
+  );
+  assert.deepEqual([...result.approvals], []);
+  assert.equal(
+    result.errors.filter((error) => /all are invalid/.test(error)).length,
+    2,
   );
 });

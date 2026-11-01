@@ -31,6 +31,7 @@ import {
   normalizeNonNegativeNumber,
   parseGeneratedFromBannerSource,
   parseNearCeilingRaiseApprovals,
+  parseStandingRaiseApprovals,
   renderOkfIndexMarkdownTable,
   resolveGeneratedBlockFiles,
   resolveInstructionSizeBudgetConfig,
@@ -54,6 +55,7 @@ import {
   collectMarkdownLinkAuditViolations,
   resolveDistributedFileSet,
 } from './markdown-link-audit.mjs';
+import { normalizePolicyConfig } from './policy-helpers.mjs';
 import { collectRepositoryInstructionViolations } from './repository-instruction-audit.mjs';
 import { collectRepositoryWorkflowViolations } from './repository-workflow-audit.mjs';
 
@@ -277,6 +279,7 @@ async function main() {
       manifest.contextCeiling ?? null,
       bundleStats,
       instructionSizeBudgetStats,
+      loadBudgetRaiseStandingApprovalPolicy(),
     );
   }
   checkDocBudgetNumbers();
@@ -1765,6 +1768,7 @@ function checkNearCeilingRatchet(
   config,
   currentBundleStats,
   currentInstructionSizeBudgetStats,
+  budgetRaisePolicy,
 ) {
   if (!config) {
     return;
@@ -1811,6 +1815,17 @@ function checkNearCeilingRatchet(
   const approvals = parseNearCeilingRaiseApprovals(
     config.nearCeilingRaiseApprovals,
   );
+  const standingApprovals = parseStandingRaiseApprovals(
+    config.standingRaiseApprovals,
+    currentBundleStats,
+    config.maxUtilizationPct,
+    budgetRaisePolicy,
+  );
+  errors.push(
+    ...standingApprovals.errors.map(
+      (message) => `near-ceiling-ratchet: ${message}`,
+    ),
+  );
   const bundleIds = new Set(currentBundleStats.map((stat) => stat.id));
   const instructionSizeBudgetIds = new Set(
     currentInstructionSizeBudgetStats.map((stat) => stat.id),
@@ -1820,6 +1835,11 @@ function checkNearCeilingRatchet(
       ([id]) => bundleIds.has(id) && !instructionSizeBudgetIds.has(id),
     ),
   );
+  for (const [id, limitBytes] of standingApprovals.approvals) {
+    if (bundleIds.has(id) && !instructionSizeBudgetIds.has(id)) {
+      bundleApprovals.set(id, limitBytes);
+    }
+  }
   const instructionSizeBudgetApprovals = new Map(
     [...approvals].filter(
       ([id]) => instructionSizeBudgetIds.has(id) && !bundleIds.has(id),
@@ -1849,6 +1869,17 @@ function checkNearCeilingRatchet(
       instructionSizeBudgetApprovals,
     ),
   );
+}
+function loadBudgetRaiseStandingApprovalPolicy() {
+  try {
+    const policyPath = join(root, '.github', 'idd', 'config.json');
+    const policy = JSON.parse(readFileSync(policyPath, 'utf8'));
+    return normalizePolicyConfig(policy).standingApprovals.budgetRaise;
+  } catch {
+    // Missing or malformed repository policy must never enable a standing
+    // approval; the repository-policy audit reports malformed config itself.
+    return { enabled: false, maxRaisePct: 10 };
+  }
 }
 function checkDocBudgetNumbers() {
   // Cross-check every hardcoded byte value in the guarded docs against the
