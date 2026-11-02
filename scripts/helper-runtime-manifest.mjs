@@ -618,6 +618,15 @@ const HELPER_COMMANDS = [
       'Create one drafted issue under the issue-authoring hold (an orphan, or a draft carrier), running the New-issue ownership steps of the authoring contract in order (dry run unless --apply).',
   },
   {
+    id: 'pull-request-draft-state',
+    scriptName: 'idd:pull-request-draft-state',
+    binName: 'idd-pull-request-draft-state',
+    entryPath: 'scripts/pull-request-draft-state-execute.mjs',
+    vendoredCommand: 'node scripts/pull-request-draft-state-execute.mjs',
+    description:
+      'Move one open pull request between draft and ready-for-review through the #4908 transition core (dry run by default; --apply sends one transition and verifies it with a fresh read).',
+  },
+  {
     id: 'release-tag',
     scriptName: 'idd:release-tag',
     binName: 'idd-release-tag',
