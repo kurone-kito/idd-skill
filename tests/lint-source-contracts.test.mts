@@ -241,6 +241,13 @@ test('standalone guard contract reports a guard block outside the expected shape
         result.stderr,
         /inlined guard block must match the expected shape/,
       );
+      // One dedicated shape violation, so the file's content checks never run.
+      assert.equal(
+        result.stderr.split('inlined guard block must match the expected shape')
+          .length - 1,
+        1,
+        result.stderr,
+      );
       assert.doesNotMatch(
         result.stderr,
         /must not copy an engines\.node range|must name idd-skill/,
