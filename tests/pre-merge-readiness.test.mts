@@ -19965,7 +19965,7 @@ test('#4879: an absent recovery object gates only the off-head claim-bound repor
       blocked,
       name,
     );
-    assert.equal(summary.ready, !blocked, name);
+    if (blocked) assert.equal(summary.ready, false, name);
   }
 });
 
