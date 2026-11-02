@@ -205,6 +205,13 @@ const EXTRA_RUNTIME_FILES_INITIALIZER_LOCATOR =
 // asserts the vendored-node managedFiles include every data path
 // validate-schemas references, so this list must stay complete.
 const EXTRA_RUNTIME_FILES = new Map<string, string[]>([
+  [
+    'scripts/idd-activation.mjs',
+    [
+      'schemas/distribution-manifest.schema.json',
+      'schemas/distribution-selection.schema.json',
+    ],
+  ],
   ['scripts/advisory-wait-policy.mjs', ['schemas/policy.schema.json']],
   // validate-schemas validates every schema/fixture pair in its CLI `cases`
   // table by reading the files directly; none of them are imported.

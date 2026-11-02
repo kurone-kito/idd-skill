@@ -10,6 +10,7 @@ import {
   advisoryMarkerComment,
   buildCopilotRecoverySummary,
   evaluateStaleRequestRecoveryAction,
+  hasCurrentHeadCopilotReview,
   parseArgs,
   readAdvisoryWaitState,
   resolveNowFlag,
@@ -1235,7 +1236,8 @@ test('decline (#4142): a declined head never yields a recovery attempt, while th
 // --- Completed review of the current HEAD (#4718) ---------------------------
 // A completed Copilot review that names the current HEAD proves the request
 // reached the reviewer, so an elapsed same-head request marker is not a failed
-// registration. Only the non-pending path is affected.
+// registration. Only the non-pending path is affected here; the pending path
+// is covered by #4877 below.
 
 const COPILOT_REVIEW_AUTHOR = {
   login: 'copilot-pull-request-reviewer[bot]',
@@ -1341,6 +1343,160 @@ test('#4718 caller: a completed review of the current HEAD keeps the F3 path and
     reason: 'proven-covers-head',
   });
   assert.equal(report.f3Outcome, 'SATISFIED');
+  assert.deepEqual(validate(report, advisoryWaitStateSchema), []);
+});
+
+// --- Completed review of the current HEAD, pending path (#4877) -------------
+// A completed Copilot review that names the current HEAD also proves that a
+// pending request reached the reviewer. The check runs after the same-head and
+// covers-head returns, and before the recovery cap.
+
+const PENDING_EVIDENCE = {
+  copilotPending: true,
+  copilotPendingCoversHead: false,
+  sameHeadMarkerPresent: false,
+  remainingBudget: 2,
+  activeClaimProvided: true,
+};
+
+test('#4877 classifier: a completed current-HEAD review makes a pending request not-applicable', () => {
+  assert.deepEqual(
+    evaluateStaleRequestRecoveryAction({
+      ...PENDING_EVIDENCE,
+      currentHeadReviewExists: true,
+    }),
+    { action: 'not-applicable', reason: 'proven-covers-head' },
+  );
+  assert.deepEqual(
+    evaluateStaleRequestRecoveryAction({
+      ...PENDING_EVIDENCE,
+      currentHeadReviewExists: false,
+    }),
+    { action: 'attempt', reason: 'recovery-attempt-eligible' },
+  );
+  assert.deepEqual(
+    evaluateStaleRequestRecoveryAction({ ...PENDING_EVIDENCE }),
+    { action: 'attempt', reason: 'recovery-attempt-eligible' },
+  );
+});
+
+test('#4877 classifier: the pending current-HEAD review check precedes the cap', () => {
+  assert.deepEqual(
+    evaluateStaleRequestRecoveryAction({
+      ...PENDING_EVIDENCE,
+      remainingBudget: 0,
+      currentHeadReviewExists: true,
+    }),
+    { action: 'not-applicable', reason: 'proven-covers-head' },
+  );
+  assert.deepEqual(
+    evaluateStaleRequestRecoveryAction({
+      ...PENDING_EVIDENCE,
+      remainingBudget: 0,
+    }),
+    { action: 'cap-exhausted', reason: 'recovery-cap-exhausted' },
+  );
+});
+
+test('#4877 classifier: same-head and covers-head reasons keep priority on the pending path', () => {
+  assert.deepEqual(
+    evaluateStaleRequestRecoveryAction({
+      ...PENDING_EVIDENCE,
+      sameHeadMarkerPresent: true,
+      currentHeadReviewExists: true,
+    }),
+    { action: 'not-applicable', reason: 'same-head-marker-present' },
+  );
+  assert.deepEqual(
+    evaluateStaleRequestRecoveryAction({
+      ...PENDING_EVIDENCE,
+      copilotPendingCoversHead: true,
+      currentHeadReviewExists: true,
+    }),
+    { action: 'not-applicable', reason: 'proven-covers-head' },
+  );
+});
+
+test('#4877 classifier: a claimless pending input stays active-claim-not-provided', () => {
+  assert.deepEqual(
+    evaluateStaleRequestRecoveryAction({
+      ...PENDING_EVIDENCE,
+      activeClaimProvided: false,
+      currentHeadReviewExists: true,
+    }),
+    { action: 'not-applicable', reason: 'active-claim-not-provided' },
+  );
+});
+
+test('#4877 helper: a current-head review still counts after a later review of an older commit', () => {
+  const reviews = [
+    {
+      ...completedCopilotReview(WAIT_SHA),
+      submitted_at: '2026-10-16T01:00:00Z',
+    },
+    {
+      ...completedCopilotReview(WAIT_OTHER_SHA),
+      submitted_at: '2026-10-16T02:00:00Z',
+    },
+  ];
+  // The latest review names the older commit, which the latest-review
+  // comparison alone would have read as "no review of this head".
+  assert.equal(hasCurrentHeadCopilotReview(reviews, WAIT_SHA, 'copilot'), true);
+  assert.equal(
+    hasCurrentHeadCopilotReview(reviews.slice(1), WAIT_SHA, 'copilot'),
+    false,
+  );
+});
+
+test('#4877 helper: only a qualifying Copilot review of the current head counts', () => {
+  const notAnOverview = {
+    ...completedCopilotReview(WAIT_SHA),
+    body: 'Not a Copilot overview.',
+  };
+  const otherAuthor = {
+    ...completedCopilotReview(WAIT_SHA),
+    user: { login: 'someone', type: 'User' },
+  };
+  assert.equal(
+    hasCurrentHeadCopilotReview([notAnOverview], WAIT_SHA, 'copilot'),
+    false,
+  );
+  assert.equal(
+    hasCurrentHeadCopilotReview([otherAuthor], WAIT_SHA, 'copilot'),
+    false,
+  );
+  assert.equal(hasCurrentHeadCopilotReview([], WAIT_SHA, 'copilot'), false);
+});
+
+test('#4877 caller: a pending request with a completed current-head review is proven-covers-head', () => {
+  // Copilot is still requested, so the pending path decides. The latest review
+  // names an older commit, so only the any-review check sees the head review.
+  const reviews = [
+    {
+      ...completedCopilotReview(WAIT_SHA),
+      submitted_at: '2026-10-16T01:00:00Z',
+    },
+    {
+      ...completedCopilotReview(WAIT_OTHER_SHA),
+      submitted_at: '2026-10-16T02:00:00Z',
+    },
+  ];
+  const fixture = {
+    ...waitFixture({ markerAgeMinutes: null, reviews }),
+    requestedReviewerLogins: { [WAIT_PR]: [COPILOT_REVIEW_AUTHOR.login] },
+  };
+  const report = withEmptyCwd(() =>
+    readAdvisoryWaitState(meteredPort(fixture).port, {
+      ...CLAIMED_WAIT_INPUT,
+      now: '',
+      clock: () => WAIT_START_MS,
+    }),
+  );
+  assert.equal(report.copilotPending, true);
+  assert.deepEqual(report.staleRequestRecovery, {
+    action: 'not-applicable',
+    reason: 'proven-covers-head',
+  });
   assert.deepEqual(validate(report, advisoryWaitStateSchema), []);
 });
 
