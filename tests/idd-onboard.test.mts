@@ -12664,7 +12664,33 @@ test('bin/idd-onboard.mjs distribution prepare and bind preserve CLI data and st
     readFileSync(join(REPO_ROOT, templateDoc)),
   );
   // The clone holds only committed files, so carry over the checkout's other
-  // tracked edits as well, the way a dirty working tree would be installed.
+  // tracked edits and its untracked, non-ignored files, the way a dirty working
+  // tree would be installed. Each entry keeps its mode, and a symlink stays a
+  // symlink, so nothing is written through a link into another path.
+  const mirrorCheckoutEntry = (path: string, stage: boolean): void => {
+    const source = join(REPO_ROOT, path);
+    const target = join(sourceRoot, path);
+    rmSync(target, { force: true });
+    let stat: ReturnType<typeof lstatSync>;
+    try {
+      stat = lstatSync(source);
+    } catch {
+      return;
+    }
+    mkdirSync(dirname(target), { recursive: true });
+    if (stat.isSymbolicLink()) {
+      symlinkSync(readlinkSync(source), target);
+    } else {
+      writeFileSync(target, readFileSync(source));
+      chmodSync(target, stat.mode & 0o777);
+    }
+    if (stage) {
+      execFileSync('git', ['-C', sourceRoot, 'add', '--', path], {
+        env: gitEnv,
+        stdio: 'pipe',
+      });
+    }
+  };
   // Additions are re-added so they stay tracked, and deletions are removed.
   const checkoutEdits = execFileSync(
     'git',
@@ -12674,21 +12700,10 @@ test('bin/idd-onboard.mjs distribution prepare and bind preserve CLI data and st
     .split('\0')
     .filter((path) => path.length > 0);
   for (const path of checkoutEdits) {
-    const target = join(sourceRoot, path);
-    if (!existsSync(join(REPO_ROOT, path))) {
-      rmSync(target, { force: true });
-      continue;
-    }
-    mkdirSync(dirname(target), { recursive: true });
-    writeFileSync(target, readFileSync(join(REPO_ROOT, path)));
-    chmodSync(target, statSync(join(REPO_ROOT, path)).mode & 0o777);
-    execFileSync('git', ['-C', sourceRoot, 'add', '--', path], {
-      env: gitEnv,
-      stdio: 'pipe',
-    });
+    mirrorCheckoutEntry(path, true);
   }
-  // Untracked, non-ignored files of the checkout stay untracked in the clone,
-  // so the untracked-payload guard sees them as it would in a dirty checkout.
+  // Untracked files stay untracked in the clone, so the untracked-payload
+  // guard sees them as it would in a dirty checkout.
   const checkoutUntracked = execFileSync(
     'git',
     ['-C', REPO_ROOT, 'ls-files', '--others', '--exclude-standard', '-z'],
@@ -12697,10 +12712,7 @@ test('bin/idd-onboard.mjs distribution prepare and bind preserve CLI data and st
     .split('\0')
     .filter((path) => path.length > 0);
   for (const path of checkoutUntracked) {
-    const target = join(sourceRoot, path);
-    mkdirSync(dirname(target), { recursive: true });
-    writeFileSync(target, readFileSync(join(REPO_ROOT, path)));
-    chmodSync(target, statSync(join(REPO_ROOT, path)).mode & 0o777);
+    mirrorCheckoutEntry(path, false);
   }
   const trackedPayloadDoc = 'idd-template/docs/idd-workflow.md';
   const payloadMarker = `<!-- tracked-payload-${process.pid}-${Date.now()} -->`;
