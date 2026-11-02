@@ -4341,23 +4341,19 @@ The command never merges, pushes, changes labels, or releases a claim.
 - Output: stable JSON by default, with one record per valid line, its
   issue/PR number, repository, conversation count, and malformed-line
   count. `--format table` is for operator reading.
-- Scope: searches issue and pull-request conversation comments, then
-  reads each matched thread and validates actual lines against issue
-  `#4886`'s grammar. It is read-only. Incomplete search, GitHub's
-  1,000-result ceiling, malformed responses, or a failed comment-page
-  read produce an error and no partial report (preventive; no observed
-  incident yet).
+- Scope: reads every issue and pull-request comment in the repository
+  through the REST comment feed, oldest first, then validates each marker
+  line against issue `#4886`'s grammar. It does not use comment search,
+  whose index can lag behind a new comment and so leave a record unlisted.
+  It is read-only. Malformed responses or a failed feed-page read produce
+  an error and no partial report (preventive; no observed incident yet).
 - Quick read-only fallback (prints marker lines for manual inspection):
 
   ```sh
   set -euo pipefail
   repo=owner/name
-  gh search issues idd-skill-standing-approval --match comments --repo "$repo" --include-prs --limit 1000 --json number --jq '.[].number' |
-    sort -nu |
-    while IFS= read -r number; do
-      gh api --paginate "repos/$repo/issues/$number/comments" |
-        jq -sr 'add[] | .body | split("\n")[] | select(startswith("<!-- idd-skill-standing-approval:"))'
-    done
+  gh api --paginate "repos/$repo/issues/comments?per_page=100" |
+    jq -sr 'add[] | .body | split("\n")[] | select(startswith("<!-- idd-skill-standing-approval:"))'
   ```
 
 ### Operator forced-handoff helpers

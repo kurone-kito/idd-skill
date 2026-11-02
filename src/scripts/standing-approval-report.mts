@@ -18,8 +18,7 @@ import {
   runHelperCli,
 } from './helper-cli-runner.mts';
 
-const SEARCH_PAGE_SIZE = 100;
-const SEARCH_RESULT_CAP = 1000;
+const PAGE_SIZE = 100;
 const MARKER_PREFIX = '<!-- idd-skill-standing-approval:';
 const MARKER_PATTERN =
   /^<!-- idd-skill-standing-approval: class=(budgetRaise|split|release); set=(none|[A-Za-z0-9][A-Za-z0-9._:-]{0,127}); anchor=(none|[A-Za-z0-9-]+\/[A-Za-z0-9_.-]+#[1-9][0-9]*); ceiling=([^;\s<>]+); option=([a-z0-9-]+) -->$/;
@@ -47,13 +46,9 @@ export interface StandingApprovalReport {
 /** Minimal read-only GitHub API dependency, injectable for offline tests. */
 export type StandingApprovalApi = (path: string) => unknown;
 
-interface IssueSearchPage {
-  totalCount: number;
-  incompleteResults: boolean;
-  numbers: number[];
-}
-
-interface IssueComment {
+/** One comment of an issue or pull request, read from the repository feed. */
+interface RepositoryComment {
+  issueNumber: number;
   body: string;
 }
 
@@ -65,7 +60,7 @@ const STANDING_APPROVAL_REPORT_FLAG_SPEC = {
 } as const;
 
 /**
- * Read one REST page without a fixed stdout buffer. Search results and
+ * Read one REST page without a fixed stdout buffer. Comment feeds and
  * comment bodies are user-authored and can exceed execFileSync's 1 MiB
  * default even when the request is limited to 100 rows. ghTextUnbounded
  * captures through a temporary file and keeps the normal load-control and
@@ -106,160 +101,80 @@ export function parseStandingApprovalRecordLine(
   return { class: approvalClass, set, anchor, ceiling, option };
 }
 
-function parseIssueSearchPage(payload: unknown): IssueSearchPage | null {
-  if (payload === null || typeof payload !== 'object') return null;
-  const row = payload as {
-    total_count?: unknown;
-    incomplete_results?: unknown;
-    items?: unknown;
-  };
+/** Parse one repository comment; an unreadable item fails the whole report. */
+function parseRepositoryComment(
+  item: unknown,
+  page: number,
+): RepositoryComment {
+  const candidate =
+    item !== null && typeof item === 'object'
+      ? (item as { body?: unknown; issue_url?: unknown })
+      : null;
+  const issueUrl = candidate?.issue_url;
+  const match =
+    typeof issueUrl === 'string'
+      ? /\/issues\/([1-9][0-9]*)$/.exec(issueUrl)
+      : null;
   if (
-    typeof row.total_count !== 'number' ||
-    !Number.isInteger(row.total_count) ||
-    row.total_count < 0 ||
-    typeof row.incomplete_results !== 'boolean' ||
-    !Array.isArray(row.items)
+    candidate === null ||
+    typeof candidate.body !== 'string' ||
+    match === null
   ) {
-    return null;
+    throw new Error(
+      `standing-approval-report: comments page ${page} contained an unreadable comment`,
+    );
   }
-  const numbers: number[] = [];
-  for (const item of row.items) {
-    if (item === null || typeof item !== 'object') return null;
-    const number = (item as { number?: unknown }).number;
-    if (
-      typeof number !== 'number' ||
-      !Number.isInteger(number) ||
-      number <= 0
-    ) {
-      return null;
-    }
-    numbers.push(number);
-  }
-  return {
-    totalCount: row.total_count,
-    incompleteResults: row.incomplete_results,
-    numbers,
-  };
+  return { issueNumber: Number(match[1]), body: candidate.body };
 }
 
-function fetchCandidateConversationNumbers(
+/**
+ * Read every issue and pull-request comment in the repository. The REST feed is
+ * read in full, because GitHub's comment search index can lag behind a new
+ * comment, and a search-based candidate list could leave a record unlisted.
+ */
+function fetchRepositoryComments(
   owner: string,
   repo: string,
   api: StandingApprovalApi,
-): number[] {
-  const query = `repo:${owner}/${repo} in:comments idd-skill-standing-approval`;
-  const fetchPage = (page: number): IssueSearchPage => {
-    const path =
-      `search/issues?q=${encodeURIComponent(query)}` +
-      `&per_page=${SEARCH_PAGE_SIZE}&page=${page}`;
-    const parsed = parseIssueSearchPage(api(path));
-    if (!parsed) {
-      throw new Error(
-        `standing-approval-report: search page ${page} was not a readable response`,
-      );
-    }
-    if (parsed.incompleteResults) {
-      throw new Error(
-        `standing-approval-report: GitHub marked search page ${page} incomplete`,
-      );
-    }
-    return parsed;
-  };
-
-  const first = fetchPage(1);
-  if (first.totalCount > SEARCH_RESULT_CAP) {
-    throw new Error(
-      `standing-approval-report: search returned ${first.totalCount} conversations, beyond GitHub's ${SEARCH_RESULT_CAP}-result search ceiling`,
-    );
-  }
-  const pageCount = Math.max(1, Math.ceil(first.totalCount / SEARCH_PAGE_SIZE));
-  const pages = [first];
-  for (let page = 2; page <= pageCount; page += 1) {
-    const parsed = fetchPage(page);
-    if (parsed.totalCount !== first.totalCount) {
-      throw new Error(
-        'standing-approval-report: search result count changed during pagination',
-      );
-    }
-    pages.push(parsed);
-  }
-
-  const collected = pages.flatMap((page) => page.numbers);
-  if (collected.length !== first.totalCount) {
-    throw new Error(
-      `standing-approval-report: search pagination returned ${collected.length} of ${first.totalCount} conversations`,
-    );
-  }
-  const uniqueNumbers = [...new Set(collected)];
-  if (uniqueNumbers.length !== first.totalCount) {
-    throw new Error(
-      'standing-approval-report: search pagination returned duplicate conversations',
-    );
-  }
-  return uniqueNumbers.sort((a, b) => a - b);
-}
-
-function fetchIssueComments(
-  owner: string,
-  repo: string,
-  issueNumber: number,
-  api: StandingApprovalApi,
-): IssueComment[] {
-  const comments: IssueComment[] = [];
+): RepositoryComment[] {
+  const comments: RepositoryComment[] = [];
   for (let page = 1; ; page += 1) {
     const path =
-      `repos/${owner}/${repo}/issues/${issueNumber}/comments` +
-      `?per_page=${SEARCH_PAGE_SIZE}&page=${page}`;
+      `repos/${owner}/${repo}/issues/comments` +
+      `?per_page=${PAGE_SIZE}&page=${page}&sort=created&direction=asc`;
     const payload = api(path);
     if (!Array.isArray(payload)) {
       throw new Error(
-        `standing-approval-report: comments page ${page} for #${issueNumber} was not an array`,
+        `standing-approval-report: comments page ${page} was not an array`,
       );
     }
-    const pageComments: IssueComment[] = [];
     for (const item of payload) {
-      if (
-        item === null ||
-        typeof item !== 'object' ||
-        typeof (item as { body?: unknown }).body !== 'string'
-      ) {
-        throw new Error(
-          `standing-approval-report: comments page ${page} for #${issueNumber} contained an unreadable comment`,
-        );
-      }
-      pageComments.push({ body: (item as { body: string }).body });
+      comments.push(parseRepositoryComment(item, page));
     }
-    comments.push(...pageComments);
-    if (pageComments.length < SEARCH_PAGE_SIZE) return comments;
+    if (payload.length < PAGE_SIZE) return comments;
   }
 }
 
-/** Fetch and parse every comment thread identified by GitHub's comment search. */
+/** Fetch and parse every standing-approval record in the repository. */
 export function fetchStandingApprovalReport(
   owner: string,
   repo: string,
   api: StandingApprovalApi = readGhApiJsonUnbounded,
 ): StandingApprovalReport {
-  const conversationNumbers = fetchCandidateConversationNumbers(
-    owner,
-    repo,
-    api,
-  );
   const records: StandingApprovalRecord[] = [];
+  const conversations = new Set<number>();
   let malformedCount = 0;
 
-  for (const issueNumber of conversationNumbers) {
-    const comments = fetchIssueComments(owner, repo, issueNumber, api);
-    for (const comment of comments) {
-      for (const line of comment.body.split(/\r?\n/)) {
-        if (!line.startsWith(MARKER_PREFIX)) continue;
-        const parsed = parseStandingApprovalRecordLine(line);
-        if (!parsed) {
-          malformedCount += 1;
-          continue;
-        }
-        records.push({ ...parsed, issueNumber });
+  for (const comment of fetchRepositoryComments(owner, repo, api)) {
+    for (const line of comment.body.split(/\r?\n/)) {
+      if (!line.startsWith(MARKER_PREFIX)) continue;
+      conversations.add(comment.issueNumber);
+      const parsed = parseStandingApprovalRecordLine(line);
+      if (!parsed) {
+        malformedCount += 1;
+        continue;
       }
+      records.push({ ...parsed, issueNumber: comment.issueNumber });
     }
   }
 
@@ -274,7 +189,7 @@ export function fetchStandingApprovalReport(
   );
   return {
     repository: { owner, repo },
-    conversationCount: conversationNumbers.length,
+    conversationCount: conversations.size,
     malformedCount,
     records,
   };

@@ -20,11 +20,11 @@ const CLI_ENTRY = fileURLToPath(
 const VALID_BUDGET =
   '<!-- idd-skill-standing-approval: class=budgetRaise; set=set-a734a6d5-f8d9-4d9a-a0c5-8eed2dcc1b12; anchor=kurone-kito/idd-skill#4883; ceiling=5; option=option-a -->';
 
-function searchPage(numbers: number[], totalCount = numbers.length) {
+/** One repository comment as the REST feed returns it. */
+function feedComment(issueNumber: number, body: string) {
   return {
-    total_count: totalCount,
-    incomplete_results: false,
-    items: numbers.map((number) => ({ number })),
+    body,
+    issue_url: `https://api.github.com/repos/acme/widgets/issues/${issueNumber}`,
   };
 }
 
@@ -91,24 +91,17 @@ test('fetchStandingApprovalReport lists every parsed record and counts malformed
     'idd-skill',
     (path) => {
       calls.push(path);
-      if (path.startsWith('search/issues?')) return searchPage([4883, 4930]);
-      if (
-        path.startsWith('repos/kurone-kito/idd-skill/issues/4883/comments?')
-      ) {
+      if (path.startsWith('repos/kurone-kito/idd-skill/issues/comments?')) {
         return [
-          { body: `Decision\n${VALID_BUDGET}` },
-          {
-            body: '<!-- idd-skill-standing-approval: class=split; set=none; anchor=none; ceiling=bad; option=split-now -->',
-          },
-        ];
-      }
-      if (
-        path.startsWith('repos/kurone-kito/idd-skill/issues/4930/comments?')
-      ) {
-        return [
-          {
-            body: '<!-- idd-skill-standing-approval: class=split; set=none; anchor=kurone-kito/idd-skill#4883; ceiling=8; option=option-a -->',
-          },
+          feedComment(4883, `Decision\n${VALID_BUDGET}`),
+          feedComment(
+            4883,
+            '<!-- idd-skill-standing-approval: class=split; set=none; anchor=none; ceiling=bad; option=split-now -->',
+          ),
+          feedComment(
+            4930,
+            '<!-- idd-skill-standing-approval: class=split; set=none; anchor=kurone-kito/idd-skill#4883; ceiling=8; option=option-a -->',
+          ),
         ];
       }
       throw new Error(`unexpected API path: ${path}`);
@@ -147,54 +140,20 @@ test('fetchStandingApprovalReport lists every parsed record and counts malformed
     JSON.parse(renderStandingApprovalReportJson(report)),
     report,
   );
-  assert.equal(calls.length, 3);
+  assert.equal(calls.length, 1);
+  assert.match(calls[0] ?? '', /sort=created&direction=asc/);
 });
 
-test('fetchStandingApprovalReport paginates complete search results', () => {
+test('fetchStandingApprovalReport follows every page of the repository feed', () => {
   const calls: string[] = [];
   const report = fetchStandingApprovalReport('acme', 'widgets', (path) => {
     calls.push(path);
-    if (path.startsWith('search/issues?')) {
-      const page = Number(new URLSearchParams(path.split('?')[1]).get('page'));
-      if (page === 1) {
-        return searchPage(
-          Array.from({ length: 100 }, (_, index) => index + 1),
-          101,
-        );
-      }
-      return searchPage([101], 101);
-    }
-    return [];
-  });
-  assert.equal(report.conversationCount, 101);
-  assert.equal(report.records.length, 0);
-  assert.ok(calls.some((path) => path.includes('page=2')));
-  assert.equal(calls.length, 103);
-
-  let commentFetches = 0;
-  assert.throws(
-    () =>
-      fetchStandingApprovalReport('acme', 'widgets', (path) => {
-        if (path.startsWith('search/issues?')) return searchPage([42, 42], 2);
-        commentFetches += 1;
-        return [];
-      }),
-    /duplicate conversations/,
-  );
-  assert.equal(commentFetches, 0);
-});
-
-test('fetchStandingApprovalReport follows full comment pages', () => {
-  const calls: string[] = [];
-  const report = fetchStandingApprovalReport('acme', 'widgets', (path) => {
-    calls.push(path);
-    if (path.startsWith('search/issues?')) return searchPage([42]);
     const page = Number(new URLSearchParams(path.split('?')[1]).get('page'));
     if (page === 1) {
-      return Array.from({ length: 100 }, () => ({ body: 'ordinary comment' }));
+      return Array.from({ length: 100 }, () => feedComment(7, 'ordinary'));
     }
-    if (page === 2) return [{ body: VALID_BUDGET }];
-    throw new Error(`unexpected comment page ${page}`);
+    if (page === 2) return [feedComment(42, VALID_BUDGET)];
+    throw new Error(`unexpected feed page ${page}`);
   });
 
   assert.deepEqual(report.records, [
@@ -207,67 +166,41 @@ test('fetchStandingApprovalReport follows full comment pages', () => {
       issueNumber: 42,
     },
   ]);
-  assert.ok(
-    calls.some((path) => path.endsWith('/comments?per_page=100&page=2')),
-  );
-  assert.equal(
-    calls.filter((path) =>
-      path.startsWith('repos/acme/widgets/issues/42/comments?'),
-    ).length,
-    2,
-  );
+  assert.equal(report.conversationCount, 1);
+  assert.equal(calls.length, 2);
 });
 
-test('fetchStandingApprovalReport returns an empty complete report for no matches', () => {
+test('fetchStandingApprovalReport returns an empty complete report for no comments', () => {
   const report = fetchStandingApprovalReport('acme', 'widgets', (path) => {
-    assert.match(path, /^search\/issues\?/);
-    return searchPage([]);
+    assert.match(path, /^repos\/acme\/widgets\/issues\/comments\?/);
+    return [];
   });
   assert.deepEqual(report.records, []);
   assert.equal(report.malformedCount, 0);
   assert.equal(report.conversationCount, 0);
 });
 
-test('fetchStandingApprovalReport fails closed on incomplete or over-limit search', () => {
+test('fetchStandingApprovalReport fails closed on an unreadable feed page or item', () => {
   assert.throws(
     () =>
       fetchStandingApprovalReport('acme', 'widgets', () => ({
-        total_count: 1,
-        incomplete_results: true,
-        items: [{ number: 1 }],
+        body: 'not an array',
       })),
-    /marked search page 1 incomplete/,
+    /comments page 1 was not an array/,
   );
   assert.throws(
     () =>
-      fetchStandingApprovalReport('acme', 'widgets', () =>
-        searchPage([], 1001),
-      ),
-    /beyond GitHub's 1000-result search ceiling/,
-  );
-});
-
-test('fetchStandingApprovalReport fails closed on unstable search and comments failures', () => {
-  let page = 0;
-  assert.throws(
-    () =>
-      fetchStandingApprovalReport('acme', 'widgets', (path) => {
-        if (!path.startsWith('search/issues?')) return [];
-        page += 1;
-        return searchPage(
-          page === 1 ? Array.from({ length: 100 }, (_, i) => i + 1) : [101],
-          page === 1 ? 101 : 102,
-        );
-      }),
-    /search result count changed during pagination/,
+      fetchStandingApprovalReport('acme', 'widgets', () => [
+        { body: VALID_BUDGET },
+      ]),
+    /comments page 1 contained an unreadable comment/,
   );
   assert.throws(
     () =>
-      fetchStandingApprovalReport('acme', 'widgets', (path) => {
-        if (path.startsWith('search/issues?')) return searchPage([12]);
-        return { body: 'not an array' };
-      }),
-    /comments page 1 for #12 was not an array/,
+      fetchStandingApprovalReport('acme', 'widgets', () => [
+        { body: VALID_BUDGET, issue_url: 'https://example.invalid/pull/x' },
+      ]),
+    /comments page 1 contained an unreadable comment/,
   );
 });
 
@@ -281,8 +214,7 @@ test('CLI uses only read-only gh API requests', () => {
 const args = process.argv.slice(2);
 fs.appendFileSync(process.env.IDD_STANDING_REPORT_CALL_LOG, JSON.stringify(args) + '\\n');
 if (args[0] !== 'api') { process.stderr.write('unexpected gh command\\n'); process.exitCode = 3; }
-else if (args[1].startsWith('search/issues?')) process.stdout.write(JSON.stringify(${JSON.stringify(searchPage([42]))}));
-else if (args[1].startsWith('repos/acme/widgets/issues/42/comments?')) process.stdout.write(JSON.stringify([{body:${JSON.stringify(VALID_BUDGET)}}]));
+else if (args[1].startsWith('repos/acme/widgets/issues/comments?')) process.stdout.write(JSON.stringify([{body:${JSON.stringify(VALID_BUDGET)},issue_url:'https://api.github.com/repos/acme/widgets/issues/42'}]));
 else { process.stderr.write('unexpected API path\\n'); process.exitCode = 4; }
 `,
   );
@@ -305,7 +237,7 @@ else { process.stderr.write('unexpected API path\\n'); process.exitCode = 4; }
       .trim()
       .split('\n')
       .map((line) => JSON.parse(line) as string[]);
-    assert.equal(calls.length, 3, JSON.stringify(calls));
+    assert.equal(calls.length, 2, JSON.stringify(calls));
     assert.deepEqual(calls[0]?.slice(0, 2), ['auth', 'token']);
     assert.ok(
       calls
@@ -324,15 +256,13 @@ else { process.stderr.write('unexpected API path\\n'); process.exitCode = 4; }
   }
 });
 
-test('CLI reads oversized search and comment pages without a stdout buffer cap', () => {
+test('CLI reads oversized feed pages without a stdout buffer cap', () => {
   const restore = stubExecutable(
     'gh',
     `const args = process.argv.slice(2);
 if (args[0] === 'auth' && args[1] === 'token') process.stdout.write('token');
-else if (args[0] === 'api' && args[1].startsWith('search/issues?')) {
-  process.stdout.write(JSON.stringify({total_count:1,incomplete_results:false,items:[{number:42,body:'x'.repeat(2*1024*1024)}]}));
-} else if (args[0] === 'api' && args[1].startsWith('repos/acme/widgets/issues/42/comments?')) {
-  process.stdout.write(JSON.stringify([{body:'x'.repeat(2*1024*1024)+'\\n'+${JSON.stringify(VALID_BUDGET)}}]));
+else if (args[0] === 'api' && args[1].startsWith('repos/acme/widgets/issues/comments?')) {
+  process.stdout.write(JSON.stringify([{body:'x'.repeat(2*1024*1024)+'\\n'+${JSON.stringify(VALID_BUDGET)},issue_url:'https://api.github.com/repos/acme/widgets/issues/42'}]));
 } else { process.stderr.write('unexpected gh command\\n'); process.exitCode = 4; }
 `,
   );
