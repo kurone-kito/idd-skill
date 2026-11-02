@@ -4290,8 +4290,9 @@ yarn run idd:pull-request-draft-state --owner <owner> --repo <repo> \
   --number <n> --target <draft|ready> --expected-head-sha <40-hex> [--apply]
 
 # ephemeral-npx
-npx idd-pull-request-draft-state --owner <owner> --repo <repo> \
-  --number <n> --target <draft|ready> --expected-head-sha <40-hex> [--apply]
+npx --yes --package <helper-package-spec> idd-pull-request-draft-state \
+  --owner <owner> --repo <repo> --number <n> --target <draft|ready> \
+  --expected-head-sha <40-hex> [--apply]
 ```
 
 - `--owner` and `--repo` are required. They name the base repository. A pull
@@ -4309,12 +4310,18 @@ The core refuses these states before any transition request: `invalid-target`,
 `invalid-head-sha`, `invalid-number`, `invalid-repository`, `inaccessible`,
 `read-failed`, `wrong-base-repository`, `merged`, `closed`, and `changed-head`.
 
-After a transition request, a failed request followed by a clean fresh read
-that still shows the state unchanged is `refused` with `transition-failed`.
-A failed or refused fresh read, a refusal code on the fresh read, or a state
-that already matches the target is `unverified`. An `unverified` report can
-carry a post-change refusal code, so a caller must check the verdict before
-it reads the refusal as a rejection.
+After a transition request, the verdict depends on both the request result and
+the fresh read:
+
+- A successful request with a clean fresh read that shows the target state is
+  `transitioned`.
+- A failed request with a clean fresh read that still shows the old state is
+  `refused` with `transition-failed`.
+- Any other post-request result is `unverified`. That covers a successful
+  request whose fresh read shows the old state, a fresh read that fails or
+  carries a refusal code, and a failed request whose state already matches the
+  target. An `unverified` report can carry a post-change refusal code, so a
+  caller must check the verdict before it reads the refusal as a rejection.
 
 The verdicts are `dry-run`, `transitioned`, `already-in-target-state`,
 `refused`, and `unverified`. The exit status is `0` for `dry-run`,
