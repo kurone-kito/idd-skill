@@ -7,8 +7,11 @@
 // Pull-request draft-state transition core (#4908). The core moves one open
 // pull request between draft and ready-for-review and nothing else: it never
 // merges, pushes, changes labels, or releases a claim. A dry run is the
-// default. Every refusal happens before the transition request, and an
-// applied transition counts as done only after a fresh read confirms it.
+// default. A refusal from the first read or the pre-mutation read happens
+// before the transition request. An applied transition counts as done only
+// after a fresh read confirms it. After the request, `transition-failed` is the
+// only `refused` verdict, and an `unverified` report can still carry a
+// post-change refusal code from its fresh read.
 // Packaging as a command is out of scope here (#4909).
 
 const FULL_SHA = /^[0-9a-f]{40}$/;
@@ -71,6 +74,11 @@ export interface DraftTransitionReport {
   expectedHeadSha: string;
   /** The state from the final read, or `null` when that read failed. */
   observed: PullRequestState | null;
+  /**
+   * The refusal code, or `null`. An `unverified` report can carry the
+   * post-change refusal (for example `merged` or `closed`) from its fresh read,
+   * so callers must check `verdict` before reading `refusal` as a rejection.
+   */
   refusal: RefusalCode | null;
   /** Human-readable detail for the verdict or refusal. */
   detail: string;

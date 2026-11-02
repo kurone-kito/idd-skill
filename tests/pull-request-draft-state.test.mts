@@ -278,6 +278,16 @@ test('a post-change read that shows the pull request closed is unverified', () =
   assert.equal(report.refusal, 'closed');
 });
 
+test('a post-change read with a changed head is unverified with changed-head', () => {
+  const gh = fakeGh({
+    reads: [ok(pr()), ok(pr()), ok(pr({ sha: OTHER }))],
+  });
+  const report = evaluatePullRequestDraftTransition(request(), gh.deps);
+  assert.equal(report.verdict, 'unverified');
+  assert.equal(report.refusal, 'changed-head');
+  assert.equal(report.mutationSent, true);
+});
+
 test('a failed mutation with an unchanged state is refused as transition-failed', () => {
   const gh = fakeGh({
     reads: [ok(pr()), ok(pr()), ok(pr())],
