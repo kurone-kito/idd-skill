@@ -215,8 +215,20 @@ test('standalone guard contract reports a guard block outside the expected shape
     );
     assert.notEqual(otherSink, source);
     assert.notEqual(spacedCall, source);
+    // A malformed first guard must not let a valid later copy pass (#4974).
+    const malformedFirstGuard =
+      "if (typeof import.meta.main !== 'boolean') {\n" +
+      "  console.error('diagnostic');\n" +
+      '  process.exit(1);\n' +
+      '}\n' +
+      source;
     assert.notEqual(sinkBeforeGuard, source);
-    for (const mutatedSource of [otherSink, spacedCall, sinkBeforeGuard]) {
+    for (const mutatedSource of [
+      otherSink,
+      spacedCall,
+      sinkBeforeGuard,
+      malformedFirstGuard,
+    ]) {
       writeFileSync(sourcePath, mutatedSource);
       const before = snapshot(fixture.root);
       const result = runAudit(fixture.root);

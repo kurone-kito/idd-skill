@@ -294,10 +294,17 @@ function detectEntryContracts(files) {
     // between those parts. The captured write() argument is the slice, so a
     // spaced call, another output call, or a statement before or after the
     // write call either leaves code in the slice or matches nothing.
+    // #4974: the audit reads one guard. With two conditions, a valid copy
+    // after a malformed first guard would pass, so the condition must be unique.
+    const guardConditionCount = Array.from(
+      text.matchAll(/typeof import\.meta\.main\s*!==\s*'boolean'/g),
+    ).length;
     const guardBlock =
-      /typeof import\.meta\.main\s*!==\s*'boolean'\s*\)\s*\{\s*process\.stderr\.write\(([\s\S]*?)\);\s*process\.exit\(1\);\s*\}/d.exec(
-        text,
-      );
+      guardConditionCount === 1
+        ? /typeof import\.meta\.main\s*!==\s*'boolean'\s*\)\s*\{\s*process\.stderr\.write\(([\s\S]*?)\);\s*process\.exit\(1\);\s*\}/d.exec(
+            text,
+          )
+        : null;
     const guardArgument = guardBlock?.indices?.[1];
     if (guardArgument === undefined) {
       // Without the block there is no diagnostic to audit, so report only the
