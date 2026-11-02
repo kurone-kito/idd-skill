@@ -12667,16 +12667,24 @@ test('bin/idd-onboard.mjs distribution prepare and bind preserve CLI data and st
   // tracked edits and its untracked, non-ignored files, the way a dirty working
   // tree would be installed. Each entry keeps its mode, and a symlink stays a
   // symlink, so nothing is written through a link into another path.
+  // A path is copied only while it is a regular file or a symlink; a path that
+  // became a directory, or was removed, is a removal in the clone (#4943 review).
+  const isCopyableEntry = (path: string): boolean => {
+    try {
+      const stat = lstatSync(join(REPO_ROOT, path));
+      return stat.isFile() || stat.isSymbolicLink();
+    } catch {
+      return false;
+    }
+  };
   const mirrorCheckoutEntry = (path: string, stage: boolean): void => {
     const source = join(REPO_ROOT, path);
     const target = join(sourceRoot, path);
     rmSync(target, { recursive: true, force: true });
-    let stat: ReturnType<typeof lstatSync>;
-    try {
-      stat = lstatSync(source);
-    } catch {
+    if (!isCopyableEntry(path)) {
       return;
     }
+    const stat = lstatSync(source);
     mkdirSync(dirname(target), { recursive: true });
     if (stat.isSymbolicLink()) {
       symlinkSync(readlinkSync(source), target);
@@ -12702,7 +12710,7 @@ test('bin/idd-onboard.mjs distribution prepare and bind preserve CLI data and st
   // A removed file may leave a directory that an added file replaces, so
   // removals go first.
   const checkoutRemovals = checkoutEdits.filter(
-    (path) => !existsSync(join(REPO_ROOT, path)),
+    (path) => !isCopyableEntry(path),
   );
   for (const path of [
     ...checkoutRemovals,
