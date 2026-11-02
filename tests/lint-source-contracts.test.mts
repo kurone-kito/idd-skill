@@ -194,6 +194,55 @@ test('standalone guard contract scans the complete diagnostic expression', () =>
     fixture.cleanup();
   }
 });
+test('standalone guard contract reports a guard block outside the expected shape once', () => {
+  const fixture = makeFixture();
+  const sourcePath = join(
+    fixture.root,
+    'src/scripts/minimize-superseded-markers.mts',
+  );
+  try {
+    const source = readFileSync(sourcePath, 'utf8');
+    const guardCall = '    process.stderr.write(\n';
+    assert.ok(source.includes(guardCall));
+    const otherSink = source.replace(guardCall, '    console.error(\n');
+    const spacedCall = source.replace(
+      guardCall,
+      '    process.stderr.write (\n',
+    );
+    const sinkBeforeGuard = source.replace(
+      guardCall,
+      "    console.error('diagnostic');\n" + guardCall,
+    );
+    assert.notEqual(otherSink, source);
+    assert.notEqual(spacedCall, source);
+    assert.notEqual(sinkBeforeGuard, source);
+    for (const mutatedSource of [otherSink, spacedCall, sinkBeforeGuard]) {
+      writeFileSync(sourcePath, mutatedSource);
+      const before = snapshot(fixture.root);
+      const result = runAudit(fixture.root);
+      assert.equal(result.status, 1, result.stderr);
+      assert.match(
+        result.stderr,
+        /RUNTIME-GUARD-STANDALONE-EXEMPTION src\/scripts\/minimize-superseded-markers\.mts:/,
+      );
+      assert.match(
+        result.stderr,
+        /inlined guard block must match the expected shape/,
+      );
+      assert.doesNotMatch(
+        result.stderr,
+        /must not copy an engines\.node range|must name idd-skill/,
+      );
+      assert.equal(
+        snapshot(fixture.root),
+        before,
+        'the audit must be read-only',
+      );
+    }
+  } finally {
+    fixture.cleanup();
+  }
+});
 test('standalone guard contract rejects an interpolated engines range', () => {
   const fixture = makeFixture();
   const sourcePath = join(
@@ -302,6 +351,12 @@ test('standalone guard contract rejects a range concatenated before the template
       sourceWithRangeConstant.slice(0, templateStart) +
       'ENGINES_RANGE + // process.stderr.write(\n      ' +
       sourceWithRangeConstant.slice(templateStart);
+    // A unary `+` before the marker template passes an outside-text check
+    // that only tests for whitespace and commas (#4974).
+    const unaryPlusPrefix =
+      sourceWithRangeConstant.slice(0, templateStart) +
+      '+' +
+      sourceWithRangeConstant.slice(templateStart);
     const otherSinkPrefix = sameLinePrefix.replace(
       'process.stderr.write(\n',
       'console.error(\n',
@@ -359,13 +414,11 @@ test('standalone guard contract rejects a range concatenated before the template
       sameLinePrefix,
       ownLinePrefix,
       decoyCallCommentPrefix,
-      otherSinkPrefix,
+      unaryPlusPrefix,
       earlierWriteCall,
       decoyWriteBeforePrefix,
       duplicatedPrefixedCall,
-      spacedCallCommentDecoy,
       statementAfterCall,
-      otherSinkBeforeCall,
     ]) {
       writeFileSync(sourcePath, mutatedSource);
       const before = snapshot(fixture.root);

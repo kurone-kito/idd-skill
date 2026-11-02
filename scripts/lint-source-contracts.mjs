@@ -299,21 +299,34 @@ function detectEntryContracts(files) {
         text,
       );
     const guardArgument = guardBlock?.indices?.[1];
-    const guardMessageStart =
-      guardArgument === undefined ? -1 : guardArgument[0];
+    if (guardArgument === undefined) {
+      // Without the block there is no diagnostic to audit, so report only the
+      // shape. The content checks below would repeat it as misleading errors.
+      result.push(
+        violation(
+          'RUNTIME-GUARD-STANDALONE-EXEMPTION',
+          `src/scripts/${name}`,
+          'inlined guard block must match the expected shape',
+        ),
+      );
+      continue;
+    }
+    const guardMessageStart = guardArgument[0];
     // Drop the whitespace before `);` so the trailing comma ends the slice.
     const guardMessageEnd =
-      guardArgument === undefined
-        ? -1
-        : guardMessageStart +
-          text.slice(guardMessageStart, guardArgument[1]).trimEnd().length;
+      guardMessageStart +
+      text.slice(guardMessageStart, guardArgument[1]).trimEnd().length;
     // The marker must open a template inside the slice and appear only once:
     // a clean copy of the diagnostic would otherwise hide a prefixed copy.
+    // Only whitespace may precede the marker template (#4974): a unary `+`
+    // there would coerce the template before the write call sees it.
     const guardMessageValid =
-      guardMessageStart !== -1 &&
       guardMessageMarkerStart > guardMessageStart &&
       guardMessageMarkerStart < guardMessageEnd &&
       text[guardMessageMarkerStart - 1] === '`' &&
+      /^\s*$/.test(
+        text.slice(guardMessageStart, guardMessageMarkerStart - 1),
+      ) &&
       text.indexOf(guardMessageMarker, guardMessageMarkerStart + 1) === -1;
     const guardMessage = guardMessageValid
       ? text.slice(guardMessageStart, guardMessageEnd)
