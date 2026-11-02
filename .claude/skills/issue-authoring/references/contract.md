@@ -1708,12 +1708,18 @@ external bind mount of one of its subdirectories; a ledger in that alias
 could be staged after the checkout is remounted.
 This control gap was identified during security review of PR #4728 on
 2026-10-28 (preventive; no observed incident yet). The stop message names the
-missing path and this operator recovery step: the operator must confirm the
-checkout directory is absent, then remove only that record with
-`git worktree remove --force <path>`, and the next run repeats the full
-inventory. If the record is detached, the operator first points a ref at its
-`HEAD` commit, so removing the record cannot leave that commit unreachable.
-Never use a plain `git worktree prune` here: it is clone-wide, so it can also
+missing path and this operator recovery step. An absent path can mean a deleted
+checkout, a worktree moved by hand, or one on unmounted storage, so the operator
+must confirm that the checkout was deleted: a moved worktree is repaired with
+`git worktree repair <new-path>`, and unmounted storage is mounted again; neither
+record is removed. For a deleted checkout whose record is detached, the operator
+first points a backup ref at its `HEAD` commit, so removing the record cannot
+leave that commit unreachable. Then, holding any lock the clone uses for
+worktree changes, the operator re-checks that the path is still absent
+(`test ! -e <path>`) and removes only that record with
+`git worktree remove --force <path>`; if the path has reappeared, the operator
+stops. The next run repeats the full inventory. Never use a plain
+`git worktree prune` here: it is clone-wide, so it can also
 remove other records, such as one whose checkout is only on unmounted storage,
 before anyone has checked them (preventive; no observed incident yet).
 Automation never prunes or removes worktree records, and this recovery does not
