@@ -12681,6 +12681,7 @@ test('bin/idd-onboard.mjs distribution prepare and bind preserve CLI data and st
     }
     mkdirSync(dirname(target), { recursive: true });
     writeFileSync(target, readFileSync(join(REPO_ROOT, path)));
+    chmodSync(target, statSync(join(REPO_ROOT, path)).mode & 0o777);
     execFileSync('git', ['-C', sourceRoot, 'add', '--', path], {
       env: gitEnv,
       stdio: 'pipe',
@@ -12699,6 +12700,7 @@ test('bin/idd-onboard.mjs distribution prepare and bind preserve CLI data and st
     const target = join(sourceRoot, path);
     mkdirSync(dirname(target), { recursive: true });
     writeFileSync(target, readFileSync(join(REPO_ROOT, path)));
+    chmodSync(target, statSync(join(REPO_ROOT, path)).mode & 0o777);
   }
   const trackedPayloadDoc = 'idd-template/docs/idd-workflow.md';
   const payloadMarker = `<!-- tracked-payload-${process.pid}-${Date.now()} -->`;
@@ -12789,9 +12791,19 @@ test('bin/idd-onboard.mjs distribution prepare and bind preserve CLI data and st
     const skipped = inspectTrackedPayloadSnapshot();
     assert.equal(skipped.kind, 'skip');
     if (skipped.kind === 'skip') {
-      const paths = untrackedPayloadFixtures
-        .map((fixture) => relative(sourceRoot, fixture).split(sep).join('/'))
-        .sort();
+      // The checkout may hold untracked payload files of its own, which the
+      // guard reports too (#4943 review).
+      const checkoutPayload = checkoutUntracked.filter(
+        (path) =>
+          payloadPaths.has(path) ||
+          skillPayloadPrefixes.some((prefix) => path.startsWith(prefix)),
+      );
+      const paths = [
+        ...untrackedPayloadFixtures.map((fixture) =>
+          relative(sourceRoot, fixture).split(sep).join('/'),
+        ),
+        ...checkoutPayload,
+      ].sort();
       assert.equal(
         skipped.reason,
         `Untracked payload files prevent a complete tracked source snapshot: ${paths.join(', ')}`,
