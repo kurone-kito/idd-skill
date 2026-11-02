@@ -15,6 +15,12 @@
 // Packaging as a command is out of scope here (#4909).
 
 const FULL_SHA = /^[0-9a-f]{40}$/;
+const REPOSITORY_NAME = /^[A-Za-z0-9_.-]+$/;
+
+/** A GitHub owner or repository segment that is safe to place in a REST path. */
+function isRepositoryName(value: string): boolean {
+  return REPOSITORY_NAME.test(value) && value !== '.' && value !== '..';
+}
 
 export type DraftTarget = 'draft' | 'ready';
 
@@ -59,6 +65,7 @@ export type DraftTransitionVerdict =
 export type RefusalCode =
   | 'invalid-target'
   | 'invalid-head-sha'
+  | 'invalid-repository'
   | 'invalid-number'
   | 'inaccessible'
   | 'read-failed'
@@ -268,6 +275,18 @@ export function evaluatePullRequestDraftTransition(
       describeRefusal(
         'invalid-head-sha',
         'expected head must be a full 40-character SHA',
+      ),
+      false,
+    );
+  }
+  if (!isRepositoryName(request.owner) || !isRepositoryName(request.repo)) {
+    return refused(
+      request,
+      null,
+      'invalid-repository',
+      describeRefusal(
+        'invalid-repository',
+        'owner and repo must be GitHub name segments, not dot-only or containing path characters',
       ),
       false,
     );

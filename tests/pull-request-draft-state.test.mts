@@ -320,6 +320,24 @@ test('a mutation that throws and a failing verification read is unverified', () 
   assert.equal(report.observed, null);
 });
 
+test('an owner or repository that could change the REST path is refused before any read', () => {
+  for (const owner of ['..', 'a/b', 'a?b', '']) {
+    const gh = fakeGh({ reads: [] });
+    const report = evaluatePullRequestDraftTransition(
+      request({ owner }),
+      gh.deps,
+    );
+    assert.equal(report.refusal, 'invalid-repository', `owner ${owner}`);
+    assert.equal(gh.mutationCalls().length, 0);
+  }
+  const gh = fakeGh({ reads: [] });
+  const report = evaluatePullRequestDraftTransition(
+    request({ repo: '.' }),
+    gh.deps,
+  );
+  assert.equal(report.refusal, 'invalid-repository');
+});
+
 test('a zero, negative, or non-integer pull request number is refused before any read', () => {
   for (const number of [0, -1, 1.5, Number.NaN]) {
     const gh = fakeGh({ reads: [] });
