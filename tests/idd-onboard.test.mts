@@ -12670,7 +12670,7 @@ test('bin/idd-onboard.mjs distribution prepare and bind preserve CLI data and st
   const mirrorCheckoutEntry = (path: string, stage: boolean): void => {
     const source = join(REPO_ROOT, path);
     const target = join(sourceRoot, path);
-    rmSync(target, { force: true });
+    rmSync(target, { recursive: true, force: true });
     let stat: ReturnType<typeof lstatSync>;
     try {
       stat = lstatSync(source);
@@ -12699,7 +12699,15 @@ test('bin/idd-onboard.mjs distribution prepare and bind preserve CLI data and st
   )
     .split('\0')
     .filter((path) => path.length > 0);
-  for (const path of checkoutEdits) {
+  // A removed file may leave a directory that an added file replaces, so
+  // removals go first.
+  const checkoutRemovals = checkoutEdits.filter(
+    (path) => !existsSync(join(REPO_ROOT, path)),
+  );
+  for (const path of [
+    ...checkoutRemovals,
+    ...checkoutEdits.filter((path) => !checkoutRemovals.includes(path)),
+  ]) {
     mirrorCheckoutEntry(path, true);
   }
   // Untracked files stay untracked in the clone, so the untracked-payload
