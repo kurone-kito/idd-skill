@@ -1717,16 +1717,15 @@ must confirm that the checkout was deleted: a moved worktree is repaired with
 `git worktree repair <new-path>`, and unmounted storage is mounted again; neither
 record is removed. For a deleted checkout whose record is detached, the operator
 first points a backup ref at its `HEAD` commit, so removing the record cannot
-leave that commit unreachable. Then, holding any lock the clone uses for
-worktree changes, the operator re-checks that the path is still absent
-(`test ! -e <path>`) and removes only that record with
-`git worktree remove --force <path>`; if the path has reappeared, the operator
-stops. A locked record refuses that removal: the operator first reads its lock
-reason, stops when the reason says the checkout may come back (for example, a
-checkout on removable media), and otherwise unlocks it with
-`git worktree unlock <path>` before the removal. Never pass `--force` twice,
-which removes a locked record without that check. The next run repeats the full
-inventory. Never use a plain
+leave that commit unreachable. A locked record refuses removal, so if the
+record is locked, the operator reads its lock reason, stops when the reason says
+the checkout may come back (for example, a checkout on removable media), and
+otherwise unlocks it with `git worktree unlock <path>`. Never pass `--force`
+twice, which removes a locked record without that check. Only then, holding any
+lock the clone uses for worktree changes, the operator re-checks that the path
+is still absent (`test ! -e <path>`) immediately before removing only that
+record with `git worktree remove --force <path>`; if the path has reappeared,
+the operator stops. The next run repeats the full inventory. Never use a plain
 `git worktree prune` here: it is clone-wide, so it can also
 remove other records, such as one whose checkout is only on unmounted storage,
 before anyone has checked them (preventive; no observed incident yet).

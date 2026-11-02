@@ -435,11 +435,12 @@ when retained history shows one; when history does not show whether a root was
 supplied, write no ledger and ask the operator. If a registered worktree
 checkout is absent, stop with a message that names the path and the operator
 step: the operator confirms the checkout was deleted rather than moved or
-unmounted, backs up a detached record's `HEAD`, re-checks under the clone's
-worktree lock that the path is still absent, unlocks a locked record only when
-its lock reason allows (never a second `--force`), and removes only that record
-with `git worktree remove --force <path>`, never a clone-wide
-`git worktree prune`; the next run repeats the inventory. Automation never
+unmounted, backs up a detached record's `HEAD`, unlocks a locked record only
+when its lock reason allows (never a second `--force`), and then, under the
+clone's worktree lock, re-checks that the path is still absent immediately
+before removing only that record with `git worktree remove --force <path>`,
+never a clone-wide `git worktree prune`; the next run repeats the inventory.
+Automation never
 prunes or removes worktree records and does not bypass claim or worktree
 recovery.
 
