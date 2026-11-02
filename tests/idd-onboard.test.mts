@@ -12665,15 +12665,26 @@ test('bin/idd-onboard.mjs distribution prepare and bind preserve CLI data and st
   );
   // The clone holds only committed files, so carry over the checkout's other
   // tracked edits as well, the way a dirty working tree would be installed.
+  // Additions are re-added so they stay tracked, and deletions are removed.
   const checkoutEdits = execFileSync(
     'git',
-    ['-C', REPO_ROOT, 'diff', '--name-only', '-z', 'HEAD'],
+    ['-C', REPO_ROOT, 'diff', '--name-only', '--no-renames', '-z', 'HEAD'],
     { env: gitEnv, encoding: 'utf8', stdio: 'pipe' },
   )
     .split('\0')
-    .filter((path) => path.length > 0 && existsSync(join(REPO_ROOT, path)));
+    .filter((path) => path.length > 0);
   for (const path of checkoutEdits) {
-    writeFileSync(join(sourceRoot, path), readFileSync(join(REPO_ROOT, path)));
+    const target = join(sourceRoot, path);
+    if (!existsSync(join(REPO_ROOT, path))) {
+      rmSync(target, { force: true });
+      continue;
+    }
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, readFileSync(join(REPO_ROOT, path)));
+    execFileSync('git', ['-C', sourceRoot, 'add', '--', path], {
+      env: gitEnv,
+      stdio: 'pipe',
+    });
   }
   const trackedPayloadDoc = 'idd-template/docs/idd-workflow.md';
   const payloadMarker = `<!-- tracked-payload-${process.pid}-${Date.now()} -->`;
