@@ -1616,7 +1616,10 @@ directory on that path may let another user rename or delete its entries: on
 POSIX, none may grant group or other users write and search permission without
 the sticky bit, and on Windows and macOS, none may have an ACL that lets another
 user rename or delete child entries. If any of this cannot be
-established, the protected-path inventory is unreadable. The executable check is
+established, the protected-path inventory is unreadable. Run every inventory
+command through that verified canonical path itself, never through the
+looked-up path or a link to it, so that a link in a directory another user can
+write cannot be retargeted after the check. The executable check is
 preventive; no observed incident yet. Run that command
 from the current worktree with that executable, `GIT_DIR`, `GIT_WORK_TREE`, `GIT_COMMON_DIR`,
 `GIT_CEILING_DIRECTORIES`, and `GIT_DISCOVERY_ACROSS_FILESYSTEM` unset, and

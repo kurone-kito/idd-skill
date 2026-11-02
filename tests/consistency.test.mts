@@ -4290,6 +4290,10 @@ test('issue-authoring contract defines ledger storage verdicts, allocation, and 
     text,
     /require that file and every directory on its canonical path to be owned by the current user or a system administrator principal .*?\. No user other than those principals may be able to write the file, and no directory on that path may let another user rename or delete its entries: on POSIX, none may grant group or other users write and search permission without the sticky bit, and on Windows and macOS, none may have an ACL that lets another user rename or delete child entries/,
   );
+  assert.match(
+    text,
+    /Run every inventory command through that verified canonical path itself, never through the looked-up path or a link to it/,
+  );
   // A supplied root is the only candidate; the defaults apply only when no
   // root was supplied (#4810).
   assert.match(
