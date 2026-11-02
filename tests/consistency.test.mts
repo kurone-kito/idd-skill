@@ -4067,6 +4067,12 @@ test('issue-authoring contract defines ledger storage verdicts, allocation, and 
     text,
     /holding any lock the clone uses for worktree changes, the operator re-checks that the path is still absent \(`test ! -e <path>`\) and removes only that record with `git worktree remove --force <path>`; if the path has reappeared, the operator stops/,
   );
+  // A locked record is unlocked only after its lock reason is read, never
+  // removed with a second --force (#4810).
+  assert.match(
+    text,
+    /A locked record refuses that removal: the operator first reads its lock reason, stops when the reason says the checkout may come back .*?, and otherwise unlocks it with `git worktree unlock <path>` before the removal\. Never pass `--force` twice/,
+  );
   // A plain prune is clone-wide, so the recovery never prescribes it (#4810).
   assert.match(
     text,
@@ -4407,7 +4413,7 @@ test('SKILL entry carries the ledger storage summary and link for instructions-o
     'Unsafe, conflicting, or unreadable storage stops the review: report its path and preserve unverified entries; cleanup is limited to entries this session created whose recorded identity still matches.',
     'A lost ledger starts empty. Losing the identity record, including after context compaction, loses the ledger:',
     'when history does not show whether a root was supplied, write no ledger and ask the operator.',
-    "stop with a message that names the path and the operator step: the operator confirms the checkout was deleted rather than moved or unmounted, backs up a detached record's `HEAD`, re-checks under the clone's worktree lock that the path is still absent, and removes only that record with `git worktree remove --force <path>`, never a clone-wide `git worktree prune`;",
+    "stop with a message that names the path and the operator step: the operator confirms the checkout was deleted rather than moved or unmounted, backs up a detached record's `HEAD`, re-checks under the clone's worktree lock that the path is still absent, unlocks a locked record only when its lock reason allows (never a second `--force`), and removes only that record with `git worktree remove --force <path>`, never a clone-wide `git worktree prune`;",
     'Use `$XDG_STATE_HOME`, `$HOME`, or `%LOCALAPPDATA%` only when its value is a fully qualified absolute path',
     "On macOS, check the root's ACL through the verified handle, because the mode bits do not show it.",
   ]) {
