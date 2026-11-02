@@ -60,8 +60,16 @@ export function parseArgs(argv) {
   if (owner === '' || repo === '') {
     throw usageError('--owner and --repo are both required');
   }
-  if (!/^\d+$/.test(numberRaw) || Number(numberRaw) <= 0) {
-    throw usageError('--number must be a positive pull request number');
+  // A value above Number.MAX_SAFE_INTEGER would be rounded by Number(), so the
+  // number that reached the REST path could name a different pull request.
+  if (
+    !/^\d+$/.test(numberRaw) ||
+    !Number.isSafeInteger(Number(numberRaw)) ||
+    Number(numberRaw) <= 0
+  ) {
+    throw usageError(
+      '--number must be a positive pull request number within the safe integer range',
+    );
   }
   if (target !== 'draft' && target !== 'ready') {
     throw usageError('--target must be draft or ready');
