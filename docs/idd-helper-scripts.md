@@ -4338,9 +4338,10 @@ The command never merges, pushes, changes labels, or releases a claim.
   `--owner`, `--repo`, and `--format json|table` flags.
 - Source-repo internal helper; not distributed via the package-manager /
   ephemeral-npx profiles.
-- Output: stable JSON by default, with one record per valid line, its
-  issue/PR number, repository, conversation count, and malformed-line
-  count. `--format table` is for operator reading.
+- Output: stable JSON by default. Each `records[]` entry carries `class`,
+  `set`, `anchor`, `ceiling`, `option`, and `issueNumber`. The top-level
+  fields are `repository`, `conversationCount`, `malformedCount`, and
+  `records`. `--format table` is for operator reading.
 - Scope: reads every issue and pull-request comment in the repository
   through the REST comment feed, oldest first, then validates each marker
   line against issue `#4886`'s grammar. It does not use comment search,
