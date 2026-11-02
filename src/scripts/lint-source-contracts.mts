@@ -346,9 +346,15 @@ function detectEntryContracts(
     // write call either leaves code in the slice or matches nothing.
     // #4974: the audit reads one guard. With two conditions, a valid copy
     // after a malformed first guard would pass, so count every typeof test of
-    // import.meta.main, whatever its quotes, comments, or line breaks.
+    // import.meta.main. Whitespace and comments may sit between the tokens.
+    const tokenGap = String.raw`(?:\s|/\*[\s\S]*?\*/|//[^\n]*\n)*`;
     const guardConditionCount = Array.from(
-      text.matchAll(/typeof\b[^;{}]*?import\s*\.\s*meta\s*\.\s*main\b/g),
+      text.matchAll(
+        new RegExp(
+          String.raw`typeof${tokenGap}\(?${tokenGap}import${tokenGap}\.${tokenGap}meta${tokenGap}\.${tokenGap}main\b`,
+          'g',
+        ),
+      ),
     ).length;
     const guardBlock =
       guardConditionCount === 1

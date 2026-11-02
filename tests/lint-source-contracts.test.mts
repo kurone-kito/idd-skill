@@ -227,6 +227,7 @@ test('standalone guard contract reports a guard block outside the expected shape
       malformedFirstGuard("typeof import.meta.main !== 'boolean'"),
       malformedFirstGuard('typeof import.meta.main !== "boolean"'),
       malformedFirstGuard("typeof import.meta.main /* note */ !== 'boolean'"),
+      malformedFirstGuard("typeof /* ; { } */ import.meta.main !== 'boolean'"),
     ]) {
       writeFileSync(sourcePath, mutatedSource);
       const before = snapshot(fixture.root);
