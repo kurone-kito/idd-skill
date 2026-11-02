@@ -345,9 +345,10 @@ function detectEntryContracts(
     // spaced call, another output call, or a statement before or after the
     // write call either leaves code in the slice or matches nothing.
     // #4974: the audit reads one guard. With two conditions, a valid copy
-    // after a malformed first guard would pass, so the condition must be unique.
+    // after a malformed first guard would pass, so count every typeof test of
+    // import.meta.main, whatever its quotes, comments, or line breaks.
     const guardConditionCount = Array.from(
-      text.matchAll(/typeof import\.meta\.main\s*!==\s*'boolean'/g),
+      text.matchAll(/typeof\b[^;{}]*?import\s*\.\s*meta\s*\.\s*main\b/g),
     ).length;
     const guardBlock =
       guardConditionCount === 1
