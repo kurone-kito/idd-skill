@@ -12663,6 +12663,18 @@ test('bin/idd-onboard.mjs distribution prepare and bind preserve CLI data and st
     join(sourceRoot, templateDoc),
     readFileSync(join(REPO_ROOT, templateDoc)),
   );
+  // The clone holds only committed files, so carry over the checkout's other
+  // tracked edits as well, the way a dirty working tree would be installed.
+  const checkoutEdits = execFileSync(
+    'git',
+    ['-C', REPO_ROOT, 'diff', '--name-only', '-z', 'HEAD'],
+    { env: gitEnv, encoding: 'utf8', stdio: 'pipe' },
+  )
+    .split('\0')
+    .filter((path) => path.length > 0 && existsSync(join(REPO_ROOT, path)));
+  for (const path of checkoutEdits) {
+    writeFileSync(join(sourceRoot, path), readFileSync(join(REPO_ROOT, path)));
+  }
   const trackedPayloadDoc = 'idd-template/docs/idd-workflow.md';
   const payloadMarker = `<!-- tracked-payload-${process.pid}-${Date.now()} -->`;
   writeFileSync(
@@ -12733,24 +12745,37 @@ test('bin/idd-onboard.mjs distribution prepare and bind preserve CLI data and st
     return { kind: 'ready' as const, sourceCommit };
   };
 
-  const untrackedPayloadFixture = join(
-    sourceRoot,
-    'skills',
-    'issue-authoring',
-    `.idd-test-untracked-${process.pid}-${Date.now()}.md`,
+  // One untracked file under each installed skill bundle must each cause a
+  // skip that names the exact path (#4949).
+  const untrackedPayloadFixtures = [
+    'skills/issue-authoring',
+    'skills/idd-spec-audit',
+  ].map((bundle) =>
+    join(
+      sourceRoot,
+      bundle,
+      `.idd-test-untracked-${process.pid}-${Date.now()}.md`,
+    ),
   );
-  writeFileSync(untrackedPayloadFixture, 'untracked payload fixture\n');
+  for (const fixture of untrackedPayloadFixtures) {
+    writeFileSync(fixture, 'untracked payload fixture\n');
+  }
   try {
     const skipped = inspectTrackedPayloadSnapshot();
     assert.equal(skipped.kind, 'skip');
     if (skipped.kind === 'skip') {
+      const paths = untrackedPayloadFixtures
+        .map((fixture) => relative(sourceRoot, fixture).split(sep).join('/'))
+        .sort();
       assert.equal(
         skipped.reason,
-        `Untracked payload files prevent a complete tracked source snapshot: ${relative(sourceRoot, untrackedPayloadFixture).split(sep).join('/')}`,
+        `Untracked payload files prevent a complete tracked source snapshot: ${paths.join(', ')}`,
       );
     }
   } finally {
-    rmSync(untrackedPayloadFixture, { force: true });
+    for (const fixture of untrackedPayloadFixtures) {
+      rmSync(fixture, { force: true });
+    }
   }
 
   const snapshot = inspectTrackedPayloadSnapshot();
