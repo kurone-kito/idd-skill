@@ -12859,15 +12859,16 @@ export function validateStaleRequestRecoveryEvidence(
 }
 
 /**
- * kurone-kito/idd-skill#4717: the stale-request recovery gate. Applies only
- * to a claim-bound run (both `claim.expectedClaimId` and
- * `claim.expectedAgentId` supplied; the collector sets the object on the same
- * predicate, and a claimless run has an empty agent id) on an off-head report
- * (`advisoryWait.lastCopilotCommit` differs from
- * `prHeadSha`), matching the Lite E1 contract. Every other run returns null:
- * an on-head report keeps the `f3Outcome` gate alone, and a claim-id-only or
- * claimless run never requires the object (a known residual; see the issue
- * hold decisions 2 and 4).
+ * kurone-kito/idd-skill#4717: the stale-request recovery gate. A real claim
+ * ID without an expected agent ID is blocked on- or off-head because the
+ * collector cannot produce recovery evidence for that shape. A claimless
+ * report (`expectedClaimId: none` and an empty agent ID) remains exempt. For a
+ * claim-bound run (both `claim.expectedClaimId` and `claim.expectedAgentId`
+ * supplied; the collector sets the object on the same predicate), the gate
+ * applies only to an off-head report
+ * (`advisoryWait.lastCopilotCommit` differs from `prHeadSha`), matching the
+ * Lite E1 contract. An on-head claim-bound report keeps the `f3Outcome` gate
+ * alone.
  */
 export function staleRequestRecoveryGateBlocker(
   report: Record<string, unknown>,
@@ -12875,6 +12876,14 @@ export function staleRequestRecoveryGateBlocker(
   const claim = preMergeAsRecord(report.claim);
   const expectedClaimId = String(claim.expectedClaimId ?? '');
   const expectedAgentId = String(claim.expectedAgentId ?? '');
+  const realClaimId = expectedClaimId !== '' && expectedClaimId !== 'none';
+  if (realClaimId && expectedAgentId === '') {
+    return {
+      gate: 'stale-request-recovery',
+      detail:
+        'claim.expectedClaimId is present without claim.expectedAgentId; rerun readiness or merge with --agent-id to evaluate stale-request recovery safely',
+    };
+  }
   const claimBound = expectedClaimId !== '' && expectedAgentId !== '';
   const advisoryWait = preMergeAsRecord(report.advisoryWait);
   const prHeadSha = String(report.prHeadSha ?? '');
@@ -13964,7 +13973,9 @@ export function buildPreMergeReadinessSummary(
     // for the claim-bound recovery object. Injected because this file cannot
     // import `evaluateStaleRequestRecoveryAction` (advisory-wait-state.mts
     // already imports FROM this file). Omitted, no `staleRequestRecovery`
-    // property is set, which is the claimless and claim-id-only result.
+    // property is set. This is expected for claimless and claim-id-only runs;
+    // the shared blocker separately fails closed for a real claim ID without
+    // an agent ID.
     evaluateStaleRequestRecovery?: (
       evidence: StaleRequestRecoveryEvidence,
     ) => unknown;

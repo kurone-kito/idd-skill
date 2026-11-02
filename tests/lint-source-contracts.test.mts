@@ -194,6 +194,74 @@ test('standalone guard contract scans the complete diagnostic expression', () =>
     fixture.cleanup();
   }
 });
+test('standalone guard contract reports a guard block outside the expected shape once', () => {
+  const fixture = makeFixture();
+  const sourcePath = join(
+    fixture.root,
+    'src/scripts/minimize-superseded-markers.mts',
+  );
+  try {
+    const source = readFileSync(sourcePath, 'utf8');
+    const guardCall = '    process.stderr.write(\n';
+    assert.ok(source.includes(guardCall));
+    const otherSink = source.replace(guardCall, '    console.error(\n');
+    const spacedCall = source.replace(
+      guardCall,
+      '    process.stderr.write (\n',
+    );
+    const sinkBeforeGuard = source.replace(
+      guardCall,
+      "    console.error('diagnostic');\n" + guardCall,
+    );
+    assert.notEqual(otherSink, source);
+    assert.notEqual(spacedCall, source);
+    // A malformed first guard must not let a valid later copy pass (#4974).
+    const malformedFirstGuard = (condition: string): string =>
+      `if (${condition}) {\n  console.error('diagnostic');\n  process.exit(1);\n}\n` +
+      source;
+    assert.notEqual(sinkBeforeGuard, source);
+    for (const mutatedSource of [
+      otherSink,
+      spacedCall,
+      sinkBeforeGuard,
+      malformedFirstGuard("typeof import.meta.main !== 'boolean'"),
+      malformedFirstGuard('typeof import.meta.main !== "boolean"'),
+      malformedFirstGuard("typeof import.meta.main /* note */ !== 'boolean'"),
+      malformedFirstGuard("typeof /* ; { } */ import.meta.main !== 'boolean'"),
+    ]) {
+      writeFileSync(sourcePath, mutatedSource);
+      const before = snapshot(fixture.root);
+      const result = runAudit(fixture.root);
+      assert.equal(result.status, 1, result.stderr);
+      assert.match(
+        result.stderr,
+        /RUNTIME-GUARD-STANDALONE-EXEMPTION src\/scripts\/minimize-superseded-markers\.mts:/,
+      );
+      assert.match(
+        result.stderr,
+        /inlined guard block must match the expected shape/,
+      );
+      // One dedicated shape violation, so the file's content checks never run.
+      assert.equal(
+        result.stderr.split('inlined guard block must match the expected shape')
+          .length - 1,
+        1,
+        result.stderr,
+      );
+      assert.doesNotMatch(
+        result.stderr,
+        /must not copy an engines\.node range|must name idd-skill/,
+      );
+      assert.equal(
+        snapshot(fixture.root),
+        before,
+        'the audit must be read-only',
+      );
+    }
+  } finally {
+    fixture.cleanup();
+  }
+});
 test('standalone guard contract rejects an interpolated engines range', () => {
   const fixture = makeFixture();
   const sourcePath = join(
@@ -266,6 +334,126 @@ test('standalone guard contract rejects a concatenated engines range', () => {
     );
     assert.match(result.stderr, /must not copy an engines\.node range/);
     assert.equal(snapshot(fixture.root), before, 'the audit must be read-only');
+  } finally {
+    fixture.cleanup();
+  }
+});
+test('standalone guard contract rejects a range concatenated before the template', () => {
+  const fixture = makeFixture();
+  const sourcePath = join(
+    fixture.root,
+    'src/scripts/minimize-superseded-markers.mts',
+  );
+  try {
+    const source = readFileSync(sourcePath, 'utf8');
+    const sourceWithRangeConstant = source.replace(
+      'function assertNodeRuntimeSupportsEntrySignal(): void {',
+      "const ENGINES_RANGE = '^22.24.0 || ^24.3.0 || >=26.0.0';\n" +
+        'function assertNodeRuntimeSupportsEntrySignal(): void {',
+    );
+    assert.notEqual(sourceWithRangeConstant, source);
+    const diagnosticStart = sourceWithRangeConstant.indexOf(
+      "node-runtime-guard: this repository's CLI entry points require",
+    );
+    assert.ok(diagnosticStart > 0);
+    const templateStart = diagnosticStart - 1;
+    assert.equal(sourceWithRangeConstant[templateStart], '`');
+    const sameLinePrefix =
+      sourceWithRangeConstant.slice(0, templateStart) +
+      'ENGINES_RANGE + ' +
+      sourceWithRangeConstant.slice(templateStart);
+    const ownLinePrefix =
+      sourceWithRangeConstant.slice(0, templateStart) +
+      'ENGINES_RANGE +\n      ' +
+      sourceWithRangeConstant.slice(templateStart);
+    const decoyCallCommentPrefix =
+      sourceWithRangeConstant.slice(0, templateStart) +
+      'ENGINES_RANGE + // process.stderr.write(\n      ' +
+      sourceWithRangeConstant.slice(templateStart);
+    // A unary `+` before the marker template passes an outside-text check
+    // that only tests for whitespace and commas (#4974).
+    const unaryPlusPrefix =
+      sourceWithRangeConstant.slice(0, templateStart) +
+      '+' +
+      sourceWithRangeConstant.slice(templateStart);
+    const otherSinkPrefix = sameLinePrefix.replace(
+      'process.stderr.write(\n',
+      'console.error(\n',
+    );
+    assert.notEqual(otherSinkPrefix, sameLinePrefix);
+    const earlierWriteCall = sourceWithRangeConstant.replace(
+      '    process.stderr.write(\n',
+      '    process.stderr.write(ENGINES_RANGE);\n    process.stderr.write(\n',
+    );
+    assert.notEqual(earlierWriteCall, sourceWithRangeConstant);
+    const decoyWriteBeforePrefix = sameLinePrefix.replace(
+      '    process.stderr.write(\n',
+      '    process.stderr.write(\n' +
+        "      `Node version satisfying idd-skill's own package.json engines.node requirement.\\n`,\n" +
+        '    );\n' +
+        '    process.stderr.write(\n',
+    );
+    assert.notEqual(decoyWriteBeforePrefix, sameLinePrefix);
+    const guardCallStart = sourceWithRangeConstant.indexOf(
+      '    process.stderr.write(\n',
+    );
+    const guardCallEnd =
+      sourceWithRangeConstant.indexOf('\n    );', guardCallStart) +
+      '\n    );'.length;
+    assert.ok(guardCallStart !== -1 && guardCallEnd > guardCallStart);
+    const guardCall = sourceWithRangeConstant.slice(
+      guardCallStart,
+      guardCallEnd,
+    );
+    const duplicatedPrefixedCall =
+      sourceWithRangeConstant.slice(0, guardCallEnd) +
+      '\n' +
+      guardCall.replace(
+        '`node-runtime-guard:',
+        'ENGINES_RANGE + `node-runtime-guard:',
+      ) +
+      sourceWithRangeConstant.slice(guardCallEnd);
+    assert.ok(duplicatedPrefixedCall.includes('ENGINES_RANGE + `node-runtime'));
+    const spacedCallCommentDecoy = decoyCallCommentPrefix.replace(
+      '    process.stderr.write(\n',
+      '    process.stderr.write (\n',
+    );
+    assert.notEqual(spacedCallCommentDecoy, decoyCallCommentPrefix);
+    const statementAfterCall =
+      sourceWithRangeConstant.slice(0, guardCallEnd) +
+      '\n    process.stderr.write(ENGINES_RANGE);' +
+      sourceWithRangeConstant.slice(guardCallEnd);
+    const otherSinkBeforeCall = sourceWithRangeConstant.replace(
+      '    process.stderr.write(\n',
+      '    console.error(ENGINES_RANGE);\n    process.stderr.write(\n',
+    );
+    assert.notEqual(otherSinkBeforeCall, sourceWithRangeConstant);
+
+    for (const mutatedSource of [
+      sameLinePrefix,
+      ownLinePrefix,
+      decoyCallCommentPrefix,
+      unaryPlusPrefix,
+      earlierWriteCall,
+      decoyWriteBeforePrefix,
+      duplicatedPrefixedCall,
+      statementAfterCall,
+    ]) {
+      writeFileSync(sourcePath, mutatedSource);
+      const before = snapshot(fixture.root);
+      const result = runAudit(fixture.root);
+      assert.equal(result.status, 1, result.stderr);
+      assert.match(
+        result.stderr,
+        /RUNTIME-GUARD-STANDALONE-EXEMPTION src\/scripts\/minimize-superseded-markers\.mts:/,
+      );
+      assert.match(result.stderr, /must not copy an engines\.node range/);
+      assert.equal(
+        snapshot(fixture.root),
+        before,
+        'the audit must be read-only',
+      );
+    }
   } finally {
     fixture.cleanup();
   }

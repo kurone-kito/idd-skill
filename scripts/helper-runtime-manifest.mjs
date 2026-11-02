@@ -105,6 +105,13 @@ const EXTRA_RUNTIME_FILES_INITIALIZER_LOCATOR =
 // asserts the vendored-node managedFiles include every data path
 // validate-schemas references, so this list must stay complete.
 const EXTRA_RUNTIME_FILES = new Map([
+  [
+    'scripts/idd-activation.mjs',
+    [
+      'schemas/distribution-manifest.schema.json',
+      'schemas/distribution-selection.schema.json',
+    ],
+  ],
   ['scripts/advisory-wait-policy.mjs', ['schemas/policy.schema.json']],
   // validate-schemas validates every schema/fixture pair in its CLI `cases`
   // table by reading the files directly; none of them are imported.
@@ -609,6 +616,15 @@ const HELPER_COMMANDS = [
     vendoredCommand: 'node scripts/publish-authoring-hold.mjs',
     description:
       'Create one drafted issue under the issue-authoring hold (an orphan, or a draft carrier), running the New-issue ownership steps of the authoring contract in order (dry run unless --apply).',
+  },
+  {
+    id: 'pull-request-draft-state',
+    scriptName: 'idd:pull-request-draft-state',
+    binName: 'idd-pull-request-draft-state',
+    entryPath: 'scripts/pull-request-draft-state-execute.mjs',
+    vendoredCommand: 'node scripts/pull-request-draft-state-execute.mjs',
+    description:
+      'Move one open pull request between draft and ready-for-review through the #4908 transition core (dry run by default; --apply sends one transition and verifies it with a fresh read).',
   },
   {
     id: 'release-tag',

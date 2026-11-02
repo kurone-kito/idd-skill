@@ -19841,6 +19841,64 @@ test('#4717: an on-head report carries the object but no stale-request-recovery 
   assert.equal(blockerNamed(summary, 'stale-request-recovery'), undefined);
 });
 
+test('#4878: a claim-id-only report blocks on-head and off-head without recovery evidence', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const cases = [
+    { name: 'on-head', input: fixture.input },
+    {
+      name: 'off-head',
+      input: withCopilotCommit(
+        fixture.input,
+        '2222222222222222222222222222222222222222',
+      ),
+    },
+  ];
+
+  for (const { name, input } of cases) {
+    const summary = JSON.parse(
+      JSON.stringify(
+        buildPreMergeReadinessSummary(input, {
+          ...fixture.options,
+          expectedAgentId: '',
+        }),
+      ),
+    );
+    assert.equal(
+      'staleRequestRecovery' in summary,
+      false,
+      `${name}: the collector does not synthesize recovery evidence`,
+    );
+    assert.ok(
+      blockerNamed(summary, 'stale-request-recovery'),
+      `${name}: ${JSON.stringify(summary.blockers)}`,
+    );
+    const blocker = blockerNamed(summary, 'stale-request-recovery');
+    assert.ok(blocker, `${name}: expected a stale-request-recovery blocker`);
+    assert.ok(typeof blocker.detail === 'string');
+    assert.match(
+      blocker.detail,
+      /--agent-id/,
+      `${name}: blocker should explain the recovery path`,
+    );
+    assert.equal(summary.ready, false, name);
+    assert.deepEqual(validate(summary, readinessSchema), []);
+  }
+});
+
+test('#4878: a claimless report omits recovery evidence without this blocker', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const summary = JSON.parse(
+    JSON.stringify(
+      buildPreMergeReadinessSummary(fixture.input, {
+        ...fixture.options,
+        claimless: true,
+      }),
+    ),
+  );
+  assert.equal('staleRequestRecovery' in summary, false);
+  assert.equal(blockerNamed(summary, 'stale-request-recovery'), undefined);
+});
+
 test('#4717: a malformed injected recovery object fails the off-head gate closed', () => {
   const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
   const summary = JSON.parse(
