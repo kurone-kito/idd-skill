@@ -12686,6 +12686,20 @@ test('bin/idd-onboard.mjs distribution prepare and bind preserve CLI data and st
       stdio: 'pipe',
     });
   }
+  // Untracked, non-ignored files of the checkout stay untracked in the clone,
+  // so the untracked-payload guard sees them as it would in a dirty checkout.
+  const checkoutUntracked = execFileSync(
+    'git',
+    ['-C', REPO_ROOT, 'ls-files', '--others', '--exclude-standard', '-z'],
+    { env: gitEnv, encoding: 'utf8', stdio: 'pipe' },
+  )
+    .split('\0')
+    .filter((path) => path.length > 0);
+  for (const path of checkoutUntracked) {
+    const target = join(sourceRoot, path);
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, readFileSync(join(REPO_ROOT, path)));
+  }
   const trackedPayloadDoc = 'idd-template/docs/idd-workflow.md';
   const payloadMarker = `<!-- tracked-payload-${process.pid}-${Date.now()} -->`;
   writeFileSync(
