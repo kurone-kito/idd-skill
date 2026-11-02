@@ -1,27 +1,23 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import {
-  chmodSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-// The bin entry the packaged command runs. Its gh calls go through a stub `gh`
-// placed first on PATH, so the test exercises the wiring from flags to exit
-// status without a network call.
+import { stubExecutable } from './test-utils.mts';
+
+// The bin entry the packaged command runs. Its gh calls resolve to a stub `gh`
+// from the repository's stubExecutable helper, which places a launchable
+// executable on PATH on every platform, so the test exercises the wiring from
+// flags to exit status without a network call.
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 const BIN = join(REPO_ROOT, 'bin', 'idd-pull-request-draft-state.mjs');
 const HEAD = 'a'.repeat(40);
 const REPO = 'kurone-kito/idd-skill';
 
-const STUB_SOURCE = [
-  '#!/usr/bin/env node',
+const STUB_BODY = [
   "const fs = require('node:fs');",
   'const statePath = process.env.DRAFT_STATE_STUB_STATE;',
   'const args = process.argv.slice(2);',
@@ -51,12 +47,11 @@ const STUB_SOURCE = [
   '',
 ].join('\n');
 
-const stubDir = mkdtempSync(join(tmpdir(), 'draft-state-gh-stub-'));
-const stubPath = join(stubDir, 'gh');
-writeFileSync(stubPath, STUB_SOURCE);
-chmodSync(stubPath, 0o755);
+const restoreGh = stubExecutable('gh', STUB_BODY);
+const stateDir = mkdtempSync(join(tmpdir(), 'draft-state-execute-'));
 after(() => {
-  rmSync(stubDir, { recursive: true, force: true });
+  restoreGh();
+  rmSync(stateDir, { recursive: true, force: true });
 });
 
 interface StubState {
@@ -86,7 +81,7 @@ function runCommand(
   options: { mutationFails?: boolean } = {},
 ) {
   const statePath = join(
-    stubDir,
+    stateDir,
     `state-${Math.random().toString(36).slice(2)}.json`,
   );
   writeFileSync(statePath, JSON.stringify(state));
@@ -94,10 +89,8 @@ function runCommand(
     encoding: 'utf8',
     env: {
       ...process.env,
-      PATH: `${stubDir}:${process.env.PATH ?? ''}`,
       DRAFT_STATE_STUB_STATE: statePath,
       DRAFT_STATE_STUB_MUTATION_FAIL: options.mutationFails ? '1' : '0',
-      IDD_TEST_GH_GUARD_ALLOWED_STUBS: JSON.stringify([stubPath]),
     },
   });
   const finalState = JSON.parse(readFileSync(statePath, 'utf8')) as StubState;
