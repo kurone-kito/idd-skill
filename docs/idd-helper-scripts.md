@@ -4332,6 +4332,31 @@ The command never merges, pushes, changes labels, or releases a claim.
 
 ## Stable Helper Evidence Outputs
 
+### Standing-approval report (issue `#4896`)
+
+- Command: `node scripts/standing-approval-report.mjs` with optional
+  `--owner`, `--repo`, and `--format json|table` flags.
+- Source-repo internal helper; not distributed via the package-manager /
+  ephemeral-npx profiles.
+- Output: stable JSON by default. Each `records[]` entry carries `class`,
+  `set`, `anchor`, `ceiling`, `option`, and `issueNumber`. The top-level
+  fields are `repository`, `conversationCount`, `malformedCount`, and
+  `records`. `--format table` is for operator reading.
+- Scope: reads every issue and pull-request comment in the repository
+  through the REST comment feed, oldest first, then validates each marker
+  line against issue `#4886`'s grammar. It does not use comment search,
+  whose index can lag behind a new comment and so leave a record unlisted.
+  It is read-only. Malformed responses or a failed feed-page read produce
+  an error and no partial report (preventive; no observed incident yet).
+- Quick read-only fallback (prints marker lines for manual inspection):
+
+  ```sh
+  set -euo pipefail
+  repo=owner/name
+  gh api --paginate "repos/$repo/issues/comments?per_page=100" |
+    jq -sr 'add[] | .body | split("\n")[] | select(startswith("<!-- idd-skill-standing-approval:"))'
+  ```
+
 ### Operator forced-handoff helpers
 
 - Command: `node scripts/force-handoff.mjs`
