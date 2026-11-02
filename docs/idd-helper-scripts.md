@@ -4269,6 +4269,47 @@ Rules:
   Under any other `deferByUrgency`, `enforce` behaves as `record`, and the
   helper writes one warning line on stderr.
 
+## Pull-request draft-state command (kurone-kito/idd-skill#4909)
+
+`idd-pull-request-draft-state` moves one open pull request between draft and
+ready-for-review. It packages the transition core that issue `#4908` added.
+Resolve the command from the helper runtime profile:
+
+```sh
+# source repo / vendored-node
+node scripts/pull-request-draft-state-execute.mjs --owner <owner> --repo <repo> --number <n> --target <draft|ready> --expected-head-sha <40-hex> [--apply]
+
+# package-manager / ephemeral-npx / user-global
+<profile-selected-pull-request-draft-state-command> --owner <owner> --repo <repo> --number <n> --target <draft|ready> --expected-head-sha <40-hex> [--apply]
+```
+
+- `--owner` and `--repo` are required. They name the base repository. A pull
+  request whose base is another repository is refused.
+- `--number` is a positive pull request number within the safe integer range.
+- `--target` is `draft` or `ready`. Any other value is a usage error.
+- `--expected-head-sha` is the full 40-character head SHA. A changed head is
+  refused.
+- The default is a dry run. It reads the pull request, reports the observed
+  state, and sends no transition request.
+- `--apply` re-reads the pull request right before the change, sends one GraphQL
+  mutation, and confirms the result with a fresh read.
+
+The core refuses these states before any transition request: `invalid-target`,
+`invalid-head-sha`, `invalid-number`, `invalid-repository`, `inaccessible`,
+`read-failed`, `wrong-base-repository`, `merged`, `closed`, and `changed-head`.
+
+After a transition request, a failed request whose state is unchanged is
+`refused` with `transition-failed`. A result the fresh read does not confirm is
+`unverified`. An `unverified` report can carry a post-change refusal code, so a
+caller must check the verdict before it reads the refusal as a rejection.
+
+The verdicts are `dry-run`, `transitioned`, `already-in-target-state`,
+`refused`, and `unverified`. The exit status is `0` for `dry-run`,
+`transitioned`, and `already-in-target-state`. It is `1` for `refused` and
+`unverified`. A usage error exits `1` before any call.
+
+The command never merges, pushes, changes labels, or releases a claim.
+
 ## Stable Helper Evidence Outputs
 
 ### Operator forced-handoff helpers
