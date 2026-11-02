@@ -307,6 +307,28 @@ const STALE_REQUEST_RECOVERY_REASONS = {
   nonPendingAttemptEligible: 'non-pending-recovery-attempt-eligible',
   recoveryMarkerOnly: 'recovery-marker-only-no-request-marker',
 };
+/**
+ * #4877: true when a completed Copilot review names `prHeadSha`. The review
+ * list is narrowed to that head before the latest review is chosen, so a
+ * later review of an older commit cannot hide an earlier review of the
+ * current head. The pending path uses this; the non-pending path keeps
+ * comparing the latest review's commit.
+ */
+export function hasCurrentHeadCopilotReview(
+  reviews,
+  prHeadSha,
+  primaryBotLogin,
+) {
+  const headSha = prHeadSha.toLowerCase();
+  return (
+    findLastCopilotReviewCommit(
+      reviews.filter(
+        (review) => String(review.commit_id ?? '').toLowerCase() === headSha,
+      ),
+      primaryBotLogin,
+    ) !== ''
+  );
+}
 export function evaluateStaleRequestRecoveryAction(input) {
   if (!input.activeClaimProvided) {
     return {
@@ -334,6 +356,16 @@ export function evaluateStaleRequestRecoveryAction(input) {
       };
     }
     if (input.copilotPendingCoversHead) {
+      return {
+        action: 'not-applicable',
+        reason: STALE_REQUEST_RECOVERY_REASONS.provenCoversHead,
+      };
+    }
+    // A completed Copilot review of this HEAD is the same proof the
+    // non-pending path uses below (#4718): the pending request reached the
+    // reviewer. Checked before the cap, so an exhausted budget still yields
+    // proven-covers-head when that review exists (#4877).
+    if (input.currentHeadReviewExists === true) {
       return {
         action: 'not-applicable',
         reason: STALE_REQUEST_RECOVERY_REASONS.provenCoversHead,
@@ -835,8 +867,11 @@ export function readAdvisoryWaitState(port, input) {
     // comparison lowercases it, the same normalization
     // buildCopilotRecoverySummary applies. Unlike the copilotDeclinedHead
     // comparison above, this one does not rely on the caller's casing.
-    currentHeadReviewExists:
-      String(summary.lastCopilotCommit ?? '').toLowerCase() === prHeadSha,
+    // #4877: on the pending path, any completed review of this head counts,
+    // not only the latest review, which may name an older commit.
+    currentHeadReviewExists: summary.copilotPending
+      ? hasCurrentHeadCopilotReview(reviews, prHeadSha, primaryBotLogin)
+      : String(summary.lastCopilotCommit ?? '').toLowerCase() === prHeadSha,
   });
   return {
     ...summary,

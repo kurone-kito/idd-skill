@@ -4269,7 +4269,93 @@ Rules:
   Under any other `deferByUrgency`, `enforce` behaves as `record`, and the
   helper writes one warning line on stderr.
 
+## Pull-request draft-state command (kurone-kito/idd-skill#4909)
+
+`idd-pull-request-draft-state` moves one open pull request between draft and
+ready-for-review. It packages the transition core that issue `#4908` added.
+Each profile runs the same command:
+
+```sh
+# source repo / vendored-node
+node scripts/pull-request-draft-state-execute.mjs --owner <owner> \
+  --repo <repo> --number <n> --target <draft|ready> \
+  --expected-head-sha <40-hex> [--apply]
+
+# package-manager
+npm run idd:pull-request-draft-state -- --owner <owner> --repo <repo> \
+  --number <n> --target <draft|ready> --expected-head-sha <40-hex> [--apply]
+pnpm run idd:pull-request-draft-state --owner <owner> --repo <repo> \
+  --number <n> --target <draft|ready> --expected-head-sha <40-hex> [--apply]
+yarn run idd:pull-request-draft-state --owner <owner> --repo <repo> \
+  --number <n> --target <draft|ready> --expected-head-sha <40-hex> [--apply]
+
+# ephemeral-npx
+npx --yes --package <helper-package-spec> idd-pull-request-draft-state \
+  --owner <owner> --repo <repo> --number <n> --target <draft|ready> \
+  --expected-head-sha <40-hex> [--apply]
+```
+
+- `--owner` and `--repo` are required. They name the base repository. A pull
+  request whose base is another repository is refused.
+- `--number` is a positive pull request number within the safe integer range.
+- `--target` is `draft` or `ready`. Any other value is a usage error.
+- `--expected-head-sha` is the full 40-character head SHA. A changed head is
+  refused.
+- The default is a dry run. It reads the pull request, reports the observed
+  state, and sends no transition request.
+- `--apply` re-reads the pull request right before the change, sends one GraphQL
+  mutation, and confirms the result with a fresh read.
+
+The core refuses these states before any transition request: `invalid-target`,
+`invalid-head-sha`, `invalid-number`, `invalid-repository`, `inaccessible`,
+`read-failed`, `wrong-base-repository`, `merged`, `closed`, and `changed-head`.
+
+After a transition request, the verdict depends on both the request result and
+the fresh read:
+
+- A successful request with a clean fresh read that shows the target state is
+  `transitioned`.
+- A failed request with a clean fresh read that still shows the old state is
+  `refused` with `transition-failed`.
+- Any other post-request result is `unverified`. That covers a successful
+  request whose fresh read shows the old state, a fresh read that fails or
+  carries a refusal code, and a failed request whose state already matches the
+  target. An `unverified` report can carry a post-change refusal code, so a
+  caller must check the verdict before it reads the refusal as a rejection.
+
+The verdicts are `dry-run`, `transitioned`, `already-in-target-state`,
+`refused`, and `unverified`. The exit status is `0` for `dry-run`,
+`transitioned`, and `already-in-target-state`. It is `1` for `refused` and
+`unverified`. A usage error exits `1` before any call.
+
+The command never merges, pushes, changes labels, or releases a claim.
+
 ## Stable Helper Evidence Outputs
+
+### Standing-approval report (issue `#4896`)
+
+- Command: `node scripts/standing-approval-report.mjs` with optional
+  `--owner`, `--repo`, and `--format json|table` flags.
+- Source-repo internal helper; not distributed via the package-manager /
+  ephemeral-npx profiles.
+- Output: stable JSON by default. Each `records[]` entry carries `class`,
+  `set`, `anchor`, `ceiling`, `option`, and `issueNumber`. The top-level
+  fields are `repository`, `conversationCount`, `malformedCount`, and
+  `records`. `--format table` is for operator reading.
+- Scope: reads every issue and pull-request comment in the repository
+  through the REST comment feed, oldest first, then validates each marker
+  line against issue `#4886`'s grammar. It does not use comment search,
+  whose index can lag behind a new comment and so leave a record unlisted.
+  It is read-only. Malformed responses or a failed feed-page read produce
+  an error and no partial report (preventive; no observed incident yet).
+- Quick read-only fallback (prints marker lines for manual inspection):
+
+  ```sh
+  set -euo pipefail
+  repo=owner/name
+  gh api --paginate "repos/$repo/issues/comments?per_page=100" |
+    jq -sr 'add[] | .body | split("\n")[] | select(startswith("<!-- idd-skill-standing-approval:"))'
+  ```
 
 ### Operator forced-handoff helpers
 

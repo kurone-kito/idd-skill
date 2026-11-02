@@ -25,6 +25,7 @@ export const COVERED_HELPERS = [
   'clone-lock',
   'copilot-review-wave-audit',
   'idd-activation',
+  'pull-request-draft-state-execute',
   'token-cost-event',
   'token-cost-harvest',
   'token-cost-report',
@@ -75,6 +76,7 @@ export const COVERED_HELPERS = [
   'select-desynced-index',
   'snapshot-issue-body-corpus',
   'stalled-session-quiet-check',
+  'standing-approval-report',
   'suitability-close-execute',
   'suitability-triage',
   'sweep-authoring-markers',
@@ -140,6 +142,8 @@ const INTERNAL_ENTRY_REASONS = {
   'scripts/check-untracked-artifacts.mjs': 'build-internal artifact verifier',
   'scripts/token-cost-report.mjs': 'source-repository token-cost report',
   'scripts/actions-usage-report.mjs': 'source-repository Actions report',
+  'scripts/standing-approval-report.mjs':
+    'source-repository standing-approval report',
   'scripts/token-cost-event.mjs': 'source-repository token-cost event logger',
   'scripts/token-cost-harvest.mjs': 'source-repository token-cost log reader',
   'scripts/check-stray-commit-closes.mjs':
