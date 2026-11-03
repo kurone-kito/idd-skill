@@ -10312,9 +10312,10 @@ runs at most once, under the 2-minute bound below. A signed tier fails when
 it exits nonzero before that bound, or when the bound fires and its process
 tree is gone. Either way, run the post-failure verification below, then
 move to the next tier. Error text is not read. A hook that rejected the
-attempt runs again on the retry and fails the unsigned tier too
-(preventive; no observed incident yet), and a
-failure at the unsigned tier is not a signing failure: the calling site's
+attempt runs again on the retry and fails the unsigned tier too, as long as
+the retry repeats that hook: a clean merge is rerun, not continued (see the
+state-present bullet below, after PR #4991 review comment r4451234135), and
+a failure at the unsigned tier is not a signing failure: the calling site's
 existing rule applies (E11 and D1 hold; B3 fixes a rejected commit message
 and commits again). If `git diff --name-only --diff-filter=U` lists any
 path, the operation stopped on a content conflict: apply the calling site's
@@ -10476,6 +10477,15 @@ already returned and released its locks.
   D1 (`idd-pr-submit.instructions.md`), a rebase with no staged content
   conflict follows D1's failed-write restart instead of `--continue`; with
   a staged content conflict, the `--continue` form here applies.
+  `--continue` is for a merge whose conflict was resolved and staged. A
+  merge that stopped with no conflict reruns at the next tier instead:
+  `git merge --abort`, then the original merge command at that tier.
+  `git merge --continue` runs the `pre-commit` and `commit-msg` hooks but
+  not `pre-merge-commit`, so continuing a clean merge that a
+  `pre-merge-commit` hook rejected would skip that hook; the rerun runs it
+  again, and its second rejection is the unsigned tier's failure (PR #4991
+  review comment r4451234135, reproduced with Git 2.43.0 there and with Git
+  2.53.0 on 2026-11-03).
 - **Merge or rebase, no state present**: absent state alone does not
   prove the operation succeeded — the timeout can equally fire before
   Git ever creates that state (nothing to `--continue`), or, for a
