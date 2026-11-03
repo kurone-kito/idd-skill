@@ -1311,9 +1311,10 @@ export const POLICY_DEFAULTS = Object.freeze({
     e10NoProgressHoldAfter: 3,
     e10MaxPasses: 2,
     deferAfterRounds: 12,
-    deferByUrgency: 'off',
-    triageRecord: 'off',
-    deferRelaxAtRounds: Object.freeze([]),
+    deferByUrgency: 'severity-tiered',
+    triageRecord: 'record',
+    deferRelaxAtRounds: Object.freeze([4]),
+    deferAllAfterRounds: 5,
     deferNeedsDecision: 'on',
     subagentWaitCeiling: 'PT20M',
   }) as Readonly<CritiqueLoopPolicy>,
@@ -1602,9 +1603,11 @@ export function normalizePolicyConfig(config: unknown) {
       TRIAGE_RECORD_MODES,
       POLICY_DEFAULTS.critiqueLoop.triageRecord,
     ) as CritiqueLoopPolicy['triageRecord'],
-    deferRelaxAtRounds: parseDeferRelaxAtRounds(
-      c?.critiqueLoop?.deferRelaxAtRounds,
-    ),
+    // Absent takes the distributed default; JSON `null` is off (an empty list).
+    deferRelaxAtRounds:
+      c?.critiqueLoop?.deferRelaxAtRounds === undefined
+        ? [...POLICY_DEFAULTS.critiqueLoop.deferRelaxAtRounds]
+        : parseDeferRelaxAtRounds(c?.critiqueLoop?.deferRelaxAtRounds),
     deferNeedsDecision: parseDeferNeedsDecision(
       c?.critiqueLoop?.deferNeedsDecision,
     ),
@@ -1622,8 +1625,16 @@ export function normalizePolicyConfig(config: unknown) {
   // #4750: the review-count cap is off unless the raw value is an integer of
   // at least 1. Any other value leaves the own property out, the same shape
   // `critiqueLoop.delegate` uses above.
+  // An absent key takes the distributed default. JSON `null` (or any other
+  // non-integer) leaves the cap off, so only an integer of at least 1 sets it.
   const rawDeferAllAfterRounds = c?.critiqueLoop?.deferAllAfterRounds;
-  if (
+  const defaultDeferAllAfterRounds =
+    POLICY_DEFAULTS.critiqueLoop.deferAllAfterRounds;
+  if (rawDeferAllAfterRounds === undefined) {
+    if (defaultDeferAllAfterRounds !== undefined) {
+      critiqueLoop.deferAllAfterRounds = defaultDeferAllAfterRounds;
+    }
+  } else if (
     typeof rawDeferAllAfterRounds === 'number' &&
     Number.isInteger(rawDeferAllAfterRounds) &&
     rawDeferAllAfterRounds >= 1

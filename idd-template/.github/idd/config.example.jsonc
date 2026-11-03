@@ -646,41 +646,40 @@
   //   // being fixed.
   //   "deferAfterRounds": 12,
   //   // An urgency-based defer rule that applies from the first round.
-  //   // - "off" (default): the rule is off.
+  //   // - "off": the rule is off.
   //   // - "low": a Low finding that is not adopt-now goes to a follow-up
   //   //   issue.
   //   // - "low-and-medium": a Low or Medium finding that is not adopt-now
   //   //   goes to a follow-up issue. High never does under low or
   //   //   low-and-medium.
-  //   // - "severity-tiered": a severity-and-urgency matrix decides. At step
-  //   //   0 (deferRelaxAtRounds left out, or a review count below its first
+  //   // - "severity-tiered" (default): a severity-and-urgency matrix decides. At step
+  //   //   0 (a review count below its first
   //   //   entry), High goes to a follow-up issue only at very-low urgency.
   //   //   See docs/idd-review-policy-profiles.md.
-  //   "deferByUrgency": "off",
+  //   "deferByUrgency": "severity-tiered",
   //   // Tier and urgency records on review replies made through the
   //   // resolve-review-thread helper.
-  //   // - "off" (default): no tier or urgency is required. A reply that
-  //   //   passes both still gets a Triage: line.
-  //   // - "record": an applied Accepted or Rejected PATH A reply needs a
-  //   //   tier and an urgency, which the helper records. A --path-b reply
-  //   //   and a maintainer-confirmation reply are exempt.
+  //   // - "off": no tier or urgency is required. A reply that passes both
+  //   //   still gets a Triage: line.
+  //   // - "record" (default): an applied Accepted or Rejected PATH A reply
+  //   //   needs a tier and an urgency, which the helper records. A --path-b
+  //   //   reply and a maintainer-confirmation reply are exempt.
   //   // - "enforce": like record, and the helper also refuses an Accepted
   //   //   reply that the defer matrix says to defer, unless a reason is
   //   //   given. It acts only with severity-tiered, and otherwise behaves as
   //   //   record.
-  //   "triageRecord": "off",
+  //   "triageRecord": "record",
   //   // One or two ascending review counts at which severity-tiered relaxes.
-  //   // Default: omitted, which turns the gradient off. No effect under the
-  //   // other deferByUrgency values. docs/customization.md recommends the
-  //   // example value.
-  //   "deferRelaxAtRounds": [4, 7],
-  //   // Review-count cap for severity-tiered. Default: omitted, which turns
-  //   // the cap off. Under severity-tiered only. At or above the value, every
+  //   // Default: [4]. JSON null turns the gradient off. No effect under the
+  //   // other deferByUrgency values. This repository's own config uses [4, 7].
+  //   "deferRelaxAtRounds": [4],
+  //   // Review-count cap for severity-tiered. Default: 5. JSON null turns the
+  //   // cap off. Under severity-tiered only. At or above the value, every
   //   // non-safety-class finding goes to a follow-up issue whatever the step,
   //   // except PATH B, --scope-fence, --protected-authority, and
   //   // --accepted-mid-fix, which keep their verdicts. Adopt-now condition (d)
   //   // and --adopt-now keep none of the others.
-  //   "deferAllAfterRounds": 3,
+  //   "deferAllAfterRounds": 5,
   //   // - "on" (default): a finding that needs a person's judgment may go to
   //   //   a needs-decision follow-up issue when merging is safe.
   //   // - "off": the loop stops for a person instead.

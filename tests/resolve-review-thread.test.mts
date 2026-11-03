@@ -1051,6 +1051,10 @@ test('--apply --claimless does not require --claim-issue / --claim-id (compiled 
         '1001',
         '--claimless',
         '--apply',
+        '--tier',
+        'high',
+        '--urgency',
+        'high',
         '--body',
         '**Accepted** — operator-authorized, no linked issue',
       ],
@@ -1176,6 +1180,11 @@ if (args[0] === 'pr' && args[1] === 'view') {
     closingIssuesReferences: [],
   }));
 }
+if (args[0] === 'api' && args[1] === 'repos/o/r/pulls/42/reviews') {
+  // The default triageRecord record reads the review list for the
+  // severity-tiered verdict; this run has no reviews to report.
+  out('');
+}
 if (args[0] === 'api' && args[1] === 'graphql' && joined.includes('closingIssuesReferences')) {
   out(JSON.stringify({ data: { repository: { pullRequest: { headRefOid: 'deadbeef', closingIssuesReferences: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } } } }));
 }
@@ -1238,6 +1247,10 @@ fail('unexpected gh invocation: ' + joined);
         'r',
         '--claimless',
         '--apply',
+        '--tier',
+        'high',
+        '--urgency',
+        'high',
         '--body',
         '**Accepted** — operator-authorized, no linked issue',
       ],
@@ -3074,7 +3087,9 @@ test('the compiled CLI exits 1 with a message and posts nothing when the review 
 test('the compiled CLI posts the reply body unchanged with no triage flag (#4186)', () => {
   const run = runTriageApply(
     [...TRIAGE_THREAD_ARGS, '--body', '**Accepted** — fixed in abc'],
-    {},
+    // The default is now triageRecord `record`, which requires tier and
+    // urgency; this test is about the body, so it turns the record off.
+    { critiqueLoop: { triageRecord: 'off' } },
     triageReviewRows(2),
   );
   assert.equal(run.status, 0, run.stderr);
