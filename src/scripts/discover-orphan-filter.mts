@@ -30,6 +30,8 @@ import {
   readDiscoverHint,
 } from './discover-hint-cache.mts';
 import {
+  buildConfirmationLabelMatcher,
+  CONFIRMATION_LABEL_COLLISION_REASON,
   extractBlockedByIssueNumbers,
   extractDeferSourceRefsIssueNumbers,
   extractDependencyIssueNumbers,
@@ -236,6 +238,8 @@ export type OrphanClassification =
   | {
       orphan: false;
       reason: 'blocked_label' | 'authoring_label';
+      /** The label name, or for `blocked_label` the
+       * `needs_confirmation_label_collision` value (issue #4960). */
       details: string;
     }
   | { orphan: false; reason: 'blocked_by_open_reference'; details: number }
@@ -297,6 +301,11 @@ interface ClassifyIssueOptions {
   needsDecisionLabelName?: unknown;
   authoringOnlyLabelName?: unknown;
   roadmapLabelName?: unknown;
+  /** Configured `autoDecide.confirmationLabelName` (issue #4960). */
+  confirmationLabelName?: unknown;
+  /** Configured `approvalSignals.readyLabelName`, read only for the
+   * confirmation-label collision check (issue #4960). */
+  readyLabelName?: unknown;
   /**
    * The configured `providerOutage.declarationTarget` issue number
    * (#2800), or `null`/absent when unconfigured. That issue is a
@@ -346,6 +355,10 @@ interface FilterOrphanIssuesOptions {
   needsDecisionLabelName?: unknown;
   authoringOnlyLabelName?: unknown;
   roadmapLabelName?: unknown;
+  /** See {@link ClassifyIssueOptions.confirmationLabelName}. */
+  confirmationLabelName?: unknown;
+  /** See {@link ClassifyIssueOptions.readyLabelName}. */
+  readyLabelName?: unknown;
   /** See {@link ClassifyIssueOptions.providerOutageDeclarationTarget}. */
   providerOutageDeclarationTarget?: number | null;
   /** See {@link ClassifyIssueOptions.authoringJournalTarget}. */
@@ -814,7 +827,27 @@ export function classifyIssue(
     needsDecisionLabelName,
     authoringOnlyLabelName,
   ]);
-  const blockedLabel = [...labels].find((label) => blockedLabels.has(label));
+  // #4960: the confirmation label is treated like the blocked-by-human label,
+  // but compared trimmed and case-insensitively. When its name collides with
+  // another configured label, the two cannot be told apart, so an issue
+  // carrying it is filed with the collision value as its details.
+  const confirmationLabel = buildConfirmationLabelMatcher({
+    confirmationLabelName: options.confirmationLabelName,
+    authoringLabelName,
+    authoringOnlyLabelName,
+    needsDecisionLabelName,
+    blockedByHumanLabelName,
+    roadmapLabelName: options.roadmapLabelName,
+    readyLabelName: options.readyLabelName,
+  });
+  const blockedLabel =
+    confirmationLabel.collision &&
+    [...labels].some((label) => confirmationLabel.matches(label))
+      ? CONFIRMATION_LABEL_COLLISION_REASON
+      : [...labels].find(
+          (label) =>
+            blockedLabels.has(label) || confirmationLabel.matches(label),
+        );
 
   // #4257: a draft carrier is filed as blocked_label before the number-based
   // targets below, so every carrier lands there, as the listing's acceptance
@@ -1419,6 +1452,8 @@ export async function filterOrphanIssues(
       needsDecisionLabelName: options.needsDecisionLabelName,
       authoringOnlyLabelName: options.authoringOnlyLabelName,
       roadmapLabelName: options.roadmapLabelName,
+      confirmationLabelName: options.confirmationLabelName,
+      readyLabelName: options.readyLabelName,
       providerOutageDeclarationTarget: options.providerOutageDeclarationTarget,
       authoringJournalTarget: options.authoringJournalTarget,
       openIssueDetailsByNumber,
@@ -2112,6 +2147,8 @@ async function produceOutput(
     needsDecisionLabelName: policy.needsDecisionLabelName,
     authoringOnlyLabelName: policy.authoringOnlyLabelName,
     roadmapLabelName: policy.roadmapLabelName,
+    confirmationLabelName: policy.confirmationLabelName,
+    readyLabelName: policy.readyLabelName,
     providerOutageDeclarationTarget: durableTargets.providerOutageTarget,
     authoringJournalTarget: durableTargets.authoringJournalTarget,
     autopilotSuitabilityFloor: policy.autopilotSuitabilityFloor,
@@ -2347,6 +2384,14 @@ so a closed journal is reported only by the per-issue mode of
 discover-readiness-check. When both numbers are equal, the outage reason takes
 precedence for a non-carrier.
 
+"filtered.blocked_label" (#4960) also excludes an issue carrying the
+configured autoDecide.confirmationLabelName (default
+status:needs-confirmation), compared trimmed and case-insensitively, whatever
+dangerouslyAutoDecide and the autoDecide class switches say; "details" is the
+label as stored. When that name equals another configured IDD label name or
+approvalSignals.readyLabelName, such an issue is filed there with "details"
+"needs_confirmation_label_collision" instead.
+
 "filtered.runtime_observation_precondition" (#2467) excludes an issue whose
 body names a runtime/production-observation precondition in prose --
 "confirmed in production", "observed live", "runtime-observation" -- with no
@@ -2497,6 +2542,11 @@ export function loadPolicy(policyPath: string) {
     needsDecisionLabelName: labelsPolicy.needsDecisionLabelName,
     authoringOnlyLabelName: labelsPolicy.authoringOnlyLabelName,
     roadmapLabelName: labelsPolicy.roadmapLabelName,
+    // #4960: the confirmation name and the ready label are the two names the
+    // collision check reads that the fields above lack. Both are in the
+    // returned policy, so a change to either misses the hint cache.
+    confirmationLabelName: normalizedPolicy.autoDecide.confirmationLabelName,
+    readyLabelName: normalizedPolicy.approvalSignals.readyLabelName,
     // #2800: own-property-omitted when unconfigured or invalid, matching
     // normalizePolicyConfig's own absence semantics -- resolved to
     // `null` below so downstream callers get a stable, always-present
