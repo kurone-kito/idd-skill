@@ -557,7 +557,7 @@ const HELPER_COMMANDS: HelperCommand[] = [
     entryPath: 'scripts/idd-effective-config.mjs',
     vendoredCommand: 'node scripts/idd-effective-config.mjs',
     description:
-      'Print the effective layered policy as JSON, with the layer each value came from, the selected user-global override, and layering diagnostics. Read-only.',
+      'Print the effective local layered policy as JSON, with the layer each value came from, the selected user-global override, and layering diagnostics; or, with --trusted-auto-decide, the trusted-base auto-decide verdict for every class, read from GitHub. Read-only.',
   },
   {
     id: 'emit-marker',
