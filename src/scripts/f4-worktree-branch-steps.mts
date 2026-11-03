@@ -19,27 +19,25 @@
 // {@link F4WorktreeBranchDeps}, so the flow runs against fakes in tests. The
 // production wiring lives in f4-worktree-branch-cleanup.mts.
 
-import {
-  dirname,
-  isAbsolute,
-  join,
-  parse,
-  relative,
-  resolve,
-  sep,
-} from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import type { RemoteBranchDeleteVerdict } from './delete-remote-branch.mts';
 import type { Reason } from './f4-head-proof-verdict.mts';
 import {
   type LocalWorktreeRecord,
   parseLocalWorktreeList,
 } from './local-worktree-occupancy.mts';
+import {
+  checkPreservationParents,
+  type DirectoryPrivacy,
+  inspectPreserveDestination,
+  isWithinRoot,
+  type LstatKind,
+  type PreservationParent,
+  type PreserveDestinationResult,
+} from './preserve-destination.mts';
 
-/** What the filesystem reports for one path, read without following links. */
-export type LstatKind = 'absent' | 'symlink' | 'directory' | 'file' | 'other';
-
-/** Read-only privacy assessment for an existing state directory. */
-export type DirectoryPrivacy = 'private' | 'tightenable' | 'unsafe';
+export type { DirectoryPrivacy, LstatKind };
+export { isWithinRoot };
 
 export interface GitResult {
   readonly status: number | null;
@@ -297,15 +295,6 @@ export const NEXT_ACTIONS: Readonly<
   'remote-delete-unreadable':
     'Hold at step 6. The output of the remote branch helper could not be read, and nothing remote was deleted. In a dry run nothing has changed, so rerun it. In an applied run, steps 4 and 5 have already run. The operator first confirms by hand that delete_branch_on_merge is false: when it is true, step 6 is skipped, because GitHub deletes the branch on merge. Only when it is false does the operator complete step 6 by hand with delete-remote-branch and the expected SHA, after reading its output, and the session continues from step 7 after the operator confirms. Do not rerun an applied run.',
 };
-
-/** True when `target` is `root` or lies inside it, with no `..` escape. */
-export function isWithinRoot(root: string, target: string): boolean {
-  const rel = relative(resolve(root), resolve(target));
-  return (
-    rel === '' ||
-    (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
-  );
-}
 
 /** Every ancestor of `target` from the filesystem root down to `target`. */
 export function ancestorChain(target: string): string[] {
@@ -1245,17 +1234,6 @@ interface InspectResult {
   } | null;
 }
 
-interface PreservationParent {
-  readonly path: string;
-  readonly identity: string | null;
-}
-
-interface PreserveDestinationResult {
-  readonly destination: string;
-  readonly parents: readonly PreservationParent[];
-  readonly hold: string | null;
-}
-
 interface PreserveNodeModulesResult {
   readonly destination: string;
 }
@@ -1533,197 +1511,25 @@ function preserveDestination(
   records: readonly LocalWorktreeRecord[],
 ): PreserveDestinationResult {
   try {
-    return inspectPreserveDestination(deps, issueNumber, primary, records);
+    const result = inspectPreserveDestination(
+      deps,
+      'f4-preserved',
+      issueNumber,
+      primary,
+      records,
+    );
+    return result.hold === null
+      ? result
+      : {
+          ...result,
+          hold: `the helper did not move node_modules/: ${result.hold}`,
+        };
   } catch (error) {
     return {
       destination: '',
       parents: [],
       hold: `the helper did not move node_modules/: destination check failed: ${error instanceof Error ? error.message : String(error)}`,
     };
-  }
-}
-
-function inspectPreserveDestination(
-  deps: F4WorktreeBranchDeps,
-  issueNumber: number,
-  primary: string,
-  records: readonly LocalWorktreeRecord[],
-): PreserveDestinationResult {
-  const refuse = (detail: string): PreserveDestinationResult => ({
-    destination: '',
-    parents: [],
-    hold: detail,
-  });
-  if (!isAbsolute(deps.stateRoot)) {
-    return refuse(
-      'the helper did not move node_modules/: the state root is not absolute',
-    );
-  }
-  const stateKind = deps.lstat(deps.stateRoot);
-  if (stateKind === 'absent') {
-    return refuse(
-      'the helper did not move node_modules/: the state root does not exist',
-    );
-  }
-  if (stateKind !== 'directory' && stateKind !== 'symlink') {
-    return refuse(
-      'the helper did not move node_modules/: the state root is not a directory',
-    );
-  }
-  const stateRootReal = deps.realpath(deps.stateRoot);
-  if (stateRootReal === null) {
-    return refuse(
-      'the helper did not move node_modules/: the state root cannot be resolved',
-    );
-  }
-  const resolvedStateRoot = resolve(stateRootReal);
-  if (parse(resolvedStateRoot).root === resolvedStateRoot) {
-    return refuse(
-      'the helper did not move node_modules/: the state root resolves to a filesystem root',
-    );
-  }
-  if (deps.inspectDirectoryPrivacy(deps.stateRoot) === 'unsafe') {
-    return refuse(
-      'the helper did not move node_modules/: the state root is not owned and private',
-    );
-  }
-
-  const iddDirectory = join(resolvedStateRoot, 'idd-skill');
-  const preserveDirectory = join(iddDirectory, 'f4-preserved');
-  for (const [path, kind] of [
-    [iddDirectory, deps.lstat(iddDirectory)],
-    [preserveDirectory, deps.lstat(preserveDirectory)],
-  ] as const) {
-    if (kind === 'symlink') {
-      return refuse(
-        `the helper did not move node_modules/: destination component ${path} is a symlink`,
-      );
-    }
-    if (kind !== 'absent' && kind !== 'directory') {
-      return refuse(
-        `the helper did not move node_modules/: destination component ${path} is not a directory`,
-      );
-    }
-    if (
-      kind === 'directory' &&
-      deps.inspectDirectoryPrivacy(path) === 'unsafe'
-    ) {
-      return refuse(
-        `the helper did not move node_modules/: destination component ${path} is not owned and private`,
-      );
-    }
-  }
-
-  let timestamp: string;
-  try {
-    timestamp = deps
-      .now()
-      .toISOString()
-      .replace(/[-:]/g, '')
-      .replace(/\.\d{3}Z$/, 'Z');
-  } catch {
-    return refuse(
-      'the helper did not move node_modules/: the UTC destination timestamp is invalid',
-    );
-  }
-  const destination = join(preserveDirectory, `${issueNumber}-${timestamp}`);
-  if (deps.lstat(destination) !== 'absent') {
-    return refuse(
-      `the helper did not move node_modules/: destination already exists at ${destination}`,
-    );
-  }
-
-  const deepestExisting = [
-    preserveDirectory,
-    iddDirectory,
-    resolvedStateRoot,
-  ].find((path) => deps.lstat(path) !== 'absent');
-  if (deepestExisting === undefined) {
-    return refuse(
-      'the helper did not move node_modules/: no existing destination parent was found',
-    );
-  }
-  const destinationBase = deps.realpath(deepestExisting);
-  if (destinationBase === null) {
-    return refuse(
-      `the helper did not move node_modules/: destination parent ${deepestExisting} cannot be resolved`,
-    );
-  }
-
-  const commonDirectoryResult = deps.git(
-    ['rev-parse', '--git-common-dir'],
-    primary,
-  );
-  const commonDirectoryOutput = commonDirectoryResult.stdout.trim();
-  if (
-    commonDirectoryResult.status !== 0 ||
-    commonDirectoryOutput.length === 0
-  ) {
-    return refuse(
-      'the helper did not move node_modules/: Git common directory cannot be resolved',
-    );
-  }
-  const commonDirectoryPath = isAbsolute(commonDirectoryOutput)
-    ? commonDirectoryOutput
-    : resolve(primary, commonDirectoryOutput);
-  const commonDirectory = deps.realpath(commonDirectoryPath);
-  if (commonDirectory === null) {
-    return refuse(
-      'the helper did not move node_modules/: Git common directory cannot be resolved',
-    );
-  }
-
-  const protectedRoots = [
-    { path: primary, label: 'worktree' },
-    { path: commonDirectory, label: 'Git common directory' },
-    ...records.map((record) => ({ path: record.path, label: 'worktree' })),
-  ];
-  for (const protectedRoot of protectedRoots) {
-    const protectedReal =
-      deps.realpath(protectedRoot.path) ?? resolve(protectedRoot.path);
-    if (isWithinRoot(protectedReal, destinationBase)) {
-      return refuse(
-        `the helper did not move node_modules/: destination ${destination} is inside protected ${protectedRoot.label} ${protectedRoot.path}`,
-      );
-    }
-  }
-
-  const parents: PreservationParent[] = [];
-  for (const path of [resolvedStateRoot, iddDirectory, preserveDirectory]) {
-    const kind = deps.lstat(path);
-    const identity = kind === 'directory' ? deps.directoryIdentity(path) : null;
-    if (kind !== 'absent' && (kind !== 'directory' || identity === null)) {
-      return refuse(
-        `the helper did not move node_modules/: destination parent ${path} has no verified directory identity`,
-      );
-    }
-    parents.push({ path, identity });
-  }
-  return { destination, parents, hold: null };
-}
-
-/** Detect changed parents without following a replacement directory link. */
-function checkPreservationParents(
-  deps: F4WorktreeBranchDeps,
-  parents: ReadonlyMap<string, string | null>,
-): string | null {
-  try {
-    for (const [path, identity] of parents) {
-      const kind = deps.lstat(path);
-      if (identity === null && kind === 'absent') continue;
-      if (
-        identity === null ||
-        kind !== 'directory' ||
-        deps.directoryIdentity(path) !== identity ||
-        deps.realpath(path) !== resolve(path) ||
-        deps.inspectDirectoryPrivacy(path) === 'unsafe'
-      ) {
-        return `destination parent ${path} changed after inspection`;
-      }
-    }
-    return null;
-  } catch (error) {
-    return `destination parent verification failed: ${error instanceof Error ? error.message : String(error)}`;
   }
 }
 

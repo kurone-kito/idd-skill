@@ -14,14 +14,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import {
-  chmodSync,
-  lstatSync,
-  mkdirSync,
-  realpathSync,
-  renameSync,
-  statSync,
-} from 'node:fs';
+import { lstatSync, mkdirSync, realpathSync, renameSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import { resolveBundleRoot } from './bundle-root.mts';
@@ -40,7 +33,6 @@ import {
   resolveCheckoutRepository,
 } from './f4-head-proof-live.mts';
 import type {
-  DirectoryPrivacy,
   F4WorktreeBranchDeps,
   GitResult,
   LstatKind,
@@ -57,12 +49,12 @@ import {
 } from './helper-cli-runner.mts';
 import { resolveStateBase } from './idd-local-admission.mts';
 import { parseLocalWorktreeList } from './local-worktree-occupancy.mts';
-import { gitChildEnvironment } from './provider-adapter-github.mts';
 import {
-  evaluateWindowsAcl,
-  readWindowsAcl,
-  type WindowsAclReader,
-} from './windows-acl.mts';
+  ensurePrivateStateDirectory,
+  inspectDirectoryPrivacy,
+} from './preserve-destination.mts';
+import { gitChildEnvironment } from './provider-adapter-github.mts';
+import { readWindowsAcl, type WindowsAclReader } from './windows-acl.mts';
 
 const F4_CLEANUP_FLAG_SPEC = {
   '--issue': { type: 'string' },
@@ -233,56 +225,6 @@ function realpathOrNull(path: string): string | null {
       return null;
     }
     throw error;
-  }
-}
-
-function inspectDirectoryPrivacy(
-  path: string,
-  platform: NodeJS.Platform,
-  windowsAclReader: WindowsAclReader,
-): DirectoryPrivacy {
-  try {
-    const lexical = lstatSync(path);
-    const target = statSync(path);
-    if (!target.isDirectory()) return 'unsafe';
-    if (platform === 'win32') {
-      return evaluateWindowsAcl(windowsAclReader(realpathSync.native(path))) ===
-        'private'
-        ? 'private'
-        : 'unsafe';
-    }
-    const uid = process.getuid?.();
-    if (uid !== undefined && target.uid !== uid) return 'unsafe';
-    if ((target.mode & 0o077) === 0 && (target.mode & 0o700) === 0o700) {
-      return 'private';
-    }
-    return lexical.isSymbolicLink() ? 'unsafe' : 'tightenable';
-  } catch {
-    return 'unsafe';
-  }
-}
-
-function ensurePrivateStateDirectory(
-  path: string,
-  platform: NodeJS.Platform,
-  windowsAclReader: WindowsAclReader,
-): void {
-  const privacy = inspectDirectoryPrivacy(path, platform, windowsAclReader);
-  if (privacy === 'private') return;
-  if (privacy !== 'tightenable') {
-    throw new Error('directory ownership or privacy could not be verified');
-  }
-  if (lstatSync(path).isSymbolicLink()) {
-    throw new Error('a state-root symlink target is not private');
-  }
-  const uid = process.getuid?.();
-  const target = statSync(path);
-  if (uid !== undefined && target.uid !== uid) {
-    throw new Error('directory belongs to another user');
-  }
-  chmodSync(path, 0o700);
-  if (inspectDirectoryPrivacy(path, platform, windowsAclReader) !== 'private') {
-    throw new Error('directory could not be restricted to its owner');
   }
 }
 
