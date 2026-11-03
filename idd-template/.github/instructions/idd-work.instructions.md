@@ -320,12 +320,13 @@ continue. See
 
 If "Proposed change" or "Acceptance criteria" cites an existing schema
 field, config key, or token as an example, verify it; correct or drop it if
-absent and hold if unclear (`#2806`). Post a plan, critique it for correctness
-and concreteness, then post the refined plan as a follow-up or update. After
-the final plan, set digest fields: `Phase: B2 planned`, `Open blockers: none`
-unless the plan found one, `Next action: B3 implement`, and `Authoritative by:`
-the plan comment plus verified claim. B2 mutations use the [shared claim
-gate][claim-gate].
+absent and hold if unclear (`#2806`). Post a plan as an issue comment, critique
+it for correctness and concreteness (per-agent: see
+`idd-overview-appendix.instructions.md`), then post the refined plan as a
+follow-up or update to the same comment. After the final plan, set digest
+fields: `Phase: B2 planned`, `Open blockers: none` unless the plan found one,
+`Next action: B3 implement`, and `Authoritative by:` the plan comment plus
+verified claim. B2 mutations use the [shared claim gate][claim-gate].
 
 [claim-gate]: idd-overview-core.instructions.md#claim-revalidation-gate
 
@@ -333,11 +334,9 @@ gate][claim-gate].
 
 ### B3 self-check
 
-Before B3, verify the B2 plan comment contains the refined post-critique plan.
-
-A pre-critique draft is insufficient.
-
-The claim revalidation gate covers B3 mutations. If unfinished, return to B2.
+Before B3, verify the B2 plan comment contains the refined post-critique plan;
+a pre-critique draft is insufficient. The claim revalidation gate covers B3
+mutations. If unfinished, return to B2.
 
 The following is a repair path only for an ordering violation that has
 already occurred, not an alternative route: disclose the deviation on
