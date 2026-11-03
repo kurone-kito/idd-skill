@@ -455,4 +455,78 @@ for (const name of DIRECTORY_NAMES) {
       /changed after inspection/,
     );
   });
+
+  test(`${name}: a parent created after inspection is refused as changed`, {
+    skip: !POSIX,
+  }, () => {
+    const fx = fresh();
+    const deps = depsFor(fx);
+    const inspected = inspectPreserveDestination(
+      deps,
+      name,
+      ISSUE,
+      fx.primary,
+      [],
+    );
+    assert.equal(inspected.hold, null);
+    // Something creates the absent idd-skill/ parent before the creation step.
+    // The recheck at the top of the step refuses it as a changed parent.
+    mkdirSync(join(fx.stateRoot, 'idd-skill'));
+    const created = createPreserveDestination(
+      deps,
+      inspected.destination,
+      inspected.parents,
+    );
+    assert.match(created.hold ?? '', /changed after inspection/);
+    assert.equal(realLstat(inspected.destination), 'absent');
+  });
+
+  for (const [label, fromCall] of [
+    ['a parent replaced before the parent loop is refused', 2],
+    ['a parent replaced before the final recheck is refused', 3],
+  ] as const) {
+    test(`${name}: ${label}`, { skip: !POSIX }, () => {
+      const fx = fresh();
+      const swap = swappingIdentity(fx, fromCall);
+      const deps = depsFor(fx, { directoryIdentity: swap.identity });
+      const inspected = inspectPreserveDestination(
+        deps,
+        name,
+        ISSUE,
+        fx.primary,
+        [],
+      );
+      assert.equal(inspected.hold, null);
+      swap.arm();
+      const created = createPreserveDestination(
+        deps,
+        inspected.destination,
+        inspected.parents,
+      );
+      assert.match(created.hold ?? '', /changed after inspection/);
+      assert.equal(realLstat(inspected.destination), 'absent');
+    });
+  }
+}
+
+/**
+ * Reports a different identity for the state root from its `fromCall`-th read
+ * after `arm()`, to simulate a replacement made by another process. Reads before
+ * `arm()` are not counted.
+ */
+function swappingIdentity(fixture: Fixture, fromCall: number) {
+  let armed = false;
+  let calls = 0;
+  return {
+    arm: () => {
+      armed = true;
+    },
+    identity: (path: string): string | null => {
+      if (armed && path === fixture.stateRoot) {
+        calls += 1;
+        if (calls >= fromCall) return 'swapped-identity';
+      }
+      return realIdentity(path);
+    },
+  };
 }

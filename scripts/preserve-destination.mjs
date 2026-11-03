@@ -225,12 +225,15 @@ export function createPreserveDestination(deps, destination, parents) {
     return refuse(`destination already exists at ${destination}`);
   }
   // Create the absent parents in order, and restrict every parent to its
-  // owner. The identity recorded for each one is read after that, so it is the
-  // identity this run left in place.
+  // owner. A parent that was absent at inspection is created with a
+  // non-recursive mkdir, which fails when something created it since. A parent
+  // that existed must still have the identity recorded at inspection. Each
+  // identity recorded here is one this run verified, and all of them are
+  // rechecked just before the destination is created.
   const recorded = [];
   for (const parent of parents) {
     try {
-      if (parent.identity === null && deps.lstat(parent.path) === 'absent') {
+      if (parent.identity === null) {
         deps.mkdir(parent.path, 0o700);
       }
       deps.ensurePrivateDirectory(parent.path);
@@ -246,8 +249,18 @@ export function createPreserveDestination(deps, destination, parents) {
     if (identity === null) {
       return refuse(`${parent.path} has no verified directory identity`);
     }
+    if (parent.identity !== null && identity !== parent.identity) {
+      return refuse(
+        `destination parent ${parent.path} changed after inspection`,
+      );
+    }
     recorded.push({ path: parent.path, identity });
   }
+  const finalChange = checkPreservationParents(
+    deps,
+    new Map(recorded.map(({ path, identity }) => [path, identity])),
+  );
+  if (finalChange !== null) return refuse(finalChange);
   try {
     deps.mkdir(destination, 0o700);
   } catch (error) {
