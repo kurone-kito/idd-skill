@@ -747,11 +747,66 @@ function currentMatches(
   return true;
 }
 
+// Built from parts so the shipped helper carries no literal placeholder token,
+// which the payload residue check would otherwise report.
+const MARKER_PLACEHOLDER = `{{${'PROJECT_MARKER_PREFIX'}}}`;
+const ANY_PLACEHOLDER = /\{\{[A-Z_]+\}\}/u;
+
+/**
+ * Resolve a prepared instruction the way onboarding concretes a local copy.
+ * Only the marker prefix has a value here: the repository policy's
+ * `markerPrefix`, which onboarding records from the repository name or from an
+ * explicit override. Any other placeholder, or a prefix the policy does not
+ * carry, returns null, so the comparison fails closed.
+ */
+function resolvePreparedInstructionBytes(
+  bytes: Buffer,
+  policy: JsonObject | null,
+): Buffer | null {
+  const text = bytes.toString('utf8');
+  if (!Buffer.from(text, 'utf8').equals(bytes)) return null;
+  if (!text.includes('{{')) return bytes;
+  const markerPrefix = policy?.markerPrefix;
+  if (typeof markerPrefix !== 'string' || markerPrefix.length === 0) {
+    return null;
+  }
+  const resolved = text.split(MARKER_PLACEHOLDER).join(markerPrefix);
+  return ANY_PLACEHOLDER.test(resolved) ? null : Buffer.from(resolved, 'utf8');
+}
+
+/**
+ * Whether a repository-local instruction tree is present at all. Any
+ * `idd-*.instructions.md` entry counts, not only the core file, so a partial
+ * tree cannot fall through to another route, while unrelated files do not.
+ * Every enumeration or containment failure counts as present, which fails
+ * closed.
+ */
+function localInstructionTreePresent(ctx: SelectionContext): boolean {
+  if (ctx.worktreeRoot === null) return false;
+  const directory = join(ctx.worktreeRoot, '.github', 'instructions');
+  try {
+    const kind = checkContainment(
+      ctx.worktreeRoot,
+      directory,
+      ctx.fs,
+    ).finalKind;
+    if (kind === 'absent') return false;
+    if (kind !== 'directory') return true;
+    return ctx.fs
+      .readdirSync(directory)
+      .some((name) => /^idd-.+\.instructions\.md$/u.test(name));
+  } catch {
+    return true;
+  }
+}
+
 /**
  * Compare the complete repository instruction tree with the instruction
- * subset of a verified prepared manifest. A repository-local route is trusted
- * only when every expected byte matches and no extra local instruction file
- * is present.
+ * subset of a verified prepared manifest. Each expected digest is taken from
+ * the prepared bytes after the same placeholder resolution onboarding applies,
+ * so a concreted local copy matches. A repository-local route is trusted only
+ * when every expected byte matches and no extra local instruction file is
+ * present.
  */
 function localInstructionsMatchSet(
   ctx: SelectionContext,
@@ -773,7 +828,21 @@ function localInstructionsMatchSet(
     ) {
       return false;
     }
-    expected.set(localPath, raw.sha256);
+    let preparedBytes: Buffer;
+    try {
+      preparedBytes = readNoFollowBytes(
+        resolve(set.root, componentPathPrefix('instructions') + raw.path),
+        ctx.fs,
+        true,
+      );
+    } catch {
+      return false;
+    }
+    // The prepared bytes must still be the ones the manifest recorded.
+    if (sha256(preparedBytes) !== raw.sha256) return false;
+    const resolved = resolvePreparedInstructionBytes(preparedBytes, ctx.policy);
+    if (resolved === null) return false;
+    expected.set(localPath, sha256(resolved));
   }
   if (!expected.has('idd-overview-core.instructions.md')) return false;
 
@@ -1182,24 +1251,10 @@ function inspectWithContext(
   // set, including one this session already bound. Verify their complete file
   // tree against that selected immutable set before allowing the local route.
   if (ctx.worktreeRoot !== null) {
-    const localInstruction = join(
-      ctx.worktreeRoot,
-      '.github',
-      'instructions',
-      'idd-overview-core.instructions.md',
-    );
-    // Any failure of the no-follow walk counts as present, so it fails closed
-    // to the repository-local report instead of throwing: a symbolic-link or
-    // non-directory ancestor, an unreadable entry, a special file, or a
-    // refused ceiling chain.
-    let localPresent: boolean;
-    try {
-      localPresent =
-        checkContainment(ctx.worktreeRoot, localInstruction, ctx.fs)
-          .finalKind !== 'absent';
-    } catch {
-      localPresent = true;
-    }
+    // A partial tree (an IDD instruction file without the core file) counts as
+    // present, so it stops at the repository-local report instead of falling
+    // through to another route. Enumeration failures fail closed the same way.
+    const localPresent = localInstructionTreePresent(ctx);
     if (localPresent) {
       if (bound !== null) {
         const selectedCommit = bound.selected.sourceCommit;

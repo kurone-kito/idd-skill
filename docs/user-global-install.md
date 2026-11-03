@@ -363,6 +363,15 @@ directory and to read its JSON output. If `active` is `true`, the agent opens
 `instructionsRoot` and follows the phase routing from there. Otherwise it does
 nothing IDD-specific.
 
+The gate is only half the check. A session-aware run that is `active` but has
+no session ID reports `selection.status` as not ready and `instructionsRoot` as
+`null`. That is a deliberate stop: without a session ID, the gate neither
+prepares a set nor binds one. A consumer must open the instructions only when
+`selection.status` is `ready` and `instructionsRoot` is not `null`. After a
+repair, the session reruns activation with the same session ID. It continues
+when the status is `ready`, and it binds only when the status is
+`binding-required`.
+
 The context cost is the entry text itself, kept under 1200 bytes by a test, and
 each session of an installed harness loads it. The IDD overview and the phase
 files load only after the gate reports `active`. The gate is read-only and makes

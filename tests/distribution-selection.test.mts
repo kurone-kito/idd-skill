@@ -509,6 +509,163 @@ test('verified repository-local instructions keep precedence and expose their ro
   );
 });
 
+const MARKER_INSTRUCTION_PATH =
+  '.github/instructions/idd-overview-core.instructions.md';
+const MARKER_INSTRUCTION = '# core for {{PROJECT_MARKER_PREFIX}}\n';
+
+function writeRepositoryMarkerPrefix(repo: string, markerPrefix: string): void {
+  fs.mkdirSync(join(repo, '.github', 'idd'), { recursive: true });
+  fs.writeFileSync(
+    join(repo, '.github', 'idd', 'config.json'),
+    JSON.stringify({ markerPrefix }),
+  );
+}
+
+function writeLocalInstruction(
+  repo: string,
+  relativePath: string,
+  content: string,
+): void {
+  const path = join(repo, relativePath);
+  fs.mkdirSync(dirname(path), { recursive: true });
+  fs.writeFileSync(path, content);
+}
+
+test('a marker prefix concreted from the repository policy keeps local provenance', () => {
+  const fixture = makeFixture();
+  fixture.addPreparedSet(
+    COMMIT_A,
+    'one',
+    MARKER_INSTRUCTION_PATH,
+    MARKER_INSTRUCTION,
+  );
+  fixture.installCurrent(
+    COMMIT_A,
+    '1.0.0',
+    'one',
+    MARKER_INSTRUCTION_PATH,
+    MARKER_INSTRUCTION,
+  );
+  writeRepositoryMarkerPrefix(fixture.repo, 'example');
+  writeLocalInstruction(
+    fixture.repo,
+    MARKER_INSTRUCTION_PATH,
+    '# core for example\n',
+  );
+
+  const routing = inspectDistributionRouting(fixture.options());
+  assert.equal(routing.report.source, 'repository-local');
+  assert.equal(routing.report.verdict, 'coherent-candidate');
+  assert.equal(routing.route, 'repository-local');
+});
+
+test('a concreted copy with another marker prefix is migration-required', () => {
+  const fixture = makeFixture();
+  fixture.addPreparedSet(
+    COMMIT_A,
+    'one',
+    MARKER_INSTRUCTION_PATH,
+    MARKER_INSTRUCTION,
+  );
+  fixture.installCurrent(
+    COMMIT_A,
+    '1.0.0',
+    'one',
+    MARKER_INSTRUCTION_PATH,
+    MARKER_INSTRUCTION,
+  );
+  writeRepositoryMarkerPrefix(fixture.repo, 'example');
+  writeLocalInstruction(
+    fixture.repo,
+    MARKER_INSTRUCTION_PATH,
+    '# core for other\n',
+  );
+
+  const routing = inspectDistributionRouting(fixture.options());
+  assert.equal(routing.report.source, 'repository-local');
+  assert.equal(routing.report.verdict, 'migration-required');
+  assert.equal(routing.route, 'none');
+});
+
+test('an unresolved placeholder with no policy marker prefix fails closed', () => {
+  const fixture = makeFixture();
+  fixture.addPreparedSet(
+    COMMIT_A,
+    'one',
+    MARKER_INSTRUCTION_PATH,
+    MARKER_INSTRUCTION,
+  );
+  fixture.installCurrent(
+    COMMIT_A,
+    '1.0.0',
+    'one',
+    MARKER_INSTRUCTION_PATH,
+    MARKER_INSTRUCTION,
+  );
+  writeLocalInstruction(
+    fixture.repo,
+    MARKER_INSTRUCTION_PATH,
+    '# core for example\n',
+  );
+
+  const routing = inspectDistributionRouting(fixture.options());
+  assert.equal(routing.report.source, 'repository-local');
+  assert.equal(routing.report.verdict, 'migration-required');
+  assert.equal(routing.route, 'none');
+});
+
+test('a partial instruction tree without the core file is migration-required, not a fall-through', () => {
+  const fixture = makeFixture();
+  fixture.addPreparedSet(
+    COMMIT_A,
+    'one',
+    MARKER_INSTRUCTION_PATH,
+    'entry one\n',
+  );
+  fixture.installCurrent(
+    COMMIT_A,
+    '1.0.0',
+    'one',
+    MARKER_INSTRUCTION_PATH,
+    'entry one\n',
+  );
+  writeLocalInstruction(
+    fixture.repo,
+    '.github/instructions/idd-other.instructions.md',
+    'partial\n',
+  );
+
+  const routing = inspectDistributionRouting(fixture.options());
+  assert.equal(routing.report.source, 'repository-local');
+  assert.equal(routing.report.verdict, 'migration-required');
+  assert.equal(routing.route, 'none');
+});
+
+test('unrelated files in the instruction directory do not count as an IDD installation', () => {
+  const fixture = makeFixture();
+  fixture.addPreparedSet(
+    COMMIT_A,
+    'one',
+    MARKER_INSTRUCTION_PATH,
+    'entry one\n',
+  );
+  fixture.installCurrent(
+    COMMIT_A,
+    '1.0.0',
+    'one',
+    MARKER_INSTRUCTION_PATH,
+    'entry one\n',
+  );
+  writeLocalInstruction(
+    fixture.repo,
+    '.github/instructions/README.md',
+    'notes\n',
+  );
+
+  const routing = inspectDistributionRouting(fixture.options());
+  assert.notEqual(routing.report.source, 'repository-local');
+});
+
 test('canonical generated instruction banners preserve local provenance', () => {
   const fixture = makeFixture();
   const instructionPath =
