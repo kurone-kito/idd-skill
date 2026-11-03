@@ -1316,7 +1316,7 @@ Reusable inputs:
 
 | Input               | Default                                           | Purpose                                                                    |
 | ------------------- | ------------------------------------------------- | -------------------------------------------------------------------------- |
-| `runner`            | `ubuntu-slim`                                     | Runner label for the boundary job                                          |
+| `runner`            | `ubuntu-slim`                                     | Runner label for every job of the workflow                                 |
 | `node-version`      | `24.x`                                            | Node.js version used by `setup-node`                                       |
 | `node-version-file` | `''` (empty)                                      | Version file used by `setup-node` instead of `node-version` when non-empty |
 | `install-command`   | `pnpm install --frozen-lockfile --prefer-offline` | Dependency install step                                                    |
@@ -1345,6 +1345,20 @@ tree confirms this: the boundary command fails with `MODULE_NOT_FOUND`,
 and even copied in by hand, with `ENOENT` (issue #3293). Every downstream
 caller, Node.js or not, must pass its own `lint-command` and
 `boundary-command`.
+
+A downstream caller gets one full run. The `pnpm-boundary-full` job runs
+`install-command`, `lint-command`, and `boundary-command` once, and the
+`pnpm-boundary` job then passes only when that job passed, so a required
+`<caller-job> / pnpm-boundary` check keeps working. The caller also sees a
+skipped `pnpm-boundary-group` job. In this source repository, when
+`lint-command` keeps its default, `pnpm-boundary-group` runs the suite as
+four matrix shards instead: `lint`, `typecheck`, `test`, and
+`distribution` (`build:check`, `audit`, and the boundary command). GitHub's
+"Re-run failed jobs" then repeats only the failed shard and the
+`pnpm-boundary` job (issue `#4993`). The workflow selects the shards by the
+repository name, which in a `workflow_call` run is the caller's, so a
+downstream caller never gets them. v0.17.0 and earlier run the whole suite
+in the `pnpm-boundary` job itself.
 
 Example downstream usage:
 
