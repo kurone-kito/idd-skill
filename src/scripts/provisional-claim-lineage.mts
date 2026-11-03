@@ -4,6 +4,7 @@
 // source by `pnpm run build`. Edit this .mts, never the generated .mjs. See
 // docs/typescript-sources.md.
 
+import type { ParsedClaimMarker } from './marker-helpers.mts';
 import {
   parseActivationNonceComment,
   parseClaimComment,
@@ -13,10 +14,10 @@ import {
   parseReleaseComment,
 } from './marker-helpers.mts';
 import {
+  applyClaimEvent,
   classifyCommentEditState,
   isStaleAt,
   isStaleByAge,
-  resolveActiveClaimWithForcedHandoffTrace,
 } from './protocol-helpers.mts';
 import type { VerifiedProvisionalDecisionClaim } from './provisional-decision-state.mts';
 
@@ -233,50 +234,89 @@ function identityChanged(
   );
 }
 
-function fold(events: readonly ClaimFoldEvent[], staleAgeMs: number) {
+interface ClaimStart {
+  readonly sourceIndex: number;
+  readonly claim: NonNullable<TrustedClaimComment['claim']>;
+  readonly comment: ProvisionalClaimLineageComment;
+}
+
+interface ClaimStartResolution {
+  readonly starts: readonly ClaimStart[];
+  readonly activeClaim: ParsedClaimMarker | null;
+  readonly activeSince: string;
+}
+
+function stalePredicate(staleAgeMs: number) {
   const isStale =
     Number.isFinite(staleAgeMs) && staleAgeMs > 0
       ? (activeCreatedAt: string, nextCreatedAt: string) =>
           isStaleByAge(activeCreatedAt, nextCreatedAt, staleAgeMs)
       : isStaleAt;
-  return resolveActiveClaimWithForcedHandoffTrace([...events], {
-    isTrustedAuthor: () => true,
-    isStale,
-  });
+  return isStale;
 }
 
 function resolveStarts(
   trustedComments: readonly TrustedClaimComment[],
   staleAgeMs: number,
-): Array<{
-  readonly sourceIndex: number;
-  readonly claim: NonNullable<TrustedClaimComment['claim']>;
-  readonly comment: ProvisionalClaimLineageComment;
-}> {
-  const starts: Array<{
-    sourceIndex: number;
-    claim: NonNullable<TrustedClaimComment['claim']>;
-    comment: ProvisionalClaimLineageComment;
-  }> = [];
-  const events: ClaimFoldEvent[] = [];
+): ClaimStartResolution {
+  const starts: ClaimStart[] = [];
+  const isTrustedAuthor = () => true;
+  const isStale = stalePredicate(staleAgeMs);
+  let activeClaim: ParsedClaimMarker | null = null;
+  let activeSince = '';
 
+  // History has already been checked oldest-first. Carry reducer state
+  // forward once; competing claim identities in one UTC second are refused
+  // below before the resulting active state is trusted.
   for (const entry of trustedComments) {
-    if (!entry.claim) {
-      events.push(entry.event);
-      continue;
+    const event = entry.event;
+    const next = applyClaimEvent(activeClaim, event, {
+      isTrustedAuthor,
+      isStale,
+    });
+    if (identityChanged(activeClaim, next)) {
+      activeSince = String(event.createdAt ?? '');
+      if (next) {
+        if (entry.claim) {
+          starts.push({
+            sourceIndex: entry.sourceIndex,
+            claim: entry.claim,
+            comment: entry.comment,
+          });
+        }
+      }
     }
-    const before = fold(events, staleAgeMs).activeClaim;
-    events.push(entry.event);
-    const after = fold(events, staleAgeMs).activeClaim;
-    if (identityChanged(before, after)) {
-      starts.push({
-        sourceIndex: entry.sourceIndex,
-        claim: entry.claim,
-        comment: entry.comment,
-      });
-    }
+    activeClaim = next;
   }
-  return starts;
+
+  return { starts, activeClaim, activeSince };
+}
+
+function hasDistinctClaimsInSameSecond(
+  trustedComments: readonly TrustedClaimComment[],
+): boolean {
+  const claimBySecond = new Map<
+    number,
+    { readonly agentId: string; readonly claimId: string }
+  >();
+  for (const entry of trustedComments) {
+    if (!entry.claim) continue;
+    const instant = parseRfc3339Instant(entry.comment.createdAt);
+    if (!instant) continue;
+    const previous = claimBySecond.get(instant.epochSeconds);
+    if (
+      previous &&
+      (previous.agentId !== entry.claim.agentId ||
+        previous.claimId !== entry.claim.claimId)
+    ) {
+      return true;
+    }
+    claimBySecond.set(instant.epochSeconds, {
+      agentId: entry.claim.agentId,
+      claimId: entry.claim.claimId,
+    });
+  }
+  return false;
 }
 
 /**
@@ -400,7 +440,13 @@ export function buildVerifiedClaimLineage(
     return recovery('malformed-claim-marker');
   }
 
-  const starts = resolveStarts(trustedComments, input.staleAgeMs);
+  const { starts, activeClaim, activeSince } = resolveStarts(
+    trustedComments,
+    input.staleAgeMs,
+  );
+  if (hasDistinctClaimsInSameSecond(trustedComments)) {
+    return recovery('same-second-claims');
+  }
   const startSeconds = new Set<number>();
   for (const start of starts) {
     const instant = parseRfc3339Instant(start.comment.createdAt);
@@ -439,9 +485,6 @@ export function buildVerifiedClaimLineage(
   }
   if (starts.length === 0) return recovery('empty-lineage');
 
-  const events = trustedComments.map(({ event }) => event);
-  const resolution = fold(events, input.staleAgeMs);
-  const activeClaim = resolution.activeClaim;
   if (!activeClaim) {
     return {
       status: 'ok',
@@ -485,6 +528,6 @@ export function buildVerifiedClaimLineage(
       branch: activeClaim.branch,
       claimedAt: activeStart.comment.createdAt,
     },
-    activeSince: resolution.activeSince || null,
+    activeSince: activeSince || null,
   };
 }

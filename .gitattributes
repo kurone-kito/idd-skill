@@ -130,6 +130,7 @@ scripts/provider-outage-park.mjs linguist-generated=true
 scripts/provider-port.mjs linguist-generated=true
 scripts/provisional-claim-lineage.mjs linguist-generated=true
 scripts/provisional-decision-state.mjs linguist-generated=true
+scripts/provisional-decision.mjs linguist-generated=true
 scripts/publish-authoring-hold.mjs linguist-generated=true
 scripts/pull-request-draft-state-execute.mjs linguist-generated=true
 scripts/pull-request-draft-state.mjs linguist-generated=true
