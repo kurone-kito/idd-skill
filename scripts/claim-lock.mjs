@@ -1765,6 +1765,22 @@ function runCli() {
       );
     }
     assertRecordTokensWorktree(args.worktree);
+    // Copilot (#4936 review): a nonce alone must not turn a bare id into a
+    // re-record. The re-record is allowed only when this claim already holds
+    // its own record at this path under the same agent-id, written earlier
+    // (by the nonce-less B1 record, or by --backfill-tokens for a worktree
+    // that predates the record). A fresh activation has no such record yet,
+    // so an arbitrary nonce cannot carry a bare id onto a new claim.
+    if (args.nonce?.trim() && !isSessionQualifiedAgentId(args.agentId)) {
+      const prior = readGeneratedClaimTokens(args.worktree, args.claimId);
+      if (prior.status !== 'present' || prior.record.agentId !== args.agentId) {
+        throw markCliUsageError(
+          new Error(
+            `--record-tokens refuses a nonce re-record under --agent-id ${JSON.stringify(args.agentId)} for claim ${args.claimId}: this worktree holds no earlier record of that claim under the same agent-id. A claim posted before the rule whose worktree predates the record needs --backfill-tokens first`,
+          ),
+        );
+      }
+    }
     const outcome = recordGeneratedClaimTokens(args.worktree, {
       agentId: args.agentId,
       claimId: args.claimId,

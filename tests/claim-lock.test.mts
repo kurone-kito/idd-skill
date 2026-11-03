@@ -2632,7 +2632,12 @@ test('CLI: a --record-tokens re-record with --nonce keeps accepting a legacy age
   const fixture = setupLinkedWorktree();
   try {
     // A claim posted before the rule re-records its own id with the
-    // activation nonce at B1 or in a recovery route.
+    // activation nonce at B1 or in a recovery route. Its B1 record already
+    // holds that bare id, so the re-record finds it at this path.
+    recordGeneratedClaimTokens(fixture.worktree, {
+      agentId: 'copilot',
+      claimId: 'claim-legacy',
+    });
     await execFileAsync(
       process.execPath,
       [
@@ -2658,6 +2663,114 @@ test('CLI: a --record-tokens re-record with --nonce keeps accepting a legacy age
     assert.equal(
       read.status === 'present' ? read.record.nonce : null,
       'nonce-legacy',
+    );
+  } finally {
+    teardown(fixture);
+  }
+});
+
+test('CLI: a nonce re-record under a bare id needs its own earlier record (#4936)', async () => {
+  const fixture = setupLinkedWorktree();
+  try {
+    // A fresh activation has no record of its claim yet, so an arbitrary
+    // nonce must not carry a bare id onto that claim.
+    await assert.rejects(
+      execFileAsync(
+        process.execPath,
+        [
+          CLI_PATH,
+          '--record-tokens',
+          '--worktree',
+          fixture.worktree,
+          '--agent-id',
+          'claude',
+          '--claim-id',
+          'claim-forged',
+          '--nonce',
+          'arbitrary-nonce',
+        ],
+        { env: fixtureEnv() },
+      ),
+      (error: NodeJS.ErrnoException & { stderr?: string }) => {
+        assert.notEqual(error.code, 0);
+        assert.match(
+          error.stderr ?? '',
+          /--record-tokens refuses a nonce re-record under --agent-id "claude" for claim claim-forged/,
+        );
+        return true;
+      },
+    );
+    assert.equal(
+      readGeneratedClaimTokens(fixture.worktree, 'claim-forged').status,
+      'absent',
+    );
+
+    // An earlier record under another agent-id does not stand in for it.
+    recordGeneratedClaimTokens(fixture.worktree, {
+      agentId: 'codex-cli',
+      claimId: 'claim-forged',
+    });
+    await assert.rejects(
+      execFileAsync(
+        process.execPath,
+        [
+          CLI_PATH,
+          '--record-tokens',
+          '--worktree',
+          fixture.worktree,
+          '--agent-id',
+          'claude',
+          '--claim-id',
+          'claim-forged',
+          '--nonce',
+          'arbitrary-nonce',
+        ],
+        { env: fixtureEnv() },
+      ),
+      (error: NodeJS.ErrnoException & { stderr?: string }) => {
+        assert.notEqual(error.code, 0);
+        assert.match(
+          error.stderr ?? '',
+          /--record-tokens refuses a nonce re-record under --agent-id "claude" for claim claim-forged/,
+        );
+        return true;
+      },
+    );
+    const afterRefusal = readGeneratedClaimTokens(
+      fixture.worktree,
+      'claim-forged',
+    );
+    assert.equal(
+      afterRefusal.status === 'present' ? afterRefusal.record.agentId : null,
+      'codex-cli',
+    );
+    assert.equal(
+      afterRefusal.status === 'present' ? afterRefusal.record.nonce : null,
+      undefined,
+    );
+
+    // A session-qualified id is not bound by this check: the fresh
+    // activation's own id re-records with its nonce as before.
+    await execFileAsync(
+      process.execPath,
+      [
+        CLI_PATH,
+        '--record-tokens',
+        '--worktree',
+        fixture.worktree,
+        '--agent-id',
+        'claude-48429e70',
+        '--claim-id',
+        'claim-fresh',
+        '--nonce',
+        'fresh-nonce',
+      ],
+      { env: fixtureEnv() },
+    );
+    const fresh = readGeneratedClaimTokens(fixture.worktree, 'claim-fresh');
+    assert.equal(
+      fresh.status === 'present' ? fresh.record.nonce : null,
+      'fresh-nonce',
     );
   } finally {
     teardown(fixture);
