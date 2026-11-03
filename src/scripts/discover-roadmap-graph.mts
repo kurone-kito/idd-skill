@@ -693,6 +693,17 @@ interface ReadinessResolution {
   needsDecisionLabelName: string;
   /** Configured authoring-only label (`labels.authoringOnlyLabelName`). */
   authoringOnlyLabelName: string;
+  /**
+   * Configured confirmation label (`autoDecide.confirmationLabelName`, issue
+   * #4960); absent uses the default.
+   */
+  confirmationLabelName?: string;
+  /**
+   * Configured ready label (`approvalSignals.readyLabelName`), read only for
+   * the confirmation-label collision check (issue #4960); absent uses the
+   * default.
+   */
+  readyLabelName?: string;
   /** Resolution "now" (ISO8601); defaults to the wall clock in the CLI. */
   nowIso: string;
 }
@@ -2358,6 +2369,8 @@ async function annotateReadiness(
       blockedByHumanLabelName: readiness.blockedByHumanLabelName,
       needsDecisionLabelName: readiness.needsDecisionLabelName,
       authoringOnlyLabelName: readiness.authoringOnlyLabelName,
+      confirmationLabelName: readiness.confirmationLabelName,
+      readyLabelName: readiness.readyLabelName,
       markerPrefix,
       // #3284 (Copilot review, PR #3415): without this, a `Blocked
       // by`/`Depends on` line naming this same repository
@@ -3114,7 +3127,8 @@ function buildReadinessResolution(
 ): ReadinessResolution {
   const authoringPolicy = resolveAuthoringGuardPolicy(policy);
   const markerPrefix = normalizeMarkerPrefix(policy.markerPrefix);
-  const labelsPolicy = normalizePolicyConfig(policy).labels;
+  const normalizedPolicy = normalizePolicyConfig(policy);
+  const labelsPolicy = normalizedPolicy.labels;
   return {
     findRoadmapsByMarker: buildRoadmapMarkerResolver(owner, repo, markerPrefix),
     authoringLabelName: authoringPolicy.labelName,
@@ -3123,6 +3137,9 @@ function buildReadinessResolution(
     blockedByHumanLabelName: labelsPolicy.blockedByHumanLabelName,
     needsDecisionLabelName: labelsPolicy.needsDecisionLabelName,
     authoringOnlyLabelName: labelsPolicy.authoringOnlyLabelName,
+    // #4960: roadmap children are filtered on the confirmation label too.
+    confirmationLabelName: normalizedPolicy.autoDecide.confirmationLabelName,
+    readyLabelName: normalizedPolicy.approvalSignals.readyLabelName,
     nowIso: new Date().toISOString(),
   };
 }

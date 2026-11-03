@@ -55,10 +55,13 @@ jobs:
     # 109990619661 were each cancelled at 15m0s although this value was
     # already 20 (the #3473 raise from 10, after run 36163057010 job
     # 108164078287 was cancelled at the old 10-minute cap on 2026-09-25).
-    # On ubuntu-latest this value is effective. Twenty minutes bounds a
+    # On ubuntu-latest this value is effective. Thirty minutes bounds a
     # hang. It is not a performance target and it is not permission to
-    # let the suite grow without a new measurement.
-    timeout-minutes: 20
+    # let the suite grow without a new measurement. Issue #5012 raised it
+    # from twenty after the Node 22 lane hit the old cap under runner load
+    # (cancelled at 20m16s on PR #4997). Recent successful runs took
+    # 12.6 to 18.7 minutes.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

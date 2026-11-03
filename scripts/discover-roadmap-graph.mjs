@@ -1588,6 +1588,8 @@ async function annotateReadiness(
       blockedByHumanLabelName: readiness.blockedByHumanLabelName,
       needsDecisionLabelName: readiness.needsDecisionLabelName,
       authoringOnlyLabelName: readiness.authoringOnlyLabelName,
+      confirmationLabelName: readiness.confirmationLabelName,
+      readyLabelName: readiness.readyLabelName,
       markerPrefix,
       // #3284 (Copilot review, PR #3415): without this, a `Blocked
       // by`/`Depends on` line naming this same repository
@@ -2203,7 +2205,8 @@ export function buildClaimStateResolution(
 function buildReadinessResolution(owner, repo, policy) {
   const authoringPolicy = resolveAuthoringGuardPolicy(policy);
   const markerPrefix = normalizeMarkerPrefix(policy.markerPrefix);
-  const labelsPolicy = normalizePolicyConfig(policy).labels;
+  const normalizedPolicy = normalizePolicyConfig(policy);
+  const labelsPolicy = normalizedPolicy.labels;
   return {
     findRoadmapsByMarker: buildRoadmapMarkerResolver(owner, repo, markerPrefix),
     authoringLabelName: authoringPolicy.labelName,
@@ -2212,6 +2215,9 @@ function buildReadinessResolution(owner, repo, policy) {
     blockedByHumanLabelName: labelsPolicy.blockedByHumanLabelName,
     needsDecisionLabelName: labelsPolicy.needsDecisionLabelName,
     authoringOnlyLabelName: labelsPolicy.authoringOnlyLabelName,
+    // #4960: roadmap children are filtered on the confirmation label too.
+    confirmationLabelName: normalizedPolicy.autoDecide.confirmationLabelName,
+    readyLabelName: normalizedPolicy.approvalSignals.readyLabelName,
     nowIso: new Date().toISOString(),
   };
 }
