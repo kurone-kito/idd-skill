@@ -108,11 +108,11 @@ For the repo-query rules of each Discover step, see
 ## Commit signing
 
 Signing is best-effort and never stops the loop: on a failure, take the
-next tier (configured, fallback signer, unsigned) per
+next tier (configured, fallback, unsigned) per
 `docs/idd-helper-scripts.md`'s Signed-Commit Merge Wrapper; never
 permanently rewrite signing config.
 
-Record progress, decisions, hold reasons, and any non-default signing
+Record material progress, decisions, hold reasons, and any non-default signing
 outcome as issue or PR comments as they happen, so a resuming agent can
 continue without session memory.
 

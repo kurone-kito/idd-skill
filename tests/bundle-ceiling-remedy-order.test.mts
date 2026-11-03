@@ -114,9 +114,9 @@ const SIGNING_TIER_SITES: readonly [string, string, readonly string[]][] = [
     '## Commit signing',
     [
       'Signing is best-effort and never stops the loop:',
-      'take the next tier (configured, fallback signer, unsigned)',
+      'take the next tier (configured, fallback, unsigned)',
       "`docs/idd-helper-scripts.md`'s Signed-Commit Merge Wrapper;",
-      'any non-default signing outcome',
+      'Record material progress, decisions, hold reasons, and any non-default signing outcome',
     ],
   ],
   [
@@ -164,6 +164,7 @@ const SIGNING_TIER_SITES: readonly [string, string, readonly string[]][] = [
       'Skip, without running it, a signer known to be unable to run without a terminal,',
       'Error text is not read.',
       "apply the calling site's conflict rule instead of the next tier.",
+      'Release tags keep their own rule: see',
       'The same verification runs after a signed tier that exits nonzero before the 2-minute bound:',
       "Otherwise, on the timeout path only, before moving to the next tier, also compare the index's tree hash",
       "At D1 (`idd-pr-submit.instructions.md`), a rebase with no staged content conflict follows D1's failed-write restart instead of `--continue`;",
