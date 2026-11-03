@@ -1782,6 +1782,26 @@ const RULE_CASES: readonly RuleCase[] = [
   },
   {
     ruleId: 'RWA005',
+    name: 'a probe that supplies a second GraphQL query field',
+    path: ROOT_PROBE,
+    mutation: {
+      transform: (text: string) =>
+        text.replace(
+          '-F number="$PR_NUMBER"); then',
+          [
+            '-F number="$PR_NUMBER" \\',
+            "            -F query='mutation($owner:String!) { repository(owner:$owner) { id } }'); then",
+          ].join('\n'),
+        ),
+    },
+    expected: [
+      {
+        message: 'probe must use only the read-only linked-issue GraphQL query',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
     name: 'a probe that reads a different API endpoint',
     path: ROOT_PROBE,
     mutation: { from: 'gh api graphql', to: 'gh api repos/' },
@@ -1793,16 +1813,31 @@ const RULE_CASES: readonly RuleCase[] = [
   },
   {
     ruleId: 'RWA005',
-    name: 'a probe that does not reject GraphQL errors',
+    name: 'a probe that accepts a malformed GraphQL errors field',
     path: ROOT_PROBE,
     mutation: {
-      from: 'if ((.errors // []) | length) > 0 then',
-      to: 'if false then',
+      from: 'elif has("errors") and (.errors | type) != "array" then',
+      to: 'elif false then',
     },
     expected: [
       {
         message:
-          'probe must fail on GraphQL errors or incomplete linked-issue data',
+          'probe must validate and derive the linked-issue result from returned nodes',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a probe that does not reject GraphQL errors',
+    path: ROOT_PROBE,
+    mutation: {
+      from: 'elif ((.errors // []) | length) > 0 then',
+      to: 'elif false then',
+    },
+    expected: [
+      {
+        message:
+          'probe must validate and derive the linked-issue result from returned nodes',
       },
     ],
   },
@@ -1858,6 +1893,26 @@ const RULE_CASES: readonly RuleCase[] = [
     mutation: {
       from: `REPOSITORY_OWNER="\${GITHUB_REPOSITORY%%/*}"`,
       to: 'REPOSITORY_OWNER="fixed-owner"',
+    },
+    expected: [
+      { message: 'probe must query the current repository and PR identity' },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a probe that type-converts repository identity GraphQL fields',
+    path: ROOT_PROBE,
+    mutation: {
+      transform: (text: string) =>
+        text
+          .replaceAll(
+            '-f owner="$REPOSITORY_OWNER"',
+            '-F owner="$REPOSITORY_OWNER"',
+          )
+          .replaceAll(
+            '-f repo="$REPOSITORY_NAME"',
+            '-F repo="$REPOSITORY_NAME"',
+          ),
     },
     expected: [
       { message: 'probe must query the current repository and PR identity' },

@@ -699,7 +699,7 @@ export async function runExternalCheckWaiver(options = {}) {
     owner,
     repo: name,
     prNumber: args.prNumber,
-    headRefOid: String(pr.headRefOid ?? '').trim(),
+    headRefOid: String(pr.headRefOid ?? ''),
   });
   // #3675: one first-commit reader shared by the pre-write resolution and the
   // post-write reconcile below, so a handoff-bearing apply reads the PR's
@@ -1986,8 +1986,32 @@ function createClosingIssueReferencesReader({
   let references;
   return () => {
     if (references === undefined) {
+      // #4812: the shared adapter accepts a non-array top-level `errors`
+      // value as absent; reject that malformed shape before it can look like
+      // a successful empty closing-issue set.
+      const strictGhText = (...args) => {
+        const response = ghText(...args);
+        let payload;
+        try {
+          payload = JSON.parse(response);
+        } catch {
+          return response;
+        }
+        if (
+          payload !== null &&
+          typeof payload === 'object' &&
+          !Array.isArray(payload) &&
+          Object.hasOwn(payload, 'errors') &&
+          !Array.isArray(payload.errors)
+        ) {
+          throw new Error(
+            'closingIssuesReferences lookup: malformed GraphQL errors field',
+          );
+        }
+        return response;
+      };
       references = readChangeRequestClosingIssueReferences(
-        ghText,
+        strictGhText,
         owner,
         repo,
         prNumber,

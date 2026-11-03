@@ -69,14 +69,18 @@ jobs:
           fi
           if ! CLOSING_ISSUE_RESPONSE=$(gh api graphql \
             -f query='query($owner:String!, $repo:String!, $number:Int!) { repository(owner:$owner,name:$repo) { pullRequest(number:$number) { closingIssuesReferences(first:1) { nodes { number } pageInfo { hasNextPage } } } } }' \
-            -F owner="$REPOSITORY_OWNER" \
-            -F repo="$REPOSITORY_NAME" \
+            -f owner="$REPOSITORY_OWNER" \
+            -f repo="$REPOSITORY_NAME" \
             -F number="$PR_NUMBER"); then
             echo "::error::Could not read linked closing issues for PR #$PR_NUMBER."
             exit 1
           fi
           if ! HAS_CLOSING_ISSUE=$(printf '%s' "$CLOSING_ISSUE_RESPONSE" | jq -r '
-            if ((.errors // []) | length) > 0 then
+            if type != "object" then
+              error("GraphQL response must be an object")
+            elif has("errors") and (.errors | type) != "array" then
+              error("malformed GraphQL errors")
+            elif ((.errors // []) | length) > 0 then
               error("GraphQL query returned errors")
             elif (.data.repository.pullRequest.closingIssuesReferences | type) != "object" then
               error("missing closing issue connection")

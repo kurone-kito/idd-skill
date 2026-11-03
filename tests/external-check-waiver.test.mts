@@ -4882,6 +4882,31 @@ test('runExternalCheckWaiver fails closed on invalid or inconsistent closing-ref
     ]);
     await assert.rejects(run(), /fixture GraphQL closing-reference failure/);
 
+    const emptyClosingIssueConnection = {
+      data: {
+        repository: {
+          pullRequest: {
+            headRefOid: FIXTURE_HEAD,
+            closingIssuesReferences: {
+              nodes: [],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        },
+      },
+    };
+    for (const errors of [{}, null]) {
+      fixtureGh.setResponses([
+        {
+          args: ['api', 'graphql'],
+          match: 'prefix',
+          includes: ['closingIssuesReferences(first:100,after:$after)'],
+          stdout: JSON.stringify({ ...emptyClosingIssueConnection, errors }),
+        },
+      ]);
+      await assert.rejects(run(), /malformed GraphQL errors field/);
+    }
+
     fixtureGh.setResponses([
       {
         args: ['api', 'graphql'],
@@ -4904,6 +4929,7 @@ test('runExternalCheckWaiver fails closed on invalid or inconsistent closing-ref
     fixtureGh.setResponses([]);
     const before = fixtureGh.calls().length;
     await assert.rejects(run('invalid-head'), /40 hexadecimal characters/);
+    await assert.rejects(run(` ${FIXTURE_HEAD}`), /40 hexadecimal characters/);
     assert.equal(
       fixtureGh
         .calls()

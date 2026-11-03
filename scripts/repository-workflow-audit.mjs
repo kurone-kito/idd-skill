@@ -1631,7 +1631,11 @@ const PROBE_READ_PERMISSIONS = [
 ];
 const PROBE_CLOSING_ISSUE_QUERY =
   'query($owner:String!, $repo:String!, $number:Int!) { repository(owner:$owner,name:$repo) { pullRequest(number:$number) { closingIssuesReferences(first:1) { nodes { number } pageInfo { hasNextPage } } } } }';
-const PROBE_CLOSING_ISSUE_JQ_FILTER = `if ((.errors // []) | length) > 0 then
+const PROBE_CLOSING_ISSUE_JQ_FILTER = `if type != "object" then
+  error("GraphQL response must be an object")
+elif has("errors") and (.errors | type) != "array" then
+  error("malformed GraphQL errors")
+elif ((.errors // []) | length) > 0 then
   error("GraphQL query returned errors")
 elif (.data.repository.pullRequest.closingIssuesReferences | type) != "object" then
   error("missing closing issue connection")
@@ -2121,9 +2125,13 @@ function checkProbeJob(path, probe, helperFields, report) {
     /gh api graphql\s*\\\s*([\s\S]*?)\); then/,
   )?.[1];
   const actualGraphQlArguments = graphQlArguments ?? '';
+  const queryFieldCount =
+    actualGraphQlArguments.match(/(?:^|\s)(?:-f|-F|--field)(?:\s+|=)query=/g)
+      ?.length ?? 0;
   if (
     ghApiCalls.length !== 1 ||
     graphQlCalls.length !== 1 ||
+    queryFieldCount !== 1 ||
     closingIssueQuery !== PROBE_CLOSING_ISSUE_QUERY
   ) {
     fail('probe must use only the read-only linked-issue GraphQL query');
@@ -2131,8 +2139,8 @@ function checkProbeJob(path, probe, helperFields, report) {
   if (
     !/^ {10}REPOSITORY_OWNER="\$\{GITHUB_REPOSITORY%%\/\*\}"$/m.test(run) ||
     !/^ {10}REPOSITORY_NAME="\$\{GITHUB_REPOSITORY#\*\/\}"$/m.test(run) ||
-    !actualGraphQlArguments.includes('-F owner="$REPOSITORY_OWNER"') ||
-    !actualGraphQlArguments.includes('-F repo="$REPOSITORY_NAME"') ||
+    !actualGraphQlArguments.includes('-f owner="$REPOSITORY_OWNER"') ||
+    !actualGraphQlArguments.includes('-f repo="$REPOSITORY_NAME"') ||
     !actualGraphQlArguments.includes('-F number="$PR_NUMBER"')
   ) {
     fail('probe must query the current repository and PR identity');
