@@ -263,11 +263,11 @@ a path, apply the conflict rule above. Otherwise take the next tier. A
 `--continue` after a resolved conflict finishes with that tier's
 `--continue` form (`git -c commit.gpgsign=false merge --continue` when
 unsigned). A clean merge reruns at that tier instead, so its
-`pre-merge-commit` hook runs again (`--continue` would skip it): run
-`git merge --abort` while `MERGE_HEAD` exists; without it, run the wrapper
-section's no-state check and stop if it verifies the merge. Then rerun the
-merge (`git merge --no-gpg-sign --no-ff` with the same `-m` subject and
-`"$target_sha"` when unsigned). Record any non-default
+`pre-merge-commit` hook runs again (`--continue` would skip it): if
+`MERGE_HEAD` exists, run `git merge --abort`; without it, run the wrapper
+section's no-state check, and if it verifies the merge, skip the rerun and
+continue to E12. Otherwise rerun the merge (`git merge --no-gpg-sign --no-ff`
+with the same `-m` subject and `"$target_sha"` when unsigned). Record any non-default
 signing outcome in a PR comment. Only a failure at the unsigned tier runs
 `git merge --abort` and stop-and-ask. After a wrapper timeout, terminate and
 wait for its full process tree; once it is gone, verify per the wrapper

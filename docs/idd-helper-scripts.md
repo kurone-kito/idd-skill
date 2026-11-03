@@ -10477,13 +10477,14 @@ already returned and released its locks.
   D1 (`idd-pr-submit.instructions.md`), a rebase with no staged content
   conflict follows D1's failed-write restart instead of `--continue`; with
   a staged content conflict, the `--continue` form here applies.
-  `--continue` is for a merge whose conflict was resolved and staged. A
-  merge that stopped with no conflict reruns at the next tier instead:
+  For a merge, `--continue` is only for one whose conflict was resolved
+  and staged. A merge that stopped with no conflict reruns at the next tier instead:
   `git merge --abort`, then the original merge command at that tier.
   `git merge --continue` runs the `pre-commit` and `commit-msg` hooks but
   not `pre-merge-commit`, so continuing a clean merge that a
   `pre-merge-commit` hook rejected would skip that hook; the rerun runs it
-  again, and its second rejection is the unsigned tier's failure (PR #4991
+  again at each tier, and its rejection at the unsigned rerun is the
+  unsigned tier's failure (PR #4991
   review comment r4451234135, reproduced with Git 2.43.0 there and with Git
   2.53.0 on 2026-11-03).
 - **Merge or rebase, no state present**: absent state alone does not
