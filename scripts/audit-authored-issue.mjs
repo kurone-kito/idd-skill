@@ -632,7 +632,7 @@ const CONFIRMATION_LINK_FIELDS = [
 const CONFIRMATION_NOTE_KINDS = ['location', 'failure'];
 // A marker value follows the contract value rule: no whitespace, no `;`, and
 // no `-->`, at most 128 characters (#4961, #5021).
-const CONTRACT_MARKER_VALUE_PATTERN = /^(?:(?!-->)[^\s;]){1,128}$/;
+const CONTRACT_MARKER_VALUE_PATTERN = /^(?:(?!-->)[^\s;]){1,128}$/u;
 const SOURCE_REFERENCE_PATTERN =
   /^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)#([1-9][0-9]*)$/;
 if (import.meta.main) {
@@ -4741,7 +4741,8 @@ function parseConfirmationMarkerLine(line, markerPrefix, suffix, fieldOrder) {
     return null;
   }
   const body = trimmed.slice(open.length, trimmed.length - close.length);
-  if (body.includes('-->') || body.includes('<!--')) {
+  // The contract forbids `-->` in a value, not `<!--` (#5021).
+  if (body.includes('-->')) {
     return null;
   }
   const parts = body.split('; ');

@@ -8260,3 +8260,28 @@ test('the confirmation label matches case-insensitively and ignores padding (#50
     label?.detail ?? 'no confirmation-label finding',
   );
 });
+
+test('an opaque marker value may contain `<!--`, which the contract does not forbid (#5021)', () => {
+  const record =
+    '<!-- idd-skill-auto-decision: class=runtimeQuestion; source=kurone-kito/idd-skill#4972; claim=claim-1; set=none; decision=dec<!--1 -->';
+  assert.ok(
+    !failingIds(confirmationAudit(confirmationBody(record))).includes(
+      'confirmation-record-marker',
+    ),
+  );
+});
+
+test('the 128-character value limit counts Unicode characters, not UTF-16 units (#5021)', () => {
+  const at = (n: number) =>
+    `<!-- idd-skill-auto-decision: class=runtimeQuestion; source=kurone-kito/idd-skill#4972; claim=claim-1; set=none; decision=${'😀'.repeat(n)} -->`;
+  assert.ok(
+    !failingIds(confirmationAudit(confirmationBody(at(128)))).includes(
+      'confirmation-record-marker',
+    ),
+  );
+  assert.ok(
+    failingIds(confirmationAudit(confirmationBody(at(129)))).includes(
+      'confirmation-record-marker',
+    ),
+  );
+});
