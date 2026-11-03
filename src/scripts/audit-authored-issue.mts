@@ -47,7 +47,7 @@
 // structural checks on top of them. Pure and network-free — the CLI reads
 // the drafted body from a file or stdin rather than fetching a live issue.
 
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { AutopilotSuitabilityMarkerDetection } from './autopilot-suitability.mts';
 import {
@@ -123,7 +123,11 @@ import {
   parseAuthoringPublicationIntentComment,
 } from './marker-helpers.mts';
 import { createMarkerRegex, escapeRegex } from './marker-regex.mts';
-import { normalizePolicyConfig, POLICY_DEFAULTS } from './policy-helpers.mts';
+import {
+  findAutoDecideLabelCollisions,
+  normalizePolicyConfig,
+  POLICY_DEFAULTS,
+} from './policy-helpers.mts';
 import { resolveTrustedMarkerActors } from './protocol-helpers.mts';
 import {
   evaluateSuitabilityLocal,
@@ -362,6 +366,12 @@ export interface AuditOptions {
    * Defaults to `status:needs-confirmation`.
    */
   confirmationLabelName?: string;
+  /**
+   * The raw repository policy document (`null` when absent or unreadable).
+   * The confirmation label collision check reads the same paths as the policy
+   * contract (#4961).
+   */
+  policyConfig?: unknown;
   /** Audit a record comment instead of a body (`--confirmation-record`, #4961). */
   confirmationRecord?: boolean;
   /** Expected record fields for `--confirmation-record` (#4961). */
@@ -987,6 +997,9 @@ const COLLAPSED_REFERENCE_LINK_USAGE_PATTERN =
 // explicit reference-style form.
 const MARKDOWN_SHORTCUT_LINK_START_PATTERN = /^\[([^\n\u005D]+)](?![[(:])/;
 const MARKDOWN_SHORTCUT_LINK_USAGE_PATTERN = /\[([^\n\u005D]+)](?![[(:])/g;
+
+/** The default policy file, relative to the working directory (#4961). */
+const DEFAULT_CONFIG_RELATIVE_PATH = '.github/idd/config.json';
 
 // Confirmation-shape constants (#4961). Declared above the CLI entry block so
 // they are initialized before main() runs.
@@ -5937,6 +5950,48 @@ function checkConfirmationForbidden(
   return pass(id, name, 'no forbidden marker or footer');
 }
 
+/**
+ * The policy document the collision check reads: the raw document with the
+ * label settings this audit was given applied on top, so the check sees the
+ * same names as the audit (#4961).
+ */
+function confirmationPolicyDocument(
+  options: AuditOptions,
+  confirmationLabel: string,
+): Record<string, Record<string, unknown>> {
+  const base: Record<
+    string,
+    Record<string, unknown>
+  > = typeof options.policyConfig === 'object' && options.policyConfig !== null
+    ? (options.policyConfig as Record<string, Record<string, unknown>>)
+    : {};
+  const issueAuthoring: Record<string, unknown> = {
+    ...(base.issueAuthoring ?? {}),
+  };
+  if (options.authoringLabelName !== undefined) {
+    issueAuthoring.authoringLabelName = options.authoringLabelName;
+  }
+  const labels: Record<string, unknown> = { ...(base.labels ?? {}) };
+  if (options.authoringOnlyLabelName !== undefined) {
+    labels.authoringOnlyLabelName = options.authoringOnlyLabelName;
+  }
+  if (options.needsDecisionLabelName !== undefined) {
+    labels.needsDecisionLabelName = options.needsDecisionLabelName;
+  }
+  if (options.blockedByHumanLabelName !== undefined) {
+    labels.blockedByHumanLabelName = options.blockedByHumanLabelName;
+  }
+  return {
+    ...base,
+    autoDecide: {
+      ...(base.autoDecide ?? {}),
+      confirmationLabelName: confirmationLabel,
+    },
+    issueAuthoring,
+    labels,
+  };
+}
+
 /** Checks the labels, the collision among them, and the policy read. */
 function checkConfirmationLabels(
   options: AuditOptions,
@@ -5962,21 +6017,17 @@ function checkConfirmationLabels(
   const collisionId = 'confirmation-label-collision';
   const collisionName =
     'The confirmation label differs from every other configured label';
-  const others = [
-    options.authoringLabelName,
-    options.needsDecisionLabelName,
-    options.blockedByHumanLabelName,
-    options.authoringOnlyLabelName,
-  ].filter((value): value is string => typeof value === 'string');
-  const collides = others.some(
-    (other) => other.trim().toLowerCase() === confirmationLabel.toLowerCase(),
+  const collisions = findAutoDecideLabelCollisions(
+    confirmationPolicyDocument(options, confirmationLabel),
   );
   findings.push(
-    collides
+    collisions.length > 0
       ? fail(
           collisionId,
           collisionName,
-          `the confirmation label ${confirmationLabel} collides with another configured label`,
+          `the confirmation label ${confirmationLabel} collides with ${collisions
+            .map((collision) => `${collision.setting} (${collision.labelName})`)
+            .join(', ')}`,
         )
       : pass(collisionId, collisionName, 'no collision'),
   );
@@ -6069,6 +6120,23 @@ function auditConfirmationShape(
     );
   }
 
+  if (options.confirmationRecord === true) {
+    const publication = rawText.match(/<!--\s+\S+-authoring-publication:/);
+    findings.push(
+      publication === null
+        ? pass(
+            'confirmation-record-publication',
+            'A record comment carries no publication line',
+            'none',
+          )
+        : fail(
+            'confirmation-record-publication',
+            'A record comment carries no publication line',
+            'a publication line appears in the record comment; the contract forbids it',
+          ),
+    );
+  }
+
   // Exactly one auto-decision text anywhere, code included.
   const occurrences = (
     rawText.match(new RegExp(escapeRegex(repoPattern), 'gi')) ?? []
@@ -6150,6 +6218,32 @@ function auditConfirmationShape(
         );
       }
     }
+  }
+
+  if (
+    options.confirmationRecord === true &&
+    options.expectSubject !== undefined
+  ) {
+    const subjectId = 'confirmation-record-subject';
+    const subjectName = 'The record names the expected subject';
+    const stopStart = maskedLines.findIndex(
+      (line) => line.trim() === '## Stop',
+    );
+    const stop =
+      stopStart < 0
+        ? []
+        : confirmationSectionRaw(maskedLines, rawLines, stopStart);
+    const first = stop.find((line) => line.trim() !== '') ?? '';
+    const subject = parseConfirmationSubjectLine(first);
+    findings.push(
+      subject === options.expectSubject
+        ? pass(subjectId, subjectName, `the subject is ${subject}`)
+        : fail(
+            subjectId,
+            subjectName,
+            `the record subject ${subject ?? '(none)'} differs from the expected ${options.expectSubject}`,
+          ),
+    );
   }
 
   // Sections.
@@ -6551,6 +6645,7 @@ function main(): HelperCliResult {
       | AuthoringBucketMarkerValue
       | undefined,
     confirmationLabelName: readConfirmationLabelName(policy.rawConfig),
+    policyConfig: policy.rawConfig ?? undefined,
     confirmationRecord: args.confirmationRecord === true,
     expectClass: args.expectClass,
     expectSource: args.expectSource,
@@ -6692,6 +6787,12 @@ function loadPolicy(configPath?: string): {
     }
   } else {
     config = loadIddConfig();
+    // loadIddConfig() collapses an unreadable or malformed default file to null,
+    // which is the same return as an absent file. Only a present file is a
+    // problem, so check for it here (#4961).
+    if (!config && existsSync(DEFAULT_CONFIG_RELATIVE_PATH)) {
+      unreadableConfigPath = DEFAULT_CONFIG_RELATIVE_PATH;
+    }
   }
   if (!config) {
     return {

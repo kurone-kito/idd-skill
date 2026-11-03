@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -8087,6 +8093,111 @@ test('the confirmation shape needs --current-repo on the command line (#4961)', 
     );
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /--current-repo/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('record mode compares the record subject with the expected subject (#4961)', () => {
+  const remnant = CONFIRMATION_RECORD.replace(
+    'class=runtimeQuestion',
+    'class=worktreeRemnant',
+  ).replace('claim=claim-1', 'claim=claim-9');
+  const record = [
+    remnant,
+    '',
+    '## Stop',
+    '',
+    'Subject: `/wrong/worktree`',
+    '',
+    ...CONFIRMATION_SECTIONS.slice(2),
+  ].join('\n');
+  const expected = {
+    confirmationRecord: true,
+    expectClass: 'worktreeRemnant',
+    expectSource: 'kurone-kito/idd-skill#4972',
+    expectClaim: 'claim-9',
+    expectSet: 'none',
+  };
+  assert.ok(
+    failingIds(
+      confirmationAudit(record, {
+        ...expected,
+        expectSubject: '/expected/worktree',
+      }),
+    ).includes('confirmation-record-subject'),
+  );
+  assert.equal(
+    confirmationAudit(record, { ...expected, expectSubject: '/wrong/worktree' })
+      .passed,
+    true,
+  );
+});
+
+test('record mode rejects a publication line anywhere in the record comment (#4961)', () => {
+  const record = [
+    CONFIRMATION_RECORD,
+    '',
+    ...CONFIRMATION_SECTIONS,
+    '',
+    CONFIRMATION_PUBLICATION,
+  ].join('\n');
+  const expected = {
+    confirmationRecord: true,
+    expectClass: 'runtimeQuestion',
+    expectSource: 'kurone-kito/idd-skill#4972',
+    expectClaim: 'claim-1',
+    expectSet: 'none',
+  };
+  assert.ok(
+    failingIds(confirmationAudit(record, expected)).includes(
+      'confirmation-record-publication',
+    ),
+  );
+});
+
+test('a confirmation label that collides with roadmapLabelName or readyLabelName fails (#4961)', () => {
+  const policy = { labels: { roadmapLabelName: 'status:needs-confirmation' } };
+  assert.ok(
+    failingIds(
+      confirmationAudit(confirmationBody(), { policyConfig: policy }),
+    ).includes('confirmation-label-collision'),
+  );
+  const ready = {
+    approvalSignals: { readyLabelName: 'Status:Needs-Confirmation ' },
+  };
+  assert.ok(
+    failingIds(
+      confirmationAudit(confirmationBody(), { policyConfig: ready }),
+    ).includes('confirmation-label-collision'),
+  );
+});
+
+test('an unreadable default policy file fails the policy check through the CLI (#4961)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'confirmation-policy-'));
+  try {
+    mkdirSync(join(dir, '.github', 'idd'), { recursive: true });
+    writeFileSync(join(dir, '.github', 'idd', 'config.json'), '{ not json');
+    const bodyPath = join(dir, 'body.md');
+    writeFileSync(bodyPath, confirmationBody());
+    const result = spawnSync(
+      process.execPath,
+      [
+        CLI_PATH,
+        '--shape',
+        'confirmation',
+        '--current-repo',
+        'kurone-kito/idd-skill',
+        '--body-file',
+        bodyPath,
+      ],
+      { encoding: 'utf8', cwd: dir },
+    );
+    assert.notEqual(result.status, 0);
+    assert.match(
+      result.stdout + result.stderr,
+      /confirmation-policy|unreadable/,
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
