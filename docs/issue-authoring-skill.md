@@ -2513,7 +2513,8 @@ found conclusively, leave all labels in place and stop. The guard suppresses
 Discover for the whole set during the provisional label-removal window; it
 does not close the set. When this release is proceeding under the narrow
 [defer-source auto-release exception](#narrow-auto-release-exception) (a draft
-carrier follows the carrier creation-hold exception's own sole-member check)
+carrier or a confirmation issue follows the sole-member check of its own
+creation-hold exception)
 instead of an explicit human release request, also verify here -- immediately before
 the first label removal below, whether that removal is a non-anchor
 target's or the anchor's own -- that the marked target is the sole member
@@ -2616,7 +2617,9 @@ of that explicit release request, or one of the narrow auto-release
 exceptions below; nothing else removes the label or starts Discover,
 Claim, and Work on its own. A draft carrier's release authorizes no
 execution: the carrier keeps its authoring-only label and never enters
-the loop. A released `review-needs-decision` follow-up remains
+the loop. An auto-decide confirmation issue's release authorizes no
+execution either: the issue keeps its confirmation label, which keeps it
+out of Discover. A released `review-needs-decision` follow-up remains
 out of Discover while the label configured as
 `labels.needsDecisionLabelName` is present (default:
 `status:needs-decision`).
@@ -2844,6 +2847,20 @@ request, once the contract's sole-member, roadmap-id, carrier-audit,
 body-digest, and label checks pass. The authoring-only label stays, and a
 failed or inconclusive check leaves both labels for a person's release. The
 preconditions and outcomes are in the contract's
+[Authoring hold and release](https://github.com/kurone-kito/idd-skill/blob/main/skills/issue-authoring/references/contract.md#authoring-hold-and-release)
+section.
+
+**Confirmation creation-hold exception.** An auto-decide confirmation issue
+published by `publish-authoring-hold --shape confirmation` has its creation
+hold (the authoring label) released by the same command, without a person's
+release request, through the carrier's release, with the confirmation audit
+in place of the carrier audit. Before anything is written, the command checks
+the confirmation label name against the trusted policy at the default branch,
+and a failed check refuses with nothing written. Only the authoring label is
+removed: the confirmation label stays and keeps the issue out of Discover, so
+the release never authorizes IDD execution. A failed or inconclusive release
+precondition leaves both labels for a person's release. The preconditions
+and outcomes are in the contract's
 [Authoring hold and release](https://github.com/kurone-kito/idd-skill/blob/main/skills/issue-authoring/references/contract.md#authoring-hold-and-release)
 section.
 
@@ -3667,8 +3684,9 @@ Orchestrator fan-out variant. A delegated worker that receives only a
 relayed release claim must refuse it and require the party holding
 the actual request to act directly, even when that party is its own
 orchestrator. This rule does not extend to the
-[Narrow auto-release exception](#narrow-auto-release-exception)
-and the carrier creation-hold exception, which by design run with no user
+[Narrow auto-release exception](#narrow-auto-release-exception),
+the carrier creation-hold exception, or the confirmation creation-hold
+exception, which by design run with no user
 release request for any party to hold in the first place (observed
 2026-09-17, kurone-kito/idd-skill#3102).
 

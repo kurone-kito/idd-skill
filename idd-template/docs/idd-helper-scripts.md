@@ -854,6 +854,15 @@ in this preamble, since the fallback differs per helper.
   also lists the origin in the top-level `unresolvable` array), or
   `needs_decision_label_conflicts_with_authoring_label` when the configured
   authoring and needs-decision labels collide (issue #4065).
+  Default-on (not opt-in): excludes an issue that carries the configured
+  `autoDecide.confirmationLabelName` (default `status:needs-confirmation`),
+  compared trimmed and case-insensitively, whatever `dangerouslyAutoDecide`
+  and the `autoDecide` class switches say, bucketed under
+  `filtered.blocked_label` with `details` set to the label as stored, or to
+  `needs_confirmation_label_collision` when that name equals another
+  configured IDD label name or `approvalSignals.readyLabelName` (issue
+  `#4960`). This keeps an auto-decide confirmation issue out of Discover
+  after its creation hold is released.
   Repeatable `--exclude-issue <positive-number>` excludes matching open issues
   before classification and claim annotation, reporting them under
   `filtered.excluded_roadmap_leaf`. Values are deduplicated for the hint-cache
@@ -931,7 +940,14 @@ in this preamble, since the fallback differs per helper.
   `discover-orphan-filter.mjs` above, surfaced as a
   `triage_verdict:<outcome>` entry in `filteredOut[].reasons` (referenced
   in
-  [kurone-kito/idd-skill#2243](https://github.com/kurone-kito/idd-skill/issues/2243))
+  [kurone-kito/idd-skill#2243](https://github.com/kurone-kito/idd-skill/issues/2243)).
+  Default-on (not opt-in): an issue that carries the configured
+  `autoDecide.confirmationLabelName` (default `status:needs-confirmation`),
+  compared trimmed and case-insensitively, is never ready, with the reason
+  `label:<name>` for the configured name, or
+  `needs_confirmation_label_collision` when that name equals another
+  configured IDD label name or `approvalSignals.readyLabelName` (issue
+  `#4960`)
 - `scripts/discover-viability-gate.mjs` for A4 viability gate evaluation
   across limited scope, clear verification, and autonomous completion
   criteria (referenced in
@@ -1567,7 +1583,8 @@ in this preamble, since the fallback differs per helper.
   are the same as for the other shapes.
 
   After `state=member` the helper runs the carrier release described above
-  and removes only the authoring label; the confirmation label stays and
+  (contract.md, "Confirmation creation-hold exception") and removes only the
+  authoring label; the confirmation label stays and
   keeps the released issue out of Discover. The preconditions are the
   carrier's, except that the confirmation audit runs in place of the
   carrier audit: `audit-authored-issue.mjs --shape confirmation` in body

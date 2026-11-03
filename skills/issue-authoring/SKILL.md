@@ -245,7 +245,8 @@ needs-decision, blocked-by-human, and out-of-scope.
      intentionally create an unlabeled issue. That command is
      `idd-publish-authoring-hold` (`node scripts/publish-authoring-hold.mjs`
      in this source repository). It publishes one issue per call: an orphan
-     (the default), a draft carrier (`--shape carrier`), a roadmap shell
+     (the default), a draft carrier (`--shape carrier`), an auto-decide
+     confirmation issue (`--shape confirmation`), a roadmap shell
      (`--shape roadmap`), or a child (`--shape child` with `--anchor` naming
      the set anchor's `<owner>/<repo>#<number>`); see its `--help` and the
      contract's
@@ -359,9 +360,11 @@ needs-decision, blocked-by-human, and out-of-scope.
      release — or, under the narrow auto-release exceptions in
      [Authoring hold and release](references/contract.md#authoring-hold-and-release),
      for a single target whose body carried the defer-source marker at
-     Stage 1 publication time (never a marker added later), or for a draft
+     Stage 1 publication time (never a marker added later), for a draft
      carrier, whose creation hold `publish-authoring-hold --shape carrier`
-     releases itself — preflight and verify or reuse a matching
+     releases itself, or for an auto-decide confirmation issue, whose
+     creation hold `publish-authoring-hold --shape confirmation` releases the
+     same way — preflight and verify or reuse a matching
      `mode=release` marker for every target (with `supersedes` equal to the
      current owner token)
      before removing any label; record its GitHub comment ID, never append a
@@ -405,8 +408,8 @@ needs-decision, blocked-by-human, and out-of-scope.
    only the user's explicit release request does, except the narrow
    defer-source auto-release exception in
    [Authoring hold and release](references/contract.md#authoring-hold-and-release);
-   its carrier creation-hold exception releases a carrier, which never
-   enters the loop.
+   its carrier and confirmation creation-hold exceptions release a carrier
+   or an auto-decide confirmation issue, neither of which enters the loop.
    A released `review-needs-decision` follow-up remains out of Discover
    while the label configured as `labels.needsDecisionLabelName` is
    present (default: `status:needs-decision`).

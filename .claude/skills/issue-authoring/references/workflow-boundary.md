@@ -398,8 +398,9 @@ approval boundary that hands off to IDD execution.
   exception in
   [Authoring hold and release](contract.md#authoring-hold-and-release) —
   and it authorizes IDD execution for the released issues. The carrier
-  creation-hold exception in the same section removes only a carrier's
-  creation hold and authorizes no execution (see
+  creation-hold exception and the confirmation creation-hold exception in the
+  same section remove only the creation hold of a carrier or an auto-decide
+  confirmation issue and authorize no execution (see
   [Handoff to execution](#handoff-to-execution))
 - Before removing the authoring label, bundled skill runs a release
   checklist that absorbs the rigor of the dropped middle step:
@@ -436,8 +437,8 @@ approval boundary that hands off to IDD execution.
   proceeding under the narrow defer-source auto-release
   exception in
   [Authoring hold and release](contract.md#authoring-hold-and-release)
-  (a draft carrier follows the carrier creation-hold exception's own
-  sole-member check)
+  (a draft carrier or a confirmation issue follows the sole-member check of
+  its own creation-hold exception)
   instead of an explicit human release request, also verify here --
   immediately before the first label removal below, whether that
   removal is a non-anchor target's or the anchor's own -- that the
@@ -518,7 +519,7 @@ approval boundary that hands off to IDD execution.
 - Bundled skill removes the authoring label from all published issues
   only after the release checklist passes and the user's release
   request is explicit, except the narrow auto-release exceptions
-  (defer-source and carrier creation-hold) in
+  (defer-source, carrier creation-hold, and confirmation creation-hold) in
   [Authoring hold and release](contract.md#authoring-hold-and-release)
 - Release remains a human action; nothing in this bundle auto-releases
   a held issue set, except those same narrow, marker-scoped exceptions
@@ -723,7 +724,7 @@ time and report the specific failure (unclear, invalid, duplicate).
   reviewed, and its drafts are reviewed at re-authoring
 - remove the authoring label from any issue without an explicit
   release request, except the narrow auto-release exceptions
-  (defer-source and carrier creation-hold) in
+  (defer-source, carrier creation-hold, and confirmation creation-hold) in
   [Authoring hold and release](contract.md#authoring-hold-and-release)
 
 ## Handoff to execution
@@ -745,3 +746,9 @@ label, and that authorizes no execution: the carrier keeps its
 authoring-only label and never enters the loop. Re-authoring publishes the
 drafts under a new hold, and releasing those targets still needs the
 explicit release request.
+
+The confirmation creation-hold exception removes an auto-decide confirmation
+issue's authoring label, and that authorizes no execution either: the issue
+keeps its confirmation label (`autoDecide.confirmationLabelName`), which keeps
+it out of Discover, so it never enters the loop. The operator confirms the
+choice by closing the issue.

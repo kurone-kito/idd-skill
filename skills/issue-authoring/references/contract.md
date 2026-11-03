@@ -2580,7 +2580,8 @@ only approval boundary.
   in this source repository). It publishes one issue per call and runs the
   steps below in order, from the journal check to `state=member`. The
   shape picks the issue: an orphan (the default), a draft carrier
-  (`--shape carrier`), a held roadmap shell (`--shape roadmap`, where an
+  (`--shape carrier`), an auto-decide confirmation issue
+  (`--shape confirmation`), a held roadmap shell (`--shape roadmap`, where an
   empty `## Tracks` list is valid), or one child of an existing set:
 
   ```sh
@@ -2589,9 +2590,10 @@ only approval boundary.
     --review-result <path> --apply
   ```
 
-  An orphan, a carrier, and a roadmap are each their own set anchor, so
-  their `anchor` reuses their own opaque `target`, and none of them accepts
-  `--anchor`. A child needs `--anchor` and exits 2 without it, before
+  An orphan, a carrier, a confirmation issue, and a roadmap are each their
+  own set anchor, so their `anchor` reuses their own opaque `target`, and
+  none of them accepts `--anchor`.
+  A child needs `--anchor` and exits 2 without it, before
   anything is created. The anchor must be an open issue in the same
   repository that still carries the authoring label and has no active
   claim or open linked pull request, and its trusted owner-marker log must
@@ -2627,13 +2629,17 @@ only approval boundary.
   of a set one call at a time (preventive; no observed incident yet). For a
   draft carrier,
   the command then runs the release steps of the carrier creation-hold
-  exception under "Authoring hold and release". It takes
-  `--review-result <path>`, required for an orphan, a roadmap, and a child:
+  exception under "Authoring hold and release", and for a confirmation issue
+  the same steps under the confirmation creation-hold exception there. It
+  takes `--review-result <path>`, required for an orphan, a roadmap, and a
+  child:
   a JSON object with `"completed": true`, whose optional `findings` entries
   must each be `fixed` or `rejected`. For a carrier the file is optional: its
   `completed` may be `false` (drafts marked `Review: not reviewed`), and its
   `findings`, if present, must be an array of objects and are not otherwise
-  checked. It is a dry run without `--apply`.
+  checked. A confirmation issue refuses `--review-result` (exit 2, before
+  anything is read), because it records an auto-decided stop, not a reviewed
+  draft. It is a dry run without `--apply`.
   It never retries, closes, or appends `cleanup` or `abandoned`: any failure
   after the create stops at a recovery hold with the record at `pending`, or
   reported as uncertain (replay the journal) when a record may have been
@@ -3257,8 +3263,9 @@ only approval boundary.
   stop. The guard suppresses Discover for the whole set during the provisional
   label-removal window; it does not close the set. When this release is
   proceeding under the narrow defer-source auto-release
-  exception below (a draft carrier follows the carrier creation-hold
-  exception's own sole-member check instead) instead of an explicit human
+  exception below (a draft carrier or a confirmation issue follows the
+  sole-member check of its own creation-hold exception instead) instead of an
+  explicit human
   release request, also verify here -- immediately before the first label
   removal below, whether that removal is a non-anchor target's or the
   anchor's own --
@@ -3349,8 +3356,9 @@ only approval boundary.
   stop. If restoration cannot be completed or a newer owner has appeared,
   record a set-level recovery hold and never claim a partial release. Release
   is a human action; nothing in this bundle auto-releases a held issue set,
-  except the two narrow, marker-scoped exceptions immediately below (the
-  defer-source exception and the carrier creation-hold exception).
+  except the three narrow, marker-scoped exceptions immediately below (the
+  defer-source exception, the carrier creation-hold exception, and the
+  confirmation creation-hold exception).
 - **Fast path: `|set|==1` self-anchor Stage 2 release (observed
   2026-09-21, kurone-kito/dotfiles#465 via gist round 27;
   kurone-kito/idd-skill#3164).** A genuine standalone set -- exactly
@@ -3371,7 +3379,9 @@ only approval boundary.
   this release is proceeding under the narrow defer-source auto-release
   exception below instead of an explicit human release request (a draft
   carrier is released under the carrier creation-hold exception bullet
-  below, with the preconditions that bullet lists instead of these) -- an
+  below, and a confirmation issue under the confirmation creation-hold
+  exception bullet, each with the preconditions its bullet lists instead of
+  these) -- an
   ordinary human-gated release skips straight to step (4), since the human
   request already vouches for the set's scope -- run **both** of that
   exception's own preconditions here, immediately before the label
@@ -3426,9 +3436,10 @@ only approval boundary.
   shorter path to the same guarantee, never a weaker one: it grants no
   new exemption, and release stays a human action under the same
   precondition as the general case, subject to the same narrow
-  defer-source auto-release exception named in step (3) or, for a draft
-  carrier, the carrier creation-hold exception. Pairs with the Stage 1
-  acquire fast path above.
+  defer-source auto-release exception named in step (3), or, for a draft
+  carrier, the carrier creation-hold exception, or, for a confirmation issue,
+  the confirmation creation-hold exception. Pairs with the Stage 1 acquire
+  fast path above.
 - **Closing sweep (after Stage 2 closes, #2896 review, Codex; #2935).**
   The two sweep points above run _before_ Stage 2's own later marker
   appends for the same generation -- the per-target `release` marker,
@@ -3671,6 +3682,65 @@ only approval boundary.
   label. Its outcomes, label restore and reapply rules, and report fields are
   those of the general case, as implemented by `publish-authoring-hold`.
 
+- **Confirmation creation-hold exception.** An auto-decide confirmation issue
+  (see [Auto-decide confirmation issue](#auto-decide-confirmation-issue))
+  published by `publish-authoring-hold --shape confirmation` (see "New-issue
+  ownership" above) is its own set anchor and has no readiness bucket. The
+  command refuses `--anchor`, `--review-result`, and any `--bucket` other
+  than `ready` (exit 2, before anything is read). It refuses (exit 1) when
+  the authoring label and the confirmation label
+  (`autoDecide.confirmationLabelName`, default `status:needs-confirmation`)
+  are not two different, non-empty names. It lints the body with
+  `audit-authored-issue --shape confirmation --new-issue --current-repo
+  <owner>/<repo>`, one `--label` for each of the two labels, and no
+  bucket. Then, before anything is written,
+  in a dry run too, it checks the confirmation label name against the
+  trusted policy: it reads `.github/idd/config.json` at the repository's
+  default branch with no user-global layer, and an absent file there means
+  the default name. It refuses (exit 1, nothing written) when the default
+  branch cannot be resolved, when that policy cannot be read for any other
+  reason, when the name from the repository policy file differs from the
+  trusted name, when either policy reports a label collision, or when the
+  repository stores the label under another letter case. A pull request or
+  a stale checkout that renamed the label could otherwise let the released
+  issue escape Discover (preventive; no observed incident yet). The creation
+  hold is the authoring label, applied together with the confirmation label
+  in the one create call. That hold is released by the same command right
+  after `state=member`, without a person's release request, by the carrier
+  release above: fast-path steps (1) to (8) on the confirmation issue, with
+  the carrier's preconditions (a) to (e) read on the confirmation issue,
+  except that:
+  - (c) runs `audit-authored-issue --shape confirmation` in body mode, not
+    record mode, on the fresh body with both configured labels;
+  - (e) requires the confirmation label and the authoring label.
+
+  The re-checks, the label restore and reapply rules, and the report fields
+  are the carrier's. The release never closes the confirmation issue and
+  never removes the confirmation label. The outcomes are:
+  - `released`: only the authoring label is removed. The confirmation label
+    stays and keeps the issue out of Discover (issue `#4960`);
+  - `held` (exit 0): both labels and the markers already posted stay, and
+    the issue waits for a person's Stage 2 release;
+  - recovery hold (exit 1): replay the issue's owner-marker log and the
+    journal's publication-intent log, and check its labels, before any
+    release. A failed or unverified label restore can leave the authoring
+    label removed.
+
+  The release records no minimization-backlog count (each `backlog` entry has
+  `count: null`), because the confirmation audit reports no
+  `authoring-marker-minimization-backlog` finding. After the create, never
+  rerun the command: a rerun would file a second confirmation issue for one
+  decision (preventive; no observed incident yet).
+
+  This exception releases only the creation hold, and it never authorizes
+  IDD execution: the confirmation label keeps the issue out of Discover, so
+  the issue never becomes a work target, and the operator confirms the
+  choice by closing it. It is therefore not an authoring release, which the
+  operator hearing of 2026-11-01 (recorded in roadmap `#4955`) kept as a
+  person's action that makes an issue a work target. Nor is it the release
+  of a follow-up that the work phase's "Unplanned follow-up work" rule
+  forbids: like the carrier exception, it needs no carve-out in that rule.
+
 - **Journal rotation.** Observed 2026-10-27 on issue `#2674`: the journal
   reached GitHub's limit of 2,500 comments, and the next post was refused with
   HTTP 403 (commenting is disabled on issues with more than 2500 comments).
@@ -3865,8 +3935,10 @@ class and source. Anyone else's comment never counts.
 
 Reuse-first never reuses a confirmation issue as an authoring target. No session
 edits a confirmation issue's body or labels, except through
-`publish-authoring-hold`'s own creation-hold release and its recovery. Appending
-a record, a void marker, or a note marker is an addition, not an edit.
+`publish-authoring-hold`'s own creation-hold release and its recovery. That
+release is the confirmation creation-hold exception in
+[Authoring hold and release](#authoring-hold-and-release). Appending a record, a
+void marker, or a note marker is an addition, not an edit.
 
 ### Linter
 
@@ -4063,7 +4135,8 @@ and starting the IDD execution loop both require the user's explicit
 hold-release request, except the narrow defer-source auto-release exception
 documented in [Authoring hold and release](#authoring-hold-and-release)
 above; nothing else authorizes either. The carrier creation-hold exception
-in that section removes only a carrier's creation hold and authorizes no
+and the confirmation creation-hold exception in that section remove only the
+creation hold of a carrier or a confirmation issue and authorize no
 execution.
 
 [issue-authoring-review-input-schema]: https://kurone-kito.github.io/idd-skill/schemas/issue-authoring-review-input.schema.json
