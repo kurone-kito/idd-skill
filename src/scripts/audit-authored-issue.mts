@@ -5807,8 +5807,7 @@ function checkConfirmationSubject(
   }
   // optionLines masks HTML comments while keeping the inline-code subject.
   const stopStart = lines.findIndex((line) => line.trim() === '## Stop');
-  const stop =
-    stopStart < 0 ? [] : confirmationSectionLines(lines, '## Stop');
+  const stop = stopStart < 0 ? [] : confirmationSectionLines(lines, '## Stop');
   const first = stop.find((line) => line.trim() !== '') ?? '';
   if (parseConfirmationSubjectLine(first) === null) {
     return fail(
