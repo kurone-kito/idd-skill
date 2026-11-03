@@ -14,6 +14,12 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import './node-runtime-guard.mts';
+import { defaultCheckGroups } from './check-project.mts';
+import {
+  parseWorkflowYamlSubset,
+  type WorkflowYamlMapping,
+  type WorkflowYamlValue,
+} from './workflow-yaml-subset.mts';
 
 export interface RepositoryWorkflowViolation {
   ruleId: string;
@@ -1085,6 +1091,16 @@ const WORKFLOWS_DIRECTORY = '.github/workflows';
 const SLIM_CAP_NOTE =
   'ubuntu-slim caps a job at 15 minutes, which cancelled the required pnpm-boundary check (#3665)';
 
+// pnpm-boundary.yml's two suite jobs (#4993): the matrix of shards this
+// repository runs, each rerun on its own, and the one full run every other
+// caller gets.
+const PNPM_BOUNDARY_GROUP_JOB = 'pnpm-boundary-group';
+const PNPM_BOUNDARY_FULL_JOB = 'pnpm-boundary-full';
+const PNPM_BOUNDARY_SUITE_JOBS = [
+  PNPM_BOUNDARY_GROUP_JOB,
+  PNPM_BOUNDARY_FULL_JOB,
+] as const;
+
 // Required status checks. Each job id and trigger must stay fixed, because
 // the ruleset waits on the display name GitHub derives from them.
 const REQUIRED_CHECKS = [
@@ -1093,6 +1109,17 @@ const REQUIRED_CHECKS = [
   { file: 'pnpm-boundary.yml', jobId: 'pnpm-boundary' },
   { file: 'idd-advisory-convergence.yml', jobId: 'idd-advisory-convergence' },
 ] as const;
+
+// The one required job that waits on other jobs (#4993): the pnpm-boundary
+// aggregate over the sharded and the full suite. It may declare needs and if
+// only in this exact shape. always() keeps it from ever being skipped, because
+// GitHub counts a skipped required check as passing.
+const REQUIRED_AGGREGATE = {
+  file: 'pnpm-boundary.yml',
+  jobId: 'pnpm-boundary',
+  ifLine: `    if: \${{ always() }}`,
+  needs: PNPM_BOUNDARY_SUITE_JOBS,
+} as const;
 
 // cancel-in-progress values this repository's own workflows are known to use
 // for a genuinely self-cancelling pull_request-scoped concurrency group: a
@@ -1465,6 +1492,55 @@ function reusableWorkflowCallTarget(text: string): string | null {
   return match ? match[1] : null;
 }
 
+// RWA001 for the pnpm-boundary aggregate (#4993): exactly one `if:` line, the
+// always() one; exactly one `needs:` key, a block list of the two suite jobs;
+// and no continue-on-error at any depth. A different spelling of the same
+// meaning is reported too, so the shape stays one this audit can read.
+function checkRequiredAggregateShape(
+  path: string,
+  jobBody: string,
+  report: Report,
+): void {
+  const { jobId, ifLine, needs } = REQUIRED_AGGREGATE;
+  const lines = structuralLines(jobBody).map((line) =>
+    line.replace(/\s+#.*$/, ''),
+  );
+  if (lines.some((line) => /^\s*["']?continue-on-error["']?\s*:/.test(line))) {
+    report(RWA001, path, `${jobId} must not continue on error`);
+  }
+  const ifLines = lines.filter((line) => /^ {4}["']?if["']?\s*:/.test(line));
+  if (ifLines.length !== 1 || ifLines[0] !== ifLine) {
+    report(
+      RWA001,
+      path,
+      `${jobId} must declare exactly \`${ifLine.trim()}\` -- a skipped required check passes, so the aggregate must always run`,
+    );
+  }
+  const needsLines = lines.filter((line) =>
+    /^ {4}["']?needs["']?\s*:/.test(line),
+  );
+  const listed: string[] = [];
+  if (needsLines.length === 1 && needsLines[0] === '    needs:') {
+    for (const line of lines.slice(lines.indexOf('    needs:') + 1)) {
+      if (line.trim() === '') {
+        continue;
+      }
+      const item = line.match(/^ {6}- ([\w-]+)$/);
+      if (!item) {
+        break;
+      }
+      listed.push(item[1]);
+    }
+  }
+  if ([...listed].sort().join(',') !== [...needs].sort().join(',')) {
+    report(
+      RWA001,
+      path,
+      `${jobId} must declare needs: as a block list of exactly ${needs.join(' and ')}`,
+    );
+  }
+}
+
 // RWA001: each required status check keeps its trigger, its job id, and a job
 // without a display name override.
 function checkRequiredCheckWorkflows(root: string, report: Report): void {
@@ -1494,10 +1570,16 @@ function checkRequiredCheckWorkflows(root: string, report: Report): void {
     }
     // A required job runs the check that gates the merge, so it must not be
     // conditional, wait on another job, or continue on error. The advisory gate
-    // is excluded: its needs and if are part of its own design.
+    // is excluded: its needs and if are part of its own design. The
+    // pnpm-boundary aggregate may wait on its suite jobs, in one shape only.
     const requiredJobBody = jobBlocks(text)?.get(jobId);
     if (requiredJobBody === undefined) {
       report(RWA001, path, `job ${jobId} not found`);
+    } else if (
+      file === REQUIRED_AGGREGATE.file &&
+      jobId === REQUIRED_AGGREGATE.jobId
+    ) {
+      checkRequiredAggregateShape(path, requiredJobBody, report);
     } else if (
       file !== 'idd-advisory-convergence.yml' &&
       structuralLines(requiredJobBody).some(
@@ -1691,19 +1773,23 @@ function checkRunnerContracts(root: string, report: Report): void {
   const pnpmBoundaryPath = `${WORKFLOWS_DIRECTORY}/pnpm-boundary.yml`;
   const pnpmBoundary = readRequiredText(root, pnpmBoundaryPath, RWA003, report);
   if (pnpmBoundary !== undefined) {
-    const jobBody = extractJobBody(pnpmBoundary, 'pnpm-boundary');
-    if (jobBody === undefined) {
-      report(RWA003, pnpmBoundaryPath, 'job pnpm-boundary not found');
-    } else if (
-      !/^ {4}runs-on: \$\{\{ inputs\.runner \|\| 'ubuntu-latest' \}\}$/m.test(
-        jobBody,
-      )
-    ) {
-      report(
-        RWA003,
-        pnpmBoundaryPath,
-        `the pnpm-boundary job's runs-on fallback must be ubuntu-latest -- the inputs context is empty under pull_request, so the fallback is the runner the default lane gets, and ${SLIM_CAP_NOTE}`,
-      );
+    // The two jobs that run the suite (#4993). The aggregate only reads their
+    // results, so the cap does not bind it.
+    for (const jobId of PNPM_BOUNDARY_SUITE_JOBS) {
+      const jobBody = extractJobBody(pnpmBoundary, jobId);
+      if (jobBody === undefined) {
+        report(RWA003, pnpmBoundaryPath, `job ${jobId} not found`);
+      } else if (
+        !/^ {4}runs-on: \$\{\{ inputs\.runner \|\| 'ubuntu-latest' \}\}$/m.test(
+          jobBody,
+        )
+      ) {
+        report(
+          RWA003,
+          pnpmBoundaryPath,
+          `the ${jobId} job's runs-on fallback must be ubuntu-latest -- the inputs context is empty under pull_request, so the fallback is the runner the default lane gets, and ${SLIM_CAP_NOTE}`,
+        );
+      }
     }
 
     const workflowCall = requireKeyBlock(
@@ -1767,6 +1853,382 @@ function checkRunnerContracts(root: string, report: Report): void {
         'the lint job must use ubuntu-latest; ubuntu-slim has a hard 15-minute cap, and issue #3728 recorded cancellation annotations for runs 36730573670, 36752800229, and 36955823310',
       );
     }
+  }
+}
+
+const RWA008 = 'RWA008';
+
+// The repository test that selects the shards (#4993). The github context
+// belongs to the caller, so it holds for this repository's pull_request lane
+// and its Node 22 floor caller, and for no downstream caller. A caller that
+// passes its own lint-command gets the full run, so that command runs once.
+const PNPM_BOUNDARY_SHARD_CONDITION =
+  "github.repository == 'kurone-kito/idd-skill' && (inputs.lint-command || 'pnpm run check') == 'pnpm run check'";
+
+// The four shards, in order, and the check-project groups each one runs.
+// The audit also checks them against check-project's own group list, so a new
+// group that no shard runs is reported.
+const PNPM_BOUNDARY_SHARDS = [
+  { shard: 'lint', checkGroups: 'lint' },
+  { shard: 'typecheck', checkGroups: 'typecheck' },
+  { shard: 'test', checkGroups: 'test' },
+  { shard: 'distribution', checkGroups: 'build:check audit' },
+] as const;
+
+const PNPM_BOUNDARY_SHARD_RUN = `pnpm run check \${{ matrix.check-groups }}`;
+const PNPM_BOUNDARY_FULL_RUN = `\${{ inputs.lint-command || 'pnpm run check' }}`;
+const PNPM_BOUNDARY_BOUNDARY_RUN = `\${{ inputs.boundary-command || 'node scripts/check-pnpm-boundary.mjs' }}`;
+const PNPM_BOUNDARY_BOUNDARY_IF = `\${{ matrix.shard == 'distribution' }}`;
+const PNPM_BOUNDARY_CONCURRENCY_GROUP = `\${{ github.workflow }}-\${{ github.ref }}`;
+
+// The aggregate step's environment and its decision lines. Lines that only
+// echo are left out of the comparison, so the log text may change, but an echo
+// line may not carry a second command.
+const PNPM_BOUNDARY_AGGREGATE_ENV = {
+  GROUP_RESULT: `\${{ needs.${PNPM_BOUNDARY_GROUP_JOB}.result }}`,
+  FULL_RESULT: `\${{ needs.${PNPM_BOUNDARY_FULL_JOB}.result }}`,
+} as const;
+const PNPM_BOUNDARY_AGGREGATE_DECISION = [
+  'if [ "$GROUP_RESULT" = success ] && [ "$FULL_RESULT" = skipped ]; then',
+  'exit 0',
+  'fi',
+  'if [ "$GROUP_RESULT" = skipped ] && [ "$FULL_RESULT" = success ]; then',
+  'exit 0',
+  'fi',
+  'exit 1',
+] as const;
+
+const FLOOR_JOB_ID = 'pnpm-boundary-node22-floor';
+
+function asMapping(
+  value: WorkflowYamlValue | undefined,
+): WorkflowYamlMapping | undefined {
+  return value !== null &&
+    value !== undefined &&
+    typeof value === 'object' &&
+    !Array.isArray(value)
+    ? value
+    : undefined;
+}
+
+function parsedWorkflow(
+  path: string,
+  text: string,
+  report: Report,
+): WorkflowYamlMapping | undefined {
+  const parsed = parseWorkflowYamlSubset(text);
+  if (!parsed.ok) {
+    report(
+      RWA008,
+      path,
+      `cannot be read: ${parsed.violation.construct} at line ${parsed.violation.line}`,
+    );
+    return undefined;
+  }
+  const workflow = asMapping(parsed.value);
+  if (workflow === undefined) {
+    report(RWA008, path, 'the workflow is not a mapping');
+  }
+  return workflow;
+}
+
+// The step mappings of one job, or undefined when steps is not a list of
+// mappings.
+function jobSteps(job: WorkflowYamlMapping): WorkflowYamlMapping[] | undefined {
+  if (!Array.isArray(job.steps)) {
+    return undefined;
+  }
+  const steps = job.steps.map(asMapping);
+  return steps.every((step) => step !== undefined)
+    ? (steps as WorkflowYamlMapping[])
+    : undefined;
+}
+
+// Reports unless exactly one step runs `run`, and that step's if: is `ifValue`
+// (absent when `ifValue` is undefined). Any other step whose run: names the
+// same command (`marker`) is reported too, so the command runs once.
+function checkSingleRunStep(
+  path: string,
+  jobId: string,
+  steps: readonly WorkflowYamlMapping[],
+  expected: { run: string; marker: RegExp; ifValue?: string },
+  report: Report,
+): void {
+  const matching = steps.filter(
+    (step) => typeof step.run === 'string' && expected.marker.test(step.run),
+  );
+  const step = matching[0];
+  if (
+    matching.length !== 1 ||
+    step.run !== expected.run ||
+    (expected.ifValue === undefined
+      ? Object.hasOwn(step, 'if')
+      : step.if !== expected.ifValue)
+  ) {
+    report(
+      RWA008,
+      path,
+      `${jobId} must run \`${expected.run}\` in exactly one step${
+        expected.ifValue === undefined
+          ? ' with no if:'
+          : ` with if: ${expected.ifValue}`
+      }`,
+    );
+  }
+}
+
+// RWA008: the shards of pnpm-boundary.yml (#4993). The two suite
+// jobs select complementary modes, the shards partition check-project's groups
+// exactly once, no job can cancel a sibling or hide a failure, the aggregate
+// reads both results, and the Node 22 floor lane keeps the shards.
+function checkPnpmBoundaryShards(root: string, report: Report): void {
+  const path = `${WORKFLOWS_DIRECTORY}/pnpm-boundary.yml`;
+  const text = readRequiredText(root, path, RWA008, report);
+  const workflow =
+    text === undefined ? undefined : parsedWorkflow(path, text, report);
+  if (workflow !== undefined) {
+    checkPnpmBoundaryWorkflow(path, workflow, report);
+  }
+
+  const floorPath = `${WORKFLOWS_DIRECTORY}/pnpm-boundary-node22-floor.yml`;
+  const floorText = readRequiredText(root, floorPath, RWA008, report);
+  const floor =
+    floorText === undefined
+      ? undefined
+      : parsedWorkflow(floorPath, floorText, report);
+  if (floor !== undefined) {
+    const job = asMapping(asMapping(floor.jobs)?.[FLOOR_JOB_ID]);
+    if (job === undefined) {
+      report(RWA008, floorPath, `job ${FLOOR_JOB_ID} not found`);
+    } else {
+      if (job.uses !== './.github/workflows/pnpm-boundary.yml') {
+        report(
+          RWA008,
+          floorPath,
+          `${FLOOR_JOB_ID} must call ./.github/workflows/pnpm-boundary.yml, so the Node 22 lane runs the same shards`,
+        );
+      }
+      if (Object.hasOwn(asMapping(job.with) ?? {}, 'lint-command')) {
+        report(
+          RWA008,
+          floorPath,
+          `${FLOOR_JOB_ID} must not pass lint-command -- a caller's own lint-command selects the full run, so the Node 22 lane would lose its shards`,
+        );
+      }
+    }
+  }
+}
+
+function checkPnpmBoundaryWorkflow(
+  path: string,
+  workflow: WorkflowYamlMapping,
+  report: Report,
+): void {
+  const concurrency = asMapping(workflow.concurrency);
+  if (concurrency?.group !== PNPM_BOUNDARY_CONCURRENCY_GROUP) {
+    report(
+      RWA008,
+      path,
+      `the workflow concurrency group must stay ${PNPM_BOUNDARY_CONCURRENCY_GROUP} -- the caller's workflow name keeps the Node 22 lane in its own group, and one group per run lets the shards run together`,
+    );
+  }
+  const jobs = asMapping(workflow.jobs);
+  const jobIds = [...PNPM_BOUNDARY_SUITE_JOBS, REQUIRED_AGGREGATE.jobId];
+  const found = new Map<string, WorkflowYamlMapping>();
+  for (const jobId of jobIds) {
+    const job = asMapping(jobs?.[jobId]);
+    if (job === undefined) {
+      report(RWA008, path, `job ${jobId} not found`);
+      continue;
+    }
+    found.set(jobId, job);
+    if (Object.hasOwn(job, 'concurrency')) {
+      report(
+        RWA008,
+        path,
+        `${jobId} must not declare its own concurrency -- a job-level group could cancel a sibling shard`,
+      );
+    }
+  }
+
+  for (const jobId of PNPM_BOUNDARY_SUITE_JOBS) {
+    const job = found.get(jobId);
+    if (job === undefined) {
+      continue;
+    }
+    const expectedIf =
+      jobId === PNPM_BOUNDARY_GROUP_JOB
+        ? `\${{ ${PNPM_BOUNDARY_SHARD_CONDITION} }}`
+        : `\${{ !(${PNPM_BOUNDARY_SHARD_CONDITION}) }}`;
+    if (job.if !== expectedIf) {
+      report(
+        RWA008,
+        path,
+        `${jobId}'s if: must be exactly ${expectedIf} -- the two suite jobs select complementary modes, so exactly one of them runs`,
+      );
+    }
+    const steps = jobSteps(job);
+    if (steps === undefined) {
+      report(RWA008, path, `${jobId}'s steps must be a list of mappings`);
+      continue;
+    }
+    if (
+      Object.hasOwn(job, 'continue-on-error') ||
+      steps.some((step) => Object.hasOwn(step, 'continue-on-error'))
+    ) {
+      report(
+        RWA008,
+        path,
+        `${jobId} must not continue on error -- a failing check would pass the aggregate`,
+      );
+    }
+    const isGroup = jobId === PNPM_BOUNDARY_GROUP_JOB;
+    checkSingleRunStep(
+      path,
+      jobId,
+      steps,
+      {
+        run: isGroup ? PNPM_BOUNDARY_SHARD_RUN : PNPM_BOUNDARY_FULL_RUN,
+        marker: /pnpm run check|inputs\.lint-command/,
+      },
+      report,
+    );
+    checkSingleRunStep(
+      path,
+      jobId,
+      steps,
+      {
+        run: PNPM_BOUNDARY_BOUNDARY_RUN,
+        marker: /boundary-command|check-pnpm-boundary/,
+        ...(isGroup ? { ifValue: PNPM_BOUNDARY_BOUNDARY_IF } : {}),
+      },
+      report,
+    );
+  }
+
+  const group = found.get(PNPM_BOUNDARY_GROUP_JOB);
+  if (group !== undefined) {
+    checkPnpmBoundaryMatrix(path, group, report);
+  }
+  const aggregate = found.get(REQUIRED_AGGREGATE.jobId);
+  if (aggregate !== undefined) {
+    checkPnpmBoundaryAggregateStep(path, aggregate, report);
+  }
+}
+
+function checkPnpmBoundaryMatrix(
+  path: string,
+  group: WorkflowYamlMapping,
+  report: Report,
+): void {
+  const strategy = asMapping(group.strategy);
+  if (strategy?.['fail-fast'] !== 'false') {
+    report(
+      RWA008,
+      path,
+      `${PNPM_BOUNDARY_GROUP_JOB} must set strategy.fail-fast: false -- one failed shard must not cancel the others, or a rerun repeats them`,
+    );
+  }
+  const matrix = asMapping(strategy?.matrix);
+  const include = matrix?.include;
+  const entries = Array.isArray(include) ? include.map(asMapping) : undefined;
+  const shardsMatch =
+    matrix !== undefined &&
+    Object.keys(matrix).length === 1 &&
+    entries !== undefined &&
+    entries.length === PNPM_BOUNDARY_SHARDS.length &&
+    entries.every((entry, index) => {
+      const expected = PNPM_BOUNDARY_SHARDS[index];
+      return (
+        entry !== undefined &&
+        Object.keys(entry).length === 2 &&
+        entry.shard === expected.shard &&
+        entry['check-groups'] === expected.checkGroups
+      );
+    });
+  if (!shardsMatch) {
+    report(
+      RWA008,
+      path,
+      `${PNPM_BOUNDARY_GROUP_JOB}'s matrix must be exactly the include list ${PNPM_BOUNDARY_SHARDS.map(
+        ({ shard, checkGroups }) => `${shard}: ${checkGroups}`,
+      ).join('; ')}`,
+    );
+  }
+
+  // Every check-project group runs in exactly one shard. The shard table above
+  // is checked against check-project's own list, so the partition stays
+  // complete when check-project gains or loses a group.
+  const known = defaultCheckGroups(undefined).map(({ id }) => id);
+  const counts = new Map<string, number>(known.map((id) => [id, 0]));
+  for (const { checkGroups } of PNPM_BOUNDARY_SHARDS) {
+    for (const id of checkGroups.split(' ')) {
+      counts.set(id, (counts.get(id) ?? 0) + 1);
+    }
+  }
+  for (const [id, count] of counts) {
+    if (!known.includes(id)) {
+      report(
+        RWA008,
+        path,
+        `the shards run ${id}, which is not a check-project group`,
+      );
+    } else if (count !== 1) {
+      report(
+        RWA008,
+        path,
+        `check-project group ${id} runs in ${count} shards; each group must run in exactly one`,
+      );
+    }
+  }
+}
+
+function checkPnpmBoundaryAggregateStep(
+  path: string,
+  aggregate: WorkflowYamlMapping,
+  report: Report,
+): void {
+  const steps = jobSteps(aggregate);
+  const step = steps?.length === 1 ? steps[0] : undefined;
+  const env = asMapping(step?.env);
+  const envMatches =
+    env !== undefined &&
+    Object.keys(env).length ===
+      Object.keys(PNPM_BOUNDARY_AGGREGATE_ENV).length &&
+    Object.entries(PNPM_BOUNDARY_AGGREGATE_ENV).every(
+      ([key, value]) => env[key] === value,
+    );
+  if (step === undefined || !envMatches) {
+    report(
+      RWA008,
+      path,
+      `${REQUIRED_AGGREGATE.jobId} must have exactly one step, whose env: is exactly ${Object.entries(
+        PNPM_BOUNDARY_AGGREGATE_ENV,
+      )
+        .map(([key, value]) => `${key}: ${value}`)
+        .join(', ')}`,
+    );
+  }
+  const run = typeof step?.run === 'string' ? step.run : '';
+  const lines = run
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line !== '' && !line.startsWith('#'));
+  const echoes = lines.filter((line) => /^echo\s/.test(line));
+  const decision = lines.filter((line) => !/^echo\s/.test(line));
+  if (
+    step === undefined ||
+    Object.hasOwn(aggregate, 'defaults') ||
+    Object.hasOwn(step, 'if') ||
+    Object.hasOwn(step, 'shell') ||
+    echoes.some((line) => /[;&|`]|\$\(/.test(line)) ||
+    decision.join('\n') !== PNPM_BOUNDARY_AGGREGATE_DECISION.join('\n')
+  ) {
+    report(
+      RWA008,
+      path,
+      `${REQUIRED_AGGREGATE.jobId}'s step must pass only when ${PNPM_BOUNDARY_GROUP_JOB} succeeded and ${PNPM_BOUNDARY_FULL_JOB} was skipped, or the reverse: its run: must keep exactly the decision lines this audit names, with no if:, shell:, or job-level defaults:, and echo lines with no second command`,
+    );
   }
 }
 
@@ -3090,6 +3552,7 @@ export function collectRepositoryWorkflowViolations(
   checkRequiredCheckWorkflows(root, report);
   checkPullRequestConcurrency(root, report);
   checkRunnerContracts(root, report);
+  checkPnpmBoundaryShards(root, report);
   checkSelfWaiverJobPermissions(root, report);
   checkRequiredGateWorkflows(root, report);
   checkRequiredGateTriggers(root, report);

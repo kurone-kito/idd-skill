@@ -2,9 +2,18 @@ name: Pnpm boundary guard
 # CI topology (#832): pull_request is the only CI trigger for this
 # repository so each check runs exactly once per change; workflow_call
 # remains for downstream callers. This workflow runs the full project
-# check suite, `pnpm run check`, once with installed dependencies (the
-# `pnpm run lint:minimum` alias runs the same suite); the bare-node
-# subset intentionally also runs in lint.yml.
+# check suite, `pnpm run check` (the `pnpm run lint:minimum` alias runs
+# the same suite), with installed dependencies; the bare-node subset
+# intentionally also runs in lint.yml.
+#
+# Rerun scope (#4993): in this repository the suite runs as four matrix
+# shards of pnpm-boundary-group, so "Re-run failed jobs" repeats only the
+# failed shard and the small pnpm-boundary aggregate. Every other caller,
+# and any caller that passes its own lint-command, gets one full run in
+# pnpm-boundary-full instead. The two job-level if: expressions are exact
+# negations; if the repository check ever stops matching, the full suite
+# runs once and the aggregate still gates it. In both modes the required
+# check is the pnpm-boundary job.
 on:
   pull_request:
   workflow_call:
@@ -42,9 +51,70 @@ concurrency:
   # unconditional setting). The conditional stays for workflow_call
   # callers: github.ref then reflects the caller's ref, which may be a
   # long-lived branch where auto-cancelling in-flight runs is unwanted.
+  # The jobs below declare no concurrency of their own, so the shards of
+  # one run never cancel one another.
   cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}
 jobs:
-  pnpm-boundary:
+  pnpm-boundary-group:
+    name: pnpm-boundary-group (${{ matrix.shard }})
+    # The github context belongs to the caller, so this holds for this
+    # repository's own pull_request lane and its Node 22 floor caller.
+    if: ${{ github.repository == 'kurone-kito/idd-skill' && (inputs.lint-command || 'pnpm run check') == 'pnpm run check' }}
+    # Differs from the input default: own lanes must avoid slim's 15m cap.
+    runs-on: ${{ inputs.runner || 'ubuntu-latest' }}
+    # Each shard keeps the full suite's bound; see pnpm-boundary-full.
+    timeout-minutes: 20
+    strategy:
+      # One failed shard must not cancel the others, or a rerun would have
+      # to repeat them too.
+      fail-fast: false
+      matrix:
+        # check-groups partitions the check-project groups: each one runs
+        # in exactly one shard. pnpm passes a literal `--` to the script,
+        # so the group ids follow the script name without one.
+        include:
+          - shard: lint
+            check-groups: lint
+          - shard: typecheck
+            check-groups: typecheck
+          - shard: test
+            check-groups: test
+          - shard: distribution
+            check-groups: build:check audit
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          run_install: false
+      - name: Setup Node.js
+        if: ${{ inputs.node-version-file == '' }}
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          check-latest: true
+          cache: pnpm
+          node-version: ${{ inputs.node-version || '24.x' }}
+      - name: Setup Node.js from version file
+        if: ${{ inputs.node-version-file != '' }}
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          check-latest: true
+          cache: pnpm
+          node-version-file: ${{ inputs.node-version-file }}
+      - name: Install dependencies
+        env:
+          HUSKY: 0
+        run: ${{ inputs.install-command || 'pnpm install --frozen-lockfile --prefer-offline' }}
+      - name: Run project check groups
+        run: pnpm run check ${{ matrix.check-groups }}
+      - name: Check distributable pnpm boundary
+        if: ${{ matrix.shard == 'distribution' }}
+        run: ${{ inputs.boundary-command || 'node scripts/check-pnpm-boundary.mjs' }}
+  pnpm-boundary-full:
+    if: ${{ !(github.repository == 'kurone-kito/idd-skill' && (inputs.lint-command || 'pnpm run check') == 'pnpm run check') }}
     # Imported from kurone-kito/pnpm-project-template push workflow shape
     # and adapted as a reusable workflow with repository-specific guards.
     # Differs from the input default: own lanes must avoid slim's 15m cap.
@@ -93,3 +163,29 @@ jobs:
         run: ${{ inputs.lint-command || 'pnpm run check' }}
       - name: Check distributable pnpm boundary
         run: ${{ inputs.boundary-command || 'node scripts/check-pnpm-boundary.mjs' }}
+  pnpm-boundary:
+    # The required check. always(), not !cancelled(): this job must never
+    # be reported as skipped, because a skipped required check passes.
+    needs:
+      - pnpm-boundary-group
+      - pnpm-boundary-full
+    if: ${{ always() }}
+    runs-on: ${{ inputs.runner || 'ubuntu-latest' }}
+    timeout-minutes: 5
+    steps:
+      - name: Require the check suite to pass
+        env:
+          GROUP_RESULT: ${{ needs.pnpm-boundary-group.result }}
+          FULL_RESULT: ${{ needs.pnpm-boundary-full.result }}
+        run: |
+          echo "pnpm-boundary-group: ${GROUP_RESULT:-<empty>}"
+          echo "pnpm-boundary-full: ${FULL_RESULT:-<empty>}"
+          # Exactly one mode must have run, and every job in it must pass.
+          if [ "$GROUP_RESULT" = success ] && [ "$FULL_RESULT" = skipped ]; then
+            exit 0
+          fi
+          if [ "$GROUP_RESULT" = skipped ] && [ "$FULL_RESULT" = success ]; then
+            exit 0
+          fi
+          echo "::error::the check suite did not pass: pnpm-boundary-group=${GROUP_RESULT:-<empty>}, pnpm-boundary-full=${FULL_RESULT:-<empty>}"
+          exit 1

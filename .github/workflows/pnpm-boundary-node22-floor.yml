@@ -8,6 +8,11 @@ name: Pnpm boundary guard (Node 22 floor)
 # suggestion), so a helper that only works on 24.x-and-newer APIs
 # fails here instead of shipping silently broken for every 22.x
 # developer/adopter (the #1447 failure class this guards against).
+#
+# #4993: this caller keeps the default project-check command, so
+# pnpm-boundary.yml runs the same four shards here as in the default
+# lane, each one rerun on its own when it fails, under the aggregate
+# check pnpm-boundary-node22-floor / pnpm-boundary.
 on:
   pull_request:
 permissions:

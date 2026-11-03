@@ -12,6 +12,10 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import {
+  defaultCheckGroups,
+  selectCheckGroups,
+} from '../src/scripts/check-project.mts';
 import { collectRepositoryWorkflowViolations } from '../src/scripts/repository-workflow-audit.mts';
 import {
   parseWorkflowYamlSubset,
@@ -40,6 +44,8 @@ const TEMPLATE_PROBE =
   'idd-template/.github/workflows/idd-advisory-convergence-probe.yml';
 const ONBOARDING_GUIDE = 'idd-template/docs/onboarding/optional-host-setup.md';
 const EXTERNAL_CHECK_WAIVER = 'src/scripts/external-check-waiver.mts';
+const PNPM_BOUNDARY = '.github/workflows/pnpm-boundary.yml';
+const PNPM_BOUNDARY_FLOOR = '.github/workflows/pnpm-boundary-node22-floor.yml';
 
 // The root workflow directory is an input of the pull_request concurrency
 // inventory, so a fixture root carries every root workflow file.
@@ -198,7 +204,8 @@ interface RuleCase {
     | 'RWA004'
     | 'RWA005'
     | 'RWA006'
-    | 'RWA007';
+    | 'RWA007'
+    | 'RWA008';
   name: string;
   path: string;
   // The path the rule reports against, when it differs from the copy that
@@ -243,6 +250,26 @@ function replaceInStep(
     `fixture anchor not found in ${stepName}: ${JSON.stringify(from)}`,
   );
   return text.slice(0, start) + step.split(from).join(to) + text.slice(end);
+}
+
+// Replaces text inside one root job only, so a fixture cannot touch a sibling
+// job that carries the same line.
+function replaceInJob(
+  text: string,
+  jobId: string,
+  from: string,
+  to: string,
+): string {
+  const header = `\n  ${jobId}:\n`;
+  const start = anchored(text, header) + 1;
+  const next = text.slice(start + header.length - 1).search(/\n {2}\S/);
+  const end = next === -1 ? text.length : start + header.length - 1 + next;
+  const job = text.slice(start, end);
+  assert.ok(
+    job.includes(from),
+    `fixture anchor not found in job ${jobId}: ${JSON.stringify(from)}`,
+  );
+  return text.slice(0, start) + job.split(from).join(to) + text.slice(end);
 }
 
 // Each case mutates one copy and names the messages its rule must raise, so
@@ -781,18 +808,53 @@ const RULE_CASES: readonly RuleCase[] = [
   // RWA003: runner contracts (replaced actions-usage tests 1612, 1624, 1638, 1655).
   {
     ruleId: 'RWA003',
-    name: 'a pnpm-boundary default-lane runner fallback that is not ubuntu-latest',
+    name: 'a pnpm-boundary shard runner fallback that is not ubuntu-latest',
     path: '.github/workflows/pnpm-boundary.yml',
     mutation: {
-      from: "inputs.runner || 'ubuntu-latest'",
-      to: "inputs.runner || 'ubuntu-slim'",
+      transform: (text: string) =>
+        replaceInJob(
+          text,
+          'pnpm-boundary-group',
+          "inputs.runner || 'ubuntu-latest'",
+          "inputs.runner || 'ubuntu-slim'",
+        ),
     },
     expected: [
       {
         prefix:
-          "the pnpm-boundary job's runs-on fallback must be ubuntu-latest",
+          "the pnpm-boundary-group job's runs-on fallback must be ubuntu-latest",
       },
     ],
+  },
+  {
+    ruleId: 'RWA003',
+    name: 'a pnpm-boundary full-run runner fallback that is not ubuntu-latest',
+    path: '.github/workflows/pnpm-boundary.yml',
+    mutation: {
+      transform: (text: string) =>
+        replaceInJob(
+          text,
+          'pnpm-boundary-full',
+          "inputs.runner || 'ubuntu-latest'",
+          "inputs.runner || 'ubuntu-slim'",
+        ),
+    },
+    expected: [
+      {
+        prefix:
+          "the pnpm-boundary-full job's runs-on fallback must be ubuntu-latest",
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA003',
+    name: 'a pnpm-boundary suite job renamed away',
+    path: '.github/workflows/pnpm-boundary.yml',
+    mutation: {
+      from: '\n  pnpm-boundary-full:\n',
+      to: '\n  pnpm-boundary-entire:\n',
+    },
+    expected: [{ message: 'job pnpm-boundary-full not found' }],
   },
   {
     ruleId: 'RWA003',
@@ -4479,6 +4541,351 @@ const RULE_CASES: readonly RuleCase[] = [
       { message: 'a line break other than LF cannot be read by this audit' },
     ],
   },
+  // RWA001: the pnpm-boundary aggregate shape (#4993).
+  {
+    ruleId: 'RWA001',
+    name: 'a pnpm-boundary aggregate that can be skipped when the run is cancelled',
+    path: PNPM_BOUNDARY,
+    mutation: {
+      from: `    if: \${{ always() }}\n`,
+      to: `    if: \${{ !cancelled() }}\n`,
+    },
+    expected: [
+      {
+        prefix:
+          // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
+          'pnpm-boundary must declare exactly `if: ${{ always() }}` -- a skipped required check passes',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA001',
+    name: 'a pnpm-boundary aggregate without its if: line',
+    path: PNPM_BOUNDARY,
+    mutation: { from: `    if: \${{ always() }}\n`, to: '' },
+    expected: [{ prefix: 'pnpm-boundary must declare exactly `if:' }],
+  },
+  {
+    ruleId: 'RWA001',
+    name: 'a pnpm-boundary aggregate that no longer waits on the full run',
+    path: PNPM_BOUNDARY,
+    mutation: { from: '      - pnpm-boundary-full\n', to: '' },
+    expected: [
+      {
+        message:
+          'pnpm-boundary must declare needs: as a block list of exactly pnpm-boundary-group and pnpm-boundary-full',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA001',
+    name: 'a pnpm-boundary aggregate whose needs: is a single scalar',
+    path: PNPM_BOUNDARY,
+    mutation: {
+      from: '    needs:\n      - pnpm-boundary-group\n      - pnpm-boundary-full\n',
+      to: '    needs: pnpm-boundary-group\n',
+    },
+    expected: [{ prefix: 'pnpm-boundary must declare needs: as a block list' }],
+  },
+  {
+    ruleId: 'RWA001',
+    name: 'a pnpm-boundary aggregate that continues on error',
+    path: PNPM_BOUNDARY,
+    mutation: {
+      from: '    timeout-minutes: 5\n',
+      to: '    timeout-minutes: 5\n    continue-on-error: true\n',
+    },
+    expected: [{ message: 'pnpm-boundary must not continue on error' }],
+  },
+  // RWA008: the pnpm-boundary shards (#4993).
+  {
+    ruleId: 'RWA008',
+    name: 'a shard selector that ignores a caller lint-command',
+    path: PNPM_BOUNDARY,
+    mutation: {
+      from: ` && (inputs.lint-command || 'pnpm run check') == 'pnpm run check' }}`,
+      to: ' }}',
+    },
+    expected: [{ prefix: "pnpm-boundary-group's if: must be exactly" }],
+  },
+  {
+    ruleId: 'RWA008',
+    name: 'a full-run selector that is not the negation of the shard selector',
+    path: PNPM_BOUNDARY,
+    mutation: {
+      from: `    if: \${{ !(github.repository`,
+      to: `    if: \${{ (github.repository`,
+    },
+    expected: [{ prefix: "pnpm-boundary-full's if: must be exactly" }],
+  },
+  {
+    ruleId: 'RWA008',
+    name: 'a shard matrix that cancels its siblings on the first failure',
+    path: PNPM_BOUNDARY,
+    mutation: {
+      from: '      fail-fast: false\n',
+      to: '      fail-fast: true\n',
+    },
+    expected: [
+      {
+        prefix:
+          'pnpm-boundary-group must set strategy.fail-fast: false -- one failed shard must not cancel the others',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA008',
+    name: 'a shard matrix that drops the typecheck shard',
+    path: PNPM_BOUNDARY,
+    mutation: {
+      from: '          - shard: typecheck\n            check-groups: typecheck\n',
+      to: '',
+    },
+    expected: [
+      {
+        prefix: "pnpm-boundary-group's matrix must be exactly the include list",
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA008',
+    name: 'a distribution shard that no longer runs the audit group',
+    path: PNPM_BOUNDARY,
+    mutation: {
+      from: '            check-groups: build:check audit\n',
+      to: '            check-groups: build:check\n',
+    },
+    expected: [
+      {
+        prefix: "pnpm-boundary-group's matrix must be exactly the include list",
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA008',
+    name: 'a shard matrix with a second axis that multiplies the shards',
+    path: PNPM_BOUNDARY,
+    mutation: {
+      from: '      matrix:\n',
+      to: '      matrix:\n        os:\n          - ubuntu-latest\n',
+    },
+    expected: [
+      {
+        prefix: "pnpm-boundary-group's matrix must be exactly the include list",
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA008',
+    name: 'a shard job with its own concurrency group',
+    path: PNPM_BOUNDARY,
+    mutation: {
+      transform: (text: string) =>
+        replaceInJob(
+          text,
+          'pnpm-boundary-group',
+          '    timeout-minutes: 20\n',
+          '    timeout-minutes: 20\n    concurrency:\n      group: pnpm-boundary-shard\n      cancel-in-progress: true\n',
+        ),
+    },
+    expected: [
+      {
+        prefix:
+          'pnpm-boundary-group must not declare its own concurrency -- a job-level group could cancel a sibling shard',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA008',
+    name: 'a workflow concurrency group shared by both Node lanes',
+    path: PNPM_BOUNDARY,
+    mutation: {
+      from: `  group: \${{ github.workflow }}-\${{ github.ref }}\n`,
+      to: `  group: pnpm-boundary-\${{ github.ref }}\n`,
+    },
+    expected: [
+      {
+        prefix:
+          // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
+          'the workflow concurrency group must stay ${{ github.workflow }}-${{ github.ref }}',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA008',
+    name: 'a shard step that passes a literal -- to the check script',
+    path: PNPM_BOUNDARY,
+    mutation: {
+      from: `        run: pnpm run check \${{ matrix.check-groups }}\n`,
+      to: `        run: pnpm run check -- \${{ matrix.check-groups }}\n`,
+    },
+    expected: [
+      {
+        message:
+          // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
+          'pnpm-boundary-group must run `pnpm run check ${{ matrix.check-groups }}` in exactly one step with no if:',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA008',
+    name: 'a boundary check that runs in every shard',
+    path: PNPM_BOUNDARY,
+    mutation: {
+      from: `        if: \${{ matrix.shard == 'distribution' }}\n`,
+      to: '',
+    },
+    expected: [
+      {
+        message:
+          // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
+          "pnpm-boundary-group must run `${{ inputs.boundary-command || 'node scripts/check-pnpm-boundary.mjs' }}` in exactly one step with if: ${{ matrix.shard == 'distribution' }}",
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA008',
+    name: 'a full run that runs the suite twice',
+    path: PNPM_BOUNDARY,
+    mutation: {
+      transform: (text: string) =>
+        replaceInJob(
+          text,
+          'pnpm-boundary-full',
+          `      - name: Check distributable pnpm boundary\n`,
+          `      - name: Run project checks again\n        run: pnpm run check\n      - name: Check distributable pnpm boundary\n`,
+        ),
+    },
+    expected: [
+      {
+        message:
+          // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
+          "pnpm-boundary-full must run `${{ inputs.lint-command || 'pnpm run check' }}` in exactly one step with no if:",
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA008',
+    name: 'a shard step that continues on error',
+    path: PNPM_BOUNDARY,
+    mutation: {
+      from: '      - name: Run project check groups\n',
+      to: '      - name: Run project check groups\n        continue-on-error: true\n',
+    },
+    expected: [
+      {
+        prefix:
+          'pnpm-boundary-group must not continue on error -- a failing check would pass the aggregate',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA008',
+    name: 'an aggregate step that reads only one result',
+    path: PNPM_BOUNDARY,
+    mutation: {
+      from: `          FULL_RESULT: \${{ needs.pnpm-boundary-full.result }}\n`,
+      to: '',
+    },
+    expected: [
+      {
+        prefix:
+          'pnpm-boundary must have exactly one step, whose env: is exactly',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA008',
+    name: 'an aggregate step that passes a failed suite',
+    path: PNPM_BOUNDARY,
+    mutation: {
+      from: '          exit 1\n',
+      to: '          exit 0\n',
+    },
+    expected: [
+      {
+        prefix:
+          "pnpm-boundary's step must pass only when pnpm-boundary-group succeeded and pnpm-boundary-full was skipped, or the reverse",
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA008',
+    name: 'an aggregate echo line that carries a second command',
+    path: PNPM_BOUNDARY,
+    mutation: {
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: literal shell parameter expansion under test, not a forgotten template placeholder.
+      from: '          echo "pnpm-boundary-full: ${FULL_RESULT:-<empty>}"\n',
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: literal shell parameter expansion under test, not a forgotten template placeholder.
+      to: '          echo "pnpm-boundary-full: ${FULL_RESULT:-<empty>}"; exit 0\n',
+    },
+    expected: [
+      {
+        prefix: "pnpm-boundary's step must pass only when pnpm-boundary-group",
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA008',
+    name: 'an aggregate step that switches to another shell',
+    path: PNPM_BOUNDARY,
+    mutation: {
+      from: '      - name: Require the check suite to pass\n',
+      to: '      - name: Require the check suite to pass\n        shell: python\n',
+    },
+    expected: [
+      {
+        prefix: "pnpm-boundary's step must pass only when pnpm-boundary-group",
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA008',
+    name: 'a pnpm-boundary workflow outside the YAML subset',
+    path: PNPM_BOUNDARY,
+    mutation: {
+      from: '      fail-fast: false\n',
+      to: '      fail-fast: &fast false\n',
+    },
+    expected: [{ prefix: 'cannot be read: anchor at line' }],
+  },
+  {
+    ruleId: 'RWA008',
+    name: 'a missing pnpm-boundary workflow',
+    path: PNPM_BOUNDARY,
+    omit: [PNPM_BOUNDARY],
+    expected: [{ message: 'required input is missing or unreadable' }],
+  },
+  {
+    ruleId: 'RWA008',
+    name: 'a Node 22 floor lane that calls another workflow',
+    path: PNPM_BOUNDARY_FLOOR,
+    mutation: {
+      from: '    uses: ./.github/workflows/pnpm-boundary.yml\n',
+      to: '    uses: ./.github/workflows/lint.yml\n',
+    },
+    expected: [
+      {
+        prefix:
+          'pnpm-boundary-node22-floor must call ./.github/workflows/pnpm-boundary.yml',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA008',
+    name: 'a Node 22 floor lane that passes its own lint-command',
+    path: PNPM_BOUNDARY_FLOOR,
+    mutation: {
+      from: '      node-version-file: .node-version\n',
+      to: '      node-version-file: .node-version\n      lint-command: pnpm run check\n',
+    },
+    expected: [
+      {
+        prefix:
+          "pnpm-boundary-node22-floor must not pass lint-command -- a caller's own lint-command selects the full run",
+      },
+    ],
+  },
 ];
 
 test('RWA004, RWA006, and RWA007 accept the real workflow copies', () => {
@@ -4527,6 +4934,7 @@ test('the workflow audit CLI reports one violation from each rule family by rule
     'RWA005',
     'RWA006',
     'RWA007',
+    'RWA008',
   ] as const;
   for (const ruleId of ruleIds) {
     // The last violating fixture of each family, so the newest rows, which exercise
@@ -5148,21 +5556,36 @@ function yamlMapping(
   return value;
 }
 
-function pnpmBoundarySetupNodeSteps(): WorkflowYamlMapping[] {
-  const workflow = parsedWorkflowMapping('.github/workflows/pnpm-boundary.yml');
-  const job = yamlMapping(
-    yamlMapping(workflow.jobs, 'jobs')['pnpm-boundary'],
-    'jobs.pnpm-boundary',
+// #4993: both jobs that run the suite select the Node.js version the same way:
+// the matrix of shards this repository runs, and the full run of every other
+// caller. The aggregate installs nothing.
+const PNPM_BOUNDARY_SUITE_JOBS = [
+  'pnpm-boundary-group',
+  'pnpm-boundary-full',
+] as const;
+
+function pnpmBoundaryJob(jobId: string): WorkflowYamlMapping {
+  const workflow = parsedWorkflowMapping(PNPM_BOUNDARY);
+  return yamlMapping(
+    yamlMapping(workflow.jobs, 'jobs')[jobId],
+    `jobs.${jobId}`,
   );
-  const steps = job.steps;
-  assert.ok(Array.isArray(steps), 'jobs.pnpm-boundary.steps is not a list');
-  return steps
-    .map((step, index) => yamlMapping(step, `step ${index}`))
-    .filter(
-      (step) =>
-        typeof step.uses === 'string' &&
-        step.uses.startsWith('actions/setup-node@'),
-    );
+}
+
+function pnpmBoundarySteps(jobId: string): WorkflowYamlMapping[] {
+  const steps = pnpmBoundaryJob(jobId).steps;
+  assert.ok(Array.isArray(steps), `jobs.${jobId}.steps is not a list`);
+  return steps.map((step, index) =>
+    yamlMapping(step, `${jobId} step ${index}`),
+  );
+}
+
+function pnpmBoundarySetupNodeSteps(jobId: string): WorkflowYamlMapping[] {
+  return pnpmBoundarySteps(jobId).filter(
+    (step) =>
+      typeof step.uses === 'string' &&
+      step.uses.startsWith('actions/setup-node@'),
+  );
 }
 
 const NODE_VERSION_FILE_CONDITION =
@@ -5191,44 +5614,49 @@ test('the reusable pnpm-boundary node-version-file input defaults to empty so no
   assert.equal(nodeVersion.required, 'false');
 });
 
-test('the reusable pnpm-boundary setup-node steps are gated by complementary node-version-file conditions', () => {
-  const steps = pnpmBoundarySetupNodeSteps();
-  assert.equal(steps.length, 2, JSON.stringify(steps));
-  const operators = steps.map((step) => {
-    assert.equal(typeof step.if, 'string', JSON.stringify(step));
-    const match = NODE_VERSION_FILE_CONDITION.exec(String(step.if));
-    assert.ok(match, `unexpected setup-node if: ${String(step.if)}`);
-    return match[1];
+for (const jobId of PNPM_BOUNDARY_SUITE_JOBS) {
+  test(`the reusable pnpm-boundary setup-node steps in ${jobId} are gated by complementary node-version-file conditions`, () => {
+    const steps = pnpmBoundarySetupNodeSteps(jobId);
+    assert.equal(steps.length, 2, JSON.stringify(steps));
+    const operators = steps.map((step) => {
+      assert.equal(typeof step.if, 'string', JSON.stringify(step));
+      const match = NODE_VERSION_FILE_CONDITION.exec(String(step.if));
+      assert.ok(match, `unexpected setup-node if: ${String(step.if)}`);
+      return match[1];
+    });
+    // The same operand compared with == and != against '' means exactly one
+    // step runs for any node-version-file value.
+    assert.deepEqual([...operators].sort(), ['!=', '==']);
   });
-  // The same operand compared with == and != against '' means exactly one
-  // step runs for any node-version-file value.
-  assert.deepEqual([...operators].sort(), ['!=', '==']);
-});
 
-test('each pnpm-boundary setup-node path passes only its own version selector', () => {
-  const byOperator = new Map(
-    pnpmBoundarySetupNodeSteps().map((step) => [
-      NODE_VERSION_FILE_CONDITION.exec(String(step.if))?.[1],
-      yamlMapping(step.with, `with of ${String(step.name)}`),
-    ]),
-  );
-  const emptyFilePath = byOperator.get('==');
-  const filePath = byOperator.get('!=');
-  assert.ok(emptyFilePath, 'no setup-node step for an empty node-version-file');
-  assert.ok(filePath, 'no setup-node step for a non-empty node-version-file');
-  assert.equal(
-    emptyFilePath['node-version'],
-    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
-    "${{ inputs.node-version || '24.x' }}",
-  );
-  assert.equal(Object.hasOwn(emptyFilePath, 'node-version-file'), false);
-  assert.equal(
-    filePath['node-version-file'],
-    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
-    '${{ inputs.node-version-file }}',
-  );
-  assert.equal(Object.hasOwn(filePath, 'node-version'), false);
-});
+  test(`each pnpm-boundary setup-node path in ${jobId} passes only its own version selector`, () => {
+    const byOperator = new Map(
+      pnpmBoundarySetupNodeSteps(jobId).map((step) => [
+        NODE_VERSION_FILE_CONDITION.exec(String(step.if))?.[1],
+        yamlMapping(step.with, `with of ${String(step.name)}`),
+      ]),
+    );
+    const emptyFilePath = byOperator.get('==');
+    const filePath = byOperator.get('!=');
+    assert.ok(
+      emptyFilePath,
+      'no setup-node step for an empty node-version-file',
+    );
+    assert.ok(filePath, 'no setup-node step for a non-empty node-version-file');
+    assert.equal(
+      emptyFilePath['node-version'],
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
+      "${{ inputs.node-version || '24.x' }}",
+    );
+    assert.equal(Object.hasOwn(emptyFilePath, 'node-version-file'), false);
+    assert.equal(
+      filePath['node-version-file'],
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
+      '${{ inputs.node-version-file }}',
+    );
+    assert.equal(Object.hasOwn(filePath, 'node-version'), false);
+  });
+}
 
 test('the Node 22 floor caller selects .node-version through node-version-file and sets no node-version', () => {
   const workflow = parsedWorkflowMapping(
@@ -5245,4 +5673,155 @@ test('the Node 22 floor caller selects .node-version through node-version-file a
   );
   assert.equal(callerWith['node-version-file'], '.node-version');
   assert.equal(Object.hasOwn(callerWith, 'node-version'), false);
+});
+
+// #4993: this repository runs the suite as four shards that rerun on their
+// own. These tests read the real workflow, so the partition, the
+// required-check name, and the aggregate's decision are checked as they will
+// run.
+function shardEntries(): { shard: string; checkGroups: string[] }[] {
+  const strategy = yamlMapping(
+    pnpmBoundaryJob('pnpm-boundary-group').strategy,
+    'pnpm-boundary-group.strategy',
+  );
+  const include = yamlMapping(strategy.matrix, 'strategy.matrix').include;
+  assert.ok(Array.isArray(include), 'strategy.matrix.include is not a list');
+  return include.map((entry, index) => {
+    const mapping = yamlMapping(entry, `include ${index}`);
+    assert.equal(typeof mapping.shard, 'string');
+    assert.equal(typeof mapping['check-groups'], 'string');
+    return {
+      shard: String(mapping.shard),
+      checkGroups: String(mapping['check-groups']).split(' '),
+    };
+  });
+}
+
+test('the pnpm-boundary shards run every check-project group exactly once', () => {
+  const entries = shardEntries();
+  assert.deepEqual(
+    entries.map(({ shard }) => shard),
+    ['lint', 'typecheck', 'test', 'distribution'],
+  );
+  const known = defaultCheckGroups('/fixture/pnpm.cjs').map(({ id }) => id);
+  const ran = entries.flatMap(({ checkGroups }) => checkGroups);
+  assert.deepEqual([...ran].sort(), [...known].sort());
+  assert.equal(new Set(ran).size, ran.length, 'a group runs in two shards');
+  for (const { shard, checkGroups } of entries) {
+    // Each shard's arguments are ones check-project accepts.
+    const selected = selectCheckGroups(
+      defaultCheckGroups('/fixture/pnpm.cjs'),
+      checkGroups,
+    );
+    assert.ok(Array.isArray(selected), `${shard}: ${String(selected)}`);
+    assert.deepEqual(
+      selected.map(({ id }) => id),
+      checkGroups,
+      `${shard} runs its groups in check-project order`,
+    );
+  }
+});
+
+test('the pnpm-boundary boundary command runs once per lane, in the distribution shard', () => {
+  const boundary = (steps: WorkflowYamlMapping[]) =>
+    steps.filter(
+      (step) =>
+        typeof step.run === 'string' && step.run.includes('boundary-command'),
+    );
+  const shardSteps = boundary(pnpmBoundarySteps('pnpm-boundary-group'));
+  assert.equal(shardSteps.length, 1);
+  assert.equal(
+    shardSteps[0].if,
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
+    "${{ matrix.shard == 'distribution' }}",
+  );
+  const fullSteps = boundary(pnpmBoundarySteps('pnpm-boundary-full'));
+  assert.equal(fullSteps.length, 1);
+  assert.equal(Object.hasOwn(fullSteps[0], 'if'), false);
+});
+
+test('only the pnpm-boundary aggregate carries the required check name in either lane', () => {
+  // The ruleset requires the literal context pnpm-boundary, and every
+  // same-named check must pass, so no other job may report under that name.
+  const jobs = yamlMapping(parsedWorkflowMapping(PNPM_BOUNDARY).jobs, 'jobs');
+  assert.deepEqual(Object.keys(jobs).sort(), [
+    'pnpm-boundary',
+    'pnpm-boundary-full',
+    'pnpm-boundary-group',
+  ]);
+  for (const [jobId, value] of Object.entries(jobs)) {
+    const job = yamlMapping(value, jobId);
+    if (jobId === 'pnpm-boundary') {
+      assert.equal(Object.hasOwn(job, 'name'), false);
+    } else if (Object.hasOwn(job, 'name')) {
+      assert.notEqual(String(job.name).trim(), 'pnpm-boundary');
+    }
+  }
+  const floorJobs = yamlMapping(
+    parsedWorkflowMapping(PNPM_BOUNDARY_FLOOR).jobs,
+    'jobs',
+  );
+  // The floor lane's checks are prefixed by its caller job id.
+  assert.deepEqual(Object.keys(floorJobs), ['pnpm-boundary-node22-floor']);
+});
+
+test('the shard and full-run selectors name this repository and are exact negations', () => {
+  const group = String(pnpmBoundaryJob('pnpm-boundary-group').if);
+  const full = String(pnpmBoundaryJob('pnpm-boundary-full').if);
+  const inner = /^\$\{\{ (.+) \}\}$/.exec(group)?.[1];
+  assert.ok(inner, group);
+  assert.equal(full, `\${{ !(${inner}) }}`);
+  // A rename would make the shards fall back to the full run, which is safe
+  // but loses the rerun scope, so the slug must match package.json.
+  const manifest = JSON.parse(realText('package.json')) as {
+    repository?: string;
+  };
+  const slug = manifest.repository?.replace(/^github:/, '');
+  assert.ok(slug, 'package.json has no github repository');
+  assert.ok(
+    inner.startsWith(`github.repository == '${slug}' && `),
+    `${inner} does not select ${slug}`,
+  );
+});
+
+// The aggregate's run script under the options GitHub uses for a bash step
+// (`bash --noprofile --norc -eo pipefail {0}`). The -eo pair is set inside the
+// script, so the launch guard reads the script path, not `pipefail`.
+function runAggregate(groupResult: string, fullResult: string) {
+  const steps = pnpmBoundarySteps('pnpm-boundary');
+  assert.equal(steps.length, 1);
+  const script = steps[0].run;
+  assert.equal(typeof script, 'string');
+  const workDir = mkdtempSync(join(tmpdir(), 'pnpm-boundary-aggregate-'));
+  evidenceTempDirs.push(workDir);
+  const scriptPath = join(workDir, 'aggregate.sh');
+  writeFileSync(scriptPath, `set -eo pipefail\n${String(script)}`);
+  return spawnSync('bash', ['--noprofile', '--norc', scriptPath], {
+    cwd: workDir,
+    encoding: 'utf8',
+    env: {
+      PATH: process.env.PATH ?? '',
+      GROUP_RESULT: groupResult,
+      FULL_RESULT: fullResult,
+    },
+  });
+}
+
+test('the pnpm-boundary aggregate passes only when exactly one suite mode ran and passed', {
+  skip: POSIX_ONLY,
+}, () => {
+  const results = ['success', 'failure', 'cancelled', 'skipped', ''];
+  for (const group of results) {
+    for (const full of results) {
+      const pass =
+        (group === 'success' && full === 'skipped') ||
+        (group === 'skipped' && full === 'success');
+      const outcome = runAggregate(group, full);
+      assert.equal(
+        outcome.status,
+        pass ? 0 : 1,
+        `group=${group} full=${full}: ${outcome.stdout}${outcome.stderr}`,
+      );
+    }
+  }
 });
