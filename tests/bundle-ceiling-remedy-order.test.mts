@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 import { stripGeneratedFromBanner } from '../src/scripts/consistency-helpers.mts';
@@ -154,6 +154,60 @@ const SIGNING_TIER_SITES: readonly [string, string, readonly string[]][] = [
 for (const [path, heading, needles] of SIGNING_TIER_SITES) {
   test(`${path} ${heading.trim()} reaches the unsigned signing tier (#4973)`, () => {
     assertInOrder(section(path, heading), needles);
+  });
+}
+
+// The three sentences that stopped the loop on a signing failure, exactly as
+// they were wrapped before #4973. Each forbidden pattern must catch its own
+// sentence, so a revert fails `node scripts/audit-docs.mjs --check`.
+const OLD_SIGNING_STOP_SENTENCES: Readonly<Record<string, string>> = {
+  'e11-merge-failure-signing-hold':
+    '- **Merge failure:** run `git merge --abort`, report, and hold on a merge,\n' +
+    '  signing, or hook failure; after a timeout, follow the wrapper.\n',
+  'lite-e11-signing-failure-stop-and-ask':
+    'the signed wrapper for merge and `--continue`. On command/signing/hook failure,\n' +
+    'run `git merge --abort` and stop-and-ask. After a wrapper timeout, terminate\n',
+  'lite-d1-signing-stop-and-ask-first':
+    '4. **Before rebasing**: if primary signing is non-interactive-hostile (GPG\n' +
+    '   pinentry or a hardware-touch path) and no fallback wrapper exists for\n' +
+    '   arbitrary git subcommands, stop and ask first; replaying even one commit\n' +
+    '   re-signs it.\n',
+};
+
+interface ForbiddenPatternEntry {
+  id: string;
+  glob: string;
+  pattern: string;
+  message: string;
+}
+
+function forbiddenPatterns(): ForbiddenPatternEntry[] {
+  const manifest = JSON.parse(
+    readFileSync('audit/sync-manifest.json', 'utf8'),
+  ) as { forbiddenPatterns?: ForbiddenPatternEntry[] };
+  return manifest.forbiddenPatterns ?? [];
+}
+
+function templateInstructionFiles(dir: string): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const path = `${dir}/${entry.name}`;
+    return entry.isDirectory() ? templateInstructionFiles(path) : [path];
+  });
+}
+
+for (const [id, oldText] of Object.entries(OLD_SIGNING_STOP_SENTENCES)) {
+  test(`forbidden pattern ${id} catches its old sentence and nothing current (#4973)`, () => {
+    const entry = forbiddenPatterns().find((candidate) => candidate.id === id);
+    assert.ok(entry, `audit/sync-manifest.json has forbidden pattern ${id}`);
+    assert.equal(entry.glob, 'idd-template/.github/instructions/**');
+    // The audit compiles each pattern case-insensitively over a whole file.
+    const regex = new RegExp(entry.pattern, 'i');
+    assert.match(oldText, regex);
+    for (const path of templateInstructionFiles(
+      'idd-template/.github/instructions',
+    )) {
+      assert.doesNotMatch(readFileSync(path, 'utf8'), regex, path);
+    }
   });
 }
 
