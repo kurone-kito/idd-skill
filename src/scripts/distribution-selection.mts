@@ -769,10 +769,7 @@ function repositoryNameFromOrigin(
 ): string | null {
   let url: string;
   try {
-    url = runGit(
-      ['config', '--get', 'remote.origin.url'],
-      worktreeRoot,
-    ).trim();
+    url = runGit(['config', '--get', 'remote.origin.url'], worktreeRoot).trim();
   } catch {
     return null;
   }
