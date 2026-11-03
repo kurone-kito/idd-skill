@@ -513,6 +513,57 @@ test('--trusted-auto-decide reports class-off and lets the trusted base win over
   }
 });
 
+test('--trusted-auto-decide reads the --owner/--repo repository, not a fork origin (#4958)', () => {
+  // In a fork checkout, origin names the fork, whose branches the fork owner
+  // controls. Explicit flags must win, so only o/r is ever read. The fork's
+  // owner and name both differ from the flags, so taking either one from
+  // origin is caught.
+  const fork = gitCheckout({ origin: 'https://github.com/fork/fork-r.git' });
+  try {
+    const run = runTrustedCli(
+      [
+        '--trusted-auto-decide',
+        '--base-ref',
+        'main',
+        '--owner',
+        'o',
+        '--repo',
+        'r',
+      ],
+      {
+        cwd: fork.cwd,
+        responses: trustedResponses({
+          config: {
+            stdout: encoded(
+              validPolicy({
+                dangerouslyAutoDecide: true,
+                autoDecide: { decisionIssue: { enabled: true } },
+              }),
+            ),
+          },
+        }),
+      },
+    );
+    assert.equal(run.status, 0, run.stderr);
+    const report = JSON.parse(run.stdout) as Record<string, unknown>;
+    assert.equal(report.status, 'readable');
+    assert.deepEqual(
+      report.classes,
+      classes('class-off', { decisionIssue: 'enabled' }),
+    );
+    const repositoryPaths = run.calls
+      .flat()
+      .filter((arg) => arg.startsWith('repos/'));
+    assert.ok(repositoryPaths.length > 0);
+    assert.ok(
+      repositoryPaths.every((arg) => arg.startsWith('repos/o/r/')),
+      repositoryPaths.join(', '),
+    );
+  } finally {
+    fork.cleanup();
+  }
+});
+
 test('--trusted-auto-decide prints an unreadable report and exits 1 when the trusted document fails its schema (#4958)', () => {
   const f = fixture({ local: null, global: null });
   try {
@@ -623,6 +674,18 @@ test('--trusted-auto-decide rejects local-layer flags and an unresolvable reposi
       f.cwd,
       /--owner and --repo must be given together/,
     ],
+    [
+      ['--trusted-auto-decide', '--repo', 'r'],
+      f.cwd,
+      /--owner and --repo must be given together/,
+    ],
+    [
+      ['--owner', 'o', '--repo', 'r'],
+      f.cwd,
+      /accepted only with --trusted-auto-decide/,
+    ],
+    [['--owner', 'o'], f.cwd, /accepted only with --trusted-auto-decide/],
+    [['--repo', 'r'], f.cwd, /accepted only with --trusted-auto-decide/],
     [
       [
         '--trusted-auto-decide',
