@@ -456,16 +456,16 @@ exactly one child, keep the parent claim and, in order:
 1. Dry-run every child, then publish each as a held orphan with `--apply`, one
    per call: `publish-authoring-hold --shape orphan --title <title>
    --body-file <file> --review-result <file>`.
-2. If a publish is refused, fails, or leaves a recovery hold, publish no more
-   children, keep the parent claim and published children held, report the
-   published children in a hold note, and do not release. The same applies if
-   posting the record below fails; reconcile an uncertain POST before a retry.
+2. If a dry run or publish is refused, fails, or leaves a recovery hold, publish
+   no more children, keep the parent claim and published children held, report
+   the published children in a hold note, and do not release. The same applies
+   if posting the record below fails; reconcile an uncertain POST before a retry.
 3. Once all are published, post this record as one line on the parent, then
    comment, release, and clean up as above, without the companion handoff:
 
-   ```text
-   <!-- idd-skill-standing-approval: class=split; set=none; anchor=<owner/repo#n>; ceiling=<maxCandidateFiles>; option=option-a -->
-   ```
+```text
+<!-- idd-skill-standing-approval: class=split; set=none; anchor=<owner/repo#n>; ceiling=<maxCandidateFiles>; option=option-a -->
+```
 
 Otherwise the rule above applies unchanged.
 

@@ -762,10 +762,11 @@ it in a comment. The exception covers only a scope overrun, and only when
 checkbox stripped, appears whole and verbatim in exactly one child. The worker
 keeps the parent claim and works in this order. It dry-runs every child, then
 publishes each as a held orphan with `--apply`, one child per
-`publish-authoring-hold --shape orphan` call. If a publish is refused, fails,
-or leaves a recovery hold, or the record line cannot be posted, it stops: it
-publishes no more children, keeps the parent claim and the published children
-held, reports them, and does not release the parent. Only after every child is
+`publish-authoring-hold --shape orphan` call. If a dry run or publish is
+refused, fails, or leaves a recovery hold, or the record line cannot be posted,
+it stops: it publishes no more children, keeps the parent claim and the
+published children held, names them in a hold note, and does not release the
+parent. Only after every child is
 published does it post on the parent, as one line, the `class=split`
 standing-approval record that `idd-work.instructions.md` gives. Then it
 comments the estimate, the candidate and changed files, and the split proposal,

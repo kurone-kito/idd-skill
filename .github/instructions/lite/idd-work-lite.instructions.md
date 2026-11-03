@@ -283,8 +283,8 @@ whole and verbatim in exactly one child, keep the parent claim and:
 1. Dry-run every child, then `--apply` each held orphan, one per call:
    `publish-authoring-hold --shape orphan --title <title> --body-file <file>
    --review-result <file>`.
-2. On refusal, failure, recovery hold, or a failed record post: publish no
-   more; keep the parent claim and children held; report them; no release;
+2. On refusal, failure, recovery hold, or a failed record post: stop; keep the
+   parent claim and children held; name them in a hold note; no release;
    reconcile an uncertain POST first.
 3. Post this one-line record on the parent, then comment, release, and clean
    up as above, no handoff:
