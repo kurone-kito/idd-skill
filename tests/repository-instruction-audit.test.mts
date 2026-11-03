@@ -1014,7 +1014,7 @@ test('issue authoring dependency guidance verifies consumed outputs', () => {
   );
 });
 
-test('A0-T step 1 stops without claiming on the three configured hold labels (#4233)', () => {
+test('A0-T step 1 stops without claiming on the four configured hold labels (#4233, #4960)', () => {
   const discover = readFileSync(
     join(
       REPO_ROOT,
@@ -1031,6 +1031,7 @@ test('A0-T step 1 stops without claiming on the three configured hold labels (#4
     'labels.blockedByHumanLabelName',
     'labels.needsDecisionLabelName',
     'labels.authoringOnlyLabelName',
+    'autoDecide.confirmationLabelName',
   ]) {
     assert.ok(step.includes(key), `A0-T step 1 names ${key}`);
   }
