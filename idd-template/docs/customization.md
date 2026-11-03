@@ -1407,9 +1407,10 @@ by number, so an open retired journal can be offered as work.
 A semantic issue auto-labeler — a bot that infers labels from issue
 content, such as CodeRabbit's issue enrichment, rather than applying
 only labels a human or workflow explicitly requests — can apply any of
-the four configured IDD label names (`labels.roadmapLabelName`,
+the configured IDD label names (`labels.roadmapLabelName`,
 `labels.blockedByHumanLabelName`, `labels.needsDecisionLabelName`,
-`labels.authoringOnlyLabelName`) to
+`labels.authoringOnlyLabelName`) or the auto-decide confirmation label
+(`autoDecide.confirmationLabelName`) to
 an ordinary issue on its own judgment. The failure is silent: the
 issue drops out of execution candidates, or gets parked behind a hold,
 with nothing erroring and no visible cause. See
@@ -1467,8 +1468,8 @@ hand-copying a placeholder recipe:
 
    It reads the target repository's own configured (or defaulted)
    `labels.roadmapLabelName` / `labels.blockedByHumanLabelName` /
-   `labels.needsDecisionLabelName` / `labels.authoringOnlyLabelName` and
-   the declared logins, then writes
+   `labels.needsDecisionLabelName` / `labels.authoringOnlyLabelName` /
+   `autoDecide.confirmationLabelName` and the declared logins, then writes
    `.github/workflows/strip-untrusted-labels.yml` with the same trust
    model documented below (least-privilege `permissions:`, no
    checkout, `pull_request_target` for the PR branch,
@@ -1491,7 +1492,7 @@ adding it to an already-onboarded repository's config; either way,
 `--substitute` is always safe to rerun (see the Scope limit note
 above).
 
-**Scope limit.** The generator covers only the four base labels above.
+**Scope limit.** The generator covers only the labels named above.
 A repository that also wants `issueAuthoring.authoringLabelName`
 covered, or the broader shared-prefix form described in the Fallback
 subsection below, has no generated equivalent yet — use the manual
@@ -1504,6 +1505,10 @@ leaves the file unchanged, never deletes it: removing
 `.github/workflows/strip-untrusted-labels.yml`. Delete that file by
 hand when disabling the guard this way, or the old actor list keeps
 stripping labels despite the current configuration.
+
+**Guards generated before the confirmation label.** A guard generated
+before `autoDecide.confirmationLabelName` existed does not cover that
+label. Rerun `--substitute` to regenerate the file with it.
 
 ### Fallback: manual recipe (`instructions-only` profile, or extended coverage)
 
@@ -1522,6 +1527,28 @@ the recipe by hand. Save it as
   never the distributed defaults unconditionally, since a repository that
   renamed these
   labels must guard the names it actually uses.
+- `<confirmation-label-name>`: this repository's actual configured
+  `autoDecide.confirmationLabelName` value (the distributed default
+  `status:needs-confirmation` if unconfigured), on the same terms.
+- Escaping and refused characters, for the label-name placeholders
+  above: each name sits inside a single-quoted GitHub Actions expression
+  string literal in the `if:` condition, so write a single quote in a
+  name as two single quotes. For a label named `don't-merge`, replace
+  the placeholder with `don''t-merge`, so the literal reads
+  `'don''t-merge'`. Do not double it again for YAML: the `if: |-` block
+  scalar adds no quoting of its own. A name that contains a newline or
+  any other control character (U+0000 to U+001F or U+007F to U+009F),
+  or a Unicode line separator (U+2028) or paragraph separator (U+2029),
+  cannot be used in this recipe. An expression string literal has no
+  escape for such a character, and a line break can end the `if: |-`
+  block early and add YAML keys to the workflow (raised in the review
+  of pull request `#2684` on 2026-09-07). `--substitute` follows both
+  rules when it generates the guard: it doubles each single quote, and
+  it stops with an error and writes no file when a name it would write
+  into the guard has one of these characters. A hand-copied recipe and
+  a generated guard therefore agree on every name the generator covers.
+  The same rules apply to a label name or prefix added for the
+  extension described after this list.
 - `<labeler-bot-login-1>`, `<labeler-bot-login-2>`, ...: the login(s) of
   whichever semantic issue auto-labeler(s) this repository actually
   runs. Build the complete list with a full-history sweep, not a single
@@ -1554,12 +1581,12 @@ the recipe by hand. Save it as
   guards — the workflow's `pull_request_target: labeled` trigger below
   reuses this same list.)
 
-This recipe guards the four policy-decision labels only. If this
-repository also configures `issueAuthoring.authoringLabelName`
+This recipe guards only the labels named in the placeholders above. If
+this repository also configures `issueAuthoring.authoringLabelName`
 (default `status:authoring`) and wants it guarded too — a spurious
 match there causes Discover to skip a ready issue as though it were
 still under authoring, a related but separate reserved-label risk —
-add a fifth equality check for that label name, or switch every check
+add another equality check for that label name, or switch every check
 to a shared-prefix `startsWith(...)` call if the whole local taxonomy
 shares one prefix. This source repository's own workflow uses
 `startsWith(github.event.label.name, 'status:')` for exactly that
@@ -1583,12 +1610,12 @@ concurrency:
   cancel-in-progress: true
 jobs:
   strip-label:
-    # Reserved set: this repository's four *configured* policy-decision
-    # IDD label names (substitute the actual configured values, not
-    # necessarily the distributed defaults). See the prose above for
-    # optionally also covering issueAuthoring.authoringLabelName.
+    # Reserved set: this repository's *configured* IDD label names and
+    # auto-decide confirmation label name (substitute the actual configured
+    # values, not necessarily the distributed defaults). See the prose
+    # above for optionally also covering issueAuthoring.authoringLabelName.
     if: |-
-      contains(fromJSON('["<labeler-bot-login-1>", "<labeler-bot-login-2>"]'), github.event.sender.login) && (github.event.label.name == '<roadmap-label-name>' || github.event.label.name == '<blocked-by-human-label-name>' || github.event.label.name == '<needs-decision-label-name>' || github.event.label.name == '<authoring-only-label-name>')
+      contains(fromJSON('["<labeler-bot-login-1>", "<labeler-bot-login-2>"]'), github.event.sender.login) && (github.event.label.name == '<roadmap-label-name>' || github.event.label.name == '<blocked-by-human-label-name>' || github.event.label.name == '<needs-decision-label-name>' || github.event.label.name == '<authoring-only-label-name>' || github.event.label.name == '<confirmation-label-name>')
     # ubuntu-latest here for maximum portability across time and
     # adopters. ubuntu-slim -- GitHub's own leaner hosted Ubuntu image,
     # not a runner private to this source repository -- is a valid
@@ -1638,7 +1665,7 @@ jobs:
   workflow or code to run with the elevated token.
 - The job runs only when **both** hold for one event: the actor is a
   configured untrusted labeler login, **and** the label is one of the
-  four reserved names. Both conditions are evaluated in the workflow's
+  reserved names. Both conditions are evaluated in the workflow's
   `if:` before any step runs, which is why the values must be
   hardcoded into this file rather than read from
   `.github/idd/config.json` at runtime — the workflow deliberately
@@ -1667,12 +1694,13 @@ both variable conditions above are per-adopter values the template
 cannot know in advance. The reserved label set depends on whether the
 adopter customized `labels.roadmapLabelName` /
 `labels.blockedByHumanLabelName` / `labels.needsDecisionLabelName` /
-`labels.authoringOnlyLabelName` away from the distributed defaults, and
+`labels.authoringOnlyLabelName` / `autoDecide.confirmationLabelName` away
+from the distributed defaults, and
 the untrusted-actor login depends on which semantic issue auto-labeler, if
 any, the adopter's repository
 actually runs. A shipped file carrying this source repository's own
 values would silently protect the wrong labels or actors for any
-adopter who configured `labels.*` or runs a different labeler — worse
+adopter who configured these label names or runs a different labeler — worse
 than no file, since its presence could be mistaken for coverage it does
 not actually provide. This is why the file is never a static template
 asset either way: the generated path above resolves these same

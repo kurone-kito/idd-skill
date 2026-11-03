@@ -4967,6 +4967,73 @@ test('--with-readiness resolves a configured authoring-only label on a roadmap l
   assert.equal(byNumber.get(932)?.readiness?.ready, true);
 });
 
+// #4960: a roadmap child waiting for an auto-decide confirmation is never
+// startable; the label is compared trimmed and case-insensitively.
+function confirmationGraphIssues(childLabel: string) {
+  return new Map<number, unknown>([
+    [940, roadmapIssue(940, '- [ ] #941\n- [ ] #942', 'confirmation-roadmap')],
+    [
+      941,
+      {
+        number: 941,
+        title: 'issue 941',
+        state: 'open',
+        body: 'confirmation leaf 941',
+        labels: [{ name: childLabel }],
+      },
+    ],
+    [942, executionIssue(942, 'ready leaf 942')],
+  ]);
+}
+
+test('--with-readiness marks a confirmation-labelled child as not ready (#4960)', async () => {
+  for (const [childLabel, readiness, reason] of [
+    [
+      'Status:Needs-Confirmation',
+      readinessResolution(),
+      'label:status:needs-confirmation',
+    ],
+    [
+      'triage:confirm',
+      { ...readinessResolution(), confirmationLabelName: 'triage:confirm' },
+      'label:triage:confirm',
+    ],
+  ] as const) {
+    const issues = confirmationGraphIssues(childLabel);
+    const report = await enumerateAllRoadmapsGraph({
+      loadOpenRoadmapRoots: async () => [940],
+      loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+      readiness,
+    });
+
+    const byNumber = new Map(report.leaves.map((leaf) => [leaf.number, leaf]));
+    const r941 = byNumber.get(941)?.readiness;
+    assert.equal(r941?.ready, false, childLabel);
+    assert.equal(r941?.startable, false, childLabel);
+    assert.deepEqual(r941?.reasons, [reason]);
+    assert.equal(byNumber.get(942)?.readiness?.ready, true, childLabel);
+  }
+});
+
+test('--with-readiness reports a confirmation-label collision for a roadmap child (#4960)', async () => {
+  const issues = confirmationGraphIssues('triage:ready');
+  const report = await enumerateAllRoadmapsGraph({
+    loadOpenRoadmapRoots: async () => [940],
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+    readiness: {
+      ...readinessResolution(),
+      confirmationLabelName: 'triage:ready',
+      readyLabelName: 'triage:ready',
+    },
+  });
+
+  const byNumber = new Map(report.leaves.map((leaf) => [leaf.number, leaf]));
+  assert.deepEqual(byNumber.get(941)?.readiness?.reasons, [
+    'needs_confirmation_label_collision',
+  ]);
+  assert.equal(byNumber.get(942)?.readiness?.ready, true);
+});
+
 test('--with-readiness is byte-stable when the flag is absent', async () => {
   const issues = readinessGraphIssues();
   const report = await enumerateAllRoadmapsGraph({

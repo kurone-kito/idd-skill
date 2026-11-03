@@ -12859,16 +12859,15 @@ export function validateStaleRequestRecoveryEvidence(
 }
 
 /**
- * kurone-kito/idd-skill#4717: the stale-request recovery gate. A real claim
+ * kurone-kito/idd-skill#4879: the stale-request recovery gate. A real claim
  * ID without an expected agent ID is blocked on- or off-head because the
  * collector cannot produce recovery evidence for that shape. A claimless
  * report (`expectedClaimId: none` and an empty agent ID) remains exempt. For a
  * claim-bound run (both `claim.expectedClaimId` and `claim.expectedAgentId`
- * supplied; the collector sets the object on the same predicate), the gate
- * applies only to an off-head report
- * (`advisoryWait.lastCopilotCommit` differs from `prHeadSha`), matching the
- * Lite E1 contract. An on-head claim-bound report keeps the `f3Outcome` gate
- * alone.
+ * supplied; the collector sets the object on the same predicate), a present
+ * recovery object is gated on- or off-head. When the object is absent, an
+ * off-head report (`advisoryWait.lastCopilotCommit` differs from `prHeadSha`)
+ * still fails closed, while an on-head report has no blocker from this rule.
  */
 export function staleRequestRecoveryGateBlocker(
   report: Record<string, unknown>,
@@ -12888,7 +12887,8 @@ export function staleRequestRecoveryGateBlocker(
   const advisoryWait = preMergeAsRecord(report.advisoryWait);
   const prHeadSha = String(report.prHeadSha ?? '');
   const offHead = String(advisoryWait.lastCopilotCommit ?? '') !== prHeadSha;
-  if (!claimBound || !offHead) {
+  const hasRecoveryEvidence = Object.hasOwn(report, 'staleRequestRecovery');
+  if (!claimBound || (!offHead && !hasRecoveryEvidence)) {
     return null;
   }
   const gate = 'stale-request-recovery';
@@ -12898,14 +12898,14 @@ export function staleRequestRecoveryGateBlocker(
   if (!verdict.valid) {
     return {
       gate,
-      detail: `staleRequestRecovery ${verdict.problem} on a claim-bound off-head run; the recovery evidence is required before readiness or merge`,
+      detail: `staleRequestRecovery ${verdict.problem} on a claim-bound run; the recovery evidence is required before readiness or merge`,
     };
   }
   if (verdict.action === 'attempt') {
     return {
       gate,
       detail:
-        'staleRequestRecovery.action is "attempt": the Copilot request for this off-head HEAD is unproven, so run the bounded AW3-S recovery through F2 first; do not merge',
+        'staleRequestRecovery.action is "attempt": the Copilot request for this HEAD is unproven, so run the bounded AW3-S recovery through F2 first; do not merge',
     };
   }
   if (verdict.action === 'cap-exhausted') {
@@ -13126,8 +13126,8 @@ export function computePreMergeReadinessBlockers(
     });
   }
 
-  // kurone-kito/idd-skill#4717: the claim-bound, off-head stale-request
-  // recovery object. The shared rollup serves both readiness and
+  // kurone-kito/idd-skill#4879: the claim-bound stale-request recovery
+  // object. The shared rollup serves both readiness and
   // idd-merge-execute, so `ready` and the merge call stay consistent.
   const staleRequestRecoveryBlocker = staleRequestRecoveryGateBlocker(report);
   if (staleRequestRecoveryBlocker !== null) {

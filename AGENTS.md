@@ -518,6 +518,28 @@ layered on top of the distributed IDD defaults:
   stays for adopters. To opt out, set `dangerouslyAutoDecide` to `false`
   in `.github/idd/config.json`, or remove the field, which then defaults
   to `false`.
+  The five auto-decide classes of roadmap `#4955` are on as well, under
+  `autoDecide` in `.github/idd/config.json`: `decisionIssue`, `runtimeQuestion`,
+  `authoringChoice`, `worktreeRemnant`, and `b1Leftover`. The four classes other
+  than `decisionIssue` file a confirmation issue labeled
+  `status:needs-confirmation` for the operator to review afterward.
+  `decisionIssue` confirms its pickup choices on the needs-decision source issue
+  instead. No other auto-decide class is defined, so none stays disabled. The
+  cap and the quiet window keep their defaults. The hearing left these stops in
+  force: safety and ownership stops (claim conflict or loss, wrong base branch);
+  authority stops (a CODEOWNER or required reviewer, `human_merge`, credentials,
+  authoring release); quality gates (CI, review threads, advisory convergence);
+  waits (rate limits, quiet windows); and scope or suitability rejections. The
+  worktree-remnant and B1-leftover classes replace two fail-closed defaults once
+  their consumers land: the §LWR operator attestation and the B1 manual-cleanup
+  stop. Each saves the data before it removes anything, to the stash tagged
+  `idd-lwr <claim-id>`, the backup refs `refs/idd-lwr/<branch>` and
+  `refs/idd-b1/`, `<state>/idd-skill/lwr-preserved/`, or
+  `<state>/idd-skill/b1-preserved/` (preventive; no observed incident yet). Turn
+  a class off when a confirmation issue is answered with a different choice, or
+  when a removed worktree turns out to be in use. To opt out, set a class's
+  `enabled` to `false` or remove `autoDecide`. The hearing was held on
+  2026-11-01 and is recorded in roadmap `#4955`.
 
 ## Branch strategy
 

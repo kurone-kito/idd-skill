@@ -5,10 +5,13 @@ import { fileURLToPath } from 'node:url';
 
 import {
   AUTHORING_JOURNAL_REFERENCE_PATTERN,
+  AUTO_DECIDE_CLASSES,
   clone,
   DEFAULT_PROVIDER,
   decideUrgencyDefer,
+  findAutoDecideLabelCollisions,
   formatTriageLine,
+  inspectAutoDecide,
   inspectCritiqueLoopDelegateLayer,
   inspectCritiqueLoopTelemetryHookLayer,
   inspectDevelopmentBranch,
@@ -3287,4 +3290,477 @@ test('standingApprovals: an unknown root key disables every class (#4886)', () =
     ['invalid', 'invalid', 'invalid'],
   );
   assert.match(diagnostics[0].reason ?? '', /unknown key otherClass/);
+});
+
+// #4956: the auto-decide class switches, caps, and confirmation label.
+const autoDecideVerdicts = (config: unknown) =>
+  Object.fromEntries(inspectAutoDecide(config).map((d) => [d.class, d]));
+
+const everyAutoDecideClass = (
+  verdict: string,
+  extra: Record<string, unknown> = {},
+) =>
+  Object.fromEntries(
+    AUTO_DECIDE_CLASSES.map((cls) => [cls, { class: cls, verdict, ...extra }]),
+  );
+
+test('autoDecide: absent keeps every class off and the default label (#4956)', () => {
+  assert.deepEqual(autoDecideVerdicts({}), everyAutoDecideClass('class-off'));
+  assert.deepEqual(normalizePolicyConfig({}).autoDecide, {
+    decisionIssue: { enabled: false },
+    runtimeQuestion: { enabled: false },
+    authoringChoice: { enabled: false },
+    worktreeRemnant: { enabled: false, quietWindow: 'PT2H' },
+    b1Leftover: { enabled: false },
+    maxPendingConfirmations: 10,
+    maxDecisionsPerClaim: 3,
+    confirmationLabelName: 'status:needs-confirmation',
+  });
+  assert.deepEqual(
+    normalizePolicyConfig({}).autoDecide,
+    POLICY_DEFAULTS.autoDecide,
+  );
+  // The master switch is not read: it neither enables nor breaks a class.
+  assert.deepEqual(
+    autoDecideVerdicts({ dangerouslyAutoDecide: true }),
+    everyAutoDecideClass('class-off'),
+  );
+});
+
+test('autoDecide: an absent class, an absent enabled, or enabled false is class-off (#4956)', () => {
+  const config = {
+    autoDecide: {
+      runtimeQuestion: {},
+      authoringChoice: { enabled: false },
+      worktreeRemnant: { quietWindow: 'PT30M' },
+    },
+  };
+  assert.deepEqual(
+    autoDecideVerdicts(config),
+    everyAutoDecideClass('class-off'),
+  );
+  const normalized = normalizePolicyConfig(config).autoDecide;
+  assert.equal(normalized.worktreeRemnant.enabled, false);
+  assert.equal(normalized.worktreeRemnant.quietWindow, 'PT30M');
+});
+
+test('autoDecide: enabled true with absent or valid values enables only that class (#4956)', () => {
+  const config = {
+    autoDecide: {
+      decisionIssue: { enabled: true },
+      worktreeRemnant: { enabled: true, quietWindow: 'P1DT30M' },
+      b1Leftover: { enabled: false },
+      maxPendingConfirmations: 100,
+      maxDecisionsPerClaim: 1,
+      confirmationLabelName: 'auto:confirm',
+    },
+  };
+  const verdicts = autoDecideVerdicts(config);
+  assert.equal(verdicts.decisionIssue.verdict, 'enabled');
+  assert.equal(verdicts.worktreeRemnant.verdict, 'enabled');
+  assert.equal(verdicts.runtimeQuestion.verdict, 'class-off');
+  assert.equal(verdicts.authoringChoice.verdict, 'class-off');
+  assert.equal(verdicts.b1Leftover.verdict, 'class-off');
+  assert.deepEqual(normalizePolicyConfig(config).autoDecide, {
+    decisionIssue: { enabled: true },
+    runtimeQuestion: { enabled: false },
+    authoringChoice: { enabled: false },
+    worktreeRemnant: { enabled: true, quietWindow: 'P1DT30M' },
+    b1Leftover: { enabled: false },
+    maxPendingConfirmations: 100,
+    maxDecisionsPerClaim: 1,
+    confirmationLabelName: 'auto:confirm',
+  });
+});
+
+test('autoDecide: a malformed class is malformed with its field, and malformed wins over enabled false (#4956)', () => {
+  const cases: [string, unknown, string][] = [
+    ['decisionIssue', { enabled: 'true' }, 'autoDecide.decisionIssue.enabled'],
+    ['runtimeQuestion', { enabled: 1 }, 'autoDecide.runtimeQuestion.enabled'],
+    ['authoringChoice', true, 'autoDecide.authoringChoice'],
+    ['b1Leftover', null, 'autoDecide.b1Leftover'],
+    ['b1Leftover', [], 'autoDecide.b1Leftover'],
+    [
+      'b1Leftover',
+      { enabled: true, quietWindow: 'PT2H' },
+      'autoDecide.b1Leftover.quietWindow',
+    ],
+    [
+      'decisionIssue',
+      { enabled: false, extra: 1 },
+      'autoDecide.decisionIssue.extra',
+    ],
+    [
+      'worktreeRemnant',
+      { enabled: true, other: 'x' },
+      'autoDecide.worktreeRemnant.other',
+    ],
+  ];
+  for (const [cls, value, field] of cases) {
+    const config = {
+      autoDecide: { runtimeQuestion: { enabled: true }, [cls]: value },
+    };
+    const verdicts = autoDecideVerdicts(config);
+    const label = `${cls}: ${JSON.stringify(value)}`;
+    assert.equal(verdicts[cls].verdict, 'malformed', label);
+    assert.equal(verdicts[cls].field, field, label);
+    assert.equal(typeof verdicts[cls].reason, 'string', label);
+    const normalized = normalizePolicyConfig(config).autoDecide;
+    assert.equal(
+      normalized[cls as (typeof AUTO_DECIDE_CLASSES)[number]].enabled,
+      false,
+      label,
+    );
+    // Other classes keep their own verdicts.
+    if (cls !== 'runtimeQuestion') {
+      assert.equal(verdicts.runtimeQuestion.verdict, 'enabled', label);
+      assert.equal(normalized.runtimeQuestion.enabled, true, label);
+    }
+  }
+});
+
+test('autoDecide: a non-object root or an unknown root field makes every class malformed (#4956)', () => {
+  for (const value of [true, null, [], 'on', 1]) {
+    const config = {
+      autoDecide: value,
+    };
+    const verdicts = autoDecideVerdicts(config);
+    for (const cls of AUTO_DECIDE_CLASSES) {
+      assert.equal(verdicts[cls].verdict, 'malformed', JSON.stringify(value));
+      assert.equal(verdicts[cls].field, 'autoDecide', JSON.stringify(value));
+      assert.equal(
+        normalizePolicyConfig(config).autoDecide[cls].enabled,
+        false,
+      );
+    }
+  }
+  const unknownRoot = {
+    autoDecide: { decisionIssue: { enabled: true }, otherClass: {} },
+  };
+  const verdicts = autoDecideVerdicts(unknownRoot);
+  for (const cls of AUTO_DECIDE_CLASSES) {
+    assert.equal(verdicts[cls].verdict, 'malformed');
+    assert.equal(verdicts[cls].field, 'autoDecide.otherClass');
+  }
+  assert.match(verdicts.decisionIssue.reason ?? '', /unknown key otherClass/);
+  assert.equal(
+    normalizePolicyConfig(unknownRoot).autoDecide.decisionIssue.enabled,
+    false,
+  );
+});
+
+test('autoDecide: a malformed quietWindow makes only worktreeRemnant malformed (#4956)', () => {
+  for (const quietWindow of ['PT0H', 'P0D', 'PT0S', '2h', ' PT2H', '', 5]) {
+    const config = {
+      autoDecide: {
+        decisionIssue: { enabled: true },
+        worktreeRemnant: { enabled: true, quietWindow },
+      },
+    };
+    const label = JSON.stringify(quietWindow);
+    const verdicts = autoDecideVerdicts(config);
+    assert.equal(verdicts.worktreeRemnant.verdict, 'malformed', label);
+    assert.equal(
+      verdicts.worktreeRemnant.field,
+      'autoDecide.worktreeRemnant.quietWindow',
+      label,
+    );
+    assert.equal(verdicts.decisionIssue.verdict, 'enabled', label);
+    assert.equal(verdicts.b1Leftover.verdict, 'class-off', label);
+    const normalized = normalizePolicyConfig(config).autoDecide;
+    assert.deepEqual(
+      normalized.worktreeRemnant,
+      { enabled: false, quietWindow: 'PT2H' },
+      label,
+    );
+    assert.equal(normalized.decisionIssue.enabled, true, label);
+  }
+});
+
+test('autoDecide: a cap outside its range or a blank label name makes every class malformed (#4956)', () => {
+  const cases: [Record<string, unknown>, string][] = [
+    [{ maxPendingConfirmations: 0 }, 'autoDecide.maxPendingConfirmations'],
+    [{ maxPendingConfirmations: 101 }, 'autoDecide.maxPendingConfirmations'],
+    [{ maxPendingConfirmations: 2.5 }, 'autoDecide.maxPendingConfirmations'],
+    [{ maxPendingConfirmations: '10' }, 'autoDecide.maxPendingConfirmations'],
+    [{ maxPendingConfirmations: null }, 'autoDecide.maxPendingConfirmations'],
+    [{ maxDecisionsPerClaim: 0 }, 'autoDecide.maxDecisionsPerClaim'],
+    [{ maxDecisionsPerClaim: 21 }, 'autoDecide.maxDecisionsPerClaim'],
+    [{ maxDecisionsPerClaim: -3 }, 'autoDecide.maxDecisionsPerClaim'],
+    [{ confirmationLabelName: '' }, 'autoDecide.confirmationLabelName'],
+    [{ confirmationLabelName: ' \t ' }, 'autoDecide.confirmationLabelName'],
+    [{ confirmationLabelName: 7 }, 'autoDecide.confirmationLabelName'],
+  ];
+  for (const [fields, field] of cases) {
+    const config = {
+      autoDecide: {
+        decisionIssue: { enabled: true },
+        worktreeRemnant: { enabled: true, quietWindow: 'PT30M' },
+        maxDecisionsPerClaim: 5,
+        ...fields,
+      },
+    };
+    const label = JSON.stringify(fields);
+    const verdicts = autoDecideVerdicts(config);
+    for (const cls of AUTO_DECIDE_CLASSES) {
+      assert.equal(verdicts[cls].verdict, 'malformed', label);
+      assert.equal(verdicts[cls].field, field, label);
+    }
+    const normalized = normalizePolicyConfig(config).autoDecide;
+    for (const cls of AUTO_DECIDE_CLASSES) {
+      assert.equal(normalized[cls].enabled, false, label);
+    }
+    assert.equal(normalized.maxPendingConfirmations, 10, label);
+    assert.equal(normalized.maxDecisionsPerClaim, 3, label);
+    assert.equal(normalized.worktreeRemnant.quietWindow, 'PT2H', label);
+  }
+});
+
+test('autoDecide: a malformed value is malformed and normalizes to its default with no class enabled (#4990)', () => {
+  const defaults = {
+    decisionIssue: { enabled: false },
+    runtimeQuestion: { enabled: false },
+    authoringChoice: { enabled: false },
+    worktreeRemnant: { enabled: false, quietWindow: 'PT2H' },
+    b1Leftover: { enabled: false },
+    maxPendingConfirmations: 10,
+    maxDecisionsPerClaim: 3,
+    confirmationLabelName: 'status:needs-confirmation',
+  };
+  const quietWindowCases: Record<string, unknown>[] = [
+    { worktreeRemnant: { enabled: false, quietWindow: 'PT0S' } },
+    { worktreeRemnant: { quietWindow: 'PT0S' } },
+  ];
+  for (const autoDecide of quietWindowCases) {
+    const config = { autoDecide };
+    const label = JSON.stringify(autoDecide);
+    assert.deepEqual(
+      autoDecideVerdicts(config),
+      {
+        ...everyAutoDecideClass('class-off'),
+        worktreeRemnant: {
+          class: 'worktreeRemnant',
+          verdict: 'malformed',
+          field: 'autoDecide.worktreeRemnant.quietWindow',
+          reason:
+            'autoDecide.worktreeRemnant.quietWindow must be a positive ISO 8601 duration',
+        },
+      },
+      label,
+    );
+    assert.deepEqual(normalizePolicyConfig(config).autoDecide, defaults, label);
+  }
+  const rootCases: [Record<string, unknown>, string][] = [
+    [{ maxPendingConfirmations: 0 }, 'autoDecide.maxPendingConfirmations'],
+    [
+      { decisionIssue: { enabled: false }, maxPendingConfirmations: 0 },
+      'autoDecide.maxPendingConfirmations',
+    ],
+    [
+      { b1Leftover: { enabled: false }, maxDecisionsPerClaim: 21 },
+      'autoDecide.maxDecisionsPerClaim',
+    ],
+    [
+      { authoringChoice: { enabled: false }, confirmationLabelName: '  ' },
+      'autoDecide.confirmationLabelName',
+    ],
+    [
+      { runtimeQuestion: { enabled: false }, otherKey: 1 },
+      'autoDecide.otherKey',
+    ],
+  ];
+  for (const [autoDecide, field] of rootCases) {
+    const config = { autoDecide };
+    const label = JSON.stringify(autoDecide);
+    const verdicts = autoDecideVerdicts(config);
+    for (const cls of AUTO_DECIDE_CLASSES) {
+      assert.equal(verdicts[cls].verdict, 'malformed', `${label} ${cls}`);
+      assert.equal(verdicts[cls].field, field, `${label} ${cls}`);
+    }
+    assert.deepEqual(normalizePolicyConfig(config).autoDecide, defaults, label);
+  }
+});
+
+test('autoDecide: a maxPendingConfirmations of 1 and a maxDecisionsPerClaim of 20 normalize unchanged (#4990)', () => {
+  const config = {
+    autoDecide: {
+      decisionIssue: { enabled: true },
+      maxPendingConfirmations: 1,
+      maxDecisionsPerClaim: 20,
+    },
+  };
+  assert.deepEqual(autoDecideVerdicts(config), {
+    ...everyAutoDecideClass('class-off'),
+    decisionIssue: { class: 'decisionIssue', verdict: 'enabled' },
+  });
+  const normalized = normalizePolicyConfig(config).autoDecide;
+  assert.equal(normalized.maxPendingConfirmations, 1);
+  assert.equal(normalized.maxDecisionsPerClaim, 20);
+  assert.equal(normalized.decisionIssue.enabled, true);
+});
+
+test('autoDecide: a valid confirmationLabelName survives any sibling error (#4956)', () => {
+  const siblings: Record<string, unknown>[] = [
+    { otherClass: {} },
+    { maxPendingConfirmations: 0 },
+    { maxDecisionsPerClaim: 'many' },
+    { decisionIssue: { enabled: 'yes' } },
+    { worktreeRemnant: { quietWindow: 'PT0S' } },
+  ];
+  for (const sibling of siblings) {
+    const config = {
+      autoDecide: { ...sibling, confirmationLabelName: ' Auto Confirm ' },
+    };
+    assert.equal(
+      normalizePolicyConfig(config).autoDecide.confirmationLabelName,
+      ' Auto Confirm ',
+      JSON.stringify(sibling),
+    );
+  }
+  for (const confirmationLabelName of ['', '   ', 7, null]) {
+    assert.equal(
+      normalizePolicyConfig({ autoDecide: { confirmationLabelName } })
+        .autoDecide.confirmationLabelName,
+      'status:needs-confirmation',
+      JSON.stringify(confirmationLabelName),
+    );
+  }
+});
+
+test('autoDecide: a confirmation label that reuses another IDD label is reported per setting (#4956)', () => {
+  assert.deepEqual(findAutoDecideLabelCollisions({}), []);
+  assert.deepEqual(
+    findAutoDecideLabelCollisions({
+      autoDecide: { confirmationLabelName: ' Status:Needs-Decision ' },
+    }),
+    [
+      {
+        setting: 'labels.needsDecisionLabelName',
+        labelName: 'status:needs-decision',
+      },
+    ],
+  );
+  const config = {
+    autoDecide: { confirmationLabelName: 'hold' },
+    issueAuthoring: { authoringLabelName: 'HOLD' },
+    labels: {
+      authoringOnlyLabelName: ' hold ',
+      needsDecisionLabelName: 'Hold',
+      blockedByHumanLabelName: 'hold\t',
+      roadmapLabelName: 'hold',
+    },
+    approvalSignals: { readyLabelName: 'hOLD' },
+  };
+  const expected = [
+    { setting: 'issueAuthoring.authoringLabelName', labelName: 'HOLD' },
+    { setting: 'labels.authoringOnlyLabelName', labelName: ' hold ' },
+    { setting: 'labels.needsDecisionLabelName', labelName: 'Hold' },
+    { setting: 'labels.blockedByHumanLabelName', labelName: 'hold\t' },
+    { setting: 'labels.roadmapLabelName', labelName: 'hold' },
+    { setting: 'approvalSignals.readyLabelName', labelName: 'hOLD' },
+  ];
+  assert.deepEqual(findAutoDecideLabelCollisions(config), expected);
+  // An already normalized document gives the same answer.
+  assert.deepEqual(
+    findAutoDecideLabelCollisions(normalizePolicyConfig(config)),
+    expected,
+  );
+  assert.deepEqual(
+    findAutoDecideLabelCollisions({
+      autoDecide: { confirmationLabelName: 'idd:ready' },
+    }),
+    [{ setting: 'approvalSignals.readyLabelName', labelName: 'idd:ready' }],
+  );
+  assert.deepEqual(
+    findAutoDecideLabelCollisions({
+      autoDecide: { confirmationLabelName: 'status:needs-confirmation-2' },
+    }),
+    [],
+  );
+  // A blank configured name is compared as the default it normalizes to.
+  assert.deepEqual(
+    findAutoDecideLabelCollisions({
+      autoDecide: { confirmationLabelName: '  ' },
+      labels: { needsDecisionLabelName: 'status:needs-confirmation' },
+    }),
+    [
+      {
+        setting: 'labels.needsDecisionLabelName',
+        labelName: 'status:needs-confirmation',
+      },
+    ],
+  );
+});
+
+test('autoDecide: an inherited value counts as absent, so an inherited enabled true stays class-off (#4990)', () => {
+  // JSON.parse yields own properties only; these non-JSON inputs check that
+  // the readers agree with the Object.keys unknown-key checks.
+  const cases: [string, unknown][] = [
+    [
+      'inherited class',
+      { autoDecide: Object.create({ decisionIssue: { enabled: true } }) },
+    ],
+    [
+      'inherited enabled',
+      { autoDecide: { decisionIssue: Object.create({ enabled: true }) } },
+    ],
+    [
+      'inherited root',
+      Object.create({
+        autoDecide: {
+          decisionIssue: { enabled: true },
+          maxPendingConfirmations: 5,
+          confirmationLabelName: 'auto:confirm',
+          worktreeRemnant: { quietWindow: 'PT30M' },
+        },
+      }),
+    ],
+    [
+      'inherited caps, label, and class',
+      {
+        autoDecide: Object.create({
+          maxPendingConfirmations: 5,
+          maxDecisionsPerClaim: 7,
+          confirmationLabelName: 'auto:confirm',
+          worktreeRemnant: { enabled: true, quietWindow: 'PT30M' },
+        }),
+      },
+    ],
+    [
+      'inherited valid quietWindow',
+      {
+        autoDecide: {
+          worktreeRemnant: Object.create({ quietWindow: 'PT45M' }),
+        },
+      },
+    ],
+    [
+      'inherited malformed quietWindow',
+      {
+        autoDecide: { worktreeRemnant: Object.create({ quietWindow: 'PT0S' }) },
+      },
+    ],
+    [
+      'inherited malformed values',
+      {
+        autoDecide: Object.create({
+          maxPendingConfirmations: 0,
+          confirmationLabelName: '  ',
+          b1Leftover: { enabled: 'yes' },
+        }),
+      },
+    ],
+  ];
+  for (const [label, config] of cases) {
+    assert.deepEqual(
+      autoDecideVerdicts(config),
+      everyAutoDecideClass('class-off'),
+      label,
+    );
+    assert.deepEqual(
+      normalizePolicyConfig(config).autoDecide,
+      POLICY_DEFAULTS.autoDecide,
+      label,
+    );
+  }
 });

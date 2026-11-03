@@ -1137,6 +1137,90 @@
           }
         }
       }
+    },
+    "autoDecide": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Per-class switches, caps, and the confirmation label for auto-decided IDD stops (roadmap #4955). Repository-only: a user-global value is ignored and rejected by the user-global schema. A class acts only when its own `enabled` flag and `dangerouslyAutoDecide` are both `true`. An absent or malformed class stays off, and a malformed cap or label name turns every class off. This key changes no behavior by itself; later children read it. Default: every class off.",
+      "properties": {
+        "decisionIssue": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Auto-decide class for picking up a needs-decision issue. Default: off.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Turns the decisionIssue class on only when true. Default: false."
+            }
+          }
+        },
+        "runtimeQuestion": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Auto-decide class for a product, technical, or scope question while implementing a claimed issue. Default: off.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Turns the runtimeQuestion class on only when true. Default: false."
+            }
+          }
+        },
+        "authoringChoice": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Auto-decide class for an issue-authoring choice when nobody asked for a hearing. Default: off.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Turns the authoringChoice class on only when true. Default: false."
+            }
+          }
+        },
+        "worktreeRemnant": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Auto-decide class for another session's worktree left on this host. Default: off.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Turns the worktreeRemnant class on only when true. Default: false."
+            },
+            "quietWindow": {
+              "type": "string",
+              "pattern": "^(?=.*[1-9])P(?=\\d|T\\d)(?:\\d+D)?(?:T(?=\\d)(?:\\d+H)?(?:\\d+M)?(?:\\d+S)?)?$",
+              "description": "How long another session's worktree must have gone unmodified before this class may act, as a positive ISO 8601 duration. Default: PT2H. A zero or malformed value turns only this class off."
+            }
+          }
+        },
+        "b1Leftover": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Auto-decide class for B1 leftovers found before a claim: an unmerged local branch with no remote branch or pull request, or a worktree path that is not a registered worktree. Default: off.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Turns the b1Leftover class on only when true. Default: false."
+            }
+          }
+        },
+        "maxPendingConfirmations": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "description": "No new auto-decision is made while this many confirmations are pending. An integer from 1 to 100. Default: 10. An out-of-range value turns every class off."
+        },
+        "maxDecisionsPerClaim": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 20,
+          "description": "Most auto-decisions under one claim. For the authoring class the unit is one authoring set; for classes that act before a claim exists, it is one source issue. An integer from 1 to 20. Default: 3. An out-of-range value turns every class off."
+        },
+        "confirmationLabelName": {
+          "type": "string",
+          "pattern": "\\S",
+          "description": "GitHub label name of an auto-decide confirmation issue. Must contain a non-whitespace character; a blank name turns every class off. Discover's exclusion of this label comes in a later child of roadmap #4955. Default: status:needs-confirmation."
+        }
+      }
     }
   },
   "patternProperties": {

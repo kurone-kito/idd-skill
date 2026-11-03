@@ -2,6 +2,13 @@
   "$schema": "https://kurone-kito.github.io/idd-skill/schemas/policy.schema.json",
   "iddVersion": "0.17.0",
   "dangerouslyAutoDecide": true,
+  "autoDecide": {
+    "decisionIssue": { "enabled": true },
+    "runtimeQuestion": { "enabled": true },
+    "authoringChoice": { "enabled": true },
+    "worktreeRemnant": { "enabled": true },
+    "b1Leftover": { "enabled": true }
+  },
   "markerPrefix": "idd-skill",
   "mergePolicy": "fully_autonomous_merge",
   "mergePolicyAck": "fully_autonomous_merge",

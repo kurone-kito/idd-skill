@@ -2895,6 +2895,8 @@ test('CLI reviewer runs: fetches each day and reports duration and branch metric
       byConclusion: { success: 1, failure: 1, cancelled: 0, other: 1 },
       totalDurationMs: 700000,
       medianDurationMs: 200000,
+      unmeasuredRuns: 0,
+      unmeasuredRunIds: [],
       headBranches: 2,
       medianRunsPerHeadBranch: 2,
     },
@@ -2958,6 +2960,188 @@ test('CLI reviewer runs: uses the lower middle for even-sized medians', () => {
   const report = JSON.parse(result.stdout).reviewerRuns;
   assert.equal(report.medianDurationMs, 200000);
   assert.equal(report.medianRunsPerHeadBranch, 1);
+});
+
+// Run 32 has updated_at before run_started_at, which GitHub never corrects.
+// Measured durations are 100 s, 200 s and 300 s. Including run 32 (-1800 s)
+// would change both the total and the lower-middle median (200 s), so these
+// expectations prove it is left out of both.
+const INVERTED_TIMESTAMP_FIXTURE = {
+  '2026-10-01': [
+    {
+      id: 31,
+      status: 'completed',
+      conclusion: 'success',
+      head_branch: 'p',
+      run_started_at: '2026-10-01T00:00:00Z',
+      updated_at: '2026-10-01T00:01:40Z',
+    },
+    {
+      id: 32,
+      status: 'completed',
+      conclusion: 'failure',
+      head_branch: 'q',
+      run_started_at: '2026-10-01T02:00:00Z',
+      updated_at: '2026-10-01T01:30:00Z',
+    },
+    {
+      id: 33,
+      status: 'completed',
+      conclusion: 'success',
+      head_branch: 'p',
+      run_started_at: '2026-10-01T03:00:00Z',
+      updated_at: '2026-10-01T03:03:20Z',
+    },
+    {
+      id: 34,
+      status: 'completed',
+      conclusion: 'success',
+      head_branch: 'q',
+      run_started_at: '2026-10-01T04:00:00Z',
+      updated_at: '2026-10-01T04:05:00Z',
+    },
+  ],
+};
+
+test('CLI reviewer runs: a run with updated_at before run_started_at is unmeasured, not a failure', () => {
+  const result = runReviewerRunsWithFixture(
+    {
+      reviewerWorkflows: [REVIEWER_WORKFLOW_FIXTURE],
+      reviewerRunsByDay: INVERTED_TIMESTAMP_FIXTURE,
+    },
+    ['--reviewer-runs-from', '2026-10-01', '--reviewer-runs-to', '2026-10-01'],
+  );
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, '');
+  assert.deepEqual(JSON.parse(result.stdout), {
+    reviewerRuns: {
+      workflowPath: 'dynamic/agents/copilot-pull-request-reviewer',
+      workflowId: 283812949,
+      from: '2026-10-01',
+      to: '2026-10-01',
+      runs: 4,
+      completed: 4,
+      byConclusion: { success: 3, failure: 1, cancelled: 0, other: 0 },
+      totalDurationMs: 600000,
+      medianDurationMs: 200000,
+      unmeasuredRuns: 1,
+      unmeasuredRunIds: [32],
+      headBranches: 2,
+      medianRunsPerHeadBranch: 2,
+    },
+  });
+});
+
+test('CLI reviewer runs: a window whose only completed run is inverted has no total and no median', () => {
+  const result = runReviewerRunsWithFixture(
+    {
+      reviewerWorkflows: [REVIEWER_WORKFLOW_FIXTURE],
+      reviewerRunsByDay: {
+        '2026-10-01': [
+          {
+            id: 51,
+            status: 'completed',
+            conclusion: 'success',
+            head_branch: 'p',
+            run_started_at: '2026-10-01T02:00:00Z',
+            updated_at: '2026-10-01T01:30:00Z',
+          },
+        ],
+      },
+    },
+    ['--reviewer-runs-from', '2026-10-01', '--reviewer-runs-to', '2026-10-01'],
+  );
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, '');
+  assert.deepEqual(JSON.parse(result.stdout), {
+    reviewerRuns: {
+      workflowPath: 'dynamic/agents/copilot-pull-request-reviewer',
+      workflowId: 283812949,
+      from: '2026-10-01',
+      to: '2026-10-01',
+      runs: 1,
+      completed: 1,
+      byConclusion: { success: 1, failure: 0, cancelled: 0, other: 0 },
+      totalDurationMs: 0,
+      medianDurationMs: null,
+      unmeasuredRuns: 1,
+      unmeasuredRunIds: [51],
+      headBranches: 1,
+      medianRunsPerHeadBranch: 1,
+    },
+  });
+});
+
+test('CLI reviewer runs: a completed run with a missing or unparseable timestamp still fails', () => {
+  const cases = [
+    { run_started_at: null, updated_at: '2026-10-01T00:01:40Z' },
+    { run_started_at: undefined, updated_at: '2026-10-01T00:01:40Z' },
+    { run_started_at: 'not-a-date', updated_at: '2026-10-01T00:01:40Z' },
+    { run_started_at: '2026-10-01T00:00:00Z', updated_at: null },
+    { run_started_at: '2026-10-01T00:00:00Z', updated_at: undefined },
+    { run_started_at: '2026-10-01T00:00:00Z', updated_at: 'not-a-date' },
+  ];
+  for (const timestamps of cases) {
+    const result = runReviewerRunsWithFixture(
+      {
+        reviewerWorkflows: [REVIEWER_WORKFLOW_FIXTURE],
+        reviewerRunsByDay: {
+          '2026-10-01': [
+            {
+              id: 41,
+              status: 'completed',
+              conclusion: 'success',
+              head_branch: 'p',
+              ...timestamps,
+            },
+          ],
+        },
+      },
+      [
+        '--reviewer-runs-from',
+        '2026-10-01',
+        '--reviewer-runs-to',
+        '2026-10-01',
+      ],
+    );
+    assert.equal(result.status, 1, JSON.stringify(timestamps));
+    assert.match(
+      result.stderr,
+      /reviewer runs: completed run 41 has invalid run_started_at or updated_at values/,
+    );
+    assert.equal(result.stdout, '');
+  }
+});
+
+test('CLI reviewer runs: step summary lists each unmeasured run ID', () => {
+  const dir = mkdtempSync(
+    join(tmpdir(), 'idd-wave-audit-reviewer-unmeasured-'),
+  );
+  const summaryPath = join(dir, 'summary.md');
+  try {
+    const result = runReviewerRunsWithFixture(
+      {
+        reviewerWorkflows: [REVIEWER_WORKFLOW_FIXTURE],
+        reviewerRunsByDay: INVERTED_TIMESTAMP_FIXTURE,
+      },
+      [
+        '--reviewer-runs-from',
+        '2026-10-01',
+        '--reviewer-runs-to',
+        '2026-10-01',
+        '--step-summary',
+        summaryPath,
+      ],
+    );
+    assert.equal(result.status, 0, result.stderr);
+    const summary = readFileSync(summaryPath, 'utf8');
+    assert.match(
+      summary,
+      /^- Unmeasured runs: 1 \(run IDs: 32; updated_at precedes run_started_at/m,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('CLI reviewer runs: fails when a run has no head branch', () => {
@@ -3151,6 +3335,7 @@ test('CLI reviewer runs: step summary reports the created-run window', () => {
     assert.match(summary, /^## Copilot reviewer runs/m);
     assert.match(summary, /Runs: 1/);
     assert.match(summary, /Median duration: 100 seconds/);
+    assert.match(summary, /^- Unmeasured runs: 0$/m);
     assert.match(
       summary,
       /runs created in the range, not the runs of the pull requests merged in it/,

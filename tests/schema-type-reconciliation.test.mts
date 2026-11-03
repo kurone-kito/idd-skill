@@ -304,6 +304,16 @@ interface PolicyConfigFile {
     split?: { enabled?: boolean; maxCandidateFiles?: number };
     release?: { enabled?: boolean; requireChecklistPass?: true };
   };
+  autoDecide?: {
+    decisionIssue?: { enabled?: boolean };
+    runtimeQuestion?: { enabled?: boolean };
+    authoringChoice?: { enabled?: boolean };
+    worktreeRemnant?: { enabled?: boolean; quietWindow?: string };
+    b1Leftover?: { enabled?: boolean };
+    maxPendingConfirmations?: number;
+    maxDecisionsPerClaim?: number;
+    confirmationLabelName?: string;
+  };
   dangerouslyAutoDecide?: boolean;
   critiqueLoopProfile?: string;
   mergeHandoffActor?: string;
@@ -796,6 +806,7 @@ export const policyConfigKeys = [
   'orphanFirstPolicy',
   'skipIssueAuthorApprovalGate',
   'standingApprovals',
+  'autoDecide',
   'dangerouslyAutoDecide',
   'critiqueLoopProfile',
   'mergeHandoffActor',
@@ -3179,6 +3190,120 @@ test('user-global schema rejects standingApprovals in the base and overrides (#4
       context,
     ).length > 0,
     'expected user-global overrides to reject the repository-owned key',
+  );
+});
+
+const fullAutoDecide = {
+  decisionIssue: { enabled: true },
+  runtimeQuestion: { enabled: false },
+  authoringChoice: { enabled: true },
+  worktreeRemnant: { enabled: true, quietWindow: 'PT2H' },
+  b1Leftover: { enabled: false },
+  maxPendingConfirmations: 10,
+  maxDecisionsPerClaim: 3,
+  confirmationLabelName: 'status:needs-confirmation',
+};
+
+test('policy schema accepts the full autoDecide object and the cap bounds (#4956)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const accepted: Record<string, unknown>[] = [
+    fullAutoDecide,
+    {},
+    { maxPendingConfirmations: 1, maxDecisionsPerClaim: 1 },
+    { maxPendingConfirmations: 100, maxDecisionsPerClaim: 20 },
+    { worktreeRemnant: { quietWindow: 'P1DT30M' } },
+    { confirmationLabelName: ' needs confirmation ' },
+  ];
+  for (const autoDecide of accepted) {
+    assert.deepEqual(
+      validate({ ...policyConfigFixture, autoDecide }, schema),
+      [],
+      `expected ${JSON.stringify(autoDecide)} to validate`,
+    );
+  }
+});
+
+test('policy schema rejects malformed autoDecide values (#4956)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  // Each class repeats the unknown-key and boolean enabled rules (#4990).
+  const autoDecideClasses = [
+    'decisionIssue',
+    'runtimeQuestion',
+    'authoringChoice',
+    'worktreeRemnant',
+    'b1Leftover',
+  ];
+  const autoDecideProperties = (
+    schema as {
+      properties: {
+        autoDecide: { properties: Record<string, { type?: unknown }> };
+      };
+    }
+  ).properties.autoDecide.properties;
+  assert.deepEqual(
+    Object.keys(autoDecideProperties).filter(
+      (key) => autoDecideProperties[key].type === 'object',
+    ),
+    autoDecideClasses,
+    'every object-typed autoDecide property is a listed class',
+  );
+  const rejected: Record<string, unknown>[] = [
+    ...autoDecideClasses.flatMap((cls) => [
+      { ...fullAutoDecide, [cls]: { enabled: false, extra: 1 } },
+      { ...fullAutoDecide, [cls]: { enabled: 'true' } },
+    ]),
+    { ...fullAutoDecide, otherClass: { enabled: true } },
+    { ...fullAutoDecide, b1Leftover: { enabled: true, quietWindow: 'PT2H' } },
+    { ...fullAutoDecide, worktreeRemnant: { quietWindow: 'PT0S' } },
+    { ...fullAutoDecide, worktreeRemnant: { quietWindow: 'P0DT0H' } },
+    { ...fullAutoDecide, worktreeRemnant: { quietWindow: '2h' } },
+    { ...fullAutoDecide, maxPendingConfirmations: 0 },
+    { ...fullAutoDecide, maxPendingConfirmations: 101 },
+    { ...fullAutoDecide, maxPendingConfirmations: 2.5 },
+    { ...fullAutoDecide, maxDecisionsPerClaim: 0 },
+    { ...fullAutoDecide, maxDecisionsPerClaim: 21 },
+    { ...fullAutoDecide, maxDecisionsPerClaim: 2.5 },
+    { ...fullAutoDecide, confirmationLabelName: '' },
+    { ...fullAutoDecide, confirmationLabelName: '   ' },
+  ];
+  for (const autoDecide of rejected) {
+    assert.ok(
+      validate({ ...policyConfigFixture, autoDecide }, schema).length > 0,
+      `expected ${JSON.stringify(autoDecide)} to be rejected`,
+    );
+  }
+  assert.ok(
+    validate({ ...policyConfigFixture, autoDecide: true }, schema).length > 0,
+    'expected a non-object autoDecide to be rejected',
+  );
+});
+
+test('user-global schema rejects autoDecide in the base and overrides (#4956)', () => {
+  const schema = loadJson('schemas/user-global-config.schema.json');
+  const context = {
+    root: process.cwd(),
+    schemaPath: 'schemas/user-global-config.schema.json',
+  };
+  const autoDecide = { decisionIssue: { enabled: true } };
+  assert.ok(
+    validate({ autoDecide }, schema, '$', context).length > 0,
+    'expected the user-global base to reject the repository-only key',
+  );
+  assert.ok(
+    validate(
+      {
+        overrides: [
+          {
+            match: { repo: 'owner/repo' },
+            config: { autoDecide },
+          },
+        ],
+      },
+      schema,
+      '$',
+      context,
+    ).length > 0,
+    'expected user-global overrides to reject the repository-only key',
   );
 });
 

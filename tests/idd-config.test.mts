@@ -415,6 +415,35 @@ test('standingApprovals is repository-owned: a user-global value never reaches t
   );
 });
 
+test('autoDecide is repository-only: a user-global value never reaches the config (#4956)', () => {
+  withSandboxCwd(() =>
+    withUserGlobal(
+      '{"reviewPolicy":"copilot-advisory","autoDecide":{"decisionIssue":{"enabled":true},"confirmationLabelName":"global-label"}}',
+      undefined,
+      () => {
+        const config = loadIddConfig();
+        assert.deepEqual(config, { reviewPolicy: 'copilot-advisory' });
+        assert.deepEqual(
+          normalizePolicyConfig(config).autoDecide,
+          POLICY_DEFAULTS.autoDecide,
+        );
+      },
+    ),
+  );
+  withSandboxCwd((sandbox) => {
+    writeConfig(sandbox, '{"autoDecide":{"b1Leftover":{"enabled":true}}}');
+    withUserGlobal(
+      '{"autoDecide":{"decisionIssue":{"enabled":true},"maxDecisionsPerClaim":20}}',
+      undefined,
+      () => {
+        assert.deepEqual(loadIddConfig(), {
+          autoDecide: { b1Leftover: { enabled: true } },
+        });
+      },
+    );
+  });
+});
+
 test('under GITHUB_ACTIONS=true the user-global layers are never read (#3820)', () => {
   withSandboxCwd((sandbox) => {
     withUserGlobal('{"reviewPolicy":"global-choice"}', 'true', () => {

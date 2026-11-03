@@ -228,6 +228,45 @@
   // - false (default): provisional decision choices stay disabled.
   // "dangerouslyAutoDecide": false,
 
+  // Auto-decide classes (roadmap #4955), repository-only like the switch
+  // above. A class acts only when its enabled flag and dangerouslyAutoDecide
+  // are both true. A malformed class stays off, and a malformed cap or label
+  // name turns every class off.
+  // "autoDecide": {
+  //   // decisionIssue: picking up a needs-decision issue.
+  //   // - true: the class is on.
+  //   // - false (default): the issue waits for a person's decision.
+  //   "decisionIssue": { "enabled": false },
+  //   // runtimeQuestion: a question while implementing a claimed issue.
+  //   // - true: the class is on.
+  //   // - false (default): the session holds and asks a person.
+  //   "runtimeQuestion": { "enabled": false },
+  //   // authoringChoice: an authoring choice when nobody asked for a
+  //   // hearing.
+  //   // - true: the class is on.
+  //   // - false (default): the choice waits for a person.
+  //   "authoringChoice": { "enabled": false },
+  //   // worktreeRemnant: another session's worktree left on this host.
+  //   // - true: the class is on once the worktree has gone unmodified for
+  //   //   quietWindow, a positive ISO 8601 duration; PT2H is the default.
+  //   // - false (default): an operator recovers the worktree.
+  //   "worktreeRemnant": { "enabled": false, "quietWindow": "PT2H" },
+  //   // b1Leftover: an unmerged local branch with no remote branch or pull
+  //   // request, or an unregistered worktree path, found before a claim.
+  //   // - true: the class is on.
+  //   // - false (default): the claim stops for manual cleanup.
+  //   "b1Leftover": { "enabled": false },
+  //   // No new auto-decision while this many confirmations are pending; an
+  //   // integer from 1 to 100.
+  //   "maxPendingConfirmations": 10,
+  //   // Most auto-decisions under one claim; one authoring set for the
+  //   // authoring class, one source issue before a claim exists. An integer
+  //   // from 1 to 20.
+  //   "maxDecisionsPerClaim": 3,
+  //   // Label of an auto-decide confirmation issue; it must not be blank.
+  //   "confirmationLabelName": "status:needs-confirmation"
+  // },
+
   // Free text that names the selected critique-loop profile, for people. No
   // helper reads it. Default: omitted.
   // "critiqueLoopProfile": "default",
