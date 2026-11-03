@@ -6,24 +6,12 @@
 
 import { createHash } from 'node:crypto';
 import { loadIddConfig } from './idd-config.mts';
-import type { ParsedClaimMarker } from './marker-helpers.mts';
+import { parseForcedHandoffComment } from './marker-helpers.mts';
 import {
-  parseActivationNonceComment,
-  parseClaimComment,
-  parseForcedHandoffComment,
-  parseLegacyClaimComment,
-  parseLegacyReleaseComment,
-  parseReleaseComment,
-} from './marker-helpers.mts';
-import {
-  type ActiveClaimResolution,
-  filterTrustedClaimFamilyEvents,
-  isStaleByAge,
-  orderClaimEvents,
   readClaimStaleAgeMs,
-  resolveActiveClaimWithForcedHandoffTrace,
   resolveTrustedMarkerActors,
 } from './protocol-helpers.mts';
+import { buildVerifiedClaimLineage } from './provisional-claim-lineage.mts';
 import {
   type ProvisionalDecisionComment,
   type ProvisionalDecisionRecord,
@@ -202,8 +190,14 @@ export type ProvisionalDecisionCommandResult =
 
 interface ClaimFoldResult {
   readonly lineage: readonly VerifiedProvisionalDecisionClaim[];
-  readonly active: ParsedClaimMarker;
+  readonly active: {
+    readonly claimId: string;
+    readonly agentId: string;
+    readonly branch: string;
+  };
 }
+
+type ClaimFoldVerification = ClaimFoldResult | { readonly failure: string };
 
 interface CandidateInfo {
   readonly record: ProvisionalDecisionRecord;
@@ -236,12 +230,16 @@ function bodySha256(body: string): string {
   return createHash('sha256').update(body, 'utf8').digest('hex');
 }
 
+function normalizeRepository(repository: string): string {
+  return repository.trim().toLowerCase();
+}
+
 function sourceFromRead(
   request: RequestBase,
   read: ProvisionalDecisionSourceIssueRead,
 ): ProvisionalDecisionSource {
   return {
-    repository: request.repository,
+    repository: normalizeRepository(request.repository),
     issueNumber: request.issueNumber,
     snapshot: {
       title: read.title,
@@ -255,179 +253,56 @@ function normalizeLogin(login: string | null): string {
   return (login ?? '').trim().toLowerCase();
 }
 
-function claimEvents(
-  comments: readonly ProvisionalDecisionHistoryComment[],
-  trustedLogins: ReadonlySet<string>,
-) {
-  return comments.map((comment) => {
-    const login = normalizeLogin(comment.authorLogin);
-    const trusted = comment.trustedAuthor && trustedLogins.has(login);
-    return {
+function resolveClaimFold(
+  history: ProvisionalDecisionHistoryRead,
+): ClaimFoldVerification | null {
+  const config = loadIddConfig();
+  const trustedLogins = resolveTrustedMarkerActors({ config }).actors.map(
+    (login) => login.trim().toLowerCase(),
+  );
+  const trustedLoginSet = new Set(trustedLogins);
+  if (
+    history.comments.some((comment) => {
+      const login = normalizeLogin(comment.authorLogin);
+      return (
+        comment.trustedAuthor &&
+        login !== '' &&
+        trustedLoginSet.has(login) &&
+        Boolean(parseForcedHandoffComment(comment.body, comment.createdAt))
+      );
+    })
+  ) {
+    return null;
+  }
+
+  const result = buildVerifiedClaimLineage({
+    comments: history.comments.map((comment) => ({
       id: comment.id,
       url: comment.url,
       body: comment.body,
       createdAt: comment.createdAt,
-      author: { login: trusted ? login : `untrusted:${login}` },
-      // `classifyCommentEditState` requires an explicit, parseable edit state.
+      authorLogin: comment.authorLogin,
       lastEditedAt: comment.edited ? comment.createdAt : null,
-    };
+      trustedAuthor: comment.trustedAuthor,
+    })),
+    completeHistory: history.complete,
+    staleAgeMs: readClaimStaleAgeMs(config),
+    trustedMarkerLogins: trustedLogins,
   });
-}
-
-function startsClaimFamily(body: string): boolean {
-  return (
-    /^<!--\s*(?:claimed-by|unclaimed-by|activation-nonce)\s*:/iu.test(body) ||
-    /^\s*<!--\s*forced-handoff\s*:/iu.test(body)
+  if (result.status !== 'ok') return { failure: result.reason };
+  if (!result.active) return null;
+  const lineage = result.claims.map((claim) =>
+    claim.supersedes === 'none'
+      ? {
+          claimId: claim.claimId,
+          agentId: claim.agentId,
+          branch: claim.branch,
+          claimedAt: claim.claimedAt,
+          commentId: claim.commentId,
+        }
+      : claim,
   );
-}
-
-function resolveClaimFold(
-  history: ProvisionalDecisionHistoryRead,
-): ClaimFoldResult | null {
-  const config = loadIddConfig();
-  const trustedLogins = new Set(
-    resolveTrustedMarkerActors({ config }).actors.map((login) =>
-      login.trim().toLowerCase(),
-    ),
-  );
-  const allEvents = claimEvents(history.comments, trustedLogins);
-  const isTrustedAuthor = (login: string) =>
-    trustedLogins.has(login.trim().toLowerCase());
-  const trustedComments = history.comments.filter((comment) => {
-    const login = normalizeLogin(comment.authorLogin);
-    return comment.trustedAuthor && login !== '' && trustedLogins.has(login);
-  });
-
-  // A malformed or legacy trusted marker cannot safely be treated as an
-  // ordinary prose comment by the claim reducer.
-  for (const comment of trustedComments) {
-    const body = comment.body;
-    const createdAt = comment.createdAt;
-    if (
-      parseLegacyClaimComment(body, createdAt) ||
-      parseLegacyReleaseComment(body, createdAt)
-    ) {
-      return null;
-    }
-    if (
-      startsClaimFamily(body) &&
-      !parseClaimComment(body, createdAt) &&
-      !parseReleaseComment(body) &&
-      !parseActivationNonceComment(body, createdAt) &&
-      !parseForcedHandoffComment(body, createdAt)
-    ) {
-      return null;
-    }
-  }
-
-  let resolution: ActiveClaimResolution;
-  try {
-    const staleAgeMs = readClaimStaleAgeMs(config);
-    resolution = resolveActiveClaimWithForcedHandoffTrace(allEvents, {
-      isTrustedAuthor,
-      isStale: (activeCreatedAt, nextCreatedAt) =>
-        isStaleByAge(activeCreatedAt, nextCreatedAt, staleAgeMs),
-      // The default forced-handoff gate intentionally remains disabled.
-      onIgnoredForcedHandoff: () => {},
-    });
-  } catch {
-    return null;
-  }
-
-  // With the default-disabled gate, every trusted forced-handoff marker is
-  // ignored, including markers that do not match the active claim and hence
-  // would not trigger the reducer's callback.
-  if (
-    trustedComments.some((comment) =>
-      Boolean(parseForcedHandoffComment(comment.body, comment.createdAt)),
-    )
-  ) {
-    return null;
-  }
-  const active = resolution.activeClaim;
-  if (!active) return null;
-  if (!/^issue\/[0-9]+-[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(active.branch)) {
-    return null;
-  }
-
-  const filtered = filterTrustedClaimFamilyEvents(allEvents, isTrustedAuthor);
-  const ordered = orderClaimEvents(filtered);
-  const lineage: VerifiedProvisionalDecisionClaim[] = [];
-  let prior: { agentId: string; claimId: string } | null = null;
-  let priorTimestamp = '';
-  const seenClaimIds = new Set<string>();
-  const staleAgeMs = readClaimStaleAgeMs(config);
-
-  for (let index = 0; index < ordered.length; index += 1) {
-    const event = ordered[index];
-    const before = resolveActiveClaimWithForcedHandoffTrace(
-      ordered.slice(0, index),
-      {
-        isTrustedAuthor,
-        isStale: (activeCreatedAt, nextCreatedAt) =>
-          isStaleByAge(activeCreatedAt, nextCreatedAt, staleAgeMs),
-      },
-    ).activeClaim;
-    const after = resolveActiveClaimWithForcedHandoffTrace(
-      ordered.slice(0, index + 1),
-      {
-        isTrustedAuthor,
-        isStale: (activeCreatedAt, nextCreatedAt) =>
-          isStaleByAge(activeCreatedAt, nextCreatedAt, staleAgeMs),
-      },
-    ).activeClaim;
-    const beforeIdentity = before
-      ? { agentId: before.agentId, claimId: before.claimId }
-      : null;
-    const afterIdentity = after
-      ? { agentId: after.agentId, claimId: after.claimId }
-      : null;
-    const changed =
-      (beforeIdentity?.agentId ?? null) !== (afterIdentity?.agentId ?? null) ||
-      (beforeIdentity?.claimId ?? null) !== (afterIdentity?.claimId ?? null);
-    if (!changed || !after) {
-      if (changed && !after) prior = null;
-      continue;
-    }
-
-    const parsedClaim = parseClaimComment(
-      event.body ?? '',
-      event.createdAt ?? '',
-    );
-    if (parsedClaim?.supersedes !== 'none') return null;
-    if (!/^issue\/[0-9]+-[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(parsedClaim.branch)) {
-      return null;
-    }
-    if (seenClaimIds.has(parsedClaim.claimId)) return null;
-    seenClaimIds.add(parsedClaim.claimId);
-    lineage.push({
-      claimId: parsedClaim.claimId,
-      agentId: parsedClaim.agentId,
-      branch: parsedClaim.branch,
-      claimedAt: event.createdAt ?? '',
-      ...(parsedClaim.supersedes !== 'none'
-        ? { supersedes: parsedClaim.supersedes }
-        : {}),
-      commentId: String(event.id ?? ''),
-    });
-    prior = afterIdentity;
-    priorTimestamp = String(event.createdAt ?? '');
-  }
-
-  const last = lineage.at(-1);
-  if (
-    !last ||
-    !prior ||
-    prior.agentId !== active.agentId ||
-    prior.claimId !== active.claimId ||
-    last.agentId !== active.agentId ||
-    last.claimId !== active.claimId ||
-    last.claimedAt !== resolution.activeSince ||
-    priorTimestamp !== resolution.activeSince
-  ) {
-    return null;
-  }
-  return { lineage, active };
+  return { lineage, active: result.active };
 }
 
 function stableJson(value: unknown): string {
@@ -445,10 +320,16 @@ function contentComparable(record: ProvisionalDecisionRecord): unknown {
   const copy = structuredClone(record) as ProvisionalDecisionRecord;
   const mutable = copy as unknown as {
     claimLineage?: unknown;
-    source?: { snapshot?: { updatedAt?: unknown } };
+    source?: {
+      repository?: string;
+      snapshot?: { updatedAt?: unknown };
+    };
     event?: { type?: unknown; result?: { verifiedAt?: unknown } };
   };
   delete mutable.claimLineage;
+  if (mutable.source?.repository) {
+    mutable.source.repository = normalizeRepository(mutable.source.repository);
+  }
   if (mutable.source?.snapshot) delete mutable.source.snapshot.updatedAt;
   if (mutable.event?.type === 'work-completed' && mutable.event.result) {
     delete mutable.event.result.verifiedAt;
@@ -490,7 +371,7 @@ function recordIdFor(
   decisionGeneration: number,
   eventType: string,
 ): string {
-  const input = `${repository}|${issueNumber}|${bundleGeneration}|${decisionGeneration}|${eventType}`;
+  const input = `${normalizeRepository(repository)}|${issueNumber}|${bundleGeneration}|${decisionGeneration}|${eventType}`;
   return `prov-${createHash('sha256').update(input, 'utf8').digest('hex').slice(0, 32)}`;
 }
 
@@ -699,7 +580,7 @@ function plan(
 
 function gateFailure(
   request: ProvisionalDecisionCommandRequest,
-  active: ParsedClaimMarker,
+  active: ClaimFoldResult['active'],
   source: ProvisionalDecisionSource,
   replayed: ReplayedProvisionalDecision | null,
   verifiedAt: string,
@@ -908,6 +789,12 @@ export async function runProvisionalDecisionCommand(
       'recovery-hold',
       'active claim lineage could not be verified',
     );
+  if ('failure' in folded) {
+    return refused(
+      'recovery-hold',
+      `active claim lineage could not be verified: ${folded.failure}`,
+    );
+  }
 
   const completeRecords = history.comments.flatMap((comment) => {
     if (!comment.trustedAuthor || comment.edited) return [];
@@ -918,6 +805,7 @@ export async function runProvisionalDecisionCommand(
     .filter(({ record }) => record.event.type === 'rework-authored')
     .map(({ record }) => record.recordId);
   if (
+    request.verifiedReworkRoadmaps.length !== reworkRecordIds.length ||
     reworkRecordIds.some(
       (recordId) =>
         request.verifiedReworkRoadmaps.filter(
@@ -1048,6 +936,23 @@ export async function runProvisionalDecisionCommand(
     pullRequest,
   );
   const recordId = candidateInfo.record.recordId;
+  if (candidateInfo.parseIssues.length) {
+    const gateError = gateFailure(
+      request,
+      folded.active,
+      source,
+      located,
+      verifiedAt,
+      history,
+      pullRequest,
+    );
+    if (gateError) return refused('fix-input', gateError, recordId);
+    return refused(
+      'fix-input',
+      `candidate record failed schema parsing: ${candidateInfo.parseIssues.join(', ')}`,
+      recordId,
+    );
+  }
   const sameIdComments = rawRecordMatches(history.comments, recordId);
   if (sameIdComments.length > 1) {
     return refused(
@@ -1164,13 +1069,6 @@ export async function runProvisionalDecisionCommand(
     pullRequest,
   );
   if (gateError) return refused('fix-input', gateError, recordId);
-  if (candidateInfo.parseIssues.length) {
-    return refused(
-      'fix-input',
-      `candidate record failed schema parsing: ${candidateInfo.parseIssues.join(', ')}`,
-      recordId,
-    );
-  }
 
   const resultPlan = createPlan(
     candidateInfo.record,

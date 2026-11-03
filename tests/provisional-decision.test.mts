@@ -259,6 +259,25 @@ test('plans a valid selection with its exact candidate and performs no writes', 
   assert.equal(result.plan.candidateRecord.claimLineage[0]?.branch, branch);
 });
 
+test('repository casing keeps record identity stable and reconciles stored records', async () => {
+  const { store, record } = await selectedRecord();
+  const storedRecord = {
+    ...record,
+    source: { ...record.source, repository: repository.toUpperCase() },
+  } as ProvisionalDecisionRecord;
+  store.history = {
+    ...store.history,
+    comments: [...store.history.comments, selectionComment(storedRecord)],
+  };
+
+  const result = await runProvisionalDecisionCommand(
+    request({ repository: repository.toUpperCase() }),
+    store,
+  );
+  assert.equal(result.state, 'reconciled', JSON.stringify(result));
+  assert.equal(result.recordId, record.recordId);
+});
+
 test('does not call a throwing dangerouslyAutoDecide reader and keeps branch evidence in lineage', async () => {
   const store = new MemoryStore();
   const result = await runProvisionalDecisionCommand(request(), store);
@@ -380,6 +399,31 @@ test('a rework-authored history record without verified roadmap evidence holds b
   assert.deepEqual(store.labelCalls, []);
 });
 
+test('verified rework evidence without a matching history record holds before replay', async () => {
+  const { store, record } = await selectedRecord();
+  const result = await runProvisionalDecisionCommand(
+    request({
+      verifiedReworkRoadmaps: [
+        {
+          recordId: `prov-${'d'.repeat(32)}`,
+          sourceBefore: record.source,
+          sourceAfter: record.source,
+          roadmapIssueNumber: issueNumber,
+          roadmapMarkerId: 'marker-extra',
+          authoringSetId: 'set-extra',
+          url: `https://github.com/${repository}/issues/${issueNumber}`,
+          publishedCommentId: 'extra-publication',
+          publishedAt: '2026-11-03T11:00:03Z',
+        },
+      ],
+    }),
+    store,
+  );
+  assertRefused(result, 'recovery-hold');
+  if (result.state === 'refused')
+    assert.match(result.reason ?? '', /verified rework evidence/u);
+});
+
 test('missing pullRequestUrl is rejected before any step-0 read', async () => {
   const store = new MemoryStore();
   const result = await runProvisionalDecisionCommand(
@@ -467,6 +511,26 @@ test('invalid candidate option shape returns fix-input after passing prechecks',
     assert.match(result.reason ?? '', /schema parsing/u);
 });
 
+test('malformed candidate takes step 5 before same-record recovery', async () => {
+  const { store, record } = await selectedRecord();
+  store.history = {
+    ...store.history,
+    comments: [
+      ...store.history.comments,
+      selectionComment(record, '3', '2026-11-03T11:00:02Z', {
+        trustedAuthor: false,
+      }),
+    ],
+  };
+  const result = await runProvisionalDecisionCommand(
+    request({ selectedOption: { id: 'broken' } as never }),
+    store,
+  );
+  assertRefused(result, 'fix-input');
+  if (result.state === 'refused')
+    assert.match(result.reason ?? '', /schema parsing/u);
+});
+
 test('the claim fold rejects trusted ignored handoffs, stale takeovers, and malformed lineage', async (t) => {
   await t.test('ignored non-active forced handoff', async () => {
     const handoff = renderForcedHandoffComment({
@@ -527,6 +591,26 @@ test('the claim fold rejects trusted ignored handoffs, stale takeovers, and malf
     const store = new MemoryStore();
     store.history = baseHistory([
       comment('4', '<!-- claimed-by: broken -->', '2026-11-03T11:00:03Z'),
+    ]);
+    assertRefused(
+      await runProvisionalDecisionCommand(request(), store),
+      'recovery-hold',
+    );
+  });
+
+  await t.test('edited trusted release marker', async () => {
+    const store = new MemoryStore();
+    store.history = baseHistory([
+      comment(
+        '4',
+        renderUnclaimedByMarker({
+          agentId: 'codex-test-agent',
+          claimId,
+          timestamp: '2026-11-03T11:00:03Z',
+        }),
+        '2026-11-03T11:00:03Z',
+        { edited: true },
+      ),
     ]);
     assertRefused(
       await runProvisionalDecisionCommand(request(), store),
