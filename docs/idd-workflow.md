@@ -906,8 +906,9 @@ Provisional decisions are available only when a repository explicitly
 sets `dangerouslyAutoDecide: true` in trusted repository policy. The
 setting defaults to `false` and does not grant credentials, scope,
 approval, permission, or a waiver of the normal claim, safety, CI,
-review, branch, or merge gates. The IDD source repository keeps this
-feature disabled until a separate decision enables it.
+review, branch, or merge gates. Each repository decides whether to
+enable the feature; the IDD source repository records its own choice in
+its `AGENTS.md`.
 
 Before provisional work starts, persist a canonical decision record on
 the source issue. Its body begins with
