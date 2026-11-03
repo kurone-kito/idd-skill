@@ -1530,6 +1530,25 @@ the recipe by hand. Save it as
 - `<confirmation-label-name>`: this repository's actual configured
   `autoDecide.confirmationLabelName` value (the distributed default
   `status:needs-confirmation` if unconfigured), on the same terms.
+- Escaping and refused characters, for the label-name placeholders
+  above: each name sits inside a single-quoted GitHub Actions expression
+  string literal in the `if:` condition, so write a single quote in a
+  name as two single quotes. For a label named `don't-merge`, replace
+  the placeholder with `don''t-merge`, so the literal reads
+  `'don''t-merge'`. Do not double it again for YAML: the `if: |-` block
+  scalar adds no quoting of its own. A name that contains a newline or
+  any other control character (U+0000 to U+001F or U+007F to U+009F),
+  or a Unicode line separator (U+2028) or paragraph separator (U+2029),
+  cannot be used in this recipe. An expression string literal has no
+  escape for such a character, and a line break can end the `if: |-`
+  block early and add YAML keys to the workflow (raised in the review
+  of pull request `#2684` on 2026-09-07). `--substitute` follows both
+  rules when it generates the guard: it doubles each single quote, and
+  it stops with an error and writes no file when a name it would write
+  into the guard has one of these characters. A hand-copied recipe and
+  a generated guard therefore agree on every name the generator covers.
+  The same rules apply to a label name or prefix added for the
+  extension described after this list.
 - `<labeler-bot-login-1>`, `<labeler-bot-login-2>`, ...: the login(s) of
   whichever semantic issue auto-labeler(s) this repository actually
   runs. Build the complete list with a full-history sweep, not a single
