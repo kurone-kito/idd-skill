@@ -20,6 +20,7 @@ import {
   carrierSetSnapshot,
   checkCarrierReviewResult,
   checkReviewResult,
+  checkTrustedConfirmationLabel,
   generateChildPublicationIds,
   generatePublicationIds,
   injectPublicationLine,
@@ -99,6 +100,7 @@ if (args[0] === 'label' && args[1] === 'create') {
   out('');
 }
 if (args[0] === 'issue' && args[1] === 'create') {
+  if (state.failCreate) fail('gh: HTTP 502 Bad Gateway (create)');
   const body = fs.readFileSync(args[args.indexOf('--body-file') + 1], 'utf8');
   const labels = [];
   args.forEach((arg, index) => { if (arg === '--label') labels.push(args[index + 1]); });
@@ -212,6 +214,17 @@ if (path === 'user') {
     ].join('\n')], { stdio: 'inherit' });
   }
   out(user + '\n');
+}
+// The default branch and the trusted policy at it (#4964). The stub ignores
+// --jq, so each prints what the jq filter would.
+if (path === 'repos/o/r') {
+  if (state.defaultBranchFails) fail('gh: HTTP 502 Bad Gateway (repository)');
+  out('main\n');
+}
+if (path === 'repos/o/r/contents/.github/idd/config.json') {
+  if (state.trustedConfigError) fail(state.trustedConfigError);
+  if (state.trustedConfig === null || state.trustedConfig === undefined) fail('gh: Not Found (HTTP 404)');
+  out(Buffer.from(JSON.stringify(state.trustedConfig), 'utf8').toString('base64') + '\n');
 }
 let match;
 if ((match = /^repos\/o\/r\/issues\/(\d+)\/comments$/.exec(path))) {
@@ -328,8 +341,10 @@ if ((match = /^repos\/o\/r\/collaborators\/([^/]+)\/permission$/.exec(path))) {
   out({ permission: level === 'maintain' ? 'write' : level, role_name: level, user: { login: decodeURIComponent(match[1]) } });
 }
 if ((match = /^repos\/o\/r\/labels\/(.+)$/.exec(path))) {
-  const name = decodeURIComponent(match[1]);
-  if (state.labels.includes(name)) out({ name });
+  // GitHub finds a label without case and returns the name it stores.
+  const name = decodeURIComponent(match[1]).toLowerCase();
+  const stored = state.labels.find((label) => label.toLowerCase() === name);
+  if (stored !== undefined) out({ name: stored });
   fail('gh: Not Found (HTTP 404)');
 }
 fail('unexpected gh api call: ' + args.join(' '));
@@ -407,6 +422,14 @@ function setup(
     failReadsAfterRemove?: boolean;
     mutateBodyOnSweep?: string;
     retiredJournalIssues?: unknown;
+    failCreate?: boolean;
+    /** The policy document at the default branch; absent (404) when unset. */
+    trustedConfig?: unknown;
+    /** A read error of the trusted policy, instead of a document or a 404. */
+    trustedConfigError?: string;
+    defaultBranchFails?: boolean;
+    /** autoDecide.confirmationLabelName of the repository policy file. */
+    confirmationLabelName?: string;
   } = {},
 ): Fixture {
   const dir = mkdtempSync(join(tmpdir(), 'idd-publish-authoring-hold-test-'));
@@ -433,6 +456,11 @@ function setup(
   }
   if (options.authoringOnlyLabelName !== undefined) {
     config.labels = { authoringOnlyLabelName: options.authoringOnlyLabelName };
+  }
+  if (options.confirmationLabelName !== undefined) {
+    config.autoDecide = {
+      confirmationLabelName: options.confirmationLabelName,
+    };
   }
   writeFileSync(
     join(work, '.github/idd/config.json'),
@@ -473,6 +501,10 @@ function setup(
       dropAuthoringOnlyOnRemove: options.dropAuthoringOnlyOnRemove === true,
       failReadsAfterRemove: options.failReadsAfterRemove === true,
       mutateBodyOnSweep: options.mutateBodyOnSweep ?? '',
+      failCreate: options.failCreate === true,
+      trustedConfig: options.trustedConfig ?? null,
+      trustedConfigError: options.trustedConfigError ?? '',
+      defaultBranchFails: options.defaultBranchFails === true,
       removed: false,
       readsFail: false,
       loadControlModule: pathToFileURL(
@@ -559,12 +591,14 @@ function files(
   ];
 }
 
-/** The write calls in the gh log, in order. */
+/** The write calls in the gh log, in order. A `--method GET` call (the trusted
+ * policy read, #4964) is a read. */
 function writes(log: { args: string[] }[]): string[] {
   return log
     .filter(
       (entry) =>
-        entry.args.includes('--method') ||
+        (entry.args.includes('--method') &&
+          entry.args[entry.args.indexOf('--method') + 1] !== 'GET') ||
         entry.args.includes('-X') ||
         (['label', 'issue'].includes(entry.args[0] ?? '') &&
           !['view', 'list'].includes(entry.args[1] ?? '')),
@@ -4735,6 +4769,745 @@ test('CLI: a marker hosted on the child that names another target stops before m
     assert.equal(report.failedStep, 'member');
     assert.match(report.reason, /owner-marker replay failed/);
     assert.equal(writeKinds(fixture).includes('member'), false);
+  } finally {
+    fixture.restore();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Auto-decide confirmation issue (#4964). It is published with the authoring
+// label and the confirmation label after a trusted-name check of the label,
+// and then the carrier release removes only the authoring label.
+// ---------------------------------------------------------------------------
+
+const CONFIRMATION_TITLE = 'Confirm the auto-decided runtime question';
+const CONFIRMATION_LABELS = ['status:authoring', 'status:needs-confirmation'];
+
+/** A confirmation draft. The record marker comes first, because the command
+ * injects the publication line above it; the source is in o/r. */
+function confirmationDraft(): string {
+  return [
+    '<!-- idd-skill-auto-decision: class=runtimeQuestion; source=o/r#4972; claim=claim-1; set=none; decision=dec-1 -->',
+    '',
+    '## Stop',
+    '',
+    'The run paused on a question.',
+    '',
+    '## Options',
+    '',
+    "### Keep today's behavior",
+    '',
+    'Cost: the run waits for a person.',
+    '',
+    '### Proceed with the change',
+    '',
+    'Cost: a small risk of rework.',
+    '',
+    '## Chosen option',
+    '',
+    'Proceed with the change',
+    '',
+    '## How to undo',
+    '',
+    'Revert the commit.',
+    '',
+    '## Question',
+    '',
+    'Question: Closing this issue confirms the choice; a comment naming another option asks for rework.',
+  ].join('\n');
+}
+
+/** The arguments of one confirmation publish, without --apply. */
+function confirmationArgs(
+  fixture: Fixture,
+  body = confirmationDraft(),
+): string[] {
+  const path = join(fixture.dir, 'confirmation.md');
+  writeFileSync(path, body);
+  return [
+    '--shape',
+    'confirmation',
+    '--title',
+    CONFIRMATION_TITLE,
+    '--body-file',
+    path,
+    '--owner',
+    'o',
+    '--repo',
+    'r',
+    '--marker-prefix',
+    'idd-skill',
+  ];
+}
+
+/** One confirmation apply, with both labels already in the repository. */
+function confirmationRun(
+  options: Parameters<typeof setup>[0] = {},
+): ReleaseRun {
+  const fixture = setup({ labels: [...CONFIRMATION_LABELS], ...options });
+  const result = fixture.run([...confirmationArgs(fixture), '--apply']);
+  return {
+    fixture,
+    status: result.status,
+    report: JSON.parse(result.stdout),
+  };
+}
+
+/** The detail of one named step of a report. */
+function stepDetail(
+  report: { steps: { step: string; detail?: unknown }[] },
+  name: string,
+): Record<string, unknown> | undefined {
+  return report.steps.find((step) => step.step === name)?.detail as
+    | Record<string, unknown>
+    | undefined;
+}
+
+/** The mode of each owner marker on the new issue, in order. */
+function ownerModes(fixture: Fixture): string[] {
+  return fixture
+    .state()
+    .comments.filter(
+      (comment) =>
+        comment.issue === NEW_ISSUE &&
+        comment.body.includes('idd-skill-authoring-owner:'),
+    )
+    .map((comment) => /mode=([a-z-]+);/.exec(comment.body)?.[1] ?? '');
+}
+
+test('lint args and labels for a confirmation issue: the authoring and confirmation labels, and no bucket', () => {
+  assert.deepEqual(
+    resolvePublishLabels({}, 'ready', 'confirmation'),
+    CONFIRMATION_LABELS,
+  );
+  assert.deepEqual(
+    resolvePublishLabels(
+      { autoDecide: { confirmationLabelName: 'status:confirm-me' } },
+      'ready',
+      'confirmation',
+    ),
+    ['status:authoring', 'status:confirm-me'],
+  );
+  const args = buildLintArgs({
+    shape: 'confirmation',
+    title: 't',
+    bodyFile: 'b.md',
+    markerPrefix: 'idd-skill',
+    currentRepo: 'o/r',
+    bucket: 'ready',
+    labels: CONFIRMATION_LABELS,
+  });
+  assert.deepEqual(args.slice(0, 3), [
+    '--shape',
+    'confirmation',
+    '--new-issue',
+  ]);
+  assert.deepEqual(args.slice(args.indexOf('--current-repo'), -4), [
+    '--current-repo',
+    'o/r',
+  ]);
+  assert.ok(!args.includes('--expect-bucket'));
+  assert.deepEqual(args.slice(-4), [
+    '--label',
+    'status:authoring',
+    '--label',
+    'status:needs-confirmation',
+  ]);
+});
+
+test('trusted-name check: an absent trusted file means the default name, and each refusal row names its cause', () => {
+  const reads = (overrides: {
+    branch?: string | null;
+    trusted?: unknown;
+    trustedError?: string;
+    stored?: string | null;
+    storedError?: string;
+  }) => {
+    const refs: string[] = [];
+    return {
+      refs,
+      reads: {
+        readDefaultBranch: () =>
+          overrides.branch === undefined ? 'main' : overrides.branch,
+        readTrustedPolicy: (_owner: string, _repo: string, ref: string) => {
+          refs.push(ref);
+          if (overrides.trustedError !== undefined) {
+            throw new Error(overrides.trustedError);
+          }
+          return overrides.trusted === undefined ? null : overrides.trusted;
+        },
+        readStoredLabel: () => {
+          if (overrides.storedError !== undefined) {
+            throw new Error(overrides.storedError);
+          }
+          return overrides.stored === undefined ? null : overrides.stored;
+        },
+      },
+    };
+  };
+  const input = {
+    owner: 'o',
+    repo: 'r',
+    config: {},
+    name: 'status:needs-confirmation',
+  };
+
+  const absent = reads({});
+  const passed = checkTrustedConfirmationLabel(input, absent.reads);
+  assert.equal(passed.problem, null);
+  assert.deepEqual(absent.refs, ['main']);
+  assert.deepEqual(passed.detail, {
+    name: 'status:needs-confirmation',
+    trustedRef: 'main',
+    trustedSource: 'absent',
+    trustedName: 'status:needs-confirmation',
+    collisions: [],
+    storedName: null,
+  });
+
+  const present = checkTrustedConfirmationLabel(
+    input,
+    reads({
+      trusted: {
+        autoDecide: { confirmationLabelName: 'status:needs-confirmation' },
+      },
+      stored: 'status:needs-confirmation',
+    }).reads,
+  );
+  assert.equal(present.problem, null);
+  assert.equal(present.detail.trustedSource, 'policy');
+  assert.equal(present.detail.storedName, 'status:needs-confirmation');
+
+  const rows: [
+    string,
+    ReturnType<typeof checkTrustedConfirmationLabel>,
+    RegExp,
+  ][] = [
+    [
+      'an unresolved default branch',
+      checkTrustedConfirmationLabel(input, reads({ branch: null }).reads),
+      /default branch of o\/r cannot be resolved/,
+    ],
+    [
+      'an unreadable trusted policy',
+      checkTrustedConfirmationLabel(
+        input,
+        reads({ trustedError: 'HTTP 403' }).reads,
+      ),
+      /trusted policy of o\/r at main cannot be read.*HTTP 403/,
+    ],
+    [
+      'a trusted name that differs',
+      checkTrustedConfirmationLabel(
+        input,
+        reads({
+          trusted: {
+            autoDecide: { confirmationLabelName: 'status:confirm-me' },
+          },
+        }).reads,
+      ),
+      /differs from "status:confirm-me", the trusted name at main/,
+    ],
+    [
+      'a renamed label in the repository policy file',
+      checkTrustedConfirmationLabel(
+        {
+          ...input,
+          config: { autoDecide: { confirmationLabelName: 'status:renamed' } },
+          name: 'status:renamed',
+        },
+        reads({}).reads,
+      ),
+      /"status:renamed" of the repository policy file differs/,
+    ],
+    [
+      'a trusted collision',
+      checkTrustedConfirmationLabel(
+        input,
+        reads({
+          trusted: {
+            labels: { needsDecisionLabelName: 'status:needs-confirmation' },
+          },
+        }).reads,
+      ),
+      /collides with labels\.needsDecisionLabelName \(status:needs-confirmation, trusted policy\)/,
+    ],
+    [
+      'a stored label in another letter case',
+      checkTrustedConfirmationLabel(
+        input,
+        reads({ stored: 'Status:Needs-Confirmation' }).reads,
+      ),
+      /stores the confirmation label as "Status:Needs-Confirmation", which differs in letter case/,
+    ],
+    [
+      'an unreadable stored label',
+      checkTrustedConfirmationLabel(
+        input,
+        reads({ storedError: 'HTTP 502' }).reads,
+      ),
+      /cannot read the label "status:needs-confirmation": HTTP 502/,
+    ],
+  ];
+  for (const [name, result, pattern] of rows) {
+    assert.match(result.problem ?? '', pattern, name);
+  }
+});
+
+test('CLI: a confirmation dry run reports the labels, the lint, the trusted-name check and the release steps, and writes nothing', () => {
+  const fixture = setup({ labels: ['status:authoring'] });
+  try {
+    // A user-global label name is never read: the trusted read has no
+    // user-global fallback, and the labels come from the repository file.
+    const globalDir = join(fixture.dir, 'home', '.config', 'idd-skill');
+    mkdirSync(globalDir, { recursive: true });
+    writeFileSync(
+      join(globalDir, 'config.json'),
+      JSON.stringify({
+        autoDecide: { confirmationLabelName: 'global:confirm' },
+      }),
+    );
+    const result = fixture.run(confirmationArgs(fixture));
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.mode, 'dry-run');
+    assert.equal(report.outcome, 'planned');
+    assert.deepEqual(report.labels, CONFIRMATION_LABELS);
+    const lint = stepDetail(report, 'lint') as { args: string[] };
+    assert.deepEqual(lint.args.slice(0, 3), [
+      '--shape',
+      'confirmation',
+      '--new-issue',
+    ]);
+    assert.deepEqual(lint.args.slice(-4), [
+      '--label',
+      'status:authoring',
+      '--label',
+      'status:needs-confirmation',
+    ]);
+    assert.deepEqual(stepDetail(report, 'confirmation-label'), {
+      name: 'status:needs-confirmation',
+      trustedRef: 'main',
+      trustedSource: 'absent',
+      trustedName: 'status:needs-confirmation',
+      collisions: [],
+      storedName: null,
+    });
+    assert.deepEqual(stepDetail(report, 'labels'), {
+      labels: CONFIRMATION_LABELS,
+      create: ['status:needs-confirmation'],
+    });
+    assert.deepEqual(stepDetail(report, 'confirmation-release'), {
+      steps: [
+        'release-preflight',
+        'release-guard',
+        'preconditions',
+        'heartbeat',
+        'label-removal',
+        'release-complete',
+        'closing-sweep',
+      ],
+    });
+    const contents = fixture
+      .log()
+      .find((entry) =>
+        entry.args.includes('repos/o/r/contents/.github/idd/config.json'),
+      );
+    assert.ok(
+      contents?.args.includes('ref=main'),
+      'read at the default branch',
+    );
+    assert.deepEqual(writeKinds(fixture), []);
+    assert.deepEqual(writes(fixture.log()), []);
+    assert.deepEqual(fixture.state().comments, []);
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('CLI: a confirmation apply creates both labels on the issue, then removes only the authoring label and ends at release-complete', () => {
+  const fixture = setup({ labels: ['status:authoring'] });
+  try {
+    const result = fixture.run([...confirmationArgs(fixture), '--apply']);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.outcome, 'published');
+    assert.equal(report.journalState, 'member');
+    assert.equal(report.release.state, 'released');
+    assert.equal(report.release.failedStep, null);
+    assert.deepEqual(writeKinds(fixture), [
+      'label',
+      'journal-pending',
+      'create status:authoring,status:needs-confirmation',
+      'identity-attach',
+      'owner-marker',
+      'member',
+      'owner-marker:release',
+      'owner-marker:release-guard',
+      'owner-marker:heartbeat',
+      'remove-label',
+      'owner-marker:release-complete',
+    ]);
+    assert.deepEqual(labelsOf(fixture), ['status:needs-confirmation']);
+    assert.equal(ownerModes(fixture).at(-1), 'release-complete');
+    const created = fixture.state().issues[String(NEW_ISSUE)] as {
+      body: string;
+    };
+    assert.match(created.body, /^<!-- idd-skill-authoring-publication: /);
+    assert.equal(
+      fixture.log().some((entry) => entry.args.includes('close')),
+      false,
+    );
+    assert.equal(report.release.sweeps.length, 3);
+    assert.equal(report.release.backlog.length, 3);
+    for (const entry of report.release.backlog) {
+      assert.equal(entry.count, null);
+      assert.match(entry.detail, /^not counted: /);
+    }
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('CLI: a confirmation issue takes no --anchor, no --review-result, and only --bucket ready, before any gh call', () => {
+  const fixture = setup({ labels: [...CONFIRMATION_LABELS] });
+  try {
+    const review = join(fixture.dir, 'review.json');
+    writeFileSync(review, JSON.stringify({ completed: true }));
+    const extras = [
+      ['--anchor', 'o/r#4000'],
+      ['--review-result', review],
+      ['--bucket', 'needs-decision'],
+      ['--bucket', 'blocked-by-human'],
+    ];
+    for (const extra of extras) {
+      const result = fixture.run([
+        ...confirmationArgs(fixture),
+        ...extra,
+        '--apply',
+      ]);
+      assert.equal(result.status, 2, extra.join(' '));
+    }
+    const ready = fixture.run([
+      ...confirmationArgs(fixture),
+      '--bucket',
+      'ready',
+    ]);
+    assert.equal(ready.status, 0, ready.stderr);
+    assert.deepEqual(writes(fixture.log()), []);
+  } finally {
+    fixture.restore();
+  }
+});
+
+const CONFIRMATION_TRUSTED_REFUSALS: {
+  name: string;
+  options: Parameters<typeof setup>[0];
+  reason: RegExp;
+}[] = [
+  {
+    name: 'an unresolved default branch',
+    options: { defaultBranchFails: true },
+    reason: /default branch of o\/r cannot be resolved/,
+  },
+  {
+    name: 'an unreadable trusted policy',
+    options: {
+      trustedConfigError:
+        'gh: Resource not accessible by integration (HTTP 403)',
+    },
+    reason: /trusted policy of o\/r at main cannot be read/,
+  },
+  {
+    name: 'a trusted name that differs',
+    options: {
+      trustedConfig: {
+        autoDecide: { confirmationLabelName: 'status:confirm' },
+      },
+    },
+    reason: /differs from "status:confirm", the trusted name at main/,
+  },
+  {
+    name: 'a label renamed in the checkout',
+    options: { confirmationLabelName: 'status:renamed' },
+    reason: /"status:renamed" of the repository policy file differs/,
+  },
+  {
+    name: 'a trusted label collision',
+    options: {
+      trustedConfig: {
+        labels: { needsDecisionLabelName: 'status:needs-confirmation' },
+      },
+    },
+    reason: /collides with labels\.needsDecisionLabelName/,
+  },
+  {
+    name: 'a stored label in another letter case',
+    options: { labels: ['status:authoring', 'Status:Needs-Confirmation'] },
+    reason: /differs in letter case/,
+  },
+];
+
+for (const refusal of CONFIRMATION_TRUSTED_REFUSALS) {
+  test(`CLI: a confirmation issue with ${refusal.name} is refused before anything is written`, () => {
+    const fixture = setup({
+      labels: [...CONFIRMATION_LABELS],
+      ...refusal.options,
+    });
+    try {
+      const result = fixture.run([...confirmationArgs(fixture), '--apply']);
+      assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
+      const report = JSON.parse(result.stdout);
+      assert.equal(report.outcome, 'refused');
+      assert.match(report.reason, refusal.reason);
+      assert.ok(report.confirmationLabel, 'the report carries the check');
+      assert.deepEqual(writeKinds(fixture), []);
+      assert.deepEqual(fixture.state().comments, []);
+      assert.deepEqual(fixture.state().issues, {});
+    } finally {
+      fixture.restore();
+    }
+  });
+}
+
+test('CLI: a confirmation trusted file that sets the same name passes the check', () => {
+  const fixture = setup({
+    labels: [...CONFIRMATION_LABELS],
+    trustedConfig: {
+      autoDecide: { confirmationLabelName: 'status:needs-confirmation' },
+    },
+  });
+  try {
+    const result = fixture.run(confirmationArgs(fixture));
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    const detail = stepDetail(JSON.parse(result.stdout), 'confirmation-label');
+    assert.equal(detail?.trustedSource, 'policy');
+    assert.equal(detail?.storedName, 'status:needs-confirmation');
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('CLI: a body that fails the confirmation lint is refused and writes nothing', () => {
+  const fixture = setup({ labels: [...CONFIRMATION_LABELS] });
+  try {
+    const noRecord = confirmationDraft().split('\n').slice(2).join('\n');
+    const result = fixture.run([
+      ...confirmationArgs(fixture, noRecord),
+      '--apply',
+    ]);
+    assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
+    assert.match(result.stdout, /confirmation-record-marker/);
+    assert.deepEqual(writeKinds(fixture), []);
+    assert.deepEqual(fixture.state().issues, {});
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('CLI: a confirmation apply by an untrusted login or one without write permission writes nothing', () => {
+  for (const options of [
+    { trusted: ['someone-else'] },
+    { permission: 'read' },
+  ] as Parameters<typeof setup>[0][]) {
+    const fixture = setup({ labels: [...CONFIRMATION_LABELS], ...options });
+    try {
+      const result = fixture.run([...confirmationArgs(fixture), '--apply']);
+      assert.equal(result.status, 1, JSON.stringify(options));
+      assert.equal(JSON.parse(result.stdout).outcome, 'refused');
+      assert.deepEqual(writeKinds(fixture), []);
+      assert.deepEqual(fixture.state().issues, {});
+    } finally {
+      fixture.restore();
+    }
+  }
+});
+
+test('CLI: a confirmation issue with no journal stops with blocked-by-human and creates nothing', () => {
+  const fixture = setup({ journal: null, labels: [...CONFIRMATION_LABELS] });
+  try {
+    const result = fixture.run([...confirmationArgs(fixture), '--apply']);
+    assert.equal(result.status, 2, `${result.stdout}\n${result.stderr}`);
+    assert.equal(JSON.parse(result.stdout).outcome, 'blocked-by-human');
+    assert.deepEqual(writeKinds(fixture), []);
+    assert.deepEqual(fixture.state().issues, {});
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('CLI: a failed confirmation create is a recovery hold with no issue and keeps the token check in its reason', () => {
+  const fixture = setup({ labels: [...CONFIRMATION_LABELS], failCreate: true });
+  try {
+    const result = fixture.run([...confirmationArgs(fixture), '--apply']);
+    assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.outcome, 'recovery-hold');
+    assert.equal(report.issue, null);
+    assert.equal(report.failedStep, 'create');
+    assert.equal(report.journalState, 'pending');
+    assert.match(
+      report.reason,
+      /check the repository for an issue carrying token token-[0-9a-f-]+ before retrying/,
+    );
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('CLI: a confirmation failure after the create and before member is a recovery hold that keeps the issue and both labels', () => {
+  const fixture = setup({
+    labels: [...CONFIRMATION_LABELS],
+    failJournalPostAt: 2,
+  });
+  try {
+    const result = fixture.run([...confirmationArgs(fixture), '--apply']);
+    assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.outcome, 'recovery-hold');
+    assert.equal(report.issue, `o/r#${NEW_ISSUE}`);
+    assert.equal(report.failedStep, 'identity-attach');
+    assert.equal(report.release, undefined);
+    assert.deepEqual(labelsOf(fixture), CONFIRMATION_LABELS);
+    assert.equal(writeKinds(fixture).includes('remove-label'), false);
+  } finally {
+    fixture.restore();
+  }
+});
+
+const CONFIRMATION_HELD_CASES: {
+  name: string;
+  options: Parameters<typeof setup>[0];
+  step: string;
+}[] = [
+  {
+    name: 'another set member',
+    options: { afterPost: [{ mode: 'acquire', action: 'anotherMember' }] },
+    step: 'precondition-sole-member',
+  },
+  {
+    name: 'a body that fails the confirmation audit',
+    options: {
+      mutateBodyAt: 3,
+      mutateBodyText:
+        '\n<!-- idd-skill-auto-decision-void: decision=dec-2 -->\n',
+    },
+    step: 'precondition-audit',
+  },
+  {
+    name: 'a missing confirmation label',
+    options: {
+      afterPost: [
+        {
+          mode: 'release',
+          action: 'dropLabel',
+          text: 'status:needs-confirmation',
+        },
+      ],
+    },
+    step: 'precondition-labels',
+  },
+  {
+    name: 'a failed release post',
+    options: { postFail: { mode: 'release', status: 422, landed: false } },
+    step: 'release-preflight',
+  },
+  {
+    name: 'a failed release-guard post',
+    options: {
+      postFail: { mode: 'release-guard', status: 422, landed: false },
+    },
+    step: 'release-guard',
+  },
+  {
+    name: 'a failed heartbeat post',
+    options: { postFail: { mode: 'heartbeat', status: 422, landed: false } },
+    step: 'heartbeat',
+  },
+];
+
+for (const held of CONFIRMATION_HELD_CASES) {
+  test(`CLI: a confirmation release held for ${held.name} keeps both labels and exits 0`, () => {
+    const run = confirmationRun(held.options);
+    try {
+      assert.equal(run.status, 0, JSON.stringify(run.report));
+      assert.equal(run.report.outcome, 'published');
+      assert.equal(run.report.journalState, 'member');
+      assert.equal(run.report.release.state, 'held');
+      assert.equal(run.report.release.failedStep, held.step);
+      assert.match(run.report.release.nextAction, /Do not rerun this command/);
+      assert.equal(writeKinds(run.fixture).includes('remove-label'), false);
+      assert.equal(labelsOf(run.fixture).includes('status:authoring'), true);
+    } finally {
+      run.fixture.restore();
+    }
+  });
+}
+
+test('CLI: a competing owner marker stops a confirmation release at recovery-hold with both labels kept', () => {
+  const run = confirmationRun({
+    afterPost: [{ mode: 'release', action: 'competing' }],
+  });
+  try {
+    assert.equal(run.status, 1, JSON.stringify(run.report));
+    assert.equal(run.report.outcome, 'recovery-hold');
+    assert.equal(run.report.release.state, 'recovery-hold');
+    assert.equal(run.report.release.failedStep, 'release-guard');
+    assert.match(run.report.release.nextAction, /Do not rerun this command/);
+    assert.deepEqual(labelsOf(run.fixture), CONFIRMATION_LABELS);
+  } finally {
+    run.fixture.restore();
+  }
+});
+
+test('CLI: a failed label restore leaves a confirmation issue without its authoring label at recovery-hold', () => {
+  const run = confirmationRun({
+    dropReleaseAfterRemove: true,
+    failAddLabel: true,
+  });
+  try {
+    assert.equal(run.status, 1, JSON.stringify(run.report));
+    assert.equal(run.report.outcome, 'recovery-hold');
+    assert.equal(run.report.release.state, 'recovery-hold');
+    assert.equal(run.report.release.failedStep, 'label-restore');
+    assert.match(
+      run.report.release.nextAction,
+      /can leave the authoring label removed/,
+    );
+    assert.deepEqual(labelsOf(run.fixture), ['status:needs-confirmation']);
+  } finally {
+    run.fixture.restore();
+  }
+});
+
+test('CLI: an unreconciled release-complete stops a confirmation release at recovery-hold', () => {
+  const run = confirmationRun({
+    postFail: { mode: 'release-complete', status: 500, landed: false },
+  });
+  try {
+    assert.equal(run.status, 1, JSON.stringify(run.report));
+    assert.equal(run.report.release.state, 'recovery-hold');
+    assert.equal(run.report.release.failedStep, 'release-complete');
+    assert.equal(countOf(writeKinds(run.fixture), 'add-label'), 0);
+  } finally {
+    run.fixture.restore();
+  }
+});
+
+test('CLI: --help names the confirmation shape and its refusals', () => {
+  const fixture = setup();
+  try {
+    const result = fixture.run(['--help']);
+    assert.equal(result.status, 0);
+    assert.match(
+      result.stdout,
+      /--shape orphan\|carrier\|roadmap\|child\|confirmation/,
+    );
+    assert.match(result.stdout, /autoDecide\.confirmationLabelName/);
+    assert.match(
+      result.stdout,
+      /a confirmation issue takes no --review-result/,
+    );
   } finally {
     fixture.restore();
   }
