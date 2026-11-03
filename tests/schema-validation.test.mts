@@ -1686,7 +1686,34 @@ test('policy schema rejects an invalid critiqueLoop.deferRelaxAtRounds value (#3
   }
 });
 
-test('policy schema defines critiqueLoop.deferRelaxAtRounds as a positive-integer array with its default in words (#3796)', () => {
+test('policy schema accepts JSON null for critiqueLoop.deferRelaxAtRounds as the off value and rejects non-array, non-null values (#3796)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  instance.critiqueLoop = {
+    ...instance.critiqueLoop,
+    deferRelaxAtRounds: null,
+  };
+  assert.equal(
+    validate(instance, schema).some((error) =>
+      error.includes('$.critiqueLoop.deferRelaxAtRounds'),
+    ),
+    false,
+    'JSON null must validate as the explicit off value',
+  );
+  for (const deferRelaxAtRounds of ['4', 4, [0]]) {
+    instance.critiqueLoop = { ...instance.critiqueLoop, deferRelaxAtRounds };
+    assert.ok(
+      validate(instance, schema).some((error) =>
+        error.includes('$.critiqueLoop.deferRelaxAtRounds'),
+      ),
+      `expected deferRelaxAtRounds ${JSON.stringify(deferRelaxAtRounds)} to be rejected`,
+    );
+  }
+});
+
+test('policy schema defines critiqueLoop.deferRelaxAtRounds as an array or null, with its default and off value in words (#3796)', () => {
   const schema = loadJson('schemas/policy.schema.json') as {
     properties: {
       critiqueLoop: {
