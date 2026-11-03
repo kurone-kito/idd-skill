@@ -10292,7 +10292,18 @@ commit, merge, rebase, or `--continue` runs at the first usable tier:
 1. the repository's configured signing;
 2. a configured fallback signer, such as the wrapper above;
 3. unsigned: `--no-gpg-sign` for a commit or merge, and
-   `-c commit.gpgsign=false` for a rebase or a `--continue`.
+   `-c commit.gpgsign=false` for a rebase, a merge `--continue`, or the
+   `--continue` of a rebase that started unsigned.
+
+A rebase that started at a signed tier keeps that tier's signing for its
+`--continue`: Git stores `-S` in the rebase state, and
+`git -c commit.gpgsign=false rebase --continue` still fails, while the
+fallback signer's `--continue` works (reproduced 2026-11-03 with Git 2.53.0
+and a failing `gpg.program`, issue #4973). Its unsigned tier is therefore
+a restart: `git rebase --abort`, then rerun the original rebase with
+`-c commit.gpgsign=false` and resolve any conflict again. A repository that
+configures no signing starts at the unsigned tier; it records nothing and
+needs no signature check.
 
 Skip, without running it, a signer known to be unable to run without a
 terminal, such as GPG with a pinentry prompt or a hardware-touch key; the
@@ -10301,7 +10312,8 @@ runs at most once, under the 2-minute bound below. A signed tier fails when
 it exits nonzero before that bound, or when the bound fires and its process
 tree is gone. Either way, run the post-failure verification below, then
 move to the next tier. Error text is not read. A hook that rejected the
-attempt runs again on the retry and fails the unsigned tier too, and a
+attempt runs again on the retry and fails the unsigned tier too
+(preventive; no observed incident yet), and a
 failure at the unsigned tier is not a signing failure: the calling site's
 existing rule applies (E11 and D1 hold; B3 fixes a rejected commit message
 and commits again). If `git diff --name-only --diff-filter=U` lists any
@@ -10312,8 +10324,9 @@ the appendix requires. Release tags keep their own rule: see
 [Signed annotated release tags](#signed-annotated-release-tags-idd-release-tag).
 
 **Bounded timeout for every invocation** (commit, merge, or rebase): if
-the wrapper has not completed within 2 minutes, treat it as stuck
-rather than a signing failure worth retrying — a whole-command,
+the wrapper has not completed within 2 minutes, treat it as stuck and
+never retry the same tier; once its process tree is gone, verify and move
+to the next tier — a whole-command,
 root-cause-agnostic bound (it deliberately does not try to isolate the
 signer subprocess) that applies even to an invocation still producing
 output: an inactivity-only trigger would leave a merge or rebase that
@@ -10453,7 +10466,9 @@ already returned and released its locks.
   mid-progress: complete it with the `--continue` form at the next tier —
   the fallback signer's `-c` flags or alias, then `-c commit.gpgsign=false`
   — because a plain `--continue` re-signs through the signer that just
-  failed, and `--no-gpg-sign` itself is not a `--continue` flag. A signing
+  failed, and `--no-gpg-sign` itself is not a `--continue` flag. For a
+  rebase that started at a signed tier, the unsigned tier is the restart
+  in "Signing tiers" above, not an unsigned `--continue`. A signing
   error that returns at once leaves this state: a clean `git merge --no-ff`
   exits 128 with `MERGE_HEAD` present, and a rebase keeps its
   `rebase-merge` directory with the replay in the index (reproduced

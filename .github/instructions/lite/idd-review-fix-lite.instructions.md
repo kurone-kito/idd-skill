@@ -255,16 +255,16 @@ With no conflict, do not ask, even with open review threads. For a conflict,
 require explicit confirmation before merging or resolving; without it, leave
 the branch unchanged and stop-and-ask. If a confirmed conflict cannot be
 resolved cleanly, run `git merge --abort`, report failure, and stop-and-ask
-without pushing. Observed on 2026-10-28: PR #4774, comment #4396449367. Use
-the signed wrapper for merge and `--continue`.
+without pushing. Observed on 2026-10-28: PR #4774, comment #4396449367. Sign
+the merge and its `--continue` at the tiers below.
 
 Signing is best-effort: a missing signature never stops E11. Sign at the
 first usable tier: the repository's configured signing, then a configured
 fallback signer such as that wrapper, then unsigned. Skip a signer known to
 be unable to run without a terminal, such as GPG with a pinentry prompt or a
-hardware-touch key. When a signed merge or `--continue` fails, do not read
-its error text. If `git diff --name-only --diff-filter=U` lists a path,
-apply the conflict rule above. Otherwise take the next tier: while
+hardware-touch key (issue #2844). When a signed merge or `--continue` fails,
+do not read its error text. If `git diff --name-only --diff-filter=U` lists
+a path, apply the conflict rule above. Otherwise take the next tier: while
 `MERGE_HEAD` exists, finish with that tier's `--continue` form
 (`git -c commit.gpgsign=false merge --continue` when unsigned); without it,
 run the wrapper section's no-state check, and unless it verifies the merge,

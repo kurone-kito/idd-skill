@@ -105,8 +105,8 @@ For the repo-query rules of each Discover step, see
 Signing is best-effort: a missing signature is recorded, never a stop. On
 a signing failure, take the next tier: configured signing, a configured
 fallback signer, then unsigned (`--no-gpg-sign` on a commit or merge;
-`-c commit.gpgsign=false` on a rebase or `--continue`). Skip a signer known
-to need a terminal. For verification and the signature check, see
+`-c commit.gpgsign=false` on a rebase or merge `--continue`). Skip a signer
+known to need a terminal. For verification and the signature check, see
 `docs/idd-helper-scripts.md`'s Signed-Commit Merge Wrapper; never
 permanently rewrite signing config. Release tags keep their own rule.
 

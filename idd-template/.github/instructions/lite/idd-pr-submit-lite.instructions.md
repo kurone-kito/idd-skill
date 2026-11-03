@@ -134,8 +134,8 @@ This section's rebase only applies **before the branch's first push**.
 4. **Before rebasing**, pick the signing tier (a signing failure never
    stops D1): primary signing, else a wrapper for arbitrary git
    subcommands, else unsigned. Skip a signer that needs a terminal (GPG
-   pinentry or a hardware-touch path). An unsigned rebase drops the
-   replayed commits' signatures; record that outcome on the issue.
+   pinentry or a hardware-touch path; issue #2844). An unsigned rebase
+   drops the replayed commits' signatures; record that outcome on the issue.
 5. Rebase onto `origin/{development-branch}` at that tier: plain
    `git rebase origin/{development-branch}`; the wrapper, `git -c
    gpg.format=ssh -c user.signingkey=<abs-path> -c commit.gpgsign=true
@@ -144,18 +144,19 @@ This section's rebase only applies **before the branch's first push**.
    origin/{development-branch}`.
 6. If the rebase hits a content conflict, resolve it and continue with the
    tier's own `--continue` form, such as `git -c commit.gpgsign=false rebase
-   --continue`; plain `git rebase --continue` re-signs through primary
-   signing. If a signed `--continue` fails, use the next tier.
+   --continue` (plain `--continue` re-signs). If a signed `--continue`
+   fails, use the next signer's; with none left, abort and restart unsigned
+   (step 7); an unsigned failure holds.
 7. Failed write — rebase in progress, index holds the replay, branch
    tip still the pre-rebase commit, and the commit object was never
    written with no staged content conflict: run `git rebase --abort` to
    restore the branch tip, then
    restart the **full** rebase at the next tier's step 5 form, last
-   `git -c commit.gpgsign=false rebase origin/{development-branch}`; if
-   that unsigned rebase fails, post a hold note and stop.
+   `git -c commit.gpgsign=false rebase origin/{development-branch}`; a
+   conflict there goes to step 6, any other failure holds.
    This replays the stack; never replace with a one-commit cherry-pick.
    Do not run `git commit --amend -S` or `git commit --amend '-S'`.
-   Step 6 `--continue` stays for a staged content conflict.
+   A staged content conflict follows step 6.
 8. After the **entire** rebase completes, if any file was hand-edited during
    conflict resolution, run **fix-validate** now, against the final rebased
    state, and commit any resulting changes before continuing. Then verify both:

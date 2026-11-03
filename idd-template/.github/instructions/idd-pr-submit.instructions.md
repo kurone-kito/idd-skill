@@ -62,9 +62,11 @@ the wrapper's own `--continue`**. Plain `git rebase --continue`
 re-signs through primary signing and stalls non-interactively.
 
 Signing follows the appendix's "Commit signing" tiers, so a signing
-failure never stops D1. When no signing tier can run, rebase and continue
-unsigned: `git -c commit.gpgsign=false rebase origin/{development-branch}`
-and `git -c commit.gpgsign=false rebase --continue`. An unsigned rebase
+failure never stops D1. When no signing tier can run, start the rebase
+unsigned (`git -c commit.gpgsign=false rebase origin/{development-branch}`)
+and continue it the same way (`git -c commit.gpgsign=false rebase
+--continue`); a rebase that started signed reaches the unsigned tier only
+through the failed-write restart below. An unsigned rebase
 drops the signatures of the commits it replays; record that outcome on the
 issue.
 
@@ -74,13 +76,16 @@ pre-rebase commit, so no commit object was written. A signing failure
 leaves this shape too (reproduced 2026-11-03 for issue `#4973`). With no
 staged content conflict, use this path in place of the wrapper's
 state-present `--continue`; with one, use the wrapper's `--continue` form at
-the next tier. Abort with
+the next tier, except that its unsigned tier is this restart (a rebase
+started signed keeps `-S` for its `--continue`), after which the conflict is
+resolved again. Abort with
 `git rebase --abort` to restore the pre-rebase branch tip, then restart
 the **full** rebase from that branch at the next tier: the configured
 fallback wrapper's `rebase origin/{development-branch}` form (the explicit
 SSH `-c` form or a repository alias), then
 `git -c commit.gpgsign=false rebase origin/{development-branch}`. If the
-unsigned rebase fails, post a hold note naming the branch state and stop.
+unsigned rebase stops on a content conflict, resolve it as above; on any
+other failure, post a hold note naming the branch state and stop.
 This replays the
 complete pre-rebase commit range, including every earlier commit in a
 stack; do not replace it with a cherry-pick of only one commit. Do not
