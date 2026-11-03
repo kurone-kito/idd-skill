@@ -432,32 +432,39 @@ a follow-up or start a second loop. If the companion is unavailable, record the
 proposal in a comment/PR follow-ups; never create it ad hoc or improvise
 worker-side authoring.
 
-**Scope overrun** (helper runtime only): when the profile-selected
+**Scope overrun** (helper runtime only): when profile-selected
 `audit-authored-issue --shape child --stdin --marker-prefix {markerPrefix}`
 fails `effort-candidate-file-limit` on the issue body or with
-`## Candidate files` set to the diff's canonical paths, stop coding without
-pushing. The standing split path requires `standingApprovals.split.enabled`,
-every child within effective `maxCandidateFiles`, and each checkbox-stripped
-parent acceptance-criteria line whole/verbatim in exactly one child. Dry-run,
-then `--apply` each held orphan separately with
-`publish-authoring-hold --shape orphan`. On refusal, failure, or recovery hold,
-stop; keep the parent claim and hold, leave published children held, and post
-no record or release. On a failed or uncertain parent-record POST, also stop,
-keep the claim/hold and all published children held, post no release, and
-reconcile before retrying. After all children publish, post on
-the parent the exact standing-approval record
-(`<!-- idd-skill-standing-approval: class=split; set=none;
-anchor=<owner/repo#n>; ceiling=<maxCandidateFiles>; option=<option-id> -->`)
-using the split option ID recorded on the roadmap, then use the existing
-comment/release/cleanup below without companion handoff. If the class is
-enabled but conditions fail, use the existing comment/release/stop without
-handoff. When the class is off or absent, use the existing route: Comment the
-estimate, candidate files, changed files, and a split proposal; release per the
-Abort rule (`unclaimed-by`); run `lost-claim-cleanup`. With the companion, hand
-it that proposal as a held split draft: it holds this issue, publishes a held
-roadmap whose children record `Split out of #<n>`, and comments its link; if
-refused, the comment stands. Never add needs-decision or ask a human
+`## Candidate files` set to the diff's canonical paths, stop coding
+without pushing. Comment the estimate, candidate files, changed files,
+and a split proposal; release per the Abort rule (`unclaimed-by`); run
+`lost-claim-cleanup`. With the companion, hand it that proposal as a
+held split draft: it holds this issue, publishes a held roadmap whose
+children record `Split out of #<n>`, and comments its link; if refused,
+the comment stands. Never add needs-decision or ask a human
 ([rationale](../../docs/idd-design-rationale.md#b3--scope-overrun-returns-to-authoring)).
+
+**Standing split**, the only exception to this rule and to the ban on
+worker-side authoring: when `standingApprovals.split.enabled` is true, every
+child fits the effective `maxCandidateFiles`, and each parent
+acceptance-criteria line, checkbox stripped, appears whole and verbatim in
+exactly one child, keep the parent claim and, in order:
+
+1. Publish each child as a held orphan, one per call, as a dry run and then
+   with `--apply`: `publish-authoring-hold --shape orphan --title <title>
+   --body-file <file> --review-result <file>`.
+2. If a publish is refused, fails, or leaves a recovery hold, publish no more
+   children, keep the parent claim and hold and published children held,
+   report, and do not release. The same applies if the record below is not
+   posted; reconcile an uncertain POST before any retry.
+3. Once all are published, post on the parent, with the split option ID the
+   roadmap records,
+   `<!-- idd-skill-standing-approval: class=split; set=none;
+   anchor=<owner/repo#n>; ceiling=<maxCandidateFiles>; option=<option-id> -->`,
+   then comment, release, and clean up as above, without the companion.
+
+Every other case, including the class off or absent, uses the rule above
+unchanged.
 
 ---
 
