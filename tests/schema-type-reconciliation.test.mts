@@ -3225,11 +3225,35 @@ test('policy schema accepts the full autoDecide object and the cap bounds (#4956
 
 test('policy schema rejects malformed autoDecide values (#4956)', () => {
   const schema = loadJson('schemas/policy.schema.json');
+  // Each class repeats the unknown-key and boolean enabled rules (#4990).
+  const autoDecideClasses = [
+    'decisionIssue',
+    'runtimeQuestion',
+    'authoringChoice',
+    'worktreeRemnant',
+    'b1Leftover',
+  ];
+  const autoDecideProperties = (
+    schema as {
+      properties: {
+        autoDecide: { properties: Record<string, { type?: unknown }> };
+      };
+    }
+  ).properties.autoDecide.properties;
+  assert.deepEqual(
+    Object.keys(autoDecideProperties).filter(
+      (key) => autoDecideProperties[key].type === 'object',
+    ),
+    autoDecideClasses,
+    'every object-typed autoDecide property is a listed class',
+  );
   const rejected: Record<string, unknown>[] = [
+    ...autoDecideClasses.flatMap((cls) => [
+      { ...fullAutoDecide, [cls]: { enabled: false, extra: 1 } },
+      { ...fullAutoDecide, [cls]: { enabled: 'true' } },
+    ]),
     { ...fullAutoDecide, otherClass: { enabled: true } },
-    { ...fullAutoDecide, decisionIssue: { enabled: false, extra: 1 } },
     { ...fullAutoDecide, b1Leftover: { enabled: true, quietWindow: 'PT2H' } },
-    { ...fullAutoDecide, runtimeQuestion: { enabled: 'true' } },
     { ...fullAutoDecide, worktreeRemnant: { quietWindow: 'PT0S' } },
     { ...fullAutoDecide, worktreeRemnant: { quietWindow: 'P0DT0H' } },
     { ...fullAutoDecide, worktreeRemnant: { quietWindow: '2h' } },
@@ -3238,6 +3262,7 @@ test('policy schema rejects malformed autoDecide values (#4956)', () => {
     { ...fullAutoDecide, maxPendingConfirmations: 2.5 },
     { ...fullAutoDecide, maxDecisionsPerClaim: 0 },
     { ...fullAutoDecide, maxDecisionsPerClaim: 21 },
+    { ...fullAutoDecide, maxDecisionsPerClaim: 2.5 },
     { ...fullAutoDecide, confirmationLabelName: '' },
     { ...fullAutoDecide, confirmationLabelName: '   ' },
   ];

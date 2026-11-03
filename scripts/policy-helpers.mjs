@@ -204,6 +204,15 @@ const AUTO_DECIDE_CAPS = [
   { key: 'maxDecisionsPerClaim', max: 20 },
 ];
 const NON_WHITESPACE_RE = /\S/;
+/**
+ * An own property of `record`, or `undefined` when the key is absent or only
+ * inherited. The `autoDecide` readers use it for every value, so an inherited
+ * value counts as absent, as it does for their `Object.keys` unknown-key
+ * checks (issue #4990).
+ */
+function ownAutoDecideField(record, key) {
+  return hasOwn(record, key) ? record[key] : undefined;
+}
 /** The first root-level rejection that makes every class malformed. */
 function inspectAutoDecideRoot(root) {
   const unknownKey = Object.keys(root).find(
@@ -216,7 +225,7 @@ function inspectAutoDecideRoot(root) {
     };
   }
   for (const { key, max } of AUTO_DECIDE_CAPS) {
-    const value = root[key];
+    const value = ownAutoDecideField(root, key);
     if (
       value !== undefined &&
       !(Number.isInteger(value) && value >= 1 && value <= max)
@@ -227,7 +236,7 @@ function inspectAutoDecideRoot(root) {
       };
     }
   }
-  const label = root.confirmationLabelName;
+  const label = ownAutoDecideField(root, 'confirmationLabelName');
   if (
     label !== undefined &&
     !(typeof label === 'string' && NON_WHITESPACE_RE.test(label))
@@ -263,13 +272,15 @@ function inspectAutoDecideClass(cls, raw) {
       `${path} has an unknown key ${unknownKey}`,
     );
   }
-  if (raw.enabled !== undefined && typeof raw.enabled !== 'boolean') {
+  const enabled = ownAutoDecideField(raw, 'enabled');
+  if (enabled !== undefined && typeof enabled !== 'boolean') {
     return malformed(`${path}.enabled`, `${path}.enabled must be a boolean`);
   }
+  const quietWindow = ownAutoDecideField(raw, 'quietWindow');
   if (
     cls === 'worktreeRemnant' &&
-    raw.quietWindow !== undefined &&
-    parsePositiveDuration(raw.quietWindow, '') === ''
+    quietWindow !== undefined &&
+    parsePositiveDuration(quietWindow, '') === ''
   ) {
     return malformed(
       `${path}.quietWindow`,
@@ -278,7 +289,7 @@ function inspectAutoDecideClass(cls, raw) {
   }
   return {
     class: cls,
-    verdict: raw.enabled === true ? 'enabled' : 'class-off',
+    verdict: enabled === true ? 'enabled' : 'class-off',
   };
 }
 /**
@@ -288,11 +299,14 @@ function inspectAutoDecideClass(cls, raw) {
  * `class-off`. A malformed value is `malformed` with the first rejected
  * field, because normalization replaces it with a default and cannot report
  * it. A malformed root, cap, or label name makes every class `malformed`; a
- * malformed `quietWindow` makes only `worktreeRemnant` `malformed`. The
- * master switch `dangerouslyAutoDecide` is not read here.
+ * malformed `quietWindow` makes only `worktreeRemnant` `malformed`. Only own
+ * properties are read; an inherited value counts as absent. The master
+ * switch `dangerouslyAutoDecide` is not read here.
  */
 export function inspectAutoDecide(config) {
-  const root = isStandingObject(config) ? config.autoDecide : undefined;
+  const root = isStandingObject(config)
+    ? ownAutoDecideField(config, 'autoDecide')
+    : undefined;
   if (root === undefined) {
     return AUTO_DECIDE_CLASSES.map((cls) => ({
       class: cls,
@@ -311,7 +325,7 @@ export function inspectAutoDecide(config) {
   }
   const classes = root;
   return AUTO_DECIDE_CLASSES.map((cls) =>
-    inspectAutoDecideClass(cls, classes[cls]),
+    inspectAutoDecideClass(cls, ownAutoDecideField(classes, cls)),
   );
 }
 /**
@@ -320,8 +334,12 @@ export function inspectAutoDecide(config) {
  * non-whitespace character is kept; anything else uses the default.
  */
 function effectiveAutoDecideConfirmationLabelName(config) {
-  const root = isStandingObject(config) ? config.autoDecide : undefined;
-  const label = isStandingObject(root) ? root.confirmationLabelName : undefined;
+  const root = isStandingObject(config)
+    ? ownAutoDecideField(config, 'autoDecide')
+    : undefined;
+  const label = isStandingObject(root)
+    ? ownAutoDecideField(root, 'confirmationLabelName')
+    : undefined;
   return typeof label === 'string' && NON_WHITESPACE_RE.test(label)
     ? label
     : POLICY_DEFAULTS.autoDecide.confirmationLabelName;
@@ -333,18 +351,22 @@ function effectiveAutoDecide(config) {
   );
   const enabled = (cls) => verdicts.get(cls) === 'enabled';
   const defaults = POLICY_DEFAULTS.autoDecide;
-  const rawRoot = isStandingObject(config) ? config.autoDecide : undefined;
+  const rawRoot = isStandingObject(config)
+    ? ownAutoDecideField(config, 'autoDecide')
+    : undefined;
   const root = isStandingObject(rawRoot) ? rawRoot : {};
   // A root-level rejection marks every class malformed, so a cap is kept only
   // when no class is malformed for a root reason; after that check every
   // present cap is already valid.
   const rootValid =
     isStandingObject(rawRoot) && inspectAutoDecideRoot(rawRoot) === null;
-  const cap = (key) =>
-    rootValid && typeof root[key] === 'number' ? root[key] : defaults[key];
-  const remnant = isStandingObject(root.worktreeRemnant)
-    ? root.worktreeRemnant
-    : {};
+  const cap = (key) => {
+    const value = ownAutoDecideField(root, key);
+    return rootValid && typeof value === 'number' ? value : defaults[key];
+  };
+  const rawRemnant = ownAutoDecideField(root, 'worktreeRemnant');
+  const remnant = isStandingObject(rawRemnant) ? rawRemnant : {};
+  const quietWindow = ownAutoDecideField(remnant, 'quietWindow');
   return {
     decisionIssue: { enabled: enabled('decisionIssue') },
     runtimeQuestion: { enabled: enabled('runtimeQuestion') },
@@ -353,8 +375,8 @@ function effectiveAutoDecide(config) {
       enabled: enabled('worktreeRemnant'),
       quietWindow:
         verdicts.get('worktreeRemnant') !== 'malformed' &&
-        typeof remnant.quietWindow === 'string'
-          ? remnant.quietWindow
+        typeof quietWindow === 'string'
+          ? quietWindow
           : defaults.worktreeRemnant.quietWindow,
     },
     b1Leftover: { enabled: enabled('b1Leftover') },
