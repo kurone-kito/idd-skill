@@ -1591,7 +1591,7 @@ test('policy schema defines critiqueLoop.triageRecord as a three-value string en
   assert.equal(property.type, 'string');
   assert.deepEqual(property.enum, ['off', 'record', 'enforce']);
   assert.ok(
-    property.description.includes('defaults to "off"'),
+    property.description.includes('defaults to `record`'),
     'expected the description to state the default in words',
   );
   // validate-schemas rejects the `default` keyword, so the default lives

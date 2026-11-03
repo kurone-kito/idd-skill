@@ -614,7 +614,7 @@
   //   //   goes to a follow-up issue. High never does under low or
   //   //   low-and-medium.
   //   // - "severity-tiered" (default): a severity-and-urgency matrix decides. At step
-  //   //   0 (deferRelaxAtRounds left out, or a review count below its first
+  //   //   0 (a review count below its first
   //   //   entry), High goes to a follow-up issue only at very-low urgency.
   //   //   See docs/idd-review-policy-profiles.md.
   //   "deferByUrgency": "severity-tiered",
