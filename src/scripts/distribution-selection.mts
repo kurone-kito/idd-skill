@@ -140,6 +140,7 @@ interface SelectionContext {
   repository: string | null;
   worktreeRoot: string | null;
   mainWorktreeRoot: string | null;
+  runGit: GitTextRunner;
   policy: JsonObject | null;
   policyDiagnostic: string | null;
   packageSpec: string | null;
@@ -392,6 +393,7 @@ function resolveContext(
     repository,
     worktreeRoot,
     mainWorktreeRoot,
+    runGit,
     policy: policyLoad.config,
     policyDiagnostic:
       repository !== null && worktreeRoot === null
@@ -757,16 +759,19 @@ const ANY_PLACEHOLDER = /\{\{[A-Z][A-Z0-9_]*\}\}/u;
  * The repository name onboarding substitutes for `REPO_NAME`: the last path
  * segment of `remote.origin.url` without `.git`, read the way idd-onboard's
  * `parseRemoteRepoRef` reads it. idd-onboard imports this module, so the parse
- * is repeated here, and a test keeps the two in step. Returns null on any
- * failure.
+ * is repeated here, and a test keeps the two in step. The read goes through the
+ * selection's Git runner, which drops inherited `GIT_` variables, so they cannot
+ * point it at another checkout. Returns null on any failure.
  */
-function repositoryNameFromOrigin(worktreeRoot: string): string | null {
+function repositoryNameFromOrigin(
+  runGit: GitTextRunner,
+  worktreeRoot: string,
+): string | null {
   let url: string;
   try {
-    url = execFileSync(
-      'git',
-      ['-C', worktreeRoot, 'config', '--get', 'remote.origin.url'],
-      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
+    url = runGit(
+      ['config', '--get', 'remote.origin.url'],
+      worktreeRoot,
     ).trim();
   } catch {
     return null;
@@ -854,7 +859,7 @@ function localInstructionsMatchSet(
   set: PreparedSet,
 ): boolean {
   if (ctx.worktreeRoot === null) return false;
-  const repoName = repositoryNameFromOrigin(ctx.worktreeRoot);
+  const repoName = repositoryNameFromOrigin(ctx.runGit, ctx.worktreeRoot);
   const component = componentListingAt(set.manifest, 'instructions');
   if (!Array.isArray(component.files)) return false;
   const prefix = '.github/instructions/';

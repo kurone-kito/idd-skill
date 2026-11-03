@@ -741,6 +741,48 @@ test('the origin repository name matches the name onboarding derives from each r
   }
 });
 
+test('ambient Git overrides do not change the origin name a concreted copy keeps', () => {
+  const fixture = makeFixture();
+  const content = '# repo {{REPO_NAME}}\n';
+  fixture.addPreparedSet(COMMIT_A, 'one', MARKER_INSTRUCTION_PATH, content);
+  fixture.installCurrent(
+    COMMIT_A,
+    '1.0.0',
+    'one',
+    MARKER_INSTRUCTION_PATH,
+    content,
+  );
+  writeLocalInstruction(fixture.repo, MARKER_INSTRUCTION_PATH, '# repo app\n');
+  const other = join(fixture.root, 'other-repo');
+  fs.mkdirSync(other);
+  execFileSync('git', ['init', '--quiet'], { cwd: other });
+  execFileSync(
+    'git',
+    ['remote', 'add', 'origin', 'https://github.com/other/repo.git'],
+    { cwd: other },
+  );
+
+  const priorGitEnv = Object.fromEntries(
+    Object.entries(process.env).filter(([key]) => key.startsWith('GIT_')),
+  );
+  try {
+    for (const key of Object.keys(process.env)) {
+      if (key.startsWith('GIT_')) delete process.env[key];
+    }
+    process.env.GIT_DIR = join(other, '.git');
+    process.env.GIT_WORK_TREE = other;
+
+    const routing = inspectDistributionRouting(fixture.options());
+    assert.equal(routing.report.verdict, 'coherent-candidate');
+    assert.equal(routing.route, 'repository-local');
+  } finally {
+    for (const key of Object.keys(process.env)) {
+      if (key.startsWith('GIT_')) delete process.env[key];
+    }
+    Object.assign(process.env, priorGitEnv);
+  }
+});
+
 test('a nested partial instruction tree is migration-required, not a fall-through', () => {
   const fixture = makeFixture();
   fixture.addPreparedSet(
