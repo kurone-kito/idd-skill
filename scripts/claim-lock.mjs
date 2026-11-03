@@ -1881,8 +1881,11 @@ new claim, before its claim post), --agent-id must be session-qualified
 after the first '-' (the runtime's unique session suffix or a generated
 UUID, such as claude-48429e70). A bare family name such as claude, or a
 short tag such as codex-cli, is then a usage error and writes nothing. A
-re-record with --nonce, and the other modes, accept any --agent-id, so a
-claim made before this rule keeps its re-record and recovery routes.
+nonce does not lift that refusal: a re-record with --nonce under such an id is
+accepted only when this worktree already holds an earlier record of the same
+claim under that agent-id (the B1 record, or --backfill-tokens for a worktree
+that predates it). The other modes accept any --agent-id, so a claim made
+before this rule keeps its re-record and recovery routes.
 
 --read-tokens is read-only: it reports whether --claim-id was actually
 recorded on disk by this mechanism, distinguishing \`present\` (a
