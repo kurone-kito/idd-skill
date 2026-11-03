@@ -113,12 +113,10 @@ const SIGNING_TIER_SITES: readonly [string, string, readonly string[]][] = [
     'idd-template/.github/instructions/idd-overview-appendix.instructions.md',
     '## Commit signing',
     [
-      'a missing signature is recorded, never a stop.',
-      'configured signing, a configured fallback signer, then unsigned',
-      '`--no-gpg-sign` on a commit or merge;',
-      '`-c commit.gpgsign=false` on a rebase or merge `--continue`',
-      'Skip a signer known to need a terminal.',
-      'Release tags keep their own rule.',
+      'Signing is best-effort and never stops the loop:',
+      'take the next tier (configured, fallback signer, unsigned)',
+      "`docs/idd-helper-scripts.md`'s Signed-Commit Merge Wrapper;",
+      'any non-default signing outcome',
     ],
   ],
   [
