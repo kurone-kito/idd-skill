@@ -358,10 +358,12 @@ not require the optional full-core import. See the
 ## Activation gate and context cost
 
 The entry text tells the agent to run `idd-activation` from the repository
-directory and to read its JSON output. If `active` is `true`, the agent opens
-`.github/instructions/idd-overview-core.instructions.md` under the reported
-`instructionsRoot` and follows the phase routing from there. Otherwise it does
-nothing IDD-specific.
+directory and to read its JSON output. If `active` is `false`, the agent does
+nothing IDD-specific. If `active` is `true` and `selection.status` is `ready`
+with a non-null `instructionsRoot`, the agent opens
+`.github/instructions/idd-overview-core.instructions.md` under that root and
+follows the phase routing from there. At `binding-required` the agent binds
+first. In every other state it stops and follows `selection.recovery`.
 
 The gate is only half the check. A session-aware run that is `active` but has
 no session ID reports `selection.status` as not ready and `instructionsRoot` as
