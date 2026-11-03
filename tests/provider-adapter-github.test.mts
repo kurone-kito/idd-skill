@@ -2432,6 +2432,149 @@ test('fetchLastEditedAtByNodeId: an empty id list makes no request', () => {
   assert.equal(result.size, 0);
 });
 
+// #5016: a transient gateway error on one chunk's `gh api graphql` call is
+// retried (up to three attempts per chunk); every other failure is not.
+type FetchGhTextStub = typeof import('../src/scripts/gh-exec.mts').ghText;
+
+const LAST_EDITED_AT_FIXTURE = '2026-10-27T00:00:00Z';
+
+/** A failed `gh` call whose stderr carries `stderrLine` and whose message is
+ * `message`, so each attempt can be told apart by its own message. */
+function ghFailure(
+  message: string,
+  stderrLine: string,
+): Error & { stderr: string } {
+  return Object.assign(new Error(message), { stderr: stderrLine });
+}
+
+/** A `ghText` stub that plays `script` in call order: a string throws that
+ * line as gh's stderr, `null` answers with a successful body for the ids that
+ * call requested. Counts its own calls. */
+function scriptedLastEditedAtGhText(script: (string | null)[]): {
+  stub: FetchGhTextStub;
+  calls: () => number;
+} {
+  let index = 0;
+  const stub = (args: string[]): string => {
+    if (index >= script.length) {
+      throw new Error('ghText called more times than scripted');
+    }
+    const step = script[index];
+    index += 1;
+    if (step !== null) {
+      throw ghFailure('gh failed', step);
+    }
+    const ids = args
+      .filter((arg) => arg.startsWith('ids[]='))
+      .map((arg) => arg.slice('ids[]='.length));
+    return graphqlNodesLastEditedAtBody(
+      ids.map((id) => ({ id, lastEditedAt: LAST_EDITED_AT_FIXTURE })),
+    );
+  };
+  return {
+    stub: stub as unknown as FetchGhTextStub,
+    calls: () => index,
+  };
+}
+
+test('fetchLastEditedAtByNodeId: retries a transient gh: HTTP 504 once and then returns the map (#5016)', () => {
+  const { stub, calls } = scriptedLastEditedAtGhText(['gh: HTTP 504', null]);
+  const result = fetchLastEditedAtByNodeId(stub, ['IC_1', 'IC_2']);
+  assert.equal(calls(), 2, 'one failed attempt, then one successful attempt');
+  assert.equal(result.get('IC_1'), LAST_EDITED_AT_FIXTURE);
+  assert.equal(result.get('IC_2'), LAST_EDITED_AT_FIXTURE);
+  assert.equal(result.size, 2);
+});
+
+test('fetchLastEditedAtByNodeId: gives up after three transient gh: HTTP 503 attempts and rethrows the last error (#5016)', () => {
+  let calls = 0;
+  const stub = (() => {
+    calls += 1;
+    throw ghFailure(`attempt ${calls}`, 'gh: HTTP 503');
+  }) as unknown as FetchGhTextStub;
+  assert.throws(
+    () => fetchLastEditedAtByNodeId(stub, ['IC_1']),
+    (error: unknown) => error instanceof Error && error.message === 'attempt 3',
+  );
+  assert.equal(calls, 3, 'exactly three attempts before the audit fails');
+});
+
+test('fetchLastEditedAtByNodeId: a gh: HTTP 404 makes exactly one call and throws (#5016)', () => {
+  const { stub, calls } = scriptedLastEditedAtGhText(['gh: HTTP 404', null]);
+  assert.throws(
+    () => fetchLastEditedAtByNodeId(stub, ['IC_1']),
+    (error: unknown) => error instanceof Error && error.message === 'gh failed',
+  );
+  assert.equal(calls(), 1, 'a 4xx is never retried');
+});
+
+test('fetchLastEditedAtByNodeId: a failure with no HTTP status makes exactly one call and throws (#5016)', () => {
+  const { stub, calls } = scriptedLastEditedAtGhText(['spawn ETIMEDOUT', null]);
+  assert.throws(
+    () => fetchLastEditedAtByNodeId(stub, ['IC_1']),
+    (error: unknown) => error instanceof Error && error.message === 'gh failed',
+  );
+  assert.equal(
+    calls(),
+    1,
+    'a failure with no derivable status is never retried',
+  );
+});
+
+test('fetchLastEditedAtByNodeId: a missing node still throws the malformed-node message on the first attempt (#5016)', () => {
+  let calls = 0;
+  const stub = (() => {
+    calls += 1;
+    return graphqlNodesLastEditedAtBody([
+      { id: 'IC_OTHER', lastEditedAt: null },
+    ]);
+  }) as unknown as FetchGhTextStub;
+  assert.throws(
+    () => fetchLastEditedAtByNodeId(stub, ['IC_1']),
+    (error: unknown) =>
+      error instanceof Error &&
+      error.message ===
+        'fetchLastEditedAtByNodeId: node IC_1 missing or mismatched in response',
+  );
+  assert.equal(calls, 1, 'a malformed response is not retried');
+});
+
+test('fetchLastEditedAtByNodeId: a GraphQL error payload is not retried (#5016)', () => {
+  let calls = 0;
+  const stub = (() => {
+    calls += 1;
+    return JSON.stringify({ errors: [{ message: 'Something went wrong' }] });
+  }) as unknown as FetchGhTextStub;
+  assert.throws(
+    () => fetchLastEditedAtByNodeId(stub, ['IC_1']),
+    (error: unknown) =>
+      error instanceof Error &&
+      error.message ===
+        'fetchLastEditedAtByNodeId failed: Something went wrong',
+  );
+  assert.equal(calls, 1, 'a GraphQL error payload is not retried');
+});
+
+test('fetchLastEditedAtByNodeId: the three-attempt budget resets for each chunk (#5016)', () => {
+  const nodeIds = Array.from({ length: 101 }, (_, i) => `IC_${i}`);
+  // Chunk 1 (100 ids) fails twice with 504 and succeeds on its third attempt;
+  // chunk 2 (1 id) fails once with 503 and succeeds on its second. A budget
+  // shared across chunks would stop at the fourth call.
+  const { stub, calls } = scriptedLastEditedAtGhText([
+    'gh: HTTP 504',
+    'gh: HTTP 504',
+    null,
+    'gh: HTTP 503',
+    null,
+  ]);
+  const result = fetchLastEditedAtByNodeId(stub, nodeIds);
+  assert.equal(calls(), 5, 'three attempts for chunk 1, two for chunk 2');
+  assert.equal(result.size, 101);
+  for (const id of nodeIds) {
+    assert.equal(result.get(id), LAST_EDITED_AT_FIXTURE);
+  }
+});
+
 // ---------------------------------------------------------------------------
 // #3269: getReviewThreadCommentUserContentEdits /
 // fetchReviewThreadCommentUserContentEdits.
