@@ -541,6 +541,278 @@ function effectiveStandingApprovals(
   };
 }
 
+/** The five auto-decide classes, in the order roadmap #4955 lists them. */
+export const AUTO_DECIDE_CLASSES = [
+  'decisionIssue',
+  'runtimeQuestion',
+  'authoringChoice',
+  'worktreeRemnant',
+  'b1Leftover',
+] as const;
+export type AutoDecideClass = (typeof AUTO_DECIDE_CLASSES)[number];
+export type AutoDecideClassVerdict = 'class-off' | 'enabled' | 'malformed';
+export interface AutoDecideClassDiagnostic {
+  readonly class: AutoDecideClass;
+  readonly verdict: AutoDecideClassVerdict;
+  /** The dotted path of the first rejected field; only on `malformed`. */
+  readonly field?: string;
+  readonly reason?: string;
+}
+export interface AutoDecideEffective {
+  readonly decisionIssue: { readonly enabled: boolean };
+  readonly runtimeQuestion: { readonly enabled: boolean };
+  readonly authoringChoice: { readonly enabled: boolean };
+  readonly worktreeRemnant: {
+    readonly enabled: boolean;
+    readonly quietWindow: string;
+  };
+  readonly b1Leftover: { readonly enabled: boolean };
+  readonly maxPendingConfirmations: number;
+  readonly maxDecisionsPerClaim: number;
+  readonly confirmationLabelName: string;
+}
+export interface AutoDecideLabelCollision {
+  /** The dotted policy path of the setting whose label name collides. */
+  readonly setting: string;
+  /** That setting's effective label name. */
+  readonly labelName: string;
+}
+
+const AUTO_DECIDE_ROOT_KEYS: readonly string[] = [
+  ...AUTO_DECIDE_CLASSES,
+  'maxPendingConfirmations',
+  'maxDecisionsPerClaim',
+  'confirmationLabelName',
+];
+const AUTO_DECIDE_CAPS = [
+  { key: 'maxPendingConfirmations', max: 100 },
+  { key: 'maxDecisionsPerClaim', max: 20 },
+] as const;
+const NON_WHITESPACE_RE = /\S/;
+
+interface AutoDecideRejection {
+  readonly field: string;
+  readonly reason: string;
+}
+
+/** The first root-level rejection that makes every class malformed. */
+function inspectAutoDecideRoot(
+  root: Record<string, unknown>,
+): AutoDecideRejection | null {
+  const unknownKey = Object.keys(root).find(
+    (key) => !AUTO_DECIDE_ROOT_KEYS.includes(key),
+  );
+  if (unknownKey !== undefined) {
+    return {
+      field: `autoDecide.${unknownKey}`,
+      reason: `autoDecide has an unknown key ${unknownKey}`,
+    };
+  }
+  for (const { key, max } of AUTO_DECIDE_CAPS) {
+    const value = root[key];
+    if (
+      value !== undefined &&
+      !(
+        Number.isInteger(value) &&
+        (value as number) >= 1 &&
+        (value as number) <= max
+      )
+    ) {
+      return {
+        field: `autoDecide.${key}`,
+        reason: `autoDecide.${key} must be an integer from 1 to ${max}`,
+      };
+    }
+  }
+  const label = root.confirmationLabelName;
+  if (
+    label !== undefined &&
+    !(typeof label === 'string' && NON_WHITESPACE_RE.test(label))
+  ) {
+    return {
+      field: 'autoDecide.confirmationLabelName',
+      reason:
+        'autoDecide.confirmationLabelName must be a string with a non-whitespace character',
+    };
+  }
+  return null;
+}
+
+function inspectAutoDecideClass(
+  cls: AutoDecideClass,
+  raw: unknown,
+): AutoDecideClassDiagnostic {
+  if (raw === undefined) {
+    return { class: cls, verdict: 'class-off' };
+  }
+  const malformed = (
+    field: string,
+    reason: string,
+  ): AutoDecideClassDiagnostic => ({
+    class: cls,
+    verdict: 'malformed',
+    field,
+    reason,
+  });
+  const path = `autoDecide.${cls}`;
+  if (!isStandingObject(raw)) {
+    return malformed(path, `${path} must be an object`);
+  }
+  const allowed =
+    cls === 'worktreeRemnant' ? ['enabled', 'quietWindow'] : ['enabled'];
+  const unknownKey = Object.keys(raw).find((key) => !allowed.includes(key));
+  if (unknownKey !== undefined) {
+    return malformed(
+      `${path}.${unknownKey}`,
+      `${path} has an unknown key ${unknownKey}`,
+    );
+  }
+  if (raw.enabled !== undefined && typeof raw.enabled !== 'boolean') {
+    return malformed(`${path}.enabled`, `${path}.enabled must be a boolean`);
+  }
+  if (
+    cls === 'worktreeRemnant' &&
+    raw.quietWindow !== undefined &&
+    parsePositiveDuration(raw.quietWindow, '') === ''
+  ) {
+    return malformed(
+      `${path}.quietWindow`,
+      `${path}.quietWindow must be a positive ISO 8601 duration`,
+    );
+  }
+  return {
+    class: cls,
+    verdict: raw.enabled === true ? 'enabled' : 'class-off',
+  };
+}
+
+/**
+ * Inspect the five auto-decide classes on a raw policy document (roadmap
+ * #4955), for local diagnostics. A class is `enabled` only by an explicit
+ * `enabled: true` with valid values; an absent class or `enabled` is
+ * `class-off`. A malformed value is `malformed` with the first rejected
+ * field, because normalization replaces it with a default and cannot report
+ * it. A malformed root, cap, or label name makes every class `malformed`; a
+ * malformed `quietWindow` makes only `worktreeRemnant` `malformed`. The
+ * master switch `dangerouslyAutoDecide` is not read here.
+ */
+export function inspectAutoDecide(
+  config: unknown,
+): AutoDecideClassDiagnostic[] {
+  const root = isStandingObject(config) ? config.autoDecide : undefined;
+  if (root === undefined) {
+    return AUTO_DECIDE_CLASSES.map((cls) => ({
+      class: cls,
+      verdict: 'class-off',
+    }));
+  }
+  const rejection: AutoDecideRejection | null = isStandingObject(root)
+    ? inspectAutoDecideRoot(root)
+    : { field: 'autoDecide', reason: 'autoDecide must be an object' };
+  if (rejection !== null) {
+    return AUTO_DECIDE_CLASSES.map((cls) => ({
+      class: cls,
+      verdict: 'malformed',
+      ...rejection,
+    }));
+  }
+  const classes = root as Record<string, unknown>;
+  return AUTO_DECIDE_CLASSES.map((cls) =>
+    inspectAutoDecideClass(cls, classes[cls]),
+  );
+}
+
+/**
+ * The effective confirmation label name. It is resolved on its own: Discover
+ * filters on it, so a malformed sibling must never change it. A string with a
+ * non-whitespace character is kept; anything else uses the default.
+ */
+function effectiveAutoDecideConfirmationLabelName(config: unknown): string {
+  const root = isStandingObject(config) ? config.autoDecide : undefined;
+  const label = isStandingObject(root) ? root.confirmationLabelName : undefined;
+  return typeof label === 'string' && NON_WHITESPACE_RE.test(label)
+    ? label
+    : POLICY_DEFAULTS.autoDecide.confirmationLabelName;
+}
+
+/** The effective `autoDecide` values that `normalizePolicyConfig` returns. */
+function effectiveAutoDecide(config: unknown): AutoDecideEffective {
+  const verdicts = new Map(
+    inspectAutoDecide(config).map((d) => [d.class, d.verdict]),
+  );
+  const enabled = (cls: AutoDecideClass) => verdicts.get(cls) === 'enabled';
+  const defaults = POLICY_DEFAULTS.autoDecide;
+  const rawRoot = isStandingObject(config) ? config.autoDecide : undefined;
+  const root = isStandingObject(rawRoot) ? rawRoot : {};
+  // A root-level rejection marks every class malformed, so a cap is kept only
+  // when no class is malformed for a root reason; after that check every
+  // present cap is already valid.
+  const rootValid =
+    isStandingObject(rawRoot) && inspectAutoDecideRoot(rawRoot) === null;
+  const cap = (key: (typeof AUTO_DECIDE_CAPS)[number]['key']) =>
+    rootValid && typeof root[key] === 'number'
+      ? (root[key] as number)
+      : defaults[key];
+  const remnant = isStandingObject(root.worktreeRemnant)
+    ? root.worktreeRemnant
+    : {};
+  return {
+    decisionIssue: { enabled: enabled('decisionIssue') },
+    runtimeQuestion: { enabled: enabled('runtimeQuestion') },
+    authoringChoice: { enabled: enabled('authoringChoice') },
+    worktreeRemnant: {
+      enabled: enabled('worktreeRemnant'),
+      quietWindow:
+        verdicts.get('worktreeRemnant') !== 'malformed' &&
+        typeof remnant.quietWindow === 'string'
+          ? remnant.quietWindow
+          : defaults.worktreeRemnant.quietWindow,
+    },
+    b1Leftover: { enabled: enabled('b1Leftover') },
+    maxPendingConfirmations: cap('maxPendingConfirmations'),
+    maxDecisionsPerClaim: cap('maxDecisionsPerClaim'),
+    confirmationLabelName: effectiveAutoDecideConfirmationLabelName(config),
+  };
+}
+
+/** The label settings a confirmation label name must not reuse (roadmap #4955). */
+const AUTO_DECIDE_COLLISION_SETTINGS = [
+  'issueAuthoring.authoringLabelName',
+  'labels.authoringOnlyLabelName',
+  'labels.needsDecisionLabelName',
+  'labels.blockedByHumanLabelName',
+  'labels.roadmapLabelName',
+  'approvalSignals.readyLabelName',
+] as const;
+
+/**
+ * Report each label setting whose effective name equals the effective
+ * `autoDecide.confirmationLabelName`, comparing names trimmed and lowercased.
+ * A default label counts as configured. Accepts a raw or an already
+ * normalized policy document, whose compared paths are the same.
+ */
+// audit:ignore-dead-export: roadmap #4955 children add the consumers; tests lock the collision rules until then
+export function findAutoDecideLabelCollisions(
+  config: unknown,
+): AutoDecideLabelCollision[] {
+  const policy = normalizePolicyConfig(config);
+  const comparable = (name: string) => name.trim().toLowerCase();
+  const confirmation = comparable(policy.autoDecide.confirmationLabelName);
+  const names: Record<(typeof AUTO_DECIDE_COLLISION_SETTINGS)[number], string> =
+    {
+      'issueAuthoring.authoringLabelName':
+        policy.issueAuthoring.authoringLabelName,
+      'labels.authoringOnlyLabelName': policy.labels.authoringOnlyLabelName,
+      'labels.needsDecisionLabelName': policy.labels.needsDecisionLabelName,
+      'labels.blockedByHumanLabelName': policy.labels.blockedByHumanLabelName,
+      'labels.roadmapLabelName': policy.labels.roadmapLabelName,
+      'approvalSignals.readyLabelName': policy.approvalSignals.readyLabelName,
+    };
+  return AUTO_DECIDE_COLLISION_SETTINGS.filter(
+    (setting) => comparable(names[setting]) === confirmation,
+  ).map((setting) => ({ setting, labelName: names[setting] }));
+}
+
 /**
  * Resolved outcome of combining {@link inspectDevelopmentBranch} with the
  * live GitHub default branch (#2272). Unlike {@link DevelopmentBranchStatus}
@@ -910,6 +1182,18 @@ export const POLICY_DEFAULTS = Object.freeze({
     split: Object.freeze({ enabled: false, maxCandidateFiles: 8 }),
     release: Object.freeze({ enabled: false, requireChecklistPass: true }),
   }),
+  // Auto-decide classes (issue #4956, roadmap #4955). Every class is off by
+  // default; a class acts only when dangerouslyAutoDecide is also true.
+  autoDecide: Object.freeze({
+    decisionIssue: Object.freeze({ enabled: false }),
+    runtimeQuestion: Object.freeze({ enabled: false }),
+    authoringChoice: Object.freeze({ enabled: false }),
+    worktreeRemnant: Object.freeze({ enabled: false, quietWindow: 'PT2H' }),
+    b1Leftover: Object.freeze({ enabled: false }),
+    maxPendingConfirmations: 10,
+    maxDecisionsPerClaim: 3,
+    confirmationLabelName: 'status:needs-confirmation',
+  }) as Readonly<AutoDecideEffective>,
   dangerouslyAutoDecide: false,
   maintainerApprovalActorPolicy: 'owners-and-maintainers-only',
   stallRecovery: Object.freeze({
@@ -1432,6 +1716,7 @@ export function normalizePolicyConfig(config: unknown) {
   };
   const githubApi: GithubApiPolicy = { telemetry, readCache, loadControl };
   const standingApprovals = effectiveStandingApprovals(config);
+  const autoDecide = effectiveAutoDecide(config);
   // #4427: only a literal `false` disables admission; every other value keeps
   // it on. The helper, not this parser, rejects `flock` with a cap above 1, so
   // the stored value stays visible here.
@@ -1729,6 +2014,7 @@ export function normalizePolicyConfig(config: unknown) {
     githubApi,
     localExec,
     standingApprovals,
+    autoDecide,
   };
 }
 

@@ -24,6 +24,8 @@ export const REPOSITORY_POLICY_FIELDS = Object.freeze({
   dangerouslyAutoDecide: 'trusted repository decision-authority reader',
   /** `standingApprovals` grants approval authority, so only the repository policy may set it (roadmap #4883). */
   standingApprovals: 'standing-approval readers (roadmap #4883 children)',
+  /** `autoDecide` grants per-class auto-decision authority, so only the repository policy may set it (roadmap #4955). */
+  autoDecide: 'auto-decide class readers (roadmap #4955 children)',
   /** `advisoryConvergence` configures the convergence helper policy read. */
   advisoryConvergence: 'advisory-convergence.mts',
   /** `reviewPolicy` controls whether advisory convergence applies. */
@@ -88,6 +90,7 @@ export const REPOSITORY_POLICY_FIELDS = Object.freeze({
 const ALWAYS_REPOSITORY_LOCAL_POLICY_FIELDS = new Set([
   'dangerouslyAutoDecide',
   'standingApprovals',
+  'autoDecide',
 ]);
 
 /** Local delegate objects are validated as a whole by their consumers. */
