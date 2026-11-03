@@ -701,25 +701,6 @@ When these prevent-during-drafting checks are applied correctly, published
 issues will pass A4.5; if they do not, A4.5 will catch them at discover
 time and report the specific failure (unclear, invalid, duplicate).
 
-Worker-side authoring normally hands scope-overrun splits to the companion.\
-Its only exception is when `standingApprovals.split.enabled`, every child fits
-effective `maxCandidateFiles`, and each checkbox-stripped parent acceptance
-criterion appears whole/verbatim in exactly one child.\
-Dry-run, then apply each held orphan separately with
-`publish-authoring-hold --shape orphan`.\
-On refusal, failure, recovery hold, or uncertain parent-record POST, stop.\
-Retain the parent claim and hold, leave published children held, and do not
-release the parent. Reconcile an uncertain POST before retrying.\
-After every child succeeds, post the parent's standing-approval record:
-`<!-- idd-skill-standing-approval: class=split; set=none;
-anchor=<owner/repo#n>; ceiling=<maxCandidateFiles>; option=<option-id> -->`.
-Use the split option ID recorded on the roadmap, then the existing
-estimate/candidate/changed-files/split-proposal comment, `unclaimed-by`, and
-`lost-claim-cleanup` sequence.\
-Every other case follows the existing comment/release/stop rule. Companion
-handoff applies only when the class is off or absent; refusal leaves the
-comment.
-
 ## Use this bundle to
 
 - prepare IDD-ready orphan issues when the target repository discovers
@@ -771,3 +752,26 @@ issue's authoring label, and that authorizes no execution either: the issue
 keeps its confirmation label (`autoDecide.confirmationLabelName`), which keeps
 it out of Discover, so it never enters the loop. The operator confirms the
 choice by closing the issue.
+
+The worker-side authoring rule has one exception, the standing split class.
+An IDD worker otherwise never authors issues itself: `idd-work.instructions.md`
+hands a follow-up or a scope-overrun split proposal to this bundle, or records
+it in a comment. The exception covers only a scope overrun, and only when
+`standingApprovals.split.enabled` is true, every child fits the effective
+`maxCandidateFiles`, and each parent acceptance-criteria line, with its
+checkbox stripped, appears whole and verbatim in exactly one child. The worker
+keeps the parent claim and works in this order. It publishes each child as a
+held orphan, one child per `publish-authoring-hold --shape orphan` call, first
+as a dry run and then with `--apply`. If a publish is refused, fails, or leaves
+a recovery hold, or the record below cannot be posted, it stops: it publishes
+no more children, keeps the parent claim and hold and the published children
+held, reports, and does not release the parent. Only after every child is
+published does it post on the parent, with the split option ID the roadmap
+records, the record
+`<!-- idd-skill-standing-approval: class=split; set=none;
+anchor=<owner/repo#n>; ceiling=<maxCandidateFiles>; option=<option-id> -->`.
+Then it comments the estimate, the candidate and changed files, and the split
+proposal, releases the parent claim, and runs `lost-claim-cleanup`, with no
+handoff to this bundle. The children stay held; releasing them follows the
+release rules above. In every other case the existing scope-overrun rule
+applies unchanged.
