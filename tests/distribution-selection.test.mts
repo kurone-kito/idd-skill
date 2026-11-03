@@ -5,6 +5,7 @@ import * as fs from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { after, test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { injectGeneratedFromBanner } from '../src/scripts/consistency-helpers.mts';
 import {
   bindDistributionSelection,
@@ -12,6 +13,7 @@ import {
   inspectDistributionRouting,
   inspectDistributionSelection,
 } from '../src/scripts/distribution-selection.mts';
+import { parseRemoteRepoRef } from '../src/scripts/idd-onboard.mts';
 import type { FsOps } from '../src/scripts/user-global-paths.mts';
 import {
   type ReceiptEntry,
@@ -664,6 +666,174 @@ test('unrelated files in the instruction directory do not count as an IDD instal
 
   const routing = inspectDistributionRouting(fixture.options());
   assert.notEqual(routing.report.source, 'repository-local');
+});
+
+test('a placeholder with a digit in its name fails closed even when the local copy keeps it', () => {
+  const fixture = makeFixture();
+  const content = '# core {{PHASE_2}}\n';
+  fixture.addPreparedSet(COMMIT_A, 'one', MARKER_INSTRUCTION_PATH, content);
+  fixture.installCurrent(
+    COMMIT_A,
+    '1.0.0',
+    'one',
+    MARKER_INSTRUCTION_PATH,
+    content,
+  );
+  writeLocalInstruction(fixture.repo, MARKER_INSTRUCTION_PATH, content);
+
+  const routing = inspectDistributionRouting(fixture.options());
+  assert.equal(routing.report.source, 'repository-local');
+  assert.equal(routing.report.verdict, 'migration-required');
+  assert.equal(routing.route, 'none');
+});
+
+test('a repository name concreted from the origin remote keeps local provenance', () => {
+  const fixture = makeFixture();
+  const content = '# repo {{REPO_NAME}}\n';
+  fixture.addPreparedSet(COMMIT_A, 'one', MARKER_INSTRUCTION_PATH, content);
+  fixture.installCurrent(
+    COMMIT_A,
+    '1.0.0',
+    'one',
+    MARKER_INSTRUCTION_PATH,
+    content,
+  );
+  writeLocalInstruction(fixture.repo, MARKER_INSTRUCTION_PATH, '# repo app\n');
+
+  const routing = inspectDistributionRouting(fixture.options());
+  assert.equal(routing.report.source, 'repository-local');
+  assert.equal(routing.report.verdict, 'coherent-candidate');
+  assert.equal(routing.route, 'repository-local');
+});
+
+test('the origin repository name matches the name onboarding derives from each remote form', () => {
+  const remotes = [
+    'https://github.com/acme/app.git',
+    'https://github.com/acme/app/',
+    'git@github.com:acme/app.git',
+    'ssh://git@github.com/acme/app.git',
+    'https://example.com/group/subgroup/app',
+  ];
+  for (const remote of remotes) {
+    const fixture = makeFixture();
+    execFileSync('git', ['remote', 'set-url', 'origin', remote], {
+      cwd: fixture.repo,
+    });
+    const name = parseRemoteRepoRef(remote)?.repo;
+    assert.ok(name, remote);
+    const content = '# repo {{REPO_NAME}}\n';
+    fixture.addPreparedSet(COMMIT_A, 'one', MARKER_INSTRUCTION_PATH, content);
+    fixture.installCurrent(
+      COMMIT_A,
+      '1.0.0',
+      'one',
+      MARKER_INSTRUCTION_PATH,
+      content,
+    );
+    writeLocalInstruction(
+      fixture.repo,
+      MARKER_INSTRUCTION_PATH,
+      `# repo ${name}\n`,
+    );
+
+    const routing = inspectDistributionRouting(fixture.options());
+    assert.equal(routing.report.verdict, 'coherent-candidate', remote);
+  }
+});
+
+test('a nested partial instruction tree is migration-required, not a fall-through', () => {
+  const fixture = makeFixture();
+  fixture.addPreparedSet(
+    COMMIT_A,
+    'one',
+    MARKER_INSTRUCTION_PATH,
+    'entry one\n',
+  );
+  fixture.installCurrent(
+    COMMIT_A,
+    '1.0.0',
+    'one',
+    MARKER_INSTRUCTION_PATH,
+    'entry one\n',
+  );
+  writeLocalInstruction(
+    fixture.repo,
+    '.github/instructions/lite/idd-work-lite.instructions.md',
+    'partial\n',
+  );
+
+  const routing = inspectDistributionRouting(fixture.options());
+  assert.equal(routing.report.source, 'repository-local');
+  assert.equal(routing.report.verdict, 'migration-required');
+  assert.equal(routing.route, 'none');
+});
+
+test('an unreadable instruction directory counts as a repository-local tree', () => {
+  const fixture = makeFixture();
+  fixture.addPreparedSet(
+    COMMIT_A,
+    'one',
+    MARKER_INSTRUCTION_PATH,
+    'entry one\n',
+  );
+  fixture.installCurrent(
+    COMMIT_A,
+    '1.0.0',
+    'one',
+    MARKER_INSTRUCTION_PATH,
+    'entry one\n',
+  );
+  writeLocalInstruction(
+    fixture.repo,
+    '.github/instructions/README.md',
+    'notes\n',
+  );
+  const instructionDirectory = join('.github', 'instructions');
+  const failingFs = {
+    ...fs,
+    readdirSync: ((path: fs.PathLike) => {
+      if (String(path).endsWith(instructionDirectory)) {
+        throw new Error('injected instruction directory failure');
+      }
+      return fs.readdirSync(path);
+    }) as typeof fs.readdirSync,
+  } as FsOps;
+
+  const routing = inspectDistributionRouting({
+    ...fixture.options(),
+    fs: failingFs,
+  });
+  assert.equal(routing.report.source, 'repository-local');
+  assert.equal(routing.report.verdict, 'migration-required');
+  assert.equal(routing.route, 'none');
+});
+
+test('every placeholder in the shipped instruction tree has a value in the local comparison', () => {
+  const shipped = fileURLToPath(
+    new URL('../idd-template/.github/instructions/', import.meta.url),
+  );
+  const found = new Set<string>();
+  const visit = (directory: string): void => {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) {
+        visit(path);
+      } else if (entry.name.endsWith('.md')) {
+        const text = fs.readFileSync(path, 'utf8');
+        for (const match of text.matchAll(/\{\{([A-Z][A-Z0-9_]*)\}\}/gu)) {
+          found.add(match[1]);
+        }
+      }
+    }
+  };
+  visit(shipped);
+  assert.ok(found.size > 0);
+  const resolved = new Set(['PROJECT_MARKER_PREFIX', 'REPO_NAME']);
+  assert.deepEqual(
+    [...found].filter((name) => !resolved.has(name)),
+    [],
+    'a new placeholder in the shipped instructions needs a value in resolvePreparedInstructionBytes',
+  );
 });
 
 test('canonical generated instruction banners preserve local provenance', () => {

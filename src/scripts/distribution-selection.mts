@@ -747,54 +747,95 @@ function currentMatches(
   return true;
 }
 
-// Built from parts so the shipped helper carries no literal placeholder token,
-// which the payload residue check would otherwise report.
-const MARKER_PLACEHOLDER = `{{${'PROJECT_MARKER_PREFIX'}}}`;
-const ANY_PLACEHOLDER = /\{\{[A-Z_]+\}\}/u;
+// Tokens are built from parts so the shipped helper carries no literal
+// placeholder, which the payload residue check would otherwise report.
+const placeholderToken = (name: string): string => `{{${name}}}`;
+// The onboarding token grammar: an upper-snake name that starts with a letter.
+const ANY_PLACEHOLDER = /\{\{[A-Z][A-Z0-9_]*\}\}/u;
+
+/**
+ * The repository name onboarding substitutes for `REPO_NAME`: the last path
+ * segment of `remote.origin.url` without `.git`, read the way idd-onboard's
+ * `parseRemoteRepoRef` reads it. idd-onboard imports this module, so the parse
+ * is repeated here, and a test keeps the two in step. Returns null on any
+ * failure.
+ */
+function repositoryNameFromOrigin(worktreeRoot: string): string | null {
+  let url: string;
+  try {
+    url = execFileSync(
+      'git',
+      ['-C', worktreeRoot, 'config', '--get', 'remote.origin.url'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
+    ).trim();
+  } catch {
+    return null;
+  }
+  const raw = url.replace(/\/+$/, '');
+  if (raw === '') return null;
+  const scpMatch = raw.match(/^[\w.-]+@([\w.-]+):(.+)$/);
+  const path = scpMatch
+    ? scpMatch[2]
+    : raw.replace(/^[a-z+]+:\/\/([^/@]+@)?[^/]+\//i, '');
+  if (path === raw && !scpMatch) return null;
+  const segments = path.split('/').filter((segment) => segment.length > 0);
+  if (segments.length < 2) return null;
+  const repo = (segments[segments.length - 1] ?? '').replace(/\.git$/, '');
+  return repo === '' ? null : repo;
+}
 
 /**
  * Resolve a prepared instruction the way onboarding concretes a local copy.
- * Only the marker prefix has a value here: the repository policy's
- * `markerPrefix`, which onboarding records from the repository name or from an
- * explicit override. Any other placeholder, or a prefix the policy does not
- * carry, returns null, so the comparison fails closed.
+ * Only the two tokens that instruction files carry have values here:
+ * `PROJECT_MARKER_PREFIX`, the repository policy's `markerPrefix`, and
+ * `REPO_NAME`, the origin repository name. Any other placeholder, or a value
+ * that is missing, returns null, so the comparison fails closed.
  */
 function resolvePreparedInstructionBytes(
   bytes: Buffer,
   policy: JsonObject | null,
+  repoName: string | null,
 ): Buffer | null {
   const text = bytes.toString('utf8');
   if (!Buffer.from(text, 'utf8').equals(bytes)) return null;
   if (!text.includes('{{')) return bytes;
-  const markerPrefix = policy?.markerPrefix;
-  if (typeof markerPrefix !== 'string' || markerPrefix.length === 0) {
-    return null;
+  const values: Array<[string, unknown]> = [
+    ['PROJECT_MARKER_PREFIX', policy?.markerPrefix],
+    ['REPO_NAME', repoName],
+  ];
+  let resolved = text;
+  for (const [name, value] of values) {
+    if (typeof value === 'string' && value.length > 0) {
+      resolved = resolved.split(placeholderToken(name)).join(value);
+    }
   }
-  const resolved = text.split(MARKER_PLACEHOLDER).join(markerPrefix);
   return ANY_PLACEHOLDER.test(resolved) ? null : Buffer.from(resolved, 'utf8');
 }
 
 /**
  * Whether a repository-local instruction tree is present at all. Any
- * `idd-*.instructions.md` entry counts, not only the core file, so a partial
- * tree cannot fall through to another route, while unrelated files do not.
- * Every enumeration or containment failure counts as present, which fails
- * closed.
+ * `idd-*.instructions.md` entry counts at any depth, not only the core file, so
+ * a partial tree cannot fall through to another route, while unrelated files do
+ * not. A symlink or other non-file entry counts as present, and so does every
+ * enumeration or containment failure, which fails closed.
  */
 function localInstructionTreePresent(ctx: SelectionContext): boolean {
   if (ctx.worktreeRoot === null) return false;
-  const directory = join(ctx.worktreeRoot, '.github', 'instructions');
+  const root = join(ctx.worktreeRoot, '.github', 'instructions');
+  const visit = (directory: string): boolean => {
+    for (const name of ctx.fs.readdirSync(directory)) {
+      if (/^idd-.+\.instructions\.md$/u.test(name)) return true;
+      const child = join(directory, name);
+      const kind = checkContainment(root, child, ctx.fs).finalKind;
+      if (kind === 'directory' ? visit(child) : kind !== 'file') return true;
+    }
+    return false;
+  };
   try {
-    const kind = checkContainment(
-      ctx.worktreeRoot,
-      directory,
-      ctx.fs,
-    ).finalKind;
+    const kind = checkContainment(ctx.worktreeRoot, root, ctx.fs).finalKind;
     if (kind === 'absent') return false;
     if (kind !== 'directory') return true;
-    return ctx.fs
-      .readdirSync(directory)
-      .some((name) => /^idd-.+\.instructions\.md$/u.test(name));
+    return visit(root);
   } catch {
     return true;
   }
@@ -813,6 +854,7 @@ function localInstructionsMatchSet(
   set: PreparedSet,
 ): boolean {
   if (ctx.worktreeRoot === null) return false;
+  const repoName = repositoryNameFromOrigin(ctx.worktreeRoot);
   const component = componentListingAt(set.manifest, 'instructions');
   if (!Array.isArray(component.files)) return false;
   const prefix = '.github/instructions/';
@@ -840,7 +882,11 @@ function localInstructionsMatchSet(
     }
     // The prepared bytes must still be the ones the manifest recorded.
     if (sha256(preparedBytes) !== raw.sha256) return false;
-    const resolved = resolvePreparedInstructionBytes(preparedBytes, ctx.policy);
+    const resolved = resolvePreparedInstructionBytes(
+      preparedBytes,
+      ctx.policy,
+      repoName,
+    );
     if (resolved === null) return false;
     expected.set(localPath, sha256(resolved));
   }
