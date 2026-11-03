@@ -207,6 +207,8 @@ export function claimCheckArgv(options, worktree, owner, repo, root) {
     options.claimId,
     '--nonce',
     options.nonce,
+    '--agent-id',
+    options.agentId,
     '--worktree',
     worktree,
     '--owner',

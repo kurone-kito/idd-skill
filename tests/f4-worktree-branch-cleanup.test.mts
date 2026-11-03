@@ -1169,16 +1169,30 @@ test('the proof dry run never carries --apply, so the helper never posts a proof
 
 test('the claim check asserts with the nonce and the claimed worktree', () => {
   const argv = claimCheckArgv(
-    { issueNumber: ISSUE, claimId: CLAIM, nonce: 'nonce-x' },
+    { issueNumber: ISSUE, claimId: CLAIM, nonce: 'nonce-x', agentId: AGENT },
     '/work/wt',
     'owner',
     'repo',
     '/root',
   );
-  assert.ok(argv.includes('--assert'));
-  assert.equal(argv[argv.indexOf('--nonce') + 1], 'nonce-x');
-  assert.equal(argv[argv.indexOf('--worktree') + 1], '/work/wt');
-  assert.equal(argv.includes('--apply'), false);
+  assert.deepEqual(argv, [
+    '/root/scripts/resume-claim-routing.mjs',
+    '--issue',
+    String(ISSUE),
+    '--assert',
+    '--claim-id',
+    CLAIM,
+    '--nonce',
+    'nonce-x',
+    '--agent-id',
+    AGENT,
+    '--worktree',
+    '/work/wt',
+    '--owner',
+    'owner',
+    '--repo',
+    'repo',
+  ]);
 });
 
 test('parseArgs takes the flags and refuses a relative worktree, a bad issue, or no nonce', () => {

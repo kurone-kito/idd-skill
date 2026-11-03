@@ -131,26 +131,12 @@ function assertClaim(
   request: ClaimAssertRequest,
   options: { owner: string; repo: string },
 ): ClaimAssertOutcome {
-  const script = join(
-    resolveBundleRoot(import.meta.dirname),
-    'scripts/resume-claim-routing.mjs',
-  );
-  const argv = [
-    script,
-    '--issue',
-    String(request.issueNumber),
-    '--assert',
-    '--claim-id',
-    request.claimId,
-    '--nonce',
-    request.nonce,
-    '--worktree',
-    request.worktree,
-    '--owner',
+  const argv = claimAssertArgv(
+    request,
     options.owner,
-    '--repo',
     options.repo,
-  ];
+    resolveBundleRoot(import.meta.dirname),
+  );
   let stdout = '';
   let exited = 0;
   try {
@@ -166,6 +152,33 @@ function assertClaim(
     request.claimId,
     request.agentId,
   );
+}
+
+/** Build the argv for the session-qualified claim assertion. */
+export function claimAssertArgv(
+  request: ClaimAssertRequest,
+  owner: string,
+  repo: string,
+  root: string,
+): string[] {
+  return [
+    join(root, 'scripts/resume-claim-routing.mjs'),
+    '--issue',
+    String(request.issueNumber),
+    '--assert',
+    '--claim-id',
+    request.claimId,
+    '--nonce',
+    request.nonce,
+    '--agent-id',
+    request.agentId,
+    '--worktree',
+    request.worktree,
+    '--owner',
+    owner,
+    '--repo',
+    repo,
+  ];
 }
 
 /**
