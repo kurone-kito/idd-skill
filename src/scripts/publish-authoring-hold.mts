@@ -20,7 +20,11 @@
 // real reference in its markers), with a same-owner anchor heartbeat before
 // its own owner marker, and never edits the anchor's body. For a
 // draft carrier it then runs the carrier release (contract.md, "Carrier
-// creation-hold exception"). A failed marker post is uncertain unless the
+// creation-hold exception"). An auto-decide confirmation issue (#4964) is
+// published like an orphan with the authoring label and the configured
+// confirmation label, after a check of that label name against the trusted
+// policy at the default branch, and then runs the same release, which removes
+// only the authoring label. A failed marker post is uncertain unless the
 // child's error envelope proves that nothing was sent (#4171).
 
 import { spawnSync } from 'node:child_process';
@@ -46,7 +50,12 @@ import {
   readForcedHandoffAuthorityPolicy,
   readForcedHandoffMode,
 } from './collaborator-permission.mts';
-import { ghApiJson, ghText, resolveViewerLogin } from './gh-exec.mts';
+import {
+  ghApiJson,
+  ghText,
+  readGithubRepoDefaultBranch,
+  resolveViewerLogin,
+} from './gh-exec.mts';
 import { deriveGhHttpStatus } from './gh-http-status.mts';
 import type { HelperCliResult } from './helper-cli-runner.mts';
 import {
@@ -54,7 +63,10 @@ import {
   isHelperErrorEnvelopeEnabled,
   runHelperCli,
 } from './helper-cli-runner.mts';
-import { readRepositoryPolicyFile } from './idd-config.mts';
+import {
+  loadTrustedIddConfig,
+  readRepositoryPolicyFile,
+} from './idd-config.mts';
 import { resolveOpenLinkedPrIssues } from './idd-roadmap-audit-execute.mts';
 import { maskMarkdownCodeRegionsPreservingPositions } from './markdown-code.mts';
 import {
@@ -65,6 +77,7 @@ import {
 } from './marker-helpers.mts';
 import {
   AUTHORING_JOURNAL_REFERENCE_PATTERN,
+  findAutoDecideLabelCollisions,
   normalizePolicyConfig,
   parseIsoDurationToMs,
 } from './policy-helpers.mts';
@@ -90,12 +103,13 @@ export const PUBLISH_BUCKETS = [
 ] as const;
 export type PublishBucket = (typeof PUBLISH_BUCKETS)[number];
 
-/** The shapes this command publishes (#4127, #4253, #4251). */
+/** The shapes this command publishes (#4127, #4253, #4251, #4964). */
 const PUBLISH_SHAPES: readonly string[] = [
   'orphan',
   'carrier',
   'roadmap',
   'child',
+  'confirmation',
 ];
 
 const PUBLISH_AUTHORING_HOLD_FLAG_SPEC = {
@@ -149,6 +163,12 @@ const CARRIER_HELD_NEXT_ACTION =
   "A person's release is required. The labels are left in place, and any release, release-guard, or heartbeat marker already posted stays for that release to reuse.";
 const CARRIER_RECOVERY_NEXT_ACTION =
   "Replay the carrier's owner-marker log and the journal's publication-intent log before any release. Do not release from this report.";
+/** The next actions of a confirmation issue's release (#4964). A rerun would
+ * file a second confirmation issue for one decision, so both forbid it. */
+const CONFIRMATION_HELD_NEXT_ACTION =
+  "A person's Stage 2 release is required. Both labels stay, and any release, release-guard, or heartbeat marker already posted stays for that release to reuse. Do not rerun this command: a rerun would file a second confirmation issue for one decision.";
+const CONFIRMATION_RECOVERY_NEXT_ACTION =
+  "Replay the confirmation issue's owner-marker log and the journal's publication-intent log before any release, and check its labels: a failed or unverified restore can leave the authoring label removed. Do not release from this report. Do not rerun this command: a rerun would file a second confirmation issue for one decision.";
 /** Heartbeat coalescing: only these modes may be reused (contract.md). */
 const COALESCING_MODES = new Set([
   'acquire',
@@ -174,6 +194,20 @@ class CarrierReleaseStop extends Error {
     this.failedStep = failedStep;
   }
 }
+
+/** The live reads of the confirmation label's trusted-name check (#4964).
+ * Declared above the entry-point call, so it is initialized when the CLI
+ * runs. */
+const DEFAULT_CONFIRMATION_LABEL_READS: ConfirmationLabelReads = {
+  readDefaultBranch: readGithubRepoDefaultBranch,
+  // The repository alone governs the label Discover filters on, so no
+  // user-global layer may fill an absent file.
+  readTrustedPolicy: (owner, repo, ref) =>
+    loadTrustedIddConfig(owner, repo, ref, undefined, undefined, {
+      userGlobalFallback: false,
+    }),
+  readStoredLabel: readStoredLabelName,
+};
 
 if (import.meta.main) {
   if (isHelperErrorEnvelopeEnabled()) {
@@ -351,8 +385,8 @@ export function checkCarrierReviewResult(raw: string): string | null {
 /**
  * The linter argv for the injected body. A ready orphan publish passes neither
  * `--expect-bucket` nor `--label`; a non-ready orphan publish passes the bucket
- * and one `--label` for each configured label. A carrier passes one `--label`
- * for each configured label and never a bucket.
+ * and one `--label` for each configured label. A carrier and a confirmation
+ * issue pass one `--label` for each configured label and never a bucket.
  */
 export function buildLintArgs(input: {
   shape: string;
@@ -380,8 +414,9 @@ export function buildLintArgs(input: {
   if (input.policy) {
     args.push('--config', input.policy);
   }
-  if (input.shape === 'carrier') {
-    // audit-authored-issue refuses --expect-bucket with --shape carrier (#4250).
+  if (input.shape === 'carrier' || input.shape === 'confirmation') {
+    // audit-authored-issue refuses --expect-bucket with --shape carrier
+    // (#4250); a confirmation issue has no bucket either (#4964).
     for (const label of input.labels) {
       args.push('--label', label);
     }
@@ -398,7 +433,11 @@ export function buildLintArgs(input: {
  * The labels one publish applies. An orphan takes the authoring label, plus the
  * bucket label for a non-ready publish. A draft carrier (#4253) has no bucket
  * and takes the authoring label and the authoring-only label (#4250), which
- * keeps Discover from claiming it. The authoring label stays at index 0.
+ * keeps Discover from claiming it. An auto-decide confirmation issue (#4964)
+ * takes the authoring label and `autoDecide.confirmationLabelName`, which
+ * keeps Discover from offering it once the authoring label is removed (#4960).
+ * The authoring label stays at index 0, and the label that stays after the
+ * release is at index 1.
  */
 export function resolvePublishLabels(
   config: unknown,
@@ -409,6 +448,10 @@ export function resolvePublishLabels(
   const labels = [normalized.issueAuthoring.authoringLabelName];
   if (shape === 'carrier') {
     labels.push(normalized.labels.authoringOnlyLabelName);
+    return labels;
+  }
+  if (shape === 'confirmation') {
+    labels.push(normalized.autoDecide.confirmationLabelName);
     return labels;
   }
   if (bucket === 'needs-decision') {
@@ -480,7 +523,7 @@ function parseRetiredJournals(
 
 function printHelp(): void {
   process.stdout.write(`Usage:
-  node scripts/publish-authoring-hold.mjs --title <text> --body-file <path> [--review-result <path>] [--shape orphan|carrier|roadmap|child] [--anchor <owner>/<repo>#<number>] [--bucket ready|needs-decision|blocked-by-human] [--owner <owner> --repo <repo>] [--policy <path>] [--marker-prefix <prefix>] [--apply]
+  node scripts/publish-authoring-hold.mjs --title <text> --body-file <path> [--review-result <path>] [--shape orphan|carrier|roadmap|child|confirmation] [--anchor <owner>/<repo>#<number>] [--bucket ready|needs-decision|blocked-by-human] [--owner <owner> --repo <repo>] [--policy <path>] [--marker-prefix <prefix>] [--apply]
 
 Publishes one drafted issue under the issue-authoring hold, running
 contract.md's "New-issue ownership" steps in order. The default shape,
@@ -490,15 +533,18 @@ their final issues yet. --shape roadmap publishes one held roadmap shell;
 an empty Tracks list is valid, and it is its own set anchor, like an
 orphan. --shape child publishes one held child under an existing set: it
 needs --anchor, the anchor's owner/repo#number, which must be an issue in
-the same repository. Every other shape refuses --anchor (exit 2). One call
-publishes one issue; a child call never edits the anchor's body, so the
-roadmap's Tracks list stays a separate reviewed edit.
+the same repository. --shape confirmation publishes one auto-decide
+confirmation issue, its own set anchor like an orphan, and then releases
+its own creation hold as a carrier does. Every other shape refuses --anchor
+(exit 2). One call publishes one issue; a child call never edits the
+anchor's body, so the roadmap's Tracks list stays a separate reviewed edit.
 
-  1. check the usage (a child needs --anchor and no other shape takes it),
-     then check the review result file: required for an orphan, a roadmap
-     and a child, and optional for a carrier (when given, it is checked as
-     described below). An --anchor in another repository exits 2 as soon
-     as the repository is resolved, before anything is written;
+  1. check the usage (a child needs --anchor and no other shape takes it;
+     a confirmation issue takes no --review-result and only --bucket
+     ready), then check the review result file: required for an orphan, a
+     roadmap and a child, and optional for a carrier (when given, it is
+     checked as described below). An --anchor in another repository exits
+     2 as soon as the repository is resolved, before anything is written;
   2. check issueAuthoring.journalIssue in the repository policy file: it
      must be set, match owner/repo#N, and name an existing issue (it may be
      closed). issueAuthoring.retiredJournalIssues, when set, must be a
@@ -531,11 +577,15 @@ roadmap's Tracks list stays a separate reviewed edit.
      non-ready bucket adds the expected bucket and one label flag per
      configured label; a carrier adds one label flag per configured label
      and no bucket, and needs markdown-it, so without it nothing is
-     written);
+     written; a confirmation issue is linted as the confirmation shape,
+     with one label flag per configured label and no bucket). A
+     confirmation issue then checks its label name against the trusted
+     policy, described below;
   5. resolve the authoring label (issueAuthoring.authoringLabelName) and,
      for a non-ready bucket, labels.needsDecisionLabelName or
-     labels.blockedByHumanLabelName, or for a carrier
-     labels.authoringOnlyLabelName; create a missing label;
+     labels.blockedByHumanLabelName, for a carrier
+     labels.authoringOnlyLabelName, or for a confirmation issue
+     autoDecide.confirmationLabelName; create a missing label;
   6. append the pending publication-intent record (issue=none) to the
      journal through post-idd-marker and read it back;
   7. create the issue with every label in one gh issue create call;
@@ -557,7 +607,8 @@ roadmap's Tracks list stays a separate reviewed edit.
      authoring label, three sweeps and their minimization-backlog counts. The
      authoring-only label stays. The report's release object carries state
      (released, held or recovery-hold), failedStep, nextAction, sweeps and
-     backlog.
+     backlog. --shape confirmation runs the same release, with the
+     confirmation audit in the preconditions; the confirmation label stays.
 
 Every policy value (the journal, the marker prefix, the label names, the
 trusted marker actors and claim.verifySettleDelay) comes from the
@@ -590,6 +641,23 @@ removed only when every precondition holds, and the authoring-only label stays.
 A held outcome leaves the carrier held for a person's release and exits 0; a
 recovery-hold exits 1.
 
+A confirmation issue takes only --bucket ready, its default, and refuses
+--review-result and --anchor (exit 2 before anything is read). It is
+labelled with the authoring label and autoDecide.confirmationLabelName.
+Before anything is written, a dry run included, the command reads the
+trusted policy at the repository's default branch, with no user-global
+layer; an absent file means the default name. It refuses (exit 1) when the
+default branch cannot be resolved, when the policy cannot be read (other
+than absent), when the name from the repository policy file differs from
+the trusted name, when either policy reports a label collision, or when the
+repository stores the label under another letter case. After state=member
+it runs the carrier release, which removes only the authoring label, so the
+confirmation label keeps the issue out of Discover. Its outcomes and exit
+codes are the carrier's. The minimization-backlog counts are not recorded
+for this shape, because the confirmation audit reports none. After the
+create, never rerun the command: a rerun would file a second confirmation
+issue for one decision.
+
 Without --apply this is a dry run: it makes the read-only checks, the lint
 and the label lookups, prints the planned steps, and writes nothing.
 
@@ -609,14 +677,17 @@ created issue, the failed step and the last journal state, and exits 1.
 That state is pending, or "uncertain: replay the journal" when a record
 may have been posted but could not be verified. The issue keeps its
 labels and is never closed. The Stage 2 release of an orphan, a roadmap or a
-child stays a separate, explicit request; a carrier's release runs after
-member, as described above.
+child stays a separate, explicit request; the release of a carrier or a
+confirmation issue runs after member, as described above.
 
-Exit codes: 0 published (or planned; a carrier whose release is held also
-exits 0), 1 refused, failed, or a recovery hold (a carrier release that stops
-at a recovery hold; an unusable anchor), 2 usage error, a child without a
+Exit codes: 0 published (or planned; a carrier or confirmation issue whose
+release is held also exits 0), 1 refused, failed, or a recovery hold (a
+release that stops at a recovery hold; an unusable anchor; a confirmation
+label that fails the trusted-name check), 2 usage error, a child without a
 valid --anchor in the issue's repository, --anchor on another shape, a
-carrier with a bucket other than ready, or the blocked-by-human journal stop.
+carrier or confirmation issue with a bucket other than ready, a
+confirmation issue with --review-result, or the blocked-by-human journal
+stop.
 `);
 }
 
@@ -820,6 +891,158 @@ function labelExists(owner: string, repo: string, name: string): boolean {
     }
     throw error;
   }
+}
+
+/** The name the repository stores for a label (GitHub looks a label up
+ * without case), or null when the label does not exist. Any other read
+ * failure throws. */
+function readStoredLabelName(
+  owner: string,
+  repo: string,
+  name: string,
+): string | null {
+  let raw: unknown;
+  try {
+    raw = ghApiJson(
+      `repos/${owner}/${repo}/labels/${encodeURIComponent(name)}`,
+    );
+  } catch (error) {
+    if (deriveGhHttpStatus(error) === 404) {
+      return null;
+    }
+    throw error;
+  }
+  const stored = (raw as { name?: unknown } | null)?.name;
+  if (typeof stored !== 'string') {
+    throw new Error(`the label read for ${name} returned no name`);
+  }
+  return stored;
+}
+
+/** One collision the trusted-name check found, with the policy it came from. */
+export interface ConfirmationLabelCollision {
+  /** `trusted` for the default-branch policy, `repository` for the file this
+   * run reads its labels from. */
+  source: 'trusted' | 'repository';
+  setting: string;
+  labelName: string;
+}
+
+/** The report of the trusted-name check of a confirmation label (#4964). */
+export interface ConfirmationLabelCheck {
+  /** The confirmation label this run applies, from the repository policy. */
+  name: string;
+  /** The default branch the trusted policy is read at, or null when unread. */
+  trustedRef: string | null;
+  /** `policy` when the file was read at that ref, `absent` on a confirmed
+   * 404 (the default name applies), or null when it was not read. */
+  trustedSource: 'policy' | 'absent' | null;
+  /** The confirmation label name of the trusted policy, or null when unread. */
+  trustedName: string | null;
+  collisions: ConfirmationLabelCollision[];
+  /** The stored name of the repository label, or null when it is missing
+   * (the create step adds it) or was not read. */
+  storedName: string | null;
+}
+
+/** The reads the trusted-name check makes; injectable for tests. */
+export interface ConfirmationLabelReads {
+  readDefaultBranch: (owner: string, repo: string) => string | null;
+  /** The policy document at `ref`, or null on a confirmed 404. Throws on any
+   * other failure. */
+  readTrustedPolicy: (owner: string, repo: string, ref: string) => unknown;
+  readStoredLabel: (owner: string, repo: string, name: string) => string | null;
+}
+
+/**
+ * Check the confirmation label against the trusted policy before any write
+ * (#4964). The policy is read at the default branch with no user-global
+ * fallback; an absent file means the default name. The check refuses when
+ * the default branch is unresolved, when the policy cannot be read (other than
+ * absent), when the name this run resolved from the repository policy file
+ * differs from the trusted name, when either policy reports a label collision
+ * (`findAutoDecideLabelCollisions`), or when the repository stores the label
+ * under another letter case. A pull request or a stale checkout that renamed
+ * the label could otherwise let the released issue escape Discover.
+ */
+export function checkTrustedConfirmationLabel(
+  input: { owner: string; repo: string; config: unknown; name: string },
+  reads: ConfirmationLabelReads = DEFAULT_CONFIRMATION_LABEL_READS,
+): { detail: ConfirmationLabelCheck; problem: string | null } {
+  const { owner, repo, name } = input;
+  const detail: ConfirmationLabelCheck = {
+    name,
+    trustedRef: null,
+    trustedSource: null,
+    trustedName: null,
+    collisions: [],
+    storedName: null,
+  };
+  const stop = (problem: string) => ({ detail, problem });
+  let ref: string | null;
+  try {
+    ref = reads.readDefaultBranch(owner, repo);
+  } catch {
+    ref = null;
+  }
+  if (ref === null || ref.trim() === '') {
+    return stop(
+      `the default branch of ${owner}/${repo} cannot be resolved, so the trusted confirmation label name cannot be read`,
+    );
+  }
+  detail.trustedRef = ref;
+  let trusted: unknown;
+  try {
+    trusted = reads.readTrustedPolicy(owner, repo, ref);
+  } catch (error) {
+    return stop(
+      `the trusted policy of ${owner}/${repo} at ${ref} cannot be read, so the confirmation label name cannot be checked: ${messageOf(error)}`,
+    );
+  }
+  detail.trustedSource = trusted === null ? 'absent' : 'policy';
+  const trustedName =
+    normalizePolicyConfig(trusted).autoDecide.confirmationLabelName;
+  detail.trustedName = trustedName;
+  if (name !== trustedName) {
+    return stop(
+      `the confirmation label ${JSON.stringify(name)} of the repository policy file differs from ${JSON.stringify(trustedName)}, the trusted name at ${ref}`,
+    );
+  }
+  detail.collisions = [
+    ...findAutoDecideLabelCollisions(trusted).map((collision) => ({
+      source: 'trusted' as const,
+      ...collision,
+    })),
+    ...findAutoDecideLabelCollisions(input.config).map((collision) => ({
+      source: 'repository' as const,
+      ...collision,
+    })),
+  ];
+  if (detail.collisions.length > 0) {
+    return stop(
+      `the confirmation label ${JSON.stringify(name)} collides with ${detail.collisions
+        .map(
+          (collision) =>
+            `${collision.setting} (${collision.labelName}, ${collision.source} policy)`,
+        )
+        .join(', ')}`,
+    );
+  }
+  let stored: string | null;
+  try {
+    stored = reads.readStoredLabel(owner, repo, name);
+  } catch (error) {
+    return stop(
+      `cannot read the label ${JSON.stringify(name)}: ${messageOf(error)}`,
+    );
+  }
+  detail.storedName = stored;
+  if (stored !== null && stored !== name) {
+    return stop(
+      `the repository stores the confirmation label as ${JSON.stringify(stored)}, which differs in letter case from ${JSON.stringify(name)}`,
+    );
+  }
+  return { detail, problem: null };
 }
 
 /** Write, Maintain or Admin on the repository; an unreadable permission is
@@ -1508,6 +1731,18 @@ function runCli(): HelperCliResult {
       `--bucket must be ready for --shape carrier (got ${JSON.stringify(bucket)}): a draft carrier has no readiness bucket`,
     );
   }
+  // A confirmation issue records an auto-decided stop for a person to answer:
+  // it has no readiness bucket and no reviewed draft (#4964).
+  if (args.shape === 'confirmation' && bucket !== 'ready') {
+    return usage(
+      `--bucket must be ready for --shape confirmation (got ${JSON.stringify(bucket)}): a confirmation issue has no readiness bucket`,
+    );
+  }
+  if (args.shape === 'confirmation' && args.reviewResultGiven) {
+    return usage(
+      '--review-result is not taken by --shape confirmation: a confirmation issue records an auto-decided stop, not a reviewed draft',
+    );
+  }
   if (args.title === '') {
     return usage('--title is required');
   }
@@ -1517,7 +1752,11 @@ function runCli(): HelperCliResult {
   if (args.reviewResultGiven && args.reviewResult === '') {
     return usage('--review-result needs a file path');
   }
-  if (args.reviewResult === '' && args.shape !== 'carrier') {
+  if (
+    args.reviewResult === '' &&
+    args.shape !== 'carrier' &&
+    args.shape !== 'confirmation'
+  ) {
     return usage(
       `--review-result is required for --shape ${args.shape}: the completed draft adversarial review must be recorded before publication`,
     );
@@ -1841,16 +2080,21 @@ function publish(input: {
   // A carrier's release removes the authoring label by name, so identical names
   // would strip the authoring-only label too, and an empty name would remove
   // nothing: refuse before any write.
-  if (args.shape === 'carrier') {
+  // The same holds for a confirmation issue, whose release keeps the
+  // confirmation label (#4964).
+  const releases = args.shape === 'carrier' || args.shape === 'confirmation';
+  if (releases) {
     const authoringName = labels[0] ?? '';
-    const authoringOnlyName = labels[1] ?? '';
+    const keptName = labels[1] ?? '';
     if (
       authoringName === '' ||
-      authoringOnlyName === '' ||
-      authoringName.toLowerCase() === authoringOnlyName.toLowerCase()
+      keptName === '' ||
+      authoringName.toLowerCase() === keptName.toLowerCase()
     ) {
       return refuse(
-        'the authoring label and labels.authoringOnlyLabelName must be different, non-empty names for a carrier',
+        args.shape === 'carrier'
+          ? 'the authoring label and labels.authoringOnlyLabelName must be different, non-empty names for a carrier'
+          : 'the authoring label and autoDecide.confirmationLabelName must be different, non-empty names for a confirmation issue',
         base,
       );
     }
@@ -1876,6 +2120,30 @@ function publish(input: {
     });
   }
   steps.push({ step: 'lint', status: 'done', detail: lintReport });
+
+  // A confirmation issue's label name must match the trusted policy at the
+  // default branch before anything is written (#4964). Read-only, so a dry
+  // run makes the check too.
+  if (args.shape === 'confirmation') {
+    const trustedCheck = checkTrustedConfirmationLabel({
+      owner,
+      repo,
+      config: input.config,
+      name: labels[1] ?? '',
+    });
+    if (trustedCheck.problem !== null) {
+      return refuse(trustedCheck.problem, {
+        ...base,
+        steps,
+        confirmationLabel: trustedCheck.detail,
+      });
+    }
+    steps.push({
+      step: 'confirmation-label',
+      status: 'done',
+      detail: trustedCheck.detail,
+    });
+  }
 
   // Step 5: resolve the labels before any journal write.
   let missing: string[];
@@ -1967,9 +2235,9 @@ function publish(input: {
         : [{ step: 'anchor-verify', status: 'planned' } as const]),
       { step: 'member', status: 'planned' },
     );
-    if (args.shape === 'carrier') {
+    if (releases) {
       steps.push({
-        step: 'carrier-release',
+        step: `${args.shape}-release`,
         status: 'planned',
         detail: { steps: CARRIER_RELEASE_PLAN },
       });
@@ -2485,8 +2753,9 @@ function publish(input: {
     });
   }
 
-  if (args.shape === 'carrier') {
+  if (releases) {
     const release = releaseCarrier({
+      shape: args.shape === 'confirmation' ? 'confirmation' : 'carrier',
       owner,
       repo,
       number,
@@ -2523,7 +2792,9 @@ function publish(input: {
 
 // ---------------------------------------------------------------------------
 // Stage 2 release of a draft carrier (contract.md, "Carrier creation-hold
-// exception"). Runs after `member` is verified, for --shape carrier only.
+// exception"). Runs after `member` is verified, for --shape carrier and for
+// --shape confirmation, which releases its own creation hold the same way and
+// keeps the confirmation label (#4964).
 // Fail closed: `held` keeps both labels and the markers already posted for a
 // person's release; `recovery-hold` needs an owner-log replay first.
 // ---------------------------------------------------------------------------
@@ -2548,6 +2819,10 @@ export interface CarrierBacklogRecord {
 
 /** The inputs of the carrier release, all from the verified publication. */
 export interface CarrierReleaseInput {
+  /** The shape being released: a draft carrier (the default), or an
+   * auto-decide confirmation issue (#4964), which runs the same release with
+   * the confirmation audit in its preconditions. */
+  shape?: 'carrier' | 'confirmation';
   owner: string;
   repo: string;
   number: number;
@@ -2556,6 +2831,8 @@ export interface CarrierReleaseInput {
   ids: PublicationIds;
   journal: { owner: string; repo: string; number: number; ref: string };
   authoringLabel: string;
+  /** The label that stays after the release: the authoring-only label of a
+   * carrier, or the confirmation label of a confirmation issue. */
   authoringOnlyLabel: string;
   settleMs: number;
   heartbeatWindowMs: number;
@@ -2589,6 +2866,18 @@ function sha256Hex(text: string): string {
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** The issue a release message names: `carrier`, or `confirmation issue`. */
+function releaseSubject(input: CarrierReleaseInput): string {
+  return input.shape === 'confirmation' ? 'confirmation issue' : 'carrier';
+}
+
+/** The label that stays, as a release message names it. */
+function keptLabelNoun(input: CarrierReleaseInput): string {
+  return input.shape === 'confirmation'
+    ? 'confirmation label'
+    : 'authoring-only label';
 }
 
 /** The set snapshot digest (contract.md, "Stage 2"): SHA-256 of the
@@ -2787,7 +3076,7 @@ function readCarrierSnapshot(
     throw new CarrierReleaseStop(
       'held',
       step,
-      `the carrier cannot be read: ${messageOf(error)}`,
+      `the ${releaseSubject(input)} cannot be read: ${messageOf(error)}`,
     );
   }
 }
@@ -2927,9 +3216,11 @@ function runCarrierAudit(
   failingIds: string[];
   findings: unknown[];
 } {
+  // A confirmation issue is audited in body mode (no record flag), with both
+  // configured labels, like a carrier (#4964).
   const args = [
     '--shape',
-    'carrier',
+    input.shape ?? 'carrier',
     '--body-file',
     bodyFile,
     '--marker-prefix',
@@ -2983,7 +3274,7 @@ function checkCarrierPreconditions(
     throw new CarrierReleaseStop(
       'held',
       'precondition-roadmap-id',
-      'a roadmap-id marker is outside code in the carrier body',
+      `a roadmap-id marker is outside code in the ${releaseSubject(input)} body`,
     );
   }
   // (b) sole member of the set, with no requested-set entry that blocks.
@@ -3025,7 +3316,7 @@ function checkCarrierPreconditions(
     throw new CarrierReleaseStop(
       'held',
       'precondition-sole-member',
-      `the carrier is not the sole member of its set: issues ${JSON.stringify(members.json.issues ?? null)}`,
+      `the ${releaseSubject(input)} is not the sole member of its set: issues ${JSON.stringify(members.json.issues ?? null)}`,
     );
   }
   // A skipped-markers value that is present but not a list, or an entry of a
@@ -3075,7 +3366,8 @@ function checkCarrierPreconditions(
       continue;
     }
     // A requested-set entry carries no namesRequestedSet field, so its kind
-    // blocks on any other issue; only the carrier's own hidden marker passes.
+    // blocks on any other issue; only the released issue's own hidden marker
+    // passes.
     if (record.kind === 'requested-set' || record.namesRequestedSet === true) {
       throw new CarrierReleaseStop(
         'held',
@@ -3085,6 +3377,7 @@ function checkCarrierPreconditions(
     }
   }
   // (c) the carrier audit: one carrier marker outside code, and the checklist.
+  // A confirmation issue runs the confirmation audit on its body instead.
   const bodyFile = join(scratch, 'carrier-body.md');
   writeFileSync(bodyFile, body);
   const audit = runCarrierAudit(input, bodyFile, []);
@@ -3092,7 +3385,7 @@ function checkCarrierPreconditions(
     throw new CarrierReleaseStop(
       'held',
       'precondition-audit',
-      `audit-authored-issue --shape carrier did not pass: ${audit.failingIds.join(', ') || 'no verdict'}`,
+      `audit-authored-issue --shape ${input.shape ?? 'carrier'} did not pass: ${audit.failingIds.join(', ') || 'no verdict'}`,
     );
   }
   // The body and the labels that (d) and (e) check are read now, after the
@@ -3118,7 +3411,7 @@ function checkCarrierPreconditions(
     throw new CarrierReleaseStop(
       'held',
       'precondition-body-digest',
-      'no acquire owner marker of this run is on the carrier',
+      `no acquire owner marker of this run is on the ${releaseSubject(input)}`,
     );
   }
   const digest = sha256Hex(body);
@@ -3149,14 +3442,16 @@ function checkCarrierPreconditions(
     throw new CarrierReleaseStop(
       'held',
       'precondition-labels',
-      'a required label is missing from the carrier',
+      `a required label is missing from the ${releaseSubject(input)}`,
     );
   }
   return acquire.parsed.bodySha256;
 }
 
 /** The backlog count from `authoring-marker-minimization-backlog`, read from
- * the audit's own finding detail. Recorded only: it never blocks. */
+ * the audit's own finding detail. Recorded only: it never blocks. The
+ * confirmation audit reports no such finding, so a confirmation issue
+ * records the point as not counted instead of reading anything (#4964). */
 function runCarrierBacklog(
   input: CarrierReleaseInput,
   point: string,
@@ -3164,6 +3459,15 @@ function runCarrierBacklog(
   scratch: string,
   backlog: CarrierBacklogRecord[],
 ): void {
+  if (input.shape === 'confirmation') {
+    backlog.push({
+      point,
+      count: null,
+      detail:
+        'not counted: audit-authored-issue --shape confirmation reports no authoring-marker-minimization-backlog finding',
+    });
+    return;
+  }
   const toAuditComments = (
     comments: readonly AuthoringOwnerProvenanceComment[],
   ): unknown[] =>
@@ -3280,7 +3584,7 @@ function requireMarkerOnLog(
     throw new CarrierReleaseStop(
       'held',
       step,
-      `the ${mode} marker ${id} is not found conclusively on the carrier log${cause}`,
+      `the ${mode} marker ${id} is not found conclusively on the ${releaseSubject(input)} log${cause}`,
     );
   }
 }
@@ -3320,7 +3624,7 @@ function removeAuthoringLabel(
   // The label is gone. Verify the rest of the release state.
   const problems: string[] = [];
   if (!hasLabel(after.labels, input.authoringOnlyLabel)) {
-    problems.push('the authoring-only label is missing');
+    problems.push(`the ${keptLabelNoun(input)} is missing`);
   }
   if (sha256Hex(after.body) !== acquireDigest) {
     problems.push('the body snapshot changed');
@@ -3424,13 +3728,13 @@ function restoreReleaseLabels(
     throw new CarrierReleaseStop(
       'recovery-hold',
       'label-restore',
-      'the restored labels are not all on the carrier',
+      `the restored labels are not all on the ${releaseSubject(input)}`,
     );
   }
   throw new CarrierReleaseStop(
     'held',
     step,
-    `${problem}; both release labels are on the carrier`,
+    `${problem}; both release labels are on the ${releaseSubject(input)}`,
   );
 }
 
@@ -3455,7 +3759,7 @@ function readCarrierAfterWrite(
   throw new CarrierReleaseStop(
     'recovery-hold',
     step,
-    `the carrier cannot be read after a label write (${CARRIER_READ_ATTEMPTS} attempts): ${lastError}`,
+    `the ${releaseSubject(input)} cannot be read after a label write (${CARRIER_READ_ATTEMPTS} attempts): ${lastError}`,
   );
 }
 
@@ -3521,9 +3825,13 @@ export function releaseCarrier(
       state: stop.state,
       failedStep: stop.failedStep,
       nextAction:
-        stop.state === 'held'
-          ? CARRIER_HELD_NEXT_ACTION
-          : CARRIER_RECOVERY_NEXT_ACTION,
+        input.shape === 'confirmation'
+          ? stop.state === 'held'
+            ? CONFIRMATION_HELD_NEXT_ACTION
+            : CONFIRMATION_RECOVERY_NEXT_ACTION
+          : stop.state === 'held'
+            ? CARRIER_HELD_NEXT_ACTION
+            : CARRIER_RECOVERY_NEXT_ACTION,
       reason: stop.message,
       sweeps,
       backlog,
@@ -3660,7 +3968,7 @@ function runCarrierRelease(
     throw new CarrierReleaseStop(
       'held',
       'heartbeat-replay',
-      'the release marker is not on the carrier after the settle wait',
+      `the release marker is not on the ${releaseSubject(input)} after the settle wait`,
     );
   }
   // A reused marker is verified exactly as a posted one would be (contract.md,
@@ -3670,7 +3978,7 @@ function runCarrierRelease(
     throw new CarrierReleaseStop(
       'held',
       'heartbeat-replay',
-      'the heartbeat marker is not on the carrier after the settle wait',
+      `the heartbeat marker is not on the ${releaseSubject(input)} after the settle wait`,
     );
   }
   const afterSettle = readCarrierSnapshot(input, 'heartbeat-replay');
@@ -3718,7 +4026,7 @@ function runCarrierRelease(
     throw new CarrierReleaseStop(
       'held',
       'label-removal',
-      'the release, guard, or heartbeat marker is not on the carrier immediately before the removal',
+      `the release, guard, or heartbeat marker is not on the ${releaseSubject(input)} immediately before the removal`,
     );
   }
   if (stateChanged) {
@@ -3779,7 +4087,7 @@ function runCarrierRelease(
     restoreReleaseLabels(
       input,
       current.labels,
-      'the carrier drifted after the label removal (body, labels, or a release marker); no completion marker was posted',
+      `the ${releaseSubject(input)} drifted after the label removal (body, labels, or a release marker); no completion marker was posted`,
       'release-complete',
     );
   }
