@@ -212,6 +212,43 @@ function mapLastEditedAt(raw) {
   return undefined;
 }
 /**
+ * #5016: statuses a chunk's `gh api graphql` call retries. Each is a gateway
+ * error that a moment later can succeed; every other status (a 4xx, an
+ * unknown one) and a failure with no derivable status fails at once.
+ */
+const FETCH_LAST_EDITED_AT_RETRYABLE_STATUSES = new Set([502, 503, 504]);
+/** #5016: total `gh api graphql` attempts per chunk (the first plus two). */
+const FETCH_LAST_EDITED_AT_TOTAL_ATTEMPTS = 3;
+/** #5016: base sleep between attempts; attempt `n` sleeps `n` times this. */
+const FETCH_LAST_EDITED_AT_BASE_DELAY_MS = 200;
+/**
+ * #5016: run one chunk's `gh api graphql` call, retrying a transient 502,
+ * 503, or 504 up to {@link FETCH_LAST_EDITED_AT_TOTAL_ATTEMPTS} attempts in
+ * total. Only the call itself is retried: the caller parses and validates
+ * the returned text on the first attempt, so a GraphQL error payload or a
+ * malformed node still fails at once. After the last failed attempt the last
+ * error is rethrown unchanged, so a persistent outage still fails the audit.
+ * Synchronous (via {@link sleepSync}) because {@link fetchLastEditedAtByNodeId}
+ * is synchronous, the same reason `withBoundedRetry` is not used here.
+ */
+function ghApiGraphqlChunkWithRetry(ghTextFn, apiArgs) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return ghTextFn(apiArgs, GH_TEXT_LOOP_OPTIONS);
+    } catch (error) {
+      const status = deriveGhHttpStatus(error);
+      if (
+        attempt >= FETCH_LAST_EDITED_AT_TOTAL_ATTEMPTS ||
+        status === null ||
+        !FETCH_LAST_EDITED_AT_RETRYABLE_STATUSES.has(status)
+      ) {
+        throw error;
+      }
+      sleepSync(FETCH_LAST_EDITED_AT_BASE_DELAY_MS * attempt);
+    }
+  }
+}
+/**
  * #3246: batch-resolve GraphQL `IssueComment.lastEditedAt` for the given
  * comment node ids via `nodes(ids:)`, chunked to 100 ids per request
  * (matching this file's own `first:100` page-size convention). Kept for
@@ -230,6 +267,10 @@ function mapLastEditedAt(raw) {
  * throws rather than silently reporting 'unknown' for a caller that
  * explicitly opted in and needs a definitive answer -- mirrors this
  * file's other GraphQL methods' fail-fast-on-malformed-page contract.
+ *
+ * #5016: each chunk's `gh api graphql` call retries a transient 502, 503,
+ * or 504 (see {@link ghApiGraphqlChunkWithRetry}); every other failure,
+ * and every malformed response, still fails on the first attempt.
  */
 export function fetchLastEditedAtByNodeId(ghTextFn, nodeIds) {
   const result = new Map();
@@ -254,7 +295,7 @@ export function fetchLastEditedAtByNodeId(ghTextFn, nodeIds) {
       `query=${query}`,
       ...chunk.flatMap((id) => ['-f', `ids[]=${id}`]),
     ];
-    const parsed = JSON.parse(ghTextFn(apiArgs, GH_TEXT_LOOP_OPTIONS));
+    const parsed = JSON.parse(ghApiGraphqlChunkWithRetry(ghTextFn, apiArgs));
     assertNoGraphqlErrors(parsed, 'fetchLastEditedAtByNodeId');
     const nodes = parsed?.data?.nodes;
     if (!Array.isArray(nodes) || nodes.length !== chunk.length) {
