@@ -1796,6 +1796,26 @@ test('trusted auto-decide: an unreadable document, schema, or default branch mak
     'main',
     /trusted schema unavailable/,
   );
+  // An unreadable schema is unreadable whatever the master switch says.
+  for (const overrides of [{ dangerouslyAutoDecide: false }, {}]) {
+    const input = {
+      owner: 'o',
+      repo: 'r',
+      baseRefName: 'main',
+      fetchEncodedConfig: () => toEncodedConfig(trustedPolicyConfig(overrides)),
+      fetchEncodedPolicySchema: () => {
+        throw new Error('trusted schema unavailable');
+      },
+    };
+    assertEveryClassUnreadable(
+      readTrustedAutoDecide(input),
+      'main',
+      /trusted schema unavailable/,
+    );
+    const master = readTrustedDangerouslyAutoDecide(input);
+    assert.equal(master.status, 'unreadable');
+    assert.match(master.error ?? '', /trusted schema unavailable/);
+  }
 
   assertEveryClassUnreadable(
     readTrustedAutoDecideForTest({
@@ -1856,20 +1876,42 @@ test('trusted auto-decide: a document that fails its schema makes every class un
       { dangerouslyAutoDecide: true, issueScope: 'invalid-scope' },
       /\$\.issueScope/,
     ],
+    // Validation runs whatever the master switch says: with the switch off
+    // or absent, a failing document is still unreadable, never master-off.
+    [
+      { dangerouslyAutoDecide: false, issueScope: 'invalid-scope' },
+      /\$\.issueScope/,
+    ],
+    [{ issueScope: 'invalid-scope' }, /\$\.issueScope/],
+    [
+      {
+        dangerouslyAutoDecide: false,
+        autoDecide: { decisionIssue: { enabled: 'yes' } },
+      },
+      /\$\.autoDecide\.decisionIssue\.enabled/,
+    ],
   ];
   for (const [overrides, fieldPattern] of failing) {
-    const report = readTrustedAutoDecideForTest({
+    const input = {
       owner: 'o',
       repo: 'r',
       baseRefName: 'main',
       fetchEncodedConfig: () => toEncodedConfig(trustedPolicyConfig(overrides)),
-    });
+    };
+    const report = readTrustedAutoDecideForTest(input);
     assertEveryClassUnreadable(
       report,
       'main',
       /trusted repository policy fails schema validation against policy\.schema\.json at ref "main"/,
     );
     assert.match(report.error ?? '', fieldPattern);
+    // The shared read fails closed for the master-switch reader too.
+    const master = readTrustedDangerouslyAutoDecideForTest(input);
+    assert.equal(master.status, 'unreadable');
+    assert.match(
+      master.error ?? '',
+      /trusted repository policy fails schema validation against policy\.schema\.json at ref "main"/,
+    );
   }
 });
 
@@ -1882,27 +1924,67 @@ test('trusted auto-decide: a malformed autoDecide stays unreadable even when the
   ) as { properties: Record<string, unknown> };
   // An older or looser trusted schema that accepts any autoDecide value.
   schema.properties.autoDecide = {};
-  const report = readTrustedAutoDecide({
-    owner: 'o',
-    repo: 'r',
-    baseRefName: 'main',
-    fetchEncodedConfig: () =>
-      toEncodedConfig(
-        trustedPolicyConfig({
-          dangerouslyAutoDecide: true,
-          autoDecide: {
-            decisionIssue: { enabled: true },
-            maxPendingConfirmations: 0,
-          },
-        }),
-      ),
-    fetchEncodedPolicySchema: () => toEncodedConfig(schema),
-  });
-  assertEveryClassUnreadable(
-    report,
-    'main',
-    /malformed autoDecide\.maxPendingConfirmations at ref "main"/,
-  );
+  const rootCap = {
+    decisionIssue: { enabled: true },
+    maxPendingConfirmations: 0,
+  };
+  const cases: Array<[Record<string, unknown>, RegExp]> = [
+    [
+      { dangerouslyAutoDecide: true, autoDecide: rootCap },
+      /malformed autoDecide\.maxPendingConfirmations at ref "main"/,
+    ],
+    // The backstop does not depend on the master switch.
+    [
+      { dangerouslyAutoDecide: false, autoDecide: rootCap },
+      /malformed autoDecide\.maxPendingConfirmations at ref "main"/,
+    ],
+    [
+      { autoDecide: rootCap },
+      /malformed autoDecide\.maxPendingConfirmations at ref "main"/,
+    ],
+    // A malformed value inside one class, not only a root-level one.
+    [
+      {
+        dangerouslyAutoDecide: true,
+        autoDecide: {
+          decisionIssue: { enabled: true },
+          runtimeQuestion: { enabled: 'yes' },
+        },
+      },
+      /malformed autoDecide\.runtimeQuestion\.enabled at ref "main"/,
+    ],
+    [
+      {
+        dangerouslyAutoDecide: true,
+        autoDecide: { authoringChoice: { enabled: 'yes' } },
+      },
+      /malformed autoDecide\.authoringChoice\.enabled at ref "main"/,
+    ],
+    [
+      {
+        dangerouslyAutoDecide: true,
+        autoDecide: { worktreeRemnant: { enabled: true, quietWindow: 'PT0S' } },
+      },
+      /malformed autoDecide\.worktreeRemnant\.quietWindow at ref "main"/,
+    ],
+    [
+      {
+        dangerouslyAutoDecide: false,
+        autoDecide: { b1Leftover: { enabled: 'yes' } },
+      },
+      /malformed autoDecide\.b1Leftover\.enabled at ref "main"/,
+    ],
+  ];
+  for (const [overrides, errorPattern] of cases) {
+    const report = readTrustedAutoDecide({
+      owner: 'o',
+      repo: 'r',
+      baseRefName: 'main',
+      fetchEncodedConfig: () => toEncodedConfig(trustedPolicyConfig(overrides)),
+      fetchEncodedPolicySchema: () => toEncodedConfig(schema),
+    });
+    assertEveryClassUnreadable(report, 'main', errorPattern);
+  }
 });
 
 test('trusted auto-decide: the trusted base wins over a feature ref that enables a class (#4958)', () => {
