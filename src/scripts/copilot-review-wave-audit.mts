@@ -1400,6 +1400,13 @@ export interface ReviewerRunsReport {
   };
   totalDurationMs: number;
   medianDurationMs: number | null;
+  /**
+   * Completed runs whose `updated_at` precedes their `run_started_at`. GitHub
+   * never changes such a record, so these runs are left out of
+   * `totalDurationMs` and `medianDurationMs` instead of failing the audit.
+   */
+  unmeasuredRuns: number;
+  unmeasuredRunIds: number[];
   headBranches: number;
   medianRunsPerHeadBranch: number | null;
 }
@@ -1525,6 +1532,7 @@ function auditReviewerRuns(
   };
   const branchCounts = new Map<string, number>();
   const durations: number[] = [];
+  const unmeasuredRunIds: number[] = [];
   let completed = 0;
   let totalDurationMs = 0;
   for (const run of runs) {
@@ -1548,18 +1556,17 @@ function auditReviewerRuns(
     }
     const startedAt = Date.parse(run.run_started_at ?? '');
     const updatedAt = Date.parse(run.updated_at ?? '');
-    const durationMs = updatedAt - startedAt;
-    if (
-      !Number.isFinite(startedAt) ||
-      !Number.isFinite(updatedAt) ||
-      !Number.isFinite(durationMs) ||
-      durationMs < 0
-    ) {
+    if (!Number.isFinite(startedAt) || !Number.isFinite(updatedAt)) {
       failReviewerRuns(
         'reviewer runs: completed run ' +
           run.id +
           ' has invalid run_started_at or updated_at values',
       );
+    }
+    const durationMs = updatedAt - startedAt;
+    if (durationMs < 0) {
+      unmeasuredRunIds.push(run.id);
+      continue;
     }
     durations.push(durationMs);
     totalDurationMs += durationMs;
@@ -1575,6 +1582,8 @@ function auditReviewerRuns(
     byConclusion,
     totalDurationMs,
     medianDurationMs: lowerMiddleMedian(durations),
+    unmeasuredRuns: unmeasuredRunIds.length,
+    unmeasuredRunIds,
     headBranches: branchCounts.size,
     medianRunsPerHeadBranch: lowerMiddleMedian([...branchCounts.values()]),
   };
@@ -1597,6 +1606,10 @@ function formatReviewerRunsStepSummary(report: ReviewerRunsReport): string {
     `- Runs: ${report.runs}`,
     `- Total duration: ${totalHours} hours`,
     `- Median duration: ${medianSeconds} seconds`,
+    `- Unmeasured runs: ${report.unmeasuredRuns}` +
+      (report.unmeasuredRuns > 0
+        ? ` (run IDs: ${report.unmeasuredRunIds.join(', ')}; updated_at precedes run_started_at, so they are left out of the total and median)`
+        : ''),
     `- Distinct head branches: ${report.headBranches}`,
     '- Median runs per head branch: ' +
       (report.medianRunsPerHeadBranch ?? 'n/a'),
