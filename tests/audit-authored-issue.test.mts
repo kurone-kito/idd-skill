@@ -9,6 +9,11 @@ import { fileURLToPath } from 'node:url';
 import {
   auditAuthoredIssue,
   EFFORT_CANDIDATE_FILE_LIMITS,
+  parseAutoDecisionLinkMarker,
+  parseAutoDecisionNoteMarker,
+  parseAutoDecisionRecordMarker,
+  parseAutoDecisionVoidMarker,
+  parseConfirmationSubjectLine,
   readCleanupEvidenceFile,
 } from '../src/scripts/audit-authored-issue.mts';
 import {
@@ -7694,5 +7699,395 @@ test('dependency inventory is opt-in across direct and bin CLIs without affectin
     }
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------
+// Auto-decide confirmation shape (#4961)
+// ---------------------------------------------------------------------
+
+const CONFIRMATION_PUBLICATION =
+  '<!-- idd-skill-authoring-publication: target=target-1; anchor=kurone-kito/idd-skill#4955; set=set-abc; session=session-1; token=token-1 -->';
+const CONFIRMATION_RECORD =
+  '<!-- idd-skill-auto-decision: class=runtimeQuestion; source=kurone-kito/idd-skill#4972; claim=claim-1; set=none; decision=dec-1 -->';
+const CONFIRMATION_SECTIONS = [
+  '## Stop',
+  '',
+  'The run paused on a question.',
+  '',
+  '## Options',
+  '',
+  "### Keep today's behavior",
+  '',
+  'Cost: the run waits for a person.',
+  '',
+  '### Proceed with the change',
+  '',
+  'Cost: a small risk of rework.',
+  '',
+  '## Chosen option',
+  '',
+  'Proceed with the change',
+  '',
+  '## How to undo',
+  '',
+  'Revert the commit.',
+  '',
+  '## Question',
+  '',
+  'Question: Closing this issue confirms the choice; a comment naming another option asks for rework.',
+];
+
+function confirmationBody(
+  record: string = CONFIRMATION_RECORD,
+  extra: string[] = [],
+): string {
+  return [
+    CONFIRMATION_PUBLICATION,
+    record,
+    '',
+    ...CONFIRMATION_SECTIONS,
+    ...extra,
+  ].join('\n');
+}
+
+function confirmationAudit(
+  body: string,
+  overrides: Partial<Parameters<typeof auditAuthoredIssue>[1]> = {},
+) {
+  return auditAuthoredIssue(body, {
+    shape: 'confirmation',
+    markerPrefix: 'idd-skill',
+    currentRepo: 'kurone-kito/idd-skill',
+    ...overrides,
+  });
+}
+
+function failingIds(report: ReturnType<typeof auditAuthoredIssue>): string[] {
+  return report.findings.filter((f) => f.result === 'fail').map((f) => f.id);
+}
+
+test('a well-formed confirmation body passes (#4961)', () => {
+  const report = confirmationAudit(confirmationBody());
+  assert.equal(report.passed, true, JSON.stringify(failingIds(report)));
+});
+
+test('a missing record marker fails the record position check (#4961)', () => {
+  const body = [CONFIRMATION_PUBLICATION, '', ...CONFIRMATION_SECTIONS].join(
+    '\n',
+  );
+  assert.ok(
+    failingIds(confirmationAudit(body)).includes('confirmation-record-marker'),
+  );
+});
+
+test('a record marker that is not the first non-blank line after the publication line fails (#4961)', () => {
+  const body = [
+    CONFIRMATION_PUBLICATION,
+    '  ' + CONFIRMATION_RECORD,
+    '',
+    ...CONFIRMATION_SECTIONS,
+  ].join('\n');
+  assert.ok(
+    failingIds(confirmationAudit(body)).includes('confirmation-record-marker'),
+  );
+});
+
+test('a second auto-decision marker anywhere in the body fails, code included (#4961)', () => {
+  const body = confirmationBody(CONFIRMATION_RECORD, [
+    '',
+    '`<!-- idd-skill-auto-decision-void: decision=dec-2 -->`',
+  ]);
+  assert.ok(
+    failingIds(confirmationAudit(body)).includes('confirmation-single-marker'),
+  );
+});
+
+test('a decisionIssue class or an unknown class fails the record marker (#4961)', () => {
+  for (const cls of ['decisionIssue', 'somethingElse']) {
+    const record = CONFIRMATION_RECORD.replace(
+      'class=runtimeQuestion',
+      `class=${cls}`,
+    );
+    assert.ok(
+      failingIds(confirmationAudit(confirmationBody(record))).includes(
+        'confirmation-record-marker',
+      ),
+      cls,
+    );
+  }
+});
+
+test('a wrong claim and set pairing fails the pairing check (#4961)', () => {
+  const runtimeWithSet = CONFIRMATION_RECORD.replace('set=none', 'set=set-1');
+  assert.ok(
+    failingIds(confirmationAudit(confirmationBody(runtimeWithSet))).includes(
+      'confirmation-pairing',
+    ),
+  );
+  const b1WithClaim = CONFIRMATION_RECORD.replace(
+    'class=runtimeQuestion',
+    'class=b1Leftover',
+  );
+  assert.ok(
+    failingIds(confirmationAudit(confirmationBody(b1WithClaim))).includes(
+      'confirmation-pairing',
+    ),
+  );
+  const authoringSameSet =
+    '<!-- idd-skill-auto-decision: class=authoringChoice; source=kurone-kito/idd-skill#4972; claim=none; set=set-abc; decision=dec-3 -->';
+  assert.ok(
+    failingIds(confirmationAudit(confirmationBody(authoringSameSet))).includes(
+      'confirmation-pairing',
+    ),
+  );
+});
+
+test('a source in another repository fails the source check (#4961)', () => {
+  const record = CONFIRMATION_RECORD.replace(
+    'kurone-kito/idd-skill#4972',
+    'someone/else#4972',
+  );
+  assert.ok(
+    failingIds(confirmationAudit(confirmationBody(record))).includes(
+      'confirmation-source',
+    ),
+  );
+});
+
+test('a missing or repeated heading fails the headings check (#4961)', () => {
+  const missing = confirmationBody().replace('## How to undo\n', '');
+  assert.ok(
+    failingIds(confirmationAudit(missing)).includes('confirmation-headings'),
+  );
+  const repeated = confirmationBody(CONFIRMATION_RECORD, [
+    '',
+    '## Stop',
+    '',
+    'again',
+  ]);
+  assert.ok(
+    failingIds(confirmationAudit(repeated)).includes('confirmation-headings'),
+  );
+});
+
+test('a worktreeRemnant stop needs one Subject: line; a runtimeQuestion stop does not (#4961)', () => {
+  const remnant = CONFIRMATION_RECORD.replace(
+    'class=runtimeQuestion',
+    'class=worktreeRemnant',
+  ).replace('claim=claim-1', 'claim=claim-9');
+  const withoutSubject = confirmationAudit(confirmationBody(remnant));
+  assert.ok(failingIds(withoutSubject).includes('confirmation-subject'));
+  const withSubject = confirmationBody(remnant).replace(
+    'The run paused on a question.',
+    'Subject: `/tmp/worktree-a`\n\nThe run paused on a question.',
+  );
+  assert.equal(
+    confirmationAudit(withSubject).passed,
+    true,
+    JSON.stringify(failingIds(confirmationAudit(withSubject))),
+  );
+});
+
+test('the options and the chosen option follow the contract (#4961)', () => {
+  const single = confirmationBody().replace(
+    '### Proceed with the change\n\nCost: a small risk of rework.\n',
+    '',
+  );
+  assert.ok(
+    failingIds(confirmationAudit(single)).includes('confirmation-options'),
+  );
+  const noCost = confirmationBody().replace(
+    'Cost: a small risk of rework.',
+    'No cost line here.',
+  );
+  assert.ok(
+    failingIds(confirmationAudit(noCost)).includes('confirmation-costs'),
+  );
+  const keepChosen = confirmationBody().replace(
+    'Proceed with the change\n\n## How',
+    "Keep today's behavior\n\n## How",
+  );
+  assert.ok(
+    failingIds(confirmationAudit(keepChosen)).includes(
+      'confirmation-chosen-option',
+    ),
+  );
+});
+
+test('a question needs exactly one Question: line (#4961)', () => {
+  const none = confirmationBody().replace('Question: Closing', 'Closing');
+  assert.ok(
+    failingIds(confirmationAudit(none)).includes('confirmation-question'),
+  );
+});
+
+test('a forbidden marker or footer fails the forbidden check (#4961)', () => {
+  const body = confirmationBody(CONFIRMATION_RECORD, [
+    '',
+    '<!-- idd-skill-effort: S -->',
+  ]);
+  assert.ok(
+    failingIds(confirmationAudit(body)).includes(
+      'confirmation-forbidden-markers',
+    ),
+  );
+});
+
+test('labels must include the confirmation label, and it must not collide (#4961)', () => {
+  assert.ok(
+    failingIds(
+      confirmationAudit(confirmationBody(), { labels: ['enhancement'] }),
+    ).includes('confirmation-label'),
+  );
+  assert.equal(
+    confirmationAudit(confirmationBody(), {
+      labels: ['status:needs-confirmation'],
+    }).passed,
+    true,
+  );
+  assert.ok(
+    failingIds(
+      confirmationAudit(confirmationBody(), {
+        confirmationLabelName: 'status:authoring',
+        authoringLabelName: 'status:authoring',
+      }),
+    ).includes('confirmation-label-collision'),
+  );
+  assert.ok(
+    failingIds(
+      confirmationAudit(confirmationBody(), {
+        unreadableConfigPath: '.github/idd/config.json',
+      }),
+    ).includes('confirmation-policy'),
+  );
+});
+
+test('record mode checks the first line and the expected fields (#4961)', () => {
+  const record = [CONFIRMATION_RECORD, '', ...CONFIRMATION_SECTIONS].join('\n');
+  const expected = {
+    confirmationRecord: true,
+    expectClass: 'runtimeQuestion',
+    expectSource: 'kurone-kito/idd-skill#4972',
+    expectClaim: 'claim-1',
+    expectSet: 'none',
+  };
+  assert.equal(
+    confirmationAudit(record, expected).passed,
+    true,
+    JSON.stringify(failingIds(confirmationAudit(record, expected))),
+  );
+  assert.ok(
+    failingIds(
+      confirmationAudit(record, {
+        ...expected,
+        expectClass: 'authoringChoice',
+      }),
+    ).includes('confirmation-record-class'),
+  );
+  const notFirst = ['', record].join('\n');
+  assert.ok(
+    failingIds(confirmationAudit(notFirst, expected)).includes(
+      'confirmation-record-marker',
+    ),
+  );
+});
+
+test('the marker parsers accept the four well-formed markers and reject malformed ones (#4961)', () => {
+  const prefix = 'idd-skill';
+  assert.deepEqual(parseAutoDecisionRecordMarker(CONFIRMATION_RECORD, prefix), {
+    class: 'runtimeQuestion',
+    source: 'kurone-kito/idd-skill#4972',
+    claim: 'claim-1',
+    set: 'none',
+    decision: 'dec-1',
+  });
+  assert.equal(
+    parseAutoDecisionRecordMarker(
+      CONFIRMATION_RECORD.replace(
+        'claim=claim-1; set=none',
+        'set=none; claim=claim-1',
+      ),
+      prefix,
+    ),
+    null,
+  );
+  assert.equal(
+    parseAutoDecisionRecordMarker(
+      CONFIRMATION_RECORD.replace('decision=dec-1', 'decision=dec 1'),
+      prefix,
+    ),
+    null,
+  );
+  assert.equal(
+    parseAutoDecisionRecordMarker(CONFIRMATION_RECORD + ' extra', prefix),
+    null,
+  );
+  const link =
+    '<!-- idd-skill-auto-decision-link: class=runtimeQuestion; claim=claim-1; set=none; decision=dec-1; confirmation=kurone-kito/idd-skill#4973 -->';
+  assert.deepEqual(
+    parseAutoDecisionLinkMarker(link, prefix)?.confirmation,
+    'kurone-kito/idd-skill#4973',
+  );
+  assert.equal(
+    parseAutoDecisionLinkMarker(
+      link.replace(
+        'confirmation=kurone-kito/idd-skill#4973',
+        'confirmation=bad',
+      ),
+      prefix,
+    ),
+    null,
+  );
+  assert.equal(
+    parseAutoDecisionVoidMarker(
+      '<!-- idd-skill-auto-decision-void: decision=dec-1 -->',
+      prefix,
+    ),
+    'dec-1',
+  );
+  assert.equal(
+    parseAutoDecisionVoidMarker(
+      '<!-- idd-skill-auto-decision-void: decision=dec-1; kind=x -->',
+      prefix,
+    ),
+    null,
+  );
+  assert.deepEqual(
+    parseAutoDecisionNoteMarker(
+      '<!-- idd-skill-auto-decision-note: decision=dec-1; kind=location -->',
+      prefix,
+    ),
+    { decision: 'dec-1', kind: 'location' },
+  );
+  assert.equal(
+    parseAutoDecisionNoteMarker(
+      '<!-- idd-skill-auto-decision-note: decision=dec-1; kind=other -->',
+      prefix,
+    ),
+    null,
+  );
+  assert.equal(parseConfirmationSubjectLine('Subject: `/a/b`'), '/a/b');
+  assert.equal(
+    parseConfirmationSubjectLine('Subject: `two` and `spans`'),
+    null,
+  );
+  assert.equal(parseConfirmationSubjectLine('Subject: ` padded `'), null);
+});
+
+test('the confirmation shape needs --current-repo on the command line (#4961)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'confirmation-cli-'));
+  try {
+    const bodyPath = join(dir, 'body.md');
+    writeFileSync(bodyPath, confirmationBody());
+    const result = spawnSync(
+      process.execPath,
+      [CLI_PATH, '--shape', 'confirmation', '--body-file', bodyPath],
+      { encoding: 'utf8' },
+    );
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /--current-repo/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });

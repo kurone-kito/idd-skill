@@ -170,7 +170,8 @@ when that file is missing or unreadable — producing a false pass or
 fail against the wrong prefix instead of an error.
 
 Use `--shape roadmap` or `--shape child` for those shapes,
-`--shape carrier` for a draft carrier, `--stdin`
+`--shape carrier` for a draft carrier, `--shape confirmation` for an
+auto-decide confirmation issue (with `--current-repo`), `--stdin`
 instead of `--body-file` when the draft is not yet on disk, and
 `--label <name>` (repeatable) to pass proposed labels for the check
 that a suitability score of `1` carries the configured

@@ -249,6 +249,15 @@ const SHAPE_HEADING_REQUIREMENTS = {
     { anyOf: ['Drafts'] },
     { anyOf: ['Review ledger'] },
   ],
+  // The confirmation shape checks its own headings (checkConfirmationHeadings);
+  // this entry keeps the table exhaustive over every IssueShape.
+  confirmation: [
+    { anyOf: ['Stop'] },
+    { anyOf: ['Options'] },
+    { anyOf: ['Chosen option'] },
+    { anyOf: ['How to undo'] },
+    { anyOf: ['Question'] },
+  ],
 };
 // Coordination-language keywords that, alongside an unencoded issue/PR
 // reference in the same sentence, suggest the reference is being used as a
@@ -449,6 +458,12 @@ const AUDIT_AUTHORED_ISSUE_FLAG_SPEC = {
   '--origin-issue': { type: 'string' },
   '--label': { type: 'string', multiple: true },
   '--expect-bucket': { type: 'string' },
+  '--confirmation-record': { type: 'boolean', default: false },
+  '--expect-class': { type: 'string' },
+  '--expect-source': { type: 'string' },
+  '--expect-claim': { type: 'string' },
+  '--expect-set': { type: 'string' },
+  '--expect-subject': { type: 'string' },
   '--comments-file': { type: 'string' },
   '--journal-comments-file': { type: 'string' },
   '--cleanup-evidence-file': { type: 'string' },
@@ -570,6 +585,47 @@ const COLLAPSED_REFERENCE_LINK_USAGE_PATTERN =
 // explicit reference-style form.
 const MARKDOWN_SHORTCUT_LINK_START_PATTERN = /^\[([^\n\u005D]+)](?![[(:])/;
 const MARKDOWN_SHORTCUT_LINK_USAGE_PATTERN = /\[([^\n\u005D]+)](?![[(:])/g;
+// Confirmation-shape constants (#4961). Declared above the CLI entry block so
+// they are initialized before main() runs.
+/** The auto-decide classes that file a confirmation issue (#4955). */
+export const AUTO_DECIDE_CONFIRMATION_CLASSES = [
+  'runtimeQuestion',
+  'authoringChoice',
+  'worktreeRemnant',
+  'b1Leftover',
+];
+/** The headings a confirmation body or record comment holds, in this order. */
+export const CONFIRMATION_HEADINGS = [
+  '## Stop',
+  '## Options',
+  '## Chosen option',
+  '## How to undo',
+  '## Question',
+];
+const CONFIRMATION_KEEP_TITLE = "Keep today's behavior";
+const CONFIRMATION_RECORD_SUFFIX = 'auto-decision';
+const CONFIRMATION_LINK_SUFFIX = 'auto-decision-link';
+const CONFIRMATION_VOID_SUFFIX = 'auto-decision-void';
+const CONFIRMATION_NOTE_SUFFIX = 'auto-decision-note';
+const CONFIRMATION_RECORD_FIELDS = [
+  'class',
+  'source',
+  'claim',
+  'set',
+  'decision',
+];
+const CONFIRMATION_LINK_FIELDS = [
+  'class',
+  'claim',
+  'set',
+  'decision',
+  'confirmation',
+];
+const CONFIRMATION_NOTE_KINDS = ['location', 'failure'];
+const DECISION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const CLAIM_OR_SET_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const SOURCE_REFERENCE_PATTERN =
+  /^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)#([1-9][0-9]*)$/;
 if (import.meta.main) {
   // #3343: fail_() still writes `error: <message>` and must not also print
   // a stack. Catch that tagged throw here. Call main() directly on the
@@ -689,6 +745,9 @@ function applyConfirmedMinimization(comments, mutations) {
 }
 export function auditAuthoredIssue(body, options) {
   const rawText = typeof body === 'string' ? body : String(body ?? '');
+  if (options.shape === 'confirmation') {
+    return auditConfirmationShape(rawText, options);
+  }
   // Mask Markdown code regions (fenced blocks, indented blocks, and
   // inline spans) once, up front, and run every check (marker counting,
   // heading detection, visible-line scoping) against the result. A
@@ -4657,8 +4716,610 @@ function extractHeadings(text) {
   }
   return headings;
 }
-// normalizeMarkerPrefix moved to marker-helpers.mts (#3289, same section
-// as above) and is imported back in and re-exported above.
+/**
+ * Parses one confirmation marker line. The line must start at column 0 with
+ * `<!-- <marker-prefix>-<suffix>: `, end with ` -->`, and hold exactly the
+ * named fields, each once, in the pinned order, separated by `; `. A value
+ * holds no whitespace and no `;`. Returns `null` for any other shape.
+ */
+function parseConfirmationMarkerLine(line, markerPrefix, suffix, fieldOrder) {
+  const open = `<!-- ${markerPrefix}-${suffix}: `;
+  const close = ' -->';
+  const trimmed = line.replace(/\r$/, '');
+  if (!trimmed.startsWith(open) || !trimmed.endsWith(close)) {
+    return null;
+  }
+  const body = trimmed.slice(open.length, trimmed.length - close.length);
+  if (body.includes('-->') || body.includes('<!--')) {
+    return null;
+  }
+  const parts = body.split('; ');
+  if (parts.length !== fieldOrder.length) {
+    return null;
+  }
+  const fields = {};
+  for (let index = 0; index < parts.length; index += 1) {
+    const part = parts[index] ?? '';
+    const match = /^([a-z]+)=(.+)$/.exec(part);
+    if (match === null) {
+      return null;
+    }
+    const [, key, value] = match;
+    if (key !== fieldOrder[index]) {
+      return null;
+    }
+    if (/\s/.test(value ?? '') || (value ?? '').includes(';')) {
+      return null;
+    }
+    fields[key] = value ?? '';
+  }
+  return fields;
+}
+/**
+ * Parses an auto-decision record marker (`<!-- <prefix>-auto-decision: ... -->`)
+ * on a single line. Exported for the shared record reader (#4961). Returns the
+ * fields when the marker is well formed, or `null` when it is not.
+ */
+export function parseAutoDecisionRecordMarker(line, markerPrefix) {
+  const fields = parseConfirmationMarkerLine(
+    line,
+    markerPrefix,
+    CONFIRMATION_RECORD_SUFFIX,
+    CONFIRMATION_RECORD_FIELDS,
+  );
+  if (fields === null || !confirmationFieldsValid(fields, 'record')) {
+    return null;
+  }
+  return fields;
+}
+/**
+ * Parses an auto-decision link marker (`<!-- <prefix>-auto-decision-link: ... -->`)
+ * on a single line. Exported for the shared record reader (#4961).
+ */
+// audit:ignore-dead-export: the shared record reader (#4961) consumes this parser; until it lands, only the focused tests call it
+export function parseAutoDecisionLinkMarker(line, markerPrefix) {
+  const fields = parseConfirmationMarkerLine(
+    line,
+    markerPrefix,
+    CONFIRMATION_LINK_SUFFIX,
+    CONFIRMATION_LINK_FIELDS,
+  );
+  if (fields === null || !confirmationFieldsValid(fields, 'link')) {
+    return null;
+  }
+  return fields;
+}
+/**
+ * Parses an auto-decision void marker (`<!-- <prefix>-auto-decision-void: decision=<id> -->`)
+ * on a single line. Returns the decision ID, or `null` when the marker is not
+ * well formed.
+ */
+// audit:ignore-dead-export: the shared record reader (#4961) consumes this parser; until it lands, only the focused tests call it
+export function parseAutoDecisionVoidMarker(line, markerPrefix) {
+  const fields = parseConfirmationMarkerLine(
+    line,
+    markerPrefix,
+    CONFIRMATION_VOID_SUFFIX,
+    ['decision'],
+  );
+  if (fields === null || !DECISION_ID_PATTERN.test(fields.decision ?? '')) {
+    return null;
+  }
+  return fields.decision ?? null;
+}
+/**
+ * Parses an auto-decision note marker (`<!-- <prefix>-auto-decision-note: decision=<id>; kind=<kind> -->`)
+ * on a single line. Returns the decision ID and the kind, or `null`.
+ */
+// audit:ignore-dead-export: the shared record reader (#4961) consumes this parser; until it lands, only the focused tests call it
+export function parseAutoDecisionNoteMarker(line, markerPrefix) {
+  const fields = parseConfirmationMarkerLine(
+    line,
+    markerPrefix,
+    CONFIRMATION_NOTE_SUFFIX,
+    ['decision', 'kind'],
+  );
+  if (fields === null || !DECISION_ID_PATTERN.test(fields.decision ?? '')) {
+    return null;
+  }
+  const kind = fields.kind ?? '';
+  if (!CONFIRMATION_NOTE_KINDS.includes(kind)) {
+    return null;
+  }
+  return {
+    decision: fields.decision ?? '',
+    kind: kind,
+  };
+}
+/**
+ * Parses the `Subject:` line of a `worktreeRemnant` or `b1Leftover` stop: the
+ * line begins with `Subject:` and holds exactly one single-backtick code span
+ * with no leading or trailing space inside. Returns the span's text, or
+ * `null`.
+ */
+// audit:ignore-dead-export: the shared record reader (#4961) consumes this parser; until it lands, only the focused tests call it
+export function parseConfirmationSubjectLine(line) {
+  const trimmed = line.replace(/\r$/, '');
+  if (!trimmed.startsWith('Subject: `')) {
+    return null;
+  }
+  if (trimmed.split('`').length !== 3) {
+    return null;
+  }
+  const match = /^Subject: `([^`]+)`/.exec(trimmed);
+  if (match === null) {
+    return null;
+  }
+  const value = match[1] ?? '';
+  return value === value.trim() ? value : null;
+}
+/** Field-value rules shared by the record, link, and note markers. */
+function confirmationFieldsValid(fields, kind) {
+  if (!AUTO_DECIDE_CONFIRMATION_CLASSES.includes(fields.class ?? '')) {
+    return false;
+  }
+  const sourceKey = kind === 'record' ? 'source' : 'confirmation';
+  if (!SOURCE_REFERENCE_PATTERN.test(fields[sourceKey] ?? '')) {
+    return false;
+  }
+  for (const key of ['claim', 'set']) {
+    const value = fields[key] ?? '';
+    if (value !== 'none' && !CLAIM_OR_SET_PATTERN.test(value)) {
+      return false;
+    }
+  }
+  return DECISION_ID_PATTERN.test(fields.decision ?? '');
+}
+/**
+ * The claim and set pairing the contract defines for each class. Returns a
+ * failure reason, or `null` when the pairing holds.
+ */
+function confirmationPairingProblem(fields, publicationSet) {
+  const cls = fields.class ?? '';
+  const claim = fields.claim ?? '';
+  const set = fields.set ?? '';
+  if (cls === 'runtimeQuestion' || cls === 'worktreeRemnant') {
+    return claim !== 'none' && set === 'none'
+      ? null
+      : `class ${cls} carries a current or recovered claim and set=none`;
+  }
+  if (cls === 'b1Leftover') {
+    return claim === 'none' && set === 'none'
+      ? null
+      : `class ${cls} carries claim=none and set=none`;
+  }
+  if (cls === 'authoringChoice') {
+    if (claim !== 'none') {
+      return `class ${cls} carries claim=none`;
+    }
+    if (set === 'none') {
+      return `class ${cls} carries the authoring set ID of its source target`;
+    }
+    if (publicationSet !== null && set === publicationSet) {
+      return `class ${cls} carries the confirmation issue's own creation set`;
+    }
+    return null;
+  }
+  return `class ${cls} is not an auto-decide confirmation class`;
+}
+/** The `set=` value of a publication line, or `null` when absent. */
+function publicationSetValue(lines) {
+  const line = lines.find((candidate) =>
+    /^<!--\s+\S+-authoring-publication:/.test(candidate),
+  );
+  if (line === undefined) {
+    return null;
+  }
+  const match = /;\s*set=([^;\s]+)/.exec(line);
+  return match === null ? null : (match[1] ?? null);
+}
+/** The lines of one `## ` section, exclusive of its heading. */
+function confirmationSectionLines(lines, heading) {
+  const start = lines.findIndex((line) => line.trim() === heading);
+  if (start < 0) {
+    return [];
+  }
+  let end = lines.length;
+  for (let index = start + 1; index < lines.length; index += 1) {
+    if (lines[index]?.startsWith('## ') === true) {
+      end = index;
+      break;
+    }
+  }
+  return lines.slice(start + 1, end);
+}
+/** Checks that each confirmation heading appears once, in the pinned order. */
+function checkConfirmationHeadings(lines) {
+  const id = 'confirmation-headings';
+  const name = 'Each confirmation heading appears once, in the pinned order';
+  let previous = -1;
+  for (const heading of CONFIRMATION_HEADINGS) {
+    const positions = lines
+      .map((line, index) => (line.trim() === heading ? index : -1))
+      .filter((index) => index >= 0);
+    if (positions.length !== 1) {
+      return fail(
+        id,
+        name,
+        `the ${heading} heading appears ${positions.length} times; a confirmation issue takes exactly one`,
+      );
+    }
+    const position = positions[0] ?? -1;
+    if (position < previous) {
+      return fail(id, name, `the ${heading} heading is out of order`);
+    }
+    previous = position;
+  }
+  return pass(id, name, 'the five headings appear once, in order');
+}
+/** The raw lines of the section that starts at masked index `start`. */
+function confirmationSectionRaw(maskedLines, rawLines, start) {
+  let end = maskedLines.length;
+  for (let index = start + 1; index < maskedLines.length; index += 1) {
+    if (maskedLines[index]?.startsWith('## ') === true) {
+      end = index;
+      break;
+    }
+  }
+  return rawLines.slice(start + 1, end);
+}
+/** Checks the `Subject:` line for the two classes that name a subject. */
+function checkConfirmationSubject(maskedLines, rawLines, cls) {
+  const id = 'confirmation-subject';
+  const name =
+    'A worktreeRemnant or b1Leftover stop names its subject on one Subject: line';
+  if (cls !== 'worktreeRemnant' && cls !== 'b1Leftover') {
+    return pass(id, name, `not applicable to class ${cls}`);
+  }
+  // The section is located on the masked view, and its lines are read raw,
+  // because masking hides the single-backtick span the Subject: line holds.
+  const stopStart = maskedLines.findIndex((line) => line.trim() === '## Stop');
+  const stop =
+    stopStart < 0
+      ? []
+      : confirmationSectionRaw(maskedLines, rawLines, stopStart);
+  const first = stop.find((line) => line.trim() !== '') ?? '';
+  if (parseConfirmationSubjectLine(first) === null) {
+    return fail(
+      id,
+      name,
+      'the first non-blank line under ## Stop must begin with Subject: and hold one single-backtick span with no leading or trailing space inside',
+    );
+  }
+  const count = stop.filter((line) => line.startsWith('Subject:')).length;
+  if (count !== 1) {
+    return fail(
+      id,
+      name,
+      `the ## Stop section holds ${count} Subject: lines; it takes exactly one`,
+    );
+  }
+  return pass(id, name, 'one Subject: line names the subject');
+}
+/** Checks the option list, the keep-today option, the costs, and the choice. */
+function checkConfirmationOptions(lines) {
+  const options = confirmationSectionLines(lines, '## Options');
+  const titles = [];
+  let current = null;
+  for (const line of options) {
+    if (line.startsWith('### ')) {
+      current = { title: line.slice(4).trim(), body: [] };
+      titles.push(current);
+    } else if (current !== null) {
+      current.body.push(line);
+    }
+  }
+  const optionsId = 'confirmation-options';
+  const optionsName =
+    "At least two options, one of them keeps today's behavior";
+  const keep = titles.find(
+    (option) => option.title === CONFIRMATION_KEEP_TITLE,
+  );
+  if (titles.length < 2 || keep === undefined) {
+    return [
+      fail(
+        optionsId,
+        optionsName,
+        `the ## Options section holds ${titles.length} option(s); it takes at least two, one titled ${CONFIRMATION_KEEP_TITLE}`,
+      ),
+    ];
+  }
+  const costId = 'confirmation-costs';
+  const costName = 'Each option holds exactly one Cost: line';
+  for (const option of titles) {
+    const costs = option.body.filter((line) => line.startsWith('Cost:')).length;
+    if (costs !== 1) {
+      return [
+        pass(
+          optionsId,
+          optionsName,
+          'two or more options, including the keep option',
+        ),
+        fail(
+          costId,
+          costName,
+          `option "${option.title}" holds ${costs} Cost: lines; it takes exactly one`,
+        ),
+      ];
+    }
+  }
+  const chosenId = 'confirmation-chosen-option';
+  const chosenName =
+    'The first non-empty line of ## Chosen option names a listed option other than the keep option';
+  const chosen = confirmationSectionLines(lines, '## Chosen option').find(
+    (line) => line.trim() !== '',
+  );
+  const chosenTitle = (chosen ?? '').replace(/^#{1,6}\s+/, '').trim();
+  const listed = titles.some(
+    (option) =>
+      option.title === chosenTitle && option.title !== CONFIRMATION_KEEP_TITLE,
+  );
+  return [
+    pass(
+      optionsId,
+      optionsName,
+      'two or more options, including the keep option',
+    ),
+    pass(costId, costName, 'each option holds exactly one Cost: line'),
+    listed
+      ? pass(chosenId, chosenName, `the chosen option is "${chosenTitle}"`)
+      : fail(
+          chosenId,
+          chosenName,
+          `the first non-empty line of ## Chosen option is not a listed option other than ${CONFIRMATION_KEEP_TITLE}`,
+        ),
+  ];
+}
+/** Checks the single Question: line. */
+function checkConfirmationQuestion(lines) {
+  const id = 'confirmation-question';
+  const name = '## Question holds exactly one Question: line';
+  const question = confirmationSectionLines(lines, '## Question');
+  const count = question.filter((line) => line.startsWith('Question: ')).length;
+  return count === 1
+    ? pass(id, name, 'one Question: line')
+    : fail(
+        id,
+        name,
+        `## Question holds ${count} Question: lines; it takes exactly one`,
+      );
+}
+/** Checks that no other auto-decision marker or footer appears. */
+function checkConfirmationForbidden(rawText, markerPrefix) {
+  const id = 'confirmation-forbidden-markers';
+  const name =
+    'A confirmation issue carries no suitability, effort, roadmap, blocked-by, bucket, defer-source, or draft-carrier marker or footer';
+  const forbidden = new RegExp(
+    `<!--\\s*${escapeRegex(markerPrefix)}-(autopilot-suitability|effort|roadmap-id|blocked-by|authoring-bucket|authoring-defer-source|draft-carrier)\\b`,
+    'i',
+  );
+  if (forbidden.test(rawText)) {
+    return fail(id, name, 'a forbidden marker appears in the body');
+  }
+  if (/^_?(Autopilot suitability|Effort):/im.test(rawText)) {
+    return fail(id, name, 'a forbidden footer line appears in the body');
+  }
+  return pass(id, name, 'no forbidden marker or footer');
+}
+/** Checks the labels, the collision among them, and the policy read. */
+function checkConfirmationLabels(options, confirmationLabel) {
+  const findings = [];
+  const labelId = 'confirmation-label';
+  const labelName =
+    'A confirmation issue carries the configured confirmation label';
+  if (options.labels !== undefined && options.labels.length > 0) {
+    findings.push(
+      options.labels.includes(confirmationLabel)
+        ? pass(labelId, labelName, `${confirmationLabel} is present`)
+        : fail(
+            labelId,
+            labelName,
+            `labels were given without the configured confirmation label ${confirmationLabel}`,
+          ),
+    );
+  } else {
+    findings.push(pass(labelId, labelName, 'no labels were given to check'));
+  }
+  const collisionId = 'confirmation-label-collision';
+  const collisionName =
+    'The confirmation label differs from every other configured label';
+  const others = [
+    options.authoringLabelName,
+    options.needsDecisionLabelName,
+    options.blockedByHumanLabelName,
+    options.authoringOnlyLabelName,
+  ].filter((value) => typeof value === 'string');
+  const collides = others.some(
+    (other) => other.trim().toLowerCase() === confirmationLabel.toLowerCase(),
+  );
+  findings.push(
+    collides
+      ? fail(
+          collisionId,
+          collisionName,
+          `the confirmation label ${confirmationLabel} collides with another configured label`,
+        )
+      : pass(collisionId, collisionName, 'no collision'),
+  );
+  const policyId = 'confirmation-policy';
+  const policyName = 'The repository policy file is readable';
+  findings.push(
+    options.unreadableConfigPath === undefined
+      ? pass(policyId, policyName, 'the policy file is readable or absent')
+      : fail(
+          policyId,
+          policyName,
+          `the policy file ${options.unreadableConfigPath} is present but unreadable`,
+        ),
+  );
+  return findings;
+}
+/**
+ * Audits one confirmation issue body, or, in record mode, one record comment.
+ * Used by `auditAuthoredIssue` when the shape is `confirmation` (#4961).
+ */
+function auditConfirmationShape(rawText, options) {
+  const markerPrefix = normalizeMarkerPrefix(options.markerPrefix);
+  const confirmationLabel =
+    typeof options.confirmationLabelName === 'string' &&
+    options.confirmationLabelName.trim().length > 0
+      ? options.confirmationLabelName
+      : 'status:needs-confirmation';
+  const rawLines = rawText.split('\n');
+  const maskedLines = maskMarkdownForScan(rawText).split('\n');
+  const findings = [];
+  const currentRepo = normalizeCurrentRepo(options.currentRepo);
+  const repoPattern = `${markerPrefix}-${CONFIRMATION_RECORD_SUFFIX}`;
+  // Marker position and fields.
+  let fields = null;
+  let publicationSet = null;
+  const recordId = 'confirmation-record-marker';
+  const recordName =
+    'The record marker is the first line of a record comment, or the first non-blank line after the publication line in a body, at column 0';
+  if (options.confirmationRecord === true) {
+    const first = rawLines[0] ?? '';
+    fields = parseAutoDecisionRecordMarker(first, markerPrefix);
+    findings.push(
+      fields === null
+        ? fail(
+            recordId,
+            recordName,
+            'the first line is not a well-formed record marker',
+          )
+        : pass(
+            recordId,
+            recordName,
+            'the first line is a well-formed record marker',
+          ),
+    );
+  } else {
+    const publicationIndex = rawLines.findIndex((line) =>
+      /^<!--\s+\S+-authoring-publication:/.test(line),
+    );
+    publicationSet = publicationSetValue(rawLines);
+    let candidate = null;
+    if (publicationIndex >= 0) {
+      const next = rawLines
+        .slice(publicationIndex + 1)
+        .find((line) => line.trim() !== '');
+      candidate = next ?? null;
+    }
+    fields =
+      candidate === null
+        ? null
+        : parseAutoDecisionRecordMarker(candidate, markerPrefix);
+    findings.push(
+      fields === null
+        ? fail(
+            recordId,
+            recordName,
+            publicationIndex < 0
+              ? 'the publication line is missing, so the record position cannot be checked'
+              : 'the first non-blank line after the publication line is not a well-formed record marker at column 0',
+          )
+        : pass(
+            recordId,
+            recordName,
+            'the record marker is at its pinned position',
+          ),
+    );
+  }
+  // Exactly one auto-decision text anywhere, code included.
+  const occurrences = (
+    rawText.match(new RegExp(escapeRegex(repoPattern), 'gi')) ?? []
+  ).length;
+  findings.push(
+    occurrences === 1
+      ? pass(
+          'confirmation-single-marker',
+          'One auto-decision marker, code included',
+          'exactly one',
+        )
+      : fail(
+          'confirmation-single-marker',
+          'One auto-decision marker, code included',
+          `the body holds ${occurrences} ${repoPattern} occurrences; it takes exactly one`,
+        ),
+  );
+  if (fields !== null) {
+    const sourceOk =
+      typeof currentRepo === 'string' &&
+      (fields.source ?? '')
+        .toLowerCase()
+        .startsWith(`${currentRepo.toLowerCase()}#`);
+    findings.push(
+      sourceOk
+        ? pass(
+            'confirmation-source',
+            'The source is an issue in this repository',
+            'same repository',
+          )
+        : fail(
+            'confirmation-source',
+            'The source is an issue in this repository',
+            `the source ${fields.source ?? ''} is not in ${currentRepo ?? 'the current repository'}`,
+          ),
+    );
+    const pairing = confirmationPairingProblem(fields, publicationSet);
+    findings.push(
+      pairing === null
+        ? pass(
+            'confirmation-pairing',
+            'The claim and set pairing matches the class',
+            'pairing holds',
+          )
+        : fail(
+            'confirmation-pairing',
+            'The claim and set pairing matches the class',
+            pairing,
+          ),
+    );
+    if (options.confirmationRecord === true) {
+      const expected = [
+        ['class', options.expectClass, fields.class],
+        ['source', options.expectSource, fields.source],
+        ['claim', options.expectClaim, fields.claim],
+        ['set', options.expectSet, fields.set],
+      ];
+      for (const [key, want, got] of expected) {
+        if (want === undefined) {
+          continue;
+        }
+        const same =
+          key === 'source'
+            ? want.toLowerCase() === (got ?? '').toLowerCase()
+            : want === got;
+        findings.push(
+          same
+            ? pass(
+                `confirmation-record-${key}`,
+                `The record's ${key} matches`,
+                'matches',
+              )
+            : fail(
+                `confirmation-record-${key}`,
+                `The record's ${key} matches`,
+                `the record ${key} ${got ?? ''} differs from the expected ${want}`,
+              ),
+        );
+      }
+    }
+  }
+  // Sections.
+  findings.push(checkConfirmationHeadings(maskedLines));
+  const subjectClass = fields?.class ?? '';
+  findings.push(checkConfirmationSubject(maskedLines, rawLines, subjectClass));
+  findings.push(...checkConfirmationOptions(maskedLines));
+  findings.push(checkConfirmationQuestion(maskedLines));
+  findings.push(checkConfirmationForbidden(rawText, markerPrefix));
+  findings.push(...checkConfirmationLabels(options, confirmationLabel));
+  return {
+    shape: 'confirmation',
+    markerPrefix,
+    passed: findings.every((finding) => finding.result === 'pass'),
+    findings,
+  };
+}
 function pass(id, name, detail) {
   return { id, name, result: 'pass', detail };
 }
@@ -4844,7 +5505,7 @@ function main() {
   }
   if (!args.shape || !isIssueShape(args.shape)) {
     fail_(
-      `--shape is required and must be one of orphan|roadmap|child|carrier`,
+      `--shape is required and must be one of orphan|roadmap|child|carrier|confirmation`,
     );
   }
   // A draft carrier has no readiness bucket (#4250), so the two cannot combine.
@@ -4857,6 +5518,24 @@ function main() {
   }
   if (args.shape === 'carrier' && args.expectBucket !== undefined) {
     fail_('--shape carrier cannot be combined with --expect-bucket');
+  }
+  if (args.shape === 'confirmation') {
+    if (args.expectBucket !== undefined) {
+      fail_('--shape confirmation cannot be combined with --expect-bucket');
+    }
+    if (args.currentRepo === undefined || args.currentRepo.trim() === '') {
+      fail_('--shape confirmation requires --current-repo <owner/repo>');
+    }
+  }
+  if (args.confirmationRecord === true) {
+    if (args.shape !== 'confirmation') {
+      fail_('--confirmation-record requires --shape confirmation');
+    }
+    if (!args.expectClass || !args.expectSource) {
+      fail_(
+        '--confirmation-record requires --expect-class and --expect-source',
+      );
+    }
   }
   if (!args.bodyFile && !args.stdin) {
     fail_('either --body-file <path> or --stdin is required');
@@ -4957,6 +5636,13 @@ function main() {
     blockedByHumanLabelName: policy.blockedByHumanLabelName,
     needsDecisionLabelName: policy.needsDecisionLabelName,
     expectedAuthoringBucket: args.expectBucket,
+    confirmationLabelName: readConfirmationLabelName(policy.rawConfig),
+    confirmationRecord: args.confirmationRecord === true,
+    expectClass: args.expectClass,
+    expectSource: args.expectSource,
+    expectClaim: args.expectClaim,
+    expectSet: args.expectSet,
+    expectSubject: args.expectSubject,
     authoringLabelName: policy.authoringLabelName,
     authoringOnlyLabelName: policy.authoringOnlyLabelName,
     currentRepo,
@@ -4991,12 +5677,25 @@ function main() {
   writeReport(report, args.format);
   return report.passed ? 0 : 1;
 }
+/** The confirmation label from the repository policy (#4961), or the default. */
+function readConfirmationLabelName(rawConfig) {
+  if (typeof rawConfig !== 'object' || rawConfig === null) {
+    return undefined;
+  }
+  const autoDecide = rawConfig.autoDecide;
+  if (typeof autoDecide !== 'object' || autoDecide === null) {
+    return undefined;
+  }
+  const label = autoDecide.confirmationLabelName;
+  return typeof label === 'string' && label.trim() !== '' ? label : undefined;
+}
 function isIssueShape(value) {
   return (
     value === 'orphan' ||
     value === 'roadmap' ||
     value === 'child' ||
-    value === 'carrier'
+    value === 'carrier' ||
+    value === 'confirmation'
   );
 }
 /**
@@ -5184,6 +5883,12 @@ function parseArgs(argv) {
     originIssue: values['origin-issue'],
     labels: values.label ?? [],
     expectBucket: values['expect-bucket'],
+    confirmationRecord: values['confirmation-record'],
+    expectClass: values['expect-class'],
+    expectSource: values['expect-source'],
+    expectClaim: values['expect-claim'],
+    expectSet: values['expect-set'],
+    expectSubject: values['expect-subject'],
     commentsFile: values['comments-file'],
     journalCommentsFile: values['journal-comments-file'],
     cleanupEvidenceFile: values['cleanup-evidence-file'],
@@ -5194,7 +5899,7 @@ function parseArgs(argv) {
   };
 }
 function printUsage() {
-  console.log(`usage: node scripts/audit-authored-issue.mjs --shape <orphan|roadmap|child|carrier> (--body-file <path> | --stdin) [options]
+  console.log(`usage: node scripts/audit-authored-issue.mjs --shape <orphan|roadmap|child|carrier|confirmation> (--body-file <path> | --stdin) [options]
 
 Mechanically audits a drafted GitHub issue body against the issue-authoring
 contract's structural expectations (skills/issue-authoring/references/
@@ -5230,9 +5935,17 @@ check fails, 2 on a usage error; the advisory check and
 authoring-marker-minimization-backlog never affect the exit code.
 
 Options:
-  --shape <orphan|roadmap|child|carrier>
+  --shape <orphan|roadmap|child|carrier|confirmation>
                                     declared issue shape (required); carrier is
-                                    a draft carrier, which takes no --expect-bucket
+                                    a draft carrier, which takes no --expect-bucket;
+                                    confirmation is an auto-decide confirmation issue
+                                    (#4961), which needs --current-repo and takes no
+                                    --expect-bucket
+  --confirmation-record            audit a record comment (its first line is the
+                                    record marker) instead of a body; needs
+                                    --shape confirmation, --expect-class, and
+                                    --expect-source; optional --expect-claim,
+                                    --expect-set, and --expect-subject
   --title <text>                   the drafted issue's title, for the A4/A4.5
                                     triage checks (orphan/child shapes only);
                                     without it, a leading "# <title>" line of

@@ -402,6 +402,15 @@ for every stop of an `--apply` run after the pre-checks; it exits `1` as
 | `branch-name.mjs`                  | a missing `--number` or `--title`, or an unknown flag                                                                                               | none today                                                                                                                                                  |
 | `emit-marker.mjs`                  | a missing `--type` or flag value, or an unknown flag                                                                                                | none today                                                                                                                                                  |
 
+The `audit-authored-issue.mjs` confirmation shape (`--shape confirmation`,
+issue `#4961`) lints an auto-decide confirmation issue. It needs
+`--current-repo`, takes no `--expect-bucket`, and exits `0` on a pass, `1` on
+each failing rule, and `2` on each usage error. `--confirmation-record` with
+`--expect-class` and `--expect-source` lints a record comment instead, with
+optional `--expect-claim`, `--expect-set`, and `--expect-subject`. The shape's
+markers, headings, and trust checks are defined in the authoring contract's
+Auto-decide confirmation issue section.
+
 ### Migrated helpers (marker, handoff, provider, and misc batch)
 
 Issue #3346 moves the last 15 packaged bins onto the same runner --
