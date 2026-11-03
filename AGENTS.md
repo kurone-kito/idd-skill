@@ -489,6 +489,35 @@ layered on top of the distributed IDD defaults:
   helper stays available for explicit use. This bullet replaces the
   earlier digest-use statement from PR `#4527`. `idd-template/` is
   unchanged, so adopters keep the distributed behavior.
+- **Provisional decision opt-in**: This source repository sets
+  `dangerouslyAutoDecide: true` in `.github/idd/config.json` as a local
+  IDD dogfooding policy (applies only to `kurone-kito/idd-skill`).
+  `idd-template/` leaves the field unset, so adopters keep the default
+  `false`. PR `#4897` set the flag, merged 2026-11-01. At a hearing the
+  same day, recorded in roadmap `#4955`, the operator chose to keep it
+  and to use the feature actively for dogfooding. As of 2026-11-03 no
+  code reads the flag for behavior; the execution children of
+  roadmap `#4528` (issues `#4533`, `#4535`, `#4538`, and `#4539`) and
+  its transition helper (roadmap `#4722`) will. Roadmap `#4955` adds a
+  repository-only switch for each class of stop. Once those switches
+  exist, the flag alone starts no new provisional work, because a class
+  acts only when its own switch is also `true`. The gates that
+  roadmap `#4528` lists stay in force: the flag supplies no credential,
+  permission, approval, or scope expansion, and waives no CI, review,
+  standing reviewer, claim or ownership, security, destructive-operation,
+  branch, effort, or authoring-release gate. The only exceptions are the
+  two that roadmap `#4528` records for the worktree-remnant and
+  B1-leftover classes: while that class's own switch is on, it may act
+  on a claim, ownership, or destructive-operation stop, and only through
+  a remedy that first saves everything (a stash, a backup ref, or a
+  preserve directory) before it removes anything. This repository
+  departs on purpose from the adopter advice in
+  [Provisional Decision Opt-in](docs/customization.md#provisional-decision-opt-in),
+  which says to keep the flag absent or false until the complete
+  lifecycle is available and the repository has opted in; that advice
+  stays for adopters. To opt out, set `dangerouslyAutoDecide` to `false`
+  in `.github/idd/config.json`, or remove the field, which then defaults
+  to `false`.
 
 ## Branch strategy
 
