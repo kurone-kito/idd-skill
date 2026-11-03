@@ -7921,6 +7921,62 @@ test('the options and the chosen option follow the contract (#4961)', () => {
   );
 });
 
+test('chosen option comparison preserves inline-code title text (#5022)', () => {
+  const matching = confirmationBody()
+    .replace('### Proceed with the change', '### Proceed with `safe` mode')
+    .replace(
+      '## Chosen option\n\nProceed with the change',
+      '## Chosen option\n\nProceed with `safe` mode',
+    );
+  assert.equal(
+    confirmationAudit(matching).passed,
+    true,
+    JSON.stringify(failingIds(confirmationAudit(matching))),
+  );
+
+  const mismatch = matching.replace(
+    '## Chosen option\n\nProceed with `safe` mode',
+    '## Chosen option\n\nProceed with `unsafe` mode',
+  );
+  assert.ok(
+    failingIds(confirmationAudit(mismatch)).includes(
+      'confirmation-chosen-option',
+    ),
+  );
+});
+
+test('a fenced example inside Options does not add an option (#5022)', () => {
+  const body = confirmationBody().replace(
+    '## Options\n\n',
+    '## Options\n\n```markdown\n### Example only\n\nCost: ignored\n```\n\n',
+  );
+  assert.equal(
+    confirmationAudit(body).passed,
+    true,
+    JSON.stringify(failingIds(confirmationAudit(body))),
+  );
+});
+
+test('required confirmation sections inside an HTML comment are hidden (#5022)', () => {
+  const body =
+    confirmationBody().replace('## Stop\n', '<!--\n## Stop\n') + '\n-->';
+  const report = confirmationAudit(body);
+  assert.ok(failingIds(report).includes('confirmation-headings'));
+  assert.equal(
+    report.findings.find(
+      (finding) => finding.id === 'confirmation-record-marker',
+    )?.result,
+    'pass',
+  );
+});
+
+test('forbidden marker checks still read raw HTML-comment text (#5022)', () => {
+  const report = confirmationAudit(
+    confirmationBody(CONFIRMATION_RECORD, ['', '<!-- idd-skill-effort: S -->']),
+  );
+  assert.ok(failingIds(report).includes('confirmation-forbidden-markers'));
+});
+
 test('a question needs exactly one Question: line (#4961)', () => {
   const none = confirmationBody().replace('Question: Closing', 'Closing');
   assert.ok(
