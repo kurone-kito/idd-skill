@@ -4919,11 +4919,11 @@ function publicationSetValue(lines) {
   const match = /;\s*set=([^;\s]+)/.exec(line);
   return match === null ? null : (match[1] ?? null);
 }
-/** The lines of one `## ` section, exclusive of its heading. */
-function confirmationSectionLines(lines, heading) {
+/** The line bounds of one `## ` section, including its heading. */
+function confirmationSectionBounds(lines, heading) {
   const start = lines.findIndex((line) => line.trim() === heading);
   if (start < 0) {
-    return [];
+    return null;
   }
   let end = lines.length;
   for (let index = start + 1; index < lines.length; index += 1) {
@@ -4932,7 +4932,12 @@ function confirmationSectionLines(lines, heading) {
       break;
     }
   }
-  return lines.slice(start + 1, end);
+  return { start, end };
+}
+/** The lines of one `## ` section, exclusive of its heading. */
+function confirmationSectionLines(lines, heading) {
+  const bounds = confirmationSectionBounds(lines, heading);
+  return bounds === null ? [] : lines.slice(bounds.start + 1, bounds.end);
 }
 /** Checks that each confirmation heading appears once, in the pinned order. */
 function checkConfirmationHeadings(lines) {
@@ -4958,32 +4963,17 @@ function checkConfirmationHeadings(lines) {
   }
   return pass(id, name, 'the five headings appear once, in order');
 }
-/** The raw lines of the section that starts at masked index `start`. */
-function confirmationSectionRaw(maskedLines, rawLines, start) {
-  let end = maskedLines.length;
-  for (let index = start + 1; index < maskedLines.length; index += 1) {
-    if (maskedLines[index]?.startsWith('## ') === true) {
-      end = index;
-      break;
-    }
-  }
-  return rawLines.slice(start + 1, end);
-}
 /** Checks the `Subject:` line for the two classes that name a subject. */
-function checkConfirmationSubject(maskedLines, rawLines, cls) {
+function checkConfirmationSubject(lines, cls) {
   const id = 'confirmation-subject';
   const name =
     'A worktreeRemnant or b1Leftover stop names its subject on one Subject: line';
   if (cls !== 'worktreeRemnant' && cls !== 'b1Leftover') {
     return pass(id, name, `not applicable to class ${cls}`);
   }
-  // The section is located on the masked view, and its lines are read raw,
-  // because masking hides the single-backtick span the Subject: line holds.
-  const stopStart = maskedLines.findIndex((line) => line.trim() === '## Stop');
-  const stop =
-    stopStart < 0
-      ? []
-      : confirmationSectionRaw(maskedLines, rawLines, stopStart);
+  // optionLines masks HTML comments while keeping the inline-code subject.
+  const stopStart = lines.findIndex((line) => line.trim() === '## Stop');
+  const stop = stopStart < 0 ? [] : confirmationSectionLines(lines, '## Stop');
   const first = stop.find((line) => line.trim() !== '') ?? '';
   if (parseConfirmationSubjectLine(first) === null) {
     return fail(
@@ -5003,16 +4993,26 @@ function checkConfirmationSubject(maskedLines, rawLines, cls) {
   return pass(id, name, 'one Subject: line names the subject');
 }
 /** Checks the option list, the keep-today option, the costs, and the choice. */
-function checkConfirmationOptions(lines) {
-  const options = confirmationSectionLines(lines, '## Options');
+function checkConfirmationOptions(visibleLines, literalLines) {
+  const optionsBounds = confirmationSectionBounds(visibleLines, '## Options');
   const titles = [];
   let current = null;
-  for (const line of options) {
-    if (line.startsWith('### ')) {
-      current = { title: line.slice(4).trim(), body: [] };
-      titles.push(current);
-    } else if (current !== null) {
-      current.body.push(line);
+  if (optionsBounds !== null) {
+    for (
+      let index = optionsBounds.start + 1;
+      index < optionsBounds.end;
+      index += 1
+    ) {
+      const line = visibleLines[index] ?? '';
+      if (line.startsWith('### ')) {
+        current = {
+          title: (literalLines[index] ?? line).slice(4).trim(),
+          body: [],
+        };
+        titles.push(current);
+      } else if (current !== null) {
+        current.body.push(line);
+      }
     }
   }
   const optionsId = 'confirmation-options';
@@ -5052,9 +5052,16 @@ function checkConfirmationOptions(lines) {
   const chosenId = 'confirmation-chosen-option';
   const chosenName =
     'The first non-empty line of ## Chosen option names a listed option other than the keep option';
-  const chosen = confirmationSectionLines(lines, '## Chosen option').find(
-    (line) => line.trim() !== '',
+  const chosenBounds = confirmationSectionBounds(
+    visibleLines,
+    '## Chosen option',
   );
+  const chosen =
+    chosenBounds === null
+      ? undefined
+      : literalLines
+          .slice(chosenBounds.start + 1, chosenBounds.end)
+          .find((line) => line.trim() !== '');
   const chosenTitle = (chosen ?? '').replace(/^#{1,6}\s+/, '').trim();
   const listed = titles.some(
     (option) =>
@@ -5204,7 +5211,13 @@ function auditConfirmationShape(rawText, options) {
       ? options.confirmationLabelName
       : 'status:needs-confirmation';
   const rawLines = rawText.split('\n');
-  const maskedLines = maskMarkdownForScan(rawText).split('\n');
+  const visibleLines = maskMarkdownForScan(rawText, {
+    htmlComments: 'mask',
+  }).split('\n');
+  const optionLines = maskMarkdownForScan(rawText, {
+    inlineCode: 'keep',
+    htmlComments: 'mask',
+  }).split('\n');
   const findings = [];
   const currentRepo = normalizeCurrentRepo(options.currentRepo);
   const repoPattern = `${markerPrefix}-${CONFIRMATION_RECORD_SUFFIX}`;
@@ -5386,13 +5399,11 @@ function auditConfirmationShape(rawText, options) {
   ) {
     const subjectId = 'confirmation-record-subject';
     const subjectName = 'The record names the expected subject';
-    const stopStart = maskedLines.findIndex(
+    const stopStart = optionLines.findIndex(
       (line) => line.trim() === '## Stop',
     );
     const stop =
-      stopStart < 0
-        ? []
-        : confirmationSectionRaw(maskedLines, rawLines, stopStart);
+      stopStart < 0 ? [] : confirmationSectionLines(optionLines, '## Stop');
     const first = stop.find((line) => line.trim() !== '') ?? '';
     const subject = parseConfirmationSubjectLine(first);
     findings.push(
@@ -5406,11 +5417,11 @@ function auditConfirmationShape(rawText, options) {
     );
   }
   // Sections.
-  findings.push(checkConfirmationHeadings(maskedLines));
+  findings.push(checkConfirmationHeadings(visibleLines));
   const subjectClass = fields?.class ?? '';
-  findings.push(checkConfirmationSubject(maskedLines, rawLines, subjectClass));
-  findings.push(...checkConfirmationOptions(maskedLines));
-  findings.push(checkConfirmationQuestion(maskedLines));
+  findings.push(checkConfirmationSubject(optionLines, subjectClass));
+  findings.push(...checkConfirmationOptions(visibleLines, optionLines));
+  findings.push(checkConfirmationQuestion(visibleLines));
   findings.push(checkConfirmationForbidden(rawText, markerPrefix));
   findings.push(...checkConfirmationLabels(options, confirmationLabel));
   return {
