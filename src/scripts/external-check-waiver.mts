@@ -60,7 +60,10 @@ import {
   resolveTrustedMarkerActors,
   summarizeExternalCheckWaivers,
 } from './protocol-helpers.mts';
-import { fetchLastEditedAtByNodeId } from './provider-adapter-github.mts';
+import {
+  fetchLastEditedAtByNodeId,
+  readChangeRequestClosingIssueReferences,
+} from './provider-adapter-github.mts';
 import type { PromptFn } from './readline-prompt.mts';
 import { makeReadlinePrompt } from './readline-prompt.mts';
 import { fetchHeadObservedAt } from './review-clause.mts';
@@ -117,6 +120,7 @@ interface PrPayload {
   headRefOid?: string | null;
   baseRefName?: string | null;
   statusCheckRollup?: StatusCheckRollupEntry[] | null;
+  /** Legacy injected references are ignored because they are not bound to this head. */
   closingIssuesReferences?: LinkedIssueRefPayload[] | null;
 }
 
@@ -1199,6 +1203,17 @@ export async function runExternalCheckWaiver(
   const pr =
     options.pr ??
     fetchPullRequest({ owner, repo: name, prNumber: args.prNumber });
+  if (options.pr !== undefined && pr.number !== args.prNumber) {
+    throw new Error(
+      `supplied pull request #${String(pr.number ?? '')} does not match requested pull request #${args.prNumber}`,
+    );
+  }
+  const readClosingIssueReferences = createClosingIssueReferencesReader({
+    owner,
+    repo: name,
+    prNumber: args.prNumber,
+    headRefOid: String(pr.headRefOid ?? '').trim(),
+  });
   // #3675: one first-commit reader shared by the pre-write resolution and the
   // post-write reconcile below, so a handoff-bearing apply reads the PR's
   // commits once.
@@ -1207,31 +1222,41 @@ export async function runExternalCheckWaiver(
     name,
     args.prNumber,
   );
+  const shouldResolveLinkedIssueEvidence =
+    args.autoBootstrap ||
+    normalizeAuthorityEvidence(
+      authority,
+      actor,
+      owner,
+      policy.ciGate.externalCheckWaivers.authorityPolicy,
+    ).authorized;
   const issueCandidates =
     options.issueCandidates ??
     options.resolveIssueCandidates?.() ??
-    resolveLinkedIssueCandidates({
-      owner,
-      repo: name,
-      rawConfig,
-      // Auto-bootstrap has no human "viewer" identity to add as an extra
-      // trusted login for resolving the linked issue's OWN claim markers
-      // (the shared builder trusts `viewerLogin` alongside configured
-      // `trustedMarkerActors`, and never an implicit repository owner) --
-      // passing the bot login here would be a no-op in practice (it never
-      // posts issue claim markers) but is semantically wrong, so pass `''`.
-      viewerLogin: args.autoBootstrap ? '' : actor,
-      baseRefName: String(pr.baseRefName ?? ''),
-      linkedIssues: pr.closingIssuesReferences,
-      issueNumber: args.issueNumber,
-      expectedClaimId: args.claimId,
-      headRefName: pr.headRefName,
-      // kurone-kito/idd-skill#2657 (Codex review, PR #2895, round 11): see
-      // resolveLinkedIssueCandidates's own enforceBranchMatch doc comment.
-      enforceBranchMatch: !args.autoBootstrap,
-      prNumber: args.prNumber,
-      readPrFirstCommitAt,
-    });
+    (shouldResolveLinkedIssueEvidence
+      ? resolveLinkedIssueCandidates({
+          owner,
+          repo: name,
+          rawConfig,
+          // Auto-bootstrap has no human "viewer" identity to add as an extra
+          // trusted login for resolving the linked issue's OWN claim markers
+          // (the shared builder trusts `viewerLogin` alongside configured
+          // `trustedMarkerActors`, and never an implicit repository owner) --
+          // passing the bot login here would be a no-op in practice (it never
+          // posts issue claim markers) but is semantically wrong, so pass `''`.
+          viewerLogin: args.autoBootstrap ? '' : actor,
+          baseRefName: String(pr.baseRefName ?? ''),
+          linkedIssues: readClosingIssueReferences(),
+          issueNumber: args.issueNumber,
+          expectedClaimId: args.claimId,
+          headRefName: pr.headRefName,
+          // kurone-kito/idd-skill#2657 (Codex review, PR #2895, round 11): see
+          // resolveLinkedIssueCandidates's own enforceBranchMatch doc comment.
+          enforceBranchMatch: !args.autoBootstrap,
+          prNumber: args.prNumber,
+          readPrFirstCommitAt,
+        })
+      : []);
 
   const resolvedHeadCommittedAt =
     options.headCommittedAt ??
@@ -1370,9 +1395,10 @@ export async function runExternalCheckWaiver(
       linkedForMembership.candidateCount === 0);
   let loopMembership: PrLoopMembership | undefined;
   let loopMembershipReason: string | undefined;
-  if (noneBindingPossible) {
+  if (noneBindingPossible && shouldResolveLinkedIssueEvidence) {
+    const closingIssueReferences = readClosingIssueReferences();
     const needsPrComments = noneBindingNeedsPrComments(
-      pr.closingIssuesReferences,
+      closingIssueReferences,
       issueCandidates,
       owner,
       name,
@@ -1387,7 +1413,7 @@ export async function runExternalCheckWaiver(
       prNumber: args.prNumber,
       owner,
       repo: name,
-      closingIssuesReferences: pr.closingIssuesReferences,
+      closingIssuesReferences: closingIssueReferences,
       issueCandidates,
       prComments,
       trustedMarkerLogins: trustedLoginsForLinkedIssueClaims({
@@ -1841,7 +1867,7 @@ export async function runExternalCheckWaiver(
             rawConfig,
             viewerLogin: actor,
             baseRefName: String(pr.baseRefName ?? ''),
-            linkedIssues: pr.closingIssuesReferences,
+            linkedIssues: readClosingIssueReferences(),
             issueNumber: args.issueNumber,
             expectedClaimId: '',
             headRefName: pr.headRefName,
@@ -2678,8 +2704,34 @@ function fetchPullRequest({
     '--repo',
     `${owner}/${repo}`,
     '--json',
-    'number,state,url,headRefName,headRefOid,baseRefName,statusCheckRollup,closingIssuesReferences',
+    'number,state,url,headRefName,headRefOid,baseRefName,statusCheckRollup',
   ]) as PrPayload;
+}
+
+function createClosingIssueReferencesReader({
+  owner,
+  repo,
+  prNumber,
+  headRefOid,
+}: {
+  owner: string;
+  repo: string;
+  prNumber: number;
+  headRefOid: string;
+}): () => LinkedIssueRefPayload[] {
+  let references: LinkedIssueRefPayload[] | undefined;
+  return () => {
+    if (references === undefined) {
+      references = readChangeRequestClosingIssueReferences(
+        ghText,
+        owner,
+        repo,
+        prNumber,
+        headRefOid,
+      );
+    }
+    return references;
+  };
 }
 
 /**

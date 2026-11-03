@@ -1796,6 +1796,24 @@ const PROBE_READ_PERMISSIONS = [
   'statuses: read',
 ] as const;
 
+const PROBE_CLOSING_ISSUE_QUERY =
+  'query($owner:String!, $repo:String!, $number:Int!) { repository(owner:$owner,name:$repo) { pullRequest(number:$number) { closingIssuesReferences(first:1) { nodes { number } pageInfo { hasNextPage } } } } }';
+const PROBE_CLOSING_ISSUE_JQ_FILTER = `if ((.errors // []) | length) > 0 then
+  error("GraphQL query returned errors")
+elif (.data.repository.pullRequest.closingIssuesReferences | type) != "object" then
+  error("missing closing issue connection")
+elif (.data.repository.pullRequest.closingIssuesReferences.nodes | type) != "array" then
+  error("missing closing issue nodes")
+elif (.data.repository.pullRequest.closingIssuesReferences.pageInfo.hasNextPage | type) != "boolean" then
+  error("missing closing issue page info")
+elif any(.data.repository.pullRequest.closingIssuesReferences.nodes[]; (.number | type) != "number" or .number <= 0) then
+  error("malformed closing issue number")
+else
+  any(.data.repository.pullRequest.closingIssuesReferences.nodes[]; .number > 0) | tostring
+end`;
+const PROBE_SUPPORTED_PR_JSON_FIELDS =
+  'number,state,url,headRefName,headRefOid,baseRefName,statusCheckRollup';
+
 const ONBOARDING_GUIDE_PATH =
   'idd-template/docs/onboarding/optional-host-setup.md';
 const EXTERNAL_CHECK_WAIVER_PATH = 'src/scripts/external-check-waiver.mts';
@@ -2052,22 +2070,50 @@ function checkTokenScopeProbeWorkflows(root: string, report: Report): void {
     RWA005,
     report,
   );
-  const helperFields = helper?.match(
-    /function fetchPullRequest\([\s\S]*?'--json',\s*'([^']+)'/,
-  )?.[1];
-  if (helper !== undefined && helperFields === undefined) {
+  const helperFetch = helper?.match(
+    /function fetchPullRequest\([\s\S]*?\n}\n/,
+  )?.[0];
+  const helperFields = helperFetch?.match(/'--json',\s*'([^']+)'/)?.[1];
+  const helperQueryArgs = helperFetch
+    ?.match(/return ghJson\(\[([\s\S]*?)\]\) as PrPayload;/)?.[1]
+    ?.replace(/\s+/g, ' ')
+    .trim();
+  const expectedHelperQueryArgs = `'pr', 'view', String(prNumber), '--repo', \`\${owner}/\${repo}\`, '--json', '${PROBE_SUPPORTED_PR_JSON_FIELDS}',`;
+  if (helper !== undefined && helperFetch === undefined) {
     report(
       RWA005,
       EXTERNAL_CHECK_WAIVER_PATH,
-      'fetchPullRequest must declare its --json fields',
+      'fetchPullRequest must declare its gh pr view query',
+    );
+  } else if (
+    helperFetch !== undefined &&
+    ((helperFetch.match(/\bghJson\s*\(/g) ?? []).length !== 1 ||
+      helperQueryArgs !== expectedHelperQueryArgs)
+  ) {
+    report(
+      RWA005,
+      EXTERNAL_CHECK_WAIVER_PATH,
+      'fetchPullRequest must make exactly one supported gh pr view query',
+    );
+  }
+  if (
+    helperFetch !== undefined &&
+    helperFields !== PROBE_SUPPORTED_PR_JSON_FIELDS
+  ) {
+    report(
+      RWA005,
+      EXTERNAL_CHECK_WAIVER_PATH,
+      'fetchPullRequest must request the exact supported gh pr view fields',
     );
   }
 
+  const workflowCopies = new Map<string, string>();
   for (const path of PROBE_WORKFLOW_PATHS) {
     const workflow = readRequiredText(root, path, RWA005, report);
     if (workflow === undefined) {
       continue;
     }
+    workflowCopies.set(path, workflow);
     checkProbeTriggersAndIdentity(path, workflow, report);
     const probe = jobBlocks(workflow)?.get('probe-self-waiver-token-scopes');
     if (probe === undefined) {
@@ -2075,6 +2121,22 @@ function checkTokenScopeProbeWorkflows(root: string, report: Report): void {
       continue;
     }
     checkProbeJob(path, probe, helperFields, report);
+  }
+  const rootProbe = workflowCopies.get(PROBE_WORKFLOW_PATHS[0]);
+  const templateProbe = workflowCopies.get(PROBE_WORKFLOW_PATHS[1]);
+  if (rootProbe !== undefined && templateProbe !== undefined) {
+    const normalizeRunner = (workflow: string): string =>
+      workflow.replace(
+        /^ {4}runs-on: (?:ubuntu-slim|\$\{\{ vars\.CI_RUNNER_LABEL \|\| 'ubuntu-slim' \}\})$/m,
+        '    runs-on: <runner>',
+      );
+    if (normalizeRunner(rootProbe) !== normalizeRunner(templateProbe)) {
+      report(
+        RWA005,
+        PROBE_WORKFLOW_PATHS[1],
+        'probe workflow must match its root copy except for the runner selector',
+      );
+    }
   }
 }
 
@@ -2218,13 +2280,11 @@ function checkProbeJob(
     fail('probe must query gh pr view');
   }
   if (
-    !/--jq '\[any\(\.statusCheckRollup\[\]\?; \.__typename == "CheckRun" and \(\(\.workflowName \/\/ ""\) \| length > 0\)\), any\(\.statusCheckRollup\[\]\?; \.__typename == "StatusContext"\), any\(\.closingIssuesReferences\[\]\?; \.number > 0\)\] \| map\(tostring\) \| join\(" "\)'/.test(
+    !/--jq '\[any\(\.statusCheckRollup\[\]\?; \.__typename == "CheckRun" and \(\(\.workflowName \/\/ ""\) \| length > 0\)\), any\(\.statusCheckRollup\[\]\?; \.__typename == "StatusContext"\)\] \| map\(tostring\) \| join\(" "\)'/.test(
       probe,
     )
   ) {
-    fail(
-      'probe must verify Actions, legacy status, and a linked issue exercise all read scopes',
-    );
+    fail('probe must verify Actions and legacy status through gh pr view');
   }
   for (const phrase of [
     'has no Actions check run',
@@ -2242,8 +2302,62 @@ function checkProbeJob(
   ) {
     fail('probe must print its read-only success summary');
   }
+  const ghApiCalls = [...probe.matchAll(/\bgh api\b/g)];
+  const graphQlCalls = [...probe.matchAll(/\bgh api graphql\b/g)];
+  const closingIssueQuery = run.match(
+    /gh api graphql\s*\\\s*-f query='([^']+)'/,
+  )?.[1];
+  const graphQlArguments = run.match(
+    /gh api graphql\s*\\\s*([\s\S]*?)\); then/,
+  )?.[1];
+  const actualGraphQlArguments = graphQlArguments ?? '';
   if (
-    /external-check-waiver|gh api|gh issue|gh pr comment|--method|labels|required_status_checks/.test(
+    ghApiCalls.length !== 1 ||
+    graphQlCalls.length !== 1 ||
+    closingIssueQuery !== PROBE_CLOSING_ISSUE_QUERY
+  ) {
+    fail('probe must use only the read-only linked-issue GraphQL query');
+  }
+  if (
+    !/^ {10}REPOSITORY_OWNER="\$\{GITHUB_REPOSITORY%%\/\*\}"$/m.test(run) ||
+    !/^ {10}REPOSITORY_NAME="\$\{GITHUB_REPOSITORY#\*\/\}"$/m.test(run) ||
+    !actualGraphQlArguments.includes('-F owner="$REPOSITORY_OWNER"') ||
+    !actualGraphQlArguments.includes('-F repo="$REPOSITORY_NAME"') ||
+    !actualGraphQlArguments.includes('-F number="$PR_NUMBER"')
+  ) {
+    fail('probe must query the current repository and PR identity');
+  }
+  const closingIssueResponseCheck = run.slice(
+    run.indexOf('HAS_CLOSING_ISSUE=$('),
+  );
+  if (
+    !/if ! CLOSING_ISSUE_RESPONSE=\$\(gh api graphql/.test(run) ||
+    !/if ! HAS_CLOSING_ISSUE=/.test(run) ||
+    !/\.errors/.test(closingIssueResponseCheck) ||
+    !/\.data\.repository\.pullRequest\.closingIssuesReferences/.test(
+      closingIssueResponseCheck,
+    ) ||
+    !/pageInfo\.hasNextPage/.test(closingIssueResponseCheck) ||
+    !/if \[ "\$HAS_CLOSING_ISSUE" != "true" \]/.test(run)
+  ) {
+    fail('probe must fail on GraphQL errors or incomplete linked-issue data');
+  }
+  const actualClosingIssueFilter = closingIssueResponseCheck.match(
+    /HAS_CLOSING_ISSUE=\$\(printf '%s' "\$CLOSING_ISSUE_RESPONSE" \| jq -r '([\s\S]*?)'\);/,
+  )?.[1];
+  const normalizeJq = (filter: string): string =>
+    filter.replace(/\s+/g, ' ').trim();
+  if (
+    actualClosingIssueFilter === undefined ||
+    normalizeJq(actualClosingIssueFilter) !==
+      normalizeJq(PROBE_CLOSING_ISSUE_JQ_FILTER)
+  ) {
+    fail(
+      'probe must validate and derive the linked-issue result from returned nodes',
+    );
+  }
+  if (
+    /external-check-waiver|gh issue|gh pr comment|--method|labels|required_status_checks/.test(
       probe,
     )
   ) {
@@ -2251,7 +2365,20 @@ function checkProbeJob(
       'probe must not invoke a waiver, comment, label, or required-check write operation',
     );
   }
-  const probeFields = probe.match(/--json\s+([^\s\\]+)/)?.[1];
+  const prViewCalls = [...probe.matchAll(/\bgh pr view\b/g)];
+  const prJsonFields = [...probe.matchAll(/--json\s+([^\s\\]+)/g)].map(
+    (match) => match[1],
+  );
+  const probeFields = prJsonFields[0];
+  if (prViewCalls.length !== 1) {
+    fail('probe must query gh pr view exactly once');
+  }
+  if (
+    prJsonFields.length !== 1 ||
+    probeFields !== PROBE_SUPPORTED_PR_JSON_FIELDS
+  ) {
+    fail('probe must request the exact supported gh pr view fields');
+  }
   if (probeFields !== helperFields) {
     fail('probe query fields must match fetchPullRequest exactly');
   }

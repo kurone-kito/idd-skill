@@ -8,7 +8,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { after, before, test } from 'node:test';
+import { after, before, beforeEach, test } from 'node:test';
 import {
   readAdvisoryConvergenceDeadlineMinutes,
   SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
@@ -63,6 +63,16 @@ after(() => {
   restoreLoadControl?.();
 });
 const fixtureGh = useFixtureGh();
+beforeEach(() => {
+  fixtureGh.setResponses([
+    {
+      args: ['api', 'graphql'],
+      match: 'prefix',
+      includes: ['closingIssuesReferences(first:100,after:$after)'],
+      stdout: fixtureClosingIssueReferencesResponse(),
+    },
+  ]);
+});
 
 // --- #1450: migration onto the shared cli-args.mts wrapper -----------------
 
@@ -588,6 +598,19 @@ test('runExternalCheckWaiver dry-run classifies a none binding before apply (kur
     now: new Date('2026-05-17T06:00:00Z'),
     isTTY: false,
   };
+  fixtureGh.setResponses([
+    {
+      args: ['api', 'graphql'],
+      match: 'prefix',
+      includes: ['closingIssuesReferences(first:100,after:$after)'],
+      stdout: fixtureClosingIssueReferencesResponse('a'.repeat(40), [
+        {
+          number: 3330,
+          url: 'https://github.com/kurone-kito/idd-skill/issues/3330',
+        },
+      ]),
+    },
+  ]);
   const args = {
     ...parseArgs([
       '--pr',
@@ -633,11 +656,20 @@ test('runExternalCheckWaiver dry-run classifies a none binding before apply (kur
     /idd-external-check-waiver: kurone-kito none /,
   );
 
+  fixtureGh.setResponses([
+    {
+      args: ['api', 'graphql'],
+      match: 'prefix',
+      includes: ['closingIssuesReferences(first:100,after:$after)'],
+      stdout: fixtureClosingIssueReferencesResponse(),
+    },
+  ]);
   const claimless = await runExternalCheckWaiver({
     ...shared,
     args,
     pr: { ...pr, closingIssuesReferences: [] },
     issueCandidates: [],
+    prComments: [],
   });
   assert.equal(claimless.report?.canApply, true);
   assert.match(
@@ -677,6 +709,19 @@ test('runExternalCheckWaiver: --auto-bootstrap none fallback classifies a closin
     now: new Date('2026-05-17T06:00:00Z'),
     isTTY: false,
   };
+  fixtureGh.setResponses([
+    {
+      args: ['api', 'graphql'],
+      match: 'prefix',
+      includes: ['closingIssuesReferences(first:100,after:$after)'],
+      stdout: fixtureClosingIssueReferencesResponse('b'.repeat(40), [
+        {
+          number: 3463,
+          url: 'https://github.com/kurone-kito/idd-skill/issues/3463',
+        },
+      ]),
+    },
+  ]);
   const args = {
     ...parseArgs([
       '--pr',
@@ -4559,6 +4604,326 @@ function fixtureWaiverArgs(...extra: string[]) {
   };
 }
 
+function fixtureClosingIssueReferencesResponse(
+  headRefOid = FIXTURE_HEAD,
+  references: Array<{ number: number; url: string }> = [],
+): string {
+  return JSON.stringify({
+    data: {
+      repository: {
+        pullRequest: {
+          headRefOid,
+          closingIssuesReferences: {
+            nodes: references.map((reference) => ({
+              ...reference,
+              repository: {
+                name: 'idd-skill',
+                owner: { login: 'kurone-kito' },
+              },
+            })),
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        },
+      },
+    },
+  });
+}
+
+test('runExternalCheckWaiver ignores injected closing references and reads the pinned adapter once per invocation', async () => {
+  const input = fixtureWaiverInputs();
+  type SuppliedPr = NonNullable<
+    NonNullable<Parameters<typeof runExternalCheckWaiver>[0]>['pr']
+  >;
+  fixtureGh.setResponses([
+    {
+      args: ['api', 'graphql'],
+      match: 'prefix',
+      includes: ['closingIssuesReferences(first:100,after:$after)'],
+      stdout: fixtureClosingIssueReferencesResponse(),
+    },
+  ]);
+  let postCalls = 0;
+  let prCommentReads = 0;
+  const before = fixtureGh.calls().length;
+  const currentPr: SuppliedPr = { ...input.pr };
+  delete currentPr.closingIssuesReferences;
+  const runWithPayload = async (pr: SuppliedPr) => {
+    const callsBefore = fixtureGh.calls().length;
+    const commentsBefore = prCommentReads;
+    const result = await runExternalCheckWaiver({
+      ...input,
+      args: fixtureWaiverArgs('--apply', '--yes'),
+      headObservedAt: '2026-05-17T00:00:00Z',
+      pr,
+      prComments: () => {
+        prCommentReads += 1;
+        return [];
+      },
+      postComment: () => {
+        postCalls += 1;
+        return {
+          html_url:
+            'https://github.com/kurone-kito/idd-skill/pull/3330#issuecomment-1',
+        };
+      },
+    });
+    const calls = fixtureGh.calls().slice(callsBefore);
+    return {
+      result,
+      commentsRead: prCommentReads - commentsBefore,
+      closingReferenceReads: calls.filter(
+        (call) =>
+          call[0] === 'api' &&
+          call[1] === 'graphql' &&
+          call
+            .join('\n')
+            .includes('closingIssuesReferences(first:100,after:$after)'),
+      ).length,
+      usedGhPrView: calls.some(
+        (call) => call[0] === 'pr' && call[1] === 'view',
+      ),
+    };
+  };
+  try {
+    const control = await runWithPayload(currentPr);
+    const injected = await runWithPayload({
+      ...currentPr,
+      closingIssuesReferences: [{ number: 9999 }],
+    });
+    assert.equal(control.result.exitCode, 0);
+    assert.equal(control.result.report?.canApply, true);
+    assert.equal(injected.result.exitCode, 0);
+    assert.deepEqual(
+      {
+        canApply: injected.result.report?.canApply,
+        blockingReasons: injected.result.report?.blockingReasons,
+        body: injected.result.report?.body,
+      },
+      {
+        canApply: control.result.report?.canApply,
+        blockingReasons: control.result.report?.blockingReasons,
+        body: control.result.report?.body,
+      },
+      'stale injected references do not change the pinned-adapter decision',
+    );
+    assert.equal(postCalls, 2);
+    assert.ok(control.commentsRead > 0);
+    assert.equal(injected.commentsRead, control.commentsRead);
+    assert.equal(control.closingReferenceReads, 1);
+    assert.equal(injected.closingReferenceReads, 1);
+    assert.equal(control.usedGhPrView, false);
+    assert.equal(injected.usedGhPrView, false);
+    const calls = fixtureGh.calls().slice(before);
+    assert.equal(
+      calls.filter(
+        (call) =>
+          call[0] === 'api' &&
+          call[1] === 'graphql' &&
+          call
+            .join('\n')
+            .includes('closingIssuesReferences(first:100,after:$after)'),
+      ).length,
+      2,
+      'one adapter read is shared by each invocation',
+    );
+  } finally {
+    fixtureGh.setResponses([]);
+  }
+});
+
+test('runExternalCheckWaiver rejects a supplied PR payload for a different requested PR before reading or writing', async () => {
+  const input = fixtureWaiverInputs();
+  let postCalls = 0;
+  const before = fixtureGh.calls().length;
+  await assert.rejects(
+    runExternalCheckWaiver({
+      ...input,
+      actor: 'kurone-kito',
+      args: fixtureWaiverArgs('--apply', '--yes'),
+      pr: { ...input.pr, number: input.pr.number + 1 },
+      prComments: [],
+      postComment: () => {
+        postCalls += 1;
+        return {};
+      },
+    }),
+    /supplied pull request #3331 does not match requested pull request #3330/,
+  );
+  assert.equal(postCalls, 0);
+  const reads = fixtureGh.calls().slice(before);
+  assert.equal(
+    reads.some(
+      (call) =>
+        call[0] === 'api' &&
+        call[1] === 'graphql' &&
+        call
+          .join('\n')
+          .includes('closingIssuesReferences(first:100,after:$after)'),
+    ),
+    false,
+    'a mismatched payload fails before reading linked issue references',
+  );
+  assert.equal(
+    reads.some((call) => call[0] === 'pr' && call[1] === 'view'),
+    false,
+    'a supplied mismatched payload does not trigger another PR lookup',
+  );
+});
+
+test('runExternalCheckWaiver skips linked-issue reads when known authority already blocks apply', async () => {
+  const input = fixtureWaiverInputs();
+  const before = fixtureGh.calls().length;
+  await assert.rejects(
+    runExternalCheckWaiver({
+      ...input,
+      actor: 'someuser',
+      authority: {
+        known: true,
+        permission: 'none',
+        roleName: '',
+      },
+      args: fixtureWaiverArgs('--apply', '--yes'),
+      headCommittedAt: '2026-05-17T00:00:00Z',
+      headObservedAt: '2026-05-17T00:00:00Z',
+      issueCandidates: undefined,
+      prComments: [],
+      postComment: () => {
+        assert.fail('unauthorized apply must not post a comment');
+      },
+    }),
+    /someuser is not authorized/,
+  );
+  assert.equal(
+    fixtureGh
+      .calls()
+      .slice(before)
+      .some(
+        (call) =>
+          call[0] === 'api' &&
+          call[1] === 'graphql' &&
+          call
+            .join('\n')
+            .includes('closingIssuesReferences(first:100,after:$after)'),
+      ),
+    false,
+    'closing references cannot change a known authority denial',
+  );
+});
+
+test('runExternalCheckWaiver avoids closing-reference reads when the decision path does not need them', async () => {
+  const input = fixtureWaiverInputs();
+  const before = fixtureGh.calls().length;
+  const result = await runExternalCheckWaiver({
+    ...input,
+    args: { ...fixtureWaiverArgs(), claimless: false },
+    headObservedAt: '2026-05-17T00:00:00Z',
+    pr: { ...input.pr, closingIssuesReferences: undefined },
+    issueCandidates: [],
+    prComments: [],
+  });
+  assert.equal(result.exitCode, 0);
+  const calls = fixtureGh.calls().slice(before);
+  assert.equal(
+    calls.some(
+      (call) =>
+        call[0] === 'api' &&
+        call[1] === 'graphql' &&
+        call
+          .join('\n')
+          .includes('closingIssuesReferences(first:100,after:$after)'),
+    ),
+    false,
+  );
+});
+
+test('runExternalCheckWaiver fails closed on invalid or inconsistent closing-reference reads', async () => {
+  const input = fixtureWaiverInputs();
+  const run = (headRefOid = FIXTURE_HEAD) =>
+    runExternalCheckWaiver({
+      ...input,
+      args: fixtureWaiverArgs(),
+      headObservedAt: '2026-05-17T00:00:00Z',
+      pr: { ...input.pr, headRefOid, closingIssuesReferences: undefined },
+      issueCandidates: undefined,
+      prComments: [],
+    });
+  try {
+    fixtureGh.setResponses([
+      {
+        args: ['api', 'graphql'],
+        match: 'prefix',
+        includes: ['closingIssuesReferences(first:100,after:$after)'],
+        stdout: fixtureClosingIssueReferencesResponse('b'.repeat(40)),
+      },
+    ]);
+    await assert.rejects(run(), /expected/);
+
+    fixtureGh.setResponses([
+      {
+        args: ['api', 'graphql'],
+        match: 'prefix',
+        includes: ['closingIssuesReferences(first:100,after:$after)'],
+        stdout: JSON.stringify({
+          data: { repository: { pullRequest: null } },
+        }),
+      },
+    ]);
+    await assert.rejects(run(), /pull request #3330 was not found/);
+
+    fixtureGh.setResponses([
+      {
+        args: ['api', 'graphql'],
+        match: 'prefix',
+        includes: ['closingIssuesReferences(first:100,after:$after)'],
+        stdout: JSON.stringify({
+          errors: [{ message: 'fixture GraphQL closing-reference failure' }],
+        }),
+      },
+    ]);
+    await assert.rejects(run(), /fixture GraphQL closing-reference failure/);
+
+    fixtureGh.setResponses([
+      {
+        args: ['api', 'graphql'],
+        match: 'prefix',
+        includes: ['closingIssuesReferences(first:100,after:$after)'],
+        stdout: JSON.stringify({
+          data: {
+            repository: {
+              pullRequest: {
+                headRefOid: FIXTURE_HEAD,
+                closingIssuesReferences: { nodes: [] },
+              },
+            },
+          },
+        }),
+      },
+    ]);
+    await assert.rejects(run(), /connection is null\/absent or malformed/);
+
+    fixtureGh.setResponses([]);
+    const before = fixtureGh.calls().length;
+    await assert.rejects(run('invalid-head'), /40 hexadecimal characters/);
+    assert.equal(
+      fixtureGh
+        .calls()
+        .slice(before)
+        .some(
+          (call) =>
+            call[0] === 'api' &&
+            call[1] === 'graphql' &&
+            call
+              .join('\n')
+              .includes('closingIssuesReferences(first:100,after:$after)'),
+        ),
+      false,
+      'an invalid expected head is rejected before the GraphQL read',
+    );
+  } finally {
+    fixtureGh.setResponses([]);
+  }
+});
+
 test('runExternalCheckWaiver takes the actor from the authenticated-user read, and a different viewer changes the marker (#3746)', async () => {
   const viewerReadsDuring = async <T,>(
     body: () => Promise<T>,
@@ -4683,7 +5048,11 @@ test('runExternalCheckWaiver anchors the deadline precondition on the earliest c
     const reads = fixtureGh
       .calls()
       .slice(before)
-      .filter((call) => call[1] === 'graphql');
+      .filter(
+        (call) =>
+          call[1] === 'graphql' &&
+          call.join('\n').includes('checkSuites(first:100'),
+      );
     assert.equal(reads.length, 2, 'one read per page');
     for (const call of reads) {
       assert.ok(call.includes('-F'), 'the number is passed as a typed field');

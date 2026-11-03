@@ -1219,8 +1219,7 @@ const RULE_CASES: readonly RuleCase[] = [
     },
     expected: [
       {
-        message:
-          'probe must not invoke a waiver, comment, label, or required-check write operation',
+        message: 'probe must use only the read-only linked-issue GraphQL query',
       },
     ],
   },
@@ -1685,12 +1684,197 @@ const RULE_CASES: readonly RuleCase[] = [
     name: 'a probe whose query fields differ from the helper query',
     path: ROOT_PROBE,
     mutation: {
-      from: ',statusCheckRollup,closingIssuesReferences',
-      to: ',statusCheckRollup',
+      from: ',baseRefName,statusCheckRollup',
+      to: ',baseRefName,checkRuns',
     },
     expected: [
       {
         message: 'probe query fields must match fetchPullRequest exactly',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a helper query that reintroduces unsupported closing reference fields',
+    path: EXTERNAL_CHECK_WAIVER,
+    mutation: {
+      from: "statusCheckRollup',",
+      to: "statusCheckRollup,closingIssuesReferences',",
+    },
+    expected: [
+      {
+        message:
+          'fetchPullRequest must request the exact supported gh pr view fields',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a helper query that invokes ghJson twice',
+    path: EXTERNAL_CHECK_WAIVER,
+    mutation: {
+      from: 'return ghJson([',
+      to: 'ghJson([]);\n  return ghJson([',
+    },
+    expected: [
+      {
+        message:
+          'fetchPullRequest must make exactly one supported gh pr view query',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a probe that reintroduces unsupported closing reference fields',
+    path: ROOT_PROBE,
+    mutation: {
+      from: ',baseRefName,statusCheckRollup',
+      to: ',baseRefName,closingIssuesReferences,statusCheckRollup',
+    },
+    expected: [
+      { message: 'probe must request the exact supported gh pr view fields' },
+      { message: 'probe query fields must match fetchPullRequest exactly' },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a probe that calls gh pr view twice',
+    path: ROOT_PROBE,
+    mutation: {
+      transform: (text: string) =>
+        text.replace(
+          'READ_SCOPE_EVIDENCE=$(gh pr view "$PR_NUMBER"',
+          [
+            'gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json number',
+            '          READ_SCOPE_EVIDENCE=$(gh pr view "$PR_NUMBER"',
+          ].join('\n'),
+        ),
+    },
+    expected: [{ message: 'probe must query gh pr view exactly once' }],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a probe that omits the linked-issue GraphQL query',
+    path: ROOT_PROBE,
+    mutation: {
+      from: 'closingIssuesReferences(first:1)',
+      to: 'issues(first:1)',
+    },
+    expected: [
+      {
+        message: 'probe must use only the read-only linked-issue GraphQL query',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a probe that uses a GraphQL mutation for closing references',
+    path: ROOT_PROBE,
+    mutation: {
+      from: 'query($owner:String!, $repo:String!, $number:Int!)',
+      to: 'mutation($owner:String!, $repo:String!, $number:Int!)',
+    },
+    expected: [
+      {
+        message: 'probe must use only the read-only linked-issue GraphQL query',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a probe that reads a different API endpoint',
+    path: ROOT_PROBE,
+    mutation: { from: 'gh api graphql', to: 'gh api repos/' },
+    expected: [
+      {
+        message: 'probe must use only the read-only linked-issue GraphQL query',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a probe that does not reject GraphQL errors',
+    path: ROOT_PROBE,
+    mutation: {
+      from: 'if ((.errors // []) | length) > 0 then',
+      to: 'if false then',
+    },
+    expected: [
+      {
+        message:
+          'probe must fail on GraphQL errors or incomplete linked-issue data',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a probe that accepts a linked issue without checking returned nodes',
+    path: ROOT_PROBE,
+    mutation: {
+      from: 'any(.data.repository.pullRequest.closingIssuesReferences.nodes[]; .number > 0) | tostring',
+      to: 'true | tostring',
+    },
+    expected: [
+      {
+        message:
+          'probe must validate and derive the linked-issue result from returned nodes',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a probe whose node predicate survives only in a jq comment',
+    path: ROOT_PROBE,
+    mutation: {
+      from: 'any(.data.repository.pullRequest.closingIssuesReferences.nodes[]; .number > 0) | tostring',
+      to: [
+        '# any(.data.repository.pullRequest.closingIssuesReferences.nodes[]; .number > 0) | tostring',
+        '              true | tostring',
+      ].join('\n'),
+    },
+    expected: [
+      {
+        message:
+          'probe must validate and derive the linked-issue result from returned nodes',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a probe that reads a linked issue for the wrong PR number',
+    path: ROOT_PROBE,
+    mutation: {
+      from: '-F number="$PR_NUMBER"',
+      to: '-F number=9999',
+    },
+    expected: [
+      { message: 'probe must query the current repository and PR identity' },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a probe that derives the GraphQL owner from a fixed repository',
+    path: ROOT_PROBE,
+    mutation: {
+      from: `REPOSITORY_OWNER="\${GITHUB_REPOSITORY%%/*}"`,
+      to: 'REPOSITORY_OWNER="fixed-owner"',
+    },
+    expected: [
+      { message: 'probe must query the current repository and PR identity' },
+    ],
+  },
+  {
+    ruleId: 'RWA005',
+    name: 'a template probe that diverges from its root copy',
+    path: TEMPLATE_PROBE,
+    mutation: {
+      from: '          export GH_HOST="$NORMALIZED_GH_HOST"\n          READ_SCOPE_EVIDENCE=',
+      to: '          export GH_HOST="$NORMALIZED_GH_HOST"\n          # The root copy has no matching comment.\n          READ_SCOPE_EVIDENCE=',
+    },
+    expected: [
+      {
+        message:
+          'probe workflow must match its root copy except for the runner selector',
       },
     ],
   },
@@ -1908,7 +2092,7 @@ const RULE_CASES: readonly RuleCase[] = [
     expected: [
       {
         message:
-          'probe must verify Actions, legacy status, and a linked issue exercise all read scopes',
+          'probe must verify Actions and legacy status through gh pr view',
       },
     ],
   },
