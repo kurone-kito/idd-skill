@@ -28,6 +28,7 @@ import { loadPolicyConfig } from './idd-config.mts';
 import { maskMarkdownForScan } from './markdown-code.mts';
 import { escapeRegex } from './marker-regex.mts';
 import {
+  findAutoDecideLabelCollisions,
   normalizePolicyConfig,
   POLICY_DEFAULTS,
   resolveDurableRecordTargets,
@@ -88,6 +89,16 @@ export const DEFER_SOURCE_VALUES = Object.freeze([
 // (`.test()` on a match-only, non-`g` regex is stateless); only existence
 // matters here, not position or count.
 const TRAILING_LOCAL_ISSUE_REF_PATTERN = /(?<![\w/-])#\d+\b/;
+
+// Declared above the CLI block, like the constants above, so it is
+// initialized before any path the CLI block starts can read it (TDZ).
+/**
+ * The readiness reason, and the orphan filter's `blocked_label` details, for
+ * an issue that carries the confirmation label while that name collides with
+ * another configured IDD label name (issue #4960).
+ */
+export const CONFIRMATION_LABEL_COLLISION_REASON =
+  'needs_confirmation_label_collision';
 
 const INACCESSIBLE_ISSUE_SENTINEL = Object.freeze({
   __iddLookupStatus: 'inaccessible',
@@ -204,6 +215,17 @@ interface EvaluateDiscoverReadinessOptions {
    * with no commit or pull request, carries it and is excluded from Discover.
    */
   authoringOnlyLabelName?: string;
+  /**
+   * Configured `autoDecide.confirmationLabelName` (default
+   * `status:needs-confirmation`, issue #4960). An issue carrying it waits for
+   * a human confirmation of an auto-decision and is never ready.
+   */
+  confirmationLabelName?: string;
+  /**
+   * Configured `approvalSignals.readyLabelName` (default `idd:ready`). Read
+   * only for the confirmation-label collision check (issue #4960).
+   */
+  readyLabelName?: string;
   autopilotSuitabilityFloor?: number;
   autopilotSuitabilityEnabled?: boolean;
   /** #3284: the current repository as `"owner/repo"`, fed from the CLI's
@@ -390,6 +412,10 @@ async function main(): Promise<HelperCliResult> {
     blockedByHumanLabelName: labelsPolicy.blockedByHumanLabelName,
     needsDecisionLabelName: labelsPolicy.needsDecisionLabelName,
     authoringOnlyLabelName: labelsPolicy.authoringOnlyLabelName,
+    // #4960: resolved on its own by the shared normalizer, so a malformed
+    // autoDecide sibling never changes it.
+    confirmationLabelName: normalizedPolicy.autoDecide.confirmationLabelName,
+    readyLabelName: normalizedPolicy.approvalSignals.readyLabelName,
     autopilotSuitabilityFloor:
       args.swarmFloor ?? resolveSuitabilityFloor(policyConfig),
     autopilotSuitabilityEnabled: resolveSuitabilityEnabled(policyConfig),
@@ -424,6 +450,8 @@ export async function evaluateDiscoverReadiness(
     blockedByHumanLabelName: rawBlockedByHumanLabelName,
     needsDecisionLabelName: rawNeedsDecisionLabelName,
     authoringOnlyLabelName: rawAuthoringOnlyLabelName,
+    confirmationLabelName: rawConfirmationLabelName,
+    readyLabelName: rawReadyLabelName,
     autopilotSuitabilityFloor,
     autopilotSuitabilityEnabled,
     currentRepo,
@@ -457,6 +485,17 @@ export async function evaluateDiscoverReadiness(
       authoringOnlyLabelName: rawAuthoringOnlyLabelName,
     },
   }).labels;
+  // #4960: built once per run from the same resolved names the label checks
+  // below use, so the collision check compares what this run filters on.
+  const confirmationLabel = buildConfirmationLabelMatcher({
+    confirmationLabelName: rawConfirmationLabelName,
+    authoringLabelName,
+    authoringOnlyLabelName,
+    needsDecisionLabelName,
+    blockedByHumanLabelName,
+    roadmapLabelName,
+    readyLabelName: rawReadyLabelName,
+  });
   if (typeof loadIssue !== 'function') {
     throw new Error(
       'evaluateDiscoverReadiness requires loadIssue(issueNumber)',
@@ -571,6 +610,18 @@ export async function evaluateDiscoverReadiness(
     }
     if (labels.has(authoringOnlyLabelName)) {
       reasons.add(`label:${authoringOnlyLabelName}`);
+    }
+    // #4960: a confirmation issue waits for a human answer, so it is never
+    // ready, whatever dangerouslyAutoDecide and the class switches say. When
+    // its name collides with another configured label, the two cannot be told
+    // apart, so the issue gets the collision reason instead; any reason the
+    // exact checks above added stays.
+    if ([...labels].some((label) => confirmationLabel.matches(label))) {
+      reasons.add(
+        confirmationLabel.collision
+          ? CONFIRMATION_LABEL_COLLISION_REASON
+          : `label:${confirmationLabel.labelName}`,
+      );
     }
     if (labels.has(authoringLabelName)) {
       reasons.add(`label:${authoringLabelName}`);
@@ -864,6 +915,69 @@ export function summarizeSwarmFloorEligibility(
     eligible,
     eligible_count: eligible.length,
     total: summary.summary.total,
+  };
+}
+
+/** The label names the confirmation-label check reads (issue #4960). */
+export interface ConfirmationLabelNames {
+  /** Configured `autoDecide.confirmationLabelName`. */
+  confirmationLabelName?: unknown;
+  /** Configured `issueAuthoring.authoringLabelName`. */
+  authoringLabelName?: unknown;
+  /** Configured `labels.authoringOnlyLabelName`. */
+  authoringOnlyLabelName?: unknown;
+  /** Configured `labels.needsDecisionLabelName`. */
+  needsDecisionLabelName?: unknown;
+  /** Configured `labels.blockedByHumanLabelName`. */
+  blockedByHumanLabelName?: unknown;
+  /** Configured `labels.roadmapLabelName`. */
+  roadmapLabelName?: unknown;
+  /** Configured `approvalSignals.readyLabelName`. */
+  readyLabelName?: unknown;
+}
+
+/** How Discover recognizes the confirmation label (issue #4960). */
+export interface ConfirmationLabelMatcher {
+  /** The effective confirmation label name, trimmed. */
+  readonly labelName: string;
+  /** `true` when that name collides with another configured label name. */
+  readonly collision: boolean;
+  /** Whether a stored label is the confirmation label (trimmed, any case). */
+  matches(label: string): boolean;
+}
+
+/**
+ * Build the confirmation-label matcher for one Discover run (issue #4960).
+ * The names go into one partial policy document: the effective confirmation
+ * name comes from `normalizePolicyConfig` (an invalid value uses the
+ * default), and the collision comes from #4956's
+ * `findAutoDecideLabelCollisions` on the same document. A stored label
+ * matches when it equals that name trimmed and lowercased, the comparison
+ * the collision helper uses. Neither `dangerouslyAutoDecide` nor any
+ * `autoDecide` class switch is read, so a confirmation issue is never
+ * selectable whatever they say.
+ */
+export function buildConfirmationLabelMatcher(
+  names: ConfirmationLabelNames,
+): ConfirmationLabelMatcher {
+  const policy = {
+    issueAuthoring: { authoringLabelName: names.authoringLabelName },
+    labels: {
+      authoringOnlyLabelName: names.authoringOnlyLabelName,
+      needsDecisionLabelName: names.needsDecisionLabelName,
+      blockedByHumanLabelName: names.blockedByHumanLabelName,
+      roadmapLabelName: names.roadmapLabelName,
+    },
+    approvalSignals: { readyLabelName: names.readyLabelName },
+    autoDecide: { confirmationLabelName: names.confirmationLabelName },
+  };
+  const labelName =
+    normalizePolicyConfig(policy).autoDecide.confirmationLabelName.trim();
+  const comparable = labelName.toLowerCase();
+  return {
+    labelName,
+    collision: findAutoDecideLabelCollisions(policy).length > 0,
+    matches: (label) => label.trim().toLowerCase() === comparable,
   };
 }
 
@@ -1265,6 +1379,14 @@ function printHelp() {
   before any GitHub read, so a closed or inaccessible durable record reports
   its reason rather than issue_not_open. The outage target takes precedence
   when both numbers are equal.
+
+  #4960 confirmation-label exclusion (default-on): an issue carrying the
+  configured autoDecide.confirmationLabelName (default
+  status:needs-confirmation), compared trimmed and case-insensitively, is
+  never ready (reason: label:<name>), whatever dangerouslyAutoDecide and the
+  autoDecide class switches say. When that name equals another configured
+  IDD label name or approvalSignals.readyLabelName, such an issue gets the
+  reason needs_confirmation_label_collision instead, and the run continues.
 
 Output schema (JSON mode):
   {
