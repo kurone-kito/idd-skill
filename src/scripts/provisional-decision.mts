@@ -486,7 +486,6 @@ function contentComparable(record: ProvisionalDecisionRecord): unknown {
   const copy = structuredClone(record) as ProvisionalDecisionRecord;
   const mutable = copy as unknown as {
     evidenceReferences?: string[];
-    claimLineage?: unknown;
     source?: {
       repository?: string;
       snapshot?: { updatedAt?: unknown };
@@ -497,7 +496,6 @@ function contentComparable(record: ProvisionalDecisionRecord): unknown {
       result?: { verifiedAt?: unknown };
     };
   };
-  delete mutable.claimLineage;
   if (mutable.source?.repository) {
     mutable.source.repository = normalizeRepository(mutable.source.repository);
   }

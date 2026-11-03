@@ -260,7 +260,6 @@ function commentUrlKey(value) {
 function contentComparable(record) {
   const copy = structuredClone(record);
   const mutable = copy;
-  delete mutable.claimLineage;
   if (mutable.source?.repository) {
     mutable.source.repository = normalizeRepository(mutable.source.repository);
   }

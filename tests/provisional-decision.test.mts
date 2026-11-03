@@ -1077,6 +1077,53 @@ test('different content under the same recordId returns recovery-hold', async ()
   );
 });
 
+test('changed claim lineage under the same recordId returns recovery-hold', async () => {
+  const { store, record } = await selectedRecord();
+  const releaseAt = '2026-11-03T11:00:03Z';
+  const nextClaimAt = '2026-11-03T11:00:04Z';
+  const nextClaimId = 'claim-4840-b';
+  store.history = {
+    ...store.history,
+    comments: [
+      ...store.history.comments,
+      selectionComment(record, '3', '2026-11-03T11:00:02Z'),
+      comment(
+        '4',
+        renderUnclaimedByMarker({
+          agentId: 'codex-test-agent',
+          claimId,
+          timestamp: releaseAt,
+        }),
+        releaseAt,
+      ),
+      comment(
+        '5',
+        renderClaimedByMarker({
+          agentId: 'codex-next-agent',
+          claimId: nextClaimId,
+          supersedes: 'none',
+          timestamp: nextClaimAt,
+          branch,
+        }),
+        nextClaimAt,
+      ),
+    ],
+  };
+
+  const result = await runProvisionalDecisionCommand(
+    request({ claimId: nextClaimId }),
+    store,
+  );
+
+  assertRefused(result, 'recovery-hold');
+  if (result.state === 'refused') {
+    assert.match(
+      result.reason ?? '',
+      /same recordId exists with different content/,
+    );
+  }
+});
+
 test('multiple decisions using the evidence URL are ambiguous', async () => {
   const { record } = await selectedRecord();
   const second = {
