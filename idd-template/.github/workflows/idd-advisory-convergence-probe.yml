@@ -50,15 +50,50 @@ jobs:
           export GH_HOST="$NORMALIZED_GH_HOST"
           READ_SCOPE_EVIDENCE=$(gh pr view "$PR_NUMBER" \
             --repo "$GITHUB_REPOSITORY" \
-            --json number,state,url,headRefName,headRefOid,baseRefName,statusCheckRollup,closingIssuesReferences \
-            --jq '[any(.statusCheckRollup[]?; .__typename == "CheckRun" and ((.workflowName // "") | length > 0)), any(.statusCheckRollup[]?; .__typename == "StatusContext"), any(.closingIssuesReferences[]?; .number > 0)] | map(tostring) | join(" ")')
-          read -r HAS_ACTION_CHECKS HAS_LEGACY_STATUS_CONTEXT HAS_CLOSING_ISSUE <<< "$READ_SCOPE_EVIDENCE"
+            --json number,state,url,headRefName,headRefOid,baseRefName,statusCheckRollup \
+            --jq '[any(.statusCheckRollup[]?; .__typename == "CheckRun" and ((.workflowName // "") | length > 0)), any(.statusCheckRollup[]?; .__typename == "StatusContext")] | map(tostring) | join(" ")')
+          read -r HAS_ACTION_CHECKS HAS_LEGACY_STATUS_CONTEXT <<< "$READ_SCOPE_EVIDENCE"
           if [ "$HAS_ACTION_CHECKS" != "true" ]; then
             echo "::error::PR #$PR_NUMBER has no Actions check run; choose a PR with at least one check run."
             exit 1
           fi
           if [ "$HAS_LEGACY_STATUS_CONTEXT" != "true" ]; then
             echo "::error::PR #$PR_NUMBER has no legacy status context; choose a PR with an Actions check run and a legacy status context."
+            exit 1
+          fi
+          REPOSITORY_OWNER="${GITHUB_REPOSITORY%%/*}"
+          REPOSITORY_NAME="${GITHUB_REPOSITORY#*/}"
+          if [ -z "$REPOSITORY_OWNER" ] || [ "$REPOSITORY_NAME" = "$GITHUB_REPOSITORY" ] || [ -z "$REPOSITORY_NAME" ]; then
+            echo "::error::Could not determine repository identity for the linked-issue GraphQL read."
+            exit 1
+          fi
+          if ! CLOSING_ISSUE_RESPONSE=$(gh api graphql \
+            -f query='query($owner:String!, $repo:String!, $number:Int!) { repository(owner:$owner,name:$repo) { pullRequest(number:$number) { closingIssuesReferences(first:1) { nodes { number } pageInfo { hasNextPage } } } } }' \
+            -f owner="$REPOSITORY_OWNER" \
+            -f repo="$REPOSITORY_NAME" \
+            -F number="$PR_NUMBER"); then
+            echo "::error::Could not read linked closing issues for PR #$PR_NUMBER."
+            exit 1
+          fi
+          if ! HAS_CLOSING_ISSUE=$(printf '%s' "$CLOSING_ISSUE_RESPONSE" | jq -r '
+            if type != "object" then
+              error("GraphQL response must be an object")
+            elif has("errors") and (.errors | type) != "array" then
+              error("malformed GraphQL errors")
+            elif ((.errors // []) | length) > 0 then
+              error("GraphQL query returned errors")
+            elif (.data.repository.pullRequest.closingIssuesReferences | type) != "object" then
+              error("missing closing issue connection")
+            elif (.data.repository.pullRequest.closingIssuesReferences.nodes | type) != "array" then
+              error("missing closing issue nodes")
+            elif (.data.repository.pullRequest.closingIssuesReferences.pageInfo.hasNextPage | type) != "boolean" then
+              error("missing closing issue page info")
+            elif any(.data.repository.pullRequest.closingIssuesReferences.nodes[]; (.number | type) != "number" or .number <= 0) then
+              error("malformed closing issue number")
+            else
+              any(.data.repository.pullRequest.closingIssuesReferences.nodes[]; .number > 0) | tostring
+            end'); then
+            echo "::error::The linked-issue GraphQL response for PR #$PR_NUMBER was incomplete or malformed."
             exit 1
           fi
           if [ "$HAS_CLOSING_ISSUE" != "true" ]; then
