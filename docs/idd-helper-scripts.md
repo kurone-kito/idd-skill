@@ -1437,18 +1437,20 @@ in this preamble, since the fallback differs per helper.
   ```
 
 - `scripts/publish-authoring-hold.mjs` (`idd-publish-authoring-hold`,
-  issues #4127 and #4171, and issue `#4253`) publishes one drafted issue
-  under the issue-authoring hold, running the authoring contract's
-  New-issue ownership steps in order, one issue per call. The default
-  `--shape orphan` publishes a standalone held orphan. `--shape carrier`
-  publishes a draft carrier, labelled with the authoring label and the
-  authoring-only label, and accepts only `--bucket ready` (exit `2`
+  issues #4127 and #4171, and issues `#4253` and `#4964`) publishes one
+  drafted issue under the issue-authoring hold, running the authoring
+  contract's New-issue ownership steps in order, one issue per call. The
+  default `--shape orphan` publishes a standalone held orphan. `--shape
+  carrier` publishes a draft carrier, labelled with the authoring label and
+  the authoring-only label, and accepts only `--bucket ready` (exit `2`
   otherwise). A carrier is linted with
   `audit-authored-issue.mjs --shape carrier`, which needs markdown-it:
   without it the lint refuses, and nothing is written. `--shape roadmap`
   publishes a held roadmap shell, linted as a roadmap; its `## Tracks` list
   may be empty, and it is its own set anchor, like an orphan. `--shape
-  child` publishes one held child under an existing set and needs
+  confirmation` publishes one auto-decide confirmation issue, described in
+  its own paragraph below. `--shape child` publishes one held child under
+  an existing set and needs
   `--anchor <owner>/<repo>#<number>`: a child without `--anchor`, any other
   shape with `--anchor`, a malformed anchor, and an anchor in another
   repository all exit `2` before anything is created. The anchor must be an
@@ -1535,6 +1537,55 @@ in this preamble, since the fallback differs per helper.
   both labels for a person's release, and a `recovery-hold` needs an
   owner-log replay before any release. The dry run lists the release steps
   as planned and writes nothing.
+
+  For `--shape confirmation` (issue `#4964`), the helper publishes one
+  auto-decide confirmation issue, its own set anchor like an orphan, and
+  then releases its own creation hold the way a carrier does. The shape
+  refuses `--anchor` and `--review-result` and accepts only `--bucket ready`
+  (exit `2` otherwise, before anything is read). The body is linted with
+  `audit-authored-issue.mjs --shape confirmation --new-issue`, with one
+  `--label` per applied label and no bucket; the confirmation lint does not
+  need markdown-it. The issue is labelled with the authoring label and
+  `autoDecide.confirmationLabelName` (default `status:needs-confirmation`),
+  both applied by the one `gh issue create` call, and a missing label is
+  created first, as for any other shape. Before anything is written, a dry
+  run included, the helper reads `.github/idd/config.json` at the
+  repository's default branch through the trusted-ref policy loader, with
+  no user-global fallback; a confirmed absent file (HTTP 404) means the
+  default name. It refuses (exit `1`, `outcome: "refused"`, nothing
+  written) when the default branch cannot be resolved, when that read fails
+  in any other way, when the name resolved from the repository policy file
+  differs from the trusted name, when the auto-decide label-collision check
+  reports a collision in either policy, or when the repository stores the
+  label under another letter case, judged by the `name` the label read
+  returns. These checks stop a pull request or a stale checkout from
+  renaming the label so that the released issue escapes Discover. The
+  refusal carries a `confirmationLabel` object, and a passing check is the
+  report's `confirmation-label` step; both carry `name`, `trustedRef`,
+  `trustedSource` (`policy` or `absent`), `trustedName`, `collisions`, and
+  `storedName`. The admission rules and the `blocked-by-human` journal stop
+  are the same as for the other shapes.
+
+  After `state=member` the helper runs the carrier release described above
+  and removes only the authoring label; the confirmation label stays and
+  keeps the released issue out of Discover. The preconditions are the
+  carrier's, except that the confirmation audit runs in place of the
+  carrier audit: `audit-authored-issue.mjs --shape confirmation` in body
+  mode, not record mode, on the fresh body with both labels. The outcomes
+  and exit codes are the carrier's. A `released` or `held` release reports
+  `outcome: "published"` (exit `0`), and a `held` release keeps both labels
+  for a person's Stage 2 release. A `recovery-hold` (exit `1`) never closes
+  the issue, but a failed or unverified label restore after a release step
+  can leave the authoring label removed. `release.failedStep` names the
+  failed step in both cases. The dry run lists the release steps as the
+  planned `confirmation-release` step. Every `release.backlog` entry has
+  `count: null`, because the confirmation audit reports no
+  `authoring-marker-minimization-backlog` finding. A failed create is a
+  recovery hold with `issue: null` and `failedStep: "create"`, and a failure
+  after the create and before `state=member` is a recovery hold that keeps
+  the issue. Never rerun the helper after the create: a rerun would file a
+  second confirmation issue for one decision, and `release.nextAction` says
+  so.
 
 - `scripts/review-disposition-verify.mjs` for read-only E7 disposition
   marker presence verification across PATH A and PATH B items
