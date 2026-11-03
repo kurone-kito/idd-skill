@@ -3271,7 +3271,9 @@ them:
 `scripts/idd-effective-config.mjs` is a read-only diagnostic for the layered
 policy. It prints the effective local policy as JSON, with the layer each
 leaf came from, the selected user-global override, and layering
-diagnostics. It never writes, claims, or posts.
+diagnostics. Its `--trusted-auto-decide` mode, described below, reads a
+trusted base on GitHub instead of the local layers. It never writes,
+claims, or posts.
 
 ```sh
 node scripts/idd-effective-config.mjs [--key <dotted.path>] [--no-user-global]
@@ -3306,6 +3308,66 @@ node scripts/idd-effective-config.mjs [--key <dotted.path>] [--no-user-global]
   a user-global `human-gated` mode cannot authorize a handoff.
 - **`--policy`**: an omitted `--policy` reads the layered policy. An explicit
   path, even the default string, reads only that file.
+
+### Trusted auto-decide verdict (kurone-kito/idd-skill#4958)
+
+The default mode and `--key` describe this checkout only. A pull request or
+a feature worktree can change its own copy of the policy, so
+`--key dangerouslyAutoDecide` and `--key autoDecide.<path>` are local
+diagnostics and never authority. A class consumer, and any session that
+applies the auto-decide procedure, reads the trusted verdict instead:
+
+```sh
+node scripts/idd-effective-config.mjs --trusted-auto-decide [--base-ref <name>] [--owner <owner> --repo <repo>]
+```
+
+- **Trusted base only**: a pull-request-scoped caller passes the pull
+  request's base branch name as `--base-ref`, never its head, a head SHA, or
+  a feature ref. A repository-scoped caller omits `--base-ref`, and the
+  helper reads the live default branch. Without `--owner` and `--repo`, the
+  repository comes from the checkout's GitHub `origin` remote, and the helper
+  refuses when that cannot be resolved. When `origin` is not the base
+  repository, as in a fork checkout, pass `--owner` and `--repo` for the base
+  repository: otherwise the helper reads the fork's policy.
+- **Network reads**: the repository's default branch (only without
+  `--base-ref`), `.github/idd/config.json` at the trusted ref, and
+  `schemas/policy.schema.json` at the same ref. The schema is not read when
+  the document is confirmed absent (HTTP 404). When the trusted ref has no
+  schema file (HTTP 404), a helper installed as a package for another
+  repository validates against its own bundled schema; a checked-out or
+  vendored helper reports `unreadable`. No local layer and no user-global
+  layer is read, so `--key` and `--no-user-global` are usage errors here.
+- **Validation before inspection**: the whole document must pass the schema
+  read at the trusted ref before any key is read. A document, schema, or
+  default branch that cannot be read, or a document that fails that schema
+  (a malformed `autoDecide` or master value included), makes the report
+  `unreadable`.
+- **Output** (JSON on stdout): `status` (`readable` or `unreadable`),
+  `source`, `ref`, `master` (`enabled`, `disabled`, or `unreadable`),
+  `masterReason` when the master switch is off (`config-absent`,
+  `property-absent`, or `explicit-false`), and `classes`, with one verdict
+  for each class:
+  - `enabled`: `dangerouslyAutoDecide` and the class's own `enabled` are
+    both `true`;
+  - `master-off`: the master switch is absent or `false`;
+  - `class-off`: the master switch is `true`, and the class is absent or
+    not enabled;
+  - `unreadable`: every class, when the report is `unreadable`, with the
+    cause in `error`.
+
+  A readable report also carries `confirmationLabelName` (the default
+  `status:needs-confirmation` when the key or the document is absent), so a
+  reader of confirmation issues gets the trusted name even when no class is
+  enabled. When a class is `enabled`, the report also carries
+  `maxPendingConfirmations`, `maxDecisionsPerClaim`, and `quietWindow` (the
+  `worktreeRemnant` quiet window).
+- **Exit codes**: `0` for a readable report, `1` for an `unreadable` one
+  (still printed, so a caller cannot mistake it for a verdict), and `2` for a
+  usage error that the mode detects, which reads nothing. A flag that cannot
+  be parsed at all (an unknown flag, or `--base-ref` with no value) fails
+  before the mode runs: it exits `1` and prints nothing on stdout. A caller
+  therefore treats an exit of `1` as unreadable only when stdout holds a
+  report whose `status` is `unreadable`.
 
 ## E10 same-family recurrence (kurone-kito/idd-skill#4129)
 

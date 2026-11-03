@@ -29,6 +29,7 @@ import {
   loadUserGlobalPolicyDocument,
   REPOSITORY_POLICY_FIELDS,
   readRepositoryPolicyFile,
+  readTrustedAutoDecide,
   readTrustedDangerouslyAutoDecide,
   readTrustedForcedHandoffMode,
   resolveEffectiveCritiqueLoopDelegateFromEnv,
@@ -1552,6 +1553,566 @@ const httpServerError = (): never => {
   throw new Error('gh: Internal Server Error (HTTP 500)');
 };
 const legacyPresent = (): void => undefined;
+
+// #4958: the trusted per-class auto-decide reader. Each test below maps to a
+// row of the issue's acceptance table.
+const AUTO_DECIDE_CLASS_NAMES = [
+  'decisionIssue',
+  'runtimeQuestion',
+  'authoringChoice',
+  'worktreeRemnant',
+  'b1Leftover',
+] as const;
+
+function everyClassVerdict(
+  verdict: string,
+  overrides: Record<string, string> = {},
+): Record<string, string> {
+  return Object.fromEntries(
+    AUTO_DECIDE_CLASS_NAMES.map((cls) => [cls, overrides[cls] ?? verdict]),
+  );
+}
+
+function readTrustedAutoDecideForTest(
+  input: Parameters<typeof readTrustedAutoDecide>[0],
+) {
+  return readTrustedAutoDecide({
+    ...input,
+    fetchEncodedPolicySchema:
+      input.fetchEncodedPolicySchema ?? (() => localPolicySchemaBase64),
+  });
+}
+
+function assertEveryClassUnreadable(
+  report: ReturnType<typeof readTrustedAutoDecide>,
+  ref: string,
+  errorPattern: RegExp,
+): void {
+  assert.equal(report.status, 'unreadable');
+  assert.equal(report.source, 'repository');
+  assert.equal(report.ref, ref);
+  assert.equal(report.master, 'unreadable');
+  assert.deepEqual(report.classes, everyClassVerdict('unreadable'));
+  assert.equal(report.confirmationLabelName, undefined);
+  assert.equal(report.maxPendingConfirmations, undefined);
+  assert.equal(report.maxDecisionsPerClaim, undefined);
+  assert.equal(report.quietWindow, undefined);
+  assert.match(report.error ?? '', errorPattern);
+}
+
+test('trusted auto-decide: an absent trusted document is master-off with the default label, and reads no schema (#4958)', () => {
+  // A user-global file that switches everything on must not count.
+  withUserGlobal(
+    '{"dangerouslyAutoDecide":true,"autoDecide":{"decisionIssue":{"enabled":true}}}',
+    undefined,
+    () => {
+      let schemaReads = 0;
+      const report = readTrustedAutoDecide({
+        owner: 'o',
+        repo: 'r',
+        baseRefName: 'main',
+        fetchEncodedConfig: httpNotFound,
+        fetchEncodedPolicySchema: () => {
+          schemaReads += 1;
+          return localPolicySchemaBase64;
+        },
+      });
+      assert.equal(schemaReads, 0);
+      assert.deepEqual(report, {
+        status: 'readable',
+        source: 'repository',
+        ref: 'main',
+        master: 'disabled',
+        masterReason: 'config-absent',
+        classes: everyClassVerdict('master-off'),
+        confirmationLabelName: 'status:needs-confirmation',
+      });
+    },
+  );
+});
+
+test('trusted auto-decide: a master switch that is absent or false makes every class master-off and returns the configured label (#4958)', () => {
+  const autoDecide = {
+    decisionIssue: { enabled: true },
+    confirmationLabelName: 'status:auto-confirm',
+  };
+  const absent = readTrustedAutoDecideForTest({
+    owner: 'o',
+    repo: 'r',
+    baseRefName: 'main',
+    fetchEncodedConfig: () =>
+      toEncodedConfig(trustedPolicyConfig({ autoDecide })),
+  });
+  assert.deepEqual(absent, {
+    status: 'readable',
+    source: 'repository',
+    ref: 'main',
+    master: 'disabled',
+    masterReason: 'property-absent',
+    classes: everyClassVerdict('master-off'),
+    confirmationLabelName: 'status:auto-confirm',
+  });
+
+  const off = readTrustedAutoDecideForTest({
+    owner: 'o',
+    repo: 'r',
+    baseRefName: 'main',
+    fetchEncodedConfig: () =>
+      toEncodedConfig(
+        trustedPolicyConfig({ dangerouslyAutoDecide: false, autoDecide }),
+      ),
+  });
+  assert.deepEqual(off, {
+    status: 'readable',
+    source: 'repository',
+    ref: 'main',
+    master: 'disabled',
+    masterReason: 'explicit-false',
+    classes: everyClassVerdict('master-off'),
+    confirmationLabelName: 'status:auto-confirm',
+  });
+
+  // With no autoDecide at all, the label is the default.
+  const noAutoDecide = readTrustedAutoDecideForTest({
+    owner: 'o',
+    repo: 'r',
+    baseRefName: 'main',
+    fetchEncodedConfig: () =>
+      toEncodedConfig(trustedPolicyConfig({ dangerouslyAutoDecide: false })),
+  });
+  assert.equal(noAutoDecide.confirmationLabelName, 'status:needs-confirmation');
+  assert.deepEqual(noAutoDecide.classes, everyClassVerdict('master-off'));
+});
+
+test('trusted auto-decide: with the master switch on, an absent or disabled class is class-off and no caps are returned (#4958)', () => {
+  const report = readTrustedAutoDecideForTest({
+    owner: 'o',
+    repo: 'r',
+    baseRefName: 'main',
+    fetchEncodedConfig: () =>
+      toEncodedConfig(
+        trustedPolicyConfig({
+          dangerouslyAutoDecide: true,
+          autoDecide: {
+            runtimeQuestion: { enabled: false },
+            worktreeRemnant: { quietWindow: 'PT4H' },
+            maxPendingConfirmations: 5,
+          },
+        }),
+      ),
+  });
+  assert.deepEqual(report, {
+    status: 'readable',
+    source: 'repository',
+    ref: 'main',
+    master: 'enabled',
+    classes: everyClassVerdict('class-off'),
+    confirmationLabelName: 'status:needs-confirmation',
+  });
+});
+
+test('trusted auto-decide: an enabled class returns the label, the caps, and the quiet window (#4958)', () => {
+  const defaults = readTrustedAutoDecideForTest({
+    owner: 'o',
+    repo: 'r',
+    baseRefName: 'main',
+    fetchEncodedConfig: () =>
+      toEncodedConfig(
+        trustedPolicyConfig({
+          dangerouslyAutoDecide: true,
+          autoDecide: { decisionIssue: { enabled: true } },
+        }),
+      ),
+  });
+  assert.deepEqual(defaults, {
+    status: 'readable',
+    source: 'repository',
+    ref: 'main',
+    master: 'enabled',
+    classes: everyClassVerdict('class-off', { decisionIssue: 'enabled' }),
+    confirmationLabelName: 'status:needs-confirmation',
+    maxPendingConfirmations: 10,
+    maxDecisionsPerClaim: 3,
+    quietWindow: 'PT2H',
+  });
+
+  const configured = readTrustedAutoDecideForTest({
+    owner: 'o',
+    repo: 'r',
+    baseRefName: 'main',
+    fetchEncodedConfig: () =>
+      toEncodedConfig(
+        trustedPolicyConfig({
+          dangerouslyAutoDecide: true,
+          autoDecide: {
+            worktreeRemnant: { enabled: true, quietWindow: 'PT4H' },
+            b1Leftover: { enabled: true },
+            maxPendingConfirmations: 5,
+            maxDecisionsPerClaim: 2,
+            confirmationLabelName: 'status:auto-confirm',
+          },
+        }),
+      ),
+  });
+  assert.deepEqual(configured, {
+    status: 'readable',
+    source: 'repository',
+    ref: 'main',
+    master: 'enabled',
+    classes: everyClassVerdict('class-off', {
+      worktreeRemnant: 'enabled',
+      b1Leftover: 'enabled',
+    }),
+    confirmationLabelName: 'status:auto-confirm',
+    maxPendingConfirmations: 5,
+    maxDecisionsPerClaim: 2,
+    quietWindow: 'PT4H',
+  });
+});
+
+test('trusted auto-decide: an unreadable document, schema, or default branch makes every class unreadable (#4958)', () => {
+  assertEveryClassUnreadable(
+    readTrustedAutoDecideForTest({
+      owner: 'o',
+      repo: 'r',
+      baseRefName: 'main',
+      fetchEncodedConfig: httpServerError,
+    }),
+    'main',
+    /cannot confirm \.github\/idd\/config\.json/,
+  );
+
+  assertEveryClassUnreadable(
+    readTrustedAutoDecide({
+      owner: 'o',
+      repo: 'r',
+      baseRefName: 'main',
+      fetchEncodedConfig: () =>
+        toEncodedConfig(trustedPolicyConfig({ dangerouslyAutoDecide: true })),
+      fetchEncodedPolicySchema: () => {
+        throw new Error('trusted schema unavailable');
+      },
+    }),
+    'main',
+    /trusted schema unavailable/,
+  );
+  // An unreadable schema is unreadable whatever the master switch says.
+  for (const overrides of [{ dangerouslyAutoDecide: false }, {}]) {
+    const input = {
+      owner: 'o',
+      repo: 'r',
+      baseRefName: 'main',
+      fetchEncodedConfig: () => toEncodedConfig(trustedPolicyConfig(overrides)),
+      fetchEncodedPolicySchema: () => {
+        throw new Error('trusted schema unavailable');
+      },
+    };
+    assertEveryClassUnreadable(
+      readTrustedAutoDecide(input),
+      'main',
+      /trusted schema unavailable/,
+    );
+    const master = readTrustedDangerouslyAutoDecide(input);
+    assert.equal(master.status, 'unreadable');
+    assert.match(master.error ?? '', /trusted schema unavailable/);
+  }
+
+  assertEveryClassUnreadable(
+    readTrustedAutoDecideForTest({
+      owner: 'o',
+      repo: 'r',
+      readDefaultBranch: () => null,
+      fetchEncodedConfig: () => {
+        throw new Error('must not fetch an untrusted ref');
+      },
+    }),
+    '',
+    /no base ref was supplied/,
+  );
+});
+
+test('trusted auto-decide: a document that fails its schema makes every class unreadable, before any key is inspected (#4958)', () => {
+  const failing: Array<[Record<string, unknown>, RegExp]> = [
+    [{ dangerouslyAutoDecide: 'true' }, /\$\.dangerouslyAutoDecide/],
+    [
+      {
+        dangerouslyAutoDecide: true,
+        autoDecide: { decisionIssue: { enabled: 'yes' } },
+      },
+      /\$\.autoDecide\.decisionIssue\.enabled/,
+    ],
+    [
+      {
+        dangerouslyAutoDecide: true,
+        autoDecide: {
+          decisionIssue: { enabled: true },
+          maxDecisionsPerClaim: 50,
+        },
+      },
+      /\$\.autoDecide\.maxDecisionsPerClaim/,
+    ],
+    [
+      {
+        dangerouslyAutoDecide: true,
+        autoDecide: {
+          decisionIssue: { enabled: true },
+          confirmationLabelName: '   ',
+        },
+      },
+      /\$\.autoDecide\.confirmationLabelName/,
+    ],
+    [
+      {
+        dangerouslyAutoDecide: true,
+        autoDecide: { worktreeRemnant: { enabled: true, quietWindow: 'PT0S' } },
+      },
+      /\$\.autoDecide\.worktreeRemnant\.quietWindow/,
+    ],
+    [
+      { dangerouslyAutoDecide: true, autoDecide: { unknownClass: {} } },
+      /\$\.autoDecide/,
+    ],
+    [
+      { dangerouslyAutoDecide: true, issueScope: 'invalid-scope' },
+      /\$\.issueScope/,
+    ],
+    // Validation runs whatever the master switch says: with the switch off
+    // or absent, a failing document is still unreadable, never master-off.
+    [
+      { dangerouslyAutoDecide: false, issueScope: 'invalid-scope' },
+      /\$\.issueScope/,
+    ],
+    [{ issueScope: 'invalid-scope' }, /\$\.issueScope/],
+    [
+      {
+        dangerouslyAutoDecide: false,
+        autoDecide: { decisionIssue: { enabled: 'yes' } },
+      },
+      /\$\.autoDecide\.decisionIssue\.enabled/,
+    ],
+  ];
+  for (const [overrides, fieldPattern] of failing) {
+    const input = {
+      owner: 'o',
+      repo: 'r',
+      baseRefName: 'main',
+      fetchEncodedConfig: () => toEncodedConfig(trustedPolicyConfig(overrides)),
+    };
+    const report = readTrustedAutoDecideForTest(input);
+    assertEveryClassUnreadable(
+      report,
+      'main',
+      /trusted repository policy fails schema validation against policy\.schema\.json at ref "main"/,
+    );
+    assert.match(report.error ?? '', fieldPattern);
+    // The shared read fails closed for the master-switch reader too.
+    const master = readTrustedDangerouslyAutoDecideForTest(input);
+    assert.equal(master.status, 'unreadable');
+    assert.match(
+      master.error ?? '',
+      /trusted repository policy fails schema validation against policy\.schema\.json at ref "main"/,
+    );
+  }
+});
+
+test('trusted auto-decide: a malformed autoDecide stays unreadable even when the trusted schema does not check it (#4958)', () => {
+  const schema = JSON.parse(
+    readFileSync(
+      new URL('../schemas/policy.schema.json', import.meta.url),
+      'utf8',
+    ),
+  ) as { properties: Record<string, unknown> };
+  // An older or looser trusted schema that accepts any autoDecide value.
+  schema.properties.autoDecide = {};
+  const rootCap = {
+    decisionIssue: { enabled: true },
+    maxPendingConfirmations: 0,
+  };
+  const cases: Array<[Record<string, unknown>, RegExp]> = [
+    [
+      { dangerouslyAutoDecide: true, autoDecide: rootCap },
+      /malformed autoDecide\.maxPendingConfirmations at ref "main"/,
+    ],
+    // The backstop does not depend on the master switch.
+    [
+      { dangerouslyAutoDecide: false, autoDecide: rootCap },
+      /malformed autoDecide\.maxPendingConfirmations at ref "main"/,
+    ],
+    [
+      { autoDecide: rootCap },
+      /malformed autoDecide\.maxPendingConfirmations at ref "main"/,
+    ],
+    // A malformed value inside one class, not only a root-level one.
+    [
+      {
+        dangerouslyAutoDecide: true,
+        autoDecide: {
+          decisionIssue: { enabled: true },
+          runtimeQuestion: { enabled: 'yes' },
+        },
+      },
+      /malformed autoDecide\.runtimeQuestion\.enabled at ref "main"/,
+    ],
+    [
+      {
+        dangerouslyAutoDecide: true,
+        autoDecide: { authoringChoice: { enabled: 'yes' } },
+      },
+      /malformed autoDecide\.authoringChoice\.enabled at ref "main"/,
+    ],
+    [
+      {
+        dangerouslyAutoDecide: true,
+        autoDecide: { worktreeRemnant: { enabled: true, quietWindow: 'PT0S' } },
+      },
+      /malformed autoDecide\.worktreeRemnant\.quietWindow at ref "main"/,
+    ],
+    [
+      {
+        dangerouslyAutoDecide: false,
+        autoDecide: { b1Leftover: { enabled: 'yes' } },
+      },
+      /malformed autoDecide\.b1Leftover\.enabled at ref "main"/,
+    ],
+  ];
+  for (const [overrides, errorPattern] of cases) {
+    const report = readTrustedAutoDecide({
+      owner: 'o',
+      repo: 'r',
+      baseRefName: 'main',
+      fetchEncodedConfig: () => toEncodedConfig(trustedPolicyConfig(overrides)),
+      fetchEncodedPolicySchema: () => toEncodedConfig(schema),
+    });
+    assertEveryClassUnreadable(report, 'main', errorPattern);
+  }
+});
+
+test('trusted auto-decide: the trusted base wins over a feature ref that enables a class (#4958)', () => {
+  const seen: string[] = [];
+  const refConfigs: Record<string, unknown> = {
+    main: trustedPolicyConfig({ dangerouslyAutoDecide: true }),
+    'issue/1-feature': trustedPolicyConfig({
+      dangerouslyAutoDecide: true,
+      autoDecide: { runtimeQuestion: { enabled: true } },
+    }),
+  };
+  const schemaRefs: string[] = [];
+  const fetchEncodedConfig = (_owner: string, _repo: string, ref: string) => {
+    seen.push(ref);
+    return toEncodedConfig(refConfigs[ref]);
+  };
+  const fetchEncodedPolicySchema = (
+    _owner: string,
+    _repo: string,
+    ref: string,
+  ) => {
+    schemaRefs.push(ref);
+    return localPolicySchemaBase64;
+  };
+  const base = readTrustedAutoDecide({
+    owner: 'o',
+    repo: 'r',
+    baseRefName: 'main',
+    readDefaultBranch: () => {
+      throw new Error('a supplied base must not read the default branch');
+    },
+    fetchEncodedConfig,
+    fetchEncodedPolicySchema,
+  });
+  assert.equal(base.status, 'readable');
+  assert.deepEqual(base.classes, everyClassVerdict('class-off'));
+  assert.equal(base.maxPendingConfirmations, undefined);
+
+  const repositoryScoped = readTrustedAutoDecide({
+    owner: 'o',
+    repo: 'r',
+    readDefaultBranch: () => 'main',
+    fetchEncodedConfig,
+    fetchEncodedPolicySchema,
+  });
+  assert.equal(repositoryScoped.ref, 'main');
+  assert.deepEqual(repositoryScoped.classes, everyClassVerdict('class-off'));
+  // The document and the schema are both read at the trusted ref only.
+  assert.deepEqual(seen, ['main', 'main']);
+  assert.deepEqual(schemaRefs, ['main', 'main']);
+});
+
+test('trusted auto-decide agrees with the master-switch reader on every master verdict (#4958)', () => {
+  const schemaText = readFileSync(
+    new URL('../schemas/policy.schema.json', import.meta.url),
+    'utf8',
+  );
+  // A looser trusted schema that accepts any master value.
+  const looseMaster = JSON.parse(schemaText) as {
+    properties: Record<string, unknown>;
+  };
+  looseMaster.properties.dangerouslyAutoDecide = {};
+  // A trusted schema that uses a keyword the validator does not support.
+  const unsupported = JSON.parse(schemaText) as {
+    properties: Record<string, Record<string, unknown>>;
+  };
+  unsupported.properties.dangerouslyAutoDecide = {
+    ...unsupported.properties.dangerouslyAutoDecide,
+    const: false,
+  };
+  const realSchema = () => localPolicySchemaBase64;
+  const cases: Array<[() => string, () => string]> = [
+    [httpNotFound, realSchema],
+    [httpServerError, realSchema],
+    [() => toEncodedConfig(trustedPolicyConfig()), realSchema],
+    [
+      () =>
+        toEncodedConfig(trustedPolicyConfig({ dangerouslyAutoDecide: false })),
+      realSchema,
+    ],
+    [
+      () =>
+        toEncodedConfig(trustedPolicyConfig({ dangerouslyAutoDecide: true })),
+      realSchema,
+    ],
+    [
+      () =>
+        toEncodedConfig(trustedPolicyConfig({ dangerouslyAutoDecide: 'true' })),
+      realSchema,
+    ],
+    [
+      () =>
+        toEncodedConfig(trustedPolicyConfig({ dangerouslyAutoDecide: 'true' })),
+      () => toEncodedConfig(looseMaster),
+    ],
+    [
+      () =>
+        toEncodedConfig(trustedPolicyConfig({ dangerouslyAutoDecide: true })),
+      () => toEncodedConfig(unsupported),
+    ],
+    [
+      () =>
+        toEncodedConfig(trustedPolicyConfig({ dangerouslyAutoDecide: true })),
+      () => {
+        throw new Error('trusted schema unavailable');
+      },
+    ],
+  ];
+  for (const [fetchEncodedConfig, fetchEncodedPolicySchema] of cases) {
+    const input = {
+      owner: 'o',
+      repo: 'r',
+      baseRefName: 'main',
+      fetchEncodedConfig,
+      fetchEncodedPolicySchema,
+    };
+    const master = readTrustedDangerouslyAutoDecide(input);
+    const report = readTrustedAutoDecide(input);
+    assert.equal(report.master, master.status);
+    assert.equal(report.masterReason, master.reason);
+    assert.equal(report.ref, master.ref);
+    assert.equal(report.error, master.error);
+    if (master.status === 'unreadable') {
+      assert.equal(report.status, 'unreadable');
+      assert.deepEqual(report.classes, everyClassVerdict('unreadable'));
+    }
+  }
+});
 
 // #3820: the forced-handoff authority is repository-only. A user-global
 // human-gated mode must not authorize a handoff when the repository has no file.
