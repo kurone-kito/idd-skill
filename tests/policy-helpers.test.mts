@@ -3581,3 +3581,76 @@ test('autoDecide: a confirmation label that reuses another IDD label is reported
     [],
   );
 });
+
+test('autoDecide: an inherited value counts as absent, so an inherited enabled true stays class-off (#4990)', () => {
+  // JSON.parse yields own properties only; these non-JSON inputs check that
+  // the readers agree with the Object.keys unknown-key checks.
+  const cases: [string, unknown][] = [
+    [
+      'inherited class',
+      { autoDecide: Object.create({ decisionIssue: { enabled: true } }) },
+    ],
+    [
+      'inherited enabled',
+      { autoDecide: { decisionIssue: Object.create({ enabled: true }) } },
+    ],
+    [
+      'inherited root',
+      Object.create({
+        autoDecide: {
+          decisionIssue: { enabled: true },
+          maxPendingConfirmations: 5,
+          confirmationLabelName: 'auto:confirm',
+          worktreeRemnant: { quietWindow: 'PT30M' },
+        },
+      }),
+    ],
+    [
+      'inherited caps, label, and class',
+      {
+        autoDecide: Object.create({
+          maxPendingConfirmations: 5,
+          maxDecisionsPerClaim: 7,
+          confirmationLabelName: 'auto:confirm',
+          worktreeRemnant: { enabled: true, quietWindow: 'PT30M' },
+        }),
+      },
+    ],
+    [
+      'inherited valid quietWindow',
+      {
+        autoDecide: {
+          worktreeRemnant: Object.create({ quietWindow: 'PT45M' }),
+        },
+      },
+    ],
+    [
+      'inherited malformed quietWindow',
+      {
+        autoDecide: { worktreeRemnant: Object.create({ quietWindow: 'PT0S' }) },
+      },
+    ],
+    [
+      'inherited malformed values',
+      {
+        autoDecide: Object.create({
+          maxPendingConfirmations: 0,
+          confirmationLabelName: '  ',
+          b1Leftover: { enabled: 'yes' },
+        }),
+      },
+    ],
+  ];
+  for (const [label, config] of cases) {
+    assert.deepEqual(
+      autoDecideVerdicts(config),
+      everyAutoDecideClass('class-off'),
+      label,
+    );
+    assert.deepEqual(
+      normalizePolicyConfig(config).autoDecide,
+      POLICY_DEFAULTS.autoDecide,
+      label,
+    );
+  }
+});
