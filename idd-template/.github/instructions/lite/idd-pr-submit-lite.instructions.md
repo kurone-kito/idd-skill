@@ -134,8 +134,8 @@ This section's rebase only applies **before the branch's first push**.
 4. **Before rebasing**, pick the signing tier (a signing failure never
    stops D1): primary signing, else a wrapper for arbitrary git
    subcommands, else unsigned. Skip a signer that needs a terminal (GPG
-   pinentry or a hardware-touch path; issue #2844). An unsigned rebase
-   drops the replayed commits' signatures; record that outcome on the issue.
+   pinentry or a hardware-touch path; issue #2844). An unsigned fallback
+   drops the replayed commits' signatures; record it on the issue.
 5. Rebase onto `origin/{development-branch}` at that tier: plain
    `git rebase origin/{development-branch}`; the wrapper, `git -c
    gpg.format=ssh -c user.signingkey=<abs-path> -c commit.gpgsign=true

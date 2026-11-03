@@ -72,8 +72,9 @@ unsigned (`git -c commit.gpgsign=false rebase origin/{development-branch}`)
 and continue it the same way (`git -c commit.gpgsign=false rebase
 --continue`); a rebase that started signed reaches the unsigned tier only
 through the failed-write restart below. An unsigned rebase
-drops the signatures of the commits it replays; record that outcome on the
-issue.
+drops the signatures of the commits it replays; when it is a fallback from
+configured signing, record that outcome on the issue (a repository that
+configures no signing records nothing).
 
 Failed write (observed 2026-09-26, issue `#3491`): rebase still in
 progress, the index holds the replay, and the branch tip is still the
@@ -87,7 +88,8 @@ resolved again. Abort with
 `git rebase --abort` to restore the pre-rebase branch tip, then restart
 the **full** rebase from that branch at the next tier: the configured
 fallback wrapper's `rebase origin/{development-branch}` form (the explicit
-SSH `-c` form or a repository alias), then
+SSH `-c` form or a repository alias), only when one is configured and has
+not already failed in this attempt, then
 `git -c commit.gpgsign=false rebase origin/{development-branch}`. If the
 unsigned rebase stops on a content conflict, resolve it as above; on any
 other failure, post a hold note naming the branch state and stop.
