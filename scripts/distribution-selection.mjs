@@ -248,6 +248,7 @@ function resolveContext(options) {
     repository,
     worktreeRoot,
     mainWorktreeRoot,
+    runGit,
     policy: policyLoad.config,
     policyDiagnostic:
       repository !== null && worktreeRoot === null
@@ -560,14 +561,111 @@ function currentMatches(ctx, current, set, entries) {
   }
   return true;
 }
+// Tokens are built from parts so the shipped helper carries no literal
+// placeholder, which the payload residue check would otherwise report.
+const placeholderToken = (name) => `{{${name}}}`;
+// The onboarding token grammar: an upper-snake name that starts with a letter.
+const ANY_PLACEHOLDER = /\{\{[A-Z][A-Z0-9_]*\}\}/u;
+// The pattern onboarding enforces on a PROJECT_MARKER_PREFIX value, also in
+// schemas/policy.schema.json. idd-onboard imports this module, so it is
+// repeated here. A policy value outside it never substitutes.
+const MARKER_PREFIX_PATTERN = /^[a-z][a-z0-9-]{1,31}$/u;
+/**
+ * The repository name onboarding substitutes for `REPO_NAME`: the last path
+ * segment of `remote.origin.url` without `.git`, read the way idd-onboard's
+ * `parseRemoteRepoRef` reads it. idd-onboard imports this module, so the parse
+ * is repeated here, and a test keeps the two in step. The read goes through the
+ * selection's Git runner, which drops inherited `GIT_` variables, so they cannot
+ * point it at another checkout. Returns null on any failure.
+ */
+function repositoryNameFromOrigin(runGit, worktreeRoot) {
+  let url;
+  try {
+    url = runGit(['config', '--get', 'remote.origin.url'], worktreeRoot).trim();
+  } catch {
+    return null;
+  }
+  const raw = url.replace(/\/+$/, '');
+  if (raw === '') return null;
+  const scpMatch = raw.match(/^[\w.-]+@([\w.-]+):(.+)$/);
+  const path = scpMatch
+    ? scpMatch[2]
+    : raw.replace(/^[a-z+]+:\/\/([^/@]+@)?[^/]+\//i, '');
+  if (path === raw && !scpMatch) return null;
+  const segments = path.split('/').filter((segment) => segment.length > 0);
+  if (segments.length < 2) return null;
+  const repo = (segments[segments.length - 1] ?? '').replace(/\.git$/, '');
+  return repo === '' ? null : repo;
+}
+/**
+ * Resolve a prepared instruction the way onboarding concretes a local copy.
+ * Only the two tokens that instruction files carry have values here:
+ * `PROJECT_MARKER_PREFIX`, the repository policy's `markerPrefix`, and
+ * `REPO_NAME`, the origin repository name. Any other placeholder, or a value
+ * that is missing, returns null, so the comparison fails closed.
+ */
+function resolvePreparedInstructionBytes(bytes, policy, repoName) {
+  const text = bytes.toString('utf8');
+  if (!Buffer.from(text, 'utf8').equals(bytes)) return null;
+  if (!text.includes('{{')) return bytes;
+  const markerPrefix = policy?.markerPrefix;
+  const values = [
+    [
+      'PROJECT_MARKER_PREFIX',
+      typeof markerPrefix === 'string' &&
+      MARKER_PREFIX_PATTERN.test(markerPrefix)
+        ? markerPrefix
+        : null,
+    ],
+    ['REPO_NAME', repoName],
+  ];
+  let resolved = text;
+  for (const [name, value] of values) {
+    if (typeof value === 'string' && value.length > 0) {
+      resolved = resolved.split(placeholderToken(name)).join(value);
+    }
+  }
+  return ANY_PLACEHOLDER.test(resolved) ? null : Buffer.from(resolved, 'utf8');
+}
+/**
+ * Whether a repository-local instruction tree is present at all. Any
+ * `idd-*.instructions.md` entry counts at any depth, not only the core file, so
+ * a partial tree cannot fall through to another route, while unrelated files do
+ * not. A symlink or other non-file entry counts as present, and so does every
+ * enumeration or containment failure, which fails closed.
+ */
+function localInstructionTreePresent(ctx) {
+  if (ctx.worktreeRoot === null) return false;
+  const root = join(ctx.worktreeRoot, '.github', 'instructions');
+  const visit = (directory) => {
+    for (const name of ctx.fs.readdirSync(directory)) {
+      if (/^idd-.+\.instructions\.md$/u.test(name)) return true;
+      const child = join(directory, name);
+      const kind = checkContainment(root, child, ctx.fs).finalKind;
+      if (kind === 'directory' ? visit(child) : kind !== 'file') return true;
+    }
+    return false;
+  };
+  try {
+    const kind = checkContainment(ctx.worktreeRoot, root, ctx.fs).finalKind;
+    if (kind === 'absent') return false;
+    if (kind !== 'directory') return true;
+    return visit(root);
+  } catch {
+    return true;
+  }
+}
 /**
  * Compare the complete repository instruction tree with the instruction
- * subset of a verified prepared manifest. A repository-local route is trusted
- * only when every expected byte matches and no extra local instruction file
- * is present.
+ * subset of a verified prepared manifest. Each expected digest is taken from
+ * the prepared bytes after the same placeholder resolution onboarding applies,
+ * so a concreted local copy matches. A repository-local route is trusted only
+ * when every expected byte matches and no extra local instruction file is
+ * present.
  */
 function localInstructionsMatchSet(ctx, set) {
   if (ctx.worktreeRoot === null) return false;
+  const repoName = repositoryNameFromOrigin(ctx.runGit, ctx.worktreeRoot);
   const component = componentListingAt(set.manifest, 'instructions');
   if (!Array.isArray(component.files)) return false;
   const prefix = '.github/instructions/';
@@ -583,7 +681,25 @@ function localInstructionsMatchSet(ctx, set) {
     ) {
       return false;
     }
-    expected.set(localPath, raw.sha256);
+    let preparedBytes;
+    try {
+      preparedBytes = readNoFollowBytes(
+        resolve(set.root, componentPathPrefix('instructions') + raw.path),
+        ctx.fs,
+        true,
+      );
+    } catch {
+      return false;
+    }
+    // The prepared bytes must still be the ones the manifest recorded.
+    if (sha256(preparedBytes) !== raw.sha256) return false;
+    const resolved = resolvePreparedInstructionBytes(
+      preparedBytes,
+      ctx.policy,
+      repoName,
+    );
+    if (resolved === null) return false;
+    expected.set(localPath, sha256(resolved));
   }
   if (!expected.has('idd-overview-core.instructions.md')) return false;
   const root = join(ctx.worktreeRoot, '.github', 'instructions');
@@ -953,24 +1069,10 @@ function inspectWithContext(ctx) {
   // set, including one this session already bound. Verify their complete file
   // tree against that selected immutable set before allowing the local route.
   if (ctx.worktreeRoot !== null) {
-    const localInstruction = join(
-      ctx.worktreeRoot,
-      '.github',
-      'instructions',
-      'idd-overview-core.instructions.md',
-    );
-    // Any failure of the no-follow walk counts as present, so it fails closed
-    // to the repository-local report instead of throwing: a symbolic-link or
-    // non-directory ancestor, an unreadable entry, a special file, or a
-    // refused ceiling chain.
-    let localPresent;
-    try {
-      localPresent =
-        checkContainment(ctx.worktreeRoot, localInstruction, ctx.fs)
-          .finalKind !== 'absent';
-    } catch {
-      localPresent = true;
-    }
+    // A partial tree (an IDD instruction file without the core file) counts as
+    // present, so it stops at the repository-local report instead of falling
+    // through to another route. Enumeration failures fail closed the same way.
+    const localPresent = localInstructionTreePresent(ctx);
     if (localPresent) {
       if (bound !== null) {
         const selectedCommit = bound.selected.sourceCommit;
