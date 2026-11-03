@@ -335,9 +335,17 @@ test('critiqueLoop.e10MaxPasses keeps a configured positive integer and falls ba
   }
 });
 
-test('critiqueLoop.deferByUrgency defaults to off and accepts low / low-and-medium / severity-tiered', () => {
-  assert.equal(POLICY_DEFAULTS.critiqueLoop.deferByUrgency, 'off');
-  assert.equal(normalizePolicyConfig({}).critiqueLoop.deferByUrgency, 'off');
+test('critiqueLoop.deferByUrgency defaults to severity-tiered and accepts off / low / low-and-medium', () => {
+  assert.equal(POLICY_DEFAULTS.critiqueLoop.deferByUrgency, 'severity-tiered');
+  assert.equal(
+    normalizePolicyConfig({}).critiqueLoop.deferByUrgency,
+    'severity-tiered',
+  );
+  assert.equal(
+    normalizePolicyConfig({ critiqueLoop: { deferByUrgency: 'off' } })
+      .critiqueLoop.deferByUrgency,
+    'off',
+  );
   assert.equal(
     normalizePolicyConfig({ critiqueLoop: { deferByUrgency: 'low' } })
       .critiqueLoop.deferByUrgency,
@@ -359,12 +367,12 @@ test('critiqueLoop.deferByUrgency defaults to off and accepts low / low-and-medi
   assert.equal(
     normalizePolicyConfig({ critiqueLoop: { deferByUrgency: 'high' } })
       .critiqueLoop.deferByUrgency,
-    'off',
+    'severity-tiered',
   );
   assert.equal(
     normalizePolicyConfig({ critiqueLoop: { deferByUrgency: 42 } }).critiqueLoop
       .deferByUrgency,
-    'off',
+    'severity-tiered',
   );
 });
 
@@ -540,9 +548,9 @@ test('parseTriageLine rejects optional parts out of the fixed order, repeated, o
   );
 });
 
-test('critiqueLoop.triageRecord defaults to off and accepts record / enforce (#4185)', () => {
-  assert.equal(POLICY_DEFAULTS.critiqueLoop.triageRecord, 'off');
-  assert.equal(normalizePolicyConfig({}).critiqueLoop.triageRecord, 'off');
+test('critiqueLoop.triageRecord defaults to record and accepts off / enforce (#4185)', () => {
+  assert.equal(POLICY_DEFAULTS.critiqueLoop.triageRecord, 'record');
+  assert.equal(normalizePolicyConfig({}).critiqueLoop.triageRecord, 'record');
   assert.equal(
     normalizePolicyConfig({ critiqueLoop: { triageRecord: 'off' } })
       .critiqueLoop.triageRecord,
@@ -562,7 +570,7 @@ test('critiqueLoop.triageRecord defaults to off and accepts record / enforce (#4
   assert.equal(
     normalizePolicyConfig({ critiqueLoop: { triageRecord: 'bogus' } })
       .critiqueLoop.triageRecord,
-    'off',
+    'record',
   );
 });
 
@@ -898,13 +906,19 @@ test('decideUrgencyDefer locks the severity-tiered matrix and binary modes', () 
   });
 });
 
-test('critiqueLoop.deferRelaxAtRounds defaults to an empty frozen array and keeps only one or two strictly ascending positive integers (#3796)', () => {
-  assert.deepEqual(POLICY_DEFAULTS.critiqueLoop.deferRelaxAtRounds, []);
+test('critiqueLoop.deferRelaxAtRounds defaults to [4], reads JSON null as off, and keeps only one or two strictly ascending positive integers (#3796)', () => {
+  assert.deepEqual(POLICY_DEFAULTS.critiqueLoop.deferRelaxAtRounds, [4]);
   assert.ok(Object.isFrozen(POLICY_DEFAULTS.critiqueLoop.deferRelaxAtRounds));
   assert.deepEqual(
     normalizePolicyConfig({}).critiqueLoop.deferRelaxAtRounds,
+    [4],
+    'an absent field takes the distributed default',
+  );
+  assert.deepEqual(
+    normalizePolicyConfig({ critiqueLoop: { deferRelaxAtRounds: null } })
+      .critiqueLoop.deferRelaxAtRounds,
     [],
-    'an absent field is off',
+    'JSON null is off',
   );
   const invalid: unknown[] = [
     [7, 4],
@@ -3112,17 +3126,17 @@ test('decideUrgencyDefer applies the review-count cap before the matrix (#4750)'
   );
 });
 
-test('critiqueLoop.deferAllAfterRounds is unset by default and keeps only integers of at least 1 (#4750)', () => {
+test('critiqueLoop.deferAllAfterRounds defaults to 5, reads JSON null as off, and keeps only integers of at least 1 (#4750)', () => {
+  assert.equal(POLICY_DEFAULTS.critiqueLoop.deferAllAfterRounds, 5);
+  assert.equal(normalizePolicyConfig({}).critiqueLoop.deferAllAfterRounds, 5);
   assert.equal(
     Object.hasOwn(
-      normalizePolicyConfig({}).critiqueLoop,
+      normalizePolicyConfig({ critiqueLoop: { deferAllAfterRounds: null } })
+        .critiqueLoop,
       'deferAllAfterRounds',
     ),
     false,
-  );
-  assert.equal(
-    Object.hasOwn(POLICY_DEFAULTS.critiqueLoop, 'deferAllAfterRounds'),
-    false,
+    'JSON null leaves the cap off',
   );
   assert.equal(
     normalizePolicyConfig({ critiqueLoop: { deferAllAfterRounds: 3 } })
