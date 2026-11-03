@@ -1591,7 +1591,7 @@ test('policy schema defines critiqueLoop.triageRecord as a three-value string en
   assert.equal(property.type, 'string');
   assert.deepEqual(property.enum, ['off', 'record', 'enforce']);
   assert.ok(
-    property.description.includes('defaults to "off"'),
+    property.description.includes('defaults to `record`'),
     'expected the description to state the default in words',
   );
   // validate-schemas rejects the `default` keyword, so the default lives
@@ -1686,7 +1686,34 @@ test('policy schema rejects an invalid critiqueLoop.deferRelaxAtRounds value (#3
   }
 });
 
-test('policy schema defines critiqueLoop.deferRelaxAtRounds as a positive-integer array with its default in words (#3796)', () => {
+test('policy schema accepts JSON null for critiqueLoop.deferRelaxAtRounds as the off value and rejects non-array, non-null values (#3796)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  instance.critiqueLoop = {
+    ...instance.critiqueLoop,
+    deferRelaxAtRounds: null,
+  };
+  assert.equal(
+    validate(instance, schema).some((error) =>
+      error.includes('$.critiqueLoop.deferRelaxAtRounds'),
+    ),
+    false,
+    'JSON null must validate as the explicit off value',
+  );
+  for (const deferRelaxAtRounds of ['4', 4, [0]]) {
+    instance.critiqueLoop = { ...instance.critiqueLoop, deferRelaxAtRounds };
+    assert.ok(
+      validate(instance, schema).some((error) =>
+        error.includes('$.critiqueLoop.deferRelaxAtRounds'),
+      ),
+      `expected deferRelaxAtRounds ${JSON.stringify(deferRelaxAtRounds)} to be rejected`,
+    );
+  }
+});
+
+test('policy schema defines critiqueLoop.deferRelaxAtRounds as an array or null, with its default and off value in words (#3796)', () => {
   const schema = loadJson('schemas/policy.schema.json') as {
     properties: {
       critiqueLoop: {
@@ -1702,7 +1729,7 @@ test('policy schema defines critiqueLoop.deferRelaxAtRounds as a positive-intege
     };
   };
   const property = schema.properties.critiqueLoop.properties.deferRelaxAtRounds;
-  assert.equal(property.type, 'array');
+  assert.deepEqual(property.type, ['array', 'null']);
   assert.equal(property.minItems, 1);
   assert.equal(property.items?.type, 'integer');
   assert.equal(property.items?.minimum, 1);
@@ -1710,8 +1737,8 @@ test('policy schema defines critiqueLoop.deferRelaxAtRounds as a positive-intege
   // description says the helper enforces it and states the default in words.
   const description = property.description.replace(/\s+/g, ' ');
   assert.ok(
-    description.includes('when the key is omitted the gradient is off'),
-    'expected the description to state the default in words',
+    description.includes('JSON `null` turns the gradient off'),
+    'expected the description to state the off value in words',
   );
   assert.ok(
     description.includes('the helper enforces it'),
@@ -4844,7 +4871,7 @@ test('policy schema accepts critiqueLoop.deferAllAfterRounds integers of at leas
 
 test('policy schema rejects an invalid critiqueLoop.deferAllAfterRounds value (#4750)', () => {
   const schema = loadJson('schemas/policy.schema.json');
-  for (const deferAllAfterRounds of [0, 1.5, '3', null]) {
+  for (const deferAllAfterRounds of [0, 1.5, '3']) {
     const instance = JSON.parse(
       JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
     );
@@ -4859,7 +4886,26 @@ test('policy schema rejects an invalid critiqueLoop.deferAllAfterRounds value (#
   }
 });
 
-test('policy schema defines critiqueLoop.deferAllAfterRounds as an integer with minimum 1 and its unset default in words (#4750)', () => {
+test('policy schema accepts JSON null for critiqueLoop.deferAllAfterRounds as the off value (#4750)', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const instance = JSON.parse(
+    JSON.stringify(loadJson('fixtures/schemas/policy.valid.json')),
+  );
+  instance.critiqueLoop = {
+    ...instance.critiqueLoop,
+    deferAllAfterRounds: null,
+  };
+  const errors = validate(instance, schema);
+  assert.equal(
+    errors.some((error) =>
+      error.includes('$.critiqueLoop.deferAllAfterRounds'),
+    ),
+    false,
+    errors.join('\n'),
+  );
+});
+
+test('policy schema defines critiqueLoop.deferAllAfterRounds as an integer or null with minimum 1 and its default in words (#4750)', () => {
   const schema = loadJson('schemas/policy.schema.json') as {
     properties: {
       critiqueLoop: {
@@ -4878,12 +4924,12 @@ test('policy schema defines critiqueLoop.deferAllAfterRounds as an integer with 
   };
   const { properties } = schema.properties.critiqueLoop;
   const property = properties.deferAllAfterRounds;
-  assert.equal(property.type, 'integer');
+  assert.deepEqual(property.type, ['integer', 'null']);
   assert.equal(property.minimum, 1);
   assert.equal('default' in property, false);
   const description = property.description.replace(/\s+/g, ' ');
   for (const phrase of [
-    'unset',
+    'Default: 5',
     'at or above',
     'severity-tiered',
     '--lite',
