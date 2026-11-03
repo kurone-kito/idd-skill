@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
-import { stripGeneratedFromBanner } from '../src/scripts/consistency-helpers.mts';
+import {
+  globToRegExp,
+  stripGeneratedFromBanner,
+} from '../src/scripts/consistency-helpers.mts';
 
 // The fixed remedy order for a bundle-ceiling breach (#4128) lives in E12 of
 // the review-fix instructions, and PR-submit only points at it.
@@ -79,7 +82,7 @@ for (const path of REVIEW_FIX_COPIES) {
 }
 
 for (const path of REVIEW_FIX_COPIES) {
-  test(`${path} keeps the E11 conflict and merge-failure outcomes (#4864)`, () => {
+  test(`${path} keeps the E11 conflict and merge-failure outcomes (#4864, #4973)`, () => {
     const text = readFileSync(path, 'utf8');
     const start = text.indexOf('## E11 ');
     const end = text.indexOf('## E12 ', start);
@@ -87,8 +90,160 @@ for (const path of REVIEW_FIX_COPIES) {
     assertInOrder(text.slice(start, end).replace(/\s+/g, ' '), [
       'Continue after a clean resolution;',
       'abort, report, and hold without pushing.',
-      '**Merge failure:** run `git merge --abort`, report, and hold on a merge, signing, or hook failure;',
+      '**Merge failure:** a failed or timed-out signed merge follows the wrapper to the next "Commit signing" tier (configured, fallback, unsigned);',
+      'if unsigned fails, run `git merge --abort`, report, and hold.',
     ]);
+  });
+}
+
+/** One section of a file, from its heading to the next heading of the same level. */
+function section(path: string, heading: string): string {
+  const text = readFileSync(path, 'utf8');
+  const start = text.indexOf(heading);
+  const level = heading.slice(0, heading.indexOf(' ') + 1);
+  const end = text.indexOf(`\n${level}`, start + heading.length);
+  assert.ok(start >= 0, `${path} has the "${heading}" section`);
+  return text.slice(start, end < 0 ? undefined : end).replace(/\s+/g, ' ');
+}
+
+// Every signing site names its unsigned tier, so a signing failure never
+// stops the loop (#4973).
+const SIGNING_TIER_SITES: readonly [string, string, readonly string[]][] = [
+  [
+    'idd-template/.github/instructions/idd-overview-appendix.instructions.md',
+    '## Commit signing',
+    [
+      'Signing is best-effort and never stops the loop:',
+      'take the next tier (configured, fallback, unsigned)',
+      "`docs/idd-helper-scripts.md`'s Signed-Commit Merge Wrapper;",
+      'Record material progress, decisions, hold reasons, and any non-default signing outcome',
+    ],
+  ],
+  [
+    'idd-template/.github/instructions/lite/idd-review-fix-lite.instructions.md',
+    '## E11 ',
+    [
+      "the repository's configured signing, then a configured fallback signer",
+      'then unsigned.',
+      '`git -c commit.gpgsign=false merge --continue` when unsigned',
+      'A clean merge reruns at that tier instead, so its `pre-merge-commit` hook runs again',
+      '`git merge --no-gpg-sign --no-ff` with the same `-m` subject',
+      'Only a failure at the unsigned tier runs `git merge --abort` and stop-and-ask.',
+    ],
+  ],
+  [
+    'idd-template/.github/instructions/lite/idd-pr-submit-lite.instructions.md',
+    '## D1 ',
+    [
+      '4. **Before rebasing**, pick the signing tier (a signing failure never stops D1): primary signing, else a wrapper for arbitrary git subcommands, else unsigned.',
+      'or `git -c commit.gpgsign=false rebase origin/{development-branch}`.',
+      'such as `git -c commit.gpgsign=false rebase --continue`',
+      'with none left, abort and restart unsigned (step 7); an unsigned failure holds.',
+      'last `git -c commit.gpgsign=false rebase origin/{development-branch}`; a conflict there goes to step 6, any other failure holds.',
+      'repeat this D1 rebase (at the tier in use, unsigned last)',
+    ],
+  ],
+  [
+    'idd-template/.github/instructions/idd-pr-submit.instructions.md',
+    '## D1 ',
+    [
+      'Signing follows the appendix\'s "Commit signing" tiers, so a signing failure never stops D1.',
+      "With no staged content conflict, use this path in place of the wrapper's state-present `--continue`;",
+      'except that its unsigned tier is this restart',
+      'then `git -c commit.gpgsign=false rebase origin/{development-branch}`.',
+    ],
+  ],
+  [
+    'idd-template/docs/idd-helper-scripts.md',
+    '## Signed-Commit Merge Wrapper',
+    [
+      "1. the repository's configured signing;",
+      '2. a configured fallback signer, such as the wrapper above;',
+      '3. unsigned: `--no-gpg-sign` for a commit or merge,',
+      'Its unsigned tier is therefore a restart: `git rebase --abort`,',
+      'Skip, without running it, a signer known to be unable to run without a terminal,',
+      'Error text is not read.',
+      "apply the calling site's conflict rule instead of the next tier.",
+      'Release tags keep their own rule: see',
+      'The same verification runs after a signed tier that exits nonzero before the 2-minute bound:',
+      "Otherwise, on the timeout path only, before moving to the next tier, also compare the index's tree hash",
+      "At D1 (`idd-pr-submit.instructions.md`), a rebase with no staged content conflict follows D1's failed-write restart instead of `--continue`;",
+      'A merge that stopped with no conflict reruns at the next tier instead: `git merge --abort`, then the original merge command at that tier.',
+      '**Signature check.**',
+      'a signed commit has a `gpgsig` or `gpgsig-sha256` header there,',
+      'Use `git log --format=%G?` only when a verifier is configured:',
+    ],
+  ],
+];
+
+for (const [path, heading, needles] of SIGNING_TIER_SITES) {
+  test(`${path} ${heading.trim()} reaches the unsigned signing tier (#4973)`, () => {
+    assertInOrder(section(path, heading), needles);
+  });
+}
+
+// The three sentences that stopped the loop on a signing failure, exactly as
+// they were wrapped before #4973. Each forbidden pattern must catch its own
+// sentence, so a revert fails `node scripts/audit-docs.mjs --check`.
+const OLD_SIGNING_STOP_SENTENCES: Readonly<Record<string, string>> = {
+  'e11-merge-failure-signing-hold':
+    '- **Merge failure:** run `git merge --abort`, report, and hold on a merge,\n' +
+    '  signing, or hook failure; after a timeout, follow the wrapper.\n',
+  'lite-e11-signing-failure-stop-and-ask':
+    'the signed wrapper for merge and `--continue`. On command/signing/hook failure,\n' +
+    'run `git merge --abort` and stop-and-ask. After a wrapper timeout, terminate\n',
+  'lite-d1-signing-stop-and-ask-first':
+    '4. **Before rebasing**: if primary signing is non-interactive-hostile (GPG\n' +
+    '   pinentry or a hardware-touch path) and no fallback wrapper exists for\n' +
+    '   arbitrary git subcommands, stop and ask first; replaying even one commit\n' +
+    '   re-signs it.\n',
+};
+
+// The template file each old sentence lived in; the audit's glob must cover it.
+const OLD_SIGNING_STOP_FILES: Readonly<Record<string, string>> = {
+  'e11-merge-failure-signing-hold':
+    'idd-template/.github/instructions/idd-review-fix.instructions.md',
+  'lite-e11-signing-failure-stop-and-ask':
+    'idd-template/.github/instructions/lite/idd-review-fix-lite.instructions.md',
+  'lite-d1-signing-stop-and-ask-first':
+    'idd-template/.github/instructions/lite/idd-pr-submit-lite.instructions.md',
+};
+
+interface ForbiddenPatternEntry {
+  id: string;
+  glob: string;
+  pattern: string;
+  message: string;
+}
+
+function forbiddenPatterns(): ForbiddenPatternEntry[] {
+  const manifest = JSON.parse(
+    readFileSync('audit/sync-manifest.json', 'utf8'),
+  ) as { forbiddenPatterns?: ForbiddenPatternEntry[] };
+  return manifest.forbiddenPatterns ?? [];
+}
+
+function templateInstructionFiles(dir: string): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const path = `${dir}/${entry.name}`;
+    return entry.isDirectory() ? templateInstructionFiles(path) : [path];
+  });
+}
+
+for (const [id, oldText] of Object.entries(OLD_SIGNING_STOP_SENTENCES)) {
+  test(`forbidden pattern ${id} catches its old sentence and nothing current (#4973)`, () => {
+    const entry = forbiddenPatterns().find((candidate) => candidate.id === id);
+    assert.ok(entry, `audit/sync-manifest.json has forbidden pattern ${id}`);
+    assert.equal(entry.glob, 'idd-template/.github/instructions/**');
+    assert.match(OLD_SIGNING_STOP_FILES[id] ?? '', globToRegExp(entry.glob));
+    // The audit compiles each pattern case-insensitively over a whole file.
+    const regex = new RegExp(entry.pattern, 'i');
+    assert.match(oldText, regex);
+    for (const path of templateInstructionFiles(
+      'idd-template/.github/instructions',
+    )) {
+      assert.doesNotMatch(readFileSync(path, 'utf8'), regex, path);
+    }
   });
 }
 

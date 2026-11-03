@@ -10201,7 +10201,8 @@ and hold. Then use this wrapper for both the merge and `git merge --continue`.
 If a confirmed conflict cannot be resolved cleanly,
 run `git merge --abort`, report the failure, and hold without pushing
 (observed 2026-10-28 in PR #4774 review comment #4396449337). After a wrapper
-timeout, terminate and wait for its full process tree before aborting; if it
+timeout, terminate and wait for its full process tree; once it is gone, run
+the post-failure verification below and take the next signing tier; if it
 remains live or its exit is unconfirmed, hold without aborting or pushing.
 
 E11 first fetches the target with this exact refspec:
@@ -10283,9 +10284,50 @@ Unlike the merge case above, a commit-only alias such as `git
 commit-ssh` is sufficient here — a single `commit` invocation needs no
 `--continue` step to re-sign.
 
+**Signing tiers** (`idd-overview-appendix.instructions.md`'s "Commit
+signing"): signing is best-effort, and a signing failure never stops the
+loop (operator statement of 2026-11-01, recorded in issue #4973). Each
+commit, merge, rebase, or `--continue` runs at the first usable tier:
+
+1. the repository's configured signing;
+2. a configured fallback signer, such as the wrapper above;
+3. unsigned: `--no-gpg-sign` for a commit or merge, and
+   `-c commit.gpgsign=false` for a rebase, a merge `--continue`, or the
+   `--continue` of a rebase that started unsigned.
+
+A rebase that started at a signed tier keeps that tier's signing for its
+`--continue`: Git stores `-S` in the rebase state, and
+`git -c commit.gpgsign=false rebase --continue` still fails, while the
+fallback signer's `--continue` works (reproduced 2026-11-03 with Git 2.53.0
+and a failing `gpg.program`, issue #4973). Its unsigned tier is therefore
+a restart: `git rebase --abort`, then rerun the original rebase with
+`-c commit.gpgsign=false` and resolve any conflict again. A repository that
+configures no signing starts at the unsigned tier; it records nothing and
+needs no signature check.
+
+Skip, without running it, a signer known to be unable to run without a
+terminal, such as GPG with a pinentry prompt or a hardware-touch key; the
+unbounded hang cited at the end of this section is that case. Each tier
+runs at most once, under the 2-minute bound below. A signed tier fails when
+it exits nonzero before that bound, or when the bound fires and its process
+tree is gone. Either way, run the post-failure verification below, then
+move to the next tier. Error text is not read. A hook that rejected the
+attempt runs again on the retry and fails the unsigned tier too, as long as
+the retry repeats that hook: a clean merge is rerun, not continued (see the
+state-present bullet below, after PR #4991 review comment r4451234135), and
+a failure at the unsigned tier is not a signing failure: the calling site's
+existing rule applies (E11 and D1 hold; B3 fixes a rejected commit message
+and commits again). If `git diff --name-only --diff-filter=U` lists any
+path, the operation stopped on a content conflict: apply the calling site's
+conflict rule instead of the next tier. An unsigned rebase drops the
+signatures of every commit it replays. Record any non-default outcome as
+the appendix requires. Release tags keep their own rule: see
+[Signed annotated release tags](#signed-annotated-release-tags-idd-release-tag).
+
 **Bounded timeout for every invocation** (commit, merge, or rebase): if
-the wrapper has not completed within 2 minutes, treat it as stuck
-rather than a signing failure worth retrying — a whole-command,
+the wrapper has not completed within 2 minutes, treat it as stuck and
+never retry the same tier; once its process tree is gone, verify and move
+to the next tier — a whole-command,
 root-cause-agnostic bound (it deliberately does not try to isolate the
 signer subprocess) that applies even to an invocation still producing
 output: an inactivity-only trigger would leave a merge or rebase that
@@ -10347,8 +10389,9 @@ simply outlasts the 30-second wait — for example a process stuck in
 uninterruptible I/O, which cannot receive a signal until it leaves
 that state (preventive; no observed incident yet). Whether either kind
 of survivor is safe to proceed past depends on what it can be: a
-signer subprocess is only a resource leak to report, since the
-unsigned fallback below never invokes one and so cannot race it — but
+signer subprocess is only a resource leak to report, since no later
+tier reuses that process and a signer never writes the working tree or
+index, so it cannot race the next tier — but
 the whole-command timeout this section opens with is root-cause-
 agnostic (it can equally fire on a hung hook, not only a stalled
 signer), and a hook process that survives could still be reading or
@@ -10381,14 +10424,18 @@ place and stop with a hold note instead of forcing the removal.
 
 Either way — the tree exited on its own, was terminated with nothing
 left but an identified signer leak, or the checks above otherwise
-allow proceeding — verify what actually happened before falling back;
-a killed or already-exited process can leave the operation completed,
-mid-progress, or never started at all:
+allow proceeding — verify what actually happened before moving to the
+next tier; a killed or already-exited process can leave the operation
+completed, mid-progress, or never started at all. The same verification
+runs after a signed tier that exits nonzero before the 2-minute bound:
+skip the process-tree and lock steps above, because the command has
+already returned and released its locks.
 
 - **Plain commit**: compare `git rev-parse HEAD` before/after the
   wrapper call, the same check B3's "Verify a commit actually landed"
   paragraph already prescribes. Landed → stop, do not re-commit.
-  Otherwise, before falling back to `--no-gpg-sign`, also compare the
+  Otherwise, on the timeout path only, before moving to the next tier,
+  also compare the
   index's tree hash — from running `git write-tree` before the wrapper
   call and again now — rather than comparing `git status --porcelain`
   and `git diff --cached --stat` output: `git commit -F` commits the
@@ -10401,11 +10448,15 @@ mid-progress, or never started at all:
   (preventive; no observed incident yet). Unstaged working-tree
   changes are intentionally excluded from this check: `git commit -F`
   alone never commits them, so they cannot reach the fallback commit
-  regardless of what changed there. Unchanged → fall back to
-  `--no-gpg-sign`
+  regardless of what changed there. Unchanged → commit at the next
+  tier: the configured fallback signer, then `--no-gpg-sign`
   (`idd-overview-appendix.instructions.md`'s "Commit signing" section).
   Changed → stop and post a hold note for review instead of falling
-  back.
+  back. After an error that returned before the bound, skip this
+  comparison and commit at the next tier: the hooks have finished, and
+  they run again on the retry (a signing error that returns at once
+  leaves `HEAD` and the index unchanged, reproduced 2026-11-03 with Git
+  2.53.0 and a failing `gpg.program`, issue #4973).
 - **Merge or rebase, state still present**: name the state via git, not
   a literal path — in a linked worktree (every B1 sibling worktree)
   `.git` at the worktree root is a _file_ pointing elsewhere, so a
@@ -10413,9 +10464,29 @@ mid-progress, or never started at all:
   `git rev-parse -q --verify MERGE_HEAD` for a merge, or
   `test -d "$(git rev-parse --git-path rebase-merge)"` (or
   `rebase-apply`) for a rebase. Either succeeding means the operation is
-  mid-progress: complete it with `-c commit.gpgsign=false` on the
-  `--continue` form — a plain `--continue` re-signs through the stalled
-  primary signer, and `--no-gpg-sign` itself is not a `--continue` flag.
+  mid-progress: complete it with the `--continue` form at the next tier —
+  the fallback signer's `-c` flags or alias, then `-c commit.gpgsign=false`
+  — because a plain `--continue` re-signs through the signer that just
+  failed, and `--no-gpg-sign` itself is not a `--continue` flag. For a
+  rebase that started at a signed tier, the unsigned tier is the restart
+  in "Signing tiers" above, not an unsigned `--continue`. A signing
+  error that returns at once leaves this state: a clean `git merge --no-ff`
+  exits 128 with `MERGE_HEAD` present, and a rebase keeps its
+  `rebase-merge` directory with the replay in the index (reproduced
+  2026-11-03 with Git 2.53.0 and a failing `gpg.program`, issue #4973). At
+  D1 (`idd-pr-submit.instructions.md`), a rebase with no staged content
+  conflict follows D1's failed-write restart instead of `--continue`; with
+  a staged content conflict, the `--continue` form here applies.
+  For a merge, `--continue` is only for one whose conflict was resolved
+  and staged. A merge that stopped with no conflict reruns at the next tier instead:
+  `git merge --abort`, then the original merge command at that tier.
+  `git merge --continue` runs the `pre-commit` and `commit-msg` hooks but
+  not `pre-merge-commit`, so continuing a clean merge that a
+  `pre-merge-commit` hook rejected would skip that hook; the rerun runs it
+  again at each tier, and its rejection at the unsigned rerun is the
+  unsigned tier's failure (PR #4991
+  review comment r4451234135, reproduced with Git 2.43.0 there and with Git
+  2.53.0 on 2026-11-03).
 - **Merge or rebase, no state present**: absent state alone does not
   prove the operation succeeded — the timeout can equally fire before
   Git ever creates that state (nothing to `--continue`), or, for a
@@ -10441,13 +10512,13 @@ mid-progress, or never started at all:
   mistaken for one that did. Verified → stop. Not verified → re-attach
   to the branch if
   detached (`git checkout {branch-name}`; the commit is preserved on
-  the branch ref) and rerun the original merge or rebase command
-  **unsigned** (`git -c commit.gpgsign=false merge …` / `rebase …`, not
-  the SSH-signing wrapper), exactly once, under this same 2-minute
-  bound — mirroring D1's own bounded auto-recovery. If that rerun times
-  out or still fails the same verification, post a hold note
-  documenting the branch state and stop, the same as D1's own recovery
-  does when it is exhausted.
+  the branch ref) and rerun the original merge or rebase command at the
+  next tier — the configured fallback signer if it has not run yet, then
+  **unsigned** (`git -c commit.gpgsign=false merge …` / `rebase …`) —
+  once per tier, under this same 2-minute bound, mirroring D1's own
+  bounded auto-recovery. If the unsigned rerun times out or still fails
+  the same verification, post a hold note documenting the branch state
+  and stop, the same as D1's own recovery does when it is exhausted.
 
 No step in this recovery procedure waits indefinitely: the original
 wrapper invocation and every fallback or continuation share the same
@@ -10455,16 +10526,28 @@ wrapper invocation and every fallback or continuation share the same
 shared 30-second bound across the whole recorded PID set — every
 step that exceeds its bound routes to the same
 terminate-and-verify-or-hold outcome, not a fresh unbounded wait. A
-hook or other non-signing cause can hang the plain-commit
-`--no-gpg-sign` fallback or the `--continue` completion just as it
-hung the original attempt; if either does not itself complete within
-2 minutes, apply the same terminate-and-verify procedure to it, and if
-it still does not resolve, post a hold note and stop rather than
-retrying further.
+hook or other non-signing cause can hang a later tier (the fallback
+signer, the unsigned `--no-gpg-sign` commit, or a `--continue`
+completion) just as it hung the original attempt; if one does not itself
+complete within 2 minutes, apply the same terminate-and-verify procedure
+to it, and if the unsigned tier still does not resolve, post a hold note
+and stop rather than retrying further.
 
 Observed hanging with no output for an extended, unbounded period on
 2026-09-10 (issue #2844 / PR #2870, commit `7be8acc9`, later confirmed
 unsigned).
+
+**Signature check.** After a signed tier reports success, confirm that
+each new commit carries a signature before recording the outcome: `HEAD`
+for a commit or merge, and every commit in
+`origin/{development-branch}..HEAD` for a rebase. Read only the header
+block of `git cat-file commit <commit>` (the lines before the first blank
+line); a signed commit has a `gpgsig` or `gpgsig-sha256` header there,
+and a message line that starts with the same word is not a header. Use
+`git log --format=%G?` only when a verifier is configured: without
+`gpg.ssh.allowedSignersFile`, that format prints `N` for every SSH-signed
+commit (reproduced 2026-11-03 with Git 2.53.0, issue #4973). A commit
+without the header is an unsigned outcome: record it and continue.
 
 ### Scripted-rebase hazards
 

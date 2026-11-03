@@ -221,18 +221,19 @@ After fetching, capture the target once as `target_sha` per the [E11 helper](../
 Fetch/capture/comparison errors report and hold.
 Compare `HEAD` with `"$target_sha"` per the helper.
 If equal, the branch is current: do not merge and continue to E12.
-If behind, follow the [E11 helper](../../docs/idd-helper-scripts.md) for its
-probe, wrapper-signed merge, and conflict or failure handling. Never
-re-fetch/re-resolve; unknown outcomes report and hold without merge or push.
+If behind, follow the E11 helper for its probe, wrapper-signed merge, and
+conflict or failure handling. Never re-fetch/re-resolve; unknown outcomes
+report and hold without merge or push.
 
 - **No conflict:** wrapper-signed merge with `"$target_sha"`; no confirmation,
   even with open threads.
 - **Conflict:** follow the
-  [signed-commit merge wrapper](../../docs/idd-helper-scripts.md#signed-commit-merge-wrapper-shared-git-procedure)
+  [wrapper](../../docs/idd-helper-scripts.md#signed-commit-merge-wrapper-shared-git-procedure)
   to confirm and resolve. Continue after a clean resolution; otherwise
   abort, report, and hold without pushing.
-- **Merge failure:** run `git merge --abort`, report, and hold on a merge,
-  signing, or hook failure; after a timeout, follow the wrapper.
+- **Merge failure:** a failed or timed-out signed merge follows the wrapper
+  to the next "Commit signing" tier (configured, fallback, unsigned); if
+  unsigned fails, run `git merge --abort`, report, and hold.
 
 On failure or hold, follow shared Hold / suspend rules; do not push.
 Otherwise, continue to E12.
