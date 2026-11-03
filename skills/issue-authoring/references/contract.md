@@ -2068,6 +2068,14 @@ configured authoring label and configured needs-decision label. The
 same rule applies to `blocked-by-human` with its matching expected
 bucket and labels.
 
+Before publishing a confirmation issue (the `confirmation` shape, described
+under [Auto-decide confirmation issue](#auto-decide-confirmation-issue)), run
+the linter with `--shape confirmation --current-repo <owner>/<repo>` and the
+configured confirmation label with `--label`. A label collision or an unreadable
+policy file fails the check. Do not pass `--expect-bucket` with this shape. To
+check an appended record comment, run the linter with `--confirmation-record`
+and the expected class and source, as that section describes.
+
 It also emits a **failing** finding, `dependency-line-grammar`: a
 `Blocked by`/`Depends on` mention that the shared line-anchored grammar
 (`dependency-grammar.mjs`, the same grammar every Discover helper uses
@@ -3739,6 +3747,145 @@ requires the marker, matching expected `Refs` origin, configured
 authoring label, bucket, and sole `Refs` line, but does not check these
 five headings for a bucket body; the completed-draft review checks the
 full body shape.
+
+## Auto-decide confirmation issue
+
+An **auto-decide confirmation issue** records one stop that an autonomous
+session decided without a person. It tells the operator what stopped, which
+options were weighed, which option the session chose, and how to undo it. The
+operator confirms the choice by closing the issue. A comment that names another
+option asks for rework. The shape is `confirmation`. The four classes that file
+one are `runtimeQuestion`, `authoringChoice`, `worktreeRemnant`, and
+`b1Leftover`. The `decisionIssue` class records its pickup choices on the
+needs-decision source and files no confirmation issue.
+
+### Markers
+
+The record marker sits in the body. Its fields come in this order, and none
+repeats:
+
+```text
+<!-- <marker-prefix>-auto-decision: class=<class>; source=<owner>/<repo>#<number>; claim=<claim-id|none>; set=<set-id|none>; decision=<id> -->
+```
+
+A value contains no whitespace, no `;`, and no `-->`.
+
+- `class` is `runtimeQuestion`, `authoringChoice`, `worktreeRemnant`, or
+  `b1Leftover`. A `runtimeQuestion` record may name a needs-decision source.
+- `source` is an issue in the same repository as the confirmation issue. The
+  comparison ignores case.
+- `runtimeQuestion` carries the session's current claim ID. `worktreeRemnant`
+  carries the stale or released claim ID that the recovery confirmed.
+  `b1Leftover` acts before any claim exists and carries `claim=none`. These
+  three carry `set=none`.
+- `authoringChoice` carries `claim=none` and the authoring set ID of the source
+  target. That set is not the confirmation issue's own creation set.
+- `decision` is an opaque ID that the session generates once per decision. A
+  decision covers exactly one subject, so a run that acts on N subjects records
+  N decisions, each with its own ID, and each counts toward the caps. A retried
+  append repeats the same ID, so readers count distinct IDs.
+
+The link marker is the first line of a comment on the source issue. The session
+posts it after the record. Its fields and value rules are the same:
+
+```text
+<!-- <marker-prefix>-auto-decision-link: class=<class>; claim=<claim-id|none>; set=<set-id|none>; decision=<id>; confirmation=<owner>/<repo>#<number> -->
+```
+
+The void marker is the first line of a comment on the confirmation issue. It
+says that the decision was not acted on. A voided decision is never completed
+and does not count toward the caps:
+
+```text
+<!-- <marker-prefix>-auto-decision-void: decision=<id> -->
+```
+
+The note marker is the first line of a comment on the confirmation issue. After
+acting, the session posts `kind=location` with the preserved-data location, the
+backup refs, or the stash tag. It posts `kind=failure` when the action fails
+after the record. A decision with a counting `location` note has been acted on,
+so no helper acts on its record again. A note does not void the decision, which
+still counts toward the caps:
+
+```text
+<!-- <marker-prefix>-auto-decision-note: decision=<id>; kind=<location|failure> -->
+```
+
+### Body
+
+- The record marker is the first non-blank line after the publication line, at
+  column 0. No other `<marker-prefix>-auto-decision` text appears anywhere in
+  the body, not even inside code.
+- These headings follow, in this order, each exactly once: `## Stop`,
+  `## Options`, `## Chosen option`, `## How to undo`, and `## Question`.
+- For `worktreeRemnant` and `b1Leftover`, the first non-blank line under
+  `## Stop`, at column 0, begins with `Subject:`. It holds exactly one
+  single-backtick code span with no backtick and no leading or trailing space
+  inside. No other line in the section begins with `Subject:`. The span holds
+  the path in one canonical form: absolute, with its parent directory resolved
+  and its last component kept as written, without following it. For a branch,
+  the span holds the short branch name without `refs/heads/`. Readers compare
+  the span exactly, and both modes build their subject in this form.
+- `## Options` holds at least two `###` options. One is titled exactly
+  `### Keep today's behavior`. Each option holds exactly one line that begins
+  with `Cost:`.
+- The first non-empty line of `## Chosen option` is the title of a listed
+  option other than `Keep today's behavior`.
+- `## Question` holds exactly one line that begins with `Question:` followed by
+  a space. Its wording says that closing the issue confirms the choice, and that
+  a comment naming another option asks for rework. The wording is the author's
+  responsibility, and the linter does not check it.
+- No autopilot-suitability, effort, roadmap-id, blocked-by, authoring-bucket,
+  defer-source, or draft-carrier marker or footer appears in the body.
+
+### Record comment
+
+A record comment's first line is a record marker for the same class and source,
+followed by the same headings.
+
+### Trust
+
+A body, record comment, link-marker comment, void marker, or note marker counts
+only when all of these hold:
+
+- its author is in `trustedMarkerActors`, read from the repository policy file
+  only, with no flag or environment override. An empty or missing list means
+  that nothing counts;
+- it is unedited, judged by the same edit-state check that the draft carrier
+  release uses for its markers;
+- for the body, the current `body-sha256` still equals the `body-sha256` of the
+  issue's `mode=acquire` owner marker;
+- its marker sits at the position the grammar pins: the body's first non-blank
+  line after the publication line, or a comment's first line.
+
+A record comment counts only on an issue whose body record counts, with the same
+class and source. Anyone else's comment never counts.
+
+### No edits
+
+Reuse-first never reuses a confirmation issue as an authoring target. No session
+edits a confirmation issue's body or labels, except through
+`publish-authoring-hold`'s own creation-hold release and its recovery. Appending
+a record, a void marker, or a note marker is an addition, not an edit.
+
+### Linter
+
+Run the linter with `--shape confirmation --current-repo <owner>/<repo>`.
+`--current-repo` is required. The `$GITHUB_REPOSITORY` fallback does not count,
+and without the flag the shape is a usage error. `--expect-bucket` is refused
+for this shape. The A4 and A4.5 triage are reported as not applicable.
+
+The label check reads the configured `autoDecide.confirmationLabelName`. It
+fails on a collision with another label name and on an unreadable policy file.
+With `--new-issue`, an `authoringChoice` record whose `set` equals the
+publication line's own `set` fails.
+
+A record comment is checked with `--confirmation-record`, `--expect-class`, and
+`--expect-source`. The caller copies `class` and `source` from the body marker.
+`--expect-claim`, `--expect-set`, and `--expect-subject` are optional. The
+record marker must be on the first line, and no publication line may appear.
+
+The linter exits 0 on a pass, 1 on each failing rule, and 2 on each usage error.
 
 ## Draft carrier
 
