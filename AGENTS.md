@@ -791,9 +791,14 @@ failure:
 
 - `lint`: the bare-Node lane, which runs the audits and the protocol
   tests with no dependency installed.
-- `pnpm-boundary`: `pnpm install --frozen-lockfile --prefer-offline` with
-  `HUSKY=0`, then `pnpm run check`, then
-  `node scripts/check-pnpm-boundary.mjs`.
+- `pnpm-boundary`: the aggregate job (issue `#4993`). act runs the jobs it
+  needs first. In this repository they are the four `pnpm-boundary-group`
+  shards (`lint`, `typecheck`, `test`, and `distribution`). Each shard runs
+  `pnpm install --frozen-lockfile --prefer-offline` with `HUSKY=0`, then
+  its own `pnpm run check` groups, and the `distribution` shard also runs
+  `node scripts/check-pnpm-boundary.mjs`. When act does not resolve the
+  repository as `kurone-kito/idd-skill`, the `pnpm-boundary-full` job runs
+  the whole suite instead. Neither path has been replayed under act yet.
 - `pnpm-boundary-node22-floor`: the same reusable workflow on the Node
   version set by its `node-version` input. It is the only one of the three
   jobs that covers Node 22.
