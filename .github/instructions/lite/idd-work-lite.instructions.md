@@ -196,8 +196,8 @@ defaultBranchRef --jq .defaultBranchRef.name`. Stop unless the name matches
 
 ## B2.1 — Premise verification
 
-Decision-transcription: verify shipped claims in prior code/docs; if unclear or
-false, hold with evidence for a maintainer addendum.
+If the issue records a human decision, verify its shipped-fact claims in
+code/docs; if unclear or false, hold with evidence for a maintainer addendum.
 
 ## B2.2 — Example field-name verification
 
