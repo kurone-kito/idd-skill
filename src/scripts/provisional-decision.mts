@@ -459,21 +459,55 @@ function stableJson(value: unknown): string {
   return JSON.stringify(value);
 }
 
+function commentUrlKey(value: string): string {
+  try {
+    const url = new URL(value);
+    const match = url.pathname.match(/^\/([^/]+)\/([^/]+)\/issues\/(\d+)\/?$/);
+    const commentId = url.hash.match(/^#issuecomment-(\d+)$/);
+    if (
+      url.protocol === 'https:' &&
+      url.hostname === 'github.com' &&
+      url.port === '' &&
+      url.username === '' &&
+      url.password === '' &&
+      url.search === '' &&
+      match &&
+      commentId
+    ) {
+      return `${match[1]?.toLowerCase()}/${match[2]?.toLowerCase()}/issues/${match[3]}#issuecomment-${commentId[1]}`;
+    }
+  } catch {
+    // Preserve exact lookup behavior for URLs outside the GitHub comment form.
+  }
+  return value;
+}
+
 function contentComparable(record: ProvisionalDecisionRecord): unknown {
   const copy = structuredClone(record) as ProvisionalDecisionRecord;
   const mutable = copy as unknown as {
+    evidenceReferences?: string[];
     claimLineage?: unknown;
     source?: {
       repository?: string;
       snapshot?: { updatedAt?: unknown };
     };
-    event?: { type?: unknown; result?: { verifiedAt?: unknown } };
+    event?: {
+      type?: unknown;
+      planReference?: string;
+      result?: { verifiedAt?: unknown };
+    };
   };
   delete mutable.claimLineage;
   if (mutable.source?.repository) {
     mutable.source.repository = normalizeRepository(mutable.source.repository);
   }
+  if (mutable.evidenceReferences) {
+    mutable.evidenceReferences = mutable.evidenceReferences.map(commentUrlKey);
+  }
   if (mutable.source?.snapshot) delete mutable.source.snapshot.updatedAt;
+  if (typeof mutable.event?.planReference === 'string') {
+    mutable.event.planReference = commentUrlKey(mutable.event.planReference);
+  }
   if (mutable.event?.type === 'work-completed' && mutable.event.result) {
     delete mutable.event.result.verifiedAt;
   }
@@ -602,7 +636,9 @@ function decisionForEvidence(
   evidenceUrl: string,
 ): ReplayedProvisionalDecision[] {
   return replay.decisions.filter((decision) =>
-    decision.selection.evidenceReferences.includes(evidenceUrl),
+    decision.selection.evidenceReferences.some(
+      (reference) => commentUrlKey(reference) === commentUrlKey(evidenceUrl),
+    ),
   );
 }
 
@@ -744,7 +780,9 @@ function gateFailure(
       return 'work-started requires a selected decision';
     if (!request.planCommentUrl) return 'planCommentUrl is required';
     const planComment = history.comments.find(
-      (comment) => comment.url === request.planCommentUrl,
+      (comment) =>
+        commentUrlKey(comment.url) ===
+        commentUrlKey(request.planCommentUrl ?? ''),
     );
     if (!planComment) return 'planCommentUrl is not a source history comment';
     const selectedComment = history.comments.find(
@@ -987,7 +1025,7 @@ export async function runProvisionalDecisionCommand(
     );
   }
   const evidenceComment = history.comments.find(
-    (comment) => comment.url === evidenceUrl,
+    (comment) => commentUrlKey(comment.url) === commentUrlKey(evidenceUrl),
   );
   if (!evidenceComment) {
     return refused('fix-input', 'evidenceUrl is not a source history comment');
@@ -1043,7 +1081,9 @@ export async function runProvisionalDecisionCommand(
   const planComment =
     request.type === 'work-started'
       ? (history.comments.find(
-          (comment) => comment.url === request.planCommentUrl,
+          (comment) =>
+            commentUrlKey(comment.url) ===
+            commentUrlKey(request.planCommentUrl ?? ''),
         ) ?? null)
       : null;
 

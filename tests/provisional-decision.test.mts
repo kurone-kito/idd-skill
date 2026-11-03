@@ -877,6 +877,114 @@ test('a same evidence URL selection retry reconciles to the stored record', asyn
   );
 });
 
+test('comment URL casing preserves selection and work-started retry identity', async (t) => {
+  const mixedCaseRepository = 'KuRoNe-KiTo/IDD-SKILL';
+  const mixedCaseEvidenceUrl = evidenceUrl.replace(
+    repository,
+    mixedCaseRepository,
+  );
+
+  await t.test(
+    'selection retry matches casing changes in the request and record',
+    async () => {
+      const { store, record } = await selectedRecord();
+      const storedRecord = {
+        ...record,
+        evidenceReferences: [mixedCaseEvidenceUrl],
+      } as ProvisionalDecisionRecord;
+      store.history = {
+        ...store.history,
+        comments: [...store.history.comments, selectionComment(storedRecord)],
+      };
+
+      const result = await runProvisionalDecisionCommand(
+        request({ evidenceUrl: mixedCaseEvidenceUrl }),
+        store,
+      );
+
+      assert.equal(result.state, 'reconciled', JSON.stringify(result));
+      assert.equal(result.recordId, record.recordId);
+    },
+  );
+
+  await t.test(
+    'history lookup matches casing changes in both stored URLs',
+    async () => {
+      const { store, record } = await selectedRecord();
+      const evidence = store.history.comments.find((item) => item.id === '2');
+      assert.ok(evidence);
+      const storedRecord = {
+        ...record,
+        evidenceReferences: [mixedCaseEvidenceUrl],
+      } as ProvisionalDecisionRecord;
+      store.history = {
+        ...store.history,
+        comments: [
+          ...store.history.comments.map((item) =>
+            item.id === evidence.id
+              ? { ...item, url: mixedCaseEvidenceUrl }
+              : item,
+          ),
+          selectionComment(storedRecord),
+        ],
+      };
+
+      const result = await runProvisionalDecisionCommand(request(), store);
+
+      assert.equal(result.state, 'reconciled', JSON.stringify(result));
+      assert.equal(result.recordId, record.recordId);
+    },
+  );
+
+  await t.test(
+    'work-started retry matches a casing-changed plan URL',
+    async () => {
+      const { store, record } = await selectedRecord();
+      store.history = withSelection(store.history, record);
+      const planComment = comment(
+        '4',
+        'Plan for the selected decision.',
+        '2026-11-03T11:00:03Z',
+      );
+      store.history = {
+        ...store.history,
+        comments: [...store.history.comments, planComment],
+      };
+      const first = await runProvisionalDecisionCommand(
+        request({ type: 'work-started', planCommentUrl: planComment.url }),
+        store,
+      );
+      assert.equal(first.state, 'planned', JSON.stringify(first));
+      if (first.state !== 'planned') return;
+      store.history = {
+        ...store.history,
+        comments: [
+          ...store.history.comments,
+          selectionComment(
+            first.plan.candidateRecord,
+            '5',
+            '2026-11-03T11:00:04Z',
+          ),
+        ],
+      };
+
+      const result = await runProvisionalDecisionCommand(
+        request({
+          type: 'work-started',
+          planCommentUrl: planComment.url.replace(
+            repository,
+            mixedCaseRepository,
+          ),
+        }),
+        store,
+      );
+
+      assert.equal(result.state, 'reconciled', JSON.stringify(result));
+      assert.equal(result.recordId, first.recordId);
+    },
+  );
+});
+
 test('a matching record is not reconciled when claim, policy, or worktree gates fail', async (t) => {
   const { record } = await selectedRecord();
   const cases = [

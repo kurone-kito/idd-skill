@@ -235,6 +235,28 @@ function stableJson(value) {
   }
   return JSON.stringify(value);
 }
+function commentUrlKey(value) {
+  try {
+    const url = new URL(value);
+    const match = url.pathname.match(/^\/([^/]+)\/([^/]+)\/issues\/(\d+)\/?$/);
+    const commentId = url.hash.match(/^#issuecomment-(\d+)$/);
+    if (
+      url.protocol === 'https:' &&
+      url.hostname === 'github.com' &&
+      url.port === '' &&
+      url.username === '' &&
+      url.password === '' &&
+      url.search === '' &&
+      match &&
+      commentId
+    ) {
+      return `${match[1]?.toLowerCase()}/${match[2]?.toLowerCase()}/issues/${match[3]}#issuecomment-${commentId[1]}`;
+    }
+  } catch {
+    // Preserve exact lookup behavior for URLs outside the GitHub comment form.
+  }
+  return value;
+}
 function contentComparable(record) {
   const copy = structuredClone(record);
   const mutable = copy;
@@ -242,7 +264,13 @@ function contentComparable(record) {
   if (mutable.source?.repository) {
     mutable.source.repository = normalizeRepository(mutable.source.repository);
   }
+  if (mutable.evidenceReferences) {
+    mutable.evidenceReferences = mutable.evidenceReferences.map(commentUrlKey);
+  }
   if (mutable.source?.snapshot) delete mutable.source.snapshot.updatedAt;
+  if (typeof mutable.event?.planReference === 'string') {
+    mutable.event.planReference = commentUrlKey(mutable.event.planReference);
+  }
   if (mutable.event?.type === 'work-completed' && mutable.event.result) {
     delete mutable.event.result.verifiedAt;
   }
@@ -354,7 +382,9 @@ function bundleState(decisions, generation) {
 }
 function decisionForEvidence(replay, evidenceUrl) {
   return replay.decisions.filter((decision) =>
-    decision.selection.evidenceReferences.includes(evidenceUrl),
+    decision.selection.evidenceReferences.some(
+      (reference) => commentUrlKey(reference) === commentUrlKey(evidenceUrl),
+    ),
   );
 }
 function baselineMatches(baseline, source) {
@@ -478,7 +508,9 @@ function gateFailure(
       return 'work-started requires a selected decision';
     if (!request.planCommentUrl) return 'planCommentUrl is required';
     const planComment = history.comments.find(
-      (comment) => comment.url === request.planCommentUrl,
+      (comment) =>
+        commentUrlKey(comment.url) ===
+        commentUrlKey(request.planCommentUrl ?? ''),
     );
     if (!planComment) return 'planCommentUrl is not a source history comment';
     const selectedComment = history.comments.find(
@@ -700,7 +732,7 @@ export async function runProvisionalDecisionCommand(request, store) {
     );
   }
   const evidenceComment = history.comments.find(
-    (comment) => comment.url === evidenceUrl,
+    (comment) => commentUrlKey(comment.url) === commentUrlKey(evidenceUrl),
   );
   if (!evidenceComment) {
     return refused('fix-input', 'evidenceUrl is not a source history comment');
@@ -751,7 +783,9 @@ export async function runProvisionalDecisionCommand(request, store) {
   const planComment =
     request.type === 'work-started'
       ? (history.comments.find(
-          (comment) => comment.url === request.planCommentUrl,
+          (comment) =>
+            commentUrlKey(comment.url) ===
+            commentUrlKey(request.planCommentUrl ?? ''),
         ) ?? null)
       : null;
   if (request.type === 'work-completed') {
