@@ -8221,3 +8221,42 @@ test('a new confirmation body must open with a well-formed publication marker (#
     'pass',
   );
 });
+
+test('an opaque marker value may hold a colon, which the contract allows (#5021)', () => {
+  const record =
+    '<!-- idd-skill-auto-decision: class=runtimeQuestion; source=kurone-kito/idd-skill#4972; claim=claim:1; set=none; decision=dec:1 -->';
+  const report = confirmationAudit(confirmationBody(record));
+  assert.equal(report.passed, true, JSON.stringify(failingIds(report)));
+});
+
+test('an opaque marker value with a semicolon still fails the record check (#5021)', () => {
+  const record =
+    '<!-- idd-skill-auto-decision: class=runtimeQuestion; source=kurone-kito/idd-skill#4972; claim=claim-1; set=none; decision=dec;1 -->';
+  assert.ok(
+    failingIds(confirmationAudit(confirmationBody(record))).includes(
+      'confirmation-record-marker',
+    ),
+  );
+});
+
+test('a confirmation audit reports the triage findings as not applicable (#5021)', () => {
+  const report = confirmationAudit(confirmationBody());
+  const triage = report.findings.filter((f) => f.id.startsWith('triage-'));
+  assert.ok(triage.length > 0, 'expected triage findings in the report');
+  for (const finding of triage) {
+    assert.equal(finding.result, 'pass', finding.id);
+    assert.match(finding.detail, /not applicable/, finding.id);
+  }
+});
+
+test('the confirmation label matches case-insensitively and ignores padding (#5021)', () => {
+  const report = confirmationAudit(confirmationBody(), {
+    labels: ['  Status:Needs-Confirmation '],
+  });
+  const label = report.findings.find((f) => f.id === 'confirmation-label');
+  assert.equal(
+    label?.result,
+    'pass',
+    label?.detail ?? 'no confirmation-label finding',
+  );
+});
