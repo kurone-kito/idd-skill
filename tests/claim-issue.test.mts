@@ -1219,7 +1219,7 @@ test('--apply without --agent-id or --project-status is a usage error that names
       '--apply requires --agent-id and --project-status',
     ],
     [
-      ['--apply', '--issue', String(ISSUE), '--agent-id', 'claude-test'],
+      ['--apply', '--issue', String(ISSUE), '--agent-id', 'claude-0a1b2c3d'],
       '--apply requires --project-status',
     ],
     [
@@ -1268,7 +1268,7 @@ test('without --apply, --agent-id and --project-status are accepted and the dry 
     '--issue',
     String(ISSUE),
     '--agent-id',
-    'claude-test',
+    'claude-0a1b2c3d',
     '--project-status',
     'not-started',
   ]);
@@ -1618,7 +1618,7 @@ test('A5(a): every approved reason the gate emits is accepted with its own check
 
 const CLAIM_ID = '11111111-2222-4333-8444-555555555555';
 const NONCE = '0123456789abcdef0123456789abcdef';
-const AGENT = 'claude-test';
+const AGENT = 'claude-0a1b2c3d';
 const NOW = new Date('2026-10-16T01:02:03.456Z');
 const TIMESTAMP = '2026-10-16T01:02:03Z';
 const SCRIPTS = join(import.meta.dirname, '..', 'scripts');
@@ -2544,6 +2544,20 @@ test('a failed token record keeps the worktree and the branch, and posts nothing
   });
 });
 
+test('#4936: a bare --agent-id is refused by the real --record-tokens before any claim post', () => {
+  withApplyFixture((fixture) => {
+    const bareArgs = APPLY_ARGS.map((arg) => (arg === AGENT ? 'claude' : arg));
+    const run = runApply(fixture, {}, bareArgs);
+    const report = assertStopped(run, 'tokens-record-failed');
+    assert.equal(report.claimPosted, false);
+    assert.equal(run.posts.length, 0);
+    assert.equal(
+      run.log.some((entry) => entry.includes('post-idd-marker.mjs --type')),
+      false,
+    );
+  });
+});
+
 test('an own-worktree gate that is not claimable stops before the claim write', () => {
   withApplyFixture((fixture) => {
     const run = runApply(fixture, { ownGate: OWN_GATE_CLAIMED });
@@ -3139,7 +3153,7 @@ const APPLY_ARGS_FOR_GH_REPO = [
   String(ISSUE),
   '--apply',
   '--agent-id',
-  'claude-test',
+  'claude-0a1b2c3d',
   '--project-status',
   'not-started',
 ];
