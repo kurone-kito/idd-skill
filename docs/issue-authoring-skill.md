@@ -1635,6 +1635,14 @@ headings are defined in the contract's
 section. A carrier is never an execution candidate, so every triage
 finding reports "not applicable" for it.
 
+For the `confirmation` shape, the linter checks an **auto-decide confirmation
+issue**: an issue that records one stop an autonomous session decided, for the
+operator to confirm by closing it. Its markers, body headings, trust rules, and
+the `--confirmation-record` mode are defined in the contract's
+[Auto-decide confirmation issue](https://github.com/kurone-kito/idd-skill/blob/main/skills/issue-authoring/references/contract.md#auto-decide-confirmation-issue)
+section. It needs `--current-repo`, takes no `--expect-bucket`, and exits `0`,
+`1`, or `2` as the other shapes do.
+
 It also emits one **advisory, warning-severity-only** finding
 (`prose-dependency`): it flags an issue/PR reference (`#<digits>` or a
 full GitHub issue/PR URL) used near coordination language (for example
@@ -1695,7 +1703,8 @@ to convert the prose into a proper dependency marker or consciously
 confirm the reference is a mere breadcrumb.
 
 ```sh
-node scripts/audit-authored-issue.mjs --shape <orphan|roadmap|child|carrier> \
+node scripts/audit-authored-issue.mjs \
+  --shape <orphan|roadmap|child|carrier|confirmation> \
   --marker-prefix <resolved-target-prefix> \
   --config <target-checkout>/.github/idd/config.json \
   --title <drafted-title> --body-file <path-to-drafted-body> \
