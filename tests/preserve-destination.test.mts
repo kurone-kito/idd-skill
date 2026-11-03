@@ -561,6 +561,23 @@ for (const name of DIRECTORY_NAMES) {
   });
 }
 
+test('a non-integer issue number is refused at run time', {
+  skip: !POSIX,
+}, () => {
+  const fx = fresh();
+  for (const issue of ['../../escape', 0, -1, 1.5, Number.NaN]) {
+    const result = inspectPreserveDestination(
+      depsFor(fx),
+      'f4-preserved',
+      issue as number,
+      fx.primary,
+      [],
+    );
+    assert.match(result.hold ?? '', /is not a positive integer/);
+    assert.equal(result.destination, '');
+  }
+});
+
 test('an unknown preserved-data directory name is refused at run time', {
   skip: !POSIX,
 }, () => {

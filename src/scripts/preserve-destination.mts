@@ -153,6 +153,13 @@ export function inspectPreserveDestination(
     parents: [],
     hold: detail,
   });
+  // The issue number becomes a path component, so a value that is not a
+  // positive integer at run time must not reach the path.
+  if (!Number.isSafeInteger(issueNumber) || issueNumber < 1) {
+    return refuse(
+      `issue number ${JSON.stringify(issueNumber)} is not a positive integer`,
+    );
+  }
   if (!PRESERVE_DIRECTORY_NAMES.includes(directoryName)) {
     return refuse(
       `unknown preserved-data directory ${JSON.stringify(directoryName)}`,
