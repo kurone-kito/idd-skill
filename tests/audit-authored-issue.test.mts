@@ -7961,14 +7961,17 @@ test('chosen option comparison preserves inline-code title text (#5022)', () => 
 });
 
 test('a fenced example inside Options does not add an option (#5022)', () => {
-  const body = confirmationBody().replace(
-    '## Options\n\n',
-    '## Options\n\n```markdown\n### Example only\n\nCost: ignored\n```\n\n',
-  );
-  assert.equal(
-    confirmationAudit(body).passed,
-    true,
-    JSON.stringify(failingIds(confirmationAudit(body))),
+  const body = confirmationBody()
+    .replace(
+      '### Proceed with the change\n\nCost: a small risk of rework.\n\n',
+      '',
+    )
+    .replace(
+      '## Options\n\n',
+      '## Options\n\n```markdown\n### Example only\n\nCost: ignored\n```\n\n',
+    );
+  assert.ok(
+    failingIds(confirmationAudit(body)).includes('confirmation-options'),
   );
 });
 
