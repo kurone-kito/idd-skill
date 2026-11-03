@@ -465,14 +465,15 @@ exactly one child, keep the parent claim and, in order:
    children, keep the parent claim and hold and published children held,
    report, and do not release. The same applies if the record below is not
    posted; reconcile an uncertain POST before any retry.
-3. Once all are published, post on the parent, with the split option ID the
-   roadmap records,
-   `<!-- idd-skill-standing-approval: class=split; set=none;
-   anchor=<owner/repo#n>; ceiling=<maxCandidateFiles>; option=<option-id> -->`,
-   then comment, release, and clean up as above, without the companion.
+3. Once all are published, post this record as one line on the parent, with
+   the split option ID the roadmap records, then comment, release, and clean
+   up as above, without the companion:
 
-Every other case, including the class off or absent, uses the rule above
-unchanged.
+   ```text
+   <!-- idd-skill-standing-approval: class=split; set=none; anchor=<owner/repo#n>; ceiling=<maxCandidateFiles>; option=<option-id> -->
+   ```
+
+Otherwise the rule above applies unchanged.
 
 ---
 

@@ -275,7 +275,7 @@ issue, publishes a held roadmap whose children record `Split out of #<n>`, and
 comments its link; if refused, the comment stands. Never add needs-decision or
 ask a human.
 
-**Standing split** (sole exception here and to no worker-side authoring): with
+**Standing split** (sole exception to this rule): with
 `standingApprovals.split.enabled` true, every child within effective
 `maxCandidateFiles`, and each checkbox-stripped parent acceptance-criteria line
 whole and verbatim in exactly one child, keep the parent claim and:
@@ -283,10 +283,10 @@ whole and verbatim in exactly one child, keep the parent claim and:
 1. Per child, dry-run then `--apply` one held orphan:
    `publish-authoring-hold --shape orphan --title <title> --body-file <file>
    --review-result <file>`.
-2. On refusal, failure, recovery hold, or unposted record: publish no more;
+2. On refusal, failure, recovery hold, or a missing record: publish no more;
    keep the parent claim, hold, and children held; report; no release.
    Reconcile an uncertain POST first.
-3. Post on the parent, with the roadmap's split option ID,
+3. Post one line on the parent, with the roadmap's split option ID,
    `<!-- idd-skill-standing-approval: class=split; set=none;
    anchor=<owner/repo#n>; ceiling=<maxCandidateFiles>; option=<option-id> -->`,
    then comment, release, and clean up as above, no companion.
