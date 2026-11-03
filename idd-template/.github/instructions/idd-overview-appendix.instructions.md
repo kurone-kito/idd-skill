@@ -102,14 +102,17 @@ For the repo-query rules of each Discover step, see
 
 ## Commit signing
 
-When it blocks, check `docs/idd-helper-scripts.md`'s Signed-Commit
-Merge Wrapper; never permanently rewrite signing config. `--no-gpg-sign`
-on `git commit`/`git merge` is the last resort.
+Signing is best-effort: a missing signature is recorded, never a stop. On
+a signing failure, take the next tier: configured signing, a configured
+fallback signer, then unsigned (`--no-gpg-sign` on a commit or merge;
+`-c commit.gpgsign=false` on a rebase or `--continue`). Skip a signer known
+to need a terminal. For verification and the signature check, see
+`docs/idd-helper-scripts.md`'s Signed-Commit Merge Wrapper; never
+permanently rewrite signing config. Release tags keep their own rule.
 
 Record material progress, decisions, and hold reasons as issue or PR
-comments as they happen -- including any non-default signing outcome
-(e.g. `--no-gpg-sign`) -- so a resuming agent can continue without
-session memory.
+comments as they happen -- including any non-default signing outcome --
+so a resuming agent can continue without session memory.
 
 Operational restore markers (`review-watermark` and `review-baseline`)
 must include the current `{claim-id}` and must never be restored across

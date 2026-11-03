@@ -136,27 +136,28 @@ This section's rebase only applies **before the branch's first push**.
 3. If `git merge-base HEAD origin/{development-branch}` equals
    `origin/{development-branch}`, the branch already contains every commit on
    `{development-branch}` — skip the rebase and go to D2.
-4. **Before rebasing**: if primary signing is non-interactive-hostile (GPG
-   pinentry or a hardware-touch path) and no fallback wrapper exists for
-   arbitrary git subcommands, stop and ask first; replaying even one commit
-   re-signs it.
-5. Rebase onto `origin/{development-branch}`. When primary signing is
-   non-interactive-hostile and a subcommand wrapper exists, run the rebase
-   through it from the start: `git -c gpg.format=ssh -c
-   user.signingkey=<abs-path> -c commit.gpgsign=true rebase
-   origin/{development-branch}` (or a repo alias; a commit-only alias will not
-   run `rebase`). Otherwise run plain `git rebase origin/{development-branch}`.
-6. If the rebase hits a content conflict, resolve it and continue the
-   rebase. On the signed-commit repo case in step 5, continue with the
-   **wrapper's own** `--continue` form, not plain `git rebase
-   --continue` — the plain form re-signs through primary signing and
-   stalls.
+4. **Before rebasing**, pick the signing tier (a signing failure never
+   stops D1): primary signing, else a wrapper for arbitrary git
+   subcommands, else unsigned. Skip a signer that needs a terminal (GPG
+   pinentry or a hardware-touch path). An unsigned rebase drops the
+   replayed commits' signatures; record that outcome on the issue.
+5. Rebase onto `origin/{development-branch}` at that tier: plain
+   `git rebase origin/{development-branch}`; the wrapper, `git -c
+   gpg.format=ssh -c user.signingkey=<abs-path> -c commit.gpgsign=true
+   rebase origin/{development-branch}` (or a repo alias; a commit-only alias
+   will not run `rebase`); or `git -c commit.gpgsign=false rebase
+   origin/{development-branch}`.
+6. If the rebase hits a content conflict, resolve it and continue with the
+   tier's own `--continue` form, such as `git -c commit.gpgsign=false rebase
+   --continue`; plain `git rebase --continue` re-signs through primary
+   signing. If a signed `--continue` fails, use the next tier.
 7. Failed write — rebase in progress, index holds the replay, branch
    tip still the pre-rebase commit, and the commit object was never
    written with no staged content conflict: run `git rebase --abort` to
    restore the branch tip, then
-   restart the **full** rebase through the configured wrapper's `rebase
-   origin/{development-branch}` form. Use SSH `-c` or step 5's alias.
+   restart the **full** rebase at the next tier's step 5 form, last
+   `git -c commit.gpgsign=false rebase origin/{development-branch}`; if
+   that unsigned rebase fails, post a hold note and stop.
    This replays the stack; never replace with a one-commit cherry-pick.
    Do not run `git commit --amend -S` or `git commit --amend '-S'`.
    Step 6 `--continue` stays for a staged content conflict.
@@ -168,8 +169,8 @@ This section's rebase only applies **before the branch's first push**.
      origin/{development-branch}..HEAD` (not local `{development-branch}`, which
      this file never fast-forwards and so can be stale).
 9. If a finished rebase left HEAD detached, re-attach once with
-   `git checkout {branch-name}`, repeat this D1 rebase (through the
-   same signing wrapper on a signed-commit repo), then re-verify both
+   `git checkout {branch-name}`, repeat this D1 rebase (at the tier in
+   use, unsigned last), then re-verify both
    checks in step 8. If recovery still fails, stop and post a hold
    note naming the branch state.
 

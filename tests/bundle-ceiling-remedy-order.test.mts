@@ -79,7 +79,7 @@ for (const path of REVIEW_FIX_COPIES) {
 }
 
 for (const path of REVIEW_FIX_COPIES) {
-  test(`${path} keeps the E11 conflict and merge-failure outcomes (#4864)`, () => {
+  test(`${path} keeps the E11 conflict and merge-failure outcomes (#4864, #4973)`, () => {
     const text = readFileSync(path, 'utf8');
     const start = text.indexOf('## E11 ');
     const end = text.indexOf('## E12 ', start);
@@ -87,8 +87,73 @@ for (const path of REVIEW_FIX_COPIES) {
     assertInOrder(text.slice(start, end).replace(/\s+/g, ' '), [
       'Continue after a clean resolution;',
       'abort, report, and hold without pushing.',
-      '**Merge failure:** run `git merge --abort`, report, and hold on a merge, signing, or hook failure;',
+      '**Merge failure:** a failed or timed-out signed merge follows the wrapper to the next "Commit signing" tier (configured, fallback, unsigned);',
+      'if unsigned fails, run `git merge --abort`, report, and hold.',
     ]);
+  });
+}
+
+/** One section of a file, from its heading to the next heading of the same level. */
+function section(path: string, heading: string): string {
+  const text = readFileSync(path, 'utf8');
+  const start = text.indexOf(heading);
+  const level = heading.slice(0, heading.indexOf(' ') + 1);
+  const end = text.indexOf(`\n${level}`, start + heading.length);
+  assert.ok(start >= 0, `${path} has the "${heading}" section`);
+  return text.slice(start, end < 0 ? undefined : end).replace(/\s+/g, ' ');
+}
+
+// Every signing site names its unsigned tier, so a signing failure never
+// stops the loop (#4973).
+const SIGNING_TIER_SITES: readonly [string, string, readonly string[]][] = [
+  [
+    'idd-template/.github/instructions/idd-overview-appendix.instructions.md',
+    '## Commit signing',
+    [
+      'a missing signature is recorded, never a stop.',
+      'configured signing, a configured fallback signer, then unsigned',
+      '`--no-gpg-sign` on a commit or merge;',
+      '`-c commit.gpgsign=false` on a rebase or `--continue`',
+      'Skip a signer known to need a terminal.',
+      'Release tags keep their own rule.',
+    ],
+  ],
+  [
+    'idd-template/.github/instructions/lite/idd-review-fix-lite.instructions.md',
+    '## E11 ',
+    [
+      "the repository's configured signing, then a configured fallback signer",
+      'then unsigned.',
+      '`git -c commit.gpgsign=false merge --continue` when unsigned',
+      '`git merge --no-gpg-sign --no-ff` with the same `-m` subject',
+      'Only a failure at the unsigned tier runs `git merge --abort` and stop-and-ask.',
+    ],
+  ],
+  [
+    'idd-template/.github/instructions/lite/idd-pr-submit-lite.instructions.md',
+    '## D1 ',
+    [
+      '4. **Before rebasing**, pick the signing tier (a signing failure never stops D1): primary signing, else a wrapper for arbitrary git subcommands, else unsigned.',
+      'or `git -c commit.gpgsign=false rebase origin/{development-branch}`.',
+      'such as `git -c commit.gpgsign=false rebase --continue`;',
+      'last `git -c commit.gpgsign=false rebase origin/{development-branch}`;',
+      'repeat this D1 rebase (at the tier in use, unsigned last)',
+    ],
+  ],
+  [
+    'idd-template/.github/instructions/idd-pr-submit.instructions.md',
+    '## D1 ',
+    [
+      'Signing follows the appendix\'s "Commit signing" tiers, so a signing failure never stops D1.',
+      "With no staged content conflict, use this path in place of the wrapper's state-present `--continue`;",
+      'then `git -c commit.gpgsign=false rebase origin/{development-branch}`.',
+    ],
+  ],
+];
+
+for (const [path, heading, needles] of SIGNING_TIER_SITES) {
+  test(`${path} ${heading.trim()} reaches the unsigned signing tier (#4973)`, () => {
+    assertInOrder(section(path, heading), needles);
   });
 }
 

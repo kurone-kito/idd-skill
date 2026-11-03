@@ -248,19 +248,34 @@ other exit is unknown: stop-and-ask without merge or push. Preventive finding:
 PR #4774 comment #4396614924 (2026-10-28); no older-Git failure observed.
 With no conflict, run `git merge --no-ff` with the same
 `"$target_sha"` and the conventional `-m` subject documented in the
-[signed-commit merge wrapper](../../../docs/idd-helper-scripts.md). Do not
-fetch or resolve the branch ref again between the probe and merge.
+[signed-commit merge wrapper](../../../docs/idd-helper-scripts.md#signed-commit-merge-wrapper-shared-git-procedure).
+Do not fetch or resolve the branch ref again between the probe and merge.
 For non-interactive-hostile primary signing, use that wrapper.
 With no conflict, do not ask, even with open review threads. For a conflict,
 require explicit confirmation before merging or resolving; without it, leave
 the branch unchanged and stop-and-ask. If a confirmed conflict cannot be
 resolved cleanly, run `git merge --abort`, report failure, and stop-and-ask
 without pushing. Observed on 2026-10-28: PR #4774, comment #4396449367. Use
-the signed wrapper for merge and `--continue`. On command/signing/hook failure,
-run `git merge --abort` and stop-and-ask. After a wrapper timeout, terminate
-and wait for its full process tree before aborting; if unconfirmed, hold
-without aborting or pushing. Continue to E12 after a successful merge so
-validation covers the merged tree.
+the signed wrapper for merge and `--continue`.
+
+Signing is best-effort: a missing signature never stops E11. Sign at the
+first usable tier: the repository's configured signing, then a configured
+fallback signer such as that wrapper, then unsigned. Skip a signer known to
+be unable to run without a terminal, such as GPG with a pinentry prompt or a
+hardware-touch key. When a signed merge or `--continue` fails, do not read
+its error text. If `git diff --name-only --diff-filter=U` lists a path,
+apply the conflict rule above. Otherwise take the next tier: while
+`MERGE_HEAD` exists, finish with that tier's `--continue` form
+(`git -c commit.gpgsign=false merge --continue` when unsigned); without it,
+run the wrapper section's no-state check, and unless it verifies the merge,
+rerun the merge at that tier (`git merge --no-gpg-sign --no-ff` with the
+same `-m` subject and `"$target_sha"` when unsigned). Record any non-default
+signing outcome in a PR comment. Only a failure at the unsigned tier runs
+`git merge --abort` and stop-and-ask. After a wrapper timeout, terminate and
+wait for its full process tree; once it is gone, verify per the wrapper
+section and take the next tier; if it is live or unconfirmed, hold without
+aborting or pushing. Continue to E12 after a successful merge so validation
+covers the merged tree.
 
 ## E12 — Lint, test, push
 
