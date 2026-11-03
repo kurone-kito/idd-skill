@@ -7790,7 +7790,7 @@ test('a missing record marker fails the record position check (#4961)', () => {
 test('a record marker that is not the first non-blank line after the publication line fails (#4961)', () => {
   const body = [
     CONFIRMATION_PUBLICATION,
-    '  ' + CONFIRMATION_RECORD,
+    `  ${CONFIRMATION_RECORD}`,
     '',
     ...CONFIRMATION_SECTIONS,
   ].join('\n');
@@ -8026,7 +8026,7 @@ test('the marker parsers accept the four well-formed markers and reject malforme
     null,
   );
   assert.equal(
-    parseAutoDecisionRecordMarker(CONFIRMATION_RECORD + ' extra', prefix),
+    parseAutoDecisionRecordMarker(`${CONFIRMATION_RECORD} extra`, prefix),
     null,
   );
   const link =
@@ -8201,4 +8201,23 @@ test('an unreadable default policy file fails the policy check through the CLI (
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('a new confirmation body must open with a well-formed publication marker (#4961)', () => {
+  const misplaced = [
+    confirmationBody().replace(`${CONFIRMATION_PUBLICATION}\n`, ''),
+  ]
+    .map((text) => `Intro line\n${text}`)
+    .join('');
+  assert.ok(
+    failingIds(confirmationAudit(misplaced, { newIssue: true })).includes(
+      'confirmation-publication',
+    ),
+  );
+  assert.equal(
+    confirmationAudit(confirmationBody(), { newIssue: true }).findings.find(
+      (f) => f.id === 'confirmation-publication',
+    )?.result,
+    'pass',
+  );
 });

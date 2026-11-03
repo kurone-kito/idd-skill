@@ -5278,6 +5278,27 @@ function auditConfirmationShape(rawText, options) {
           ),
     );
   }
+  // A new confirmation body must open with a well-formed publication marker,
+  // validated by the same shared parser the other shapes use (#4961).
+  if (options.confirmationRecord !== true && options.newIssue === true) {
+    const publicationId = 'confirmation-publication';
+    const publicationName =
+      'A new confirmation body opens with a well-formed authoring-publication marker';
+    const marker = parseAuthoringPublicationComment(rawText, markerPrefix);
+    findings.push(
+      marker === null
+        ? fail(
+            publicationId,
+            publicationName,
+            'the first line of a new confirmation body is not a well-formed authoring-publication marker',
+          )
+        : pass(
+            publicationId,
+            publicationName,
+            'the publication marker is well formed',
+          ),
+    );
+  }
   // Exactly one auto-decision text anywhere, code included.
   const occurrences = (
     rawText.match(new RegExp(escapeRegex(repoPattern), 'gi')) ?? []
