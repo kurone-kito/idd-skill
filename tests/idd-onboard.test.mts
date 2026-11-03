@@ -781,6 +781,12 @@ test('planUntrustedLabelerGuardWorkflow generates the guard workflow for non-emp
     plan.content ?? '',
     /github\.event\.label\.name == 'status:authoring-only'/,
   );
+  // #4959: the default confirmation label is reserved too, even with no
+  // autoDecide block configured, since Discover hides an issue carrying it.
+  assert.match(
+    plan.content ?? '',
+    /github\.event\.label\.name == 'status:needs-confirmation'/,
+  );
   assert.match(
     plan.content ?? '',
     /export GH_HOST="\$\{GITHUB_SERVER_URL#https:\/\/\}"/,
@@ -819,6 +825,72 @@ test('planUntrustedLabelerGuardWorkflow substitutes custom (non-default) label n
     /github\.event\.label\.name == 'needs:decision'/,
   );
   assert.doesNotMatch(plan.content ?? '', /'roadmap'/);
+});
+
+function writeGuardConfig(root: string, config: Record<string, unknown>): void {
+  mkdirSync(join(root, '.github', 'idd'), { recursive: true });
+  writeFileSync(
+    join(root, '.github', 'idd', 'config.json'),
+    JSON.stringify(config),
+  );
+}
+
+test('planUntrustedLabelerGuardWorkflow substitutes a configured autoDecide.confirmationLabelName (#4959)', () => {
+  const root = makeFixtureDir();
+  writeGuardConfig(root, {
+    labels: { untrustedLabelerLogins: ['triage-bot[bot]'] },
+    autoDecide: { confirmationLabelName: 'triage:confirm' },
+  });
+  const plan = planUntrustedLabelerGuardWorkflow(root);
+  assert.match(
+    plan.content ?? '',
+    /github\.event\.label\.name == 'triage:confirm'/,
+  );
+  assert.doesNotMatch(plan.content ?? '', /'status:needs-confirmation'/);
+  // The four labels.* names stay in the reserved set next to the override.
+  for (const name of [
+    'roadmap',
+    'status:blocked-by-human',
+    'status:needs-decision',
+    'status:authoring-only',
+  ]) {
+    assert.ok(
+      (plan.content ?? '').includes(`github.event.label.name == '${name}'`),
+      `expected ${name} to stay reserved`,
+    );
+  }
+  // The header names the autoDecide key as a source next to labels.*.
+  assert.match(plan.content ?? '', /`autoDecide\.confirmationLabelName`/);
+});
+
+test('planUntrustedLabelerGuardWorkflow rejects a control character in a configured autoDecide.confirmationLabelName (#4959)', () => {
+  // Normalization keeps any name with a non-whitespace character, so the
+  // raw value reaches the generator, which must refuse it by key.
+  const root = makeFixtureDir();
+  writeGuardConfig(root, {
+    labels: { untrustedLabelerLogins: ['bot[bot]'] },
+    autoDecide: {
+      confirmationLabelName: 'status:x\npermissions:\n  contents: write',
+    },
+  });
+  assert.throws(
+    () => planUntrustedLabelerGuardWorkflow(root),
+    /autoDecide\.confirmationLabelName must not contain control characters/,
+  );
+});
+
+test('planUntrustedLabelerGuardWorkflow is a no-op without untrustedLabelerLogins even when a confirmation label is configured (#4959)', () => {
+  const root = makeFixtureDir();
+  writeGuardConfig(root, {
+    autoDecide: { confirmationLabelName: 'triage:confirm' },
+  });
+  const plan = planUntrustedLabelerGuardWorkflow(root);
+  assert.equal(plan.content, null);
+  assert.equal(applyUntrustedLabelerGuardPlan(root, plan), false);
+  assert.equal(
+    existsSync(join(root, UNTRUSTED_LABELER_GUARD_WORKFLOW_PATH)),
+    false,
+  );
 });
 
 test('planUntrustedLabelerGuardWorkflow is idempotent against an unchanged config (#2671)', () => {
@@ -926,9 +998,46 @@ test('buildUntrustedLabelerGuardWorkflowContent escapes an embedded single quote
     blockedByHumanLabelName: 'status:blocked-by-human',
     needsDecisionLabelName: 'status:needs-decision',
     authoringOnlyLabelName: 'status:authoring-only',
+    confirmationLabelName: 'status:needs-confirmation',
     untrustedLabelerLogins: ['bot[bot]'],
   });
   assert.match(content, /github\.event\.label\.name == 'adopter''s-roadmap'/);
+});
+
+test('buildUntrustedLabelerGuardWorkflowContent escapes an embedded single quote in the confirmation label name (#4959)', () => {
+  const content = buildUntrustedLabelerGuardWorkflowContent({
+    roadmapLabelName: 'roadmap',
+    blockedByHumanLabelName: 'status:blocked-by-human',
+    needsDecisionLabelName: 'status:needs-decision',
+    authoringOnlyLabelName: 'status:authoring-only',
+    confirmationLabelName: "adopter's-confirmation",
+    untrustedLabelerLogins: ['bot[bot]'],
+  });
+  assert.match(
+    content,
+    /github\.event\.label\.name == 'adopter''s-confirmation'/,
+  );
+});
+
+test('buildUntrustedLabelerGuardWorkflowContent rejects a confirmation label name containing a newline, a C1 control character, or a Unicode line/paragraph separator (#4959)', () => {
+  // The confirmation label name is interpolated into the same `if: |-`
+  // block scalar as the labels.* names, so it gets the same rejection, and
+  // the error names its autoDecide key.
+  for (const injected of ['\n', '\x85', ' ', ' ']) {
+    assert.throws(
+      () =>
+        buildUntrustedLabelerGuardWorkflowContent({
+          roadmapLabelName: 'roadmap',
+          blockedByHumanLabelName: 'status:blocked-by-human',
+          needsDecisionLabelName: 'status:needs-decision',
+          authoringOnlyLabelName: 'status:authoring-only',
+          confirmationLabelName: `status:needs-confirmation${injected}permissions:`,
+          untrustedLabelerLogins: ['bot[bot]'],
+        }),
+      /autoDecide\.confirmationLabelName must not contain control characters/,
+      `expected ${JSON.stringify(injected)} to be rejected`,
+    );
+  }
 });
 
 test('buildUntrustedLabelerGuardWorkflowContent rejects a label name containing a newline (YAML/permissions-injection guard, #2671 review)', () => {
@@ -944,6 +1053,7 @@ test('buildUntrustedLabelerGuardWorkflowContent rejects a label name containing 
         blockedByHumanLabelName: 'status:blocked-by-human',
         needsDecisionLabelName: 'status:needs-decision',
         authoringOnlyLabelName: 'status:authoring-only',
+        confirmationLabelName: 'status:needs-confirmation',
         untrustedLabelerLogins: ['bot[bot]'],
       }),
     /labels\.roadmapLabelName must not contain control characters/,
@@ -961,6 +1071,7 @@ test('buildUntrustedLabelerGuardWorkflowContent rejects an authoring-only label 
         needsDecisionLabelName: 'status:needs-decision',
         authoringOnlyLabelName:
           'status:authoring-only\npermissions:\n  contents: write',
+        confirmationLabelName: 'status:needs-confirmation',
         untrustedLabelerLogins: ['bot[bot]'],
       }),
     /labels\.authoringOnlyLabelName must not contain control characters/,
@@ -979,6 +1090,7 @@ test('buildUntrustedLabelerGuardWorkflowContent rejects a label name containing 
           blockedByHumanLabelName: 'status:blocked-by-human',
           needsDecisionLabelName: 'status:needs-decision',
           authoringOnlyLabelName: 'status:authoring-only',
+          confirmationLabelName: 'status:needs-confirmation',
           untrustedLabelerLogins: ['bot[bot]'],
         }),
       /labels\.roadmapLabelName must not contain control characters/,
@@ -991,7 +1103,7 @@ test('buildUntrustedLabelerGuardWorkflowContent safely escapes a control charact
   // JSON.stringify already renders a control character as a short escape
   // (e.g. "\r" -> the two characters backslash + "r"), so the serialized
   // logins blob this function embeds never contains a raw control byte --
-  // unlike the four label-name fields above, which are interpolated as
+  // unlike the reserved label-name fields above, which are interpolated as
   // raw strings and do need the explicit rejection this test's sibling
   // above covers.
   const content = buildUntrustedLabelerGuardWorkflowContent({
@@ -999,6 +1111,7 @@ test('buildUntrustedLabelerGuardWorkflowContent safely escapes a control charact
     blockedByHumanLabelName: 'status:blocked-by-human',
     needsDecisionLabelName: 'status:needs-decision',
     authoringOnlyLabelName: 'status:authoring-only',
+    confirmationLabelName: 'status:needs-confirmation',
     untrustedLabelerLogins: ['bot\r[bot]'],
   });
   assert.match(content, /contains\(fromJSON\('\["bot\\r\[bot\]"\]'\)/);
