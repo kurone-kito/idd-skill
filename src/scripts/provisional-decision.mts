@@ -6,9 +6,18 @@
 
 import { createHash } from 'node:crypto';
 import { loadIddConfig } from './idd-config.mts';
-import { parseForcedHandoffComment } from './marker-helpers.mts';
 import {
+  parseClaimComment,
+  parseForcedHandoffComment,
+} from './marker-helpers.mts';
+import {
+  applyClaimEvent,
+  filterTrustedClaimFamilyEvents,
+  isStaleAt,
+  isStaleByAge,
+  orderClaimEvents,
   readClaimStaleAgeMs,
+  resolveActiveClaimWithForcedHandoffTrace,
   resolveTrustedMarkerActors,
 } from './protocol-helpers.mts';
 import { buildVerifiedClaimLineage } from './provisional-claim-lineage.mts';
@@ -261,18 +270,50 @@ function resolveClaimFold(
     (login) => login.trim().toLowerCase(),
   );
   const trustedLoginSet = new Set(trustedLogins);
-  if (
-    history.comments.some((comment) => {
-      const login = normalizeLogin(comment.authorLogin);
-      return (
-        comment.trustedAuthor &&
-        login !== '' &&
-        trustedLoginSet.has(login) &&
-        Boolean(parseForcedHandoffComment(comment.body, comment.createdAt))
-      );
-    })
-  ) {
-    return null;
+  const isTrustedAuthor = (login: string) =>
+    trustedLoginSet.has(normalizeLogin(login));
+  const staleAgeMs = readClaimStaleAgeMs(config);
+  const isStale =
+    Number.isFinite(staleAgeMs) && staleAgeMs > 0
+      ? (activeCreatedAt: string, nextCreatedAt: string) =>
+          isStaleByAge(activeCreatedAt, nextCreatedAt, staleAgeMs)
+      : isStaleAt;
+  const events = history.comments.map((comment) => ({
+    id: comment.id,
+    url: comment.url,
+    body: comment.body,
+    createdAt: comment.createdAt,
+    author: { login: comment.authorLogin?.trim() ?? '' },
+    lastEditedAt: comment.edited ? comment.createdAt : null,
+  }));
+  const trustedEvents = events.filter(
+    (_event, index) => history.comments[index]?.trustedAuthor === true,
+  );
+
+  let ignoredForcedHandoff = false;
+  let trace: ReturnType<typeof resolveActiveClaimWithForcedHandoffTrace>;
+  try {
+    trace = resolveActiveClaimWithForcedHandoffTrace(trustedEvents, {
+      isTrustedAuthor,
+      isStale,
+      onIgnoredForcedHandoff: () => {
+        ignoredForcedHandoff = true;
+      },
+    });
+  } catch (error) {
+    return { failure: `canonical claim trace failed: ${errorText(error)}` };
+  }
+  const hasTrustedForcedHandoff = history.comments.some((comment) => {
+    const login = normalizeLogin(comment.authorLogin);
+    return (
+      comment.trustedAuthor &&
+      login !== '' &&
+      trustedLoginSet.has(login) &&
+      Boolean(parseForcedHandoffComment(comment.body, comment.createdAt))
+    );
+  });
+  if (ignoredForcedHandoff || hasTrustedForcedHandoff) {
+    return { failure: 'trusted forced-handoff marker requires recovery' };
   }
 
   const result = buildVerifiedClaimLineage({
@@ -286,23 +327,125 @@ function resolveClaimFold(
       trustedAuthor: comment.trustedAuthor,
     })),
     completeHistory: history.complete,
-    staleAgeMs: readClaimStaleAgeMs(config),
+    staleAgeMs,
     trustedMarkerLogins: trustedLogins,
   });
   if (result.status !== 'ok') return { failure: result.reason };
-  if (!result.active) return null;
-  const lineage = result.claims.map((claim) =>
-    claim.supersedes === 'none'
-      ? {
+
+  const orderedEvents = orderClaimEvents(
+    filterTrustedClaimFamilyEvents(trustedEvents, isTrustedAuthor),
+  );
+  const lineage: VerifiedProvisionalDecisionClaim[] = [];
+  const seenClaimIds = new Set<string>();
+  let active: typeof trace.activeClaim = null;
+  let activeSince = '';
+  let foldIgnoredForcedHandoff = false;
+  for (const event of orderedEvents) {
+    const next = applyClaimEvent(active, event, {
+      isTrustedAuthor,
+      isStale,
+      onIgnoredForcedHandoff: () => {
+        foldIgnoredForcedHandoff = true;
+      },
+    });
+    const identityChanged =
+      (next?.claimId ?? null) !== (active?.claimId ?? null) ||
+      (next?.agentId ?? null) !== (active?.agentId ?? null);
+    if (identityChanged) {
+      activeSince = String(event.createdAt ?? '');
+      if (next) {
+        const claim = parseClaimComment(
+          event.body ?? '',
+          event.createdAt ?? '',
+        );
+        if (
+          claim?.supersedes !== 'none' ||
+          seenClaimIds.has(claim.claimId) ||
+          !/^issue\/[0-9]+-[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(claim.branch)
+        ) {
+          return { failure: 'canonical claim lineage is malformed' };
+        }
+        seenClaimIds.add(claim.claimId);
+        lineage.push({
           claimId: claim.claimId,
           agentId: claim.agentId,
           branch: claim.branch,
-          claimedAt: claim.claimedAt,
-          commentId: claim.commentId,
-        }
-      : claim,
-  );
-  return { lineage, active: result.active };
+          claimedAt: event.createdAt ?? '',
+          supersedes: claim.supersedes,
+          commentId: String(event.id ?? ''),
+        });
+      }
+    }
+    active = next;
+  }
+
+  if (foldIgnoredForcedHandoff) {
+    return { failure: 'claim fold ignored a trusted forced-handoff marker' };
+  }
+  const sameClaim = (
+    left: {
+      readonly claimId: string;
+      readonly agentId: string;
+      readonly branch: string;
+    } | null,
+    right: {
+      readonly claimId: string;
+      readonly agentId: string;
+      readonly branch: string;
+    } | null,
+  ) =>
+    left?.claimId === right?.claimId &&
+    left?.agentId === right?.agentId &&
+    left?.branch === right?.branch;
+  const lineageMatchesValidatedResult =
+    lineage.length === result.claims.length &&
+    lineage.every((claim, index) => {
+      const validated = result.claims[index];
+      return (
+        claim.claimId === validated?.claimId &&
+        claim.agentId === validated?.agentId &&
+        claim.branch === validated?.branch &&
+        claim.claimedAt === validated?.claimedAt &&
+        claim.supersedes === validated?.supersedes &&
+        claim.commentId === validated?.commentId
+      );
+    });
+  if (
+    !sameClaim(active, trace.activeClaim) ||
+    activeSince !== trace.activeSince ||
+    !sameClaim(
+      trace.activeClaim,
+      result.active
+        ? {
+            claimId: result.active.claimId,
+            agentId: result.active.agentId,
+            branch: result.active.branch,
+          }
+        : null,
+    ) ||
+    !lineageMatchesValidatedResult
+  ) {
+    return { failure: 'canonical claim trace and lineage disagree' };
+  }
+  if (!trace.activeClaim) return null;
+  const lastClaim = lineage.at(-1);
+  if (
+    !lastClaim ||
+    lastClaim.claimId !== trace.activeClaim.claimId ||
+    lastClaim.agentId !== trace.activeClaim.agentId ||
+    lastClaim.branch !== trace.activeClaim.branch ||
+    lastClaim.claimedAt !== trace.activeSince
+  ) {
+    return { failure: 'canonical activeSince does not match claim lineage' };
+  }
+  return {
+    lineage,
+    active: {
+      claimId: trace.activeClaim.claimId,
+      agentId: trace.activeClaim.agentId,
+      branch: trace.activeClaim.branch,
+    },
+  };
 }
 
 function stableJson(value: unknown): string {

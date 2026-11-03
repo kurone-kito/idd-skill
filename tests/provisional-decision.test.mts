@@ -6,6 +6,7 @@ import {
   renderForcedHandoffComment,
   renderUnclaimedByMarker,
 } from '../src/scripts/marker-helpers.mts';
+import { resolveActiveClaimWithForcedHandoffTrace } from '../src/scripts/protocol-helpers.mts';
 import {
   type ProvisionalDecisionCommandRequest,
   type ProvisionalDecisionHistoryComment,
@@ -532,6 +533,59 @@ test('malformed candidate takes step 5 before same-record recovery', async () =>
 });
 
 test('the claim fold rejects trusted ignored handoffs, stale takeovers, and malformed lineage', async (t) => {
+  await t.test(
+    'ignores an allowlisted login when the comment is untrusted',
+    async () => {
+      const handoff = renderForcedHandoffComment({
+        oldAgentId: 'codex-test-agent',
+        oldClaimId: claimId,
+        newAgentId: 'agent-next',
+        newClaimId: 'claim-next',
+        branch,
+        forcedBy: 'kurone-kito',
+        reason: 'This marker must remain untrusted.',
+        timestamp: '2026-11-03T11:00:03Z',
+        contextScope: 'issue-only',
+      });
+      const store = new MemoryStore();
+      store.history = baseHistory([
+        comment('3', handoff, '2026-11-03T11:00:03Z', {
+          trustedAuthor: false,
+        }),
+      ]);
+      assert.equal(
+        (await runProvisionalDecisionCommand(request(), store)).state,
+        'planned',
+      );
+    },
+  );
+
+  await t.test(
+    'active forced handoff reported by the canonical trace',
+    async () => {
+      const handoff = renderForcedHandoffComment({
+        oldAgentId: 'codex-test-agent',
+        oldClaimId: claimId,
+        newAgentId: 'agent-next',
+        newClaimId: 'claim-next',
+        branch,
+        forcedBy: 'kurone-kito',
+        reason:
+          'The command must hold when the canonical trace ignores a handoff.',
+        timestamp: '2026-11-03T11:00:03Z',
+        contextScope: 'issue-only',
+      });
+      const store = new MemoryStore();
+      store.history = baseHistory([
+        comment('3', handoff, '2026-11-03T11:00:03Z'),
+      ]);
+      assertRefused(
+        await runProvisionalDecisionCommand(request(), store),
+        'recovery-hold',
+      );
+    },
+  );
+
   await t.test('ignored non-active forced handoff', async () => {
     const handoff = renderForcedHandoffComment({
       oldAgentId: 'not-active',
@@ -781,9 +835,20 @@ test('lineage appends a fresh post-release identity, rejects duplicate IDs, and 
       const result = await runProvisionalDecisionCommand(request(), store);
       assert.equal(result.state, 'planned');
       if (result.state === 'planned') {
+        const trace = resolveActiveClaimWithForcedHandoffTrace(
+          store.history.comments.map((entry) => ({
+            id: entry.id,
+            url: entry.url,
+            body: entry.body,
+            createdAt: entry.createdAt,
+            author: { login: entry.authorLogin ?? '' },
+            lastEditedAt: entry.edited ? entry.createdAt : null,
+          })),
+          { isTrustedAuthor: (login) => login.toLowerCase() === 'kurone-kito' },
+        );
         assert.equal(
           result.plan.verifiedClaimLineage.at(-1)?.claimedAt,
-          claimAt,
+          trace.activeSince,
         );
         assert.equal(result.plan.verifiedClaimLineage.at(-1)?.commentId, '1');
       }
