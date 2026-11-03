@@ -260,6 +260,8 @@ function commentUrlKey(value) {
 function contentComparable(record) {
   const copy = structuredClone(record);
   const mutable = copy;
+  // Claim lineage identifies the run, not the decision content.
+  delete mutable.claimLineage;
   if (mutable.source?.repository) {
     mutable.source.repository = normalizeRepository(mutable.source.repository);
   }

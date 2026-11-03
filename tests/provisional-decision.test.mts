@@ -1077,7 +1077,7 @@ test('different content under the same recordId returns recovery-hold', async ()
   );
 });
 
-test('changed claim lineage under the same recordId returns recovery-hold', async () => {
+test('changed claim lineage under the same recordId reconciles for the active claim', async () => {
   const { store, record } = await selectedRecord();
   const releaseAt = '2026-11-03T11:00:03Z';
   const nextClaimAt = '2026-11-03T11:00:04Z';
@@ -1115,13 +1115,8 @@ test('changed claim lineage under the same recordId returns recovery-hold', asyn
     store,
   );
 
-  assertRefused(result, 'recovery-hold');
-  if (result.state === 'refused') {
-    assert.match(
-      result.reason ?? '',
-      /same recordId exists with different content/,
-    );
-  }
+  assert.equal(result.state, 'reconciled', JSON.stringify(result));
+  assert.equal(result.recordId, record.recordId);
 });
 
 test('multiple decisions using the evidence URL are ambiguous', async () => {

@@ -485,6 +485,7 @@ function commentUrlKey(value: string): string {
 function contentComparable(record: ProvisionalDecisionRecord): unknown {
   const copy = structuredClone(record) as ProvisionalDecisionRecord;
   const mutable = copy as unknown as {
+    claimLineage?: unknown;
     evidenceReferences?: string[];
     source?: {
       repository?: string;
@@ -496,6 +497,8 @@ function contentComparable(record: ProvisionalDecisionRecord): unknown {
       result?: { verifiedAt?: unknown };
     };
   };
+  // Claim lineage identifies the run, not the decision content.
+  delete mutable.claimLineage;
   if (mutable.source?.repository) {
     mutable.source.repository = normalizeRepository(mutable.source.repository);
   }
