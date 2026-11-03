@@ -589,6 +589,34 @@ test('a concreted copy with another marker prefix is migration-required', () => 
   assert.equal(routing.route, 'none');
 });
 
+test('a malformed marker prefix in the policy never substitutes, so the copy fails closed', () => {
+  const fixture = makeFixture();
+  fixture.addPreparedSet(
+    COMMIT_A,
+    'one',
+    MARKER_INSTRUCTION_PATH,
+    MARKER_INSTRUCTION,
+  );
+  fixture.installCurrent(
+    COMMIT_A,
+    '1.0.0',
+    'one',
+    MARKER_INSTRUCTION_PATH,
+    MARKER_INSTRUCTION,
+  );
+  writeRepositoryMarkerPrefix(fixture.repo, ' bad ');
+  writeLocalInstruction(
+    fixture.repo,
+    MARKER_INSTRUCTION_PATH,
+    '# core for  bad \n',
+  );
+
+  const routing = inspectDistributionRouting(fixture.options());
+  assert.equal(routing.report.source, 'repository-local');
+  assert.equal(routing.report.verdict, 'migration-required');
+  assert.equal(routing.route, 'none');
+});
+
 test('an unresolved placeholder with no policy marker prefix fails closed', () => {
   const fixture = makeFixture();
   fixture.addPreparedSet(

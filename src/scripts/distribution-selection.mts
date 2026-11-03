@@ -754,6 +754,10 @@ function currentMatches(
 const placeholderToken = (name: string): string => `{{${name}}}`;
 // The onboarding token grammar: an upper-snake name that starts with a letter.
 const ANY_PLACEHOLDER = /\{\{[A-Z][A-Z0-9_]*\}\}/u;
+// The pattern onboarding enforces on a PROJECT_MARKER_PREFIX value, also in
+// schemas/policy.schema.json. idd-onboard imports this module, so it is
+// repeated here. A policy value outside it never substitutes.
+const MARKER_PREFIX_PATTERN = /^[a-z][a-z0-9-]{1,31}$/u;
 
 /**
  * The repository name onboarding substitutes for `REPO_NAME`: the last path
@@ -801,8 +805,15 @@ function resolvePreparedInstructionBytes(
   const text = bytes.toString('utf8');
   if (!Buffer.from(text, 'utf8').equals(bytes)) return null;
   if (!text.includes('{{')) return bytes;
+  const markerPrefix = policy?.markerPrefix;
   const values: Array<[string, unknown]> = [
-    ['PROJECT_MARKER_PREFIX', policy?.markerPrefix],
+    [
+      'PROJECT_MARKER_PREFIX',
+      typeof markerPrefix === 'string' &&
+      MARKER_PREFIX_PATTERN.test(markerPrefix)
+        ? markerPrefix
+        : null,
+    ],
     ['REPO_NAME', repoName],
   ];
   let resolved = text;
