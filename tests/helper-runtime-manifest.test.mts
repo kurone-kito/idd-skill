@@ -699,6 +699,56 @@ test('the closure scanner reads division after a class expression whose supercla
   );
 });
 
+test('the closure scanner reads division after a class expression whose superclass is a long dotted name, and a regular expression after such a class declaration (#4989)', () => {
+  const { packageRoot } = makeRuntimePackageFixture(
+    'idd-helper-entry-class-dotted-heritage-',
+  );
+  // Nine segments: before #4989 the walk ran out of steps after eight
+  // segments, or seven after a class name.
+  const nine = 'a.b.c.d.e.f.g.h.i';
+  const long = Array.from({ length: 24 }, (_, index) => `s${index}`).join('.');
+  writeRuntimePackageFile(
+    packageRoot,
+    'scripts/entry.mjs',
+    [
+      // Declarations come first, as in the #4979 test above.
+      `class F extends ${nine} {}`,
+      "/`/.test('a');",
+      "import './after-dotted-declaration.mjs';",
+      `export default class extends ${nine} {}`,
+      "/`/.test('a');",
+      "import './after-dotted-default-declaration.mjs';",
+      `const ca = class extends ${nine} {} / 2; import('./after-dotted-superclass.mjs'); const cb = ca / 3;`,
+      `const cn = class Named extends ${nine} {} / 2; import('./after-named-dotted-superclass.mjs'); const co = cn / 3;`,
+      `const cm = class extends ${nine}(Object).j.k.l.m.n.o.p.q {} / 2; import('./after-mixed-dotted-superclass.mjs'); const cp = cm / 3;`,
+      `const cl = class Long extends ${long} {} / 2; import('./after-long-dotted-superclass.mjs'); const cq = cl / 3;`,
+      '',
+    ].join('\n'),
+  );
+  const names = [
+    'after-dotted-declaration',
+    'after-dotted-default-declaration',
+    'after-dotted-superclass',
+    'after-long-dotted-superclass',
+    'after-mixed-dotted-superclass',
+    'after-named-dotted-superclass',
+  ];
+  for (const name of names) {
+    writeRuntimePackageFile(packageRoot, `scripts/${name}.mjs`, 'export {};');
+  }
+
+  assert.deepEqual(
+    resolveHelperEntryClosure('scripts/entry.mjs', {
+      packageRoot,
+      extraRuntimeFiles: new Map(),
+    }),
+    sortUtf8Paths([
+      'scripts/entry.mjs',
+      ...names.map((name) => `scripts/${name}.mjs`),
+    ]),
+  );
+});
+
 test('the closure scanner treats `of` as division outside a for...of head and as an operator inside one (#4917)', () => {
   const { packageRoot } = makeRuntimePackageFixture('idd-helper-entry-of-');
   writeRuntimePackageFile(

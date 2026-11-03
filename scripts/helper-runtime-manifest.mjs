@@ -2294,11 +2294,14 @@ function tokenizeJavaScript(source) {
     // `class {`, `class Name {`, or `class Name extends Heritage {`, where
     // Heritage is a name, a dotted name, a call such as `mixin(Base)`, or a
     // parenthesized expression such as `(Base)` (issue #4979). The walk steps
-    // back over names, `.`, and whole parenthesized groups; each counts as
-    // one step, so a long semicolon-free chain of calls is not rescanned at
-    // every `{`. A class name is never followed by `(`, so a walk that jumped
-    // a group must also have passed `extends`. A `class` after `.` is a
-    // property name, as in `ns.class(Base)`, so the walk steps over it.
+    // back over names, `.`, and whole parenthesized groups, and it jumps from
+    // a property segment of a dotted name such as `a.b.c` straight to the
+    // first segment (issue #4989). Each of these moves counts as one step, so
+    // a long semicolon-free chain of calls is not rescanned at every `{`, and
+    // a dotted name of any length costs two steps. A class name is never
+    // followed by `(`, so a walk that jumped a group must also have passed
+    // `extends`. A `class` after `.` is a property name, as in
+    // `ns.class(Base)`, so the walk steps over it.
     let at = tokens.length - 1;
     let steps = 0;
     let jumpedGroup = false;
@@ -2310,6 +2313,9 @@ function tokenizeJavaScript(source) {
         if (token.openIndex === undefined) return false;
         jumpedGroup = true;
         at = token.openIndex - 1;
+      } else if (token?.type === 'name' && token.chainStart !== undefined) {
+        // The next step reads the first segment as a plain name.
+        at = token.chainStart;
       } else if (token?.type === 'name' || isPunct(token, '.')) {
         if (isNameToken(token, 'extends') && !isPunct(tokens[at - 1], '.')) {
           sawExtends = true;
@@ -2459,9 +2465,16 @@ function tokenizeJavaScript(source) {
           isPunct(previous, ']') ||
           isPunct(previous, '}'));
       if (operator && head !== undefined) head.sawOf = true;
-      tokens.push(
-        operator ? { type: 'name', value, operator } : { type: 'name', value },
-      );
+      const token = {
+        type: 'name',
+        value,
+      };
+      if (operator) token.operator = true;
+      const owner = tokens.at(-2);
+      if (isPunct(previous, '.') && owner?.type === 'name') {
+        token.chainStart = owner.chainStart ?? tokens.length - 2;
+      }
+      tokens.push(token);
     } else if ((character === '+' || character === '-') && next === character) {
       tokens.push({ type: 'punct', value: `${character}${character}` });
       index += 2;
