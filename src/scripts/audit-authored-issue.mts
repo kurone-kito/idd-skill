@@ -5794,26 +5794,9 @@ function checkConfirmationHeadings(lines: readonly string[]): AuditFinding {
   return pass(id, name, 'the five headings appear once, in order');
 }
 
-/** The raw lines of the section that starts at masked index `start`. */
-function confirmationSectionRaw(
-  maskedLines: readonly string[],
-  rawLines: readonly string[],
-  start: number,
-): string[] {
-  let end = maskedLines.length;
-  for (let index = start + 1; index < maskedLines.length; index += 1) {
-    if (maskedLines[index]?.startsWith('## ') === true) {
-      end = index;
-      break;
-    }
-  }
-  return rawLines.slice(start + 1, end);
-}
-
 /** Checks the `Subject:` line for the two classes that name a subject. */
 function checkConfirmationSubject(
-  maskedLines: readonly string[],
-  rawLines: readonly string[],
+  lines: readonly string[],
   cls: string,
 ): AuditFinding {
   const id = 'confirmation-subject';
@@ -5822,13 +5805,10 @@ function checkConfirmationSubject(
   if (cls !== 'worktreeRemnant' && cls !== 'b1Leftover') {
     return pass(id, name, `not applicable to class ${cls}`);
   }
-  // The section is located on the masked view, and its lines are read raw,
-  // because masking hides the single-backtick span the Subject: line holds.
-  const stopStart = maskedLines.findIndex((line) => line.trim() === '## Stop');
+  // optionLines masks HTML comments while keeping the inline-code subject.
+  const stopStart = lines.findIndex((line) => line.trim() === '## Stop');
   const stop =
-    stopStart < 0
-      ? []
-      : confirmationSectionRaw(maskedLines, rawLines, stopStart);
+    stopStart < 0 ? [] : confirmationSectionLines(lines, '## Stop');
   const first = stop.find((line) => line.trim() !== '') ?? '';
   if (parseConfirmationSubjectLine(first) === null) {
     return fail(
@@ -6283,13 +6263,11 @@ function auditConfirmationShape(
   ) {
     const subjectId = 'confirmation-record-subject';
     const subjectName = 'The record names the expected subject';
-    const stopStart = visibleLines.findIndex(
+    const stopStart = optionLines.findIndex(
       (line) => line.trim() === '## Stop',
     );
     const stop =
-      stopStart < 0
-        ? []
-        : confirmationSectionRaw(visibleLines, rawLines, stopStart);
+      stopStart < 0 ? [] : confirmationSectionLines(optionLines, '## Stop');
     const first = stop.find((line) => line.trim() !== '') ?? '';
     const subject = parseConfirmationSubjectLine(first);
     findings.push(
@@ -6306,7 +6284,7 @@ function auditConfirmationShape(
   // Sections.
   findings.push(checkConfirmationHeadings(visibleLines));
   const subjectClass = fields?.class ?? '';
-  findings.push(checkConfirmationSubject(visibleLines, rawLines, subjectClass));
+  findings.push(checkConfirmationSubject(optionLines, subjectClass));
   findings.push(...checkConfirmationOptions(visibleLines, optionLines));
   findings.push(checkConfirmationQuestion(visibleLines));
   findings.push(checkConfirmationForbidden(rawText, markerPrefix));

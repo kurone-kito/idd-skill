@@ -7895,6 +7895,21 @@ test('a worktreeRemnant stop needs one Subject: line; a runtimeQuestion stop doe
   );
 });
 
+test('a worktreeRemnant subject hidden in an HTML comment fails (#5022)', () => {
+  const remnant = CONFIRMATION_RECORD.replace(
+    'class=runtimeQuestion',
+    'class=worktreeRemnant',
+  ).replace('claim=claim-1', 'claim=claim-9');
+  const body = confirmationBody(remnant).replace(
+    'The run paused on a question.',
+    '<!--\nSubject: `/tmp/worktree-a`\n-->\n\nThe run paused on a question.',
+  );
+
+  assert.ok(
+    failingIds(confirmationAudit(body)).includes('confirmation-subject'),
+  );
+});
+
 test('the options and the chosen option follow the contract (#4961)', () => {
   const single = confirmationBody().replace(
     '### Proceed with the change\n\nCost: a small risk of rework.\n',
@@ -8187,6 +8202,37 @@ test('record mode compares the record subject with the expected subject (#4961)'
     confirmationAudit(record, { ...expected, expectSubject: '/wrong/worktree' })
       .passed,
     true,
+  );
+});
+
+test('record mode rejects an expected subject hidden in an HTML comment (#5022)', () => {
+  const remnant = CONFIRMATION_RECORD.replace(
+    'class=runtimeQuestion',
+    'class=worktreeRemnant',
+  ).replace('claim=claim-1', 'claim=claim-9');
+  const record = [
+    remnant,
+    '',
+    '## Stop',
+    '',
+    '<!--',
+    'Subject: `/expected/worktree`',
+    '-->',
+    '',
+    ...CONFIRMATION_SECTIONS.slice(2),
+  ].join('\n');
+
+  assert.ok(
+    failingIds(
+      confirmationAudit(record, {
+        confirmationRecord: true,
+        expectClass: 'worktreeRemnant',
+        expectSource: 'kurone-kito/idd-skill#4972',
+        expectClaim: 'claim-9',
+        expectSet: 'none',
+        expectSubject: '/expected/worktree',
+      }),
+    ).includes('confirmation-record-subject'),
   );
 });
 
