@@ -638,6 +638,67 @@ test('the closure scanner reads a regular expression after a control head, a blo
   );
 });
 
+test('the closure scanner reads division after a class expression whose superclass is a call or a parenthesized expression, and a regular expression after a class declaration (#4979)', () => {
+  const { packageRoot } = makeRuntimePackageFixture(
+    'idd-helper-entry-class-heritage-',
+  );
+  writeRuntimePackageFile(
+    packageRoot,
+    'scripts/entry.mjs',
+    [
+      // Declarations come first, so a misread expression below cannot turn
+      // one of them into an expression by leaving a stray token before it.
+      'class Plain {}',
+      "/`/.test('a');",
+      "import './after-plain-declaration.mjs';",
+      'class D extends mixin(Object) {}',
+      "/`/.test('a');",
+      "import './after-call-declaration.mjs';",
+      'class E extends (Object) {}',
+      "/`/.test('a');",
+      "import './after-parenthesized-declaration.mjs';",
+      'export class X extends mixin(Object) {}',
+      "/`/.test('a');",
+      "import './after-exported-declaration.mjs';",
+      "const cm = class extends mixin(Object) {} / 2; await import('./after-call-superclass.mjs'); const cn = cm / 3;",
+      "const cp = class extends (Object) {} / 2; import('./after-parenthesized-superclass.mjs'); const cq = cp / 3;",
+      "const cr = class Named extends base.mixin(Object).Mixed {} / 2; import('./after-chained-superclass.mjs'); const cs = cr / 3;",
+      "const cf = class extends new Factory().Base {} / 2; import('./after-new-superclass.mjs'); const cg = cf / 3;",
+      "const ck = class extends ns.class(Object) {} / 2; import('./after-class-property-superclass.mjs'); const cl = ck / 3;",
+      // A statement block inside such a class body is still a block.
+      'const cb = class extends mixin(Object) { m(x) { if (x) {}',
+      "/`/.test('a'); import('./after-nested-block.mjs'); } };",
+      '',
+    ].join('\n'),
+  );
+  const names = [
+    'after-call-declaration',
+    'after-call-superclass',
+    'after-chained-superclass',
+    'after-class-property-superclass',
+    'after-exported-declaration',
+    'after-nested-block',
+    'after-new-superclass',
+    'after-parenthesized-declaration',
+    'after-parenthesized-superclass',
+    'after-plain-declaration',
+  ];
+  for (const name of names) {
+    writeRuntimePackageFile(packageRoot, `scripts/${name}.mjs`, 'export {};');
+  }
+
+  assert.deepEqual(
+    resolveHelperEntryClosure('scripts/entry.mjs', {
+      packageRoot,
+      extraRuntimeFiles: new Map(),
+    }),
+    sortUtf8Paths([
+      'scripts/entry.mjs',
+      ...names.map((name) => `scripts/${name}.mjs`),
+    ]),
+  );
+});
+
 test('the closure scanner treats `of` as division outside a for...of head and as an operator inside one (#4917)', () => {
   const { packageRoot } = makeRuntimePackageFixture('idd-helper-entry-of-');
   writeRuntimePackageFile(

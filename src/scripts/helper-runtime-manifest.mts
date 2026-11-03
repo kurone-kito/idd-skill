@@ -2620,9 +2620,10 @@ function tokenizeJavaScript(source: string): SourceToken[] {
     return true;
   };
 
-  // A block `{` that opens the body of a function or class expression, as in
-  // `const f = function () {} / 2`, ends an expression, so a `/` after its
-  // `}` is division (issue #4917).
+  // A block `{` that opens the body of a function or class expression ends
+  // an expression, so a `/` after its `}` is division, as in
+  // `const f = function () {} / 2` or `const C = class extends m(B) {} / 2`
+  // (issues #4917 and #4979).
   const blockIsExpressionBody = (): boolean => {
     const last = tokens.at(-1);
     if (last?.type === 'punct' && last.value === ')') {
@@ -2631,25 +2632,48 @@ function tokenizeJavaScript(source: string): SourceToken[] {
         at -= 1;
       }
       if (isPunct(tokens[at], '*')) at -= 1;
-      return (
+      if (
         isNameToken(tokens[at], 'function') &&
-        !isPunct(tokens[at - 1], '.') &&
-        inExpressionAt(at)
-      );
+        !isPunct(tokens[at - 1], '.')
+      ) {
+        return inExpressionAt(at);
+      }
+      // Not a function head: the `)` may end a call or parenthesized
+      // superclass, so read on as a class head.
     }
-    // `class {`, `class Name {`, or `class Name extends Base.member {`.
+    // `class {`, `class Name {`, or `class Name extends Heritage {`, where
+    // Heritage is a name, a dotted name, a call such as `mixin(Base)`, or a
+    // parenthesized expression such as `(Base)` (issue #4979). The walk steps
+    // back over names, `.`, and whole parenthesized groups; each counts as
+    // one step, so a long semicolon-free chain of calls is not rescanned at
+    // every `{`. A class name is never followed by `(`, so a walk that jumped
+    // a group must also have passed `extends`. A `class` after `.` is a
+    // property name, as in `ns.class(Base)`, so the walk steps over it.
     let at = tokens.length - 1;
-    while (
-      at >= 0 &&
-      at >= tokens.length - 8 &&
-      (tokens[at]?.type === 'name' || isPunct(tokens[at], '.')) &&
-      !isNameToken(tokens[at], 'class')
-    ) {
-      at -= 1;
+    let steps = 0;
+    let jumpedGroup = false;
+    let sawExtends = false;
+    while (at >= 0 && steps < 16) {
+      const token = tokens[at];
+      if (isNameToken(token, 'class') && !isPunct(tokens[at - 1], '.')) break;
+      if (token?.type === 'punct' && token.value === ')') {
+        if (token.openIndex === undefined) return false;
+        jumpedGroup = true;
+        at = token.openIndex - 1;
+      } else if (token?.type === 'name' || isPunct(token, '.')) {
+        if (isNameToken(token, 'extends') && !isPunct(tokens[at - 1], '.')) {
+          sawExtends = true;
+        }
+        at -= 1;
+      } else {
+        return false;
+      }
+      steps += 1;
     }
     return (
       isNameToken(tokens[at], 'class') &&
       !isPunct(tokens[at - 1], '.') &&
+      (!jumpedGroup || sawExtends) &&
       inExpressionAt(at)
     );
   };
