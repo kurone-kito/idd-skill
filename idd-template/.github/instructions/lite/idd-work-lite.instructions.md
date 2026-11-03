@@ -177,7 +177,7 @@ defaultBranchRef --jq .defaultBranchRef.name`. Stop unless the name matches
    superseding PR.
 6. If the criteria only partly hold, keep the issue open, record the overlap
    in the plan, and plan only the remaining work.
-7. Draft an issue comment plan for the change set.
+7. After B2.1-B2.2, draft an issue comment plan.
 8. For a per-agent plan critique, resolve `critiqueLoop.subagentWaitCeiling`
    (`PT20M` default). If the harness lacks bound/cleanup, skip delegation and
    use structured self-critique, recording risk. Otherwise enforce a harness
@@ -191,13 +191,13 @@ defaultBranchRef --jq .defaultBranchRef.name`. Stop unless the name matches
 
 ## B2.1 — Premise verification
 
-Decision-transcription: verify shipped claims in prior code/docs; if unclear,
-hold with evidence for a maintainer addendum.
+Decision-transcription: verify shipped claims in prior code/docs; if unclear or
+false, hold with evidence for a maintainer addendum.
 
 ## B2.2 — Example field-name verification
 
-Verify cited fields/config keys/tokens exist; correct/drop absent examples; hold
-if unclear (`#2806`).
+Verify existing fields/config keys/tokens cited as examples; fix/drop absent
+ones; hold if unclear (`#2806`).
 
 ## B3 — Implement
 
@@ -220,7 +220,7 @@ if unclear (`#2806`).
 11. For untouched-file failures, rule out baseline drift/stale installs: run
     `install-deps` in a clean worktree or compare fresh/stale `node_modules`.
 12. If an unrelated test fails once locally but passes isolated with hosted CI
-    green, stop chasing it as baseline; still run both validation gates.
+    green, stop chasing it as a regression; still run both validation gates.
 13. When consolidating a wrapper function used at multiple call sites into one
     shared function, check whether any call site's old delegate path added
     options or behavior the shared function does not replicate.
@@ -244,9 +244,9 @@ and use another target or a separate comment.
 After Stage 1 publishes and acquires a valid parent roadmap shell as the set
 anchor (or the designated lead when no parent roadmap exists), then publishes or
 acquires every ready child under that anchor and wires real numbers into the
-roadmap, leave the authoring label on every published or updated target (issues
-and roadmaps), and resume B–C. If interrupted, leave those labels, stop B–C, and
-resume only after a later pass completes the set. After anchor acquisition,
+roadmap, leave the authoring label on every published or updated target, and
+resume B–C. If interrupted, leave those labels, stop B–C, and resume only after
+a later pass completes the set. After anchor acquisition,
 persist and verify exact `anchor`/`set` identities in the originating issue's
 durable Stage 1 hold; resume must recover them, not infer them from the label or
 choose another lead. If Stage 1 publishes nothing (including after clarification

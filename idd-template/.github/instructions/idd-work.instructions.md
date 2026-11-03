@@ -310,23 +310,26 @@ human decision, and its rationale asserts a checkable fact about what a
 prior change shipped. Verify that fact against the shipped code or docs
 before planning; the rationale is not evidence. If the change cannot be
 identified, its shipped state cannot be checked, or the evidence conflicts,
-follow shared Hold/suspend rules and include primary-source evidence or why
-verification is inconclusive. Do not propagate or silently overwrite the
-decision; wait for a maintainer addendum before resuming. On no conflict,
-continue. See
+follow the shared Hold / suspend rules in
+`idd-overview-appendix.instructions.md` and put the primary-source evidence, or
+why verification is inconclusive, in the hold comment. Do not propagate the
+unverified premise or unilaterally overwrite the decision; resume only after a
+maintainer addendum. On no conflict, continue. See
 [rationale](../../docs/idd-design-rationale.md#b21--premise-verification-decision-transcription-issues).
 
 ### B2.2 — Example field-name verification
 
 If "Proposed change" or "Acceptance criteria" cites an existing schema
-field, config key, or token as an example, verify it; correct or drop it if
-absent and hold if unclear (`#2806`). Post a plan as an issue comment, critique
-it for correctness and concreteness (per-agent: see
-`idd-overview-appendix.instructions.md`), then post the refined plan as a
-follow-up or update to the same comment. After the final plan, set digest
-fields: `Phase: B2 planned`, `Open blockers: none` unless the plan found one,
-`Next action: B3 implement`, and `Authoritative by:` the plan comment plus
-verified claim. B2 mutations use the [shared claim gate][claim-gate].
+field, config key, or token as an example (not one it adds), verify it; correct
+or drop it if absent and hold if unclear (`#2806`).
+
+Post a plan as an issue comment, critique it for correctness and concreteness
+(per-agent: see `idd-overview-appendix.instructions.md`), then post the
+refined plan as a follow-up or update to the same comment. After the final
+plan, set digest fields: `Phase: B2 planned`, `Open blockers: none` unless the
+plan found one, `Next action: B3 implement`, and `Authoritative by:` the plan
+comment plus verified claim. B2 mutations use the [shared claim
+gate][claim-gate].
 
 [claim-gate]: idd-overview-core.instructions.md#claim-revalidation-gate
 
@@ -335,8 +338,8 @@ verified claim. B2 mutations use the [shared claim gate][claim-gate].
 ### B3 self-check
 
 Before B3, verify the B2 plan comment contains the refined post-critique plan;
-a pre-critique draft is insufficient. The claim revalidation gate covers B3
-mutations. If unfinished, return to B2.
+a pre-critique draft is insufficient. The [claim revalidation gate][claim-gate]
+covers B3 mutations. If unfinished, stop and return to B2.
 
 The following is a repair path only for an ordering violation that has
 already occurred, not an alternative route: disclose the deviation on
