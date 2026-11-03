@@ -2557,3 +2557,252 @@ test('replay is deterministic for the same complete server-ordered pages', () =>
     replayProvisionalDecisionHistory(input(flattened)),
   );
 });
+
+// Each code below is a literal passed to createReplayIssue in
+// replayProvisionalDecisionHistory (src/scripts/provisional-decision-state.mts)
+// that no earlier test in this file asserts (issue #4841).
+function assertReplayIssue(
+  result: ReturnType<typeof replayProvisionalDecisionHistory>,
+  code: string,
+): void {
+  assert.equal(result.valid, false, code);
+  assert.ok(
+    result.issues.some((issue) => issue.code === code),
+    `${code} missing from ${JSON.stringify(result.issues)}`,
+  );
+}
+
+function reworkRequestEvent(
+  answer: ProvisionalDecisionComment,
+  requestedOptionId: string,
+  rationale: string,
+): Event {
+  return {
+    type: 'rework-requested',
+    reworkRequest: {
+      commentUrl: answer.url,
+      requestedAt: answer.createdAt,
+      requestedOptionId,
+      rationale,
+    },
+  };
+}
+
+test('replay refuses an unverified complete history as history-incomplete', () => {
+  const result = replayProvisionalDecisionHistory(
+    input([recordComment('1', record('select-1', selectedEvent()), 1)], {
+      completeHistory: false,
+    }),
+  );
+  assertReplayIssue(result, 'history-incomplete');
+});
+
+test('replay refuses an empty verified claim lineage as claim-lineage-unverified', () => {
+  const result = replayProvisionalDecisionHistory(
+    input([recordComment('1', record('select-1', selectedEvent()), 1)], {
+      verifiedClaimLineage: [],
+    }),
+  );
+  assertReplayIssue(result, 'claim-lineage-unverified');
+});
+
+// transition-order-invalid has no reachable input at either level (#4841):
+// the oldest-first order gate refuses every transition posted before its prior
+// event, so the lifecycle check that reports this code never runs.
+test('replay refuses a transition posted before its selection as history-order-invalid', () => {
+  // The oldest-first order gate runs before the lifecycle loop, so a
+  // transition that predates its prior event never reaches the
+  // transition-order-invalid check.
+  const result = replayProvisionalDecisionHistory(
+    input([
+      recordComment('1', record('select-1', selectedEvent()), 2),
+      recordComment('2', record('start-1', workStartedEvent()), 1),
+    ]),
+  );
+  assertReplayIssue(result, 'history-order-invalid');
+});
+
+test('replay refuses a repeated comment ID or URL as duplicate-comment', () => {
+  const selected = recordComment('1', record('select-1', selectedEvent()), 1);
+  const sameId = comment('1', 'A later page repeated this comment.', 2);
+  assertReplayIssue(
+    replayProvisionalDecisionHistory(input([selected, sameId])),
+    'duplicate-comment',
+  );
+
+  const sameUrl = comment('2', 'Another comment with the same URL.', 2, {
+    url: selected.url,
+  });
+  assertReplayIssue(
+    replayProvisionalDecisionHistory(input([selected, sameUrl])),
+    'duplicate-comment',
+  );
+});
+
+test('replay refuses a second selection of one generation as duplicate-selection', () => {
+  const result = replayProvisionalDecisionHistory(
+    input([
+      recordComment('1', record('select-1', selectedEvent()), 1),
+      recordComment(
+        '2',
+        record('select-1-again', selectedEvent('Which behavior now?')),
+        2,
+      ),
+    ]),
+  );
+  assertReplayIssue(result, 'duplicate-selection');
+});
+
+test('replay refuses an older bundle after a newer one as bundle-generation-regression', () => {
+  const result = replayProvisionalDecisionHistory(
+    input([
+      recordComment('1', record('select-bundle-2', selectedEvent(), 1, 2), 1),
+      recordComment('2', record('select-bundle-1', selectedEvent(), 1, 1), 2),
+    ]),
+  );
+  assertReplayIssue(result, 'bundle-generation-regression');
+});
+
+test('replay refuses a transition with no selection as transition-without-selection', () => {
+  const result = replayProvisionalDecisionHistory(
+    input([recordComment('1', record('start-1', workStartedEvent()), 2)]),
+  );
+  assertReplayIssue(result, 'transition-without-selection');
+});
+
+test('replay refuses a confirmation before completed work as confirmation-order-invalid', () => {
+  const { selected, started, completed } = oneCompletedDecision();
+  const answer = answerComment('3', buildAnswer([selected], [completed]), 3);
+  const confirmation = record('confirm-1', confirmedEvent(answer));
+  const result = replayProvisionalDecisionHistory(
+    input([
+      recordComment('1', selected, 1),
+      recordComment('2', started, 2),
+      answer,
+      recordComment('4', confirmation, 4),
+    ]),
+  );
+  assertReplayIssue(result, 'confirmation-order-invalid');
+});
+
+test('replay refuses a second confirmation of one decision as duplicate-confirmation', () => {
+  const { selected, started, completed } = oneCompletedDecision();
+  const answer = answerComment('4', buildAnswer([selected], [completed]), 4);
+  const result = replayProvisionalDecisionHistory(
+    input([
+      recordComment('1', selected, 1),
+      recordComment('2', started, 2),
+      recordComment('3', completed, 3),
+      answer,
+      recordComment('5', record('confirm-1', confirmedEvent(answer)), 5),
+      recordComment('6', record('confirm-1-again', confirmedEvent(answer)), 6),
+    ]),
+  );
+  assertReplayIssue(result, 'duplicate-confirmation');
+});
+
+test('replay refuses a confirmation citing a rework answer as confirmation-answer-not-accepted', () => {
+  const { selected, started, completed } = oneCompletedDecision();
+  const answer = answerComment(
+    '4',
+    buildAnswer(
+      [selected],
+      [completed],
+      [firstClaim],
+      'rework',
+      'change',
+      'The alternate choice better fits the current need.',
+    ),
+    4,
+  );
+  const confirmation = record('confirm-1', confirmedEvent(answer));
+  const result = replayProvisionalDecisionHistory(
+    input([
+      recordComment('1', selected, 1),
+      recordComment('2', started, 2),
+      recordComment('3', completed, 3),
+      answer,
+      recordComment('5', confirmation, 5),
+    ]),
+  );
+  assertReplayIssue(result, 'confirmation-answer-not-accepted');
+});
+
+test('replay refuses rework to the selected or an unlisted option as rework-option-invalid', () => {
+  const { selected, started, completed } = oneCompletedDecision();
+  const rationale = 'The alternate choice better fits the current need.';
+  for (const requestedOptionId of ['keep', 'unlisted']) {
+    const answer = answerComment(
+      '4',
+      buildAnswer(
+        [selected],
+        [completed],
+        [firstClaim],
+        'rework',
+        requestedOptionId,
+        rationale,
+      ),
+      4,
+    );
+    const request = record(
+      'rework-1',
+      reworkRequestEvent(answer, requestedOptionId, rationale),
+    );
+    const result = replayProvisionalDecisionHistory(
+      input([
+        recordComment('1', selected, 1),
+        recordComment('2', started, 2),
+        recordComment('3', completed, 3),
+        answer,
+        recordComment('5', request, 5),
+      ]),
+    );
+    assertReplayIssue(result, 'rework-option-invalid');
+  }
+});
+
+test('replay refuses rework citing an unmarked comment as rework-answer-untrusted', () => {
+  const { selected, started, completed } = oneCompletedDecision();
+  const ordinary = comment('4', 'Please switch to the alternate option.', 4);
+  const request = record(
+    'rework-1',
+    reworkRequestEvent(
+      ordinary,
+      'change',
+      'The alternate choice better fits the current need.',
+    ),
+  );
+  const result = replayProvisionalDecisionHistory(
+    input([
+      recordComment('1', selected, 1),
+      recordComment('2', started, 2),
+      recordComment('3', completed, 3),
+      ordinary,
+      recordComment('5', request, 5),
+    ]),
+  );
+  assertReplayIssue(result, 'rework-answer-untrusted');
+});
+
+test('replay refuses a rework roadmap with no rework request as rework-roadmap-order-invalid', () => {
+  const authored = record('rework-2', {
+    type: 'rework-authored',
+    reworkRoadmap: {
+      roadmapIssueNumber: source.issueNumber,
+      roadmapMarkerId: 'same-source-rework',
+      authoringSetId: 'set-4599-rework',
+      url: `https://github.com/${source.repository}/issues/${source.issueNumber}`,
+    },
+  });
+  const result = replayProvisionalDecisionHistory(
+    input(
+      [
+        recordComment('1', record('select-1', selectedEvent()), 1),
+        reworkPublicationComment('rework-2'),
+        recordComment('6', authored, 6),
+      ],
+      { verifiedReworkRoadmaps: [reworkEvidence('rework-2')] },
+    ),
+  );
+  assertReplayIssue(result, 'rework-roadmap-order-invalid');
+});

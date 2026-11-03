@@ -21,6 +21,7 @@ import {
   PROVISIONAL_DECISION_RECORD_MARKER,
   type ProvisionalDecisionRecord,
   parseProvisionalDecisionRecordComment,
+  type VerifiedProvisionalReworkRoadmap,
 } from '../src/scripts/provisional-decision-state.mts';
 
 const repository = 'kurone-kito/idd-skill';
@@ -1799,4 +1800,845 @@ test('a new selection after a replay-accepted complete bundle uses the next gene
     assert.equal(next.plan.candidateRecord.bundleGeneration, 2);
     assert.equal(next.plan.candidateRecord.decisionGeneration, 1);
   }
+});
+
+// The tests below cover each refusal code that replayProvisionalDecisionHistory
+// creates through createReplayIssue in src/scripts/provisional-decision-state.mts
+// (issue #4841). Each replay subtest is named after the code that its history
+// makes the first replay issue. The last test covers the codes that an earlier
+// command step always catches first, so the replay never reports them.
+async function assertHeldWithoutWrites(
+  store: MemoryStore,
+  reason: string,
+  overrides: Partial<ProvisionalDecisionCommandRequest> = {},
+): Promise<void> {
+  const result = await runProvisionalDecisionCommand(request(overrides), store);
+  assertRefused(result, 'recovery-hold');
+  assert.equal(result.reason, reason);
+  assert.equal(store.appendCalls, 0);
+  assert.deepEqual(store.labelCalls, []);
+}
+
+function replayRefusal(code: string): string {
+  return `decision history replay refused: ${code}`;
+}
+
+function appendComments(
+  store: MemoryStore,
+  ...comments: ProvisionalDecisionHistoryComment[]
+): void {
+  store.history = {
+    ...store.history,
+    comments: [...store.history.comments, ...comments],
+  };
+}
+
+function replaceComment(
+  store: MemoryStore,
+  replacement: ProvisionalDecisionHistoryComment,
+): void {
+  store.history = {
+    ...store.history,
+    comments: store.history.comments.map((item) =>
+      item.id === replacement.id ? replacement : item,
+    ),
+  };
+}
+
+async function completedFixture(): Promise<{
+  store: MemoryStore;
+  selection: ProvisionalDecisionRecord;
+  started: ProvisionalDecisionRecord;
+  completion: ProvisionalDecisionRecord;
+}> {
+  const { store, selection, started } = await workStartedFixture();
+  store.pullRequests.set(prUrl, {
+    state: 'merged',
+    headSha,
+    mergeCommitSha: mergeSha,
+    requiredChecksPassing: true,
+  });
+  const planned = await runProvisionalDecisionCommand(
+    request({
+      type: 'work-completed',
+      pullRequestUrl: prUrl,
+      verifiedHeadSha: headSha,
+      executionCriteriaSatisfied: true,
+    }),
+    store,
+  );
+  assert.equal(planned.state, 'planned', JSON.stringify(planned));
+  if (planned.state !== 'planned')
+    throw new Error('expected work-completed plan');
+  const completion = planned.plan.candidateRecord;
+  appendComments(
+    store,
+    selectionComment(completion, '6', '2026-11-03T11:00:05Z'),
+  );
+  store.history = {
+    ...store.history,
+    serverDate: 'Tue, 03 Nov 2026 11:00:10 GMT',
+  };
+  return { store, selection, started, completion };
+}
+
+function answerComment(
+  id: string,
+  createdAt: string,
+  selection: ProvisionalDecisionRecord,
+  completion: ProvisionalDecisionRecord,
+  fields: Record<string, unknown> = {
+    response: 'accepted',
+    answerText: 'Yes, I accept the presented completed choice.',
+  },
+): ProvisionalDecisionHistoryComment {
+  return comment(
+    id,
+    `${PROVISIONAL_DECISION_ANSWER_MARKER}\n${JSON.stringify({
+      schemaVersion: 1,
+      source: selection.source,
+      bundleGeneration: 1,
+      decisionGenerations: [1],
+      claimIds: [claimId],
+      presentedBundle: [
+        {
+          decisionGeneration: 1,
+          question: selection.event.question,
+          selectedOptionId: 'keep',
+          feasibleAlternativeIds: ['change'],
+          workCompletedRecordId: completion.recordId,
+          result: completion.event.result,
+        },
+      ],
+      ...fields,
+    })}`,
+    createdAt,
+  );
+}
+
+function reworkAnswerFields(
+  requestedOptionId = 'change',
+  rationale = 'Revise this comparison.',
+): Record<string, unknown> {
+  return {
+    response: 'rework',
+    requestedOptionId,
+    rationale,
+    answerText: 'I prefer the alternate option.',
+  };
+}
+
+function confirmedRecord(
+  base: ProvisionalDecisionRecord,
+  recordId: string,
+  answer: ProvisionalDecisionHistoryComment,
+  confirmedAt = answer.createdAt,
+): ProvisionalDecisionRecord {
+  return {
+    ...base,
+    recordId,
+    event: {
+      type: 'confirmed',
+      confirmation: {
+        commentUrl: answer.url,
+        response: 'accepted',
+        confirmedAt,
+        confirmedBy: 'Operator',
+      },
+    },
+  } as ProvisionalDecisionRecord;
+}
+
+function reworkRequestRecord(
+  base: ProvisionalDecisionRecord,
+  recordId: string,
+  answer: ProvisionalDecisionHistoryComment,
+  requestedOptionId = 'change',
+  rationale = 'Revise this comparison.',
+): ProvisionalDecisionRecord {
+  return {
+    ...base,
+    recordId,
+    event: {
+      type: 'rework-requested',
+      reworkRequest: {
+        commentUrl: answer.url,
+        requestedAt: answer.createdAt,
+        requestedOptionId,
+        rationale,
+      },
+    },
+  } as ProvisionalDecisionRecord;
+}
+
+function reworkAuthoredRecord(
+  base: ProvisionalDecisionRecord,
+  recordId: string,
+): ProvisionalDecisionRecord {
+  return {
+    ...base,
+    recordId,
+    event: {
+      type: 'rework-authored',
+      reworkRoadmap: {
+        roadmapIssueNumber: issueNumber,
+        roadmapMarkerId: 'marker-rework',
+        authoringSetId: 'set-rework',
+        url: `https://github.com/${repository}/issues/${issueNumber}`,
+      },
+    },
+  } as ProvisionalDecisionRecord;
+}
+
+function reworkEvidence(
+  authored: ProvisionalDecisionRecord,
+  publishedCommentId: string,
+  publishedAt: string,
+): VerifiedProvisionalReworkRoadmap {
+  return {
+    recordId: authored.recordId,
+    sourceBefore: authored.source,
+    sourceAfter: authored.source,
+    roadmapIssueNumber: issueNumber,
+    roadmapMarkerId: 'marker-rework',
+    authoringSetId: 'set-rework',
+    url: `https://github.com/${repository}/issues/${issueNumber}`,
+    publishedCommentId,
+    publishedAt,
+  };
+}
+
+test('record and source replay refusals are recovery holds that append nothing', async (t) => {
+  await t.test('record-authority-invalid', async () => {
+    const { store, record } = await selectedRecord();
+    appendComments(
+      store,
+      selectionComment(record, '3', '2026-11-03T11:00:02Z', { edited: true }),
+    );
+    await assertHeldWithoutWrites(
+      store,
+      replayRefusal('record-authority-invalid'),
+    );
+  });
+
+  await t.test('duplicate-record-id', async () => {
+    const { store, record } = await selectedRecord();
+    appendComments(
+      store,
+      selectionComment(record, '3', '2026-11-03T11:00:02Z'),
+      selectionComment(record, '4', '2026-11-03T11:00:03Z'),
+    );
+    await assertHeldWithoutWrites(store, replayRefusal('duplicate-record-id'));
+  });
+
+  await t.test('claim-binding-mismatch', async () => {
+    const { store, record } = await selectedRecord();
+    const otherAgent = {
+      ...record,
+      claimLineage: record.claimLineage.map((claim) => ({
+        ...claim,
+        agentId: 'codex-other-agent',
+      })),
+    } as ProvisionalDecisionRecord;
+    appendComments(store, selectionComment(otherAgent));
+    await assertHeldWithoutWrites(
+      store,
+      replayRefusal('claim-binding-mismatch'),
+    );
+  });
+
+  await t.test('source-binding-mismatch', async () => {
+    const { store, record } = await selectedRecord();
+    appendComments(store, selectionComment(record));
+    store.source = { ...sourceRead, body: `${body}\nEdited after selection.` };
+    await assertHeldWithoutWrites(
+      store,
+      replayRefusal('source-binding-mismatch'),
+    );
+  });
+});
+
+test('lifecycle replay refusals are recovery holds that append nothing', async (t) => {
+  await t.test('bundle-generation-regression', async () => {
+    const { store, record } = await selectedRecord();
+    const laterBundle = {
+      ...record,
+      recordId: 'prov-bundle-two',
+      bundleGeneration: 2,
+    } as ProvisionalDecisionRecord;
+    appendComments(
+      store,
+      selectionComment(laterBundle, '3', '2026-11-03T11:00:02Z'),
+      selectionComment(record, '4', '2026-11-03T11:00:03Z'),
+    );
+    await assertHeldWithoutWrites(
+      store,
+      replayRefusal('bundle-generation-regression'),
+    );
+  });
+
+  await t.test('bundle-generation-overlap', async () => {
+    const { store, record } = await selectedRecord();
+    const nextBundle = {
+      ...record,
+      recordId: 'prov-bundle-two',
+      bundleGeneration: 2,
+    } as ProvisionalDecisionRecord;
+    appendComments(
+      store,
+      selectionComment(record, '3', '2026-11-03T11:00:02Z'),
+      selectionComment(nextBundle, '4', '2026-11-03T11:00:03Z'),
+    );
+    await assertHeldWithoutWrites(
+      store,
+      replayRefusal('bundle-generation-overlap'),
+    );
+  });
+
+  await t.test('bundle-generation-closed', async () => {
+    const { store, selection, completion } = await completedFixture();
+    const answer = answerComment(
+      '7',
+      '2026-11-03T11:00:06Z',
+      selection,
+      completion,
+    );
+    const lateSelection = {
+      ...selection,
+      recordId: 'prov-late-selection',
+      decisionGeneration: 2,
+    } as ProvisionalDecisionRecord;
+    appendComments(
+      store,
+      answer,
+      selectionComment(
+        confirmedRecord(completion, 'prov-confirmed', answer),
+        '8',
+        '2026-11-03T11:00:07Z',
+      ),
+      selectionComment(lateSelection, '9', '2026-11-03T11:00:08Z'),
+    );
+    await assertHeldWithoutWrites(
+      store,
+      replayRefusal('bundle-generation-closed'),
+    );
+  });
+
+  await t.test('duplicate-selection', async () => {
+    const { store, record } = await selectedRecord();
+    const again = {
+      ...record,
+      recordId: 'prov-selection-again',
+    } as ProvisionalDecisionRecord;
+    appendComments(
+      store,
+      selectionComment(record, '3', '2026-11-03T11:00:02Z'),
+      selectionComment(again, '4', '2026-11-03T11:00:03Z'),
+    );
+    await assertHeldWithoutWrites(store, replayRefusal('duplicate-selection'));
+  });
+
+  await t.test('transition-without-selection', async () => {
+    const { started } = await workStartedFixture();
+    const store = new MemoryStore();
+    store.history = baseHistory([
+      comment('4', 'Implementation plan.', '2026-11-03T11:00:03Z'),
+      selectionComment(started, '5', '2026-11-03T11:00:04Z'),
+    ]);
+    await assertHeldWithoutWrites(
+      store,
+      replayRefusal('transition-without-selection'),
+    );
+  });
+
+  await t.test('work-started-conflict', async () => {
+    const { store, started } = await workStartedFixture();
+    const again = {
+      ...started,
+      recordId: 'prov-started-again',
+    } as ProvisionalDecisionRecord;
+    appendComments(store, selectionComment(again, '6', '2026-11-03T11:00:05Z'));
+    await assertHeldWithoutWrites(
+      store,
+      replayRefusal('work-started-conflict'),
+    );
+  });
+
+  await t.test('work-start-time-order-invalid', async () => {
+    const { store, started } = await workStartedFixture();
+    const beforeSelection = {
+      ...started,
+      event: { ...started.event, startedAt: '2026-11-03T11:00:01Z' },
+    } as ProvisionalDecisionRecord;
+    replaceComment(
+      store,
+      selectionComment(beforeSelection, '5', '2026-11-03T11:00:04Z'),
+    );
+    await assertHeldWithoutWrites(
+      store,
+      replayRefusal('work-start-time-order-invalid'),
+    );
+  });
+
+  await t.test('work-completion-order-invalid', async () => {
+    const { store } = await completedFixture();
+    store.history = {
+      ...store.history,
+      comments: store.history.comments.filter((item) => item.id !== '5'),
+    };
+    await assertHeldWithoutWrites(
+      store,
+      replayRefusal('work-completion-order-invalid'),
+    );
+  });
+
+  await t.test('work-verification-order-invalid', async () => {
+    const { store, completion } = await completedFixture();
+    const verifiedLater = {
+      ...completion,
+      event: {
+        ...completion.event,
+        result: {
+          ...(completion.event.result as Record<string, unknown>),
+          verifiedAt: '2026-11-03T11:00:09Z',
+        },
+      },
+    } as ProvisionalDecisionRecord;
+    replaceComment(
+      store,
+      selectionComment(verifiedLater, '6', '2026-11-03T11:00:05Z'),
+    );
+    await assertHeldWithoutWrites(
+      store,
+      replayRefusal('work-verification-order-invalid'),
+    );
+  });
+});
+
+test('confirmation replay refusals are recovery holds that append nothing', async (t) => {
+  await t.test('confirmation-order-invalid', async () => {
+    const { store, started } = await workStartedFixture();
+    const answer = comment('6', 'Yes, I accept.', '2026-11-03T11:00:05Z');
+    appendComments(
+      store,
+      answer,
+      selectionComment(
+        confirmedRecord(started, 'prov-confirmed', answer),
+        '7',
+        '2026-11-03T11:00:06Z',
+      ),
+    );
+    await assertHeldWithoutWrites(
+      store,
+      replayRefusal('confirmation-order-invalid'),
+    );
+  });
+
+  await t.test('confirmation-answer-untrusted', async () => {
+    const { store, completion } = await completedFixture();
+    const ordinary = comment('7', 'Yes, I accept.', '2026-11-03T11:00:06Z');
+    appendComments(
+      store,
+      ordinary,
+      selectionComment(
+        confirmedRecord(completion, 'prov-confirmed', ordinary),
+        '8',
+        '2026-11-03T11:00:07Z',
+      ),
+    );
+    await assertHeldWithoutWrites(
+      store,
+      replayRefusal('confirmation-answer-untrusted'),
+    );
+  });
+
+  await t.test('confirmation-time-mismatch', async () => {
+    const { store, selection, completion } = await completedFixture();
+    const answer = answerComment(
+      '7',
+      '2026-11-03T11:00:06Z',
+      selection,
+      completion,
+    );
+    appendComments(
+      store,
+      answer,
+      selectionComment(
+        confirmedRecord(
+          completion,
+          'prov-confirmed',
+          answer,
+          '2026-11-03T11:00:05Z',
+        ),
+        '8',
+        '2026-11-03T11:00:07Z',
+      ),
+    );
+    await assertHeldWithoutWrites(
+      store,
+      replayRefusal('confirmation-time-mismatch'),
+    );
+  });
+
+  await t.test('confirmation-bundle-incomplete', async () => {
+    const { store, selection, completion } = await completedFixture();
+    const secondSelection = {
+      ...selection,
+      recordId: 'prov-second-selection',
+      decisionGeneration: 2,
+    } as ProvisionalDecisionRecord;
+    const answer = answerComment(
+      '8',
+      '2026-11-03T11:00:07Z',
+      selection,
+      completion,
+    );
+    appendComments(
+      store,
+      selectionComment(secondSelection, '7', '2026-11-03T11:00:06Z'),
+      answer,
+      selectionComment(
+        confirmedRecord(completion, 'prov-confirmed', answer),
+        '9',
+        '2026-11-03T11:00:08Z',
+      ),
+    );
+    await assertHeldWithoutWrites(
+      store,
+      replayRefusal('confirmation-bundle-incomplete'),
+    );
+  });
+
+  await t.test('confirmation-scope-mismatch', async () => {
+    const { store, selection, completion } = await completedFixture();
+    const answer = answerComment(
+      '7',
+      '2026-11-03T11:00:06Z',
+      selection,
+      completion,
+      {
+        bundleGeneration: 2,
+        response: 'accepted',
+        answerText: 'Yes, I accept the presented completed choice.',
+      },
+    );
+    appendComments(
+      store,
+      answer,
+      selectionComment(
+        confirmedRecord(completion, 'prov-confirmed', answer),
+        '8',
+        '2026-11-03T11:00:07Z',
+      ),
+    );
+    await assertHeldWithoutWrites(
+      store,
+      replayRefusal('confirmation-scope-mismatch'),
+    );
+  });
+
+  await t.test('confirmation-answer-not-accepted', async () => {
+    const { store, selection, completion } = await completedFixture();
+    const answer = answerComment(
+      '7',
+      '2026-11-03T11:00:06Z',
+      selection,
+      completion,
+      reworkAnswerFields(),
+    );
+    appendComments(
+      store,
+      answer,
+      selectionComment(
+        confirmedRecord(completion, 'prov-confirmed', answer),
+        '8',
+        '2026-11-03T11:00:07Z',
+      ),
+    );
+    await assertHeldWithoutWrites(
+      store,
+      replayRefusal('confirmation-answer-not-accepted'),
+    );
+  });
+
+  await t.test('duplicate-confirmation', async () => {
+    const { store, selection, completion } = await completedFixture();
+    const answer = answerComment(
+      '7',
+      '2026-11-03T11:00:06Z',
+      selection,
+      completion,
+    );
+    appendComments(
+      store,
+      answer,
+      selectionComment(
+        confirmedRecord(completion, 'prov-confirmed', answer),
+        '8',
+        '2026-11-03T11:00:07Z',
+      ),
+      selectionComment(
+        confirmedRecord(completion, 'prov-confirmed-again', answer),
+        '9',
+        '2026-11-03T11:00:08Z',
+      ),
+    );
+    await assertHeldWithoutWrites(
+      store,
+      replayRefusal('duplicate-confirmation'),
+    );
+  });
+});
+
+test('rework replay refusals are recovery holds that append nothing', async (t) => {
+  await t.test('rework-request-order-invalid', async () => {
+    const { store, started } = await workStartedFixture();
+    const ordinary = comment(
+      '6',
+      'Please switch to the alternate option.',
+      '2026-11-03T11:00:05Z',
+    );
+    appendComments(
+      store,
+      ordinary,
+      selectionComment(
+        reworkRequestRecord(started, 'prov-rework-request', ordinary),
+        '7',
+        '2026-11-03T11:00:06Z',
+      ),
+    );
+    await assertHeldWithoutWrites(
+      store,
+      replayRefusal('rework-request-order-invalid'),
+    );
+  });
+
+  await t.test('rework-option-invalid', async () => {
+    const { store, selection, completion } = await completedFixture();
+    const answer = answerComment(
+      '7',
+      '2026-11-03T11:00:06Z',
+      selection,
+      completion,
+      reworkAnswerFields('keep'),
+    );
+    appendComments(
+      store,
+      answer,
+      selectionComment(
+        reworkRequestRecord(completion, 'prov-rework-request', answer, 'keep'),
+        '8',
+        '2026-11-03T11:00:07Z',
+      ),
+    );
+    await assertHeldWithoutWrites(
+      store,
+      replayRefusal('rework-option-invalid'),
+    );
+  });
+
+  await t.test('rework-answer-untrusted', async () => {
+    const { store, completion } = await completedFixture();
+    const ordinary = comment(
+      '7',
+      'Please switch to the alternate option.',
+      '2026-11-03T11:00:06Z',
+    );
+    appendComments(
+      store,
+      ordinary,
+      selectionComment(
+        reworkRequestRecord(completion, 'prov-rework-request', ordinary),
+        '8',
+        '2026-11-03T11:00:07Z',
+      ),
+    );
+    await assertHeldWithoutWrites(
+      store,
+      replayRefusal('rework-answer-untrusted'),
+    );
+  });
+
+  await t.test('rework-answer-scope-mismatch', async () => {
+    const { store, selection, completion } = await completedFixture();
+    const answer = answerComment(
+      '7',
+      '2026-11-03T11:00:06Z',
+      selection,
+      completion,
+      reworkAnswerFields(),
+    );
+    appendComments(
+      store,
+      answer,
+      selectionComment(
+        reworkRequestRecord(
+          completion,
+          'prov-rework-request',
+          answer,
+          'change',
+          'A rationale the answer never gave.',
+        ),
+        '8',
+        '2026-11-03T11:00:07Z',
+      ),
+    );
+    await assertHeldWithoutWrites(
+      store,
+      replayRefusal('rework-answer-scope-mismatch'),
+    );
+  });
+
+  await t.test('rework-roadmap-order-invalid', async () => {
+    const { store, record } = await selectedRecord();
+    const publication = comment(
+      '4',
+      'Rework roadmap publication.',
+      '2026-11-03T11:00:03Z',
+    );
+    const authored = reworkAuthoredRecord(record, 'prov-rework-authored');
+    appendComments(
+      store,
+      selectionComment(record, '3', '2026-11-03T11:00:02Z'),
+      publication,
+      selectionComment(authored, '5', '2026-11-03T11:00:04Z'),
+    );
+    await assertHeldWithoutWrites(
+      store,
+      replayRefusal('rework-roadmap-order-invalid'),
+      {
+        verifiedReworkRoadmaps: [
+          reworkEvidence(authored, publication.id, publication.createdAt),
+        ],
+      },
+    );
+  });
+
+  await t.test('rework-roadmap-unverified', async () => {
+    const { store, selection, completion } = await completedFixture();
+    const answer = answerComment(
+      '7',
+      '2026-11-03T11:00:06Z',
+      selection,
+      completion,
+      reworkAnswerFields(),
+    );
+    const authored = reworkAuthoredRecord(completion, 'prov-rework-authored');
+    appendComments(
+      store,
+      answer,
+      selectionComment(
+        reworkRequestRecord(completion, 'prov-rework-request', answer),
+        '8',
+        '2026-11-03T11:00:07Z',
+      ),
+      selectionComment(authored, '9', '2026-11-03T11:00:08Z'),
+    );
+    await assertHeldWithoutWrites(
+      store,
+      replayRefusal('rework-roadmap-unverified'),
+      {
+        verifiedReworkRoadmaps: [
+          reworkEvidence(
+            authored,
+            'missing-publication',
+            '2026-11-03T11:00:07Z',
+          ),
+        ],
+      },
+    );
+  });
+});
+
+test('inputs behind replay codes the command cannot reach are held before replay', async (t) => {
+  await t.test(
+    'history-incomplete: step 0 holds an incomplete history',
+    async () => {
+      const store = new MemoryStore();
+      store.history = baseHistory([], { complete: false });
+      await assertHeldWithoutWrites(
+        store,
+        'history is incomplete or its server Date is invalid',
+      );
+    },
+  );
+
+  await t.test(
+    'claim-lineage-unverified: the claim fold holds a history with no claim',
+    async () => {
+      const store = new MemoryStore();
+      store.history = {
+        ...store.history,
+        comments: store.history.comments.filter((item) => item.id !== '1'),
+      };
+      await assertHeldWithoutWrites(
+        store,
+        'active claim lineage could not be verified: empty-lineage',
+      );
+    },
+  );
+
+  await t.test(
+    'duplicate-comment: the claim fold holds a repeated comment ID',
+    async () => {
+      const store = new MemoryStore();
+      appendComments(
+        store,
+        comment('2', 'Duplicate history comment.', '2026-11-03T11:00:02Z'),
+      );
+      await assertHeldWithoutWrites(
+        store,
+        'active claim lineage could not be verified: duplicate-comment',
+      );
+    },
+  );
+
+  await t.test(
+    'history-order-invalid: the claim fold holds an out-of-order comment',
+    async () => {
+      const store = new MemoryStore();
+      appendComments(
+        store,
+        comment('3', 'Out-of-order history comment.', '2026-11-03T10:59:59Z'),
+      );
+      await assertHeldWithoutWrites(
+        store,
+        'active claim lineage could not be verified: history-order-invalid',
+      );
+    },
+  );
+
+  await t.test(
+    'work-evidence-insufficient: historical verification holds an unmatched completion',
+    async () => {
+      const { store } = await completedFixture();
+      store.pullRequests.set(prUrl, {
+        state: 'merged',
+        headSha,
+        mergeCommitSha: 'c'.repeat(40),
+        requiredChecksPassing: true,
+      });
+      await assertHeldWithoutWrites(
+        store,
+        `historical completion verification failed: historical pull request verification failed for ${prUrl}`,
+      );
+    },
+  );
+
+  await t.test(
+    'transition-order-invalid: the claim fold holds a transition posted before its selection',
+    async () => {
+      // The replay's own history order gate would also refuse this input
+      // before its transition-order-invalid check.
+      const { store, selection, started } = await workStartedFixture();
+      store.history = baseHistory([
+        selectionComment(selection, '3', '2026-11-03T11:00:03Z'),
+        selectionComment(started, '5', '2026-11-03T11:00:02Z'),
+      ]);
+      await assertHeldWithoutWrites(
+        store,
+        'active claim lineage could not be verified: history-order-invalid',
+      );
+    },
+  );
 });
