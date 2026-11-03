@@ -11,8 +11,27 @@
  * expired here.
  */
 import { chmodSync, lstatSync, realpathSync, statSync } from 'node:fs';
-import { isAbsolute, join, parse, relative, resolve, sep } from 'node:path';
+import {
+  dirname,
+  isAbsolute,
+  join,
+  parse,
+  relative,
+  resolve,
+  sep,
+} from 'node:path';
 import { evaluateWindowsAcl } from './windows-acl.mjs';
+
+/**
+ * The same names at run time. A TypeScript type is erased, so a cast or a
+ * JavaScript caller can pass any string, and the path must not escape the
+ * state root.
+ */
+const PRESERVE_DIRECTORY_NAMES = [
+  'f4-preserved',
+  'lwr-preserved',
+  'b1-preserved',
+];
 /** True when `target` is `root` or lies inside it, with no `..` escape. */
 export function isWithinRoot(root, target) {
   const rel = relative(resolve(root), resolve(target));
@@ -73,6 +92,11 @@ export function inspectPreserveDestination(
     parents: [],
     hold: detail,
   });
+  if (!PRESERVE_DIRECTORY_NAMES.includes(directoryName)) {
+    return refuse(
+      `unknown preserved-data directory ${JSON.stringify(directoryName)}`,
+    );
+  }
   if (!isAbsolute(deps.stateRoot)) {
     return refuse('the state root is not absolute');
   }
@@ -221,6 +245,17 @@ export function createPreserveDestination(deps, destination, parents) {
     new Map(parents.map(({ path, identity }) => [path, identity])),
   );
   if (changed !== null) return refuse(changed);
+  // The destination must be a direct child of the preserve directory that was
+  // inspected, which is the last parent in the list.
+  const preserveDirectory = parents[parents.length - 1]?.path;
+  if (
+    preserveDirectory === undefined ||
+    dirname(destination) !== preserveDirectory
+  ) {
+    return refuse(
+      `${destination} is not a direct child of the inspected preserve directory`,
+    );
+  }
   if (deps.lstat(destination) !== 'absent') {
     return refuse(`destination already exists at ${destination}`);
   }
@@ -268,6 +303,13 @@ export function createPreserveDestination(deps, destination, parents) {
       `could not create ${destination}: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
+  // Read the identity straight after creation, before the other checks, so
+  // the window in which another process can replace the directory is as short
+  // as possible. A second read after the privacy check must match it.
+  const identity = deps.directoryIdentity(destination);
+  if (identity === null) {
+    return refuse(`${destination} has no verified directory identity`);
+  }
   if (deps.lstat(destination) !== 'directory') {
     return refuse(`${destination} is not a directory after creation`);
   }
@@ -276,9 +318,8 @@ export function createPreserveDestination(deps, destination, parents) {
       `${destination} was created but is not owned and private; it stays in place and nothing is written into it`,
     );
   }
-  const identity = deps.directoryIdentity(destination);
-  if (identity === null) {
-    return refuse(`${destination} has no verified directory identity`);
+  if (deps.directoryIdentity(destination) !== identity) {
+    return refuse(`${destination} changed after creation`);
   }
   return {
     parents: [...recorded, { path: destination, identity }],

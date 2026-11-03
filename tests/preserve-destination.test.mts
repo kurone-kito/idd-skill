@@ -358,7 +358,11 @@ for (const name of DIRECTORY_NAMES) {
     const deps = depsFor(fx);
     const destination = destinationFor(name, fx.stateRoot);
     mkdirSync(destination, { recursive: true });
-    const created = createPreserveDestination(deps, destination, []);
+    const created = createPreserveDestination(
+      deps,
+      destination,
+      chainParents(fx, name),
+    );
     assert.match(created.hold ?? '', /already exists/);
     assert.equal(realLstat(destination), 'directory');
   });
@@ -507,6 +511,78 @@ for (const name of DIRECTORY_NAMES) {
       assert.equal(realLstat(inspected.destination), 'absent');
     });
   }
+
+  test(`${name}: a destination outside the inspected preserve directory is refused`, {
+    skip: !POSIX,
+  }, () => {
+    const fx = fresh();
+    const deps = depsFor(fx);
+    const inspected = inspectPreserveDestination(
+      deps,
+      name,
+      ISSUE,
+      fx.primary,
+      [],
+    );
+    assert.equal(inspected.hold, null);
+    const outside = join(fx.root, `${ISSUE}-${TIMESTAMP}`);
+    const created = createPreserveDestination(deps, outside, inspected.parents);
+    assert.match(created.hold ?? '', /not a direct child/);
+    assert.equal(realLstat(outside), 'absent');
+  });
+
+  test(`${name}: a created directory replaced before its final identity read is refused`, {
+    skip: !POSIX,
+  }, () => {
+    const fx = fresh();
+    const destination = destinationFor(name, fx.stateRoot);
+    let reads = 0;
+    const deps = depsFor(fx, {
+      directoryIdentity: (path) => {
+        if (path !== destination) return realIdentity(path);
+        reads += 1;
+        return reads === 1 ? realIdentity(path) : 'replaced-identity';
+      },
+    });
+    const inspected = inspectPreserveDestination(
+      deps,
+      name,
+      ISSUE,
+      fx.primary,
+      [],
+    );
+    assert.equal(inspected.hold, null);
+    const created = createPreserveDestination(
+      deps,
+      destination,
+      inspected.parents,
+    );
+    assert.match(created.hold ?? '', /changed after creation/);
+  });
+}
+
+test('an unknown preserved-data directory name is refused at run time', {
+  skip: !POSIX,
+}, () => {
+  const fx = fresh();
+  const result = inspectPreserveDestination(
+    depsFor(fx),
+    '../../escape' as PreserveDirectoryName,
+    ISSUE,
+    fx.primary,
+    [],
+  );
+  assert.match(result.hold ?? '', /unknown preserved-data directory/);
+  assert.equal(result.destination, '');
+});
+
+/** The parents of a complete chain, read after its directories exist. */
+function chainParents(fixture: Fixture, name: PreserveDirectoryName) {
+  return [
+    fixture.stateRoot,
+    join(fixture.stateRoot, 'idd-skill'),
+    join(fixture.stateRoot, 'idd-skill', name),
+  ].map((path) => ({ path, identity: realIdentity(path) }));
 }
 
 /**
