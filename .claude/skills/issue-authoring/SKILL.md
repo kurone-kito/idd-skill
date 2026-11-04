@@ -415,6 +415,8 @@ needs-decision, blocked-by-human, and out-of-scope.
    A released `review-needs-decision` follow-up remains out of Discover
    while the label configured as `labels.needsDecisionLabelName` is
    present (default: `status:needs-decision`).
+   After a standing-approval release completes, post the anchor's record line
+   in the format defined in [policy constants](../../docs/policy-constants.md#standing-approval-defaults).
 
 ## Findings ledger storage
 

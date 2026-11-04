@@ -3692,20 +3692,25 @@ only approval boundary.
     a `<marker-prefix>-draft-carrier` marker outside code, so it is
     neither a roadmap shell nor a draft carrier;
   - (c) `node scripts/authoring-set-members.mjs --set <set> --issue <target>`
-    reports `soleMember: true`, as in fast-path step (3); a non-zero exit
-    is inconclusive and falls back to the explicit request;
+    reports `soleMember: true`, with `issues` equal to the target and no
+    `skippedMarkers` entry whose `namesRequestedSet` is `true`, except for a
+    `requested-set` marker on the target itself, as in fast-path step (3).
+    A non-zero exit or any other result is inconclusive and falls back to
+    the explicit request;
   - (d) the target's labels include neither the configured needs-decision
     label nor the configured blocked-by-human label
     (`labels.needsDecisionLabelName` and `labels.blockedByHumanLabelName`,
     defaulting to `status:needs-decision` and `status:blocked-by-human`);
     if either configured name cannot be read, the explicit request applies;
   - (e) replay each publication-token chain's trusted, unedited journal
-    records chronologically, and require its latest valid state to be
-    `member`. Earlier `pending` records are expected in the append-only
-    journal when that chain advances to `member`. A missing, unresolved,
-    conflicting, or out-of-order chain, or a chain whose latest state is
-    `pending`, `cleanup`, or `abandoned`, leaves the target held. The
-    owner-marker modes are only `acquire`, `heartbeat`, `release`,
+    records chronologically, with readable edit and minimization state, and
+    require its latest valid state to be `member`. The latest record must not
+    be minimized as `outdated`. Earlier `pending` records are expected in
+    the append-only journal when that chain advances to `member`. A missing,
+    unresolved, conflicting, or out-of-order chain, unreadable edit or
+    minimization state, an outdated latest record, or a chain whose latest
+    state is `pending`, `cleanup`, or `abandoned`, leaves the target held.
+    The owner-marker modes are only `acquire`, `heartbeat`, `release`,
     `release-guard`, and `release-complete`;
 
   Every other fast-path step still runs unchanged, including the release

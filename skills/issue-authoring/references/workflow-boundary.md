@@ -561,6 +561,10 @@ and 4 for each non-anchor target in turn, entries 3 and 4 for the anchor,
 and entry 5 last. The defer-source and standing-approval paths add their own
 checks before the first label removal. This checklist covers the shared
 release steps; follow the contract for those additional conditions.
+After a standing-approval release completes, post the anchor's
+standing-approval record line in the format defined in
+[policy constants](../../../docs/policy-constants.md#standing-approval-defaults).
+This line is post-release evidence, not another release condition.
 
 1. **Preflight, every target.** Run the contract's sweep against the target
    and the journal first (attempted, not blocking, so the command ends in
