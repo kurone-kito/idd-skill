@@ -3,11 +3,13 @@ import { type ChildProcess, spawn, spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import {
   chmodSync,
+  closeSync,
   existsSync,
   constants as fsConstants,
   linkSync,
   lstatSync,
   mkdirSync,
+  openSync,
   readdirSync,
   readFileSync,
   renameSync,
@@ -2297,6 +2299,56 @@ test('a detached descendant cannot retain the validation slot', {
       await next.done;
     }
   }
+});
+
+test('refusing a lock-file stderr alias leaves the lock bytes unchanged', {
+  skip: !REAL_LOCK,
+}, async () => {
+  const h = makeHarness();
+  const repo = makeRepo();
+  const lockPath = join(h.state, LOCK_RELATIVE);
+  const started = join(h.state, 'refused-command.started');
+  mkdirSync(dirname(lockPath), { recursive: true });
+  writeFileSync(lockPath, 'preserve the lock bytes\n');
+  const before = readFileSync(lockPath);
+  const notes: string[] = [];
+  const stdout = new PassThrough();
+  stdout.resume();
+  const spawnWithWritableStderrAlias: LocalAdmissionDeps['spawn'] = (
+    command,
+    args,
+    options,
+  ) => {
+    if (command === '/bin/sh' && Array.isArray(options.stdio)) {
+      const stdio = [...options.stdio];
+      const alias = openSync(lockPath, 'a');
+      stdio[2] = alias;
+      try {
+        return spawn(command, args, { ...options, stdio });
+      } finally {
+        closeSync(alias);
+      }
+    }
+    return spawn(command, args, options);
+  };
+  const commandScript = `require('node:fs').writeFileSync(${JSON.stringify(started)}, 'started');`;
+
+  const status = await runLocalAdmission(
+    ['--', process.execPath, '-e', commandScript],
+    {
+      cwd: repo,
+      env: h.env,
+      platform: process.platform,
+      stderr: (text) => notes.push(text),
+      stdout,
+      spawn: spawnWithWritableStderrAlias,
+    },
+  );
+
+  assert.equal(status, 2, notes.join(''));
+  assert.equal(existsSync(started), false);
+  assert.deepEqual(readFileSync(lockPath), before);
+  assert.equal(flockStatus(lockPath), 0);
 });
 
 test('a double-forked daemon cannot retain a non-3 lock descriptor', {

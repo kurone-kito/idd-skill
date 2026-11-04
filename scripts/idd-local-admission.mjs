@@ -88,6 +88,28 @@ const ADMITTED_COMMAND_RUNNER = String.raw`
 const fs = require('node:fs');
 const { spawnSync } = require('node:child_process');
 const { constants: osConstants } = require('node:os');
+let lock;
+try {
+  lock = fs.fstatSync(3);
+} catch {
+  process.exit(2);
+}
+if (!lock.isFile()) process.exit(2);
+let stderrIsSafe = false;
+try {
+  const stderr = fs.fstatSync(2);
+  stderrIsSafe = stderr.dev !== lock.dev || stderr.ino !== lock.ino;
+} catch {}
+const refuse = (message) => {
+  if (stderrIsSafe) {
+    try {
+      fs.writeSync(2, message);
+    } catch {}
+  }
+  process.exit(2);
+};
+const refuseDescriptorInspection = () =>
+  refuse('local-admission: cannot verify inherited lock descriptors; command not started\n');
 let descriptors;
 for (const directory of ['/proc/self/fd', '/dev/fd']) {
   try {
@@ -98,18 +120,7 @@ for (const directory of ['/proc/self/fd', '/dev/fd']) {
     }
   } catch {}
 }
-const refuseDescriptorInspection = () => {
-  process.stderr.write('local-admission: cannot verify inherited lock descriptors; command not started\n');
-  process.exit(2);
-};
 if (descriptors === undefined) refuseDescriptorInspection();
-let lock;
-try {
-  lock = fs.fstatSync(3);
-} catch {
-  refuseDescriptorInspection();
-}
-if (!lock.isFile()) refuseDescriptorInspection();
 const matchingDescriptors = () => {
   const matches = [];
   for (const entry of descriptors) {
@@ -132,20 +143,17 @@ const inspectDescriptors = () => {
 };
 const aliases = inspectDescriptors();
 if (aliases.some((fd) => fd < 3)) {
-  process.stderr.write('local-admission: a standard stream refers to the validation lock; command not started\n');
-  process.exit(2);
+  refuse('local-admission: a standard stream refers to the validation lock; command not started\n');
 }
 for (const fd of aliases) {
   try {
     fs.closeSync(fd);
   } catch {
-    process.stderr.write('local-admission: cannot close inherited lock descriptor; command not started\n');
-    process.exit(2);
+    refuse('local-admission: cannot close inherited lock descriptor; command not started\n');
   }
 }
 if (inspectDescriptors().length > 0) {
-  process.stderr.write('local-admission: inherited lock descriptors remain; command not started\n');
-  process.exit(2);
+  refuse('local-admission: inherited lock descriptors remain; command not started\n');
 }
 const [command, ...args] = process.argv.slice(1);
 if (command === undefined) process.exit(2);
