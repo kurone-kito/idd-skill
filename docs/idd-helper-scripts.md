@@ -3182,14 +3182,38 @@ enabled=true
 backend=flock
 raw_max_concurrent=1
 wait_seconds=7200 # Replace with the validated repository maxWait when set.
+# A refusal notice can itself corrupt a lock when stderr aliases it (issue #5036).
+stderr_diagnostic_safe=false
+diagnostic_state=
+case ${XDG_STATE_HOME:-} in
+  /*) diagnostic_state=$XDG_STATE_HOME ;;
+  *) case ${HOME:-} in
+       /*) diagnostic_state=$HOME/.local/state ;;
+     esac ;;
+esac
+if [ -n "$diagnostic_state" ] && [ -d /dev/fd ] && [ -e /dev/fd/2 ]; then
+  diagnostic_lock="$diagnostic_state/idd-skill/local-admission/validate.lock"
+  if [ -f "$diagnostic_lock" ]; then
+    if [ "/dev/fd/2" -ef "$diagnostic_lock" ] 2>/dev/null; then
+      stderr_diagnostic_safe=false
+    else
+      diagnostic_check_status=$?
+      [ "$diagnostic_check_status" -eq 1 ] && stderr_diagnostic_safe=true
+    fi
+  fi
+fi
+safe_notice() {
+  [ "$stderr_diagnostic_safe" = true ] || return 0
+  printf '%s\n' "$1" >&2
+}
 if [ "$enabled" = false ]; then
   run_direct
 fi
 if [ "$backend" = pueue ]; then
-  printf 'local-admission: helper-free path uses flock for backend "pueue" with one slot\n' >&2
+  safe_notice 'local-admission: helper-free path uses flock for backend "pueue" with one slot'
 fi
 if ! command -v flock >/dev/null 2>&1; then
-  printf 'local-admission: flock is not available on this host; running the command without admission\n' >&2
+  safe_notice 'local-admission: flock is not available on this host; running the command without admission'
   run_direct
 fi
 # Resolve lock-only state and stderr prerequisites only when the locked path
@@ -3198,7 +3222,7 @@ case ${XDG_STATE_HOME:-} in
   /*) state=$XDG_STATE_HOME ;;
   *) case ${HOME:-} in
        /*) state=$HOME/.local/state ;;
-       *) printf 'local-admission: no absolute state root; command not started\n' >&2; exit 2 ;;
+       *) safe_notice 'local-admission: no absolute state root; command not started'; exit 2 ;;
      esac ;;
 esac
 lock_dir="$state/idd-skill/local-admission"
@@ -3212,6 +3236,7 @@ else
   scan_stderr_status=$?
   exec {scan_stderr_fd}>&- || exit 2
   [ "$scan_stderr_status" -eq 1 ] || exit 2
+  stderr_diagnostic_safe=true
 fi
 if [ "$backend" = flock ]; then
   if ! command -v awk >/dev/null 2>&1; then

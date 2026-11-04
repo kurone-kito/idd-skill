@@ -747,6 +747,47 @@ test('preflight refusal checks a lock-file stderr alias before writing diagnosti
   }
 });
 
+test('missing absolute state root suppresses refusal diagnostics on a lock-file stderr alias', {
+  skip: SKIP,
+  timeout: TEST_TIMEOUT_MS,
+}, async () => {
+  const dir = tempDir('idd-fallback-relative-state-stderr-alias-');
+  const env = {
+    ...fallbackEnv(dir),
+    HOME: 'relative-home',
+    XDG_STATE_HOME: 'relative-state',
+  };
+  const lockDir = join(dir, 'state', 'idd-skill', 'local-admission');
+  const lockPath = join(lockDir, 'validate.lock');
+  const started = join(dir, 'started');
+  mkdirSync(lockDir, { recursive: true });
+  writeFileSync(lockPath, 'preserve the lock bytes\n');
+  const before = readFileSync(lockPath);
+  const stderrAlias = openSync(lockPath, 'a');
+  let wrapper: Wrapper;
+  try {
+    wrapper = startWrapper(
+      dir,
+      'relative-state-stderr-alias',
+      `echo started > ${sq(started)}; exit 0`,
+      env,
+      30,
+      { stderrFd: stderrAlias },
+    );
+  } finally {
+    closeSync(stderrAlias);
+  }
+  const wrappers = [wrapper];
+  try {
+    assert.equal(await wrapper.exited, 2);
+    assert.equal(existsSync(started), false);
+    assert.deepEqual(readFileSync(lockPath), before);
+    assert.equal(flockStatus(lockPath), 0);
+  } finally {
+    await teardown(dir, wrappers, []);
+  }
+});
+
 test('a SIGKILLed wrapper frees the slot while a detached daemon survives', {
   skip: SKIP,
   timeout: TEST_TIMEOUT_MS,
