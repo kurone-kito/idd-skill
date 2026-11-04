@@ -544,9 +544,12 @@ approval boundary that hands off to IDD execution.
 
 #### Per-target release checklist
 
-Use this checklist for an explicit-request release, after the Stage 2
-checks above pass and the user's release request is verified. Each entry
-names its command. The verify, re-fetch, reuse, and restore rules are in
+Use this checklist for an explicit-request release and for the
+defer-source or standing-approval path, after the applicable Stage 2
+conditions pass. Verify the user's request only for an explicit-request
+release; each automatic path uses its conditions in the contract. Draft
+carriers follow the carrier creation-hold procedure above. Each entry names
+its command. The verify, re-fetch, reuse, and restore rules are in
 [Authoring hold and release](contract.md#authoring-hold-and-release) and
 are not repeated here. Each post is a dry run unless it has `--apply`, so
 preview it first. For an issue in another repository, pass `--owner` and

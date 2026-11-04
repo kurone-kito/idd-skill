@@ -3569,11 +3569,10 @@ only approval boundary.
   decision of 2026-11-01 (option (a), roadmap `#4883`): the self-anchor
   fast path above may release a set without an explicit human release
   request when the repository policy enables
-  `standingApprovals.release` (defined by child `#4886`) and all six
+  `standingApprovals.release` (defined by child `#4886`) and all five
   conditions below hold. They are checked immediately before the label
   removal, as fast-path step (3) requires for its own preconditions. They
-  replace the two defer-source preconditions in step (3), and condition (f)
-  keeps the body-sha256 check that the defer-source path also runs.
+  replace the two defer-source preconditions in step (3).
   - (a) `standingApprovals.release.enabled` is `true` in the repository
     policy; a missing, malformed, or disabled value leaves the explicit
     request in force;
@@ -3589,15 +3588,14 @@ only approval boundary.
     (`labels.needsDecisionLabelName` and `labels.blockedByHumanLabelName`,
     defaulting to `status:needs-decision` and `status:blocked-by-human`);
     if either configured name cannot be read, the explicit request applies;
-  - (e) the latest valid publication-intent record in each publication-token
-    chain for the target is in state `member`, and no chain is unresolved or
-    conflicting. The journal is append-only, so earlier `pending` records do
-    not fail this condition. The owner-marker modes are only `acquire`,
-    `heartbeat`, `release`, `release-guard`, and `release-complete`;
-  - (f) a freshly recomputed body-sha256 equals the target's own
-    `mode=acquire` owner marker `body-sha256`, as
-    `node scripts/authoring-owner-provenance.mjs --issue <target>` reports,
-    and it is checked again immediately before the label removal.
+  - (e) replay each publication-token chain's trusted, unedited journal
+    records chronologically, and require its latest valid state to be
+    `member`. Earlier `pending` records are expected in the append-only
+    journal when that chain advances to `member`. A missing, unresolved,
+    conflicting, or out-of-order chain, or a chain whose latest state is
+    `pending`, `cleanup`, or `abandoned`, leaves the target held. The
+    owner-marker modes are only `acquire`, `heartbeat`, `release`,
+    `release-guard`, and `release-complete`;
 
   Every other fast-path step still runs unchanged, including the release
   checklist, the sweeps, and the verified label removal. The released issue
