@@ -3185,7 +3185,15 @@ wait_seconds=7200 # Replace with the validated repository maxWait when set.
 if [ "$enabled" = false ]; then
   run_direct
 fi
-# Resolve the lock path and check stderr before any refusal can write to it.
+if [ "$backend" = pueue ]; then
+  printf 'local-admission: helper-free path uses flock for backend "pueue" with one slot\n' >&2
+fi
+if ! command -v flock >/dev/null 2>&1; then
+  printf 'local-admission: flock is not available on this host; running the command without admission\n' >&2
+  run_direct
+fi
+# Resolve lock-only state and stderr prerequisites only when the locked path
+# will be used. The no-flock direct-run fallback needs neither one.
 case ${XDG_STATE_HOME:-} in
   /*) state=$XDG_STATE_HOME ;;
   *) case ${HOME:-} in
@@ -3204,13 +3212,6 @@ else
   scan_stderr_status=$?
   exec {scan_stderr_fd}>&- || exit 2
   [ "$scan_stderr_status" -eq 1 ] || exit 2
-fi
-if [ "$backend" = pueue ]; then
-  printf 'local-admission: helper-free path uses flock for backend "pueue" with one slot\n' >&2
-fi
-if ! command -v flock >/dev/null 2>&1; then
-  printf 'local-admission: flock is not available on this host; running the command without admission\n' >&2
-  run_direct
 fi
 if [ "$backend" = flock ]; then
   if ! command -v awk >/dev/null 2>&1; then
