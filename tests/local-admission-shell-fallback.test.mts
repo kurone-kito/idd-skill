@@ -24,6 +24,7 @@ import {
   readFileSync,
   readlinkSync,
   realpathSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { constants as osConstants, tmpdir } from 'node:os';
@@ -166,6 +167,7 @@ interface Wrapper {
 }
 
 interface WrapperStartOptions {
+  stdoutFd?: number;
   stderrFd?: number;
   lockFd?: number;
   rawMaxConcurrent?: number;
@@ -189,7 +191,7 @@ function startWrapper(
   );
   const stdio: Array<'ignore' | 'pipe' | number> = [
     'ignore',
-    'pipe',
+    options.stdoutFd ?? 'pipe',
     options.stderrFd ?? 'pipe',
   ];
   if (options.lockFd !== undefined) {
@@ -226,14 +228,35 @@ function flockStatus(path: string): number | null {
 }
 
 /** Environment for a wrapper: fresh state, and `stubDir` first on PATH when set. */
-function fallbackEnv(dir: string, stubDir?: string): NodeJS.ProcessEnv {
+function fallbackEnv(
+  dir: string,
+  stubDir?: string,
+  pathOverride?: string,
+): NodeJS.ProcessEnv {
   const basePath = process.env.PATH ?? '/usr/bin:/bin';
   return {
     HOME: dir,
     LC_ALL: 'C',
-    PATH: stubDir === undefined ? basePath : `${stubDir}:${basePath}`,
+    PATH:
+      pathOverride ??
+      (stubDir === undefined ? basePath : `${stubDir}:${basePath}`),
     XDG_STATE_HOME: join(dir, 'state'),
   };
+}
+
+/** Creates the helper tools the direct-run branch needs, without `flock`. */
+function writePathWithoutFlock(dir: string): string {
+  const path = join(dir, 'no-flock-bin');
+  mkdirSync(path, { recursive: true });
+  for (const tool of ['cat', 'env', 'node', 'ps', 'setsid', 'sleep']) {
+    const source =
+      tool === 'node'
+        ? process.execPath
+        : findExecutableOnPath(tool, process.env);
+    assert.ok(source, `the host provides ${tool}`);
+    symlinkSync(source, join(path, tool));
+  }
+  return path;
 }
 
 /**
@@ -747,6 +770,43 @@ test('preflight refusal checks a lock-file stderr alias before writing diagnosti
   }
 });
 
+test('preflight refuses a lock-file stdout alias before command substitution', {
+  skip: SKIP,
+  timeout: TEST_TIMEOUT_MS,
+}, async () => {
+  const dir = tempDir('idd-fallback-stdout-alias-');
+  const env = fallbackEnv(dir);
+  const lockDir = join(dir, 'state', 'idd-skill', 'local-admission');
+  const lockPath = join(lockDir, 'validate.lock');
+  const started = join(dir, 'started');
+  mkdirSync(lockDir, { recursive: true });
+  writeFileSync(lockPath, 'preserve the lock bytes\n');
+  const before = readFileSync(lockPath);
+  const stdoutAlias = openSync(lockPath, 'a');
+  let wrapper: Wrapper;
+  try {
+    wrapper = startWrapper(
+      dir,
+      'stdout-alias',
+      `echo started > ${sq(started)}; echo output; exit 0`,
+      env,
+      30,
+      { stdoutFd: stdoutAlias },
+    );
+  } finally {
+    closeSync(stdoutAlias);
+  }
+  const wrappers = [wrapper];
+  try {
+    assert.equal(await wrapper.exited, 2);
+    assert.equal(existsSync(started), false);
+    assert.deepEqual(readFileSync(lockPath), before);
+    assert.equal(flockStatus(lockPath), 0);
+  } finally {
+    await teardown(dir, wrappers, []);
+  }
+});
+
 test('missing absolute state root suppresses refusal diagnostics on a lock-file stderr alias', {
   skip: SKIP,
   timeout: TEST_TIMEOUT_MS,
@@ -783,6 +843,39 @@ test('missing absolute state root suppresses refusal diagnostics on a lock-file 
     assert.equal(existsSync(started), false);
     assert.deepEqual(readFileSync(lockPath), before);
     assert.equal(flockStatus(lockPath), 0);
+  } finally {
+    await teardown(dir, wrappers, []);
+  }
+});
+
+test('missing lock file keeps the no-flock bypass warning visible', {
+  skip: SKIP,
+  timeout: TEST_TIMEOUT_MS,
+}, async () => {
+  const dir = tempDir('idd-fallback-no-lock-warning-');
+  const noFlockPath = writePathWithoutFlock(join(dir, 'tools'));
+  const env = fallbackEnv(dir, undefined, noFlockPath);
+  const lockPath = join(
+    dir,
+    'state',
+    'idd-skill',
+    'local-admission',
+    'validate.lock',
+  );
+  const started = join(dir, 'started');
+  const wrapper = startWrapper(
+    dir,
+    'no-lock-warning',
+    `echo started > ${sq(started)}; exit 0`,
+    env,
+    30,
+  );
+  const wrappers = [wrapper];
+  try {
+    assert.equal(await wrapper.exited, 0);
+    assert.match(wrapper.stderr(), /flock is not available/);
+    assert.equal(existsSync(started), true);
+    assert.equal(existsSync(lockPath), false);
   } finally {
     await teardown(dir, wrappers, []);
   }

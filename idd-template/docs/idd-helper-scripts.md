@@ -3058,6 +3058,13 @@ matching_lock_descriptors() {
   [ "$scan_found_lock_fd" = true ] || return 2
 }
 close_lock_aliases() {
+  # Check the original stdout before command substitution replaces fd 1 (issue #5036).
+  if [ "/dev/fd/1" -ef /dev/fd/9 ] 2>/dev/null; then
+    return 1
+  else
+    standard_stdout_status=$?
+    [ "$standard_stdout_status" -eq 1 ] || return 1
+  fi
   scan_lock_aliases=$(matching_lock_descriptors) || return 1
   for scan_fd in $scan_lock_aliases; do
     case $scan_fd in
@@ -3200,6 +3207,8 @@ if [ -n "$diagnostic_state" ] && [ -d /dev/fd ] && [ -e /dev/fd/2 ]; then
       diagnostic_check_status=$?
       [ "$diagnostic_check_status" -eq 1 ] && stderr_diagnostic_safe=true
     fi
+  elif [ ! -e "$diagnostic_lock" ] && [ ! -L "$diagnostic_lock" ]; then
+    stderr_diagnostic_safe=true
   fi
 fi
 safe_notice() {
