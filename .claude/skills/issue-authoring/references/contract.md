@@ -1495,7 +1495,9 @@ draft revision the finding was raised against, counted from 1; recorded for
 audit only), `disposition` (`fixed`, `rejected`, or `deferred`), `evidence`
 (required for `rejected`: a file and line, or a read-only command and its
 output), and `decidedAt`. If the namespace or the ledger is lost, for example
-after a restart, the ledger is empty and the review runs as it does without one.
+after a restart, or after the session loses the identity record that
+[Ledger storage](#ledger-storage) keeps, including through context compaction,
+the ledger is empty and the review runs as it does without one.
 Record an entry for every finding as soon as its disposition is decided, before
 the next review round. A later disposition of the same finding updates that
 entry.
@@ -1543,37 +1545,83 @@ finding reopens as a new finding.
 ### Ledger storage
 
 A drafting session needs a private place for its ledger before the first ledger
-write. This procedure needs no orchestrator, no particular environment variable,
-no helper package, and no stable harness session ID, so it works the same in
-instructions-only and same-response self-critique runs. Run it once per drafting
-session, before the first disposition is recorded. Every check below fails
-closed: when a platform cannot supply one of the evidence values named here, the
-storage is unreadable and the procedure stops.
+write. This procedure needs one process that keeps the verified directory
+handles and the exclusive lock open across every ledger operation of the
+drafting session. An instructions-only or same-response self-critique run whose
+commands run as separate shell calls cannot do this, because a handle or a lock
+does not survive from one call to the next. Such a run, or any other run that
+cannot keep them, decides this before any check below and stops the procedure
+there: it creates no namespace and writes no ledger, and it never substitutes
+pathname-based operations. It reports that no ledger is kept and runs the review
+under the loss rule in the **Ledger** paragraph of
+[Carry-forward of rejected findings](#carry-forward-of-rejected-findings): no
+finding is carried forward, and every finding gets a fresh disposition. This
+capability stop is not a storage stop: no storage was examined, so the review
+can still finish. To keep a ledger, run the procedure and every ledger operation
+in one long-lived process that follows the implementation notes below. If that
+process ends before the drafting session does, the ledger is lost under the same
+rule; never reopen the namespace by path. The rule against pathname-based
+substitutes is preventive; no observed incident yet. Run the procedure once per
+drafting session, before the first disposition is recorded. Every check below
+fails closed: when a platform cannot supply one of the evidence values named
+here, the storage is unreadable and the procedure stops.
 
 **Evidence.** For each path, record its canonical path (symbolic links
-resolved), its file type, its owner, its mode (POSIX) or ACL (Windows), its link
+resolved), its file type, its owner, its mode (POSIX) or ACL (Windows), plus
+its ACL on any POSIX platform where the root checks below read one, its link
 count, and its file identity (device and inode on POSIX, volume serial and file
 index on Windows). A ledger's content is identified by its SHA-256. This
 identity record lives only in the session's working context, never in a file, a
-marker, or the repository. For Linux root checks, also record the candidate
-root, each existing protected path, and every nested mount point's mount ID,
-matching mountinfo fields, and derived backing location; repeat the full
-inventory and comparison whenever the root checks run.
+marker, or the repository. Loss of this record, including after context
+compaction, is a lost-ledger trigger: the earlier namespace cannot be verified
+again, so it is left untouched as evidence, and any new ledger goes in a new
+namespace. The storage verdicts below decide whether to allocate one and under
+which root; a missing record does not prove that no root was supplied. For Linux
+root checks, also record the candidate root, each existing protected path, and
+every nested mount point's mount ID, matching mountinfo fields, and derived
+backing location; repeat the full inventory and comparison whenever the root
+checks run.
 
-**Roots.** A root is a directory that holds namespaces. Use a root that the user
-or the runtime supplies, such as a named scratch directory or harness scratch
-metadata, when one exists. Otherwise try the operating system's temporary
-directory, then the user state directory (`$XDG_STATE_HOME` when it is a
-qualified absolute path, else `$HOME/.local/state`; on Windows,
-`%LOCALAPPDATA%`). An environment variable is an optional lookup, and a
-candidate that is absent is skipped. The user state directory is used only when
-it already exists; this procedure never creates it.
+**Roots.** A root is a directory that holds namespaces. A root that the user or
+the runtime supplies, such as a named scratch directory or harness scratch
+metadata, is the only candidate: if it is missing or fails a check, stop and
+report under the storage verdicts below, and never try another root. Only when
+session history affirmatively establishes that no root was supplied, try the
+operating system's temporary directory, then the user state directory. The
+temporary directory is the
+absolute path returned by the runtime's standard-library temporary-directory
+resolver or the equivalent OS API. The user state directory is
+`$XDG_STATE_HOME`, else `$HOME/.local/state`, on POSIX, and `%LOCALAPPDATA%` on
+Windows. One rule applies to every base variable here (`$XDG_STATE_HOME`,
+`$HOME`, and `%LOCALAPPDATA%`): use it only when it is set, nonempty, and a fully
+qualified absolute path, which starts with `/` on POSIX, or with a drive letter
+and `:\` or with a UNC `\\` prefix on Windows. Skip any other value, including a
+relative, drive-relative, or root-relative one, and never resolve it against the
+current directory. The user state directory is used only when it already exists;
+this procedure never creates it.
 
 **Root checks.** A root must be an existing directory, not a symbolic link or
 reparse point, whose canonical path lies outside every path reported by a
 complete, successful `git worktree list --porcelain` run and outside every Git
-directory. Run that command from the current worktree with the repository's
-trusted Git executable, `GIT_DIR`, `GIT_WORK_TREE`, `GIT_COMMON_DIR`,
+directory. The trusted Git executable is the single absolute executable
+resolved by the runtime's configured command lookup before the Git environment
+is sanitized. Resolve it once, do not use a shell alias or function, and use
+that same executable for every inventory command in this run. A command lookup
+can be steered by the session's `PATH`, so before trusting the executable's
+output, require that file and every directory on its canonical path to be owned
+by the current user or a system administrator principal (POSIX UID 0; on
+Windows, LocalSystem, TrustedInstaller, or the built-in Administrators group).
+No user other than those principals may be able to write the file, and no
+directory on that path may let another user rename or delete its entries: on
+POSIX, none may grant group or other users write and search permission without
+the sticky bit, and on Windows and macOS, none may have an ACL that lets another
+user rename or delete child entries. If any of this cannot be
+established, the protected-path inventory is unreadable. Run every inventory
+command through that verified canonical path itself, never through the
+looked-up path or a link to it, so that a link in a directory another user can
+write cannot be retargeted after the check. The executable check is
+preventive; no observed incident yet. Run that command
+from the current worktree with that executable, `GIT_DIR`, `GIT_WORK_TREE`, `GIT_COMMON_DIR`,
 `GIT_CEILING_DIRECTORIES`, and `GIT_DISCOVERY_ACROSS_FILESYSTEM` unset, and
 Git's diagnostic locale fixed to C (`LC_ALL=C` where supported). Require exit
 status 0 and parse all records. A missing executable, nonzero status,
@@ -1591,8 +1639,8 @@ unreadable. A common directory protects linked-worktree administrative
 records under its `worktrees/` subtree, including records for a registered
 worktree whose checkout path is confirmed absent. Keep that common directory
 in the inventory. The separate Git-administration-directory gap was identified
-during security review of PR #4728 on 2026-10-28
-([review comment](https://github.com/kurone-kito/idd-skill/pull/4728#issuecomment-6397812741)).
+during security review of PR #4728 on 2026-10-28 (preventive; no observed
+incident yet).
 
 Confirm the last part by running `git -C <canonical root> rev-parse --git-dir`
 with `GIT_DIR`, `GIT_WORK_TREE`, `GIT_COMMON_DIR`, `GIT_CEILING_DIRECTORIES`,
@@ -1607,19 +1655,18 @@ repository (or any parent up to mount point <path>)` and whose second line is
 For the filesystem-boundary form, the reported mount point must be a verified
 ancestor mount point of the canonical root. In either case, a no-follow walk
 from the root through its ancestors must confirm that each is readable and
-none is a Git directory or contains a `.git` entry (file or directory). The
-filesystem-boundary diagnostic was reproduced with `/dev/shm` during review of
-PR #4728 on 2026-10-28 ([review comment](https://github.com/kurone-kito/idd-skill/pull/4728#discussion_r4400867073)).
+none is a Git directory or contains a `.git` entry (file or directory).
+The filesystem-boundary diagnostic was reproduced with `/dev/shm` as a control
+test during security review of PR #4728 on 2026-10-28 (preventive; no observed
+incident yet).
 If the walk finds Git metadata, cannot inspect an ancestor, or sees malformed
 or ambiguous Git metadata, stop. Any other exit status or diagnostic,
 including missing Git, permission, I/O, malformed repository metadata, or an
 unclassifiable error, means the root is unreadable and must stop. Never treat
 an arbitrary Git failure as proof that the path is outside a repository.
 
-The root-ownership gap was identified during security review of PR #4728
-on 2026-10-28; no user-data loss was observed. See the review comment:
-
-<https://github.com/kurone-kito/idd-skill/pull/4728#discussion_r4401322925>
+The root-ownership gap was identified during security review of PR #4728 on
+2026-10-28 (preventive; no observed incident yet).
 
 A sticky bit does not make a root owned by another local user trustworthy:
 that directory owner can rename entries in the session namespace. The root
@@ -1627,16 +1674,28 @@ must be owned by the current user or a trusted system principal (POSIX UID
 0 or the Windows LocalSystem SID), and must be writable by the current
 user. On POSIX, reject a root that grants group or other users write and
 search permission without the sticky bit, even when the current user owns
-it. On Windows, reject a root whose ACL lets another user
-rename or delete child entries. If this permission evidence is unreadable,
-stop.
+it. On Windows, reject a root whose ACL lets another user rename or delete child
+entries. On Linux, a POSIX ACL entry for a named user or group is limited by the
+ACL mask, which the group permission bits show, so the mode check above already
+covers it. On macOS, an extended ACL entry can let another user delete child
+entries without any change to the BSD mode bits: read the root's ACL from the
+verified directory handle with Apple's
+[`acl_get_fd_np`](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man3/acl_get_fd.3.html)
+and reject a root whose ACL lets another user rename or delete child entries.
+On any other POSIX platform, the mode bits may not show ACL entries either, so
+apply the same check through that platform's handle-based ACL call. When that
+call reports that the root has no ACL (on macOS, `acl_get_fd_np` returns no ACL
+with `ENOENT`), the root has no extended entries and the mode check decides. On
+macOS or any other POSIX platform, any other failure to read the root's ACL
+through the verified handle fails this check. If this permission evidence is
+unreadable, stop.
 
 **Mount aliases.** A canonical pathname can look external while a bind mount
 exposes a worktree or Git administration directory, or while a nested mount
 inside a worktree is also reachable through an external path. The nested-mount
-gap was reproduced in an isolated Linux mount namespace during review of PR
-`#4728` on 2026-10-28 ([review comment](https://github.com/kurone-kito/idd-skill/pull/4728#discussion_r4401240053));
-the reproduction demonstrates the control gap, not user-data loss. Check the
+gap was reproduced as a control test in an isolated Linux mount namespace during
+security review of PR #4728 on 2026-10-28 (preventive; no observed incident
+yet). Check the
 backing location as well as the visible path. For every protected path (each
 reported worktree path and each discovered Git directory), first compare its
 normalized absolute lexical path against the candidate root using
@@ -1649,13 +1708,31 @@ its readable ancestors, retain the worktree record and its Git common
 directory, mark the protected-path inventory incomplete, and stop before
 evaluating any candidate root. A missing checkout does not rule out an
 external bind mount of one of its subdirectories; a ledger in that alias
-could be staged after the checkout is remounted. This control gap was
-identified during review of PR #4728 on 2026-10-28; no user-data loss was
-observed. See the review comment:
+could be staged after the checkout is remounted.
+This control gap was identified during security review of PR #4728 on
+2026-10-28 (preventive; no observed incident yet). The stop message names the
+missing path and this operator recovery step. An absent path can mean a deleted
+checkout, a worktree moved by hand, or one on unmounted storage, so the operator
+must confirm that the checkout was deleted: a moved worktree is repaired with
+`git worktree repair <new-path>`, and unmounted storage is mounted again; neither
+record is removed. For a deleted checkout whose record is detached, the operator
+first points a backup ref at its `HEAD` commit, so removing the record cannot
+leave that commit unreachable. A locked record refuses removal, so if the
+record is locked, the operator reads its lock reason, stops when the reason says
+the checkout may come back (for example, a checkout on removable media), and
+otherwise unlocks it with `git worktree unlock <path>`. Never pass `--force`
+twice, which removes a locked record without that check. Only then, holding any
+lock the clone uses for worktree changes, the operator re-checks that the path
+is still absent (`test ! -e <path>`) immediately before removing only that
+record with `git worktree remove --force <path>`; if the path has reappeared,
+the operator stops. The next run repeats the full inventory. Never use a plain
+`git worktree prune` here: it is clone-wide, so it can also
+remove other records, such as one whose checkout is only on unmounted storage,
+before anyone has checked them (preventive; no observed incident yet).
+Automation never prunes or removes worktree records, and this recovery does not
+bypass claim or worktree recovery.
 
-<https://github.com/kurone-kito/idd-skill/pull/4728#discussion_r4401322963>
-
-Never prune or edit Git metadata. Access denial,
+Automation must never prune or edit Git metadata. Access denial,
 an I/O or device error, a symbolic link or reparse point, or any ambiguous
 result makes the root unreadable and fails closed. An existing protected path
 still needs the full canonical-path and backing-location checks below. For
@@ -1700,14 +1777,24 @@ incident yet. See [`statx(2)`](https://man7.org/linux/man-pages/man2/statx.2.htm
 [`/proc/self/mountinfo`](https://www.man7.org/linux/man-pages/man5/proc_pid_mountinfo.5.html),
 and [`openat2(2)`](https://man7.org/linux/man-pages/man2/openat2.2.html).
 
+For this contract, native mount or volume evidence means an OS-provided
+inventory of every nested mount beneath each existing protected path plus a
+stable volume identity and backing path for each verified open handle; device
+numbers alone are insufficient. If that inventory or comparison cannot be
+established, fail closed. On macOS, get a verified handle's canonical path from
+the handle itself with `fcntl` and `F_GETPATH`, and compare that path with the
+inventory; if the call fails, stop. Never reopen the path by name to establish
+it.
+
 **Storage verdicts.** Classify each supplied root and namespace with exactly one
 verdict:
 
-| Input                                                                                                                                                                   | Verdict                                    | Action                                                                                                                                                                               |
-| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| A supplied root that exists and passes the root checks                                                                                                                  | Supplied verified storage                  | Create a new namespace under it (step 1).                                                                                                                                            |
-| No root is supplied, and this session has no identity record                                                                                                            | No previously supplied allocation          | Allocate under the first candidate root that passes the root checks (step 1).                                                                                                        |
-| A supplied root that is missing or fails a check, or a namespace, ledger, or lock file of this session whose identity differs from its record (see the ownership cases) | Unsafe, conflicting, or unreadable storage | Preserve everything, report the canonical path and the exact failing evidence, and treat the review as one that cannot finish (see below). Never fall back to another root silently. |
+| Input                                                                                                                                                                 | Verdict                                    | Action                                                                                                                                                                                                                         |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| A supplied root that exists and passes the root checks                                                                                                                | Supplied verified storage                  | Create a new namespace under it (step 1).                                                                                                                                                                                      |
+| No root was supplied for this session, and the session has no identity record                                                                                         | No previously supplied allocation          | Allocate under the first candidate root that passes the root checks (step 1).                                                                                                                                                  |
+| The identity record is unavailable, including after context compaction, and retained history does not establish whether a root was supplied                           | Identity unknown                           | Stop before any ledger write and allocate nothing. Ask the operator whether a root was supplied, then classify again; until then, the review runs without a ledger under the loss rule. Never infer that no root was supplied. |
+| A supplied root is missing or fails a check, or a namespace, ledger, or lock file of this session has an identity different from its record (see the ownership cases) | Unsafe, conflicting, or unreadable storage | Preserve everything, report the canonical path and exact failing evidence, and treat the review as unable to finish (see below). Never fall back to another root.                                                              |
 
 A namespace from another session is never reused, and a new session has no
 identity record to reuse. An older namespace is left untouched as evidence.
@@ -1742,9 +1829,11 @@ and report its path and the exact failing evidence; mark this candidate failed.
 Do not remove it by path.
 Retry with a fresh UUID only when the name already exists, at most three times.
 Any other failure ends that attempt. If a root was supplied, stop and report
-its path and error; do not try another root. Only when no root was supplied may
-the next candidate be tried. When every candidate fails, stop and report each
-attempt's path and error. Keep the namespace handle open for the ledger
+its path and error; do not try another root. Only when session history
+affirmatively establishes that no root was supplied may the next candidate be
+tried. When every candidate fails, stop and report each attempt's path and
+error.
+Keep the namespace handle open for the ledger
 operations below. Create a stable `ledger.lock` file relative to this handle
 with exclusive, no-follow, owner-only creation. Record its canonical path,
 identity, type, owner, and mode or ACL; verify those values before use. Never
@@ -1893,21 +1982,35 @@ identity still matches, the source identity and SHA-256 still match their
 records, and the destination is a regular file with link count 1, the recorded
 identity and SHA-256, and the canonical path `<namespace>/<number>.json`; also
 confirm that the destination's SHA-256 still equals the source ledger's
-recorded SHA-256. If any check fails, preserve both files and stop. Unlink the
-source only after all checks pass; if the unlink fails, preserve both files and
-report the error.
+recorded SHA-256. If any check fails, preserve both files and stop.
+Unlink the source only after all checks pass. If the unlink fails, preserve both
+files and report the error. The destination `<namespace>/<number>.json` is
+authoritative only while its recorded identity and SHA-256 still match; treat
+the source as a preserved, non-authoritative duplicate and perform no further
+ledger writes. If the destination cannot be verified, stop without using either
+copy.
 
 **A review that cannot finish.** A storage stop, an unowned or conflicting
-ledger, a failed first ledger, or a copy that does not match its source means
-the review cannot finish. The target is then not published as reviewed: its
-drafts go into a draft carrier marked `Review: not reviewed` (see
-[Draft carrier](#draft-carrier)), and the final message reports the namespace
-path, the exact failing evidence, and the drafts' local paths.
+ledger, a failed first ledger, a copy that does not match its source, or a
+failed source unlink means the review cannot finish. After a failed source
+unlink, only the verified destination ledger at the canonical path recorded in
+the identity record is authoritative; preserve the source duplicate and stop
+all writes. The target is then not published as reviewed: its drafts go into a
+draft carrier marked `Review: not reviewed` (see [Draft carrier](#draft-carrier)),
+and the final message reports the namespace path, exact failing evidence, and
+the drafts' local paths.
 
 **Scope.** The procedure never automatically deletes an older or abandoned
-namespace. It adds no mandatory durable session registry or operator recovery
-gate for a lost ledger. It may remove only a newly created entry whose recorded
-identity still matches, as stated above.
+namespace and adds no durable session registry. A lost identity record is not
+permission to guess the supplied root or reuse another session's namespace.
+Missing-worktree recovery is operator-only as described above. The procedure
+may remove only a newly created entry whose recorded identity still matches, as
+stated above.
+
+Structural checks and a live run differ: the repository tests in
+`tests/consistency.test.mts` confirm that these rules stay written in the
+bundle, but they never run an authoring session. Only a live authoring run shows
+that the storage procedure allocates a namespace and writes a ledger.
 
 ## Mechanical pre-publish gate
 
@@ -1964,6 +2067,14 @@ re-lint while held, and the Stage 2 release checklist — pass
 configured authoring label and configured needs-decision label. The
 same rule applies to `blocked-by-human` with its matching expected
 bucket and labels.
+
+Before publishing a confirmation issue (the `confirmation` shape, described
+under [Auto-decide confirmation issue](#auto-decide-confirmation-issue)), run
+the linter with `--shape confirmation --current-repo <owner>/<repo>` and the
+configured confirmation label with `--label`. A label collision or an unreadable
+policy file fails the check. Do not pass `--expect-bucket` with this shape. To
+check an appended record comment, run the linter with `--confirmation-record`
+and the expected class and source, as that section describes.
 
 It also emits a **failing** finding, `dependency-line-grammar`: a
 `Blocked by`/`Depends on` mention that the shared line-anchored grammar
@@ -2469,7 +2580,8 @@ only approval boundary.
   in this source repository). It publishes one issue per call and runs the
   steps below in order, from the journal check to `state=member`. The
   shape picks the issue: an orphan (the default), a draft carrier
-  (`--shape carrier`), a held roadmap shell (`--shape roadmap`, where an
+  (`--shape carrier`), an auto-decide confirmation issue
+  (`--shape confirmation`), a held roadmap shell (`--shape roadmap`, where an
   empty `## Tracks` list is valid), or one child of an existing set:
 
   ```sh
@@ -2478,9 +2590,10 @@ only approval boundary.
     --review-result <path> --apply
   ```
 
-  An orphan, a carrier, and a roadmap are each their own set anchor, so
-  their `anchor` reuses their own opaque `target`, and none of them accepts
-  `--anchor`. A child needs `--anchor` and exits 2 without it, before
+  An orphan, a carrier, a confirmation issue, and a roadmap are each their
+  own set anchor, so their `anchor` reuses their own opaque `target`, and
+  none of them accepts `--anchor`.
+  A child needs `--anchor` and exits 2 without it, before
   anything is created. The anchor must be an open issue in the same
   repository that still carries the authoring label and has no active
   claim or open linked pull request, and its trusted owner-marker log must
@@ -2516,13 +2629,17 @@ only approval boundary.
   of a set one call at a time (preventive; no observed incident yet). For a
   draft carrier,
   the command then runs the release steps of the carrier creation-hold
-  exception under "Authoring hold and release". It takes
-  `--review-result <path>`, required for an orphan, a roadmap, and a child:
+  exception under "Authoring hold and release", and for a confirmation issue
+  the same steps under the confirmation creation-hold exception there. It
+  takes `--review-result <path>`, required for an orphan, a roadmap, and a
+  child:
   a JSON object with `"completed": true`, whose optional `findings` entries
   must each be `fixed` or `rejected`. For a carrier the file is optional: its
   `completed` may be `false` (drafts marked `Review: not reviewed`), and its
   `findings`, if present, must be an array of objects and are not otherwise
-  checked. It is a dry run without `--apply`.
+  checked. A confirmation issue refuses `--review-result` (exit 2, before
+  anything is read), because it records an auto-decided stop, not a reviewed
+  draft. It is a dry run without `--apply`.
   It never retries, closes, or appends `cleanup` or `abandoned`: any failure
   after the create stops at a recovery hold with the record at `pending`, or
   reported as uncertain (replay the journal) when a record may have been
@@ -3146,8 +3263,9 @@ only approval boundary.
   stop. The guard suppresses Discover for the whole set during the provisional
   label-removal window; it does not close the set. When this release is
   proceeding under the narrow defer-source auto-release
-  exception below (a draft carrier follows the carrier creation-hold
-  exception's own sole-member check instead) instead of an explicit human
+  exception below (a draft carrier or a confirmation issue follows the
+  sole-member check of its own creation-hold exception instead) instead of an
+  explicit human
   release request, also verify here -- immediately before the first label
   removal below, whether that removal is a non-anchor target's or the
   anchor's own --
@@ -3236,12 +3354,12 @@ only approval boundary.
   read, restore its authoring label while the current owner/set still matches,
   and verify the restored set state; leave every target generation open and
   stop. If restoration cannot be completed or a newer owner has appeared,
-  record a set-level recovery hold and never claim a partial release. Release
-  is a human action; nothing in this bundle auto-releases a held issue set,
-  except the narrow exceptions immediately below: the defer-source exception
-  and the carrier creation-hold exception, both marker-scoped, and the
-  standing release approval for a single self-anchor target, which only the
-  repository policy can enable.
+  record a set-level recovery hold and never claim a partial release. An
+  explicit request is the default for Stage 2 release. This bundle permits a
+  hold to be removed without that request only under the narrow exceptions
+  immediately below: the marker-scoped defer-source, carrier creation-hold,
+  and confirmation creation-hold exceptions, and the policy-enabled standing
+  release approval for a single self-anchor target.
 - **Fast path: `|set|==1` self-anchor Stage 2 release (observed
   2026-09-21, kurone-kito/dotfiles#465 via gist round 27;
   kurone-kito/idd-skill#3164).** A genuine standalone set -- exactly
@@ -3258,38 +3376,33 @@ only approval boundary.
   retried or resumed release still re-runs it), then reuse or append
   the sole target/anchor's own `mode=release` marker and verify it;
   (2) the anchor-only `mode=release-guard` marker on the same issue,
-  verified against its paginated owner-marker log; (3) **only** when
-  this release is proceeding under the narrow defer-source auto-release
-  exception below, or under the standing release approval bullet below,
-  instead of an explicit human release request (a draft carrier is released
-  under the carrier creation-hold exception bullet below, with the
-  preconditions that bullet lists instead of these; a standing release is
-  checked by that bullet's own conditions instead of these) -- an
-  ordinary human-gated release skips straight to step (4), since the human
-  request already vouches for the set's scope -- run **both** of that
-  exception's own preconditions here, immediately before the label
-  removal in step (4): first, verify that this sole target really is
-  the sole member of its authoring set -- it carries no
-  `<marker-prefix>-roadmap-id` marker, and
+  verified against its paginated owner-marker log; (3) immediately before the
+  label removal, run the preconditions for the selected release path. An
+  ordinary human-gated release skips these additional checks and goes straight
+  to step (4), since the human request already vouches for the set's scope.
+  A defer-source release must pass both of its own preconditions: first,
+  verify that this sole target really is the sole member of its authoring set
+  -- it carries no `<marker-prefix>-roadmap-id` marker, and
   `node scripts/authoring-set-members.mjs --set <id> --issue <target>`, the
   bounded window that starts at the target's own first trusted marker for the
   set, reports `soleMember: true` with `issues` equal to this one target and no
   `skippedMarkers` entry with `namesRequestedSet: true` (a `requested-set`
-  entry on the target itself does not block); that
-  helper is exactly the mechanical proof this fast path's own
-  `|set|==1` premise rests on, so skipping it here would be a genuine
-  weakening, not a condensation, and a non-zero exit (including
-  `incomplete_results`, an unfinished index-lag window, or an edited
-  marker the token search still fetched) is
-  inconclusive; second, run the exception's
-  own provenance check -- the target's body must still carry the exact
-  defined defer-source marker from Stage 1 publication, and a
-  freshly recomputed body-sha256 must match that same target's
-  `mode=acquire` owner marker's recorded `body-sha256` -- neither
-  check is optional, and this fast path adds no shortcut through
-  either one; if either the sole-member helper or the provenance check
-  fails, or either cannot be completed, fall back to the ordinary
-  human-release-request precondition instead; (4) immediately before
+  entry on the target itself does not block); that helper is exactly the
+  mechanical proof this fast path's own `|set|==1` premise rests on, so
+  skipping it here would be a genuine weakening, not a condensation, and a
+  non-zero exit (including `incomplete_results`, an unfinished index-lag
+  window, or an edited marker the token search still fetched) is
+  inconclusive; second, run its own provenance check -- the target's body
+  must still carry the exact defined defer-source marker from Stage 1
+  publication, and a freshly recomputed body-sha256 must match that same
+  target's `mode=acquire` owner marker's recorded `body-sha256` -- neither
+  check is optional, and this fast path adds no shortcut through either one.
+  If either check fails or cannot be completed, fall back to the ordinary
+  human-release-request precondition. For a standing release, check all five
+  conditions in its own bullet at this same point; a failed or inconclusive
+  condition leaves the target held for an explicit request. A draft carrier
+  or confirmation issue uses its own creation-hold bullet's preconditions
+  instead of these. (4) immediately before
   the single label removal, reuse or append the anchor's
   `mode=heartbeat` marker (reuse allowed per the heartbeat-coalescing
   rule above) -- already the only heartbeat needed, per "one marker
@@ -3317,12 +3430,10 @@ only approval boundary.
   `authoring-marker-minimization-backlog` check after each of the
   sweep attempts above to keep its outcome visible. This callout is a
   shorter path to the same guarantee, never a weaker one: it grants no
-  new exemption, and release stays a human action under the same
-  precondition as the general case, subject to the same narrow
-  defer-source auto-release exception named in step (3), the standing
-  release approval for a single self-anchor target, or, for a draft
-  carrier, the carrier creation-hold exception. Pairs with the Stage 1
-  acquire fast path above.
+  new exemption, and release remains gated by the general approval rule or
+  one of the narrow defer-source or standing-release exceptions named in
+  step (3), or, for a draft carrier or confirmation issue, its creation-hold
+  exception. Pairs with the Stage 1 acquire fast path above.
 - **Closing sweep (after Stage 2 closes, #2896 review, Codex; #2935).**
   The two sweep points above run _before_ Stage 2's own later marker
   appends for the same generation -- the per-target `release` marker,
@@ -3605,9 +3716,68 @@ only approval boundary.
   `<!-- idd-skill-standing-approval:` and carries `class=release`,
   `set=<set>`, `anchor=<owner/repo#n>`, `ceiling=checklist`, and
   `option=<option-id>`, in that order. The record is evidence only and is not
-  a gate condition. A roadmap set, a multi-target set, a draft carrier, or a target
-  that fails any condition stays held for an explicit request. With the class
-  disabled or absent, the explicit-request rule applies unchanged.
+  a gate condition. A roadmap set, a multi-target set, a draft carrier, or a
+  target that fails any condition stays held for an explicit request. With
+  the class disabled or absent, the explicit-request rule applies unchanged.
+
+- **Confirmation creation-hold exception.** An auto-decide confirmation issue
+  (see [Auto-decide confirmation issue](#auto-decide-confirmation-issue))
+  published by `publish-authoring-hold --shape confirmation` (see "New-issue
+  ownership" above) is its own set anchor and has no readiness bucket. The
+  command refuses `--anchor`, `--review-result`, and any `--bucket` other
+  than `ready` (exit 2, before anything is read). It refuses (exit 1) when
+  the authoring label and the confirmation label
+  (`autoDecide.confirmationLabelName`, default `status:needs-confirmation`)
+  are not two different, non-empty names. It lints the body with
+  `audit-authored-issue --shape confirmation --new-issue --current-repo
+  <owner>/<repo>`, one `--label` for each of the two labels, and no
+  bucket. Then, before anything is written,
+  in a dry run too, it checks the confirmation label name against the
+  trusted policy: it reads `.github/idd/config.json` at the repository's
+  default branch with no user-global layer, and an absent file there means
+  the default name. It refuses (exit 1, nothing written) when the default
+  branch cannot be resolved, when that policy cannot be read for any other
+  reason, when the name from the repository policy file differs from the
+  trusted name, when either policy reports a label collision, or when the
+  repository stores the label under another letter case. A pull request or
+  a stale checkout that renamed the label could otherwise let the released
+  issue escape Discover (preventive; no observed incident yet). The creation
+  hold is the authoring label, applied together with the confirmation label
+  in the one create call. That hold is released by the same command right
+  after `state=member`, without a person's release request, by the carrier
+  release above: fast-path steps (1) to (8) on the confirmation issue, with
+  the carrier's preconditions (a) to (e) read on the confirmation issue,
+  except that:
+  - (c) runs `audit-authored-issue --shape confirmation` in body mode, not
+    record mode, on the fresh body with both configured labels;
+  - (e) requires the confirmation label and the authoring label.
+
+  The re-checks, the label restore and reapply rules, and the report fields
+  are the carrier's. The release never closes the confirmation issue and
+  never removes the confirmation label. The outcomes are:
+  - `released`: only the authoring label is removed. The confirmation label
+    stays and keeps the issue out of Discover (issue `#4960`);
+  - `held` (exit 0): both labels and the markers already posted stay, and
+    the issue waits for a person's Stage 2 release;
+  - recovery hold (exit 1): replay the issue's owner-marker log and the
+    journal's publication-intent log, and check its labels, before any
+    release. A failed or unverified label restore can leave the authoring
+    label removed.
+
+  The release records no minimization-backlog count (each `backlog` entry has
+  `count: null`), because the confirmation audit reports no
+  `authoring-marker-minimization-backlog` finding. After the create, never
+  rerun the command: a rerun would file a second confirmation issue for one
+  decision (preventive; no observed incident yet).
+
+  This exception releases only the creation hold, and it never authorizes
+  IDD execution: the confirmation label keeps the issue out of Discover, so
+  the issue never becomes a work target, and the operator confirms the
+  choice by closing it. It is therefore not an authoring release, which the
+  operator hearing of 2026-11-01 (recorded in roadmap `#4955`) kept as a
+  person's action that makes an issue a work target. Nor is it the release
+  of a follow-up that the work phase's "Unplanned follow-up work" rule
+  forbids: like the carrier exception, it needs no carve-out in that rule.
 
 - **Journal rotation.** Observed 2026-10-27 on issue `#2674`: the journal
   reached GitHub's limit of 2,500 comments, and the next post was refused with
@@ -3685,6 +3855,147 @@ requires the marker, matching expected `Refs` origin, configured
 authoring label, bucket, and sole `Refs` line, but does not check these
 five headings for a bucket body; the completed-draft review checks the
 full body shape.
+
+## Auto-decide confirmation issue
+
+An **auto-decide confirmation issue** records one stop that an autonomous
+session decided without a person. It tells the operator what stopped, which
+options were weighed, which option the session chose, and how to undo it. The
+operator confirms the choice by closing the issue. A comment that names another
+option asks for rework. The shape is `confirmation`. The four classes that file
+one are `runtimeQuestion`, `authoringChoice`, `worktreeRemnant`, and
+`b1Leftover`. The `decisionIssue` class records its pickup choices on the
+needs-decision source and files no confirmation issue.
+
+### Markers
+
+The record marker sits in the body. Its fields come in this order, and none
+repeats:
+
+```text
+<!-- <marker-prefix>-auto-decision: class=<class>; source=<owner>/<repo>#<number>; claim=<claim-id|none>; set=<set-id|none>; decision=<id> -->
+```
+
+A value contains no whitespace, no `;`, and no `-->`.
+
+- `class` is `runtimeQuestion`, `authoringChoice`, `worktreeRemnant`, or
+  `b1Leftover`. A `runtimeQuestion` record may name a needs-decision source.
+- `source` is an issue in the same repository as the confirmation issue. The
+  comparison ignores case.
+- `runtimeQuestion` carries the session's current claim ID. `worktreeRemnant`
+  carries the stale or released claim ID that the recovery confirmed.
+  `b1Leftover` acts before any claim exists and carries `claim=none`. These
+  three carry `set=none`.
+- `authoringChoice` carries `claim=none` and the authoring set ID of the source
+  target. That set is not the confirmation issue's own creation set.
+- `decision` is an opaque ID that the session generates once per decision. A
+  decision covers exactly one subject, so a run that acts on N subjects records
+  N decisions, each with its own ID, and each counts toward the caps. A retried
+  append repeats the same ID, so readers count distinct IDs.
+
+The link marker is the first line of a comment on the source issue. The session
+posts it after the record. Its fields and value rules are the same:
+
+```text
+<!-- <marker-prefix>-auto-decision-link: class=<class>; claim=<claim-id|none>; set=<set-id|none>; decision=<id>; confirmation=<owner>/<repo>#<number> -->
+```
+
+The void marker is the first line of a comment on the confirmation issue. It
+says that the decision was not acted on. A voided decision is never completed
+and does not count toward the caps:
+
+```text
+<!-- <marker-prefix>-auto-decision-void: decision=<id> -->
+```
+
+The note marker is the first line of a comment on the confirmation issue. After
+acting, the session posts `kind=location` with the preserved-data location, the
+backup refs, or the stash tag. It posts `kind=failure` when the action fails
+after the record. A decision with a counting `location` note has been acted on,
+so no helper acts on its record again. A note does not void the decision, which
+still counts toward the caps:
+
+```text
+<!-- <marker-prefix>-auto-decision-note: decision=<id>; kind=<location|failure> -->
+```
+
+### Body
+
+- The record marker is the first non-blank line after the publication line, at
+  column 0. No other `<marker-prefix>-auto-decision` text appears anywhere in
+  the body, not even inside code.
+- These headings follow, in this order, each exactly once: `## Stop`,
+  `## Options`, `## Chosen option`, `## How to undo`, and `## Question`.
+- For `worktreeRemnant` and `b1Leftover`, the first non-blank line under
+  `## Stop`, at column 0, begins with `Subject:`. It holds exactly one
+  single-backtick code span with no backtick and no leading or trailing space
+  inside. No other line in the section begins with `Subject:`. The span holds
+  the path in one canonical form: absolute, with its parent directory resolved
+  and its last component kept as written, without following it. For a branch,
+  the span holds the short branch name without `refs/heads/`. Readers compare
+  the span exactly, and both modes build their subject in this form.
+- `## Options` holds at least two `###` options. One is titled exactly
+  `### Keep today's behavior`. Each option holds exactly one line that begins
+  with `Cost:`.
+- The first non-empty line of `## Chosen option` is the title of a listed
+  option other than `Keep today's behavior`.
+- `## Question` holds exactly one line that begins with `Question:` followed by
+  a space. Its wording says that closing the issue confirms the choice, and that
+  a comment naming another option asks for rework. The wording is the author's
+  responsibility, and the linter does not check it.
+- No autopilot-suitability, effort, roadmap-id, blocked-by, authoring-bucket,
+  defer-source, or draft-carrier marker or footer appears in the body.
+
+### Record comment
+
+A record comment's first line is a record marker for the same class and source,
+followed by the same headings.
+
+### Trust
+
+A body, record comment, link-marker comment, void marker, or note marker counts
+only when all of these hold:
+
+- its author is in `trustedMarkerActors`, read from the repository policy file
+  only, with no flag or environment override. An empty or missing list means
+  that nothing counts;
+- it is unedited, judged by the same edit-state check that the draft carrier
+  release uses for its markers;
+- for the body, the current `body-sha256` still equals the `body-sha256` of the
+  issue's `mode=acquire` owner marker;
+- its marker sits at the position the grammar pins: the body's first non-blank
+  line after the publication line, or a comment's first line.
+
+A record comment counts only on an issue whose body record counts, with the same
+class and source. Anyone else's comment never counts.
+
+### No edits
+
+Reuse-first never reuses a confirmation issue as an authoring target. No session
+edits a confirmation issue's body or labels, except through
+`publish-authoring-hold`'s own creation-hold release and its recovery. That
+release is the confirmation creation-hold exception in
+[Authoring hold and release](#authoring-hold-and-release). Appending a record, a
+void marker, or a note marker is an addition, not an edit.
+
+### Linter
+
+Run the linter with `--shape confirmation --current-repo <owner>/<repo>`.
+`--current-repo` is required. The `$GITHUB_REPOSITORY` fallback does not count,
+and without the flag the shape is a usage error. `--expect-bucket` is refused
+for this shape. The A4 and A4.5 triage are reported as not applicable.
+
+The label check reads the configured `autoDecide.confirmationLabelName`. It
+fails on a collision with another label name and on an unreadable policy file.
+With `--new-issue`, an `authoringChoice` record whose `set` equals the
+publication line's own `set` fails.
+
+A record comment is checked with `--confirmation-record`, `--expect-class`, and
+`--expect-source`. The caller copies `class` and `source` from the body marker.
+`--expect-claim`, `--expect-set`, and `--expect-subject` are optional. The
+record marker must be on the first line, and no publication line may appear.
+
+The linter exits 0 on a pass, 1 on each failing rule, and 2 on each usage error.
 
 ## Draft carrier
 
@@ -3857,13 +4168,13 @@ passes the completed-draft adversarial review and then the mechanical
 [Authoring hold and release](#authoring-hold-and-release) above for the
 full two-stage contract. A reviewed draft that cannot be published that way
 is published as a [draft carrier](#draft-carrier) instead, and ends in local
-files only in the two cases that section lists. Removing the authoring label
-and starting the IDD execution loop both require the user's explicit
-hold-release request, except the narrow defer-source auto-release exception
-documented in [Authoring hold and release](#authoring-hold-and-release)
-above and the standing release approval for a single self-anchor target in
-that section; nothing else authorizes either. The carrier creation-hold exception
-in that section removes only a carrier's creation hold and authorizes no
-execution.
+files only in the cases that section lists. Removing the authoring label and
+starting the IDD execution loop both require the user's explicit hold-release
+request, except the narrow defer-source auto-release exception and the
+standing release approval for a single self-anchor target documented in
+[Authoring hold and release](#authoring-hold-and-release) above; nothing else
+authorizes either. The carrier creation-hold exception and the confirmation
+creation-hold exception in that section remove only the creation hold of a
+carrier or a confirmation issue and authorize no execution.
 
 [issue-authoring-review-input-schema]: https://kurone-kito.github.io/idd-skill/schemas/issue-authoring-review-input.schema.json

@@ -1088,6 +1088,24 @@
       "glob": "**/*.md",
       "pattern": "blocked:\\s+adopt-now",
       "message": "The Triage line writes blocked adopt-now without a colon after blocked."
+    },
+    {
+      "id": "e11-merge-failure-signing-hold",
+      "glob": "idd-template/.github/instructions/**",
+      "pattern": "hold\\s+on\\s+a\\s+merge,\\s+signing,\\s+or\\s+hook\\s+failure",
+      "message": "A signed merge that fails moves to the next Commit signing tier; only an unsigned failure holds (issue #4973). Do not restore the old E11 sentence that held on a signing failure."
+    },
+    {
+      "id": "lite-e11-signing-failure-stop-and-ask",
+      "glob": "idd-template/.github/instructions/**",
+      "pattern": "On\\s+command/signing/hook\\s+failure,\\s+run\\s+`git\\s+merge\\s+--abort`\\s+and\\s+stop-and-ask",
+      "message": "Lite E11 takes the next signing tier after a signing failure; only an unsigned failure stops and asks (issue #4973). Do not restore the old sentence."
+    },
+    {
+      "id": "lite-d1-signing-stop-and-ask-first",
+      "glob": "idd-template/.github/instructions/**",
+      "pattern": "no\\s+fallback\\s+wrapper\\s+exists\\s+for\\s+arbitrary\\s+git\\s+subcommands,\\s+stop\\s+and\\s+ask\\s+first",
+      "message": "Lite D1 skips a signer that needs a terminal and falls back to an unsigned rebase instead of stopping (issue #4973). Do not restore the old step 4 sentence."
     }
   ],
   "rootMarkdownAllowlist": {

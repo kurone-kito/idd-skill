@@ -19,13 +19,16 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, relative, resolve } from 'node:path';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 import { after, before, test } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import type { DistributionSelectionReport } from '../src/scripts/distribution-selection.mts';
 import {
   buildCommandCatalog,
   collectVendoredFiles,
   PROFILE_NAMES,
+  readHelperExtraRuntimeFiles,
+  resolveHelperEntryClosure,
 } from '../src/scripts/helper-runtime-manifest.mts';
 // Importing the CLI module directly is only possible because its top-level
 // statements are guarded behind `import.meta.main` (#1210 pattern, migrated
@@ -45,11 +48,14 @@ import {
   checkPackagePinWarning,
   checkPlaceholderResidue,
   checkStaleImportSignal,
+  type DistributionCliCommand,
+  type DistributionCliServices,
   deriveDevelopmentBranchCandidate,
   deriveInstallDepsCommand,
   deriveMarkerPrefix,
   deriveValidateCommands,
   escapeJsonStringContent,
+  executeDistributionCli,
   HEAR_NON_TTY_ERROR,
   listSkippedPlaceholderPaths,
   MARKER_PREFIX_PATTERN,
@@ -68,14 +74,17 @@ import {
   runRecordPolicyCli,
   runVerify,
   SCAN_EXCLUDED_PATHS,
+  sanitizedGitEnvironment,
   scanPlaceholderTokens,
   UNTRUSTED_LABELER_GUARD_WORKFLOW_PATH,
+  withSanitizedGitEnvironment,
 } from '../src/scripts/idd-onboard.mts';
 import { loadOnboardingHearingCatalog } from '../src/scripts/onboarding-hearing.mts';
 import type { PromptFn } from '../src/scripts/readline-prompt.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
 import {
   type FixtureGhRule,
+  fixtureEnv,
   pinLoadControlOff,
   useFixtureGh,
 } from './test-utils.mts';
@@ -772,6 +781,12 @@ test('planUntrustedLabelerGuardWorkflow generates the guard workflow for non-emp
     plan.content ?? '',
     /github\.event\.label\.name == 'status:authoring-only'/,
   );
+  // #4959: the default confirmation label is reserved too, even with no
+  // autoDecide block configured, since Discover hides an issue carrying it.
+  assert.match(
+    plan.content ?? '',
+    /github\.event\.label\.name == 'status:needs-confirmation'/,
+  );
   assert.match(
     plan.content ?? '',
     /export GH_HOST="\$\{GITHUB_SERVER_URL#https:\/\/\}"/,
@@ -810,6 +825,72 @@ test('planUntrustedLabelerGuardWorkflow substitutes custom (non-default) label n
     /github\.event\.label\.name == 'needs:decision'/,
   );
   assert.doesNotMatch(plan.content ?? '', /'roadmap'/);
+});
+
+function writeGuardConfig(root: string, config: Record<string, unknown>): void {
+  mkdirSync(join(root, '.github', 'idd'), { recursive: true });
+  writeFileSync(
+    join(root, '.github', 'idd', 'config.json'),
+    JSON.stringify(config),
+  );
+}
+
+test('planUntrustedLabelerGuardWorkflow substitutes a configured autoDecide.confirmationLabelName (#4959)', () => {
+  const root = makeFixtureDir();
+  writeGuardConfig(root, {
+    labels: { untrustedLabelerLogins: ['triage-bot[bot]'] },
+    autoDecide: { confirmationLabelName: 'triage:confirm' },
+  });
+  const plan = planUntrustedLabelerGuardWorkflow(root);
+  assert.match(
+    plan.content ?? '',
+    /github\.event\.label\.name == 'triage:confirm'/,
+  );
+  assert.doesNotMatch(plan.content ?? '', /'status:needs-confirmation'/);
+  // The four labels.* names stay in the reserved set next to the override.
+  for (const name of [
+    'roadmap',
+    'status:blocked-by-human',
+    'status:needs-decision',
+    'status:authoring-only',
+  ]) {
+    assert.ok(
+      (plan.content ?? '').includes(`github.event.label.name == '${name}'`),
+      `expected ${name} to stay reserved`,
+    );
+  }
+  // The header names the autoDecide key as a source next to labels.*.
+  assert.match(plan.content ?? '', /`autoDecide\.confirmationLabelName`/);
+});
+
+test('planUntrustedLabelerGuardWorkflow rejects a control character in a configured autoDecide.confirmationLabelName (#4959)', () => {
+  // Normalization keeps any name with a non-whitespace character, so the
+  // raw value reaches the generator, which must refuse it by key.
+  const root = makeFixtureDir();
+  writeGuardConfig(root, {
+    labels: { untrustedLabelerLogins: ['bot[bot]'] },
+    autoDecide: {
+      confirmationLabelName: 'status:x\npermissions:\n  contents: write',
+    },
+  });
+  assert.throws(
+    () => planUntrustedLabelerGuardWorkflow(root),
+    /autoDecide\.confirmationLabelName must not contain control characters/,
+  );
+});
+
+test('planUntrustedLabelerGuardWorkflow is a no-op without untrustedLabelerLogins even when a confirmation label is configured (#4959)', () => {
+  const root = makeFixtureDir();
+  writeGuardConfig(root, {
+    autoDecide: { confirmationLabelName: 'triage:confirm' },
+  });
+  const plan = planUntrustedLabelerGuardWorkflow(root);
+  assert.equal(plan.content, null);
+  assert.equal(applyUntrustedLabelerGuardPlan(root, plan), false);
+  assert.equal(
+    existsSync(join(root, UNTRUSTED_LABELER_GUARD_WORKFLOW_PATH)),
+    false,
+  );
 });
 
 test('planUntrustedLabelerGuardWorkflow is idempotent against an unchanged config (#2671)', () => {
@@ -917,9 +998,46 @@ test('buildUntrustedLabelerGuardWorkflowContent escapes an embedded single quote
     blockedByHumanLabelName: 'status:blocked-by-human',
     needsDecisionLabelName: 'status:needs-decision',
     authoringOnlyLabelName: 'status:authoring-only',
+    confirmationLabelName: 'status:needs-confirmation',
     untrustedLabelerLogins: ['bot[bot]'],
   });
   assert.match(content, /github\.event\.label\.name == 'adopter''s-roadmap'/);
+});
+
+test('buildUntrustedLabelerGuardWorkflowContent escapes an embedded single quote in the confirmation label name (#4959)', () => {
+  const content = buildUntrustedLabelerGuardWorkflowContent({
+    roadmapLabelName: 'roadmap',
+    blockedByHumanLabelName: 'status:blocked-by-human',
+    needsDecisionLabelName: 'status:needs-decision',
+    authoringOnlyLabelName: 'status:authoring-only',
+    confirmationLabelName: "adopter's-confirmation",
+    untrustedLabelerLogins: ['bot[bot]'],
+  });
+  assert.match(
+    content,
+    /github\.event\.label\.name == 'adopter''s-confirmation'/,
+  );
+});
+
+test('buildUntrustedLabelerGuardWorkflowContent rejects a confirmation label name containing a newline, a C1 control character, or a Unicode line/paragraph separator (#4959)', () => {
+  // The confirmation label name is interpolated into the same `if: |-`
+  // block scalar as the labels.* names, so it gets the same rejection, and
+  // the error names its autoDecide key.
+  for (const injected of ['\n', '\x85', ' ', ' ']) {
+    assert.throws(
+      () =>
+        buildUntrustedLabelerGuardWorkflowContent({
+          roadmapLabelName: 'roadmap',
+          blockedByHumanLabelName: 'status:blocked-by-human',
+          needsDecisionLabelName: 'status:needs-decision',
+          authoringOnlyLabelName: 'status:authoring-only',
+          confirmationLabelName: `status:needs-confirmation${injected}permissions:`,
+          untrustedLabelerLogins: ['bot[bot]'],
+        }),
+      /autoDecide\.confirmationLabelName must not contain control characters/,
+      `expected ${JSON.stringify(injected)} to be rejected`,
+    );
+  }
 });
 
 test('buildUntrustedLabelerGuardWorkflowContent rejects a label name containing a newline (YAML/permissions-injection guard, #2671 review)', () => {
@@ -935,6 +1053,7 @@ test('buildUntrustedLabelerGuardWorkflowContent rejects a label name containing 
         blockedByHumanLabelName: 'status:blocked-by-human',
         needsDecisionLabelName: 'status:needs-decision',
         authoringOnlyLabelName: 'status:authoring-only',
+        confirmationLabelName: 'status:needs-confirmation',
         untrustedLabelerLogins: ['bot[bot]'],
       }),
     /labels\.roadmapLabelName must not contain control characters/,
@@ -952,6 +1071,7 @@ test('buildUntrustedLabelerGuardWorkflowContent rejects an authoring-only label 
         needsDecisionLabelName: 'status:needs-decision',
         authoringOnlyLabelName:
           'status:authoring-only\npermissions:\n  contents: write',
+        confirmationLabelName: 'status:needs-confirmation',
         untrustedLabelerLogins: ['bot[bot]'],
       }),
     /labels\.authoringOnlyLabelName must not contain control characters/,
@@ -970,6 +1090,7 @@ test('buildUntrustedLabelerGuardWorkflowContent rejects a label name containing 
           blockedByHumanLabelName: 'status:blocked-by-human',
           needsDecisionLabelName: 'status:needs-decision',
           authoringOnlyLabelName: 'status:authoring-only',
+          confirmationLabelName: 'status:needs-confirmation',
           untrustedLabelerLogins: ['bot[bot]'],
         }),
       /labels\.roadmapLabelName must not contain control characters/,
@@ -982,7 +1103,7 @@ test('buildUntrustedLabelerGuardWorkflowContent safely escapes a control charact
   // JSON.stringify already renders a control character as a short escape
   // (e.g. "\r" -> the two characters backslash + "r"), so the serialized
   // logins blob this function embeds never contains a raw control byte --
-  // unlike the four label-name fields above, which are interpolated as
+  // unlike the reserved label-name fields above, which are interpolated as
   // raw strings and do need the explicit rejection this test's sibling
   // above covers.
   const content = buildUntrustedLabelerGuardWorkflowContent({
@@ -990,6 +1111,7 @@ test('buildUntrustedLabelerGuardWorkflowContent safely escapes a control charact
     blockedByHumanLabelName: 'status:blocked-by-human',
     needsDecisionLabelName: 'status:needs-decision',
     authoringOnlyLabelName: 'status:authoring-only',
+    confirmationLabelName: 'status:needs-confirmation',
     untrustedLabelerLogins: ['bot\r[bot]'],
   });
   assert.match(content, /contains\(fromJSON\('\["bot\\r\[bot\]"\]'\)/);
@@ -8608,6 +8730,54 @@ test("bin/idd-onboard.mjs --hear rejects import/substitute-only flags (--source,
   }
 });
 
+test('legacy onboarding stages reject distribution-only options before execution', () => {
+  const root = makeFixtureDir();
+  const stages = [
+    { mode: '--import', extra: ['--source', root] },
+    { mode: '--verify', extra: [] },
+    { mode: '--substitute', extra: [] },
+    { mode: '--hear', extra: [] },
+    { mode: '--record-policy', extra: [] },
+  ];
+  const distributionOptions: [string, string][] = [
+    ['--session-id', 'unexpected-session'],
+    ['--source-commit', 'a'.repeat(40)],
+    ['--helper-argv-json', '[]'],
+  ];
+
+  for (const { mode, extra } of stages) {
+    for (const [flag, value] of distributionOptions) {
+      let failure: { status?: number; stderr?: string } | undefined;
+      try {
+        execFileSync(
+          process.execPath,
+          [
+            BIN_PATH,
+            mode,
+            '--target',
+            root,
+            ...extra,
+            flag,
+            value,
+            '--allow-root',
+            tmpdir(),
+          ],
+          { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+        );
+      } catch (error) {
+        failure = error as { status?: number; stderr?: string };
+      }
+      assert.ok(failure, `${mode} unexpectedly accepted ${flag}`);
+      assert.equal(failure.status, 2, `${mode} + ${flag}`);
+      assert.match(String(failure.stderr), /does not accept/u);
+      assert.ok(String(failure.stderr).includes(flag));
+      if (mode === '--substitute') {
+        assert.match(String(failure.stderr), /distribution-only flag/u);
+      }
+    }
+  }
+});
+
 test('bin/idd-onboard.mjs rejects --hear-only flags (--propose, --apply, --answers) when --hear is not selected', () => {
   const root = makeFixtureDir();
   for (const [stage, extra] of [
@@ -12149,6 +12319,798 @@ test('a missing directory above an install root is a refusal that names it and w
 });
 
 // ---------------------------------------------------------------------------
+// #4705: distribution mode is explicit, session-bound, and read-only unless
+// the caller chooses preparation or binding.
+// ---------------------------------------------------------------------------
+
+const DISTRIBUTION_TEST_COMMIT = 'a'.repeat(40);
+
+function loadDistributionFixture(path: string): unknown {
+  return JSON.parse(JSON.stringify(loadJson(path))) as unknown;
+}
+
+function distributionReportFor(sessionId: string): DistributionSelectionReport {
+  const report = loadDistributionFixture(
+    'fixtures/schemas/distribution-selection.valid.json',
+  ) as DistributionSelectionReport;
+  report.session.id = sessionId;
+  return report;
+}
+
+function distributionServices(
+  overrides: Partial<DistributionCliServices> = {},
+): DistributionCliServices {
+  return {
+    inspect: ({ sessionId }) => distributionReportFor(sessionId),
+    prepare: () => {
+      throw new Error('unexpected preparation');
+    },
+    bind: () => {
+      throw new Error('unexpected binding');
+    },
+    resolveCommit: () => DISTRIBUTION_TEST_COMMIT,
+    readManifest: () =>
+      loadDistributionFixture(
+        'fixtures/schemas/distribution-manifest.valid.json',
+      ),
+    ...overrides,
+  };
+}
+
+test('distribution inspect returns a schema-valid report and calls no writer', () => {
+  const calls: string[] = [];
+  const outcome = executeDistributionCli(
+    {
+      operation: 'inspect',
+      targetRoot: '/target/repository',
+      sessionId: 'inspect-session',
+    },
+    distributionServices({
+      inspect: ({ cwd, sessionId }) => {
+        calls.push(`inspect:${cwd}:${sessionId}`);
+        return distributionReportFor(sessionId);
+      },
+      prepare: () => {
+        calls.push('prepare');
+        throw new Error('inspection called preparation');
+      },
+      bind: () => {
+        calls.push('bind');
+        throw new Error('inspection called binding');
+      },
+    }),
+  );
+
+  assert.equal(outcome.exitCode, 0);
+  assert.deepEqual(calls, ['inspect:/target/repository:inspect-session']);
+  assert.deepEqual(
+    validate(
+      outcome.output,
+      loadJson('schemas/distribution-selection.schema.json'),
+    ),
+    [],
+  );
+  assert.equal(
+    (outcome.output as DistributionSelectionReport).session.id,
+    'inspect-session',
+  );
+});
+
+test('distribution inspect and bind sanitize Git repository overrides', () => {
+  const environmentName = process.platform === 'win32' ? 'git_dir' : 'GIT_DIR';
+  const previousValue = process.env[environmentName];
+  process.env[environmentName] = 'caller-controlled-repository-override';
+  const valuesDuringResolution: (string | undefined)[] = [];
+
+  try {
+    const inspect = executeDistributionCli(
+      {
+        operation: 'inspect',
+        targetRoot: '/target/repository',
+        sessionId: 'sanitized-inspect-session',
+      },
+      distributionServices({
+        inspect: ({ sessionId }) => {
+          valuesDuringResolution.push(process.env[environmentName]);
+          return distributionReportFor(sessionId);
+        },
+      }),
+    );
+    assert.equal(inspect.exitCode, 0);
+    assert.equal(
+      process.env[environmentName],
+      'caller-controlled-repository-override',
+      'inspection restores the caller environment after resolution',
+    );
+
+    const bind = executeDistributionCli(
+      {
+        operation: 'bind',
+        targetRoot: '/target/repository',
+        sessionId: 'sanitized-bind-session',
+      },
+      distributionServices({
+        bind: ({ sessionId }) => {
+          valuesDuringResolution.push(process.env[environmentName]);
+          return {
+            status: 'created',
+            authorized: true,
+            report: distributionReportFor(sessionId),
+          };
+        },
+      }),
+    );
+    assert.equal(bind.exitCode, 0);
+    assert.deepEqual(valuesDuringResolution, [undefined, undefined]);
+    assert.equal(
+      process.env[environmentName],
+      'caller-controlled-repository-override',
+      'binding restores the caller environment after resolution',
+    );
+  } finally {
+    if (previousValue === undefined) delete process.env[environmentName];
+    else process.env[environmentName] = previousValue;
+  }
+});
+
+test('distribution inspect refuses a valid report for a different session', () => {
+  const outcome = executeDistributionCli(
+    {
+      operation: 'inspect',
+      targetRoot: '/target/repository',
+      sessionId: 'requested-session',
+    },
+    distributionServices({
+      inspect: () => distributionReportFor('other-session'),
+    }),
+  );
+
+  assert.equal(outcome.exitCode, 1);
+  assert.match(outcome.message ?? '', /expected requested-session/u);
+});
+
+test('distribution rejects an unsupported operation without invoking a writer', () => {
+  let calls = 0;
+  const command = {
+    operation: 'delete' as unknown as DistributionCliCommand['operation'],
+    targetRoot: '/target/repository',
+    sessionId: 'invalid-operation-session',
+  };
+  const outcome = executeDistributionCli(
+    command,
+    distributionServices({
+      inspect: () => {
+        calls += 1;
+        return distributionReportFor(command.sessionId);
+      },
+      prepare: () => {
+        calls += 1;
+        throw new Error('unsupported operation reached preparation');
+      },
+      bind: () => {
+        calls += 1;
+        throw new Error('unsupported operation reached binding');
+      },
+    }),
+  );
+
+  assert.equal(outcome.exitCode, 1);
+  assert.match(
+    outcome.message ?? '',
+    /unsupported distribution operation: delete/u,
+  );
+  assert.equal(calls, 0);
+  assert.equal((outcome.output as { operation: string }).operation, 'delete');
+});
+
+test('distribution prepare verifies an immutable commit and argv data, then re-inspects without binding', () => {
+  const calls: string[] = [];
+  let preparedOptions: unknown;
+  let manifestPath: string | undefined;
+  const outcome = executeDistributionCli(
+    {
+      operation: 'prepare',
+      targetRoot: '/target/repository',
+      sourceRoot: '/source/checkout',
+      sourceCommit: DISTRIBUTION_TEST_COMMIT,
+      sessionId: 'prepare-session',
+      helperArgv: ['--repo', 'owner/name with spaces', 'quote" and $HOME'],
+    },
+    distributionServices({
+      inspect: ({ sessionId }) => {
+        calls.push('inspect');
+        return distributionReportFor(sessionId);
+      },
+      prepare: (options) => {
+        calls.push('prepare');
+        preparedOptions = options;
+        return {
+          sourceCommit: DISTRIBUTION_TEST_COMMIT,
+          preparedPath: '/home/user/.local/share/idd-skill/prepared/test',
+          fileCount: 4,
+          reused: false,
+        };
+      },
+      bind: () => {
+        calls.push('bind');
+        throw new Error('preparation called binding');
+      },
+      resolveCommit: (sourceRoot, requested) => {
+        assert.equal(sourceRoot, '/source/checkout');
+        assert.equal(requested, DISTRIBUTION_TEST_COMMIT);
+        return DISTRIBUTION_TEST_COMMIT;
+      },
+      readManifest: (path) => {
+        manifestPath = path;
+        const manifest = loadDistributionFixture(
+          'fixtures/schemas/distribution-manifest.valid.json',
+        ) as { sourceCommit: string };
+        manifest.sourceCommit = DISTRIBUTION_TEST_COMMIT;
+        return manifest;
+      },
+    }),
+  );
+
+  assert.equal(outcome.exitCode, 0);
+  assert.deepEqual(calls, ['inspect', 'prepare', 'inspect']);
+  assert.deepEqual(preparedOptions, {
+    sourceRoot: '/source/checkout',
+    sourceCommit: DISTRIBUTION_TEST_COMMIT,
+    provenance: { kind: 'checkout', commit: DISTRIBUTION_TEST_COMMIT },
+    invocation: {
+      command: 'bin/idd-activation.mjs',
+      argv: ['--repo', 'owner/name with spaces', 'quote" and $HOME'],
+    },
+  });
+  assert.equal(manifestPath, '/home/user/.local/share/idd-skill/prepared/test');
+  assert.equal((outcome.output as { operation: string }).operation, 'prepare');
+});
+
+test('distribution prepare reports staged recovery state after a writer failure', () => {
+  let inspections = 0;
+  const outcome = executeDistributionCli(
+    {
+      operation: 'prepare',
+      targetRoot: '/target/repository',
+      sourceRoot: '/source/checkout',
+      sessionId: 'prepare-session',
+    },
+    distributionServices({
+      inspect: ({ sessionId }) => {
+        inspections += 1;
+        return distributionReportFor(sessionId);
+      },
+      prepare: () => {
+        throw new Error('receipt update stopped after staging');
+      },
+    }),
+  );
+
+  assert.equal(outcome.exitCode, 1);
+  assert.equal(inspections, 2);
+  assert.match(outcome.message ?? '', /receipt update stopped/u);
+  assert.equal(
+    (outcome.output as { selection?: DistributionSelectionReport }).selection
+      ?.session.id,
+    'prepare-session',
+  );
+});
+
+test('distribution bind reports partial and refused outcomes without success', () => {
+  for (const status of ['partial', 'refused'] as const) {
+    const outcome = executeDistributionCli(
+      {
+        operation: 'bind',
+        targetRoot: '/target/repository',
+        sessionId: `bind-${status}`,
+      },
+      distributionServices({
+        bind: ({ sessionId }) => ({
+          status,
+          authorized: false,
+          reason: `binding ${status} after filesystem refusal`,
+          ...(status === 'partial'
+            ? { stagedPath: '/global/.staging/binding-record' }
+            : {}),
+          report: distributionReportFor(sessionId),
+        }),
+      }),
+    );
+
+    assert.equal(outcome.exitCode, 1);
+    assert.match(outcome.message ?? '', new RegExp(`binding ${status}`, 'u'));
+    const output = outcome.output as {
+      status: string;
+      authorized: boolean;
+      stagedPath?: string;
+      selection: DistributionSelectionReport;
+    };
+    assert.equal(output.status, status);
+    assert.equal(output.authorized, false);
+    assert.equal(output.selection.session.id, `bind-${status}`);
+    if (status === 'partial') {
+      assert.equal(output.stagedPath, '/global/.staging/binding-record');
+    }
+  }
+});
+
+test('bin/idd-onboard.mjs distribution inspect validates its report and writes nothing', () => {
+  const sandbox = makeUserGlobalSandbox();
+  const before = snapshotFull(sandbox.root);
+  const run = runUserGlobal(sandbox, [
+    '--distribution',
+    'inspect',
+    '--session-id',
+    'cli-session',
+  ]);
+
+  assert.equal(run.status, 0, run.stderr);
+  const report = JSON.parse(run.stdout) as DistributionSelectionReport;
+  assert.deepEqual(
+    validate(report, loadJson('schemas/distribution-selection.schema.json')),
+    [],
+  );
+  assert.equal(report.session.id, 'cli-session');
+  assert.deepEqual(snapshotFull(sandbox.root), before);
+
+  const missingSession = runUserGlobal(sandbox, ['--distribution', 'inspect']);
+  assert.equal(missingSession.status, 2);
+  assert.match(missingSession.stderr, /requires a non-empty --session-id/u);
+  assert.deepEqual(snapshotFull(sandbox.root), before);
+
+  const conflictingModes = runUserGlobal(sandbox, [
+    '--distribution',
+    'inspect',
+    '--session-id',
+    'cli-session',
+    '--distribution',
+    'bind',
+  ]);
+  assert.equal(conflictingModes.status, 2);
+  assert.match(
+    conflictingModes.stderr,
+    /--distribution may be specified only once/u,
+  );
+  assert.deepEqual(snapshotFull(sandbox.root), before);
+});
+
+test('Git repository overrides are sanitized case-insensitively on Windows', () => {
+  const names = ['git_dir', 'gIt_wOrK_tReE', 'git_config_global'] as const;
+  const previousValues = new Map(
+    names.map((name) => [name, process.env[name]] as const),
+  );
+  for (const [index, name] of names.entries()) {
+    process.env[name] = `windows-git-override-${index}`;
+  }
+
+  try {
+    const sanitized = sanitizedGitEnvironment('win32');
+    for (const name of names) {
+      assert.equal(sanitized[name], undefined);
+    }
+
+    const valuesDuringOperation = withSanitizedGitEnvironment(
+      () => names.map((name) => process.env[name]),
+      'win32',
+    );
+    assert.deepEqual(
+      valuesDuringOperation,
+      names.map(() => undefined),
+    );
+    for (const [index, name] of names.entries()) {
+      assert.equal(process.env[name], `windows-git-override-${index}`);
+    }
+  } finally {
+    for (const [name, value] of previousValues) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+});
+
+test('bin/idd-onboard.mjs distribution prepare and bind preserve CLI data and status', {
+  skip: NO_USER_GLOBAL_INSTALL,
+}, (t) => {
+  const sandbox = makeUserGlobalSandbox();
+  const gitEnv = fixtureEnv();
+  const targetRoot = sandbox.root;
+  execFileSync(
+    'git',
+    ['init', '--quiet', '--initial-branch=main', targetRoot],
+    { env: gitEnv, stdio: 'pipe' },
+  );
+  writeFileSync(join(targetRoot, 'README.md'), 'fixture repository\n');
+  execFileSync('git', ['-C', targetRoot, 'add', 'README.md'], {
+    env: gitEnv,
+    stdio: 'pipe',
+  });
+  execFileSync(
+    'git',
+    [
+      '-C',
+      targetRoot,
+      '-c',
+      'user.name=IDD fixture',
+      '-c',
+      'user.email=idd-fixture@example.invalid',
+      '-c',
+      'commit.gpgsign=false',
+      'commit',
+      '--quiet',
+      '-m',
+      'create fixture repository',
+    ],
+    { env: gitEnv, stdio: 'pipe' },
+  );
+  execFileSync(
+    'git',
+    [
+      '-C',
+      targetRoot,
+      'remote',
+      'add',
+      'origin',
+      'https://github.com/fixture/distribution-cli.git',
+    ],
+    { env: gitEnv, stdio: 'pipe' },
+  );
+
+  // This source clone stands in for the working tree used by both fixture
+  // installation and distribution preparation.
+  const sourceRoot = join(targetRoot, 'source');
+  execFileSync(
+    'git',
+    ['clone', '--quiet', '--shared', '--no-checkout', REPO_ROOT, sourceRoot],
+    { env: gitEnv, stdio: 'pipe' },
+  );
+  execFileSync(
+    'git',
+    ['-C', sourceRoot, 'checkout', '--quiet', '--detach', 'HEAD'],
+    {
+      env: gitEnv,
+      stdio: 'pipe',
+    },
+  );
+  const templateDoc = 'idd-template/docs/idd-helper-scripts.md';
+  writeFileSync(
+    join(sourceRoot, templateDoc),
+    readFileSync(join(REPO_ROOT, templateDoc)),
+  );
+  // The clone holds only committed files, so carry over the checkout's other
+  // tracked edits and its untracked, non-ignored files, the way a dirty working
+  // tree would be installed. Each entry keeps its mode, and a symlink stays a
+  // symlink, so nothing is written through a link into another path.
+  // A path is copied only while it is a regular file or a symlink; a path that
+  // became a directory, or was removed, is a removal in the clone (#4943 review).
+  const isCopyableEntry = (path: string): boolean => {
+    try {
+      const stat = lstatSync(join(REPO_ROOT, path));
+      return stat.isFile() || stat.isSymbolicLink();
+    } catch {
+      return false;
+    }
+  };
+  const mirrorCheckoutEntry = (path: string, stage: boolean): void => {
+    const source = join(REPO_ROOT, path);
+    const target = join(sourceRoot, path);
+    rmSync(target, { recursive: true, force: true });
+    if (!isCopyableEntry(path)) {
+      return;
+    }
+    const stat = lstatSync(source);
+    mkdirSync(dirname(target), { recursive: true });
+    if (stat.isSymbolicLink()) {
+      symlinkSync(readlinkSync(source), target);
+    } else {
+      writeFileSync(target, readFileSync(source));
+      chmodSync(target, stat.mode & 0o777);
+    }
+    if (stage) {
+      execFileSync('git', ['-C', sourceRoot, 'add', '--', path], {
+        env: gitEnv,
+        stdio: 'pipe',
+      });
+    }
+  };
+  // Additions are re-added so they stay tracked, and deletions are removed.
+  const checkoutEdits = execFileSync(
+    'git',
+    ['-C', REPO_ROOT, 'diff', '--name-only', '--no-renames', '-z', 'HEAD'],
+    { env: gitEnv, encoding: 'utf8', stdio: 'pipe' },
+  )
+    .split('\0')
+    .filter((path) => path.length > 0);
+  // A removed file may leave a directory that an added file replaces, so
+  // removals go first.
+  const checkoutRemovals = checkoutEdits.filter(
+    (path) => !isCopyableEntry(path),
+  );
+  for (const path of [
+    ...checkoutRemovals,
+    ...checkoutEdits.filter((path) => !checkoutRemovals.includes(path)),
+  ]) {
+    mirrorCheckoutEntry(path, true);
+  }
+  // Untracked files stay untracked in the clone, so the untracked-payload
+  // guard sees them as it would in a dirty checkout.
+  const checkoutUntracked = execFileSync(
+    'git',
+    ['-C', REPO_ROOT, 'ls-files', '--others', '--exclude-standard', '-z'],
+    { env: gitEnv, encoding: 'utf8', stdio: 'pipe' },
+  )
+    .split('\0')
+    .filter((path) => path.length > 0);
+  for (const path of checkoutUntracked) {
+    mirrorCheckoutEntry(path, false);
+  }
+  const trackedPayloadDoc = 'idd-template/docs/idd-workflow.md';
+  const payloadMarker = `<!-- tracked-payload-${process.pid}-${Date.now()} -->`;
+  writeFileSync(
+    join(sourceRoot, trackedPayloadDoc),
+    `${readFileSync(join(sourceRoot, trackedPayloadDoc), 'utf8')}\n${payloadMarker}\n`,
+  );
+
+  const syncManifest = JSON.parse(
+    readFileSync(join(sourceRoot, 'audit', 'sync-manifest.json'), 'utf8'),
+  ) as { generatedBlocks: { id: string; paths: string[] }[] };
+  const payloadBlock = syncManifest.generatedBlocks.find(
+    (block) => block.id === 'idd-template-core-files',
+  );
+  assert.ok(payloadBlock, 'the core template payload block exists');
+  assert.ok(
+    payloadBlock.paths.includes(trackedPayloadDoc),
+    'the tracked edit is part of the installed template payload',
+  );
+  const payloadPaths = new Set([
+    ...payloadBlock.paths,
+    'idd-template/user-global/entry.md',
+    ...resolveHelperEntryClosure('bin/idd-activation.mjs', {
+      packageRoot: sourceRoot,
+      extraRuntimeFiles: readHelperExtraRuntimeFiles(sourceRoot),
+    }),
+  ]);
+  const skillPayloadPrefixes = [
+    'skills/issue-authoring/',
+    'skills/idd-spec-audit/',
+  ];
+  const inspectTrackedPayloadSnapshot = () => {
+    const untrackedPayloadPaths = execFileSync(
+      'git',
+      ['-C', sourceRoot, 'ls-files', '--others', '-z'],
+      { env: gitEnv, encoding: 'utf8', stdio: 'pipe' },
+    )
+      .split('\0')
+      .filter(
+        (path) =>
+          path.length > 0 &&
+          (payloadPaths.has(path) ||
+            skillPayloadPrefixes.some((prefix) => path.startsWith(prefix))),
+      )
+      .sort();
+    if (untrackedPayloadPaths.length > 0) {
+      return {
+        kind: 'skip' as const,
+        reason: `Untracked payload files prevent a complete tracked source snapshot: ${untrackedPayloadPaths.join(', ')}`,
+      };
+    }
+    const sourceCommit = execFileSync(
+      'git',
+      [
+        '-C',
+        sourceRoot,
+        '-c',
+        'user.name=IDD fixture',
+        '-c',
+        'user.email=idd-fixture@example.invalid',
+        '-c',
+        'commit.gpgsign=false',
+        'stash',
+        'create',
+      ],
+      { env: gitEnv, encoding: 'utf8', stdio: 'pipe' },
+    ).trim();
+    assert.match(sourceCommit, /^[0-9a-f]{40}$/u);
+    return { kind: 'ready' as const, sourceCommit };
+  };
+
+  // One untracked file under each installed skill bundle must each cause a
+  // skip that names the exact path (#4949).
+  const untrackedPayloadFixtures = [
+    'skills/issue-authoring',
+    'skills/idd-spec-audit',
+  ].map((bundle) =>
+    join(
+      sourceRoot,
+      bundle,
+      `.idd-test-untracked-${process.pid}-${Date.now()}.md`,
+    ),
+  );
+  for (const fixture of untrackedPayloadFixtures) {
+    writeFileSync(fixture, 'untracked payload fixture\n');
+  }
+  try {
+    const skipped = inspectTrackedPayloadSnapshot();
+    assert.equal(skipped.kind, 'skip');
+    if (skipped.kind === 'skip') {
+      // The checkout may hold untracked payload files of its own, which the
+      // guard reports too (#4943 review).
+      const checkoutPayload = checkoutUntracked.filter(
+        (path) =>
+          payloadPaths.has(path) ||
+          skillPayloadPrefixes.some((prefix) => path.startsWith(prefix)),
+      );
+      const paths = [
+        ...untrackedPayloadFixtures.map((fixture) =>
+          relative(sourceRoot, fixture).split(sep).join('/'),
+        ),
+        ...checkoutPayload,
+      ].sort();
+      assert.equal(
+        skipped.reason,
+        `Untracked payload files prevent a complete tracked source snapshot: ${paths.join(', ')}`,
+      );
+    }
+  } finally {
+    for (const fixture of untrackedPayloadFixtures) {
+      rmSync(fixture, { force: true });
+    }
+  }
+
+  const snapshot = inspectTrackedPayloadSnapshot();
+  if (snapshot.kind === 'skip') {
+    t.skip(snapshot.reason);
+    return;
+  }
+  const sourceCommit = snapshot.sourceCommit;
+
+  // Install from the same dirty tracked worktree whose full snapshot will be
+  // used for preparation. The snapshot helper itself leaves the worktree and
+  // index untouched; after verifying its tree, reset this temporary clone to
+  // the snapshot because the CLI requires HEAD to equal --source-commit.
+  const installed = runUserGlobal(sandbox, ['--install-user-global'], {
+    script: join(sourceRoot, 'bin', 'idd-onboard.mjs'),
+  });
+  assert.equal(installed.status, 0, installed.stderr);
+  assert.equal(
+    execFileSync(
+      'git',
+      ['-C', sourceRoot, 'show', `${sourceCommit}:${templateDoc}`],
+      {
+        env: gitEnv,
+        encoding: 'utf8',
+        stdio: 'pipe',
+      },
+    ),
+    readFileSync(join(sourceRoot, templateDoc), 'utf8'),
+  );
+  assert.equal(
+    execFileSync(
+      'git',
+      ['-C', sourceRoot, 'show', `${sourceCommit}:${trackedPayloadDoc}`],
+      {
+        env: gitEnv,
+        encoding: 'utf8',
+        stdio: 'pipe',
+      },
+    ),
+    readFileSync(join(sourceRoot, trackedPayloadDoc), 'utf8'),
+  );
+  assert.ok(
+    execFileSync(
+      'git',
+      ['-C', sourceRoot, 'show', `${sourceCommit}:${trackedPayloadDoc}`],
+      {
+        env: gitEnv,
+        encoding: 'utf8',
+        stdio: 'pipe',
+      },
+    ).includes(payloadMarker),
+    'the source commit contains the tracked template payload edit',
+  );
+  execFileSync('git', ['-C', sourceRoot, 'reset', '--hard', sourceCommit], {
+    env: gitEnv,
+    stdio: 'pipe',
+  });
+  assert.equal(
+    execFileSync('git', ['-C', sourceRoot, 'rev-parse', 'HEAD'], {
+      env: gitEnv,
+      encoding: 'utf8',
+      stdio: 'pipe',
+    }).trim(),
+    sourceCommit,
+  );
+  const helperArgv = [
+    '--repo',
+    'fixture/owner with spaces',
+    'literal "$HOME" ; echo ignored',
+  ];
+  const sessionId = 'distribution-cli-session';
+
+  const prepared = runUserGlobal(
+    sandbox,
+    [
+      '--distribution',
+      'prepare',
+      '--session-id',
+      sessionId,
+      '--source',
+      sourceRoot,
+      '--source-commit',
+      sourceCommit,
+      '--helper-argv-json',
+      JSON.stringify(helperArgv),
+    ],
+    {
+      env: {
+        GIT_DIR: join(targetRoot, '.git'),
+        GIT_WORK_TREE: targetRoot,
+      },
+    },
+  );
+  assert.equal(prepared.status, 0, prepared.stderr);
+  const preparedOutput = JSON.parse(prepared.stdout) as {
+    operation: string;
+    status: string;
+    preparation: { preparedPath: string; sourceCommit: string };
+    selection: DistributionSelectionReport;
+  };
+  assert.equal(preparedOutput.operation, 'prepare');
+  assert.equal(preparedOutput.status, 'prepared');
+  assert.equal(preparedOutput.preparation.sourceCommit, sourceCommit);
+  assert.deepEqual(
+    validate(
+      preparedOutput.selection,
+      loadJson('schemas/distribution-selection.schema.json'),
+    ),
+    [],
+  );
+  const manifest = JSON.parse(
+    readFileSync(
+      join(preparedOutput.preparation.preparedPath, 'manifest.json'),
+      'utf8',
+    ),
+  ) as {
+    components: { helper: { invocation: { command: string; argv: string[] } } };
+  };
+  assert.deepEqual(
+    validate(manifest, loadJson('schemas/distribution-manifest.schema.json')),
+    [],
+  );
+  assert.equal(
+    manifest.components.helper.invocation.command,
+    'bin/idd-activation.mjs',
+  );
+  assert.deepEqual(manifest.components.helper.invocation.argv, helperArgv);
+
+  const bound = runUserGlobal(sandbox, [
+    '--distribution',
+    'bind',
+    '--session-id',
+    sessionId,
+  ]);
+  assert.equal(bound.status, 0, bound.stderr);
+  const boundOutput = JSON.parse(bound.stdout) as {
+    operation: string;
+    status: string;
+    authorized: boolean;
+    selection: DistributionSelectionReport;
+  };
+  assert.equal(boundOutput.operation, 'bind');
+  assert.equal(boundOutput.status, 'created');
+  assert.equal(boundOutput.authorized, true);
+  assert.equal(boundOutput.selection.session.id, sessionId);
+  assert.equal(boundOutput.selection.session.binding, 'bound');
+  assert.equal(boundOutput.selection.verdict, 'session-bound');
+  assert.deepEqual(
+    validate(
+      boundOutput.selection,
+      loadJson('schemas/distribution-selection.schema.json'),
+    ),
+    [],
+  );
+});
+
+// ---------------------------------------------------------------------------
 // #4245: structural guard. The two user-global modes add no write or removal
 // of their own: the marked block of src/scripts/idd-onboard.mts calls only
 // the install, uninstall, and plan functions of user-global-install.mts.
@@ -12417,7 +13379,7 @@ test('structural guard: the user-global block calls only the install, uninstall,
   // install module are the four it exports for this CLI.
   assert.deepEqual(
     importedNames(source, './user-global-install.mts').sort(),
-    [...MODULE_FUNCTIONS].sort(),
+    [...MODULE_FUNCTIONS, 'prepareDistributionSet'].sort(),
   );
   assert.match(
     source.slice(0, begin) + source.slice(end),

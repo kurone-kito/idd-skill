@@ -9550,6 +9550,51 @@ test('disposition pointers include triage placeholders only for record and enfor
   }
 });
 
+test('disposition pointer under the normalized empty-config default carries the triage flags (#4854)', () => {
+  // The mode is read from the normalized policy, not written as a literal, so
+  // a change to the distributed default in POLICY_DEFAULTS changes what this
+  // pointer test sees.
+  const normalized = normalizePolicyConfig({}).critiqueLoop.triageRecord;
+  assert.equal(normalized, 'record');
+  const verdict = computeAdvisoryConvergenceVerdict(
+    baseInputs({
+      prNumber: 42,
+      reviews: [copilotReview({ itemCount: 2 })],
+    }),
+    baseOptions({ triageRecord: normalized }),
+  );
+  assertValidVerdict(verdict);
+  const action = verdict.nextActions.find(
+    (item) =>
+      item.token ===
+      ADVISORY_CONVERGENCE_NEXT_ACTION_TOKEN.DISPOSITION_POSTED_ITEMS,
+  );
+  assert.ok(action);
+  assert.equal(
+    action.pointer,
+    'node scripts/resolve-review-thread.mjs --pr 42 --comment-id <id> --body "**Accepted** — …" --claim-issue <n> --claim-id <id> --tier <tier> --urgency <urgency> --apply',
+  );
+  assert.ok(
+    formatAssertNextActions(verdict, { triageRecord: normalized }).includes(
+      action.pointer,
+    ),
+  );
+
+  // The stamped-disposition pointer carries the same triage flags.
+  const stamped = nextActionsFor(CITED_PREVIOUSLY_MISSED_BODY, [], {
+    prNumber: 42,
+    triageRecord: normalized,
+  }).items.find(
+    (item) =>
+      item.token ===
+      ADVISORY_CONVERGENCE_NEXT_ACTION_TOKEN.STAMPED_DISPOSITION_SUPPRESSED,
+  );
+  assert.equal(
+    stamped?.pointer,
+    'node scripts/resolve-review-thread.mjs --pr 42 --review-id <review-id> --item-title "<item-title>" --body "<reply-body>" --claim-issue <claim-issue> --claim-id <claim-id> --tier <tier> --urgency <urgency> --apply',
+  );
+});
+
 test('stamped disposition (#4007): cited-only items name the stamped reply, not a review-ack', () => {
   const { verdict, items, text } = nextActionsFor(CITED_PREVIOUSLY_MISSED_BODY);
   assert.deepEqual(verdict.review.suppressedCitation, {

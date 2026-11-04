@@ -19824,7 +19824,7 @@ test('#4717: the readiness builder carries the injected claim-bound recovery obj
   assert.deepEqual(validate(summary, readinessSchema), []);
 });
 
-test('#4717: an on-head report carries the object but no stale-request-recovery gate (decision 2)', () => {
+test('#4879: an on-head claim-bound report gates a present attempt recovery object', () => {
   const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
   const summary = JSON.parse(
     JSON.stringify(
@@ -19838,38 +19838,135 @@ test('#4717: an on-head report carries the object but no stale-request-recovery 
     ),
   );
   assert.equal(summary.staleRequestRecovery.action, 'attempt');
-  assert.equal(blockerNamed(summary, 'stale-request-recovery'), undefined);
+  assert.ok(blockerNamed(summary, 'stale-request-recovery'));
+  assert.equal(summary.ready, false);
 });
 
-test('#4717: a malformed injected recovery object fails the off-head gate closed', () => {
+test('#4879: an on-head claim-bound report keeps the cap-exhausted recovery hold', () => {
   const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
   const summary = JSON.parse(
     JSON.stringify(
-      buildPreMergeReadinessSummary(
-        withCopilotCommit(
-          fixture.input,
-          '2222222222222222222222222222222222222222',
-        ),
-        {
-          ...fixture.options,
-          evaluateStaleRequestRecovery: () => ({ action: 'not-applicable' }),
-        },
-      ),
+      buildPreMergeReadinessSummary(fixture.input, {
+        ...fixture.options,
+        evaluateStaleRequestRecovery: () => ({
+          action: 'cap-exhausted',
+          reason: 'recovery-cap-exhausted',
+        }),
+      }),
     ),
   );
   assert.ok(blockerNamed(summary, 'stale-request-recovery'));
   assert.equal(summary.ready, false);
 });
 
-test('#4717: without an injected classifier no staleRequestRecovery property is set', () => {
+test('#4878: a claim-id-only report blocks on-head and off-head without recovery evidence', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const cases = [
+    { name: 'on-head', input: fixture.input },
+    {
+      name: 'off-head',
+      input: withCopilotCommit(
+        fixture.input,
+        '2222222222222222222222222222222222222222',
+      ),
+    },
+  ];
+
+  for (const { name, input } of cases) {
+    const summary = JSON.parse(
+      JSON.stringify(
+        buildPreMergeReadinessSummary(input, {
+          ...fixture.options,
+          expectedAgentId: '',
+        }),
+      ),
+    );
+    assert.equal(
+      'staleRequestRecovery' in summary,
+      false,
+      `${name}: the collector does not synthesize recovery evidence`,
+    );
+    assert.ok(
+      blockerNamed(summary, 'stale-request-recovery'),
+      `${name}: ${JSON.stringify(summary.blockers)}`,
+    );
+    const blocker = blockerNamed(summary, 'stale-request-recovery');
+    assert.ok(blocker, `${name}: expected a stale-request-recovery blocker`);
+    assert.ok(typeof blocker.detail === 'string');
+    assert.match(
+      blocker.detail,
+      /--agent-id/,
+      `${name}: blocker should explain the recovery path`,
+    );
+    assert.equal(summary.ready, false, name);
+    assert.deepEqual(validate(summary, readinessSchema), []);
+  }
+});
+
+test('#4878: a claimless report omits recovery evidence without this blocker', () => {
   const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
   const summary = JSON.parse(
     JSON.stringify(
-      buildPreMergeReadinessSummary(fixture.input, fixture.options),
+      buildPreMergeReadinessSummary(fixture.input, {
+        ...fixture.options,
+        claimless: true,
+      }),
     ),
   );
   assert.equal('staleRequestRecovery' in summary, false);
   assert.equal(blockerNamed(summary, 'stale-request-recovery'), undefined);
+});
+
+test('#4879: a malformed injected recovery object fails the gate closed on either head', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  for (const [name, input] of [
+    ['on-head', fixture.input],
+    [
+      'off-head',
+      withCopilotCommit(
+        fixture.input,
+        '2222222222222222222222222222222222222222',
+      ),
+    ],
+  ] as const) {
+    const summary = JSON.parse(
+      JSON.stringify(
+        buildPreMergeReadinessSummary(input, {
+          ...fixture.options,
+          evaluateStaleRequestRecovery: () => ({ action: 'not-applicable' }),
+        }),
+      ),
+    );
+    assert.ok(blockerNamed(summary, 'stale-request-recovery'), name);
+    assert.equal(summary.ready, false, name);
+  }
+});
+
+test('#4879: an absent recovery object gates only the off-head claim-bound report', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const cases = [
+    { name: 'on-head', input: fixture.input, blocked: false },
+    {
+      name: 'off-head',
+      input: withCopilotCommit(
+        fixture.input,
+        '2222222222222222222222222222222222222222',
+      ),
+      blocked: true,
+    },
+  ] as const;
+  for (const { name, input, blocked } of cases) {
+    const summary = JSON.parse(
+      JSON.stringify(buildPreMergeReadinessSummary(input, fixture.options)),
+    );
+    assert.equal('staleRequestRecovery' in summary, false, name);
+    assert.equal(
+      Boolean(blockerNamed(summary, 'stale-request-recovery')),
+      blocked,
+      name,
+    );
+    if (blocked) assert.equal(summary.ready, false, name);
+  }
 });
 
 // kurone-kito/idd-skill#4717: both lite advisory-wait copies validate the

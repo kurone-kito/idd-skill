@@ -228,6 +228,45 @@
   // - false (default): provisional decision choices stay disabled.
   // "dangerouslyAutoDecide": false,
 
+  // Auto-decide classes (roadmap #4955), repository-only like the switch
+  // above. A class acts only when its enabled flag and dangerouslyAutoDecide
+  // are both true. A malformed class stays off, and a malformed cap or label
+  // name turns every class off.
+  // "autoDecide": {
+  //   // decisionIssue: picking up a needs-decision issue.
+  //   // - true: the class is on.
+  //   // - false (default): the issue waits for a person's decision.
+  //   "decisionIssue": { "enabled": false },
+  //   // runtimeQuestion: a question while implementing a claimed issue.
+  //   // - true: the class is on.
+  //   // - false (default): the session holds and asks a person.
+  //   "runtimeQuestion": { "enabled": false },
+  //   // authoringChoice: an authoring choice when nobody asked for a
+  //   // hearing.
+  //   // - true: the class is on.
+  //   // - false (default): the choice waits for a person.
+  //   "authoringChoice": { "enabled": false },
+  //   // worktreeRemnant: another session's worktree left on this host.
+  //   // - true: the class is on once the worktree has gone unmodified for
+  //   //   quietWindow, a positive ISO 8601 duration; PT2H is the default.
+  //   // - false (default): an operator recovers the worktree.
+  //   "worktreeRemnant": { "enabled": false, "quietWindow": "PT2H" },
+  //   // b1Leftover: an unmerged local branch with no remote branch or pull
+  //   // request, or an unregistered worktree path, found before a claim.
+  //   // - true: the class is on.
+  //   // - false (default): the claim stops for manual cleanup.
+  //   "b1Leftover": { "enabled": false },
+  //   // No new auto-decision while this many confirmations are pending; an
+  //   // integer from 1 to 100.
+  //   "maxPendingConfirmations": 10,
+  //   // Most auto-decisions under one claim; one authoring set for the
+  //   // authoring class, one source issue before a claim exists. An integer
+  //   // from 1 to 20.
+  //   "maxDecisionsPerClaim": 3,
+  //   // Label of an auto-decide confirmation issue; it must not be blank.
+  //   "confirmationLabelName": "status:needs-confirmation"
+  // },
+
   // Free text that names the selected critique-loop profile, for people. No
   // helper reads it. Default: omitted.
   // "critiqueLoopProfile": "default",
@@ -607,41 +646,40 @@
   //   // being fixed.
   //   "deferAfterRounds": 12,
   //   // An urgency-based defer rule that applies from the first round.
-  //   // - "off" (default): the rule is off.
+  //   // - "off": the rule is off.
   //   // - "low": a Low finding that is not adopt-now goes to a follow-up
   //   //   issue.
   //   // - "low-and-medium": a Low or Medium finding that is not adopt-now
   //   //   goes to a follow-up issue. High never does under low or
   //   //   low-and-medium.
-  //   // - "severity-tiered": a severity-and-urgency matrix decides. At step
-  //   //   0 (deferRelaxAtRounds left out, or a review count below its first
+  //   // - "severity-tiered" (default): a severity-and-urgency matrix decides. At step
+  //   //   0 (a review count below its first
   //   //   entry), High goes to a follow-up issue only at very-low urgency.
   //   //   See docs/idd-review-policy-profiles.md.
-  //   "deferByUrgency": "off",
+  //   "deferByUrgency": "severity-tiered",
   //   // Tier and urgency records on review replies made through the
   //   // resolve-review-thread helper.
-  //   // - "off" (default): no tier or urgency is required. A reply that
-  //   //   passes both still gets a Triage: line.
-  //   // - "record": an applied Accepted or Rejected PATH A reply needs a
-  //   //   tier and an urgency, which the helper records. A --path-b reply
-  //   //   and a maintainer-confirmation reply are exempt.
+  //   // - "off": no tier or urgency is required. A reply that passes both
+  //   //   still gets a Triage: line.
+  //   // - "record" (default): an applied Accepted or Rejected PATH A reply
+  //   //   needs a tier and an urgency, which the helper records. A --path-b
+  //   //   reply and a maintainer-confirmation reply are exempt.
   //   // - "enforce": like record, and the helper also refuses an Accepted
   //   //   reply that the defer matrix says to defer, unless a reason is
   //   //   given. It acts only with severity-tiered, and otherwise behaves as
   //   //   record.
-  //   "triageRecord": "off",
+  //   "triageRecord": "record",
   //   // One or two ascending review counts at which severity-tiered relaxes.
-  //   // Default: omitted, which turns the gradient off. No effect under the
-  //   // other deferByUrgency values. docs/customization.md recommends the
-  //   // example value.
-  //   "deferRelaxAtRounds": [4, 7],
-  //   // Review-count cap for severity-tiered. Default: omitted, which turns
-  //   // the cap off. Under severity-tiered only. At or above the value, every
+  //   // Default: [4]. JSON null turns the gradient off. No effect under the
+  //   // other deferByUrgency values. This repository's own config uses [4, 7].
+  //   "deferRelaxAtRounds": [4],
+  //   // Review-count cap for severity-tiered. Default: 5. JSON null turns the
+  //   // cap off. Under severity-tiered only. At or above the value, every
   //   // non-safety-class finding goes to a follow-up issue whatever the step,
   //   // except PATH B, --scope-fence, --protected-authority, and
   //   // --accepted-mid-fix, which keep their verdicts. Adopt-now condition (d)
   //   // and --adopt-now keep none of the others.
-  //   "deferAllAfterRounds": 3,
+  //   "deferAllAfterRounds": 5,
   //   // - "on" (default): a finding that needs a person's judgment may go to
   //   //   a needs-decision follow-up issue when merging is safe.
   //   // - "off": the loop stops for a person instead.

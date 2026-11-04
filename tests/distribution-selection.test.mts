@@ -5,11 +5,15 @@ import * as fs from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { after, test } from 'node:test';
+import { fileURLToPath } from 'node:url';
+import { injectGeneratedFromBanner } from '../src/scripts/consistency-helpers.mts';
 import {
   bindDistributionSelection,
   type DistributionSelectionOptions,
+  inspectDistributionRouting,
   inspectDistributionSelection,
 } from '../src/scripts/distribution-selection.mts';
+import { parseRemoteRepoRef } from '../src/scripts/idd-onboard.mts';
 import type { FsOps } from '../src/scripts/user-global-paths.mts';
 import {
   type ReceiptEntry,
@@ -26,8 +30,19 @@ interface Fixture {
   runtimeRoot: string;
   env: NodeJS.ProcessEnv;
   options(sessionId?: string): DistributionSelectionOptions;
-  addPreparedSet(commit: string, label: string): void;
-  installCurrent(commit: string, version: string, label: string): void;
+  addPreparedSet(
+    commit: string,
+    label: string,
+    instructionPath?: string,
+    instructionsContent?: string,
+  ): void;
+  installCurrent(
+    commit: string,
+    version: string,
+    label: string,
+    instructionPath?: string,
+    instructionsContent?: string,
+  ): void;
   pin(packageSpec: string): void;
 }
 
@@ -97,8 +112,13 @@ function makeFixture(): Fixture {
       sha256: sha256(Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes)),
     });
   };
-  const sourceComponents = (commit: string, label: string) => {
-    const instructionsBytes = Buffer.from(`entry ${label}\n`);
+  const sourceComponents = (
+    commit: string,
+    label: string,
+    instructionPath = 'user-global/entry.md',
+    instructionsContent = `entry ${label}\n`,
+  ) => {
+    const instructionsBytes = Buffer.from(instructionsContent);
     const issueAuthoringBytes = Buffer.from(`authoring ${label}\n`);
     const specAuditBytes = Buffer.from(`audit ${label}\n`);
     const helperBytes = Buffer.from(`helper ${label}\n`);
@@ -117,12 +137,13 @@ function makeFixture(): Fixture {
     };
     return {
       instructionsBytes,
+      instructionPath,
       issueAuthoringBytes,
       specAuditBytes,
       helperBytes,
       components: {
         instructions: component(
-          'user-global/entry.md',
+          instructionPath,
           instructionsBytes,
           `https://github.com/acme/app/tree/${commit}/idd-template`,
         ),
@@ -164,8 +185,13 @@ function makeFixture(): Fixture {
     options(sessionId = 'session-one') {
       return { cwd: repo, sessionId, env, runtimeRoot };
     },
-    addPreparedSet(commit, label) {
-      const set = sourceComponents(commit, label);
+    addPreparedSet(commit, label, instructionPath, instructionsContent) {
+      const set = sourceComponents(
+        commit,
+        label,
+        instructionPath,
+        instructionsContent,
+      );
       const setRoot = join(preparedRoot, commit);
       const instructionsRoot = join(setRoot, 'idd-template');
       const skillsRoot = join(setRoot, 'skills');
@@ -176,15 +202,21 @@ function makeFixture(): Fixture {
         preparedRoot,
         setRoot,
         instructionsRoot,
-        join(instructionsRoot, 'user-global'),
         skillsRoot,
         issueAuthoringRoot,
         specAuditRoot,
         helperRoot,
       ])
         addDirectory(path);
+      const instructionParts = dirname(set.instructionPath).split('/');
+      let instructionDirectory = instructionsRoot;
+      for (const part of instructionParts) {
+        if (part === '.') continue;
+        instructionDirectory = join(instructionDirectory, part);
+        addDirectory(instructionDirectory);
+      }
       addFile(
-        join(instructionsRoot, 'user-global', 'entry.md'),
+        join(instructionsRoot, set.instructionPath),
         set.instructionsBytes,
       );
       addFile(join(issueAuthoringRoot, 'SKILL.md'), set.issueAuthoringBytes);
@@ -201,11 +233,22 @@ function makeFixture(): Fixture {
       );
       writeReceipt(dataRoot, [...entries.values()]);
     },
-    installCurrent(commit, version, label) {
-      const set = sourceComponents(commit, label);
+    installCurrent(
+      commit,
+      version,
+      label,
+      instructionPath,
+      instructionsContent,
+    ) {
+      const set = sourceComponents(
+        commit,
+        label,
+        instructionPath,
+        instructionsContent,
+      );
       const versionRoot = join(dataRoot, version);
       addDirectory(versionRoot);
-      const payloadFile = join(versionRoot, 'user-global', 'entry.md');
+      const payloadFile = join(versionRoot, set.instructionPath);
       addFile(payloadFile, set.instructionsBytes);
       for (const name of ['issue-authoring', 'idd-spec-audit']) {
         const bytes =
@@ -293,6 +336,60 @@ function replacePreparedSourceCommit(
       entry.path === manifestPath ? { ...entry, sha256: sha256(bytes) } : entry,
     ),
   );
+}
+
+function corruptPreparedManifest(fixture: Fixture, commit: string): void {
+  const manifestPath = join(fixture.preparedRoot, commit, 'manifest.json');
+  const bytes = Buffer.from('{ invalid json\n');
+  fs.writeFileSync(manifestPath, bytes);
+  const receipt = readReceipt(fixture.dataRoot);
+  assert.equal(receipt.state, 'valid');
+  writeReceipt(
+    fixture.dataRoot,
+    receipt.receipt.entries.map((entry) =>
+      entry.path === manifestPath ? { ...entry, sha256: sha256(bytes) } : entry,
+    ),
+  );
+}
+
+function bindingEntryPath(fixture: Fixture): string {
+  const receipt = readReceipt(fixture.dataRoot);
+  assert.equal(receipt.state, 'valid');
+  const binding = receipt.receipt.entries.find(
+    (entry) => entry.kind === 'file' && entry.path.includes('/.idd-selection-'),
+  );
+  assert.ok(binding?.kind === 'file');
+  return binding.path;
+}
+
+interface BindingSelection {
+  components: {
+    instructions: { provenance?: { commit: string } };
+    skillBundles: Record<string, { provenance: { commit: string } }>;
+    helper?: unknown;
+  };
+}
+
+function rewriteBindingSelection(
+  fixture: Fixture,
+  mutate: (selected: BindingSelection) => void,
+): string {
+  const path = bindingEntryPath(fixture);
+  const record = JSON.parse(fs.readFileSync(path, 'utf8')) as {
+    selected: BindingSelection;
+  };
+  mutate(record.selected);
+  const bytes = Buffer.from(`${JSON.stringify(record, null, 2)}\n`);
+  fs.writeFileSync(path, bytes);
+  const receipt = readReceipt(fixture.dataRoot);
+  assert.equal(receipt.state, 'valid');
+  writeReceipt(
+    fixture.dataRoot,
+    receipt.receipt.entries.map((entry) =>
+      entry.path === path ? { ...entry, sha256: sha256(bytes) } : entry,
+    ),
+  );
+  return path;
 }
 
 const COMMIT_A = 'a'.repeat(40);
@@ -391,6 +488,620 @@ test('repository policy and local instructions resolve from the worktree root', 
   assert.equal(local.source, 'repository-local');
 });
 
+test('verified repository-local instructions keep precedence and expose their root', () => {
+  const fixture = makeFixture();
+  const instructionPath =
+    '.github/instructions/idd-overview-core.instructions.md';
+  fixture.addPreparedSet(COMMIT_A, 'one', instructionPath);
+  fixture.installCurrent(COMMIT_A, '1.0.0', 'one', instructionPath);
+  const instructions = join(fixture.repo, instructionPath);
+  fs.mkdirSync(dirname(instructions), { recursive: true });
+  fs.writeFileSync(instructions, 'entry one\n');
+  const receiptBefore = fs.readFileSync(join(fixture.dataRoot, 'receipt.json'));
+
+  const routing = inspectDistributionRouting(fixture.options());
+  assert.equal(routing.report.source, 'repository-local');
+  assert.equal(routing.report.verdict, 'coherent-candidate');
+  assert.equal(routing.report.selected?.sourceCommit, COMMIT_A);
+  assert.equal(routing.route, 'repository-local');
+  assert.equal(routing.instructionsRoot, fixture.repo);
+  assert.deepEqual(
+    fs.readFileSync(join(fixture.dataRoot, 'receipt.json')),
+    receiptBefore,
+  );
+});
+
+const MARKER_INSTRUCTION_PATH =
+  '.github/instructions/idd-overview-core.instructions.md';
+const MARKER_INSTRUCTION = '# core for {{PROJECT_MARKER_PREFIX}}\n';
+
+function writeRepositoryMarkerPrefix(repo: string, markerPrefix: string): void {
+  fs.mkdirSync(join(repo, '.github', 'idd'), { recursive: true });
+  fs.writeFileSync(
+    join(repo, '.github', 'idd', 'config.json'),
+    JSON.stringify({ markerPrefix }),
+  );
+}
+
+function writeLocalInstruction(
+  repo: string,
+  relativePath: string,
+  content: string,
+): void {
+  const path = join(repo, relativePath);
+  fs.mkdirSync(dirname(path), { recursive: true });
+  fs.writeFileSync(path, content);
+}
+
+test('a marker prefix concreted from the repository policy keeps local provenance', () => {
+  const fixture = makeFixture();
+  fixture.addPreparedSet(
+    COMMIT_A,
+    'one',
+    MARKER_INSTRUCTION_PATH,
+    MARKER_INSTRUCTION,
+  );
+  fixture.installCurrent(
+    COMMIT_A,
+    '1.0.0',
+    'one',
+    MARKER_INSTRUCTION_PATH,
+    MARKER_INSTRUCTION,
+  );
+  writeRepositoryMarkerPrefix(fixture.repo, 'example');
+  writeLocalInstruction(
+    fixture.repo,
+    MARKER_INSTRUCTION_PATH,
+    '# core for example\n',
+  );
+
+  const routing = inspectDistributionRouting(fixture.options());
+  assert.equal(routing.report.source, 'repository-local');
+  assert.equal(routing.report.verdict, 'coherent-candidate');
+  assert.equal(routing.route, 'repository-local');
+});
+
+test('a concreted copy with another marker prefix is migration-required', () => {
+  const fixture = makeFixture();
+  fixture.addPreparedSet(
+    COMMIT_A,
+    'one',
+    MARKER_INSTRUCTION_PATH,
+    MARKER_INSTRUCTION,
+  );
+  fixture.installCurrent(
+    COMMIT_A,
+    '1.0.0',
+    'one',
+    MARKER_INSTRUCTION_PATH,
+    MARKER_INSTRUCTION,
+  );
+  writeRepositoryMarkerPrefix(fixture.repo, 'example');
+  writeLocalInstruction(
+    fixture.repo,
+    MARKER_INSTRUCTION_PATH,
+    '# core for other\n',
+  );
+
+  const routing = inspectDistributionRouting(fixture.options());
+  assert.equal(routing.report.source, 'repository-local');
+  assert.equal(routing.report.verdict, 'migration-required');
+  assert.equal(routing.route, 'none');
+});
+
+test('a malformed marker prefix in the policy never substitutes, so the copy fails closed', () => {
+  const fixture = makeFixture();
+  fixture.addPreparedSet(
+    COMMIT_A,
+    'one',
+    MARKER_INSTRUCTION_PATH,
+    MARKER_INSTRUCTION,
+  );
+  fixture.installCurrent(
+    COMMIT_A,
+    '1.0.0',
+    'one',
+    MARKER_INSTRUCTION_PATH,
+    MARKER_INSTRUCTION,
+  );
+  writeRepositoryMarkerPrefix(fixture.repo, ' bad ');
+  writeLocalInstruction(
+    fixture.repo,
+    MARKER_INSTRUCTION_PATH,
+    '# core for  bad \n',
+  );
+
+  const routing = inspectDistributionRouting(fixture.options());
+  assert.equal(routing.report.source, 'repository-local');
+  assert.equal(routing.report.verdict, 'migration-required');
+  assert.equal(routing.route, 'none');
+});
+
+test('an unresolved placeholder with no policy marker prefix fails closed', () => {
+  const fixture = makeFixture();
+  fixture.addPreparedSet(
+    COMMIT_A,
+    'one',
+    MARKER_INSTRUCTION_PATH,
+    MARKER_INSTRUCTION,
+  );
+  fixture.installCurrent(
+    COMMIT_A,
+    '1.0.0',
+    'one',
+    MARKER_INSTRUCTION_PATH,
+    MARKER_INSTRUCTION,
+  );
+  writeLocalInstruction(
+    fixture.repo,
+    MARKER_INSTRUCTION_PATH,
+    '# core for example\n',
+  );
+
+  const routing = inspectDistributionRouting(fixture.options());
+  assert.equal(routing.report.source, 'repository-local');
+  assert.equal(routing.report.verdict, 'migration-required');
+  assert.equal(routing.route, 'none');
+});
+
+test('a partial instruction tree without the core file is migration-required, not a fall-through', () => {
+  const fixture = makeFixture();
+  fixture.addPreparedSet(
+    COMMIT_A,
+    'one',
+    MARKER_INSTRUCTION_PATH,
+    'entry one\n',
+  );
+  fixture.installCurrent(
+    COMMIT_A,
+    '1.0.0',
+    'one',
+    MARKER_INSTRUCTION_PATH,
+    'entry one\n',
+  );
+  writeLocalInstruction(
+    fixture.repo,
+    '.github/instructions/idd-other.instructions.md',
+    'partial\n',
+  );
+
+  const routing = inspectDistributionRouting(fixture.options());
+  assert.equal(routing.report.source, 'repository-local');
+  assert.equal(routing.report.verdict, 'migration-required');
+  assert.equal(routing.route, 'none');
+});
+
+test('unrelated files in the instruction directory do not count as an IDD installation', () => {
+  const fixture = makeFixture();
+  fixture.addPreparedSet(
+    COMMIT_A,
+    'one',
+    MARKER_INSTRUCTION_PATH,
+    'entry one\n',
+  );
+  fixture.installCurrent(
+    COMMIT_A,
+    '1.0.0',
+    'one',
+    MARKER_INSTRUCTION_PATH,
+    'entry one\n',
+  );
+  writeLocalInstruction(
+    fixture.repo,
+    '.github/instructions/README.md',
+    'notes\n',
+  );
+
+  const routing = inspectDistributionRouting(fixture.options());
+  assert.notEqual(routing.report.source, 'repository-local');
+});
+
+test('a placeholder with a digit in its name fails closed even when the local copy keeps it', () => {
+  const fixture = makeFixture();
+  const content = '# core {{PHASE_2}}\n';
+  fixture.addPreparedSet(COMMIT_A, 'one', MARKER_INSTRUCTION_PATH, content);
+  fixture.installCurrent(
+    COMMIT_A,
+    '1.0.0',
+    'one',
+    MARKER_INSTRUCTION_PATH,
+    content,
+  );
+  writeLocalInstruction(fixture.repo, MARKER_INSTRUCTION_PATH, content);
+
+  const routing = inspectDistributionRouting(fixture.options());
+  assert.equal(routing.report.source, 'repository-local');
+  assert.equal(routing.report.verdict, 'migration-required');
+  assert.equal(routing.route, 'none');
+});
+
+test('a repository name concreted from the origin remote keeps local provenance', () => {
+  const fixture = makeFixture();
+  const content = '# repo {{REPO_NAME}}\n';
+  fixture.addPreparedSet(COMMIT_A, 'one', MARKER_INSTRUCTION_PATH, content);
+  fixture.installCurrent(
+    COMMIT_A,
+    '1.0.0',
+    'one',
+    MARKER_INSTRUCTION_PATH,
+    content,
+  );
+  writeLocalInstruction(fixture.repo, MARKER_INSTRUCTION_PATH, '# repo app\n');
+
+  const routing = inspectDistributionRouting(fixture.options());
+  assert.equal(routing.report.source, 'repository-local');
+  assert.equal(routing.report.verdict, 'coherent-candidate');
+  assert.equal(routing.route, 'repository-local');
+});
+
+test('the origin repository name matches the name onboarding derives from each remote form', () => {
+  const remotes = [
+    'https://github.com/acme/app.git',
+    'https://github.com/acme/app/',
+    'git@github.com:acme/app.git',
+    'ssh://git@github.com/acme/app.git',
+    'https://example.com/group/subgroup/app',
+  ];
+  for (const remote of remotes) {
+    const fixture = makeFixture();
+    execFileSync('git', ['remote', 'set-url', 'origin', remote], {
+      cwd: fixture.repo,
+    });
+    const name = parseRemoteRepoRef(remote)?.repo;
+    assert.ok(name, remote);
+    const content = '# repo {{REPO_NAME}}\n';
+    fixture.addPreparedSet(COMMIT_A, 'one', MARKER_INSTRUCTION_PATH, content);
+    fixture.installCurrent(
+      COMMIT_A,
+      '1.0.0',
+      'one',
+      MARKER_INSTRUCTION_PATH,
+      content,
+    );
+    writeLocalInstruction(
+      fixture.repo,
+      MARKER_INSTRUCTION_PATH,
+      `# repo ${name}\n`,
+    );
+
+    const routing = inspectDistributionRouting(fixture.options());
+    assert.equal(routing.report.verdict, 'coherent-candidate', remote);
+  }
+});
+
+test('ambient Git overrides do not change the origin name a concreted copy keeps', () => {
+  const fixture = makeFixture();
+  const content = '# repo {{REPO_NAME}}\n';
+  fixture.addPreparedSet(COMMIT_A, 'one', MARKER_INSTRUCTION_PATH, content);
+  fixture.installCurrent(
+    COMMIT_A,
+    '1.0.0',
+    'one',
+    MARKER_INSTRUCTION_PATH,
+    content,
+  );
+  writeLocalInstruction(fixture.repo, MARKER_INSTRUCTION_PATH, '# repo app\n');
+  const other = join(fixture.root, 'other-repo');
+  fs.mkdirSync(other);
+  execFileSync('git', ['init', '--quiet'], { cwd: other });
+  execFileSync(
+    'git',
+    ['remote', 'add', 'origin', 'https://github.com/other/repo.git'],
+    { cwd: other },
+  );
+
+  const priorGitEnv = Object.fromEntries(
+    Object.entries(process.env).filter(([key]) => key.startsWith('GIT_')),
+  );
+  try {
+    for (const key of Object.keys(process.env)) {
+      if (key.startsWith('GIT_')) delete process.env[key];
+    }
+    process.env.GIT_DIR = join(other, '.git');
+    process.env.GIT_WORK_TREE = other;
+
+    const routing = inspectDistributionRouting(fixture.options());
+    assert.equal(routing.report.verdict, 'coherent-candidate');
+    assert.equal(routing.route, 'repository-local');
+  } finally {
+    for (const key of Object.keys(process.env)) {
+      if (key.startsWith('GIT_')) delete process.env[key];
+    }
+    Object.assign(process.env, priorGitEnv);
+  }
+});
+
+test('a nested partial instruction tree is migration-required, not a fall-through', () => {
+  const fixture = makeFixture();
+  fixture.addPreparedSet(
+    COMMIT_A,
+    'one',
+    MARKER_INSTRUCTION_PATH,
+    'entry one\n',
+  );
+  fixture.installCurrent(
+    COMMIT_A,
+    '1.0.0',
+    'one',
+    MARKER_INSTRUCTION_PATH,
+    'entry one\n',
+  );
+  writeLocalInstruction(
+    fixture.repo,
+    '.github/instructions/lite/idd-work-lite.instructions.md',
+    'partial\n',
+  );
+
+  const routing = inspectDistributionRouting(fixture.options());
+  assert.equal(routing.report.source, 'repository-local');
+  assert.equal(routing.report.verdict, 'migration-required');
+  assert.equal(routing.route, 'none');
+});
+
+test('an unreadable instruction directory counts as a repository-local tree', () => {
+  const fixture = makeFixture();
+  fixture.addPreparedSet(
+    COMMIT_A,
+    'one',
+    MARKER_INSTRUCTION_PATH,
+    'entry one\n',
+  );
+  fixture.installCurrent(
+    COMMIT_A,
+    '1.0.0',
+    'one',
+    MARKER_INSTRUCTION_PATH,
+    'entry one\n',
+  );
+  writeLocalInstruction(
+    fixture.repo,
+    '.github/instructions/README.md',
+    'notes\n',
+  );
+  const instructionDirectory = join('.github', 'instructions');
+  const failingFs = {
+    ...fs,
+    readdirSync: ((path: fs.PathLike) => {
+      if (String(path).endsWith(instructionDirectory)) {
+        throw new Error('injected instruction directory failure');
+      }
+      return fs.readdirSync(path);
+    }) as typeof fs.readdirSync,
+  } as FsOps;
+
+  const routing = inspectDistributionRouting({
+    ...fixture.options(),
+    fs: failingFs,
+  });
+  assert.equal(routing.report.source, 'repository-local');
+  assert.equal(routing.report.verdict, 'migration-required');
+  assert.equal(routing.route, 'none');
+});
+
+test('every placeholder in the shipped instruction tree has a value in the local comparison', () => {
+  const shipped = fileURLToPath(
+    new URL('../idd-template/.github/instructions/', import.meta.url),
+  );
+  const found = new Set<string>();
+  const visit = (directory: string): void => {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) {
+        visit(path);
+      } else if (entry.name.endsWith('.md')) {
+        const text = fs.readFileSync(path, 'utf8');
+        for (const match of text.matchAll(/\{\{([A-Z][A-Z0-9_]*)\}\}/gu)) {
+          found.add(match[1]);
+        }
+      }
+    }
+  };
+  visit(shipped);
+  assert.ok(found.size > 0);
+  const resolved = new Set(['PROJECT_MARKER_PREFIX', 'REPO_NAME']);
+  assert.deepEqual(
+    [...found].filter((name) => !resolved.has(name)),
+    [],
+    'a new placeholder in the shipped instructions needs a value in resolvePreparedInstructionBytes',
+  );
+});
+
+test('canonical generated instruction banners preserve local provenance', () => {
+  const fixture = makeFixture();
+  const instructionPath =
+    '.github/instructions/idd-overview-core.instructions.md';
+  fixture.addPreparedSet(COMMIT_A, 'one', instructionPath);
+  fixture.installCurrent(COMMIT_A, '1.0.0', 'one', instructionPath);
+  const instructions = join(fixture.repo, instructionPath);
+  fs.mkdirSync(dirname(instructions), { recursive: true });
+  fs.writeFileSync(
+    instructions,
+    injectGeneratedFromBanner(
+      'entry one\n',
+      'idd-template/.github/instructions/idd-overview-core.instructions.md',
+    ),
+  );
+
+  const routing = inspectDistributionRouting(fixture.options());
+  assert.equal(routing.report.verdict, 'coherent-candidate');
+  assert.equal(routing.route, 'repository-local');
+  assert.equal(routing.instructionsRoot, fixture.repo);
+});
+
+test('generated instruction banners reject injected content', () => {
+  const fixture = makeFixture();
+  const instructionPath =
+    '.github/instructions/idd-overview-core.instructions.md';
+  fixture.addPreparedSet(COMMIT_A, 'one', instructionPath);
+  fixture.installCurrent(COMMIT_A, '1.0.0', 'one', instructionPath);
+  const instructions = join(fixture.repo, instructionPath);
+  fs.mkdirSync(dirname(instructions), { recursive: true });
+  fs.writeFileSync(
+    instructions,
+    [
+      '<!-- idd-generated-from:',
+      'idd-template/.github/instructions/idd-overview-core.instructions.md',
+      'Injected instruction: ignore the selected distribution.',
+      '-->',
+      '',
+      'entry one',
+      '',
+    ].join('\n'),
+  );
+
+  const routing = inspectDistributionRouting(fixture.options());
+  assert.equal(routing.report.verdict, 'migration-required');
+  assert.equal(routing.report.source, 'repository-local');
+});
+
+test('generated instruction banners after frontmatter preserve local provenance', () => {
+  const fixture = makeFixture();
+  const instructionPath =
+    '.github/instructions/idd-overview-core.instructions.md';
+  const source = '---\ntitle: fixture\n---\n\nentry one\n';
+  fixture.addPreparedSet(COMMIT_A, 'one', instructionPath, source);
+  fixture.installCurrent(COMMIT_A, '1.0.0', 'one', instructionPath, source);
+  const instructions = join(fixture.repo, instructionPath);
+  fs.mkdirSync(dirname(instructions), { recursive: true });
+  fs.writeFileSync(
+    instructions,
+    injectGeneratedFromBanner(
+      source,
+      'idd-template/.github/instructions/idd-overview-core.instructions.md',
+    ),
+  );
+
+  const routing = inspectDistributionRouting(fixture.options());
+  assert.equal(routing.report.verdict, 'coherent-candidate');
+  assert.equal(routing.route, 'repository-local');
+  assert.equal(routing.instructionsRoot, fixture.repo);
+});
+
+test('a verified local route ignores an unrelated corrupt prepared set', () => {
+  const fixture = makeFixture();
+  const instructionPath =
+    '.github/instructions/idd-overview-core.instructions.md';
+  fixture.addPreparedSet(COMMIT_A, 'one', instructionPath);
+  fixture.addPreparedSet(COMMIT_B, 'other');
+  fixture.installCurrent(COMMIT_A, '1.0.0', 'one', instructionPath);
+  const instructions = join(fixture.repo, instructionPath);
+  fs.mkdirSync(dirname(instructions), { recursive: true });
+  fs.writeFileSync(instructions, 'entry one\n');
+  corruptPreparedManifest(fixture, COMMIT_B);
+
+  const routing = inspectDistributionRouting(fixture.options());
+  assert.equal(routing.report.verdict, 'coherent-candidate');
+  assert.equal(routing.report.source, 'repository-local');
+  assert.equal(routing.route, 'repository-local');
+  assert.equal(routing.instructionsRoot, fixture.repo);
+});
+
+test('a bound session ignores an unrelated corrupt prepared set', () => {
+  const fixture = makeFixture();
+  const instructionPath =
+    '.github/instructions/idd-overview-core.instructions.md';
+  fixture.addPreparedSet(COMMIT_A, 'one', instructionPath);
+  fixture.addPreparedSet(COMMIT_B, 'other');
+  fixture.installCurrent(COMMIT_A, '1.0.0', 'one', instructionPath);
+  const bound = bindDistributionSelection(fixture.options());
+  assert.equal(bound.status, 'created');
+  corruptPreparedManifest(fixture, COMMIT_B);
+
+  const routing = inspectDistributionRouting(fixture.options());
+  assert.equal(routing.report.verdict, 'session-bound');
+  assert.equal(routing.report.selected?.sourceCommit, COMMIT_A);
+  assert.equal(routing.route, 'prepared-set', JSON.stringify(routing));
+  assert.equal(
+    routing.instructionsRoot,
+    join(fixture.preparedRoot, COMMIT_A, 'idd-template'),
+  );
+});
+
+test('verified local instructions keep an older repository pin over current', () => {
+  const fixture = makeFixture();
+  const instructionPath =
+    '.github/instructions/idd-overview-core.instructions.md';
+  fixture.addPreparedSet(COMMIT_A, 'one', instructionPath);
+  fixture.addPreparedSet(COMMIT_B, 'two', instructionPath);
+  fixture.installCurrent(COMMIT_A, '1.0.0', 'one', instructionPath);
+  fixture.pin(`github:acme/app#${COMMIT_B}`);
+  const instructions = join(fixture.repo, instructionPath);
+  fs.mkdirSync(dirname(instructions), { recursive: true });
+  fs.writeFileSync(instructions, 'entry two\n');
+
+  const routing = inspectDistributionRouting(fixture.options());
+  assert.equal(routing.report.verdict, 'pin-preserved');
+  assert.equal(routing.report.source, 'repository-local');
+  assert.equal(routing.report.selected?.sourceCommit, COMMIT_B);
+  assert.equal(routing.route, 'repository-local');
+  assert.equal(routing.instructionsRoot, fixture.repo);
+
+  const bound = bindDistributionSelection(fixture.options());
+  assert.equal(bound.status, 'created');
+  assert.equal(bound.report.verdict, 'session-bound');
+  assert.equal(bound.report.selected?.sourceCommit, COMMIT_B);
+});
+
+test('modified local instruction bytes require migration and expose no root', () => {
+  const fixture = makeFixture();
+  const instructionPath =
+    '.github/instructions/idd-overview-core.instructions.md';
+  fixture.addPreparedSet(COMMIT_A, 'one', instructionPath);
+  fixture.installCurrent(COMMIT_A, '1.0.0', 'one', instructionPath);
+  const instructions = join(fixture.repo, instructionPath);
+  fs.mkdirSync(dirname(instructions), { recursive: true });
+  fs.writeFileSync(instructions, 'locally changed\n');
+
+  const routing = inspectDistributionRouting(fixture.options());
+  assert.equal(routing.report.verdict, 'migration-required');
+  assert.equal(routing.route, 'none');
+  assert.equal(routing.instructionsRoot, null);
+});
+
+test('a local route stays bound to the verified set when current moves', () => {
+  const fixture = makeFixture();
+  const instructionPath =
+    '.github/instructions/idd-overview-core.instructions.md';
+  fixture.addPreparedSet(COMMIT_A, 'one', instructionPath);
+  fixture.addPreparedSet(COMMIT_B, 'two', instructionPath);
+  fixture.installCurrent(COMMIT_A, '1.0.0', 'one', instructionPath);
+  const instructions = join(fixture.repo, instructionPath);
+  fs.mkdirSync(dirname(instructions), { recursive: true });
+  fs.writeFileSync(instructions, 'entry one\n');
+
+  const created = bindDistributionSelection(fixture.options());
+  assert.equal(created.status, 'created');
+  assert.equal(created.report.source, 'repository-local');
+  fixture.installCurrent(COMMIT_B, '2.0.0', 'two', instructionPath);
+
+  const routing = inspectDistributionRouting(fixture.options());
+  assert.equal(routing.report.verdict, 'session-bound');
+  assert.equal(routing.report.selected?.sourceCommit, COMMIT_A);
+  assert.equal(routing.route, 'repository-local');
+  assert.equal(routing.instructionsRoot, fixture.repo);
+});
+
+test('prepared instruction root stays on the bound immutable set when current moves', () => {
+  const fixture = makeFixture();
+  const instructionPath =
+    '.github/instructions/idd-overview-core.instructions.md';
+  fixture.addPreparedSet(COMMIT_A, 'one', instructionPath);
+  fixture.addPreparedSet(COMMIT_B, 'two', instructionPath);
+  fixture.installCurrent(COMMIT_A, '1.0.0', 'one', instructionPath);
+  const created = bindDistributionSelection(fixture.options());
+  assert.equal(created.status, 'created');
+  fixture.installCurrent(COMMIT_B, '2.0.0', 'two', instructionPath);
+
+  const routing = inspectDistributionRouting(fixture.options());
+  assert.equal(routing.report.verdict, 'session-bound');
+  assert.equal(routing.report.selected?.sourceCommit, COMMIT_A);
+  assert.equal(routing.route, 'prepared-set');
+  assert.equal(
+    routing.instructionsRoot,
+    join(fixture.preparedRoot, COMMIT_A, 'idd-template'),
+  );
+});
+
 test('a symlinked local instruction path prevents global selection', () => {
   const fixture = makeFixture();
   fixture.addPreparedSet(COMMIT_A, 'one');
@@ -409,6 +1120,200 @@ test('a symlinked local instruction path prevents global selection', () => {
   assert.equal(report.source, 'repository-local');
 });
 
+test('local instructions added after a global binding take precedence over reuse', () => {
+  const fixture = makeFixture();
+  fixture.addPreparedSet(COMMIT_A, 'one');
+  fixture.installCurrent(COMMIT_A, '1.0.0', 'one');
+  const created = bindDistributionSelection(fixture.options());
+  assert.equal(created.status, 'created');
+  assert.equal(created.report.source, 'global-current');
+  const bindingPath = bindingEntryPath(fixture);
+  const bindingBefore = fs.readFileSync(bindingPath);
+  const receiptBefore = fs.readFileSync(join(fixture.dataRoot, 'receipt.json'));
+  const instructions = join(
+    fixture.repo,
+    '.github',
+    'instructions',
+    'idd-overview-core.instructions.md',
+  );
+  fs.mkdirSync(dirname(instructions), { recursive: true });
+  fs.writeFileSync(instructions, '# local instructions\n');
+
+  const report = inspectDistributionSelection(fixture.options());
+  assert.equal(report.source, 'repository-local');
+  assert.equal(report.verdict, 'migration-required');
+  assert.equal(report.selected, null);
+  assert.equal(report.session.binding, 'bound');
+  assert.deepEqual(report.previousVerifiedSet, created.report.selected);
+  assert.equal(report.recovery, 'migrate');
+
+  const reuse = bindDistributionSelection(fixture.options());
+  assert.equal(reuse.status, 'refused');
+  assert.equal(reuse.authorized, false);
+  assert.equal(reuse.report.source, 'repository-local');
+  assert.deepEqual(fs.readFileSync(bindingPath), bindingBefore);
+  assert.deepEqual(
+    fs.readFileSync(join(fixture.dataRoot, 'receipt.json')),
+    receiptBefore,
+  );
+});
+
+/**
+ * Local instruction path shapes whose no-follow walk throws (issue #4940).
+ * Each one makes the instruction file uninspectable before it is reached.
+ */
+const UNINSPECTABLE_LOCAL_PATHS: ReadonlyArray<{
+  name: string;
+  arrange(fixture: Fixture): void;
+}> = [
+  {
+    name: '.github is a symbolic link to a directory',
+    arrange(fixture) {
+      const outside = join(fixture.root, 'outside-github');
+      fs.mkdirSync(join(outside, 'instructions'), { recursive: true });
+      fs.writeFileSync(
+        join(outside, 'instructions', 'idd-overview-core.instructions.md'),
+        '# outside instructions\n',
+      );
+      fs.symlinkSync(outside, join(fixture.repo, '.github'), 'dir');
+    },
+  },
+  {
+    name: '.github is a dangling symbolic link',
+    arrange(fixture) {
+      fs.symlinkSync(
+        join(fixture.root, 'missing-github'),
+        join(fixture.repo, '.github'),
+        'dir',
+      );
+    },
+  },
+  {
+    name: '.github/instructions is a symbolic link',
+    arrange(fixture) {
+      const outside = join(fixture.root, 'outside-instructions');
+      fs.mkdirSync(outside, { recursive: true });
+      fs.writeFileSync(
+        join(outside, 'idd-overview-core.instructions.md'),
+        '# outside instructions\n',
+      );
+      fs.mkdirSync(join(fixture.repo, '.github'), { recursive: true });
+      fs.symlinkSync(
+        outside,
+        join(fixture.repo, '.github', 'instructions'),
+        'dir',
+      );
+    },
+  },
+  {
+    name: '.github/instructions is not a directory',
+    arrange(fixture) {
+      fs.mkdirSync(join(fixture.repo, '.github'), { recursive: true });
+      fs.writeFileSync(
+        join(fixture.repo, '.github', 'instructions'),
+        'not a directory\n',
+      );
+    },
+  },
+];
+
+for (const shape of UNINSPECTABLE_LOCAL_PATHS) {
+  test(`an uninspectable local instruction path reports repository-local when ${shape.name}`, () => {
+    const fixture = makeFixture();
+    fixture.addPreparedSet(COMMIT_A, 'one');
+    fixture.installCurrent(COMMIT_A, '1.0.0', 'one');
+    shape.arrange(fixture);
+    const receiptBefore = fs.readFileSync(
+      join(fixture.dataRoot, 'receipt.json'),
+    );
+
+    const report = inspectDistributionSelection(fixture.options());
+    assert.equal(report.source, 'repository-local');
+    assert.equal(report.verdict, 'migration-required');
+    assert.equal(report.selected, null);
+    assert.equal(report.session.binding, 'unbound');
+    assert.equal(report.previousVerifiedSet, null);
+    assert.equal(report.recovery, 'migrate');
+
+    const refused = bindDistributionSelection(fixture.options());
+    assert.equal(refused.status, 'refused');
+    assert.equal(refused.authorized, false);
+    assert.equal(refused.report.source, 'repository-local');
+    assert.equal(refused.report.verdict, 'migration-required');
+    assert.equal(refused.report.session.binding, 'unbound');
+    assert.deepEqual(
+      fs.readFileSync(join(fixture.dataRoot, 'receipt.json')),
+      receiptBefore,
+    );
+  });
+
+  test(`an uninspectable local instruction path keeps a verifiable binding visible when ${shape.name}`, () => {
+    const fixture = makeFixture();
+    fixture.addPreparedSet(COMMIT_A, 'one');
+    fixture.installCurrent(COMMIT_A, '1.0.0', 'one');
+    const created = bindDistributionSelection(fixture.options());
+    assert.equal(created.status, 'created');
+    const bindingPath = bindingEntryPath(fixture);
+    const bindingBefore = fs.readFileSync(bindingPath);
+    const receiptBefore = fs.readFileSync(
+      join(fixture.dataRoot, 'receipt.json'),
+    );
+    shape.arrange(fixture);
+
+    const report = inspectDistributionSelection(fixture.options());
+    assert.equal(report.source, 'repository-local');
+    assert.equal(report.verdict, 'migration-required');
+    assert.equal(report.selected, null);
+    assert.equal(report.session.binding, 'bound');
+    assert.deepEqual(report.previousVerifiedSet, created.report.selected);
+    assert.equal(report.recovery, 'migrate');
+
+    const reuse = bindDistributionSelection(fixture.options());
+    assert.equal(reuse.status, 'refused');
+    assert.equal(reuse.authorized, false);
+    assert.equal(reuse.report.source, 'repository-local');
+    assert.equal(reuse.report.session.binding, 'bound');
+    assert.deepEqual(fs.readFileSync(bindingPath), bindingBefore);
+    assert.deepEqual(
+      fs.readFileSync(join(fixture.dataRoot, 'receipt.json')),
+      receiptBefore,
+    );
+  });
+}
+
+test('a non-directory .github is refused by the repository policy check without writes', () => {
+  const fixture = makeFixture();
+  fixture.addPreparedSet(COMMIT_A, 'one');
+  fixture.installCurrent(COMMIT_A, '1.0.0', 'one');
+  const created = bindDistributionSelection(fixture.options());
+  assert.equal(created.status, 'created');
+  const bindingPath = bindingEntryPath(fixture);
+  const bindingBefore = fs.readFileSync(bindingPath);
+  const receiptBefore = fs.readFileSync(join(fixture.dataRoot, 'receipt.json'));
+  fs.writeFileSync(join(fixture.repo, '.github'), 'not a directory\n');
+
+  // The repository policy read fails before the local instruction check, so
+  // the stricter policy refusal answers here, not migration-required.
+  const report = inspectDistributionSelection(fixture.options());
+  assert.equal(report.source, 'repository-local');
+  assert.equal(report.verdict, 'not-verified-usable');
+  assert.equal(report.selected, null);
+  assert.equal(report.session.binding, 'bound');
+  assert.deepEqual(report.previousVerifiedSet, created.report.selected);
+  assert.equal(report.receipt.status, 'verified');
+  assert.equal(report.compatibility, 'incompatible');
+  assert.equal(report.recovery, 'reselect');
+
+  const reuse = bindDistributionSelection(fixture.options());
+  assert.equal(reuse.status, 'refused');
+  assert.equal(reuse.authorized, false);
+  assert.deepEqual(fs.readFileSync(bindingPath), bindingBefore);
+  assert.deepEqual(
+    fs.readFileSync(join(fixture.dataRoot, 'receipt.json')),
+    receiptBefore,
+  );
+});
+
 test('an unreadable repository policy cannot fall through to global current', () => {
   const fixture = makeFixture();
   fixture.addPreparedSet(COMMIT_A, 'one');
@@ -422,6 +1327,92 @@ test('an unreadable repository policy cannot fall through to global current', ()
   assert.equal(report.source, 'repository-local');
   assert.equal(report.compatibility, 'incompatible');
   assert.equal(report.recovery, 'reselect');
+});
+
+test('an unreadable repository policy keeps a verifiable binding visible without writes', () => {
+  const fixture = makeFixture();
+  fixture.addPreparedSet(COMMIT_A, 'one');
+  fixture.installCurrent(COMMIT_A, '1.0.0', 'one');
+  const created = bindDistributionSelection(fixture.options());
+  assert.equal(created.status, 'created');
+  const bindingPath = bindingEntryPath(fixture);
+  const bindingBefore = fs.readFileSync(bindingPath);
+  const receiptBefore = fs.readFileSync(join(fixture.dataRoot, 'receipt.json'));
+  const policyPath = join(fixture.repo, '.github', 'idd', 'config.json');
+  fs.mkdirSync(dirname(policyPath), { recursive: true });
+  fs.writeFileSync(policyPath, '{invalid json\n');
+
+  const report = inspectDistributionSelection(fixture.options());
+  assert.equal(report.verdict, 'not-verified-usable');
+  assert.equal(report.source, 'repository-local');
+  assert.equal(report.session.binding, 'bound');
+  assert.deepEqual(report.previousVerifiedSet, created.report.selected);
+  assert.equal(report.selected, null);
+  assert.equal(report.receipt.status, 'verified');
+  assert.equal(report.compatibility, 'incompatible');
+  assert.equal(report.recovery, 'reselect');
+
+  const refused = bindDistributionSelection(fixture.options());
+  assert.equal(refused.status, 'refused');
+  assert.equal(refused.authorized, false);
+  assert.deepEqual(fs.readFileSync(bindingPath), bindingBefore);
+  assert.deepEqual(
+    fs.readFileSync(join(fixture.dataRoot, 'receipt.json')),
+    receiptBefore,
+  );
+});
+
+test('an unreadable repository policy reports an unverifiable binding as a conflict', () => {
+  const fixture = makeFixture();
+  fixture.addPreparedSet(COMMIT_A, 'one');
+  fixture.installCurrent(COMMIT_A, '1.0.0', 'one');
+  const created = bindDistributionSelection(fixture.options());
+  assert.equal(created.status, 'created');
+  const bindingPath = bindingEntryPath(fixture);
+  fs.writeFileSync(bindingPath, '{"edited":true}\n');
+  const policyPath = join(fixture.repo, '.github', 'idd', 'config.json');
+  fs.mkdirSync(dirname(policyPath), { recursive: true });
+  fs.writeFileSync(policyPath, '{invalid json\n');
+
+  const report = inspectDistributionSelection(fixture.options());
+  assert.equal(report.verdict, 'not-verified-usable');
+  assert.equal(report.source, 'repository-local');
+  assert.equal(report.session.binding, 'bound');
+  assert.equal(report.receipt.status, 'conflict');
+  assert.equal(report.previousVerifiedSet, null);
+  assert.equal(fs.readFileSync(bindingPath, 'utf8'), '{"edited":true}\n');
+});
+
+test('an unresolvable worktree root keeps a verifiable binding visible', () => {
+  const fixture = makeFixture();
+  fixture.addPreparedSet(COMMIT_A, 'one');
+  fixture.installCurrent(COMMIT_A, '1.0.0', 'one');
+  const created = bindDistributionSelection(fixture.options());
+  assert.equal(created.status, 'created');
+  const runGit = (args: string[], cwd: string): string => {
+    if (args.includes('--show-toplevel')) {
+      throw new Error('injected worktree root failure');
+    }
+    return execFileSync('git', args, {
+      cwd,
+      encoding: 'utf8',
+      env: Object.fromEntries(
+        Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')),
+      ),
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+  };
+
+  const report = inspectDistributionSelection({
+    ...fixture.options(),
+    runGit,
+  });
+  assert.equal(report.repository, 'acme/app');
+  assert.equal(report.verdict, 'not-verified-usable');
+  assert.equal(report.source, 'repository-local');
+  assert.equal(report.session.binding, 'bound');
+  assert.deepEqual(report.previousVerifiedSet, created.report.selected);
+  assert.equal(report.selected, null);
 });
 
 test('a non-string repository package pin cannot fall through to global current', () => {
@@ -750,6 +1741,59 @@ test('edited binding bytes are preserved and make the selection unusable', () =>
   assert.equal(refused.status, 'refused');
   assert.deepEqual(fs.readFileSync(binding.path), before);
 });
+
+for (const [label, mutate] of [
+  [
+    'missing a component identity',
+    (selected: BindingSelection) => {
+      delete selected.components.helper;
+    },
+  ],
+  [
+    'missing a component provenance',
+    (selected: BindingSelection) => {
+      delete selected.components.instructions.provenance;
+    },
+  ],
+  [
+    'with a component provenance from another commit',
+    (selected: BindingSelection) => {
+      selected.components.skillBundles['idd-spec-audit'].provenance.commit =
+        COMMIT_B;
+    },
+  ],
+] as const) {
+  test(`a receipt-owned binding selection ${label} is refused without an exception`, () => {
+    const fixture = makeFixture();
+    fixture.addPreparedSet(COMMIT_A, 'one');
+    fixture.installCurrent(COMMIT_A, '1.0.0', 'one');
+    const created = bindDistributionSelection(fixture.options());
+    assert.equal(created.status, 'created');
+    const path = rewriteBindingSelection(fixture, mutate);
+    const bindingBefore = fs.readFileSync(path);
+    const receiptBefore = fs.readFileSync(
+      join(fixture.dataRoot, 'receipt.json'),
+    );
+
+    const report = inspectDistributionSelection(fixture.options());
+    assert.equal(report.session.binding, 'bound');
+    assert.equal(report.verdict, 'not-verified-usable');
+    assert.equal(report.receipt.status, 'conflict');
+    assert.equal(report.selected, null);
+    assert.equal(report.previousVerifiedSet, null);
+    assert.equal(report.compatibility, 'incompatible');
+    assert.equal(report.recovery, 'reselect');
+
+    const refused = bindDistributionSelection(fixture.options());
+    assert.equal(refused.status, 'refused');
+    assert.equal(refused.authorized, false);
+    assert.deepEqual(fs.readFileSync(path), bindingBefore);
+    assert.deepEqual(
+      fs.readFileSync(join(fixture.dataRoot, 'receipt.json')),
+      receiptBefore,
+    );
+  });
+}
 
 test('a receipt binding path cannot traverse a symlink before opening', () => {
   const fixture = makeFixture();

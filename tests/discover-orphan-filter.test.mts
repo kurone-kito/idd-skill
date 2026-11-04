@@ -813,6 +813,183 @@ test('filterOrphanIssues resolves a configured authoring-only label name (#4109)
   );
 });
 
+// #4960: an issue waiting for an auto-decide confirmation is filed under the
+// existing blocked_label bucket, with the label compared trimmed and
+// case-insensitively.
+function confirmationOrphan(number: number, labels: string[]) {
+  return {
+    number,
+    title: `confirmation guard ${number}`,
+    state: 'OPEN',
+    labels: labels.map((name) => ({ name })),
+    body: '',
+    url: `https://example.com/${number}`,
+  };
+}
+
+function blockedLabelDetails(result: {
+  filtered: { blocked_label: { number: number; details: unknown }[] };
+}) {
+  return result.filtered.blocked_label.map((entry) => [
+    entry.number,
+    entry.details,
+  ]);
+}
+
+test('filterOrphanIssues files a confirmation-labelled issue under blocked_label in any case (#4960)', async () => {
+  const result = await filterOrphanIssues(
+    [
+      confirmationOrphan(4960101, ['status:needs-confirmation']),
+      confirmationOrphan(4960102, [' Status:Needs-Confirmation ']),
+      confirmationOrphan(4960103, ['enhancement']),
+    ],
+    {
+      issueStateByNumber: new Map(),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    },
+  );
+
+  assert.deepEqual(blockedLabelDetails(result), [
+    [4960101, 'status:needs-confirmation'],
+    [4960102, ' Status:Needs-Confirmation '],
+  ]);
+  assert.deepEqual(
+    result.orphans.map((issue) => issue.number),
+    [4960103],
+  );
+  // No new bucket: the output keeps its existing filtered keys.
+  assert.equal(
+    Object.keys(result.filtered).some((key) => key.includes('confirmation')),
+    false,
+  );
+});
+
+// Non-default override: a dropped forwarding site would fall back to the
+// default name and fail this assertion.
+test('filterOrphanIssues resolves a configured confirmation label name (#4960)', async () => {
+  const result = await filterOrphanIssues(
+    [
+      confirmationOrphan(4960104, ['triage:confirm']),
+      confirmationOrphan(4960105, ['status:needs-confirmation']),
+    ],
+    {
+      issueStateByNumber: new Map(),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+      confirmationLabelName: 'triage:confirm',
+    },
+  );
+
+  assert.deepEqual(blockedLabelDetails(result), [[4960104, 'triage:confirm']]);
+  assert.deepEqual(
+    result.orphans.map((issue) => issue.number),
+    [4960105],
+  );
+});
+
+test('filterOrphanIssues reports a confirmation-label collision under blocked_label and continues (#4960)', async () => {
+  const issues = [
+    confirmationOrphan(4960111, ['idd:ready']),
+    confirmationOrphan(4960112, ['status:needs-decision']),
+    confirmationOrphan(4960113, []),
+  ];
+  // The confirmation name equals the default ready label name.
+  const result = await filterOrphanIssues(issues, {
+    issueStateByNumber: new Map(),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    confirmationLabelName: 'idd:ready',
+  });
+
+  assert.deepEqual(blockedLabelDetails(result), [
+    [4960111, 'needs_confirmation_label_collision'],
+    // An unrelated existing label filter is unchanged.
+    [4960112, 'status:needs-decision'],
+  ]);
+  assert.deepEqual(
+    result.orphans.map((issue) => issue.number),
+    [4960113],
+  );
+});
+
+test('classifyIssue files a needs-decision collision under the collision details (#4960)', () => {
+  const options = {
+    issueStateByNumber: new Map<number, string>(),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    confirmationLabelName: 'Status:Needs-Decision',
+  };
+  assert.deepEqual(
+    classifyIssue(
+      confirmationOrphan(4960114, ['status:needs-decision']),
+      options,
+    ),
+    {
+      orphan: false,
+      reason: 'blocked_label',
+      details: 'needs_confirmation_label_collision',
+    },
+  );
+  // Without the colliding label, the issue is classified as before.
+  assert.equal(
+    classifyIssue(confirmationOrphan(4960115, []), options).orphan,
+    true,
+  );
+});
+
+test('classifyIssue keeps the earlier checks ahead of the confirmation label (#4960)', () => {
+  const base = {
+    issueStateByNumber: new Map<number, string>(),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+  };
+  const labelled = (number: number, body: string, labels: string[]) => ({
+    ...confirmationOrphan(number, ['status:needs-confirmation', ...labels]),
+    body,
+  });
+
+  // Number targets and markers keep their precedence, as for blocked-by-human.
+  assert.equal(
+    classifyIssue(labelled(4960131, '', []), {
+      ...base,
+      providerOutageDeclarationTarget: 4960131,
+    }).reason,
+    'provider_outage_target',
+  );
+  assert.equal(
+    classifyIssue(
+      labelled(4960132, '<!-- idd-skill-roadmap-id: r4960 -->', []),
+      base,
+    ).reason,
+    'roadmap_marker',
+  );
+  assert.equal(
+    classifyIssue(
+      labelled(4960133, '<!-- idd-skill-blocked-by: r4960 -->', []),
+      base,
+    ).reason,
+    'blocked_by_marker',
+  );
+
+  // A draft carrier stays under blocked_label; its details name the first
+  // matching label, or the collision value when the names collide.
+  const carrier = labelled(4960134, '<!-- idd-skill-draft-carrier: v1 -->', [
+    'status:authoring-only',
+  ]);
+  assert.deepEqual(classifyIssue(carrier, base), {
+    orphan: false,
+    reason: 'blocked_label',
+    details: 'status:needs-confirmation',
+  });
+  assert.deepEqual(
+    classifyIssue(
+      { ...carrier, labels: [{ name: 'status:authoring-only' }] },
+      { ...base, confirmationLabelName: 'status:authoring-only' },
+    ),
+    {
+      orphan: false,
+      reason: 'blocked_label',
+      details: 'needs_confirmation_label_collision',
+    },
+  );
+});
+
 // #4257: a draft carrier is an authoring-only issue whose body carries the
 // carrier marker outside code. Each case below builds its fixtures from this
 // marker, so the release-state bucket is the only thing under test.
@@ -3064,6 +3241,68 @@ function loadPolicyFromConfig(config: unknown) {
   }
 }
 
+test('loadPolicy carries the confirmation and ready label names in the hint-cache key (#4960)', () => {
+  const defaults = loadPolicyFromConfig({});
+  assert.equal(defaults.confirmationLabelName, 'status:needs-confirmation');
+  assert.equal(defaults.readyLabelName, 'idd:ready');
+
+  const configured = loadPolicyFromConfig({
+    approvalSignals: { readyLabelName: 'triage:ready' },
+    autoDecide: { confirmationLabelName: 'triage:confirm' },
+  });
+  assert.equal(configured.confirmationLabelName, 'triage:confirm');
+  assert.equal(configured.readyLabelName, 'triage:ready');
+
+  // A malformed autoDecide sibling leaves a valid override name in force.
+  const malformed = loadPolicyFromConfig({
+    autoDecide: {
+      confirmationLabelName: 'triage:confirm',
+      maxDecisionsPerClaim: 999,
+      decisionIssue: 'yes',
+      unknownKey: true,
+    },
+  });
+  assert.equal(malformed.confirmationLabelName, 'triage:confirm');
+});
+
+test('the confirmation label filters whatever dangerouslyAutoDecide and the class switches say (#4960)', async () => {
+  const policy = loadPolicyFromConfig({
+    dangerouslyAutoDecide: true,
+    autoDecide: {
+      decisionIssue: { enabled: true },
+      runtimeQuestion: { enabled: true },
+      authoringChoice: { enabled: true },
+      worktreeRemnant: { enabled: true },
+      b1Leftover: { enabled: true },
+    },
+  });
+  const result = await filterOrphanIssues(
+    [
+      confirmationOrphan(4960121, ['status:needs-confirmation']),
+      confirmationOrphan(4960122, []),
+    ],
+    {
+      issueStateByNumber: new Map(),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+      authoringLabelName: policy.authoringLabelName,
+      blockedByHumanLabelName: policy.blockedByHumanLabelName,
+      needsDecisionLabelName: policy.needsDecisionLabelName,
+      authoringOnlyLabelName: policy.authoringOnlyLabelName,
+      roadmapLabelName: policy.roadmapLabelName,
+      confirmationLabelName: policy.confirmationLabelName,
+      readyLabelName: policy.readyLabelName,
+    },
+  );
+
+  assert.deepEqual(blockedLabelDetails(result), [
+    [4960121, 'status:needs-confirmation'],
+  ]);
+  assert.deepEqual(
+    result.orphans.map((issue) => issue.number),
+    [4960122],
+  );
+});
+
 test('loadPolicy carries the normalized forced-handoff mode (#3675)', () => {
   assert.equal(
     loadPolicyFromConfig({ forcedHandoff: { mode: 'human-gated' } })
@@ -4131,6 +4370,95 @@ process.exit(1);
     assert.deepEqual(
       defaultOutput.orphans.map((o: { number: number }) => o.number),
       [2, 1],
+    );
+  } finally {
+    restore();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('CLI: produceOutput forwards the configured confirmation and ready label names (#4960)', () => {
+  // The unit tests above pass the names to filterOrphanIssues directly, so the
+  // loadPolicy-to-produceOutput wiring is only reached through the real CLI.
+  const issue = (number: number, label: string) => ({
+    number,
+    title: `confirmation ${number}`,
+    state: 'open',
+    body: 'task',
+    labels: [{ name: label }],
+    html_url: `https://github.com/kurone-kito/idd-skill/issues/${number}`,
+    user: { login: 'kurone-kito' },
+    created_at: '2026-01-01T00:00:00Z',
+    milestone: null,
+  });
+  const issues = [
+    issue(1, 'Triage:Confirm'),
+    issue(2, 'status:needs-confirmation'),
+    issue(3, 'triage:ready'),
+  ];
+  const script = `const ISSUES = ${JSON.stringify(issues)};
+const args = process.argv.slice(2);
+if (args[0] === "api") {
+  const path = args[1] || "";
+  if (path.startsWith("repos/kurone-kito/idd-skill/issues?state=open")) {
+    process.stdout.write(JSON.stringify(ISSUES) + "\\n");
+    process.exit(0);
+  }
+  if (/^repos\\/kurone-kito\\/idd-skill\\/issues\\/\\d+\\/(comments|timeline|events)/.test(path)) {
+    process.stdout.write("[]\\n");
+    process.exit(0);
+  }
+}
+process.stderr.write("unexpected gh invocation: " + args.join(" ") + "\\n");
+process.exit(1);
+`;
+  const dir = mkdtempSync(join(tmpdir(), 'idd-orphan-confirmation-'));
+  const restore = stubExecutable('gh', script);
+  const run = (config: unknown) => {
+    const policyPath = join(dir, 'policy.json');
+    writeFileSync(policyPath, JSON.stringify(config));
+    const result = spawnHelperBinWithEnvelope(
+      'idd-discover-orphan-filter.mjs',
+      [
+        '--owner',
+        'kurone-kito',
+        '--repo',
+        'idd-skill',
+        '--policy',
+        policyPath,
+        '--no-cache',
+      ],
+    );
+    assert.equal(result.status, 0, JSON.stringify(result));
+    const output = JSON.parse(result.stdout);
+    return {
+      blocked: output.filtered.blocked_label.map(
+        (entry: { number: number; details: unknown }) => [
+          entry.number,
+          entry.details,
+        ],
+      ),
+      orphans: output.orphans.map((entry: { number: number }) => entry.number),
+    };
+  };
+  try {
+    // A malformed autoDecide sibling leaves the valid override name in force.
+    assert.deepEqual(
+      run({
+        autoDecide: { confirmationLabelName: 'triage:confirm', unknownKey: 1 },
+      }),
+      { blocked: [[1, 'Triage:Confirm']], orphans: [2, 3] },
+    );
+    // A confirmation name equal to the configured ready label collides.
+    assert.deepEqual(
+      run({
+        approvalSignals: { readyLabelName: 'triage:ready' },
+        autoDecide: { confirmationLabelName: 'triage:ready' },
+      }),
+      {
+        blocked: [[3, 'needs_confirmation_label_collision']],
+        orphans: [1, 2],
+      },
     );
   } finally {
     restore();

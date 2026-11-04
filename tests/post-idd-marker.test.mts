@@ -10103,6 +10103,14 @@ const LEGACY_OWNER = 'owner-a0bfac08-125e-4c1a-bea7-473cc6a3f793';
 const LEGACY_SNAPSHOT =
   '6a706e6192793af16bba8d7598046b5069e508368c62c7769c285b87fe2e2843';
 const LEGACY_RELEASE_COMPLETE = 6509470897;
+const SECOND_LEGACY_ANCHOR = 'kurone-kito/idd-skill#4528';
+const SECOND_LEGACY_SET = 'set-5c06e359-ba71-48ba-9e63-62aedbb0e6e3';
+const SECOND_LEGACY_SESSION = 'session-4be93ee0-8e6f-4a09-a282-2d3b9f1ebdfe';
+const SECOND_LEGACY_OWNER = 'owner-1030b89f-075f-4022-9cd7-7c811881a1c3';
+const SECOND_LEGACY_SNAPSHOT =
+  '016a5b98783bb0b7144aec131783598274d1826335816145fd7d7e9bf84a6afa';
+const SECOND_LEGACY_RELEASE_COMPLETE = 6500504932;
+const SECOND_LEGACY_CHILD_RELEASE = 6500449499;
 
 /**
  * The 2026-10-29 closure of #4722: an acquire and a release-guard, with no
@@ -10159,6 +10167,56 @@ function legacyClosureLog(
   }));
 }
 
+function secondLegacyClosureLog(
+  overrides: {
+    anchor?: string;
+    set?: string;
+    session?: string;
+    owner?: string;
+    releaseCompleteId?: number;
+    snapshot?: string;
+  } = {},
+): AuthoringOwnerProvenanceComment[] {
+  const anchor = overrides.anchor ?? SECOND_LEGACY_ANCHOR;
+  const owner = overrides.owner ?? SECOND_LEGACY_OWNER;
+  const flags = {
+    'marker-target': anchor,
+    anchor,
+    'marker-owner': owner,
+    set: overrides.set ?? SECOND_LEGACY_SET,
+    session: overrides.session ?? SECOND_LEGACY_SESSION,
+  };
+  const entries: Array<[number, string]> = [
+    [6500449000, ownerIdBody(ownerIdFlags('acquire', flags))],
+    [
+      6500451244,
+      ownerIdBody(
+        ownerIdFlags('release-guard', { ...flags, supersedes: owner }),
+      ),
+    ],
+    [
+      overrides.releaseCompleteId ?? SECOND_LEGACY_RELEASE_COMPLETE,
+      ownerIdBody(
+        ownerIdFlags('release-complete', {
+          ...flags,
+          supersedes: owner,
+          'snapshot-sha256': overrides.snapshot ?? SECOND_LEGACY_SNAPSHOT,
+        }),
+      ),
+    ],
+  ];
+  return entries.map(([id, body], index) => ({
+    id,
+    authorLogin: 'kurone-kito',
+    body,
+    createdAt: `2026-10-30T22:0${index + 1}:00Z`,
+    updatedAt: `2026-10-30T22:0${index + 1}:00Z`,
+    lastEditedAt: null,
+    isMinimized: false,
+    minimizedReason: null,
+  }));
+}
+
 function replayAnchorLog(
   comments: AuthoringOwnerProvenanceComment[],
   anchorRef = LEGACY_ANCHOR,
@@ -10172,7 +10230,7 @@ function replayAnchorLog(
 }
 
 test('the reviewed legacy closure of #4722 closes its generation only on an exact match (#4837)', () => {
-  assert.equal(ACCEPTED_LEGACY_CLOSURES.length, 1);
+  assert.equal(ACCEPTED_LEGACY_CLOSURES.length, 2);
   const exact = replayAnchorLog(legacyClosureLog());
   assert.equal('problem' in exact, false, JSON.stringify(exact));
   if ('problem' in exact) {
@@ -10228,6 +10286,145 @@ test('the reviewed legacy closure of #4722 closes its generation only on an exac
       /closes a generation with no accepted release marker in progress/,
       name,
     );
+  }
+});
+
+test('the reviewed legacy closure of #4528 closes its generation only on an exact match (#4976)', () => {
+  assert.equal(ACCEPTED_LEGACY_CLOSURES.length, 2);
+  assert.deepEqual(ACCEPTED_LEGACY_CLOSURES[0], {
+    anchor: LEGACY_ANCHOR,
+    set: LEGACY_SET,
+    session: LEGACY_SESSION,
+    owner: LEGACY_OWNER,
+    releaseCompleteId: LEGACY_RELEASE_COMPLETE,
+    snapshotSha256: LEGACY_SNAPSHOT,
+    childReleaseMarkerId: 6509444207,
+  });
+  assert.deepEqual(ACCEPTED_LEGACY_CLOSURES[1], {
+    anchor: SECOND_LEGACY_ANCHOR,
+    set: SECOND_LEGACY_SET,
+    session: SECOND_LEGACY_SESSION,
+    owner: SECOND_LEGACY_OWNER,
+    releaseCompleteId: SECOND_LEGACY_RELEASE_COMPLETE,
+    snapshotSha256: SECOND_LEGACY_SNAPSHOT,
+    childReleaseMarkerId: SECOND_LEGACY_CHILD_RELEASE,
+  });
+
+  const exact = replayAnchorLog(secondLegacyClosureLog(), SECOND_LEGACY_ANCHOR);
+  assert.equal('problem' in exact, false, JSON.stringify(exact));
+  if ('problem' in exact) {
+    return;
+  }
+  assert.equal(exact.generation, null);
+
+  const refused: Array<[string, AuthoringOwnerProvenanceComment[], string]> = [
+    [
+      'a release-complete comment ID off by one',
+      secondLegacyClosureLog({
+        releaseCompleteId: SECOND_LEGACY_RELEASE_COMPLETE + 1,
+      }),
+      SECOND_LEGACY_ANCHOR,
+    ],
+    [
+      'a different snapshot digest',
+      secondLegacyClosureLog({ snapshot: 'f'.repeat(64) }),
+      SECOND_LEGACY_ANCHOR,
+    ],
+    [
+      'a different set',
+      secondLegacyClosureLog({ set: 'set-other' }),
+      SECOND_LEGACY_ANCHOR,
+    ],
+    [
+      'a different session',
+      secondLegacyClosureLog({ session: 'session-other' }),
+      SECOND_LEGACY_ANCHOR,
+    ],
+    [
+      'a different owner',
+      secondLegacyClosureLog({ owner: 'owner-other' }),
+      SECOND_LEGACY_ANCHOR,
+    ],
+    [
+      'another anchor that carries the same identities',
+      secondLegacyClosureLog({ anchor: 'kurone-kito/idd-skill#4529' }),
+      'kurone-kito/idd-skill#4529',
+    ],
+  ];
+  for (const [name, comments, anchorRef] of refused) {
+    const result = replayAnchorLog(comments, anchorRef);
+    assert.ok('problem' in result, name);
+    assert.match(
+      result.problem,
+      /closes a generation with no accepted release marker in progress/,
+      name,
+    );
+  }
+});
+
+test('authoring-owner child acquire reconciles a former child through the reviewed #4528 closure (#4976)', () => {
+  const targetRef = OWNER_ID_TARGET;
+  const formerAnchorRef = SECOND_LEGACY_ANCHOR;
+  const newAnchorRef = 'o/r#44';
+  const formerChildComments: OwnerIdComment[] = [
+    {
+      id: 6500444000,
+      body: ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: targetRef,
+        anchor: formerAnchorRef,
+        owner: SECOND_LEGACY_OWNER,
+        set: SECOND_LEGACY_SET,
+        session: SECOND_LEGACY_SESSION,
+      }),
+    },
+    {
+      id: SECOND_LEGACY_CHILD_RELEASE,
+      body: ownerIdHistoryMarker({
+        mode: 'release',
+        target: targetRef,
+        anchor: formerAnchorRef,
+        owner: SECOND_LEGACY_OWNER,
+        set: SECOND_LEGACY_SET,
+        session: SECOND_LEGACY_SESSION,
+      }),
+    },
+  ];
+  const newAnchorComments: OwnerIdComment[] = [
+    {
+      id: 6500510000,
+      body: ownerIdHistoryMarker({
+        mode: 'acquire',
+        target: newAnchorRef,
+        anchor: newAnchorRef,
+        owner: 'owner-new-anchor',
+        set: 'set-new-anchor',
+        session: 'session-new-anchor',
+      }),
+    },
+  ];
+  const stub = withOwnerIdStub({
+    comments: formerChildComments,
+    commentsByIssueNumber: {
+      44: newAnchorComments,
+      4528: secondLegacyClosureLog(),
+    },
+  });
+  try {
+    const run = runOwnerIdPost(
+      ownerIdFlags('acquire', {
+        'marker-target': targetRef,
+        anchor: newAnchorRef,
+        'marker-owner': 'owner-next-child',
+        set: 'set-new-anchor',
+        session: 'session-new-anchor',
+      }),
+      { apply: false, targetNumber: 42 },
+    );
+    assert.equal(run.status, 0, run.stderr);
+    assert.deepEqual(readOwnerIdLines(stub.postsFile), []);
+  } finally {
+    stub.restore();
   }
 });
 

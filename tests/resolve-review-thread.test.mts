@@ -1051,6 +1051,10 @@ test('--apply --claimless does not require --claim-issue / --claim-id (compiled 
         '1001',
         '--claimless',
         '--apply',
+        '--tier',
+        'high',
+        '--urgency',
+        'high',
         '--body',
         '**Accepted** — operator-authorized, no linked issue',
       ],
@@ -1176,6 +1180,11 @@ if (args[0] === 'pr' && args[1] === 'view') {
     closingIssuesReferences: [],
   }));
 }
+if (args[0] === 'api' && args[1] === 'repos/o/r/pulls/42/reviews') {
+  // The default triageRecord record reads the review list for the
+  // severity-tiered verdict; this run has no reviews to report.
+  out('');
+}
 if (args[0] === 'api' && args[1] === 'graphql' && joined.includes('closingIssuesReferences')) {
   out(JSON.stringify({ data: { repository: { pullRequest: { headRefOid: 'deadbeef', closingIssuesReferences: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } } } }));
 }
@@ -1238,6 +1247,10 @@ fail('unexpected gh invocation: ' + joined);
         'r',
         '--claimless',
         '--apply',
+        '--tier',
+        'high',
+        '--urgency',
+        'high',
         '--body',
         '**Accepted** — operator-authorized, no linked issue',
       ],
@@ -3074,12 +3087,62 @@ test('the compiled CLI exits 1 with a message and posts nothing when the review 
 test('the compiled CLI posts the reply body unchanged with no triage flag (#4186)', () => {
   const run = runTriageApply(
     [...TRIAGE_THREAD_ARGS, '--body', '**Accepted** — fixed in abc'],
-    {},
+    // The default is now triageRecord `record`, which requires tier and
+    // urgency; this test is about the body, so it turns the record off.
+    { critiqueLoop: { triageRecord: 'off' } },
     triageReviewRows(2),
   );
   assert.equal(run.status, 0, run.stderr);
   assert.deepEqual(run.posted, [
     `**Accepted** — fixed in abc\n\n${TRIAGE_STAMP}`,
+  ]);
+});
+
+test('the normalized default (empty config) refuses a flagless disposition reply and exempts path B and maintainer rejection (#4854)', () => {
+  // An empty repository config normalizes triageRecord to `record`, so an
+  // Accepted or Rejected PATH A reply must carry --tier and --urgency. The
+  // --path-b reply and the maintainer rejection confirmation stay exempt.
+  // The config is `{}` rather than an explicit `record`, so a change to the
+  // distributed default in POLICY_DEFAULTS fails here.
+  const refusal = /triageRecord record requires --tier and --urgency/u;
+  for (const body of [
+    '**Accepted** — fixed in abc',
+    '**Rejected** — not fixed here',
+  ]) {
+    const run = runTriageApply(
+      [...TRIAGE_THREAD_ARGS, '--body', body],
+      {},
+      triageReviewRows(2),
+    );
+    assert.equal(run.status, 1, `${body}: ${run.stderr}`);
+    assert.match(run.stderr, refusal);
+    assert.deepEqual(run.posted, [], body);
+  }
+
+  const pathB = runTriageApply(
+    [
+      ...TRIAGE_THREAD_ARGS,
+      '--path-b',
+      '--body',
+      '**Accepted** — advisory remark',
+    ],
+    {},
+    triageReviewRows(2),
+  );
+  assert.equal(pathB.status, 0, pathB.stderr);
+  assert.deepEqual(pathB.posted, [
+    `**Accepted** — advisory remark\n\n${TRIAGE_STAMP}`,
+  ]);
+
+  const confirmed = '**Rejection confirmed by maintainer** — agreed';
+  const rejectionConfirmed = runTriageApply(
+    [...TRIAGE_THREAD_ARGS, '--body', confirmed],
+    {},
+    triageReviewRows(2),
+  );
+  assert.equal(rejectionConfirmed.status, 0, rejectionConfirmed.stderr);
+  assert.deepEqual(rejectionConfirmed.posted, [
+    `${confirmed}\n\n${TRIAGE_STAMP}`,
   ]);
 });
 

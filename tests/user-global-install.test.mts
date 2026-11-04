@@ -28,6 +28,7 @@ import {
 } from '../src/scripts/helper-runtime-manifest.mts';
 import { PAYLOAD_PLACEHOLDER_FIELDS } from '../src/scripts/payload-placeholders.mts';
 import {
+  discardPreparedCandidate,
   installPayload,
   type PrepareDistributionOptions,
   planInstall,
@@ -489,6 +490,153 @@ test('helper closure validation ignores generated comments that mention source i
   );
 });
 
+/** A bin wrapper, a minimal run-helper that spawns its argument, and the script it runs. */
+function writeWrapperFixture(source: string, delegatedCall: string): void {
+  nodeFs.mkdirSync(join(source, 'bin'), { recursive: true });
+  nodeFs.writeFileSync(
+    join(source, 'bin/sample.mjs'),
+    `import { runHelper } from './run-helper.mjs';\n\n${delegatedCall}\n`,
+  );
+  nodeFs.writeFileSync(
+    join(source, 'bin/run-helper.mjs'),
+    [
+      "import { spawnSync } from 'node:child_process';",
+      "import { resolve } from 'node:path';",
+      'export function runHelper(relativeScriptPath) {',
+      '  const result = spawnSync(',
+      '    process.execPath,',
+      '    [resolve(import.meta.dirname, relativeScriptPath)],',
+      "    { stdio: 'inherit' },",
+      '  );',
+      '  process.exitCode = result.status ?? 1;',
+      '}',
+      '',
+    ].join('\n'),
+  );
+  nodeFs.writeFileSync(
+    join(source, 'scripts/sample.mjs'),
+    "import { readFileSync } from 'node:fs';\nprocess.stdout.write(readFileSync(new URL('../data/one.json', import.meta.url), 'utf8'));\n",
+  );
+}
+
+test('preparation includes the script a bin wrapper delegates to, and the prepared wrapper runs (#4917)', () => {
+  const home = makeHome();
+  const source = makePreparedSource();
+  writeWrapperFixture(source, "runHelper('../scripts/sample.mjs');");
+  const commit = 'a'.repeat(40);
+
+  const prepared = prepareDistributionSet(
+    prepareOptions(home, source, commit, {
+      invocation: { command: 'bin/sample.mjs', argv: [] },
+    }),
+  );
+
+  assert.deepEqual(
+    preparedManifest(prepared.preparedPath)
+      .components.helper.files.map((file) => file.path)
+      .sort(),
+    [
+      'bin/run-helper.mjs',
+      'bin/sample.mjs',
+      'data/one.json',
+      'scripts/sample.mjs',
+    ],
+  );
+  const run = spawnSync(
+    process.execPath,
+    [join(prepared.preparedPath, 'bin/sample.mjs')],
+    { cwd: home, encoding: 'utf8' },
+  );
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(run.stdout, '{"prepared":true}\n');
+});
+
+test('preparation refuses a bin wrapper whose delegated script is missing or not a literal, before any write (#4917)', () => {
+  for (const { call, error } of [
+    {
+      call: "runHelper('../scripts/missing.mjs');",
+      error:
+        /delegated helper \.\.\/scripts\/missing\.mjs run by bin\/sample\.mjs is not a regular file/,
+    },
+    {
+      call: "const script = '../scripts/sample.mjs';\nrunHelper(script);",
+      error:
+        /bin\/sample\.mjs uses runHelper in a way that does not name one script/,
+    },
+  ]) {
+    const home = makeHome();
+    const source = makePreparedSource();
+    writeWrapperFixture(source, call);
+    const before = snapshot(home);
+
+    assert.throws(
+      () =>
+        prepareDistributionSet(
+          prepareOptions(home, source, 'b'.repeat(40), {
+            invocation: { command: 'bin/sample.mjs', argv: [] },
+          }),
+        ),
+      error,
+    );
+    assert.deepEqual(snapshot(home), before);
+  }
+});
+
+test('a prepared set of the repository activation wrapper runs without a missing module (#4917)', () => {
+  const home = makeHome();
+  const prepared = prepareDistributionSet(
+    prepareOptions(home, REPO, 'c'.repeat(40), {
+      invocation: { command: 'bin/idd-activation.mjs', argv: [] },
+    }),
+  );
+  const helperFiles = preparedManifest(
+    prepared.preparedPath,
+  ).components.helper.files.map((file) => file.path);
+  assert.ok(helperFiles.includes('scripts/idd-activation.mjs'));
+
+  const run = spawnSync(
+    process.execPath,
+    [join(prepared.preparedPath, 'bin/idd-activation.mjs')],
+    { cwd: home, encoding: 'utf8' },
+  );
+  assert.equal(run.status, 0, run.stderr);
+  assert.doesNotMatch(run.stderr, /MODULE_NOT_FOUND|Cannot find module/);
+});
+
+test('preparation follows a dynamic import inside a template substitution and ignores import text in a string (#4917)', () => {
+  const home = makeHome();
+  const source = makePreparedSource();
+  nodeFs.writeFileSync(
+    join(source, 'scripts/sample.mjs'),
+    [
+      `export const note = "import './quoted-missing.mjs'";`,
+      // `${import('./dependency.mjs')}` inside a template literal.
+      ['export const loaded = `$', "{import('./dependency.mjs')}`;"].join(''),
+      '',
+    ].join('\n'),
+  );
+  nodeFs.writeFileSync(
+    join(source, 'scripts/dependency.mjs'),
+    'export const dependency = true;\n',
+  );
+
+  const prepared = prepareDistributionSet(
+    prepareOptions(home, source, 'd'.repeat(40)),
+  );
+
+  const helperFiles = preparedManifest(
+    prepared.preparedPath,
+  ).components.helper.files.map((file) => file.path);
+  assert.ok(helperFiles.includes('scripts/dependency.mjs'));
+  assert.equal(
+    helperFiles.some((path) => path.includes('quoted-missing')),
+    false,
+  );
+  assert.ok(
+    nodeFs.existsSync(join(prepared.preparedPath, 'scripts/dependency.mjs')),
+  );
+});
+
 test('checkout preparation verifies helper blobs larger than the git default buffer', () => {
   const home = makeHome();
   const source = makePreparedSource();
@@ -858,6 +1006,635 @@ test('preparation refuses linked roots and hard-linked managed files', () => {
     /more than one hard link/,
   );
   assert.equal(nodeFs.readFileSync(sentinel, 'utf8'), '# Authoring\n');
+});
+
+interface InterruptedPreparedUninstall {
+  source: string;
+  setRoot: string;
+  manifestPath: string;
+  manifestBytes: Buffer;
+  continuationPath: string;
+  failedPath: string;
+  sentinels: Map<string, string>;
+}
+
+/**
+ * Install the payload, prepare one set, plant unlisted sentinel files, and
+ * run an uninstall whose unlink of a helper file fails after `manifest.json`
+ * was removed (#4917).
+ */
+function interruptPreparedUninstall(
+  home: string,
+  commit: string,
+): InterruptedPreparedUninstall {
+  installPayload(optionsFor(home));
+  const source = makePreparedSource();
+  const prepared = prepareDistributionSet(prepareOptions(home, source, commit));
+  const setRoot = prepared.preparedPath;
+  const manifestPath = join(setRoot, 'manifest.json');
+  const manifestBytes = nodeFs.readFileSync(manifestPath);
+  const continuationPath = join(
+    dataRootOf(home),
+    'prepared',
+    `${commit}.uninstall.json`,
+  );
+  const failedPath = join(setRoot, 'scripts/sample.mjs');
+  const sentinels = new Map([
+    [join(home, '.local', 'share', 'user-note.txt'), 'user note\n'],
+    [join(home, '.claude', 'user-file.md'), '# User file\n'],
+  ]);
+  for (const [path, text] of sentinels) nodeFs.writeFileSync(path, text);
+
+  let continuationBeforeManifest = false;
+  let failed = false;
+  const fs = hookedFs((op, args) => {
+    if (op !== 'unlinkSync') return;
+    if (args[0] === manifestPath) {
+      continuationBeforeManifest = nodeFs.existsSync(continuationPath);
+    }
+    if (args[0] === failedPath && !failed) {
+      failed = true;
+      throw new Error('injected unlink failure');
+    }
+  });
+  assert.throws(
+    () => uninstallPayload(optionsFor(home, { fs })),
+    /uninstall stopped at .*scripts\/sample\.mjs: .*injected unlink failure/,
+  );
+  assert.equal(continuationBeforeManifest, true);
+  return {
+    source,
+    setRoot,
+    manifestPath,
+    manifestBytes,
+    continuationPath,
+    failedPath,
+    sentinels,
+  };
+}
+
+test('an uninstall interrupted after the prepared manifest was removed resumes from its continuation record (#4917)', () => {
+  const home = makeHome();
+  const commit = 'e'.repeat(40);
+  const state = interruptPreparedUninstall(home, commit);
+
+  assert.equal(nodeFs.existsSync(state.manifestPath), false);
+  assert.ok(nodeFs.existsSync(state.failedPath));
+  assert.deepEqual(
+    nodeFs.readFileSync(state.continuationPath),
+    state.manifestBytes,
+  );
+  const listed = new Map(
+    readReceiptEntries(home).map((entry) => [entry.path, entry]),
+  );
+  assert.equal(listed.has(state.manifestPath), false);
+  assert.ok(listed.has(state.failedPath));
+  assert.deepEqual(listed.get(state.continuationPath), {
+    kind: 'file',
+    path: state.continuationPath,
+    sha256: sha256(state.manifestBytes),
+  });
+
+  const interrupted = snapshot(home);
+  assert.throws(
+    () => installPayload(optionsFor(home)),
+    /has an interrupted uninstall recorded at .*run uninstall again to finish removing it/,
+  );
+  assert.throws(
+    () => prepareDistributionSet(prepareOptions(home, state.source, commit)),
+    /has an interrupted uninstall recorded at /,
+  );
+  planUninstall(optionsFor(home));
+  assert.deepEqual(snapshot(home), interrupted);
+
+  const result = uninstallPayload(optionsFor(home));
+  assert.ok(result.lines.includes(`removed ${state.failedPath}`));
+  assert.ok(result.lines.includes(`removed ${state.continuationPath}`));
+  assert.equal(nodeFs.existsSync(dataRootOf(home)), false);
+  for (const [path, text] of state.sentinels) {
+    assert.equal(nodeFs.readFileSync(path, 'utf8'), text);
+  }
+});
+
+test('uninstall resumes from the published manifest when it stopped before writing its continuation record (#4917)', () => {
+  const home = makeHome();
+  const commit = 'f'.repeat(40);
+  const prepared = prepareDistributionSet(
+    prepareOptions(home, makePreparedSource(), commit),
+  );
+  const continuationPath = join(
+    dataRootOf(home),
+    'prepared',
+    `${commit}.uninstall.json`,
+  );
+  let failed = false;
+  const fs = hookedFs((op, args) => {
+    if (op === 'linkSync' && args[1] === continuationPath && !failed) {
+      failed = true;
+      throw new Error('injected publication failure');
+    }
+  });
+
+  assert.throws(
+    () => uninstallPayload(optionsFor(home, { fs })),
+    /uninstall stopped at .*\.uninstall\.json: .*injected publication failure/,
+  );
+  assert.equal(nodeFs.existsSync(continuationPath), false);
+  assert.ok(nodeFs.existsSync(join(prepared.preparedPath, 'manifest.json')));
+  assert.ok(
+    readReceiptEntries(home).some((entry) => entry.path === continuationPath),
+  );
+
+  uninstallPayload(optionsFor(home));
+  assert.equal(nodeFs.existsSync(dataRootOf(home)), false);
+});
+
+test('a retry finishes an uninstall that stopped while its continuation record still had a temporary link (#4917)', () => {
+  const home = makeHome();
+  const commit = '0'.repeat(40);
+  prepareDistributionSet(prepareOptions(home, makePreparedSource(), commit));
+  const continuationPath = join(
+    dataRootOf(home),
+    'prepared',
+    `${commit}.uninstall.json`,
+  );
+  let failed = false;
+  const fs = hookedFs((op, args) => {
+    if (
+      op === 'unlinkSync' &&
+      String(args[0]).startsWith(`${continuationPath}.idd-prepared-tmp-`) &&
+      !failed
+    ) {
+      failed = true;
+      throw new Error('injected temporary unlink failure');
+    }
+  });
+
+  assert.throws(
+    () => uninstallPayload(optionsFor(home, { fs })),
+    /uninstall stopped at .*\.uninstall\.json: .*injected temporary unlink failure/,
+  );
+  assert.equal(nodeFs.statSync(continuationPath).nlink, 2);
+
+  uninstallPayload(optionsFor(home));
+  assert.equal(nodeFs.existsSync(dataRootOf(home)), false);
+});
+
+test('uninstall still refuses a prepared set whose manifest is missing without a continuation record (#4917)', () => {
+  const home = makeHome();
+  const prepared = prepareDistributionSet(
+    prepareOptions(home, makePreparedSource(), '1'.repeat(40)),
+  );
+  const manifestPath = join(prepared.preparedPath, 'manifest.json');
+  nodeFs.unlinkSync(manifestPath);
+  const unlisted = snapshot(home);
+  assert.throws(
+    () => uninstallPayload(optionsFor(home)),
+    /manifest\.json is not a regular published manifest; refusing/,
+  );
+  assert.deepEqual(snapshot(home), unlisted);
+
+  const receipt = JSON.parse(nodeFs.readFileSync(receiptOf(home), 'utf8')) as {
+    entries: { path: string }[];
+  };
+  receipt.entries = receipt.entries.filter(
+    (entry) => entry.path !== manifestPath,
+  );
+  nodeFs.writeFileSync(receiptOf(home), `${JSON.stringify(receipt)}\n`);
+  const unrecorded = snapshot(home);
+  assert.throws(
+    () => uninstallPayload(optionsFor(home)),
+    /has no published manifest; refusing to trust its prepared receipt entries/,
+  );
+  assert.deepEqual(snapshot(home), unrecorded);
+});
+
+test('a resumed uninstall refuses an edited or missing continuation record and an entry outside its inventory (#4917)', () => {
+  const home = makeHome();
+  const state = interruptPreparedUninstall(home, '2'.repeat(40));
+  const original = nodeFs.readFileSync(receiptOf(home));
+
+  nodeFs.writeFileSync(state.continuationPath, '{"edited":true}\n');
+  let before = snapshot(home);
+  assert.throws(
+    () => uninstallPayload(optionsFor(home)),
+    /\.uninstall\.json does not match its receipt entry/,
+  );
+  assert.deepEqual(snapshot(home), before);
+  nodeFs.writeFileSync(state.continuationPath, state.manifestBytes);
+
+  const extraPath = join(state.setRoot, 'extra.txt');
+  nodeFs.writeFileSync(extraPath, 'extra\n');
+  const receipt = JSON.parse(original.toString('utf8')) as {
+    entries: { kind: string; path: string; sha256?: string }[];
+  };
+  receipt.entries.push({
+    kind: 'file',
+    path: extraPath,
+    sha256: sha256('extra\n'),
+  });
+  nodeFs.writeFileSync(receiptOf(home), `${JSON.stringify(receipt)}\n`);
+  before = snapshot(home);
+  assert.throws(
+    () => uninstallPayload(optionsFor(home)),
+    /extra\.txt is not in the inventory the uninstall continuation .* records/,
+  );
+  assert.deepEqual(snapshot(home), before);
+  nodeFs.unlinkSync(extraPath);
+  nodeFs.writeFileSync(receiptOf(home), original);
+
+  nodeFs.unlinkSync(state.continuationPath);
+  before = snapshot(home);
+  assert.throws(
+    () => uninstallPayload(optionsFor(home)),
+    /has no published manifest and its uninstall continuation .* is absent/,
+  );
+  assert.deepEqual(snapshot(home), before);
+});
+
+/**
+ * Run a preparation whose publication of `failedRelative` fails, and return
+ * the failure message and the candidate path (#4917). The failed publication
+ * leaves a complete `.idd-prepared-tmp-<pid>` file beside that path.
+ */
+function interruptPreparation(
+  home: string,
+  source: string,
+  commit: string,
+  failedRelative = 'scripts/sample.mjs',
+): { message: string; candidatePath: string } {
+  const candidatePath = join(dataRootOf(home), 'prepared', commit);
+  const failedPath = join(candidatePath, failedRelative);
+  let failed = false;
+  const fs = hookedFs((op, args) => {
+    if (op === 'linkSync' && args[1] === failedPath && !failed) {
+      failed = true;
+      throw new Error('injected stage interruption');
+    }
+  });
+  let message = '';
+  assert.throws(
+    () =>
+      prepareDistributionSet({ ...prepareOptions(home, source, commit), fs }),
+    (error: Error) => {
+      message = error.message;
+      return true;
+    },
+  );
+  assert.equal(failed, true);
+  return { message, candidatePath };
+}
+
+test('discardPreparedCandidate removes an unavailable candidate with its receipt entries, so prepare, install, and uninstall proceed (#4917)', () => {
+  const home = makeHome();
+  installPayload(optionsFor(home));
+  const prior = prepareDistributionSet(
+    prepareOptions(
+      home,
+      makePreparedSource({ authoringText: '# Prior\n' }),
+      '3'.repeat(40),
+    ),
+  );
+  const candidateCommit = '4'.repeat(40);
+  const { message, candidatePath } = interruptPreparation(
+    home,
+    makePreparedSource({ authoringText: '# Candidate\n' }),
+    candidateCommit,
+  );
+  assert.match(
+    message,
+    /if the source is unavailable, call discardPreparedCandidate with the same sourceCommit/,
+  );
+  assert.ok(
+    nodeFs
+      .readdirSync(join(candidatePath, 'scripts'))
+      .some((name) => name.startsWith('sample.mjs.idd-prepared-tmp-')),
+  );
+  const otherSource = makePreparedSource({ authoringText: '# Other\n' });
+  const otherCommit = '5'.repeat(40);
+  assert.throws(
+    () => installPayload(optionsFor(home)),
+    /manifest\.json is not a regular published manifest/,
+  );
+  assert.throws(
+    () => uninstallPayload(optionsFor(home)),
+    /manifest\.json is not a regular published manifest/,
+  );
+  assert.throws(
+    () =>
+      prepareDistributionSet(prepareOptions(home, otherSource, otherCommit)),
+    /manifest\.json is not a regular published manifest/,
+  );
+  const sentinel = join(home, '.local', 'share', 'user-note.txt');
+  nodeFs.writeFileSync(sentinel, 'user note\n');
+  const priorSnapshot = snapshot(prior.preparedPath);
+  const unrelatedEntries = readReceiptEntries(home).filter(
+    (entry) =>
+      entry.path !== candidatePath &&
+      !entry.path.startsWith(`${candidatePath}/`),
+  );
+
+  const result = discardPreparedCandidate({
+    ...optionsFor(home),
+    sourceCommit: candidateCommit,
+  });
+
+  assert.ok(result.lines.includes(`removed ${candidatePath}`));
+  assert.equal(nodeFs.existsSync(candidatePath), false);
+  assert.deepEqual(readReceiptEntries(home), unrelatedEntries);
+  assert.deepEqual(snapshot(prior.preparedPath), priorSnapshot);
+  assert.equal(nodeFs.readFileSync(sentinel, 'utf8'), 'user note\n');
+
+  assert.equal(
+    prepareDistributionSet(prepareOptions(home, otherSource, otherCommit))
+      .reused,
+    false,
+  );
+  installPayload(optionsFor(home));
+  uninstallPayload(optionsFor(home));
+  assert.equal(nodeFs.existsSync(dataRootOf(home)), false);
+  assert.equal(nodeFs.readFileSync(sentinel, 'utf8'), 'user note\n');
+});
+
+test('discardPreparedCandidate refuses edited, unlisted, unverifiable, published, and uninstalling paths and removes nothing (#4917)', () => {
+  const home = makeHome();
+  const commit = '6'.repeat(40);
+  const { candidatePath } = interruptPreparation(
+    home,
+    makePreparedSource(),
+    commit,
+  );
+  const discard = () =>
+    discardPreparedCandidate({ ...optionsFor(home), sourceCommit: commit });
+  const editedPath = join(
+    candidatePath,
+    'idd-template/.github/instructions/core.md',
+  );
+  const original = nodeFs.readFileSync(editedPath);
+  const refusals: [() => void, () => void, RegExp][] = [
+    [
+      () => nodeFs.writeFileSync(editedPath, '# Edited\n'),
+      () => nodeFs.writeFileSync(editedPath, original),
+      /core\.md differs from its receipt hash/,
+    ],
+    [
+      () => nodeFs.writeFileSync(join(candidatePath, 'extra.txt'), 'extra\n'),
+      () => nodeFs.unlinkSync(join(candidatePath, 'extra.txt')),
+      /extra\.txt is a file the receipt does not list/,
+    ],
+    [
+      () =>
+        nodeFs.writeFileSync(
+          `${editedPath}.idd-prepared-tmp-999`,
+          original.subarray(0, 3),
+        ),
+      () => nodeFs.unlinkSync(`${editedPath}.idd-prepared-tmp-999`),
+      /core\.md\.idd-prepared-tmp-999 is a preparation temporary file that does not hold the complete bytes/,
+    ],
+  ];
+  for (const [change, restore, error] of refusals) {
+    change();
+    const before = snapshot(home);
+    assert.throws(
+      discard,
+      (caught: Error) =>
+        error.test(caught.message) &&
+        /refused before any removal; nothing was removed/.test(caught.message),
+    );
+    assert.deepEqual(snapshot(home), before);
+    restore();
+  }
+  assert.throws(
+    () => discardPreparedCandidate({ ...optionsFor(home), sourceCommit: 'x' }),
+    /sourceCommit must be a full lowercase 40-character commit ID/,
+  );
+  discard();
+  assert.equal(nodeFs.existsSync(candidatePath), false);
+
+  const publishedHome = makeHome();
+  const published = prepareDistributionSet(
+    prepareOptions(publishedHome, makePreparedSource(), '7'.repeat(40)),
+  );
+  const publishedBefore = snapshot(publishedHome);
+  assert.throws(
+    () =>
+      discardPreparedCandidate({
+        ...optionsFor(publishedHome),
+        sourceCommit: '7'.repeat(40),
+      }),
+    /manifest\.json is published, so .* is a complete set; use uninstall to remove it/,
+  );
+  assert.deepEqual(snapshot(publishedHome), publishedBefore);
+  assert.ok(nodeFs.existsSync(published.preparedPath));
+
+  const uninstallingHome = makeHome();
+  interruptPreparedUninstall(uninstallingHome, '8'.repeat(40));
+  const uninstallingBefore = snapshot(uninstallingHome);
+  assert.throws(
+    () =>
+      discardPreparedCandidate({
+        ...optionsFor(uninstallingHome),
+        sourceCommit: '8'.repeat(40),
+      }),
+    /records an interrupted uninstall of .*run uninstall again/,
+  );
+  assert.deepEqual(snapshot(uninstallingHome), uninstallingBefore);
+});
+
+test('discardPreparedCandidate refuses an unlisted candidate directory instead of reporting nothing to discard (#4917)', () => {
+  const home = makeHome();
+  installPayload(optionsFor(home));
+  const commit = '9'.repeat(40);
+  const discard = () =>
+    discardPreparedCandidate({ ...optionsFor(home), sourceCommit: commit });
+  assert.deepEqual(discard().lines, [
+    `no receipt entries for ${join(dataRootOf(home), 'prepared', commit)}; nothing to discard`,
+  ]);
+
+  const unlisted = join(dataRootOf(home), 'prepared', commit);
+  nodeFs.mkdirSync(join(unlisted, 'idd-template'), { recursive: true });
+  nodeFs.writeFileSync(join(unlisted, 'manifest.json'), '{}\n');
+  const before = snapshot(home);
+  assert.throws(
+    discard,
+    /refused before any removal; nothing was removed: .* exists as a directory, but the receipt lists nothing under it/,
+  );
+  assert.deepEqual(snapshot(home), before);
+});
+
+test('discardPreparedCandidate removes a publication interrupted between its link and unlink, and refuses another hard link (#4917)', () => {
+  const home = makeHome();
+  const commit = 'a'.repeat(40);
+  const candidatePath = join(dataRootOf(home), 'prepared', commit);
+  const failedPath = join(candidatePath, 'scripts/sample.mjs');
+  let failed = false;
+  const fs = hookedFs((op, args) => {
+    if (
+      op === 'unlinkSync' &&
+      String(args[0]).startsWith(`${failedPath}.idd-prepared-tmp-`) &&
+      !failed
+    ) {
+      failed = true;
+      throw new Error('injected interruption after the link');
+    }
+  });
+  assert.throws(
+    () =>
+      prepareDistributionSet({
+        ...prepareOptions(home, makePreparedSource(), commit),
+        fs,
+      }),
+    /injected interruption after the link/,
+  );
+  assert.equal(nodeFs.statSync(failedPath).nlink, 2);
+
+  const pairedBytes = nodeFs.readFileSync(failedPath);
+  nodeFs.writeFileSync(failedPath, 'export const edited = true;\n');
+  const editedPair = snapshot(home);
+  assert.throws(
+    () =>
+      discardPreparedCandidate({ ...optionsFor(home), sourceCommit: commit }),
+    /sample\.mjs\.idd-prepared-tmp-[0-9]+ has more than one hard link/,
+  );
+  assert.deepEqual(snapshot(home), editedPair);
+  nodeFs.writeFileSync(failedPath, pairedBytes);
+  assert.equal(nodeFs.statSync(failedPath).nlink, 2);
+
+  const userLink = join(home, 'user-copy.mjs');
+  const editedTarget = join(
+    candidatePath,
+    'idd-template/.github/instructions/core.md',
+  );
+  nodeFs.linkSync(editedTarget, userLink);
+  const before = snapshot(home);
+  assert.throws(
+    () =>
+      discardPreparedCandidate({ ...optionsFor(home), sourceCommit: commit }),
+    /core\.md has more than one hard link; remove the extra link by hand after confirming no preparation is running, then retry/,
+  );
+  assert.deepEqual(snapshot(home), before);
+  nodeFs.unlinkSync(userLink);
+
+  const result = discardPreparedCandidate({
+    ...optionsFor(home),
+    sourceCommit: commit,
+  });
+  assert.ok(result.lines.includes(`removed ${failedPath}`));
+  assert.equal(nodeFs.existsSync(candidatePath), false);
+  assert.equal(
+    readReceiptEntries(home).some(
+      (entry) =>
+        entry.path === candidatePath ||
+        entry.path.startsWith(`${candidatePath}/`),
+    ),
+    false,
+  );
+});
+
+test('discardPreparedCandidate takes a set whose manifest publication stopped between its link and unlink (#4917)', () => {
+  const home = makeHome();
+  const commit = 'b'.repeat(40);
+  const candidatePath = join(dataRootOf(home), 'prepared', commit);
+  const manifestPath = join(candidatePath, 'manifest.json');
+  let failed = false;
+  const fs = hookedFs((op, args) => {
+    if (
+      op === 'unlinkSync' &&
+      String(args[0]).startsWith(`${manifestPath}.idd-prepared-tmp-`) &&
+      !failed
+    ) {
+      failed = true;
+      throw new Error('injected interruption after the manifest link');
+    }
+  });
+  assert.throws(
+    () =>
+      prepareDistributionSet({
+        ...prepareOptions(home, makePreparedSource(), commit),
+        fs,
+      }),
+    /injected interruption after the manifest link/,
+  );
+  assert.equal(nodeFs.statSync(manifestPath).nlink, 2);
+  const before = snapshot(home);
+  assert.throws(
+    () => uninstallPayload(optionsFor(home)),
+    /manifest\.json has more than one hard link/,
+  );
+  assert.deepEqual(snapshot(home), before);
+
+  discardPreparedCandidate({ ...optionsFor(home), sourceCommit: commit });
+  assert.equal(nodeFs.existsSync(candidatePath), false);
+  assert.equal(
+    readReceiptEntries(home).some(
+      (entry) =>
+        entry.path === candidatePath ||
+        entry.path.startsWith(`${candidatePath}/`),
+    ),
+    false,
+  );
+});
+
+test('discardPreparedCandidate checks a listed file named like a temporary against its own receipt hash (#4917)', () => {
+  const home = makeHome();
+  const commit = 'c'.repeat(40);
+  const dataRoot = dataRootOf(home);
+  const preparedRoot = join(dataRoot, 'prepared');
+  const setRoot = join(preparedRoot, commit);
+  const target = join(setRoot, 'foo');
+  const temporaryNamed = join(setRoot, 'foo.idd-prepared-tmp-123');
+  nodeFs.mkdirSync(setRoot, { recursive: true });
+  nodeFs.writeFileSync(target, 'same\n');
+  nodeFs.writeFileSync(temporaryNamed, 'same\n');
+  nodeFs.writeFileSync(
+    receiptOf(home),
+    `${JSON.stringify({
+      version: 1,
+      entries: [
+        { kind: 'directory', path: dataRoot },
+        { kind: 'directory', path: preparedRoot },
+        { kind: 'directory', path: setRoot },
+        { kind: 'file', path: target, sha256: sha256('same\n') },
+        { kind: 'file', path: temporaryNamed, sha256: sha256('original\n') },
+      ],
+    })}\n`,
+  );
+  const before = snapshot(home);
+
+  assert.throws(
+    () =>
+      discardPreparedCandidate({ ...optionsFor(home), sourceCommit: commit }),
+    /foo\.idd-prepared-tmp-123 differs from its receipt hash/,
+  );
+  assert.deepEqual(snapshot(home), before);
+});
+
+test('uninstall refuses an unlisted file at a continuation path instead of adopting it (#4917)', () => {
+  const home = makeHome();
+  const commit = 'd'.repeat(40);
+  const prepared = prepareDistributionSet(
+    prepareOptions(home, makePreparedSource(), commit),
+  );
+  const continuationPath = join(
+    dataRootOf(home),
+    'prepared',
+    `${commit}.uninstall.json`,
+  );
+  for (const bytes of [
+    nodeFs.readFileSync(join(prepared.preparedPath, 'manifest.json')),
+    Buffer.from('{"user":true}\n'),
+  ]) {
+    nodeFs.writeFileSync(continuationPath, bytes);
+    const before = snapshot(home);
+    assert.throws(
+      () => uninstallPayload(optionsFor(home)),
+      /\.uninstall\.json exists as a file, but the receipt does not list it, so uninstall will not adopt it/,
+    );
+    assert.deepEqual(snapshot(home), before);
+  }
+  nodeFs.unlinkSync(continuationPath);
+  uninstallPayload(optionsFor(home));
+  assert.equal(nodeFs.existsSync(dataRootOf(home)), false);
 });
 
 test('a fresh install lays down the payload, skills, and receipt, and uninstall removes them', () => {

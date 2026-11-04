@@ -3,8 +3,11 @@ import { test } from 'node:test';
 
 import {
   collectInstructionSizeBudgetRatchetViolations,
+  collectNearCeilingRatchetViolations,
   extractGeneratedFromBanner,
   generatedFromBanner,
+  parseNearCeilingRaiseApprovals,
+  parseStandingRaiseApprovals,
   selectStricterNoticeUtilizationPct,
 } from '../src/scripts/consistency-helpers.mts';
 
@@ -15,11 +18,10 @@ import {
 // tests/consistency.test.mts, plus
 // collectRootMarkdownAllowlistViolations (tests/root-markdown-allowlist.test.mts),
 // collectTypeSuppressionViolations (tests/type-suppression-budgets.test.mts),
-// and collectNearCeilingRatchetViolations /
-// selectStricterNoticeUtilizationPct (tests/near-ceiling-ratchet.test.mts,
-// the bundle-side sibling of collectInstructionSizeBudgetRatchetViolations
-// below). The 3 re-exported policy-helpers.mts functions have their own
-// tests/policy-helpers.test.mts.
+// and selectStricterNoticeUtilizationPct (tests/near-ceiling-ratchet.test.mts).
+// The bundle-side ratchet is also exercised below for standing-approval
+// precedence against its manual-approval input. The 3 re-exported
+// policy-helpers.mts functions have their own tests/policy-helpers.test.mts.
 //
 // collectInstructionSizeBudgetRatchetViolations (#3028) is tested here
 // rather than alongside its bundle-side sibling in
@@ -720,5 +722,128 @@ test('an approved phaseLimitBytes limit never widens alwaysLoadedLimitBytes', ()
   assert.match(
     result[0],
     /entry-a alwaysLoadedLimitBytes raised from 1000 to 2000 while a\/y\.md/,
+  );
+});
+
+test('a valid standing entry supersedes manual approvals for the same bundle', () => {
+  const manual = parseNearCeilingRaiseApprovals([
+    {
+      bundle: 'bundle-a',
+      limitBytes: 1000,
+      issue: 3840,
+      reason: 'manual approval',
+    },
+  ]);
+  const standing = parseStandingRaiseApprovals(
+    [
+      {
+        bundle: 'bundle-a',
+        standingClass: 'budgetRaise',
+        ceilingPct: 10,
+        limitBytes: 1100,
+        issue: 4887,
+        reason: 'supersedes manual approval issue 3840',
+      },
+    ],
+    [{ id: 'bundle-a', limitBytes: 1100, totalBytes: 1045 }],
+    98,
+    { enabled: true, maxRaisePct: 10 },
+  );
+  const effective = new Map(manual);
+  for (const [bundle, limitBytes] of standing.approvals) {
+    effective.set(bundle, limitBytes);
+  }
+  assert.deepEqual(standing.errors, []);
+  assert.deepEqual([...effective], [['bundle-a', 1100]]);
+  assert.deepEqual(
+    collectNearCeilingRatchetViolations(
+      NOTICE_PCT,
+      [{ id: 'bundle-a', limitBytes: 1100, totalBytes: 1045 }],
+      [{ id: 'bundle-a', limitBytes: 1000, totalBytes: 950 }],
+      effective,
+    ),
+    [],
+  );
+});
+
+test('an invalid standing entry leaves the manual approval in effect', () => {
+  const manual = parseNearCeilingRaiseApprovals([
+    {
+      bundle: 'bundle-a',
+      limitBytes: 1100,
+      issue: 3840,
+      reason: 'manual approval',
+    },
+  ]);
+  const standing = parseStandingRaiseApprovals(
+    [
+      {
+        bundle: 'bundle-a',
+        standingClass: 'budgetRaise',
+        ceilingPct: 11,
+        limitBytes: 1100,
+        issue: 4887,
+        reason: 'invalid ceiling',
+      },
+    ],
+    [{ id: 'bundle-a', limitBytes: 1100, totalBytes: 1045 }],
+    98,
+    { enabled: true, maxRaisePct: 10 },
+  );
+  const effective = new Map(manual);
+  for (const [bundle, limitBytes] of standing.approvals) {
+    effective.set(bundle, limitBytes);
+  }
+  assert.ok(standing.errors.length > 0);
+  assert.deepEqual([...effective], [['bundle-a', 1100]]);
+  assert.deepEqual(
+    collectNearCeilingRatchetViolations(
+      NOTICE_PCT,
+      [{ id: 'bundle-a', limitBytes: 1100, totalBytes: 1045 }],
+      [{ id: 'bundle-a', limitBytes: 1000, totalBytes: 950 }],
+      effective,
+    ),
+    [],
+  );
+});
+
+test('a disabled standing class leaves the manual approval rule unchanged', () => {
+  const manual = parseNearCeilingRaiseApprovals([
+    {
+      bundle: 'bundle-a',
+      limitBytes: 1000,
+      issue: 3840,
+      reason: 'manual approval',
+    },
+  ]);
+  const standing = parseStandingRaiseApprovals(
+    [
+      {
+        bundle: 'bundle-a',
+        standingClass: 'budgetRaise',
+        ceilingPct: 10,
+        limitBytes: 1100,
+        issue: 4887,
+        reason: 'standing approval',
+      },
+    ],
+    [{ id: 'bundle-a', limitBytes: 1100, totalBytes: 1045 }],
+    98,
+    { enabled: false, maxRaisePct: 10 },
+  );
+  const effective = new Map(manual);
+  for (const [bundle, limitBytes] of standing.approvals) {
+    effective.set(bundle, limitBytes);
+  }
+  assert.deepEqual(standing.errors, []);
+  assert.deepEqual([...effective], [['bundle-a', 1000]]);
+  assert.equal(
+    collectNearCeilingRatchetViolations(
+      NOTICE_PCT,
+      [{ id: 'bundle-a', limitBytes: 1100, totalBytes: 1045 }],
+      [{ id: 'bundle-a', limitBytes: 1000, totalBytes: 950 }],
+      effective,
+    ).length,
+    1,
   );
 });

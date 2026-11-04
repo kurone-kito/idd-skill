@@ -31,11 +31,11 @@ Make no claim-stage event/marker, branch/worktree, or issue-state change.
 
 Commands below are the **source-repo / vendored-node** form; other profiles use
 the profile-selected equivalent in `docs/idd-helper-scripts.md`. A helper
-missing on the active profile is a rule 1 stop, never a fall-through.
+missing on the active profile is a rule 1 stop.
 
-`{agent-id}` is shared across sessions of one agent type; pick or confirm it
-before the first command that needs it (Claim execution step 4 at the latest).
-It is never ownership proof; `{claim-id}` is the authoritative token.
+`{agent-id}` is `<family>-<suffix>`: the runtime's unique session suffix or a
+new UUID; never bare or another session's. Persist it before step 2. It never
+proves ownership; `{claim-id}` does.
 
 ## Stop-and-ask
 
@@ -98,11 +98,11 @@ this session `newAgentId`: check its `newClaimId` before Claim execution's
 forced-handoff steps:
 
 ```sh
-node scripts/resume-claim-routing.mjs --issue <N> --claim-id <your-or-newClaimId> [--nonce <your-recorded-nonce>] [--worktree <path>]
+node scripts/resume-claim-routing.mjs --issue <N> --claim-id <your-or-newClaimId> --agent-id <id> [--nonce <your-recorded-nonce>] [--worktree <path>]
 ```
 
-Pass `--nonce` only if this session recorded one for `{claim-id}`; pass
-`--worktree <path>` once the linked worktree exists (step 2 or B1).
+Omit `--agent-id` only for a pre-rule claim; pass `--nonce` only if this session
+recorded one; `--worktree <path>` once the worktree exists.
 
 <!-- dprint-ignore-start -->
 | Top-level `state` / `action` | Meaning |
@@ -303,9 +303,10 @@ no `claimed-by`, but it is a fresh activation, so it still runs step 5.
    then acquire and `--read-tokens` (`instructions-only`: written
    checks). After `claim.verifySettleDelay`, run
    `resume-claim-routing.mjs` with `--assert`, `--issue`, `--claim-id`,
-   `--nonce`, and `--worktree`; it must return `already_owned`/`keep`, and
-   that post-acquire result alone counts. Any other result: claim
-   contested; follow Claim verification step 5; STOP before digest.
+   `--nonce`, and `--worktree`, plus `--agent-id`; it must return
+   `already_owned`/`keep`, and that post-acquire result alone counts. Any
+   other result: claim contested; follow Claim verification step 5; STOP
+   before digest.
 
 ## Lost-claim cleanup (`lost-claim-cleanup`)
 

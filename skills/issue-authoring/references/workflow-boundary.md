@@ -393,14 +393,15 @@ approval boundary that hands off to IDD execution.
 
 ### Stage 2: Release (the single approval boundary)
 
-- The user's explicit hold-release request is the only approval this
+- The user's explicit hold-release request is the default approval this
   bundle's workflow requires — except the narrow defer-source auto-release
-  exception and the standing release approval for a single self-anchor target,
+  exception or the standing release approval for a single self-anchor target,
   both in
   [Authoring hold and release](contract.md#authoring-hold-and-release) —
   and it authorizes IDD execution for the released issues. The carrier
-  creation-hold exception in the same section removes only a carrier's
-  creation hold and authorizes no execution (see
+  creation-hold exception and the confirmation creation-hold exception in the
+  same section remove only the creation hold of a carrier or an auto-decide
+  confirmation issue and authorize no execution (see
   [Handoff to execution](#handoff-to-execution))
 - Before removing the authoring label, bundled skill runs a release
   checklist that absorbs the rigor of the dropped middle step:
@@ -434,12 +435,11 @@ approval boundary that hands off to IDD execution.
   body. If that guard is not found conclusively, leave all labels in place and
   stop. The guard suppresses Discover for the whole set during the provisional
   label-removal window; it does not close the set. When this release is
-  proceeding under the narrow defer-source auto-release
-  exception in
+  proceeding under the narrow defer-source auto-release exception or the
+  standing release approval in
   [Authoring hold and release](contract.md#authoring-hold-and-release)
-  (a draft carrier follows the carrier creation-hold exception's own
-  sole-member check; a standing release approval follows its own conditions
-  in that section)
+  (a draft carrier or a confirmation issue follows the sole-member check of
+  its own creation-hold exception)
   instead of an explicit human release request, also verify here --
   immediately before the first label removal below, whether that
   removal is a non-anchor target's or the anchor's own -- that the
@@ -520,12 +520,13 @@ approval boundary that hands off to IDD execution.
 - Bundled skill removes the authoring label from all published issues
   only after the release checklist passes and the user's release
   request is explicit, except the narrow auto-release exceptions
-  (defer-source and carrier creation-hold) and the standing release approval
-  for a single self-anchor target, in
+  (defer-source, carrier creation-hold, and confirmation creation-hold) and
+  the standing release approval for a single self-anchor target in
   [Authoring hold and release](contract.md#authoring-hold-and-release)
 - Release remains a human action; nothing in this bundle auto-releases
   a held issue set, except those same narrow, marker-scoped exceptions and
-  the standing release approval for a single self-anchor target
+  the policy-enabled standing release approval for a single self-anchor
+  target
 - For an ordinary human-gated release, under an orchestrator and
   delegated-worker split, the release action itself must be
   performed by whichever party directly holds the verified user's
@@ -548,18 +549,18 @@ Use this checklist for an explicit-request release and for the
 defer-source or standing-approval path, after the applicable Stage 2
 conditions pass. Verify the user's request only for an explicit-request
 release; each automatic path uses its conditions in the contract. Draft
-carriers follow the carrier creation-hold procedure above. Each entry names
-its command. The verify, re-fetch, reuse, and restore rules are in
+carriers and confirmation issues follow their creation-hold procedure above.
+Each entry names its command. The verify, re-fetch, reuse, and restore rules
+are in
 [Authoring hold and release](contract.md#authoring-hold-and-release) and
 are not repeated here. Each post is a dry run unless it has `--apply`, so
 preview it first. For an issue in another repository, pass `--owner` and
 `--repo` to the helper and `--repo <owner>/<repo>` to `gh`. Run the
 entries in this order: entry 1 for every target, entry 2 once, entries 3
 and 4 for each non-anchor target in turn, entries 3 and 4 for the anchor,
-and entry 5 last. The defer-source auto-release exception adds a
-sole-member check before the first label removal, and the standing release
-approval adds its own conditions there. The release checklist still runs for
-both paths; follow the contract for those additional conditions.
+and entry 5 last. The defer-source and standing-approval paths add their own
+checks before the first label removal. This checklist covers the shared
+release steps; follow the contract for those additional conditions.
 
 1. **Preflight, every target.** Run the contract's sweep against the target
    and the journal first (attempted, not blocking, so the command ends in
@@ -731,17 +732,15 @@ time and report the specific failure (unclear, invalid, duplicate).
   reviewed, and its drafts are reviewed at re-authoring
 - remove the authoring label from any issue without an explicit
   release request, except the narrow auto-release exceptions
-  (defer-source and carrier creation-hold) and the standing release approval
-  for a single self-anchor target, in
+  (defer-source, carrier creation-hold, and confirmation creation-hold) in
   [Authoring hold and release](contract.md#authoring-hold-and-release)
 
 ## Handoff to execution
 
 Once the authoring label is removed from every issue in a released
-set — via the user's explicit release request, or, for a single
-marked target only, the narrow defer-source auto-release
-exception, or, for a single self-anchor target, the standing release
-approval — execution is authorized: the repository's normal entry
+set — via the user's explicit release request, the narrow defer-source
+auto-release exception, or, for a single self-anchor target, the standing
+release approval — execution is authorized: the repository's normal entry
 file and routed `.github/instructions/*.instructions.md` phase files
 (Discover, Claim, Work) may pick up the released issue(s). This bundle
 does not itself start that loop. A released `review-needs-decision`
@@ -755,3 +754,9 @@ label, and that authorizes no execution: the carrier keeps its
 authoring-only label and never enters the loop. Re-authoring publishes the
 drafts under a new hold, and releasing those targets still needs the
 explicit release request.
+
+The confirmation creation-hold exception removes an auto-decide confirmation
+issue's authoring label, and that authorizes no execution either: the issue
+keeps its confirmation label (`autoDecide.confirmationLabelName`), which keeps
+it out of Discover, so it never enters the loop. The operator confirms the
+choice by closing the issue.

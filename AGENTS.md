@@ -489,6 +489,57 @@ layered on top of the distributed IDD defaults:
   helper stays available for explicit use. This bullet replaces the
   earlier digest-use statement from PR `#4527`. `idd-template/` is
   unchanged, so adopters keep the distributed behavior.
+- **Provisional decision opt-in**: This source repository sets
+  `dangerouslyAutoDecide: true` in `.github/idd/config.json` as a local
+  IDD dogfooding policy (applies only to `kurone-kito/idd-skill`).
+  `idd-template/` leaves the field unset, so adopters keep the default
+  `false`. PR `#4897` set the flag, merged 2026-11-01. At a hearing the
+  same day, recorded in roadmap `#4955`, the operator chose to keep it
+  and to use the feature actively for dogfooding. As of 2026-11-03 no
+  code reads the flag for behavior; the execution children of
+  roadmap `#4528` (issues `#4533`, `#4535`, `#4538`, and `#4539`) and
+  its transition helper (roadmap `#4722`) will. Roadmap `#4955` adds a
+  repository-only switch for each class of stop. Once those switches
+  exist, the flag alone starts no new provisional work, because a class
+  acts only when its own switch is also `true`. The gates that
+  roadmap `#4528` lists stay in force: the flag supplies no credential,
+  permission, approval, or scope expansion, and waives no CI, review,
+  standing reviewer, claim or ownership, security, destructive-operation,
+  branch, effort, or authoring-release gate. The only exceptions are the
+  two that roadmap `#4528` records for the worktree-remnant and
+  B1-leftover classes: while that class's own switch is on, it may act
+  on a claim, ownership, or destructive-operation stop, and only through
+  a remedy that first saves everything (a stash, a backup ref, or a
+  preserve directory) before it removes anything. This repository
+  departs on purpose from the adopter advice in
+  [Provisional Decision Opt-in](docs/customization.md#provisional-decision-opt-in),
+  which says to keep the flag absent or false until the complete
+  lifecycle is available and the repository has opted in; that advice
+  stays for adopters. To opt out, set `dangerouslyAutoDecide` to `false`
+  in `.github/idd/config.json`, or remove the field, which then defaults
+  to `false`.
+  The five auto-decide classes of roadmap `#4955` are on as well, under
+  `autoDecide` in `.github/idd/config.json`: `decisionIssue`, `runtimeQuestion`,
+  `authoringChoice`, `worktreeRemnant`, and `b1Leftover`. The four classes other
+  than `decisionIssue` file a confirmation issue labeled
+  `status:needs-confirmation` for the operator to review afterward.
+  `decisionIssue` confirms its pickup choices on the needs-decision source issue
+  instead. No other auto-decide class is defined, so none stays disabled. The
+  cap and the quiet window keep their defaults. The hearing left these stops in
+  force: safety and ownership stops (claim conflict or loss, wrong base branch);
+  authority stops (a CODEOWNER or required reviewer, `human_merge`, credentials,
+  authoring release); quality gates (CI, review threads, advisory convergence);
+  waits (rate limits, quiet windows); and scope or suitability rejections. The
+  worktree-remnant and B1-leftover classes replace two fail-closed defaults once
+  their consumers land: the §LWR operator attestation and the B1 manual-cleanup
+  stop. Each saves the data before it removes anything, to the stash tagged
+  `idd-lwr <claim-id>`, the backup refs `refs/idd-lwr/<branch>` and
+  `refs/idd-b1/`, `<state>/idd-skill/lwr-preserved/`, or
+  `<state>/idd-skill/b1-preserved/` (preventive; no observed incident yet). Turn
+  a class off when a confirmation issue is answered with a different choice, or
+  when a removed worktree turns out to be in use. To opt out, set a class's
+  `enabled` to `false` or remove `autoDecide`. The hearing was held on
+  2026-11-01 and is recorded in roadmap `#4955`.
 
 ## Branch strategy
 
@@ -740,9 +791,14 @@ failure:
 
 - `lint`: the bare-Node lane, which runs the audits and the protocol
   tests with no dependency installed.
-- `pnpm-boundary`: `pnpm install --frozen-lockfile --prefer-offline` with
-  `HUSKY=0`, then `pnpm run check`, then
-  `node scripts/check-pnpm-boundary.mjs`.
+- `pnpm-boundary`: the aggregate job (issue `#4993`). act runs the jobs it
+  needs first. In this repository they are the four `pnpm-boundary-group`
+  shards (`lint`, `typecheck`, `test`, and `distribution`). Each shard runs
+  `pnpm install --frozen-lockfile --prefer-offline` with `HUSKY=0`, then
+  its own `pnpm run check` groups, and the `distribution` shard also runs
+  `node scripts/check-pnpm-boundary.mjs`. When act does not resolve the
+  repository as `kurone-kito/idd-skill`, the `pnpm-boundary-full` job runs
+  the whole suite instead. Neither path has been replayed under act yet.
 - `pnpm-boundary-node22-floor`: the same reusable workflow on the Node
   version set by its `node-version` input. It is the only one of the three
   jobs that covers Node 22.

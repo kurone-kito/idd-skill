@@ -2390,14 +2390,10 @@ function ownerMarkerReplayFieldProblem(
 }
 
 /**
- * One reviewed closure that the replay accepts without an anchor
- * `mode=release` marker. The set was released on 2026-10-29 with a
- * `release-guard` and a `release-complete`, but its anchor log has no
- * anchor release marker, which the release preflight in
- * `skills/issue-authoring/references/contract.md` requires. The closure is
- * recorded in kurone-kito/idd-skill#4834, and option A there, a narrow
- * accepted closure, was approved on 2026-10-30 (implemented in
- * kurone-kito/idd-skill#4837). Only the exact identities below are accepted.
+ * Individually reviewed historical closures that lack the anchor
+ * `mode=release` marker required by the release preflight in
+ * `skills/issue-authoring/references/contract.md`. Each entry binds the
+ * exception to one exact recorded closure; no unlisted closure is accepted.
  */
 export interface AcceptedLegacyClosure {
   readonly anchor: string;
@@ -2406,7 +2402,7 @@ export interface AcceptedLegacyClosure {
   readonly owner: string;
   readonly releaseCompleteId: number;
   readonly snapshotSha256: string;
-  /** Audit record: the child release marker that the release recorded on #4792. */
+  /** Audit provenance for this closure's child release marker. */
   readonly childReleaseMarkerId: number;
 }
 
@@ -2420,6 +2416,16 @@ export const ACCEPTED_LEGACY_CLOSURES: readonly AcceptedLegacyClosure[] = [
     snapshotSha256:
       '6a706e6192793af16bba8d7598046b5069e508368c62c7769c285b87fe2e2843',
     childReleaseMarkerId: 6509444207,
+  },
+  {
+    anchor: 'kurone-kito/idd-skill#4528',
+    set: 'set-5c06e359-ba71-48ba-9e63-62aedbb0e6e3',
+    session: 'session-4be93ee0-8e6f-4a09-a282-2d3b9f1ebdfe',
+    owner: 'owner-1030b89f-075f-4022-9cd7-7c811881a1c3',
+    releaseCompleteId: 6500504932,
+    snapshotSha256:
+      '016a5b98783bb0b7144aec131783598274d1826335816145fd7d7e9bf84a6afa',
+    childReleaseMarkerId: 6500449499,
   },
 ];
 

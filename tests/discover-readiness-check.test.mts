@@ -7,6 +7,7 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import {
+  buildConfirmationLabelMatcher,
   buildRoadmapMarkerSearchQuery,
   DEFER_SOURCE_VALUES,
   evaluateDiscoverReadiness,
@@ -694,6 +695,173 @@ test('a configured authoring-only label name replaces the default (#4109)', asyn
     summary.ready.map((entry) => entry.number),
     [4109004],
   );
+});
+
+// #4960: an issue waiting for an auto-decide confirmation is never ready, and
+// the label is compared trimmed and case-insensitively.
+function confirmationIssue(number: number, labels: string[]) {
+  return {
+    number,
+    title: `confirmation guard ${number}`,
+    state: 'OPEN',
+    body: '',
+    labels: labels.map((name) => ({ name })),
+  };
+}
+
+test('excludes an issue carrying the default confirmation label in any case (#4960)', async () => {
+  const issues = new Map([
+    [4960001, confirmationIssue(4960001, ['status:needs-confirmation'])],
+    [4960002, confirmationIssue(4960002, [' Status:Needs-Confirmation '])],
+    [4960003, confirmationIssue(4960003, ['enhancement'])],
+  ]);
+  const summary = await evaluateDiscoverReadiness([...issues.keys()], {
+    loadIssue: async (number) => issues.get(number) ?? null,
+    findRoadmapsByMarker: async () => [],
+  });
+
+  assert.deepEqual(
+    summary.ready.map((entry) => entry.number),
+    [4960003],
+  );
+  for (const number of [4960001, 4960002]) {
+    assert.deepEqual(
+      summary.filteredOut.find((entry) => entry.number === number)?.reasons,
+      ['label:status:needs-confirmation'],
+    );
+  }
+  // The swarm floor reads the same summary, so it never offers them either.
+  assert.deepEqual(
+    summarizeSwarmFloorEligibility(summary).eligible.map(
+      (entry) => entry.number,
+    ),
+    [4960003],
+  );
+});
+
+test('a configured confirmation label name replaces the default (#4960)', async () => {
+  const issues = new Map([
+    [4960004, confirmationIssue(4960004, ['Triage:Confirm'])],
+    [4960005, confirmationIssue(4960005, ['status:needs-confirmation'])],
+  ]);
+  const summary = await evaluateDiscoverReadiness([...issues.keys()], {
+    loadIssue: async (number) => issues.get(number) ?? null,
+    findRoadmapsByMarker: async () => [],
+    confirmationLabelName: 'triage:confirm',
+  });
+
+  assert.deepEqual(
+    summary.filteredOut.find((entry) => entry.number === 4960004)?.reasons,
+    ['label:triage:confirm'],
+  );
+  // The stock default no longer matches once overridden, so #4960005 is ready.
+  assert.deepEqual(
+    summary.ready.map((entry) => entry.number),
+    [4960005],
+  );
+});
+
+test('a blank confirmation label option falls back to the default (#4960)', async () => {
+  const summary = await evaluateDiscoverReadiness([4960006], {
+    loadIssue: async () =>
+      confirmationIssue(4960006, ['status:needs-confirmation']),
+    findRoadmapsByMarker: async () => [],
+    confirmationLabelName: '   ',
+  });
+
+  assert.equal(summary.ready.length, 0);
+  assert.deepEqual(summary.filteredOut[0].reasons, [
+    'label:status:needs-confirmation',
+  ]);
+});
+
+test('a confirmation name colliding with the needs-decision label reports the collision and the run continues (#4960)', async () => {
+  const issues = new Map([
+    [4960011, confirmationIssue(4960011, ['status:needs-decision'])],
+    [4960012, confirmationIssue(4960012, ['enhancement'])],
+  ]);
+  const summary = await evaluateDiscoverReadiness([...issues.keys()], {
+    loadIssue: async (number) => issues.get(number) ?? null,
+    findRoadmapsByMarker: async () => [],
+    // Differs only in case, as the collision helper compares names.
+    confirmationLabelName: 'Status:Needs-Decision',
+  });
+
+  // The existing needs-decision reason stays; the collision reason is added.
+  assert.deepEqual(
+    summary.filteredOut.find((entry) => entry.number === 4960011)?.reasons,
+    ['label:status:needs-decision', 'needs_confirmation_label_collision'],
+  );
+  assert.deepEqual(
+    summary.ready.map((entry) => entry.number),
+    [4960012],
+  );
+});
+
+test('a confirmation name equal to the ready label filters ready-labeled issues (#4960)', async () => {
+  const issues = new Map([
+    [4960013, confirmationIssue(4960013, ['idd:ready'])],
+    [4960014, confirmationIssue(4960014, [])],
+    [4960015, confirmationIssue(4960015, ['triage:ready'])],
+  ]);
+  const load = async (number: number) => issues.get(number) ?? null;
+  const defaultReady = await evaluateDiscoverReadiness([4960013, 4960014], {
+    loadIssue: load,
+    findRoadmapsByMarker: async () => [],
+    confirmationLabelName: 'idd:ready',
+  });
+
+  assert.deepEqual(
+    defaultReady.filteredOut.find((entry) => entry.number === 4960013)?.reasons,
+    ['needs_confirmation_label_collision'],
+  );
+  assert.deepEqual(
+    summarizeSwarmFloorEligibility(defaultReady).eligible.map(
+      (entry) => entry.number,
+    ),
+    [4960014],
+  );
+
+  // A configured ready label name is the one the collision check compares.
+  const overriddenReady = await evaluateDiscoverReadiness([4960013, 4960015], {
+    loadIssue: load,
+    findRoadmapsByMarker: async () => [],
+    confirmationLabelName: 'triage:ready',
+    readyLabelName: 'triage:ready',
+  });
+  assert.deepEqual(
+    overriddenReady.filteredOut.find((entry) => entry.number === 4960015)
+      ?.reasons,
+    ['needs_confirmation_label_collision'],
+  );
+  assert.deepEqual(
+    overriddenReady.ready.map((entry) => entry.number),
+    [4960013],
+  );
+});
+
+test('buildConfirmationLabelMatcher reports a collision with each configured label (#4960)', () => {
+  const base = {
+    authoringLabelName: 'status:authoring',
+    authoringOnlyLabelName: 'status:authoring-only',
+    needsDecisionLabelName: 'status:needs-decision',
+    blockedByHumanLabelName: 'status:blocked-by-human',
+    roadmapLabelName: 'roadmap',
+    readyLabelName: 'idd:ready',
+  };
+  const unchanged = buildConfirmationLabelMatcher(base);
+  assert.equal(unchanged.labelName, 'status:needs-confirmation');
+  assert.equal(unchanged.collision, false);
+  assert.equal(unchanged.matches(' STATUS:needs-confirmation'), true);
+  assert.equal(unchanged.matches('status:needs-decision'), false);
+  for (const [key, value] of Object.entries(base)) {
+    const matcher = buildConfirmationLabelMatcher({
+      ...base,
+      confirmationLabelName: ` ${value.toUpperCase()} `,
+    });
+    assert.equal(matcher.collision, true, `collides with ${key}`);
+    assert.equal(matcher.labelName, value.toUpperCase());
+  }
 });
 
 test('an empty-string label-name option falls back to the default instead of disabling the check (#1273 review fix)', async () => {
@@ -2075,6 +2243,107 @@ process.exit(1);
           },
         ),
       /failed to load policy from .*bad-policy\.json/,
+    );
+  } finally {
+    restore();
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+// #4960: the unit tests pass the names to evaluateDiscoverReadiness directly,
+// so the policy-to-main() wiring is only reached through the real CLI.
+test('CLI path forwards the configured confirmation and ready label names (#4960)', () => {
+  const issue = (number: number, label: string) => ({
+    number,
+    title: `confirmation ${number}`,
+    state: 'open',
+    body: 'task',
+    labels: [{ name: label }],
+    html_url: `https://github.com/kurone-kito/idd-skill/issues/${number}`,
+    created_at: '2026-01-01T00:00:00Z',
+  });
+  const issues = {
+    1: issue(1, 'Triage:Confirm'),
+    2: issue(2, 'status:needs-confirmation'),
+    3: issue(3, 'triage:ready'),
+  };
+  const tempRoot = mkdtempSync(
+    join(tmpdir(), 'idd-discover-readiness-check-confirmation-'),
+  );
+  const restore = stubExecutable(
+    'gh',
+    `const ISSUES = ${JSON.stringify(issues)};
+const args = process.argv.slice(2);
+const path = args.find((arg) => arg.startsWith("repos/")) || "";
+if (args[0] === "api") {
+  const issueMatch = /^repos\\/kurone-kito\\/idd-skill\\/issues\\/(\\d+)$/.exec(path);
+  if (issueMatch && ISSUES[issueMatch[1]]) {
+    process.stdout.write(JSON.stringify(ISSUES[issueMatch[1]]) + "\\n");
+    process.exit(0);
+  }
+  if (/^repos\\/kurone-kito\\/idd-skill\\/issues\\/\\d+\\/(comments|timeline|events)/.test(path)) {
+    process.stdout.write("[]\\n");
+    process.exit(0);
+  }
+}
+process.stderr.write("unexpected gh invocation: " + args.join(" ") + "\\n");
+process.exit(1);
+`,
+  );
+  const run = (config: unknown) => {
+    const policyPath = join(tempRoot, 'policy.json');
+    writeFileSync(policyPath, JSON.stringify(config));
+    const summary = JSON.parse(
+      execFileSync(
+        process.execPath,
+        [
+          join(REPO_ROOT, 'scripts/discover-readiness-check.mjs'),
+          '--issues',
+          '1,2,3',
+          '--owner',
+          'kurone-kito',
+          '--repo',
+          'idd-skill',
+          '--policy',
+          policyPath,
+        ],
+        {
+          cwd: REPO_ROOT,
+          encoding: 'utf8',
+          env: { ...process.env, IDD_TRUSTED_MARKER_ACTORS: '' },
+          stdio: ['ignore', 'pipe', 'pipe'],
+        },
+      ),
+    ) as {
+      ready: { number: number }[];
+      filteredOut: { number: number; reasons: string[] }[];
+    };
+    return {
+      ready: summary.ready.map((entry) => entry.number),
+      filtered: summary.filteredOut.map((entry) => [
+        entry.number,
+        entry.reasons,
+      ]),
+    };
+  };
+  try {
+    // A malformed autoDecide sibling leaves the valid override name in force.
+    assert.deepEqual(
+      run({
+        autoDecide: { confirmationLabelName: 'triage:confirm', unknownKey: 1 },
+      }),
+      { ready: [2, 3], filtered: [[1, ['label:triage:confirm']]] },
+    );
+    // A confirmation name equal to the configured ready label collides.
+    assert.deepEqual(
+      run({
+        approvalSignals: { readyLabelName: 'triage:ready' },
+        autoDecide: { confirmationLabelName: 'triage:ready' },
+      }),
+      {
+        ready: [1, 2],
+        filtered: [[3, ['needs_confirmation_label_collision']]],
+      },
     );
   } finally {
     restore();

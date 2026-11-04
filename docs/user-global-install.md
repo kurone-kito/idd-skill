@@ -358,10 +358,21 @@ not require the optional full-core import. See the
 ## Activation gate and context cost
 
 The entry text tells the agent to run `idd-activation` from the repository
-directory and to read its JSON output. If `active` is `true`, the agent opens
-`.github/instructions/idd-overview-core.instructions.md` under the reported
-`instructionsRoot` and follows the phase routing from there. Otherwise it does
-nothing IDD-specific.
+directory and to read its JSON output. If `active` is `false`, the agent does
+nothing IDD-specific. If `active` is `true` and `selection.status` is `ready`
+with a non-null `instructionsRoot`, the agent opens
+`.github/instructions/idd-overview-core.instructions.md` under that root and
+follows the phase routing from there. At `binding-required` the agent binds
+first. In every other state it stops and follows `selection.recovery`.
+
+The gate is only half the check. A session-aware run that is `active` but has
+no session ID reports `selection.status` as not ready and `instructionsRoot` as
+`null`. That is a deliberate stop: without a session ID, the gate neither
+prepares a set nor binds one. A consumer must open the instructions only when
+`selection.status` is `ready` and `instructionsRoot` is not `null`. After a
+repair, the session reruns activation with the same session ID. It continues
+when the status is `ready`, and it binds only when the status is
+`binding-required`.
 
 The context cost is the entry text itself, kept under 1200 bytes by a test, and
 each session of an installed harness loads it. The IDD overview and the phase

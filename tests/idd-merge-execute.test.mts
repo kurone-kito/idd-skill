@@ -2816,21 +2816,41 @@ for (const [label, value] of MALFORMED_RECOVERY) {
   });
 }
 
-test('#4717: an on-head report does not check the recovery object (decision 2)', () => {
+test('#4879: an on-head report gates a present recovery attempt object', () => {
   const report = claimBoundReport(
     { action: 'attempt', reason: 'recovery-attempt-eligible' },
     { lastCopilotCommit: HEAD },
   );
-  assert.equal(staleGateOf(report), undefined);
-  assert.deepEqual(evaluateMergeGates(report), []);
+  assert.ok(staleGateOf(report));
+  assert.deepEqual(
+    evaluateMergeGates(report).map((gate) => gate.gate),
+    [STALE_GATE],
+  );
+  const { deps, calls } = depsFor(report);
+  const { verdict } = runMergeExecute([...CLAIM_BOUND_ARGS, '--apply'], deps);
+  assert.equal(verdict.ready, false);
+  assert.equal(verdict.merged, false);
+  assert.deepEqual(calls.merged, []);
 });
 
-test('#4717: a claim-id-only run never requires the recovery object (decision 4, known residual)', () => {
+test('#4878: a claim-id-only run blocks readiness and never merges without recovery evidence', () => {
   const report = claimBoundReport(undefined, {
     claim: { expectedAgentId: '' },
   });
-  assert.equal(staleGateOf(report), undefined);
-  assert.deepEqual(evaluateMergeGates(report), []);
+  assert.ok(staleGateOf(report));
+  assert.deepEqual(
+    evaluateMergeGates(report).map((gate) => gate.gate),
+    [STALE_GATE],
+  );
+  const { deps, calls } = depsFor(report);
+  const { verdict, exitCode } = runMergeExecute(
+    [...BASE_ARGS, '--apply'],
+    deps,
+  );
+  assert.equal(verdict.ready, false);
+  assert.equal(verdict.merged, false);
+  assert.deepEqual(calls.merged, []);
+  assert.notEqual(exitCode, 0);
 });
 
 test('#4717: a claimless off-head run never requires the recovery object', () => {

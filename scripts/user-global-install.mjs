@@ -94,6 +94,13 @@ import {
 const VERSION_PATTERN = /^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$/;
 const SOURCE_COMMIT_PATTERN = /^[0-9a-f]{40}$/;
 const PREPARED_MANIFEST_NAME = 'manifest.json';
+/**
+ * The suffix of `prepared/<commit>.uninstall.json`, the continuation record an
+ * uninstall writes before it removes anything from a prepared set (#4917). It
+ * holds the manifest bytes the uninstall validated, so a retry after a failure
+ * can check what is left of the set after `manifest.json` is gone.
+ */
+const UNINSTALL_CONTINUATION_SUFFIX = '.uninstall.json';
 const CHECKOUT_GIT_MAX_BUFFER_BYTES = 1024 * 1024 * 1024;
 const CURRENT = 'current';
 const PAYLOAD_BLOCK_ID = 'idd-template-core-files';
@@ -277,6 +284,14 @@ function rootNamed(ctx, name) {
   if (root === undefined) throw new Error(`no ${name} root resolved`);
   return root;
 }
+/** The commit a `prepared/` file name records an uninstall continuation for. */
+function continuationCommitOf(name) {
+  if (name === undefined || !name.endsWith(UNINSTALL_CONTINUATION_SUFFIX)) {
+    return null;
+  }
+  const commit = name.slice(0, -UNINSTALL_CONTINUATION_SUFFIX.length);
+  return SOURCE_COMMIT_PATTERN.test(commit) ? commit : null;
+}
 /** The path below `base` as segments, or null when it is not below `base`. */
 function segmentsUnder(base, path) {
   const rel = relative(base, path);
@@ -294,6 +309,9 @@ function ownedShape(ctx, entry) {
   if (data !== null && data[0] === 'prepared') {
     if (entry.kind !== 'directory' && entry.kind !== 'file') return false;
     if (data.length === 1) return entry.kind === 'directory';
+    if (data.length === 2 && continuationCommitOf(data[1]) !== null) {
+      return entry.kind === 'file';
+    }
     if (!SOURCE_COMMIT_PATTERN.test(data[1])) return false;
     if (data.length === 2) return entry.kind === 'directory';
     return true;
@@ -1303,30 +1321,49 @@ function preparedManifestExpectedEntries(setRoot, sourceCommit, manifestBytes) {
   );
   return { fileEntries, directoryEntries };
 }
+/**
+ * Check every prepared set's receipt group against its manifest. A group with
+ * an uninstall continuation entry refuses unless `resumeUninstall` is set, so
+ * install and preparation never take a set that an uninstall has started to
+ * remove (#4917). Preparation passes its own commit as `incompleteCommit`.
+ */
 function assertPreparedReceiptEntriesMatchManifests(
   ctx,
   entries,
-  incompleteCommit,
+  options = {},
 ) {
   const grouped = new Map();
+  const continuations = new Map();
   for (const entry of entries.values()) {
     const data = segmentsUnder(ctx.dataRoot, entry.path);
-    if (
-      data === null ||
-      data[0] !== 'prepared' ||
-      data.length < 2 ||
-      !SOURCE_COMMIT_PATTERN.test(data[1] ?? '')
-    ) {
+    if (data === null || data[0] !== 'prepared' || data.length < 2) continue;
+    const continuationCommit =
+      data.length === 2 ? continuationCommitOf(data[1]) : null;
+    if (continuationCommit !== null) {
+      continuations.set(continuationCommit, entry);
+      if (!grouped.has(continuationCommit)) grouped.set(continuationCommit, []);
       continue;
     }
+    if (!SOURCE_COMMIT_PATTERN.test(data[1] ?? '')) continue;
     const commit = data[1];
     const group = grouped.get(commit) ?? [];
     group.push(entry);
     grouped.set(commit, group);
   }
+  const checks = [];
   for (const [commit, group] of grouped) {
-    if (commit === incompleteCommit) continue;
     const setRoot = join(ctx.preparedRoot, commit);
+    const continuation = continuations.get(commit);
+    if (continuation !== undefined) {
+      if (!options.resumeUninstall) {
+        throw new Error(
+          `${setRoot} has an interrupted uninstall recorded at ${continuation.path}; refusing; run uninstall again to finish removing it`,
+        );
+      }
+      checks.push(checkUninstallContinuation(ctx, commit, group, continuation));
+      continue;
+    }
+    if (commit === options.incompleteCommit) continue;
     const manifestPath = join(setRoot, PREPARED_MANIFEST_NAME);
     const receiptManifest = group.find((entry) => entry.path === manifestPath);
     if (receiptManifest === undefined || receiptManifest.kind !== 'file') {
@@ -1388,7 +1425,107 @@ function assertPreparedReceiptEntriesMatchManifests(
         );
       }
     }
+    checks.push({
+      commit,
+      setRoot,
+      continuationPath: join(
+        ctx.preparedRoot,
+        `${commit}${UNINSTALL_CONTINUATION_SUFFIX}`,
+      ),
+      manifestBytes,
+      continuationWritten: false,
+    });
   }
+  return checks;
+}
+/**
+ * Check a prepared group that an earlier uninstall recorded a continuation
+ * for (#4917). The record holds the manifest bytes that uninstall validated,
+ * and the receipt lists it with their hash. Every entry still listed for the
+ * set must be in the inventory those bytes describe, with the same kind and
+ * hash; whether each file still matches its hash is the uninstall plan's own
+ * check. When the record is absent, the uninstall stopped before writing it,
+ * so the manifest must still be published and match, or nothing of the set
+ * may be left.
+ */
+function checkUninstallContinuation(ctx, commit, group, continuation) {
+  const setRoot = join(ctx.preparedRoot, commit);
+  const manifestPath = join(setRoot, PREPARED_MANIFEST_NAME);
+  const continuationPath = continuation.path;
+  if (continuation.kind !== 'file') {
+    throw new Error(
+      `${continuationPath} is listed as a ${continuation.kind}, not as the uninstall continuation file; refusing`,
+    );
+  }
+  let manifestBytes = null;
+  let continuationWritten = false;
+  const walk = checkContainment(ctx.preparedRoot, continuationPath, ctx.fs);
+  if (walk.finalKind === 'file') {
+    const bytes = readNoFollowBytes(continuationPath, ctx.fs);
+    if (sha256Hex(bytes) !== continuation.sha256) {
+      throw new Error(
+        `${continuationPath} does not match its receipt entry, so it cannot show which prepared files an earlier uninstall validated; refusing`,
+      );
+    }
+    manifestBytes = bytes;
+    continuationWritten = true;
+  } else if (walk.finalKind === 'absent') {
+    const receiptManifest = group.find((entry) => entry.path === manifestPath);
+    const manifestWalk = checkContainment(
+      ctx.preparedRoot,
+      manifestPath,
+      ctx.fs,
+    );
+    if (receiptManifest?.kind === 'file' && manifestWalk.finalKind === 'file') {
+      const bytes = readNoFollowBytes(manifestPath, ctx.fs);
+      if (
+        sha256Hex(bytes) !== receiptManifest.sha256 ||
+        receiptManifest.sha256 !== continuation.sha256
+      ) {
+        throw new Error(
+          `${manifestPath} does not match its receipt entry and the uninstall continuation entry; refusing`,
+        );
+      }
+      manifestBytes = bytes;
+    } else if (group.length > 0) {
+      throw new Error(
+        `${setRoot} has no published manifest and its uninstall continuation ${continuationPath} is absent; refusing to trust its prepared receipt entries`,
+      );
+    }
+  } else {
+    throw new Error(
+      `${continuationPath} is ${walk.finalKind}, not a regular uninstall continuation file; refusing`,
+    );
+  }
+  if (manifestBytes !== null) {
+    const expected = preparedManifestExpectedEntries(
+      setRoot,
+      commit,
+      manifestBytes,
+    );
+    for (const entry of group) {
+      const expectedEntry =
+        expected.fileEntries.get(entry.path) ??
+        expected.directoryEntries.get(entry.path);
+      if (expectedEntry === undefined) {
+        throw new Error(
+          `${entry.path} is not in the inventory the uninstall continuation ${continuationPath} records for prepared set ${setRoot}; refusing`,
+        );
+      }
+      if (!sameReceiptEntry(entry, expectedEntry)) {
+        throw new Error(
+          `${entry.path} conflicts with the inventory the uninstall continuation ${continuationPath} records; refusing`,
+        );
+      }
+    }
+  }
+  return {
+    commit,
+    setRoot,
+    continuationPath,
+    manifestBytes,
+    continuationWritten,
+  };
 }
 function verifyPreparedTree(ctx, build, expected, receiptEntries, options) {
   const rootWalk = checkContainment(ctx.preparedRoot, build.setRoot, ctx.fs);
@@ -1524,7 +1661,7 @@ function prepareFailureMessage(ctx, build, expected, error) {
   } catch (receiptError) {
     receiptState = `invalid (${describe(receiptError)})`;
   }
-  return `preparing ${build.sourceCommit} failed (${describe(error)}); the completion manifest ${marker} is ${markerState}; staged paths under the candidate are ${stagedState}; expected paths still missing are ${missingState}; receipt state is ${receiptState}; one safe retry is to call prepareDistributionSet again with the identical sourceCommit, provenance and source bytes; if the source is unavailable, remove only candidate paths whose receipt hashes still match`;
+  return `preparing ${build.sourceCommit} failed (${describe(error)}); the completion manifest ${marker} is ${markerState}; staged paths under the candidate are ${stagedState}; expected paths still missing are ${missingState}; receipt state is ${receiptState}; one safe retry is to call prepareDistributionSet again with the identical sourceCommit, provenance and source bytes; if the source is unavailable, call discardPreparedCandidate with the same sourceCommit, which removes the candidate paths whose receipt hashes still match together with their receipt entries`;
 }
 function withReceiptMutationLock(ctx, operation) {
   const fs = ctx.fs;
@@ -1652,7 +1789,9 @@ function prepareDistributionSetWithContext(ctx, options) {
   if (prior.state === 'valid') {
     for (const entry of prior.receipt.entries) entries.set(entry.path, entry);
   }
-  assertPreparedReceiptEntriesMatchManifests(ctx, entries, build.sourceCommit);
+  assertPreparedReceiptEntriesMatchManifests(ctx, entries, {
+    incompleteCommit: build.sourceCommit,
+  });
   const preparedRootStat = lstatOrNull(ctx.preparedRoot, fs);
   if (
     preparedRootStat !== null &&
@@ -1802,6 +1941,331 @@ function prepareDistributionSetWithContext(ctx, options) {
     fileCount: build.files.length,
     reused: false,
   };
+}
+/**
+ * Remove an incomplete prepared candidate and its receipt entries when its
+ * source is unavailable for a retry (#4917). A failed preparation lists every
+ * candidate path in the receipt before it writes the first file, and install,
+ * uninstall, and the preparation of any other commit refuse a candidate whose
+ * manifest was never published, so removing the paths alone left the receipt
+ * entries behind. This runs under the receipt mutation lock and removes
+ * nothing until every path of the candidate passes the ownership, link, and
+ * hash checks. A published set, or one an uninstall has started to remove,
+ * is refused: uninstall removes those. The `prepared` directory and its
+ * receipt entry stay.
+ */
+export function discardPreparedCandidate(options) {
+  if (!SOURCE_COMMIT_PATTERN.test(options.sourceCommit)) {
+    throw new Error(
+      'sourceCommit must be a full lowercase 40-character commit ID',
+    );
+  }
+  const ctx = resolveContext(options);
+  return withReceiptMutationLock(ctx, () =>
+    discardPreparedCandidateWithContext(ctx, options.sourceCommit),
+  );
+}
+function discardPreparedCandidateWithContext(ctx, commit) {
+  const fs = ctx.fs;
+  const refuse = (reason) => {
+    throw new Error(
+      `discarding prepared candidate ${commit} refused before any removal; nothing was removed: ${reason}`,
+    );
+  };
+  try {
+    assertRealChain(ctx.dataRoot, fs);
+  } catch (error) {
+    refuse(describe(error));
+  }
+  const rootStat = lstatOrNull(ctx.dataRoot, fs);
+  if (rootStat === null) {
+    return {
+      lines: ['no data root; nothing to discard'],
+      priorCurrentTarget: null,
+    };
+  }
+  if (!rootStat.isDirectory()) {
+    refuse(`${ctx.dataRoot} is not a real directory`);
+  }
+  const stale = findStaleReceiptTemps(ctx.dataRoot, fs);
+  if (stale.length > 0) {
+    refuse(
+      `${stale[0]} is a stale receipt temporary from an interrupted write; remove that exact file after confirming no receipt write is active`,
+    );
+  }
+  const read = readReceipt(ctx.dataRoot, fs);
+  if (read.state === 'missing') {
+    return {
+      lines: ['no receipt; nothing to discard'],
+      priorCurrentTarget: null,
+    };
+  }
+  const entries = new Map();
+  for (const entry of read.receipt.entries) {
+    assertOwnedShape(ctx, entry);
+    entries.set(entry.path, entry);
+  }
+  const setRoot = join(ctx.preparedRoot, commit);
+  const manifestPath = join(setRoot, PREPARED_MANIFEST_NAME);
+  const continuationPath = join(
+    ctx.preparedRoot,
+    `${commit}${UNINSTALL_CONTINUATION_SUFFIX}`,
+  );
+  if (entries.has(continuationPath)) {
+    refuse(
+      `${continuationPath} records an interrupted uninstall of ${setRoot}; run uninstall again to finish removing it`,
+    );
+  }
+  const fileEntries = new Map();
+  const directoryEntries = [];
+  for (const entry of entries.values()) {
+    if (!isWithin(setRoot, entry.path)) continue;
+    if (entry.kind === 'file') fileEntries.set(entry.path, entry.sha256);
+    else if (entry.kind === 'directory') directoryEntries.push(entry.path);
+    else refuse(`${entry.path} is listed as a ${entry.kind}`);
+  }
+  const rootWalk = checkContainment(ctx.preparedRoot, setRoot, fs);
+  if (fileEntries.size === 0 && directoryEntries.length === 0) {
+    // Nothing is listed, so nothing here is the installer's to remove; a
+    // candidate directory that exists anyway is refused rather than
+    // reported as nothing to discard.
+    if (rootWalk.finalKind !== 'absent') {
+      refuse(
+        `${setRoot} exists as a ${rootWalk.finalKind}, but the receipt lists nothing under it, so the installer does not own it; inspect it and remove it by hand if it is not needed`,
+      );
+    }
+    return {
+      lines: [`no receipt entries for ${setRoot}; nothing to discard`],
+      priorCurrentTarget: null,
+    };
+  }
+  // Whether `target` and one unlisted `<target>.idd-prepared-tmp-<digits>`
+  // beside it are the two links a publication interrupted between its link
+  // and its unlink leaves: one inode, two links each, and the bytes of the
+  // target's receipt hash.
+  const isInterruptedPublication = (target) => {
+    const expected = fileEntries.get(target);
+    const targetStat = fs.lstatSync(target, { bigint: true });
+    if (
+      expected === undefined ||
+      !targetStat.isFile() ||
+      targetStat.nlink !== 2n ||
+      targetStat.ino === 0n
+    ) {
+      return false;
+    }
+    const prefix = `${basename(target)}.idd-prepared-tmp-`;
+    return fs.readdirSync(dirname(target)).some((name) => {
+      const path = join(dirname(target), name);
+      if (
+        !name.startsWith(prefix) ||
+        !/^[0-9]+$/.test(name.slice(prefix.length)) ||
+        fileEntries.has(path)
+      ) {
+        return false;
+      }
+      const stat = fs.lstatSync(path, { bigint: true });
+      return (
+        stat.isFile() &&
+        stat.nlink === 2n &&
+        stat.dev === targetStat.dev &&
+        stat.ino === targetStat.ino &&
+        sha256Hex(readNoFollowBytes(path, fs)) === expected
+      );
+    });
+  };
+  // A manifest published by an interrupted publication still has its second
+  // link, which uninstall refuses, so this recovery takes that set too.
+  const manifestWalk = checkContainment(ctx.preparedRoot, manifestPath, fs);
+  if (
+    manifestWalk.finalKind !== 'absent' &&
+    !(
+      manifestWalk.finalKind === 'file' &&
+      isInterruptedPublication(manifestPath)
+    )
+  ) {
+    refuse(
+      manifestWalk.finalKind === 'file'
+        ? `${manifestPath} is published, so ${setRoot} is a complete set; use uninstall to remove it`
+        : `${manifestPath} is a ${manifestWalk.finalKind}`,
+    );
+  }
+  // Every path under the candidate must be one the receipt lists, with the
+  // listed hash. A preparation temporary file is removed only when it holds
+  // the complete bytes of its listed target, which is what a failed
+  // publication leaves; any other one cannot be checked against the receipt.
+  // A publication interrupted between its link and its unlink leaves the
+  // temporary name and the target as two links to one file (#4917); that
+  // pair is accepted when both names share the inode, each has exactly two
+  // links, and the bytes match the target's receipt hash.
+  const refusals = [];
+  const presentFiles = new Set();
+  const presentDirectories = new Set();
+  const temporaries = [];
+  const pairedTemporaries = [];
+  const temporaryPattern = /^(.*)\.idd-prepared-tmp-[0-9]+$/u;
+  const extraLinkGuidance =
+    'remove the extra link by hand after confirming no preparation is running, then retry';
+  if (rootWalk.finalKind === 'directory') {
+    const listedDirectories = new Set(directoryEntries);
+    const regularFiles = new Map();
+    const visit = (directory) => {
+      presentDirectories.add(directory);
+      if (!listedDirectories.has(directory)) {
+        refusals.push(`${directory} is a directory the receipt does not list`);
+      }
+      for (const name of fs.readdirSync(directory)) {
+        const path = join(directory, name);
+        const stat = fs.lstatSync(path, { bigint: true });
+        if (stat.isSymbolicLink()) {
+          refusals.push(`${path} is a symbolic link`);
+        } else if (stat.isDirectory()) {
+          visit(path);
+        } else if (!stat.isFile()) {
+          refusals.push(`${path} is not a regular file or directory`);
+        } else {
+          regularFiles.set(path, { name, directory, stat });
+        }
+      }
+    };
+    visit(setRoot);
+    const pairedTargets = new Set();
+    for (const [path, { name, directory, stat }] of regularFiles) {
+      // A listed path is an ordinary file, whatever its name.
+      const temporary = fileEntries.has(path)
+        ? null
+        : name.match(temporaryPattern);
+      if (temporary === null || stat.nlink !== 2n) continue;
+      const target = join(directory, temporary[1] ?? '');
+      const targetFile = regularFiles.get(target);
+      if (
+        targetFile !== undefined &&
+        targetFile.stat.nlink === 2n &&
+        targetFile.stat.dev === stat.dev &&
+        targetFile.stat.ino === stat.ino &&
+        stat.ino !== 0n &&
+        fileEntries.get(target) === sha256Hex(readNoFollowBytes(path, fs))
+      ) {
+        pairedTemporaries.push({ path, target });
+        pairedTargets.add(target);
+      }
+    }
+    const paired = new Set(pairedTemporaries.map(({ path }) => path));
+    for (const [path, { name, directory, stat }] of regularFiles) {
+      if (paired.has(path)) continue;
+      if (stat.nlink > 1n && !pairedTargets.has(path)) {
+        refusals.push(
+          `${path} has more than one hard link; ${extraLinkGuidance}`,
+        );
+        continue;
+      }
+      const sha256 = sha256Hex(readNoFollowBytes(path, fs));
+      const temporary = fileEntries.has(path)
+        ? null
+        : name.match(temporaryPattern);
+      if (temporary !== null) {
+        const target = join(directory, temporary[1] ?? '');
+        if (fileEntries.get(target) === sha256) {
+          temporaries.push({ path, sha256 });
+        } else {
+          refusals.push(
+            `${path} is a preparation temporary file that does not hold the complete bytes of a listed file, so it cannot be checked against the receipt; remove that exact file by hand after confirming no preparation is running`,
+          );
+        }
+      } else if (!fileEntries.has(path)) {
+        refusals.push(`${path} is a file the receipt does not list`);
+      } else if (fileEntries.get(path) !== sha256) {
+        refusals.push(
+          `${path} differs from its receipt hash, so it may hold an edit`,
+        );
+      } else {
+        presentFiles.add(path);
+      }
+    }
+  } else if (rootWalk.finalKind !== 'absent') {
+    refuse(`${setRoot} is ${rootWalk.finalKind}, not a real directory`);
+  }
+  if (refusals.length > 0) refuse(refusals.join('; '));
+  const lines = [];
+  const persist = () => persistEntries(ctx, entries, fs);
+  const stopAt = (path, error) => {
+    throw new Error(
+      `discarding prepared candidate ${commit} stopped at ${path}: ${describe(error)}; the entries not yet removed stay listed`,
+    );
+  };
+  for (const temporary of temporaries) {
+    try {
+      removeSingleEntry(
+        ctx.preparedRoot,
+        temporary.path,
+        { kind: 'file', sha256: temporary.sha256 },
+        fs,
+      );
+    } catch (error) {
+      stopAt(temporary.path, error);
+    }
+    lines.push(`removed ${temporary.path}`);
+  }
+  // Drop the temporary name of each interrupted publication pair, after
+  // checking again that both names are still the same file with two links,
+  // as the preparation's own atomic write does; the target then has one
+  // link and is removed with the other listed files.
+  for (const { path, target } of pairedTemporaries) {
+    try {
+      const walk = checkContainment(ctx.preparedRoot, path, fs);
+      const temporaryStat = fs.lstatSync(path, { bigint: true });
+      const targetStat = fs.lstatSync(target, { bigint: true });
+      if (
+        walk.finalKind !== 'file' ||
+        temporaryStat.nlink !== 2n ||
+        targetStat.nlink !== 2n ||
+        temporaryStat.dev !== targetStat.dev ||
+        temporaryStat.ino !== targetStat.ino
+      ) {
+        throw new Error(`${path} is no longer a second link to ${target}`);
+      }
+      fs.unlinkSync(path);
+    } catch (error) {
+      stopAt(path, error);
+    }
+    lines.push(`removed ${path}`);
+  }
+  for (const [path, sha256] of [...fileEntries].reverse()) {
+    if (presentFiles.has(path)) {
+      try {
+        removeSingleEntry(ctx.preparedRoot, path, { kind: 'file', sha256 }, fs);
+      } catch (error) {
+        stopAt(path, error);
+      }
+    }
+    entries.delete(path);
+    persist();
+    lines.push(`${presentFiles.has(path) ? 'removed' : 'absent'} ${path}`);
+  }
+  const deepestFirst = [...directoryEntries].sort((left, right) => {
+    const depth = right.split(sep).length - left.split(sep).length;
+    return depth === 0 ? compareUtf8(right, left) : depth;
+  });
+  for (const directory of deepestFirst) {
+    if (presentDirectories.has(directory)) {
+      try {
+        removeSingleEntry(
+          ctx.preparedRoot,
+          directory,
+          { kind: 'directory' },
+          fs,
+        );
+      } catch (error) {
+        stopAt(directory, error);
+      }
+    }
+    entries.delete(directory);
+    persist();
+    lines.push(
+      `${presentDirectories.has(directory) ? 'removed' : 'absent'} ${directory}`,
+    );
+  }
+  return { lines, priorCurrentTarget: null };
 }
 function readPackageVersion(sourceRoot, fs) {
   const parsed = JSON.parse(
@@ -2714,6 +3178,7 @@ function buildUninstallPlan(ctx) {
       reason: 'no data root; nothing to remove',
       entries: new Map(),
       decisions: [],
+      preparedGroups: [],
     };
   }
   if (rootStat.isSymbolicLink()) {
@@ -2739,17 +3204,41 @@ function buildUninstallPlan(ctx) {
       reason: 'no receipt; nothing to remove',
       entries: new Map(),
       decisions: [],
+      preparedGroups: [],
     };
   }
   const entries = new Map();
   for (const entry of read.receipt.entries) entries.set(entry.path, entry);
-  assertPreparedReceiptEntriesMatchManifests(ctx, entries);
+  const preparedGroups = assertPreparedReceiptEntriesMatchManifests(
+    ctx,
+    entries,
+    { resumeUninstall: true },
+  );
+  const continuationPaths = new Set(
+    preparedGroups.map((group) => group.continuationPath),
+  );
   const decisions = [];
   const refusals = [];
+  // A continuation path that exists without a receipt entry is not the
+  // installer's, so uninstall refuses it rather than adopting it as its
+  // record or listing a record it cannot then write (#4917).
+  for (const group of preparedGroups) {
+    if (entries.has(group.continuationPath)) continue;
+    const walk = checkContainment(ctx.preparedRoot, group.continuationPath, fs);
+    if (walk.finalKind !== 'absent') {
+      refusals.push(
+        `${group.continuationPath} exists as a ${walk.finalKind}, but the receipt does not list it, so uninstall will not adopt it as its continuation record; move it aside, then uninstall again`,
+      );
+    }
+  }
   for (const entry of read.receipt.entries) {
     try {
       assertOwnedShape(ctx, entry);
       const { root, base, walk } = inspect(ctx, entry.path);
+      // A continuation record is removed only after the rest of its set, so
+      // it gets no decision of its own here (#4917); the receipt lists it
+      // last, and the reversed removal order would otherwise take it first.
+      if (continuationPaths.has(entry.path)) continue;
       const decide = (action, rewrite) => {
         decisions.push({
           path: entry.path,
@@ -2841,7 +3330,7 @@ function buildUninstallPlan(ctx) {
       `uninstall refused before any removal; nothing was removed: ${[...new Set(refusals)].join('; ')}`,
     );
   }
-  return { reason: null, entries, decisions };
+  return { reason: null, entries, decisions, preparedGroups };
 }
 function uninstallLines(plan) {
   if (plan.reason !== null) return [plan.reason];
@@ -2889,13 +3378,78 @@ function uninstallPayloadWithContext(ctx) {
   const plan = buildUninstallPlan(ctx);
   if (plan.reason !== null)
     return { lines: [plan.reason], priorCurrentTarget: null };
-  const { entries, decisions } = plan;
+  const { entries, decisions, preparedGroups } = plan;
   const lines = [];
   const persist = () => persistEntries(ctx, entries, fs);
   const stopAt = (path, error) => {
     throw new Error(
       `uninstall stopped at ${path}: ${describe(error)}; the entries not yet removed stay listed`,
     );
+  };
+  // Before anything in a prepared set is removed, record the manifest bytes
+  // this plan validated (#4917). The receipt lists the record first, so a
+  // failed write leaves an entry that a retry recognizes; the manifest is the
+  // first file removed, and a retry after a later failure checks what is left
+  // against this record instead of refusing for the missing manifest. A
+  // record that is already present goes through the same write, which only
+  // verifies it and drops a temporary file a crash left linked to it.
+  for (const group of preparedGroups) {
+    if (group.manifestBytes === null) continue;
+    if (!entries.has(group.continuationPath)) {
+      entries.set(group.continuationPath, {
+        kind: 'file',
+        path: group.continuationPath,
+        sha256: sha256Hex(group.manifestBytes),
+      });
+      persist();
+    }
+    try {
+      writeNewFileAtomically(
+        ctx.preparedRoot,
+        group.continuationPath,
+        group.manifestBytes,
+        fs,
+        0o644,
+      );
+    } catch (error) {
+      stopAt(group.continuationPath, error);
+    }
+    if (!group.continuationWritten) {
+      lines.push(`recorded ${group.continuationPath}`);
+    }
+  }
+  // Remove a set's continuation record once nothing else of that set is
+  // listed: after its set root, and before the prepared root is judged.
+  const finishContinuations = () => {
+    for (const group of preparedGroups) {
+      const entry = entries.get(group.continuationPath);
+      if (entry === undefined || entry.kind !== 'file') continue;
+      if ([...entries.keys()].some((path) => isWithin(group.setRoot, path))) {
+        continue;
+      }
+      const walk = checkContainment(
+        ctx.preparedRoot,
+        group.continuationPath,
+        fs,
+      );
+      if (walk.finalKind !== 'absent') {
+        try {
+          removeSingleEntry(
+            ctx.preparedRoot,
+            group.continuationPath,
+            { kind: 'file', sha256: entry.sha256 },
+            fs,
+          );
+        } catch (error) {
+          stopAt(group.continuationPath, error);
+        }
+      }
+      entries.delete(group.continuationPath);
+      persist();
+      lines.push(
+        `${walk.finalKind === 'absent' ? 'absent' : 'removed'} ${group.continuationPath}`,
+      );
+    }
   };
   for (const decision of [...decisions].reverse()) {
     if (decision.entry.kind === 'directory') continue;
@@ -2961,6 +3515,7 @@ function uninstallPayloadWithContext(ctx) {
     if (decision.entry.kind !== 'directory' || decision.path === ctx.dataRoot) {
       continue;
     }
+    if (decision.path === ctx.preparedRoot) finishContinuations();
     if (decision.action === 'absent') {
       entries.delete(decision.path);
       persist();
@@ -2995,6 +3550,7 @@ function uninstallPayloadWithContext(ctx) {
     persist();
     lines.push(`removed ${decision.path}`);
   }
+  finishContinuations();
   const others = [...entries.keys()].filter((path) => path !== ctx.dataRoot);
   const dataRootListed = entries.has(ctx.dataRoot);
   const extraFiles = fs

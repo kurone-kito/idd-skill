@@ -798,6 +798,29 @@ entry `id`. The check then accepts that bundle or entry only up to the
 approved limit. An id that names both a bundle and an entry is ambiguous, so
 neither takes that approval.
 
+The opt-in `contextCeiling.standingRaiseApprovals` array supports the
+`budgetRaise` class when repository policy explicitly sets
+`standingApprovals.budgetRaise.enabled: true`. Each entry names a
+`bundleBudgets` bundle and records `standingClass`, `ceilingPct`,
+`limitBytes`, a positive `issue` number, and a non-empty `reason`.
+`ceilingPct` cannot exceed the policy's `maxRaisePct`; `limitBytes`
+must be a multiple of 100 and satisfy these bounds:
+
+```text
+lowerBound = measured * 100 / maxUtilizationPct
+upperBound = floor(measured * (1 + ceilingPct / 100) / 100) * 100
+lowerBound <= limitBytes <= upperBound
+```
+
+If no such multiple exists, the entry is invalid. The reason records the
+manual approval issue numbers superseded; the audit does not parse that text.
+
+A valid standing entry supplies the approved limit for its bundle and
+supersedes every manual entry for that bundle. Invalid entries are reported
+and ignored, leaving any manual approval in effect; duplicate standing entries
+for one bundle are all invalid. If the budget-raise class is disabled or
+absent, the standing-entry array is ignored entirely.
+
 **Mechanically enforced (#2697).** `node scripts/audit-docs.mjs --check`
 fails, when the base ref and its manifest are available, when a commit
 raises a `bundleBudgets` bundle's `limitBytes` while that bundle's

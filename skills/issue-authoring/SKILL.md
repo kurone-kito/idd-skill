@@ -143,7 +143,9 @@ needs-decision, blocked-by-human, and out-of-scope.
    `instructions-only` installs with no helper runtime. Resolve every
    reported failure before treating the issue as ready; a carrier is
    never published without that check, and it has no manual fallback
-   (step 8's second exception applies). Before newly
+   (step 8's second exception applies). An auto-decide confirmation issue is
+   linted with `--shape confirmation --current-repo <owner>/<repo>` instead, and
+   its record comments with `--confirmation-record`. Before newly
    publishing a body into the `needs-decision` or `blocked-by-human`
    bucket instead, also run the linter, passing
    `--expect-bucket <needs-decision|blocked-by-human>` (choose the one
@@ -243,7 +245,8 @@ needs-decision, blocked-by-human, and out-of-scope.
      intentionally create an unlabeled issue. That command is
      `idd-publish-authoring-hold` (`node scripts/publish-authoring-hold.mjs`
      in this source repository). It publishes one issue per call: an orphan
-     (the default), a draft carrier (`--shape carrier`), a roadmap shell
+     (the default), a draft carrier (`--shape carrier`), an auto-decide
+     confirmation issue (`--shape confirmation`), a roadmap shell
      (`--shape roadmap`), or a child (`--shape child` with `--anchor` naming
      the set anchor's `<owner>/<repo>#<number>`); see its `--help` and the
      contract's
@@ -358,9 +361,11 @@ needs-decision, blocked-by-human, and out-of-scope.
      [Authoring hold and release](references/contract.md#authoring-hold-and-release),
      for a single target whose body carried the defer-source marker at
      Stage 1 publication time (never a marker added later), for a single
-     self-anchor target under the standing release approval, or for a draft
-     carrier, whose creation hold `publish-authoring-hold --shape carrier`
-     releases itself — preflight and verify or reuse a matching
+     self-anchor target under the standing release approval, for a draft
+     carrier whose creation hold `publish-authoring-hold --shape carrier`
+     releases itself, or for an auto-decide confirmation issue whose creation
+     hold `publish-authoring-hold --shape confirmation` releases the same way
+     — preflight and verify or reuse a matching
      `mode=release` marker for every target (with `supersedes` equal to the
      current owner token)
      before removing any label; record its GitHub comment ID, never append a
@@ -401,12 +406,12 @@ needs-decision, blocked-by-human, and out-of-scope.
      leave every target generation open
 9. Stop at the single approval boundary: release. Publishing under the
    hold does not by itself authorize starting the IDD execution loop —
-   only the user's explicit release request does, except the narrow
-   defer-source auto-release exception and the standing release approval for a
-   single self-anchor target, both in
-   [Authoring hold and release](references/contract.md#authoring-hold-and-release);
-   its carrier creation-hold exception releases a carrier, which never
-   enters the loop.
+   the user's explicit release request does, except under the narrow
+   defer-source auto-release exception or the standing release approval
+   for a single self-anchor target, both in
+   [Authoring hold and release](references/contract.md#authoring-hold-and-release).
+   Its carrier and confirmation creation-hold exceptions release a carrier
+   or an auto-decide confirmation issue, neither of which enters the loop.
    A released `review-needs-decision` follow-up remains out of Discover
    while the label configured as `labels.needsDecisionLabelName` is
    present (default: `status:needs-decision`).
@@ -415,25 +420,48 @@ needs-decision, blocked-by-human, and out-of-scope.
 
 Before the first ledger write, read
 [Ledger storage](references/contract.md#ledger-storage) and follow it. In brief:
-use a supplied scratch root only if it passes its checks; if a supplied root
-fails, stop without trying another root. When no root is supplied, allocate a
-new `issue-authoring-<uuid>` directory with exclusive creation (a non-recursive
-`mkdir`, never `mkdir -p`) in the OS temporary directory, or in the user state
-directory if it already exists, outside every worktree and git directory,
-including mount aliases verified by native filesystem evidence. Keep one
-owner-only `<uuid>.json` ledger per draft, created with exclusive creation;
-rename it to the issue number without overwriting another file. Never share a
-ledger or write one to the repository or a marker, and never reuse another
-session's namespace. A lost ledger starts empty. Unsafe, conflicting, or unreadable
-storage stops the review: report the path and preserve unverified entries; the
-contract permits cleanup only for entries this session created whose identity
-still matches. Send the drafts to a carrier marked `Review: not reviewed`.
+a supplied scratch root is the only candidate; if a supplied root is missing or
+fails, stop and report without trying another root. Only when no root was
+supplied,
+allocate a new `issue-authoring-<uuid>` directory with exclusive creation (a
+non-recursive `mkdir`, never `mkdir -p`) in the runtime's absolute temporary
+directory, or in the existing user state directory. Use `$XDG_STATE_HOME`,
+`$HOME`, or `%LOCALAPPDATA%` only when its value is a fully qualified absolute
+path, never resolved against the current directory. Keep
+the namespace outside every worktree and Git directory, including mount aliases
+checked through filesystem evidence. Keep one owner-only `<uuid>.json` ledger
+per draft; rename it to the issue number without overwriting another file.
+Never share a ledger or write one to the repository or a marker, and never reuse
+another session's namespace. Unsafe, conflicting, or unreadable storage stops
+the review: report its path and preserve unverified entries; cleanup is limited
+to entries this session created whose recorded identity still matches.
+
+A lost ledger starts empty. Losing the identity record, including after context
+compaction, loses the ledger: allocate a new namespace under the supplied root
+when retained history shows one; when history does not show whether a root was
+supplied, write no ledger and ask the operator. If a registered worktree
+checkout is absent, stop with a message that names the path and the operator
+step: the operator confirms the checkout was deleted rather than moved or
+unmounted, backs up a detached record's `HEAD`, unlocks a locked record only
+when its lock reason allows (never a second `--force`), and then, under the
+clone's worktree lock, re-checks that the path is still absent immediately
+before removing only that record with `git worktree remove --force <path>`,
+never a clone-wide `git worktree prune`; the next run repeats the inventory.
+Automation never
+prunes or removes worktree records and does not bypass claim or worktree
+recovery.
+
 Resolve every root path component without following links, and require each
 ledger read, write, copy, replacement, and unlink to hold the namespace's
-verified exclusive lock while rechecking ownership and hashes. Fail closed if
-the complete path or lock cannot be verified.
-Instructions-only and same-response self-critique runs follow the same
-procedure; no orchestrator, environment variable, or helper is needed.
+verified exclusive lock while rechecking ownership and hashes. An
+instructions-only or same-response self-critique run whose shell calls cannot
+keep the verified directory handle and exclusive lock open in one process must
+not start the procedure: it writes no ledger, never substitutes path-based
+operations, and runs the review without a ledger, as after a lost ledger. To
+keep a ledger, run the procedure in one long-lived process. On macOS, check the
+root's ACL through the verified handle, because the mode bits do not show it.
+When storage stops the review, send the drafts to a carrier marked
+`Review: not reviewed`.
 
 ## Reference Routing
 

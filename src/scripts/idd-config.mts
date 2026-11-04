@@ -49,9 +49,12 @@ import {
   resolveLayeredPolicy,
 } from './layered-policy.mts';
 import {
+  AUTO_DECIDE_CLASSES,
+  type AutoDecideClass,
   type EffectiveCritiqueLoopDelegate,
   type EffectiveCritiqueLoopTelemetryHook,
   type EffectiveIssueAuthoringDelegate,
+  inspectAutoDecide,
   inspectCritiqueLoopDelegateLayer,
   inspectCritiqueLoopTelemetryHookLayer,
   inspectIssueAuthoringDelegateLayer,
@@ -732,24 +735,12 @@ export interface TrustedDangerouslyAutoDecideReport {
 }
 
 /**
- * Read provisional-decision authority from a trusted repository base ref.
- * PR-scoped callers pass the trusted PR base name; repository-scoped callers
- * omit it and this function resolves the live default branch. Callers must
- * never pass a PR head or feature-worktree ref. Both the policy document and
- * its schema are fetched at that ref so a feature-branch schema change cannot
- * relax validation of the trusted policy. User-global fallback is disabled;
- * malformed values and unreadable policy return `enabled: false` with the
- * cause so they cannot grant authority silently.
+ * The inputs every trusted provisional-decision reader takes. PR-scoped
+ * callers pass the trusted PR base name as `baseRefName`; repository-scoped
+ * callers omit it and the reader resolves the live default branch. Callers
+ * must never pass a PR head or feature-worktree ref.
  */
-// audit:ignore-dead-export: #4529 provides the repository-only authority reader for downstream provisional-decision consumers
-export function readTrustedDangerouslyAutoDecide({
-  owner,
-  repo,
-  baseRefName = '',
-  readDefaultBranch = readGithubRepoDefaultBranch,
-  fetchEncodedConfig,
-  fetchEncodedPolicySchema = fetchEncodedPolicySchemaAtTrustedRef,
-}: {
+export interface TrustedPolicyReadInput {
   owner: string;
   repo: string;
   baseRefName?: string;
@@ -760,17 +751,36 @@ export function readTrustedDangerouslyAutoDecide({
     repo: string,
     ref: string,
   ) => string;
-}): TrustedDangerouslyAutoDecideReport {
+}
+
+/**
+ * One trusted read of the repository policy document. `absent` is a
+ * confirmed 404 at the ref. `valid` means the whole document passed the
+ * schema read at the same ref. Every other outcome is `unreadable`.
+ */
+type TrustedPolicyDocumentRead =
+  | { status: 'absent'; ref: string }
+  | { status: 'valid'; ref: string; config: IddConfig }
+  | { status: 'unreadable'; ref: string; error: string };
+
+/**
+ * The shared trusted read behind the provisional-decision readers (#4529,
+ * #4958). It selects the ref, loads `.github/idd/config.json` there with the
+ * user-global fallback disabled, and validates the whole document against
+ * `schemas/policy.schema.json` read at the same ref, so a feature-branch
+ * schema change cannot relax validation of the trusted policy. A confirmed
+ * absent document returns before any schema read. Nothing here inspects a
+ * key: callers inspect only a `valid` document.
+ */
+function readValidatedTrustedPolicy({
+  owner,
+  repo,
+  baseRefName = '',
+  readDefaultBranch = readGithubRepoDefaultBranch,
+  fetchEncodedConfig,
+  fetchEncodedPolicySchema = fetchEncodedPolicySchemaAtTrustedRef,
+}: TrustedPolicyReadInput): TrustedPolicyDocumentRead {
   let ref = '';
-  const disabled = (
-    reason: TrustedDangerouslyAutoDecideReport['reason'],
-  ): TrustedDangerouslyAutoDecideReport => ({
-    status: 'disabled',
-    enabled: false,
-    source: 'repository',
-    ref,
-    reason,
-  });
   try {
     ref = selectTrustedConfigRef(
       baseRefName,
@@ -784,7 +794,7 @@ export function readTrustedDangerouslyAutoDecide({
       undefined,
       { userGlobalFallback: false },
     );
-    if (config === null) return disabled('config-absent');
+    if (config === null) return { status: 'absent', ref };
     const encodedSchema = fetchEncodedPolicySchema(owner, repo, ref);
     const schema = JSON.parse(
       Buffer.from(encodedSchema.replace(/\n/g, ''), 'base64').toString('utf8'),
@@ -801,8 +811,6 @@ export function readTrustedDangerouslyAutoDecide({
       const suffix = remainder > 0 ? ` (and ${remainder} more)` : '';
       return {
         status: 'unreadable',
-        enabled: false,
-        source: 'repository',
         ref,
         error: `trusted repository policy schema has unsupported keywords at ref "${ref}": ${shown.join('; ')}${suffix}`,
       };
@@ -814,35 +822,190 @@ export function readTrustedDangerouslyAutoDecide({
       const suffix = remainder > 0 ? ` (and ${remainder} more)` : '';
       return {
         status: 'unreadable',
-        enabled: false,
-        source: 'repository',
         ref,
         error: `trusted repository policy fails schema validation against policy.schema.json at ref "${ref}": ${shown.join('; ')}${suffix}`,
       };
     }
-    if (!Object.hasOwn(config, 'dangerouslyAutoDecide'))
-      return disabled('property-absent');
-    const value = config.dangerouslyAutoDecide;
-    if (typeof value !== 'boolean') {
-      return {
-        status: 'unreadable',
-        enabled: false,
-        source: 'repository',
-        ref,
-        error: `dangerouslyAutoDecide must be a boolean when present, got ${value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value}`,
-      };
-    }
-    return value
-      ? { status: 'enabled', enabled: true, source: 'repository', ref }
-      : disabled('explicit-false');
+    return { status: 'valid', ref, config };
   } catch (error) {
     return {
       status: 'unreadable',
-      enabled: false,
-      source: 'repository',
       ref,
       error: error instanceof Error ? error.message : String(error),
     };
+  }
+}
+
+/** The master-switch verdict for one trusted read. */
+function dangerouslyAutoDecideFromTrustedRead(
+  read: TrustedPolicyDocumentRead,
+): TrustedDangerouslyAutoDecideReport {
+  const { ref } = read;
+  const disabled = (
+    reason: TrustedDangerouslyAutoDecideReport['reason'],
+  ): TrustedDangerouslyAutoDecideReport => ({
+    status: 'disabled',
+    enabled: false,
+    source: 'repository',
+    ref,
+    reason,
+  });
+  const unreadable = (error: string): TrustedDangerouslyAutoDecideReport => ({
+    status: 'unreadable',
+    enabled: false,
+    source: 'repository',
+    ref,
+    error,
+  });
+  if (read.status === 'unreadable') return unreadable(read.error);
+  if (read.status === 'absent') return disabled('config-absent');
+  const { config } = read;
+  if (!Object.hasOwn(config, 'dangerouslyAutoDecide'))
+    return disabled('property-absent');
+  const value = config.dangerouslyAutoDecide;
+  if (typeof value !== 'boolean') {
+    return unreadable(
+      `dangerouslyAutoDecide must be a boolean when present, got ${value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value}`,
+    );
+  }
+  return value
+    ? { status: 'enabled', enabled: true, source: 'repository', ref }
+    : disabled('explicit-false');
+}
+
+/**
+ * Read provisional-decision authority from a trusted repository base ref.
+ * PR-scoped callers pass the trusted PR base name; repository-scoped callers
+ * omit it and this function resolves the live default branch. Callers must
+ * never pass a PR head or feature-worktree ref. Both the policy document and
+ * its schema are fetched at that ref so a feature-branch schema change cannot
+ * relax validation of the trusted policy. User-global fallback is disabled;
+ * malformed values and unreadable policy return `enabled: false` with the
+ * cause so they cannot grant authority silently.
+ */
+// audit:ignore-dead-export: #4529 provides the repository-only authority reader for downstream provisional-decision consumers
+export function readTrustedDangerouslyAutoDecide(
+  input: TrustedPolicyReadInput,
+): TrustedDangerouslyAutoDecideReport {
+  return dangerouslyAutoDecideFromTrustedRead(
+    readValidatedTrustedPolicy(input),
+  );
+}
+
+/**
+ * One auto-decide class's trusted verdict (#4958). `enabled` needs the
+ * master switch and the class's own `enabled` flag both `true`;
+ * `master-off` means the master switch is absent or `false`; `class-off`
+ * means the master switch is `true` but the class is absent or not enabled;
+ * `unreadable` means the trusted policy could not be read or validated.
+ */
+export type TrustedAutoDecideClassVerdict =
+  | 'enabled'
+  | 'master-off'
+  | 'class-off'
+  | 'unreadable';
+
+/** The trusted auto-decide report: the master switch and every class. */
+export interface TrustedAutoDecideReport {
+  status: 'readable' | 'unreadable';
+  source: 'repository';
+  ref: string;
+  master: TrustedDangerouslyAutoDecideReport['status'];
+  /** Why the master switch is off; only when `master` is `disabled`. */
+  masterReason?: TrustedDangerouslyAutoDecideReport['reason'];
+  classes: Record<AutoDecideClass, TrustedAutoDecideClassVerdict>;
+  /** The trusted confirmation label name; whenever the report is readable. */
+  confirmationLabelName?: string;
+  /** The caps and the `worktreeRemnant` quiet window; only when a class is `enabled`. */
+  maxPendingConfirmations?: number;
+  maxDecisionsPerClaim?: number;
+  quietWindow?: string;
+  error?: string;
+}
+
+function everyAutoDecideClass(
+  verdict: (cls: AutoDecideClass) => TrustedAutoDecideClassVerdict,
+): Record<AutoDecideClass, TrustedAutoDecideClassVerdict> {
+  const classes = {} as Record<AutoDecideClass, TrustedAutoDecideClassVerdict>;
+  for (const cls of AUTO_DECIDE_CLASSES) classes[cls] = verdict(cls);
+  return classes;
+}
+
+/**
+ * Read the master switch and every auto-decide class from a trusted
+ * repository base ref (#4958). It uses the same trusted read and validation
+ * as {@link readTrustedDangerouslyAutoDecide} and inspects keys only after
+ * the whole document passes the schema read at the same ref. PR-scoped
+ * callers pass the trusted PR base name; repository-scoped callers omit it
+ * and this function resolves the live default branch. Callers must never
+ * pass a PR head or feature-worktree ref.
+ *
+ * Any read or validation failure makes every class `unreadable`. As a
+ * fail-closed backstop for a trusted-ref schema that is looser than this
+ * bundle's, a non-boolean master value or a malformed `autoDecide` that
+ * passed that schema is `unreadable` too, never `class-off`. A readable
+ * report always carries `confirmationLabelName` (the default when the key or
+ * the document is absent), and the caps and `quietWindow` when a class is
+ * `enabled`.
+ */
+export function readTrustedAutoDecide(
+  input: TrustedPolicyReadInput,
+): TrustedAutoDecideReport {
+  const read = readValidatedTrustedPolicy(input);
+  const { ref } = read;
+  const unreadable = (error: string): TrustedAutoDecideReport => ({
+    status: 'unreadable',
+    source: 'repository',
+    ref,
+    master: 'unreadable',
+    classes: everyAutoDecideClass(() => 'unreadable'),
+    error,
+  });
+  const master = dangerouslyAutoDecideFromTrustedRead(read);
+  if (master.status === 'unreadable') {
+    return unreadable(master.error ?? 'trusted repository policy unreadable');
+  }
+  try {
+    const config: IddConfig = read.status === 'valid' ? read.config : {};
+    const diagnostics = new Map(
+      inspectAutoDecide(config).map((diagnostic) => [
+        diagnostic.class,
+        diagnostic,
+      ]),
+    );
+    const malformed = [...diagnostics.values()].find(
+      (diagnostic) => diagnostic.verdict === 'malformed',
+    );
+    if (malformed !== undefined) {
+      return unreadable(
+        `trusted repository policy has a malformed ${malformed.field ?? 'autoDecide'} at ref "${ref}": ${malformed.reason ?? 'invalid value'}`,
+      );
+    }
+    const masterOn = master.status === 'enabled';
+    const classes = everyAutoDecideClass((cls) => {
+      if (!masterOn) return 'master-off';
+      return diagnostics.get(cls)?.verdict === 'enabled'
+        ? 'enabled'
+        : 'class-off';
+    });
+    const effective = normalizePolicyConfig(config).autoDecide;
+    const report: TrustedAutoDecideReport = {
+      status: 'readable',
+      source: 'repository',
+      ref,
+      master: master.status,
+      ...(master.reason === undefined ? {} : { masterReason: master.reason }),
+      classes,
+      confirmationLabelName: effective.confirmationLabelName,
+    };
+    if (Object.values(classes).includes('enabled')) {
+      report.maxPendingConfirmations = effective.maxPendingConfirmations;
+      report.maxDecisionsPerClaim = effective.maxDecisionsPerClaim;
+      report.quietWindow = effective.worktreeRemnant.quietWindow;
+    }
+    return report;
+  } catch (error) {
+    return unreadable(error instanceof Error ? error.message : String(error));
   }
 }
 

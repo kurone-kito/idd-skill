@@ -92,15 +92,15 @@ routing:
 1. Fetch the target issue. If it carries the configured authoring label,
    report `Issue #N is currently being authored`, run the
    stale-authoring warning check above, and stop without claiming — this
-   check runs first and applies whether the target turns out to be an
-   execution leaf or a roadmap node in step 2 below, so an
-   authoring-held roadmap is never routed into step 2's traversal. If it
-   carries `labels.blockedByHumanLabelName` (default
-   `status:blocked-by-human`), `labels.needsDecisionLabelName` (default
-   `status:needs-decision`), or `labels.authoringOnlyLabelName` (default
-   `status:authoring-only`), also stop without claiming: report the label
-   name and the issue number. Naming the issue does not clear the hold
-   (issue `#4233`).
+   check runs before step 2, so an authoring-held roadmap is never routed
+   into step 2's traversal. If it carries
+   `labels.blockedByHumanLabelName` (default `status:blocked-by-human`),
+   `labels.needsDecisionLabelName` (default `status:needs-decision`),
+   `labels.authoringOnlyLabelName` (default `status:authoring-only`), or
+   `autoDecide.confirmationLabelName` (default
+   `status:needs-confirmation`, any case), also stop without claiming:
+   report the label name and the issue number. Naming the issue does not
+   clear the hold (issue `#4233`).
 2. If the target issue carries an
    `idd-skill-roadmap-id` marker — the same test
    **A2**'s roadmap-node/execution-leaf classification rule uses (an
@@ -409,7 +409,8 @@ below.
 
 From A2, keep only issues that satisfy **all** of the following:
 
-- No configured blocked-by-human, needs-decision, or authoring-only label
+- No configured blocked-by-human, needs-decision, authoring-only, or
+  confirmation label
 - No configured authoring label
 - No open dependent issues (parent epics / aggregate issues that are
   still open are acceptable)

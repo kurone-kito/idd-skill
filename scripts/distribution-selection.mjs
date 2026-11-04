@@ -248,6 +248,7 @@ function resolveContext(options) {
     repository,
     worktreeRoot,
     mainWorktreeRoot,
+    runGit,
     policy: policyLoad.config,
     policyDiagnostic:
       repository !== null && worktreeRoot === null
@@ -539,10 +540,10 @@ function currentMatches(ctx, current, set, entries) {
   // loadPreparedSets has already checked helper ownership and integrity. Keep
   // missing helper files visible so the caller can report preparation recovery.
   const instructions = componentListingAt(set.manifest, 'instructions');
-  if (
-    !Array.isArray(instructions.files) ||
-    !filesMatchAtRoot(current.versionRoot, instructions.files, entries, ctx.fs)
-  ) {
+  const instructionsMatch =
+    Array.isArray(instructions.files) &&
+    filesMatchAtRoot(current.versionRoot, instructions.files, entries, ctx.fs);
+  if (!instructionsMatch) {
     return false;
   }
   const home = ctx.home;
@@ -557,6 +558,226 @@ function currentMatches(ctx, current, set, entries) {
     ];
     if (!roots.every((root) => filesMatchAtRoot(root, files, entries, ctx.fs)))
       return false;
+  }
+  return true;
+}
+// Tokens are built from parts so the shipped helper carries no literal
+// placeholder, which the payload residue check would otherwise report.
+const placeholderToken = (name) => `{{${name}}}`;
+// The onboarding token grammar: an upper-snake name that starts with a letter.
+const ANY_PLACEHOLDER = /\{\{[A-Z][A-Z0-9_]*\}\}/u;
+// The pattern onboarding enforces on a PROJECT_MARKER_PREFIX value, also in
+// schemas/policy.schema.json. idd-onboard imports this module, so it is
+// repeated here. A policy value outside it never substitutes.
+const MARKER_PREFIX_PATTERN = /^[a-z][a-z0-9-]{1,31}$/u;
+/**
+ * The repository name onboarding substitutes for `REPO_NAME`: the last path
+ * segment of `remote.origin.url` without `.git`, read the way idd-onboard's
+ * `parseRemoteRepoRef` reads it. idd-onboard imports this module, so the parse
+ * is repeated here, and a test keeps the two in step. The read goes through the
+ * selection's Git runner, which drops inherited `GIT_` variables, so they cannot
+ * point it at another checkout. Returns null on any failure.
+ */
+function repositoryNameFromOrigin(runGit, worktreeRoot) {
+  let url;
+  try {
+    url = runGit(['config', '--get', 'remote.origin.url'], worktreeRoot).trim();
+  } catch {
+    return null;
+  }
+  const raw = url.replace(/\/+$/, '');
+  if (raw === '') return null;
+  const scpMatch = raw.match(/^[\w.-]+@([\w.-]+):(.+)$/);
+  const path = scpMatch
+    ? scpMatch[2]
+    : raw.replace(/^[a-z+]+:\/\/([^/@]+@)?[^/]+\//i, '');
+  if (path === raw && !scpMatch) return null;
+  const segments = path.split('/').filter((segment) => segment.length > 0);
+  if (segments.length < 2) return null;
+  const repo = (segments[segments.length - 1] ?? '').replace(/\.git$/, '');
+  return repo === '' ? null : repo;
+}
+/**
+ * Resolve a prepared instruction the way onboarding concretes a local copy.
+ * Only the two tokens that instruction files carry have values here:
+ * `PROJECT_MARKER_PREFIX`, the repository policy's `markerPrefix`, and
+ * `REPO_NAME`, the origin repository name. Any other placeholder, or a value
+ * that is missing, returns null, so the comparison fails closed.
+ */
+function resolvePreparedInstructionBytes(bytes, policy, repoName) {
+  const text = bytes.toString('utf8');
+  if (!Buffer.from(text, 'utf8').equals(bytes)) return null;
+  if (!text.includes('{{')) return bytes;
+  const markerPrefix = policy?.markerPrefix;
+  const values = [
+    [
+      'PROJECT_MARKER_PREFIX',
+      typeof markerPrefix === 'string' &&
+      MARKER_PREFIX_PATTERN.test(markerPrefix)
+        ? markerPrefix
+        : null,
+    ],
+    ['REPO_NAME', repoName],
+  ];
+  let resolved = text;
+  for (const [name, value] of values) {
+    if (typeof value === 'string' && value.length > 0) {
+      resolved = resolved.split(placeholderToken(name)).join(value);
+    }
+  }
+  return ANY_PLACEHOLDER.test(resolved) ? null : Buffer.from(resolved, 'utf8');
+}
+/**
+ * Whether a repository-local instruction tree is present at all. Any
+ * `idd-*.instructions.md` entry counts at any depth, not only the core file, so
+ * a partial tree cannot fall through to another route, while unrelated files do
+ * not. A symlink or other non-file entry counts as present, and so does every
+ * enumeration or containment failure, which fails closed.
+ */
+function localInstructionTreePresent(ctx) {
+  if (ctx.worktreeRoot === null) return false;
+  const root = join(ctx.worktreeRoot, '.github', 'instructions');
+  const visit = (directory) => {
+    for (const name of ctx.fs.readdirSync(directory)) {
+      if (/^idd-.+\.instructions\.md$/u.test(name)) return true;
+      const child = join(directory, name);
+      const kind = checkContainment(root, child, ctx.fs).finalKind;
+      if (kind === 'directory' ? visit(child) : kind !== 'file') return true;
+    }
+    return false;
+  };
+  try {
+    const kind = checkContainment(ctx.worktreeRoot, root, ctx.fs).finalKind;
+    if (kind === 'absent') return false;
+    if (kind !== 'directory') return true;
+    return visit(root);
+  } catch {
+    return true;
+  }
+}
+/**
+ * Compare the complete repository instruction tree with the instruction
+ * subset of a verified prepared manifest. Each expected digest is taken from
+ * the prepared bytes after the same placeholder resolution onboarding applies,
+ * so a concreted local copy matches. A repository-local route is trusted only
+ * when every expected byte matches and no extra local instruction file is
+ * present.
+ */
+function localInstructionsMatchSet(ctx, set) {
+  if (ctx.worktreeRoot === null) return false;
+  const repoName = repositoryNameFromOrigin(ctx.runGit, ctx.worktreeRoot);
+  const component = componentListingAt(set.manifest, 'instructions');
+  if (!Array.isArray(component.files)) return false;
+  const prefix = '.github/instructions/';
+  const expected = new Map();
+  for (const raw of component.files) {
+    if (!isObject(raw) || typeof raw.path !== 'string') return false;
+    if (!raw.path.startsWith(prefix)) continue;
+    const localPath = raw.path.slice(prefix.length);
+    if (
+      !safeRelativeFilePath(localPath) ||
+      typeof raw.sha256 !== 'string' ||
+      expected.has(localPath)
+    ) {
+      return false;
+    }
+    let preparedBytes;
+    try {
+      preparedBytes = readNoFollowBytes(
+        resolve(set.root, componentPathPrefix('instructions') + raw.path),
+        ctx.fs,
+        true,
+      );
+    } catch {
+      return false;
+    }
+    // The prepared bytes must still be the ones the manifest recorded.
+    if (sha256(preparedBytes) !== raw.sha256) return false;
+    const resolved = resolvePreparedInstructionBytes(
+      preparedBytes,
+      ctx.policy,
+      repoName,
+    );
+    if (resolved === null) return false;
+    expected.set(localPath, sha256(resolved));
+  }
+  if (!expected.has('idd-overview-core.instructions.md')) return false;
+  const root = join(ctx.worktreeRoot, '.github', 'instructions');
+  const actual = new Map();
+  const frontmatterPattern = /^(---\n[\s\S]*?\n---\n)/u;
+  const stripGeneratedBanner = (bytes, relativePath) => {
+    const text = bytes.toString('utf8');
+    // Keep malformed UTF-8 byte-for-byte so it cannot become a different
+    // instruction body merely by decoding and re-encoding it.
+    if (!Buffer.from(text, 'utf8').equals(bytes)) return bytes;
+    const source = `idd-template/.github/instructions/${relativePath}`;
+    const expectedBanner = [
+      '<!-- idd-generated-from:',
+      source,
+      'Generated by sync-docs. Edit the source above, then run',
+      '`node scripts/sync-docs.mjs --apply`; do not edit this file. -->',
+    ].join('\n');
+    const frontmatter = frontmatterPattern.exec(text);
+    if (frontmatter !== null) {
+      const front = frontmatter[1];
+      const after = text.slice(front.length);
+      const prefix = `\n${expectedBanner}\n`;
+      if (!after.startsWith(prefix)) return bytes;
+      return Buffer.from(`${front}${after.slice(prefix.length)}`);
+    }
+    const prefix = `${expectedBanner}\n\n`;
+    return text.startsWith(prefix)
+      ? Buffer.from(text.slice(prefix.length))
+      : bytes;
+  };
+  const visit = (directory, relativePath) => {
+    let names;
+    try {
+      if (
+        checkContainment(ctx.worktreeRoot, directory, ctx.fs).finalKind !==
+        'directory'
+      ) {
+        return false;
+      }
+      names = ctx.fs.readdirSync(directory);
+    } catch {
+      return false;
+    }
+    for (const name of names) {
+      if (!safeRelativeFilePath(name)) return false;
+      const child = join(directory, name);
+      const childRelative =
+        relativePath.length === 0 ? name : `${relativePath}/${name}`;
+      let kind;
+      try {
+        kind = checkContainment(root, child, ctx.fs).finalKind;
+      } catch {
+        return false;
+      }
+      if (kind === 'directory') {
+        if (!visit(child, childRelative)) return false;
+        continue;
+      }
+      if (kind !== 'file') return false;
+      try {
+        actual.set(
+          childRelative,
+          sha256(
+            stripGeneratedBanner(
+              readNoFollowBytes(child, ctx.fs, true),
+              childRelative,
+            ),
+          ),
+        );
+      } catch {
+        return false;
+      }
+    }
+    return true;
+  };
+  if (!visit(root, '') || actual.size !== expected.size) return false;
+  for (const [path, digest] of expected) {
+    if (actual.get(path) !== digest) return false;
   }
   return true;
 }
@@ -597,6 +818,52 @@ function bindingPathCandidates(ctx, entries, key) {
       );
     })
     .map((entry) => entry.path);
+}
+let selectionSchemaCache;
+function selectionSchema() {
+  if (selectionSchemaCache === undefined) {
+    const parsed = JSON.parse(
+      nodeFs.readFileSync(
+        join(PACKAGE_ROOT, 'schemas', 'distribution-selection.schema.json'),
+        'utf8',
+      ),
+    );
+    if (!isObject(parsed))
+      throw new Error('the distribution selection schema is not an object');
+    selectionSchemaCache = parsed;
+  }
+  return selectionSchemaCache;
+}
+/**
+ * Explain why a persisted selected identity cannot be reported, or return
+ * null. The identity must have the exact shape a report requires, so copying
+ * it into previousVerifiedSet can never fail report validation, and every
+ * component must carry the provenance commit that identity matching relies on.
+ */
+function selectedIdentityProblem(selected) {
+  if (!isObject(selected)) return 'selected identity is not an object';
+  const properties = selectionSchema().properties;
+  const identitySchema = isObject(properties) ? properties.selected : null;
+  if (!isObject(identitySchema)) {
+    return 'the selection schema defines no selected identity';
+  }
+  const errors = validateSchema(selected, identitySchema);
+  if (errors.length > 0) return errors.join('; ');
+  const components = selected.components;
+  const skillBundles = components.skillBundles;
+  const listed = [
+    ['instructions', components.instructions],
+    ['skillBundles.issue-authoring', skillBundles['issue-authoring']],
+    ['skillBundles.idd-spec-audit', skillBundles['idd-spec-audit']],
+    ['helper', components.helper],
+  ];
+  for (const [key, component] of listed) {
+    const provenance = component.provenance;
+    if (provenance.commit !== selected.sourceCommit) {
+      return `component ${key} provenance differs from sourceCommit`;
+    }
+  }
+  return null;
 }
 function readBinding(ctx, entries) {
   const key = bindingKey(ctx);
@@ -639,14 +906,26 @@ function readBinding(ctx, entries) {
   const current = readCurrentLink(ctx, entries);
   if (current !== null) {
     const path = join(current.versionRoot, `.idd-selection-${key}.json`);
-    if (
-      !paths.includes(path) &&
-      checkContainment(current.versionRoot, path, ctx.fs).finalKind !== 'absent'
-    ) {
-      return {
-        record: null,
-        conflict: `an unowned session binding file already exists at ${path}`,
-      };
+    if (!paths.includes(path)) {
+      let currentState;
+      try {
+        currentState = checkContainment(current.versionRoot, path, ctx.fs);
+      } catch (error) {
+        return {
+          record: null,
+          conflict:
+            'could not safely inspect binding parent ' +
+            current.versionRoot +
+            ': ' +
+            String(error),
+        };
+      }
+      if (currentState.finalKind !== 'absent') {
+        return {
+          record: null,
+          conflict: `an unowned session binding file already exists at ${path}`,
+        };
+      }
     }
   }
   if (paths.length === 0) return { record: null, conflict: null };
@@ -683,6 +962,17 @@ function readBinding(ctx, entries) {
         conflict: `session binding identity is invalid at ${path}`,
       };
     }
+    const identityProblem = selectedIdentityProblem(record.selected);
+    if (identityProblem !== null) {
+      return {
+        record: null,
+        conflict:
+          'session binding selected identity is invalid at ' +
+          path +
+          ': ' +
+          identityProblem,
+      };
+    }
     return { record, conflict: null };
   } catch (error) {
     return {
@@ -692,13 +982,7 @@ function readBinding(ctx, entries) {
   }
 }
 function report(value) {
-  const schema = JSON.parse(
-    nodeFs.readFileSync(
-      join(PACKAGE_ROOT, 'schemas', 'distribution-selection.schema.json'),
-      'utf8',
-    ),
-  );
-  const errors = validateSchema(value, schema);
+  const errors = validateSchema(value, selectionSchema());
   if (errors.length > 0)
     throw new Error(
       `selection report violates its schema: ${errors.join('; ')}`,
@@ -738,12 +1022,31 @@ function inspectWithContext(ctx) {
     });
   }
   if (ctx.policyDiagnostic !== null) {
-    return baseReport(ctx, receipt.status, {
+    const refusal = {
       source: 'repository-local',
       verdict: 'not-verified-usable',
       compatibility: 'incompatible',
       recovery: 'reselect',
-    });
+    };
+    // A policy diagnostic leaves no set selectable, but a binding that the
+    // receipt still verifies keeps the session's prior identity visible.
+    if (receipt.status === 'verified') {
+      const binding = readBinding(ctx, receipt.entries);
+      if (binding.conflict !== null) {
+        return baseReport(ctx, 'conflict', {
+          ...refusal,
+          session: { id: ctx.sessionId, binding: 'bound' },
+        });
+      }
+      if (binding.record !== null) {
+        return baseReport(ctx, receipt.status, {
+          ...refusal,
+          session: { id: ctx.sessionId, binding: 'bound' },
+          previousVerifiedSet: cloneJson(binding.record.selected),
+        });
+      }
+    }
+    return baseReport(ctx, receipt.status, refusal);
   }
   if (receipt.status === 'unsupported-legacy') {
     return baseReport(ctx, receipt.status, { source: 'legacy-receipt' });
@@ -762,6 +1065,176 @@ function inspectWithContext(ctx) {
     });
   }
   const bound = binding.record;
+  // Repository-local instructions keep routing precedence over any global
+  // set, including one this session already bound. Verify their complete file
+  // tree against that selected immutable set before allowing the local route.
+  if (ctx.worktreeRoot !== null) {
+    // A partial tree (an IDD instruction file without the core file) counts as
+    // present, so it stops at the repository-local report instead of falling
+    // through to another route. Enumeration failures fail closed the same way.
+    const localPresent = localInstructionTreePresent(ctx);
+    if (localPresent) {
+      if (bound !== null) {
+        const selectedCommit = bound.selected.sourceCommit;
+        if (
+          typeof selectedCommit === 'string' &&
+          loaded.invalidCommits.has(selectedCommit)
+        ) {
+          return baseReport(ctx, 'conflict', {
+            source: 'repository-local',
+            verdict: 'not-verified-usable',
+            compatibility: 'incompatible',
+            recovery: 'reselect',
+            packageVersion: version,
+            session: { id: ctx.sessionId, binding: 'bound' },
+            previousVerifiedSet: cloneJson(bound.selected),
+          });
+        }
+        if (bound.packageSpec !== ctx.packageSpec) {
+          return baseReport(ctx, receipt.status, {
+            source: 'repository-local',
+            verdict: 'migration-required',
+            packageVersion: version,
+            session: { id: ctx.sessionId, binding: 'bound' },
+            previousVerifiedSet: cloneJson(bound.selected),
+          });
+        }
+        const set = identityFromBinding(bound, loaded.sets);
+        if (set === null || !localInstructionsMatchSet(ctx, set)) {
+          return baseReport(ctx, receipt.status, {
+            source: 'repository-local',
+            verdict: 'migration-required',
+            packageVersion: version,
+            session: { id: ctx.sessionId, binding: 'bound' },
+            previousVerifiedSet: cloneJson(bound.selected),
+          });
+        }
+        if (set.preparationMissing) {
+          return baseReport(ctx, receipt.status, {
+            source: 'repository-local',
+            verdict: 'preparation-missing',
+            selected: cloneJson(bound.selected),
+            previousVerifiedSet: cloneJson(bound.selected),
+            packageVersion: version,
+            preparation: 'preparation-missing',
+            compatibility: 'compatible',
+            recovery: 'prepare',
+            session: { id: ctx.sessionId, binding: 'bound' },
+          });
+        }
+        return baseReport(ctx, receipt.status, {
+          source: 'repository-local',
+          verdict: 'session-bound',
+          selected: cloneJson(bound.selected),
+          previousVerifiedSet: cloneJson(bound.selected),
+          packageVersion: version,
+          preparation: 'prepared',
+          compatibility: 'compatible',
+          recovery: 'none',
+          session: { id: ctx.sessionId, binding: 'bound' },
+        });
+      }
+      let candidate = null;
+      let candidateVerdict = 'coherent-candidate';
+      if (ctx.packageSpec !== null) {
+        const pinnedCommit = pinCommit(ctx.packageSpec);
+        if (pinnedCommit === null) {
+          return baseReport(ctx, receipt.status, {
+            source: 'repository-local',
+            verdict: 'not-verified-usable',
+            packageVersion: version,
+            compatibility: 'unknown',
+            recovery: 'reselect',
+          });
+        }
+        candidate =
+          loaded.sets.find((set) => set.commit === pinnedCommit) ?? null;
+        candidateVerdict = 'pin-preserved';
+      } else if (current !== null) {
+        const matches = loaded.sets.filter((set) =>
+          currentMatches(ctx, current, set, receipt.entries),
+        );
+        if (matches.length > 1) {
+          const commits = new Set(matches.map((set) => set.commit));
+          return baseReport(ctx, receipt.status, {
+            source: 'repository-local',
+            verdict:
+              version !== null && commits.size > 1
+                ? 'distinct-builds'
+                : 'not-verified-usable',
+            packageVersion: version,
+            compatibility: 'unknown',
+            recovery: 'reselect',
+          });
+        }
+        candidate = matches[0] ?? null;
+      }
+      if (candidate === null && loaded.errors.length > 0) {
+        return baseReport(ctx, 'conflict', {
+          source: ctx.packageSpec === null ? 'unknown' : 'repository-pin',
+          verdict: 'not-verified-usable',
+          compatibility: 'incompatible',
+          recovery: 'reselect',
+          packageVersion: version,
+        });
+      }
+      if (candidate !== null && loaded.invalidCommits.has(candidate.commit)) {
+        return baseReport(ctx, 'conflict', {
+          source: 'repository-local',
+          verdict: 'not-verified-usable',
+          compatibility: 'incompatible',
+          recovery: 'reselect',
+          packageVersion: version,
+        });
+      }
+      if (candidate === null) {
+        return baseReport(ctx, receipt.status, {
+          source: 'repository-local',
+          verdict: 'migration-required',
+          packageVersion: version,
+        });
+      }
+      if (candidate.preparationMissing) {
+        return baseReport(ctx, receipt.status, {
+          source: 'repository-local',
+          verdict: 'preparation-missing',
+          selected: cloneJson(candidate.identity),
+          packageVersion: version,
+          preparation: 'preparation-missing',
+          compatibility: 'compatible',
+          recovery: 'prepare',
+        });
+      }
+      if (!localInstructionsMatchSet(ctx, candidate)) {
+        return baseReport(ctx, receipt.status, {
+          source: 'repository-local',
+          verdict: 'migration-required',
+          packageVersion: version,
+        });
+      }
+      return baseReport(ctx, receipt.status, {
+        source: 'repository-local',
+        verdict: candidateVerdict,
+        selected: cloneJson(candidate.identity),
+        packageVersion: version,
+        preparation: 'prepared',
+        compatibility: 'compatible',
+        recovery: 'none',
+      });
+    }
+  }
+  // An unrelated corrupt set must not override a verified local route or a
+  // bound session's per-commit integrity checks. Unbound global selection
+  // still requires a complete prepared-set inventory.
+  if (bound === null && loaded.errors.length > 0) {
+    return baseReport(ctx, 'conflict', {
+      source: ctx.packageSpec === null ? 'unknown' : 'repository-pin',
+      verdict: 'not-verified-usable',
+      compatibility: 'incompatible',
+      recovery: 'reselect',
+      packageVersion: version,
+    });
+  }
   if (bound !== null) {
     const pinned = ctx.packageSpec;
     if (pinned !== null && pinCommit(pinned) === null) {
@@ -836,26 +1309,6 @@ function inspectWithContext(ctx) {
       recovery: 'none',
     });
   }
-  if (ctx.worktreeRoot !== null) {
-    const localInstruction = join(
-      ctx.worktreeRoot,
-      '.github',
-      'instructions',
-      'idd-overview-core.instructions.md',
-    );
-    const localWalk = checkContainment(
-      ctx.worktreeRoot,
-      localInstruction,
-      ctx.fs,
-    );
-    if (localWalk.finalKind !== 'absent') {
-      return baseReport(ctx, receipt.status, {
-        source: 'repository-local',
-        verdict: 'migration-required',
-        packageVersion: version,
-      });
-    }
-  }
   if (
     (ctx.repository === null || ctx.mainWorktreeRoot === null) &&
     ctx.packageSpec !== null
@@ -918,15 +1371,6 @@ function inspectWithContext(ctx) {
     return baseReport(ctx, receipt.status, {
       source: 'installed-bundle',
       verdict: 'migration-required',
-      packageVersion: version,
-    });
-  }
-  if (loaded.errors.length > 0) {
-    return baseReport(ctx, 'conflict', {
-      source: ctx.packageSpec === null ? 'unknown' : 'repository-pin',
-      verdict: 'not-verified-usable',
-      compatibility: 'incompatible',
-      recovery: 'reselect',
       packageVersion: version,
     });
   }
@@ -1034,6 +1478,91 @@ function inspectWithContext(ctx) {
 export function inspectDistributionSelection(options) {
   const ctx = resolveContext(options);
   return inspectWithContext(ctx);
+}
+/**
+ * Resolve the verified local instruction root for activation without adding
+ * filesystem paths to the public selection report schema.
+ */
+export function inspectDistributionRouting(options) {
+  const ctx = resolveContext(options);
+  const selection = inspectWithContext(ctx);
+  if (
+    selection.selected === null ||
+    selection.compatibility !== 'compatible' ||
+    selection.preparation !== 'prepared' ||
+    !['coherent-candidate', 'pin-preserved', 'session-bound'].includes(
+      selection.verdict,
+    )
+  ) {
+    return {
+      report: selection,
+      route: 'none',
+      instructionsRoot: null,
+    };
+  }
+  const receipt = readReceiptSnapshot(ctx);
+  if (receipt.status !== 'verified') {
+    return {
+      report: selection,
+      route: 'none',
+      instructionsRoot: null,
+    };
+  }
+  const loaded = loadPreparedSets(ctx, receipt.entries);
+  const set = loaded.sets.find((candidate) =>
+    sameIdentity(candidate.identity, selection.selected),
+  );
+  if (set === undefined || set.preparationMissing) {
+    return {
+      report: selection,
+      route: 'none',
+      instructionsRoot: null,
+    };
+  }
+  if (selection.source === 'repository-local') {
+    if (!localInstructionsMatchSet(ctx, set) || ctx.worktreeRoot === null) {
+      return {
+        report: selection,
+        route: 'none',
+        instructionsRoot: null,
+      };
+    }
+    return {
+      report: selection,
+      route: 'repository-local',
+      instructionsRoot: ctx.worktreeRoot,
+    };
+  }
+  const root = join(set.root, 'idd-template');
+  const core = join(
+    root,
+    '.github',
+    'instructions',
+    'idd-overview-core.instructions.md',
+  );
+  try {
+    if (
+      checkContainment(set.root, root, ctx.fs).finalKind !== 'directory' ||
+      checkContainment(root, core, ctx.fs).finalKind !== 'file'
+    ) {
+      return {
+        report: selection,
+        route: 'none',
+        instructionsRoot: null,
+      };
+    }
+  } catch {
+    return {
+      report: selection,
+      route: 'none',
+      instructionsRoot: null,
+    };
+  }
+  return {
+    report: selection,
+    route: 'prepared-set',
+    instructionsRoot: root,
+  };
 }
 function withReceiptMutationLock(ctx, operation) {
   const fs = ctx.fs;
@@ -1234,7 +1763,7 @@ export function bindDistributionSelection(options) {
         sessionId: ctx.sessionId,
         packageSpec: ctx.packageSpec,
         source:
-          before.source === 'repository-pin'
+          pinCommit(ctx.packageSpec) !== null
             ? 'repository-pin'
             : 'global-current',
         selected: cloneJson(before.selected),

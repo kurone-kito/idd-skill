@@ -54,11 +54,13 @@ function assertKeywordReferenceScaling({
   name,
   inputForSize,
   smallerSize,
+  iterationsPerSample,
   expectedReferenceCount,
 }: {
   name: string;
   inputForSize: (size: number) => string;
   smallerSize: number;
+  iterationsPerSample: number;
   expectedReferenceCount: (size: number) => number;
 }): void {
   const largerSize = smallerSize * 2;
@@ -66,7 +68,6 @@ function assertKeywordReferenceScaling({
   const largerInput = inputForSize(largerSize);
   const smallerSamples: number[] = [];
   const largerSamples: number[] = [];
-  const iterationsPerSample = 3;
 
   const measure = (input: string, size: number, samples: number[]) => {
     const start = process.cpuUsage();
@@ -80,8 +81,14 @@ function assertKeywordReferenceScaling({
 
   // Warm both input sizes before recording timings so V8's first-use work
   // does not disproportionately affect the smaller median.
-  measure(smallerInput, smallerSize, []);
-  measure(largerInput, largerSize, []);
+  const warm = (input: string, size: number) => {
+    for (let iteration = 0; iteration < 3; iteration += 1) {
+      const references = extractKeywordReferences(input);
+      assert.equal(references.length, expectedReferenceCount(size));
+    }
+  };
+  warm(smallerInput, smallerSize);
+  warm(largerInput, largerSize);
 
   // Measure process CPU time so other test files' CPU load does not skew a
   // sample. Alternate order to avoid a consistent run-order effect.
@@ -126,6 +133,9 @@ test('extractKeywordReferences scales on a keyword-dense standalone line (#1970)
     inputForSize: (size) =>
       Array.from({ length: size }, (_, i) => `closes #${i + 1}`).join(', '),
     smallerSize: 10000,
+    // #4859: the loaded 20-run baseline's shortest small-input median was
+    // 20.77ms, so the minimum-three floor gives a ~62ms CPU sample.
+    iterationsPerSample: 3,
     expectedReferenceCount: (size) => size,
   });
 });
@@ -138,6 +148,8 @@ test('extractKeywordReferences scales on a dense non-standalone line (#1970, #38
     name: 'the dense non-standalone line',
     inputForSize: (size) => `Context: ${'Closes #1 '.repeat(size)}`,
     smallerSize: 4000,
+    // #4859: 11 repetitions keep the shortest baseline sample above 50ms.
+    iterationsPerSample: 11,
     expectedReferenceCount: () => 0,
   });
 });
@@ -157,6 +169,8 @@ test('extractKeywordReferences scales on keyword matches glued by non-whitespace
     name: 'keyword matches glued by non-whitespace separators',
     inputForSize: (size) => 'Closes,'.repeat(size),
     smallerSize: 4000,
+    // #4859: 19 repetitions keep the shortest baseline sample above 50ms.
+    iterationsPerSample: 19,
     expectedReferenceCount: () => 0,
   });
 });
@@ -4951,6 +4965,73 @@ test('--with-readiness resolves a configured authoring-only label on a roadmap l
   assert.equal(r931?.ready, false);
   assert.deepEqual(r931?.reasons, ['label:triage:authoring-only']);
   assert.equal(byNumber.get(932)?.readiness?.ready, true);
+});
+
+// #4960: a roadmap child waiting for an auto-decide confirmation is never
+// startable; the label is compared trimmed and case-insensitively.
+function confirmationGraphIssues(childLabel: string) {
+  return new Map<number, unknown>([
+    [940, roadmapIssue(940, '- [ ] #941\n- [ ] #942', 'confirmation-roadmap')],
+    [
+      941,
+      {
+        number: 941,
+        title: 'issue 941',
+        state: 'open',
+        body: 'confirmation leaf 941',
+        labels: [{ name: childLabel }],
+      },
+    ],
+    [942, executionIssue(942, 'ready leaf 942')],
+  ]);
+}
+
+test('--with-readiness marks a confirmation-labelled child as not ready (#4960)', async () => {
+  for (const [childLabel, readiness, reason] of [
+    [
+      'Status:Needs-Confirmation',
+      readinessResolution(),
+      'label:status:needs-confirmation',
+    ],
+    [
+      'triage:confirm',
+      { ...readinessResolution(), confirmationLabelName: 'triage:confirm' },
+      'label:triage:confirm',
+    ],
+  ] as const) {
+    const issues = confirmationGraphIssues(childLabel);
+    const report = await enumerateAllRoadmapsGraph({
+      loadOpenRoadmapRoots: async () => [940],
+      loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+      readiness,
+    });
+
+    const byNumber = new Map(report.leaves.map((leaf) => [leaf.number, leaf]));
+    const r941 = byNumber.get(941)?.readiness;
+    assert.equal(r941?.ready, false, childLabel);
+    assert.equal(r941?.startable, false, childLabel);
+    assert.deepEqual(r941?.reasons, [reason]);
+    assert.equal(byNumber.get(942)?.readiness?.ready, true, childLabel);
+  }
+});
+
+test('--with-readiness reports a confirmation-label collision for a roadmap child (#4960)', async () => {
+  const issues = confirmationGraphIssues('triage:ready');
+  const report = await enumerateAllRoadmapsGraph({
+    loadOpenRoadmapRoots: async () => [940],
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+    readiness: {
+      ...readinessResolution(),
+      confirmationLabelName: 'triage:ready',
+      readyLabelName: 'triage:ready',
+    },
+  });
+
+  const byNumber = new Map(report.leaves.map((leaf) => [leaf.number, leaf]));
+  assert.deepEqual(byNumber.get(941)?.readiness?.reasons, [
+    'needs_confirmation_label_collision',
+  ]);
+  assert.equal(byNumber.get(942)?.readiness?.ready, true);
 });
 
 test('--with-readiness is byte-stable when the flag is absent', async () => {

@@ -49,7 +49,10 @@ import {
   resolveTrustedMarkerActors,
   summarizeExternalCheckWaivers,
 } from './protocol-helpers.mjs';
-import { fetchLastEditedAtByNodeId } from './provider-adapter-github.mjs';
+import {
+  fetchLastEditedAtByNodeId,
+  readChangeRequestClosingIssueReferences,
+} from './provider-adapter-github.mjs';
 import { makeReadlinePrompt } from './readline-prompt.mjs';
 import { fetchHeadObservedAt } from './review-clause.mjs';
 
@@ -687,6 +690,17 @@ export async function runExternalCheckWaiver(options = {}) {
   const pr =
     options.pr ??
     fetchPullRequest({ owner, repo: name, prNumber: args.prNumber });
+  if (options.pr !== undefined && pr.number !== args.prNumber) {
+    throw new Error(
+      `supplied pull request #${String(pr.number ?? '')} does not match requested pull request #${args.prNumber}`,
+    );
+  }
+  const readClosingIssueReferences = createClosingIssueReferencesReader({
+    owner,
+    repo: name,
+    prNumber: args.prNumber,
+    headRefOid: String(pr.headRefOid ?? ''),
+  });
   // #3675: one first-commit reader shared by the pre-write resolution and the
   // post-write reconcile below, so a handoff-bearing apply reads the PR's
   // commits once.
@@ -695,31 +709,41 @@ export async function runExternalCheckWaiver(options = {}) {
     name,
     args.prNumber,
   );
+  const shouldResolveLinkedIssueEvidence =
+    args.autoBootstrap ||
+    normalizeAuthorityEvidence(
+      authority,
+      actor,
+      owner,
+      policy.ciGate.externalCheckWaivers.authorityPolicy,
+    ).authorized;
   const issueCandidates =
     options.issueCandidates ??
     options.resolveIssueCandidates?.() ??
-    resolveLinkedIssueCandidates({
-      owner,
-      repo: name,
-      rawConfig,
-      // Auto-bootstrap has no human "viewer" identity to add as an extra
-      // trusted login for resolving the linked issue's OWN claim markers
-      // (the shared builder trusts `viewerLogin` alongside configured
-      // `trustedMarkerActors`, and never an implicit repository owner) --
-      // passing the bot login here would be a no-op in practice (it never
-      // posts issue claim markers) but is semantically wrong, so pass `''`.
-      viewerLogin: args.autoBootstrap ? '' : actor,
-      baseRefName: String(pr.baseRefName ?? ''),
-      linkedIssues: pr.closingIssuesReferences,
-      issueNumber: args.issueNumber,
-      expectedClaimId: args.claimId,
-      headRefName: pr.headRefName,
-      // kurone-kito/idd-skill#2657 (Codex review, PR #2895, round 11): see
-      // resolveLinkedIssueCandidates's own enforceBranchMatch doc comment.
-      enforceBranchMatch: !args.autoBootstrap,
-      prNumber: args.prNumber,
-      readPrFirstCommitAt,
-    });
+    (shouldResolveLinkedIssueEvidence
+      ? resolveLinkedIssueCandidates({
+          owner,
+          repo: name,
+          rawConfig,
+          // Auto-bootstrap has no human "viewer" identity to add as an extra
+          // trusted login for resolving the linked issue's OWN claim markers
+          // (the shared builder trusts `viewerLogin` alongside configured
+          // `trustedMarkerActors`, and never an implicit repository owner) --
+          // passing the bot login here would be a no-op in practice (it never
+          // posts issue claim markers) but is semantically wrong, so pass `''`.
+          viewerLogin: args.autoBootstrap ? '' : actor,
+          baseRefName: String(pr.baseRefName ?? ''),
+          linkedIssues: readClosingIssueReferences(),
+          issueNumber: args.issueNumber,
+          expectedClaimId: args.claimId,
+          headRefName: pr.headRefName,
+          // kurone-kito/idd-skill#2657 (Codex review, PR #2895, round 11): see
+          // resolveLinkedIssueCandidates's own enforceBranchMatch doc comment.
+          enforceBranchMatch: !args.autoBootstrap,
+          prNumber: args.prNumber,
+          readPrFirstCommitAt,
+        })
+      : []);
   const resolvedHeadCommittedAt =
     options.headCommittedAt ??
     fetchHeadCommittedAt({
@@ -854,9 +878,10 @@ export async function runExternalCheckWaiver(options = {}) {
       linkedForMembership.candidateCount === 0);
   let loopMembership;
   let loopMembershipReason;
-  if (noneBindingPossible) {
+  if (noneBindingPossible && shouldResolveLinkedIssueEvidence) {
+    const closingIssueReferences = readClosingIssueReferences();
     const needsPrComments = noneBindingNeedsPrComments(
-      pr.closingIssuesReferences,
+      closingIssueReferences,
       issueCandidates,
       owner,
       name,
@@ -871,7 +896,7 @@ export async function runExternalCheckWaiver(options = {}) {
       prNumber: args.prNumber,
       owner,
       repo: name,
-      closingIssuesReferences: pr.closingIssuesReferences,
+      closingIssuesReferences: closingIssueReferences,
       issueCandidates,
       prComments,
       trustedMarkerLogins: trustedLoginsForLinkedIssueClaims({
@@ -1306,7 +1331,7 @@ export async function runExternalCheckWaiver(options = {}) {
             rawConfig,
             viewerLogin: actor,
             baseRefName: String(pr.baseRefName ?? ''),
-            linkedIssues: pr.closingIssuesReferences,
+            linkedIssues: readClosingIssueReferences(),
             issueNumber: args.issueNumber,
             expectedClaimId: '',
             headRefName: pr.headRefName,
@@ -1949,8 +1974,52 @@ function fetchPullRequest({ owner, repo, prNumber }) {
     '--repo',
     `${owner}/${repo}`,
     '--json',
-    'number,state,url,headRefName,headRefOid,baseRefName,statusCheckRollup,closingIssuesReferences',
+    'number,state,url,headRefName,headRefOid,baseRefName,statusCheckRollup',
   ]);
+}
+function createClosingIssueReferencesReader({
+  owner,
+  repo,
+  prNumber,
+  headRefOid,
+}) {
+  let references;
+  return () => {
+    if (references === undefined) {
+      // #4812: the shared adapter accepts a non-array top-level `errors`
+      // value as absent; reject that malformed shape before it can look like
+      // a successful empty closing-issue set.
+      const strictGhText = (...args) => {
+        const response = ghText(...args);
+        let payload;
+        try {
+          payload = JSON.parse(response);
+        } catch {
+          return response;
+        }
+        if (
+          payload !== null &&
+          typeof payload === 'object' &&
+          !Array.isArray(payload) &&
+          Object.hasOwn(payload, 'errors') &&
+          !Array.isArray(payload.errors)
+        ) {
+          throw new Error(
+            'closingIssuesReferences lookup: malformed GraphQL errors field',
+          );
+        }
+        return response;
+      };
+      references = readChangeRequestClosingIssueReferences(
+        strictGhText,
+        owner,
+        repo,
+        prNumber,
+        headRefOid,
+      );
+    }
+    return references;
+  };
 }
 /**
  * #2328: the HEAD commit's own `committer.date`, the anchor of the
