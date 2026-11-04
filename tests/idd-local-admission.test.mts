@@ -51,6 +51,27 @@ const REAL_LOCK =
 
 const makeTempDirectory = trackTempDirectories();
 
+function jsEvalStringLiteral(value: string): string {
+  const replacements: Record<string, string> = {
+    '<': '\\u003C',
+    '>': '\\u003E',
+    '/': '\\u002F',
+    '\u2028': '\\u2028',
+    '\u2029': '\\u2029',
+  };
+  return JSON.stringify(value).replace(/[<>/\u2028\u2029]/gu, (character) => {
+    return replacements[character] ?? character;
+  });
+}
+
+test('JavaScript test-source literals preserve values while escaping code delimiters', () => {
+  const value = '</script>\u2028\u2029';
+  const literal = jsEvalStringLiteral(value);
+
+  assert.equal(literal, '"\\u003C\\u002Fscript\\u003E\\u2028\\u2029"');
+  assert.equal(JSON.parse(literal), value);
+});
+
 /** A tracked directory under the suite's temporary root, named with `prefix`. */
 function tempDir(prefix: string): string {
   return makeTempDirectory(join(tmpdir(), prefix));
@@ -2375,7 +2396,7 @@ test('a double-forked daemon cannot retain a non-3 lock descriptor', {
   const lockPath = join(h.state, LOCK_RELATIVE);
   const grandchildScript = [
     `const fs = require('node:fs');`,
-    `const lock = fs.statSync(${JSON.stringify(lockPath)});`,
+    `const lock = fs.statSync(${jsEvalStringLiteral(lockPath)});`,
     `let descriptors;`,
     `for (const directory of ['/proc/self/fd', '/dev/fd']) {`,
     `  try { descriptors = fs.readdirSync(directory); break; } catch {}`,
@@ -2386,32 +2407,32 @@ test('a double-forked daemon cannot retain a non-3 lock descriptor', {
     `  if (!/^\\d+$/.test(entry)) continue;`,
     `  try { const info = fs.fstatSync(Number(entry)); if (info.dev === lock.dev && info.ino === lock.ino) lockAliases.push(Number(entry)); } catch {}`,
     `}`,
-    `fs.writeFileSync(${JSON.stringify(ready)}, JSON.stringify({ pid: process.pid, lockAliases, runnerHadLockAlias: process.env.IDD_TEST_LOCK_ALIAS === 'true' }));`,
-    `process.on('exit', () => fs.writeFileSync(${JSON.stringify(exitFile)}, 'exited'));`,
+    `fs.writeFileSync(${jsEvalStringLiteral(ready)}, JSON.stringify({ pid: process.pid, lockAliases, runnerHadLockAlias: process.env.IDD_TEST_LOCK_ALIAS === 'true' }));`,
+    `process.on('exit', () => fs.writeFileSync(${jsEvalStringLiteral(exitFile)}, 'exited'));`,
     `process.on('SIGTERM', () => clearInterval(timer));`,
-    `const timer = setInterval(() => { if (fs.existsSync(${JSON.stringify(stopFile)})) clearInterval(timer); }, 20);`,
+    `const timer = setInterval(() => { if (fs.existsSync(${jsEvalStringLiteral(stopFile)})) clearInterval(timer); }, 20);`,
   ].join('\n');
   const intermediateScript = [
     `const fs = require('node:fs');`,
     `const { spawn } = require('node:child_process');`,
-    `const lock = fs.statSync(${JSON.stringify(lockPath)});`,
+    `const lock = fs.statSync(${jsEvalStringLiteral(lockPath)});`,
     `let inheritedLockFd = false;`,
     `try { const fd = fs.fstatSync(5); inheritedLockFd = fd.dev === lock.dev && fd.ino === lock.ino; } catch {}`,
     `const stdio = inheritedLockFd ? ['inherit', 'inherit', 'inherit', 'ignore', 'ignore', 5] : 'inherit';`,
-    `const daemon = spawn(process.execPath, ['-e', ${JSON.stringify(grandchildScript)}], { detached: true, stdio, env: { ...process.env, IDD_TEST_LOCK_ALIAS: inheritedLockFd ? 'true' : 'false' } });`,
+    `const daemon = spawn(process.execPath, ['-e', ${jsEvalStringLiteral(grandchildScript)}], { detached: true, stdio, env: { ...process.env, IDD_TEST_LOCK_ALIAS: inheritedLockFd ? 'true' : 'false' } });`,
     `daemon.unref();`,
   ].join('\n');
   const commandScript = [
     `const fs = require('node:fs');`,
     `const { spawn } = require('node:child_process');`,
-    `const lock = fs.statSync(${JSON.stringify(lockPath)});`,
+    `const lock = fs.statSync(${jsEvalStringLiteral(lockPath)});`,
     `let inheritedLockFd = false;`,
     `try { const fd = fs.fstatSync(5); inheritedLockFd = fd.dev === lock.dev && fd.ino === lock.ino; } catch {}`,
     `const stdio = inheritedLockFd ? ['inherit', 'inherit', 'inherit', 'ignore', 'ignore', 5] : 'inherit';`,
-    `const daemon = spawn(process.execPath, ['-e', ${JSON.stringify(intermediateScript)}], { detached: true, stdio, env: { ...process.env, IDD_TEST_LOCK_ALIAS: inheritedLockFd ? 'true' : 'false' } });`,
+    `const daemon = spawn(process.execPath, ['-e', ${jsEvalStringLiteral(intermediateScript)}], { detached: true, stdio, env: { ...process.env, IDD_TEST_LOCK_ALIAS: inheritedLockFd ? 'true' : 'false' } });`,
     `daemon.unref();`,
     `const deadline = Date.now() + 5000;`,
-    `const waitForReady = async () => { while (!fs.existsSync(${JSON.stringify(ready)}) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20)); if (!fs.existsSync(${JSON.stringify(ready)})) process.exit(3); };`,
+    `const waitForReady = async () => { while (!fs.existsSync(${jsEvalStringLiteral(ready)}) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20)); if (!fs.existsSync(${jsEvalStringLiteral(ready)})) process.exit(3); };`,
     `waitForReady().catch(() => process.exit(4));`,
   ].join('\n');
   const notes: string[] = [];
