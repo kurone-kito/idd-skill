@@ -2968,7 +2968,9 @@ This raw-cap check requires `awk`; if it is unavailable or returns an
 unexpected status, refuse with exit `2` before starting the command. If
 `flock` is present but `setsid` is not, refuse with exit `2` before starting
 the command. The locked path also requires `env --default-signal`; refuse with
-exit `2` if that option is unavailable. Otherwise resolve
+exit `2` if that option is unavailable. Alias cleanup requires `/dev/fd` and a
+shell whose `test` supports `-ef`; refuse with exit `2` when either is
+unavailable. Otherwise resolve
 `state` to absolute `XDG_STATE_HOME`, or
 `$HOME/.local/state` when that variable is relative or unset; if neither gives
 an absolute path, refuse with exit `2`. The following Bash-compatible shell
@@ -2999,11 +3001,17 @@ signal during that wait is forwarded to the group, as above, and the run ends
 with that signal's status. The drain has no bound of its own, and `maxWait`
 does not apply to it: a group member that never exits keeps the slot held until
 it ends, so end that member to release the slot. Direct runs do not wait after
-a normal exit. The admitted command runs without the lock descriptor (fd 9), so
-a descendant that leaves the group cannot keep the slot through an inherited
-descriptor. Observed 2026-10-23 in adopter field feedback (finding 10, issue
-`#4702`): a same-group child outlived a normally exiting root, and a contender
-entered while it was still alive.
+a normal exit. Before the admitted command starts, the fallback compares every
+`/dev/fd` entry with fd 9 using the shell's same-file test, closes each matching
+alias other than fd 9, and verifies none remain. The command then runs with fd 9
+closed, so a descendant that leaves the group cannot keep the slot through a
+lock descriptor. If `/dev/fd` or the same-file test is unavailable, the fallback
+refuses with exit 2 before starting the command. Observed 2026-11-04 in issue
+`#5036`: a daemon held the validation lock through an inherited fd 5, so closing
+fd 9 alone was insufficient. The existing group drain protects same-group
+children that outlive the root; observed 2026-10-23 in adopter field feedback
+(finding 10, issue `#4702`): a same-group child outlived a normally exiting root,
+and a contender entered while it was still alive.
 
 ```sh
 child_pid=
@@ -3029,6 +3037,45 @@ group_has_live_member() {
 $process_list
 EOF
   return 1
+}
+matching_lock_descriptors() {
+  if [ ! -d /dev/fd ] || [ ! -e /dev/fd/9 ]; then return 2; fi
+  scan_found_lock_fd=false
+  for scan_descriptor_path in /dev/fd/*; do
+    scan_descriptor=${scan_descriptor_path##*/}
+    case $scan_descriptor in *[!0-9]*|'') continue ;; esac
+    if [ "$scan_descriptor" = 9 ]; then
+      scan_found_lock_fd=true
+      continue
+    fi
+    if [ "$scan_descriptor_path" -ef /dev/fd/9 ]; then
+      printf '%s\n' "$scan_descriptor"
+    else
+      scan_status=$?
+      [ "$scan_status" -eq 1 ] || return 2
+    fi
+  done
+  [ "$scan_found_lock_fd" = true ] || return 2
+}
+close_lock_aliases() {
+  # Check the original stdout before command substitution replaces fd 1 (issue #5036).
+  if [ "/dev/fd/1" -ef /dev/fd/9 ] 2>/dev/null; then
+    return 1
+  else
+    standard_stdout_status=$?
+    [ "$standard_stdout_status" -eq 1 ] || return 1
+  fi
+  scan_lock_aliases=$(matching_lock_descriptors) || return 1
+  for scan_fd in $scan_lock_aliases; do
+    case $scan_fd in
+      *[!0-9]*|'') return 1 ;;
+      0|1|2) return 1 ;;
+      9) continue ;;
+      *) exec {scan_fd}>&- || return 1 ;;
+    esac
+  done
+  scan_lock_aliases=$(matching_lock_descriptors) || return 1
+  [ -z "$scan_lock_aliases" ]
 }
 process_state_ready() {
   if ! command -v ps >/dev/null 2>&1; then return 1; fi
@@ -3142,15 +3189,63 @@ enabled=true
 backend=flock
 raw_max_concurrent=1
 wait_seconds=7200 # Replace with the validated repository maxWait when set.
+# A refusal notice can itself corrupt a lock when stderr aliases it (issue #5036).
+stderr_diagnostic_safe=false
+diagnostic_state=
+case ${XDG_STATE_HOME:-} in
+  /*) diagnostic_state=$XDG_STATE_HOME ;;
+  *) case ${HOME:-} in
+       /*) diagnostic_state=$HOME/.local/state ;;
+     esac ;;
+esac
+if [ -n "$diagnostic_state" ] && [ -d /dev/fd ] && [ -e /dev/fd/2 ]; then
+  diagnostic_lock="$diagnostic_state/idd-skill/local-admission/validate.lock"
+  if [ -f "$diagnostic_lock" ]; then
+    if [ "/dev/fd/2" -ef "$diagnostic_lock" ] 2>/dev/null; then
+      stderr_diagnostic_safe=false
+    else
+      diagnostic_check_status=$?
+      [ "$diagnostic_check_status" -eq 1 ] && stderr_diagnostic_safe=true
+    fi
+  elif [ ! -e "$diagnostic_lock" ] && [ ! -L "$diagnostic_lock" ]; then
+    stderr_diagnostic_safe=true
+  fi
+fi
+safe_notice() {
+  [ "$stderr_diagnostic_safe" = true ] || return 0
+  printf '%s\n' "$1" >&2
+}
 if [ "$enabled" = false ]; then
   run_direct
 fi
 if [ "$backend" = pueue ]; then
-  printf 'local-admission: helper-free path uses flock for backend "pueue" with one slot\n' >&2
+  safe_notice 'local-admission: helper-free path uses flock for backend "pueue" with one slot'
 fi
 if ! command -v flock >/dev/null 2>&1; then
-  printf 'local-admission: flock is not available on this host; running the command without admission\n' >&2
+  safe_notice 'local-admission: flock is not available on this host; running the command without admission'
   run_direct
+fi
+# Resolve lock-only state and stderr prerequisites only when the locked path
+# will be used. The no-flock direct-run fallback needs neither one.
+case ${XDG_STATE_HOME:-} in
+  /*) state=$XDG_STATE_HOME ;;
+  *) case ${HOME:-} in
+       /*) state=$HOME/.local/state ;;
+       *) safe_notice 'local-admission: no absolute state root; command not started'; exit 2 ;;
+     esac ;;
+esac
+lock_dir="$state/idd-skill/local-admission"
+lock="$lock_dir/validate.lock"
+if [ ! -d /dev/fd ] || [ ! -e /dev/fd/2 ]; then exit 2; fi
+exec {scan_stderr_fd}>&2 || exit 2
+if [ "/dev/fd/$scan_stderr_fd" -ef "$lock" ] 2>/dev/null; then
+  exec {scan_stderr_fd}>&-
+  exit 2
+else
+  scan_stderr_status=$?
+  exec {scan_stderr_fd}>&- || exit 2
+  [ "$scan_stderr_status" -eq 1 ] || exit 2
+  stderr_diagnostic_safe=true
 fi
 if [ "$backend" = flock ]; then
   if ! command -v awk >/dev/null 2>&1; then
@@ -3177,16 +3272,8 @@ if ! command -v env >/dev/null 2>&1 ||
   printf 'local-admission: env cannot reset child signal dispositions; command not started\n' >&2
   exit 2
 fi
-case ${XDG_STATE_HOME:-} in
-  /*) state=$XDG_STATE_HOME ;;
-  *) case ${HOME:-} in
-       /*) state=$HOME/.local/state ;;
-       *) printf 'local-admission: no absolute state root; command not started\n' >&2; exit 2 ;;
-     esac ;;
-esac
 original_umask=$(umask)
 umask 077
-lock_dir="$state/idd-skill/local-admission"
 for dir in "$state/idd-skill" "$lock_dir"; do
   if [ -L "$dir" ] || { [ -e "$dir" ] && [ ! -d "$dir" ]; }; then
     printf 'local-admission: unsafe lock directory; command not started\n' >&2
@@ -3203,7 +3290,6 @@ for dir in "$state/idd-skill" "$lock_dir"; do
     exit 2
   fi
 done
-lock="$lock_dir/validate.lock"
 if [ -L "$lock" ] || { [ -e "$lock" ] && [ ! -f "$lock" ]; }; then
   printf 'local-admission: unsafe lock file; command not started\n' >&2
   exit 2
@@ -3271,6 +3357,12 @@ while :; do
   fi
   printf 'local-admission: waiting (waited %s of %s seconds)\n' "$waited_seconds" "$wait_seconds" >&2
 done
+if ! close_lock_aliases; then
+  printf 'local-admission: cannot verify or close every inherited lock descriptor; command not started\n' >&2
+  flock --unlock 9 || { printf 'local-admission: cannot release lock\n' >&2; exit 2; }
+  lock_fd_open=false
+  exit 2
+fi
 run_child admitted
 status=$?
 flock --unlock 9 || { printf 'local-admission: cannot release lock\n' >&2; exit 2; }
@@ -3283,10 +3375,10 @@ starts. A child exit `75` is returned without that line. Other `flock` failures
 before acquisition print a diagnostic and exit `2` without starting the child.
 
 Refusals before the command starts exit `2`: a policy file that fails to parse,
-a raw cap above 1 under `flock`, unavailable signal-reset support, a symlink at
-`idd-skill` or `local-admission`,
-a lock file that is a symlink or not a regular file, or a `flock` that fails
-before it takes the lock.
+a raw cap above 1 under `flock`, unavailable signal-reset support or lock-alias
+inspection, a standard stream that refers to the lock file, a symlink at
+`idd-skill` or `local-admission`, a lock file that is a symlink or not a regular
+file, or a `flock` that fails before it takes the lock.
 The helper also refuses before starting a process-group-supervised command
 when the ps process-state utility is unavailable or returns unusable output.
 

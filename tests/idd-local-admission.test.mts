@@ -3,11 +3,13 @@ import { type ChildProcess, spawn, spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import {
   chmodSync,
+  closeSync,
   existsSync,
   constants as fsConstants,
   linkSync,
   lstatSync,
   mkdirSync,
+  openSync,
   readdirSync,
   readFileSync,
   renameSync,
@@ -48,6 +50,27 @@ const REAL_LOCK =
   findExecutableOnPath('flock', process.env) !== null;
 
 const makeTempDirectory = trackTempDirectories();
+
+function jsEvalStringLiteral(value: string): string {
+  const replacements: Record<string, string> = {
+    '<': '\\u003C',
+    '>': '\\u003E',
+    '/': '\\u002F',
+    '\u2028': '\\u2028',
+    '\u2029': '\\u2029',
+  };
+  return JSON.stringify(value).replace(/[<>/\u2028\u2029]/gu, (character) => {
+    return replacements[character] ?? character;
+  });
+}
+
+test('JavaScript test-source literals preserve values while escaping code delimiters', () => {
+  const value = '</script>\u2028\u2029';
+  const literal = jsEvalStringLiteral(value);
+
+  assert.equal(literal, '"\\u003C\\u002Fscript\\u003E\\u2028\\u2029"');
+  assert.equal(JSON.parse(literal), value);
+});
 
 /** A tracked directory under the suite's temporary root, named with `prefix`. */
 function tempDir(prefix: string): string {
@@ -2273,6 +2296,191 @@ test('a detached descendant cannot retain the validation slot', {
       makeWorkDir(),
       h.env,
     );
+    assert.equal((await next.done).status, 0);
+    assert.equal(existsSync(nextReady), true);
+    assert.equal(processIsAlive(daemon.pid), true);
+  } finally {
+    if (daemonPid === undefined && existsSync(ready)) {
+      try {
+        daemonPid = (JSON.parse(readFileSync(ready, 'utf8')) as { pid: number })
+          .pid;
+      } catch {
+        // The command may have failed before it wrote a complete readiness file.
+      }
+    }
+    if (daemonPid !== undefined) {
+      await stopProcess(daemonPid, stopFile, exitFile);
+    }
+    if (
+      next !== undefined &&
+      next.child.exitCode === null &&
+      next.child.signalCode === null
+    ) {
+      next.child.kill('SIGTERM');
+      await next.done;
+    }
+  }
+});
+
+test('refusing a lock-file stderr alias leaves the lock bytes unchanged', {
+  skip: !REAL_LOCK,
+}, async () => {
+  const h = makeHarness();
+  const repo = makeRepo();
+  const lockPath = join(h.state, LOCK_RELATIVE);
+  const started = join(h.state, 'refused-command.started');
+  mkdirSync(dirname(lockPath), { recursive: true });
+  writeFileSync(lockPath, 'preserve the lock bytes\n');
+  const before = readFileSync(lockPath);
+  const notes: string[] = [];
+  const stdout = new PassThrough();
+  stdout.resume();
+  const spawnWithWritableStderrAlias: LocalAdmissionDeps['spawn'] = (
+    command,
+    args,
+    options,
+  ) => {
+    if (command === '/bin/sh' && Array.isArray(options.stdio)) {
+      const stdio = [...options.stdio];
+      const alias = openSync(lockPath, 'a');
+      stdio[2] = alias;
+      try {
+        return spawn(command, args, { ...options, stdio });
+      } finally {
+        closeSync(alias);
+      }
+    }
+    return spawn(command, args, options);
+  };
+  const commandScript = `require('node:fs').writeFileSync(${JSON.stringify(started)}, 'started');`;
+
+  const status = await runLocalAdmission(
+    ['--', process.execPath, '-e', commandScript],
+    {
+      cwd: repo,
+      env: h.env,
+      platform: process.platform,
+      stderr: (text) => notes.push(text),
+      stdout,
+      spawn: spawnWithWritableStderrAlias,
+    },
+  );
+
+  assert.equal(status, 2, notes.join(''));
+  assert.equal(existsSync(started), false);
+  assert.deepEqual(readFileSync(lockPath), before);
+  assert.equal(flockStatus(lockPath), 0);
+});
+
+test('a missing admitted command reports its spawn error and returns 127', {
+  skip: !REAL_LOCK,
+}, async () => {
+  const h = makeHarness();
+  const repo = makeRepo();
+  const missingCommand = join(h.state, 'missing-admitted-command');
+  const run = runBin(['--', missingCommand], repo, h.env);
+  const result = await run.done;
+  assert.equal(result.status, 127);
+  assert.match(result.stderr, /ENOENT/u);
+});
+
+test('a double-forked daemon cannot retain a non-3 lock descriptor', {
+  skip: !REAL_LOCK,
+}, async () => {
+  const h = makeHarness();
+  const repo = makeRepo();
+  const ready = join(h.state, 'double-fork.ready');
+  const stopFile = join(h.state, 'double-fork.stop');
+  const exitFile = join(h.state, 'double-fork.exit');
+  const nextReady = join(h.state, 'double-fork.next-ready');
+  const lockPath = join(h.state, LOCK_RELATIVE);
+  const grandchildScript = [
+    `const fs = require('node:fs');`,
+    `const lock = fs.statSync(${jsEvalStringLiteral(lockPath)});`,
+    `let descriptors;`,
+    `for (const directory of ['/proc/self/fd', '/dev/fd']) {`,
+    `  try { descriptors = fs.readdirSync(directory); break; } catch {}`,
+    `}`,
+    `if (!descriptors) process.exit(2);`,
+    `const lockAliases = [];`,
+    `for (const entry of descriptors) {`,
+    `  if (!/^\\d+$/.test(entry)) continue;`,
+    `  try { const info = fs.fstatSync(Number(entry)); if (info.dev === lock.dev && info.ino === lock.ino) lockAliases.push(Number(entry)); } catch {}`,
+    `}`,
+    `fs.writeFileSync(${jsEvalStringLiteral(ready)}, JSON.stringify({ pid: process.pid, lockAliases, runnerHadLockAlias: process.env.IDD_TEST_LOCK_ALIAS === 'true' }));`,
+    `process.on('exit', () => fs.writeFileSync(${jsEvalStringLiteral(exitFile)}, 'exited'));`,
+    `process.on('SIGTERM', () => clearInterval(timer));`,
+    `const timer = setInterval(() => { if (fs.existsSync(${jsEvalStringLiteral(stopFile)})) clearInterval(timer); }, 20);`,
+  ].join('\n');
+  const intermediateScript = [
+    `const fs = require('node:fs');`,
+    `const { spawn } = require('node:child_process');`,
+    `const lock = fs.statSync(${jsEvalStringLiteral(lockPath)});`,
+    `let inheritedLockFd = false;`,
+    `try { const fd = fs.fstatSync(5); inheritedLockFd = fd.dev === lock.dev && fd.ino === lock.ino; } catch {}`,
+    `const stdio = inheritedLockFd ? ['inherit', 'inherit', 'inherit', 'ignore', 'ignore', 5] : 'inherit';`,
+    `const daemon = spawn(process.execPath, ['-e', ${jsEvalStringLiteral(grandchildScript)}], { detached: true, stdio, env: { ...process.env, IDD_TEST_LOCK_ALIAS: inheritedLockFd ? 'true' : 'false' } });`,
+    `daemon.unref();`,
+  ].join('\n');
+  const commandScript = [
+    `const fs = require('node:fs');`,
+    `const { spawn } = require('node:child_process');`,
+    `const lock = fs.statSync(${jsEvalStringLiteral(lockPath)});`,
+    `let inheritedLockFd = false;`,
+    `try { const fd = fs.fstatSync(5); inheritedLockFd = fd.dev === lock.dev && fd.ino === lock.ino; } catch {}`,
+    `const stdio = inheritedLockFd ? ['inherit', 'inherit', 'inherit', 'ignore', 'ignore', 5] : 'inherit';`,
+    `const daemon = spawn(process.execPath, ['-e', ${jsEvalStringLiteral(intermediateScript)}], { detached: true, stdio, env: { ...process.env, IDD_TEST_LOCK_ALIAS: inheritedLockFd ? 'true' : 'false' } });`,
+    `daemon.unref();`,
+    `const deadline = Date.now() + 5000;`,
+    `const waitForReady = async () => { while (!fs.existsSync(${jsEvalStringLiteral(ready)}) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20)); if (!fs.existsSync(${jsEvalStringLiteral(ready)})) process.exit(3); };`,
+    `waitForReady().catch(() => process.exit(4));`,
+  ].join('\n');
+  const notes: string[] = [];
+  const stdout = new PassThrough();
+  stdout.resume();
+  const spawnWithAlias: LocalAdmissionDeps['spawn'] = (
+    command,
+    args,
+    options,
+  ) => {
+    if (command === '/bin/sh' && Array.isArray(options.stdio)) {
+      const stdio = [...options.stdio];
+      const lockDescriptor = stdio[3];
+      assert.equal(typeof lockDescriptor, 'number');
+      stdio[5] = lockDescriptor;
+      return spawn(command, args, { ...options, stdio });
+    }
+    return spawn(command, args, options);
+  };
+  let daemonPid: number | undefined;
+  let next: ReturnType<typeof runBin> | undefined;
+  try {
+    const status = await runLocalAdmission(
+      ['--', process.execPath, '-e', commandScript],
+      {
+        cwd: repo,
+        env: h.env,
+        platform: process.platform,
+        stderr: (text) => notes.push(text),
+        stdout,
+        spawn: spawnWithAlias,
+      },
+    );
+    assert.equal(status, 0, notes.join(''));
+    await waitFor(() => existsSync(ready));
+    const daemon = JSON.parse(readFileSync(ready, 'utf8')) as {
+      pid: number;
+      lockAliases: number[];
+      runnerHadLockAlias: boolean;
+    };
+    daemonPid = daemon.pid;
+    assert.deepEqual(daemon.lockAliases, []);
+    assert.equal(daemon.runnerHadLockAlias, false);
+    assert.equal(processIsAlive(daemon.pid), true);
+    assert.equal(flockStatus(lockPath), 0);
+
+    const nextScript = `require('node:fs').writeFileSync(${JSON.stringify(nextReady)}, 'started');`;
+    next = runBin(['--', process.execPath, '-e', nextScript], repo, h.env);
     assert.equal((await next.done).status, 0);
     assert.equal(existsSync(nextReady), true);
     assert.equal(processIsAlive(daemon.pid), true);

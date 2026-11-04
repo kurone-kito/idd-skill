@@ -66,19 +66,116 @@ const FALLBACK_MAX_WAIT_MS = 2 * 60 * 60 * 1000;
 const LOCK_PARENT_DIRECTORY = 'idd-skill';
 const LOCK_DIRECTORY = 'local-admission';
 const LOCK_FILE_NAME = 'validate.lock';
-/** Inherited descriptor that the wrapper and helper keep locked. */
+/** Descriptor the wrapper and helper keep locked. */
 const LOCK_FD = 3;
 /** Descriptor the wrapper reports `acquired` on, through a dedicated pipe. */
 const ACQUIRED_FD = 4;
 const ACQUIRED_LINE = 'acquired\n';
 /**
- * Acquire the inherited FD in descriptor mode, report it, then run argv with
- * the lock FD closed only in the command process. The wrapper keeps the lock
- * alive if the helper exits before its command, then a same-group guardian keeps
- * it until every live member of the supervised process group has exited.
+ * Acquire the inherited FD in descriptor mode, report it, then run argv in a
+ * short-lived process that closes every descriptor alias to the lock inode.
+ * This wrapper keeps its own lock descriptor if the helper exits, then a
+ * same-group guardian keeps it until every live group member has exited.
  */
 const ACQUIRED_WRAPPER =
-  '"$1" "$2" "$3" "$4" "$5" "$6"; flock_status=$?; if [ "$flock_status" -ne 0 ]; then exit "$flock_status"; fi; trap ":" INT TERM; printf "acquired\\n" >&4; exec 4>&-; process_state_tool=$7; node_path=$8; guardian_script=$9; shift 9; (exec "$@" 3>&-); command_status=$?; while :; do "$node_path" -e "$guardian_script" "$$" "$process_state_tool" & guardian_pid=$!; while :; do wait "$guardian_pid"; guardian_status=$?; if ! kill -0 "$guardian_pid" 2>/dev/null; then break; fi; done; if [ "$guardian_status" -eq 0 ]; then break; fi; printf "local-admission: process-group guardian did not start; keeping the validation slot held\\n" >&2; sleep 1; done; exit "$command_status"';
+  '"$1" "$2" "$3" "$4" "$5" "$6"; flock_status=$?; if [ "$flock_status" -ne 0 ]; then exit "$flock_status"; fi; trap ":" INT TERM; printf "acquired\\n" >&4; exec 4>&-; process_state_tool=$7; node_path=$8; guardian_script=$9; shift 9; command_runner=$1; shift; "$node_path" -e "$command_runner" "$@"; command_status=$?; while :; do "$node_path" -e "$guardian_script" "$$" "$process_state_tool" & guardian_pid=$!; while :; do wait "$guardian_pid"; guardian_status=$?; if ! kill -0 "$guardian_pid" 2>/dev/null; then break; fi; done; if [ "$guardian_status" -eq 0 ]; then break; fi; printf "local-admission: process-group guardian did not start; keeping the validation slot held\\n" >&2; sleep 1; done; exit "$command_status"';
+/**
+ * Close every descriptor in this short-lived command runner that refers to
+ * the lock inode shared through fd 3, then run argv without those descriptors
+ * (issue #5036). The shell supervisor keeps its separate fd 3 open.
+ */
+const ADMITTED_COMMAND_RUNNER = String.raw`
+const fs = require('node:fs');
+const { spawnSync } = require('node:child_process');
+const { constants: osConstants } = require('node:os');
+let lock;
+try {
+  lock = fs.fstatSync(3);
+} catch {
+  process.exit(2);
+}
+if (!lock.isFile()) process.exit(2);
+let stderrIsSafe = false;
+try {
+  const stderr = fs.fstatSync(2);
+  stderrIsSafe = stderr.dev !== lock.dev || stderr.ino !== lock.ino;
+} catch {}
+const refuse = (message) => {
+  if (stderrIsSafe) {
+    try {
+      fs.writeSync(2, message);
+    } catch {}
+  }
+  process.exit(2);
+};
+const refuseDescriptorInspection = () =>
+  refuse('local-admission: cannot verify inherited lock descriptors; command not started\n');
+let descriptors;
+for (const directory of ['/proc/self/fd', '/dev/fd']) {
+  try {
+    const entries = fs.readdirSync(directory);
+    if (entries.includes('3')) {
+      descriptors = entries;
+      break;
+    }
+  } catch {}
+}
+if (descriptors === undefined) refuseDescriptorInspection();
+const matchingDescriptors = () => {
+  const matches = [];
+  for (const entry of descriptors) {
+    if (!/^\d+$/.test(entry)) continue;
+    try {
+      const info = fs.fstatSync(Number(entry));
+      if (info.dev === lock.dev && info.ino === lock.ino) matches.push(Number(entry));
+    } catch (error) {
+      if (error?.code !== 'EBADF') throw error;
+    }
+  }
+  return matches;
+};
+const inspectDescriptors = () => {
+  try {
+    return matchingDescriptors();
+  } catch {
+    refuseDescriptorInspection();
+  }
+};
+const aliases = inspectDescriptors();
+if (aliases.some((fd) => fd < 3)) {
+  refuse('local-admission: a standard stream refers to the validation lock; command not started\n');
+}
+for (const fd of aliases) {
+  try {
+    fs.closeSync(fd);
+  } catch {
+    refuse('local-admission: cannot close inherited lock descriptor; command not started\n');
+  }
+}
+if (inspectDescriptors().length > 0) {
+  refuse('local-admission: inherited lock descriptors remain; command not started\n');
+}
+const [command, ...args] = process.argv.slice(1);
+if (command === undefined) process.exit(2);
+const result = spawnSync(command, args, { stdio: 'inherit' });
+if (result.error !== undefined) {
+  if (stderrIsSafe) {
+    try {
+      fs.writeSync(
+        2,
+        'local-admission: cannot start command: ' +
+          result.error.message +
+          '\n',
+      );
+    } catch {}
+  }
+  process.exit(result.error.code === 'ENOENT' ? 127 : 126);
+}
+if (result.signal !== null) {
+  process.exit(128 + (osConstants.signals[result.signal] ?? 0));
+}
+process.exit(result.status ?? 1);
+`;
 /**
  * This guardian shares the supervised process group and keeps the inherited
  * lock descriptor until every live member except the wrapper has left it. Its
@@ -331,8 +428,10 @@ function makeDirectoryIfAbsent(dir) {
  * Create and open the lock. Both directories are `lstat`ed before any
  * creation and again after it, so a symlink in `idd-skill` or
  * `local-admission` refuses without creating anything. The lock path is
- * opened with `O_NOFOLLOW`, and a non-regular file is refused. The helper
- * never writes, truncates, or removes it.
+ * opened with `O_NOFOLLOW`, and a non-regular file is refused. Node/libuv
+ * opens the descriptor close-on-exec; the command runner also closes any
+ * inherited aliases to this inode before starting argv (issue #5036). The
+ * helper never writes, truncates, or removes the lock file.
  */
 function openLockFile(deps) {
   const base = resolveStateBase(deps.env, deps.platform, deps.homedir);
@@ -576,6 +675,7 @@ function runLocked(
         processStateTool,
         process.execPath,
         GROUP_DRAIN_GUARDIAN,
+        ADMITTED_COMMAND_RUNNER,
         ...command,
       ],
       {
