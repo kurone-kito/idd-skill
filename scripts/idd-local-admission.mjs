@@ -159,6 +159,16 @@ const [command, ...args] = process.argv.slice(1);
 if (command === undefined) process.exit(2);
 const result = spawnSync(command, args, { stdio: 'inherit' });
 if (result.error !== undefined) {
+  if (stderrIsSafe) {
+    try {
+      fs.writeSync(
+        2,
+        'local-admission: cannot start command: ' +
+          result.error.message +
+          '\n',
+      );
+    } catch {}
+  }
   process.exit(result.error.code === 'ENOENT' ? 127 : 126);
 }
 if (result.signal !== null) {

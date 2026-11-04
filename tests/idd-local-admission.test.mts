@@ -2351,6 +2351,18 @@ test('refusing a lock-file stderr alias leaves the lock bytes unchanged', {
   assert.equal(flockStatus(lockPath), 0);
 });
 
+test('a missing admitted command reports its spawn error and returns 127', {
+  skip: !REAL_LOCK,
+}, async () => {
+  const h = makeHarness();
+  const repo = makeRepo();
+  const missingCommand = join(h.state, 'missing-admitted-command');
+  const run = runBin(['--', missingCommand], repo, h.env);
+  const result = await run.done;
+  assert.equal(result.status, 127);
+  assert.match(result.stderr, /ENOENT/u);
+});
+
 test('a double-forked daemon cannot retain a non-3 lock descriptor', {
   skip: !REAL_LOCK,
 }, async () => {
@@ -2374,20 +2386,29 @@ test('a double-forked daemon cannot retain a non-3 lock descriptor', {
     `  if (!/^\\d+$/.test(entry)) continue;`,
     `  try { const info = fs.fstatSync(Number(entry)); if (info.dev === lock.dev && info.ino === lock.ino) lockAliases.push(Number(entry)); } catch {}`,
     `}`,
-    `fs.writeFileSync(${JSON.stringify(ready)}, JSON.stringify({ pid: process.pid, lockAliases }));`,
+    `fs.writeFileSync(${JSON.stringify(ready)}, JSON.stringify({ pid: process.pid, lockAliases, runnerHadLockAlias: process.env.IDD_TEST_LOCK_ALIAS === 'true' }));`,
     `process.on('exit', () => fs.writeFileSync(${JSON.stringify(exitFile)}, 'exited'));`,
     `process.on('SIGTERM', () => clearInterval(timer));`,
     `const timer = setInterval(() => { if (fs.existsSync(${JSON.stringify(stopFile)})) clearInterval(timer); }, 20);`,
   ].join('\n');
   const intermediateScript = [
+    `const fs = require('node:fs');`,
     `const { spawn } = require('node:child_process');`,
-    `const daemon = spawn(process.execPath, ['-e', ${JSON.stringify(grandchildScript)}], { detached: true, stdio: 'inherit' });`,
+    `const lock = fs.statSync(${JSON.stringify(lockPath)});`,
+    `let inheritedLockFd = false;`,
+    `try { const fd = fs.fstatSync(5); inheritedLockFd = fd.dev === lock.dev && fd.ino === lock.ino; } catch {}`,
+    `const stdio = inheritedLockFd ? ['inherit', 'inherit', 'inherit', 'ignore', 'ignore', 5] : 'inherit';`,
+    `const daemon = spawn(process.execPath, ['-e', ${JSON.stringify(grandchildScript)}], { detached: true, stdio, env: { ...process.env, IDD_TEST_LOCK_ALIAS: inheritedLockFd ? 'true' : 'false' } });`,
     `daemon.unref();`,
   ].join('\n');
   const commandScript = [
     `const fs = require('node:fs');`,
     `const { spawn } = require('node:child_process');`,
-    `const daemon = spawn(process.execPath, ['-e', ${JSON.stringify(intermediateScript)}], { detached: true, stdio: 'inherit' });`,
+    `const lock = fs.statSync(${JSON.stringify(lockPath)});`,
+    `let inheritedLockFd = false;`,
+    `try { const fd = fs.fstatSync(5); inheritedLockFd = fd.dev === lock.dev && fd.ino === lock.ino; } catch {}`,
+    `const stdio = inheritedLockFd ? ['inherit', 'inherit', 'inherit', 'ignore', 'ignore', 5] : 'inherit';`,
+    `const daemon = spawn(process.execPath, ['-e', ${JSON.stringify(intermediateScript)}], { detached: true, stdio, env: { ...process.env, IDD_TEST_LOCK_ALIAS: inheritedLockFd ? 'true' : 'false' } });`,
     `daemon.unref();`,
     `const deadline = Date.now() + 5000;`,
     `const waitForReady = async () => { while (!fs.existsSync(${JSON.stringify(ready)}) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20)); if (!fs.existsSync(${JSON.stringify(ready)})) process.exit(3); };`,
@@ -2429,9 +2450,11 @@ test('a double-forked daemon cannot retain a non-3 lock descriptor', {
     const daemon = JSON.parse(readFileSync(ready, 'utf8')) as {
       pid: number;
       lockAliases: number[];
+      runnerHadLockAlias: boolean;
     };
     daemonPid = daemon.pid;
     assert.deepEqual(daemon.lockAliases, []);
+    assert.equal(daemon.runnerHadLockAlias, false);
     assert.equal(processIsAlive(daemon.pid), true);
     assert.equal(flockStatus(lockPath), 0);
 

@@ -3064,7 +3064,7 @@ close_lock_aliases() {
       *[!0-9]*|'') return 1 ;;
       0|1|2) return 1 ;;
       9) continue ;;
-      *) eval "exec $scan_fd>&-" || return 1 ;;
+      *) exec {scan_fd}>&- || return 1 ;;
     esac
   done
   scan_lock_aliases=$(matching_lock_descriptors) || return 1
@@ -3185,6 +3185,26 @@ wait_seconds=7200 # Replace with the validated repository maxWait when set.
 if [ "$enabled" = false ]; then
   run_direct
 fi
+# Resolve the lock path and check stderr before any refusal can write to it.
+case ${XDG_STATE_HOME:-} in
+  /*) state=$XDG_STATE_HOME ;;
+  *) case ${HOME:-} in
+       /*) state=$HOME/.local/state ;;
+       *) printf 'local-admission: no absolute state root; command not started\n' >&2; exit 2 ;;
+     esac ;;
+esac
+lock_dir="$state/idd-skill/local-admission"
+lock="$lock_dir/validate.lock"
+if [ ! -d /dev/fd ] || [ ! -e /dev/fd/2 ]; then exit 2; fi
+exec {scan_stderr_fd}>&2 || exit 2
+if [ "/dev/fd/$scan_stderr_fd" -ef "$lock" ] 2>/dev/null; then
+  exec {scan_stderr_fd}>&-
+  exit 2
+else
+  scan_stderr_status=$?
+  exec {scan_stderr_fd}>&- || exit 2
+  [ "$scan_stderr_status" -eq 1 ] || exit 2
+fi
 if [ "$backend" = pueue ]; then
   printf 'local-admission: helper-free path uses flock for backend "pueue" with one slot\n' >&2
 fi
@@ -3217,16 +3237,8 @@ if ! command -v env >/dev/null 2>&1 ||
   printf 'local-admission: env cannot reset child signal dispositions; command not started\n' >&2
   exit 2
 fi
-case ${XDG_STATE_HOME:-} in
-  /*) state=$XDG_STATE_HOME ;;
-  *) case ${HOME:-} in
-       /*) state=$HOME/.local/state ;;
-       *) printf 'local-admission: no absolute state root; command not started\n' >&2; exit 2 ;;
-     esac ;;
-esac
 original_umask=$(umask)
 umask 077
-lock_dir="$state/idd-skill/local-admission"
 for dir in "$state/idd-skill" "$lock_dir"; do
   if [ -L "$dir" ] || { [ -e "$dir" ] && [ ! -d "$dir" ]; }; then
     printf 'local-admission: unsafe lock directory; command not started\n' >&2
@@ -3243,7 +3255,6 @@ for dir in "$state/idd-skill" "$lock_dir"; do
     exit 2
   fi
 done
-lock="$lock_dir/validate.lock"
 if [ -L "$lock" ] || { [ -e "$lock" ] && [ ! -f "$lock" ]; }; then
   printf 'local-admission: unsafe lock file; command not started\n' >&2
   exit 2

@@ -13,11 +13,13 @@
  * owns the slot, and a teardown that kills the holder groups it created.
  */
 import assert from 'node:assert/strict';
-import { type ChildProcess, spawn } from 'node:child_process';
+import { type ChildProcess, spawn, spawnSync } from 'node:child_process';
 import {
   chmodSync,
+  closeSync,
   existsSync,
   mkdirSync,
+  openSync,
   readdirSync,
   readFileSync,
   readlinkSync,
@@ -120,7 +122,11 @@ function probe(marker: string, order: string): string {
  * The fenced sh block, with the shell and command set and `wait_seconds`
  * bounded. The command is read from `commandFile` so no quoting is needed.
  */
-function fallbackScript(commandFile: string, waitSeconds: number): string {
+function fallbackScript(
+  commandFile: string,
+  waitSeconds: number,
+  rawMaxConcurrent: number,
+): string {
   const matches = [
     ...readFileSync(TEMPLATE_DOC, 'utf8').matchAll(
       /```sh\n(child_pid=\n[\s\S]*?)\n```/g,
@@ -133,10 +139,20 @@ function fallbackScript(commandFile: string, waitSeconds: number): string {
     1,
     'the wait_seconds line appears once',
   );
+  assert.equal(
+    block.split('raw_max_concurrent=1').length - 1,
+    1,
+    'the raw maxConcurrent line appears once',
+  );
   return [
     'shell=/bin/sh',
     `command=$(cat ${sq(commandFile)})`,
-    block.replace(WAIT_LINE, `wait_seconds=${waitSeconds}`),
+    block
+      .replace(WAIT_LINE, `wait_seconds=${waitSeconds}`)
+      .replace(
+        'raw_max_concurrent=1',
+        `raw_max_concurrent=${rawMaxConcurrent}`,
+      ),
     '',
   ].join('\n');
 }
@@ -149,6 +165,12 @@ interface Wrapper {
   stderr: () => string;
 }
 
+interface WrapperStartOptions {
+  stderrFd?: number;
+  lockFd?: number;
+  rawMaxConcurrent?: number;
+}
+
 /** Starts one fallback wrapper with `command` as its child argv. */
 function startWrapper(
   dir: string,
@@ -156,17 +178,29 @@ function startWrapper(
   command: string,
   env: NodeJS.ProcessEnv,
   waitSeconds: number,
+  options: WrapperStartOptions = {},
 ): Wrapper {
   const commandFile = join(dir, `${name}.cmd`);
   const script = join(dir, `${name}.sh`);
   writeFileSync(commandFile, command);
-  writeFileSync(script, fallbackScript(commandFile, waitSeconds));
+  writeFileSync(
+    script,
+    fallbackScript(commandFile, waitSeconds, options.rawMaxConcurrent ?? 1),
+  );
+  const stdio: Array<'ignore' | 'pipe' | number> = [
+    'ignore',
+    'pipe',
+    options.stderrFd ?? 'pipe',
+  ];
+  if (options.lockFd !== undefined) {
+    stdio.push('ignore', 'ignore', options.lockFd);
+  }
   // Detached, so the wrapper leads its own group and teardown also ends its
   // flock waiter, which would otherwise hold the stdio pipes open.
   const child = spawn(WRAPPER_SHELL, [script], {
     detached: true,
     env,
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio,
   });
   let stderr = '';
   let done = false;
@@ -185,6 +219,10 @@ function startWrapper(
     });
   });
   return { child, exited, settled: () => done, stderr: () => stderr };
+}
+
+function flockStatus(path: string): number | null {
+  return spawnSync('flock', ['-n', path, 'true']).status;
 }
 
 /** Environment for a wrapper: fresh state, and `stubDir` first on PATH when set. */
@@ -571,6 +609,141 @@ test('a detached daemon in another process group does not hold the slot', {
     assert.equal(readFileSync(order, 'utf8').trim(), 'alive');
   } finally {
     await teardown(dir, wrappers, groups);
+  }
+});
+
+test('an inherited non-9 lock descriptor does not reach a detached daemon', {
+  skip: SKIP,
+  timeout: TEST_TIMEOUT_MS,
+}, async () => {
+  const dir = tempDir('idd-fallback-inherited-lock-fd-');
+  const env = fallbackEnv(dir);
+  const lockDir = join(dir, 'state', 'idd-skill', 'local-admission');
+  const lockPath = join(lockDir, 'validate.lock');
+  const ready = join(dir, 'daemon.json');
+  const order = join(dir, 'order');
+  mkdirSync(lockDir, { recursive: true });
+  writeFileSync(lockPath, 'preserve the lock bytes\n');
+  const lockFd = openSync(lockPath, 'r');
+  const daemonScript = [
+    `const fs = require('node:fs');`,
+    `const timer = setInterval(() => {}, 20);`,
+  ].join('\n');
+  const commandScript = [
+    `const fs = require('node:fs');`,
+    `const { spawn } = require('node:child_process');`,
+    `let inheritedLockFd = false;`,
+    `try { const fd = fs.fstatSync(5); const lock = fs.statSync(${JSON.stringify(lockPath)}); inheritedLockFd = fd.dev === lock.dev && fd.ino === lock.ino; } catch {}`,
+    `const stdio = inheritedLockFd ? ['ignore', 'ignore', 'ignore', 'ignore', 'ignore', 'inherit'] : 'ignore';`,
+    `const daemon = spawn(process.execPath, ['-e', ${JSON.stringify(daemonScript)}], { detached: true, stdio });`,
+    `daemon.unref();`,
+    `fs.writeFileSync(${JSON.stringify(ready)}, JSON.stringify({ pid: daemon.pid, inheritedLockFd }));`,
+  ].join('\n');
+  const wrappers: Wrapper[] = [];
+  const groups: number[] = [];
+  let daemonPid: number | undefined;
+  try {
+    let holder: Wrapper;
+    try {
+      holder = startWrapper(
+        dir,
+        'holder',
+        `node -e ${sq(commandScript)}; exit 0`,
+        env,
+        30,
+        { lockFd },
+      );
+    } finally {
+      closeSync(lockFd);
+    }
+    wrappers.push(holder);
+    await waitFor(() => hasPid(ready), 'the detached daemon to start');
+    const daemon = JSON.parse(readFileSync(ready, 'utf8')) as {
+      pid: number;
+      inheritedLockFd: boolean;
+    };
+    daemonPid = daemon.pid;
+    groups.push(daemon.pid);
+    assert.equal(await holder.exited, 0);
+    assert.equal(daemon.inheritedLockFd, false);
+    assert.equal(isAlive(daemon.pid), true);
+    const resolvedLockPath = realpathSync(lockPath);
+    const heldDescriptors = readdirSync(`/proc/${daemon.pid}/fd`).filter(
+      (fd) => {
+        try {
+          return (
+            readlinkSync(`/proc/${daemon.pid}/fd/${fd}`) === resolvedLockPath
+          );
+        } catch {
+          return false;
+        }
+      },
+    );
+    assert.deepEqual(heldDescriptors, []);
+    assert.equal(flockStatus(lockPath), 0);
+
+    const queued = startWrapper(
+      dir,
+      'queued',
+      `if kill -0 ${daemon.pid} 2>/dev/null; then echo alive > ${sq(order)}; else echo dead > ${sq(order)}; fi; exit 0`,
+      env,
+      30,
+    );
+    wrappers.push(queued);
+    assert.equal(await queued.exited, 0);
+    assert.equal(readFileSync(order, 'utf8').trim(), 'alive');
+    assert.deepEqual(
+      readFileSync(lockPath),
+      Buffer.from('preserve the lock bytes\n'),
+    );
+  } finally {
+    if (daemonPid === undefined && existsSync(ready)) {
+      try {
+        daemonPid = (JSON.parse(readFileSync(ready, 'utf8')) as { pid: number })
+          .pid;
+        groups.push(daemonPid);
+      } catch {
+        // The command may have failed before it wrote a complete readiness file.
+      }
+    }
+    await teardown(dir, wrappers, groups);
+  }
+});
+
+test('preflight refusal checks a lock-file stderr alias before writing diagnostics', {
+  skip: SKIP,
+  timeout: TEST_TIMEOUT_MS,
+}, async () => {
+  const dir = tempDir('idd-fallback-stderr-alias-');
+  const env = fallbackEnv(dir);
+  const lockDir = join(dir, 'state', 'idd-skill', 'local-admission');
+  const lockPath = join(lockDir, 'validate.lock');
+  const started = join(dir, 'started');
+  mkdirSync(lockDir, { recursive: true });
+  writeFileSync(lockPath, 'preserve the lock bytes\n');
+  const before = readFileSync(lockPath);
+  const stderrAlias = openSync(lockPath, 'a');
+  let wrapper: Wrapper;
+  try {
+    wrapper = startWrapper(
+      dir,
+      'stderr-alias',
+      `echo started > ${sq(started)}; exit 0`,
+      env,
+      30,
+      { stderrFd: stderrAlias, rawMaxConcurrent: 2 },
+    );
+  } finally {
+    closeSync(stderrAlias);
+  }
+  const wrappers = [wrapper];
+  try {
+    assert.equal(await wrapper.exited, 2);
+    assert.equal(existsSync(started), false);
+    assert.deepEqual(readFileSync(lockPath), before);
+    assert.equal(flockStatus(lockPath), 0);
+  } finally {
+    await teardown(dir, wrappers, []);
   }
 });
 
