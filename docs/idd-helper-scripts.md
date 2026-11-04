@@ -2971,7 +2971,8 @@ task may have started, so it is not evidence that this recovery path is safe.
    pueue status --json
    ```
 
-   A failed or incomplete status read is unknown state, not an empty queue.
+   A failed or incomplete status read is unknown state, not an empty queue
+   (preventive; no observed incident yet).
    Check the recorded daemon PID's parent/cgroup and the applicable user or
    system service manager with read-only status queries to determine who owns
    it. A failed or inconclusive ownership check is unknown state. Coordinate
@@ -3011,7 +3012,7 @@ task may have started, so it is not evidence that this recovery path is safe.
    path, device, inode = sys.argv[1:]
    expected_major, expected_minor = map(int, device.split(":"))
    expected_inode = int(inode)
-   fd = os.open(path, os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW)
+   fd = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
    try:
        st = os.fstat(fd)
        identity = (os.major(st.st_dev), os.minor(st.st_dev), st.st_ino)
@@ -3029,7 +3030,7 @@ task may have started, so it is not evidence that this recovery path is safe.
    any result is uncertain, stop and coordinate with the owner. Do not reopen
    the path between the descriptor identity check and the `flock` probe. Close
    the descriptor before retrying one validation through the normal
-   `idd-local-admission` helper.
+   `idd-local-admission` helper (preventive; no observed incident yet).
 
 Never delete, truncate, or replace the lock file. An inherited descriptor can
 keep a lock on the original inode while a replacement path names a different
