@@ -2928,7 +2928,8 @@ Behavior:
 
 Use this operator-run procedure only when investigating a retained lock. An
 `expired` notice means the command did not start. Exit `3` still means a pueue
-task may have started, so it is not evidence that this recovery path is safe.
+task may have started, so it is not evidence that this recovery path is safe
+(preventive; no observed incident yet).
 
 1. Find the lock holder and its file identity:
 
