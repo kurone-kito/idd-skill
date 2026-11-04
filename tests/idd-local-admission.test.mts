@@ -2299,6 +2299,118 @@ test('a detached descendant cannot retain the validation slot', {
   }
 });
 
+test('a double-forked daemon cannot retain a non-3 lock descriptor', {
+  skip: !REAL_LOCK,
+}, async () => {
+  const h = makeHarness();
+  const repo = makeRepo();
+  const ready = join(h.state, 'double-fork.ready');
+  const stopFile = join(h.state, 'double-fork.stop');
+  const exitFile = join(h.state, 'double-fork.exit');
+  const nextReady = join(h.state, 'double-fork.next-ready');
+  const lockPath = join(h.state, LOCK_RELATIVE);
+  const grandchildScript = [
+    `const fs = require('node:fs');`,
+    `const lock = fs.statSync(${JSON.stringify(lockPath)});`,
+    `let descriptors;`,
+    `for (const directory of ['/proc/self/fd', '/dev/fd']) {`,
+    `  try { descriptors = fs.readdirSync(directory); break; } catch {}`,
+    `}`,
+    `if (!descriptors) process.exit(2);`,
+    `const lockAliases = [];`,
+    `for (const entry of descriptors) {`,
+    `  if (!/^\\d+$/.test(entry)) continue;`,
+    `  try { const info = fs.fstatSync(Number(entry)); if (info.dev === lock.dev && info.ino === lock.ino) lockAliases.push(Number(entry)); } catch {}`,
+    `}`,
+    `fs.writeFileSync(${JSON.stringify(ready)}, JSON.stringify({ pid: process.pid, lockAliases }));`,
+    `process.on('exit', () => fs.writeFileSync(${JSON.stringify(exitFile)}, 'exited'));`,
+    `process.on('SIGTERM', () => clearInterval(timer));`,
+    `const timer = setInterval(() => { if (fs.existsSync(${JSON.stringify(stopFile)})) clearInterval(timer); }, 20);`,
+  ].join('\n');
+  const intermediateScript = [
+    `const { spawn } = require('node:child_process');`,
+    `const daemon = spawn(process.execPath, ['-e', ${JSON.stringify(grandchildScript)}], { detached: true, stdio: 'inherit' });`,
+    `daemon.unref();`,
+  ].join('\n');
+  const commandScript = [
+    `const fs = require('node:fs');`,
+    `const { spawn } = require('node:child_process');`,
+    `const daemon = spawn(process.execPath, ['-e', ${JSON.stringify(intermediateScript)}], { detached: true, stdio: 'inherit' });`,
+    `daemon.unref();`,
+    `const deadline = Date.now() + 5000;`,
+    `const waitForReady = async () => { while (!fs.existsSync(${JSON.stringify(ready)}) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20)); if (!fs.existsSync(${JSON.stringify(ready)})) process.exit(3); };`,
+    `waitForReady().catch(() => process.exit(4));`,
+  ].join('\n');
+  const notes: string[] = [];
+  const stdout = new PassThrough();
+  stdout.resume();
+  const spawnWithAlias: LocalAdmissionDeps['spawn'] = (
+    command,
+    args,
+    options,
+  ) => {
+    if (command === '/bin/sh' && Array.isArray(options.stdio)) {
+      const stdio = [...options.stdio];
+      const lockDescriptor = stdio[3];
+      assert.equal(typeof lockDescriptor, 'number');
+      stdio[5] = lockDescriptor;
+      return spawn(command, args, { ...options, stdio });
+    }
+    return spawn(command, args, options);
+  };
+  let daemonPid: number | undefined;
+  let next: ReturnType<typeof runBin> | undefined;
+  try {
+    const status = await runLocalAdmission(
+      ['--', process.execPath, '-e', commandScript],
+      {
+        cwd: repo,
+        env: h.env,
+        platform: process.platform,
+        stderr: (text) => notes.push(text),
+        stdout,
+        spawn: spawnWithAlias,
+      },
+    );
+    assert.equal(status, 0, notes.join(''));
+    await waitFor(() => existsSync(ready));
+    const daemon = JSON.parse(readFileSync(ready, 'utf8')) as {
+      pid: number;
+      lockAliases: number[];
+    };
+    daemonPid = daemon.pid;
+    assert.deepEqual(daemon.lockAliases, []);
+    assert.equal(processIsAlive(daemon.pid), true);
+    assert.equal(flockStatus(lockPath), 0);
+
+    const nextScript = `require('node:fs').writeFileSync(${JSON.stringify(nextReady)}, 'started');`;
+    next = runBin(['--', process.execPath, '-e', nextScript], repo, h.env);
+    assert.equal((await next.done).status, 0);
+    assert.equal(existsSync(nextReady), true);
+    assert.equal(processIsAlive(daemon.pid), true);
+  } finally {
+    if (daemonPid === undefined && existsSync(ready)) {
+      try {
+        daemonPid = (JSON.parse(readFileSync(ready, 'utf8')) as { pid: number })
+          .pid;
+      } catch {
+        // The command may have failed before it wrote a complete readiness file.
+      }
+    }
+    if (daemonPid !== undefined) {
+      await stopProcess(daemonPid, stopFile, exitFile);
+    }
+    if (
+      next !== undefined &&
+      next.child.exitCode === null &&
+      next.child.signalCode === null
+    ) {
+      next.child.kill('SIGTERM');
+      await next.done;
+    }
+  }
+});
+
 test('a live supervised process group holds the slot after command exit', {
   skip: !REAL_LOCK,
 }, async () => {
