@@ -174,7 +174,8 @@ also explicit that a hit is corroborating bootstrap evidence only, not
 sole proof of current-session ownership by itself — when several
 sessions share one clone, a different, still-live sibling session's
 own A5 claim can leave an indistinguishable record at that same shared
-path. At the time of the #3273 finding, `{agent-id}` could be shared
+path. When source issue `kurone-kito/idd-skill#3273` was filed,
+`{agent-id}` could be shared
 across sessions of the same agent type and never proved current-session
 ownership on its own (`idd-overview-core.instructions.md`, the
 pre-rule contract). Source issue `kurone-kito/idd-skill#4936` later
