@@ -100,12 +100,12 @@ failure; no table fallback). Map:
 against occupied, unreadable, or unknown local worktree state
 (#3141).
 
-Forced-handoff: for `non_inheritable`/`stop`, `stale`/`takeover`, or
-`local_worktree_occupied`/`stop` with `evidence.forced_handoff`, retry with
-`--claim-id <new_claim_id>` and `--agent-id <new_agent_id>`. Continue only
-on `already_owned` when `new_agent_id` is this session and `old_claim_id`
-is not its claim. Adopt the pair; post a nonce if none was recorded, wait
-for settlement, confirm its winner, then Step 2.
+With `evidence.forced_handoff` on those routes, retry with
+`--claim-id <new_claim_id>` and `--agent-id <new_agent_id>`; omit only the
+latter for pre-rule claims. Continue only on `already_owned` when
+`new_agent_id` is this session and `old_claim_id` is not its claim. Adopt the
+pair; post a nonce if absent, wait for settlement, verify its winner, then
+Step 2.
 
 After any helper map, `roadmap-audit/*` stays A1.5-only (no worktree; children
 unlocked).

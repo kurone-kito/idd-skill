@@ -163,11 +163,9 @@ Use helper output as evidence, not as authority:
   (`cold-recovery-activation-nonce-collision`: no local nonce and 2+
   trusted activation-nonce markers — #1529).
 
-When `evidence.forced_handoff` is set, retry on
-`stale`/`takeover`, `non_inheritable`/`stop`, or
-`local_worktree_occupied`/`stop` (#2178) with
-`--claim-id <new_claim_id>` and `--agent-id <new_agent_id>`; adopt
-the pair verbatim. See
+When `evidence.forced_handoff` is set (#2178), retry with
+`--claim-id <new_claim_id>` and `--agent-id <new_agent_id>`; omit only
+`--agent-id` for pre-rule claims. Adopt the pair verbatim. See
 `docs/idd-helper-scripts.md`'s Resume claim and route evidence.
 
 If helper runtime is absent, helper output is invalid, or helper evidence
