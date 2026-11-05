@@ -204,12 +204,15 @@ bodies.
 
 On resume or restart, read the latest same-claim, trusted-author
 `<!-- review-watermark: {agent-id} {claim-id} … -->` comment to
-restore all six values; ignore watermarks from any other claim or
-untrusted author. Legacy watermarks without `{claim-id}` aren't
-resumable — rerun E1 from scratch if no trusted same-claim watermark
-exists. After forced handoff, prior-claim watermarks are foreign
-restore markers: never delete/hide/minimize them to "clear" state;
-ignore them and rerun E1 under the successor claim.
+restore the six standard fields and, when present, the optional seventh
+`{base-ref}` field. A six-field same-claim watermark remains resumable,
+but records no base; treat its base as unknown and skip the comparison.
+Ignore watermarks from any other claim or untrusted author. Legacy
+watermarks without `{claim-id}` aren't resumable — rerun E1 from scratch
+if no trusted same-claim watermark exists. After forced handoff,
+prior-claim watermarks are foreign restore markers: never
+delete/hide/minimize them to "clear" state; ignore them and rerun E1
+under the successor claim.
 
 **Hide superseded same-claim watermarks.** After the new watermark is
 verified on GitHub, minimize every strictly older trusted **same-claim**
