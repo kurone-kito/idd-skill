@@ -193,6 +193,8 @@ const TRIAGE_NOT_APPLICABLE_ROADMAP_DETAIL =
 
 // Same idea for `shape === 'carrier'` (#4250): a draft carrier is never an
 // execution candidate, so no triage verdict applies to it at all.
+const TRIAGE_NOT_APPLICABLE_CONFIRMATION_DETAIL =
+  'not applicable: an auto-decide confirmation issue records a stop for a person to answer and never enters A4 or A4.5 triage';
 const TRIAGE_NOT_APPLICABLE_CARRIER_DETAIL =
   'not applicable: a draft carrier is never an execution candidate and never enters A4 or A4.5 triage';
 
@@ -1044,8 +1046,9 @@ const CONFIRMATION_LINK_FIELDS = [
   'confirmation',
 ] as const;
 const CONFIRMATION_NOTE_KINDS = ['location', 'failure'] as const;
-const DECISION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
-const CLAIM_OR_SET_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+// A marker value follows the contract value rule: no whitespace, no `;`, and
+// no `-->`, at most 128 characters (#4961, #5021).
+const CONTRACT_MARKER_VALUE_PATTERN = /^(?:(?!-->)[^\s;]){1,128}$/u;
 const SOURCE_REFERENCE_PATTERN =
   /^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)#([1-9][0-9]*)$/;
 
@@ -1522,7 +1525,9 @@ function buildTriageFindings(
     ? TRIAGE_NOT_APPLICABLE_ROADMAP_DETAIL
     : shape === 'carrier'
       ? TRIAGE_NOT_APPLICABLE_CARRIER_DETAIL
-      : undefined;
+      : shape === 'confirmation'
+        ? TRIAGE_NOT_APPLICABLE_CONFIRMATION_DETAIL
+        : undefined;
   const { title: autoTitle, body: autoBody } =
     splitLocalDraftTitleAndBody(rawText);
   const trimmedExplicitTitle =
@@ -5527,7 +5532,8 @@ function parseConfirmationMarkerLine(
     return null;
   }
   const body = trimmed.slice(open.length, trimmed.length - close.length);
-  if (body.includes('-->') || body.includes('<!--')) {
+  // The contract forbids `-->` in a value, not `<!--` (#5021).
+  if (body.includes('-->')) {
     return null;
   }
   const parts = body.split('; ');
@@ -5611,7 +5617,10 @@ export function parseAutoDecisionVoidMarker(
     CONFIRMATION_VOID_SUFFIX,
     ['decision'],
   );
-  if (fields === null || !DECISION_ID_PATTERN.test(fields.decision ?? '')) {
+  if (
+    fields === null ||
+    !CONTRACT_MARKER_VALUE_PATTERN.test(fields.decision ?? '')
+  ) {
     return null;
   }
   return fields.decision ?? null;
@@ -5632,7 +5641,10 @@ export function parseAutoDecisionNoteMarker(
     CONFIRMATION_NOTE_SUFFIX,
     ['decision', 'kind'],
   );
-  if (fields === null || !DECISION_ID_PATTERN.test(fields.decision ?? '')) {
+  if (
+    fields === null ||
+    !CONTRACT_MARKER_VALUE_PATTERN.test(fields.decision ?? '')
+  ) {
     return null;
   }
   const kind = fields.kind ?? '';
@@ -5686,11 +5698,11 @@ function confirmationFieldsValid(
   }
   for (const key of ['claim', 'set'] as const) {
     const value = fields[key] ?? '';
-    if (value !== 'none' && !CLAIM_OR_SET_PATTERN.test(value)) {
+    if (value !== 'none' && !CONTRACT_MARKER_VALUE_PATTERN.test(value)) {
       return false;
     }
   }
-  return DECISION_ID_PATTERN.test(fields.decision ?? '');
+  return CONTRACT_MARKER_VALUE_PATTERN.test(fields.decision ?? '');
 }
 
 /**
@@ -6010,8 +6022,12 @@ function checkConfirmationLabels(
   const labelName =
     'A confirmation issue carries the configured confirmation label';
   if (options.labels !== undefined && options.labels.length > 0) {
+    const target = confirmationLabel.trim().toLowerCase();
+    const supplied = options.labels.map((label) =>
+      String(label).trim().toLowerCase(),
+    );
     findings.push(
-      options.labels.includes(confirmationLabel)
+      supplied.includes(target)
         ? pass(labelId, labelName, `${confirmationLabel} is present`)
         : fail(
             labelId,
@@ -6288,6 +6304,17 @@ function auditConfirmationShape(
   findings.push(checkConfirmationQuestion(visibleLines));
   findings.push(checkConfirmationForbidden(rawText, markerPrefix));
   findings.push(...checkConfirmationLabels(options, confirmationLabel));
+  findings.push(
+    ...buildTriageFindings(
+      rawText,
+      'confirmation',
+      options.title,
+      false,
+      '',
+      '',
+      markerPrefix,
+    ),
+  );
 
   return {
     shape: 'confirmation',
