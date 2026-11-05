@@ -124,6 +124,12 @@ function applyMutation(text: string, mutation: Mutation): string {
   return text.replace(mutation.from, mutation.to);
 }
 
+function addPullRequestTriggerToFloorCaller(text: string): string {
+  const trigger = '\n  workflow_dispatch:\n';
+  assert.ok(text.includes(trigger), 'floor workflow trigger anchor not found');
+  return text.replace(trigger, '\n  pull_request:\n');
+}
+
 // Builds a scratch root from the real workflow copies. An omitted path is left
 // out of the root entirely, so the rule that reads it reports a missing input.
 function fixtureRoot(
@@ -214,8 +220,21 @@ interface RuleCase {
   // Without a mutation the case checks the root as built, which is how a
   // missing-input case drops inputs through `omit` instead.
   mutation?: Mutation;
+  // Additional workflow copies changed to make a multi-file fixture.
+  extraMutations?: Readonly<Record<string, Mutation>>;
   omit?: readonly string[];
   expected: readonly Expectation[];
+}
+
+function scenarioMutations(
+  scenario: RuleCase,
+): Readonly<Record<string, Mutation>> {
+  return {
+    ...scenario.extraMutations,
+    ...(scenario.mutation === undefined
+      ? {}
+      : { [scenario.path]: scenario.mutation }),
+  };
 }
 
 // Removes the first checkout step of one job and leaves the rest of the copy as it
@@ -749,14 +768,14 @@ const RULE_CASES: readonly RuleCase[] = [
   // RWA002: pull_request concurrency (replaced actions-usage test 1547).
   {
     ruleId: 'RWA002',
-    name: 'a pull_request inventory below six workflows',
+    name: 'a pull_request inventory below five workflows',
     path: '.github/workflows/lint.yml',
     violationPath: '.github/workflows',
     omit: ROOT_WORKFLOWS.filter(
       (path) => path !== '.github/workflows/lint.yml',
     ),
     expected: [
-      { prefix: 'expected >= 6 pull_request-triggered workflows, found' },
+      { prefix: 'expected >= 5 pull_request-triggered workflows, found' },
     ],
   },
   {
@@ -776,11 +795,18 @@ const RULE_CASES: readonly RuleCase[] = [
   },
   {
     ruleId: 'RWA002',
-    name: 'a reusable-workflow caller that declares a sibling job',
+    name: 'a pull_request reusable-workflow caller that declares a sibling job',
     path: '.github/workflows/pnpm-boundary-node22-floor.yml',
     mutation: {
-      from: '\njobs:\n',
-      to: '\njobs:\n  sibling:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo sibling\n',
+      transform: (text: string) => {
+        const withPullRequest = addPullRequestTriggerToFloorCaller(text);
+        const jobs = '\njobs:\n';
+        assert.ok(withPullRequest.includes(jobs), 'jobs anchor not found');
+        return withPullRequest.replace(
+          jobs,
+          `${jobs}  sibling:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo sibling\n`,
+        );
+      },
     },
     expected: [
       {
@@ -793,6 +819,12 @@ const RULE_CASES: readonly RuleCase[] = [
     ruleId: 'RWA002',
     name: 'a reusable-workflow callee that declares no effective cancel-in-progress',
     path: '.github/workflows/pnpm-boundary.yml',
+    extraMutations: {
+      [PNPM_BOUNDARY_FLOOR]: {
+        from: '\n  workflow_dispatch:\n',
+        to: '\n  pull_request:\n',
+      },
+    },
     violationPath: '.github/workflows/pnpm-boundary-node22-floor.yml',
     mutation: {
       from: `cancel-in-progress: \${{ startsWith(github.ref, 'refs/pull/') }}`,
@@ -2487,7 +2519,14 @@ const RULE_CASES: readonly RuleCase[] = [
     ruleId: 'RWA002',
     name: 'a reusable-workflow caller without a jobs mapping',
     path: '.github/workflows/pnpm-boundary-node22-floor.yml',
-    mutation: { from: '\njobs:\n', to: '\njobs_x:\n' },
+    mutation: {
+      transform: (text: string) => {
+        const withPullRequest = addPullRequestTriggerToFloorCaller(text);
+        const jobs = '\njobs:\n';
+        assert.ok(withPullRequest.includes(jobs), 'jobs anchor not found');
+        return withPullRequest.replace(jobs, '\njobs_x:\n');
+      },
+    },
     expected: [{ message: 'jobs: block not found' }],
   },
   {
@@ -4635,6 +4674,36 @@ const RULE_CASES: readonly RuleCase[] = [
   },
   {
     ruleId: 'RWA008',
+    name: 'a shard matrix that drops required Node LTS versions',
+    path: PNPM_BOUNDARY,
+    mutation: {
+      from: `        node-version: \${{ fromJSON(github.repository == 'kurone-kito/idd-skill' && inputs.node-version-file == '.node-version' && '["22.x"]' || github.repository == 'kurone-kito/idd-skill' && inputs.node-version-file != '' && '["file"]' || '["22.x","24.x","26.x"]') }}\n`,
+      to: `        node-version: \${{ fromJSON('["24.x"]') }}\n`,
+    },
+    expected: [
+      {
+        prefix:
+          "pnpm-boundary-group's matrix must use the supported Node version selector",
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA008',
+    name: 'a single-version selector that treats any caller file as the local floor',
+    path: PNPM_BOUNDARY,
+    mutation: {
+      from: `node-version: \${{ fromJSON(github.repository == 'kurone-kito/idd-skill' && inputs.node-version-file == '.node-version'`,
+      to: `node-version: \${{ fromJSON(inputs.node-version-file == '.node-version'`,
+    },
+    expected: [
+      {
+        prefix:
+          "pnpm-boundary-group's matrix must use the supported Node version selector",
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA008',
     name: 'a shard matrix that drops the typecheck shard',
     path: PNPM_BOUNDARY,
     mutation: {
@@ -4643,7 +4712,8 @@ const RULE_CASES: readonly RuleCase[] = [
     },
     expected: [
       {
-        prefix: "pnpm-boundary-group's matrix must be exactly the include list",
+        prefix:
+          "pnpm-boundary-group's matrix must use the supported Node version selector",
       },
     ],
   },
@@ -4657,7 +4727,8 @@ const RULE_CASES: readonly RuleCase[] = [
     },
     expected: [
       {
-        prefix: "pnpm-boundary-group's matrix must be exactly the include list",
+        prefix:
+          "pnpm-boundary-group's matrix must use the supported Node version selector",
       },
     ],
   },
@@ -4671,7 +4742,8 @@ const RULE_CASES: readonly RuleCase[] = [
     },
     expected: [
       {
-        prefix: "pnpm-boundary-group's matrix must be exactly the include list",
+        prefix:
+          "pnpm-boundary-group's matrix must use the supported Node version selector",
       },
     ],
   },
@@ -4886,6 +4958,51 @@ const RULE_CASES: readonly RuleCase[] = [
       },
     ],
   },
+  {
+    ruleId: 'RWA008',
+    name: 'a Node 22 floor workflow that also runs on pull_request',
+    path: PNPM_BOUNDARY_FLOOR,
+    mutation: {
+      from: '  workflow_dispatch:\n',
+      to: '  workflow_dispatch:\n  pull_request:\n',
+    },
+    expected: [
+      {
+        message:
+          'the Node 22 floor workflow must use workflow_dispatch only, so it does not duplicate the pull_request matrix',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA008',
+    name: 'a reusable workflow that changes its Node version default',
+    path: PNPM_BOUNDARY,
+    mutation: {
+      from: '      node-version:\n        default: 24.x\n',
+      to: '      node-version:\n        default: 26.x\n',
+    },
+    expected: [
+      {
+        message:
+          'workflow_call must preserve the existing input names, types, and defaults so downstream callers keep their contract',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA008',
+    name: 'a Node 22 floor caller that stops selecting the repository version file',
+    path: PNPM_BOUNDARY_FLOOR,
+    mutation: {
+      from: '      node-version-file: .node-version\n',
+      to: '',
+    },
+    expected: [
+      {
+        message:
+          "pnpm-boundary-node22-floor must pass node-version-file: .node-version so the local floor lane uses the repository's Node 22 selector",
+      },
+    ],
+  },
 ];
 
 test('RWA004, RWA006, and RWA007 accept the real workflow copies', () => {
@@ -4945,7 +5062,7 @@ test('the workflow audit CLI reports one violation from each rule family by rule
     );
     const scenario = matching[matching.length - 1];
     assert.ok(scenario?.mutation, `no violating fixture for ${ruleId}`);
-    const root = fixtureRoot({ [scenario.path]: scenario.mutation });
+    const root = fixtureRoot(scenarioMutations(scenario));
     withRoot(root, () => {
       const result = runCli(root);
       const reported = scenario.violationPath ?? scenario.path;
@@ -4962,10 +5079,7 @@ test('the workflow audit CLI reports one violation from each rule family by rule
 
 for (const scenario of RULE_CASES) {
   test(`${scenario.ruleId} flags ${scenario.name}`, () => {
-    const root = fixtureRoot(
-      scenario.mutation ? { [scenario.path]: scenario.mutation } : {},
-      scenario.omit ?? [],
-    );
+    const root = fixtureRoot(scenarioMutations(scenario), scenario.omit ?? []);
     withRoot(root, () => {
       const violations = collectRepositoryWorkflowViolations(root);
       for (const expectation of scenario.expected) {
@@ -5043,7 +5157,7 @@ test('a missing advisory-convergence copy is an inspection failure for each rule
           violation.ruleId === 'RWA002' &&
           violation.path === '.github/workflows' &&
           violation.message.startsWith(
-            'expected >= 6 pull_request-triggered workflows',
+            'expected >= 5 pull_request-triggered workflows',
           ),
       ),
       'RWA002 must report the inventory shortfall',
@@ -5530,12 +5644,9 @@ test('the Node 22 floor caller inherits the pnpm run check default and sets no l
   assert.doesNotMatch(text, /lint-command/);
 });
 
-// #4923: pnpm-boundary.yml selects the Node.js version through one of two
-// mutually exclusive actions/setup-node steps. An empty node-version-file
-// keeps node-version (default 24.x); a non-empty one selects the file and
-// passes no node-version. These tests read the parsed workflows, so a later
-// edit cannot break the 24.x fallback or the Node 22 floor's file-based
-// selection without failing here.
+// #4996: the local matrix pins Node 22 through .node-version and selects
+// Node 24/26 from the matrix. The reusable full-run path keeps its generic
+// node-version/node-version-file input behavior for downstream callers.
 function parsedWorkflowMapping(relativePath: string): WorkflowYamlMapping {
   const parsed = parseWorkflowYamlSubset(realText(relativePath));
   if (!parsed.ok) {
@@ -5555,14 +5666,6 @@ function yamlMapping(
   }
   return value;
 }
-
-// #4993: both jobs that run the suite select the Node.js version the same way:
-// the matrix of shards this repository runs, and the full run of every other
-// caller. The aggregate installs nothing.
-const PNPM_BOUNDARY_SUITE_JOBS = [
-  'pnpm-boundary-group',
-  'pnpm-boundary-full',
-] as const;
 
 function pnpmBoundaryJob(jobId: string): WorkflowYamlMapping {
   const workflow = parsedWorkflowMapping(PNPM_BOUNDARY);
@@ -5598,6 +5701,14 @@ test('the reusable pnpm-boundary node-version-file input defaults to empty so no
       .inputs,
     'workflow_call.inputs',
   );
+  assert.deepEqual(Object.keys(inputs).sort(), [
+    'boundary-command',
+    'install-command',
+    'lint-command',
+    'node-version',
+    'node-version-file',
+    'runner',
+  ]);
   const nodeVersionFile = yamlMapping(
     inputs['node-version-file'],
     'inputs.node-version-file',
@@ -5614,49 +5725,89 @@ test('the reusable pnpm-boundary node-version-file input defaults to empty so no
   assert.equal(nodeVersion.required, 'false');
 });
 
-for (const jobId of PNPM_BOUNDARY_SUITE_JOBS) {
-  test(`the reusable pnpm-boundary setup-node steps in ${jobId} are gated by complementary node-version-file conditions`, () => {
-    const steps = pnpmBoundarySetupNodeSteps(jobId);
-    assert.equal(steps.length, 2, JSON.stringify(steps));
-    const operators = steps.map((step) => {
+test('the reusable full-run setup-node steps preserve generic version inputs', () => {
+  const steps = pnpmBoundarySetupNodeSteps('pnpm-boundary-full');
+  assert.equal(steps.length, 2, JSON.stringify(steps));
+  const byOperator = new Map(
+    steps.map((step) => {
       assert.equal(typeof step.if, 'string', JSON.stringify(step));
       const match = NODE_VERSION_FILE_CONDITION.exec(String(step.if));
       assert.ok(match, `unexpected setup-node if: ${String(step.if)}`);
-      return match[1];
-    });
-    // The same operand compared with == and != against '' means exactly one
-    // step runs for any node-version-file value.
-    assert.deepEqual([...operators].sort(), ['!=', '==']);
-  });
+      return [match[1], yamlMapping(step.with, `with of ${String(step.name)}`)];
+    }),
+  );
+  const emptyFilePath = byOperator.get('==');
+  const filePath = byOperator.get('!=');
+  assert.ok(emptyFilePath, 'no setup-node step for an empty node-version-file');
+  assert.ok(filePath, 'no setup-node step for a non-empty node-version-file');
+  assert.equal(
+    emptyFilePath['node-version'],
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
+    "${{ inputs.node-version || '24.x' }}",
+  );
+  assert.equal(Object.hasOwn(emptyFilePath, 'node-version-file'), false);
+  assert.equal(
+    filePath['node-version-file'],
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
+    '${{ inputs.node-version-file }}',
+  );
+  assert.equal(Object.hasOwn(filePath, 'node-version'), false);
+});
 
-  test(`each pnpm-boundary setup-node path in ${jobId} passes only its own version selector`, () => {
-    const byOperator = new Map(
-      pnpmBoundarySetupNodeSteps(jobId).map((step) => [
-        NODE_VERSION_FILE_CONDITION.exec(String(step.if))?.[1],
-        yamlMapping(step.with, `with of ${String(step.name)}`),
-      ]),
-    );
-    const emptyFilePath = byOperator.get('==');
-    const filePath = byOperator.get('!=');
-    assert.ok(
-      emptyFilePath,
-      'no setup-node step for an empty node-version-file',
-    );
-    assert.ok(filePath, 'no setup-node step for a non-empty node-version-file');
-    assert.equal(
-      emptyFilePath['node-version'],
+test('the local shard setup-node steps use .node-version for Node 22 and the matrix for other versions', () => {
+  const steps = pnpmBoundarySetupNodeSteps('pnpm-boundary-group');
+  assert.equal(steps.length, 2, JSON.stringify(steps));
+  const fileStep = steps.find(
+    (step) =>
+      step.if ===
       // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
-      "${{ inputs.node-version || '24.x' }}",
-    );
-    assert.equal(Object.hasOwn(emptyFilePath, 'node-version-file'), false);
-    assert.equal(
-      filePath['node-version-file'],
+      "${{ matrix.node-version == '22.x' || matrix.node-version == 'file' }}",
+  );
+  const matrixStep = steps.find(
+    (step) =>
+      step.if ===
       // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
-      '${{ inputs.node-version-file }}',
-    );
-    assert.equal(Object.hasOwn(filePath, 'node-version'), false);
-  });
-}
+      "${{ matrix.node-version != '22.x' && matrix.node-version != 'file' }}",
+  );
+  assert.ok(fileStep, 'no setup-node step for the Node 22 version file');
+  assert.ok(matrixStep, 'no setup-node step for matrix Node versions');
+  const fileWith = yamlMapping(fileStep.with, 'Node 22 setup-node with');
+  const matrixWith = yamlMapping(matrixStep.with, 'matrix setup-node with');
+  assert.equal(
+    fileWith['node-version-file'],
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
+    "${{ inputs.node-version-file || '.node-version' }}",
+  );
+  assert.equal(Object.hasOwn(fileWith, 'node-version'), false);
+  assert.equal(
+    matrixWith['node-version'],
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
+    '${{ matrix.node-version }}',
+  );
+  assert.equal(Object.hasOwn(matrixWith, 'node-version-file'), false);
+});
+
+test('the local matrix covers Node 22, 24.x, and 26.x while the floor caller stays manual and single-version', () => {
+  const matrix = yamlMapping(
+    yamlMapping(
+      pnpmBoundaryJob('pnpm-boundary-group').strategy,
+      'pnpm-boundary-group.strategy',
+    ).matrix,
+    'pnpm-boundary-group.strategy.matrix',
+  );
+  assert.equal(
+    matrix['node-version'],
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
+    "${{ fromJSON(github.repository == 'kurone-kito/idd-skill' && inputs.node-version-file == '.node-version' && '[\"22.x\"]' || github.repository == 'kurone-kito/idd-skill' && inputs.node-version-file != '' && '[\"file\"]' || '[\"22.x\",\"24.x\",\"26.x\"]') }}",
+  );
+  assert.deepEqual(matrix.shard, ['lint', 'typecheck', 'test', 'distribution']);
+  const floor = parsedWorkflowMapping(
+    '.github/workflows/pnpm-boundary-node22-floor.yml',
+  );
+  assert.deepEqual(Object.keys(yamlMapping(floor.on, 'floor workflow on')), [
+    'workflow_dispatch',
+  ]);
+});
 
 test('the Node 22 floor caller selects .node-version through node-version-file and sets no node-version', () => {
   const workflow = parsedWorkflowMapping(
