@@ -88,6 +88,9 @@
   },
   "localExec": {
     "admission": {
+      "backend": "pueue",
+      "maxConcurrent": 2,
+      "pueueGroup": "idd-skill-validate",
       "testCommand": "pnpm test"
     }
   },

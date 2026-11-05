@@ -33,6 +33,16 @@ interface RuleDefinition {
 
 interface RawPolicyConfig extends Record<string, unknown> {
   githubApi?: { loadControl?: unknown };
+  localExec?: {
+    admission?: {
+      backend?: unknown;
+      enabled?: unknown;
+      maxConcurrent?: unknown;
+      maxWait?: unknown;
+      pueueGroup?: unknown;
+      testCommand?: unknown;
+    };
+  };
   orchestrator?: { maxWorkers?: unknown };
 }
 
@@ -1589,6 +1599,44 @@ const RULES: readonly RuleDefinition[] = [
         fail(
           TEMPLATE_CONFIG,
           'distributed template must omit the local githubApi entry',
+        );
+    },
+  },
+  {
+    id: 'local-exec-pueue-dogfood',
+    paths: [REPO_CONFIG, TEMPLATE_CONFIG, POLICY_SCHEMA],
+    check({ json }) {
+      const repo = json(REPO_CONFIG) as RawPolicyConfig;
+      const errors = validate(repo, json(POLICY_SCHEMA));
+      if (errors.length > 0)
+        fail(REPO_CONFIG, `policy config fails schema: ${errors.join('; ')}`);
+      const admission = repo.localExec?.admission;
+      if (
+        typeof admission !== 'object' ||
+        admission === null ||
+        Array.isArray(admission) ||
+        admission.backend !== 'pueue' ||
+        admission.maxConcurrent !== 2 ||
+        admission.pueueGroup !== 'idd-skill-validate' ||
+        admission.testCommand !== 'pnpm test' ||
+        'enabled' in admission ||
+        'maxWait' in admission
+      )
+        fail(
+          REPO_CONFIG,
+          'repository localExec.admission must pin the Pueue group and cap, retain pnpm test, and inherit enabled/maxWait defaults',
+        );
+      const effective = normalizePolicyConfig(repo).localExec.admission;
+      if (effective.enabled !== true || effective.maxWait !== 'PT2H')
+        fail(
+          REPO_CONFIG,
+          'repository localExec.admission must retain effective enabled=true and maxWait=PT2H',
+        );
+      const template = json(TEMPLATE_CONFIG) as Record<string, unknown>;
+      if ('localExec' in template)
+        fail(
+          TEMPLATE_CONFIG,
+          'distributed template must omit the repository-local localExec entry',
         );
     },
   },
