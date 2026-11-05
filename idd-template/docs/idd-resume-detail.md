@@ -28,6 +28,14 @@ The copies and the recovery sequence are described in
 evidence under the contract in `docs/customization.md`: record the approving
 human, old claim ID, branch, linked PR (if any), and evidence URL.
 
+**Repeat the detached-rebase route on every Resume.** If Step 1 returns
+`already_owned` / `keep` and its fresh
+`evidence.owner_evidence.rebase_identity.passed` is `true`, route to this §FH
+procedure before the ordinary same-claim Step 2 table. This includes resumes
+after the successor already took over the lock. The generic Step 1
+same-claim route dispatches to §FH in this case; it is not permission to
+select ordinary no-PR work. A missing or false proof does not select §FH.
+
 The recommended operator path for collecting that evidence is the
 interactive `idd-force-handoff` helper. It asks for the issue number
 first, checks live open PRs on the active claim branch to decide whether
@@ -131,22 +139,28 @@ these hold:
   conditions of the takeover authorization in `docs/idd-helper-scripts.md`
   (claim-lock section) apply.
 - `W` comes from `git worktree list --porcelain`: exactly one linked
-  worktree for the claimed branch, showing `branch refs/heads/<branch>` and
-  neither `prunable` nor `locked`. If no record names the claimed branch
-  while routing still says `owner_evidence_required` (a worktree left
-  mid-rebase by the dead predecessor lists only `detached`), stop.
-  `git -C W symbolic-ref --quiet --short HEAD` must print the branch (that
-  is the routing check itself), and none of
-  `git -C W rev-parse --git-path rebase-merge`, `rebase-apply`,
-  `MERGE_HEAD` or `BISECT_START` may name an existing path (they live in the
-  worktree's own git directory, not in `W/.git`, which is a file there). A
-  worktree left mid-rebase lets the takeover succeed while routing still
-  returns `owner_evidence_required` (preventive; no observed incident yet).
-  Merge and dirty state do not change routing and are only a safety check:
-  the takeover adopts whatever uncommitted or unpushed work the predecessor
-  left, so run the content-scope audit (§CSA) before any of it is pushed.
-  Otherwise do not run `--takeover`: report to the operator, and retry Step
-  1 after `W` has been cleaned up.
+  worktree for the claimed branch, and neither `prunable` nor `locked`. For
+  an attached worktree, the record must show `branch refs/heads/<branch>`,
+  `git -C W symbolic-ref --quiet --short HEAD` must print the branch, and
+  none of `rebase-merge`, `rebase-apply`, `MERGE_HEAD`, `CHERRY_PICK_HEAD`,
+  `REVERT_HEAD`, `BISECT_START`, or `sequencer` may exist in its Git admin
+  directory. For a detached worktree, use the canonical path reported by
+  `git worktree list --porcelain` and require the live routing result to
+  include `evidence.owner_evidence.rebase_identity.passed: true`. That
+  read-only proof is emitted only for the exact accepted human-gated,
+  issue-only forced handoff when the issue is open, linked-PR lookup
+  succeeded with no linked open PR, the assigned successor pair and nonce
+  match, and the same single linked worktree is being inspected. It requires
+  exactly one valid `rebase-merge` or `rebase-apply` backend, matching
+  `head-name`, a resolvable `orig-head` equal to the local issue-branch tip,
+  no other worktree record may check out the claimed branch, and no merge,
+  cherry-pick, revert, bisect, sequencer, or `git am` state. The proof
+  rejects a locked target record even when all rebase metadata matches.
+  Detached state without that passed proof, or any missing, malformed,
+  contradictory, or unreadable evidence, keeps the stop. Do not infer the
+  proof from a detached record or hand-read metadata as a substitute (#4903).
+  A displaced predecessor's uncommitted changes remain subject to the
+  content-scope audit (§CSA) before any push.
 - `claim-lock --check --worktree W` shows a holder (`holder.claimId`) equal
   to `old_claim_id`. If it already shows this session's claim-id and
   agent-id (a takeover done earlier), skip the takeover and only record the
@@ -184,13 +198,38 @@ applies), through the profile-selected claim-lock command:
    `--acquire` with the same flags, no `--takeover`. Any other holder:
    stop. A displaced predecessor that is somehow still running is
    displaced by definition.
-4. Re-run the routing call and expect `already_owned`. If it still returns
-   `owner_evidence_required` with `occupancy_probe` `unreadable`, §LWR's
-   paragraph on an unrelated worktree record applies.
+4. Re-run the routing call. An attached worktree must return
+   `already_owned`; a verified detached rebase must return `already_owned`
+   with `evidence.owner_evidence.rebase_identity.passed: true`. The detached
+   result authorizes only the bounded rebase continuation below, not normal
+   implementation or push.
 
-The trust basis is the human-gated forced-handoff marker, the nonce winner,
-and the `--check` run immediately before the takeover. `resume-claim-routing`
-and `claim-lock` keep their fail-closed behavior; nothing here changes them.
+Before resolving a conflict, the successor must complete its own B2.0
+supersession check, draft plan, critique, and refined plan. The displaced
+session's plan does not substitute. Revalidate the active claim, winning
+nonce, owner evidence, lock, and generated-token record immediately before
+each mutation. While HEAD remains detached, edit only conflict paths within
+the claimed issue's Candidate files, stage only those paths with
+`git add -- <candidate-conflict-paths>`, and continue the rebase with the
+same profile-selected signing wrapper/tier used to start it, following D1's
+`--continue` form. A commit-only `git commit-ssh` alias does not wrap a rebase;
+use a rebase-capable wrapper or D1's selected unsigned-tier command. Do not
+run bare `git rebase --continue` when primary signing is
+non-interactive-hostile.
+Do not abort, skip, reset, switch branches, or push. If a resolution needs a
+path outside Candidate files, retain the claim and worktree and stop for
+scope reconciliation. Let normal rebase completion attach the worktree to
+the claimed branch; then verify `git branch --show-current` and obtain a
+fresh `already_owned` route before ordinary implementation or push. Any
+ordinary content-scope, validation, review, CI, and merge gate still applies.
+
+If routing still returns `owner_evidence_required` with `occupancy_probe`
+`unreadable`, §LWR's paragraph on an unrelated worktree record applies.
+
+The trust basis is the accepted human-gated forced-handoff marker, the nonce
+winner, the live no-open-PR result, the read-only rebase identity proof, and
+the `--check` run immediately before the takeover. `resume-claim-routing`
+and `claim-lock` remain fail-closed outside this exact recovery path.
 
 **Content-scope audit** — Once the successor's post-handoff routing
 (Step 2 in `idd-resume.instructions.md`) lands it on §W7 or §W8 with
