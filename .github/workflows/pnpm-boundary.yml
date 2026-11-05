@@ -70,10 +70,10 @@ jobs:
       # to repeat them too.
       fail-fast: false
       matrix:
-        # This repository's manual floor workflow selects only Node 22.
-        # Another local file-based call keeps its single-version input
-        # semantics; downstream callers still use the full-run path below.
-        node-version: ${{ fromJSON(github.repository == 'kurone-kito/idd-skill' && inputs.node-version-file == '.node-version' && '["22.x"]' || github.repository == 'kurone-kito/idd-skill' && inputs.node-version-file != '' && '["file"]' || '["22.x","24.x","26.x"]') }}
+        # The direct pull_request workflow runs the supported LTS matrix.
+        # Other same-repository callers keep their node-version or
+        # node-version-file input; the floor caller selects .node-version.
+        node-version: ${{ fromJSON(github.repository == 'kurone-kito/idd-skill' && contains(github.workflow_ref, 'kurone-kito/idd-skill/.github/workflows/pnpm-boundary.yml@') && inputs.node-version-file == '' && '["22.x","24.x","26.x"]' || github.repository == 'kurone-kito/idd-skill' && inputs.node-version-file == '.node-version' && '["22.x"]' || github.repository == 'kurone-kito/idd-skill' && inputs.node-version-file != '' && '["file"]' || format('["{0}"]', inputs.node-version || '24.x')) }}
         shard:
           - lint
           - typecheck
@@ -101,14 +101,14 @@ jobs:
         with:
           run_install: false
       - name: Setup Node.js from version file
-        if: ${{ matrix.node-version == '22.x' || matrix.node-version == 'file' }}
+        if: ${{ matrix.node-version == 'file' || (matrix.node-version == '22.x' && (contains(github.workflow_ref, 'kurone-kito/idd-skill/.github/workflows/pnpm-boundary.yml@') || inputs.node-version-file == '.node-version')) }}
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           check-latest: true
           cache: pnpm
           node-version-file: ${{ inputs.node-version-file || '.node-version' }}
       - name: Setup Node.js
-        if: ${{ matrix.node-version != '22.x' && matrix.node-version != 'file' }}
+        if: ${{ matrix.node-version != 'file' && (matrix.node-version != '22.x' || (!contains(github.workflow_ref, 'kurone-kito/idd-skill/.github/workflows/pnpm-boundary.yml@') && inputs.node-version-file != '.node-version')) }}
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           check-latest: true

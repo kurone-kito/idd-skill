@@ -46,6 +46,9 @@ const ONBOARDING_GUIDE = 'idd-template/docs/onboarding/optional-host-setup.md';
 const EXTERNAL_CHECK_WAIVER = 'src/scripts/external-check-waiver.mts';
 const PNPM_BOUNDARY = '.github/workflows/pnpm-boundary.yml';
 const PNPM_BOUNDARY_FLOOR = '.github/workflows/pnpm-boundary-node22-floor.yml';
+const PNPM_BOUNDARY_NODE_VERSION_MATRIX =
+  // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
+  "${{ fromJSON(github.repository == 'kurone-kito/idd-skill' && contains(github.workflow_ref, 'kurone-kito/idd-skill/.github/workflows/pnpm-boundary.yml@') && inputs.node-version-file == '' && '[\"22.x\",\"24.x\",\"26.x\"]' || github.repository == 'kurone-kito/idd-skill' && inputs.node-version-file == '.node-version' && '[\"22.x\"]' || github.repository == 'kurone-kito/idd-skill' && inputs.node-version-file != '' && '[\"file\"]' || format('[\"{0}\"]', inputs.node-version || '24.x')) }}";
 
 // The root workflow directory is an input of the pull_request concurrency
 // inventory, so a fixture root carries every root workflow file.
@@ -4677,7 +4680,7 @@ const RULE_CASES: readonly RuleCase[] = [
     name: 'a shard matrix that drops required Node LTS versions',
     path: PNPM_BOUNDARY,
     mutation: {
-      from: `        node-version: \${{ fromJSON(github.repository == 'kurone-kito/idd-skill' && inputs.node-version-file == '.node-version' && '["22.x"]' || github.repository == 'kurone-kito/idd-skill' && inputs.node-version-file != '' && '["file"]' || '["22.x","24.x","26.x"]') }}\n`,
+      from: `        node-version: ${PNPM_BOUNDARY_NODE_VERSION_MATRIX}\n`,
       to: `        node-version: \${{ fromJSON('["24.x"]') }}\n`,
     },
     expected: [
@@ -4692,8 +4695,8 @@ const RULE_CASES: readonly RuleCase[] = [
     name: 'a single-version selector that treats any caller file as the local floor',
     path: PNPM_BOUNDARY,
     mutation: {
-      from: `node-version: \${{ fromJSON(github.repository == 'kurone-kito/idd-skill' && inputs.node-version-file == '.node-version'`,
-      to: `node-version: \${{ fromJSON(inputs.node-version-file == '.node-version'`,
+      from: "github.repository == 'kurone-kito/idd-skill' && inputs.node-version-file == '.node-version'",
+      to: "inputs.node-version-file == '.node-version'",
     },
     expected: [
       {
@@ -5000,6 +5003,21 @@ const RULE_CASES: readonly RuleCase[] = [
       {
         message:
           "pnpm-boundary-node22-floor must pass node-version-file: .node-version so the local floor lane uses the repository's Node 22 selector",
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA008',
+    name: 'a same-repository workflow_call matrix that ignores node-version',
+    path: PNPM_BOUNDARY,
+    mutation: {
+      from: "inputs.node-version || '24.x'",
+      to: "inputs.node-version || '22.x'",
+    },
+    expected: [
+      {
+        prefix:
+          "pnpm-boundary-group's matrix must use the supported Node version selector",
       },
     ],
   },
@@ -5754,20 +5772,20 @@ test('the reusable full-run setup-node steps preserve generic version inputs', (
   assert.equal(Object.hasOwn(filePath, 'node-version'), false);
 });
 
-test('the local shard setup-node steps use .node-version for Node 22 and the matrix for other versions', () => {
+test('the local shard setup-node steps use .node-version only for the floor lane', () => {
   const steps = pnpmBoundarySetupNodeSteps('pnpm-boundary-group');
   assert.equal(steps.length, 2, JSON.stringify(steps));
   const fileStep = steps.find(
     (step) =>
       step.if ===
       // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
-      "${{ matrix.node-version == '22.x' || matrix.node-version == 'file' }}",
+      "${{ matrix.node-version == 'file' || (matrix.node-version == '22.x' && (contains(github.workflow_ref, 'kurone-kito/idd-skill/.github/workflows/pnpm-boundary.yml@') || inputs.node-version-file == '.node-version')) }}",
   );
   const matrixStep = steps.find(
     (step) =>
       step.if ===
       // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
-      "${{ matrix.node-version != '22.x' && matrix.node-version != 'file' }}",
+      "${{ matrix.node-version != 'file' && (matrix.node-version != '22.x' || (!contains(github.workflow_ref, 'kurone-kito/idd-skill/.github/workflows/pnpm-boundary.yml@') && inputs.node-version-file != '.node-version')) }}",
   );
   assert.ok(fileStep, 'no setup-node step for the Node 22 version file');
   assert.ok(matrixStep, 'no setup-node step for matrix Node versions');
@@ -5787,7 +5805,7 @@ test('the local shard setup-node steps use .node-version for Node 22 and the mat
   assert.equal(Object.hasOwn(matrixWith, 'node-version-file'), false);
 });
 
-test('the local matrix covers Node 22, 24.x, and 26.x while the floor caller stays manual and single-version', () => {
+test('the direct pull_request matrix covers Node 22, 24.x, and 26.x while reusable callers keep their selected version', () => {
   const matrix = yamlMapping(
     yamlMapping(
       pnpmBoundaryJob('pnpm-boundary-group').strategy,
@@ -5795,10 +5813,14 @@ test('the local matrix covers Node 22, 24.x, and 26.x while the floor caller sta
     ).matrix,
     'pnpm-boundary-group.strategy.matrix',
   );
-  assert.equal(
-    matrix['node-version'],
-    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
-    "${{ fromJSON(github.repository == 'kurone-kito/idd-skill' && inputs.node-version-file == '.node-version' && '[\"22.x\"]' || github.repository == 'kurone-kito/idd-skill' && inputs.node-version-file != '' && '[\"file\"]' || '[\"22.x\",\"24.x\",\"26.x\"]') }}",
+  assert.equal(matrix['node-version'], PNPM_BOUNDARY_NODE_VERSION_MATRIX);
+  assert.match(
+    String(matrix['node-version']),
+    /format\('\["\{0\}"\]', inputs\.node-version \|\| '24\.x'\)/,
+  );
+  assert.match(
+    String(matrix['node-version']),
+    /contains\(github\.workflow_ref, 'kurone-kito\/idd-skill\/\.github\/workflows\/pnpm-boundary\.yml@'\)/,
   );
   assert.deepEqual(matrix.shard, ['lint', 'typecheck', 'test', 'distribution']);
   const floor = parsedWorkflowMapping(

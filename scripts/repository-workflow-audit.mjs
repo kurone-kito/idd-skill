@@ -1690,13 +1690,13 @@ const RWA008 = 'RWA008';
 // that passes its own lint-command gets the full run, so that command runs once.
 const PNPM_BOUNDARY_SHARD_CONDITION =
   "github.repository == 'kurone-kito/idd-skill' && (inputs.lint-command || 'pnpm run check') == 'pnpm run check'";
-// The default pull_request lane spans the supported LTS majors. This
-// repository's manual floor caller narrows to Node 22; another local caller
-// with a version file keeps its single-version behavior. Downstream callers
-// with any version file stay on pnpm-boundary-full.
-const PNPM_BOUNDARY_NODE_VERSION_MATRIX = `\${{ fromJSON(github.repository == 'kurone-kito/idd-skill' && inputs.node-version-file == '.node-version' && '["22.x"]' || github.repository == 'kurone-kito/idd-skill' && inputs.node-version-file != '' && '["file"]' || '["22.x","24.x","26.x"]') }}`;
-const PNPM_BOUNDARY_NODE_VERSION_FILE_IF = `\${{ matrix.node-version == '22.x' || matrix.node-version == 'file' }}`;
-const PNPM_BOUNDARY_NODE_VERSION_IF = `\${{ matrix.node-version != '22.x' && matrix.node-version != 'file' }}`;
+// The direct pull_request workflow spans the supported LTS majors. The
+// caller's workflow_ref distinguishes that matrix from same-repository
+// workflow_call jobs, which must keep their node-version input when no file
+// input is supplied. The manual floor caller selects .node-version.
+const PNPM_BOUNDARY_NODE_VERSION_MATRIX = `\${{ fromJSON(github.repository == 'kurone-kito/idd-skill' && contains(github.workflow_ref, 'kurone-kito/idd-skill/.github/workflows/pnpm-boundary.yml@') && inputs.node-version-file == '' && '["22.x","24.x","26.x"]' || github.repository == 'kurone-kito/idd-skill' && inputs.node-version-file == '.node-version' && '["22.x"]' || github.repository == 'kurone-kito/idd-skill' && inputs.node-version-file != '' && '["file"]' || format('["{0}"]', inputs.node-version || '24.x')) }}`;
+const PNPM_BOUNDARY_NODE_VERSION_FILE_IF = `\${{ matrix.node-version == 'file' || (matrix.node-version == '22.x' && (contains(github.workflow_ref, 'kurone-kito/idd-skill/.github/workflows/pnpm-boundary.yml@') || inputs.node-version-file == '.node-version')) }}`;
+const PNPM_BOUNDARY_NODE_VERSION_IF = `\${{ matrix.node-version != 'file' && (matrix.node-version != '22.x' || (!contains(github.workflow_ref, 'kurone-kito/idd-skill/.github/workflows/pnpm-boundary.yml@') && inputs.node-version-file != '.node-version')) }}`;
 const PNPM_BOUNDARY_NODE_VERSION_FILE = `\${{ inputs.node-version-file || '.node-version' }}`;
 const PNPM_BOUNDARY_NODE_VERSION = `\${{ matrix.node-version }}`;
 const PNPM_BOUNDARY_WORKFLOW_CALL_INPUTS = {
