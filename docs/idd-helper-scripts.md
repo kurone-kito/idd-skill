@@ -2922,6 +2922,145 @@ Behavior:
   through `run-helper`, which forwards no signals. A SIGTERM sent to the
   registered command therefore reaches the admitted command.
 
+<!-- cspell:ignore lslocks -->
+
+### Recovering an existing validation lock (Linux)
+
+Use this operator-run procedure only when investigating a retained lock. An
+`expired` notice means the command did not start. Exit `3` still means a pueue
+task may have started, so it is not evidence that this recovery path is safe
+(preventive; no observed incident yet).
+
+1. Find the lock holder and its file identity:
+
+   ```sh
+   lslocks --notruncate -o PID,COMMAND,HOLDERS,TYPE,MODE,PATH,MAJ:MIN,INODE
+   ```
+
+   Locate the `validate.lock` `FLOCK` row and record its PID, command, all
+   `HOLDERS`, path, device, and inode. The `HOLDERS` column matters because a
+   `flock` can be shared by more than one process. Stop if the column is
+   unavailable or any holder cannot be identified. Set `LOCK_PATH`,
+   `LOCK_DEVICE`, and `LOCK_INODE` to the exact path, `MAJ:MIN`, and `INODE`
+   from the row. If it is Pueue, record that daemon's PID as `DAEMON_PID`.
+   Before changing daemon state, compare the resolved path's device and inode
+   to the observation. The command below passes the three file identity values
+   to Python:
+
+   ```sh
+   python3 - "$LOCK_PATH" "$LOCK_DEVICE" "$LOCK_INODE" <<'PY'
+   import os
+   import sys
+
+   path, device, inode = sys.argv[1:]
+   expected_major, expected_minor = map(int, device.split(":"))
+   st = os.stat(path)
+   actual = (os.major(st.st_dev), os.minor(st.st_dev), st.st_ino)
+   if actual != (expected_major, expected_minor, int(inode)):
+       raise SystemExit("lock path identity changed; stop and coordinate")
+   PY
+   ```
+
+   Stop if the row, holder, path, or identity is missing, differs, or
+   uncertain. A live admitted command, a non-Pueue holder, or any unaccounted
+   holder means wait for or contact its owner; do not stop the process.
+
+2. If the holder is a Pueue daemon, first pin the client to that exact
+   daemon. Use read-only inspection of the recorded daemon's command line,
+   environment, and service definition to establish the config file, profile
+   (if any), and socket/host endpoint it uses. Do not use the recovery
+   shell's default Pueue selection: a client can connect to another daemon
+   (preventive; no observed incident yet).
+   Set the config path and profile below to the values established for
+   `DAEMON_PID`. Run every call with the same environment values used to
+   resolve its socket/host endpoint. If the selected endpoint cannot be tied
+   to `DAEMON_PID`, stop and coordinate with its owner (preventive; no
+   observed incident yet). Use the unfiltered command below to inspect every
+   group and task on that endpoint.
+
+   ```sh
+   PUEUE_CONFIG=/exact/path/to/the-daemon-config
+   PUEUE_PROFILE= # Leave empty if the daemon used no named profile.
+
+   pueue_for_daemon() {
+     if [ -n "$PUEUE_PROFILE" ]; then
+       pueue --config "$PUEUE_CONFIG" --profile "$PUEUE_PROFILE" "$@"
+     else
+       pueue --config "$PUEUE_CONFIG" "$@"
+     fi
+   }
+
+   pueue_for_daemon status --json
+   ```
+
+   A failed or incomplete status read is unknown state, not an empty queue
+   (preventive; no observed incident yet).
+   Check the recorded daemon PID's parent/cgroup and the applicable user or
+   system service manager with read-only status queries to determine who owns
+   it. A failed or inconclusive ownership check is unknown state. Coordinate
+   with every local submitter that can use this shared daemon: stop new
+   submissions, let in-flight submissions resolve, and keep submissions
+   quiesced through the recovery. Immediately before shutdown, re-run
+   `pueue_for_daemon status --json`
+   and `lslocks` with the recorded columns. Require the same daemon, holder
+   list, path, device, and inode, and repeat the path identity comparison
+   above. If the lock or its identity changed, a new holder appeared, or any
+   check is uncertain, stop and do not shut down the daemon. If any queued,
+   stashed, locked, running, or paused task remains, a submitter cannot be
+   accounted for, or task or daemon ownership is unclear, stop and coordinate
+   with the owner (preventive; no observed incident yet). Run
+   `pueue_for_daemon shutdown` only after an explicit operator action for a
+   confirmed idle daemon that is not managed by a service manager. For a
+   managed daemon, use its service owner's approved procedure; if ownership is
+   uncertain, stop. If the shutdown result is uncertain, do not retry it; stop
+   and coordinate with the owner.
+
+3. After a graceful stop, re-run `lslocks` and confirm the recorded
+   `FLOCK` row and holders are gone. Check that the recorded daemon process has
+   exited (for example, with `ps -p "$DAEMON_PID" -o pid=,comm=,lstart=`); if
+   it remains or its identity is unclear, stop and coordinate with the owner.
+   Then open the existing lock path once, without create or truncate flags,
+   and compare the opened descriptor's `fstat` device and inode with the values
+   recorded from `lslocks`. On that same descriptor, try a short-lived
+   nonblocking exclusive `flock`, then unlock and close it:
+
+   ```sh
+   # Substitute the same recorded PATH, MAJ:MIN, and INODE values.
+   python3 - "$LOCK_PATH" "$LOCK_DEVICE" "$LOCK_INODE" <<'PY'
+   import fcntl
+   import os
+   import sys
+
+   path, device, inode = sys.argv[1:]
+   expected_major, expected_minor = map(int, device.split(":"))
+   expected_inode = int(inode)
+   fd = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+   try:
+       st = os.fstat(fd)
+       identity = (os.major(st.st_dev), os.minor(st.st_dev), st.st_ino)
+       if identity != (expected_major, expected_minor, expected_inode):
+           raise RuntimeError("lock file identity changed; stop and coordinate")
+       fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+       print("lock is available")
+       fcntl.flock(fd, fcntl.LOCK_UN)
+   finally:
+       os.close(fd)
+   PY
+   ```
+
+   If the holder remains, the identity differs, the nonblocking lock fails, or
+   any result is uncertain, stop and coordinate with the owner. Do not reopen
+   the path between the descriptor identity check and the `flock` probe. Close
+   the descriptor before retrying one validation through the normal
+   `idd-local-admission` helper (preventive; no observed incident yet).
+
+Never delete, truncate, or replace the lock file. An inherited descriptor can
+keep a lock on the original inode while a replacement path names a different
+file. The inherited-descriptor incident was observed on 2026-11-04 (issue
+`#5036`); its fix prevents new admitted children from retaining that lock, but
+does not stop an already-running daemon. The replacement-path warning is
+preventive; no lock-file replacement incident has been observed.
+
 The pueue backend relies on pueue's default settings. This reliance is an
 open risk for the operator to accept. With
 `client.read_local_logs: false`, a queued-task state read can fail and leave
