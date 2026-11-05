@@ -351,6 +351,39 @@ legitimate relay use-case. Any future change here must preserve the single
 resolver (do not fork `resolveActiveClaim`) and the resume-side
 self-signed-hijack block.
 
+**Detached rebase recovery after forced handoff (kurone-kito/idd-skill#4903).**
+Issue `#4903` records a successor inheriting the exact trusted
+forced-handoff claim while its linked worktree is detached in an interrupted
+rebase. The ordinary owner check correctly refused that state because Git
+could not prove the checked-out branch; however, the same refusal also made
+the recorded handoff unable to continue otherwise-verifiable conflict work.
+Issue `#5045` adds a read-only `rebase_identity` proof for that one recovery
+shape.
+
+The proof is restricted to an accepted human-gated, issue-only handoff with
+the assigned agent, claim, branch, and winning activation nonce; an open
+issue with a successful linked-PR lookup that found no open linked PR; and
+one canonical linked worktree. It requires exactly one rebase backend,
+`head-name` for the claimed issue branch, and a valid `orig-head` equal to
+that local branch ref. It re-reads worktree records, rejects a locked or
+prunable target and any other record that checks out the claimed branch, and
+leaves absent occupancy probes on the pre-existing no-worktree path without
+invoking an owner callback. It also rejects unreadable or contradictory
+metadata and merge, cherry-pick, revert, bisect, sequencer, or `git am` state.
+This proof replaces only the missing worktree-identity proof: the lock,
+generated-token record, nonce, agent, branch, and occupancy checks remain
+independent.
+
+Even a passed proof permits only the successor's B2 plan comment and
+Candidate-file conflict edits, staging those paths, and `git rebase --continue`
+through the same D1 signing tier while detached. Every Resume must route a
+passed rebase proof back to this bounded procedure, including after lock
+takeover. The successor revalidates before each mutation and waits for normal
+rebase completion to attach the claimed branch before ordinary work or push.
+An out-of-scope conflict or uncertain proof remains a hold. This keeps the
+recovery tied to the observed incident instead of treating detached
+worktrees as generally owned.
+
 **Failed linked-PR lookup on the resume side (kurone-kito/idd-skill#3276).**
 Resume routing's own PR-backed-claim detection
 (`fetchOpenLinkedPrReferences`) used the unpaginated, fail-open

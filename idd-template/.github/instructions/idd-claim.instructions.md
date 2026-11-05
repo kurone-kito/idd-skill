@@ -185,8 +185,8 @@ Before posting a claim, also run this **scoped branch pattern check**
 — fast-path collision detection for parallel sessions on the same
 issue (different slug variants).
 
-1. **Local worktree scan**: porcelain, not a name grep — detached has
-   none (#2225):
+1. **Local worktree scan**: porcelain proves occupancy, not ownership;
+   detached has none (#2225):
 
    ```sh
    git worktree list --porcelain -z
