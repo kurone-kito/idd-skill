@@ -174,8 +174,12 @@ also explicit that a hit is corroborating bootstrap evidence only, not
 sole proof of current-session ownership by itself — when several
 sessions share one clone, a different, still-live sibling session's
 own A5 claim can leave an indistinguishable record at that same shared
-path. `{agent-id}` is shared across sessions of the same agent type
-and never proves ownership (`idd-overview-core.instructions.md`), so
+path. At the time of the #3273 finding, `{agent-id}` could be shared
+across sessions of the same agent type and never proved current-session
+ownership on its own (`idd-overview-core.instructions.md`, the
+pre-rule contract). Source issue `kurone-kito/idd-skill#4936` later
+required a session-qualified ID for new claims. Even now, that ID alone
+does not prove ownership, so
 Step 1.5 does **not** gate this route on `record.agentId`. It does
 **not** adopt the recorded pair outright; it stops silently discarding
 the candidate as an ordinary foreign claim and routes a well-formed
@@ -185,6 +189,15 @@ evidence to `idd-resume-stall.instructions.md` before Step 1, so
 this route does not finish ownership by itself. A refusal there
 is not a terminal end of Discover: the candidate stays ineligible
 and Step 1.5 keeps scanning.
+
+The later owner check passes the session's persisted `--agent-id` for a
+session-qualified claim. The `resume-claim-routing` compatibility path
+may omit it only for an active pre-rule claim whose trusted marker has
+the legacy bare family ID; pass the marker ID when it is already
+session-qualified, even on a pre-rule claim. The exact claim-id must still
+match the trusted marker, and each route applies the owner checks available
+for it. Source issue `kurone-kito/idd-skill#5000` records the runtime change
+that fails closed when a session-qualified claim omits its ID.
 
 This finding is upstream of kurone-kito/idd-skill#3273 (Resume Step 1
 not threading an already-known claim-id through to
@@ -211,16 +224,22 @@ entry at `selectDesyncedIndex(session-token, band-size)` (a pure
 `hash(session-token) mod band-size`) instead of always index 0, spreading
 concurrent sessions across _different_ eligible issues up front.
 
-`session-token` must be a per-session-unique value, never the bare,
-session-shared `{agent-id}` alone: `idd-overview-core.instructions.md`
-defines `{agent-id}` as shared across concurrent sessions of the same
-agent type, with a unique session suffix only recommended, not required.
-Sessions that follow that core definition literally and omit the suffix
-all hash to the identical index and converge on the same issue — the
-same converge-and-collide shape as the 3-way race above. This specific
-bare-agent-id collapse is preventive; no observed incident yet —
-kurone-kito/idd-skill#1694 identified it by inspection of the two
-files' definitions, not from a collision that already happened.
+`session-token` must be a per-session-unique value, never merely the
+bare `{agent-id}` from the pre-rule contract. When source issue
+`kurone-kito/idd-skill#1694`
+identified this gap, `idd-overview-core.instructions.md` allowed
+`{agent-id}` to be shared across concurrent sessions of the same agent
+type and only recommended, but did not require, a unique session suffix.
+Source issue `kurone-kito/idd-skill#4936` later required session-qualified
+IDs for new claims. The
+pre-rule bare-ID failure remains a useful historical case: sessions that
+follow that old definition literally and use the bare ID as their token
+hash to the same index and converge on the same issue — the same
+converge-and-collide shape as the 3-way race above. This specific
+bare-agent-id collapse is
+preventive; no observed incident yet — kurone-kito/idd-skill#1694
+identified it by inspection of the two files' definitions, not from a
+collision that already happened.
 `idd-discover.instructions.md` closes the gap by requiring the
 session-suffixed `{agent-id}` or, when the agent-id carries no unique
 component, a session-local fallback token generated once at Discover
