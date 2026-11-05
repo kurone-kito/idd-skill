@@ -126,7 +126,8 @@ start of Step 1, compute `{max-activity-updatedAt}` as the highest
 `updatedAt` server timestamp across the **entire snapshot** (not just
 the items in ReviewItems_snapshot; `none` if empty), and
 `{total-item-count}` as the snapshot's total item count (0 if empty).
-Persist all six values by posting a PR comment with this format (with
+Persist the six snapshot fields and the optional seventh base-ref field
+on `--from-pr` watermarks by posting a PR comment with this format (with
 helpers, prefer the **one-command** post-idd-marker watermark path —
 `--type watermark --from-pr <pr-number> --expected-head-sha {head-SHA}
 --prior-base-ref {base-ref-name} --agent-id <id> --claim-id <id> --apply
@@ -150,13 +151,21 @@ otherwise repeat Step 1. Follow the
 [manual fallback rules](../../docs/idd-helper-scripts.md#manual-e1-watermark-ci-fallback).
 
 ```markdown
-<!-- review-watermark: {agent-id} {claim-id} {head-SHA} {max-activity-updatedAt|none} {total-item-count} {latest-ci-completed-at|none} -->
+<!-- review-watermark: {agent-id} {claim-id} {head-SHA} {max-activity-updatedAt|none} {total-item-count} {latest-ci-completed-at|none} [{base-ref}] -->
 
 _{agent-id}: review triage snapshot — IDD automation marker. Do not edit._
 ```
 
 The HTML comment is the marker; italic note uses PR language
 (English if ambiguous).
+
+Six-field watermarks remain valid and record no base, so the base-ref
+comparison is skipped. The `--from-pr` watermark path appends an
+optional seventh field containing the raw `baseRefName` captured in
+Step 1 and checked when the marker is published; no other watermark
+path writes it. If a recorded base differs from the pull request's
+current base, review-currency returns to E1 and the F4 head-proof gate
+refuses the watermark with a note naming both refs.
 
 **Nothing appended after the note.** As with `claimed-by`/`unclaimed-by`
 in `idd-claim.instructions.md`, a `review-watermark` (and
