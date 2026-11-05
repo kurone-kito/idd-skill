@@ -48,7 +48,7 @@ const PNPM_BOUNDARY = '.github/workflows/pnpm-boundary.yml';
 const PNPM_BOUNDARY_FLOOR = '.github/workflows/pnpm-boundary-node22-floor.yml';
 const PNPM_BOUNDARY_NODE_VERSION_MATRIX =
   // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
-  "${{ fromJSON(github.repository == 'kurone-kito/idd-skill' && contains(github.workflow_ref, 'kurone-kito/idd-skill/.github/workflows/pnpm-boundary.yml@') && inputs.node-version-file == '' && '[\"22.x\",\"24.x\",\"26.x\"]' || github.repository == 'kurone-kito/idd-skill' && inputs.node-version-file == '.node-version' && '[\"22.x\"]' || github.repository == 'kurone-kito/idd-skill' && inputs.node-version-file != '' && '[\"file\"]' || format('[\"{0}\"]', inputs.node-version || '24.x')) }}";
+  "${{ fromJSON(github.repository == 'kurone-kito/idd-skill' && contains(github.workflow_ref, 'kurone-kito/idd-skill/.github/workflows/pnpm-boundary.yml@') && inputs.node-version-file == '' && '[\"22.x\",\"24.x\",\"26.x\"]' || github.repository == 'kurone-kito/idd-skill' && inputs.node-version-file == '.node-version' && '[\"22.x\"]' || github.repository == 'kurone-kito/idd-skill' && inputs.node-version-file != '' && '[\"file\"]' || format('[{0}]', toJSON(inputs.node-version || '24.x'))) }}";
 
 // The root workflow directory is an input of the pull_request concurrency
 // inventory, so a fixture root carries every root workflow file.
@@ -4707,6 +4707,21 @@ const RULE_CASES: readonly RuleCase[] = [
   },
   {
     ruleId: 'RWA008',
+    name: 'a local shard matrix that interpolates node-version into JSON unsafely',
+    path: PNPM_BOUNDARY,
+    mutation: {
+      from: "format('[{0}]', toJSON(inputs.node-version || '24.x'))",
+      to: "format('[\"{0}\"]', inputs.node-version || '24.x')",
+    },
+    expected: [
+      {
+        prefix:
+          "pnpm-boundary-group's matrix must use the supported Node version selector",
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA008',
     name: 'a shard matrix that drops the typecheck shard',
     path: PNPM_BOUNDARY,
     mutation: {
@@ -5816,7 +5831,7 @@ test('the direct pull_request matrix covers Node 22, 24.x, and 26.x while reusab
   assert.equal(matrix['node-version'], PNPM_BOUNDARY_NODE_VERSION_MATRIX);
   assert.match(
     String(matrix['node-version']),
-    /format\('\["\{0\}"\]', inputs\.node-version \|\| '24\.x'\)/,
+    /format\('\[\{0\}\]', toJSON\(inputs\.node-version \|\| '24\.x'\)\)/,
   );
   assert.match(
     String(matrix['node-version']),

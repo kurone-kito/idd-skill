@@ -73,7 +73,7 @@ jobs:
         # The direct pull_request workflow runs the supported LTS matrix.
         # Other same-repository callers keep their node-version or
         # node-version-file input; the floor caller selects .node-version.
-        node-version: ${{ fromJSON(github.repository == 'kurone-kito/idd-skill' && contains(github.workflow_ref, 'kurone-kito/idd-skill/.github/workflows/pnpm-boundary.yml@') && inputs.node-version-file == '' && '["22.x","24.x","26.x"]' || github.repository == 'kurone-kito/idd-skill' && inputs.node-version-file == '.node-version' && '["22.x"]' || github.repository == 'kurone-kito/idd-skill' && inputs.node-version-file != '' && '["file"]' || format('["{0}"]', inputs.node-version || '24.x')) }}
+        node-version: ${{ fromJSON(github.repository == 'kurone-kito/idd-skill' && contains(github.workflow_ref, 'kurone-kito/idd-skill/.github/workflows/pnpm-boundary.yml@') && inputs.node-version-file == '' && '["22.x","24.x","26.x"]' || github.repository == 'kurone-kito/idd-skill' && inputs.node-version-file == '.node-version' && '["22.x"]' || github.repository == 'kurone-kito/idd-skill' && inputs.node-version-file != '' && '["file"]' || format('[{0}]', toJSON(inputs.node-version || '24.x'))) }}
         shard:
           - lint
           - typecheck
