@@ -330,6 +330,7 @@ one clone per worker (`docs/idd-workflow.md`), (c)'s written rules.
 ```sh
 set -euo pipefail
 node scripts/claim-lock.mjs --acquire --worktree <path> --agent-id {agent-id} --claim-id {claim-id}
+# For a session-qualified claim, pass --agent-id; omit it only for a pre-rule claim.
 route=$(node scripts/resume-claim-routing.mjs --issue <n> --claim-id {claim-id} --agent-id {agent-id} --worktree <path>)
 printf '%s\n' "$route" | CLAIM_ID='{claim-id}' node -e 'const a=JSON.parse(require("fs").readFileSync(0,"utf8")).active_claim;process.exit(a===null||(a&&a.claim_id&&a.claim_id!==process.env.CLAIM_ID)?0:1)'
 test "$(git -C <path> symbolic-ref -q HEAD)" = refs/heads/<branch>
@@ -422,18 +423,11 @@ require `present: true` with no `malformed`; otherwise recover per
 `docs/idd-helper-scripts.md` (gated: each step succeeds,
 `reacquired: true` both ends), else stop.
 
-A matching `{claim-id}` re-acquires as a read-only check. A different
-`{claim-id}` is always a collision — run `--fresh-claim-gate` directly
-(not pre-check (c)):
-
-- `already-claimed` naming **your own** verified `{claim-id}`, with a
-  top-level `reason` that is not `released-claim-*`: only the local lock
-  drifted; you still own the GitHub claim. Retry the lock with
-  `--takeover` directly.
-- Every other result — a `released-claim-*` reason, `already-claimed`
-  naming a different id, or `claimable`/`stale-reclaimable`: the claim
-  itself was lost. **STOP** and report; post no new claim from this
-  check. Re-entry is only through a fresh Resume or Discover pass.
+Before takeover, follow Full's identity checks in `idd-claim.instructions.md`'s
+Worktree-local lock section using the profile-selected helper. Then use
+`--fresh-claim-gate` for state only. Take over only on `already-claimed`,
+`winning_claim_id` equal to the verified `{claim-id}`, and top-level reason
+not `released-claim-*`; else stop.
 
 No release step (F4 `git worktree remove` deletes it).
 

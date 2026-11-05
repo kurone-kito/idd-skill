@@ -331,6 +331,7 @@ The gates and removal run under that hold, from the primary checkout (or with
 ```sh
 set -euo pipefail
 node scripts/claim-lock.mjs --acquire --worktree <path> --agent-id {agent-id} --claim-id {claim-id}
+# Pre-rule claim: omit --agent-id.
 route=$(node scripts/resume-claim-routing.mjs --issue <n> --claim-id {claim-id} --agent-id {agent-id} --worktree <path>)
 printf '%s\n' "$route" | CLAIM_ID='{claim-id}' node -e 'const a=JSON.parse(require("fs").readFileSync(0,"utf8")).active_claim;process.exit(a===null||(a&&a.claim_id&&a.claim_id!==process.env.CLAIM_ID)?0:1)'
 test "$(git -C <path> symbolic-ref -q HEAD)" = refs/heads/<branch>
@@ -577,10 +578,10 @@ the trusted marker and persisted session identity. This proves identity
 only, not takeover authority.
 
 Use `--fresh-claim-gate` only for current state. Take over only for
-`already-claimed`, matching `winning_claim_id`, and a top-level reason
-other than `released-claim-*`; otherwise stop/report, post no claim, and
-re-enter through fresh Resume/Discover. If routing is unavailable or
-malformed, apply Claim-state parsing with the same identity checks. F4
+`already-claimed` with `winning_claim_id` equal to the verified
+`{claim-id}` and top-level reason not `released-claim-*`; else stop. If
+routing is unavailable/malformed, use Claim-state parsing with the same
+identity checks. F4
 deletes the lock with its worktree; no release step. See
 `docs/idd-helper-scripts.md`'s Worktree-local claim lock entry for the
 package-manager / ephemeral-npx / user-global forms and mechanical detail.

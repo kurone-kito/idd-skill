@@ -299,6 +299,8 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
 
 ## F4 — Cleanup
 
+For pre-rule claims, omit `--agent-id` in F4 owner checks.
+
 1. **Non-default development branch**: if `{development-branch}` is not
    the repository's default branch, GitHub did not auto-close any issue
    on merge (see `idd-pr-submit.instructions.md` D3.5) — close each
@@ -445,11 +447,9 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
      informational); `incomplete`/`failed` still take the
      cleanup-failure path below.
 
-     If the apply `status` is `held`: the head-proof gate (issue `#4369`)
-     stopped cleanup before its next pass, leaving this head's proof
-     unsettled. Do not route to cleanup-failure or run
-     `--skip-claim-check` or a manual remedy. Read each
-     `holds` entry's `verdict`. For `hold`, revalidate with:
+     If `status` is `held`, head-proof gate (issue `#4369`) left the proof
+     unsettled. Do not route to cleanup-failure, use `--skip-claim-check`,
+     or try a manual remedy. Read each `holds` verdict; for `hold`, revalidate:
 
      ```sh
      node scripts/resume-claim-routing.mjs --issue {issue-number} \
