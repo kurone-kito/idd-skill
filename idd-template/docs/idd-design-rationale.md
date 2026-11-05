@@ -329,8 +329,7 @@ legitimate relay use-case. Any future change here must preserve the single
 resolver (do not fork `resolveActiveClaim`) and the resume-side
 self-signed-hijack block.
 
-### Detached rebase recovery after forced handoff (kurone-kito/idd-skill#4903)
-
+**Detached rebase recovery after forced handoff (kurone-kito/idd-skill#4903).**
 Issue `#4903` records a successor inheriting the exact trusted
 forced-handoff claim while its linked worktree is detached in an interrupted
 rebase. The ordinary owner check correctly refused that state because Git

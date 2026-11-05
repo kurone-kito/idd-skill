@@ -243,23 +243,7 @@ When in scope, run:
    do not `add`, `commit`, or `push` from a worktree not on the claimed
    branch.
 
-**Narrow detached-rebase exception.** Only a successor continuing the exact
-verified, human-gated, issue-only forced handoff described in
-[`idd-resume-detail.md` §FH](../../docs/idd-resume-detail.md#fh--forced-handoff-recovery)
-may use a detached worktree for the interrupted rebase. Before each such
-mutation, the fresh `resume-claim-routing --assert` result must be
-`already_owned` and include `evidence.owner_evidence.rebase_identity.passed:
-true`; re-check the assigned claim/agent pair, winning nonce, worktree-local
-lock, and generated-token record as usual. While HEAD is detached, the only
-permitted mutations are resolving conflict paths that belong to the claimed
-issue's Candidate files, staging those paths, and `git rebase --continue`.
-Do not abort, skip, reset, switch branches, or push through this exception.
-After normal rebase completion, require `git branch --show-current` to equal
-the claimed branch and obtain a fresh `already_owned` route before ordinary
-implementation or push steps. Any missing proof or out-of-scope conflict
-keeps the worktree and claim on hold.
-
-1. Acquire the worktree-local claim lock immediately before the mutation,
+5. Acquire the worktree-local claim lock immediately before the mutation,
    using the profile-selected `claim-lock` helper
    (`docs/idd-helper-scripts.md`) with `{agent-id}`/`{claim-id}`.
    Under `instructions-only`, use `idd-work.instructions.md`'s

@@ -185,8 +185,8 @@ Before posting a claim, also run this **scoped branch pattern check**
 — fast-path collision detection for parallel sessions on the same
 issue (different slug variants).
 
-1. **Local worktree scan**: porcelain, not a name grep — detached has
-   none (#2225):
+1. **Local worktree scan**: porcelain proves occupancy, not ownership;
+   detached has none (#2225):
 
    ```sh
    git worktree list --porcelain -z
@@ -199,13 +199,6 @@ issue (different slug variants).
    or non-prunable with no `rebase-*` dir or `BISECT_START` → absent;
    prunable/other unknown, malformed, unreadable, or target →
    occupied/unreadable (#3154 review).
-
-   This scan reports occupancy, not ownership. A detached rebase worktree
-   qualifies for the narrow successor path only when Resume §FH's live
-   `resume-claim-routing` result includes a passed
-   `evidence.owner_evidence.rebase_identity` proof for the exact assigned
-   issue-only handoff; the scan alone never authorizes a lock takeover or
-   mutation (#4903).
 
 2. **Remote branch scan** (scoped Refs API, not repo-wide):
    Query only the issue-number prefix:
