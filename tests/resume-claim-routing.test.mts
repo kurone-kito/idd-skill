@@ -3323,6 +3323,8 @@ test('--worktree end-to-end: the real compiled CLI proves ownership via an occup
         fixture.policyPath,
         '--claim-id',
         claimId,
+        '--agent-id',
+        agentId,
         '--worktree',
         secondary,
       ],
@@ -5341,6 +5343,20 @@ test('#4936: a competing session of the same family cannot resume the claim even
   assert.equal(competitor.evidence.owner_evidence, undefined);
 });
 
+test('#5000: a session-qualified claim cannot be resumed when --agent-id is omitted', () => {
+  const result = routeAsSession(undefined);
+  assert.equal(result.state, 'non_inheritable');
+  assert.equal(result.action, 'stop');
+  assert.equal(result.reason, 'active-claim-non-stale');
+  assert.equal('agent_id_checked' in result, false);
+  assert.ok(
+    result.warnings.some((warning) =>
+      warning.includes('session agent-id is required'),
+    ),
+  );
+  assert.equal(result.evidence.owner_evidence, undefined);
+});
+
 test('#4936: a session whose agent-id lacks the suffix fails closed', () => {
   const result = routeAsSession('claude');
   assert.equal(result.state, 'non_inheritable');
@@ -5379,23 +5395,6 @@ test('#4936: a legacy claim keeps its route when the caller omits --agent-id', (
   assert.equal(result.state, 'already_owned');
   assert.equal(result.action, 'keep');
   assert.equal('agent_id_checked' in result, false);
-  // Omitting the flag on a session-qualified claim keeps the prior verdict
-  // and output too.
-  const omitted = routeAsSession(undefined);
-  const before = evaluateResumeClaimRouting(
-    {
-      claimId: 'claim-session',
-      nonce: 'nonce-session',
-      now: '2026-05-12T11:00:00Z',
-      events: sessionClaimEvents(),
-    },
-    {
-      isTrustedAuthor: trusted(['maintainer']),
-      inspectLocalWorktree: () => OCCUPIED_SESSION_WORKTREE,
-      isCurrentSessionOwner: () => true,
-    },
-  );
-  assert.deepEqual(omitted, before);
 });
 
 test('#4936: a legacy claim without a claim-id is unaffected by --agent-id', () => {

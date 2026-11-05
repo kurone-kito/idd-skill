@@ -52,6 +52,7 @@ import {
 const CLAIMED_PUSH_FLAG_SPEC = {
   '--issue': { type: 'string' },
   '--claim-id': { type: 'string' },
+  '--agent-id': { type: 'string' },
   '--nonce': { type: 'string' },
   '--apply': { type: 'boolean' },
   '--help': { type: 'boolean', short: 'h' },
@@ -261,6 +262,7 @@ export interface ClaimedPushDeps {
 export interface ClaimedPushInput {
   issue: number;
   claimId: string;
+  agentId: string;
   nonce: string | null;
   apply: boolean;
   /** Directory the worktree is resolved from (`git rev-parse --show-toplevel`). */
@@ -431,6 +433,8 @@ function runAssert(ctx: Context): {
     '--assert',
     '--claim-id',
     input.claimId,
+    '--agent-id',
+    input.agentId,
     ...(input.nonce === null ? [] : ['--nonce', input.nonce]),
     '--worktree',
     worktree ?? '',
@@ -1969,29 +1973,45 @@ export function parseArgs(argv: string[]): {
   help: boolean;
   issue: number | null;
   claimId: string | null;
+  agentId: string | null;
   nonce: string | null;
   apply: boolean;
 } {
   const { values, help } = parseCliArgs(argv, CLAIMED_PUSH_FLAG_SPEC);
   const apply = values.apply === true;
   if (help) {
-    return { help, issue: null, claimId: null, nonce: null, apply };
+    return {
+      help,
+      issue: null,
+      claimId: null,
+      agentId: null,
+      nonce: null,
+      apply,
+    };
   }
   const issue = parseCanonicalIntegerOrThrow(
     requireFlag(values.issue, '--issue'),
     '--issue',
   );
   const claimId = requireFlag(values['claim-id'], '--claim-id');
+  const agentId = requireFlag(values['agent-id'], '--agent-id');
   const nonceValue = values.nonce as string | undefined;
   if (nonceValue !== undefined && nonceValue.trim() === '') {
     throw markCliUsageError(new Error('--nonce must not be empty'));
   }
-  return { help, issue, claimId, nonce: nonceValue?.trim() ?? null, apply };
+  return {
+    help,
+    issue,
+    claimId,
+    agentId,
+    nonce: nonceValue?.trim() ?? null,
+    apply,
+  };
 }
 
 function printUsage(stdout: { write: (text: string) => unknown }): void {
   stdout.write(
-    `Usage:\n  node scripts/claimed-push.mjs --issue <n> --claim-id <id> [--nonce <nonce>] [--apply]\n\n` +
+    `Usage:\n  node scripts/claimed-push.mjs --issue <n> --claim-id <id> --agent-id <id> [--nonce <nonce>] [--apply]\n\n` +
       'Pushes the claimed branch to origin only after the claim, the worktree\n' +
       'location, the scope check, and the configured pre-push gate have passed\n' +
       'in order, then re-checks the claim and the gated commit just before the\n' +
@@ -2024,7 +2044,12 @@ export function runCli(
 ): HelperCliResult {
   const args = parseArgs(argv);
   const stdout = options.stdout ?? process.stdout;
-  if (args.help || args.issue === null || args.claimId === null) {
+  if (
+    args.help ||
+    args.issue === null ||
+    args.claimId === null ||
+    args.agentId === null
+  ) {
     printUsage(stdout);
     return 0;
   }
@@ -2032,6 +2057,7 @@ export function runCli(
     {
       issue: args.issue,
       claimId: args.claimId,
+      agentId: args.agentId,
       nonce: args.nonce,
       apply: args.apply,
       cwd: options.cwd ?? process.cwd(),

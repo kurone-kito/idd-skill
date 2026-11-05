@@ -631,15 +631,21 @@ export function evaluateResumeClaimRouting(
   const agentIdChecked = normalizeToken(input.agentId);
   // #4936: the claim-id alone names the claim lineage, not the session. When
   // the caller passes its persisted session-qualified agent-id and it differs
-  // from the active claim's, a second session that read the public claim-id
-  // and nonce (or a shared worktree record) is not the owner: the owner path
-  // below is skipped and the claim is routed as another session's.
+  // from the active claim's, or omits it for a session-qualified claim, the
+  // owner path below is skipped and the claim is routed as another session's.
+  const sessionAgentIdRequired = Boolean(
+    state.activeClaim &&
+      claimIdChecked === state.activeClaim.claimId &&
+      isSessionQualifiedAgentId(state.activeClaim.agentId) &&
+      !agentIdChecked,
+  );
   const sessionAgentMismatch = Boolean(
     state.activeClaim &&
       agentIdChecked &&
       claimIdChecked === state.activeClaim.claimId &&
       agentIdChecked !== state.activeClaim.agentId,
   );
+  const sessionAgentUnverified = sessionAgentIdRequired || sessionAgentMismatch;
 
   const warnings = [...state.warnings];
   let routeState = 'unclaimed';
@@ -650,6 +656,10 @@ export function evaluateResumeClaimRouting(
   if (sessionAgentMismatch && state.activeClaim) {
     warnings.push(
       `session agent-id ${agentIdChecked} does not match active claim agent-id ${state.activeClaim.agentId}; claim ${claimIdChecked} is routed as another session's claim`,
+    );
+  } else if (sessionAgentIdRequired && state.activeClaim) {
+    warnings.push(
+      `session agent-id is required for active claim ${claimIdChecked}; claim is routed as another session's claim`,
     );
   }
 
@@ -678,7 +688,7 @@ export function evaluateResumeClaimRouting(
   } else if (
     claimIdChecked &&
     claimIdChecked === state.activeClaim.claimId &&
-    !sessionAgentMismatch
+    !sessionAgentUnverified
   ) {
     // Owner-resume path: the checking session already proved ownership of
     // the active claim-id. A later trusted `claimed-by` with a different
