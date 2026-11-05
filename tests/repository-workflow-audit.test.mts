@@ -4745,7 +4745,7 @@ const RULE_CASES: readonly RuleCase[] = [
     },
     expected: [
       {
-        includes: "exact check-group include list",
+        includes: 'exact check-group include list',
       },
     ],
   },
