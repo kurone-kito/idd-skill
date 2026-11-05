@@ -5677,6 +5677,20 @@ test('the Node 22 floor caller inherits the pnpm run check default and sets no l
   assert.doesNotMatch(text, /lint-command/);
 });
 
+test('ci:act uses workflow_dispatch for the Node 22 floor workflow', () => {
+  const manifest = JSON.parse(realText('package.json')) as {
+    scripts?: Record<string, string>;
+  };
+  const command = manifest.scripts?.['ci:act'];
+  assert.ok(command, 'package.json has no ci:act script');
+  assert.ok(
+    command.includes(
+      'case "$WF" in pnpm-boundary-node22-floor.yml) EVENT=workflow_dispatch ;; *) EVENT=pull_request ;; esac; act "$EVENT" -W',
+    ),
+    command,
+  );
+});
+
 // #4996: the local matrix pins Node 22 through .node-version and selects
 // Node 24/26 from the matrix. The reusable full-run path keeps its generic
 // node-version/node-version-file input behavior for downstream callers.
