@@ -2965,11 +2965,31 @@ task may have started, so it is not evidence that this recovery path is safe
    uncertain. A live admitted command, a non-Pueue holder, or any unaccounted
    holder means wait for or contact its owner; do not stop the process.
 
-2. If the holder is a Pueue daemon, inspect every group and task with the
-   unfiltered command:
+2. If the holder is a Pueue daemon, first pin the client to that exact
+   daemon. Use read-only inspection of the recorded daemon's command line,
+   environment, and service definition to establish the config file, profile
+   (if any), and socket/host endpoint it uses. Do not use the recovery
+   shell's default Pueue selection: a client can connect to another daemon.
+   Set the config path and profile below to the values established for
+   `DAEMON_PID`. Run every call with the same environment values used to
+   resolve its socket/host endpoint. If the selected endpoint cannot be tied
+   to `DAEMON_PID`, stop and coordinate with its owner (preventive; no
+   observed incident yet). Use the unfiltered command below to inspect every
+   group and task on that endpoint.
 
    ```sh
-   pueue status --json
+   PUEUE_CONFIG=/exact/path/to/the-daemon-config
+   PUEUE_PROFILE= # Leave empty if the daemon used no named profile.
+
+   pueue_for_daemon() {
+     if [ -n "$PUEUE_PROFILE" ]; then
+       pueue --config "$PUEUE_CONFIG" --profile "$PUEUE_PROFILE" "$@"
+     else
+       pueue --config "$PUEUE_CONFIG" "$@"
+     fi
+   }
+
+   pueue_for_daemon status --json
    ```
 
    A failed or incomplete status read is unknown state, not an empty queue
@@ -2979,20 +2999,20 @@ task may have started, so it is not evidence that this recovery path is safe
    it. A failed or inconclusive ownership check is unknown state. Coordinate
    with every local submitter that can use this shared daemon: stop new
    submissions, let in-flight submissions resolve, and keep submissions
-   quiesced through the recovery. Immediately before shutdown, re-run both
-   `pueue status --json`
+   quiesced through the recovery. Immediately before shutdown, re-run
+   `pueue_for_daemon status --json`
    and `lslocks` with the recorded columns. Require the same daemon, holder
    list, path, device, and inode, and repeat the path identity comparison
    above. If the lock or its identity changed, a new holder appeared, or any
    check is uncertain, stop and do not shut down the daemon. If any queued,
-   stashed, locked, or running task remains, a submitter cannot be accounted
-   for, or task or daemon ownership is unclear, stop and coordinate with the
-   owner. Run
-   `pueue shutdown` only after an explicit operator action for a confirmed idle
-   daemon that is not managed by a service manager. For a managed daemon, use
-   its service owner's approved procedure; if ownership is uncertain, stop. If
-   the shutdown result is uncertain, do not retry it; stop and coordinate with
-   the owner.
+   stashed, locked, running, or paused task remains, a submitter cannot be
+   accounted for, or task or daemon ownership is unclear, stop and coordinate
+   with the owner (preventive; no observed incident yet). Run
+   `pueue_for_daemon shutdown` only after an explicit operator action for a
+   confirmed idle daemon that is not managed by a service manager. For a
+   managed daemon, use its service owner's approved procedure; if ownership is
+   uncertain, stop. If the shutdown result is uncertain, do not retry it; stop
+   and coordinate with the owner.
 
 3. After a graceful stop, re-run `lslocks` and confirm the recorded
    `FLOCK` row and holders are gone. Check that the recorded daemon process has
