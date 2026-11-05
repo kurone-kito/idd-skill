@@ -2969,7 +2969,8 @@ task may have started, so it is not evidence that this recovery path is safe
    daemon. Use read-only inspection of the recorded daemon's command line,
    environment, and service definition to establish the config file, profile
    (if any), and socket/host endpoint it uses. Do not use the recovery
-   shell's default Pueue selection: a client can connect to another daemon.
+   shell's default Pueue selection: a client can connect to another daemon
+   (preventive; no observed incident yet).
    Set the config path and profile below to the values established for
    `DAEMON_PID`. Run every call with the same environment values used to
    resolve its socket/host endpoint. If the selected endpoint cannot be tied
