@@ -418,11 +418,12 @@ require `present: true` with no `malformed`; otherwise recover per
 `docs/idd-helper-scripts.md` (gated: each step succeeds,
 `reacquired: true` both ends), else stop.
 
+A matching `{claim-id}` re-acquires read-only; another always collides.
 Before takeover, follow Full's identity checks in `idd-claim.instructions.md`'s
 Worktree-local lock section using the profile-selected helper. Then use
-`--fresh-claim-gate` for state only. Take over only on `already-claimed`,
-`winning_claim_id` equal to the verified `{claim-id}`, and top-level reason
-not `released-claim-*`; else stop.
+`--fresh-claim-gate` for state only. Retry `--acquire --takeover` only on
+`already-claimed`, `winning_claim_id` equal to the verified `{claim-id}`, and
+top-level reason not `released-claim-*`; else stop.
 
 No release step (F4 `git worktree remove` deletes it).
 

@@ -577,8 +577,9 @@ winner when recorded, linked `--read-tokens` record, and branch to match
 the trusted marker and persisted session identity. This proves identity
 only, not takeover authority.
 
-Use `--fresh-claim-gate` only for current state. Take over only for
-`already-claimed` with `winning_claim_id` equal to the verified
+Use `--fresh-claim-gate` only for current state. Retry
+`--acquire --takeover` only for `already-claimed` with `winning_claim_id`
+equal to the verified
 `{claim-id}` and top-level reason not `released-claim-*`; else stop. If
 routing is unavailable/malformed, use Claim-state parsing with the same
 identity checks. F4
