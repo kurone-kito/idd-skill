@@ -68,7 +68,7 @@ function readPositiveFixture(): Map<string, string> {
   assert.ok(
     typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed),
   );
-  return new Map(
+  const documents = new Map(
     Object.entries(parsed).map(([path, contents]) => {
       assert.equal(
         typeof contents,
@@ -78,6 +78,35 @@ function readPositiveFixture(): Map<string, string> {
       return [path, contents];
     }),
   );
+  // Keep the historical fixture file outside this issue's Candidate files;
+  // overlay the repository-only Pueue opt-in for each in-memory snapshot.
+  const configPath = '.github/idd/config.json';
+  const configContents = documents.get(configPath);
+  assert.ok(configContents);
+  const config = JSON.parse(configContents) as Record<string, unknown>;
+  config.localExec = {
+    admission: {
+      backend: 'pueue',
+      maxConcurrent: 2,
+      pueueGroup: 'idd-skill-validate',
+      testCommand: 'pnpm test',
+    },
+  };
+  documents.set(configPath, `${JSON.stringify(config, null, 2)}\n`);
+  const schemaPath = 'schemas/policy.schema.json';
+  const fixtureSchemaContents = documents.get(schemaPath);
+  assert.ok(fixtureSchemaContents);
+  const fixtureSchema = JSON.parse(fixtureSchemaContents) as {
+    properties?: Record<string, unknown>;
+  };
+  const currentSchema = JSON.parse(
+    readFileSync(join(REPOSITORY_ROOT, schemaPath), 'utf8'),
+  ) as { properties?: Record<string, unknown> };
+  assert.ok(fixtureSchema.properties);
+  assert.ok(currentSchema.properties?.localExec);
+  fixtureSchema.properties.localExec = currentSchema.properties.localExec;
+  documents.set(schemaPath, `${JSON.stringify(fixtureSchema, null, 2)}\n`);
+  return documents;
 }
 
 function materializeDocuments(
@@ -693,6 +722,16 @@ function makeRuleViolation(
           loadControl.maxConcurrent = 3;
         },
       );
+    case 'local-exec-pueue-dogfood':
+      return updateFixtureJson(
+        documents,
+        '.github/idd/config.json',
+        (value) => {
+          const localExec = value.localExec as Record<string, unknown>;
+          const admission = localExec.admission as Record<string, unknown>;
+          admission.backend = 'flock';
+        },
+      );
     case 'orchestrator-worker-cap-dogfood':
       return updateFixtureJson(
         documents,
@@ -976,6 +1015,59 @@ test('load-control dogfood check ignores JSON property order', () => {
     collectRepositoryPolicyViolationsFromDocuments(documents),
     [],
   );
+});
+
+test('local-exec Pueue dogfood pins repository settings and inherited defaults', () => {
+  const changes: Array<[string, (admission: Record<string, unknown>) => void]> =
+    [
+      ['backend', (admission) => (admission.backend = 'flock')],
+      ['maxConcurrent', (admission) => (admission.maxConcurrent = 1)],
+      ['pueueGroup', (admission) => (admission.pueueGroup = 'idd-validate')],
+      ['testCommand', (admission) => (admission.testCommand = 'npm test')],
+      ['enabled', (admission) => (admission.enabled = true)],
+      ['maxWait', (admission) => (admission.maxWait = 'PT2H')],
+    ];
+  for (const [field, change] of changes) {
+    const documents = readPositiveFixture();
+    const mutation = updateFixtureJson(
+      documents,
+      '.github/idd/config.json',
+      (value) => {
+        const localExec = value.localExec as Record<string, unknown>;
+        const admission = localExec.admission as Record<string, unknown>;
+        change(admission);
+      },
+    );
+    documents.set(mutation.path, mutation.contents);
+    const violations = collectRepositoryPolicyViolationsFromDocuments(
+      documents,
+    ).filter((violation) => violation.ruleId === 'local-exec-pueue-dogfood');
+    assert.equal(violations.length, 1, `${field} drift must be rejected`);
+  }
+});
+
+test('local-exec Pueue dogfood rejects a template-local admission override', () => {
+  const documents = readPositiveFixture();
+  const mutation = updateFixtureJson(
+    documents,
+    'idd-template/.github/idd/config.json',
+    (value) => {
+      value.localExec = {
+        admission: {
+          backend: 'pueue',
+          maxConcurrent: 2,
+          pueueGroup: 'idd-skill-validate',
+          testCommand: 'pnpm test',
+        },
+      };
+    },
+  );
+  documents.set(mutation.path, mutation.contents);
+  const violations = collectRepositoryPolicyViolationsFromDocuments(
+    documents,
+  ).filter((violation) => violation.ruleId === 'local-exec-pueue-dogfood');
+  assert.equal(violations.length, 1);
+  assert.equal(violations[0].path, 'idd-template/.github/idd/config.json');
 });
 
 test('orchestrator dogfood rejects a local entry in the distributed template', () => {
