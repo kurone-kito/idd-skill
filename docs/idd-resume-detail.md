@@ -1366,7 +1366,8 @@ step 1. This sequence does not repeat them.
    contested, not yours. Stop, as the failure rules below require.
 8. After the settle delay (`claim.verifySettleDelay`, default `PT5S`), assert:
    `node scripts/resume-claim-routing.mjs --issue <N> --assert --claim-id <id>
-   --nonce <nonce> --worktree <linked>`. Only `already_owned` with action
+   --agent-id <agent-id> --nonce <nonce>
+   --worktree <linked>`. Only `already_owned` with action
    `keep` continues. Any other result stops the sequence. Do not assert before
    the delay: the nonce and the claim comments are eventually consistent, so an
    early assert can report a false failure while the markers are still
