@@ -99,26 +99,12 @@ export function claimCheckSpawnOptions() {
  * classify the result (see `classifyClaimAssertResult`).
  */
 function assertClaim(request, options) {
-  const script = join(
-    resolveBundleRoot(import.meta.dirname),
-    'scripts/resume-claim-routing.mjs',
-  );
-  const argv = [
-    script,
-    '--issue',
-    String(request.issueNumber),
-    '--assert',
-    '--claim-id',
-    request.claimId,
-    '--nonce',
-    request.nonce,
-    '--worktree',
-    request.worktree,
-    '--owner',
+  const argv = claimAssertArgv(
+    request,
     options.owner,
-    '--repo',
     options.repo,
-  ];
+    resolveBundleRoot(import.meta.dirname),
+  );
   let stdout = '';
   let exited = 0;
   try {
@@ -134,6 +120,27 @@ function assertClaim(request, options) {
     request.claimId,
     request.agentId,
   );
+}
+/** Build the argv for the session-qualified claim assertion. */
+export function claimAssertArgv(request, owner, repo, root) {
+  return [
+    join(root, 'scripts/resume-claim-routing.mjs'),
+    '--issue',
+    String(request.issueNumber),
+    '--assert',
+    '--claim-id',
+    request.claimId,
+    '--nonce',
+    request.nonce,
+    '--agent-id',
+    request.agentId,
+    '--worktree',
+    request.worktree,
+    '--owner',
+    owner,
+    '--repo',
+    repo,
+  ];
 }
 /**
  * The `state` and `action` values `resume-claim-routing` prints (its routing

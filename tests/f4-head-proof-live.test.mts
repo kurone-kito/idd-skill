@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 
 import {
+  claimAssertArgv,
   claimCheckSpawnOptions,
   classifyClaimAssertResult,
   classifyLocalRefReads,
@@ -21,10 +22,12 @@ import {
 // them are thin; what they conclude from their output is tested here.
 
 const CLAIM = '95ad0071-ebaa-4155-91ac-ceeae7897bf8';
-const AGENT = 'codex-f4-head-proof';
+const AGENT = 'codex-23c12b20';
 const BRANCH = 'issue/4368-feat-post-idd-marker-add-f4-head-proof';
 const TIP = 'a'.repeat(40);
 const HANDOFF_TIMESTAMP = '2026-10-16T03:00:00Z';
+const ISSUE = 4999;
+const NONCE = '7f961b73970cefb71d1f930e03fecbb7';
 const APPLIED_HANDOFF = {
   old_agent_id: 'agent-old',
   old_claim_id: 'claim-old',
@@ -54,6 +57,61 @@ test('classifyClaimAssertResult: exit 0 with an owned keep verdict for this clai
     branch: BRANCH,
     forcedHandoff: null,
   });
+});
+
+test('claimAssertArgv passes this session identity to resume-claim-routing', () => {
+  assert.deepEqual(
+    claimAssertArgv(
+      {
+        issueNumber: ISSUE,
+        claimId: CLAIM,
+        agentId: AGENT,
+        nonce: NONCE,
+        worktree: '/work/wt',
+      },
+      'owner',
+      'repo',
+      '/root',
+    ),
+    [
+      '/root/scripts/resume-claim-routing.mjs',
+      '--issue',
+      String(ISSUE),
+      '--assert',
+      '--claim-id',
+      CLAIM,
+      '--nonce',
+      NONCE,
+      '--agent-id',
+      AGENT,
+      '--worktree',
+      '/work/wt',
+      '--owner',
+      'owner',
+      '--repo',
+      'repo',
+    ],
+  );
+});
+
+test('classifyClaimAssertResult treats the same claim ID under another agent as not-owned', () => {
+  assert.deepEqual(
+    classifyClaimAssertResult(
+      1,
+      routing({
+        state: 'non_inheritable',
+        action: 'stop',
+        active_claim: {
+          agent_id: 'codex-9f31c0d2',
+          claim_id: CLAIM,
+          branch: BRANCH,
+        },
+      }),
+      CLAIM,
+      AGENT,
+    ),
+    { status: 'not-owned' },
+  );
 });
 
 test('classifyClaimAssertResult carries only the accepted handoff tied to the active successor', () => {
@@ -116,7 +174,7 @@ test('classifyClaimAssertResult refuses mismatched or malformed handoff evidence
       0,
       routing({
         active_claim: {
-          agent_id: 'another-agent',
+          agent_id: 'codex-9f31c0d2',
           claim_id: CLAIM,
           branch: BRANCH,
         },
