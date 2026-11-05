@@ -4737,6 +4737,20 @@ const RULE_CASES: readonly RuleCase[] = [
   },
   {
     ruleId: 'RWA008',
+    name: 'a shard matrix entry with an unsupported key',
+    path: PNPM_BOUNDARY,
+    mutation: {
+      from: '          - shard: lint\n            check-groups: lint\n',
+      to: '          - shard: lint\n            check-groups: lint\n            unsupported: true\n',
+    },
+    expected: [
+      {
+        prefix: "pnpm-boundary-group's matrix must be exactly the include list",
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA008',
     name: 'a distribution shard that no longer runs the audit group',
     path: PNPM_BOUNDARY,
     mutation: {
@@ -4774,8 +4788,8 @@ const RULE_CASES: readonly RuleCase[] = [
         replaceInJob(
           text,
           'pnpm-boundary-group',
-          '    timeout-minutes: 20\n',
-          '    timeout-minutes: 20\n    concurrency:\n      group: pnpm-boundary-shard\n      cancel-in-progress: true\n',
+          '    strategy:\n',
+          '    concurrency:\n      group: pnpm-boundary-shard\n      cancel-in-progress: true\n    strategy:\n',
         ),
     },
     expected: [

@@ -2110,6 +2110,8 @@ function checkFinalAssert(state) {
       '--assert',
       '--claim-id',
       identity.claimId,
+      '--agent-id',
+      identity.agentId,
       '--nonce',
       identity.nonce,
       '--worktree',
