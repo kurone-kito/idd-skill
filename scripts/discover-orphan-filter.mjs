@@ -465,15 +465,17 @@ export function classifyIssue(issue, options) {
   // but compared trimmed and case-insensitively. When its name collides with
   // another configured label, the two cannot be told apart, so an issue
   // carrying it is filed with the collision value as its details.
-  const confirmationLabel = buildConfirmationLabelMatcher({
-    confirmationLabelName: options.confirmationLabelName,
-    authoringLabelName,
-    authoringOnlyLabelName,
-    needsDecisionLabelName,
-    blockedByHumanLabelName,
-    roadmapLabelName: options.roadmapLabelName,
-    readyLabelName: options.readyLabelName,
-  });
+  const confirmationLabel =
+    options.confirmationLabelMatcher ??
+    buildConfirmationLabelMatcher({
+      confirmationLabelName: options.confirmationLabelName,
+      authoringLabelName,
+      authoringOnlyLabelName,
+      needsDecisionLabelName,
+      blockedByHumanLabelName,
+      roadmapLabelName: options.roadmapLabelName,
+      readyLabelName: options.readyLabelName,
+    });
   const blockedLabel =
     confirmationLabel.collision &&
     [...labels].some((label) => confirmationLabel.matches(label))
@@ -959,6 +961,23 @@ export async function filterOrphanIssues(issues, options = {}) {
     options.trustedMarkerLogins ?? [],
     options.isTrustedCollaborator ?? (() => false),
   );
+  // #5014: these policy names are constant for the whole filtering pass, so
+  // normalize them and derive the confirmation-label collision matcher once.
+  const confirmationLabelMatcher = buildConfirmationLabelMatcher({
+    confirmationLabelName: options.confirmationLabelName,
+    authoringLabelName: normalizeAuthoringLabelName(options.authoringLabelName),
+    authoringOnlyLabelName: normalizeAuthoringOnlyLabelName(
+      options.authoringOnlyLabelName,
+    ),
+    needsDecisionLabelName: normalizeNeedsDecisionLabelName(
+      options.needsDecisionLabelName,
+    ),
+    blockedByHumanLabelName: normalizeBlockedByHumanLabelName(
+      options.blockedByHumanLabelName,
+    ),
+    roadmapLabelName: options.roadmapLabelName,
+    readyLabelName: options.readyLabelName,
+  });
   for (const issue of issues) {
     if (excludedIssueNumbers.has(issue.number)) {
       filtered.excluded_roadmap_leaf.push({
@@ -982,6 +1001,7 @@ export async function filterOrphanIssues(issues, options = {}) {
       roadmapLabelName: options.roadmapLabelName,
       confirmationLabelName: options.confirmationLabelName,
       readyLabelName: options.readyLabelName,
+      confirmationLabelMatcher,
       providerOutageDeclarationTarget: options.providerOutageDeclarationTarget,
       authoringJournalTarget: options.authoringJournalTarget,
       openIssueDetailsByNumber,
