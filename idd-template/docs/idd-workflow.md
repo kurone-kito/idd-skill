@@ -2257,8 +2257,10 @@ contract for continuation records.
    post-rule claim is own only when its `agentId` equals this session's
    persisted session-suffixed agent-id and its `agentId` and `claimId` both
    match the trusted `claimed-by` marker for the same issue. For an active
-   pre-rule claim, the compatibility route may omit `--agent-id`, but still
-   requires this session's exact recorded claim-id and matching trusted marker.
+   pre-rule claim whose trusted marker has a legacy bare family ID, the
+   compatibility route may omit `--agent-id`; if the marker is already
+   session-qualified, pass its recorded ID. In either case, this session's
+   exact recorded claim-id must match the trusted marker.
    Apply the lock, branch, and occupancy checks where a worktree exists; a
    worktree-less claim is not rejected for lacking worktree evidence. The
    agent-id alone never proves
