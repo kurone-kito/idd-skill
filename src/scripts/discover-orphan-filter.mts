@@ -32,6 +32,7 @@ import {
 import {
   buildConfirmationLabelMatcher,
   CONFIRMATION_LABEL_COLLISION_REASON,
+  type ConfirmationLabelMatcher,
   extractBlockedByIssueNumbers,
   extractDeferSourceRefsIssueNumbers,
   extractDependencyIssueNumbers,
@@ -306,6 +307,8 @@ interface ClassifyIssueOptions {
   /** Configured `approvalSignals.readyLabelName`, read only for the
    * confirmation-label collision check (issue #4960). */
   readyLabelName?: unknown;
+  /** Prebuilt per-run matcher; omitted for direct `classifyIssue` callers. */
+  confirmationLabelMatcher?: ConfirmationLabelMatcher;
   /**
    * The configured `providerOutage.declarationTarget` issue number
    * (#2800), or `null`/absent when unconfigured. That issue is a
@@ -831,15 +834,17 @@ export function classifyIssue(
   // but compared trimmed and case-insensitively. When its name collides with
   // another configured label, the two cannot be told apart, so an issue
   // carrying it is filed with the collision value as its details.
-  const confirmationLabel = buildConfirmationLabelMatcher({
-    confirmationLabelName: options.confirmationLabelName,
-    authoringLabelName,
-    authoringOnlyLabelName,
-    needsDecisionLabelName,
-    blockedByHumanLabelName,
-    roadmapLabelName: options.roadmapLabelName,
-    readyLabelName: options.readyLabelName,
-  });
+  const confirmationLabel =
+    options.confirmationLabelMatcher ??
+    buildConfirmationLabelMatcher({
+      confirmationLabelName: options.confirmationLabelName,
+      authoringLabelName,
+      authoringOnlyLabelName,
+      needsDecisionLabelName,
+      blockedByHumanLabelName,
+      roadmapLabelName: options.roadmapLabelName,
+      readyLabelName: options.readyLabelName,
+    });
   const blockedLabel =
     confirmationLabel.collision &&
     [...labels].some((label) => confirmationLabel.matches(label))
@@ -1430,6 +1435,23 @@ export async function filterOrphanIssues(
     options.trustedMarkerLogins ?? [],
     options.isTrustedCollaborator ?? (() => false),
   );
+  // #5014: these policy names are constant for the whole filtering pass, so
+  // normalize them and derive the confirmation-label collision matcher once.
+  const confirmationLabelMatcher = buildConfirmationLabelMatcher({
+    confirmationLabelName: options.confirmationLabelName,
+    authoringLabelName: normalizeAuthoringLabelName(options.authoringLabelName),
+    authoringOnlyLabelName: normalizeAuthoringOnlyLabelName(
+      options.authoringOnlyLabelName,
+    ),
+    needsDecisionLabelName: normalizeNeedsDecisionLabelName(
+      options.needsDecisionLabelName,
+    ),
+    blockedByHumanLabelName: normalizeBlockedByHumanLabelName(
+      options.blockedByHumanLabelName,
+    ),
+    roadmapLabelName: options.roadmapLabelName,
+    readyLabelName: options.readyLabelName,
+  });
 
   for (const issue of issues) {
     if (excludedIssueNumbers.has(issue.number)) {
@@ -1454,6 +1476,7 @@ export async function filterOrphanIssues(
       roadmapLabelName: options.roadmapLabelName,
       confirmationLabelName: options.confirmationLabelName,
       readyLabelName: options.readyLabelName,
+      confirmationLabelMatcher,
       providerOutageDeclarationTarget: options.providerOutageDeclarationTarget,
       authoringJournalTarget: options.authoringJournalTarget,
       openIssueDetailsByNumber,
