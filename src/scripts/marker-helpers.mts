@@ -887,6 +887,7 @@ export interface ParsedReviewWatermark {
   maxActivityUpdatedAt: string;
   totalItemCount: number;
   latestCiCompletedAt: string;
+  baseRef: string | null;
   createdAt: string;
 }
 
@@ -1009,10 +1010,10 @@ const OPERATIONAL_MARKER_ENTRIES: OperationalMarker[] = [
   {
     label: '<!-- review-watermark:',
     pattern:
-      /^<!--\s*review-watermark:\s+\S+\s+\S+\s+\S+\s+\S+\s+\d+\s+\S+\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i,
+      /^<!--\s*review-watermark:\s+\S+\s+\S+\s+\S+\s+\S+\s+\d+\s+\S+(?:\s+\S+)?\s*-->(?:\s*|\s*\n\s*_[^\n]*\bIDD\b[^\n]*_\s*)$/i,
     startPattern: /^<!--\s*review-watermark:/i,
     malformedPrefixPattern:
-      /^<!--\s*review-watermark:\s+\S+\s+\S+\s+\S+\s+\S+\s+\d+\s+\S+\s*-->/i,
+      /^<!--\s*review-watermark:\s+\S+\s+\S+\s+\S+\s+\S+\s+\d+\s+\S+(?:\s+\S+)?\s*-->/i,
   },
   {
     label: '<!-- review-baseline:',
@@ -3606,6 +3607,7 @@ export function renderReviewWatermarkMarker(payload: {
   maxActivityAt?: unknown;
   totalItemCount?: unknown;
   ciCompletedAt?: unknown;
+  baseRef?: unknown;
 }): string {
   const agentId = normalizeNonWhitespaceToken(payload?.agentId);
   const claimId = normalizeNonWhitespaceToken(payload?.claimId);
@@ -3613,6 +3615,12 @@ export function renderReviewWatermarkMarker(payload: {
   const maxActivityAt = normalizeMarkerIsoOrNone(payload?.maxActivityAt);
   const totalItemCount = normalizeMarkerCount(payload?.totalItemCount);
   const ciCompletedAt = normalizeMarkerIsoOrNone(payload?.ciCompletedAt);
+  const baseRef = payload?.baseRef;
+  const baseRefValid =
+    baseRef === undefined ||
+    (typeof baseRef === 'string' &&
+      baseRef.length > 0 &&
+      !/[\s<>]/u.test(baseRef));
   const headShaValid = /^[0-9a-f]{40}$/.test(headSha);
   if (
     !agentId ||
@@ -3620,7 +3628,8 @@ export function renderReviewWatermarkMarker(payload: {
     !headShaValid ||
     maxActivityAt === null ||
     totalItemCount === null ||
-    ciCompletedAt === null
+    ciCompletedAt === null ||
+    !baseRefValid
   ) {
     throw new Error(
       'invalid review-watermark marker payload' +
@@ -3643,11 +3652,13 @@ export function renderReviewWatermarkMarker(payload: {
             raw: payload?.ciCompletedAt,
             failed: ciCompletedAt === null,
           },
+          { name: 'baseRef', raw: baseRef, failed: !baseRefValid },
         ]),
     );
   }
+  const baseRefField = baseRef === undefined ? '' : ` ${baseRef as string}`;
   return [
-    `<!-- review-watermark: ${agentId} ${claimId} ${headSha} ${maxActivityAt} ${totalItemCount} ${ciCompletedAt} -->`,
+    `<!-- review-watermark: ${agentId} ${claimId} ${headSha} ${maxActivityAt} ${totalItemCount} ${ciCompletedAt}${baseRefField} -->`,
     '',
     `_${agentId}: review triage snapshot — IDD automation marker. Do not edit._`,
   ].join('\n');
@@ -4023,7 +4034,7 @@ export function parseReviewWatermarkComment(
     .trimEnd()
     .match(
       new RegExp(
-        `^<!--\\s*review-watermark:\\s+(\\S+)\\s+(\\S+)\\s+([0-9a-f]{40})\\s+(\\S+)\\s+(\\d+)\\s+(\\S+)\\s*-->${OPTIONAL_IDD_VISIBLE_NOTE_PATTERN}$`,
+        `^<!--\\s*review-watermark:\\s+(\\S+)\\s+(\\S+)\\s+([0-9a-f]{40})\\s+(\\S+)\\s+(\\d+)\\s+(\\S+)(?:\\s+(\\S+))?\\s*-->${OPTIONAL_IDD_VISIBLE_NOTE_PATTERN}$`,
         'i',
       ),
     );
@@ -4033,6 +4044,10 @@ export function parseReviewWatermarkComment(
 
   const maxActivityUpdatedAt = match[4];
   const latestCiCompletedAt = match[6];
+  const baseRef = match[7] ?? null;
+  if (baseRef !== null && /[<>]/u.test(baseRef)) {
+    return null;
+  }
   if (
     maxActivityUpdatedAt !== 'none' &&
     !isValidIsoTimestamp(maxActivityUpdatedAt)
@@ -4066,6 +4081,7 @@ export function parseReviewWatermarkComment(
     maxActivityUpdatedAt,
     totalItemCount,
     latestCiCompletedAt,
+    baseRef,
     createdAt: isValidIsoTimestamp(createdAt) ? createdAt : 'none',
   };
 }

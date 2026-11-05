@@ -6,11 +6,12 @@ name: Pnpm boundary guard
 # the same suite), with installed dependencies; the bare-node subset
 # intentionally also runs in lint.yml.
 #
-# Rerun scope (#4993): in this repository the suite runs as four matrix
-# shards of pnpm-boundary-group, so "Re-run failed jobs" repeats only the
-# failed shard and the small pnpm-boundary aggregate. Every other caller,
-# and any caller that passes its own lint-command, gets one full run in
-# pnpm-boundary-full instead. The two job-level if: expressions are exact
+# Rerun scope (#4993): this repository's pull_request run covers the four
+# check groups on Node 22, 24.x, and 26.x. "Re-run failed jobs" repeats only
+# the failed version/group lane and the small pnpm-boundary aggregate. The
+# manual Node 22 floor caller selects only the Node 22 column. Every other
+# caller, and any caller that passes its own lint-command, gets one full run
+# in pnpm-boundary-full instead. The two job-level if: expressions are exact
 # negations; if the repository check ever stops matching, the full suite
 # runs once and the aggregate still gates it. In both modes the required
 # check is the pnpm-boundary job.
@@ -56,22 +57,31 @@ concurrency:
   cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}
 jobs:
   pnpm-boundary-group:
-    name: pnpm-boundary-group (${{ matrix.shard }})
+    name: pnpm-boundary-group (Node ${{ matrix.node-version }}, ${{ matrix.shard }})
     # The github context belongs to the caller, so this holds for this
     # repository's own pull_request lane and its Node 22 floor caller.
     if: ${{ github.repository == 'kurone-kito/idd-skill' && (inputs.lint-command || 'pnpm run check') == 'pnpm run check' }}
     # Differs from the input default: own lanes must avoid slim's 15m cap.
     runs-on: ${{ inputs.runner || 'ubuntu-latest' }}
     # Each shard keeps the full suite's bound; see pnpm-boundary-full.
-    timeout-minutes: 20
+    timeout-minutes: 30
     strategy:
       # One failed shard must not cancel the others, or a rerun would have
       # to repeat them too.
       fail-fast: false
       matrix:
-        # check-groups partitions the check-project groups: each one runs
-        # in exactly one shard. pnpm passes a literal `--` to the script,
-        # so the group ids follow the script name without one.
+        # The direct pull_request workflow runs the supported LTS matrix.
+        # Other same-repository callers keep their node-version or
+        # node-version-file input; the floor caller selects .node-version.
+        node-version: ${{ fromJSON(github.repository == 'kurone-kito/idd-skill' && contains(github.workflow_ref, 'kurone-kito/idd-skill/.github/workflows/pnpm-boundary.yml@') && inputs.node-version-file == '' && '["22.x","24.x","26.x"]' || github.repository == 'kurone-kito/idd-skill' && inputs.node-version-file == '.node-version' && '["22.x"]' || github.repository == 'kurone-kito/idd-skill' && inputs.node-version-file != '' && '["file"]' || format('[{0}]', toJSON(inputs.node-version || '24.x'))) }}
+        shard:
+          - lint
+          - typecheck
+          - test
+          - distribution
+        # check-groups partitions check-project: each group runs in exactly
+        # one shard for each Node version. pnpm passes a literal `--` to the
+        # script, so group ids follow the script name without one.
         include:
           - shard: lint
             check-groups: lint
@@ -90,20 +100,20 @@ jobs:
         uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           run_install: false
-      - name: Setup Node.js
-        if: ${{ inputs.node-version-file == '' }}
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          check-latest: true
-          cache: pnpm
-          node-version: ${{ inputs.node-version || '24.x' }}
       - name: Setup Node.js from version file
-        if: ${{ inputs.node-version-file != '' }}
+        if: ${{ matrix.node-version == 'file' || (matrix.node-version == '22.x' && (contains(github.workflow_ref, 'kurone-kito/idd-skill/.github/workflows/pnpm-boundary.yml@') || inputs.node-version-file == '.node-version')) }}
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           check-latest: true
           cache: pnpm
-          node-version-file: ${{ inputs.node-version-file }}
+          node-version-file: ${{ inputs.node-version-file || '.node-version' }}
+      - name: Setup Node.js
+        if: ${{ matrix.node-version != 'file' && (matrix.node-version != '22.x' || (!contains(github.workflow_ref, 'kurone-kito/idd-skill/.github/workflows/pnpm-boundary.yml@') && inputs.node-version-file != '.node-version')) }}
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          check-latest: true
+          cache: pnpm
+          node-version: ${{ matrix.node-version }}
       - name: Install dependencies
         env:
           HUSKY: 0

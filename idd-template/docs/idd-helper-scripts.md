@@ -7395,7 +7395,9 @@ cleanup script is in
   (one in-process capture, then a separate required-CI/HEAD read), but still
   posts nothing without `--apply`. Every `--from-pr` watermark also needs
   `--prior-base-ref <Step 1 base ref>`: a base ref that differs at publish
-  refuses with `base-ref`. `--operation-local` returns that capture
+  refuses with `base-ref`. This path writes the compared ref as an optional
+  seventh `base-ref` token; existing six-field watermarks remain valid and
+  explicit-field watermarks stay six-field. `--operation-local` returns that capture
   when required CI is incomplete and defers only the post. Pass
   `--prior-head-sha`, `--prior-total-item-count`, and
   `--prior-max-activity-at`: E1 Step 2 passes the Step 1 `{head-SHA}`,

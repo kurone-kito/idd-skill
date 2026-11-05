@@ -1,20 +1,16 @@
 name: Pnpm boundary guard (Node 22 floor)
-# #1706: this repository's own pull_request lane for pnpm-boundary.yml
-# (and every other Node-pinning workflow) runs on Node 24.x, so the
-# Node 22 low bound of `engines.node` was never exercised in CI. The
-# `.node-version` file supplies that boundary, but nothing ran the test
-# suite there. This workflow invokes pnpm-boundary.yml's reusable
-# `node-version-file` input (a second invocation, per the issue's own
-# suggestion), so a helper that only works on 24.x-and-newer APIs
-# fails here instead of shipping silently broken for every 22.x
-# developer/adopter (the #1447 failure class this guards against).
+# #1706: the pull_request lane for pnpm-boundary.yml also covers the Node
+# 22 lower bound of `engines.node`, using `.node-version`. Keep this manual
+# workflow for an explicit floor-only run without starting a second copy of
+# the full matrix on every pull request. A helper that only works on newer
+# APIs still fails on the floor version (the #1447 failure class this guards
+# against).
 #
-# #4993: this caller keeps the default project-check command, so
-# pnpm-boundary.yml runs the same four shards here as in the default
-# lane, each one rerun on its own when it fails, under the aggregate
-# check pnpm-boundary-node22-floor / pnpm-boundary.
+# #4993: this caller keeps the default project-check command and selects
+# only the Node 22 column of the same four check groups. It is manually
+# dispatched and does not add another pull-request status context.
 on:
-  pull_request:
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:
