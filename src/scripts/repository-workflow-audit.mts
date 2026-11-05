@@ -1698,11 +1698,11 @@ function checkPullRequestConcurrency(root: string, report: Report): void {
   if (files === undefined) {
     return;
   }
-  if (files.length < 6) {
+  if (files.length < 5) {
     report(
       RWA002,
       WORKFLOWS_DIRECTORY,
-      `expected >= 6 pull_request-triggered workflows, found ${files.length}: ${files.join(', ')}`,
+      `expected >= 5 pull_request-triggered workflows, found ${files.length}: ${files.join(', ')}`,
     );
   }
   for (const file of files) {
@@ -1860,10 +1860,41 @@ const RWA008 = 'RWA008';
 
 // The repository test that selects the shards (#4993). The github context
 // belongs to the caller, so it holds for this repository's pull_request lane
-// and its Node 22 floor caller, and for no downstream caller. A caller that
-// passes its own lint-command gets the full run, so that command runs once.
+// and its manual Node 22 floor caller, and for no downstream caller. A caller
+// that passes its own lint-command gets the full run, so that command runs once.
 const PNPM_BOUNDARY_SHARD_CONDITION =
   "github.repository == 'kurone-kito/idd-skill' && (inputs.lint-command || 'pnpm run check') == 'pnpm run check'";
+
+// The direct pull_request workflow spans the supported LTS majors. The
+// caller's workflow_ref distinguishes that matrix from same-repository
+// workflow_call jobs, which must keep their node-version input when no file
+// input is supplied. The manual floor caller selects .node-version.
+const PNPM_BOUNDARY_NODE_VERSION_MATRIX = `\${{ fromJSON(github.repository == 'kurone-kito/idd-skill' && contains(github.workflow_ref, 'kurone-kito/idd-skill/.github/workflows/pnpm-boundary.yml@') && inputs.node-version-file == '' && '["22.x","24.x","26.x"]' || github.repository == 'kurone-kito/idd-skill' && inputs.node-version-file == '.node-version' && '["22.x"]' || github.repository == 'kurone-kito/idd-skill' && inputs.node-version-file != '' && '["file"]' || format('[{0}]', toJSON(inputs.node-version || '24.x'))) }}`;
+const PNPM_BOUNDARY_NODE_VERSION_FILE_IF = `\${{ matrix.node-version == 'file' || (matrix.node-version == '22.x' && (contains(github.workflow_ref, 'kurone-kito/idd-skill/.github/workflows/pnpm-boundary.yml@') || inputs.node-version-file == '.node-version')) }}`;
+const PNPM_BOUNDARY_NODE_VERSION_IF = `\${{ matrix.node-version != 'file' && (matrix.node-version != '22.x' || (!contains(github.workflow_ref, 'kurone-kito/idd-skill/.github/workflows/pnpm-boundary.yml@') && inputs.node-version-file != '.node-version')) }}`;
+const PNPM_BOUNDARY_NODE_VERSION_FILE = `\${{ inputs.node-version-file || '.node-version' }}`;
+const PNPM_BOUNDARY_NODE_VERSION = `\${{ matrix.node-version }}`;
+
+const PNPM_BOUNDARY_WORKFLOW_CALL_INPUTS = {
+  runner: { default: 'ubuntu-slim', required: 'false', type: 'string' },
+  'node-version': { default: '24.x', required: 'false', type: 'string' },
+  'node-version-file': { default: '', required: 'false', type: 'string' },
+  'install-command': {
+    default: 'pnpm install --frozen-lockfile --prefer-offline',
+    required: 'false',
+    type: 'string',
+  },
+  'lint-command': {
+    default: 'pnpm run check',
+    required: 'false',
+    type: 'string',
+  },
+  'boundary-command': {
+    default: 'node scripts/check-pnpm-boundary.mjs',
+    required: 'false',
+    type: 'string',
+  },
+} as const;
 
 // The four shards, in order, and the check-project groups each one runs.
 // The audit also checks them against check-project's own group list, so a new
@@ -1977,10 +2008,11 @@ function checkSingleRunStep(
   }
 }
 
-// RWA008: the shards of pnpm-boundary.yml (#4993). The two suite
-// jobs select complementary modes, the shards partition check-project's groups
-// exactly once, no job can cancel a sibling or hide a failure, the aggregate
-// reads both results, and the Node 22 floor lane keeps the shards.
+// RWA008: the shards of pnpm-boundary.yml (#4993). The two suite jobs select
+// complementary modes, the shards partition check-project's groups exactly
+// once per supported Node version, no job can cancel a sibling or hide a
+// failure, the aggregate reads both results, and the manual Node 22 floor lane
+// selects only its matching version column.
 function checkPnpmBoundaryShards(root: string, report: Report): void {
   const path = `${WORKFLOWS_DIRECTORY}/pnpm-boundary.yml`;
   const text = readRequiredText(root, path, RWA008, report);
@@ -1988,6 +2020,7 @@ function checkPnpmBoundaryShards(root: string, report: Report): void {
     text === undefined ? undefined : parsedWorkflow(path, text, report);
   if (workflow !== undefined) {
     checkPnpmBoundaryWorkflow(path, workflow, report);
+    checkPnpmBoundaryWorkflowCallInputs(path, workflow, report);
   }
 
   const floorPath = `${WORKFLOWS_DIRECTORY}/pnpm-boundary-node22-floor.yml`;
@@ -1997,6 +2030,18 @@ function checkPnpmBoundaryShards(root: string, report: Report): void {
       ? undefined
       : parsedWorkflow(floorPath, floorText, report);
   if (floor !== undefined) {
+    const triggers = asMapping(floor.on);
+    if (
+      triggers === undefined ||
+      Object.keys(triggers).length !== 1 ||
+      !Object.hasOwn(triggers, 'workflow_dispatch')
+    ) {
+      report(
+        RWA008,
+        floorPath,
+        'the Node 22 floor workflow must use workflow_dispatch only, so it does not duplicate the pull_request matrix',
+      );
+    }
     const job = asMapping(asMapping(floor.jobs)?.[FLOOR_JOB_ID]);
     if (job === undefined) {
       report(RWA008, floorPath, `job ${FLOOR_JOB_ID} not found`);
@@ -2015,7 +2060,44 @@ function checkPnpmBoundaryShards(root: string, report: Report): void {
           `${FLOOR_JOB_ID} must not pass lint-command -- a caller's own lint-command selects the full run, so the Node 22 lane would lose its shards`,
         );
       }
+      if (asMapping(job.with)?.['node-version-file'] !== '.node-version') {
+        report(
+          RWA008,
+          floorPath,
+          `${FLOOR_JOB_ID} must pass node-version-file: .node-version so the local floor lane uses the repository's Node 22 selector`,
+        );
+      }
     }
+  }
+}
+
+function checkPnpmBoundaryWorkflowCallInputs(
+  path: string,
+  workflow: WorkflowYamlMapping,
+  report: Report,
+): void {
+  const workflowCall = asMapping(asMapping(workflow.on)?.workflow_call);
+  const inputs = asMapping(workflowCall?.inputs);
+  const matches =
+    inputs !== undefined &&
+    Object.keys(inputs).length ===
+      Object.keys(PNPM_BOUNDARY_WORKFLOW_CALL_INPUTS).length &&
+    Object.entries(PNPM_BOUNDARY_WORKFLOW_CALL_INPUTS).every(
+      ([name, expected]) => {
+        const input = asMapping(inputs[name]);
+        return (
+          input !== undefined &&
+          Object.keys(input).length === Object.keys(expected).length &&
+          Object.entries(expected).every(([key, value]) => input[key] === value)
+        );
+      },
+    );
+  if (!matches) {
+    report(
+      RWA008,
+      path,
+      'workflow_call must preserve the existing input names, types, and defaults so downstream callers keep their contract',
+    );
   }
 }
 
@@ -2083,6 +2165,7 @@ function checkPnpmBoundaryWorkflow(
       );
     }
     const isGroup = jobId === PNPM_BOUNDARY_GROUP_JOB;
+    checkPnpmBoundaryNodeSetup(path, jobId, steps, isGroup, report);
     checkSingleRunStep(
       path,
       jobId,
@@ -2130,11 +2213,17 @@ function checkPnpmBoundaryMatrix(
     );
   }
   const matrix = asMapping(strategy?.matrix);
+  const shardAxis = matrix?.shard;
+  const expectedShards = PNPM_BOUNDARY_SHARDS.map(({ shard }) => shard);
   const include = matrix?.include;
   const entries = Array.isArray(include) ? include.map(asMapping) : undefined;
   const shardsMatch =
     matrix !== undefined &&
-    Object.keys(matrix).length === 1 &&
+    Object.keys(matrix).length === 3 &&
+    matrix['node-version'] === PNPM_BOUNDARY_NODE_VERSION_MATRIX &&
+    Array.isArray(shardAxis) &&
+    shardAxis.length === expectedShards.length &&
+    shardAxis.every((shard, index) => shard === expectedShards[index]) &&
     entries !== undefined &&
     entries.length === PNPM_BOUNDARY_SHARDS.length &&
     entries.every((entry, index) => {
@@ -2150,7 +2239,7 @@ function checkPnpmBoundaryMatrix(
     report(
       RWA008,
       path,
-      `${PNPM_BOUNDARY_GROUP_JOB}'s matrix must be exactly the include list ${PNPM_BOUNDARY_SHARDS.map(
+      `${PNPM_BOUNDARY_GROUP_JOB}'s matrix must use the supported Node version selector, the four shard axis values, and the exact check-group include list ${PNPM_BOUNDARY_SHARDS.map(
         ({ shard, checkGroups }) => `${shard}: ${checkGroups}`,
       ).join('; ')}`,
     );
@@ -2180,6 +2269,53 @@ function checkPnpmBoundaryMatrix(
         `check-project group ${id} runs in ${count} shards; each group must run in exactly one`,
       );
     }
+  }
+}
+
+function checkPnpmBoundaryNodeSetup(
+  path: string,
+  jobId: string,
+  steps: readonly WorkflowYamlMapping[],
+  isGroup: boolean,
+  report: Report,
+): void {
+  const setupSteps = steps.filter(
+    (step) =>
+      typeof step.uses === 'string' &&
+      step.uses.startsWith('actions/setup-node@'),
+  );
+  const fileIf = isGroup
+    ? PNPM_BOUNDARY_NODE_VERSION_FILE_IF
+    : `\${{ inputs.node-version-file != '' }}`;
+  const versionIf = isGroup
+    ? PNPM_BOUNDARY_NODE_VERSION_IF
+    : `\${{ inputs.node-version-file == '' }}`;
+  const fileStep = setupSteps.find((step) => step.if === fileIf);
+  const versionStep = setupSteps.find((step) => step.if === versionIf);
+  const fileWith = asMapping(fileStep?.with);
+  const versionWith = asMapping(versionStep?.with);
+  const matches =
+    setupSteps.length === 2 &&
+    fileWith !== undefined &&
+    versionWith !== undefined &&
+    fileWith['node-version-file'] ===
+      (isGroup
+        ? PNPM_BOUNDARY_NODE_VERSION_FILE
+        : `\${{ inputs.node-version-file }}`) &&
+    !Object.hasOwn(fileWith, 'node-version') &&
+    versionWith['node-version'] ===
+      (isGroup
+        ? PNPM_BOUNDARY_NODE_VERSION
+        : `\${{ inputs.node-version || '24.x' }}`) &&
+    !Object.hasOwn(versionWith, 'node-version-file');
+  if (!matches) {
+    report(
+      RWA008,
+      path,
+      isGroup
+        ? `${jobId} must set the Node 22 or file-selected lane from node-version-file and the other lanes from matrix.node-version`
+        : `${jobId} must keep the mutually exclusive workflow_call node-version and node-version-file setup paths`,
+    );
   }
 }
 

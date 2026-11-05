@@ -45,17 +45,18 @@ clauses of the range, and TypeScript's structural typing means a
 too-new API passing typecheck doesn't reliably fail loudly at that
 type-only layer.
 
-The actual backstop is runtime, not type-level: the Node 22 CI lane
-(`pnpm-boundary-node22-floor.yml`) runs the full `pnpm run check`
-suite — including the whole test suite and
-`verify-workshop-integrity.mts` — directly on the version in
-`.node-version`. A helper
-that calls an API present in the types-26 surface but missing or
-broken on the true floor version (the #1447 failure class) crashes
-there even though it typechecks cleanly, closing the gap that pinning
-`@types/node` down would only partially cover anyway (types don't
-model version-specific runtime bugs like #1447's `import.meta.main`
-silently-falsy case).
+The actual backstop is runtime, not type-level: the repository's
+`pull_request` lane runs the four check groups on Node 22, 24.x, and
+26.x. The Node 22 lane uses the version in `.node-version`; an explicit
+`workflow_dispatch` run of `pnpm-boundary-node22-floor.yml` remains
+available when only the floor needs to be checked. The full matrix
+includes the whole test suite and `verify-workshop-integrity.mts` on
+every supported line. A helper that calls an API present in the types-26
+surface but missing or broken on the true floor version (the failure
+class from issue `#1447`) crashes on Node 22 even though it typechecks
+cleanly, closing the gap that pinning `@types/node` down would only
+partially cover anyway (types don't model version-specific runtime bugs
+like issue `#1447`'s `import.meta.main` silently-falsy case).
 
 ## Layout
 
