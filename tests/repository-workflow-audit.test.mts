@@ -4745,7 +4745,7 @@ const RULE_CASES: readonly RuleCase[] = [
     },
     expected: [
       {
-        prefix: "pnpm-boundary-group's matrix must be exactly the include list",
+        includes: "exact check-group include list",
       },
     ],
   },
