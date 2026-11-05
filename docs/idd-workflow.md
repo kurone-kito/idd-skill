@@ -1032,12 +1032,16 @@ is recorded in source issue `kurone-kito/idd-skill#3494` (2026-09-26).
 With helper runtime, use the
 profile-selected `pre-merge-readiness` invocation documented under
 [merge-gate evidence](idd-helper-scripts.md#merge-gate-evidence) for the
-current PR, passing `--pr <n> --claim-issue <n>`, the active marker's
-`--claim-id` and `--agent-id`, and `--nonce` when this session recorded
-one. Do not omit an available marker ID from this readiness call. The
-legacy omission path applies only to a pre-rule bare-ID claim checked with
-`resume-claim-routing`, not as a general shortcut for this readiness
-invocation. Route by its
+current PR, passing `--pr <n> --claim-issue <n>` and this session's
+locally persisted `--claim-id` and `--agent-id`, plus `--nonce` when this
+session recorded one. Before the call, separately verify those persisted
+values match the trusted active claim and nonce markers. The readiness
+helper compares the supplied values with the active marker; it does not
+prove that the caller owns a locally persisted pair. Never copy marker
+values to fill a missing local value; stop if a required value is absent or
+does not match. The legacy omission path applies only to a pre-rule bare-ID
+claim checked with `resume-claim-routing`, not as a general shortcut for
+this readiness invocation. Route by its
 `ready`/`blockers` verdict and then its `branchCurrency`, `threads`,
 `unrepliedComments`, `reviewerStates`, `advisoryWait`, `ci`,
 `dispositionEvidence`, `secondaryQuietWindow`, `claim`, and `closingSet`
@@ -2243,11 +2247,14 @@ session-suffixed agent id, as the 2026-10-11 session did (issue
 historical and applies only to active claims created before issue
 `kurone-kito/idd-skill#4936`; new claims require a session-qualified ID, which
 the session must persist and reuse across a restart. The compatibility path
-may omit `--agent-id` only for an active pre-rule claim whose trusted marker
-has a legacy bare family ID; pass the marker ID if it is already
-session-qualified. The session's exact recorded claim-id must match the
-trusted marker. Apply lock, branch, and occupancy checks where a worktree
-exists; a worktree-less claim is not rejected for lacking worktree evidence.
+uses this session's persisted `--agent-id` in owner checks and compares it
+with the trusted marker; the marker is evidence to compare, not caller
+identity. If a session-qualified marker has no matching session-local ID,
+stop and report the claim. Omit `--agent-id` only for an active pre-rule
+claim whose trusted marker has a legacy bare family ID. The session's exact
+recorded claim-id must match the trusted marker. Apply lock, branch, and
+occupancy checks where a worktree exists; a worktree-less claim is not
+rejected for lacking worktree evidence.
 A bare ID alone cannot distinguish sessions; when
 the session cannot verify which legacy claim it owns, it reports the claim to
 the operator and does not refill. A post-rule claim requires this session's
@@ -2273,8 +2280,10 @@ contract for continuation records.
    persisted session-suffixed agent-id and its `agentId` and `claimId` both
    match the trusted `claimed-by` marker for the same issue. For an active
    pre-rule claim whose trusted marker has a legacy bare family ID, the
-   compatibility route may omit `--agent-id`; if the marker is already
-   session-qualified, pass its recorded ID. In either case, this session's
+   compatibility route may omit `--agent-id`. If that marker is already
+   session-qualified, compare it with this session's persisted agent-id; do
+   not substitute the marker's public ID. If the local ID is absent or does
+   not match, report the claim as not owned. In every case, this session's
    exact recorded claim-id must match the trusted marker.
    Apply the lock, branch, and occupancy checks where a worktree exists; a
    worktree-less claim is not rejected for lacking worktree evidence. The
@@ -2320,11 +2329,13 @@ contract for continuation records.
    holds no issue number. Run the profile-selected `resume-claim-routing`
    command (see `docs/idd-helper-scripts.md`) with `--assert`, `--issue`,
    `--claim-id`, `--nonce` (when the file holds one), and `--worktree <path>`.
-   Pass `--agent-id <the marker's recorded ID>` whenever it is available,
-   including for a pre-rule claim whose marker is already session-qualified.
-   Omit it only for a pre-rule claim whose trusted marker has the legacy bare
-   family ID. The same compatibility path applies when checking a
-   worktree-less claim without `--assert`. Continue to step 3 only when the
+   Pass `--agent-id <this session's persisted ID>`, never a value copied
+   from the public marker. The marker is comparison evidence only; if the
+   local ID is missing or does not match a session-qualified marker, stop
+   and report the claim. Omit `--agent-id` only for a pre-rule claim whose
+   trusted marker has the legacy bare family ID. The same compatibility
+   path applies when checking a worktree-less claim without `--assert`.
+   Continue to step 3 only when the
    command exits 0, which means the state is
    `already_owned` with action `keep`. A claim that a worker released with its
    `unclaimed-by` marker, as F4 does as its last mutation before returning the

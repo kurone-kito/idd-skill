@@ -191,14 +191,16 @@ this route does not finish ownership by itself. A refusal there
 is not a terminal end of Discover: the candidate stays ineligible
 and Step 1.5 keeps scanning.
 
-The later owner check passes the session's persisted `--agent-id` for a
-session-qualified claim. The `resume-claim-routing` compatibility path
-may omit it only for an active pre-rule claim whose trusted marker has
-the legacy bare family ID; pass the marker ID when it is already
-session-qualified, even on a pre-rule claim. The exact claim-id must still
-match the trusted marker, and each route applies the owner checks available
-for it. Source issue `kurone-kito/idd-skill#5000` records the runtime change
-that fails closed when a session-qualified claim omits its ID.
+The later owner check passes this session's persisted `--agent-id` and
+compares it with the trusted marker; the marker is comparison evidence, not
+caller identity. If a session-qualified marker has no matching
+session-local ID, the check fails closed. The `resume-claim-routing`
+compatibility path may omit `--agent-id` only for an active pre-rule claim
+whose trusted marker has the legacy bare family ID. The exact locally
+recorded claim-id must still match the trusted marker, and each route
+applies the owner checks available for it. Source issue
+`kurone-kito/idd-skill#5000` records the runtime change that fails closed
+when a session-qualified claim omits its ID.
 
 This finding is upstream of kurone-kito/idd-skill#3273 (Resume Step 1
 not threading an already-known claim-id through to
