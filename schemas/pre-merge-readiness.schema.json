@@ -295,7 +295,7 @@
         },
         "comparisonReason": {
           "type": "string",
-          "description": "Specific reason the comparison chose comparisonRoute, e.g. missing-watermark, head-changed, newer-activity, ci-pass-drift, ack-only-post-disposition, or snapshot-current.",
+          "description": "Specific reason the comparison chose comparisonRoute, e.g. missing-watermark, head-changed, base-ref, newer-activity, ci-pass-drift, ack-only-post-disposition, or snapshot-current.",
           "minLength": 1
         }
       }

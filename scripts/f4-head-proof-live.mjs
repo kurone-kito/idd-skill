@@ -622,12 +622,14 @@ export function createLiveF4HeadProofDeps(options) {
         ghApiJson(`repos/${owner}/${repo}/pulls/${prNumber}`),
       );
       const head = asRecord(pr.head);
+      const base = asRecord(pr.base);
       return {
         state: String(pr.state ?? ''),
         merged: pr.merged === true,
         mergeCommitSha:
           typeof pr.merge_commit_sha === 'string' ? pr.merge_commit_sha : null,
         headSha: typeof head.sha === 'string' ? head.sha : null,
+        baseRefName: typeof base.ref === 'string' ? base.ref : null,
       };
     },
     readPullRequestFirstCommitAt(prNumber) {
