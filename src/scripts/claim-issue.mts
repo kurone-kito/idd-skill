@@ -2498,6 +2498,8 @@ function checkFinalAssert(state: ApplyState): ApplyOutcome {
       '--assert',
       '--claim-id',
       identity.claimId,
+      '--agent-id',
+      identity.agentId,
       '--nonce',
       identity.nonce,
       '--worktree',

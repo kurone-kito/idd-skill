@@ -131,11 +131,12 @@ interface ResumeClaimRoutingInput {
    */
   nonce?: unknown;
   /**
-   * This session's own persisted, session-qualified `{agent-id}` (#4936).
-   * When given, the owner-resume path also requires it to equal the active
-   * claim's agent-id exactly; on a mismatch the claim-id is not this
-   * session's, so routing takes the non-owner path instead. Optional and
-   * additive like `nonce`: omitting it keeps the prior verdict and output.
+   * This session's own persisted `{agent-id}` (#4936). For a
+   * session-qualified active claim, omission or a mismatch routes through
+   * the non-owner path. A legacy claim with a bare agent-id keeps its prior
+   * route when this is omitted; when supplied, the value must match exactly.
+   * The CLI accepts a bare value only with `--assert`, for that exact legacy
+   * claim case (#5000).
    */
   agentId?: unknown;
   staleAgeMs?: unknown;
@@ -631,15 +632,21 @@ export function evaluateResumeClaimRouting(
   const agentIdChecked = normalizeToken(input.agentId);
   // #4936: the claim-id alone names the claim lineage, not the session. When
   // the caller passes its persisted session-qualified agent-id and it differs
-  // from the active claim's, a second session that read the public claim-id
-  // and nonce (or a shared worktree record) is not the owner: the owner path
-  // below is skipped and the claim is routed as another session's.
+  // from the active claim's, or omits it for a session-qualified claim, the
+  // owner path below is skipped and the claim is routed as another session's.
+  const sessionAgentIdRequired = Boolean(
+    state.activeClaim &&
+      claimIdChecked === state.activeClaim.claimId &&
+      isSessionQualifiedAgentId(state.activeClaim.agentId) &&
+      !agentIdChecked,
+  );
   const sessionAgentMismatch = Boolean(
     state.activeClaim &&
       agentIdChecked &&
       claimIdChecked === state.activeClaim.claimId &&
       agentIdChecked !== state.activeClaim.agentId,
   );
+  const sessionAgentUnverified = sessionAgentIdRequired || sessionAgentMismatch;
 
   const warnings = [...state.warnings];
   let routeState = 'unclaimed';
@@ -650,6 +657,10 @@ export function evaluateResumeClaimRouting(
   if (sessionAgentMismatch && state.activeClaim) {
     warnings.push(
       `session agent-id ${agentIdChecked} does not match active claim agent-id ${state.activeClaim.agentId}; claim ${claimIdChecked} is routed as another session's claim`,
+    );
+  } else if (sessionAgentIdRequired && state.activeClaim) {
+    warnings.push(
+      `session agent-id is required for active claim ${claimIdChecked}; claim is routed as another session's claim`,
     );
   }
 
@@ -678,7 +689,7 @@ export function evaluateResumeClaimRouting(
   } else if (
     claimIdChecked &&
     claimIdChecked === state.activeClaim.claimId &&
-    !sessionAgentMismatch
+    !sessionAgentUnverified
   ) {
     // Owner-resume path: the checking session already proved ownership of
     // the active claim-id. A later trusted `claimed-by` with a different
@@ -1102,12 +1113,16 @@ function runCli(): HelperCliResult {
       new Error('--own-worktree requires --fresh-claim-gate'),
     );
   }
-  // #4936: a shared bare agent-id cannot tell two sessions apart, so it is
-  // refused rather than compared.
+  // #5000: a bare identity can confirm only its exact legacy claim. Outside
+  // --assert, it cannot distinguish sessions and is refused.
   if (args.agentId && !args.claimId) {
     throw markCliUsageError(new Error('--agent-id requires --claim-id'));
   }
-  if (args.agentId && !isSessionQualifiedAgentId(args.agentId)) {
+  if (
+    args.agentId &&
+    !isSessionQualifiedAgentId(args.agentId) &&
+    !args.assert
+  ) {
     throw markCliUsageError(
       new Error(
         `--agent-id ${JSON.stringify(args.agentId)} is not session-qualified: pass this session's persisted <family>-<suffix> agent-id (a run of at least 8 letters or digits after the first '-'), or omit --agent-id for a claim whose marker agent-id predates that rule`,
@@ -1902,9 +1917,13 @@ function printHelp(): void {
                       otherwise the claim is routed as another session's
                       (non_inheritable, disputed, or stale behind the
                       local-worktree check) and agent_id_checked reports the
-                      value. A bare family name, a short tag, or an empty
-                      value is a usage error. Omit it only for a claim whose
-                      marker agent-id predates that rule.
+                      value. A bare family name or short tag is accepted
+                      only with --assert, where it must match the exact
+                      pre-rule legacy claim; elsewhere it is a usage error.
+                      An empty value is always a usage error. Omit this flag
+                      only for a claim whose marker agent-id predates that
+                      rule; omission on a session-qualified claim routes as
+                      another session's claim (#5000).
   --worktree <path>   read the independent owner-evidence proof (the claim
                       lock, the generated-tokens record, and the current
                       branch) from this path instead of process.cwd() when

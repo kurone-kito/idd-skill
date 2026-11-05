@@ -3323,6 +3323,8 @@ test('--worktree end-to-end: the real compiled CLI proves ownership via an occup
         fixture.policyPath,
         '--claim-id',
         claimId,
+        '--agent-id',
+        agentId,
         '--worktree',
         secondary,
       ],
@@ -5341,6 +5343,20 @@ test('#4936: a competing session of the same family cannot resume the claim even
   assert.equal(competitor.evidence.owner_evidence, undefined);
 });
 
+test('#5000: a session-qualified claim cannot be resumed when --agent-id is omitted', () => {
+  const result = routeAsSession(undefined);
+  assert.equal(result.state, 'non_inheritable');
+  assert.equal(result.action, 'stop');
+  assert.equal(result.reason, 'active-claim-non-stale');
+  assert.equal('agent_id_checked' in result, false);
+  assert.ok(
+    result.warnings.some((warning) =>
+      warning.includes('session agent-id is required'),
+    ),
+  );
+  assert.equal(result.evidence.owner_evidence, undefined);
+});
+
 test('#4936: a session whose agent-id lacks the suffix fails closed', () => {
   const result = routeAsSession('claude');
   assert.equal(result.state, 'non_inheritable');
@@ -5379,23 +5395,6 @@ test('#4936: a legacy claim keeps its route when the caller omits --agent-id', (
   assert.equal(result.state, 'already_owned');
   assert.equal(result.action, 'keep');
   assert.equal('agent_id_checked' in result, false);
-  // Omitting the flag on a session-qualified claim keeps the prior verdict
-  // and output too.
-  const omitted = routeAsSession(undefined);
-  const before = evaluateResumeClaimRouting(
-    {
-      claimId: 'claim-session',
-      nonce: 'nonce-session',
-      now: '2026-05-12T11:00:00Z',
-      events: sessionClaimEvents(),
-    },
-    {
-      isTrustedAuthor: trusted(['maintainer']),
-      inspectLocalWorktree: () => OCCUPIED_SESSION_WORKTREE,
-      isCurrentSessionOwner: () => true,
-    },
-  );
-  assert.deepEqual(omitted, before);
 });
 
 test('#4936: a legacy claim without a claim-id is unaffected by --agent-id', () => {
@@ -5455,6 +5454,7 @@ const SESSION_CLI_CLAIM = {
  */
 function withSessionSandbox(
   body: (sandbox: { primary: string; worktree: string }) => void,
+  agentId = SESSION_AGENT,
 ): void {
   const primary = mkdtempSync(join(tmpdir(), 'idd-session-primary-'));
   const worktree = join(primary, '..', `${basename(primary)}-wt`);
@@ -5469,9 +5469,9 @@ function withSessionSandbox(
       ['worktree', 'add', '--quiet', '-b', SUCCESSOR_BRANCH, worktree, 'main'],
       env,
     );
-    acquireClaimLock(worktree, SESSION_AGENT, 'claim-session', false);
+    acquireClaimLock(worktree, agentId, 'claim-session', false);
     recordGeneratedClaimTokens(worktree, {
-      agentId: SESSION_AGENT,
+      agentId,
       claimId: 'claim-session',
       nonce: 'nonce-session',
     });
@@ -5534,6 +5534,49 @@ test('#4936: --assert --agent-id exits 0 for the owning session and leaves the w
   }
 });
 
+test('#5000: --assert accepts an exact legacy bare agent-id for its claim', () => {
+  const legacyAgent = 'copilot';
+  const legacyClaim = {
+    ...SESSION_CLI_CLAIM,
+    body: `<!-- claimed-by: ${legacyAgent} claim-session supersedes: none 2026-05-12T10:00:00Z branch: ${SUCCESSOR_BRANCH} -->`,
+  };
+  const fixture = assertCliFixture([legacyClaim]);
+  try {
+    withSessionSandbox(({ primary, worktree }) => {
+      const result = runAssertCli(fixture, primary, [
+        '--claim-id',
+        'claim-session',
+        '--agent-id',
+        legacyAgent,
+        '--worktree',
+        worktree,
+        '--assert',
+        ...ASSERT_NON_STALE,
+      ]);
+      assert.equal(result.status, 0, result.stderr);
+      const output = JSON.parse(result.stdout);
+      assert.equal(output.state, 'already_owned');
+      assert.equal(output.action, 'keep');
+      assert.equal(output.agent_id_checked, legacyAgent);
+      assert.equal(output.evidence.owner_evidence.agent_and_branch_match, true);
+      const mismatch = runAssertCli(fixture, primary, [
+        '--claim-id',
+        'claim-session',
+        '--agent-id',
+        'claude',
+        '--worktree',
+        worktree,
+        '--assert',
+        ...ASSERT_NON_STALE,
+      ]);
+      assert.equal(mismatch.status, 1);
+      assert.equal(JSON.parse(mismatch.stdout).state, 'non_inheritable');
+    }, legacyAgent);
+  } finally {
+    fixture.restore();
+  }
+});
+
 test('#4936: --assert --agent-id exits 1 for another session that reads the same markers and records', () => {
   const fixture = assertCliFixture([SESSION_CLI_CLAIM]);
   try {
@@ -5575,7 +5618,7 @@ process.exit(1);
   try {
     for (const [extraArgs, message] of [
       [
-        ['--claim-id', 'claim-session', '--agent-id', 'claude', '--assert'],
+        ['--claim-id', 'claim-session', '--agent-id', 'claude'],
         /--agent-id "claude" is not session-qualified/,
       ],
       [

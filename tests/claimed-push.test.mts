@@ -84,6 +84,7 @@ const SCOPE_NEXT = {
 
 const ISSUE = 4375;
 const CLAIM_ID = 'claim-id-4375';
+const AGENT_ID = 'codex-12345678';
 const NONCE = 'nonce-4375';
 const ROOT = resolve(tmpdir(), 'claimed-push-fake-root');
 const PRIMARY = join(ROOT, 'idd-skill');
@@ -359,6 +360,7 @@ function run(scenario: Scenario = {}): Run {
   const input: ClaimedPushInput = {
     issue: ISSUE,
     claimId: CLAIM_ID,
+    agentId: AGENT_ID,
     nonce: NONCE,
     apply: true,
     cwd: WORKTREE,
@@ -1123,6 +1125,8 @@ test('the assert receives the identity, the nonce only when given, and the workt
     '--assert',
     '--claim-id',
     CLAIM_ID,
+    '--agent-id',
+    AGENT_ID,
     '--nonce',
     NONCE,
     '--worktree',
@@ -1248,31 +1252,48 @@ test('a refused origin never echoes the credentials in its URL', () => {
 
 // ---- Command line ----------------------------------------------------------
 
-test('parseArgs requires --issue and --claim-id and validates --nonce', () => {
+test('parseArgs requires --issue, --claim-id, and --agent-id and validates --nonce', () => {
   assert.deepEqual(
     parseArgs([
       '--issue',
       '4375',
       '--claim-id',
       'c',
+      '--agent-id',
+      AGENT_ID,
       '--nonce',
       'n',
       '--apply',
     ]),
-    { help: false, issue: 4375, claimId: 'c', nonce: 'n', apply: true },
+    {
+      help: false,
+      issue: 4375,
+      claimId: 'c',
+      agentId: AGENT_ID,
+      nonce: 'n',
+      apply: true,
+    },
   );
-  assert.deepEqual(parseArgs(['--issue', '4375', '--claim-id', 'c']), {
-    help: false,
-    issue: 4375,
-    claimId: 'c',
-    nonce: null,
-    apply: false,
-  });
+  assert.deepEqual(
+    parseArgs(['--issue', '4375', '--claim-id', 'c', '--agent-id', AGENT_ID]),
+    {
+      help: false,
+      issue: 4375,
+      claimId: 'c',
+      agentId: AGENT_ID,
+      nonce: null,
+      apply: false,
+    },
+  );
   assert.equal(parseArgs(['--help']).help, true);
   assert.throws(() => parseArgs([]), /--issue is required/u);
   assert.throws(
     () => parseArgs(['--issue', '4375']),
     /--claim-id is required/u,
+  );
+  assert.throws(
+    () => parseArgs(['--issue', '4375', '--claim-id', 'c']),
+    /--agent-id is required/u,
   );
   assert.throws(
     () => parseArgs(['--issue', 'abc', '--claim-id', 'c']),
@@ -1283,11 +1304,29 @@ test('parseArgs requires --issue and --claim-id and validates --nonce', () => {
     /--issue/u,
   );
   assert.throws(
-    () => parseArgs(['--issue', '4375', '--claim-id', 'c', '--nonce', ' ']),
+    () =>
+      parseArgs([
+        '--issue',
+        '4375',
+        '--claim-id',
+        'c',
+        '--agent-id',
+        AGENT_ID,
+        '--nonce',
+        ' ',
+      ]),
     /--nonce must not be empty/u,
   );
   assert.throws(() =>
-    parseArgs(['--issue', '4375', '--claim-id', 'c', '--bogus']),
+    parseArgs([
+      '--issue',
+      '4375',
+      '--claim-id',
+      'c',
+      '--agent-id',
+      AGENT_ID,
+      '--bogus',
+    ]),
   );
 });
 
@@ -1295,7 +1334,15 @@ test('runCli writes only the JSON report to stdout and maps failures to exit 1',
   const chunks: string[] = [];
   const stdout = { write: (text: string) => chunks.push(text) };
   const { deps, world } = harness({ gate: { ok: true, command: 'true' } });
-  const argv = ['--issue', String(ISSUE), '--claim-id', CLAIM_ID, '--apply'];
+  const argv = [
+    '--issue',
+    String(ISSUE),
+    '--claim-id',
+    CLAIM_ID,
+    '--agent-id',
+    AGENT_ID,
+    '--apply',
+  ];
   assert.equal(runCli(argv, deps, { cwd: WORKTREE, stdout }), 0);
   assert.equal(chunks.length, 1);
   const parsed = JSON.parse(chunks.join('')) as ClaimedPushReport;
@@ -1312,6 +1359,7 @@ test('runCli exits 0 on a passing dry run and 1 on a refused one', () => {
   const stdout = { write: (text: string) => chunks.push(text) };
   const { deps, world } = harness({ gate: { ok: true, command: 'true' } });
   const argv = ['--issue', String(ISSUE), '--claim-id', CLAIM_ID];
+  argv.push('--agent-id', AGENT_ID);
   assert.equal(runCli(argv, deps, { cwd: WORKTREE, stdout }), 0);
   const dry = JSON.parse(chunks.join('')) as ClaimedPushReport;
   assert.equal(dry.mode, 'dry-run');
@@ -1527,7 +1575,15 @@ const deps = {
   parseCandidates: parseCandidateFiles,
 };
 process.exitCode = runCli(
-  ['--issue', '${ISSUE}', '--claim-id', '${CLAIM_ID}', '--apply'],
+  [
+    '--issue',
+    '${ISSUE}',
+    '--claim-id',
+    '${CLAIM_ID}',
+    '--agent-id',
+    '${AGENT_ID}',
+    '--apply',
+  ],
   deps,
   { cwd },
 );
@@ -1842,6 +1898,8 @@ function cliRun(scenario: Scenario, apply = false): CliRun {
     String(ISSUE),
     '--claim-id',
     CLAIM_ID,
+    '--agent-id',
+    AGENT_ID,
     '--nonce',
     NONCE,
     ...(apply ? ['--apply'] : []),
@@ -1981,6 +2039,15 @@ test('a passing scope with --apply runs scope, gate, reassert, and push in order
   assert.ok(lastAudit < gate, 'scope before the gate');
   assert.ok(gate < reassert, 'gate before the reassert');
   assert.ok(reassert < push, 'reassert before the push');
+  const asserts = r.calls.filter(
+    (call) =>
+      call.kind === 'helper' && call.script === 'resume-claim-routing.mjs',
+  );
+  assert.equal(asserts.length, 2);
+  for (const call of asserts) {
+    assert.ok(call.kind === 'helper');
+    assert.equal(argValue(call.args, '--agent-id'), AGENT_ID);
+  }
   const pushes = r.calls.filter(
     (call) => call.kind === 'git' && call.args[0] === 'push',
   );

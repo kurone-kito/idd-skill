@@ -123,7 +123,10 @@ With helper runtime enabled, the normal (non-force) push runs through
 the profile-selected `claimed-push` helper
 ([Claimed push](../../docs/idd-helper-scripts.md#claimed-push-kurone-kitoidd-skill4375)),
 started from the claimed worktree with
-`--issue {issue-number} --claim-id {claim-id} [--nonce {nonce}] --apply`.
+`--issue {issue-number} --claim-id {claim-id} --agent-id {agent-id}
+[--nonce {nonce}] --apply`. Pass this session's persisted `{agent-id}`;
+omitting it makes the assertion fail closed for a session-qualified claim
+(issue `#5000`).
 `--apply` runs the claim assert, the location check, the `scope` check,
 the configured gate (**pre-push-validate**), a second claim assert, and
 the push, in that order, so do not run the gate or push a second time.
