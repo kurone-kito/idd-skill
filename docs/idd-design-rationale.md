@@ -189,7 +189,8 @@ compatibility path may omit `--agent-id` only for an active pre-`#4936`
 claim whose trusted marker has the legacy bare family ID. The exact locally
 recorded claim-id must still match the trusted marker, and each route
 applies the owner checks available for it. Issue `#5000` records the runtime
-change that fails closed when a session-qualified claim omits its ID.
+change that fails closed when a session-qualified claim omits its ID
+(preventive; no observed incident yet).
 
 This finding is upstream of the related `#3273` (Resume Step 1 not
 threading an already-known claim-id through to

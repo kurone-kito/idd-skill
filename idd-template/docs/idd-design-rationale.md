@@ -200,7 +200,7 @@ whose trusted marker has the legacy bare family ID. The exact locally
 recorded claim-id must still match the trusted marker, and each route
 applies the owner checks available for it. Source issue
 `kurone-kito/idd-skill#5000` records the runtime change that fails closed
-when a session-qualified claim omits its ID.
+when a session-qualified claim omits its ID (preventive; no observed incident yet).
 
 This finding is upstream of kurone-kito/idd-skill#3273 (Resume Step 1
 not threading an already-known claim-id through to
