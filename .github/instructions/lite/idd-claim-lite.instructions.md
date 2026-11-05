@@ -330,7 +330,7 @@ one clone per worker (`docs/idd-workflow.md`), (c)'s written rules.
 ```sh
 set -euo pipefail
 node scripts/claim-lock.mjs --acquire --worktree <path> --agent-id {agent-id} --claim-id {claim-id}
-# For a session-qualified claim, pass --agent-id; omit it only for a pre-rule claim.
+# Pre-rule variant: run this route without --agent-id {agent-id}
 route=$(node scripts/resume-claim-routing.mjs --issue <n> --claim-id {claim-id} --agent-id {agent-id} --worktree <path>)
 printf '%s\n' "$route" | CLAIM_ID='{claim-id}' node -e 'const a=JSON.parse(require("fs").readFileSync(0,"utf8")).active_claim;process.exit(a===null||(a&&a.claim_id&&a.claim_id!==process.env.CLAIM_ID)?0:1)'
 test "$(git -C <path> symbolic-ref -q HEAD)" = refs/heads/<branch>
