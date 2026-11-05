@@ -311,14 +311,14 @@ failure; five of the six never return a non-zero exit code as their own
 verdict, so they produce no `kind: "gate"`. `resume-claim-routing.mjs`
 does under `--assert` (see its `gate` cell).
 
-| Helper                           | `usage`                                                                                                                                                                            | `not-found` / `transport`                                                                                                                | `gate`                                                      | `internal`              |
-| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- | ----------------------- |
-| `pre-merge-readiness.mjs`        | missing/invalid `--pr`, `--claim-issue`, or a flag-combination error                                                                                                               | a `gh` failure while resolving the repo, PR, or checks (still prints the existing `{"error": ...}` stdout JSON, unchanged by this track) | —                                                           | an unexpected exception |
-| `resume-claim-routing.mjs`       | missing/invalid `--issue`, an unknown flag, `--assert` without `--claim-id`, `--assert` with `--fresh-claim-gate`, or `--own-worktree` that is empty or lacks `--fresh-claim-gate` | a `gh` failure resolving claim state                                                                                                     | `--assert` when the verdict is not `already_owned` / `keep` | an unexpected exception |
-| `authoring-owner-provenance.mjs` | missing/invalid `--issue`, or an unknown flag                                                                                                                                      | a `gh` failure resolving comment/marker history                                                                                          | —                                                           | an unexpected exception |
-| `discover-readiness-check.mjs`   | missing `--issue`/`--issues`, or an unknown flag                                                                                                                                   | a `gh` failure resolving issue state                                                                                                     | —                                                           | an unexpected exception |
-| `discover-viability-gate.mjs`    | missing `--issue`/`--issues`, or an unknown flag                                                                                                                                   | a `gh` failure resolving issue state                                                                                                     | —                                                           | an unexpected exception |
-| `ci-wait-state.mjs`              | missing/invalid `--pr`, or an unknown flag                                                                                                                                         | a `gh` failure resolving CI state                                                                                                        | —                                                           | an unexpected exception |
+| Helper                           | `usage`                                                                                                                                                                            | `not-found` / `transport`                                                                                                                | `gate`                                                                                                                                | `internal`              |
+| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- |
+| `pre-merge-readiness.mjs`        | missing/invalid `--pr`, `--claim-issue`, or a flag-combination error                                                                                                               | a `gh` failure while resolving the repo, PR, or checks (still prints the existing `{"error": ...}` stdout JSON, unchanged by this track) | —                                                                                                                                     | an unexpected exception |
+| `resume-claim-routing.mjs`       | missing/invalid `--issue`, an unknown flag, `--assert` without `--claim-id`, `--assert` with `--fresh-claim-gate`, or `--own-worktree` that is empty or lacks `--fresh-claim-gate` | a `gh` failure resolving claim state                                                                                                     | `--assert` when the verdict is not `already_owned` / `keep`, including a missing/mismatched `--agent-id` on a session-qualified claim | an unexpected exception |
+| `authoring-owner-provenance.mjs` | missing/invalid `--issue`, or an unknown flag                                                                                                                                      | a `gh` failure resolving comment/marker history                                                                                          | —                                                                                                                                     | an unexpected exception |
+| `discover-readiness-check.mjs`   | missing `--issue`/`--issues`, or an unknown flag                                                                                                                                   | a `gh` failure resolving issue state                                                                                                     | —                                                                                                                                     | an unexpected exception |
+| `discover-viability-gate.mjs`    | missing `--issue`/`--issues`, or an unknown flag                                                                                                                                   | a `gh` failure resolving issue state                                                                                                     | —                                                                                                                                     | an unexpected exception |
+| `ci-wait-state.mjs`              | missing/invalid `--pr`, or an unknown flag                                                                                                                                         | a `gh` failure resolving CI state                                                                                                        | —                                                                                                                                     | an unexpected exception |
 
 ### Migrated helpers (review and merge batch)
 
@@ -6404,10 +6404,22 @@ This record is durable issue evidence: it is not added to the transient
      idd-claim.instructions.md requires; `tokens-record-failed` on failure),
      then `claim-lock --acquire` on the worktree (`lock-acquire-failed`),
      then `claim-lock --read-tokens`, which must read back as present and not
-     malformed for this claim. Then, after `claim.verifySettleDelay`,
-     `resume-claim-routing --assert`. Only `already_owned` with `keep`
-     verifies the claim (`claim-not-verified`); the verdict is read from
-     the output on every exit.
+     malformed for this claim. After `claim.verifySettleDelay`, run this
+     active-claim assertion with the persisted session identity:
+
+     ```sh
+     node scripts/resume-claim-routing.mjs \
+       --issue <N> \
+       --assert \
+       --claim-id <id> \
+       --agent-id <agent-id> \
+       --nonce <nonce> \
+       --worktree <path>
+     ```
+
+     Only `already_owned` with `keep` verifies the claim
+     (`claim-not-verified`); the verdict is read from the output on every
+     exit.
   7. A second hold check. A hold, or an unreadable label, first checks the
      claim again: the worktree lock is acquired with its tokens read back,
      and the claim is asserted. Any failure there posts nothing and stops
@@ -7543,8 +7555,11 @@ means restart E1; do not include a later CI pass in the watermark.
 - `--agent-id` (kurone-kito/idd-skill#4936, #5000): pass this session's
   persisted identity on every owner assertion. A session-qualified active
   claim requires an exact match; omission or mismatch routes as another
-  session's claim. An exact matching bare ID is accepted only with
-  `--assert` for a legacy claim; bare IDs elsewhere are usage errors. The
+  session's claim, so `--assert` fails with a `kind: "gate"` verdict. An
+  `--agent-id` may be omitted only when the active claim's marker predates
+  session-qualified IDs. A bare ID is accepted only with `--assert` and
+  only when it exactly matches that legacy marker; bare IDs elsewhere are
+  usage errors. The
   `--fresh-claim-gate` call does not take an agent ID because no claim exists
   yet.
 - Optional `--assert` (kurone-kito/idd-skill#3667): turn the verdict into an
