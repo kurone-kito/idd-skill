@@ -64,7 +64,7 @@ jobs:
     # Differs from the input default: own lanes must avoid slim's 15m cap.
     runs-on: ${{ inputs.runner || 'ubuntu-latest' }}
     # Each shard keeps the full suite's bound; see pnpm-boundary-full.
-    timeout-minutes: 20
+    timeout-minutes: 30
     strategy:
       # One failed shard must not cancel the others, or a rerun would have
       # to repeat them too.
