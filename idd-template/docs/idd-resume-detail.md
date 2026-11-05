@@ -28,6 +28,14 @@ The copies and the recovery sequence are described in
 evidence under the contract in `docs/customization.md`: record the approving
 human, old claim ID, branch, linked PR (if any), and evidence URL.
 
+**Repeat the detached-rebase route on every Resume.** If Step 1 returns
+`already_owned` / `keep` and its fresh
+`evidence.owner_evidence.rebase_identity.passed` is `true`, route to this §FH
+procedure before the ordinary same-claim Step 2 table. This includes resumes
+after the successor already took over the lock. The generic Step 1
+same-claim route dispatches to §FH in this case; it is not permission to
+select ordinary no-PR work. A missing or false proof does not select §FH.
+
 The recommended operator path for collecting that evidence is the
 interactive `idd-force-handoff` helper. It asks for the issue number
 first, checks live open PRs on the active claim branch to decide whether
@@ -145,7 +153,9 @@ these hold:
   match, and the same single linked worktree is being inspected. It requires
   exactly one valid `rebase-merge` or `rebase-apply` backend, matching
   `head-name`, a resolvable `orig-head` equal to the local issue-branch tip,
-  and no merge, cherry-pick, revert, bisect, sequencer, or `git am` state.
+  no other worktree record may check out the claimed branch, and no merge,
+  cherry-pick, revert, bisect, sequencer, or `git am` state. The proof
+  rejects a locked target record even when all rebase metadata matches.
   Detached state without that passed proof, or any missing, malformed,
   contradictory, or unreadable evidence, keeps the stop. Do not infer the
   proof from a detached record or hand-read metadata as a substitute (#4903).
@@ -200,7 +210,12 @@ session's plan does not substitute. Revalidate the active claim, winning
 nonce, owner evidence, lock, and generated-token record immediately before
 each mutation. While HEAD remains detached, edit only conflict paths within
 the claimed issue's Candidate files, stage only those paths with
-`git add -- <candidate-conflict-paths>`, and run `git rebase --continue`.
+`git add -- <candidate-conflict-paths>`, and continue the rebase with the
+same profile-selected signing wrapper/tier used to start it, following D1's
+`--continue` form. A commit-only `git commit-ssh` alias does not wrap a rebase;
+use a rebase-capable wrapper or D1's selected unsigned-tier command. Do not
+run bare `git rebase --continue` when primary signing is
+non-interactive-hostile.
 Do not abort, skip, reset, switch branches, or push. If a resolution needs a
 path outside Candidate files, retain the claim and worktree and stop for
 scope reconciliation. Let normal rebase completion attach the worktree to

@@ -148,26 +148,14 @@ export function buildForcedHandoffEnabledGate(options) {
 /**
  * Take the occupancy probe and the owner check once for a claim-id match.
  * The gate applies only when a probe or an owner callback is wired and the
- * probe did not come back `absent` (#3154), except for the explicit
- * nonce-matched forced-handoff case below. A wired probe with no owner
+ * probe did not come back `absent` (#3154). A wired probe with no owner
  * callback never proves ownership.
  */
 function checkCurrentSessionOwner(claim, options, context) {
   const probe = options.inspectLocalWorktree?.(claim.branch);
-  const handoff = context.appliedForcedHandoff;
-  const exactAbsentProbeHandoff = Boolean(
-    options.checkForcedHandoffOwnerWhenProbeAbsent &&
-      handoff &&
-      handoff.contextScope === 'issue-only' &&
-      handoff.newAgentId === claim.agentId &&
-      handoff.newClaimId === claim.claimId &&
-      handoff.branch === claim.branch &&
-      context.activationNonceWinner !== null &&
-      context.nonceChecked === context.activationNonceWinner,
-  );
   if (
     !(options.inspectLocalWorktree || options.isCurrentSessionOwner) ||
-    (probe?.status === 'absent' && !exactAbsentProbeHandoff)
+    probe?.status === 'absent'
   ) {
     return { probe, unproven: false, evidence: null };
   }
@@ -175,6 +163,8 @@ function checkCurrentSessionOwner(claim, options, context) {
   const structured = typeof verdict === 'object' ? verdict : null;
   return {
     probe,
+    // The early return above preserves the established no-worktree route and
+    // ensures an absent probe never reaches an owner callback.
     unproven: !(structured ? structured.owner : verdict),
     evidence: probe !== undefined && structured ? structured.evidence : null,
   };
@@ -224,6 +214,8 @@ function emptyRebaseIdentityProof(reason) {
     comparisons: {
       canonical_worktree_matches: null,
       single_linked_worktree_matches: null,
+      worktree_unlocked: null,
+      no_other_branch_worktree: null,
       detached_head: null,
       exclusive_backend: null,
       head_name_matches: null,
@@ -278,10 +270,22 @@ function inspectRebaseIdentity(claim, localWorktree, worktreePath) {
       matchingRecords[0].detached &&
       !matchingRecords[0].bare &&
       !matchingRecords[0].prunable;
+    proof.comparisons.worktree_unlocked =
+      matchingRecords.length === 1 && !matchingRecords[0].locked;
     proof.comparisons.detached_head =
       matchingRecords.length === 1 && matchingRecords[0].detached;
     if (!proof.comparisons.single_linked_worktree_matches) {
       return fail('worktree-is-not-the-single-detached-linked-occupant');
+    }
+    if (!proof.comparisons.worktree_unlocked) {
+      return fail('worktree-is-locked');
+    }
+    const claimedBranchRef = `refs/heads/${claim.branch}`;
+    proof.comparisons.no_other_branch_worktree =
+      worktreeRecords.filter((record) => record.branchRef === claimedBranchRef)
+        .length === 0;
+    if (!proof.comparisons.no_other_branch_worktree) {
+      return fail('claimed-branch-is-checked-out-in-another-worktree');
     }
     const rebaseMergePath = gitAdminPath(worktreePath, 'rebase-merge');
     const rebaseApplyPath = gitAdminPath(worktreePath, 'rebase-apply');
@@ -1291,7 +1295,6 @@ function runCli() {
           linkedOpenPrCount: linkedPr.references.size,
         },
       ),
-    checkForcedHandoffOwnerWhenProbeAbsent: Boolean(args.worktree),
     linkedPrLookupFailed,
     // #4019: only with --own-worktree, which requires --fresh-claim-gate.
     ...(args.ownWorktree

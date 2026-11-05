@@ -4115,10 +4115,12 @@ function withSuccessorSandbox(
     primary: string;
     worktree: string;
     env: NodeJS.ProcessEnv;
+    extraWorktrees: string[];
   }) => void,
 ): void {
   const primary = mkdtempSync(join(tmpdir(), 'idd-successor-primary-'));
   const worktree = join(primary, '..', `${basename(primary)}-wt`);
+  const extraWorktrees: string[] = [];
   const env = hermeticGitEnv();
   try {
     gitIn(primary, ['init', '--quiet', '-b', 'main'], env);
@@ -4134,8 +4136,16 @@ function withSuccessorSandbox(
       claimId: 'claim-old',
       nonce: 'nonce-old',
     });
-    body({ primary, worktree, env });
+    body({ primary, worktree, env, extraWorktrees });
   } finally {
+    for (const extraWorktree of extraWorktrees) {
+      try {
+        gitIn(primary, ['worktree', 'remove', '--force', extraWorktree], env);
+      } catch {
+        // best-effort; rmSync below still runs
+      }
+      rmSync(extraWorktree, { recursive: true, force: true });
+    }
     try {
       gitIn(primary, ['worktree', 'remove', '--force', worktree], env);
     } catch {
@@ -4177,7 +4187,6 @@ function routeAsSuccessor(
       isForcedHandoffEnabled: () => true,
       isAuthorizedForcedHandoff: (forcedBy) => forcedBy === 'maintainer',
       inspectLocalWorktree: inspect,
-      checkForcedHandoffOwnerWhenProbeAbsent: true,
       isCurrentSessionOwner: (claim, localWorktree, context) =>
         evaluateForcedHandoffRebaseOwnerEvidence(
           claim,
@@ -4405,6 +4414,12 @@ function snapshotSuccessorRebaseState(sandbox: {
       gitAdminPathForTest(sandbox, 'BISECT_START'),
     ),
     sequencer: snapshotPathForTest(gitAdminPathForTest(sandbox, 'sequencer')),
+    worktreeLock: snapshotPathForTest(gitAdminPathForTest(sandbox, 'locked')),
+    worktreeList: gitIn(
+      sandbox.primary,
+      ['worktree', 'list', '--porcelain', '-z'],
+      sandbox.env,
+    ),
     lock: snapshotPathForTest(checkClaimLock(sandbox.worktree).path),
     oldTokens: snapshotPathForTest(oldTokens.path),
     newTokens: snapshotPathForTest(newTokens.path),
@@ -4510,6 +4525,12 @@ test('a verified forced-handoff successor can resume both interrupted rebase bac
           detachedHead:
             result.evidence.owner_evidence?.rebase_identity?.comparisons
               .detached_head,
+          worktreeUnlocked:
+            result.evidence.owner_evidence?.rebase_identity?.comparisons
+              .worktree_unlocked,
+          noOtherBranchWorktree:
+            result.evidence.owner_evidence?.rebase_identity?.comparisons
+              .no_other_branch_worktree,
           origHeadMatches:
             result.evidence.owner_evidence?.rebase_identity?.comparisons
               .orig_head_matches_branch_tip,
@@ -4519,6 +4540,8 @@ test('a verified forced-handoff successor can resume both interrupted rebase bac
           backend: backend === 'apply' ? 'rebase-apply' : 'rebase-merge',
           headName: `refs/heads/${SUCCESSOR_BRANCH}`,
           detachedHead: true,
+          worktreeUnlocked: true,
+          noOtherBranchWorktree: true,
           origHeadMatches: true,
         },
       );
@@ -4545,7 +4568,7 @@ test('forced-handoff rebase proof stays disabled for non-matching handoff, nonce
       overrides: { eligibility: { linkedPrLookupSucceeded: false } },
     },
     {
-      name: 'branch is not associated with the detached worktree',
+      name: 'absent occupancy probe keeps the pre-worktree route',
       overrides: {
         probe: { status: 'absent', paths: [], reason: null },
       },
@@ -4609,13 +4632,15 @@ test('forced-handoff rebase proof stays disabled for non-matching handoff, nonce
       prepareDetachedSuccessor(sandbox);
       const before = snapshotSuccessorRebaseState(sandbox);
       const result = routeAsSuccessor(sandbox, scenario.overrides);
-      assert.notEqual(result.state, 'already_owned', scenario.name);
       const proof = result.evidence.owner_evidence?.rebase_identity;
       if (
-        scenario.name === 'branch is not associated with the detached worktree'
+        scenario.name === 'absent occupancy probe keeps the pre-worktree route'
       ) {
-        assert.equal(proof?.passed, false, scenario.name);
+        assert.equal(result.state, 'already_owned', scenario.name);
+        assert.equal(result.action, 'keep', scenario.name);
+        assert.equal(result.evidence.owner_evidence, undefined, scenario.name);
       } else {
+        assert.notEqual(result.state, 'already_owned', scenario.name);
         assert.equal(proof, undefined, scenario.name);
       }
       assert.deepEqual(
@@ -4635,11 +4660,13 @@ test('rebase identity rejects contradictory or unreadable evidence without chang
       primary: string;
       worktree: string;
       env: NodeJS.ProcessEnv;
+      extraWorktrees: string[];
     }) => void;
     probe?: (sandbox: {
       primary: string;
       worktree: string;
       env: NodeJS.ProcessEnv;
+      extraWorktrees: string[];
     }) => LocalWorktreeInspection;
   }> = [
     {
@@ -4749,6 +4776,47 @@ test('rebase identity rejects contradictory or unreadable evidence without chang
         reason: null,
       }),
     },
+    {
+      name: 'another worktree checks out the claimed branch after the initial probe',
+      mutate: (sandbox) => {
+        const otherWorktree = join(
+          dirname(sandbox.primary),
+          `${basename(sandbox.primary)}-other`,
+        );
+        gitIn(
+          sandbox.primary,
+          [
+            'worktree',
+            'add',
+            '--force',
+            '--quiet',
+            otherWorktree,
+            SUCCESSOR_BRANCH,
+          ],
+          sandbox.env,
+        );
+        sandbox.extraWorktrees.push(otherWorktree);
+      },
+      probe: (sandbox) => ({
+        status: 'occupied',
+        paths: [sandbox.worktree],
+        reason: null,
+      }),
+    },
+    {
+      name: 'locked detached worktree is refused',
+      mutate: (sandbox) =>
+        gitIn(
+          sandbox.primary,
+          ['worktree', 'lock', '--reason', 'locked for test', sandbox.worktree],
+          sandbox.env,
+        ),
+      probe: (sandbox) => ({
+        status: 'occupied',
+        paths: [sandbox.worktree],
+        reason: null,
+      }),
+    },
   ];
 
   for (const scenario of scenarios) {
@@ -4776,6 +4844,38 @@ test('rebase identity rejects contradictory or unreadable evidence without chang
       );
     });
   }
+});
+
+test('an absent occupancy probe cannot be turned into ownership by a callback', () => {
+  let callbackCalled = false;
+  const result = evaluateResumeClaimRouting(
+    {
+      claimId: 'claim-new',
+      nonce: 'nonce-new',
+      agentId: 'agent-new',
+      now: '2026-05-12T11:00:00Z',
+      events: SUCCESSOR_EVENTS,
+    },
+    {
+      isTrustedAuthor: trusted(['maintainer']),
+      isForcedHandoffEnabled: () => true,
+      isAuthorizedForcedHandoff: (forcedBy) => forcedBy === 'maintainer',
+      inspectLocalWorktree: () => ({
+        status: 'absent',
+        paths: [],
+        reason: null,
+      }),
+      isCurrentSessionOwner: () => {
+        callbackCalled = true;
+        return true;
+      },
+    },
+  );
+
+  assert.equal(callbackCalled, false);
+  assert.equal(result.state, 'already_owned');
+  assert.equal(result.action, 'keep');
+  assert.equal(result.evidence.owner_evidence, undefined);
 });
 
 test('a passed rebase identity proof does not waive the successor token nonce (#5045)', () => {
