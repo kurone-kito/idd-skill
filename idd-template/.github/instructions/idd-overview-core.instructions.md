@@ -231,12 +231,9 @@ When in scope, run:
    do not auto-relocate; investigate (`scripts/idd-doctor.mjs` flags the
    same primary-worktree-HEAD symptom) and either remove the stale
    primary-HEAD branch or rerun B1 in a fresh worktree.
-4. Also assert the worktree is **on the claimed branch**:
-   `git branch --show-current` must equal the active claim's `branch:`
-   value — a worktree can be in the right directory but switched onto a
-   different branch under concurrency. If it differs, stop and report;
-   do not `add`, `commit`, or `push` from a worktree not on the claimed
-   branch.
+4. Require `git branch --show-current` to match the claimed `branch:`.
+   Stop on mismatch unless §FH's verified-rebase exception below applies.
+
 5. Acquire the worktree-local claim lock immediately before the mutation,
    using the profile-selected `claim-lock` helper
    (`docs/idd-helper-scripts.md`) with `{agent-id}`/`{claim-id}`.
@@ -247,6 +244,10 @@ When in scope, run:
    recovers only via `docs/idd-helper-scripts.md`'s gated backfill
    sequence (each step must succeed before the next; `reacquired:
    true` required at both ends) -- else fails closed.
+
+**§FH exception.** Require fresh `--assert`, all owner checks, and
+`rebase_identity.passed`; follow `docs/idd-resume-detail.md`, revalidate
+each mutation, then require branch-attached `already_owned`.
 
 **Wrong-branch recovery.** Cherry-pick onto the right branch and
 restore the contaminated one — never `git reset --hard` +
