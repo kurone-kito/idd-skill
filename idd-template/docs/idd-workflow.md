@@ -2279,7 +2279,9 @@ contract for continuation records.
    `claimed-by` marker that carries the same claim-id, because the token record
    holds no issue number. Run the profile-selected `resume-claim-routing`
    command (see `docs/idd-helper-scripts.md`) with `--assert`, `--issue`,
-   `--claim-id`, `--nonce` (when the file holds one), and `--worktree <path>`.
+   `--claim-id`, `--agent-id` (the session-suffixed id from the matching
+   trusted `claimed-by` marker), `--nonce` (when the file holds one), and
+   `--worktree <path>`.
    Continue to step 3 only when the command exits 0, which means the state is
    `already_owned` with action `keep`. A claim that a worker released with its
    `unclaimed-by` marker, as F4 does as its last mutation before returning the

@@ -126,12 +126,12 @@ only; this path's own already-announced pause waits on neither.
 When helper runtime is enabled, you may collect Step 1 evidence with:
 
 ```sh
-node scripts/resume-claim-routing.mjs --issue {issue-number} [--claim-id {claim-id}] [--nonce {nonce}] [--worktree {path}]
+node scripts/resume-claim-routing.mjs --issue {issue-number} [--claim-id {claim-id}] [--agent-id {agent-id}] [--nonce {nonce}] [--worktree {path}]
 ```
 
-Pass `--claim-id` once this session recorded and verified one,
-`--nonce {nonce}` when this session recorded one for that same
-claim-id, and `--worktree {path}` once the B1 worktree exists.
+For a recorded claim, pass `--claim-id` and, if session-qualified,
+`--agent-id {agent-id}`; only pre-rule claims may omit it. Add the recorded
+`--nonce` and B1 `--worktree` when available.
 
 When the issue is closed or its PR merged, skip every bullet below and
 go directly to the table's first three rows (§MC): the helper's routing
@@ -150,19 +150,20 @@ Use helper output as evidence, not as authority:
 - `state: local_worktree_occupied` + `action: stop` → a stale or released
   claim's matching local worktree is occupied, unreadable, or unknown;
   stop; see §LWR (`docs/idd-resume-detail.md`). Verify owner resume with
-  the exact claim-id, or retry a valid forced-handoff successor with its
-  new claim-id, before proceeding.
+  the exact claim-id, or retry a valid forced-handoff successor with the
+  adopted claim-id/agent-id pair below.
 - `state: non_inheritable` + `action: stop` → active non-stale claim
   stop route.
 - `state: disputed` + `action: stop` → contested-claim stop route
   (`cold-recovery-activation-nonce-collision`: no local nonce and 2+
   trusted activation-nonce markers — #1529).
 
-A `non_inheritable`/`stop` verdict whose `evidence.forced_handoff` is
-non-null (#2178) means a valid successor pair already exists — retry
-with `--claim-id <evidence.forced_handoff.new_claim_id>` before
-concluding the claim is not inheritable; see
-`docs/idd-helper-scripts.md`'s Resume claim and route evidence section.
+When `evidence.forced_handoff` is set, retry on
+`stale`/`takeover`, `non_inheritable`/`stop`, or
+`local_worktree_occupied`/`stop` (#2178) with
+`--claim-id <new_claim_id>` and `--agent-id <new_agent_id>`; adopt
+the pair verbatim. See
+`docs/idd-helper-scripts.md`'s Resume claim and route evidence.
 
 If helper runtime is absent, helper output is invalid, or helper evidence
 disagrees with live GitHub state, use the written table below as authoritative,

@@ -103,7 +103,7 @@ this session `newAgentId`: check its `newClaimId` before Claim execution's
 forced-handoff steps:
 
 ```sh
-node scripts/resume-claim-routing.mjs --issue <N> --claim-id <your-or-newClaimId> --agent-id <id> [--nonce <your-recorded-nonce>] [--worktree <path>]
+node scripts/resume-claim-routing.mjs --issue <N> --claim-id <claim-id> --agent-id <id> [--nonce <your-recorded-nonce>] [--worktree <path>]
 ```
 
 Omit `--agent-id` only for a pre-rule claim; pass `--nonce` only if this session
@@ -330,7 +330,7 @@ one clone per worker (`docs/idd-workflow.md`), (c)'s written rules.
 ```sh
 set -euo pipefail
 node scripts/claim-lock.mjs --acquire --worktree <path> --agent-id {agent-id} --claim-id {claim-id}
-route=$(node scripts/resume-claim-routing.mjs --issue <n> --claim-id {claim-id} --worktree <path>)
+route=$(node scripts/resume-claim-routing.mjs --issue <n> --claim-id {claim-id} --agent-id {agent-id} --worktree <path>)
 printf '%s\n' "$route" | CLAIM_ID='{claim-id}' node -e 'const a=JSON.parse(require("fs").readFileSync(0,"utf8")).active_claim;process.exit(a===null||(a&&a.claim_id&&a.claim_id!==process.env.CLAIM_ID)?0:1)'
 test "$(git -C <path> symbolic-ref -q HEAD)" = refs/heads/<branch>
 tip=$(git rev-parse <branch>)
