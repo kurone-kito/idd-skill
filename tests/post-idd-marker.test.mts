@@ -146,6 +146,33 @@ test('buildMarkerBody renders the exact watermark body (reuses renderReviewWater
   );
 });
 
+test('buildMarkerBody writes an explicit base-ref only when the from-pr path supplies it', () => {
+  const fields = {
+    'agent-id': 'a',
+    'claim-id': 'c',
+    'head-sha': SHA,
+    'max-activity-at': 'none',
+    'total-item-count': '0',
+    'ci-completed-at': 'none',
+    'base-ref': 'ignored-stray-field',
+  };
+  const explicitBody = buildMarkerBody('watermark', fields);
+  assert.match(explicitBody.split('\n', 1)[0], / none 0 none -->$/u);
+  assert.doesNotMatch(explicitBody, /ignored-stray-field/u);
+
+  const fromPrBody = buildMarkerBody('watermark', fields, {
+    baseRef: 'Release/Stable',
+  });
+  assert.match(
+    fromPrBody.split('\n', 1)[0],
+    / none 0 none Release\/Stable -->$/u,
+  );
+  assert.equal(
+    parseReviewWatermarkComment(fromPrBody, CREATED_AT)?.baseRef,
+    'Release/Stable',
+  );
+});
+
 test('buildMarkerBody renders the exact baseline body (reuses renderReviewBaselineMarker)', () => {
   assert.equal(
     buildMarkerBody('baseline', { 'agent-id': 'a', 'claim-id': 'c', sha: SHA }),
@@ -280,6 +307,7 @@ test('watermark body round-trips through parseReviewWatermarkComment (real ISO +
     maxActivityUpdatedAt: '2026-06-25T12:00:00Z',
     totalItemCount: 7,
     latestCiCompletedAt: '2026-06-25T11:59:00Z',
+    baseRef: null,
     createdAt: CREATED_AT,
   });
 });
@@ -1494,6 +1522,7 @@ test('watermarkFieldsFromSnapshot output round-trips through the watermark parse
     // The parser stores the 6th field under `latestCiCompletedAt`; pre-merge
     // currency reads it back AS the latest-passing CI time.
     latestCiCompletedAt: '2026-06-25T11:59:00Z',
+    baseRef: null,
     createdAt: CREATED_AT,
   });
 });
@@ -2148,8 +2177,8 @@ test('#4698: --from-pr watermark keeps same-named workflows distinct for the pas
   );
   try {
     const body = JSON.parse(runWatermarkFromPr(false)).body as string;
-    assert.ok(body.includes(`${newer} -->`));
-    assert.ok(!body.includes(`${earlier} -->`));
+    assert.ok(body.includes(`${newer} main -->`));
+    assert.ok(!body.includes(`${earlier} main -->`));
   } finally {
     restore();
   }
@@ -2173,14 +2202,18 @@ test('#3465: a non-required failure does not refuse a passing required check', (
       type: 'watermark',
       target: 'pr',
       number: 1200,
-      body: buildMarkerBody('watermark', {
-        'agent-id': 'claude-02f8159e',
-        'claim-id': 'claim-1134-02f8159e',
-        'head-sha': SHA,
-        'max-activity-at': '2026-06-25T10:30:00Z',
-        'total-item-count': '1',
-        'ci-completed-at': '2026-06-25T11:00:00Z',
-      }),
+      body: buildMarkerBody(
+        'watermark',
+        {
+          'agent-id': 'claude-02f8159e',
+          'claim-id': 'claim-1134-02f8159e',
+          'head-sha': SHA,
+          'max-activity-at': '2026-06-25T10:30:00Z',
+          'total-item-count': '1',
+          'ci-completed-at': '2026-06-25T11:00:00Z',
+        },
+        { baseRef: 'main' },
+      ),
       warnings: [NO_DISPOSITION_EVIDENCE_WARNING_ONE_COMMENT],
     });
   } finally {
@@ -2252,14 +2285,18 @@ test('--from-pr CLI composes review-activity-snapshot and prints the derived wat
       type: 'watermark',
       target: 'pr',
       number: 1200,
-      body: buildMarkerBody('watermark', {
-        'agent-id': 'claude-02f8159e',
-        'claim-id': 'claim-1134-02f8159e',
-        'head-sha': SHA,
-        'max-activity-at': '2026-06-25T10:30:00Z',
-        'total-item-count': '1',
-        'ci-completed-at': '2026-06-25T11:00:00Z',
-      }),
+      body: buildMarkerBody(
+        'watermark',
+        {
+          'agent-id': 'claude-02f8159e',
+          'claim-id': 'claim-1134-02f8159e',
+          'head-sha': SHA,
+          'max-activity-at': '2026-06-25T10:30:00Z',
+          'total-item-count': '1',
+          'ci-completed-at': '2026-06-25T11:00:00Z',
+        },
+        { baseRef: 'main' },
+      ),
       // #1833: the stub's one plain (never-dispositioned) comment has no
       // disposition evidence, so the diagnostic warning fires -- see the
       // dedicated `describeUnaddressedActivity` tests below for the field's
@@ -2364,14 +2401,18 @@ test('--expected-head-sha lets a matching (even differently-cased) --from-pr sna
       type: 'watermark',
       target: 'pr',
       number: 1200,
-      body: buildMarkerBody('watermark', {
-        'agent-id': 'claude-02f8159e',
-        'claim-id': 'claim-1134-02f8159e',
-        'head-sha': SHA,
-        'max-activity-at': '2026-06-25T10:30:00Z',
-        'total-item-count': '1',
-        'ci-completed-at': '2026-06-25T11:00:00Z',
-      }),
+      body: buildMarkerBody(
+        'watermark',
+        {
+          'agent-id': 'claude-02f8159e',
+          'claim-id': 'claim-1134-02f8159e',
+          'head-sha': SHA,
+          'max-activity-at': '2026-06-25T10:30:00Z',
+          'total-item-count': '1',
+          'ci-completed-at': '2026-06-25T11:00:00Z',
+        },
+        { baseRef: 'main' },
+      ),
       // #1833: same one-plain-comment fixture as the "--from-pr CLI
       // composes..." test above (shared stub function).
       warnings: [NO_DISPOSITION_EVIDENCE_WARNING_ONE_COMMENT],
@@ -7293,6 +7334,43 @@ function runWatermarkCli(
   };
 }
 
+function runExplicitWatermarkCli(extra: string[] = []): {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+} {
+  const result = spawnSync(
+    process.execPath,
+    [
+      POST_IDD_MARKER_CLI,
+      '--type',
+      'watermark',
+      '--target',
+      'pr',
+      '1200',
+      '--agent-id',
+      'claude-02f8159e',
+      '--claim-id',
+      'claim-1134-02f8159e',
+      '--head-sha',
+      SHA,
+      '--max-activity-at',
+      'none',
+      '--total-item-count',
+      '0',
+      '--ci-completed-at',
+      'none',
+      ...extra,
+    ],
+    { cwd: REPO_ROOT, encoding: 'utf8', env: { ...process.env } },
+  );
+  return {
+    status: result.status,
+    stdout: result.stdout,
+    stderr: result.stderr,
+  };
+}
+
 /** Make the stub `gh` append every argv it sees to `logFile`, one JSON line each. */
 function withGhArgvLog(stub: string, logFile: string): string {
   return stub.replace(
@@ -7308,13 +7386,37 @@ function ghPostCalls(logFile: string): string[] {
 }
 
 test('#4803: a --from-pr watermark needs --prior-base-ref, with or without --operation-local', () => {
-  for (const extra of [['--operation-local'], []]) {
+  for (const extra of [['--operation-local'], [], ['--base-ref', 'main']]) {
     const missing = runWatermarkCli(extra, { priorBaseRef: null });
     assert.equal(missing.status, 1, missing.stderr);
     assert.match(
       missing.stderr,
       /--type watermark --from-pr requires --prior-base-ref/u,
     );
+  }
+});
+
+test('explicit-field watermark CLI keeps six fields even with a stray --base-ref', () => {
+  for (const extra of [[], ['--base-ref', 'stray-ref']]) {
+    const result = runExplicitWatermarkCli(extra);
+    assert.equal(result.status, 0, result.stderr);
+    const body = (JSON.parse(result.stdout) as { body: string }).body;
+    const parsed = parseReviewWatermarkComment(body, CREATED_AT);
+    assert.ok(parsed);
+    assert.equal(parsed.baseRef, null);
+    assert.doesNotMatch(body, /stray-ref/u);
+  }
+});
+
+test('--from-pr watermark records only the compared --prior-base-ref as its seventh field', () => {
+  for (const extra of [[], ['--base-ref', 'stray-ref']]) {
+    const result = runOperationLocalCli(extra);
+    assert.equal(result.status, 0, result.stderr);
+    assert.ok(result.json?.body);
+    const parsed = parseReviewWatermarkComment(result.json.body, CREATED_AT);
+    assert.ok(parsed);
+    assert.equal(parsed.baseRef, 'main');
+    assert.doesNotMatch(result.json.body, /stray-ref/u);
   }
 });
 

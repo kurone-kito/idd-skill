@@ -135,7 +135,8 @@ all three boundaries. `refuse` or moved HEAD: do not post; repeat Step 1 and
 re-triage. `defer`: do not post; follow the CI-incomplete route and
 refresh Step 1.
 
-Manual six-field: omit `--operation-local`; operator-selected. Run the
+Manual: six fields; no `--operation-local`; `--from-pr` adds base
+([ref](../../../docs/idd-helper-scripts.md)). Run the
 [query](../idd-review-snapshot.instructions.md#manual-ci-fallback) and
 apply its page, ref, producer, and latest-pass rules. Post only if Step 1
 refs/activity/count match and the latest passing CI timestamp equals
