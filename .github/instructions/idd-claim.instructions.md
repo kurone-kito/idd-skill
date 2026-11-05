@@ -205,6 +205,13 @@ issue (different slug variants).
    prunable/other unknown, malformed, unreadable, or target →
    occupied/unreadable (#3154 review).
 
+   This scan reports occupancy, not ownership. A detached rebase worktree
+   qualifies for the narrow successor path only when Resume §FH's live
+   `resume-claim-routing` result includes a passed
+   `evidence.owner_evidence.rebase_identity` proof for the exact assigned
+   issue-only handoff; the scan alone never authorizes a lock takeover or
+   mutation (#4903).
+
 2. **Remote branch scan** (scoped Refs API, not repo-wide):
    Query only the issue-number prefix:
 

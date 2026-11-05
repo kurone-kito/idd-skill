@@ -5,8 +5,13 @@
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
 import { execFileSync } from 'node:child_process';
-import { realpathSync } from 'node:fs';
-import { isSessionQualifiedAgentId } from './claim-lock.mjs';
+import { lstatSync, readFileSync, realpathSync } from 'node:fs';
+import { isAbsolute, resolve } from 'node:path';
+import {
+  checkClaimLock,
+  isSessionQualifiedAgentId,
+  readGeneratedClaimTokens,
+} from './claim-lock.mjs';
 import { parseCliArgs } from './cli-args.mjs';
 import { isAuthorizedForcedHandoffActor } from './collaborator-permission.mjs';
 import {
@@ -22,6 +27,7 @@ import {
 import { loadPolicyConfig } from './idd-config.mjs';
 import {
   inspectLocalWorktreeBranch,
+  parseLocalWorktreeList,
   sanitizedGitEnvironment,
 } from './local-worktree-occupancy.mjs';
 import {
@@ -142,25 +148,330 @@ export function buildForcedHandoffEnabledGate(options) {
 /**
  * Take the occupancy probe and the owner check once for a claim-id match.
  * The gate applies only when a probe or an owner callback is wired and the
- * probe did not come back `absent` (#3154): with nothing occupying the
- * branch there is no second session to tell apart. A wired probe with no
- * owner callback never proves ownership.
+ * probe did not come back `absent` (#3154), except for the explicit
+ * nonce-matched forced-handoff case below. A wired probe with no owner
+ * callback never proves ownership.
  */
-function checkCurrentSessionOwner(claim, options) {
+function checkCurrentSessionOwner(claim, options, context) {
   const probe = options.inspectLocalWorktree?.(claim.branch);
+  const handoff = context.appliedForcedHandoff;
+  const exactAbsentProbeHandoff = Boolean(
+    options.checkForcedHandoffOwnerWhenProbeAbsent &&
+      handoff &&
+      handoff.contextScope === 'issue-only' &&
+      handoff.newAgentId === claim.agentId &&
+      handoff.newClaimId === claim.claimId &&
+      handoff.branch === claim.branch &&
+      context.activationNonceWinner !== null &&
+      context.nonceChecked === context.activationNonceWinner,
+  );
   if (
     !(options.inspectLocalWorktree || options.isCurrentSessionOwner) ||
-    probe?.status === 'absent'
+    (probe?.status === 'absent' && !exactAbsentProbeHandoff)
   ) {
     return { probe, unproven: false, evidence: null };
   }
-  const verdict = options.isCurrentSessionOwner?.(claim, probe);
+  const verdict = options.isCurrentSessionOwner?.(claim, probe, context);
   const structured = typeof verdict === 'object' ? verdict : null;
   return {
     probe,
     unproven: !(structured ? structured.owner : verdict),
     evidence: probe !== undefined && structured ? structured.evidence : null,
   };
+}
+function gitText(worktree, args) {
+  return execFileSync('git', ['-C', worktree, ...args], {
+    encoding: 'utf8',
+    env: sanitizedGitEnvironment(),
+    stdio: ['ignore', 'pipe', 'pipe'],
+  }).replace(/\n$/u, '');
+}
+function gitAdminPath(worktree, name) {
+  const value = gitText(worktree, ['rev-parse', '--git-path', name]);
+  if (!value || value.includes('\n') || value.includes('\r')) {
+    throw new Error(`invalid git path for ${name}`);
+  }
+  return isAbsolute(value) ? value : resolve(worktree, value);
+}
+function pathState(path) {
+  try {
+    lstatSync(path);
+    return 'present';
+  } catch (error) {
+    return error.code === 'ENOENT' ? 'absent' : 'unreadable';
+  }
+}
+function readStrictGitLine(path) {
+  const info = lstatSync(path);
+  if (!info.isFile() || info.isSymbolicLink()) {
+    throw new Error('metadata is not a regular file');
+  }
+  const value = readFileSync(path, 'utf8');
+  const match = value.match(/^([^\r\n]+)\n?$/u);
+  if (!match) {
+    throw new Error('metadata is not one non-empty LF-terminated line');
+  }
+  return match[1];
+}
+function emptyRebaseIdentityProof(reason) {
+  return {
+    passed: false,
+    expected_worktree: null,
+    backend: null,
+    head_name: null,
+    orig_head: null,
+    branch_tip: null,
+    comparisons: {
+      canonical_worktree_matches: null,
+      single_linked_worktree_matches: null,
+      detached_head: null,
+      exclusive_backend: null,
+      head_name_matches: null,
+      orig_head_is_commit: null,
+      orig_head_matches_branch_tip: null,
+      no_other_operation: null,
+    },
+    reason,
+  };
+}
+/** Inspect one detached, in-progress rebase without changing Git state. */
+function inspectRebaseIdentity(claim, localWorktree, worktreePath) {
+  const proof = emptyRebaseIdentityProof('rebase-identity-unverified');
+  const fail = (reason) => ({
+    ...proof,
+    reason,
+  });
+  try {
+    if (
+      localWorktree.status !== 'occupied' ||
+      localWorktree.paths.length !== 1
+    ) {
+      return fail('expected-exactly-one-occupied-worktree');
+    }
+    const canonicalWorktree = realpathSync(worktreePath);
+    const canonicalTopLevel = realpathSync(
+      gitText(worktreePath, ['rev-parse', '--show-toplevel']),
+    );
+    proof.expected_worktree = canonicalWorktree;
+    proof.comparisons.canonical_worktree_matches =
+      canonicalTopLevel === canonicalWorktree;
+    if (!proof.comparisons.canonical_worktree_matches) {
+      return fail('worktree-root-mismatch');
+    }
+    const occupiedPath = realpathSync(localWorktree.paths[0]);
+    const worktreeFile = lstatSync(resolve(canonicalWorktree, '.git'));
+    const worktreeRecords = parseLocalWorktreeList(
+      gitText(worktreePath, ['worktree', 'list', '--porcelain', '-z']),
+    );
+    const matchingRecords = worktreeRecords.filter((record) => {
+      try {
+        return realpathSync(record.path) === canonicalWorktree;
+      } catch {
+        return false;
+      }
+    });
+    proof.comparisons.single_linked_worktree_matches =
+      occupiedPath === canonicalWorktree &&
+      worktreeFile.isFile() &&
+      !worktreeFile.isSymbolicLink() &&
+      matchingRecords.length === 1 &&
+      matchingRecords[0].detached &&
+      !matchingRecords[0].bare &&
+      !matchingRecords[0].prunable;
+    proof.comparisons.detached_head =
+      matchingRecords.length === 1 && matchingRecords[0].detached;
+    if (!proof.comparisons.single_linked_worktree_matches) {
+      return fail('worktree-is-not-the-single-detached-linked-occupant');
+    }
+    const rebaseMergePath = gitAdminPath(worktreePath, 'rebase-merge');
+    const rebaseApplyPath = gitAdminPath(worktreePath, 'rebase-apply');
+    const mergeState = pathState(rebaseMergePath);
+    const applyState = pathState(rebaseApplyPath);
+    const exclusiveBackend =
+      (mergeState === 'present' && applyState === 'absent') ||
+      (mergeState === 'absent' && applyState === 'present');
+    proof.comparisons.exclusive_backend = exclusiveBackend;
+    if (!exclusiveBackend) {
+      return fail(
+        mergeState === 'unreadable' || applyState === 'unreadable'
+          ? 'rebase-backend-unreadable'
+          : 'missing-or-conflicting-rebase-backends',
+      );
+    }
+    const backend = mergeState === 'present' ? 'rebase-merge' : 'rebase-apply';
+    proof.backend = backend;
+    const backendPath =
+      backend === 'rebase-merge' ? rebaseMergePath : rebaseApplyPath;
+    const backendInfo = lstatSync(backendPath);
+    if (!backendInfo.isDirectory() || backendInfo.isSymbolicLink()) {
+      return fail('rebase-backend-is-not-a-regular-directory');
+    }
+    let noOtherOperation = true;
+    for (const marker of [
+      'MERGE_HEAD',
+      'CHERRY_PICK_HEAD',
+      'REVERT_HEAD',
+      'BISECT_START',
+      'sequencer',
+    ]) {
+      if (pathState(gitAdminPath(worktreePath, marker)) !== 'absent') {
+        noOtherOperation = false;
+      }
+    }
+    if (
+      backend === 'rebase-apply' &&
+      pathState(resolve(backendPath, 'applying')) !== 'absent'
+    ) {
+      noOtherOperation = false;
+    }
+    proof.comparisons.no_other_operation = noOtherOperation;
+    if (!noOtherOperation) {
+      return fail('another-git-operation-is-active');
+    }
+    const headName = readStrictGitLine(resolve(backendPath, 'head-name'));
+    const origHead = readStrictGitLine(resolve(backendPath, 'orig-head'));
+    proof.head_name = headName;
+    proof.orig_head = origHead;
+    const expectedHeadName = `refs/heads/${claim.branch}`;
+    const headNameMatches =
+      claim.branch.startsWith('issue/') && headName === expectedHeadName;
+    proof.comparisons.head_name_matches = headNameMatches;
+    if (!headNameMatches) {
+      return fail('rebase-head-name-does-not-match-claimed-branch');
+    }
+    const objectFormat = gitText(worktreePath, [
+      'rev-parse',
+      '--show-object-format',
+    ]);
+    const expectedObjectIdLength =
+      objectFormat === 'sha1' ? 40 : objectFormat === 'sha256' ? 64 : 0;
+    const validObjectId =
+      expectedObjectIdLength > 0 &&
+      new RegExp(`^[0-9a-f]{${expectedObjectIdLength}}$`, 'u').test(origHead);
+    let resolvedOrigHead = '';
+    if (validObjectId) {
+      resolvedOrigHead = gitText(worktreePath, [
+        'rev-parse',
+        '--verify',
+        '--end-of-options',
+        `${origHead}^{commit}`,
+      ]);
+    }
+    proof.comparisons.orig_head_is_commit =
+      validObjectId && resolvedOrigHead === origHead;
+    if (!proof.comparisons.orig_head_is_commit) {
+      return fail('orig-head-is-not-a-resolvable-commit');
+    }
+    const branchTip = gitText(worktreePath, [
+      'rev-parse',
+      '--verify',
+      '--end-of-options',
+      `${expectedHeadName}^{commit}`,
+    ]);
+    proof.branch_tip = branchTip;
+    proof.comparisons.orig_head_matches_branch_tip = origHead === branchTip;
+    if (!proof.comparisons.orig_head_matches_branch_tip) {
+      return fail('orig-head-does-not-match-claimed-branch-tip');
+    }
+    return { ...proof, passed: true, reason: null };
+  } catch {
+    return fail('rebase-identity-evidence-unreadable-or-malformed');
+  }
+}
+/**
+ * Add the narrowly scoped forced-handoff rebase identity proof to the normal
+ * owner checks. Every lock, token, agent, nonce, and occupancy proof remains
+ * independently necessary; this only supplies detached-HEAD worktree identity.
+ */
+export function evaluateForcedHandoffRebaseOwnerEvidence(
+  claim,
+  localWorktree,
+  worktreePath,
+  context,
+  eligibility,
+) {
+  const ordinary = evaluateCurrentSessionOwnerEvidence(
+    claim,
+    localWorktree,
+    worktreePath,
+  );
+  const handoff = context.appliedForcedHandoff;
+  const eligible =
+    eligibility.humanGated &&
+    eligibility.issueOpen &&
+    eligibility.linkedPrLookupSucceeded &&
+    eligibility.linkedOpenPrCount === 0 &&
+    handoff !== null &&
+    handoff.contextScope === 'issue-only' &&
+    handoff.newAgentId === claim.agentId &&
+    handoff.newClaimId === claim.claimId &&
+    handoff.branch === claim.branch &&
+    context.activationNonceWinner !== null &&
+    context.nonceChecked === context.activationNonceWinner;
+  if (!eligible || ordinary.evidence.worktree_identity) {
+    return ordinary;
+  }
+  const proof = inspectRebaseIdentity(claim, localWorktree, worktreePath);
+  if (!proof.passed) {
+    return {
+      owner: false,
+      evidence: { ...ordinary.evidence, rebase_identity: proof },
+    };
+  }
+  let lockMatches = false;
+  let holderAgentId = '';
+  try {
+    const lock = checkClaimLock(worktreePath);
+    const holder = lock.holder;
+    lockMatches = Boolean(
+      lock.present &&
+        !lock.malformed &&
+        holder &&
+        holder.claimId === claim.claimId &&
+        holder.agentId,
+    );
+    if (lockMatches && holder) {
+      holderAgentId = holder.agentId;
+    }
+  } catch {
+    lockMatches = false;
+  }
+  let tokensMatch = null;
+  let agentAndBranchMatch = null;
+  let pathsMatch = null;
+  if (lockMatches) {
+    tokensMatch = false;
+    try {
+      const tokens = readGeneratedClaimTokens(worktreePath, claim.claimId);
+      tokensMatch =
+        tokens.status === 'present' &&
+        tokens.record.claimId === claim.claimId &&
+        tokens.record.agentId === holderAgentId &&
+        tokens.record.nonce === context.activationNonceWinner;
+    } catch {
+      tokensMatch = false;
+    }
+    if (tokensMatch) {
+      agentAndBranchMatch =
+        holderAgentId === claim.agentId &&
+        proof.head_name === `refs/heads/${claim.branch}`;
+    }
+    if (agentAndBranchMatch === true) {
+      pathsMatch =
+        localWorktree.paths.length === 1 &&
+        proof.comparisons.single_linked_worktree_matches === true;
+    }
+  }
+  const evidence = {
+    worktree_identity: true,
+    claim_lock_matches: lockMatches,
+    generated_tokens_match: tokensMatch,
+    agent_and_branch_match: agentAndBranchMatch,
+    occupancy_probe: localWorktree.status,
+    occupancy_paths_match: pathsMatch,
+    rebase_identity: proof,
+  };
+  return { owner: pathsMatch === true, evidence };
 }
 /**
  * #4019: decide whether one occupant of a released claim's branch is the
@@ -472,7 +783,11 @@ export function evaluateResumeClaimRouting(input, options = {}) {
     // `evidence.owner_evidence` is reported for every claim-id match whose
     // probe is not `absent`, including a `disputed` nonce route (whose
     // state, action and reason this never changes).
-    ownerCheck = checkCurrentSessionOwner(state.activeClaim, options);
+    ownerCheck = checkCurrentSessionOwner(state.activeClaim, options, {
+      appliedForcedHandoff: state.appliedForcedHandoff,
+      activationNonceWinner,
+      nonceChecked,
+    });
     if (laterCompetingClaim) {
       warnings.push(
         `later trusted claim ${laterCompetingClaim.claim_id} at ${laterCompetingClaim.created_at} cannot activate under Claim-state parsing rules 4/6 and is ignored on the owner path`,
@@ -959,12 +1274,24 @@ function runCli() {
       ),
     inspectLocalWorktree: (branchName) =>
       inspectLocalWorktreeBranch(branchName),
-    isCurrentSessionOwner: (claim, localWorktree) =>
-      evaluateCurrentSessionOwnerEvidence(
+    isCurrentSessionOwner: (claim, localWorktree, context) =>
+      evaluateForcedHandoffRebaseOwnerEvidence(
         claim,
         localWorktree ?? inspectLocalWorktreeBranch(claim.branch),
-        args.worktree || undefined,
+        args.worktree || process.cwd(),
+        context ?? {
+          appliedForcedHandoff: null,
+          activationNonceWinner: null,
+          nonceChecked: '',
+        },
+        {
+          humanGated: forcedHandoffEnabled,
+          issueOpen: issue.state === 'open',
+          linkedPrLookupSucceeded: !linkedPrLookupFailed,
+          linkedOpenPrCount: linkedPr.references.size,
+        },
       ),
+    checkForcedHandoffOwnerWhenProbeAbsent: Boolean(args.worktree),
     linkedPrLookupFailed,
     // #4019: only with --own-worktree, which requires --fresh-claim-gate.
     ...(args.ownWorktree
