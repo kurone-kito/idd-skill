@@ -5358,6 +5358,46 @@ test('resolveIssueLoopContext: firstReviewAtMs is the earlier of the review-wate
   }
 });
 
+test('resolveIssueLoopContext: six- and seven-field watermarks produce the same token-cost result', () => {
+  const fixture = readJson(
+    'tests/fixtures/token-cost/github/issue-loop-merged.json',
+  );
+  const results: { firstReviewAtMs: number | null; outcome: string }[] = [];
+  for (const baseRef of [null, 'Release/Stable'] as const) {
+    const patched = JSON.parse(JSON.stringify(fixture));
+    if (baseRef !== null) {
+      const watermark = patched.data.repository.issue.comments.nodes[1];
+      watermark.body = watermark.body.replace(
+        ' none 3 none -->',
+        ` none 3 none ${baseRef} -->`,
+      );
+    }
+    const restore = stubGhReturningJson(patched);
+    try {
+      const ctx = resolveIssueLoopContext(
+        'acme',
+        'repo',
+        9001,
+        ms('2025-12-31T23:55:00Z'),
+        ms('2026-01-01T00:35:00Z'),
+        ['claude-test'],
+      );
+      assert.ok(ctx);
+      results.push({
+        firstReviewAtMs: ctx.firstReviewAtMs,
+        outcome: deriveOutcome(ctx as IssueLoopGithubContext),
+      });
+    } finally {
+      restore();
+    }
+  }
+
+  assert.deepEqual(results, [
+    { firstReviewAtMs: ms('2026-01-01T00:20:00Z'), outcome: 'merged' },
+    { firstReviewAtMs: ms('2026-01-01T00:20:00Z'), outcome: 'merged' },
+  ]);
+});
+
 test('resolveIssueLoopContext: an edited matching review-watermark marker is ignored', () => {
   const fixture = readJson(
     'tests/fixtures/token-cost/github/issue-loop-merged.json',
