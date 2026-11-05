@@ -1032,8 +1032,16 @@ is recorded in source issue `kurone-kito/idd-skill#3494` (2026-09-26).
 With helper runtime, use the
 profile-selected `pre-merge-readiness` invocation documented under
 [merge-gate evidence](idd-helper-scripts.md#merge-gate-evidence) for the
-current PR, passing `--pr <n> --claim-issue <n>` and current
-`--claim-id`, `--agent-id`, and `--nonce` flags when available. Route by its
+current PR, passing `--pr <n> --claim-issue <n>` and this session's
+locally persisted `--claim-id` and `--agent-id`, plus `--nonce` when this
+session recorded one. Before the call, separately verify those persisted
+values match the trusted active claim and nonce markers. The readiness
+helper compares the supplied values with the active marker; it does not
+prove that the caller owns a locally persisted pair. Never copy marker
+values to fill a missing local value; stop if a required value is absent or
+does not match. The legacy omission path applies only to a pre-rule bare-ID
+claim checked with `resume-claim-routing`, not as a general shortcut for
+this readiness invocation. Route by its
 `ready`/`blockers` verdict and then its `branchCurrency`, `threads`,
 `unrepliedComments`, `reviewerStates`, `advisoryWait`, `ci`,
 `dispositionEvidence`, `secondaryQuietWindow`, `claim`, and `closingSet`
@@ -2235,15 +2243,27 @@ not defined here.
 
 This subsection covers an orchestrating session that restarts with its
 session-suffixed agent id, as the 2026-10-11 session did (issue
-`kurone-kito/idd-skill#4014`). Under the default shared `{agent-id}` with no
-session suffix, the session cannot tell its claims from another session's, so
-recovery is unavailable: it reports its claims to the operator and does not
-refill. The roster is not stored anywhere locally, so the steps below rebuild it
-from the forge, the worktrees, and the harness's agent listing. Start with the
-orchestrator phase's session scratchpad preflight to discover the durable record
-from the session identity and recover the exact report-draft root. A session
-with a new id cannot identify its old claims, and step 1 treats them as not its
-own.
+`kurone-kito/idd-skill#4014`). The shared `{agent-id}` convention below is
+historical and applies only to active claims created before issue
+`kurone-kito/idd-skill#4936`; new claims require a session-qualified ID, which
+the session must persist and reuse across a restart. The compatibility path
+uses this session's persisted `--agent-id` in owner checks and compares it
+with the trusted marker; the marker is evidence to compare, not caller
+identity. If a session-qualified marker has no matching session-local ID,
+stop and report the claim. Omit `--agent-id` only for an active pre-rule
+claim whose trusted marker has a legacy bare family ID. The session's exact
+recorded claim-id must match the trusted marker. Apply lock, branch, and
+occupancy checks where a worktree exists; a worktree-less claim is not
+rejected for lacking worktree evidence.
+A bare ID alone cannot distinguish sessions; when
+the session cannot verify which legacy claim it owns, it reports the claim to
+the operator and does not refill. A post-rule claim requires this session's
+matching session-qualified ID, so a session with a different ID cannot
+identify it. The roster is not stored anywhere locally, so the steps below
+rebuild it from the forge, the worktrees, and the harness's agent listing.
+Start with the orchestrator phase's session scratchpad preflight to discover
+the durable record from the session identity and recover the exact report-draft
+root.
 
 Before roster reconstruction or any Discover/refill step, follow the
 [orchestrator restart scan](idd-helper-scripts.md#orchestrator-restart-scan)
@@ -2255,14 +2275,25 @@ contract for continuation records.
    one whose path no longer exists, is not read: it is noted, and a claim whose
    branch or lock it still names is reported to the operator. The scan then goes
    on with the readable entries. Each file holds `agentId` and `claimId`, and a
-   `nonce` when one was recorded. One worktree can hold several files. A claim
-   is own only when its `agentId` equals this session's session-suffixed
-   agent-id and its `agentId` and `claimId` both match the trusted `claimed-by`
-   marker for the same issue. The agent-id alone never proves ownership, because
+   `nonce` when one was recorded. One worktree can hold several files. A
+   post-rule claim is own only when its `agentId` equals this session's
+   persisted session-suffixed agent-id and its `agentId` and `claimId` both
+   match the trusted `claimed-by` marker for the same issue. For an active
+   pre-rule claim whose trusted marker has a legacy bare family ID, the
+   compatibility route may omit `--agent-id`. If that marker is already
+   session-qualified, compare it with this session's persisted agent-id; do
+   not substitute the marker's public ID. If the local ID is absent or does
+   not match, report the claim as not owned. In every case, this session's
+   exact recorded claim-id must match the trusted marker.
+   Apply the lock, branch, and occupancy checks where a worktree exists; a
+   worktree-less claim is not rejected for lacking worktree evidence. The
+   agent-id alone never proves
+   ownership, because
    the claim id is the authoritative token. A session with no unique session
-   identity cannot recover its claims: it reports them to the operator and does
-   not refill. Claims that are not own are not dispatched again, and they are
-   reported to the operator. A worktree that has claim evidence, such as a claim
+   identity cannot recover post-rule claims: it reports them to the operator
+   and does not refill. Claims that are not own are not dispatched again,
+   and they are reported to the operator. A worktree that has claim evidence,
+   such as a claim
    lock or an `issue/<number>-<slug>` branch, but no readable token record is
    reported to the operator rather than skipped, because the claim contract
    treats that state as fail-closed. A worktree with no claim evidence, such as
@@ -2273,8 +2304,11 @@ contract for continuation records.
    F4. Keep at most one record per claim-id: prefer the linked worktree's
    record. A primary-directory record makes a claim worktree-less only when no
    linked worktree carries that claim's branch or lock, and it is a hint only:
-   the trusted claimed-by marker for its issue must also carry this session's
-   unique agent-id and the same claim id. A linked worktree that does carry it,
+   the trusted claimed-by marker for its issue must also match this session's
+   recorded agent-id and the same claim id. For a pre-rule claim, the marker
+   may carry a bare agent-id, but that ID alone cannot identify the session;
+   its compatibility route still requires this session's recorded claim-id
+   to match the trusted marker. A linked worktree that does carry it,
    but has no readable token record, is reported to the operator as unreadable
    and is not treated as worktree-less. A readable linked record stays
    authoritative. For a worktree-less claim, take the issue number from the
@@ -2295,7 +2329,14 @@ contract for continuation records.
    holds no issue number. Run the profile-selected `resume-claim-routing`
    command (see `docs/idd-helper-scripts.md`) with `--assert`, `--issue`,
    `--claim-id`, `--nonce` (when the file holds one), and `--worktree <path>`.
-   Continue to step 3 only when the command exits 0, which means the state is
+   Pass `--agent-id <this session's persisted ID>`, never a value copied
+   from the public marker. The marker is comparison evidence only; if the
+   local ID is missing or does not match a session-qualified marker, stop
+   and report the claim. Omit `--agent-id` only for a pre-rule claim whose
+   trusted marker has the legacy bare family ID. The same compatibility
+   path applies when checking a worktree-less claim without `--assert`.
+   Continue to step 3 only when the
+   command exits 0, which means the state is
    `already_owned` with action `keep`. A claim that a worker released with its
    `unclaimed-by` marker, as F4 does as its last mutation before returning the
    final report, is the one exception. Its `--assert` run exits 1 by design, so
