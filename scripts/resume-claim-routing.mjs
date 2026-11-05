@@ -839,12 +839,16 @@ function runCli() {
       new Error('--own-worktree requires --fresh-claim-gate'),
     );
   }
-  // #4936: a shared bare agent-id cannot tell two sessions apart, so it is
-  // refused rather than compared.
+  // #5000: a bare identity can confirm only its exact legacy claim. Outside
+  // --assert, it cannot distinguish sessions and is refused.
   if (args.agentId && !args.claimId) {
     throw markCliUsageError(new Error('--agent-id requires --claim-id'));
   }
-  if (args.agentId && !isSessionQualifiedAgentId(args.agentId)) {
+  if (
+    args.agentId &&
+    !isSessionQualifiedAgentId(args.agentId) &&
+    !args.assert
+  ) {
     throw markCliUsageError(
       new Error(
         `--agent-id ${JSON.stringify(args.agentId)} is not session-qualified: pass this session's persisted <family>-<suffix> agent-id (a run of at least 8 letters or digits after the first '-'), or omit --agent-id for a claim whose marker agent-id predates that rule`,
@@ -1551,9 +1555,13 @@ function printHelp() {
                       otherwise the claim is routed as another session's
                       (non_inheritable, disputed, or stale behind the
                       local-worktree check) and agent_id_checked reports the
-                      value. A bare family name, a short tag, or an empty
-                      value is a usage error. Omit it only for a claim whose
-                      marker agent-id predates that rule.
+                      value. A bare family name or short tag is accepted
+                      only with --assert, where it must match the exact
+                      pre-rule legacy claim; elsewhere it is a usage error.
+                      An empty value is always a usage error. Omit this flag
+                      only for a claim whose marker agent-id predates that
+                      rule; omission on a session-qualified claim routes as
+                      another session's claim (#5000).
   --worktree <path>   read the independent owner-evidence proof (the claim
                       lock, the generated-tokens record, and the current
                       branch) from this path instead of process.cwd() when
