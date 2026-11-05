@@ -117,6 +117,7 @@ function watermarkComment(
   id = 50,
   extra: Partial<ProviderComment> = {},
   claimId = CLAIM,
+  baseRef?: string,
 ): ProviderComment {
   return comment(
     id,
@@ -127,6 +128,7 @@ function watermarkComment(
       maxActivityAt: 'none',
       totalItemCount: '0',
       ciCompletedAt: 'none',
+      baseRef,
     }),
     extra,
   );
@@ -210,6 +212,7 @@ function harness(overrides: Partial<F4HeadProofGateDeps> = {}): Harness {
       merged: true,
       mergeCommitSha: MERGE,
       headSha: HEAD,
+      baseRefName: 'main',
     })),
     readPullRequestFirstCommitAt: track(
       'readPullRequestFirstCommitAt',
@@ -305,6 +308,7 @@ test('a dry run reads the live state, names the post verdict with a null reason,
     head: HEAD,
   });
   assert.deepEqual(h.posts, []);
+  assert.equal(h.calls.filter((name) => name === 'readPullRequest').length, 1);
   for (const read of [
     'readTokens',
     'assertClaim',
@@ -475,6 +479,7 @@ test('pr-state: an unmerged, unreadable, or malformed pull request', () => {
         merged: false,
         mergeCommitSha: null,
         headSha: HEAD,
+        baseRefName: null,
       }),
     },
     {
@@ -483,6 +488,7 @@ test('pr-state: an unmerged, unreadable, or malformed pull request', () => {
         merged: false,
         mergeCommitSha: null,
         headSha: HEAD,
+        baseRefName: null,
       }),
     },
     {
@@ -491,6 +497,7 @@ test('pr-state: an unmerged, unreadable, or malformed pull request', () => {
         merged: true,
         mergeCommitSha: 'abc123',
         headSha: HEAD,
+        baseRefName: null,
       }),
     },
     {
@@ -499,6 +506,7 @@ test('pr-state: an unmerged, unreadable, or malformed pull request', () => {
         merged: true,
         mergeCommitSha: MERGE,
         headSha: null,
+        baseRefName: null,
       }),
     },
     {
@@ -521,6 +529,7 @@ test('pr-state: the commit endpoint is read only after the pull request passes',
       merged: false,
       mergeCommitSha: MERGE,
       headSha: HEAD,
+      baseRefName: null,
     }),
   });
   runF4HeadProofGate(APPLY, h.deps);
@@ -684,6 +693,104 @@ test('watermark-unauthenticated: no trusted, unedited, same-claim review-waterma
     'watermark-unauthenticated',
     1,
   );
+});
+
+test('a recorded watermark base is checked by a separate live PR read', () => {
+  let reads = 0;
+  const h = harness({
+    listPullRequestComments: () => [watermarkComment(50, {}, CLAIM, 'main')],
+    readPullRequest: () => {
+      reads += 1;
+      return {
+        state: 'closed',
+        merged: true,
+        mergeCommitSha: MERGE,
+        headSha: HEAD,
+        baseRefName: 'main',
+      };
+    },
+  });
+
+  const output = expectVerdict(
+    runF4HeadProofGate(INPUT, h.deps),
+    'post',
+    null,
+    0,
+  );
+  assert.equal(reads, 2);
+  assert.equal(output.proof.f2, F2);
+});
+
+test('a base mismatch leaves the watermark unauthenticated and names both refs', () => {
+  let reads = 0;
+  const h = harness({
+    listPullRequestComments: () => [watermarkComment(50, {}, CLAIM, 'main')],
+    readPullRequest: () => {
+      reads += 1;
+      return {
+        state: 'closed',
+        merged: true,
+        mergeCommitSha: MERGE,
+        headSha: HEAD,
+        baseRefName: reads === 1 ? 'main' : 'develop',
+      };
+    },
+  });
+
+  const output = expectVerdict(
+    runF4HeadProofGate(APPLY, h.deps),
+    'hold',
+    'watermark-unauthenticated',
+    1,
+  );
+  assert.equal(reads, 2);
+  assert.match(
+    (output.warnings ?? []).join('\n'),
+    /base ref "main".*currently targets "develop"/,
+  );
+  assert.equal(
+    output.nextAction,
+    'Do not post. No trusted, unedited review-watermark of this claim could be found on the pull request.',
+  );
+});
+
+test('a missing or unreadable current base fails closed without replacing the comments note', () => {
+  for (const mode of ['missing', 'unreadable'] as const) {
+    let reads = 0;
+    const h = harness({
+      listPullRequestComments: () => [watermarkComment(50, {}, CLAIM, 'main')],
+      readPullRequest: () => {
+        reads += 1;
+        if (reads === 1 || mode === 'missing') {
+          return {
+            state: 'closed',
+            merged: true,
+            mergeCommitSha: MERGE,
+            headSha: HEAD,
+            baseRefName: reads === 1 ? 'main' : null,
+          };
+        }
+        throw new Error('base request failed');
+      },
+    });
+
+    const output = expectVerdict(
+      runF4HeadProofGate(APPLY, h.deps),
+      'hold',
+      'watermark-unauthenticated',
+      1,
+    );
+    const warnings = (output.warnings ?? []).join('\n');
+    assert.equal(reads, 2);
+    assert.match(
+      warnings,
+      /the current base of pull request 4390 could not be read/,
+    );
+    assert.doesNotMatch(
+      warnings,
+      /the comments of pull request 4390 could not be read/,
+    );
+  }
 });
 
 test('claim-activation-unknown: no trusted claimed-by marker for this claim and branch', () => {

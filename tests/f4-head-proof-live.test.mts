@@ -4,7 +4,6 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-
 import {
   claimAssertArgv,
   claimCheckSpawnOptions,
@@ -16,6 +15,7 @@ import {
   resolveCheckoutRepository,
   selectPullRequests,
 } from '../src/scripts/f4-head-proof-live.mts';
+import { pinLoadControlOff, stubExecutable } from './test-utils.mts';
 
 // kurone-kito/idd-skill#4368: the pure classifiers behind the production
 // wiring of the F4 head-proof flow. The `git`, `gh`, and spawn calls around
@@ -1339,4 +1339,52 @@ test('a pull request row is selected only with an explicit same-repository flag'
   assert.deepEqual(selectPullRequests(rows, BRANCH, 100), [
     { number: 34, merged: true },
   ]);
+});
+
+test('readPullRequest maps REST base.ref and returns null when it is missing', () => {
+  const readBaseRefName = (response: Record<string, unknown>) => {
+    const restoreLoadControl = pinLoadControlOff();
+    const restoreGh = stubExecutable(
+      'gh',
+      [
+        'const args = process.argv.slice(2);',
+        `if (args[0] === 'api' && args[1] === 'repos/origin-owner/origin-repo/pulls/${ISSUE}') {`,
+        `  process.stdout.write(${JSON.stringify(JSON.stringify(response))});`,
+        '  process.exit(0);',
+        '}',
+        "process.stderr.write('unexpected gh invocation');",
+        'process.exit(1);',
+      ].join('\n'),
+    );
+    let result: string | null | undefined;
+    try {
+      inOriginCheckout('https://github.com/origin-owner/origin-repo.git', () =>
+        withEnvironment(
+          { GH_HOST: undefined, GITHUB_SERVER_URL: undefined },
+          () => {
+            const deps = createLiveF4HeadProofDeps({
+              resolveRepo: resolveCheckoutRepository,
+            });
+            result = deps.readPullRequest(ISSUE).baseRefName;
+          },
+        ),
+      );
+    } finally {
+      restoreGh();
+      restoreLoadControl();
+    }
+    return result;
+  };
+
+  const common = {
+    state: 'closed',
+    merged: true,
+    merge_commit_sha: '3'.repeat(40),
+    head: { sha: '4'.repeat(40) },
+  };
+  assert.equal(
+    readBaseRefName({ ...common, base: { ref: 'release/next' } }),
+    'release/next',
+  );
+  assert.equal(readBaseRefName(common), null);
 });

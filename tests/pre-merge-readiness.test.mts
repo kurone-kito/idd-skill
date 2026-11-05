@@ -129,6 +129,22 @@ function buildPreMergeReadinessSummary(
   );
 }
 
+function cleanFixtureWithRecordedBaseRef(baseRef: string) {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  let replaced = false;
+  const comments = fixture.input.comments.map(
+    (comment: Record<string, unknown>) => {
+      const body = String(comment.body ?? '');
+      if (!body.startsWith('<!-- review-watermark:')) return comment;
+      if (replaced) throw new Error('expected one clean-fixture watermark');
+      replaced = true;
+      return { ...comment, body: body.replace(' -->', ` ${baseRef} -->`) };
+    },
+  );
+  if (!replaced) throw new Error('clean-fixture watermark was not found');
+  return { ...fixture, input: { ...fixture.input, comments } };
+}
+
 function summarizeClaimValidation(
   events: Parameters<typeof summarizeClaimValidationImpl>[0],
   options: Parameters<typeof summarizeClaimValidationImpl>[1],
@@ -15533,6 +15549,77 @@ test('#4467: an omitted advisoryBotLogins option gives the window the default bo
   const explicitEmptyStatus = secondaryQuietWindowOf(explicitEmpty);
   assert.equal(explicitEmptyStatus.anchorAt, '2026-05-11T23:51:00Z');
   assert.equal(explicitEmptyStatus.elapsed, true);
+});
+
+// #4875: a watermark that records its base is usable only when the caller
+// can compare it with a known, non-empty live PR base. This check precedes
+// head comparison; legacy six-field watermarks keep their old behavior.
+test('a recorded review-watermark base must match a readable development-branch target before snapshot comparison', () => {
+  const fixture = cleanFixtureWithRecordedBaseRef('main');
+  const matching = buildPreMergeReadinessSummary(fixture.input, {
+    ...fixture.options,
+    developmentBranchTarget: {
+      status: 'default',
+      branch: 'main',
+      baseRefName: 'main',
+    },
+  });
+  const matchingCurrency = matching.reviewCurrency as Record<string, unknown>;
+  assert.equal(matchingCurrency.comparisonRoute, 'proceed');
+  assert.equal(matchingCurrency.comparisonReason, 'snapshot-current');
+
+  const changedHead = '2'.repeat(40);
+  const mismatched = buildPreMergeReadinessSummary(
+    { ...fixture.input, prHeadSha: changedHead },
+    {
+      ...fixture.options,
+      developmentBranchTarget: {
+        status: 'default',
+        branch: 'develop',
+        baseRefName: 'develop',
+      },
+    },
+  );
+  const mismatchedCurrency = mismatched.reviewCurrency as Record<
+    string,
+    unknown
+  >;
+  assert.equal(mismatchedCurrency.comparisonRoute, 'return-to-e1');
+  assert.equal(mismatchedCurrency.comparisonReason, 'base-ref');
+
+  for (const target of [
+    undefined,
+    null,
+    { status: 'default', baseRefName: '' },
+  ]) {
+    const options = {
+      ...fixture.options,
+      ...(target === undefined ? {} : { developmentBranchTarget: target }),
+    };
+    const refused = buildPreMergeReadinessSummary(fixture.input, options);
+    assert.equal(
+      (refused.reviewCurrency as Record<string, unknown>).comparisonReason,
+      'base-ref',
+    );
+  }
+
+  const legacy = readJson('fixtures/pre-merge-readiness/clean.json');
+  const legacyChangedHead = buildPreMergeReadinessSummary(
+    { ...legacy.input, prHeadSha: changedHead },
+    {
+      ...legacy.options,
+      developmentBranchTarget: {
+        status: 'default',
+        branch: 'develop',
+        baseRefName: 'develop',
+      },
+    },
+  );
+  assert.equal(
+    (legacyChangedHead.reviewCurrency as Record<string, unknown>)
+      .comparisonReason,
+    'head-changed',
+  );
 });
 
 // #2272: the development-branch-target gate is a fail-closed invariant
