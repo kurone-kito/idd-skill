@@ -1358,20 +1358,39 @@ step 1. This sequence does not repeat them.
    ```
 
 6. Carry the nonce forward on the linked worktree:
-   `node scripts/claim-lock.mjs --record-tokens --worktree <linked>
-   --agent-id <id> --claim-id <id> --nonce <nonce>`.
+
+   ```sh
+   node scripts/claim-lock.mjs \
+     --record-tokens --worktree <linked> \
+     --agent-id <id> --claim-id <id> --nonce <nonce>
+   ```
+
 7. Acquire on the linked worktree:
-   `node scripts/claim-lock.mjs --acquire --worktree <linked> --agent-id <id>
-   --claim-id <id>`. A collision with another claim id means the claim is
-   contested, not yours. Stop, as the failure rules below require.
+
+   ```sh
+   node scripts/claim-lock.mjs \
+     --acquire --worktree <linked> \
+     --agent-id <id> --claim-id <id>
+   ```
+
+   A collision with another claim id means the claim is contested, not yours.
+   Stop, as the failure rules below require.
 8. After the settle delay (`claim.verifySettleDelay`, default `PT5S`), assert:
-   `node scripts/resume-claim-routing.mjs --issue <N> --assert --claim-id <id>
-   --agent-id <agent-id> --nonce <nonce>
-   --worktree <linked>`. Only `already_owned` with action
-   `keep` continues. Any other result stops the sequence. Do not assert before
-   the delay: the nonce and the claim comments are eventually consistent, so an
-   early assert can report a false failure while the markers are still
-   propagating.
+
+   ```sh
+   node scripts/resume-claim-routing.mjs \
+     --issue <N> \
+     --assert \
+     --claim-id <id> \
+     --agent-id <agent-id> \
+     --nonce <nonce> \
+     --worktree <linked>
+   ```
+
+   Only `already_owned` with action `keep` continues. Any other result stops the
+   sequence. Do not assert before the delay: the nonce and the claim comments
+   are eventually consistent, so an early assert can report a false failure
+   while the markers are still propagating.
 
 A failure after the POSTs may leave a live claim, so never answer it by
 repeating a POST blind. Re-read the issue comments first, paginated, and apply

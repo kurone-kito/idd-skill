@@ -6404,11 +6404,22 @@ This record is durable issue evidence: it is not added to the transient
      idd-claim.instructions.md requires; `tokens-record-failed` on failure),
      then `claim-lock --acquire` on the worktree (`lock-acquire-failed`),
      then `claim-lock --read-tokens`, which must read back as present and not
-     malformed for this claim. Then, after `claim.verifySettleDelay`,
-     `resume-claim-routing --assert` with `--claim-id`, `--agent-id`,
-     `--nonce`, and `--worktree`. Only `already_owned` with `keep`
-     verifies the claim (`claim-not-verified`); the verdict is read from
-     the output on every exit.
+     malformed for this claim. After `claim.verifySettleDelay`, run this
+     active-claim assertion with the persisted session identity:
+
+     ```sh
+     node scripts/resume-claim-routing.mjs \
+       --issue <N> \
+       --assert \
+       --claim-id <id> \
+       --agent-id <agent-id> \
+       --nonce <nonce> \
+       --worktree <path>
+     ```
+
+     Only `already_owned` with `keep` verifies the claim
+     (`claim-not-verified`); the verdict is read from the output on every
+     exit.
   7. A second hold check. A hold, or an unreadable label, first checks the
      claim again: the worktree lock is acquired with its tokens read back,
      and the claim is asserted. Any failure there posts nothing and stops
