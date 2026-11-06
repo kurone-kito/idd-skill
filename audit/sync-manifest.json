@@ -552,7 +552,7 @@
         "ceilingPct": 10,
         "limitBytes": 37300,
         "issue": 4893,
-        "reason": "Measured 33,914 bytes after restoring the existing work-phase wording and adding the approved split safeguards. With maxUtilizationPct 98, 37,300 is the largest 100-byte limit within the approved 10% ceiling. Operator approval is recorded in issue #4893 comment #6671770411."
+        "reason": "Final E12 audit measured 34,968 bytes after restoring existing work-phase wording and adding the approved split safeguards. The approved 10% ceiling permits at most 38,400; the 37,300 limit leaves 1,586 bytes before the 98% utilization threshold (36,554). Operator approval is recorded in issue #4893 comment #6671770411."
       },
       {
         "bundle": "bundle-work-lite",
@@ -560,7 +560,7 @@
         "ceilingPct": 10,
         "limitBytes": 29500,
         "issue": 4893,
-        "reason": "Measured 26,826 bytes after restoring the existing Lite wording and adding the approved split safeguards. With maxUtilizationPct 98, 29,500 is the largest 100-byte limit within the approved 10% ceiling. Operator approval is recorded in issue #4893 comment #6671770411."
+        "reason": "Final E12 audit measured 27,793 bytes after restoring existing Lite wording and adding the approved split safeguards. The approved 10% ceiling permits at most 30,500; the 29,500 limit leaves 1,117 bytes before the 98% utilization threshold (28,910). Operator approval is recorded in issue #4893 comment #6671770411."
       }
     ]
   },
