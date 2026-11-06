@@ -326,7 +326,7 @@ one clone per worker (`docs/idd-workflow.md`), (c)'s written rules.
 set -euo pipefail
 node scripts/claim-lock.mjs --acquire --worktree '<path>' --agent-id '{agent-id}' --claim-id '{claim-id}'
 set -- --issue '<n>' --claim-id '{claim-id}'
-if [[ '{agent-id}' =~ -[[:alnum:]]{8,}($|[^[:alnum:]]) ]]; then set -- "$@" --agent-id '{agent-id}'; fi
+if [[ '{agent-id}' =~ ^[^[:space:]-]+-[^[:space:]]*[A-Za-z0-9]{8}[^[:space:]]*$ ]]; then set -- "$@" --agent-id '{agent-id}'; fi
 route=$(node scripts/resume-claim-routing.mjs "$@" --worktree '<path>')
 printf '%s\n' "$route" | CLAIM_ID='{claim-id}' node -e 'const a=JSON.parse(require("fs").readFileSync(0,"utf8")).active_claim;process.exit(a===null||(a&&a.claim_id&&a.claim_id!==process.env.CLAIM_ID)?0:1)'
 test "$(git -C '<path>' symbolic-ref -q HEAD)" = 'refs/heads/<branch>'
