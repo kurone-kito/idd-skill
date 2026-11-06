@@ -11,6 +11,16 @@ source for the full contract and schema.
 The canonical source bundle lives in this repository; install copies in
 the agent-specific skill directory your runtime reads.
 
+During authoring, do not create, remove, or prune any Git worktree, and
+do not write files into the repository's default checkout or any linked
+checkout. Keep drafts, ledger data, and helper output outside every
+worktree. If the session itself created a file inside a checkout, move
+only that file outside the repository and leave unrecognized files
+untouched. Never stash,
+reset, clean, or delete checkout contents. Publishing under the
+authoring hold does not start claim or work. This boundary follows the
+2026-11-06 incident in issue `#5058`.
+
 ## Stable Phases
 
 Use two stable phases:
@@ -448,7 +458,8 @@ unmounted, backs up a detached record's `HEAD`, unlocks a locked record only
 when its lock reason allows (never a second `--force`), and then, under the
 clone's worktree lock, re-checks that the path is still absent immediately
 before removing only that record with `git worktree remove --force <path>`,
-never a clone-wide `git worktree prune`; the next run repeats the inventory.
+never a clone-wide `git worktree prune`; this operator recovery starts only
+after the authoring session stops; the next run repeats the inventory.
 Automation never
 prunes or removes worktree records and does not bypass claim or worktree
 recovery.

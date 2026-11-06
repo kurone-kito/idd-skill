@@ -716,6 +716,17 @@ have been checked against their source records before review. The new
 pre-review check requires current-source verification and places support
 in the existing packet, without changing its schema or the review.
 
+On 2026-11-06, an untracked local recovery report in the shared default
+checkout blocked a claim helper's fast-forward for unrelated issues. The
+helper reported only `primary-not-ready`, and authoring guidance did not
+forbid creating a worktree or writing into that checkout. Issue `#2452` had
+already identified that dirty paths can block primary-checkout fast-forwards.
+Issue `#5058` adds a targeted `primary-worktree-dirty` diagnosis only after a
+failed fast-forward, preserves successful fast-forwards with unrelated
+untracked files, and makes the authoring checkout boundary explicit. Only the
+operator moves paths out of the shared checkout; the helper never stashes or
+removes them.
+
 ### B1 Step 3 — install-deps silent under-install detection
 
 Two independent fresh-worktree sessions observed `pnpm install

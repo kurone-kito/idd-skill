@@ -67,10 +67,9 @@ check, and steps 19 and 26's lock acquisition and token recording.
 
 ## B1 — Create worktree
 
-Concurrent workers sharing one clone: serialize every `fetch`/`merge
---ff-only`/worktree add/remove call below (and F4 cleanup's own
-worktree removal) behind the
-[clone-scoped lock](../../../docs/idd-helper-scripts.md#clone-scoped-lock).
+Under the [clone-scoped lock](../../../docs/idd-helper-scripts.md#clone-scoped-lock),
+serialize shared-clone `fetch`, `merge --ff-only`, and worktree add/remove,
+including F4 cleanup.
 
 Before step 1, resolve `{development-branch}`, failing closed. Run
 profile-selected `idd-effective-config` without `--key` (in the vendored
@@ -83,24 +82,27 @@ defaultBranchRef --jq .defaultBranchRef.name`. Stop unless the name matches
 <name>` lists it. Steps 15, 16, 21, and 25 use only this value.
 
 1. On the primary worktree, run `git fetch origin`.
-2. On the primary worktree, run `git log
-   origin/{default-branch}..{default-branch} --oneline`.
-3. If step 2 outputs any lines, stop and report: local `{default-branch}` has
-   unpushed commits. Do not force-reset `{default-branch}`.
-4. Fast-forward local `{default-branch}` with `git merge --ff-only
-   origin/{default-branch}`.
+2. Run `git log origin/{default-branch}..{default-branch} --oneline`.
+3. Any output means `{default-branch}` has unpushed commits. Stop and
+   report; never force-reset it.
+4. Fast-forward with `git -c merge.autoStash=false merge --ff-only
+   origin/{default-branch}`. If dirty paths block it, report
+   `primary-worktree-dirty` and paths; stop before creating a worktree.
+   For staged or unmerged paths, ask the operator to preserve staged and
+   unstaged content and resolve the index before retrying. Otherwise move
+   only this session's unstaged paths outside the repository; ask before
+   moving others. Rerun step 1. Never stash, discard, or remove a worktree
+   (`#5058`).
 5. Keep the primary worktree on `{default-branch}` throughout B1. Never use
    `git switch -c <branch-name>`, `git checkout -b <branch-name>`, or a
    standalone `git branch <branch-name>` followed by in-place commits there.
-6. Reuse the existing branch name verbatim for takeover.
-7. Run `git worktree list` (`--porcelain` for prunable entries). For a sibling
-   worktree, acquire its worktree-local claim lock with the profile-selected
-   `claim-lock` helper before reuse or removal. A `collision` is fail-closed: do
-   not reuse or remove the path; resolve it per `idd-claim.instructions.md`'s
-   Claim-state rule, and remove it only once the current claim is authorized to
-   take it over. On a fresh claim whose worktree the claim phase created, adopt
-   it: skip steps 8-26, run step 27 (install dependencies), and
-   continue at step 28. Never delete or recreate that branch.
+6. Keep the claimed branch name verbatim.
+7. Run `git worktree list --porcelain`. Before reusing or removing a sibling,
+   acquire its worktree-local lock except for an absent prunable entry in step
+   8. On `collision`, stop and follow `idd-claim.instructions.md`'s Claim-state
+   rule; remove only when authorized. For the claim phase's fresh worktree,
+   skip steps 8-26, run step 27; continue at step 28. Never delete or
+   recreate that branch.
 8. If `git worktree list --porcelain` marks the entry `prunable` and its path
    is already absent, remove that stale entry with
    `git worktree remove --force <path-from-list>` and continue.
