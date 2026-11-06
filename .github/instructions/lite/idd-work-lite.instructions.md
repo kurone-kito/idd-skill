@@ -290,12 +290,13 @@ Never add needs-decision or ask a human.
 **Standing split** is the sole helper-runtime exception to the worker-side
 authoring rule and the scope-overrun route above. When its conditions hold,
 skip that route's release/handoff and keep the parent claim and label held
-throughout. Read `standingApprovals.split.enabled` only from
-`.github/idd/config.json` at the live PR base (live default before a PR);
-validate its policy and schema with `idd-effective-config
---trusted-auto-decide` at the same ref. Never use local/head config. Missing,
-false, malformed, or unreadable uses the existing route. Each child must fit
-effective `maxCandidateFiles`; each
+throughout. Read `standingApprovals.split.enabled` from
+`.github/idd/config.json` at the live PR base (`baseRefName`; live default
+before a PR). Require
+`idd-effective-config --trusted-auto-decide --base-ref <base>` to report
+`status: readable` for a PR; omit `--base-ref` without one. Never use
+local/head config. Missing, false, malformed, or unreadable uses the existing
+route. Each child must fit effective `maxCandidateFiles`; each
 checkbox-stripped parent criterion must appear whole and verbatim in exactly
 one child, and every child must contain one. The hand split of issue `#4064`
 produced duplicate child `#4093`; apply
@@ -376,10 +377,10 @@ and roadmap tracks pass the set check, post the exact record below. On definite
 or uncertain POST failure, post a hold note naming verified children and keep
 the parent and child holds. For uncertainty, proceed only after paginated
 read-back confirms one trusted exact record and the full set; never retry. On
-success, post the completion note, revalidate and verify the parent's exact
-`unclaimed-by`, then run cleanup. Mismatch, unreadable state, or uncertain
-release keeps the parent held and stops before cleanup. Keep the label until
-the set is released or complete.
+success, post the completion note, revalidate the parent claim, post and
+verify its exact `unclaimed-by` marker, then run cleanup. Mismatch, unreadable
+state, or uncertain release keeps the parent held and stops before cleanup.
+Keep the label until the set is released or complete.
 `instructions-only` keeps the companion route.
 
 ```text
