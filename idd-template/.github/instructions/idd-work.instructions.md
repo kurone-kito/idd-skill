@@ -474,11 +474,19 @@ the comment stands. Never add needs-decision or ask a human
 **Standing split** is the only helper-runtime exception to the worker-side
 authoring rule and the scope-overrun route above. When its conditions hold,
 skip that route's release/handoff and keep the parent claim and label held
-throughout. It requires
-`standingApprovals.split.enabled`, every child to fit the effective
-`maxCandidateFiles`, each checkbox-stripped parent acceptance criterion to
-appear whole and verbatim in exactly one child, and every child to contain at
-least one such criterion. The hand split after issue `#4064` produced duplicate
+throughout. Its authority check uses the live base policy. For a PR, read
+`baseRefName` live; otherwise use the live default branch. Run
+`idd-effective-config --trusted-auto-decide --base-ref <base>` (omit
+`--base-ref` without a PR) and require `status: readable`, then read
+`standingApprovals.split.enabled` from `.github/idd/config.json` at that same
+ref through GitHub Contents. The helper validates the trusted policy and
+schema; its auto-decide verdict does not govern split. Never use local/head
+config as authority. An absent, false, malformed, or unreadable value uses the
+existing route.
+Every child must fit the effective `maxCandidateFiles`, each checkbox-stripped
+parent acceptance criterion must appear whole and verbatim in exactly one
+child, and every child must contain at least one such criterion. The hand split
+after issue `#4064` produced duplicate
 child `#4093`; apply the issue-authoring contract's Reuse-first policy to each
 child, including open issues, draft carriers, and their claim/PR state. On a
 match, follow that contract and stop this split if the work cannot safely join
@@ -491,6 +499,12 @@ roadmap's claim/PR/execution state, establish per-target ownership, add
 in the roadmap's `## Tracks` list. Any conflict keeps the parent and published
 children held.
 
+This route publishes only orphan-shaped children. A child that requires a
+sequential-roadmap `blocked-by` marker is not an orphan, and `--shape child`
+requires an independently held authoring-set anchor that this claimed parent
+does not provide. Take the existing scope-overrun route before publishing any
+child in that case.
+
 If any standing-split condition fails, use the existing comment, release, and
 stop route.
 
@@ -500,8 +514,13 @@ stop route.
    it as an unrelated hold. Reconcile mappings. Before release, and on resume
    when a record exists, require exactly one trusted record line matching the
    expected class, set, anchor, ceiling, and option, plus a one-to-one match
-   between proposal, mappings, and live held children (exact title/body; no
-   missing, duplicate, extra, or released child). The record alone is not proof.
+   between proposal, mappings, and live held children (exact title and draft
+   body; no missing, duplicate, extra, or released child). For each live body,
+   first verify its single leading helper-generated `authoring-publication`
+   line against the helper report, journal, and child ownership record; remove
+   only that line and its one blank separator, then compare the remaining body
+   byte-for-byte with the saved draft. Never strip an unmatched or additional
+   marker. The record alone is not proof.
    If it exists, verify the set and finish release without republishing. Stop
    on any conflict or unknown publication. Before saving the proposal, verify
    each child's material factual
@@ -531,8 +550,9 @@ stop route.
    full ordered set, read it back, and repeat both checks for every changed child.
    If the update outcome is uncertain, read that comment and continue only when
    its full body exactly matches the updated set; otherwise keep the hold and
-   stop. Dry-run only when every final title and body matches the read-back
-   proposal and has a completed review result. Resolve the
+   stop. Dry-run only when every final title and normalized draft body matches
+   the read-back proposal and has a completed review result. A refused or failed
+   dry-run stops and is reported before any child is applied. Resolve the
    profile-selected `idd-publish-authoring-hold` invocation per
    `docs/idd-helper-scripts.md`. Its default
    without `--apply` is dry-run. Dry-run every child as an orphan and inspect all
@@ -548,20 +568,23 @@ stop route.
    Verify each new issue number and held state, then append and read back its
    mapping on the parent before the next publish. If that POST is uncertain,
    inspect all parent comments and continue only when exactly one matching
-   mapping is present; otherwise keep the hold and stop. On refusal or a definite
-   pre-create failure, stop and report it. If a call may have created an issue,
-   inspect its report, journal, marker, and live issues; continue only after one
-   matching held child is identified. Any unresolved or conflicting outcome stops
-   with the proposal, parent claim, label, and published children held. Do not
-   retry an unknown publication result.
+   mapping is present; otherwise keep the hold and stop. On any refusal, failure,
+   recovery hold, or uncertain result, stop and report it, even if inspection
+   identifies one matching held child. Do not publish another child, retry an
+   unknown result, post the standing record, or release the parent. Keep the
+   proposal, parent claim and label, and every published child held; inspect the
+   helper report, journal, marker, and live issues to describe the state.
 4. **Record and release.** After children and required roadmap tracks pass the
    set check, post the exact record below. On definite or uncertain POST
    failure, post a hold note naming verified children, keep the parent claim and
    label and all child holds, and stop. For an uncertain result, proceed only
    after paginated read-back confirms one trusted exact record and the complete
-   set; never retry. On success, post the completion note, release only the
-   parent claim, and run cleanup. Keep the authoring label until the set is
-   explicitly released or completed.
+   set; never retry. On success, post the completion note, revalidate the parent
+   claim, and release it by posting and verifying its exact `unclaimed-by` marker
+   through the standard release procedure; only then run cleanup. A mismatch,
+   unreadable state, or uncertain marker write keeps the parent held and stops
+   before cleanup. Keep the authoring label until the set is explicitly released
+   or completed.
 
 ```text
 <!-- idd-skill-standing-approval: class=split; set=none; anchor=<owner/repo#n>; ceiling=<maxCandidateFiles>; option=option-a -->
