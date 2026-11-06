@@ -99,8 +99,9 @@ defaultBranchRef --jq .defaultBranchRef.name`. Stop unless the name matches
 7. Run `git worktree list --porcelain`. Before reusing or removing a sibling,
    acquire its worktree-local lock except for an absent prunable entry in step
    8. On `collision`, stop and follow `idd-claim.instructions.md`'s Claim-state
-   rule; remove only when authorized. For a fresh worktree, skip steps 8-26,
-   run step 27, then continue at step 28. Never delete or recreate the branch.
+   rule; remove only when authorized. For the claim phase's fresh worktree,
+   skip steps 8-26, run step 27; continue at step 28. Never delete or
+   recreate that branch.
 8. If `git worktree list --porcelain` marks the entry `prunable` and its path
    is already absent, remove that stale entry with
    `git worktree remove --force <path-from-list>` and continue.
