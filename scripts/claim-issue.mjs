@@ -100,6 +100,8 @@ const AGENT_ID_PATTERN = /^(?!.*(?:<!--|-->))\S+$/;
 /** Next actions of the write half that the report repeats. */
 const PRIMARY_RETRY_NEXT =
   'Bring the primary checkout to the default branch by hand (B1 step 1 in idd-work.instructions.md), then rerun this helper. This helper removed nothing.';
+const PRIMARY_WORKTREE_DIRTY_NEXT =
+  "The listed paths in the shared primary checkout can stop every issue's fast-forward. Have the operator move only paths created by this session; leave all others in place and ask the operator. Do not stash, discard, or remove a worktree. This helper removed nothing.";
 const CLEANUP_NEXT =
   'Run the B1 cleanup of idd-work.instructions.md by hand: remove the prunable worktree entry, or delete the leftover branch if its commits are confirmed unneeded. Then rerun this helper. This helper removed nothing.';
 const PATH_NEXT =
@@ -1298,6 +1300,32 @@ function resolveDevelopment(state) {
       : 'no developmentBranch is configured and the default branch is unavailable',
   );
 }
+/** Parse the path fields from `git status --porcelain=v1 -z` output. */
+function parsePorcelainV1StatusPaths(output) {
+  const records = output.split('\0');
+  if (records.at(-1) !== '') return null;
+  records.pop();
+  const paths = [];
+  for (let index = 0; index < records.length; index += 1) {
+    const record = records[index];
+    if (record === undefined || record.length < 4 || record[2] !== ' ') {
+      return null;
+    }
+    const status = record.slice(0, 2);
+    const path = record.slice(3);
+    if (path === '') return null;
+    paths.push(path);
+    // With `-z`, porcelain v1 emits a rename/copy destination first and its
+    // source as the following NUL-delimited field, without an arrow marker.
+    if (status.includes('R') || status.includes('C')) {
+      const source = records[index + 1];
+      if (source === undefined || source === '') return null;
+      paths.push(source);
+      index += 1;
+    }
+  }
+  return paths;
+}
 /** B1 step 1: the primary is on the default branch, has no unpushed commits, and is fast-forwarded. */
 function fastForwardPrimary(state) {
   const base = state.defaultBranch;
@@ -1365,9 +1393,34 @@ function fastForwardPrimary(state) {
     `origin/${base}`,
   ]);
   if (forward.status !== 0) {
-    return notReady(
-      `git merge --ff-only origin/${base} ended with ${describeStatus(forward)}`,
-    );
+    const status = state.deps.run('git', [
+      '-C',
+      state.primary,
+      'status',
+      '--porcelain=v1',
+      '-z',
+      '--untracked-files=all',
+    ]);
+    const forwardFailure = `git merge --ff-only origin/${base} ended with ${describeStatus(forward)}`;
+    if (status.status !== 0) {
+      return notReady(
+        `${forwardFailure}; git status --porcelain=v1 -z --untracked-files=all ended with ${describeStatus(status)}`,
+      );
+    }
+    const paths = parsePorcelainV1StatusPaths(status.stdout);
+    if (paths === null) {
+      return notReady(
+        `${forwardFailure}; git status --porcelain=v1 -z --untracked-files=all returned malformed output`,
+      );
+    }
+    if (paths.length > 0) {
+      return applyFail(
+        'primary-worktree-dirty',
+        PRIMARY_WORKTREE_DIRTY_NEXT,
+        `${forwardFailure}; dirty paths: ${paths.map((path) => JSON.stringify(path)).join(', ')}`,
+      );
+    }
+    return notReady(forwardFailure);
   }
   return applyPass(`${base} is on origin/${base} (fast-forwarded)`);
 }

@@ -1703,6 +1703,10 @@ interface ApplyScenario {
   approvalRevoked?: boolean;
   /** `git worktree add` fails (stubbed: nothing is created). */
   failWorktreeAdd?: boolean;
+  /** The primary fast-forward fails (stubbed) before status is checked. */
+  failPrimaryFastForward?: boolean;
+  /** The primary status read after a failed fast-forward fails. */
+  failPrimaryStatus?: boolean;
   /** The login `gh api user` reports for this session. */
   viewer?: string;
   /** The issue comments cannot be read (every comment read fails). */
@@ -1806,6 +1810,26 @@ function withApplyFixture<T>(
   } finally {
     rmSync(parent, { recursive: true, force: true });
   }
+}
+
+function advanceOrigin(
+  fixture: ApplyFixture,
+  path: string,
+  contents: string,
+): void {
+  const updater = join(fixture.parent, 'updater');
+  gitIn(fixture.parent, [
+    'clone',
+    '--quiet',
+    join(fixture.parent, 'origin.git'),
+    updater,
+  ]);
+  gitIn(updater, ['config', 'user.email', 'test@example.com']);
+  gitIn(updater, ['config', 'user.name', 'Test']);
+  writeFileSync(join(updater, path), contents);
+  gitIn(updater, ['add', path]);
+  gitIn(updater, ['commit', '--quiet', '-m', 'advance origin']);
+  gitIn(updater, ['push', '--quiet', 'origin', 'main']);
 }
 
 function valueAfter(args: readonly string[], flag: string): string | undefined {
@@ -2071,6 +2095,28 @@ function runApply(
     run: (file, args, options) => {
       if (file === 'git') {
         log.push(`git ${args.join(' ')}${held()}`);
+        if (
+          scenario.failPrimaryFastForward &&
+          args.includes('merge') &&
+          args.includes('--ff-only')
+        ) {
+          return {
+            status: 1,
+            stdout: '',
+            stderr: 'fatal: stubbed fast-forward failure',
+          };
+        }
+        if (
+          scenario.failPrimaryStatus &&
+          args.includes('status') &&
+          args.includes('--porcelain=v1')
+        ) {
+          return {
+            status: 128,
+            stdout: '',
+            stderr: 'fatal: stubbed status read failure',
+          };
+        }
         if (
           scenario.failWorktreeAdd &&
           args.includes('worktree') &&
@@ -2386,11 +2432,144 @@ test('unpushed commits on the default branch stop with primary-not-ready and not
       '-m',
       'local',
     ]);
+    writeFileSync(join(fixture.primary, 'local-only.txt'), 'leave in place\n');
     const run = runApply(fixture);
     const report = assertStopped(run, 'primary-not-ready');
     assert.match(report.steps.at(-1)?.detail ?? '', /unpushed-commits/);
+    assert.equal(
+      run.log.some((entry) => entry.includes('status --porcelain=v1')),
+      false,
+    );
     assert.equal(existsSync(fixture.worktree), false);
     assert.equal(branchExists(fixture.primary), false);
+  });
+});
+
+test('a clean primary fast-forwards and continues to create the claim worktree', () => {
+  withApplyFixture((fixture) => {
+    advanceOrigin(fixture, 'seed.txt', 'advanced on origin\n');
+    const run = runApply(fixture);
+    assert.equal(exitOf(run.result), 0, run.stderr);
+    assert.equal(
+      gitIn(fixture.primary, ['rev-parse', 'main']).trim(),
+      gitIn(fixture.primary, ['rev-parse', 'origin/main']).trim(),
+    );
+    assert.equal(existsSync(fixture.worktree), true);
+    assert.equal(
+      run.log.some((entry) => entry.includes('status --porcelain=v1')),
+      false,
+    );
+  });
+});
+
+test('an unrelated untracked file does not stop a successful primary fast-forward', () => {
+  withApplyFixture((fixture) => {
+    writeFileSync(join(fixture.primary, 'local-only.txt'), 'leave in place\n');
+    advanceOrigin(fixture, 'seed.txt', 'advanced on origin\n');
+    const run = runApply(fixture);
+    assert.equal(exitOf(run.result), 0, run.stderr);
+    assert.equal(existsSync(join(fixture.primary, 'local-only.txt')), true);
+    assert.equal(existsSync(fixture.worktree), true);
+    assert.equal(
+      run.log.some((entry) => entry.includes('status --porcelain=v1')),
+      false,
+    );
+  });
+});
+
+test('ignored-only files do not stop a successful primary fast-forward', () => {
+  withApplyFixture((fixture) => {
+    writeFileSync(
+      join(fixture.primary, '.git', 'info', 'exclude'),
+      'ignored-only.txt\n',
+      { flag: 'a' },
+    );
+    writeFileSync(join(fixture.primary, 'ignored-only.txt'), 'ignored\n');
+    advanceOrigin(fixture, 'seed.txt', 'advanced on origin\n');
+    const run = runApply(fixture);
+    assert.equal(exitOf(run.result), 0, run.stderr);
+    assert.equal(existsSync(fixture.worktree), true);
+    assert.doesNotMatch(`${run.stdout}\n${run.stderr}`, /ignored-only\.txt/);
+  });
+});
+
+test('ignored-only status after a failed fast-forward stays primary-not-ready', () => {
+  withApplyFixture((fixture) => {
+    writeFileSync(
+      join(fixture.primary, '.git', 'info', 'exclude'),
+      'ignored-only.txt\n',
+      { flag: 'a' },
+    );
+    writeFileSync(join(fixture.primary, 'ignored-only.txt'), 'ignored\n');
+    const run = runApply(fixture, { failPrimaryFastForward: true });
+    const report = assertStopped(run, 'primary-not-ready');
+    const detail = report.steps.at(-1)?.detail ?? '';
+    assert.match(detail, /git merge --ff-only/);
+    assert.doesNotMatch(detail, /ignored-only\.txt|primary-worktree-dirty/);
+    assert.equal(
+      run.log.some((entry) => entry.includes('status --porcelain=v1')),
+      true,
+    );
+    assert.equal(existsSync(fixture.worktree), false);
+    assert.equal(run.posts.length, 0);
+  });
+});
+
+test('a failed fast-forward blocked by a modified primary path reports the path and creates no worktree', () => {
+  withApplyFixture((fixture) => {
+    advanceOrigin(fixture, 'seed.txt', 'advanced on origin\n');
+    writeFileSync(join(fixture.primary, 'seed.txt'), 'local modification\n');
+    const run = runApply(fixture);
+    const report = assertStopped(run, 'primary-worktree-dirty');
+    const detail = report.steps.at(-1)?.detail ?? '';
+    assert.match(detail, /"seed\.txt"/);
+    assert.match(report.nextAction ?? '', /shared primary checkout/);
+    assert.match(report.nextAction ?? '', /operator move/);
+    assert.match(report.nextAction ?? '', /paths created by this session/);
+    assert.match(report.nextAction ?? '', /leave all others in place/);
+    assert.match(
+      report.nextAction ?? '',
+      /do not stash, discard, or remove a worktree/i,
+    );
+    assert.equal(existsSync(fixture.worktree), false);
+    assert.equal(run.posts.length, 0);
+  });
+});
+
+test('a failed fast-forward blocked by an untracked primary path reports the path and creates no worktree', () => {
+  withApplyFixture((fixture) => {
+    advanceOrigin(fixture, 'untracked-collision.txt', 'on origin\n');
+    writeFileSync(
+      join(fixture.primary, 'untracked-collision.txt'),
+      'leave in place\n',
+    );
+    const run = runApply(fixture);
+    const report = assertStopped(run, 'primary-worktree-dirty');
+    assert.match(
+      report.steps.at(-1)?.detail ?? '',
+      /"untracked-collision\.txt"/,
+    );
+    assert.equal(existsSync(fixture.worktree), false);
+    assert.equal(
+      existsSync(join(fixture.primary, 'untracked-collision.txt')),
+      true,
+    );
+    assert.equal(run.posts.length, 0);
+  });
+});
+
+test('an unreadable primary status after a failed fast-forward stays primary-not-ready', () => {
+  withApplyFixture((fixture) => {
+    advanceOrigin(fixture, 'seed.txt', 'advanced on origin\n');
+    writeFileSync(join(fixture.primary, 'seed.txt'), 'local modification\n');
+    const run = runApply(fixture, { failPrimaryStatus: true });
+    const report = assertStopped(run, 'primary-not-ready');
+    assert.match(
+      report.steps.at(-1)?.detail ?? '',
+      /git status --porcelain=v1 -z --untracked-files=all ended with exit code 128/,
+    );
+    assert.equal(existsSync(fixture.worktree), false);
+    assert.equal(run.posts.length, 0);
   });
 });
 

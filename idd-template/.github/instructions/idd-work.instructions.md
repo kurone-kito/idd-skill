@@ -17,13 +17,12 @@ backgrounded command, and confirm the result before ending the turn.
 
 ## B1 — Create worktree (with branch)
 
-Before creating, check for local conflicts in this order. Concurrent
-workers sharing one clone: serialize every `git fetch`/`merge --ff-only`/
-worktree add/remove call against the shared clone -- here, and at F4
-cleanup's own worktree removal -- behind the
-[clone-scoped lock](../../docs/idd-helper-scripts.md#clone-scoped-lock)
-(see the [fan-out variant](../../docs/idd-workflow.md#orchestrator-fan-out-variant)
-for when this applies).
+Under the
+[clone-scoped lock](../../docs/idd-helper-scripts.md#clone-scoped-lock),
+serialize shared-clone `fetch`, `merge --ff-only`, and worktree add/remove
+(including F4 cleanup). See the
+[fan-out variant](../../docs/idd-workflow.md#orchestrator-fan-out-variant)
+if applicable.
 
 1. Ensure the local `{default-branch}` branch is up to date and has no local
    commits.
@@ -44,9 +43,12 @@ for when this applies).
    git merge --ff-only origin/{default-branch}
    ```
 
-   After this fast-forward, see Anti-patterns below for the forbidden
-   commands; read-only inspection and the HEAD-preserving commands of
-   Steps 2-3 and Worktree creation stay allowed.
+   Dirty failure: report `primary-worktree-dirty` and paths; stop before
+   worktree creation. Operator may move only paths this session created;
+   leave others in place and ask. Then rerun the helper from step 1. Never
+   stash, discard, or remove a worktree (`#5058`).
+
+   After success, follow Anti-patterns below.
 
 2. Run `git worktree list` — if a worktree for the branch already
    exists, inspect and acquire its
