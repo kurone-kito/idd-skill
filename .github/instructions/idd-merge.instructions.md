@@ -450,17 +450,19 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
      informational); `incomplete`/`failed` still take the
      cleanup-failure path below.
 
-     If the apply `status` is `held`: the head-proof gate (issue `#4369`)
-     stopped the cleanup before its next pass, so the proof of this head
-     is not settled. Do not route the run to the cleanup-failure path, and
-     do not run `--skip-claim-check` or any manual remedy. Read each
-     `holds` entry's `verdict`. For `verdict: hold`, first revalidate the
-     claim with `resume-claim-routing --assert` (exit 0, `already_owned`).
-     If that fails, end quietly. Otherwise post a hold note that lists each
-     entry's `code` and `nextAction`, then stop F4 here. For
-     `verdict: stop` (the claim is not this session's), post nothing and
-     end quietly: this session takes no further mutation. Either way, do not
-     run step 4 or later. The hold rules are in
+     If `status` is `held`, head-proof gate (issue `#4369`) left the proof
+     unsettled. Do not route to cleanup-failure, use `--skip-claim-check`,
+     or try a manual remedy. Read each `holds` verdict; for `hold`, revalidate:
+
+     ```sh
+     node scripts/resume-claim-routing.mjs --issue {issue-number} \
+       --assert --claim-id {claim-id} --agent-id {agent-id} \
+       --nonce {nonce} --worktree <issue-worktree-path>
+     ```
+
+     Require `already_owned`. If it fails, end quietly. Otherwise post a
+     hold note with each `code` and `nextAction`, then stop F4. For `stop`, post
+     nothing and end quietly; neither route reaches step 4. See
      `idd-overview-appendix.instructions.md`.
 
      If the apply `status` is `failed`, `incomplete`, or
@@ -598,7 +600,7 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
 
    ```sh
    node scripts/resume-claim-routing.mjs --issue <issue-number> \
-     --claim-id <claim-id> --nonce <nonce> \
+     --claim-id <claim-id> --agent-id {agent-id} --nonce <nonce> \
      --worktree <issue-worktree-path>
    ```
 
