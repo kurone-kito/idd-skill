@@ -2320,8 +2320,7 @@ contract for continuation records.
    and report the claim. Omit `--agent-id` only for a pre-rule claim whose
    trusted marker has the legacy bare family ID. The same compatibility
    path applies when checking a worktree-less claim without `--assert`.
-   Continue to step 3 only when the
-   command exits 0, which means the state is
+   Continue to step 3 only when the command exits 0, which means the state is
    `already_owned` with action `keep`. A claim that a worker released with its
    `unclaimed-by` marker, as F4 does as its last mutation before returning the
    final report, is the one exception. Its `--assert` run exits 1 by design, so

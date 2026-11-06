@@ -296,7 +296,7 @@ Resolve the commands as A5(a) does.
    running the acquire.
 5. After the settle delay, `resume-claim-routing.mjs --issue <n> --assert
    --agent-id {agent-id} --claim-id {claim-id} --nonce {nonce} --worktree <path>`.
-   This verification alone counts.
+   Only this post-acquire verification counts.
 6. Continue B1 in that worktree at B1 Step 3: install dependencies with
    `install-deps`.
 
@@ -319,30 +319,30 @@ every fresh `{claim-id}`.
 
 ### Lost-claim cleanup (`lost-claim-cleanup`)
 
-Run this at each [trigger list](../../docs/idd-helper-scripts.md#lost-claim-triggers)
-exit. Never use `--takeover`. Fill in
-the placeholders of the script, each as a single-quoted shell word (write a `'`
-as `'\''`), resolve each helper as in A5(a), and run it as one hold of the
-[clone-scoped lock](../../docs/idd-helper-scripts.md#clone-scoped-lock):
-`node scripts/clone-lock.mjs --exec --agent-id {agent-id} -- bash <script>`.
-The gates and removal run under that hold, from the primary checkout (or with
-`--repo`), never from the worktree being removed.
+At each [trigger](../../docs/idd-helper-scripts.md#lost-claim-triggers), run
+under [clone-scoped lock](../../docs/idd-helper-scripts.md#clone-scoped-lock)
+from primary checkout (or `--repo`), not from `<path>`:
+`node scripts/clone-lock.mjs --exec --agent-id '{agent-id}' -- bash <script>`.
+Quote placeholders (`'` as `'\''`); resolve helpers per A5(a).
+No `--takeover`.
 
 ```sh
 set -euo pipefail
-node scripts/claim-lock.mjs --acquire --worktree <path> --agent-id {agent-id} --claim-id {claim-id}
-route=$(node scripts/resume-claim-routing.mjs --issue <n> --claim-id {claim-id} --worktree <path>)
-printf '%s\n' "$route" | CLAIM_ID='{claim-id}' node -e 'const a=JSON.parse(require("fs").readFileSync(0,"utf8")).active_claim;process.exit(a===null||(a&&a.claim_id&&a.claim_id!==process.env.CLAIM_ID)?0:1)'
-test "$(git -C <path> symbolic-ref -q HEAD)" = refs/heads/<branch>
-tip=$(git rev-parse <branch>)
-base=$(git rev-parse origin/{development-branch})
+node scripts/claim-lock.mjs --acquire --worktree '<path>' --agent-id '{agent-id}' --claim-id '{claim-id}'
+set -- --issue '<n>' --claim-id '{claim-id}'
+if [[ '{agent-id}' =~ ^[^[:space:]-]+-[^[:space:]]*[A-Za-z0-9]{8}[^[:space:]]*$ ]]; then set -- "$@" --agent-id '{agent-id}'; fi
+route=$(node scripts/resume-claim-routing.mjs "$@" --worktree '<path>')
+printf '%s\n' "$route" | node -e 'const {active_claim:a,claim_id_checked:c,agent_id_checked:i}=JSON.parse(require("fs").readFileSync(0)),p=/^[^\s-]+-\S*[A-Z\d]{8}\S*$/i;process.exit(!a||a.claim_id&&a.claim_id!==c&&(a.agent_id&&!p.test(a.agent_id)||i&&i===a.agent_id)?0:1)'
+test "$(git -C '<path>' symbolic-ref -q HEAD)" = 'refs/heads/<branch>'
+tip=$(git rev-parse '<branch>')
+base=$(git rev-parse 'origin/{development-branch}')
 test "$tip" = "$base"
-tags=$(git -C <path> ls-files -v | cut -c1 | tr -d 'H\n')
+tags=$(git -C '<path>' ls-files -v | cut -c1 | tr -d 'H\n')
 test -z "$tags"
-dirty=$(git -C <path> status --porcelain --ignored --untracked-files=all --ignore-submodules=none)
+dirty=$(git -C '<path>' status --porcelain --ignored --untracked-files=all --ignore-submodules=none)
 test -z "$dirty"
-git worktree remove <path>
-git branch -D <branch>
+git worktree remove '<path>'
+git branch -D '<branch>'
 ```
 
 Every gate runs before `git worktree remove`, the only removal step (no
@@ -566,22 +566,23 @@ the primary worktree keeps the existing reacquire, collision, and
 `--check`, `--record-tokens`, `--read-tokens`, and
 `--backfill-tokens` still accept the primary worktree.
 
-A matching `{claim-id}` re-acquires as a read-only check; a different
-`{claim-id}` is always a collision, regardless of lock age. Run
-`resume-claim-routing.mjs --issue <n> --fresh-claim-gate`: `--takeover`
-is authorized only when the verdict is `already-claimed`, its
-`winning_claim_id` matches this session's verified `{claim-id}`, and the
-output's top-level `reason` is not a `released-claim-*` reason — the
-lock merely drifted.
-Every other result — a `released-claim-*` reason, `already-claimed` for
-another id, or `claimable`/`stale-reclaimable` (unexpected from inside
-the worktree since #3141, but handled the same) — means the claim was
-lost: stop, report, and post no new claim from this check; re-entry is
-only through a fresh Resume or Discover pass. If the helper is
-unavailable or malformed, fall back to this file's Claim-state parsing
-rules below for the same verdict. No release step — `git worktree
-remove` at F4 deletes the lock with the worktree, so a crashed
-session's leftover lock resolves the same way. See
+A matching `{claim-id}` re-acquires read-only; another always collides.
+Before takeover, read the active claim with profile-selected
+`resume-claim-routing` (without `--assert`), passing `--issue`,
+`--claim-id`, `--agent-id` (omit only for pre-rule claims), recorded
+`--nonce`, and linked `--worktree`. Inspect JSON even on
+`owner_evidence_required`: require active `agent_id`/`claim_id`, nonce
+winner when recorded, linked `--read-tokens` record, and branch to match
+the trusted marker and persisted session identity. This proves identity
+only, not takeover authority.
+
+Use `--fresh-claim-gate` only for current state. Retry
+`--acquire --takeover` only for `already-claimed` with `winning_claim_id`
+equal to the verified
+`{claim-id}` and top-level reason not `released-claim-*`; else stop. If
+routing is unavailable/malformed, use Claim-state parsing with the same
+identity checks. F4
+deletes the lock with its worktree; no release step. See
 `docs/idd-helper-scripts.md`'s Worktree-local claim lock entry for the
 package-manager / ephemeral-npx / user-global forms and mechanical detail.
 

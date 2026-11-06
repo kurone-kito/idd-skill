@@ -103,7 +103,7 @@ this session `newAgentId`: check its `newClaimId` before Claim execution's
 forced-handoff steps:
 
 ```sh
-node scripts/resume-claim-routing.mjs --issue <N> --claim-id <your-or-newClaimId> --agent-id <id> [--nonce <your-recorded-nonce>] [--worktree <path>]
+node scripts/resume-claim-routing.mjs --issue <N> --claim-id <claim-id> --agent-id <id> [--nonce <your-recorded-nonce>] [--worktree <path>]
 ```
 
 Omit `--agent-id` only for a pre-rule claim; pass `--nonce` only if this session
@@ -329,19 +329,21 @@ one clone per worker (`docs/idd-workflow.md`), (c)'s written rules.
 
 ```sh
 set -euo pipefail
-node scripts/claim-lock.mjs --acquire --worktree <path> --agent-id {agent-id} --claim-id {claim-id}
-route=$(node scripts/resume-claim-routing.mjs --issue <n> --claim-id {claim-id} --worktree <path>)
-printf '%s\n' "$route" | CLAIM_ID='{claim-id}' node -e 'const a=JSON.parse(require("fs").readFileSync(0,"utf8")).active_claim;process.exit(a===null||(a&&a.claim_id&&a.claim_id!==process.env.CLAIM_ID)?0:1)'
-test "$(git -C <path> symbolic-ref -q HEAD)" = refs/heads/<branch>
-tip=$(git rev-parse <branch>)
-base=$(git rev-parse origin/{development-branch})
+node scripts/claim-lock.mjs --acquire --worktree '<path>' --agent-id '{agent-id}' --claim-id '{claim-id}'
+set -- --issue '<n>' --claim-id '{claim-id}'
+if [[ '{agent-id}' =~ ^[^[:space:]-]+-[^[:space:]]*[A-Za-z0-9]{8}[^[:space:]]*$ ]]; then set -- "$@" --agent-id '{agent-id}'; fi
+route=$(node scripts/resume-claim-routing.mjs "$@" --worktree '<path>')
+printf '%s\n' "$route" | node -e 'const {active_claim:a,claim_id_checked:c,agent_id_checked:i}=JSON.parse(require("fs").readFileSync(0)),p=/^[^\s-]+-\S*[A-Z\d]{8}\S*$/i;process.exit(!a||a.claim_id&&a.claim_id!==c&&(a.agent_id&&!p.test(a.agent_id)||i&&i===a.agent_id)?0:1)'
+test "$(git -C '<path>' symbolic-ref -q HEAD)" = 'refs/heads/<branch>'
+tip=$(git rev-parse '<branch>')
+base=$(git rev-parse 'origin/{development-branch}')
 test "$tip" = "$base"
-tags=$(git -C <path> ls-files -v | cut -c1 | tr -d 'H\n')
+tags=$(git -C '<path>' ls-files -v | cut -c1 | tr -d 'H\n')
 test -z "$tags"
-dirty=$(git -C <path> status --porcelain --ignored --untracked-files=all --ignore-submodules=none)
+dirty=$(git -C '<path>' status --porcelain --ignored --untracked-files=all --ignore-submodules=none)
 test -z "$dirty"
-git worktree remove <path>
-git branch -D <branch>
+git worktree remove '<path>'
+git branch -D '<branch>'
 ```
 
 ## Heartbeat posting
@@ -422,18 +424,12 @@ require `present: true` with no `malformed`; otherwise recover per
 `docs/idd-helper-scripts.md` (gated: each step succeeds,
 `reacquired: true` both ends), else stop.
 
-A matching `{claim-id}` re-acquires as a read-only check. A different
-`{claim-id}` is always a collision — run `--fresh-claim-gate` directly
-(not pre-check (c)):
-
-- `already-claimed` naming **your own** verified `{claim-id}`, with a
-  top-level `reason` that is not `released-claim-*`: only the local lock
-  drifted; you still own the GitHub claim. Retry the lock with
-  `--takeover` directly.
-- Every other result — a `released-claim-*` reason, `already-claimed`
-  naming a different id, or `claimable`/`stale-reclaimable`: the claim
-  itself was lost. **STOP** and report; post no new claim from this
-  check. Re-entry is only through a fresh Resume or Discover pass.
+A matching `{claim-id}` re-acquires read-only; another always collides.
+Before takeover, follow Full's identity checks in `idd-claim.instructions.md`'s
+Worktree-local lock section using the profile-selected helper. Then use
+`--fresh-claim-gate` for state only. Retry `--acquire --takeover` only on
+`already-claimed`, `winning_claim_id` equal to the verified `{claim-id}`, and
+top-level reason not `released-claim-*`; else stop.
 
 No release step (F4 `git worktree remove` deletes it).
 
