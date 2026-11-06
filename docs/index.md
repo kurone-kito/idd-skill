@@ -71,6 +71,7 @@ distinct from the phase rules in `.github/instructions/`:
 | reference | [IDD Policy Constants](policy-constants.md) | Inventories the distributed IDD policy defaults and names which configuration surface owns each one. |
 | reference | [PR Cleanup Backlog — Batch Run 001](pr-cleanup-backlog-batch-001.md) | Records the first batch execution of the historical merged-PR cleanup backlog campaign and how to continue subsequent batches. |
 | reference | [IDD Detailed Reference](reference.md) | Maps each operational question to the authoritative phase file or policy page that answers it. |
+| reference | [Repository Policy Evidence](repository-policy-evidence.md) | Records the evidence, measurements, and decisions behind this source repository’s local IDD dogfood policies. |
 | reference | [Stalled Session Quiet-Check Helper](stalled-session-quiet-check.md) | Documents the CLI usage, output schema, and required live rechecks for the Resume/S2 stalled-session quiet-check helper. |
 | reference | [Token-Cost Methodology](token-cost.md) | Documents how this repository measures its own agent context-window cost per completed IDD issue loop. |
 | reference | [TypeScript helper sources](typescript-sources.md) | Explains the generated .mjs-from-.mts helper source layout, build commands, and drift guards this repository enforces. |

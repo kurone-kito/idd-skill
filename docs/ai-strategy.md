@@ -14,7 +14,8 @@ multi-agent harness mix rather than any one tool.
 
 ## Canonical guidance
 
-- [AGENTS.md](../AGENTS.md) is the canonical, fully detailed AI guide.
+- [AGENTS.md](../AGENTS.md) is the canonical AI entry guide. Source-only
+  policy rationale and measurements live in [Repository Policy Evidence](repository-policy-evidence.md).
   It follows the [AGENTS.md](https://agents.md) convention that Codex
   CLI, OpenCode, Grok Build, Cursor CLI, and GitHub Copilot (CLI, coding
   agent, and Chat) all discover automatically at the repository root.

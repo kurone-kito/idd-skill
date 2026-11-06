@@ -517,11 +517,11 @@ ownership boundaries explicit:
 - **Exported template files**: `idd-template/` is the portable package
   copied into adopter repositories. When live IDD instruction files
   change, mirror the equivalent portable form into this template.
-- **Agent entry files**: `AGENTS.md` is the canonical, fully detailed
-  AI guide (see [AI tooling strategy](ai-strategy.md)); `CLAUDE.md`,
-  `GEMINI.md`, and `.github/copilot-instructions.md` are lightweight
-  adapters that import or point to it and tell each agent where to
-  start.
+- **Agent entry files**: `AGENTS.md` is the canonical AI entry guide (see
+  [AI tooling strategy](ai-strategy.md)); source-only policy rationale and
+  measurements live in [Repository Policy Evidence](repository-policy-evidence.md).
+  `CLAUDE.md`, `GEMINI.md`, and `.github/copilot-instructions.md` are lightweight
+  adapters that import or point to it and tell each agent where to start.
 - **Workflow docs**: files under `docs/` explain architecture, policy,
   and usage. They should avoid duplicating long operational rules that
   belong in `.github/instructions/`.
