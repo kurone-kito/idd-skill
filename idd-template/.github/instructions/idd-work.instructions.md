@@ -297,49 +297,73 @@ here).
    gh pr view <n> --json files --jq '.files[].path'
    ```
 
-**On a hit → verify-then-close**: Confirm criteria on current
-`{development-branch}`; close with a comment citing the superseding PR. If
-partly met, keep open, record overlap, and plan remaining work. On no hit,
-continue. With no diff and no PR, close only through this check or F4 step 1
-post-merge.
+**On a hit → verify-then-close**: confirm the issue's acceptance criteria
+already hold on current `{development-branch}`, then close the issue with a
+comment referencing the superseding PR. If the criteria only
+**partly** hold, keep the issue open,
+record the overlap, and plan only the genuinely-remaining work. On no hit,
+continue with the plan below.
+
+`gh issue close` is not completion: with no diff and no PR, only
+**verify-then-close** or F4 step 1 post-merge close may close it.
 
 ### B2.1 — Premise verification (decision-transcription issues)
 
-Apply only when both are true: the issue records or acts on a prior
-human decision, and its rationale asserts a checkable fact about what a
-prior change shipped. Verify that fact against the shipped code or docs
-before planning; the rationale is not evidence. If the change cannot be
-identified, its shipped state cannot be checked, or the evidence conflicts,
-follow the shared Hold / suspend rules in
-`idd-overview-appendix.instructions.md` and put the primary-source evidence, or
-why verification is inconclusive, in the hold comment. Do not propagate the
-unverified premise or unilaterally overwrite the decision; resume only after a
-maintainer addendum. On no conflict, continue. See
+Apply this check only when **both** hold: the issue's deliverable is to
+record or act on an already-recorded human decision, and that decision's
+rationale asserts a specific checkable fact about what a prior change
+actually shipped. Out of scope for ordinary feature or bugfix issues.
+
+Before drafting the plan, verify the asserted fact against the prior
+change's actual shipped code or documentation rather than treating the
+decision's rationale as ground truth. If the prior change cannot be
+identified, or its shipped state cannot be checked, treat verification
+as inconclusive and follow the conflict path below — do not default to
+continuing. See
 [rationale](../../docs/idd-design-rationale.md#b21--premise-verification-decision-transcription-issues).
+
+**On a genuine conflict or inconclusive verification**: follow the
+shared Hold / suspend rules in `idd-overview-appendix.instructions.md`,
+and include the primary-source evidence (or the reason verification was
+inconclusive) in the hold comment. Do not silently propagate the
+unverified premise, and do not unilaterally overwrite the recorded
+decision — the correction must land as a maintainer addendum, not a
+silent edit. Resume planning only after the addendum is recorded.
+
+On no conflict, continue with the plan below.
 
 ### B2.2 — Example field-name verification
 
-If "Proposed change" or "Acceptance criteria" cites an existing schema
-field, config key, or token as an example (not one it adds), verify it; correct
-or drop it if absent and hold if unclear (`#2806`).
+When the issue's "Proposed change" or "Acceptance criteria" cites an
+existing schema field, config key, or token as an example (not one it
+adds), verify it exists as cited; fix or drop if not, hold if unclear
+(`#2806`).
 
-Post a plan as an issue comment, critique it for correctness and concreteness
-(per-agent: see `idd-overview-appendix.instructions.md`), then post the
-refined plan as a follow-up or update to the same comment. After the final
-plan, set digest fields: `Phase: B2 planned`, `Open blockers: none` unless the
-plan found one, `Next action: B3 implement`, and `Authoritative by:` the plan
-comment plus verified claim. B2 mutations use the [shared claim
-gate][claim-gate].
+Draft an implementation plan and post it as an issue comment, then run
+a critique pass for correctness and concreteness (see
+`idd-overview-appendix.instructions.md` for per-agent implementation),
+and post the refined final plan as a follow-up or update to the same
+comment. After the final plan comment is posted, update the issue live
+status digest: `Phase` is `B2 planned`, `Open blockers` is `none`
+unless the plan found a blocker, `Next action` is `B3 implement`, and
+`Authoritative by` points to the plan comment and verified claim.
 
-[claim-gate]: idd-overview-core.instructions.md#claim-revalidation-gate
+Claim ownership revalidation needs no separate check here: it already
+applies to every B2 mutation via the
+[claim revalidation gate](idd-overview-core.instructions.md#claim-revalidation-gate).
 
 ## B3 — Implement
 
 ### B3 self-check
 
-Before B3, verify the B2 plan comment contains the refined post-critique plan;
-a pre-critique draft is insufficient. The [claim revalidation gate][claim-gate]
-covers B3 mutations. If unfinished, stop and return to B2.
+Before implementing, verify B2 actually finished, not merely started:
+the B2 plan comment reflects the refined, post-critique plan (draft →
+critique pass → refined final plan posted as a follow-up or update to
+the same comment) -- a draft posted before its critique pass does not
+satisfy this. Claim ownership revalidation needs no separate check
+here: it already applies to every B3 mutation via the
+[claim revalidation gate](idd-overview-core.instructions.md#claim-revalidation-gate).
+If the plan is not actually finalized, stop and return to B2.
 
 The following is a repair path only for an ordering violation that has
 already occurred, not an alternative route: disclose the deviation on
@@ -447,27 +471,91 @@ children record `Split out of #<n>`, and comments its link; if refused,
 the comment stands. Never add needs-decision or ask a human
 ([rationale](../../docs/idd-design-rationale.md#b3--scope-overrun-returns-to-authoring)).
 
-**Standing split**, the only exception to this rule and to the ban on
-worker-side authoring: when `standingApprovals.split.enabled` is true, every
-child fits the effective `maxCandidateFiles`, and each parent
-acceptance-criteria line, checkbox stripped, appears whole and verbatim in
-exactly one child, keep the parent claim and, in order:
+**Standing split** is the only helper-runtime exception to this worker-side
+authoring rule. It requires `standingApprovals.split.enabled`, every child to
+fit the effective `maxCandidateFiles`, each checkbox-stripped parent
+acceptance criterion to appear whole and verbatim in exactly one child, and
+every child to contain at least one such criterion. The hand split after issue
+`#4064` produced duplicate child `#4093`; this PR's review also caught the
+one-way criterion check (`#5031`, comment `#4460505492`)
+([rationale](../../docs/idd-design-rationale.md#b3--scope-overrun-returns-to-authoring)).
+If any condition fails, use the existing comment, release, and stop route.
 
-1. Dry-run every child, then publish each as a held orphan with `--apply`, one
-   per call: `publish-authoring-hold --shape orphan --title <title>
-   --body-file <file> --review-result <file>`.
-2. If a dry run or publish is refused, fails, or leaves a recovery hold, publish
-   no more children, keep the parent claim and published children held, report
-   the published children in a hold note, and do not release. The same applies
-   if posting the record below fails; reconcile an uncertain POST before a retry.
-3. Once all are published, post this record as one line on the parent, then
-   comment, release, and clean up as above, without the companion handoff:
+1. **Hold and record the set.** Revalidate the parent claim, add the configured
+   authoring label (default `status:authoring`) and verify it is present. If it
+   already exists, resume only from the same durable proposal; otherwise treat
+   it as an unrelated hold. Reconcile every published-child mapping. If the
+   final record is already present, verify the mapped children and finish the
+   release steps without publishing again. Stop if any publication outcome is
+   unknown. Before saving the proposal, verify each child's material factual
+   claims that justify its scope or design against current sources. Put
+   supporting file references, GitHub permalinks, or read-only command evidence
+   in the review packet's existing `evidence` array. Correct, qualify, or remove
+   unsupported claims; route materially unresolved claims under the
+   issue-authoring contract. Then post and read back one complete ordered
+   proposal with the current claim ID,
+   estimate, candidate files, current changed files, and each child's exact title
+   and full body. If that comment POST is uncertain, read all parent comments and
+   continue only if exactly one exact proposal is present; otherwise keep the hold
+   and stop. On resume reuse this proposal, reconcile each child against helper
+   records and live issues, and never republish an unknown result. The parent
+   claim and label stay held throughout. This PR's review found the missing
+   proposal record (`#5031`, comment `#4460505511`).
+2. **Review and dry-run.** Review each final child separately with the
+   issue-authoring contract's completed-draft adversarial review: send its
+   exact title and body plus the bounded review packet, resolve the configured
+   delegate when usable,
+   otherwise use the agent-native reviewer or structured self-critique, and
+   bound the wait by
+   `issueAuthoring.adversarialReview.waitCeiling` (`PT20M` default). Save a result
+   with `"completed": true` and every finding `fixed` or `rejected`. An incomplete,
+   unreadable, or unresolved review stops publication. Any factual or review
+   correction that changes a title or body invalidates that child's review
+   result and the saved proposal. Update the existing proposal comment with the
+   full ordered set, read it back, and repeat both checks for every changed child.
+   If the update outcome is uncertain, read that comment and continue only when
+   its full body exactly matches the updated set; otherwise keep the hold and
+   stop. Dry-run only when every final title and body matches the read-back
+   proposal and has a completed review result. Resolve the
+   profile-selected `idd-publish-authoring-hold` invocation per
+   `docs/idd-helper-scripts.md`. Its default
+   without `--apply` is dry-run. Dry-run every child as an orphan and inspect all
+   results before applying any. The helper's review-result check is not the
+   adversarial review (`#5031`, comment `#4460505499`).
+
+   ```sh
+   idd-publish-authoring-hold --shape orphan \
+     --title <title> --body-file <file> --review-result <file> [--apply]
+   ```
+
+3. **Publish one at a time.** Apply the inspected dry-runs one child per call.
+   Verify each new issue number and held state, then append and read back its
+   mapping on the parent before the next publish. If that POST is uncertain,
+   inspect all parent comments and continue only when exactly one matching
+   mapping is present; otherwise keep the hold and stop. On refusal or a definite
+   pre-create failure, stop and report it. If a call may have created an issue,
+   inspect its report, journal, marker, and live issues; continue only after one
+   matching held child is identified. Any unresolved or conflicting outcome stops
+   with the proposal, parent claim, label, and published children held. Do not
+   retry an unknown publication result.
+4. **Record and release.** After every proposed child is verified and mapped,
+   post the standing-approval record below on the parent. If that POST is
+   uncertain, read all parent comments: proceed only when exactly one exact
+   record line is present. If absent, duplicated, conflicting, or unreadable,
+   keep the hold and stop without retrying the POST (`#5031`, comments
+   `#4460450129` and `#4460450314`). Then post a completion note listing the
+   children and follow the existing claim-release and cleanup steps. Keep the
+   parent authoring label until the held child set is explicitly released or
+   completed.
 
 ```text
 <!-- idd-skill-standing-approval: class=split; set=none; anchor=<owner/repo#n>; ceiling=<maxCandidateFiles>; option=option-a -->
 ```
 
-Otherwise the rule above applies unchanged.
+Use the parent issue itself as `anchor` (`<owner>/<repo>#<number>`) and the
+numeric effective `maxCandidateFiles` as `ceiling`.
+
+For `instructions-only` execution, keep using the existing companion route.
 
 ---
 

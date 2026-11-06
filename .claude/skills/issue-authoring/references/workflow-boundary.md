@@ -753,23 +753,24 @@ keeps its confirmation label (`autoDecide.confirmationLabelName`), which keeps
 it out of Discover, so it never enters the loop. The operator confirms the
 choice by closing the issue.
 
-The worker-side authoring rule has one exception, the standing split class.
-An IDD worker otherwise never authors issues itself: `idd-work.instructions.md`
-hands a follow-up or a scope-overrun split proposal to this bundle, or records
-it in a comment. The exception covers only a scope overrun, and only when
+The worker-side authoring rule has one exception: a scope-overrun split when
 `standingApprovals.split.enabled` is true, every child fits the effective
-`maxCandidateFiles`, and each parent acceptance-criteria line, with its
-checkbox stripped, appears whole and verbatim in exactly one child. The worker
-keeps the parent claim and works in this order. It dry-runs every child, then
-publishes each as a held orphan with `--apply`, one child per
-`publish-authoring-hold --shape orphan` call. If a dry run or publish is
-refused, fails, or leaves a recovery hold, or the record line cannot be posted,
-it stops: it publishes no more children, keeps the parent claim and the
-published children held, names them in a hold note, and does not release the
-parent. Only after every child is
-published does it post on the parent, as one line, the `class=split`
-standing-approval record that `idd-work.instructions.md` gives. Then it
-comments the estimate, the candidate and changed files, and the split proposal,
-releases the parent claim, and runs `lost-claim-cleanup`, with no handoff to
-this bundle. The children stay held; releasing them follows the release rules
-above. In every other case the existing scope-overrun rule applies unchanged.
+`maxCandidateFiles`, each checkbox-stripped parent criterion appears whole and
+verbatim in exactly one child, and every child contains a parent criterion.
+The worker keeps the parent claim and authoring label, verifies material factual
+claims in each child's scope or design against current sources, and records
+support in the review packet's existing `evidence` array before saving and
+verifying the complete ordered proposal. Each completed child is then reviewed;
+any edit requires an updated, read-back proposal and a repeated check of that
+child. The worker dry-runs the set, then publishes held orphans one at a time
+and records each verified ID. A failed or uncertain publication stops with the
+parent and children held; resume reconciles the latest verified proposal and
+helper records before continuing. After all children are verified and mapped,
+the worker posts the standing record with the parent issue as `anchor` and the
+numeric effective `maxCandidateFiles` as `ceiling`, completes the existing
+release steps, and keeps the parent label until the set is deliberately
+released or completed. The hand split of
+issue `#4064` produced duplicate child `#4093`; PR `#5031` identified gaps in
+criterion coverage, per-child review, and recovery records (comments
+`#4460505492`, `#4460505499`, and `#4460505511`). Follow the split procedure in
+`idd-work.instructions.md`.

@@ -366,7 +366,7 @@
       "files": [
         ".github/instructions/idd-work.instructions.md"
       ],
-      "limitBytes": 30100
+      "limitBytes": 37300
     },
     {
       "id": "bundle-work-lite",
@@ -374,7 +374,7 @@
       "files": [
         ".github/instructions/lite/idd-work-lite.instructions.md"
       ],
-      "limitBytes": 24000
+      "limitBytes": 29500
     },
     {
       "id": "bundle-resume-lite",
@@ -543,6 +543,24 @@
         "limitBytes": 40000,
         "issue": 4233,
         "reason": "maintainer-approved per-file phaseLimitBytes raise (kurone-kito, comment 6162851754 on issue #4233; checker decision in comment 6168271034): the A0-T step 1 hold-label stop adds about 370 bytes to the idd-template idd-discover.instructions.md, which sat at 35,997 of 36,000 bytes. The raise is the maintainer's explicit exception to E12's per-file-cap rule. The entry name is the instructionSizeBudgets id, and only phaseLimitBytes is covered."
+      }
+    ],
+    "standingRaiseApprovals": [
+      {
+        "bundle": "bundle-work-phase",
+        "standingClass": "budgetRaise",
+        "ceilingPct": 10,
+        "limitBytes": 37300,
+        "issue": 4893,
+        "reason": "Measured 33,914 bytes after restoring the existing work-phase wording and adding the approved split safeguards. With maxUtilizationPct 98, 37,300 is the largest 100-byte limit within the approved 10% ceiling. Operator approval is recorded in issue #4893 comment #6671770411."
+      },
+      {
+        "bundle": "bundle-work-lite",
+        "standingClass": "budgetRaise",
+        "ceilingPct": 10,
+        "limitBytes": 29500,
+        "issue": 4893,
+        "reason": "Measured 26,826 bytes after restoring the existing Lite wording and adding the approved split safeguards. With maxUtilizationPct 98, 29,500 is the largest 100-byte limit within the approved 10% ceiling. Operator approval is recorded in issue #4893 comment #6671770411."
       }
     ]
   },

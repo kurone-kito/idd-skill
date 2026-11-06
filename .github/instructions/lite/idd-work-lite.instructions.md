@@ -182,7 +182,7 @@ defaultBranchRef --jq .defaultBranchRef.name`. Stop unless the name matches
    superseding PR.
 6. If the criteria only partly hold, keep the issue open, record the overlap
    in the plan, and plan only the remaining work.
-7. After B2.1-B2.2, draft an issue comment plan.
+7. Draft an issue comment plan for the change set.
 8. For a per-agent plan critique, resolve `critiqueLoop.subagentWaitCeiling`
    (`PT20M` default). If the harness lacks bound/cleanup, skip delegation and
    use structured self-critique, recording risk. Otherwise enforce a harness
@@ -196,19 +196,27 @@ defaultBranchRef --jq .defaultBranchRef.name`. Stop unless the name matches
 
 ## B2.1 — Premise verification
 
-If the issue records a human decision, verify its shipped-fact claims in
-code/docs; if unclear or false, hold with evidence for a maintainer addendum.
+If the issue is a decision-transcription issue (it records or restates a prior
+human decision whose rationale asserts a checkable fact about shipped behavior),
+verify that fact against the prior change's actual code or docs before drafting
+the plan. If the prior change or the fact cannot be verified, stop and hold,
+with the primary-source evidence (file, line, or excerpt, or why it was
+inconclusive) in the hold comment, until a maintainer addendum resolves it.
 
 ## B2.2 — Example field-name verification
 
-Verify existing fields/config keys/tokens cited as examples; fix/drop absent
-ones; hold if unclear (`#2806`).
+If the issue's "Proposed change" or "Acceptance criteria" cites an
+existing schema field, config key, or token as an example (not one it
+adds), verify it exists as cited before drafting the plan. Fix or drop
+the citation if it does not exist; stop and hold if unclear (`#2806`).
 
 ## B3 — Implement
 
-1. Before coding, verify the final B2 plan comment exists on the issue.
-2. If absent, stop; return to B2 and post it.
-3. If code landed first, disclose the ordering deviation on the issue.
+1. Before the first implementation edit, confirm the final B2 plan comment
+   exists on the issue.
+2. If it does not exist, stop and return to B2 to post it.
+3. If code already landed before that checkpoint was noticed, disclose the
+   ordering deviation on the issue.
 4. Post the plan retroactively.
 5. Implement the plan.
 6. Critique the completed diff.
@@ -222,10 +230,14 @@ ones; hold if unclear (`#2806`).
     up-to-date". Prefer `git commit -F <file>` with a pre-wrapped body, and
     compare `git rev-parse HEAD` before and after (or check the reported commit
     hash) before treating a push as confirmation.
-11. For untouched-file failures, rule out baseline drift/stale installs: run
-    `install-deps` in a clean worktree or compare fresh/stale `node_modules`.
-12. If an unrelated test fails once locally but passes isolated with hosted CI
-    green, stop chasing it as a regression; still run both validation gates.
+11. If validation fails in files this diff did not touch, suspect baseline
+    drift or a stale install before blaming the change; verify with a fresh
+    `install-deps` run in a clean worktree or a fresh-vs-stale
+    `node_modules` comparison before assuming the failure traces to this diff.
+12. If a test this diff did not touch fails once locally but passes in
+    isolation while hosted CI is green, trust the hosted result and stop
+    chasing it as a regression. This does not waive the `fix-validate` /
+    `pre-push-validate` requirements.
 13. When consolidating a wrapper function used at multiple call sites into one
     shared function, check whether any call site's old delegate path added
     options or behavior the shared function does not replicate.
@@ -249,9 +261,9 @@ and use another target or a separate comment.
 After Stage 1 publishes and acquires a valid parent roadmap shell as the set
 anchor (or the designated lead when no parent roadmap exists), then publishes or
 acquires every ready child under that anchor and wires real numbers into the
-roadmap, leave the authoring label on every published or updated target, and
-resume B–C. If interrupted, leave those labels, stop B–C, and resume only after
-a later pass completes the set. After anchor acquisition,
+roadmap, leave the authoring label on every published or updated target (issues
+and roadmaps), and resume B–C. If interrupted, leave those labels, stop B–C, and
+resume only after a later pass completes the set. After anchor acquisition,
 persist and verify exact `anchor`/`set` identities in the originating issue's
 durable Stage 1 hold; resume must recover them, not infer them from the label or
 choose another lead. If Stage 1 publishes nothing (including after clarification
@@ -261,39 +273,89 @@ never release a follow-up or start a second loop. If the companion is
 unavailable, record the proposal in a separate comment and PR follow-ups; never
 create it ad hoc or improvise worker-side authoring.
 
-**Scope overrun** (helper runtime only): when profile-selected
+**Scope overrun** (helper runtime only): when the profile-selected
 `audit-authored-issue --shape child --stdin --marker-prefix {markerPrefix}`
 fails `effort-candidate-file-limit` on the issue body or with
 `## Candidate files` set to the diff's canonical paths, stop coding without
 pushing. Comment the estimate, candidate files, changed files, and a split
 proposal. Then revalidate ownership: only if the active claim still uses your
-current `{claim-id}`, update the digest (`Phase: aborted/released`, release in
-`Next action`, claim/reason in `Authoritative by`) and post `unclaimed-by` for
-that same `{claim-id}`; else no release. Then run `lost-claim-cleanup`. With
-the companion, hand it that proposal as a held split draft: it holds this
-issue, publishes a held roadmap whose children record `Split out of #<n>`, and
-comments its link; if refused, the comment stands. Never add needs-decision or
-ask a human.
+current `{claim-id}`, update the digest (`Phase: aborted/released`, the release
+in `Next action`, the claim and reason in `Authoritative by`) and post
+`unclaimed-by` for that same `{claim-id}`; otherwise post no release. Then run
+`lost-claim-cleanup`. With the companion, hand it that proposal as a held split
+draft: it holds this issue, publishes a held roadmap whose children record
+`Split out of #<n>`, and comments its link; if refused, the comment stands.
+Never add needs-decision or ask a human.
 
-**Standing split** (sole exception to this rule): with
-`standingApprovals.split.enabled` true, every child within effective
-`maxCandidateFiles`, and each checkbox-stripped parent acceptance-criteria line
-whole and verbatim in exactly one child, keep the parent claim and:
+**Standing split** is the sole helper-runtime exception. It requires
+`standingApprovals.split.enabled`, every child within the effective
+`maxCandidateFiles`, each checkbox-stripped parent criterion whole and
+verbatim in exactly one child, and at least one parent criterion in every
+child. The hand split of issue `#4064` produced duplicate child `#4093`; PR
+`#5031` also found gaps in criterion coverage, per-child review, and recovery
+records (comments `#4460505492`, `#4460505499`, and `#4460505511`). Otherwise
+keep the existing comment/release route
+([rationale](../../../docs/idd-design-rationale.md#b3--scope-overrun-returns-to-authoring)).
 
-1. Dry-run every child, then `--apply` each held orphan, one per call:
-   `publish-authoring-hold --shape orphan --title <title> --body-file <file>
-   --review-result <file>`.
-2. On refusal, failure, recovery hold, or a failed record post: stop; keep the
-   parent claim and children held; name them in a hold note; no release;
-   reconcile an uncertain POST first.
-3. Post this one-line record on the parent, then comment, release, and clean
-   up as above, no handoff:
+Revalidate the parent claim and add/verify the configured authoring label.
+If it already exists, resume only from the same proposal; otherwise stop on the
+unrelated hold. Reconcile every child mapping; if the final record exists,
+verify the held children and finish release without publishing again. Before
+publishing, verify each child's material factual claims that justify its scope
+or design against current sources. Put supporting file references, GitHub
+permalinks, or read-only command evidence in the review packet's existing
+`evidence` array. Correct, qualify, or remove unsupported claims; route
+materially unresolved claims under the issue-authoring contract. Then post/read
+back one ordered parent comment with the current claim ID,
+estimate, candidate and changed files, and every child's exact title and full
+body. If its POST is uncertain, page the parent comments and continue
+only if exactly one exact proposal is present; otherwise keep the hold and
+stop. On resume, reconcile the proposal, helper records, and live issues;
+never republish an unknown result. Keep the parent claim and label throughout.
+Complete each final child's separate adversarial review: send its exact
+title/body plus the bounded packet, use the configured delegate when usable or
+native review otherwise, and bound wait by
+`issueAuthoring.adversarialReview.waitCeiling` (`PT20M` default).
+Record `"completed": true` with all findings `fixed` or `rejected`, and stop on
+an incomplete, unreadable, or unresolved review. Any factual or review
+correction that changes a title or body invalidates that child's review result
+and the saved proposal. Update the existing proposal comment with the full
+ordered set and read it back, then repeat both checks for each changed child.
+If the update outcome is uncertain, read that comment and continue only when
+its full body exactly matches the updated set; otherwise keep the hold and stop.
+Dry-run only when every final title and body matches the read-back proposal and
+has a completed review result. Resolve the profile-selected
+`idd-publish-authoring-hold` invocation per `docs/idd-helper-scripts.md`. Its
+default without `--apply` is dry-run. Dry-run every orphan and inspect all
+results before applying one per call. The invocation and required arguments
+are:
+
+```sh
+idd-publish-authoring-hold --shape orphan \
+  --title <title> --body-file <file> --review-result <file> [--apply]
+```
+
+Verify each child is held and append/read back its
+number on the parent before the next. If that POST is uncertain, read all
+parent comments and proceed only when exactly one matching mapping is present;
+otherwise stop and keep the hold. A refusal or definite pre-create failure
+stops; if a call may have created an issue, inspect the helper report, journal,
+marker, and live issues, and continue only after one matching held child is
+identified. Any unknown or conflicting result keeps the parent claim, label,
+and published children held. After all children are verified and mapped, post
+the record below. If its POST is uncertain, read all parent comments: proceed
+only when exactly one exact line is present; otherwise stop and keep the hold
+without retrying (`#5031`, comments `#4460450129` and `#4460450314`). Then post
+a completion note, release the parent claim, and run `lost-claim-cleanup`;
+keep the parent label until the set is deliberately released or completed.
+`instructions-only` keeps the companion route.
 
 ```text
 <!-- idd-skill-standing-approval: class=split; set=none; anchor=<owner/repo#n>; ceiling=<maxCandidateFiles>; option=option-a -->
 ```
 
-Otherwise the rule above applies unchanged.
+Use the parent issue itself as `anchor` (`<owner>/<repo>#<number>`) and the
+numeric effective `maxCandidateFiles` as `ceiling`.
 
 ## C — Self-review
 
