@@ -436,7 +436,7 @@
         ".github/instructions/idd-review-snapshot.instructions.md",
         ".github/instructions/idd-review-triage.instructions.md"
       ],
-      "limitBytes": 59300
+      "limitBytes": 64700
     },
     {
       "id": "bundle-review-fix-phase",
@@ -522,9 +522,9 @@
       },
       {
         "bundle": "bundle-review-triage-phase",
-        "limitBytes": 59300,
-        "issue": 4195,
-        "reason": "Maintainer-approved in the roadmap hearing of 2026-10-13, sized by the docs convention (roughly 10% headroom over measured need, not an exact fit): the E5 triage-record rule adds about 800 bytes to review-triage, which had 0 bytes of headroom. Measured 53,214 bytes before the change, about 54,010 after; raised to 59,300, the value approved in the hearing, about 10% above that."
+        "limitBytes": 64700,
+        "issue": 4880,
+        "reason": "Issue #4880 records the operator's approval in the 2026-10-31 IDD session to raise this limit rather than trim the E1 instruction. The projected bundle is 58,838 bytes; 64,700 is 10% above that total, rounded to the nearest 100. This replaces the #4195 approval at 59,300 bytes."
       },
       {
         "bundle": "bundle-merge-phase",

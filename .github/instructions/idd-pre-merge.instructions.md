@@ -149,39 +149,29 @@ is diagnostic and never changes the verdict.
   not delete, hide, minimize, or unmark open-PR operational markers
   during this recovery; with no trusted same-claim watermark for the
   successor claim, return to E1 and rebuild review state there.
-  When helper runtime is enabled, prefer the documented merge-gate
-  helper reference in
-  [`docs/idd-helper-scripts.md`](../../docs/idd-helper-scripts.md#stable-helper-evidence-outputs)
-  to collect this evidence (the fields listed at that anchor). Helpers
-  remain read-only evidence collectors. Distinguish two failure shapes
-  before deciding whether to retry. On an
-  **infrastructure/transport failure** — the invocation itself fails
-  with no well-formed gate result at all (a bare network/transport
-  error such as a connection failure, timeout, or DNS failure, or a
-  retryable `5xx`/`429` HTTP status with no substantive JSON body —
-  never a non-retryable `4xx` such as `401`/`403`/`404`, which is
-  code-/auth-caused, not transient), **or returns well-formed JSON
-  whose sole content is a collection/transport-failure placeholder
-  rather than a real gate criterion** (for example a non-empty
-  `blockers` array whose only entry describes the collection failure
-  itself, not any actual merge-readiness criterion) — retry the
-  identical invocation once, mirroring the CI-wait algorithm's own
-  infra-vs-code retry distinction (`ciWait.rerunPolicy`,
-  `idd-ci.instructions.md`) rather than inventing a new pattern; if the
-  retry fails the same way, fall back to the discard-and-fetch-directly
-  path below unchanged — a single bounded attempt, not a loop. A
-  **substantive non-passing gate result** — the helper ran to
-  completion and returned well-formed JSON with real gate fields backed
-  by an actual merge-readiness criterion (for example
-  `claim.matchesExpectedClaim: false`), not a collection-failure
-  placeholder — is never retried; continue trusting it at face value,
-  unchanged from today. For every other case —
-  output is invalid JSON, required sections are missing, or live GitHub
-  state disagrees with it — discard helper output and fetch the
-  activity universe snapshot (same scope as E1 Step 1) plus current CI
-  state for the HEAD SHA directly, unchanged and without retry — the
-  instruction rules remain canonical. Return to E1 if **any** of the
-  following is true:
+  When helper runtime is enabled, prefer the read-only [merge-gate helper evidence](../../docs/idd-helper-scripts.md#stable-helper-evidence-outputs).
+  Retry the identical invocation once only for a transport failure with
+  no well-formed result (connection failure, timeout, DNS, or retryable
+  `5xx`/`429` without substantive JSON) or well-formed JSON containing
+  only a collection-failure placeholder, not a gate criterion. Do not
+  retry non-retryable `4xx` (`401`/`403`/`404`); discard the output and
+  use the direct-fetch path without retry. Do not retry a substantive
+  gate result (for example `claim.matchesExpectedClaim: false`); trust
+  it unchanged. If the same failure recurs, fall back to the discard-and-fetch-directly
+  path. For invalid JSON, missing sections, or disagreement with live
+  GitHub, use that path without retry. It fetches the E1-scope activity
+  snapshot plus current HEAD CI directly. This follows
+  `ciWait.rerunPolicy` in `idd-ci.instructions.md`; instructions remain
+  canonical. On manual paths (helper unavailable or output discarded),
+  fetch the PR's current `baseRefName` from GitHub during F2 (for example,
+  `gh pr view {pr-number} --json baseRefName --jq .baseRefName`); do not
+  reuse F1's `prBaseSha` or an earlier base read. If the fetch fails or
+  yields no single non-empty name, hold F2 and do not report review
+  currency as current. Compare optional field (g) `{base-ref}` with that
+  value; if they differ, return to E1. A legacy six-field marker has no
+  base, so skip only this comparison and continue every check below. The gap
+  was observed on 2026-11-05 on pull request `#5050` (issue `#4880`).
+  Return to E1 if **any** of the following is true:
   - The current PR HEAD SHA differs from the stored `{head-SHA}` (a new
     push after E1's snapshot, even if the watermark posted later).
   - The stored value is `none` and the live snapshot is non-empty
