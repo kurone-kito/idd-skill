@@ -91,23 +91,21 @@ defaultBranchRef --jq .defaultBranchRef.name`. Stop unless the name matches
    origin/{default-branch}..{default-branch} --oneline`.
 3. If step 2 outputs any lines, stop and report: local `{default-branch}` has
    unpushed commits. Do not force-reset `{default-branch}`.
-4. Fast-forward local `{default-branch}` with `git merge --ff-only
-   origin/{default-branch}`.
-   Dirty failure: report `primary-worktree-dirty` and paths; stop before
-   worktree creation. Operator may move only paths this session created;
-   leave others in place and ask. Then rerun the helper from step 1. Never
-   stash, discard, or remove a worktree (`#5058`).
+4. Fast-forward with `git -c merge.autoStash=false merge --ff-only
+   origin/{default-branch}`. If dirty paths block it, report
+   `primary-worktree-dirty` and paths; stop before creating a worktree.
+   Move only files this session created outside the repository; ask before
+   moving others. Rerun step 1. Never stash, discard, or remove a worktree
+   (`#5058`).
 5. Keep the primary worktree on `{default-branch}` throughout B1. Never use
    `git switch -c <branch-name>`, `git checkout -b <branch-name>`, or a
    standalone `git branch <branch-name>` followed by in-place commits there.
 6. Keep the claimed branch name verbatim.
-7. Run `git worktree list` (`--porcelain` for prunable entries). Before reusing
-   or removing a sibling, acquire its worktree-local lock with the profile's
-   `claim-lock` helper. On `collision`, stop and resolve per
-   `idd-claim.instructions.md`'s Claim-state rule; remove only when authorized.
-   For the claim phase's fresh worktree, skip steps 8-26, run step 27
-   (install dependencies), then continue at step 28. Never delete or
-   recreate that branch.
+7. Run `git worktree list --porcelain`. Before reusing or removing a sibling,
+   acquire its worktree-local lock except for an absent prunable entry in step
+   8. On `collision`, stop and follow `idd-claim.instructions.md`'s Claim-state
+   rule; remove only when authorized. For a fresh worktree, skip steps 8-26,
+   run step 27, then continue at step 28. Never delete or recreate the branch.
 8. If `git worktree list --porcelain` marks the entry `prunable` and its path
    is already absent, remove that stale entry with
    `git worktree remove --force <path-from-list>` and continue.

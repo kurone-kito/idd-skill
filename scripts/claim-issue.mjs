@@ -101,7 +101,7 @@ const AGENT_ID_PATTERN = /^(?!.*(?:<!--|-->))\S+$/;
 const PRIMARY_RETRY_NEXT =
   'Bring the primary checkout to the default branch by hand (B1 step 1 in idd-work.instructions.md), then rerun this helper. This helper removed nothing.';
 const PRIMARY_WORKTREE_DIRTY_NEXT =
-  "The listed paths in the shared primary checkout can stop every issue's fast-forward. Have the operator move only paths created by this session; leave all others in place and ask the operator. Do not stash, discard, or remove a worktree. This helper removed nothing.";
+  "The listed paths in the shared primary checkout can stop every issue's fast-forward. Have the operator move only paths created by this session outside the repository; leave all others in place and ask the operator. Do not stash, discard, or remove a worktree. This helper removed nothing.";
 const CLEANUP_NEXT =
   'Run the B1 cleanup of idd-work.instructions.md by hand: remove the prunable worktree entry, or delete the leftover branch if its commits are confirmed unneeded. Then rerun this helper. This helper removed nothing.';
 const PATH_NEXT =
@@ -1300,7 +1300,7 @@ function resolveDevelopment(state) {
       : 'no developmentBranch is configured and the default branch is unavailable',
   );
 }
-/** Parse the path fields from `git status --porcelain=v1 -z` output. */
+/** Parse path fields from NUL-delimited porcelain v1 status output. */
 function parsePorcelainV1StatusPaths(output) {
   const records = output.split('\0');
   if (records.at(-1) !== '') return null;
@@ -1308,23 +1308,41 @@ function parsePorcelainV1StatusPaths(output) {
   const paths = [];
   for (let index = 0; index < records.length; index += 1) {
     const record = records[index];
-    if (record === undefined || record.length < 4 || record[2] !== ' ') {
-      return null;
-    }
+    if (record === undefined) return null;
+    if (record.length < 4 || record[2] !== ' ') return null;
     const status = record.slice(0, 2);
     const path = record.slice(3);
     if (path === '') return null;
-    paths.push(path);
+    paths.push({
+      path,
+      unmerged: ['AA', 'AU', 'DD', 'DU', 'UA', 'UD', 'UU'].includes(status),
+    });
     // With `-z`, porcelain v1 emits a rename/copy destination first and its
     // source as the following NUL-delimited field, without an arrow marker.
     if (status.includes('R') || status.includes('C')) {
       const source = records[index + 1];
       if (source === undefined || source === '') return null;
-      paths.push(source);
+      paths.push({ path: source, unmerged: false });
       index += 1;
     }
   }
   return paths;
+}
+/** Parse a NUL-delimited path list such as `git diff --name-only -z`. */
+function parseNulDelimitedPaths(output) {
+  const paths = output.split('\0');
+  if (paths.at(-1) !== '') return null;
+  paths.pop();
+  return paths.every((path) => path !== '') ? paths : null;
+}
+function pathsOverlap(left, right, ignoreCase) {
+  const leftPath = ignoreCase ? left.toLowerCase() : left;
+  const rightPath = ignoreCase ? right.toLowerCase() : right;
+  return (
+    leftPath === rightPath ||
+    leftPath.startsWith(`${rightPath}/`) ||
+    rightPath.startsWith(`${leftPath}/`)
+  );
 }
 /** B1 step 1: the primary is on the default branch, has no unpushed commits, and is fast-forwarded. */
 function fastForwardPrimary(state) {
@@ -1400,24 +1418,95 @@ function fastForwardPrimary(state) {
       '--porcelain=v1',
       '-z',
       '--untracked-files=all',
+      '--ignore-submodules=none',
     ]);
     const forwardFailure = `git merge --ff-only origin/${base} ended with ${describeStatus(forward)}`;
     if (status.status !== 0) {
       return notReady(
-        `${forwardFailure}; git status --porcelain=v1 -z --untracked-files=all ended with ${describeStatus(status)}`,
+        `${forwardFailure}; git status --porcelain=v1 -z --untracked-files=all --ignore-submodules=none ended with ${describeStatus(status)}`,
       );
     }
-    const paths = parsePorcelainV1StatusPaths(status.stdout);
-    if (paths === null) {
+    const statusPaths = parsePorcelainV1StatusPaths(status.stdout);
+    if (statusPaths === null) {
       return notReady(
-        `${forwardFailure}; git status --porcelain=v1 -z --untracked-files=all returned malformed output`,
+        `${forwardFailure}; git status --porcelain=v1 -z --untracked-files=all --ignore-submodules=none returned malformed output`,
       );
     }
+    const unmergedPaths = statusPaths
+      .filter((entry) => entry.unmerged)
+      .map((entry) => entry.path);
+    if (unmergedPaths.length > 0) {
+      return notReady(
+        `${forwardFailure}; the primary index has unmerged paths: ${unmergedPaths.map((path) => JSON.stringify(path)).join(', ')}`,
+      );
+    }
+    const changed = state.deps.run('git', [
+      '-C',
+      state.primary,
+      'diff',
+      '--no-renames',
+      '--name-only',
+      '-z',
+      'HEAD',
+      `origin/${base}`,
+      '--ignore-submodules=none',
+    ]);
+    if (changed.status !== 0) {
+      return notReady(
+        `${forwardFailure}; git diff --no-renames --name-only -z HEAD origin/${base} ended with ${describeStatus(changed)}`,
+      );
+    }
+    const incomingPaths = parseNulDelimitedPaths(changed.stdout);
+    if (incomingPaths === null) {
+      return notReady(
+        `${forwardFailure}; git diff --no-renames --name-only -z HEAD origin/${base} returned malformed output`,
+      );
+    }
+    const ignoreCaseResult = state.deps.run('git', [
+      '-C',
+      state.primary,
+      'config',
+      '--bool',
+      '--get',
+      'core.ignoreCase',
+    ]);
+    let ignoreCase;
+    if (
+      ignoreCaseResult.status === 1 &&
+      ignoreCaseResult.stdout === '' &&
+      ignoreCaseResult.stderr === ''
+    ) {
+      ignoreCase = false;
+    } else if (ignoreCaseResult.status !== 0) {
+      return notReady(
+        `${forwardFailure}; git config --bool --get core.ignoreCase ended with ${describeStatus(ignoreCaseResult)}`,
+      );
+    } else {
+      const value = ignoreCaseResult.stdout.trim();
+      if (value !== 'true' && value !== 'false') {
+        return notReady(
+          `${forwardFailure}; git config --bool --get core.ignoreCase returned malformed output`,
+        );
+      }
+      ignoreCase = value === 'true';
+    }
+    const paths = statusPaths
+      .map((entry) => entry.path)
+      .filter((path) =>
+        incomingPaths.some((incoming) =>
+          pathsOverlap(path, incoming, ignoreCase),
+        ),
+      );
     if (paths.length > 0) {
       return applyFail(
         'primary-worktree-dirty',
         PRIMARY_WORKTREE_DIRTY_NEXT,
         `${forwardFailure}; dirty paths: ${paths.map((path) => JSON.stringify(path)).join(', ')}`,
+      );
+    }
+    if (statusPaths.length > 0) {
+      return notReady(
+        `${forwardFailure}; dirty paths do not overlap changes from origin/${base}`,
       );
     }
     return notReady(forwardFailure);

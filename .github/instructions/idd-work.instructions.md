@@ -45,13 +45,13 @@ if applicable.
    fast-forward to origin:
 
    ```sh
-   git merge --ff-only origin/{default-branch}
+   git -c merge.autoStash=false merge --ff-only origin/{default-branch}
    ```
 
    Dirty failure: report `primary-worktree-dirty` and paths; stop before
-   worktree creation. Operator may move only paths this session created;
-   leave others in place and ask. Then rerun the helper from step 1. Never
-   stash, discard, or remove a worktree (`#5058`).
+   worktree creation. Move only this session's files outside the repository;
+   ask before moving others. Rerun step 1. Never stash, discard, or remove a
+   worktree (`#5058`).
 
    After success, follow Anti-patterns below.
 

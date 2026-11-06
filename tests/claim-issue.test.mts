@@ -1754,12 +1754,13 @@ function exitOf(result: HelperCliResult): number {
   return typeof result === 'number' ? result : result.exitCode;
 }
 
-function gitIn(cwd: string, args: readonly string[]): string {
+function gitIn(cwd: string, args: readonly string[], input?: string): string {
   return execFileSync('git', [...args], {
     cwd,
     env: fixtureEnv(),
     stdio: 'pipe',
     encoding: 'utf8',
+    ...(input === undefined ? {} : { input }),
   });
 }
 
@@ -2525,7 +2526,10 @@ test('a failed fast-forward blocked by a modified primary path reports the path 
     assert.match(detail, /"seed\.txt"/);
     assert.match(report.nextAction ?? '', /shared primary checkout/);
     assert.match(report.nextAction ?? '', /operator move/);
-    assert.match(report.nextAction ?? '', /paths created by this session/);
+    assert.match(
+      report.nextAction ?? '',
+      /paths created by this session outside the repository/,
+    );
     assert.match(report.nextAction ?? '', /leave all others in place/);
     assert.match(
       report.nextAction ?? '',
@@ -2533,6 +2537,16 @@ test('a failed fast-forward blocked by a modified primary path reports the path 
     );
     assert.equal(existsSync(fixture.worktree), false);
     assert.equal(run.posts.length, 0);
+    assert.ok(
+      run.log.some((entry) => entry.includes('--ignore-submodules=none')),
+    );
+    assert.ok(
+      run.log.some(
+        (entry) =>
+          entry.includes('diff --no-renames --name-only -z HEAD origin/main') &&
+          entry.includes('--ignore-submodules=none'),
+      ),
+    );
   });
 });
 
@@ -2566,7 +2580,81 @@ test('an unreadable primary status after a failed fast-forward stays primary-not
     const report = assertStopped(run, 'primary-not-ready');
     assert.match(
       report.steps.at(-1)?.detail ?? '',
-      /git status --porcelain=v1 -z --untracked-files=all ended with exit code 128/,
+      /git status --porcelain=v1 -z --untracked-files=all --ignore-submodules=none ended with exit code 128/,
+    );
+    assert.equal(existsSync(fixture.worktree), false);
+    assert.equal(run.posts.length, 0);
+  });
+});
+
+test('a failed fast-forward with unrelated dirty paths stays primary-not-ready', () => {
+  withApplyFixture((fixture) => {
+    advanceOrigin(fixture, 'upstream-only.txt', 'incoming\n');
+    writeFileSync(join(fixture.primary, 'local-only.txt'), 'leave in place\n');
+    const run = runApply(fixture, { failPrimaryFastForward: true });
+    const report = assertStopped(run, 'primary-not-ready');
+    const detail = report.steps.at(-1)?.detail ?? '';
+    assert.match(
+      detail,
+      /dirty paths do not overlap changes from origin\/main/,
+    );
+    assert.doesNotMatch(detail, /local-only\.txt|primary-worktree-dirty/);
+    assert.equal(existsSync(fixture.worktree), false);
+    assert.equal(run.posts.length, 0);
+  });
+});
+
+test('case-only path collisions match when core.ignoreCase is true', () => {
+  withApplyFixture((fixture) => {
+    advanceOrigin(fixture, 'README', 'incoming version\n');
+    gitIn(fixture.primary, ['config', 'core.ignoreCase', 'true']);
+    writeFileSync(join(fixture.primary, 'readme'), 'local version\n');
+
+    const run = runApply(fixture, { failPrimaryFastForward: true });
+    const report = assertStopped(run, 'primary-worktree-dirty');
+    assert.match(report.steps.at(-1)?.detail ?? '', /"readme"/);
+    assert.equal(existsSync(fixture.worktree), false);
+    assert.equal(run.posts.length, 0);
+  });
+});
+
+test('an unmerged primary index is reported as not-ready, including paths with spaces', () => {
+  withApplyFixture((fixture) => {
+    const path = 'conflict path.txt';
+    advanceOrigin(fixture, path, 'origin version\n');
+    gitIn(fixture.primary, ['fetch', 'origin']);
+
+    const localBlob = gitIn(
+      fixture.primary,
+      ['hash-object', '-w', '--stdin'],
+      'local version\n',
+    ).trim();
+    const incomingBlob = gitIn(fixture.primary, [
+      'rev-parse',
+      `origin/main:${path}`,
+    ]).trim();
+    gitIn(fixture.primary, ['update-index', '--force-remove', '--', path]);
+    gitIn(
+      fixture.primary,
+      ['update-index', '--index-info'],
+      `100644 ${localBlob} 2\t${path}\n100644 ${incomingBlob} 3\t${path}\n`,
+    );
+    writeFileSync(join(fixture.primary, path), 'local version\n');
+
+    const status = gitIn(fixture.primary, [
+      'status',
+      '--porcelain=v1',
+      '-z',
+      '--untracked-files=all',
+      '--ignore-submodules=none',
+    ]);
+    assert.match(status, /AA conflict path\.txt\0/);
+
+    const run = runApply(fixture);
+    const report = assertStopped(run, 'primary-not-ready');
+    assert.match(
+      report.steps.at(-1)?.detail ?? '',
+      /unmerged paths: "conflict path\.txt"/,
     );
     assert.equal(existsSync(fixture.worktree), false);
     assert.equal(run.posts.length, 0);
