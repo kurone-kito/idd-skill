@@ -2618,7 +2618,7 @@ test('case-only path collisions match when core.ignoreCase is true', () => {
   });
 });
 
-test('an unmerged primary index is reported as not-ready, including paths with spaces', () => {
+test('an unmerged primary index reports all dirty paths and creates no worktree', () => {
   withApplyFixture((fixture) => {
     const path = 'conflict path.txt';
     advanceOrigin(fixture, path, 'origin version\n');
@@ -2640,6 +2640,26 @@ test('an unmerged primary index is reported as not-ready, including paths with s
       `100644 ${localBlob} 2\t${path}\n100644 ${incomingBlob} 3\t${path}\n`,
     );
     writeFileSync(join(fixture.primary, path), 'local version\n');
+    writeFileSync(
+      join(fixture.primary, '.git', 'info', 'exclude'),
+      'ignored-report.txt\n',
+      {
+        flag: 'a',
+      },
+    );
+    writeFileSync(
+      join(fixture.primary, 'staged report.txt'),
+      'staged content\n',
+    );
+    gitIn(fixture.primary, ['add', '--', 'staged report.txt']);
+    writeFileSync(
+      join(fixture.primary, 'unstaged report.txt'),
+      'unstaged content\n',
+    );
+    writeFileSync(
+      join(fixture.primary, 'ignored-report.txt'),
+      'ignored content\n',
+    );
 
     const status = gitIn(fixture.primary, [
       'status',
@@ -2651,10 +2671,16 @@ test('an unmerged primary index is reported as not-ready, including paths with s
     assert.match(status, /AA conflict path\.txt\0/);
 
     const run = runApply(fixture);
-    const report = assertStopped(run, 'primary-not-ready');
+    const report = assertStopped(run, 'primary-worktree-dirty');
+    const detail = report.steps.at(-1)?.detail ?? '';
+    assert.match(detail, /unmerged index paths: "conflict path\.txt"/);
+    assert.match(detail, /all dirty paths: .*"staged report\.txt"/);
+    assert.match(detail, /"unstaged report\.txt"/);
+    assert.doesNotMatch(detail, /ignored-report\.txt/);
+    assert.match(report.nextAction ?? '', /staged or unmerged/);
     assert.match(
-      report.steps.at(-1)?.detail ?? '',
-      /unmerged paths: "conflict path\.txt"/,
+      report.nextAction ?? '',
+      /preserve staged and unstaged content/,
     );
     assert.equal(existsSync(fixture.worktree), false);
     assert.equal(run.posts.length, 0);

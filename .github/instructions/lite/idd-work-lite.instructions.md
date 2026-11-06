@@ -87,14 +87,15 @@ defaultBranchRef --jq .defaultBranchRef.name`. Stop unless the name matches
 <name>` lists it. Steps 15, 16, 21, and 25 use only this value.
 
 1. On the primary worktree, run `git fetch origin`.
-2. On the primary worktree, run `git log
-   origin/{default-branch}..{default-branch} --oneline`.
-3. If step 2 outputs any lines, stop and report: local `{default-branch}` has
-   unpushed commits. Do not force-reset `{default-branch}`.
+2. Run `git log origin/{default-branch}..{default-branch} --oneline`.
+3. Any output means `{default-branch}` has unpushed commits. Stop and
+   report; never force-reset it.
 4. Fast-forward with `git -c merge.autoStash=false merge --ff-only
    origin/{default-branch}`. If dirty paths block it, report
    `primary-worktree-dirty` and paths; stop before creating a worktree.
-   Move only files this session created outside the repository; ask before
+   For staged or unmerged paths, ask the operator to preserve staged and
+   unstaged content and resolve the index before retrying. Otherwise move
+   only this session's unstaged paths outside the repository; ask before
    moving others. Rerun step 1. Never stash, discard, or remove a worktree
    (`#5058`).
 5. Keep the primary worktree on `{default-branch}` throughout B1. Never use

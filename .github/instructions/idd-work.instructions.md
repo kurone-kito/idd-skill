@@ -29,11 +29,8 @@ serialize shared-clone `fetch`, `merge --ff-only`, and worktree add/remove
 [fan-out variant](../../docs/idd-workflow.md#orchestrator-fan-out-variant)
 if applicable.
 
-1. Ensure the local `{default-branch}` branch is up to date and has no local
-   commits.
-   `{default-branch}` resolves to `gh repo view --json defaultBranchRef --jq .defaultBranchRef.name`.
-   Validate it per Worktree creation Step 2 (fail closed).
-   Run this from the primary worktree while on `{default-branch}`:
+1. Resolve and validate `{default-branch}` per Worktree creation Step 2. On
+   the primary worktree with it checked out, run:
 
    ```sh
    git fetch origin
@@ -49,7 +46,9 @@ if applicable.
    ```
 
    Dirty failure: report `primary-worktree-dirty` and paths; stop before
-   worktree creation. Move only this session's files outside the repository;
+   worktree creation. For staged or unmerged paths, ask the operator to
+   preserve staged and unstaged content and resolve the index before retrying.
+   Otherwise move only this session's unstaged paths outside the repository;
    ask before moving others. Rerun step 1. Never stash, discard, or remove a
    worktree (`#5058`).
 
