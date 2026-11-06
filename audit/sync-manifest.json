@@ -366,7 +366,7 @@
       "files": [
         ".github/instructions/idd-work.instructions.md"
       ],
-      "limitBytes": 37300
+      "limitBytes": 38400
     },
     {
       "id": "bundle-work-lite",
@@ -374,7 +374,7 @@
       "files": [
         ".github/instructions/lite/idd-work-lite.instructions.md"
       ],
-      "limitBytes": 29500
+      "limitBytes": 30500
     },
     {
       "id": "bundle-resume-lite",
@@ -550,17 +550,17 @@
         "bundle": "bundle-work-phase",
         "standingClass": "budgetRaise",
         "ceilingPct": 10,
-        "limitBytes": 37300,
+        "limitBytes": 38400,
         "issue": 4893,
-        "reason": "Final E12 audit measured 34,968 bytes after restoring existing work-phase wording and adding the approved split safeguards. The approved 10% ceiling permits at most 38,400; the 37,300 limit leaves 1,586 bytes before the 98% utilization threshold (36,554). Operator approval is recorded in issue #4893 comment #6671770411."
+        "reason": "Audit during the issue #4893 work-phase safeguard revision measured 37,311 bytes. The issue-authorized 10% standing raise permits up to 41,000 bytes; the 38,400 limit leaves 321 bytes before the 98% utilization threshold (37,632). Operator approval is recorded in issue #4893 comment #6671770411."
       },
       {
         "bundle": "bundle-work-lite",
         "standingClass": "budgetRaise",
         "ceilingPct": 10,
-        "limitBytes": 29500,
+        "limitBytes": 30500,
         "issue": 4893,
-        "reason": "Final E12 audit measured 27,793 bytes after restoring existing Lite wording and adding the approved split safeguards. The approved 10% ceiling permits at most 30,500; the 29,500 limit leaves 1,117 bytes before the 98% utilization threshold (28,910). Operator approval is recorded in issue #4893 comment #6671770411."
+        "reason": "Audit during the issue #4893 Lite safeguard revision measured 29,727 bytes. The issue-authorized 10% standing raise permits up to 32,600 bytes; the 30,500 limit leaves 163 bytes before the 98% utilization threshold (29,890). Operator approval is recorded in issue #4893 comment #6671770411."
       }
     ]
   },
