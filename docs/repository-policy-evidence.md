@@ -223,8 +223,8 @@ This source repository also records
 dogfooding policy (applies only to `kurone-kito/idd-skill`).
 `low` and `low-and-medium` still never defer High.
 `severity-tiered` scores urgency `very-low` < `low` < `medium` <
-`high` and, below both the first threshold and the
-review-count cap, defers High only at `very-low` (issue `#3589`).
+`high` and at step 0 defers otherwise-unblocked High findings only at
+`very-low` (issue `#3589`).
 At review count 3, below the first threshold 4 but at the cap, the
 cap defers otherwise-unblocked High findings at every urgency;
 safety-class findings and other block reasons retain their verdicts.
@@ -235,9 +235,11 @@ merged pull requests numbered #3561 to #3781 (merged 2026-09-27
 to 2026-10-05), the median PR-wide Copilot review count was 2,
 and 30 reached a 4th review, 25 a 5th, 14 a 7th and 10 a 9th, so
 the first threshold leaves a typical pull request unchanged and
-the second acts only on the long tail. With the cap at 3, these
-thresholds act only through the converged extra step at review counts
-1 and 2. A follow-up filed by the
+the second acts only on the long tail. With the cap at 3, neither
+count threshold changes standard-profile verdicts because the cap
+takes effect first. At counts 1 and 2, current-head convergence can add
+one step and let otherwise-unblocked High findings with `low` urgency
+defer. A follow-up filed by the
 gradient carries the existing `review-fix-loop-cutoff` marker.
 The motivating observation is
 [kurone-kito/setup.ubuntu#201](https://github.com/kurone-kito/setup.ubuntu/issues/201).
