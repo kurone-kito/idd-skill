@@ -1340,7 +1340,11 @@ function assertWindowsNodeSetupBeforeCheckout(workflow: string): void {
   assert.ok(setupStep, 'lint-windows: Node setup step must be present');
   const setupUseLines = setupStep
     .split(/\r?\n/)
-    .filter((line) => line.includes('actions/setup-node@'));
+    .filter(
+      (line) =>
+        !line.trimStart().startsWith('#') &&
+        line.includes('actions/setup-node@'),
+    );
   assert.equal(
     setupUseLines.length,
     1,
@@ -1358,8 +1362,15 @@ function assertWindowsNodeSetupBeforeCheckout(workflow: string): void {
     sharedPin,
     'lint-windows: Node setup must use the shared workflow pin',
   );
+  const setupStepWithoutComments = setupStep
+    .split(/\r?\n/)
+    .filter((line) => !line.trimStart().startsWith('#'))
+    .join('\n');
   assert.equal(
-    setupStep.replace(setupUseLine, '        <shared setup-node pin>'),
+    setupStepWithoutComments.replace(
+      setupUseLine,
+      '        <shared setup-node pin>',
+    ),
     [
       '      - name: Setup Node.js',
       '        <shared setup-node pin>',
@@ -1698,6 +1709,17 @@ test('all mirrored Node floor checks follow checkout and share one program', () 
 
   assertWindowsNodeSetupBeforeCheckout(readWorkflow('lint.yml'));
   assert.equal(new Set(programs).size, 1);
+});
+
+test('lint-windows setup ignores comments that mention setup-node', () => {
+  const workflow = readWorkflow('lint.yml');
+  const annotatedWorkflow = workflow.replace(
+    /^ {6}- name: Setup Node\.js$/m,
+    (stepLine) =>
+      `${stepLine}\n        # This comment mentions actions/setup-node@ without adding a use.`,
+  );
+  assert.notEqual(annotatedWorkflow, workflow);
+  assertWindowsNodeSetupBeforeCheckout(annotatedWorkflow);
 });
 
 function evaluateNodeFloorProgram(

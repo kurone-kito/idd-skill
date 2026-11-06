@@ -3261,9 +3261,69 @@ function readSharedSetupNodePin(): string {
   return sharedSetupNodePinFromSources(sources);
 }
 
+function rawWorkflowStepBlock(
+  lines: readonly string[],
+  jobName: string,
+  stepName: string,
+): readonly string[] {
+  const jobHeader = `  ${jobName}:`;
+  const jobStart = lines.findIndex((line) => line === jobHeader);
+  assert.notEqual(jobStart, -1, `job ${jobName} must be present`);
+  const nextJobStart = lines.findIndex(
+    (line, index) => index > jobStart && /^ {2}[\w-]+:\s*$/.test(line),
+  );
+  const jobEnd = nextJobStart === -1 ? lines.length : nextJobStart;
+  const stepsHeader = lines.findIndex(
+    (line, index) =>
+      index > jobStart && index < jobEnd && line === '    steps:',
+  );
+  assert.notEqual(stepsHeader, -1, `steps must be present in job ${jobName}`);
+  const stepHeader = `      - name: ${stepName}`;
+  const stepStarts = lines
+    .map((line, index) =>
+      index > stepsHeader && index < jobEnd && line === stepHeader ? index : -1,
+    )
+    .filter((index) => index !== -1);
+  assert.equal(
+    stepStarts.length,
+    1,
+    `expected exactly one step ${JSON.stringify(stepName)} in job ${jobName}`,
+  );
+  const start = stepStarts[0];
+  assert.notEqual(start, undefined);
+  const nextStep = lines.findIndex(
+    (line, index) => index > start && index < jobEnd && /^ {6}- /.test(line),
+  );
+  return lines.slice(start, nextStep === -1 ? jobEnd : nextStep);
+}
+
 function setupNodeUseLine(sha: string): string {
   return `        uses: actions/setup-node@${sha} # v1.2.3`;
 }
+
+test('raw setup-node lookup stays in the named job step', () => {
+  const setupNodeUse = setupNodeUseLine('a'.repeat(40));
+  const lines = [
+    'jobs:',
+    '  other:',
+    '    steps:',
+    '      - name: Set up Node.js',
+    '        uses: actions/setup-node@not-a-pin',
+    '  render:',
+    '    steps:',
+    '      - name: Set up Node.js',
+    '        # actions/setup-node@ in a comment is not a use',
+    '',
+    setupNodeUse,
+    '      - name: Render',
+  ];
+  const setupStep = rawWorkflowStepBlock(lines, 'render', 'Set up Node.js');
+  const setupUseLines = setupStep.filter(
+    (line) =>
+      !line.trimStart().startsWith('#') && line.includes('actions/setup-node@'),
+  );
+  assert.deepEqual(setupUseLines, [setupNodeUse]);
+});
 
 /** A plain copy of a parsed mapping, so assertions compare values, not prototypes. */
 function plain(value: unknown): unknown {
@@ -3494,11 +3554,17 @@ test('the render job has three named steps, with pinned actions and a checkout w
   const job = sweepJob('render');
   const sharedPin = readSharedSetupNodePin();
   const rawLines = readFileSync(SWEEP_WORKFLOW, 'utf8').split(/\r?\n/);
-  const setupNameIndex = rawLines.findIndex((line) =>
-    /^\s*- name: Set up Node\.js\s*$/.test(line),
+  const setupStep = rawWorkflowStepBlock(rawLines, 'render', 'Set up Node.js');
+  const rawUsesLines = setupStep.filter(
+    (line) =>
+      !line.trimStart().startsWith('#') && line.includes('actions/setup-node@'),
   );
-  assert.notEqual(setupNameIndex, -1, 'render setup-node step must be present');
-  const rawUsesLine = rawLines[setupNameIndex + 1];
+  assert.equal(
+    rawUsesLines.length,
+    1,
+    'render setup-node step must have exactly one uses line',
+  );
+  const rawUsesLine = rawUsesLines.at(0);
   assert.ok(rawUsesLine, 'render setup-node step must have a uses line');
   const rawUsesMatch = SETUP_NODE_USE_LINE.exec(rawUsesLine);
   assert.ok(
