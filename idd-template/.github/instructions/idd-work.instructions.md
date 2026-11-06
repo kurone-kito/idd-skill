@@ -24,8 +24,10 @@ serialize shared-clone `fetch`, `merge --ff-only`, and worktree add/remove
 [fan-out variant](../../docs/idd-workflow.md#orchestrator-fan-out-variant)
 if applicable.
 
-1. Resolve and validate `{default-branch}` per Worktree creation Step 2. On
-   the primary worktree with it checked out, run:
+1. Get `{default-branch}` from
+   `gh repo view --json defaultBranchRef --jq .defaultBranchRef.name`; stop
+   if empty. Do not use `developmentBranch` here. On primary with it checked
+   out, run:
 
    ```sh
    git fetch origin
