@@ -476,23 +476,40 @@ children record `Split out of #<n>`, and comments its link; if refused,
 the comment stands. Never add needs-decision or ask a human
 ([rationale](../../docs/idd-design-rationale.md#b3--scope-overrun-returns-to-authoring)).
 
-**Standing split** is the only helper-runtime exception to this worker-side
-authoring rule. It requires `standingApprovals.split.enabled`, every child to
-fit the effective `maxCandidateFiles`, each checkbox-stripped parent
-acceptance criterion to appear whole and verbatim in exactly one child, and
-every child to contain at least one such criterion. The hand split after issue
-`#4064` produced duplicate child `#4093`; this PR's review also caught the
-one-way criterion check (`#5031`, comment `#4460505492`)
+**Standing split** is the only helper-runtime exception to the worker-side
+authoring rule and the scope-overrun route above. When its conditions hold,
+skip that route's release/handoff and keep the parent claim and label held
+throughout. It requires
+`standingApprovals.split.enabled`, every child to fit the effective
+`maxCandidateFiles`, each checkbox-stripped parent acceptance criterion to
+appear whole and verbatim in exactly one child, and every child to contain at
+least one such criterion. The hand split after issue `#4064` produced duplicate
+child `#4093`; apply the issue-authoring contract's Reuse-first policy to each
+child, including open issues, draft carriers, and their claim/PR state. On a
+match, follow that contract and stop this split if the work cannot safely join
+the held set; never publish a duplicate
 ([rationale](../../docs/idd-design-rationale.md#b3--scope-overrun-returns-to-authoring)).
-If any condition fails, use the existing comment, release, and stop route.
+
+When splitting a roadmap child, follow the issue-authoring contract: check the
+roadmap's claim/PR/execution state, establish per-target ownership, add
+`Split out of #<parent>` to each child, and update/read back each verified child
+in the roadmap's `## Tracks` list. Any conflict keeps the parent and published
+children held.
+
+If any standing-split condition fails, use the existing comment, release, and
+stop route.
 
 1. **Hold and record the set.** Revalidate the parent claim, add the configured
    authoring label (default `status:authoring`) and verify it is present. If it
    already exists, resume only from the same durable proposal; otherwise treat
-   it as an unrelated hold. Reconcile every published-child mapping. If the
-   final record is already present, verify the mapped children and finish the
-   release steps without publishing again. Stop if any publication outcome is
-   unknown. Before saving the proposal, verify each child's material factual
+   it as an unrelated hold. Reconcile mappings. Before release, and on resume
+   when a record exists, require exactly one trusted record line matching the
+   expected class, set, anchor, ceiling, and option, plus a one-to-one match
+   between proposal, mappings, and live held children (exact title/body; no
+   missing, duplicate, extra, or released child). The record alone is not proof.
+   If it exists, verify the set and finish release without republishing. Stop
+   on any conflict or unknown publication. Before saving the proposal, verify
+   each child's material factual
    claims that justify its scope or design against current sources. Put
    supporting file references, GitHub permalinks, or read-only command evidence
    in the review packet's existing `evidence` array. Correct, qualify, or remove
@@ -504,8 +521,7 @@ If any condition fails, use the existing comment, release, and stop route.
    continue only if exactly one exact proposal is present; otherwise keep the hold
    and stop. On resume reuse this proposal, reconcile each child against helper
    records and live issues, and never republish an unknown result. The parent
-   claim and label stay held throughout. This PR's review found the missing
-   proposal record (`#5031`, comment `#4460505511`).
+   claim and label stay held throughout.
 2. **Review and dry-run.** Review each final child separately with the
    issue-authoring contract's completed-draft adversarial review: send its
    exact title and body plus the bounded review packet, resolve the configured
@@ -526,7 +542,7 @@ If any condition fails, use the existing comment, release, and stop route.
    `docs/idd-helper-scripts.md`. Its default
    without `--apply` is dry-run. Dry-run every child as an orphan and inspect all
    results before applying any. The helper's review-result check is not the
-   adversarial review (`#5031`, comment `#4460505499`).
+   adversarial review.
 
    ```sh
    idd-publish-authoring-hold --shape orphan \
@@ -543,15 +559,14 @@ If any condition fails, use the existing comment, release, and stop route.
    matching held child is identified. Any unresolved or conflicting outcome stops
    with the proposal, parent claim, label, and published children held. Do not
    retry an unknown publication result.
-4. **Record and release.** After every proposed child is verified and mapped,
-   post the standing-approval record below on the parent. If that POST is
-   uncertain, read all parent comments: proceed only when exactly one exact
-   record line is present. If absent, duplicated, conflicting, or unreadable,
-   keep the hold and stop without retrying the POST (`#5031`, comments
-   `#4460450129` and `#4460450314`). Then post a completion note listing the
-   children and follow the existing claim-release and cleanup steps. Keep the
-   parent authoring label until the held child set is explicitly released or
-   completed.
+4. **Record and release.** After children and required roadmap tracks pass the
+   set check, post the exact record below. On definite or uncertain POST
+   failure, post a hold note naming verified children, keep the parent claim and
+   label and all child holds, and stop. For an uncertain result, proceed only
+   after paginated read-back confirms one trusted exact record and the complete
+   set; never retry. On success, post the completion note, release only the
+   parent claim, and run cleanup. Keep the authoring label until the set is
+   explicitly released or completed.
 
 ```text
 <!-- idd-skill-standing-approval: class=split; set=none; anchor=<owner/repo#n>; ceiling=<maxCandidateFiles>; option=option-a -->

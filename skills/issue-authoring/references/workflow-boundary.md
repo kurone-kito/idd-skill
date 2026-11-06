@@ -769,20 +769,28 @@ The worker-side authoring rule has one exception: a scope-overrun split when
 `standingApprovals.split.enabled` is true, every child fits the effective
 `maxCandidateFiles`, each checkbox-stripped parent criterion appears whole and
 verbatim in exactly one child, and every child contains a parent criterion.
-The worker keeps the parent claim and authoring label, verifies material factual
-claims in each child's scope or design against current sources, and records
-support in the review packet's existing `evidence` array before saving and
-verifying the complete ordered proposal. Each completed child is then reviewed;
-any edit requires an updated, read-back proposal and a repeated check of that
-child. The worker dry-runs the set, then publishes held orphans one at a time
-and records each verified ID. A failed or uncertain publication stops with the
-parent and children held; resume reconciles the latest verified proposal and
-helper records before continuing. After all children are verified and mapped,
+This procedure replaces the ordinary claim-release and companion-handoff route
+only when all conditions hold. Before saving the complete ordered proposal,
+apply the issue-authoring contract's Reuse-first issue policy to every child,
+including open draft carriers. The hand split of issue `#4064` produced
+duplicate child `#4093`. If the issue being split is listed under a roadmap's
+`## Tracks`, check whether the roadmap has an active claim, an open PR, or
+other active execution, and establish per-target ownership. Include
+`Split out of #<parent>` in each child body, then update and read back the
+roadmap track for every verified child. A conflict or ownership failure keeps
+the parent held and stops publication. The worker keeps the
+parent claim and authoring label, verifies material factual claims in each
+child's scope or design against current sources, and records support in the
+review packet's existing `evidence` array. Each completed child is then
+reviewed; any edit requires an updated, read-back proposal and a repeated check
+of that child. The worker dry-runs the set, then publishes held orphans one at
+a time and records each verified ID. A record counts only when one exact
+expected line is authored by a trusted actor and the proposal, mappings, and
+live held children match one-to-one. A failed or uncertain publication or
+record stops with the parent and children held; resume reconciles the complete
+set before continuing. After all children and any roadmap tracks are verified,
 the worker posts the standing record with the parent issue as `anchor` and the
-numeric effective `maxCandidateFiles` as `ceiling`, completes the existing
-release steps, and keeps the parent label until the set is deliberately
-released or completed. The hand split of
-issue `#4064` produced duplicate child `#4093`; PR `#5031` identified gaps in
-criterion coverage, per-child review, and recovery records (comments
-`#4460505492`, `#4460505499`, and `#4460505511`). Follow the split procedure in
+numeric effective `maxCandidateFiles` as `ceiling`, posts a completion note,
+and releases only the parent claim. The authoring label stays until the set is
+deliberately released or completed. Follow the split procedure in
 `idd-work.instructions.md`.

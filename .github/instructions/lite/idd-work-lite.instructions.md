@@ -287,20 +287,36 @@ draft: it holds this issue, publishes a held roadmap whose children record
 `Split out of #<n>`, and comments its link; if refused, the comment stands.
 Never add needs-decision or ask a human.
 
-**Standing split** is the sole helper-runtime exception. It requires
+**Standing split** is the sole helper-runtime exception to the worker-side
+authoring rule and the scope-overrun route above. When its conditions hold,
+skip that route's release/handoff and keep the parent claim and label held
+throughout. It requires
 `standingApprovals.split.enabled`, every child within the effective
 `maxCandidateFiles`, each checkbox-stripped parent criterion whole and
 verbatim in exactly one child, and at least one parent criterion in every
-child. The hand split of issue `#4064` produced duplicate child `#4093`; PR
-`#5031` also found gaps in criterion coverage, per-child review, and recovery
-records (comments `#4460505492`, `#4460505499`, and `#4460505511`). Otherwise
-keep the existing comment/release route
+child. The hand split of issue `#4064` produced duplicate child `#4093`; apply
+the issue-authoring contract's Reuse-first policy to each child, including open
+issues, draft carriers, and their claim/PR state. On a match, follow that
+contract and stop this split if the work cannot safely join the held set; never
+publish a duplicate
 ([rationale](../../../docs/idd-design-rationale.md#b3--scope-overrun-returns-to-authoring)).
+
+When splitting a roadmap child, follow the issue-authoring contract: check the
+roadmap's claim/PR/execution state, establish per-target ownership, add
+`Split out of #<parent>` to each child, and update/read back each verified child
+in the roadmap's `## Tracks` list. Any conflict keeps the parent and published
+children held.
+
+If any standing-split condition fails, keep the existing comment/release route.
 
 Revalidate the parent claim and add/verify the configured authoring label.
 If it already exists, resume only from the same proposal; otherwise stop on the
-unrelated hold. Reconcile every child mapping; if the final record exists,
-verify the held children and finish release without publishing again. Before
+unrelated hold. Reconcile mappings. Before release, and on resume when a record
+exists, require one trusted exact record line matching expected class, set,
+anchor, ceiling, and option, plus a one-to-one match between proposal, mappings,
+and live held children (exact title/body; no missing, duplicate, extra, or
+released child). The record alone is not proof. If it exists, verify the set
+and finish without republishing. Stop on any conflict. Before
 publishing, verify each child's material factual claims that justify its scope
 or design against current sources. Put supporting file references, GitHub
 permalinks, or read-only command evidence in the review packet's existing
@@ -342,12 +358,14 @@ otherwise stop and keep the hold. A refusal or definite pre-create failure
 stops; if a call may have created an issue, inspect the helper report, journal,
 marker, and live issues, and continue only after one matching held child is
 identified. Any unknown or conflicting result keeps the parent claim, label,
-and published children held. After all children are verified and mapped, post
-the record below. If its POST is uncertain, read all parent comments: proceed
-only when exactly one exact line is present; otherwise stop and keep the hold
-without retrying (`#5031`, comments `#4460450129` and `#4460450314`). Then post
-a completion note, release the parent claim, and run `lost-claim-cleanup`;
-keep the parent label until the set is deliberately released or completed.
+and published children held. After children and required roadmap tracks pass
+the set check, post the exact record below. On definite or uncertain POST
+failure, post a hold note naming verified children, keep the parent claim and
+label and all child holds, and stop. For an uncertain result, proceed only
+after paginated read-back confirms one trusted exact record and the complete
+set; never retry. On success, post the completion note, release only the parent
+claim, and run `lost-claim-cleanup`. Keep the label until the set is explicitly
+released or completed.
 `instructions-only` keeps the companion route.
 
 ```text
