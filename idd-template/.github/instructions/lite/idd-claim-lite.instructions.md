@@ -324,20 +324,21 @@ one clone per worker (`docs/idd-workflow.md`), (c)'s written rules.
 
 ```sh
 set -euo pipefail
-node scripts/claim-lock.mjs --acquire --worktree <path> --agent-id {agent-id} --claim-id {claim-id}
-route_args=(--agent-id '{agent-id}') # Pre-rule: route_args=()
-route=$(node scripts/resume-claim-routing.mjs --issue <n> --claim-id '{claim-id}' "${route_args[@]}" --worktree <path>)
+node scripts/claim-lock.mjs --acquire --worktree '<path>' --agent-id '{agent-id}' --claim-id '{claim-id}'
+set -- --issue '<n>' --claim-id '{claim-id}'
+if [[ '{agent-id}' =~ -[[:alnum:]]{8,}($|[^[:alnum:]]) ]]; then set -- "$@" --agent-id '{agent-id}'; fi
+route=$(node scripts/resume-claim-routing.mjs "$@" --worktree '<path>')
 printf '%s\n' "$route" | CLAIM_ID='{claim-id}' node -e 'const a=JSON.parse(require("fs").readFileSync(0,"utf8")).active_claim;process.exit(a===null||(a&&a.claim_id&&a.claim_id!==process.env.CLAIM_ID)?0:1)'
-test "$(git -C <path> symbolic-ref -q HEAD)" = refs/heads/<branch>
-tip=$(git rev-parse <branch>)
-base=$(git rev-parse origin/{development-branch})
+test "$(git -C '<path>' symbolic-ref -q HEAD)" = 'refs/heads/<branch>'
+tip=$(git rev-parse '<branch>')
+base=$(git rev-parse 'origin/{development-branch}')
 test "$tip" = "$base"
-tags=$(git -C <path> ls-files -v | cut -c1 | tr -d 'H\n')
+tags=$(git -C '<path>' ls-files -v | cut -c1 | tr -d 'H\n')
 test -z "$tags"
-dirty=$(git -C <path> status --porcelain --ignored --untracked-files=all --ignore-submodules=none)
+dirty=$(git -C '<path>' status --porcelain --ignored --untracked-files=all --ignore-submodules=none)
 test -z "$dirty"
-git worktree remove <path>
-git branch -D <branch>
+git worktree remove '<path>'
+git branch -D '<branch>'
 ```
 
 ## Heartbeat posting
