@@ -84,7 +84,7 @@ when set; only when it is absent, use `gh repo view --json
 defaultBranchRef --jq .defaultBranchRef.name`. Stop unless the name matches
 `^(?!refs/heads/)[A-Za-z0-9._/][A-Za-z0-9._/-]*$` (see
 `docs/policy-constants.md`) and `git ls-remote --exit-code --heads origin
-<name>` lists it. Use it in steps 15, 16, 21, and 25.
+<name>` lists it. Steps 15, 16, 21, and 25 use only this value.
 
 1. On the primary worktree, run `git fetch origin`.
 2. On the primary worktree, run `git log
@@ -105,8 +105,9 @@ defaultBranchRef --jq .defaultBranchRef.name`. Stop unless the name matches
    or removing a sibling, acquire its worktree-local lock with the profile's
    `claim-lock` helper. On `collision`, stop and resolve per
    `idd-claim.instructions.md`'s Claim-state rule; remove only when authorized.
-   For the claim-created worktree, skip 8-26, run 27 (install), then continue
-   at 28. Never delete or recreate it.
+   For the claim phase's fresh worktree, skip steps 8-26, run step 27
+   (install dependencies), then continue at step 28. Never delete or
+   recreate that branch.
 8. If `git worktree list --porcelain` marks the entry `prunable` and its path
    is already absent, remove that stale entry with
    `git worktree remove --force <path-from-list>` and continue.
