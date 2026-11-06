@@ -7895,6 +7895,21 @@ test('a worktreeRemnant stop needs one Subject: line; a runtimeQuestion stop doe
   );
 });
 
+test('a worktreeRemnant subject hidden in an HTML comment fails (#5022)', () => {
+  const remnant = CONFIRMATION_RECORD.replace(
+    'class=runtimeQuestion',
+    'class=worktreeRemnant',
+  ).replace('claim=claim-1', 'claim=claim-9');
+  const body = confirmationBody(remnant).replace(
+    'The run paused on a question.',
+    '<!--\nSubject: `/tmp/worktree-a`\n-->\n\nThe run paused on a question.',
+  );
+
+  assert.ok(
+    failingIds(confirmationAudit(body)).includes('confirmation-subject'),
+  );
+});
+
 test('the options and the chosen option follow the contract (#4961)', () => {
   const single = confirmationBody().replace(
     '### Proceed with the change\n\nCost: a small risk of rework.\n',
@@ -7919,6 +7934,65 @@ test('the options and the chosen option follow the contract (#4961)', () => {
       'confirmation-chosen-option',
     ),
   );
+});
+
+test('chosen option comparison preserves inline-code title text (#5022)', () => {
+  const matching = confirmationBody()
+    .replace('### Proceed with the change', '### Proceed with `safe` mode')
+    .replace(
+      '## Chosen option\n\nProceed with the change',
+      '## Chosen option\n\nProceed with `safe` mode',
+    );
+  assert.equal(
+    confirmationAudit(matching).passed,
+    true,
+    JSON.stringify(failingIds(confirmationAudit(matching))),
+  );
+
+  const mismatch = matching.replace(
+    '## Chosen option\n\nProceed with `safe` mode',
+    '## Chosen option\n\nProceed with `unsafe` mode',
+  );
+  assert.ok(
+    failingIds(confirmationAudit(mismatch)).includes(
+      'confirmation-chosen-option',
+    ),
+  );
+});
+
+test('a fenced example inside Options does not add an option (#5022)', () => {
+  const body = confirmationBody()
+    .replace(
+      '### Proceed with the change\n\nCost: a small risk of rework.\n\n',
+      '',
+    )
+    .replace(
+      '## Options\n\n',
+      '## Options\n\n```markdown\n### Example only\n\nCost: ignored\n```\n\n',
+    );
+  assert.ok(
+    failingIds(confirmationAudit(body)).includes('confirmation-options'),
+  );
+});
+
+test('required confirmation sections inside an HTML comment are hidden (#5022)', () => {
+  const body =
+    confirmationBody().replace('## Stop\n', '<!--\n## Stop\n') + '\n-->';
+  const report = confirmationAudit(body);
+  assert.ok(failingIds(report).includes('confirmation-headings'));
+  assert.equal(
+    report.findings.find(
+      (finding) => finding.id === 'confirmation-record-marker',
+    )?.result,
+    'pass',
+  );
+});
+
+test('forbidden marker checks still read raw HTML-comment text (#5022)', () => {
+  const report = confirmationAudit(
+    confirmationBody(CONFIRMATION_RECORD, ['', '<!-- idd-skill-effort: S -->']),
+  );
+  assert.ok(failingIds(report).includes('confirmation-forbidden-markers'));
 });
 
 test('a question needs exactly one Question: line (#4961)', () => {
@@ -8134,6 +8208,37 @@ test('record mode compares the record subject with the expected subject (#4961)'
   );
 });
 
+test('record mode rejects an expected subject hidden in an HTML comment (#5022)', () => {
+  const remnant = CONFIRMATION_RECORD.replace(
+    'class=runtimeQuestion',
+    'class=worktreeRemnant',
+  ).replace('claim=claim-1', 'claim=claim-9');
+  const record = [
+    remnant,
+    '',
+    '## Stop',
+    '',
+    '<!--',
+    'Subject: `/expected/worktree`',
+    '-->',
+    '',
+    ...CONFIRMATION_SECTIONS.slice(2),
+  ].join('\n');
+
+  assert.ok(
+    failingIds(
+      confirmationAudit(record, {
+        confirmationRecord: true,
+        expectClass: 'worktreeRemnant',
+        expectSource: 'kurone-kito/idd-skill#4972',
+        expectClaim: 'claim-9',
+        expectSet: 'none',
+        expectSubject: '/expected/worktree',
+      }),
+    ).includes('confirmation-record-subject'),
+  );
+});
+
 test('record mode rejects a publication line anywhere in the record comment (#4961)', () => {
   const record = [
     CONFIRMATION_RECORD,
@@ -8219,5 +8324,69 @@ test('a new confirmation body must open with a well-formed publication marker (#
       (f) => f.id === 'confirmation-publication',
     )?.result,
     'pass',
+  );
+});
+
+test('an opaque marker value may hold a colon, which the contract allows (#5021)', () => {
+  const record =
+    '<!-- idd-skill-auto-decision: class=runtimeQuestion; source=kurone-kito/idd-skill#4972; claim=claim:1; set=none; decision=dec:1 -->';
+  const report = confirmationAudit(confirmationBody(record));
+  assert.equal(report.passed, true, JSON.stringify(failingIds(report)));
+});
+
+test('an opaque marker value with a semicolon still fails the record check (#5021)', () => {
+  const record =
+    '<!-- idd-skill-auto-decision: class=runtimeQuestion; source=kurone-kito/idd-skill#4972; claim=claim-1; set=none; decision=dec;1 -->';
+  assert.ok(
+    failingIds(confirmationAudit(confirmationBody(record))).includes(
+      'confirmation-record-marker',
+    ),
+  );
+});
+
+test('a confirmation audit reports the triage findings as not applicable (#5021)', () => {
+  const report = confirmationAudit(confirmationBody());
+  const triage = report.findings.filter((f) => f.id.startsWith('triage-'));
+  assert.ok(triage.length > 0, 'expected triage findings in the report');
+  for (const finding of triage) {
+    assert.equal(finding.result, 'pass', finding.id);
+    assert.match(finding.detail, /not applicable/, finding.id);
+  }
+});
+
+test('the confirmation label matches case-insensitively and ignores padding (#5021)', () => {
+  const report = confirmationAudit(confirmationBody(), {
+    labels: ['  Status:Needs-Confirmation '],
+  });
+  const label = report.findings.find((f) => f.id === 'confirmation-label');
+  assert.equal(
+    label?.result,
+    'pass',
+    label?.detail ?? 'no confirmation-label finding',
+  );
+});
+
+test('an opaque marker value may contain `<!--`, which the contract does not forbid (#5021)', () => {
+  const record =
+    '<!-- idd-skill-auto-decision: class=runtimeQuestion; source=kurone-kito/idd-skill#4972; claim=claim-1; set=none; decision=dec<!--1 -->';
+  assert.ok(
+    !failingIds(confirmationAudit(confirmationBody(record))).includes(
+      'confirmation-record-marker',
+    ),
+  );
+});
+
+test('the 128-character value limit counts Unicode characters, not UTF-16 units (#5021)', () => {
+  const at = (n: number) =>
+    `<!-- idd-skill-auto-decision: class=runtimeQuestion; source=kurone-kito/idd-skill#4972; claim=claim-1; set=none; decision=${'😀'.repeat(n)} -->`;
+  assert.ok(
+    !failingIds(confirmationAudit(confirmationBody(at(128)))).includes(
+      'confirmation-record-marker',
+    ),
+  );
+  assert.ok(
+    failingIds(confirmationAudit(confirmationBody(at(129)))).includes(
+      'confirmation-record-marker',
+    ),
   );
 });

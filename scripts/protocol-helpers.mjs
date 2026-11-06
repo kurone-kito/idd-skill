@@ -11470,25 +11470,34 @@ export function buildPreMergeReadinessSummary(
     expectedClaimId: options.expectedClaimId,
     isTrustedAuthor: isTrustedWatermarkAuthor,
   });
-  const reviewCurrency = watermark
-    ? diffReviewSnapshot(
-        {
-          headSha: watermark.headSha,
-          maxActivityUpdatedAt: watermark.maxActivityUpdatedAt,
-          totalItemCount: watermark.totalItemCount,
-          latestPassingCiCompletedAt: watermark.latestCiCompletedAt,
-        },
-        {
-          headSha: prHeadSha,
-          ...liveSnapshot,
-        },
-      )
-    : detectMalformedReviewWatermarkComments(comments, {
-          isTrustedAuthor: isTrustedWatermarkAuthor,
-          expectedClaimId: options.expectedClaimId,
-        })
-      ? { route: 'return-to-e1', reason: 'malformed-watermark' }
-      : { route: 'return-to-e1', reason: 'missing-watermark' };
+  const recordedBaseRef = watermark?.baseRef ?? null;
+  const targetBaseRefName = options.developmentBranchTarget?.baseRefName;
+  const recordedBaseRefMismatch =
+    recordedBaseRef !== null &&
+    (typeof targetBaseRefName !== 'string' ||
+      targetBaseRefName.trim() === '' ||
+      targetBaseRefName !== recordedBaseRef);
+  const reviewCurrency = recordedBaseRefMismatch
+    ? { route: 'return-to-e1', reason: 'base-ref' }
+    : watermark
+      ? diffReviewSnapshot(
+          {
+            headSha: watermark.headSha,
+            maxActivityUpdatedAt: watermark.maxActivityUpdatedAt,
+            totalItemCount: watermark.totalItemCount,
+            latestPassingCiCompletedAt: watermark.latestCiCompletedAt,
+          },
+          {
+            headSha: prHeadSha,
+            ...liveSnapshot,
+          },
+        )
+      : detectMalformedReviewWatermarkComments(comments, {
+            isTrustedAuthor: isTrustedWatermarkAuthor,
+            expectedClaimId: options.expectedClaimId,
+          })
+        ? { route: 'return-to-e1', reason: 'malformed-watermark' }
+        : { route: 'return-to-e1', reason: 'missing-watermark' };
   const threadSummary = summarizeReviewThreadsForGate(threads, {
     iddAgentLogins,
     prAuthorLogin,

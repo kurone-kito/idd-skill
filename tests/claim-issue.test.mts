@@ -2194,6 +2194,19 @@ test('--apply runs the fresh-claim order, with the clone lock held over the work
       branch: BRANCH,
       worktree: fixture.worktree,
     });
+    const assertCalls = run.log.filter(
+      (entry) =>
+        entry.startsWith('resume-claim-routing.mjs ') &&
+        entry.includes('--assert'),
+    );
+    assert.ok(assertCalls.length > 0, 'the claim verification assert ran');
+    for (const entry of assertCalls) {
+      const args = entry.split(/\s+/u);
+      const agentIdFlag = args.indexOf('--agent-id');
+      assert.notEqual(agentIdFlag, -1, entry);
+      assert.equal(args[agentIdFlag + 1], AGENT, entry);
+      assert.equal(args.filter((arg) => arg === '--agent-id').length, 1, entry);
+    }
     assert.equal(existsSync(fixture.worktree), true);
     assert.equal(branchExists(fixture.primary), true);
     assertNoDestructive(run.log);

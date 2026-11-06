@@ -244,7 +244,10 @@ export interface LiveCleanupOptions {
 
 /** The argv of `resume-claim-routing --assert` for the claimed worktree. */
 export function claimCheckArgv(
-  options: Pick<LiveCleanupOptions, 'issueNumber' | 'claimId' | 'nonce'>,
+  options: Pick<
+    LiveCleanupOptions,
+    'issueNumber' | 'claimId' | 'nonce' | 'agentId'
+  >,
   worktree: string,
   owner: string,
   repo: string,
@@ -259,6 +262,8 @@ export function claimCheckArgv(
     options.claimId,
     '--nonce',
     options.nonce,
+    '--agent-id',
+    options.agentId,
     '--worktree',
     worktree,
     '--owner',

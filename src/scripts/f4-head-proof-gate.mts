@@ -118,6 +118,7 @@ export interface PullRequestRead {
   merged: boolean;
   mergeCommitSha: string | null;
   headSha: string | null;
+  baseRefName: string | null;
 }
 
 /** The fields of the REST commit endpoint the proof reads. */
@@ -623,24 +624,54 @@ function readWatermarkHead(
   claimId: string,
   notes: string[],
 ): string | null {
+  let watermark: ReturnType<typeof resolveLatestReviewWatermark> = null;
   try {
     const comments = deps.listPullRequestComments(prNumber);
     const trusted = new Set(
       deps.resolveTrustedLogins(comments).map(normalizeLogin),
     );
-    const watermark = resolveLatestReviewWatermark([...comments], {
+    watermark = resolveLatestReviewWatermark([...comments], {
       expectedClaimId: claimId,
       isTrustedAuthor: (login) => trusted.has(normalizeLogin(login)),
     });
-    return watermark !== null && isFullSha(watermark.headSha)
-      ? watermark.headSha
-      : null;
   } catch (error) {
     notes.push(
       `the comments of pull request ${prNumber} could not be read: ${describeError(error)}`,
     );
     return null;
   }
+
+  if (watermark === null || !isFullSha(watermark.headSha)) {
+    return null;
+  }
+
+  if (watermark.baseRef !== null) {
+    let liveBaseRefName: string | null;
+    try {
+      liveBaseRefName = deps.readPullRequest(prNumber).baseRefName;
+    } catch (error) {
+      notes.push(
+        `the current base of pull request ${prNumber} could not be read: ${describeError(error)}`,
+      );
+      return null;
+    }
+
+    if (typeof liveBaseRefName !== 'string' || liveBaseRefName.trim() === '') {
+      notes.push(
+        `the current base of pull request ${prNumber} could not be read`,
+      );
+      return null;
+    }
+
+    if (liveBaseRefName !== watermark.baseRef) {
+      notes.push(
+        `the review watermark records base ref "${watermark.baseRef}", but pull request ${prNumber} currently targets "${liveBaseRefName}"`,
+      );
+      return null;
+    }
+  }
+
+  return watermark.headSha;
 }
 
 function describeOutcome(

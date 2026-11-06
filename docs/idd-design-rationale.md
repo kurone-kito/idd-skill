@@ -181,6 +181,17 @@ does not finish ownership by itself. A refusal there is not a
 terminal end of Discover: the candidate stays ineligible and
 Step 1.5 keeps scanning.
 
+The later owner check passes this session's persisted `--agent-id` and
+compares it with the trusted marker; the marker is comparison evidence, not
+caller identity. If a session-qualified marker has no matching
+session-local ID, the check fails closed. The `resume-claim-routing`
+compatibility path may omit `--agent-id` only for an active pre-`#4936`
+claim whose trusted marker has the legacy bare family ID. The exact locally
+recorded claim-id must still match the trusted marker, and each route
+applies the owner checks available for it. Issue `#5000` records the runtime
+change that fails closed when a session-qualified claim omits its ID
+(preventive; no observed incident yet).
+
 This finding is upstream of the related `#3273` (Resume Step 1 not
 threading an already-known claim-id through to
 `resume-claim-routing.mjs`) and `#3274` (operator recovery for a
@@ -208,13 +219,16 @@ entry at `selectDesyncedIndex(session-token, band-size)` (a pure
 `hash(session-token) mod band-size`) instead of always index 0, spreading
 concurrent sessions across _different_ eligible issues up front.
 
-`session-token` must be a per-session-unique value, never the bare,
-session-shared `{agent-id}` alone: `idd-overview-core.instructions.md`
-defines `{agent-id}` as shared across concurrent sessions of the same
-agent type, with a unique session suffix only recommended, not required.
-Sessions that follow that core definition literally and omit the suffix
-all hash to the identical index and converge on the same issue — the
-same converge-and-collide shape as the 3-way race above. This specific
+`session-token` must be a per-session-unique value, never merely the
+bare `{agent-id}` from the pre-#4936 contract. When issue #1694
+identified this gap, `idd-overview-core.instructions.md` allowed
+`{agent-id}` to be shared across concurrent sessions of the same agent
+type and only recommended, but did not require, a unique session suffix.
+Issue #4936 later required session-qualified IDs for new claims. The
+pre-rule bare-ID failure remains a useful historical case: sessions that
+follow that old definition literally and use the bare ID as their token
+hash to the same index and converge on the same issue — the same
+converge-and-collide shape as the 3-way race above. This specific
 bare-agent-id collapse is preventive; no observed incident yet — #1694
 identified it by inspection of the two files' definitions, not from a
 collision that already happened. `idd-discover.instructions.md` closes
@@ -2296,6 +2310,14 @@ defined in that item.
    same 431 review bodies.
 
 Roadmap kurone-kito/idd-skill#4182 responds to this audit.
+
+On 2026-11-03, workflow-dispatch run
+[41655706076](https://github.com/kurone-kito/idd-skill/actions/runs/41655706076)
+passed for the complete UTC window 2026-10-26 through 2026-11-01 on `main`
+at `c716e88b1716434cd9268674ca39b5450b1a759f`. It audited 89 merged pull
+requests. All 186 accepted, deferred, or rejected Copilot finding threads
+carried a `Triage:` line (186/186, 100%). The audit found no unparsed Copilot
+reviews, malformed `Triage:` lines, or recorded triage contradictions.
 
 ### Needs-decision deferral of review findings (kurone-kito/idd-skill#3776)
 

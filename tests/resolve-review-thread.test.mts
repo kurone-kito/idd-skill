@@ -3098,6 +3098,54 @@ test('the compiled CLI posts the reply body unchanged with no triage flag (#4186
   ]);
 });
 
+test('the normalized default (empty config) refuses a flagless disposition reply and exempts path B and maintainer rejection (#4854)', () => {
+  // An empty repository config normalizes triageRecord to `record`, so an
+  // Accepted or Rejected PATH A reply must carry --tier and --urgency. The
+  // --path-b reply and the maintainer rejection confirmation stay exempt.
+  // The config is `{}` rather than an explicit `record`, so a change to the
+  // distributed default in POLICY_DEFAULTS fails here.
+  const refusal = /triageRecord record requires --tier and --urgency/u;
+  for (const body of [
+    '**Accepted** — fixed in abc',
+    '**Rejected** — not fixed here',
+  ]) {
+    const run = runTriageApply(
+      [...TRIAGE_THREAD_ARGS, '--body', body],
+      {},
+      triageReviewRows(2),
+    );
+    assert.equal(run.status, 1, `${body}: ${run.stderr}`);
+    assert.match(run.stderr, refusal);
+    assert.deepEqual(run.posted, [], body);
+  }
+
+  const pathB = runTriageApply(
+    [
+      ...TRIAGE_THREAD_ARGS,
+      '--path-b',
+      '--body',
+      '**Accepted** — advisory remark',
+    ],
+    {},
+    triageReviewRows(2),
+  );
+  assert.equal(pathB.status, 0, pathB.stderr);
+  assert.deepEqual(pathB.posted, [
+    `**Accepted** — advisory remark\n\n${TRIAGE_STAMP}`,
+  ]);
+
+  const confirmed = '**Rejection confirmed by maintainer** — agreed';
+  const rejectionConfirmed = runTriageApply(
+    [...TRIAGE_THREAD_ARGS, '--body', confirmed],
+    {},
+    triageReviewRows(2),
+  );
+  assert.equal(rejectionConfirmed.status, 0, rejectionConfirmed.stderr);
+  assert.deepEqual(rejectionConfirmed.posted, [
+    `${confirmed}\n\n${TRIAGE_STAMP}`,
+  ]);
+});
+
 test('the compiled CLI posts nothing when --advisory-converged names another head (#4186)', () => {
   const run = runTriageApply(
     [

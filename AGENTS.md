@@ -462,6 +462,17 @@ layered on top of the distributed IDD defaults:
   (preventive; no observed incident yet).
   See [docs/idd-helper-scripts.md](docs/idd-helper-scripts.md#github-api-load-control)
   for the mechanism.
+- **Local validation admission**: On non-Windows hosts, this repository uses
+  the Pueue group `idd-skill-validate` with a cap of `2` when the daemon is
+  available. The helper creates a missing group with that cap and warns while
+  preserving an existing group with a different cap. If Pueue is unavailable,
+  it falls back to serial `flock`. On Windows, the helper keeps its existing
+  direct-run behavior. While Pueue is available, this repository's Pueue group
+  is separate from the shared `flock` admission domain used by other
+  repositories. If Pueue is unavailable, this repository's fallback joins
+  that shared `flock` domain. This repository-only choice adds no daemon start
+  or shutdown and no group resizing. It follows the lock inheritance fix for
+  issue `#5036` in PR `#5038`.
 
 - **Orchestrator worker cap**: This source repository also records
   `orchestrator.maxWorkers: 4` in `.github/idd/config.json` as a local IDD

@@ -513,6 +513,57 @@ test('a case-variant REVIEW-WATERMARK marker resolves to the same label on both 
   assert.equal(operationalMarkerPrefixByStart(body), '<!-- review-watermark:');
 });
 
+test('review-watermark preserves one optional base-ref token and rejects invalid renderer values', () => {
+  const payload = {
+    agentId: 'claude-417b737f',
+    claimId: 'c3009f22b5f6',
+    headSha: 'a'.repeat(40),
+    maxActivityAt: 'none',
+    totalItemCount: 0,
+    ciCompletedAt: 'none',
+  };
+  const sixFieldBody = renderReviewWatermarkMarker({
+    ...payload,
+    baseRef: undefined,
+  });
+  assert.match(sixFieldBody.split('\n', 1)[0], / none 0 none -->$/u);
+  assert.equal(
+    parseReviewWatermarkComment(sixFieldBody, '2026-05-23T10:00:00Z')?.baseRef,
+    null,
+  );
+
+  const sevenFieldBody = renderReviewWatermarkMarker({
+    ...payload,
+    baseRef: 'Release/Stable',
+  });
+  assert.match(
+    sevenFieldBody.split('\n', 1)[0],
+    / none 0 none Release\/Stable -->$/u,
+  );
+  assert.equal(
+    parseReviewWatermarkComment(sevenFieldBody, '2026-05-23T10:00:00Z')
+      ?.baseRef,
+    'Release/Stable',
+  );
+
+  for (const baseRef of [
+    '',
+    'main branch',
+    ' main',
+    'main ',
+    'main<ref',
+    'main>ref',
+    null,
+    42,
+  ]) {
+    assert.throws(
+      () => renderReviewWatermarkMarker({ ...payload, baseRef }),
+      /baseRef/u,
+      `expected invalid baseRef ${String(baseRef)} to be rejected`,
+    );
+  }
+});
+
 test('a case-variant REVIEW-BASELINE marker resolves to the same label on both prefix functions', () => {
   const sha = 'b'.repeat(40);
   const body = renderReviewBaselineMarker({

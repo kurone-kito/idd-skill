@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
+  detectMalformedOperationalMarker,
+  operationalMarkerPrefix,
   parseClaimComment,
   parseForcedHandoffComment,
+  parseReviewWatermarkComment,
   renderForcedHandoffComment,
 } from '../src/scripts/marker-helpers.mts';
 import {
@@ -4709,6 +4712,33 @@ test('isTrustEvidenceComment: normalizes a mixed-case flat authorLogin field bef
 // minimized shape (`lastEditedAt: null`, `updatedAt` later than `createdAt`)
 // is still honored.
 
+test('resolveLatestReviewWatermark preserves an optional base ref and six-field compatibility', () => {
+  const sha = 'a'.repeat(40);
+  const body = (baseRef?: string) =>
+    `<!-- review-watermark: claude-x claim-base ${sha} none 0 none${baseRef === undefined ? '' : ` ${baseRef}`} -->\n\n` +
+    '_claude-x: review triage snapshot — IDD automation marker. Do not edit._';
+  const comment = (watermarkBody: string) => ({
+    author: { login: 'claude-x' },
+    body: watermarkBody,
+    createdAt: '2026-05-10T00:00:00Z',
+    updatedAt: '2026-05-10T00:00:00Z',
+    lastEditedAt: null,
+  });
+  const options = {
+    expectedClaimId: 'claim-base',
+    isTrustedAuthor: () => true,
+  };
+
+  const sixField = resolveLatestReviewWatermark([comment(body())], options);
+  assert.equal(sixField?.baseRef, null);
+
+  const sevenField = resolveLatestReviewWatermark(
+    [comment(body('Release/Stable'))],
+    options,
+  );
+  assert.equal(sevenField?.baseRef, 'Release/Stable');
+});
+
 test('resolveLatestReviewWatermark: rejects an edited or edit-state-unresolved trusted watermark, honors the minimized shape', () => {
   const isTrustedAuthor = () => true;
   const watermarkBody = (claimId: string) =>
@@ -4820,6 +4850,70 @@ test('detectMalformedReviewWatermarkComments: an edited or edit-state-unresolved
       { isTrustedAuthor: () => true },
     ),
     true,
+  );
+});
+
+test('detectMalformedReviewWatermarkComments distinguishes an invalid seventh token from eight fields', () => {
+  const sha = 'a'.repeat(40);
+  const createdAt = '2026-05-10T00:00:00Z';
+  const comment = (body: string, author = 'trusted') => ({
+    author: { login: author },
+    body,
+    createdAt,
+    updatedAt: createdAt,
+    lastEditedAt: null,
+  });
+  const isTrustedAuthor = (login: string) => login === 'trusted';
+
+  for (const invalidBaseRef of ['main<ref', 'main>ref']) {
+    const body =
+      `<!-- review-watermark: agent claim-invalid ${sha} none 0 none ${invalidBaseRef} -->\n\n` +
+      '_agent: review triage snapshot — IDD automation marker. Do not edit._';
+    assert.equal(parseReviewWatermarkComment(body, createdAt), null);
+    assert.equal(operationalMarkerPrefix(body), '<!-- review-watermark:');
+    assert.equal(detectMalformedOperationalMarker(body), null);
+    assert.equal(
+      detectMalformedReviewWatermarkComments([comment(body)], {
+        expectedClaimId: 'claim-invalid',
+        isTrustedAuthor,
+      }),
+      true,
+    );
+    assert.equal(
+      detectMalformedReviewWatermarkComments([comment(body, 'untrusted')], {
+        expectedClaimId: 'claim-invalid',
+        isTrustedAuthor,
+      }),
+      false,
+    );
+    assert.equal(
+      detectMalformedReviewWatermarkComments(
+        [{ ...comment(body), lastEditedAt: '2026-05-10T01:00:00Z' }],
+        { expectedClaimId: 'claim-invalid', isTrustedAuthor },
+      ),
+      false,
+    );
+    assert.equal(
+      detectMalformedReviewWatermarkComments([comment(body)], {
+        expectedClaimId: 'other-claim',
+        isTrustedAuthor,
+      }),
+      false,
+    );
+  }
+
+  const eightFields =
+    `<!-- review-watermark: agent claim-eight ${sha} none 0 none main extra -->\n\n` +
+    '_agent: review triage snapshot — IDD automation marker. Do not edit._';
+  assert.equal(parseReviewWatermarkComment(eightFields, createdAt), null);
+  assert.equal(operationalMarkerPrefix(eightFields), null);
+  assert.equal(detectMalformedOperationalMarker(eightFields), null);
+  assert.equal(
+    detectMalformedReviewWatermarkComments([comment(eightFields)], {
+      expectedClaimId: 'claim-eight',
+      isTrustedAuthor,
+    }),
+    false,
   );
 });
 

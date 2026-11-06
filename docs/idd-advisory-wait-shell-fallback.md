@@ -362,7 +362,7 @@ claim_revalidate() {
   # Never pipe it: a pipe hides its exit status. Its stderr line names the
   # verdict and, on owner_evidence_required, the failed proof.
   <profile-selected-resume-claim-routing-command> --issue {issue-number} \
-    --claim-id {claim-id} --nonce {nonce} --assert >/dev/null || return 2
+    --claim-id {claim-id} --agent-id {agent-id} --nonce {nonce} --assert >/dev/null || return 2
   LIVE_PR_HEAD_SHA=$(gh pr view {pr-number} --json headRefOid --jq '.headRefOid') || return 2
   [ "$LIVE_PR_HEAD_SHA" = "$PR_HEAD_SHA" ] || {
     echo "PR HEAD moved; restart from E1" >&2
@@ -600,7 +600,7 @@ directly — no command block needed here.
 ```sh
 revalidate_head() {
   <profile-selected-resume-claim-routing-command> --issue {issue-number} \
-    --claim-id {claim-id} --nonce {nonce} --assert >/dev/null || return 2
+    --claim-id {claim-id} --agent-id {agent-id} --nonce {nonce} --assert >/dev/null || return 2
   LIVE_PR_HEAD_SHA=$(gh pr view {pr-number} --json headRefOid --jq '.headRefOid') || return 2
   [ "$LIVE_PR_HEAD_SHA" = "$PR_HEAD_SHA" ] || {
     echo "PR HEAD moved; restart from E1" >&2

@@ -311,14 +311,14 @@ failure; five of the six never return a non-zero exit code as their own
 verdict, so they produce no `kind: "gate"`. `resume-claim-routing.mjs`
 does under `--assert` (see its `gate` cell).
 
-| Helper                           | `usage`                                                                                                                                                                            | `not-found` / `transport`                                                                                                                | `gate`                                                      | `internal`              |
-| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- | ----------------------- |
-| `pre-merge-readiness.mjs`        | missing/invalid `--pr`, `--claim-issue`, or a flag-combination error                                                                                                               | a `gh` failure while resolving the repo, PR, or checks (still prints the existing `{"error": ...}` stdout JSON, unchanged by this track) | —                                                           | an unexpected exception |
-| `resume-claim-routing.mjs`       | missing/invalid `--issue`, an unknown flag, `--assert` without `--claim-id`, `--assert` with `--fresh-claim-gate`, or `--own-worktree` that is empty or lacks `--fresh-claim-gate` | a `gh` failure resolving claim state                                                                                                     | `--assert` when the verdict is not `already_owned` / `keep` | an unexpected exception |
-| `authoring-owner-provenance.mjs` | missing/invalid `--issue`, or an unknown flag                                                                                                                                      | a `gh` failure resolving comment/marker history                                                                                          | —                                                           | an unexpected exception |
-| `discover-readiness-check.mjs`   | missing `--issue`/`--issues`, or an unknown flag                                                                                                                                   | a `gh` failure resolving issue state                                                                                                     | —                                                           | an unexpected exception |
-| `discover-viability-gate.mjs`    | missing `--issue`/`--issues`, or an unknown flag                                                                                                                                   | a `gh` failure resolving issue state                                                                                                     | —                                                           | an unexpected exception |
-| `ci-wait-state.mjs`              | missing/invalid `--pr`, or an unknown flag                                                                                                                                         | a `gh` failure resolving CI state                                                                                                        | —                                                           | an unexpected exception |
+| Helper                           | `usage`                                                                                                                                                                            | `not-found` / `transport`                                                                                                                | `gate`                                                                                                                                | `internal`              |
+| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- |
+| `pre-merge-readiness.mjs`        | missing/invalid `--pr`, `--claim-issue`, or a flag-combination error                                                                                                               | a `gh` failure while resolving the repo, PR, or checks (still prints the existing `{"error": ...}` stdout JSON, unchanged by this track) | —                                                                                                                                     | an unexpected exception |
+| `resume-claim-routing.mjs`       | missing/invalid `--issue`, an unknown flag, `--assert` without `--claim-id`, `--assert` with `--fresh-claim-gate`, or `--own-worktree` that is empty or lacks `--fresh-claim-gate` | a `gh` failure resolving claim state                                                                                                     | `--assert` when the verdict is not `already_owned` / `keep`, including a missing/mismatched `--agent-id` on a session-qualified claim | an unexpected exception |
+| `authoring-owner-provenance.mjs` | missing/invalid `--issue`, or an unknown flag                                                                                                                                      | a `gh` failure resolving comment/marker history                                                                                          | —                                                                                                                                     | an unexpected exception |
+| `discover-readiness-check.mjs`   | missing `--issue`/`--issues`, or an unknown flag                                                                                                                                   | a `gh` failure resolving issue state                                                                                                     | —                                                                                                                                     | an unexpected exception |
+| `discover-viability-gate.mjs`    | missing `--issue`/`--issues`, or an unknown flag                                                                                                                                   | a `gh` failure resolving issue state                                                                                                     | —                                                                                                                                     | an unexpected exception |
+| `ci-wait-state.mjs`              | missing/invalid `--pr`, or an unknown flag                                                                                                                                         | a `gh` failure resolving CI state                                                                                                        | —                                                                                                                                     | an unexpected exception |
 
 ### Migrated helpers (review and merge batch)
 
@@ -465,7 +465,7 @@ outcome path.
 | `idd-doctor.mjs`                     | an unknown flag (exit `1`)                                                                                                                                                                                                                                                                                                                                                                         | a `gh` failure reached during a live check                                                                                                                                              | the report contains at least one error (exit `1`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | an unexpected exception                                                                                                                                                                                                     |
 | `idd-delete-remote-branch.mjs`       | missing/empty `--branch`, missing/invalid `--expected-sha`, or an unknown flag (exit `1`)                                                                                                                                                                                                                                                                                                          | —                                                                                                                                                                                       | invalid ref, unreadable remote/default-branch state, expected-SHA mismatch, refused default branch, failed delete, or unconfirmed deletion (exit `1`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | an unexpected exception                                                                                                                                                                                                     |
 | `idd-f4-worktree-branch-cleanup.mjs` | missing `--issue`, `--claim-id`, `--nonce`, or `--agent-id`, a relative `--worktree`, a run outside the primary worktree, or an unknown flag (exit `1`)                                                                                                                                                                                                                                            | a failed `gh` read, reported as a hold (exit `1`)                                                                                                                                       | a hold or failed verdict (exit `1`), such as `claim-lost`, `proof-missing`, or `dirty-worktree`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | an exception from a dependency, reported as a failed step (exit `1`)                                                                                                                                                        |
-| `idd-claimed-push.mjs`               | missing or invalid `--issue`, missing `--claim-id`, an empty `--nonce`, or an unknown flag (exit `1`)                                                                                                                                                                                                                                                                                              | —                                                                                                                                                                                       | a refused or failed step: the claim assert, the location check, the scope check, a dirty tree, the gate, the second assert, or the push (exit `1`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | an unexpected exception                                                                                                                                                                                                     |
+| `idd-claimed-push.mjs`               | missing or invalid `--issue`, missing `--claim-id` or `--agent-id`, an empty `--nonce`, or an unknown flag (exit `1`)                                                                                                                                                                                                                                                                              | —                                                                                                                                                                                       | a refused or failed step: the claim assert, the location check, the scope check, a dirty tree, the gate, the second assert, or the push (exit `1`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | an unexpected exception                                                                                                                                                                                                     |
 | `idd-onboard.mjs`                    | missing/conflicting mode flags, a stage-foreign flag, `--distribution` without a non-empty `--session-id` or without `--source` for prepare, `--import`/`--verify` missing `--source`, `--record-policy` missing `--transcript`, `--install-user-global`/`--uninstall` with a flag outside their whitelist or an invalid `--harness` list, an unknown argument, or a missing flag value (exit `2`) | a `gh` failure reached during any stage (exit `2`)                                                                                                                                      | `--substitute`/`--import`/`--verify` report a blocking verdict, `--hear`/`--record-policy` report a schema-invalid transcript, or `--install-user-global`/`--uninstall` refuse or fail, or `--distribution` refuses, partially completes, or fails (exit `1`)                                                                                                                                                                                                                                                                                                                                                                    | an environment/config issue (e.g. `--substitute`'s own core file set resolution, path confinement) or any other unexpected exception (exit `2`)                                                                             |
 | `helper-runtime-manifest.mjs`        | an unknown flag (exit `1`)                                                                                                                                                                                                                                                                                                                                                                         | —                                                                                                                                                                                       | —                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | an unexpected exception                                                                                                                                                                                                     |
 | `idd-critique-delegate.mjs`          | an unknown flag (exit `1`)                                                                                                                                                                                                                                                                                                                                                                         | —                                                                                                                                                                                       | —                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | an unexpected exception (deterministic, network-free)                                                                                                                                                                       |
@@ -2922,6 +2922,145 @@ Behavior:
   through `run-helper`, which forwards no signals. A SIGTERM sent to the
   registered command therefore reaches the admitted command.
 
+<!-- cspell:ignore lslocks -->
+
+### Recovering an existing validation lock (Linux)
+
+Use this operator-run procedure only when investigating a retained lock. An
+`expired` notice means the command did not start. Exit `3` still means a pueue
+task may have started, so it is not evidence that this recovery path is safe
+(preventive; no observed incident yet).
+
+1. Find the lock holder and its file identity:
+
+   ```sh
+   lslocks --notruncate -o PID,COMMAND,HOLDERS,TYPE,MODE,PATH,MAJ:MIN,INODE
+   ```
+
+   Locate the `validate.lock` `FLOCK` row and record its PID, command, all
+   `HOLDERS`, path, device, and inode. The `HOLDERS` column matters because a
+   `flock` can be shared by more than one process. Stop if the column is
+   unavailable or any holder cannot be identified. Set `LOCK_PATH`,
+   `LOCK_DEVICE`, and `LOCK_INODE` to the exact path, `MAJ:MIN`, and `INODE`
+   from the row. If it is Pueue, record that daemon's PID as `DAEMON_PID`.
+   Before changing daemon state, compare the resolved path's device and inode
+   to the observation. The command below passes the three file identity values
+   to Python:
+
+   ```sh
+   python3 - "$LOCK_PATH" "$LOCK_DEVICE" "$LOCK_INODE" <<'PY'
+   import os
+   import sys
+
+   path, device, inode = sys.argv[1:]
+   expected_major, expected_minor = map(int, device.split(":"))
+   st = os.stat(path)
+   actual = (os.major(st.st_dev), os.minor(st.st_dev), st.st_ino)
+   if actual != (expected_major, expected_minor, int(inode)):
+       raise SystemExit("lock path identity changed; stop and coordinate")
+   PY
+   ```
+
+   Stop if the row, holder, path, or identity is missing, differs, or
+   uncertain. A live admitted command, a non-Pueue holder, or any unaccounted
+   holder means wait for or contact its owner; do not stop the process.
+
+2. If the holder is a Pueue daemon, first pin the client to that exact
+   daemon. Use read-only inspection of the recorded daemon's command line,
+   environment, and service definition to establish the config file, profile
+   (if any), and socket/host endpoint it uses. Do not use the recovery
+   shell's default Pueue selection: a client can connect to another daemon
+   (preventive; no observed incident yet).
+   Set the config path and profile below to the values established for
+   `DAEMON_PID`. Run every call with the same environment values used to
+   resolve its socket/host endpoint. If the selected endpoint cannot be tied
+   to `DAEMON_PID`, stop and coordinate with its owner (preventive; no
+   observed incident yet). Use the unfiltered command below to inspect every
+   group and task on that endpoint.
+
+   ```sh
+   PUEUE_CONFIG=/exact/path/to/the-daemon-config
+   PUEUE_PROFILE= # Leave empty if the daemon used no named profile.
+
+   pueue_for_daemon() {
+     if [ -n "$PUEUE_PROFILE" ]; then
+       pueue --config "$PUEUE_CONFIG" --profile "$PUEUE_PROFILE" "$@"
+     else
+       pueue --config "$PUEUE_CONFIG" "$@"
+     fi
+   }
+
+   pueue_for_daemon status --json
+   ```
+
+   A failed or incomplete status read is unknown state, not an empty queue
+   (preventive; no observed incident yet).
+   Check the recorded daemon PID's parent/cgroup and the applicable user or
+   system service manager with read-only status queries to determine who owns
+   it. A failed or inconclusive ownership check is unknown state. Coordinate
+   with every local submitter that can use this shared daemon: stop new
+   submissions, let in-flight submissions resolve, and keep submissions
+   quiesced through the recovery. Immediately before shutdown, re-run
+   `pueue_for_daemon status --json`
+   and `lslocks` with the recorded columns. Require the same daemon, holder
+   list, path, device, and inode, and repeat the path identity comparison
+   above. If the lock or its identity changed, a new holder appeared, or any
+   check is uncertain, stop and do not shut down the daemon. If any queued,
+   stashed, locked, running, or paused task remains, a submitter cannot be
+   accounted for, or task or daemon ownership is unclear, stop and coordinate
+   with the owner (preventive; no observed incident yet). Run
+   `pueue_for_daemon shutdown` only after an explicit operator action for a
+   confirmed idle daemon that is not managed by a service manager. For a
+   managed daemon, use its service owner's approved procedure; if ownership is
+   uncertain, stop. If the shutdown result is uncertain, do not retry it; stop
+   and coordinate with the owner.
+
+3. After a graceful stop, re-run `lslocks` and confirm the recorded
+   `FLOCK` row and holders are gone. Check that the recorded daemon process has
+   exited (for example, with `ps -p "$DAEMON_PID" -o pid=,comm=,lstart=`); if
+   it remains or its identity is unclear, stop and coordinate with the owner.
+   Then open the existing lock path once, without create or truncate flags,
+   and compare the opened descriptor's `fstat` device and inode with the values
+   recorded from `lslocks`. On that same descriptor, try a short-lived
+   nonblocking exclusive `flock`, then unlock and close it:
+
+   ```sh
+   # Substitute the same recorded PATH, MAJ:MIN, and INODE values.
+   python3 - "$LOCK_PATH" "$LOCK_DEVICE" "$LOCK_INODE" <<'PY'
+   import fcntl
+   import os
+   import sys
+
+   path, device, inode = sys.argv[1:]
+   expected_major, expected_minor = map(int, device.split(":"))
+   expected_inode = int(inode)
+   fd = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+   try:
+       st = os.fstat(fd)
+       identity = (os.major(st.st_dev), os.minor(st.st_dev), st.st_ino)
+       if identity != (expected_major, expected_minor, expected_inode):
+           raise RuntimeError("lock file identity changed; stop and coordinate")
+       fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+       print("lock is available")
+       fcntl.flock(fd, fcntl.LOCK_UN)
+   finally:
+       os.close(fd)
+   PY
+   ```
+
+   If the holder remains, the identity differs, the nonblocking lock fails, or
+   any result is uncertain, stop and coordinate with the owner. Do not reopen
+   the path between the descriptor identity check and the `flock` probe. Close
+   the descriptor before retrying one validation through the normal
+   `idd-local-admission` helper (preventive; no observed incident yet).
+
+Never delete, truncate, or replace the lock file. An inherited descriptor can
+keep a lock on the original inode while a replacement path names a different
+file. The inherited-descriptor incident was observed on 2026-11-04 (issue
+`#5036`); its fix prevents new admitted children from retaining that lock, but
+does not stop an already-running daemon. The replacement-path warning is
+preventive; no lock-file replacement incident has been observed.
+
 The pueue backend relies on pueue's default settings. This reliance is an
 open risk for the operator to accept. With
 `client.read_local_logs: false`, a queued-task state read can fail and leave
@@ -2968,7 +3107,9 @@ This raw-cap check requires `awk`; if it is unavailable or returns an
 unexpected status, refuse with exit `2` before starting the command. If
 `flock` is present but `setsid` is not, refuse with exit `2` before starting
 the command. The locked path also requires `env --default-signal`; refuse with
-exit `2` if that option is unavailable. Otherwise resolve
+exit `2` if that option is unavailable. Alias cleanup requires `/dev/fd` and a
+shell whose `test` supports `-ef`; refuse with exit `2` when either is
+unavailable. Otherwise resolve
 `state` to absolute `XDG_STATE_HOME`, or
 `$HOME/.local/state` when that variable is relative or unset; if neither gives
 an absolute path, refuse with exit `2`. The following Bash-compatible shell
@@ -2999,11 +3140,17 @@ signal during that wait is forwarded to the group, as above, and the run ends
 with that signal's status. The drain has no bound of its own, and `maxWait`
 does not apply to it: a group member that never exits keeps the slot held until
 it ends, so end that member to release the slot. Direct runs do not wait after
-a normal exit. The admitted command runs without the lock descriptor (fd 9), so
-a descendant that leaves the group cannot keep the slot through an inherited
-descriptor. Observed 2026-10-23 in adopter field feedback (finding 10, issue
-`#4702`): a same-group child outlived a normally exiting root, and a contender
-entered while it was still alive.
+a normal exit. Before the admitted command starts, the fallback compares every
+`/dev/fd` entry with fd 9 using the shell's same-file test, closes each matching
+alias other than fd 9, and verifies none remain. The command then runs with fd 9
+closed, so a descendant that leaves the group cannot keep the slot through a
+lock descriptor. If `/dev/fd` or the same-file test is unavailable, the fallback
+refuses with exit 2 before starting the command. Observed 2026-11-04 in issue
+`#5036`: a daemon held the validation lock through an inherited fd 5, so closing
+fd 9 alone was insufficient. The existing group drain protects same-group
+children that outlive the root; observed 2026-10-23 in adopter field feedback
+(finding 10, issue `#4702`): a same-group child outlived a normally exiting root,
+and a contender entered while it was still alive.
 
 ```sh
 child_pid=
@@ -3029,6 +3176,45 @@ group_has_live_member() {
 $process_list
 EOF
   return 1
+}
+matching_lock_descriptors() {
+  if [ ! -d /dev/fd ] || [ ! -e /dev/fd/9 ]; then return 2; fi
+  scan_found_lock_fd=false
+  for scan_descriptor_path in /dev/fd/*; do
+    scan_descriptor=${scan_descriptor_path##*/}
+    case $scan_descriptor in *[!0-9]*|'') continue ;; esac
+    if [ "$scan_descriptor" = 9 ]; then
+      scan_found_lock_fd=true
+      continue
+    fi
+    if [ "$scan_descriptor_path" -ef /dev/fd/9 ]; then
+      printf '%s\n' "$scan_descriptor"
+    else
+      scan_status=$?
+      [ "$scan_status" -eq 1 ] || return 2
+    fi
+  done
+  [ "$scan_found_lock_fd" = true ] || return 2
+}
+close_lock_aliases() {
+  # Check the original stdout before command substitution replaces fd 1 (issue #5036).
+  if [ "/dev/fd/1" -ef /dev/fd/9 ] 2>/dev/null; then
+    return 1
+  else
+    standard_stdout_status=$?
+    [ "$standard_stdout_status" -eq 1 ] || return 1
+  fi
+  scan_lock_aliases=$(matching_lock_descriptors) || return 1
+  for scan_fd in $scan_lock_aliases; do
+    case $scan_fd in
+      *[!0-9]*|'') return 1 ;;
+      0|1|2) return 1 ;;
+      9) continue ;;
+      *) exec {scan_fd}>&- || return 1 ;;
+    esac
+  done
+  scan_lock_aliases=$(matching_lock_descriptors) || return 1
+  [ -z "$scan_lock_aliases" ]
 }
 process_state_ready() {
   if ! command -v ps >/dev/null 2>&1; then return 1; fi
@@ -3142,15 +3328,63 @@ enabled=true
 backend=flock
 raw_max_concurrent=1
 wait_seconds=7200 # Replace with the validated repository maxWait when set.
+# A refusal notice can itself corrupt a lock when stderr aliases it (issue #5036).
+stderr_diagnostic_safe=false
+diagnostic_state=
+case ${XDG_STATE_HOME:-} in
+  /*) diagnostic_state=$XDG_STATE_HOME ;;
+  *) case ${HOME:-} in
+       /*) diagnostic_state=$HOME/.local/state ;;
+     esac ;;
+esac
+if [ -n "$diagnostic_state" ] && [ -d /dev/fd ] && [ -e /dev/fd/2 ]; then
+  diagnostic_lock="$diagnostic_state/idd-skill/local-admission/validate.lock"
+  if [ -f "$diagnostic_lock" ]; then
+    if [ "/dev/fd/2" -ef "$diagnostic_lock" ] 2>/dev/null; then
+      stderr_diagnostic_safe=false
+    else
+      diagnostic_check_status=$?
+      [ "$diagnostic_check_status" -eq 1 ] && stderr_diagnostic_safe=true
+    fi
+  elif [ ! -e "$diagnostic_lock" ] && [ ! -L "$diagnostic_lock" ]; then
+    stderr_diagnostic_safe=true
+  fi
+fi
+safe_notice() {
+  [ "$stderr_diagnostic_safe" = true ] || return 0
+  printf '%s\n' "$1" >&2
+}
 if [ "$enabled" = false ]; then
   run_direct
 fi
 if [ "$backend" = pueue ]; then
-  printf 'local-admission: helper-free path uses flock for backend "pueue" with one slot\n' >&2
+  safe_notice 'local-admission: helper-free path uses flock for backend "pueue" with one slot'
 fi
 if ! command -v flock >/dev/null 2>&1; then
-  printf 'local-admission: flock is not available on this host; running the command without admission\n' >&2
+  safe_notice 'local-admission: flock is not available on this host; running the command without admission'
   run_direct
+fi
+# Resolve lock-only state and stderr prerequisites only when the locked path
+# will be used. The no-flock direct-run fallback needs neither one.
+case ${XDG_STATE_HOME:-} in
+  /*) state=$XDG_STATE_HOME ;;
+  *) case ${HOME:-} in
+       /*) state=$HOME/.local/state ;;
+       *) safe_notice 'local-admission: no absolute state root; command not started'; exit 2 ;;
+     esac ;;
+esac
+lock_dir="$state/idd-skill/local-admission"
+lock="$lock_dir/validate.lock"
+if [ ! -d /dev/fd ] || [ ! -e /dev/fd/2 ]; then exit 2; fi
+exec {scan_stderr_fd}>&2 || exit 2
+if [ "/dev/fd/$scan_stderr_fd" -ef "$lock" ] 2>/dev/null; then
+  exec {scan_stderr_fd}>&-
+  exit 2
+else
+  scan_stderr_status=$?
+  exec {scan_stderr_fd}>&- || exit 2
+  [ "$scan_stderr_status" -eq 1 ] || exit 2
+  stderr_diagnostic_safe=true
 fi
 if [ "$backend" = flock ]; then
   if ! command -v awk >/dev/null 2>&1; then
@@ -3177,16 +3411,8 @@ if ! command -v env >/dev/null 2>&1 ||
   printf 'local-admission: env cannot reset child signal dispositions; command not started\n' >&2
   exit 2
 fi
-case ${XDG_STATE_HOME:-} in
-  /*) state=$XDG_STATE_HOME ;;
-  *) case ${HOME:-} in
-       /*) state=$HOME/.local/state ;;
-       *) printf 'local-admission: no absolute state root; command not started\n' >&2; exit 2 ;;
-     esac ;;
-esac
 original_umask=$(umask)
 umask 077
-lock_dir="$state/idd-skill/local-admission"
 for dir in "$state/idd-skill" "$lock_dir"; do
   if [ -L "$dir" ] || { [ -e "$dir" ] && [ ! -d "$dir" ]; }; then
     printf 'local-admission: unsafe lock directory; command not started\n' >&2
@@ -3203,7 +3429,6 @@ for dir in "$state/idd-skill" "$lock_dir"; do
     exit 2
   fi
 done
-lock="$lock_dir/validate.lock"
 if [ -L "$lock" ] || { [ -e "$lock" ] && [ ! -f "$lock" ]; }; then
   printf 'local-admission: unsafe lock file; command not started\n' >&2
   exit 2
@@ -3271,6 +3496,12 @@ while :; do
   fi
   printf 'local-admission: waiting (waited %s of %s seconds)\n' "$waited_seconds" "$wait_seconds" >&2
 done
+if ! close_lock_aliases; then
+  printf 'local-admission: cannot verify or close every inherited lock descriptor; command not started\n' >&2
+  flock --unlock 9 || { printf 'local-admission: cannot release lock\n' >&2; exit 2; }
+  lock_fd_open=false
+  exit 2
+fi
 run_child admitted
 status=$?
 flock --unlock 9 || { printf 'local-admission: cannot release lock\n' >&2; exit 2; }
@@ -3283,10 +3514,10 @@ starts. A child exit `75` is returned without that line. Other `flock` failures
 before acquisition print a diagnostic and exit `2` without starting the child.
 
 Refusals before the command starts exit `2`: a policy file that fails to parse,
-a raw cap above 1 under `flock`, unavailable signal-reset support, a symlink at
-`idd-skill` or `local-admission`,
-a lock file that is a symlink or not a regular file, or a `flock` that fails
-before it takes the lock.
+a raw cap above 1 under `flock`, unavailable signal-reset support or lock-alias
+inspection, a standard stream that refers to the lock file, a symlink at
+`idd-skill` or `local-admission`, a lock file that is a symlink or not a regular
+file, or a `flock` that fails before it takes the lock.
 The helper also refuses before starting a process-group-supervised command
 when the ps process-state utility is unavailable or returns unusable output.
 
@@ -6173,10 +6404,22 @@ This record is durable issue evidence: it is not added to the transient
      idd-claim.instructions.md requires; `tokens-record-failed` on failure),
      then `claim-lock --acquire` on the worktree (`lock-acquire-failed`),
      then `claim-lock --read-tokens`, which must read back as present and not
-     malformed for this claim. Then, after `claim.verifySettleDelay`,
-     `resume-claim-routing --assert`. Only `already_owned` with `keep`
-     verifies the claim (`claim-not-verified`); the verdict is read from
-     the output on every exit.
+     malformed for this claim. After `claim.verifySettleDelay`, run this
+     active-claim assertion with the persisted session identity:
+
+     ```sh
+     node scripts/resume-claim-routing.mjs \
+       --issue <N> \
+       --assert \
+       --claim-id <id> \
+       --agent-id <agent-id> \
+       --nonce <nonce> \
+       --worktree <path>
+     ```
+
+     Only `already_owned` with `keep` verifies the claim
+     (`claim-not-verified`); the verdict is read from the output on every
+     exit.
   7. A second hold check. A hold, or an unreadable label, first checks the
      claim again: the worktree lock is acquired with its tokens read back,
      and the claim is asserted. Any failure there posts nothing and stops
@@ -6729,7 +6972,7 @@ p --type activation-nonce --nonce "$n"
 node scripts/claim-lock.mjs --acquire --worktree "$w" --agent-id "$a" --claim-id "$c"
 node scripts/claim-lock.mjs --read-tokens --worktree "$w" --claim-id "$c" | node -e 'const o=JSON.parse(require("fs").readFileSync(0));process.exit(o.present&&!o.malformed?0:1)'
 sleep <settle-seconds>
-g --assert --claim-id "$c" --nonce "$n" --worktree "$w"
+g --assert --claim-id "$c" --agent-id "$a" --nonce "$n" --worktree "$w"
 echo verified
 ```
 
@@ -7152,7 +7395,9 @@ cleanup script is in
   (one in-process capture, then a separate required-CI/HEAD read), but still
   posts nothing without `--apply`. Every `--from-pr` watermark also needs
   `--prior-base-ref <Step 1 base ref>`: a base ref that differs at publish
-  refuses with `base-ref`. `--operation-local` returns that capture
+  refuses with `base-ref`. This path writes the compared ref as an optional
+  seventh `base-ref` token; existing six-field watermarks remain valid and
+  explicit-field watermarks stay six-field. `--operation-local` returns that capture
   when required CI is incomplete and defers only the post. Pass
   `--prior-head-sha`, `--prior-total-item-count`, and
   `--prior-max-activity-at`: E1 Step 2 passes the Step 1 `{head-SHA}`,
@@ -7307,6 +7552,16 @@ means restart E1; do not include a later CI pass in the watermark.
   the probe is `occupied`. On an `owner_evidence_required` verdict the helper
   also pushes one `warnings[]` line, `owner evidence required: first failed
   proof is <field>` (with the probe status appended for `occupancy_probe`).
+- `--agent-id` (kurone-kito/idd-skill#4936, #5000): pass this session's
+  persisted identity on every owner assertion. A session-qualified active
+  claim requires an exact match; omission or mismatch routes as another
+  session's claim, so `--assert` fails with a `kind: "gate"` verdict. An
+  `--agent-id` may be omitted only when the active claim's marker predates
+  session-qualified IDs. A bare ID is accepted only with `--assert` and
+  only when it exactly matches that legacy marker; bare IDs elsewhere are
+  usage errors. The
+  `--fresh-claim-gate` call does not take an agent ID because no claim exists
+  yet.
 - Optional `--assert` (kurone-kito/idd-skill#3667): turn the verdict into an
   exit status for a script that gates a mutation on it. The stdout JSON is
   identical with and without the flag. The exit status is `0` only when
@@ -10854,11 +11109,16 @@ before the first push (pull request `#4399`); it ran at F2 and tripped
 Issue `#4480` added it as the `scope` step.
 
 ```sh
-node scripts/claimed-push.mjs --issue <n> --claim-id <id> [--nonce <nonce>] [--apply]
+node scripts/claimed-push.mjs --issue <n> --claim-id <id> --agent-id <id> \
+  [--nonce <nonce>] [--apply]
 ```
 
-- **Arguments**: `--issue` and `--claim-id` are required. `--nonce` goes to
-  the claim assert only when given. The remote is always `origin`, and
+- **Arguments**: `--issue`, `--claim-id`, and `--agent-id` are required.
+  Pass this session's persisted identity; the helper forwards it to both
+  claim assertions. For a claim whose marker predates session-qualified IDs,
+  `--assert` accepts a bare ID only when it exactly matches that legacy
+  marker (issue `#5000`). `--nonce` goes to the claim assert only when given.
+  The remote is always `origin`, and
   there is no path argument: the worktree is `git rev-parse --show-toplevel`
   of the working directory (a failure there is reported under `assert`,
   with the next action to run the helper from the claimed worktree) and the

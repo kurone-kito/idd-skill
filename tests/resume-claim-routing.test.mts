@@ -2,10 +2,12 @@ import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import {
   copyFileSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
+  readlinkSync,
   realpathSync,
   rmSync,
   writeFileSync,
@@ -43,6 +45,7 @@ import { createFakeProviderAdapter } from '../src/scripts/provider-adapter-fake.
 import type { ProviderPort } from '../src/scripts/provider-port.mts';
 import {
   buildForcedHandoffEnabledGate,
+  evaluateForcedHandoffRebaseOwnerEvidence,
   evaluateFreshClaimGate as evaluateFreshClaimGateImpl,
   evaluateResumeClaimRouting as evaluateResumeClaimRoutingImpl,
   fetchOpenLinkedPrReferences,
@@ -3323,6 +3326,8 @@ test('--worktree end-to-end: the real compiled CLI proves ownership via an occup
         fixture.policyPath,
         '--claim-id',
         claimId,
+        '--agent-id',
+        agentId,
         '--worktree',
         secondary,
       ],
@@ -4110,10 +4115,12 @@ function withSuccessorSandbox(
     primary: string;
     worktree: string;
     env: NodeJS.ProcessEnv;
+    extraWorktrees: string[];
   }) => void,
 ): void {
   const primary = mkdtempSync(join(tmpdir(), 'idd-successor-primary-'));
   const worktree = join(primary, '..', `${basename(primary)}-wt`);
+  const extraWorktrees: string[] = [];
   const env = hermeticGitEnv();
   try {
     gitIn(primary, ['init', '--quiet', '-b', 'main'], env);
@@ -4129,8 +4136,16 @@ function withSuccessorSandbox(
       claimId: 'claim-old',
       nonce: 'nonce-old',
     });
-    body({ primary, worktree, env });
+    body({ primary, worktree, env, extraWorktrees });
   } finally {
+    for (const extraWorktree of extraWorktrees) {
+      try {
+        gitIn(primary, ['worktree', 'remove', '--force', extraWorktree], env);
+      } catch {
+        // best-effort; rmSync below still runs
+      }
+      rmSync(extraWorktree, { recursive: true, force: true });
+    }
     try {
       gitIn(primary, ['worktree', 'remove', '--force', worktree], env);
     } catch {
@@ -4142,40 +4157,54 @@ function withSuccessorSandbox(
 }
 
 /** Routing as the successor runs it, with the real occupancy probe. */
-function routeAsSuccessor(sandbox: { primary: string; worktree: string }) {
+function routeAsSuccessor(
+  sandbox: { primary: string; worktree: string },
+  overrides: {
+    events?: unknown;
+    nonce?: string;
+    agentId?: string;
+    probe?: LocalWorktreeInspection;
+    eligibility?: Partial<{
+      humanGated: boolean;
+      issueOpen: boolean;
+      linkedPrLookupSucceeded: boolean;
+      linkedOpenPrCount: number;
+    }>;
+  } = {},
+) {
   const inspect = (branch: string) =>
-    inspectLocalWorktreeBranch(branch, sandbox.primary);
+    overrides.probe ?? inspectLocalWorktreeBranch(branch, sandbox.primary);
   return evaluateResumeClaimRouting(
     {
       claimId: 'claim-new',
-      nonce: 'nonce-new',
+      nonce: overrides.nonce ?? 'nonce-new',
+      agentId: overrides.agentId ?? 'agent-new',
       now: '2026-05-12T11:00:00Z',
-      events: SUCCESSOR_EVENTS,
+      events: overrides.events ?? SUCCESSOR_EVENTS,
     },
     {
       isTrustedAuthor: trusted(['maintainer']),
       isForcedHandoffEnabled: () => true,
       isAuthorizedForcedHandoff: (forcedBy) => forcedBy === 'maintainer',
       inspectLocalWorktree: inspect,
-      isCurrentSessionOwner: (claim) => {
-        const evidence = resolveCurrentSessionClaimEvidence(
-          claim.claimId,
+      isCurrentSessionOwner: (claim, localWorktree, context) =>
+        evaluateForcedHandoffRebaseOwnerEvidence(
+          claim,
+          localWorktree ?? inspect(claim.branch),
           sandbox.worktree,
-        );
-        if (
-          evidence === null ||
-          evidence.agentId !== claim.agentId ||
-          evidence.branchName !== claim.branch
-        ) {
-          return false;
-        }
-        return isCurrentSessionWorktreeOwner(
-          evidence.worktreePath,
-          evidence.branchName,
-          claim.branch,
-          inspect(claim.branch),
-        );
-      },
+          context ?? {
+            appliedForcedHandoff: null,
+            activationNonceWinner: null,
+            nonceChecked: '',
+          },
+          {
+            humanGated: true,
+            issueOpen: true,
+            linkedPrLookupSucceeded: true,
+            linkedOpenPrCount: 0,
+            ...overrides.eligibility,
+          },
+        ),
     },
   );
 }
@@ -4244,6 +4273,7 @@ test('a forced-handoff successor turns the owner-evidence stop into already_owne
     assert.equal(result.state, 'already_owned');
     assert.equal(result.action, 'keep');
     assert.equal(result.reason, 'claim-id-match');
+    assert.equal(result.evidence.owner_evidence?.rebase_identity, undefined);
   });
 });
 
@@ -4280,11 +4310,14 @@ test('a takeover after recording the identity against another worktree still sto
  * checkout --detach` would make the probe report the branch absent, which
  * routes already_owned.)
  */
-function leaveWorktreeMidRebase(sandbox: {
-  primary: string;
-  worktree: string;
-  env: NodeJS.ProcessEnv;
-}): void {
+function leaveWorktreeMidRebase(
+  sandbox: {
+    primary: string;
+    worktree: string;
+    env: NodeJS.ProcessEnv;
+  },
+  backend: 'merge' | 'apply' = 'merge',
+): void {
   const { primary, worktree, env } = sandbox;
   writeFileSync(join(primary, 'conflict.txt'), 'main\n');
   gitIn(primary, ['add', 'conflict.txt'], env);
@@ -4292,10 +4325,19 @@ function leaveWorktreeMidRebase(sandbox: {
   writeFileSync(join(worktree, 'conflict.txt'), 'branch\n');
   gitIn(worktree, ['add', 'conflict.txt'], env);
   gitIn(worktree, ['commit', '--quiet', '-m', 'branch side'], env);
-  assert.throws(() => gitIn(worktree, ['rebase', 'main'], env));
+  assert.throws(() =>
+    gitIn(
+      worktree,
+      backend === 'apply'
+        ? ['rebase', '--apply', 'main']
+        : ['rebase', '--merge', 'main'],
+      env,
+    ),
+  );
+  const backendDir = backend === 'apply' ? 'rebase-apply' : 'rebase-merge';
   const rebaseState = gitIn(
     worktree,
-    ['rev-parse', '--git-path', 'rebase-merge'],
+    ['rev-parse', '--git-path', backendDir],
     env,
   ).trim();
   assert.equal(
@@ -4305,30 +4347,553 @@ function leaveWorktreeMidRebase(sandbox: {
   );
 }
 
-test('a takeover of a worktree the dead predecessor left mid-rebase still stops with owner_evidence_required (#3645)', () => {
-  withSuccessorSandbox((sandbox) => {
-    const { primary, worktree } = sandbox;
-    leaveWorktreeMidRebase(sandbox);
+function gitAdminPathForTest(
+  sandbox: { worktree: string; env: NodeJS.ProcessEnv },
+  name: string,
+): string {
+  return resolve(
+    sandbox.worktree,
+    gitIn(
+      sandbox.worktree,
+      ['rev-parse', '--git-path', name],
+      sandbox.env,
+    ).trim(),
+  );
+}
 
-    // The real probe still reports the branch occupied by this worktree (it
-    // reads the rebase metadata); it is the detached HEAD that leaves the
-    // session without owner evidence.
-    const probe = inspectLocalWorktreeBranch(SUCCESSOR_BRANCH, primary);
-    assert.equal(probe.status, 'occupied');
+function snapshotPathForTest(path: string): unknown {
+  let info: ReturnType<typeof lstatSync>;
+  try {
+    info = lstatSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
+  }
+  if (info.isSymbolicLink()) return { symlink: readlinkSync(path) };
+  if (info.isDirectory()) {
+    return Object.fromEntries(
+      readdirSync(path)
+        .sort()
+        .map((name) => [name, snapshotPathForTest(join(path, name))]),
+    );
+  }
+  if (info.isFile()) return { file: readFileSync(path).toString('base64') };
+  return { mode: info.mode };
+}
 
-    recordGeneratedClaimTokens(worktree, {
-      agentId: 'agent-new',
+function snapshotSuccessorRebaseState(sandbox: {
+  primary: string;
+  worktree: string;
+  env: NodeJS.ProcessEnv;
+}): unknown {
+  const issueBranchRef = `refs/heads/${SUCCESSOR_BRANCH}`;
+  const oldTokens = readGeneratedClaimTokens(sandbox.worktree, 'claim-old');
+  const newTokens = readGeneratedClaimTokens(sandbox.worktree, 'claim-new');
+  return {
+    branchTip: gitIn(
+      sandbox.primary,
+      ['rev-parse', issueBranchRef],
+      sandbox.env,
+    ),
+    detachedHead: gitIn(sandbox.worktree, ['rev-parse', 'HEAD'], sandbox.env),
+    index: gitIn(sandbox.worktree, ['diff', '--cached', '--raw'], sandbox.env),
+    rebaseMerge: snapshotPathForTest(
+      gitAdminPathForTest(sandbox, 'rebase-merge'),
+    ),
+    rebaseApply: snapshotPathForTest(
+      gitAdminPathForTest(sandbox, 'rebase-apply'),
+    ),
+    mergeHead: snapshotPathForTest(gitAdminPathForTest(sandbox, 'MERGE_HEAD')),
+    cherryPickHead: snapshotPathForTest(
+      gitAdminPathForTest(sandbox, 'CHERRY_PICK_HEAD'),
+    ),
+    revertHead: snapshotPathForTest(
+      gitAdminPathForTest(sandbox, 'REVERT_HEAD'),
+    ),
+    bisectStart: snapshotPathForTest(
+      gitAdminPathForTest(sandbox, 'BISECT_START'),
+    ),
+    sequencer: snapshotPathForTest(gitAdminPathForTest(sandbox, 'sequencer')),
+    worktreeLock: snapshotPathForTest(gitAdminPathForTest(sandbox, 'locked')),
+    worktreeList: gitIn(
+      sandbox.primary,
+      ['worktree', 'list', '--porcelain', '-z'],
+      sandbox.env,
+    ),
+    lock: snapshotPathForTest(checkClaimLock(sandbox.worktree).path),
+    oldTokens: snapshotPathForTest(oldTokens.path),
+    newTokens: snapshotPathForTest(newTokens.path),
+  };
+}
+
+function prepareDetachedSuccessor(
+  sandbox: { primary: string; worktree: string; env: NodeJS.ProcessEnv },
+  backend: 'merge' | 'apply' = 'merge',
+): void {
+  leaveWorktreeMidRebase(sandbox, backend);
+  recordGeneratedClaimTokens(sandbox.worktree, {
+    agentId: 'agent-new',
+    claimId: 'claim-new',
+    nonce: 'nonce-new',
+  });
+  const takeover = acquireClaimLock(
+    sandbox.worktree,
+    'agent-new',
+    'claim-new',
+    true,
+  );
+  assert.equal(takeover.mode, 'acquired');
+}
+
+test('a verified forced-handoff successor can resume both interrupted rebase backends only after lock takeover (#5045)', () => {
+  for (const backend of ['merge', 'apply'] as const) {
+    withSuccessorSandbox((sandbox) => {
+      const { primary, worktree } = sandbox;
+      leaveWorktreeMidRebase(sandbox, backend);
+
+      const probe = inspectLocalWorktreeBranch(SUCCESSOR_BRANCH, primary);
+      assert.equal(probe.status, 'occupied');
+      assert.equal(probe.paths.length, 1);
+
+      // The metadata establishes only detached worktree identity. The old
+      // claim lock still blocks owner routing until the documented takeover.
+      const beforeTakeover = routeAsSuccessor(sandbox);
+      assertSuccessorStop(beforeTakeover);
+      assert.equal(
+        beforeTakeover.evidence.owner_evidence?.rebase_identity?.passed,
+        true,
+      );
+      assert.equal(
+        beforeTakeover.evidence.owner_evidence?.claim_lock_matches,
+        false,
+      );
+      assert.equal(
+        beforeTakeover.evidence.owner_evidence?.rebase_identity?.backend,
+        backend === 'apply' ? 'rebase-apply' : 'rebase-merge',
+      );
+
+      recordGeneratedClaimTokens(worktree, {
+        agentId: 'agent-new',
+        claimId: 'claim-new',
+        nonce: 'nonce-new',
+      });
+      const stillOldLock = routeAsSuccessor(sandbox);
+      assertSuccessorStop(stillOldLock);
+      assert.equal(
+        stillOldLock.evidence.owner_evidence?.generated_tokens_match,
+        null,
+      );
+
+      const gate = evaluateFreshClaimGate(
+        { now: '2026-05-12T11:00:00Z', events: SUCCESSOR_EVENTS },
+        {
+          isTrustedAuthor: trusted(['maintainer']),
+          isForcedHandoffEnabled: () => true,
+          isAuthorizedForcedHandoff: (forcedBy) => forcedBy === 'maintainer',
+          inspectLocalWorktree: (branch) =>
+            inspectLocalWorktreeBranch(branch, primary),
+        },
+      );
+      assert.equal(gate.verdict, 'already-claimed');
+      assert.equal(gate.winningClaimId, 'claim-new');
+      assert.equal(checkClaimLock(worktree).holder?.claimId, 'claim-old');
+
+      const takeover = acquireClaimLock(
+        worktree,
+        'agent-new',
+        'claim-new',
+        true,
+      );
+      assert.equal(takeover.mode, 'acquired');
+      assert.equal(takeover.forcedTakeover, true);
+      assert.equal(takeover.holder?.claimId, 'claim-old');
+      assert.equal(
+        resolveCurrentSessionClaimEvidence('claim-new', worktree),
+        null,
+        'detached HEAD must remain outside the ordinary branch identity resolver',
+      );
+
+      const result = routeAsSuccessor(sandbox);
+      assert.equal(result.state, 'already_owned');
+      assert.equal(result.action, 'keep');
+      assert.equal(result.reason, 'claim-id-match');
+      assert.deepEqual(
+        {
+          passed: result.evidence.owner_evidence?.rebase_identity?.passed,
+          backend: result.evidence.owner_evidence?.rebase_identity?.backend,
+          headName: result.evidence.owner_evidence?.rebase_identity?.head_name,
+          detachedHead:
+            result.evidence.owner_evidence?.rebase_identity?.comparisons
+              .detached_head,
+          worktreeUnlocked:
+            result.evidence.owner_evidence?.rebase_identity?.comparisons
+              .worktree_unlocked,
+          noOtherBranchWorktree:
+            result.evidence.owner_evidence?.rebase_identity?.comparisons
+              .no_other_branch_worktree,
+          origHeadMatches:
+            result.evidence.owner_evidence?.rebase_identity?.comparisons
+              .orig_head_matches_branch_tip,
+        },
+        {
+          passed: true,
+          backend: backend === 'apply' ? 'rebase-apply' : 'rebase-merge',
+          headName: `refs/heads/${SUCCESSOR_BRANCH}`,
+          detachedHead: true,
+          worktreeUnlocked: true,
+          noOtherBranchWorktree: true,
+          origHeadMatches: true,
+        },
+      );
+    });
+  }
+});
+
+test('forced-handoff rebase proof stays disabled for non-matching handoff, nonce, PR, or issue state (#5045)', () => {
+  const cases: Array<{
+    name: string;
+    overrides: Parameters<typeof routeAsSuccessor>[1];
+  }> = [
+    {
+      name: 'non-human-gated policy',
+      overrides: { eligibility: { humanGated: false } },
+    },
+    { name: 'closed issue', overrides: { eligibility: { issueOpen: false } } },
+    {
+      name: 'linked open PR',
+      overrides: { eligibility: { linkedOpenPrCount: 1 } },
+    },
+    {
+      name: 'failed linked-PR lookup',
+      overrides: { eligibility: { linkedPrLookupSucceeded: false } },
+    },
+    {
+      name: 'absent occupancy probe keeps the pre-worktree route',
+      overrides: {
+        probe: { status: 'absent', paths: [], reason: null },
+      },
+    },
+    {
+      name: 'issue-plus-pr scope',
+      overrides: {
+        events: SUCCESSOR_EVENTS.map((event, index) =>
+          index === 1 && typeof event === 'object' && event !== null
+            ? {
+                ...event,
+                body: String((event as { body?: unknown }).body).replace(
+                  '"contextScope":"issue-only"',
+                  '"contextScope":"issue-plus-pr","linkedPr":"77"',
+                ),
+              }
+            : event,
+        ),
+      },
+    },
+    {
+      name: 'handoff agent does not match this session',
+      overrides: {
+        events: SUCCESSOR_EVENTS.map((event, index) =>
+          index === 1 && typeof event === 'object' && event !== null
+            ? {
+                ...event,
+                body: String((event as { body?: unknown }).body).replace(
+                  '"newAgentId":"agent-new"',
+                  '"newAgentId":"agent-other"',
+                ),
+              }
+            : event,
+        ),
+      },
+    },
+    {
+      name: 'winning activation nonce mismatch',
+      overrides: { nonce: 'nonce-other' },
+    },
+    {
+      name: 'handoff branch differs from displaced claim branch',
+      overrides: {
+        events: SUCCESSOR_EVENTS.map((event, index) =>
+          index === 1 && typeof event === 'object' && event !== null
+            ? {
+                ...event,
+                body: String((event as { body?: unknown }).body).replace(
+                  `"branch":"${SUCCESSOR_BRANCH}"`,
+                  '"branch":"issue/12-other"',
+                ),
+              }
+            : event,
+        ),
+      },
+    },
+  ];
+
+  for (const scenario of cases) {
+    withSuccessorSandbox((sandbox) => {
+      prepareDetachedSuccessor(sandbox);
+      const before = snapshotSuccessorRebaseState(sandbox);
+      const result = routeAsSuccessor(sandbox, scenario.overrides);
+      const proof = result.evidence.owner_evidence?.rebase_identity;
+      if (
+        scenario.name === 'absent occupancy probe keeps the pre-worktree route'
+      ) {
+        assert.equal(result.state, 'already_owned', scenario.name);
+        assert.equal(result.action, 'keep', scenario.name);
+        assert.equal(result.evidence.owner_evidence, undefined, scenario.name);
+      } else {
+        assert.notEqual(result.state, 'already_owned', scenario.name);
+        assert.equal(proof, undefined, scenario.name);
+      }
+      assert.deepEqual(
+        snapshotSuccessorRebaseState(sandbox),
+        before,
+        scenario.name,
+      );
+    });
+  }
+});
+
+test('rebase identity rejects contradictory or unreadable evidence without changing claim or Git state (#5045)', () => {
+  const scenarios: Array<{
+    name: string;
+    backend?: 'merge' | 'apply';
+    mutate: (sandbox: {
+      primary: string;
+      worktree: string;
+      env: NodeJS.ProcessEnv;
+      extraWorktrees: string[];
+    }) => void;
+    probe?: (sandbox: {
+      primary: string;
+      worktree: string;
+      env: NodeJS.ProcessEnv;
+      extraWorktrees: string[];
+    }) => LocalWorktreeInspection;
+  }> = [
+    {
+      name: 'no rebase backend',
+      mutate: (sandbox) =>
+        rmSync(gitAdminPathForTest(sandbox, 'rebase-merge'), {
+          recursive: true,
+          force: true,
+        }),
+    },
+    {
+      name: 'both rebase backends are present',
+      mutate: (sandbox) =>
+        mkdirSync(gitAdminPathForTest(sandbox, 'rebase-apply'), {
+          recursive: true,
+        }),
+    },
+    {
+      name: 'head-name is missing',
+      mutate: (sandbox) =>
+        rmSync(join(gitAdminPathForTest(sandbox, 'rebase-merge'), 'head-name')),
+    },
+    {
+      name: 'orig-head is malformed',
+      mutate: (sandbox) =>
+        writeFileSync(
+          join(gitAdminPathForTest(sandbox, 'rebase-merge'), 'orig-head'),
+          'not-a-commit\nsecond-line\n',
+        ),
+    },
+    {
+      name: 'head-name names another branch',
+      mutate: (sandbox) =>
+        writeFileSync(
+          join(gitAdminPathForTest(sandbox, 'rebase-merge'), 'head-name'),
+          'refs/heads/issue/12-other\n',
+        ),
+    },
+    {
+      name: 'orig-head differs from the branch tip',
+      mutate: (sandbox) =>
+        writeFileSync(
+          join(gitAdminPathForTest(sandbox, 'rebase-merge'), 'orig-head'),
+          `${gitIn(sandbox.primary, ['rev-parse', 'main'], sandbox.env).trim()}\n`,
+        ),
+    },
+    {
+      name: 'another Git operation is active',
+      mutate: (sandbox) =>
+        writeFileSync(
+          gitAdminPathForTest(sandbox, 'CHERRY_PICK_HEAD'),
+          `${gitIn(sandbox.primary, ['rev-parse', 'main'], sandbox.env).trim()}\n`,
+        ),
+    },
+    {
+      name: 'merge operation marker is active',
+      mutate: (sandbox) =>
+        writeFileSync(
+          gitAdminPathForTest(sandbox, 'MERGE_HEAD'),
+          `${gitIn(sandbox.primary, ['rev-parse', 'main'], sandbox.env).trim()}\n`,
+        ),
+    },
+    {
+      name: 'revert operation marker is active',
+      mutate: (sandbox) =>
+        writeFileSync(
+          gitAdminPathForTest(sandbox, 'REVERT_HEAD'),
+          `${gitIn(sandbox.primary, ['rev-parse', 'main'], sandbox.env).trim()}\n`,
+        ),
+    },
+    {
+      name: 'bisect operation marker is active',
+      mutate: (sandbox) =>
+        writeFileSync(gitAdminPathForTest(sandbox, 'BISECT_START'), 'HEAD\n'),
+    },
+    {
+      name: 'sequencer operation is active',
+      mutate: (sandbox) =>
+        mkdirSync(gitAdminPathForTest(sandbox, 'sequencer'), {
+          recursive: true,
+        }),
+    },
+    {
+      name: 'git-am applying marker is active',
+      backend: 'apply',
+      mutate: (sandbox) =>
+        writeFileSync(
+          join(gitAdminPathForTest(sandbox, 'rebase-apply'), 'applying'),
+          '',
+        ),
+    },
+    {
+      name: 'occupancy names more than one worktree',
+      mutate: () => undefined,
+      probe: (sandbox) => ({
+        status: 'occupied',
+        paths: [sandbox.worktree, sandbox.primary],
+        reason: null,
+      }),
+    },
+    {
+      name: 'occupancy names a different worktree',
+      mutate: () => undefined,
+      probe: (sandbox) => ({
+        status: 'occupied',
+        paths: [sandbox.primary],
+        reason: null,
+      }),
+    },
+    {
+      name: 'another worktree checks out the claimed branch after the initial probe',
+      mutate: (sandbox) => {
+        const otherWorktree = join(
+          dirname(sandbox.primary),
+          `${basename(sandbox.primary)}-other`,
+        );
+        gitIn(
+          sandbox.primary,
+          [
+            'worktree',
+            'add',
+            '--force',
+            '--quiet',
+            otherWorktree,
+            SUCCESSOR_BRANCH,
+          ],
+          sandbox.env,
+        );
+        sandbox.extraWorktrees.push(otherWorktree);
+      },
+      probe: (sandbox) => ({
+        status: 'occupied',
+        paths: [sandbox.worktree],
+        reason: null,
+      }),
+    },
+    {
+      name: 'locked detached worktree is refused',
+      mutate: (sandbox) =>
+        gitIn(
+          sandbox.primary,
+          ['worktree', 'lock', '--reason', 'locked for test', sandbox.worktree],
+          sandbox.env,
+        ),
+      probe: (sandbox) => ({
+        status: 'occupied',
+        paths: [sandbox.worktree],
+        reason: null,
+      }),
+    },
+  ];
+
+  for (const scenario of scenarios) {
+    withSuccessorSandbox((sandbox) => {
+      prepareDetachedSuccessor(sandbox, scenario.backend ?? 'merge');
+      scenario.mutate(sandbox);
+      const probe = scenario.probe?.(sandbox) ?? {
+        status: 'occupied' as const,
+        paths: [sandbox.worktree],
+        reason: null,
+      };
+      const before = snapshotSuccessorRebaseState(sandbox);
+      const result = routeAsSuccessor(sandbox, { probe });
+      assert.equal(result.state, 'owner_evidence_required', scenario.name);
+      assert.equal(result.action, 'stop', scenario.name);
+      assert.equal(
+        result.evidence.owner_evidence?.rebase_identity?.passed,
+        false,
+        scenario.name,
+      );
+      assert.deepEqual(
+        snapshotSuccessorRebaseState(sandbox),
+        before,
+        scenario.name,
+      );
+    });
+  }
+});
+
+test('an absent occupancy probe cannot be turned into ownership by a callback', () => {
+  let callbackCalled = false;
+  const result = evaluateResumeClaimRouting(
+    {
       claimId: 'claim-new',
       nonce: 'nonce-new',
+      agentId: 'agent-new',
+      now: '2026-05-12T11:00:00Z',
+      events: SUCCESSOR_EVENTS,
+    },
+    {
+      isTrustedAuthor: trusted(['maintainer']),
+      isForcedHandoffEnabled: () => true,
+      isAuthorizedForcedHandoff: (forcedBy) => forcedBy === 'maintainer',
+      inspectLocalWorktree: () => ({
+        status: 'absent',
+        paths: [],
+        reason: null,
+      }),
+      isCurrentSessionOwner: () => {
+        callbackCalled = true;
+        return true;
+      },
+    },
+  );
+
+  assert.equal(callbackCalled, false);
+  assert.equal(result.state, 'already_owned');
+  assert.equal(result.action, 'keep');
+  assert.equal(result.evidence.owner_evidence, undefined);
+});
+
+test('a passed rebase identity proof does not waive the successor token nonce (#5045)', () => {
+  withSuccessorSandbox((sandbox) => {
+    prepareDetachedSuccessor(sandbox);
+    recordGeneratedClaimTokens(sandbox.worktree, {
+      agentId: 'agent-new',
+      claimId: 'claim-new',
+      nonce: 'nonce-other',
     });
-    const takeover = acquireClaimLock(worktree, 'agent-new', 'claim-new', true);
-    assert.equal(takeover.mode, 'acquired');
-    assert.equal(takeover.holder?.claimId, 'claim-old');
-    assert.equal(
-      resolveCurrentSessionClaimEvidence('claim-new', worktree),
-      null,
-    );
-    assertSuccessorStop(routeAsSuccessor(sandbox));
+    const before = snapshotSuccessorRebaseState(sandbox);
+    const result = routeAsSuccessor(sandbox);
+    assert.equal(result.state, 'owner_evidence_required');
+    assert.equal(result.evidence.owner_evidence?.rebase_identity?.passed, true);
+    assert.equal(result.evidence.owner_evidence?.claim_lock_matches, true);
+    assert.equal(result.evidence.owner_evidence?.generated_tokens_match, false);
+    assert.equal(result.evidence.owner_evidence?.agent_and_branch_match, null);
+    assert.deepEqual(snapshotSuccessorRebaseState(sandbox), before);
   });
 });
 
@@ -5341,6 +5906,20 @@ test('#4936: a competing session of the same family cannot resume the claim even
   assert.equal(competitor.evidence.owner_evidence, undefined);
 });
 
+test('#5000: a session-qualified claim cannot be resumed when --agent-id is omitted', () => {
+  const result = routeAsSession(undefined);
+  assert.equal(result.state, 'non_inheritable');
+  assert.equal(result.action, 'stop');
+  assert.equal(result.reason, 'active-claim-non-stale');
+  assert.equal('agent_id_checked' in result, false);
+  assert.ok(
+    result.warnings.some((warning) =>
+      warning.includes('session agent-id is required'),
+    ),
+  );
+  assert.equal(result.evidence.owner_evidence, undefined);
+});
+
 test('#4936: a session whose agent-id lacks the suffix fails closed', () => {
   const result = routeAsSession('claude');
   assert.equal(result.state, 'non_inheritable');
@@ -5379,23 +5958,6 @@ test('#4936: a legacy claim keeps its route when the caller omits --agent-id', (
   assert.equal(result.state, 'already_owned');
   assert.equal(result.action, 'keep');
   assert.equal('agent_id_checked' in result, false);
-  // Omitting the flag on a session-qualified claim keeps the prior verdict
-  // and output too.
-  const omitted = routeAsSession(undefined);
-  const before = evaluateResumeClaimRouting(
-    {
-      claimId: 'claim-session',
-      nonce: 'nonce-session',
-      now: '2026-05-12T11:00:00Z',
-      events: sessionClaimEvents(),
-    },
-    {
-      isTrustedAuthor: trusted(['maintainer']),
-      inspectLocalWorktree: () => OCCUPIED_SESSION_WORKTREE,
-      isCurrentSessionOwner: () => true,
-    },
-  );
-  assert.deepEqual(omitted, before);
 });
 
 test('#4936: a legacy claim without a claim-id is unaffected by --agent-id', () => {
@@ -5455,6 +6017,7 @@ const SESSION_CLI_CLAIM = {
  */
 function withSessionSandbox(
   body: (sandbox: { primary: string; worktree: string }) => void,
+  agentId = SESSION_AGENT,
 ): void {
   const primary = mkdtempSync(join(tmpdir(), 'idd-session-primary-'));
   const worktree = join(primary, '..', `${basename(primary)}-wt`);
@@ -5469,9 +6032,9 @@ function withSessionSandbox(
       ['worktree', 'add', '--quiet', '-b', SUCCESSOR_BRANCH, worktree, 'main'],
       env,
     );
-    acquireClaimLock(worktree, SESSION_AGENT, 'claim-session', false);
+    acquireClaimLock(worktree, agentId, 'claim-session', false);
     recordGeneratedClaimTokens(worktree, {
-      agentId: SESSION_AGENT,
+      agentId,
       claimId: 'claim-session',
       nonce: 'nonce-session',
     });
@@ -5534,6 +6097,49 @@ test('#4936: --assert --agent-id exits 0 for the owning session and leaves the w
   }
 });
 
+test('#5000: --assert accepts an exact legacy bare agent-id for its claim', () => {
+  const legacyAgent = 'copilot';
+  const legacyClaim = {
+    ...SESSION_CLI_CLAIM,
+    body: `<!-- claimed-by: ${legacyAgent} claim-session supersedes: none 2026-05-12T10:00:00Z branch: ${SUCCESSOR_BRANCH} -->`,
+  };
+  const fixture = assertCliFixture([legacyClaim]);
+  try {
+    withSessionSandbox(({ primary, worktree }) => {
+      const result = runAssertCli(fixture, primary, [
+        '--claim-id',
+        'claim-session',
+        '--agent-id',
+        legacyAgent,
+        '--worktree',
+        worktree,
+        '--assert',
+        ...ASSERT_NON_STALE,
+      ]);
+      assert.equal(result.status, 0, result.stderr);
+      const output = JSON.parse(result.stdout);
+      assert.equal(output.state, 'already_owned');
+      assert.equal(output.action, 'keep');
+      assert.equal(output.agent_id_checked, legacyAgent);
+      assert.equal(output.evidence.owner_evidence.agent_and_branch_match, true);
+      const mismatch = runAssertCli(fixture, primary, [
+        '--claim-id',
+        'claim-session',
+        '--agent-id',
+        'claude',
+        '--worktree',
+        worktree,
+        '--assert',
+        ...ASSERT_NON_STALE,
+      ]);
+      assert.equal(mismatch.status, 1);
+      assert.equal(JSON.parse(mismatch.stdout).state, 'non_inheritable');
+    }, legacyAgent);
+  } finally {
+    fixture.restore();
+  }
+});
+
 test('#4936: --assert --agent-id exits 1 for another session that reads the same markers and records', () => {
   const fixture = assertCliFixture([SESSION_CLI_CLAIM]);
   try {
@@ -5575,7 +6181,7 @@ process.exit(1);
   try {
     for (const [extraArgs, message] of [
       [
-        ['--claim-id', 'claim-session', '--agent-id', 'claude', '--assert'],
+        ['--claim-id', 'claim-session', '--agent-id', 'claude'],
         /--agent-id "claude" is not session-qualified/,
       ],
       [

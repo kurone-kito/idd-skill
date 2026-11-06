@@ -360,11 +360,12 @@ needs-decision, blocked-by-human, and out-of-scope.
      release — or, under the narrow auto-release exceptions in
      [Authoring hold and release](references/contract.md#authoring-hold-and-release),
      for a single target whose body carried the defer-source marker at
-     Stage 1 publication time (never a marker added later), for a draft
-     carrier, whose creation hold `publish-authoring-hold --shape carrier`
-     releases itself, or for an auto-decide confirmation issue, whose
-     creation hold `publish-authoring-hold --shape confirmation` releases the
-     same way — preflight and verify or reuse a matching
+     Stage 1 publication time (never a marker added later), for a single
+     self-anchor target under the standing release approval, for a draft
+     carrier whose creation hold `publish-authoring-hold --shape carrier`
+     releases itself, or for an auto-decide confirmation issue whose creation
+     hold `publish-authoring-hold --shape confirmation` releases the same way
+     — preflight and verify or reuse a matching
      `mode=release` marker for every target (with `supersedes` equal to the
      current owner token)
      before removing any label; record its GitHub comment ID, never append a
@@ -405,14 +406,17 @@ needs-decision, blocked-by-human, and out-of-scope.
      leave every target generation open
 9. Stop at the single approval boundary: release. Publishing under the
    hold does not by itself authorize starting the IDD execution loop —
-   only the user's explicit release request does, except the narrow
-   defer-source auto-release exception in
-   [Authoring hold and release](references/contract.md#authoring-hold-and-release);
-   its carrier and confirmation creation-hold exceptions release a carrier
+   the user's explicit release request does, except under the narrow
+   defer-source auto-release exception or the standing release approval
+   for a single self-anchor target, both in
+   [Authoring hold and release](references/contract.md#authoring-hold-and-release).
+   Its carrier and confirmation creation-hold exceptions release a carrier
    or an auto-decide confirmation issue, neither of which enters the loop.
    A released `review-needs-decision` follow-up remains out of Discover
    while the label configured as `labels.needsDecisionLabelName` is
    present (default: `status:needs-decision`).
+   After a standing-approval release completes, post the anchor's record line
+   in the format defined in [policy constants](../../docs/policy-constants.md#standing-approval-defaults).
 
 ## Findings ledger storage
 

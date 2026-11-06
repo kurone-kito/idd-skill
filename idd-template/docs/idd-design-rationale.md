@@ -174,8 +174,13 @@ also explicit that a hit is corroborating bootstrap evidence only, not
 sole proof of current-session ownership by itself — when several
 sessions share one clone, a different, still-live sibling session's
 own A5 claim can leave an indistinguishable record at that same shared
-path. `{agent-id}` is shared across sessions of the same agent type
-and never proves ownership (`idd-overview-core.instructions.md`), so
+path. When source issue `kurone-kito/idd-skill#3273` was filed,
+`{agent-id}` could be shared
+across sessions of the same agent type and never proved current-session
+ownership on its own (`idd-overview-core.instructions.md`, the
+pre-rule contract). Source issue `kurone-kito/idd-skill#4936` later
+required a session-qualified ID for new claims. Even now, that ID alone
+does not prove ownership, so
 Step 1.5 does **not** gate this route on `record.agentId`. It does
 **not** adopt the recorded pair outright; it stops silently discarding
 the candidate as an ordinary foreign claim and routes a well-formed
@@ -185,6 +190,17 @@ evidence to `idd-resume-stall.instructions.md` before Step 1, so
 this route does not finish ownership by itself. A refusal there
 is not a terminal end of Discover: the candidate stays ineligible
 and Step 1.5 keeps scanning.
+
+The later owner check passes this session's persisted `--agent-id` and
+compares it with the trusted marker; the marker is comparison evidence, not
+caller identity. If a session-qualified marker has no matching
+session-local ID, the check fails closed. The `resume-claim-routing`
+compatibility path may omit `--agent-id` only for an active pre-rule claim
+whose trusted marker has the legacy bare family ID. The exact locally
+recorded claim-id must still match the trusted marker, and each route
+applies the owner checks available for it. Source issue
+`kurone-kito/idd-skill#5000` records the runtime change that fails closed
+when a session-qualified claim omits its ID (preventive; no observed incident yet).
 
 This finding is upstream of kurone-kito/idd-skill#3273 (Resume Step 1
 not threading an already-known claim-id through to
@@ -211,16 +227,22 @@ entry at `selectDesyncedIndex(session-token, band-size)` (a pure
 `hash(session-token) mod band-size`) instead of always index 0, spreading
 concurrent sessions across _different_ eligible issues up front.
 
-`session-token` must be a per-session-unique value, never the bare,
-session-shared `{agent-id}` alone: `idd-overview-core.instructions.md`
-defines `{agent-id}` as shared across concurrent sessions of the same
-agent type, with a unique session suffix only recommended, not required.
-Sessions that follow that core definition literally and omit the suffix
-all hash to the identical index and converge on the same issue — the
-same converge-and-collide shape as the 3-way race above. This specific
-bare-agent-id collapse is preventive; no observed incident yet —
-kurone-kito/idd-skill#1694 identified it by inspection of the two
-files' definitions, not from a collision that already happened.
+`session-token` must be a per-session-unique value, never merely the
+bare `{agent-id}` from the pre-rule contract. When source issue
+`kurone-kito/idd-skill#1694`
+identified this gap, `idd-overview-core.instructions.md` allowed
+`{agent-id}` to be shared across concurrent sessions of the same agent
+type and only recommended, but did not require, a unique session suffix.
+Source issue `kurone-kito/idd-skill#4936` later required session-qualified
+IDs for new claims. The
+pre-rule bare-ID failure remains a useful historical case: sessions that
+follow that old definition literally and use the bare ID as their token
+hash to the same index and converge on the same issue — the same
+converge-and-collide shape as the 3-way race above. This specific
+bare-agent-id collapse is
+preventive; no observed incident yet — kurone-kito/idd-skill#1694
+identified it by inspection of the two files' definitions, not from a
+collision that already happened.
 `idd-discover.instructions.md` closes the gap by requiring the
 session-suffixed `{agent-id}` or, when the agent-id carries no unique
 component, a session-local fallback token generated once at Discover
@@ -328,6 +350,39 @@ shared `resolveActiveClaim`, and forcing both sides strict would break the
 legitimate relay use-case. Any future change here must preserve the single
 resolver (do not fork `resolveActiveClaim`) and the resume-side
 self-signed-hijack block.
+
+**Detached rebase recovery after forced handoff (kurone-kito/idd-skill#4903).**
+Issue `#4903` records a successor inheriting the exact trusted
+forced-handoff claim while its linked worktree is detached in an interrupted
+rebase. The ordinary owner check correctly refused that state because Git
+could not prove the checked-out branch; however, the same refusal also made
+the recorded handoff unable to continue otherwise-verifiable conflict work.
+Issue `#5045` adds a read-only `rebase_identity` proof for that one recovery
+shape.
+
+The proof is restricted to an accepted human-gated, issue-only handoff with
+the assigned agent, claim, branch, and winning activation nonce; an open
+issue with a successful linked-PR lookup that found no open linked PR; and
+one canonical linked worktree. It requires exactly one rebase backend,
+`head-name` for the claimed issue branch, and a valid `orig-head` equal to
+that local branch ref. It re-reads worktree records, rejects a locked or
+prunable target and any other record that checks out the claimed branch, and
+leaves absent occupancy probes on the pre-existing no-worktree path without
+invoking an owner callback. It also rejects unreadable or contradictory
+metadata and merge, cherry-pick, revert, bisect, sequencer, or `git am` state.
+This proof replaces only the missing worktree-identity proof: the lock,
+generated-token record, nonce, agent, branch, and occupancy checks remain
+independent.
+
+Even a passed proof permits only the successor's B2 plan comment and
+Candidate-file conflict edits, staging those paths, and `git rebase --continue`
+through the same D1 signing tier while detached. Every Resume must route a
+passed rebase proof back to this bounded procedure, including after lock
+takeover. The successor revalidates before each mutation and waits for normal
+rebase completion to attach the claimed branch before ordinary work or push.
+An out-of-scope conflict or uncertain proof remains a hold. This keeps the
+recovery tied to the observed incident instead of treating detached
+worktrees as generally owned.
 
 **Failed linked-PR lookup on the resume side (kurone-kito/idd-skill#3276).**
 Resume routing's own PR-backed-claim detection

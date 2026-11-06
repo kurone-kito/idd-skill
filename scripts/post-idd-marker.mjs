@@ -274,7 +274,7 @@ export const TARGET_KINDS = ['issue', 'pr'];
  * the written marker formats produce. Throws on an unknown type or an invalid
  * field set (the renderer's own validation).
  */
-export function buildMarkerBody(type, fields) {
+export function buildMarkerBody(type, fields, options = {}) {
   switch (type) {
     case 'claim':
       return renderClaimedByMarker({
@@ -305,6 +305,7 @@ export function buildMarkerBody(type, fields) {
         maxActivityAt: fields['max-activity-at'],
         totalItemCount: fields['total-item-count'],
         ciCompletedAt: fields['ci-completed-at'],
+        baseRef: options.baseRef,
       });
     case 'baseline':
       return renderReviewBaselineMarker({
@@ -4549,7 +4550,13 @@ function main() {
     for (const field of REQUIRED_FIELDS_BY_TYPE[args.type]) {
       requireFlag(args.fields[field], `--${field}`);
     }
-    body = buildMarkerBody(args.type, args.fields);
+    body = buildMarkerBody(
+      args.type,
+      args.fields,
+      args.type === 'watermark' && args.fromPr !== null
+        ? { baseRef: args.priorBaseRef }
+        : undefined,
+    );
   } catch (error) {
     const message = error.message;
     process.stderr.write(`${message}\n`);
