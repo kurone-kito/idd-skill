@@ -560,7 +560,7 @@
         "ceilingPct": 10,
         "limitBytes": 30500,
         "issue": 4893,
-        "reason": "Audit during the issue #4893 Lite safeguard revision measured 29,727 bytes. The issue-authorized 10% standing raise permits up to 32,600 bytes; the 30,500 limit leaves 163 bytes before the 98% utilization threshold (29,890). Operator approval is recorded in issue #4893 comment #6671770411."
+        "reason": "Audit during the issue #4893 Lite safeguard revision measured 29,801 bytes. The issue-authorized 10% standing raise permits up to 32,700 bytes; the 30,500 limit leaves 89 bytes before the 98% utilization threshold (29,890). Operator approval is recorded in issue #4893 comment #6671770411."
       }
     ]
   },
