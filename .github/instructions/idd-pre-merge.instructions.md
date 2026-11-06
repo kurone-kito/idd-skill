@@ -154,17 +154,22 @@ is diagnostic and never changes the verdict.
   no well-formed result (connection failure, timeout, DNS, or retryable
   `5xx`/`429` without substantive JSON) or well-formed JSON containing
   only a collection-failure placeholder, not a gate criterion. Do not
-  retry non-retryable `4xx` (`401`/`403`/`404`) or a substantive gate
-  result (for example `claim.matchesExpectedClaim: false`); trust the
-  latter unchanged. If the same failure recurs, fall back to the discard-and-fetch-directly
+  retry non-retryable `4xx` (`401`/`403`/`404`); discard the output and
+  use the direct-fetch path without retry. Do not retry a substantive
+  gate result (for example `claim.matchesExpectedClaim: false`); trust
+  it unchanged. If the same failure recurs, fall back to the discard-and-fetch-directly
   path. For invalid JSON, missing sections, or disagreement with live
   GitHub, use that path without retry. It fetches the E1-scope activity
   snapshot plus current HEAD CI directly. This follows
   `ciWait.rerunPolicy` in `idd-ci.instructions.md`; instructions remain
   canonical. On manual paths (helper unavailable or output discarded),
-  compare optional field (g) `{base-ref}` with F1's live `baseRefName`;
-  if they differ, return to E1. A legacy six-field marker has no base,
-  so skip only this comparison and continue every check below. The gap
+  fetch the PR's current `baseRefName` from GitHub during F2 (for example,
+  `gh pr view {pr-number} --json baseRefName --jq .baseRefName`); do not
+  reuse F1's `prBaseSha` or an earlier base read. If the fetch fails or
+  yields no single non-empty name, hold F2 and do not report review
+  currency as current. Compare optional field (g) `{base-ref}` with that
+  value; if they differ, return to E1. A legacy six-field marker has no
+  base, so skip only this comparison and continue every check below. The gap
   was observed on 2026-11-05 on pull request `#5050` (issue `#4880`).
   Return to E1 if **any** of the following is true:
   - The current PR HEAD SHA differs from the stored `{head-SHA}` (a new
