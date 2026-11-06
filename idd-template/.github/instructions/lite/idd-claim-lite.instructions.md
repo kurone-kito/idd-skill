@@ -328,7 +328,7 @@ node scripts/claim-lock.mjs --acquire --worktree '<path>' --agent-id '{agent-id}
 set -- --issue '<n>' --claim-id '{claim-id}'
 if [[ '{agent-id}' =~ ^[^[:space:]-]+-[^[:space:]]*[A-Za-z0-9]{8}[^[:space:]]*$ ]]; then set -- "$@" --agent-id '{agent-id}'; fi
 route=$(node scripts/resume-claim-routing.mjs "$@" --worktree '<path>')
-printf '%s\n' "$route" | CLAIM_ID='{claim-id}' node -e 'const a=JSON.parse(require("fs").readFileSync(0,"utf8")).active_claim;process.exit(a===null||(a&&a.claim_id&&a.claim_id!==process.env.CLAIM_ID)?0:1)'
+printf '%s\n' "$route" | node -e 'const {active_claim:a,claim_id_checked:c,agent_id_checked:i}=JSON.parse(require("fs").readFileSync(0)),p=/^[^\s-]+-\S*[A-Z\d]{8}\S*$/i,l=/^[A-Za-z]\w*(?:-[\w]+)*$/;process.exit(!a||a.claim_id&&a.claim_id!==c&&(!p.test(a.agent_id)&&l.test(a.agent_id)||i&&i===a.agent_id)?0:1)'
 test "$(git -C '<path>' symbolic-ref -q HEAD)" = 'refs/heads/<branch>'
 tip=$(git rev-parse '<branch>')
 base=$(git rev-parse 'origin/{development-branch}')
