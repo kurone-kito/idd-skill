@@ -114,78 +114,30 @@ distributed defaults. Supporting context and measurements are in
 `## Branch strategy` and `## Commit rules` below cover those rule sets in
 full.
 
-- **Merge policy**: Autonomous merging is enabled only after all normal
-  claim, freshness, CI, advisory, review, and unresolved-thread gates pass;
-  see [evidence](docs/repository-policy-evidence.md).
-- **Discover concurrency**: A4 Step 2 selection spreads across a same-score
-  tie band with `discover.selectionDesync: session-offset`; see
-  [evidence](docs/repository-policy-evidence.md).
-- **Advisory-convergence waiver backstop**: A trusted maintainer may issue
-  a short-lived waiver for genuinely stuck convergence after the configured
-  deadline; it does not replace review. See
-  [evidence](docs/repository-policy-evidence.md).
-- **Self-referential bootstrap waiver**: A narrow bootstrap-only waiver may
-  mark readiness immediately without Copilot review when trigger files, but
-  no decision-rule files, change. See
-  [evidence](docs/repository-policy-evidence.md).
-- **ciGate F2 bootstrap**: New `ciGate.*` keys use the preload-first
-  procedure; do not generalize the self-referential waiver. See
-  [evidence](docs/repository-policy-evidence.md).
-- **Advisory-convergence deadline**: This repository sets the maintainer-
-  authorized waiver deadline to `PT9H`; the distributed default is
-  `PT24H`. See [evidence](docs/repository-policy-evidence.md).
-- **Secondary-bot quiet window**: Wait `PT5M` after last substantive
-  activity; a current-head CodeRabbit review uses the fixed `PT5M` settled
-  buffer, and a definitive decline ends the wait immediately. See
-  [evidence](docs/repository-policy-evidence.md).
-- **New CI job rollout**: Land new CI jobs with `workflow_dispatch` first
-  to avoid running unproven jobs on unrelated pushes. See
-  [evidence](docs/repository-policy-evidence.md).
-- **Critique telemetry hook**: The configured `idd-critique-telemetry`
-  hook is fire-and-forget; absent external tooling is a silent no-op. See
-  [evidence](docs/repository-policy-evidence.md).
-- **Gist-retrospective feedback label**: Apply `feedback:idd-core` to
-  qualifying roadmaps and tracked children for visibility only; it never
-  gates phases, and `status:upstream-candidate` remains adopter-side. See
-  [evidence](docs/repository-policy-evidence.md).
-- **Adopt-now urgency defer**: With `severity-tiered` and relax rounds
-  `[4, 7]`, otherwise-unblocked High findings defer only at `very-low`
-  urgency below the cap and first threshold; safety and other blocks remain.
-  See [evidence](docs/repository-policy-evidence.md).
-- **Review-count cap**: Standard-profile PATH A findings defer at every
-  urgency at or above `critiqueLoop.deferAllAfterRounds: 3`, unless a
-  safety or other block reason applies; Lite keeps `deferAfterRounds: 5`.
-  See [evidence](docs/repository-policy-evidence.md).
-- **Triage record**: With `severity-tiered`, an applied Accepted reply
-  whose otherwise-unblocked verdict is `defer` needs `--override`. See
-  [evidence](docs/repository-policy-evidence.md).
-- **E10 converged-review opt-in**: A converged standard-profile batch
-  accepted only from non-primary advisory bots may skip E10; Lite always
-  runs it. See [evidence](docs/repository-policy-evidence.md).
-- **Effort-L refusal**: Autopilot routes effort-L orphans and authored
-  effort-L issues to humans; roadmap children are not demoted. See
-  [evidence](docs/repository-policy-evidence.md).
-- **GitHub API load control**: This repository sets
-  `githubApi.loadControl.maxConcurrent: 4`; a real `notDispatched` refusal
-  is the signal to opt out. See
-  [evidence](docs/repository-policy-evidence.md).
-- **Local validation admission**: Use the `idd-skill-validate` Pueue
-  group at cap 2 when available, otherwise serial `flock`; Windows runs
-  directly. This repository does not manage the daemon or resize groups.
-  See [evidence](docs/repository-policy-evidence.md).
-- **Orchestrator worker cap**: This repository sets
-  `orchestrator.maxWorkers: 4` per session; remove both the setting and
-  enforcing dogfood rule to opt out. See
-  [evidence](docs/repository-policy-evidence.md).
-- **Live status digest**: This repository does not use live status digests;
-  leave existing digests untouched and use the helper only by explicit
-  request. See [evidence](docs/repository-policy-evidence.md).
-- **Provisional decision opt-in**: `dangerouslyAutoDecide` and all five
-  classes are enabled. Only `worktreeRemnant` and `b1Leftover` may resolve
-  claim, ownership, or destructive-operation stops after saving state;
-  every other safety, authority, quality, wait, scope, branch, effort, and
-  authoring-release gate remains. See
-  [evidence](docs/repository-policy-evidence.md).
+<!-- dprint-ignore-start -->
+<!-- markdownlint-disable MD013 -->
+- **Merge policy**: Run F3 only after all claim, freshness, CI, advisory, review, and unresolved-thread gates pass. See [evidence](docs/repository-policy-evidence.md).
+- **Discover concurrency**: A4 spreads same-score candidates across sessions with `discover.selectionDesync: session-offset`. See [evidence](docs/repository-policy-evidence.md).
+- **Advisory-convergence waiver backstop**: After the configured deadline, a trusted maintainer may waive genuinely stuck convergence; this does not replace review. See [evidence](docs/repository-policy-evidence.md).
+- **Self-referential bootstrap waiver**: Auto-waive only when bootstrap trigger files change and no decision-rule files change. See [evidence](docs/repository-policy-evidence.md).
+- **ciGate F2 bootstrap**: Preload new `ciGate.*` keys through the distributed F2 procedure; do not generalize the bootstrap auto-waiver. See [evidence](docs/repository-policy-evidence.md).
+- **Advisory-convergence deadline**: This repository sets the maintainer-authorized waiver deadline to `PT9H`; the distributed default is `PT24H`. See [evidence](docs/repository-policy-evidence.md).
+- **Secondary-bot quiet window**: Wait `PT5M` after substantive activity; use the settled buffer after a current-head CodeRabbit review, and stop immediately on a definitive decline. See [evidence](docs/repository-policy-evidence.md).
+- **New CI job rollout**: Land new CI jobs with `workflow_dispatch` first; enable automatic runs after they are proven. See [evidence](docs/repository-policy-evidence.md).
+- **Critique telemetry hook**: The configured `idd-critique-telemetry` hook is fire-and-forget; absent external tooling is a silent no-op. See [evidence](docs/repository-policy-evidence.md).
+- **Gist-retrospective feedback label**: Apply `feedback:idd-core` to qualifying roadmaps and tracked children for visibility only; it never gates phases, and `status:upstream-candidate` remains adopter-side. See [evidence](docs/repository-policy-evidence.md).
+- **Adopt-now urgency defer**: With `severity-tiered` and relax rounds `[4, 7]`, otherwise-unblocked High findings defer only at `very-low` urgency below both the first threshold and review-count cap; safety and other blocks remain. See [evidence](docs/repository-policy-evidence.md).
+- **Review-count cap**: Standard-profile PATH A findings defer at every urgency at or above `critiqueLoop.deferAllAfterRounds: 3`, unless safety or another block applies; Lite keeps `deferAfterRounds: 5`. See [evidence](docs/repository-policy-evidence.md).
+- **Triage record**: With `severity-tiered`, an applied Accepted reply whose otherwise-unblocked verdict is `defer` needs an `--override` reason. See [evidence](docs/repository-policy-evidence.md).
+- **E10 converged-review opt-in**: With the standard-profile opt-in, skip E10 only for a nonempty Accepted PATH A batch from configured non-primary advisory bots after convergence on the current HEAD; Lite always runs E10. See [evidence](docs/repository-policy-evidence.md).
+- **Effort-L refusal**: Authoring rejects ready L child/orphan bodies unless they use a matching human bucket; split into S/M or use that bucket. Discover routes only effort-L orphans to humans, not roadmaps or roadmap children. See [evidence](docs/repository-policy-evidence.md).
+- **GitHub API load control**: Respect `githubApi.loadControl.maxConcurrent: 4`; a real `notDispatched` refusal is the signal to opt out. See [evidence](docs/repository-policy-evidence.md).
+- **Local validation admission**: Use `idd-skill-validate` Pueue cap 2 or serial `flock` fallback; Windows runs directly; do not manage the daemon or resize groups. See [evidence](docs/repository-policy-evidence.md).
+- **Orchestrator worker cap**: Cap each orchestrator session at 4 workers; remove both the config and enforcing dogfood rule to opt out. See [evidence](docs/repository-policy-evidence.md).
+- **Live status digest**: This repository does not use live status digests; leave existing digests untouched and use the helper only by explicit request. See [evidence](docs/repository-policy-evidence.md).
+- **Provisional decision opt-in**: `dangerouslyAutoDecide` acts only when each class's own switch and matching consumer are ready; only `worktreeRemnant` and `b1Leftover` may replace their stops after saving all data, with every other gate retained. See [evidence](docs/repository-policy-evidence.md).
+<!-- markdownlint-enable MD013 -->
+<!-- dprint-ignore-end -->
 
 ## Branch strategy
 

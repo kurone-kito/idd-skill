@@ -199,7 +199,7 @@ hook unconfigured, rather than a failure.
 
 ## Gist-retrospective field-feedback label
 
-this repository applies
+This repository applies
 the `feedback:idd-core` label to every "IDD loop field-feedback
 intake" gist-retrospective roadmap (title beginning with `roadmap:
 IDD loop field-feedback intake`) and every child issue linked from
@@ -363,9 +363,9 @@ This source repository also records
 `autopilotSuitability.effortL: "refuse"` as a local IDD dogfooding
 policy (applies only to `kurone-kito/idd-skill`); `idd-template/` keeps
 the distributed default `"allow"`, so adopters are unchanged. With
-`refuse`, `audit-authored-issue` fails an orphan or child body whose
-effort is `L` (check `effort-l-ready`) unless it is routed to a human
-bucket, and autopilot Discover routes an effort `L` orphan to a human.
+`refuse`, `effort-l-ready` rejects a ready `L` child or orphan body unless
+it is routed to a matching human bucket; roadmap bodies are exempt. Discover
+routes only `L` orphan candidates to humans, not roadmaps or roadmap children.
 To turn this off, remove the field or set it to `"allow"`. Evidence: in
 the same 100-pull-request cohort as the bullet above, 6 of the 8 pull
 requests whose issue has effort `L` reached 7 or more Copilot reviews,
