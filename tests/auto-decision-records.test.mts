@@ -419,7 +419,12 @@ function links(
   policyPath: string = TRUSTED_POLICY,
 ): DecisionLinksRead {
   return readDecisionLinks(
-    { repository: REPOSITORY, number, policyPath },
+    {
+      repository: REPOSITORY,
+      number,
+      confirmationLabel: CONFIRMATION_LABEL,
+      policyPath,
+    },
     github,
   );
 }
@@ -488,6 +493,79 @@ test('an HTML comment cannot supply a fake Stop section or subject', () => {
     }).verdict,
     'match',
   );
+});
+
+test('an inline-code example cannot supply a fake Stop section or subject', () => {
+  const body = confirmationBody(200).replace(
+    '## Stop',
+    '``## Stop\nSubject: `/work/fake`\n``\n## Stop',
+  );
+  const github = new FakeGithub(confirmationIssue(200, { body }));
+  const result = readable(read(github, 200));
+  assert.equal(result.records[0]?.subject, SUBJECT);
+  assert.equal(
+    matchDecisionRecord(result, {
+      class: 'worktreeRemnant',
+      source: SOURCE,
+      claim: 'claim-a',
+      subject: SUBJECT,
+    }).verdict,
+    'match',
+  );
+  assert.equal(
+    matchDecisionRecord(result, {
+      class: 'worktreeRemnant',
+      source: SOURCE,
+      claim: 'claim-a',
+      subject: '/work/fake',
+    }).verdict,
+    'no-match',
+  );
+});
+
+test('an issue-head change between comment pages is unreadable', () => {
+  const issue = confirmationIssue(200, {
+    comments: [{ id: 200002, body: recordComment({ decision: 'd2' }) }],
+  });
+  const plain = new FakeGithub(issue);
+  plain.pageSize = 1;
+  const github = new FakeGithub(issue);
+  github.issuePageOverride = (request) => {
+    const page = plain.readIssuePage(request) as {
+      data: {
+        repository: {
+          issue: { lastEditedAt: string | null };
+        };
+      };
+    };
+    if (request.cursor !== null) {
+      page.data.repository.issue.lastEditedAt = EDITED_AT;
+    }
+    return page;
+  };
+
+  const result = read(github, 200);
+  assert.deepEqual(result, {
+    status: 'unreadable',
+    error: 'kurone-kito/idd-skill#200 changed while reading comment pages',
+  });
+});
+
+test('a record source in another repository does not count', () => {
+  const source = `${OWNER}/another-repo#100`;
+  const github = new FakeGithub(
+    confirmationIssue(200, {
+      fields: { source },
+      comments: [
+        { id: 200002, body: recordComment({ source, decision: 'd2' }) },
+      ],
+    }),
+  );
+  const result = readable(read(github, 200));
+  assert.equal(result.bodyRecordCounts, false);
+  assert.deepEqual(result.records, []);
+  assert.match(result.bodyRecordReason ?? '', /confirmation repository/);
+  assert.deepEqual(foundNumbers(find(github)), []);
 });
 
 test('an HTML comment inside Stop cannot add a Subject line', () => {
@@ -899,6 +977,29 @@ test('row: the same decision ID with a different claim, set, or subject counts n
   const linked = readable(links(github, 100));
   assert.deepEqual(linked.links, []);
   assert.deepEqual(linked.conflictingDecisions, ['d1']);
+});
+
+test('a void on another confirmation issue removes the linked decision', () => {
+  const github = new FakeGithub(
+    confirmationIssue(200),
+    confirmationIssue(201, {
+      body: 'The edited body no longer carries its record.',
+      lastEditedAt: EDITED_AT,
+      comments: [{ id: 201002, body: voidComment('d1') }],
+    }),
+    sourceIssue(100, [
+      {
+        id: 100001,
+        body: linkComment({
+          decision: 'd1',
+          confirmation: `${OWNER}/${REPO}#200`,
+        }),
+      },
+    ]),
+  );
+  const linked = readable(links(github, 100));
+  assert.deepEqual(linked.links, []);
+  assert.deepEqual(linked.voidedDecisions, ['d1']);
 });
 
 test('row: a REST list entry that is a pull request is skipped', () => {

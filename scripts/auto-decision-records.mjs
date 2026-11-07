@@ -265,6 +265,17 @@ function issueHead(issue, number, label) {
     labels,
   };
 }
+function sameIssueHead(a, b) {
+  return (
+    a.number === b.number &&
+    a.state === b.state &&
+    a.body === b.body &&
+    a.bodyEdited === b.bodyEdited &&
+    a.authorLogin === b.authorLogin &&
+    a.labels.length === b.labels.length &&
+    a.labels.every((label, index) => label === b.labels[index])
+  );
+}
 function compareComments(a, b) {
   if (a.createdAt !== b.createdAt) {
     return a.createdAt < b.createdAt ? -1 : 1;
@@ -292,8 +303,11 @@ function readIssueSnapshot(provider, owner, repo, number) {
       provider.readIssuePage({ owner, repo, number, cursor }),
       label,
     );
+    const currentHead = issueHead(issue, number, label);
     if (head === null) {
-      head = issueHead(issue, number, label);
+      head = currentHead;
+    } else if (!sameIssueHead(head, currentHead)) {
+      throw new Error(`${label} changed while reading comment pages`);
     }
     const connection = issue.comments;
     if (!isRecord(connection)) {
@@ -348,7 +362,7 @@ function recordSubject(text, cls) {
   }
   const raw = text.split('\n');
   const masked = maskMarkdownForScan(text, {
-    inlineCode: 'keep',
+    inlineCode: 'mask',
     htmlComments: 'mask',
   }).split('\n');
   const start = masked.findIndex((line) => line.trim() === '## Stop');
@@ -478,7 +492,7 @@ function recordFrom(fields, issue, from, text) {
   };
 }
 /** The body record when it counts, or the reason it does not. */
-function evaluateBodyRecord(snapshot, target, context) {
+function evaluateBodyRecord(snapshot, repository, context) {
   if (!isTrusted(snapshot.authorLogin, context)) {
     return {
       record: null,
@@ -496,6 +510,19 @@ function evaluateBodyRecord(snapshot, target, context) {
         'the first non-blank line after the publication line is not a record marker',
     };
   }
+  const sourceReference = ISSUE_REFERENCE_PATTERN.exec(fields.source ?? '');
+  if (
+    sourceReference === null ||
+    !sameText(sourceReference[1] ?? '', repository.owner) ||
+    !sameText(sourceReference[2] ?? '', repository.repo)
+  ) {
+    return {
+      record: null,
+      reason:
+        'the record source is not an issue in the confirmation repository',
+    };
+  }
+  const target = `${repository.owner}/${repository.repo}#${snapshot.number}`;
   const { event, rejectReason } = findStageOneAcquire(
     snapshot.comments,
     target,
@@ -545,8 +572,7 @@ function countingVoids(snapshot, context) {
   return voids;
 }
 function evaluateConfirmationIssue(snapshot, repository, context, labels) {
-  const target = `${repository.owner}/${repository.repo}#${snapshot.number}`;
-  const body = evaluateBodyRecord(snapshot, target, context);
+  const body = evaluateBodyRecord(snapshot, repository, context);
   const entries = body.record === null ? [] : [body.record];
   const notes = [];
   for (const comment of countingComments(snapshot, context)) {
@@ -634,14 +660,15 @@ export function readConfirmationIssue(
  * trusted login posted it as the first line of a comment that was never
  * edited, and it names a confirmation issue in the same repository (the
  * contract keeps a record's source in its confirmation issue's repository).
- * Each confirmation issue a link names is read too, so a decision a counting
- * void marker voided there is removed from the result.
+ * A trusted void marker on any currently labelled confirmation issue removes
+ * that decision from the result.
  */
 // audit:ignore-dead-export: the auto-decide caps and crash recovery (#4955) consume this reader; until they land, only the focused tests call it
 export function readDecisionLinks(input, provider = createGithubProvider()) {
   try {
     assertRepository(input.repository);
     assertIssueNumber(input.number);
+    assertLabel(input.confirmationLabel, 'confirmation label');
     const context = readTrustContext(input);
     const { owner, repo } = input.repository;
     const snapshot = readIssueSnapshot(provider, owner, repo, input.number);
@@ -672,27 +699,35 @@ export function readDecisionLinks(input, provider = createGithubProvider()) {
       });
     }
     const { kept, conflicting } = resolveDecisions(entries, sameLink);
-    const voidsByIssue = new Map();
-    for (const link of kept) {
-      const number = Number(
-        ISSUE_REFERENCE_PATTERN.exec(link.confirmation)?.[3] ?? 0,
+    const listed = listLabelledIssues(
+      provider,
+      owner,
+      repo,
+      input.confirmationLabel,
+      'all',
+    );
+    const voids = new Set();
+    for (const issue of listed) {
+      const confirmation = readIssueSnapshot(
+        provider,
+        owner,
+        repo,
+        issue.number,
       );
-      if (!voidsByIssue.has(number)) {
-        voidsByIssue.set(
-          number,
-          countingVoids(
-            readIssueSnapshot(provider, owner, repo, number),
-            context,
-          ),
-        );
+      if (
+        !confirmation.labels.some((name) =>
+          sameText(name, input.confirmationLabel),
+        )
+      ) {
+        continue;
+      }
+      for (const decision of countingVoids(confirmation, context)) {
+        voids.add(decision);
       }
     }
     const voided = [];
     const links = kept.filter((link) => {
-      const number = Number(
-        ISSUE_REFERENCE_PATTERN.exec(link.confirmation)?.[3] ?? 0,
-      );
-      if (voidsByIssue.get(number)?.has(link.decision) === true) {
+      if (voids.has(link.decision)) {
         voided.push(link.decision);
         return false;
       }

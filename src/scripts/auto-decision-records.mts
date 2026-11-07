@@ -191,7 +191,7 @@ export type DecisionLinksRead =
       links: AutoDecisionLink[];
       /** Decision IDs dropped because two counting links disagree, sorted. */
       conflictingDecisions: string[];
-      /** Decision IDs voided on the confirmation issue a link names, sorted. */
+      /** Decision IDs removed from links by trusted void markers, sorted. */
       voidedDecisions: string[];
     }
   | AutoDecisionUnreadable;
@@ -491,6 +491,21 @@ function issueHead(
   };
 }
 
+function sameIssueHead(
+  a: Omit<IssueSnapshot, 'comments'>,
+  b: Omit<IssueSnapshot, 'comments'>,
+): boolean {
+  return (
+    a.number === b.number &&
+    a.state === b.state &&
+    a.body === b.body &&
+    a.bodyEdited === b.bodyEdited &&
+    a.authorLogin === b.authorLogin &&
+    a.labels.length === b.labels.length &&
+    a.labels.every((label, index) => label === b.labels[index])
+  );
+}
+
 function compareComments(
   a: AuthoringOwnerProvenanceComment,
   b: AuthoringOwnerProvenanceComment,
@@ -527,8 +542,11 @@ function readIssueSnapshot(
       provider.readIssuePage({ owner, repo, number, cursor }),
       label,
     );
+    const currentHead = issueHead(issue, number, label);
     if (head === null) {
-      head = issueHead(issue, number, label);
+      head = currentHead;
+    } else if (!sameIssueHead(head, currentHead)) {
+      throw new Error(`${label} changed while reading comment pages`);
     }
     const connection = issue.comments;
     if (!isRecord(connection)) {
@@ -589,7 +607,7 @@ function recordSubject(text: string, cls: string): string | null {
   }
   const raw = text.split('\n');
   const masked = maskMarkdownForScan(text, {
-    inlineCode: 'keep',
+    inlineCode: 'mask',
     htmlComments: 'mask',
   }).split('\n');
   const start = masked.findIndex((line) => line.trim() === '## Stop');
@@ -750,7 +768,7 @@ function recordFrom(
 /** The body record when it counts, or the reason it does not. */
 function evaluateBodyRecord(
   snapshot: IssueSnapshot,
-  target: string,
+  repository: AutoDecisionRepository,
   context: TrustContext,
 ): { record: AutoDecisionRecord | null; reason: string | null } {
   if (!isTrusted(snapshot.authorLogin, context)) {
@@ -770,6 +788,19 @@ function evaluateBodyRecord(
         'the first non-blank line after the publication line is not a record marker',
     };
   }
+  const sourceReference = ISSUE_REFERENCE_PATTERN.exec(fields.source ?? '');
+  if (
+    sourceReference === null ||
+    !sameText(sourceReference[1] ?? '', repository.owner) ||
+    !sameText(sourceReference[2] ?? '', repository.repo)
+  ) {
+    return {
+      record: null,
+      reason:
+        'the record source is not an issue in the confirmation repository',
+    };
+  }
+  const target = `${repository.owner}/${repository.repo}#${snapshot.number}`;
   const { event, rejectReason } = findStageOneAcquire(
     snapshot.comments,
     target,
@@ -833,8 +864,7 @@ function evaluateConfirmationIssue(
   context: TrustContext,
   labels: { confirmationLabel: string; authoringLabel: string },
 ): ConfirmationIssueReport {
-  const target = `${repository.owner}/${repository.repo}#${snapshot.number}`;
-  const body = evaluateBodyRecord(snapshot, target, context);
+  const body = evaluateBodyRecord(snapshot, repository, context);
   const entries: AutoDecisionRecord[] =
     body.record === null ? [] : [body.record];
   const notes: AutoDecisionNote[] = [];
@@ -937,6 +967,8 @@ export interface DecisionLinksInput extends AutoDecisionReadOptions {
   repository: AutoDecisionRepository;
   /** The source issue whose comments hold the link markers. */
   number: number;
+  /** From the trusted read of #4958, never from the local checkout. */
+  confirmationLabel: string;
 }
 
 /**
@@ -944,8 +976,8 @@ export interface DecisionLinksInput extends AutoDecisionReadOptions {
  * trusted login posted it as the first line of a comment that was never
  * edited, and it names a confirmation issue in the same repository (the
  * contract keeps a record's source in its confirmation issue's repository).
- * Each confirmation issue a link names is read too, so a decision a counting
- * void marker voided there is removed from the result.
+ * A trusted void marker on any currently labelled confirmation issue removes
+ * that decision from the result.
  */
 // audit:ignore-dead-export: the auto-decide caps and crash recovery (#4955) consume this reader; until they land, only the focused tests call it
 export function readDecisionLinks(
@@ -955,6 +987,7 @@ export function readDecisionLinks(
   try {
     assertRepository(input.repository);
     assertIssueNumber(input.number);
+    assertLabel(input.confirmationLabel, 'confirmation label');
     const context = readTrustContext(input);
     const { owner, repo } = input.repository;
     const snapshot = readIssueSnapshot(provider, owner, repo, input.number);
@@ -985,27 +1018,35 @@ export function readDecisionLinks(
       });
     }
     const { kept, conflicting } = resolveDecisions(entries, sameLink);
-    const voidsByIssue = new Map<number, Set<string>>();
-    for (const link of kept) {
-      const number = Number(
-        ISSUE_REFERENCE_PATTERN.exec(link.confirmation)?.[3] ?? 0,
+    const listed = listLabelledIssues(
+      provider,
+      owner,
+      repo,
+      input.confirmationLabel,
+      'all',
+    );
+    const voids = new Set<string>();
+    for (const issue of listed) {
+      const confirmation = readIssueSnapshot(
+        provider,
+        owner,
+        repo,
+        issue.number,
       );
-      if (!voidsByIssue.has(number)) {
-        voidsByIssue.set(
-          number,
-          countingVoids(
-            readIssueSnapshot(provider, owner, repo, number),
-            context,
-          ),
-        );
+      if (
+        !confirmation.labels.some((name) =>
+          sameText(name, input.confirmationLabel),
+        )
+      ) {
+        continue;
+      }
+      for (const decision of countingVoids(confirmation, context)) {
+        voids.add(decision);
       }
     }
     const voided: string[] = [];
     const links = kept.filter((link) => {
-      const number = Number(
-        ISSUE_REFERENCE_PATTERN.exec(link.confirmation)?.[3] ?? 0,
-      );
-      if (voidsByIssue.get(number)?.has(link.decision) === true) {
+      if (voids.has(link.decision)) {
         voided.push(link.decision);
         return false;
       }
