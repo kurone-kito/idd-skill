@@ -458,20 +458,20 @@ a follow-up or start a second loop. If the companion is unavailable, record the
 proposal in a comment/PR follow-ups; never create it ad hoc or improvise
 worker-side authoring.
 
-**Scope overrun**: if the audit finds
-`effort-candidate-file-limit`, stop without pushing. Use the
-`claimed-push` `scope.scopeOverrun` fields (`effort`, `estimate`,
-`candidateFiles`, `changedFiles`), or B3's finding and paths.
+**Scope overrun**: `effort-candidate-file-limit` stops push. Use
+`claimed-push`'s `scopeOverrun` (`effort`, `estimate`, `candidateFiles`,
+`changedFiles`) or B3.
 
-Revalidate each write. Post the marker with `post-idd-marker --apply`
-(no PR fields), then a visible split proposal with the estimate,
-candidate and changed files, plus the exact `idd-agent-authored` suffix.
-Verify both bodies, trusted authors and unedited state in full history.
-If uncertain, inspect comments and retain the claim. After verification,
-release with `unclaimed-by` and run `lost-claim-cleanup`. If available,
-hand off as a held split draft; refusal leaves the comment. Never add
-`needs-decision` or ask a human.
-See the [rationale](../../docs/idd-design-rationale.md).
+Revalidate writes. Profile-selected `post-idd-marker` needs
+`--type scope-overrun --target issue <n> --agent-id <id>
+--effort <S|M|L> --candidate-files '<JSON array>' --apply`;
+omit PR/branch/HEAD flags. Post a visible split proposal with estimate,
+candidate/changed files and exact `idd-agent-authored` suffix. Verify
+both full-history bodies, trusted authors and no edits. If unsure, inspect
+comments and keep the claim. After verification, unclaim and run
+`lost-claim-cleanup`. Hand off a held split draft if possible; otherwise
+keep the comment. Never add `needs-decision` or ask a human. See
+[rationale](../../docs/idd-design-rationale.md).
 
 ---
 
