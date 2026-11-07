@@ -78,6 +78,7 @@ import {
   resolveEffectiveDevelopmentBranch,
 } from './policy-helpers.mts';
 import type {
+  ClaimValidationSummary,
   DispositionEvidenceSummary,
   ExternalCheckWaiverAuthorityLookup,
   PrClosingIssueClaimState,
@@ -472,7 +473,7 @@ export type PreMergeReadinessReport = Omit<
   'claim'
 > & {
   /** Claim-bound scope-overrun evidence, present only when audited. */
-  claim: PreMergeReadinessSummary['claim'] & {
+  claim: ClaimValidationSummary & {
     scopeOverrun?: ScopeOverrunReport;
   };
   // #4163: the optional hint the collector attaches (see

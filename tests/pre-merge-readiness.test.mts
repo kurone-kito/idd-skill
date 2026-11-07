@@ -669,14 +669,13 @@ test('pre-merge readiness schema validates scope-overrun evidence', () => {
     validate(
       {
         ...summary,
-        claim: {
-          ...summary.claim,
+        claim: Object.assign({}, summary.claim, {
           scopeOverrun: {
             status: 'valid',
             reason: 'no-decision',
             recordedHeadSha: SCOPE_OVERRUN_HEAD,
           },
-        },
+        }),
       },
       readinessSchema,
     ),
