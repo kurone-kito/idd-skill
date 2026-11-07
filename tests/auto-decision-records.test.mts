@@ -471,6 +471,25 @@ test('a trusted, unedited confirmation issue reports its body record', () => {
   assert.deepEqual(result.notes, []);
 });
 
+test('an HTML comment cannot supply a fake Stop section or subject', () => {
+  const body = confirmationBody(200).replace(
+    '## Stop',
+    '<!--\n## Stop\nSubject: `/work/fake`\n-->\n## Stop',
+  );
+  const github = new FakeGithub(confirmationIssue(200, { body }));
+  const result = readable(read(github, 200));
+  assert.equal(result.records[0]?.subject, SUBJECT);
+  assert.equal(
+    matchDecisionRecord(result, {
+      class: 'worktreeRemnant',
+      source: SOURCE,
+      claim: 'claim-a',
+      subject: SUBJECT,
+    }).verdict,
+    'match',
+  );
+});
+
 test('a closed issue without the authoring label reports both facts', () => {
   const github = new FakeGithub(confirmationIssue(200, { state: 'CLOSED' }));
   const result = readable(read(github, 200));
@@ -762,6 +781,52 @@ test('row: the same decision ID twice with the same fields counts once', () => {
     linked.links.map((link) => link.commentId),
     [100001],
   );
+});
+
+test('the finder deduplicates one decision across confirmation issues and merges notes', () => {
+  const github = new FakeGithub(
+    confirmationIssue(200),
+    confirmationIssue(201, {
+      comments: [{ id: 201002, body: noteComment('d1', 'location') }],
+    }),
+  );
+  const result = readable(find(github));
+  assert.deepEqual(foundNumbers(result), [200]);
+  assert.equal(result.issues[0]?.records[0]?.locationNote, true);
+});
+
+test('the finder drops decision IDs that conflict across confirmation issues before filtering', () => {
+  const claimConflict = new FakeGithub(
+    confirmationIssue(200),
+    confirmationIssue(201, { fields: { claim: 'claim-b' } }),
+  );
+  assert.deepEqual(foundNumbers(find(claimConflict, { claim: 'claim-a' })), []);
+
+  const sourceConflict = new FakeGithub(
+    confirmationIssue(200),
+    confirmationIssue(201, { fields: { source: `${OWNER}/${REPO}#101` } }),
+  );
+  assert.deepEqual(foundNumbers(find(sourceConflict, { source: SOURCE })), []);
+
+  const issueConflict = new FakeGithub(
+    confirmationIssue(200, {
+      comments: [{ id: 200002, body: recordComment({ claim: 'claim-b' }) }],
+    }),
+    confirmationIssue(201),
+  );
+  assert.deepEqual(foundNumbers(find(issueConflict, { claim: 'claim-a' })), []);
+});
+
+test('a voided decision is removed across the full finder result', () => {
+  const github = new FakeGithub(
+    confirmationIssue(200),
+    confirmationIssue(201, {
+      body: 'The edited body no longer carries its record.',
+      lastEditedAt: EDITED_AT,
+      comments: [{ id: 201002, body: voidComment('d1') }],
+    }),
+  );
+  assert.deepEqual(foundNumbers(find(github)), []);
 });
 
 test('row: the same decision ID with a different claim, set, or subject counts neither', () => {

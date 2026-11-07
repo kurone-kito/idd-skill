@@ -588,7 +588,10 @@ function recordSubject(text: string, cls: string): string | null {
     return null;
   }
   const raw = text.split('\n');
-  const masked = maskMarkdownForScan(text).split('\n');
+  const masked = maskMarkdownForScan(text, {
+    inlineCode: 'keep',
+    htmlComments: 'mask',
+  }).split('\n');
   const start = masked.findIndex((line) => line.trim() === '## Stop');
   if (start < 0) {
     return null;
@@ -651,6 +654,50 @@ function sameRecord(a: AutoDecisionRecord, b: AutoDecisionRecord): boolean {
     a.set === b.set &&
     a.subject === b.subject
   );
+}
+
+interface FinderRecordEntry {
+  issue: Omit<ConfirmationFinderIssue, 'records'>;
+  record: AutoDecisionRecord;
+}
+
+/** Resolve decision IDs across the finder result before applying its filters. */
+function resolveFinderRecords(
+  entries: readonly FinderRecordEntry[],
+  removedDecisions: ReadonlySet<string>,
+): FinderRecordEntry[] {
+  const groups = new Map<string, FinderRecordEntry[]>();
+  for (const entry of entries) {
+    const group = groups.get(entry.record.decision);
+    if (group === undefined) {
+      groups.set(entry.record.decision, [entry]);
+    } else {
+      group.push(entry);
+    }
+  }
+
+  const kept: FinderRecordEntry[] = [];
+  for (const [decision, group] of groups) {
+    if (removedDecisions.has(decision)) {
+      continue;
+    }
+    const first = group[0];
+    if (
+      first === undefined ||
+      !group.every((entry) => sameRecord(first.record, entry.record))
+    ) {
+      continue;
+    }
+    kept.push({
+      ...first,
+      record: {
+        ...first.record,
+        locationNote: group.some((entry) => entry.record.locationNote),
+        failureNote: group.some((entry) => entry.record.failureNote),
+      },
+    });
+  }
+  return kept;
 }
 
 function sameLink(a: AutoDecisionLink, b: AutoDecisionLink): boolean {
@@ -1140,47 +1187,59 @@ export function findConfirmationIssues(
       input.confirmationLabel,
       state,
     );
-    const issues: ConfirmationFinderIssue[] = [];
+    const entries: FinderRecordEntry[] = [];
+    const voidedDecisions = new Set<string>();
     for (const entry of listed) {
-      // A body whose listed text has no record of this class (and source)
-      // cannot hold a counting body record: any later change to the body
-      // would set lastEditedAt. Skipping it saves the GraphQL read.
-      const listedFields = bodyRecordFields(entry.body, context.markerPrefix);
-      if (
-        listedFields === null ||
-        listedFields.class !== input.class ||
-        (input.source !== undefined &&
-          !sameText(listedFields.source ?? '', input.source))
-      ) {
-        continue;
-      }
+      // Read every listed issue before applying the finder's filters: a
+      // trusted void marker can remove an ID even after its body record stops
+      // counting, and conflicts can span classes, sources, and issues.
       const report = evaluateConfirmationIssue(
         readIssueSnapshot(provider, owner, repo, entry.number),
         input.repository,
         context,
         input,
       );
+      for (const decision of report.voidedDecisions) {
+        voidedDecisions.add(decision);
+      }
+      for (const decision of report.conflictingDecisions) {
+        voidedDecisions.add(decision);
+      }
       // A counting body record whose own decision was voided or dropped still
       // lets the issue's record comments count.
       if (!report.bodyRecordCounts) {
         continue;
       }
-      const records = report.records.filter(
-        (record) =>
-          record.class === input.class && recordMatchesFilters(record, input),
-      );
-      if (records.length === 0) {
-        continue;
-      }
-      issues.push({
+      const issue = {
         number: report.number,
         state: report.state,
         confirmationLabel: report.confirmationLabel,
         authoringLabel: report.authoringLabel,
-        records,
-      });
+      };
+      for (const record of report.records) {
+        entries.push({ issue, record });
+      }
     }
-    return { status: 'readable', issues };
+    const resolved = resolveFinderRecords(entries, voidedDecisions);
+    const byIssue = new Map<number, ConfirmationFinderIssue>();
+    for (const { issue, record } of resolved) {
+      if (
+        record.class !== input.class ||
+        !recordMatchesFilters(record, input)
+      ) {
+        continue;
+      }
+      let result = byIssue.get(issue.number);
+      if (result === undefined) {
+        result = { ...issue, records: [] };
+        byIssue.set(issue.number, result);
+      }
+      result.records.push(record);
+    }
+    return {
+      status: 'readable',
+      issues: [...byIssue.values()].sort((a, b) => a.number - b.number),
+    };
   } catch (error) {
     return unreadable(error);
   }
