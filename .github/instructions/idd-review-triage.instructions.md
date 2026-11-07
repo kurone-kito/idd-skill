@@ -189,8 +189,9 @@ Reply
   `#4331` (issue `#3826`): 14 Copilot review rounds and 24 inline
   comments, most of them factual corrections rather than wording, so the
   rule above does not cover them.
-- **Adopt-now urgency** (`deferByUrgency`, default `off` — E4/E5
-  unchanged when off; `low`/`low-and-medium` from round 1).
+- **Adopt-now urgency** (`deferByUrgency`, default `severity-tiered`;
+  `off` leaves E4/E5 unchanged; `low`/`low-and-medium` are available
+  alternatives from round 1).
   Eligibility is the higher of the E4 tier and Copilot's label — the
   `alt="<Level> severity"` text next to its `#discussion_r<id>` link
   in the Open section of any `<!-- ccr-overview-v2 -->` review. The
@@ -218,22 +219,26 @@ Reply
   condition. Unknown E4 severity counts as Medium; the floor only
   raises. Unscored urgency never defers. At step 0, High defers only at
   `very-low` (Accept forced does not win); Medium or unknown, not at
-  `high`; Low at every scored urgency. When `deferRelaxAtRounds` is set,
-  apply the [wave gradient] first: only with `severity-tiered`; unset or
-  invalid means off (step 0); the step is how many thresholds are at or
-  below the PR's Copilot review count, counted as `deferAfterRounds`
+  `high`; Low at every scored urgency. Apply the [wave gradient] first:
+  only with `severity-tiered`; an omitted `deferRelaxAtRounds` key uses
+  the distributed default `[4]`, JSON `null` explicitly disables it, and
+  an invalid value means off (step 0). An explicit `[]` fails schema
+  validation. The step is how many thresholds are at or below the PR's
+  Copilot review count, counted as `deferAfterRounds`
   counts it; from step 1 the safety class (see the section) never defers,
   an exception to "never override"; `deferAfterRounds` is unchanged.
   Clause: `urgency <level>; severity <tier>[, Copilot <label>]`, plus
   `; step <k>` above step 0. Read `converged` once per pass; if true,
   add one step ([wave gradient]). The agent reports adopt-now condition
   (d) with `--adopt-now`, which turns a `defer` verdict into `keep` (see (d)
-  above). At or above `deferAllAfterRounds` Copilot reviews ([wave gradient]),
-  every unblocked scored finding but the safety class defers at any step,
-  and (d) and `--adopt-now` keep none; not with `--lite`.
+  above). `deferAllAfterRounds` defaults to `5`; an omitted key keeps that
+  default, JSON `null` explicitly disables the cap, and an invalid value
+  means off. At or above that many Copilot reviews ([wave gradient]), every
+  unblocked scored finding but the safety class defers at any step, and (d)
+  and `--adopt-now` keep none; not with `--lite`.
 
-**Triage record.** With `triageRecord` on, before deciding each PATH A
-item run `resolve-review-thread --pr <n>` with `--tier`, `--urgency`,
+**Triage record.** `triageRecord` defaults to `record`. With it on, before
+deciding each PATH A item run `resolve-review-thread --pr <n>` with `--tier`, `--urgency`,
 and its other [triage flags] (`--lite` on a lite-profile claim), and no
 target, body, or `--apply`; it prints the step and, under
 `severity-tiered`, the verdict. Accepting against `defer` under `enforce`
