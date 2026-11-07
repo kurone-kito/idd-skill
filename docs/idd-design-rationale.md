@@ -995,6 +995,48 @@ authoring-time check, the over-scope split threshold that
 `audit-authored-issue`'s `effort-candidate-file-limit` check enforces.
 This route is its work-phase counterpart (kurone-kito/idd-skill#4138).
 
+#### S-M
+
+The one-band correction requested in issue #5030 is a narrow continuation
+before the stop route below. It applies only when the profile-selected
+`audit-authored-issue --shape child --stdin --marker-prefix {markerPrefix}`
+reports `effort-candidate-file-limit` for the issue body or the copy with
+the diff's canonical paths, and both the visible `_Effort: S` estimate and
+the hidden `{markerPrefix}-effort: S` marker are present, coherent, and
+agree. A missing, malformed, conflicting, or different marker keeps the
+existing route. An existing `Split out of #<n>` exemption still passes
+before this correction is considered.
+
+Keep the exact issue body as the original snapshot. Make an M copy by
+changing only the visible effort token and hidden effort marker from S to
+M; preserve every other byte. Run the same profile-selected audit with the
+same marker prefix on that M body and on a second copy whose `## Candidate
+files` section is replaced by the diff's canonical changed paths. Only the
+`effort-candidate-file-limit` result matters. Continue this path only when
+both results pass. A remaining failure, an unavailable or ambiguous result,
+or a command error takes the existing stop route. This keeps the medium
+ceiling of eight canonical paths; it never writes L or changes the threshold.
+
+Before the issue-body write, revalidate the active claim, nonce, worktree,
+lock, and generated tokens, then reread the issue. If its body no longer
+matches the original snapshot, preserve the live edit and stop without
+continuing. Write the M copy, reread the issue, and require an exact body
+match before posting anything else. Post exactly one report comment naming
+the old band S, the new band M, and the canonical path count, ending with
+`idd-agent-authored`; verify that exact comment is present. Continue under
+the same claim only after both the M body and report comment are verified.
+This successful path posts no release and creates no scope-overrun record.
+
+If the body write or report comment cannot be verified, stop without
+pushing and take the existing overrun route. Before restoring, revalidate
+ownership and reread the issue. Restore the original snapshot only if the
+live body still exactly equals the M copy written by this run; if it is
+already the original snapshot, leave it alone, and if it contains any other
+content, preserve it rather than overwrite a concurrent edit. Verify the
+restored body. If restoration cannot be verified, stop without pushing and
+report the live body and report-comment state. The existing overrun route
+continues to own the split proposal, release, and companion handoff.
+
 - **Stop, do not push.** An over-threshold diff is what the authoring
   check would have split before publication, so finishing it only
   produces an oversized pull request. The trigger is the distributed

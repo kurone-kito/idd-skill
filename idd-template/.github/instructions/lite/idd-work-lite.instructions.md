@@ -273,8 +273,9 @@ create it ad hoc or improvise worker-side authoring.
 **Scope overrun** (helper runtime only): when the profile-selected
 `audit-authored-issue --shape child --stdin --marker-prefix {markerPrefix}`
 fails `effort-candidate-file-limit` on the issue body or with
-`## Candidate files` set to the diff's canonical paths, stop coding without
-pushing. Comment the estimate, candidate files, changed files, and a split
+`## Candidate files` set to the diff's canonical paths. S fits M: use
+[B3](../../../docs/idd-design-rationale.md#s-m); else, see below: stop coding
+without pushing. Comment the estimate, candidate files, changed files, and a split
 proposal. Then revalidate ownership: only if the active claim still uses your
 current `{claim-id}`, update the digest (`Phase: aborted/released`, the release
 in `Next action`, the claim and reason in `Authoritative by`) and post
