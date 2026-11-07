@@ -6,6 +6,7 @@
 // .mjs. See docs/typescript-sources.md.
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { isSessionQualifiedAgentId } from './claim-lock.mjs';
 import { parseCliArgs } from './cli-args.mjs';
 import {
   isAuthorizedForcedHandoffActor,
@@ -43,14 +44,16 @@ export function generateSuccessorIds(baseAgentId) {
     newClaimId: `claim-${randomUUID().replace(/-/g, '').slice(0, 16)}`,
   };
 }
-export function planHandoff(issueComments, linkedPrs, options) {
+function assertSessionQualifiedSuccessorAgentId(agentId) {
+  if (!isSessionQualifiedAgentId(agentId)) {
+    throw new Error(
+      `successor agent-id ${JSON.stringify(agentId)} is not session-qualified; provide an ID with a unique session suffix`,
+    );
+  }
+}
+export function resolveHandoffContext(issueComments, linkedPrs, options) {
   const {
-    newAgentId,
-    newClaimId,
     prNumber,
-    forcedBy,
-    reason,
-    timestamp,
     trustedMarkerLogins,
     isAuthorizedForcedHandoff,
     staleAgeMs,
@@ -103,10 +106,36 @@ export function planHandoff(issueComments, linkedPrs, options) {
       activeClaim = filteredClaim;
     }
   }
-  const generated = generateSuccessorIds(activeClaim.agentId);
+  return {
+    activeClaim,
+    branch: activeClaim.branch,
+    contextScope,
+    prReferences,
+  };
+}
+export function planHandoff(issueComments, linkedPrs, options) {
+  const {
+    newAgentId,
+    newClaimId,
+    forcedBy,
+    reason,
+    timestamp,
+    isAuthorizedForcedHandoff,
+  } = options;
+  const context = resolveHandoffContext(issueComments, linkedPrs, options);
+  const generated = generateSuccessorIds(context.activeClaim.agentId);
   const successorIds = {
     newAgentId: newAgentId ?? generated.newAgentId,
     newClaimId: newClaimId ?? generated.newClaimId,
+  };
+  // Every plan is potentially consumable by a marker writer, including the
+  // read-only --plan preview. Reject an invalid inherited legacy ID too.
+  assertSessionQualifiedSuccessorAgentId(successorIds.newAgentId);
+  const resolveOpts = {
+    isAuthorizedForcedHandoff:
+      typeof isAuthorizedForcedHandoff === 'function'
+        ? isAuthorizedForcedHandoff
+        : () => false,
   };
   let markerBody = null;
   if (forcedBy && reason) {
@@ -117,32 +146,27 @@ export function planHandoff(issueComments, linkedPrs, options) {
     const authorized = resolveOpts.isAuthorizedForcedHandoff(forcedBy);
     if (authorized) {
       const resolvedLinkedPr =
-        prNumber !== undefined ? String(prNumber) : prReferences[0];
+        options.prNumber !== undefined
+          ? String(options.prNumber)
+          : context.prReferences[0];
       const payload = {
-        oldAgentId: activeClaim.agentId,
-        oldClaimId: activeClaim.claimId,
+        oldAgentId: context.activeClaim.agentId,
+        oldClaimId: context.activeClaim.claimId,
         newAgentId: successorIds.newAgentId,
         newClaimId: successorIds.newClaimId,
-        branch: activeClaim.branch,
-        ...(contextScope === 'issue-plus-pr' && resolvedLinkedPr
+        branch: context.activeClaim.branch,
+        ...(context.contextScope === 'issue-plus-pr' && resolvedLinkedPr
           ? { linkedPr: resolvedLinkedPr }
           : {}),
         forcedBy,
         reason,
         timestamp: timestamp ?? currentIsoTimestamp(),
-        contextScope,
+        contextScope: context.contextScope,
       };
       markerBody = renderForcedHandoffComment(payload);
     }
   }
-  return {
-    activeClaim,
-    branch: activeClaim.branch,
-    contextScope,
-    prReferences,
-    markerBody,
-    successorIds,
-  };
+  return { ...context, markerBody, successorIds };
 }
 /**
  * Run the successor preflight for `--plan` without refusing. A local mode that
@@ -320,6 +344,7 @@ export function main(argv = process.argv.slice(2)) {
       new Error('missing required --new-claim-id <id> argument'),
     );
   }
+  assertSessionQualifiedSuccessorAgentId(args.newAgentId);
   const repoRef =
     args.repo ??
     ghText([

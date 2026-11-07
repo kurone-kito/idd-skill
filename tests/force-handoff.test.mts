@@ -12,10 +12,13 @@ import type { PromptFn } from '../src/scripts/readline-prompt.mts';
 
 type RunHandoffOptions = NonNullable<Parameters<typeof runHandoff>[0]>;
 
+const OLD_AGENT_ID = 'codex-old-12345678';
+const NEW_AGENT_ID = 'codex-next-12345678';
+
 const CLAIM_BODY = [
-  '<!-- claimed-by: github-copilot-cli-old claim-497-test supersedes: none 2026-05-13T10:00:00Z branch: issue/497-feat-force-handoff-add-interactive -->',
+  `<!-- claimed-by: ${OLD_AGENT_ID} claim-497-test supersedes: none 2026-05-13T10:00:00Z branch: issue/497-feat-force-handoff-add-interactive -->`,
   '',
-  '_github-copilot-cli-old: issue claim — IDD automation marker. Do not edit._',
+  `_${OLD_AGENT_ID}: issue claim — IDD automation marker. Do not edit._`,
 ].join('\n');
 
 const ISSUE_COMMENTS = [
@@ -27,7 +30,20 @@ const ISSUE_COMMENTS = [
   },
 ];
 
-const TRUSTED_LOGINS = ['kurone-kito', 'github-copilot-cli-old'];
+const TRUSTED_LOGINS = ['kurone-kito', OLD_AGENT_ID];
+
+const LEGACY_ISSUE_COMMENTS = [
+  {
+    body: [
+      '<!-- claimed-by: legacy-agent claim-497-legacy supersedes: none 2026-05-13T10:00:00Z branch: issue/497-feat-force-handoff-add-interactive -->',
+      '',
+      '_legacy-agent: issue claim — IDD automation marker. Do not edit._',
+    ].join('\n'),
+    created_at: '2026-05-13T10:00:00Z',
+    user: { login: 'kurone-kito' },
+    lastEditedAt: null,
+  },
+];
 
 function makeCommonOpts(overrides: RunHandoffOptions = {}): RunHandoffOptions {
   return {
@@ -244,11 +260,11 @@ test('runHandoff blank successor-agent-id prompt keeps the displaced agent-id an
   assert.equal(result.posted, true, 'should post the comment');
   assert.equal(
     result.successorIds?.newAgentId,
-    'github-copilot-cli-old',
+    OLD_AGENT_ID,
     'blank input should keep the displaced agent-id as successor',
   );
   assert.ok(
-    postedBodies[0].includes('"new-agent-id":"github-copilot-cli-old"'),
+    postedBodies[0].includes(`"new-agent-id":"${OLD_AGENT_ID}"`),
     'marker body should name the displaced agent-id as successor',
   );
   assert.ok(
@@ -258,7 +274,7 @@ test('runHandoff blank successor-agent-id prompt keeps the displaced agent-id an
 });
 
 test('runHandoff explicit re-entry of the displaced agent-id also prints the same-successor warning', async () => {
-  const responses = ['497', 'github-copilot-cli-old', 'y'];
+  const responses = ['497', OLD_AGENT_ID, 'y'];
   let callIndex = 0;
   const postedBodies: string[] = [];
   let output = '';
@@ -282,11 +298,11 @@ test('runHandoff explicit re-entry of the displaced agent-id also prints the sam
   assert.equal(result.posted, true, 'should post the comment');
   assert.equal(
     result.successorIds?.newAgentId,
-    'github-copilot-cli-old',
+    OLD_AGENT_ID,
     'explicitly re-entered value should still be the displaced agent-id',
   );
   assert.ok(
-    postedBodies[0].includes('"new-agent-id":"github-copilot-cli-old"'),
+    postedBodies[0].includes(`"new-agent-id":"${OLD_AGENT_ID}"`),
     'marker body should name the re-entered displaced agent-id as successor',
   );
   assert.ok(
@@ -296,7 +312,7 @@ test('runHandoff explicit re-entry of the displaced agent-id also prints the sam
 });
 
 test('runHandoff entered successor-agent-id flows through to the posted marker without the warning', async () => {
-  const responses = ['497', 'distinct-successor-id', 'y'];
+  const responses = ['497', NEW_AGENT_ID, 'y'];
   let callIndex = 0;
   const postedBodies: string[] = [];
   let output = '';
@@ -320,11 +336,11 @@ test('runHandoff entered successor-agent-id flows through to the posted marker w
   assert.equal(result.posted, true, 'should post the comment');
   assert.equal(
     result.successorIds?.newAgentId,
-    'distinct-successor-id',
+    NEW_AGENT_ID,
     'entered value should become the successor agent-id',
   );
   assert.ok(
-    postedBodies[0].includes('"new-agent-id":"distinct-successor-id"'),
+    postedBodies[0].includes(`"new-agent-id":"${NEW_AGENT_ID}"`),
     'marker body should name the entered value as successor',
   );
   assert.ok(
@@ -338,7 +354,7 @@ test('runHandoff entered successor-agent-id flows through to the posted marker w
 });
 
 test('runHandoff preserves the chosen PR number when a distinct successor agent-id is also entered', async () => {
-  const responses = ['497', '501', 'distinct-successor-id', 'y'];
+  const responses = ['497', '501', NEW_AGENT_ID, 'y'];
   let callIndex = 0;
   const postedBodies: string[] = [];
 
@@ -368,7 +384,7 @@ test('runHandoff preserves the chosen PR number when a distinct successor agent-
   assert.equal(result.contextScope, 'issue-plus-pr');
   assert.equal(
     result.successorIds?.newAgentId,
-    'distinct-successor-id',
+    NEW_AGENT_ID,
     'entered successor should still apply in the issue-plus-pr flow',
   );
   assert.ok(
@@ -376,13 +392,84 @@ test('runHandoff preserves the chosen PR number when a distinct successor agent-
     'marker body should still include the previously chosen PR number',
   );
   assert.ok(
-    postedBodies[0].includes('"new-agent-id":"distinct-successor-id"'),
+    postedBodies[0].includes(`"new-agent-id":"${NEW_AGENT_ID}"`),
     'marker body should include the entered successor agent-id',
   );
   assert.equal(
     callIndex,
     4,
     'should ask for issue number, PR number, successor agent-id, and confirmation',
+  );
+});
+
+test('runHandoff asks for a valid replacement when blank input keeps a legacy agent-id', async () => {
+  const responses = ['497', '', NEW_AGENT_ID, 'N'];
+  let callIndex = 0;
+  let posted = false;
+  let output = '';
+
+  const result = await runHandoff(
+    makeCommonOpts({
+      fetchIssueComments: async () => LEGACY_ISSUE_COMMENTS,
+      trustedMarkerLogins: ['kurone-kito', 'legacy-agent'],
+      prompt: async () => responses[callIndex++],
+      write: (chunk) => {
+        output += chunk;
+      },
+      postComment: async () => {
+        posted = true;
+        return { html_url: 'https://example.invalid/should-not-post' };
+      },
+    }),
+  );
+
+  assert.equal(result.posted, false);
+  assert.equal(posted, false, 'declining after replacement must not post');
+  assert.equal(
+    callIndex,
+    4,
+    'invalid blank input must prompt again before confirmation',
+  );
+  assert.ok(output.includes('Invalid successor agent-id "legacy-agent"'));
+  assert.ok(
+    output.indexOf('Invalid successor agent-id') <
+      output.indexOf('Marker preview:'),
+    'the invalid default must be rejected before any marker preview',
+  );
+});
+
+test('runHandoff retries an invalid explicit successor-agent-id before confirmation', async () => {
+  const responses = ['497', 'legacy-agent', NEW_AGENT_ID, 'N'];
+  let callIndex = 0;
+  let posted = false;
+  let output = '';
+
+  const result = await runHandoff(
+    makeCommonOpts({
+      prompt: async () => responses[callIndex++],
+      write: (chunk) => {
+        output += chunk;
+      },
+      postComment: async () => {
+        posted = true;
+        return { html_url: 'https://example.invalid/should-not-post' };
+      },
+    }),
+  );
+
+  assert.equal(result.posted, false);
+  assert.equal(posted, false, 'declining confirmation must not post');
+  assert.equal(
+    callIndex,
+    4,
+    'the invalid explicit ID must be retried before confirmation',
+  );
+  assert.ok(output.includes('Invalid successor agent-id "legacy-agent"'));
+  assert.ok(output.includes(`Successor: ${NEW_AGENT_ID} /`));
+  assert.ok(
+    output.indexOf('Invalid successor agent-id') <
+      output.indexOf('Marker preview:'),
+    'the invalid ID must be rejected before any marker preview',
   );
 });
 
@@ -477,7 +564,7 @@ test('buildTrustedMarkerLogins leaves comment authors untouched when collaborato
   }
 });
 
-test('runHandoff release keyword posts unclaimed-by for the displaced claim', async () => {
+test('runHandoff release keyword bypasses successor validation for a legacy claim', async () => {
   const responses = ['497', 'release', 'y'];
   let callIndex = 0;
   const postedBodies: string[] = [];
@@ -485,6 +572,8 @@ test('runHandoff release keyword posts unclaimed-by for the displaced claim', as
 
   const result = await runHandoff(
     makeCommonOpts({
+      fetchIssueComments: async () => LEGACY_ISSUE_COMMENTS,
+      trustedMarkerLogins: ['kurone-kito', 'legacy-agent'],
       prompt: async () => responses[callIndex++],
       write: (chunk) => {
         output += chunk;
@@ -504,7 +593,7 @@ test('runHandoff release keyword posts unclaimed-by for the displaced claim', as
   assert.equal(postedBodies.length, 1);
   assert.match(
     postedBodies[0],
-    /^<!-- unclaimed-by: github-copilot-cli-old claim-497-test /,
+    /^<!-- unclaimed-by: legacy-agent claim-497-legacy /,
   );
   assert.equal(postedBodies[0].includes('forced-handoff:'), false);
   assert.ok(output.includes('release -- no successor'));
