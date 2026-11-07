@@ -1182,7 +1182,12 @@ test('row: a counting record for the class, source, claim or set, and subject ma
   const github = new FakeGithub(
     confirmationIssue(200),
     confirmationIssue(201, {
-      fields: { cls: 'authoringChoice', claim: 'none', set: 'set-x' },
+      fields: {
+        cls: 'authoringChoice',
+        claim: 'none',
+        set: 'set-x',
+        decision: 'd201',
+      },
     }),
   );
   const byClaim = matchDecisionRecord(read(github, 200), {
@@ -1258,19 +1263,25 @@ test('row: a record with another claim, set, or subject does not match', () => {
 });
 
 test('row: the finder with a class and a set but no source returns the matching records of every labelled confirmation issue', () => {
-  const choice = (set: string, source: string): ConfirmationOptions => ({
-    fields: { cls: 'authoringChoice', claim: 'none', set, source },
+  const choice = (
+    set: string,
+    source: string,
+    decision: string,
+  ): ConfirmationOptions => ({
+    fields: { cls: 'authoringChoice', claim: 'none', set, source, decision },
   });
   const github = new FakeGithub(
-    confirmationIssue(300, choice('set-s', `${OWNER}/${REPO}#100`)),
-    confirmationIssue(301, choice('set-s', `${OWNER}/${REPO}#101`)),
-    confirmationIssue(302, choice('set-t', `${OWNER}/${REPO}#102`)),
-    confirmationIssue(303, { fields: { cls: 'runtimeQuestion', set: 'none' } }),
+    confirmationIssue(300, choice('set-s', `${OWNER}/${REPO}#100`, 'd300')),
+    confirmationIssue(301, choice('set-s', `${OWNER}/${REPO}#101`, 'd301')),
+    confirmationIssue(302, choice('set-t', `${OWNER}/${REPO}#102`, 'd302')),
+    confirmationIssue(303, {
+      fields: { cls: 'runtimeQuestion', set: 'none', decision: 'd303' },
+    }),
     // Unlabelled: never listed.
-    confirmationIssue(304, { ...choice('set-s', SOURCE), labels: [] }),
+    confirmationIssue(304, { ...choice('set-s', SOURCE, 'd304'), labels: [] }),
     // Closed: listed only for state=all.
     confirmationIssue(305, {
-      ...choice('set-s', `${OWNER}/${REPO}#103`),
+      ...choice('set-s', `${OWNER}/${REPO}#103`, 'd305'),
       state: 'CLOSED',
     }),
   );
