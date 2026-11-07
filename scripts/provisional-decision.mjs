@@ -77,7 +77,7 @@ function resolveClaimFold(history) {
     body: comment.body,
     createdAt: comment.createdAt,
     author: { login: comment.authorLogin?.trim() ?? '' },
-    lastEditedAt: comment.edited ? comment.createdAt : null,
+    lastEditedAt: comment.edited === false ? null : comment.createdAt,
   }));
   const trustedEvents = events.filter(
     (_event, index) => history.comments[index]?.trustedAuthor === true,
@@ -98,7 +98,7 @@ function resolveClaimFold(history) {
   const hasTrustedForcedHandoff = history.comments.some((comment) => {
     const login = normalizeLogin(comment.authorLogin);
     return (
-      comment.trustedAuthor &&
+      comment.trustedAuthor === true &&
       login !== '' &&
       trustedLoginSet.has(login) &&
       Boolean(parseForcedHandoffComment(comment.body, comment.createdAt))
@@ -114,10 +114,10 @@ function resolveClaimFold(history) {
       body: comment.body,
       createdAt: comment.createdAt,
       authorLogin: comment.authorLogin,
-      lastEditedAt: comment.edited ? comment.createdAt : null,
-      trustedAuthor: comment.trustedAuthor,
+      lastEditedAt: comment.edited === false ? null : comment.createdAt,
+      trustedAuthor: comment.trustedAuthor === true,
     })),
-    completeHistory: history.complete,
+    completeHistory: history.complete === true,
     staleAgeMs,
     trustedMarkerLogins: trustedLogins,
   });
@@ -444,7 +444,11 @@ function historicalWorkFromRecord(record) {
 async function rebuildHistoricalWork(history, store) {
   const work = [];
   for (const comment of history.comments) {
-    if (!comment.trustedAuthor || comment.edited || !comment.authorLogin)
+    if (
+      comment.trustedAuthor !== true ||
+      comment.edited !== false ||
+      !comment.authorLogin
+    )
       continue;
     const parsed = parseProvisionalDecisionRecordComment(comment.body);
     if (!parsed.ok || parsed.record.event.type !== 'work-completed') continue;
@@ -495,9 +499,9 @@ function gateFailure(
   history,
   pullRequest,
 ) {
-  if (!request.policyTrusted)
+  if (request.policyTrusted !== true)
     return 'trusted dangerouslyAutoDecide policy is not enabled';
-  if (!request.optionComparisonValid)
+  if (request.optionComparisonValid !== true)
     return 'option comparison has not been validated';
   if (request.worktreeBranch !== active.branch)
     return 'worktree branch does not match the active claim';
@@ -528,9 +532,12 @@ function gateFailure(
   if (request.type === 'work-completed') {
     if (replayed?.status !== 'in-progress')
       return 'work-completed requires an in-progress decision';
-    if (!request.executionCriteriaSatisfied)
+    if (request.executionCriteriaSatisfied !== true)
       return 'execution criteria are not satisfied';
-    if (pullRequest?.state !== 'merged' || !pullRequest.requiredChecksPassing) {
+    if (
+      pullRequest?.state !== 'merged' ||
+      pullRequest.requiredChecksPassing !== true
+    ) {
       return 'pull request is not merged with required checks passing';
     }
     const startedAt = replayed.workStarted?.event.startedAt;
@@ -654,7 +661,7 @@ async function planProvisionalDecisionCommand(request, store) {
       pullRequest = await store.readPullRequest(request.pullRequestUrl);
     }
     const parsedDate = parseServerDate(history.serverDate);
-    if (!history.complete || !parsedDate) {
+    if (history.complete !== true || !parsedDate) {
       return refused(
         'recovery-hold',
         'history is incomplete or its server Date is invalid',
@@ -687,7 +694,7 @@ async function planProvisionalDecisionCommand(request, store) {
     );
   }
   const completeRecords = history.comments.flatMap((comment) => {
-    if (!comment.trustedAuthor || comment.edited) return [];
+    if (comment.trustedAuthor !== true || comment.edited !== false) return [];
     const parsed = parseProvisionalDecisionRecordComment(comment.body);
     return parsed.ok ? [{ comment, record: parsed.record }] : [];
   });
@@ -710,7 +717,7 @@ async function planProvisionalDecisionCommand(request, store) {
   }
   const replay = replayProvisionalDecisionHistory({
     comments: history.comments,
-    completeHistory: history.complete,
+    completeHistory: history.complete === true,
     currentSource: source,
     verifiedClaimLineage: folded.lineage,
     verifiedWork,
@@ -798,7 +805,7 @@ async function planProvisionalDecisionCommand(request, store) {
     if (
       pullRequest.state === 'open' ||
       pullRequest.state === 'closed-unmerged' ||
-      !pullRequest.requiredChecksPassing
+      pullRequest.requiredChecksPassing !== true
     ) {
       return refused(
         'fix-input',
@@ -847,7 +854,10 @@ async function planProvisionalDecisionCommand(request, store) {
   const sameIdComment = sameIdComments[0];
   let existingPlan = null;
   if (sameIdComment) {
-    if (!sameIdComment.trustedAuthor || sameIdComment.edited) {
+    if (
+      sameIdComment.trustedAuthor !== true ||
+      sameIdComment.edited !== false
+    ) {
       return refused(
         'recovery-hold',
         'same recordId exists in an untrusted or edited comment',
@@ -875,18 +885,19 @@ async function planProvisionalDecisionCommand(request, store) {
     const locatedBundle = located
       ? bundleState(replay.decisions, located.bundleGeneration)
       : null;
-    const earlyGateFailure = !request.policyTrusted
-      ? 'trusted dangerouslyAutoDecide policy is not enabled'
-      : !request.optionComparisonValid
-        ? 'option comparison has not been validated'
-        : request.worktreeBranch !== folded.active.branch
-          ? 'worktree branch does not match the active claim'
-          : request.claimId !== folded.active.claimId
-            ? 'a different claim is active'
-            : request.type === 'work-completed' &&
-                !request.executionCriteriaSatisfied
-              ? 'execution criteria are not satisfied'
-              : null;
+    const earlyGateFailure =
+      request.policyTrusted !== true
+        ? 'trusted dangerouslyAutoDecide policy is not enabled'
+        : request.optionComparisonValid !== true
+          ? 'option comparison has not been validated'
+          : request.worktreeBranch !== folded.active.branch
+            ? 'worktree branch does not match the active claim'
+            : request.claimId !== folded.active.claimId
+              ? 'a different claim is active'
+              : request.type === 'work-completed' &&
+                  request.executionCriteriaSatisfied !== true
+                ? 'execution criteria are not satisfied'
+                : null;
     if (earlyGateFailure) {
       return refused(
         'fix-input',
@@ -902,7 +913,7 @@ async function planProvisionalDecisionCommand(request, store) {
           labelName: chooseLabelName(),
           apply: false,
         });
-        labelPresent = label.present;
+        labelPresent = label.present === true;
       }
       existingPlan = {
         commentId: sameIdComment.id,
@@ -1032,8 +1043,8 @@ function verifyStoredAppend(
     !comment ||
     comment.id !== stored.id ||
     comment.url !== stored.url ||
-    !comment.trustedAuthor ||
-    comment.edited
+    comment.trustedAuthor !== true ||
+    comment.edited !== false
   ) {
     return 'fresh history record identity, trust, or edit state differs';
   }
@@ -1116,7 +1127,8 @@ async function applyCompletionLabel(request, store, planned) {
       labelName: chooseLabelName(),
       apply: true,
     });
-    if (label.present) return { state: 'applied', recordId, commentUrl };
+    if (label.present === true)
+      return { state: 'applied', recordId, commentUrl };
     return {
       state: 'reconciled',
       action: 'reconcile',
@@ -1145,7 +1157,7 @@ export async function runProvisionalDecisionCommand(
   options = {},
 ) {
   const initial = await planProvisionalDecisionCommand(request, store);
-  if (!options.apply || initial.state !== 'planned') return initial;
+  if (options.apply !== true || initial.state !== 'planned') return initial;
   const initialPlan = initial.plan;
   let stepEight;
   try {

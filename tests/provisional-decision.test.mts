@@ -319,6 +319,149 @@ test('plans a valid selection with its exact candidate and performs no writes', 
   assert.equal(result.plan.candidateRecord.claimLineage[0]?.branch, branch);
 });
 
+test('malformed truthy booleans do not authorize provisional writes', async (t) => {
+  await t.test('the apply option must be literal true', async () => {
+    const store = new MemoryStore();
+    const result = await runProvisionalDecisionCommand(request(), store, {
+      apply: 'false' as unknown as boolean,
+    });
+
+    assert.equal(result.state, 'planned', JSON.stringify(result));
+    assert.equal(store.appendCalls, 0);
+    assert.deepEqual(store.labelCalls, []);
+  });
+
+  for (const [name, field] of [
+    ['policy trust', 'policyTrusted'],
+    ['option comparison', 'optionComparisonValid'],
+  ] as const) {
+    await t.test(`${name} must be literal true`, async () => {
+      const store = new MemoryStore();
+      const invalid = {
+        [field]: 'false',
+      } as unknown as Partial<ProvisionalDecisionCommandRequest>;
+      const result = await runProvisionalDecisionCommand(
+        request(invalid),
+        store,
+        { apply: true },
+      );
+
+      assertRefused(result, 'fix-input');
+      assert.equal(store.appendCalls, 0);
+      assert.deepEqual(store.labelCalls, []);
+    });
+  }
+
+  await t.test('execution criteria must be literal true', async () => {
+    const { store, request: completionRequest } =
+      await workCompletedPlanFixture();
+    const invalidRequest = {
+      ...completionRequest,
+      executionCriteriaSatisfied: 'false',
+    } as unknown as ProvisionalDecisionCommandRequest;
+    const result = await runProvisionalDecisionCommand(invalidRequest, store, {
+      apply: true,
+    });
+
+    assertRefused(result, 'fix-input');
+    assert.equal(store.appendCalls, 0);
+    assert.equal(
+      store.labelCalls.some(({ apply }) => apply),
+      false,
+    );
+  });
+
+  await t.test('required checks must be literal true', async () => {
+    const { store, request: completionRequest } =
+      await workCompletedPlanFixture();
+    store.pullRequests.set(prUrl, {
+      state: 'merged',
+      headSha,
+      mergeCommitSha: mergeSha,
+      requiredChecksPassing: 'false' as unknown as boolean,
+    });
+    const result = await runProvisionalDecisionCommand(
+      completionRequest,
+      store,
+      { apply: true },
+    );
+
+    assertRefused(result, 'fix-input');
+    assert.equal(store.appendCalls, 0);
+    assert.equal(
+      store.labelCalls.some(({ apply }) => apply),
+      false,
+    );
+  });
+
+  await t.test('history completeness must be literal true', async () => {
+    const store = new MemoryStore();
+    store.history = {
+      ...store.history,
+      complete: 'false' as unknown as boolean,
+    };
+    const result = await runProvisionalDecisionCommand(request(), store, {
+      apply: true,
+    });
+
+    assertRefused(result, 'recovery-hold');
+    assert.equal(store.appendCalls, 0);
+  });
+
+  await t.test(
+    'stored records must have a literal trusted-author flag',
+    async () => {
+      const {
+        store,
+        request: completionRequest,
+        record,
+      } = await workCompletedPlanFixture();
+      const stored = addHistoryRecord(store, record);
+      store.history = {
+        ...store.history,
+        comments: store.history.comments.map((item) =>
+          item.id === stored.id
+            ? { ...item, trustedAuthor: 'false' as unknown as boolean }
+            : item,
+        ),
+      };
+      const result = await runProvisionalDecisionCommand(
+        completionRequest,
+        store,
+        { apply: true },
+      );
+
+      assertRefused(result, 'recovery-hold');
+      assert.equal(store.appendCalls, 0);
+      assert.equal(
+        store.labelCalls.some(({ apply }) => apply),
+        false,
+      );
+    },
+  );
+
+  await t.test(
+    'label read-back must be literal true before reporting applied',
+    async () => {
+      const { store, request: completionRequest } =
+        await workCompletedPlanFixture();
+      store.applyOrReadDecisionLabel = async () => ({
+        present: 'false' as unknown as boolean,
+      });
+      const result = await runProvisionalDecisionCommand(
+        completionRequest,
+        store,
+        { apply: true },
+      );
+
+      assert.equal(result.state, 'reconciled', JSON.stringify(result));
+      if (result.state === 'reconciled')
+        assert.equal(result.action, 'reconcile');
+      assert.equal(store.appendCalls, 1);
+    },
+  );
+});
+
 test('repository casing keeps record identity stable and reconciles stored records', async () => {
   const { store, record } = await selectedRecord();
   const storedRecord = {
