@@ -4361,9 +4361,13 @@ intent's ID for the child):
 _Issue-authoring carrier mapping. Do not edit or delete._
 ````
 
-**Trust and replay.** All issue references are canonical identities in the
-target repository; normalize repository components with the owner protocol's
-identity algorithm. The intent's `carrier` must name the containing carrier,
+**Trust and replay.** Carrier, roadmap, child, and anchor issue references
+are canonical identities in the target repository. The `publication.journal`
+reference instead identifies the configured current journal or a verified
+originating retired journal in its own repository; cross-repository journals
+retain the existing journal trust and replay checks. Normalize each
+reference's repository components with the owner protocol's identity
+algorithm. The intent's `carrier` must name the containing carrier,
 and each child intent and mapping repeats that identity, token, exact source
 draft title and draft hash. The title identifies one `###` draft; duplicate
 titles are ambiguous. Read its original fenced draft payload, excluding only
@@ -4456,8 +4460,9 @@ Only after these checks may a missing mapping be appended from the
 verified issue and journal evidence; never invent an issue identity or repeat
 an uncertain publication to obtain one.
 
-The record-format and uncertain-intent gaps, including source/child binding
-and serialized record size, were identified on 2026-11-07 during PR `#5074`
+The record-format and uncertain-intent gaps, including source/child binding,
+journal identity, and serialized record size, were identified on 2026-11-07
+during PR `#5074`
 and PR `#5100` review and tracked in
 [issue `#5085`](https://github.com/kurone-kito/idd-skill/issues/5085)
 (preventive; no observed incident yet).
