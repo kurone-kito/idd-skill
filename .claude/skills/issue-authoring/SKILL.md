@@ -180,7 +180,7 @@ needs-decision, blocked-by-human, and out-of-scope.
    ready child's original set no longer proves a held anchor, follow the
    [re-anchoring procedure](references/contract.md#re-anchor-a-child-when-its-original-set-is-unavailable).
    Observed 2026-11-05 on carrier issue #5054; see the
-   [design rationale](../../docs/idd-design-rationale.md#cite-the-observed-incident).
+   [design rationale](https://github.com/kurone-kito/idd-skill/blob/main/docs/idd-design-rationale.md#cite-the-observed-incident).
    A preview request also publishes a carrier, and the drafts are shown in
    the reply too. When authoring stops before the review completes on a
    planned stop (context pressure, or the user's instruction to stop), or

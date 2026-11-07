@@ -4198,7 +4198,7 @@ repeat an uncertain create. Release the coordination claim last. Keep the new
 roadmap and child under the authoring hold for a separate Stage 2 release.
 
 Observed 2026-11-05 during the replay recorded on carrier issue #5054; see
-[the design rationale](../../../docs/idd-design-rationale.md#cite-the-observed-incident).
+[the design rationale](https://github.com/kurone-kito/idd-skill/blob/main/docs/idd-design-rationale.md#cite-the-observed-incident).
 
 **Records.** Once the carrier exists, local draft files are disposable; the
 carrier is the record.
