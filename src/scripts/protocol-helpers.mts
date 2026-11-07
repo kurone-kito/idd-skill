@@ -15687,6 +15687,12 @@ export interface ActiveClaimResolution {
    */
   appliedForcedHandoff: ParsedForcedHandoffMarker | null;
   /**
+   * The ordered forced-handoff transitions that produced the current
+   * `activeClaim` identity. A fresh claim, stale takeover, or release breaks
+   * the lineage; ordinary same-claim heartbeats do not.
+   */
+  verifiedForcedHandoffChain: ParsedForcedHandoffMarker[];
+  /**
    * kurone-kito/idd-skill#2911: the GitHub `createdAt` of the event that
    * most recently changed `activeClaim`'s `(agentId, claimId)` identity --
    * a fresh claim, a stale takeover, or a forced handoff -- as opposed to
@@ -15791,7 +15797,8 @@ export function filterTrustedClaimFamilyEvents<T extends CommentLike>(
 /**
  * Same reduction as {@link resolveActiveClaim}, but also tracks which
  * specific forced-handoff marker (if any) produced the final active
- * claim's identity. `resolveActiveClaim`'s state machine has no memory of
+ * claim's identity and the ordered chain of accepted handoffs that produced
+ * it. `resolveActiveClaim`'s state machine has no memory of
  * *why* the active claim changed, so a caller that needs forced-handoff
  * provenance (`resume-claim-routing.mts`'s `evidence.forced_handoff`,
  * kurone-kito/idd-skill#2178) cannot reconstruct it safely by
@@ -15843,6 +15850,7 @@ export function resolveActiveClaimWithForcedHandoffTrace(
   let active: ParsedClaimMarker | null = null;
   let releasedClaim: ParsedClaimMarker | null = null;
   let appliedForcedHandoff: ParsedForcedHandoffMarker | null = null;
+  let verifiedForcedHandoffChain: ParsedForcedHandoffMarker[] = [];
   let activeSince = '';
   for (const event of orderedEvents) {
     const previous = active;
@@ -15859,7 +15867,7 @@ export function resolveActiveClaimWithForcedHandoffTrace(
       const candidate = previous
         ? parseForcedHandoffComment(event.body ?? '', event.createdAt ?? '')
         : null;
-      appliedForcedHandoff =
+      const applied =
         candidate &&
         next &&
         previous &&
@@ -15870,6 +15878,12 @@ export function resolveActiveClaimWithForcedHandoffTrace(
         candidate.newClaimId === next.claimId
           ? candidate
           : null;
+      appliedForcedHandoff = applied;
+      if (applied) {
+        verifiedForcedHandoffChain.push(applied);
+      } else {
+        verifiedForcedHandoffChain = [];
+      }
       // kurone-kito/idd-skill#2911: record the transition's own event
       // timestamp -- see `ActiveClaimResolution.activeSince`'s doc comment
       // for why this must be captured here (at the identity-changing step
@@ -15883,6 +15897,7 @@ export function resolveActiveClaimWithForcedHandoffTrace(
     activeClaim: active,
     releasedClaim,
     appliedForcedHandoff,
+    verifiedForcedHandoffChain,
     activeSince,
   };
 }

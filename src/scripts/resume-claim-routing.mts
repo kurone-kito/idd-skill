@@ -267,7 +267,7 @@ export interface ResumeSessionOwnerCheck {
  * uses), not the marker's own embedded `timestamp` field; `null` when that
  * comment metadata is unavailable, never an empty string.
  */
-interface AppliedForcedHandoffEvidence {
+interface ForcedHandoffEvidenceEntry {
   old_agent_id: string;
   old_claim_id: string;
   new_agent_id: string;
@@ -277,6 +277,10 @@ interface AppliedForcedHandoffEvidence {
   context_scope: string;
   forced_by: string;
   timestamp: string | null;
+}
+
+interface AppliedForcedHandoffEvidence extends ForcedHandoffEvidenceEntry {
+  verified_chain: ForcedHandoffEvidenceEntry[];
 }
 
 /** Parsed CLI arguments. */
@@ -1339,7 +1343,10 @@ export function evaluateResumeClaimRouting(
       // stale appliedForcedHandoff value around a blocked marker).
       forced_handoff: linkedPrLookupFailureMatch
         ? null
-        : toForcedHandoffEvidence(state.appliedForcedHandoff),
+        : toForcedHandoffEvidence(
+            state.appliedForcedHandoff,
+            state.verifiedForcedHandoffChain,
+          ),
       // #3276: always present (byte-stable), not only when a lookup was
       // attempted -- 'ok' covers both "no lookup ran" (forced-handoff mode
       // disabled) and "the lookup succeeded", matching the Proposed
@@ -1371,23 +1378,33 @@ export function evaluateResumeClaimRouting(
   };
 }
 
-/** Render {@link ActiveClaimResolution.appliedForcedHandoff} for JSON output. */
+/** Render the latest applied handoff and its verified lineage for JSON. */
 function toForcedHandoffEvidence(
   applied: ParsedForcedHandoffMarker | null,
+  verifiedChain: ParsedForcedHandoffMarker[],
 ): AppliedForcedHandoffEvidence | null {
   if (!applied) {
     return null;
   }
   return {
-    old_agent_id: applied.oldAgentId,
-    old_claim_id: applied.oldClaimId,
-    new_agent_id: applied.newAgentId,
-    new_claim_id: applied.newClaimId,
-    branch: applied.branch,
-    linked_pr: applied.linkedPr ?? null,
-    context_scope: applied.contextScope,
-    forced_by: applied.forcedBy,
-    timestamp: applied.createdAt ?? null,
+    ...toForcedHandoffEvidenceEntry(applied),
+    verified_chain: verifiedChain.map(toForcedHandoffEvidenceEntry),
+  };
+}
+
+function toForcedHandoffEvidenceEntry(
+  handoff: ParsedForcedHandoffMarker,
+): ForcedHandoffEvidenceEntry {
+  return {
+    old_agent_id: handoff.oldAgentId,
+    old_claim_id: handoff.oldClaimId,
+    new_agent_id: handoff.newAgentId,
+    new_claim_id: handoff.newClaimId,
+    branch: handoff.branch,
+    linked_pr: handoff.linkedPr ?? null,
+    context_scope: handoff.contextScope,
+    forced_by: handoff.forcedBy,
+    timestamp: handoff.createdAt ?? null,
   };
 }
 
@@ -1969,6 +1986,7 @@ function resolveClaimState(
       activeClaim: claimTrace?.activeClaim ?? null,
       releasedClaim: claimTrace?.releasedClaim ?? null,
       appliedForcedHandoff: claimTrace?.appliedForcedHandoff ?? null,
+      verifiedForcedHandoffChain: claimTrace?.verifiedForcedHandoffChain ?? [],
       warnings,
       legacyClaim: null,
       legacyReleased: false,
@@ -1992,6 +2010,7 @@ function resolveClaimState(
     activeClaim: null,
     releasedClaim: legacy.releasedClaim,
     appliedForcedHandoff: null,
+    verifiedForcedHandoffChain: [],
     warnings,
     legacyClaim: legacy.claim,
     legacyReleased: legacy.released,
