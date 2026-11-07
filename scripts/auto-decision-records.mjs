@@ -854,6 +854,12 @@ export function findConfirmationIssues(
         context,
         input,
       );
+      if (
+        !report.confirmationLabel ||
+        (state === 'open' && report.state !== 'open')
+      ) {
+        continue;
+      }
       for (const decision of report.voidedDecisions) {
         voidedDecisions.add(decision);
       }

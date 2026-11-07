@@ -913,6 +913,38 @@ test('row: a REST list entry that is a pull request is skipped', () => {
   );
 });
 
+test('the finder rechecks the current label and state after the REST scan', () => {
+  const issue = confirmationIssue(200);
+  const labelRemoved = new FakeGithub(issue);
+  labelRemoved.issuePageOverride = (request) => {
+    const page = new FakeGithub(issue).readIssuePage(request) as {
+      data: {
+        repository: {
+          issue: { labels: { nodes: unknown[] } };
+        };
+      };
+    };
+    page.data.repository.issue.labels.nodes = [];
+    return page;
+  };
+  assert.deepEqual(foundNumbers(find(labelRemoved)), []);
+
+  const closed = new FakeGithub(issue);
+  closed.issuePageOverride = (request) => {
+    const page = new FakeGithub(issue).readIssuePage(request) as {
+      data: {
+        repository: {
+          issue: { state: string };
+        };
+      };
+    };
+    page.data.repository.issue.state = 'CLOSED';
+    return page;
+  };
+  assert.deepEqual(foundNumbers(find(closed)), []);
+  assert.deepEqual(foundNumbers(find(closed, { state: 'all' })), [200]);
+});
+
 test('row: a failed read is unreadable', () => {
   const failing = new FakeGithub(confirmationIssue(200));
   failing.issuePageOverride = () => {
