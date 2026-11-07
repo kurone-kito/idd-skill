@@ -287,23 +287,24 @@ draft: it holds this issue, publishes a held roadmap whose children record
 `Split out of #<n>`, and comments its link; if refused, the comment stands.
 Never add needs-decision or ask a human.
 
-**Standing split** is the sole helper-runtime exception to the worker-side
-authoring rule and the scope-overrun route above. When its conditions hold,
-skip that route's release/handoff and keep the parent claim and label held
-throughout. Read `standingApprovals.split.enabled` from
-`.github/idd/config.json` at the live PR base (`baseRefName`; live default
-before a PR). Require
-`idd-effective-config --trusted-auto-decide --base-ref <base>` to report
-`status: readable` for a PR; omit `--base-ref` without one. Never use
-local/head config. Missing, false, malformed, or unreadable uses the existing
-route. Each child must fit effective `maxCandidateFiles`; each
-checkbox-stripped parent criterion must appear whole and verbatim in exactly
-one child, and every child must contain one. The hand split of issue `#4064`
-produced duplicate child `#4093`; apply
-the issue-authoring contract's Reuse-first policy to each child, including open
-issues, draft carriers, and their claim/PR state. On a match, follow that
-contract and stop this split if the work cannot safely join the held set; never
-publish a duplicate
+**Standing split** alone bypasses the worker-side scope-overrun route; keep the
+parent claim and label held. Use live `baseRefName` for PRs, else the live
+default branch. Require `idd-effective-config` with
+`--trusted-auto-decide` to report `status: readable`. For PRs, pass
+`--base-ref <base>`; omit it otherwise. Read `standingApprovals.split.enabled` and
+`standingApprovals.split.maxCandidateFiles` from `.github/idd/config.json` at
+that ref through GitHub Contents. The helper validates the policy against the
+same-ref schema; its auto-decide verdict does not govern split. Require
+`enabled: true`; otherwise use the existing route. Missing
+`maxCandidateFiles` defaults to documented `8`. An absent, malformed, or
+unreadable policy also uses that route. Never use local, head, or layered
+config.
+
+Each child fits the trusted ceiling. Each checkbox-stripped parent acceptance
+criterion appears whole and verbatim in exactly one child, and every child has
+one. Reuse-first check each child against open issues and draft carriers,
+including claim/PR state. If a match cannot safely join the held set, stop
+without publishing; the split after issue `#4064` duplicated child `#4093`
 ([rationale](../../../docs/idd-design-rationale.md#b3--scope-overrun-returns-to-authoring)).
 
 When splitting a roadmap child, follow the issue-authoring contract: check the

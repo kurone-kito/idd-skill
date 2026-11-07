@@ -472,25 +472,25 @@ the comment stands. Never add needs-decision or ask a human
 ([rationale](../../docs/idd-design-rationale.md#b3--scope-overrun-returns-to-authoring)).
 
 **Standing split** is the only helper-runtime exception to the worker-side
-authoring rule and the scope-overrun route above. When its conditions hold,
-skip that route's release/handoff and keep the parent claim and label held
-throughout. Its authority check uses the live base policy. For a PR, read
-`baseRefName` live; otherwise use the live default branch. Run
-`idd-effective-config --trusted-auto-decide --base-ref <base>` (omit
-`--base-ref` without a PR) and require `status: readable`, then read
-`standingApprovals.split.enabled` from `.github/idd/config.json` at that same
-ref through GitHub Contents. The helper validates the trusted policy and
-schema; its auto-decide verdict does not govern split. Never use local/head
-config as authority. An absent, false, malformed, or unreadable value uses the
-existing route.
-Every child must fit the effective `maxCandidateFiles`, each checkbox-stripped
-parent acceptance criterion must appear whole and verbatim in exactly one
-child, and every child must contain at least one such criterion. The hand split
-after issue `#4064` produced duplicate
-child `#4093`; apply the issue-authoring contract's Reuse-first policy to each
-child, including open issues, draft carriers, and their claim/PR state. On a
-match, follow that contract and stop this split if the work cannot safely join
-the held set; never publish a duplicate
+authoring rule and scope-overrun route. When authorized, keep the parent claim
+and label held; skip release and handoff. Use live `baseRefName` for PRs,
+otherwise the live default branch. Require
+`idd-effective-config --trusted-auto-decide --base-ref <base>` to report
+`status: readable` (omit `--base-ref` without a PR). Then read
+`standingApprovals.split.enabled` and
+`standingApprovals.split.maxCandidateFiles` from `.github/idd/config.json` at
+that ref through GitHub Contents. The helper validates the policy against that
+ref's schema; its auto-decide verdict does not govern split. Require
+`enabled: true`; otherwise use the existing route. A missing
+`maxCandidateFiles` uses documented default `8`. An absent, malformed, or
+unreadable policy also uses that route. Never use local, head, or layered
+config.
+Each child fits the trusted ceiling. Each checkbox-stripped parent acceptance
+criterion must appear whole and verbatim in exactly one child, and every child
+must contain at least one. Reuse-first check each child against open issues,
+draft carriers, and their claim/PR state. The hand split after issue `#4064`
+duplicated child `#4093`; if a match cannot safely join the held set, stop
+without publishing a duplicate
 ([rationale](../../docs/idd-design-rationale.md#b3--scope-overrun-returns-to-authoring)).
 
 When splitting a roadmap child, follow the issue-authoring contract: check the

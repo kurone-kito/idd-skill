@@ -768,11 +768,21 @@ choice by closing the issue.
 The worker-side authoring rule has one exception: a scope-overrun split when
 `standingApprovals.split.enabled` is true in the schema-valid trusted policy
 at the PR base (or live default before a PR exists), never from the feature
-checkout. An absent, false, malformed, or unreadable value keeps the existing
-route. Every child fits the effective
-`maxCandidateFiles`, each checkbox-stripped parent criterion appears whole and
-verbatim in exactly one child, and every child contains a parent criterion.
-This procedure replaces the ordinary claim-release and companion-handoff route
+checkout. Use live `baseRefName` for a PR; otherwise use the live default
+branch. Require `idd-effective-config` with `--trusted-auto-decide` to report
+`status: readable`. For PRs, pass `--base-ref <base>`; omit it otherwise.
+Then read
+`standingApprovals.split.enabled` and
+`standingApprovals.split.maxCandidateFiles` from `.github/idd/config.json` at
+that ref through GitHub Contents. The helper validates the policy against that
+ref's schema; its auto-decide verdict does not govern split. Missing `enabled`
+is false; missing `maxCandidateFiles` uses documented default `8`. Malformed,
+absent, or unreadable policy keeps the existing route. Never use local, head,
+or layered config. Every child fits the trusted ceiling. Each
+checkbox-stripped parent acceptance criterion appears whole and verbatim in
+exactly one child, and every child contains at least one. This procedure
+replaces the ordinary
+claim-release and companion-handoff route
 only when all conditions hold. Before saving the complete ordered proposal,
 apply the issue-authoring contract's Reuse-first issue policy to every child,
 including open draft carriers. The hand split of issue `#4064` produced
