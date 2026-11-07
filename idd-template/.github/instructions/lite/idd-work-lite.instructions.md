@@ -285,37 +285,35 @@ draft: it holds this issue, publishes a held roadmap whose children record
 Never add needs-decision or ask a human.
 
 **Standing split** alone bypasses the worker-side scope-overrun route; keep the
-parent claim and label held. Use live `baseRefName` for PRs, else the live
-default branch. Require `idd-effective-config` with
-`--trusted-auto-decide` to report `status: readable`. For PRs, pass
-`--base-ref <base>`; omit it otherwise. Read `standingApprovals.split.enabled` and
+parent claim and label held. Use the live PR `baseRefName`, or the live default
+branch without a PR. `idd-effective-config --trusted-auto-decide` must return
+`status: readable`; pass `--base-ref <base>` only for PRs. Read
+`standingApprovals.split.enabled` and
 `standingApprovals.split.maxCandidateFiles` from `.github/idd/config.json` at
-that ref through GitHub Contents. The helper validates the policy against the
-same-ref schema; its auto-decide verdict does not govern split. Require
-`enabled: true`; otherwise use the existing route. Missing
-`maxCandidateFiles` defaults to documented `8`. An absent, malformed, or
-unreadable policy also uses that route. Never use local, head, or layered
-config.
+that ref through GitHub Contents. The helper validates against that ref's
+schema; its auto-decide verdict does not govern split. Require `enabled: true`;
+otherwise use the existing route. Missing `maxCandidateFiles` defaults to
+documented `8`. Missing, malformed, or unreadable policy uses that route. Never
+use local, head, or layered config.
 
-Each child fits the trusted ceiling. Each checkbox-stripped parent acceptance
-criterion appears whole and verbatim in exactly one child, and every child has
-one. Reuse-first check each child against open issues and draft carriers,
+Each child must fit the trusted ceiling and contain a parent criterion. After
+checkbox removal, each parent criterion appears whole and verbatim in exactly
+one child. Reuse-first check each child against open issues and draft carriers,
 including claim/PR state. If a match cannot safely join the held set, stop
-without publishing; the split after issue `#4064` duplicated child `#4093`
+without publishing; issue `#4064` duplicated child `#4093`
 ([rationale](../../../docs/idd-design-rationale.md#b3--scope-overrun-returns-to-authoring)).
 
-When splitting a roadmap child, follow the issue-authoring contract: check the
-roadmap's claim/PR/execution state, establish per-target ownership, add
-`Split out of #<parent>` to each child, and update/read back each verified child
-in the roadmap's `## Tracks` list. Any conflict keeps the parent and published
-children held.
+For a roadmap child, check the roadmap's claim/PR/execution state, establish
+ownership per target, add `Split out of #<parent>` to each child, and
+update/read back each verified child in `## Tracks`. Conflicts keep the parent
+and published children held.
 
 Only orphan-shaped children qualify. A child needing a sequential-roadmap
-`blocked-by` marker is not an orphan; `--shape child` requires a separately
-held authoring-set anchor, which this claimed parent does not provide. Use the
-existing scope-overrun route before publishing children in that case.
+`blocked-by` marker is not an orphan; `--shape child` needs a separately held
+authoring-set anchor that this claimed parent does not provide. Use the
+existing scope-overrun route before publishing such children.
 
-If any standing-split condition fails, keep the existing comment/release route.
+Otherwise, use the existing comment/release route.
 
 Revalidate the parent claim and add/verify the configured authoring label.
 If it already exists, resume only from the same proposal; otherwise stop on the
