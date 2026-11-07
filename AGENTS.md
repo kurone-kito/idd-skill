@@ -396,7 +396,11 @@ failure:
   its own `pnpm run check` groups, and the `distribution` shard also runs
   `node scripts/check-pnpm-boundary.mjs`. When act does not resolve the
   repository as `kurone-kito/idd-skill`, the `pnpm-boundary-full` job runs
-  the whole suite instead. Neither path has been replayed under act yet.
+  the whole suite instead. The shard path (`pnpm-boundary.yml` with
+  `-j pnpm-boundary`) was replayed locally with act 0.2.94 before PR
+  `#5018`'s first push; that replay exposed lint and test content failures,
+  both fixed before the push. The `pnpm-boundary-full` fallback path has
+  not been replayed under act.
 - `pnpm-boundary-node22-floor`: the same reusable workflow on the Node
   version set by its `node-version` input. It is the only one of the three
   jobs that covers Node 22.
