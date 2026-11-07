@@ -39,6 +39,16 @@ function scopeOverrunRoute(relativePath: string): string {
   return text.slice(start, end === -1 ? undefined : end).replace(/\s+/g, ' ');
 }
 
+/** The verified, body-safe S-to-M report route in a work instruction. */
+function scopeCorrectionRoute(relativePath: string): string {
+  const text = readRepoFile(relativePath).replace(/\s+/gu, ' ');
+  const start = text.indexOf('**Read-only S-to-M correction**');
+  const end = text.indexOf('**Scope overrun**', start);
+  assert.notEqual(start, -1, `${relativePath} has the correction cue`);
+  assert.notEqual(end, -1, `${relativePath} retains the overrun route`);
+  return text.slice(start, end);
+}
+
 /**
  * An issue body whose `## Candidate files` lists the diff's changed
  * files, so the shipped threshold rule measures the real scope against
@@ -245,6 +255,47 @@ const LITE_WORK_PATHS = [
   'idd-template/.github/instructions/lite/idd-work-lite.instructions.md',
   '.github/instructions/lite/idd-work-lite.instructions.md',
 ] as const;
+
+const CORRECTION_ORDERED_STEPS = [
+  '`assessment.correctionApplied: true`',
+  'raw-body SHA-256',
+  'assessment SHA-256',
+  'unique attempt ID',
+  'complete `idd-agent-authored` suffix',
+  'returned comment ID, author and exact body',
+  'uncertain POST by its attempt ID',
+  '`--apply --expected-scope-sha256',
+  'before push',
+] as const;
+
+for (const relativePath of [...WORK_PHASE_PATHS, ...LITE_WORK_PATHS]) {
+  test(`${relativePath}: S-to-M correction verifies the report before guarded apply`, () => {
+    const route = scopeCorrectionRoute(relativePath);
+    const cue = route.slice(0, route.indexOf(':'));
+    assert.ok(
+      Buffer.byteLength(cue, 'utf8') <= 80,
+      'the cue stays under 80 bytes',
+    );
+    const positions = CORRECTION_ORDERED_STEPS.map((step) =>
+      route.indexOf(step),
+    );
+    for (const [index, position] of positions.entries()) {
+      assert.notEqual(position, -1, CORRECTION_ORDERED_STEPS[index]);
+    }
+    assert.deepEqual(
+      [...positions].sort((left, right) => left - right),
+      positions,
+      'report evidence, verification and guarded apply stay ordered',
+    );
+    assert.match(route, /Do not edit (?:or roll back )?the issue body/u);
+    assert.match(route, /reconcile an uncertain POST by its attempt ID/u);
+    assert.match(
+      route,
+      /unverified report stops continuation and retains the claim|If unverified, retain the claim and stop/u,
+    );
+    assert.doesNotMatch(route, /gh issue edit|PATCH \/repos\//u);
+  });
+}
 
 const LITE_ORDERED_STEPS = [
   '(helper runtime only)',

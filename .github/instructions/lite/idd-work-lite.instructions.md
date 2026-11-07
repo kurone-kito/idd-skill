@@ -275,7 +275,22 @@ never release a follow-up or start a second loop. If the companion is
 unavailable, record the proposal in a separate comment and PR follow-ups; never
 create it ad hoc or improvise worker-side authoring.
 
-**Scope overrun** (helper runtime only): when the profile-selected
+**Read-only S-to-M correction**: when `claimed-push` dry-run returns
+`assessment.correctionApplied: true`, report S, M, canonical paths/count,
+claim ID, raw-body SHA-256, assessment SHA-256 and a unique attempt ID.
+Before posting, revalidate claim, nonce, worktree, lock and tokens; re-read the
+issue and rerun dry-run if the body or assessment changed. Add the complete
+`idd-agent-authored` suffix. Verify the returned comment ID, author and exact
+body; reconcile an uncertain POST by its attempt ID. If unverified, retain the
+claim and stop. Do not edit or roll back the issue body. Then run helper
+`--apply --expected-scope-sha256 <assessment-sha256>`; it recomputes scope and
+checks the same assessment before the gate and again before push. On change,
+stop, reassess and report again. Never inherit the report across a claim
+change or resume. If structured assessment is absent, use the existing
+scope-overrun route.
+
+**Scope overrun** (helper runtime only): unless that correction applies,
+when the profile-selected
 `audit-authored-issue --shape child --stdin --marker-prefix {markerPrefix}`
 fails `effort-candidate-file-limit` on the issue body or with
 `## Candidate files` set to the diff's canonical paths, stop coding without

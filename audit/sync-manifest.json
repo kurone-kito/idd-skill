@@ -374,7 +374,7 @@
       "files": [
         ".github/instructions/lite/idd-work-lite.instructions.md"
       ],
-      "limitBytes": 24000
+      "limitBytes": 26000
     },
     {
       "id": "bundle-resume-lite",
@@ -490,6 +490,12 @@
     "noticeUtilizationPct": 95,
     "exemptBundles": [],
     "nearCeilingRaiseApprovals": [
+      {
+        "bundle": "bundle-work-lite",
+        "limitBytes": 26000,
+        "issue": 5030,
+        "reason": "The operator approved this limit for bundle-work-lite in issue #5030 comment #6706528642. The corrected pre-change generated measurement is 23,596 bytes per comment #6706762777. Issue #5092 brings the current banner-stripped bundle to 24,471 bytes, leaving 1,529 bytes of headroom (6.25%) at 94.12% utilization, below the 95% notice band. The shared 98% enforcement and 196,000-byte maximum remain unchanged."
+      },
       {
         "bundle": "bundle-orchestrator-phase",
         "limitBytes": 6300,
