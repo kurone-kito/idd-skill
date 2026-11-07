@@ -99,6 +99,13 @@ test('only standard Worktree creation Step 2 uses the development branch', () =>
       ),
       relativePath,
     );
+    for (const command of [
+      'macOS/Linux: `wt switch --create -b origin/<base-branch> <branch-name>`',
+      'Windows: `git-wt switch --create -b origin/<base-branch> <branch-name>`',
+      'same `wt switch --create -b origin/<base-branch> <branch-name>` if `git-wt` is unavailable',
+    ]) {
+      assert.ok(creation.includes(command), `${relativePath}: ${command}`);
+    }
     const otherSteps = b1
       .replace(creationStep[0], '')
       .replace('Never use\n   `developmentBranch`.', '');
