@@ -31,6 +31,154 @@ function readWorkflow(name: string): string {
   );
 }
 
+type SetupNodeWorkflowSource = Readonly<{ path: string; contents: string }>;
+
+const SETUP_NODE_USE_LINE =
+  /^\s*(?:-\s+)?uses:\s*actions\/setup-node@([0-9a-fA-F]{40}) # v\d+\.\d+\.\d+\s*$/;
+
+function sharedSetupNodePinFromSources(
+  sources: readonly SetupNodeWorkflowSource[],
+): string {
+  const pins: string[] = [];
+  for (const source of sources) {
+    for (const [index, line] of source.contents.split(/\r?\n/).entries()) {
+      if (line.trimStart().startsWith('#')) {
+        continue;
+      }
+      if (!line.includes('actions/setup-node@')) {
+        continue;
+      }
+      const match = SETUP_NODE_USE_LINE.exec(line);
+      const pin = match?.[1];
+      assert.ok(
+        pin,
+        `${source.path}:${index + 1}: setup-node uses must pin a 40-hex SHA with a same-line semver comment`,
+      );
+      pins.push(pin);
+    }
+  }
+
+  assert.ok(pins.length > 0, 'at least one real setup-node use must exist');
+  const uniquePins = new Set(pins);
+  assert.equal(uniquePins.size, 1, 'all setup-node uses must share one SHA');
+  const sharedPin = [...uniquePins].at(0);
+  assert.ok(sharedPin, 'the shared setup-node pin must be present');
+  return sharedPin;
+}
+
+function readSharedSetupNodePin(): string {
+  const workflowsDirectory = fileURLToPath(
+    new URL(`../.github/${WORKFLOWS_DIR}/`, import.meta.url),
+  );
+  const sources = readdirSync(workflowsDirectory)
+    .filter((name) => name.endsWith('.yml'))
+    .sort()
+    .map((name) => ({
+      path: `.github/${WORKFLOWS_DIR}/${name}`,
+      contents: readFileSync(join(workflowsDirectory, name), 'utf8'),
+    }));
+  return sharedSetupNodePinFromSources(sources);
+}
+
+function setupNodeUseLine(sha: string): string {
+  return `        uses: actions/setup-node@${sha} # v1.2.3`;
+}
+
+test('the shared setup-node pin reader accepts one uniform pin and rejects malformed uses', () => {
+  const currentPin = readSharedSetupNodePin();
+  const replacementPin =
+    currentPin.toLowerCase() === 'a'.repeat(40)
+      ? 'b'.repeat(40)
+      : 'a'.repeat(40);
+  const source = (path: string, lines: readonly string[]) => ({
+    path,
+    contents: lines.join('\n'),
+  });
+
+  assert.equal(
+    sharedSetupNodePinFromSources([
+      source('first.yml', [setupNodeUseLine(currentPin)]),
+      source('second.yml', [setupNodeUseLine(currentPin)]),
+    ]),
+    currentPin,
+  );
+  assert.equal(
+    sharedSetupNodePinFromSources([
+      source('first.yml', [
+        `      - uses: actions/setup-node@${replacementPin} # v1.2.3`,
+      ]),
+      source('second.yml', [setupNodeUseLine(replacementPin)]),
+    ]),
+    replacementPin,
+  );
+
+  assert.throws(
+    () =>
+      sharedSetupNodePinFromSources([
+        source('first.yml', [setupNodeUseLine(currentPin)]),
+        source('second.yml', [setupNodeUseLine(replacementPin)]),
+      ]),
+    /all setup-node uses must share one SHA/,
+  );
+
+  for (const ref of ['v7.1.0', 'main']) {
+    assert.throws(
+      () =>
+        sharedSetupNodePinFromSources([
+          source('invalid.yml', [
+            `        uses: actions/setup-node@${ref} # v1.2.3`,
+          ]),
+        ]),
+      /same-line semver comment/,
+    );
+  }
+
+  assert.throws(
+    () =>
+      sharedSetupNodePinFromSources([
+        source('invalid.yml', [
+          '      -uses: actions/setup-node@' + currentPin + ' # v1.2.3',
+        ]),
+      ]),
+    /same-line semver comment/,
+  );
+
+  for (const line of [
+    `        uses: actions/setup-node@${currentPin}`,
+    `        uses: actions/setup-node@${currentPin} # version one`,
+  ]) {
+    assert.throws(
+      () => sharedSetupNodePinFromSources([source('invalid.yml', [line])]),
+      /same-line semver comment/,
+    );
+  }
+
+  assert.throws(
+    () =>
+      sharedSetupNodePinFromSources([
+        source('mixed.yml', [
+          setupNodeUseLine(currentPin),
+          '        uses: actions/setup-node@invalid # v1.2.3',
+        ]),
+      ]),
+    /same-line semver comment/,
+  );
+
+  const commentOnlyPin = `# uses: actions/setup-node@${replacementPin} # v1.2.3`;
+  assert.equal(
+    sharedSetupNodePinFromSources([
+      source('real.yml', [setupNodeUseLine(currentPin)]),
+      source('comment.yml', [commentOnlyPin]),
+    ]),
+    currentPin,
+  );
+  assert.throws(
+    () =>
+      sharedSetupNodePinFromSources([source('comment.yml', [commentOnlyPin])]),
+    /at least one real setup-node use must exist/,
+  );
+});
+
 // In the Linux `lint` job, checkout is the only action before the Node floor assertion. Keep its
 // immutable ref explicit: an earlier JavaScript/composite action can change
 // GITHUB_PATH for every later step, so an unreviewed action can replace node.
@@ -1172,6 +1320,7 @@ function assertFloorImmediatelyFollowsCheckout(
 
 function assertWindowsNodeSetupBeforeCheckout(workflow: string): void {
   const steps = workflowStepBlocks(workflow, 'lint-windows');
+  const sharedPin = readSharedSetupNodePin();
   const setupIndex = steps.findIndex((step) =>
     /^ {6}- name: Setup Node\.js$/m.test(step),
   );
@@ -1187,11 +1336,44 @@ function assertWindowsNodeSetupBeforeCheckout(workflow: string): void {
     setupIndex < checkoutIndex,
     'lint-windows: Node setup must precede checkout',
   );
+  const setupStep = steps[setupIndex];
+  assert.ok(setupStep, 'lint-windows: Node setup step must be present');
+  const setupUseLines = setupStep
+    .split(/\r?\n/)
+    .filter(
+      (line) =>
+        !line.trimStart().startsWith('#') &&
+        line.includes('actions/setup-node@'),
+    );
   assert.equal(
-    steps[setupIndex],
+    setupUseLines.length,
+    1,
+    'lint-windows: Node setup must have exactly one setup-node use',
+  );
+  const setupUseLine = setupUseLines.at(0);
+  assert.ok(setupUseLine, 'lint-windows: Node setup uses line must be present');
+  const setupUseMatch = SETUP_NODE_USE_LINE.exec(setupUseLine);
+  assert.ok(
+    setupUseMatch,
+    'lint-windows: Node setup must use a 40-hex pin with a semver comment',
+  );
+  assert.equal(
+    setupUseMatch[1],
+    sharedPin,
+    'lint-windows: Node setup must use the shared workflow pin',
+  );
+  const setupStepWithoutComments = setupStep
+    .split(/\r?\n/)
+    .filter((line) => !line.trimStart().startsWith('#'))
+    .join('\n');
+  assert.equal(
+    setupStepWithoutComments.replace(
+      setupUseLine,
+      '        <shared setup-node pin>',
+    ),
     [
       '      - name: Setup Node.js',
-      '        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0',
+      '        <shared setup-node pin>',
       '        with:',
       '          check-latest: true',
       '          node-version: 24.x',
@@ -1527,6 +1709,17 @@ test('all mirrored Node floor checks follow checkout and share one program', () 
 
   assertWindowsNodeSetupBeforeCheckout(readWorkflow('lint.yml'));
   assert.equal(new Set(programs).size, 1);
+});
+
+test('lint-windows setup ignores comments that mention setup-node', () => {
+  const workflow = readWorkflow('lint.yml');
+  const annotatedWorkflow = workflow.replace(
+    /^ {6}- name: Setup Node\.js$/m,
+    (stepLine) =>
+      `${stepLine}\n        # This comment mentions actions/setup-node@ without adding a use.`,
+  );
+  assert.notEqual(annotatedWorkflow, workflow);
+  assertWindowsNodeSetupBeforeCheckout(annotatedWorkflow);
 });
 
 function evaluateNodeFloorProgram(
