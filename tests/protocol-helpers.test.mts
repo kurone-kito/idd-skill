@@ -6435,6 +6435,199 @@ test('a legacy caller that passes only the boolean gate still reports mode-disab
   assert.deepEqual(reasons, ['mode-disabled']);
 });
 
+test('forced-handoff trace keeps only accepted edges and breaks on release or an independent claim', () => {
+  const branch = 'issue/50-task';
+  const claim = (
+    agentId: string,
+    claimId: string,
+    supersedes: string,
+    createdAt: string,
+  ) => ({
+    author: { login: 'maintainer' },
+    createdAt,
+    lastEditedAt: null,
+    body: `<!-- claimed-by: ${agentId} ${claimId} supersedes: ${supersedes} ${createdAt} branch: ${branch} -->`,
+  });
+  const handoff = (
+    oldAgentId: string,
+    oldClaimId: string,
+    newAgentId: string,
+    newClaimId: string,
+    createdAt: string,
+    options: {
+      author?: string;
+      forcedBy?: string;
+      linkedPr?: string;
+      branch?: string;
+    } = {},
+  ) => {
+    const payload = {
+      oldAgentId,
+      oldClaimId,
+      newAgentId,
+      newClaimId,
+      branch: options.branch ?? branch,
+      forcedBy: options.forcedBy ?? 'maintainer',
+      reason: 'handoff',
+      timestamp: createdAt,
+      contextScope: 'issue-plus-pr',
+      linkedPr: options.linkedPr ?? '77',
+    };
+    return {
+      author: { login: options.author ?? 'maintainer' },
+      createdAt,
+      lastEditedAt: null,
+      body: `<!-- forced-handoff: ${JSON.stringify(payload)} -->\n\n_maintainer: forced handoff — IDD automation marker. Do not edit._`,
+    };
+  };
+  const events = [
+    claim('agent-a', 'claim-a', 'none', '2026-06-01T10:00:00Z'),
+    handoff('agent-a', 'claim-a', 'agent-b', 'claim-b', '2026-06-01T10:01:00Z'),
+    handoff(
+      'agent-b',
+      'claim-b',
+      'agent-x',
+      'claim-unauthorized',
+      '2026-06-01T10:02:00Z',
+      { forcedBy: 'unauthorized' },
+    ),
+    handoff(
+      'agent-b',
+      'claim-b',
+      'agent-y',
+      'claim-wrong-pr',
+      '2026-06-01T10:03:00Z',
+      { linkedPr: '88' },
+    ),
+    handoff(
+      'agent-b',
+      'claim-b',
+      'agent-y',
+      'claim-wrong-branch',
+      '2026-06-01T10:04:00Z',
+      { branch: 'issue/51-other' },
+    ),
+    handoff(
+      'agent-b',
+      'claim-b',
+      'agent-z',
+      'claim-untrusted',
+      '2026-06-01T10:05:00Z',
+      { author: 'stranger' },
+    ),
+    {
+      ...handoff(
+        'agent-b',
+        'claim-b',
+        'agent-z',
+        'claim-edited',
+        '2026-06-01T10:06:00Z',
+      ),
+      lastEditedAt: '2026-06-01T10:07:00Z',
+    },
+    handoff('agent-b', 'claim-b', 'agent-c', 'claim-c', '2026-06-01T10:08:00Z'),
+  ];
+  const options = {
+    isTrustedAuthor: (login: string) => login === 'maintainer',
+    isForcedHandoffEnabled: buildForcedHandoffEnableGate({
+      forcedHandoffEnabled: true,
+      expectedLinkedPrReferences: new Set(['77']),
+    }),
+    isAuthorizedForcedHandoff: (forcedBy: string) => forcedBy === 'maintainer',
+    requireAuthorMatchesForcedBy: true,
+  };
+
+  const trace = resolveActiveClaimWithForcedHandoffTrace(events, options);
+  assert.equal(trace.activeClaim?.claimId, 'claim-c');
+  assert.deepEqual(
+    trace.verifiedForcedHandoffChain.map((entry) => [
+      entry.oldClaimId,
+      entry.newClaimId,
+      entry.createdAt,
+    ]),
+    [
+      ['claim-a', 'claim-b', '2026-06-01T10:01:00Z'],
+      ['claim-b', 'claim-c', '2026-06-01T10:08:00Z'],
+    ],
+  );
+
+  const releaseEvent = {
+    author: { login: 'maintainer' },
+    createdAt: '2026-06-01T10:09:00Z',
+    lastEditedAt: null,
+    body: '<!-- unclaimed-by: agent-c claim-c 2026-06-01T10:09:00Z -->',
+  };
+  const released = resolveActiveClaimWithForcedHandoffTrace(
+    [...events, releaseEvent],
+    options,
+  );
+  assert.equal(released.activeClaim, null);
+  assert.deepEqual(released.verifiedForcedHandoffChain, []);
+
+  const afterRelease = resolveActiveClaimWithForcedHandoffTrace(
+    [
+      ...events,
+      releaseEvent,
+      claim('agent-d', 'claim-after-release', 'none', '2026-06-01T10:10:00Z'),
+      handoff(
+        'agent-d',
+        'claim-after-release',
+        'agent-e',
+        'claim-after-release-successor',
+        '2026-06-01T10:11:00Z',
+      ),
+    ],
+    options,
+  );
+  assert.equal(
+    afterRelease.activeClaim?.claimId,
+    'claim-after-release-successor',
+  );
+  assert.deepEqual(
+    afterRelease.verifiedForcedHandoffChain.map((entry) => [
+      entry.oldClaimId,
+      entry.newClaimId,
+    ]),
+    [['claim-after-release', 'claim-after-release-successor']],
+  );
+
+  const independent = resolveActiveClaimWithForcedHandoffTrace(
+    [
+      ...events,
+      claim('agent-d', 'claim-independent', 'claim-c', '2026-06-02T10:00:00Z'),
+    ],
+    { ...options, isStale: () => true },
+  );
+  assert.equal(independent.activeClaim?.claimId, 'claim-independent');
+  assert.deepEqual(independent.verifiedForcedHandoffChain, []);
+
+  const afterIndependentClaim = resolveActiveClaimWithForcedHandoffTrace(
+    [
+      ...events,
+      claim('agent-d', 'claim-independent', 'claim-c', '2026-06-02T10:00:00Z'),
+      handoff(
+        'agent-d',
+        'claim-independent',
+        'agent-e',
+        'claim-independent-successor',
+        '2026-06-02T10:01:00Z',
+      ),
+    ],
+    { ...options, isStale: () => true },
+  );
+  assert.equal(
+    afterIndependentClaim.activeClaim?.claimId,
+    'claim-independent-successor',
+  );
+  assert.deepEqual(
+    afterIndependentClaim.verifiedForcedHandoffChain.map((entry) => [
+      entry.oldClaimId,
+      entry.newClaimId,
+    ]),
+    [['claim-independent', 'claim-independent-successor']],
+  );
+});
+
 test('an unparseable first-commit time is reported as unknown, like a missing one', () => {
   const explain = buildForcedHandoffRefusalExplainer({
     forcedHandoffEnabled: true,
