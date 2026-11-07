@@ -75,6 +75,14 @@ Check `git worktree list` and the target path before creating anything:
   its history with a fresh branch. If an unexpected branch cannot be
   safely deleted, preserve it and stop for a decision.
 
+Before a fresh-claim create command, run `git branch --list
+<claimed-branch>`. If the branch exists, follow step 3 in the
+[B1 phase instructions](../.github/instructions/idd-work.instructions.md#b1--create-worktree-with-branch)
+to reuse an inheritable branch for a takeover, safely delete an
+unexpected leftover, or stop for manual cleanup when step 3 requires a
+hold. Do not run the fresh-claim command until the local branch check
+is clear.
+
 During A5, before the claim POST, resolve and fetch the development
 branch. For a fresh claim, create the branch from that base without
 tracking it:
