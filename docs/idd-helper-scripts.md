@@ -7677,8 +7677,15 @@ means restart E1; do not include a later CI pass in the watermark.
 - `evidence.forced_handoff` (kurone-kito/idd-skill#2178, #5078): populated on
   **any** call, including a bare `--issue` call with no `--claim-id`, when
   the latest applied, trusted, rule-7-valid `forced-handoff` transition ends
-  at the resolved active claim; `null` otherwise. Its existing top-level
-  transition fields describe that latest handoff. The additive
+  at the resolved active claim and the lookup-failure override below does
+  not apply; `null` otherwise. The override (issue `#3276`, maintainer decision
+  2026-09-24) applies when an `issue-only` handoff is blocked solely by a
+  failed linked-PR lookup, `--claim-id` names its old or new claim, and its
+  old claim remains active. The result is `disputed`/`stop` with reason
+  `forced-handoff-linked-pr-lookup-failed`; the entire
+  `evidence.forced_handoff` is suppressed to `null`, even if earlier accepted
+  handoff ancestry ends at that active claim. Outside that override, its
+  existing top-level transition fields describe the latest handoff. The additive
   `verified_chain` array describes the accepted, uninterrupted lineage:
   - Entries follow the claim reducer's accepted transition order, oldest
     first, ending with the latest applied handoff. Each entry contains
