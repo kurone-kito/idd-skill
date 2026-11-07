@@ -178,7 +178,9 @@ needs-decision, blocked-by-human, and out-of-scope.
    default is a dry run), as
    [Draft carrier](references/contract.md#draft-carrier) defines. When a
    ready child's original set no longer proves a held anchor, follow the
-   [re-anchoring procedure](references/contract.md#re-anchor-a-child-when-its-original-set-is-unavailable).
+   [re-anchoring procedure](references/contract.md#re-anchor-a-child-when-its-original-set-is-unavailable),
+   including its recorded roadmap-create intent, immediate carrier mapping,
+   defer-source reference exception, and live `## Tracks` check before closure.
    Observed 2026-11-05 on carrier issue #5054; see the
    [design rationale](https://github.com/kurone-kito/idd-skill/blob/main/docs/idd-design-rationale.md#cite-the-observed-incident).
    A preview request also publishes a carrier, and the drafts are shown in

@@ -4162,40 +4162,58 @@ stays the separate Stage 2 step that a person requests.
 
 ### Re-anchor a child when its original set is unavailable
 
-When the child
-publisher refuses because the original anchor cannot prove a currently held
-set, continue only if the carrier is still ready. Under the verified carrier
-coordination claim, re-read the carrier and its comments, counting only trusted
-mapping comments; refresh the draft against the current default branch; and
-check current claims, linked pull requests, and duplicate or reuse candidates
-before creating anything. If a target already exists, a conflicting issue or
-pull request exists, the carrier is no longer ready, or uncertain owner
-history is needed to establish provenance, stop and reconcile without
-publishing. The hidden-only owner-marker rule remains fail-closed: do not
-unhide comments, infer completion, or edit the old anchor's body, labels, or
-owner-marker history.
+When the child publisher refuses because the original anchor cannot prove a
+currently held set, continue only if the carrier is still ready. Under the
+verified carrier coordination claim, which has no worktree, re-read the
+carrier and its comments, counting only trusted mapping comments; refresh the
+draft against the current default branch; inspect the current source branch
+and recent issue and pull-request history; and check current claims, linked
+pull requests, and duplicate or reuse candidates before creating anything. If
+a target already exists, a conflicting issue or pull request exists, the
+carrier is no longer ready, or uncertain owner history is needed to establish
+provenance, stop and reconcile without publishing. The hidden-only owner-marker
+rule remains fail-closed: do not unhide comments, infer completion, or edit the
+old anchor's body, labels, or owner-marker history.
 
 Use an existing set only when its trusted owner history proves that it is an
 open held set that owns this draft. Otherwise, do not reuse a released or
-completed set or repurpose an unrelated issue as an anchor. Review and lint an
-empty roadmap shell against the current default branch, then publish it under
-the normal authoring hold with `publish-authoring-hold --shape roadmap`. The
-new roadmap is the anchor of a distinct set. Re-review and re-lint the child
-against the current default branch, then publish it under the hold with
+completed set or repurpose an unrelated issue as an anchor. Prepare an empty
+roadmap shell with a unique token, the draft title, and a
+`Refs #<carrier> (non-blocking)` line, then review and lint that shell against
+the current default branch. Before creating it, post a trusted, unedited intent
+comment on the carrier that records the draft's `###` title, the refreshed
+draft body's SHA-256, the intended roadmap title, and the same unique token.
+Publish the shell under the normal authoring hold with
+`publish-authoring-hold --shape roadmap`, then immediately post a trusted
+carrier mapping that links the token and draft to the roadmap issue number.
+That mapping closes the intent.
+Before another roadmap create, reconcile every
+unresolved intent against the journal and recent issue history: continue only
+from one verified held roadmap, or start a new intent when evidence proves the
+previous create did not happen. If the result is absent, ambiguous, or
+inconclusive, stop without repeating the create. The new roadmap is the anchor
+of a distinct set. Re-review and re-lint the child against the current default
+branch, then publish it under the hold with
 `publish-authoring-hold --shape child --anchor <fresh-roadmap>`. Preserve the
 non-blocking carrier reference and any source provenance, such as
-`Split out of #<source>`.
+`Split out of #<source>`; when the child has a defer-source marker, keep its
+single source `Refs` line and do not add a carrier `Refs` line.
 
 Immediately after each successful child create, post a trusted mapping comment
 on the carrier naming the draft and published issue. Once the child number is
 known, update the new roadmap's `## Tracks` list under its current owner
 generation; re-review and re-lint that refreshed roadmap body before saving
-the edit. Close the carrier only after every draft is published or dropped
-with a recorded reason. If a create, mapping, Tracks update, or close has an
-uncertain outcome, keep the carrier open, retain the exact issue identities
-and journal evidence, and read and reconcile live state before retrying; never
-repeat an uncertain create. Release the coordination claim last. Keep the new
-roadmap and child under the authoring hold for a separate Stage 2 release.
+the edit. Before closing the carrier, re-read each mapped roadmap under its
+current owner generation and verify that its live `## Tracks` lists every
+mapped child. If any child is missing, keep the carrier open, update and
+re-review/re-lint the roadmap, then verify the saved list. Close the carrier
+only after every draft is published or dropped with a recorded reason and all
+mapped children pass that check. If a create, mapping, Tracks update, or close
+has an uncertain outcome, keep the carrier open, retain the exact issue
+identities and journal evidence, and read and reconcile live state before
+retrying; never repeat an uncertain create. Release the coordination claim
+last. Keep the new roadmap and child under the authoring hold for a separate
+Stage 2 release.
 
 Observed 2026-11-05 during the replay recorded on carrier issue #5054; see
 [the design rationale](https://github.com/kurone-kito/idd-skill/blob/main/docs/idd-design-rationale.md#cite-the-observed-incident).
