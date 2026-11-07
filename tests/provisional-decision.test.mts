@@ -3040,7 +3040,7 @@ test('apply appends work-completed, verifies it, then applies and reads back the
   assert.equal(store.labelPresent, true);
   assert.deepEqual(
     store.labelCalls.map(({ apply }) => apply),
-    [false, true],
+    [false, false, true],
   );
   assert.equal(
     store.history.comments.filter(
@@ -3080,7 +3080,7 @@ test('a completion retry defaults to dry-run and applies only the missing label'
   assert.equal(store.labelPresent, true);
   assert.deepEqual(
     store.labelCalls.map(({ apply }) => apply),
-    [false, false, true],
+    [false, false, false, true],
   );
 });
 
@@ -3288,6 +3288,51 @@ test('step-8 holds a completion retry when confirmation arrives before label app
   assert.equal(store.appendCalls, 0);
   assert.equal(store.labelPresent, false);
   assert.ok(store.labelCalls.every(({ apply }) => !apply));
+});
+
+test('step-10 replays history immediately before applying a completion label', async (t) => {
+  for (const response of ['accepted', 'rework'] as const) {
+    await t.test(
+      `${response} arriving after the prior read holds`,
+      async () => {
+        const { store, transitionedHistory } =
+          await bundleTransitionFixture(response);
+        store.history = {
+          ...transitionedHistory,
+          comments: transitionedHistory.comments.filter(
+            (item) => item.id !== '8' && item.id !== '9',
+          ),
+          serverDate: 'Tue, 03 Nov 2026 11:00:08 GMT',
+        };
+        store.historyReads = 0;
+        store.readHistoryHook = (readNumber, current) => {
+          if (readNumber === 3) current.history = transitionedHistory;
+        };
+
+        const result = await runProvisionalDecisionCommand(
+          request({
+            type: 'work-completed',
+            pullRequestUrl: prUrl,
+            verifiedHeadSha: headSha,
+            executionCriteriaSatisfied: true,
+          }),
+          store,
+          { apply: true },
+        );
+
+        assertRefused(result, 'recovery-hold');
+        if (result.state === 'refused') {
+          assert.match(
+            result.reason ?? '',
+            /step-10 decision history or stored record changed/u,
+          );
+        }
+        assert.equal(store.appendCalls, 0);
+        assert.equal(store.labelPresent, false);
+        assert.ok(store.labelCalls.every(({ apply }) => !apply));
+      },
+    );
+  }
 });
 
 test('a completion label apply or read-back failure reconciles without deleting the record', async (t) => {

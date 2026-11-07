@@ -1126,6 +1126,60 @@ async function applyCompletionLabel(request, store, planned) {
       commentUrl,
     };
   }
+  // The read-back can go stale before this label side effect.
+  let finalRead;
+  try {
+    finalRead = await planProvisionalDecisionCommand(request, store);
+  } catch (error) {
+    return recoveryHold(
+      planned,
+      `step-10 fresh read failed: ${errorText(error)}`,
+      recordId,
+      commentUrl,
+    );
+  }
+  if (finalRead.state === 'reconciled') return finalRead;
+  if (finalRead.state === 'refused') {
+    if (finalRead.action === 'fix-input') {
+      return refused(
+        'fix-input',
+        finalRead.reason ?? 'step-10 gates no longer pass',
+        recordId,
+        commentUrl,
+      );
+    }
+    return recoveryHold(
+      finalRead,
+      `step-10 fresh read no longer permits label application: ${finalRead.reason ?? finalRead.action}`,
+      recordId,
+      commentUrl,
+    );
+  }
+  if (finalRead.state !== 'planned') {
+    return recoveryHold(
+      finalRead,
+      'step-10 fresh read did not return a plan',
+      recordId,
+      commentUrl,
+    );
+  }
+  const finalPlan = finalRead.plan;
+  const finalExistingRecord = finalPlan.existingRecord;
+  if (
+    stepEightPlanChanged(resultPlan, finalPlan) ||
+    finalPlan.locatedDecision?.status !== 'confirmation-pending' ||
+    !finalExistingRecord ||
+    finalExistingRecord.commentId !== existingRecord.commentId ||
+    finalExistingRecord.commentUrl !== commentUrl ||
+    finalExistingRecord.labelPresent
+  ) {
+    return recoveryHold(
+      finalRead,
+      'step-10 decision history or stored record changed before label application',
+      recordId,
+      commentUrl,
+    );
+  }
   try {
     const label = await store.applyOrReadDecisionLabel({
       labelName: chooseLabelName(),
