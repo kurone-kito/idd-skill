@@ -1117,6 +1117,29 @@
             "activation-nonce-mismatch",
             "not-applicable"
           ]
+        },
+        "scopeOverrun": {
+          "type": "object",
+          "description": "Claim-bound effort scope audit, present only when a real claim id and issue are supplied.",
+          "required": ["status", "reason", "recordedHeadSha"],
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "type": "string",
+              "description": "Whether the overrun record is missing, invalid, or valid.",
+              "enum": ["missing", "invalid", "valid"]
+            },
+            "reason": {
+              "type": "string",
+              "description": "Why the overrun record passed or failed validation.",
+              "minLength": 1
+            },
+            "recordedHeadSha": {
+              "type": ["string", "null"],
+              "description": "The full PR head SHA recorded by valid post-push evidence, or null when there is no valid record.",
+              "pattern": "^[0-9a-f]{40}$"
+            }
+          }
         }
       }
     },
@@ -1991,26 +2014,6 @@
         }
       },
       "additionalProperties": false
-    },
-    "scopeOverrun": {
-      "type": "object",
-      "description": "Claim-bound effort scope evidence. Present only when the issue body or canonical PR changed paths exceed the effort candidate-file limit.",
-      "required": ["status", "reason", "recordedHeadSha"],
-      "additionalProperties": false,
-      "properties": {
-        "status": {
-          "type": "string",
-          "enum": ["missing", "invalid", "valid"]
-        },
-        "reason": {
-          "type": "string",
-          "minLength": 1
-        },
-        "recordedHeadSha": {
-          "type": ["string", "null"],
-          "pattern": "^[0-9a-f]{40}$"
-        }
-      }
     },
     "ready": {
       "description": "Strict merge-gate rollup: true only when blockers is empty. Does NOT apply the dispositionEvidence.soleCauseAckOnlyPostDisposition override (a separate flag the F2 checklist layers on top).",

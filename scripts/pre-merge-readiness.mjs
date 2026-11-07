@@ -914,8 +914,19 @@ export function collectPreMergeReadiness(
       : [],
   });
   let scopeOverrun;
-  if (!args.claimless && args.claimIssueNumber !== null) {
-    const claimedIssue = port.getWorkItem(args.claimIssueNumber);
+  if (
+    !args.claimless &&
+    args.claimIssueNumber !== null &&
+    args.expectedClaimId !== '' &&
+    args.expectedClaimId !== 'none'
+  ) {
+    let claimedIssue = null;
+    try {
+      claimedIssue = port.getWorkItem(args.claimIssueNumber);
+    } catch {
+      // An unreadable issue cannot establish that its changed scope is within
+      // the authored effort limit, so report an invalid audit below.
+    }
     if (
       !claimedIssue ||
       typeof claimedIssue.title !== 'string' ||
@@ -923,36 +934,39 @@ export function collectPreMergeReadiness(
       typeof claimedIssue.body !== 'string' ||
       claimedIssue.body.trim() === ''
     ) {
-      throw new Error(
-        `scope-overrun audit cannot read issue #${args.claimIssueNumber} title and body`,
-      );
+      scopeOverrun = {
+        status: 'invalid',
+        reason: 'issue-unreadable',
+        recordedHeadSha: null,
+      };
+    } else {
+      scopeOverrun = resolveScopeOverrunReadiness({
+        issue: {
+          number: args.claimIssueNumber,
+          title: claimedIssue.title,
+          body: claimedIssue.body,
+        },
+        pullRequestNumber: args.prNumber,
+        headSha: prHeadSha,
+        baseRef: baseRefName,
+        changedFiles,
+        renamedFromPaths: port.listChangeRequestRenamedFromPaths(args.prNumber),
+        comments: claimComments.map((comment) => ({
+          id: comment.id,
+          createdAt: comment.created_at,
+          body: comment.body,
+          authorLogin: comment.user?.login,
+          lastEditedAt: comment.last_edited_at,
+        })),
+        markerPrefix: iddConfig?.markerPrefix,
+        trustedMarkerLogins,
+        currentRepo: `${owner}/${repo}`,
+        policyConfig: iddConfig,
+        readCurrentBranch: () => port.getChangeRequestHeadRef(args.prNumber),
+        readBaseFile: (path, ref) =>
+          port.getRepositoryFileContentAtRef(`${owner}/${repo}`, path, ref),
+      });
     }
-    scopeOverrun = resolveScopeOverrunReadiness({
-      issue: {
-        number: args.claimIssueNumber,
-        title: claimedIssue.title,
-        body: claimedIssue.body,
-      },
-      pullRequestNumber: args.prNumber,
-      headSha: prHeadSha,
-      baseRef: baseRefName,
-      changedFiles,
-      renamedFromPaths: port.listChangeRequestRenamedFromPaths(args.prNumber),
-      comments: claimComments.map((comment) => ({
-        id: comment.id,
-        createdAt: comment.created_at,
-        body: comment.body,
-        authorLogin: comment.user?.login,
-        lastEditedAt: comment.last_edited_at,
-      })),
-      markerPrefix: iddConfig?.markerPrefix,
-      trustedMarkerLogins,
-      currentRepo: `${owner}/${repo}`,
-      policyConfig: iddConfig,
-      readCurrentBranch: () => port.getChangeRequestHeadRef(args.prNumber),
-      readBaseFile: (path, ref) =>
-        port.getRepositoryFileContentAtRef(`${owner}/${repo}`, path, ref),
-    });
   }
   // kurone-kito/idd-skill#3328: out-of-loop membership check. Only
   // evaluated when claimless AND (the PR actually has closing references
@@ -1801,7 +1815,9 @@ export function collectPreMergeReadiness(
     ...reportSummary,
     ...(scopeOverrun === undefined || scopeOverrun === null
       ? {}
-      : { scopeOverrun }),
+      : {
+          claim: Object.assign({}, reportSummary.claim, { scopeOverrun }),
+        }),
     ...(summary.dispositionEvidence && dispositionNoticeHint !== null
       ? {
           dispositionEvidence: {

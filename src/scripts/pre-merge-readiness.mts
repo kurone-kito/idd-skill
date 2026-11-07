@@ -457,14 +457,23 @@ const PRE_MERGE_READINESS_FLAG_SPEC = {
  * JSON state document printed by this CLI: the pre-merge readiness
  * gate summary plus the trusted-marker actor provenance fields.
  */
-export type PreMergeReadinessReport = ReturnType<
+type PreMergeReadinessSummary = ReturnType<
   typeof buildPreMergeReadinessSummary
+>;
+
+type ScopeOverrunReport = {
+  status: 'missing' | 'invalid' | 'valid';
+  reason: string;
+  recordedHeadSha: string | null;
+};
+
+export type PreMergeReadinessReport = Omit<
+  PreMergeReadinessSummary,
+  'claim'
 > & {
-  /** Claim-bound scope-overrun evidence, present only when the effort audit fails. */
-  scopeOverrun?: {
-    status: 'missing' | 'invalid' | 'valid';
-    reason: string;
-    recordedHeadSha: string | null;
+  /** Claim-bound scope-overrun evidence, present only when audited. */
+  claim: PreMergeReadinessSummary['claim'] & {
+    scopeOverrun?: ScopeOverrunReport;
   };
   // #4163: the optional hint the collector attaches (see
   // dispositionNoticeCommandHint). Declared here so a caller can read it
@@ -510,7 +519,7 @@ export interface ScopeOverrunReadinessInput {
  */
 export function resolveScopeOverrunReadiness(
   input: ScopeOverrunReadinessInput,
-): PreMergeReadinessReport['scopeOverrun'] | null {
+): ScopeOverrunReport | null {
   if (
     !Number.isSafeInteger(input.issue.number) ||
     input.issue.number < 1 ||
@@ -1227,9 +1236,20 @@ export function collectPreMergeReadiness(
       : [],
   });
 
-  let scopeOverrun: PreMergeReadinessReport['scopeOverrun'] | null;
-  if (!args.claimless && args.claimIssueNumber !== null) {
-    const claimedIssue = port.getWorkItem(args.claimIssueNumber);
+  let scopeOverrun: ScopeOverrunReport | null | undefined;
+  if (
+    !args.claimless &&
+    args.claimIssueNumber !== null &&
+    args.expectedClaimId !== '' &&
+    args.expectedClaimId !== 'none'
+  ) {
+    let claimedIssue: ReturnType<ProviderPort['getWorkItem']> = null;
+    try {
+      claimedIssue = port.getWorkItem(args.claimIssueNumber);
+    } catch {
+      // An unreadable issue cannot establish that its changed scope is within
+      // the authored effort limit, so report an invalid audit below.
+    }
     if (
       !claimedIssue ||
       typeof claimedIssue.title !== 'string' ||
@@ -1237,39 +1257,42 @@ export function collectPreMergeReadiness(
       typeof claimedIssue.body !== 'string' ||
       claimedIssue.body.trim() === ''
     ) {
-      throw new Error(
-        `scope-overrun audit cannot read issue #${args.claimIssueNumber} title and body`,
-      );
+      scopeOverrun = {
+        status: 'invalid',
+        reason: 'issue-unreadable',
+        recordedHeadSha: null,
+      };
+    } else {
+      scopeOverrun = resolveScopeOverrunReadiness({
+        issue: {
+          number: args.claimIssueNumber,
+          title: claimedIssue.title,
+          body: claimedIssue.body,
+        },
+        pullRequestNumber: args.prNumber as number,
+        headSha: prHeadSha,
+        baseRef: baseRefName,
+        changedFiles,
+        renamedFromPaths: port.listChangeRequestRenamedFromPaths(
+          args.prNumber as number,
+        ),
+        comments: claimComments.map((comment) => ({
+          id: comment.id,
+          createdAt: comment.created_at,
+          body: comment.body,
+          authorLogin: comment.user?.login,
+          lastEditedAt: comment.last_edited_at,
+        })),
+        markerPrefix: iddConfig?.markerPrefix,
+        trustedMarkerLogins,
+        currentRepo: `${owner}/${repo}`,
+        policyConfig: iddConfig,
+        readCurrentBranch: () =>
+          port.getChangeRequestHeadRef(args.prNumber as number),
+        readBaseFile: (path, ref) =>
+          port.getRepositoryFileContentAtRef(`${owner}/${repo}`, path, ref),
+      });
     }
-    scopeOverrun = resolveScopeOverrunReadiness({
-      issue: {
-        number: args.claimIssueNumber,
-        title: claimedIssue.title,
-        body: claimedIssue.body,
-      },
-      pullRequestNumber: args.prNumber as number,
-      headSha: prHeadSha,
-      baseRef: baseRefName,
-      changedFiles,
-      renamedFromPaths: port.listChangeRequestRenamedFromPaths(
-        args.prNumber as number,
-      ),
-      comments: claimComments.map((comment) => ({
-        id: comment.id,
-        createdAt: comment.created_at,
-        body: comment.body,
-        authorLogin: comment.user?.login,
-        lastEditedAt: comment.last_edited_at,
-      })),
-      markerPrefix: iddConfig?.markerPrefix,
-      trustedMarkerLogins,
-      currentRepo: `${owner}/${repo}`,
-      policyConfig: iddConfig,
-      readCurrentBranch: () =>
-        port.getChangeRequestHeadRef(args.prNumber as number),
-      readBaseFile: (path, ref) =>
-        port.getRepositoryFileContentAtRef(`${owner}/${repo}`, path, ref),
-    });
   }
 
   // kurone-kito/idd-skill#3328: out-of-loop membership check. Only
@@ -2145,7 +2168,9 @@ export function collectPreMergeReadiness(
     ...reportSummary,
     ...(scopeOverrun === undefined || scopeOverrun === null
       ? {}
-      : { scopeOverrun }),
+      : {
+          claim: Object.assign({}, reportSummary.claim, { scopeOverrun }),
+        }),
     ...(summary.dispositionEvidence && dispositionNoticeHint !== null
       ? {
           dispositionEvidence: {

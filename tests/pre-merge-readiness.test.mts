@@ -412,6 +412,8 @@ test('pre-merge readiness scope audit accepts both paths of a renamed PR file', 
         '1',
         '--claim-issue',
         '7',
+        '--claim-id',
+        'scope-test',
         '--owner',
         'o',
         '--repo',
@@ -423,8 +425,8 @@ test('pre-merge readiness scope audit accepts both paths of a renamed PR file', 
       () => ({ trustedMarkerActors: ['kurone-kito', 'maintainer'] }) as never,
     );
 
-    assert.equal(report.scopeOverrun?.status, 'valid');
-    assert.equal(report.scopeOverrun?.recordedHeadSha, 'a'.repeat(40));
+    assert.equal(report.claim.scopeOverrun?.status, 'valid');
+    assert.equal(report.claim.scopeOverrun?.recordedHeadSha, 'a'.repeat(40));
     assert.equal(
       (report.blockers as Array<{ gate: string }>).some(
         (blocker) => blocker.gate === 'scope-overrun',
@@ -464,6 +466,8 @@ test('collectPreMergeReadiness adds a blocker for an overrun without valid evide
         '1',
         '--claim-issue',
         '7',
+        '--claim-id',
+        'scope-test',
         '--owner',
         'o',
         '--repo',
@@ -474,7 +478,7 @@ test('collectPreMergeReadiness adds a blocker for an overrun without valid evide
       () => port,
       () => ({ trustedMarkerActors: ['kurone-kito', 'maintainer'] }) as never,
     );
-    assert.deepEqual(report.scopeOverrun, {
+    assert.deepEqual(report.claim.scopeOverrun, {
       status: 'missing',
       reason: 'no-record',
       recordedHeadSha: null,
@@ -522,6 +526,8 @@ test('collectPreMergeReadiness adds a blocker for an overrun without valid evide
         '1',
         '--claim-issue',
         '7',
+        '--claim-id',
+        'scope-test',
         '--owner',
         'o',
         '--repo',
@@ -532,13 +538,63 @@ test('collectPreMergeReadiness adds a blocker for an overrun without valid evide
       () => validPort,
       () => ({ trustedMarkerActors: ['kurone-kito', 'maintainer'] }) as never,
     );
-    assert.equal(validReport.scopeOverrun?.status, 'valid');
-    assert.equal(validReport.scopeOverrun?.recordedHeadSha, 'a'.repeat(40));
+    assert.equal(validReport.claim.scopeOverrun?.status, 'valid');
+    assert.equal(
+      validReport.claim.scopeOverrun?.recordedHeadSha,
+      'a'.repeat(40),
+    );
     assert.equal(
       (validReport.blockers as Array<{ gate: string }>).some(
         (blocker) => blocker.gate === 'scope-overrun',
       ),
       false,
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('collectPreMergeReadiness blocks when a claimed issue is unreadable', () => {
+  const restore = stubExecutable('gh', FORCED_HANDOFF_GH_STUB);
+  try {
+    const base = forcedHandoffMergeFakePort({
+      scope: 'issue-plus-pr',
+      earlierLinkedPr: false,
+      linkedLookupFails: false,
+    });
+    const port: ProviderPort = {
+      ...base,
+      getWorkItem: () => null,
+    };
+    const report = collectPreMergeReadiness(
+      [
+        '--pr',
+        '1',
+        '--claim-issue',
+        '7',
+        '--claim-id',
+        'scope-test',
+        '--owner',
+        'o',
+        '--repo',
+        'r',
+        '--now',
+        '2026-05-12T11:00:00Z',
+      ],
+      () => port,
+      () => ({ trustedMarkerActors: ['kurone-kito'] }) as never,
+    );
+
+    assert.deepEqual(report.claim.scopeOverrun, {
+      status: 'invalid',
+      reason: 'issue-unreadable',
+      recordedHeadSha: null,
+    });
+    assert.equal(report.ready, false);
+    assert.ok(
+      (report.blockers as Array<{ gate: string }>).some(
+        (blocker) => blocker.gate === 'scope-overrun',
+      ),
     );
   } finally {
     restore();
@@ -613,10 +669,13 @@ test('pre-merge readiness schema validates scope-overrun evidence', () => {
     validate(
       {
         ...summary,
-        scopeOverrun: {
-          status: 'valid',
-          reason: 'no-decision',
-          recordedHeadSha: SCOPE_OVERRUN_HEAD,
+        claim: {
+          ...summary.claim,
+          scopeOverrun: {
+            status: 'valid',
+            reason: 'no-decision',
+            recordedHeadSha: SCOPE_OVERRUN_HEAD,
+          },
         },
       },
       readinessSchema,
