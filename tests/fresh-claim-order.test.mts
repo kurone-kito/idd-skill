@@ -31,6 +31,92 @@ test('both fresh-claim worktree commands use --no-track', () => {
   }
 });
 
+const STANDARD_WORK_PATHS = [
+  'idd-template/.github/instructions/idd-work.instructions.md',
+  '.github/instructions/idd-work.instructions.md',
+];
+
+function standardB1(relativePath: string): string {
+  const match = /^## B1 —[\s\S]*?(?=^## B2 —)/m.exec(
+    readTemplate(relativePath),
+  );
+  assert.ok(match, `${relativePath}: B1 section`);
+  return match[0];
+}
+
+test('standard B1 keeps the primary worktree on the GitHub default branch', () => {
+  for (const relativePath of STANDARD_WORK_PATHS) {
+    const b1 = standardB1(relativePath);
+    const primaryStep = /^1\. ([\s\S]*?)(?=^2\. )/m.exec(b1);
+    assert.ok(primaryStep, `${relativePath}: primary-worktree step 1`);
+    const primary = primaryStep[1].replace(/\s+/g, ' ');
+    assert.match(
+      primary,
+      /Get `\{default-branch\}` directly with `gh repo view --json defaultBranchRef --jq \.defaultBranchRef\.name`\./,
+      relativePath,
+    );
+    assert.ok(primary.includes('Never use `developmentBranch`.'), relativePath);
+    for (const command of [
+      'git log origin/{default-branch}..{default-branch} --oneline',
+      'git -c merge.autoStash=false merge --ff-only origin/{default-branch}',
+    ]) {
+      assert.ok(primary.includes(command), `${relativePath}: ${command}`);
+    }
+    assert.ok(
+      b1
+        .replace(/\s+/g, ' ')
+        .includes(
+          "The primary worktree's HEAD MUST remain on `{default-branch}` throughout B1",
+        ),
+      relativePath,
+    );
+    const selfCheck = /^### B1 self-check\n([\s\S]*?)(?=^### )/m.exec(b1);
+    assert.ok(selfCheck, `${relativePath}: B1 self-check`);
+    assert.match(
+      selfCheck[1],
+      /git -C <primary-worktree-root> rev-parse --abbrev-ref HEAD` returns\s+`\{default-branch\}`/,
+      relativePath,
+    );
+  }
+});
+
+test('only standard Worktree creation Step 2 uses the development branch', () => {
+  for (const relativePath of STANDARD_WORK_PATHS) {
+    const b1 = standardB1(relativePath);
+    const creationStep =
+      /^\*\*Step 2 — Create\*\*:([\s\S]*?)(?=^\*\*Step 3 —)/m.exec(b1);
+    assert.ok(creationStep, `${relativePath}: Worktree creation Step 2`);
+    const creation = creationStep[1].replace(/\s+/g, ' ');
+    assert.ok(
+      creation.includes(
+        '`<base-branch>` below is `{development-branch}` — resolve it first: read `developmentBranch` from the effective policy, else use `{default-branch}` from B1 Step 1',
+      ),
+      relativePath,
+    );
+    assert.ok(
+      creation.includes(
+        'git worktree add --no-track <path> -b <branch-name> origin/{development-branch}',
+      ),
+      relativePath,
+    );
+    for (const command of [
+      'macOS/Linux: `wt switch --create -b origin/<base-branch> <branch-name>`',
+      'Windows: `git-wt switch --create -b origin/<base-branch> <branch-name>`',
+      'same `wt switch --create -b origin/<base-branch> <branch-name>` if `git-wt` is unavailable',
+    ]) {
+      assert.ok(creation.includes(command), `${relativePath}: ${command}`);
+    }
+    const otherSteps = b1
+      .replace(creationStep[0], '')
+      .replace('Never use\n   `developmentBranch`.', '');
+    assert.doesNotMatch(
+      otherSteps,
+      /developmentBranch|\{development-branch\}/,
+      `${relativePath}: development branch stays in creation Step 2`,
+    );
+  }
+});
+
 test('the lite fresh claim adopts the claim-phase worktree through step 7', () => {
   const lite = readTemplate(
     'idd-template/.github/instructions/lite/idd-work-lite.instructions.md',
