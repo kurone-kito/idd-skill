@@ -2001,6 +2001,11 @@ startable candidates (issue `kurone-kito/idd-skill#3835`).
 For discover/claim/review-loop threshold customization, the schema now
 supports these keys:
 
+The defaults below describe the distributed policy when a field is
+omitted. Setting a different `critiqueLoop` value in a repository's
+`.github/idd/config.json` is a repository-local opt-in; it does not
+change the distributed defaults for adopters.
+
 - `discover.activeClaimPreScanBatchSize` (default `10`)
 - `claim.verifySettleDelay` (default `PT5S`)
 - `critiqueLoop.cPhaseLowSeveritySkipAfter` (default `2`)
@@ -2011,7 +2016,7 @@ supports these keys:
   profile only; skips eligible advisory-only E10 batches after convergence
   matches the E1 head. Lite always runs E10.)
 - `critiqueLoop.deferAfterRounds` (default `12`)
-- `critiqueLoop.deferByUrgency` (default `off`; `low`,
+- `critiqueLoop.deferByUrgency` (default `severity-tiered`; `off`, `low`,
   `low-and-medium`, or `severity-tiered`). High stays ineligible under
   `low` and `low-and-medium`. Under `low`, `low-and-medium`, and
   `severity-tiered`, clause (d) of the adopt-now test cascades (under
@@ -2022,9 +2027,10 @@ supports these keys:
   `resolve-review-thread --adopt-now`, which turns a `defer` verdict into
   `keep` below `deferAllAfterRounds` (at or above it, the flag changes
   nothing); its `high` urgency still reads adopt-now conditions (a)-(c).
-- `critiqueLoop.deferRelaxAtRounds` (optional array of one or two
-  positive integers, strictly ascending, at most two; recommended
-  `[4, 7]`; omit the key to turn it off). The thresholds are PR-wide
+- `critiqueLoop.deferRelaxAtRounds` (default `[4]`; an array of one or two
+  positive integers, strictly ascending, at most two; `null` explicitly
+  turns it off; an explicit `[]` fails schema validation). Omitting the
+  key keeps the default. The thresholds are PR-wide
   Copilot review counts, the same count `critiqueLoop.deferAfterRounds`
   uses, at which `severity-tiered` relaxes: a pull request's step is the
   number of thresholds at or below its count, and each step raises the
@@ -2036,8 +2042,9 @@ supports these keys:
   and the clause suffix. A converged advisory gate adds one further
   step, still capped at 2, only when `reviewPolicy` is absent or
   `copilot-advisory`.
-- `critiqueLoop.deferAllAfterRounds` (optional positive integer, at least
-  1; omit the key to turn the cap off). At or above this many PR-wide
+- `critiqueLoop.deferAllAfterRounds` (default `5`; positive integer, at
+  least 1; `null` explicitly turns the cap off). Omitting the key keeps
+  the default. At or above this many PR-wide
   Copilot review counts, under `severity-tiered` and without `--lite`,
   every scored PATH A finding that no block reason holds defers at any
   step, except a safety-class finding, which never defers. An invalid
@@ -2046,7 +2053,7 @@ supports these keys:
   [the review-count cap](idd-review-policy-profiles.md#wave-gradient-urgency-defer)
   of the review policy profiles for the exclusions and the adopt-now
   limit.
-- `critiqueLoop.triageRecord` (default `off`; `record` or `enforce`).
+- `critiqueLoop.triageRecord` (default `record`; `off` or `enforce`).
   `record` makes `resolve-review-thread` require `--tier` and
   `--urgency` on every Accepted or Rejected PATH A reply it posts, and
   append a `Triage:` line with the relax step and, under

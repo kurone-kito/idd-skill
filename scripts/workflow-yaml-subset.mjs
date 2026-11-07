@@ -15,9 +15,8 @@
 //
 // No scalar is type-resolved, so the key `on` stays the string `on`. The
 // module imports nothing, so it runs with plain node in the bare-Node lane.
-// Nothing reads it yet: the 2026-10-12 split decision leaves the workflow
-// audit's readers unchanged, and the rule groups R5 to R8 move to this
-// parser in follow-up issues.
+// The repository workflow audit uses this parser in RWA008 to check the
+// pnpm-boundary shards. See `src/scripts/repository-workflow-audit.mts`.
 /** Carries a violation out of the recursive descent. Never leaves the module. */
 class WorkflowYamlRefusal extends Error {
   violation;
@@ -65,7 +64,6 @@ const MAX_NESTING = 200;
  * Parses one YAML document of the subset. A refusal comes back as
  * `ok: false` with the first construct found; it is never thrown.
  */
-// audit:ignore-dead-export: no production caller until the R5 to R8 follow-up issues move the workflow audit onto this parser (split decision 2026-10-12, #3974)
 export function parseWorkflowYamlSubset(text) {
   try {
     prescan(text);

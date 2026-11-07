@@ -9,6 +9,15 @@ approval boundary that hands off to IDD execution.
 
 ### Stage 1: Author-and-publish (under the hold)
 
+- An authoring session does not create, remove, or prune any Git worktree,
+  and does not write files into the repository's default checkout or any
+  linked checkout. Keep drafts, ledger data, and helper output outside every
+  worktree. If the session itself created a file inside a checkout, move only
+  that file outside the repository and leave unrecognized files untouched.
+  Never stash, reset,
+  clean, or delete checkout contents. Publishing under the authoring hold does
+  not start claim or work. This boundary follows the 2026-11-06 incident in
+  issue `#5058`.
 - Skill drafts issues in the target repository. Each candidate moves
   through the readiness buckets: `deferred` → `ready` or an escalation
   bucket (`needs-decision`, `blocked-by-human`, `out-of-scope`)

@@ -716,6 +716,17 @@ have been checked against their source records before review. The new
 pre-review check requires current-source verification and places support
 in the existing packet, without changing its schema or the review.
 
+On 2026-11-06, an untracked local recovery report in the shared default
+checkout blocked a claim helper's fast-forward for unrelated issues. The
+helper reported only `primary-not-ready`, and authoring guidance did not
+forbid creating a worktree or writing into that checkout. Issue `#2452` had
+already identified that dirty paths can block primary-checkout fast-forwards.
+Issue `#5058` adds a targeted `primary-worktree-dirty` diagnosis only after a
+failed fast-forward, preserves successful fast-forwards with unrelated
+untracked files, and makes the authoring checkout boundary explicit. Only the
+operator moves paths out of the shared checkout; the helper never stashes or
+removes them.
+
 ### B1 Step 3 — install-deps silent under-install detection
 
 Two independent fresh-worktree sessions observed `pnpm install
@@ -3109,6 +3120,24 @@ in the instruction text remains acceptable in place of that link when
 no paired entry exists — both forms fit inside the tight
 instruction-bundle budget that motivates the exemption; neither is
 required.
+
+**Re-anchoring ready carrier drafts (issue `#5061`).** Observed 2026-11-05
+during the publication check on carrier issue `#5054`. Its only draft was a
+resolver child split from issue `#4707` and anchored to issue `#4694`. The
+replay found that issue `#4694` had no `status:authoring` label and its current
+owner generation pointed to closed issue `#4867`, so the standard child
+publisher correctly refused the old anchor. The reviewed child was later
+re-authored as issue `#5062` under held roadmap `#5060`.
+
+The carrier procedure had said to leave the carrier open when a publication
+route refused a draft, but did not describe how a later session could safely
+continue when the original anchor was no longer held. That left no explicit
+route for checking mapped targets and current claims or pull requests,
+publishing a fresh held roadmap set, updating its Tracks list after child
+identities existed, or reconciling an uncertain create without duplication.
+The re-anchoring procedure keeps the old owner history immutable and
+fail-closed, records each new child mapping, and leaves the carrier open until
+all drafts are resolved.
 
 ### Trace a documented output field to its print/return call site, not a type or variable name
 

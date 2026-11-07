@@ -7,6 +7,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { isSessionQualifiedAgentId } from './claim-lock.mts';
 import { parseCliArgs } from './cli-args.mts';
 import type { CollaboratorPermissionCache } from './collaborator-permission.mts';
 import {
@@ -119,6 +120,14 @@ interface HandoffPlan {
   successorIds: SuccessorIds;
 }
 
+/** Claim and PR context resolved before a successor is selected. */
+export interface HandoffContext {
+  activeClaim: ActiveClaim;
+  branch: string;
+  contextScope: string;
+  prReferences: string[];
+}
+
 /** Parsed CLI arguments. */
 interface ForcedHandoffMarkerArgs {
   format: string;
@@ -142,18 +151,21 @@ export function generateSuccessorIds(baseAgentId: unknown): SuccessorIds {
   };
 }
 
-export function planHandoff(
+function assertSessionQualifiedSuccessorAgentId(agentId: string): void {
+  if (!isSessionQualifiedAgentId(agentId)) {
+    throw new Error(
+      `successor agent-id ${JSON.stringify(agentId)} is not session-qualified; provide an ID with a unique session suffix`,
+    );
+  }
+}
+
+export function resolveHandoffContext(
   issueComments: IssueCommentPayload[],
   linkedPrs: LinkedPrPayload[] | null | undefined,
   options: PlanHandoffOptions,
-): HandoffPlan {
+): HandoffContext {
   const {
-    newAgentId,
-    newClaimId,
     prNumber,
-    forcedBy,
-    reason,
-    timestamp,
     trustedMarkerLogins,
     isAuthorizedForcedHandoff,
     staleAgeMs,
@@ -213,12 +225,44 @@ export function planHandoff(
     }
   }
 
-  const generated = generateSuccessorIds(activeClaim.agentId);
+  return {
+    activeClaim,
+    branch: activeClaim.branch,
+    contextScope,
+    prReferences,
+  };
+}
+
+export function planHandoff(
+  issueComments: IssueCommentPayload[],
+  linkedPrs: LinkedPrPayload[] | null | undefined,
+  options: PlanHandoffOptions,
+): HandoffPlan {
+  const {
+    newAgentId,
+    newClaimId,
+    forcedBy,
+    reason,
+    timestamp,
+    isAuthorizedForcedHandoff,
+  } = options;
+  const context = resolveHandoffContext(issueComments, linkedPrs, options);
+  const generated = generateSuccessorIds(context.activeClaim.agentId);
   const successorIds = {
     newAgentId: newAgentId ?? generated.newAgentId,
     newClaimId: newClaimId ?? generated.newClaimId,
   };
 
+  // Every plan is potentially consumable by a marker writer, including the
+  // read-only --plan preview. Reject an invalid inherited legacy ID too.
+  assertSessionQualifiedSuccessorAgentId(successorIds.newAgentId);
+
+  const resolveOpts = {
+    isAuthorizedForcedHandoff:
+      typeof isAuthorizedForcedHandoff === 'function'
+        ? isAuthorizedForcedHandoff
+        : () => false,
+  };
   let markerBody: string | null = null;
   if (forcedBy && reason) {
     // Validate the approving actor before rendering the marker body so that
@@ -228,33 +272,28 @@ export function planHandoff(
     const authorized = resolveOpts.isAuthorizedForcedHandoff(forcedBy);
     if (authorized) {
       const resolvedLinkedPr =
-        prNumber !== undefined ? String(prNumber) : prReferences[0];
+        options.prNumber !== undefined
+          ? String(options.prNumber)
+          : context.prReferences[0];
       const payload = {
-        oldAgentId: activeClaim.agentId,
-        oldClaimId: activeClaim.claimId,
+        oldAgentId: context.activeClaim.agentId,
+        oldClaimId: context.activeClaim.claimId,
         newAgentId: successorIds.newAgentId,
         newClaimId: successorIds.newClaimId,
-        branch: activeClaim.branch,
-        ...(contextScope === 'issue-plus-pr' && resolvedLinkedPr
+        branch: context.activeClaim.branch,
+        ...(context.contextScope === 'issue-plus-pr' && resolvedLinkedPr
           ? { linkedPr: resolvedLinkedPr }
           : {}),
         forcedBy,
         reason,
         timestamp: timestamp ?? currentIsoTimestamp(),
-        contextScope,
+        contextScope: context.contextScope,
       };
       markerBody = renderForcedHandoffComment(payload);
     }
   }
 
-  return {
-    activeClaim,
-    branch: activeClaim.branch,
-    contextScope,
-    prReferences,
-    markerBody,
-    successorIds,
-  };
+  return { ...context, markerBody, successorIds };
 }
 
 /** `--plan`'s read-only preflight (#3872); see {@link planPreflight}. */
@@ -458,6 +497,7 @@ export function main(argv: string[] = process.argv.slice(2)): HelperCliResult {
       new Error('missing required --new-claim-id <id> argument'),
     );
   }
+  assertSessionQualifiedSuccessorAgentId(args.newAgentId);
 
   const repoRef =
     args.repo ??

@@ -1015,7 +1015,10 @@ export function evaluateResumeClaimRouting(input, options = {}) {
       // stale appliedForcedHandoff value around a blocked marker).
       forced_handoff: linkedPrLookupFailureMatch
         ? null
-        : toForcedHandoffEvidence(state.appliedForcedHandoff),
+        : toForcedHandoffEvidence(
+            state.appliedForcedHandoff,
+            state.verifiedForcedHandoffChain,
+          ),
       // #3276: always present (byte-stable), not only when a lookup was
       // attempted -- 'ok' covers both "no lookup ran" (forced-handoff mode
       // disabled) and "the lookup succeeded", matching the Proposed
@@ -1046,21 +1049,27 @@ export function evaluateResumeClaimRouting(input, options = {}) {
     },
   };
 }
-/** Render {@link ActiveClaimResolution.appliedForcedHandoff} for JSON output. */
-function toForcedHandoffEvidence(applied) {
+/** Render the latest applied handoff and its verified lineage for JSON. */
+function toForcedHandoffEvidence(applied, verifiedChain) {
   if (!applied) {
     return null;
   }
   return {
-    old_agent_id: applied.oldAgentId,
-    old_claim_id: applied.oldClaimId,
-    new_agent_id: applied.newAgentId,
-    new_claim_id: applied.newClaimId,
-    branch: applied.branch,
-    linked_pr: applied.linkedPr ?? null,
-    context_scope: applied.contextScope,
-    forced_by: applied.forcedBy,
-    timestamp: applied.createdAt ?? null,
+    ...toForcedHandoffEvidenceEntry(applied),
+    verified_chain: verifiedChain.map(toForcedHandoffEvidenceEntry),
+  };
+}
+function toForcedHandoffEvidenceEntry(handoff) {
+  return {
+    old_agent_id: handoff.oldAgentId,
+    old_claim_id: handoff.oldClaimId,
+    new_agent_id: handoff.newAgentId,
+    new_claim_id: handoff.newClaimId,
+    branch: handoff.branch,
+    linked_pr: handoff.linkedPr ?? null,
+    context_scope: handoff.contextScope,
+    forced_by: handoff.forcedBy,
+    timestamp: handoff.createdAt ?? null,
   };
 }
 /**
@@ -1562,6 +1571,7 @@ function resolveClaimState(events, staleAgeMs, options = {}) {
       activeClaim: claimTrace?.activeClaim ?? null,
       releasedClaim: claimTrace?.releasedClaim ?? null,
       appliedForcedHandoff: claimTrace?.appliedForcedHandoff ?? null,
+      verifiedForcedHandoffChain: claimTrace?.verifiedForcedHandoffChain ?? [],
       warnings,
       legacyClaim: null,
       legacyReleased: false,
@@ -1584,6 +1594,7 @@ function resolveClaimState(events, staleAgeMs, options = {}) {
     activeClaim: null,
     releasedClaim: legacy.releasedClaim,
     appliedForcedHandoff: null,
+    verifiedForcedHandoffChain: [],
     warnings,
     legacyClaim: legacy.claim,
     legacyReleased: legacy.released,

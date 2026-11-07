@@ -22,49 +22,49 @@ backgrounded command, and confirm the result before ending the turn.
 
 ## B1 — Create worktree (with branch)
 
-Before creating, check for local conflicts in this order. Concurrent
-workers sharing one clone: serialize every `git fetch`/`merge --ff-only`/
-worktree add/remove call against the shared clone -- here, and at F4
-cleanup's own worktree removal -- behind the
-[clone-scoped lock](../../docs/idd-helper-scripts.md#clone-scoped-lock)
-(see the [fan-out variant](../../docs/idd-workflow.md#orchestrator-fan-out-variant)
-for when this applies).
+Use the [clone-scoped lock](../../docs/idd-helper-scripts.md#clone-scoped-lock)
+for shared-clone fetch, merge, worktree operations, and F4 cleanup; see
+[fan-out](../../docs/idd-workflow.md#orchestrator-fan-out-variant) if applicable.
 
-1. Ensure the local `{default-branch}` branch is up to date and has no local
-   commits.
-   `{default-branch}` resolves to `gh repo view --json defaultBranchRef --jq .defaultBranchRef.name`.
-   Validate it per Worktree creation Step 2 (fail closed).
-   Run this from the primary worktree while on `{default-branch}`:
+1. Parse the `origin` remote to credential-free `{origin-repository}`
+   (`[HOST/]OWNER/REPO`); strip userinfo, never print or pass the URL. For
+   SSH, resolve aliases with `ssh -G`'s `hostname`. Stop on
+   parse failure. Set `GH_REPO` to this ID per lookup. Require
+   `nameWithOwner` to match origin's owner/repo; check with
+   `gh repo view --json nameWithOwner --jq .nameWithOwner`. Get
+   `{default-branch}` directly with
+   `gh repo view --json defaultBranchRef --jq .defaultBranchRef.name`.
+   Stop on mismatch, failure, empty or unsafe name. Never use
+   `developmentBranch`. On primary with it checked out, run:
 
    ```sh
    git fetch origin
    git log origin/{default-branch}..{default-branch} --oneline
    ```
 
-   If the second command outputs any lines, local `{default-branch}` has unpushed
-   commits — stop and report, do not force-reset `{default-branch}`. Otherwise,
-   fast-forward to origin:
+   A missing origin ref or any `git log` output means stop and report; never
+   reset. Otherwise fast-forward:
 
    ```sh
-   git merge --ff-only origin/{default-branch}
+   git -c merge.autoStash=false merge --ff-only origin/{default-branch}
    ```
 
-   After this fast-forward, see Anti-patterns below for the forbidden
-   commands; read-only inspection and the HEAD-preserving commands of
-   Steps 2-3 and Worktree creation stay allowed.
+   Merge failure: stop before worktree creation and report it.
 
-2. Run `git worktree list` — if a worktree for the branch already
-   exists, inspect and acquire its
-   [worktree-local claim lock](idd-claim.instructions.md#worktree-local-lock-file-same-machine-collision)
-   before reusing or removing it (same helper commands as there); do
-   not run `git worktree remove` while the lock check is still a
-   collision — resolve it via the Claim-state rule in
-   `idd-claim.instructions.md`, and only remove the path once the
-   current claim is authorized to take it over. Reusing it keeps the
-   acquired lock; removing it means recreating the path and
-   re-acquiring the lock before any install or other mutation (removal
-   must precede branch deletion — git blocks deleting a checked-out
-   branch).
+   Dirty: stop before creation; report `primary-worktree-dirty` and paths.
+   For staged/unmerged paths, ask the operator to preserve staged and
+   unstaged content and resolve the index. Move only this session's unstaged
+   paths outside the repo; ask before moving others. Rerun Step 1. Never
+   stash, discard, or remove a worktree (`#5058`).
+
+   Follow Anti-patterns below.
+
+2. Run `git worktree list`. Inspect an existing branch worktree and acquire
+   its [worktree-local claim lock](idd-claim.instructions.md#worktree-local-lock-file-same-machine-collision)
+   before reuse/removal. On collision, follow the Claim-state rule in
+   `idd-claim.instructions.md`; remove only after authorized takeover.
+   Reuse keeps the lock. After removal, recreate the path and reacquire the
+   lock before mutation; remove before branch deletion.
 
    If `git worktree list --porcelain` marks the entry `prunable` with
    its path already absent, there is no live worktree to protect —
@@ -120,18 +120,17 @@ but is not listed in `git worktree list`, stop and report for manual
 cleanup before continuing.
 
 **Step 2 — Create**: `<base-branch>` below is `{development-branch}` —
-resolve it first: read `developmentBranch` from
-the effective policy, else `gh repo view --json
-defaultBranchRef --jq .defaultBranchRef.name`; validate the result
+resolve it first: read `developmentBranch` from the effective policy, else
+use `{default-branch}` from B1 Step 1; validate the result
 ([defaults](../../docs/policy-constants.md#branch-synchronization-defaults)),
 fail closed if invalid/absent on `origin`, never fall back. Then
 `git fetch origin` (may be missing/stale otherwise). Use **WorkTrunk**
 if available, except on a fresh claim (see the note under the table; create verb:
 `wt switch --create`; `wt new` was removed):
 
-- macOS/Linux: `wt switch --create -b <base-branch> <branch-name>`
-- Windows: `git-wt switch --create -b <base-branch> <branch-name>`, or the
-  same `wt switch --create -b <base-branch> <branch-name>` if `git-wt` is
+- macOS/Linux: `wt switch --create -b origin/<base-branch> <branch-name>`
+- Windows: `git-wt switch --create -b origin/<base-branch> <branch-name>`, or the
+  same `wt switch --create -b origin/<base-branch> <branch-name>` if `git-wt` is
   unavailable
 
 Non-interactive/automation: append `-x <noop>` (e.g. `-x true`) so
