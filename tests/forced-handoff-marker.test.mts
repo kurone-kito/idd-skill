@@ -221,7 +221,7 @@ test('forced handoff helper validates --repo format before API calls', () => {
         '--issue',
         '337',
         '--new-agent-id',
-        'github-copilot-cli-new',
+        'codex-next-12345678',
         '--new-claim-id',
         'claim-20260512T110000Z-337-new',
         '--forced-by',
@@ -468,7 +468,7 @@ test('forced handoff helper refuses output when forced-handoff mode is disabled'
           '--issue',
           '337',
           '--new-agent-id',
-          'github-copilot-cli-new',
+          'codex-next-12345678',
           '--new-claim-id',
           'claim-20260512T110000Z-337-new',
           '--forced-by',
@@ -765,9 +765,9 @@ const HANDOFF_PERMISSION_ARGS = [
   `repos/${HANDOFF_REPO}/collaborators/kurone-kito/permission`,
 ];
 const HANDOFF_CLAIM_BODY = [
-  '<!-- claimed-by: github-copilot-cli-old claim-20260512T090000Z-337-old supersedes: none 2026-05-12T09:00:00Z branch: issue/337-feat-protocol-add-auditable-forced -->',
+  '<!-- claimed-by: codex-old-12345678 claim-20260512T090000Z-337-old supersedes: none 2026-05-12T09:00:00Z branch: issue/337-feat-protocol-add-auditable-forced -->',
   '',
-  '_github-copilot-cli-old: issue claim — IDD automation marker. Do not edit._',
+  '_codex-old-12345678: issue claim — IDD automation marker. Do not edit._',
 ].join('\n');
 
 interface FixtureComment {
@@ -937,7 +937,7 @@ const HANDOFF_ARGS = [
   '--issue',
   '337',
   '--new-agent-id',
-  'github-copilot-cli-new',
+  'codex-next-12345678',
   '--new-claim-id',
   'claim-20260512T110000Z-337-new',
   '--forced-by',
@@ -1013,9 +1013,9 @@ test('nested forcedHandoff.mode key enables human-gated mode and renders the mar
     assert.deepEqual(
       parseForcedHandoffComment(rendered, '2026-05-12T11:00:05Z'),
       {
-        oldAgentId: 'github-copilot-cli-old',
+        oldAgentId: 'codex-old-12345678',
         oldClaimId: 'claim-20260512T090000Z-337-old',
-        newAgentId: 'github-copilot-cli-new',
+        newAgentId: 'codex-next-12345678',
         newClaimId: 'claim-20260512T110000Z-337-new',
         branch: 'issue/337-feat-protocol-add-auditable-forced',
         forcedBy: 'kurone-kito',
@@ -1055,6 +1055,53 @@ const HANDOFF_PLAN_ARGS = [
   HANDOFF_REPO,
   '--plan',
 ];
+
+test('forced handoff helper refuses invalid successor IDs before marker output', () => {
+  const invalidDirectArgs = [...HANDOFF_ARGS];
+  invalidDirectArgs[3] = 'legacy-agent';
+
+  inHumanGatedSandbox([], (output) => {
+    assert.throws(() => main(invalidDirectArgs), /not session-qualified/);
+    assert.equal(output(), '', 'ordinary CLI must not print a marker');
+  });
+
+  inHumanGatedSandbox(
+    [...preflightRules(), ...handoffRules(HANDOFF_CLAIM)],
+    (output) => {
+      assert.throws(
+        () => main([...HANDOFF_PLAN_ARGS, '--new-agent-id', 'legacy-agent']),
+        /not session-qualified/,
+      );
+      assert.equal(output(), '', '--plan must not preview an invalid marker');
+    },
+  );
+});
+
+test('forced handoff --plan refuses an invalid inherited legacy agent-id', () => {
+  const legacyClaim = [
+    fixtureComment(
+      1001,
+      'kurone-kito',
+      [
+        '<!-- claimed-by: legacy-agent claim-legacy-plan supersedes: none 2026-05-12T09:00:00Z branch: issue/337-feat-protocol-add-auditable-forced -->',
+        '',
+        '_legacy-agent: issue claim — IDD automation marker. Do not edit._',
+      ].join('\n'),
+    ),
+  ];
+
+  inHumanGatedSandbox(
+    [...preflightRules(), ...handoffRules(legacyClaim)],
+    (output) => {
+      assert.throws(() => main(HANDOFF_PLAN_ARGS), /not session-qualified/);
+      assert.equal(
+        output(),
+        '',
+        'an invalid inherited ID must not be previewed',
+      );
+    },
+  );
+});
 
 test('forced handoff helper names --pr and prints nothing when the claim branch has an open PR (#3872)', () => {
   inHumanGatedSandbox(
@@ -1442,7 +1489,7 @@ test('nested forcedHandoff.mode=disabled refuses output', () => {
           '--issue',
           '337',
           '--new-agent-id',
-          'github-copilot-cli-new',
+          'codex-next-12345678',
           '--new-claim-id',
           'claim-20260512T110000Z-337-new',
           '--forced-by',
@@ -1460,10 +1507,11 @@ test('nested forcedHandoff.mode=disabled refuses output', () => {
 });
 
 test('planHandoff and generateSuccessorIds — integration fixture', () => {
+  const planAgentId = 'codex-plan-12345678';
   const planClaimBody = [
-    '<!-- claimed-by: github-copilot-cli-old claim-plan-test-old supersedes: none 2026-05-13T10:00:00Z branch: issue/496-feat-force-handoff-derive-live-pr -->',
+    `<!-- claimed-by: ${planAgentId} claim-plan-test-old supersedes: none 2026-05-13T10:00:00Z branch: issue/496-feat-force-handoff-derive-live-pr -->`,
     '',
-    '_github-copilot-cli-old: issue claim — IDD automation marker. Do not edit._',
+    `_${planAgentId}: issue claim — IDD automation marker. Do not edit._`,
   ].join('\n');
 
   const issueComments = [
@@ -1474,7 +1522,7 @@ test('planHandoff and generateSuccessorIds — integration fixture', () => {
     },
   ];
 
-  const trustedLogins = ['kurone-kito', 'github-copilot-cli-old'];
+  const trustedLogins = ['kurone-kito', planAgentId];
   const authorizeKuroneKito = (actor: string) => actor === 'kurone-kito';
 
   const resultIssueOnly = planHandoff(issueComments, [], {
@@ -1554,11 +1602,64 @@ test('planHandoff and generateSuccessorIds — integration fixture', () => {
   assert.match(ids1.newClaimId, /^claim-[0-9a-f]{16}$/);
 });
 
+test('planHandoff refuses explicit and inherited successor IDs without session qualification', () => {
+  const planAgentId = 'codex-plan-12345678';
+  const activeClaimComments = [
+    {
+      body: [
+        `<!-- claimed-by: ${planAgentId} claim-plan-test-old supersedes: none 2026-05-13T10:00:00Z branch: issue/496-plan-validation -->`,
+        '',
+        `_${planAgentId}: issue claim — IDD automation marker. Do not edit._`,
+      ].join('\n'),
+      created_at: '2026-05-13T10:00:00Z',
+      user: { login: 'kurone-kito' },
+    },
+  ];
+  const commonOptions = {
+    trustedMarkerLogins: ['kurone-kito', planAgentId],
+    staleAgeMs: DEFAULT_STALE_AGE_MS,
+  };
+
+  for (const newAgentId of ['legacy-agent', 'codex-cli', '']) {
+    assert.throws(
+      () =>
+        planHandoff(activeClaimComments, [], {
+          ...commonOptions,
+          newAgentId,
+        }),
+      /not session-qualified/,
+      JSON.stringify(newAgentId),
+    );
+  }
+
+  const legacyClaimComments = [
+    {
+      body: [
+        '<!-- claimed-by: legacy-agent claim-legacy-default supersedes: none 2026-05-13T10:00:00Z branch: issue/496-plan-validation -->',
+        '',
+        '_legacy-agent: issue claim — IDD automation marker. Do not edit._',
+      ].join('\n'),
+      created_at: '2026-05-13T10:00:00Z',
+      user: { login: 'kurone-kito' },
+    },
+  ];
+  assert.throws(
+    () =>
+      planHandoff(legacyClaimComments, [], {
+        trustedMarkerLogins: ['kurone-kito', 'legacy-agent'],
+        staleAgeMs: DEFAULT_STALE_AGE_MS,
+      }),
+    /not session-qualified/,
+    'the inherited legacy default must be rejected',
+  );
+});
+
 test('planHandoff omits markerBody when forcedBy actor is not authorized', () => {
+  const planAgentId = 'codex-plan-12345678';
   const planClaimBody = [
-    '<!-- claimed-by: github-copilot-cli-old claim-plan-test-old supersedes: none 2026-05-13T10:00:00Z branch: issue/496-feat-force-handoff-derive-live-pr -->',
+    `<!-- claimed-by: ${planAgentId} claim-plan-test-old supersedes: none 2026-05-13T10:00:00Z branch: issue/496-feat-force-handoff-derive-live-pr -->`,
     '',
-    '_github-copilot-cli-old: issue claim — IDD automation marker. Do not edit._',
+    `_${planAgentId}: issue claim — IDD automation marker. Do not edit._`,
   ].join('\n');
 
   const issueComments = [
@@ -1570,7 +1671,7 @@ test('planHandoff omits markerBody when forcedBy actor is not authorized', () =>
   ];
 
   const result = planHandoff(issueComments, [], {
-    trustedMarkerLogins: ['kurone-kito', 'github-copilot-cli-old'],
+    trustedMarkerLogins: ['kurone-kito', planAgentId],
     forcedBy: 'unauthorized-actor',
     reason: 'operator-approved-recovery',
     isAuthorizedForcedHandoff: (actor) => actor === 'kurone-kito',
@@ -1590,10 +1691,11 @@ test('planHandoff omits markerBody when forcedBy actor is not authorized', () =>
 });
 
 test('planHandoff fails closed for the marker preview when no authorizer callback is supplied', () => {
+  const planAgentId = 'codex-plan-12345678';
   const planClaimBody = [
-    '<!-- claimed-by: github-copilot-cli-old claim-plan-test-old supersedes: none 2026-05-13T10:00:00Z branch: issue/496-feat-force-handoff-derive-live-pr -->',
+    `<!-- claimed-by: ${planAgentId} claim-plan-test-old supersedes: none 2026-05-13T10:00:00Z branch: issue/496-feat-force-handoff-derive-live-pr -->`,
     '',
-    '_github-copilot-cli-old: issue claim — IDD automation marker. Do not edit._',
+    `_${planAgentId}: issue claim — IDD automation marker. Do not edit._`,
   ].join('\n');
 
   const issueComments = [
@@ -1605,7 +1707,7 @@ test('planHandoff fails closed for the marker preview when no authorizer callbac
   ];
 
   const baseOptions = {
-    trustedMarkerLogins: ['kurone-kito', 'github-copilot-cli-old'],
+    trustedMarkerLogins: ['kurone-kito', planAgentId],
     forcedBy: 'kurone-kito',
     reason: 'operator-approved-recovery',
     staleAgeMs: DEFAULT_STALE_AGE_MS,
@@ -1667,6 +1769,7 @@ test('planHandoff rejects prior issue-only handoff when PR is present (PR-scoped
   ];
 
   const result = planHandoff(issueComments, linkedPrs, {
+    newAgentId: 'codex-next-12345678',
     trustedMarkerLogins: ['kurone-kito', 'agent-a', 'agent-b'],
     isAuthorizedForcedHandoff: (actor) => actor === 'kurone-kito',
     forcedBy: 'kurone-kito',
@@ -1698,7 +1801,7 @@ test('forcedHandoff.mode defaults to disabled when key is absent', () => {
           '--issue',
           '337',
           '--new-agent-id',
-          'github-copilot-cli-new',
+          'codex-next-12345678',
           '--new-claim-id',
           'claim-20260512T110000Z-337-new',
           '--forced-by',
