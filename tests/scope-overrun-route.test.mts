@@ -96,12 +96,43 @@ function thresholdFinding(
   changedFiles: number,
   extraLines: readonly string[] = [],
 ) {
-  const finding = auditAuthoredIssue(
+  return thresholdFindingForBody(
     issueWithChangedFiles(effort, changedFiles, extraLines),
-    { shape: 'child' },
-  ).findings.find((entry) => entry.id === 'effort-candidate-file-limit');
+  );
+}
+
+function thresholdFindingForBody(body: string) {
+  const finding = auditAuthoredIssue(body, { shape: 'child' }).findings.find(
+    (entry) => entry.id === 'effort-candidate-file-limit',
+  );
   assert.ok(finding, 'the threshold rule runs on the fixture');
   return finding;
+}
+
+function withCandidateFileCount(body: string, count: number): string {
+  const start = body.indexOf('## Candidate files');
+  const end = body.indexOf('\n\n---', start);
+  assert.notEqual(start, -1, 'the fixture has a candidate-files section');
+  assert.notEqual(end, -1, 'the fixture has a footer after candidate files');
+  const paths = Array.from(
+    { length: count },
+    (_, index) => '- src/scripts/changed-' + (index + 1) + '.mts',
+  );
+  return (
+    body.slice(0, start) +
+    ['## Candidate files', '', ...paths].join('\n') +
+    body.slice(end)
+  );
+}
+
+function mediumCopyOfLowBody(body: string): string {
+  const visibleEstimate = '_Effort: S --';
+  const hiddenMarker = '<!-- idd-skill-effort: S -->';
+  assert.equal(body.split(visibleEstimate).length - 1, 1);
+  assert.equal(body.split(hiddenMarker).length - 1, 1);
+  return body
+    .replace(visibleEstimate, '_Effort: M --')
+    .replace(hiddenMarker, '<!-- idd-skill-effort: M -->');
 }
 
 function isOverrun(effort: string | null, changedFiles: number): boolean {
@@ -112,6 +143,58 @@ function isOverrun(effort: string | null, changedFiles: number): boolean {
 const QUESTION_PATTERNS = [/needs-decision/i, /\bask\b/i, /\?/] as const;
 
 const PROHIBITION = 'Never add needs-decision or ask a human';
+const FULL_CUE =
+  'S fits M: use [B3](../../docs/idd-design-rationale.md#s-m); else, see below:';
+const LITE_CUE =
+  'S fits M: use [B3](../../../docs/idd-design-rationale.md#s-m); else, see below:';
+
+const RATIONALE_PATHS = [
+  'idd-template/docs/idd-design-rationale.md',
+  'docs/idd-design-rationale.md',
+] as const;
+
+function b3Rationale(relativePath: string): string {
+  const text = readRepoFile(relativePath);
+  const start = text.indexOf('### B3 — Scope overrun returns to authoring');
+  assert.notEqual(start, -1, relativePath + ' has the B3 rationale');
+  const end = text.indexOf('\n### C1 — Search sibling', start);
+  assert.notEqual(end, -1, relativePath + ' has the next rationale section');
+  return text.slice(start, end).replace(/\s+/g, ' ');
+}
+
+for (const relativePath of RATIONALE_PATHS) {
+  test(relativePath + ': B3 documents the guarded S-to-M continuation', () => {
+    const rationale = b3Rationale(relativePath);
+    assert.match(rationale, /#### S-M/);
+    assert.match(
+      rationale,
+      /visible `_Effort: S` estimate and the hidden `\{markerPrefix\}-effort: S` marker are present, coherent, and agree/,
+    );
+    assert.match(
+      rationale,
+      /changing only the visible effort token and hidden effort marker from S to M; preserve every other byte/,
+    );
+    assert.match(
+      rationale,
+      /on that M body and on a second copy whose `## Candidate files` section is replaced by the diff's canonical changed paths/,
+    );
+    assert.match(rationale, /only when both results pass/);
+    assert.match(
+      rationale,
+      /ending with `idd-agent-authored`; verify that exact comment is present/,
+    );
+    assert.match(rationale, /no release and creates no scope-overrun record/);
+    assert.match(
+      rationale,
+      /Restore the original snapshot only if the live body still exactly equals the M copy written by this run/,
+    );
+    assert.match(
+      rationale,
+      /preserve it rather than overwrite a concurrent edit/,
+    );
+    assert.match(rationale, /never writes L or changes the threshold/);
+  });
+}
 
 /**
  * The route steps, in the order the worker must perform them: the
@@ -124,6 +207,7 @@ const ORDERED_STEPS = [
   '`audit-authored-issue --shape child --stdin --marker-prefix {markerPrefix}`',
   'fails `effort-candidate-file-limit` on the issue body',
   "`## Candidate files` set to the diff's canonical paths",
+  'S fits M: use [B3]',
   'stop coding without pushing',
   'Comment the estimate, candidate files, changed files, and a split proposal',
   'release per the Abort rule (`unclaimed-by`)',
@@ -150,6 +234,50 @@ test('an issue within its estimate whose diff is over it is an overrun through t
   // ...but the same issue with the canonical changed files in place of
   // its candidate files fails it, which is the route's second trigger.
   assert.equal(isOverrun('M', EFFORT_CANDIDATE_FILE_LIMITS.M + 1), true);
+});
+
+test('an S estimate moves to M only when the issue-body and changed-path audits pass', () => {
+  const sBody = issueWithChangedFiles('S', EFFORT_CANDIDATE_FILE_LIMITS.S);
+  const changedSBody = withCandidateFileCount(
+    sBody,
+    EFFORT_CANDIDATE_FILE_LIMITS.M,
+  );
+  assert.equal(thresholdFindingForBody(changedSBody).result, 'fail');
+
+  const mBody = mediumCopyOfLowBody(sBody);
+  assert.equal(
+    mBody,
+    sBody
+      .replace('_Effort: S --', '_Effort: M --')
+      .replace('<!-- idd-skill-effort: S -->', '<!-- idd-skill-effort: M -->'),
+    'only the visible estimate and hidden marker change',
+  );
+  assert.equal(thresholdFindingForBody(mBody).result, 'pass');
+  assert.equal(
+    thresholdFindingForBody(
+      withCandidateFileCount(mBody, EFFORT_CANDIDATE_FILE_LIMITS.M),
+    ).result,
+    'pass',
+  );
+  assert.equal(
+    thresholdFindingForBody(
+      withCandidateFileCount(mBody, EFFORT_CANDIDATE_FILE_LIMITS.M + 1),
+    ).result,
+    'fail',
+    'the medium ceiling still takes the existing stop route',
+  );
+});
+
+test('a visible and hidden effort mismatch does not qualify for the S-to-M path', () => {
+  const mismatch = issueWithChangedFiles(
+    'S',
+    EFFORT_CANDIDATE_FILE_LIMITS.S + 1,
+  ).replace('_Effort: S --', '_Effort: M --');
+  assert.equal(thresholdFindingForBody(mismatch).result, 'fail');
+  assert.match(
+    b3Rationale('idd-template/docs/idd-design-rationale.md'),
+    /visible `_Effort: S` estimate and the hidden `\{markerPrefix\}-effort: S` marker are present, coherent, and agree/,
+  );
 });
 
 test('an over-limit orphan fails the orphan shape as well, and the route still names the child shape (#4434)', () => {
@@ -187,6 +315,13 @@ test('a split child over the limit is exempt, so it never triggers the route', (
   ]);
   assert.equal(finding.result, 'pass');
   assert.match(finding.detail, /Split out of #<n> provenance line exempts it/);
+  assert.equal(
+    thresholdFinding('S', EFFORT_CANDIDATE_FILE_LIMITS.M + 1, [
+      'Split out of #1',
+      '',
+    ]).result,
+    'pass',
+  );
 });
 
 for (const relativePath of WORK_PHASE_PATHS) {
@@ -194,6 +329,10 @@ for (const relativePath of WORK_PHASE_PATHS) {
     // The fixture diff (M, one file over the limit) is an overrun.
     assert.equal(isOverrun('M', EFFORT_CANDIDATE_FILE_LIMITS.M + 1), true);
     const route = scopeOverrunRoute(relativePath);
+    const cuePosition = route.indexOf(FULL_CUE);
+    assert.notEqual(cuePosition, -1);
+    assert.ok(cuePosition < route.indexOf('stop coding without pushing'));
+    assert.ok(Buffer.byteLength(FULL_CUE, 'utf8') <= 80);
     const positions = ORDERED_STEPS.map((step) => route.indexOf(step));
     for (const [index, position] of positions.entries()) {
       assert.notEqual(position, -1, ORDERED_STEPS[index]);
@@ -252,6 +391,7 @@ const LITE_ORDERED_STEPS = [
   '`audit-authored-issue --shape child --stdin --marker-prefix {markerPrefix}`',
   'fails `effort-candidate-file-limit` on the issue body',
   "`## Candidate files` set to the diff's canonical paths",
+  'S fits M: use [B3]',
   'stop coding without pushing',
   'Comment the estimate, candidate files, changed files, and a split proposal',
   'revalidate ownership',
@@ -274,6 +414,10 @@ for (const relativePath of LITE_WORK_PATHS) {
       false,
       'lite cites no Abort rule',
     );
+    const cuePosition = route.indexOf(LITE_CUE);
+    assert.notEqual(cuePosition, -1);
+    assert.ok(cuePosition < route.indexOf('stop coding without pushing'));
+    assert.ok(Buffer.byteLength(LITE_CUE, 'utf8') <= 80);
     const positions = LITE_ORDERED_STEPS.map((step) => route.indexOf(step));
     for (const [index, position] of positions.entries()) {
       assert.notEqual(position, -1, LITE_ORDERED_STEPS[index]);

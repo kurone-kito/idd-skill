@@ -463,14 +463,14 @@ worker-side authoring.
 **Scope overrun** (helper runtime only): when profile-selected
 `audit-authored-issue --shape child --stdin --marker-prefix {markerPrefix}`
 fails `effort-candidate-file-limit` on the issue body or with
-`## Candidate files` set to the diff's canonical paths, stop coding
+`## Candidate files` set to the diff's canonical paths. S fits M: use
+[B3](../../docs/idd-design-rationale.md#s-m); else, see below: stop coding
 without pushing. Comment the estimate, candidate files, changed files,
 and a split proposal; release per the Abort rule (`unclaimed-by`); run
 `lost-claim-cleanup`. With the companion, hand it that proposal as a
 held split draft: it holds this issue, publishes a held roadmap whose
 children record `Split out of #<n>`, and comments its link; if refused,
-the comment stands. Never add needs-decision or ask a human
-([rationale](../../docs/idd-design-rationale.md#b3--scope-overrun-returns-to-authoring)).
+the comment stands. Never add needs-decision or ask a human.
 
 ---
 

@@ -374,7 +374,7 @@
       "files": [
         ".github/instructions/lite/idd-work-lite.instructions.md"
       ],
-      "limitBytes": 24000
+      "limitBytes": 26000
     },
     {
       "id": "bundle-resume-lite",
@@ -490,6 +490,12 @@
     "noticeUtilizationPct": 95,
     "exemptBundles": [],
     "nearCeilingRaiseApprovals": [
+      {
+        "bundle": "bundle-work-lite",
+        "limitBytes": 26000,
+        "issue": 5030,
+        "reason": "Operator approved this specific raise in issue #5030 comment 6706528642 on 2026-11-07. Final bundle use is 23,596 bytes with the 79-byte Lite cue; 26,000 leaves 2,404 bytes (10.19%) of headroom and 90.75% utilization, below the 95% notice band and under the 196,000-byte maximum. The final measurement is recorded in comment 6706762777."
+      },
       {
         "bundle": "bundle-orchestrator-phase",
         "limitBytes": 6300,
