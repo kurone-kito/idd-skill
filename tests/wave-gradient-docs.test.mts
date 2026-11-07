@@ -31,6 +31,10 @@ const CUSTOMIZATION = [
   'idd-template/docs/customization.md',
   'docs/customization.md',
 ] as const;
+const REVIEW_POLICY_PROFILES = [
+  'idd-template/docs/idd-review-policy-profiles.md',
+  'docs/idd-review-policy-profiles.md',
+] as const;
 const RATIONALE = [
   'idd-template/docs/idd-design-rationale.md',
   'docs/idd-design-rationale.md',
@@ -57,7 +61,7 @@ test('the schema description of deferByUrgency introduces High-at-very-low as st
   );
 });
 
-test('the policy-constants rows keep High-at-very-low at step 0 and state the new field and its default (#3796)', () => {
+test('the policy-constants rows state the distributed review-triage defaults and explicit off switches (#4855)', () => {
   for (const path of POLICY_CONSTANTS) {
     const rows = read(path).split('\n').map(collapse);
     const adoptNow = rows.find((row) =>
@@ -73,19 +77,70 @@ test('the policy-constants rows keep High-at-very-low at step 0 and state the ne
     );
     assert.ok(wave, `${path} carries the wave-gradient row`);
     assert.ok(
-      wave.includes('`critiqueLoop.deferRelaxAtRounds` is unset by default'),
+      wave.includes('`critiqueLoop.deferRelaxAtRounds = [4]` (default'),
       wave,
     );
-    assert.ok(wave.includes('omit the key for off'), 'the default is stated');
+    assert.ok(wave.includes('JSON `null` explicitly disables it'), wave);
     assert.ok(
       wave.includes('an explicit `[]` fails schema validation'),
       'the empty array is called out, as the legacyRoots row does',
+    );
+    assert.equal(wave.includes('is unset by default'), false, wave);
+    assert.equal(wave.includes('omit the key for off'), false, wave);
+
+    const urgency = rows.find((row) =>
+      row.startsWith('| E4/E5 adopt-now urgency defer '),
+    );
+    assert.ok(
+      urgency?.includes(
+        '`critiqueLoop.deferByUrgency = "severity-tiered"` (default',
+      ),
+      path,
+    );
+
+    const cap = rows.find((row) => row.startsWith('| E4/E5 review-count cap '));
+    assert.ok(
+      cap?.includes('`critiqueLoop.deferAllAfterRounds = 5` (default'),
+      path,
+    );
+    assert.ok(cap?.includes('JSON `null` explicitly disables it'), path);
+
+    const triageRecord = rows.find((row) =>
+      row.startsWith('| E4/E5 triage record '),
+    );
+    assert.ok(
+      triageRecord?.includes('`critiqueLoop.triageRecord = record` (default'),
+      path,
     );
     assert.equal(
       /(\d{1,3}(?:,\d{3})+|\d{4,})\s*bytes?\b/i.test(wave),
       false,
       'the doc budget guard rejects a "N bytes" figure that is not a manifest budget',
     );
+  }
+});
+
+test('customization separates distributed defaults from local critiqueLoop opt-ins (#4855)', () => {
+  for (const path of CUSTOMIZATION) {
+    const text = collapse(read(path));
+    assert.ok(
+      text.includes('distributed policy when a field is omitted'),
+      path,
+    );
+    assert.ok(
+      text.includes(
+        'repository-local opt-in; it does not change the distributed defaults for adopters',
+      ),
+      path,
+    );
+  }
+});
+
+test('distributed review-policy docs do not copy the local [4, 7] threshold example (#4855)', () => {
+  for (const path of REVIEW_POLICY_PROFILES) {
+    const text = read(path);
+    assert.equal(text.includes('`[4, 7]`'), false, path);
+    assert.ok(text.includes('distributed default `[4]`'), path);
   }
 });
 
@@ -108,7 +163,10 @@ test('the customization bullet states the field contract (#3796)', () => {
     const bullet = collapse(lines.slice(first, last).join('\n'));
     for (const phrase of [
       'strictly ascending, at most two',
-      'omit the key to turn it off',
+      'default `[4]`',
+      'Omitting the key keeps the default',
+      '`null` explicitly turns it off',
+      'an explicit `[]` fails schema validation',
       'an invalid value means off',
     ]) {
       assert.ok(bullet.includes(phrase), `${path}: bullet states "${phrase}"`);

@@ -589,7 +589,7 @@ shape.
 
 ## Wave-gradient urgency defer
 
-This section is the full rule for the optional wave gradient of
+This section is the full rule for the wave gradient, enabled by default for
 `critiqueLoop.deferByUrgency: "severity-tiered"`. Before the gradient, the
 matrix there was the same at every review wave. Only the separate
 round-count trigger, `critiqueLoop.deferAfterRounds`, depended on the
@@ -600,18 +600,22 @@ count grows. The
 review-triage file carries only a short pointer, so a session that does
 not read this section behaves as it did before the gradient existed,
 except that a valid `deferAllAfterRounds` also applies the cap that the
-triage bullet states. A configuration that leaves both
-`deferRelaxAtRounds` and `deferAllAfterRounds` unset or invalid behaves
-as it did before the gradient existed. The decision
+triage bullet states. The distributed defaults are
+`deferRelaxAtRounds: [4]` and `deferAllAfterRounds: 5`; an omitted key
+keeps its default, and JSON `null` explicitly disables either field. With
+both fields disabled, the matrix behaves as it did before the gradient
+existed. The decision
 record is in the
 [design rationale](idd-design-rationale.md#wave-gradient-urgency-defer-kurone-kitoidd-skill3796).
 
 **Switch.** The gradient applies only while `critiqueLoop.deferByUrgency`
 is `"severity-tiered"` and `critiqueLoop.deferRelaxAtRounds` holds one or
-two strictly ascending positive integers, recommended `[4, 7]`. An unset
-key means off, and so does any other value: more than two entries,
-entries that are not strictly ascending integers of at least 1, or a
-different type. Off means step 0 for every pull request. The
+two strictly ascending positive integers. The distributed default is
+`[4]`; an omitted key uses that default, and JSON `null` explicitly
+disables the gradient. An explicit `[]` fails schema validation. Any
+other invalid value also means off: more than two entries, entries that
+are not strictly ascending integers of at least 1, or a different type.
+Off means step 0 for every pull request. The
 [customization guide](customization.md) states the rule, and the lite
 profile does not apply the gradient.
 
@@ -619,9 +623,8 @@ profile does not apply the gradient.
 `copilot-pull-request-reviewer[bot]` review count, PR-wide and not scoped
 to one claim: the same count `critiqueLoop.deferAfterRounds` uses. A pull
 request's relax step is the number of configured thresholds that are less
-than or equal to that count. With `[4, 7]`, counts 1 to 3 give step 0,
-counts 4 to 6 give step 1, and counts 7 and above give step 2. With
-`[3]`, counts 1 and 2 give step 0 and every count from 3 gives step 1.
+than or equal to that count. With the distributed default `[4]`, counts
+1 to 3 give step 0, and count 4 onward gives step 1.
 
 **Ceilings.** Each step raises the highest urgency at which an
 eligibility tier may still defer. Urgency is ordered `very-low` < `low`
@@ -711,9 +714,10 @@ step. The reply keeps `step <k>`, and only when convergence raised the
 step it also carries `converged <short-sha>` (the first 7 hex digits
 of `prHeadSha`).
 
-**Review-count cap.** `critiqueLoop.deferAllAfterRounds` is an optional
-integer of at least 1, unset by default. Leaving it out turns the cap
-off, and so does an invalid value. The cap compares the same PR-wide
+**Review-count cap.** `critiqueLoop.deferAllAfterRounds` defaults to `5`,
+an integer of at least 1. An omitted key keeps that default; JSON `null`
+explicitly disables the cap, and an invalid value means off. The cap
+compares the same PR-wide
 Copilot review count that the relax step uses, at or above the value of
 the field. It acts only under `critiqueLoop.deferByUrgency`
 `"severity-tiered"`, never with `--lite`, and it acts whether or not
