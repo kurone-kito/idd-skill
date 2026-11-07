@@ -45,14 +45,16 @@ git fetch origin
 git log origin/{default-branch}..{default-branch} --oneline
 ```
 
-If the log prints commits, the local default branch has unpushed work.
-Stop and report it; do not reset or overwrite it. Otherwise fast-forward:
+Proceed to the fast-forward only when `git log` succeeds with no output.
+If `origin/{default-branch}` is missing, the command fails, or it prints
+commits, stop and report; do not reset or overwrite the local branch:
 
 ```sh
 git -c merge.autoStash=false merge --ff-only origin/{default-branch}
 ```
 
-A dirty-worktree failure is a hold. Preserve staged and unmerged paths
+If the fast-forward fails, stop before creating the worktree and report
+the failure. A dirty-worktree failure is a hold. Preserve staged and unmerged paths
 and ask the operator to resolve the index. For other dirty paths, follow
 the phase instruction's preservation rule. Do not stash, discard, or
 remove the primary worktree. Keep its `HEAD` on the default branch
