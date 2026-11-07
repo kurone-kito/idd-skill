@@ -63,7 +63,8 @@ jobs:
     if: ${{ github.repository == 'kurone-kito/idd-skill' && (inputs.lint-command || 'pnpm run check') == 'pnpm run check' }}
     # Differs from the input default: own lanes must avoid slim's 15m cap.
     runs-on: ${{ inputs.runner || 'ubuntu-latest' }}
-    # Each shard keeps the full suite's bound; see pnpm-boundary-full.
+    # Issue #5013: uncensored runs reached 22.5 minutes, so keep the
+    # 30-minute floor for each shard and pnpm-boundary-full.
     timeout-minutes: 30
     strategy:
       # One failed shard must not cancel the others, or a rerun would have

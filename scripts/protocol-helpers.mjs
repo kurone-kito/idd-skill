@@ -12822,7 +12822,8 @@ export function filterTrustedClaimFamilyEvents(events, isTrustedAuthor) {
 /**
  * Same reduction as {@link resolveActiveClaim}, but also tracks which
  * specific forced-handoff marker (if any) produced the final active
- * claim's identity. `resolveActiveClaim`'s state machine has no memory of
+ * claim's identity and the ordered chain of accepted handoffs that produced
+ * it. `resolveActiveClaim`'s state machine has no memory of
  * *why* the active claim changed, so a caller that needs forced-handoff
  * provenance (`resume-claim-routing.mts`'s `evidence.forced_handoff`,
  * kurone-kito/idd-skill#2178) cannot reconstruct it safely by
@@ -12872,6 +12873,7 @@ export function resolveActiveClaimWithForcedHandoffTrace(
   let active = null;
   let releasedClaim = null;
   let appliedForcedHandoff = null;
+  let verifiedForcedHandoffChain = [];
   let activeSince = '';
   for (const event of orderedEvents) {
     const previous = active;
@@ -12888,7 +12890,7 @@ export function resolveActiveClaimWithForcedHandoffTrace(
       const candidate = previous
         ? parseForcedHandoffComment(event.body ?? '', event.createdAt ?? '')
         : null;
-      appliedForcedHandoff =
+      const applied =
         candidate &&
         next &&
         previous &&
@@ -12899,6 +12901,12 @@ export function resolveActiveClaimWithForcedHandoffTrace(
         candidate.newClaimId === next.claimId
           ? candidate
           : null;
+      appliedForcedHandoff = applied;
+      if (applied) {
+        verifiedForcedHandoffChain.push(applied);
+      } else {
+        verifiedForcedHandoffChain = [];
+      }
       // kurone-kito/idd-skill#2911: record the transition's own event
       // timestamp -- see `ActiveClaimResolution.activeSince`'s doc comment
       // for why this must be captured here (at the identity-changing step
@@ -12912,6 +12920,7 @@ export function resolveActiveClaimWithForcedHandoffTrace(
     activeClaim: active,
     releasedClaim,
     appliedForcedHandoff,
+    verifiedForcedHandoffChain,
     activeSince,
   };
 }
