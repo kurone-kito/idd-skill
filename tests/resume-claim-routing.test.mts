@@ -1205,6 +1205,116 @@ test('evidence.forced_handoff is populated on a bare --issue call (no --claim-id
     context_scope: 'issue-only',
     forced_by: 'maintainer',
     timestamp: '2026-05-12T10:01:00Z',
+    verified_chain: [
+      {
+        old_agent_id: 'copilot',
+        old_claim_id: 'claim-old',
+        new_agent_id: 'copilot',
+        new_claim_id: 'claim-new',
+        branch: 'issue/11-task',
+        linked_pr: null,
+        context_scope: 'issue-only',
+        forced_by: 'maintainer',
+        timestamp: '2026-05-12T10:01:00Z',
+      },
+    ],
+  });
+});
+
+test('evidence.forced_handoff exposes the ordered verified chain from the applied reducer transitions', () => {
+  const branch = 'issue/50-task';
+  const handoff = (
+    oldAgentId: string,
+    oldClaimId: string,
+    newAgentId: string,
+    newClaimId: string,
+    createdAt: string,
+    markerTimestamp: string,
+  ) => ({
+    createdAt,
+    author: { login: 'maintainer' },
+    body: `<!-- forced-handoff: ${JSON.stringify({
+      oldAgentId,
+      oldClaimId,
+      newAgentId,
+      newClaimId,
+      branch,
+      linkedPr: '77',
+      contextScope: 'issue-plus-pr',
+      forcedBy: 'maintainer',
+      reason: 'verified chain test',
+      timestamp: markerTimestamp,
+    })} -->\n\n_maintainer: forced handoff — IDD automation marker. Do not edit._`,
+  });
+  const result = evaluateResumeClaimRouting(
+    {
+      now: '2026-06-01T11:00:00Z',
+      events: [
+        {
+          createdAt: '2026-06-01T10:00:00Z',
+          author: { login: 'maintainer' },
+          body: '<!-- claimed-by: agent-a claim-a supersedes: none 2026-06-01T10:00:00Z branch: issue/50-task -->',
+        },
+        handoff(
+          'agent-a',
+          'claim-a',
+          'agent-b',
+          'claim-b',
+          '2026-06-01T10:01:00Z',
+          '2026-06-01T09:01:00Z',
+        ),
+        handoff(
+          'agent-b',
+          'claim-b',
+          'agent-c',
+          'claim-c',
+          '2026-06-01T10:02:00Z',
+          '2026-06-01T09:02:00Z',
+        ),
+      ],
+    },
+    {
+      isTrustedAuthor: trusted(['maintainer']),
+      isForcedHandoffEnabled: () => true,
+      isAuthorizedForcedHandoff: (forcedBy) => forcedBy === 'maintainer',
+    },
+  );
+
+  assert.equal(result.active_claim?.claim_id, 'claim-c');
+  assert.deepEqual(result.evidence.forced_handoff, {
+    old_agent_id: 'agent-b',
+    old_claim_id: 'claim-b',
+    new_agent_id: 'agent-c',
+    new_claim_id: 'claim-c',
+    branch,
+    linked_pr: '77',
+    context_scope: 'issue-plus-pr',
+    forced_by: 'maintainer',
+    timestamp: '2026-06-01T10:02:00Z',
+    verified_chain: [
+      {
+        old_agent_id: 'agent-a',
+        old_claim_id: 'claim-a',
+        new_agent_id: 'agent-b',
+        new_claim_id: 'claim-b',
+        branch,
+        linked_pr: '77',
+        context_scope: 'issue-plus-pr',
+        forced_by: 'maintainer',
+        timestamp: '2026-06-01T10:01:00Z',
+      },
+      {
+        old_agent_id: 'agent-b',
+        old_claim_id: 'claim-b',
+        new_agent_id: 'agent-c',
+        new_claim_id: 'claim-c',
+        branch,
+        linked_pr: '77',
+        context_scope: 'issue-plus-pr',
+        forced_by: 'maintainer',
+        timestamp: '2026-06-01T10:02:00Z',
+      },
+    ],
   });
 });
 
@@ -1302,6 +1412,19 @@ test('evidence.forced_handoff is not misattributed to a stale, never-applied dup
     context_scope: 'issue-only',
     forced_by: 'maintainer',
     timestamp: '2026-06-02T11:10:00Z',
+    verified_chain: [
+      {
+        old_agent_id: 'agent-D',
+        old_claim_id: 'claim-9',
+        new_agent_id: 'agent-B',
+        new_claim_id: 'claim-2',
+        branch: 'issue/50-task',
+        linked_pr: null,
+        context_scope: 'issue-only',
+        forced_by: 'maintainer',
+        timestamp: '2026-06-02T11:10:00Z',
+      },
+    ],
   });
 });
 
