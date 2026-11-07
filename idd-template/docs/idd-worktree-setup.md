@@ -54,11 +54,12 @@ git -c merge.autoStash=false merge --ff-only origin/{default-branch}
 ```
 
 If the fast-forward fails, stop before creating the worktree and report
-the failure. A dirty-worktree failure is a hold. Preserve staged and unmerged paths
-and ask the operator to resolve the index. For other dirty paths, follow
-the phase instruction's preservation rule. Do not stash, discard, or
-remove the primary worktree. Keep its `HEAD` on the default branch
-throughout B1.
+the failure. A dirty-worktree failure is a hold. See issue `#5058` and
+the [work and self-review rationale](idd-design-rationale.md#work-and-self-review).
+Preserve staged and unmerged paths and ask the operator to resolve the
+index. For other dirty paths, follow the phase instruction's preservation
+rule. Do not stash, discard, or remove the primary worktree. Keep its
+`HEAD` on the default branch throughout B1.
 
 ## Create or attach the issue worktree
 
