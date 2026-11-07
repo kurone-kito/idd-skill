@@ -4549,7 +4549,7 @@ flags feed that line. Without the pair they have no line to carry them and
 change nothing, except three flags that are refused with a usage error:
 `--path-b`, when combined with any other triage flag, and `--override` and
 `--adopt-now`, which need the pair. The line is written
-whenever the pair is given. `critiqueLoop.triageRecord` (default `off`)
+whenever the pair is given. `critiqueLoop.triageRecord` (default `record`)
 decides only whether the pair is required, whether an `enforce` refusal
 applies, and whether `--override` is accepted.
 
@@ -4624,7 +4624,9 @@ Rules:
   cap it returns `verdict defer` with no `blocked` part for each scored
   finding that no block reason holds, except the safety class, which
   keeps with `blocked safety-class`.
-  An unset or invalid field means off. See the
+  The distributed default is `5`; an omitted field keeps that default,
+  JSON `null` explicitly disables the cap, and an invalid value means off.
+  See the
   [Review-count cap paragraph](idd-review-policy-profiles.md#wave-gradient-urgency-defer).
 - **Override.** `--override` needs `record` or `enforce`, `deferByUrgency`
   `severity-tiered`, the pair, an `**Accepted**` body, and a `defer` verdict.

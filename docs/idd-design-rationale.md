@@ -3121,6 +3121,24 @@ no paired entry exists — both forms fit inside the tight
 instruction-bundle budget that motivates the exemption; neither is
 required.
 
+**Re-anchoring ready carrier drafts (issue `#5061`).** Observed 2026-11-05
+during the publication check on carrier issue `#5054`. Its only draft was a
+resolver child split from issue `#4707` and anchored to issue `#4694`. The
+replay found that issue `#4694` had no `status:authoring` label and its current
+owner generation pointed to closed issue `#4867`, so the standard child
+publisher correctly refused the old anchor. The reviewed child was later
+re-authored as issue `#5062` under held roadmap `#5060`.
+
+The carrier procedure had said to leave the carrier open when a publication
+route refused a draft, but did not describe how a later session could safely
+continue when the original anchor was no longer held. That left no explicit
+route for checking mapped targets and current claims or pull requests,
+publishing a fresh held roadmap set, updating its Tracks list after child
+identities existed, or reconciling an uncertain create without duplication.
+The re-anchoring procedure keeps the old owner history immutable and
+fail-closed, records each new child mapping, and leaves the carrier open until
+all drafts are resolved.
+
 ### Trace a documented output field to its print/return call site, not a type or variable name
 
 While drafting #2474's documentation of field-name variance across

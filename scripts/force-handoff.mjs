@@ -5,6 +5,7 @@
 // above by `pnpm run build`. Edit the .mts source, never the generated
 // .mjs. See docs/typescript-sources.md.
 import { readFileSync } from 'node:fs';
+import { isSessionQualifiedAgentId } from './claim-lock.mjs';
 import { parseCliArgs } from './cli-args.mjs';
 import {
   isAuthorizedForcedHandoffActor,
@@ -13,7 +14,10 @@ import {
   resolveTrustedCollaboratorMarkerLogins,
 } from './collaborator-permission.mjs';
 import { invalidateDiscoverHints } from './discover-hint-cache.mjs';
-import { planHandoff } from './forced-handoff-marker.mjs';
+import {
+  planHandoff,
+  resolveHandoffContext,
+} from './forced-handoff-marker.mjs';
 import {
   DEFAULT_GH_PAGINATED_TIMEOUT_MS,
   ghText,
@@ -151,7 +155,7 @@ export async function runHandoff(options = {}) {
       reason,
       staleAgeMs,
     };
-    const firstPass = planHandoff(issueComments, [], resolveOpts);
+    const firstPass = resolveHandoffContext(issueComments, [], resolveOpts);
     const linkedPrs = fetchLinkedPrs
       ? await fetchLinkedPrs(firstPass.branch)
       : ghJson([
@@ -167,93 +171,104 @@ export async function runHandoff(options = {}) {
           'number,headRefName,baseRefName',
         ]);
     let planOptions = resolveOpts;
-    let plan = planHandoff(issueComments, linkedPrs, planOptions);
+    let context = resolveHandoffContext(issueComments, linkedPrs, planOptions);
     let resolvedPrNumber;
-    if (plan.contextScope === 'issue-plus-pr') {
-      const prList = plan.prReferences.join(', ');
+    if (context.contextScope === 'issue-plus-pr') {
+      const prList = context.prReferences.join(', ');
       const rawPr = await ask(
         `Open PR on branch (${prList}). Enter PR number: `,
       );
       const prNumber = parsePositiveInteger(rawPr, '--pr');
       planOptions = { ...planOptions, prNumber };
-      plan = planHandoff(issueComments, linkedPrs, planOptions);
+      context = resolveHandoffContext(issueComments, linkedPrs, planOptions);
       resolvedPrNumber = prNumber;
     }
-    const rawSuccessorAgentId = await ask(
-      `Successor agent-id [leave blank to keep \`${plan.activeClaim.agentId}\`, or \`${RELEASE_SUCCESSOR_KEYWORD}\` for no successor]: `,
-    );
-    const enteredAgentId = rawSuccessorAgentId.trim();
-    if (enteredAgentId.toLowerCase() === RELEASE_SUCCESSOR_KEYWORD) {
-      if ((mode ?? readForcedHandoffMode()) !== 'human-gated') {
-        throw new Error(
-          "forced-handoff mode is not human-gated; idd-force-handoff is only available when forcedHandoff.mode is 'human-gated'",
-        );
-      }
-      if (!isAuthorizedForcedHandoff(forcedBy)) {
-        throw new Error(
-          `forced-by actor ${forcedBy} is not authorized to release this claim`,
-        );
-      }
-      const releaseBody = renderUnclaimedByMarker({
-        agentId: plan.activeClaim.agentId,
-        claimId: plan.activeClaim.claimId,
-        timestamp: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
-      });
-      const releaseLines = [
-        '',
-        `Forced-handoff plan for issue #${issueNumber}:`,
-        `  Context:   ${plan.contextScope}`,
-        `  Branch:    ${plan.branch}`,
-        `  Old claim: ${plan.activeClaim.agentId} / ${plan.activeClaim.claimId}`,
-        '  Action:    release -- no successor',
-        '',
-        'Marker preview:',
-        releaseBody,
-        '',
-      ];
-      write(`${releaseLines.join('\n')}\n`);
-      const releaseConfirm = await ask('Confirm forced handoff? [y/N] ');
-      ask.close?.();
-      if (releaseConfirm.trim().toLowerCase() !== 'y') {
-        write('Aborted. No changes made.\n');
-        return { posted: false };
-      }
-      const releaseResult = postComment
-        ? await postComment(issueNumber, releaseBody)
-        : ghJson([
-            'api',
-            `repos/${owner}/${name}/issues/${issueNumber}/comments`,
-            '--method',
-            'POST',
-            '-f',
-            `body=${releaseBody}`,
-          ]);
-      // A released claim changes what a cached Discover hint may list (#3588).
-      invalidateHints([
-        { owner, repo: name },
-        repo ? { owner, repo: name } : {},
-      ]);
-      const releaseUrl = String(
-        releaseResult.html_url ?? releaseResult.url ?? '',
+    let successorAgentId = '';
+    while (!successorAgentId) {
+      const rawSuccessorAgentId = await ask(
+        `Successor agent-id [leave blank to keep \`${context.activeClaim.agentId}\`, or \`${RELEASE_SUCCESSOR_KEYWORD}\` for no successor]: `,
       );
-      write(
-        [
+      const enteredAgentId = rawSuccessorAgentId.trim();
+      if (enteredAgentId.toLowerCase() === RELEASE_SUCCESSOR_KEYWORD) {
+        if ((mode ?? readForcedHandoffMode()) !== 'human-gated') {
+          throw new Error(
+            "forced-handoff mode is not human-gated; idd-force-handoff is only available when forcedHandoff.mode is 'human-gated'",
+          );
+        }
+        if (!isAuthorizedForcedHandoff(forcedBy)) {
+          throw new Error(
+            `forced-by actor ${forcedBy} is not authorized to release this claim`,
+          );
+        }
+        const releaseBody = renderUnclaimedByMarker({
+          agentId: context.activeClaim.agentId,
+          claimId: context.activeClaim.claimId,
+          timestamp: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
+        });
+        const releaseLines = [
           '',
-          `Claim released: ${releaseUrl}`,
-          `  Released claim: ${plan.activeClaim.agentId} / ${plan.activeClaim.claimId}`,
+          `Forced-handoff plan for issue #${issueNumber}:`,
+          `  Context:   ${context.contextScope}`,
+          `  Branch:    ${context.branch}`,
+          `  Old claim: ${context.activeClaim.agentId} / ${context.activeClaim.claimId}`,
+          '  Action:    release -- no successor',
           '',
-        ].join('\n'),
-      );
-      return {
-        posted: true,
-        commentUrl: releaseUrl,
-        contextScope: plan.contextScope,
-      };
+          'Marker preview:',
+          releaseBody,
+          '',
+        ];
+        write(`${releaseLines.join('\n')}\n`);
+        const releaseConfirm = await ask('Confirm forced handoff? [y/N] ');
+        ask.close?.();
+        if (releaseConfirm.trim().toLowerCase() !== 'y') {
+          write('Aborted. No changes made.\n');
+          return { posted: false };
+        }
+        const releaseResult = postComment
+          ? await postComment(issueNumber, releaseBody)
+          : ghJson([
+              'api',
+              `repos/${owner}/${name}/issues/${issueNumber}/comments`,
+              '--method',
+              'POST',
+              '-f',
+              `body=${releaseBody}`,
+            ]);
+        // A released claim changes what a cached Discover hint may list (#3588).
+        invalidateHints([
+          { owner, repo: name },
+          repo ? { owner, repo: name } : {},
+        ]);
+        const releaseUrl = String(
+          releaseResult.html_url ?? releaseResult.url ?? '',
+        );
+        write(
+          [
+            '',
+            `Claim released: ${releaseUrl}`,
+            `  Released claim: ${context.activeClaim.agentId} / ${context.activeClaim.claimId}`,
+            '',
+          ].join('\n'),
+        );
+        return {
+          posted: true,
+          commentUrl: releaseUrl,
+          contextScope: context.contextScope,
+        };
+      }
+      const candidateAgentId = enteredAgentId || context.activeClaim.agentId;
+      if (!isSessionQualifiedAgentId(candidateAgentId)) {
+        write(
+          `Invalid successor agent-id ${JSON.stringify(candidateAgentId)}. Enter a session-qualified ID (\`<family>-<suffix>\` with at least eight letters or digits in the suffix), or type \`${RELEASE_SUCCESSOR_KEYWORD}\` to release.\n`,
+        );
+        continue;
+      }
+      successorAgentId = candidateAgentId;
     }
-    if (enteredAgentId) {
-      planOptions = { ...planOptions, newAgentId: enteredAgentId };
-      plan = planHandoff(issueComments, linkedPrs, planOptions);
-    }
+    const plan = planHandoff(issueComments, linkedPrs, {
+      ...planOptions,
+      newAgentId: successorAgentId,
+    });
     if (!plan.markerBody) {
       throw new Error(
         'cannot generate forced-handoff marker: check that forced-handoff mode is human-gated and the actor is authorized',
