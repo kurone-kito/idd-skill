@@ -6,6 +6,7 @@
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
 
+import { Buffer } from 'node:buffer';
 import { execFileSync } from 'node:child_process';
 import {
   ADVISORY_CONVERGENCE_WORKFLOW_PATH,
@@ -31,15 +32,19 @@ import {
   buildCopilotRecoverySummary,
   evaluateStaleRequestRecoveryAction,
 } from './advisory-wait-state.mts';
+import { auditAuthoredIssue } from './audit-authored-issue.mts';
 import { resolveAuthoringGuardPolicy } from './authoring-label-guard.mts';
 import { parseCanonicalIntegerOrNull, parseCliArgs } from './cli-args.mts';
 import type { CollaboratorPermissionCache } from './collaborator-permission.mts';
 import { isAuthorizedForcedHandoffActor } from './collaborator-permission.mts';
+import { GENERATED_SOURCE_BANNER_PATTERN } from './consistency-helpers.mts';
 import {
   extractDeferSourceRefsIssueNumbers,
   hasDeferSourceMarker,
 } from './discover-readiness-check.mts';
+import { parseCandidateFiles } from './discover-shared-file-overlap.mts';
 import { buildDispositionPlan } from './disposition-non-review-notices.mts';
+import { parseEffortMarker } from './effort.mts';
 import {
   type AuthorityEvidence,
   normalizeAuthorityEvidence,
@@ -60,7 +65,12 @@ import {
 } from './helper-cli-runner.mts';
 import { type ActivationResult, computeActivation } from './idd-activation.mts';
 import { type IddConfig, loadTrustedIddConfig } from './idd-config.mts';
-import { parseForcedHandoffComment } from './marker-helpers.mts';
+import {
+  normalizeMarkerPrefix,
+  parseForcedHandoffComment,
+  resolveScopeOverrunEvidence,
+  type ScopeOverrunEvidenceComment,
+} from './marker-helpers.mts';
 import {
   inspectDevelopmentBranch,
   normalizePolicyConfig,
@@ -450,6 +460,12 @@ const PRE_MERGE_READINESS_FLAG_SPEC = {
 export type PreMergeReadinessReport = ReturnType<
   typeof buildPreMergeReadinessSummary
 > & {
+  /** Claim-bound scope-overrun evidence, present only when the effort audit fails. */
+  scopeOverrun?: {
+    status: 'missing' | 'invalid' | 'valid';
+    reason: string;
+    recordedHeadSha: string | null;
+  };
   // #4163: the optional hint the collector attaches (see
   // dispositionNoticeCommandHint). Declared here so a caller can read it
   // without a cast; the shared gate-summary type is unchanged.
@@ -464,6 +480,280 @@ export type PreMergeReadinessReport = ReturnType<
   trustedMarkerActors: string[];
   trustedMarkerActorsSource: TrustedMarkerActorResolution['source'];
 };
+
+type ScopeOverrunBaseFileRead =
+  | { outcome: 'ok'; value: string }
+  | { outcome: 'not-found' };
+
+/** Live post-push evidence needed to classify one claim-bound overrun. */
+export interface ScopeOverrunReadinessInput {
+  issue: { number: number; title: string; body: string };
+  pullRequestNumber: number;
+  headSha: string;
+  baseRef: string;
+  changedFiles: readonly string[];
+  renamedFromPaths: readonly string[];
+  comments: readonly ScopeOverrunEvidenceComment[];
+  markerPrefix: unknown;
+  trustedMarkerLogins: readonly string[];
+  currentRepo: string;
+  policyConfig: unknown;
+  readCurrentBranch(): string;
+  readBaseFile(path: string, ref: string): ScopeOverrunBaseFileRead;
+}
+
+/**
+ * Audit a claim-bound issue against the PR's canonical changed paths. A
+ * record is valid only when trusted, unedited post-push evidence names this
+ * exact issue, PR, branch, HEAD, and canonical file set. Owner acceptance is
+ * deliberately left to the separate F2 decision gate.
+ */
+export function resolveScopeOverrunReadiness(
+  input: ScopeOverrunReadinessInput,
+): PreMergeReadinessReport['scopeOverrun'] | null {
+  if (
+    !Number.isSafeInteger(input.issue.number) ||
+    input.issue.number < 1 ||
+    !Number.isSafeInteger(input.pullRequestNumber) ||
+    input.pullRequestNumber < 1 ||
+    typeof input.issue.title !== 'string' ||
+    input.issue.title.trim() === '' ||
+    typeof input.issue.body !== 'string' ||
+    input.issue.body.trim() === ''
+  ) {
+    throw new Error(
+      'scope-overrun audit received incomplete issue or PR evidence',
+    );
+  }
+  const markerPrefix = normalizeMarkerPrefix(input.markerPrefix);
+  const issueEffort = parseEffortMarker(input.issue.body, markerPrefix);
+  const auditOptions = {
+    shape: 'child' as const,
+    markerPrefix,
+    title: input.issue.title,
+    policyConfig: input.policyConfig,
+    currentRepo: input.currentRepo,
+    issueNumber: input.issue.number,
+  };
+  const originalFinding = scopeEffortFinding(
+    auditAuthoredIssue(input.issue.body, auditOptions),
+  );
+  if (
+    originalFinding.result === 'pass' &&
+    (!issueEffort.present ||
+      issueEffort.malformed ||
+      (issueEffort.value !== 'S' && issueEffort.value !== 'M'))
+  ) {
+    return null;
+  }
+  if (input.baseRef.trim() === '') {
+    throw new Error('scope-overrun audit cannot resolve the PR base ref');
+  }
+
+  // The general changed-file list intentionally omits rename sources for
+  // CODEOWNERS and reviewer matching. Scope evidence mirrors claimed-push's
+  // --no-renames diff, so include old paths only in this scope-specific audit.
+  const changedFiles = [
+    ...new Set([...input.changedFiles, ...input.renamedFromPaths]),
+  ].sort();
+  const syncTargets = readScopeOverrunSyncTargets(
+    input.readBaseFile,
+    input.baseRef,
+  );
+  const candidateFiles: string[] = [];
+  for (const path of changedFiles) {
+    if (syncTargets.has(path)) continue;
+    const base = input.readBaseFile(path, input.baseRef);
+    if (base.outcome === 'not-found') {
+      candidateFiles.push(path);
+      continue;
+    }
+    const text = decodeScopeOverrunBase64(base.value, path);
+    const banner = GENERATED_SOURCE_BANNER_PATTERN.exec(
+      Buffer.from(text, 'utf8').subarray(0, 200).toString('utf8'),
+    );
+    if (banner?.[1] === undefined || banner[1] === path) {
+      candidateFiles.push(path);
+    }
+  }
+  const unsafe = candidateFiles.filter((path) => /[`\r\n\uFFFD]/u.test(path));
+  if (unsafe.length > 0) {
+    throw new Error(
+      `scope-overrun audit cannot safely render changed path(s): ${unsafe.map((path) => JSON.stringify(path)).join(', ')}`,
+    );
+  }
+  const canonicalFiles = candidateFiles.sort(compareUtf8);
+  const section = `## Candidate files\n\n${canonicalFiles.map((path) => `- \`${path}\``).join('\n')}\n\n`;
+  const sectionKeys = parseCandidateFiles(section);
+  const scopedBody = `${section}${input.issue.body}`;
+  if (!sameStringList(parseCandidateFiles(scopedBody), sectionKeys)) {
+    throw new Error(
+      'scope-overrun audit could not isolate the canonical Candidate files section',
+    );
+  }
+  const scopedFinding = scopeEffortFinding(
+    auditAuthoredIssue(scopedBody, auditOptions),
+  );
+  if (originalFinding.result === 'pass' && scopedFinding.result === 'pass') {
+    return null;
+  }
+
+  const headSha = input.headSha.toLowerCase();
+  const resolution = resolveScopeOverrunEvidence({
+    comments: [...input.comments],
+    markerPrefix,
+    trustedMarkerLogins: [...input.trustedMarkerLogins],
+    issueNumber: input.issue.number,
+    currentHeadSha: headSha,
+  });
+  const recordedHeadSha =
+    resolution.record?.kind === 'post-push' ? resolution.record.headSha : null;
+  if (resolution.status === 'absent') {
+    return {
+      status: 'missing',
+      reason: resolution.reason,
+      recordedHeadSha: null,
+    };
+  }
+  if (resolution.status === 'invalid') {
+    return { status: 'invalid', reason: resolution.reason, recordedHeadSha };
+  }
+  if (resolution.reason !== 'no-decision' && resolution.status === 'pending') {
+    return { status: 'invalid', reason: resolution.reason, recordedHeadSha };
+  }
+  const record = resolution.record;
+  if (record?.kind !== 'post-push') {
+    return {
+      status: 'invalid',
+      reason: 'pre-push-record-has-no-head',
+      recordedHeadSha: null,
+    };
+  }
+  const branch = input.readCurrentBranch().trim();
+  if (branch === '' || !/^[0-9a-f]{40}$/iu.test(input.headSha)) {
+    throw new Error(
+      'scope-overrun audit could not read the current PR branch and HEAD',
+    );
+  }
+  if (
+    record.pullRequestNumber !== input.pullRequestNumber ||
+    record.branch !== branch ||
+    !sameStringList(record.candidateFiles, canonicalFiles)
+  ) {
+    return {
+      status: 'invalid',
+      reason: 'record-conflict',
+      recordedHeadSha: record.headSha,
+    };
+  }
+  if (record.headSha !== headSha) {
+    return {
+      status: 'invalid',
+      reason: 'current-head-mismatch',
+      recordedHeadSha: record.headSha,
+    };
+  }
+  return {
+    status: 'valid',
+    reason: resolution.reason,
+    recordedHeadSha: record.headSha,
+  };
+}
+
+function scopeEffortFinding(report: ReturnType<typeof auditAuthoredIssue>) {
+  const finding = report.findings.find(
+    (entry) => entry.id === 'effort-candidate-file-limit',
+  );
+  if (!finding) {
+    throw new Error('scope-overrun audit did not return its effort finding');
+  }
+  return finding;
+}
+
+function readScopeOverrunSyncTargets(
+  readBaseFile: ScopeOverrunReadinessInput['readBaseFile'],
+  ref: string,
+): Set<string> {
+  const read = readBaseFile('audit/sync-manifest.json', ref);
+  if (read.outcome === 'not-found') return new Set();
+  let manifest: unknown;
+  try {
+    manifest = JSON.parse(
+      decodeScopeOverrunBase64(read.value, 'audit/sync-manifest.json'),
+    );
+  } catch (error) {
+    throw new Error(
+      `scope-overrun audit cannot read the base sync manifest: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  if (
+    typeof manifest !== 'object' ||
+    manifest === null ||
+    Array.isArray(manifest)
+  ) {
+    throw new Error('scope-overrun audit found a malformed base sync manifest');
+  }
+  const pairs = (manifest as { syncPairs?: unknown }).syncPairs;
+  if (pairs === undefined) return new Set();
+  if (!Array.isArray(pairs)) {
+    throw new Error(
+      'scope-overrun audit found malformed syncPairs in the base manifest',
+    );
+  }
+  const targets = new Set<string>();
+  for (const [index, pair] of pairs.entries()) {
+    if (typeof pair !== 'object' || pair === null || Array.isArray(pair)) {
+      throw new Error(
+        `scope-overrun audit found malformed syncPairs entry ${index + 1}`,
+      );
+    }
+    const { target, mode } = pair as { target?: unknown; mode?: unknown };
+    if (
+      typeof target !== 'string' ||
+      target === '' ||
+      typeof mode !== 'string'
+    ) {
+      throw new Error(
+        `scope-overrun audit found malformed syncPairs entry ${index + 1}`,
+      );
+    }
+    if (!['exact', 'concreted', 'contains', 'structure'].includes(mode)) {
+      throw new Error(
+        `scope-overrun audit found unsupported syncPairs mode ${JSON.stringify(mode)}`,
+      );
+    }
+    if (mode === 'exact' || mode === 'concreted') targets.add(target);
+  }
+  return targets;
+}
+
+function decodeScopeOverrunBase64(value: string, path: string): string {
+  const encoded = value.replace(/\s/gu, '');
+  if (
+    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(
+      encoded,
+    )
+  ) {
+    throw new Error(
+      `scope-overrun audit received malformed base64 for ${path}`,
+    );
+  }
+  return Buffer.from(encoded, 'base64').toString('utf8');
+}
+
+function compareUtf8(left: string, right: string): number {
+  return Buffer.compare(Buffer.from(left, 'utf8'), Buffer.from(right, 'utf8'));
+}
+
+function sameStringList(
+  left: readonly string[],
+  right: readonly string[],
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every((value, index) => value === right[index])
+  );
+}
 
 /**
  * Fetch live GitHub state for the PR + claim issue and build the
@@ -936,6 +1226,51 @@ export function collectPreMergeReadiness(
         ])
       : [],
   });
+
+  let scopeOverrun: PreMergeReadinessReport['scopeOverrun'] | null;
+  if (!args.claimless && args.claimIssueNumber !== null) {
+    const claimedIssue = port.getWorkItem(args.claimIssueNumber);
+    if (
+      !claimedIssue ||
+      typeof claimedIssue.title !== 'string' ||
+      claimedIssue.title.trim() === '' ||
+      typeof claimedIssue.body !== 'string' ||
+      claimedIssue.body.trim() === ''
+    ) {
+      throw new Error(
+        `scope-overrun audit cannot read issue #${args.claimIssueNumber} title and body`,
+      );
+    }
+    scopeOverrun = resolveScopeOverrunReadiness({
+      issue: {
+        number: args.claimIssueNumber,
+        title: claimedIssue.title,
+        body: claimedIssue.body,
+      },
+      pullRequestNumber: args.prNumber as number,
+      headSha: prHeadSha,
+      baseRef: baseRefName,
+      changedFiles,
+      renamedFromPaths: port.listChangeRequestRenamedFromPaths(
+        args.prNumber as number,
+      ),
+      comments: claimComments.map((comment) => ({
+        id: comment.id,
+        createdAt: comment.created_at,
+        body: comment.body,
+        authorLogin: comment.user?.login,
+        lastEditedAt: comment.last_edited_at,
+      })),
+      markerPrefix: iddConfig?.markerPrefix,
+      trustedMarkerLogins,
+      currentRepo: `${owner}/${repo}`,
+      policyConfig: iddConfig,
+      readCurrentBranch: () =>
+        port.getChangeRequestHeadRef(args.prNumber as number),
+      readBaseFile: (path, ref) =>
+        port.getRepositoryFileContentAtRef(`${owner}/${repo}`, path, ref),
+    });
+  }
 
   // kurone-kito/idd-skill#3328: out-of-loop membership check. Only
   // evaluated when claimless AND (the PR actually has closing references
@@ -1770,6 +2105,23 @@ export function collectPreMergeReadiness(
     },
   );
 
+  const reportSummary =
+    scopeOverrun !== undefined &&
+    scopeOverrun !== null &&
+    scopeOverrun.status !== 'valid'
+      ? {
+          ...summary,
+          ready: false,
+          blockers: [
+            ...(summary.blockers as Array<Record<string, unknown>>),
+            {
+              gate: 'scope-overrun',
+              detail: `scope overrun ${scopeOverrun.status}: ${scopeOverrun.reason}`,
+            },
+          ],
+        }
+      : summary;
+
   // #4163: name the E6 helper command when it would record exactly the missing
   // bot items (see dispositionNoticeCommandHint). The hint is the only field
   // this adds; the verdict and every count are unchanged.
@@ -1790,7 +2142,10 @@ export function collectPreMergeReadiness(
     : null;
 
   return {
-    ...summary,
+    ...reportSummary,
+    ...(scopeOverrun === undefined || scopeOverrun === null
+      ? {}
+      : { scopeOverrun }),
     ...(summary.dispositionEvidence && dispositionNoticeHint !== null
       ? {
           dispositionEvidence: {

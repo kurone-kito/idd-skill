@@ -458,17 +458,20 @@ a follow-up or start a second loop. If the companion is unavailable, record the
 proposal in a comment/PR follow-ups; never create it ad hoc or improvise
 worker-side authoring.
 
-**Scope overrun** (helper runtime only): when profile-selected
-`audit-authored-issue --shape child --stdin --marker-prefix {markerPrefix}`
-fails `effort-candidate-file-limit` on the issue body or with
-`## Candidate files` set to the diff's canonical paths, stop coding
-without pushing. Comment the estimate, candidate files, changed files,
-and a split proposal; release per the Abort rule (`unclaimed-by`); run
-`lost-claim-cleanup`. With the companion, hand it that proposal as a
-held split draft: it holds this issue, publishes a held roadmap whose
-children record `Split out of #<n>`, and comments its link; if refused,
-the comment stands. Never add needs-decision or ask a human
-([rationale](../../docs/idd-design-rationale.md#b3--scope-overrun-returns-to-authoring)).
+**Scope overrun**: if the audit finds
+`effort-candidate-file-limit`, stop without pushing. Use the
+`claimed-push` `scope.scopeOverrun` fields (`effort`, `estimate`,
+`candidateFiles`, `changedFiles`), or B3's finding and paths.
+
+Revalidate each write. Post the marker with `post-idd-marker --apply`
+(no PR fields), then a visible split proposal with the estimate,
+candidate and changed files, plus the exact `idd-agent-authored` suffix.
+Verify both bodies, trusted authors and unedited state in full history.
+If uncertain, inspect comments and retain the claim. After verification,
+release with `unclaimed-by` and run `lost-claim-cleanup`. If available,
+hand off as a held split draft; refusal leaves the comment. Never add
+`needs-decision` or ask a human.
+See the [rationale](../../docs/idd-design-rationale.md).
 
 ---
 
