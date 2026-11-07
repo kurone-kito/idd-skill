@@ -66,6 +66,10 @@ and [Local-copy installs](#local-copy-installs);
 `idd-template/ONBOARDING.md` Option A/B point here for the exact
 commands instead of inlining them.
 
+The core import includes the on-demand
+[IDD Worktree Setup — B1](../idd-worktree-setup.md) guide for creating
+and validating an issue worktree.
+
 Each companion's generated block describes canonical source paths relative
 to the idd-skill checkout. Neither is a target installation path: the
 [Remote fetch examples](#remote-fetch-examples) below use a separate
@@ -292,6 +296,7 @@ for FILE in \
   ".github/instructions/lite/idd-advisory-wait-lite.instructions.md" \
   "docs/index.md" \
   "docs/idd-workflow.md" \
+  "docs/idd-worktree-setup.md" \
   "docs/idd-review-policy-profiles.md" \
   "docs/idd-helper-scripts.md" \
   "docs/idd-autonomy-contract.md" \
@@ -430,6 +435,7 @@ for FILE in \
   ".github/instructions/lite/idd-advisory-wait-lite.instructions.md" \
   "docs/index.md" \
   "docs/idd-workflow.md" \
+  "docs/idd-worktree-setup.md" \
   "docs/idd-review-policy-profiles.md" \
   "docs/idd-helper-scripts.md" \
   "docs/idd-autonomy-contract.md" \
