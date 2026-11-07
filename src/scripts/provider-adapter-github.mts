@@ -4428,8 +4428,9 @@ export function createGithubProviderAdapter(
       // required-reviewer pattern matching (pre-merge-readiness.mts),
       // where a stale rename source could pull in an obsolete owner or
       // let an approval from it substitute for the destination path's
-      // real owner. See {@link listChangeRequestRenamedFromPaths} for the
-      // one consumer that specifically needs the old path too.
+      // real owner. The self-referential-bootstrap check and scope-overrun
+      // audit use the separate renamed-from list; current-path consumers
+      // above must not use it.
       return rows.map((row) => String(row.filename ?? ''));
     },
 
