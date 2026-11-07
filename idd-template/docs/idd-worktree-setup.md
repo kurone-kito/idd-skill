@@ -138,7 +138,9 @@ the configured command as written. It must be safe to rerun after a
 retry or worktree recreation.
 
 Some package managers can report success while leaving a required
-binary absent. If the configured command uses the
+binary absent, as observed in issue `#1237` (see the
+[incident rationale](idd-design-rationale.md#b1-step-3--install-deps-silent-under-install-detection)).
+If the configured command uses the
 [`verify-install-deps` helper](idd-helper-scripts.md),
 confirm that its key post-install artifact exists; the helper retries
 the install once and fails loudly if verification still fails.
