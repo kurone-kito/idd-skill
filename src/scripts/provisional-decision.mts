@@ -80,7 +80,7 @@ export interface ProvisionalDecisionStore {
   readHistory(): Promise<ProvisionalDecisionHistoryRead>;
   readSourceIssue(): Promise<ProvisionalDecisionSourceIssueRead>;
   readPullRequest(url: string): Promise<ProvisionalDecisionPullRequestRead>;
-  /** Used by the write child; this read-only child never calls it. */
+  /** Append once by record ID, returning the created or existing comment. */
   appendRecordBody(
     recordId: string,
     body: string,
@@ -88,7 +88,7 @@ export interface ProvisionalDecisionStore {
     readonly result: 'created' | 'existed';
     readonly record: ProvisionalDecisionStoredRecord;
   }>;
-  /** `apply: false` is the only form this read-only child may call. */
+  /** Apply when requested, then return the label state read back from GitHub. */
   applyOrReadDecisionLabel(input: {
     readonly labelName: string;
     readonly apply: boolean;
@@ -918,9 +918,8 @@ function createPlan(
   );
 }
 
-/** Read-only steps 0 through 7 of the provisional-decision write protocol. */
-// audit:ignore-dead-export: consumed by the command child #4799
-export async function runProvisionalDecisionCommand(
+/** Read-only steps 0 through 7 of the provisional-decision protocol. */
+async function planProvisionalDecisionCommand(
   request: ProvisionalDecisionCommandRequest,
   store: ProvisionalDecisionStore,
 ): Promise<ProvisionalDecisionCommandResult> {
@@ -1184,7 +1183,10 @@ export async function runProvisionalDecisionCommand(
           ? 'worktree branch does not match the active claim'
           : request.claimId !== folded.active.claimId
             ? 'a different claim is active'
-            : null;
+            : request.type === 'work-completed' &&
+                !request.executionCriteriaSatisfied
+              ? 'execution criteria are not satisfied'
+              : null;
     if (earlyGateFailure) {
       return refused(
         'fix-input',
@@ -1194,14 +1196,18 @@ export async function runProvisionalDecisionCommand(
       );
     }
     try {
-      const label = await store.applyOrReadDecisionLabel({
-        labelName: chooseLabelName(),
-        apply: false,
-      });
+      let labelPresent = false;
+      if (request.type === 'work-completed') {
+        const label = await store.applyOrReadDecisionLabel({
+          labelName: chooseLabelName(),
+          apply: false,
+        });
+        labelPresent = label.present;
+      }
       existingPlan = {
         commentId: sameIdComment.id,
         commentUrl: sameIdComment.url,
-        labelPresent: label.present,
+        labelPresent,
       };
       const existingCandidate = storedRecord;
       const resultPlan = createPlan(
@@ -1218,7 +1224,7 @@ export async function runProvisionalDecisionCommand(
         existingPlan,
         pullRequest,
       );
-      if (request.type === 'work-completed' && !label.present) {
+      if (request.type === 'work-completed' && !labelPresent) {
         return {
           state: 'planned',
           recordId,
@@ -1270,5 +1276,369 @@ export async function runProvisionalDecisionCommand(
     recordId,
     commentUrl: '',
     plan: resultPlan,
+  };
+}
+
+export interface ProvisionalDecisionCommandOptions {
+  /** Defaults to false. Only true may append a record or apply the label. */
+  readonly apply?: boolean;
+}
+
+function expectedStatus(
+  request: ProvisionalDecisionCommandRequest,
+): ReplayedProvisionalDecision['status'] {
+  switch (request.type) {
+    case 'selected':
+      return 'selected';
+    case 'work-started':
+      return 'in-progress';
+    case 'work-completed':
+      return 'confirmation-pending';
+  }
+}
+
+function sameLineage(
+  left: readonly VerifiedProvisionalDecisionClaim[],
+  right: readonly VerifiedProvisionalDecisionClaim[],
+): boolean {
+  return stableJson(left) === stableJson(right);
+}
+
+function stepEightPlanChanged(
+  before: ProvisionalDecisionPlan,
+  after: ProvisionalDecisionPlan,
+): boolean {
+  return (
+    !sameContent(before.candidateRecord, after.candidateRecord) ||
+    before.candidateRecord.source.snapshot.title !==
+      after.candidateRecord.source.snapshot.title ||
+    before.candidateRecord.source.snapshot.bodySha256 !==
+      after.candidateRecord.source.snapshot.bodySha256 ||
+    !sameLineage(before.verifiedClaimLineage, after.verifiedClaimLineage) ||
+    stableJson(before.locatedDecision) !== stableJson(after.locatedDecision)
+  );
+}
+
+function recoveryHold(
+  result: ProvisionalDecisionCommandResult,
+  reason: string,
+  recordId: string | null = result.recordId,
+  commentUrl = result.commentUrl,
+): ProvisionalDecisionCommandResult {
+  return refused('recovery-hold', reason, recordId, commentUrl);
+}
+
+function verifyStoredAppend(
+  request: ProvisionalDecisionCommandRequest,
+  expected: ProvisionalDecisionRecord,
+  expectedDecision: ProvisionalDecisionPlan['locatedDecision'],
+  stored: ProvisionalDecisionStoredRecord,
+  result: ProvisionalDecisionCommandResult,
+): string | null {
+  if (result.state === 'refused') {
+    return `fresh history verification refused: ${result.reason ?? result.action}`;
+  }
+  if (!('plan' in result) || !result.plan) {
+    return 'fresh history verification did not return its plan';
+  }
+  const comments = rawRecordMatches(
+    result.plan.history.comments,
+    expected.recordId,
+  );
+  if (comments.length !== 1) {
+    return 'fresh history must contain exactly one matching record';
+  }
+  const comment = comments[0];
+  if (
+    !comment ||
+    comment.id !== stored.id ||
+    comment.url !== stored.url ||
+    !comment.trustedAuthor ||
+    comment.edited
+  ) {
+    return 'fresh history record identity, trust, or edit state differs';
+  }
+  const record = parseStoredRecord(comment);
+  if (!record || !sameContent(record, expected)) {
+    return 'fresh history record content differs from the appended record';
+  }
+  if (
+    result.plan.candidateRecord.recordId !== expected.recordId ||
+    result.plan.candidateRecord.source.snapshot.title !==
+      request.baseline.title ||
+    result.plan.candidateRecord.source.snapshot.bodySha256 !==
+      request.baseline.bodySha256
+  ) {
+    return 'fresh history record baseline differs from the request';
+  }
+  const decisionRecordId =
+    request.type === 'selected'
+      ? expected.recordId
+      : expectedDecision?.recordId;
+  if (
+    !decisionRecordId ||
+    result.plan.locatedDecision?.recordId !== decisionRecordId ||
+    result.plan.locatedDecision.bundleGeneration !==
+      expected.bundleGeneration ||
+    result.plan.locatedDecision.decisionGeneration !==
+      expected.decisionGeneration ||
+    result.plan.locatedDecision.status !== expectedStatus(request)
+  ) {
+    return 'fresh history replay did not produce the expected decision status';
+  }
+  if (
+    result.plan.existingRecord?.commentId !== stored.id ||
+    result.plan.existingRecord.commentUrl !== stored.url
+  ) {
+    return 'fresh history plan did not retain the stored record identity';
+  }
+  return null;
+}
+
+async function applyCompletionLabel(
+  request: ProvisionalDecisionCommandRequest,
+  store: ProvisionalDecisionStore,
+  planned: ProvisionalDecisionCommandResult,
+): Promise<ProvisionalDecisionCommandResult> {
+  if (
+    request.type !== 'work-completed' ||
+    planned.state !== 'planned' ||
+    !planned.plan.existingRecord
+  ) {
+    return recoveryHold(
+      planned,
+      'completion label step requires a verified stored completion record',
+    );
+  }
+  const { plan: resultPlan } = planned;
+  const recordId = resultPlan.candidateRecord.recordId;
+  const existingRecord = resultPlan.existingRecord;
+  if (!existingRecord) {
+    return recoveryHold(
+      planned,
+      'completion label step requires a verified stored completion record',
+    );
+  }
+  const commentUrl = existingRecord.commentUrl;
+  if (existingRecord.labelPresent) {
+    return {
+      state: 'reconciled',
+      action: 'reconcile',
+      recordId,
+      commentUrl,
+    };
+  }
+  if (resultPlan.locatedDecision?.status !== 'confirmation-pending') {
+    return {
+      state: 'reconciled',
+      action: 'reconcile',
+      reason: 'decision no longer awaits confirmation',
+      recordId,
+      commentUrl,
+    };
+  }
+  try {
+    const label = await store.applyOrReadDecisionLabel({
+      labelName: chooseLabelName(),
+      apply: true,
+    });
+    if (label.present) return { state: 'applied', recordId, commentUrl };
+    return {
+      state: 'reconciled',
+      action: 'reconcile',
+      reason: 'decision label was not present after apply and read-back',
+      recordId,
+      commentUrl,
+    };
+  } catch (error) {
+    return {
+      state: 'reconciled',
+      action: 'reconcile',
+      reason: `decision label apply or read-back failed: ${errorText(error)}`,
+      recordId,
+      commentUrl,
+    };
+  }
+}
+
+/**
+ * Run the provisional-decision protocol. The default is read-only; `apply`
+ * re-reads every gate before appending or applying a completion label.
+ */
+// audit:ignore-dead-export: consumed by the command child #4799
+export async function runProvisionalDecisionCommand(
+  request: ProvisionalDecisionCommandRequest,
+  store: ProvisionalDecisionStore,
+  options: ProvisionalDecisionCommandOptions = {},
+): Promise<ProvisionalDecisionCommandResult> {
+  const initial = await planProvisionalDecisionCommand(request, store);
+  if (!options.apply || initial.state !== 'planned') return initial;
+
+  const initialPlan = initial.plan;
+  let stepEight: ProvisionalDecisionCommandResult;
+  try {
+    stepEight = await planProvisionalDecisionCommand(request, store);
+  } catch (error) {
+    return recoveryHold(
+      initial,
+      `step-8 fresh read failed: ${errorText(error)}`,
+      initialPlan.candidateRecord.recordId,
+    );
+  }
+
+  if (stepEight.state === 'refused') {
+    return recoveryHold(
+      stepEight,
+      `step-8 fresh read no longer satisfies the plan: ${stepEight.reason ?? stepEight.action}`,
+      initialPlan.candidateRecord.recordId,
+      initialPlan.existingRecord?.commentUrl,
+    );
+  }
+
+  if (stepEight.state === 'reconciled') {
+    if (stepEight.plan && stepEightPlanChanged(initialPlan, stepEight.plan)) {
+      return recoveryHold(
+        stepEight,
+        'step-8 located decision, bundle, source, or claim lineage changed',
+        initialPlan.candidateRecord.recordId,
+        stepEight.plan.existingRecord?.commentUrl ??
+          initialPlan.existingRecord?.commentUrl ??
+          stepEight.commentUrl,
+      );
+    }
+    return stepEight;
+  }
+  if (stepEight.state !== 'planned') {
+    return recoveryHold(
+      stepEight,
+      'step-8 fresh read did not return a plan',
+      initialPlan.candidateRecord.recordId,
+    );
+  }
+
+  const freshPlan = stepEight.plan;
+  if (freshPlan.existingRecord) {
+    // Another writer may have created this record after the first plan. The
+    // planner has just applied the existing-record step-6 checks to it.
+    if (stepEightPlanChanged(initialPlan, freshPlan)) {
+      return recoveryHold(
+        stepEight,
+        'step-8 located decision, bundle, source, or claim lineage changed',
+        initialPlan.candidateRecord.recordId,
+        freshPlan.existingRecord.commentUrl,
+      );
+    }
+    return applyCompletionLabel(request, store, stepEight);
+  }
+
+  if (
+    initialPlan.existingRecord ||
+    stepEightPlanChanged(initialPlan, freshPlan)
+  ) {
+    return recoveryHold(
+      stepEight,
+      'step-8 located decision, bundle, source, or claim lineage changed',
+      initialPlan.candidateRecord.recordId,
+    );
+  }
+
+  let append: {
+    readonly result: 'created' | 'existed';
+    readonly record: ProvisionalDecisionStoredRecord;
+  };
+  try {
+    append = await store.appendRecordBody(
+      initialPlan.candidateRecord.recordId,
+      recordCommentBody(initialPlan.candidateRecord),
+    );
+  } catch (error) {
+    return recoveryHold(
+      stepEight,
+      `step-8 append failed: ${errorText(error)}`,
+      initialPlan.candidateRecord.recordId,
+    );
+  }
+
+  if (!append.record.id || !append.record.url) {
+    return recoveryHold(
+      stepEight,
+      'append returned an empty comment identity',
+      initialPlan.candidateRecord.recordId,
+      append.record.url,
+    );
+  }
+
+  let readBack: ProvisionalDecisionCommandResult;
+  try {
+    readBack = await planProvisionalDecisionCommand(request, store);
+  } catch (error) {
+    return recoveryHold(
+      stepEight,
+      `step-9 fresh read failed: ${errorText(error)}`,
+      initialPlan.candidateRecord.recordId,
+      append.record.url,
+    );
+  }
+
+  if (append.result === 'existed' && readBack.state === 'refused') {
+    if (readBack.action === 'fix-input') {
+      return refused(
+        'fix-input',
+        readBack.reason ?? 'existing record gates failed',
+        initialPlan.candidateRecord.recordId,
+        append.record.url,
+      );
+    }
+    return recoveryHold(
+      readBack,
+      readBack.reason ?? 'existing record could not be verified',
+      initialPlan.candidateRecord.recordId,
+      append.record.url,
+    );
+  }
+
+  const readBackError = verifyStoredAppend(
+    request,
+    initialPlan.candidateRecord,
+    initialPlan.locatedDecision,
+    append.record,
+    readBack,
+  );
+  if (readBackError) {
+    return recoveryHold(
+      readBack,
+      append.result === 'created'
+        ? `step-9 read-back failed: ${readBackError}`
+        : `step-8 existing-record verification failed: ${readBackError}`,
+      initialPlan.candidateRecord.recordId,
+      append.record.url,
+    );
+  }
+
+  if (append.result === 'existed') {
+    if (readBack.state === 'refused') return readBack;
+    if (readBack.state === 'planned') {
+      return applyCompletionLabel(request, store, readBack);
+    }
+    return readBack;
+  }
+
+  if (request.type === 'work-completed') {
+    if (readBack.state === 'planned') {
+      return applyCompletionLabel(request, store, readBack);
+    }
+    if (readBack.state === 'reconciled') return readBack;
+    return recoveryHold(
+      readBack,
+      'step-9 verification did not permit completion-label application',
+      initialPlan.candidateRecord.recordId,
+      append.record.url,
+    );
+  }
+
+  return {
+    state: 'applied',
+    recordId: initialPlan.candidateRecord.recordId,
+    commentUrl: append.record.url,
   };
 }

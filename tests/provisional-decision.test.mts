@@ -11,6 +11,7 @@ import {
   type ProvisionalDecisionCommandRequest,
   type ProvisionalDecisionHistoryComment,
   type ProvisionalDecisionHistoryRead,
+  type ProvisionalDecisionPlan,
   type ProvisionalDecisionPullRequestRead,
   type ProvisionalDecisionSourceIssueRead,
   type ProvisionalDecisionStore,
@@ -21,6 +22,7 @@ import {
   PROVISIONAL_DECISION_RECORD_MARKER,
   type ProvisionalDecisionRecord,
   parseProvisionalDecisionRecordComment,
+  replayProvisionalDecisionHistory,
   type VerifiedProvisionalReworkRoadmap,
 } from '../src/scripts/provisional-decision-state.mts';
 
@@ -143,7 +145,23 @@ class MemoryStore implements ProvisionalDecisionStore {
   pullRequests = new Map<string, ProvisionalDecisionPullRequestRead>();
   labelPresent = false;
   labelReadFails = false;
+  labelApplyFails = false;
+  labelApplyReturnsFalse = false;
+  waitForLabelOnExisted = false;
   appendCalls = 0;
+  readHistoryHook?: (
+    readNumber: number,
+    store: MemoryStore,
+  ) => void | Promise<void>;
+  beforeAppend?: (
+    recordId: string,
+    body: string,
+    store: MemoryStore,
+  ) => void | Promise<void>;
+  afterAppend?: (
+    appended: ProvisionalDecisionHistoryComment,
+    store: MemoryStore,
+  ) => void | Promise<void>;
   labelCalls: Array<{ labelName: string; apply: boolean }> = [];
   pullRequestReads: string[] = [];
   historyReads = 0;
@@ -153,6 +171,7 @@ class MemoryStore implements ProvisionalDecisionStore {
   async readHistory(): Promise<ProvisionalDecisionHistoryRead> {
     this.historyReads += 1;
     if (this.readFails) throw new Error('history unavailable');
+    await this.readHistoryHook?.(this.historyReads, this);
     return this.history;
   }
 
@@ -171,12 +190,47 @@ class MemoryStore implements ProvisionalDecisionStore {
     return result;
   }
 
-  async appendRecordBody(): Promise<{
-    result: 'created';
+  async appendRecordBody(
+    recordId: string,
+    body: string,
+  ): Promise<{
+    result: 'created' | 'existed';
     record: { id: string; url: string };
   }> {
     this.appendCalls += 1;
-    return { result: 'created', record: { id: 'new', url: 'new-url' } };
+    await this.beforeAppend?.(recordId, body, this);
+    const existing = this.history.comments.find((candidate) => {
+      const parsed = parseProvisionalDecisionRecordComment(candidate.body);
+      return parsed.ok && parsed.record.recordId === recordId;
+    });
+    if (existing) {
+      while (this.waitForLabelOnExisted && !this.labelPresent) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 1));
+      }
+      return {
+        result: 'existed',
+        record: { id: existing.id, url: existing.url },
+      };
+    }
+    const previousServerTime = Date.parse(this.history.serverDate);
+    const appendedTime =
+      (Number.isFinite(previousServerTime)
+        ? previousServerTime
+        : Date.parse('2026-11-03T11:00:10Z')) + 1000;
+    const appendedAt = new Date(appendedTime)
+      .toISOString()
+      .replace('.000Z', 'Z');
+    const appended = comment(String(99 + this.appendCalls), body, appendedAt);
+    this.history = {
+      ...this.history,
+      comments: [...this.history.comments, appended],
+      serverDate: new Date(appendedTime + 1000).toUTCString(),
+    };
+    await this.afterAppend?.(appended, this);
+    return {
+      result: 'created',
+      record: { id: appended.id, url: appended.url },
+    };
   }
 
   async applyOrReadDecisionLabel(input: {
@@ -185,7 +239,11 @@ class MemoryStore implements ProvisionalDecisionStore {
   }): Promise<{ present: boolean }> {
     this.labelCalls.push(input);
     if (this.labelReadFails) throw new Error('label lookup failed');
-    if (input.apply) this.labelPresent = true;
+    if (input.apply && this.labelApplyFails)
+      throw new Error('label apply failed');
+    if (input.apply && !this.labelApplyReturnsFalse) {
+      this.labelPresent = true;
+    }
     return { present: this.labelPresent };
   }
 
@@ -872,10 +930,7 @@ test('a same evidence URL selection retry reconciles to the stored record', asyn
     assert.equal(result.plan?.existingRecord?.labelPresent, false);
   }
   assert.equal(store.appendCalls, 0);
-  assert.deepEqual(
-    store.labelCalls.map(({ apply }) => apply),
-    [false],
-  );
+  assert.deepEqual(store.labelCalls, []);
 });
 
 test('comment URL casing preserves selection and work-started retry identity', async (t) => {
@@ -1011,7 +1066,7 @@ test('a matching record is not reconciled when claim, policy, or worktree gates 
   }
 });
 
-test('step-6 existing record trust, edit, baseline, and label failures fail closed', async (t) => {
+test('step-6 existing record trust, edit, and baseline failures fail closed', async (t) => {
   const { record } = await selectedRecord();
   for (const [name, overrides, expected] of [
     ['untrusted', { trustedAuthor: false }, 'recovery-hold'],
@@ -1044,18 +1099,6 @@ test('step-6 existing record trust, edit, baseline, and label failures fail clos
         request({ baseline: { title: 'old', bodySha256 } }),
         store,
       ),
-      'recovery-hold',
-    );
-  });
-  await t.test('label read fails', async () => {
-    const store = new MemoryStore();
-    store.history = {
-      ...store.history,
-      comments: [...store.history.comments, selectionComment(record)],
-    };
-    store.labelReadFails = true;
-    assertRefused(
-      await runProvisionalDecisionCommand(request(), store),
       'recovery-hold',
     );
   });
@@ -1114,10 +1157,13 @@ test('changed claim lineage under the same recordId reconciles for the active cl
   const result = await runProvisionalDecisionCommand(
     request({ claimId: nextClaimId }),
     store,
+    { apply: true },
   );
 
   assert.equal(result.state, 'reconciled', JSON.stringify(result));
   assert.equal(result.recordId, record.recordId);
+  assert.equal(store.appendCalls, 0);
+  assert.deepEqual(store.labelCalls, []);
 });
 
 test('multiple decisions using the evidence URL are ambiguous', async () => {
@@ -1699,21 +1745,29 @@ test('work-completed is allowed for an in-progress decision in a mixed bundle', 
     mergeCommitSha: 'c'.repeat(40),
     requiredChecksPassing: true,
   });
+  const completionRequest = request({
+    type: 'work-completed',
+    evidenceUrl: evidence2.url,
+    pullRequestUrl: pr2Url,
+    verifiedHeadSha: headSha,
+    executionCriteriaSatisfied: true,
+  });
+  const plan = await runProvisionalDecisionCommand(completionRequest, store);
+  assert.equal(plan.state, 'planned', JSON.stringify(plan));
+  if (plan.state !== 'planned') return;
+  assert.equal(plan.plan.locatedDecision?.status, 'in-progress');
+  assert.equal(plan.plan.locatedDecision?.bundleState, 'accepting');
   const current = await runProvisionalDecisionCommand(
-    request({
-      type: 'work-completed',
-      evidenceUrl: evidence2.url,
-      pullRequestUrl: pr2Url,
-      verifiedHeadSha: headSha,
-      executionCriteriaSatisfied: true,
-    }),
+    completionRequest,
     store,
+    { apply: true },
   );
-  assert.equal(current.state, 'planned', JSON.stringify(current));
-  if (current.state === 'planned') {
-    assert.equal(current.plan.locatedDecision?.status, 'in-progress');
-    assert.equal(current.plan.locatedDecision?.bundleState, 'accepting');
-  }
+  assert.equal(current.state, 'applied', JSON.stringify(current));
+  assert.equal(store.appendCalls, 1);
+  assert.equal(store.labelPresent, true);
+  assert.ok(store.labelCalls.some(({ apply }) => apply));
+  assert.equal(current.recordId, plan.plan.candidateRecord.recordId);
+  assertStoredRecord(store, current.recordId, 'work-completed');
 });
 
 test('a new selection after a replay-accepted complete bundle uses the next generation', async () => {
@@ -2641,4 +2695,1010 @@ test('inputs behind replay codes the command cannot reach are held before replay
       );
     },
   );
+});
+
+async function workCompletedPlanFixture(): Promise<{
+  store: MemoryStore;
+  request: ProvisionalDecisionCommandRequest;
+  record: ProvisionalDecisionRecord;
+}> {
+  const { store } = await workStartedFixture();
+  store.pullRequests.set(prUrl, {
+    state: 'merged',
+    headSha,
+    mergeCommitSha: mergeSha,
+    requiredChecksPassing: true,
+  });
+  const completionRequest = request({
+    type: 'work-completed',
+    pullRequestUrl: prUrl,
+    verifiedHeadSha: headSha,
+    executionCriteriaSatisfied: true,
+  });
+  const result = await runProvisionalDecisionCommand(completionRequest, store);
+  assert.equal(result.state, 'planned', JSON.stringify(result));
+  if (result.state !== 'planned') {
+    throw new Error('expected work-completed plan');
+  }
+  return {
+    store,
+    request: completionRequest,
+    record: result.plan.candidateRecord,
+  };
+}
+
+function addHistoryRecord(
+  store: MemoryStore,
+  record: ProvisionalDecisionRecord,
+  id = '100',
+  createdAt = '2026-11-03T11:00:06Z',
+): ProvisionalDecisionHistoryComment {
+  const added = selectionComment(record, id, createdAt);
+  store.history = {
+    ...store.history,
+    comments: [...store.history.comments, added],
+  };
+  return added;
+}
+
+function assertStoredRecord(
+  store: MemoryStore,
+  recordId: string,
+  eventType: string,
+): ProvisionalDecisionRecord {
+  const matching = store.history.comments.filter((item) => {
+    const parsed = parseProvisionalDecisionRecordComment(item.body);
+    return parsed.ok && parsed.record.recordId === recordId;
+  });
+  assert.equal(matching.length, 1);
+  const storedComment = matching[0];
+  assert.ok(storedComment);
+  assert.equal(storedComment.trustedAuthor, true);
+  assert.equal(storedComment.edited, false);
+  const parsed = parseProvisionalDecisionRecordComment(storedComment.body);
+  assert.equal(parsed.ok, true);
+  if (!parsed.ok) throw new Error('expected a readable stored decision record');
+  assert.equal(parsed.record.recordId, recordId);
+  assert.equal(parsed.record.event.type, eventType);
+  return parsed.record;
+}
+
+function assertReplayStatus(
+  store: MemoryStore,
+  plan: ProvisionalDecisionPlan,
+  expected: 'selected' | 'in-progress',
+): void {
+  const replay = replayProvisionalDecisionHistory({
+    comments: store.history.comments,
+    completeHistory: store.history.complete,
+    currentSource: plan.candidateRecord.source,
+    verifiedClaimLineage: plan.verifiedClaimLineage,
+    verifiedWork: [],
+    verifiedReworkRoadmaps: [],
+  });
+  assert.equal(replay.valid, true, JSON.stringify(replay.issues));
+  assert.equal(replay.status, expected);
+  assert.equal(replay.decisions.length, 1);
+  assert.equal(replay.decisions[0]?.status, expected);
+}
+
+test('apply appends selected and work-started records without decision-label calls', async (t) => {
+  await t.test('selected', async () => {
+    const store = new MemoryStore();
+    const planned = await runProvisionalDecisionCommand(request(), store);
+    assert.equal(planned.state, 'planned', JSON.stringify(planned));
+    if (planned.state !== 'planned') return;
+    const result = await runProvisionalDecisionCommand(request(), store, {
+      apply: true,
+    });
+    assert.equal(result.state, 'applied', JSON.stringify(result));
+    assert.equal('action' in result, false);
+    assert.equal(store.appendCalls, 1);
+    assert.deepEqual(store.labelCalls, []);
+    assert.match(result.commentUrl, /issuecomment-100$/u);
+    assert.equal(store.history.comments.length, 3);
+    assert.equal(result.recordId, planned.plan.candidateRecord.recordId);
+    assertStoredRecord(store, result.recordId, 'selected');
+    assertReplayStatus(store, planned.plan, 'selected');
+  });
+
+  await t.test('work-started', async () => {
+    const { store, record } = await selectedRecord();
+    store.history = withSelection(store.history, record);
+    const planComment = comment(
+      '4',
+      'Implementation plan.',
+      '2026-11-03T11:00:03Z',
+    );
+    store.history = {
+      ...store.history,
+      comments: [...store.history.comments, planComment],
+    };
+    const workStartedRequest = request({
+      type: 'work-started',
+      planCommentUrl: planComment.url,
+    });
+    const planned = await runProvisionalDecisionCommand(
+      workStartedRequest,
+      store,
+    );
+    assert.equal(planned.state, 'planned', JSON.stringify(planned));
+    if (planned.state !== 'planned') return;
+    const result = await runProvisionalDecisionCommand(
+      workStartedRequest,
+      store,
+      { apply: true },
+    );
+    assert.equal(result.state, 'applied', JSON.stringify(result));
+    assert.equal('action' in result, false);
+    assert.equal(store.appendCalls, 1);
+    assert.deepEqual(store.labelCalls, []);
+    assert.equal(result.recordId, planned.plan.candidateRecord.recordId);
+    assertStoredRecord(store, result.recordId, 'work-started');
+    assertReplayStatus(store, planned.plan, 'in-progress');
+  });
+});
+
+test('apply appends work-completed, verifies it, then applies and reads back the label', async () => {
+  const { store, request: completionRequest } =
+    await workCompletedPlanFixture();
+  const result = await runProvisionalDecisionCommand(completionRequest, store, {
+    apply: true,
+  });
+  assert.equal(result.state, 'applied', JSON.stringify(result));
+  assert.equal('action' in result, false);
+  assert.equal(store.appendCalls, 1);
+  assert.equal(store.labelPresent, true);
+  assert.deepEqual(
+    store.labelCalls.map(({ apply }) => apply),
+    [false, true],
+  );
+  assert.equal(
+    store.history.comments.filter(
+      (item) => parseProvisionalDecisionRecordComment(item.body).ok,
+    ).length,
+    3,
+  );
+});
+
+test('a completion retry defaults to dry-run and applies only the missing label', async () => {
+  const {
+    store,
+    request: completionRequest,
+    record,
+  } = await workCompletedPlanFixture();
+  const completion = addHistoryRecord(store, record, '6');
+
+  const dryRun = await runProvisionalDecisionCommand(completionRequest, store);
+  assert.equal(dryRun.state, 'planned', JSON.stringify(dryRun));
+  assert.equal('action' in dryRun, false);
+  assert.equal(store.appendCalls, 0);
+  assert.equal(store.labelPresent, false);
+  assert.deepEqual(
+    store.labelCalls.map(({ apply }) => apply),
+    [false],
+  );
+
+  store.labelCalls = [];
+  const retry = await runProvisionalDecisionCommand(completionRequest, store, {
+    apply: true,
+  });
+  assert.equal(retry.state, 'applied', JSON.stringify(retry));
+  assert.equal('action' in retry, false);
+  assert.equal(retry.recordId, record.recordId);
+  assert.equal(retry.commentUrl, completion.url);
+  assert.equal(store.appendCalls, 0);
+  assert.equal(store.labelPresent, true);
+  assert.deepEqual(
+    store.labelCalls.map(({ apply }) => apply),
+    [false, false, true],
+  );
+});
+
+test('a missing completion label remains retryable after a sibling is confirmed', async () => {
+  const { store, selection: firstSelection } = await workStartedFixture();
+  const secondEvidence = comment(
+    '6',
+    'Second decision comparison.',
+    '2026-11-03T11:00:06Z',
+  );
+  store.history = {
+    ...store.history,
+    comments: [...store.history.comments, secondEvidence],
+    serverDate: 'Tue, 03 Nov 2026 11:00:07 GMT',
+  };
+
+  const secondSelectionPlan = await runProvisionalDecisionCommand(
+    request({ evidenceUrl: secondEvidence.url }),
+    store,
+  );
+  assert.equal(secondSelectionPlan.state, 'planned');
+  if (secondSelectionPlan.state !== 'planned') return;
+  const secondSelection = secondSelectionPlan.plan.candidateRecord;
+  const secondSelectionComment = selectionComment(
+    secondSelection,
+    '7',
+    '2026-11-03T11:00:08Z',
+  );
+  const secondPlanComment = comment(
+    '8',
+    'Plan for the second decision.',
+    '2026-11-03T11:00:09Z',
+  );
+  store.history = {
+    ...store.history,
+    comments: [
+      ...store.history.comments,
+      secondSelectionComment,
+      secondPlanComment,
+    ],
+    serverDate: 'Tue, 03 Nov 2026 11:00:10 GMT',
+  };
+  const secondStartedPlan = await runProvisionalDecisionCommand(
+    request({
+      type: 'work-started',
+      evidenceUrl: secondEvidence.url,
+      planCommentUrl: secondPlanComment.url,
+    }),
+    store,
+  );
+  assert.equal(secondStartedPlan.state, 'planned');
+  if (secondStartedPlan.state !== 'planned') return;
+  const secondStartedComment = selectionComment(
+    secondStartedPlan.plan.candidateRecord,
+    '9',
+    '2026-11-03T11:00:11Z',
+  );
+  store.history = {
+    ...store.history,
+    comments: [...store.history.comments, secondStartedComment],
+    serverDate: 'Tue, 03 Nov 2026 11:00:12 GMT',
+  };
+  store.pullRequests.set(prUrl, {
+    state: 'merged',
+    headSha,
+    mergeCommitSha: mergeSha,
+    requiredChecksPassing: true,
+  });
+
+  const firstCompletionPlan = await runProvisionalDecisionCommand(
+    request({
+      type: 'work-completed',
+      pullRequestUrl: prUrl,
+      verifiedHeadSha: headSha,
+      executionCriteriaSatisfied: true,
+    }),
+    store,
+  );
+  assert.equal(firstCompletionPlan.state, 'planned');
+  if (firstCompletionPlan.state !== 'planned') return;
+  const firstCompletion = firstCompletionPlan.plan.candidateRecord;
+  const firstCompletionComment = selectionComment(
+    firstCompletion,
+    '10',
+    '2026-11-03T11:00:13Z',
+  );
+  store.history = {
+    ...store.history,
+    comments: [...store.history.comments, firstCompletionComment],
+    serverDate: 'Tue, 03 Nov 2026 11:00:14 GMT',
+  };
+
+  const secondCompletionRequest = request({
+    type: 'work-completed',
+    evidenceUrl: secondEvidence.url,
+    pullRequestUrl: prUrl,
+    verifiedHeadSha: headSha,
+    executionCriteriaSatisfied: true,
+  });
+  const secondCompletionPlan = await runProvisionalDecisionCommand(
+    secondCompletionRequest,
+    store,
+  );
+  assert.equal(secondCompletionPlan.state, 'planned');
+  if (secondCompletionPlan.state !== 'planned') return;
+  const secondCompletion = secondCompletionPlan.plan.candidateRecord;
+  const secondCompletionComment = selectionComment(
+    secondCompletion,
+    '11',
+    '2026-11-03T11:00:15Z',
+  );
+  const answer = comment(
+    '12',
+    `${PROVISIONAL_DECISION_ANSWER_MARKER}\n${JSON.stringify({
+      schemaVersion: 1,
+      source: firstSelection.source,
+      bundleGeneration: 1,
+      decisionGenerations: [
+        firstCompletion.decisionGeneration,
+        secondCompletion.decisionGeneration,
+      ].sort((left, right) => left - right),
+      claimIds: [claimId],
+      presentedBundle: [
+        {
+          decisionGeneration: firstCompletion.decisionGeneration,
+          question: firstSelection.event.question,
+          selectedOptionId: 'keep',
+          feasibleAlternativeIds: ['change'],
+          workCompletedRecordId: firstCompletion.recordId,
+          result: firstCompletion.event.result,
+        },
+        {
+          decisionGeneration: secondCompletion.decisionGeneration,
+          question: secondSelection.event.question,
+          selectedOptionId: 'keep',
+          feasibleAlternativeIds: ['change'],
+          workCompletedRecordId: secondCompletion.recordId,
+          result: secondCompletion.event.result,
+        },
+      ],
+      response: 'accepted',
+      answerText: 'Both completed choices are accepted.',
+    })}`,
+    '2026-11-03T11:00:16Z',
+  );
+  const firstConfirmed = confirmedRecord(
+    firstCompletion,
+    'prov-confirmed-first-decision',
+    answer,
+  );
+  store.history = {
+    ...store.history,
+    comments: [
+      ...store.history.comments,
+      secondCompletionComment,
+      answer,
+      selectionComment(firstConfirmed, '13', '2026-11-03T11:00:17Z'),
+    ],
+    serverDate: 'Tue, 03 Nov 2026 11:00:18 GMT',
+  };
+
+  const retry = await runProvisionalDecisionCommand(
+    secondCompletionRequest,
+    store,
+    { apply: true },
+  );
+  assert.equal(retry.state, 'applied', JSON.stringify(retry));
+  assert.equal(retry.recordId, secondCompletion.recordId);
+  assert.equal(retry.commentUrl, secondCompletionComment.url);
+  assert.equal(store.appendCalls, 0);
+  assert.equal(store.labelPresent, true);
+  assert.equal(store.labelCalls.filter(({ apply }) => apply).length, 1);
+});
+
+test('step-8 holds a completion retry when confirmation arrives before label apply', async () => {
+  const { store, transitionedHistory } =
+    await bundleTransitionFixture('accepted');
+  const beforeConfirmation: ProvisionalDecisionHistoryRead = {
+    ...transitionedHistory,
+    comments: transitionedHistory.comments.filter(
+      (item) => item.id !== '8' && item.id !== '9',
+    ),
+    serverDate: 'Tue, 03 Nov 2026 11:00:08 GMT',
+  };
+  store.history = beforeConfirmation;
+  store.historyReads = 0;
+  store.readHistoryHook = (readNumber, current) => {
+    if (readNumber === 2) current.history = transitionedHistory;
+  };
+  const result = await runProvisionalDecisionCommand(
+    request({
+      type: 'work-completed',
+      evidenceUrl,
+      pullRequestUrl: prUrl,
+      verifiedHeadSha: headSha,
+      executionCriteriaSatisfied: true,
+    }),
+    store,
+    { apply: true },
+  );
+  assertRefused(result, 'recovery-hold');
+  if (result.state === 'refused') {
+    assert.match(result.reason ?? '', /located decision, bundle/u);
+  }
+  assert.equal(store.appendCalls, 0);
+  assert.equal(store.labelPresent, false);
+  assert.ok(store.labelCalls.every(({ apply }) => !apply));
+});
+
+test('a completion label apply or read-back failure reconciles without deleting the record', async (t) => {
+  for (const [name, configure] of [
+    ['apply throws', (store: MemoryStore) => (store.labelApplyFails = true)],
+    [
+      'read-back is absent',
+      (store: MemoryStore) => (store.labelApplyReturnsFalse = true),
+    ],
+  ] as const) {
+    await t.test(name, async () => {
+      const {
+        store,
+        request: completionRequest,
+        record,
+      } = await workCompletedPlanFixture();
+      const completion = addHistoryRecord(store, record, '6');
+      configure(store);
+
+      const result = await runProvisionalDecisionCommand(
+        completionRequest,
+        store,
+        { apply: true },
+      );
+      assert.equal(result.state, 'reconciled', JSON.stringify(result));
+      if (result.state === 'reconciled')
+        assert.equal(result.action, 'reconcile');
+      assert.equal(result.recordId, record.recordId);
+      assert.equal(result.commentUrl, completion.url);
+      assert.equal(store.appendCalls, 0);
+      assert.ok(
+        store.history.comments.some((item) => item.url === completion.url),
+      );
+    });
+  }
+});
+
+test('a completion retry with failed claim, policy, or worktree gates does not apply its label', async (t) => {
+  const cases = [
+    ['claim', { claimId: 'claim-other' }],
+    ['policy', { policyTrusted: false }],
+    ['worktree', { worktreeBranch: 'main' }],
+  ] as const;
+  for (const [name, overrides] of cases) {
+    await t.test(name, async () => {
+      const {
+        store,
+        request: completionRequest,
+        record,
+      } = await workCompletedPlanFixture();
+      addHistoryRecord(store, record, '6');
+      const result = await runProvisionalDecisionCommand(
+        request({ ...completionRequest, ...overrides }),
+        store,
+        { apply: true },
+      );
+      assertRefused(result, 'fix-input');
+      assert.equal(store.appendCalls, 0);
+      assert.equal(store.labelPresent, false);
+      assert.ok(store.labelCalls.every(({ apply }) => !apply));
+    });
+  }
+});
+
+test('step-8 claim handoff and source changes hold without appending', async (t) => {
+  await t.test('claim handoff', async () => {
+    const store = new MemoryStore();
+    store.readHistoryHook = (readNumber, current) => {
+      if (readNumber !== 2) return;
+      const releaseAt = '2026-11-03T11:00:05Z';
+      const nextClaimAt = '2026-11-03T11:00:06Z';
+      current.history = {
+        ...current.history,
+        comments: [
+          ...current.history.comments,
+          comment(
+            '3',
+            renderUnclaimedByMarker({
+              agentId: 'codex-test-agent',
+              claimId,
+              timestamp: releaseAt,
+            }),
+            releaseAt,
+          ),
+          comment(
+            '4',
+            renderClaimedByMarker({
+              agentId: 'codex-next-agent',
+              claimId: 'claim-next',
+              supersedes: 'none',
+              timestamp: nextClaimAt,
+              branch,
+            }),
+            nextClaimAt,
+          ),
+        ],
+      };
+    };
+    const result = await runProvisionalDecisionCommand(request(), store, {
+      apply: true,
+    });
+    assertRefused(result, 'recovery-hold');
+    assert.equal(store.appendCalls, 0);
+  });
+
+  await t.test('source baseline changes', async () => {
+    const store = new MemoryStore();
+    store.readHistoryHook = (readNumber, current) => {
+      if (readNumber === 2) {
+        current.source = { ...sourceRead, body: `${body}\nChanged.` };
+      }
+    };
+    const result = await runProvisionalDecisionCommand(request(), store, {
+      apply: true,
+    });
+    assertRefused(result, 'recovery-hold');
+    assert.equal(store.appendCalls, 0);
+  });
+});
+
+test('step-9 read-back failures preserve the URL returned by created', async (t) => {
+  await t.test('edited record', async () => {
+    const store = new MemoryStore();
+    store.afterAppend = (appended, current) => {
+      current.history = {
+        ...current.history,
+        comments: current.history.comments.map((item) =>
+          item.id === appended.id ? { ...item, edited: true } : item,
+        ),
+      };
+    };
+    const result = await runProvisionalDecisionCommand(request(), store, {
+      apply: true,
+    });
+    assertRefused(result, 'recovery-hold');
+    assert.equal(typeof result.recordId, 'string');
+    assert.equal(result.commentUrl, store.history.comments.at(-1)?.url);
+    assert.match(result.commentUrl, /issuecomment-100$/u);
+    assert.equal(store.appendCalls, 1);
+  });
+
+  await t.test('duplicate record ID', async () => {
+    const store = new MemoryStore();
+    store.afterAppend = (appended, current) => {
+      current.history = {
+        ...current.history,
+        comments: [
+          ...current.history.comments,
+          { ...appended, id: 'another-comment' },
+        ],
+      };
+    };
+    const result = await runProvisionalDecisionCommand(request(), store, {
+      apply: true,
+    });
+    assertRefused(result, 'recovery-hold');
+    assert.equal(result.commentUrl, store.history.comments.at(-2)?.url);
+    assert.equal(store.appendCalls, 1);
+  });
+});
+
+test('repeated rework-evidence failure after append holds and preserves the record', async () => {
+  const { store, record } = await selectedRecord();
+  const rework = {
+    ...record,
+    recordId: `prov-${'e'.repeat(32)}`,
+    event: {
+      type: 'rework-authored',
+      reworkRoadmap: {
+        roadmapIssueNumber: issueNumber,
+        roadmapMarkerId: 'marker-4840',
+        authoringSetId: 'set-4840',
+        url: `https://github.com/${repository}/issues/${issueNumber}`,
+      },
+    },
+  } as ProvisionalDecisionRecord;
+  let appendedUrl = '';
+  store.afterAppend = (_appended, current) => {
+    appendedUrl = _appended.url;
+    current.history = {
+      ...current.history,
+      comments: [
+        ...current.history.comments,
+        selectionComment(rework, '101', '2026-11-03T11:00:13Z'),
+      ],
+    };
+  };
+
+  const result = await runProvisionalDecisionCommand(request(), store, {
+    apply: true,
+  });
+  assertRefused(result, 'recovery-hold');
+  if (result.state === 'refused') {
+    assert.match(result.reason ?? '', /verified rework evidence/u);
+  }
+  assert.equal(result.commentUrl, appendedUrl);
+  assert.equal(store.appendCalls, 1);
+  assert.ok(store.history.comments.some(({ url }) => url === appendedUrl));
+  assert.deepEqual(store.labelCalls, []);
+});
+
+test('create-if-absent existed uses fresh history and preserves step-6 gate outcomes', async (t) => {
+  await t.test('matching record reconciles', async () => {
+    const store = new MemoryStore();
+    let concurrent: ProvisionalDecisionHistoryComment | undefined;
+    let requestedRecordId = '';
+    store.beforeAppend = (recordId, bodyText, current) => {
+      requestedRecordId = recordId;
+      concurrent = comment('101', bodyText, '2026-11-03T11:00:11Z');
+      current.history = {
+        ...current.history,
+        comments: [...current.history.comments, concurrent],
+      };
+      assert.match(bodyText, new RegExp(recordId, 'u'));
+    };
+    const result = await runProvisionalDecisionCommand(request(), store, {
+      apply: true,
+    });
+    assert.equal(result.state, 'reconciled', JSON.stringify(result));
+    if (result.state === 'reconciled') assert.equal(result.action, 'reconcile');
+    assert.equal(store.appendCalls, 1);
+    assert.equal(result.recordId, requestedRecordId);
+    assert.equal(result.commentUrl, concurrent?.url);
+    assert.equal(
+      store.history.comments.filter(
+        (item) => parseProvisionalDecisionRecordComment(item.body).ok,
+      ).length,
+      1,
+    );
+  });
+
+  await t.test('step-6 gate failure stays fix-input', async () => {
+    const store = new MemoryStore();
+    const writeRequest = request();
+    store.beforeAppend = (_recordId, bodyText, current) => {
+      const concurrent = comment('101', bodyText, '2026-11-03T11:00:11Z');
+      current.history = {
+        ...current.history,
+        comments: [...current.history.comments, concurrent],
+      };
+      Object.assign(writeRequest, { policyTrusted: false });
+    };
+    const result = await runProvisionalDecisionCommand(writeRequest, store, {
+      apply: true,
+    });
+    assertRefused(result, 'fix-input');
+    assert.equal(store.appendCalls, 1);
+  });
+
+  await t.test(
+    'baseline difference holds and preserves the concurrent URL',
+    async () => {
+      const store = new MemoryStore();
+      let concurrent: ProvisionalDecisionHistoryComment | undefined;
+      store.beforeAppend = (_recordId, bodyText, current) => {
+        concurrent = comment('101', bodyText, '2026-11-03T11:00:11Z');
+        current.history = {
+          ...current.history,
+          comments: [...current.history.comments, concurrent],
+        };
+        current.source = { ...sourceRead, body: `${body}\nChanged.` };
+      };
+      const result = await runProvisionalDecisionCommand(request(), store, {
+        apply: true,
+      });
+      assertRefused(result, 'recovery-hold');
+      assert.equal(result.commentUrl, concurrent?.url);
+      assert.equal(store.appendCalls, 1);
+      assert.ok(store.labelCalls.every(({ apply }) => !apply));
+    },
+  );
+});
+
+test('two concurrent applies create one record and the later completion run reconciles', async () => {
+  const { store, request: completionRequest } =
+    await workCompletedPlanFixture();
+  store.waitForLabelOnExisted = true;
+  const [first, second] = await Promise.all([
+    runProvisionalDecisionCommand(completionRequest, store, { apply: true }),
+    runProvisionalDecisionCommand(completionRequest, store, { apply: true }),
+  ]);
+  assert.deepEqual([first.state, second.state].sort(), [
+    'applied',
+    'reconciled',
+  ]);
+  assert.equal(store.appendCalls, 2);
+  assert.equal(store.labelPresent, true);
+  const matchingRecords = store.history.comments.filter((item) => {
+    const parsed = parseProvisionalDecisionRecordComment(item.body);
+    return parsed.ok && parsed.record.recordId === first.recordId;
+  });
+  assert.equal(matchingRecords.length, 1);
+});
+
+async function bundleTransitionFixture(
+  response: 'accepted' | 'rework',
+): Promise<{
+  store: MemoryStore;
+  nextEvidence: ProvisionalDecisionHistoryComment;
+  acceptingHistory: ProvisionalDecisionHistoryRead;
+  transitionedHistory: ProvisionalDecisionHistoryRead;
+}> {
+  const { store, selection } = await workStartedFixture();
+  store.pullRequests.set(prUrl, {
+    state: 'merged',
+    headSha,
+    mergeCommitSha: mergeSha,
+    requiredChecksPassing: true,
+  });
+  const completionPlan = await runProvisionalDecisionCommand(
+    request({
+      type: 'work-completed',
+      pullRequestUrl: prUrl,
+      verifiedHeadSha: headSha,
+      executionCriteriaSatisfied: true,
+    }),
+    store,
+  );
+  assert.equal(completionPlan.state, 'planned');
+  if (completionPlan.state !== 'planned') {
+    throw new Error('expected completion plan for bundle fixture');
+  }
+
+  const nextEvidence = comment(
+    '6',
+    'A second decision comparison.',
+    '2026-11-03T11:00:06Z',
+  );
+  const completedRecord = completionPlan.plan.candidateRecord;
+  const completion = selectionComment(
+    completedRecord,
+    '7',
+    '2026-11-03T11:00:07Z',
+  );
+  const rationale = 'The current option needs another pass.';
+  const answer = comment(
+    '8',
+    `${PROVISIONAL_DECISION_ANSWER_MARKER}\n${JSON.stringify({
+      schemaVersion: 1,
+      source: selection.source,
+      bundleGeneration: 1,
+      decisionGenerations: [1],
+      claimIds: [claimId],
+      presentedBundle: [
+        {
+          decisionGeneration: 1,
+          question: selection.event.question,
+          selectedOptionId: 'keep',
+          feasibleAlternativeIds: ['change'],
+          workCompletedRecordId: completedRecord.recordId,
+          result: completedRecord.event.result,
+        },
+      ],
+      response,
+      ...(response === 'rework'
+        ? { requestedOptionId: 'change', rationale }
+        : {}),
+      answerText:
+        response === 'accepted'
+          ? 'The completed choice is accepted.'
+          : 'Please revise the comparison.',
+    })}`,
+    '2026-11-03T11:00:08Z',
+  );
+  const transition = {
+    ...completedRecord,
+    recordId:
+      response === 'accepted'
+        ? 'prov-accepted-bundle'
+        : 'prov-rework-request-bundle',
+    event:
+      response === 'accepted'
+        ? {
+            type: 'confirmed',
+            confirmation: {
+              commentUrl: answer.url,
+              response: 'accepted',
+              confirmedAt: answer.createdAt,
+              confirmedBy: 'Operator',
+            },
+          }
+        : {
+            type: 'rework-requested',
+            reworkRequest: {
+              commentUrl: answer.url,
+              requestedAt: answer.createdAt,
+              requestedOptionId: 'change',
+              rationale,
+            },
+          },
+  } as ProvisionalDecisionRecord;
+  const transitionComment = selectionComment(
+    transition,
+    '9',
+    '2026-11-03T11:00:09Z',
+  );
+  const acceptingHistory: ProvisionalDecisionHistoryRead = {
+    ...store.history,
+    comments: [...store.history.comments, nextEvidence],
+    serverDate: 'Tue, 03 Nov 2026 11:00:10 GMT',
+  };
+  const transitionedHistory: ProvisionalDecisionHistoryRead = {
+    ...acceptingHistory,
+    comments: [
+      ...acceptingHistory.comments,
+      completion,
+      answer,
+      transitionComment,
+    ],
+  };
+  store.historyReads = 0;
+  store.history = acceptingHistory;
+  return { store, nextEvidence, acceptingHistory, transitionedHistory };
+}
+
+test('step-8 turns a newly waiting bundle into recovery-hold instead of none', async () => {
+  const { store, nextEvidence, acceptingHistory, transitionedHistory } =
+    await bundleTransitionFixture('rework');
+  store.history = acceptingHistory;
+  store.readHistoryHook = (readNumber, current) => {
+    if (readNumber === 2) current.history = transitionedHistory;
+  };
+  const result = await runProvisionalDecisionCommand(
+    request({ evidenceUrl: nextEvidence.url }),
+    store,
+    { apply: true },
+  );
+  assertRefused(result, 'recovery-hold');
+  if (result.state === 'refused') {
+    assert.match(result.reason ?? '', /no longer satisfies the plan/u);
+  }
+  assert.equal(store.appendCalls, 0);
+});
+
+test('work-completed refuses a new record after a same-generation sibling is confirmed', async () => {
+  const { store, nextEvidence, acceptingHistory, transitionedHistory } =
+    await bundleTransitionFixture('accepted');
+  store.history = acceptingHistory;
+  const nextSelectionPlan = await runProvisionalDecisionCommand(
+    request({ evidenceUrl: nextEvidence.url }),
+    store,
+  );
+  assert.equal(nextSelectionPlan.state, 'planned');
+  if (nextSelectionPlan.state !== 'planned') return;
+  const nextSelectionComment = selectionComment(
+    nextSelectionPlan.plan.candidateRecord,
+    '10',
+    '2026-11-03T11:00:10Z',
+  );
+  const planComment = comment(
+    '11',
+    'Plan for the second decision.',
+    '2026-11-03T11:00:11Z',
+  );
+  store.history = {
+    ...store.history,
+    comments: [...store.history.comments, nextSelectionComment, planComment],
+    serverDate: 'Tue, 03 Nov 2026 11:00:12 GMT',
+  };
+  const nextStartedPlan = await runProvisionalDecisionCommand(
+    request({
+      type: 'work-started',
+      evidenceUrl: nextEvidence.url,
+      planCommentUrl: planComment.url,
+    }),
+    store,
+  );
+  assert.equal(nextStartedPlan.state, 'planned');
+  if (nextStartedPlan.state !== 'planned') return;
+  const nextStartedComment = selectionComment(
+    nextStartedPlan.plan.candidateRecord,
+    '12',
+    '2026-11-03T11:00:13Z',
+  );
+  store.history = {
+    ...transitionedHistory,
+    comments: [
+      ...transitionedHistory.comments,
+      nextSelectionComment,
+      planComment,
+      nextStartedComment,
+    ],
+    serverDate: 'Tue, 03 Nov 2026 11:00:14 GMT',
+  };
+
+  const result = await runProvisionalDecisionCommand(
+    request({
+      type: 'work-completed',
+      evidenceUrl: nextEvidence.url,
+      pullRequestUrl: prUrl,
+      verifiedHeadSha: headSha,
+      executionCriteriaSatisfied: true,
+    }),
+    store,
+    { apply: true },
+  );
+
+  assertRefused(result, 'recovery-hold');
+  if (result.state === 'refused') {
+    assert.match(result.reason ?? '', /bundle-generation-closed/u);
+  }
+  assert.equal(store.appendCalls, 0);
+  assert.deepEqual(store.labelCalls, []);
+});
+
+test('step-8 detects a confirmation that lands between the plan and append', async () => {
+  const { store, nextEvidence, acceptingHistory, transitionedHistory } =
+    await bundleTransitionFixture('accepted');
+  store.history = acceptingHistory;
+  store.readHistoryHook = (readNumber, current) => {
+    if (readNumber === 2) current.history = transitionedHistory;
+  };
+  const result = await runProvisionalDecisionCommand(
+    request({ evidenceUrl: nextEvidence.url }),
+    store,
+    { apply: true },
+  );
+  assertRefused(result, 'recovery-hold');
+  if (result.state === 'refused') {
+    assert.match(result.reason ?? '', /located decision, bundle/u);
+  }
+  assert.equal(store.appendCalls, 0);
+});
+
+test('step-8 holds when a concurrent completion changes its bundle before label apply', async () => {
+  const { store, acceptingHistory, transitionedHistory } =
+    await bundleTransitionFixture('accepted');
+  store.history = acceptingHistory;
+  store.readHistoryHook = (readNumber, current) => {
+    if (readNumber === 2) current.history = transitionedHistory;
+  };
+  const result = await runProvisionalDecisionCommand(
+    request({
+      type: 'work-completed',
+      pullRequestUrl: prUrl,
+      verifiedHeadSha: headSha,
+      executionCriteriaSatisfied: true,
+    }),
+    store,
+    { apply: true },
+  );
+  assertRefused(result, 'recovery-hold');
+  if (result.state === 'refused') {
+    assert.match(result.reason ?? '', /located decision, bundle/u);
+  }
+  assert.equal(store.appendCalls, 0);
+  assert.ok(store.labelCalls.every(({ apply }) => !apply));
+});
+
+test('work-completed in a later bundle applies despite a confirmed prior decision', async () => {
+  const { store, nextEvidence, transitionedHistory } =
+    await bundleTransitionFixture('accepted');
+  store.history = transitionedHistory;
+
+  const nextSelection = await runProvisionalDecisionCommand(
+    request({ evidenceUrl: nextEvidence.url }),
+    store,
+    { apply: true },
+  );
+  assert.equal(nextSelection.state, 'applied', JSON.stringify(nextSelection));
+  const planComment = comment(
+    '200',
+    'Plan for the second decision.',
+    '2026-11-03T11:00:13Z',
+  );
+  store.history = {
+    ...store.history,
+    comments: [...store.history.comments, planComment],
+    serverDate: 'Tue, 03 Nov 2026 11:00:14 GMT',
+  };
+  const nextStarted = await runProvisionalDecisionCommand(
+    request({
+      type: 'work-started',
+      evidenceUrl: nextEvidence.url,
+      planCommentUrl: planComment.url,
+    }),
+    store,
+    { apply: true },
+  );
+  assert.equal(nextStarted.state, 'applied', JSON.stringify(nextStarted));
+
+  const secondPrUrl = `https://github.com/${repository}/pull/5099`;
+  store.pullRequests.set(secondPrUrl, {
+    state: 'merged',
+    headSha,
+    mergeCommitSha: 'c'.repeat(40),
+    requiredChecksPassing: true,
+  });
+  const completion = await runProvisionalDecisionCommand(
+    request({
+      type: 'work-completed',
+      evidenceUrl: nextEvidence.url,
+      pullRequestUrl: secondPrUrl,
+      verifiedHeadSha: headSha,
+      executionCriteriaSatisfied: true,
+    }),
+    store,
+    { apply: true },
+  );
+  assert.equal(completion.state, 'applied', JSON.stringify(completion));
+  assert.equal(store.labelPresent, true);
+  assert.ok(store.labelCalls.some(({ apply }) => apply));
 });
