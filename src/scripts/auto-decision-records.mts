@@ -341,6 +341,17 @@ function assertIssueNumber(number: number): void {
   }
 }
 
+function issueNumberFromReference(reference: string): number {
+  const numberText = ISSUE_REFERENCE_PATTERN.exec(reference)?.[3];
+  const number = Number(numberText);
+  if (!Number.isSafeInteger(number) || number <= 0) {
+    throw new Error(
+      `the issue reference ${JSON.stringify(reference)} is invalid`,
+    );
+  }
+  return number;
+}
+
 function assertLabel(name: string, setting: string): void {
   if (typeof name !== 'string' || name.trim() === '') {
     throw new Error(`the ${setting} must be a non-empty name`);
@@ -1034,6 +1045,7 @@ export function readDecisionLinks(
       'all',
     );
     const voids = new Set<string>();
+    const readConfirmationNumbers = new Set<number>();
     for (const issue of listed) {
       const confirmation = readIssueSnapshot(
         provider,
@@ -1041,6 +1053,7 @@ export function readDecisionLinks(
         repo,
         issue.number,
       );
+      readConfirmationNumbers.add(issue.number);
       if (
         !confirmation.labels.some((name) =>
           sameText(name, input.confirmationLabel),
@@ -1051,6 +1064,17 @@ export function readDecisionLinks(
       for (const decision of countingVoids(confirmation, context)) {
         voids.add(decision);
       }
+    }
+    for (const link of kept) {
+      const number = issueNumberFromReference(link.confirmation);
+      if (readConfirmationNumbers.has(number)) {
+        continue;
+      }
+      // A link still names an issue even when it no longer appears in the
+      // confirmation-label scan. Read it directly so a missing or failed
+      // target cannot turn into a readable empty result.
+      readIssueSnapshot(provider, owner, repo, number);
+      readConfirmationNumbers.add(number);
     }
     const voided: string[] = [];
     const links = kept.filter((link) => {
