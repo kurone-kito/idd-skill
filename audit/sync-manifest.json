@@ -366,7 +366,7 @@
       "files": [
         ".github/instructions/idd-work.instructions.md"
       ],
-      "limitBytes": 30100
+      "limitBytes": 38400
     },
     {
       "id": "bundle-work-lite",
@@ -374,7 +374,7 @@
       "files": [
         ".github/instructions/lite/idd-work-lite.instructions.md"
       ],
-      "limitBytes": 24000
+      "limitBytes": 30500
     },
     {
       "id": "bundle-resume-lite",
@@ -543,6 +543,24 @@
         "limitBytes": 40000,
         "issue": 4233,
         "reason": "maintainer-approved per-file phaseLimitBytes raise (kurone-kito, comment 6162851754 on issue #4233; checker decision in comment 6168271034): the A0-T step 1 hold-label stop adds about 370 bytes to the idd-template idd-discover.instructions.md, which sat at 35,997 of 36,000 bytes. The raise is the maintainer's explicit exception to E12's per-file-cap rule. The entry name is the instructionSizeBudgets id, and only phaseLimitBytes is covered."
+      }
+    ],
+    "standingRaiseApprovals": [
+      {
+        "bundle": "bundle-work-phase",
+        "standingClass": "budgetRaise",
+        "ceilingPct": 10,
+        "limitBytes": 38400,
+        "issue": 4893,
+        "reason": "Audit during the issue #4893 work-phase safeguard revision measured 37,311 bytes. The issue-authorized 10% standing raise permits up to 41,000 bytes; the 38,400 limit leaves 321 bytes before the 98% utilization threshold (37,632). Operator approval is recorded in issue #4893 comment #6671770411."
+      },
+      {
+        "bundle": "bundle-work-lite",
+        "standingClass": "budgetRaise",
+        "ceilingPct": 10,
+        "limitBytes": 30500,
+        "issue": 4893,
+        "reason": "Audit during the issue #4893 Lite safeguard revision measured 29,801 bytes. The issue-authorized 10% standing raise permits up to 32,700 bytes; the 30,500 limit leaves 89 bytes before the 98% utilization threshold (29,890). Operator approval is recorded in issue #4893 comment #6671770411."
       }
     ]
   },

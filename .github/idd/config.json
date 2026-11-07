@@ -52,6 +52,12 @@
   "discover": {
     "selectionDesync": "session-offset"
   },
+  "standingApprovals": {
+    "budgetRaise": {
+      "enabled": true,
+      "maxRaisePct": 10
+    }
+  },
   "critiqueLoop": {
     "deferAfterRounds": 5,
     "deferAllAfterRounds": 3,

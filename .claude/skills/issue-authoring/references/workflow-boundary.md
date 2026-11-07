@@ -773,3 +773,46 @@ issue's authoring label, and that authorizes no execution either: the issue
 keeps its confirmation label (`autoDecide.confirmationLabelName`), which keeps
 it out of Discover, so it never enters the loop. The operator confirms the
 choice by closing the issue.
+
+The worker-side authoring rule has one exception: a scope-overrun split when
+`standingApprovals.split.enabled` is true in the schema-valid trusted policy
+at the PR base (or live default before a PR exists), never from the feature
+checkout. An absent, false, malformed, or unreadable value keeps the existing
+route. Every child fits the effective
+`maxCandidateFiles`, each checkbox-stripped parent criterion appears whole and
+verbatim in exactly one child, and every child contains a parent criterion.
+This procedure replaces the ordinary claim-release and companion-handoff route
+only when all conditions hold. Before saving the complete ordered proposal,
+apply the issue-authoring contract's Reuse-first issue policy to every child,
+including open draft carriers. The hand split of issue `#4064` produced
+duplicate child `#4093`. If the issue being split is listed under a roadmap's
+`## Tracks`, check whether the roadmap has an active claim, an open PR, or
+other active execution, and establish per-target ownership. Include
+`Split out of #<parent>` in each child body, then update and read back the
+roadmap track for every verified child. A conflict or ownership failure keeps
+the parent held and stops publication. The worker keeps the
+parent claim and authoring label, verifies material factual claims in each
+child's scope or design against current sources, and records support in the
+review packet's existing `evidence` array. Each completed child is then
+reviewed; any edit requires an updated, read-back proposal and a repeated check
+of that child. The worker dry-runs the set, then publishes held orphans one at
+a time and records each verified ID. The publisher prepends one
+`authoring-publication` line and a blank line; verify it against the helper
+report, journal, and child ownership record, then compare the remaining body
+exactly with the draft. A child needing a sequential-roadmap `blocked-by`
+marker is not an orphan and needs a separately held authoring-set anchor, so
+use the existing scope-overrun route before publishing. Any refused, failed,
+recovery-hold, or uncertain child publication stops further publication, even
+when a matching held child is found; report the state and keep the parent and
+children held. A record counts only when one exact expected line is authored by
+a trusted actor and the proposal, mappings, and live held children match
+one-to-one. A failed or uncertain record stops with the parent and children
+held; resume reconciles the complete set before continuing. After all children
+and any roadmap tracks are verified, the worker posts the standing record with
+the parent issue as `anchor` and the numeric effective `maxCandidateFiles` as
+`ceiling`, posts a completion note, revalidates the parent claim, posts and
+verifies its `unclaimed-by` marker, then runs cleanup. A mismatch or uncertain
+release keeps the parent held and stops before cleanup. The authoring label
+stays until the set is deliberately released or completed. These failure modes
+were observed during review of PR #5031 on 2026-11-06. Follow the split
+procedure in `idd-work.instructions.md`.
