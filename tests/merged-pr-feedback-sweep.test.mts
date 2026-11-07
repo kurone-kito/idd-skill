@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 import { auditAuthoredIssue } from '../src/scripts/audit-authored-issue.mts';
@@ -3213,6 +3213,117 @@ const SWEEP_WORKFLOW = new URL(
   '../.github/workflows/merged-pr-feedback-sweep.yml',
   import.meta.url,
 );
+const WORKFLOWS_DIRECTORY = new URL('../.github/workflows/', import.meta.url);
+
+type SetupNodeWorkflowSource = Readonly<{ path: string; contents: string }>;
+
+const SETUP_NODE_USE_LINE =
+  /^\s*(?:-\s+)?uses:\s*actions\/setup-node@([0-9a-fA-F]{40}) # v\d+\.\d+\.\d+\s*$/;
+
+function sharedSetupNodePinFromSources(
+  sources: readonly SetupNodeWorkflowSource[],
+): string {
+  const pins: string[] = [];
+  for (const source of sources) {
+    for (const [index, line] of source.contents.split(/\r?\n/).entries()) {
+      if (line.trimStart().startsWith('#')) {
+        continue;
+      }
+      if (!line.includes('actions/setup-node@')) {
+        continue;
+      }
+      const match = SETUP_NODE_USE_LINE.exec(line);
+      const pin = match?.[1];
+      assert.ok(
+        pin,
+        `${source.path}:${index + 1}: setup-node uses must pin a 40-hex SHA with a same-line semver comment`,
+      );
+      pins.push(pin);
+    }
+  }
+
+  assert.ok(pins.length > 0, 'at least one real setup-node use must exist');
+  const uniquePins = new Set(pins);
+  assert.equal(uniquePins.size, 1, 'all setup-node uses must share one SHA');
+  const sharedPin = [...uniquePins].at(0);
+  assert.ok(sharedPin, 'the shared setup-node pin must be present');
+  return sharedPin;
+}
+
+function readSharedSetupNodePin(): string {
+  const sources = readdirSync(WORKFLOWS_DIRECTORY)
+    .filter((name) => name.endsWith('.yml'))
+    .sort()
+    .map((name) => ({
+      path: `.github/workflows/${name}`,
+      contents: readFileSync(new URL(name, WORKFLOWS_DIRECTORY), 'utf8'),
+    }));
+  return sharedSetupNodePinFromSources(sources);
+}
+
+function rawWorkflowStepBlock(
+  lines: readonly string[],
+  jobName: string,
+  stepName: string,
+): readonly string[] {
+  const jobHeader = `  ${jobName}:`;
+  const jobStart = lines.findIndex((line) => line === jobHeader);
+  assert.notEqual(jobStart, -1, `job ${jobName} must be present`);
+  const nextJobStart = lines.findIndex(
+    (line, index) => index > jobStart && /^ {2}[\w-]+:\s*$/.test(line),
+  );
+  const jobEnd = nextJobStart === -1 ? lines.length : nextJobStart;
+  const stepsHeader = lines.findIndex(
+    (line, index) =>
+      index > jobStart && index < jobEnd && line === '    steps:',
+  );
+  assert.notEqual(stepsHeader, -1, `steps must be present in job ${jobName}`);
+  const stepHeader = `      - name: ${stepName}`;
+  const stepStarts = lines
+    .map((line, index) =>
+      index > stepsHeader && index < jobEnd && line === stepHeader ? index : -1,
+    )
+    .filter((index) => index !== -1);
+  assert.equal(
+    stepStarts.length,
+    1,
+    `expected exactly one step ${JSON.stringify(stepName)} in job ${jobName}`,
+  );
+  const start = stepStarts[0];
+  assert.notEqual(start, undefined);
+  const nextStep = lines.findIndex(
+    (line, index) => index > start && index < jobEnd && /^ {6}- /.test(line),
+  );
+  return lines.slice(start, nextStep === -1 ? jobEnd : nextStep);
+}
+
+function setupNodeUseLine(sha: string): string {
+  return `        uses: actions/setup-node@${sha} # v1.2.3`;
+}
+
+test('raw setup-node lookup stays in the named job step', () => {
+  const setupNodeUse = setupNodeUseLine('a'.repeat(40));
+  const lines = [
+    'jobs:',
+    '  other:',
+    '    steps:',
+    '      - name: Set up Node.js',
+    '        uses: actions/setup-node@not-a-pin',
+    '  render:',
+    '    steps:',
+    '      - name: Set up Node.js',
+    '        # actions/setup-node@ in a comment is not a use',
+    '',
+    setupNodeUse,
+    '      - name: Render',
+  ];
+  const setupStep = rawWorkflowStepBlock(lines, 'render', 'Set up Node.js');
+  const setupUseLines = setupStep.filter(
+    (line) =>
+      !line.trimStart().startsWith('#') && line.includes('actions/setup-node@'),
+  );
+  assert.deepEqual(setupUseLines, [setupNodeUse]);
+});
 
 /** A plain copy of a parsed mapping, so assertions compare values, not prototypes. */
 function plain(value: unknown): unknown {
@@ -3228,6 +3339,101 @@ function readSweepWorkflow(): Record<string, unknown> {
   );
   return plain(parsed.value) as Record<string, unknown>;
 }
+
+test('the shared setup-node pin reader accepts one uniform pin and rejects malformed uses', () => {
+  const currentPin = readSharedSetupNodePin();
+  const replacementPin =
+    currentPin.toLowerCase() === 'a'.repeat(40)
+      ? 'b'.repeat(40)
+      : 'a'.repeat(40);
+  const source = (path: string, lines: readonly string[]) => ({
+    path,
+    contents: lines.join('\n'),
+  });
+
+  assert.equal(
+    sharedSetupNodePinFromSources([
+      source('first.yml', [setupNodeUseLine(currentPin)]),
+      source('second.yml', [setupNodeUseLine(currentPin)]),
+    ]),
+    currentPin,
+  );
+  assert.equal(
+    sharedSetupNodePinFromSources([
+      source('first.yml', [
+        `      - uses: actions/setup-node@${replacementPin} # v1.2.3`,
+      ]),
+      source('second.yml', [setupNodeUseLine(replacementPin)]),
+    ]),
+    replacementPin,
+  );
+
+  assert.throws(
+    () =>
+      sharedSetupNodePinFromSources([
+        source('first.yml', [setupNodeUseLine(currentPin)]),
+        source('second.yml', [setupNodeUseLine(replacementPin)]),
+      ]),
+    /all setup-node uses must share one SHA/,
+  );
+
+  for (const ref of ['v7.1.0', 'main']) {
+    assert.throws(
+      () =>
+        sharedSetupNodePinFromSources([
+          source('invalid.yml', [
+            `        uses: actions/setup-node@${ref} # v1.2.3`,
+          ]),
+        ]),
+      /same-line semver comment/,
+    );
+  }
+
+  assert.throws(
+    () =>
+      sharedSetupNodePinFromSources([
+        source('invalid.yml', [
+          '      -uses: actions/setup-node@' + currentPin + ' # v1.2.3',
+        ]),
+      ]),
+    /same-line semver comment/,
+  );
+
+  for (const line of [
+    `        uses: actions/setup-node@${currentPin}`,
+    `        uses: actions/setup-node@${currentPin} # version one`,
+  ]) {
+    assert.throws(
+      () => sharedSetupNodePinFromSources([source('invalid.yml', [line])]),
+      /same-line semver comment/,
+    );
+  }
+
+  assert.throws(
+    () =>
+      sharedSetupNodePinFromSources([
+        source('mixed.yml', [
+          setupNodeUseLine(currentPin),
+          '        uses: actions/setup-node@invalid # v1.2.3',
+        ]),
+      ]),
+    /same-line semver comment/,
+  );
+
+  const commentOnlyPin = `# uses: actions/setup-node@${replacementPin} # v1.2.3`;
+  assert.equal(
+    sharedSetupNodePinFromSources([
+      source('real.yml', [setupNodeUseLine(currentPin)]),
+      source('comment.yml', [commentOnlyPin]),
+    ]),
+    currentPin,
+  );
+  assert.throws(
+    () =>
+      sharedSetupNodePinFromSources([source('comment.yml', [commentOnlyPin])]),
+    /at least one real setup-node use must exist/,
+  );
+});
 
 interface SweepWorkflowStep {
   name?: string;
@@ -3346,6 +3552,30 @@ test('the write job holds only the issue write, publishes only from the default 
 
 test('the render job has three named steps, with pinned actions and a checkout without persisted credentials', () => {
   const job = sweepJob('render');
+  const sharedPin = readSharedSetupNodePin();
+  const rawLines = readFileSync(SWEEP_WORKFLOW, 'utf8').split(/\r?\n/);
+  const setupStep = rawWorkflowStepBlock(rawLines, 'render', 'Set up Node.js');
+  const rawUsesLines = setupStep.filter(
+    (line) =>
+      !line.trimStart().startsWith('#') && line.includes('actions/setup-node@'),
+  );
+  assert.equal(
+    rawUsesLines.length,
+    1,
+    'render setup-node step must have exactly one uses line',
+  );
+  const rawUsesLine = rawUsesLines.at(0);
+  assert.ok(rawUsesLine, 'render setup-node step must have a uses line');
+  const rawUsesMatch = SETUP_NODE_USE_LINE.exec(rawUsesLine);
+  assert.ok(
+    rawUsesMatch,
+    'render setup-node step must use a 40-hex pin with a semver comment',
+  );
+  assert.equal(
+    rawUsesMatch[1],
+    sharedPin,
+    'render setup-node step must use the shared workflow pin',
+  );
   assert.deepEqual(
     job.steps.map((step) => step.name),
     [
@@ -3358,7 +3588,7 @@ test('the render job has three named steps, with pinned actions and a checkout w
     job.steps.map((step) => step.uses ?? null),
     [
       'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
-      'actions/setup-node@820762786026740c76f36085b0efc47a31fe5020',
+      `actions/setup-node@${sharedPin}`,
       null,
     ],
   );
