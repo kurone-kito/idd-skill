@@ -163,6 +163,13 @@ function assertLabel(name, setting) {
     throw new Error(`the ${setting} must be a non-empty name`);
   }
 }
+function assertListableConfirmationLabel(name) {
+  assertLabel(name, 'confirmation label');
+  // The REST label filter splits on commas, so such a name cannot be listed exactly.
+  if (name.includes(',')) {
+    throw new Error('the confirmation label name contains a comma');
+  }
+}
 function isConfirmationClass(value) {
   return AUTO_DECIDE_CONFIRMATION_CLASSES.includes(value);
 }
@@ -668,7 +675,7 @@ export function readDecisionLinks(input, provider = createGithubProvider()) {
   try {
     assertRepository(input.repository);
     assertIssueNumber(input.number);
-    assertLabel(input.confirmationLabel, 'confirmation label');
+    assertListableConfirmationLabel(input.confirmationLabel);
     const context = readTrustContext(input);
     const { owner, repo } = input.repository;
     const snapshot = readIssueSnapshot(provider, owner, repo, input.number);
@@ -850,7 +857,7 @@ export function findConfirmationIssues(
 ) {
   try {
     assertRepository(input.repository);
-    assertLabel(input.confirmationLabel, 'confirmation label');
+    assertListableConfirmationLabel(input.confirmationLabel);
     assertLabel(input.authoringLabel, 'authoring label');
     if (!isConfirmationClass(input.class)) {
       throw new Error(
@@ -860,11 +867,6 @@ export function findConfirmationIssues(
     const state = input.state ?? 'open';
     if (state !== 'open' && state !== 'all') {
       throw new Error(`the state must be open or all (got ${String(state)})`);
-    }
-    // The REST label filter splits on commas, so such a name cannot be
-    // listed exactly.
-    if (input.confirmationLabel.includes(',')) {
-      throw new Error('the confirmation label name contains a comma');
     }
     const context = readTrustContext(input);
     const { owner, repo } = input.repository;

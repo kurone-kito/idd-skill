@@ -1002,6 +1002,25 @@ test('a void on another confirmation issue removes the linked decision', () => {
   assert.deepEqual(linked.voidedDecisions, ['d1']);
 });
 
+test('a comma-containing confirmation label makes link reads unreadable', () => {
+  const github = new FakeGithub(sourceIssue(100, []));
+  const result = readDecisionLinks(
+    {
+      repository: REPOSITORY,
+      number: 100,
+      confirmationLabel: CONFIRMATION_LABEL + ',another-label',
+      policyPath: TRUSTED_POLICY,
+    },
+    github,
+  );
+  assert.deepEqual(result, {
+    status: 'unreadable',
+    error: 'the confirmation label name contains a comma',
+  });
+  assert.deepEqual(github.issueCalls, []);
+  assert.deepEqual(github.listCalls, []);
+});
+
 test('row: a REST list entry that is a pull request is skipped', () => {
   const github = new FakeGithub(
     confirmationIssue(200),
