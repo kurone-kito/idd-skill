@@ -142,9 +142,8 @@ needs-decision, blocked-by-human, and out-of-scope.
    edits do not start another review. Audit every revised body before
    publication. A roadmap shell may be reviewed
    and published with an empty `## Tracks` list. Review each child
-   before publishing it. Review the parent again when real child
-   numbers are written into `## Tracks`, then audit that edit before
-   saving it.
+   before publishing it. Review and lint the parent again when real child
+   numbers are written into `## Tracks`, before saving that edit.
 7. Before publishing a ready orphan, roadmap, or child body, or a draft
    carrier (`--shape carrier`), run the `audit-authored-issue` linter
    against it as the mechanical pre-publish gate — see
@@ -177,8 +176,12 @@ needs-decision, blocked-by-human, and out-of-scope.
    a draft carrier with
    `publish-authoring-hold --shape carrier` (run it with `--apply`; the
    default is a dry run), as
-   [Draft carrier](references/contract.md#draft-carrier) defines. A
-   preview request also publishes a carrier, and the drafts are shown in
+   [Draft carrier](references/contract.md#draft-carrier) defines. When a
+   ready child's original set no longer proves a held anchor, follow the
+   [re-anchoring procedure](references/contract.md#re-anchor-a-child-when-its-original-set-is-unavailable).
+   Observed 2026-11-05 on carrier issue #5054; see the
+   [design rationale](../../docs/idd-design-rationale.md#cite-the-observed-incident).
+   A preview request also publishes a carrier, and the drafts are shown in
    the reply too. When authoring stops before the review completes on a
    planned stop (context pressure, or the user's instruction to stop), or
    when the review fails or cannot finish, the target is not published;

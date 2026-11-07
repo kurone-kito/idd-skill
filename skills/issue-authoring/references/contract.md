@@ -4153,13 +4153,52 @@ session runs it is decided separately (in this source repository, issue
 7. Release the claim last, whichever way the procedure stops.
 
 When the publication route for a draft's shape is still missing or refuses it
-(a child whose set anchor is not a held set of this repository, for example),
-post a comment that
+(for a reason other than an unavailable child anchor), post a comment that
 names the issue that adds the route (one comment is enough), release the
 claim, and leave the carrier open. A failure partway also leaves the carrier
 open: the mapping comments and the `Refs` lines show which drafts are done,
 and the next session continues with the rest. Releasing the published targets
 stays the separate Stage 2 step that a person requests.
+
+### Re-anchor a child when its original set is unavailable
+
+When the child
+publisher refuses because the original anchor cannot prove a currently held
+set, continue only if the carrier is still ready. Under the verified carrier
+coordination claim, re-read the carrier and its comments, counting only trusted
+mapping comments; refresh the draft against the current default branch; and
+check current claims, linked pull requests, and duplicate or reuse candidates
+before creating anything. If a target already exists, a conflicting issue or
+pull request exists, the carrier is no longer ready, or uncertain owner
+history is needed to establish provenance, stop and reconcile without
+publishing. The hidden-only owner-marker rule remains fail-closed: do not
+unhide comments, infer completion, or edit the old anchor's body, labels, or
+owner-marker history.
+
+Use an existing set only when its trusted owner history proves that it is an
+open held set that owns this draft. Otherwise, do not reuse a released or
+completed set or repurpose an unrelated issue as an anchor. Review and lint an
+empty roadmap shell against the current default branch, then publish it under
+the normal authoring hold with `publish-authoring-hold --shape roadmap`. The
+new roadmap is the anchor of a distinct set. Re-review and re-lint the child
+against the current default branch, then publish it under the hold with
+`publish-authoring-hold --shape child --anchor <fresh-roadmap>`. Preserve the
+non-blocking carrier reference and any source provenance, such as
+`Split out of #<source>`.
+
+Immediately after each successful child create, post a trusted mapping comment
+on the carrier naming the draft and published issue. Once the child number is
+known, update the new roadmap's `## Tracks` list under its current owner
+generation; re-review and re-lint that refreshed roadmap body before saving
+the edit. Close the carrier only after every draft is published or dropped
+with a recorded reason. If a create, mapping, Tracks update, or close has an
+uncertain outcome, keep the carrier open, retain the exact issue identities
+and journal evidence, and read and reconcile live state before retrying; never
+repeat an uncertain create. Release the coordination claim last. Keep the new
+roadmap and child under the authoring hold for a separate Stage 2 release.
+
+Observed 2026-11-05 during the replay recorded on carrier issue #5054; see
+[the design rationale](../../../docs/idd-design-rationale.md#cite-the-observed-incident).
 
 **Records.** Once the carrier exists, local draft files are disposable; the
 carrier is the record.
