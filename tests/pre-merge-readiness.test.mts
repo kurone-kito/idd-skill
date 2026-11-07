@@ -385,7 +385,7 @@ test('pre-merge readiness scope audit accepts both paths of a renamed PR file', 
           ? [
               ...comments,
               {
-                id: '45',
+                id: 45,
                 createdAt: '2026-05-12T10:30:00Z',
                 updatedAt: '2026-05-12T10:30:00Z',
                 body: renderScopeOverrunRecordComment({
@@ -496,7 +496,7 @@ test('collectPreMergeReadiness adds a blocker for an overrun without valid evide
           ? [
               ...comments,
               {
-                id: '44',
+                id: 44,
                 createdAt: '2026-05-12T10:30:00Z',
                 updatedAt: '2026-05-12T10:30:00Z',
                 body: renderScopeOverrunRecordComment({
