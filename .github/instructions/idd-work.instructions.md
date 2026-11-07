@@ -29,30 +29,31 @@ serialize shared-clone `fetch`, `merge --ff-only`, and worktree add/remove
 [fan-out variant](../../docs/idd-workflow.md#orchestrator-fan-out-variant)
 if applicable.
 
-1. Resolve and validate `{default-branch}` per Worktree creation Step 2. On
-   the primary worktree with it checked out, run:
+1. Get a nonempty `{origin-url}` via `git remote get-url origin`; pass it to
+   `gh repo view "{origin-url}" --json defaultBranchRef --jq .defaultBranchRef.name`
+   for `{default-branch}`. Stop on failure, empty result, or unsafe name per
+   the policy safe-name pattern. Never use
+   `developmentBranch`. On primary with it checked out, run:
 
    ```sh
    git fetch origin
    git log origin/{default-branch}..{default-branch} --oneline
    ```
 
-   If the second command outputs any lines, local `{default-branch}` has unpushed
-   commits — stop and report, do not force-reset `{default-branch}`. Otherwise,
-   fast-forward to origin:
+   A missing origin ref or any `git log` output means stop and report; never
+   reset. Otherwise fast-forward:
 
    ```sh
    git -c merge.autoStash=false merge --ff-only origin/{default-branch}
    ```
 
-   Dirty failure: report `primary-worktree-dirty` and paths; stop before
-   worktree creation. For staged or unmerged paths, ask the operator to
-   preserve staged and unstaged content and resolve the index before retrying.
-   Otherwise move only this session's unstaged paths outside the repository;
-   ask before moving others. Rerun step 1. Never stash, discard, or remove a
-   worktree (`#5058`).
+   Dirty: stop before creation; report `primary-worktree-dirty` and paths. For
+   staged/unmerged paths, ask the operator to preserve staged/unstaged
+   content and resolve the index. Otherwise move only this session's unstaged
+   paths outside the repo; ask before moving others. Rerun step 1; never
+   stash, discard, or remove a worktree (`#5058`).
 
-   After success, follow Anti-patterns below.
+   Follow Anti-patterns below.
 
 2. Run `git worktree list` — if a worktree for the branch already
    exists, inspect and acquire its
@@ -121,9 +122,8 @@ but is not listed in `git worktree list`, stop and report for manual
 cleanup before continuing.
 
 **Step 2 — Create**: `<base-branch>` below is `{development-branch}` —
-resolve it first: read `developmentBranch` from
-the effective policy, else `gh repo view --json
-defaultBranchRef --jq .defaultBranchRef.name`; validate the result
+resolve it first: read `developmentBranch` from the effective policy, else
+use `{default-branch}` from B1 Step 1; validate the result
 ([defaults](../../docs/policy-constants.md#branch-synchronization-defaults)),
 fail closed if invalid/absent on `origin`, never fall back. Then
 `git fetch origin` (may be missing/stale otherwise). Use **WorkTrunk**
