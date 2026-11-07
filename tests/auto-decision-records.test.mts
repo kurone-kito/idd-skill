@@ -490,6 +490,16 @@ test('an HTML comment cannot supply a fake Stop section or subject', () => {
   );
 });
 
+test('an HTML comment inside Stop cannot add a Subject line', () => {
+  const body = confirmationBody(200).replace(
+    `Subject: \`${SUBJECT}\``,
+    `Subject: \`${SUBJECT}\`\n<!--\nSubject: \`/work/fake\`\n-->`,
+  );
+  const github = new FakeGithub(confirmationIssue(200, { body }));
+  const result = readable(read(github, 200));
+  assert.equal(result.records[0]?.subject, SUBJECT);
+});
+
 test('a closed issue without the authoring label reports both facts', () => {
   const github = new FakeGithub(confirmationIssue(200, { state: 'CLOSED' }));
   const result = readable(read(github, 200));
@@ -793,6 +803,23 @@ test('the finder deduplicates one decision across confirmation issues and merges
   const result = readable(find(github));
   assert.deepEqual(foundNumbers(result), [200]);
   assert.equal(result.issues[0]?.records[0]?.locationNote, true);
+});
+
+test('the finder keeps counting notes from an issue whose body record does not count', () => {
+  const github = new FakeGithub(
+    confirmationIssue(200),
+    confirmationIssue(201, {
+      body: 'The edited body no longer carries its record.',
+      lastEditedAt: EDITED_AT,
+      comments: [
+        { id: 201002, body: noteComment('d1', 'location') },
+        { id: 201003, body: noteComment('d1', 'failure') },
+      ],
+    }),
+  );
+  const result = readable(find(github));
+  assert.equal(result.issues[0]?.records[0]?.locationNote, true);
+  assert.equal(result.issues[0]?.records[0]?.failureNote, true);
 });
 
 test('the finder drops decision IDs that conflict across confirmation issues before filtering', () => {

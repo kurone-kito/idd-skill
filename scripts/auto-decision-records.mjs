@@ -338,9 +338,9 @@ function bodyRecordFields(body, markerPrefix) {
 }
 /**
  * The `Subject:` value of a record, located as the #4961 linter locates it:
- * the `## Stop` section is found on the masked text, so a fenced heading does
- * not count, and its lines are read raw. The section holds exactly one
- * `Subject:` line, and it is the first non-blank one.
+ * the `## Stop` section is found on masked text, so fenced headings and HTML
+ * comments do not count. The visible section holds exactly one `Subject:`
+ * line, and it is the first non-blank one.
  */
 function recordSubject(text, cls) {
   if (!SUBJECT_CLASSES.has(cls)) {
@@ -362,13 +362,18 @@ function recordSubject(text, cls) {
       break;
     }
   }
-  const section = raw.slice(start + 1, end);
-  if (section.filter((line) => line.startsWith('Subject:')).length !== 1) {
+  const rawSection = raw.slice(start + 1, end);
+  const visibleSection = masked.slice(start + 1, end);
+  const firstVisibleLine = visibleSection.findIndex(
+    (line) => line.trim() !== '',
+  );
+  if (
+    firstVisibleLine < 0 ||
+    visibleSection.filter((line) => line.startsWith('Subject:')).length !== 1
+  ) {
     return null;
   }
-  return parseConfirmationSubjectLine(
-    section.find((line) => line.trim() !== '') ?? '',
-  );
+  return parseConfirmationSubjectLine(rawSection[firstVisibleLine] ?? '');
 }
 // ---------------------------------------------------------------------
 // Decision grouping
@@ -409,7 +414,7 @@ function sameRecord(a, b) {
   );
 }
 /** Resolve decision IDs across the finder result before applying its filters. */
-function resolveFinderRecords(entries, removedDecisions) {
+function resolveFinderRecords(entries, removedDecisions, countingNotes) {
   const groups = new Map();
   for (const entry of entries) {
     const group = groups.get(entry.record.decision);
@@ -435,8 +440,12 @@ function resolveFinderRecords(entries, removedDecisions) {
       ...first,
       record: {
         ...first.record,
-        locationNote: group.some((entry) => entry.record.locationNote),
-        failureNote: group.some((entry) => entry.record.failureNote),
+        locationNote:
+          countingNotes.location.has(decision) ||
+          group.some((entry) => entry.record.locationNote),
+        failureNote:
+          countingNotes.failure.has(decision) ||
+          group.some((entry) => entry.record.failureNote),
       },
     });
   }
@@ -833,6 +842,8 @@ export function findConfirmationIssues(
     );
     const entries = [];
     const voidedDecisions = new Set();
+    const locationNotes = new Set();
+    const failureNotes = new Set();
     for (const entry of listed) {
       // Read every listed issue before applying the finder's filters: a
       // trusted void marker can remove an ID even after its body record stops
@@ -849,6 +860,11 @@ export function findConfirmationIssues(
       for (const decision of report.conflictingDecisions) {
         voidedDecisions.add(decision);
       }
+      for (const note of report.notes) {
+        (note.kind === 'location' ? locationNotes : failureNotes).add(
+          note.decision,
+        );
+      }
       // A counting body record whose own decision was voided or dropped still
       // lets the issue's record comments count.
       if (!report.bodyRecordCounts) {
@@ -864,7 +880,10 @@ export function findConfirmationIssues(
         entries.push({ issue, record });
       }
     }
-    const resolved = resolveFinderRecords(entries, voidedDecisions);
+    const resolved = resolveFinderRecords(entries, voidedDecisions, {
+      location: locationNotes,
+      failure: failureNotes,
+    });
     const byIssue = new Map();
     for (const { issue, record } of resolved) {
       if (
