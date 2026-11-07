@@ -462,6 +462,52 @@ test('malformed truthy booleans do not authorize provisional writes', async (t) 
   );
 });
 
+test('replay refuses malformed trust and edit flags before writes', async (t) => {
+  for (const [name, flags, expectedAction] of [
+    [
+      'truthy non-boolean trust',
+      { trustedAuthor: 'false' as unknown as boolean },
+      'fix-input',
+    ],
+    [
+      'missing edit state',
+      { edited: undefined as unknown as boolean },
+      'recovery-hold',
+    ],
+  ] as const) {
+    await t.test(name, async () => {
+      const { store, record } = await selectedRecord();
+      const selection = selectionComment(
+        record,
+        '3',
+        '2026-11-03T11:00:02Z',
+        flags,
+      );
+      const planComment = comment(
+        '4',
+        'Implementation plan.',
+        '2026-11-03T11:00:03Z',
+      );
+      store.history = {
+        ...store.history,
+        comments: [...store.history.comments, selection, planComment],
+      };
+      const result = await runProvisionalDecisionCommand(
+        request({
+          type: 'work-started',
+          planCommentUrl: planComment.url,
+        }),
+        store,
+        { apply: true },
+      );
+
+      assertRefused(result, expectedAction);
+      assert.equal(store.appendCalls, 0);
+      assert.deepEqual(store.labelCalls, []);
+    });
+  }
+});
+
 test('repository casing keeps record identity stable and reconciles stored records', async () => {
   const { store, record } = await selectedRecord();
   const storedRecord = {

@@ -1008,7 +1008,11 @@ async function planProvisionalDecisionCommand(
   }
 
   const replay = replayProvisionalDecisionHistory({
-    comments: history.comments,
+    comments: history.comments.map((comment) => ({
+      ...comment,
+      trustedAuthor: comment.trustedAuthor === true,
+      edited: comment.edited !== false,
+    })),
     completeHistory: history.complete === true,
     currentSource: source,
     verifiedClaimLineage: folded.lineage,
