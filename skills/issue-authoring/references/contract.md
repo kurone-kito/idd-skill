@@ -4175,21 +4175,28 @@ provenance, stop and reconcile without publishing. The hidden-only owner-marker
 rule remains fail-closed: do not unhide comments, infer completion, or edit the
 old anchor's body, labels, or owner-marker history.
 
-Before assigning an existing original child to another set, replay its full
-paginated owner-marker history and follow its persisted original `anchor` to
-that anchor's full log. Apply the interrupted-release guard from Stage 1:
-if the child's generation has `mode=release`, or its anchor's generation has
-`mode=release` or `mode=release-guard`, require the matching trusted
-`mode=release-complete`
-for that exact anchor/set/session release generation and its current anchor
-owner, with the required body and set-snapshot digest verification. Child and
-anchor owner tokens are per target; do not compare them literally. An absent
-label, a local child log, or an older or newer completion cannot substitute.
-If completion is absent or any generation evidence is inconclusive, resume
-that exact interrupted set under its existing rules or stop and preserve its
-hold; do not publish a replacement anchor or acquire the child into a fresh
-set. This check precedes the fresh-set fallback even when the old anchor is
-no longer labeled. This guard addresses the gap identified on 2026-11-07
+Before any fresh-set fallback, identify the original anchor and the exact
+set/session release generation from the refused publication's persisted draft
+and owner provenance, and replay that anchor's full paginated owner-marker log.
+This check applies even when the draft has never produced a child issue. If an
+original child already exists, also replay its full paginated owner-marker
+history, follow its persisted original `anchor`, and require it to agree with
+the verified original anchor and generation. Missing or inconclusive provenance
+stops before any replacement roadmap or child creation.
+
+Apply the interrupted-release guard from Stage 1: if the original anchor's
+generation has `mode=release` or `mode=release-guard`, or an existing child's
+generation has `mode=release`, require the matching trusted
+`mode=release-complete` for that exact anchor/set/session release generation
+and its current anchor owner, with the required body and set-snapshot digest
+verification. Child and anchor owner tokens are per target; do not compare
+them literally. An absent label, a local child log, or an older or newer
+completion cannot substitute. If completion is absent or any generation
+evidence is inconclusive, resume that exact interrupted set under its existing
+rules or stop and preserve its hold; do not publish a replacement anchor or
+acquire the child into a fresh set. This check precedes the fresh-set fallback
+even when the old anchor is no longer labeled or no child has been published.
+This guard addresses the gap identified on 2026-11-07
 during PR `#5074` and PR `#5100` review and tracked in issue `#5085`
 (preventive; no observed incident yet).
 
