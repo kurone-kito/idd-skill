@@ -1711,6 +1711,49 @@ test('all mirrored Node floor checks follow checkout and share one program', () 
   assert.equal(new Set(programs).size, 1);
 });
 
+test('live workflow Node floor checks match the package-based lint assertion', () => {
+  const canonicalProgram = assertNodeVersionLogBeforeFloor(
+    extractNamedStepBody(
+      readWorkflow('lint.yml'),
+      'lint',
+      'Assert Node.js floor',
+    ),
+  );
+  // Keep adopter templates out of this equality check because they do not
+  // ship the source repository's package.json.
+  const workflowCases = [
+    ['idd-doctor.yml', 'idd-doctor'],
+    ['review-policy-audit.yml', 'audit'],
+  ] as const;
+  assert.deepEqual(
+    workflowCases.map(([workflowName]) => workflowName),
+    ['idd-doctor.yml', 'review-policy-audit.yml'],
+    'only the two source-repository workflows belong in this equality check',
+  );
+
+  for (const [workflowName, jobId] of workflowCases) {
+    const workflow = readWorkflow(workflowName);
+    assert.equal(
+      workflow.includes('22.23.2'),
+      false,
+      `${workflowName}: must not hard-code the Node floor`,
+    );
+    assert.equal(
+      workflow.includes('^22.23.2 || ^24.2.0 || >=26.0.0'),
+      false,
+      `${workflowName}: must not hard-code the engines.node range`,
+    );
+    const program = assertNodeVersionLogBeforeFloor(
+      extractNamedStepBody(workflow, jobId, 'Assert Node.js floor'),
+    );
+    assert.equal(
+      program,
+      canonicalProgram,
+      `${workflowName}: assertion must match lint.yml after whitespace normalization`,
+    );
+  }
+});
+
 test('lint-windows setup ignores comments that mention setup-node', () => {
   const workflow = readWorkflow('lint.yml');
   const annotatedWorkflow = workflow.replace(
