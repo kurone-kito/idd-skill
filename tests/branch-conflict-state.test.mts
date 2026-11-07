@@ -1943,6 +1943,42 @@ test('parseHeadSuites: lists run-less suites by app slug and status', () => {
   });
 });
 
+test('#4891: run-less unsupported suites remain blocking beside a later success', () => {
+  for (const conclusion of ['NOT_APPLICABLE', 'WEIRD']) {
+    const unknown = suiteNode('external', {
+      appId: 12637,
+      status: 'COMPLETED',
+      conclusion,
+      createdAt: '2026-10-14T08:00:00Z',
+    });
+    const success = suiteNode('external', {
+      appId: 12637,
+      status: 'COMPLETED',
+      conclusion: 'SUCCESS',
+      createdAt: '2026-10-14T09:00:00Z',
+    });
+    for (const nodes of [[unknown], [unknown, success], [success, unknown]]) {
+      const { suites, notes } = parseHeadSuites(suitesOf(nodes));
+      assert.deepEqual(notes, []);
+      assert.deepEqual(suites, [
+        {
+          name: 'external',
+          state: conclusion.toLowerCase(),
+          suiteStatus: conclusion.toLowerCase(),
+          appId: 12637,
+        },
+      ]);
+      assert.deepEqual(
+        resolveCallSiteRouting('clean', 'UNSTABLE', true, [
+          { name: 'waiting', state: 'pending', required: false },
+          ...suites.map((suite) => ({ ...suite, required: false })),
+        ]),
+        { eBranchSync: 'hold', e11: 'skip-merge', f1: 'hold' },
+      );
+    }
+  }
+});
+
 test('parseHeadSuites: a failed or unfinished-conclusion suite never proceeds', () => {
   const states = (nodes: unknown[]) =>
     parseHeadSuites(suitesOf(nodes)).suites.map((suite) => suite.state);

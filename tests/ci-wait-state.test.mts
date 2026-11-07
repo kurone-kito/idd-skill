@@ -1039,6 +1039,65 @@ test('#4891: NOT_APPLICABLE is unknown and cannot satisfy the required gate', ()
   assert.equal(ciWaitSummaryIsPreMergeCiPassing(summary), false);
 });
 
+test('#4891: older unsupported conclusions remain blocking beside a later passing run', () => {
+  for (const conclusion of ['NOT_APPLICABLE', 'WEIRD']) {
+    for (const passing of ['SUCCESS', 'SKIPPED', 'NEUTRAL']) {
+      const unknown = checkRun({
+        conclusion,
+        completedAt: '2026-07-09T00:04:00Z',
+      });
+      const success = checkRun({
+        conclusion: passing,
+        completedAt: '2026-07-09T00:05:00Z',
+      });
+      for (const runs of [
+        [unknown, success],
+        [success, unknown],
+      ]) {
+        const summary = buildCiWaitStateSummary(
+          { headRefOid: HEAD_SHA, statusCheckRollup: runs },
+          { requiredCheckNames: ['lint'] },
+        );
+        assert.equal(summary.requiredChecks.anyRequiredUnknown, true);
+        assert.equal(summary.requiredChecks.allRequiredPassing, false);
+        assert.equal(summary.requiredChecks.status, 'pending');
+        assert.equal(ciWaitSummaryIsPreMergeCiPassing(summary), false);
+      }
+    }
+  }
+});
+
+test('#4891: producer and CI-wait classifiers retain their normalization boundaries', () => {
+  const unknown = {
+    name: 'lint',
+    state: 'success ',
+    completedAt: '2026-07-09T00:04:00Z',
+  };
+  const success = {
+    name: 'lint',
+    state: 'SUCCESS',
+    completedAt: '2026-07-09T00:05:00Z',
+  };
+  for (const checks of [
+    [unknown, success],
+    [success, unknown],
+  ]) {
+    assert.equal(classifyCiChecks(checks).status, 'unknown');
+  }
+  assert.equal(
+    classifyCiChecks([{ ...unknown, state: 'success' }, success]).status,
+    'success',
+  );
+  const normalized = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [checkRun({ conclusion: 'success ' })],
+    },
+    { requiredCheckNames: ['lint'] },
+  );
+  assert.equal(ciWaitSummaryIsPreMergeCiPassing(normalized), true);
+});
+
 test('a genuinely unrecognized state buckets as unknown and marks the rollup unknown, not passing', () => {
   const summary = buildCiWaitStateSummary(
     {
