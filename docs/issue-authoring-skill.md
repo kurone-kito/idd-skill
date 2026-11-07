@@ -2881,6 +2881,21 @@ contract's
 [Draft carrier](https://github.com/kurone-kito/idd-skill/blob/main/skills/issue-authoring/references/contract.md#draft-carrier)
 section.
 
+When a ready child draft's original set no longer proves a held anchor,
+the re-authoring procedure permits a fresh held roadmap set after the
+verified no-worktree carrier claim, current branch and recent issue/PR
+history checks. It requires reviewed and linted root and child bodies, a
+trusted pre-create intent linking the draft to a unique token in the roadmap,
+an immediate carrier mapping after root creation, and live reconciliation
+before retrying any uncertain write. A defer-source child keeps its single
+source `Refs` line instead of gaining a carrier reference. Before closure,
+the procedure verifies that every mapped child appears in the live roadmap
+`## Tracks` list (issue `#5061`). Observed 2026-11-05 on carrier issue
+`#5054`; see the
+[design rationale](idd-design-rationale.md#cite-the-observed-incident).
+The old owner history remains unchanged, and the fresh roadmap and child stay
+under the authoring hold for a separate Stage 2 release.
+
 ## Reuse-first issue policy
 
 Before creating any new issue, the skill should check whether the work
