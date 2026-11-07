@@ -125,7 +125,6 @@ const CHECK_RUN_KNOWN_CONCLUSIONS = new Set([
   'SUCCESS',
   'NEUTRAL',
   'SKIPPED',
-  'NOT_APPLICABLE',
   'ACTION_REQUIRED',
   'CANCELLED',
   'FAILURE',
@@ -134,12 +133,7 @@ const CHECK_RUN_KNOWN_CONCLUSIONS = new Set([
   'TIMED_OUT',
 ]);
 /** Conclusions and states that count as passing, so they are not listed. */
-const PASSING_CHECK_CONCLUSIONS = new Set([
-  'SUCCESS',
-  'NEUTRAL',
-  'SKIPPED',
-  'NOT_APPLICABLE',
-]);
+const PASSING_CHECK_CONCLUSIONS = new Set(['SUCCESS', 'NEUTRAL', 'SKIPPED']);
 /**
  * #4209: every non-passing head run must be non-required and waiting, and
  * #4309 holds a run-less check suite to the same rule. An empty list never

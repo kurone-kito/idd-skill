@@ -1323,9 +1323,63 @@ test('parseNonPassingRuns: keeps only non-passing runs and fails closed', () => 
     { name: 'expected-check', state: 'pending', required: true },
     { name: 'requested-check', state: 'pending', required: false },
     { name: 'Windows platform tests', state: 'failure', required: false },
+    { name: 'not-applicable-run', state: 'not_applicable', required: false },
     { name: 'odd-status', state: 'unknown', required: false },
     { name: '', state: 'unknown', required: true },
   ]);
+});
+
+test('#4891: valid passing CheckRun conclusions are omitted from non-passing runs', () => {
+  for (const conclusion of ['SUCCESS', 'SKIPPED', 'NEUTRAL']) {
+    assert.deepEqual(
+      parseNonPassingRuns([
+        {
+          __typename: 'CheckRun',
+          name: 'lint',
+          status: 'COMPLETED',
+          conclusion,
+          isRequired: true,
+        },
+      ]),
+      [],
+      conclusion,
+    );
+  }
+});
+
+test('#4891: NOT_APPLICABLE cannot be hidden by a later same-producer SUCCESS', () => {
+  const sha = 'd061d433cbaf1ad0b92337263d53237130e9cf5d';
+  const run = (conclusion: string, completedAt: string) => ({
+    __typename: 'CheckRun',
+    name: 'lint',
+    status: 'COMPLETED',
+    conclusion,
+    completedAt,
+    isRequired: false,
+    checkSuite: {
+      app: { databaseId: 15368, slug: 'github-actions' },
+      workflowRun: { workflow: { databaseId: 1, name: 'CI' } },
+    },
+  });
+  const invalid = run('NOT_APPLICABLE', '2026-10-14T08:00:00Z');
+  const success = run('SUCCESS', '2026-10-14T09:00:00Z');
+  for (const nodes of [[invalid], [invalid, success], [success, invalid]]) {
+    const { runs } = parseHeadRollup(
+      {
+        oid: sha,
+        statusCheckRollup: { contexts: { totalCount: nodes.length, nodes } },
+      },
+      sha,
+    );
+    assert.deepEqual(runs, [
+      { name: 'lint', state: 'not_applicable', required: false },
+    ]);
+    assert.deepEqual(resolveCallSiteRouting('clean', 'UNSTABLE', true, runs), {
+      eBranchSync: 'hold',
+      e11: 'skip-merge',
+      f1: 'hold',
+    });
+  }
 });
 
 test('parseHeadRollup: fails closed unless the pinned head and full rollup match', () => {

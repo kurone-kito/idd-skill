@@ -215,7 +215,6 @@ const CHECK_RUN_KNOWN_CONCLUSIONS: ReadonlySet<string> = new Set([
   'SUCCESS',
   'NEUTRAL',
   'SKIPPED',
-  'NOT_APPLICABLE',
   'ACTION_REQUIRED',
   'CANCELLED',
   'FAILURE',
@@ -229,7 +228,6 @@ const PASSING_CHECK_CONCLUSIONS: ReadonlySet<string> = new Set([
   'SUCCESS',
   'NEUTRAL',
   'SKIPPED',
-  'NOT_APPLICABLE',
 ]);
 
 /**

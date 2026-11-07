@@ -1190,7 +1190,6 @@ export const CHECK_PASS_EQUIVALENT_STATES: ReadonlySet<string> = new Set([
   'SUCCESS',
   'SKIPPED',
   'NEUTRAL',
-  'NOT_APPLICABLE',
 ]);
 
 function matchCheckSelectorLocal(
@@ -7079,7 +7078,7 @@ export interface CiCheckDiscardedSibling {
  * `(name, type, workflowName)` -- see `groupChecksByProducer`'s own doc
  * comment) whose dedup-selected "latest" instance
  * (`selectLatestCheckInstance`) is pass-equivalent (SUCCESS/SKIPPED/
- * NEUTRAL/NOT_APPLICABLE) while a DISCARDED sibling in that same group is
+ * NEUTRAL) while a DISCARDED sibling in that same group is
  * genuinely non-passing (see {@link GENUINELY_NON_PASSING_STATES}) -- the
  * live discrepancy PR #1741 exhibited (#1745): `classifyCiChecks` reported
  * `success` for a commit whose GitHub `statusCheckRollup.state` was
