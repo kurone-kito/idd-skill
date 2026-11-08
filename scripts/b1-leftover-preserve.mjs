@@ -183,6 +183,18 @@ function list(ctx) {
       return refuse(`git worktree list ended with ${describeStatus(result)}`);
     }
     records = parseLocalWorktreeList(result.stdout);
+    // An empty or primary-less listing is unreadable, not "no worktree": the
+    // registered-worktree guards would pass vacuously on it.
+    const real = (path) => ctx.ports.fs.realpath(path) ?? resolve(path);
+    const primary = real(request.primary);
+    if (
+      records.length === 0 ||
+      !records.some((record) => real(record.path) === primary)
+    ) {
+      return refuse(
+        `git worktree list names ${records.length === 0 ? 'no worktree' : 'no primary checkout'} at ${shorten(request.primary)}`,
+      );
+    }
     return pass(`${records.length} registered worktree(s)`);
   });
   let branchTip = null;
@@ -233,6 +245,22 @@ function list(ctx) {
 // ---------------------------------------------------------------------------
 function commonChecks(ctx, listing) {
   const { request, ports, report } = ctx;
+  report.common.push(
+    guarded('claim-branch', () => {
+      // The caller computes the branch from the issue, so a name of any other
+      // shape means the request is not what this mode was written for.
+      const shape = new RegExp(
+        `^issue/${request.issue}-[a-z0-9]+(?:-[a-z0-9]+)*$`,
+      );
+      return Number.isSafeInteger(request.issue) &&
+        request.issue > 0 &&
+        shape.test(request.branch)
+        ? pass(`${request.branch} is the claim's computed branch shape`)
+        : refuse(
+            `${shorten(request.branch)} is not an issue/${request.issue}-<slug> branch`,
+          );
+    }),
+  );
   let trusted = null;
   report.common.push(
     guarded('class-enabled', () => {
@@ -301,6 +329,50 @@ function commonChecks(ctx, listing) {
   return { trusted };
 }
 /**
+ * The key names of the branch's own section in the repository's local
+ * configuration. `--name-only`: a value can span lines (a branch description),
+ * and without it each continuation line would read as a key. `--local`: the
+ * removal only touches the repository's own configuration, so a key held only
+ * by a global or included file must not pass a check that the removal cannot
+ * honor. An empty list means the section holds no key.
+ */
+function readBranchConfigKeys(ctx, branch) {
+  const result = git(ctx, [
+    'config',
+    '--local',
+    '--name-only',
+    '--get-regexp',
+    `^branch\\.${escapeForRegExp(branch)}\\.`,
+  ]);
+  if (result.status === 1) {
+    return { kind: 'keys', keys: [] };
+  }
+  if (result.status !== 0) {
+    return {
+      kind: 'refused',
+      detail: `git config ended with ${describeStatus(result)}`,
+    };
+  }
+  const keys = new Set();
+  for (const line of result.stdout.split(/\r?\n/)) {
+    if (line === '') continue;
+    if (!line.startsWith(`branch.${branch}.`)) {
+      return {
+        kind: 'refused',
+        detail: `git config printed an unexpected key ${shorten(line)}`,
+      };
+    }
+    keys.add(line);
+  }
+  return { kind: 'keys', keys: [...keys] };
+}
+/** Whether a ref exists, read as a ref: `unknown` when the read itself fails. */
+function refState(ctx, ref) {
+  const result = git(ctx, ['rev-parse', '--verify', '--quiet', ref]);
+  if (result.status === 0) return 'present';
+  return result.status === 1 ? 'absent' : 'unknown';
+}
+/**
  * Read the backup ref as a ref, not as a revision: `rev-parse` follows a
  * symbolic ref, so the type comes from `for-each-ref`. A ref that would
  * collide with the backup path (a ref named `refs/idd-b1/<issue>`, or one
@@ -323,6 +395,16 @@ function inspectBackupRef(ctx, backupRef) {
     .split(/\r?\n/)
     .filter((line) => line !== '')
     .map((line) => line.split('\t'));
+  const garbled = rows.find(
+    (fields) =>
+      fields.length !== 3 || !OBJECT_ID_PATTERN.test((fields[1] ?? '').trim()),
+  );
+  if (garbled !== undefined) {
+    return {
+      kind: 'refused',
+      detail: `git for-each-ref printed an unexpected row ${shorten(garbled.join(' '))}`,
+    };
+  }
   const collision = rows.find(
     ([name]) => name === directory || (name ?? '').startsWith(`${backupRef}/`),
   );
@@ -404,35 +486,12 @@ function branchPlan(ctx, listing) {
   const configKeys = [];
   preconditions.push(
     guarded('config-readable', () => {
-      // `--local`: the removal below only touches the repository's own
-      // configuration, so a key held only by a global or included file must not
-      // pass a check that the removal cannot honor.
-      // `--name-only`: a value can span lines (a branch description), and
-      // without it each continuation line would read as a key.
-      const result = git(ctx, [
-        'config',
-        '--local',
-        '--name-only',
-        '--get-regexp',
-        `^branch\\.${escapeForRegExp(branch)}\\.`,
-      ]);
-      if (result.status === 1) {
+      const read = readBranchConfigKeys(ctx, branch);
+      if (read.kind === 'refused') return refuse(read.detail);
+      if (read.keys.length === 0) {
         return pass(`no branch.${branch} configuration section`);
       }
-      if (result.status !== 0) {
-        return refuse(`git config ended with ${describeStatus(result)}`);
-      }
-      const keys = new Set();
-      for (const line of result.stdout.split(/\r?\n/)) {
-        if (line === '') continue;
-        if (!line.startsWith(`branch.${branch}.`)) {
-          return refuse(
-            `git config printed an unexpected key ${shorten(line)}`,
-          );
-        }
-        keys.add(line);
-      }
-      configKeys.push(...keys);
+      configKeys.push(...read.keys);
       return pass(
         `the section branch.${branch} holds ${configKeys.length} key(s)`,
       );
@@ -514,10 +573,23 @@ function branchPlan(ctx, listing) {
             `git ls-remote ${name} ended with ${describeStatus(live)}`,
           );
         }
-        const found = live.stdout
+        const lines = live.stdout
           .split(/\r?\n/)
-          .some((line) => line.trim().endsWith(`\t${ref}`));
-        if (found) return refuse(`${branch} exists on the remote ${name}`);
+          .map((line) => line.trim())
+          .filter((line) => line !== '');
+        // Every line must be an object id and a ref, so a garbled answer is
+        // not read as an absence.
+        const garbled = lines.find(
+          (line) => !/^[0-9a-f]{40}(?:[0-9a-f]{24})?\t\S+$/.test(line),
+        );
+        if (garbled !== undefined) {
+          return refuse(
+            `git ls-remote ${name} printed an unexpected line ${shorten(garbled)}`,
+          );
+        }
+        if (lines.some((line) => line.endsWith(`\t${ref}`))) {
+          return refuse(`${branch} exists on the remote ${name}`);
+        }
       }
       return pass(`${branch} is on none of ${names.length} remote(s)`);
     }),
@@ -789,6 +861,29 @@ function recordChecks(ctx, trusted, subjects) {
     unmetAll('no confirmation record was checked');
     return;
   }
+  // The records name the claimed issue as their source, and a source must be
+  // an issue of the confirmation issue's repository, so the confirmation issue
+  // is another issue of this repository. The caller checks this too; the module
+  // does not rely on it.
+  const sameRepository =
+    `${confirmation.owner}/${confirmation.repo}`.toLowerCase() ===
+    `${request.repository.owner}/${request.repository.repo}`.toLowerCase();
+  if (!sameRepository || confirmation.number === request.issue) {
+    report.common.push({
+      id: 'record',
+      status: 'unmet',
+      detail:
+        'the confirmation issue must be another issue of this repository than the claimed issue',
+    });
+    report.common.push({
+      id: 'decision-pairing',
+      status: 'unmet',
+      detail:
+        'the decisions cannot be paired without a valid confirmation issue',
+    });
+    unmetAll('no confirmation record was checked');
+    return;
+  }
   const confirmationLabel =
     trusted?.status === 'readable' ? trusted.confirmationLabelName : undefined;
   if (confirmationLabel === undefined || confirmationLabel === '') {
@@ -992,17 +1087,22 @@ function preserveBranch(ctx, plan) {
       `the backup ref ${backupRef} did not read back as ${tip}; the ref stays and the branch is untouched`,
     );
   }
-  // `--no-deref`: never follow a symbolic ref to its target.
+  // `--no-deref`: never follow a symbolic ref to its target. The ref is read
+  // back whatever the command reported, because a command that timed out or
+  // died may still have deleted it.
   const deleted = git(ctx, ['update-ref', '--no-deref', '-d', ref, tip]);
-  if (deleted.status !== 0) {
+  const after = refState(ctx, ref);
+  if (after === 'present') {
     return failed(
       report,
       `deleting ${ref} at ${tip} failed (${describeStatus(deleted)}), so the tip moved or the ref changed: ${shorten(deleted.stderr)}; the branch is untouched`,
     );
   }
-  const gone = git(ctx, ['rev-parse', '--verify', '--quiet', ref]);
-  if (gone.status !== 1) {
-    return failed(report, `${ref} is still present after its deletion`);
+  if (after === 'unknown') {
+    return failed(
+      report,
+      `deleting ${ref} at ${tip} ended with ${describeStatus(deleted)} and the ref could not be read back; check by hand whether the branch is gone`,
+    );
   }
   report.actions.push({
     id: 'branch-deleted',
@@ -1018,10 +1118,12 @@ function preserveBranch(ctx, plan) {
       '--remove-section',
       section,
     ]);
-    if (removed.status !== 0) {
+    // Read the section back, whatever the command reported.
+    const left = readBranchConfigKeys(ctx, branch);
+    if (left.kind === 'refused' || left.keys.length > 0) {
       return failed(
         report,
-        `the configuration section ${section} (${keys}) could not be removed (${describeStatus(removed)}); remove it by hand before a branch of that name is recreated`,
+        `the configuration section ${section} (${keys}) could not be removed (${describeStatus(removed)}${left.kind === 'refused' ? `; ${left.detail}` : ''}); remove it by hand before a branch of that name is recreated`,
       );
     }
     report.removedConfigSections.push(section);

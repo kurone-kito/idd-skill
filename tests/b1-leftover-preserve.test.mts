@@ -1866,7 +1866,13 @@ test(
         },
       });
       assertRefused(result, 'branch:not-checked-out');
-      assert.ok(result.report.subjects.length > 0, name);
+      assert.match(
+        result.report.subjects[0]?.preconditions.find(
+          (entry) => entry.id === 'not-checked-out',
+        )?.detail ?? '',
+        /\(occupied: /,
+        name,
+      );
     }
   },
 );
@@ -2138,4 +2144,262 @@ test('refused: a b1Leftover record that names a set, though the contract pairs i
   });
   assertRefused(result, 'decision-pairing');
   assert.match(pairingDetail(result.report), /matches no record/);
+});
+
+// ---------------------------------------------------------------------------
+// Malformed or unexpected output never reads as a pass
+// ---------------------------------------------------------------------------
+
+const REAL_RUN: B1Runner = (file, args) => {
+  const result = spawnSync(file, [...args], {
+    env: fixtureEnv(),
+    encoding: 'utf8',
+    stdio: 'pipe',
+  });
+  return {
+    status: result.status,
+    stdout: result.stdout ?? '',
+    stderr: result.stderr ?? '',
+  };
+};
+
+const isGitCommand = (args: readonly string[], ...words: string[]): boolean =>
+  words.every((word) => args.includes(word));
+
+const failClosedRows: [string, string, Overrides][] = [
+  [
+    'the worktree list is empty',
+    'worktree-list',
+    {
+      hook: (_f, _file, args) =>
+        isGitCommand(args, 'worktree', 'list') ? okResult('') : undefined,
+    },
+  ],
+  [
+    'the worktree list does not name the primary',
+    'worktree-list',
+    {
+      hook: (f, file, args) => {
+        if (!isGitCommand(args, 'worktree', 'list')) return undefined;
+        const real = REAL_RUN(file, args);
+        return {
+          ...real,
+          stdout: real.stdout.replaceAll(f.primary, `${f.primary}-elsewhere`),
+        };
+      },
+    },
+  ],
+  [
+    'the branch listing prints a tip that is not an object id',
+    'branch-listing',
+    {
+      hook: (_f, _file, args) =>
+        isGitCommand(args, 'for-each-ref') &&
+        args.at(-1) === `refs/heads/${BRANCH}`
+          ? okResult(`refs/heads/${BRANCH}\tnot-an-oid\t\n`)
+          : undefined,
+    },
+  ],
+  [
+    'no remote is configured',
+    'branch:no-remote-branch',
+    {
+      hook: (_f, _file, args) =>
+        args.length === 3 && args[2] === 'remote' ? okResult('') : undefined,
+    },
+  ],
+  [
+    'ls-remote prints a line that is not an object id and a ref',
+    'branch:no-remote-branch',
+    {
+      hook: (_f, _file, args) =>
+        isGitCommand(args, 'ls-remote')
+          ? okResult('garbled output\n')
+          : undefined,
+    },
+  ],
+  [
+    'the pull request list reaches its limit',
+    'branch:no-open-pr',
+    {
+      hook: (_f, file) =>
+        file === 'gh'
+          ? okResult(
+              JSON.stringify(
+                Array.from({ length: 100 }, (_, index) => ({
+                  number: index + 1,
+                  headRefName: `other-${index}`,
+                })),
+              ),
+            )
+          : undefined,
+    },
+  ],
+  [
+    'git config exits with an unexpected status',
+    'branch:config-readable',
+    {
+      hook: (_f, _file, args) =>
+        isGitCommand(args, 'config', '--name-only')
+          ? failedResult(128)
+          : undefined,
+    },
+  ],
+  [
+    'HEAD cannot be resolved',
+    'branch:not-deletable-with-d',
+    {
+      hook: (_f, _file, args) =>
+        isGitCommand(args, 'rev-parse', 'HEAD^{commit}')
+          ? failedResult(128)
+          : undefined,
+    },
+  ],
+  [
+    'merge-base fails',
+    'branch:not-deletable-with-d',
+    {
+      hook: (_f, _file, args) =>
+        isGitCommand(args, 'merge-base') ? failedResult(128) : undefined,
+    },
+  ],
+  [
+    'the backup ref listing prints an unexpected row',
+    'branch:backup-ref-compatible',
+    {
+      hook: (_f, _file, args) =>
+        isGitCommand(args, 'for-each-ref') &&
+        args.at(-1) === `refs/idd-b1/${ISSUE}`
+          ? okResult('not a ref row\n')
+          : undefined,
+    },
+  ],
+  [
+    'the confirmation issue is in another repository',
+    'record',
+    {
+      request: {
+        confirmation: { owner: 'someone', repo: 'else', number: 5200 },
+      },
+    },
+  ],
+  [
+    'the confirmation issue is the claimed issue',
+    'record',
+    {
+      request: {
+        confirmation: { owner: OWNER, repo: REPO, number: ISSUE },
+      },
+    },
+  ],
+  [
+    "the branch is not the claim's computed shape",
+    'claim-branch',
+    { request: { branch: 'feature/not-the-claim' } },
+  ],
+  [
+    'the branch name holds a dot',
+    'claim-branch',
+    { request: { branch: `issue/${ISSUE}-has.dot` } },
+  ],
+];
+
+for (const [name, expected, overrides] of failClosedRows) {
+  test(`fail closed: ${name}`, () => {
+    const fixture = fresh();
+    const result = exercise(fixture, {
+      ...overrides,
+      prepare: (f) => {
+        const branch = overrides.request?.branch ?? BRANCH;
+        leftoverBranch(f, branch === BRANCH ? BRANCH : branch);
+        overrides.prepare?.(f);
+      },
+    });
+    assert.equal(result.failure, null);
+    assert.equal(result.report.outcome, 'unmet-preconditions');
+    assert.ok(
+      unmet(result.report).includes(expected),
+      `${expected} is unmet; got ${unmet(result.report).join(', ')}`,
+    );
+    assert.equal(result.report.actions.length, 0);
+    assert.equal(result.after, result.before, 'nothing changed');
+    assert.equal(
+      result.calls.some((call) => /update-ref|--remove-section/.test(call)),
+      false,
+    );
+  });
+}
+
+test('a deletion that reports failure but removed the ref is recorded as deleted', () => {
+  const fixture = fresh();
+  const tip = leftoverBranch(fixture);
+  const result = exercise(fixture, {
+    hook: (f, _file, args) => {
+      if (isGitCommand(args, 'update-ref', '-d')) {
+        git(f.primary, ['update-ref', '-d', `refs/heads/${BRANCH}`]);
+        return failedResult(1);
+      }
+      return undefined;
+    },
+  });
+  assert.equal(result.report.outcome, 'preserved');
+  assert.deepEqual(
+    result.report.actions.map((action) => action.id),
+    ['backup-ref', 'branch-deleted'],
+  );
+  assert.equal(
+    git(fixture.primary, ['rev-parse', `refs/idd-b1/${ISSUE}/${tip}`]),
+    tip,
+  );
+});
+
+test('a deletion whose result cannot be read back is reported as unknown', () => {
+  const fixture = fresh();
+  const tip = leftoverBranch(fixture);
+  let attempted = false;
+  const result = exercise(fixture, {
+    hook: (_f, _file, args) => {
+      if (isGitCommand(args, 'update-ref', '-d')) {
+        attempted = true;
+        return { status: null, stdout: '', stderr: '' };
+      }
+      if (
+        attempted &&
+        isGitCommand(args, 'rev-parse', '--quiet') &&
+        args.at(-1) === `refs/heads/${BRANCH}`
+      ) {
+        return failedResult(128);
+      }
+      return undefined;
+    },
+  });
+  assert.equal(result.report.outcome, 'failed');
+  assert.match(result.failure?.detail ?? '', /could not be read back/);
+  assert.match(result.failure?.nextAction ?? '', new RegExp(tip));
+  assert.deepEqual(
+    result.report.actions.map((action) => action.id),
+    ['backup-ref'],
+  );
+});
+
+test('a section removal that reports failure but removed the section is recorded', () => {
+  const fixture = fresh();
+  leftoverBranch(fixture);
+  git(fixture.primary, ['config', `branch.${BRANCH}.remote`, 'origin']);
+  const result = exercise(fixture, {
+    hook: (f, _file, args) => {
+      if (isGitCommand(args, '--remove-section')) {
+        git(f.primary, [
+          'config',
+          '--local',
+          '--remove-section',
+          `branch.${BRANCH}`,
+        ]);
+        return failedResult(1);
+      }
+      return undefined;
+    },
+  });
+  assert.equal(result.report.outcome, 'preserved');
+  assert.deepEqual(result.report.removedConfigSections, [`branch.${BRANCH}`]);
 });
