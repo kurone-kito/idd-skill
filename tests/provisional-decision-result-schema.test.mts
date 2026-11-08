@@ -27,14 +27,13 @@ const recordSchema = loadJson(
 ) as RecordSchemaDocument;
 const results = loadJson(
   'tests/fixtures/provisional-decision-results.json',
-) as unknown[];
+) as ResultFixture[];
 const cloneJson = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
+const expectedStates = ['applied', 'planned', 'reconciled', 'refused'];
 
 /** Look a fixture up by state so no test depends on the fixture file order. */
 function byState(state: string): ResultFixture {
-  const found = (results as ResultFixture[]).find(
-    (result) => result.state === state,
-  );
+  const found = results.find((result) => result.state === state);
   assert.ok(found, `fixture for state ${state} should exist`);
   return found;
 }
@@ -42,8 +41,8 @@ function byState(state: string): ResultFixture {
 test('provisional-decision result schema validates all four states', () => {
   assert.deepEqual(checkSchemaKeywords(schema), []);
   assert.deepEqual(
-    results.map((result) => (result as { state: string }).state),
-    ['planned', 'applied', 'reconciled', 'refused'],
+    [...new Set(results.map((result) => result.state))].sort(),
+    expectedStates,
   );
 
   for (const [index, result] of results.entries()) {
@@ -74,7 +73,8 @@ test('provisional-decision result schema enforces the candidate record contract'
       };
     };
   };
-  const planned = cloneJson(results[0]) as PlannedResult;
+  const planned = cloneJson(byState('planned')) as unknown as PlannedResult;
+  assert.deepEqual(validate(planned, schema), []);
   const invalidCases: ((result: PlannedResult) => void)[] = [
     (result) => {
       result.plan.candidateRecord.recordId = '!';
