@@ -4285,7 +4285,9 @@ Before each POST, serialize the complete rendered comment, including marker,
 fences, JSON escaping, and visible note, and require at most 60,000 UTF-8 bytes.
 This limit is a conservative protocol budget. An oversized intent stops
 before its associated create; keep the carrier and any existing targets held.
-An oversized mapping after create keeps that exact target held and the carrier
+A fitting intent does not prove that its later mapping fits, so each create
+also needs the pre-create mapping bound below. An oversized actual mapping
+after create keeps that exact target held and the carrier
 open: retain its issue identity and journal evidence for reconciliation. Do
 not truncate bodies, substitute hashes for required bodies, split a record,
 or repeat a create to evade this budget.
@@ -4467,12 +4469,103 @@ Only after these checks may a missing mapping be appended from the
 verified issue and journal evidence; never invent an issue identity or repeat
 an uncertain publication to obtain one.
 
+**Pre-create mapping budget.** The mapping adds the publication line, two LF
+bytes, the issue identity and the publication fields to the reviewed body, so
+it can exceed 60,000 bytes while its intent fits. For each create, order the
+gates: this bound, the intent's own size check, the intent POST and exact
+read-back, the create, then the check of the actual mapping before its POST.
+
+Compute the bound for the mapping that create will require (`kind=roadmap`
+before a roadmap create, `kind=child` before a child create). Do it before
+appending the intent, so that a refusal leaves no unresolved intent to
+conflict with a corrected draft. A create that resumes or retries from an
+already verified intent repeats the check before that create. Render the
+complete mapping comment with the serializer the later POST will use. Measure
+every value already known exactly, in UTF-8 bytes after JSON escaping: the
+marker, fences, visible note, `carrier`, `token`, draft title and hash,
+`actor`, `kind`, `publication.journal`, comment IDs already returned, the
+repository part of `issue`, and the `body` value, which is the publication
+line exactly as the publisher renders it, two LF bytes and the reviewed body.
+For a child these also include the anchor reference, set and session. Replace
+each value not yet known with a placeholder of its proven maximum width; the
+rendered size is the bound. Require a proven bound of at most 60,000 UTF-8
+bytes before creating the roadmap or child. If it is larger or any part has no
+proven maximum, stop before the intent and the create, keep the carrier open
+and every existing target held, and report the refusal. When a verified intent
+already exists, leave it in place and stop for reconciliation. Never truncate
+bodies, substitute hashes, split a record or repeat a create to fit.
+
+The not-yet-known values and the guarantee behind each maximum (checked
+2026-11-08):
+
+- `publication.target`, `set`, `session` and `token`, and the same IDs in the
+  publication line. `idd-publish-authoring-hold` mints each when it runs, as a
+  fixed prefix (`target-`, `set-`, `session-`, `token-`) and one 36-character
+  UUID, so the widths are 43, 40, 44 and 42 bytes. A roadmap's
+  `publication.anchor` repeats its `target`; a child's is its anchor's real
+  reference, which is known. A session whose publisher mints another shape
+  verifies that publisher's own maximum widths; an unverified width is
+  unproven.
+- The issue number in `issue`. GitHub's GraphQL schema types `Issue.number` as
+  `Int!`, a signed 32-bit integer, so it has at most 10 decimal digits. REST
+  declares the number with no format, so REST alone proves no maximum.
+- A comment ID not yet returned: the root intent's ID in a roadmap mapping, the
+  child intent's ID in a child mapping. REST types an issue-comment `id` as
+  `int64`, so it has at most 19 decimal digits.
+- `body-sha256` is exactly 64 hexadecimal characters.
+
+A dry run mints different IDs from the ones a later `--apply` mints, so its
+identities are neither evidence for these widths nor preallocated publication
+authority; never copy them into a record. A passing bound authorizes nothing
+by itself: the create still needs the exact body/hash and journal binding, the
+pre-create `pending` record, trusted append-only replay, the
+original-generation release guard, and every other publication gate. The check
+of the actual mapping before its POST stays as the backstop for metadata the
+bound did not foresee and for an uncertain outcome. An unexpectedly oversized
+actual mapping keeps that exact target under its hold with the carrier open
+and its issue identity and journal evidence retained; report the bound and the
+actual size, and treat a bound that proved too small as a defect in the check.
+
+Trace cases for this rule (worked arithmetic, not an executable carrier parser
+or an end-to-end suite):
+
+1. Child, fitting intent, oversized mapping. In a canonical in-memory fixture,
+   a 59,205-byte child body gave a 60,000-byte child intent, which fits, and a
+   60,431-byte mapping once the publication line and fields were injected.
+   The bound exceeds 60,000, so stop before the child intent and the child
+   create; the roadmap and every existing target stay held.
+2. Roadmap, fitting intent, oversized mapping. Let `D` and `S` be the escaped
+   draft payload and shell body, `I` the intent's other bytes and `M` the
+   mapping's other bytes (publication line and fields included). The intent is
+   `D + S + I` and the mapping is `S + M`, so the mapping can be the larger
+   only when `M > D + I`, for example a short draft and a large shell. In an
+   illustrative fixture, `D = 100` and `S = 59,000` gave a 59,618-byte intent
+   and a 60,246-byte mapping. Stop before the root intent and the roadmap
+   create when `S + M` exceeds 60,000.
+3. Boundary. A complete proven bound of 60,000 bytes allows the create; 60,001
+   refuses it. This holds for both kinds.
+4. Escapes and multibyte text. `"`, `\` and LF each cost two bytes (`\"`, `\\`
+   and `\n`); another control character costs six (`\u00XX`). U+3042 costs
+   three UTF-8 bytes raw, or six as its `\uXXXX` escape; U+1F600 costs four
+   raw, or twelve as a surrogate-pair escape. Count what the serializer emits.
+5. Unknown bound. An unverified publisher ID width, an unresolved anchor,
+   journal or actor, or an unverified API width leaves the bound unproven.
+   Stop before the intent and the create, even when every proven part is small.
+6. A pass is not authority. A 59,000-byte bound with a missing `pending`
+   journal record, a changed anchor owner generation or an unresolved earlier
+   intent still refuses the create.
+7. Unexpected oversize after create. If the actual mapping exceeds 60,000 bytes
+   despite a passing bound, keep that exact target held, the carrier open and
+   the evidence intact; do not truncate, split or repeat the create.
+
 The record-format and uncertain-intent gaps, including source/child binding,
 journal identity, and serialized record size, were identified on 2026-11-07
 during PR `#5074`
 and PR `#5100` review and tracked in
 [issue `#5085`](https://github.com/kurone-kito/idd-skill/issues/5085)
-(preventive; no observed incident yet).
+(preventive; no observed incident yet). The mapping-budget gap was identified
+on 2026-11-08 during PR `#5100` review and tracked in issue `#5110`
+(preventive; no publication failure was observed).
 
 **Records.** Once the carrier exists, local draft files are disposable; the
 carrier is the record.
