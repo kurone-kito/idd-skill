@@ -11306,15 +11306,19 @@ node scripts/claimed-push.mjs --issue <n> --claim-id <id> --agent-id <id> \
    SHA, an older helper without structured assessment, or any changed result
    cannot authorize the correction.
 
-   B3 posts a report before apply with S, M, canonical paths/count, current
-   claim ID, raw-body and assessment SHA values, and a unique attempt ID.
+   B3 posts a report with S, M, canonical paths/count, current claim ID,
+   raw-body and assessment SHA values, and a unique attempt ID.
    Revalidate claim, nonce, worktree, lock and tokens immediately before the
    POST; reread the body and rerun dry-run if its digest or assessment
    changed. Append the complete `idd-agent-authored` suffix. Verify the
    returned comment ID, author and exact body; reconcile an uncertain POST
    by attempt ID before retrying. If reporting remains unverified, stop and
-   retain the claim. A report is not inherited across a claim change or
-   resume.
+   retain the claim. Keep the verified assessment SHA for normal D2. B3 ends
+   without `--apply` or a push: continue through C self-review and D1
+   synchronization, then pass the SHA with `--expected-scope-sha256` to the
+   normal D2 helper invocation. If D2's fresh scope differs, stop, reassess
+   and report in B3, then repeat C and D1 before D2. A report is not inherited
+   across a claim change or resume.
 
    ```sh
    node scripts/clone-lock.mjs --exec --agent-id <your agent id> -- git fetch origin +refs/heads/<base>:refs/remotes/origin/<base>
@@ -11468,9 +11472,12 @@ claim, nonce, worktree, lock, and tokens immediately before reporting; require
 the live-body and assessment SHA-256 values to match or rerun dry-run. Verify
 the attempt's returned comment ID, author, and exact body; reconcile uncertain
 POSTs by attempt ID. If the report is unverified, retain the claim and stop.
-Apply with `--expected-scope-sha256`; the helper rechecks before the gate and
-push. Reassess and report again if scope changes. Never reuse reports across
-claims or resumes, and do not edit or roll back the issue body.
+Do not apply in B3. Keep the verified assessment SHA and pass it with
+`--expected-scope-sha256` to the normal D2 `--apply` only after C self-review
+and D1 synchronization. If D2's fresh scope differs, return to B3, reassess
+and report, then repeat C and D1 before applying. Never reuse reports across
+claims or resumes, and do not edit or roll back the issue body. See the
+[B3 scope-overrun rationale](idd-design-rationale.md#b3--scope-overrun-returns-to-authoring).
 
 When the helper returns no `assessment.correctionApplied: true` (a qualifying
 correction whose report is unverified follows the retain-and-stop rule above)

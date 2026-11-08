@@ -285,12 +285,14 @@ _{agent-id}: IDD automation comment; attribution is self-reported._
 
 Verify the returned comment ID, author and exact body; reconcile an uncertain
 POST by its attempt ID. If unverified, retain the claim and stop. Do not edit
-or roll back the issue body. Then run helper
-`--apply --expected-scope-sha256 <assessment-sha256>`; it recomputes scope and
-checks the same assessment before the gate and again before push. On change,
-stop, reassess and report again. Never inherit the report across a claim
-change or resume. If structured assessment is absent, use the existing
-scope-overrun route.
+or roll back the issue body. Keep the verified assessment SHA for normal D2.
+Do not apply or push from B3: continue through C self-review and D1
+synchronization, then pass the SHA with
+`--expected-scope-sha256 <assessment-sha256>` to D2's normal
+`claimed-push --apply`. If D2's scope check differs, return to B3, reassess
+and report, then repeat C and D1 before applying. Never inherit the report
+across a claim change or resume. If structured assessment is absent, use the
+existing scope-overrun route.
 
 **Scope overrun** (helper runtime only): unless that correction applies,
 when the profile-selected

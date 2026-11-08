@@ -284,8 +284,11 @@ const CORRECTION_ORDERED_STEPS = [
   'complete `idd-agent-authored` suffix',
   'returned comment ID, author and exact body',
   'uncertain POST by its attempt ID',
-  '`--apply --expected-scope-sha256',
-  'before push',
+  'Keep the verified assessment SHA for normal D2',
+  'Do not apply or push from B3',
+  'continue through C self-review and D1 synchronization',
+  '`--expected-scope-sha256 <assessment-sha256>`',
+  "If D2's scope check differs, return to B3",
 ] as const;
 
 for (const relativePath of WORK_PHASE_PATHS) {
@@ -296,15 +299,15 @@ for (const relativePath of WORK_PHASE_PATHS) {
       Buffer.byteLength(cue, 'utf8') <= 80,
       'the cue stays under 80 bytes',
     );
-    assert.ok(route.includes('[report/apply procedure]'));
+    assert.ok(route.includes('[read-only report procedure]'));
     assert.ok(route.includes('#b3-scope-assessment-outcomes'));
     assert.match(route, /without editing the issue body/u);
   });
 }
 
-test('the shared B3 correction verifies the report before guarded apply', () => {
+test('the shared B3 report carries its assessment to post-review D2', () => {
   const text = readRepoFile('docs/idd-helper-scripts.md').replace(/\s+/gu, ' ');
-  const start = text.indexOf('B3 posts a report before apply');
+  const start = text.indexOf('B3 posts a report with S, M');
   const end = text.indexOf('## Dead-export audit', start);
   assert.notEqual(start, -1, 'the shared report procedure is documented');
   assert.notEqual(end, -1, 'the report procedure has a section boundary');
@@ -316,7 +319,11 @@ test('the shared B3 correction verifies the report before guarded apply', () => 
     'returned comment ID, author and exact body',
     'reconcile an uncertain POST by attempt ID',
     'If reporting remains unverified, stop and retain the claim',
-    'Apply with `--expected-scope-sha256`',
+    'Keep the verified assessment SHA for normal D2',
+    'B3 ends without `--apply` or a push',
+    'continue through C self-review and D1 synchronization',
+    'pass the SHA with `--expected-scope-sha256` to the normal D2',
+    "If D2's fresh scope differs, stop",
   ];
   const positions = steps.map((step) => route.indexOf(step));
   for (const [index, position] of positions.entries()) {
@@ -349,7 +356,7 @@ for (const relativePath of LITE_WORK_PATHS) {
     assert.deepEqual(
       [...positions].sort((left, right) => left - right),
       positions,
-      'report evidence, verification and guarded apply stay ordered',
+      'report verification and D2 apply stay after C and D1',
     );
     assert.match(route, /Do not edit (?:or roll back )?the issue body/u);
     assert.match(route, /reconcile an uncertain POST by its attempt ID/u);

@@ -1003,6 +1003,20 @@ files, at the cost of one extra lookup.
 
 ### B3 — Scope overrun returns to authoring
 
+The S-to-M correction route uses the same scope assessment but has a separate
+publication sequence. Review of issue `kurone-kito/idd-skill#5092` and
+[PR #5113](https://github.com/kurone-kito/idd-skill/pull/5113)
+(finding `#discussion_r4507032443`) on 2026-11-08 found that the verified B3
+report route ended with
+`claimed-push --apply`. That helper runs the pre-push gate and publishes the
+branch, so calling it at B3 can publish before C self-review and D1
+synchronization. The review caught this before anyone used that route; no
+premature publication occurred. Keep B3 read-only after reporting, retain the
+verified assessment SHA through C and D1, and pass it to the normal D2 apply
+with `--expected-scope-sha256`.
+If D2 finds a changed assessment, return to B3, reassess and report, then
+repeat C and D1 before another D2 attempt.
+
 A work session that found the issue's real scope larger than its effort
 estimate used to stop and ask a human what to do. The work phase said
 what to do with a follow-up, but not with an overrun of the claimed

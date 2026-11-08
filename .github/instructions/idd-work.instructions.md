@@ -465,8 +465,13 @@ worker-side authoring.
 
 **S-to-M correction** (helper runtime only): when dry-run returns
 `assessment.correctionApplied: true`, follow the
-[report/apply procedure](../../docs/idd-helper-scripts.md#b3-scope-assessment-outcomes)
-without editing the issue body.
+[read-only report procedure](../../docs/idd-helper-scripts.md#b3-scope-assessment-outcomes)
+without editing the issue body. Keep the verified assessment SHA for normal
+D2. Continue through C self-review and D1 synchronization before passing it to
+`claimed-push --apply` with
+`--expected-scope-sha256 <assessment-sha256>`. If D2's fresh scope check
+differs, return to B3, report the new assessment, and repeat C and D1 before
+D2.
 
 **Scope overrun** (helper runtime only): when the helper returns no
 `assessment.correctionApplied: true` (a qualifying correction whose report is
