@@ -4175,41 +4175,93 @@ provenance, stop and reconcile without publishing. The hidden-only owner-marker
 rule remains fail-closed: do not unhide comments, infer completion, or edit the
 old anchor's body, labels, or owner-marker history.
 
+Before any fresh-set fallback, identify the original anchor and the exact
+set/session release generation from the refused publication's persisted draft
+and owner provenance, and replay that anchor's full paginated owner-marker log.
+This check applies even when the draft has never produced a child issue. If an
+original child already exists, also replay its full paginated owner-marker
+history, follow its persisted original `anchor`, and require it to agree with
+the verified original anchor and generation. Missing or inconclusive provenance
+stops before any replacement roadmap or child creation.
+
+Apply the interrupted-release guard from Stage 1: if the original anchor's
+generation has `mode=release` or `mode=release-guard`, or an existing child's
+generation has `mode=release`, require the matching trusted
+`mode=release-complete` for that exact anchor/set/session release generation
+and its current anchor owner, with the required body and set-snapshot digest
+verification. Child and anchor owner tokens are per target; do not compare
+them literally. An absent label, a local child log, or an older or newer
+completion cannot substitute. If completion is absent or any generation
+evidence is inconclusive, resume that exact interrupted set under its existing
+rules or stop and preserve its hold; do not publish a replacement anchor or
+acquire the child into a fresh set. This check precedes the fresh-set fallback
+even when the old anchor is no longer labeled or no child has been published.
+This guard addresses the gap identified on 2026-11-07
+during PR `#5074` and PR `#5100` review and tracked in issue `#5085`
+(preventive; no observed incident yet).
+
 Use an existing set only when its trusted owner history proves that it is an
-open held set that owns this draft. Otherwise, do not reuse a released or
-completed set or repurpose an unrelated issue as an anchor. Prepare an empty
-roadmap shell with a unique token, the draft title, and a
+open held set that owns this draft. Otherwise, after the original-generation
+check above passes, do not reuse a released or completed set or repurpose an
+unrelated issue as an anchor. Prepare an empty
+roadmap shell with the draft title, a unique recovery token, and a
 `Refs #<carrier> (non-blocking)` line, then review and lint that shell against
-the current default branch. Before creating it, post a trusted, unedited intent
-comment on the carrier that records the draft's `###` title, the refreshed
-draft body's SHA-256, the intended roadmap title, and the same unique token.
-Publish the shell under the normal authoring hold with
-`publish-authoring-hold --shape roadmap`, then immediately post a trusted
-carrier mapping that links the token and draft to the roadmap issue number.
-That mapping closes the intent.
-Before another roadmap create, reconcile every
-unresolved intent against the journal and recent issue history: continue only
-from one verified held roadmap, or start a new intent when evidence proves the
-previous create did not happen. If the result is absent, ambiguous, or
-inconclusive, stop without repeating the create. The new roadmap is the anchor
-of a distinct set. Re-review and re-lint the child against the current default
-branch, then publish it under the hold with
-`publish-authoring-hold --shape child --anchor <fresh-roadmap>`. Preserve the
+the current default branch. Include the token exactly once in the shell:
+
+```html
+<!-- <marker-prefix>-authoring-carrier-token: <opaque-recovery-token> -->
+```
+
+This token correlates the carrier with the created shell; it is not an owner,
+claim, set, or publisher token and grants no authority. Before creating the
+shell, append and verify the canonical carrier intent below. Only a conclusive
+POST and exact read-back permit
+`publish-authoring-hold --shape roadmap` under the normal authoring hold.
+Immediately after verified publication, append and verify the canonical
+`kind=roadmap` mapping below. That mapping closes the roadmap-create intent;
+it does not mean the child has been published.
+
+An inconclusive intent POST or read-back stops before roadmap creation. Retain
+the exact attempted record and any returned comment ID, keep the carrier open,
+and reconcile its live paginated log, the publication journal and recent issue
+history before retrying. Reuse the earliest exact verified intent rather than
+posting a duplicate. Before another roadmap create, reconcile every unresolved
+intent: continue only from one verified held roadmap and record its recovered
+mapping, or retry publication under the same verified intent only when
+conclusive dispatch/outcome evidence proves the previous create did not happen.
+A journal `pending` record with
+`issue=none`, no search result, or an absent mapping alone does not prove that.
+An absent, ambiguous, or inconclusive result stops without repeating the
+create. The new roadmap is the anchor of a distinct set. After verifying its
+mapping
+and current anchor owner generation, re-review and re-lint the final child
+title and body against the current default branch with that anchor assigned.
+Before child publication, append and verify the canonical child intent below.
+Only its conclusive POST and exact read-back permit
+`publish-authoring-hold --shape child --anchor <fresh-roadmap>`. Apply the same
+uncertain-intent and no-repeat-create reconciliation rules to this child
+intent; its presence alone never proves that no child was created. Preserve the
 non-blocking carrier reference and any source provenance, such as
 `Split out of #<source>`; when the child has a defer-source marker, keep its
 single source `Refs` line and do not add a carrier `Refs` line.
 
-Immediately after each successful child create, post a trusted mapping comment
-on the carrier naming the draft and published issue. Once the child number is
+Immediately after each verified child publication, append and verify a
+canonical `kind=child` mapping on the carrier for that intent and published
+issue. Once the child number is
 known, update the new roadmap's `## Tracks` list under its current owner
 generation; re-review and re-lint that refreshed roadmap body before saving
-the edit. Before closing the carrier, re-read each mapped roadmap under its
+the edit. After saving, verify the exact reviewed saved body and unchanged
+owner/set/anchor/session, then append and verify a same-owner heartbeat whose
+body digest matches that saved body. If the write or that verification is
+uncertain, stop for reconciliation; a pre-edit heartbeat cannot prove the new
+body. Before closing the carrier, re-read each mapped roadmap under its
 current owner generation and verify that its live `## Tracks` lists every
 mapped child. If any child is missing, keep the carrier open, update and
 re-review/re-lint the roadmap, then verify the saved list. Close the carrier
 only after every draft is published or dropped with a recorded reason and all
-mapped children pass that check. If a create, mapping, Tracks update, or close
-has an uncertain outcome, keep the carrier open, retain the exact issue
+mapped children pass that check. If an intent append or verification, create,
+mapping, Tracks update, or close has an uncertain outcome, keep the carrier
+open, retain the exact issue
 identities and journal evidence, and read and reconcile live state before
 retrying; never repeat an uncertain create. Release the coordination claim
 last. Keep the new roadmap and child under the authoring hold for a separate
@@ -4217,6 +4269,210 @@ Stage 2 release.
 
 Observed 2026-11-05 during the replay recorded on carrier issue #5054; see
 [the design rationale](https://github.com/kurone-kito/idd-skill/blob/main/docs/idd-design-rationale.md#cite-the-observed-incident).
+
+### Canonical carrier recovery records
+
+These records apply to the re-anchoring procedure above. They are separate
+from the publisher's `authoring-publication-intent` journal records. Post
+through a direct JSON issue-comment POST; verify the returned comment ID and
+exact body. Each comment has the following first line, one fenced JSON object,
+and the visible note shown below. Replace placeholders with JSON strings;
+`intent-comment-id`, `roadmap-mapping-comment-id`, and a non-null
+`child-intent-comment-id` are positive decimal JSON integers. Require exactly
+the shown keys, no duplicate keys, and no extra prose or markers.
+
+Before each POST, serialize the complete rendered comment, including marker,
+fences, JSON escaping, and visible note, and require at most 60,000 UTF-8 bytes.
+This limit is a conservative protocol budget. An oversized intent stops
+before its associated create; keep the carrier and any existing targets held.
+An oversized mapping after create keeps that exact target held and the carrier
+open: retain its issue identity and journal evidence for reconciliation. Do
+not truncate bodies, substitute hashes for required bodies, split a record,
+or repeat a create to evade this budget.
+
+Root intent (one original carrier draft and its roadmap shell):
+
+````text
+<!-- <marker-prefix>-authoring-carrier-intent: v1 -->
+```json
+{
+  "carrier": "<owner>/<repo>#<number>",
+  "token": "<opaque-recovery-token>",
+  "draft-title": "<exact carrier ### title>",
+  "draft-body": "<exact original carrier fenced draft payload>",
+  "draft-sha256": "<64-lowercase-hex>",
+  "roadmap-title": "<reviewed roadmap title>",
+  "roadmap-body": "<exact reviewed shell body before publication injection>",
+  "roadmap-sha256": "<64-lowercase-hex>",
+  "actor": "<trusted-marker-actor>"
+}
+```
+_Issue-authoring carrier intent. Do not edit or delete._
+````
+
+Child intent (after verified roadmap mapping and final child review, before
+child publication):
+
+````text
+<!-- <marker-prefix>-authoring-carrier-child-intent: v1 -->
+```json
+{
+  "carrier": "<owner>/<repo>#<number>",
+  "token": "<opaque-recovery-token>",
+  "intent-comment-id": 123,
+  "roadmap-mapping-comment-id": 124,
+  "draft-title": "<exact carrier ### title>",
+  "draft-sha256": "<64-lowercase-hex>",
+  "anchor": "<owner>/<repo>#<number>",
+  "anchor-owner": "<current-anchor-owner-token>",
+  "set": "<current-anchor-set-id>",
+  "session": "<current-anchor-session-id>",
+  "child-title": "<final reviewed child title>",
+  "child-body": "<exact final reviewed child body before publication injection>",
+  "child-sha256": "<64-lowercase-hex>",
+  "actor": "<trusted-marker-actor>"
+}
+```
+_Issue-authoring carrier child intent. Do not edit or delete._
+````
+
+Mapping (one roadmap and one child per root intent;
+`child-intent-comment-id` is null for the roadmap and the verified child
+intent's ID for the child):
+
+````text
+<!-- <marker-prefix>-authoring-carrier-mapping: v1 -->
+```json
+{
+  "carrier": "<owner>/<repo>#<number>",
+  "token": "<opaque-recovery-token>",
+  "intent-comment-id": 123,
+  "child-intent-comment-id": null,
+  "kind": "<roadmap|child>",
+  "draft-title": "<exact carrier ### title>",
+  "draft-sha256": "<64-lowercase-hex>",
+  "issue": "<owner>/<repo>#<number>",
+  "body": "<exact initial published issue body>",
+  "body-sha256": "<64-lowercase-hex>",
+  "publication": {
+    "target": "<publisher-target-id>",
+    "anchor": "<publisher-anchor-id-or-issue-reference>",
+    "set": "<publisher-set-id>",
+    "session": "<publisher-session-id>",
+    "token": "<publisher-publication-token>",
+    "journal": "<owner>/<repo>#<number>"
+  },
+  "actor": "<trusted-marker-actor>"
+}
+```
+_Issue-authoring carrier mapping. Do not edit or delete._
+````
+
+**Trust and replay.** Carrier, roadmap, child, and anchor issue references
+are canonical identities in the target repository. The `publication.journal`
+reference instead identifies the configured current journal or a verified
+originating retired journal in its own repository; cross-repository journals
+retain the existing journal trust and replay checks. Normalize each
+reference's repository components with the owner protocol's identity
+algorithm. The intent's `carrier` must name the containing carrier,
+and each child intent and mapping repeats that identity, token, exact source
+draft title and draft hash. The title identifies one `###` draft; duplicate
+titles are ambiguous. Read its original fenced draft payload, excluding only
+the fence delimiter lines, and require the root intent's `draft-body` and hash
+to match those exact bytes. Refreshed child content belongs in `child-body`,
+not in the immutable source draft. Stop if the source draft changed.
+Tokens are fresh opaque values matching `[A-Za-z0-9][A-Za-z0-9._-]{7,199}`,
+retained on recovery. JSON
+string escaping preserves exact decoded strings, including newlines; do not
+trim, normalize, or reformat body/title strings when hashing or comparing.
+
+For each record, require `actor` to equal its API author and re-evaluate that
+author's durable trust and required Write/Maintain/Admin permission under
+Stage 1's trusted-marker rules; current-session identity alone is insufficient
+on resume. Fetch all carrier comments with GraphQL edit and minimization
+metadata. Require explicit `lastEditedAt: null` and `isMinimized: false`;
+missing metadata, an edited/minimized relevant record, malformed exact-token
+records, or an incomplete enumeration stops recovery. Do not unhide, edit,
+delete or minimize these records. Historical free-form intent/mapping comments
+remain context, not authority for this recovery path. A missing canonical
+pre-create intent cannot be appended retrospectively to authorize an old
+publication; keep that case held for reconciliation. A missing mapping may
+be appended only from an already verified, correctly ordered intent and
+publication chain.
+
+Replay by server `createdAt`, then numeric comment ID; never use embedded
+ordering or select a later conflicting comment as an override. A mapping must
+reference the actual earlier root intent comment ID on this carrier; a child
+intent must also reference the verified earlier roadmap mapping, and a child
+mapping must reference the verified earlier child intent. Exact duplicate
+records reuse the earliest verified ID. One root intent accounts for exactly
+one source draft, at most one roadmap, and at most one child. Conflicting
+root or child intents for that token or draft, a second distinct child or
+roadmap, or one child assigned to different intents stops for reconciliation.
+Before
+closing the carrier, account for every draft under the existing publish/drop
+rule; a roadmap mapping alone never accounts for a child draft.
+
+**Publication and hash binding.** SHA-256 values hash the exact decoded UTF-8
+body bytes. Recompute the root intent's draft and roadmap hashes and the
+child intent's child hash. The reviewed `roadmap-body` must
+contain the intent's exact recovery-token marker once. A roadmap mapping's
+`body` must equal the publisher's actual `authoring-publication` line, two LF
+bytes, and that exact `roadmap-body`; its issue title must match
+`roadmap-title`. This checks the shell hash against the created roadmap rather
+than comparing the source draft hash with the roadmap body. A child mapping's
+`body` must equal its actual publication line, two LF bytes, and the referenced
+child intent's exact `child-body`; the live issue title must equal
+`child-title`. Preserve these initial published bytes in the mapping. A title
+refined during review may differ from the source `draft-title`, but must be
+pinned in the child intent before create. An unrelated child in the same set
+cannot substitute for this title/body binding.
+
+For either mapping, recompute `body-sha256`, require the initial trusted
+`mode=acquire` marker's body digest to match, and require the body publication
+line to match all five `publication` fields other than `journal`. The publisher
+mints those fields; never substitute the carrier recovery token or assume a
+CLI option can preallocate them. The recorded `journal` must be the configured
+current journal or a verified originating retired journal and match the
+member record used as evidence. Paginate the configured current journal and
+every retired journal using the existing journal trust, edit, minimization
+and transition rules. Require that exact publication tuple to
+replay through pre-create `pending; issue=none`, the same returned issue
+identity, and verified owner acquisition to `member`. The root intent must
+precede the roadmap's pre-create pending record; the child intent must precede
+the child's pre-create pending record. Each `member` must precede its mapping,
+using server time/comment-ID order. Incomplete, conflicting or out-of-order
+chains, or `pending`, `cleanup` or `abandoned` as the latest state, retain the
+recovery hold.
+
+The roadmap is its own anchor. A child mapping's set and canonical anchor
+identity must match that roadmap and the child intent's anchor and set. Verify
+the child intent's exact anchor-owner/set/session immediately before and after
+child publication and against the anchor history at that publication. The
+child publication session must equal that recorded anchor session, following
+the publisher's self-anchor/child field rules. Require exactly one matching
+child publication; multiple candidates or an unexplained generation change
+stops recovery. An exact-set resume may change the owner session;
+do not require the root's original publication session to equal every later
+child's session. Require fresh anchor/child provenance checks as well.
+For recovery, require one open held roadmap, no conflicting execution claim
+or linked PR, and its current owner generation. Later legitimate `## Tracks`
+edits do not have to preserve the initial published body hash: retain the
+intent/mapping's initial bytes and acquire digest, then separately verify the
+live body hash and Tracks against the current trusted owner generation.
+Changed provenance, lost initial evidence, or an unexplained body change stops
+recovery. This includes interruption after a Tracks save but before its
+matching post-edit digest was verified; do not infer the edit from intent.
+Only after these checks may a missing mapping be appended from the
+verified issue and journal evidence; never invent an issue identity or repeat
+an uncertain publication to obtain one.
+
+The record-format and uncertain-intent gaps, including source/child binding,
+journal identity, and serialized record size, were identified on 2026-11-07
+during PR `#5074`
+and PR `#5100` review and tracked in
+[issue `#5085`](https://github.com/kurone-kito/idd-skill/issues/5085)
+(preventive; no observed incident yet).
 
 **Records.** Once the carrier exists, local draft files are disposable; the
 carrier is the record.
