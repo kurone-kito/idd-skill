@@ -371,7 +371,7 @@ function normalizeExplicitCriterion(value) {
     .toLocaleLowerCase('en-US');
 }
 function isHumanApprovalCriterion(value) {
-  return /\b(?:human|person|operator|maintainer|approve|approval|confirm|confirmation|consent|authorize|authorise|sign[ -]off)\b/iu.test(
+  return /\b(?:human|person|operator|maintainer|approv(?:e(?:d|s)?|ing|al|er(?:s)?)|confirm(?:ed|s|ing|ation(?:s)?)?|consent(?:ed|s|ing)|authoriz(?:e(?:d|s)?|ing|ation(?:s)?)|authoris(?:e(?:d|s)?|ing|ation(?:s)?)|sign(?:ed|s|ing)?[ -]off)\b/iu.test(
     value,
   );
 }

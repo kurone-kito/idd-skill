@@ -28,6 +28,7 @@ import {
   summarizeSwarmFloorEligibility,
 } from '../src/scripts/discover-readiness-check.mts';
 import { createFakeProviderAdapter } from '../src/scripts/provider-adapter-fake.mts';
+import type { ProviderPort } from '../src/scripts/provider-port.mts';
 import {
   PROVISIONAL_DECISION_ANSWER_MARKER,
   PROVISIONAL_DECISION_RECORD_MARKER,
@@ -1009,6 +1010,22 @@ test('only an exact, replay-verified provisional Blocked by criterion can procee
     ),
     true,
   );
+  for (const criterion of [
+    'The design is approved.',
+    'The decision is confirmed.',
+  ]) {
+    assert.equal(
+      allowsProvisionalDependencyProgress(
+        {
+          ...pending,
+          decisions: [{ ...pendingDecision, executionCriteria: [criterion] }],
+        },
+        criterion,
+      ),
+      false,
+      criterion,
+    );
+  }
 
   const run = async (
     candidateBody: string,
