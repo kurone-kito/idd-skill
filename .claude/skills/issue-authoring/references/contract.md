@@ -4544,10 +4544,11 @@ or an end-to-end suite):
    create when `S + M` exceeds 60,000.
 3. Boundary. A complete proven bound of 60,000 bytes allows the create; 60,001
    refuses it. This holds for both kinds.
-4. Escapes and multibyte text. `"`, `\` and LF each cost two bytes (`\"`, `\\`
-   and `\n`); another control character costs six (`\u00XX`). U+3042 costs
-   three UTF-8 bytes raw, or six as its `\uXXXX` escape; U+1F600 costs four
-   raw, or twelve as a surrogate-pair escape. Count what the serializer emits.
+4. Escapes and multibyte text. `"`, `\`, LF, CR, tab, backspace and form feed
+   each cost two bytes (`\"`, `\\`, `\n`, `\r`, `\t`, `\b` and `\f`); any
+   other control character costs six (`\u00XX`). U+3042 costs three UTF-8
+   bytes raw, or six as its `\uXXXX` escape; U+1F600 costs four raw, or
+   twelve as a surrogate-pair escape. Count what the serializer emits.
 5. Unknown bound. An unverified publisher ID width, an unresolved anchor,
    journal or actor, or an unverified API width leaves the bound unproven.
    Stop before the intent and the create, even when every proven part is small.
