@@ -4752,6 +4752,25 @@ the child's title, this set ID or this anchor reference can only stop recovery:
 a hit stops, and a miss proves nothing. A hit on the roadmap, the carrier or a
 target that a trusted mapping names is not a stop.
 
+**Displaced publisher.** A journal scan proves only that no create had been
+reached when it was read; it cannot prove that the displaced session has
+stopped. The publisher checks the anchor generation before its `pending` write
+and checks it again only after its create (the anchor heartbeat and log replay
+that precede `member`), so a publisher that paused between its first check and
+its `pending` write could still create a second child after the final re-check.
+This contract accepts only the evidence it defines: the stale-age and
+late-marker tests of condition 2 and, where the replacing session started or can
+identify the displaced session, a confirmation that it has stopped before the
+replacement is appended. A pause longer than `issueAuthoring.authoringStaleAge`
+at exactly that point is the window that remains. A child created in it carries
+the displaced generation. It cannot reach `member`, because the publisher's own
+anchor replay shows a changed owner, and the exactly-one-child rule stops
+recovery as soon as its journal record shows a second candidate. That child
+stays held and unmapped for a person to reconcile, and the lineage never maps
+it. Closing the window needs a publisher change (re-verify the anchor generation
+after the `pending` write and before the create), which this contract does not
+specify.
+
 **Replacement procedure.** Append the replacement, then verify the returned ID
 and exact body. After `claim.verifySettleDelay`, repeat conditions 2 and 3 on
 fresh complete reads together with the lineage replay, and repeat them once
