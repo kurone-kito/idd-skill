@@ -677,8 +677,12 @@ export function readConfirmationIssue(
  * trusted login posted it as the first line of a comment that was never
  * edited, and it names a confirmation issue in the same repository (the
  * contract keeps a record's source in its confirmation issue's repository).
- * A trusted void marker on any successfully read confirmation target removes
- * that decision from the result, even when its confirmation label is gone.
+ * When no such link remains, the result is readable and empty (a conflict
+ * report is kept), and no confirmation issue is listed or read, so a failing
+ * list or an unrelated confirmation issue cannot make it unreadable. When a
+ * link remains, a trusted void marker on any successfully read confirmation
+ * target removes that decision from the result, even when its confirmation
+ * label is gone.
  */
 // audit:ignore-dead-export: the auto-decide caps and crash recovery (#4955) consume this reader; until they land, only the focused tests call it
 export function readDecisionLinks(input, provider = createGithubProvider()) {
@@ -716,6 +720,17 @@ export function readDecisionLinks(input, provider = createGithubProvider()) {
       });
     }
     const { kept, conflicting } = resolveDecisions(entries, sameLink);
+    if (kept.length === 0) {
+      // A void marker only ever removes a kept link, so with none left the
+      // confirmation scan could change nothing in the result.
+      return {
+        status: 'readable',
+        number: input.number,
+        links: [],
+        conflictingDecisions: conflicting,
+        voidedDecisions: [],
+      };
+    }
     const listed = listLabelledIssues(
       provider,
       owner,
