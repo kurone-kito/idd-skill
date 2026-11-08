@@ -145,7 +145,8 @@ Apply the recipe below only when all of these hold:
   `evidence.forced_handoff.new_claim_id` equals this session's claim-id while
   `old_claim_id` does not (the routing call below adds `--nonce` and
   `--fresh-claim-gate` once the nonce steps are done). Pass the recorded
-  session-qualified `--agent-id` to routing too. Pass
+  `--agent-id` to routing too for session-qualified claims; omit that flag
+  for pre-rule claims, even when a token record exists. Pass
   `evidence.forced_handoff.new_agent_id` as
   `--agent-id` on the `claim-lock` calls below that take it
   (`--record-tokens` and `--acquire`; `--check` takes none): it usually
