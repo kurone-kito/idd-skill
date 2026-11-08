@@ -4452,3 +4452,53 @@ test("--apply refuses when the routing prints no evidence object, and keeps toda
     );
   });
 });
+
+test('no leftover: the flag alone, with no confirmation or decision, claims as usual', () => {
+  withApplyFixture((fixture) => {
+    for (const argv of [
+      [...APPLY_ARGS, '--preserve-b1-leftovers'],
+      [
+        ...APPLY_ARGS,
+        '--preserve-b1-leftovers',
+        '--confirmation',
+        CONFIRMATION_REF,
+      ],
+    ]) {
+      const run = runApply(fixture, { b1: {} }, argv);
+      assert.equal(exitOf(run.result), 0, run.stderr);
+      const report = run.report as ClaimApplyReport;
+      assert.equal(report.eligible, true);
+      assert.equal(report.b1Leftovers?.outcome, 'no-leftover');
+      assert.equal(report.b1Leftovers?.common.length, 0);
+      assert.equal(
+        run.log.some((entry) =>
+          /update-ref|--remove-section|pr list/.test(entry),
+        ),
+        false,
+        'nothing was read or changed for the leftovers',
+      );
+      // Start the next case from a clean slate.
+      gitIn(fixture.primary, [
+        'worktree',
+        'remove',
+        '--force',
+        fixture.worktree,
+      ]);
+      gitIn(fixture.primary, ['branch', '-D', BRANCH]);
+    }
+  });
+});
+
+test('no leftover: a dry run with the flag alone lists nothing and exits by the pre-checks', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture, { b1: {} }, [
+      '--issue',
+      String(ISSUE),
+      '--preserve-b1-leftovers',
+    ]);
+    assert.equal(exitOf(run.result), 0, run.stderr);
+    const b1 = (run.report as ClaimIssueReport).b1Leftovers;
+    assert.equal(b1?.outcome, 'no-leftover');
+    assert.deepEqual(b1?.subjects, []);
+  });
+});

@@ -788,6 +788,7 @@ function pathPlan(ctx, listing) {
   );
   let destinationDirectory = '';
   let destinationParents = [];
+  let looseParents = [];
   preconditions.push(
     guarded('destination', () => {
       const guards = {
@@ -809,6 +810,13 @@ function pathPlan(ctx, listing) {
       }
       destinationDirectory = inspected.destination;
       destinationParents = inspected.parents;
+      looseParents = inspected.parents
+        .filter(
+          (parent) =>
+            parent.identity !== null &&
+            fs.inspectDirectoryPrivacy(parent.path) === 'tightenable',
+        )
+        .map((parent) => parent.path);
       return pass(
         `the destination is ${join(destinationDirectory, basename(source))}`,
       );
@@ -841,6 +849,7 @@ function pathPlan(ctx, listing) {
     info,
     destinationDirectory,
     destinationParents,
+    looseParents,
   };
 }
 // ---------------------------------------------------------------------------
@@ -1242,6 +1251,22 @@ function preservePath(ctx, plan) {
     created = { parents: [], hold: `threw: ${errorMessage(error)}` };
   }
   const made = createdDirectories(fs, plan);
+  // The creation step restricts every parent to its owner, so a parent that
+  // let others in is changed whether the step then succeeded or held.
+  const restricted = plan.looseParents.filter((path) => {
+    try {
+      return fs.inspectDirectoryPrivacy(path) === 'private';
+    } catch {
+      return false;
+    }
+  });
+  if (restricted.length > 0) {
+    report.actions.push({
+      id: 'parents-restricted',
+      subject: source,
+      detail: `restricted ${restricted.join(', ')} to its owner`,
+    });
+  }
   if (created.hold !== null) {
     // The creation step may already have made the directory, and it stays in
     // place when it fails its privacy or identity check. Name every directory

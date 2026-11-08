@@ -2597,3 +2597,90 @@ test('a dangling symbolic ref planted at the backup path is not followed by the 
   );
   assert.deepEqual(result.report.actions, []);
 });
+
+test(
+  'apply: a state root that let others in is restricted, and the report names it',
+  pathCase,
+  () => {
+    const fixture = fresh();
+    const result = exercise(fixture, {
+      confirmation: () => confirmationRead([record('d1', fixture.worktree)]),
+      prepare: (f) => {
+        leftoverPath(f);
+        chmodSync(f.state, 0o755);
+      },
+    });
+    assert.equal(result.report.outcome, 'preserved');
+    const restricted = result.report.actions.find(
+      (action) => action.id === 'parents-restricted',
+    );
+    assert.ok(restricted, 'the permission change is an action');
+    assert.ok(restricted.detail.includes(fixture.state), restricted.detail);
+    assert.equal(lstatSync(fixture.state).mode & 0o077, 0);
+    // The restriction comes before the directory it protects.
+    assert.deepEqual(
+      result.report.actions.map((action) => action.id),
+      ['parents-restricted', 'destination-created', 'path-moved'],
+    );
+  },
+);
+
+test(
+  'failure: a restricted state root is named even when the rename then fails',
+  pathCase,
+  () => {
+    const fixture = fresh();
+    const result = exercise(fixture, {
+      confirmation: () => confirmationRead([record('d1', fixture.worktree)]),
+      prepare: (f) => {
+        leftoverPath(f);
+        chmodSync(f.state, 0o755);
+      },
+      fs: () => ({
+        rename: () => {
+          throw new Error('EXDEV');
+        },
+      }),
+    });
+    assert.equal(result.report.outcome, 'failed');
+    assert.match(
+      result.failure?.nextAction ?? '',
+      /restricted .* to its owner/,
+    );
+    assert.ok(
+      (result.failure?.nextAction ?? '').includes(fixture.state),
+      result.failure?.nextAction ?? '',
+    );
+    assert.doesNotMatch(result.failure?.nextAction ?? '', /changed nothing/);
+  },
+);
+
+test(
+  'failure: a state root restricted before a creation hold is named',
+  pathCase,
+  () => {
+    const fixture = fresh();
+    const real = realFs();
+    const result = exercise(fixture, {
+      confirmation: () => confirmationRead([record('d1', fixture.worktree)]),
+      prepare: (f) => {
+        leftoverPath(f);
+        chmodSync(f.state, 0o755);
+      },
+      fs: (f) => ({
+        inspectDirectoryPrivacy: (path: string) =>
+          path === f.destination
+            ? 'unsafe'
+            : real.inspectDirectoryPrivacy(path),
+      }),
+    });
+    assert.equal(result.report.outcome, 'failed');
+    assert.match(result.failure?.detail ?? '', /not prepared/);
+    assert.ok(
+      result.report.actions.some(
+        (action) => action.id === 'parents-restricted',
+      ),
+      result.report.actions.map((action) => action.id).join(','),
+    );
+  },
+);

@@ -206,6 +206,7 @@ export interface B1Action {
     | 'backup-ref'
     | 'branch-deleted'
     | 'config-section-removed'
+    | 'parents-restricted'
     | 'destination-created'
     | 'path-moved';
   readonly subject: string;
@@ -389,6 +390,12 @@ interface PathPlan {
   readonly info: B1EntryInfo | null;
   readonly destinationDirectory: string;
   readonly destinationParents: readonly PreservationParent[];
+  /**
+   * Existing destination parents whose mode lets group or others in. The
+   * creation step restricts every parent to its owner, which changes their
+   * permissions, so the report names each one.
+   */
+  readonly looseParents: readonly string[];
 }
 
 interface Context {
@@ -1068,6 +1075,7 @@ function pathPlan(ctx: Context, listing: Listing): PathPlan {
 
   let destinationDirectory = '';
   let destinationParents: readonly PreservationParent[] = [];
+  let looseParents: readonly string[] = [];
   preconditions.push(
     guarded('destination', () => {
       const guards: PreserveGuardDeps = {
@@ -1089,6 +1097,13 @@ function pathPlan(ctx: Context, listing: Listing): PathPlan {
       }
       destinationDirectory = inspected.destination;
       destinationParents = inspected.parents;
+      looseParents = inspected.parents
+        .filter(
+          (parent) =>
+            parent.identity !== null &&
+            fs.inspectDirectoryPrivacy(parent.path) === 'tightenable',
+        )
+        .map((parent) => parent.path);
       return pass(
         `the destination is ${join(destinationDirectory, basename(source))}`,
       );
@@ -1121,6 +1136,7 @@ function pathPlan(ctx: Context, listing: Listing): PathPlan {
     info,
     destinationDirectory,
     destinationParents,
+    looseParents,
   };
 }
 
@@ -1544,6 +1560,22 @@ function preservePath(ctx: Context, plan: PathPlan): B1PreserveFailure | null {
     created = { parents: [], hold: `threw: ${errorMessage(error)}` };
   }
   const made = createdDirectories(fs, plan);
+  // The creation step restricts every parent to its owner, so a parent that
+  // let others in is changed whether the step then succeeded or held.
+  const restricted = plan.looseParents.filter((path) => {
+    try {
+      return fs.inspectDirectoryPrivacy(path) === 'private';
+    } catch {
+      return false;
+    }
+  });
+  if (restricted.length > 0) {
+    report.actions.push({
+      id: 'parents-restricted',
+      subject: source,
+      detail: `restricted ${restricted.join(', ')} to its owner`,
+    });
+  }
   if (created.hold !== null) {
     // The creation step may already have made the directory, and it stays in
     // place when it fails its privacy or identity check. Name every directory
