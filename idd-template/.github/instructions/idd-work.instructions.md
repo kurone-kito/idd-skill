@@ -463,8 +463,10 @@ worker-side authoring.
 [report/apply procedure](../../docs/idd-helper-scripts.md#b3-scope-assessment-outcomes)
 without editing the issue body.
 
-**Scope overrun** (helper runtime only): when the scope check fails without
-a verified correction, follow the same
+**Scope overrun** (helper runtime only): when the helper returns no
+`assessment.correctionApplied: true` (a qualifying correction whose report is
+unverified follows the retain-and-stop rule above) and the profile-selected
+scope audit fails `effort-candidate-file-limit`, follow the same
 [scope assessment routes](../../docs/idd-helper-scripts.md#b3-scope-assessment-outcomes)
 and stop without pushing.
 

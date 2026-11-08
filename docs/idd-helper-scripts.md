@@ -11472,7 +11472,9 @@ Apply with `--expected-scope-sha256`; the helper rechecks before the gate and
 push. Reassess and report again if scope changes. Never reuse reports across
 claims or resumes, and do not edit or roll back the issue body.
 
-When no verified correction applies and the profile-selected
+When the helper returns no `assessment.correctionApplied: true` (a qualifying
+correction whose report is unverified follows the retain-and-stop rule above)
+and the profile-selected
 `audit-authored-issue --shape child --stdin --marker-prefix {markerPrefix}`
 fails `effort-candidate-file-limit` on the issue body or with `## Candidate
 files` set to canonical changed paths, stop coding without pushing. Comment

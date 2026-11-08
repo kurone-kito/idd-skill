@@ -137,7 +137,8 @@ const PROHIBITION = 'Never add needs-decision or ask a human';
 
 /** The shared B3 no-correction route, in the order the worker follows. */
 const ORDERED_STEPS = [
-  'When no verified correction applies',
+  'When the helper returns no `assessment.correctionApplied: true`',
+  'retain-and-stop rule above',
   'profile-selected',
   '`audit-authored-issue --shape child --stdin --marker-prefix {markerPrefix}`',
   'fails `effort-candidate-file-limit` on the issue body',
@@ -210,7 +211,10 @@ test('a split child over the limit is exempt, so it never triggers the route', (
 for (const relativePath of WORK_PHASE_PATHS) {
   test(`${relativePath}: scope overrun delegates to the shared B3 outcomes`, () => {
     const route = scopeOverrunRoute(relativePath);
-    assert.ok(route.includes('without a verified correction'));
+    assert.ok(
+      route.includes('returns no `assessment.correctionApplied: true`'),
+    );
+    assert.ok(route.includes('unverified follows the retain-and-stop rule'));
     assert.ok(route.includes('scope assessment routes'));
     assert.ok(route.includes('#b3-scope-assessment-outcomes'));
     assert.ok(route.includes('stop without pushing'));
