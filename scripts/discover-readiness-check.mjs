@@ -225,7 +225,15 @@ export function buildProvisionalDecisionEvidenceReader(input) {
         ) {
           return invalidProvisionalEvidence('completion-reference-invalid');
         }
-        const pullRequest = port.getMergedChangeRequestMeta(pullRequestNumber);
+        let pullRequest;
+        try {
+          pullRequest = port.getMergedChangeRequestMeta(pullRequestNumber);
+        } catch (error) {
+          if (isInaccessibleIssueLookupError(error)) {
+            return invalidProvisionalEvidence('completion-pr-inaccessible');
+          }
+          throw error;
+        }
         if (
           pullRequest?.merged !== true ||
           pullRequest.headRefOid !== result.headSha ||

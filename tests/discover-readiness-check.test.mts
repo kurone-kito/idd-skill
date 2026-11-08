@@ -1285,6 +1285,7 @@ test('live provisional evidence refuses source edits and unverified rework', asy
       updatedAt: source.snapshot.updatedAt,
     },
     history = comments,
+    getMergedChangeRequestMeta?: ProviderPort['getMergedChangeRequestMeta'],
   ) => {
     const port = createFakeProviderAdapter({
       workItems: {
@@ -1308,6 +1309,9 @@ test('live provisional evidence refuses source edits and unverified rework', asy
         },
       },
     });
+    if (getMergedChangeRequestMeta) {
+      port.getMergedChangeRequestMeta = getMergedChangeRequestMeta;
+    }
     return buildProvisionalDecisionEvidenceReader({
       owner,
       repo,
@@ -1358,6 +1362,27 @@ test('live provisional evidence refuses source edits and unverified rework', asy
     baselineEvidence.issues.join(', '),
   );
   assert.equal(baselineEvidence.status, 'confirmation-pending');
+
+  const inaccessibleError = Object.assign(new Error('GitHub lookup failed'), {
+    stderr: 'GraphQL: Resource not accessible by integration (HTTP 403)',
+  });
+  const inaccessibleEvidence = await makeReader(undefined, comments, () => {
+    throw inaccessibleError;
+  }).loadState(sourceNumber);
+  assert.equal(inaccessibleEvidence.valid, false);
+  assert.deepEqual(inaccessibleEvidence.issues, ['completion-pr-inaccessible']);
+  await assertBlocked(inaccessibleEvidence);
+
+  const authError = Object.assign(new Error('Bad credentials (HTTP 401)'), {
+    stderr: 'gh: Bad credentials (HTTP 401)',
+  });
+  await assert.rejects(
+    () =>
+      makeReader(undefined, comments, () => {
+        throw authError;
+      }).loadState(sourceNumber),
+    (error: unknown) => error === authError,
+  );
 
   for (const changedSource of [
     { title: 'edited decision title', body: sourceBody },
