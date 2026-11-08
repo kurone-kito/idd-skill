@@ -297,8 +297,9 @@ Read
 `standingApprovals.split.enabled` and
 `standingApprovals.split.maxCandidateFiles` from `.github/idd/config.json` at
 that ref through GitHub Contents. It validates the policy against that ref's
-schema; auto-decide's verdict does not govern split. Require `enabled: true`, or use the
-existing route. Missing `maxCandidateFiles` defaults to `8`; absent, malformed,
+schema; auto-decide's verdict does not govern split. Require
+`enabled: true`, or use the existing route. Missing `maxCandidateFiles` defaults
+to `8`; absent, malformed,
 or unreadable policy also uses that route. Never use local, head, or layered
 config.
 
