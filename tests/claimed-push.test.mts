@@ -2173,7 +2173,7 @@ test('an explicit visible mismatch blocks in-limit S while unavailable stays com
   assert.equal(failedAgreement.code, 1);
   assert.equal(failedScope?.status, 'failed');
   assert.equal(failedScope?.nextAction, NEXT.stopAndReport);
-  assert.equal(failedScope?.exitStatus, 0);
+  assert.equal(failedScope?.exitStatus, 1);
   assert.match(
     failedScope?.reason ?? '',
     /effort-visible-line-agreement fails/u,
