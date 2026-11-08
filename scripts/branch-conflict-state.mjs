@@ -125,7 +125,6 @@ const CHECK_RUN_KNOWN_CONCLUSIONS = new Set([
   'SUCCESS',
   'NEUTRAL',
   'SKIPPED',
-  'NOT_APPLICABLE',
   'ACTION_REQUIRED',
   'CANCELLED',
   'FAILURE',
@@ -134,12 +133,7 @@ const CHECK_RUN_KNOWN_CONCLUSIONS = new Set([
   'TIMED_OUT',
 ]);
 /** Conclusions and states that count as passing, so they are not listed. */
-const PASSING_CHECK_CONCLUSIONS = new Set([
-  'SUCCESS',
-  'NEUTRAL',
-  'SKIPPED',
-  'NOT_APPLICABLE',
-]);
+const PASSING_CHECK_CONCLUSIONS = new Set(['SUCCESS', 'NEUTRAL', 'SKIPPED']);
 /**
  * #4209: every non-passing head run must be non-required and waiting, and
  * #4309 holds a run-less check suite to the same rule. An empty list never
@@ -374,8 +368,10 @@ function parseSuiteNode(node) {
  * workflow when one made it), the same latest-instance rule the run list
  * applies by name. A cancelled or stale suite that a later suite of the same
  * producer supersedes must not hold a branch whose current suite passes. A
- * group whose order cannot be proven keeps every member, and members that
- * share the newest timestamp all stay, since neither is provably older.
+ * group whose order cannot be proven keeps every member. An unsupported
+ * status or conclusion cannot be ordered away by a later pass (PR #5099),
+ * matching the CheckRun rule. Members that share the newest timestamp all
+ * stay, since neither is provably older.
  */
 function latestSuitePerProducer(suites) {
   const groups = new Map();
@@ -389,7 +385,13 @@ function latestSuitePerProducer(suites) {
   for (const group of groups.values()) {
     const ordered =
       group.length > 1 &&
-      group.every((suite) => isCompletedCiTimestamp(suite.createdAt));
+      group.every(
+        (suite) =>
+          isCompletedCiTimestamp(suite.createdAt) &&
+          (suite.status === 'COMPLETED'
+            ? CHECK_RUN_KNOWN_CONCLUSIONS.has(suite.conclusion)
+            : CHECK_RUN_WAITING_STATES.has(suite.status)),
+      );
     const newest = ordered
       ? Math.max(...group.map((suite) => Date.parse(suite.createdAt)))
       : null;

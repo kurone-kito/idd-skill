@@ -286,12 +286,7 @@ test('required-checks rollup: the PR #1434 real-world shape (2 cancelled, 1 fail
 // unlike the #1478 tests above (which use strictly increasing timestamps to
 // exercise latest-completedAt selection instead).
 test('required-checks rollup: a same-instant TIMED_OUT vs success-family tie still reports failing', () => {
-  for (const successConclusion of [
-    'SUCCESS',
-    'NEUTRAL',
-    'SKIPPED',
-    'NOT_APPLICABLE',
-  ]) {
+  for (const successConclusion of ['SUCCESS', 'NEUTRAL', 'SKIPPED']) {
     const summary = buildCiWaitStateSummary(
       {
         headRefOid: HEAD_SHA,
@@ -325,7 +320,7 @@ test('required-checks rollup: a same-instant TIMED_OUT vs success-family tie sti
 
 test('required-checks rollup: a same-instant STARTUP_FAILURE/STALE vs success-family tie still reports failing', () => {
   for (const failureConclusion of ['STARTUP_FAILURE', 'STALE']) {
-    for (const successConclusion of ['NEUTRAL', 'SKIPPED', 'NOT_APPLICABLE']) {
+    for (const successConclusion of ['NEUTRAL', 'SKIPPED']) {
       const summary = buildCiWaitStateSummary(
         {
           headRefOid: HEAD_SHA,
@@ -365,12 +360,7 @@ test('required-checks rollup: a same-instant ACTION_REQUIRED vs success-family t
   // completeness/symmetry with the other FAILURE_STATES members above,
   // and as a regression guard in case a future success-family addition
   // ever breaks that happenstance.
-  for (const successConclusion of [
-    'SUCCESS',
-    'NEUTRAL',
-    'SKIPPED',
-    'NOT_APPLICABLE',
-  ]) {
+  for (const successConclusion of ['SUCCESS', 'NEUTRAL', 'SKIPPED']) {
     const summary = buildCiWaitStateSummary(
       {
         headRefOid: HEAD_SHA,
@@ -416,12 +406,7 @@ test('required-checks rollup: a same-instant StatusContext ERROR vs (CheckRun) s
   // make ERROR win for the wrong reason (treated as still-running, never
   // reaching the #1504 tie-break rank comparison this test means to
   // cover) regardless of whether the tie-break fix works at all.
-  for (const successConclusion of [
-    'SUCCESS',
-    'NEUTRAL',
-    'SKIPPED',
-    'NOT_APPLICABLE',
-  ]) {
+  for (const successConclusion of ['SUCCESS', 'NEUTRAL', 'SKIPPED']) {
     const summary = buildCiWaitStateSummary(
       {
         headRefOid: HEAD_SHA,
@@ -1021,6 +1006,96 @@ test('a failure-family state (cancelled/timed_out/action_required/stale) buckets
       `expected ${conclusion} to bucket as failure`,
     );
   }
+});
+
+test('#4891: valid passing CheckRun conclusions satisfy the required gate', () => {
+  for (const conclusion of ['SUCCESS', 'SKIPPED', 'NEUTRAL']) {
+    const summary = buildCiWaitStateSummary(
+      {
+        headRefOid: HEAD_SHA,
+        statusCheckRollup: [checkRun({ conclusion })],
+      },
+      { requiredCheckNames: ['lint'] },
+    );
+    assert.equal(summary.checks[0]?.status, 'success', conclusion);
+    assert.equal(summary.requiredChecks.allRequiredPassing, true, conclusion);
+    assert.equal(summary.requiredChecks.status, 'success', conclusion);
+    assert.equal(ciWaitSummaryIsPreMergeCiPassing(summary), true, conclusion);
+  }
+});
+
+test('#4891: NOT_APPLICABLE is unknown and cannot satisfy the required gate', () => {
+  const summary = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [checkRun({ conclusion: 'NOT_APPLICABLE' })],
+    },
+    { requiredCheckNames: ['lint'] },
+  );
+  assert.equal(summary.checks[0]?.status, 'unknown');
+  assert.equal(summary.requiredChecks.anyRequiredUnknown, true);
+  assert.equal(summary.requiredChecks.allRequiredPassing, false);
+  assert.equal(summary.requiredChecks.status, 'pending');
+  assert.equal(ciWaitSummaryIsPreMergeCiPassing(summary), false);
+});
+
+test('#4891: older unsupported conclusions remain blocking beside a later passing run', () => {
+  for (const conclusion of ['NOT_APPLICABLE', 'WEIRD']) {
+    for (const passing of ['SUCCESS', 'SKIPPED', 'NEUTRAL']) {
+      const unknown = checkRun({
+        conclusion,
+        completedAt: '2026-07-09T00:04:00Z',
+      });
+      const success = checkRun({
+        conclusion: passing,
+        completedAt: '2026-07-09T00:05:00Z',
+      });
+      for (const runs of [
+        [unknown, success],
+        [success, unknown],
+      ]) {
+        const summary = buildCiWaitStateSummary(
+          { headRefOid: HEAD_SHA, statusCheckRollup: runs },
+          { requiredCheckNames: ['lint'] },
+        );
+        assert.equal(summary.requiredChecks.anyRequiredUnknown, true);
+        assert.equal(summary.requiredChecks.allRequiredPassing, false);
+        assert.equal(summary.requiredChecks.status, 'pending');
+        assert.equal(ciWaitSummaryIsPreMergeCiPassing(summary), false);
+      }
+    }
+  }
+});
+
+test('#4891: producer and CI-wait classifiers retain their normalization boundaries', () => {
+  const unknown = {
+    name: 'lint',
+    state: 'success ',
+    completedAt: '2026-07-09T00:04:00Z',
+  };
+  const success = {
+    name: 'lint',
+    state: 'SUCCESS',
+    completedAt: '2026-07-09T00:05:00Z',
+  };
+  for (const checks of [
+    [unknown, success],
+    [success, unknown],
+  ]) {
+    assert.equal(classifyCiChecks(checks).status, 'unknown');
+  }
+  assert.equal(
+    classifyCiChecks([{ ...unknown, state: 'success' }, success]).status,
+    'success',
+  );
+  const normalized = buildCiWaitStateSummary(
+    {
+      headRefOid: HEAD_SHA,
+      statusCheckRollup: [checkRun({ conclusion: 'success ' })],
+    },
+    { requiredCheckNames: ['lint'] },
+  );
+  assert.equal(ciWaitSummaryIsPreMergeCiPassing(normalized), true);
 });
 
 test('a genuinely unrecognized state buckets as unknown and marks the rollup unknown, not passing', () => {
@@ -2327,22 +2402,17 @@ test('#4053: parseArgs reads --global-only and defaults it off', () => {
 
 // --- #4401: one shared pass-equivalent state set ---------------------------
 
-const PASS_EQUIVALENT_STATE_NAMES = [
-  'NEUTRAL',
-  'NOT_APPLICABLE',
-  'SKIPPED',
-  'SUCCESS',
-];
+const PASS_EQUIVALENT_STATE_NAMES = ['NEUTRAL', 'SKIPPED', 'SUCCESS'];
 
 /**
  * Offsets of every `[` in `source` that opens a single-level array whose
  * entries are only string literals (single, double or back quotes, with
- * comments allowed between them) and whose member set is exactly the four
+ * comments allowed between them) and whose member set is exactly the three
  * pass-equivalent states, compared case-insensitively. Any other token before
  * the closing `]` (a spread, an identifier, a nested array) disqualifies the
  * array, so `[...CI_FAILURE_CONCLUSION_STATES, 'CANCELLED']` is never a copy.
  * Member order and duplicates do not matter. Comments are not stripped, so a
- * comment that spells the four states as a bracketed list is reported too;
+ * comment that spells the three states as a bracketed list is reported too;
  * reword such a comment instead of weakening the scan.
  */
 function findPassEquivalentLiteralArrays(source: string): number[] {
@@ -2387,7 +2457,7 @@ function literalMembers(source: string, start: number): string[] | null {
   return null;
 }
 
-test('#4401: CHECK_PASS_EQUIVALENT_STATES holds exactly the four pass-equivalent states', () => {
+test('#4401: CHECK_PASS_EQUIVALENT_STATES holds exactly the three pass-equivalent states', () => {
   assert.deepEqual(
     [...CHECK_PASS_EQUIVALENT_STATES].sort(),
     PASS_EQUIVALENT_STATE_NAMES,
@@ -2396,13 +2466,12 @@ test('#4401: CHECK_PASS_EQUIVALENT_STATES holds exactly the four pass-equivalent
 
 test('#4401: the pass-equivalent literal scan flags the shapes it exists to catch', () => {
   const sample = [
-    "const a = ['SUCCESS', 'SKIPPED', 'NEUTRAL', 'NOT_APPLICABLE'].includes(s);",
-    'const b = new Set(["NOT_APPLICABLE", "NEUTRAL", "SKIPPED", "SUCCESS", ]);',
+    "const a = ['SUCCESS', 'SKIPPED', 'NEUTRAL'].includes(s);",
+    'const b = new Set(["NEUTRAL", "SKIPPED", "SUCCESS", ]);',
     'const c = [',
     "  'SKIPPED', // legacy copy [see docs]",
     "  'success',",
     "  'NEUTRAL',",
-    "  'NOT_APPLICABLE',",
     '];',
     "const d = [...CI_FAILURE_CONCLUSION_STATES, 'CANCELLED'];",
     "const e = ['SUCCESS', 'FAILURE', 'NEUTRAL', 'SKIPPED'];",

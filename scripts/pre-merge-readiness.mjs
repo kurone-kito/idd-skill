@@ -122,7 +122,7 @@ const ZERO_SENTINEL_TIMESTAMP = '0001-01-01T00:00:00Z';
 // this comment underclaimed 4, missing `EXPECTED`) that only partly
 // overlaps the check-run vocabulary `classifyCiChecks` understands
 // (`FAILURE`, `CANCELLED`, `QUEUED`, `IN_PROGRESS`, `WAITING`, `SUCCESS`,
-// `SKIPPED`, `NEUTRAL`, `NOT_APPLICABLE`, ...). `SUCCESS` and `FAILURE`
+// `SKIPPED`, `NEUTRAL`, ...). `SUCCESS` and `FAILURE`
 // already coincide, but the other three have no direct match -- left
 // unmapped, each would silently fall into `classifyCiChecks`'s `unknown`
 // bucket instead of the `failed` / `pending` bucket a caller actually
