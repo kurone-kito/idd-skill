@@ -6561,7 +6561,8 @@ This record is durable issue evidence: it is not added to the transient
   action creates the backup ref `refs/idd-b1/<issue>/<commit>` with a
   create-only `git update-ref` (an existing plain ref at the same commit is
   reused; a symbolic ref, another commit, or a ref that collides with the
-  backup path refuses), reads it back, deletes the branch with
+  backup path refuses), reads it back as a plain ref (a symbolic ref swapped
+  in after the check refuses), deletes the branch with
   `git update-ref --no-deref -d refs/heads/<branch> <commit>` (which fails
   when the tip moved), and removes the `branch.<name>` configuration section
   when the repository's own configuration holds keys, so that a recreated
