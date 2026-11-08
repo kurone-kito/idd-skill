@@ -674,9 +674,12 @@ function branchPlan(ctx: Context, listing: Listing): BranchPlan {
       // `--local`: the removal below only touches the repository's own
       // configuration, so a key held only by a global or included file must not
       // pass a check that the removal cannot honor.
+      // `--name-only`: a value can span lines (a branch description), and
+      // without it each continuation line would read as a key.
       const result = git(ctx, [
         'config',
         '--local',
+        '--name-only',
         '--get-regexp',
         `^branch\\.${escapeForRegExp(branch)}\\.`,
       ]);
@@ -686,10 +689,17 @@ function branchPlan(ctx: Context, listing: Listing): BranchPlan {
       if (result.status !== 0) {
         return refuse(`git config ended with ${describeStatus(result)}`);
       }
+      const keys = new Set<string>();
       for (const line of result.stdout.split(/\r?\n/)) {
-        const key = line.split(/\s/, 1)[0] ?? '';
-        if (key !== '') configKeys.push(key);
+        if (line === '') continue;
+        if (!line.startsWith(`branch.${branch}.`)) {
+          return refuse(
+            `git config printed an unexpected key ${shorten(line)}`,
+          );
+        }
+        keys.add(line);
       }
+      configKeys.push(...keys);
       return pass(
         `the section branch.${branch} holds ${configKeys.length} key(s)`,
       );
@@ -1274,18 +1284,24 @@ function preserveBranch(
 
   if (plan.configKeys.length > 0) {
     const section = `branch.${branch}`;
-    const removed = git(ctx, ['config', '--remove-section', section]);
+    const keys = shorten(plan.configKeys.join(', '));
+    const removed = git(ctx, [
+      'config',
+      '--local',
+      '--remove-section',
+      section,
+    ]);
     if (removed.status !== 0) {
       return failed(
         report,
-        `the configuration section ${section} (${plan.configKeys.join(', ')}) could not be removed (${describeStatus(removed)}); remove it by hand before a branch of that name is recreated`,
+        `the configuration section ${section} (${keys}) could not be removed (${describeStatus(removed)}); remove it by hand before a branch of that name is recreated`,
       );
     }
     report.removedConfigSections.push(section);
     report.actions.push({
       id: 'config-section-removed',
       subject: branch,
-      detail: `configuration section ${section} removed (${plan.configKeys.join(', ')})`,
+      detail: `configuration section ${section} removed (${keys})`,
     });
   }
   return null;

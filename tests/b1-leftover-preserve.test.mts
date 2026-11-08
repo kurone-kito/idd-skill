@@ -2058,3 +2058,48 @@ test(
     ]);
   },
 );
+
+test('apply: a multi-line branch description counts as one key, and the removal is local', () => {
+  const fixture = fresh();
+  const tip = leftoverBranch(fixture);
+  git(fixture.primary, [
+    'config',
+    `branch.${BRANCH}.description`,
+    'first line\nsecond-token continues here\nthird',
+  ]);
+  git(fixture.primary, ['config', `branch.${BRANCH}.remote`, 'origin']);
+  const result = exercise(fixture);
+  assert.equal(result.failure, null);
+  assert.equal(result.report.outcome, 'preserved');
+  const removal = result.report.actions.find(
+    (action) => action.id === 'config-section-removed',
+  );
+  assert.match(removal?.detail ?? '', /\(branch\.[^ ]+\.description, /);
+  assert.doesNotMatch(removal?.detail ?? '', /second-token|third/);
+  assert.equal(
+    result.report.subjects[0]?.preconditions.find(
+      (entry) => entry.id === 'config-readable',
+    )?.detail,
+    `the section branch.${BRANCH} holds 2 key(s)`,
+  );
+  assert.ok(
+    result.calls.some((call) => /config --local --remove-section/.test(call)),
+    result.calls.join('\n'),
+  );
+  assert.equal(git(fixture.primary, ['cat-file', '-t', tip]), 'commit');
+});
+
+test('refused: an unexpected line in the config key list', () => {
+  const fixture = fresh();
+  const result = exercise(fixture, {
+    prepare: (f) => {
+      leftoverBranch(f);
+      git(f.primary, ['config', `branch.${BRANCH}.remote`, 'origin']);
+    },
+    hook: (_f, _file, args) =>
+      args.includes('--name-only')
+        ? okResult('branch.other.remote\n')
+        : undefined,
+  });
+  assertRefused(result, 'branch:config-readable');
+});
