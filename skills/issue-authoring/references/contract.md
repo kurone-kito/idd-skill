@@ -4787,11 +4787,13 @@ window carries the displaced generation. It cannot reach `member`, because the
 publisher's own anchor replay shows a changed owner, and the exactly-one-child
 rule stops recovery as soon as its journal record shows a second candidate. That
 child stays held and unmapped for a person to reconcile, and the lineage never
-maps it. A publisher used for a child after a replacement must re-verify the
-anchor generation after its `pending` write and immediately before its create;
+maps it. A publisher used for a child after a replacement must take the head's
+owner, set and session as expected values, refuse any other generation, and
+re-verify them after its `pending` write and immediately before its create;
 until the helper does, running it is accepted only because condition 4 bounds
-the window above, and the helper change is separate work that this contract does
-not implement.
+the window above and the checks of the next paragraph stand in for the expected
+generation, and the helper change is separate work that this contract does not
+implement.
 
 **Replacement procedure.** When a verified replacement is already the head, its
 generation is current and no create followed it, append nothing: repeat the
@@ -4808,10 +4810,15 @@ condition 3 keeps failing. When the only cause is a further resume, the voided
 record stays the head, and a later pass may append a replacement that names it
 once conditions 1 to 4 hold again. Only a verified replacement that passes this
 re-check permits the first run of
-`publish-authoring-hold --shape child --anchor <roadmap>`, which keeps the
-existing owner, set and session checks immediately before and after publication,
-now against the head. After publication, append and verify the `kind=child`
-mapping as above, naming the head.
+`publish-authoring-hold --shape child --anchor <roadmap>`. The helper reads the
+anchor's generation itself and takes no expected generation, so this session
+performs the existing owner, set and session checks against the head itself: it
+reads the anchor log immediately before the run and requires the current owner,
+set and session to equal the head's, and after the run it requires the anchor
+log to show the same owner, set and session and the created child's publication
+line to carry the head's anchor, set and session before it relies on the child.
+A mismatch stops recovery with that child held and unmapped. After publication,
+append and verify the `kind=child` mapping as above, naming the head.
 
 An inconclusive replacement append or read-back stops before the child create.
 Retain the exact attempted record and any returned comment ID, keep the carrier
