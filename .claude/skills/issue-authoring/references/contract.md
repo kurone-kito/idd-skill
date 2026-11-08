@@ -4663,8 +4663,8 @@ condition 2 below when that condition is evaluated at the replacement's own
 position. A replacement never overrides another valid successor, which is a
 head whose `anchor-owner` is still the anchor's current owner token, and it
 never authorizes a second child. A stop here is the recovery hold: it keeps the
-carrier open and every target held, appends no lineage record, creates no
-target, and never unhides, edits or deletes a record.
+carrier open and every target held, appends no further lineage record, creates
+no target, and never unhides, edits or deletes a record.
 
 **When a replacement is allowed.** Append one only while holding the verified
 carrier coordination claim and the anchor's current generation (you appended
@@ -4755,13 +4755,13 @@ these hold:
    claim markers as the holder of the coordination claim that preceded this
    session's claim, and require that claim to have been released by its own
    `unclaimed-by` marker, or to have been stale under `claimTiming.staleAge`
-   when this session took the carrier over, with no later `claimed-by` marker
-   carrying its claim ID (read from the raw comments). A claim marker that the
-   takeover step minimized as `outdated` counts like one that was never
-   minimized; an edited marker, or one minimized for another reason, in the
-   displaced chain stops recovery, as does a displaced session that cannot be
-   identified from trusted markers or whose claim was neither released nor
-   stale.
+   when this session took the carrier over, with no `claimed-by` marker carrying
+   its claim ID posted after this session's takeover claim or after its own
+   `unclaimed-by` (read from the raw comments). A claim marker that the takeover
+   step minimized as `outdated` counts like one that was never minimized; an
+   edited marker, or one minimized for another reason, in the displaced chain
+   stops recovery, as does a displaced session that cannot be identified from
+   trusted markers or whose claim was neither released nor stale.
 
 An incomplete enumeration stops. None of these alone is sufficient: a journal
 `pending` record with `issue=none`, other than an exempt roadmap record, is the
@@ -4799,29 +4799,34 @@ implement.
 claim immediately before any append, after the settle delay and immediately
 before the child publisher runs, as the re-authoring procedure requires before
 each mutation. When a verified replacement is already the head, its generation
-is current and no create followed it, append nothing: repeat the pre-create
-mapping bound and the re-check below, then run the publisher. Otherwise append
-the replacement, then verify the returned ID and exact body. After
-`claim.verifySettleDelay`, repeat conditions 2 to 4 on fresh complete reads
-together with the lineage replay, and repeat them once more immediately before
-running the child publisher. A comment found under condition 3, an owner-log
-record that changes the current generation, a later owner marker carrying a
-superseded owner token, a later `claimed-by` marker of the displaced claim, or a
-takeover of the carrier claim by another session voids the replacement. A void
-stops this pass under the recovery hold. Publication evidence can never be
-followed by another replacement, because condition 3 keeps failing. When the
-only cause is a further resume, the voided record stays the head, and a later
-pass may append a replacement that names it once conditions 1 to 4 hold again.
-Only a verified replacement that passes this re-check permits the first run of
-`publish-authoring-hold --shape child --anchor <roadmap>`. The helper reads the
-anchor's generation itself and takes no expected generation, so this session
-performs the existing owner, set and session checks against the head itself: it
-reads the anchor log immediately before the run and requires the current owner,
-set and session to equal the head's, and after the run it requires the anchor
-log to show the same owner, set and session and the created child's publication
-line to carry the head's anchor, set and session before it relies on the child.
-A mismatch stops recovery with that child held and unmapped. After publication,
-append and verify the `kind=child` mapping as above, naming the head.
+is current and is this session's own (it appended that generation's resume or
+re-verified it as this session's under the Stage 1 rules), and no create
+followed it, append nothing: repeat the pre-create mapping bound and the
+re-check below, then run the publisher. When the head's current generation was
+opened by another session, resume the set and append a replacement under
+conditions 1 to 4. Otherwise append the replacement, then verify the returned ID
+and exact body. After `claim.verifySettleDelay`, repeat conditions 2 to 4 on
+fresh complete reads together with the lineage replay, and repeat them once more
+immediately before running the child publisher. A comment found under condition
+3, an owner-log record that changes the current generation, a later owner marker
+carrying a superseded owner token, a later `claimed-by` marker of the displaced
+claim, or a takeover of the carrier claim by another session voids the
+replacement. A void stops this pass under the recovery hold. Publication
+evidence can never be followed by another replacement, because condition 3 keeps
+failing. When the only cause is a further resume, the voided record stays the
+head, and a later pass may append a replacement that names it once conditions 1
+to 4 hold again. Only a verified replacement that passes this re-check permits
+the first run of `publish-authoring-hold --shape child --anchor <roadmap>`. The
+helper reads the anchor's generation itself and takes no expected generation, so
+this session performs the existing owner, set and session checks against the
+head itself: it reads the anchor log immediately before the run and requires the
+current owner, set and session to equal the head's, and after the run it
+requires the anchor log to show the same owner, set and session and the created
+child's publication line to carry the head's anchor, set and session, and the
+journal to show exactly this run's publication tuple for this anchor and set and
+no other candidate, before it relies on the child. A mismatch stops recovery
+with that child held and unmapped. After publication, append and verify the
+`kind=child` mapping as above, naming the head.
 
 An inconclusive replacement append or read-back stops before the child create.
 Retain the exact attempted record and any returned comment ID, keep the carrier
@@ -4890,7 +4895,8 @@ defined above: no replacement is appended and no create is issued.
   or after it, or an owner marker of a superseded owner follows the resume.
 - Hold, displaced session not expired. The carrier's claim history does not
   identify the displaced session, or its claim was neither released nor stale
-  when this session took the carrier over, or it sent a heartbeat since.
+  when this session took the carrier over, or it posted a `claimed-by` marker
+  after that.
 - Hold, inconclusive outcome. The POST or read-back of `D` is uncertain, or the
   child create after `D` is: retain the evidence as above and create nothing.
 
