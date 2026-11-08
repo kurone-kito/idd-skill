@@ -84,6 +84,10 @@ export type RemoteDeleteHold = Exclude<
 export type HoldCode =
   | 'claim-lost'
   | 'owner-evidence-required'
+  | 'released-lineage-unverified'
+  | 'claim-lock-mismatch'
+  | 'cleanup-attestation-required'
+  | 'released-branch-remains'
   | DecideBeforePostHold
   | 'proof-missing'
   | 'proof-unreadable'
@@ -110,6 +114,13 @@ export type HoldCode =
 /** The step names, in the order the flow runs them. */
 export type StepName =
   | 'path-check'
+  | 'attestation-check'
+  | 'lineage-check'
+  | 'lock-check'
+  | 'worktree-check'
+  | 'preserve'
+  | 'remove'
+  | 'branch-remove'
   | 'claim-check'
   | 'proof-check'
   | 'step-4'
@@ -139,6 +150,7 @@ export type F4ReportStatus = 'dry-run' | 'complete' | 'hold' | 'failed';
 export interface F4WorktreeBranchReport {
   readonly protocolVersion: '1';
   readonly issueNumber: number;
+  readonly cleanupMode: 'merged-pr' | 'released-claim';
   readonly mode: 'dry-run' | 'apply';
   readonly status: F4ReportStatus;
   readonly steps: readonly F4StepRecord[];
@@ -155,6 +167,8 @@ export interface F4WorktreeBranchInput {
   readonly worktree: string;
   readonly primaryRoot: string;
   readonly apply: boolean;
+  readonly cleanupMode?: 'merged-pr' | 'released-claim';
+  readonly attestNoLiveSession?: boolean;
 }
 
 /** Every side effect and read the flow needs, injected by the caller. */
@@ -175,6 +189,10 @@ export interface F4WorktreeBranchDeps {
   readonly git: (args: readonly string[], cwd: string) => GitResult;
   /** `resume-claim-routing --assert` for the claimed worktree. */
   readonly assertClaim: (worktree: string) => SpawnedResult;
+  /** Fresh read-only routing evidence for a released or stale claim. */
+  readonly releasedClaimCheck: () => SpawnedResult;
+  /** Read-only inspection of the worktree-local claim lock. */
+  readonly claimLockCheck: (worktree: string) => SpawnedResult;
   /** The marker command's dry run (never with `--apply`). */
   readonly proofDryRun: () => SpawnedResult;
   /** The base branch of the merged pull request, or null when unreadable. */
@@ -238,6 +256,14 @@ export const NEXT_ACTIONS: Readonly<
     'Stop. The claim is not this session, or it could not be confirmed. Take no further mutation and report the handoff. Do not unclaim.',
   'owner-evidence-required':
     'Stop. The claim ID matches, but the independent owner evidence (the claim lock, the generated tokens, and the branch) does not. Restore the claimed worktree lock, or the operator decides.',
+  'released-lineage-unverified':
+    'Stop. Fresh routing does not prove one exact released or stale claim for this registered worktree. Preserve the worktree and branch for operator review.',
+  'claim-lock-mismatch':
+    'Stop. The worktree-local IDD lock is absent, malformed, or belongs to a different claim or agent. Preserve the worktree and branch for operator review.',
+  'cleanup-attestation-required':
+    'Stop. Apply mode requires the operator to explicitly attest that no session is live for this worktree. A claim marker or clean status is not that attestation.',
+  'released-branch-remains':
+    'Stop. The worktree was removed, but the local branch remains because ordinary deletion refused. Do not force-delete the branch; the operator reviews it.',
   'claim-or-lock':
     'Stop. The claim or its worktree lock is not this session. Take no further mutation and report the handoff.',
   'pr-state':
@@ -372,6 +398,125 @@ export function classifyClaimAssert(
     return { ok: true, branch: active.branch };
   }
   return { ok: false, code: 'claim-lost' };
+}
+
+export interface ReleasedClaimLineage {
+  readonly kind: 'released' | 'stale';
+  readonly branch: string;
+}
+
+/**
+ * Accept only a fresh released/stale route whose sole local occupant is the
+ * requested worktree and whose trusted claim fields exactly match the caller.
+ */
+export function classifyReleasedClaimRoute(
+  raw: SpawnedResult,
+  claimId: string,
+  agentId: string,
+  worktree: string,
+  realpath: (path: string) => string | null = () => null,
+): { ok: true; lineage: ReleasedClaimLineage } | { ok: false } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw.stdout);
+  } catch {
+    return { ok: false };
+  }
+  const routing = parsed as {
+    state?: unknown;
+    action?: unknown;
+    reason?: unknown;
+    active_claim?: {
+      agent_id?: unknown;
+      claim_id?: unknown;
+      branch?: unknown;
+    } | null;
+    evidence?: {
+      released_claim?: {
+        agent_id?: unknown;
+        claim_id?: unknown;
+        branch?: unknown;
+      };
+      local_worktree?: { status?: unknown; paths?: unknown };
+      same_second_contenders?: unknown;
+      later_competing_claim?: unknown;
+    };
+  };
+  const local = routing.evidence?.local_worktree;
+  if (
+    raw.exitCode !== 0 ||
+    routing.state !== 'local_worktree_occupied' ||
+    routing.action !== 'stop' ||
+    !Array.isArray(local?.paths) ||
+    local.status !== 'occupied' ||
+    local.paths.length !== 1 ||
+    typeof local.paths[0] !== 'string' ||
+    !Array.isArray(routing.evidence?.same_second_contenders) ||
+    routing.evidence.same_second_contenders.length !== 0 ||
+    routing.evidence.later_competing_claim !== null
+  ) {
+    return { ok: false };
+  }
+  const normalize = (path: string): string => {
+    const resolved = realpath(path) ?? resolve(path);
+    return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+  };
+  if (normalize(local.paths[0]) !== normalize(worktree)) {
+    return { ok: false };
+  }
+
+  if (
+    routing.reason === 'released-claim-local-worktree-occupied' &&
+    routing.evidence?.released_claim?.claim_id === claimId &&
+    routing.evidence.released_claim.agent_id === agentId &&
+    typeof routing.evidence.released_claim.branch === 'string'
+  ) {
+    return {
+      ok: true,
+      lineage: {
+        kind: 'released',
+        branch: routing.evidence.released_claim.branch,
+      },
+    };
+  }
+  if (
+    routing.reason === 'stale-claim-local-worktree-occupied' &&
+    routing.active_claim?.claim_id === claimId &&
+    routing.active_claim.agent_id === agentId &&
+    typeof routing.active_claim.branch === 'string'
+  ) {
+    return {
+      ok: true,
+      lineage: { kind: 'stale', branch: routing.active_claim.branch },
+    };
+  }
+  return { ok: false };
+}
+
+/** Require a well-formed local lock owned by exactly the expected lineage. */
+export function classifyReleasedClaimLock(
+  raw: SpawnedResult,
+  claimId: string,
+  agentId: string,
+): boolean {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw.stdout);
+  } catch {
+    return false;
+  }
+  const result = parsed as {
+    present?: unknown;
+    malformed?: unknown;
+    holder?: { claimId?: unknown; agentId?: unknown };
+  };
+  return (
+    raw.exitCode === 0 &&
+    result.present === true &&
+    result.malformed !== true &&
+    result.holder?.claimId === claimId &&
+    result.holder.agentId === agentId
+  );
 }
 
 /**
@@ -539,6 +684,9 @@ export function runF4WorktreeBranchSteps(
   input: F4WorktreeBranchInput,
   deps: F4WorktreeBranchDeps,
 ): F4WorktreeBranchReport {
+  if (input.cleanupMode === 'released-claim') {
+    return runReleasedClaimCleanup(input, deps);
+  }
   const steps: F4StepRecord[] = [];
   try {
     return runPlan(input, deps, steps);
@@ -558,6 +706,7 @@ export function runF4WorktreeBranchSteps(
     return {
       protocolVersion: '1',
       issueNumber: input.issueNumber,
+      cleanupMode: 'merged-pr',
       mode: input.apply ? 'apply' : 'dry-run',
       status: 'failed',
       steps,
@@ -572,6 +721,20 @@ export function runF4WorktreeBranchSteps(
 /** The plan index that a completed step record stands for. */
 function planIndexOf(entry: F4StepRecord): number {
   switch (entry.step) {
+    case 'attestation-check':
+      return 1;
+    case 'lineage-check':
+      return 2;
+    case 'lock-check':
+      return 3;
+    case 'worktree-check':
+      return 4;
+    case 'preserve':
+      return 5;
+    case 'remove':
+      return 6;
+    case 'branch-remove':
+      return 7;
     case 'path-check':
       return 0;
     case 'claim-check':
@@ -584,6 +747,416 @@ function planIndexOf(entry: F4StepRecord): number {
       return 4;
     case 'step-6':
       return 6;
+  }
+}
+
+const RELEASED_CLEANUP_ORDER = [
+  'path-check',
+  'attestation-check',
+  'lineage-check',
+  'lock-check',
+  'worktree-check',
+  'preserve',
+  'remove',
+  'branch-remove',
+] as const;
+
+/**
+ * Remove only a worktree whose exact released or stale lineage is freshly
+ * proven. This path is deliberately local-only: no primary fast-forward,
+ * F4 head proof, or remote branch deletion is part of released cleanup.
+ */
+function runReleasedClaimCleanup(
+  input: F4WorktreeBranchInput,
+  deps: F4WorktreeBranchDeps,
+): F4WorktreeBranchReport {
+  const mode = input.apply ? 'apply' : 'dry-run';
+  const primary = resolve(input.primaryRoot);
+  const worktree = resolve(input.worktree);
+  const steps: F4StepRecord[] = [];
+  let currentStep: StepName = 'path-check';
+
+  const finish = (
+    status: F4ReportStatus,
+    failedStep: StepName | null,
+    reason: string | null,
+    nextAction: string | null,
+  ): F4WorktreeBranchReport => {
+    const index =
+      failedStep === null
+        ? -1
+        : RELEASED_CLEANUP_ORDER.indexOf(
+            failedStep as (typeof RELEASED_CLEANUP_ORDER)[number],
+          );
+    return {
+      protocolVersion: '1',
+      issueNumber: input.issueNumber,
+      cleanupMode: 'released-claim',
+      mode,
+      status,
+      steps,
+      reason,
+      nextAction,
+      failedStep: status === 'failed' ? failedStep : null,
+      notRunSteps:
+        status === 'complete' || status === 'dry-run'
+          ? []
+          : RELEASED_CLEANUP_ORDER.slice(index + 1),
+    };
+  };
+
+  const stop = (
+    step: StepName,
+    code: HoldCode,
+    detail: string | null = null,
+    status: 'hold' | 'failed' = 'hold',
+  ): F4WorktreeBranchReport => {
+    const nextAction =
+      code in NEXT_ACTIONS
+        ? NEXT_ACTIONS[code as Exclude<HoldCode, RemoteDeleteHold>]
+        : (detail ?? 'Stop and inspect the worktree state before retrying.');
+    steps.push(
+      stepRecord(step, status === 'hold' ? 'held' : 'failed', {
+        reason: code,
+        nextAction,
+        detail,
+      }),
+    );
+    return finish(status, step, code, nextAction);
+  };
+
+  const verifyLineageAndLock = (
+    expectedBranch?: string,
+  ):
+    | { ok: true; branch: string }
+    | { ok: false; code: HoldCode; step: 'lineage-check' | 'lock-check' } => {
+    const route = classifyReleasedClaimRoute(
+      deps.releasedClaimCheck(),
+      input.claimId,
+      input.agentId,
+      worktree,
+      deps.realpath,
+    );
+    if (
+      !route.ok ||
+      (expectedBranch && route.lineage.branch !== expectedBranch)
+    ) {
+      return {
+        ok: false,
+        code: 'released-lineage-unverified',
+        step: 'lineage-check',
+      };
+    }
+    if (
+      !classifyReleasedClaimLock(
+        deps.claimLockCheck(worktree),
+        input.claimId,
+        input.agentId,
+      )
+    ) {
+      return { ok: false, code: 'claim-lock-mismatch', step: 'lock-check' };
+    }
+    return { ok: true, branch: route.lineage.branch };
+  };
+
+  const inspect = (branchRef: string, branchTip: string): InspectResult =>
+    inspectWorktree(
+      deps,
+      input.issueNumber,
+      primary,
+      worktree,
+      branchRef,
+      branchTip,
+    );
+
+  try {
+    if (worktree === primary) {
+      return stop(
+        'path-check',
+        'inconsistent-worktree-state',
+        'the primary worktree is never removed',
+      );
+    }
+    const pathLinks = ancestorChain(worktree).find(
+      (path) => deps.lstat(path) === 'symlink',
+    );
+    if (pathLinks !== undefined) {
+      return stop(
+        'path-check',
+        'symlink-path',
+        `a symlink at ${pathLinks} is on the worktree path`,
+      );
+    }
+    steps.push(stepRecord('path-check', 'passed'));
+
+    currentStep = 'attestation-check';
+    if (input.apply && input.attestNoLiveSession !== true) {
+      return stop('attestation-check', 'cleanup-attestation-required');
+    }
+    steps.push(
+      stepRecord('attestation-check', 'passed', {
+        detail: input.apply
+          ? 'operator attested that no session is live for this worktree'
+          : 'dry-run is read-only; apply requires --attest-no-live-session',
+      }),
+    );
+
+    currentStep = 'lineage-check';
+    const route = classifyReleasedClaimRoute(
+      deps.releasedClaimCheck(),
+      input.claimId,
+      input.agentId,
+      worktree,
+      deps.realpath,
+    );
+    if (!route.ok) {
+      return stop('lineage-check', 'released-lineage-unverified');
+    }
+    const branch = route.lineage.branch;
+    steps.push(
+      stepRecord('lineage-check', 'passed', {
+        detail: `fresh released or stale claim lineage matches ${branch}`,
+      }),
+    );
+
+    currentStep = 'lock-check';
+    if (
+      !classifyReleasedClaimLock(
+        deps.claimLockCheck(worktree),
+        input.claimId,
+        input.agentId,
+      )
+    ) {
+      return stop('lock-check', 'claim-lock-mismatch');
+    }
+    steps.push(
+      stepRecord('lock-check', 'passed', {
+        detail: `idd-claim.lock matches claim ${input.claimId} and agent ${input.agentId}`,
+      }),
+    );
+    const branchRef = `refs/heads/${branch}`;
+    if (deps.git(['check-ref-format', branchRef], primary).status !== 0) {
+      return stop(
+        'lineage-check',
+        'released-lineage-unverified',
+        'the claim branch is not a valid branch name',
+      );
+    }
+    const branchTip = readBranchTip(deps, primary, branchRef);
+    if (branchTip === null) {
+      return stop(
+        'worktree-check',
+        'branch-tip-mismatch',
+        'the claimed local branch is absent or unreadable',
+      );
+    }
+
+    currentStep = 'worktree-check';
+    const inspected = inspect(branchRef, branchTip);
+    if (inspected.hold !== null) {
+      return stop('worktree-check', inspected.hold.code, inspected.hold.detail);
+    }
+    if (!inspected.worktreePresent || !inspected.branchPresent) {
+      return stop(
+        'worktree-check',
+        'inconsistent-worktree-state',
+        'released cleanup requires the requested registered worktree and its local branch',
+      );
+    }
+    steps.push(stepRecord('worktree-check', 'passed'));
+
+    currentStep = 'preserve';
+    if (!input.apply) {
+      steps.push(
+        stepRecord(
+          'preserve',
+          inspected.preserveNodeModules === null ? 'skipped' : 'would-run',
+          inspected.preserveNodeModules === null
+            ? { detail: 'no node_modules/ directory needs preservation' }
+            : {
+                detail: `node_modules/ would move to ${inspected.preserveNodeModules.destination}`,
+              },
+        ),
+      );
+      steps.push(
+        stepRecord('remove', 'would-run', {
+          detail: 'the worktree would be removed',
+        }),
+      );
+      steps.push(
+        stepRecord('branch-remove', 'would-run', {
+          detail: 'the local branch would be removed with git branch -d',
+        }),
+      );
+      return finish('dry-run', null, null, null);
+    }
+
+    const applySteps = (): F4WorktreeBranchReport => {
+      currentStep = 'lineage-check';
+      const lockedLineage = verifyLineageAndLock(branch);
+      if (!lockedLineage.ok) {
+        return stop(
+          lockedLineage.step,
+          lockedLineage.code,
+          'lineage or lock changed while waiting for the clone lock',
+        );
+      }
+      if (readBranchTip(deps, primary, branchRef) !== branchTip) {
+        return stop(
+          'worktree-check',
+          'branch-tip-mismatch',
+          'the local branch tip changed while waiting for the clone lock',
+        );
+      }
+      const lockedInspection = inspect(branchRef, branchTip);
+      if (lockedInspection.hold !== null) {
+        return stop(
+          'worktree-check',
+          lockedInspection.hold.code,
+          lockedInspection.hold.detail,
+        );
+      }
+      if (
+        !lockedInspection.worktreePresent ||
+        !lockedInspection.branchPresent
+      ) {
+        return stop(
+          'worktree-check',
+          'inconsistent-worktree-state',
+          'the registered worktree or local branch disappeared while waiting for the clone lock',
+        );
+      }
+
+      let preservedDestination: string | null = null;
+      if (lockedInspection.preserveNodeModules !== null) {
+        currentStep = 'preserve';
+        const beforeMove = verifyLineageAndLock(branch);
+        if (!beforeMove.ok) {
+          return stop(
+            beforeMove.step,
+            beforeMove.code,
+            'lineage or lock changed before preservation',
+          );
+        }
+        const moved = moveNodeModules(
+          deps,
+          primary,
+          worktree,
+          lockedInspection.preserveNodeModules.destination,
+          lockedInspection.preserveNodeModules.sourceIdentity,
+          lockedInspection.preserveNodeModules.parents,
+        );
+        if (moved.hold !== null || moved.result === null) {
+          return stop('preserve', 'dirty-worktree', moved.hold);
+        }
+        preservedDestination = moved.result.destination;
+        steps.push(
+          stepRecord('preserve', 'done', {
+            detail: `node_modules/ was preserved at ${preservedDestination}`,
+          }),
+        );
+      } else {
+        steps.push(
+          stepRecord('preserve', 'skipped', {
+            detail: 'no node_modules/ directory needs preservation',
+          }),
+        );
+      }
+
+      currentStep = 'lineage-check';
+      const beforeRemoval = verifyLineageAndLock(branch);
+      if (!beforeRemoval.ok) {
+        return stop(
+          beforeRemoval.step,
+          beforeRemoval.code,
+          preservedDestination === null
+            ? 'lineage or lock changed before final status and removal'
+            : `lineage or lock changed after preserving node_modules/ at ${preservedDestination}`,
+        );
+      }
+      currentStep = 'worktree-check';
+      const finalInspection = inspect(branchRef, branchTip);
+      if (finalInspection.hold !== null) {
+        return stop(
+          'worktree-check',
+          finalInspection.hold.code,
+          preservedDestination === null
+            ? finalInspection.hold.detail
+            : `${finalInspection.hold.detail ?? 'final worktree checks failed'}; node_modules/ remains preserved at ${preservedDestination}`,
+        );
+      }
+      if (!finalInspection.worktreePresent || !finalInspection.branchPresent) {
+        return stop(
+          'worktree-check',
+          'inconsistent-worktree-state',
+          `the registered worktree or branch changed before removal${preservedDestination === null ? '' : `; node_modules/ remains preserved at ${preservedDestination}`}`,
+        );
+      }
+
+      currentStep = 'remove';
+      const removed = deps.git(['worktree', 'remove', worktree], primary);
+      if (removed.status !== 0) {
+        return stop(
+          'remove',
+          'worktree-remove-refused',
+          `git worktree remove refused: ${removed.stderr.trim()}${preservedDestination === null ? '' : `; node_modules/ remains preserved at ${preservedDestination}`}`,
+          'failed',
+        );
+      }
+      steps.push(
+        stepRecord('remove', 'done', {
+          detail:
+            preservedDestination === null
+              ? null
+              : `node_modules/ remains preserved at ${preservedDestination}`,
+        }),
+      );
+
+      currentStep = 'branch-remove';
+      const deleted = deps.git(['branch', '-d', '--', branch], primary);
+      if (deleted.status !== 0) {
+        const remainingTip = readBranchTip(deps, primary, branchRef);
+        if (remainingTip !== null) {
+          return stop(
+            'branch-remove',
+            'released-branch-remains',
+            `the worktree was removed, but local branch ${branch} remains at ${remainingTip}; git branch -d refused: ${deleted.stderr.trim()}${preservedDestination === null ? '' : `; node_modules/ remains preserved at ${preservedDestination}`}`,
+          );
+        }
+        const ref = deps.git(
+          ['show-ref', '--verify', '--quiet', branchRef],
+          primary,
+        );
+        if (ref.status !== 1) {
+          return stop(
+            'branch-remove',
+            'inconsistent-worktree-state',
+            `the worktree was removed, but the local branch state is unreadable${preservedDestination === null ? '' : `; node_modules/ remains preserved at ${preservedDestination}`}`,
+          );
+        }
+        steps.push(
+          stepRecord('branch-remove', 'done', {
+            detail: 'the local branch was already absent',
+          }),
+        );
+      } else {
+        steps.push(stepRecord('branch-remove', 'done'));
+      }
+      return finish('complete', null, null, null);
+    };
+
+    const locked = deps.withCloneLock(applySteps);
+    if (!locked.acquired) {
+      return stop(
+        'worktree-check',
+        'lock-busy',
+        'the clone-scoped lock is held by another session',
+      );
+    }
+    return locked.value;
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return stop(currentStep, 'inconsistent-worktree-state', detail, 'failed');
   }
 }
 
@@ -611,6 +1184,7 @@ function runPlan(
     return {
       protocolVersion: '1',
       issueNumber: input.issueNumber,
+      cleanupMode: input.cleanupMode ?? 'merged-pr',
       mode,
       status,
       steps,
@@ -863,7 +1437,7 @@ function runStep4And5(
     primary,
     worktree,
     branchRef,
-    proof,
+    proof.branchTip,
   );
   if (inspected.hold !== null) {
     return { hold: inspected.hold, error: null, at: 'step-5' };
@@ -1249,7 +1823,7 @@ function inspectWorktree(
   primary: string,
   worktree: string,
   branchRef: string,
-  proof: ProofValues,
+  expectedBranchTip: string,
 ): InspectResult {
   const none = (code: HoldCode, detail: string | null): InspectResult => ({
     hold: { code, detail },
@@ -1291,10 +1865,10 @@ function inspectWorktree(
       );
     }
     const exists = ref.status === 0;
-    if (exists && tip !== proof.branchTip) {
+    if (exists && tip !== expectedBranchTip) {
       return none(
         'branch-tip-mismatch',
-        `local tip ${tip ?? 'unknown'} differs from the proof`,
+        `local tip ${tip ?? 'unknown'} differs from the expected tip ${expectedBranchTip}`,
       );
     }
     return {
@@ -1331,10 +1905,10 @@ function inspectWorktree(
       `${branchRef} is missing while its worktree exists`,
     );
   }
-  if (tip !== proof.branchTip) {
+  if (tip !== expectedBranchTip) {
     return none(
       'branch-tip-mismatch',
-      `local tip ${tip} differs from the proof ${proof.branchTip}`,
+      `local tip ${tip} differs from the expected tip ${expectedBranchTip}`,
     );
   }
 

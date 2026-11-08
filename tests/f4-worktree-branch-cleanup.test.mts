@@ -26,10 +26,12 @@ import {
 import type { RemoteBranchDeleteVerdict } from '../src/scripts/delete-remote-branch.mts';
 import {
   claimCheckArgv,
+  claimLockCheckArgv,
   createLiveDeps,
   lstatKind,
   parseArgs,
   proofDryRunArgv,
+  releasedClaimRoutingArgv,
 } from '../src/scripts/f4-worktree-branch-cleanup.mts';
 import {
   type F4WorktreeBranchDeps,
@@ -1195,6 +1197,24 @@ test('the claim check asserts with the nonce and the claimed worktree', () => {
   ]);
 });
 
+test('released cleanup reads fresh routing and the worktree-local lock', () => {
+  assert.deepEqual(releasedClaimRoutingArgv(ISSUE, 'owner', 'repo', '/root'), [
+    '/root/scripts/resume-claim-routing.mjs',
+    '--issue',
+    String(ISSUE),
+    '--owner',
+    'owner',
+    '--repo',
+    'repo',
+  ]);
+  assert.deepEqual(claimLockCheckArgv('/work/wt', '/root'), [
+    '/root/scripts/claim-lock.mjs',
+    '--check',
+    '--worktree',
+    '/work/wt',
+  ]);
+});
+
 test('parseArgs takes the flags and refuses a relative worktree, a bad issue, or no nonce', () => {
   const base = [
     '--issue',
@@ -1210,6 +1230,7 @@ test('parseArgs takes the flags and refuses a relative worktree, a bad issue, or
   ];
   assert.equal(parseArgs(base).apply, false);
   assert.equal(parseArgs([...base, '--apply']).apply, true);
+  assert.equal(parseArgs(base).cleanupMode, 'merged-pr');
   assert.equal(parseArgs(['--help']).help, true);
   assert.throws(() =>
     parseArgs([
@@ -1249,6 +1270,42 @@ test('parseArgs takes the flags and refuses a relative worktree, a bad issue, or
       AGENT,
       '--worktree',
       '/work/wt',
+    ]),
+  );
+});
+
+test('released cleanup requires explicit attestation only for apply', () => {
+  const base = [
+    '--issue',
+    String(ISSUE),
+    '--claim-id',
+    CLAIM,
+    '--agent-id',
+    AGENT,
+    '--worktree',
+    '/work/wt',
+    '--released-claim',
+  ];
+  assert.equal(parseArgs(base).cleanupMode, 'released-claim');
+  assert.equal(parseArgs(base).attestNoLiveSession, false);
+  assert.throws(
+    () => parseArgs([...base, '--apply']),
+    /requires --attest-no-live-session/u,
+  );
+  const applied = parseArgs([...base, '--attest-no-live-session', '--apply']);
+  assert.equal(applied.apply, true);
+  assert.equal(applied.attestNoLiveSession, true);
+  assert.throws(() =>
+    parseArgs([
+      '--issue',
+      String(ISSUE),
+      '--claim-id',
+      CLAIM,
+      '--agent-id',
+      AGENT,
+      '--worktree',
+      '/work/wt',
+      '--attest-no-live-session',
     ]),
   );
 });

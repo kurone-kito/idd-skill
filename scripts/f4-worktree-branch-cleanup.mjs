@@ -52,6 +52,8 @@ const F4_CLEANUP_FLAG_SPEC = {
   '--agent-id': { type: 'string' },
   '--worktree': { type: 'string' },
   '--apply': { type: 'boolean' },
+  '--released-claim': { type: 'boolean' },
+  '--attest-no-live-session': { type: 'boolean' },
   '--help': { type: 'boolean', short: 'h' },
 };
 /** Largest stdout the helper accepts from one git call (`ls-files` on a big tree). */
@@ -69,6 +71,8 @@ export function parseArgs(argv) {
       agentId: '',
       worktree: '',
       apply: false,
+      cleanupMode: 'merged-pr',
+      attestNoLiveSession: false,
     };
   }
   const issue = values.issue?.trim() ?? '';
@@ -81,14 +85,35 @@ export function parseArgs(argv) {
   const nonce = values.nonce?.trim() ?? '';
   const agentId = values['agent-id']?.trim() ?? '';
   const worktree = values.worktree?.trim() ?? '';
+  const cleanupMode =
+    values['released-claim'] === true ? 'released-claim' : 'merged-pr';
+  const attestNoLiveSession = values['attest-no-live-session'] === true;
   for (const [flag, value] of [
     ['--claim-id', claimId],
-    ['--nonce', nonce],
     ['--agent-id', agentId],
   ]) {
     if (value.length === 0) {
       throw markCliUsageError(new Error(`${flag} must not be empty`));
     }
+  }
+  if (cleanupMode === 'merged-pr' && nonce.length === 0) {
+    throw markCliUsageError(new Error('--nonce must not be empty'));
+  }
+  if (cleanupMode === 'merged-pr' && attestNoLiveSession) {
+    throw markCliUsageError(
+      new Error('--attest-no-live-session requires --released-claim'),
+    );
+  }
+  if (
+    cleanupMode === 'released-claim' &&
+    values.apply === true &&
+    !attestNoLiveSession
+  ) {
+    throw markCliUsageError(
+      new Error(
+        '--apply with --released-claim requires --attest-no-live-session',
+      ),
+    );
   }
   if (!isAbsolute(worktree)) {
     throw markCliUsageError(
@@ -103,14 +128,17 @@ export function parseArgs(argv) {
     agentId,
     worktree: resolve(worktree),
     apply: values.apply === true,
+    cleanupMode,
+    attestNoLiveSession,
   };
 }
 function printUsage() {
   process.stdout.write(
     'Usage:\n' +
       '  node scripts/f4-worktree-branch-cleanup.mjs --issue <n> --claim-id <id> --nonce <nonce> --agent-id <id> --worktree <abs-path> [--apply]\n\n' +
+      '  node scripts/f4-worktree-branch-cleanup.mjs --issue <n> --claim-id <id> --agent-id <id> --worktree <abs-path> --released-claim [--attest-no-live-session] [--apply]\n\n' +
       'Run from the primary worktree. F4 steps 4 to 6, gated on the head proof.\n' +
-      'Dry-run is the default. --apply mutates: fetch, fast-forward, secure the state destination, preserve a lone ignored node_modules/, worktree and branch removal, remote branch deletion.\n',
+      'Dry-run is the default. --apply mutates the merged-PR F4 cleanup path. Released/stale cleanup is local-only; apply requires --attest-no-live-session and never fast-forwards or deletes a remote branch.\n',
   );
 }
 /** Run one git command with the child environment's locale fixed to C. */
@@ -217,6 +245,27 @@ export function claimCheckArgv(options, worktree, owner, repo, root) {
     repo,
   ];
 }
+/** A fresh, read-only route snapshot used only by released/stale cleanup. */
+export function releasedClaimRoutingArgv(issueNumber, owner, repo, root) {
+  return [
+    join(root, 'scripts', 'resume-claim-routing.mjs'),
+    '--issue',
+    String(issueNumber),
+    '--owner',
+    owner,
+    '--repo',
+    repo,
+  ];
+}
+/** Read the worktree-local lock without attempting to acquire or repair it. */
+export function claimLockCheckArgv(worktree, root) {
+  return [
+    join(root, 'scripts', 'claim-lock.mjs'),
+    '--check',
+    '--worktree',
+    worktree,
+  ];
+}
 /**
  * The argv of the marker command's dry run. It never carries `--apply`:
  * this helper reads the proof and never posts one.
@@ -274,6 +323,12 @@ export function createLiveDeps(options) {
     git: (args, cwd) => runGit(args, cwd),
     assertClaim: (worktree) =>
       runSpawned(claimCheckArgv(options, worktree, owner, repo, root)),
+    releasedClaimCheck: () =>
+      runSpawned(
+        releasedClaimRoutingArgv(options.issueNumber, owner, repo, root),
+      ),
+    claimLockCheck: (worktree) =>
+      runSpawned(claimLockCheckArgv(worktree, root)),
     proofDryRun: () =>
       runSpawned(proofDryRunArgv(options, options.worktree, root)),
     prBaseRef: (pr) => {
@@ -348,6 +403,8 @@ function main() {
       worktree: args.worktree,
       primaryRoot,
       apply: args.apply,
+      cleanupMode: args.cleanupMode,
+      attestNoLiveSession: args.attestNoLiveSession,
     },
     createLiveDeps({
       issueNumber: args.issueNumber,

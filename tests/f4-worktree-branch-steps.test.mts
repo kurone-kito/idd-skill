@@ -6,6 +6,8 @@ import {
   classifyClaimAssert,
   classifyPrimaryRefusal,
   classifyProofEnvelope,
+  classifyReleasedClaimLock,
+  classifyReleasedClaimRoute,
   type DirectoryPrivacy,
   type F4WorktreeBranchDeps,
   type F4WorktreeBranchInput,
@@ -78,6 +80,33 @@ function claimOk(): SpawnedResult {
     }),
   };
 }
+
+function releasedRoute(overrides: Record<string, unknown> = {}): SpawnedResult {
+  return {
+    exitCode: 0,
+    stdout: JSON.stringify({
+      state: 'local_worktree_occupied',
+      action: 'stop',
+      reason: 'released-claim-local-worktree-occupied',
+      active_claim: null,
+      evidence: {
+        released_claim: { agent_id: AGENT, claim_id: CLAIM, branch: BRANCH },
+        local_worktree: { status: 'occupied', paths: [WORKTREE], reason: null },
+        same_second_contenders: [],
+        later_competing_claim: null,
+      },
+      ...overrides,
+    }),
+  };
+}
+
+const RELEASED_LOCK_OK: SpawnedResult = {
+  exitCode: 0,
+  stdout: JSON.stringify({
+    present: true,
+    holder: { claimId: CLAIM, agentId: AGENT },
+  }),
+};
 
 function proofProceed(overrides: Record<string, unknown> = {}): SpawnedResult {
   return {
@@ -157,6 +186,8 @@ interface Harness {
   readonly gitCalls: { args: Args; cwd: string }[];
   readonly remoteCalls: string[];
   readonly claimCalls: string[];
+  readonly releasedRouteCalls: number[];
+  readonly lockCheckCalls: string[];
   readonly proofCalls: number[];
   readonly lockCalls: number[];
   readonly mkdirCalls: string[];
@@ -191,6 +222,8 @@ interface HarnessOptions {
   readonly routes?: Route[];
   readonly lstat?: (path: string) => LstatKind;
   readonly claims?: SpawnedResult[];
+  readonly releasedRoutes?: readonly SpawnedResult[];
+  readonly lockChecks?: readonly SpawnedResult[];
   readonly proof?: SpawnedResult;
   readonly base?: string | null;
   readonly autoDelete?: boolean | null;
@@ -224,6 +257,8 @@ function harness(options: HarnessOptions = {}): Harness {
   const gitCalls: { args: Args; cwd: string }[] = [];
   const remoteCalls: string[] = [];
   const claimCalls: string[] = [];
+  const releasedRouteCalls: number[] = [];
+  const lockCheckCalls: string[] = [];
   const proofCalls: number[] = [];
   const lockCalls: number[] = [];
   const statusResults = [...(options.statusResults ?? [])];
@@ -339,6 +374,20 @@ function harness(options: HarnessOptions = {}): Harness {
       const index = Math.min(claimCalls.length - 1, claims.length - 1);
       return claims[index] as SpawnedResult;
     },
+    releasedClaimCheck: () => {
+      releasedRouteCalls.push(releasedRouteCalls.length + 1);
+      const routes = options.releasedRoutes ?? [releasedRoute()];
+      return routes[
+        Math.min(releasedRouteCalls.length - 1, routes.length - 1)
+      ] as SpawnedResult;
+    },
+    claimLockCheck: (worktree) => {
+      lockCheckCalls.push(worktree);
+      const locks = options.lockChecks ?? [RELEASED_LOCK_OK];
+      return locks[
+        Math.min(lockCheckCalls.length - 1, locks.length - 1)
+      ] as SpawnedResult;
+    },
     proofDryRun: () => {
       proofCalls.push(proofCalls.length + 1);
       return options.proof ?? proofProceed();
@@ -370,6 +419,8 @@ function harness(options: HarnessOptions = {}): Harness {
     gitCalls,
     remoteCalls,
     claimCalls,
+    releasedRouteCalls,
+    lockCheckCalls,
     proofCalls,
     lockCalls,
     mkdirCalls,
@@ -1631,6 +1682,276 @@ test('the removal is always the claimed path, so an unrelated worktree is untouc
   );
   assert.equal(removals.length, 1);
   assert.equal(removals[0]?.args[2], WORKTREE);
+});
+
+test('released lineage classifier accepts only an exact sole worktree occupant', () => {
+  assert.deepEqual(
+    classifyReleasedClaimRoute(
+      releasedRoute(),
+      CLAIM,
+      AGENT,
+      WORKTREE,
+      (path) => path,
+    ),
+    { ok: true, lineage: { kind: 'released', branch: BRANCH } },
+  );
+  const stale = JSON.parse(releasedRoute().stdout) as Record<string, unknown>;
+  stale.reason = 'stale-claim-local-worktree-occupied';
+  stale.active_claim = { agent_id: AGENT, claim_id: CLAIM, branch: BRANCH };
+  (stale.evidence as Record<string, unknown>).released_claim = undefined;
+  assert.deepEqual(
+    classifyReleasedClaimRoute(
+      { exitCode: 0, stdout: JSON.stringify(stale) },
+      CLAIM,
+      AGENT,
+      WORKTREE,
+      (path) => path,
+    ),
+    { ok: true, lineage: { kind: 'stale', branch: BRANCH } },
+  );
+  const wrongPath = JSON.parse(releasedRoute().stdout) as {
+    evidence: {
+      released_claim: unknown;
+      local_worktree: { status: string; paths: string[] };
+    };
+  };
+  wrongPath.evidence.local_worktree.paths = ['/work/other'];
+  assert.equal(
+    classifyReleasedClaimRoute(
+      { exitCode: 0, stdout: JSON.stringify(wrongPath) },
+      CLAIM,
+      AGENT,
+      WORKTREE,
+      (path) => path,
+    ).ok,
+    false,
+  );
+  const ambiguous = JSON.parse(releasedRoute().stdout) as {
+    evidence: {
+      same_second_contenders: string[];
+      later_competing_claim: unknown;
+    };
+  };
+  ambiguous.evidence.same_second_contenders = [CLAIM];
+  assert.equal(
+    classifyReleasedClaimRoute(
+      { exitCode: 0, stdout: JSON.stringify(ambiguous) },
+      CLAIM,
+      AGENT,
+      WORKTREE,
+      (path) => path,
+    ).ok,
+    false,
+  );
+  const competing = JSON.parse(releasedRoute().stdout) as {
+    evidence: {
+      same_second_contenders: string[];
+      later_competing_claim: unknown;
+    };
+  };
+  competing.evidence.later_competing_claim = { claim_id: 'other-claim' };
+  assert.equal(
+    classifyReleasedClaimRoute(
+      { exitCode: 0, stdout: JSON.stringify(competing) },
+      CLAIM,
+      AGENT,
+      WORKTREE,
+      (path) => path,
+    ).ok,
+    false,
+  );
+});
+
+test('released cleanup removes only the registered local worktree and branch', () => {
+  const h = harness();
+  const report = runF4WorktreeBranchSteps(
+    input({ cleanupMode: 'released-claim', attestNoLiveSession: true }),
+    h.deps,
+  );
+  assert.equal(report.cleanupMode, 'released-claim');
+  assert.equal(report.status, 'complete');
+  assert.equal(h.releasedRouteCalls.length, 3);
+  assert.equal(h.lockCheckCalls.length, 3);
+  assert.equal(
+    h.gitCalls.some((call) => call.args[0] === 'fetch'),
+    false,
+  );
+  assert.equal(
+    h.gitCalls.some((call) => call.args[0] === 'switch'),
+    false,
+  );
+  assert.equal(h.remoteCalls.length, 0);
+  assert.equal(
+    h.gitCalls.some(
+      (call) =>
+        call.args[0] === 'worktree' &&
+        call.args[1] === 'remove' &&
+        call.args[2] === WORKTREE,
+    ),
+    true,
+  );
+  assert.equal(
+    h.gitCalls.some(
+      (call) =>
+        call.args[0] === 'branch' &&
+        call.args[1] === '-d' &&
+        call.args.includes(BRANCH),
+    ),
+    true,
+  );
+  assert.equal(
+    h.gitCalls.some(
+      (call) => call.args.includes('--force') || call.args.includes('-D'),
+    ),
+    false,
+  );
+});
+
+test('released cleanup refuses missing lineage, active claims, mismatched locks, and missing attestation', () => {
+  const noMarker = {
+    exitCode: 0,
+    stdout: JSON.stringify({
+      state: 'unclaimed',
+      action: 're_claim',
+      reason: 'unclaimed',
+      active_claim: null,
+      evidence: {},
+    }),
+  };
+  const active = {
+    exitCode: 0,
+    stdout: JSON.stringify({
+      state: 'non_inheritable',
+      action: 'stop',
+      reason: 'active-claim-non-stale',
+      active_claim: { agent_id: AGENT, claim_id: CLAIM, branch: BRANCH },
+      evidence: {},
+    }),
+  };
+  for (const route of [noMarker, active]) {
+    const h = harness({ releasedRoutes: [route] });
+    const report = runF4WorktreeBranchSteps(
+      input({ cleanupMode: 'released-claim', attestNoLiveSession: true }),
+      h.deps,
+    );
+    assert.equal(report.reason, 'released-lineage-unverified');
+    assert.equal(
+      h.gitCalls.some(
+        (call) => call.args[0] === 'worktree' && call.args[1] === 'remove',
+      ),
+      false,
+    );
+  }
+
+  const mismatchedLock = {
+    exitCode: 0,
+    stdout: JSON.stringify({
+      present: true,
+      holder: { claimId: 'other', agentId: AGENT },
+    }),
+  };
+  const lockHarness = harness({ lockChecks: [mismatchedLock] });
+  const lockReport = runF4WorktreeBranchSteps(
+    input({ cleanupMode: 'released-claim', attestNoLiveSession: true }),
+    lockHarness.deps,
+  );
+  assert.equal(lockReport.reason, 'claim-lock-mismatch');
+  assert.equal(
+    lockHarness.gitCalls.some(
+      (call) => call.args[0] === 'worktree' && call.args[1] === 'remove',
+    ),
+    false,
+  );
+
+  const unattested = harness();
+  const attestationReport = runF4WorktreeBranchSteps(
+    input({ cleanupMode: 'released-claim' }),
+    unattested.deps,
+  );
+  assert.equal(attestationReport.reason, 'cleanup-attestation-required');
+  assert.equal(unattested.releasedRouteCalls.length, 0);
+  assert.equal(
+    unattested.gitCalls.some(
+      (call) => call.args[0] === 'worktree' && call.args[1] === 'remove',
+    ),
+    false,
+  );
+});
+
+test('released cleanup keeps the worktree and preserved data when lineage changes after preservation', () => {
+  const changedRoute = {
+    exitCode: 0,
+    stdout: JSON.stringify({
+      state: 'unclaimed',
+      reason: 'unclaimed',
+      evidence: {},
+    }),
+  };
+  const h = harness({
+    releasedRoutes: [
+      releasedRoute(),
+      releasedRoute(),
+      releasedRoute(),
+      changedRoute,
+    ],
+    statusResults: [ok('!! node_modules/'), ok('!! node_modules/')],
+  });
+  const report = runF4WorktreeBranchSteps(
+    input({ cleanupMode: 'released-claim', attestNoLiveSession: true }),
+    h.deps,
+  );
+  assert.equal(report.reason, 'released-lineage-unverified');
+  assert.equal(report.failedStep, null);
+  assert.equal(h.renameCalls.length, 2);
+  assert.equal(
+    h.gitCalls.some(
+      (call) => call.args[0] === 'worktree' && call.args[1] === 'remove',
+    ),
+    false,
+  );
+  const heldLineage = report.steps.find(
+    (step) => step.step === 'lineage-check' && step.status === 'held',
+  );
+  assert.match(heldLineage?.detail ?? '', /after preserving node_modules/u);
+});
+
+test('released cleanup reports a leftover branch when ordinary deletion refuses', () => {
+  const h = harness({
+    routes: [
+      {
+        match: (args) => args[0] === 'branch' && args[1] === '-d',
+        result: fail('not fully merged'),
+      },
+      ...healthyRoutes(),
+    ],
+  });
+  const report = runF4WorktreeBranchSteps(
+    input({ cleanupMode: 'released-claim', attestNoLiveSession: true }),
+    h.deps,
+  );
+  assert.equal(report.reason, 'released-branch-remains');
+  assert.match(
+    report.steps.find((step) => step.step === 'branch-remove')?.detail ?? '',
+    /local branch .* remains/u,
+  );
+  assert.equal(
+    h.gitCalls.some(
+      (call) => call.args[0] === 'branch' && call.args[1] === '-D',
+    ),
+    false,
+  );
+});
+
+test('released lock classifier rejects absent and foreign locks', () => {
+  assert.equal(classifyReleasedClaimLock(RELEASED_LOCK_OK, CLAIM, AGENT), true);
+  assert.equal(
+    classifyReleasedClaimLock(
+      { exitCode: 0, stdout: JSON.stringify({ present: false }) },
+      CLAIM,
+      AGENT,
+    ),
+    false,
+  );
 });
 
 test('classifyClaimAssert keeps owner_evidence_required distinct from claim-lost', () => {
