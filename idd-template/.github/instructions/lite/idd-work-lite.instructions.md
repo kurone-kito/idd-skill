@@ -274,10 +274,18 @@ create it ad hoc or improvise worker-side authoring.
 `assessment.correctionApplied: true`, report S, M, canonical paths/count,
 claim ID, raw-body SHA-256, assessment SHA-256 and a unique attempt ID.
 Before posting, revalidate claim, nonce, worktree, lock and tokens; re-read the
-issue and rerun dry-run if the body or assessment changed. Add the complete
-`idd-agent-authored` suffix. Verify the returned comment ID, author and exact
-body; reconcile an uncertain POST by its attempt ID. If unverified, retain the
-claim and stop. Do not edit or roll back the issue body. Then run helper
+issue and rerun dry-run if the body or assessment changed. Add this complete
+`idd-agent-authored` suffix:
+
+```markdown
+<!-- idd-agent-authored: {agent-id} -->
+
+_{agent-id}: IDD automation comment; attribution is self-reported._
+```
+
+Verify the returned comment ID, author and exact body; reconcile an uncertain
+POST by its attempt ID. If unverified, retain the claim and stop. Do not edit
+or roll back the issue body. Then run helper
 `--apply --expected-scope-sha256 <assessment-sha256>`; it recomputes scope and
 checks the same assessment before the gate and again before push. On change,
 stop, reassess and report again. Never inherit the report across a claim
