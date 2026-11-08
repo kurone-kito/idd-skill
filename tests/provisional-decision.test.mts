@@ -3564,6 +3564,41 @@ test('create-if-absent existed uses fresh history and preserves step-6 gate outc
     );
   });
 
+  await t.test(
+    'second plan read preserves a step-6 fix-input record identity',
+    async () => {
+      const {
+        store,
+        request: completionRequest,
+        record,
+      } = await workCompletedPlanFixture();
+      store.historyReads = 0;
+      let concurrent: ProvisionalDecisionHistoryComment | undefined;
+      store.readHistoryHook = (readNumber, current) => {
+        if (readNumber !== 2) return;
+        concurrent = selectionComment(record, '101', '2026-11-03T11:00:06Z');
+        current.history = {
+          ...current.history,
+          comments: [...current.history.comments, concurrent],
+          serverDate: 'Tue, 03 Nov 2026 11:00:07 GMT',
+        };
+        Object.assign(completionRequest, { policyTrusted: false });
+      };
+
+      const result = await runProvisionalDecisionCommand(
+        completionRequest,
+        store,
+        { apply: true },
+      );
+
+      assertRefused(result, 'fix-input');
+      assert.equal(result.recordId, record.recordId);
+      assert.equal(result.commentUrl, concurrent?.url);
+      assert.equal(store.appendCalls, 0);
+      assert.deepEqual(store.labelCalls, []);
+    },
+  );
+
   await t.test('step-6 gate failure stays fix-input', async () => {
     const store = new MemoryStore();
     const writeRequest = request();
