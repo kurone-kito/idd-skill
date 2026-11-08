@@ -651,8 +651,16 @@ function normalizeExplicitCriterion(value: string): string {
 }
 
 function isHumanApprovalCriterion(value: string): boolean {
-  return /\b(?:human|person|operator|maintainer|approv(?:e(?:d|s)?|ing|al|er(?:s)?)|confirm(?:ed|s|ing|ation(?:s)?)?|consent(?:ed|s|ing)|authoriz(?:e(?:d|s)?|ing|ation(?:s)?)|authoris(?:e(?:d|s)?|ing|ation(?:s)?)|sign(?:ed|s|ing)?[ -]off)\b/iu.test(
-    value,
+  return (
+    /\b(?:human|person|operator|maintainer)\b/iu.test(value) ||
+    /\b(?:approve(?:d|s)?|approving|approval|approvers?)\b/iu.test(value) ||
+    /\b(?:confirm(?:ed|s|ing|ation(?:s)?)?|consent(?:ed|s|ing))\b/iu.test(
+      value,
+    ) ||
+    /\b(?:authorize(?:d|s)?|authorizing|authorization(?:s)?|authorise(?:d|s)?|authorising|authorisation(?:s)?)\b/iu.test(
+      value,
+    ) ||
+    /\bsign(?:ed|s|ing)?[ -]off\b/iu.test(value)
   );
 }
 
