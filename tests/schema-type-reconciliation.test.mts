@@ -29,6 +29,7 @@ import type {
   ParsedProviderOutagePark,
 } from '../src/scripts/protocol-helpers.mts';
 import type { ProviderHealthReport } from '../src/scripts/provider-health.mts';
+import type { ProvisionalDecisionCommandResult } from '../src/scripts/provisional-decision.mts';
 import type { ProvisionalDecisionRecord } from '../src/scripts/provisional-decision-state.mts';
 import {
   type CatalogSchemaFile,
@@ -699,6 +700,15 @@ export const provisionalDecisionRecordKeys = [
   'event',
 ] as const satisfies readonly (keyof ProvisionalDecisionRecord)[];
 
+export const provisionalDecisionCommandResultKeys = [
+  'recordId',
+  'commentUrl',
+  'reason',
+  'plan',
+  'state',
+  'action',
+] as const satisfies readonly (keyof ProvisionalDecisionCommandResult)[];
+
 export const onboardingHearingCatalogKeys = [
   'version',
   'items',
@@ -1045,6 +1055,10 @@ const exhaustivenessWitnesses: {
     ProvisionalDecisionRecord,
     (typeof provisionalDecisionRecordKeys)[number]
   >;
+  provisionalDecisionCommandResult: CoversAllKeysOf<
+    ProvisionalDecisionCommandResult,
+    (typeof provisionalDecisionCommandResultKeys)[number]
+  >;
   onboardingHearingCatalog: CoversAllKeysOf<
     OnboardingHearingCatalog,
     (typeof onboardingHearingCatalogKeys)[number]
@@ -1101,6 +1115,7 @@ const exhaustivenessWitnesses: {
   distributionManifest: true,
   distributionSelection: true,
   provisionalDecisionRecord: true,
+  provisionalDecisionCommandResult: true,
   onboardingHearingCatalog: true,
   onboardingHearingTranscript: true,
   policyConfig: true,
@@ -1707,6 +1722,14 @@ const provisionalDecisionRecordFixture = {
     executionCriteria: ['The selected behavior passes its targeted checks.'],
   },
 } satisfies ProvisionalDecisionRecord;
+
+const provisionalDecisionCommandResultFixture = {
+  recordId: null,
+  commentUrl: '',
+  reason: 'The requested input needs correction.',
+  state: 'refused',
+  action: 'fix-input',
+} satisfies ProvisionalDecisionCommandResult;
 
 const onboardingHearingCatalogFixture = {
   version: '1.0.0',
@@ -2400,6 +2423,10 @@ const SCHEMA_TEST_DATA: Record<CatalogSchemaFile, SchemaTestData> = {
   'provisional-decision-record.schema.json': {
     keys: provisionalDecisionRecordKeys,
     fixture: provisionalDecisionRecordFixture,
+  },
+  'provisional-decision.schema.json': {
+    keys: provisionalDecisionCommandResultKeys,
+    fixture: provisionalDecisionCommandResultFixture,
   },
   'onboarding-hearing-catalog.schema.json': {
     keys: onboardingHearingCatalogKeys,

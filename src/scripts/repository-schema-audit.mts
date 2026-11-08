@@ -219,6 +219,11 @@ export const SCHEMA_TYPE_CATALOG = [
     owningModule: 'src/scripts/provisional-decision-state.mts',
   },
   {
+    schemaFile: 'provisional-decision.schema.json',
+    exportedType: 'ProvisionalDecisionCommandResult',
+    owningModule: 'src/scripts/provisional-decision.mts',
+  },
+  {
     schemaFile: 'onboarding-hearing-catalog.schema.json',
     exportedType: 'OnboardingHearingCatalog',
     owningModule: 'src/scripts/onboarding-hearing.mts',
@@ -371,6 +376,14 @@ export const SCHEMA_OUTPUT_COVERAGE: readonly CoverageEntry[] = [
       'scripts/validate-schemas.mjs and tests/schema-validation.test.mts; ' +
       'the replay consumer is covered by ' +
       'tests/provisional-decision-state.test.mts.',
+  },
+  {
+    schema: 'provisional-decision.schema.json',
+    status: 'uncovered',
+    reason:
+      'provisional-decision.schema.json describes the command result union, ' +
+      'not a helper stdout envelope; its state examples are validated by ' +
+      'tests/provisional-decision-result-schema.test.mts.',
   },
   {
     schema: 'worker-report.schema.json',
