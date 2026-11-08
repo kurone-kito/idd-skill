@@ -4070,9 +4070,9 @@ The adopted helper boundaries are intentionally narrow:
 - `force-handoff.mjs` is intentionally operator-facing and interactive;
   it asks for the issue number before any mutation, derives whether PR
   input is required from live open PR state on the active claim branch,
-  prompts for an optional successor agent-id (blank keeps the
-  displaced agent's own id; a warning is shown when the resolved
-  successor still matches it), previews the marker, and posts only
+  prompts for an optional session-qualified successor agent-id (blank
+  keeps the displaced agent's own id only when it passes validation; a
+  warning is shown for a valid same-ID choice), previews the marker, and posts only
   after an explicit `y` confirmation
 - it must fail closed outside a TTY and is not available to autopilot
   or unattended agent contexts
@@ -4738,8 +4738,16 @@ The command never merges, pushes, changes labels, or releases a claim.
   - asks for issue input before any mutation
   - asks for PR input only when a live open PR exists on the active
     claim branch and PR-scoped evidence is required
-  - asks for an optional successor agent-id (blank keeps the displaced
-    agent's own id)
+  - asks for an optional successor agent-id; blank selects the displaced
+    agent's own id, subject to the same validation as an explicit ID
+  - validates that choice with `claim-lock`'s existing session-qualified
+    predicate before generating a plan or marker preview: `<family>-<suffix>`,
+    with no whitespace and a run of at least eight consecutive letters or
+    digits after the first hyphen; an invalid explicit or inherited ID
+    prompts again instead of reaching confirmation
+  - accepts an intentional same-ID choice when it passes that predicate
+  - accepts `release` through the existing unclaim path, without successor-ID
+    validation, including for a legacy claim whose ID fails the predicate
   - prints the resolved successor IDs and marker preview -- with a
     warning when the resolved successor still matches the displaced
     agent-id -- before the final confirmation
@@ -4759,13 +4767,28 @@ The command never merges, pushes, changes labels, or releases a claim.
   - render or inspect canonical forced-handoff marker payloads
   - support audited debugging or manual review of the exact body
   - stay distinct from the interactive operator facade above
+- Successor-ID validation: both the ordinary marker path and `--plan` apply
+  the same session-qualified predicate before rendering. An invalid
+  `--new-agent-id`, or an invalid inherited default in `--plan`, exits non-zero
+  with empty stdout, without producing a marker body or plan preview. A valid
+  intentional same-ID choice remains allowed.
 - Preflight: with an open PR on the claim branch, a non-plan run needs
   `--pr <number>`, and that PR must be open. Before it renders, the run
   refuses (non-zero exit, empty stdout) unless every copy that the
-  facade's preflight reads confirms `human-gated`. `--plan` reports the
+  facade's preflight reads confirms `human-gated`. With a valid successor ID,
+  `--plan` reports the
   same check as a read-only `preflight` field, for the PR that `--pr`
   names, or for every open PR's base when no PR is named. It omits
   `markerBody` when the check would refuse, and it still exits `0`.
+
+Successor-ID validation checks the ID's form; it does not authenticate the
+live session supplying it. The existing human-gated policy, authorized actor,
+claim, nonce, worktree, lock, and generated-token checks still apply.
+Observed 2026-11-06 in issue `#4893` (PR `#5031`): a forced handoff named a
+successor ID that Resume rejected as not session-qualified, while the local
+lock still identified the displaced claim and successor tokens were absent.
+The writer validation shipped in issue `#5079` prevents that invalid-ID
+preview; it does not repair local ownership evidence.
 
 The references in this subsection apply only when a repository
 explicitly installs the matching helpers and records
@@ -7547,13 +7570,22 @@ means restart E1; do not include a later CI pass in the watermark.
   `occupancy_probe` (`absent`, `occupied` or `unreadable`) and
   `occupancy_paths_match` (boolean). It is emitted whenever `--claim-id`
   matches the active claim and the occupancy probe is not `absent`,
-  including a `disputed` nonce route. The four booleans short-circuit: the
+  including a `disputed` nonce route. In the ordinary owner check, the four
+  booleans short-circuit: the
   first `false` makes every later boolean `null` (not evaluated).
   `occupancy_probe` is always the observed status, never `null`, and
   `occupancy_paths_match` is `null` unless all four booleans are `true` and
   the probe is `occupied`. On an `owner_evidence_required` verdict the helper
   also pushes one `warnings[]` line, `owner evidence required: first failed
   proof is <field>` (with the probe status appended for `occupancy_probe`).
+  The bounded forced-handoff recovery added in issue `#5045` can also emit
+  `rebase_identity`: a structured proof with `passed`, worktree/backend/ref
+  fields, individual `comparisons`, and `reason`. A passed proof supplies
+  detached-HEAD worktree identity; the remaining lock, token, agent, nonce,
+  and occupancy checks stay necessary. See
+  [Forced-Handoff Recovery](idd-resume-detail.md#fh--forced-handoff-recovery)
+  before using that exception; ordinary work requires branch-attached
+  ownership again.
 - `--agent-id` (kurone-kito/idd-skill#4936, #5000): pass this session's
   persisted identity on every owner assertion. A session-qualified active
   claim requires an exact match; omission or mismatch routes as another
@@ -7642,17 +7674,43 @@ means restart E1; do not include a later CI pass in the watermark.
   no-op for consistency with sibling helpers such as `live-status-digest`,
   since this helper only ever emits JSON. Any other value fails with
   `--format must be json` instead of `unknown argument: --format`.
-- `evidence.forced_handoff` (kurone-kito/idd-skill#2178): populated on
-  **any** call, including a bare `--issue` call with no `--claim-id`,
-  whenever a trusted, rule-7-valid `forced-handoff` marker's successor
-  pair (`{old_agent_id, old_claim_id, new_agent_id, new_claim_id,
-  forced_by, timestamp}`, `timestamp` the transferring comment's GitHub
-  `created_at`) matches the resolved active claim; `null` otherwise. A
-  bare `--issue` call whose `evidence.forced_handoff` is non-null but
-  whose `state`/`action` still reads `non_inheritable`/`stop` should
-  retry with `--claim-id <evidence.forced_handoff.new_claim_id>` to
-  check adoption eligibility — that second call is what can turn the
-  verdict into `already_owned`/`keep`.
+- `evidence.forced_handoff` (kurone-kito/idd-skill#2178, #5078): populated on
+  **any** call, including a bare `--issue` call with no `--claim-id`, when
+  the latest applied, trusted, rule-7-valid `forced-handoff` transition ends
+  at the resolved active claim and the lookup-failure override below does
+  not apply; `null` otherwise. The override (issue `#3276`, maintainer decision
+  2026-09-24) applies when an `issue-only` handoff is blocked solely by a
+  failed linked-PR lookup, `--claim-id` names its old or new claim, and its
+  old claim remains active. The result is `disputed`/`stop` with reason
+  `forced-handoff-linked-pr-lookup-failed`; the entire
+  `evidence.forced_handoff` is suppressed to `null`, even if earlier accepted
+  handoff ancestry ends at that active claim. Outside that override, its
+  existing top-level transition fields describe the latest handoff. The additive
+  `verified_chain` array describes the accepted, uninterrupted lineage:
+  - Entries follow the claim reducer's accepted transition order, oldest
+    first, ending with the latest applied handoff. Each entry contains
+    `old_agent_id`, `old_claim_id`, `new_agent_id`, `new_claim_id`, `branch`,
+    `linked_pr` (the marker's PR reference, or `null`), `context_scope`,
+    `forced_by`, and `timestamp`. These are also the top-level transition
+    fields. `timestamp` is the transferring comment's GitHub `created_at`,
+    not its embedded marker time; it is `null` when that metadata is
+    unavailable.
+  - Only applied handoffs contribute entries. Ignored markers add none;
+    same-claim heartbeats preserve the chain. A release or an independent
+    claim transition clears it, so a later accepted handoff starts a new
+    chain rather than joining unrelated claim histories.
+  - The array proves accepted marker ancestry. It does not prove process
+    liveness, authenticate the session supplying a successor ID, or supply
+    standalone ownership or takeover authority. Current claim, agent,
+    nonce, worktree, lock, and generated-token checks remain required (see
+    the observed issue `#4893` incident under
+    [Operator forced-handoff helpers](#operator-forced-handoff-helpers)).
+    A bare `--issue` call whose `evidence.forced_handoff` is non-null but whose
+    `state`/`action` still reads `non_inheritable`/`stop` can be retried with
+    `--claim-id <evidence.forced_handoff.new_claim_id>` to check adoption
+    eligibility. That read is an eligibility check, not permission to adopt a
+    token learned only from a marker; follow the forced-handoff recovery
+    procedure and require the independent owner evidence.
 
 - Step 3 route command:
   `node scripts/resume-route-selection.mjs --issue <issue-number>`
