@@ -552,8 +552,11 @@ test('apply: the order is backup, read back, then deletion', () => {
   const create = at(
     new RegExp(`update-ref refs/idd-b1/${ISSUE}/${tip} ${tip} $`),
   );
-  const readBack = at(
-    new RegExp(`rev-parse --verify refs/idd-b1/${ISSUE}/${tip}$`),
+  // The read-back lists the ref as a ref (a no-follow read), after the create.
+  const readBack = calls.findIndex(
+    (call, index) =>
+      index > create &&
+      new RegExp(`for-each-ref .*refs/idd-b1/${ISSUE}$`).test(call),
   );
   const remove = at(
     new RegExp(`update-ref --no-deref -d refs/heads/${BRANCH} ${tip}$`),
@@ -985,13 +988,20 @@ test('failure: the backup ref reads back wrong, and the branch stays', () => {
   const fixture = fresh();
   const tip = leftoverBranch(fixture);
   const backup = `refs/idd-b1/${ISSUE}/${tip}`;
+  let created = false;
   const result = exercise(fixture, {
-    hook: (_f, _file, args) =>
-      args.at(-1) === backup &&
-      args.includes('--verify') &&
-      !args.includes('--quiet')
-        ? okResult(`${'a'.repeat(40)}\n`)
-        : undefined,
+    hook: (_f, _file, args) => {
+      if (isGitCommand(args, 'update-ref', backup) && !args.includes('-d')) {
+        created = true;
+        return undefined;
+      }
+      // The read-back of the ref after its creation sees another commit.
+      return created &&
+        isGitCommand(args, 'for-each-ref') &&
+        args.at(-1) === `refs/idd-b1/${ISSUE}`
+        ? okResult(`${backup}\t${'a'.repeat(40)}\t\n`)
+        : undefined;
+    },
   });
   assert.equal(result.report.outcome, 'failed');
   assert.match(result.failure?.detail ?? '', /did not read back/);
@@ -2402,4 +2412,43 @@ test('a section removal that reports failure but removed the section is recorded
   });
   assert.equal(result.report.outcome, 'preserved');
   assert.deepEqual(result.report.removedConfigSections, [`branch.${BRANCH}`]);
+});
+
+test('failure: a backup ref swapped for a symbolic ref after its creation is not trusted', () => {
+  const fixture = fresh();
+  const tip = leftoverBranch(fixture);
+  const backup = `refs/idd-b1/${ISSUE}/${tip}`;
+  const result = exercise(fixture, {
+    hook: (f, file, args) => {
+      if (isGitCommand(args, 'update-ref', backup) && !args.includes('-d')) {
+        const real = REAL_RUN(file, args);
+        // After the create, an outside writer replaces the plain ref with a
+        // symbolic ref that still resolves to the tip.
+        git(f.primary, ['update-ref', '-d', backup]);
+        git(f.primary, ['symbolic-ref', backup, `refs/heads/${BRANCH}`]);
+        return real;
+      }
+      return undefined;
+    },
+  });
+  assert.equal(result.report.outcome, 'failed');
+  assert.match(
+    result.failure?.detail ?? '',
+    /did not read back as a plain ref/,
+  );
+  assert.equal(
+    git(fixture.primary, ['rev-parse', `refs/heads/${BRANCH}`]),
+    tip,
+    'the branch is not deleted',
+  );
+  assert.deepEqual(
+    result.report.actions.map((action) => action.id),
+    ['backup-ref'],
+  );
+  assert.equal(
+    result.calls.some((call) =>
+      /update-ref --no-deref -d refs\/heads/.test(call),
+    ),
+    false,
+  );
 });

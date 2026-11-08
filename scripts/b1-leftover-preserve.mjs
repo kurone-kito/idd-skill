@@ -1080,11 +1080,19 @@ function preserveBranch(ctx, plan) {
     subject: branch,
     detail: `backup ref ${backupRef} ${reused ? 'reused' : 'written'} for branch ${branch} (tip ${tip})`,
   });
-  const readBack = git(ctx, ['rev-parse', '--verify', backupRef]);
-  if (readBack.status !== 0 || readBack.stdout.trim() !== tip) {
+  // The read-back is the last check before the deletion, and it reads the ref
+  // as a ref, not as a revision: `rev-parse` follows a symbolic ref, so a
+  // symbolic ref swapped in after the compatibility check would read back as
+  // the tip while no plain ref held the commit.
+  const readBack = inspectBackupRef(ctx, backupRef);
+  if (
+    readBack.kind !== 'present' ||
+    readBack.symref !== '' ||
+    readBack.oid !== tip
+  ) {
     return failed(
       report,
-      `the backup ref ${backupRef} did not read back as ${tip}; the ref stays and the branch is untouched`,
+      `the backup ref ${backupRef} did not read back as a plain ref at ${tip}${readBack.kind === 'refused' ? ` (${readBack.detail})` : ''}; the ref stays and the branch is untouched`,
     );
   }
   // `--no-deref`: never follow a symbolic ref to its target. The ref is read
