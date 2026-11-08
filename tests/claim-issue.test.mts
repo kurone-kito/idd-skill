@@ -15,6 +15,14 @@ import { basename, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
+import type {
+  AutoDecisionRecord,
+  ConfirmationIssueRead,
+} from '../src/scripts/auto-decision-records.mts';
+import {
+  type B1Filesystem,
+  createDefaultB1PreservePorts,
+} from '../src/scripts/b1-leftover-preserve.mts';
 import { computeBranchName } from '../src/scripts/branch-name.mts';
 import {
   type ClaimApplyReport,
@@ -34,6 +42,7 @@ import {
   releaseCloneLock,
 } from '../src/scripts/clone-lock.mts';
 import type { HelperCliResult } from '../src/scripts/helper-cli-runner.mts';
+import type { TrustedAutoDecideReport } from '../src/scripts/idd-config.mts';
 import {
   inspectLocalWorktreeBranchPrefix,
   type LocalWorktreeInspection,
@@ -1731,8 +1740,32 @@ interface ApplyScenario {
   collisionAfterPrecheck?: boolean;
   /** A local worktree on issue/<n>-* appears after the pre-check's local scan. */
   localCollisionAfterPrecheck?: boolean;
+  /**
+   * A local worktree on issue/<n>-* appears after the second local scan: with
+   * `--preserve-b1-leftovers` that is the preservation step's own scan, so
+   * only the rescan under the lock sees it.
+   */
+  localCollisionAfterPreservation?: boolean;
   /** The clone lock's release fails. */
   releaseFails?: boolean;
+  /**
+   * `--preserve-b1-leftovers` (issue 4970): wires the preservation ports. The
+   * trusted read, the confirmation issue, and the filesystem are stubs; git and
+   * the clone are real.
+   */
+  b1?: B1Scenario;
+}
+
+/** The inputs of the preservation ports; every field has a passing default. */
+interface B1Scenario {
+  trusted?: TrustedAutoDecideReport;
+  /** The confirmation issue the record reader returns. */
+  confirmation?: (fixture: ApplyFixture) => ConfirmationIssueRead;
+  /** Heads of the open pull requests `gh pr list` reports. */
+  prHeads?: string[];
+  fs?: (fixture: ApplyFixture) => Partial<B1Filesystem>;
+  /** The released claim the fresh-claim gate names after the pre-check. */
+  released?: { branch: string | null };
 }
 
 interface ApplyRun {
@@ -1838,6 +1871,76 @@ function valueAfter(args: readonly string[], flag: string): string | undefined {
   return index === -1 ? undefined : args[index + 1];
 }
 
+/** The confirmation issue number the preservation tests name. */
+const CONFIRMATION = 5300;
+const B1_TRUSTED: TrustedAutoDecideReport = {
+  status: 'readable',
+  source: 'repository',
+  ref: 'main',
+  master: 'enabled',
+  classes: {
+    decisionIssue: 'class-off',
+    runtimeQuestion: 'class-off',
+    authoringChoice: 'class-off',
+    worktreeRemnant: 'class-off',
+    b1Leftover: 'enabled',
+  },
+  confirmationLabelName: 'status:needs-confirmation',
+};
+
+function b1Record(decision: string, subject: string): AutoDecisionRecord {
+  return {
+    issue: CONFIRMATION,
+    from: 'body',
+    class: 'b1Leftover',
+    source: `${SLUG}#${ISSUE}`,
+    claim: 'none',
+    set: 'none',
+    decision,
+    subject,
+    locationNote: false,
+    failureNote: false,
+  };
+}
+
+function b1Confirmation(
+  records: readonly AutoDecisionRecord[],
+): ConfirmationIssueRead {
+  return {
+    status: 'readable',
+    number: CONFIRMATION,
+    state: 'open',
+    confirmationLabel: true,
+    authoringLabel: false,
+    bodyRecordCounts: true,
+    bodyRecordReason: null,
+    records: [...records],
+    voidedDecisions: [],
+    conflictingDecisions: [],
+    notes: [],
+  };
+}
+
+function b1PortsFor(fixture: ApplyFixture, scenario: B1Scenario) {
+  const state = join(fixture.parent, 'state');
+  if (!existsSync(state)) {
+    mkdirSync(state, { mode: 0o700 });
+  }
+  const real = createDefaultB1PreservePorts({
+    env: { XDG_STATE_HOME: state },
+    platform: process.platform,
+    home: fixture.parent,
+    now: () => NOW,
+  });
+  return {
+    readTrusted: () => scenario.trusted ?? B1_TRUSTED,
+    readConfirmation: () =>
+      scenario.confirmation?.(fixture) ??
+      b1Confirmation([b1Record('d1', BRANCH)]),
+    fs: { ...real.fs, ...scenario.fs?.(fixture) },
+  };
+}
+
 function runApply(
   fixture: ApplyFixture,
   scenario: ApplyScenario = {},
@@ -1941,6 +2044,16 @@ function runApply(
     if (args[0] === 'repo' && args[1] === 'view') {
       return ok('main\n');
     }
+    if (args[0] === 'pr' && args[1] === 'list') {
+      return ok(
+        JSON.stringify(
+          (scenario.b1?.prHeads ?? []).map((head, index) => ({
+            number: index + 1,
+            headRefName: head,
+          })),
+        ),
+      );
+    }
     throw new Error(`unexpected gh call: ${args.join(' ')}`);
   };
 
@@ -1993,6 +2106,7 @@ function runApply(
   };
 
   let approvalCalls = 0;
+  let gateCalls = 0;
   const child = (script: string, rest: string[]): CommandResult => {
     if (script === 'claim-approval-gate.mjs') {
       approvalCalls += 1;
@@ -2018,6 +2132,23 @@ function runApply(
       }
       if (rest.includes('--own-worktree')) {
         return scenario.ownGate ?? CLAIMABLE;
+      }
+      gateCalls += 1;
+      if (scenario.b1?.released !== undefined && gateCalls > 1) {
+        const base = JSON.parse(CLAIMABLE.stdout) as Record<string, unknown>;
+        return ok(
+          JSON.stringify({
+            ...base,
+            evidence: {
+              released_claim: {
+                agent_id: 'claude-old',
+                claim_id: 'old-claim',
+                created_at: '2026-10-01T00:00:00Z',
+                branch: scenario.b1.released.branch,
+              },
+            },
+          }),
+        );
       }
       return CLAIMABLE;
     }
@@ -2161,7 +2292,8 @@ function runApply(
     },
     inspectLocalWorktrees: () => {
       localCalls += 1;
-      return scenario.localCollisionAfterPrecheck && localCalls > 1
+      return (scenario.localCollisionAfterPrecheck && localCalls > 1) ||
+        (scenario.localCollisionAfterPreservation && localCalls > 2)
         ? {
             status: 'occupied',
             paths: [join(fixture.parent, `${REPO}.issue-${ISSUE}-other-slug`)],
@@ -2173,6 +2305,9 @@ function runApply(
     now: () => NOW,
     mintClaimId: () => CLAIM_ID,
     mintNonce: () => NONCE,
+    ...(scenario.b1 === undefined
+      ? {}
+      : { b1Preserve: b1PortsFor(fixture, scenario.b1) }),
   };
   let stdout = '';
   let stderr = '';
@@ -3629,4 +3764,659 @@ test('a local worktree that appears after the pre-check stops the run before any
     );
     assert.equal(existsSync(fixture.worktree), false);
   });
+});
+
+// ---------------------------------------------------------------------------
+// --preserve-b1-leftovers (issue 4970, roadmap 4955). The primary clone and its
+// git are real; the trusted read, the confirmation issue, and `gh` are stubs.
+// ---------------------------------------------------------------------------
+
+const CONFIRMATION_REF = `${SLUG}#${CONFIRMATION}`;
+const PRESERVE_ARGS = [
+  ...APPLY_ARGS,
+  '--preserve-b1-leftovers',
+  '--confirmation',
+  CONFIRMATION_REF,
+  '--decision',
+  'd1',
+];
+const DRY_ARGS = [
+  '--issue',
+  String(ISSUE),
+  '--preserve-b1-leftovers',
+  '--confirmation',
+  CONFIRMATION_REF,
+  '--decision',
+  'd1',
+];
+/** Every command that would change a ref, a configuration, the clone, or a lock. */
+const STATE_CHANGING =
+  /update-ref|--remove-section|worktree add|\bfetch\b|merge |lock:acquire|lock:release/;
+
+/** A commit no branch holds, so `git branch -d` refuses the branch. */
+function unmergedBranch(primary: string, name = BRANCH): string {
+  const tree = gitIn(primary, ['rev-parse', 'HEAD^{tree}']).trim();
+  const commit = gitIn(primary, [
+    '-c',
+    'user.name=Test',
+    '-c',
+    'user.email=test@example.com',
+    'commit-tree',
+    tree,
+    '-p',
+    'HEAD',
+    '-m',
+    'leftover work',
+  ]).trim();
+  gitIn(primary, ['update-ref', `refs/heads/${name}`, commit]);
+  return commit;
+}
+
+function refsOf(primary: string): string {
+  return gitIn(primary, ['for-each-ref', '--format=%(refname) %(objectname)']);
+}
+
+function stepOf(report: ClaimApplyReport, id: string) {
+  return report.steps.find((entry) => entry.id === id);
+}
+
+const preserveUsageRows: [string, string[], RegExp][] = [
+  [
+    '--confirmation without the flag',
+    ['--issue', String(ISSUE), '--confirmation', CONFIRMATION_REF],
+    /need --preserve-b1-leftovers/,
+  ],
+  [
+    '--decision without the flag',
+    ['--issue', String(ISSUE), '--decision', 'd1'],
+    /need --preserve-b1-leftovers/,
+  ],
+  [
+    '--decision without --confirmation',
+    ['--issue', String(ISSUE), '--preserve-b1-leftovers', '--decision', 'd1'],
+    /--decision needs --confirmation/,
+  ],
+  [
+    'a malformed --confirmation',
+    [
+      '--issue',
+      String(ISSUE),
+      '--preserve-b1-leftovers',
+      '--confirmation',
+      'x',
+    ],
+    /--confirmation must be <owner>\/<repo>#<number>/,
+  ],
+  [
+    'a --decision with a semicolon',
+    [...DRY_ARGS.slice(0, 5), '--decision', 'a;b'],
+    /--decision takes one token/,
+  ],
+  [
+    'a --confirmation of another repository',
+    [
+      '--issue',
+      String(ISSUE),
+      '--preserve-b1-leftovers',
+      '--confirmation',
+      `other/repo#${CONFIRMATION}`,
+    ],
+    /of this repository/,
+  ],
+  [
+    'a --confirmation naming the claimed issue',
+    [
+      '--issue',
+      String(ISSUE),
+      '--preserve-b1-leftovers',
+      '--confirmation',
+      `${SLUG}#${ISSUE}`,
+    ],
+    /other than the claimed issue/,
+  ],
+];
+
+for (const [name, argv, message] of preserveUsageRows) {
+  test(`a usage error: ${name}`, () => {
+    withApplyFixture((fixture) => {
+      unmergedBranch(fixture.primary);
+      const before = refsOf(fixture.primary);
+      const run = runApply(fixture, { b1: {} }, argv);
+      assert.equal(exitOf(run.result), 2);
+      assert.equal(run.stdout, '');
+      assert.match(run.stderr, message);
+      assert.equal(refsOf(fixture.primary), before);
+      assert.equal(
+        run.log.some((entry) => STATE_CHANGING.test(entry)),
+        false,
+      );
+    });
+  });
+}
+
+test('the help text documents the flags and no longer says the helper deletes nothing', () => {
+  const record = makeRun();
+  let stdout = '';
+  const code = runClaimIssue(['--help'], record.deps, {
+    stdout: (text) => {
+      stdout += text;
+    },
+    stderr: () => undefined,
+  });
+  assert.equal(code, 0);
+  for (const needle of [
+    '--preserve-b1-leftovers',
+    '--confirmation <owner>/<repo>#<number>',
+    '--decision <id>',
+    'b1-preserve-failed',
+  ]) {
+    assert.ok(stdout.includes(needle), needle);
+  }
+  assert.doesNotMatch(stdout, /The helper deletes nothing\./);
+});
+
+test('without the flag the leftover-branch and path-occupied stops carry one static sentence', () => {
+  withApplyFixture((fixture) => {
+    unmergedBranch(fixture.primary);
+    const branch = runApply(fixture);
+    const report = assertStopped(branch, 'b1-cleanup-needed');
+    assert.match(
+      report.nextAction ?? '',
+      /If the `b1Leftover` auto-decide class is enabled, follow the auto-decide procedure and run `claim-issue --preserve-b1-leftovers`\./,
+    );
+    assert.equal(report.b1Leftovers, undefined);
+    // Nothing new is read: no pull request list, no remote listing, no trust read.
+    assert.equal(
+      branch.log.some((entry) =>
+        /pr list|ls-remote origin|update-ref/.test(entry),
+      ),
+      false,
+    );
+    assert.equal(branchExists(fixture.primary), true);
+
+    writeFileSync(fixture.worktree, 'occupied\n');
+    gitIn(fixture.primary, ['branch', '-D', BRANCH]);
+    const path = runApply(fixture);
+    assert.match(
+      assertStopped(path, 'path-occupied').nextAction ?? '',
+      /run `claim-issue --preserve-b1-leftovers`/,
+    );
+  });
+});
+
+test('the prunable-entry stop keeps its text', () => {
+  withApplyFixture((fixture) => {
+    const stale = join(fixture.parent, 'stale');
+    gitIn(fixture.primary, [
+      'worktree',
+      'add',
+      '--quiet',
+      '-b',
+      BRANCH,
+      stale,
+      'main',
+    ]);
+    rmSync(stale, { recursive: true, force: true });
+    const report = assertStopped(runApply(fixture), 'b1-cleanup-needed');
+    assert.doesNotMatch(report.nextAction ?? '', /auto-decide/);
+    assert.match(report.nextAction ?? '', /This helper removed nothing\.$/);
+  });
+});
+
+test('a dry run with the flag lists the leftover and changes nothing', () => {
+  withApplyFixture((fixture) => {
+    const tip = unmergedBranch(fixture.primary);
+    const before = refsOf(fixture.primary);
+    const run = runApply(fixture, { b1: {} }, DRY_ARGS);
+    assert.equal(exitOf(run.result), 0, run.stderr);
+    const b1 = (run.report as ClaimIssueReport).b1Leftovers;
+    assert.ok(b1);
+    assert.equal(b1.mode, 'dry-run');
+    assert.equal(b1.outcome, 'ready');
+    assert.deepEqual(
+      b1.subjects.map((subject) => [
+        subject.kind,
+        subject.subject,
+        subject.decision,
+      ]),
+      [['branch', BRANCH, 'd1']],
+    );
+    assert.equal(
+      b1.subjects[0]?.preconditions.every((entry) => entry.status === 'met'),
+      true,
+    );
+    assert.equal(refsOf(fixture.primary), before);
+    assert.equal(
+      gitIn(fixture.primary, ['rev-parse', `refs/heads/${BRANCH}`]).trim(),
+      tip,
+    );
+    assert.equal(
+      run.log.some((entry) => STATE_CHANGING.test(entry)),
+      false,
+      run.log.join('\n'),
+    );
+    assert.equal(existsSync(join(fixture.parent, 'state', 'idd-skill')), false);
+  });
+});
+
+test('a dry run without --confirmation shows the record unmet and still exits by the pre-checks', () => {
+  withApplyFixture((fixture) => {
+    unmergedBranch(fixture.primary);
+    const run = runApply(fixture, { b1: {} }, [
+      '--issue',
+      String(ISSUE),
+      '--preserve-b1-leftovers',
+    ]);
+    assert.equal(exitOf(run.result), 0, run.stderr);
+    const b1 = (run.report as ClaimIssueReport).b1Leftovers;
+    assert.equal(b1?.outcome, 'unmet-preconditions');
+    assert.equal(
+      b1?.common.find((entry) => entry.id === 'record')?.status,
+      'unmet',
+    );
+    assert.equal(branchExists(fixture.primary), true);
+  });
+});
+
+test('a dry run adds no b1Leftovers when a pre-check fails', () => {
+  withApplyFixture((fixture) => {
+    unmergedBranch(fixture.primary);
+    const run = runApply(fixture, { b1: {}, assigned: true }, DRY_ARGS);
+    assert.equal(exitOf(run.result), 1);
+    assert.equal((run.report as ClaimIssueReport).b1Leftovers, undefined);
+  });
+});
+
+test('a dry run without the ports reports the inputs unavailable', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture, {}, DRY_ARGS);
+    assert.equal(exitOf(run.result), 0, run.stderr);
+    const b1 = (run.report as ClaimIssueReport).b1Leftovers;
+    assert.equal(b1?.outcome, 'unmet-preconditions');
+    assert.equal(b1?.common[0]?.id, 'dry-run-inputs');
+  });
+});
+
+test('--apply without the ports stops before any change', () => {
+  withApplyFixture((fixture) => {
+    unmergedBranch(fixture.primary);
+    const run = runApply(fixture, {}, PRESERVE_ARGS);
+    const report = assertStopped(run, 'precheck-unavailable');
+    assert.equal(stepOf(report, 'b1-preserve')?.status, 'failed');
+    assert.equal(branchExists(fixture.primary), true);
+  });
+});
+
+test("--apply without --confirmation refuses, and today's b1-cleanup-needed stop follows", () => {
+  withApplyFixture((fixture) => {
+    unmergedBranch(fixture.primary);
+    const before = refsOf(fixture.primary);
+    const run = runApply(fixture, { b1: {} }, [
+      ...APPLY_ARGS,
+      '--preserve-b1-leftovers',
+    ]);
+    const report = assertStopped(run, 'b1-cleanup-needed');
+    assert.equal(report.b1Leftovers?.outcome, 'unmet-preconditions');
+    assert.match(stepOf(report, 'b1-preserve')?.detail ?? '', /not preserved/);
+    assert.equal(stepOf(report, 'b1-preserve')?.status, 'passed');
+    assert.equal(refsOf(fixture.primary), before);
+    assert.equal(
+      run.log.some((entry) => /update-ref|--remove-section/.test(entry)),
+      false,
+    );
+    assert.equal(checkCloneLock(fixture.primary).present, false);
+  });
+});
+
+test("--apply refuses and keeps today's route when a precondition is unmet", () => {
+  const rows: [string, B1Scenario | undefined, string][] = [
+    [
+      'the class is off',
+      {
+        trusted: {
+          ...B1_TRUSTED,
+          classes: { ...B1_TRUSTED.classes, b1Leftover: 'class-off' },
+        },
+      },
+      'class-enabled',
+    ],
+    [
+      "the branch is a released claim's",
+      { released: { branch: BRANCH } },
+      'released-claim',
+    ],
+    ['an open pull request has the head', { prHeads: [BRANCH] }, 'no-open-pr'],
+    [
+      'the record names another subject',
+      { confirmation: () => b1Confirmation([b1Record('d1', 'issue/other')]) },
+      'decision-pairing',
+    ],
+  ];
+  for (const [name, b1, unmetId] of rows) {
+    withApplyFixture((fixture) => {
+      unmergedBranch(fixture.primary);
+      const before = refsOf(fixture.primary);
+      const run = runApply(fixture, { b1: b1 ?? {} }, PRESERVE_ARGS);
+      const report = assertStopped(run, 'b1-cleanup-needed');
+      assert.equal(report.b1Leftovers?.outcome, 'unmet-preconditions', name);
+      assert.match(
+        stepOf(report, 'b1-preserve')?.detail ?? '',
+        new RegExp(unmetId),
+        name,
+      );
+      assert.equal(refsOf(fixture.primary), before, name);
+      assert.equal(
+        run.log.some((entry) => /update-ref|--remove-section/.test(entry)),
+        false,
+        name,
+      );
+    });
+  }
+});
+
+test('--apply preserves a leftover branch under the clone lock, then claims', () => {
+  withApplyFixture((fixture) => {
+    const tip = unmergedBranch(fixture.primary);
+    gitIn(fixture.primary, ['config', `branch.${BRANCH}.remote`, 'origin']);
+    const run = runApply(fixture, { b1: {} }, PRESERVE_ARGS);
+    assert.equal(exitOf(run.result), 0, run.stderr);
+    const report = run.report as ClaimApplyReport;
+    assert.equal(report.eligible, true);
+    assert.equal(report.b1Leftovers?.outcome, 'preserved');
+    const backup = `refs/idd-b1/${ISSUE}/${tip}`;
+    assert.deepEqual(report.b1Leftovers?.backupRefs, [backup]);
+    assert.equal(gitIn(fixture.primary, ['rev-parse', backup]).trim(), tip);
+    // worktree add created the branch again, from origin/main, not the old tip.
+    assert.notEqual(
+      gitIn(fixture.primary, ['rev-parse', `refs/heads/${BRANCH}`]).trim(),
+      tip,
+    );
+    assert.equal(
+      spawnSync('git', ['config', '--get-regexp', '^branch\\.issue/'], {
+        cwd: fixture.primary,
+        env: fixtureEnv(),
+      }).status,
+      1,
+      'a recreated branch inherits no configuration',
+    );
+    assert.match(report.nextAction ?? '', new RegExp(backup));
+    assert.deepEqual(
+      report.steps
+        .map((entry) => entry.id)
+        .filter((id) =>
+          [
+            'development-branch',
+            'b1-preserve',
+            'b1-leftovers',
+            'worktree-add',
+          ].includes(id),
+        ),
+      ['development-branch', 'b1-preserve', 'b1-leftovers', 'worktree-add'],
+    );
+    const at = (needle: string): number =>
+      run.log.findIndex((entry) => entry.includes(needle));
+    const order = [
+      'lock:acquire',
+      `update-ref ${backup}`,
+      `update-ref --no-deref -d refs/heads/${BRANCH}`,
+      'worktree add --no-track',
+      'lock:release',
+    ].map(at);
+    assert.equal(order.includes(-1), false, run.log.join('\n'));
+    assert.deepEqual(
+      order,
+      [...order].sort((left, right) => left - right),
+    );
+    for (const needle of [
+      `update-ref ${backup}`,
+      `update-ref --no-deref -d refs/heads/${BRANCH}`,
+    ]) {
+      assert.match(run.log[at(needle)] ?? '', /\[lock held\]/, needle);
+    }
+    // The gate ran again under the lock: before the preservation, after the lock.
+    const gates = run.log
+      .map((entry, index) => [entry, index] as const)
+      .filter(
+        ([entry]) =>
+          entry.startsWith('resume-claim-routing.mjs ') &&
+          entry.includes('--fresh-claim-gate') &&
+          !entry.includes('--own-worktree'),
+      );
+    assert.equal(gates.length, 2);
+    assert.ok((gates[1]?.[1] ?? -1) > at('lock:acquire'));
+    assert.ok((gates[1]?.[1] ?? -1) < at(`update-ref ${backup}`));
+  });
+});
+
+test('--apply preserves a leftover path, then creates the worktree there', {
+  skip: process.platform === 'win32',
+}, () => {
+  withApplyFixture((fixture) => {
+    mkdirSync(fixture.worktree);
+    writeFileSync(join(fixture.worktree, 'work.txt'), 'precious\n');
+    const run = runApply(
+      fixture,
+      {
+        b1: {
+          confirmation: () =>
+            b1Confirmation([b1Record('d1', fixture.worktree)]),
+        },
+      },
+      PRESERVE_ARGS,
+    );
+    assert.equal(exitOf(run.result), 0, run.stderr);
+    const report = run.report as ClaimApplyReport;
+    const destinations = report.b1Leftovers?.destinations ?? [];
+    assert.equal(destinations.length, 1);
+    const moved = destinations[0]?.to ?? '';
+    assert.match(
+      moved,
+      /b1-preserved\/4372-20261016T010203Z\/idd-skill\.issue-4372/,
+    );
+    assert.equal(readFileSync(join(moved, 'work.txt'), 'utf8'), 'precious\n');
+    assert.equal(existsSync(join(fixture.worktree, 'work.txt')), false);
+    assert.equal(existsSync(join(fixture.worktree, 'seed.txt')), true);
+    assert.match(
+      report.nextAction ?? '',
+      new RegExp(moved.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+    );
+  });
+});
+
+test('after a preservation, a later stop names the backup ref and drops the nothing-removed sentences', () => {
+  withApplyFixture((fixture) => {
+    const tip = unmergedBranch(fixture.primary);
+    const run = runApply(
+      fixture,
+      { b1: {}, failWorktreeAdd: true },
+      PRESERVE_ARGS,
+    );
+    const report = assertStopped(run, 'worktree-add-failed');
+    const backup = `refs/idd-b1/${ISSUE}/${tip}`;
+    assert.match(report.nextAction ?? '', new RegExp(backup));
+    assert.doesNotMatch(
+      report.nextAction ?? '',
+      /removed nothing|created nothing|Nothing was created|created no worktree/i,
+    );
+    const failedStep = report.steps.find((entry) => entry.status === 'failed');
+    assert.match(failedStep?.nextAction ?? '', new RegExp(backup));
+    assert.doesNotMatch(failedStep?.nextAction ?? '', /removed nothing/);
+    assert.deepEqual(report.b1Leftovers?.backupRefs, [backup]);
+    assert.equal(report.lostClaimCleanupRequired, false);
+    assert.equal(gitIn(fixture.primary, ['rev-parse', backup]).trim(), tip);
+    assert.equal(branchExists(fixture.primary), false);
+  });
+});
+
+test('after a preservation, a remote rescan stop still names the backup ref', () => {
+  withApplyFixture((fixture) => {
+    const tip = unmergedBranch(fixture.primary);
+    const run = runApply(
+      fixture,
+      { b1: {}, collisionAfterPrecheck: true },
+      PRESERVE_ARGS,
+    );
+    const report = assertStopped(run, 'branch-collision');
+    assert.match(
+      report.nextAction ?? '',
+      new RegExp(`refs/idd-b1/${ISSUE}/${tip}`),
+    );
+    assert.equal(report.b1Leftovers?.outcome, 'preserved');
+  });
+});
+
+test('a failure after the preservation started stops as b1-preserve-failed with the location', {
+  skip: process.platform === 'win32',
+}, () => {
+  withApplyFixture((fixture) => {
+    mkdirSync(fixture.worktree);
+    writeFileSync(join(fixture.worktree, 'work.txt'), 'precious\n');
+    const run = runApply(
+      fixture,
+      {
+        b1: {
+          confirmation: () =>
+            b1Confirmation([b1Record('d1', fixture.worktree)]),
+          fs: () => ({
+            rename: () => {
+              throw new Error('EXDEV');
+            },
+          }),
+        },
+      },
+      PRESERVE_ARGS,
+    );
+    const report = assertStopped(run, 'b1-preserve-failed');
+    assert.equal(report.lostClaimCleanupRequired, false);
+    assert.equal(report.claimPosted, false);
+    assert.equal(stepOf(report, 'b1-preserve')?.status, 'failed');
+    assert.equal(report.b1Leftovers?.outcome, 'failed');
+    assert.match(report.nextAction ?? '', /b1-preserved/);
+    assert.equal(
+      readFileSync(join(fixture.worktree, 'work.txt'), 'utf8'),
+      'precious\n',
+    );
+    assert.equal(
+      run.log.some((entry) => entry.includes('worktree add')),
+      false,
+    );
+    assert.equal(checkCloneLock(fixture.primary).present, false);
+  });
+});
+
+test('no leftover: the flag acts on nothing, the claim proceeds, and a decision goes unused', () => {
+  withApplyFixture((fixture) => {
+    const run = runApply(fixture, { b1: {} }, PRESERVE_ARGS);
+    assert.equal(exitOf(run.result), 0, run.stderr);
+    const report = run.report as ClaimApplyReport;
+    assert.equal(report.b1Leftovers?.outcome, 'no-leftover');
+    assert.deepEqual(report.b1Leftovers?.decisionsUnused, ['d1']);
+    assert.match(
+      stepOf(report, 'b1-preserve')?.detail ?? '',
+      /nothing to preserve/,
+    );
+    assert.equal(
+      run.log.some((entry) => /update-ref|--remove-section/.test(entry)),
+      false,
+    );
+  });
+});
+
+test('after a preservation, a local rescan stop drops its created-nothing sentence', () => {
+  withApplyFixture((fixture) => {
+    const tip = unmergedBranch(fixture.primary);
+    const run = runApply(
+      fixture,
+      { b1: {}, localCollisionAfterPreservation: true },
+      PRESERVE_ARGS,
+    );
+    const report = assertStopped(run, 'local-worktree-occupied');
+    assert.match(
+      report.nextAction ?? '',
+      new RegExp(`refs/idd-b1/${ISSUE}/${tip}`),
+    );
+    assert.doesNotMatch(report.nextAction ?? '', /created nothing/);
+    assert.match(report.nextAction ?? '', /A5\(e\) collision action tree/);
+  });
+});
+
+test('after a path preservation, a path occupied again stops with the destination named', {
+  skip: process.platform === 'win32',
+}, () => {
+  withApplyFixture((fixture) => {
+    mkdirSync(fixture.worktree);
+    writeFileSync(join(fixture.worktree, 'work.txt'), 'precious\n');
+    const real = createDefaultB1PreservePorts().fs;
+    const run = runApply(
+      fixture,
+      {
+        b1: {
+          confirmation: () =>
+            b1Confirmation([b1Record('d1', fixture.worktree)]),
+          fs: () => ({
+            rename: (from: string, to: string) => {
+              real.rename(from, to);
+              writeFileSync(from, 'occupied again\n');
+            },
+          }),
+        },
+      },
+      PRESERVE_ARGS,
+    );
+    const report = assertStopped(run, 'path-occupied');
+    const moved = report.b1Leftovers?.destinations[0]?.to ?? '';
+    assert.notEqual(moved, '');
+    assert.ok(
+      (report.nextAction ?? '').includes(moved),
+      report.nextAction ?? '',
+    );
+    assert.equal(readFileSync(join(moved, 'work.txt'), 'utf8'), 'precious\n');
+  });
+});
+
+test('after a preservation, a claim write failure names the backup ref too', () => {
+  withApplyFixture((fixture) => {
+    const tip = unmergedBranch(fixture.primary);
+    const run = runApply(
+      fixture,
+      { b1: {}, recordTokensFails: true },
+      PRESERVE_ARGS,
+    );
+    const report = assertStopped(run, 'tokens-record-failed');
+    assert.equal(report.lostClaimCleanupRequired, true);
+    assert.match(
+      report.nextAction ?? '',
+      new RegExp(`refs/idd-b1/${ISSUE}/${tip}`),
+    );
+    assert.match(report.nextAction ?? '', /lost-claim-cleanup/);
+    const failedStep = report.steps.find((entry) => entry.status === 'failed');
+    assert.match(failedStep?.nextAction ?? '', new RegExp(tip));
+  });
+});
+
+test('after a preservation, a clone-lock release failure names the backup ref too', () => {
+  withApplyFixture((fixture) => {
+    const tip = unmergedBranch(fixture.primary);
+    const run = runApply(
+      fixture,
+      { b1: {}, releaseFails: true },
+      PRESERVE_ARGS,
+    );
+    const report = assertStopped(run, 'primary-not-ready');
+    assert.match(
+      report.nextAction ?? '',
+      new RegExp(`refs/idd-b1/${ISSUE}/${tip}`),
+    );
+    assert.match(report.nextAction ?? '', /clone lock/);
+  });
+});
+
+test('the default deps build the preservation ports only when they are read', () => {
+  const deps = createDefaultDeps();
+  const descriptor = Object.getOwnPropertyDescriptor(deps, 'b1Preserve');
+  assert.equal(typeof descriptor?.get, 'function', 'a getter, not a value');
+  assert.equal(descriptor?.value, undefined);
+  const ports = deps.b1Preserve;
+  assert.equal(typeof ports?.readTrusted, 'function');
+  assert.equal(typeof ports?.fs.rename, 'function');
 });
