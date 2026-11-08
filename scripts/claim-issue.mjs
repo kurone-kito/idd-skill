@@ -459,13 +459,19 @@ function checkAssignee(issue) {
   return pass('no assignee (the project status is not checked)');
 }
 /**
- * The released claim the routing names, if any. A `released_claim` that is
- * present but not a record with a non-empty string `branch` is `present` with
- * a `null` branch, so the preservation refuses rather than guessing.
+ * The released claim the routing names, if any. `resume-claim-routing` always
+ * prints an `evidence` object, so a response without one is malformed: it is
+ * read as a released claim with no readable branch, and the preservation
+ * refuses rather than treating the absence as proof. A `released_claim` that
+ * is present but not a record with a non-empty string `branch` is `present`
+ * with a `null` branch for the same reason.
  */
 function readReleasedClaim(routing) {
   const evidence = routing.evidence;
-  const released = isRecord(evidence) ? evidence.released_claim : undefined;
+  if (!isRecord(evidence)) {
+    return { present: true, branch: null };
+  }
+  const released = evidence.released_claim;
   if (released === undefined) {
     return { present: false, branch: null };
   }

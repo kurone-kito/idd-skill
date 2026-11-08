@@ -1766,6 +1766,8 @@ interface B1Scenario {
   fs?: (fixture: ApplyFixture) => Partial<B1Filesystem>;
   /** The released claim the fresh-claim gate names after the pre-check. */
   released?: { branch: string | null };
+  /** The gate answers after the pre-check with no evidence object at all. */
+  noEvidence?: boolean;
 }
 
 interface ApplyRun {
@@ -2134,19 +2136,29 @@ function runApply(
         return scenario.ownGate ?? CLAIMABLE;
       }
       gateCalls += 1;
-      if (scenario.b1?.released !== undefined && gateCalls > 1) {
+      // The real routing always prints an evidence object, which the
+      // preservation reads for a released claim (the second call onward).
+      if (
+        scenario.b1 !== undefined &&
+        gateCalls > 1 &&
+        !scenario.b1.noEvidence
+      ) {
         const base = JSON.parse(CLAIMABLE.stdout) as Record<string, unknown>;
+        const released = scenario.b1.released;
         return ok(
           JSON.stringify({
             ...base,
-            evidence: {
-              released_claim: {
-                agent_id: 'claude-old',
-                claim_id: 'old-claim',
-                created_at: '2026-10-01T00:00:00Z',
-                branch: scenario.b1.released.branch,
-              },
-            },
+            evidence:
+              released === undefined
+                ? {}
+                : {
+                    released_claim: {
+                      agent_id: 'claude-old',
+                      claim_id: 'old-claim',
+                      created_at: '2026-10-01T00:00:00Z',
+                      branch: released.branch,
+                    },
+                  },
           }),
         );
       }
@@ -4419,4 +4431,23 @@ test('the default deps build the preservation ports only when they are read', ()
   const ports = deps.b1Preserve;
   assert.equal(typeof ports?.readTrusted, 'function');
   assert.equal(typeof ports?.fs.rename, 'function');
+});
+
+test("--apply refuses when the routing prints no evidence object, and keeps today's route", () => {
+  withApplyFixture((fixture) => {
+    unmergedBranch(fixture.primary);
+    const before = refsOf(fixture.primary);
+    const run = runApply(fixture, { b1: { noEvidence: true } }, PRESERVE_ARGS);
+    const report = assertStopped(run, 'b1-cleanup-needed');
+    assert.equal(report.b1Leftovers?.outcome, 'unmet-preconditions');
+    assert.match(
+      stepOf(report, 'b1-preserve')?.detail ?? '',
+      /released-claim .*not readable/,
+    );
+    assert.equal(refsOf(fixture.primary), before);
+    assert.equal(
+      run.log.some((entry) => /update-ref|--remove-section/.test(entry)),
+      false,
+    );
+  });
 });
