@@ -4170,7 +4170,7 @@ test('--apply preserves a leftover branch under the clone lock, then claims', ()
       run.log.findIndex((entry) => entry.includes(needle));
     const order = [
       'lock:acquire',
-      `update-ref ${backup}`,
+      `update-ref --no-deref ${backup}`,
       `update-ref --no-deref -d refs/heads/${BRANCH}`,
       'worktree add --no-track',
       'lock:release',
@@ -4181,7 +4181,7 @@ test('--apply preserves a leftover branch under the clone lock, then claims', ()
       [...order].sort((left, right) => left - right),
     );
     for (const needle of [
-      `update-ref ${backup}`,
+      `update-ref --no-deref ${backup}`,
       `update-ref --no-deref -d refs/heads/${BRANCH}`,
     ]) {
       assert.match(run.log[at(needle)] ?? '', /\[lock held\]/, needle);
@@ -4197,7 +4197,7 @@ test('--apply preserves a leftover branch under the clone lock, then claims', ()
       );
     assert.equal(gates.length, 2);
     assert.ok((gates[1]?.[1] ?? -1) > at('lock:acquire'));
-    assert.ok((gates[1]?.[1] ?? -1) < at(`update-ref ${backup}`));
+    assert.ok((gates[1]?.[1] ?? -1) < at(`update-ref --no-deref ${backup}`));
   });
 });
 

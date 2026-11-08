@@ -1364,7 +1364,10 @@ function preserveBranch(
   }
   const reused = existing.kind === 'present';
   if (!reused) {
-    const created = git(ctx, ['update-ref', backupRef, tip, '']);
+    // `--no-deref`: a dangling symbolic ref at this path reads as absent (the
+    // listing skips it), and without the flag the create would follow it and
+    // write the tip to its target.
+    const created = git(ctx, ['update-ref', '--no-deref', backupRef, tip, '']);
     if (created.status !== 0) {
       const again = inspectBackupRef(ctx, backupRef);
       if (

@@ -550,7 +550,7 @@ test('apply: the order is backup, read back, then deletion', () => {
   const calls = result.calls;
   const at = (needle: RegExp) => calls.findIndex((call) => needle.test(call));
   const create = at(
-    new RegExp(`update-ref refs/idd-b1/${ISSUE}/${tip} ${tip} $`),
+    new RegExp(`update-ref --no-deref refs/idd-b1/${ISSUE}/${tip} ${tip} $`),
   );
   // The read-back lists the ref as a ref (a no-follow read), after the create.
   const readBack = calls.findIndex(
@@ -579,7 +579,7 @@ test('apply: an existing backup ref at the same commit is reused', () => {
   assert.equal(result.report.outcome, 'preserved');
   assert.equal(
     result.calls.some((call) =>
-      / update-ref refs\/idd-b1\/\S+ \S+ $/.test(call),
+      / update-ref --no-deref refs\/idd-b1\/\S+ \S+ $/.test(call),
     ),
     false,
     'a reused ref is not created again',
@@ -2566,4 +2566,34 @@ test('a dangling symbolic ref swapped in at the deletion is not read as a delete
     git(fixture.primary, ['symbolic-ref', `refs/heads/${BRANCH}`]),
     'refs/heads/nonexistent-target',
   );
+});
+
+test('a dangling symbolic ref planted at the backup path is not followed by the create', () => {
+  const fixture = fresh();
+  let backup = '';
+  const result = exercise(fixture, {
+    prepare: (f) => {
+      const tip = leftoverBranch(f);
+      backup = `refs/idd-b1/${ISSUE}/${tip}`;
+      // The listing skips a dangling symbolic ref, so planning sees no ref
+      // there. Following it would write the tip to the target.
+      git(f.primary, ['symbolic-ref', backup, 'refs/heads/stray-target']);
+    },
+  });
+  assert.equal(result.report.outcome, 'failed');
+  assert.match(
+    result.failure?.detail ?? '',
+    /creating refs\/idd-b1\/.* failed/,
+  );
+  assert.equal(
+    git(fixture.primary, ['branch', '--list', 'stray-target']),
+    '',
+    'nothing was written to the symbolic ref target',
+  );
+  assert.notEqual(git(fixture.primary, ['branch', '--list', BRANCH]), '');
+  assert.equal(
+    git(fixture.primary, ['symbolic-ref', backup]),
+    'refs/heads/stray-target',
+  );
+  assert.deepEqual(result.report.actions, []);
 });
