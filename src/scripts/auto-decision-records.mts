@@ -65,7 +65,6 @@ import { ghTextUnbounded } from './gh-exec.mts';
 import { readRepositoryPolicyFile } from './idd-config.mts';
 import { maskMarkdownForScan } from './markdown-code.mts';
 import { normalizeMarkerPrefix } from './marker-helpers.mts';
-import { resolveGhHostnameArgs } from './minimize-superseded-markers.mts';
 import { resolveTrustedMarkerActors } from './protocol-helpers.mts';
 
 /** The repository whose issues are read. */
@@ -270,7 +269,6 @@ function createGithubProvider(): AutoDecisionRecordsProvider {
     readIssuePage({ owner, repo, number, cursor }) {
       const raw = ghTextUnbounded([
         'api',
-        ...resolveGhHostnameArgs(),
         'graphql',
         '-f',
         `query=${ISSUE_PAGE_QUERY}`,
@@ -287,7 +285,6 @@ function createGithubProvider(): AutoDecisionRecordsProvider {
     listIssuesPage({ owner, repo, label, state, page, perPage }) {
       const raw = ghTextUnbounded([
         'api',
-        ...resolveGhHostnameArgs(),
         `repos/${owner}/${repo}/issues?labels=${encodeURIComponent(label)}&state=${state}&sort=created&direction=asc&per_page=${perPage}&page=${page}`,
       ]);
       return JSON.parse(raw || 'null') as unknown;
