@@ -2010,3 +2010,51 @@ test(
     assertRefused(result, 'path:not-registered-worktree');
   },
 );
+
+test(
+  'failure: a replaced entry is not moved back after the destination parents change',
+  pathCase,
+  () => {
+    const fixture = fresh();
+    const real = realFs();
+    const moved = join(fixture.destination, basename(fixture.worktree));
+    const result = exercise(fixture, {
+      confirmation: () => confirmationRead([record('d1', fixture.worktree)]),
+      prepare: leftoverPath,
+      fs: (f) => {
+        let renames = 0;
+        let movedReads = 0;
+        return {
+          ...parentsChangeAfterRename(f),
+          rename: (from: string, to: string) => {
+            renames += 1;
+            real.rename(from, to);
+          },
+          // The first read of the moved entry is the identity check after the
+          // rename. Any later read sees a replacement, as a writer racing the
+          // rollback would leave.
+          lstatEntry: (path: string) => {
+            const info = real.lstatEntry(path);
+            if (path !== moved || info === null) return info;
+            movedReads += 1;
+            return movedReads > 1 ? { ...info, identity: '9:9' } : info;
+          },
+          directoryIdentity: (path: string) =>
+            renames > 0 && path === join(f.state, 'idd-skill')
+              ? '7:7'
+              : real.directoryIdentity(path),
+        };
+      },
+    });
+    assert.equal(result.report.outcome, 'failed');
+    assert.match(
+      result.failure?.detail ?? '',
+      /no longer matches the identity/,
+    );
+    assert.equal(readFileSync(join(moved, 'work.txt'), 'utf8'), 'precious\n');
+    assert.equal(existsSync(fixture.worktree), false, 'nothing was moved back');
+    assert.deepEqual(result.report.destinations, [
+      { from: fixture.worktree, to: moved },
+    ]);
+  },
+);

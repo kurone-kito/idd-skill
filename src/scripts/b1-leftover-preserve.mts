@@ -1427,6 +1427,28 @@ function preservePath(ctx: Context, plan: PathPlan): B1PreserveFailure | null {
         `${shorten(changed)}; moving the entry back is needed, but ${source} is occupied again, so it stays at ${final}`,
       );
     }
+    // The identity is read again right before the move back: a writer could
+    // have replaced the entry at the destination since the check above, and a
+    // replacement must never be moved into the worktree path.
+    let unchanged = false;
+    try {
+      const current = fs.lstatEntry(final);
+      unchanged = current !== null && sameEntry(current, info);
+    } catch {
+      unchanged = false;
+    }
+    if (!unchanged) {
+      report.destinations.push({ from: source, to: final });
+      report.actions.push({
+        id: 'path-moved',
+        subject: source,
+        detail: `moved ${source} to ${final}; the entry at the destination no longer matches, so it was not moved back`,
+      });
+      return failed(
+        report,
+        `${shorten(changed)}; the entry at ${final} no longer matches the identity of ${source}, so it was not moved back and stays at ${final}`,
+      );
+    }
     try {
       fs.rename(final, source);
     } catch (error) {
