@@ -4755,9 +4755,13 @@ these hold:
    claim markers as the holder of the coordination claim that preceded this
    session's claim, and require that claim to have been released by its own
    `unclaimed-by` marker, or to have been stale under `claimTiming.staleAge`
-   when this session took the carrier over, with no heartbeat of it since. A
-   displaced session that cannot be identified from trusted markers, or whose
-   claim was neither released nor stale, stops recovery.
+   when this session took the carrier over, with no later `claimed-by` marker
+   carrying its claim ID (read from the raw comments). A claim marker that the
+   takeover step minimized as `outdated` counts like one that was never
+   minimized; an edited marker, or one minimized for another reason, in the
+   displaced chain stops recovery, as does a displaced session that cannot be
+   identified from trusted markers or whose claim was neither released nor
+   stale.
 
 An incomplete enumeration stops. None of these alone is sufficient: a journal
 `pending` record with `issue=none`, other than an exempt roadmap record, is the
@@ -4785,23 +4789,25 @@ rule stops recovery as soon as its journal record shows a second candidate. That
 child stays held and unmapped for a person to reconcile, and the lineage never
 maps it. A publisher used for a child after a replacement must re-verify the
 anchor generation after its `pending` write and immediately before its create;
-until the helper does, the window above stands, and the helper change is
-separate work that this contract does not implement.
+until the helper does, running it is accepted only because condition 4 bounds
+the window above, and the helper change is separate work that this contract does
+not implement.
 
 **Replacement procedure.** When a verified replacement is already the head, its
 generation is current and no create followed it, append nothing: repeat the
 pre-create mapping bound and the re-check below, then run the publisher.
 Otherwise append the replacement, then verify the returned ID and exact body.
-After `claim.verifySettleDelay`, repeat conditions 2 and 3 on fresh complete
+After `claim.verifySettleDelay`, repeat conditions 2 to 4 on fresh complete
 reads together with the lineage replay, and repeat them once more immediately
 before running the child publisher. A comment found under condition 3, an
-owner-log record that changes the current generation, or a later owner marker
-carrying a superseded owner token voids the replacement. A void stops this pass
-under the recovery hold. Publication evidence can never be followed by another
-replacement, because condition 3 keeps failing. When the only cause is a further
-resume, the voided record stays the head, and a later pass may append a
-replacement that names it once conditions 1 to 3 hold again. Only a verified
-replacement that passes this re-check permits the first run of
+owner-log record that changes the current generation, a later owner marker
+carrying a superseded owner token, or a later `claimed-by` marker of the
+displaced claim voids the replacement. A void stops this pass under the recovery
+hold. Publication evidence can never be followed by another replacement, because
+condition 3 keeps failing. When the only cause is a further resume, the voided
+record stays the head, and a later pass may append a replacement that names it
+once conditions 1 to 4 hold again. Only a verified replacement that passes this
+re-check permits the first run of
 `publish-authoring-hold --shape child --anchor <roadmap>`, which keeps the
 existing owner, set and session checks immediately before and after publication,
 now against the head. After publication, append and verify the `kind=child`
@@ -4827,18 +4833,19 @@ root intent, `B` the roadmap mapping, and `C` the child intent, which pins
 `anchor-owner` O0 and `session` S0. Every hold below is the recovery hold
 defined above: no replacement is appended and no create is issued.
 
-- Permitted. The carrier's previous coordination claim was released or stale
-  when this session took over. The anchor log then shows one trusted resume
-  marker (owner O1, session S1, `supersedes` O0), posted past the stale age, for
-  the same anchor and set, with no release-family marker and no later owner
-  marker of O0.
-  Journal replay finds no comment for this anchor or set beyond the roadmap's
-  own publication records, the resume enumeration finds only the anchor, no
-  child mapping exists, the carrier is ready, the roadmap is open and held
-  without a claim, and the draft bytes still match `A`. One replacement `D`
-  (`replaces-comment-id` naming `C`, `anchor-owner` O1, `session` S1, source
-  draft, anchor and set unchanged) is appended and verified, passes the
-  re-check, and the child is published once; its mapping names `D`.
+- Permitted. The carrier's claim history identifies the previous coordination
+  claim holder, whose claim was released or stale when this session took over,
+  with no later `claimed-by` marker of it. The anchor log then shows one trusted
+  resume marker (owner O1, session S1, `supersedes` O0), posted past the stale
+  age, for the same anchor and set, with no release-family marker and no later
+  owner marker of O0. Journal replay finds no comment for this anchor or set
+  beyond the roadmap's own publication records, the resume enumeration finds
+  only the anchor, no child mapping exists, the carrier is ready, the roadmap is
+  open and held without a claim, and the draft bytes still match `A`. One
+  replacement `D` (`replaces-comment-id` naming `C`, `anchor-owner` O1,
+  `session` S1, source draft, anchor and set unchanged) is appended and
+  verified, passes the re-check, and the child is published once; its mapping
+  names `D`.
 - Reuse. An exact duplicate of `D` is ignored and reuses `D`; it is neither a
   second head nor a fork.
 - Hold, existing child. A journal comment beyond the exempt roadmap records, an
