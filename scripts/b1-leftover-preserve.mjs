@@ -857,7 +857,7 @@ function recordChecks(ctx, trusted, subjects) {
             ? 'it is voided'
             : current.conflictingDecisions.includes(id)
               ? 'its records disagree'
-              : 'no counting b1Leftover record for this issue carries it';
+              : 'no counting b1Leftover record for this issue, with claim=none and set=none, carries it';
           return refuse(`decision ${id} matches no record: ${why}`);
         }
         const subject = subjects.find(

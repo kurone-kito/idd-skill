@@ -6525,8 +6525,9 @@ This record is durable issue evidence: it is not added to the transient
   - the trusted read of the repository's default branch reports `b1Leftover`
     as `enabled` (a master switch that is off, a class that is off, or an
     unreadable policy refuses);
-  - the fresh-claim gate reads `claimable`, and a `released_claim` in its
-    evidence is neither unreadable nor the claim's own branch (a released
+  - the fresh-claim gate reads `claimable`, its response carries an
+    `evidence` object (the routing always prints one), and a `released_claim`
+    in it is neither unreadable nor the claim's own branch (a released
     claim's branch is inheritable, and so is the path derived from it);
   - no prunable worktree entry is on the branch or at the path;
   - the confirmation issue is open, carries the confirmation label, and no
