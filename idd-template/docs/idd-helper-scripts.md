@@ -6566,8 +6566,11 @@ This record is durable issue evidence: it is not added to the transient
   `git update-ref --no-deref -d refs/heads/<branch> <commit>` (which fails
   when the tip moved), and removes the `branch.<name>` configuration section
   when the repository's own configuration holds keys, so that a recreated
-  branch does not inherit it. The ref and the section are read back after
-  each removal, whatever the command reported. The branch reflog is lost; the
+  branch does not inherit it. The section's keys are read after the delete,
+  and the ref and the section are read back after each removal, whatever the
+  command reported. Right before the delete, the worktree list and the local
+  scan are read again, and a worktree that took the branch since planning
+  stops the run with the backup ref kept. The branch reflog is lost; the
   commits stay reachable from the backup ref.
 - Path mode, in addition: the path is the computed worktree path, a direct
   child of the primary's parent, and that parent is not a link. The entry
