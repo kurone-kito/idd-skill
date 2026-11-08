@@ -142,9 +142,9 @@ Use helper output as evidence, not as authority:
 
 - `state: already_owned` + `action: keep` → continue with the same
   `{claim-id}` route.
-- `state: owner_evidence_required` + `action: stop` → retry once with
-  `--worktree {path}`; if it persists, stop (not a live competitor) unless
-  a forced-handoff successor: §FH.
+- `state: owner_evidence_required` + `action: stop` → retry `--worktree {path}`
+  once; else stop unless §FH's successor checks pass (including its attached
+  verified-chain case). Other mismatches stop.
 - `state: unclaimed` + `action: re_claim` → no-active-claim route.
 - `state: stale` + `action: takeover` → stale-claim takeover route.
 - `state: local_worktree_occupied` + `action: stop` → a stale or released
