@@ -388,7 +388,7 @@ for every stop of an `--apply` run after the pre-checks; it exits `1` as
 | `idd-load-gate.mjs`                | an unknown flag, a missing value, a non-positive or malformed `--max-load`, or a malformed `--timeout-ms` or `--poll-ms`                            | exit `3` when the timeout ends with the load still at or above the limit (the JSON line on stdout has `passed` set to `false`)                              |
 | `idd-activation.mjs`               | an unknown flag, or an empty `--cwd` value                                                                                                          | none today                                                                                                                                                  |
 | `claim-approval-gate.mjs`          | a missing `--issue`, or an unknown flag                                                                                                             | none today                                                                                                                                                  |
-| `claim-issue.mjs`                  | a missing or invalid `--issue`, `--agent-id`, `--project-status`, `--confirmation`, or `--decision`, a flag without its partner, or an unknown flag | exit `1` for every ineligible result, including a failed check, and for every stop of an `--apply` run                                                      |
+| `claim-issue.mjs`                  | a missing or invalid `--issue`, `--agent-id`, `--project-status`, `--confirmation`, `--decision`, a B1 flag used out of place, or an unknown flag   | exit `1` for every ineligible result, including a failed check, and for every stop of an `--apply` run                                                      |
 | `claim-lock.mjs`                   | a missing mode or required flag, or an unknown flag                                                                                                 | exit `2` on an `--acquire` collision, exit `4` on a primary-worktree refusal, or a non-`backfilled` `--backfill-tokens`                                     |
 | `clone-lock.mjs`                   | a missing mode, `--agent-id`, or command, or an unknown flag                                                                                        | exit `3` on an acquire timeout; a wrapped command's own non-zero status                                                                                     |
 | `phase-id-resolver.mjs`            | a missing `--phase-id`, or an unknown flag                                                                                                          | none today                                                                                                                                                  |
@@ -6537,7 +6537,9 @@ This record is durable issue evidence: it is not added to the transient
     an ID given twice, two IDs for one subject, and a count that differs
     from the listed subjects (for example because the leftovers changed since
     the dry run) all refuse. Each paired record has `class=b1Leftover`,
-    `source` equal to the claimed issue, `claim=none`, and its decision. The
+    `source` equal to the claimed issue, `claim=none`, `set=none` (the
+    contract's pairing, which the record reader does not enforce), and its
+    decision. The
     decision is not voided and has no counting `location` or `failure` note,
     so a decision that was already acted on or already failed never
     authorizes another preservation: a new attempt is a new decision.
@@ -6569,18 +6571,19 @@ This record is durable issue evidence: it is not added to the transient
   included, is at, inside, or around it. A `.git` file in it that points to
   an existing administration directory refuses. The destination passes the
   shared preserved-data guards (`b1-preserved` under the per-user state
-  root, and not inside the leftover path itself) and the source is on the
-  same device as every existing destination
-  parent, both checked before any directory is created. The action creates
+  root, and not inside the leftover path itself), and the source is on the
+  same device as every existing destination parent. Both are checked before
+  any directory is created. The action creates
   `<state>/idd-skill/b1-preserved/<issue>-<UTC timestamp>/` through the
-  shared creation step, rechecks its parents and the source's no-follow
-  identity right before the rename, renames the entry (never a copy and
-  never a removal) to `<basename>` inside it, and checks the moved entry's
-  identity. A mismatch leaves the entry at the destination and reports both
-  paths. The entry moves back only when its identity matches and the source
-  path is free. The mode checks no live use: a rename keeps inodes, so a
-  process that still writes into the tree keeps writing into the preserved
-  copy (preventive; no observed incident yet).
+  shared creation step (which also restricts each parent directory to its
+  owner), rechecks its parents and the source's no-follow identity right
+  before the rename, renames the entry (never a copy and never a removal)
+  to `<basename>` inside it, and checks the moved entry's identity. A
+  mismatch leaves the entry at the destination and reports both paths. The
+  entry moves back only when its identity matches, read again right before
+  the move, and the source path is free. The mode checks no live use: a
+  rename keeps inodes, so a process that still writes into the tree keeps
+  writing into the preserved copy (preventive; no observed incident yet).
 - A refused precondition changes nothing. The step `b1-preserve` still
   passes with a detail that starts "not preserved", `b1Leftovers.outcome` is
   `unmet-preconditions`, and the stops of a run without the flag follow
