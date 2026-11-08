@@ -6583,15 +6583,17 @@ This record is durable issue evidence: it is not added to the transient
   same device as every existing destination parent. Both are checked before
   any directory is created. The action creates
   `<state>/idd-skill/b1-preserved/<issue>-<UTC timestamp>/` through the
-  shared creation step (which also restricts each parent directory to its
-  owner), rechecks its parents and the source's no-follow identity right
-  before the rename, renames the entry (never a copy and never a removal)
-  to `<basename>` inside it, and checks the moved entry's identity. A
-  mismatch leaves the entry at the destination and reports both paths. The
-  entry moves back only when its identity matches, read again right before
-  the move, and the source path is free. The mode checks no live use: a
-  rename keeps inodes, so a process that still writes into the tree keeps
-  writing into the preserved copy (preventive; no observed incident yet).
+  shared creation step, which also restricts each parent directory to its
+  owner (the report names each parent that let others in before, as a
+  `parents-restricted` action). It then rechecks its parents and the
+  source's no-follow identity right before the rename, renames the entry
+  (never a copy and never a removal) to `<basename>` inside it, and checks
+  the moved entry's identity. A mismatch leaves the entry at the destination
+  and reports both paths. The entry moves back only when its identity
+  matches, read again right before the move, and the source path is free.
+  The mode checks no live use: a rename keeps inodes, so a process that
+  still writes into the tree keeps writing into the preserved copy
+  (preventive; no observed incident yet).
 - A refused precondition changes nothing. The step `b1-preserve` still
   passes with a detail that starts "not preserved", `b1Leftovers.outcome` is
   `unmet-preconditions`, and the stops of a run without the flag follow
