@@ -179,7 +179,7 @@ export function evaluateRoadmapAuditGates(report, options = {}) {
       ? `issue #${node.number} has an unconfirmed provisional decision bundle; preserve it as active confirmation work`
       : `issue #${node.number} has provisional decision evidence that cannot be replayed: ${evidence?.issues.join(', ') || 'unknown replay refusal'}`;
     blockers.push({
-      kind: 'provisional-confirmation-pending',
+      kind: 'roadmap-blocked',
       target: node.number,
       provenance: pathTo(node.number),
       detail: `${detail}${impactDetail}`,
