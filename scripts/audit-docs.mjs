@@ -105,7 +105,6 @@ const ENGINES_RANGE_MIRRORS = [
   { file: '.nvmrc', mode: 'low-bound-line' },
   { file: '.node-version', mode: 'low-bound-line' },
   { file: '.tool-versions', mode: 'low-bound-contains' },
-  { file: 'src/scripts/helper-runtime-manifest.mts', mode: 'full-range' },
   {
     file: 'idd-template/.github/workflows/idd-advisory-convergence.yml',
     mode: 'full-range',
