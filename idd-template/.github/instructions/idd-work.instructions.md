@@ -483,11 +483,17 @@ for a PR. Require `status: readable`; never let checkout `origin` choose
 policy. Then read
 `standingApprovals.split.enabled` and
 `standingApprovals.split.maxCandidateFiles` from `.github/idd/config.json` at
-that ref through GitHub Contents. The helper validates against that ref's
-schema; its auto-decide verdict does not govern split. Require `enabled: true`
-or use the existing route; missing `maxCandidateFiles` defaults to `8`, while
-absent, malformed, or unreadable policy also uses that route. Never use local,
-head, or layered config.
+that ref through GitHub Contents. Save its decoded contents as
+`<target-policy>`; the helper validates that ref's schema, but its auto-decide
+verdict does not govern split. Read the parent authoring label
+(`issueAuthoring.authoringLabelName`, default `status:authoring`) and
+`markerPrefix` from this snapshot. Pass
+`--owner <target-owner> --repo <target-repo> --policy <target-policy>
+--marker-prefix <target-markerPrefix>` on every publisher call. Require
+`enabled: true` or use the existing route; missing `maxCandidateFiles` defaults
+to `8`; absent, malformed, or unreadable policy uses that route. Never use
+local, head, layered config, or checkout `origin`
+([target finding](https://github.com/kurone-kito/idd-skill/pull/5031#discussion_r4505536175)).
 Each child fits the trusted ceiling and contains a parent criterion. Each
 checkbox-stripped parent acceptance criterion appears whole and verbatim in
 exactly one child. Reuse-first check children against open issues, draft
@@ -507,7 +513,7 @@ claimed parent does not provide. Use the existing route before publishing it.
 Otherwise use the existing comment/release/stop route.
 
 1. **Hold and record the set.** Revalidate the parent claim; add and verify the
-   configured authoring label (default `status:authoring`). If present, resume
+   snapshot's authoring label. If present, resume
    only from the same durable proposal; otherwise stop on the unrelated hold.
    Reconcile mappings. Before release and on resume with a record, require one
    trusted record line matching class, set, anchor, ceiling, and option; proposal,
@@ -527,9 +533,10 @@ Otherwise use the existing comment/release/stop route.
    complete ordered proposal with current claim ID, estimate, candidate and
    changed files, and each child's exact title and full body. If its POST is
    uncertain, read all parent comments and continue only if exactly one exact
-   proposal exists; otherwise keep the hold and stop. On resume reuse it,
-   reconcile children against helper records and live issues, and never
-   republish an unknown result. Keep the parent claim and label held.
+   proposal exists; otherwise keep the hold and stop. On resume reconcile the
+   proposal/mappings with helper records and live issues; verify/skip mapped
+   children and publish only unmapped ones. Stop on conflicts or unknown
+   publication. Keep parent claim/label and children held.
 2. **Review and dry-run.** Review each final child separately with the
    issue-authoring contract's completed-draft adversarial review: send its
    exact title and body plus the bounded review packet, resolve the configured
@@ -548,7 +555,7 @@ Otherwise use the existing comment/release/stop route.
    a completed review. A refused or failed dry-run stops before any apply.
    Resolve the profile-selected `idd-publish-authoring-hold` invocation per
    `docs/idd-helper-scripts.md`; without `--apply` it is a dry-run. Dry-run
-   every orphan and inspect all results before applying. The helper's review
+   only unmapped orphans; inspect all results before applying. The helper's review
    check is not the adversarial review.
 
    ```sh

@@ -788,14 +788,16 @@ during review on 2026-11-08 in PR
 [#5031](https://github.com/kurone-kito/idd-skill/pull/5031). Require
 `idd-effective-config` with `--trusted-auto-decide` to report
 `status: readable`. For PRs, pass `--base-ref <base>`; omit it otherwise.
-Then read
-`standingApprovals.split.enabled` and
-`standingApprovals.split.maxCandidateFiles` from `.github/idd/config.json` at
-that ref through GitHub Contents. The helper validates the policy against that
-ref's schema; its auto-decide verdict does not govern split. Missing `enabled`
-is false; missing `maxCandidateFiles` uses documented default `8`. Malformed,
-absent, or unreadable policy keeps the existing route. Never use local, head,
-or layered config. Every child fits the trusted ceiling. Each
+Save the decoded `.github/idd/config.json` at that ref as `<target-policy>`;
+the helper validates its schema, but its auto-decide verdict does not govern
+split. Use this snapshot for split settings, the parent authoring label, and
+`markerPrefix`. Pass the resolved `--owner`, `--repo`,
+`--policy <target-policy>`, and `--marker-prefix <target-markerPrefix>` to
+every publisher dry-run and apply. Missing `enabled` is false; missing
+`maxCandidateFiles` defaults to `8`. Malformed, absent, or unreadable policy
+keeps the existing route; never use checkout policy or `origin`
+([target finding](https://github.com/kurone-kito/idd-skill/pull/5031#discussion_r4505536234)).
+Every child fits the trusted ceiling. Each
 checkbox-stripped parent acceptance criterion appears whole and verbatim in
 exactly one child, and every child contains at least one. After any title or
 body correction, repeat this entire eligibility check against the final child
@@ -828,7 +830,10 @@ when a matching held child is found; report the state and keep the parent and
 children held. A record counts only when one exact expected line is authored by
 a trusted actor and the proposal, mappings, and live held children match
 one-to-one. A failed or uncertain record stops with the parent and children
-held; resume reconciles the complete set before continuing. After all children
+held; on resume, verify and skip exact mappings, publishing only unmapped
+proposal entries. Stop if an existing child cannot be mapped; every call
+creates a new issue ([resume finding](https://github.com/kurone-kito/idd-skill/pull/5031#discussion_r4505546659)).
+After all children
 and any roadmap tracks are verified, the worker posts the standing record with
 the parent issue as `anchor` and the numeric effective `maxCandidateFiles` as
 `ceiling`, posts a completion note, revalidates the parent claim, posts and
