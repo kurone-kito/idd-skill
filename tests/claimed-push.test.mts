@@ -224,6 +224,7 @@ function auditResult(
     ? 'effort M with 2 candidate file(s) is within the limit of 8'
     : 'effort M with 9 candidate files exceeds the limit of 8',
   status = outcome === 'pass' ? 0 : 1,
+  visibleLineAgreement: 'pass' | 'fail' | 'unavailable' = 'pass',
 ): CommandResult {
   return result(
     status,
@@ -236,7 +237,7 @@ function auditResult(
         {
           id: 'effort-visible-line-agreement',
           name: 'visible effort line',
-          result: 'pass',
+          result: visibleLineAgreement,
           detail: 'visible line agrees with the marker',
         },
       ],
@@ -2127,6 +2128,50 @@ test('a coherent S estimate is reassessed as M when only the canonical S audit f
   );
 });
 
+test('an explicit visible mismatch blocks in-limit S while unavailable stays compatible', () => {
+  const coherentBody = issueBodyWithEffort('S', []);
+  const mismatchedBody = coherentBody.replace('_Effort: S', '_Effort: M');
+  const run = (agreement: 'fail' | 'unavailable') =>
+    cliRun({
+      world: {
+        [K.issueView]: result(
+          0,
+          issueJson(agreement === 'fail' ? mismatchedBody : coherentBody),
+        ),
+        [K.diff]: result(0, nulList(manyPaths(2))),
+        [K.audit]: auditResult(
+          'pass',
+          'effort S with 2 candidate files is within the limit of 3',
+          agreement === 'fail' ? 1 : 0,
+          agreement,
+        ),
+      },
+    });
+
+  const failedAgreement = run('fail');
+  const failedScope = failedAgreement.report.steps[2];
+  assert.equal(failedAgreement.code, 1);
+  assert.equal(failedScope?.status, 'failed');
+  assert.match(
+    failedScope?.reason ?? '',
+    /effort-visible-line-agreement fails/u,
+  );
+  assert.equal(
+    failedScope?.assessment?.originalIssueBodyAudit.visibleLineAgreement,
+    'fail',
+  );
+  assert.equal(failedScope?.assessment?.correctionApplied, false);
+
+  const unavailableAgreement = run('unavailable');
+  const compatibleScope = unavailableAgreement.report.steps[2];
+  assert.equal(unavailableAgreement.code, 0);
+  assert.equal(compatibleScope?.status, 'passed');
+  assert.equal(
+    compatibleScope?.assessment?.originalIssueBodyAudit.visibleLineAgreement,
+    'unavailable',
+  );
+});
+
 test('the correction runs when the original body S audit fails, with either or both S audits failing', () => {
   const cases = [
     { bodyCandidates: [], diffCount: 4, body: 'pass', canonical: 'fail' },
@@ -2443,6 +2488,25 @@ test('identical, conflicting, valueless, mismatched, and masked-only footer inpu
     );
     assert.equal(r.h.count(K.audit), 2, scenario.name);
   }
+
+  const duplicateWithinLimit = cliRun({
+    world: {
+      [K.issueView]: result(0, issueJson(cases[0].body)),
+      [K.diff]: result(0, nulList(manyPaths(2))),
+      [K.audit]: realAudit,
+    },
+  });
+  assert.equal(duplicateWithinLimit.code, 0);
+  assert.equal(duplicateWithinLimit.report.steps[2]?.status, 'passed');
+  assert.equal(
+    duplicateWithinLimit.report.steps[2]?.assessment?.correctionApplied,
+    false,
+  );
+  assert.equal(
+    duplicateWithinLimit.report.steps[2]?.assessment?.originalIssueBodyAudit
+      .visibleLineAgreement,
+    'fail',
+  );
 
   const missing = issueBodyWithEffort('M', []);
   const missingMarker = cliRun({

@@ -1197,9 +1197,47 @@ function visibleAgreementOf(stdout: string): 'pass' | 'fail' | 'unavailable' {
   ) as Record<string, unknown>[];
   if (findings.length !== 1) return 'unavailable';
   const finding = findings[0];
-  return finding?.result === 'pass' || finding?.result === 'fail'
-    ? finding.result
-    : 'unavailable';
+  if (finding?.result !== 'pass' && finding?.result !== 'fail') {
+    return 'unavailable';
+  }
+  return finding.result;
+}
+
+/** Distinguish a single explicit visible/hidden mismatch from other failures. */
+function hasExplicitEffortMismatch(
+  body: string,
+  markerPrefix: string,
+  verdict: AuditVerdict,
+  expected: EffortHint | null,
+): boolean {
+  if (
+    !verdict.ok ||
+    expected === null ||
+    verdict.visibleLineAgreement !== 'fail'
+  ) {
+    return false;
+  }
+  const effort = parseEffortMarker(body, markerPrefix);
+  if (!effort.present || effort.malformed || effort.value !== expected) {
+    return false;
+  }
+  const masked = maskMarkdownForScan(body);
+  if (countMarkerOccurrences(masked, markerPrefix, 'effort') !== 1) {
+    return false;
+  }
+  const markerPattern = new RegExp(
+    `<!--\\s*${escapeRegex(markerPrefix)}-effort:\\s*([^\\s>]+)\\s*-->`,
+    'iu',
+  );
+  const marker = markerPattern.exec(masked);
+  if (marker?.[1]?.toUpperCase() !== expected || marker.index === undefined) {
+    return false;
+  }
+  const beforeMarker = masked.slice(0, marker.index).replace(/\s+$/u, '');
+  const paragraph = beforeMarker.split(/\n\s*\n/u).at(-1) ?? '';
+  const visible = /_Effort:\s*([A-Za-z]+)/u.exec(paragraph);
+  const visibleValue = visible?.[1]?.toUpperCase();
+  return visibleValue !== undefined && visibleValue !== expected;
 }
 
 /** Item 5: one audit run; its exit status is not the verdict. */
@@ -1565,7 +1603,14 @@ function stepScope(ctx: Context): StepOutcome {
   const effort = parseEffortMarker(body, markerPrefix);
   const estimatedEffort =
     effort.present && !effort.malformed ? effort.value : null;
-  const originalsPass = original.result === 'pass' && scoped.result === 'pass';
+  const originalVisibleLineMismatch =
+    estimatedEffort === 'S' &&
+    (hasExplicitEffortMismatch(body, markerPrefix, original, estimatedEffort) ||
+      hasExplicitEffortMismatch(copy, markerPrefix, scoped, estimatedEffort));
+  const originalsPass =
+    original.result === 'pass' &&
+    scoped.result === 'pass' &&
+    !originalVisibleLineMismatch;
   if (originalsPass) {
     const assessment = makeScopeAssessment({
       body,
@@ -1595,6 +1640,11 @@ function stepScope(ctx: Context): StepOutcome {
     ...(scoped.result === 'fail'
       ? [
           `${EFFORT_FINDING_ID} fails with the canonical paths: ${scoped.detail}`,
+        ]
+      : []),
+    ...(originalVisibleLineMismatch
+      ? [
+          `effort-visible-line-agreement fails (issue body: ${original.visibleLineAgreement}; canonical paths: ${scoped.visibleLineAgreement})`,
         ]
       : []),
   ];
