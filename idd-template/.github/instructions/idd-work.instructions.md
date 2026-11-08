@@ -172,9 +172,11 @@ fresh-claim row above, then follow the fresh-claim order in
   token recording its first commands, in that order, before installing.
   If it cannot, skip the hook and use the manual lock-then-install path in
   the guide.
-- Run configured `commands.install-deps` inside the sibling worktree.
-  Follow the guide's [install and verification steps](../../docs/idd-worktree-setup.md#install-and-verify-dependencies)
-  and keep the command safe to rerun.
+- Run configured `commands.install-deps` inside the sibling worktree only
+  when a compliant takeover pre-start hook did not already complete it.
+  After either path, use the guide's [install and verification steps](../../docs/idd-worktree-setup.md#install-and-verify-dependencies)
+  to confirm the expected post-install artifact. Keep the command safe to
+  rerun for retries and worktree recreation.
 - Complete the guide's [B1 self-check](../../docs/idd-worktree-setup.md#run-the-b1-self-check)
   before B2. `-x <noop>` leaves the current directory unchanged, so enter
   the sibling worktree before checking. Stop if any step fails.
