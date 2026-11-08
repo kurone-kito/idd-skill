@@ -110,18 +110,47 @@ instance. Every other `owner_evidence_required` case keeps "stop", except
 an `unreadable` occupancy probe caused by an unrelated record, which §LWR's
 paragraph on an unrelated worktree record covers. §LWR's steps 1-5 apply to
 none of them: they recover a stale or released claim's occupied worktree,
-not a live forced-handoff claim. Apply the recipe below only when all of
-these hold:
+not a live forced-handoff claim.
+
+**Attached-worktree ancestor extension** — The repeated handoffs on
+`kurone-kito/idd-skill#4893` left the lock two transfers behind. In addition
+to the immediate `old_claim_id` route below, an attached worktree may adopt
+an earlier holder only from the live helper's
+`evidence.forced_handoff.verified_chain` (issue `#5078`). This is an ordered
+array of edge objects, not claim IDs. Require a nonempty chain whose adjacent
+`new_agent_id` / `new_claim_id` and `old_agent_id` / `old_claim_id` pairs
+connect exactly. Every edge must match the active claim's branch and the live
+PR context under the validity checks above; an issue-only edge needs the
+helper-confirmed pre-first-commit exception when an open PR exists. The last
+edge must match the top-level handoff's old/new pairs, branch, `linked_pr`
+and `context_scope`; its new pair must equal this session's assigned pair
+and the live active claim. The lock's exact `holder.agentId` / `holder.claimId`
+must occur as an old pair in that chain. Call this the **eligible ancestor**.
+
+Never bridge a missing, untrusted, edited, unauthorized, refused, or
+discontinuous edge. A release or independent fresh claim breaks the chain;
+cross-branch or incompatible PR context supplies no bridge. Lock age,
+timestamps, or agent-id alone prove no ancestry. Missing, malformed,
+ambiguous, or unreadable chain evidence cannot authorize the extension.
+It applies only to the single canonical, attached, unlocked, non-prunable
+worktree with no operation in progress described below: missing, duplicate,
+detached, wrong-branch, or unreadable worktree evidence stops this path.
+The detached-rebase route below keeps its own exact checks and only its
+existing lock-holder cases. No worktree removal or replacement is authorized.
+
+Apply the recipe below only when all of these hold:
 
 - A routing call that passed this session's `--claim-id` and `--worktree W`
   returned `owner_evidence_required`, and
   `evidence.forced_handoff.new_claim_id` equals this session's claim-id while
-  `old_claim_id` does not (the four-flag call below adds `--nonce` and
-  `--fresh-claim-gate` once the nonce steps are done). Pass
+  `old_claim_id` does not (the routing call below adds `--nonce` and
+  `--fresh-claim-gate` once the nonce steps are done). Pass the recorded
+  `--agent-id` to routing too for session-qualified claims; omit that flag
+  for pre-rule claims, even when a token record exists. Pass
   `evidence.forced_handoff.new_agent_id` as
   `--agent-id` on the `claim-lock` calls below that take it
-  (`--record-tokens` and `--acquire`; `--check` and the routing helper take
-  none): it usually equals the displaced agent-id, but a marker may name a
+  (`--record-tokens` and `--acquire`; `--check` takes none): it usually
+  equals the displaced agent-id, but a marker may name a
   distinct successor id, and a lock or record written under another
   agent-id leaves routing at `owner_evidence_required` (preventive; no
   observed incident yet).
@@ -162,7 +191,8 @@ these hold:
   A displaced predecessor's uncommitted changes remain subject to the
   content-scope audit (§CSA) before any push.
 - `claim-lock --check --worktree W` shows a holder (`holder.claimId`) equal
-  to `old_claim_id`. If it already shows this session's claim-id and
+  to `old_claim_id`, or the attached-worktree eligible ancestor above.
+  If it already shows this session's claim-id and
   agent-id (a takeover done earlier), skip the takeover and only record the
   claim identity; if no lock exists (`present` is false), use the normal
   `--acquire`. Any other holder, including this session's claim-id under
@@ -172,7 +202,7 @@ The recommended order (it differed between the sessions that hit the stop;
 treat it as recommended, not observed): adopt the marker's agent-id and
 claim-id; check the lock holder; record the claim identity against `W`; post
 this session's own activation nonce, wait, and confirm the winner; run the
-four-flag routing call once and read `fresh_claim_gate.verdict` and
+routing call once and read `fresh_claim_gate.verdict` and
 `winning_claim_id`; check the lock holder again; take the lock over; re-run
 routing. Run every
 `claim-lock` call with `W` as the current directory and with `--worktree W`
@@ -180,8 +210,9 @@ routing. Run every
 applies), through the profile-selected claim-lock command:
 
 1. `--check --worktree W` and require the holder condition above (the
-   holder is `old_claim_id`, this session's own claim-id and agent-id, or
-   no lock exists); only then `--record-tokens --worktree W --agent-id
+   holder is `old_claim_id`, an eligible attached-worktree ancestor,
+   this session's own claim-id and agent-id, or no lock exists); only then
+   `--record-tokens --worktree W --agent-id
    <new_agent_id> --claim-id <new_claim_id> --nonce <nonce>`. That call
    overwrites the record keyed by the claim-id without a holder check, so
    run before the check it would replace another session's token record.
@@ -190,10 +221,29 @@ applies), through the profile-selected claim-lock command:
    primary lets the takeover succeed while routing still returns
    `owner_evidence_required` (preventive; no observed incident yet).
 2. Post the nonce, wait, and confirm the winner, then run the routing call.
-3. `--check --worktree W` again and branch on the result. A holder equal
+3. For an attached `W`, run this entire step inside one profile-selected
+   `clone-lock --exec --agent-id <new_agent_id> --repo W -- <command>`
+   critical section (see the clone-scoped lock commands in
+   `docs/idd-helper-scripts.md`). After acquiring that mutex, revalidate the
+   live chain, successor pair, nonce winner, fresh-claim winner, branch/PR,
+   and attached-worktree conditions. Run the final holder check and its
+   selected acquisition below without releasing the mutex between them;
+   `claim-lock --acquire` inherits the held clone mutex. This covers every
+   attached holder case, including the immediate predecessor. Any failed
+   check stops before acquisition; release the mutex only after the selected
+   action and output checks finish. The detached-rebase route keeps the
+   checks and acquisition below without this attached-only extension.
+
+   `--check --worktree W` again and branch on the result. A holder equal
    to `old_claim_id`: `--acquire --takeover --worktree W --agent-id
    <new_agent_id> --claim-id <new_claim_id>`, then confirm the output's
-   `holder.claimId` equals `old_claim_id`. This session's own claim-id and
+   `holder.claimId` equals `old_claim_id`. An eligible attached-worktree
+   ancestor: revalidate the live chain, successor pair, nonce winner,
+   fresh-claim winner, branch/PR, and attached-worktree conditions, then
+   recheck the lock immediately before the same `--acquire --takeover`.
+   Require its exact agent/claim pair still to equal the verified ancestor
+   and confirm that pair in the takeover output's `holder`; otherwise stop.
+   This session's own claim-id and
    agent-id: skip the takeover. No lock (`present` is false): the normal
    `--acquire` with the same flags, no `--takeover`. Any other holder:
    stop. A displaced predecessor that is somehow still running is
