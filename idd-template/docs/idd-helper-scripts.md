@@ -6529,6 +6529,9 @@ This record is durable issue evidence: it is not added to the transient
     `evidence` object (the routing always prints one), and a `released_claim`
     in it is neither unreadable nor the claim's own branch (a released
     claim's branch is inheritable, and so is the path derived from it);
+  - the worktree list is readable and names the primary checkout (an empty
+    list refuses), and the claim's branch has the `issue/<number>-<slug>`
+    shape;
   - no prunable worktree entry is on the branch or at the path;
   - the confirmation issue is open, carries the confirmation label, and no
     longer carries the authoring label, read through the trusted record
@@ -6547,24 +6550,24 @@ This record is durable issue evidence: it is not added to the transient
 - Branch mode, in addition: the branch is the claim's computed branch, never
   an argument, and is neither the default nor the development branch. It is a
   plain ref: a symbolic ref refuses, because deleting one could remove its
-  target. It is
-  checked out in no worktree and no worktree is mid-rebase or mid-bisect on
-  it (the scoped scan of A5(e)). `git branch -d` would refuse it: it is not
-  merged into its upstream when one is configured and resolvable, else not
-  merged into the primary's HEAD. A branch that `-d` deletes keeps today's
-  stop. `git ls-remote --heads` on every remote shows no such branch (a clone
-  with no remote refuses, since absence cannot be proven), no open pull
-  request has it as its head (a listing that reaches its 100-row limit
-  refuses), and a failed read refuses. The action creates the backup ref
-  `refs/idd-b1/<issue>/<commit>` with a create-only `git update-ref` (an
-  existing plain ref at the same commit is reused; a symbolic ref, another
-  commit, or a ref that collides with the backup path refuses), reads it
-  back, deletes the branch with
+  target. It is checked out in no worktree and no worktree is mid-rebase or
+  mid-bisect on it (the scoped scan of A5(e)). `git branch -d` would refuse
+  it: it is not merged into its upstream when one is configured and
+  resolvable, else not merged into the primary's HEAD. A branch that `-d`
+  deletes keeps today's stop. `git ls-remote --heads` on every remote shows
+  no such branch (a clone with no remote refuses, since absence cannot be
+  proven), no open pull request has it as its head (a listing that reaches
+  its 100-row limit refuses), and a failed or malformed read refuses. The
+  action creates the backup ref `refs/idd-b1/<issue>/<commit>` with a
+  create-only `git update-ref` (an existing plain ref at the same commit is
+  reused; a symbolic ref, another commit, or a ref that collides with the
+  backup path refuses), reads it back, deletes the branch with
   `git update-ref --no-deref -d refs/heads/<branch> <commit>` (which fails
   when the tip moved), and removes the `branch.<name>` configuration section
   when the repository's own configuration holds keys, so that a recreated
-  branch does not inherit it. The branch reflog is lost; the commits stay
-  reachable from the backup ref.
+  branch does not inherit it. The ref and the section are read back after
+  each removal, whatever the command reported. The branch reflog is lost; the
+  commits stay reachable from the backup ref.
 - Path mode, in addition: the path is the computed worktree path, a direct
   child of the primary's parent, and that parent is not a link. The entry
   belongs to the current user (a platform without user IDs refuses) and is
