@@ -1228,6 +1228,13 @@ export async function runProvisionalDecisionCommand(
     );
   }
   if (stepEight.state === 'refused') {
+    if (
+      stepEight.action === 'fix-input' &&
+      stepEight.recordId === initialPlan.candidateRecord.recordId &&
+      stepEight.commentUrl !== ''
+    ) {
+      return stepEight;
+    }
     return recoveryHold(
       stepEight,
       `step-8 fresh read no longer satisfies the plan: ${stepEight.reason ?? stepEight.action}`,
