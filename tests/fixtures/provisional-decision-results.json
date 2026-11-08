@@ -1,0 +1,78 @@
+[
+  {
+    "recordId": "record-4793-planned",
+    "commentUrl": "https://github.com/kurone-kito/idd-skill/issues/4793#issuecomment-100",
+    "state": "planned",
+    "plan": {
+      "candidateRecord": {
+        "schemaVersion": 1,
+        "recordId": "record-4793-candidate",
+        "source": {
+          "repository": "kurone-kito/idd-skill",
+          "issueNumber": 4793,
+          "snapshot": {
+            "title": "Example provisional decision",
+            "bodySha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "updatedAt": "2026-11-03T11:00:00Z"
+          }
+        },
+        "bundleGeneration": 1,
+        "decisionGeneration": 1,
+        "claimLineage": [
+          {
+            "claimId": "claim-4793-example",
+            "agentId": "codex-example",
+            "branch": "issue/4793-feat-decisions-add-provisional-decision",
+            "claimedAt": "2026-11-03T11:00:00Z"
+          }
+        ],
+        "evidenceReferences": [
+          "https://github.com/kurone-kito/idd-skill/issues/4793"
+        ],
+        "event": {
+          "type": "selected"
+        }
+      },
+      "verifiedClaimLineage": [
+        {
+          "claimId": "claim-4793-example",
+          "agentId": "codex-example",
+          "branch": "issue/4793-feat-decisions-add-provisional-decision",
+          "claimedAt": "2026-11-03T11:00:00Z",
+          "commentId": "1"
+        }
+      ],
+      "verifiedAt": "2026-11-03T11:00:10Z",
+      "locatedDecision": null,
+      "history": {
+        "comments": [],
+        "complete": true,
+        "serverDate": "Tue, 03 Nov 2026 11:00:10 GMT"
+      },
+      "baseline": {
+        "title": "Example provisional decision",
+        "bodySha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "existingRecord": null,
+      "pullRequest": null
+    }
+  },
+  {
+    "recordId": "record-4793-applied",
+    "commentUrl": "https://github.com/kurone-kito/idd-skill/issues/4793#issuecomment-101",
+    "state": "applied"
+  },
+  {
+    "recordId": "record-4793-reconciled",
+    "commentUrl": "https://github.com/kurone-kito/idd-skill/issues/4793#issuecomment-102",
+    "state": "reconciled",
+    "action": "reconcile"
+  },
+  {
+    "recordId": null,
+    "commentUrl": "",
+    "reason": "The requested input could not be applied.",
+    "state": "refused",
+    "action": "fix-input"
+  }
+]

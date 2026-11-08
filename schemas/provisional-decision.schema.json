@@ -1,0 +1,569 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kurone-kito.github.io/idd-skill/schemas/provisional-decision.schema.json",
+  "title": "Provisional Decision Command Result",
+  "description": "Closed result report returned by the provisional-decision command.",
+  "type": "object",
+  "required": [
+    "recordId",
+    "commentUrl",
+    "state"
+  ],
+  "properties": {
+    "recordId": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Record identity produced or recovered by the command, or null when no record exists."
+    },
+    "commentUrl": {
+      "type": "string",
+      "description": "URL of the record comment, or an empty string when no comment exists."
+    },
+    "reason": {
+      "type": "string",
+      "description": "Reason for refusing the requested transition, when applicable."
+    },
+    "plan": {
+      "type": "object",
+      "required": [
+        "candidateRecord",
+        "verifiedClaimLineage",
+        "verifiedAt",
+        "locatedDecision",
+        "history",
+        "baseline",
+        "existingRecord",
+        "pullRequest"
+      ],
+      "properties": {
+        "candidateRecord": {
+          "type": "object",
+          "required": [
+            "schemaVersion",
+            "recordId",
+            "source",
+            "bundleGeneration",
+            "decisionGeneration",
+            "claimLineage",
+            "evidenceReferences",
+            "event"
+          ],
+          "properties": {
+            "schemaVersion": {
+              "type": "integer",
+              "enum": [
+                1
+              ],
+              "description": "Version of the provisional decision record shape."
+            },
+            "recordId": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Stable identity of this provisional decision record."
+            },
+            "source": {
+              "type": "object",
+              "required": [
+                "repository",
+                "issueNumber",
+                "snapshot"
+              ],
+              "properties": {
+                "repository": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$",
+                  "description": "Owner and repository name of the source issue."
+                },
+                "issueNumber": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991,
+                  "description": "Number of the source issue."
+                },
+                "snapshot": {
+                  "type": "object",
+                  "required": [
+                    "title",
+                    "bodySha256",
+                    "updatedAt"
+                  ],
+                  "properties": {
+                    "title": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "Source issue title at the observed snapshot."
+                    },
+                    "bodySha256": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$",
+                      "description": "SHA-256 digest of the source issue body at the observed snapshot."
+                    },
+                    "updatedAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "description": "Source issue update time at the observed snapshot."
+                    }
+                  },
+                  "additionalProperties": false,
+                  "description": "Source issue content identity observed during planning."
+                }
+              },
+              "additionalProperties": false,
+              "description": "Source issue identity and the content snapshot used for this decision."
+            },
+            "bundleGeneration": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991,
+              "description": "Generation of the decision bundle that contains this record."
+            },
+            "decisionGeneration": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991,
+              "description": "Generation of the decision represented by this record."
+            },
+            "claimLineage": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "claimId",
+                  "agentId",
+                  "branch",
+                  "claimedAt"
+                ],
+                "properties": {
+                  "claimId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Unique ID of the claim."
+                  },
+                  "agentId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Session-qualified ID of the agent that held the claim."
+                  },
+                  "branch": {
+                    "type": "string",
+                    "pattern": "^issue/[0-9]+-[a-z0-9]+(?:-[a-z0-9]+)*$",
+                    "description": "Git branch associated with the claim."
+                  },
+                  "claimedAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "Time the claim was created."
+                  },
+                  "supersedes": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Earlier claim ID replaced by this claim, when applicable."
+                  }
+                },
+                "additionalProperties": false
+              },
+              "description": "Trusted claim markers that establish the work lineage for this decision."
+            },
+            "evidenceReferences": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^https?://\\S+$",
+                "format": "uri"
+              },
+              "description": "URLs that support this decision record."
+            },
+            "event": {
+              "type": "object",
+              "required": [
+                "type"
+              ],
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "description": "Kind of decision event represented by the record."
+                }
+              },
+              "additionalProperties": true,
+              "description": "Decision event data stored with the record."
+            }
+          },
+          "additionalProperties": false,
+          "description": "The provisional decision record that would be appended."
+        },
+        "verifiedClaimLineage": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "claimId",
+              "agentId",
+              "branch",
+              "claimedAt"
+            ],
+            "properties": {
+              "claimId": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Unique ID of the verified claim."
+              },
+              "agentId": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Session-qualified ID of the verified claim owner."
+              },
+              "branch": {
+                "type": "string",
+                "pattern": "^issue/[0-9]+-[a-z0-9]+(?:-[a-z0-9]+)*$",
+                "description": "Git branch associated with the verified claim."
+              },
+              "claimedAt": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Time the verified claim was created."
+              },
+              "supersedes": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Earlier claim ID replaced by this verified claim, when applicable."
+              },
+              "commentId": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Issue comment ID that records the verified claim."
+              }
+            },
+            "additionalProperties": false
+          },
+          "description": "Claim lineage independently verified from trusted issue history."
+        },
+        "verifiedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server time when the evidence in this plan was verified."
+        },
+        "locatedDecision": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "required": [
+            "recordId",
+            "bundleGeneration",
+            "decisionGeneration",
+            "status",
+            "bundleState"
+          ],
+          "properties": {
+            "recordId": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Stable identity of the located decision record."
+            },
+            "bundleGeneration": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991,
+              "description": "Generation of the bundle containing the located decision."
+            },
+            "decisionGeneration": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991,
+              "description": "Generation of the located decision."
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "selected",
+                "in-progress",
+                "confirmation-pending",
+                "confirmed",
+                "rework-requested",
+                "rework-authored"
+              ],
+              "description": "Current replayed status of the located decision."
+            },
+            "bundleState": {
+              "type": "string",
+              "enum": [
+                "accepting",
+                "waiting",
+                "complete"
+              ],
+              "description": "Current state of the bundle containing the located decision."
+            }
+          },
+          "additionalProperties": false,
+          "description": "Current replayed decision, or null when no valid decision is located."
+        },
+        "history": {
+          "type": "object",
+          "required": [
+            "comments",
+            "complete",
+            "serverDate"
+          ],
+          "properties": {
+            "comments": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "id",
+                  "url",
+                  "body",
+                  "authorLogin",
+                  "createdAt",
+                  "edited",
+                  "trustedAuthor"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Server-assigned ID of the issue comment."
+                  },
+                  "url": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "URL of the issue comment."
+                  },
+                  "body": {
+                    "type": "string",
+                    "description": "Comment body as read from issue history."
+                  },
+                  "authorLogin": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "GitHub login of the comment author, or null when unavailable."
+                  },
+                  "createdAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "Server creation time of the issue comment."
+                  },
+                  "edited": {
+                    "type": "boolean",
+                    "description": "Whether the comment has been edited."
+                  },
+                  "trustedAuthor": {
+                    "type": "boolean",
+                    "description": "Whether the author is trusted to provide IDD markers."
+                  }
+                },
+                "additionalProperties": false
+              },
+              "description": "Issue comments in server order."
+            },
+            "complete": {
+              "type": "boolean",
+              "description": "Whether every page of issue history was read successfully."
+            },
+            "serverDate": {
+              "type": "string",
+              "minLength": 1,
+              "description": "HTTP Date header returned by the issue history read."
+            }
+          },
+          "additionalProperties": false,
+          "description": "Complete issue history snapshot used to verify the decision."
+        },
+        "baseline": {
+          "type": "object",
+          "required": [
+            "title",
+            "bodySha256"
+          ],
+          "properties": {
+            "title": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Source issue title captured in the baseline."
+            },
+            "bodySha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$",
+              "description": "SHA-256 digest of the source issue body captured in the baseline."
+            }
+          },
+          "additionalProperties": false,
+          "description": "Source issue baseline compared with the current issue."
+        },
+        "existingRecord": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "required": [
+            "commentId",
+            "commentUrl",
+            "labelPresent"
+          ],
+          "properties": {
+            "commentId": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Issue comment ID of the existing decision record."
+            },
+            "commentUrl": {
+              "type": "string",
+              "minLength": 1,
+              "description": "URL of the existing decision record comment."
+            },
+            "labelPresent": {
+              "type": "boolean",
+              "description": "Whether the completion label is present on the source issue."
+            }
+          },
+          "additionalProperties": false,
+          "description": "Previously stored decision record, or null when none exists."
+        },
+        "pullRequest": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "required": [
+            "state",
+            "headSha",
+            "mergeCommitSha",
+            "requiredChecksPassing"
+          ],
+          "properties": {
+            "state": {
+              "type": "string",
+              "enum": [
+                "open",
+                "merged",
+                "closed-unmerged"
+              ],
+              "description": "Current pull request state."
+            },
+            "headSha": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Commit SHA at the head of the pull request."
+            },
+            "mergeCommitSha": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Merge commit SHA, or null when the pull request is not merged."
+            },
+            "requiredChecksPassing": {
+              "type": "boolean",
+              "description": "Whether required checks pass for the pull request."
+            }
+          },
+          "additionalProperties": false,
+          "description": "Pull request evidence for completed work, or null when it is not applicable."
+        }
+      },
+      "additionalProperties": false,
+      "description": "Evidence and proposed record used to decide whether the transition is safe."
+    },
+    "state": {
+      "type": "string",
+      "enum": [
+        "planned",
+        "applied",
+        "reconciled",
+        "refused"
+      ],
+      "description": "Outcome state of the provisional decision command."
+    },
+    "action": {
+      "type": "string",
+      "enum": [
+        "none",
+        "reconcile",
+        "recovery-hold",
+        "fix-input"
+      ],
+      "description": "Recovery or follow-up action associated with the outcome, when present."
+    }
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "state": {
+          "enum": [
+            "planned"
+          ]
+        },
+        "action": {
+          "enum": [
+            ""
+          ]
+        }
+      },
+      "required": [
+        "state",
+        "plan"
+      ]
+    },
+    {
+      "properties": {
+        "state": {
+          "enum": [
+            "applied"
+          ]
+        },
+        "action": {
+          "enum": [
+            ""
+          ]
+        }
+      },
+      "required": [
+        "state"
+      ]
+    },
+    {
+      "properties": {
+        "state": {
+          "enum": [
+            "reconciled"
+          ]
+        },
+        "action": {
+          "enum": [
+            "reconcile"
+          ]
+        }
+      },
+      "required": [
+        "state",
+        "action"
+      ]
+    },
+    {
+      "properties": {
+        "state": {
+          "enum": [
+            "refused"
+          ]
+        },
+        "action": {
+          "enum": [
+            "none",
+            "recovery-hold",
+            "fix-input"
+          ]
+        }
+      },
+      "required": [
+        "state",
+        "action"
+      ]
+    }
+  ],
+  "additionalProperties": false
+}
