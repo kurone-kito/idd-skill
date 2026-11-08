@@ -1051,8 +1051,12 @@ export interface DecisionLinksInput extends AutoDecisionReadOptions {
  * trusted login posted it as the first line of a comment that was never
  * edited, and it names a confirmation issue in the same repository (the
  * contract keeps a record's source in its confirmation issue's repository).
- * A trusted void marker on any successfully read confirmation target removes
- * that decision from the result, even when its confirmation label is gone.
+ * When no such link remains, the result is readable and empty (a conflict
+ * report is kept), and no confirmation issue is listed or read, so a failing
+ * list or an unrelated confirmation issue cannot make it unreadable. When a
+ * link remains, a trusted void marker on any successfully read confirmation
+ * target removes that decision from the result, even when its confirmation
+ * label is gone.
  */
 // audit:ignore-dead-export: the auto-decide caps and crash recovery (#4955) consume this reader; until they land, only the focused tests call it
 export function readDecisionLinks(
@@ -1093,6 +1097,17 @@ export function readDecisionLinks(
       });
     }
     const { kept, conflicting } = resolveDecisions(entries, sameLink);
+    if (kept.length === 0) {
+      // A void marker only ever removes a kept link, so with none left the
+      // confirmation scan could change nothing in the result.
+      return {
+        status: 'readable',
+        number: input.number,
+        links: [],
+        conflictingDecisions: conflicting,
+        voidedDecisions: [],
+      };
+    }
     const listed = listLabelledIssues(
       provider,
       owner,
@@ -1245,12 +1260,16 @@ function sameIssueNumbers(
 
 /**
  * Every issue on the REST list for one label, from a set that two consecutive
- * scans agree on. The list pages by number, so an issue that closes or loses
- * the label during a scan shifts every later entry back by one, and the entry
- * that crosses onto a page already read is silently skipped. For a cap count
- * that undercount is not acceptable, so the list is scanned twice, and once
- * more when the two sets differ. A third scan that still differs from the
- * second is unreadable. The bodies come from the later agreeing scan.
+ * scans agree on. The provider requests the list in creation order, oldest
+ * first (`sort=created&direction=asc`), and each scan returns its set sorted
+ * by issue number only so two scans can be compared entry by entry. Whatever
+ * the sort key, an issue that leaves the list during a scan (it closes under
+ * an open-only list, or loses the label) shifts every later entry back by
+ * one, and the entry that crosses onto a page already read is silently
+ * skipped. For a cap count that undercount is not acceptable, so the list is
+ * scanned twice, and once more when the two sets differ. A third scan that
+ * still differs from the second is unreadable. The bodies come from the later
+ * agreeing scan.
  */
 function listLabelledIssues(
   provider: AutoDecisionRecordsProvider,

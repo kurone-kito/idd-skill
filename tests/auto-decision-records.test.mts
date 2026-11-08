@@ -1076,6 +1076,179 @@ test('a comma-containing confirmation label makes link reads unreadable', () => 
   assert.deepEqual(github.listCalls, []);
 });
 
+const NO_LINKS_READ = {
+  status: 'readable',
+  number: 100,
+  links: [],
+  conflictingDecisions: [],
+  voidedDecisions: [],
+};
+
+test('no counting link on the source lists and reads no confirmation issue', () => {
+  const cases: Record<string, CommentFixture[]> = {
+    'no link comment': [],
+    'a link from an untrusted login': [
+      { id: 100001, author: STRANGER, body: linkComment({}) },
+    ],
+    'an edited link': [
+      { id: 100001, body: linkComment({}), lastEditedAt: EDITED_AT },
+    ],
+    'a link not on the first line': [
+      { id: 100001, body: `See below.\n${linkComment({})}` },
+    ],
+    'a link to another repository': [
+      { id: 100001, body: linkComment({ confirmation: 'other/repo#200' }) },
+    ],
+  };
+  for (const [name, comments] of Object.entries(cases)) {
+    const github = new FakeGithub(
+      confirmationIssue(200, {
+        comments: [{ id: 200002, body: voidComment('d1') }],
+      }),
+      sourceIssue(100, comments),
+    );
+    // Only the source issue is readable, and the label list fails: a result
+    // that depended on either would be unreadable.
+    github.issuePageOverride = (request) => {
+      if (request.number !== 100) {
+        throw new Error('gh: HTTP 502');
+      }
+      return undefined;
+    };
+    github.listPageOverride = () => {
+      throw new Error('gh: HTTP 500');
+    };
+    assert.deepEqual(links(github, 100), NO_LINKS_READ, name);
+    assert.deepEqual(github.listCalls, [], name);
+    assert.deepEqual(
+      github.issueCalls.map((call) => call.number),
+      [100],
+      name,
+    );
+  }
+});
+
+test('a link no trusted actor posted leaves a readable empty result', () => {
+  const github = new FakeGithub(
+    confirmationIssue(200),
+    sourceIssue(100, [{ id: 100001, body: linkComment({}) }]),
+  );
+  for (const policy of [
+    policyFile('no-actors.json', JSON.stringify({ trustedMarkerActors: [] })),
+    policyFile('no-actors-key.json', JSON.stringify({ markerPrefix: PREFIX })),
+  ]) {
+    assert.deepEqual(links(github, 100, policy), NO_LINKS_READ, policy);
+  }
+  assert.deepEqual(github.listCalls, []);
+  assert.deepEqual(
+    [...new Set(github.issueCalls.map((call) => call.number))],
+    [100],
+  );
+});
+
+test('conflicting links alone are reported without listing or reading a confirmation issue', () => {
+  const github = new FakeGithub(
+    confirmationIssue(200),
+    sourceIssue(100, [
+      { id: 100001, body: linkComment({}) },
+      { id: 100002, body: linkComment({ claim: 'claim-b' }) },
+    ]),
+  );
+  assert.deepEqual(links(github, 100), {
+    ...NO_LINKS_READ,
+    conflictingDecisions: ['d1'],
+  });
+  assert.deepEqual(github.listCalls, []);
+  assert.deepEqual(
+    github.issueCalls.map((call) => call.number),
+    [100],
+  );
+});
+
+test('a remaining link scans the confirmation label twice and reads its target', () => {
+  const target = `${OWNER}/${REPO}#200`;
+  const github = new FakeGithub(
+    confirmationIssue(200),
+    sourceIssue(100, [
+      { id: 100001, body: linkComment({ confirmation: target }) },
+    ]),
+  );
+  const linked = readable(links(github, 100));
+  assert.deepEqual(
+    linked.links.map((link) => link.decision),
+    ['d1'],
+  );
+  assert.deepEqual(
+    github.listCalls.map((call) => [call.label, call.state, call.page]),
+    [
+      [CONFIRMATION_LABEL, 'all', 1],
+      [CONFIRMATION_LABEL, 'all', 1],
+    ],
+  );
+  assert.deepEqual(
+    github.issueCalls.map((call) => call.number),
+    [100, 200],
+  );
+
+  // A conflicting decision does not stop the scan for a decision that remains.
+  const mixed = new FakeGithub(
+    confirmationIssue(200),
+    sourceIssue(100, [
+      { id: 100001, body: linkComment({ confirmation: target }) },
+      {
+        id: 100002,
+        body: linkComment({ claim: 'claim-b', confirmation: target }),
+      },
+      {
+        id: 100003,
+        body: linkComment({ decision: 'd2', confirmation: target }),
+      },
+    ]),
+  );
+  const result = readable(links(mixed, 100));
+  assert.deepEqual(
+    result.links.map((link) => link.decision),
+    ['d2'],
+  );
+  assert.deepEqual(result.conflictingDecisions, ['d1']);
+  assert.equal(mixed.listCalls.length, 2);
+});
+
+test('a remaining link keeps a failed list or confirmation read unreadable', () => {
+  const build = (): FakeGithub =>
+    new FakeGithub(
+      confirmationIssue(200),
+      confirmationIssue(201),
+      sourceIssue(100, [
+        {
+          id: 100001,
+          body: linkComment({ confirmation: `${OWNER}/${REPO}#200` }),
+        },
+      ]),
+    );
+
+  // A listed confirmation issue other than the link's target cannot be read:
+  // its void marker could remove the linked decision.
+  const unreadableListed = build();
+  unreadableListed.issuePageOverride = (request) => {
+    if (request.number === 201) {
+      throw new Error('gh: HTTP 502');
+    }
+    return undefined;
+  };
+  const listed = links(unreadableListed, 100);
+  assert.equal(listed.status, 'unreadable');
+  assert.match(listed.status === 'unreadable' ? listed.error : '', /502/);
+
+  const listFailing = build();
+  listFailing.listPageOverride = () => {
+    throw new Error('gh: HTTP 500');
+  };
+  const failed = links(listFailing, 100);
+  assert.equal(failed.status, 'unreadable');
+  assert.match(failed.status === 'unreadable' ? failed.error : '', /500/);
+});
+
 test('row: a REST list entry that is a pull request is skipped', () => {
   const github = new FakeGithub(
     confirmationIssue(200),
