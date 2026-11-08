@@ -80,6 +80,62 @@ test('standard B1 keeps the primary worktree on the GitHub default branch', () =
   }
 });
 
+test('standard B1 guards unset helper selection before direct lookups', () => {
+  for (const relativePath of STANDARD_WORK_PATHS) {
+    const primaryStep = /^1\. ([\s\S]*?)(?=^2\. )/m.exec(
+      standardB1(relativePath),
+    );
+    assert.ok(primaryStep, `${relativePath}: primary-worktree step`);
+    const primary = primaryStep[1].replace(/\s+/g, ' ');
+    const ordered = [
+      "For the helper, set `GH_HOST` to origin's host if unset; stop if set differently.",
+      'Before fresh `claim-issue`, unset `GH_REPO`;',
+      'gh repo view --json nameWithOwner --jq .nameWithOwner',
+      'gh repo view --json url --jq .url',
+      'Before profile-selected `claim-issue`',
+      'gh repo view "{origin-repository}" --json nameWithOwner --jq .nameWithOwner',
+      'gh repo view "{origin-repository}" --json defaultBranchRef --jq .defaultBranchRef.name',
+    ];
+    const positions = ordered.map((part) => primary.indexOf(part));
+    for (const [index, position] of positions.entries()) {
+      assert.notEqual(position, -1, `${relativePath}: ${ordered[index]}`);
+    }
+    assert.deepEqual(
+      [...positions].sort((left, right) => left - right),
+      positions,
+      `${relativePath}: guard precedes helper and direct lookups`,
+    );
+    assert.match(primary, /keep `GH_REPO` unset\./, relativePath);
+    assert.match(
+      primary,
+      /Compare owner\/repo and host case-insensitively; stop on parse\/lookup failure or mismatch\./,
+      relativePath,
+    );
+    assert.match(
+      primary,
+      /match `nameWithOwner` to origin's owner\/repo and `url`'s host to origin's host/,
+      relativePath,
+    );
+  }
+});
+
+test('fresh A5 runs B1 repository guards before the helper and worktree', () => {
+  for (const relativePath of [
+    'idd-template/.github/instructions/idd-claim.instructions.md',
+    '.github/instructions/idd-claim.instructions.md',
+  ]) {
+    const claim = readTemplate(relativePath).replace(/\s+/g, ' ');
+    const guard = claim.indexOf(
+      "Run [B1 Step 1's repository guards](idd-work.instructions.md#b1--create-worktree-with-branch)",
+    );
+    const helper = claim.indexOf(
+      'before `claim-issue`; keep `GH_REPO` unset through the helper',
+    );
+    const creation = claim.indexOf('1. Create the worktree and branch:');
+    assert.ok(guard >= 0 && guard < helper && helper < creation, relativePath);
+  }
+});
+
 test('only standard Worktree creation Step 2 uses the development branch', () => {
   for (const relativePath of STANDARD_WORK_PATHS) {
     const b1 = standardB1(relativePath);

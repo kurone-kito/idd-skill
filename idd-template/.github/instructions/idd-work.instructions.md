@@ -23,20 +23,22 @@ for shared-clone fetch, merge, worktree operations, and F4 cleanup; see
 
 1. Parse `origin` as credential-free `{origin-repository}`
    (`[HOST/]OWNER/REPO`); strip userinfo, never print/pass the URL. Resolve
-   SSH aliases with `ssh -G`'s `hostname`. Stop on parse/lookup failure.
-   Match `nameWithOwner` to origin's owner/repo case-insensitively;
-   stop on mismatch. Preserve explicit host routing.
+   SSH aliases with `ssh -G`'s `hostname`. For the helper, set `GH_HOST`
+   to origin's host if unset; stop if set differently.
+   Compare owner/repo and host case-insensitively; stop on parse/lookup
+   failure or mismatch.
 
-   Before fresh-claim `claim-issue`, unset `GH_REPO`; run the separate
+   Before fresh `claim-issue`, unset `GH_REPO`; run the separate
    unqualified guard (issue `#5090`):
 
    ```sh
    gh repo view --json nameWithOwner --jq .nameWithOwner
+   gh repo view --json url --jq .url
    ```
 
-   Require that identity match before the helper; invoke the
-   profile-selected `claim-issue` with `GH_REPO` still unset.
-   Direct B1 lookups use positional `{origin-repository}`:
+   Before profile-selected `claim-issue`, match `nameWithOwner` to origin's
+   owner/repo and `url`'s host to origin's host; keep `GH_REPO` unset.
+   Direct lookups:
 
    ```sh
    gh repo view "{origin-repository}" --json nameWithOwner --jq .nameWithOwner
@@ -57,12 +59,12 @@ for shared-clone fetch, merge, worktree operations, and F4 cleanup; see
    git -c merge.autoStash=false merge --ff-only origin/{default-branch}
    ```
 
-   On merge failure or dirty primary, stop before creation and report;
-   dirty reports include `primary-worktree-dirty` and paths. Ask the
+   On merge failure/dirty primary, stop/report before creation;
+   dirty reports: `primary-worktree-dirty` and paths. Ask the
    operator to preserve staged/unstaged content and resolve staged/unmerged
-   paths. Move only this session's unstaged paths outside the repo; ask
-   before moving others. Rerun Step 1. Never stash, discard, or remove a
-   worktree (issue `#5058`). Follow Anti-patterns below.
+   paths. Move only this session's unstaged paths outside repo; ask
+   before moving others. Rerun Step 1. Never stash/discard/remove a
+   worktree (issue `#5058`). Follow Anti-patterns.
 
 2. Run `git worktree list`. Inspect an existing branch worktree and acquire
    its [worktree-local claim lock](idd-claim.instructions.md#worktree-local-lock-file-same-machine-collision)
@@ -108,12 +110,12 @@ branch name with every `/` replaced by `-`.
 
 Example: `issue/123-add-foo` → `../{{REPO_NAME}}.issue-123-add-foo`.
 
-**Harness-native worktree tools**: pin both the sibling path and claimed
-`issue/<number>-<slug>` branch or use `git worktree add`/WorkTrunk.
+**Harness-native worktree tools**: pin sibling path and claimed
+`issue/<number>-<slug>` branch, else use `git worktree add`/WorkTrunk.
 Never use Claude Code's `EnterWorktree`
 (`.claude/worktrees/agent-<hash>` only), Grok Build's `grok --worktree`,
 subagent `isolation: worktree`, or `x.ai/git/worktree/*`: they cannot pin
-both (same class as #1930).
+both (issue `#1930`).
 
 **Step 1 — Check for orphaned path**: if the target path already exists
 but is not listed in `git worktree list`, stop and report for manual
