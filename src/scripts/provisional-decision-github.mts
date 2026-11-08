@@ -294,7 +294,7 @@ export function createGithubProvisionalDecisionStore(input: {
   }
   const repoPath = `repos/${repository}`;
   const issuePath = `${repoPath}/issues/${issueNumber}`;
-  const commentsPath = `${issuePath}/comments?per_page=100`;
+  const commentsPath = `${issuePath}/comments`;
   const apiHost = resolveGhApiHostname();
   const host = (
     process.env.GH_HOST?.trim() ||
@@ -315,7 +315,7 @@ export function createGithubProvisionalDecisionStore(input: {
   );
 
   async function readHistory(): Promise<ProvisionalDecisionHistoryRead> {
-    const firstPage = ghApiJsonWithHeaders(commentsPath);
+    const firstPage = ghApiJsonWithHeaders(`${commentsPath}?per_page=1`);
     const serverDate = firstPage.headers.date;
     if (!serverDate || !Number.isFinite(Date.parse(serverDate))) {
       throw new Error('comments first page has no usable HTTP Date');
@@ -326,7 +326,7 @@ export function createGithubProvisionalDecisionStore(input: {
       raw = ghText(
         [
           'api',
-          commentsPath,
+          `${commentsPath}?per_page=100`,
           ...hostnameArgs,
           '--paginate',
           '--jq',

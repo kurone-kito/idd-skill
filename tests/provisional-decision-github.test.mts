@@ -139,7 +139,10 @@ if (!step || step.kind !== kind) {
   process.stderr.write('unexpected stub request: ' + kind);
   process.exit(2);
 }
-let result = step.raw === undefined ? JSON.stringify(step.response) : step.raw;
+const response = kind === 'date' && Array.isArray(step.response)
+  ? step.response.slice(0, Number(new URL('https://example.test/' + endpoint).searchParams.get('per_page') || 30))
+  : step.response;
+let result = step.raw === undefined ? JSON.stringify(response) : step.raw;
 if (args.includes('--include') && !step.fail) {
   result = 'HTTP/2.0 200 OK\\r\\nDate: ' + (step.date || ${JSON.stringify(date)}) + '\\r\\n\\r\\n' + result;
 }
@@ -210,6 +213,22 @@ test('history retains all authors, string IDs, edit evidence and first-page Date
       assert.ok(calls()[2]?.args.some((arg) => arg.includes('lastEditedAt')));
     },
   );
+});
+
+test('large history bounds the header page without dropping paginated bodies', async () => {
+  const body = 'x'.repeat(60_000);
+  const rows = Array.from({ length: 20 }, (_, index) =>
+    row(String(index + 1), { body }),
+  );
+  const steps = history(rows);
+  steps[0] = { kind: 'date', response: rows };
+  await withGh(steps, async (store) => {
+    const result = await store.readHistory();
+    assert.equal(result.complete, true);
+    assert.equal(result.serverDate, date);
+    assert.equal(result.comments.length, rows.length);
+    assert.ok(result.comments.every((comment) => comment.body === body));
+  });
 });
 
 test('a failed later page preserves its prefix and reports incomplete', async () => {
