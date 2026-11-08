@@ -215,8 +215,10 @@ function isConfirmationClass(value) {
   return AUTO_DECIDE_CONFIRMATION_CLASSES.includes(value);
 }
 function readTrustContext(options) {
-  const loaded = readRepositoryPolicyFile(options.policyPath || undefined);
-  const config = loaded.config;
+  const config =
+    options.trustedPolicyConfig === undefined
+      ? readRepositoryPolicyFile(options.policyPath || undefined).config
+      : options.trustedPolicyConfig;
   // Repository policy only: no flag or environment value may widen the list.
   const { actors } = resolveTrustedMarkerActors({ config });
   return {
@@ -918,8 +920,8 @@ export function findConfirmationIssues(
     if (state !== 'open' && state !== 'all') {
       throw new Error(`the state must be open or all (got ${String(state)})`);
     }
-    const context = readTrustContext(input);
     const { owner, repo } = input.repository;
+    const context = readTrustContext(input);
     const listed = listLabelledIssues(
       provider,
       owner,
@@ -1004,9 +1006,11 @@ export function findConfirmationIssues(
 }
 /**
  * Count every open issue carrying the trusted confirmation label. The REST
- * list is scanned until two consecutive all-page snapshots agree, then each
- * listed issue is read again so a closure or label removal during pagination
- * does not inflate the count. A failed list or issue read stays unreadable.
+ * list is scanned until two consecutive all-page snapshots agree, so a closure
+ * or label removal during pagination cannot silently drop an issue that moved
+ * onto an already-read page. The stable list itself is sufficient for this
+ * count; fetching every issue's comment history would add cost without adding
+ * count data.
  */
 export function countPendingConfirmationIssues(
   input,
@@ -1023,17 +1027,7 @@ export function countPendingConfirmationIssues(
       input.confirmationLabel,
       'open',
     );
-    let count = 0;
-    for (const entry of listed) {
-      const snapshot = readIssueSnapshot(provider, owner, repo, entry.number);
-      if (
-        snapshot.state === 'open' &&
-        snapshot.labels.some((name) => sameText(name, input.confirmationLabel))
-      ) {
-        count += 1;
-      }
-    }
-    return { status: 'readable', count };
+    return { status: 'readable', count: listed.length };
   } catch (error) {
     return unreadable(error);
   }
@@ -1260,7 +1254,7 @@ function unreadableResult(output, mode, repository, error, details = {}) {
     ...details,
     error,
   });
-  return { exitCode: 1, kind: 'gate', message: error, httpStatus: null };
+  return { exitCode: 1, kind: 'transport', message: error, httpStatus: null };
 }
 function printAutoDecisionRecordsHelp(output) {
   output(`Usage:
@@ -1328,8 +1322,9 @@ export function runAutoDecisionRecordsCli(argv, dependencies = {}) {
       { trustedPolicy: trusted },
     );
   }
+  let trustedPolicyConfig;
   let authoringLabel;
-  if (mode === 'records' || mode === 'confirmation') {
+  if (mode === 'records' || mode === 'confirmation' || mode === 'links') {
     try {
       const loadTrustedConfig =
         dependencies.loadTrustedConfig ??
@@ -1342,10 +1337,13 @@ export function runAutoDecisionRecordsCli(argv, dependencies = {}) {
         repository.repo,
         trusted.ref,
       );
-      authoringLabel =
-        normalizePolicyConfig(config).issueAuthoring.authoringLabelName;
+      trustedPolicyConfig = config;
+      if (mode === 'records' || mode === 'confirmation') {
+        authoringLabel =
+          normalizePolicyConfig(config).issueAuthoring.authoringLabelName;
+      }
     } catch (error) {
-      const message = `the trusted authoring-label policy could not be read: ${errorMessage(error)}`;
+      const message = `the trusted repository policy could not be read: ${errorMessage(error)}`;
       return unreadableResult(output, mode, repository, message);
     }
   }
@@ -1386,6 +1384,7 @@ export function runAutoDecisionRecordsCli(argv, dependencies = {}) {
         ...(dependencies.policyPath === undefined
           ? {}
           : { policyPath: dependencies.policyPath }),
+        ...(trustedPolicyConfig === undefined ? {} : { trustedPolicyConfig }),
       },
       provider,
     );
@@ -1420,6 +1419,7 @@ export function runAutoDecisionRecordsCli(argv, dependencies = {}) {
         ...(dependencies.policyPath === undefined
           ? {}
           : { policyPath: dependencies.policyPath }),
+        ...(trustedPolicyConfig === undefined ? {} : { trustedPolicyConfig }),
       },
       provider,
     );
@@ -1438,6 +1438,7 @@ export function runAutoDecisionRecordsCli(argv, dependencies = {}) {
       ...(dependencies.policyPath === undefined
         ? {}
         : { policyPath: dependencies.policyPath }),
+      ...(trustedPolicyConfig === undefined ? {} : { trustedPolicyConfig }),
     },
     provider,
   );

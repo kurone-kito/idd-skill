@@ -1843,6 +1843,7 @@ interface CliFixtureOptions {
   status?: 'readable' | 'unreadable';
   repositorySlug?: string | null;
   trustedConfig?: unknown;
+  localPolicyPath?: string;
 }
 
 function runCliFixture(
@@ -1877,14 +1878,16 @@ function runCliFixture(
     },
     loadTrustedConfig: (owner, repo, ref) => {
       configReads.push({ owner, repo, ref });
-      return (
-        options.trustedConfig ?? {
-          issueAuthoring: { authoringLabelName: AUTHORING_LABEL },
-        }
-      );
+      return options.trustedConfig === undefined
+        ? {
+            issueAuthoring: { authoringLabelName: AUTHORING_LABEL },
+            markerPrefix: PREFIX,
+            trustedMarkerActors: [TRUSTED],
+          }
+        : options.trustedConfig;
     },
     provider: github,
-    policyPath: TRUSTED_POLICY,
+    policyPath: options.localPolicyPath ?? TRUSTED_POLICY,
     writeOutput: (text) => {
       stdout += text;
     },
@@ -1943,7 +1946,7 @@ test('pending count scans every stable page and excludes pull requests', () => {
     [1, 2, 1, 2],
   );
   assert.ok(github.listCalls.every((request) => request.state === 'open'));
-  assert.equal(github.issueCalls.length, 101);
+  assert.deepEqual(github.issueCalls, []);
 });
 
 test('CLI records flatten issue labels and note flags and pass --base-ref', () => {
@@ -2081,7 +2084,58 @@ test('CLI confirmation and links modes expose their reader reports', () => {
     ),
     ['d1'],
   );
-  assert.deepEqual(links.configReads, []);
+  assert.deepEqual(links.configReads, [
+    { owner: OWNER, repo: REPO, ref: 'main' },
+  ]);
+});
+
+test('CLI link trust comes from the trusted ref rather than the checkout policy', () => {
+  const localPolicy = policyFile(
+    'untrusted-local.json',
+    JSON.stringify({
+      markerPrefix: 'local-only',
+      trustedMarkerActors: [STRANGER],
+    }),
+  );
+  const github = new FakeGithub(
+    confirmationIssue(200),
+    sourceIssue(300, [
+      {
+        id: 300001,
+        body: linkComment({ confirmation: `${OWNER}/${REPO}#200` }),
+      },
+    ]),
+  );
+  const result = runCliFixture(
+    github,
+    ['--links', '--issue', '300', '--owner', OWNER, '--repo', REPO],
+    { localPolicyPath: localPolicy },
+  );
+  assert.equal(cliExitCode(result.outcome), 0);
+  assert.equal(result.report.status, 'readable');
+  assert.deepEqual(
+    (result.report.links as Array<Record<string, unknown>>).map(
+      (link) => link.decision,
+    ),
+    ['d1'],
+  );
+  assert.deepEqual(result.configReads, [
+    { owner: OWNER, repo: REPO, ref: 'main' },
+  ]);
+
+  const noTrustedActors = runCliFixture(
+    github,
+    ['--links', '--issue', '300', '--owner', OWNER, '--repo', REPO],
+    {
+      localPolicyPath: TRUSTED_POLICY,
+      trustedConfig: {
+        markerPrefix: PREFIX,
+        trustedMarkerActors: [],
+      },
+    },
+  );
+  assert.equal(cliExitCode(noTrustedActors.outcome), 0);
+  assert.deepEqual(noTrustedActors.report.links, []);
 });
 
 test('CLI stops unreadable trusted policy and usage errors before provider reads', () => {
@@ -2093,6 +2147,12 @@ test('CLI stops unreadable trusted policy and usage errors before provider reads
   );
   assert.equal(cliExitCode(unreadable.outcome), 1);
   assert.equal(unreadable.report.status, 'unreadable');
+  assert.equal(
+    typeof unreadable.outcome === 'number'
+      ? 'success'
+      : unreadable.outcome.kind,
+    'transport',
+  );
   assert.equal(github.issueCalls.length, 0);
   assert.equal(github.listCalls.length, 0);
 
@@ -2117,12 +2177,6 @@ test('CLI returns unreadable for provider failures in every mode', () => {
       name: 'pending count list failure',
       argv: ['--pending-count'],
       fail: 'list',
-      issues: [confirmationIssue(200)],
-    },
-    {
-      name: 'pending count issue failure',
-      argv: ['--pending-count'],
-      fail: 'issue',
       issues: [confirmationIssue(200)],
     },
     {
@@ -2166,5 +2220,10 @@ test('CLI returns unreadable for provider failures in every mode', () => {
     assert.equal(cliExitCode(result.outcome), 1, fixture.name);
     assert.equal(result.report.status, 'unreadable', fixture.name);
     assert.match(String(result.report.error), /HTTP 502/, fixture.name);
+    assert.equal(
+      typeof result.outcome === 'number' ? 'success' : result.outcome.kind,
+      'transport',
+      fixture.name,
+    );
   }
 });
