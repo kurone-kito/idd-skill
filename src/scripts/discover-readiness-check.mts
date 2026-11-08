@@ -635,14 +635,12 @@ export function extractExplicitBlockedCriterion(
   const normalizedBody = String(body ?? '').replace(/\r\n/gu, '\n');
   let visibleBody = maskMarkdownForScan(normalizedBody, {
     htmlComments: 'mask',
+    htmlBlocks: 'mask',
   });
-  // The edge label is intentionally inline code. Restore only that exact
-  // token when its prose lead stayed visible; all other inline code remains
-  // masked so hidden criteria or evidence cannot authorize progress.
-  const edgeMarker = new RegExp(
-    String.raw`For the edge\s+\x60Blocked by #${blockedIssueNumber}\x60`,
-    'giu',
-  );
+  // Edge labels are intentionally inline code. Restore each visible edge
+  // token only when its prose lead stayed visible; all other inline code
+  // remains masked so hidden criteria or evidence cannot authorize progress.
+  const edgeMarker = /For the edge\s+\x60Blocked by #\d+\x60/giu;
   for (const match of normalizedBody.matchAll(edgeMarker)) {
     const marker = match[0];
     const markerIndex = match.index;
@@ -656,8 +654,14 @@ export function extractExplicitBlockedCriterion(
       marker +
       visibleBody.slice(markerIndex + marker.length);
   }
+  // Keep each rationale attached to its own edge lead. Without this split,
+  // the non-greedy scan can cross a later `For the edge` lead in the same
+  // paragraph and borrow that edge's criterion.
   const matches = visibleBody
     .split(/\n\s*\n/u)
+    .flatMap((paragraph) =>
+      paragraph.split(/(?=For the edge\s+`Blocked by #\d+`)/giu),
+    )
     .map((paragraph) => edgeLine.exec(paragraph))
     .filter((match): match is RegExpExecArray => match !== null);
   if (matches.length !== 1) return null;
@@ -686,13 +690,6 @@ function isHumanApprovalCriterion(value: string): boolean {
     ) ||
     /\bsign(?:ed|s|ing)?[ -]off\b/iu.test(value)
   );
-}
-
-export function allowsProvisionalDependencyProgress(
-  evidence: ProvisionalDecisionEvidence,
-  explicitCriterion: string,
-): boolean {
-  return findProvisionalDecisionMatch(evidence, explicitCriterion) !== null;
 }
 
 function findProvisionalDecisionMatch(
@@ -1207,12 +1204,13 @@ export async function evaluateDiscoverReadiness(
         const sourceHasDecisionLabel = blockedIssue.labels.has(
           needsDecisionLabelName,
         );
-        const sourceHasHumanOrAuthoringHold = [
-          blockedByHumanLabelName,
-          authoringLabelName,
-          authoringOnlyLabelName,
-          confirmationLabel.labelName,
-        ].some((label) => blockedIssue.labels.has(label));
+        const sourceHasHumanOrAuthoringHold =
+          blockedIssue.labels.has(blockedByHumanLabelName) ||
+          blockedIssue.labels.has(authoringLabelName) ||
+          blockedIssue.labels.has(authoringOnlyLabelName) ||
+          [...blockedIssue.labels].some((label) =>
+            confirmationLabel.matches(label),
+          );
         if (
           explicitCriterion &&
           !isHumanApprovalCriterion(explicitCriterion) &&
@@ -1240,26 +1238,22 @@ export async function evaluateDiscoverReadiness(
               workReferences: [...new Set(workReferences)].sort(),
             });
           }
-          if (
-            allowsProvisionalDependencyProgress(provisional, explicitCriterion)
-          ) {
-            const match = findProvisionalDecisionMatch(
-              provisional,
-              explicitCriterion,
-            );
-            if (match) {
-              provisionalDependencies.push({
-                issueNumber: blockedNumber,
-                criterion: explicitCriterion,
-                bundleGeneration: match.bundleGeneration,
-                decisionGeneration: match.decisionGeneration,
-                status: match.status,
-                ...(match.workReference
-                  ? { workReference: match.workReference }
-                  : {}),
-                ...(match.verifiedAt ? { verifiedAt: match.verifiedAt } : {}),
-              });
-            }
+          const match = findProvisionalDecisionMatch(
+            provisional,
+            explicitCriterion,
+          );
+          if (match) {
+            provisionalDependencies.push({
+              issueNumber: blockedNumber,
+              criterion: explicitCriterion,
+              bundleGeneration: match.bundleGeneration,
+              decisionGeneration: match.decisionGeneration,
+              status: match.status,
+              ...(match.workReference
+                ? { workReference: match.workReference }
+                : {}),
+              ...(match.verifiedAt ? { verifiedAt: match.verifiedAt } : {}),
+            });
             continue;
           }
         }

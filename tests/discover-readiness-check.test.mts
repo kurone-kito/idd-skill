@@ -8,7 +8,6 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import {
-  allowsProvisionalDependencyProgress,
   buildConfirmationLabelMatcher,
   buildProvisionalDecisionEvidenceReader,
   buildRoadmapMarkerSearchQuery,
@@ -982,6 +981,16 @@ test('only an exact, replay-verified provisional Blocked by criterion can procee
         labels: [{ name: 'status:needs-decision' }],
       },
     ],
+    [
+      203,
+      {
+        number: 203,
+        title: 'second open dependency',
+        state: 'OPEN',
+        body: 'second dependency body',
+        labels: [],
+      },
+    ],
   ]);
   const pendingDecision = {
     bundleGeneration: 1,
@@ -1005,10 +1014,26 @@ test('only an exact, replay-verified provisional Blocked by criterion can procee
   );
   const visibleEdgeLead =
     'For the edge `Blocked by #202`, the producer output is the selected work completion. ';
+  const hiddenHtmlRationale = [
+    'Blocked by #202',
+    '',
+    'For the edge `Blocked by #202`, the producer output is the selected work completion.',
+    '<pre>',
+    'The blocked criterion is that all generated artifacts ship.',
+    'The evidence is the merged implementation PR.',
+    '</pre>',
+  ].join('\n');
+  const crossEdgeRationale = [
+    'Blocked by #202 and #203',
+    '',
+    'For the edge `Blocked by #202`, the producer output is the selected work completion.',
+    'For the edge `Blocked by #203`, the producer output is the selected work completion. The blocked criterion is that all generated artifacts ship. The evidence is the merged implementation PR.',
+  ].join('\n');
   const hiddenRationales = [
     `Blocked by #202\n\n${visibleEdgeLead}<!-- The blocked criterion is that all generated artifacts ship. The evidence is the merged implementation PR. -->`,
     `Blocked by #202\n\n${visibleEdgeLead}\n\`\`\`text\nThe blocked criterion is that all generated artifacts ship. The evidence is the merged implementation PR.\n\`\`\``,
     `Blocked by #202\n\n${visibleEdgeLead}\`The blocked criterion is that all generated artifacts ship. The evidence is the merged implementation PR.\``,
+    hiddenHtmlRationale,
   ];
   for (const hiddenRationale of hiddenRationales) {
     assert.equal(
@@ -1017,30 +1042,6 @@ test('only an exact, replay-verified provisional Blocked by criterion can procee
       'hidden Markdown cannot authorize provisional progress',
     );
   }
-  assert.equal(
-    allowsProvisionalDependencyProgress(
-      pending,
-      'All generated artifacts ship.',
-    ),
-    true,
-  );
-  for (const criterion of [
-    'The design is approved.',
-    'The decision is confirmed.',
-  ]) {
-    assert.equal(
-      allowsProvisionalDependencyProgress(
-        {
-          ...pending,
-          decisions: [{ ...pendingDecision, executionCriteria: [criterion] }],
-        },
-        criterion,
-      ),
-      false,
-      criterion,
-    );
-  }
-
   const run = async (
     candidateBody: string,
     evidence: ProvisionalDecisionEvidence,
@@ -1073,6 +1074,21 @@ test('only an exact, replay-verified provisional Blocked by criterion can procee
     },
   ]);
 
+  let decisionReads = 0;
+  const countedPending: ProvisionalDecisionEvidence = {
+    ...pending,
+    get decisions() {
+      decisionReads += 1;
+      return pending.decisions;
+    },
+  };
+  await run(body, countedPending, true);
+  assert.equal(
+    decisionReads,
+    1,
+    'readiness computes and reuses one provisional decision match',
+  );
+
   const held = async (
     candidateBody: string,
     evidence: ProvisionalDecisionEvidence,
@@ -1085,6 +1101,17 @@ test('only an exact, replay-verified provisional Blocked by criterion can procee
     );
   };
   await held(body, pending, false);
+  await held(hiddenHtmlRationale, pending);
+  await held(crossEdgeRationale, pending);
+  for (const criterion of [
+    'The design is approved.',
+    'The decision is confirmed.',
+  ]) {
+    await held(body.replace('all generated artifacts ship', criterion), {
+      ...pending,
+      decisions: [{ ...pendingDecision, executionCriteria: [criterion] }],
+    });
+  }
   await held(body, {
     ...pending,
     valid: false,
@@ -1333,7 +1360,10 @@ test('live provisional evidence refuses source edits and unverified rework', asy
       policy: { trustedMarkerActors: [trustedActor] },
     });
   };
-  const assertBlocked = async (evidence: ProvisionalDecisionEvidence) => {
+  const assertBlocked = async (
+    evidence: ProvisionalDecisionEvidence,
+    sourceLabels = [{ name: 'status:needs-decision' }],
+  ) => {
     const body = [
       'Blocked by #202',
       '',
@@ -1355,7 +1385,7 @@ test('live provisional evidence refuses source edits and unverified rework', asy
                 title: sourceTitle,
                 state: 'OPEN',
                 body: sourceBody,
-                labels: [{ name: 'status:needs-decision' }],
+                labels: sourceLabels,
               }
             : null,
       findRoadmapsByMarker: async () => [],
@@ -1376,6 +1406,10 @@ test('live provisional evidence refuses source edits and unverified rework', asy
     baselineEvidence.issues.join(', '),
   );
   assert.equal(baselineEvidence.status, 'confirmation-pending');
+  await assertBlocked(baselineEvidence, [
+    { name: 'status:needs-decision' },
+    { name: ' Status:Needs-Confirmation ' },
+  ]);
 
   const inaccessibleError = Object.assign(new Error('GitHub lookup failed'), {
     stderr: 'GraphQL: Resource not accessible by integration (HTTP 403)',
