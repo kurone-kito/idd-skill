@@ -362,7 +362,31 @@ export function extractExplicitBlockedCriterion(body, blockedIssueNumber) {
     String.raw`^For the edge\s+\x60Blocked by #${blockedIssueNumber}\x60[\s\S]*?The blocked criterion is\s*:?[ \t]*([\s\S]*?)\.\s+The evidence is\b`,
     'iu',
   );
-  const matches = String(body ?? '')
+  const normalizedBody = String(body ?? '').replace(/\r\n/gu, '\n');
+  let visibleBody = maskMarkdownForScan(normalizedBody, {
+    htmlComments: 'mask',
+  });
+  // The edge label is intentionally inline code. Restore only that exact
+  // token when its prose lead stayed visible; all other inline code remains
+  // masked so hidden criteria or evidence cannot authorize progress.
+  const edgeMarker = new RegExp(
+    String.raw`For the edge\s+\x60Blocked by #${blockedIssueNumber}\x60`,
+    'giu',
+  );
+  for (const match of normalizedBody.matchAll(edgeMarker)) {
+    const marker = match[0];
+    const markerIndex = match.index;
+    if (markerIndex === undefined) continue;
+    const codeStart = marker.indexOf('`');
+    if (codeStart < 0) continue;
+    const visibleLead = visibleBody.slice(markerIndex, markerIndex + codeStart);
+    if (!/^For the edge\s+$/iu.test(visibleLead)) continue;
+    visibleBody =
+      visibleBody.slice(0, markerIndex) +
+      marker +
+      visibleBody.slice(markerIndex + marker.length);
+  }
+  const matches = visibleBody
     .split(/\n\s*\n/u)
     .map((paragraph) => edgeLine.exec(paragraph))
     .filter((match) => match !== null);

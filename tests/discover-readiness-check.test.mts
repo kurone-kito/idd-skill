@@ -1003,6 +1003,20 @@ test('only an exact, replay-verified provisional Blocked by criterion can procee
     extractExplicitBlockedCriterion(body, 202),
     'all generated artifacts ship',
   );
+  const visibleEdgeLead =
+    'For the edge `Blocked by #202`, the producer output is the selected work completion. ';
+  const hiddenRationales = [
+    `Blocked by #202\n\n${visibleEdgeLead}<!-- The blocked criterion is that all generated artifacts ship. The evidence is the merged implementation PR. -->`,
+    `Blocked by #202\n\n${visibleEdgeLead}\n\`\`\`text\nThe blocked criterion is that all generated artifacts ship. The evidence is the merged implementation PR.\n\`\`\``,
+    `Blocked by #202\n\n${visibleEdgeLead}\`The blocked criterion is that all generated artifacts ship. The evidence is the merged implementation PR.\``,
+  ];
+  for (const hiddenRationale of hiddenRationales) {
+    assert.equal(
+      extractExplicitBlockedCriterion(hiddenRationale, 202),
+      null,
+      'hidden Markdown cannot authorize provisional progress',
+    );
+  }
   assert.equal(
     allowsProvisionalDependencyProgress(
       pending,
