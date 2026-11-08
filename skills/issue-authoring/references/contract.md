@@ -4584,10 +4584,12 @@ create. Before appending it, compute the pre-create mapping bound above for the
 child mapping that its create will require, as for a child intent. A refused
 bound or size leaves the lineage unchanged and stops this pass for
 reconciliation, as that section says for any verified intent; a later pass may
-append a replacement with a re-reviewed body whose bound and size fit. That
-section's traces about a changed owner generation or an unresolved earlier
-intent refer to the head: a superseded child intent is resolved, and a head
-whose owner is no longer current is replaced under this rule.
+append a replacement with a re-reviewed body whose bound and size fit, while
+condition 1 holds; a refusal at the repeat check on a current head is a manual
+hold. That section's traces about a changed owner generation or an unresolved
+earlier intent refer to this lineage's head: a superseded child intent is
+resolved, and a head whose owner is no longer current is replaced under this
+rule.
 
 ````text
 <!-- <marker-prefix>-authoring-carrier-child-intent-replacement: v1 -->
@@ -4712,8 +4714,9 @@ these hold:
    `issueAuthoring.retiredJournalIssues` and the journal that the roadmap
    mapping's `publication.journal` names that finds no comment naming this
    anchor or set (apart from the one exemption below) proves that the publisher
-   never reached a create for it. Read each journal, and the owner-marker scan
-   below, with GraphQL edit and minimization metadata (`lastEditedAt`,
+   had not reached a create for it when the scan was read, subject to the
+   displaced-publisher window below. Read each journal, and the owner-marker
+   scan below, with GraphQL edit and minimization metadata (`lastEditedAt`,
    `isMinimized`, `minimizedReason`): the REST list omits them, and `updated_at`
    also moves when the hide-on-supersede step minimizes a comment. A comment
    counts as found when its raw body contains this anchor's canonical reference
@@ -4764,18 +4767,23 @@ stopped. The publisher checks the anchor generation before its `pending` write
 and checks it again only after its create (the anchor heartbeat and log replay
 that precede `member`), so a publisher that paused between its first check and
 its `pending` write could still create a second child after the final re-check.
-This contract accepts only the evidence it defines: the stale-age and
-late-marker tests of condition 2 and, where the replacing session started or can
-identify the displaced session, a confirmation that it has stopped before the
-replacement is appended. A pause longer than `issueAuthoring.authoringStaleAge`
-at exactly that point is the window that remains. A child created in it carries
-the displaced generation. It cannot reach `member`, because the publisher's own
-anchor replay shows a changed owner, and the exactly-one-child rule stops
-recovery as soon as its journal record shows a second candidate. That child
-stays held and unmapped for a person to reconcile, and the lineage never maps
-it. Closing the window needs a publisher change (re-verify the anchor generation
-after the `pending` write and before the create), which this contract does not
-specify.
+This contract accepts only the evidence it defines: the stale-age test and the
+late-marker test of condition 2 (no owner marker of a superseded owner after the
+resume) and, when the displaced session can be identified, a confirmation made
+before the replacement is appended that its process has ended (the session's own
+report, or the roster of whoever started it); an unidentifiable displaced
+session needs no such confirmation. The window that remains is a displaced
+session whose last anchor marker was already older than
+`issueAuthoring.authoringStaleAge` when the successor's resume was posted, and
+which pauses between its anchor check and its `pending` write across the whole
+of the replacement's append, settle delay and re-checks. A child created in it
+carries the displaced generation. It cannot reach `member`, because the
+publisher's own anchor replay shows a changed owner, and the exactly-one-child
+rule stops recovery as soon as its journal record shows a second candidate. That
+child stays held and unmapped for a person to reconcile, and the lineage never
+maps it. Closing the window needs a publisher change (re-verify the anchor
+generation after the `pending` write and before the create), which this contract
+does not specify.
 
 **Replacement procedure.** When a verified replacement is already the head, its
 generation is current and no create followed it, append nothing: repeat the
