@@ -500,7 +500,8 @@ export interface ScopeOverrunReadinessInput {
   issue: { number: number; title: string; body: string };
   pullRequestNumber: number;
   headSha: string;
-  baseRef: string;
+  baseRefName: string;
+  readMergeBaseSha(): string;
   changedFiles: readonly string[];
   renamedFromPaths: readonly string[];
   comments: readonly ScopeOverrunEvidenceComment[];
@@ -548,16 +549,26 @@ export function resolveScopeOverrunReadiness(
   const originalFinding = scopeEffortFinding(
     auditAuthoredIssue(input.issue.body, auditOptions),
   );
+  const resolution = resolveScopeOverrunEvidence({
+    comments: [...input.comments],
+    markerPrefix,
+    trustedMarkerLogins: [...input.trustedMarkerLogins],
+    issueNumber: input.issue.number,
+    currentHeadSha: input.headSha.toLowerCase(),
+  });
+  const hasScopeOverrunEvidence = resolution.status !== 'absent';
   if (
     originalFinding.result === 'pass' &&
     (!issueEffort.present ||
       issueEffort.malformed ||
-      (issueEffort.value !== 'S' && issueEffort.value !== 'M'))
+      (issueEffort.value !== 'S' && issueEffort.value !== 'M')) &&
+    !hasScopeOverrunEvidence
   ) {
     return null;
   }
-  if (input.baseRef.trim() === '') {
-    throw new Error('scope-overrun audit cannot resolve the PR base ref');
+  const mergeBaseSha = input.readMergeBaseSha().trim().toLowerCase();
+  if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(mergeBaseSha)) {
+    throw new Error('scope-overrun audit cannot resolve the PR merge base');
   }
 
   // The general changed-file list intentionally omits rename sources for
@@ -568,12 +579,12 @@ export function resolveScopeOverrunReadiness(
   ].sort();
   const syncTargets = readScopeOverrunSyncTargets(
     input.readBaseFile,
-    input.baseRef,
+    mergeBaseSha,
   );
   const candidateFiles: string[] = [];
   for (const path of changedFiles) {
     if (syncTargets.has(path)) continue;
-    const base = input.readBaseFile(path, input.baseRef);
+    const base = input.readBaseFile(path, mergeBaseSha);
     if (base.outcome === 'not-found') {
       candidateFiles.push(path);
       continue;
@@ -604,18 +615,15 @@ export function resolveScopeOverrunReadiness(
   const scopedFinding = scopeEffortFinding(
     auditAuthoredIssue(scopedBody, auditOptions),
   );
-  if (originalFinding.result === 'pass' && scopedFinding.result === 'pass') {
+  if (
+    originalFinding.result === 'pass' &&
+    scopedFinding.result === 'pass' &&
+    !hasScopeOverrunEvidence
+  ) {
     return null;
   }
 
   const headSha = input.headSha.toLowerCase();
-  const resolution = resolveScopeOverrunEvidence({
-    comments: [...input.comments],
-    markerPrefix,
-    trustedMarkerLogins: [...input.trustedMarkerLogins],
-    issueNumber: input.issue.number,
-    currentHeadSha: headSha,
-  });
   const recordedHeadSha =
     resolution.record?.kind === 'post-push' ? resolution.record.headSha : null;
   if (resolution.status === 'absent') {
@@ -678,6 +686,58 @@ function scopeEffortFinding(report: ReturnType<typeof auditAuthoredIssue>) {
     throw new Error('scope-overrun audit did not return its effort finding');
   }
   return finding;
+}
+
+export function readScopeOverrunMergeBaseSha(
+  baseRefName: string,
+  headSha: string,
+  workingDirectory: string = process.cwd(),
+): string {
+  try {
+    const mergeBaseSha = execFileSync(
+      'git',
+      ['merge-base', `refs/remotes/origin/${baseRefName}`, headSha],
+      {
+        cwd: workingDirectory,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    ).trim();
+    if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/iu.test(mergeBaseSha)) {
+      throw new Error('git merge-base did not print an object id');
+    }
+    return mergeBaseSha.toLowerCase();
+  } catch (error) {
+    throw new Error(
+      `scope-overrun audit cannot resolve the PR merge base: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+
+function readRepositoryContentAtRef(
+  port: ProviderPort,
+  owner: string,
+  repo: string,
+  path: string,
+  ref: string,
+): ScopeOverrunBaseFileRead {
+  const encodedPath = path.split('/').map(encodeURIComponent).join('/');
+  const result = port.getRepositoryContentAtRef(owner, repo, encodedPath, ref);
+  if (result === null) return { outcome: 'not-found' };
+  if (
+    typeof result !== 'object' ||
+    result === null ||
+    Array.isArray(result) ||
+    typeof (result as { content?: unknown }).content !== 'string'
+  ) {
+    throw new Error(
+      `scope-overrun audit received malformed repository content for ${JSON.stringify(path)}`,
+    );
+  }
+  return {
+    outcome: 'ok',
+    value: (result as { content: string }).content,
+  };
 }
 
 function readScopeOverrunSyncTargets(
@@ -795,6 +855,10 @@ export function collectPreMergeReadiness(
     owner: string,
     repo: string,
   ) => ActivationResult | null = resolvePrimaryActivation,
+  resolveScopeOverrunMergeBase: (
+    baseRefName: string,
+    headSha: string,
+  ) => string = readScopeOverrunMergeBaseSha,
 ): PreMergeReadinessReport {
   const args = parseArgs(argv);
   // --help used to exit from inside the parseArgs token loop; relocated
@@ -1272,7 +1336,9 @@ export function collectPreMergeReadiness(
         },
         pullRequestNumber: args.prNumber as number,
         headSha: prHeadSha,
-        baseRef: baseRefName,
+        baseRefName,
+        readMergeBaseSha: () =>
+          resolveScopeOverrunMergeBase(baseRefName, prHeadSha),
         changedFiles,
         renamedFromPaths: port.listChangeRequestRenamedFromPaths(
           args.prNumber as number,
@@ -1291,7 +1357,7 @@ export function collectPreMergeReadiness(
         readCurrentBranch: () =>
           port.getChangeRequestHeadRef(args.prNumber as number),
         readBaseFile: (path, ref) =>
-          port.getRepositoryFileContentAtRef(`${owner}/${repo}`, path, ref),
+          readRepositoryContentAtRef(port, owner, repo, path, ref),
       });
     }
   }

@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
@@ -38,6 +41,7 @@ import {
   mentionsIssue,
   normalizeStatusCheckRollupEntry,
   parseArgs,
+  readScopeOverrunMergeBaseSha,
   renderCliUsageError,
   resolveDeclarationActiveSince,
   resolveDeferMarkerPrefix,
@@ -254,7 +258,8 @@ function scopeOverrunInput(
     issue: scopeOverrunIssue(SCOPE_OVERRUN_FILES),
     pullRequestNumber: 9001,
     headSha: SCOPE_OVERRUN_HEAD,
-    baseRef: 'main',
+    baseRefName: 'main',
+    readMergeBaseSha: () => SCOPE_OVERRUN_HEAD,
     changedFiles: SCOPE_OVERRUN_FILES,
     renamedFromPaths: [],
     comments: [],
@@ -267,6 +272,40 @@ function scopeOverrunInput(
     ...overrides,
   };
 }
+
+test('scope-overrun merge-base uses the PR base ref and fails closed on missing refs', () => {
+  const workingDirectory = mkdtempSync(
+    join(tmpdir(), 'idd-scope-overrun-merge-base-'),
+  );
+  try {
+    const git = (args: string[]) =>
+      execFileSync('git', args, { cwd: workingDirectory });
+    git(['init', '--quiet']);
+    git(['config', 'commit.gpgsign', 'false']);
+    git(['config', 'user.name', 'IDD test']);
+    git(['config', 'user.email', 'idd-test@example.invalid']);
+    writeFileSync(join(workingDirectory, 'base.txt'), 'base\n');
+    git(['add', 'base.txt']);
+    git(['commit', '--quiet', '--no-verify', '-m', 'base']);
+    const baseSha = git(['rev-parse', 'HEAD']).toString('utf8').trim();
+    writeFileSync(join(workingDirectory, 'head.txt'), 'head\n');
+    git(['add', 'head.txt']);
+    git(['commit', '--quiet', '--no-verify', '-m', 'head']);
+    const headSha = git(['rev-parse', 'HEAD']).toString('utf8').trim();
+    git(['update-ref', 'refs/remotes/origin/release/main', baseSha]);
+
+    assert.equal(
+      readScopeOverrunMergeBaseSha('release/main', headSha, workingDirectory),
+      baseSha,
+    );
+    assert.throws(
+      () => readScopeOverrunMergeBaseSha('missing', headSha, workingDirectory),
+      /scope-overrun audit cannot resolve the PR merge base/u,
+    );
+  } finally {
+    rmSync(workingDirectory, { recursive: true, force: true });
+  }
+});
 
 function scopeOverrunRecordComment(options: {
   candidateFiles?: readonly string[];
@@ -350,6 +389,20 @@ test('pre-merge readiness accepts a current post-push record while owner decisio
   });
 });
 
+test('pre-merge readiness preserves scope evidence after the issue body no longer overruns', () => {
+  const issue = scopeOverrunIssue(['src/current.mts']);
+  issue.body = issue.body.replace('\n<!-- idd-skill-effort: M -->', '');
+  const result = resolveScopeOverrunReadiness(
+    scopeOverrunInput({
+      issue,
+      changedFiles: [],
+      comments: [scopeOverrunRecordComment({})],
+    }),
+  );
+  assert.equal(result?.status, 'invalid');
+  assert.equal(result?.reason, 'record-conflict');
+});
+
 test('pre-merge readiness scope audit accepts both paths of a renamed PR file', () => {
   const restore = stubExecutable('gh', FORCED_HANDOFF_GH_STUB);
   try {
@@ -404,7 +457,7 @@ test('pre-merge readiness scope audit accepts both paths of a renamed PR file', 
             ]
           : comments;
       },
-      getRepositoryFileContentAtRef: () => ({ outcome: 'not-found' }),
+      getRepositoryContentAtRef: () => null,
     };
     const report = collectPreMergeReadiness(
       [
@@ -423,6 +476,8 @@ test('pre-merge readiness scope audit accepts both paths of a renamed PR file', 
       ],
       () => port,
       () => ({ trustedMarkerActors: ['kurone-kito', 'maintainer'] }) as never,
+      undefined,
+      () => 'b'.repeat(40),
     );
 
     assert.equal(report.claim.scopeOverrun?.status, 'valid');
@@ -446,6 +501,9 @@ test('collectPreMergeReadiness adds a blocker for an overrun without valid evide
       earlierLinkedPr: false,
       linkedLookupFails: false,
     });
+    const encodedPaths: string[] = [];
+    const scopeBaseRefs: string[] = [];
+    const changedFiles = ['src/odd?#.mts', ...SCOPE_OVERRUN_FILES.slice(1)];
     const port: ProviderPort = {
       ...base,
       getWorkItem: (number) =>
@@ -457,8 +515,14 @@ test('collectPreMergeReadiness adds a blocker for an overrun without valid evide
               state: 'OPEN',
             }
           : base.getWorkItem(number),
-      listChangeRequestChangedFiles: () => [...SCOPE_OVERRUN_FILES],
-      getRepositoryFileContentAtRef: () => ({ outcome: 'not-found' }),
+      listChangeRequestChangedFiles: () => changedFiles,
+      getRepositoryContentAtRef: (owner, repo, path, ref) => {
+        encodedPaths.push(path);
+        if (path === 'audit/sync-manifest.json' || path.includes('odd')) {
+          scopeBaseRefs.push(ref);
+        }
+        return base.getRepositoryContentAtRef(owner, repo, path, ref);
+      },
     };
     const report = collectPreMergeReadiness(
       [
@@ -477,6 +541,12 @@ test('collectPreMergeReadiness adds a blocker for an overrun without valid evide
       ],
       () => port,
       () => ({ trustedMarkerActors: ['kurone-kito', 'maintainer'] }) as never,
+      undefined,
+      (baseRefName, headSha) => {
+        assert.equal(baseRefName, 'main');
+        assert.equal(headSha, 'a'.repeat(40));
+        return 'b'.repeat(40);
+      },
     );
     assert.deepEqual(report.claim.scopeOverrun, {
       status: 'missing',
@@ -490,6 +560,8 @@ test('collectPreMergeReadiness adds a blocker for an overrun without valid evide
       true,
     );
     assert.equal(report.ready, false);
+    assert.ok(encodedPaths.includes('src/odd%3F%23.mts'));
+    assert.deepEqual(scopeBaseRefs, ['b'.repeat(40), 'b'.repeat(40)]);
 
     const validPort: ProviderPort = {
       ...port,
@@ -508,7 +580,7 @@ test('collectPreMergeReadiness adds a blocker for an overrun without valid evide
                   agentId: 'codex-test',
                   issueNumber: 7,
                   effort: 'M',
-                  candidateFiles: SCOPE_OVERRUN_FILES,
+                  candidateFiles: changedFiles,
                   pullRequestNumber: 1,
                   branch: 'issue/7-task',
                   headSha: 'a'.repeat(40),
@@ -537,6 +609,8 @@ test('collectPreMergeReadiness adds a blocker for an overrun without valid evide
       ],
       () => validPort,
       () => ({ trustedMarkerActors: ['kurone-kito', 'maintainer'] }) as never,
+      undefined,
+      () => 'b'.repeat(40),
     );
     assert.equal(validReport.claim.scopeOverrun?.status, 'valid');
     assert.equal(
@@ -552,6 +626,41 @@ test('collectPreMergeReadiness adds a blocker for an overrun without valid evide
   } finally {
     restore();
   }
+});
+
+test('computePreMergeReadinessBlockers carries scope-overrun evidence into F3', () => {
+  const report = {
+    prHeadSha: SCOPE_OVERRUN_HEAD,
+    claim: {
+      scopeOverrun: {
+        status: 'missing',
+        reason: 'no-record',
+        recordedHeadSha: null,
+      },
+    },
+  };
+  const scopeBlockers = (value: Record<string, unknown>) =>
+    computePreMergeReadinessBlockers(value).filter(
+      (blocker) => blocker.gate === 'scope-overrun',
+    );
+
+  assert.deepEqual(scopeBlockers(report), [
+    { gate: 'scope-overrun', detail: 'scope overrun missing: no-record' },
+  ]);
+  assert.deepEqual(
+    scopeBlockers({
+      ...report,
+      claim: {
+        scopeOverrun: {
+          status: 'valid',
+          reason: 'no-decision',
+          recordedHeadSha: SCOPE_OVERRUN_HEAD,
+        },
+      },
+    }),
+    [],
+  );
+  assert.deepEqual(scopeBlockers({ prHeadSha: SCOPE_OVERRUN_HEAD }), []);
 });
 
 test('collectPreMergeReadiness blocks when a claimed issue is unreadable', () => {

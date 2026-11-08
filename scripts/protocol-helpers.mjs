@@ -10610,6 +10610,21 @@ function isWellFormedDeferFollowUpItem(entry) {
  */
 export function computePreMergeReadinessBlockers(report) {
   const blockers = [];
+  // #4676: F3 re-runs this shared reducer from the collected report. Keep
+  // the claim-bound scope-overrun evidence in that path as well, so the
+  // merge executor cannot lose a blocker that F2 reported. An omitted field
+  // remains backward-compatible with reports collected before this gate.
+  const scopeClaim = preMergeAsRecord(report.claim);
+  if (scopeClaim.scopeOverrun !== undefined) {
+    const scopeOverrun = preMergeAsRecord(scopeClaim.scopeOverrun);
+    const status = String(scopeOverrun.status ?? '');
+    if (status !== 'valid') {
+      blockers.push({
+        gate: 'scope-overrun',
+        detail: `scope overrun ${status || 'unavailable'}: ${String(scopeOverrun.reason ?? 'missing status')}`,
+      });
+    }
+  }
   // Fail closed on a missing/invalid head: `prHeadSha` binds
   // `--match-head-commit`, so a non-40-hex value must never yield a "ready"
   // verdict with an unsafe merge binding.
