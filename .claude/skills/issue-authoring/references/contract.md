@@ -4572,17 +4572,22 @@ or an end-to-end suite):
    the evidence intact; do not truncate, split or repeat the create.
 
 **Child intent replacement.** An exact-set resume gives the anchor a new owner
-token and may give it a new session. A verified child intent that never led to
-a create then pins a generation that is no longer current, and the conflicting
+token and may give it a new session. A verified child intent that never led to a
+create then pins a generation that is no longer current, and the conflicting
 intent rule above would keep recovery held although nothing was published. A
 verified, append-only replacement closes that gap and nothing else. It leaves
 the child-intent shape above unchanged, so records already posted stay valid.
 Post it like the other records: a direct JSON POST, the returned comment ID and
-exact body verified, exactly the shown keys, and the 60,000-byte budget, with
-an oversized replacement treated as an oversized intent that stops before the
-child create. Before appending it, compute the pre-create mapping bound above
-for the child mapping that its create will require, as for a child intent; a
-refusal leaves the lineage unchanged.
+exact body verified, exactly the shown keys, and the 60,000-byte budget, with an
+oversized replacement treated as an oversized intent that stops before the child
+create. Before appending it, compute the pre-create mapping bound above for the
+child mapping that its create will require, as for a child intent. A refused
+bound or size leaves the lineage unchanged and stops this pass for
+reconciliation, as that section says for any verified intent; a later pass may
+append a replacement with a re-reviewed body whose bound and size fit. That
+section's traces about a changed owner generation or an unresolved earlier
+intent refer to the head: a superseded child intent is resolved, and a head
+whose owner is no longer current is replaced under this rule.
 
 ````text
 <!-- <marker-prefix>-authoring-carrier-child-intent-replacement: v1 -->
@@ -4684,21 +4689,22 @@ these hold:
    that opener is ignored), and no `release`, `release-guard` or
    `release-complete` marker appears on the path or after its last step. There
    is no competing generation winner: the first valid opener wins, and a losing
-   resume and the markers of its owner are ignored here. The current owner and
-   its session are exactly the replacement's `anchor-owner` and `session`. No
-   owner marker of the anchor whose `owner` is a superseded owner token (a
-   `supersedes` field that names one does not count) is positioned after the
-   resume marker that superseded that owner: that shows a live prior session and
-   stops. A session ID that the resume reused does not distinguish the sessions,
-   and condition 3 covers journal activity of any session. A label, a local log,
-   an acquire or bootstrap marker, an untrusted resume, a resume before the
-   stale age, or a different anchor or set is not that evidence. A marker that
-   the hide-on-supersede step minimized as `outdated` counts exactly like a
-   marker that was never minimized in every test of this condition, at a replay
+   opener (a resume, acquire or bootstrap marker) and the markers of its owner
+   are ignored here. The current owner and its session are exactly the
+   replacement's `anchor-owner` and `session`. No owner marker of the anchor
+   whose `owner` is a superseded owner token (a `supersedes` field that names
+   one does not count) is positioned after the resume marker that superseded
+   that owner: that shows a live prior session and stops. A session ID that the
+   resume reused does not distinguish the sessions, and condition 3 covers
+   journal activity of any session. A label, a local log, an acquire or
+   bootstrap marker, an untrusted resume, a resume before the stale age, or a
+   different anchor or set is not that evidence. A marker that the
+   hide-on-supersede step minimized as `outdated` counts exactly like a marker
+   that was never minimized in every test of this condition, at a replay
    position too. An edited marker, a marker minimized for another reason, or a
    minimized last owner marker of the anchor's open generation (the winning
-   generation that no later opener follows), read in the full log, stops, even
-   when that marker was minimized as `outdated`.
+   generation that no later valid opener follows), read in the full log, stops,
+   even when that marker was minimized as `outdated`.
 3. Conclusive no-publication evidence. The publisher persists `state=pending` in
    the journal before it issues a child create and does not create when that
    write cannot be verified. So a complete replay of
@@ -4771,21 +4777,24 @@ it. Closing the window needs a publisher change (re-verify the anchor generation
 after the `pending` write and before the create), which this contract does not
 specify.
 
-**Replacement procedure.** Append the replacement, then verify the returned ID
-and exact body. After `claim.verifySettleDelay`, repeat conditions 2 and 3 on
-fresh complete reads together with the lineage replay, and repeat them once
-more immediately before running the child publisher. A comment found under
-condition 3, an owner-log record that changes the current generation, or a
-later owner marker carrying a superseded owner token voids the replacement. A
-void stops this pass under the recovery hold. Publication evidence can never be
-followed by another replacement, because condition 3 keeps failing. When the
-only cause is a further resume, the voided record stays the head, and a later
-pass may append a replacement that names it once conditions 1 to 3 hold again.
-Only a verified replacement that passes this re-check permits the first run of
+**Replacement procedure.** When a verified replacement is already the head, its
+generation is current and no create followed it, append nothing: repeat the
+pre-create mapping bound and the re-check below, then run the publisher.
+Otherwise append the replacement, then verify the returned ID and exact body.
+After `claim.verifySettleDelay`, repeat conditions 2 and 3 on fresh complete
+reads together with the lineage replay, and repeat them once more immediately
+before running the child publisher. A comment found under condition 3, an
+owner-log record that changes the current generation, or a later owner marker
+carrying a superseded owner token voids the replacement. A void stops this pass
+under the recovery hold. Publication evidence can never be followed by another
+replacement, because condition 3 keeps failing. When the only cause is a further
+resume, the voided record stays the head, and a later pass may append a
+replacement that names it once conditions 1 to 3 hold again. Only a verified
+replacement that passes this re-check permits the first run of
 `publish-authoring-hold --shape child --anchor <roadmap>`, which keeps the
-existing owner, set and session checks immediately before and after
-publication, now against the head. After publication, append and verify the
-`kind=child` mapping as above, naming the head.
+existing owner, set and session checks immediately before and after publication,
+now against the head. After publication, append and verify the `kind=child`
+mapping as above, naming the head.
 
 An inconclusive replacement append or read-back stops before the child create.
 Retain the exact attempted record and any returned comment ID, keep the carrier
@@ -4820,10 +4829,11 @@ defined above: no replacement is appended and no create is issued.
 - Reuse. An exact duplicate of `D` is ignored and reuses `D`; it is neither a
   second head nor a fork.
 - Hold, existing child. A journal comment beyond the exempt roadmap records, an
-  owner marker whose target is not the anchor, or a `## Tracks` entry for this
-  anchor or set shows a child, or a `kind=child` mapping references any lineage
-  record (`C` or `D`). A child exists or may exist, so only the existing mapping
-  recovery, through its own rules, may record one.
+  owner marker naming this anchor or set whose target is not the anchor, or a
+  `## Tracks` entry for this anchor or set shows a child, or a `kind=child`
+  mapping references any lineage record (`C` or `D`). A child exists or may
+  exist, so only the existing mapping recovery, through its own rules, may
+  record one.
 - Hold, uncertain create or journal. The journal holds any comment for this
   anchor or set beyond the exempt roadmap records: `pending` with
   `issue=none`, `cleanup`, `abandoned`, or a comment that is untrusted, edited,
