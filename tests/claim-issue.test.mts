@@ -1741,9 +1741,10 @@ interface ApplyScenario {
   /** A local worktree on issue/<n>-* appears after the pre-check's local scan. */
   localCollisionAfterPrecheck?: boolean;
   /**
-   * A local worktree on issue/<n>-* appears after the second local scan: with
-   * `--preserve-b1-leftovers` that is the preservation step's own scan, so
-   * only the rescan under the lock sees it.
+   * A local worktree on issue/<n>-* appears after the third local scan: with
+   * `--preserve-b1-leftovers` the scans are the pre-check, the preservation
+   * step's planning scan, and its recheck right before the delete, so only the
+   * rescan under the lock sees it.
    */
   localCollisionAfterPreservation?: boolean;
   /** The clone lock's release fails. */
@@ -2305,7 +2306,7 @@ function runApply(
     inspectLocalWorktrees: () => {
       localCalls += 1;
       return (scenario.localCollisionAfterPrecheck && localCalls > 1) ||
-        (scenario.localCollisionAfterPreservation && localCalls > 2)
+        (scenario.localCollisionAfterPreservation && localCalls > 3)
         ? {
             status: 'occupied',
             paths: [join(fixture.parent, `${REPO}.issue-${ISSUE}-other-slug`)],

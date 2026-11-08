@@ -26,11 +26,14 @@
  * local worktree inspection as callbacks.
  *
  * One pass lists the leftovers and checks every precondition for every
- * subject before the first mutation. A refused subject refuses them all, so a
- * pair of leftovers is never left half handled. A dry run stops after that
- * pass. An apply run then acts, branch first and path second, and records
- * each completed action in the caller's report before the next one, so a
- * failure still names every backup ref and destination.
+ * subject before the first mutation. A refused subject refuses them all, so
+ * the preconditions never leave a pair of leftovers half handled. A dry run
+ * stops after that pass. An apply run then acts, branch first and path
+ * second, and records each completed action in the caller's report before the
+ * next one. An action that fails after a state change, such as a rename that
+ * fails after the branch was deleted, leaves that state and stops; the report
+ * names every backup ref and destination, and the commits of a deleted branch
+ * stay reachable from its backup ref.
  *
  * Open risks, accepted in the issue: the window between the last check and
  * the rename or the ref deletion, which the platform cannot close (inside
@@ -1392,6 +1395,40 @@ function preserveBranch(
     );
   }
 
+  // The deletion is the step that cannot be undone (the reflog goes with the
+  // ref), and the planning checks ran before the remote and record reads.
+  // The delete itself guards the tip. Right before it, look again for a
+  // worktree that took the branch since planning; the remote and pull request
+  // answers are read once, by design.
+  const taken = (() => {
+    try {
+      const list = git(ctx, ['worktree', 'list', '--porcelain', '-z']);
+      if (list.status !== 0) {
+        return `git worktree list ended with ${describeStatus(list)}`;
+      }
+      const holder = parseLocalWorktreeList(list.stdout).find(
+        (record) => record.branchRef === ref,
+      );
+      if (holder !== undefined) {
+        return `${branch} is now checked out in ${holder.path}`;
+      }
+      const local = ctx.request.inspectLocalWorktrees();
+      return local.status === 'absent' &&
+        local.paths.length === 0 &&
+        local.reason === null
+        ? null
+        : `a worktree now holds, or may hold, ${branch}`;
+    } catch (error) {
+      return `the worktree recheck threw: ${shorten(errorMessage(error))}`;
+    }
+  })();
+  if (taken !== null) {
+    return failed(
+      report,
+      `${shorten(taken)}; the branch is untouched and the backup ref stays`,
+    );
+  }
+
   // `--no-deref`: never follow a symbolic ref to its target. The ref is read
   // back whatever the command reported, because a command that timed out or
   // died may still have deleted it.
@@ -1415,9 +1452,19 @@ function preserveBranch(
     detail: `branch ${branch} deleted at ${tip}`,
   });
 
-  if (plan.configKeys.length > 0) {
+  // The keys are read again now: one added since planning (a concurrent
+  // `git branch --set-upstream-to`) would otherwise be inherited by the branch
+  // that worktree add recreates.
+  const present = readBranchConfigKeys(ctx, branch);
+  if (present.kind === 'refused') {
+    return failed(
+      report,
+      `the configuration section branch.${branch} could not be read after the deletion (${present.detail}); check it by hand before a branch of that name is recreated`,
+    );
+  }
+  if (present.keys.length > 0) {
     const section = `branch.${branch}`;
-    const keys = shorten(plan.configKeys.join(', '));
+    const keys = shorten(present.keys.join(', '));
     const removed = git(ctx, [
       'config',
       '--local',

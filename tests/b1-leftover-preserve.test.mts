@@ -2452,3 +2452,87 @@ test('failure: a backup ref swapped for a symbolic ref after its creation is not
     false,
   );
 });
+
+test('failure: a worktree that takes the branch after planning stops the run before the delete', () => {
+  const fixture = fresh();
+  const tip = leftoverBranch(fixture);
+  let scans = 0;
+  const result = exercise(fixture, {
+    request: {
+      // The planning scan finds nothing; the recheck right before the delete
+      // finds a worktree.
+      inspectLocalWorktrees: () => {
+        scans += 1;
+        return scans === 1
+          ? { status: 'absent', paths: [], reason: null }
+          : { status: 'occupied', paths: ['/new/worktree'], reason: null };
+      },
+    },
+  });
+  assert.equal(result.report.outcome, 'failed');
+  assert.match(result.failure?.detail ?? '', /a worktree now holds/);
+  assert.equal(
+    git(fixture.primary, ['rev-parse', `refs/heads/${BRANCH}`]),
+    tip,
+    'the branch is untouched',
+  );
+  assert.equal(
+    git(fixture.primary, ['rev-parse', `refs/idd-b1/${ISSUE}/${tip}`]),
+    tip,
+    'the backup ref stays',
+  );
+  assert.equal(
+    result.calls.some((call) =>
+      /update-ref --no-deref -d refs\/heads/.test(call),
+    ),
+    false,
+  );
+});
+
+test('failure: an unreadable worktree list at the recheck stops the run before the delete', () => {
+  const fixture = fresh();
+  const tip = leftoverBranch(fixture);
+  let lists = 0;
+  const result = exercise(fixture, {
+    hook: (_f, _file, args) => {
+      if (isGitCommand(args, 'worktree', 'list')) {
+        lists += 1;
+        return lists > 1 ? failedResult(128) : undefined;
+      }
+      return undefined;
+    },
+  });
+  assert.equal(result.report.outcome, 'failed');
+  assert.match(result.failure?.detail ?? '', /git worktree list ended with/);
+  assert.equal(
+    git(fixture.primary, ['rev-parse', `refs/heads/${BRANCH}`]),
+    tip,
+  );
+});
+
+test('apply: a config key added after planning is removed with the section', () => {
+  const fixture = fresh();
+  leftoverBranch(fixture);
+  const result = exercise(fixture, {
+    hook: (f, _file, args) => {
+      if (isGitCommand(args, 'update-ref', '-d')) {
+        // The planning read found no key; one appears before the deletion.
+        git(f.primary, ['config', `branch.${BRANCH}.pushremote`, 'origin']);
+      }
+      return undefined;
+    },
+  });
+  assert.equal(result.report.outcome, 'preserved');
+  assert.deepEqual(result.report.removedConfigSections, [`branch.${BRANCH}`]);
+  assert.equal(
+    spawnSync(
+      'git',
+      ['config', '--local', '--get-regexp', '^branch\\.issue/'],
+      {
+        cwd: fixture.primary,
+        env: fixtureEnv(),
+      },
+    ).status,
+    1,
+  );
+});
