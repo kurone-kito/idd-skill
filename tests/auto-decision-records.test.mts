@@ -1002,6 +1002,58 @@ test('a void on another confirmation issue removes the linked decision', () => {
   assert.deepEqual(linked.voidedDecisions, ['d1']);
 });
 
+test('a directly linked unlabelled target still contributes void markers', () => {
+  const github = new FakeGithub(
+    confirmationIssue(200, {
+      labels: [],
+      comments: [{ id: 200002, body: voidComment('d1') }],
+    }),
+    sourceIssue(100, [
+      {
+        id: 100001,
+        body: linkComment({ confirmation: `${OWNER}/${REPO}#200` }),
+      },
+    ]),
+  );
+
+  const linked = readable(links(github, 100));
+  assert.deepEqual(linked.links, []);
+  assert.deepEqual(linked.voidedDecisions, ['d1']);
+});
+
+test('void markers still count when a listed issue loses its label after the REST scan', () => {
+  const issueWithVoid = confirmationIssue(200, {
+    comments: [{ id: 200002, body: voidComment('d1') }],
+  });
+  const linkedTarget = confirmationIssue(201);
+  const source = sourceIssue(100, [
+    {
+      id: 100001,
+      body: linkComment({ confirmation: `${OWNER}/${REPO}#201` }),
+    },
+  ]);
+  const plain = new FakeGithub(issueWithVoid, linkedTarget, source);
+  const github = new FakeGithub(issueWithVoid, linkedTarget, source);
+  github.issuePageOverride = (request) => {
+    const page = plain.readIssuePage(request) as {
+      data: {
+        repository: {
+          issue: { labels: { nodes: unknown[] } };
+        };
+      };
+    };
+    if (request.number === 200) {
+      page.data.repository.issue.labels.nodes = [];
+    }
+    return page;
+  };
+
+  const linked = readable(links(github, 100));
+  assert.deepEqual(linked.links, []);
+  assert.deepEqual(linked.voidedDecisions, ['d1']);
+  assert.deepEqual(foundNumbers(find(github)), []);
+});
+
 test('a comma-containing confirmation label makes link reads unreadable', () => {
   const github = new FakeGithub(sourceIssue(100, []));
   const result = readDecisionLinks(

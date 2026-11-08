@@ -995,8 +995,8 @@ export interface DecisionLinksInput extends AutoDecisionReadOptions {
  * trusted login posted it as the first line of a comment that was never
  * edited, and it names a confirmation issue in the same repository (the
  * contract keeps a record's source in its confirmation issue's repository).
- * A trusted void marker on any currently labelled confirmation issue removes
- * that decision from the result.
+ * A trusted void marker on any successfully read confirmation target removes
+ * that decision from the result, even when its confirmation label is gone.
  */
 // audit:ignore-dead-export: the auto-decide caps and crash recovery (#4955) consume this reader; until they land, only the focused tests call it
 export function readDecisionLinks(
@@ -1054,15 +1054,14 @@ export function readDecisionLinks(
         issue.number,
       );
       readConfirmationNumbers.add(issue.number);
+      for (const decision of countingVoids(confirmation, context)) {
+        voids.add(decision);
+      }
       if (
         !confirmation.labels.some((name) =>
           sameText(name, input.confirmationLabel),
         )
       ) {
-        continue;
-      }
-      for (const decision of countingVoids(confirmation, context)) {
-        voids.add(decision);
       }
     }
     for (const link of kept) {
@@ -1073,7 +1072,10 @@ export function readDecisionLinks(
       // A link still names an issue even when it no longer appears in the
       // confirmation-label scan. Read it directly so a missing or failed
       // target cannot turn into a readable empty result.
-      readIssueSnapshot(provider, owner, repo, number);
+      const confirmation = readIssueSnapshot(provider, owner, repo, number);
+      for (const decision of countingVoids(confirmation, context)) {
+        voids.add(decision);
+      }
       readConfirmationNumbers.add(number);
     }
     const voided: string[] = [];
@@ -1282,14 +1284,16 @@ export function findConfirmationIssues(
         context,
         input,
       );
+      // The REST scan establishes the confirmation-issue scope. Keep voids
+      // from that snapshot even if its label or state changed before this read.
+      for (const decision of report.voidedDecisions) {
+        voidedDecisions.add(decision);
+      }
       if (
         !report.confirmationLabel ||
         (state === 'open' && report.state !== 'open')
       ) {
         continue;
-      }
-      for (const decision of report.voidedDecisions) {
-        voidedDecisions.add(decision);
       }
       for (const decision of report.conflictingDecisions) {
         voidedDecisions.add(decision);
