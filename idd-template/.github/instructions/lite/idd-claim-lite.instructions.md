@@ -108,7 +108,7 @@ recorded one; `--worktree <path>` once the worktree exists.
 | Top-level `state` / `action` | Meaning |
 | --- | --- |
 | `already_owned` / `keep` | Confirmed — see the two cases below |
-| `owner_evidence_required` / `stop` | Retry once with `--worktree <path>`; still returned → Stop-and-ask (not a competitor), unless a forced-handoff successor: `docs/idd-resume-detail.md` §FH |
+| `owner_evidence_required` / `stop` | Retry `--worktree <path>` once; else STOP unless `docs/idd-resume-detail.md` §FH checks pass (attached verified-chain included); other owner/lock mismatches STOP |
 | anything else | Not yours — forced-handoff: Stop-and-ask; else fall through below |
 <!-- dprint-ignore-end -->
 

@@ -90,7 +90,7 @@ failure; no table fallback). Map:
 | Helper `state` / `action`          | Action                                                         |
 | ---------------------------------- | -------------------------------------------------------------- |
 | `already_owned` / `keep`           | Keep same `{claim-id}` → Step 2                                |
-| `owner_evidence_required` / `stop` | Retry `--worktree <path>` once; else STOP unless §FH successor |
+| `owner_evidence_required` / `stop` | Retry `--worktree <path>` once; else §FH checks or STOP        |
 | `unclaimed` / `re_claim`           | Fresh A5 claim → Step 2                                        |
 | `stale` / `takeover`               | Forced-handoff: retry below; else A5 takeover                  |
 | `non_inheritable` / `stop`         | Forced-handoff: retry below; else STOP — live competitor claim |
@@ -99,6 +99,8 @@ failure; no table fallback). Map:
 `local_worktree_occupied` / `stop` → STOP — see §LWR; verify claim-id
 against occupied, unreadable, or unknown local worktree state
 (#3141).
+
+§FH includes attached verified-chain recovery; else STOP.
 
 With `evidence.forced_handoff` on those routes, retry with
 `--claim-id <new_claim_id>` and `--agent-id <new_agent_id>`; omit only the
