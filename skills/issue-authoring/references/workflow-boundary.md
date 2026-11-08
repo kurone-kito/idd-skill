@@ -777,8 +777,16 @@ choice by closing the issue.
 The worker-side authoring rule has one exception: a scope-overrun split when
 `standingApprovals.split.enabled` is true in the schema-valid trusted policy
 at the PR base (or live default before a PR exists), never from the feature
-checkout. Use live `baseRefName` for a PR; otherwise use the live default
-branch. Require `idd-effective-config` with `--trusted-auto-decide` to report
+checkout. Resolve the trusted owner/repo from the claimed issue's canonical
+live URL. For a PR, query `gh api repos/<target-owner>/<target-repo>/pulls/<number>
+--jq '{owner: .base.repo.owner.login, repo: .base.repo.name, ref: .base.ref}'`
+and use its base owner/repo/ref. Without a PR, use issue owner/repo and the
+live default branch. Always pass those resolved values explicitly to
+`idd-effective-config`; never use checkout `origin` for policy. A fork checkout
+can otherwise read fork-controlled policy, as found
+during review on 2026-11-08 in PR
+[#5031](https://github.com/kurone-kito/idd-skill/pull/5031). Require
+`idd-effective-config` with `--trusted-auto-decide` to report
 `status: readable`. For PRs, pass `--base-ref <base>`; omit it otherwise.
 Then read
 `standingApprovals.split.enabled` and
@@ -789,7 +797,10 @@ is false; missing `maxCandidateFiles` uses documented default `8`. Malformed,
 absent, or unreadable policy keeps the existing route. Never use local, head,
 or layered config. Every child fits the trusted ceiling. Each
 checkbox-stripped parent acceptance criterion appears whole and verbatim in
-exactly one child, and every child contains at least one. This procedure
+exactly one child, and every child contains at least one. After any title or
+body correction, repeat this entire eligibility check against the final child
+set immediately before dry-run or apply; a pre-correction check is not enough.
+This procedure
 replaces the ordinary
 claim-release and companion-handoff route
 only when all conditions hold. Before saving the complete ordered proposal,

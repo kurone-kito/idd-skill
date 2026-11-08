@@ -285,9 +285,16 @@ draft: it holds this issue, publishes a held roadmap whose children record
 Never add needs-decision or ask a human.
 
 **Standing split** alone bypasses the worker-side scope-overrun route; keep the
-parent claim and label held. Use the live PR `baseRefName`, or the live default
-branch without a PR. `idd-effective-config --trusted-auto-decide` must return
-`status: readable`; pass `--base-ref <base>` only for PRs. Read
+parent claim and label held. Resolve the trusted owner/repo from the claimed
+issue's canonical live URL. For a PR, query
+`gh api repos/<target-owner>/<target-repo>/pulls/<number> --jq '{owner:
+.base.repo.owner.login, repo: .base.repo.name, ref: .base.ref}'` and use its
+base owner/repo/ref. Without a PR, use the issue repo and live default branch.
+Always pass the resolved values as explicit `--owner <owner> --repo <repo>`;
+never let the checkout's `origin` choose policy.
+`idd-effective-config --trusted-auto-decide --owner <owner> --repo <repo>`
+must return `status: readable`; pass `--base-ref <base>`
+only for PRs. Read
 `standingApprovals.split.enabled` and
 `standingApprovals.split.maxCandidateFiles` from `.github/idd/config.json` at
 that ref through GitHub Contents. The helper validates against that ref's
@@ -347,6 +354,10 @@ and the saved proposal. Update the existing proposal comment with the full
 ordered set and read it back, then repeat both checks for each changed child.
 If the update outcome is uncertain, read that comment and continue only when
 its full body exactly matches the updated set; otherwise keep the hold and stop.
+Immediately before dry-run, recheck the nonempty final child set: every child
+must fit the trusted candidate-file ceiling and contain a parent criterion,
+and every checkbox-stripped parent criterion must appear whole and verbatim
+in exactly one final child. If any check fails, do not dry-run or apply.
 Dry-run only when every final title and normalized draft body matches the
 read-back proposal and has a completed review result. A refused or failed
 dry-run stops and is reported before any child is applied. Resolve the
