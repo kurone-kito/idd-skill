@@ -15,10 +15,24 @@
         "string",
         "null"
       ],
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9._:-]{1,128}$",
       "description": "Record identity produced or recovered by the command, or null when no record exists."
     },
     "commentUrl": {
       "type": "string",
+      "oneOf": [
+        {
+          "enum": [
+            ""
+          ]
+        },
+        {
+          "minLength": 1,
+          "pattern": "^https?://\\S+$",
+          "format": "uri"
+        }
+      ],
       "description": "URL of the record comment, or an empty string when no comment exists."
     },
     "reason": {
