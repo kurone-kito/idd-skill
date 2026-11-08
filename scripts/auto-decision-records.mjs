@@ -65,9 +65,8 @@ import {
 } from './helper-cli-runner.mjs';
 import {
   deriveRepositoryIdentity,
-  loadTrustedIddConfig,
   readRepositoryPolicyFile,
-  readTrustedAutoDecide,
+  readTrustedAutoDecideWithConfig,
 } from './idd-config.mjs';
 import { maskMarkdownForScan } from './markdown-code.mjs';
 import { normalizeMarkerPrefix } from './marker-helpers.mjs';
@@ -1307,10 +1306,11 @@ export function runAutoDecisionRecordsCli(argv, dependencies = {}) {
   } catch (error) {
     return usageResult(output, errorMessage(error));
   }
-  let trusted;
+  let trustedSnapshot;
   try {
-    const reader = dependencies.readTrustedAutoDecide ?? readTrustedAutoDecide;
-    trusted = reader({
+    const reader =
+      dependencies.readTrustedAutoDecide ?? readTrustedAutoDecideWithConfig;
+    trustedSnapshot = reader({
       owner: repository.owner,
       repo: repository.repo,
       ...(args.baseRef === undefined ? {} : { baseRefName: args.baseRef }),
@@ -1319,6 +1319,7 @@ export function runAutoDecisionRecordsCli(argv, dependencies = {}) {
     const message = `the trusted confirmation-label policy could not be read: ${errorMessage(error)}`;
     return unreadableResult(output, mode, repository, message);
   }
+  const trusted = trustedSnapshot.report;
   if (trusted.status !== 'readable') {
     return unreadableResult(
       output,
@@ -1344,26 +1345,16 @@ export function runAutoDecisionRecordsCli(argv, dependencies = {}) {
   let trustedPolicyConfig;
   let authoringLabel;
   if (mode === 'records' || mode === 'confirmation' || mode === 'links') {
-    try {
-      const loadTrustedConfig =
-        dependencies.loadTrustedConfig ??
-        ((owner, repo, ref) =>
-          loadTrustedIddConfig(owner, repo, ref, undefined, undefined, {
-            userGlobalFallback: false,
-          }));
-      const config = loadTrustedConfig(
-        repository.owner,
-        repository.repo,
-        trusted.ref,
-      );
-      trustedPolicyConfig = config;
-      if (mode === 'records' || mode === 'confirmation') {
+    const config = trustedSnapshot.policyConfig;
+    trustedPolicyConfig = config;
+    if (mode === 'records' || mode === 'confirmation') {
+      try {
         authoringLabel =
           normalizePolicyConfig(config).issueAuthoring.authoringLabelName;
+      } catch (error) {
+        const message = `the trusted repository policy could not be read: ${errorMessage(error)}`;
+        return unreadableResult(output, mode, repository, message);
       }
-    } catch (error) {
-      const message = `the trusted repository policy could not be read: ${errorMessage(error)}`;
-      return unreadableResult(output, mode, repository, message);
     }
   }
   const provider = dependencies.provider ?? createGithubProvider();

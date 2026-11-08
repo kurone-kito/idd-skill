@@ -30,6 +30,7 @@ import {
   REPOSITORY_POLICY_FIELDS,
   readRepositoryPolicyFile,
   readTrustedAutoDecide,
+  readTrustedAutoDecideWithConfig,
   readTrustedDangerouslyAutoDecide,
   readTrustedForcedHandoffMode,
   resolveEffectiveCritiqueLoopDelegateFromEnv,
@@ -1599,6 +1600,33 @@ function assertEveryClassUnreadable(
   assert.equal(report.quietWindow, undefined);
   assert.match(report.error ?? '', errorPattern);
 }
+
+test('trusted auto-decide snapshot returns the config validated with its label', () => {
+  const config = trustedPolicyConfig({
+    markerPrefix: 'trusted-prefix',
+    trustedMarkerActors: ['trusted-actor'],
+    autoDecide: { confirmationLabelName: 'status:trusted-confirmation' },
+  });
+  let configReads = 0;
+  const snapshot = readTrustedAutoDecideWithConfig({
+    owner: 'o',
+    repo: 'r',
+    baseRefName: 'main',
+    fetchEncodedConfig: () => {
+      configReads += 1;
+      return toEncodedConfig(config);
+    },
+    fetchEncodedPolicySchema: () => localPolicySchemaBase64,
+  });
+
+  assert.equal(snapshot.report.status, 'readable');
+  assert.equal(
+    snapshot.report.confirmationLabelName,
+    'status:trusted-confirmation',
+  );
+  assert.deepEqual(snapshot.policyConfig, config);
+  assert.equal(configReads, 1);
+});
 
 test('trusted auto-decide: an absent trusted document is master-off with the default label, and reads no schema (#4958)', () => {
   // A user-global file that switches everything on must not count.

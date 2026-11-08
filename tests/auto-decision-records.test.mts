@@ -20,7 +20,10 @@ import {
   readDecisionLinks,
   runAutoDecisionRecordsCli,
 } from '../src/scripts/auto-decision-records.mts';
-import type { TrustedAutoDecideReport } from '../src/scripts/idd-config.mts';
+import type {
+  TrustedAutoDecideReport,
+  TrustedAutoDecideSnapshot,
+} from '../src/scripts/idd-config.mts';
 import { renderAuthoringOwnerMarker } from '../src/scripts/marker-helpers.mts';
 import { pinLoadControlOff, stubExecutable } from './test-utils.mts';
 
@@ -2027,7 +2030,7 @@ function runCliFixture(
   outcome: ReturnType<typeof runAutoDecisionRecordsCli>;
   report: Record<string, unknown>;
   trustedInputs: Array<{ owner: string; repo: string; baseRefName?: string }>;
-  configReads: Array<{ owner: string; repo: string; ref: string }>;
+  trustedReadCount: number;
 } {
   let stdout = '';
   const trustedInputs: Array<{
@@ -2035,29 +2038,31 @@ function runCliFixture(
     repo: string;
     baseRefName?: string;
   }> = [];
-  const configReads: Array<{ owner: string; repo: string; ref: string }> = [];
+  let trustedReadCount = 0;
   const outcome = runAutoDecisionRecordsCli(argv, {
     repositorySlug: () =>
       options.repositorySlug === undefined
         ? `${OWNER}/${REPO}`
         : options.repositorySlug,
     readTrustedAutoDecide: (input) => {
+      trustedReadCount += 1;
       trustedInputs.push(input);
-      return trustedAutoDecideReport(
+      const report = trustedAutoDecideReport(
         input.baseRefName ?? 'main',
         options.label,
         options.status,
       );
-    },
-    loadTrustedConfig: (owner, repo, ref) => {
-      configReads.push({ owner, repo, ref });
-      return options.trustedConfig === undefined
-        ? {
-            issueAuthoring: { authoringLabelName: AUTHORING_LABEL },
-            markerPrefix: PREFIX,
-            trustedMarkerActors: [TRUSTED],
-          }
-        : options.trustedConfig;
+      const policyConfig =
+        options.status === 'unreadable'
+          ? null
+          : options.trustedConfig === undefined
+            ? {
+                issueAuthoring: { authoringLabelName: AUTHORING_LABEL },
+                markerPrefix: PREFIX,
+                trustedMarkerActors: [TRUSTED],
+              }
+            : (options.trustedConfig as TrustedAutoDecideSnapshot['policyConfig']);
+      return { report, policyConfig };
     },
     provider: github,
     policyPath: options.localPolicyPath ?? TRUSTED_POLICY,
@@ -2069,7 +2074,7 @@ function runCliFixture(
     outcome,
     report: JSON.parse(stdout) as Record<string, unknown>,
     trustedInputs,
-    configReads,
+    trustedReadCount,
   };
 }
 
@@ -2097,7 +2102,7 @@ test('CLI uses the trusted label from origin policy for pending count', () => {
   assert.equal(result.report.pendingCount, 1);
   assert.deepEqual(result.report.repository, { owner: OWNER, repo: REPO });
   assert.deepEqual(result.trustedInputs, [{ owner: OWNER, repo: REPO }]);
-  assert.deepEqual(result.configReads, []);
+  assert.equal(result.trustedReadCount, 1);
 });
 
 test('pending count scans every stable page and excludes pull requests', () => {
@@ -2159,9 +2164,7 @@ test('CLI records flatten issue labels and note flags and pass --base-ref', () =
   assert.deepEqual(byClaim.trustedInputs, [
     { owner: OWNER, repo: REPO, baseRefName: 'release/2026' },
   ]);
-  assert.deepEqual(byClaim.configReads, [
-    { owner: OWNER, repo: REPO, ref: 'release/2026' },
-  ]);
+  assert.equal(byClaim.trustedReadCount, 1);
   const claimRecords = byClaim.report.records as Array<Record<string, unknown>>;
   assert.equal(claimRecords.length, 1);
   assert.deepEqual(
@@ -2238,7 +2241,8 @@ test('CLI confirmation and links modes expose their reader reports', () => {
     { decision: 'd1', kind: 'location', commentId: 200002 },
     { decision: 'd1', kind: 'failure', commentId: 200003 },
   ]);
-  assert.equal(confirmation.configReads[0]?.ref, 'main');
+  assert.deepEqual(confirmation.trustedInputs, [{ owner: OWNER, repo: REPO }]);
+  assert.equal(confirmation.trustedReadCount, 1);
 
   const links = runCliFixture(github, [
     '--links',
@@ -2257,9 +2261,8 @@ test('CLI confirmation and links modes expose their reader reports', () => {
     ),
     ['d1'],
   );
-  assert.deepEqual(links.configReads, [
-    { owner: OWNER, repo: REPO, ref: 'main' },
-  ]);
+  assert.deepEqual(links.trustedInputs, [{ owner: OWNER, repo: REPO }]);
+  assert.equal(links.trustedReadCount, 1);
 });
 
 test('CLI link trust comes from the trusted ref rather than the checkout policy', () => {
@@ -2292,9 +2295,8 @@ test('CLI link trust comes from the trusted ref rather than the checkout policy'
     ),
     ['d1'],
   );
-  assert.deepEqual(result.configReads, [
-    { owner: OWNER, repo: REPO, ref: 'main' },
-  ]);
+  assert.deepEqual(result.trustedInputs, [{ owner: OWNER, repo: REPO }]);
+  assert.equal(result.trustedReadCount, 1);
 
   const noTrustedActors = runCliFixture(
     github,
