@@ -138,8 +138,8 @@ detached, wrong-branch, or unreadable worktree evidence stops this path.
 The detached-rebase route below keeps its own exact checks and only its
 existing lock-holder cases. No worktree removal or replacement is authorized.
 
-**Pre-rule successor token prerequisite** — Before the recipe's token writes,
-use `--read-tokens --worktree W --claim-id <new_claim_id>`. Require
+**Pre-rule successor token prerequisite** — Before a pre-rule successor writes
+tokens, use `--read-tokens --worktree W --claim-id <new_claim_id>`. Require
 `present: true`, then explicitly compare the returned `record.agentId` with the
 assigned `new_agent_id`. The lookup is claim-keyed: an absent or malformed
 record, or an agent-id mismatch, counts as no matching record. A pre-rule
