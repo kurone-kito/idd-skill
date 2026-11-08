@@ -632,11 +632,19 @@ function readBranchConfigKeys(ctx: Context, branch: string): ConfigKeysRead {
   return { kind: 'keys', keys: [...keys] };
 }
 
-/** Whether a ref exists, read as a ref: `unknown` when the read itself fails. */
+/**
+ * Whether a ref exists: `unknown` when the read itself fails. `rev-parse` alone
+ * is not enough: a dangling symbolic ref does not resolve, so it reads as
+ * absent although the ref is still there. A symbolic ref is therefore tested
+ * on its own.
+ */
 function refState(ctx: Context, ref: string): 'present' | 'absent' | 'unknown' {
-  const result = git(ctx, ['rev-parse', '--verify', '--quiet', ref]);
-  if (result.status === 0) return 'present';
-  return result.status === 1 ? 'absent' : 'unknown';
+  const resolved = git(ctx, ['rev-parse', '--verify', '--quiet', ref]);
+  if (resolved.status === 0) return 'present';
+  if (resolved.status !== 1) return 'unknown';
+  const symbolic = git(ctx, ['symbolic-ref', '--quiet', ref]);
+  if (symbolic.status === 0) return 'present';
+  return symbolic.status === 1 ? 'absent' : 'unknown';
 }
 
 type BackupRefState =

@@ -2536,3 +2536,34 @@ test('apply: a config key added after planning is removed with the section', () 
     1,
   );
 });
+
+test('a dangling symbolic ref swapped in at the deletion is not read as a deleted branch', () => {
+  const fixture = fresh();
+  leftoverBranch(fixture);
+  const result = exercise(fixture, {
+    hook: (f, _file, args) => {
+      if (isGitCommand(args, 'update-ref', '-d')) {
+        // An outside writer replaces the branch with a symbolic ref whose
+        // target does not exist: it does not resolve, but the ref is there.
+        git(f.primary, ['update-ref', '-d', `refs/heads/${BRANCH}`]);
+        git(f.primary, [
+          'symbolic-ref',
+          `refs/heads/${BRANCH}`,
+          'refs/heads/nonexistent-target',
+        ]);
+        return failedResult(1);
+      }
+      return undefined;
+    },
+  });
+  assert.equal(result.report.outcome, 'failed');
+  assert.deepEqual(
+    result.report.actions.map((action) => action.id),
+    ['backup-ref'],
+  );
+  assert.match(result.failure?.detail ?? '', /the branch is untouched/);
+  assert.equal(
+    git(fixture.primary, ['symbolic-ref', `refs/heads/${BRANCH}`]),
+    'refs/heads/nonexistent-target',
+  );
+});
