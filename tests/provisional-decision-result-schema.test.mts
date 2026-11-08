@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { isDeepStrictEqual } from 'node:util';
 import {
   checkSchemaKeywords,
   loadJson,
@@ -14,6 +15,7 @@ type ResultFixture = {
 type SchemaDocument = {
   properties: {
     recordId: { minLength?: number; pattern?: string };
+    plan: { properties: { candidateRecord: Record<string, unknown> } };
   };
 };
 type RecordSchemaDocument = Record<string, unknown> & {
@@ -151,4 +153,119 @@ test('provisional-decision result schema constrains the record ID and comment UR
       `${JSON.stringify(fields)} should fail on ${path}: ${errors}`,
     );
   }
+});
+
+/**
+ * Drop documentation keywords for the drift comparison. Only `description` and
+ * `title` entries whose value is a string are annotations: a property named
+ * `description` or `title` holds a schema object and is still compared, and the
+ * `required` arrays only hold those names as elements. `required` is sorted
+ * because its order carries no meaning.
+ */
+function withoutDocumentation(node: unknown): unknown {
+  if (Array.isArray(node)) return node.map(withoutDocumentation);
+  if (node === null || typeof node !== 'object') return node;
+  const copy: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(node)) {
+    if (
+      (key === 'description' || key === 'title') &&
+      typeof value === 'string'
+    ) {
+      continue;
+    }
+    copy[key] =
+      key === 'required' && Array.isArray(value)
+        ? [...value].sort()
+        : withoutDocumentation(value);
+  }
+  return copy;
+}
+
+const driftKeys = ['type', 'required', 'properties', 'additionalProperties'];
+const driftingKeys = (
+  embedded: Record<string, unknown>,
+  persisted: Record<string, unknown>,
+): string[] =>
+  driftKeys.filter(
+    (key) =>
+      !isDeepStrictEqual(
+        withoutDocumentation({ [key]: embedded[key] }),
+        withoutDocumentation({ [key]: persisted[key] }),
+      ),
+  );
+
+test('provisional-decision result schema embeds the persisted record schema', () => {
+  const embedded = resultSchema.properties.plan.properties.candidateRecord;
+
+  assert.ok(
+    embedded !== null && typeof embedded === 'object',
+    'embedded candidateRecord exists',
+  );
+  assert.deepEqual(
+    driftingKeys(embedded, recordSchema),
+    [],
+    'embedded candidateRecord drifted from provisional-decision-record.schema.json',
+  );
+  for (const key of driftKeys) {
+    assert.ok(key in embedded, `embedded candidateRecord has ${key}`);
+  }
+});
+
+test('provisional-decision embedded record drift check ignores only documentation', () => {
+  const embeddedSchema =
+    resultSchema.properties.plan.properties.candidateRecord;
+  const clone = () => cloneJson(embeddedSchema) as Record<string, unknown>;
+  const at = (
+    root: unknown,
+    ...path: (string | number)[]
+  ): Record<string, unknown> =>
+    path.reduce<unknown>(
+      (node, key) => (node as Record<string | number, unknown>)[key],
+      root,
+    ) as Record<string, unknown>;
+
+  // Reworded documentation and a reordered `required` list are not drift.
+  const reworded = clone();
+  at(reworded, 'properties', 'recordId').description = 'Reworded text.';
+  at(reworded, 'properties', 'event').description = 'Reworded text.';
+  (reworded.required as string[]).reverse();
+  assert.deepEqual(driftingKeys(reworded, recordSchema), []);
+
+  // Each compared key counts as drift, including constraints on properties
+  // that are themselves named like annotations (`title`, `description`).
+  const drifts: [string, (string | number)[], string, unknown][] = [
+    ['type', [], 'type', 'array'],
+    ['additionalProperties', [], 'additionalProperties', true],
+    ['properties', ['properties', 'recordId'], 'pattern', '^[a-z]+$'],
+    [
+      'properties',
+      ['properties', 'source', 'properties', 'snapshot', 'properties', 'title'],
+      'minLength',
+      2,
+    ],
+    [
+      'properties',
+      [
+        'properties',
+        'event',
+        'oneOf',
+        0,
+        'properties',
+        'selectedOption',
+        'properties',
+        'description',
+      ],
+      'minLength',
+      2,
+    ],
+  ];
+  for (const [key, path, property, value] of drifts) {
+    const drifted = clone();
+    at(drifted, ...path)[property] = value;
+    assert.deepEqual(driftingKeys(drifted, recordSchema), [key]);
+  }
+
+  const fewerRequired = clone();
+  (fewerRequired.required as string[]).pop();
+  assert.deepEqual(driftingKeys(fewerRequired, recordSchema), ['required']);
 });
