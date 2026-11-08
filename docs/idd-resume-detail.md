@@ -221,7 +221,20 @@ applies), through the profile-selected claim-lock command:
    primary lets the takeover succeed while routing still returns
    `owner_evidence_required` (preventive; no observed incident yet).
 2. Post the nonce, wait, and confirm the winner, then run the routing call.
-3. `--check --worktree W` again and branch on the result. A holder equal
+3. For an attached `W`, run this entire step inside one profile-selected
+   `clone-lock --exec --agent-id <new_agent_id> --repo W -- <command>`
+   critical section (see the clone-scoped lock commands in
+   `docs/idd-helper-scripts.md`). After acquiring that mutex, revalidate the
+   live chain, successor pair, nonce winner, fresh-claim winner, branch/PR,
+   and attached-worktree conditions. Run the final holder check and its
+   selected acquisition below without releasing the mutex between them;
+   `claim-lock --acquire` inherits the held clone mutex. This covers every
+   attached holder case, including the immediate predecessor. Any failed
+   check stops before acquisition; release the mutex only after the selected
+   action and output checks finish. The detached-rebase route keeps the
+   checks and acquisition below without this attached-only extension.
+
+   `--check --worktree W` again and branch on the result. A holder equal
    to `old_claim_id`: `--acquire --takeover --worktree W --agent-id
    <new_agent_id> --claim-id <new_claim_id>`, then confirm the output's
    `holder.claimId` equals `old_claim_id`. An eligible attached-worktree
