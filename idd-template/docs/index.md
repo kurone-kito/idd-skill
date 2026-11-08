@@ -27,6 +27,7 @@ adding a page of your own.
 | guide | [Customizing IDD](customization.md) | Lists which IDD surfaces adopters can safely customize and points to the authoritative file for each policy. |
 | guide | [Getting Started with IDD](getting-started.md) | Walks a new adopter through the shortest safe path from deciding to adopt IDD to running the first Issue-Driven Development loop. |
 | guide | [IDD Review Policy Profiles](idd-review-policy-profiles.md) | Names the supported PR review policy profiles and the instruction files an adopter must edit to select one other than the Copilot-advisory default. |
+| guide | [IDD Worktree Setup (B1)](idd-worktree-setup.md) | Explains the branch, worktree, dependency, and self-check steps for entering the IDD work phase. |
 | guide | [Permissions and Threat Model](permissions.md) | Defines the credential profiles, merge-policy boundaries, and threat model an operator must choose before granting IDD agents GitHub access. |
 | concept | [Core IDD Concepts](concepts.md) | Introduces the loop-engineering vocabulary and mental model behind the IDD phase instructions before diving into phase-by-phase rules. |
 | reference | [Global-only profile](global-only-profile.md) | Defines the global-only IDD profile, its trust rule, and its pre-merge and cleanup behavior. |
