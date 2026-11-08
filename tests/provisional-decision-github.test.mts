@@ -18,6 +18,7 @@ interface Step {
   response?: unknown;
   raw?: string;
   fail?: boolean;
+  status?: number;
   date?: string;
 }
 
@@ -75,6 +76,11 @@ async function withGh(
     store: ReturnType<typeof createGithubProvisionalDecisionStore>,
     calls: () => { args: string[]; input: string }[],
   ) => Promise<void>,
+  options: {
+    policy?: Parameters<
+      typeof createGithubProvisionalDecisionStore
+    >[0]['policy'];
+  } = {},
 ) {
   const directory = mkdtempSync(join(tmpdir(), 'idd-provisional-store-'));
   const path = join(directory, 'state.json');
@@ -88,13 +94,16 @@ const path = ${JSON.stringify(path)};
 const state = JSON.parse(fs.readFileSync(path, 'utf8'));
 const args = process.argv.slice(2);
 const input = args.includes('--input') ? fs.readFileSync(0, 'utf8') : '';
-const endpoint = args[1] || '';
+const endpoint = args[0] === 'api'
+  ? args.slice(1).find((arg, i, tail) => !arg.startsWith('-') && tail[i - 1] !== '--hostname') || ''
+  : args[1] || '';
 const kind = args[0] === 'pr' ? 'pr' : args[0] === 'issue' ? 'label'
-  : endpoint === 'graphql' ? 'edits'
+  : endpoint === 'graphql' ? (args.some(arg => arg.includes('statusCheckRollup')) ? 'checks' : 'edits')
   : args.includes('POST') ? 'post'
   : endpoint.includes('/comments') ? (args.includes('--paginate') ? 'pages' : 'date')
   : endpoint.includes('/rules/branches/') ? 'rules'
-  : endpoint.includes('/protection') ? 'protection' : 'issue';
+  : endpoint.includes('/protection') ? 'protection'
+  : endpoint.includes('/contents/.github/idd/config.json') ? 'trusted-config' : 'issue';
 const step = state.steps.shift();
 state.calls.push({ args, input });
 fs.writeFileSync(path, JSON.stringify(state));
@@ -108,7 +117,7 @@ if (args.includes('--include') && !step.fail) {
 }
 process.stdout.write(result || '');
 if (step.fail) {
-  process.stderr.write('gh: unavailable (HTTP 503)');
+  process.stderr.write('gh: unavailable (HTTP ' + (step.status || 503) + ')');
   process.exit(1);
 }
 `,
@@ -117,7 +126,10 @@ if (step.fail) {
     const store = createGithubProvisionalDecisionStore({
       repository,
       issueNumber,
-      policy: { trustedMarkerActors: ['KuRoNe-KiTo'] },
+      policy:
+        options.policy === undefined
+          ? { trustedMarkerActors: ['KuRoNe-KiTo'] }
+          : options.policy,
     });
     await run(store, () => JSON.parse(readFileSync(path, 'utf8')).calls);
     assert.equal(JSON.parse(readFileSync(path, 'utf8')).steps.length, 0);
@@ -249,9 +261,72 @@ function pr(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function prSteps(value: ReturnType<typeof pr>, protectionFail = false): Step[] {
+function checksStep(
+  value: ReturnType<typeof pr>,
+  overrides: Record<string, unknown> = {},
+): Step {
+  const nodes = (value.statusCheckRollup as unknown[]).map((raw) => {
+    if (!raw || typeof raw !== 'object') return raw;
+    const check = raw as Record<string, unknown>;
+    return check.__typename === 'CheckRun'
+      ? {
+          ...check,
+          checkSuite: {
+            app: { slug: 'github-actions' },
+            workflowRun:
+              check.workflowName || check.workflowPath
+                ? {
+                    workflow: { name: check.workflowName ?? '' },
+                    file: { path: check.workflowPath ?? null },
+                  }
+                : null,
+          },
+        }
+      : {
+          ...check,
+          updatedAt: check.updatedAt ?? check.completedAt ?? check.createdAt,
+        };
+  });
+  return {
+    kind: 'checks',
+    response: {
+      data: {
+        repository: {
+          pullRequest: {
+            headRefOid: value.headRefOid,
+            baseRefName: value.baseRefName,
+            statusCheckRollup: {
+              contexts: {
+                nodes,
+                pageInfo: { hasNextPage: false, endCursor: null },
+              },
+            },
+            ...overrides,
+          },
+        },
+      },
+    },
+  };
+}
+
+function prSteps(
+  value: ReturnType<typeof pr>,
+  protectionFail = false,
+  checksExpected = true,
+): Step[] {
+  const view = {
+    ...value,
+    statusCheckRollup: Array.isArray(value.statusCheckRollup)
+      ? value.statusCheckRollup.map((raw) => {
+          const check = { ...raw } as Record<string, unknown>;
+          // gh pr view exposes workflowName, not the workflow file path.
+          delete check.workflowPath;
+          return check;
+        })
+      : value.statusCheckRollup,
+  };
   return [
-    { kind: 'pr', response: value },
+    { kind: 'pr', response: view },
     ...(Array.isArray(value.statusCheckRollup)
       ? [
           {
@@ -262,6 +337,7 @@ function prSteps(value: ReturnType<typeof pr>, protectionFail = false): Step[] {
             }),
           },
           { kind: 'protection', response: {}, fail: protectionFail },
+          ...(!protectionFail && checksExpected ? [checksStep(value)] : []),
         ]
       : []),
   ];
@@ -338,6 +414,340 @@ test('unreadable protection cannot pass or apply a waiver', async () => {
       false,
     );
   });
+});
+
+function trustedConfig(value: unknown): Step {
+  return {
+    kind: 'trusted-config',
+    raw: Buffer.from(JSON.stringify(value)).toString('base64'),
+  };
+}
+
+test('only trusted base policy can classify not-found governance as empty', async () => {
+  for (const missing of ['rules', 'protection', 'both']) {
+    const steps = prSteps(pr());
+    if (missing !== 'protection') {
+      steps[1] = { kind: 'rules', fail: true, status: 404 };
+    }
+    if (missing !== 'rules') {
+      steps[2] = { kind: 'protection', fail: true, status: 404 };
+    }
+    steps.splice(
+      missing === 'protection' ? 3 : 2,
+      0,
+      trustedConfig({ ciGate: { trustEmptyProtectionReads: true } }),
+    );
+    await withGh(
+      steps,
+      async (store, calls) => {
+        assert.equal(
+          (await store.readPullRequest(url)).requiredChecksPassing,
+          true,
+        );
+        const configReads = calls().filter((call) =>
+          call.args[1]?.includes('/contents/.github/idd/config.json'),
+        );
+        assert.equal(configReads.length, 1);
+        assert.ok(configReads[0]?.args.includes('ref=release/next'));
+      },
+      { policy: { ciGate: { trustEmptyProtectionReads: false } } },
+    );
+  }
+});
+
+test('caller policy cannot enable a trusted-base governance opt-in', async () => {
+  const steps = prSteps(pr(), false, false);
+  steps[2] = { kind: 'protection', fail: true, status: 404 };
+  steps.push(trustedConfig({ ciGate: { trustEmptyProtectionReads: false } }));
+  await withGh(
+    steps,
+    async (store) => {
+      assert.equal(
+        (await store.readPullRequest(url)).requiredChecksPassing,
+        false,
+      );
+    },
+    { policy: { ciGate: { trustEmptyProtectionReads: true } } },
+  );
+});
+
+test('failed and malformed governance or trusted policy remain false', async () => {
+  const value: Step = { kind: 'pr', response: pr() };
+  const rules = prSteps(pr())[1] as Step;
+  for (const steps of [
+    [value, { kind: 'rules', fail: true }],
+    [
+      value,
+      { kind: 'rules', response: [null] },
+      { kind: 'protection', response: {} },
+    ],
+    [
+      value,
+      { kind: 'rules', response: [{}] },
+      { kind: 'protection', response: {} },
+    ],
+    [
+      value,
+      {
+        kind: 'rules',
+        raw: JSON.stringify({
+          type: 'required_status_checks',
+          parameters: { required_status_checks: [''] },
+        }),
+      },
+      { kind: 'protection', response: {} },
+    ],
+    [value, rules, { kind: 'protection', response: [] }],
+    [
+      value,
+      rules,
+      { kind: 'protection', response: { required_status_checks: {} } },
+    ],
+    [
+      value,
+      rules,
+      { kind: 'protection', response: { required_status_checks: 'bad' } },
+    ],
+    [
+      value,
+      rules,
+      { kind: 'protection', fail: true, status: 404 },
+      trustedConfig(null),
+    ],
+    [
+      value,
+      rules,
+      { kind: 'protection', fail: true, status: 404 },
+      { kind: 'trusted-config', fail: true },
+    ],
+    [
+      value,
+      { kind: 'rules', fail: true, status: 404 },
+      trustedConfig({ ciGate: { trustEmptyProtectionReads: true } }),
+      { kind: 'protection', fail: true },
+    ],
+  ]) {
+    await withGh(steps, async (store) => {
+      assert.equal(
+        (await store.readPullRequest(url)).requiredChecksPassing,
+        false,
+      );
+    });
+  }
+});
+
+test('required reruns use the shared latest-instance and tie semantics', async () => {
+  const success = {
+    __typename: 'CheckRun',
+    name: 'required',
+    status: 'COMPLETED',
+    conclusion: 'SUCCESS',
+    completedAt: '2026-11-08T00:02:00Z',
+  };
+  for (const [other, expected] of [
+    [
+      {
+        ...success,
+        conclusion: 'FAILURE',
+        completedAt: '2026-11-08T00:01:00Z',
+      },
+      true,
+    ],
+    [
+      {
+        ...success,
+        conclusion: 'CANCELLED',
+        completedAt: '2026-11-08T00:01:00Z',
+      },
+      true,
+    ],
+    [
+      {
+        ...success,
+        conclusion: 'FAILURE',
+        completedAt: '2026-11-08T00:03:00Z',
+      },
+      false,
+    ],
+    [{ ...success, conclusion: 'FAILURE' }, false],
+    [{ ...success, conclusion: 'CANCELLED' }, true],
+    [
+      {
+        ...success,
+        status: 'IN_PROGRESS',
+        completedAt: '2026-11-08T00:01:00Z',
+      },
+      false,
+    ],
+    [
+      {
+        ...success,
+        conclusion: 'UNKNOWN',
+        completedAt: '2026-11-08T00:01:00Z',
+      },
+      false,
+    ],
+  ] as const) {
+    for (const checks of [
+      [other, success],
+      [success, other],
+    ]) {
+      await withGh(
+        prSteps(pr({ statusCheckRollup: checks })),
+        async (store) => {
+          assert.equal(
+            (await store.readPullRequest(url)).requiredChecksPassing,
+            expected,
+          );
+        },
+      );
+    }
+  }
+});
+
+test('legacy status reruns preserve pending and failed-current evidence', async () => {
+  const success = {
+    __typename: 'StatusContext',
+    context: 'required',
+    state: 'SUCCESS',
+    createdAt: '2026-11-08T00:02:00Z',
+  };
+  for (const [other, expected] of [
+    [{ ...success, state: 'ERROR', createdAt: '2026-11-08T00:01:00Z' }, true],
+    [{ ...success, state: 'ERROR', createdAt: '2026-11-08T00:03:00Z' }, false],
+    [
+      { ...success, state: 'PENDING', createdAt: '2026-11-08T00:01:00Z' },
+      false,
+    ],
+    [{ ...success, state: 'ERROR' }, false],
+  ] as const) {
+    await withGh(
+      prSteps(pr({ statusCheckRollup: [other, success] })),
+      async (store) => {
+        assert.equal(
+          (await store.readPullRequest(url)).requiredChecksPassing,
+          expected,
+        );
+      },
+    );
+  }
+});
+
+test('independent required-check producers cannot supersede one another', async () => {
+  const success = {
+    __typename: 'CheckRun',
+    name: 'required',
+    status: 'COMPLETED',
+    conclusion: 'SUCCESS',
+    completedAt: '2026-11-08T00:02:00Z',
+    workflowName: 'Linting workflow',
+    workflowPath: '.github/workflows/lint.yml',
+  };
+  const failure = {
+    ...success,
+    conclusion: 'FAILURE',
+    completedAt: '2026-11-08T00:01:00Z',
+  };
+  const status = {
+    __typename: 'StatusContext',
+    context: 'required',
+    state: 'SUCCESS',
+    updatedAt: '2026-11-08T00:02:00Z',
+  };
+  for (const [entries, expected] of [
+    [[failure, status], false],
+    [
+      [
+        { ...status, state: 'FAILURE', updatedAt: '2026-11-08T00:01:00Z' },
+        success,
+      ],
+      false,
+    ],
+    [[failure, { ...success, workflowName: 'Another workflow' }], false],
+    [
+      [failure, { ...success, workflowPath: '.github/workflows/decoy.yml' }],
+      false,
+    ],
+    [[failure, success], true],
+  ] as const) {
+    for (const statusCheckRollup of [entries, [...entries].reverse()]) {
+      await withGh(prSteps(pr({ statusCheckRollup })), async (store, calls) => {
+        assert.equal(
+          (await store.readPullRequest(url)).requiredChecksPassing,
+          expected,
+        );
+        assert.ok(
+          calls().some((call) =>
+            call.args.some((arg) => arg.includes('workflowRun')),
+          ),
+        );
+      });
+    }
+  }
+});
+
+test('changed or incomplete check snapshots cannot pass', async () => {
+  const value = pr();
+  for (const overrides of [
+    { headRefOid: 'b'.repeat(40) },
+    { baseRefName: 'other-base' },
+    { statusCheckRollup: null },
+    {
+      statusCheckRollup: {
+        contexts: {
+          nodes: [],
+          pageInfo: { hasNextPage: true, endCursor: null },
+        },
+      },
+    },
+  ]) {
+    const steps = prSteps(value);
+    steps[3] = checksStep(value, overrides);
+    await withGh(steps, async (store) => {
+      assert.equal(
+        (await store.readPullRequest(url)).requiredChecksPassing,
+        false,
+      );
+    });
+  }
+});
+
+test('pinned required-check sources stay false despite caller trust opt-ins', async () => {
+  for (const pinned of ['rules', 'protection']) {
+    const steps = prSteps(pr(), false, false);
+    if (pinned === 'rules') {
+      steps[1] = {
+        kind: 'rules',
+        raw: JSON.stringify({
+          type: 'required_status_checks',
+          parameters: {
+            required_status_checks: [
+              { context: 'required', integration_id: 123 },
+            ],
+          },
+        }),
+      };
+    } else {
+      steps[2] = {
+        kind: 'protection',
+        response: {
+          required_status_checks: {
+            checks: [{ context: 'required', app_id: 123 }],
+          },
+        },
+      };
+    }
+    await withGh(
+      steps,
+      async (store) => {
+        assert.equal(
+          (await store.readPullRequest(url)).requiredChecksPassing,
+          false,
+        );
+      },
+      { policy: { ciGate: { trustSourcePinnedRequiredChecks: true } } },
+    );
+  }
 });
 
 test('classic protection joins ruleset requirements and successful legacy statuses pass', async () => {

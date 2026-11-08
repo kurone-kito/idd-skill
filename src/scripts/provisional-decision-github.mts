@@ -11,8 +11,18 @@ import {
   ghText,
   resolveGhApiHostname,
 } from './gh-exec.mts';
-import { type IddConfig, loadIddConfig } from './idd-config.mts';
-import { summarizeBranchReviewRequirements } from './protocol-helpers.mts';
+import { deriveGhHttpStatus } from './gh-http-status.mts';
+import {
+  type IddConfig,
+  loadIddConfig,
+  loadTrustedIddConfig,
+} from './idd-config.mts';
+import { normalizePolicyConfig } from './policy-helpers.mts';
+import {
+  classifyCiChecks,
+  summarizeBranchReviewRequirements,
+} from './protocol-helpers.mts';
+import { createGithubProviderAdapter } from './provider-adapter-github.mts';
 import type {
   ProvisionalDecisionHistoryComment,
   ProvisionalDecisionHistoryRead,
@@ -64,38 +74,181 @@ function parseCommentLines(raw: string): {
   return { rows, complete: true };
 }
 
-function requiredChecksPassing(pr: JsonObject, repoPath: string): boolean {
+function validCheckRequirements(value: JsonObject): boolean {
+  const fields = [
+    'contexts',
+    'checks',
+    'required_status_checks',
+    'required_checks',
+  ].filter((field) => value[field] != null);
+  return (
+    fields.length > 0 &&
+    fields.every((field) => {
+      const entries = value[field];
+      return (
+        Array.isArray(entries) &&
+        entries.every((entry) => {
+          const name =
+            typeof entry === 'string'
+              ? entry
+              : (() => {
+                  const check = object(entry);
+                  return check.context ?? check.name ?? check.check;
+                })();
+          return typeof name === 'string' && name.trim().length > 0;
+        })
+      );
+    })
+  );
+}
+
+function requiredChecksPassing(
+  pr: JsonObject,
+  repository: string,
+  number: number,
+): boolean {
   if (!Array.isArray(pr.statusCheckRollup)) return false;
   try {
-    const base = encodeURIComponent(text(pr.baseRefName));
-    if (!base) return false;
-    const rules = ghApiJson(`${repoPath}/rules/branches/${base}`, {
-      paginate: true,
-    });
+    const baseRef = text(pr.baseRefName);
+    const base = encodeURIComponent(baseRef);
+    const [owner, repo] = repository.split('/');
+    if (
+      !base ||
+      !owner ||
+      !repo ||
+      !Number.isSafeInteger(number) ||
+      number < 1 ||
+      number > 2147483647
+    )
+      return false;
+    const repoPath = `repos/${repository}`;
+    let trustEmptyReads: boolean | undefined;
+    function readGovernance(path: string, paginate: boolean, empty: unknown) {
+      try {
+        return ghApiJson(path, { paginate });
+      } catch (error) {
+        if (deriveGhHttpStatus(error) !== 404) throw error;
+        // Only the trusted PR base may opt into treating a masked 404 as empty.
+        trustEmptyReads ??=
+          normalizePolicyConfig(loadTrustedIddConfig(owner, repo, baseRef))
+            .ciGate.trustEmptyProtectionReads === true;
+        if (!trustEmptyReads) throw error;
+        return empty;
+      }
+    }
+    const rules = readGovernance(
+      `${repoPath}/rules/branches/${base}`,
+      true,
+      [],
+    );
     const protection = object(
-      ghApiJson(`${repoPath}/branches/${base}/protection`),
+      readGovernance(`${repoPath}/branches/${base}/protection`, false, {}),
     );
     if (!Array.isArray(rules)) return false;
+    for (const value of rules) {
+      const rule = object(value);
+      if (typeof rule.type !== 'string' || !rule.type) return false;
+      if (
+        rule.type === 'required_status_checks' &&
+        !validCheckRequirements(object(rule.parameters))
+      )
+        return false;
+    }
+    if (protection.required_status_checks != null) {
+      if (!validCheckRequirements(object(protection.required_status_checks)))
+        return false;
+    }
     const requirements = summarizeBranchReviewRequirements(
       rules as Parameters<typeof summarizeBranchReviewRequirements>[0],
       protection,
     );
     // The rollup has no producer ID with which to verify a pinned requirement.
     if (requirements.requiredCheckSourcePinned) return false;
+    if (
+      requirements.requiredCheckNames.length === 0 &&
+      pr.statusCheckRollup.length === 0
+    )
+      return true;
+    // Preserve real workflow-file identity and complete pagination, not only
+    // gh pr view's display-name metadata. A moved snapshot cannot pass.
+    const snapshot = createGithubProviderAdapter(
+      owner,
+      repo,
+    ).getChangeRequestBranchAndChecks(number);
+    if (snapshot.headSha !== pr.headRefOid || snapshot.baseRefName !== baseRef)
+      return false;
+    if (!Array.isArray(snapshot.statusCheckRollup)) return false;
+    if (
+      snapshot.statusCheckRollup.length === 0 &&
+      pr.statusCheckRollup.length > 0
+    )
+      return false;
+    const checks = snapshot.statusCheckRollup.map(object);
     return requirements.requiredCheckNames.every((name) => {
-      const matches = (pr.statusCheckRollup as unknown[])
-        .map(object)
-        .filter((check) => (check.name ?? check.context) === name);
-      return (
-        matches.length > 0 &&
-        matches.every((check) =>
-          check.__typename === 'CheckRun'
-            ? check.status === 'COMPLETED' &&
-              check.conclusion === 'SUCCESS' &&
-              typeof check.completedAt === 'string' &&
+      const matches = checks.filter(
+        (check) => (check.name ?? check.context) === name,
+      );
+      if (matches.length === 0) return false;
+      const classification = classifyCiChecks(
+        matches.map((check) => {
+          const rawState =
+            check.__typename === 'CheckRun'
+              ? check.status === 'COMPLETED'
+                ? String(check.conclusion ?? 'UNKNOWN')
+                : String(check.status ?? 'UNKNOWN')
+              : check.__typename === 'StatusContext'
+                ? String(check.state ?? 'UNKNOWN')
+                : 'UNKNOWN';
+          const state =
+            rawState === rawState.toUpperCase() ? rawState : 'UNKNOWN';
+          const completedAt =
+            check.__typename === 'CheckRun'
+              ? check.status === 'COMPLETED' &&
+                typeof check.completedAt === 'string'
+                ? check.completedAt
+                : undefined
+              : ['SUCCESS', 'FAILURE', 'ERROR'].includes(state)
+                ? [
+                    check.updatedAt,
+                    check.completedAt,
+                    check.createdAt,
+                    check.startedAt,
+                  ].find(
+                    (value): value is string =>
+                      typeof value === 'string' &&
+                      Number.isFinite(Date.parse(value)),
+                  )
+                : undefined;
+          return {
+            name,
+            state,
+            completedAt,
+            type:
+              check.__typename === 'CheckRun'
+                ? 'check-run'
+                : check.__typename === 'StatusContext'
+                  ? 'status-context'
+                  : 'unknown',
+            workflowName:
+              typeof check.workflowName === 'string'
+                ? check.workflowName
+                : undefined,
+            workflowPath:
+              typeof check.workflowPath === 'string'
+                ? check.workflowPath
+                : undefined,
+          };
+        }),
+      );
+      if (classification.status !== 'success' || !classification.passing)
+        return false;
+      return classification.passing.every(
+        (check) =>
+          check.state === 'SUCCESS' &&
+          (check.type === 'check-run'
+            ? typeof check.completedAt === 'string' &&
               Number.isFinite(Date.parse(check.completedAt))
-            : check.__typename === 'StatusContext' && check.state === 'SUCCESS',
-        )
+            : check.type === 'status-context'),
       );
     });
   } catch {
@@ -281,7 +434,11 @@ export function createGithubProvisionalDecisionStore(input: {
         headSha: text(pr.headRefOid),
         mergeCommitSha:
           pr.mergeCommit === null ? null : text(object(pr.mergeCommit).oid),
-        requiredChecksPassing: requiredChecksPassing(pr, repoPath),
+        requiredChecksPassing: requiredChecksPassing(
+          pr,
+          repository,
+          Number(match[2]),
+        ),
       };
     },
     async appendRecordBody(recordId, body) {
