@@ -706,6 +706,31 @@ const branchRefusals: [string, string, Overrides][] = [
     { prHeads: [BRANCH] },
   ],
   [
+    'the pull request list has a row without a head name',
+    'branch:no-open-pr',
+    {
+      hook: (_fixture, file) => (file === 'gh' ? okResult('[{}]') : undefined),
+    },
+  ],
+  [
+    'the pull request list has a row of the wrong type',
+    'branch:no-open-pr',
+    {
+      hook: (_fixture, file) =>
+        file === 'gh'
+          ? okResult('[{"number":"7","headRefName":"x"},{"number":8}]')
+          : undefined,
+    },
+  ],
+  [
+    'the pull request list is not an array',
+    'branch:no-open-pr',
+    {
+      hook: (_fixture, file) =>
+        file === 'gh' ? okResult('{"message":"x"}') : undefined,
+    },
+  ],
+  [
     'the pull request read fails',
     'branch:no-open-pr',
     {

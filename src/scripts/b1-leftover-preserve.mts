@@ -815,11 +815,25 @@ function branchPlan(ctx: Context, listing: Listing): BranchPlan {
       if (parsed.length >= PR_LIST_LIMIT) {
         return refuse(`gh pr list reached its limit of ${PR_LIST_LIMIT}`);
       }
-      const heads = parsed.filter(
-        (row: unknown) =>
-          typeof row === 'object' &&
-          row !== null &&
-          (row as { headRefName?: unknown }).headRefName === branch,
+      // Every row must have the shape the query asked for. A row that is not
+      // an object with a numeric `number` and a string `headRefName` could be
+      // the very pull request that owns the branch, so it refuses instead of
+      // being skipped.
+      const rows = parsed as unknown[];
+      const malformed = rows.findIndex(
+        (row) =>
+          typeof row !== 'object' ||
+          row === null ||
+          typeof (row as { number?: unknown }).number !== 'number' ||
+          typeof (row as { headRefName?: unknown }).headRefName !== 'string',
+      );
+      if (malformed >= 0) {
+        return refuse(
+          `gh pr list printed a malformed row (${malformed + 1} of ${rows.length})`,
+        );
+      }
+      const heads = rows.filter(
+        (row) => (row as { headRefName: string }).headRefName === branch,
       );
       return heads.length === 0
         ? pass(`no open pull request has ${branch} as its head`)
