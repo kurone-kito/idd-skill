@@ -2172,6 +2172,8 @@ test('an explicit visible mismatch blocks in-limit S while unavailable stays com
   const failedScope = failedAgreement.report.steps[2];
   assert.equal(failedAgreement.code, 1);
   assert.equal(failedScope?.status, 'failed');
+  assert.equal(failedScope?.nextAction, NEXT.stopAndReport);
+  assert.equal(failedScope?.exitStatus, 0);
   assert.match(
     failedScope?.reason ?? '',
     /effort-visible-line-agreement fails/u,

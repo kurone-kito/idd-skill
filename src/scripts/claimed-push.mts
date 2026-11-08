@@ -1740,11 +1740,19 @@ function stepScope(ctx: Context): StepOutcome {
   });
   ctx.scopeAssessment = assessment;
   parts.push(counted);
+  const limitFailure =
+    original.result === 'fail'
+      ? original
+      : scoped.result === 'fail'
+        ? scoped
+        : null;
   return {
     ...failed(
       parts.join('; '),
-      NEXT_ACTION.scopeOverrun,
-      original.result === 'fail' ? original.exitStatus : scoped.exitStatus,
+      limitFailure === null
+        ? NEXT_ACTION.stopAndReport
+        : NEXT_ACTION.scopeOverrun,
+      limitFailure?.exitStatus ?? scoped.exitStatus,
     ),
     assessment,
   };
