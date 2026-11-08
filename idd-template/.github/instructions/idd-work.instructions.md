@@ -21,6 +21,12 @@ Use the [clone-scoped lock](../../docs/idd-helper-scripts.md#clone-scoped-lock)
 for shared-clone fetch, merge, worktree operations, and F4 cleanup; see
 [fan-out](../../docs/idd-workflow.md#orchestrator-fan-out-variant) if applicable.
 
+For the ordered lock, install, and verification sequence, follow the
+[on-demand B1 setup guide](../../docs/idd-worktree-setup.md). This phase
+file retains the required source and branch checks, stop conditions, and
+the branch-reuse, WorkTrunk, and host-isolated exceptions that the guide
+references.
+
 1. Parse the `origin` remote to credential-free `{origin-repository}`
    (`[HOST/]OWNER/REPO`); strip userinfo, never print or pass the URL. For
    SSH, resolve aliases with `ssh -G`'s `hostname`. Stop on
@@ -154,60 +160,11 @@ before the claim POST and before any lock. Create the worktree with the
 fresh-claim row above, then follow the fresh-claim order in
 `idd-claim.instructions.md`.
 
-For manual `git worktree add`, WorkTrunk without an install hook, or a
-compliant pinned harness-native tool (per "Harness-native worktree
-tools" above), acquire the
-[worktree-local lock file](idd-claim.instructions.md#worktree-local-lock-file-same-machine-collision)
-at the timing `idd-claim.instructions.md` gives, **before Step 3** —
-`install-deps` itself writes into the worktree and runs lifecycle
-hooks, so acquiring the lock any later leaves that install unprotected.
-Also re-run `--record-tokens` (with the same `{nonce}` the A5 write
-used; it overwrites rather than merges) for this
-worktree's own copy of the
-[generated-tokens record](idd-claim.instructions.md#worktree-local-lock-file-same-machine-collision)
-at the same point — the A5 copy is in the primary worktree's admin
-directory, so this copy is needed for the `--read-tokens` check.
-
-On a takeover, WorkTrunk's pre-start hook runs before the create command
-returns. If it
-installs dependencies, its **first** command must acquire the lock for
-the new worktree with the current `{agent-id}` / `{claim-id}` and
-re-run `--record-tokens` (with the same `{nonce}` the A5 write used),
-then run the install. Under
-`package-manager`, the new worktree's `idd:claim-lock` bin may not exist
-yet: invoke a pre-install-available helper from the primary worktree
-with the new path as `--worktree`, or use the helper-free fallback
-below. If neither is available, skip the automatic install hook and
-follow the manual lock-then-install path above.
-
-For `instructions-only` (no helper runtime), use the helper-free
-fallback under
-[Worktree-local claim lock](../../docs/idd-helper-scripts.md#worktree-local-claim-lock)
-before the first mutation; it shares the same `idd-claim.lock`
-namespace and F4 removal behavior as above.
-
-**Step 3 — Install deps**: after worktree creation, ensure dependencies
-are installed:
-
-- **WorkTrunk with a pre-start install hook** (e.g.,
-  `[pre-start].install` in `.config/wt.toml`): On a takeover, the hook must
-  acquire the lock before installing, as described above; after the hook succeeds,
-  skip this step. `-x <noop>` never changes the caller's directory —
-  `cd` into the new sibling (from `git worktree list`) before later
-  steps.
-- **Manual `git worktree add`, WorkTrunk without a hook, or a
-  compliant pinned harness-native tool**: `cd` into the newly created
-  worktree, then run **install-deps**.
-
-`install-deps` must remain safe to rerun during retries, takeovers, and
-recreated worktrees without manual cleanup.
-
-A fresh worktree can report `install-deps` success while a package
-manager silently under-installs a dependency binary. If observed, the
-`install-deps` command should verify a key post-install artifact and
-retry the install exactly once before failing loudly — see the
-`verify-install-deps` helper in `docs/idd-helper-scripts.md`. See
-[rationale](../../docs/idd-design-rationale.md#b1-step-3--install-deps-silent-under-install-detection).
+**Step 3 — Install deps**: after worktree creation, follow the
+[on-demand B1 setup guide](../../docs/idd-worktree-setup.md) for lock
+acquisition, token recording, dependency installation, and verification.
+Stop before B2 if any step fails; continue only after the B1 self-check
+below passes.
 
 ### B1 self-check
 
