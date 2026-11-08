@@ -187,11 +187,10 @@ const LIVE_CONFIG_CANDIDATE_FILES = [
   '.github/idd/config.json',
   'idd-policy.json',
 ];
-const NODE_ENGINES = '^22.23.2 || ^24.2.0 || >=26.0.0';
 // Deliberately not a hardcoded release number: a literal version string
 // would silently go stale at the next release with no drift guard (unlike
-// NODE_ENGINES, which audit-docs.mjs's ENGINES_RANGE_MIRRORS keeps honest)
-// -- exactly the misleading-output class idd-skill#1923 exists to fix. Only
+// nodeEngines, which is unknown when no source declaration is available) --
+// exactly the misleading-output class idd-skill#1923 exists to fix. Only
 // reached for a foreign/missing package.json root; the source repo,
 // package-manager, and ephemeral-npx paths always read the real version.
 const PACKAGE_VERSION_FALLBACK = 'unknown';
@@ -1693,7 +1692,7 @@ export function resolveSourcePackageMetadata(
   const fallback: PackageMetadata = {
     name: PACKAGE_NAME,
     repository: SOURCE_REPOSITORY,
-    nodeEngines: NODE_ENGINES,
+    nodeEngines: 'unknown',
     version: PACKAGE_VERSION_FALLBACK,
   };
   const packageJsonPath = resolve(packageRoot, 'package.json');
@@ -1714,7 +1713,10 @@ export function resolveSourcePackageMetadata(
     return {
       name: PACKAGE_NAME,
       repository: normalizeRepository(packageJson.repository),
-      nodeEngines: String(packageJson.engines?.node ?? NODE_ENGINES),
+      nodeEngines:
+        typeof packageJson.engines?.node === 'string'
+          ? packageJson.engines.node
+          : 'unknown',
       version: normalizePackageVersion(packageJson.version),
     };
   } catch {
