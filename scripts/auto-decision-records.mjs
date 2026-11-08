@@ -60,6 +60,7 @@ import { ghTextUnbounded } from './gh-exec.mjs';
 import { readRepositoryPolicyFile } from './idd-config.mjs';
 import { maskMarkdownForScan } from './markdown-code.mjs';
 import { normalizeMarkerPrefix } from './marker-helpers.mjs';
+import { resolveGhHostnameArgs } from './minimize-superseded-markers.mjs';
 import { resolveTrustedMarkerActors } from './protocol-helpers.mjs';
 
 const REPO_TOKEN_PATTERN = /^[A-Za-z0-9_.-]+$/;
@@ -97,6 +98,7 @@ function createGithubProvider() {
     readIssuePage({ owner, repo, number, cursor }) {
       const raw = ghTextUnbounded([
         'api',
+        ...resolveGhHostnameArgs(),
         'graphql',
         '-f',
         `query=${ISSUE_PAGE_QUERY}`,
@@ -113,6 +115,7 @@ function createGithubProvider() {
     listIssuesPage({ owner, repo, label, state, page, perPage }) {
       const raw = ghTextUnbounded([
         'api',
+        ...resolveGhHostnameArgs(),
         `repos/${owner}/${repo}/issues?labels=${encodeURIComponent(label)}&state=${state}&sort=created&direction=asc&per_page=${perPage}&page=${page}`,
       ]);
       return JSON.parse(raw || 'null');

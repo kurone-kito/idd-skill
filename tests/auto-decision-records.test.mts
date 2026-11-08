@@ -1684,6 +1684,10 @@ test('the default provider reads through gh: GraphQL for the issue, the REST lis
     process.exit(2);
   `;
   const restoreLoadControl = pinLoadControlOff();
+  const previousGhHost = process.env.GH_HOST;
+  const previousServerUrl = process.env.GITHUB_SERVER_URL;
+  delete process.env.GH_HOST;
+  process.env.GITHUB_SERVER_URL = 'https://ghes.example.com/';
   const restoreGh = stubExecutable('gh', script);
   try {
     const result = readConfirmationIssue({
@@ -1705,12 +1709,28 @@ test('the default provider reads through gh: GraphQL for the issue, the REST lis
   } finally {
     restoreGh();
     restoreLoadControl();
+    if (previousGhHost === undefined) {
+      delete process.env.GH_HOST;
+    } else {
+      process.env.GH_HOST = previousGhHost;
+    }
+    if (previousServerUrl === undefined) {
+      delete process.env.GITHUB_SERVER_URL;
+    } else {
+      process.env.GITHUB_SERVER_URL = previousServerUrl;
+    }
   }
   const calls = readFileSync(argvLog, 'utf8')
     .trim()
     .split('\n')
     .map((line) => JSON.parse(line) as string[]);
   const graphql = calls.find((args) => args.includes('graphql')) ?? [];
+  assert.deepEqual(graphql.slice(0, 4), [
+    'api',
+    '--hostname',
+    'ghes.example.com',
+    'graphql',
+  ]);
   assert.ok(graphql.includes('number=200'), JSON.stringify(graphql));
   assert.ok(
     graphql.some(
@@ -1727,5 +1747,18 @@ test('the default provider reads through gh: GraphQL for the issue, the REST lis
       ),
     ),
     JSON.stringify(list),
+  );
+  const listCalls = calls.filter((args) =>
+    args.some((arg) => arg.startsWith('repos/')),
+  );
+  assert.ok(listCalls.length > 0);
+  assert.ok(
+    listCalls.every(
+      (args) =>
+        args[0] === 'api' &&
+        args[1] === '--hostname' &&
+        args[2] === 'ghes.example.com',
+    ),
+    JSON.stringify(listCalls),
   );
 });
