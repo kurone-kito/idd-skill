@@ -1103,11 +1103,13 @@ This route is its work-phase counterpart (kurone-kito/idd-skill#4138).
 
 The original count-only route could reject useful in-flight work even
 when an S estimate was merely low by one or two files. Editing the issue
-body to M would make the existing audit pass, but review of PR `#5086`
-identified a race: a body update could overwrite concurrent authoring
-changes ([discussion](https://github.com/kurone-kito/idd-skill/pull/5086#discussion_r4501769570)).
-Issue `#5092` keeps the issue body as the authoring-time record and makes
-one shared helper assessment serve dry-run and apply.
+body to M would make the existing audit pass, but review of PR
+`kurone-kito/idd-skill#5086` identified a race: a body update could overwrite
+concurrent authoring changes
+([discussion](https://github.com/kurone-kito/idd-skill/pull/5086#discussion_r4501769570)).
+Issue `kurone-kito/idd-skill#5092` keeps the issue body as the
+authoring-time record and makes one shared helper assessment serve
+dry-run and apply.
 
 The correction is narrow. It starts only when either original S limit
 audit fails and the existing parser and visible-line agreement audit
@@ -1118,9 +1120,11 @@ two tokens in an in-memory M copy. It requires both M audits to pass and
 independently caps actual canonical paths at eight, because the audit
 parser may omit a root path or one containing whitespace. Duplicate,
 masked-only, malformed, mismatched or ambiguous evidence keeps the
-existing route from issue `#4138`; so do M failures and more than eight
-actual paths. This preserves the authoring threshold from `#4130` and
-the overrun route's incident history in `#4064` and `#3824`.
+existing route from issue
+`kurone-kito/idd-skill#4138`; so do M failures and more than eight
+actual paths. This preserves the authoring threshold from
+`kurone-kito/idd-skill#4130` and the overrun route's incident history
+in `kurone-kito/idd-skill#4064` and `kurone-kito/idd-skill#3824`.
 
 The assessment records the raw issue-body SHA-256, original and
 effective estimates, both canonical path counts, original audit results,
