@@ -860,6 +860,8 @@ a same-claim watermark has been posted. Live status digests are UI-only
 handoff context and do not satisfy review currency, claim ownership,
 advisory wait, or CI gates.
 
+For creating the issue worktree before B2, see [IDD Worktree Setup — B1](idd-worktree-setup.md).
+
 ## §LWR — Local Worktree Recovery
 
 A local worktree matching a stale or released claim's branch counts as occupied
