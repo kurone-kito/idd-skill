@@ -1204,12 +1204,16 @@ function sameIssueNumbers(
 
 /**
  * Every issue on the REST list for one label, from a set that two consecutive
- * scans agree on. The list pages by number, so an issue that closes or loses
- * the label during a scan shifts every later entry back by one, and the entry
- * that crosses onto a page already read is silently skipped. For a cap count
- * that undercount is not acceptable, so the list is scanned twice, and once
- * more when the two sets differ. A third scan that still differs from the
- * second is unreadable. The bodies come from the later agreeing scan.
+ * scans agree on. The provider requests the list in creation order, oldest
+ * first (`sort=created&direction=asc`), and each scan returns its set sorted
+ * by issue number only so two scans can be compared entry by entry. Whatever
+ * the sort key, an issue that leaves the list during a scan (it closes under
+ * an open-only list, or loses the label) shifts every later entry back by
+ * one, and the entry that crosses onto a page already read is silently
+ * skipped. For a cap count that undercount is not acceptable, so the list is
+ * scanned twice, and once more when the two sets differ. A third scan that
+ * still differs from the second is unreadable. The bodies come from the later
+ * agreeing scan.
  */
 function listLabelledIssues(
   provider: AutoDecisionRecordsProvider,
