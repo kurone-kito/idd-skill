@@ -4491,21 +4491,23 @@ each value not yet known with a placeholder of its proven maximum width; the
 rendered size is the bound. Require a proven bound of at most 60,000 UTF-8
 bytes before creating the roadmap or child. If it is larger or any part has no
 proven maximum, stop before the intent and the create, keep the carrier open
-and every existing target held, and report the refusal. When a verified intent
-already exists, leave it in place and stop for reconciliation. Never truncate
-bodies, substitute hashes, split a record or repeat a create to fit.
+and every existing target held, and report the refusal. When that refusal
+comes after a verified intent already exists, leave the intent in place and
+stop for reconciliation. Never truncate bodies, substitute hashes, split a
+record or repeat a create to fit.
 
 The not-yet-known values and the guarantee behind each maximum (checked
 2026-11-08):
 
-- `publication.target`, `set`, `session` and `token`, and the same IDs in the
-  publication line. `idd-publish-authoring-hold` mints each when it runs, as a
+- The publisher-minted IDs, in `publication` and again in the publication
+  line. `idd-publish-authoring-hold` mints a `target`, `set`, `session` and
+  `token` for a roadmap, and only a `target` and `token` for a child, each as a
   fixed prefix (`target-`, `set-`, `session-`, `token-`) and one 36-character
   UUID, so the widths are 43, 40, 44 and 42 bytes. A roadmap's
-  `publication.anchor` repeats its `target`; a child's is its anchor's real
-  reference, which is known. A session whose publisher mints another shape
-  verifies that publisher's own maximum widths; an unverified width is
-  unproven.
+  `publication.anchor` repeats its `target`. A child takes its anchor's real
+  reference, set and session, which are known and measured exactly. A session
+  whose publisher mints another shape verifies that publisher's own maximum
+  widths; an unverified width is unproven.
 - The issue number in `issue`. GitHub's GraphQL schema types `Issue.number` as
   `Int!`, a signed 32-bit integer, so it has at most 10 decimal digits. REST
   declares the number with no format, so REST alone proves no maximum.
