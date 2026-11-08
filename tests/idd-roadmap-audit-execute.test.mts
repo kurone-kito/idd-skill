@@ -235,6 +235,118 @@ test('evaluateRoadmapAuditGates returns no blockers when every child is closed',
   assert.deepEqual(evaluateRoadmapAuditGates(readyReport()), []);
 });
 
+test('roadmap close stays blocked while any descendant decision is unconfirmed or cannot be replayed', () => {
+  const pending = readyReport();
+  pending.nodes = pending.nodes.map((entry) =>
+    entry.number === 1047
+      ? {
+          ...entry,
+          provisionalDecisionState: {
+            valid: true,
+            hasRecords: true,
+            status: 'confirmation-pending',
+            hasRework: false,
+            decisions: [
+              {
+                bundleGeneration: 1,
+                decisionGeneration: 1,
+                status: 'confirmation-pending',
+                executionCriteria: ['the implementation is verified'],
+              },
+            ],
+            issues: [],
+          },
+        }
+      : entry,
+  );
+  const pendingBlockers = evaluateRoadmapAuditGates(pending);
+  assert.deepEqual(
+    pendingBlockers.map((blocker) => blocker.kind),
+    ['provisional-confirmation-pending'],
+  );
+  assert.equal(pendingBlockers[0]?.target, 1047);
+  assert.deepEqual(pendingBlockers[0]?.provenance, [ROADMAP, 1047]);
+
+  const unreadable = readyReport();
+  unreadable.nodes = unreadable.nodes.map((entry) =>
+    entry.number === ROADMAP
+      ? {
+          ...entry,
+          provisionalDecisionState: {
+            valid: false,
+            hasRecords: true,
+            status: 'invalid',
+            hasRework: false,
+            decisions: [],
+            issues: ['history-incomplete'],
+          },
+        }
+      : entry,
+  );
+  const unreadableBlockers = evaluateRoadmapAuditGates(unreadable);
+  assert.equal(unreadableBlockers[0]?.kind, 'provisional-confirmation-pending');
+  assert.equal(unreadableBlockers[0]?.target, ROADMAP);
+  assert.ok(
+    unreadableBlockers[0]?.detail.includes('downstream work may be affected'),
+  );
+
+  const confirmed = readyReport();
+  confirmed.nodes = confirmed.nodes.map((entry) =>
+    entry.number === ROADMAP
+      ? {
+          ...entry,
+          provisionalDecisionState: {
+            valid: true,
+            hasRecords: true,
+            status: 'confirmed',
+            hasRework: false,
+            decisions: [
+              {
+                bundleGeneration: 1,
+                decisionGeneration: 1,
+                status: 'confirmed',
+                executionCriteria: ['the implementation is verified'],
+              },
+            ],
+            issues: [],
+          },
+        }
+      : entry,
+  );
+  assert.deepEqual(evaluateRoadmapAuditGates(confirmed), []);
+
+  const rework = readyReport();
+  rework.nodes = rework.nodes.map((entry) =>
+    entry.number === 1047
+      ? {
+          ...entry,
+          provisionalDecisionState: {
+            valid: true,
+            hasRecords: true,
+            status: 'rework-requested',
+            hasRework: true,
+            decisions: [
+              {
+                bundleGeneration: 1,
+                decisionGeneration: 1,
+                status: 'rework-requested',
+                executionCriteria: ['the implementation is verified'],
+                workReference: 'https://github.com/acme/repo/pull/203',
+              },
+            ],
+            issues: [],
+          },
+        }
+      : entry,
+  );
+  const reworkBlockers = evaluateRoadmapAuditGates(rework);
+  assert.ok(
+    reworkBlockers[0]?.detail.includes(
+      'potentially affected merged downstream work: https://github.com/acme/repo/pull/203',
+    ),
+  );
+});
+
 test('an open execution child becomes an open-child blocker with provenance', () => {
   const report = readyReport();
   report.nodes = report.nodes.map((entry) =>

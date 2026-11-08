@@ -38,7 +38,11 @@ duplicate graph reference (only a cycle blocks `ready`, even though
 the written procedure below always treats a duplicate reference as
 unresolved). The caller must still confirm all of these separately
 before `--apply`, exactly as every other helper-first section in this
-repository already states for its own helper:
+repository already states for its own helper. Any unconfirmed
+provisional decision blocks closure of its source and every ancestor,
+even when implementation descendants are closed. Rework or replay
+refusal reports verified merged work as potentially affected and never
+reverts it:
 
 ```sh
 # source repo / vendored-node

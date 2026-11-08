@@ -4,6 +4,7 @@
 // The scripts/discover-readiness-check.mjs copy is generated from the .mts
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
+import { createHash } from 'node:crypto';
 import {
   buildAuthoringLabelWarning,
   resolveAuthoringGuardPolicy,
@@ -21,20 +22,31 @@ import {
   markCliUsageError,
   runHelperCli,
 } from './helper-cli-runner.mjs';
-import { loadPolicyConfig } from './idd-config.mjs';
+import { loadPolicyConfig, readTrustedAutoDecide } from './idd-config.mjs';
 import { maskMarkdownForScan } from './markdown-code.mjs';
 import { escapeRegex } from './marker-regex.mjs';
 import {
   findAutoDecideLabelCollisions,
   normalizePolicyConfig,
   POLICY_DEFAULTS,
+  parseIsoDurationToMs,
   resolveDurableRecordTargets,
 } from './policy-helpers.mjs';
-import { resolveTrustedMarkerActors } from './protocol-helpers.mjs';
+import {
+  classifyCommentEditState,
+  DEFAULT_STALE_AGE_MS,
+  resolveTrustedMarkerActors,
+} from './protocol-helpers.mjs';
 import {
   createGithubProviderAdapter,
   resolveCurrentGithubRepository,
 } from './provider-adapter-github.mjs';
+import { buildVerifiedClaimLineage } from './provisional-claim-lineage.mjs';
+import {
+  PROVISIONAL_DECISION_RECORD_MARKER,
+  parseProvisionalDecisionRecordComment,
+  replayProvisionalDecisionHistory,
+} from './provisional-decision-state.mjs';
 import {
   findTrustedSuitabilityRejection,
   isSuitabilityTriageVerdictCurrent,
@@ -93,6 +105,311 @@ export const CONFIRMATION_LABEL_COLLISION_REASON =
 const INACCESSIBLE_ISSUE_SENTINEL = Object.freeze({
   __iddLookupStatus: 'inaccessible',
 });
+/**
+ * Build the live, fail-closed reader shared by Discover and roadmap audits.
+ * A replayed work-completed record is accepted only after its exact merged
+ * PR head and merge commit are re-read from GitHub.
+ */
+export function buildProvisionalDecisionEvidenceReader(input) {
+  const { owner, repo, port, policy } = input;
+  const trustedLogins = resolveTrustedMarkerActors({
+    envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
+    config: policy,
+  }).actors;
+  const trustedSet = new Set(trustedLogins.map(normalizeLogin));
+  const staleAgeMs =
+    parseIsoDurationToMs(normalizePolicyConfig(policy).claimTiming.staleAge) ??
+    DEFAULT_STALE_AGE_MS;
+  let classEnabled;
+  return {
+    decisionIssueClassEnabled() {
+      if (classEnabled === undefined) {
+        classEnabled =
+          readTrustedAutoDecide({ owner, repo }).classes.decisionIssue ===
+          'enabled';
+      }
+      return classEnabled;
+    },
+    async loadState(issueNumber) {
+      let issue;
+      try {
+        issue = port.getWorkItem(issueNumber);
+      } catch (error) {
+        if (isInaccessibleIssueLookupError(error)) {
+          return invalidProvisionalEvidence('source-inaccessible');
+        }
+        throw error;
+      }
+      if (!issue) return invalidProvisionalEvidence('source-not-found');
+      const body = String(issue.body ?? '');
+      const updatedAt = String(issue.updatedAt ?? '');
+      if (
+        typeof issue.title !== 'string' ||
+        !issue.title ||
+        !updatedAt ||
+        Number.isNaN(Date.parse(updatedAt))
+      ) {
+        return invalidProvisionalEvidence('source-snapshot-incomplete');
+      }
+      let providerComments;
+      try {
+        providerComments = port.listWorkItemComments(issueNumber, {
+          includeEditState: true,
+        });
+      } catch (error) {
+        if (isInaccessibleIssueLookupError(error)) {
+          return invalidProvisionalEvidence('history-inaccessible');
+        }
+        throw error;
+      }
+      const comments = providerComments.map((comment) => ({
+        id: String(comment.id),
+        url: `https://github.com/${owner}/${repo}/issues/${issueNumber}#issuecomment-${comment.id}`,
+        body: comment.body,
+        authorLogin: comment.authorLogin,
+        createdAt: comment.createdAt,
+        edited: classifyCommentEditState(comment) !== 'unedited',
+        trustedAuthor: trustedSet.has(normalizeLogin(comment.authorLogin)),
+      }));
+      const hasRecords = comments.some((comment) =>
+        comment.body.startsWith(PROVISIONAL_DECISION_RECORD_MARKER),
+      );
+      if (!hasRecords) return emptyProvisionalEvidence();
+      for (const comment of comments) {
+        if (
+          comment.body.startsWith(PROVISIONAL_DECISION_RECORD_MARKER) &&
+          (!comment.trustedAuthor || comment.edited)
+        ) {
+          return invalidProvisionalEvidence('record-authority-invalid');
+        }
+      }
+      const claimLineage = buildVerifiedClaimLineage({
+        comments: providerComments.map((comment) => ({
+          id: String(comment.id),
+          url: `https://github.com/${owner}/${repo}/issues/${issueNumber}#issuecomment-${comment.id}`,
+          body: comment.body,
+          createdAt: comment.createdAt,
+          authorLogin: comment.authorLogin,
+          lastEditedAt: comment.lastEditedAt,
+          trustedAuthor: trustedSet.has(normalizeLogin(comment.authorLogin)),
+        })),
+        completeHistory: true,
+        staleAgeMs,
+        trustedMarkerLogins: trustedLogins,
+      });
+      if (claimLineage.status !== 'ok') {
+        return invalidProvisionalEvidence(
+          `claim-lineage-${claimLineage.reason}`,
+        );
+      }
+      const verifiedWork = [];
+      for (let index = 0; index < comments.length; index += 1) {
+        const comment = comments[index];
+        if (!comment?.trustedAuthor || comment.edited) continue;
+        const parsed = parseProvisionalDecisionRecordComment(comment.body);
+        if (!parsed.ok || parsed.record.event.type !== 'work-completed') {
+          continue;
+        }
+        const result = parsed.record.event.result;
+        const pullRequestNumber = parseSameRepositoryPullRequestNumber(
+          result.reference,
+          owner,
+          repo,
+        );
+        if (
+          result.kind !== 'merged-pull-request' ||
+          pullRequestNumber === null ||
+          typeof result.verifiedAt !== 'string' ||
+          typeof result.headSha !== 'string' ||
+          typeof result.mergeCommitSha !== 'string'
+        ) {
+          return invalidProvisionalEvidence('completion-reference-invalid');
+        }
+        const pullRequest = port.getMergedChangeRequestMeta(pullRequestNumber);
+        if (
+          pullRequest?.merged !== true ||
+          pullRequest.headRefOid !== result.headSha ||
+          pullRequest.mergeCommitOid !== result.mergeCommitSha
+        ) {
+          return invalidProvisionalEvidence('completion-proof-mismatch');
+        }
+        verifiedWork.push({
+          source: parsed.record.source,
+          bundleGeneration: parsed.record.bundleGeneration,
+          decisionGeneration: parsed.record.decisionGeneration,
+          reference: String(result.reference),
+          verifiedAt: result.verifiedAt,
+          headSha: result.headSha,
+          mergeCommitSha: result.mergeCommitSha,
+          executionCriteriaSatisfied: true,
+        });
+      }
+      const replay = replayProvisionalDecisionHistory({
+        comments,
+        completeHistory: true,
+        currentSource: {
+          repository: `${owner}/${repo}`.toLowerCase(),
+          issueNumber,
+          snapshot: {
+            title: issue.title,
+            bodySha256: createHash('sha256').update(body).digest('hex'),
+            updatedAt,
+          },
+        },
+        verifiedClaimLineage: claimLineage.claims,
+        verifiedWork,
+        verifiedReworkRoadmaps: [],
+      });
+      if (!replay.valid) {
+        return invalidProvisionalEvidence(
+          ...replay.issues.map((entry) => entry.code),
+        );
+      }
+      const decisions = replay.decisions.map((decision) => {
+        const result = decision.workCompleted?.event.result ?? {};
+        return {
+          bundleGeneration: decision.bundleGeneration,
+          decisionGeneration: decision.decisionGeneration,
+          status: decision.status,
+          executionCriteria: Array.isArray(
+            decision.selection.event.executionCriteria,
+          )
+            ? decision.selection.event.executionCriteria
+            : [],
+          ...(typeof result.reference === 'string'
+            ? { workReference: result.reference }
+            : {}),
+          ...(typeof result.verifiedAt === 'string'
+            ? { verifiedAt: result.verifiedAt }
+            : {}),
+        };
+      });
+      return {
+        valid: true,
+        hasRecords: true,
+        status: replay.status,
+        hasRework: decisions.some(
+          (decision) =>
+            decision.status === 'rework-requested' ||
+            decision.status === 'rework-authored',
+        ),
+        decisions,
+        issues: [],
+      };
+    },
+  };
+}
+function emptyProvisionalEvidence() {
+  return {
+    valid: true,
+    hasRecords: false,
+    status: 'none',
+    hasRework: false,
+    decisions: [],
+    issues: [],
+  };
+}
+function invalidProvisionalEvidence(...issues) {
+  return {
+    valid: false,
+    hasRecords: true,
+    status: 'invalid',
+    hasRework: false,
+    decisions: [],
+    issues,
+  };
+}
+function normalizeLogin(value) {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase();
+}
+function parseSameRepositoryPullRequestNumber(value, owner, repo) {
+  if (typeof value !== 'string') return null;
+  try {
+    const url = new URL(value);
+    const match = url.pathname.match(/^\/([^/]+)\/([^/]+)\/pull\/(\d+)\/?$/u);
+    if (
+      url.protocol !== 'https:' ||
+      url.hostname !== 'github.com' ||
+      url.port !== '' ||
+      url.username !== '' ||
+      url.password !== '' ||
+      url.search !== '' ||
+      url.hash !== '' ||
+      match?.[1]?.toLowerCase() !== owner.toLowerCase() ||
+      match?.[2]?.toLowerCase() !== repo.toLowerCase()
+    ) {
+      return null;
+    }
+    const number = Number.parseInt(match[3] ?? '', 10);
+    return Number.isSafeInteger(number) && number > 0 ? number : null;
+  } catch {
+    return null;
+  }
+}
+/** A hard-edge rationale is eligible only when it names the exact criterion. */
+export function extractExplicitBlockedCriterion(body, blockedIssueNumber) {
+  const edgeLine = new RegExp(
+    String.raw`^For the edge\s+\x60Blocked by #${blockedIssueNumber}\x60[\s\S]*?The blocked criterion is\s*:?[ \t]*([\s\S]*?)\.\s+The evidence is\b`,
+    'iu',
+  );
+  const matches = String(body ?? '')
+    .split(/\n\s*\n/u)
+    .map((paragraph) => edgeLine.exec(paragraph))
+    .filter((match) => match !== null);
+  if (matches.length !== 1) return null;
+  const criterion = normalizeExplicitCriterion(matches[0]?.[1] ?? '');
+  return criterion || null;
+}
+function normalizeExplicitCriterion(value) {
+  return value
+    .replace(/\s+/gu, ' ')
+    .trim()
+    .replace(/^that\s+/iu, '')
+    .replace(/[.\s]+$/u, '')
+    .toLocaleLowerCase('en-US');
+}
+function isHumanApprovalCriterion(value) {
+  return /\b(?:human|person|operator|maintainer|approve|approval|confirm|confirmation|consent|authorize|authorise|sign[ -]off)\b/iu.test(
+    value,
+  );
+}
+export function allowsProvisionalDependencyProgress(
+  evidence,
+  explicitCriterion,
+) {
+  return findProvisionalDecisionMatch(evidence, explicitCriterion) !== null;
+}
+function findProvisionalDecisionMatch(evidence, explicitCriterion) {
+  if (
+    !evidence.valid ||
+    !evidence.hasRecords ||
+    evidence.hasRework ||
+    !['in-progress', 'confirmation-pending', 'confirmed'].includes(
+      evidence.status,
+    ) ||
+    isHumanApprovalCriterion(explicitCriterion)
+  ) {
+    return null;
+  }
+  const normalizedCriterion = normalizeExplicitCriterion(explicitCriterion);
+  if (!normalizedCriterion) return null;
+  const matches = evidence.decisions.filter((decision) =>
+    decision.executionCriteria.some(
+      (criterion) =>
+        normalizeExplicitCriterion(criterion) === normalizedCriterion,
+    ),
+  );
+  if (
+    matches.length !== 1 ||
+    (matches[0]?.status !== 'confirmation-pending' &&
+      matches[0]?.status !== 'confirmed')
+  ) {
+    return null;
+  }
+  return matches[0] ? matches[0] : null;
+}
 // Flag-spec keys stay the dashed literal on purpose (never bare keys like
 // `issue:`): tests/flag-name-matrix.test.mts scans this file's *compiled*
 // .mjs source text for quoted flag literals such as the --issue spec key
@@ -178,6 +495,12 @@ async function main() {
     envValue: process.env.IDD_TRUSTED_MARKER_ACTORS ?? '',
     config: policyConfig,
   });
+  const provisionalReader = buildProvisionalDecisionEvidenceReader({
+    owner,
+    repo,
+    port: createGithubProviderAdapter(owner, repo),
+    policy: policyConfig,
+  });
   const summary = await evaluateDiscoverReadiness(issueNumbers, {
     includeUnresolvable: args.includeUnresolvable,
     providerOutageTarget: durableTargets.providerOutageTarget,
@@ -190,6 +513,8 @@ async function main() {
       owner,
       repo,
     ),
+    loadProvisionalDecisionState: provisionalReader.loadState,
+    decisionIssueClassEnabled: provisionalReader.decisionIssueClassEnabled,
     trustedMarkerLogins,
     // `--swarm-floor` output never surfaces the stale-authoring warning, so
     // skip the per-issue timeline fetch this loader runs — over a whole-repo
@@ -253,6 +578,8 @@ export async function evaluateDiscoverReadiness(issueNumbers, options) {
     trustedMarkerLogins,
     providerOutageTarget,
     authoringJournalTarget,
+    loadProvisionalDecisionState,
+    decisionIssueClassEnabled,
   } = options ?? {};
   const triageVerdictCheckEnabled =
     typeof fetchCommentsByIssueNumber === 'function' &&
@@ -387,6 +714,8 @@ export async function evaluateDiscoverReadiness(issueNumbers, options) {
       continue;
     }
     const reasons = new Set();
+    const provisionalDependencies = [];
+    const potentiallyAffectedDependencies = [];
     const labels = normalizeLabels(issue.labels);
     if (labels.has(blockedByHumanLabelName)) {
       reasons.add(`label:${blockedByHumanLabelName}`);
@@ -502,6 +831,69 @@ export async function evaluateDiscoverReadiness(issueNumbers, options) {
         continue;
       }
       if (blockedIssue.state === 'OPEN') {
+        const explicitCriterion = extractExplicitBlockedCriterion(
+          issue.body,
+          blockedNumber,
+        );
+        const sourceHasDecisionLabel = blockedIssue.labels.has(
+          needsDecisionLabelName,
+        );
+        const sourceHasHumanOrAuthoringHold = [
+          blockedByHumanLabelName,
+          authoringLabelName,
+          authoringOnlyLabelName,
+          confirmationLabel.labelName,
+        ].some((label) => blockedIssue.labels.has(label));
+        if (
+          explicitCriterion &&
+          !isHumanApprovalCriterion(explicitCriterion) &&
+          sourceHasDecisionLabel &&
+          !sourceHasHumanOrAuthoringHold &&
+          loadProvisionalDecisionState &&
+          decisionIssueClassEnabled?.()
+        ) {
+          const provisional = await loadProvisionalDecisionState(blockedNumber);
+          if (!provisional.valid || provisional.hasRework) {
+            const workReferences = provisional.decisions
+              .filter(
+                (decision) =>
+                  decision.executionCriteria.some(
+                    (criterion) =>
+                      normalizeExplicitCriterion(criterion) ===
+                      normalizeExplicitCriterion(explicitCriterion),
+                  ) && Boolean(decision.workReference),
+              )
+              .map((decision) => decision.workReference);
+            potentiallyAffectedDependencies.push({
+              issueNumber: blockedNumber,
+              criterion: explicitCriterion,
+              reason: provisional.hasRework ? 'rework' : 'evidence-invalid',
+              workReferences: [...new Set(workReferences)].sort(),
+            });
+          }
+          if (
+            allowsProvisionalDependencyProgress(provisional, explicitCriterion)
+          ) {
+            const match = findProvisionalDecisionMatch(
+              provisional,
+              explicitCriterion,
+            );
+            if (match) {
+              provisionalDependencies.push({
+                issueNumber: blockedNumber,
+                criterion: explicitCriterion,
+                bundleGeneration: match.bundleGeneration,
+                decisionGeneration: match.decisionGeneration,
+                status: match.status,
+                ...(match.workReference
+                  ? { workReference: match.workReference }
+                  : {}),
+                ...(match.verifiedAt ? { verifiedAt: match.verifiedAt } : {}),
+              });
+            }
+            continue;
+          }
+        }
         reasons.add(`blocked_by_open_issue:#${blockedNumber}`);
       }
     }
@@ -644,6 +1036,9 @@ export async function evaluateDiscoverReadiness(issueNumbers, options) {
         title: issue.title,
         ...signal,
         isRoadmap,
+        ...(provisionalDependencies.length > 0
+          ? { provisionalDependencies }
+          : {}),
       });
       continue;
     }
@@ -653,6 +1048,12 @@ export async function evaluateDiscoverReadiness(issueNumbers, options) {
       reasons: [...reasons].sort(),
       ...signal,
       isRoadmap,
+      ...(provisionalDependencies.length > 0
+        ? { provisionalDependencies }
+        : {}),
+      ...(potentiallyAffectedDependencies.length > 0
+        ? { potentiallyAffectedDependencies }
+        : {}),
     });
   }
   const filteredByReason = countReasons(filteredOut);
