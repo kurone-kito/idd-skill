@@ -139,13 +139,15 @@ The detached-rebase route below keeps its own exact checks and only its
 existing lock-holder cases. No worktree removal or replacement is authorized.
 
 **Pre-rule successor token prerequisite** — Before the recipe's token writes,
-use `--read-tokens --worktree W --claim-id <new_claim_id>` to check for a valid
-record of that exact claim under the assigned `new_agent_id`. A pre-rule
+use `--read-tokens --worktree W --claim-id <new_claim_id>`. Require
+`present: true`, then explicitly compare the returned `record.agentId` with the
+assigned `new_agent_id`. The lookup is claim-keyed: an absent or malformed
+record, or an agent-id mismatch, counts as no matching record. A pre-rule
 successor can re-record with `--nonce` only when that matching record already
-exists; a nonce alone is insufficient. For a pre-rule successor with no valid
-matching record, if
+exists; a nonce alone is insufficient. For a pre-rule successor with no
+matching record, stop before token writes or lock acquisition/takeover if
 `W`'s lock names a different earlier claim, whether the immediate predecessor
-or an eligible ancestor, stop before token writes or lock acquisition/takeover.
+or an eligible ancestor.
 `--backfill-tokens` also refuses a different claim-id in the lock. Ask the
 operator for a new trusted handoff assigning a session-qualified successor
 agent-id, then restart the live §FH checks and adopt the new marker's pair
