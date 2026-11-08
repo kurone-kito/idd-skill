@@ -138,8 +138,9 @@ detached, wrong-branch, or unreadable worktree evidence stops this path.
 The detached-rebase route below keeps its own exact checks and only its
 existing lock-holder cases. No worktree removal or replacement is authorized.
 
-**Pre-rule successor token prerequisite** — Before a pre-rule successor writes
-tokens, use `--read-tokens --worktree W --claim-id <new_claim_id>`. Require
+**Pre-rule successor token prerequisite** — Before a pre-rule successor
+re-records its nonce with `--record-tokens --nonce`, use
+`--read-tokens --worktree W --claim-id <new_claim_id>`. Require
 `present: true`, then explicitly compare the returned `record.agentId` with the
 assigned `new_agent_id`. The lookup is claim-keyed: an absent or malformed
 record, or an agent-id mismatch, counts as no matching record. A pre-rule
@@ -156,12 +157,16 @@ Observed 2026-11-08 in the review of `kurone-kito/idd-skill#5111`
 ([finding](https://github.com/kurone-kito/idd-skill/pull/5111#discussion_r4505106283)),
 tracked in `kurone-kito/idd-skill#5121`.
 
-An existing matching legacy record still permits its nonce re-record. Legitimate
-same-claim backfill still follows the gated sequence in
+An existing matching legacy record still permits its nonce re-record. Separately,
+when the record is absent or malformed and the existing lock matches the same
+claim, legitimate backfill remains available through the gated sequence in
 [Worktree-local generated-tokens record](idd-helper-scripts.md#worktree-local-generated-tokens-record);
 it does not bridge an earlier claim's lock. Session-qualified successors retain
 the recipe below. Every ownership, nonce, lineage, branch/PR, and worktree check
-still applies.
+still applies. This distinction was clarified after the 2026-11-08 wording review
+of `kurone-kito/idd-skill#5137`
+([finding](https://github.com/kurone-kito/idd-skill/pull/5137#discussion_r4506944379)),
+tracked in `kurone-kito/idd-skill#5143`.
 
 Apply the recipe below only when all of these hold:
 
