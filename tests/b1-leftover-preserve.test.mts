@@ -2568,22 +2568,53 @@ test('a dangling symbolic ref swapped in at the deletion is not read as a delete
   );
 });
 
-test('a dangling symbolic ref planted at the backup path is not followed by the create', () => {
+test('refused: a dangling symbolic ref at the backup path, found at planning', () => {
   const fixture = fresh();
   let backup = '';
   const result = exercise(fixture, {
     prepare: (f) => {
       const tip = leftoverBranch(f);
       backup = `refs/idd-b1/${ISSUE}/${tip}`;
-      // The listing skips a dangling symbolic ref, so planning sees no ref
-      // there. Following it would write the tip to the target.
+      // The listing skips a dangling symbolic ref, so a check built on it
+      // alone would see no ref there.
       git(f.primary, ['symbolic-ref', backup, 'refs/heads/stray-target']);
+    },
+  });
+  assertRefused(result, 'branch:backup-ref-compatible');
+  assert.match(
+    result.report.subjects[0]?.preconditions.find(
+      (entry) => entry.id === 'backup-ref-compatible',
+    )?.detail ?? '',
+    /does not resolve/,
+  );
+  assert.equal(
+    git(fixture.primary, ['branch', '--list', 'stray-target']),
+    '',
+    'nothing was written to the symbolic ref target',
+  );
+  assert.equal(
+    git(fixture.primary, ['symbolic-ref', backup]),
+    'refs/heads/stray-target',
+  );
+});
+
+test('a dangling symbolic ref planted at the backup path after planning is not followed by the create', () => {
+  const fixture = fresh();
+  const tip = leftoverBranch(fixture);
+  const backup = `refs/idd-b1/${ISSUE}/${tip}`;
+  const result = exercise(fixture, {
+    hook: (f, _file, args) => {
+      if (isGitCommand(args, 'update-ref', backup) && !args.includes('-d')) {
+        // Planned as absent; the symbolic ref appears right before the create.
+        git(f.primary, ['symbolic-ref', backup, 'refs/heads/stray-target']);
+      }
+      return undefined;
     },
   });
   assert.equal(result.report.outcome, 'failed');
   assert.match(
     result.failure?.detail ?? '',
-    /creating refs\/idd-b1\/.* failed/,
+    /creating refs\/idd-b1\/.* failed|symbolic ref that does not resolve/,
   );
   assert.equal(
     git(fixture.primary, ['branch', '--list', 'stray-target']),
@@ -2591,10 +2622,6 @@ test('a dangling symbolic ref planted at the backup path is not followed by the 
     'nothing was written to the symbolic ref target',
   );
   assert.notEqual(git(fixture.primary, ['branch', '--list', BRANCH]), '');
-  assert.equal(
-    git(fixture.primary, ['symbolic-ref', backup]),
-    'refs/heads/stray-target',
-  );
   assert.deepEqual(result.report.actions, []);
 });
 

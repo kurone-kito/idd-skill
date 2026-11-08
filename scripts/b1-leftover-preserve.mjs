@@ -429,13 +429,28 @@ function inspectBackupRef(ctx, backupRef) {
     };
   }
   const own = rows.find(([name]) => name === backupRef);
-  return own === undefined
-    ? { kind: 'absent' }
-    : {
-        kind: 'present',
-        oid: (own[1] ?? '').trim(),
-        symref: (own[2] ?? '').trim(),
+  if (own === undefined) {
+    // The listing skips a dangling symbolic ref, which does not resolve. It
+    // is still there, and it must refuse here, not at the create.
+    const symbolic = git(ctx, ['symbolic-ref', '--quiet', backupRef]);
+    if (symbolic.status === 0) {
+      return {
+        kind: 'refused',
+        detail: `${backupRef} is a symbolic ref that does not resolve`,
       };
+    }
+    return symbolic.status === 1
+      ? { kind: 'absent' }
+      : {
+          kind: 'refused',
+          detail: `git symbolic-ref ended with ${describeStatus(symbolic)}`,
+        };
+  }
+  return {
+    kind: 'present',
+    oid: (own[1] ?? '').trim(),
+    symref: (own[2] ?? '').trim(),
+  };
 }
 function branchPlan(ctx, listing) {
   const { request, run } = ctx;
