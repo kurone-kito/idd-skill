@@ -95,14 +95,13 @@ failure; no table fallback). Map:
 against occupied, unreadable, or unknown local worktree state
 (#3141).
 
-§FH includes attached verified-chain recovery; else STOP.
-
-With `evidence.forced_handoff` on those routes, retry with
-`--claim-id <new_claim_id>` and `--agent-id <new_agent_id>`; omit only the
-latter for pre-rule claims. Continue only on `already_owned` when
-`new_agent_id` is this session and `old_claim_id` is not its claim. Adopt the
-pair; post a nonce if absent, wait for settlement, verify its winner, then
-Step 2.
+With `evidence.forced_handoff`, retry `--claim-id <new_claim_id>` and
+`--agent-id <new_agent_id>` (omit the latter for pre-rule claims).
+`new_agent_id` must be ours; `old_claim_id` must not.
+`owner_evidence_required` → run `docs/idd-resume-detail.md` §FH checks
+(attached ancestors included); else require `already_owned`.
+Adopt the pair; post a missing nonce, wait for settlement, verify its winner,
+then Step 2.
 
 After any helper map, `roadmap-audit/*` stays A1.5-only (no worktree; children
 unlocked).
