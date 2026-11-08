@@ -52,7 +52,7 @@ test('standard B1 keeps the primary worktree on the GitHub default branch', () =
     const primary = primaryStep[1].replace(/\s+/g, ' ');
     assert.match(
       primary,
-      /Get `\{default-branch\}` directly with `gh repo view --json defaultBranchRef --jq \.defaultBranchRef\.name`\./,
+      /gh repo view "\{origin-repository\}" --json defaultBranchRef --jq \.defaultBranchRef\.name/,
       relativePath,
     );
     assert.ok(primary.includes('Never use `developmentBranch`.'), relativePath);
@@ -108,7 +108,7 @@ test('only standard Worktree creation Step 2 uses the development branch', () =>
     }
     const otherSteps = b1
       .replace(creationStep[0], '')
-      .replace('Never use\n   `developmentBranch`.', '');
+      .replace(/Never use\s+`developmentBranch`\./, '');
     assert.doesNotMatch(
       otherSteps,
       /developmentBranch|\{development-branch\}/,

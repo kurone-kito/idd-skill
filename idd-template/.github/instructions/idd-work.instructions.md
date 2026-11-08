@@ -21,38 +21,48 @@ Use the [clone-scoped lock](../../docs/idd-helper-scripts.md#clone-scoped-lock)
 for shared-clone fetch, merge, worktree operations, and F4 cleanup; see
 [fan-out](../../docs/idd-workflow.md#orchestrator-fan-out-variant) if applicable.
 
-1. Parse the `origin` remote to credential-free `{origin-repository}`
-   (`[HOST/]OWNER/REPO`); strip userinfo, never print or pass the URL. For
-   SSH, resolve aliases with `ssh -G`'s `hostname`. Stop on
-   parse failure. Set `GH_REPO` to this ID per lookup. Require
-   `nameWithOwner` to match origin's owner/repo; check with
-   `gh repo view --json nameWithOwner --jq .nameWithOwner`. Get
-   `{default-branch}` directly with
-   `gh repo view --json defaultBranchRef --jq .defaultBranchRef.name`.
-   Stop on mismatch, failure, empty or unsafe name. Never use
-   `developmentBranch`. On primary with it checked out, run:
+1. Parse `origin` as credential-free `{origin-repository}`
+   (`[HOST/]OWNER/REPO`); strip userinfo, never print/pass the URL. Resolve
+   SSH aliases with `ssh -G`'s `hostname`. Stop on parse/lookup failure.
+   Match `nameWithOwner` to origin's owner/repo case-insensitively;
+   stop on mismatch. Preserve explicit host routing.
+
+   Before fresh-claim `claim-issue`, unset `GH_REPO`; run the separate
+   unqualified guard (issue `#5090`):
+
+   ```sh
+   gh repo view --json nameWithOwner --jq .nameWithOwner
+   ```
+
+   Require that identity match before the helper; invoke the
+   profile-selected `claim-issue` with `GH_REPO` still unset.
+   Direct B1 lookups use positional `{origin-repository}`:
+
+   ```sh
+   gh repo view "{origin-repository}" --json nameWithOwner --jq .nameWithOwner
+   gh repo view "{origin-repository}" --json defaultBranchRef --jq .defaultBranchRef.name
+   ```
+
+   Recheck identity; use the returned default branch. Stop on empty/unsafe
+   name. Never use `developmentBranch`. On primary with it checked out:
 
    ```sh
    git fetch origin
    git log origin/{default-branch}..{default-branch} --oneline
    ```
 
-   A missing origin ref or any `git log` output means stop and report; never
-   reset. Otherwise fast-forward:
+   Missing ref or any log output: stop/report; never reset. Otherwise:
 
    ```sh
    git -c merge.autoStash=false merge --ff-only origin/{default-branch}
    ```
 
-   Merge failure: stop before worktree creation and report it.
-
-   Dirty: stop before creation; report `primary-worktree-dirty` and paths.
-   For staged/unmerged paths, ask the operator to preserve staged and
-   unstaged content and resolve the index. Move only this session's unstaged
-   paths outside the repo; ask before moving others. Rerun Step 1. Never
-   stash, discard, or remove a worktree (`#5058`).
-
-   Follow Anti-patterns below.
+   On merge failure or dirty primary, stop before creation and report;
+   dirty reports include `primary-worktree-dirty` and paths. Ask the
+   operator to preserve staged/unstaged content and resolve staged/unmerged
+   paths. Move only this session's unstaged paths outside the repo; ask
+   before moving others. Rerun Step 1. Never stash, discard, or remove a
+   worktree (issue `#5058`). Follow Anti-patterns below.
 
 2. Run `git worktree list`. Inspect an existing branch worktree and acquire
    its [worktree-local claim lock](idd-claim.instructions.md#worktree-local-lock-file-same-machine-collision)
@@ -98,17 +108,12 @@ branch name with every `/` replaced by `-`.
 
 Example: `issue/123-add-foo` → `../{{REPO_NAME}}.issue-123-add-foo`.
 
-**Harness-native worktree tools**: an agent harness's own worktree
-primitive (e.g. Claude Code's `EnterWorktree`) is a third path outside
-the two enumerated below. Use one only when both its target directory
-can be pinned to the sibling path above and its branch to
-`issue/<number>-<slug>` — never a tool-chosen default. `EnterWorktree`
-always places the worktree under a harness-owned directory
-(`.claude/worktrees/agent-<hash>`), never the sibling path — never use
-it here. Grok Build's `grok --worktree`, subagent `isolation:
-worktree`, and `x.ai/git/worktree/*` likewise can't pin either — never
-use them (same class as #1930). When a tool can't pin both, use
-`git worktree add` below (or WorkTrunk) instead.
+**Harness-native worktree tools**: pin both the sibling path and claimed
+`issue/<number>-<slug>` branch or use `git worktree add`/WorkTrunk.
+Never use Claude Code's `EnterWorktree`
+(`.claude/worktrees/agent-<hash>` only), Grok Build's `grok --worktree`,
+subagent `isolation: worktree`, or `x.ai/git/worktree/*`: they cannot pin
+both (same class as #1930).
 
 **Step 1 — Check for orphaned path**: if the target path already exists
 but is not listed in `git worktree list`, stop and report for manual
