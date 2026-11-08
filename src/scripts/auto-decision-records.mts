@@ -61,11 +61,45 @@ import {
   inspectGraphqlCommentsPage,
   mapGraphqlIssueCommentNode,
 } from './authoring-owner-provenance.mts';
+import { parseCliArgs } from './cli-args.mts';
 import { ghTextUnbounded } from './gh-exec.mts';
-import { readRepositoryPolicyFile } from './idd-config.mts';
+import type { HelperCliResult } from './helper-cli-runner.mts';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  isHelperErrorEnvelopeEnabled,
+  runHelperCli,
+} from './helper-cli-runner.mts';
+import {
+  deriveRepositoryIdentity,
+  loadTrustedIddConfig,
+  readRepositoryPolicyFile,
+  readTrustedAutoDecide,
+  type TrustedAutoDecideReport,
+} from './idd-config.mts';
 import { maskMarkdownForScan } from './markdown-code.mts';
 import { normalizeMarkerPrefix } from './marker-helpers.mts';
+import { normalizePolicyConfig } from './policy-helpers.mts';
 import { resolveTrustedMarkerActors } from './protocol-helpers.mts';
+
+// Declared above the entry-point call for the same temporal-dead-zone reason
+// documented in idd-critique-delegate.mts.
+const AUTO_DECISION_CLI_FLAG_SPEC = {
+  '--pending-count': { type: 'boolean' },
+  '--records': { type: 'boolean' },
+  '--class': { type: 'string' },
+  '--source': { type: 'string' },
+  '--claim': { type: 'string' },
+  '--set': { type: 'string' },
+  '--subject': { type: 'string' },
+  '--state': { type: 'string' },
+  '--confirmation': { type: 'string' },
+  '--links': { type: 'boolean' },
+  '--issue': { type: 'string' },
+  '--owner': { type: 'string' },
+  '--repo': { type: 'string' },
+  '--base-ref': { type: 'string' },
+  '--help': { type: 'boolean', short: 'h' },
+} as const;
 
 /** The repository whose issues are read. */
 export interface AutoDecisionRepository {
@@ -208,6 +242,17 @@ export interface ConfirmationFinderIssue {
 
 export type ConfirmationFinderRead =
   | { status: 'readable'; issues: ConfirmationFinderIssue[] }
+  | AutoDecisionUnreadable;
+
+/** Input for counting open issues that carry the confirmation label. */
+export interface PendingConfirmationCountInput {
+  repository: AutoDecisionRepository;
+  /** From the trusted read of #4958, never from the local checkout. */
+  confirmationLabel: string;
+}
+
+export type PendingConfirmationCountRead =
+  | { status: 'readable'; count: number }
   | AutoDecisionUnreadable;
 
 /** What a matcher call expects. Name a claim, a set, or both. */
@@ -1341,6 +1386,43 @@ export function findConfirmationIssues(
 }
 
 /**
+ * Count every open issue carrying the trusted confirmation label. The REST
+ * list is scanned until two consecutive all-page snapshots agree, then each
+ * listed issue is read again so a closure or label removal during pagination
+ * does not inflate the count. A failed list or issue read stays unreadable.
+ */
+export function countPendingConfirmationIssues(
+  input: PendingConfirmationCountInput,
+  provider: AutoDecisionRecordsProvider = createGithubProvider(),
+): PendingConfirmationCountRead {
+  try {
+    assertRepository(input.repository);
+    assertListableConfirmationLabel(input.confirmationLabel);
+    const { owner, repo } = input.repository;
+    const listed = listLabelledIssues(
+      provider,
+      owner,
+      repo,
+      input.confirmationLabel,
+      'open',
+    );
+    let count = 0;
+    for (const entry of listed) {
+      const snapshot = readIssueSnapshot(provider, owner, repo, entry.number);
+      if (
+        snapshot.state === 'open' &&
+        snapshot.labels.some((name) => sameText(name, input.confirmationLabel))
+      ) {
+        count += 1;
+      }
+    }
+    return { status: 'readable', count };
+  } catch (error) {
+    return unreadable(error);
+  }
+}
+
+/**
  * Report whether a counting record exists for the expected class, source,
  * claim or set, and subject, and, when `expected.decision` is given, whether
  * that record carries that decision ID. Takes the result of
@@ -1406,4 +1488,441 @@ export function matchDecisionRecord(
     records: matching,
     reason: 'a counting record matches',
   };
+}
+
+type AutoDecisionCliMode =
+  | 'pending-count'
+  | 'records'
+  | 'confirmation'
+  | 'links';
+
+export interface ParsedAutoDecisionCliArgs {
+  help: boolean;
+  mode: AutoDecisionCliMode | null;
+  owner?: string;
+  repo?: string;
+  baseRef?: string;
+  class?: AutoDecideConfirmationClass;
+  source?: number;
+  claim?: string;
+  set?: string;
+  subject?: string;
+  state?: 'open' | 'all';
+  confirmation?: number;
+  issue?: number;
+}
+
+/** Injectable external reads for exercising the command without GitHub. */
+export interface AutoDecisionRecordsCliDependencies {
+  repositorySlug?: () => string | null;
+  readTrustedAutoDecide?: (input: {
+    owner: string;
+    repo: string;
+    baseRefName?: string;
+  }) => TrustedAutoDecideReport;
+  loadTrustedConfig?: (owner: string, repo: string, ref: string) => unknown;
+  provider?: AutoDecisionRecordsProvider;
+  /** Test seam for the library's repository-local trusted-actor policy read. */
+  policyPath?: string;
+  writeOutput?: (text: string) => void;
+}
+
+function parsePositiveIssueNumber(value: string, flag: string): number {
+  if (!/^[1-9]\d*$/.test(value)) {
+    throw new Error(`${flag} must be a positive issue number`);
+  }
+  const number = Number(value);
+  if (!Number.isSafeInteger(number)) {
+    throw new Error(`${flag} must be a safe positive issue number`);
+  }
+  return number;
+}
+
+/** Parse and validate arguments before any repository or GitHub reads. */
+export function parseAutoDecisionRecordsArgs(
+  argv: readonly string[],
+): ParsedAutoDecisionCliArgs {
+  const { values, help } = parseCliArgs(argv, AUTO_DECISION_CLI_FLAG_SPEC);
+  if (help) return { help: true, mode: null };
+
+  const flag = (name: string): boolean => values[name] === true;
+  const optional = (name: string): string | undefined =>
+    values[name] as string | undefined;
+  const modes: Array<AutoDecisionCliMode | null> = [
+    flag('pending-count') ? 'pending-count' : null,
+    flag('records') ? 'records' : null,
+    values.confirmation === undefined ? null : 'confirmation',
+    flag('links') ? 'links' : null,
+  ];
+  const selected = modes.filter(
+    (mode): mode is AutoDecisionCliMode => mode !== null,
+  );
+  if (selected.length !== 1) {
+    throw new Error(
+      'give exactly one mode: --pending-count, --records, --confirmation, or --links',
+    );
+  }
+  const mode = selected[0] as AutoDecisionCliMode;
+  const ownerValue = optional('owner');
+  const repoValue = optional('repo');
+  const owner = ownerValue?.trim();
+  const repo = repoValue?.trim();
+  if ((ownerValue === undefined) !== (repoValue === undefined)) {
+    throw new Error('--owner and --repo must be given together');
+  }
+  if (ownerValue !== undefined && (owner === '' || repo === '')) {
+    throw new Error('--owner and --repo must be non-empty');
+  }
+  const baseRefValue = optional('base-ref');
+  const baseRef = baseRefValue?.trim();
+  if (baseRefValue !== undefined && baseRef === '') {
+    throw new Error('--base-ref must be non-empty when given');
+  }
+
+  const modeFlags: Record<AutoDecisionCliMode, readonly string[]> = {
+    'pending-count': ['pending-count'],
+    records: ['records', 'class', 'source', 'claim', 'set', 'subject', 'state'],
+    confirmation: ['confirmation'],
+    links: ['links', 'issue'],
+  };
+  const commonFlags = new Set(['owner', 'repo', 'base-ref']);
+  const allowedFlags = new Set([...commonFlags, ...(modeFlags[mode] ?? [])]);
+  for (const name of Object.keys(values)) {
+    if (!allowedFlags.has(name)) {
+      throw new Error(`--${name} is not valid with --${mode}`);
+    }
+  }
+
+  const parsed: ParsedAutoDecisionCliArgs = {
+    help: false,
+    mode,
+    ...(owner === undefined ? {} : { owner }),
+    ...(repo === undefined ? {} : { repo }),
+    ...(baseRef === undefined ? {} : { baseRef }),
+  };
+
+  if (mode === 'records') {
+    const className = optional('class');
+    const state = optional('state');
+    if (className === undefined) {
+      throw new Error('--records requires --class <class>');
+    }
+    if (!isConfirmationClass(className)) {
+      throw new Error(
+        `--class must be one of ${AUTO_DECIDE_CONFIRMATION_CLASSES.join(', ')}`,
+      );
+    }
+    if (state !== 'open' && state !== 'all') {
+      throw new Error('--records requires --state open|all');
+    }
+    const source = optional('source');
+    const claim = optional('claim');
+    const set = optional('set');
+    const subject = optional('subject');
+    if (claim !== undefined && set !== undefined) {
+      throw new Error('--claim and --set cannot be used together');
+    }
+    for (const [name, value] of [
+      ['--claim', claim],
+      ['--set', set],
+      ['--subject', subject],
+    ] as const) {
+      if (value !== undefined && value.trim() === '') {
+        throw new Error(`${name} must be non-empty when given`);
+      }
+    }
+    parsed.class = className;
+    parsed.state = state;
+    if (source !== undefined) {
+      parsed.source = parsePositiveIssueNumber(source, '--source');
+    }
+    if (claim !== undefined) parsed.claim = claim;
+    if (set !== undefined) parsed.set = set;
+    if (subject !== undefined) parsed.subject = subject;
+    return parsed;
+  }
+
+  if (mode === 'confirmation') {
+    parsed.confirmation = parsePositiveIssueNumber(
+      optional('confirmation') ?? '',
+      '--confirmation',
+    );
+    return parsed;
+  }
+
+  if (mode === 'links') {
+    const issue = optional('issue');
+    if (issue === undefined) {
+      throw new Error('--links requires --issue <number>');
+    }
+    parsed.issue = parsePositiveIssueNumber(issue, '--issue');
+  }
+  return parsed;
+}
+
+function repositoryForCli(
+  args: ParsedAutoDecisionCliArgs,
+  dependencies: AutoDecisionRecordsCliDependencies,
+): AutoDecisionRepository {
+  let owner = args.owner ?? '';
+  let repo = args.repo ?? '';
+  if (owner === '' && repo === '') {
+    const slug = dependencies.repositorySlug
+      ? dependencies.repositorySlug()
+      : deriveRepositoryIdentity({ cwd: process.cwd() }).githubSlug;
+    const parts = slug?.split('/') ?? [];
+    if (parts.length !== 2 || !parts[0] || !parts[1]) {
+      throw new Error(
+        'cannot resolve the repository from this checkout\'s GitHub "origin" remote; pass --owner and --repo',
+      );
+    }
+    owner = parts[0];
+    repo = parts[1];
+  }
+  const repository = { owner, repo };
+  assertRepository(repository);
+  return repository;
+}
+
+function outputJson(output: (text: string) => void, value: unknown): void {
+  output(`${JSON.stringify(value, null, 2)}\n`);
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function usageResult(
+  output: (text: string) => void,
+  message: string,
+): HelperCliResult {
+  outputJson(output, { status: 'usage-error', error: message });
+  return { exitCode: 2, kind: 'usage', message, httpStatus: null };
+}
+
+function unreadableResult(
+  output: (text: string) => void,
+  mode: AutoDecisionCliMode,
+  repository: AutoDecisionRepository,
+  error: string,
+  details: Record<string, unknown> = {},
+): HelperCliResult {
+  outputJson(output, {
+    status: 'unreadable',
+    mode,
+    repository,
+    ...details,
+    error,
+  });
+  return { exitCode: 1, kind: 'gate', message: error, httpStatus: null };
+}
+
+function printAutoDecisionRecordsHelp(output: (text: string) => void): void {
+  output(`Usage:
+  node scripts/auto-decision-records.mjs --pending-count [--owner <owner> --repo <repo>] [--base-ref <name>]
+  node scripts/auto-decision-records.mjs --records --class <class> [--source <number>] [--claim <id> | --set <id>] [--subject <value>] --state open|all [--owner <owner> --repo <repo>] [--base-ref <name>]
+  node scripts/auto-decision-records.mjs --confirmation <number> [--owner <owner> --repo <repo>] [--base-ref <name>]
+  node scripts/auto-decision-records.mjs --links --issue <number> [--owner <owner> --repo <repo>] [--base-ref <name>]
+
+Read auto-decision confirmation records as JSON. The confirmation label and
+policy are read from a trusted repository ref; the command never writes.
+`);
+}
+
+/** Run the read-only command. All CLI and provider effects are injectable. */
+export function runAutoDecisionRecordsCli(
+  argv: readonly string[],
+  dependencies: AutoDecisionRecordsCliDependencies = {},
+): HelperCliResult {
+  const output =
+    dependencies.writeOutput ?? ((text) => process.stdout.write(text));
+  let args: ParsedAutoDecisionCliArgs;
+  try {
+    args = parseAutoDecisionRecordsArgs(argv);
+  } catch (error) {
+    return usageResult(output, errorMessage(error));
+  }
+  if (args.help) {
+    printAutoDecisionRecordsHelp(output);
+    return 0;
+  }
+  const mode = args.mode as AutoDecisionCliMode;
+
+  let repository: AutoDecisionRepository;
+  try {
+    repository = repositoryForCli(args, dependencies);
+  } catch (error) {
+    return usageResult(output, errorMessage(error));
+  }
+
+  let trusted: TrustedAutoDecideReport;
+  try {
+    const reader = dependencies.readTrustedAutoDecide ?? readTrustedAutoDecide;
+    trusted = reader({
+      owner: repository.owner,
+      repo: repository.repo,
+      ...(args.baseRef === undefined ? {} : { baseRefName: args.baseRef }),
+    });
+  } catch (error) {
+    const message = `the trusted confirmation-label policy could not be read: ${errorMessage(error)}`;
+    return unreadableResult(output, mode, repository, message);
+  }
+  if (trusted.status !== 'readable') {
+    return unreadableResult(
+      output,
+      mode,
+      repository,
+      trusted.error ?? 'the trusted confirmation-label policy is unreadable',
+      { trustedPolicy: trusted },
+    );
+  }
+  const confirmationLabel = trusted.confirmationLabelName;
+  if (
+    typeof confirmationLabel !== 'string' ||
+    confirmationLabel.trim() === ''
+  ) {
+    return unreadableResult(
+      output,
+      mode,
+      repository,
+      'the trusted confirmation-label policy has no readable label name',
+      { trustedPolicy: trusted },
+    );
+  }
+
+  let authoringLabel: string | undefined;
+  if (mode === 'records' || mode === 'confirmation') {
+    try {
+      const loadTrustedConfig =
+        dependencies.loadTrustedConfig ??
+        ((owner: string, repo: string, ref: string) =>
+          loadTrustedIddConfig(owner, repo, ref, undefined, undefined, {
+            userGlobalFallback: false,
+          }));
+      const config = loadTrustedConfig(
+        repository.owner,
+        repository.repo,
+        trusted.ref,
+      );
+      authoringLabel =
+        normalizePolicyConfig(config).issueAuthoring.authoringLabelName;
+    } catch (error) {
+      const message = `the trusted authoring-label policy could not be read: ${errorMessage(error)}`;
+      return unreadableResult(output, mode, repository, message);
+    }
+  }
+
+  const provider = dependencies.provider ?? createGithubProvider();
+  if (mode === 'pending-count') {
+    const result = countPendingConfirmationIssues(
+      { repository, confirmationLabel },
+      provider,
+    );
+    if (result.status === 'unreadable') {
+      return unreadableResult(output, mode, repository, result.error);
+    }
+    outputJson(output, {
+      status: 'readable',
+      mode,
+      repository,
+      confirmationLabel,
+      pendingCount: result.count,
+    });
+    return 0;
+  }
+
+  if (mode === 'records') {
+    const result = findConfirmationIssues(
+      {
+        repository,
+        class: args.class as AutoDecideConfirmationClass,
+        confirmationLabel,
+        authoringLabel: authoringLabel as string,
+        state: args.state,
+        ...(args.source === undefined
+          ? {}
+          : {
+              source: `${repository.owner}/${repository.repo}#${args.source}`,
+            }),
+        ...(args.claim === undefined ? {} : { claim: args.claim }),
+        ...(args.set === undefined ? {} : { set: args.set }),
+        ...(args.subject === undefined ? {} : { subject: args.subject }),
+        ...(dependencies.policyPath === undefined
+          ? {}
+          : { policyPath: dependencies.policyPath }),
+      },
+      provider,
+    );
+    if (result.status === 'unreadable') {
+      return unreadableResult(output, mode, repository, result.error);
+    }
+    const records = result.issues.flatMap((issue) =>
+      issue.records.map((record) => ({
+        ...record,
+        state: issue.state,
+        confirmationLabel: issue.confirmationLabel,
+        authoringLabel: issue.authoringLabel,
+      })),
+    );
+    outputJson(output, {
+      status: 'readable',
+      mode,
+      repository,
+      class: args.class,
+      state: args.state,
+      records,
+    });
+    return 0;
+  }
+
+  if (mode === 'confirmation') {
+    const result = readConfirmationIssue(
+      {
+        repository,
+        number: args.confirmation as number,
+        confirmationLabel,
+        authoringLabel: authoringLabel as string,
+        ...(dependencies.policyPath === undefined
+          ? {}
+          : { policyPath: dependencies.policyPath }),
+      },
+      provider,
+    );
+    if (result.status === 'unreadable') {
+      return unreadableResult(output, mode, repository, result.error);
+    }
+    const { status: _status, ...report } = result;
+    outputJson(output, { status: 'readable', mode, repository, ...report });
+    return 0;
+  }
+
+  const result = readDecisionLinks(
+    {
+      repository,
+      number: args.issue as number,
+      confirmationLabel,
+      ...(dependencies.policyPath === undefined
+        ? {}
+        : { policyPath: dependencies.policyPath }),
+    },
+    provider,
+  );
+  if (result.status === 'unreadable') {
+    return unreadableResult(output, mode, repository, result.error);
+  }
+  const { status: _status, ...report } = result;
+  outputJson(output, { status: 'readable', mode, repository, ...report });
+  return 0;
+}
+
+function runCli(): HelperCliResult {
+  return runAutoDecisionRecordsCli(process.argv.slice(2));
+}
+
+if (import.meta.main) {
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('auto-decision-records', runCli);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(runCli());
+  }
 }

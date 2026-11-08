@@ -12,12 +12,15 @@ import {
   type ConfirmationFinderInput,
   type ConfirmationFinderRead,
   type ConfirmationIssueRead,
+  countPendingConfirmationIssues,
   type DecisionLinksRead,
   findConfirmationIssues,
   matchDecisionRecord,
   readConfirmationIssue,
   readDecisionLinks,
+  runAutoDecisionRecordsCli,
 } from '../src/scripts/auto-decision-records.mts';
+import type { TrustedAutoDecideReport } from '../src/scripts/idd-config.mts';
 import { renderAuthoringOwnerMarker } from '../src/scripts/marker-helpers.mts';
 import { pinLoadControlOff, stubExecutable } from './test-utils.mts';
 
@@ -1813,4 +1816,355 @@ test('the default provider reads through gh: GraphQL for the issue, the REST lis
     ),
     JSON.stringify(listCalls),
   );
+});
+
+const REMOTE_CONFIRMATION_LABEL = 'trusted:needs-confirmation';
+
+function trustedAutoDecideReport(
+  ref: string,
+  label = CONFIRMATION_LABEL,
+  status: 'readable' | 'unreadable' = 'readable',
+): TrustedAutoDecideReport {
+  return {
+    status,
+    source: 'repository',
+    ref,
+    master: status === 'readable' ? 'disabled' : 'unreadable',
+    classes: {},
+    ...(status === 'readable' ? { confirmationLabelName: label } : {}),
+    ...(status === 'unreadable'
+      ? { error: 'trusted policy cannot be read' }
+      : {}),
+  } as unknown as TrustedAutoDecideReport;
+}
+
+interface CliFixtureOptions {
+  label?: string;
+  status?: 'readable' | 'unreadable';
+  repositorySlug?: string | null;
+  trustedConfig?: unknown;
+}
+
+function runCliFixture(
+  github: FakeGithub,
+  argv: readonly string[],
+  options: CliFixtureOptions = {},
+): {
+  outcome: ReturnType<typeof runAutoDecisionRecordsCli>;
+  report: Record<string, unknown>;
+  trustedInputs: Array<{ owner: string; repo: string; baseRefName?: string }>;
+  configReads: Array<{ owner: string; repo: string; ref: string }>;
+} {
+  let stdout = '';
+  const trustedInputs: Array<{
+    owner: string;
+    repo: string;
+    baseRefName?: string;
+  }> = [];
+  const configReads: Array<{ owner: string; repo: string; ref: string }> = [];
+  const outcome = runAutoDecisionRecordsCli(argv, {
+    repositorySlug: () =>
+      options.repositorySlug === undefined
+        ? `${OWNER}/${REPO}`
+        : options.repositorySlug,
+    readTrustedAutoDecide: (input) => {
+      trustedInputs.push(input);
+      return trustedAutoDecideReport(
+        input.baseRefName ?? 'main',
+        options.label,
+        options.status,
+      );
+    },
+    loadTrustedConfig: (owner, repo, ref) => {
+      configReads.push({ owner, repo, ref });
+      return (
+        options.trustedConfig ?? {
+          issueAuthoring: { authoringLabelName: AUTHORING_LABEL },
+        }
+      );
+    },
+    provider: github,
+    policyPath: TRUSTED_POLICY,
+    writeOutput: (text) => {
+      stdout += text;
+    },
+  });
+  return {
+    outcome,
+    report: JSON.parse(stdout) as Record<string, unknown>,
+    trustedInputs,
+    configReads,
+  };
+}
+
+function cliExitCode(
+  outcome: ReturnType<typeof runAutoDecisionRecordsCli>,
+): number {
+  return typeof outcome === 'number' ? outcome : outcome.exitCode;
+}
+
+test('CLI uses the trusted label from origin policy for pending count', () => {
+  const github = new FakeGithub(
+    confirmationIssue(200, { labels: [REMOTE_CONFIRMATION_LABEL] }),
+    confirmationIssue(201, { labels: [CONFIRMATION_LABEL] }),
+    confirmationIssue(202, {
+      labels: [REMOTE_CONFIRMATION_LABEL],
+      state: 'CLOSED',
+    }),
+  );
+  const result = runCliFixture(github, ['--pending-count'], {
+    label: REMOTE_CONFIRMATION_LABEL,
+  });
+  assert.equal(cliExitCode(result.outcome), 0);
+  assert.equal(result.report.mode, 'pending-count');
+  assert.equal(result.report.confirmationLabel, REMOTE_CONFIRMATION_LABEL);
+  assert.equal(result.report.pendingCount, 1);
+  assert.deepEqual(result.report.repository, { owner: OWNER, repo: REPO });
+  assert.deepEqual(result.trustedInputs, [{ owner: OWNER, repo: REPO }]);
+  assert.deepEqual(result.configReads, []);
+});
+
+test('pending count scans every stable page and excludes pull requests', () => {
+  const issues = Array.from({ length: 101 }, (_, index) =>
+    confirmationIssue(1000 + index),
+  );
+  issues.push(
+    confirmationIssue(1200, { state: 'CLOSED' }),
+    confirmationIssue(1201, { pullRequest: true }),
+  );
+  const github = new FakeGithub(...issues);
+  const result = countPendingConfirmationIssues(
+    { repository: REPOSITORY, confirmationLabel: CONFIRMATION_LABEL },
+    github,
+  );
+  assert.deepEqual(result, { status: 'readable', count: 101 });
+  assert.deepEqual(
+    github.listCalls.map((request) => request.page),
+    [1, 2, 1, 2],
+  );
+  assert.ok(github.listCalls.every((request) => request.state === 'open'));
+  assert.equal(github.issueCalls.length, 101);
+});
+
+test('CLI records flatten issue labels and note flags and pass --base-ref', () => {
+  const github = new FakeGithub(
+    confirmationIssue(200, {
+      labels: [CONFIRMATION_LABEL, AUTHORING_LABEL],
+      comments: [
+        { id: 200002, body: noteComment('d1', 'location') },
+        { id: 200003, body: noteComment('d1', 'failure') },
+      ],
+    }),
+    confirmationIssue(201, {
+      fields: { claim: 'claim-b', set: 'set-b', decision: 'd2' },
+      state: 'CLOSED',
+    }),
+  );
+  const byClaim = runCliFixture(github, [
+    '--records',
+    '--class',
+    'worktreeRemnant',
+    '--source',
+    '100',
+    '--claim',
+    'claim-a',
+    '--subject',
+    SUBJECT,
+    '--state',
+    'open',
+    '--owner',
+    OWNER,
+    '--repo',
+    REPO,
+    '--base-ref',
+    'release/2026',
+  ]);
+  assert.equal(cliExitCode(byClaim.outcome), 0);
+  assert.deepEqual(byClaim.trustedInputs, [
+    { owner: OWNER, repo: REPO, baseRefName: 'release/2026' },
+  ]);
+  assert.deepEqual(byClaim.configReads, [
+    { owner: OWNER, repo: REPO, ref: 'release/2026' },
+  ]);
+  const claimRecords = byClaim.report.records as Array<Record<string, unknown>>;
+  assert.equal(claimRecords.length, 1);
+  assert.deepEqual(
+    {
+      issue: claimRecords[0]?.issue,
+      state: claimRecords[0]?.state,
+      confirmationLabel: claimRecords[0]?.confirmationLabel,
+      authoringLabel: claimRecords[0]?.authoringLabel,
+      locationNote: claimRecords[0]?.locationNote,
+      failureNote: claimRecords[0]?.failureNote,
+    },
+    {
+      issue: 200,
+      state: 'open',
+      confirmationLabel: true,
+      authoringLabel: true,
+      locationNote: true,
+      failureNote: true,
+    },
+  );
+
+  const bySet = runCliFixture(github, [
+    '--records',
+    '--class',
+    'worktreeRemnant',
+    '--source',
+    '100',
+    '--set',
+    'set-b',
+    '--subject',
+    SUBJECT,
+    '--state',
+    'all',
+    '--owner',
+    OWNER,
+    '--repo',
+    REPO,
+  ]);
+  assert.equal(cliExitCode(bySet.outcome), 0);
+  const setRecords = bySet.report.records as Array<Record<string, unknown>>;
+  assert.equal(setRecords.length, 1);
+  assert.equal(setRecords[0]?.issue, 201);
+  assert.equal(setRecords[0]?.state, 'closed');
+});
+
+test('CLI confirmation and links modes expose their reader reports', () => {
+  const issue = confirmationIssue(200, {
+    comments: [
+      { id: 200002, body: noteComment('d1', 'location') },
+      { id: 200003, body: noteComment('d1', 'failure') },
+    ],
+  });
+  const github = new FakeGithub(
+    issue,
+    sourceIssue(300, [
+      {
+        id: 300001,
+        body: linkComment({ confirmation: `${OWNER}/${REPO}#200` }),
+      },
+    ]),
+  );
+  const confirmation = runCliFixture(github, [
+    '--confirmation',
+    '200',
+    '--owner',
+    OWNER,
+    '--repo',
+    REPO,
+  ]);
+  assert.equal(cliExitCode(confirmation.outcome), 0);
+  assert.equal(confirmation.report.number, 200);
+  assert.equal(confirmation.report.authoringLabel, false);
+  assert.deepEqual(confirmation.report.notes, [
+    { decision: 'd1', kind: 'location', commentId: 200002 },
+    { decision: 'd1', kind: 'failure', commentId: 200003 },
+  ]);
+  assert.equal(confirmation.configReads[0]?.ref, 'main');
+
+  const links = runCliFixture(github, [
+    '--links',
+    '--issue',
+    '300',
+    '--owner',
+    OWNER,
+    '--repo',
+    REPO,
+  ]);
+  assert.equal(cliExitCode(links.outcome), 0);
+  assert.equal(links.report.number, 300);
+  assert.deepEqual(
+    (links.report.links as Array<Record<string, unknown>>).map(
+      (link) => link.decision,
+    ),
+    ['d1'],
+  );
+  assert.deepEqual(links.configReads, []);
+});
+
+test('CLI stops unreadable trusted policy and usage errors before provider reads', () => {
+  const github = new FakeGithub(confirmationIssue(200));
+  const unreadable = runCliFixture(
+    github,
+    ['--pending-count', '--owner', OWNER, '--repo', REPO],
+    { status: 'unreadable' },
+  );
+  assert.equal(cliExitCode(unreadable.outcome), 1);
+  assert.equal(unreadable.report.status, 'unreadable');
+  assert.equal(github.issueCalls.length, 0);
+  assert.equal(github.listCalls.length, 0);
+
+  for (const argv of [[], ['--unknown']]) {
+    let stdout = '';
+    const invalid = runAutoDecisionRecordsCli(argv, {
+      writeOutput: (text) => {
+        stdout += text;
+      },
+    });
+    assert.equal(cliExitCode(invalid), 2);
+    assert.equal(
+      (JSON.parse(stdout) as { status?: string }).status,
+      'usage-error',
+    );
+  }
+});
+
+test('CLI returns unreadable for provider failures in every mode', () => {
+  const cases = [
+    {
+      name: 'pending count list failure',
+      argv: ['--pending-count'],
+      fail: 'list',
+      issues: [confirmationIssue(200)],
+    },
+    {
+      name: 'pending count issue failure',
+      argv: ['--pending-count'],
+      fail: 'issue',
+      issues: [confirmationIssue(200)],
+    },
+    {
+      name: 'records list failure',
+      argv: ['--records', '--class', 'worktreeRemnant', '--state', 'all'],
+      fail: 'list',
+      issues: [confirmationIssue(200)],
+    },
+    {
+      name: 'records issue failure',
+      argv: ['--records', '--class', 'worktreeRemnant', '--state', 'all'],
+      fail: 'issue',
+      issues: [confirmationIssue(200)],
+    },
+    {
+      name: 'confirmation issue failure',
+      argv: ['--confirmation', '200'],
+      fail: 'issue',
+      issues: [confirmationIssue(200)],
+    },
+    {
+      name: 'links issue failure',
+      argv: ['--links', '--issue', '300'],
+      fail: 'issue',
+      issues: [sourceIssue(300, [{ id: 300001, body: linkComment({}) }])],
+    },
+  ] as const;
+
+  for (const fixture of cases) {
+    const github = new FakeGithub(...fixture.issues);
+    if (fixture.fail === 'list') {
+      github.listPageOverride = () => {
+        throw new Error('gh: HTTP 502');
+      };
+    } else {
+      github.issuePageOverride = () => {
+        throw new Error('gh: HTTP 502');
+      };
+    }
+    const result = runCliFixture(github, fixture.argv);
+    assert.equal(cliExitCode(result.outcome), 1, fixture.name);
+    assert.equal(result.report.status, 'unreadable', fixture.name);
+    assert.match(String(result.report.error), /HTTP 502/, fixture.name);
+  }
 });

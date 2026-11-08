@@ -12,6 +12,7 @@ export const COVERED_HELPERS = [
   'advisory-wait-state',
   'audit-authored-issue',
   'audit-pr-cleanup',
+  'auto-decision-records',
   'authoring-owner-provenance',
   'branch-conflict-state',
   'branch-name',
