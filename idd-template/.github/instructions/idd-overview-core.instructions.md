@@ -327,10 +327,11 @@ With helper runtime, use only it. Otherwise `enabled: false` runs directly;
 use the [helper-free fallback](../../docs/idd-helper-scripts.md#helper-free-fallback)
 with `flock` on `PATH`, or run directly with one notice.
 
-**Admission expiry.** Only exit `75` plus stderr
-`local-admission: expired` means no command started. Report; never rerun or
-pass it. Do not use issue `#1391`'s flakiness rerun or Discover's
-incomplete-result retry. Bare `75` is command status.
+**Admission expiry.** Only exit/stderr pairs mean no start:
+`75`/`local-admission: expired`; `69`/`local-admission: pueue daemon is
+not accepting commands`. Report; never rerun, push manually, or mark
+pass/flaky. Bare `69`/`75`: command statuses. No `#1391` flakiness or
+Discover incomplete-result retry.
 
 If `pre-push-validate` lint fails, run `fix-validate`, then rerun
 `pre-push-validate`. Inspect, stage, and commit `fix-validate` or
