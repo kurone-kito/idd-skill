@@ -80,11 +80,33 @@ async function withGh(
     policy?: Parameters<
       typeof createGithubProvisionalDecisionStore
     >[0]['policy'];
+    environment?: { GH_HOST?: string; GITHUB_SERVER_URL?: string };
+    authHosts?: unknown;
+    authFail?: boolean;
   } = {},
 ) {
   const directory = mkdtempSync(join(tmpdir(), 'idd-provisional-store-'));
   const path = join(directory, 'state.json');
-  writeFileSync(path, JSON.stringify({ steps, calls: [] }));
+  writeFileSync(
+    path,
+    JSON.stringify({
+      steps,
+      calls: [],
+      authHosts:
+        options.authHosts === undefined ? ['github.com'] : options.authHosts,
+      authFail: options.authFail === true,
+    }),
+  );
+  const previousEnvironment = {
+    GH_HOST: process.env.GH_HOST,
+    GITHUB_SERVER_URL: process.env.GITHUB_SERVER_URL,
+  };
+  const environment = options.environment ?? { GH_HOST: 'github.com' };
+  for (const name of ['GH_HOST', 'GITHUB_SERVER_URL'] as const) {
+    const value = environment[name];
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  }
   const restorePolicy = pinLoadControlOff();
   const restore = stubExecutable(
     'gh',
@@ -94,6 +116,12 @@ const path = ${JSON.stringify(path)};
 const state = JSON.parse(fs.readFileSync(path, 'utf8'));
 const args = process.argv.slice(2);
 const input = args.includes('--input') ? fs.readFileSync(0, 'utf8') : '';
+if (args[0] === 'auth' && args[1] === 'status') {
+  state.calls.push({ args, input });
+  fs.writeFileSync(path, JSON.stringify(state));
+  process.stdout.write(JSON.stringify(state.authHosts));
+  process.exit(state.authFail ? 1 : 0);
+}
 const endpoint = args[0] === 'api'
   ? args.slice(1).find((arg, i, tail) => !arg.startsWith('-') && tail[i - 1] !== '--hostname') || ''
   : args[1] || '';
@@ -136,6 +164,11 @@ if (step.fail) {
   } finally {
     restore();
     restorePolicy();
+    for (const name of ['GH_HOST', 'GITHUB_SERVER_URL'] as const) {
+      const value = previousEnvironment[name];
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
     rmSync(directory, { recursive: true, force: true });
   }
 }
@@ -782,6 +815,134 @@ test('a PR from another repository is rejected without execution', async () => {
       store.readPullRequest('https://github.com/other/repo/pull/1'),
     );
   });
+});
+
+test('a sole authenticated GHES host scopes PR and label operations without environment hints', async () => {
+  const host = 'ghe.example.test';
+  await withGh(
+    [
+      ...prSteps(pr()),
+      { kind: 'label', response: '' },
+      { kind: 'issue', response: { labels: [{ name: 'needs-decision' }] } },
+    ],
+    async (store, calls) => {
+      assert.equal(
+        (await store.readPullRequest(`https://${host}/${repository}/pull/5000`))
+          .requiredChecksPassing,
+        true,
+      );
+      assert.deepEqual(
+        await store.applyOrReadDecisionLabel({
+          labelName: 'needs-decision',
+          apply: true,
+        }),
+        { present: true },
+      );
+      for (const command of ['pr', 'issue']) {
+        const args = calls().find((call) => call.args[0] === command)?.args;
+        assert.equal(
+          args?.[args.indexOf('--repo') + 1],
+          `${host}/${repository}`,
+        );
+      }
+      assert.deepEqual(calls()[0]?.args, [
+        'auth',
+        'status',
+        '--json',
+        'hosts',
+        '--jq',
+        '.hosts | keys',
+      ]);
+      assert.ok(
+        calls()
+          .filter((call) => call.args[0] === 'api')
+          .every((call) => !call.args.includes('--hostname')),
+      );
+      await assert.rejects(store.readPullRequest(url));
+    },
+    { environment: {}, authHosts: [host] },
+  );
+});
+
+test('explicit host and Actions server URL retain precedence over authenticated defaults', async () => {
+  const host = 'ghe.example.test';
+  for (const [environment, expectedHost, apiHostname] of [
+    [
+      { GH_HOST: host, GITHUB_SERVER_URL: 'https://github.com' },
+      host,
+      undefined,
+    ],
+    [{ GITHUB_SERVER_URL: `https://${host}` }, host, host],
+    [{ GITHUB_SERVER_URL: 'https://github.com' }, 'github.com', undefined],
+  ] as const) {
+    await withGh(
+      prSteps(pr()),
+      async (store, calls) => {
+        assert.equal(
+          (
+            await store.readPullRequest(
+              `https://${expectedHost}/${repository}/pull/5000`,
+            )
+          ).requiredChecksPassing,
+          true,
+        );
+        assert.ok(calls().every((call) => call.args[0] !== 'auth'));
+        const args = calls().find((call) => call.args[0] === 'pr')?.args;
+        assert.equal(
+          args?.[args.indexOf('--repo') + 1],
+          expectedHost === 'github.com'
+            ? repository
+            : `${expectedHost}/${repository}`,
+        );
+        for (const call of calls().filter((call) => call.args[0] === 'api')) {
+          assert.equal(
+            call.args.includes('--hostname'),
+            apiHostname !== undefined,
+          );
+          if (apiHostname)
+            assert.equal(
+              call.args[call.args.indexOf('--hostname') + 1],
+              apiHostname,
+            );
+        }
+      },
+      { environment, authHosts: ['other.example.test'] },
+    );
+  }
+});
+
+test('absent, ambiguous, malformed or failed host discovery retains the public default', async () => {
+  for (const options of [
+    { authHosts: ['github.com'] },
+    { authHosts: [] },
+    { authHosts: ['github.com', 'ghe.example.test'] },
+    { authHosts: null },
+    { authHosts: [''] },
+    { authHosts: { invalid: true } },
+    { authHosts: ['ghe.example.test'], authFail: true },
+  ]) {
+    await withGh(
+      prSteps(pr()),
+      async (store, calls) => {
+        await assert.rejects(
+          store.readPullRequest(
+            `https://ghe.example.test/${repository}/pull/5000`,
+          ),
+        );
+        assert.equal(
+          (await store.readPullRequest(url)).requiredChecksPassing,
+          true,
+        );
+        assert.equal(
+          calls().filter((call) => call.args[0] === 'auth').length,
+          1,
+        );
+        const args = calls().find((call) => call.args[0] === 'pr')?.args;
+        assert.equal(args?.[args.indexOf('--repo') + 1], repository);
+      },
+      { ...options, environment: {} },
+    );
+  }
 });
 
 const recordId = `prov-${'c'.repeat(32)}`;

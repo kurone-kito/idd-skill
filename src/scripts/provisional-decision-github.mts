@@ -10,6 +10,7 @@ import {
   ghGraphql,
   ghText,
   resolveGhApiHostname,
+  serverUrlHost,
 } from './gh-exec.mts';
 import { deriveGhHttpStatus } from './gh-http-status.mts';
 import {
@@ -42,6 +43,25 @@ function object(value: unknown): JsonObject {
 function text(value: unknown): string {
   if (typeof value !== 'string') throw new Error('expected a GitHub string');
   return value;
+}
+
+function defaultGhHost(): string {
+  try {
+    const hosts: unknown = JSON.parse(
+      ghText(['auth', 'status', '--json', 'hosts', '--jq', '.hosts | keys']),
+    );
+    if (
+      Array.isArray(hosts) &&
+      hosts.length === 1 &&
+      typeof hosts[0] === 'string' &&
+      hosts[0].trim()
+    ) {
+      return hosts[0].trim().toLowerCase();
+    }
+  } catch {
+    // With no usable single-host answer, retain gh's public-host default.
+  }
+  return 'github.com';
 }
 
 function decimalId(value: unknown): string {
@@ -278,8 +298,8 @@ export function createGithubProvisionalDecisionStore(input: {
   const apiHost = resolveGhApiHostname();
   const host = (
     process.env.GH_HOST?.trim() ||
-    apiHost ||
-    'github.com'
+    serverUrlHost(process.env) ||
+    defaultGhHost()
   ).toLowerCase();
   const hostnameArgs = apiHost ? ['--hostname', apiHost] : [];
   const scopedRepository =
