@@ -844,7 +844,8 @@ function scanLabelledIssues(provider, owner, repo, label, state) {
       );
     }
     for (const item of payload) {
-      const number = isRecord(item) ? item.number : undefined;
+      const row = isRecord(item) ? item : null;
+      const number = row?.number;
       if (
         typeof number !== 'number' ||
         !Number.isInteger(number) ||
@@ -854,11 +855,43 @@ function scanLabelledIssues(provider, owner, repo, label, state) {
           `page ${page} of the issue list for ${JSON.stringify(label)} has an entry with no issue number`,
         );
       }
+      const rowState = row?.state;
+      if (rowState !== 'open' && rowState !== 'closed') {
+        throw new Error(
+          `page ${page} of the issue list for ${JSON.stringify(label)} has an entry with an unreadable state`,
+        );
+      }
+      if (state === 'open' && rowState !== 'open') {
+        throw new Error(
+          `page ${page} of the open issue list for ${JSON.stringify(label)} contains a non-open issue`,
+        );
+      }
+      const labels = row?.labels;
+      if (
+        !Array.isArray(labels) ||
+        labels.some(
+          (entry) =>
+            !isRecord(entry) ||
+            typeof entry.name !== 'string' ||
+            entry.name.trim() === '',
+        )
+      ) {
+        throw new Error(
+          `page ${page} of the issue list for ${JSON.stringify(label)} has an entry with unreadable labels`,
+        );
+      }
+      if (
+        !labels.some((entry) => isRecord(entry) && sameText(entry.name, label))
+      ) {
+        throw new Error(
+          `page ${page} of the issue list for ${JSON.stringify(label)} contains an issue without the requested label`,
+        );
+      }
       // The REST issues endpoint returns pull requests too.
-      if (isRecord(item) && item.pull_request != null) {
+      if (row?.pull_request != null) {
         continue;
       }
-      const body = isRecord(item) ? item.body : undefined;
+      const body = row?.body;
       if (body !== null && typeof body !== 'string') {
         throw new Error(
           `page ${page} of the issue list for ${JSON.stringify(label)} has an entry with an unreadable body`,

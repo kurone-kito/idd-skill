@@ -2127,6 +2127,45 @@ test('pending count scans every stable page and excludes pull requests', () => {
   assert.deepEqual(github.issueCalls, []);
 });
 
+test('pending count rejects issue rows that contradict its state or label filter', () => {
+  const cases = [
+    {
+      name: 'a closed issue in the open list',
+      row: {
+        number: 200,
+        state: 'closed',
+        body: '',
+        labels: [{ name: CONFIRMATION_LABEL }],
+      },
+      message: /non-open issue/,
+    },
+    {
+      name: 'an issue without the requested label',
+      row: {
+        number: 200,
+        state: 'open',
+        body: '',
+        labels: [{ name: 'status:other' }],
+      },
+      message: /without the requested label/,
+    },
+  ];
+
+  for (const item of cases) {
+    const github = new FakeGithub(confirmationIssue(200));
+    github.listPageOverride = () => [item.row];
+    const result = countPendingConfirmationIssues(
+      { repository: REPOSITORY, confirmationLabel: CONFIRMATION_LABEL },
+      github,
+    );
+    assert.equal(result.status, 'unreadable', item.name);
+    if (result.status === 'unreadable') {
+      assert.match(result.error, item.message, item.name);
+    }
+    assert.deepEqual(github.issueCalls, [], item.name);
+  }
+});
+
 test('CLI records flatten issue labels and note flags and pass --base-ref', () => {
   const github = new FakeGithub(
     confirmationIssue(200, {
