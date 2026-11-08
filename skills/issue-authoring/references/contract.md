@@ -4795,21 +4795,24 @@ the window above and the checks of the next paragraph stand in for the expected
 generation, and the helper change is separate work that this contract does not
 implement.
 
-**Replacement procedure.** When a verified replacement is already the head, its
-generation is current and no create followed it, append nothing: repeat the
-pre-create mapping bound and the re-check below, then run the publisher.
-Otherwise append the replacement, then verify the returned ID and exact body.
-After `claim.verifySettleDelay`, repeat conditions 2 to 4 on fresh complete
-reads together with the lineage replay, and repeat them once more immediately
-before running the child publisher. A comment found under condition 3, an
-owner-log record that changes the current generation, a later owner marker
-carrying a superseded owner token, or a later `claimed-by` marker of the
-displaced claim voids the replacement. A void stops this pass under the recovery
-hold. Publication evidence can never be followed by another replacement, because
-condition 3 keeps failing. When the only cause is a further resume, the voided
-record stays the head, and a later pass may append a replacement that names it
-once conditions 1 to 4 hold again. Only a verified replacement that passes this
-re-check permits the first run of
+**Replacement procedure.** Revalidate this session's own carrier coordination
+claim immediately before any append, after the settle delay and immediately
+before the child publisher runs, as the re-authoring procedure requires before
+each mutation. When a verified replacement is already the head, its generation
+is current and no create followed it, append nothing: repeat the pre-create
+mapping bound and the re-check below, then run the publisher. Otherwise append
+the replacement, then verify the returned ID and exact body. After
+`claim.verifySettleDelay`, repeat conditions 2 to 4 on fresh complete reads
+together with the lineage replay, and repeat them once more immediately before
+running the child publisher. A comment found under condition 3, an owner-log
+record that changes the current generation, a later owner marker carrying a
+superseded owner token, a later `claimed-by` marker of the displaced claim, or a
+takeover of the carrier claim by another session voids the replacement. A void
+stops this pass under the recovery hold. Publication evidence can never be
+followed by another replacement, because condition 3 keeps failing. When the
+only cause is a further resume, the voided record stays the head, and a later
+pass may append a replacement that names it once conditions 1 to 4 hold again.
+Only a verified replacement that passes this re-check permits the first run of
 `publish-authoring-hold --shape child --anchor <roadmap>`. The helper reads the
 anchor's generation itself and takes no expected generation, so this session
 performs the existing owner, set and session checks against the head itself: it
