@@ -1664,7 +1664,7 @@ test(
       }),
     });
     assert.equal(result.report.outcome, 'failed');
-    assert.match(OID.test(tip) ? tip : '', OID);
+    assert.match(tip, OID);
     assert.deepEqual(result.report.backupRefs, [`refs/idd-b1/${ISSUE}/${tip}`]);
     assert.match(result.failure?.nextAction ?? '', new RegExp(tip));
     assert.equal(git(fixture.primary, ['branch', '--list', BRANCH]), '');
@@ -2102,4 +2102,15 @@ test('refused: an unexpected line in the config key list', () => {
         : undefined,
   });
   assertRefused(result, 'branch:config-readable');
+});
+
+test('refused: a b1Leftover record that names a set, though the contract pairs it with set=none', () => {
+  const fixture = fresh();
+  const result = exercise(fixture, {
+    confirmation: () =>
+      confirmationRead([record('d1', BRANCH, { set: 'some-set' })]),
+    prepare: leftoverBranch,
+  });
+  assertRefused(result, 'decision-pairing');
+  assert.match(pairingDetail(result.report), /matches no record/);
 });

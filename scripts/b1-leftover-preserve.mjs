@@ -847,7 +847,10 @@ function recordChecks(ctx, trusted, subjects) {
             candidate.decision === id &&
             candidate.class === 'b1Leftover' &&
             candidate.source.toLowerCase() === source.toLowerCase() &&
-            candidate.claim === 'none',
+            candidate.claim === 'none' &&
+            // The contract pairs a b1Leftover with claim=none and set=none; the
+            // record reader does not enforce the pairing, so it is checked here.
+            candidate.set === 'none',
         );
         if (record === undefined) {
           const why = current.voidedDecisions.includes(id)
@@ -886,6 +889,7 @@ function recordChecks(ctx, trusted, subjects) {
           class: 'b1Leftover',
           source,
           claim: 'none',
+          set: 'none',
           subject: subject.subject,
           decision: id,
         });
