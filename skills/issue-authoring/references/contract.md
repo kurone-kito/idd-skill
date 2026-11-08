@@ -4617,9 +4617,12 @@ against the current default branch with that generation exactly as for a child
 intent; they may differ from the superseded record's.
 
 **Replacement lineage and replay.** The original child intent and its
-replacements form one append-only lineage for one root intent. A position
-compares server `createdAt`, then numeric comment ID, whichever issue hosts the
-record (the carrier, the anchor or a journal). Replay the lineage from the
+replacements form one append-only lineage for one root intent. Lineage records
+are carrier comments, posted and replayed from the carrier like every other
+record in this section; a record posted anywhere else is not a lineage record. A
+position compares server `createdAt`, then numeric comment ID, across issues, so
+that the carrier's lineage records, the anchor's owner markers and journal
+comments order deterministically against each other. Replay the lineage from the
 original child intent in that order. First collapse exact duplicates in that
 order: a record with the same actor and the same decoded fields as an earlier
 lineage record, after every `replaces-comment-id` that names a collapsed
