@@ -10,6 +10,7 @@ const schema = loadJson('schemas/provisional-decision.schema.json');
 const results = loadJson(
   'tests/fixtures/provisional-decision-results.json',
 ) as unknown[];
+const cloneJson = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
 test('provisional-decision result schema validates all four states', () => {
   assert.deepEqual(checkSchemaKeywords(schema), []);
@@ -33,4 +34,38 @@ test('provisional-decision result schema rejects the invalid fixture', () => {
   );
 
   assert.ok(validate(invalid, schema).length > 0);
+});
+
+test('provisional-decision result schema enforces the candidate record contract', () => {
+  type PlannedResult = {
+    plan: {
+      candidateRecord: {
+        recordId: string;
+        claimLineage: unknown[];
+        evidenceReferences: string[];
+        event: Record<string, unknown>;
+      };
+    };
+  };
+  const planned = cloneJson(results[0]) as PlannedResult;
+  const invalidCases: ((result: PlannedResult) => void)[] = [
+    (result) => {
+      result.plan.candidateRecord.recordId = '!';
+    },
+    (result) => {
+      result.plan.candidateRecord.claimLineage = [];
+    },
+    (result) => {
+      result.plan.candidateRecord.evidenceReferences = [];
+    },
+    (result) => {
+      result.plan.candidateRecord.event = { type: 'unknown' };
+    },
+  ];
+
+  for (const mutate of invalidCases) {
+    const invalid = cloneJson(planned);
+    mutate(invalid);
+    assert.ok(validate(invalid, schema).length > 0);
+  }
 });

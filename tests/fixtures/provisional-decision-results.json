@@ -30,7 +30,9 @@
           "https://github.com/kurone-kito/idd-skill/issues/4793"
         ],
         "event": {
-          "type": "selected"
+          "type": "work-started",
+          "startedAt": "2026-11-03T11:00:05Z",
+          "planReference": "https://github.com/kurone-kito/idd-skill/pull/5119"
         }
       },
       "verifiedClaimLineage": [
