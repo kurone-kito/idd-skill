@@ -152,7 +152,7 @@ or an eligible ancestor.
 operator for a new trusted handoff assigning a session-qualified successor
 agent-id, then restart the live §FH checks and adopt the new marker's pair
 verbatim. Do not take the lock first to manufacture matching evidence.
-This clarification follows the review of `kurone-kito/idd-skill#5111`
+Observed 2026-11-08 in the review of `kurone-kito/idd-skill#5111`
 ([finding](https://github.com/kurone-kito/idd-skill/pull/5111#discussion_r4505106283)),
 tracked in `kurone-kito/idd-skill#5121`.
 
