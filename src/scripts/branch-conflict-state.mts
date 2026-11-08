@@ -215,7 +215,6 @@ const CHECK_RUN_KNOWN_CONCLUSIONS: ReadonlySet<string> = new Set([
   'SUCCESS',
   'NEUTRAL',
   'SKIPPED',
-  'NOT_APPLICABLE',
   'ACTION_REQUIRED',
   'CANCELLED',
   'FAILURE',
@@ -229,7 +228,6 @@ const PASSING_CHECK_CONCLUSIONS: ReadonlySet<string> = new Set([
   'SUCCESS',
   'NEUTRAL',
   'SKIPPED',
-  'NOT_APPLICABLE',
 ]);
 
 /**
@@ -540,8 +538,10 @@ function parseSuiteNode(node: unknown): ParsedSuite | null {
  * workflow when one made it), the same latest-instance rule the run list
  * applies by name. A cancelled or stale suite that a later suite of the same
  * producer supersedes must not hold a branch whose current suite passes. A
- * group whose order cannot be proven keeps every member, and members that
- * share the newest timestamp all stay, since neither is provably older.
+ * group whose order cannot be proven keeps every member. An unsupported
+ * status or conclusion cannot be ordered away by a later pass (PR #5099),
+ * matching the CheckRun rule. Members that share the newest timestamp all
+ * stay, since neither is provably older.
  */
 function latestSuitePerProducer(suites: readonly ParsedSuite[]): ParsedSuite[] {
   const groups = new Map<string, ParsedSuite[]>();
@@ -555,7 +555,13 @@ function latestSuitePerProducer(suites: readonly ParsedSuite[]): ParsedSuite[] {
   for (const group of groups.values()) {
     const ordered =
       group.length > 1 &&
-      group.every((suite) => isCompletedCiTimestamp(suite.createdAt));
+      group.every(
+        (suite) =>
+          isCompletedCiTimestamp(suite.createdAt) &&
+          (suite.status === 'COMPLETED'
+            ? CHECK_RUN_KNOWN_CONCLUSIONS.has(suite.conclusion)
+            : CHECK_RUN_WAITING_STATES.has(suite.status)),
+      );
     const newest = ordered
       ? Math.max(...group.map((suite) => Date.parse(suite.createdAt)))
       : null;

@@ -1297,7 +1297,7 @@ test('source package metadata falls back when vendored into another repository',
   assert.deepEqual(resolveSourcePackageMetadata(foreignRoot), {
     name: '@kurone-kito/idd-skill',
     repository: 'github:kurone-kito/idd-skill',
-    nodeEngines: '^22.23.2 || ^24.2.0 || >=26.0.0',
+    nodeEngines: 'unknown',
     version: 'unknown',
   });
 
@@ -1307,9 +1307,38 @@ test('source package metadata falls back when vendored into another repository',
   assert.deepEqual(resolveSourcePackageMetadata(missingRoot), {
     name: '@kurone-kito/idd-skill',
     repository: 'github:kurone-kito/idd-skill',
-    nodeEngines: '^22.23.2 || ^24.2.0 || >=26.0.0',
+    nodeEngines: 'unknown',
     version: 'unknown',
   });
+});
+
+test('source package metadata does not invent a Node.js engine range', () => {
+  const missingEngineRoot = makeTempDir(
+    join(tmpdir(), 'idd-helper-runtime-missing-engine-'),
+  );
+  writeFileSync(
+    join(missingEngineRoot, 'package.json'),
+    JSON.stringify({ name: '@kurone-kito/idd-skill' }),
+  );
+  assert.equal(
+    resolveSourcePackageMetadata(missingEngineRoot).nodeEngines,
+    'unknown',
+  );
+
+  const malformedEngineRoot = makeTempDir(
+    join(tmpdir(), 'idd-helper-runtime-malformed-engine-'),
+  );
+  writeFileSync(
+    join(malformedEngineRoot, 'package.json'),
+    JSON.stringify({
+      name: '@kurone-kito/idd-skill',
+      engines: { node: { range: '^22.23.2' } },
+    }),
+  );
+  assert.equal(
+    resolveSourcePackageMetadata(malformedEngineRoot).nodeEngines,
+    'unknown',
+  );
 });
 
 test('source package metadata accepts repository objects with url', () => {
@@ -1356,7 +1385,7 @@ test('source package metadata falls back on a non-string version field', () => {
   assert.deepEqual(resolveSourcePackageMetadata(nonStringVersionRoot), {
     name: '@kurone-kito/idd-skill',
     repository: 'github:kurone-kito/idd-skill',
-    nodeEngines: '^22.23.2 || ^24.2.0 || >=26.0.0',
+    nodeEngines: 'unknown',
     version: 'unknown',
   });
 
