@@ -4626,20 +4626,21 @@ lineage record, after every `replaces-comment-id` that names a collapsed
 duplicate is resolved to that earliest ID, is ignored and reuses the earliest
 verified ID, wherever it is positioned. Then each remaining replacement must
 repeat the carrier, token, root `intent-comment-id`,
-`roadmap-mapping-comment-id`, draft title and hash, anchor and set of the
-record it replaces exactly, carry a `child-sha256` that recomputes from its
-`child-body`, and name in `replaces-comment-id` the head of
-the lineage at that point of the order. Its `anchor-owner` must differ from
-that head's and name a generation that a trusted resume marker had already
-opened and that was the anchor's current one when the replacement was posted.
-The last record is the head. Wherever
-this contract refers to the child intent of this recovery path, in a check, a
-publication or a mapping, including the re-anchor procedure and the mapping
-template above, it means the head: only the head can authorize
-`publish-authoring-hold --shape child`, a child mapping's
-`child-intent-comment-id` names the head, and the published title, body and
-session must equal the head's. Superseded records stay as replay evidence and
-authorize nothing.
+`roadmap-mapping-comment-id`, draft title and hash, anchor and set of the record
+it replaces exactly, carry a `child-sha256` that recomputes from its
+`child-body`, and name in `replaces-comment-id` the head of the lineage at that
+point of the order. Its `anchor-owner` must differ from that head's and name a
+generation that a trusted resume marker had already opened and that was the
+anchor's current one when the replacement was posted. The last record is the
+head. Wherever this contract refers to the child intent of this recovery path,
+in a check, a publication or a mapping, including the re-anchor procedure and
+the mapping template above, it means the head: only the head can authorize
+`publish-authoring-hold --shape child`; a child mapping's
+`child-intent-comment-id` names the head; the published title must equal the
+head's `child-title`; the mapping's `body` must equal the publication line, two
+LF bytes and the head's `child-body`; and the publication session must equal the
+head's `session`. Superseded records stay as replay evidence and authorize
+nothing.
 
 These stop for reconciliation: a replacement that names an unknown record or a
 record that is not the head at that point of the order, two different
