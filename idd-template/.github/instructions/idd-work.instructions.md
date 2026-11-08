@@ -21,11 +21,12 @@ Use the [clone-scoped lock](../../docs/idd-helper-scripts.md#clone-scoped-lock)
 for shared-clone fetch, merge, worktree operations, and F4 cleanup; see
 [fan-out](../../docs/idd-workflow.md#orchestrator-fan-out-variant) if applicable.
 
-For the ordered lock, install, and verification sequence, follow the
-[on-demand B1 setup guide](../../docs/idd-worktree-setup.md). This phase
-file retains the required source and branch checks, stop conditions, and
-the branch-reuse, WorkTrunk, and host-isolated exceptions that the guide
-references.
+For the ordered setup, follow the guide's [lock and token steps](../../docs/idd-worktree-setup.md#lock-the-worktree-before-installing-dependencies),
+[install and verification steps](../../docs/idd-worktree-setup.md#install-and-verify-dependencies),
+and [B1 self-check](../../docs/idd-worktree-setup.md#run-the-b1-self-check).
+This phase file retains the required source and branch checks, stop
+conditions, and the branch-reuse, WorkTrunk, and host-isolated exceptions
+that the guide references.
 
 1. Parse the `origin` remote to credential-free `{origin-repository}`
    (`[HOST/]OWNER/REPO`); strip userinfo, never print or pass the URL. For
@@ -160,11 +161,23 @@ before the claim POST and before any lock. Create the worktree with the
 fresh-claim row above, then follow the fresh-claim order in
 `idd-claim.instructions.md`.
 
-**Step 3 — Install deps**: after worktree creation, follow the
-[on-demand B1 setup guide](../../docs/idd-worktree-setup.md) for lock
-acquisition, token recording, dependency installation, and verification.
-Stop before B2 if any step fails; continue only after the B1 self-check
-below passes.
+**Step 3 — Install deps**: after worktree creation:
+
+- Before installing, complete the guide's [lock and token steps](../../docs/idd-worktree-setup.md#lock-the-worktree-before-installing-dependencies).
+  For a fresh claim, record this worktree's tokens with the A5 nonce before
+  acquiring the lock; for a takeover, acquire the lock first, then record
+  tokens with that nonce. In both cases, read both records back and pass
+  the post-acquire claim assertion.
+- On takeover, a pre-start install hook must make lock acquisition and
+  token recording its first commands, in that order, before installing.
+  If it cannot, skip the hook and use the manual lock-then-install path in
+  the guide.
+- Run configured `commands.install-deps` inside the sibling worktree.
+  Follow the guide's [install and verification steps](../../docs/idd-worktree-setup.md#install-and-verify-dependencies)
+  and keep the command safe to rerun.
+- Complete the guide's [B1 self-check](../../docs/idd-worktree-setup.md#run-the-b1-self-check)
+  before B2. `-x <noop>` leaves the current directory unchanged, so enter
+  the sibling worktree before checking. Stop if any step fails.
 
 ### B1 self-check
 
