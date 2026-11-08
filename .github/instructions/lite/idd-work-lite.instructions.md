@@ -290,109 +290,99 @@ draft: it holds this issue, publishes a held roadmap whose children record
 Never add needs-decision or ask a human.
 
 **Standing split** alone bypasses the worker-side scope-overrun route; keep the
-parent claim and label held. Resolve the trusted owner/repo from the claimed
-issue's canonical live URL. For a PR, query
+parent claim and label held. Resolve policy owner/repo from the claimed issue's
+canonical live URL. For a PR, query
 `gh api repos/<target-owner>/<target-repo>/pulls/<number> --jq '{owner:
 .base.repo.owner.login, repo: .base.repo.name, ref: .base.ref}'` and use its
-base owner/repo/ref. Without a PR, use the issue repo and live default branch.
-Always pass the resolved values as explicit `--owner <owner> --repo <repo>`;
-never let the checkout's `origin` choose policy.
-`idd-effective-config --trusted-auto-decide --owner <owner> --repo <repo>`
-must return `status: readable`; pass `--base-ref <base>`
-only for PRs. Read
+base owner/repo/ref; otherwise use the issue repo and live default branch.
+Pass explicit `--owner <owner> --repo <repo>` to
+`idd-effective-config --trusted-auto-decide`; add `--base-ref <base>` only for
+PRs. Require `status: readable`; never let checkout `origin` choose policy.
+Read
 `standingApprovals.split.enabled` and
 `standingApprovals.split.maxCandidateFiles` from `.github/idd/config.json` at
-that ref through GitHub Contents. The helper validates against that ref's
-schema; its auto-decide verdict does not govern split. Require `enabled: true`;
-otherwise use the existing route. Missing `maxCandidateFiles` defaults to
-documented `8`. Missing, malformed, or unreadable policy uses that route. Never
-use local, head, or layered config.
+that ref through GitHub Contents. It validates the policy against that ref's
+schema; auto-decide's verdict does not govern split. Require `enabled: true`, or use the
+existing route. Missing `maxCandidateFiles` defaults to `8`; absent, malformed,
+or unreadable policy also uses that route. Never use local, head, or layered
+config.
 
-Each child must fit the trusted ceiling and contain a parent criterion. After
-checkbox removal, each parent criterion appears whole and verbatim in exactly
-one child. Reuse-first check each child against open issues and draft carriers,
-including claim/PR state. If a match cannot safely join the held set, stop
-without publishing; issue `#4064` duplicated child `#4093`
+Each child fits the trusted ceiling and contains a parent criterion. Each
+checkbox-stripped parent criterion appears whole and verbatim in exactly one
+child. Reuse-first check against open issues and draft carriers, including claim/PR
+state. If a match cannot safely join the held set, stop; issue `#4064`
+duplicated child `#4093`
 ([rationale](../../../docs/idd-design-rationale.md#b3--scope-overrun-returns-to-authoring)).
 
-For a roadmap child, check the roadmap's claim/PR/execution state, establish
-ownership per target, add `Split out of #<parent>` to each child, and
-update/read back each verified child in `## Tracks`. Conflicts keep the parent
-and published children held.
+For a roadmap child, check claim/PR/execution state, establish ownership per
+target, add `Split out of #<parent>`, and update/read back each verified child in
+`## Tracks`. Conflicts keep the parent and published children held.
 
-Only orphan-shaped children qualify. A child needing a sequential-roadmap
-`blocked-by` marker is not an orphan; `--shape child` needs a separately held
-authoring-set anchor that this claimed parent does not provide. Use the
-existing scope-overrun route before publishing such children.
+Only orphan-shaped children qualify. A sequential-roadmap `blocked-by` child
+is not an orphan; `--shape child` needs a separately held anchor this parent
+does not provide. Use the existing scope-overrun route for such children.
 
 Otherwise, use the existing comment/release route.
 
-Revalidate the parent claim and add/verify the configured authoring label.
-If it already exists, resume only from the same proposal; otherwise stop on the
-unrelated hold. Reconcile mappings. Before release, and on resume when a record
-exists, require one trusted exact record line matching expected class, set,
-anchor, ceiling, and option, plus a one-to-one match between proposal, mappings,
-and live held children (exact title and draft body; no missing, duplicate,
-extra, or released child). For each body, verify its single leading
-`authoring-publication` line against the helper report, journal, and ownership
-record; remove only that line and its blank separator, then compare the rest
-byte-for-byte with the saved draft. Never strip an unmatched marker. The record
-alone is not proof. If it exists, verify the set without republishing. Stop on
-conflict. Before publishing, check each child's material scope/design claims
-against current sources; put evidence in the review packet's `evidence` array.
-Correct or remove unsupported claims and route unresolved material claims
-under the issue-authoring contract. Then post/read back one ordered parent
-comment with the current claim ID,
-estimate, candidate and changed files, and every child's exact title and full
-body. If its POST is uncertain, page the parent comments and continue
-only if exactly one exact proposal is present; otherwise keep the hold and
-stop. On resume, reconcile the proposal, helper records, and live issues;
-never republish an unknown result. Keep the parent claim and label throughout.
-Complete each final child's separate adversarial review: send its exact
-title/body plus the bounded packet, use the configured delegate when usable or
-native review otherwise, and bound wait by
-`issueAuthoring.adversarialReview.waitCeiling` (`PT20M` default).
-Record `"completed": true` with all findings `fixed` or `rejected`, and stop on
-an incomplete, unreadable, or unresolved review. Any factual or review
-correction that changes a title or body invalidates that child's review result
-and the saved proposal. Update the existing proposal comment with the full
-ordered set and read it back, then repeat both checks for each changed child.
-If the update outcome is uncertain, read that comment and continue only when
-its full body exactly matches the updated set; otherwise keep the hold and stop.
-Immediately before dry-run, recheck the nonempty final child set: every child
-must fit the trusted candidate-file ceiling and contain a parent criterion,
-and every checkbox-stripped parent criterion must appear whole and verbatim
-in exactly one final child. If any check fails, do not dry-run or apply.
-Dry-run only when every final title and normalized draft body matches the
-read-back proposal and has a completed review result. A refused or failed
-dry-run stops and is reported before any child is applied. Resolve the
-profile-selected
-`idd-publish-authoring-hold` invocation per `docs/idd-helper-scripts.md`. Its
-default without `--apply` is dry-run. Dry-run every orphan and inspect all
-results before applying one per call. The invocation and required arguments
-are:
+Revalidate the parent claim; add/verify the configured authoring label. An
+existing label resumes only from the same proposal; otherwise stop on the
+unrelated hold. Reconcile mappings. Before release and on record-bearing
+resume, require one trusted exact record line matching class, set, anchor, ceiling,
+and option. Proposal, mappings, and live held children must match one-to-one
+by exact title/body, with no missing, duplicate, extra, or released child. For
+each body, verify its single leading `authoring-publication` line against the
+helper report, journal, and ownership record; remove only that line and its
+blank separator, then compare the rest byte-for-byte with the saved draft.
+Never strip an unmatched marker; the record alone is not proof. If a record
+exists, verify the set without republishing; stop on conflict or unknown
+publication.
+Before publishing, verify material scope/design claims against current sources
+and put file references, GitHub permalinks, or read-only command evidence in the
+review packet's `evidence` array. Correct/qualify/remove unsupported claims
+and route unresolved material claims under the issue-authoring contract.
+Post/read back one ordered parent proposal with current claim ID, estimate,
+candidate/changed files, and each child's exact title and full body. If POST is
+uncertain, page all parent comments and continue only if exactly one exact
+proposal exists; otherwise keep the hold and stop. On resume reuse and reconcile
+it with helper records/live issues; never republish an unknown result. Keep the
+parent claim and label held.
+Review each final child separately: send exact title/body and the bounded
+packet to the usable configured delegate, or use native review or structured
+self-critique. Bound wait by
+`issueAuthoring.adversarialReview.waitCeiling` (`PT20M` default). Require
+`"completed": true` and every finding `fixed` or `rejected`; stop on incomplete,
+unreadable, or unresolved review. A title/body correction invalidates its
+review and the proposal. Update/read back the full ordered proposal and repeat
+both checks for changed children. If uncertain, continue only when the full
+body matches exactly; otherwise keep the hold and stop. Immediately before
+dry-run, recheck the nonempty final set: each child fits the trusted ceiling
+and contains a parent criterion, and each checkbox-stripped parent criterion
+appears whole and verbatim in exactly one child. Any failure blocks dry-run and
+apply. Dry-run only when every final title and normalized body matches the
+read-back proposal and has a completed review. A refused/failed dry-run stops
+before apply. Resolve the profile-selected `idd-publish-authoring-hold` per
+`docs/idd-helper-scripts.md`; without `--apply` it dry-runs. Dry-run every
+orphan and inspect all results before applying one per call. The invocation is:
 
 ```sh
 idd-publish-authoring-hold --shape orphan \
   --title <title> --body-file <file> --review-result <file> [--apply]
 ```
 
-Verify each child is held and append/read back its
-number on the parent before the next. If that POST is uncertain, read all
-parent comments and proceed only when exactly one matching mapping is present;
-otherwise stop and keep the hold. Any refusal, failure, recovery hold, or
-uncertain result stops publication, even if one matching held child is found.
-Do not publish or retry, post the record, or release the parent. Keep the
-proposal, claim, label, and all published children held; inspect the helper
-report, journal, marker, and live issues, then report the state. After children
-and roadmap tracks pass the set check, post the exact record below. On definite
-or uncertain POST failure, post a hold note naming verified children and keep
-the parent and child holds. For uncertainty, proceed only after paginated
-read-back confirms one trusted exact record and the full set; never retry. On
-success, post the completion note, revalidate the parent claim, post and
-verify its exact `unclaimed-by` marker, then run cleanup. Mismatch, unreadable
-state, or uncertain release keeps the parent held and stops before cleanup.
-Keep the label until the set is released or complete.
+Verify each child is held and append/read back its parent mapping before the
+next. If that POST is uncertain, proceed only when all parent comments show one
+matching mapping; otherwise keep the hold and stop. Any refusal, failure,
+recovery hold, or unknown result stops publication, even if a matching child is
+found. Do not publish another child, retry, post the record, or release the
+parent. Keep proposal, claim/label, and published children held; inspect the
+report, journal, marker, and live issues. After children/tracks pass the set
+check, post the exact record below. On definite/uncertain POST failure, post a
+hold note naming verified children; keep all holds and stop. For uncertainty,
+proceed only after paginated read-back confirms one trusted exact record and
+the full set; never retry. On success, post the completion note, revalidate
+the claim, post/verify its exact `unclaimed-by` marker, then clean up. Mismatch,
+unreadable state, or uncertain release keeps the parent held. Keep the label
+until release or completion.
 `instructions-only` keeps the companion route.
 
 ```text
