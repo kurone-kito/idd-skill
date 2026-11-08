@@ -1057,12 +1057,6 @@ export function readDecisionLinks(
       for (const decision of countingVoids(confirmation, context)) {
         voids.add(decision);
       }
-      if (
-        !confirmation.labels.some((name) =>
-          sameText(name, input.confirmationLabel),
-        )
-      ) {
-      }
     }
     for (const link of kept) {
       const number = issueNumberFromReference(link.confirmation);
