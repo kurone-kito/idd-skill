@@ -351,7 +351,6 @@ export const CHECK_PASS_EQUIVALENT_STATES = new Set([
   'SUCCESS',
   'SKIPPED',
   'NEUTRAL',
-  'NOT_APPLICABLE',
 ]);
 function matchCheckSelectorLocal(name, selector, matchMode) {
   const n = String(name ?? '').trim();
@@ -5357,7 +5356,8 @@ function isNewerCheckInstance(candidate, current) {
  * Reduce a group of check-run instances that share one grouping key
  * (typically a check name) to the single instance that represents the
  * current truth for that key. See `isNewerCheckInstance` for the
- * selection rule. Exported so other same-name dedup call sites (e.g.
+ * selection rule. A selected pass never hides an unsupported state in the
+ * group (PR #5099). Exported so other same-name dedup call sites (e.g.
  * `ci-wait-state.mts`'s `buildCiWaitStateSummary`, #1478) can reuse this
  * tie-break instead of maintaining an independent copy. `group` is
  * always non-empty in every current caller (each group comes from
@@ -5365,9 +5365,28 @@ function isNewerCheckInstance(candidate, current) {
  * below never hits its empty-array throw path.
  */
 export function selectLatestCheckInstance(group) {
-  return group.reduce((latest, candidate) =>
-    isNewerCheckInstance(candidate, latest) ? candidate : latest,
-  );
+  const latestOf = (entries) =>
+    entries.reduce((latest, candidate) =>
+      isNewerCheckInstance(candidate, latest) ? candidate : latest,
+    );
+  const selected = latestOf(group);
+  if (!CHECK_PASS_EQUIVALENT_STATES.has(selected.state)) {
+    return selected;
+  }
+  // An unsupported result cannot establish an ordered passing verdict:
+  // otherwise a later success hides it (PR #5099, issue #4891). Known
+  // passing, failure, cancellation, and pending states keep the usual order.
+  const unknown = group.filter((check) => {
+    const state = check.state;
+    return (
+      !CHECK_PASS_EQUIVALENT_STATES.has(state) &&
+      !CI_FAILURE_CONCLUSION_STATES.has(state) &&
+      state !== 'CANCELLED' &&
+      !CI_PENDING_STATES.has(state) &&
+      !CI_STATUS_CONTEXT_PENDING_STATES.has(state)
+    );
+  });
+  return unknown.length > 0 ? latestOf(unknown) : selected;
 }
 /**
  * Reduce a check-run list to a single representative instance per
@@ -5467,7 +5486,7 @@ const GENUINELY_NON_PASSING_STATES = new Set([
  * `(name, type, workflowName)` -- see `groupChecksByProducer`'s own doc
  * comment) whose dedup-selected "latest" instance
  * (`selectLatestCheckInstance`) is pass-equivalent (SUCCESS/SKIPPED/
- * NEUTRAL/NOT_APPLICABLE) while a DISCARDED sibling in that same group is
+ * NEUTRAL) while a DISCARDED sibling in that same group is
  * genuinely non-passing (see {@link GENUINELY_NON_PASSING_STATES}) -- the
  * live discrepancy PR #1741 exhibited (#1745): `classifyCiChecks` reported
  * `success` for a commit whose GitHub `statusCheckRollup.state` was
