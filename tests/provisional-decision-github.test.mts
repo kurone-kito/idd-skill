@@ -459,6 +459,32 @@ test('pending, missing, neutral and uncompleted required checks are false', asyn
   }
 });
 
+test('successful CheckRuns require a nonzero completed ISO timestamp', async () => {
+  for (const completedAt of [
+    '0001-01-01T00:00:00Z',
+    'not-a-time',
+    '2026-11-08',
+  ]) {
+    const value = pr({
+      statusCheckRollup: [
+        {
+          __typename: 'CheckRun',
+          name: 'required',
+          status: 'COMPLETED',
+          conclusion: 'SUCCESS',
+          completedAt,
+        },
+      ],
+    });
+    await withGh(prSteps(value), async (store) => {
+      assert.equal(
+        (await store.readPullRequest(url)).requiredChecksPassing,
+        false,
+      );
+    });
+  }
+});
+
 test('unreadable protection cannot pass or apply a waiver', async () => {
   await withGh(prSteps(pr(), true), async (store) => {
     assert.equal(

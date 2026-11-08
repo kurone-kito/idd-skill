@@ -21,6 +21,7 @@ import {
 import { normalizePolicyConfig } from './policy-helpers.mts';
 import {
   classifyCiChecks,
+  isCompletedCiTimestamp,
   summarizeBranchReviewRequirements,
 } from './protocol-helpers.mts';
 import { createGithubProviderAdapter } from './provider-adapter-github.mts';
@@ -266,8 +267,7 @@ function requiredChecksPassing(
         (check) =>
           check.state === 'SUCCESS' &&
           (check.type === 'check-run'
-            ? typeof check.completedAt === 'string' &&
-              Number.isFinite(Date.parse(check.completedAt))
+            ? isCompletedCiTimestamp(check.completedAt)
             : check.type === 'status-context'),
       );
     });

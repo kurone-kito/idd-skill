@@ -16,6 +16,7 @@ import { loadIddConfig, loadTrustedIddConfig } from './idd-config.mjs';
 import { normalizePolicyConfig } from './policy-helpers.mjs';
 import {
   classifyCiChecks,
+  isCompletedCiTimestamp,
   summarizeBranchReviewRequirements,
 } from './protocol-helpers.mjs';
 import { createGithubProviderAdapter } from './provider-adapter-github.mjs';
@@ -237,8 +238,7 @@ function requiredChecksPassing(pr, repository, number) {
         (check) =>
           check.state === 'SUCCESS' &&
           (check.type === 'check-run'
-            ? typeof check.completedAt === 'string' &&
-              Number.isFinite(Date.parse(check.completedAt))
+            ? isCompletedCiTimestamp(check.completedAt)
             : check.type === 'status-context'),
       );
     });
