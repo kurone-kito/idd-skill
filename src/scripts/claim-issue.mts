@@ -2075,6 +2075,20 @@ function describeUnmet(report: B1LeftoverReport): string {
 }
 
 /**
+ * The preservation ports, or `undefined` when they are absent or cannot be
+ * built. The default deps build them on first read, and building them reads the
+ * home directory, which can fail in an odd environment; that must end the run
+ * as an unavailable input, not as a throw outside the report.
+ */
+function readPorts(deps: ClaimIssueDeps): B1PreservePorts | undefined {
+  try {
+    return deps.b1Preserve;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * `--preserve-b1-leftovers`, under the clone lock and before the B1 check.
  * With no leftover it passes. With an unmet precondition it changes nothing
  * and passes, so the stops of a run without the flag follow unchanged; the
@@ -2084,7 +2098,7 @@ function describeUnmet(report: B1LeftoverReport): string {
  */
 function preserveLeftovers(state: ApplyState): ApplyOutcome {
   const preserve = state.input.preserve;
-  const ports = state.deps.b1Preserve;
+  const ports = readPorts(state.deps);
   if (preserve === undefined || ports === undefined) {
     return applyFail(
       'precheck-unavailable',
@@ -2155,7 +2169,7 @@ function inspectB1ForDryRun(
     report.common.push({ id: 'dry-run-inputs', status: 'unmet', detail });
     return report;
   };
-  const ports = deps.b1Preserve;
+  const ports = readPorts(deps);
   if (ports === undefined) {
     return unavailable('the B1 preservation ports are not available');
   }

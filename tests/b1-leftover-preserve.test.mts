@@ -2684,3 +2684,31 @@ test(
     );
   },
 );
+
+test(
+  'dry run: a state root that lets others in is flagged before the apply restricts it',
+  pathCase,
+  () => {
+    const fixture = fresh();
+    const result = exercise(fixture, {
+      request: { mode: 'dry-run' },
+      confirmation: () => confirmationRead([record('d1', fixture.worktree)]),
+      prepare: (f) => {
+        leftoverPath(f);
+        chmodSync(f.state, 0o755);
+      },
+    });
+    assert.equal(result.report.outcome, 'ready');
+    const detail =
+      result.report.subjects[0]?.preconditions.find(
+        (entry) => entry.id === 'destination',
+      )?.detail ?? '';
+    assert.match(detail, /will restrict/);
+    assert.ok(detail.includes(fixture.state), detail);
+    assert.equal(
+      lstatSync(fixture.state).mode & 0o777,
+      0o755,
+      'a dry run changes no mode',
+    );
+  },
+);

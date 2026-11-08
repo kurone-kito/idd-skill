@@ -381,6 +381,9 @@ function refState(ctx, ref) {
   if (resolved.status !== 1) return 'unknown';
   const symbolic = git(ctx, ['symbolic-ref', '--quiet', ref]);
   if (symbolic.status === 0) return 'present';
+  // A plain ref whose object is missing also reads as absent here. After a
+  // delete at a verified tip that is not a realistic state, and a read that
+  // fails outright is `unknown`.
   return symbolic.status === 1 ? 'absent' : 'unknown';
 }
 /**
@@ -818,7 +821,11 @@ function pathPlan(ctx, listing) {
         )
         .map((parent) => parent.path);
       return pass(
-        `the destination is ${join(destinationDirectory, basename(source))}`,
+        `the destination is ${join(destinationDirectory, basename(source))}${
+          looseParents.length === 0
+            ? ''
+            : `; the creation step will restrict ${looseParents.join(', ')} to its owner`
+        }`,
       );
     }),
   );

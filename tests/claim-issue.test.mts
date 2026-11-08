@@ -1767,6 +1767,8 @@ interface B1Scenario {
   fs?: (fixture: ApplyFixture) => Partial<B1Filesystem>;
   /** The released claim the fresh-claim gate names after the pre-check. */
   released?: { branch: string | null };
+  /** Reading the ports throws, as building them can in an odd environment. */
+  portsThrow?: boolean;
   /** The gate answers after the pre-check with no evidence object at all. */
   noEvidence?: boolean;
 }
@@ -2322,6 +2324,14 @@ function runApply(
       ? {}
       : { b1Preserve: b1PortsFor(fixture, scenario.b1) }),
   };
+  if (scenario.b1?.portsThrow) {
+    Object.defineProperty(deps, 'b1Preserve', {
+      enumerable: true,
+      get: () => {
+        throw new Error('no home directory');
+      },
+    });
+  }
   let stdout = '';
   let stderr = '';
   const result = runClaimIssue([...argv], deps, {
@@ -4500,5 +4510,30 @@ test('no leftover: a dry run with the flag alone lists nothing and exits by the 
     const b1 = (run.report as ClaimIssueReport).b1Leftovers;
     assert.equal(b1?.outcome, 'no-leftover');
     assert.deepEqual(b1?.subjects, []);
+  });
+});
+
+test('ports that cannot be built stop an apply run before any change, and a dry run reports them', () => {
+  withApplyFixture((fixture) => {
+    unmergedBranch(fixture.primary);
+    const before = refsOf(fixture.primary);
+    const apply = runApply(
+      fixture,
+      { b1: { portsThrow: true } },
+      PRESERVE_ARGS,
+    );
+    const report = assertStopped(apply, 'precheck-unavailable');
+    assert.equal(stepOf(report, 'b1-preserve')?.status, 'failed');
+    assert.match(
+      stepOf(report, 'b1-preserve')?.detail ?? '',
+      /ports are not available/,
+    );
+    assert.equal(refsOf(fixture.primary), before);
+
+    const dry = runApply(fixture, { b1: { portsThrow: true } }, DRY_ARGS);
+    assert.equal(exitOf(dry.result), 0, dry.stderr);
+    const b1 = (dry.report as ClaimIssueReport).b1Leftovers;
+    assert.equal(b1?.common[0]?.id, 'dry-run-inputs');
+    assert.equal(b1?.outcome, 'unmet-preconditions');
   });
 });
