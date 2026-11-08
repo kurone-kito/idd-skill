@@ -4751,6 +4751,13 @@ these hold:
    procedure (source branch, claims, linked pull requests, duplicate or reuse
    candidates, conflicting issues or pull requests) pass again; and the source
    draft bytes still match the root intent.
+4. The displaced session has expired. Identify it from the carrier's trusted
+   claim markers as the holder of the coordination claim that preceded this
+   session's claim, and require that claim to have been released by its own
+   `unclaimed-by` marker, or to have been stale under `claimTiming.staleAge`
+   when this session took the carrier over, with no heartbeat of it since. A
+   displaced session that cannot be identified from trusted markers, or whose
+   claim was neither released nor stale, stops recovery.
 
 An incomplete enumeration stops. None of these alone is sufficient: a journal
 `pending` record with `issue=none`, other than an exempt roadmap record, is the
@@ -4763,27 +4770,23 @@ target that a trusted mapping names is not a stop.
 
 **Displaced publisher.** A journal scan proves only that no create had been
 reached when it was read; it cannot prove that the displaced session has
-stopped. The publisher checks the anchor generation before its `pending` write
-and checks it again only after its create (the anchor heartbeat and log replay
-that precede `member`), so a publisher that paused between its first check and
-its `pending` write could still create a second child after the final re-check.
-This contract accepts only the evidence it defines: the stale-age test and the
-late-marker test of condition 2 (no owner marker of a superseded owner after the
-resume) and, when the displaced session can be identified, a confirmation made
-before the replacement is appended that its process has ended (the session's own
-report, or the roster of whoever started it); an unidentifiable displaced
-session needs no such confirmation. The window that remains is a displaced
-session whose last anchor marker was already older than
-`issueAuthoring.authoringStaleAge` when the successor's resume was posted, and
-which pauses between its anchor check and its `pending` write across the whole
-of the replacement's append, settle delay and re-checks. A child created in it
-carries the displaced generation. It cannot reach `member`, because the
+stopped, so condition 4 takes that proof from the carrier's own claim history.
+The publisher checks the anchor generation before its `pending` write and checks
+it again only after its create (the anchor heartbeat and log replay that precede
+`member`). A displaced session that is suspended inside one publisher call
+between those points could therefore still create a second child after the final
+re-check. Condition 4 bounds that window: this session holds the carrier
+coordination claim only after the displaced holder released it or let it go
+stale, so the suspension must have outlasted that claim, which is hours rather
+than minutes for a session that heartbeats as required. A child created in the
+window carries the displaced generation. It cannot reach `member`, because the
 publisher's own anchor replay shows a changed owner, and the exactly-one-child
 rule stops recovery as soon as its journal record shows a second candidate. That
 child stays held and unmapped for a person to reconcile, and the lineage never
-maps it. Closing the window needs a publisher change (re-verify the anchor
-generation after the `pending` write and before the create), which this contract
-does not specify.
+maps it. A publisher used for a child after a replacement must re-verify the
+anchor generation after its `pending` write and immediately before its create;
+until the helper does, the window above stands, and the helper change is
+separate work that this contract does not implement.
 
 **Replacement procedure.** When a verified replacement is already the head, its
 generation is current and no create followed it, append nothing: repeat the
@@ -4824,9 +4827,11 @@ root intent, `B` the roadmap mapping, and `C` the child intent, which pins
 `anchor-owner` O0 and `session` S0. Every hold below is the recovery hold
 defined above: no replacement is appended and no create is issued.
 
-- Permitted. The anchor log then shows one trusted resume marker (owner O1,
-  session S1, `supersedes` O0), posted past the stale age, for the same anchor
-  and set, with no release-family marker and no later owner marker of O0.
+- Permitted. The carrier's previous coordination claim was released or stale
+  when this session took over. The anchor log then shows one trusted resume
+  marker (owner O1, session S1, `supersedes` O0), posted past the stale age, for
+  the same anchor and set, with no release-family marker and no later owner
+  marker of O0.
   Journal replay finds no comment for this anchor or set beyond the roadmap's
   own publication records, the resume enumeration finds only the anchor, no
   child mapping exists, the carrier is ready, the roadmap is open and held
@@ -4866,6 +4871,9 @@ defined above: no replacement is appended and no create is issued.
   marker that names the owner before it, the resume came before the stale age,
   a `release`, `release-guard` or `release-complete` marker appears on the path
   or after it, or an owner marker of a superseded owner follows the resume.
+- Hold, displaced session not expired. The carrier's claim history does not
+  identify the displaced session, or its claim was neither released nor stale
+  when this session took the carrier over, or it sent a heartbeat since.
 - Hold, inconclusive outcome. The POST or read-back of `D` is uncertain, or the
   child create after `D` is: retain the evidence as above and create nothing.
 
