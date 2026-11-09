@@ -370,6 +370,8 @@ invocation is:
 
 ```sh
 idd-publish-authoring-hold --shape orphan \
+  --owner <target-owner> --repo <target-repo> --policy <target-policy> \
+  --marker-prefix <target-markerPrefix> \
   --title <title> --body-file <file> --review-result <file> [--apply]
 ```
 
