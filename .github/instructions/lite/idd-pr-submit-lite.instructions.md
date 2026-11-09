@@ -186,8 +186,16 @@ instead of returning to this D1 rebase path.
    (even under the same agent id), the claim was lost — stop.
 2. Run **pre-push-validate**. (E2E tests are verified by CI; do not run
    them locally.)
-3. Push the branch: `git push -u origin {branch-name}`, plain on first
-   publication or a no-open-PR resume (D1 step 1). Use `--force-with-lease` only
+3. If B3 recorded an S-to-M assessment SHA (see the S-to-M correction in
+   `idd-work-lite.instructions.md`), publish only through the profile-selected
+   `claimed-push` helper, run from the claimed worktree with
+   `--issue {issue-number} --claim-id {claim-id} --agent-id {agent-id}
+   [--nonce {nonce}] --expected-scope-sha256 {assessment-sha256} --apply`.
+   Its `--apply` runs the gate and the push, so skip the plain push and
+   step 2. Require `pushed: true`; otherwise follow its `nextAction`.
+   Otherwise push the branch: `git push -u origin {branch-name}`, plain on
+   first publication or a no-open-PR resume (D1 step 1). Use
+   `--force-with-lease` only
    when the branch is already published, a repository policy permits a
    force-push exception, and this exact exception already required a rebase.
    Otherwise stop per the condition above, without `--force-with-lease`; the
