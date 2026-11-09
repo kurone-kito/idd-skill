@@ -226,6 +226,7 @@ function auditResult(
     ? 'effort M with 2 candidate file(s) is within the limit of 8'
     : 'effort M with 9 candidate files exceeds the limit of 8',
   status = outcome === 'pass' ? 0 : 1,
+  visibleLineAgreement: 'pass' | 'fail' | 'unavailable' = 'pass',
 ): CommandResult {
   return result(
     status,
@@ -235,6 +236,12 @@ function auditResult(
       passed: status === 0,
       findings: [
         { id: EFFORT_FINDING, name: 'limit', result: outcome, detail },
+        {
+          id: 'effort-visible-line-agreement',
+          name: 'visible effort line',
+          result: visibleLineAgreement,
+          detail: 'visible line agrees with the marker',
+        },
       ],
     })}\n`,
   );
@@ -1291,6 +1298,7 @@ test('parseArgs requires --issue, --claim-id, and --agent-id and validates --non
       claimId: 'c',
       agentId: AGENT_ID,
       nonce: 'n',
+      expectedScopeSha256: null,
       apply: true,
     },
   );
@@ -1302,6 +1310,7 @@ test('parseArgs requires --issue, --claim-id, and --agent-id and validates --non
       claimId: 'c',
       agentId: AGENT_ID,
       nonce: null,
+      expectedScopeSha256: null,
       apply: false,
     },
   );
@@ -1347,6 +1356,20 @@ test('parseArgs requires --issue, --claim-id, and --agent-id and validates --non
       AGENT_ID,
       '--bogus',
     ]),
+  );
+  assert.throws(
+    () =>
+      parseArgs([
+        '--issue',
+        '4375',
+        '--claim-id',
+        'c',
+        '--agent-id',
+        AGENT_ID,
+        '--expected-scope-sha256',
+        'not-a-sha',
+      ]),
+    /--expected-scope-sha256 must be a 64-character SHA-256/u,
   );
 });
 
@@ -1922,6 +1945,10 @@ function cliRun(scenario: Scenario, apply = false): CliRun {
     AGENT_ID,
     '--nonce',
     NONCE,
+    ...(scenario.input?.expectedScopeSha256 === undefined ||
+    scenario.input.expectedScopeSha256 === null
+      ? []
+      : ['--expected-scope-sha256', scenario.input.expectedScopeSha256]),
     ...(apply ? ['--apply'] : []),
   ];
   const code = runCli(argv, h.deps, {
@@ -1975,6 +2002,48 @@ function bodyWithMarker(marker: string, extra = ''): string {
     marker,
     '',
   ].join('\n');
+}
+
+function issueBodyWithEffort(
+  effort: 'S' | 'M' | 'L',
+  candidates: readonly string[],
+  newline = '\n',
+  includeCandidateSection = true,
+): string {
+  const lines = ['## Background', '', 'The helper reassesses scope.', ''];
+  if (includeCandidateSection) {
+    lines.push(
+      '## Candidate files',
+      '',
+      ...candidates.map((path) => `- \`${path}\``),
+      '',
+    );
+  }
+  lines.push(
+    '## Proposed change',
+    '',
+    'Reassess a low estimate from the current scope.',
+    '',
+    `_Effort: ${effort} -- author-estimated size; a soft autopilot selection tie-breaker only._`,
+    '',
+    `<!-- idd-skill-effort: ${effort} -->`,
+    '',
+  );
+  return lines.join(newline);
+}
+
+function forceEffortFindingFailure(request: CommandRequest): CommandResult {
+  const result_ = realAudit(request);
+  const report = JSON.parse(result_.stdout) as {
+    passed: boolean;
+    findings: { id: string; result: string; detail: string }[];
+  };
+  const finding = report.findings.find((entry) => entry.id === EFFORT_FINDING);
+  assert.ok(finding);
+  finding.result = 'fail';
+  finding.detail = 'forced M audit failure';
+  report.passed = false;
+  return result(1, `${JSON.stringify(report)}\n`);
 }
 
 test('a body within the limit whose canonical paths exceed it fails scope in the dry run', () => {
@@ -2033,6 +2102,453 @@ test('a body and canonical paths both within the limit pass scope in the dry run
   assert.match(report.steps[3]?.reason ?? '', /dry run/u);
   assert.equal(h.count(K.gate), 0);
   assert.equal(h.count(K.audit), 2);
+});
+
+test('a coherent S estimate is reassessed as M when only the canonical S audit fails', () => {
+  const body = issueBodyWithEffort('S', []);
+  const { code, report, h } = cliRun({
+    world: {
+      [K.issueView]: result(0, issueJson(body)),
+      [K.diff]: result(0, nulList(manyPaths(4))),
+      [K.audit]: realAudit,
+    },
+  });
+  const scope = report.steps[2];
+  assert.equal(code, 0);
+  assert.equal(scope?.status, 'passed');
+  assert.equal(scope?.assessment?.estimatedEffort, 'S');
+  assert.equal(scope?.assessment?.effectiveEffort, 'M');
+  assert.equal(scope?.assessment?.correctionApplied, true);
+  assert.equal(scope?.assessment?.actualCanonicalPathCount, 4);
+  assert.equal(scope?.assessment?.originalBodySha256?.length, 64);
+  assert.equal(scope?.assessment?.originalIssueBodyAudit.result, 'pass');
+  assert.equal(scope?.assessment?.originalCanonicalPathsAudit.result, 'fail');
+  assert.equal(scope?.assessment?.correctedIssueBodyAudit?.result, 'pass');
+  assert.equal(scope?.assessment?.correctedCanonicalPathsAudit?.result, 'pass');
+  assert.equal(scope?.assessment?.assessmentSha256?.length, 64);
+  assert.equal(h.count(K.audit), 4);
+  const inputs = auditInputs({ report, calls: h.calls, count: h.count });
+  assert.equal(inputs[0], body);
+  assert.equal(
+    inputs[2],
+    body
+      .replace('_Effort: S', '_Effort: M')
+      .replace('idd-skill-effort: S', 'idd-skill-effort: M'),
+  );
+  assert.equal(
+    inputs[3],
+    `## Candidate files\n\n${manyPaths(4)
+      .map((path) => `- \`${path}\``)
+      .join('\n')}\n\n${inputs[2]}`,
+  );
+  assert.equal(
+    body.includes('_Effort: S'),
+    true,
+    'the source body stays unchanged',
+  );
+});
+
+test('an explicit visible mismatch blocks in-limit S while unavailable stays compatible', () => {
+  const coherentBody = issueBodyWithEffort('S', []);
+  const mismatchedBody = coherentBody.replace('_Effort: S', '_Effort: M');
+  const run = (agreement: 'fail' | 'unavailable') =>
+    cliRun({
+      world: {
+        [K.issueView]: result(
+          0,
+          issueJson(agreement === 'fail' ? mismatchedBody : coherentBody),
+        ),
+        [K.diff]: result(0, nulList(manyPaths(2))),
+        [K.audit]: auditResult(
+          'pass',
+          'effort S with 2 candidate files is within the limit of 3',
+          agreement === 'fail' ? 1 : 0,
+          agreement,
+        ),
+      },
+    });
+
+  const failedAgreement = run('fail');
+  const failedScope = failedAgreement.report.steps[2];
+  assert.equal(failedAgreement.code, 1);
+  assert.equal(failedScope?.status, 'failed');
+  assert.equal(failedScope?.nextAction, NEXT.stopAndReport);
+  assert.equal(failedScope?.exitStatus, 1);
+  assert.match(
+    failedScope?.reason ?? '',
+    /effort-visible-line-agreement fails/u,
+  );
+  assert.equal(
+    failedScope?.assessment?.originalIssueBodyAudit.visibleLineAgreement,
+    'fail',
+  );
+  assert.equal(failedScope?.assessment?.correctionApplied, false);
+
+  const unavailableAgreement = run('unavailable');
+  const compatibleScope = unavailableAgreement.report.steps[2];
+  assert.equal(unavailableAgreement.code, 0);
+  assert.equal(compatibleScope?.status, 'passed');
+  assert.equal(
+    compatibleScope?.assessment?.originalIssueBodyAudit.visibleLineAgreement,
+    'unavailable',
+  );
+});
+
+test('the correction runs when the original body S audit fails, with either or both S audits failing', () => {
+  const cases = [
+    { bodyCandidates: [], diffCount: 4, body: 'pass', canonical: 'fail' },
+    {
+      bodyCandidates: manyPaths(4),
+      diffCount: 2,
+      body: 'fail',
+      canonical: 'pass',
+    },
+    {
+      bodyCandidates: manyPaths(4),
+      diffCount: 4,
+      body: 'fail',
+      canonical: 'fail',
+    },
+  ] as const;
+  for (const scenario of cases) {
+    const body = issueBodyWithEffort('S', scenario.bodyCandidates);
+    const { code, report } = cliRun({
+      world: {
+        [K.issueView]: result(0, issueJson(body)),
+        [K.diff]: result(0, nulList(manyPaths(scenario.diffCount))),
+        [K.audit]: realAudit,
+      },
+    });
+    const assessment = report.steps[2]?.assessment;
+    assert.equal(code, 0);
+    assert.equal(assessment?.correctionApplied, true);
+    assert.equal(assessment?.originalIssueBodyAudit.result, scenario.body);
+    assert.equal(
+      assessment?.originalCanonicalPathsAudit.result,
+      scenario.canonical,
+    );
+  }
+});
+
+test('S at three stays S, while four through eight paths qualify and nine actual paths do not', () => {
+  const three = cliRun({
+    world: {
+      [K.issueView]: result(0, issueJson(issueBodyWithEffort('S', []))),
+      [K.diff]: result(0, nulList(manyPaths(3))),
+      [K.audit]: realAudit,
+    },
+  });
+  assert.equal(three.code, 0);
+  assert.equal(three.report.steps[2]?.assessment?.correctionApplied, false);
+  assert.equal(three.report.steps[2]?.assessment?.effectiveEffort, 'S');
+
+  const eightPaths = [...manyPaths(6), 'README', 'path with spaces.mts'];
+  const eight = cliRun({
+    world: {
+      [K.issueView]: result(0, issueJson(issueBodyWithEffort('S', []))),
+      [K.diff]: result(0, nulList(eightPaths)),
+      [K.audit]: realAudit,
+    },
+  });
+  assert.equal(eight.code, 0);
+  assert.equal(eight.report.steps[2]?.assessment?.actualCanonicalPathCount, 8);
+  assert.equal(eight.report.steps[2]?.assessment?.auditParsedPathCount, 6);
+  assert.equal(eight.report.steps[2]?.assessment?.correctionApplied, true);
+
+  const ninePaths = [...manyPaths(7), 'README', 'path with spaces.mts'];
+  const nine = cliRun({
+    world: {
+      [K.issueView]: result(0, issueJson(issueBodyWithEffort('S', []))),
+      [K.diff]: result(0, nulList(ninePaths)),
+      [K.audit]: realAudit,
+    },
+  });
+  assert.equal(nine.code, 1);
+  assert.equal(nine.report.steps[2]?.assessment?.actualCanonicalPathCount, 9);
+  assert.equal(nine.report.steps[2]?.assessment?.auditParsedPathCount, 7);
+  assert.equal(nine.report.steps[2]?.assessment?.correctionApplied, false);
+  assert.match(
+    nine.report.steps[2]?.reason ?? '',
+    /actual canonical path count 9 exceeds the M maximum of 8/u,
+  );
+});
+
+test('a missing Candidate files section uses the existing leading canonical section', () => {
+  const body = issueBodyWithEffort('S', [], '\n', false);
+  const { code, report, h } = cliRun({
+    world: {
+      [K.issueView]: result(0, issueJson(body)),
+      [K.diff]: result(0, nulList(manyPaths(4))),
+      [K.audit]: realAudit,
+    },
+  });
+  assert.equal(code, 0);
+  assert.equal(report.steps[2]?.assessment?.correctionApplied, true);
+  assert.ok(
+    auditInputs({ report, calls: h.calls, count: h.count })[1]?.startsWith(
+      '## Candidate files\n\n',
+    ),
+  );
+});
+
+test('untracked paths join the actual canonical count used by S-to-M correction', () => {
+  const untracked = 'src/scripts/untracked.mts';
+  const { code, report } = cliRun({
+    world: {
+      [K.issueView]: result(0, issueJson(issueBodyWithEffort('S', []))),
+      [K.diff]: result(0, nulList(manyPaths(3))),
+      [K.untracked]: result(0, nulList([untracked])),
+      [K.audit]: realAudit,
+    },
+  });
+  assert.equal(code, 0);
+  assert.equal(report.steps[2]?.assessment?.actualCanonicalPathCount, 4);
+  assert.ok(
+    report.steps[2]?.assessment?.canonicalChangedPaths.includes(untracked),
+  );
+  assert.equal(report.steps[2]?.assessment?.correctionApplied, true);
+});
+
+test('each corrected M audit must pass and a scope change between report and push stops apply', () => {
+  for (const failingAudit of [3, 4]) {
+    let auditCount = 0;
+    const r = run({
+      input: { apply: false },
+      world: {
+        [K.issueView]: result(0, issueJson(issueBodyWithEffort('S', []))),
+        [K.diff]: result(0, nulList(manyPaths(4))),
+        [K.audit]: (request) => {
+          auditCount += 1;
+          return auditCount === failingAudit
+            ? forceEffortFindingFailure(request)
+            : realAudit(request);
+        },
+      },
+    });
+    assert.equal(stepOf(r, 'scope').status, 'failed');
+    assert.equal(stepOf(r, 'scope').assessment?.correctionApplied, false);
+    assert.equal(r.count(K.gate), 0);
+    noPush(r);
+  }
+
+  const body = issueBodyWithEffort('S', []);
+  const dry = cliRun({
+    world: {
+      [K.issueView]: result(0, issueJson(body)),
+      [K.diff]: result(0, nulList(manyPaths(4))),
+      [K.audit]: realAudit,
+    },
+  });
+  const expected = dry.report.steps[2]?.assessment?.assessmentSha256;
+  assert.ok(expected);
+  const applied = run({
+    input: { expectedScopeSha256: expected },
+    world: {
+      [K.issueView]: result(0, issueJson(body)),
+      [K.diff]: result(0, nulList(manyPaths(4))),
+      [K.audit]: realAudit,
+    },
+  });
+  assert.equal(stepOf(applied, 'scope').status, 'passed');
+  assert.equal(stepOf(applied, 'scope').assessment?.assessmentSha256, expected);
+  assert.equal(applied.report.pushed, true);
+
+  const changed = `${body}Changed after the report.\n`;
+  const stale = run({
+    input: { expectedScopeSha256: expected },
+    world: {
+      [K.issueView]: [
+        result(0, issueJson(body)),
+        result(0, issueJson(changed)),
+      ],
+      [K.diff]: result(0, nulList(manyPaths(4))),
+      [K.audit]: realAudit,
+    },
+  });
+  assert.equal(stepOf(stale, 'reassert').status, 'failed');
+  assert.equal(stale.report.pushed, false);
+  assert.equal(stale.count(K.pushNew), 0);
+  assert.match(stepOf(stale, 'reassert').reason, /scope assessment changed/u);
+});
+
+test('apply of a corrected scope requires the report assessment SHA-256', () => {
+  const r = run({
+    world: {
+      [K.issueView]: result(0, issueJson(issueBodyWithEffort('S', []))),
+      [K.diff]: result(0, nulList(manyPaths(4))),
+      [K.audit]: realAudit,
+    },
+  });
+  assert.equal(stepOf(r, 'scope').status, 'failed');
+  assert.match(stepOf(r, 'scope').reason, /requires --expected-scope-sha256/u);
+  assert.equal(r.count(K.gate), 0);
+  noPush(r);
+});
+
+test('an unavailable corrected M audit fails closed before gate or push', () => {
+  let auditCount = 0;
+  const r = run({
+    world: {
+      [K.issueView]: result(0, issueJson(issueBodyWithEffort('S', []))),
+      [K.diff]: result(0, nulList(manyPaths(4))),
+      [K.audit]: (request) => {
+        auditCount += 1;
+        return auditCount === 3 ? CANNOT_START : realAudit(request);
+      },
+    },
+  });
+  assert.equal(stepOf(r, 'scope').status, 'failed');
+  assert.equal(stepOf(r, 'scope').nextAction, NEXT.helperInstallation);
+  assert.equal(r.count(K.gate), 0);
+  noPush(r);
+});
+
+test('correction range mapping preserves CRLF UTF-16 offsets and masked examples', () => {
+  const ordinary = issueBodyWithEffort('S', [], '\r\n');
+  const bodyWithMaskedExample = ordinary.replace(
+    '_Effort: S -- author-estimated size; a soft autopilot selection tie-breaker only._\r\n\r\n<!-- idd-skill-effort: S -->',
+    '```md\r\n_Effort: S -- quoted example._\r\n<!-- idd-skill-effort: S -->\r\n```\r\n\r\n_Effort: S -- author-estimated size; a soft autopilot selection tie-breaker only._\r\n\r\n<!-- idd-skill-effort: S -->',
+  );
+  const body = bodyWithMaskedExample.replace(
+    '\r\n\r\n_Effort: S -- author-estimated size;',
+    '\r\n\r\nUTF-16 boundary note 🧭.\r\n\r\n_Effort: S -- author-estimated size;',
+  );
+  const { code, report, h } = cliRun({
+    world: {
+      [K.issueView]: result(0, issueJson(body)),
+      [K.diff]: result(0, nulList(manyPaths(4))),
+      [K.audit]: realAudit,
+    },
+  });
+  const inputs = auditInputs({ report, calls: h.calls, count: h.count });
+  const visible = body.lastIndexOf('_Effort: S') + '_Effort: '.length;
+  const marker =
+    body.lastIndexOf('idd-skill-effort: S') + 'idd-skill-effort: '.length;
+  assert.ok(body.indexOf('🧭') < visible);
+  assert.ok(body.indexOf('🧭') < marker);
+  const expected =
+    body.slice(0, visible) +
+    'M' +
+    body.slice(visible + 1, marker) +
+    'M' +
+    body.slice(marker + 1);
+  assert.equal(code, 0);
+  assert.equal(report.steps[2]?.assessment?.correctionApplied, true);
+  assert.equal(inputs[2], expected);
+  assert.ok(
+    inputs[2]?.includes(
+      '```md\r\n_Effort: S -- quoted example._\r\n<!-- idd-skill-effort: S -->',
+    ),
+  );
+  assert.ok(inputs[2]?.includes('_Effort: M -- author-estimated size;'));
+  assert.equal(body.includes('_Effort: S -- author-estimated size;'), true);
+});
+
+test('identical, conflicting, valueless, mismatched, and masked-only footer inputs do not receive correction', () => {
+  const coherent = issueBodyWithEffort('S', []);
+  const cases = [
+    {
+      name: 'identical duplicate',
+      body: coherent.replace(
+        '<!-- idd-skill-effort: S -->',
+        '<!-- idd-skill-effort: S -->\n\n<!-- idd-skill-effort: S -->',
+      ),
+      shouldFail: true,
+    },
+    {
+      name: 'conflicting duplicate',
+      body: coherent.replace(
+        '<!-- idd-skill-effort: S -->',
+        '<!-- idd-skill-effort: S -->\n\n<!-- idd-skill-effort: M -->',
+      ),
+      shouldFail: false,
+    },
+    {
+      name: 'valueless duplicate',
+      body: coherent.replace(
+        '<!-- idd-skill-effort: S -->',
+        '<!-- idd-skill-effort: S -->\n\n<!-- idd-skill-effort: -->',
+      ),
+      shouldFail: true,
+    },
+    {
+      name: 'visible mismatch',
+      body: coherent.replace('_Effort: S', '_Effort: M'),
+      shouldFail: true,
+    },
+    {
+      name: 'visible example only in masked code',
+      body: coherent
+        .replace(
+          '_Effort: S -- author-estimated size; a soft autopilot selection tie-breaker only._\n\n',
+          '',
+        )
+        .replace(
+          '<!-- idd-skill-effort: S -->',
+          '```md\n_Effort: S -- quoted example._\n```\n\n<!-- idd-skill-effort: S -->',
+        ),
+      shouldFail: true,
+    },
+  ] as const;
+  for (const scenario of cases) {
+    const r = cliRun({
+      world: {
+        [K.issueView]: result(0, issueJson(scenario.body)),
+        [K.diff]: result(0, nulList(manyPaths(4))),
+        [K.audit]: realAudit,
+      },
+    });
+    assert.equal(
+      r.report.steps[2]?.assessment?.correctionApplied,
+      false,
+      scenario.name,
+    );
+    assert.equal(
+      r.report.steps[2]?.status === 'failed',
+      scenario.shouldFail,
+      scenario.name,
+    );
+    assert.equal(r.h.count(K.audit), 2, scenario.name);
+  }
+
+  const duplicateWithinLimit = cliRun({
+    world: {
+      [K.issueView]: result(0, issueJson(cases[0].body)),
+      [K.diff]: result(0, nulList(manyPaths(2))),
+      [K.audit]: realAudit,
+    },
+  });
+  assert.equal(duplicateWithinLimit.code, 0);
+  assert.equal(duplicateWithinLimit.report.steps[2]?.status, 'passed');
+  assert.equal(
+    duplicateWithinLimit.report.steps[2]?.assessment?.correctionApplied,
+    false,
+  );
+  assert.equal(
+    duplicateWithinLimit.report.steps[2]?.assessment?.originalIssueBodyAudit
+      .visibleLineAgreement,
+    'fail',
+  );
+
+  const missing = issueBodyWithEffort('M', []);
+  const missingMarker = cliRun({
+    world: {
+      [K.issueView]: result(
+        0,
+        issueJson(missing.replace(/\n_Effort:[\s\S]*$/u, '\n')),
+      ),
+      [K.diff]: result(0, nulList(manyPaths(9))),
+      [K.audit]: realAudit,
+    },
+  });
+  assert.equal(
+    missingMarker.report.steps[2]?.assessment?.correctionApplied,
+    false,
+  );
+  assert.equal(
+    missingMarker.report.steps[2]?.assessment?.estimatedEffort,
+    null,
+  );
 });
 
 test('a scope failure with --apply sends no gate or push request', () => {

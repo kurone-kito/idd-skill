@@ -20,9 +20,10 @@
 // where it runs in a shell directly as before.
 
 import { type SpawnSyncOptions, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, realpathSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
-
+import { EFFORT_CANDIDATE_FILE_LIMITS } from './audit-authored-issue.mts';
 import { resolveBundleRoot } from './bundle-root.mts';
 import {
   parseCanonicalIntegerOrThrow,
@@ -31,6 +32,7 @@ import {
 } from './cli-args.mts';
 import { GENERATED_SOURCE_BANNER_PATTERN } from './consistency-helpers.mts';
 import { parseCandidateFiles } from './discover-shared-file-overlap.mts';
+import { type EffortHint, parseEffortMarker } from './effort.mts';
 import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mts';
 import { isNotDispatchedRefusal } from './github-api-refusal.mts';
 import type { HelperCliResult } from './helper-cli-runner.mts';
@@ -43,7 +45,11 @@ import {
 import { loadLayeredLocalPolicy } from './idd-config.mts';
 import { parseLocalWorktreeList } from './local-worktree-occupancy.mts';
 import { maskMarkdownForScan } from './markdown-code.mts';
-import { normalizeMarkerPrefix } from './marker-helpers.mts';
+import {
+  countMarkerOccurrences,
+  normalizeMarkerPrefix,
+} from './marker-helpers.mts';
+import { escapeRegex } from './marker-regex.mts';
 import {
   inspectDevelopmentBranch,
   resolveEffectiveDevelopmentBranch,
@@ -54,6 +60,7 @@ const CLAIMED_PUSH_FLAG_SPEC = {
   '--claim-id': { type: 'string' },
   '--agent-id': { type: 'string' },
   '--nonce': { type: 'string' },
+  '--expected-scope-sha256': { type: 'string' },
   '--apply': { type: 'boolean' },
   '--help': { type: 'boolean', short: 'h' },
 } as const;
@@ -176,6 +183,8 @@ const NEXT_ACTION = {
   pushUnknown: 'read the remote branch before any new push, no retry',
   scopeOverrun:
     'stop without pushing and follow the Scope overrun rule in idd-work.instructions.md',
+  scopeAssessmentChanged:
+    'rerun the dry-run, reconcile the report, and retry with its assessment SHA-256',
   staleBase: (base: string): string =>
     `run node scripts/clone-lock.mjs --exec --agent-id <your agent id> -- git fetch ${REMOTE_NAME} +refs/heads/${base}:refs/remotes/${REMOTE_NAME}/${base} (see docs/idd-helper-scripts.md, "Clone-scoped lock"), then rerun the helper once; if the base is still stale, stop, report both SHAs, and do not push`,
 } as const;
@@ -269,6 +278,11 @@ export interface ClaimedPushInput {
   claimId: string;
   agentId: string;
   nonce: string | null;
+  /**
+   * Optional optimistic-concurrency guard for an assessment reported before
+   * apply. It never bypasses a fresh scope audit.
+   */
+  expectedScopeSha256?: string | null;
   apply: boolean;
   /** Directory the worktree is resolved from (`git rev-parse --show-toplevel`). */
   cwd: string;
@@ -290,6 +304,29 @@ export interface ClaimedPushStep {
   reason: string;
   /** Non-empty on every failed step. */
   nextAction?: string;
+  /** Read-only evidence returned by the scope step in both modes. */
+  assessment?: ClaimedPushScopeAssessment;
+}
+
+export interface ClaimedPushScopeAssessment {
+  originalBodySha256: string;
+  estimatedEffort: EffortHint | null;
+  effectiveEffort: EffortHint | null;
+  correctionApplied: boolean;
+  canonicalChangedPaths: string[];
+  actualCanonicalPathCount: number;
+  auditParsedPathCount: number;
+  originalIssueBodyAudit: ScopeAuditEvidence;
+  originalCanonicalPathsAudit: ScopeAuditEvidence;
+  correctedIssueBodyAudit?: ScopeAuditEvidence;
+  correctedCanonicalPathsAudit?: ScopeAuditEvidence;
+  assessmentSha256: string;
+}
+
+export interface ScopeAuditEvidence {
+  result: 'pass' | 'fail';
+  detail: string;
+  visibleLineAgreement: 'pass' | 'fail' | 'unavailable';
 }
 
 export interface ClaimedPushReport {
@@ -317,6 +354,7 @@ interface Context {
   pushed: boolean | null;
   pushedSha: string | null;
   pushMessage: string | null;
+  scopeAssessment: ClaimedPushScopeAssessment | null;
 }
 
 type CommandEnd =
@@ -1107,7 +1145,13 @@ function isSetextContentLine(lines: readonly string[], index: number): boolean {
 }
 
 type AuditVerdict =
-  | { ok: true; result: 'pass' | 'fail'; detail: string; exitStatus: number }
+  | {
+      ok: true;
+      result: 'pass' | 'fail';
+      detail: string;
+      exitStatus: number;
+      visibleLineAgreement: 'pass' | 'fail' | 'unavailable';
+    }
   | { ok: false; failure: StepOutcome };
 
 /** The `effort-candidate-file-limit` finding of one audit's JSON report. */
@@ -1123,12 +1167,15 @@ function effortFindingOf(
   if (!isRecord(report) || !Array.isArray(report.findings)) {
     return 'malformed';
   }
-  const finding = report.findings.find(
+  const findings = report.findings.filter(
     (entry: unknown) => isRecord(entry) && entry.id === EFFORT_FINDING_ID,
-  ) as Record<string, unknown> | undefined;
-  if (finding === undefined) {
+  ) as Record<string, unknown>[];
+  if (findings.length === 0) {
     return 'missing';
   }
+  if (findings.length !== 1) return 'malformed';
+  const finding = findings[0];
+  if (finding === undefined) return 'malformed';
   if (finding.result !== 'pass' && finding.result !== 'fail') {
     return 'malformed';
   }
@@ -1136,6 +1183,66 @@ function effortFindingOf(
     result: finding.result,
     detail: typeof finding.detail === 'string' ? finding.detail : '',
   };
+}
+
+/** The correction also needs the audit's independent footer-pair verdict. */
+function visibleAgreementOf(stdout: string): 'pass' | 'fail' | 'unavailable' {
+  let report: unknown;
+  try {
+    report = JSON.parse(stdout);
+  } catch {
+    return 'unavailable';
+  }
+  if (!isRecord(report) || !Array.isArray(report.findings)) {
+    return 'unavailable';
+  }
+  const findings = report.findings.filter(
+    (entry: unknown) =>
+      isRecord(entry) && entry.id === 'effort-visible-line-agreement',
+  ) as Record<string, unknown>[];
+  if (findings.length !== 1) return 'unavailable';
+  const finding = findings[0];
+  if (finding?.result !== 'pass' && finding?.result !== 'fail') {
+    return 'unavailable';
+  }
+  return finding.result;
+}
+
+/** Distinguish a single explicit visible/hidden mismatch from other failures. */
+function hasExplicitEffortMismatch(
+  body: string,
+  markerPrefix: string,
+  verdict: AuditVerdict,
+  expected: EffortHint | null,
+): boolean {
+  if (
+    !verdict.ok ||
+    expected === null ||
+    verdict.visibleLineAgreement !== 'fail'
+  ) {
+    return false;
+  }
+  const effort = parseEffortMarker(body, markerPrefix);
+  if (!effort.present || effort.malformed || effort.value !== expected) {
+    return false;
+  }
+  const masked = maskMarkdownForScan(body);
+  if (countMarkerOccurrences(masked, markerPrefix, 'effort') !== 1) {
+    return false;
+  }
+  const markerPattern = new RegExp(
+    `<!--\\s*${escapeRegex(markerPrefix)}-effort:\\s*([^\\s>]+)\\s*-->`,
+    'iu',
+  );
+  const marker = markerPattern.exec(masked);
+  if (marker?.[1]?.toUpperCase() !== expected || marker.index === undefined) {
+    return false;
+  }
+  const beforeMarker = masked.slice(0, marker.index).replace(/\s+$/u, '');
+  const paragraph = beforeMarker.split(/\n\s*\n/u).at(-1) ?? '';
+  const visible = /_Effort:\s*([A-Za-z]+)/u.exec(paragraph);
+  const visibleValue = visible?.[1]?.toUpperCase();
+  return visibleValue !== undefined && visibleValue !== expected;
 }
 
 /** Item 5: one audit run; its exit status is not the verdict. */
@@ -1197,7 +1304,12 @@ function runAudit(
       ),
     };
   }
-  return { ok: true, ...finding, exitStatus: end.status };
+  return {
+    ok: true,
+    ...finding,
+    exitStatus: end.status,
+    visibleLineAgreement: visibleAgreementOf(result.stdout),
+  };
 }
 
 function sameList(left: readonly string[], right: readonly string[]): boolean {
@@ -1205,6 +1317,206 @@ function sameList(left: readonly string[], right: readonly string[]): boolean {
     left.length === right.length &&
     left.every((value, index) => value === right[index])
   );
+}
+
+interface EffortTokenRange {
+  start: number;
+  end: number;
+}
+
+function rawOffsetForNormalizedIndex(raw: string, offset: number): number {
+  let rawIndex = 0;
+  let normalizedIndex = 0;
+  while (normalizedIndex < offset && rawIndex < raw.length) {
+    if (raw[rawIndex] === '\r' && raw[rawIndex + 1] === '\n') {
+      rawIndex += 2;
+    } else {
+      rawIndex += 1;
+    }
+    normalizedIndex += 1;
+  }
+  return rawIndex;
+}
+
+/**
+ * Locate the visible and hidden S tokens only after the existing parser and
+ * audit have established their classification and agreement. The mask keeps
+ * HTML comments and HTML blocks visible, matching parseEffortMarker and the
+ * audit; it masks fenced, indented, and inline code. Returned offsets address
+ * the raw body, including CRLF line endings.
+ */
+function locateEffortSTokens(
+  body: string,
+  markerPrefix: string,
+): { visible: EffortTokenRange; marker: EffortTokenRange } | null {
+  const effort = parseEffortMarker(body, markerPrefix);
+  if (!effort.present || effort.malformed || effort.value !== 'S') {
+    return null;
+  }
+  const normalized = body.replace(/\r\n/gu, '\n');
+  const masked = maskMarkdownForScan(body);
+  if (
+    masked.length !== normalized.length ||
+    countMarkerOccurrences(masked, markerPrefix, 'effort') !== 1
+  ) {
+    return null;
+  }
+
+  const markerPattern = new RegExp(
+    `<!--\\s*${escapeRegex(markerPrefix)}-effort:\\s*([^\\s>]+)\\s*-->`,
+    'giu',
+  );
+  const markers = [...masked.matchAll(markerPattern)];
+  if (markers.length !== 1) return null;
+  const markerMatch = markers[0];
+  const markerValue = markerMatch?.[1];
+  const markerStart = markerMatch?.index;
+  if (
+    markerMatch === undefined ||
+    markerValue?.toUpperCase() !== 'S' ||
+    markerStart === undefined
+  ) {
+    return null;
+  }
+
+  const beforeMarker = masked.slice(0, markerStart).replace(/\s+$/u, '');
+  const paragraph = beforeMarker.split(/\n\s*\n/u).at(-1) ?? '';
+  const paragraphStart = beforeMarker.length - paragraph.length;
+  const visiblePattern = /_Effort:\s*([A-Za-z]+)/gu;
+  const visibleMatches = [...paragraph.matchAll(visiblePattern)];
+  if (
+    visibleMatches.length !== 1 ||
+    visibleMatches[0]?.[1]?.toUpperCase() !== 'S'
+  ) {
+    return null;
+  }
+  const visibleMatch = visibleMatches[0];
+  const visibleToken = visibleMatch?.[1];
+  const visibleMatchStart = visibleMatch?.index;
+  if (
+    visibleMatch === undefined ||
+    visibleToken === undefined ||
+    visibleMatchStart === undefined
+  ) {
+    return null;
+  }
+  const visibleStart =
+    paragraphStart +
+    visibleMatchStart +
+    visibleMatch[0].lastIndexOf(visibleToken);
+  const markerTokenStart =
+    markerStart + markerMatch[0].lastIndexOf(markerValue);
+  const visibleRawStart = rawOffsetForNormalizedIndex(body, visibleStart);
+  const markerRawStart = rawOffsetForNormalizedIndex(body, markerTokenStart);
+  if (
+    body
+      .slice(visibleRawStart, visibleRawStart + visibleToken.length)
+      .toUpperCase() !== 'S' ||
+    body
+      .slice(markerRawStart, markerRawStart + markerValue.length)
+      .toUpperCase() !== 'S'
+  ) {
+    return null;
+  }
+  return {
+    visible: {
+      start: visibleRawStart,
+      end: visibleRawStart + visibleToken.length,
+    },
+    marker: { start: markerRawStart, end: markerRawStart + markerValue.length },
+  };
+}
+
+function correctEffortSTokens(
+  body: string,
+  ranges: { visible: EffortTokenRange; marker: EffortTokenRange },
+): string | null {
+  const replacements = [ranges.visible, ranges.marker].sort(
+    (left, right) => right.start - left.start,
+  );
+  let corrected = body;
+  for (const range of replacements) {
+    if (corrected.slice(range.start, range.end).toUpperCase() !== 'S') {
+      return null;
+    }
+    corrected = `${corrected.slice(0, range.start)}M${corrected.slice(range.end)}`;
+  }
+  return corrected;
+}
+
+function scopeAuditEvidence(
+  audit: AuditVerdict & { ok: true },
+): ScopeAuditEvidence {
+  return {
+    result: audit.result,
+    detail: audit.detail,
+    visibleLineAgreement: audit.visibleLineAgreement,
+  };
+}
+
+function makeScopeAssessment(input: {
+  body: string;
+  estimatedEffort: EffortHint | null;
+  effectiveEffort: EffortHint | null;
+  correctionApplied: boolean;
+  paths: readonly string[];
+  auditParsedPathCount: number;
+  originalBody: AuditVerdict & { ok: true };
+  originalCanonical: AuditVerdict & { ok: true };
+  correctedBody?: AuditVerdict & { ok: true };
+  correctedCanonical?: AuditVerdict & { ok: true };
+}): ClaimedPushScopeAssessment {
+  const evidence = {
+    originalBodySha256: createHash('sha256')
+      .update(input.body, 'utf8')
+      .digest('hex'),
+    estimatedEffort: input.estimatedEffort,
+    effectiveEffort: input.effectiveEffort,
+    correctionApplied: input.correctionApplied,
+    canonicalChangedPaths: [...input.paths],
+    actualCanonicalPathCount: input.paths.length,
+    auditParsedPathCount: input.auditParsedPathCount,
+    originalIssueBodyAudit: scopeAuditEvidence(input.originalBody),
+    originalCanonicalPathsAudit: scopeAuditEvidence(input.originalCanonical),
+    ...(input.correctedBody === undefined
+      ? {}
+      : { correctedIssueBodyAudit: scopeAuditEvidence(input.correctedBody) }),
+    ...(input.correctedCanonical === undefined
+      ? {}
+      : {
+          correctedCanonicalPathsAudit: scopeAuditEvidence(
+            input.correctedCanonical,
+          ),
+        }),
+  };
+  return {
+    ...evidence,
+    assessmentSha256: createHash('sha256')
+      .update(JSON.stringify(evidence), 'utf8')
+      .digest('hex'),
+  };
+}
+
+function assessmentGuard(
+  ctx: Context,
+  assessment: ClaimedPushScopeAssessment,
+): StepOutcome | null {
+  const expected = ctx.input.expectedScopeSha256 ?? null;
+  if (expected !== null && expected !== assessment.assessmentSha256) {
+    return failed(
+      `the scope assessment changed: expected ${expected}, read ${assessment.assessmentSha256}`,
+      NEXT_ACTION.scopeAssessmentChanged,
+      0,
+    );
+  }
+  if (ctx.input.apply && assessment.correctionApplied && expected === null) {
+    return failed(
+      'apply of a corrected S-to-M assessment requires --expected-scope-sha256 from the verified report',
+      NEXT_ACTION.scopeAssessmentChanged,
+      0,
+    );
+  }
+  return null;
 }
 
 /**
@@ -1293,13 +1605,39 @@ function stepScope(ctx: Context): StepOutcome {
   if (!scoped.ok) {
     return scoped.failure;
   }
-  if (original.result === 'pass' && scoped.result === 'pass') {
+  const effort = parseEffortMarker(body, markerPrefix);
+  const estimatedEffort =
+    effort.present && !effort.malformed ? effort.value : null;
+  const originalVisibleLineMismatch =
+    estimatedEffort === 'S' &&
+    (hasExplicitEffortMismatch(body, markerPrefix, original, estimatedEffort) ||
+      hasExplicitEffortMismatch(copy, markerPrefix, scoped, estimatedEffort));
+  const originalsPass =
+    original.result === 'pass' &&
+    scoped.result === 'pass' &&
+    !originalVisibleLineMismatch;
+  if (originalsPass) {
+    const assessment = makeScopeAssessment({
+      body,
+      estimatedEffort,
+      effectiveEffort: estimatedEffort,
+      correctionApplied: false,
+      paths,
+      auditParsedPathCount: sectionKeys.length,
+      originalBody: original,
+      originalCanonical: scoped,
+    });
+    ctx.scopeAssessment = assessment;
+    const guard = assessmentGuard(ctx, assessment);
+    if (guard !== null) return { ...guard, assessment };
     return {
       status: 'passed',
       exitStatus: 0,
       reason: `${EFFORT_FINDING_ID} passes on the issue body (${original.detail}) and with the canonical paths (${scoped.detail}); ${counted}`,
+      assessment,
     };
   }
+
   const parts = [
     ...(original.result === 'fail'
       ? [`${EFFORT_FINDING_ID} fails on the issue body: ${original.detail}`]
@@ -1309,13 +1647,115 @@ function stepScope(ctx: Context): StepOutcome {
           `${EFFORT_FINDING_ID} fails with the canonical paths: ${scoped.detail}`,
         ]
       : []),
-    counted,
+    ...(originalVisibleLineMismatch
+      ? [
+          `effort-visible-line-agreement fails (issue body: ${original.visibleLineAgreement}; canonical paths: ${scoped.visibleLineAgreement})`,
+        ]
+      : []),
   ];
-  return failed(
-    parts.join('; '),
-    NEXT_ACTION.scopeOverrun,
-    original.result === 'fail' ? original.exitStatus : scoped.exitStatus,
-  );
+  const ranges =
+    estimatedEffort === 'S' &&
+    original.visibleLineAgreement === 'pass' &&
+    scoped.visibleLineAgreement === 'pass'
+      ? locateEffortSTokens(body, markerPrefix)
+      : null;
+  const correctedBody =
+    ranges === null ? null : correctEffortSTokens(body, ranges);
+  if (correctedBody !== null) {
+    const correctedCanonicalBody = `${section}${correctedBody}`;
+    const corrected = runAudit(
+      ctx,
+      'the corrected M issue body',
+      correctedBody,
+      markerPrefix,
+      title,
+    );
+    if (!corrected.ok) return corrected.failure;
+    const correctedScoped = runAudit(
+      ctx,
+      'the corrected M body with the canonical paths',
+      correctedCanonicalBody,
+      markerPrefix,
+      title,
+    );
+    if (!correctedScoped.ok) return correctedScoped.failure;
+    const actualWithinM = paths.length <= EFFORT_CANDIDATE_FILE_LIMITS.M;
+    const correctedPass =
+      corrected.result === 'pass' &&
+      correctedScoped.result === 'pass' &&
+      corrected.visibleLineAgreement === 'pass' &&
+      correctedScoped.visibleLineAgreement === 'pass';
+    const correctionApplied = correctedPass && actualWithinM;
+    const assessment = makeScopeAssessment({
+      body,
+      estimatedEffort,
+      effectiveEffort: correctionApplied ? 'M' : estimatedEffort,
+      correctionApplied,
+      paths,
+      auditParsedPathCount: sectionKeys.length,
+      originalBody: original,
+      originalCanonical: scoped,
+      correctedBody: corrected,
+      correctedCanonical: correctedScoped,
+    });
+    ctx.scopeAssessment = assessment;
+    if (correctedPass && actualWithinM) {
+      const guard = assessmentGuard(ctx, assessment);
+      if (guard !== null) return { ...guard, assessment };
+      return {
+        status: 'passed',
+        exitStatus: 0,
+        reason: `the coherent S estimate was reassessed as M: ${corrected.detail}; ${correctedScoped.detail}; ${counted}; the actual canonical path count is within the M maximum of ${EFFORT_CANDIDATE_FILE_LIMITS.M}; assessment ${assessment.assessmentSha256}`,
+        assessment,
+      };
+    }
+    if (!actualWithinM) {
+      parts.push(
+        `the actual canonical path count ${paths.length} exceeds the M maximum of ${EFFORT_CANDIDATE_FILE_LIMITS.M}`,
+      );
+    }
+    if (!correctedPass) {
+      parts.push(
+        `the M correction audits did not both pass with visible-line agreement (body: ${corrected.result}/${corrected.visibleLineAgreement}; canonical paths: ${correctedScoped.result}/${correctedScoped.visibleLineAgreement})`,
+      );
+    }
+    parts.push(counted);
+    const refusal = failed(
+      parts.join('; '),
+      NEXT_ACTION.scopeOverrun,
+      original.result === 'fail' ? original.exitStatus : scoped.exitStatus,
+    );
+    return { ...refusal, assessment };
+  }
+
+  const assessment = makeScopeAssessment({
+    body,
+    estimatedEffort,
+    effectiveEffort: estimatedEffort,
+    correctionApplied: false,
+    paths,
+    auditParsedPathCount: sectionKeys.length,
+    originalBody: original,
+    originalCanonical: scoped,
+  });
+  ctx.scopeAssessment = assessment;
+  parts.push(counted);
+  const limitFailure =
+    original.result === 'fail'
+      ? original
+      : scoped.result === 'fail'
+        ? scoped
+        : null;
+  return {
+    ...failed(
+      parts.join('; '),
+      limitFailure === null
+        ? NEXT_ACTION.stopAndReport
+        : NEXT_ACTION.scopeOverrun,
+      limitFailure?.exitStatus ?? scoped.exitStatus,
+    ),
+    assessment,
+  };
 }
 
 /** A failed outcome when the tree is dirty or unreadable, else null. */
@@ -1468,6 +1908,27 @@ function stepReassert(ctx: Context): StepOutcome {
       0,
     );
   }
+  const originalAssessment = ctx.scopeAssessment;
+  if (originalAssessment?.correctionApplied) {
+    const currentScope = stepScope(ctx);
+    if (currentScope.status !== 'passed') {
+      return failed(
+        `the corrected scope changed or could not be revalidated before push: ${currentScope.reason}`,
+        currentScope.nextAction ?? NEXT_ACTION.scopeAssessmentChanged,
+        currentScope.exitStatus,
+      );
+    }
+    if (
+      ctx.scopeAssessment?.assessmentSha256 !==
+      originalAssessment.assessmentSha256
+    ) {
+      return failed(
+        `the corrected scope assessment changed before push: expected ${originalAssessment.assessmentSha256}, read ${ctx.scopeAssessment?.assessmentSha256 ?? 'none'}`,
+        NEXT_ACTION.scopeAssessmentChanged,
+        0,
+      );
+    }
+  }
   return {
     ...outcome,
     reason: `${outcome.reason}; HEAD and the branch tip are still ${sha}`,
@@ -1572,6 +2033,7 @@ export function runClaimedPush(
     pushed: false,
     pushedSha: null,
     pushMessage: null,
+    scopeAssessment: null,
   };
   const steps: ClaimedPushStep[] = [];
   let failedStep: ClaimedPushStepId | null = null;
@@ -1983,6 +2445,7 @@ export function parseArgs(argv: string[]): {
   claimId: string | null;
   agentId: string | null;
   nonce: string | null;
+  expectedScopeSha256: string | null;
   apply: boolean;
 } {
   const { values, help } = parseCliArgs(argv, CLAIMED_PUSH_FLAG_SPEC);
@@ -1994,6 +2457,7 @@ export function parseArgs(argv: string[]): {
       claimId: null,
       agentId: null,
       nonce: null,
+      expectedScopeSha256: null,
       apply,
     };
   }
@@ -2007,27 +2471,43 @@ export function parseArgs(argv: string[]): {
   if (nonceValue !== undefined && nonceValue.trim() === '') {
     throw markCliUsageError(new Error('--nonce must not be empty'));
   }
+  const expectedScopeSha256Value = values['expected-scope-sha256'] as
+    | string
+    | undefined;
+  if (
+    expectedScopeSha256Value !== undefined &&
+    !/^[0-9a-f]{64}$/iu.test(expectedScopeSha256Value.trim())
+  ) {
+    throw markCliUsageError(
+      new Error(
+        '--expected-scope-sha256 must be a 64-character SHA-256 hex value',
+      ),
+    );
+  }
   return {
     help,
     issue,
     claimId,
     agentId,
     nonce: nonceValue?.trim() ?? null,
+    expectedScopeSha256: expectedScopeSha256Value?.trim().toLowerCase() ?? null,
     apply,
   };
 }
 
 function printUsage(stdout: { write: (text: string) => unknown }): void {
   stdout.write(
-    `Usage:\n  node scripts/claimed-push.mjs --issue <n> --claim-id <id> --agent-id <id> [--nonce <nonce>] [--apply]\n\n` +
+    `Usage:\n  node scripts/claimed-push.mjs --issue <n> --claim-id <id> --agent-id <id> [--nonce <nonce>] [--expected-scope-sha256 <sha256>] [--apply]\n\n` +
       'Pushes the claimed branch to origin only after the claim, the worktree\n' +
       'location, the scope check, and the configured pre-push gate have passed\n' +
       'in order, then re-checks the claim and the gated commit just before the\n' +
       'push. The six steps are assert, location, scope, gate, reassert, and\n' +
       'push. The scope step runs audit-authored-issue on the issue body and on\n' +
       'a copy whose leading ## Candidate files section lists the paths the\n' +
-      'branch changed since its branch point, and fails when either\n' +
-      'effort-candidate-file-limit finding fails.\n' +
+      'branch changed since its branch point. A coherent S-to-M correction\n' +
+      'includes structured evidence in the scope step; apply requires its\n' +
+      '--expected-scope-sha256 and rechecks that assessment before push.\n' +
+      'Other effort-candidate-file-limit failures stop before the gate.\n' +
       'Dry-run is the default: it runs the claim assert, the location check,\n' +
       'and the scope check, skips the gate, the second assert, and the push,\n' +
       'and exits 0 when all three pass. --apply runs all six steps and pushes\n' +
@@ -2067,6 +2547,7 @@ export function runCli(
       claimId: args.claimId,
       agentId: args.agentId,
       nonce: args.nonce,
+      expectedScopeSha256: args.expectedScopeSha256,
       apply: args.apply,
       cwd: options.cwd ?? process.cwd(),
     },

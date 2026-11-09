@@ -1003,6 +1003,20 @@ files, at the cost of one extra lookup.
 
 ### B3 — Scope overrun returns to authoring
 
+The S-to-M correction route uses the same scope assessment but has a separate
+publication sequence. Review of issue `kurone-kito/idd-skill#5092` and
+[PR #5113](https://github.com/kurone-kito/idd-skill/pull/5113)
+(finding `#discussion_r4507032443`) on 2026-11-08 found that the verified B3
+report route ended with
+`claimed-push --apply`. That helper runs the pre-push gate and publishes the
+branch, so calling it at B3 can publish before C self-review and D1
+synchronization. The review caught this before anyone used that route; no
+premature publication occurred. Keep B3 read-only after reporting, retain the
+verified assessment SHA through C and D1, and pass it to the normal D2 apply
+with `--expected-scope-sha256`.
+If D2 finds a changed assessment, return to B3, reassess and report, then
+repeat C and D1 before another D2 attempt.
+
 A work session that found the issue's real scope larger than its effort
 estimate used to stop and ask a human what to do. The work phase said
 what to do with a follow-up, but not with an overrun of the claimed
@@ -1098,6 +1112,44 @@ This route is its work-phase counterpart (kurone-kito/idd-skill#4138).
 - **Known gap.** Without the companion, nothing marks the released
   issue, so Discover can select it again before the next triage reads
   the overrun comment, and the next session can overrun again.
+
+**Reassess a coherent S estimate without editing the issue body.**
+
+The original count-only route could reject useful in-flight work even
+when an S estimate was merely low by one or two files. Editing the issue
+body to M would make the existing audit pass, but review of PR
+`kurone-kito/idd-skill#5086` identified a race: a body update could overwrite
+concurrent authoring changes
+([discussion](https://github.com/kurone-kito/idd-skill/pull/5086#discussion_r4501769570)).
+Issue `kurone-kito/idd-skill#5092` keeps the issue body as the
+authoring-time record and makes one shared helper assessment serve
+dry-run and apply.
+
+The correction is narrow. It starts only when either original S limit
+audit fails and the existing parser and visible-line agreement audit
+prove one coherent visible and hidden S footer after the existing
+Markdown masking. The helper locates both UTF-16 tokens in the
+normalized scan, maps them to raw-body offsets, and changes only those
+two tokens in an in-memory M copy. It requires both M audits to pass and
+independently caps actual canonical paths at eight, because the audit
+parser may omit a root path or one containing whitespace. Duplicate,
+masked-only, malformed, mismatched or ambiguous evidence keeps the
+existing route from issue
+`kurone-kito/idd-skill#4138`; so do M failures and more than eight
+actual paths. This preserves the authoring threshold from
+`kurone-kito/idd-skill#4130` and the overrun route's incident history
+in `kurone-kito/idd-skill#4064` and `kurone-kito/idd-skill#3824`.
+
+The assessment records the raw issue-body SHA-256, original and
+effective estimates, both canonical path counts, original audit results,
+and corrected M results. B3 reports that evidence in a uniquely
+identified comment with the standard `idd-agent-authored` suffix. The
+agent verifies the returned comment ID, author and exact body before
+continuing. It then passes the assessment SHA to apply; the helper
+recomputes scope before the gate and again before push, refusing any
+change. The SHA is a freshness guard, not a saved permission: every
+apply and resumed session performs the full assessment under its own
+current claim. No issue-body write or rollback is part of this route.
 
 ### C1 — Search sibling code for the same defect shape before closing
 

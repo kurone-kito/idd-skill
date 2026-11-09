@@ -124,7 +124,9 @@ the profile-selected `claimed-push` helper
 ([Claimed push](../../docs/idd-helper-scripts.md#claimed-push-kurone-kitoidd-skill4375)),
 started from the claimed worktree with
 `--issue {issue-number} --claim-id {claim-id} --agent-id {agent-id}
-[--nonce {nonce}] --apply`. Pass this session's persisted `{agent-id}`;
+[--nonce {nonce}] [--expected-scope-sha256 {assessment-sha256}] --apply`. When B3
+recorded an S-to-M correction, pass its verified assessment SHA so the helper
+refuses a changed scope. Pass this session's persisted `{agent-id}`;
 omitting it makes the assertion fail closed for a session-qualified claim
 (issue `#5000`).
 `--apply` runs the claim assert, the location check, the `scope` check,
