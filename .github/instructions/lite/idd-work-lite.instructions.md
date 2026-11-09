@@ -298,11 +298,13 @@ base owner/repo/ref; otherwise use the issue repo and live default branch.
 Pass explicit `--owner <owner> --repo <repo>` to
 `idd-effective-config --trusted-auto-decide`; add `--base-ref <base>` only for
 PRs. Require `status: readable`; the helper validates that ref's schema, and
-its auto-decide verdict does not govern split. Resolve the base ref once to a
-commit SHA (`<policy-sha>`) and run the check and every read at it. Save the
-decoded `.github/idd/config.json` at `<policy-sha>` as `<target-policy>`. Read
-the split settings, parent label (`issueAuthoring.authoringLabelName`, default
-`status:authoring`), and `markerPrefix` from this snapshot. Pass
+its auto-decide verdict does not govern split. The helper validates only the
+live base branch, so read the base head commit (`<policy-sha>`), run the check,
+read it again, and continue only when both are equal. Save the decoded
+`.github/idd/config.json` at `<policy-sha>` as `<target-policy>`, or use the
+existing route when they differ. Read the split settings, parent label
+(`issueAuthoring.authoringLabelName`, default `status:authoring`), and
+`markerPrefix` from this snapshot. Pass
 `--owner <owner> --repo <repo> --policy <target-policy>
 --marker-prefix <target-markerPrefix>` to every publisher call. Require
 `enabled: true`; missing `maxCandidateFiles` defaults to `8`; absent,

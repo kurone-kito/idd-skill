@@ -492,13 +492,15 @@ base owner/repo/ref; otherwise use the issue repo and live default branch.
 Pass explicit `--owner <owner> --repo <repo>` to
 `idd-effective-config --trusted-auto-decide`; add `--base-ref <base>` only
 for a PR. Require `status: readable`; never let checkout `origin` choose
-policy. Resolve the base ref once to a commit SHA (`<policy-sha>`) and run the
-check and every later read at that SHA, never at the branch name again. Then
-read `standingApprovals.split.enabled` and
+policy. The helper validates only the live base branch and has no exact-ref
+mode. Read the base head commit (`<policy-sha>`), run the check, then read the
+base head commit again, and continue only when both SHAs are equal. Then read
+`standingApprovals.split.enabled` and
 `standingApprovals.split.maxCandidateFiles` from `.github/idd/config.json` at
 `<policy-sha>` through GitHub Contents. Save its decoded contents as
-`<target-policy>`; the helper validates that ref's schema, but its auto-decide
-verdict does not govern split. Read the parent authoring label
+`<target-policy>`; use the existing route when the two SHAs differ. The helper
+validates that policy's schema, but its auto-decide verdict does not govern
+split. Read the parent authoring label
 (`issueAuthoring.authoringLabelName`, default `status:authoring`) and
 `markerPrefix` from this snapshot. Pass
 `--owner <target-owner> --repo <target-repo> --policy <target-policy>

@@ -788,9 +788,10 @@ during review on 2026-11-08 in PR
 [#5031](https://github.com/kurone-kito/idd-skill/pull/5031). Require
 `idd-effective-config` with `--trusted-auto-decide` to report
 `status: readable`. For PRs, pass `--base-ref <base>`; omit it otherwise.
-Resolve the base ref once to a commit SHA (`<policy-sha>`), run the check and
-every read at that SHA, and save the decoded `.github/idd/config.json` at
-`<policy-sha>` as `<target-policy>`;
+The helper validates only the live base branch, so read the base head commit
+(`<policy-sha>`), run the check, read the base head commit again, and continue
+only when both are equal. Save the decoded `.github/idd/config.json` at
+`<policy-sha>` as `<target-policy>`, or use the existing route when they differ;
 the helper validates its schema, but its auto-decide verdict does not govern
 split. Use this snapshot for split settings, the parent authoring label, and
 `markerPrefix`. Pass the resolved `--owner`, `--repo`,
