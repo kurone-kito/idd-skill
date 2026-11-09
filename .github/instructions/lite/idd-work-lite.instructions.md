@@ -380,8 +380,11 @@ idd-publish-authoring-hold --shape orphan \
 ```
 
 Verify each child is held and append/read back its parent mapping before the
-next. If that POST is uncertain, proceed only when all parent comments show one
-matching mapping; otherwise keep the hold and stop. Any refusal, failure,
+next. A mapping is one parent comment that names the child's exact
+`<owner>/<repo>#<number>` and the current claim ID, and only a trusted actor's
+comment counts. If that POST is uncertain, page all parent comments and proceed
+only when each child has exactly one such mapping; otherwise keep the hold and
+stop. Any refusal, failure,
 recovery hold, or unknown result stops publication, even if a matching child is
 found. Do not publish another child, retry, post the record, or release the
 parent. Keep proposal, claim/label, and published children held; inspect the
