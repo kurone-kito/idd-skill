@@ -367,7 +367,7 @@
       "files": [
         ".github/instructions/idd-work.instructions.md"
       ],
-      "limitBytes": 41400
+      "limitBytes": 40200
     },
     {
       "id": "bundle-work-lite",
@@ -553,9 +553,9 @@
       },
       {
         "bundle": "bundle-work-phase",
-        "limitBytes": 41400,
+        "limitBytes": 40200,
         "issue": 4893,
-        "reason": "Operator chose to raise this limit before the split route lands on main (PR #5031, issue #4893). The trial budget check measures a raise only after it is on the base. The branch of issue #4893 projects 37,706 bytes for this bundle with the generated banner removed, measured on 2026-11-10. 41,400 is the floor of the issue-authorized 10% permit for that total, rounded down to the nearest 100. Main measures 28,344 bytes, so the new ceiling leaves room for the split route to land."
+        "reason": "Operator chose to raise this limit before the split route lands on main (PR #5031, issue #4893), so the trial budget check can measure the raise on the base. Re-measured after merging main on 2026-11-10: 36,576 bytes with the generated banner removed. 40,200 is the floor of the issue-authorized 10% permit for that total."
       }
     ],
     "standingRaiseApprovals": [
@@ -563,9 +563,9 @@
         "bundle": "bundle-work-phase",
         "standingClass": "budgetRaise",
         "ceilingPct": 10,
-        "limitBytes": 41400,
+        "limitBytes": 40200,
         "issue": 4893,
-        "reason": "Re-measured after the split-policy pinning fix (PR #5031 takeover, 2026-11-10): 37,706 bytes with the generated banner removed. The issue-authorized 10% standing raise permits up to 41,476 bytes, so the limit is set to 41,400, the floor of that permit to the nearest 100. This replaces the earlier 38,400 limit."
+        "reason": "Re-measured after merging main on 2026-11-10: 36,576 bytes with the generated banner removed. The issue-authorized 10% standing raise permits up to 40,200 bytes (floor of 36,576 times 1.1 to the nearest 100), so the limit is set to that bound. This replaces the earlier 38,400 and 41,400 limits."
       },
       {
         "bundle": "bundle-work-lite",
