@@ -41,6 +41,7 @@ import {
   mentionsIssue,
   normalizeStatusCheckRollupEntry,
   parseArgs,
+  readRepositoryContentAtRef,
   readScopeOverrunMergeBaseForRepo,
   readScopeOverrunMergeBaseSha,
   renderCliUsageError,
@@ -287,10 +288,63 @@ test('scope-overrun merge base refuses a target repository that the checkout ori
   );
 });
 
+test('scope-overrun base reads treat a directory or submodule entry as absent, and fail closed on the sync manifest', () => {
+  const portWith = (value: unknown) =>
+    ({ getRepositoryContentAtRef: () => value }) as unknown as ProviderPort;
+  assert.deepEqual(
+    readRepositoryContentAtRef(
+      portWith([{ type: 'file' }]),
+      'o',
+      'r',
+      'src',
+      'b',
+    ),
+    { outcome: 'not-found' },
+  );
+  assert.deepEqual(
+    readRepositoryContentAtRef(
+      portWith({ type: 'submodule', sha: 'c'.repeat(40) }),
+      'o',
+      'r',
+      'vendor/lib',
+      'b',
+    ),
+    { outcome: 'not-found' },
+  );
+  assert.deepEqual(
+    readRepositoryContentAtRef(
+      portWith({ type: 'file', content: 'YQ==' }),
+      'o',
+      'r',
+      'src/a.mts',
+      'b',
+    ),
+    { outcome: 'ok', value: 'YQ==' },
+  );
+  assert.throws(
+    () =>
+      readRepositoryContentAtRef(
+        portWith([{ type: 'file' }]),
+        'o',
+        'r',
+        'audit/sync-manifest.json',
+        'b',
+      ),
+    /malformed repository content/u,
+  );
+});
+
 test('scope-overrun merge-base uses the PR base ref and fails closed on missing refs', () => {
   const workingDirectory = mkdtempSync(
     join(tmpdir(), 'idd-scope-overrun-merge-base-'),
   );
+  // An inherited GIT_DIR (set under a hook, for example) would point the
+  // fixture commands and the reader at the real checkout. Drop GIT_* for this
+  // test only, and restore it in the finally block.
+  const inheritedGitEnv = Object.fromEntries(
+    Object.entries(process.env).filter(([key]) => key.startsWith('GIT_')),
+  );
+  for (const key of Object.keys(inheritedGitEnv)) delete process.env[key];
   try {
     const git = (args: string[]) =>
       execFileSync('git', args, { cwd: workingDirectory });
@@ -317,6 +371,7 @@ test('scope-overrun merge-base uses the PR base ref and fails closed on missing 
       /scope-overrun audit cannot resolve the PR merge base/u,
     );
   } finally {
+    Object.assign(process.env, inheritedGitEnv);
     rmSync(workingDirectory, { recursive: true, force: true });
   }
 });

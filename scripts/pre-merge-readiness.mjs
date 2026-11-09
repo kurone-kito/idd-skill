@@ -445,10 +445,23 @@ export function readScopeOverrunMergeBaseSha(
     );
   }
 }
-function readRepositoryContentAtRef(port, owner, repo, path, ref) {
+export function readRepositoryContentAtRef(port, owner, repo, path, ref) {
   const encodedPath = path.split('/').map(encodeURIComponent).join('/');
   const result = port.getRepositoryContentAtRef(owner, repo, encodedPath, ref);
   if (result === null) return { outcome: 'not-found' };
+  // A directory listing or a submodule/symlink entry has no file content.
+  // Treat it as absent at the base, so the changed path becomes a candidate
+  // instead of aborting readiness. The sync manifest stays fail-closed.
+  if (
+    path !== 'audit/sync-manifest.json' &&
+    (Array.isArray(result) ||
+      (typeof result === 'object' &&
+        result !== null &&
+        typeof result.type === 'string' &&
+        result.type !== 'file'))
+  ) {
+    return { outcome: 'not-found' };
+  }
   if (
     typeof result !== 'object' ||
     result === null ||
