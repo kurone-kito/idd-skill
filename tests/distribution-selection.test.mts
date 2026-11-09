@@ -35,6 +35,7 @@ interface Fixture {
     label: string,
     instructionPath?: string,
     instructionsContent?: string,
+    dispatcherTemplate?: string,
   ): void;
   installCurrent(
     commit: string,
@@ -42,6 +43,7 @@ interface Fixture {
     label: string,
     instructionPath?: string,
     instructionsContent?: string,
+    dispatcherTemplate?: string,
   ): void;
   pin(packageSpec: string): void;
 }
@@ -65,6 +67,21 @@ function listingDigest(files: Array<{ path: string; sha256: string }>): string {
     .map((file) => `${file.sha256} ${file.path}\n`)
     .join('');
   return `sha256:${sha256(listing)}`;
+}
+
+function expectedDispatcher(
+  source: Buffer,
+  template: string,
+  bundleDigest: string,
+): Buffer {
+  const text = source.toString('utf8');
+  const frontmatter = /^\uFEFF?---\r?\n(?:[\s\S]*?\r?\n)?---\r?\n/u.exec(
+    text,
+  )?.[0];
+  assert.ok(frontmatter, 'fixture skill has frontmatter');
+  return Buffer.from(
+    `${frontmatter}\n${template.trim()}\n\n<!-- idd-skill-bundle: ${bundleDigest} -->\n`,
+  );
 }
 
 function makeFixture(): Fixture {
@@ -117,47 +134,63 @@ function makeFixture(): Fixture {
     label: string,
     instructionPath = 'user-global/entry.md',
     instructionsContent = `entry ${label}\n`,
+    dispatcherTemplate?: string,
   ) => {
-    const instructionsBytes = Buffer.from(instructionsContent);
-    const issueAuthoringBytes = Buffer.from(`authoring ${label}\n`);
-    const specAuditBytes = Buffer.from(`audit ${label}\n`);
+    const instructionFiles = [
+      { path: instructionPath, bytes: Buffer.from(instructionsContent) },
+    ];
+    if (dispatcherTemplate !== undefined) {
+      instructionFiles.push({
+        path: 'user-global/skill-entry.md',
+        bytes: Buffer.from(dispatcherTemplate),
+      });
+    }
+    const issueAuthoringBytes = Buffer.from(
+      dispatcherTemplate === undefined
+        ? `authoring ${label}\n`
+        : `---\nname: issue-authoring\ndescription: Authoring ${label}.\n---\n\n# Authoring ${label}\n`,
+    );
+    const specAuditBytes = Buffer.from(
+      dispatcherTemplate === undefined
+        ? `audit ${label}\n`
+        : `---\nname: idd-spec-audit\ndescription: Audit ${label}.\n---\n\n# Audit ${label}\n`,
+    );
     const helperBytes = Buffer.from(`helper ${label}\n`);
     const component = (
-      path: string,
-      bytes: Buffer,
+      files: Array<{ path: string; bytes: Buffer }>,
       location: string,
     ): Record<string, unknown> => {
-      const files = [{ path, sha256: sha256(bytes) }];
+      const listedFiles = files.map(({ path, bytes }) => ({
+        path,
+        sha256: sha256(bytes),
+      }));
       return {
         location,
         provenance: { kind: 'checkout', commit },
-        files,
-        digest: listingDigest(files),
+        files: listedFiles,
+        digest: listingDigest(listedFiles),
       };
     };
     return {
-      instructionsBytes,
+      instructionFiles,
       instructionPath,
       issueAuthoringBytes,
       specAuditBytes,
       helperBytes,
       components: {
         instructions: component(
-          instructionPath,
-          instructionsBytes,
+          instructionFiles,
           `https://github.com/acme/app/tree/${commit}/idd-template`,
         ),
         skillBundles: {
           'issue-authoring': component(
-            'SKILL.md',
-            issueAuthoringBytes,
+            [{ path: 'SKILL.md', bytes: issueAuthoringBytes }],
             'https://github.com/acme/app/tree/' +
               commit +
               '/skills/issue-authoring',
           ),
           'idd-spec-audit': component(
-            'SKILL.md',
-            specAuditBytes,
+            [{ path: 'SKILL.md', bytes: specAuditBytes }],
             'https://github.com/acme/app/tree/' +
               commit +
               '/skills/idd-spec-audit',
@@ -165,8 +198,7 @@ function makeFixture(): Fixture {
         },
         helper: {
           ...component(
-            'scripts/tool.mjs',
-            helperBytes,
+            [{ path: 'scripts/tool.mjs', bytes: helperBytes }],
             `https://github.com/acme/app/tree/${commit}`,
           ),
           invocation: { command: 'scripts/tool.mjs', argv: [] },
@@ -185,12 +217,19 @@ function makeFixture(): Fixture {
     options(sessionId = 'session-one') {
       return { cwd: repo, sessionId, env, runtimeRoot };
     },
-    addPreparedSet(commit, label, instructionPath, instructionsContent) {
+    addPreparedSet(
+      commit,
+      label,
+      instructionPath,
+      instructionsContent,
+      dispatcherTemplate,
+    ) {
       const set = sourceComponents(
         commit,
         label,
         instructionPath,
         instructionsContent,
+        dispatcherTemplate,
       );
       const setRoot = join(preparedRoot, commit);
       const instructionsRoot = join(setRoot, 'idd-template');
@@ -208,17 +247,15 @@ function makeFixture(): Fixture {
         helperRoot,
       ])
         addDirectory(path);
-      const instructionParts = dirname(set.instructionPath).split('/');
-      let instructionDirectory = instructionsRoot;
-      for (const part of instructionParts) {
-        if (part === '.') continue;
-        instructionDirectory = join(instructionDirectory, part);
-        addDirectory(instructionDirectory);
+      for (const file of set.instructionFiles) {
+        let instructionDirectory = instructionsRoot;
+        for (const part of dirname(file.path).split('/')) {
+          if (part === '.') continue;
+          instructionDirectory = join(instructionDirectory, part);
+          addDirectory(instructionDirectory);
+        }
+        addFile(join(instructionsRoot, file.path), file.bytes);
       }
-      addFile(
-        join(instructionsRoot, set.instructionPath),
-        set.instructionsBytes,
-      );
       addFile(join(issueAuthoringRoot, 'SKILL.md'), set.issueAuthoringBytes);
       addFile(join(specAuditRoot, 'SKILL.md'), set.specAuditBytes);
       addFile(join(helperRoot, 'tool.mjs'), set.helperBytes);
@@ -239,22 +276,33 @@ function makeFixture(): Fixture {
       label,
       instructionPath,
       instructionsContent,
+      dispatcherTemplate,
     ) {
       const set = sourceComponents(
         commit,
         label,
         instructionPath,
         instructionsContent,
+        dispatcherTemplate,
       );
       const versionRoot = join(dataRoot, version);
       addDirectory(versionRoot);
-      const payloadFile = join(versionRoot, set.instructionPath);
-      addFile(payloadFile, set.instructionsBytes);
-      for (const name of ['issue-authoring', 'idd-spec-audit']) {
-        const bytes =
+      for (const file of set.instructionFiles)
+        addFile(join(versionRoot, file.path), file.bytes);
+      for (const name of ['issue-authoring', 'idd-spec-audit'] as const) {
+        const sourceBytes =
           name === 'issue-authoring'
             ? set.issueAuthoringBytes
             : set.specAuditBytes;
+        const bundle = set.components.skillBundles[name];
+        const bytes =
+          dispatcherTemplate === undefined
+            ? sourceBytes
+            : expectedDispatcher(
+                sourceBytes,
+                dispatcherTemplate,
+                String(bundle.digest),
+              );
         for (const parent of [
           join(home, '.claude', 'skills'),
           join(home, '.agents', 'skills'),
@@ -352,6 +400,76 @@ function corruptPreparedManifest(fixture: Fixture, commit: string): void {
   );
 }
 
+function preparedDispatcher(
+  fixture: Fixture,
+  commit: string,
+  name: 'issue-authoring' | 'idd-spec-audit',
+  template: string,
+): Buffer {
+  const manifestPath = join(fixture.preparedRoot, commit, 'manifest.json');
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as {
+    components: {
+      skillBundles: Record<string, { digest: string }>;
+    };
+  };
+  const skillPath = join(
+    fixture.preparedRoot,
+    commit,
+    'skills',
+    name,
+    'SKILL.md',
+  );
+  return expectedDispatcher(
+    fs.readFileSync(skillPath),
+    template,
+    manifest.components.skillBundles[name].digest,
+  );
+}
+
+function replacePreparedSkillBytes(
+  fixture: Fixture,
+  commit: string,
+  name: 'issue-authoring' | 'idd-spec-audit',
+  skillBytes: Buffer,
+): void {
+  const manifestPath = join(fixture.preparedRoot, commit, 'manifest.json');
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as {
+    components: {
+      skillBundles: Record<
+        string,
+        { files: Array<{ path: string; sha256: string }>; digest: string }
+      >;
+    };
+  };
+  const bundle = manifest.components.skillBundles[name];
+  const skillEntry = bundle.files.find((file) => file.path === 'SKILL.md');
+  assert.ok(skillEntry);
+  skillEntry.sha256 = sha256(skillBytes);
+  bundle.digest = listingDigest(bundle.files);
+  const skillPath = join(
+    fixture.preparedRoot,
+    commit,
+    'skills',
+    name,
+    'SKILL.md',
+  );
+  fs.writeFileSync(skillPath, skillBytes);
+  const manifestBytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`);
+  fs.writeFileSync(manifestPath, manifestBytes);
+  const receipt = readReceipt(fixture.dataRoot);
+  assert.equal(receipt.state, 'valid');
+  writeReceipt(
+    fixture.dataRoot,
+    receipt.receipt.entries.map((entry) => {
+      if (entry.path === skillPath)
+        return { ...entry, sha256: sha256(skillBytes) };
+      if (entry.path === manifestPath)
+        return { ...entry, sha256: sha256(manifestBytes) };
+      return entry;
+    }),
+  );
+}
+
 function bindingEntryPath(fixture: Fixture): string {
   const receipt = readReceipt(fixture.dataRoot);
   assert.equal(receipt.state, 'valid');
@@ -392,10 +510,64 @@ function rewriteBindingSelection(
   return path;
 }
 
+function preparedBundleDigest(fixture: Fixture, commit: string, name: string) {
+  const manifest = JSON.parse(
+    fs.readFileSync(
+      join(fixture.preparedRoot, commit, 'manifest.json'),
+      'utf8',
+    ),
+  ) as { components: { skillBundles: Record<string, { digest: string }> } };
+  return manifest.components.skillBundles[name].digest;
+}
+
+/**
+ * Render the bytes an accepting resolver would expect for `skillBytes`.
+ * Unlike expectedDispatcher, it never asserts. An input with no closing
+ * frontmatter delimiter has no frontmatter to keep, so the whole text stands
+ * in for it; such bytes are not a real rendering, and the extraction in the
+ * resolver refuses them.
+ */
+function permissiveDispatcher(
+  skillBytes: Buffer,
+  template: string,
+  bundleDigest: string,
+): Buffer {
+  const text = skillBytes.toString('utf8');
+  const frontmatter =
+    /^﻿?---\r?\n(?:[\s\S]*?\r?\n)?---\r?\n/u.exec(text)?.[0] ?? text;
+  return Buffer.from(
+    `${frontmatter}\n${template.trim()}\n\n<!-- idd-skill-bundle: ${bundleDigest} -->\n`,
+  );
+}
+
+/** Replace one installed SKILL.md and keep its receipt entry in step. */
+function replaceInstalledSkill(
+  fixture: Fixture,
+  skillPath: string,
+  bytes: Buffer,
+): void {
+  fs.writeFileSync(skillPath, bytes);
+  const receipt = readReceipt(fixture.dataRoot);
+  assert.equal(receipt.state, 'valid');
+  writeReceipt(
+    fixture.dataRoot,
+    receipt.receipt.entries.map((entry) =>
+      entry.path === skillPath ? { ...entry, sha256: sha256(bytes) } : entry,
+    ),
+  );
+}
+
+function globalSkillPaths(fixture: Fixture, name: string): string[] {
+  return [
+    join(fixture.home, '.claude', 'skills', name, 'SKILL.md'),
+    join(fixture.home, '.agents', 'skills', name, 'SKILL.md'),
+  ];
+}
+
 const COMMIT_A = 'a'.repeat(40);
 const COMMIT_B = 'b'.repeat(40);
 
-test('inspection selects one byte-verified global-current set without writing', () => {
+test('legacy global-current sets keep exact full-bundle matching', () => {
   const fixture = makeFixture();
   fixture.addPreparedSet(COMMIT_A, 'one');
   fixture.installCurrent(COMMIT_A, '1.0.0', 'one');
@@ -410,6 +582,375 @@ test('inspection selects one byte-verified global-current set without writing', 
     fs.readFileSync(join(fixture.dataRoot, 'receipt.json')),
     before,
   );
+});
+
+test('dispatcher selection resolves the exact prepared set in repository and standalone routes', () => {
+  const fixture = makeFixture();
+  const template =
+    '# Installed skill dispatcher\nUse the selected immutable skill contract.\n';
+  const sharedInstructions = 'entry shared across prepared sets\n';
+  fixture.addPreparedSet(
+    COMMIT_A,
+    'one',
+    'user-global/entry.md',
+    sharedInstructions,
+    template,
+  );
+  fixture.addPreparedSet(
+    COMMIT_B,
+    'two',
+    'user-global/entry.md',
+    sharedInstructions,
+    template,
+  );
+  fixture.installCurrent(
+    COMMIT_A,
+    '1.0.0',
+    'one',
+    'user-global/entry.md',
+    sharedInstructions,
+    template,
+  );
+
+  const repositoryReport = inspectDistributionSelection(fixture.options());
+  assert.equal(repositoryReport.verdict, 'coherent-candidate');
+  assert.equal(repositoryReport.source, 'global-current');
+  assert.equal(repositoryReport.selected?.sourceCommit, COMMIT_A);
+
+  const standaloneReport = inspectDistributionSelection({
+    ...fixture.options(),
+    cwd: fixture.root,
+  });
+  assert.equal(standaloneReport.verdict, 'coherent-candidate');
+  assert.equal(standaloneReport.source, 'installed-bundle');
+  assert.equal(standaloneReport.selected?.sourceCommit, COMMIT_A);
+});
+
+test('dispatcher selection requires both global roots to match one set', () => {
+  const fixture = makeFixture();
+  const template = '# Installed skill dispatcher\n';
+  const sharedInstructions = 'entry shared across prepared sets\n';
+  fixture.addPreparedSet(
+    COMMIT_A,
+    'one',
+    'user-global/entry.md',
+    sharedInstructions,
+    template,
+  );
+  fixture.addPreparedSet(
+    COMMIT_B,
+    'two',
+    'user-global/entry.md',
+    sharedInstructions,
+    template,
+  );
+  fixture.installCurrent(
+    COMMIT_A,
+    '1.0.0',
+    'one',
+    'user-global/entry.md',
+    sharedInstructions,
+    template,
+  );
+  const mixedRoot = join(
+    fixture.home,
+    '.agents',
+    'skills',
+    'issue-authoring',
+    'SKILL.md',
+  );
+  const mixedBytes = preparedDispatcher(
+    fixture,
+    COMMIT_B,
+    'issue-authoring',
+    template,
+  );
+  fs.writeFileSync(mixedRoot, mixedBytes);
+  const receipt = readReceipt(fixture.dataRoot);
+  assert.equal(receipt.state, 'valid');
+  writeReceipt(
+    fixture.dataRoot,
+    receipt.receipt.entries.map((entry) =>
+      entry.path === mixedRoot
+        ? { ...entry, sha256: sha256(mixedBytes) }
+        : entry,
+    ),
+  );
+
+  const report = inspectDistributionSelection(fixture.options());
+  assert.equal(report.verdict, 'migration-required');
+  assert.equal(report.selected, null);
+});
+
+test('identical dispatchers across distinct commits remain ambiguous', () => {
+  const fixture = makeFixture();
+  const template = '# Installed skill dispatcher\n';
+  const sharedInstructions = 'entry shared across prepared sets\n';
+  fixture.addPreparedSet(
+    COMMIT_A,
+    'same',
+    'user-global/entry.md',
+    sharedInstructions,
+    template,
+  );
+  fixture.addPreparedSet(
+    COMMIT_B,
+    'same',
+    'user-global/entry.md',
+    sharedInstructions,
+    template,
+  );
+  fixture.installCurrent(
+    COMMIT_A,
+    '1.0.0',
+    'same',
+    'user-global/entry.md',
+    sharedInstructions,
+    template,
+  );
+
+  const repositoryReport = inspectDistributionSelection(fixture.options());
+  assert.equal(repositoryReport.verdict, 'distinct-builds');
+  assert.equal(repositoryReport.selected, null);
+
+  const standaloneReport = inspectDistributionSelection({
+    ...fixture.options(),
+    cwd: fixture.root,
+  });
+  assert.equal(standaloneReport.verdict, 'not-verified-usable');
+  assert.equal(standaloneReport.selected, null);
+});
+
+test('missing prepared dispatcher inputs keep explicit preparation recovery', () => {
+  const template = '# Installed skill dispatcher\n';
+  for (const missing of ['skill', 'template'] as const) {
+    const fixture = makeFixture();
+    fixture.addPreparedSet(COMMIT_A, 'one', undefined, undefined, template);
+    fixture.installCurrent(
+      COMMIT_A,
+      '1.0.0',
+      'one',
+      undefined,
+      undefined,
+      template,
+    );
+    const missingPath =
+      missing === 'skill'
+        ? join(
+            fixture.preparedRoot,
+            COMMIT_A,
+            'skills',
+            'issue-authoring',
+            'SKILL.md',
+          )
+        : join(
+            fixture.preparedRoot,
+            COMMIT_A,
+            'idd-template',
+            'user-global',
+            'skill-entry.md',
+          );
+    fs.unlinkSync(missingPath);
+
+    const report = inspectDistributionSelection(fixture.options());
+    assert.equal(report.verdict, 'preparation-missing', missing);
+    assert.equal(report.selected?.sourceCommit, COMMIT_A, missing);
+    assert.equal(report.recovery, 'prepare', missing);
+  }
+});
+
+test('tampered prepared dispatcher inputs do not select a set', () => {
+  const template = '# Installed skill dispatcher\n';
+  for (const tampered of ['skill', 'template'] as const) {
+    const fixture = makeFixture();
+    fixture.addPreparedSet(COMMIT_A, 'one', undefined, undefined, template);
+    fixture.installCurrent(
+      COMMIT_A,
+      '1.0.0',
+      'one',
+      undefined,
+      undefined,
+      template,
+    );
+    const tamperedPath =
+      tampered === 'skill'
+        ? join(
+            fixture.preparedRoot,
+            COMMIT_A,
+            'skills',
+            'issue-authoring',
+            'SKILL.md',
+          )
+        : join(
+            fixture.preparedRoot,
+            COMMIT_A,
+            'idd-template',
+            'user-global',
+            'skill-entry.md',
+          );
+    fs.writeFileSync(tamperedPath, 'tampered bytes\n');
+
+    const report = inspectDistributionSelection(fixture.options());
+    assert.equal(report.verdict, 'not-verified-usable', tampered);
+    assert.equal(report.selected, null, tampered);
+  }
+});
+
+test('malformed, non-scalar, or wrong-name frontmatter does not select a set', () => {
+  const template = '# Installed skill dispatcher\n';
+  const cases = [
+    ['malformed', Buffer.from('---\nname: issue-authoring\n')],
+    [
+      'duplicate-name',
+      Buffer.from(
+        '---\nname: issue-authoring\ndescription: First.\nname: issue-authoring\n---\n',
+      ),
+    ],
+    [
+      'non-scalar-name',
+      Buffer.from(
+        '---\nname: [issue-authoring]\ndescription: Collection.\n---\n',
+      ),
+    ],
+    [
+      'wrong-name',
+      Buffer.from(
+        '---\nname: idd-spec-audit\ndescription: Wrong bundle.\n---\n\n# Wrong\n',
+      ),
+    ],
+    [
+      'name-without-space',
+      Buffer.from(
+        '---\nname:issue-authoring\ndescription: No space after the colon.\n---\n\n# Bad\n',
+      ),
+    ],
+    [
+      'field-without-value',
+      Buffer.from('---\nname: issue-authoring\ndescription:\n---\n\n# Bad\n'),
+    ],
+    [
+      'field-with-blank-value',
+      Buffer.from('---\nname: issue-authoring\ndescription: \n---\n\n# Bad\n'),
+    ],
+  ] as const;
+  for (const [label, skillBytes] of cases) {
+    const fixture = makeFixture();
+    fixture.addPreparedSet(COMMIT_A, 'one', undefined, undefined, template);
+    fixture.installCurrent(
+      COMMIT_A,
+      '1.0.0',
+      'one',
+      undefined,
+      undefined,
+      template,
+    );
+    replacePreparedSkillBytes(fixture, COMMIT_A, 'issue-authoring', skillBytes);
+    // Install the bytes an accepting resolver would expect, so the frontmatter
+    // check (or, for input with no closing delimiter, the extraction) is the
+    // only reason this set can fail to match.
+    const installed = permissiveDispatcher(
+      skillBytes,
+      template,
+      preparedBundleDigest(fixture, COMMIT_A, 'issue-authoring'),
+    );
+    for (const path of globalSkillPaths(fixture, 'issue-authoring'))
+      replaceInstalledSkill(fixture, path, installed);
+
+    const report = inspectDistributionSelection(fixture.options());
+    assert.equal(report.verdict, 'migration-required', label);
+    assert.equal(report.selected, null, label);
+  }
+});
+
+test('a blank dispatcher template does not select a set', () => {
+  const template = '  \n\n';
+  const fixture = makeFixture();
+  fixture.addPreparedSet(COMMIT_A, 'one', undefined, undefined, template);
+  fixture.installCurrent(
+    COMMIT_A,
+    '1.0.0',
+    'one',
+    undefined,
+    undefined,
+    template,
+  );
+  const skillBytes = fs.readFileSync(
+    join(
+      fixture.preparedRoot,
+      COMMIT_A,
+      'skills',
+      'issue-authoring',
+      'SKILL.md',
+    ),
+  );
+  const installed = permissiveDispatcher(
+    skillBytes,
+    template,
+    preparedBundleDigest(fixture, COMMIT_A, 'issue-authoring'),
+  );
+  for (const path of globalSkillPaths(fixture, 'issue-authoring'))
+    replaceInstalledSkill(fixture, path, installed);
+
+  const report = inspectDistributionSelection(fixture.options());
+  assert.notEqual(report.verdict, 'coherent-candidate');
+  assert.equal(report.selected, null);
+});
+
+test('a dispatcher set does not match a legacy full-bundle copy in either root', () => {
+  const template = '# Installed skill dispatcher\n';
+  const fixture = makeFixture();
+  fixture.addPreparedSet(COMMIT_A, 'one', undefined, undefined, template);
+  fixture.installCurrent(
+    COMMIT_A,
+    '1.0.0',
+    'one',
+    undefined,
+    undefined,
+    template,
+  );
+  // Both bundles must be legacy copies. With only one of them matching, the
+  // selection still fails on the other bundle, so the test would not show that
+  // full-bundle bytes alone can satisfy it.
+  for (const name of ['issue-authoring', 'idd-spec-audit'] as const) {
+    const fullCopy = fs.readFileSync(
+      join(fixture.preparedRoot, COMMIT_A, 'skills', name, 'SKILL.md'),
+    );
+    for (const path of globalSkillPaths(fixture, name))
+      replaceInstalledSkill(fixture, path, fullCopy);
+  }
+
+  const report = inspectDistributionSelection(fixture.options());
+  assert.notEqual(report.verdict, 'coherent-candidate');
+  assert.equal(report.selected, null);
+});
+
+test('a dispatcher installed in only one global root does not select a set', () => {
+  const template = '# Installed skill dispatcher\n';
+  const fixture = makeFixture();
+  fixture.addPreparedSet(COMMIT_A, 'one', undefined, undefined, template);
+  fixture.installCurrent(
+    COMMIT_A,
+    '1.0.0',
+    'one',
+    undefined,
+    undefined,
+    template,
+  );
+  const agentsRoot = join(fixture.home, '.agents', 'skills', 'issue-authoring');
+  fs.rmSync(agentsRoot, { recursive: true, force: true });
+  const receipt = readReceipt(fixture.dataRoot);
+  assert.equal(receipt.state, 'valid');
+  writeReceipt(
+    fixture.dataRoot,
+    receipt.receipt.entries.filter(
+      (entry) =>
+        entry.path !== agentsRoot && !entry.path.startsWith(`${agentsRoot}/`),
+    ),
+  );
+
+  const report = inspectDistributionSelection(fixture.options());
+  assert.notEqual(report.verdict, 'coherent-candidate');
+  assert.equal(report.selected, null);
 });
 
 test('global-current exposes the prepare route when a prepared helper is missing', () => {
