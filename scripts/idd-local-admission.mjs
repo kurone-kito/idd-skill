@@ -44,6 +44,8 @@ export const LOCAL_ADMISSION_ENV_VAR = 'IDD_LOCAL_ADMISSION';
 const EXPIRED_EXIT_CODE = 75;
 /** Refusal before the command starts: policy, cap, symlink, open, or flock failure. */
 const REFUSED_EXIT_CODE = 2;
+/** The Pueue daemon health check failed before a task could be submitted. */
+const PUEUE_DAEMON_UNAVAILABLE_EXIT_CODE = 69;
 /** The submitted pueue task may have run, but its final outcome is unknown. */
 const PUEUE_OUTCOME_UNKNOWN_EXIT_CODE = 3;
 /** A command that could not be started: 127 when not found, else 126 (the shell convention). */
@@ -295,9 +297,11 @@ repository's .github/idd/config.json. The flock backend admits one command;
 the pueue backend uses the configured shared group on non-Windows hosts.
 
 Exit status: the command's own status; 2 when the command was refused before
-it started (policy, cap, symlink, or lock failure); 75 with
-\`local-admission: expired\` when the wait reached maxWait; 3 when a pueue
-task may have started but its outcome is unknown.
+it started (policy, cap, symlink, or lock failure); 69 with
+\`local-admission: pueue daemon is not accepting commands\` when the Pueue
+health check fails before task submission; 75 with \`local-admission: expired\`
+when the wait reached maxWait; 3 when a pueue task may have started but its
+outcome is unknown.
 `;
 function defaultDependencies() {
   return {
@@ -1110,7 +1114,8 @@ function runPueueAdmission(command, admission, raw, deps) {
     ]);
     if (pendingSignal !== null) return statusForSignal();
     if (!isPueueClientSuccess(daemon)) {
-      return fallback('daemon is not accepting commands');
+      deps.stderr('local-admission: pueue daemon is not accepting commands\n');
+      return PUEUE_DAEMON_UNAVAILABLE_EXIT_CODE;
     }
     let groupsResult = await call(['group', '--json']);
     if (pendingSignal !== null) return statusForSignal();
