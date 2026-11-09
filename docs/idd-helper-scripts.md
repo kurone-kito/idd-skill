@@ -5947,6 +5947,14 @@ closes the aliasing and unreadable-list cases raised during review of pull
 request `#4688` on 2026-10-24 ([canonical path spellings](https://github.com/kurone-kito/idd-skill/pull/4688#discussion_r4368595793),
 [visible candidate list](https://github.com/kurone-kito/idd-skill/pull/4688#discussion_r4368595801)).
 
+Build `CANDIDATES` from the helper report, never from pasted text. Dry-run
+`claimed-push` with the claim, agent, and nonce; its failed `scope` report
+carries `scopeOverrun.candidateFiles`. Serialize that array with Node
+`JSON.stringify` into a shell variable, then pass the variable quoted as one
+argument, `--candidate-files "$CANDIDATES"`. Changed paths can contain shell
+syntax, so interpolating them into a command line is unsafe (preventive; no
+observed incident yet).
+
 For a local target, the marker prefix comes from this repository's configured
 `markerPrefix`; an explicit `--marker-prefix` must match it. When both
 `--owner` and `--repo` explicitly name a target repository, pass that

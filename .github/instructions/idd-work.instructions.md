@@ -463,18 +463,22 @@ a follow-up or start a second loop. If the companion is unavailable, record the
 proposal in a comment/PR follow-ups; never create it ad hoc or improvise
 worker-side authoring.
 
-**Scope overrun**: on `effort-candidate-file-limit`, stop; no push.
-Dry-run profile-selected `claimed-push` with claim, agent and nonce; require
-failed `scope` with nonempty `scopeOverrun.candidateFiles`, else retain claim.
-PR `#5104`: JSON.stringify report candidates via Node; never interpolate paths.
-
-Post with profile-selected `post-idd-marker` (see
-[guide](../../docs/idd-helper-scripts.md#scope-overrun-evidence-marker)), passing
-`--candidate-files`; omit PR/branch/HEAD. Comment estimate, files and split
-proposal (`idd-agent-authored`); verify both full comment bodies, trusted
-authors and no edits before unclaim and `lost-claim-cleanup`. Hand companion a
-Stage 1 held split; on refusal, keep the comment. No `needs-decision`/human
-route (#4138).
+**Scope overrun** (helper runtime only): when profile-selected
+`audit-authored-issue --shape child --stdin --marker-prefix {markerPrefix}`
+fails `effort-candidate-file-limit` on the issue body or with
+`## Candidate files` set to the diff's canonical paths, stop coding
+without pushing. Record via `post-idd-marker --type scope-overrun --target
+issue <n> --agent-id <id> --effort <S|M|L> --candidate-files "$CANDIDATES"
+--apply` (build `CANDIDATES` argv-safely, per the guide); omit PR/branch/HEAD.
+Comment the estimate, candidate files, changed files, and a split proposal;
+use the exact `idd-agent-authored` suffix. Verify both full-history bodies,
+trusted authors, and no edits. If verification fails, keep the claim. After
+both checks pass, release per the Abort rule (`unclaimed-by`) and run
+`lost-claim-cleanup`.
+With the companion, hand it that proposal as a held split draft: it holds
+this issue, publishes a held roadmap whose children record `Split out of #<n>`,
+and comments its link; if refused, the comment stands. Never add
+needs-decision or ask a human (issue #4138).
 
 ---
 
