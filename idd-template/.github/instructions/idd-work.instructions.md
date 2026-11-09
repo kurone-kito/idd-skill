@@ -437,17 +437,22 @@ a follow-up or start a second loop. If the companion is unavailable, record the
 proposal in a comment/PR follow-ups; never create it ad hoc or improvise
 worker-side authoring.
 
-**Scope overrun** (helper runtime only): when profile-selected
-`audit-authored-issue --shape child --stdin --marker-prefix {markerPrefix}`
-fails `effort-candidate-file-limit` on the issue body or with
-`## Candidate files` set to the diff's canonical paths, stop coding
-without pushing. Comment the estimate, candidate files, changed files,
-and a split proposal; release per the Abort rule (`unclaimed-by`); run
-`lost-claim-cleanup`. With the companion, hand it that proposal as a
-held split draft: it holds this issue, publishes a held roadmap whose
-children record `Split out of #<n>`, and comments its link; if refused,
-the comment stands. Never add needs-decision or ask a human
-([rationale](../../docs/idd-design-rationale.md#b3--scope-overrun-returns-to-authoring)).
+**S-to-M correction** (helper runtime only): when dry-run returns
+`assessment.correctionApplied: true`, follow the
+[read-only report procedure](../../docs/idd-helper-scripts.md#b3-scope-assessment-outcomes)
+without editing the issue body. Keep the verified assessment SHA for normal
+D2. Continue through C self-review and D1 synchronization before passing it to
+`claimed-push --apply` with
+`--expected-scope-sha256 <assessment-sha256>`. If D2's fresh scope check
+differs, return to B3, report the new assessment, and repeat C and D1 before
+D2.
+
+**Scope overrun** (helper runtime only): when the helper returns no
+`assessment.correctionApplied: true` (a qualifying correction whose report is
+unverified follows the retain-and-stop rule above) and the profile-selected
+scope audit fails `effort-candidate-file-limit`, follow the same
+[scope assessment routes](../../docs/idd-helper-scripts.md#b3-scope-assessment-outcomes)
+and stop without pushing.
 
 ---
 
