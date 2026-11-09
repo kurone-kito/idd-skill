@@ -4069,9 +4069,15 @@ export function createGithubProviderAdapter(
       ref: string,
     ): ProviderGovernanceReadOutcome<string> {
       try {
+        // Encode each segment so a PR-controlled name such as `a?b#c` stays
+        // in the contents path instead of starting a query or fragment.
+        const encodedPath = path
+          .split('/')
+          .map((segment) => encodeURIComponent(segment))
+          .join('/');
         const content = deps.ghText([
           'api',
-          `repos/${repoRef}/contents/${path}`,
+          `repos/${repoRef}/contents/${encodedPath}`,
           '--method',
           'GET',
           '--field',
