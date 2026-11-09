@@ -110,8 +110,11 @@ git worktree add <path> -b <claimed-branch> origin/<claimed-branch>
 WorkTrunk may be used for an authorized takeover when its target path
 and branch can be pinned to the required values. Do not use its
 create hook for a fresh claim: a pre-start install can run before the
-claim and worktree lock exist. For hook setup, approval, and the exact
-WorkTrunk command, follow the
+claim and worktree lock exist (preventive; no observed incident yet).
+Issue `#3960` documents only the fresh-claim order, with the worktree
+and branch created before the claim POST and the lock acquired after it;
+it does not document a WorkTrunk hook failure. For hook setup, approval,
+and the exact WorkTrunk command, follow the
 [B1 phase instructions](../.github/instructions/idd-work.instructions.md#worktree-creation).
 
 ## Lock the worktree before installing dependencies
@@ -130,7 +133,8 @@ On a takeover, any pre-start hook that installs dependencies must make
 lock acquisition, then token recording, its first commands before the
 install. If those checks cannot run before the hook, skip its automatic
 install and use the manual sequence after entering the worktree. Never
-let a lifecycle hook write into an unverified or unowned worktree.
+let a lifecycle hook write into an unverified or unowned worktree. These
+hook rules are preventive; no observed incident yet.
 
 ## Install and verify dependencies
 

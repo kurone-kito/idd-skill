@@ -367,7 +367,7 @@
       "files": [
         ".github/instructions/idd-work.instructions.md"
       ],
-      "limitBytes": 30100
+      "limitBytes": 41400
     },
     {
       "id": "bundle-work-lite",
@@ -375,7 +375,7 @@
       "files": [
         ".github/instructions/lite/idd-work-lite.instructions.md"
       ],
-      "limitBytes": 24000
+      "limitBytes": 33200
     },
     {
       "id": "bundle-resume-lite",
@@ -409,7 +409,7 @@
       "files": [
         ".github/instructions/lite/idd-pr-submit-lite.instructions.md"
       ],
-      "limitBytes": 26000
+      "limitBytes": 27300
     },
     {
       "id": "bundle-review-fix-lite",
@@ -492,6 +492,12 @@
     "exemptBundles": [],
     "nearCeilingRaiseApprovals": [
       {
+        "bundle": "bundle-pr-submit-lite",
+        "limitBytes": 27300,
+        "issue": 5092,
+        "reason": "The operator approved this raise in the #5092 takeover session so that lite D2 step 3 can publish a corrected-scope assessment SHA through claimed-push, as the lite B3 S-to-M correction requires. Before the change the bundle measured 25,397 of 26,000 bytes (97.7%), leaving 603 bytes, and only 83 bytes below the 98% enforcement ceiling (25,480), so the required step cannot fit without a raise. At the current head it measures 25,999 bytes, which is 95.24% of 27,300: above the 95% notice band but below the 98% enforcement ceiling."
+      },
+      {
         "bundle": "bundle-orchestrator-phase",
         "limitBytes": 6300,
         "issue": 4833,
@@ -544,6 +550,28 @@
         "limitBytes": 40000,
         "issue": 4233,
         "reason": "maintainer-approved per-file phaseLimitBytes raise (kurone-kito, comment 6162851754 on issue #4233; checker decision in comment 6168271034): the A0-T step 1 hold-label stop adds about 370 bytes to the idd-template idd-discover.instructions.md, which sat at 35,997 of 36,000 bytes. The raise is the maintainer's explicit exception to E12's per-file-cap rule. The entry name is the instructionSizeBudgets id, and only phaseLimitBytes is covered."
+      },
+      {
+        "bundle": "bundle-work-phase",
+        "limitBytes": 41400,
+        "issue": 4893,
+        "reason": "Operator chose to raise this limit before the split route lands on main (PR #5031, issue #4893). The trial budget check measures a raise only after it is on the base. The branch of issue #4893 projects 37,706 bytes for this bundle with the generated banner removed, measured on 2026-11-10. 41,400 is the floor of the issue-authorized 10% permit for that total, rounded down to the nearest 100. Main measures 28,344 bytes, so the new ceiling leaves room for the split route to land."
+      },
+      {
+        "bundle": "bundle-work-lite",
+        "limitBytes": 33200,
+        "issue": 4893,
+        "reason": "Operator chose to raise this limit before the split route lands on main (PR #5031, issue #4893), so the trial budget check can measure the raise on the base. This entry supersedes the manual approval from issue #5030 for this bundle (26,000 bytes). That record is removed here because the strictest-limit rule would otherwise keep the old ceiling in force; it remains in git history. Main measures 24,737 bytes (95.14% of 26,000). The Lite split procedure projects about 30,682 bytes for this bundle with the generated banner removed, measured on 2026-11-10. 33,200 leaves 2,518 bytes (7.6%) of headroom, about 92.4% utilization, below the 98% enforcement ceiling."
+      }
+    ],
+    "standingRaiseApprovals": [
+      {
+        "bundle": "bundle-work-lite",
+        "standingClass": "budgetRaise",
+        "ceilingPct": 10,
+        "limitBytes": 33200,
+        "issue": 4893,
+        "reason": "Re-measured after merging main on 2026-11-10: the Lite split procedure brings bundle-work-lite to about 31,900 bytes (96.09% of 33,200) with the generated banner removed. The issue-authorized 10% standing raise permits up to about 35,090 bytes for that total, and the 98% enforcement ceiling requires a limit of at least about 32,550 bytes, so 33,200 sits inside both bounds."
       }
     ]
   },

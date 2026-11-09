@@ -26,38 +26,57 @@ Use the [clone-scoped lock](../../docs/idd-helper-scripts.md#clone-scoped-lock)
 for shared-clone fetch, merge, worktree operations, and F4 cleanup; see
 [fan-out](../../docs/idd-workflow.md#orchestrator-fan-out-variant) if applicable.
 
-1. Parse the `origin` remote to credential-free `{origin-repository}`
-   (`[HOST/]OWNER/REPO`); strip userinfo, never print or pass the URL. For
-   SSH, resolve aliases with `ssh -G`'s `hostname`. Stop on
-   parse failure. Set `GH_REPO` to this ID per lookup. Require
-   `nameWithOwner` to match origin's owner/repo; check with
-   `gh repo view --json nameWithOwner --jq .nameWithOwner`. Get
-   `{default-branch}` directly with
-   `gh repo view --json defaultBranchRef --jq .defaultBranchRef.name`.
-   Stop on mismatch, failure, empty or unsafe name. Never use
-   `developmentBranch`. On primary with it checked out, run:
+For the ordered setup, follow the guide's [lock and token steps](../../docs/idd-worktree-setup.md#lock-the-worktree-before-installing-dependencies),
+[install and verification steps](../../docs/idd-worktree-setup.md#install-and-verify-dependencies),
+and [B1 self-check](../../docs/idd-worktree-setup.md#run-the-b1-self-check).
+This phase file retains the required source and branch checks, stop
+conditions, and the branch-reuse, WorkTrunk, and host-isolated exceptions
+that the guide references.
+
+1. Parse `origin` as credential-free `{origin-repository}`
+   (`[HOST/]OWNER/REPO`); strip userinfo, never print/pass the URL. Resolve
+   SSH aliases with `ssh -G`'s `hostname`. For the helper, set `GH_HOST`
+   to origin's host if unset; stop if set differently.
+   Compare owner/repo and host case-insensitively; stop on parse/lookup
+   failure or mismatch.
+
+   Before fresh `claim-issue`, unset `GH_REPO`; run the separate
+   unqualified guard (issue `#5090`):
+
+   ```sh
+   gh repo view --json nameWithOwner --jq .nameWithOwner
+   gh repo view --json url --jq .url
+   ```
+
+   Before profile-selected `claim-issue`, match `nameWithOwner` to origin's
+   owner/repo and `url`'s host to origin's host; keep `GH_REPO` unset.
+   Direct lookups:
+
+   ```sh
+   gh repo view "{origin-repository}" --json nameWithOwner --jq .nameWithOwner
+   gh repo view "{origin-repository}" --json defaultBranchRef --jq .defaultBranchRef.name
+   ```
+
+   Recheck identity; use the returned default branch. Stop on empty/unsafe
+   name. Never use `developmentBranch`. On primary with it checked out:
 
    ```sh
    git fetch origin
    git log origin/{default-branch}..{default-branch} --oneline
    ```
 
-   A missing origin ref or any `git log` output means stop and report; never
-   reset. Otherwise fast-forward:
+   Missing ref or any log output: stop/report; never reset. Otherwise:
 
    ```sh
    git -c merge.autoStash=false merge --ff-only origin/{default-branch}
    ```
 
-   Merge failure: stop before worktree creation and report it.
-
-   Dirty: stop before creation; report `primary-worktree-dirty` and paths.
-   For staged/unmerged paths, ask the operator to preserve staged and
-   unstaged content and resolve the index. Move only this session's unstaged
-   paths outside the repo; ask before moving others. Rerun Step 1. Never
-   stash, discard, or remove a worktree (`#5058`).
-
-   Follow Anti-patterns below.
+   On merge failure/dirty primary, stop/report before creation;
+   dirty reports: `primary-worktree-dirty` and paths. Ask the
+   operator to preserve staged/unstaged content and resolve staged/unmerged
+   paths. Move only this session's unstaged paths outside repo; ask
+   before moving others. Rerun Step 1. Never stash/discard/remove a
+   worktree (issue `#5058`). Follow Anti-patterns.
 
 2. Run `git worktree list`. Inspect an existing branch worktree and acquire
    its [worktree-local claim lock](idd-claim.instructions.md#worktree-local-lock-file-same-machine-collision)
@@ -103,17 +122,12 @@ branch name with every `/` replaced by `-`.
 
 Example: `issue/123-add-foo` → `../idd-skill.issue-123-add-foo`.
 
-**Harness-native worktree tools**: an agent harness's own worktree
-primitive (e.g. Claude Code's `EnterWorktree`) is a third path outside
-the two enumerated below. Use one only when both its target directory
-can be pinned to the sibling path above and its branch to
-`issue/<number>-<slug>` — never a tool-chosen default. `EnterWorktree`
-always places the worktree under a harness-owned directory
-(`.claude/worktrees/agent-<hash>`), never the sibling path — never use
-it here. Grok Build's `grok --worktree`, subagent `isolation:
-worktree`, and `x.ai/git/worktree/*` likewise can't pin either — never
-use them (same class as #1930). When a tool can't pin both, use
-`git worktree add` below (or WorkTrunk) instead.
+**Harness-native worktree tools**: pin sibling path and claimed
+`issue/<number>-<slug>` branch, else use `git worktree add`/WorkTrunk.
+Never use Claude Code's `EnterWorktree`
+(`.claude/worktrees/agent-<hash>` only), Grok Build's `grok --worktree`,
+subagent `isolation: worktree`, or `x.ai/git/worktree/*`: they cannot pin
+both (issue `#1930`).
 
 **Step 1 — Check for orphaned path**: if the target path already exists
 but is not listed in `git worktree list`, stop and report for manual
@@ -159,60 +173,25 @@ before the claim POST and before any lock. Create the worktree with the
 fresh-claim row above, then follow the fresh-claim order in
 `idd-claim.instructions.md`.
 
-For manual `git worktree add`, WorkTrunk without an install hook, or a
-compliant pinned harness-native tool (per "Harness-native worktree
-tools" above), acquire the
-[worktree-local lock file](idd-claim.instructions.md#worktree-local-lock-file-same-machine-collision)
-at the timing `idd-claim.instructions.md` gives, **before Step 3** —
-`install-deps` itself writes into the worktree and runs lifecycle
-hooks, so acquiring the lock any later leaves that install unprotected.
-Also re-run `--record-tokens` (with the same `{nonce}` the A5 write
-used; it overwrites rather than merges) for this
-worktree's own copy of the
-[generated-tokens record](idd-claim.instructions.md#worktree-local-lock-file-same-machine-collision)
-at the same point — the A5 copy is in the primary worktree's admin
-directory, so this copy is needed for the `--read-tokens` check.
+**Step 3 — Install deps**: after worktree creation:
 
-On a takeover, WorkTrunk's pre-start hook runs before the create command
-returns. If it
-installs dependencies, its **first** command must acquire the lock for
-the new worktree with the current `{agent-id}` / `{claim-id}` and
-re-run `--record-tokens` (with the same `{nonce}` the A5 write used),
-then run the install. Under
-`package-manager`, the new worktree's `idd:claim-lock` bin may not exist
-yet: invoke a pre-install-available helper from the primary worktree
-with the new path as `--worktree`, or use the helper-free fallback
-below. If neither is available, skip the automatic install hook and
-follow the manual lock-then-install path above.
-
-For `instructions-only` (no helper runtime), use the helper-free
-fallback under
-[Worktree-local claim lock](../../docs/idd-helper-scripts.md#worktree-local-claim-lock)
-before the first mutation; it shares the same `idd-claim.lock`
-namespace and F4 removal behavior as above.
-
-**Step 3 — Install deps**: after worktree creation, ensure dependencies
-are installed:
-
-- **WorkTrunk with a pre-start install hook** (e.g.,
-  `[pre-start].install` in `.config/wt.toml`): On a takeover, the hook must
-  acquire the lock before installing, as described above; after the hook succeeds,
-  skip this step. `-x <noop>` never changes the caller's directory —
-  `cd` into the new sibling (from `git worktree list`) before later
-  steps.
-- **Manual `git worktree add`, WorkTrunk without a hook, or a
-  compliant pinned harness-native tool**: `cd` into the newly created
-  worktree, then run **install-deps**.
-
-`install-deps` must remain safe to rerun during retries, takeovers, and
-recreated worktrees without manual cleanup.
-
-A fresh worktree can report `install-deps` success while a package
-manager silently under-installs a dependency binary. If observed, the
-`install-deps` command should verify a key post-install artifact and
-retry the install exactly once before failing loudly — see the
-`verify-install-deps` helper in `docs/idd-helper-scripts.md`. See
-[rationale](../../docs/idd-design-rationale.md#b1-step-3--install-deps-silent-under-install-detection).
+- Before installing, complete the guide's [lock and token steps](../../docs/idd-worktree-setup.md#lock-the-worktree-before-installing-dependencies).
+  For a fresh claim, record this worktree's tokens with the A5 nonce before
+  acquiring the lock; for a takeover, acquire the lock first, then record
+  tokens with that nonce. In both cases, read both records back and pass
+  the post-acquire claim assertion.
+- On takeover, a pre-start install hook must make lock acquisition and
+  token recording its first commands, in that order, before installing.
+  If it cannot, skip the hook and use the manual lock-then-install path in
+  the guide.
+- Run configured `commands.install-deps` inside the sibling worktree only
+  when a compliant takeover pre-start hook did not already complete it.
+  After either path, use the guide's [install and verification steps](../../docs/idd-worktree-setup.md#install-and-verify-dependencies)
+  to confirm the expected post-install artifact. Keep the command safe to
+  rerun for retries and worktree recreation.
+- Complete the guide's [B1 self-check](../../docs/idd-worktree-setup.md#run-the-b1-self-check)
+  before B2. `-x <noop>` leaves the current directory unchanged, so enter
+  the sibling worktree before checking. Stop if any step fails.
 
 ### B1 self-check
 
@@ -463,17 +442,150 @@ a follow-up or start a second loop. If the companion is unavailable, record the
 proposal in a comment/PR follow-ups; never create it ad hoc or improvise
 worker-side authoring.
 
-**Scope overrun** (helper runtime only): when profile-selected
-`audit-authored-issue --shape child --stdin --marker-prefix {markerPrefix}`
-fails `effort-candidate-file-limit` on the issue body or with
-`## Candidate files` set to the diff's canonical paths, stop coding
-without pushing. Comment the estimate, candidate files, changed files,
-and a split proposal; release per the Abort rule (`unclaimed-by`); run
-`lost-claim-cleanup`. With the companion, hand it that proposal as a
-held split draft: it holds this issue, publishes a held roadmap whose
-children record `Split out of #<n>`, and comments its link; if refused,
-the comment stands. Never add needs-decision or ask a human
+**S-to-M correction** (helper runtime only): when dry-run returns
+`assessment.correctionApplied: true`, follow the
+[read-only report procedure](../../docs/idd-helper-scripts.md#b3-scope-assessment-outcomes)
+without editing the issue body. Keep the verified assessment SHA for normal
+D2. Continue through C self-review and D1 synchronization before passing it to
+`claimed-push --apply` with
+`--expected-scope-sha256 <assessment-sha256>`. If D2's fresh scope check
+differs, return to B3, report the new assessment, and repeat C and D1 before
+D2.
+
+**Scope overrun** (helper runtime only): when the helper returns no
+`assessment.correctionApplied: true` (a qualifying correction whose report is
+unverified follows the retain-and-stop rule above) and the profile-selected
+scope audit fails `effort-candidate-file-limit`, follow the same
+[scope assessment routes](../../docs/idd-helper-scripts.md#b3-scope-assessment-outcomes)
+and stop without pushing.
+
+**Standing split** is the helper-runtime exception to the worker-side
+authoring and scope-overrun rules. Keep the parent claim and label held; skip
+release/handoff. Resolve policy owner/repo from the claimed issue's canonical
+live URL. For a PR, query
+`gh api repos/<target-owner>/<target-repo>/pulls/<number> --jq '{owner:
+.base.repo.owner.login, repo: .base.repo.name, ref: .base.ref}'` and use its
+base owner/repo/ref; otherwise use the issue repo and live default branch.
+Pass explicit `--owner <owner> --repo <repo>` to
+`idd-effective-config --trusted-auto-decide`; add `--base-ref <base>` only
+for a PR. Require `status: readable`; never let checkout `origin` choose
+policy. The helper validates only the live base branch and has no exact-ref
+mode. Read the base head commit (`<policy-sha>`), run the check, then read the
+base head commit again, and continue only when both SHAs are equal. Then read
+`standingApprovals.split.enabled` and
+`standingApprovals.split.maxCandidateFiles` from `.github/idd/config.json` at
+`<policy-sha>` through GitHub Contents. Save its decoded contents as
+`<target-policy>`; use the existing route when the two SHAs differ. The helper
+validates that policy's schema, but its auto-decide verdict does not govern
+split. Read the parent authoring label
+(`issueAuthoring.authoringLabelName`, default `status:authoring`) and
+`markerPrefix` from this snapshot. Pass
+`--owner <target-owner> --repo <target-repo> --policy <target-policy>
+--marker-prefix <target-markerPrefix>` on every publisher call. Require
+`enabled: true` or use the existing route; missing `maxCandidateFiles` defaults
+to `8`; absent, malformed, or unreadable policy uses that route. Never use
+local, head, layered config, or checkout `origin`
+([target finding](https://github.com/kurone-kito/idd-skill/pull/5031#discussion_r4505536175)).
+Each child fits the trusted ceiling and contains a parent criterion. Each
+checkbox-stripped parent acceptance criterion appears whole and verbatim in
+exactly one child. Reuse-first check children against open issues, draft
+carriers, and claim/PR state. The hand split after issue `#4064`
+duplicated child `#4093`; if a match cannot safely join the held set, stop
+without publishing a duplicate
 ([rationale](../../docs/idd-design-rationale.md#b3--scope-overrun-returns-to-authoring)).
+
+For a roadmap child, check claim/PR/execution state, establish ownership per
+target, add `Split out of #<parent>`, and update/read back each verified child
+in `## Tracks`; conflicts keep the parent and published children held.
+
+Publish only orphan-shaped children. A sequential-roadmap `blocked-by` child
+is not an orphan, and `--shape child` needs an independently held anchor this
+claimed parent does not provide. Use the existing route before publishing it.
+
+Otherwise use the existing comment/release/stop route.
+
+1. **Hold and record the set.** Revalidate the parent claim; add and verify the
+   snapshot's authoring label. If present, resume
+   only from the same durable proposal; otherwise stop on the unrelated hold.
+   Reconcile mappings. Before release and on resume with a record, require one
+   trusted record line matching class, set, anchor, ceiling, and option; proposal,
+   mappings, and live held children must match one-to-one by exact title/body,
+   with no missing, duplicate, extra, or released child. For each live body,
+   verify its single leading helper-generated `authoring-publication` line
+   against the helper report, journal, and child ownership record. Remove only
+   that line and its blank separator, then compare the rest byte-for-byte with
+   the saved draft; never strip an unmatched or extra marker. The record alone
+   is not proof.
+   If a record exists, verify the set and finish release without republishing. Stop
+   on conflict or unknown publication. Before saving, verify material scope or
+   design claims against current sources; put file references, GitHub
+   permalinks, or read-only command evidence in the review packet's `evidence`
+   array. Correct, qualify, or remove unsupported claims; route unresolved
+   material claims under the issue-authoring contract. Post/read back one
+   complete ordered proposal with current claim ID, estimate, candidate and
+   changed files, and each child's exact title and full body. If its POST is
+   uncertain, read all parent comments and continue only if exactly one exact
+   proposal exists and a trusted actor authored it; otherwise keep the hold and
+   stop. On resume reconcile the
+   proposal/mappings with helper records and live issues; verify/skip mapped
+   children and publish only unmapped ones. Stop on conflicts or unknown
+   publication. Keep parent claim/label and children held.
+2. **Review and dry-run.** Review each final child separately with the
+   issue-authoring contract's completed-draft adversarial review: send its
+   exact title and body plus the bounded review packet, resolve the configured
+   delegate when usable, else use native review or structured self-critique.
+   Bound the wait by `issueAuthoring.adversarialReview.waitCeiling` (`PT20M` default).
+   Save `"completed": true` with every finding `fixed` or `rejected`; stop on an
+   incomplete, unreadable, or unresolved review. A title/body correction
+   invalidates that child's review and the saved proposal. Update/read back the
+   full ordered proposal and repeat both checks for changed children. If the
+   update is uncertain, continue only when its full body matches exactly;
+   otherwise keep the hold and stop. Immediately before dry-run, recheck the
+   nonempty final set: every child fits the trusted ceiling and contains a
+   parent criterion, and every checkbox-stripped criterion appears whole and
+   verbatim in exactly one child. On failure, do not dry-run or apply. Dry-run
+   only when each final title and normalized body matches the proposal and has
+   a completed review. A refused or failed dry-run stops before any apply.
+   Resolve the profile-selected `idd-publish-authoring-hold` invocation per
+   `docs/idd-helper-scripts.md`; without `--apply` it is a dry-run. Dry-run
+   only unmapped orphans; inspect all results before applying. The helper's review
+   check is not the adversarial review.
+
+   ```sh
+   idd-publish-authoring-hold --shape orphan \
+     --owner <target-owner> --repo <target-repo> --policy <target-policy> \
+     --marker-prefix <target-markerPrefix> \
+     --title <title> --body-file <file> --review-result <file> [--apply]
+   ```
+
+3. **Publish one at a time.** Apply each inspected dry-run in a separate call.
+   Verify its new issue number and held state; append/read back its parent
+   mapping before the next publish. If that POST is uncertain, continue only
+   when all parent comments show exactly one matching mapping; otherwise keep
+   the hold and stop. Any refusal, failure, recovery hold, or unknown result
+   stops publication, even if one matching held child is found. Do not publish
+   another child, retry an unknown result, post the record, or release the
+   parent. Keep proposal, parent claim/label, and published children held;
+   inspect the report, journal, marker, and live issues before reporting.
+4. **Record and release.** After children and required roadmap tracks pass the
+   set check, post the exact record below. On definite/uncertain POST failure,
+   post a hold note naming verified children; keep parent claim/label and child
+   holds, then stop. For uncertainty, proceed only after paginated read-back
+   confirms one trusted exact record and the complete set; never retry. On
+   success, post the completion note, revalidate the claim, post/verify its
+   exact `unclaimed-by` marker through the standard release procedure, then run
+   cleanup. Mismatch, unreadable state, or uncertain release keeps the parent
+   held and stops before cleanup. Keep the authoring label until release or
+   completion.
+
+```text
+<!-- idd-skill-standing-approval: class=split; set=none; anchor=<owner/repo#n>; ceiling=<maxCandidateFiles>; option=option-a -->
+```
+
+Use the parent issue itself as `anchor` (`<owner>/<repo>#<number>`) and the
+numeric effective `maxCandidateFiles` as `ceiling`.
+
+For `instructions-only` execution, keep using the existing companion route.
 
 ---
 

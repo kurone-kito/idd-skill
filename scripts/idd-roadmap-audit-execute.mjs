@@ -20,6 +20,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { parseCliArgs } from './cli-args.mjs';
 import { invalidateDiscoverHints } from './discover-hint-cache.mjs';
+import { buildProvisionalDecisionEvidenceReader } from './discover-readiness-check.mjs';
 import {
   buildIssueLoader,
   buildSubIssueLoader,
@@ -137,6 +138,59 @@ export function evaluateRoadmapAuditGates(report, options = {}) {
       target: rootNumber,
       provenance: [rootNumber],
       detail: `roadmap #${rootNumber} carries "${rootBlockedLabel}"; resolve the human gate before closing`,
+    });
+  }
+  // A source with a selected, unfinished, or confirmation-pending decision
+  // remains active even when its implementation children have closed. The
+  // graph reader verifies the complete record stream and current work proof;
+  // any replay refusal is a blocker, never an implicit confirmation.
+  const provisionalSources = report.nodes
+    .filter((node) => {
+      const evidence = node.provisionalDecisionState;
+      return (
+        evidence?.hasRecords === true &&
+        (!evidence.valid ||
+          evidence.hasRework ||
+          evidence.decisions.length === 0 ||
+          evidence.decisions.some(
+            (decision) => decision.status !== 'confirmed',
+          ))
+      );
+    })
+    .sort((left, right) => left.number - right.number);
+  for (const node of provisionalSources) {
+    const evidence = node.provisionalDecisionState;
+    // A refused replay keeps its decisions empty, so the verified merged work
+    // it read is reported from the evidence itself, as the readiness gate does.
+    const affectedWorkReferences = [
+      ...new Set([
+        ...(evidence?.decisions
+          .filter(
+            (decision) =>
+              (decision.status === 'rework-requested' ||
+                decision.status === 'rework-authored') &&
+              typeof decision.workReference === 'string',
+          )
+          .map((decision) => decision.workReference) ?? []),
+        ...(evidence?.valid === false
+          ? (evidence.verifiedWorkReferences ?? [])
+          : []),
+      ]),
+    ].sort();
+    const impactDetail =
+      evidence?.hasRework || evidence?.valid === false
+        ? affectedWorkReferences && affectedWorkReferences.length > 0
+          ? `; potentially affected merged downstream work: ${[...new Set(affectedWorkReferences)].join(', ')}`
+          : '; merged downstream work may be affected, but its references cannot be verified'
+        : '';
+    const detail = evidence?.valid
+      ? `issue #${node.number} has an unconfirmed provisional decision bundle; preserve it as active confirmation work`
+      : `issue #${node.number} has provisional decision evidence that cannot be replayed: ${evidence?.issues.join(', ') || 'unknown replay refusal'}`;
+    blockers.push({
+      kind: 'roadmap-blocked',
+      target: node.number,
+      provenance: pathTo(node.number),
+      detail: `${detail}${impactDetail}`,
     });
   }
   // No explicit child work → childless / malformed. Do not infer completion
@@ -1407,6 +1461,12 @@ function createProductionDeps(args) {
   const labelsPolicy = normalizePolicyConfig(rawConfig).labels;
   const loadIssue = buildIssueLoader(port);
   const loadSubIssues = buildSubIssueLoader(port);
+  const provisionalReader = buildProvisionalDecisionEvidenceReader({
+    owner,
+    repo,
+    port,
+    policy: rawConfig,
+  });
   return {
     collect: (roadmapNumber) =>
       enumerateRoadmapGraph(roadmapNumber, {
@@ -1415,6 +1475,7 @@ function createProductionDeps(args) {
         repo,
         loadIssue,
         loadSubIssues,
+        provisionalDecisionState: { loadState: provisionalReader.loadState },
       }),
     resolveOpenLinkedPrIssues: (issueNumbers) =>
       resolveOpenLinkedPrIssues(port, issueNumbers),

@@ -388,7 +388,7 @@ for every stop of an `--apply` run after the pre-checks; it exits `1` as
 | `idd-load-gate.mjs`                | an unknown flag, a missing value, a non-positive or malformed `--max-load`, or a malformed `--timeout-ms` or `--poll-ms`                            | exit `3` when the timeout ends with the load still at or above the limit (the JSON line on stdout has `passed` set to `false`)                              |
 | `idd-activation.mjs`               | an unknown flag, or an empty `--cwd` value                                                                                                          | none today                                                                                                                                                  |
 | `claim-approval-gate.mjs`          | a missing `--issue`, or an unknown flag                                                                                                             | none today                                                                                                                                                  |
-| `claim-issue.mjs`                  | a missing or invalid `--issue`, `--agent-id`, or `--project-status`, `--apply` without both of the last two, or an unknown flag                     | exit `1` for every ineligible result, including a failed check, and for every stop of an `--apply` run                                                      |
+| `claim-issue.mjs`                  | a missing or invalid `--issue`, `--agent-id`, `--project-status`, `--confirmation`, `--decision`, a B1 flag used out of place, or an unknown flag   | exit `1` for every ineligible result, including a failed check, and for every stop of an `--apply` run                                                      |
 | `claim-lock.mjs`                   | a missing mode or required flag, or an unknown flag                                                                                                 | exit `2` on an `--acquire` collision, exit `4` on a primary-worktree refusal, or a non-`backfilled` `--backfill-tokens`                                     |
 | `clone-lock.mjs`                   | a missing mode, `--agent-id`, or command, or an unknown flag                                                                                        | exit `3` on an acquire timeout; a wrapped command's own non-zero status                                                                                     |
 | `phase-id-resolver.mjs`            | a missing `--phase-id`, or an unknown flag                                                                                                          | none today                                                                                                                                                  |
@@ -465,14 +465,14 @@ outcome path.
 | `idd-doctor.mjs`                     | an unknown flag (exit `1`)                                                                                                                                                                                                                                                                                                                                                                         | a `gh` failure reached during a live check                                                                                                                                              | the report contains at least one error (exit `1`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | an unexpected exception                                                                                                                                                                                                     |
 | `idd-delete-remote-branch.mjs`       | missing/empty `--branch`, missing/invalid `--expected-sha`, or an unknown flag (exit `1`)                                                                                                                                                                                                                                                                                                          | —                                                                                                                                                                                       | invalid ref, unreadable remote/default-branch state, expected-SHA mismatch, refused default branch, failed delete, or unconfirmed deletion (exit `1`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | an unexpected exception                                                                                                                                                                                                     |
 | `idd-f4-worktree-branch-cleanup.mjs` | missing `--issue`, `--claim-id`, `--nonce`, or `--agent-id`, a relative `--worktree`, a run outside the primary worktree, or an unknown flag (exit `1`)                                                                                                                                                                                                                                            | a failed `gh` read, reported as a hold (exit `1`)                                                                                                                                       | a hold or failed verdict (exit `1`), such as `claim-lost`, `proof-missing`, or `dirty-worktree`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | an exception from a dependency, reported as a failed step (exit `1`)                                                                                                                                                        |
-| `idd-claimed-push.mjs`               | missing or invalid `--issue`, missing `--claim-id` or `--agent-id`, an empty `--nonce`, or an unknown flag (exit `1`)                                                                                                                                                                                                                                                                              | —                                                                                                                                                                                       | a refused or failed step: the claim assert, the location check, the scope check, a dirty tree, the gate, the second assert, or the push (exit `1`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | an unexpected exception                                                                                                                                                                                                     |
+| `idd-claimed-push.mjs`               | missing or invalid `--issue`, missing `--claim-id` or `--agent-id`, an empty `--nonce`, an invalid `--expected-scope-sha256`, or an unknown flag (exit `1`)                                                                                                                                                                                                                                        | —                                                                                                                                                                                       | a refused or failed step: the claim assert, the location check, the scope check, a dirty tree, the gate, the second assert, or the push (exit `1`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | an unexpected exception                                                                                                                                                                                                     |
 | `idd-onboard.mjs`                    | missing/conflicting mode flags, a stage-foreign flag, `--distribution` without a non-empty `--session-id` or without `--source` for prepare, `--import`/`--verify` missing `--source`, `--record-policy` missing `--transcript`, `--install-user-global`/`--uninstall` with a flag outside their whitelist or an invalid `--harness` list, an unknown argument, or a missing flag value (exit `2`) | a `gh` failure reached during any stage (exit `2`)                                                                                                                                      | `--substitute`/`--import`/`--verify` report a blocking verdict, `--hear`/`--record-policy` report a schema-invalid transcript, or `--install-user-global`/`--uninstall` refuse or fail, or `--distribution` refuses, partially completes, or fails (exit `1`)                                                                                                                                                                                                                                                                                                                                                                    | an environment/config issue (e.g. `--substitute`'s own core file set resolution, path confinement) or any other unexpected exception (exit `2`)                                                                             |
 | `helper-runtime-manifest.mjs`        | an unknown flag (exit `1`)                                                                                                                                                                                                                                                                                                                                                                         | —                                                                                                                                                                                       | —                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | an unexpected exception                                                                                                                                                                                                     |
 | `idd-critique-delegate.mjs`          | an unknown flag (exit `1`)                                                                                                                                                                                                                                                                                                                                                                         | —                                                                                                                                                                                       | —                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | an unexpected exception (deterministic, network-free)                                                                                                                                                                       |
 | `idd-issue-authoring-delegate.mjs`   | an unknown flag (exit `1`)                                                                                                                                                                                                                                                                                                                                                                         | —                                                                                                                                                                                       | —                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | an unexpected exception (deterministic, network-free)                                                                                                                                                                       |
 | `idd-critique-telemetry-hook.mjs`    | an unknown flag (exit `1`)                                                                                                                                                                                                                                                                                                                                                                         | —                                                                                                                                                                                       | —                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | an unexpected exception; `--invoke` always exits `0` with no envelope (fire-and-forget contract)                                                                                                                            |
 | `idd-suggest-untrusted-labelers.mjs` | an invalid `--format`, or an unknown flag (exit `1`/`2`)                                                                                                                                                                                                                                                                                                                                           | a `gh` failure sweeping issue events (a rate-limit-shaped 403/429 gets an actionable message, still `transport`)                                                                        | —                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | an unexpected exception                                                                                                                                                                                                     |
-| `idd-local-admission.mjs`            | an unknown flag, or no command after `--`                                                                                                                                                                                                                                                                                                                                                          | none today                                                                                                                                                                              | the command's own status; `2` for a refusal before the command starts (policy, cap, symlink, or lock); `75` with `local-admission: expired` when the wait reaches `maxWait`; `3` with `local-admission: pueue task outcome unknown` when a submitted task outcome cannot be verified                                                                                                                                                                                                                                                                                                                                             | an unexpected exception                                                                                                                                                                                                     |
+| `idd-local-admission.mjs`            | an unknown flag, or no command after `--`                                                                                                                                                                                                                                                                                                                                                          | none today                                                                                                                                                                              | the command's own status; `2` for a refusal before the command starts (policy, cap, symlink, or lock); `69` with `local-admission: pueue daemon is not accepting commands` when the Pueue health check fails before submission; `75` with `local-admission: expired` when the wait reaches `maxWait`; `3` with `local-admission: pueue task outcome unknown` when a submitted task outcome cannot be verified                                                                                                                                                                                                                    | an unexpected exception                                                                                                                                                                                                     |
 | `idd-worker-report.mjs`              | a missing or unknown mode, an unknown flag, a bad `--file`/`--stdin`/`--since` combination or value, or a record that is unreadable, not JSON, or fails the schema (exit `1`)                                                                                                                                                                                                                      | —                                                                                                                                                                                       | —                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | an unexpected exception, including a store lock that could not be acquired (network-free)                                                                                                                                   |
 
 `tests/helper-cli-contract.test.mts` (source repo only) enumerates
@@ -2853,10 +2853,13 @@ Behavior:
   random-label query and `first 1` to check the daemon before submitting
   anything. The query normally selects no tasks and limits the returned status
   to at most one task record, so the helper does not capture the full retained
-  task list. A missing client, connection error, timeout, or any non-zero
-  daemon-check exit prints one pueue notice and uses the flock path, whatever
-  the client exit code. Nothing was submitted, so this fallback cannot start a
-  duplicate. The pueue path does not require `flock`.
+  task list. If the client is missing, it prints one notice and uses the flock
+  path. If the health check returns non-zero, times out, or cannot connect, the
+  helper exits `69` with
+  `local-admission: pueue daemon is not accepting commands`; it does not take
+  the flock lock, submit a task, or start the command. A failed health check
+  does not establish that a concurrent flock slot is available (issue `#5115`).
+  The pueue path does not otherwise require `flock`.
 - The pueue backend reads the configured group and creates a missing group with
   the effective cap (1 through 8). If another session creates it first, the
   helper rereads the group and uses it. An existing group's parallel count is
@@ -6372,7 +6375,11 @@ This record is durable issue evidence: it is not added to the transient
      session's own login. The development branch must exist on origin, or
      the run stops with `development-branch-unresolved`. A prunable worktree
      entry or a leftover local branch of the claim's name stops with
-     `b1-cleanup-needed`.
+     `b1-cleanup-needed`. The leftover-branch stop and `path-occupied` end
+     their next action with one static sentence that points at
+     `--preserve-b1-leftovers` (see
+     [B1 leftover preservation](#b1-leftover-preservation)); the
+     prunable-entry stop keeps its text.
   2. Still under the lock, the scoped local-worktree and remote-branch scans
      of A5(e) run again after the fetch (`local-worktree-occupied`,
      `local-worktree-unreadable`, or `branch-collision` if one appeared since
@@ -6454,9 +6461,10 @@ This record is durable issue evidence: it is not added to the transient
 - Exit `0` means the claim is verified. Every stop exits `1` with the
   envelope kind `gate`. The report carries `claimPosted` (`true`, `false`
   when nothing was sent, or `"unknown"`), `lostClaimCleanupRequired`, and
-  a `nextAction`. The helper deletes nothing. Once the worktree exists, a
-  failure keeps the worktree, its branch, and the worktree-local lock, and
-  the next action is `lost-claim-cleanup` from `idd-claim.instructions.md`.
+  a `nextAction`. Without `--preserve-b1-leftovers` the helper deletes
+  nothing. Once the worktree exists, a failure keeps the worktree, its
+  branch, and the worktree-local lock, and the next action is
+  `lost-claim-cleanup` from `idd-claim.instructions.md`.
 - The routing and marker helpers that the write half calls run from the
   primary checkout, so each one reads the policy that the fast-forward
   refreshed. `claim-lock` runs from the linked worktree, the caller's own
@@ -6464,6 +6472,165 @@ This record is durable issue evidence: it is not added to the transient
   claim's own.
 - Stale-claim takeover is out of scope: a stale active claim stops the run
   with `stale-takeover-out-of-scope`.
+
+### B1 leftover preservation
+
+- Command: `node scripts/claim-issue.mjs --issue <issue-number>
+  --preserve-b1-leftovers [--confirmation <owner>/<repo>#<number>
+  --decision <id>...]`. Add `--apply --agent-id <id> --project-status
+  <not-in-use|not-started>` for the write run. The same flags work through
+  the profile-selected `idd:claim-issue` command. `--confirmation` and
+  `--decision` are valid only with the flag, `--decision` needs
+  `--confirmation`, and `--decision` may repeat. A `--confirmation` is one
+  issue of this repository other than the claimed issue. A decision ID is
+  one token of at most 128 characters with no whitespace, no `;`, and no
+  `-->`. Anything else is a usage error. The logic lives in
+  `src/scripts/b1-leftover-preserve.mts`; `claim-issue.mts` only wires it.
+- Why: the manual B1 rules stop a fresh claim when its branch already exists
+  locally or something sits at its worktree path, and `claim-issue` stopped
+  the same way with `b1-cleanup-needed` or `path-occupied`. The helper header
+  and the leftover-branch next action both said that the helper deletes or
+  removes nothing. At the operator hearing of 2026-11-01
+  (recorded in roadmap `#4955`, implemented by issue `#4970`) the operator
+  chose that, with the `b1Leftover` auto-decide class switched on, the session
+  preserves such a leftover and continues. Unpushed commits on the local
+  default branch, a prunable worktree entry, and anything in the primary
+  worktree stay out of scope.
+- A leftover is one of two subjects. A branch: the claim's computed branch
+  exists as a local ref. A path: anything, a file, a directory, or a link,
+  sits at the computed worktree path
+  `<primary-parent>/<repo>.<normalized-branch>`. A run can list both, and
+  each needs its own record. The mode acts only where a run without the flag
+  would stop. With no leftover it acts on nothing, `--confirmation` is not
+  needed, the claim proceeds, and any `--decision` is reported in
+  `decisionsUnused`.
+- Dry run (no `--apply`): after the five pre-checks pass, the helper lists
+  every leftover with its subject (the short branch name, or the absolute
+  path with its parent resolved and its last component kept as written),
+  and evaluates each precondition below. It reads the primary checkout, the
+  default branch, the local policy, the trusted policy, the fresh-claim gate,
+  `git ls-remote`, `gh pr list`, and the confirmation issue, but takes no
+  lock and makes no fetch or write. Without `--confirmation` it reports the
+  record precondition as unmet without refusing, so the order is dry run,
+  record, apply. The exit code still follows the pre-checks, and the report
+  gains `b1Leftovers` only when every pre-check passed. The dry run does not
+  fast-forward the primary checkout, so its answer is advisory: apply checks
+  everything again under the lock.
+- Apply: with `--apply` the helper adds the step `b1-preserve` under the same
+  clone lock, after `development-branch` and before `b1-leftovers`. It
+  re-reads the fresh-claim gate (keeping `evidence.released_claim.branch`),
+  and checks every precondition for every listed subject again. The first
+  change happens only when all of them are met, so a refusal never leaves one
+  leftover half handled. The branch is preserved first and the path second.
+  The run then continues through `local-rescan`, `remote-rescan`,
+  `worktree-path`, and `worktree-add`.
+- Common preconditions:
+  - the trusted read of the repository's default branch reports `b1Leftover`
+    as `enabled` (a master switch that is off, a class that is off, or an
+    unreadable policy refuses);
+  - the fresh-claim gate reads `claimable`, its response carries an
+    `evidence` object (the routing always prints one), and a `released_claim`
+    in it is neither unreadable nor the claim's own branch (a released
+    claim's branch is inheritable, and so is the path derived from it);
+  - the worktree list is readable and names the primary checkout (an empty
+    list refuses), and the claim's branch has the `issue/<number>-<slug>`
+    shape;
+  - no prunable worktree entry is on the branch or at the path;
+  - the confirmation issue is open, carries the confirmation label, and no
+    longer carries the authoring label, read through the trusted record
+    reader with the policy file of the primary checkout;
+  - one `--decision` per listed subject, each paired with its subject through
+    the `Subject:` value of its record. An ID that matches no listed subject,
+    an ID given twice, two IDs for one subject, and a count that differs
+    from the listed subjects (for example because the leftovers changed since
+    the dry run) all refuse. Each paired record has `class=b1Leftover`,
+    `source` equal to the claimed issue, `claim=none`, `set=none` (the
+    contract's pairing, which the record reader does not enforce), and its
+    decision. The
+    decision is not voided and has no counting `location` or `failure` note,
+    so a decision that was already acted on or already failed never
+    authorizes another preservation: a new attempt is a new decision.
+- Branch mode, in addition: the branch is the claim's computed branch, never
+  an argument, and is neither the default nor the development branch. It is a
+  plain ref: a symbolic ref refuses, because deleting one could remove its
+  target. It is checked out in no worktree and no worktree is mid-rebase or
+  mid-bisect on it (the scoped scan of A5(e)). `git branch -d` would refuse
+  it: it is not merged into its upstream when one is configured and
+  resolvable, else not merged into the primary's HEAD. A branch that `-d`
+  deletes keeps today's stop. `git ls-remote --heads` on every remote shows
+  no such branch (a clone with no remote refuses, since absence cannot be
+  proven), no open pull request has it as its head (a listing that reaches
+  its 100-row limit refuses), and a failed or malformed read refuses. The
+  action creates the backup ref `refs/idd-b1/<issue>/<commit>` with a
+  create-only `git update-ref` (an existing plain ref at the same commit is
+  reused; a symbolic ref, another commit, or a ref that collides with the
+  backup path refuses), reads it back as a plain ref (a symbolic ref swapped
+  in after the check refuses), deletes the branch with
+  `git update-ref --no-deref -d refs/heads/<branch> <commit>` (which fails
+  when the tip moved), and removes the `branch.<name>` configuration section
+  when the repository's own configuration holds keys, so that a recreated
+  branch does not inherit it. The section's keys are read after the delete,
+  and the ref and the section are read back after each removal, whatever the
+  command reported. Right before the delete, the worktree list and the local
+  scan are read again, and a worktree that took the branch since planning
+  stops the run with the backup ref kept. The branch reflog is lost; the
+  commits stay reachable from the backup ref.
+- Path mode, in addition: the path is the computed worktree path, a direct
+  child of the primary's parent, and that parent is not a link. The entry
+  belongs to the current user (a platform without user IDs refuses) and is
+  not listed by `git worktree list`. No registered worktree, the primary
+  included, is at, inside, or around it. A `.git` file in it that points to
+  an existing administration directory refuses. The destination passes the
+  shared preserved-data guards (`b1-preserved` under the per-user state
+  root, and not inside the leftover path itself), and the source is on the
+  same device as every existing destination parent. Both are checked before
+  any directory is created. The action creates
+  `<state>/idd-skill/b1-preserved/<issue>-<UTC timestamp>/` through the
+  shared creation step, which also restricts each parent directory to its
+  owner (the report names each parent that let others in before, as a
+  `parents-restricted` action). It then rechecks its parents and the
+  source's no-follow identity right before the rename, renames the entry
+  (never a copy and never a removal) to `<basename>` inside it, and checks
+  the moved entry's identity. A mismatch leaves the entry at the destination
+  and reports both paths. The entry moves back only when its identity
+  matches, read again right before the move, and the source path is free.
+  The mode checks no live use: a rename keeps inodes, so a process that
+  still writes into the tree keeps writing into the preserved copy
+  (preventive; no observed incident yet).
+- A refused precondition changes nothing. The step `b1-preserve` still
+  passes with a detail that starts "not preserved", `b1Leftovers.outcome` is
+  `unmet-preconditions`, and the stops of a run without the flag follow
+  unchanged, so a refused leftover branch still stops with
+  `b1-cleanup-needed` and a refused path with `path-occupied`.
+- Report: `b1Leftovers` holds `mode`, `outcome` (`no-leftover`,
+  `unmet-preconditions`, `ready`, `preserved`, or `failed`), `common` (each
+  common precondition), `subjects` (each with its `kind`, `subject`,
+  `decision`, and `preconditions`, each `met` or `unmet` with a detail),
+  `actions`, `backupRefs`, `destinations` (`from` and `to`),
+  `removedConfigSections`, `decisionsUnused`, and `failure`. The caller
+  comments each backup ref and destination on the confirmation issue, even
+  when a later claim step fails. After a preservation, every later stop's
+  `nextAction` (and the failed step's) names what was saved and no longer
+  says that nothing was removed or created.
+- Failures after a state change stop the run with `b1-preserve-failed`
+  (`lostClaimCleanupRequired` stays `false`: no worktree or claim exists
+  yet), with the saved locations in the report and the next action:
+
+  | After                          | Failure                                                                        | Outcome                                                                                                                 |
+  | ------------------------------ | ------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
+  | Backup ref written             | Read-back fails                                                                | The ref stays, the branch is untouched, the run stops                                                                   |
+  | Backup ref written             | The deletion fails because the tip moved                                       | The ref stays, the branch is untouched, the run stops                                                                   |
+  | Branch deleted                 | A present configuration section is not removed                                 | The commits are on the backup ref; the run stops before `worktree-add`; the section is named                            |
+  | Destination parents created    | The rename fails                                                               | Empty private parents stay, the source is untouched, the run stops                                                      |
+  | Destination directory created  | Its privacy or identity check fails                                            | The source is untouched, the run stops, the path is reported                                                            |
+  | Path renamed                   | The moved entry's identity differs                                             | The entry stays at the destination, both paths are reported                                                             |
+  | Path renamed, identity matches | Moving back is needed but the source is occupied again, or the move back fails | The entry stays where the failure leaves it, both paths are reported                                                    |
+  | A leftover preserved           | A later claim step fails                                                       | The leftover stays preserved; that step's reason and next action name the location; a rerun no longer sees the leftover |
+
+- Open risks, accepted by the operator: the window between the last check and
+  the rename or the ref deletion, which the platform cannot close (inside it
+  only a writer outside IDD can interfere, because IDD sessions take the
+  clone lock), and the resolution of a state root that is a link.
 
 ### Worktree-local claim lock
 
@@ -11170,7 +11337,7 @@ Issue `#4480` added it as the `scope` step.
 
 ```sh
 node scripts/claimed-push.mjs --issue <n> --claim-id <id> --agent-id <id> \
-  [--nonce <nonce>] [--apply]
+  [--nonce <nonce>] [--expected-scope-sha256 <sha256>] [--apply]
 ```
 
 - **Arguments**: `--issue`, `--claim-id`, and `--agent-id` are required.
@@ -11178,6 +11345,9 @@ node scripts/claimed-push.mjs --issue <n> --claim-id <id> --agent-id <id> \
   claim assertions. For a claim whose marker predates session-qualified IDs,
   `--assert` accepts a bare ID only when it exactly matches that legacy
   marker (issue `#5000`). `--nonce` goes to the claim assert only when given.
+  `--expected-scope-sha256` is an optional 64-character SHA-256 from a
+  previously verified read-only assessment. It never skips an audit: each
+  invocation recomputes scope and refuses when the fingerprint differs.
   The remote is always `origin`, and
   there is no path argument: the worktree is `git rev-parse --show-toplevel`
   of the working directory (a failure there is reported under `assert`,
@@ -11257,7 +11427,8 @@ node scripts/claimed-push.mjs --issue <n> --claim-id <id> --agent-id <id> \
    counts, and the counting rule: distinct parsed keys, and a token
    without `/` or `.`, or with whitespace, is not counted. The next action
    is to stop without pushing and follow the Scope overrun rule in
-   `idd-work.instructions.md`. When `refs/remotes/origin/<base>` is
+   `idd-work.instructions.md`, unless the S-to-M correction below qualifies.
+   When `refs/remotes/origin/<base>` is
    missing or differs from the SHA `git ls-remote` printed, the base is
    stale, and the step refuses before it reads the branch point, whatever
    the audits would say: a ref behind `origin` adds paths to the diff,
@@ -11276,6 +11447,46 @@ node scripts/claimed-push.mjs --issue <n> --claim-id <id> --agent-id <id> \
    title or body, a malformed audit result) has the next action to stop
    and report.
 
+   **Read-only S-to-M correction (issue `#5092`)**: only when either
+   original S limit finding fails, `parseEffortMarker` finds one coherent S,
+   the audit's `effort-visible-line-agreement` passes, and the offset locator
+   proves one active visible and hidden token after Markdown masking, the
+   step changes only those two tokens in an in-memory copy. CRLF is preserved
+   by mapping normalized UTF-16 offsets back to raw-body offsets. It reruns
+   both audits on that M copy and its canonical-path copy, and requires both
+   limit findings and both visible-line agreements to pass. It also requires
+   the actual canonical path count, before audit-parser omissions, to be at
+   most the existing M maximum of eight. Missing, malformed, mismatched,
+   duplicate, masked-only or ambiguous footer evidence, an M audit failure,
+   or more than eight actual paths keeps the existing stop. No issue body is
+   written.
+
+   A successful scope step includes an `assessment` object in dry-run and
+   apply JSON: the original body SHA-256, authored and effective effort,
+   correction flag, canonical changed paths and actual count, audit-parsed
+   count, original audit findings and (when corrected) M audit findings, and
+   `assessmentSha256`. The assessment SHA covers the body digest, estimate,
+   path set/count and audit outcomes. Apply of a corrected assessment
+   requires `--expected-scope-sha256` equal to that SHA; it still rereads and
+   reassesses the live issue and branch. After the gate, `reassert` reassesses
+   corrected scope again and stops before push if the SHA changed. A missing
+   SHA, an older helper without structured assessment, or any changed result
+   cannot authorize the correction.
+
+   B3 posts a report with S, M, canonical paths/count, current claim ID,
+   raw-body and assessment SHA values, and a unique attempt ID.
+   Revalidate claim, nonce, worktree, lock and tokens immediately before the
+   POST; reread the body and rerun dry-run if its digest or assessment
+   changed. Append the complete `idd-agent-authored` suffix. Verify the
+   returned comment ID, author and exact body; reconcile an uncertain POST
+   by attempt ID before retrying. If reporting remains unverified, stop and
+   retain the claim. Keep the verified assessment SHA for normal D2. B3 ends
+   without `--apply` or a push: continue through C self-review and D1
+   synchronization, then pass the SHA with `--expected-scope-sha256` to the
+   normal D2 helper invocation. If D2's fresh scope differs, stop, reassess
+   and report in B3, then repeat C and D1 before D2. A report is not inherited
+   across a claim change or resume.
+
    ```sh
    node scripts/clone-lock.mjs --exec --agent-id <your agent id> -- git fetch origin +refs/heads/<base>:refs/remotes/origin/<base>
    ```
@@ -11291,15 +11502,18 @@ node scripts/claimed-push.mjs --issue <n> --claim-id <id> --agent-id <id> \
    off, in a shell directly), then requires a clean tree again (next
    action: commit or discard what the gate changed, then rerun). A gate
    that exits non-zero or ends by signal refuses with the next action to
-   fix the failure, commit, and rerun, except two exits of the admitted
+   fix the failure, commit, and rerun, except three exits of the admitted
    call, whose next action names the stderr line that decides it. Exit
-   `75`: a `local-admission: expired` line above means the gate did not
+   `69`: a line exactly equal to `local-admission: pueue daemon is not accepting
+   commands` means the gate did not start; report it, and do not rerun the
+   helper or push by hand. Exit `75`: a
+   `local-admission: expired` line above means the gate did not
    start, so report it and do not rerun the helper or push by hand.
    Exit `2`: a `local-admission:` line that ends with
    `command not started`, or one that says the lock stays held until the
    command exits, means stop and report without changing the repository
-   policy, and do not rerun. Without such a line, either exit is the
-   gate's own status: fix the failure, commit, and rerun. A gate that is
+   policy, and do not rerun. Without such a line, each of these three exits
+   is the gate's own status: fix the failure, commit, and rerun. A gate that is
    not configured, or that cannot start on Windows, refuses with the next
    action to configure the command or run the written gate by hand. An
    admission child that cannot start (for example a missing
@@ -11312,7 +11526,8 @@ node scripts/claimed-push.mjs --issue <n> --claim-id <id> --agent-id <id> \
    installation, then rerun; the assert must also still name the same
    branch), then requires `git rev-parse HEAD` and the branch tip to equal
    the recorded value (next action: rerun the helper so the gate sees the
-   new HEAD).
+   new HEAD). For a corrected assessment only, it also reruns scope after
+   the gate and compares the expected SHA before push.
 6. `push`: runs `git push -u origin <branch>` when the branch has no
    upstream yet, else `git push origin <branch>`, once. A push that git
    rejects (non-fast-forward, hook, missing remote) fails with git's
@@ -11360,7 +11575,9 @@ node scripts/claimed-push.mjs --issue <n> --claim-id <id> --agent-id <id> \
   lines go to the helper's stderr as they are written. Only the exit
   status judges the gate; a command killed by a signal counts as failed.
 - **Report**: JSON on stdout with `mode`, `pushed`, `issue`, `branch`,
-  `worktree`, and `steps`. Every step has an `id`, a `status` (`passed`,
+  `worktree`, and `steps`. The scope step includes its structured
+  `assessment` when both original audit results are available. Every step
+  has an `id`, a `status` (`passed`,
   `failed`, or `skipped`), and a `reason`. A step that ran a command
   carries that command's `exitStatus`: `0` on every passed step (assert,
   location, scope, reassert, gate, and push; location decides by its last
@@ -11416,6 +11633,35 @@ node scripts/claimed-push.mjs --issue <n> --claim-id <id> --agent-id <id> \
   separately, apply B3's canonical-path exclusions, and stop without
   pushing when either count fails. Commit any validation or formatter
   output first, so the tree is clean.
+
+### B3 scope assessment outcomes
+
+When dry-run returns `assessment.correctionApplied: true`, follow the
+preceding read-only S-to-M correction and report procedure. Revalidate the
+claim, nonce, worktree, lock, and tokens immediately before reporting; require
+the live-body and assessment SHA-256 values to match or rerun dry-run. Verify
+the attempt's returned comment ID, author, and exact body; reconcile uncertain
+POSTs by attempt ID. If the report is unverified, retain the claim and stop.
+Do not apply in B3. Keep the verified assessment SHA and pass it with
+`--expected-scope-sha256` to the normal D2 `--apply` only after C self-review
+and D1 synchronization. If D2's fresh scope differs, return to B3, reassess
+and report, then repeat C and D1 before applying. Never reuse reports across
+claims or resumes, and do not edit or roll back the issue body. See the
+[B3 scope-overrun rationale](idd-design-rationale.md#b3--scope-overrun-returns-to-authoring).
+
+When the helper returns no `assessment.correctionApplied: true` (a qualifying
+correction whose report is unverified follows the retain-and-stop rule above)
+and the profile-selected
+`audit-authored-issue --shape child --stdin --marker-prefix {markerPrefix}`
+fails `effort-candidate-file-limit` on the issue body or with `## Candidate
+files` set to canonical changed paths, stop coding without pushing. Comment
+the estimate, candidate files, changed files, and split proposal; release per
+the Abort rule (`unclaimed-by`) and run `lost-claim-cleanup`. With the
+companion, hand it the proposal as a held split draft: it holds this issue,
+publishes a held roadmap whose children record `Split out of #<n>`, and
+comments the link. If refused, the comment stands. Never add needs-decision
+or ask a human. Do not edit or roll back the issue body. See the
+[scope-overrun rationale](idd-design-rationale.md#b3--scope-overrun-returns-to-authoring).
 
 ## Dead-export audit (kurone-kito/idd-skill#3478)
 
