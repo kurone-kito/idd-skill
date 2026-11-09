@@ -138,6 +138,31 @@ detached, wrong-branch, or unreadable worktree evidence stops this path.
 The detached-rebase route below keeps its own exact checks and only its
 existing lock-holder cases. No worktree removal or replacement is authorized.
 
+**Pre-rule successor token prerequisite** — Before a pre-rule successor writes
+tokens, use `--read-tokens --worktree W --claim-id <new_claim_id>`. Require
+`present: true`, then explicitly compare the returned `record.agentId` with the
+assigned `new_agent_id`. The lookup is claim-keyed: an absent or malformed
+record, or an agent-id mismatch, counts as no matching record. A pre-rule
+successor can re-record with `--nonce` only when that matching record already
+exists; a nonce alone is insufficient. For a pre-rule successor with no
+matching record, stop before token writes or lock acquisition/takeover if
+`W`'s lock names a different earlier claim, whether the immediate predecessor
+or an eligible ancestor.
+`--backfill-tokens` also refuses a different claim-id in the lock. Ask the
+operator for a new trusted handoff assigning a session-qualified successor
+agent-id, then restart the live §FH checks and adopt the new marker's pair
+verbatim. Do not take the lock first to manufacture matching evidence.
+Observed 2026-11-08 in the review of `kurone-kito/idd-skill#5111`
+([finding](https://github.com/kurone-kito/idd-skill/pull/5111#discussion_r4505106283)),
+tracked in `kurone-kito/idd-skill#5121`.
+
+An existing matching legacy record still permits its nonce re-record. Legitimate
+same-claim backfill still follows the gated sequence in
+[Worktree-local generated-tokens record](idd-helper-scripts.md#worktree-local-generated-tokens-record);
+it does not bridge an earlier claim's lock. Session-qualified successors retain
+the recipe below. Every ownership, nonce, lineage, branch/PR, and worktree check
+still applies.
+
 Apply the recipe below only when all of these hold:
 
 - A routing call that passed this session's `--claim-id` and `--worktree W`
@@ -211,7 +236,8 @@ applies), through the profile-selected claim-lock command:
 
 1. `--check --worktree W` and require the holder condition above (the
    holder is `old_claim_id`, an eligible attached-worktree ancestor,
-   this session's own claim-id and agent-id, or no lock exists); only then
+   this session's own claim-id and agent-id, or no lock exists). Apply the
+   pre-rule token prerequisite above before proceeding; only then run
    `--record-tokens --worktree W --agent-id
    <new_agent_id> --claim-id <new_claim_id> --nonce <nonce>`. That call
    overwrites the record keyed by the claim-id without a holder check, so

@@ -29,6 +29,7 @@ import type {
   ParsedProviderOutagePark,
 } from '../src/scripts/protocol-helpers.mts';
 import type { ProviderHealthReport } from '../src/scripts/provider-health.mts';
+import type { ProvisionalDecisionCommandResult } from '../src/scripts/provisional-decision.mts';
 import type { ProvisionalDecisionRecord } from '../src/scripts/provisional-decision-state.mts';
 import {
   type CatalogSchemaFile,
@@ -699,6 +700,15 @@ export const provisionalDecisionRecordKeys = [
   'event',
 ] as const satisfies readonly (keyof ProvisionalDecisionRecord)[];
 
+export const provisionalDecisionCommandResultKeys = [
+  'recordId',
+  'commentUrl',
+  'reason',
+  'plan',
+  'state',
+  'action',
+] as const satisfies readonly (keyof ProvisionalDecisionCommandResult)[];
+
 export const onboardingHearingCatalogKeys = [
   'version',
   'items',
@@ -1045,6 +1055,10 @@ const exhaustivenessWitnesses: {
     ProvisionalDecisionRecord,
     (typeof provisionalDecisionRecordKeys)[number]
   >;
+  provisionalDecisionCommandResult: CoversAllKeysOf<
+    ProvisionalDecisionCommandResult,
+    (typeof provisionalDecisionCommandResultKeys)[number]
+  >;
   onboardingHearingCatalog: CoversAllKeysOf<
     OnboardingHearingCatalog,
     (typeof onboardingHearingCatalogKeys)[number]
@@ -1101,6 +1115,7 @@ const exhaustivenessWitnesses: {
   distributionManifest: true,
   distributionSelection: true,
   provisionalDecisionRecord: true,
+  provisionalDecisionCommandResult: true,
   onboardingHearingCatalog: true,
   onboardingHearingTranscript: true,
   policyConfig: true,
@@ -1707,6 +1722,89 @@ const provisionalDecisionRecordFixture = {
     executionCriteria: ['The selected behavior passes its targeted checks.'],
   },
 } satisfies ProvisionalDecisionRecord;
+
+const provisionalDecisionCommandResultFixture = {
+  recordId: null,
+  commentUrl: '',
+  reason: 'The requested input needs correction.',
+  state: 'refused',
+  action: 'fix-input',
+} satisfies ProvisionalDecisionCommandResult;
+
+// A planned `work-completed` result: the only planned shape whose plan carries
+// an existing record. Every nullable member of the plan is populated, so the
+// fixture checks the non-null side of the exported union against the schema.
+// It covers the result's shape, not a transcript of one command run.
+const provisionalPlannedCandidateFixture = {
+  ...provisionalDecisionRecordFixture,
+  recordId: 'prov-0123456789abcdef0123456789abcdef',
+  event: {
+    type: 'work-completed',
+    result: {
+      kind: 'merged-pull-request',
+      reference: 'https://github.com/kurone-kito/idd-skill/pull/5119',
+      verifiedAt: '2026-10-20T01:00:00Z',
+      headSha: 'b'.repeat(40),
+      mergeCommitSha: 'c'.repeat(40),
+    },
+  },
+} satisfies ProvisionalDecisionRecord;
+
+const provisionalPlannedCommentUrl =
+  'https://github.com/kurone-kito/idd-skill/issues/4519#issuecomment-4002';
+
+const provisionalDecisionPlannedResultFixture = {
+  recordId: provisionalPlannedCandidateFixture.recordId,
+  commentUrl: provisionalPlannedCommentUrl,
+  state: 'planned',
+  plan: {
+    candidateRecord: provisionalPlannedCandidateFixture,
+    verifiedClaimLineage: [
+      {
+        ...provisionalDecisionRecordFixture.claimLineage[0],
+        commentId: '4001',
+      },
+    ],
+    verifiedAt: provisionalPlannedCandidateFixture.event.result.verifiedAt,
+    locatedDecision: {
+      recordId: provisionalDecisionRecordFixture.recordId,
+      bundleGeneration: 1,
+      decisionGeneration: 1,
+      status: 'confirmation-pending',
+      bundleState: 'accepting',
+    },
+    history: {
+      comments: [
+        {
+          id: '4002',
+          url: provisionalPlannedCommentUrl,
+          body: `<!-- idd-provisional-decision-record:v1 -->\n${JSON.stringify(provisionalPlannedCandidateFixture)}`,
+          authorLogin: 'kurone-kito',
+          createdAt: '2026-10-20T01:00:05Z',
+          edited: false,
+          trustedAuthor: true,
+        },
+      ],
+      complete: true,
+      serverDate: 'Tue, 20 Oct 2026 01:00:10 GMT',
+    },
+    baseline: {
+      title: provisionalDecisionRecordFixture.source.snapshot.title,
+      bodySha256: provisionalDecisionRecordFixture.source.snapshot.bodySha256,
+    },
+    existingRecord: {
+      commentId: '4002',
+      commentUrl: provisionalPlannedCommentUrl,
+      labelPresent: false,
+    },
+    pullRequest: {
+      state: 'merged',
+      headSha: 'b'.repeat(40),
+      mergeCommitSha: 'c'.repeat(40),
+      requiredChecksPassing: true,
+    },
+  },
+} satisfies ProvisionalDecisionCommandResult;
 
 const onboardingHearingCatalogFixture = {
   version: '1.0.0',
@@ -2400,6 +2498,10 @@ const SCHEMA_TEST_DATA: Record<CatalogSchemaFile, SchemaTestData> = {
   'provisional-decision-record.schema.json': {
     keys: provisionalDecisionRecordKeys,
     fixture: provisionalDecisionRecordFixture,
+  },
+  'provisional-decision.schema.json': {
+    keys: provisionalDecisionCommandResultKeys,
+    fixture: provisionalDecisionCommandResultFixture,
   },
   'onboarding-hearing-catalog.schema.json': {
     keys: onboardingHearingCatalogKeys,
@@ -3384,6 +3486,35 @@ for (const entry of SCHEMA_TYPE_MAP) {
 // ---------------------------------------------------------------------------
 // Extra structural checks.
 // ---------------------------------------------------------------------------
+
+test('provisional-decision.schema.json: a planned result with non-null plan values validates', () => {
+  const fixture = provisionalDecisionPlannedResultFixture;
+  const { plan } = fixture;
+  const schemaPath = 'schemas/provisional-decision.schema.json';
+
+  // `satisfies ProvisionalDecisionCommandResult` is enforced by typecheck; the
+  // assertions below keep the fixture from quietly regressing to null values.
+  for (const [name, value] of Object.entries({
+    locatedDecision: plan.locatedDecision,
+    existingRecord: plan.existingRecord,
+    pullRequest: plan.pullRequest,
+    mergeCommitSha: plan.pullRequest.mergeCommitSha,
+    authorLogin: plan.history.comments[0].authorLogin,
+    commentId: plan.verifiedClaimLineage[0].commentId,
+  })) {
+    assert.notEqual(value, null, `${name} must be populated`);
+    assert.notEqual(value, undefined, `${name} must be populated`);
+  }
+  assert.equal(fixture.recordId, plan.candidateRecord.recordId);
+  assert.equal(fixture.commentUrl, plan.existingRecord.commentUrl);
+  assert.deepEqual(
+    validate(fixture, loadJson(schemaPath), '$', {
+      root: process.cwd(),
+      schemaPath,
+    }),
+    [],
+  );
+});
 
 test('phase-graph canonical fixture passes referential-integrity validation', () => {
   assert.deepEqual(validatePhaseGraph(phaseGraphFixture), []);

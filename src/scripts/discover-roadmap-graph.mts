@@ -37,8 +37,12 @@ import {
   isDiscoverIncompleteResult,
 } from './discover-progress.mts';
 import {
+  buildProvisionalDecisionEvidenceReader,
   buildRoadmapMarkerResolver,
   evaluateDiscoverReadiness,
+  type PotentiallyAffectedProvisionalDependency,
+  type ProvisionalDecisionEvidence,
+  type ProvisionalDependencyProgress,
 } from './discover-readiness-check.mts';
 import { type EffortHint, effortOrdinal, parseEffort } from './effort.mts';
 import type { HelperCliResult } from './helper-cli-runner.mts';
@@ -298,6 +302,10 @@ export interface LeafReadiness {
    * alone. Advisory only — never a gate.
    */
   startable: boolean;
+  /** Exact verified provisional edges that permit this leaf to proceed. */
+  provisionalDependencies?: ProvisionalDependencyProgress[];
+  /** Blocked provisional edges whose prior merged work may need review. */
+  potentiallyAffectedDependencies?: PotentiallyAffectedProvisionalDependency[];
 }
 
 /** One node of the enumerated roadmap graph in report form. */
@@ -338,6 +346,8 @@ export interface RoadmapGraphNode {
    * path so the byte-stable output shape is unchanged.
    */
   readiness?: LeafReadiness;
+  /** Full replay result, present only when the caller requests this read. */
+  provisionalDecisionState?: ProvisionalDecisionEvidence;
   /**
    * REST `state_reason` for a node closed WITHOUT completion (`not_planned`,
    * `duplicate`, or any other non-null reason other than `completed`).
@@ -706,6 +716,14 @@ interface ReadinessResolution {
   readyLabelName?: string;
   /** Resolution "now" (ISO8601); defaults to the wall clock in the CLI. */
   nowIso: string;
+  loadProvisionalDecisionState?: (
+    issueNumber: number,
+  ) => Promise<ProvisionalDecisionEvidence>;
+  decisionIssueClassEnabled?: () => boolean;
+}
+
+interface ProvisionalDecisionStateResolution {
+  loadState: (issueNumber: number) => Promise<ProvisionalDecisionEvidence>;
 }
 
 interface ReadinessOptions {
@@ -715,6 +733,7 @@ interface ReadinessOptions {
 interface EnumerateRoadmapGraphOptions
   extends ClaimStateOptions,
     ReadinessOptions {
+  provisionalDecisionState?: ProvisionalDecisionStateResolution;
   markerPrefix?: unknown;
   owner?: string;
   repo?: string;
@@ -1465,6 +1484,13 @@ export async function enumerateRoadmapGraph(
       markerPrefix,
       currentRepoRef,
     );
+  }
+
+  if (options.provisionalDecisionState) {
+    for (const node of nodes) {
+      (node as RoadmapGraphNode).provisionalDecisionState =
+        await options.provisionalDecisionState.loadState(node.number);
+    }
   }
 
   return {
@@ -2380,6 +2406,8 @@ async function annotateReadiness(
       // traversal -- exactly the cross-path disagreement this issue
       // exists to eliminate.
       currentRepo: currentRepo || undefined,
+      loadProvisionalDecisionState: readiness.loadProvisionalDecisionState,
+      decisionIssueClassEnabled: readiness.decisionIssueClassEnabled,
       now: readiness.nowIso,
     },
   );
@@ -2387,15 +2415,44 @@ async function annotateReadiness(
   const reasonsByNumber = new Map(
     summary.filteredOut.map((entry) => [entry.number, entry.reasons]),
   );
+  const dependencyEvidenceByNumber = new Map<
+    number,
+    Pick<
+      LeafReadiness,
+      'provisionalDependencies' | 'potentiallyAffectedDependencies'
+    >
+  >();
+  for (const entry of summary.ready) {
+    dependencyEvidenceByNumber.set(entry.number, {
+      ...(entry.provisionalDependencies
+        ? { provisionalDependencies: entry.provisionalDependencies }
+        : {}),
+    });
+  }
+  for (const entry of summary.filteredOut) {
+    dependencyEvidenceByNumber.set(entry.number, {
+      ...(entry.provisionalDependencies
+        ? { provisionalDependencies: entry.provisionalDependencies }
+        : {}),
+      ...(entry.potentiallyAffectedDependencies
+        ? {
+            potentiallyAffectedDependencies:
+              entry.potentiallyAffectedDependencies,
+          }
+        : {}),
+    });
+  }
   const authoringReason = `label:${readiness.authoringLabelName}`;
   for (const entry of openEntries) {
     const ready = readyNumbers.has(entry.number);
     const reasons = reasonsByNumber.get(entry.number) ?? [];
+    const dependencyEvidence = dependencyEvidenceByNumber.get(entry.number);
     entry.readiness = {
       ready,
       reasons,
       authoringHeld: reasons.includes(authoringReason),
       startable: ready && entry.claimEligible !== false,
+      ...dependencyEvidence,
     };
   }
 }
@@ -3129,6 +3186,15 @@ function buildReadinessResolution(
   const markerPrefix = normalizeMarkerPrefix(policy.markerPrefix);
   const normalizedPolicy = normalizePolicyConfig(policy);
   const labelsPolicy = normalizedPolicy.labels;
+  const provisionalReader = buildProvisionalDecisionEvidenceReader({
+    owner,
+    repo,
+    port: createGithubProviderAdapter(owner, repo),
+    policy: policy as {
+      trustedMarkerActors?: unknown;
+      claimTiming?: { staleAge?: unknown };
+    } | null,
+  });
   return {
     findRoadmapsByMarker: buildRoadmapMarkerResolver(owner, repo, markerPrefix),
     authoringLabelName: authoringPolicy.labelName,
@@ -3141,6 +3207,8 @@ function buildReadinessResolution(
     confirmationLabelName: normalizedPolicy.autoDecide.confirmationLabelName,
     readyLabelName: normalizedPolicy.approvalSignals.readyLabelName,
     nowIso: new Date().toISOString(),
+    loadProvisionalDecisionState: provisionalReader.loadState,
+    decisionIssueClassEnabled: provisionalReader.decisionIssueClassEnabled,
   };
 }
 

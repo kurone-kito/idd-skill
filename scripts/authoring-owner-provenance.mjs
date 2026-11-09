@@ -295,8 +295,11 @@ export function looksLikeOwnerMarker(body, markerPrefix) {
  * parsing, target-matching, or validation; `{ event: null, rejectReason:
  * null }` when the pool is empty; or `{ event, rejectReason: null }` on
  * success.
+ *
+ * Exported for the auto-decide record reader (kurone-kito/idd-skill#4962),
+ * which compares a confirmation body against the same Stage 1 acquire.
  */
-function findStageOneAcquire(
+export function findStageOneAcquire(
   comments,
   target,
   markerPrefix,

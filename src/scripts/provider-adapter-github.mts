@@ -4069,9 +4069,15 @@ export function createGithubProviderAdapter(
       ref: string,
     ): ProviderGovernanceReadOutcome<string> {
       try {
+        // Encode each segment so a PR-controlled name such as `a?b#c` stays
+        // in the contents path instead of starting a query or fragment.
+        const encodedPath = path
+          .split('/')
+          .map((segment) => encodeURIComponent(segment))
+          .join('/');
         const content = deps.ghText([
           'api',
-          `repos/${repoRef}/contents/${path}`,
+          `repos/${repoRef}/contents/${encodedPath}`,
           '--method',
           'GET',
           '--field',
@@ -4428,8 +4434,9 @@ export function createGithubProviderAdapter(
       // required-reviewer pattern matching (pre-merge-readiness.mts),
       // where a stale rename source could pull in an obsolete owner or
       // let an approval from it substitute for the destination path's
-      // real owner. See {@link listChangeRequestRenamedFromPaths} for the
-      // one consumer that specifically needs the old path too.
+      // real owner. The self-referential-bootstrap check and scope-overrun
+      // audit use the separate renamed-from list; current-path consumers
+      // above must not use it.
       return rows.map((row) => String(row.filename ?? ''));
     },
 
