@@ -268,9 +268,10 @@ incomplete/current authoring hold blocks; only exact anchor/set/session
 `release-complete` allows a completed generation.
 Route directly to already-claimed/Discover fallback (A0-T stops), never A5(c).
 
-Fresh-claim order, worktree first. Fresh branches only; for an inheritable
-branch, follow [Re-claim an inheritable branch](../../docs/idd-resume-detail.md#re-claim-an-inheritable-branch).
-Resolve the commands as A5(a) does.
+Fresh-claim order, worktree first. Run [B1 Step 1's repository guards](idd-work.instructions.md#b1--create-worktree-with-branch)
+before `claim-issue`; keep `GH_REPO` unset through the helper (issue `#5090`).
+Resolve commands per A5(a). For inheritable
+branches, use [Re-claim an inheritable branch](../../docs/idd-resume-detail.md#re-claim-an-inheritable-branch).
 
 1. Create the worktree and branch: `git worktree add --no-track <path> -b
    <branch-name> origin/{development-branch}` (fresh-claim row of
@@ -278,12 +279,10 @@ Resolve the commands as A5(a) does.
    use WorkTrunk create here: its pre-start hook installs before the claim POST.
 2. `--record-tokens --worktree <path> --agent-id {agent-id} --claim-id {claim-id}`.
 3. Re-run the A5(c) gate with `--fresh-claim-gate --own-worktree <path>`,
-   so this session's new worktree does not read as an occupant of a
-   released claim's branch. The gate ignores that path only while it is
-   clean, and either has no commits beyond the base or sits at its live
-   remote tip (#4067). Observed 2026-10-11, issues
-   `#3944` and `#3952`: without the flag the gate read `already-claimed`
-   (`released-claim-local-worktree-occupied`). Only on `claimable`, post
+   ignoring this path only when clean and either without commits beyond
+   the base or at its live remote tip (issue `#4067`). Without that flag it
+   reads as occupied (`released-claim-local-worktree-occupied`;
+   2026-10-11, issues `#3944` and `#3952`). Only on `claimable`, post
    the claim comment per
    [Claim format](idd-overview-core.instructions.md#claim-format), then
    record `{nonce}` with `claim-lock --record-tokens --nonce` on

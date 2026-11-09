@@ -388,7 +388,7 @@ for every stop of an `--apply` run after the pre-checks; it exits `1` as
 | `idd-load-gate.mjs`                | an unknown flag, a missing value, a non-positive or malformed `--max-load`, or a malformed `--timeout-ms` or `--poll-ms`                            | exit `3` when the timeout ends with the load still at or above the limit (the JSON line on stdout has `passed` set to `false`)                              |
 | `idd-activation.mjs`               | an unknown flag, or an empty `--cwd` value                                                                                                          | none today                                                                                                                                                  |
 | `claim-approval-gate.mjs`          | a missing `--issue`, or an unknown flag                                                                                                             | none today                                                                                                                                                  |
-| `claim-issue.mjs`                  | a missing or invalid `--issue`, `--agent-id`, or `--project-status`, `--apply` without both of the last two, or an unknown flag                     | exit `1` for every ineligible result, including a failed check, and for every stop of an `--apply` run                                                      |
+| `claim-issue.mjs`                  | a missing or invalid `--issue`, `--agent-id`, `--project-status`, `--confirmation`, `--decision`, a B1 flag used out of place, or an unknown flag   | exit `1` for every ineligible result, including a failed check, and for every stop of an `--apply` run                                                      |
 | `claim-lock.mjs`                   | a missing mode or required flag, or an unknown flag                                                                                                 | exit `2` on an `--acquire` collision, exit `4` on a primary-worktree refusal, or a non-`backfilled` `--backfill-tokens`                                     |
 | `clone-lock.mjs`                   | a missing mode, `--agent-id`, or command, or an unknown flag                                                                                        | exit `3` on an acquire timeout; a wrapped command's own non-zero status                                                                                     |
 | `phase-id-resolver.mjs`            | a missing `--phase-id`, or an unknown flag                                                                                                          | none today                                                                                                                                                  |
@@ -6372,7 +6372,11 @@ This record is durable issue evidence: it is not added to the transient
      session's own login. The development branch must exist on origin, or
      the run stops with `development-branch-unresolved`. A prunable worktree
      entry or a leftover local branch of the claim's name stops with
-     `b1-cleanup-needed`.
+     `b1-cleanup-needed`. The leftover-branch stop and `path-occupied` end
+     their next action with one static sentence that points at
+     `--preserve-b1-leftovers` (see
+     [B1 leftover preservation](#b1-leftover-preservation)); the
+     prunable-entry stop keeps its text.
   2. Still under the lock, the scoped local-worktree and remote-branch scans
      of A5(e) run again after the fetch (`local-worktree-occupied`,
      `local-worktree-unreadable`, or `branch-collision` if one appeared since
@@ -6454,9 +6458,10 @@ This record is durable issue evidence: it is not added to the transient
 - Exit `0` means the claim is verified. Every stop exits `1` with the
   envelope kind `gate`. The report carries `claimPosted` (`true`, `false`
   when nothing was sent, or `"unknown"`), `lostClaimCleanupRequired`, and
-  a `nextAction`. The helper deletes nothing. Once the worktree exists, a
-  failure keeps the worktree, its branch, and the worktree-local lock, and
-  the next action is `lost-claim-cleanup` from `idd-claim.instructions.md`.
+  a `nextAction`. Without `--preserve-b1-leftovers` the helper deletes
+  nothing. Once the worktree exists, a failure keeps the worktree, its
+  branch, and the worktree-local lock, and the next action is
+  `lost-claim-cleanup` from `idd-claim.instructions.md`.
 - The routing and marker helpers that the write half calls run from the
   primary checkout, so each one reads the policy that the fast-forward
   refreshed. `claim-lock` runs from the linked worktree, the caller's own
@@ -6464,6 +6469,165 @@ This record is durable issue evidence: it is not added to the transient
   claim's own.
 - Stale-claim takeover is out of scope: a stale active claim stops the run
   with `stale-takeover-out-of-scope`.
+
+### B1 leftover preservation
+
+- Command: `node scripts/claim-issue.mjs --issue <issue-number>
+  --preserve-b1-leftovers [--confirmation <owner>/<repo>#<number>
+  --decision <id>...]`. Add `--apply --agent-id <id> --project-status
+  <not-in-use|not-started>` for the write run. The same flags work through
+  the profile-selected `idd:claim-issue` command. `--confirmation` and
+  `--decision` are valid only with the flag, `--decision` needs
+  `--confirmation`, and `--decision` may repeat. A `--confirmation` is one
+  issue of this repository other than the claimed issue. A decision ID is
+  one token of at most 128 characters with no whitespace, no `;`, and no
+  `-->`. Anything else is a usage error. The logic lives in
+  `src/scripts/b1-leftover-preserve.mts`; `claim-issue.mts` only wires it.
+- Why: the manual B1 rules stop a fresh claim when its branch already exists
+  locally or something sits at its worktree path, and `claim-issue` stopped
+  the same way with `b1-cleanup-needed` or `path-occupied`. The helper header
+  and the leftover-branch next action both said that the helper deletes or
+  removes nothing. At the operator hearing of 2026-11-01
+  (recorded in roadmap `#4955`, implemented by issue `#4970`) the operator
+  chose that, with the `b1Leftover` auto-decide class switched on, the session
+  preserves such a leftover and continues. Unpushed commits on the local
+  default branch, a prunable worktree entry, and anything in the primary
+  worktree stay out of scope.
+- A leftover is one of two subjects. A branch: the claim's computed branch
+  exists as a local ref. A path: anything, a file, a directory, or a link,
+  sits at the computed worktree path
+  `<primary-parent>/<repo>.<normalized-branch>`. A run can list both, and
+  each needs its own record. The mode acts only where a run without the flag
+  would stop. With no leftover it acts on nothing, `--confirmation` is not
+  needed, the claim proceeds, and any `--decision` is reported in
+  `decisionsUnused`.
+- Dry run (no `--apply`): after the five pre-checks pass, the helper lists
+  every leftover with its subject (the short branch name, or the absolute
+  path with its parent resolved and its last component kept as written),
+  and evaluates each precondition below. It reads the primary checkout, the
+  default branch, the local policy, the trusted policy, the fresh-claim gate,
+  `git ls-remote`, `gh pr list`, and the confirmation issue, but takes no
+  lock and makes no fetch or write. Without `--confirmation` it reports the
+  record precondition as unmet without refusing, so the order is dry run,
+  record, apply. The exit code still follows the pre-checks, and the report
+  gains `b1Leftovers` only when every pre-check passed. The dry run does not
+  fast-forward the primary checkout, so its answer is advisory: apply checks
+  everything again under the lock.
+- Apply: with `--apply` the helper adds the step `b1-preserve` under the same
+  clone lock, after `development-branch` and before `b1-leftovers`. It
+  re-reads the fresh-claim gate (keeping `evidence.released_claim.branch`),
+  and checks every precondition for every listed subject again. The first
+  change happens only when all of them are met, so a refusal never leaves one
+  leftover half handled. The branch is preserved first and the path second.
+  The run then continues through `local-rescan`, `remote-rescan`,
+  `worktree-path`, and `worktree-add`.
+- Common preconditions:
+  - the trusted read of the repository's default branch reports `b1Leftover`
+    as `enabled` (a master switch that is off, a class that is off, or an
+    unreadable policy refuses);
+  - the fresh-claim gate reads `claimable`, its response carries an
+    `evidence` object (the routing always prints one), and a `released_claim`
+    in it is neither unreadable nor the claim's own branch (a released
+    claim's branch is inheritable, and so is the path derived from it);
+  - the worktree list is readable and names the primary checkout (an empty
+    list refuses), and the claim's branch has the `issue/<number>-<slug>`
+    shape;
+  - no prunable worktree entry is on the branch or at the path;
+  - the confirmation issue is open, carries the confirmation label, and no
+    longer carries the authoring label, read through the trusted record
+    reader with the policy file of the primary checkout;
+  - one `--decision` per listed subject, each paired with its subject through
+    the `Subject:` value of its record. An ID that matches no listed subject,
+    an ID given twice, two IDs for one subject, and a count that differs
+    from the listed subjects (for example because the leftovers changed since
+    the dry run) all refuse. Each paired record has `class=b1Leftover`,
+    `source` equal to the claimed issue, `claim=none`, `set=none` (the
+    contract's pairing, which the record reader does not enforce), and its
+    decision. The
+    decision is not voided and has no counting `location` or `failure` note,
+    so a decision that was already acted on or already failed never
+    authorizes another preservation: a new attempt is a new decision.
+- Branch mode, in addition: the branch is the claim's computed branch, never
+  an argument, and is neither the default nor the development branch. It is a
+  plain ref: a symbolic ref refuses, because deleting one could remove its
+  target. It is checked out in no worktree and no worktree is mid-rebase or
+  mid-bisect on it (the scoped scan of A5(e)). `git branch -d` would refuse
+  it: it is not merged into its upstream when one is configured and
+  resolvable, else not merged into the primary's HEAD. A branch that `-d`
+  deletes keeps today's stop. `git ls-remote --heads` on every remote shows
+  no such branch (a clone with no remote refuses, since absence cannot be
+  proven), no open pull request has it as its head (a listing that reaches
+  its 100-row limit refuses), and a failed or malformed read refuses. The
+  action creates the backup ref `refs/idd-b1/<issue>/<commit>` with a
+  create-only `git update-ref` (an existing plain ref at the same commit is
+  reused; a symbolic ref, another commit, or a ref that collides with the
+  backup path refuses), reads it back as a plain ref (a symbolic ref swapped
+  in after the check refuses), deletes the branch with
+  `git update-ref --no-deref -d refs/heads/<branch> <commit>` (which fails
+  when the tip moved), and removes the `branch.<name>` configuration section
+  when the repository's own configuration holds keys, so that a recreated
+  branch does not inherit it. The section's keys are read after the delete,
+  and the ref and the section are read back after each removal, whatever the
+  command reported. Right before the delete, the worktree list and the local
+  scan are read again, and a worktree that took the branch since planning
+  stops the run with the backup ref kept. The branch reflog is lost; the
+  commits stay reachable from the backup ref.
+- Path mode, in addition: the path is the computed worktree path, a direct
+  child of the primary's parent, and that parent is not a link. The entry
+  belongs to the current user (a platform without user IDs refuses) and is
+  not listed by `git worktree list`. No registered worktree, the primary
+  included, is at, inside, or around it. A `.git` file in it that points to
+  an existing administration directory refuses. The destination passes the
+  shared preserved-data guards (`b1-preserved` under the per-user state
+  root, and not inside the leftover path itself), and the source is on the
+  same device as every existing destination parent. Both are checked before
+  any directory is created. The action creates
+  `<state>/idd-skill/b1-preserved/<issue>-<UTC timestamp>/` through the
+  shared creation step, which also restricts each parent directory to its
+  owner (the report names each parent that let others in before, as a
+  `parents-restricted` action). It then rechecks its parents and the
+  source's no-follow identity right before the rename, renames the entry
+  (never a copy and never a removal) to `<basename>` inside it, and checks
+  the moved entry's identity. A mismatch leaves the entry at the destination
+  and reports both paths. The entry moves back only when its identity
+  matches, read again right before the move, and the source path is free.
+  The mode checks no live use: a rename keeps inodes, so a process that
+  still writes into the tree keeps writing into the preserved copy
+  (preventive; no observed incident yet).
+- A refused precondition changes nothing. The step `b1-preserve` still
+  passes with a detail that starts "not preserved", `b1Leftovers.outcome` is
+  `unmet-preconditions`, and the stops of a run without the flag follow
+  unchanged, so a refused leftover branch still stops with
+  `b1-cleanup-needed` and a refused path with `path-occupied`.
+- Report: `b1Leftovers` holds `mode`, `outcome` (`no-leftover`,
+  `unmet-preconditions`, `ready`, `preserved`, or `failed`), `common` (each
+  common precondition), `subjects` (each with its `kind`, `subject`,
+  `decision`, and `preconditions`, each `met` or `unmet` with a detail),
+  `actions`, `backupRefs`, `destinations` (`from` and `to`),
+  `removedConfigSections`, `decisionsUnused`, and `failure`. The caller
+  comments each backup ref and destination on the confirmation issue, even
+  when a later claim step fails. After a preservation, every later stop's
+  `nextAction` (and the failed step's) names what was saved and no longer
+  says that nothing was removed or created.
+- Failures after a state change stop the run with `b1-preserve-failed`
+  (`lostClaimCleanupRequired` stays `false`: no worktree or claim exists
+  yet), with the saved locations in the report and the next action:
+
+  | After                          | Failure                                                                        | Outcome                                                                                                                 |
+  | ------------------------------ | ------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
+  | Backup ref written             | Read-back fails                                                                | The ref stays, the branch is untouched, the run stops                                                                   |
+  | Backup ref written             | The deletion fails because the tip moved                                       | The ref stays, the branch is untouched, the run stops                                                                   |
+  | Branch deleted                 | A present configuration section is not removed                                 | The commits are on the backup ref; the run stops before `worktree-add`; the section is named                            |
+  | Destination parents created    | The rename fails                                                               | Empty private parents stay, the source is untouched, the run stops                                                      |
+  | Destination directory created  | Its privacy or identity check fails                                            | The source is untouched, the run stops, the path is reported                                                            |
+  | Path renamed                   | The moved entry's identity differs                                             | The entry stays at the destination, both paths are reported                                                             |
+  | Path renamed, identity matches | Moving back is needed but the source is occupied again, or the move back fails | The entry stays where the failure leaves it, both paths are reported                                                    |
+  | A leftover preserved           | A later claim step fails                                                       | The leftover stays preserved; that step's reason and next action name the location; a rerun no longer sees the leftover |
+
+- Open risks, accepted by the operator: the window between the last check and
+  the rename or the ref deletion, which the platform cannot close (inside it
+  only a writer outside IDD can interfere, because IDD sessions take the
+  clone lock), and the resolution of a state root that is a link.
 
 ### Worktree-local claim lock
 

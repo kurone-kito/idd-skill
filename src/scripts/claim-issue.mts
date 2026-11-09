@@ -21,9 +21,14 @@
 // (under the clone-scoped lock), then the claim marker, the activation nonce,
 // `claim-lock --acquire`, and the final assert, with the authoring-label hold
 // check before and after the claim. It stops at the first failed step and
-// deletes nothing. Once the worktree exists, a failure keeps the worktree, the
-// branch, and the worktree-local claim lock, and the report says what to run
-// next (`lost-claim-cleanup`).
+// deletes nothing, except in one opt-in mode: `--preserve-b1-leftovers`
+// (issue 4970, roadmap 4955) preserves a B1 leftover, a branch that already
+// exists or something at the worktree path, behind the `b1Leftover`
+// auto-decide class and a confirmation record, through
+// `b1-leftover-preserve.mts`. That mode deletes a branch ref only after
+// backing it up, and moves a path without removing it. Once the worktree
+// exists, a failure keeps the worktree, the branch, and the worktree-local
+// claim lock, and the report says what to run next (`lost-claim-cleanup`).
 //
 // Fail-closed contract: a pre-check helper or `gh` call that fails or returns
 // malformed output never reads as eligible. It is `precheck-unavailable` with
@@ -46,6 +51,20 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { lstatSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 
+import {
+  type B1Confirmation,
+  type B1GateReading,
+  type B1LeftoverReport,
+  type B1PreserveFailure,
+  type B1PreservePorts,
+  type B1PreserveRequest,
+  createDefaultB1PreservePorts,
+  describeB1Locations,
+  isDecisionId,
+  newB1LeftoverReport,
+  runB1Preservation,
+  worktreeParentProblem,
+} from './b1-leftover-preserve.mts';
 import { computeBranchName } from './branch-name.mts';
 import { resolveBundleRoot } from './bundle-root.mts';
 import { parseCanonicalIntegerOrNull, parseCliArgs } from './cli-args.mts';
@@ -61,7 +80,10 @@ import {
   isHelperErrorEnvelopeEnabled,
   runHelperCli,
 } from './helper-cli-runner.mts';
-import { loadLayeredLocalPolicy } from './idd-config.mts';
+import {
+  DEFAULT_POLICY_CONFIG_PATH,
+  loadLayeredLocalPolicy,
+} from './idd-config.mts';
 import {
   inspectLocalWorktreeBranchPrefix,
   type LocalWorktreeInspection,
@@ -96,6 +118,9 @@ const CLAIM_ISSUE_FLAG_SPEC = {
   '--apply': { type: 'boolean' },
   '--agent-id': { type: 'string' },
   '--project-status': { type: 'string' },
+  '--preserve-b1-leftovers': { type: 'boolean' },
+  '--confirmation': { type: 'string' },
+  '--decision': { type: 'string', multiple: true },
   '--help': { type: 'boolean', short: 'h' },
 } as const;
 
@@ -119,10 +144,18 @@ const PRIMARY_RETRY_NEXT =
   'Bring the primary checkout to the default branch by hand (B1 step 1 in idd-work.instructions.md), then rerun this helper. This helper removed nothing.';
 const PRIMARY_WORKTREE_DIRTY_NEXT =
   "The listed paths in the shared primary checkout can stop every issue's fast-forward. Check their index state: if any path is staged or unmerged, preserve staged and unstaged content and ask the operator to resolve the index before retrying. Otherwise, have the operator move only paths created by this session outside the repository; leave all others in place and ask. Do not stash, discard, or remove a worktree. This helper removed nothing.";
-const CLEANUP_NEXT =
-  'Run the B1 cleanup of idd-work.instructions.md by hand: remove the prunable worktree entry, or delete the leftover branch if its commits are confirmed unneeded. Then rerun this helper. This helper removed nothing.';
-const PATH_NEXT =
-  'Inspect the path by hand. This helper never removes it: move or clean it, then rerun this helper.';
+const CLEANUP_STEPS =
+  'Run the B1 cleanup of idd-work.instructions.md by hand: remove the prunable worktree entry, or delete the leftover branch if its commits are confirmed unneeded. Then rerun this helper.';
+/** The prunable-entry stop: unchanged, because `--preserve-b1-leftovers` never handles it. */
+const CLEANUP_NEXT = `${CLEANUP_STEPS} This helper removed nothing.`;
+/**
+ * The one static sentence the leftover-branch and `path-occupied` stops carry
+ * (issue 4970). It reads no GitHub state: it only points at the opt-in mode.
+ */
+const AUTO_DECIDE_SENTENCE =
+  'If the `b1Leftover` auto-decide class is enabled, follow the auto-decide procedure and run `claim-issue --preserve-b1-leftovers`.';
+const LEFTOVER_BRANCH_NEXT = `${CLEANUP_STEPS} ${AUTO_DECIDE_SENTENCE} This helper removed nothing.`;
+const PATH_NEXT = `Inspect the path by hand. This helper never removes it: move or clean it, then rerun this helper. ${AUTO_DECIDE_SENTENCE}`;
 /** The timestamp shape the marker grammar prints (second precision, UTC). */
 const MARKER_TIMESTAMP = '(?<ts>\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z)';
 /**
@@ -131,6 +164,16 @@ const MARKER_TIMESTAMP = '(?<ts>\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z)';
  * (the grammar anchors the whole body).
  */
 const MARKER_NOTE_SUFFIX = '(?:\\r?\\n\\r?\\n_[^\\n]*\\bIDD\\b[^\\n]*_)?\\s*$';
+/** `--confirmation <owner>/<repo>#<number>`: the same reference shape the record grammar uses. */
+const CONFIRMATION_PATTERN =
+  /^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)#([1-9][0-9]*)$/;
+/**
+ * The sentences of a next action that say nothing was removed or created.
+ * After a preservation they are false, so {@link namePreserved} drops them.
+ */
+const NOTHING_SENTENCES =
+  /\s*;?\s*(?:[Tt]his helper (?:removed|created) nothing|Nothing was created|[Tt]his helper created no worktree or branch)\./g;
+
 /** The next action when the issue is not OPEN (the issue-state guard). */
 const CLOSED_NEXT =
   'The issue is closed, so it cannot be claimed. Do not claim it. If a maintainer reopens it, rerun this helper; otherwise choose an open issue. This helper created nothing.';
@@ -208,6 +251,7 @@ export type ClaimStopReason =
   | 'development-branch-unresolved'
   | 'b1-cleanup-needed'
   | 'path-occupied'
+  | 'b1-preserve-failed'
   | 'worktree-add-failed'
   | 'tokens-record-failed'
   | 'hold-active'
@@ -242,6 +286,12 @@ export interface ClaimIssueReport {
   gateReason?: string;
   /** Only for `already-claimed`: the gate's `winning_claim_id`, or `null`. */
   winningClaimId?: string | null;
+  /**
+   * Only with `--preserve-b1-leftovers`: the leftovers found, each
+   * precondition, and every action taken (issue 4970). A dry run adds it only
+   * when every pre-check passed.
+   */
+  b1Leftovers?: B1LeftoverReport;
 }
 
 /** A finished child process or `gh` call. `status` is `null` on no exit code. */
@@ -292,6 +342,11 @@ export interface ClaimIssueDeps {
   mintClaimId: () => string;
   /** The write half only: a fresh activation nonce (32 hex characters). */
   mintNonce: () => string;
+  /**
+   * `--preserve-b1-leftovers` only: the trusted reads and the filesystem the
+   * preservation mode uses. A run without the flag never touches it.
+   */
+  b1Preserve?: B1PreservePorts;
 }
 
 /**
@@ -441,6 +496,11 @@ export function createDefaultDeps(): ClaimIssueDeps {
     now: () => new Date(),
     mintClaimId: () => randomUUID(),
     mintNonce: () => randomBytes(16).toString('hex'),
+    // A getter, so a run without the flag never builds the ports (which read
+    // the home directory and the environment for the state root).
+    get b1Preserve(): B1PreservePorts {
+      return createDefaultB1PreservePorts();
+    },
   };
 }
 
@@ -612,8 +672,37 @@ type FreshGateReading =
       verdict: string;
       reason: string;
       winningClaimId: string | null;
+      /** The routing's `evidence.released_claim`, kept for the B1 preservation. */
+      releasedClaim: { present: boolean; branch: string | null };
     }
   | { ok: false; detail: string };
+
+/**
+ * The released claim the routing names, if any. `resume-claim-routing` always
+ * prints an `evidence` object, so a response without one is malformed: it is
+ * read as a released claim with no readable branch, and the preservation
+ * refuses rather than treating the absence as proof. A `released_claim` that
+ * is present but not a record with a non-empty string `branch` is `present`
+ * with a `null` branch for the same reason.
+ */
+function readReleasedClaim(routing: Record<string, unknown>): {
+  present: boolean;
+  branch: string | null;
+} {
+  const evidence = routing.evidence;
+  if (!isRecord(evidence)) {
+    return { present: true, branch: null };
+  }
+  const released = evidence.released_claim;
+  if (released === undefined) {
+    return { present: false, branch: null };
+  }
+  const branch = isRecord(released) ? released.branch : null;
+  return {
+    present: true,
+    branch: typeof branch === 'string' && branch !== '' ? branch : null,
+  };
+}
 
 /**
  * Run `resume-claim-routing --fresh-claim-gate` (with `extra` arguments, such
@@ -698,6 +787,7 @@ function readFreshClaimGate(
     verdict: gate.verdict,
     reason: routing.reason,
     winningClaimId: winningClaimId === null ? null : (winningClaimId as string),
+    releasedClaim: readReleasedClaim(routing),
   };
 }
 
@@ -1132,10 +1222,18 @@ export function runClaimPrechecks(
 /** The project status the caller attests for A5(b); the helper cannot read it. */
 export type ClaimProjectStatus = 'not-in-use' | 'not-started';
 
+/** `--preserve-b1-leftovers` and the record it needs (issue 4970). */
+export interface ClaimPreserveInput {
+  confirmation: B1Confirmation | null;
+  decisions: string[];
+}
+
 /** What `--apply` takes from the caller. */
 export interface ClaimApplyInput {
   agentId: string;
   projectStatus: ClaimProjectStatus;
+  /** Set only with `--preserve-b1-leftovers`. */
+  preserve?: ClaimPreserveInput;
 }
 
 /** The claim identity a run minted. Present once the worktree exists. */
@@ -1197,6 +1295,8 @@ interface ApplyState {
   worktreeCreated: boolean;
   identity: ClaimApplyIdentity | null;
   claimPosted: boolean | 'unknown';
+  /** The preservation report; set once `--preserve-b1-leftovers` reaches its step. */
+  b1Report: B1LeftoverReport | null;
 }
 
 /** The authoring-label read: clear, held, or not readable (never read as clear). */
@@ -1514,6 +1614,34 @@ function readPrimaryRoot(state: ApplyState): ApplyOutcome {
  * run writes.
  */
 function readPolicy(state: ApplyState): ApplyOutcome {
+  const loaded = readPolicyConfig(state);
+  if (!loaded.ok) {
+    return loaded;
+  }
+  const viewer = readViewerLogin(state);
+  if (viewer === null) {
+    return applyFail(
+      'precheck-unavailable',
+      POLICY_NEXT,
+      'the viewer login could not be read, so this run cannot recognize the markers it posts',
+    );
+  }
+  const configured = resolveTrustedMarkerActors({
+    envValue: process.env.IDD_TRUSTED_MARKER_ACTORS ?? '',
+    config: isRecord(state.config)
+      ? { trustedMarkerActors: state.config.trustedMarkerActors }
+      : null,
+  }).actors;
+  state.trustedActors = [...new Set([...configured, viewer.toLowerCase()])];
+  return applyPass(`effective policy of ${state.primary}; viewer ${viewer}`);
+}
+
+/**
+ * The policy half of {@link readPolicy}: the layered effective policy of the
+ * primary checkout, with no network read. The dry run of
+ * `--preserve-b1-leftovers` uses it alone.
+ */
+function readPolicyConfig(state: ApplyState): ApplyOutcome {
   let config: unknown;
   try {
     const loaded = loadLayeredLocalPolicy({ cwd: state.primary });
@@ -1533,27 +1661,12 @@ function readPolicy(state: ApplyState): ApplyOutcome {
       `the policy could not be read: ${errorMessage(error)}`,
     );
   }
-  const viewer = readViewerLogin(state);
-  if (viewer === null) {
-    return applyFail(
-      'precheck-unavailable',
-      POLICY_NEXT,
-      'the viewer login could not be read, so this run cannot recognize the markers it posts',
-    );
-  }
   const normalized = normalizePolicyConfig(config);
-  const configured = resolveTrustedMarkerActors({
-    envValue: process.env.IDD_TRUSTED_MARKER_ACTORS ?? '',
-    config: isRecord(config)
-      ? { trustedMarkerActors: config.trustedMarkerActors }
-      : null,
-  }).actors;
   state.config = config;
   state.settleMs =
     parseIsoDurationToMs(normalized.claim.verifySettleDelay) ?? 0;
   state.authoringLabel = normalized.issueAuthoring.authoringLabelName;
-  state.trustedActors = [...new Set([...configured, viewer.toLowerCase()])];
-  return applyPass(`effective policy of ${state.primary}; viewer ${viewer}`);
+  return applyPass(`effective policy of ${state.primary}`);
 }
 
 /** The login of the account this session writes as; `null` when it cannot be read. */
@@ -1889,6 +2002,238 @@ function fastForwardPrimary(state: ApplyState): ApplyOutcome {
   return applyPass(`${base} is on origin/${base} (fast-forwarded)`);
 }
 
+/** The gate reading in the shape the preservation module takes. */
+function toB1Gate(reading: FreshGateReading): B1GateReading {
+  return reading.ok
+    ? {
+        ok: true,
+        detail: '',
+        verdict: reading.verdict,
+        releasedClaim: reading.releasedClaim,
+      }
+    : {
+        ok: false,
+        detail: reading.detail,
+        verdict: '',
+        releasedClaim: { present: false, branch: null },
+      };
+}
+
+/**
+ * What the preservation module needs from this run. The fresh-claim gate and
+ * the local-worktree scan are callbacks, so the module reads them again at the
+ * moment it checks its preconditions, under the clone lock in an apply run.
+ */
+function b1Request(
+  state: ApplyState,
+  mode: 'dry-run' | 'apply',
+  preserve: ClaimPreserveInput,
+): B1PreserveRequest {
+  return {
+    mode,
+    issue: state.issue,
+    repository: state.repository,
+    branch: state.branch,
+    primary: state.primary,
+    path: state.path,
+    defaultBranch: state.defaultBranch,
+    developmentBranch: state.developmentBranch,
+    authoringLabel: state.authoringLabel,
+    // The record reader takes its trust list from this file. It is the primary
+    // checkout's copy, whatever directory this run started in.
+    policyPath: join(state.primary, DEFAULT_POLICY_CONFIG_PATH),
+    confirmation: preserve.confirmation,
+    decisions: preserve.decisions,
+    readGate: () =>
+      toB1Gate(readFreshClaimGate(state.issue, [], state.deps, state.primary)),
+    inspectLocalWorktrees: () => {
+      try {
+        return state.deps.inspectLocalWorktrees(state.issue);
+      } catch (error) {
+        return { status: 'unreadable', paths: [], reason: errorMessage(error) };
+      }
+    },
+  };
+}
+
+/** The unmet preconditions of a report, one line of text. */
+function describeUnmet(report: B1LeftoverReport): string {
+  const unmet = [
+    ...report.common
+      .filter((entry) => entry.status === 'unmet')
+      .map((entry) => `${entry.id} (${entry.detail})`),
+    ...report.subjects.flatMap((subject) =>
+      subject.preconditions
+        .filter((entry) => entry.status === 'unmet')
+        .map(
+          (entry) =>
+            `${subject.kind} ${subject.subject}: ${entry.id} (${entry.detail})`,
+        ),
+    ),
+  ];
+  return unmet.join('; ');
+}
+
+/**
+ * The preservation ports, or `undefined` when they are absent or cannot be
+ * built. The default deps build them on first read, and building them reads the
+ * home directory, which can fail in an odd environment; that must end the run
+ * as an unavailable input, not as a throw outside the report.
+ */
+function readPorts(deps: ClaimIssueDeps): B1PreservePorts | undefined {
+  try {
+    return deps.b1Preserve;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * `--preserve-b1-leftovers`, under the clone lock and before the B1 check.
+ * With no leftover it passes. With an unmet precondition it changes nothing
+ * and passes, so the stops of a run without the flag follow unchanged; the
+ * refusal is in the report. With every precondition met it preserves each
+ * leftover and the run continues. A failure after the preservation started
+ * stops the run as `b1-preserve-failed`, with every saved location named.
+ */
+function preserveLeftovers(state: ApplyState): ApplyOutcome {
+  const preserve = state.input.preserve;
+  const ports = readPorts(state.deps);
+  if (preserve === undefined || ports === undefined) {
+    return applyFail(
+      'precheck-unavailable',
+      'Run this helper from a build that carries the B1 preservation ports, or rerun it without --preserve-b1-leftovers. Nothing was changed.',
+      'the B1 preservation ports are not available',
+    );
+  }
+  const report = newB1LeftoverReport('apply');
+  state.b1Report = report;
+  let failure: B1PreserveFailure | null;
+  try {
+    failure = runB1Preservation(
+      b1Request(state, 'apply', preserve),
+      ports,
+      state.deps.run,
+      report,
+    );
+  } catch (error) {
+    const detail = `the preservation threw: ${errorMessage(error)}`;
+    report.outcome = 'failed';
+    report.failure = detail;
+    failure = {
+      detail,
+      nextAction: `Stop. Inspect the branch and the path by hand${
+        describeB1Locations(report) === null
+          ? ''
+          : `; this run saved: ${describeB1Locations(report)}`
+      }, then rerun this helper.`,
+    };
+  }
+  if (failure !== null) {
+    return applyFail('b1-preserve-failed', failure.nextAction, failure.detail);
+  }
+  if (report.outcome === 'no-leftover') {
+    return applyPass(
+      `no leftover branch or path; nothing to preserve${
+        report.decisionsUnused.length > 0
+          ? ` (unused decision(s): ${report.decisionsUnused.join(', ')})`
+          : ''
+      }`,
+    );
+  }
+  if (report.outcome === 'preserved') {
+    return applyPass(`preserved: ${describeB1Locations(report) ?? 'nothing'}`);
+  }
+  return applyPass(
+    `not preserved, nothing changed: ${describeUnmet(report)}; the stops of a run without the flag follow`,
+  );
+}
+
+/**
+ * The dry run of `--preserve-b1-leftovers`: the same listing and checks as the
+ * apply run, read-only. It reads the primary checkout, the default branch, and
+ * the local policy, but it takes no lock and makes no fetch or write, so the
+ * development branch comes from the policy without the `ls-remote` that
+ * {@link resolveDevelopment} runs.
+ */
+function inspectB1ForDryRun(
+  issueNumber: number,
+  repository: { owner: string; repo: string },
+  branch: string,
+  preserve: ClaimPreserveInput,
+  deps: ClaimIssueDeps,
+): B1LeftoverReport {
+  const report = newB1LeftoverReport('dry-run');
+  const unavailable = (detail: string): B1LeftoverReport => {
+    report.outcome = 'unmet-preconditions';
+    report.common.push({ id: 'dry-run-inputs', status: 'unmet', detail });
+    return report;
+  };
+  const ports = readPorts(deps);
+  if (ports === undefined) {
+    return unavailable('the B1 preservation ports are not available');
+  }
+  const state: ApplyState = {
+    issue: issueNumber,
+    repository,
+    deps,
+    input: { agentId: '', projectStatus: 'not-started', preserve },
+    branch,
+    steps: [],
+    primary: '',
+    path: '',
+    defaultBranch: '',
+    developmentBranch: '',
+    config: null,
+    settleMs: 0,
+    authoringLabel: '',
+    trustedActors: [],
+    worktreeCreated: false,
+    identity: null,
+    claimPosted: false,
+    b1Report: null,
+  };
+  try {
+    for (const read of [readPrimaryRoot, readDefaultBranch]) {
+      const outcome = read(state);
+      if (!outcome.ok) {
+        return unavailable(outcome.failure.detail);
+      }
+    }
+    state.path = join(
+      dirname(state.primary),
+      `${repository.repo}.${branch.replace(/\//g, '-')}`,
+    );
+    const policy = readPolicyConfig(state);
+    if (!policy.ok) {
+      return unavailable(policy.failure.detail);
+    }
+    const target = resolveEffectiveDevelopmentBranch(
+      state.config,
+      state.defaultBranch,
+    );
+    if (
+      (target.status !== 'configured' && target.status !== 'default') ||
+      target.branch === undefined
+    ) {
+      return unavailable('the development branch cannot be resolved');
+    }
+    state.developmentBranch = target.branch;
+    const failure = runB1Preservation(
+      b1Request(state, 'dry-run', preserve),
+      ports,
+      deps.run,
+      report,
+    );
+    if (failure !== null) {
+      return unavailable(failure.detail);
+    }
+  } catch (error) {
+    return unavailable(`the dry run threw: ${errorMessage(error)}`);
+  }
+  return report;
+}
+
 /** B1 steps 2 and 3, read-only: a prunable entry or a leftover branch stops the run. */
 function checkLeftovers(state: ApplyState): ApplyOutcome {
   const list = state.deps.run('git', [
@@ -1946,7 +2291,7 @@ function checkLeftovers(state: ApplyState): ApplyOutcome {
   if (refs.stdout.split(/\r?\n/).some((line) => line.trim() === ref)) {
     return applyFail(
       'b1-cleanup-needed',
-      CLEANUP_NEXT,
+      LEFTOVER_BRANCH_NEXT,
       `a leftover local branch ${state.branch} exists`,
     );
   }
@@ -1975,16 +2320,9 @@ export function worktreePathProblem(
   primary: string,
   path: string,
 ): string | null {
-  const parent = dirname(primary);
-  if (dirname(path) !== parent || path === primary) {
-    return `${path} is not a direct child of ${parent}`;
-  }
-  try {
-    if (lstatSync(parent).isSymbolicLink()) {
-      return `the parent ${parent} is a link`;
-    }
-  } catch (error) {
-    return `the parent ${parent} could not be inspected: ${errorMessage(error)}`;
+  const parentProblem = worktreeParentProblem(primary, path);
+  if (parentProblem !== null) {
+    return parentProblem;
   }
   const entry = entryState(path);
   if (entry === 'unknown') {
@@ -2091,6 +2429,9 @@ function runUnderCloneLock(state: ApplyState): ApplyFailure | null {
       step(state, 'primary-ready', fastForwardPrimary(state)) ??
       step(state, 'policy', readPolicy(state)) ??
       step(state, 'development-branch', resolveDevelopment(state)) ??
+      (state.input.preserve === undefined
+        ? null
+        : step(state, 'b1-preserve', preserveLeftovers(state))) ??
       step(state, 'b1-leftovers', checkLeftovers(state)) ??
       step(state, 'local-rescan', rescanLocalWorktrees(state)) ??
       step(state, 'remote-rescan', rescanRemoteBranches(state)) ??
@@ -2840,17 +3181,44 @@ function runFreshClaimOrder(state: ApplyState): ApplyFailure | null {
   return runUnderCloneLock(state) ?? runClaimWrites(state);
 }
 
+/**
+ * A next action after a run preserved a leftover: the "removed nothing" and
+ * "created nothing" sentences are dropped and the saved locations are named.
+ * Idempotent, so a failure that already names them keeps its text.
+ */
+function namePreserved(nextAction: string, summary: string): string {
+  let base = nextAction.replace(NOTHING_SENTENCES, '').trim();
+  if (base === '' || base.includes(summary)) {
+    return base === '' ? `This run preserved: ${summary}.` : base;
+  }
+  if (!/[.!?]$/.test(base)) {
+    base = `${base}.`;
+  }
+  return `${base} This run preserved: ${summary}.`;
+}
+
 function buildApplyReport(
   state: ApplyState,
   failure: ApplyFailure | null,
 ): ClaimApplyReport {
+  const summary =
+    state.b1Report === null ? null : describeB1Locations(state.b1Report);
+  const name = (text: string): string =>
+    summary === null ? text : namePreserved(text, summary);
   return {
     issue: state.issue,
     eligible: failure === null,
     reason: failure === null ? null : failure.reason,
     branch: state.branch,
     projectStatusChecked: false,
-    steps: state.steps,
+    steps:
+      summary === null
+        ? state.steps
+        : state.steps.map((entry) =>
+            entry.status === 'failed' && entry.nextAction !== null
+              ? { ...entry, nextAction: name(entry.nextAction) }
+              : entry,
+          ),
     ...(failure?.gateReason === undefined
       ? {}
       : {
@@ -2865,9 +3233,14 @@ function buildApplyReport(
       failure === null ? false : (failure.lost ?? state.worktreeCreated),
     nextAction:
       failure === null
-        ? `Continue B1 from Step 3 (install dependencies) in ${state.path} (idd-claim.instructions.md, fresh-claim order step 6).`
-        : failure.nextAction,
+        ? `Continue B1 from Step 3 (install dependencies) in ${state.path} (idd-claim.instructions.md, fresh-claim order step 6).${
+            summary === null
+              ? ''
+              : ` This run preserved: ${summary}. Report these locations on the confirmation issue as the auto-decide procedure's After acting step says.`
+          }`
+        : name(failure.nextAction),
     claim: state.identity,
+    ...(state.b1Report === null ? {} : { b1Leftovers: state.b1Report }),
   };
 }
 
@@ -2902,6 +3275,7 @@ export function runClaimApply(
     worktreeCreated: false,
     identity: null,
     claimPosted: false,
+    b1Report: null,
   };
   let failure: ApplyFailure | null;
   try {
@@ -2963,6 +3337,9 @@ export function runClaimIssue(
   let apply = false;
   let agentId: string | undefined;
   let projectStatus: string | undefined;
+  let preserveFlag = false;
+  let confirmationText: string | undefined;
+  let decisionValues: string[] = [];
   try {
     const { values, help } = parseCliArgs(argv, CLAIM_ISSUE_FLAG_SPEC);
     if (help) {
@@ -2975,6 +3352,9 @@ export function runClaimIssue(
     apply = values.apply === true;
     agentId = values['agent-id'] as string | undefined;
     projectStatus = values['project-status'] as string | undefined;
+    preserveFlag = values['preserve-b1-leftovers'] === true;
+    confirmationText = values.confirmation as string | undefined;
+    decisionValues = (values.decision as string[] | undefined) ?? [];
   } catch (error) {
     return usage(errorMessage(error), io);
   }
@@ -2993,6 +3373,39 @@ export function runClaimIssue(
   ) {
     return usage('--project-status must be not-in-use or not-started', io);
   }
+  let preserveInput: ClaimPreserveInput | null = null;
+  if (!preserveFlag) {
+    if (confirmationText !== undefined || decisionValues.length > 0) {
+      return usage(
+        '--confirmation and --decision need --preserve-b1-leftovers',
+        io,
+      );
+    }
+  } else {
+    let confirmation: B1Confirmation | null = null;
+    if (confirmationText !== undefined) {
+      const match = CONFIRMATION_PATTERN.exec(confirmationText);
+      const number = Number(match?.[3]);
+      if (match === null || !Number.isSafeInteger(number) || number < 1) {
+        return usage('--confirmation must be <owner>/<repo>#<number>', io);
+      }
+      confirmation = {
+        owner: match[1] as string,
+        repo: match[2] as string,
+        number,
+      };
+    }
+    if (!decisionValues.every((value) => isDecisionId(value))) {
+      return usage(
+        '--decision takes one token of at most 128 characters with no whitespace, no ;, and no -->',
+        io,
+      );
+    }
+    if (decisionValues.length > 0 && confirmation === null) {
+      return usage('--decision needs --confirmation', io);
+    }
+    preserveInput = { confirmation, decisions: decisionValues };
+  }
   let applyInput: ClaimApplyInput | null = null;
   if (apply) {
     const missing = [
@@ -3005,12 +3418,37 @@ export function runClaimIssue(
     applyInput = {
       agentId: agentId as string,
       projectStatus: projectStatus as ClaimProjectStatus,
+      ...(preserveInput === null ? {} : { preserve: preserveInput }),
     };
     // gh honors GH_REPO and would name another repository than the clone whose
     // worktree this run creates, so the write half refuses to run with it set.
     if (process.env.GH_REPO) {
       return usage(
         '--apply refuses to run with GH_REPO set, because gh would name a repository other than this clone; unset GH_REPO',
+        io,
+      );
+    }
+  }
+  // The confirmation issue holds records whose source is the claimed issue, so
+  // it must be an issue of this repository, and not the claimed issue itself.
+  // The repository lookup is local, so a mismatch is refused before any
+  // pre-check reads GitHub; a lookup that fails is left to the pre-checks.
+  if (preserveInput?.confirmation != null) {
+    let current: { owner: string; repo: string } | null = null;
+    try {
+      current = deps.resolveRepository();
+    } catch {
+      current = null;
+    }
+    const wanted = preserveInput.confirmation;
+    if (
+      current !== null &&
+      (`${wanted.owner}/${wanted.repo}`.toLowerCase() !==
+        `${current.owner}/${current.repo}`.toLowerCase() ||
+        wanted.number === issueNumber)
+    ) {
+      return usage(
+        '--confirmation must name an issue of this repository other than the claimed issue',
         io,
       );
     }
@@ -3022,6 +3460,15 @@ export function runClaimIssue(
   }
   const { report, repository } = outcome;
   if (applyInput === null) {
+    if (preserveInput !== null && report.eligible) {
+      report.b1Leftovers = inspectB1ForDryRun(
+        issueNumber,
+        repository,
+        report.branch,
+        preserveInput,
+        deps,
+      );
+    }
     io.stdout(`${JSON.stringify(report, null, 2)}\n`);
     if (report.eligible) {
       return 0;
@@ -3067,6 +3514,8 @@ function helpText(): string {
   return `Usage:
   node scripts/claim-issue.mjs --issue <number>
   node scripts/claim-issue.mjs --issue <number> --apply --agent-id <id> --project-status <not-in-use|not-started>
+  node scripts/claim-issue.mjs --issue <number> --preserve-b1-leftovers [--confirmation <owner>/<repo>#<number> --decision <id>...]
+  node scripts/claim-issue.mjs --issue <number> --apply --agent-id <id> --project-status <not-in-use|not-started> --preserve-b1-leftovers --confirmation <owner>/<repo>#<number> --decision <id>...
 
 Dry run of the five A5 pre-checks of idd-claim.instructions.md for one issue.
 Without --apply it makes no write: no marker, no worktree, no lock file, no
@@ -3103,9 +3552,28 @@ which the helper cannot read. Both are required with --apply. The hold check
 reads the authoring label only; the owner-marker log replay is not done
 (holdCheck is "label"). Stale-claim takeover is out of scope and stops the run.
 
-The helper deletes nothing. Once the worktree exists, a failure keeps the
-worktree, its branch, and the worktree-local claim lock; the report's
-nextAction says what to run next (lost-claim-cleanup).
+Without --preserve-b1-leftovers the helper deletes nothing. Once the worktree
+exists, a failure keeps the worktree, its branch, and the worktree-local claim
+lock; the report's nextAction says what to run next (lost-claim-cleanup).
+
+--preserve-b1-leftovers (issue 4970) is the one mode that changes a B1
+leftover: a local branch of the claim's name, or something at the computed
+worktree path. It acts only where the run would stop with b1-cleanup-needed (a
+leftover branch) or path-occupied, and only when every precondition holds for
+every leftover: the trusted b1Leftover auto-decide class is enabled, the
+fresh-claim gate is claimable, and each leftover has a matching confirmation
+record named by --confirmation, paired with one --decision per leftover through
+the record's Subject line. A branch is backed up to
+refs/idd-b1/<issue>/<commit>, the ref is read back, and only then is the branch
+deleted at that commit; a path is renamed, never removed, into
+<state>/idd-skill/b1-preserved/<issue>-<UTC timestamp>/. A prunable worktree
+entry, a branch that git branch -d deletes, and everything else keep the stops
+of a run without the flag. Without --apply the flag lists the leftovers and
+checks every precondition read-only, with no fetch, no lock, and no write;
+without --confirmation it reports the record precondition as unmet. The report
+gains b1Leftovers: the leftovers, each precondition, every action, each backup
+ref, and each destination. A run that failed after a state change stops with
+b1-preserve-failed and names what it saved.
 
 Output: one JSON report on stdout with issue, eligible, reason, branch,
 projectStatusChecked (always false) and steps. With --apply it also has mode,
