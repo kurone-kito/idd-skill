@@ -1569,12 +1569,13 @@ test('live provisional evidence refuses source edits and unverified rework', asy
       evidence.issues.join(', '),
     );
     const summary = await assertBlocked(evidence);
+    // A refused replay still reports the verified merged work it read.
     assert.deepEqual(summary.filteredOut[0]?.potentiallyAffectedDependencies, [
       {
         issueNumber: 202,
         criterion: 'all generated artifacts ship',
         reason: 'evidence-invalid',
-        workReferences: [],
+        workReferences: ['https://github.com/acme/repo/pull/203'],
       },
     ]);
   }

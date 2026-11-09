@@ -339,6 +339,12 @@ export interface ProvisionalDecisionEvidence {
     verifiedAt?: string;
   }[];
   issues: readonly string[];
+  /**
+   * Verified merged work that a refused replay still names. Set only on an
+   * invalid result, so a refusal can report downstream work it cannot
+   * attribute to a decision.
+   */
+  verifiedWorkReferences?: readonly string[];
 }
 
 export interface ProvisionalDecisionEvidenceReader {
@@ -357,33 +363,56 @@ export function buildProvisionalDecisionEvidenceReader(input: {
   port: ProviderPort;
   /** Injectable trusted actor source for deterministic tests. */
   readTrustedMarkerActors?: () => string[];
+  /**
+   * Not read. The trusted base configuration supplies the actors and the
+   * stale age; kept so the existing callers keep compiling.
+   */
   policy: {
     trustedMarkerActors?: unknown;
     claimTiming?: { staleAge?: unknown };
   } | null;
 }): ProvisionalDecisionEvidenceReader {
-  const { owner, repo, port, policy } = input;
-  // The trusted actors come from a live default-branch read, so they are
-  // resolved on the first replay (as the class switch is), not at reader
-  // build. An unreadable trusted config fails closed inside `loadState`.
-  let trustedLoginsCache: string[] | null = null;
-  const readTrustedLogins = (): string[] | null => {
-    if (trustedLoginsCache !== null) return trustedLoginsCache;
+  const { owner, repo, port } = input;
+  // The trusted actors and the claim stale age come from the trusted base
+  // configuration, read live on the first replay that needs them (as the
+  // class switch is), not at reader build. The caller's local policy is not
+  // read here, so a feature branch cannot widen either. An unreadable trusted
+  // config fails closed inside `loadState`.
+  let trustedCache: { logins: string[]; staleAgeMs: number } | null = null;
+  const readTrustedPolicy = (): {
+    logins: string[];
+    staleAgeMs: number;
+  } | null => {
+    if (trustedCache !== null) return trustedCache;
     try {
-      trustedLoginsCache =
-        input.readTrustedMarkerActors?.() ??
-        resolveTrustedMarkerActors({
-          envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
-          config: loadTrustedActorConfig({ owner, repo, baseRefName: '' }),
-        }).actors;
+      if (input.readTrustedMarkerActors) {
+        // Test seam: the actor set is injected, so no live config is read.
+        trustedCache = {
+          logins: input.readTrustedMarkerActors(),
+          staleAgeMs: DEFAULT_STALE_AGE_MS,
+        };
+      } else {
+        const trustedConfig = loadTrustedActorConfig({
+          owner,
+          repo,
+          baseRefName: '',
+        });
+        trustedCache = {
+          logins: resolveTrustedMarkerActors({
+            envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
+            config: trustedConfig,
+          }).actors,
+          staleAgeMs:
+            parseIsoDurationToMs(
+              normalizePolicyConfig(trustedConfig).claimTiming.staleAge,
+            ) ?? DEFAULT_STALE_AGE_MS,
+        };
+      }
     } catch {
       return null;
     }
-    return trustedLoginsCache;
+    return trustedCache;
   };
-  const staleAgeMs =
-    parseIsoDurationToMs(normalizePolicyConfig(policy).claimTiming.staleAge) ??
-    DEFAULT_STALE_AGE_MS;
   let classEnabled: boolean | undefined;
 
   return {
@@ -417,12 +446,6 @@ export function buildProvisionalDecisionEvidenceReader(input: {
         return invalidProvisionalEvidence('source-snapshot-incomplete');
       }
 
-      const trustedLogins = readTrustedLogins();
-      if (trustedLogins === null) {
-        return invalidProvisionalEvidence('trusted-policy-unreadable');
-      }
-      const trustedSet = new Set(trustedLogins.map(normalizeLogin));
-
       let providerComments: ProviderComment[];
       try {
         providerComments = port.listWorkItemComments(issueNumber, {
@@ -434,6 +457,22 @@ export function buildProvisionalDecisionEvidenceReader(input: {
         }
         throw error;
       }
+      // Only a source that carries decision records needs the trusted config,
+      // so an ordinary closed blocker costs no live config read here.
+      if (
+        !providerComments.some((comment) =>
+          String(comment.body ?? '').startsWith(
+            PROVISIONAL_DECISION_RECORD_MARKER,
+          ),
+        )
+      ) {
+        return emptyProvisionalEvidence();
+      }
+      const trusted = readTrustedPolicy();
+      if (trusted === null) {
+        return invalidProvisionalEvidence('trusted-policy-unreadable');
+      }
+      const trustedSet = new Set(trusted.logins.map(normalizeLogin));
       const comments: ProvisionalDecisionComment[] = providerComments.map(
         (comment) => ({
           id: String(comment.id),
@@ -445,10 +484,6 @@ export function buildProvisionalDecisionEvidenceReader(input: {
           trustedAuthor: trustedSet.has(normalizeLogin(comment.authorLogin)),
         }),
       );
-      const hasRecords = comments.some((comment) =>
-        comment.body.startsWith(PROVISIONAL_DECISION_RECORD_MARKER),
-      );
-      if (!hasRecords) return emptyProvisionalEvidence();
 
       for (const comment of comments) {
         if (
@@ -470,8 +505,8 @@ export function buildProvisionalDecisionEvidenceReader(input: {
           trustedAuthor: trustedSet.has(normalizeLogin(comment.authorLogin)),
         })),
         completeHistory: true,
-        staleAgeMs,
-        trustedMarkerLogins: trustedLogins,
+        staleAgeMs: trusted.staleAgeMs,
+        trustedMarkerLogins: trusted.logins,
       });
       if (claimLineage.status !== 'ok') {
         return invalidProvisionalEvidence(
@@ -547,9 +582,16 @@ export function buildProvisionalDecisionEvidenceReader(input: {
         verifiedReworkRoadmaps: [],
       });
       if (!replay.valid) {
-        return invalidProvisionalEvidence(
-          ...replay.issues.map((entry) => entry.code),
-        );
+        // A refused replay keeps its decisions empty, so the verified merged
+        // work it did read is carried separately for the affected report.
+        return {
+          ...invalidProvisionalEvidence(
+            ...replay.issues.map((entry) => entry.code),
+          ),
+          verifiedWorkReferences: [
+            ...new Set(verifiedWork.map((work) => work.reference)),
+          ].sort(),
+        };
       }
       const decisions = replay.decisions.map((decision) => {
         const result = (decision.workCompleted?.event.result ?? {}) as Record<
@@ -1260,7 +1302,12 @@ export async function evaluateDiscoverReadiness(
               issueNumber: blockedNumber,
               criterion: explicitCriterion,
               reason: provisional.hasRework ? 'rework' : 'evidence-invalid',
-              workReferences: [...new Set(workReferences)].sort(),
+              workReferences: [
+                ...new Set([
+                  ...workReferences,
+                  ...(provisional.verifiedWorkReferences ?? []),
+                ]),
+              ].sort(),
             });
           }
           const match = findProvisionalDecisionMatch(
@@ -1342,7 +1389,12 @@ export async function evaluateDiscoverReadiness(
             issueNumber: blockedNumber,
             criterion: explicitCriterion,
             reason: provisional.hasRework ? 'rework' : 'evidence-invalid',
-            workReferences: [...new Set(workReferences)].sort(),
+            workReferences: [
+              ...new Set([
+                ...workReferences,
+                ...(provisional.verifiedWorkReferences ?? []),
+              ]),
+            ].sort(),
           });
         }
         reasons.add(
