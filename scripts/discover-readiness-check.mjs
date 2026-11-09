@@ -471,6 +471,20 @@ function isHumanApprovalCriterion(value) {
     /\bsign(?:ed|s|ing)?[ -]off\b/iu.test(value)
   );
 }
+/**
+ * The proof key of a work reference: its pull request number. The URL
+ * pathname ignores a query, a fragment, and backslash separators, so the
+ * spellings the replay accepts map to one key. An unparsable reference keeps
+ * its own text as the key.
+ */
+function pullRequestProofKey(reference) {
+  try {
+    const pathname = new URL(reference).pathname;
+    return pathname.match(/\/pull\/0*(\d+)\/?$/i)?.[1] ?? reference;
+  } catch {
+    return reference;
+  }
+}
 function findProvisionalDecisionMatch(evidence, explicitCriterion) {
   if (
     !evidence.valid ||
@@ -485,7 +499,18 @@ function findProvisionalDecisionMatch(evidence, explicitCriterion) {
   }
   const normalizedCriterion = normalizeExplicitCriterion(explicitCriterion);
   if (!normalizedCriterion) return null;
-  const matches = evidence.decisions.filter((decision) =>
+  // One merged change request proves one decision. When a second decision
+  // names the same reference, the proof cannot show which criterion it covers,
+  // so no criterion of this source is discharged on it.
+  const decisions = evidence.decisions;
+  // Compare by pull request number, so spellings of one pull request count as
+  // the same proof.
+  const references = decisions
+    .map((decision) => decision.workReference)
+    .filter((reference) => typeof reference === 'string')
+    .map(pullRequestProofKey);
+  if (new Set(references).size !== references.length) return null;
+  const matches = decisions.filter((decision) =>
     decision.executionCriteria.some(
       (criterion) =>
         normalizeExplicitCriterion(criterion) === normalizedCriterion,

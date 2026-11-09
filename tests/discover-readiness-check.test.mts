@@ -1283,6 +1283,59 @@ test('only an exact, replay-verified provisional Blocked by criterion can procee
       ?.reason,
     'rework',
   );
+
+  // One merged change request proves one decision. A reference that a second
+  // decision also names must not discharge a dependency on either criterion.
+  const sharedReference: ProvisionalDecisionEvidence = {
+    ...pending,
+    decisions: [
+      pendingDecision,
+      {
+        ...pendingDecision,
+        decisionGeneration: 2,
+        executionCriteria: ['The second criterion ships.'],
+      },
+    ],
+  };
+  const shared = await run(
+    body.replace('all generated artifacts ship', 'the second criterion ships'),
+    sharedReference,
+    true,
+  );
+  assert.deepEqual(shared.ready, []);
+  assert.ok(
+    shared.filteredOut[0]?.reasons.includes('blocked_by_open_issue:#202'),
+  );
+
+  // Other spellings of the same pull request are the same proof.
+  for (const spelling of [
+    'https://github.com/Acme/Repo/pull/0203/',
+    'https://github.com/acme/repo/pull/203?',
+    'https://github.com/acme/repo/pull/203#discussion',
+    'https://github.com/acme/repo\\pull\\203',
+  ]) {
+    const variantReference: ProvisionalDecisionEvidence = {
+      ...pending,
+      decisions: [
+        pendingDecision,
+        {
+          ...pendingDecision,
+          decisionGeneration: 2,
+          executionCriteria: ['The second criterion ships.'],
+          workReference: spelling,
+        },
+      ],
+    };
+    const variant = await run(
+      body.replace(
+        'all generated artifacts ship',
+        'the second criterion ships',
+      ),
+      variantReference,
+      true,
+    );
+    assert.deepEqual(variant.ready, [], spelling);
+  }
 });
 
 test('live provisional evidence rejects an untrusted record marker', async () => {
