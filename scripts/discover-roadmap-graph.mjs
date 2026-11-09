@@ -32,6 +32,7 @@ import {
   isDiscoverIncompleteResult,
 } from './discover-progress.mjs';
 import {
+  buildProvisionalDecisionEvidenceReader,
   buildRoadmapMarkerResolver,
   evaluateDiscoverReadiness,
 } from './discover-readiness-check.mjs';
@@ -771,6 +772,12 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
       markerPrefix,
       currentRepoRef,
     );
+  }
+  if (options.provisionalDecisionState) {
+    for (const node of nodes) {
+      node.provisionalDecisionState =
+        await options.provisionalDecisionState.loadState(node.number);
+    }
   }
   return {
     root: {
@@ -1599,6 +1606,8 @@ async function annotateReadiness(
       // traversal -- exactly the cross-path disagreement this issue
       // exists to eliminate.
       currentRepo: currentRepo || undefined,
+      loadProvisionalDecisionState: readiness.loadProvisionalDecisionState,
+      decisionIssueClassEnabled: readiness.decisionIssueClassEnabled,
       now: readiness.nowIso,
     },
   );
@@ -1606,15 +1615,38 @@ async function annotateReadiness(
   const reasonsByNumber = new Map(
     summary.filteredOut.map((entry) => [entry.number, entry.reasons]),
   );
+  const dependencyEvidenceByNumber = new Map();
+  for (const entry of summary.ready) {
+    dependencyEvidenceByNumber.set(entry.number, {
+      ...(entry.provisionalDependencies
+        ? { provisionalDependencies: entry.provisionalDependencies }
+        : {}),
+    });
+  }
+  for (const entry of summary.filteredOut) {
+    dependencyEvidenceByNumber.set(entry.number, {
+      ...(entry.provisionalDependencies
+        ? { provisionalDependencies: entry.provisionalDependencies }
+        : {}),
+      ...(entry.potentiallyAffectedDependencies
+        ? {
+            potentiallyAffectedDependencies:
+              entry.potentiallyAffectedDependencies,
+          }
+        : {}),
+    });
+  }
   const authoringReason = `label:${readiness.authoringLabelName}`;
   for (const entry of openEntries) {
     const ready = readyNumbers.has(entry.number);
     const reasons = reasonsByNumber.get(entry.number) ?? [];
+    const dependencyEvidence = dependencyEvidenceByNumber.get(entry.number);
     entry.readiness = {
       ready,
       reasons,
       authoringHeld: reasons.includes(authoringReason),
       startable: ready && entry.claimEligible !== false,
+      ...dependencyEvidence,
     };
   }
 }
@@ -2207,6 +2239,12 @@ function buildReadinessResolution(owner, repo, policy) {
   const markerPrefix = normalizeMarkerPrefix(policy.markerPrefix);
   const normalizedPolicy = normalizePolicyConfig(policy);
   const labelsPolicy = normalizedPolicy.labels;
+  const provisionalReader = buildProvisionalDecisionEvidenceReader({
+    owner,
+    repo,
+    port: createGithubProviderAdapter(owner, repo),
+    policy: policy,
+  });
   return {
     findRoadmapsByMarker: buildRoadmapMarkerResolver(owner, repo, markerPrefix),
     authoringLabelName: authoringPolicy.labelName,
@@ -2219,6 +2257,8 @@ function buildReadinessResolution(owner, repo, policy) {
     confirmationLabelName: normalizedPolicy.autoDecide.confirmationLabelName,
     readyLabelName: normalizedPolicy.approvalSignals.readyLabelName,
     nowIso: new Date().toISOString(),
+    loadProvisionalDecisionState: provisionalReader.loadState,
+    decisionIssueClassEnabled: provisionalReader.decisionIssueClassEnabled,
   };
 }
 /**
