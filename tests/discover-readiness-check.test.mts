@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -8,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 
 import {
   buildConfirmationLabelMatcher,
+  buildProvisionalDecisionEvidenceReader,
   buildRoadmapMarkerSearchQuery,
   DEFER_SOURCE_VALUES,
   evaluateDiscoverReadiness,
@@ -15,14 +17,21 @@ import {
   extractBlockedByRoadmapMarkers,
   extractDeferSourceRefsIssueNumbers,
   extractDependencyIssueNumbers,
+  extractExplicitBlockedCriterion,
   hasDeferSourceMarker,
   isInaccessibleIssueLookupError,
+  type ProvisionalDecisionEvidence,
   parseArgs,
   parseSwarmFloorArg,
   renderCsv,
   summarizeSwarmFloorEligibility,
 } from '../src/scripts/discover-readiness-check.mts';
 import { createFakeProviderAdapter } from '../src/scripts/provider-adapter-fake.mts';
+import type { ProviderPort } from '../src/scripts/provider-port.mts';
+import {
+  PROVISIONAL_DECISION_ANSWER_MARKER,
+  PROVISIONAL_DECISION_RECORD_MARKER,
+} from '../src/scripts/provisional-decision-state.mts';
 import { SUITABILITY_REJECTION_PREFIX } from '../src/scripts/supersession-detection.mts';
 import { stubExecutable } from './test-utils.mts';
 
@@ -940,6 +949,797 @@ test('fails safe when blocked-by issue cannot be resolved', async () => {
   assert.match(
     summary.filteredOut[0].reasons.join(','),
     /unresolvable_blocked_by_issue/,
+  );
+});
+
+test('only an exact, replay-verified provisional Blocked by criterion can proceed', async () => {
+  const body = [
+    '## Background',
+    '',
+    'Blocked by #202',
+    '',
+    'For the edge `Blocked by #202`, the producer output is the selected work completion. The blocked criterion is that all generated artifacts ship. The evidence is the merged implementation PR.',
+  ].join('\n');
+  const issues = new Map([
+    [
+      201,
+      {
+        number: 201,
+        title: 'dependent implementation',
+        state: 'OPEN',
+        body,
+        labels: [],
+      },
+    ],
+    [
+      202,
+      {
+        number: 202,
+        title: 'provisional decision source',
+        state: 'OPEN',
+        body: 'source body',
+        labels: [{ name: 'status:needs-decision' }],
+      },
+    ],
+    [
+      203,
+      {
+        number: 203,
+        title: 'second open dependency',
+        state: 'OPEN',
+        body: 'second dependency body',
+        labels: [],
+      },
+    ],
+  ]);
+  const pendingDecision = {
+    bundleGeneration: 1,
+    decisionGeneration: 1,
+    status: 'confirmation-pending' as const,
+    executionCriteria: ['All generated artifacts ship.'],
+    workReference: 'https://github.com/acme/repo/pull/203',
+    verifiedAt: '2026-11-01T00:00:00Z',
+  };
+  const pending: ProvisionalDecisionEvidence = {
+    valid: true,
+    hasRecords: true,
+    status: 'confirmation-pending',
+    hasRework: false,
+    decisions: [pendingDecision],
+    issues: [],
+  };
+  assert.equal(
+    extractExplicitBlockedCriterion(body, 202),
+    'all generated artifacts ship',
+  );
+  const visibleEdgeLead =
+    'For the edge `Blocked by #202`, the producer output is the selected work completion. ';
+  const hiddenHtmlRationale = [
+    'Blocked by #202',
+    '',
+    'For the edge `Blocked by #202`, the producer output is the selected work completion.',
+    '<pre>',
+    'The blocked criterion is that all generated artifacts ship.',
+    'The evidence is the merged implementation PR.',
+    '</pre>',
+  ].join('\n');
+  const crossEdgeRationale = [
+    'Blocked by #202 and #203',
+    '',
+    'For the edge `Blocked by #202`, the producer output is the selected work completion.',
+    'For the edge `Blocked by #203`, the producer output is the selected work completion. The blocked criterion is that all generated artifacts ship. The evidence is the merged implementation PR.',
+  ].join('\n');
+  const hiddenRationales = [
+    `Blocked by #202\n\n${visibleEdgeLead}<!-- The blocked criterion is that all generated artifacts ship. The evidence is the merged implementation PR. -->`,
+    `Blocked by #202\n\n${visibleEdgeLead}\n\`\`\`text\nThe blocked criterion is that all generated artifacts ship. The evidence is the merged implementation PR.\n\`\`\``,
+    `Blocked by #202\n\n${visibleEdgeLead}\`The blocked criterion is that all generated artifacts ship. The evidence is the merged implementation PR.\``,
+    hiddenHtmlRationale,
+  ];
+  for (const hiddenRationale of hiddenRationales) {
+    assert.equal(
+      extractExplicitBlockedCriterion(hiddenRationale, 202),
+      null,
+      'hidden Markdown cannot authorize provisional progress',
+    );
+  }
+  const run = async (
+    candidateBody: string,
+    evidence: ProvisionalDecisionEvidence,
+    classEnabled: boolean,
+    sourceState = 'OPEN',
+    sourceLabels = [{ name: 'status:needs-decision' }],
+  ) =>
+    evaluateDiscoverReadiness([201], {
+      loadIssue: async (number) =>
+        number === 201
+          ? { ...issues.get(201), body: candidateBody }
+          : number === 202
+            ? { ...issues.get(202), state: sourceState, labels: sourceLabels }
+            : (issues.get(number) ?? null),
+      findRoadmapsByMarker: async () => [],
+      loadProvisionalDecisionState: () => evidence,
+      decisionIssueClassEnabled: () => classEnabled,
+    });
+
+  const allowed = await run(body, pending, true);
+  assert.deepEqual(
+    allowed.ready.map((entry) => entry.number),
+    [201],
+  );
+  assert.deepEqual(allowed.ready[0]?.provisionalDependencies, [
+    {
+      issueNumber: 202,
+      criterion: 'all generated artifacts ship',
+      bundleGeneration: 1,
+      decisionGeneration: 1,
+      status: 'confirmation-pending',
+      workReference: 'https://github.com/acme/repo/pull/203',
+      verifiedAt: '2026-11-01T00:00:00Z',
+    },
+  ]);
+
+  let decisionReads = 0;
+  const countedPending: ProvisionalDecisionEvidence = {
+    ...pending,
+    get decisions() {
+      decisionReads += 1;
+      return pending.decisions;
+    },
+  };
+  await run(body, countedPending, true);
+  assert.equal(
+    decisionReads,
+    1,
+    'readiness computes and reuses one provisional decision match',
+  );
+
+  const held = async (
+    candidateBody: string,
+    evidence: ProvisionalDecisionEvidence,
+    enabled = true,
+  ) => {
+    const summary = await run(candidateBody, evidence, enabled);
+    assert.deepEqual(summary.ready, []);
+    assert.ok(
+      summary.filteredOut[0]?.reasons.includes('blocked_by_open_issue:#202'),
+    );
+  };
+  await held(body, pending, false);
+  await held(hiddenHtmlRationale, pending);
+  await held(crossEdgeRationale, pending);
+  for (const criterion of [
+    'The design is approved.',
+    'The decision is confirmed.',
+  ]) {
+    await held(body.replace('all generated artifacts ship', criterion), {
+      ...pending,
+      decisions: [{ ...pendingDecision, executionCriteria: [criterion] }],
+    });
+  }
+  await held(body, {
+    ...pending,
+    valid: false,
+    issues: ['history-incomplete'],
+  });
+  await held(body, {
+    ...pending,
+    status: 'rework-requested',
+    hasRework: false,
+  });
+  await held(body, {
+    ...pending,
+    status: 'selected' as const,
+    decisions: [{ ...pendingDecision, status: 'selected' as const }],
+  });
+  await held(body, {
+    ...pending,
+    hasRework: true,
+    status: 'rework-requested' as const,
+    decisions: [{ ...pendingDecision, status: 'rework-requested' as const }],
+  });
+  await held(
+    body.replace('all generated artifacts ship', 'human approval is recorded'),
+    {
+      ...pending,
+      decisions: [
+        {
+          ...pendingDecision,
+          executionCriteria: ['human approval is recorded'],
+        },
+      ],
+    },
+  );
+  await held(
+    body.replace('all generated artifacts ship', 'another unrelated criterion'),
+    pending,
+  );
+  await held(body, {
+    ...pending,
+    decisions: [
+      ...pending.decisions,
+      { ...pendingDecision, decisionGeneration: 2 },
+    ],
+  });
+
+  const dependsOnBody = `${body}\n\nDepends on #202`;
+  const dependsOn = await run(dependsOnBody, pending, true);
+  assert.deepEqual(dependsOn.ready, []);
+  assert.ok(
+    dependsOn.filteredOut[0]?.reasons.includes('open_dependency_issue:#202'),
+  );
+
+  const closedPending = await run(body, pending, true, 'CLOSED');
+  assert.deepEqual(
+    closedPending.ready.map((entry) => entry.number),
+    [201],
+  );
+  assert.deepEqual(closedPending.ready[0]?.provisionalDependencies, [
+    {
+      issueNumber: 202,
+      criterion: 'all generated artifacts ship',
+      bundleGeneration: 1,
+      decisionGeneration: 1,
+      status: 'confirmation-pending',
+      workReference: 'https://github.com/acme/repo/pull/203',
+      verifiedAt: '2026-11-01T00:00:00Z',
+    },
+  ]);
+
+  const closedInvalid = await run(
+    body,
+    { ...pending, valid: false, issues: ['source-binding-mismatch'] },
+    true,
+    'CLOSED',
+  );
+  assert.deepEqual(closedInvalid.ready, []);
+  assert.ok(
+    closedInvalid.filteredOut[0]?.reasons.includes(
+      'blocked_by_unverified_provisional_issue:#202',
+    ),
+  );
+  assert.equal(
+    closedInvalid.filteredOut[0]?.potentiallyAffectedDependencies?.[0]?.reason,
+    'evidence-invalid',
+  );
+
+  const closedRework = await run(
+    body,
+    {
+      ...pending,
+      hasRework: true,
+      status: 'rework-requested',
+    },
+    true,
+    'CLOSED',
+    [],
+  );
+  assert.deepEqual(closedRework.ready, []);
+  assert.ok(
+    closedRework.filteredOut[0]?.reasons.includes(
+      'blocked_by_unverified_provisional_issue:#202',
+    ),
+  );
+  assert.equal(
+    closedRework.filteredOut[0]?.potentiallyAffectedDependencies?.[0]?.reason,
+    'rework',
+  );
+
+  const closedOrdinary = await run(
+    body,
+    {
+      valid: true,
+      hasRecords: false,
+      status: 'none',
+      hasRework: false,
+      decisions: [],
+      issues: [],
+    },
+    true,
+    'CLOSED',
+    [],
+  );
+  assert.deepEqual(
+    closedOrdinary.ready.map((entry) => entry.number),
+    [201],
+  );
+
+  const closedConfirmed = await run(
+    body,
+    { ...pending, status: 'confirmed' as const },
+    true,
+    'CLOSED',
+  );
+  assert.deepEqual(
+    closedConfirmed.ready.map((entry) => entry.number),
+    [201],
+  );
+  assert.deepEqual(closedConfirmed.ready[0]?.provisionalDependencies ?? [], []);
+
+  const closedPendingNoLabel = await run(body, pending, true, 'CLOSED', []);
+  assert.deepEqual(closedPendingNoLabel.ready, []);
+  assert.ok(
+    closedPendingNoLabel.filteredOut[0]?.reasons.includes(
+      'blocked_by_unverified_provisional_issue:#202',
+    ),
+  );
+
+  const closedPendingClassOff = await run(body, pending, false, 'CLOSED');
+  assert.deepEqual(closedPendingClassOff.ready, []);
+  assert.ok(
+    closedPendingClassOff.filteredOut[0]?.reasons.includes(
+      'blocked_by_unverified_provisional_issue:#202',
+    ),
+  );
+
+  const closedReworkLabelled = await run(
+    body,
+    { ...pending, hasRework: true, status: 'rework-requested' as const },
+    true,
+    'CLOSED',
+  );
+  assert.deepEqual(closedReworkLabelled.ready, []);
+  assert.equal(
+    closedReworkLabelled.filteredOut[0]?.potentiallyAffectedDependencies?.[0]
+      ?.reason,
+    'rework',
+  );
+
+  // One merged change request proves one decision. A reference that a second
+  // decision also names must not discharge a dependency on either criterion.
+  const sharedReference: ProvisionalDecisionEvidence = {
+    ...pending,
+    decisions: [
+      pendingDecision,
+      {
+        ...pendingDecision,
+        decisionGeneration: 2,
+        executionCriteria: ['The second criterion ships.'],
+      },
+    ],
+  };
+  const shared = await run(
+    body.replace('all generated artifacts ship', 'the second criterion ships'),
+    sharedReference,
+    true,
+  );
+  assert.deepEqual(shared.ready, []);
+  assert.ok(
+    shared.filteredOut[0]?.reasons.includes('blocked_by_open_issue:#202'),
+  );
+
+  // Other spellings of the same pull request are the same proof.
+  for (const spelling of [
+    'https://github.com/Acme/Repo/pull/0203/',
+    'https://github.com/acme/repo/pull/203?',
+    'https://github.com/acme/repo/pull/203#discussion',
+    'https://github.com/acme/repo\\pull\\203',
+  ]) {
+    const variantReference: ProvisionalDecisionEvidence = {
+      ...pending,
+      decisions: [
+        pendingDecision,
+        {
+          ...pendingDecision,
+          decisionGeneration: 2,
+          executionCriteria: ['The second criterion ships.'],
+          workReference: spelling,
+        },
+      ],
+    };
+    const variant = await run(
+      body.replace(
+        'all generated artifacts ship',
+        'the second criterion ships',
+      ),
+      variantReference,
+      true,
+    );
+    assert.deepEqual(variant.ready, [], spelling);
+  }
+});
+
+test('live provisional evidence rejects an untrusted record marker', async () => {
+  const sourceNumber = 204;
+  const untrustedActor = `untrusted-${process.pid}`;
+  const port = createFakeProviderAdapter({
+    workItems: {
+      [sourceNumber]: {
+        number: sourceNumber,
+        title: 'decision source',
+        body: 'source body',
+        state: 'open',
+        createdAt: '2026-10-01T00:00:00Z',
+        updatedAt: '2026-11-01T00:00:00Z',
+      },
+    },
+    comments: {
+      [sourceNumber]: [
+        {
+          id: 1,
+          body: PROVISIONAL_DECISION_RECORD_MARKER,
+          createdAt: '2026-10-02T00:00:00Z',
+          updatedAt: '2026-10-02T00:00:00Z',
+          lastEditedAt: null,
+          authorLogin: untrustedActor,
+        },
+      ],
+    },
+  });
+  const reader = buildProvisionalDecisionEvidenceReader({
+    owner: 'acme',
+    repo: 'repo',
+    port,
+    readTrustedMarkerActors: () => ['trusted-automation'],
+    policy: { trustedMarkerActors: [untrustedActor] },
+  });
+
+  assert.deepEqual(await reader.loadState(sourceNumber), {
+    valid: false,
+    hasRecords: true,
+    status: 'invalid',
+    hasRework: false,
+    decisions: [],
+    issues: ['record-authority-invalid'],
+  });
+});
+
+test('live provisional evidence refuses source edits and unverified rework', async () => {
+  const owner = 'acme';
+  const repo = 'repo';
+  const sourceNumber = 202;
+  const sourceTitle = 'provisional decision source';
+  const sourceBody = 'source body';
+  const trustedActor = 'trusted-automation';
+  const baseTime = Date.now() - 60_000;
+  const at = (seconds: number) =>
+    new Date(baseTime + seconds * 1000).toISOString();
+  const claimId = 'claim-202-live-test';
+  const agentId = 'codex-live-test';
+  const branch = 'issue/202-provisional-source';
+  const claim = {
+    claimId,
+    agentId,
+    branch,
+    claimedAt: at(0),
+    supersedes: 'none',
+  };
+  const claimMarkerAt = at(0).replace(/\.\d{3}Z$/u, 'Z');
+  const source = {
+    repository: `${owner}/${repo}`,
+    issueNumber: sourceNumber,
+    snapshot: {
+      title: sourceTitle,
+      bodySha256: createHash('sha256').update(sourceBody).digest('hex'),
+      updatedAt: at(-1),
+    },
+  };
+  const result = {
+    kind: 'merged-pull-request',
+    reference: `https://github.com/${owner}/${repo}/pull/203`,
+    verifiedAt: at(3),
+    headSha: 'a'.repeat(40),
+    mergeCommitSha: 'b'.repeat(40),
+  };
+  const record = (recordId: string, event: Record<string, unknown>) => ({
+    schemaVersion: 1,
+    recordId,
+    source,
+    bundleGeneration: 1,
+    decisionGeneration: 1,
+    claimLineage: [claim],
+    evidenceReferences: [`https://github.com/${owner}/${repo}/issues/202`],
+    event,
+  });
+  const recordComment = (
+    id: number,
+    recordId: string,
+    event: Record<string, unknown>,
+    createdAt: string,
+  ) => ({
+    id,
+    body: `${PROVISIONAL_DECISION_RECORD_MARKER}\n${JSON.stringify(record(recordId, event))}`,
+    createdAt,
+    updatedAt: createdAt,
+    lastEditedAt: null,
+    authorLogin: trustedActor,
+  });
+  const selected = {
+    type: 'selected',
+    question: 'Which behavior should be used?',
+    selectedOption: {
+      id: 'keep',
+      description: 'Keep the existing behavior',
+      feasibilityRationale: 'The current implementation supports this option.',
+      requirementFit: 'It meets the verified requirement.',
+      consequences: 'No migration is needed.',
+      verification: 'Run the focused replay tests.',
+      reversalOrMigration: 'No migration is required.',
+      rationale: 'It matches the current evidence.',
+    },
+    feasibleAlternatives: [
+      {
+        id: 'change',
+        description: 'Adopt the alternate behavior',
+        feasibilityRationale: 'The repository can implement it.',
+        requirementFit: 'It also meets the requirement.',
+        consequences: 'It requires a migration.',
+        verification: 'Validate migrated records.',
+        reversalOrMigration: 'Existing records require migration.',
+        comparison: 'It adds migration without improving the fit.',
+        rejectionReason: 'The selected option better fits the evidence.',
+      },
+    ],
+    executionCriteria: ['All generated artifacts ship.'],
+  };
+  const completionId = 'completed-1';
+  const comments = [
+    {
+      id: 1,
+      body: `<!-- claimed-by: ${agentId} ${claimId} supersedes: none ${claimMarkerAt} branch: ${branch} -->\n\n_${agentId}: issue claim — IDD automation marker. Do not edit._`,
+      createdAt: at(0),
+      updatedAt: at(0),
+      lastEditedAt: null,
+      authorLogin: trustedActor,
+    },
+    recordComment(2, 'selected-1', selected, at(1)),
+    recordComment(
+      3,
+      'started-1',
+      {
+        type: 'work-started',
+        startedAt: at(2),
+        planReference: `https://github.com/${owner}/${repo}/issues/${sourceNumber}#issuecomment-2`,
+      },
+      at(2),
+    ),
+    recordComment(4, completionId, { type: 'work-completed', result }, at(4)),
+  ];
+  const makeReader = (
+    current = {
+      title: sourceTitle,
+      body: sourceBody,
+      updatedAt: source.snapshot.updatedAt,
+    },
+    history = comments,
+    getMergedChangeRequestMeta?: ProviderPort['getMergedChangeRequestMeta'],
+  ) => {
+    const port = createFakeProviderAdapter({
+      workItems: {
+        [sourceNumber]: {
+          number: sourceNumber,
+          title: current.title,
+          body: current.body,
+          state: 'open',
+          createdAt: at(-2),
+          updatedAt: current.updatedAt,
+        },
+      },
+      comments: { [sourceNumber]: history },
+      mergedChangeRequestMeta: {
+        203: {
+          number: 203,
+          merged: true,
+          mergedAt: at(3),
+          headRefOid: result.headSha,
+          mergeCommitOid: result.mergeCommitSha,
+        },
+      },
+    });
+    if (getMergedChangeRequestMeta) {
+      port.getMergedChangeRequestMeta = getMergedChangeRequestMeta;
+    }
+    return buildProvisionalDecisionEvidenceReader({
+      owner,
+      repo,
+      port,
+      readTrustedMarkerActors: () => [trustedActor],
+      policy: { trustedMarkerActors: [trustedActor] },
+    });
+  };
+  const assertBlocked = async (
+    evidence: ProvisionalDecisionEvidence,
+    sourceLabels = [{ name: 'status:needs-decision' }],
+  ) => {
+    const body = [
+      'Blocked by #202',
+      '',
+      'For the edge `Blocked by #202`, the producer output is the selected work completion. The blocked criterion is that all generated artifacts ship. The evidence is the merged implementation PR.',
+    ].join('\n');
+    const summary = await evaluateDiscoverReadiness([201], {
+      loadIssue: async (number) =>
+        number === 201
+          ? {
+              number,
+              title: 'dependent implementation',
+              state: 'OPEN',
+              body,
+              labels: [],
+            }
+          : number === sourceNumber
+            ? {
+                number,
+                title: sourceTitle,
+                state: 'OPEN',
+                body: sourceBody,
+                labels: sourceLabels,
+              }
+            : null,
+      findRoadmapsByMarker: async () => [],
+      loadProvisionalDecisionState: () => evidence,
+      decisionIssueClassEnabled: () => true,
+    });
+    assert.deepEqual(summary.ready, []);
+    assert.ok(
+      summary.filteredOut[0]?.reasons.includes('blocked_by_open_issue:#202'),
+    );
+    return summary;
+  };
+
+  const baselineEvidence = await makeReader().loadState(sourceNumber);
+  assert.equal(
+    baselineEvidence.valid,
+    true,
+    baselineEvidence.issues.join(', '),
+  );
+  assert.equal(baselineEvidence.status, 'confirmation-pending');
+  await assertBlocked(baselineEvidence, [
+    { name: 'status:needs-decision' },
+    { name: ' Status:Needs-Confirmation ' },
+  ]);
+
+  const inaccessibleError = Object.assign(new Error('GitHub lookup failed'), {
+    stderr: 'GraphQL: Resource not accessible by integration (HTTP 403)',
+  });
+  const inaccessibleEvidence = await makeReader(undefined, comments, () => {
+    throw inaccessibleError;
+  }).loadState(sourceNumber);
+  assert.equal(inaccessibleEvidence.valid, false);
+  assert.deepEqual(inaccessibleEvidence.issues, ['completion-pr-inaccessible']);
+  await assertBlocked(inaccessibleEvidence);
+
+  const authError = Object.assign(new Error('Bad credentials (HTTP 401)'), {
+    stderr: 'gh: Bad credentials (HTTP 401)',
+  });
+  await assert.rejects(
+    () =>
+      makeReader(undefined, comments, () => {
+        throw authError;
+      }).loadState(sourceNumber),
+    (error: unknown) => error === authError,
+  );
+
+  for (const changedSource of [
+    { title: 'edited decision title', body: sourceBody },
+    { title: sourceTitle, body: 'edited decision body' },
+  ]) {
+    const evidence = await makeReader({
+      ...changedSource,
+      updatedAt: at(5),
+    }).loadState(sourceNumber);
+    assert.equal(evidence.valid, false);
+    assert.ok(
+      evidence.issues.includes('source-binding-mismatch'),
+      evidence.issues.join(', '),
+    );
+    const summary = await assertBlocked(evidence);
+    // A refused replay still reports the verified merged work it read.
+    assert.deepEqual(summary.filteredOut[0]?.potentiallyAffectedDependencies, [
+      {
+        issueNumber: 202,
+        criterion: 'all generated artifacts ship',
+        reason: 'evidence-invalid',
+        workReferences: ['https://github.com/acme/repo/pull/203'],
+      },
+    ]);
+  }
+
+  const answerId = 5;
+  const answerAt = at(5);
+  const rationale = 'The alternate choice better fits the current need.';
+  const answer = {
+    schemaVersion: 1,
+    source,
+    bundleGeneration: 1,
+    decisionGenerations: [1],
+    claimIds: [claimId],
+    presentedBundle: [
+      {
+        decisionGeneration: 1,
+        question: selected.question,
+        selectedOptionId: 'keep',
+        feasibleAlternativeIds: ['change'],
+        workCompletedRecordId: completionId,
+        result,
+      },
+    ],
+    response: 'rework',
+    requestedOptionId: 'change',
+    rationale,
+    answerText: 'I prefer the alternate option.',
+  };
+  const answerComment = {
+    id: answerId,
+    body: `${PROVISIONAL_DECISION_ANSWER_MARKER}\n${JSON.stringify(answer)}`,
+    createdAt: answerAt,
+    updatedAt: answerAt,
+    lastEditedAt: null,
+    authorLogin: trustedActor,
+  };
+  const reworkRequest = recordComment(
+    6,
+    'rework-requested-1',
+    {
+      type: 'rework-requested',
+      reworkRequest: {
+        commentUrl: `https://github.com/${owner}/${repo}/issues/${sourceNumber}#issuecomment-${answerId}`,
+        requestedAt: answerAt,
+        requestedOptionId: 'change',
+        rationale,
+      },
+    },
+    at(6),
+  );
+  const requestedEvidence = await makeReader(undefined, [
+    ...comments,
+    answerComment,
+    reworkRequest,
+  ]).loadState(sourceNumber);
+  assert.equal(
+    requestedEvidence.valid,
+    true,
+    requestedEvidence.issues.join(', '),
+  );
+  assert.equal(requestedEvidence.status, 'rework-requested');
+  const reworkSummary = await assertBlocked(requestedEvidence);
+  assert.deepEqual(
+    reworkSummary.filteredOut[0]?.potentiallyAffectedDependencies,
+    [
+      {
+        issueNumber: 202,
+        criterion: 'all generated artifacts ship',
+        reason: 'rework',
+        workReferences: ['https://github.com/acme/repo/pull/203'],
+      },
+    ],
+  );
+
+  const publicationComment = {
+    id: 7,
+    body: '<!-- idd-skill-authoring-publication: rework -->',
+    createdAt: at(7),
+    updatedAt: at(7),
+    lastEditedAt: null,
+    authorLogin: trustedActor,
+  };
+  const authoredRecord = record('rework-authored-1', {
+    type: 'rework-authored',
+    reworkRoadmap: {
+      roadmapIssueNumber: sourceNumber,
+      roadmapMarkerId: 'same-source-rework',
+      authoringSetId: 'set-202-rework',
+      url: `https://github.com/${owner}/${repo}/issues/${sourceNumber}`,
+    },
+  });
+  const authoredComment = recordComment(
+    8,
+    'rework-authored-1',
+    authoredRecord.event,
+    at(8),
+  );
+  const authoredEvidence = await makeReader(undefined, [
+    ...comments,
+    answerComment,
+    reworkRequest,
+    publicationComment,
+    authoredComment,
+  ]).loadState(sourceNumber);
+  assert.equal(authoredEvidence.valid, false);
+  assert.ok(authoredEvidence.issues.includes('rework-roadmap-unverified'));
+  const authoredSummary = await assertBlocked(authoredEvidence);
+  assert.equal(
+    authoredSummary.filteredOut[0]?.potentiallyAffectedDependencies?.[0]
+      ?.reason,
+    'evidence-invalid',
   );
 });
 
@@ -2276,6 +3076,14 @@ test('CLI path forwards the configured confirmation and ready label names (#4960
 const args = process.argv.slice(2);
 const path = args.find((arg) => arg.startsWith("repos/")) || "";
 if (args[0] === "api") {
+  if (path === "repos/kurone-kito/idd-skill") {
+    process.stdout.write("main\\n");
+    process.exit(0);
+  }
+  if (path === "repos/kurone-kito/idd-skill/contents/.github/idd/config.json") {
+    process.stdout.write(Buffer.from("{}").toString("base64") + "\\n");
+    process.exit(0);
+  }
   const issueMatch = /^repos\\/kurone-kito\\/idd-skill\\/issues\\/(\\d+)$/.exec(path);
   if (issueMatch && ISSUES[issueMatch[1]]) {
     process.stdout.write(JSON.stringify(ISSUES[issueMatch[1]]) + "\\n");
