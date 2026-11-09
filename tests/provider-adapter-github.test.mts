@@ -3256,17 +3256,10 @@ test('getRepositoryFileContentAtRef encodes each path segment so reserved charac
     }),
   );
   assert.deepEqual(
-    port.getRepositoryFileContentAtRef(
-      'o/r',
-      'src/a?b#c d.mts',
-      'deadbeef',
-    ),
+    port.getRepositoryFileContentAtRef('o/r', 'src/a?b#c d.mts', 'deadbeef'),
     { outcome: 'ok', value: 'Y29udGVudA==' },
   );
-  assert.equal(
-    calls[0]?.[1],
-    'repos/o/r/contents/src/a%3Fb%23c%20d.mts',
-  );
+  assert.equal(calls[0]?.[1], 'repos/o/r/contents/src/a%3Fb%23c%20d.mts');
 });
 
 test('getMergedChangeRequestMeta returns null when the PR is not merged, and the parsed meta when it is', () => {
