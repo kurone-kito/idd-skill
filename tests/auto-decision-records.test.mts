@@ -1426,7 +1426,9 @@ test('row: a missing REST list page is unreadable', () => {
     if (request.page === 1) {
       return Array.from({ length: request.perPage }, (_, index) => ({
         number: 1000 + index,
+        state: 'open',
         body: '',
+        labels: [{ name: CONFIRMATION_LABEL }],
         pull_request: { url: 'x' },
       }));
     }
@@ -1458,7 +1460,9 @@ function listRow(issue: IssueFixture): Record<string, unknown> {
 /** 99 pull requests, so one more entry fills page 1 of the REST list. */
 const PAGE_ONE_FILLERS = Array.from({ length: 99 }, (_, index) => ({
   number: 1000 + index,
+  state: 'open',
   body: '',
+  labels: [{ name: CONFIRMATION_LABEL }],
   pull_request: { url: 'x' },
 }));
 
