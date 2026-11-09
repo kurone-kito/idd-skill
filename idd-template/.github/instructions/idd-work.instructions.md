@@ -21,6 +21,13 @@ Use the [clone-scoped lock](../../docs/idd-helper-scripts.md#clone-scoped-lock)
 for shared-clone fetch, merge, worktree operations, and F4 cleanup; see
 [fan-out](../../docs/idd-workflow.md#orchestrator-fan-out-variant) if applicable.
 
+For the ordered setup, follow the guide's [lock and token steps](../../docs/idd-worktree-setup.md#lock-the-worktree-before-installing-dependencies),
+[install and verification steps](../../docs/idd-worktree-setup.md#install-and-verify-dependencies),
+and [B1 self-check](../../docs/idd-worktree-setup.md#run-the-b1-self-check).
+This phase file retains the required source and branch checks, stop
+conditions, and the branch-reuse, WorkTrunk, and host-isolated exceptions
+that the guide references.
+
 1. Parse `origin` as credential-free `{origin-repository}`
    (`[HOST/]OWNER/REPO`); strip userinfo, never print/pass the URL. Resolve
    SSH aliases with `ssh -G`'s `hostname`. For the helper, set `GH_HOST`
@@ -161,60 +168,25 @@ before the claim POST and before any lock. Create the worktree with the
 fresh-claim row above, then follow the fresh-claim order in
 `idd-claim.instructions.md`.
 
-For manual `git worktree add`, WorkTrunk without an install hook, or a
-compliant pinned harness-native tool (per "Harness-native worktree
-tools" above), acquire the
-[worktree-local lock file](idd-claim.instructions.md#worktree-local-lock-file-same-machine-collision)
-at the timing `idd-claim.instructions.md` gives, **before Step 3** —
-`install-deps` itself writes into the worktree and runs lifecycle
-hooks, so acquiring the lock any later leaves that install unprotected.
-Also re-run `--record-tokens` (with the same `{nonce}` the A5 write
-used; it overwrites rather than merges) for this
-worktree's own copy of the
-[generated-tokens record](idd-claim.instructions.md#worktree-local-lock-file-same-machine-collision)
-at the same point — the A5 copy is in the primary worktree's admin
-directory, so this copy is needed for the `--read-tokens` check.
+**Step 3 — Install deps**: after worktree creation:
 
-On a takeover, WorkTrunk's pre-start hook runs before the create command
-returns. If it
-installs dependencies, its **first** command must acquire the lock for
-the new worktree with the current `{agent-id}` / `{claim-id}` and
-re-run `--record-tokens` (with the same `{nonce}` the A5 write used),
-then run the install. Under
-`package-manager`, the new worktree's `idd:claim-lock` bin may not exist
-yet: invoke a pre-install-available helper from the primary worktree
-with the new path as `--worktree`, or use the helper-free fallback
-below. If neither is available, skip the automatic install hook and
-follow the manual lock-then-install path above.
-
-For `instructions-only` (no helper runtime), use the helper-free
-fallback under
-[Worktree-local claim lock](../../docs/idd-helper-scripts.md#worktree-local-claim-lock)
-before the first mutation; it shares the same `idd-claim.lock`
-namespace and F4 removal behavior as above.
-
-**Step 3 — Install deps**: after worktree creation, ensure dependencies
-are installed:
-
-- **WorkTrunk with a pre-start install hook** (e.g.,
-  `[pre-start].install` in `.config/wt.toml`): On a takeover, the hook must
-  acquire the lock before installing, as described above; after the hook succeeds,
-  skip this step. `-x <noop>` never changes the caller's directory —
-  `cd` into the new sibling (from `git worktree list`) before later
-  steps.
-- **Manual `git worktree add`, WorkTrunk without a hook, or a
-  compliant pinned harness-native tool**: `cd` into the newly created
-  worktree, then run **install-deps**.
-
-`install-deps` must remain safe to rerun during retries, takeovers, and
-recreated worktrees without manual cleanup.
-
-A fresh worktree can report `install-deps` success while a package
-manager silently under-installs a dependency binary. If observed, the
-`install-deps` command should verify a key post-install artifact and
-retry the install exactly once before failing loudly — see the
-`verify-install-deps` helper in `docs/idd-helper-scripts.md`. See
-[rationale](../../docs/idd-design-rationale.md#b1-step-3--install-deps-silent-under-install-detection).
+- Before installing, complete the guide's [lock and token steps](../../docs/idd-worktree-setup.md#lock-the-worktree-before-installing-dependencies).
+  For a fresh claim, record this worktree's tokens with the A5 nonce before
+  acquiring the lock; for a takeover, acquire the lock first, then record
+  tokens with that nonce. In both cases, read both records back and pass
+  the post-acquire claim assertion.
+- On takeover, a pre-start install hook must make lock acquisition and
+  token recording its first commands, in that order, before installing.
+  If it cannot, skip the hook and use the manual lock-then-install path in
+  the guide.
+- Run configured `commands.install-deps` inside the sibling worktree only
+  when a compliant takeover pre-start hook did not already complete it.
+  After either path, use the guide's [install and verification steps](../../docs/idd-worktree-setup.md#install-and-verify-dependencies)
+  to confirm the expected post-install artifact. Keep the command safe to
+  rerun for retries and worktree recreation.
+- Complete the guide's [B1 self-check](../../docs/idd-worktree-setup.md#run-the-b1-self-check)
+  before B2. `-x <noop>` leaves the current directory unchanged, so enter
+  the sibling worktree before checking. Stop if any step fails.
 
 ### B1 self-check
 
