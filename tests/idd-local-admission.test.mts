@@ -366,9 +366,20 @@ async function runPueueTest(
   scenario: Record<string, unknown>,
   command: string[] = ['true'],
   overrides: Partial<LocalAdmissionDeps> = {},
-): Promise<{ status: number; stderr: string; fake: FakePueue; repo: string }> {
+): Promise<{
+  status: number;
+  stderr: string;
+  fake: FakePueue;
+  repo: string;
+  state: string;
+  policyBefore: string | null;
+}> {
   const h = makeHarness();
   const repo = makeRepo(policy);
+  const policyPath = join(repo, POLICY);
+  const policyBefore = existsSync(policyPath)
+    ? readFileSync(policyPath, 'utf8')
+    : null;
   const fake = makeFakePueue(h.env, scenario);
   const notes: string[] = [];
   const status = await runLocalAdmission(['--', ...command], {
@@ -381,7 +392,14 @@ async function runPueueTest(
     pueuePollIntervalMs: 2,
     ...overrides,
   });
-  return { status, stderr: notes.join(''), fake, repo };
+  return {
+    status,
+    stderr: notes.join(''),
+    fake,
+    repo,
+    state: h.state,
+    policyBefore,
+  };
 }
 
 interface Run {
@@ -922,6 +940,26 @@ test('a child that exits 75 is returned as 75 without the expired line', {
   assert.doesNotMatch(result.stderr, /local-admission: expired/);
 });
 
+test('a child that exits 69 on the flock path is returned as 69 without the daemon line', {
+  skip: !REAL_LOCK,
+}, () => {
+  const h = makeHarness();
+  const workDir = makeWorkDir();
+  const result = runBinSync(
+    [
+      '--',
+      process.execPath,
+      '-e',
+      "require('node:fs').writeFileSync('child-started', 'yes'); process.exit(69)",
+    ],
+    workDir,
+    h.env,
+  );
+  assert.equal(result.status, 69);
+  assert.doesNotMatch(result.stderr, /pueue daemon is not accepting commands/u);
+  assert.equal(existsSync(join(workDir, 'child-started')), true);
+});
+
 test('a command that cannot be found exits 127 after the lock is taken', {
   skip: !REAL_LOCK,
 }, () => {
@@ -1141,68 +1179,124 @@ test('pueue passes leading-hyphen group names as values and positionals', {
   );
 });
 
-test('pueue daemon failure uses flock without changing policy despite cap above one', {
-  skip: !REAL_LOCK,
-}, async () => {
-  const policy = {
-    localExec: { admission: { backend: 'pueue', maxConcurrent: 4 } },
-  };
-  const h = makeHarness();
-  const repo = makeRepo(policy);
-  const before = readFileSync(join(repo, POLICY), 'utf8');
-  const fake = makeFakePueue(h.env, { daemonExit: 1 });
-  const notes: string[] = [];
-  const status = await runLocalAdmission(['--', 'true'], {
-    cwd: repo,
-    env: fake.env,
-    platform: 'linux',
-    stderr: (text: string) => notes.push(text),
-    pueueClientTimeoutMs: 3000,
-    pueuePollIntervalMs: 2,
-  });
-  const result = { status, stderr: notes.join(''), fake, repo };
-  assert.equal(result.status, 0);
-  assert.match(result.stderr, /pueue daemon is not accepting commands/);
-  assert.equal(Array.isArray(readFakePueue(result.fake).calls), true);
+async function assertPueueDaemonProbeStops(
+  scenario: Record<string, unknown>,
+  overrides: Partial<LocalAdmissionDeps> = {},
+): Promise<void> {
+  let flockLookups = 0;
+  const result = await runPueueTest(
+    { localExec: { admission: { backend: 'pueue', maxConcurrent: 4 } } },
+    scenario,
+    [
+      process.execPath,
+      '-e',
+      "require('node:fs').writeFileSync('child-started', 'yes')",
+    ],
+    {
+      ...overrides,
+      findFlock: () => {
+        flockLookups += 1;
+        return null;
+      },
+    },
+  );
+  assert.equal(result.status, 69);
+  assert.equal(
+    result.stderr,
+    'local-admission: pueue daemon is not accepting commands\n',
+  );
+  assert.equal(flockLookups, 0);
+  assert.equal(existsSync(join(result.repo, 'child-started')), false);
   assert.equal(
     (readFakePueue(result.fake).calls as string[][]).some(
       (call) => call[0] === 'add',
     ),
     false,
   );
-  assert.equal(readFileSync(join(result.repo, POLICY), 'utf8'), before);
+  assert.equal(
+    result.policyBefore === null
+      ? null
+      : readFileSync(join(result.repo, POLICY), 'utf8'),
+    result.policyBefore,
+  );
+}
+
+test('pueue daemon health failure exits 69 without taking the lock or starting the command', {
+  skip: process.platform === 'win32',
+}, async () => {
+  await assertPueueDaemonProbeStops({ daemonExit: 1 });
 });
 
-test('pueue daemon timeout uses flock and a missing client never calls pueue', {
+test('pueue daemon health timeout exits 69 without taking the lock or starting the command', {
+  skip: process.platform === 'win32',
+}, async () => {
+  await assertPueueDaemonProbeStops(
+    { statusHang: true },
+    { pueueClientTimeoutMs: 10 },
+  );
+});
+
+test('pueue daemon connection failure exits 69 without taking the lock or starting the command', {
+  skip: process.platform === 'win32',
+}, async () => {
+  await assertPueueDaemonProbeStops(
+    {},
+    { findPueue: () => '/definitely/missing/pueue' },
+  );
+});
+
+test('a missing pueue client still uses flock', {
   skip: !REAL_LOCK,
 }, async () => {
   const policy = {
     localExec: { admission: { backend: 'pueue', maxConcurrent: 4 } },
   };
-  const timed = await runPueueTest(policy, { statusHang: true }, ['true'], {
-    pueueClientTimeoutMs: 10,
-  });
-  assert.equal(timed.status, 0);
-  assert.match(timed.stderr, /pueue daemon is not accepting commands/);
   const h = makeHarness();
   const repo = makeRepo(policy);
   const notes: string[] = [];
-  const missing = await runLocalAdmission(['--', 'true'], {
-    cwd: repo,
-    env: h.env,
-    stderr: (text: string) => notes.push(text),
-    findPueue: () => null,
-  });
+  const missing = await runLocalAdmission(
+    [
+      '--',
+      process.execPath,
+      '-e',
+      "require('node:fs').writeFileSync('child-started', 'yes')",
+    ],
+    {
+      cwd: repo,
+      env: h.env,
+      stderr: (text: string) => notes.push(text),
+      findPueue: () => null,
+    },
+  );
   assert.equal(missing, 0);
   assert.match(notes.join(''), /pueue client is not available/);
-  const connectionError = await runPueueTest(policy, {}, ['true'], {
-    findPueue: () => '/definitely/missing/pueue',
-  });
-  assert.equal(connectionError.status, 0);
-  assert.match(
-    connectionError.stderr,
-    /pueue daemon is not accepting commands/,
+  assert.equal(existsSync(join(repo, 'child-started')), true);
+  assert.equal(existsSync(join(h.state, LOCK_RELATIVE)), true);
+});
+
+test('a submitted command exit 69 is returned unchanged', {
+  skip: process.platform === 'win32',
+}, async () => {
+  const result = await runPueueTest(
+    { localExec: { admission: { backend: 'pueue' } } },
+    { runCommandOnAdd: true },
+    [
+      process.execPath,
+      '-e',
+      "require('node:fs').writeFileSync('child-started', 'yes'); process.exit(69)",
+    ],
+    { findFlock: () => null },
   );
+  assert.equal(result.status, 69);
+  assert.doesNotMatch(result.stderr, /pueue daemon is not accepting commands/u);
+  assert.equal(existsSync(join(result.repo, 'child-started')), true);
+});
+
+test('help names the Pueue health-probe exit status', () => {
+  const result = runBinSync(['--help'], makeWorkDir(), process.env);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /69/u);
+  assert.match(result.stdout, /pueue daemon is not accepting commands/u);
 });
 
 test('pueue cap outside the supported range falls back to one without rewriting policy', {
@@ -1304,6 +1398,7 @@ test('pueue create race rereads a group; a missing or unreadable group falls bac
   const unreadable = await runPueueTest(policy, { groupListExit: 1 });
   assert.equal(unreadable.status, 0);
   assert.match(unreadable.stderr, /could not read the group list/);
+  assert.equal(existsSync(join(unreadable.state, LOCK_RELATIVE)), true);
   const unreadableAfterCreate = await runPueueTest(policy, {
     groupAddExit: 1,
     groupListExitAfterFirst: 1,

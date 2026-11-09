@@ -417,14 +417,15 @@ for the mechanism.
 On non-Windows hosts, this repository uses
 the Pueue group `idd-skill-validate` with a cap of `2` when the daemon is
 available. The helper creates a missing group with that cap and warns while
-preserving an existing group with a different cap. If Pueue is unavailable,
-it falls back to serial `flock`. On Windows, the helper keeps its existing
-direct-run behavior. While Pueue is available, this repository's Pueue group
-is separate from the shared `flock` admission domain used by other
-repositories. If Pueue is unavailable, this repository's fallback joins
-that shared `flock` domain. This repository-only choice adds no daemon start
-or shutdown and no group resizing. It follows the lock inheritance fix for
-issue `#5036` in PR `#5038`.
+preserving an existing group with a different cap. If the Pueue client is
+missing, it falls back to serial `flock`. A failed, timed-out, or unreachable
+daemon health check exits `69` without taking the flock lock or starting the
+command (issue `#5115`). On Windows, the helper keeps its existing direct-run
+behavior. While Pueue is available, this repository's Pueue group is separate
+from the shared `flock` admission domain used by other repositories. If the
+client is missing, this repository's fallback joins that shared `flock` domain.
+This repository-only choice adds no daemon start or shutdown and no group
+resizing. It follows the lock inheritance fix for issue `#5036` in PR `#5038`.
 
 ## Orchestrator worker cap
 
