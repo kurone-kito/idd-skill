@@ -367,7 +367,7 @@
       "files": [
         ".github/instructions/idd-work.instructions.md"
       ],
-      "limitBytes": 38400
+      "limitBytes": 41400
     },
     {
       "id": "bundle-work-lite",
@@ -557,9 +557,9 @@
         "bundle": "bundle-work-phase",
         "standingClass": "budgetRaise",
         "ceilingPct": 10,
-        "limitBytes": 38400,
+        "limitBytes": 41400,
         "issue": 4893,
-        "reason": "Audit during the issue #4893 work-phase safeguard revision measured 37,311 bytes. The issue-authorized 10% standing raise permits up to 41,000 bytes; the 38,400 limit leaves 321 bytes before the 98% utilization threshold (37,632). Operator approval is recorded in issue #4893 comment #6671770411."
+        "reason": "Re-measured after the split-policy pinning fix (PR #5031 takeover, 2026-11-10): 37,706 bytes with the generated banner removed. The issue-authorized 10% standing raise permits up to 41,476 bytes, so the limit is set to 41,400, the floor of that permit to the nearest 100. This replaces the earlier 38,400 limit."
       },
       {
         "bundle": "bundle-work-lite",
