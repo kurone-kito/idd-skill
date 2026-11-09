@@ -375,7 +375,7 @@
       "files": [
         ".github/instructions/lite/idd-work-lite.instructions.md"
       ],
-      "limitBytes": 26000
+      "limitBytes": 33200
     },
     {
       "id": "bundle-resume-lite",
@@ -492,12 +492,6 @@
     "exemptBundles": [],
     "nearCeilingRaiseApprovals": [
       {
-        "bundle": "bundle-work-lite",
-        "limitBytes": 26000,
-        "issue": 5030,
-        "reason": "The operator approved this limit for bundle-work-lite in issue #5030 comment #6706528642. The corrected pre-change generated measurement is 23,596 bytes per comment #6706762777. At the current head the banner-stripped bundle measures 24,737 bytes, leaving 1,263 bytes of headroom (4.86%) at 95.14% utilization, above the 95% notice band but below the 98% enforcement ceiling. The shared 98% enforcement and 196,000-byte maximum remain unchanged."
-      },
-      {
         "bundle": "bundle-pr-submit-lite",
         "limitBytes": 27300,
         "issue": 5092,
@@ -562,6 +556,12 @@
         "limitBytes": 41400,
         "issue": 4893,
         "reason": "Operator chose to raise this limit before the split route lands on main (PR #5031, issue #4893). The trial budget check measures a raise only after it is on the base. The branch of issue #4893 projects 37,706 bytes for this bundle with the generated banner removed, measured on 2026-11-10. 41,400 is the floor of the issue-authorized 10% permit for that total, rounded down to the nearest 100. Main measures 28,344 bytes, so the new ceiling leaves room for the split route to land."
+      },
+      {
+        "bundle": "bundle-work-lite",
+        "limitBytes": 33200,
+        "issue": 4893,
+        "reason": "Operator chose to raise this limit before the split route lands on main (PR #5031, issue #4893), so the trial budget check can measure the raise on the base. This entry supersedes the manual approval from issue #5030 for this bundle (26,000 bytes). That record is removed here because the strictest-limit rule would otherwise keep the old ceiling in force; it remains in git history. Main measures 24,737 bytes (95.14% of 26,000). The Lite split procedure projects about 30,682 bytes for this bundle with the generated banner removed, measured on 2026-11-10. 33,200 leaves 2,518 bytes (7.6%) of headroom, about 92.4% utilization, below the 98% enforcement ceiling."
       }
     ]
   },
