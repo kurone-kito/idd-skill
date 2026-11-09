@@ -1338,18 +1338,22 @@ test('released cleanup requires explicit attestation only for apply', () => {
   const applied = parseArgs([...base, '--attest-no-live-session', '--apply']);
   assert.equal(applied.apply, true);
   assert.equal(applied.attestNoLiveSession, true);
-  assert.throws(() =>
-    parseArgs([
-      '--issue',
-      String(ISSUE),
-      '--claim-id',
-      CLAIM,
-      '--agent-id',
-      AGENT,
-      '--worktree',
-      '/work/wt',
-      '--attest-no-live-session',
-    ]),
+  assert.throws(
+    () =>
+      parseArgs([
+        '--issue',
+        String(ISSUE),
+        '--claim-id',
+        CLAIM,
+        '--agent-id',
+        AGENT,
+        '--worktree',
+        '/work/wt',
+        '--nonce',
+        'nonce-for-tests',
+        '--attest-no-live-session',
+      ]),
+    /requires --released-claim/u,
   );
 });
 
