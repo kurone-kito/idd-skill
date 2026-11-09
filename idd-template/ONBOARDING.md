@@ -403,12 +403,11 @@ needs a standalone `jq` binary on `PATH` (see
 this fallback's own commands piping into `jq -r`/`jq -s`, and neither
 `gh` nor Git for Windows installs a standalone `jq`.
 
-Native-Windows adopters should set
-`git config --global core.longpaths true` (a one-time host-level
-setting, not a repository change): B1's sibling-worktree layout
-(`<repo>.<branch-with-slashes-dashed>` beside the primary worktree)
-combined with this repository's deep `.github/instructions/` paths can
-approach Windows' 260-character path limit.
+Native-Windows adopters should set `git config --global core.longpaths true`
+once; this changes only the host. The B1 sibling-worktree layout
+(`<repo>.<branch-with-slashes-dashed>`) and deep
+`.github/instructions/` paths can approach Windows' 260-character limit.
+See [IDD Worktree Setup](docs/idd-worktree-setup.md).
 
 ---
 
@@ -831,6 +830,7 @@ for the frontmatter convention its generated table follows.
 .github/instructions/lite/idd-advisory-wait-lite.instructions.md
 docs/index.md
 docs/idd-workflow.md
+docs/idd-worktree-setup.md
 docs/idd-review-policy-profiles.md
 docs/idd-helper-scripts.md
 docs/idd-autonomy-contract.md

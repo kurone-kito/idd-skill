@@ -29,6 +29,9 @@ Open `ONBOARDING.md`, follow the core import instructions there, and
 install the optional issue-authoring companion only when the operator
 explicitly asks for it.
 
+For the B1 worktree and dependency setup steps before planning, see
+[IDD Worktree Setup](docs/idd-worktree-setup.md).
+
 ## Artifact boundary
 
 This template exports the portable IDD instruction files, onboarding
@@ -162,6 +165,7 @@ docs/idd-helper-scripts.md
 docs/idd-resume-detail.md
 docs/idd-review-policy-profiles.md
 docs/idd-workflow.md
+docs/idd-worktree-setup.md
 docs/index.md
 docs/onboarding/agent-entry-and-verification.md
 docs/onboarding/hearing-catalog.json

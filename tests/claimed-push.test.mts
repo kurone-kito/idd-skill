@@ -64,9 +64,11 @@ const NEXT = {
   readGitError: 'read the git error in the worktree and fix it, then rerun',
 } as const;
 
-// The two admission next actions state the exit-75 and exit-2 rows of issue
-// 4525's table; they are written out here for the same reason.
+// The admission next actions state issue 4525's exit-75/exit-2 rows and
+// issue 5117's exit-69 row; they are written out here for the same reason.
 const ADMISSION_NEXT = {
+  unavailable:
+    'if the stderr above has a line exactly equal to "local-admission: pueue daemon is not accepting commands", the gate did not start: report it, and do not rerun the helper or push by hand; otherwise the gate itself exited 69: fix the failure, commit, and rerun',
   expired:
     'if the stderr above has a "local-admission: expired" line (a helper error envelope JSON line can follow it), the gate did not start: report it, and do not rerun the helper or push by hand; otherwise the gate itself exited 75: fix the failure, commit, and rerun',
   refused:
@@ -713,6 +715,24 @@ test('an admitted gate that exits 0 after admission notices passes after the cle
   assertRefused(dirty, 'gate', NEXT.commitOrDiscard, { exitStatus: 0 });
 });
 
+test('an admitted gate that exits 69 distinguishes the daemon notice from a gate failure', () => {
+  for (const stderr of [
+    'local-admission: pueue daemon is not accepting commands\n',
+    'local-admission: pueue daemon is not accepting commands; using the flock path\n',
+    '',
+    'the gate itself failed\n',
+  ]) {
+    const r = run({ world: { [K.gate]: result(69, '', stderr) } });
+    assertRefused(r, 'gate', ADMISSION_NEXT.unavailable, { exitStatus: 69 });
+    assert.match(
+      stepOf(r, 'gate').reason,
+      /through idd-local-admission exited 69/u,
+    );
+    assert.equal(r.count(K.assert), 1, 'no second assert');
+    noPush(r);
+  }
+});
+
 test('an admitted gate that exits 75 names the expiry line in its next action', () => {
   const r = run({ world: { [K.gate]: result(75) } });
   assertRefused(r, 'gate', ADMISSION_NEXT.expired, { exitStatus: 75 });
@@ -748,8 +768,8 @@ test('an admission child killed by a signal is a gate failure with no exit statu
   assert.match(stepOf(r, 'gate').reason, /killed by signal SIGTERM/u);
 });
 
-test('on win32 exits 75 and 2 keep the gate-failure next action', () => {
-  for (const status of [75, 2]) {
+test('on win32 exits 69, 75 and 2 keep the gate-failure next action', () => {
+  for (const status of [69, 75, 2]) {
     const r = run({ platform: 'win32', world: { [K.gate]: result(status) } });
     assertRefused(r, 'gate', NEXT.fixThenRerun, { exitStatus: status });
     assert.equal(

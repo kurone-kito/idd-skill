@@ -128,6 +128,7 @@
         "idd-template/.github/instructions/lite/idd-advisory-wait-lite.instructions.md",
         "idd-template/docs/index.md",
         "idd-template/docs/idd-workflow.md",
+        "idd-template/docs/idd-worktree-setup.md",
         "idd-template/docs/idd-review-policy-profiles.md",
         "idd-template/docs/idd-helper-scripts.md",
         "idd-template/docs/idd-autonomy-contract.md",
@@ -933,6 +934,12 @@
       "source": "idd-template/docs/idd-workflow.md",
       "target": "docs/idd-workflow.md",
       "mode": "structure"
+    },
+    {
+      "id": "idd-worktree-setup-doc",
+      "source": "idd-template/docs/idd-worktree-setup.md",
+      "target": "docs/idd-worktree-setup.md",
+      "mode": "exact"
     },
     {
       "id": "issue-authoring-boundary-reference",

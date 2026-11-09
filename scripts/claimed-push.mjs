@@ -68,6 +68,8 @@ const LOCAL_ADMISSION_SCRIPT = 'idd-local-admission.mjs';
  * It is the shell `shell: true` uses on POSIX, so the string parses as before.
  */
 const GATE_SHELL = '/bin/sh';
+/** Exit status when the Pueue daemon is unavailable (issue #5117). */
+const ADMISSION_UNAVAILABLE_STATUS = 69;
 /** Exit status of an admission wait that reached `maxWait` (issue #4428). */
 const ADMISSION_EXPIRED_STATUS = 75;
 /** Exit status of an admission refusal, or of a stop it could not deliver. */
@@ -135,6 +137,8 @@ const NEXT_ACTION = {
   commitThenRerun: 'stage and commit, then rerun',
   fixThenRerun: 'fix the failure, commit, and rerun',
   configureGate: 'configure the command or run the written gate by hand',
+  admissionUnavailable:
+    'if the stderr above has a line exactly equal to "local-admission: pueue daemon is not accepting commands", the gate did not start: report it, and do not rerun the helper or push by hand; otherwise the gate itself exited 69: fix the failure, commit, and rerun',
   admissionExpired:
     'if the stderr above has a "local-admission: expired" line (a helper error envelope JSON line can follow it), the gate did not start: report it, and do not rerun the helper or push by hand; otherwise the gate itself exited 75: fix the failure, commit, and rerun',
   admissionRefused:
@@ -1114,12 +1118,15 @@ function checkCleanTree(ctx, when) {
 /**
  * The next action for a gate that exited non-zero. The helper cannot read the
  * admission's stderr lines (they stream to this process's stderr with the
- * gate's output), so for the two statuses `idd-local-admission` also returns
+ * gate's output), so for the statuses `idd-local-admission` also returns
  * for its own outcomes, the next action names the line that tells them from
  * the gate's own status (core "Admission expiry": bare `75` is command
  * status).
  */
 function gateFailureAction(admission, status) {
+  if (admission && status === ADMISSION_UNAVAILABLE_STATUS) {
+    return NEXT_ACTION.admissionUnavailable;
+  }
   if (admission && status === ADMISSION_EXPIRED_STATUS) {
     return NEXT_ACTION.admissionExpired;
   }

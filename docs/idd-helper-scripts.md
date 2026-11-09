@@ -388,7 +388,7 @@ for every stop of an `--apply` run after the pre-checks; it exits `1` as
 | `idd-load-gate.mjs`                | an unknown flag, a missing value, a non-positive or malformed `--max-load`, or a malformed `--timeout-ms` or `--poll-ms`                            | exit `3` when the timeout ends with the load still at or above the limit (the JSON line on stdout has `passed` set to `false`)                              |
 | `idd-activation.mjs`               | an unknown flag, or an empty `--cwd` value                                                                                                          | none today                                                                                                                                                  |
 | `claim-approval-gate.mjs`          | a missing `--issue`, or an unknown flag                                                                                                             | none today                                                                                                                                                  |
-| `claim-issue.mjs`                  | a missing or invalid `--issue`, `--agent-id`, or `--project-status`, `--apply` without both of the last two, or an unknown flag                     | exit `1` for every ineligible result, including a failed check, and for every stop of an `--apply` run                                                      |
+| `claim-issue.mjs`                  | a missing or invalid `--issue`, `--agent-id`, `--project-status`, `--confirmation`, `--decision`, a B1 flag used out of place, or an unknown flag   | exit `1` for every ineligible result, including a failed check, and for every stop of an `--apply` run                                                      |
 | `claim-lock.mjs`                   | a missing mode or required flag, or an unknown flag                                                                                                 | exit `2` on an `--acquire` collision, exit `4` on a primary-worktree refusal, or a non-`backfilled` `--backfill-tokens`                                     |
 | `clone-lock.mjs`                   | a missing mode, `--agent-id`, or command, or an unknown flag                                                                                        | exit `3` on an acquire timeout; a wrapped command's own non-zero status                                                                                     |
 | `phase-id-resolver.mjs`            | a missing `--phase-id`, or an unknown flag                                                                                                          | none today                                                                                                                                                  |
@@ -4070,9 +4070,9 @@ The adopted helper boundaries are intentionally narrow:
 - `force-handoff.mjs` is intentionally operator-facing and interactive;
   it asks for the issue number before any mutation, derives whether PR
   input is required from live open PR state on the active claim branch,
-  prompts for an optional successor agent-id (blank keeps the
-  displaced agent's own id; a warning is shown when the resolved
-  successor still matches it), previews the marker, and posts only
+  prompts for an optional session-qualified successor agent-id (blank
+  keeps the displaced agent's own id only when it passes validation; a
+  warning is shown for a valid same-ID choice), previews the marker, and posts only
   after an explicit `y` confirmation
 - it must fail closed outside a TTY and is not available to autopilot
   or unattended agent contexts
@@ -4738,8 +4738,16 @@ The command never merges, pushes, changes labels, or releases a claim.
   - asks for issue input before any mutation
   - asks for PR input only when a live open PR exists on the active
     claim branch and PR-scoped evidence is required
-  - asks for an optional successor agent-id (blank keeps the displaced
-    agent's own id)
+  - asks for an optional successor agent-id; blank selects the displaced
+    agent's own id, subject to the same validation as an explicit ID
+  - validates that choice with `claim-lock`'s existing session-qualified
+    predicate before generating a plan or marker preview: `<family>-<suffix>`,
+    with no whitespace and a run of at least eight consecutive letters or
+    digits after the first hyphen; an invalid explicit or inherited ID
+    prompts again instead of reaching confirmation
+  - accepts an intentional same-ID choice when it passes that predicate
+  - accepts `release` through the existing unclaim path, without successor-ID
+    validation, including for a legacy claim whose ID fails the predicate
   - prints the resolved successor IDs and marker preview -- with a
     warning when the resolved successor still matches the displaced
     agent-id -- before the final confirmation
@@ -4759,13 +4767,28 @@ The command never merges, pushes, changes labels, or releases a claim.
   - render or inspect canonical forced-handoff marker payloads
   - support audited debugging or manual review of the exact body
   - stay distinct from the interactive operator facade above
+- Successor-ID validation: both the ordinary marker path and `--plan` apply
+  the same session-qualified predicate before rendering. An invalid
+  `--new-agent-id`, or an invalid inherited default in `--plan`, exits non-zero
+  with empty stdout, without producing a marker body or plan preview. A valid
+  intentional same-ID choice remains allowed.
 - Preflight: with an open PR on the claim branch, a non-plan run needs
   `--pr <number>`, and that PR must be open. Before it renders, the run
   refuses (non-zero exit, empty stdout) unless every copy that the
-  facade's preflight reads confirms `human-gated`. `--plan` reports the
+  facade's preflight reads confirms `human-gated`. With a valid successor ID,
+  `--plan` reports the
   same check as a read-only `preflight` field, for the PR that `--pr`
   names, or for every open PR's base when no PR is named. It omits
   `markerBody` when the check would refuse, and it still exits `0`.
+
+Successor-ID validation checks the ID's form; it does not authenticate the
+live session supplying it. The existing human-gated policy, authorized actor,
+claim, nonce, worktree, lock, and generated-token checks still apply.
+Observed 2026-11-06 in issue `#4893` (PR `#5031`): a forced handoff named a
+successor ID that Resume rejected as not session-qualified, while the local
+lock still identified the displaced claim and successor tokens were absent.
+The writer validation shipped in issue `#5079` prevents that invalid-ID
+preview; it does not repair local ownership evidence.
 
 The references in this subsection apply only when a repository
 explicitly installs the matching helpers and records
@@ -6357,7 +6380,11 @@ This record is durable issue evidence: it is not added to the transient
      session's own login. The development branch must exist on origin, or
      the run stops with `development-branch-unresolved`. A prunable worktree
      entry or a leftover local branch of the claim's name stops with
-     `b1-cleanup-needed`.
+     `b1-cleanup-needed`. The leftover-branch stop and `path-occupied` end
+     their next action with one static sentence that points at
+     `--preserve-b1-leftovers` (see
+     [B1 leftover preservation](#b1-leftover-preservation)); the
+     prunable-entry stop keeps its text.
   2. Still under the lock, the scoped local-worktree and remote-branch scans
      of A5(e) run again after the fetch (`local-worktree-occupied`,
      `local-worktree-unreadable`, or `branch-collision` if one appeared since
@@ -6439,9 +6466,10 @@ This record is durable issue evidence: it is not added to the transient
 - Exit `0` means the claim is verified. Every stop exits `1` with the
   envelope kind `gate`. The report carries `claimPosted` (`true`, `false`
   when nothing was sent, or `"unknown"`), `lostClaimCleanupRequired`, and
-  a `nextAction`. The helper deletes nothing. Once the worktree exists, a
-  failure keeps the worktree, its branch, and the worktree-local lock, and
-  the next action is `lost-claim-cleanup` from `idd-claim.instructions.md`.
+  a `nextAction`. Without `--preserve-b1-leftovers` the helper deletes
+  nothing. Once the worktree exists, a failure keeps the worktree, its
+  branch, and the worktree-local lock, and the next action is
+  `lost-claim-cleanup` from `idd-claim.instructions.md`.
 - The routing and marker helpers that the write half calls run from the
   primary checkout, so each one reads the policy that the fast-forward
   refreshed. `claim-lock` runs from the linked worktree, the caller's own
@@ -6449,6 +6477,165 @@ This record is durable issue evidence: it is not added to the transient
   claim's own.
 - Stale-claim takeover is out of scope: a stale active claim stops the run
   with `stale-takeover-out-of-scope`.
+
+### B1 leftover preservation
+
+- Command: `node scripts/claim-issue.mjs --issue <issue-number>
+  --preserve-b1-leftovers [--confirmation <owner>/<repo>#<number>
+  --decision <id>...]`. Add `--apply --agent-id <id> --project-status
+  <not-in-use|not-started>` for the write run. The same flags work through
+  the profile-selected `idd:claim-issue` command. `--confirmation` and
+  `--decision` are valid only with the flag, `--decision` needs
+  `--confirmation`, and `--decision` may repeat. A `--confirmation` is one
+  issue of this repository other than the claimed issue. A decision ID is
+  one token of at most 128 characters with no whitespace, no `;`, and no
+  `-->`. Anything else is a usage error. The logic lives in
+  `src/scripts/b1-leftover-preserve.mts`; `claim-issue.mts` only wires it.
+- Why: the manual B1 rules stop a fresh claim when its branch already exists
+  locally or something sits at its worktree path, and `claim-issue` stopped
+  the same way with `b1-cleanup-needed` or `path-occupied`. The helper header
+  and the leftover-branch next action both said that the helper deletes or
+  removes nothing. At the operator hearing of 2026-11-01
+  (recorded in roadmap `#4955`, implemented by issue `#4970`) the operator
+  chose that, with the `b1Leftover` auto-decide class switched on, the session
+  preserves such a leftover and continues. Unpushed commits on the local
+  default branch, a prunable worktree entry, and anything in the primary
+  worktree stay out of scope.
+- A leftover is one of two subjects. A branch: the claim's computed branch
+  exists as a local ref. A path: anything, a file, a directory, or a link,
+  sits at the computed worktree path
+  `<primary-parent>/<repo>.<normalized-branch>`. A run can list both, and
+  each needs its own record. The mode acts only where a run without the flag
+  would stop. With no leftover it acts on nothing, `--confirmation` is not
+  needed, the claim proceeds, and any `--decision` is reported in
+  `decisionsUnused`.
+- Dry run (no `--apply`): after the five pre-checks pass, the helper lists
+  every leftover with its subject (the short branch name, or the absolute
+  path with its parent resolved and its last component kept as written),
+  and evaluates each precondition below. It reads the primary checkout, the
+  default branch, the local policy, the trusted policy, the fresh-claim gate,
+  `git ls-remote`, `gh pr list`, and the confirmation issue, but takes no
+  lock and makes no fetch or write. Without `--confirmation` it reports the
+  record precondition as unmet without refusing, so the order is dry run,
+  record, apply. The exit code still follows the pre-checks, and the report
+  gains `b1Leftovers` only when every pre-check passed. The dry run does not
+  fast-forward the primary checkout, so its answer is advisory: apply checks
+  everything again under the lock.
+- Apply: with `--apply` the helper adds the step `b1-preserve` under the same
+  clone lock, after `development-branch` and before `b1-leftovers`. It
+  re-reads the fresh-claim gate (keeping `evidence.released_claim.branch`),
+  and checks every precondition for every listed subject again. The first
+  change happens only when all of them are met, so a refusal never leaves one
+  leftover half handled. The branch is preserved first and the path second.
+  The run then continues through `local-rescan`, `remote-rescan`,
+  `worktree-path`, and `worktree-add`.
+- Common preconditions:
+  - the trusted read of the repository's default branch reports `b1Leftover`
+    as `enabled` (a master switch that is off, a class that is off, or an
+    unreadable policy refuses);
+  - the fresh-claim gate reads `claimable`, its response carries an
+    `evidence` object (the routing always prints one), and a `released_claim`
+    in it is neither unreadable nor the claim's own branch (a released
+    claim's branch is inheritable, and so is the path derived from it);
+  - the worktree list is readable and names the primary checkout (an empty
+    list refuses), and the claim's branch has the `issue/<number>-<slug>`
+    shape;
+  - no prunable worktree entry is on the branch or at the path;
+  - the confirmation issue is open, carries the confirmation label, and no
+    longer carries the authoring label, read through the trusted record
+    reader with the policy file of the primary checkout;
+  - one `--decision` per listed subject, each paired with its subject through
+    the `Subject:` value of its record. An ID that matches no listed subject,
+    an ID given twice, two IDs for one subject, and a count that differs
+    from the listed subjects (for example because the leftovers changed since
+    the dry run) all refuse. Each paired record has `class=b1Leftover`,
+    `source` equal to the claimed issue, `claim=none`, `set=none` (the
+    contract's pairing, which the record reader does not enforce), and its
+    decision. The
+    decision is not voided and has no counting `location` or `failure` note,
+    so a decision that was already acted on or already failed never
+    authorizes another preservation: a new attempt is a new decision.
+- Branch mode, in addition: the branch is the claim's computed branch, never
+  an argument, and is neither the default nor the development branch. It is a
+  plain ref: a symbolic ref refuses, because deleting one could remove its
+  target. It is checked out in no worktree and no worktree is mid-rebase or
+  mid-bisect on it (the scoped scan of A5(e)). `git branch -d` would refuse
+  it: it is not merged into its upstream when one is configured and
+  resolvable, else not merged into the primary's HEAD. A branch that `-d`
+  deletes keeps today's stop. `git ls-remote --heads` on every remote shows
+  no such branch (a clone with no remote refuses, since absence cannot be
+  proven), no open pull request has it as its head (a listing that reaches
+  its 100-row limit refuses), and a failed or malformed read refuses. The
+  action creates the backup ref `refs/idd-b1/<issue>/<commit>` with a
+  create-only `git update-ref` (an existing plain ref at the same commit is
+  reused; a symbolic ref, another commit, or a ref that collides with the
+  backup path refuses), reads it back as a plain ref (a symbolic ref swapped
+  in after the check refuses), deletes the branch with
+  `git update-ref --no-deref -d refs/heads/<branch> <commit>` (which fails
+  when the tip moved), and removes the `branch.<name>` configuration section
+  when the repository's own configuration holds keys, so that a recreated
+  branch does not inherit it. The section's keys are read after the delete,
+  and the ref and the section are read back after each removal, whatever the
+  command reported. Right before the delete, the worktree list and the local
+  scan are read again, and a worktree that took the branch since planning
+  stops the run with the backup ref kept. The branch reflog is lost; the
+  commits stay reachable from the backup ref.
+- Path mode, in addition: the path is the computed worktree path, a direct
+  child of the primary's parent, and that parent is not a link. The entry
+  belongs to the current user (a platform without user IDs refuses) and is
+  not listed by `git worktree list`. No registered worktree, the primary
+  included, is at, inside, or around it. A `.git` file in it that points to
+  an existing administration directory refuses. The destination passes the
+  shared preserved-data guards (`b1-preserved` under the per-user state
+  root, and not inside the leftover path itself), and the source is on the
+  same device as every existing destination parent. Both are checked before
+  any directory is created. The action creates
+  `<state>/idd-skill/b1-preserved/<issue>-<UTC timestamp>/` through the
+  shared creation step, which also restricts each parent directory to its
+  owner (the report names each parent that let others in before, as a
+  `parents-restricted` action). It then rechecks its parents and the
+  source's no-follow identity right before the rename, renames the entry
+  (never a copy and never a removal) to `<basename>` inside it, and checks
+  the moved entry's identity. A mismatch leaves the entry at the destination
+  and reports both paths. The entry moves back only when its identity
+  matches, read again right before the move, and the source path is free.
+  The mode checks no live use: a rename keeps inodes, so a process that
+  still writes into the tree keeps writing into the preserved copy
+  (preventive; no observed incident yet).
+- A refused precondition changes nothing. The step `b1-preserve` still
+  passes with a detail that starts "not preserved", `b1Leftovers.outcome` is
+  `unmet-preconditions`, and the stops of a run without the flag follow
+  unchanged, so a refused leftover branch still stops with
+  `b1-cleanup-needed` and a refused path with `path-occupied`.
+- Report: `b1Leftovers` holds `mode`, `outcome` (`no-leftover`,
+  `unmet-preconditions`, `ready`, `preserved`, or `failed`), `common` (each
+  common precondition), `subjects` (each with its `kind`, `subject`,
+  `decision`, and `preconditions`, each `met` or `unmet` with a detail),
+  `actions`, `backupRefs`, `destinations` (`from` and `to`),
+  `removedConfigSections`, `decisionsUnused`, and `failure`. The caller
+  comments each backup ref and destination on the confirmation issue, even
+  when a later claim step fails. After a preservation, every later stop's
+  `nextAction` (and the failed step's) names what was saved and no longer
+  says that nothing was removed or created.
+- Failures after a state change stop the run with `b1-preserve-failed`
+  (`lostClaimCleanupRequired` stays `false`: no worktree or claim exists
+  yet), with the saved locations in the report and the next action:
+
+  | After                          | Failure                                                                        | Outcome                                                                                                                 |
+  | ------------------------------ | ------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
+  | Backup ref written             | Read-back fails                                                                | The ref stays, the branch is untouched, the run stops                                                                   |
+  | Backup ref written             | The deletion fails because the tip moved                                       | The ref stays, the branch is untouched, the run stops                                                                   |
+  | Branch deleted                 | A present configuration section is not removed                                 | The commits are on the backup ref; the run stops before `worktree-add`; the section is named                            |
+  | Destination parents created    | The rename fails                                                               | Empty private parents stay, the source is untouched, the run stops                                                      |
+  | Destination directory created  | Its privacy or identity check fails                                            | The source is untouched, the run stops, the path is reported                                                            |
+  | Path renamed                   | The moved entry's identity differs                                             | The entry stays at the destination, both paths are reported                                                             |
+  | Path renamed, identity matches | Moving back is needed but the source is occupied again, or the move back fails | The entry stays where the failure leaves it, both paths are reported                                                    |
+  | A leftover preserved           | A later claim step fails                                                       | The leftover stays preserved; that step's reason and next action name the location; a rerun no longer sees the leftover |
+
+- Open risks, accepted by the operator: the window between the last check and
+  the rename or the ref deletion, which the platform cannot close (inside it
+  only a writer outside IDD can interfere, because IDD sessions take the
+  clone lock), and the resolution of a state root that is a link.
 
 ### Worktree-local claim lock
 
@@ -7555,13 +7742,22 @@ means restart E1; do not include a later CI pass in the watermark.
   `occupancy_probe` (`absent`, `occupied` or `unreadable`) and
   `occupancy_paths_match` (boolean). It is emitted whenever `--claim-id`
   matches the active claim and the occupancy probe is not `absent`,
-  including a `disputed` nonce route. The four booleans short-circuit: the
+  including a `disputed` nonce route. In the ordinary owner check, the four
+  booleans short-circuit: the
   first `false` makes every later boolean `null` (not evaluated).
   `occupancy_probe` is always the observed status, never `null`, and
   `occupancy_paths_match` is `null` unless all four booleans are `true` and
   the probe is `occupied`. On an `owner_evidence_required` verdict the helper
   also pushes one `warnings[]` line, `owner evidence required: first failed
   proof is <field>` (with the probe status appended for `occupancy_probe`).
+  The bounded forced-handoff recovery added in issue `#5045` can also emit
+  `rebase_identity`: a structured proof with `passed`, worktree/backend/ref
+  fields, individual `comparisons`, and `reason`. A passed proof supplies
+  detached-HEAD worktree identity; the remaining lock, token, agent, nonce,
+  and occupancy checks stay necessary. See
+  [Forced-Handoff Recovery](idd-resume-detail.md#fh--forced-handoff-recovery)
+  before using that exception; ordinary work requires branch-attached
+  ownership again.
 - `--agent-id` (kurone-kito/idd-skill#4936, #5000): pass this session's
   persisted identity on every owner assertion. A session-qualified active
   claim requires an exact match; omission or mismatch routes as another
@@ -7650,17 +7846,43 @@ means restart E1; do not include a later CI pass in the watermark.
   no-op for consistency with sibling helpers such as `live-status-digest`,
   since this helper only ever emits JSON. Any other value fails with
   `--format must be json` instead of `unknown argument: --format`.
-- `evidence.forced_handoff` (kurone-kito/idd-skill#2178): populated on
-  **any** call, including a bare `--issue` call with no `--claim-id`,
-  whenever a trusted, rule-7-valid `forced-handoff` marker's successor
-  pair (`{old_agent_id, old_claim_id, new_agent_id, new_claim_id,
-  forced_by, timestamp}`, `timestamp` the transferring comment's GitHub
-  `created_at`) matches the resolved active claim; `null` otherwise. A
-  bare `--issue` call whose `evidence.forced_handoff` is non-null but
-  whose `state`/`action` still reads `non_inheritable`/`stop` should
-  retry with `--claim-id <evidence.forced_handoff.new_claim_id>` to
-  check adoption eligibility — that second call is what can turn the
-  verdict into `already_owned`/`keep`.
+- `evidence.forced_handoff` (kurone-kito/idd-skill#2178, #5078): populated on
+  **any** call, including a bare `--issue` call with no `--claim-id`, when
+  the latest applied, trusted, rule-7-valid `forced-handoff` transition ends
+  at the resolved active claim and the lookup-failure override below does
+  not apply; `null` otherwise. The override (issue `#3276`, maintainer decision
+  2026-09-24) applies when an `issue-only` handoff is blocked solely by a
+  failed linked-PR lookup, `--claim-id` names its old or new claim, and its
+  old claim remains active. The result is `disputed`/`stop` with reason
+  `forced-handoff-linked-pr-lookup-failed`; the entire
+  `evidence.forced_handoff` is suppressed to `null`, even if earlier accepted
+  handoff ancestry ends at that active claim. Outside that override, its
+  existing top-level transition fields describe the latest handoff. The additive
+  `verified_chain` array describes the accepted, uninterrupted lineage:
+  - Entries follow the claim reducer's accepted transition order, oldest
+    first, ending with the latest applied handoff. Each entry contains
+    `old_agent_id`, `old_claim_id`, `new_agent_id`, `new_claim_id`, `branch`,
+    `linked_pr` (the marker's PR reference, or `null`), `context_scope`,
+    `forced_by`, and `timestamp`. These are also the top-level transition
+    fields. `timestamp` is the transferring comment's GitHub `created_at`,
+    not its embedded marker time; it is `null` when that metadata is
+    unavailable.
+  - Only applied handoffs contribute entries. Ignored markers add none;
+    same-claim heartbeats preserve the chain. A release or an independent
+    claim transition clears it, so a later accepted handoff starts a new
+    chain rather than joining unrelated claim histories.
+  - The array proves accepted marker ancestry. It does not prove process
+    liveness, authenticate the session supplying a successor ID, or supply
+    standalone ownership or takeover authority. Current claim, agent,
+    nonce, worktree, lock, and generated-token checks remain required (see
+    the observed issue `#4893` incident under
+    [Operator forced-handoff helpers](#operator-forced-handoff-helpers)).
+    A bare `--issue` call whose `evidence.forced_handoff` is non-null but whose
+    `state`/`action` still reads `non_inheritable`/`stop` can be retried with
+    `--claim-id <evidence.forced_handoff.new_claim_id>` to check adoption
+    eligibility. That read is an eligibility check, not permission to adopt a
+    token learned only from a marker; follow the forced-handoff recovery
+    procedure and require the independent owner evidence.
 
 - Step 3 route command:
   `node scripts/resume-route-selection.mjs --issue <issue-number>`
