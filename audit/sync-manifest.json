@@ -550,6 +550,12 @@
         "limitBytes": 40000,
         "issue": 4233,
         "reason": "maintainer-approved per-file phaseLimitBytes raise (kurone-kito, comment 6162851754 on issue #4233; checker decision in comment 6168271034): the A0-T step 1 hold-label stop adds about 370 bytes to the idd-template idd-discover.instructions.md, which sat at 35,997 of 36,000 bytes. The raise is the maintainer's explicit exception to E12's per-file-cap rule. The entry name is the instructionSizeBudgets id, and only phaseLimitBytes is covered."
+      },
+      {
+        "bundle": "bundle-work-phase",
+        "limitBytes": 41400,
+        "issue": 4893,
+        "reason": "Operator chose to raise this limit before the split route lands on main (PR #5031, issue #4893). The trial budget check measures a raise only after it is on the base. The branch of issue #4893 projects 37,706 bytes for this bundle with the generated banner removed, measured on 2026-11-10. 41,400 is the floor of the issue-authorized 10% permit for that total, rounded down to the nearest 100. Main measures 28,344 bytes, so the new ceiling leaves room for the split route to land."
       }
     ],
     "standingRaiseApprovals": [

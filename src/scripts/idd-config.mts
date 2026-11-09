@@ -923,6 +923,13 @@ export interface TrustedAutoDecideReport {
   error?: string;
 }
 
+/** The trusted auto-decide report and the policy snapshot it validated. */
+export interface TrustedAutoDecideSnapshot {
+  report: TrustedAutoDecideReport;
+  /** `null` means the trusted document was absent or unreadable. */
+  policyConfig: IddConfig | null;
+}
+
 function everyAutoDecideClass(
   verdict: (cls: AutoDecideClass) => TrustedAutoDecideClassVerdict,
 ): Record<AutoDecideClass, TrustedAutoDecideClassVerdict> {
@@ -948,18 +955,21 @@ function everyAutoDecideClass(
  * the document is absent), and the caps and `quietWindow` when a class is
  * `enabled`.
  */
-export function readTrustedAutoDecide(
+export function readTrustedAutoDecideWithConfig(
   input: TrustedPolicyReadInput,
-): TrustedAutoDecideReport {
+): TrustedAutoDecideSnapshot {
   const read = readValidatedTrustedPolicy(input);
   const { ref } = read;
-  const unreadable = (error: string): TrustedAutoDecideReport => ({
-    status: 'unreadable',
-    source: 'repository',
-    ref,
-    master: 'unreadable',
-    classes: everyAutoDecideClass(() => 'unreadable'),
-    error,
+  const unreadable = (error: string): TrustedAutoDecideSnapshot => ({
+    report: {
+      status: 'unreadable',
+      source: 'repository',
+      ref,
+      master: 'unreadable',
+      classes: everyAutoDecideClass(() => 'unreadable'),
+      error,
+    },
+    policyConfig: null,
   });
   const master = dangerouslyAutoDecideFromTrustedRead(read);
   if (master.status === 'unreadable') {
@@ -1003,10 +1013,20 @@ export function readTrustedAutoDecide(
       report.maxDecisionsPerClaim = effective.maxDecisionsPerClaim;
       report.quietWindow = effective.worktreeRemnant.quietWindow;
     }
-    return report;
+    return {
+      report,
+      policyConfig: read.status === 'valid' ? read.config : null,
+    };
   } catch (error) {
     return unreadable(error instanceof Error ? error.message : String(error));
   }
+}
+
+/** Read trusted auto-decide state without exposing the policy snapshot. */
+export function readTrustedAutoDecide(
+  input: TrustedPolicyReadInput,
+): TrustedAutoDecideReport {
+  return readTrustedAutoDecideWithConfig(input).report;
 }
 
 /**

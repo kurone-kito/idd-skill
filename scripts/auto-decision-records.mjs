@@ -56,12 +56,42 @@ import {
   inspectGraphqlCommentsPage,
   mapGraphqlIssueCommentNode,
 } from './authoring-owner-provenance.mjs';
+import { parseCliArgs } from './cli-args.mjs';
 import { ghTextUnbounded } from './gh-exec.mjs';
-import { readRepositoryPolicyFile } from './idd-config.mjs';
+import {
+  applyHelperCliOutcomeWhenDisabled,
+  isHelperErrorEnvelopeEnabled,
+  runHelperCli,
+} from './helper-cli-runner.mjs';
+import {
+  deriveRepositoryIdentity,
+  readRepositoryPolicyFile,
+  readTrustedAutoDecideWithConfig,
+} from './idd-config.mjs';
 import { maskMarkdownForScan } from './markdown-code.mjs';
 import { normalizeMarkerPrefix } from './marker-helpers.mjs';
+import { normalizePolicyConfig } from './policy-helpers.mjs';
 import { resolveTrustedMarkerActors } from './protocol-helpers.mjs';
 
+// Declared above the entry-point call for the same temporal-dead-zone reason
+// documented in idd-critique-delegate.mts.
+const AUTO_DECISION_CLI_FLAG_SPEC = {
+  '--pending-count': { type: 'boolean' },
+  '--records': { type: 'boolean' },
+  '--class': { type: 'string' },
+  '--source': { type: 'string' },
+  '--claim': { type: 'string' },
+  '--set': { type: 'string' },
+  '--subject': { type: 'string' },
+  '--state': { type: 'string' },
+  '--confirmation': { type: 'string' },
+  '--links': { type: 'boolean' },
+  '--issue': { type: 'string' },
+  '--owner': { type: 'string' },
+  '--repo': { type: 'string' },
+  '--base-ref': { type: 'string' },
+  '--help': { type: 'boolean', short: 'h' },
+};
 const REPO_TOKEN_PATTERN = /^[A-Za-z0-9_.-]+$/;
 /** The publication line the record marker follows (the #4961 linter's own
  * position rule in `auditConfirmationShape`). */
@@ -184,8 +214,10 @@ function isConfirmationClass(value) {
   return AUTO_DECIDE_CONFIRMATION_CLASSES.includes(value);
 }
 function readTrustContext(options) {
-  const loaded = readRepositoryPolicyFile(options.policyPath || undefined);
-  const config = loaded.config;
+  const config =
+    options.trustedPolicyConfig === undefined
+      ? readRepositoryPolicyFile(options.policyPath || undefined).config
+      : options.trustedPolicyConfig;
   // Repository policy only: no flag or environment value may widen the list.
   const { actors } = resolveTrustedMarkerActors({ config });
   return {
@@ -812,7 +844,8 @@ function scanLabelledIssues(provider, owner, repo, label, state) {
       );
     }
     for (const item of payload) {
-      const number = isRecord(item) ? item.number : undefined;
+      const row = isRecord(item) ? item : null;
+      const number = row?.number;
       if (
         typeof number !== 'number' ||
         !Number.isInteger(number) ||
@@ -822,11 +855,43 @@ function scanLabelledIssues(provider, owner, repo, label, state) {
           `page ${page} of the issue list for ${JSON.stringify(label)} has an entry with no issue number`,
         );
       }
+      const rowState = row?.state;
+      if (rowState !== 'open' && rowState !== 'closed') {
+        throw new Error(
+          `page ${page} of the issue list for ${JSON.stringify(label)} has an entry with an unreadable state`,
+        );
+      }
+      if (state === 'open' && rowState !== 'open') {
+        throw new Error(
+          `page ${page} of the open issue list for ${JSON.stringify(label)} contains a non-open issue`,
+        );
+      }
+      const labels = row?.labels;
+      if (
+        !Array.isArray(labels) ||
+        labels.some(
+          (entry) =>
+            !isRecord(entry) ||
+            typeof entry.name !== 'string' ||
+            entry.name.trim() === '',
+        )
+      ) {
+        throw new Error(
+          `page ${page} of the issue list for ${JSON.stringify(label)} has an entry with unreadable labels`,
+        );
+      }
+      if (
+        !labels.some((entry) => isRecord(entry) && sameText(entry.name, label))
+      ) {
+        throw new Error(
+          `page ${page} of the issue list for ${JSON.stringify(label)} contains an issue without the requested label`,
+        );
+      }
       // The REST issues endpoint returns pull requests too.
-      if (isRecord(item) && item.pull_request != null) {
+      if (row?.pull_request != null) {
         continue;
       }
-      const body = isRecord(item) ? item.body : undefined;
+      const body = row?.body;
       if (body !== null && typeof body !== 'string') {
         throw new Error(
           `page ${page} of the issue list for ${JSON.stringify(label)} has an entry with an unreadable body`,
@@ -906,8 +971,8 @@ export function findConfirmationIssues(
     if (state !== 'open' && state !== 'all') {
       throw new Error(`the state must be open or all (got ${String(state)})`);
     }
-    const context = readTrustContext(input);
     const { owner, repo } = input.repository;
+    const context = readTrustContext(input);
     const listed = listLabelledIssues(
       provider,
       owner,
@@ -991,6 +1056,34 @@ export function findConfirmationIssues(
   }
 }
 /**
+ * Count every open issue carrying the trusted confirmation label. The REST
+ * list is scanned until two consecutive all-page snapshots agree, so a closure
+ * or label removal during pagination cannot silently drop an issue that moved
+ * onto an already-read page. The stable list itself is sufficient for this
+ * count; fetching every issue's comment history would add cost without adding
+ * count data.
+ */
+export function countPendingConfirmationIssues(
+  input,
+  provider = createGithubProvider(),
+) {
+  try {
+    assertRepository(input.repository);
+    assertListableConfirmationLabel(input.confirmationLabel);
+    const { owner, repo } = input.repository;
+    const listed = listLabelledIssues(
+      provider,
+      owner,
+      repo,
+      input.confirmationLabel,
+      'open',
+    );
+    return { status: 'readable', count: listed.length };
+  } catch (error) {
+    return unreadable(error);
+  }
+}
+/**
  * Report whether a counting record exists for the expected class, source,
  * claim or set, and subject, and, when `expected.decision` is given, whether
  * that record carries that decision ID. Takes the result of
@@ -1053,4 +1146,359 @@ export function matchDecisionRecord(read, expected) {
     records: matching,
     reason: 'a counting record matches',
   };
+}
+function parsePositiveIssueNumber(value, flag) {
+  if (!/^[1-9]\d*$/.test(value)) {
+    throw new Error(`${flag} must be a positive issue number`);
+  }
+  const number = Number(value);
+  if (!Number.isSafeInteger(number)) {
+    throw new Error(`${flag} must be a safe positive issue number`);
+  }
+  return number;
+}
+/** Parse and validate arguments before any repository or GitHub reads. */
+export function parseAutoDecisionRecordsArgs(argv) {
+  const { values, help } = parseCliArgs(argv, AUTO_DECISION_CLI_FLAG_SPEC);
+  if (help) return { help: true, mode: null };
+  const flag = (name) => values[name] === true;
+  const optional = (name) => values[name];
+  const modes = [
+    flag('pending-count') ? 'pending-count' : null,
+    flag('records') ? 'records' : null,
+    values.confirmation === undefined ? null : 'confirmation',
+    flag('links') ? 'links' : null,
+  ];
+  const selected = modes.filter((mode) => mode !== null);
+  if (selected.length !== 1) {
+    throw new Error(
+      'give exactly one mode: --pending-count, --records, --confirmation, or --links',
+    );
+  }
+  const mode = selected[0];
+  const ownerValue = optional('owner');
+  const repoValue = optional('repo');
+  const owner = ownerValue?.trim();
+  const repo = repoValue?.trim();
+  if ((ownerValue === undefined) !== (repoValue === undefined)) {
+    throw new Error('--owner and --repo must be given together');
+  }
+  if (ownerValue !== undefined && (owner === '' || repo === '')) {
+    throw new Error('--owner and --repo must be non-empty');
+  }
+  const baseRefValue = optional('base-ref');
+  const baseRef = baseRefValue?.trim();
+  if (baseRefValue !== undefined && baseRef === '') {
+    throw new Error('--base-ref must be non-empty when given');
+  }
+  const modeFlags = {
+    'pending-count': ['pending-count'],
+    records: ['records', 'class', 'source', 'claim', 'set', 'subject', 'state'],
+    confirmation: ['confirmation'],
+    links: ['links', 'issue'],
+  };
+  const commonFlags = new Set(['owner', 'repo', 'base-ref']);
+  const allowedFlags = new Set([...commonFlags, ...(modeFlags[mode] ?? [])]);
+  for (const name of Object.keys(values)) {
+    if (!allowedFlags.has(name)) {
+      throw new Error(`--${name} is not valid with --${mode}`);
+    }
+  }
+  const parsed = {
+    help: false,
+    mode,
+    ...(owner === undefined ? {} : { owner }),
+    ...(repo === undefined ? {} : { repo }),
+    ...(baseRef === undefined ? {} : { baseRef }),
+  };
+  if (mode === 'records') {
+    const className = optional('class');
+    const state = optional('state');
+    if (className === undefined) {
+      throw new Error('--records requires --class <class>');
+    }
+    if (!isConfirmationClass(className)) {
+      throw new Error(
+        `--class must be one of ${AUTO_DECIDE_CONFIRMATION_CLASSES.join(', ')}`,
+      );
+    }
+    if (state !== 'open' && state !== 'all') {
+      throw new Error('--records requires --state open|all');
+    }
+    const source = optional('source');
+    const claim = optional('claim');
+    const set = optional('set');
+    const subject = optional('subject');
+    if (claim !== undefined && set !== undefined) {
+      throw new Error('--claim and --set cannot be used together');
+    }
+    for (const [name, value] of [
+      ['--claim', claim],
+      ['--set', set],
+      ['--subject', subject],
+    ]) {
+      if (value !== undefined && value.trim() === '') {
+        throw new Error(`${name} must be non-empty when given`);
+      }
+    }
+    parsed.class = className;
+    parsed.state = state;
+    if (source !== undefined) {
+      parsed.source = parsePositiveIssueNumber(source, '--source');
+    }
+    if (claim !== undefined) parsed.claim = claim;
+    if (set !== undefined) parsed.set = set;
+    if (subject !== undefined) parsed.subject = subject;
+    return parsed;
+  }
+  if (mode === 'confirmation') {
+    parsed.confirmation = parsePositiveIssueNumber(
+      optional('confirmation') ?? '',
+      '--confirmation',
+    );
+    return parsed;
+  }
+  if (mode === 'links') {
+    const issue = optional('issue');
+    if (issue === undefined) {
+      throw new Error('--links requires --issue <number>');
+    }
+    parsed.issue = parsePositiveIssueNumber(issue, '--issue');
+  }
+  return parsed;
+}
+function repositoryForCli(args, dependencies) {
+  let owner = args.owner ?? '';
+  let repo = args.repo ?? '';
+  if (owner === '' && repo === '') {
+    const slug = dependencies.repositorySlug
+      ? dependencies.repositorySlug()
+      : deriveRepositoryIdentity({ cwd: process.cwd() }).githubSlug;
+    const parts = slug?.split('/') ?? [];
+    if (parts.length !== 2 || !parts[0] || !parts[1]) {
+      throw new Error(
+        'cannot resolve the repository from this checkout\'s GitHub "origin" remote; pass --owner and --repo',
+      );
+    }
+    owner = parts[0];
+    repo = parts[1];
+  }
+  const repository = { owner, repo };
+  assertRepository(repository);
+  return repository;
+}
+function outputJson(output, value) {
+  output(`${JSON.stringify(value, null, 2)}\n`);
+}
+function errorMessage(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+function usageResult(output, message) {
+  outputJson(output, { status: 'usage-error', error: message });
+  return { exitCode: 2, kind: 'usage', message, httpStatus: null };
+}
+function unreadableResult(output, mode, repository, error, details = {}) {
+  outputJson(output, {
+    status: 'unreadable',
+    mode,
+    repository,
+    ...details,
+    error,
+  });
+  return { exitCode: 1, kind: 'transport', message: error, httpStatus: null };
+}
+function printAutoDecisionRecordsHelp(output) {
+  output(`Usage:
+  node scripts/auto-decision-records.mjs --pending-count [--owner <owner> --repo <repo>] [--base-ref <name>]
+  node scripts/auto-decision-records.mjs --records --class <class> [--source <number>] [--claim <id> | --set <id>] [--subject <value>] --state open|all [--owner <owner> --repo <repo>] [--base-ref <name>]
+  node scripts/auto-decision-records.mjs --confirmation <number> [--owner <owner> --repo <repo>] [--base-ref <name>]
+  node scripts/auto-decision-records.mjs --links --issue <number> [--owner <owner> --repo <repo>] [--base-ref <name>]
+
+Read auto-decision confirmation records as JSON. The confirmation label and
+policy are read from a trusted repository ref; the command never writes.
+`);
+}
+/** Run the read-only command. All CLI and provider effects are injectable. */
+export function runAutoDecisionRecordsCli(argv, dependencies = {}) {
+  const output =
+    dependencies.writeOutput ?? ((text) => process.stdout.write(text));
+  let args;
+  try {
+    args = parseAutoDecisionRecordsArgs(argv);
+  } catch (error) {
+    return usageResult(output, errorMessage(error));
+  }
+  if (args.help) {
+    printAutoDecisionRecordsHelp(output);
+    return 0;
+  }
+  const mode = args.mode;
+  let repository;
+  try {
+    repository = repositoryForCli(args, dependencies);
+  } catch (error) {
+    return usageResult(output, errorMessage(error));
+  }
+  let trustedSnapshot;
+  try {
+    const reader =
+      dependencies.readTrustedAutoDecide ?? readTrustedAutoDecideWithConfig;
+    trustedSnapshot = reader({
+      owner: repository.owner,
+      repo: repository.repo,
+      ...(args.baseRef === undefined ? {} : { baseRefName: args.baseRef }),
+    });
+  } catch (error) {
+    const message = `the trusted confirmation-label policy could not be read: ${errorMessage(error)}`;
+    return unreadableResult(output, mode, repository, message);
+  }
+  const trusted = trustedSnapshot.report;
+  if (trusted.status !== 'readable') {
+    return unreadableResult(
+      output,
+      mode,
+      repository,
+      trusted.error ?? 'the trusted confirmation-label policy is unreadable',
+      { trustedPolicy: trusted },
+    );
+  }
+  const confirmationLabel = trusted.confirmationLabelName;
+  if (
+    typeof confirmationLabel !== 'string' ||
+    confirmationLabel.trim() === ''
+  ) {
+    return unreadableResult(
+      output,
+      mode,
+      repository,
+      'the trusted confirmation-label policy has no readable label name',
+      { trustedPolicy: trusted },
+    );
+  }
+  let trustedPolicyConfig;
+  let authoringLabel;
+  if (mode === 'records' || mode === 'confirmation' || mode === 'links') {
+    const config = trustedSnapshot.policyConfig;
+    trustedPolicyConfig = config;
+    if (mode === 'records' || mode === 'confirmation') {
+      try {
+        authoringLabel =
+          normalizePolicyConfig(config).issueAuthoring.authoringLabelName;
+      } catch (error) {
+        const message = `the trusted repository policy could not be read: ${errorMessage(error)}`;
+        return unreadableResult(output, mode, repository, message);
+      }
+    }
+  }
+  const provider = dependencies.provider ?? createGithubProvider();
+  if (mode === 'pending-count') {
+    const result = countPendingConfirmationIssues(
+      { repository, confirmationLabel },
+      provider,
+    );
+    if (result.status === 'unreadable') {
+      return unreadableResult(output, mode, repository, result.error);
+    }
+    outputJson(output, {
+      status: 'readable',
+      mode,
+      repository,
+      confirmationLabel,
+      pendingCount: result.count,
+    });
+    return 0;
+  }
+  if (mode === 'records') {
+    const result = findConfirmationIssues(
+      {
+        repository,
+        class: args.class,
+        confirmationLabel,
+        authoringLabel: authoringLabel,
+        state: args.state,
+        ...(args.source === undefined
+          ? {}
+          : {
+              source: `${repository.owner}/${repository.repo}#${args.source}`,
+            }),
+        ...(args.claim === undefined ? {} : { claim: args.claim }),
+        ...(args.set === undefined ? {} : { set: args.set }),
+        ...(args.subject === undefined ? {} : { subject: args.subject }),
+        ...(dependencies.policyPath === undefined
+          ? {}
+          : { policyPath: dependencies.policyPath }),
+        ...(trustedPolicyConfig === undefined ? {} : { trustedPolicyConfig }),
+      },
+      provider,
+    );
+    if (result.status === 'unreadable') {
+      return unreadableResult(output, mode, repository, result.error);
+    }
+    const records = result.issues.flatMap((issue) =>
+      issue.records.map((record) => ({
+        ...record,
+        state: issue.state,
+        confirmationLabel: issue.confirmationLabel,
+        authoringLabel: issue.authoringLabel,
+      })),
+    );
+    outputJson(output, {
+      status: 'readable',
+      mode,
+      repository,
+      class: args.class,
+      state: args.state,
+      records,
+    });
+    return 0;
+  }
+  if (mode === 'confirmation') {
+    const result = readConfirmationIssue(
+      {
+        repository,
+        number: args.confirmation,
+        confirmationLabel,
+        authoringLabel: authoringLabel,
+        ...(dependencies.policyPath === undefined
+          ? {}
+          : { policyPath: dependencies.policyPath }),
+        ...(trustedPolicyConfig === undefined ? {} : { trustedPolicyConfig }),
+      },
+      provider,
+    );
+    if (result.status === 'unreadable') {
+      return unreadableResult(output, mode, repository, result.error);
+    }
+    const { status: _status, ...report } = result;
+    outputJson(output, { status: 'readable', mode, repository, ...report });
+    return 0;
+  }
+  const result = readDecisionLinks(
+    {
+      repository,
+      number: args.issue,
+      confirmationLabel,
+      ...(dependencies.policyPath === undefined
+        ? {}
+        : { policyPath: dependencies.policyPath }),
+      ...(trustedPolicyConfig === undefined ? {} : { trustedPolicyConfig }),
+    },
+    provider,
+  );
+  if (result.status === 'unreadable') {
+    return unreadableResult(output, mode, repository, result.error);
+  }
+  const { status: _status, ...report } = result;
+  outputJson(output, { status: 'readable', mode, repository, ...report });
+  return 0;
+}
+function runCli() {
+  return runAutoDecisionRecordsCli(process.argv.slice(2));
+}
+if (import.meta.main) {
+  if (isHelperErrorEnvelopeEnabled()) {
+    runHelperCli('auto-decision-records', runCli);
+  } else {
+    applyHelperCliOutcomeWhenDisabled(runCli());
+  }
 }
