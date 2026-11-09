@@ -375,7 +375,7 @@
       "files": [
         ".github/instructions/lite/idd-work-lite.instructions.md"
       ],
-      "limitBytes": 30500
+      "limitBytes": 33200
     },
     {
       "id": "bundle-resume-lite",
@@ -492,6 +492,12 @@
     "exemptBundles": [],
     "nearCeilingRaiseApprovals": [
       {
+        "bundle": "bundle-work-lite",
+        "limitBytes": 33200,
+        "issue": 4893,
+        "reason": "Operator chose to raise this limit and record the approval (IDD takeover session on 2026-11-09), after E12 step 1 for PR #5031. The lite split procedure added about 6.6 KB to the bundle, so the limit was raised from 30500 without a record. This entry replaces that unrecorded raise. Measured 30,257 bytes with the generated banner removed, 91.1% of 33,200, under the 95% notice band. Base utilization at main was 98.9% (23,732 of 24,000). 33,200 is the floor of the issue-authorized 10% permit for the measured total."
+      },
+      {
         "bundle": "bundle-orchestrator-phase",
         "limitBytes": 6300,
         "issue": 4833,
@@ -559,9 +565,9 @@
         "bundle": "bundle-work-lite",
         "standingClass": "budgetRaise",
         "ceilingPct": 10,
-        "limitBytes": 30500,
+        "limitBytes": 33200,
         "issue": 4893,
-        "reason": "Audit during the issue #4893 Lite safeguard revision measured 29,801 bytes. The issue-authorized 10% standing raise permits up to 32,700 bytes; the 30,500 limit leaves 89 bytes before the 98% utilization threshold (29,890). Operator approval is recorded in issue #4893 comment #6671770411."
+        "reason": "Re-measured after the lite split procedure and the target-repository fix (PR #5031 takeover, 2026-11-09): 30,257 bytes with the generated banner removed. The issue-authorized 10% standing raise permits up to 33,282 bytes, so the limit is set to 33,200, the floor of that permit."
       }
     ]
   },
