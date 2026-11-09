@@ -485,6 +485,10 @@ export function buildProvisionalDecisionEvidenceReader(input: {
         }),
       );
 
+      // An untrusted or edited record marker refuses the whole history, even
+      // on a closed source. That keeps the dependency blocked (fail closed)
+      // instead of trusting a record with no authority; the cost is that a
+      // third party can hold a closed dependency until the marker is removed.
       for (const comment of comments) {
         if (
           comment.body.startsWith(PROVISIONAL_DECISION_RECORD_MARKER) &&
