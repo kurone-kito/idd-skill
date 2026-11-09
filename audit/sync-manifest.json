@@ -563,6 +563,16 @@
         "issue": 4893,
         "reason": "Operator chose to raise this limit before the split route lands on main (PR #5031, issue #4893), so the trial budget check can measure the raise on the base. This entry supersedes the manual approval from issue #5030 for this bundle (26,000 bytes). That record is removed here because the strictest-limit rule would otherwise keep the old ceiling in force; it remains in git history. Main measures 24,737 bytes (95.14% of 26,000). The Lite split procedure projects about 30,682 bytes for this bundle with the generated banner removed, measured on 2026-11-10. 33,200 leaves 2,518 bytes (7.6%) of headroom, about 92.4% utilization, below the 98% enforcement ceiling."
       }
+    ],
+    "standingRaiseApprovals": [
+      {
+        "bundle": "bundle-work-lite",
+        "standingClass": "budgetRaise",
+        "ceilingPct": 10,
+        "limitBytes": 33200,
+        "issue": 4893,
+        "reason": "Re-measured after merging main on 2026-11-10: the Lite split procedure brings bundle-work-lite to about 31,900 bytes (96.09% of 33,200) with the generated banner removed. The issue-authorized 10% standing raise permits up to about 35,090 bytes for that total, and the 98% enforcement ceiling requires a limit of at least about 32,550 bytes, so 33,200 sits inside both bounds."
+      }
     ]
   },
   "docBudgetGuard": {

@@ -454,6 +454,134 @@ scope audit fails `effort-candidate-file-limit`, follow the same
 [scope assessment routes](../../docs/idd-helper-scripts.md#b3-scope-assessment-outcomes)
 and stop without pushing.
 
+**Standing split** is the helper-runtime exception to the worker-side
+authoring and scope-overrun rules. Keep the parent claim and label held; skip
+release/handoff. Resolve policy owner/repo from the claimed issue's canonical
+live URL. For a PR, query
+`gh api repos/<target-owner>/<target-repo>/pulls/<number> --jq '{owner:
+.base.repo.owner.login, repo: .base.repo.name, ref: .base.ref}'` and use its
+base owner/repo/ref; otherwise use the issue repo and live default branch.
+Pass explicit `--owner <owner> --repo <repo>` to
+`idd-effective-config --trusted-auto-decide`; add `--base-ref <base>` only
+for a PR. Require `status: readable`; never let checkout `origin` choose
+policy. The helper validates only the live base branch and has no exact-ref
+mode. Read the base head commit (`<policy-sha>`), run the check, then read the
+base head commit again, and continue only when both SHAs are equal. Then read
+`standingApprovals.split.enabled` and
+`standingApprovals.split.maxCandidateFiles` from `.github/idd/config.json` at
+`<policy-sha>` through GitHub Contents. Save its decoded contents as
+`<target-policy>`; use the existing route when the two SHAs differ. The helper
+validates that policy's schema, but its auto-decide verdict does not govern
+split. Read the parent authoring label
+(`issueAuthoring.authoringLabelName`, default `status:authoring`) and
+`markerPrefix` from this snapshot. Pass
+`--owner <target-owner> --repo <target-repo> --policy <target-policy>
+--marker-prefix <target-markerPrefix>` on every publisher call. Require
+`enabled: true` or use the existing route; missing `maxCandidateFiles` defaults
+to `8`; absent, malformed, or unreadable policy uses that route. Never use
+local, head, layered config, or checkout `origin`
+([target finding](https://github.com/kurone-kito/idd-skill/pull/5031#discussion_r4505536175)).
+Each child fits the trusted ceiling and contains a parent criterion. Each
+checkbox-stripped parent acceptance criterion appears whole and verbatim in
+exactly one child. Reuse-first check children against open issues, draft
+carriers, and claim/PR state. The hand split after issue `#4064`
+duplicated child `#4093`; if a match cannot safely join the held set, stop
+without publishing a duplicate
+([rationale](../../docs/idd-design-rationale.md#b3--scope-overrun-returns-to-authoring)).
+
+For a roadmap child, check claim/PR/execution state, establish ownership per
+target, add `Split out of #<parent>`, and update/read back each verified child
+in `## Tracks`; conflicts keep the parent and published children held.
+
+Publish only orphan-shaped children. A sequential-roadmap `blocked-by` child
+is not an orphan, and `--shape child` needs an independently held anchor this
+claimed parent does not provide. Use the existing route before publishing it.
+
+Otherwise use the existing comment/release/stop route.
+
+1. **Hold and record the set.** Revalidate the parent claim; add and verify the
+   snapshot's authoring label. If present, resume
+   only from the same durable proposal; otherwise stop on the unrelated hold.
+   Reconcile mappings. Before release and on resume with a record, require one
+   trusted record line matching class, set, anchor, ceiling, and option; proposal,
+   mappings, and live held children must match one-to-one by exact title/body,
+   with no missing, duplicate, extra, or released child. For each live body,
+   verify its single leading helper-generated `authoring-publication` line
+   against the helper report, journal, and child ownership record. Remove only
+   that line and its blank separator, then compare the rest byte-for-byte with
+   the saved draft; never strip an unmatched or extra marker. The record alone
+   is not proof.
+   If a record exists, verify the set and finish release without republishing. Stop
+   on conflict or unknown publication. Before saving, verify material scope or
+   design claims against current sources; put file references, GitHub
+   permalinks, or read-only command evidence in the review packet's `evidence`
+   array. Correct, qualify, or remove unsupported claims; route unresolved
+   material claims under the issue-authoring contract. Post/read back one
+   complete ordered proposal with current claim ID, estimate, candidate and
+   changed files, and each child's exact title and full body. If its POST is
+   uncertain, read all parent comments and continue only if exactly one exact
+   proposal exists and a trusted actor authored it; otherwise keep the hold and
+   stop. On resume reconcile the
+   proposal/mappings with helper records and live issues; verify/skip mapped
+   children and publish only unmapped ones. Stop on conflicts or unknown
+   publication. Keep parent claim/label and children held.
+2. **Review and dry-run.** Review each final child separately with the
+   issue-authoring contract's completed-draft adversarial review: send its
+   exact title and body plus the bounded review packet, resolve the configured
+   delegate when usable, else use native review or structured self-critique.
+   Bound the wait by `issueAuthoring.adversarialReview.waitCeiling` (`PT20M` default).
+   Save `"completed": true` with every finding `fixed` or `rejected`; stop on an
+   incomplete, unreadable, or unresolved review. A title/body correction
+   invalidates that child's review and the saved proposal. Update/read back the
+   full ordered proposal and repeat both checks for changed children. If the
+   update is uncertain, continue only when its full body matches exactly;
+   otherwise keep the hold and stop. Immediately before dry-run, recheck the
+   nonempty final set: every child fits the trusted ceiling and contains a
+   parent criterion, and every checkbox-stripped criterion appears whole and
+   verbatim in exactly one child. On failure, do not dry-run or apply. Dry-run
+   only when each final title and normalized body matches the proposal and has
+   a completed review. A refused or failed dry-run stops before any apply.
+   Resolve the profile-selected `idd-publish-authoring-hold` invocation per
+   `docs/idd-helper-scripts.md`; without `--apply` it is a dry-run. Dry-run
+   only unmapped orphans; inspect all results before applying. The helper's review
+   check is not the adversarial review.
+
+   ```sh
+   idd-publish-authoring-hold --shape orphan \
+     --owner <target-owner> --repo <target-repo> --policy <target-policy> \
+     --marker-prefix <target-markerPrefix> \
+     --title <title> --body-file <file> --review-result <file> [--apply]
+   ```
+
+3. **Publish one at a time.** Apply each inspected dry-run in a separate call.
+   Verify its new issue number and held state; append/read back its parent
+   mapping before the next publish. If that POST is uncertain, continue only
+   when all parent comments show exactly one matching mapping; otherwise keep
+   the hold and stop. Any refusal, failure, recovery hold, or unknown result
+   stops publication, even if one matching held child is found. Do not publish
+   another child, retry an unknown result, post the record, or release the
+   parent. Keep proposal, parent claim/label, and published children held;
+   inspect the report, journal, marker, and live issues before reporting.
+4. **Record and release.** After children and required roadmap tracks pass the
+   set check, post the exact record below. On definite/uncertain POST failure,
+   post a hold note naming verified children; keep parent claim/label and child
+   holds, then stop. For uncertainty, proceed only after paginated read-back
+   confirms one trusted exact record and the complete set; never retry. On
+   success, post the completion note, revalidate the claim, post/verify its
+   exact `unclaimed-by` marker through the standard release procedure, then run
+   cleanup. Mismatch, unreadable state, or uncertain release keeps the parent
+   held and stops before cleanup. Keep the authoring label until release or
+   completion.
+
+```text
+<!-- idd-skill-standing-approval: class=split; set=none; anchor=<owner/repo#n>; ceiling=<maxCandidateFiles>; option=option-a -->
+```
+
+Use the parent issue itself as `anchor` (`<owner>/<repo>#<number>`) and the
+numeric effective `maxCandidateFiles` as `ceiling`.
+
+For `instructions-only` execution, keep using the existing companion route.
+
 ---
 
 ## C — Self-Review Loop

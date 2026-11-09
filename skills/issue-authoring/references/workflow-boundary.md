@@ -773,3 +773,76 @@ issue's authoring label, and that authorizes no execution either: the issue
 keeps its confirmation label (`autoDecide.confirmationLabelName`), which keeps
 it out of Discover, so it never enters the loop. The operator confirms the
 choice by closing the issue.
+
+The worker-side authoring rule has one exception: a scope-overrun split when
+`standingApprovals.split.enabled` is true in the schema-valid trusted policy
+at the PR base (or live default before a PR exists), never from the feature
+checkout. Resolve the trusted owner/repo from the claimed issue's canonical
+live URL. For a PR, query `gh api repos/<target-owner>/<target-repo>/pulls/<number>
+--jq '{owner: .base.repo.owner.login, repo: .base.repo.name, ref: .base.ref}'`
+and use its base owner/repo/ref. Without a PR, use issue owner/repo and the
+live default branch. Always pass those resolved values explicitly to
+`idd-effective-config`; never use checkout `origin` for policy. A fork checkout
+can otherwise read fork-controlled policy, as found
+during review on 2026-11-08 in PR
+[#5031](https://github.com/kurone-kito/idd-skill/pull/5031). Require
+`idd-effective-config` with `--trusted-auto-decide` to report
+`status: readable`. For PRs, pass `--base-ref <base>`; omit it otherwise.
+The helper validates only the live base branch, so read the base head commit
+(`<policy-sha>`), run the check, read the base head commit again, and continue
+only when both are equal. Save the decoded `.github/idd/config.json` at
+`<policy-sha>` as `<target-policy>`, or use the existing route when they differ;
+the helper validates its schema, but its auto-decide verdict does not govern
+split. Use this snapshot for split settings, the parent authoring label, and
+`markerPrefix`. Pass the resolved `--owner`, `--repo`,
+`--policy <target-policy>`, and `--marker-prefix <target-markerPrefix>` to
+every publisher dry-run and apply. Missing `enabled` is false; missing
+`maxCandidateFiles` defaults to `8`. Malformed, absent, or unreadable policy
+keeps the existing route; never use checkout policy or `origin`
+([target finding](https://github.com/kurone-kito/idd-skill/pull/5031#discussion_r4505536234)).
+Every child fits the trusted ceiling. Each
+checkbox-stripped parent acceptance criterion appears whole and verbatim in
+exactly one child, and every child contains at least one. After any title or
+body correction, repeat this entire eligibility check against the final child
+set immediately before dry-run or apply; a pre-correction check is not enough.
+This procedure
+replaces the ordinary
+claim-release and companion-handoff route
+only when all conditions hold. Before saving the complete ordered proposal,
+apply the issue-authoring contract's Reuse-first issue policy to every child,
+including open draft carriers. The hand split of issue `#4064` produced
+duplicate child `#4093`. If the issue being split is listed under a roadmap's
+`## Tracks`, check whether the roadmap has an active claim, an open PR, or
+other active execution, and establish per-target ownership. Include
+`Split out of #<parent>` in each child body, then update and read back the
+roadmap track for every verified child. A conflict or ownership failure keeps
+the parent held and stops publication. The worker keeps the
+parent claim and authoring label, verifies material factual claims in each
+child's scope or design against current sources, and records support in the
+review packet's existing `evidence` array. Each completed child is then
+reviewed; any edit requires an updated, read-back proposal and a repeated check
+of that child. The worker dry-runs the set, then publishes held orphans one at
+a time and records each verified ID. The publisher prepends one
+`authoring-publication` line and a blank line; verify it against the helper
+report, journal, and child ownership record, then compare the remaining body
+exactly with the draft. A child needing a sequential-roadmap `blocked-by`
+marker is not an orphan and needs a separately held authoring-set anchor, so
+use the existing scope-overrun route before publishing. Any refused, failed,
+recovery-hold, or uncertain child publication stops further publication, even
+when a matching held child is found; report the state and keep the parent and
+children held. A record counts only when one exact expected line is authored by
+a trusted actor and the proposal, mappings, and live held children match
+one-to-one. Each mapping comment counts only when a trusted actor authored it.
+A failed or uncertain record stops with the parent and children held; on
+resume, verify and skip exact mappings, publishing only unmapped
+proposal entries. Stop if an existing child cannot be mapped; every call
+creates a new issue ([resume finding](https://github.com/kurone-kito/idd-skill/pull/5031#discussion_r4505546659)).
+After all children
+and any roadmap tracks are verified, the worker posts the standing record with
+the parent issue as `anchor` and the numeric effective `maxCandidateFiles` as
+`ceiling`, posts a completion note, revalidates the parent claim, posts and
+verifies its `unclaimed-by` marker, then runs cleanup. A mismatch or uncertain
+release keeps the parent held and stops before cleanup. The authoring label
+stays until the set is deliberately released or completed. These failure modes
+were observed during review of PR #5031 on 2026-11-06. Follow the split
+procedure in `idd-work.instructions.md`.
