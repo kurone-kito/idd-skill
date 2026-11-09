@@ -23,11 +23,12 @@ claimed, implemented issue.
 - Phase mismatch is a bug.
 - Resolve active-profile `idd-local-admission` via manifest/docs; pass
   each configured string once as `-- <shell> -c <string>` (one argument).
-- If set, admit `localExec.admission.testCommand` likewise.
-- Only these exit/stderr pairs mean no start: `75`/`local-admission: expired`;
-  `69`/`local-admission: pueue daemon is not accepting commands`. Report;
-  do not rerun, push manually, or mark as pass/flaky. Bare `69`/`75`:
-  command statuses.
+- If set in repo policy, admit `localExec.admission.testCommand` likewise.
+- These exit/stderr pairs mean no start: `75` with
+  `local-admission: expired`, or `69` with
+  `local-admission: pueue daemon is not accepting commands`. Report; do not
+  rerun, push manually, or mark as pass/flaky (not a test rerun or Discover
+  incomplete-result retry). Bare `69`/`75`: command statuses.
 
 ## Stop-and-ask conditions
 
