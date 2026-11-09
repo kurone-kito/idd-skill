@@ -5,6 +5,7 @@
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
 
+import { createHash } from 'node:crypto';
 import type { LabelEvent } from './authoring-label-guard.mts';
 import {
   buildAuthoringLabelWarning,
@@ -24,21 +25,45 @@ import {
   markCliUsageError,
   runHelperCli,
 } from './helper-cli-runner.mts';
-import { loadPolicyConfig } from './idd-config.mts';
+import {
+  loadPolicyConfig,
+  loadTrustedActorConfig,
+  readTrustedAutoDecide,
+} from './idd-config.mts';
 import { maskMarkdownForScan } from './markdown-code.mts';
 import { escapeRegex } from './marker-regex.mts';
 import {
   findAutoDecideLabelCollisions,
   normalizePolicyConfig,
   POLICY_DEFAULTS,
+  parseIsoDurationToMs,
   resolveDurableRecordTargets,
 } from './policy-helpers.mts';
-import { resolveTrustedMarkerActors } from './protocol-helpers.mts';
+import {
+  classifyCommentEditState,
+  DEFAULT_STALE_AGE_MS,
+  resolveTrustedMarkerActors,
+} from './protocol-helpers.mts';
 import {
   createGithubProviderAdapter,
   resolveCurrentGithubRepository,
 } from './provider-adapter-github.mts';
-import type { ProviderPort } from './provider-port.mts';
+import type {
+  ProviderComment,
+  ProviderPort,
+  ProviderWorkItem,
+} from './provider-port.mts';
+import { buildVerifiedClaimLineage } from './provisional-claim-lineage.mts';
+import type {
+  ProvisionalDecisionComment,
+  ProvisionalDecisionStatus,
+  VerifiedProvisionalWork,
+} from './provisional-decision-state.mts';
+import {
+  PROVISIONAL_DECISION_RECORD_MARKER,
+  parseProvisionalDecisionRecordComment,
+  replayProvisionalDecisionHistory,
+} from './provisional-decision-state.mts';
 import {
   findTrustedSuitabilityRejection,
   isSuitabilityTriageVerdictCurrent,
@@ -141,6 +166,17 @@ export interface ReadinessReadyIssue
     ReadinessRoadmapSignal {
   number: number;
   title: string;
+  provisionalDependencies?: ProvisionalDependencyProgress[];
+}
+
+export interface ProvisionalDependencyProgress {
+  issueNumber: number;
+  criterion: string;
+  bundleGeneration: number;
+  decisionGeneration: number;
+  status: 'confirmation-pending' | 'confirmed';
+  workReference?: string;
+  verifiedAt?: string;
 }
 
 /** One issue removed by a readiness filter, with the failed reasons. */
@@ -150,6 +186,17 @@ export interface ReadinessFilteredIssue
   number: number;
   title: string;
   reasons: string[];
+  provisionalDependencies?: ProvisionalDependencyProgress[];
+  potentiallyAffectedDependencies?: PotentiallyAffectedProvisionalDependency[];
+}
+
+/** A blocked edge whose formerly verified provisional work may be affected. */
+export interface PotentiallyAffectedProvisionalDependency {
+  issueNumber: number;
+  criterion: string;
+  reason: 'rework' | 'evidence-invalid';
+  /** Only replay-verified merged work references are included. */
+  workReferences: string[];
 }
 
 /** One reference that could not be resolved during the readiness check. */
@@ -270,6 +317,517 @@ interface EvaluateDiscoverReadinessOptions {
   /** #2243: trust-actor allowlist for the triage-verdict marker scan, same
    * semantics as `idd-claim.instructions.md`'s trusted marker actors. */
   trustedMarkerLogins?: string[];
+  /** Full, replay-verified provisional state for an open Blocked by target. */
+  loadProvisionalDecisionState?: (
+    issueNumber: number,
+  ) => Promise<ProvisionalDecisionEvidence> | ProvisionalDecisionEvidence;
+  /** Trusted-base decisionIssue class switch; absent is fail-closed. */
+  decisionIssueClassEnabled?: () => boolean;
+}
+
+export interface ProvisionalDecisionEvidence {
+  valid: boolean;
+  hasRecords: boolean;
+  status: ProvisionalDecisionStatus;
+  hasRework: boolean;
+  decisions: readonly {
+    bundleGeneration: number;
+    decisionGeneration: number;
+    status: ProvisionalDecisionStatus;
+    executionCriteria: readonly string[];
+    workReference?: string;
+    verifiedAt?: string;
+  }[];
+  issues: readonly string[];
+  /**
+   * Verified merged work that a refused replay still names. Set only on an
+   * invalid result, so a refusal can report downstream work it cannot
+   * attribute to a decision.
+   */
+  verifiedWorkReferences?: readonly string[];
+}
+
+export interface ProvisionalDecisionEvidenceReader {
+  loadState(issueNumber: number): Promise<ProvisionalDecisionEvidence>;
+  decisionIssueClassEnabled(): boolean;
+}
+
+/**
+ * Build the live, fail-closed reader shared by Discover and roadmap audits.
+ * A replayed work-completed record is accepted only after its exact merged
+ * PR head and merge commit are re-read from GitHub.
+ */
+export function buildProvisionalDecisionEvidenceReader(input: {
+  owner: string;
+  repo: string;
+  port: ProviderPort;
+  /** Injectable trusted actor source for deterministic tests. */
+  readTrustedMarkerActors?: () => string[];
+  /**
+   * Not read. The trusted base configuration supplies the actors and the
+   * stale age; kept so the existing callers keep compiling.
+   */
+  policy: {
+    trustedMarkerActors?: unknown;
+    claimTiming?: { staleAge?: unknown };
+  } | null;
+}): ProvisionalDecisionEvidenceReader {
+  const { owner, repo, port } = input;
+  // The trusted actors and the claim stale age come from the trusted base
+  // configuration, read live on the first replay that needs them (as the
+  // class switch is), not at reader build. The caller's local policy is not
+  // read here, so a feature branch cannot widen either. An unreadable trusted
+  // config fails closed inside `loadState`.
+  let trustedCache: { logins: string[]; staleAgeMs: number } | null = null;
+  const readTrustedPolicy = (): {
+    logins: string[];
+    staleAgeMs: number;
+  } | null => {
+    if (trustedCache !== null) return trustedCache;
+    try {
+      if (input.readTrustedMarkerActors) {
+        // Test seam: the actor set is injected, so no live config is read.
+        trustedCache = {
+          logins: input.readTrustedMarkerActors(),
+          staleAgeMs: DEFAULT_STALE_AGE_MS,
+        };
+      } else {
+        const trustedConfig = loadTrustedActorConfig({
+          owner,
+          repo,
+          baseRefName: '',
+        });
+        trustedCache = {
+          logins: resolveTrustedMarkerActors({
+            envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
+            config: trustedConfig,
+          }).actors,
+          staleAgeMs:
+            parseIsoDurationToMs(
+              normalizePolicyConfig(trustedConfig).claimTiming.staleAge,
+            ) ?? DEFAULT_STALE_AGE_MS,
+        };
+      }
+    } catch {
+      return null;
+    }
+    return trustedCache;
+  };
+  let classEnabled: boolean | undefined;
+
+  return {
+    decisionIssueClassEnabled() {
+      if (classEnabled === undefined) {
+        classEnabled =
+          readTrustedAutoDecide({ owner, repo }).classes.decisionIssue ===
+          'enabled';
+      }
+      return classEnabled;
+    },
+    async loadState(issueNumber) {
+      let issue: ProviderWorkItem | null;
+      try {
+        issue = port.getWorkItem(issueNumber);
+      } catch (error) {
+        if (isInaccessibleIssueLookupError(error)) {
+          return invalidProvisionalEvidence('source-inaccessible');
+        }
+        throw error;
+      }
+      if (!issue) return invalidProvisionalEvidence('source-not-found');
+      const body = String(issue.body ?? '');
+      const updatedAt = String(issue.updatedAt ?? '');
+      if (
+        typeof issue.title !== 'string' ||
+        !issue.title ||
+        !updatedAt ||
+        Number.isNaN(Date.parse(updatedAt))
+      ) {
+        return invalidProvisionalEvidence('source-snapshot-incomplete');
+      }
+
+      let providerComments: ProviderComment[];
+      try {
+        providerComments = port.listWorkItemComments(issueNumber, {
+          includeEditState: true,
+        });
+      } catch (error) {
+        if (isInaccessibleIssueLookupError(error)) {
+          return invalidProvisionalEvidence('history-inaccessible');
+        }
+        throw error;
+      }
+      // Only a source that carries decision records needs the trusted config,
+      // so an ordinary closed blocker costs no live config read here.
+      if (
+        !providerComments.some((comment) =>
+          String(comment.body ?? '').startsWith(
+            PROVISIONAL_DECISION_RECORD_MARKER,
+          ),
+        )
+      ) {
+        return emptyProvisionalEvidence();
+      }
+      const trusted = readTrustedPolicy();
+      if (trusted === null) {
+        return invalidProvisionalEvidence('trusted-policy-unreadable');
+      }
+      const trustedSet = new Set(trusted.logins.map(normalizeLogin));
+      const comments: ProvisionalDecisionComment[] = providerComments.map(
+        (comment) => ({
+          id: String(comment.id),
+          url: `https://github.com/${owner}/${repo}/issues/${issueNumber}#issuecomment-${comment.id}`,
+          body: comment.body,
+          authorLogin: comment.authorLogin,
+          createdAt: comment.createdAt,
+          edited: classifyCommentEditState(comment) !== 'unedited',
+          trustedAuthor: trustedSet.has(normalizeLogin(comment.authorLogin)),
+        }),
+      );
+
+      // An untrusted or edited record marker refuses the whole history, even
+      // on a closed source. That keeps the dependency blocked (fail closed)
+      // instead of trusting a record with no authority; the cost is that a
+      // third party can hold a closed dependency until the marker is removed.
+      for (const comment of comments) {
+        if (
+          comment.body.startsWith(PROVISIONAL_DECISION_RECORD_MARKER) &&
+          (!comment.trustedAuthor || comment.edited)
+        ) {
+          return invalidProvisionalEvidence('record-authority-invalid');
+        }
+      }
+
+      const claimLineage = buildVerifiedClaimLineage({
+        comments: providerComments.map((comment) => ({
+          id: String(comment.id),
+          url: `https://github.com/${owner}/${repo}/issues/${issueNumber}#issuecomment-${comment.id}`,
+          body: comment.body,
+          createdAt: comment.createdAt,
+          authorLogin: comment.authorLogin,
+          lastEditedAt: comment.lastEditedAt,
+          trustedAuthor: trustedSet.has(normalizeLogin(comment.authorLogin)),
+        })),
+        completeHistory: true,
+        staleAgeMs: trusted.staleAgeMs,
+        trustedMarkerLogins: trusted.logins,
+      });
+      if (claimLineage.status !== 'ok') {
+        return invalidProvisionalEvidence(
+          `claim-lineage-${claimLineage.reason}`,
+        );
+      }
+
+      const verifiedWork: VerifiedProvisionalWork[] = [];
+      for (let index = 0; index < comments.length; index += 1) {
+        const comment = comments[index];
+        if (!comment?.trustedAuthor || comment.edited) continue;
+        const parsed = parseProvisionalDecisionRecordComment(comment.body);
+        if (!parsed.ok || parsed.record.event.type !== 'work-completed') {
+          continue;
+        }
+        const result = parsed.record.event.result as Record<string, unknown>;
+        const pullRequestNumber = parseSameRepositoryPullRequestNumber(
+          result.reference,
+          owner,
+          repo,
+        );
+        if (
+          result.kind !== 'merged-pull-request' ||
+          pullRequestNumber === null ||
+          typeof result.verifiedAt !== 'string' ||
+          typeof result.headSha !== 'string' ||
+          typeof result.mergeCommitSha !== 'string'
+        ) {
+          return invalidProvisionalEvidence('completion-reference-invalid');
+        }
+        let pullRequest: ReturnType<ProviderPort['getMergedChangeRequestMeta']>;
+        try {
+          pullRequest = port.getMergedChangeRequestMeta(pullRequestNumber);
+        } catch (error) {
+          if (isInaccessibleIssueLookupError(error)) {
+            return invalidProvisionalEvidence('completion-pr-inaccessible');
+          }
+          throw error;
+        }
+        if (
+          pullRequest?.merged !== true ||
+          pullRequest.headRefOid !== result.headSha ||
+          pullRequest.mergeCommitOid !== result.mergeCommitSha
+        ) {
+          return invalidProvisionalEvidence('completion-proof-mismatch');
+        }
+        verifiedWork.push({
+          source: parsed.record.source,
+          bundleGeneration: parsed.record.bundleGeneration,
+          decisionGeneration: parsed.record.decisionGeneration,
+          reference: String(result.reference),
+          verifiedAt: result.verifiedAt,
+          headSha: result.headSha,
+          mergeCommitSha: result.mergeCommitSha,
+          executionCriteriaSatisfied: true,
+        });
+      }
+
+      const replay = replayProvisionalDecisionHistory({
+        comments,
+        completeHistory: true,
+        currentSource: {
+          repository: `${owner}/${repo}`.toLowerCase(),
+          issueNumber,
+          snapshot: {
+            title: issue.title,
+            bodySha256: createHash('sha256').update(body).digest('hex'),
+            updatedAt,
+          },
+        },
+        verifiedClaimLineage: claimLineage.claims,
+        verifiedWork,
+        verifiedReworkRoadmaps: [],
+      });
+      if (!replay.valid) {
+        // A refused replay keeps its decisions empty, so the verified merged
+        // work it did read is carried separately for the affected report.
+        return {
+          ...invalidProvisionalEvidence(
+            ...replay.issues.map((entry) => entry.code),
+          ),
+          verifiedWorkReferences: [
+            ...new Set(verifiedWork.map((work) => work.reference)),
+          ].sort(),
+        };
+      }
+      const decisions = replay.decisions.map((decision) => {
+        const result = (decision.workCompleted?.event.result ?? {}) as Record<
+          string,
+          unknown
+        >;
+        return {
+          bundleGeneration: decision.bundleGeneration,
+          decisionGeneration: decision.decisionGeneration,
+          status: decision.status,
+          executionCriteria: Array.isArray(
+            decision.selection.event.executionCriteria,
+          )
+            ? (decision.selection.event.executionCriteria as string[])
+            : [],
+          ...(typeof result.reference === 'string'
+            ? { workReference: result.reference }
+            : {}),
+          ...(typeof result.verifiedAt === 'string'
+            ? { verifiedAt: result.verifiedAt }
+            : {}),
+        };
+      });
+      return {
+        valid: true,
+        hasRecords: true,
+        status: replay.status,
+        hasRework: decisions.some(
+          (decision) =>
+            decision.status === 'rework-requested' ||
+            decision.status === 'rework-authored',
+        ),
+        decisions,
+        issues: [],
+      };
+    },
+  };
+}
+
+function emptyProvisionalEvidence(): ProvisionalDecisionEvidence {
+  return {
+    valid: true,
+    hasRecords: false,
+    status: 'none',
+    hasRework: false,
+    decisions: [],
+    issues: [],
+  };
+}
+
+function invalidProvisionalEvidence(
+  ...issues: string[]
+): ProvisionalDecisionEvidence {
+  return {
+    valid: false,
+    hasRecords: true,
+    status: 'invalid',
+    hasRework: false,
+    decisions: [],
+    issues,
+  };
+}
+
+function normalizeLogin(value: unknown): string {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase();
+}
+
+function parseSameRepositoryPullRequestNumber(
+  value: unknown,
+  owner: string,
+  repo: string,
+): number | null {
+  if (typeof value !== 'string') return null;
+  try {
+    const url = new URL(value);
+    const match = url.pathname.match(/^\/([^/]+)\/([^/]+)\/pull\/(\d+)\/?$/u);
+    if (
+      url.protocol !== 'https:' ||
+      url.hostname !== 'github.com' ||
+      url.port !== '' ||
+      url.username !== '' ||
+      url.password !== '' ||
+      url.search !== '' ||
+      url.hash !== '' ||
+      match?.[1]?.toLowerCase() !== owner.toLowerCase() ||
+      match?.[2]?.toLowerCase() !== repo.toLowerCase()
+    ) {
+      return null;
+    }
+    const number = Number.parseInt(match[3] ?? '', 10);
+    return Number.isSafeInteger(number) && number > 0 ? number : null;
+  } catch {
+    return null;
+  }
+}
+
+/** A hard-edge rationale is eligible only when it names the exact criterion. */
+export function extractExplicitBlockedCriterion(
+  body: string,
+  blockedIssueNumber: number,
+): string | null {
+  const edgeLine = new RegExp(
+    String.raw`^For the edge\s+\x60Blocked by #${blockedIssueNumber}\x60[\s\S]*?The blocked criterion is\s*:?[ \t]*([\s\S]*?)\.\s+The evidence is\b`,
+    'iu',
+  );
+  const normalizedBody = String(body ?? '').replace(/\r\n/gu, '\n');
+  let visibleBody = maskMarkdownForScan(normalizedBody, {
+    htmlComments: 'mask',
+    htmlBlocks: 'mask',
+  });
+  // Edge labels are intentionally inline code. Restore each visible edge
+  // token only when its prose lead stayed visible; all other inline code
+  // remains masked so hidden criteria or evidence cannot authorize progress.
+  const edgeMarker = /For the edge\s+\x60Blocked by #\d+\x60/giu;
+  for (const match of normalizedBody.matchAll(edgeMarker)) {
+    const marker = match[0];
+    const markerIndex = match.index;
+    if (markerIndex === undefined) continue;
+    const codeStart = marker.indexOf('`');
+    if (codeStart < 0) continue;
+    const visibleLead = visibleBody.slice(markerIndex, markerIndex + codeStart);
+    if (!/^For the edge\s+$/iu.test(visibleLead)) continue;
+    visibleBody =
+      visibleBody.slice(0, markerIndex) +
+      marker +
+      visibleBody.slice(markerIndex + marker.length);
+  }
+  // Keep each rationale attached to its own edge lead. Without this split,
+  // the non-greedy scan can cross a later `For the edge` lead in the same
+  // paragraph and borrow that edge's criterion.
+  const matches = visibleBody
+    .split(/\n\s*\n/u)
+    .flatMap((paragraph) =>
+      paragraph.split(/(?=For the edge\s+`Blocked by #\d+`)/giu),
+    )
+    .map((paragraph) => edgeLine.exec(paragraph))
+    .filter((match): match is RegExpExecArray => match !== null);
+  if (matches.length !== 1) return null;
+  const criterion = normalizeExplicitCriterion(matches[0]?.[1] ?? '');
+  return criterion || null;
+}
+
+function normalizeExplicitCriterion(value: string): string {
+  return value
+    .replace(/\s+/gu, ' ')
+    .trim()
+    .replace(/^that\s+/iu, '')
+    .replace(/[.\s]+$/u, '')
+    .toLocaleLowerCase('en-US');
+}
+
+function isHumanApprovalCriterion(value: string): boolean {
+  return (
+    /\b(?:human|person|operator|maintainer)\b/iu.test(value) ||
+    /\b(?:approve(?:d|s)?|approving|approval|approvers?)\b/iu.test(value) ||
+    /\b(?:confirm(?:ed|s|ing|ation(?:s)?)?|consent(?:ed|s|ing))\b/iu.test(
+      value,
+    ) ||
+    /\b(?:authorize(?:d|s)?|authorizing|authorization(?:s)?|authorise(?:d|s)?|authorising|authorisation(?:s)?)\b/iu.test(
+      value,
+    ) ||
+    /\bsign(?:ed|s|ing)?[ -]off\b/iu.test(value)
+  );
+}
+
+/**
+ * The proof key of a work reference: its pull request number. The URL
+ * pathname ignores a query, a fragment, and backslash separators, so the
+ * spellings the replay accepts map to one key. An unparsable reference keeps
+ * its own text as the key.
+ */
+function pullRequestProofKey(reference: string): string {
+  try {
+    const pathname = new URL(reference).pathname;
+    return pathname.match(/\/pull\/0*(\d+)\/?$/i)?.[1] ?? reference;
+  } catch {
+    return reference;
+  }
+}
+
+function findProvisionalDecisionMatch(
+  evidence: ProvisionalDecisionEvidence,
+  explicitCriterion: string,
+):
+  | (ProvisionalDecisionEvidence['decisions'][number] & {
+      status: 'confirmation-pending' | 'confirmed';
+    })
+  | null {
+  if (
+    !evidence.valid ||
+    !evidence.hasRecords ||
+    evidence.hasRework ||
+    !['in-progress', 'confirmation-pending', 'confirmed'].includes(
+      evidence.status,
+    ) ||
+    isHumanApprovalCriterion(explicitCriterion)
+  ) {
+    return null;
+  }
+  const normalizedCriterion = normalizeExplicitCriterion(explicitCriterion);
+  if (!normalizedCriterion) return null;
+  // One merged change request proves one decision. When a second decision
+  // names the same reference, the proof cannot show which criterion it covers,
+  // so no criterion of this source is discharged on it.
+  const decisions = evidence.decisions;
+  // Compare by pull request number, so spellings of one pull request count as
+  // the same proof.
+  const references = decisions
+    .map((decision) => decision.workReference)
+    .filter((reference): reference is string => typeof reference === 'string')
+    .map(pullRequestProofKey);
+  if (new Set(references).size !== references.length) return null;
+  const matches = decisions.filter((decision) =>
+    decision.executionCriteria.some(
+      (criterion) =>
+        normalizeExplicitCriterion(criterion) === normalizedCriterion,
+    ),
+  );
+  if (
+    matches.length !== 1 ||
+    (matches[0]?.status !== 'confirmation-pending' &&
+      matches[0]?.status !== 'confirmed')
+  ) {
+    return null;
+  }
+  return matches[0]
+    ? (matches[0] as ProvisionalDecisionEvidence['decisions'][number] & {
+        status: 'confirmation-pending' | 'confirmed';
+      })
+    : null;
 }
 
 interface ParsedArgs {
@@ -381,6 +939,15 @@ async function main(): Promise<HelperCliResult> {
     envValue: process.env.IDD_TRUSTED_MARKER_ACTORS ?? '',
     config: policyConfig as { trustedMarkerActors?: unknown } | null,
   });
+  const provisionalReader = buildProvisionalDecisionEvidenceReader({
+    owner,
+    repo,
+    port: createGithubProviderAdapter(owner, repo),
+    policy: policyConfig as {
+      trustedMarkerActors?: unknown;
+      claimTiming?: { staleAge?: unknown };
+    } | null,
+  });
 
   const summary = await evaluateDiscoverReadiness(issueNumbers, {
     includeUnresolvable: args.includeUnresolvable,
@@ -394,6 +961,8 @@ async function main(): Promise<HelperCliResult> {
       owner,
       repo,
     ),
+    loadProvisionalDecisionState: provisionalReader.loadState,
+    decisionIssueClassEnabled: provisionalReader.decisionIssueClassEnabled,
     trustedMarkerLogins,
     // `--swarm-floor` output never surfaces the stale-authoring warning, so
     // skip the per-issue timeline fetch this loader runs — over a whole-repo
@@ -462,6 +1031,8 @@ export async function evaluateDiscoverReadiness(
     trustedMarkerLogins,
     providerOutageTarget,
     authoringJournalTarget,
+    loadProvisionalDecisionState,
+    decisionIssueClassEnabled,
   } = options ?? {};
   const triageVerdictCheckEnabled =
     typeof fetchCommentsByIssueNumber === 'function' &&
@@ -601,6 +1172,9 @@ export async function evaluateDiscoverReadiness(
     }
 
     const reasons = new Set<string>();
+    const provisionalDependencies: ProvisionalDependencyProgress[] = [];
+    const potentiallyAffectedDependencies: PotentiallyAffectedProvisionalDependency[] =
+      [];
     const labels = normalizeLabels(issue.labels);
     if (labels.has(blockedByHumanLabelName)) {
       reasons.add(`label:${blockedByHumanLabelName}`);
@@ -719,8 +1293,143 @@ export async function evaluateDiscoverReadiness(
         });
         continue;
       }
+      const explicitCriterion = extractExplicitBlockedCriterion(
+        issue.body,
+        blockedNumber,
+      );
+      const sourceHasDecisionLabel = blockedIssue.labels.has(
+        needsDecisionLabelName,
+      );
+      const sourceHasHumanOrAuthoringHold =
+        blockedIssue.labels.has(blockedByHumanLabelName) ||
+        blockedIssue.labels.has(authoringLabelName) ||
+        blockedIssue.labels.has(authoringOnlyLabelName) ||
+        [...blockedIssue.labels].some((label) =>
+          confirmationLabel.matches(label),
+        );
       if (blockedIssue.state === 'OPEN') {
+        if (
+          explicitCriterion &&
+          !isHumanApprovalCriterion(explicitCriterion) &&
+          sourceHasDecisionLabel &&
+          !sourceHasHumanOrAuthoringHold &&
+          loadProvisionalDecisionState &&
+          decisionIssueClassEnabled?.()
+        ) {
+          const provisional = await loadProvisionalDecisionState(blockedNumber);
+          if (!provisional.valid || provisional.hasRework) {
+            const workReferences = provisional.decisions
+              .filter(
+                (decision) =>
+                  decision.executionCriteria.some(
+                    (criterion) =>
+                      normalizeExplicitCriterion(criterion) ===
+                      normalizeExplicitCriterion(explicitCriterion),
+                  ) && Boolean(decision.workReference),
+              )
+              .map((decision) => decision.workReference as string);
+            potentiallyAffectedDependencies.push({
+              issueNumber: blockedNumber,
+              criterion: explicitCriterion,
+              reason: provisional.hasRework ? 'rework' : 'evidence-invalid',
+              workReferences: [
+                ...new Set([
+                  ...workReferences,
+                  ...(provisional.verifiedWorkReferences ?? []),
+                ]),
+              ].sort(),
+            });
+          }
+          const match = findProvisionalDecisionMatch(
+            provisional,
+            explicitCriterion,
+          );
+          if (match) {
+            provisionalDependencies.push({
+              issueNumber: blockedNumber,
+              criterion: explicitCriterion,
+              bundleGeneration: match.bundleGeneration,
+              decisionGeneration: match.decisionGeneration,
+              status: match.status,
+              ...(match.workReference
+                ? { workReference: match.workReference }
+                : {}),
+              ...(match.verifiedAt ? { verifiedAt: match.verifiedAt } : {}),
+            });
+            continue;
+          }
+        }
         reasons.add(`blocked_by_open_issue:#${blockedNumber}`);
+      } else if (loadProvisionalDecisionState) {
+        // A manually or stale-closed decision source is not itself proof that
+        // its recorded work was confirmed. Replay every closed blocker: a
+        // replay refusal or rework keeps all dependency shapes blocked, while
+        // an ordinary closed issue with no decision records keeps its prior
+        // behavior.
+        const provisional = await loadProvisionalDecisionState(blockedNumber);
+        if (!provisional.hasRecords && provisional.valid) continue;
+        if (
+          provisional.valid &&
+          !provisional.hasRework &&
+          provisional.status === 'confirmed'
+        ) {
+          continue;
+        }
+        if (
+          explicitCriterion &&
+          !isHumanApprovalCriterion(explicitCriterion) &&
+          sourceHasDecisionLabel &&
+          !sourceHasHumanOrAuthoringHold &&
+          decisionIssueClassEnabled?.()
+        ) {
+          const match = findProvisionalDecisionMatch(
+            provisional,
+            explicitCriterion,
+          );
+          if (match) {
+            provisionalDependencies.push({
+              issueNumber: blockedNumber,
+              criterion: explicitCriterion,
+              bundleGeneration: match.bundleGeneration,
+              decisionGeneration: match.decisionGeneration,
+              status: match.status,
+              ...(match.workReference
+                ? { workReference: match.workReference }
+                : {}),
+              ...(match.verifiedAt ? { verifiedAt: match.verifiedAt } : {}),
+            });
+            continue;
+          }
+        }
+        if (
+          explicitCriterion &&
+          (!provisional.valid || provisional.hasRework)
+        ) {
+          const workReferences = provisional.decisions
+            .filter(
+              (decision) =>
+                decision.executionCriteria.some(
+                  (criterion) =>
+                    normalizeExplicitCriterion(criterion) ===
+                    normalizeExplicitCriterion(explicitCriterion),
+                ) && Boolean(decision.workReference),
+            )
+            .map((decision) => decision.workReference as string);
+          potentiallyAffectedDependencies.push({
+            issueNumber: blockedNumber,
+            criterion: explicitCriterion,
+            reason: provisional.hasRework ? 'rework' : 'evidence-invalid',
+            workReferences: [
+              ...new Set([
+                ...workReferences,
+                ...(provisional.verifiedWorkReferences ?? []),
+              ]),
+            ].sort(),
+          });
+        }
+        reasons.add(
+          `blocked_by_unverified_provisional_issue:#${blockedNumber}`,
+        );
       }
     }
 
@@ -866,6 +1575,9 @@ export async function evaluateDiscoverReadiness(
         title: issue.title,
         ...signal,
         isRoadmap,
+        ...(provisionalDependencies.length > 0
+          ? { provisionalDependencies }
+          : {}),
       });
       continue;
     }
@@ -876,6 +1588,12 @@ export async function evaluateDiscoverReadiness(
       reasons: [...reasons].sort(),
       ...signal,
       isRoadmap,
+      ...(provisionalDependencies.length > 0
+        ? { provisionalDependencies }
+        : {}),
+      ...(potentiallyAffectedDependencies.length > 0
+        ? { potentiallyAffectedDependencies }
+        : {}),
     });
   }
 

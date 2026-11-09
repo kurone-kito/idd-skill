@@ -1209,10 +1209,9 @@ export interface ProviderPort {
    * key their own path-based logic on; including a stale rename source
    * here once let a renamed-away file's OLD owner enter the same
    * any-owner-approved set as the destination path's owner, or introduce
-   * an obsolete required reviewer. See
-   * {@link listChangeRequestRenamedFromPaths} for the one consumer (the
-   * self-referential-bootstrap-auto trigger-file allowlist check) that
-   * specifically needs the old path too.
+   * an obsolete required reviewer. The self-referential-bootstrap-auto
+   * trigger-file check and scope-overrun audit use the separate renamed-
+   * from list; general consumers above must use current paths only.
    */
   listChangeRequestChangedFiles(number: number): string[];
 

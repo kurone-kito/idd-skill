@@ -715,16 +715,19 @@ function everyAutoDecideClass(verdict) {
  * the document is absent), and the caps and `quietWindow` when a class is
  * `enabled`.
  */
-export function readTrustedAutoDecide(input) {
+export function readTrustedAutoDecideWithConfig(input) {
   const read = readValidatedTrustedPolicy(input);
   const { ref } = read;
   const unreadable = (error) => ({
-    status: 'unreadable',
-    source: 'repository',
-    ref,
-    master: 'unreadable',
-    classes: everyAutoDecideClass(() => 'unreadable'),
-    error,
+    report: {
+      status: 'unreadable',
+      source: 'repository',
+      ref,
+      master: 'unreadable',
+      classes: everyAutoDecideClass(() => 'unreadable'),
+      error,
+    },
+    policyConfig: null,
   });
   const master = dangerouslyAutoDecideFromTrustedRead(read);
   if (master.status === 'unreadable') {
@@ -768,10 +771,17 @@ export function readTrustedAutoDecide(input) {
       report.maxDecisionsPerClaim = effective.maxDecisionsPerClaim;
       report.quietWindow = effective.worktreeRemnant.quietWindow;
     }
-    return report;
+    return {
+      report,
+      policyConfig: read.status === 'valid' ? read.config : null,
+    };
   } catch (error) {
     return unreadable(error instanceof Error ? error.message : String(error));
   }
+}
+/** Read trusted auto-decide state without exposing the policy snapshot. */
+export function readTrustedAutoDecide(input) {
+  return readTrustedAutoDecideWithConfig(input).report;
 }
 /**
  * Whether `branch` exists on the remote. Only a 404 means absent. Any other

@@ -2323,6 +2323,67 @@ test('reports when only roadmap nodes remain open', async () => {
   assert.equal(graph.summary.executionCandidateCount, 0);
 });
 
+test('provisional graph state stays attached to the source across shared provenance paths', async () => {
+  const issues = new Map([
+    [660, roadmapIssue(660, '- [ ] #661\n- [ ] #662', 'provisional-root')],
+    [661, executionIssue(661, 'Refs #663', 'closed')],
+    [662, executionIssue(662, 'Refs #663', 'closed')],
+    [663, executionIssue(663, 'confirmation-pending source', 'open')],
+  ]);
+  const loaded: number[] = [];
+  const graph = await enumerateRoadmapGraph(660, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+    provisionalDecisionState: {
+      loadState: async (issueNumber) => {
+        loaded.push(issueNumber);
+        return issueNumber === 663
+          ? {
+              valid: true,
+              hasRecords: true,
+              status: 'confirmation-pending',
+              hasRework: false,
+              decisions: [
+                {
+                  bundleGeneration: 1,
+                  decisionGeneration: 1,
+                  status: 'confirmation-pending',
+                  executionCriteria: ['the exact implementation is merged'],
+                },
+              ],
+              issues: [],
+            }
+          : {
+              valid: true,
+              hasRecords: false,
+              status: 'none',
+              hasRework: false,
+              decisions: [],
+              issues: [],
+            };
+      },
+    },
+  });
+
+  assert.deepEqual(
+    loaded.sort((left, right) => left - right),
+    [660, 661, 662, 663],
+  );
+  assert.equal(
+    graph.nodes.find((entry) => entry.number === 663)?.provisionalDecisionState
+      ?.status,
+    'confirmation-pending',
+  );
+  assert.deepEqual(
+    graph.provenancePaths
+      .filter((entry) => entry.target === 663)
+      .map((entry) => entry.path),
+    [
+      [660, 661, 663],
+      [660, 662, 663],
+    ],
+  );
+});
+
 function roadmapIssue(
   number: number,
   body: string,
@@ -4894,6 +4955,80 @@ test('--with-readiness annotates open union leaves with a combined startable sig
   // The summary aggregates the same signal: only 921 is ready and startable.
   assert.equal(report.summary.readyCount, 1);
   assert.equal(report.summary.startableCount, 1);
+});
+
+test('--with-readiness carries provisional edge evidence and rework impact into the graph', async () => {
+  const implementationBody = [
+    'Blocked by #922',
+    '',
+    'For the edge `Blocked by #922`, the producer output is the selected work completion. The blocked criterion is that all generated artifacts ship. The evidence is the merged implementation PR.',
+  ].join('\n');
+  const issues = new Map<number, unknown>([
+    [920, roadmapIssue(920, '- [ ] #921', 'provisional-readiness')],
+    [921, executionIssue(921, implementationBody)],
+    [
+      922,
+      {
+        ...executionIssue(922, 'provisional decision source'),
+        labels: [{ name: 'status:needs-decision' }],
+      },
+    ],
+  ]);
+  const makeReport = async (
+    status: 'confirmation-pending' | 'rework-requested',
+  ) =>
+    enumerateAllRoadmapsGraph({
+      loadOpenRoadmapRoots: async () => [920],
+      loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+      readiness: {
+        ...readinessResolution(),
+        decisionIssueClassEnabled: () => true,
+        loadProvisionalDecisionState: async () => ({
+          valid: true,
+          hasRecords: true,
+          status,
+          hasRework: status === 'rework-requested',
+          decisions: [
+            {
+              bundleGeneration: 1,
+              decisionGeneration: 1,
+              status,
+              executionCriteria: ['All generated artifacts ship.'],
+              workReference: 'https://github.com/acme/repo/pull/923',
+              verifiedAt: '2026-11-01T00:00:00Z',
+            },
+          ],
+          issues: [],
+        }),
+      },
+    });
+
+  const pending = await makeReport('confirmation-pending');
+  const pendingLeaf = pending.leaves.find((entry) => entry.number === 921);
+  assert.equal(pendingLeaf?.readiness?.ready, true);
+  assert.deepEqual(pendingLeaf?.readiness?.provisionalDependencies, [
+    {
+      issueNumber: 922,
+      criterion: 'all generated artifacts ship',
+      bundleGeneration: 1,
+      decisionGeneration: 1,
+      status: 'confirmation-pending',
+      workReference: 'https://github.com/acme/repo/pull/923',
+      verifiedAt: '2026-11-01T00:00:00Z',
+    },
+  ]);
+
+  const rework = await makeReport('rework-requested');
+  const reworkLeaf = rework.leaves.find((entry) => entry.number === 921);
+  assert.equal(reworkLeaf?.readiness?.ready, false);
+  assert.deepEqual(reworkLeaf?.readiness?.potentiallyAffectedDependencies, [
+    {
+      issueNumber: 922,
+      criterion: 'all generated artifacts ship',
+      reason: 'rework',
+      workReferences: ['https://github.com/acme/repo/pull/923'],
+    },
+  ]);
 });
 
 // #4109: the authoring-only label reaches the roadmap readiness path through

@@ -4270,6 +4270,13 @@ Stage 2 release.
 Observed 2026-11-05 during the replay recorded on carrier issue #5054; see
 [the design rationale](https://github.com/kurone-kito/idd-skill/blob/main/docs/idd-design-rationale.md#cite-the-observed-incident).
 
+If an exact-set resume changes the anchor's owner generation after the child
+intent was verified but before any child was published, that intent no longer
+authorizes publication. Only the verified replacement defined under
+[Canonical carrier recovery records](#canonical-carrier-recovery-records) can
+replace it; otherwise stay held, and post no child-intent record for this
+root intent other than a verified replacement.
+
 ### Canonical carrier recovery records
 
 These records apply to the re-anchoring procedure above. They are separate
@@ -4403,14 +4410,17 @@ be appended only from an already verified, correctly ordered intent and
 publication chain.
 
 Replay by server `createdAt`, then numeric comment ID; never use embedded
-ordering or select a later conflicting comment as an override. A mapping must
+ordering or select a later conflicting comment as an override (a verified
+replacement lineage, defined below, is not one). A mapping must
 reference the actual earlier root intent comment ID on this carrier; a child
 intent must also reference the verified earlier roadmap mapping, and a child
 mapping must reference the verified earlier child intent. Exact duplicate
 records reuse the earliest verified ID. One root intent accounts for exactly
 one source draft, at most one roadmap, and at most one child. Conflicting
-root or child intents for that token or draft, a second distinct child or
-roadmap, or one child assigned to different intents stops for reconciliation.
+root or child intents for that token or draft (one verified replacement
+lineage, defined below, is a single intent and not a conflict), a second
+distinct child or roadmap, or one child assigned to different intents stops
+for reconciliation.
 Before
 closing the carrier, account for every draft under the existing publish/drop
 rule; a roadmap mapping alone never accounts for a child draft.
@@ -4560,6 +4570,339 @@ or an end-to-end suite):
 7. Unexpected oversize after create. If the actual mapping exceeds 60,000 bytes
    despite a passing bound, keep that exact target held, the carrier open and
    the evidence intact; do not truncate, split or repeat the create.
+
+**Child intent replacement.** An exact-set resume gives the anchor a new owner
+token and may give it a new session. A verified child intent that never led to a
+create then pins a generation that is no longer current, and the conflicting
+intent rule above would keep recovery held although nothing was published. A
+verified, append-only replacement closes that gap and nothing else. It leaves
+the child-intent shape above unchanged, so records already posted stay valid.
+Post it like the other records: a direct JSON POST, the returned comment ID and
+exact body verified, exactly the shown keys, and the 60,000-byte budget, with an
+oversized replacement treated as an oversized intent that stops before the child
+create. Before appending it, compute the pre-create mapping bound above for the
+child mapping that its create will require, as for a child intent. A refused
+bound or size leaves the lineage unchanged and stops this pass for
+reconciliation, as that section says for any verified intent; a later pass may
+append a replacement with a re-reviewed body whose bound and size fit, while
+condition 1 holds; a refusal at the repeat check on a current head is a manual
+hold. That section's traces about a changed owner generation or an unresolved
+earlier intent refer to this lineage's head: a superseded child intent is
+resolved, and a head whose owner is no longer current is replaced under this
+rule.
+
+````text
+<!-- <marker-prefix>-authoring-carrier-child-intent-replacement: v1 -->
+```json
+{
+  "carrier": "<owner>/<repo>#<number>",
+  "token": "<opaque-recovery-token>",
+  "intent-comment-id": 123,
+  "roadmap-mapping-comment-id": 124,
+  "replaces-comment-id": 125,
+  "draft-title": "<exact carrier ### title>",
+  "draft-sha256": "<64-lowercase-hex>",
+  "anchor": "<owner>/<repo>#<number>",
+  "anchor-owner": "<successor-anchor-owner-token>",
+  "set": "<unchanged-anchor-set-id>",
+  "session": "<successor-anchor-session-id>",
+  "child-title": "<final reviewed child title>",
+  "child-body": "<exact final reviewed child body before publication injection>",
+  "child-sha256": "<64-lowercase-hex>",
+  "actor": "<trusted-marker-actor>"
+}
+```
+_Issue-authoring carrier child intent replacement. Do not edit or delete._
+````
+
+`replaces-comment-id` is a positive decimal JSON integer naming the child
+intent or earlier replacement that this record supersedes; the replacement
+never edits, hides or deletes that record. `anchor-owner` and `session` are
+those of the anchor's current verified generation. `child-title`, `child-body`
+and `child-sha256` are the final title and body, re-reviewed and re-linted
+against the current default branch with that generation exactly as for a child
+intent; they may differ from the superseded record's.
+
+**Replacement lineage and replay.** The original child intent and its
+replacements form one append-only lineage for one root intent. Lineage records
+are carrier comments, posted and replayed from the carrier like every other
+record in this section; a record posted anywhere else is not a lineage record. A
+position compares server `createdAt`, then numeric comment ID, across issues, so
+that the carrier's lineage records, the anchor's owner markers and journal
+comments order deterministically against each other. Replay the lineage from the
+original child intent in that order. First collapse exact duplicates in that
+order: a record with the same actor and the same decoded fields as an earlier
+lineage record, after every `replaces-comment-id` that names a collapsed
+duplicate is resolved to that earliest ID, is ignored and reuses the earliest
+verified ID, wherever it is positioned. Then each remaining replacement must
+repeat the carrier, token, root `intent-comment-id`,
+`roadmap-mapping-comment-id`, draft title and hash, anchor and set of the record
+it replaces exactly, carry a `child-sha256` that recomputes from its
+`child-body`, and name in `replaces-comment-id` the head of the lineage at that
+point of the order. Its `anchor-owner` must differ from that head's and name a
+generation that a trusted resume marker had already opened and that was the
+anchor's current one when the replacement was posted. The last record is the
+head. Wherever this contract refers to the child intent of this recovery path,
+in a check, a publication or a mapping, including the re-anchor procedure and
+the mapping template above, it means the head: only the head can authorize
+`publish-authoring-hold --shape child`; a child mapping's
+`child-intent-comment-id` names the head; the published title must equal the
+head's `child-title`; the mapping's `body` must equal the publication line, two
+LF bytes and the head's `child-body`; and the publication session must equal the
+head's `session`. Superseded records stay as replay evidence and authorize
+nothing.
+
+These stop for reconciliation: a replacement that names an unknown record or a
+record that is not the head at that point of the order, two different
+replacements of one record, a replacement positioned after a journal comment
+naming this anchor or set (other than the roadmap's own publication records,
+defined in condition 3 below) or after a child mapping for the lineage, any
+lineage record that fails a trust, edit and minimization, identity, hash or
+owner-binding requirement above, and a replacement whose resume path fails
+condition 2 below when that condition is evaluated at the replacement's own
+position. A replacement never overrides another valid successor, which is a
+head whose `anchor-owner` is still the anchor's current owner token, and it
+never authorizes a second child. A stop here is the recovery hold: it keeps the
+carrier open and every target held, appends no further lineage record, creates
+no target, and never unhides, edits or deletes a record.
+
+**When a replacement is allowed.** Append one only while holding the verified
+carrier coordination claim and the anchor's current generation (you appended
+its resume or re-verified it as this session's under the Stage 1 rules; a
+generation of another session whose latest trusted marker is younger than
+`issueAuthoring.authoringStaleAge` is live and stops), and only when all of
+these hold:
+
+1. The head is verified, no child mapping references any lineage record, and
+   the head's `anchor-owner` is no longer the anchor's current owner token.
+2. The change is an authorized exact-set resume. Replay the full paginated
+   owner-marker log of the anchor (the markers posted on it that name it as
+   `target`), read with GraphQL edit and minimization metadata (`lastEditedAt`,
+   `isMinimized`, `minimizedReason`), because the REST comment list does not
+   return them. At a replay position, every test of this condition reads only
+   the markers positioned before the replacement, except the last-marker check
+   that ends this condition. The path from the original child intent's
+   `anchor-owner` to the current owner is not empty and every step of it is a
+   trusted `mode=resume` marker for the same `anchor` and `set` whose
+   `supersedes` names the owner token before it and that was posted past
+   `issueAuthoring.authoringStaleAge` after the latest trusted marker of the
+   generation it supersedes. Between a generation's opener and the resume that
+   supersedes it there are only same-owner heartbeats (an exact duplicate of
+   that opener is ignored), and no `release`, `release-guard` or
+   `release-complete` marker appears on the path or after its last step. There
+   is no competing generation winner: the first valid opener wins, and a losing
+   opener (a resume, acquire or bootstrap marker) and the markers of its owner
+   are ignored here. The current owner and its session are exactly the
+   replacement's `anchor-owner` and `session`. No owner marker of the anchor
+   whose `owner` is a superseded owner token (a `supersedes` field that names
+   one does not count) is positioned after the resume marker that superseded
+   that owner: that shows a live prior session and stops. A session ID that the
+   resume reused does not distinguish the sessions, and condition 3 covers
+   journal activity of any session. A label, a local log, an acquire or
+   bootstrap marker, an untrusted resume, a resume before the stale age, or a
+   different anchor or set is not that evidence. A marker that the
+   hide-on-supersede step minimized as `outdated` counts exactly like a marker
+   that was never minimized in every test of this condition, at a replay
+   position too. An edited marker, a marker minimized for another reason, or a
+   minimized last owner marker of the anchor's open generation (the winning
+   generation that no later valid opener follows), read in the full log, stops,
+   even when that marker was minimized as `outdated`.
+3. Conclusive no-publication evidence. The publisher persists `state=pending` in
+   the journal before it issues a child create and does not create when that
+   write cannot be verified. So a complete replay of
+   `issueAuthoring.journalIssue`, every journal listed in
+   `issueAuthoring.retiredJournalIssues` and the journal that the roadmap
+   mapping's `publication.journal` names that finds no comment naming this
+   anchor or set (apart from the one exemption below) proves that the publisher
+   had not reached a create for it when the scan was read, subject to the
+   displaced-publisher window below. Read each journal, and the owner-marker
+   scan below, with GraphQL edit and minimization metadata (`lastEditedAt`,
+   `isMinimized`, `minimizedReason`): the REST list omits them, and `updated_at`
+   also moves when the hide-on-supersede step minimizes a comment. A comment
+   counts as found when its raw body contains this anchor's canonical reference
+   (after the owner protocol's identity normalization, so a case variant still
+   matches, and at a non-digit boundary, so a number that merely starts with the
+   anchor's does not match) or this exact set ID anywhere, whatever its author,
+   edit state, minimization or syntax, and so does a journal comment positioned
+   after the lineage's original child intent that contains the exact marker name
+   `<marker-prefix>-authoring-publication-intent:` or
+   `<marker-prefix>-authoring-owner:` but does not parse. Untrusted, edited,
+   minimized or malformed state never removes a comment from the scan and only
+   adds a stop. A journal comment that was edited (non-null `lastEditedAt`) and
+   is positioned after the lineage's original child intent counts as found
+   whatever its current body names, because the edit may have removed the
+   anchor, the set or every marker token. The only exemption is a parsed journal
+   record of a trusted actor, never edited, that matches the roadmap's own
+   publication tuple exactly (the target, anchor, set, session and token that
+   the roadmap mapping records) in the `pending` or `member` state; one that the
+   hide-on-supersede step minimized as `outdated` stays exempt, while a
+   `cleanup` or `abandoned` record of that tuple is found and stops. That proof
+   counts only together with every other requirement: the Stage 1 resume
+   enumeration for the exact anchor and set (the anchor's `## Tracks` plus the
+   repository-wide paginated owner-marker scan, which here counts a
+   marker-shaped comment of any author, and a marker minimized as `outdated`,
+   that names this anchor or set) finds no target other than the anchor, because
+   a fresh recovery set holds that anchor and at most this one child; the
+   carrier holds no `kind=child` mapping for the lineage (an edited, minimized
+   or malformed mapping-shaped comment naming the token counts as found and
+   stops) and no malformed or untrusted exact-token record; the carrier is still
+   ready; the roadmap is open under the authoring hold with no active claim or
+   linked pull request; the current-state checks that open the re-anchor
+   procedure (source branch, claims, linked pull requests, duplicate or reuse
+   candidates, conflicting issues or pull requests) pass again; and the source
+   draft bytes still match the root intent.
+4. The displaced session has expired. Identify it from the carrier's trusted
+   claim markers as the holder of the coordination claim that preceded this
+   session's claim, and require that claim to have been released by its own
+   `unclaimed-by` marker, or to have been stale under `claimTiming.staleAge`
+   when this session took the carrier over, with no `claimed-by` marker carrying
+   its claim ID posted after this session's takeover claim or after its own
+   `unclaimed-by` (read from the raw comments). A claim marker that the takeover
+   step minimized as `outdated` counts like one that was never minimized; an
+   edited marker, or one minimized for another reason, in the displaced chain
+   stops recovery, as does a displaced session that cannot be identified from
+   trusted markers or whose claim was neither released nor stale.
+
+An incomplete enumeration stops. None of these alone is sufficient: a journal
+`pending` record with `issue=none`, other than an exempt roadmap record, is the
+uncertain-create shape and stops; an absent mapping, an absent search result,
+an empty local log, and a recollection of what the interrupted session did
+prove nothing. An exact search of issue and pull request titles and bodies for
+the child's title, this set ID or this anchor reference can only stop recovery:
+a hit stops, and a miss proves nothing. A hit on the roadmap, the carrier or a
+target that a trusted mapping names is not a stop.
+
+**Displaced publisher.** A journal scan proves only that no create had been
+reached when it was read; it cannot prove that the displaced session has
+stopped, so condition 4 takes that proof from the carrier's own claim history.
+The publisher checks the anchor generation before its `pending` write and checks
+it again only after its create (the anchor heartbeat and log replay that precede
+`member`). A displaced session that is suspended inside one publisher call
+between those points could therefore still create a second child after the final
+re-check. Condition 4 bounds that window: this session holds the carrier
+coordination claim only after the displaced holder released it or let it go
+stale, so the suspension must have outlasted that claim, which is hours rather
+than minutes for a session that heartbeats as required. A child created in the
+window carries the displaced generation. It cannot reach `member`, because the
+publisher's own anchor replay shows a changed owner, and the exactly-one-child
+rule stops recovery as soon as its journal record shows a second candidate. That
+child stays held and unmapped for a person to reconcile, and the lineage never
+maps it. A publisher used for a child after a replacement must take the head's
+owner, set and session as expected values, refuse any other generation, and
+re-verify them after its `pending` write and immediately before its create;
+until the helper does, running it is accepted only because condition 4 bounds
+the window above and the checks of the next paragraph stand in for the expected
+generation, and the helper change is separate work that this contract does not
+implement.
+
+**Replacement procedure.** Revalidate this session's own carrier coordination
+claim immediately before any append, after the settle delay and immediately
+before the child publisher runs, as the re-authoring procedure requires before
+each mutation. When a verified replacement is already the head, its generation
+is current and is this session's own (it appended that generation's resume or
+re-verified it as this session's under the Stage 1 rules), and no create
+followed it, append nothing: repeat the pre-create mapping bound and the
+re-check below, then run the publisher. When the head's current generation was
+opened by another session, resume the set and append a replacement under
+conditions 1 to 4. Otherwise append the replacement, then verify the returned ID
+and exact body. After `claim.verifySettleDelay`, repeat conditions 2 to 4 on
+fresh complete reads together with the lineage replay, and repeat them once more
+immediately before running the child publisher. A comment found under condition
+3, an owner-log record that changes the current generation, a later owner marker
+carrying a superseded owner token, a later `claimed-by` marker of the displaced
+claim, or a takeover of the carrier claim by another session voids the
+replacement. A void stops this pass under the recovery hold. Publication
+evidence can never be followed by another replacement, because condition 3 keeps
+failing. When the only cause is a further resume, the voided record stays the
+head, and a later pass may append a replacement that names it once conditions 1
+to 4 hold again. Only a verified replacement that passes this re-check permits
+the first run of `publish-authoring-hold --shape child --anchor <roadmap>`. The
+helper reads the anchor's generation itself and takes no expected generation, so
+this session performs the existing owner, set and session checks against the
+head itself: it reads the anchor log immediately before the run and requires the
+current owner, set and session to equal the head's, and after the run it
+requires the anchor log to show the same owner, set and session and the created
+child's publication line to carry the head's anchor, set and session, and the
+journal to show exactly this run's publication tuple for this anchor and set and
+no other candidate, before it relies on the child. A mismatch stops recovery
+with that child held and unmapped. After publication, append and verify the
+`kind=child` mapping as above, naming the head.
+
+An inconclusive replacement append or read-back stops before the child create.
+Retain the exact attempted record and any returned comment ID, keep the carrier
+open and every target held, and reconcile the live paginated carrier log, the
+journal and recent issue history before retrying. Reuse the earliest exact
+verified replacement rather than posting a duplicate, and post a different
+record for the same predecessor only after reconciliation proves that the first
+attempt is absent. An inconclusive child publication keeps the carrier and
+targets held and preserves the returned issue identities and journal evidence
+under the existing no-repeat-create rules. It needs reconciliation before any
+retry. A retry then follows those rules alone, under the unchanged head while
+its owner generation is still current. Once another resume changes that
+generation the head cannot publish and condition 3 blocks every further
+replacement, because the attempt left a journal comment: that case is a manual
+hold for a person.
+
+**Replacement traces.** Records are named by role, in server order: `A` is the
+root intent, `B` the roadmap mapping, and `C` the child intent, which pins
+`anchor-owner` O0 and `session` S0. Every hold below is the recovery hold
+defined above: no replacement is appended and no create is issued.
+
+- Permitted. The carrier's claim history identifies the previous coordination
+  claim holder, whose claim was released or stale when this session took over,
+  with no later `claimed-by` marker of it. The anchor log then shows one trusted
+  resume marker (owner O1, session S1, `supersedes` O0), posted past the stale
+  age, for the same anchor and set, with no release-family marker and no later
+  owner marker of O0. Journal replay finds no comment for this anchor or set
+  beyond the roadmap's own publication records, the resume enumeration finds
+  only the anchor, no child mapping exists, the carrier is ready, the roadmap is
+  open and held without a claim, and the draft bytes still match `A`. One
+  replacement `D` (`replaces-comment-id` naming `C`, `anchor-owner` O1,
+  `session` S1, source draft, anchor and set unchanged) is appended and
+  verified, passes the re-check, and the child is published once; its mapping
+  names `D`.
+- Reuse. An exact duplicate of `D` is ignored and reuses `D`; it is neither a
+  second head nor a fork.
+- Hold, existing child. A journal comment beyond the exempt roadmap records, an
+  owner marker naming this anchor or set whose target is not the anchor, or a
+  `## Tracks` entry for this anchor or set shows a child, or a `kind=child`
+  mapping references any lineage record (`C` or `D`). A child exists or may
+  exist, so only the existing mapping recovery, through its own rules, may
+  record one.
+- Hold, uncertain create or journal. The journal holds any comment for this
+  anchor or set beyond the exempt roadmap records: `pending` with
+  `issue=none`, `cleanup`, `abandoned`, or a comment that is untrusted, edited,
+  minimized (other than an exempt roadmap record) or malformed. Or a page of
+  any enumeration is missing. That is not
+  no-publication evidence.
+- Hold, absence alone. Only an empty search result, a missing mapping, or a
+  `pending` record with `issue=none` (other than an exempt roadmap record) is
+  available.
+- Hold, changed binding. The source draft hash differs from `A`, the anchor
+  differs, or the set differs (for example a fresh acquisition after
+  `release-complete`).
+- Hold, untrusted record. `A`, `B`, `C` or `D` is edited, minimized, malformed,
+  has an `actor` that differs from its API author, or has an actor whose
+  durable trust cannot be re-evaluated.
+- Hold, forked or ambiguous lineage. After exact duplicates collapse, two
+  different replacements name `C`, one names a non-head or an unknown record,
+  or a second original child intent exists for the root intent. A head whose
+  `anchor-owner` is still current is another valid successor, so a new
+  replacement stops; a head whose owner is no longer current is not.
+- Hold, unauthorized resume. The owner changed without a trusted `mode=resume`
+  marker that names the owner before it, the resume came before the stale age,
+  a `release`, `release-guard` or `release-complete` marker appears on the path
+  or after it, or an owner marker of a superseded owner follows the resume.
+- Hold, displaced session not expired. The carrier's claim history does not
+  identify the displaced session, or its claim was neither released nor stale
+  when this session took the carrier over, or it posted a `claimed-by` marker
+  after that.
+- Hold, inconclusive outcome. The POST or read-back of `D` is uncertain, or the
+  child create after `D` is: retain the evidence as above and create nothing.
+
+The unused-intent continuity gap was identified on 2026-11-07 during PR
+`#5100` review and tracked in issue `#5106` (preventive; no observed incident
+yet).
 
 The record-format and uncertain-intent gaps, including source/child binding,
 journal identity, and serialized record size, were identified on 2026-11-07

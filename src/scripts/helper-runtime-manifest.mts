@@ -368,6 +368,15 @@ const HELPER_COMMANDS: HelperCommand[] = [
       'List issues whose unedited trusted authoring-owner markers carry one exact set, and exit non-zero when that listing does not finish.',
   },
   {
+    id: 'auto-decision-records',
+    scriptName: 'idd:auto-decision-records',
+    binName: 'idd-auto-decision-records',
+    entryPath: 'scripts/auto-decision-records.mjs',
+    vendoredCommand: 'node scripts/auto-decision-records.mjs',
+    description:
+      'Read trusted auto-decision confirmation counts, records, and links as JSON.',
+  },
+  {
     id: 'branch-conflict-state',
     scriptName: 'idd:branch-conflict-state',
     binName: 'idd-branch-conflict-state',
