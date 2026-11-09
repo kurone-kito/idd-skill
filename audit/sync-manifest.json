@@ -366,7 +366,7 @@
       "files": [
         ".github/instructions/idd-work.instructions.md"
       ],
-      "limitBytes": 30100
+      "limitBytes": 32800
     },
     {
       "id": "bundle-work-lite",
@@ -490,6 +490,12 @@
     "noticeUtilizationPct": 95,
     "exemptBundles": [],
     "nearCeilingRaiseApprovals": [
+      {
+        "bundle": "bundle-work-phase",
+        "limitBytes": 32800,
+        "issue": 4676,
+        "reason": "Operator chose option 1 (raise the limit) in the IDD takeover session on 2026-11-09, after E12 step 1 for the scope-overrun record wiring. The record step in idd-work.instructions.md adds about 330 bytes to a bundle at 97.94% of 30,100 (base 29,481 bytes). The projected total is 29,816 bytes (99.06% of 30,100), so 32,800 is about 10% above the projection, rounded to the nearest 100. Measured 29,806 bytes on the current tree, 90.9% of 32,800, under the 95% notice band."
+      },
       {
         "bundle": "bundle-orchestrator-phase",
         "limitBytes": 6300,
