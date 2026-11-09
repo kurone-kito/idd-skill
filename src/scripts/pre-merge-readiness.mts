@@ -688,6 +688,27 @@ function scopeEffortFinding(report: ReturnType<typeof auditAuthoredIssue>) {
   return finding;
 }
 
+/**
+ * Resolves the PR merge base only when this checkout's origin names the
+ * target repository. `--owner`/`--repo` can name another repository, whose
+ * `origin/<base>` is then missing or unrelated, so the audit fails closed
+ * instead of computing candidates against the wrong base.
+ */
+export function readScopeOverrunMergeBaseForRepo(
+  owner: string,
+  repo: string,
+  baseRefName: string,
+  headSha: string,
+): string {
+  const root = primaryCheckoutRoot();
+  if (root === null || !primaryCheckoutNamesRepo(root, owner, repo)) {
+    throw new Error(
+      'scope-overrun audit cannot resolve the PR merge base: the checkout origin does not name the target repository',
+    );
+  }
+  return readScopeOverrunMergeBaseSha(baseRefName, headSha);
+}
+
 export function readScopeOverrunMergeBaseSha(
   baseRefName: string,
   headSha: string,
@@ -856,9 +877,11 @@ export function collectPreMergeReadiness(
     repo: string,
   ) => ActivationResult | null = resolvePrimaryActivation,
   resolveScopeOverrunMergeBase: (
+    owner: string,
+    repo: string,
     baseRefName: string,
     headSha: string,
-  ) => string = readScopeOverrunMergeBaseSha,
+  ) => string = readScopeOverrunMergeBaseForRepo,
 ): PreMergeReadinessReport {
   const args = parseArgs(argv);
   // --help used to exit from inside the parseArgs token loop; relocated
@@ -1338,7 +1361,7 @@ export function collectPreMergeReadiness(
         headSha: prHeadSha,
         baseRefName,
         readMergeBaseSha: () =>
-          resolveScopeOverrunMergeBase(baseRefName, prHeadSha),
+          resolveScopeOverrunMergeBase(owner, repo, baseRefName, prHeadSha),
         changedFiles,
         renamedFromPaths: port.listChangeRequestRenamedFromPaths(
           args.prNumber as number,

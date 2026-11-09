@@ -41,6 +41,7 @@ import {
   mentionsIssue,
   normalizeStatusCheckRollupEntry,
   parseArgs,
+  readScopeOverrunMergeBaseForRepo,
   readScopeOverrunMergeBaseSha,
   renderCliUsageError,
   resolveDeclarationActiveSince,
@@ -272,6 +273,19 @@ function scopeOverrunInput(
     ...overrides,
   };
 }
+
+test('scope-overrun merge base refuses a target repository that the checkout origin does not name', () => {
+  assert.throws(
+    () =>
+      readScopeOverrunMergeBaseForRepo(
+        'not-this-owner',
+        'not-this-repo',
+        'main',
+        'a'.repeat(40),
+      ),
+    /does not name the target repository/u,
+  );
+});
 
 test('scope-overrun merge-base uses the PR base ref and fails closed on missing refs', () => {
   const workingDirectory = mkdtempSync(
@@ -581,7 +595,9 @@ test('collectPreMergeReadiness adds a blocker for an overrun without valid evide
       () => port,
       () => ({ trustedMarkerActors: ['kurone-kito', 'maintainer'] }) as never,
       undefined,
-      (baseRefName, headSha) => {
+      (owner, repo, baseRefName, headSha) => {
+        assert.equal(owner, 'o');
+        assert.equal(repo, 'r');
         assert.equal(baseRefName, 'main');
         assert.equal(headSha, 'a'.repeat(40));
         return 'b'.repeat(40);
