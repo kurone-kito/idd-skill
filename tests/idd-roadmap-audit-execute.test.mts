@@ -350,6 +350,31 @@ test('roadmap close stays blocked while any descendant decision is unconfirmed o
       'potentially affected merged downstream work: https://github.com/acme/repo/pull/203',
     ),
   );
+
+  // A refused replay keeps no decisions, but still names the verified work it read.
+  const refused = readyReport();
+  refused.nodes = refused.nodes.map((entry) =>
+    entry.number === 1047
+      ? {
+          ...entry,
+          provisionalDecisionState: {
+            valid: false,
+            hasRecords: true,
+            status: 'invalid',
+            hasRework: false,
+            decisions: [],
+            issues: ['source-binding-mismatch'],
+            verifiedWorkReferences: ['https://github.com/acme/repo/pull/203'],
+          },
+        }
+      : entry,
+  );
+  const refusedBlockers = evaluateRoadmapAuditGates(refused);
+  assert.ok(
+    refusedBlockers[0]?.detail.includes(
+      'potentially affected merged downstream work: https://github.com/acme/repo/pull/203',
+    ),
+  );
 });
 
 test('an open execution child becomes an open-child blocker with provenance', () => {

@@ -160,15 +160,23 @@ export function evaluateRoadmapAuditGates(report, options = {}) {
     .sort((left, right) => left.number - right.number);
   for (const node of provisionalSources) {
     const evidence = node.provisionalDecisionState;
-    const affectedWorkReferences = evidence?.decisions
-      .filter(
-        (decision) =>
-          (decision.status === 'rework-requested' ||
-            decision.status === 'rework-authored') &&
-          typeof decision.workReference === 'string',
-      )
-      .map((decision) => decision.workReference)
-      .sort();
+    // A refused replay keeps its decisions empty, so the verified merged work
+    // it read is reported from the evidence itself, as the readiness gate does.
+    const affectedWorkReferences = [
+      ...new Set([
+        ...(evidence?.decisions
+          .filter(
+            (decision) =>
+              (decision.status === 'rework-requested' ||
+                decision.status === 'rework-authored') &&
+              typeof decision.workReference === 'string',
+          )
+          .map((decision) => decision.workReference) ?? []),
+        ...(evidence?.valid === false
+          ? (evidence.verifiedWorkReferences ?? [])
+          : []),
+      ]),
+    ].sort();
     const impactDetail =
       evidence?.hasRework || evidence?.valid === false
         ? affectedWorkReferences && affectedWorkReferences.length > 0
