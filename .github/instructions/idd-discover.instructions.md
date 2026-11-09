@@ -414,15 +414,15 @@ From A2, keep only issues that satisfy **all** of the following:
 - No configured authoring label
 - No open dependent issues (parent epics / aggregate issues that are
   still open are acceptable)
-- All dependency issues are closed or otherwise completed. Two forms:
-  (a) visible `Blocked by #NNN` lines — an open or unresolvable
-  reference is treated as blocked (fail-safe); (b) hidden
-  `<!-- idd-skill-blocked-by: {roadmap-id} -->` markers —
-  find the issue whose body contains a matching
-  `<!-- idd-skill-roadmap-id: {roadmap-id} -->`; treat as
-  blocked if that issue is open, if no issue matches (fail-safe — a
-  migration integrity problem such as a typo, deleted issue, or
-  incomplete migration), or if any matching issue is open.
+- Dependencies close or prove completion. An open
+  `Blocked by #NNN` passes only if its `status:needs-decision` source
+  has no human/authoring hold, and its edge rationale starts “For the
+  edge `Blocked by #NNN`, ... The blocked criterion is {criterion}. The
+  evidence is {evidence}”; trusted replay exactly matches
+  `{criterion}` with `decisionIssue` enabled. Human approval, rework,
+  missing/ambiguous proof, open `Depends on` or unresolved refs block. Hidden
+  `<!-- idd-skill-blocked-by: {roadmap-id} -->` markers
+  block if unmatched or a match is open.
 - Defer-source origin: a body with a
   `<!-- idd-skill-authoring-defer-source: ... -->` marker
   is blocked while its single `Refs #NNN` origin issue is open; a missing,

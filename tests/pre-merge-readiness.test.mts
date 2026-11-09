@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
@@ -26,6 +29,7 @@ import {
   renderForcedHandoffComment,
   renderOutOfLoopMarker,
   renderReviewReplyStamp,
+  renderScopeOverrunRecordComment,
   renderUnclaimedByMarker,
 } from '../src/scripts/marker-helpers.mts';
 import {
@@ -37,10 +41,14 @@ import {
   mentionsIssue,
   normalizeStatusCheckRollupEntry,
   parseArgs,
+  readRepositoryContentAtRef,
+  readScopeOverrunMergeBaseForRepo,
+  readScopeOverrunMergeBaseSha,
   renderCliUsageError,
   resolveDeclarationActiveSince,
   resolveDeferMarkerPrefix,
   resolveEligibleCodeownerUserLogins,
+  resolveScopeOverrunReadiness,
   resolveToleratedGhFailure,
 } from '../src/scripts/pre-merge-readiness.mts';
 import {
@@ -85,7 +93,7 @@ import {
   summarizeReviewThreadsForGate,
 } from '../src/scripts/protocol-helpers.mts';
 import {
-  createFakeProviderAdapter,
+  createFakeProviderAdapter as createFakeProviderAdapterImpl,
   type FakeProviderFixture,
 } from '../src/scripts/provider-adapter-fake.mts';
 import { GH_SEARCH_RESULT_CAP } from '../src/scripts/provider-adapter-github.mts';
@@ -94,12 +102,33 @@ import type {
   ProviderPort,
   ProviderReviewClauseNode,
 } from '../src/scripts/provider-port.mts';
+
 import {
   computeClosingSetEvidence,
   findStrayCommitCloses,
 } from '../src/scripts/supersession-detection.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
 import { readJson, stubExecutable } from './test-utils.mts';
+
+function createFakeProviderAdapter(fixture: FakeProviderFixture): ProviderPort {
+  const port = createFakeProviderAdapterImpl(fixture);
+  return {
+    ...port,
+    getWorkItem(number) {
+      return (
+        port.getWorkItem(number) ??
+        (number === 7
+          ? {
+              number,
+              title: 'Fixture claim issue',
+              body: 'This fixture has no effort overrun.',
+              state: 'OPEN',
+            }
+          : null)
+      );
+    },
+  };
+}
 
 const readinessSchema = loadJson('schemas/pre-merge-readiness.schema.json');
 
@@ -197,6 +226,698 @@ for (const fixtureName of [
     assert.deepEqual(validate(summary, readinessSchema), []);
   });
 }
+
+const SCOPE_OVERRUN_HEAD = 'a'.repeat(40);
+const SCOPE_OVERRUN_FILES = Array.from(
+  { length: 9 },
+  (_, index) => `src/overrun-${index + 1}.mts`,
+);
+
+function scopeOverrunIssue(candidateFiles: readonly string[]) {
+  return {
+    number: 4676,
+    title: 'feat: split an over-scoped change',
+    body: [
+      'Implement the claimed change.',
+      '',
+      '## Candidate files',
+      '',
+      ...candidateFiles.map((path) => `- \`${path}\``),
+      '',
+      '## Acceptance Criteria',
+      '',
+      '- Keep the work reviewable.',
+      '',
+      '<!-- idd-skill-effort: M -->',
+    ].join('\n'),
+  };
+}
+
+function scopeOverrunInput(
+  overrides: Partial<Parameters<typeof resolveScopeOverrunReadiness>[0]> = {},
+) {
+  return {
+    issue: scopeOverrunIssue(SCOPE_OVERRUN_FILES),
+    pullRequestNumber: 9001,
+    headSha: SCOPE_OVERRUN_HEAD,
+    baseRefName: 'main',
+    readMergeBaseSha: () => SCOPE_OVERRUN_HEAD,
+    changedFiles: SCOPE_OVERRUN_FILES,
+    renamedFromPaths: [],
+    comments: [],
+    markerPrefix: 'idd-skill',
+    trustedMarkerLogins: ['maintainer'],
+    currentRepo: 'kurone-kito/idd-skill',
+    policyConfig: {},
+    readCurrentBranch: () => 'issue/4676-scope-overrun',
+    readBaseFile: () => ({ outcome: 'not-found' as const }),
+    ...overrides,
+  };
+}
+
+test('scope-overrun merge base refuses a target repository that the checkout origin does not name', () => {
+  assert.throws(
+    () =>
+      readScopeOverrunMergeBaseForRepo(
+        'not-this-owner',
+        'not-this-repo',
+        'main',
+        'a'.repeat(40),
+      ),
+    /does not name the target repository/u,
+  );
+});
+
+test('scope-overrun base reads treat a directory or submodule entry as absent, and fail closed on the sync manifest', () => {
+  const portWith = (value: unknown) =>
+    ({ getRepositoryContentAtRef: () => value }) as unknown as ProviderPort;
+  assert.deepEqual(
+    readRepositoryContentAtRef(
+      portWith([{ type: 'file' }]),
+      'o',
+      'r',
+      'src',
+      'b',
+    ),
+    { outcome: 'not-found' },
+  );
+  assert.deepEqual(
+    readRepositoryContentAtRef(
+      portWith({ type: 'submodule', sha: 'c'.repeat(40) }),
+      'o',
+      'r',
+      'vendor/lib',
+      'b',
+    ),
+    { outcome: 'not-found' },
+  );
+  assert.deepEqual(
+    readRepositoryContentAtRef(
+      portWith({ type: 'file', content: 'YQ==' }),
+      'o',
+      'r',
+      'src/a.mts',
+      'b',
+    ),
+    { outcome: 'ok', value: 'YQ==' },
+  );
+  assert.throws(
+    () =>
+      readRepositoryContentAtRef(
+        portWith([{ type: 'file' }]),
+        'o',
+        'r',
+        'audit/sync-manifest.json',
+        'b',
+      ),
+    /malformed repository content/u,
+  );
+});
+
+test('scope-overrun merge-base uses the PR base ref and fails closed on missing refs', () => {
+  const workingDirectory = mkdtempSync(
+    join(tmpdir(), 'idd-scope-overrun-merge-base-'),
+  );
+  // An inherited GIT_DIR (set under a hook, for example) would point the
+  // fixture commands and the reader at the real checkout. Drop GIT_* for this
+  // test only, and restore it in the finally block.
+  const inheritedGitEnv = Object.fromEntries(
+    Object.entries(process.env).filter(([key]) => key.startsWith('GIT_')),
+  );
+  for (const key of Object.keys(inheritedGitEnv)) delete process.env[key];
+  try {
+    const git = (args: string[]) =>
+      execFileSync('git', args, { cwd: workingDirectory });
+    git(['init', '--quiet']);
+    git(['config', 'commit.gpgsign', 'false']);
+    git(['config', 'user.name', 'IDD test']);
+    git(['config', 'user.email', 'idd-test@example.invalid']);
+    writeFileSync(join(workingDirectory, 'base.txt'), 'base\n');
+    git(['add', 'base.txt']);
+    git(['commit', '--quiet', '--no-verify', '-m', 'base']);
+    const baseSha = git(['rev-parse', 'HEAD']).toString('utf8').trim();
+    writeFileSync(join(workingDirectory, 'head.txt'), 'head\n');
+    git(['add', 'head.txt']);
+    git(['commit', '--quiet', '--no-verify', '-m', 'head']);
+    const headSha = git(['rev-parse', 'HEAD']).toString('utf8').trim();
+    git(['update-ref', 'refs/remotes/origin/release/main', baseSha]);
+
+    assert.equal(
+      readScopeOverrunMergeBaseSha('release/main', headSha, workingDirectory),
+      baseSha,
+    );
+    assert.throws(
+      () => readScopeOverrunMergeBaseSha('missing', headSha, workingDirectory),
+      /scope-overrun audit cannot resolve the PR merge base/u,
+    );
+  } finally {
+    Object.assign(process.env, inheritedGitEnv);
+    rmSync(workingDirectory, { recursive: true, force: true });
+  }
+});
+
+function scopeOverrunRecordComment(options: {
+  candidateFiles?: readonly string[];
+  pullRequestNumber?: number;
+  branch?: string;
+  headSha?: string;
+  prePush?: boolean;
+  lastEditedAt?: string | null;
+  authorLogin?: string;
+}) {
+  const body = renderScopeOverrunRecordComment({
+    markerPrefix: 'idd-skill',
+    agentId: 'codex-test',
+    issueNumber: 4676,
+    effort: 'M',
+    candidateFiles: options.candidateFiles ?? SCOPE_OVERRUN_FILES,
+    ...(options.prePush
+      ? {}
+      : {
+          pullRequestNumber: options.pullRequestNumber ?? 9001,
+          branch: options.branch ?? 'issue/4676-scope-overrun',
+          headSha: options.headSha ?? SCOPE_OVERRUN_HEAD,
+        }),
+  });
+  return {
+    id: '42',
+    createdAt: '2026-11-07T12:00:00Z',
+    body,
+    authorLogin: options.authorLogin ?? 'maintainer',
+    lastEditedAt: options.lastEditedAt ?? null,
+  };
+}
+
+function scopeOverrunDecisionComment(headSha: string) {
+  return {
+    id: '43',
+    createdAt: '2026-11-07T12:05:00Z',
+    body: `Scope decision: accept head ${headSha}`,
+    authorLogin: 'maintainer',
+    lastEditedAt: null,
+  };
+}
+
+test('pre-merge readiness scope overrun ignores generated sync targets and banners', () => {
+  const changedFiles = [
+    ...Array.from({ length: 7 }, (_, index) => `src/file-${index + 1}.mts`),
+    'docs/generated-copy.md',
+    'scripts/generated.mjs',
+  ];
+  const manifest = Buffer.from(
+    JSON.stringify({
+      syncPairs: [{ target: 'docs/generated-copy.md', mode: 'exact' }],
+    }),
+  ).toString('base64');
+  const generated = Buffer.from(
+    '// idd-generated-from: src/generated.mts\nexport {};\n',
+  ).toString('base64');
+  const result = resolveScopeOverrunReadiness(
+    scopeOverrunInput({
+      issue: scopeOverrunIssue(['src/already-listed.mts']),
+      changedFiles,
+      readBaseFile: (path) =>
+        path === 'audit/sync-manifest.json'
+          ? { outcome: 'ok', value: manifest }
+          : path === 'scripts/generated.mjs'
+            ? { outcome: 'ok', value: generated }
+            : { outcome: 'not-found' },
+    }),
+  );
+  assert.equal(result, null);
+});
+
+test('pre-merge readiness blocks an overrun without scope evidence', () => {
+  const result = resolveScopeOverrunReadiness(scopeOverrunInput());
+  assert.deepEqual(result, {
+    status: 'missing',
+    reason: 'no-record',
+    recordedHeadSha: null,
+  });
+});
+
+test('pre-merge readiness holds a current post-push record until the owner decides', () => {
+  const comment = scopeOverrunRecordComment({});
+  const result = resolveScopeOverrunReadiness(
+    scopeOverrunInput({ comments: [comment] }),
+  );
+  assert.deepEqual(result, {
+    status: 'invalid',
+    reason: 'no-decision',
+    recordedHeadSha: SCOPE_OVERRUN_HEAD,
+  });
+});
+
+test('pre-merge readiness accepts a post-push record once a trusted owner decision names its head', () => {
+  const decision = {
+    id: '43',
+    createdAt: '2026-11-07T12:05:00Z',
+    body: `Scope decision: accept head ${SCOPE_OVERRUN_HEAD}`,
+    authorLogin: 'maintainer',
+    lastEditedAt: null,
+  };
+  const result = resolveScopeOverrunReadiness(
+    scopeOverrunInput({ comments: [scopeOverrunRecordComment({}), decision] }),
+  );
+  assert.deepEqual(result, {
+    status: 'valid',
+    reason: 'accepted',
+    recordedHeadSha: SCOPE_OVERRUN_HEAD,
+  });
+});
+
+test('pre-merge readiness preserves scope evidence after the issue body no longer overruns', () => {
+  const issue = scopeOverrunIssue(['src/current.mts']);
+  issue.body = issue.body.replace('\n<!-- idd-skill-effort: M -->', '');
+  const result = resolveScopeOverrunReadiness(
+    scopeOverrunInput({
+      issue,
+      changedFiles: [],
+      comments: [
+        scopeOverrunRecordComment({}),
+        scopeOverrunDecisionComment(SCOPE_OVERRUN_HEAD),
+      ],
+    }),
+  );
+  assert.equal(result?.status, 'invalid');
+  assert.equal(result?.reason, 'record-conflict');
+});
+
+test('pre-merge readiness scope audit accepts both paths of a renamed PR file', () => {
+  const restore = stubExecutable('gh', FORCED_HANDOFF_GH_STUB);
+  try {
+    const base = forcedHandoffMergeFakePort({
+      scope: 'issue-plus-pr',
+      earlierLinkedPr: false,
+      linkedLookupFails: false,
+    });
+    const oldPath = SCOPE_OVERRUN_FILES[0] as string;
+    const renamedPath = 'src/renamed-target.mts';
+    const currentFiles = [
+      ...SCOPE_OVERRUN_FILES.filter((path) => path !== oldPath),
+      renamedPath,
+    ];
+    const expectedCanonicalFiles = [...currentFiles, oldPath];
+    const port: ProviderPort = {
+      ...base,
+      getWorkItem: (number) =>
+        number === 7
+          ? {
+              number,
+              title: scopeOverrunIssue(SCOPE_OVERRUN_FILES).title,
+              body: scopeOverrunIssue(SCOPE_OVERRUN_FILES).body,
+              state: 'OPEN',
+            }
+          : base.getWorkItem(number),
+      getChangeRequestHeadRef: () => 'issue/7-task',
+      listChangeRequestChangedFiles: () => currentFiles,
+      listChangeRequestRenamedFromPaths: () => [oldPath],
+      listWorkItemComments: (number, options) => {
+        const comments = base.listWorkItemComments(number, options);
+        return number === 7
+          ? [
+              ...comments,
+              {
+                id: 45,
+                createdAt: '2026-05-12T10:30:00Z',
+                updatedAt: '2026-05-12T10:30:00Z',
+                body: renderScopeOverrunRecordComment({
+                  markerPrefix: 'idd-skill',
+                  agentId: 'codex-test',
+                  issueNumber: 7,
+                  effort: 'M',
+                  candidateFiles: expectedCanonicalFiles,
+                  pullRequestNumber: 1,
+                  branch: 'issue/7-task',
+                  headSha: 'a'.repeat(40),
+                }),
+                authorLogin: 'maintainer',
+                lastEditedAt: null,
+              },
+              {
+                id: 46,
+                createdAt: '2026-05-12T10:31:00Z',
+                updatedAt: '2026-05-12T10:31:00Z',
+                body: `Scope decision: accept head ${'a'.repeat(40)}`,
+                authorLogin: 'maintainer',
+                lastEditedAt: null,
+              },
+            ]
+          : comments;
+      },
+      getRepositoryContentAtRef: () => null,
+    };
+    const report = collectPreMergeReadiness(
+      [
+        '--pr',
+        '1',
+        '--claim-issue',
+        '7',
+        '--claim-id',
+        'scope-test',
+        '--owner',
+        'o',
+        '--repo',
+        'r',
+        '--now',
+        '2026-05-12T11:00:00Z',
+      ],
+      () => port,
+      () => ({ trustedMarkerActors: ['kurone-kito', 'maintainer'] }) as never,
+      undefined,
+      () => 'b'.repeat(40),
+    );
+
+    assert.equal(report.claim.scopeOverrun?.status, 'valid');
+    assert.equal(report.claim.scopeOverrun?.recordedHeadSha, 'a'.repeat(40));
+    assert.equal(
+      (report.blockers as Array<{ gate: string }>).some(
+        (blocker) => blocker.gate === 'scope-overrun',
+      ),
+      false,
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('collectPreMergeReadiness adds a blocker for an overrun without valid evidence', () => {
+  const restore = stubExecutable('gh', FORCED_HANDOFF_GH_STUB);
+  try {
+    const base = forcedHandoffMergeFakePort({
+      scope: 'issue-plus-pr',
+      earlierLinkedPr: false,
+      linkedLookupFails: false,
+    });
+    const encodedPaths: string[] = [];
+    const scopeBaseRefs: string[] = [];
+    const changedFiles = ['src/odd?#.mts', ...SCOPE_OVERRUN_FILES.slice(1)];
+    const port: ProviderPort = {
+      ...base,
+      getWorkItem: (number) =>
+        number === 7
+          ? {
+              number,
+              title: scopeOverrunIssue(SCOPE_OVERRUN_FILES).title,
+              body: scopeOverrunIssue(SCOPE_OVERRUN_FILES).body,
+              state: 'OPEN',
+            }
+          : base.getWorkItem(number),
+      listChangeRequestChangedFiles: () => changedFiles,
+      getRepositoryContentAtRef: (owner, repo, path, ref) => {
+        encodedPaths.push(path);
+        if (path === 'audit/sync-manifest.json' || path.includes('odd')) {
+          scopeBaseRefs.push(ref);
+        }
+        return base.getRepositoryContentAtRef(owner, repo, path, ref);
+      },
+    };
+    const report = collectPreMergeReadiness(
+      [
+        '--pr',
+        '1',
+        '--claim-issue',
+        '7',
+        '--claim-id',
+        'scope-test',
+        '--owner',
+        'o',
+        '--repo',
+        'r',
+        '--now',
+        '2026-05-12T11:00:00Z',
+      ],
+      () => port,
+      () => ({ trustedMarkerActors: ['kurone-kito', 'maintainer'] }) as never,
+      undefined,
+      (owner, repo, baseRefName, headSha) => {
+        assert.equal(owner, 'o');
+        assert.equal(repo, 'r');
+        assert.equal(baseRefName, 'main');
+        assert.equal(headSha, 'a'.repeat(40));
+        return 'b'.repeat(40);
+      },
+    );
+    assert.deepEqual(report.claim.scopeOverrun, {
+      status: 'missing',
+      reason: 'no-record',
+      recordedHeadSha: null,
+    });
+    assert.equal(
+      (report.blockers as Array<{ gate: string }>).some(
+        (blocker) => blocker.gate === 'scope-overrun',
+      ),
+      true,
+    );
+    assert.equal(report.ready, false);
+    assert.ok(encodedPaths.includes('src/odd%3F%23.mts'));
+    assert.deepEqual(scopeBaseRefs, ['b'.repeat(40), 'b'.repeat(40)]);
+
+    const validPort: ProviderPort = {
+      ...port,
+      getChangeRequestHeadRef: () => 'issue/7-task',
+      listWorkItemComments: (number, options) => {
+        const comments = port.listWorkItemComments(number, options);
+        return number === 7
+          ? [
+              ...comments,
+              {
+                id: 44,
+                createdAt: '2026-05-12T10:30:00Z',
+                updatedAt: '2026-05-12T10:30:00Z',
+                body: renderScopeOverrunRecordComment({
+                  markerPrefix: 'idd-skill',
+                  agentId: 'codex-test',
+                  issueNumber: 7,
+                  effort: 'M',
+                  candidateFiles: changedFiles,
+                  pullRequestNumber: 1,
+                  branch: 'issue/7-task',
+                  headSha: 'a'.repeat(40),
+                }),
+                authorLogin: 'maintainer',
+                lastEditedAt: null,
+              },
+              {
+                id: 46,
+                createdAt: '2026-05-12T10:31:00Z',
+                updatedAt: '2026-05-12T10:31:00Z',
+                body: `Scope decision: accept head ${'a'.repeat(40)}`,
+                authorLogin: 'maintainer',
+                lastEditedAt: null,
+              },
+            ]
+          : comments;
+      },
+    };
+    const validReport = collectPreMergeReadiness(
+      [
+        '--pr',
+        '1',
+        '--claim-issue',
+        '7',
+        '--claim-id',
+        'scope-test',
+        '--owner',
+        'o',
+        '--repo',
+        'r',
+        '--now',
+        '2026-05-12T11:00:00Z',
+      ],
+      () => validPort,
+      () => ({ trustedMarkerActors: ['kurone-kito', 'maintainer'] }) as never,
+      undefined,
+      () => 'b'.repeat(40),
+    );
+    assert.equal(validReport.claim.scopeOverrun?.status, 'valid');
+    assert.equal(
+      validReport.claim.scopeOverrun?.recordedHeadSha,
+      'a'.repeat(40),
+    );
+    assert.equal(
+      (validReport.blockers as Array<{ gate: string }>).some(
+        (blocker) => blocker.gate === 'scope-overrun',
+      ),
+      false,
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('computePreMergeReadinessBlockers carries scope-overrun evidence into F3', () => {
+  const report = {
+    prHeadSha: SCOPE_OVERRUN_HEAD,
+    claim: {
+      scopeOverrun: {
+        status: 'missing',
+        reason: 'no-record',
+        recordedHeadSha: null,
+      },
+    },
+  };
+  const scopeBlockers = (value: Record<string, unknown>) =>
+    computePreMergeReadinessBlockers(value).filter(
+      (blocker) => blocker.gate === 'scope-overrun',
+    );
+
+  assert.deepEqual(scopeBlockers(report), [
+    { gate: 'scope-overrun', detail: 'scope overrun missing: no-record' },
+  ]);
+  assert.deepEqual(
+    scopeBlockers({
+      ...report,
+      claim: {
+        scopeOverrun: {
+          status: 'valid',
+          reason: 'accepted',
+          recordedHeadSha: SCOPE_OVERRUN_HEAD,
+        },
+      },
+    }),
+    [],
+  );
+  assert.deepEqual(scopeBlockers({ prHeadSha: SCOPE_OVERRUN_HEAD }), []);
+});
+
+test('collectPreMergeReadiness blocks when a claimed issue is unreadable', () => {
+  const restore = stubExecutable('gh', FORCED_HANDOFF_GH_STUB);
+  try {
+    const base = forcedHandoffMergeFakePort({
+      scope: 'issue-plus-pr',
+      earlierLinkedPr: false,
+      linkedLookupFails: false,
+    });
+    const port: ProviderPort = {
+      ...base,
+      getWorkItem: () => null,
+    };
+    const report = collectPreMergeReadiness(
+      [
+        '--pr',
+        '1',
+        '--claim-issue',
+        '7',
+        '--claim-id',
+        'scope-test',
+        '--owner',
+        'o',
+        '--repo',
+        'r',
+        '--now',
+        '2026-05-12T11:00:00Z',
+      ],
+      () => port,
+      () => ({ trustedMarkerActors: ['kurone-kito'] }) as never,
+    );
+
+    assert.deepEqual(report.claim.scopeOverrun, {
+      status: 'invalid',
+      reason: 'issue-unreadable',
+      recordedHeadSha: null,
+    });
+    assert.equal(report.ready, false);
+    assert.ok(
+      (report.blockers as Array<{ gate: string }>).some(
+        (blocker) => blocker.gate === 'scope-overrun',
+      ),
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('pre-merge readiness rejects edited and mismatched post-push records', () => {
+  const edited = resolveScopeOverrunReadiness(
+    scopeOverrunInput({
+      comments: [
+        scopeOverrunRecordComment({ lastEditedAt: '2026-11-07T12:01:00Z' }),
+      ],
+    }),
+  );
+  assert.equal(edited?.status, 'invalid');
+  assert.equal(edited?.reason, 'record-edited-or-unknown');
+
+  const wrongPr = resolveScopeOverrunReadiness(
+    scopeOverrunInput({
+      comments: [
+        scopeOverrunRecordComment({ pullRequestNumber: 9002 }),
+        scopeOverrunDecisionComment(SCOPE_OVERRUN_HEAD),
+      ],
+    }),
+  );
+  assert.equal(wrongPr?.status, 'invalid');
+  assert.equal(wrongPr?.reason, 'record-conflict');
+
+  const staleHead = resolveScopeOverrunReadiness(
+    scopeOverrunInput({
+      headSha: 'b'.repeat(40),
+      comments: [
+        scopeOverrunRecordComment({}),
+        scopeOverrunDecisionComment(SCOPE_OVERRUN_HEAD),
+      ],
+    }),
+  );
+  assert.equal(staleHead?.status, 'invalid');
+  assert.equal(staleHead?.reason, 'current-head-mismatch');
+
+  const untrusted = resolveScopeOverrunReadiness(
+    scopeOverrunInput({
+      comments: [scopeOverrunRecordComment({ authorLogin: 'untrusted' })],
+    }),
+  );
+  assert.equal(untrusted?.status, 'invalid');
+  assert.equal(untrusted?.reason, 'record-untrusted');
+
+  const prePush = resolveScopeOverrunReadiness(
+    scopeOverrunInput({
+      comments: [
+        scopeOverrunRecordComment({ prePush: true }),
+        scopeOverrunDecisionComment(SCOPE_OVERRUN_HEAD),
+      ],
+    }),
+  );
+  assert.equal(prePush?.status, 'invalid');
+  assert.equal(prePush?.reason, 'pre-push-record-has-no-head');
+
+  const malformed = resolveScopeOverrunReadiness(
+    scopeOverrunInput({
+      comments: [
+        {
+          id: '43',
+          createdAt: '2026-11-07T12:00:00Z',
+          body: '<!-- idd-skill-scope-overrun: malformed -->',
+          authorLogin: 'maintainer',
+          lastEditedAt: null,
+        },
+      ],
+    }),
+  );
+  assert.equal(malformed?.status, 'invalid');
+  assert.equal(malformed?.reason, 'record-malformed');
+});
+
+test('pre-merge readiness schema validates scope-overrun evidence', () => {
+  const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
+  const summary = buildPreMergeReadinessSummary(fixture.input, fixture.options);
+  assert.deepEqual(
+    validate(
+      {
+        ...summary,
+        claim: Object.assign({}, summary.claim, {
+          scopeOverrun: {
+            status: 'valid',
+            reason: 'accepted',
+            recordedHeadSha: SCOPE_OVERRUN_HEAD,
+          },
+        }),
+      },
+      readinessSchema,
+    ),
+    [],
+  );
+});
 
 test('pre-merge readiness schema keeps UTC timestamps strict', () => {
   const cleanFixture = readJson('fixtures/pre-merge-readiness/clean.json');
