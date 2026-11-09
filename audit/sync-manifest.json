@@ -409,7 +409,7 @@
       "files": [
         ".github/instructions/lite/idd-pr-submit-lite.instructions.md"
       ],
-      "limitBytes": 26000
+      "limitBytes": 27300
     },
     {
       "id": "bundle-review-fix-lite",
@@ -496,6 +496,12 @@
         "limitBytes": 26000,
         "issue": 5030,
         "reason": "The operator approved this limit for bundle-work-lite in issue #5030 comment #6706528642. The corrected pre-change generated measurement is 23,596 bytes per comment #6706762777. Issue #5092 brings the current banner-stripped bundle to 24,599 bytes, leaving 1,401 bytes of headroom (5.39%) at 94.61% utilization, below the 95% notice band. The shared 98% enforcement and 196,000-byte maximum remain unchanged."
+      },
+      {
+        "bundle": "bundle-pr-submit-lite",
+        "limitBytes": 27300,
+        "issue": 5092,
+        "reason": "The operator approved this raise in the #5092 takeover session so that lite D2 step 3 can publish a corrected-scope assessment SHA through claimed-push, as the lite B3 S-to-M correction requires. Before the change the bundle measured 25,397 of 26,000 bytes (97.7%), leaving 83 bytes, so the required step cannot fit without a raise. After the change it measures 25,905 bytes; 27,300 keeps utilization at 94.9%, under the 95% notice band."
       },
       {
         "bundle": "bundle-orchestrator-phase",
