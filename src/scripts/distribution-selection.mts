@@ -713,6 +713,138 @@ function filesMatchAtRoot(
   }
 }
 
+const SKILL_DISPATCHER_INSTRUCTION = 'user-global/skill-entry.md';
+
+/** Read the single-scalar skill name while preserving the original frontmatter. */
+function skillFrontmatter(text: string, expectedName: string): string | null {
+  const frontmatter = /^\uFEFF?---\r?\n(?:[\s\S]*?\r?\n)?---\r?\n/u.exec(
+    text,
+  )?.[0];
+  if (frontmatter === undefined) return null;
+
+  const inner = frontmatter
+    .replace(/^\uFEFF?---\r?\n/u, '')
+    .replace(/\r?\n---\r?\n$/u, '');
+  const fields = new Set<string>();
+  let foundName: string | null = null;
+  for (const line of inner.split(/\r?\n/u)) {
+    if (line.trim() === '' || line.startsWith('#')) continue;
+    // A YAML mapping entry needs a space after its colon. `name:value` is a
+    // single plain scalar, so it must not be read as a name field.
+    const field = /^([A-Za-z][A-Za-z0-9_-]*):(?:[ \t]+(.*))?$/u.exec(line);
+    if (field === null || fields.has(field[1])) return null;
+    fields.add(field[1]);
+    if (field[1] === 'name') {
+      // The current dispatcher contract uses a plain scalar name. Reject
+      // quoted, collection, empty, and duplicate values instead of guessing.
+      const value = field[2] ?? '';
+      if (!/^[a-z][a-z0-9-]*$/u.test(value)) return null;
+      foundName = value;
+    }
+  }
+  return foundName === expectedName ? frontmatter : null;
+}
+
+function losslessUtf8(bytes: Buffer): string | null {
+  const text = bytes.toString('utf8');
+  return Buffer.from(text, 'utf8').equals(bytes) ? text : null;
+}
+
+/** Render the stable dispatcher written from one prepared skill bundle. */
+function renderSkillDispatcher(
+  sourceBytes: Buffer,
+  templateBytes: Buffer,
+  skillName: string,
+  bundleDigest: string,
+): string | null {
+  if (!/^sha256:[0-9a-f]{64}$/u.test(bundleDigest)) return null;
+  const sourceText = losslessUtf8(sourceBytes);
+  const templateText = losslessUtf8(templateBytes);
+  if (sourceText === null || templateText === null) return null;
+  const frontmatter = skillFrontmatter(sourceText, skillName);
+  if (frontmatter === null) return null;
+  const body = templateText.trim();
+  // A blank template would render a dispatcher with no instructions.
+  if (body === '') return null;
+  return `${frontmatter}\n${body}\n\n<!-- idd-skill-bundle: ${bundleDigest} -->\n`;
+}
+
+/**
+ * Return the manifest-backed files one installed skill root must contain.
+ * New sets install a single rendered dispatcher; old sets keep their full
+ * copied bundle. A missing prepared SKILL.md can still route to the explicit
+ * preparation recovery state when its receipt-owned installed dispatcher
+ * proves the manifest bundle digest and template contract.
+ */
+function expectedGlobalSkillFiles(
+  ctx: SelectionContext,
+  current: CurrentLink,
+  set: PreparedSet,
+  globalSkillRoot: string,
+  name: string,
+  bundle: JsonObject,
+  dispatcher: ComponentFile | undefined,
+): readonly ComponentFile[] | null {
+  if (!Array.isArray(bundle.files)) return null;
+  const bundleFiles = bundle.files as ComponentFile[];
+  if (dispatcher === undefined) return bundleFiles;
+  const bundleDigest = bundle.digest;
+  if (typeof bundleDigest !== 'string') return null;
+  const skillEntry = bundleFiles.find((file) => file.path === 'SKILL.md');
+  if (skillEntry === undefined) return null;
+
+  try {
+    const templatePath = join(current.versionRoot, dispatcher.path);
+    if (
+      checkContainment(current.versionRoot, templatePath, ctx.fs).finalKind !==
+      'file'
+    ) {
+      return null;
+    }
+    const templateBytes = readNoFollowBytes(templatePath, ctx.fs);
+    if (sha256(templateBytes) !== dispatcher.sha256) return null;
+
+    const skillPath = join(
+      set.root,
+      componentPathPrefix(`skillBundles.${name}`),
+      'SKILL.md',
+    );
+    const skillKind = checkContainment(set.root, skillPath, ctx.fs).finalKind;
+    if (skillKind === 'absent' && set.preparationMissing) {
+      const globalPath = join(globalSkillRoot, 'SKILL.md');
+      if (
+        checkContainment(globalSkillRoot, globalPath, ctx.fs).finalKind !==
+        'file'
+      ) {
+        return null;
+      }
+      const installed = readNoFollowBytes(globalPath, ctx.fs);
+      const verified = renderSkillDispatcher(
+        installed,
+        templateBytes,
+        name,
+        bundleDigest,
+      );
+      if (verified === null || !Buffer.from(verified).equals(installed))
+        return null;
+      return [{ path: 'SKILL.md', sha256: sha256(installed) }];
+    }
+    if (skillKind !== 'file') return null;
+    const skillBytes = readNoFollowBytes(skillPath, ctx.fs);
+    if (sha256(skillBytes) !== skillEntry.sha256) return null;
+    const rendered = renderSkillDispatcher(
+      skillBytes,
+      templateBytes,
+      name,
+      bundleDigest,
+    );
+    if (rendered === null) return null;
+    return [{ path: 'SKILL.md', sha256: sha256(rendered) }];
+  } catch {
+    return null;
+  }
+}
+
 function currentMatches(
   ctx: SelectionContext,
   current: CurrentLink,
@@ -735,14 +867,25 @@ function currentMatches(
   }
   const home = ctx.home;
   if (home === null) return false;
+  const dispatcher = (instructions.files as ComponentFile[]).find(
+    (file) => file.path === SKILL_DISPATCHER_INSTRUCTION,
+  );
   for (const name of ['issue-authoring', 'idd-spec-audit']) {
     const component = componentListingAt(set.manifest, `skillBundles.${name}`);
-    if (!Array.isArray(component.files)) return false;
-    const files = component.files as ComponentFile[];
     const roots = [
       join(home, '.claude', 'skills', name),
       join(home, '.agents', 'skills', name),
     ];
+    const files = expectedGlobalSkillFiles(
+      ctx,
+      current,
+      set,
+      roots[0],
+      name,
+      component,
+      dispatcher,
+    );
+    if (files === null) return false;
     if (!roots.every((root) => filesMatchAtRoot(root, files, entries, ctx.fs)))
       return false;
   }
