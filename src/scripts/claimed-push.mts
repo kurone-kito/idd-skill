@@ -31,7 +31,6 @@ import {
 } from './cli-args.mts';
 import { GENERATED_SOURCE_BANNER_PATTERN } from './consistency-helpers.mts';
 import { parseCandidateFiles } from './discover-shared-file-overlap.mts';
-import { type EffortHint, parseEffortMarker } from './effort.mts';
 import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mts';
 import { isNotDispatchedRefusal } from './github-api-refusal.mts';
 import type { HelperCliResult } from './helper-cli-runner.mts';
@@ -291,13 +290,6 @@ export interface ClaimedPushStep {
   reason: string;
   /** Non-empty on every failed step. */
   nextAction?: string;
-  /** Pre-push scope snapshot; deliberately has no PR, branch, or HEAD fields. */
-  scopeOverrun?: {
-    effort: EffortHint;
-    estimate: string;
-    candidateFiles: string[];
-    changedFiles: string[];
-  };
 }
 
 export interface ClaimedPushReport {
@@ -366,14 +358,12 @@ function failed(
   reason: string,
   nextAction: string,
   exitStatus?: number | null,
-  extra: Pick<StepOutcome, 'scopeOverrun'> = {},
 ): StepOutcome {
   return {
     status: 'failed',
     reason,
     nextAction,
     ...(exitStatus === undefined ? {} : { exitStatus }),
-    ...extra,
   };
 }
 
@@ -987,7 +977,7 @@ function readGeneratedSyncTargets(
 function readCanonicalPaths(
   ctx: Context,
   base: string,
-): Read<{ branchPoint: string; paths: string[]; changedFiles: string[] }> {
+): Read<{ branchPoint: string; paths: string[] }> {
   const worktree = ctx.worktree ?? ctx.input.cwd;
   const gitFailure = (read: GitRead & { ok: false }): Read<never> => ({
     ok: false,
@@ -1033,7 +1023,7 @@ function readCanonicalPaths(
   if (!untracked.ok) {
     return gitFailure(untracked);
   }
-  const changedFiles = [
+  const changed = [
     ...new Set([...gitPathList(diff.stdout), ...gitPathList(untracked.stdout)]),
   ].sort();
 
@@ -1042,7 +1032,7 @@ function readCanonicalPaths(
     return generatedTargets;
   }
   const paths: string[] = [];
-  for (const path of changedFiles) {
+  for (const path of changed) {
     if (generatedTargets.value.has(path)) {
       continue;
     }
@@ -1075,7 +1065,7 @@ function readCanonicalPaths(
       ),
     };
   }
-  return { ok: true, value: { branchPoint, paths, changedFiles } };
+  return { ok: true, value: { branchPoint, paths } };
 }
 
 /** The canonical `## Candidate files` section the copy leads with. */
@@ -1254,7 +1244,7 @@ function stepScope(ctx: Context): StepOutcome {
   if (!canonical.ok) {
     return canonical.failure;
   }
-  const { paths, changedFiles } = canonical.value;
+  const { paths } = canonical.value;
   const { title, body } = issue.value;
 
   // A backtick ends the bullet's code span early and a line break ends the
@@ -1321,31 +1311,10 @@ function stepScope(ctx: Context): StepOutcome {
       : []),
     counted,
   ];
-  const effort = parseEffortMarker(body, markerPrefix).value;
-  if (effort === null) {
-    return failed(
-      `${parts.join('; ')}; the issue has no coherent effort estimate for a pre-push scope record`,
-      NEXT_ACTION.stopAndReport,
-      original.result === 'fail' ? original.exitStatus : scoped.exitStatus,
-    );
-  }
   return failed(
     parts.join('; '),
     NEXT_ACTION.scopeOverrun,
     original.result === 'fail' ? original.exitStatus : scoped.exitStatus,
-    {
-      scopeOverrun: {
-        effort,
-        estimate: [
-          ...(original.result === 'fail' ? [original.detail] : []),
-          ...(scoped.result === 'fail' ? [scoped.detail] : []),
-        ]
-          .map((detail) => detail.split(';', 1)[0]?.trim() ?? detail)
-          .join('; '),
-        candidateFiles: paths,
-        changedFiles,
-      },
-    },
   );
 }
 

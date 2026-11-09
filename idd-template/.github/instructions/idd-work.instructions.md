@@ -469,18 +469,13 @@ worker-side authoring.
 `audit-authored-issue --shape child --stdin --marker-prefix {markerPrefix}`
 fails `effort-candidate-file-limit` on the issue body or with
 `## Candidate files` set to the diff's canonical paths, stop coding
-without pushing. Record via `post-idd-marker --type scope-overrun --target
-issue <n> --agent-id <id> --effort <S|M|L> --candidate-files "$CANDIDATES"
---apply` (build `CANDIDATES` argv-safely, per the guide); omit PR/branch/HEAD.
-Comment the estimate, candidate files, changed files, and a split proposal;
-use the exact `idd-agent-authored` suffix. Verify both full-history bodies,
-trusted authors, and no edits. If verification fails, keep the claim. After
-both checks pass, release per the Abort rule (`unclaimed-by`) and run
-`lost-claim-cleanup`.
-With the companion, hand it that proposal as a held split draft: it holds
-this issue, publishes a held roadmap whose children record `Split out of #<n>`,
-and comments its link; if refused, the comment stands. Never add
-needs-decision or ask a human (issue #4138).
+without pushing. Comment the estimate, candidate files, changed files,
+and a split proposal; release per the Abort rule (`unclaimed-by`); run
+`lost-claim-cleanup`. With the companion, hand it that proposal as a
+held split draft: it holds this issue, publishes a held roadmap whose
+children record `Split out of #<n>`, and comments its link; if refused,
+the comment stands. Never add needs-decision or ask a human
+([rationale](../../docs/idd-design-rationale.md#b3--scope-overrun-returns-to-authoring)).
 
 ---
 

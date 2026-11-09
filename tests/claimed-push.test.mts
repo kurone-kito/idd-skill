@@ -2007,30 +2007,6 @@ test('a body within the limit whose canonical paths exceed it fails scope in the
   assert.equal(report.pushed, false);
 });
 
-test('a pre-push overrun returns its estimate and canonical files without PR fields', () => {
-  const { code, report } = cliRun({
-    world: { [K.diff]: result(0, nulList(manyPaths(9))), [K.audit]: realAudit },
-  });
-  const scope = report.steps[2];
-  assert.equal(code, 1);
-  assert.equal(scope?.status, 'failed');
-  assert.deepEqual(scope?.scopeOverrun, {
-    effort: 'M',
-    estimate: 'effort M with 9 candidate files exceeds the limit of 8',
-    candidateFiles: manyPaths(9).sort(),
-    changedFiles: manyPaths(9).sort(),
-  });
-  assert.deepEqual(Object.keys(scope?.scopeOverrun ?? {}).sort(), [
-    'candidateFiles',
-    'changedFiles',
-    'effort',
-    'estimate',
-  ]);
-  assert.equal(report.pushed, false);
-  assert.equal(report.steps[3]?.status, 'skipped');
-  assert.equal(report.steps[5]?.status, 'skipped');
-});
-
 test('a body over the limit fails scope', () => {
   const r = run({
     world: {
@@ -2931,7 +2907,6 @@ test('readPrimaryPolicy reads the primary checkout, never the worktree copy', ()
   const worktree = join(root, 'primary.issue-1-x');
   const env = fixtureEnv();
   const homedir = makeScratch();
-  env.XDG_CONFIG_HOME = homedir;
   const identity = [
     '-c',
     'user.name=Test',

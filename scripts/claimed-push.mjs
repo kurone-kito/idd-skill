@@ -29,7 +29,6 @@ import {
 } from './cli-args.mjs';
 import { GENERATED_SOURCE_BANNER_PATTERN } from './consistency-helpers.mjs';
 import { parseCandidateFiles } from './discover-shared-file-overlap.mjs';
-import { parseEffortMarker } from './effort.mjs';
 import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mjs';
 import { isNotDispatchedRefusal } from './github-api-refusal.mjs';
 import {
@@ -181,13 +180,12 @@ function firstLine(text) {
 function withDetail(summary, detail) {
   return detail === '' ? summary : `${summary}: ${detail}`;
 }
-function failed(reason, nextAction, exitStatus, extra = {}) {
+function failed(reason, nextAction, exitStatus) {
   return {
     status: 'failed',
     reason,
     nextAction,
     ...(exitStatus === undefined ? {} : { exitStatus }),
-    ...extra,
   };
 }
 function describeEnd(what, end) {
@@ -794,7 +792,7 @@ function readCanonicalPaths(ctx, base) {
   if (!untracked.ok) {
     return gitFailure(untracked);
   }
-  const changedFiles = [
+  const changed = [
     ...new Set([...gitPathList(diff.stdout), ...gitPathList(untracked.stdout)]),
   ].sort();
   const generatedTargets = readGeneratedSyncTargets(ctx, worktree, branchPoint);
@@ -802,7 +800,7 @@ function readCanonicalPaths(ctx, base) {
     return generatedTargets;
   }
   const paths = [];
-  for (const path of changedFiles) {
+  for (const path of changed) {
     if (generatedTargets.value.has(path)) {
       continue;
     }
@@ -835,7 +833,7 @@ function readCanonicalPaths(ctx, base) {
       ),
     };
   }
-  return { ok: true, value: { branchPoint, paths, changedFiles } };
+  return { ok: true, value: { branchPoint, paths } };
 }
 /** The canonical `## Candidate files` section the copy leads with. */
 function canonicalSection(paths) {
@@ -994,7 +992,7 @@ function stepScope(ctx) {
   if (!canonical.ok) {
     return canonical.failure;
   }
-  const { paths, changedFiles } = canonical.value;
+  const { paths } = canonical.value;
   const { title, body } = issue.value;
   // A backtick ends the bullet's code span early and a line break ends the
   // bullet, so the parser would read another path, or none, for such a path.
@@ -1058,31 +1056,10 @@ function stepScope(ctx) {
       : []),
     counted,
   ];
-  const effort = parseEffortMarker(body, markerPrefix).value;
-  if (effort === null) {
-    return failed(
-      `${parts.join('; ')}; the issue has no coherent effort estimate for a pre-push scope record`,
-      NEXT_ACTION.stopAndReport,
-      original.result === 'fail' ? original.exitStatus : scoped.exitStatus,
-    );
-  }
   return failed(
     parts.join('; '),
     NEXT_ACTION.scopeOverrun,
     original.result === 'fail' ? original.exitStatus : scoped.exitStatus,
-    {
-      scopeOverrun: {
-        effort,
-        estimate: [
-          ...(original.result === 'fail' ? [original.detail] : []),
-          ...(scoped.result === 'fail' ? [scoped.detail] : []),
-        ]
-          .map((detail) => detail.split(';', 1)[0]?.trim() ?? detail)
-          .join('; '),
-        candidateFiles: paths,
-        changedFiles,
-      },
-    },
   );
 }
 /** A failed outcome when the tree is dirty or unreadable, else null. */
