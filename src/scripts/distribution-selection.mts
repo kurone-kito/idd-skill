@@ -729,15 +729,16 @@ function skillFrontmatter(text: string, expectedName: string): string | null {
   let foundName: string | null = null;
   for (const line of inner.split(/\r?\n/u)) {
     if (line.trim() === '' || line.startsWith('#')) continue;
-    // A YAML mapping entry needs a space after its colon. `name:value` is a
-    // single plain scalar, so it must not be read as a name field.
-    const field = /^([A-Za-z][A-Za-z0-9_-]*):(?:[ \t]+(.*))?$/u.exec(line);
+    // A YAML mapping entry needs a space after its colon, and every field
+    // needs a non-blank value after it. `name:value`, `description:`, and a
+    // value that is only whitespace are not mapping entries with a value.
+    const field = /^([A-Za-z][A-Za-z0-9_-]*):[ \t]+(\S.*)$/u.exec(line);
     if (field === null || fields.has(field[1])) return null;
     fields.add(field[1]);
     if (field[1] === 'name') {
       // The current dispatcher contract uses a plain scalar name. Reject
       // quoted, collection, empty, and duplicate values instead of guessing.
-      const value = field[2] ?? '';
+      const value = field[2];
       if (!/^[a-z][a-z0-9-]*$/u.test(value)) return null;
       foundName = value;
     }

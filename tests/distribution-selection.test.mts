@@ -824,6 +824,14 @@ test('malformed, non-scalar, or wrong-name frontmatter does not select a set', (
         '---\nname:issue-authoring\ndescription: No space after the colon.\n---\n\n# Bad\n',
       ),
     ],
+    [
+      'field-without-value',
+      Buffer.from('---\nname: issue-authoring\ndescription:\n---\n\n# Bad\n'),
+    ],
+    [
+      'field-with-blank-value',
+      Buffer.from('---\nname: issue-authoring\ndescription: \n---\n\n# Bad\n'),
+    ],
   ] as const;
   for (const [label, skillBytes] of cases) {
     const fixture = makeFixture();
