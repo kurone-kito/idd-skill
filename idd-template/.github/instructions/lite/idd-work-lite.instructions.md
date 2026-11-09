@@ -293,9 +293,10 @@ base owner/repo/ref; otherwise use the issue repo and live default branch.
 Pass explicit `--owner <owner> --repo <repo>` to
 `idd-effective-config --trusted-auto-decide`; add `--base-ref <base>` only for
 PRs. Require `status: readable`; the helper validates that ref's schema, and
-its auto-decide verdict does not govern split. Save the decoded
-`.github/idd/config.json` at that ref as `<target-policy>`. Read the split
-settings, parent label (`issueAuthoring.authoringLabelName`, default
+its auto-decide verdict does not govern split. Resolve the base ref once to a
+commit SHA (`<policy-sha>`) and run the check and every read at it. Save the
+decoded `.github/idd/config.json` at `<policy-sha>` as `<target-policy>`. Read
+the split settings, parent label (`issueAuthoring.authoringLabelName`, default
 `status:authoring`), and `markerPrefix` from this snapshot. Pass
 `--owner <owner> --repo <repo> --policy <target-policy>
 --marker-prefix <target-markerPrefix>` to every publisher call. Require
@@ -340,7 +341,8 @@ and route unresolved material claims under the issue-authoring contract.
 Post/read back one ordered parent proposal with current claim ID, estimate,
 candidate/changed files, and each child's exact title and full body. If POST is
 uncertain, page all parent comments and continue only if exactly one exact
-proposal exists; otherwise keep the hold and stop. On resume reconcile
+proposal exists and a trusted actor authored it; otherwise keep the hold and
+stop. On resume reconcile
 mappings with helper records/live issues; verify/skip mapped children and
 publish only unmapped proposals. Stop on conflict or unknown publication.
 Keep the parent claim/label and children held.

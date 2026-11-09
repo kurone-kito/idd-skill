@@ -487,10 +487,11 @@ base owner/repo/ref; otherwise use the issue repo and live default branch.
 Pass explicit `--owner <owner> --repo <repo>` to
 `idd-effective-config --trusted-auto-decide`; add `--base-ref <base>` only
 for a PR. Require `status: readable`; never let checkout `origin` choose
-policy. Then read
-`standingApprovals.split.enabled` and
+policy. Resolve the base ref once to a commit SHA (`<policy-sha>`) and run the
+check and every later read at that SHA, never at the branch name again. Then
+read `standingApprovals.split.enabled` and
 `standingApprovals.split.maxCandidateFiles` from `.github/idd/config.json` at
-that ref through GitHub Contents. Save its decoded contents as
+`<policy-sha>` through GitHub Contents. Save its decoded contents as
 `<target-policy>`; the helper validates that ref's schema, but its auto-decide
 verdict does not govern split. Read the parent authoring label
 (`issueAuthoring.authoringLabelName`, default `status:authoring`) and
@@ -540,7 +541,8 @@ Otherwise use the existing comment/release/stop route.
    complete ordered proposal with current claim ID, estimate, candidate and
    changed files, and each child's exact title and full body. If its POST is
    uncertain, read all parent comments and continue only if exactly one exact
-   proposal exists; otherwise keep the hold and stop. On resume reconcile the
+   proposal exists and a trusted actor authored it; otherwise keep the hold and
+   stop. On resume reconcile the
    proposal/mappings with helper records and live issues; verify/skip mapped
    children and publish only unmapped ones. Stop on conflicts or unknown
    publication. Keep parent claim/label and children held.

@@ -788,7 +788,9 @@ during review on 2026-11-08 in PR
 [#5031](https://github.com/kurone-kito/idd-skill/pull/5031). Require
 `idd-effective-config` with `--trusted-auto-decide` to report
 `status: readable`. For PRs, pass `--base-ref <base>`; omit it otherwise.
-Save the decoded `.github/idd/config.json` at that ref as `<target-policy>`;
+Resolve the base ref once to a commit SHA (`<policy-sha>`), run the check and
+every read at that SHA, and save the decoded `.github/idd/config.json` at
+`<policy-sha>` as `<target-policy>`;
 the helper validates its schema, but its auto-decide verdict does not govern
 split. Use this snapshot for split settings, the parent authoring label, and
 `markerPrefix`. Pass the resolved `--owner`, `--repo`,
@@ -829,8 +831,9 @@ recovery-hold, or uncertain child publication stops further publication, even
 when a matching held child is found; report the state and keep the parent and
 children held. A record counts only when one exact expected line is authored by
 a trusted actor and the proposal, mappings, and live held children match
-one-to-one. A failed or uncertain record stops with the parent and children
-held; on resume, verify and skip exact mappings, publishing only unmapped
+one-to-one. Each mapping comment counts only when a trusted actor authored it.
+A failed or uncertain record stops with the parent and children held; on
+resume, verify and skip exact mappings, publishing only unmapped
 proposal entries. Stop if an existing child cannot be mapped; every call
 creates a new issue ([resume finding](https://github.com/kurone-kito/idd-skill/pull/5031#discussion_r4505546659)).
 After all children
