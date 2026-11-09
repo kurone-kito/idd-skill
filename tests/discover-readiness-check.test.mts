@@ -1242,6 +1242,47 @@ test('only an exact, replay-verified provisional Blocked by criterion can procee
     closedOrdinary.ready.map((entry) => entry.number),
     [201],
   );
+
+  const closedConfirmed = await run(
+    body,
+    { ...pending, status: 'confirmed' as const },
+    true,
+    'CLOSED',
+  );
+  assert.deepEqual(
+    closedConfirmed.ready.map((entry) => entry.number),
+    [201],
+  );
+  assert.deepEqual(closedConfirmed.ready[0]?.provisionalDependencies ?? [], []);
+
+  const closedPendingNoLabel = await run(body, pending, true, 'CLOSED', []);
+  assert.deepEqual(closedPendingNoLabel.ready, []);
+  assert.ok(
+    closedPendingNoLabel.filteredOut[0]?.reasons.includes(
+      'blocked_by_unverified_provisional_issue:#202',
+    ),
+  );
+
+  const closedPendingClassOff = await run(body, pending, false, 'CLOSED');
+  assert.deepEqual(closedPendingClassOff.ready, []);
+  assert.ok(
+    closedPendingClassOff.filteredOut[0]?.reasons.includes(
+      'blocked_by_unverified_provisional_issue:#202',
+    ),
+  );
+
+  const closedReworkLabelled = await run(
+    body,
+    { ...pending, hasRework: true, status: 'rework-requested' as const },
+    true,
+    'CLOSED',
+  );
+  assert.deepEqual(closedReworkLabelled.ready, []);
+  assert.equal(
+    closedReworkLabelled.filteredOut[0]?.potentiallyAffectedDependencies?.[0]
+      ?.reason,
+    'rework',
+  );
 });
 
 test('live provisional evidence rejects an untrusted record marker', async () => {

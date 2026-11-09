@@ -116,13 +116,24 @@ const INACCESSIBLE_ISSUE_SENTINEL = Object.freeze({
  */
 export function buildProvisionalDecisionEvidenceReader(input) {
   const { owner, repo, port, policy } = input;
-  const trustedLogins =
-    input.readTrustedMarkerActors?.() ??
-    resolveTrustedMarkerActors({
-      envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
-      config: loadTrustedActorConfig({ owner, repo, baseRefName: '' }),
-    }).actors;
-  const trustedSet = new Set(trustedLogins.map(normalizeLogin));
+  // The trusted actors come from a live default-branch read, so they are
+  // resolved on the first replay (as the class switch is), not at reader
+  // build. An unreadable trusted config fails closed inside `loadState`.
+  let trustedLoginsCache = null;
+  const readTrustedLogins = () => {
+    if (trustedLoginsCache !== null) return trustedLoginsCache;
+    try {
+      trustedLoginsCache =
+        input.readTrustedMarkerActors?.() ??
+        resolveTrustedMarkerActors({
+          envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
+          config: loadTrustedActorConfig({ owner, repo, baseRefName: '' }),
+        }).actors;
+    } catch {
+      return null;
+    }
+    return trustedLoginsCache;
+  };
   const staleAgeMs =
     parseIsoDurationToMs(normalizePolicyConfig(policy).claimTiming.staleAge) ??
     DEFAULT_STALE_AGE_MS;
@@ -157,6 +168,11 @@ export function buildProvisionalDecisionEvidenceReader(input) {
       ) {
         return invalidProvisionalEvidence('source-snapshot-incomplete');
       }
+      const trustedLogins = readTrustedLogins();
+      if (trustedLogins === null) {
+        return invalidProvisionalEvidence('trusted-policy-unreadable');
+      }
+      const trustedSet = new Set(trustedLogins.map(normalizeLogin));
       let providerComments;
       try {
         providerComments = port.listWorkItemComments(issueNumber, {
