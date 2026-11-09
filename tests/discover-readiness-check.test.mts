@@ -1046,12 +1046,16 @@ test('only an exact, replay-verified provisional Blocked by criterion can procee
     candidateBody: string,
     evidence: ProvisionalDecisionEvidence,
     classEnabled: boolean,
+    sourceState = 'OPEN',
+    sourceLabels = [{ name: 'status:needs-decision' }],
   ) =>
     evaluateDiscoverReadiness([201], {
       loadIssue: async (number) =>
         number === 201
           ? { ...issues.get(201), body: candidateBody }
-          : (issues.get(number) ?? null),
+          : number === 202
+            ? { ...issues.get(202), state: sourceState, labels: sourceLabels }
+            : (issues.get(number) ?? null),
       findRoadmapsByMarker: async () => [],
       loadProvisionalDecisionState: () => evidence,
       decisionIssueClassEnabled: () => classEnabled,
@@ -1163,10 +1167,86 @@ test('only an exact, replay-verified provisional Blocked by criterion can procee
   assert.ok(
     dependsOn.filteredOut[0]?.reasons.includes('open_dependency_issue:#202'),
   );
+
+  const closedPending = await run(body, pending, true, 'CLOSED');
+  assert.deepEqual(
+    closedPending.ready.map((entry) => entry.number),
+    [201],
+  );
+  assert.deepEqual(closedPending.ready[0]?.provisionalDependencies, [
+    {
+      issueNumber: 202,
+      criterion: 'all generated artifacts ship',
+      bundleGeneration: 1,
+      decisionGeneration: 1,
+      status: 'confirmation-pending',
+      workReference: 'https://github.com/acme/repo/pull/203',
+      verifiedAt: '2026-11-01T00:00:00Z',
+    },
+  ]);
+
+  const closedInvalid = await run(
+    body,
+    { ...pending, valid: false, issues: ['source-binding-mismatch'] },
+    true,
+    'CLOSED',
+  );
+  assert.deepEqual(closedInvalid.ready, []);
+  assert.ok(
+    closedInvalid.filteredOut[0]?.reasons.includes(
+      'blocked_by_unverified_provisional_issue:#202',
+    ),
+  );
+  assert.equal(
+    closedInvalid.filteredOut[0]?.potentiallyAffectedDependencies?.[0]?.reason,
+    'evidence-invalid',
+  );
+
+  const closedRework = await run(
+    body,
+    {
+      ...pending,
+      hasRework: true,
+      status: 'rework-requested',
+    },
+    true,
+    'CLOSED',
+    [],
+  );
+  assert.deepEqual(closedRework.ready, []);
+  assert.ok(
+    closedRework.filteredOut[0]?.reasons.includes(
+      'blocked_by_unverified_provisional_issue:#202',
+    ),
+  );
+  assert.equal(
+    closedRework.filteredOut[0]?.potentiallyAffectedDependencies?.[0]?.reason,
+    'rework',
+  );
+
+  const closedOrdinary = await run(
+    body,
+    {
+      valid: true,
+      hasRecords: false,
+      status: 'none',
+      hasRework: false,
+      decisions: [],
+      issues: [],
+    },
+    true,
+    'CLOSED',
+    [],
+  );
+  assert.deepEqual(
+    closedOrdinary.ready.map((entry) => entry.number),
+    [201],
+  );
 });
 
 test('live provisional evidence rejects an untrusted record marker', async () => {
   const sourceNumber = 204;
+  const untrustedActor = `untrusted-${process.pid}`;
   const port = createFakeProviderAdapter({
     workItems: {
       [sourceNumber]: {
@@ -1186,7 +1266,7 @@ test('live provisional evidence rejects an untrusted record marker', async () =>
           createdAt: '2026-10-02T00:00:00Z',
           updatedAt: '2026-10-02T00:00:00Z',
           lastEditedAt: null,
-          authorLogin: `untrusted-${process.pid}`,
+          authorLogin: untrustedActor,
         },
       ],
     },
@@ -1195,7 +1275,8 @@ test('live provisional evidence rejects an untrusted record marker', async () =>
     owner: 'acme',
     repo: 'repo',
     port,
-    policy: { trustedMarkerActors: ['trusted-automation'] },
+    readTrustedMarkerActors: () => ['trusted-automation'],
+    policy: { trustedMarkerActors: [untrustedActor] },
   });
 
   assert.deepEqual(await reader.loadState(sourceNumber), {
@@ -1357,6 +1438,7 @@ test('live provisional evidence refuses source edits and unverified rework', asy
       owner,
       repo,
       port,
+      readTrustedMarkerActors: () => [trustedActor],
       policy: { trustedMarkerActors: [trustedActor] },
     });
   };
@@ -2899,6 +2981,14 @@ test('CLI path forwards the configured confirmation and ready label names (#4960
 const args = process.argv.slice(2);
 const path = args.find((arg) => arg.startsWith("repos/")) || "";
 if (args[0] === "api") {
+  if (path === "repos/kurone-kito/idd-skill") {
+    process.stdout.write("main\\n");
+    process.exit(0);
+  }
+  if (path === "repos/kurone-kito/idd-skill/contents/.github/idd/config.json") {
+    process.stdout.write(Buffer.from("{}").toString("base64") + "\\n");
+    process.exit(0);
+  }
   const issueMatch = /^repos\\/kurone-kito\\/idd-skill\\/issues\\/(\\d+)$/.exec(path);
   if (issueMatch && ISSUES[issueMatch[1]]) {
     process.stdout.write(JSON.stringify(ISSUES[issueMatch[1]]) + "\\n");

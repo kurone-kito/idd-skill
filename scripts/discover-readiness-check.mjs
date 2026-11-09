@@ -22,7 +22,11 @@ import {
   markCliUsageError,
   runHelperCli,
 } from './helper-cli-runner.mjs';
-import { loadPolicyConfig, readTrustedAutoDecide } from './idd-config.mjs';
+import {
+  loadPolicyConfig,
+  loadTrustedActorConfig,
+  readTrustedAutoDecide,
+} from './idd-config.mjs';
 import { maskMarkdownForScan } from './markdown-code.mjs';
 import { escapeRegex } from './marker-regex.mjs';
 import {
@@ -112,10 +116,12 @@ const INACCESSIBLE_ISSUE_SENTINEL = Object.freeze({
  */
 export function buildProvisionalDecisionEvidenceReader(input) {
   const { owner, repo, port, policy } = input;
-  const trustedLogins = resolveTrustedMarkerActors({
-    envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
-    config: policy,
-  }).actors;
+  const trustedLogins =
+    input.readTrustedMarkerActors?.() ??
+    resolveTrustedMarkerActors({
+      envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
+      config: loadTrustedActorConfig({ owner, repo, baseRefName: '' }),
+    }).actors;
   const trustedSet = new Set(trustedLogins.map(normalizeLogin));
   const staleAgeMs =
     parseIsoDurationToMs(normalizePolicyConfig(policy).claimTiming.staleAge) ??
@@ -868,21 +874,21 @@ export async function evaluateDiscoverReadiness(issueNumbers, options) {
         });
         continue;
       }
+      const explicitCriterion = extractExplicitBlockedCriterion(
+        issue.body,
+        blockedNumber,
+      );
+      const sourceHasDecisionLabel = blockedIssue.labels.has(
+        needsDecisionLabelName,
+      );
+      const sourceHasHumanOrAuthoringHold =
+        blockedIssue.labels.has(blockedByHumanLabelName) ||
+        blockedIssue.labels.has(authoringLabelName) ||
+        blockedIssue.labels.has(authoringOnlyLabelName) ||
+        [...blockedIssue.labels].some((label) =>
+          confirmationLabel.matches(label),
+        );
       if (blockedIssue.state === 'OPEN') {
-        const explicitCriterion = extractExplicitBlockedCriterion(
-          issue.body,
-          blockedNumber,
-        );
-        const sourceHasDecisionLabel = blockedIssue.labels.has(
-          needsDecisionLabelName,
-        );
-        const sourceHasHumanOrAuthoringHold =
-          blockedIssue.labels.has(blockedByHumanLabelName) ||
-          blockedIssue.labels.has(authoringLabelName) ||
-          blockedIssue.labels.has(authoringOnlyLabelName) ||
-          [...blockedIssue.labels].some((label) =>
-            confirmationLabel.matches(label),
-          );
         if (
           explicitCriterion &&
           !isHumanApprovalCriterion(explicitCriterion) &&
@@ -930,6 +936,71 @@ export async function evaluateDiscoverReadiness(issueNumbers, options) {
           }
         }
         reasons.add(`blocked_by_open_issue:#${blockedNumber}`);
+      } else if (loadProvisionalDecisionState) {
+        // A manually or stale-closed decision source is not itself proof that
+        // its recorded work was confirmed. Replay every closed blocker: a
+        // replay refusal or rework keeps all dependency shapes blocked, while
+        // an ordinary closed issue with no decision records keeps its prior
+        // behavior.
+        const provisional = await loadProvisionalDecisionState(blockedNumber);
+        if (!provisional.hasRecords && provisional.valid) continue;
+        if (
+          provisional.valid &&
+          !provisional.hasRework &&
+          provisional.status === 'confirmed'
+        ) {
+          continue;
+        }
+        if (
+          explicitCriterion &&
+          !isHumanApprovalCriterion(explicitCriterion) &&
+          sourceHasDecisionLabel &&
+          !sourceHasHumanOrAuthoringHold &&
+          decisionIssueClassEnabled?.()
+        ) {
+          const match = findProvisionalDecisionMatch(
+            provisional,
+            explicitCriterion,
+          );
+          if (match) {
+            provisionalDependencies.push({
+              issueNumber: blockedNumber,
+              criterion: explicitCriterion,
+              bundleGeneration: match.bundleGeneration,
+              decisionGeneration: match.decisionGeneration,
+              status: match.status,
+              ...(match.workReference
+                ? { workReference: match.workReference }
+                : {}),
+              ...(match.verifiedAt ? { verifiedAt: match.verifiedAt } : {}),
+            });
+            continue;
+          }
+        }
+        if (
+          explicitCriterion &&
+          (!provisional.valid || provisional.hasRework)
+        ) {
+          const workReferences = provisional.decisions
+            .filter(
+              (decision) =>
+                decision.executionCriteria.some(
+                  (criterion) =>
+                    normalizeExplicitCriterion(criterion) ===
+                    normalizeExplicitCriterion(explicitCriterion),
+                ) && Boolean(decision.workReference),
+            )
+            .map((decision) => decision.workReference);
+          potentiallyAffectedDependencies.push({
+            issueNumber: blockedNumber,
+            criterion: explicitCriterion,
+            reason: provisional.hasRework ? 'rework' : 'evidence-invalid',
+            workReferences: [...new Set(workReferences)].sort(),
+          });
+        }
+        reasons.add(
+          `blocked_by_unverified_provisional_issue:#${blockedNumber}`,
+        );
       }
     }
     // #2877/#3778: a follow-up issue carrying a defined defer-source
