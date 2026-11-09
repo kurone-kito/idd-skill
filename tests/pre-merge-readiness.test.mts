@@ -339,6 +339,16 @@ function scopeOverrunRecordComment(options: {
   };
 }
 
+function scopeOverrunDecisionComment(headSha: string) {
+  return {
+    id: '43',
+    createdAt: '2026-11-07T12:05:00Z',
+    body: `Scope decision: accept head ${headSha}`,
+    authorLogin: 'maintainer',
+    lastEditedAt: null,
+  };
+}
+
 test('pre-merge readiness scope overrun ignores generated sync targets and banners', () => {
   const changedFiles = [
     ...Array.from({ length: 7 }, (_, index) => `src/file-${index + 1}.mts`),
@@ -377,14 +387,32 @@ test('pre-merge readiness blocks an overrun without scope evidence', () => {
   });
 });
 
-test('pre-merge readiness accepts a current post-push record while owner decision is pending', () => {
+test('pre-merge readiness holds a current post-push record until the owner decides', () => {
   const comment = scopeOverrunRecordComment({});
   const result = resolveScopeOverrunReadiness(
     scopeOverrunInput({ comments: [comment] }),
   );
   assert.deepEqual(result, {
-    status: 'valid',
+    status: 'invalid',
     reason: 'no-decision',
+    recordedHeadSha: SCOPE_OVERRUN_HEAD,
+  });
+});
+
+test('pre-merge readiness accepts a post-push record once a trusted owner decision names its head', () => {
+  const decision = {
+    id: '43',
+    createdAt: '2026-11-07T12:05:00Z',
+    body: `Scope decision: accept head ${SCOPE_OVERRUN_HEAD}`,
+    authorLogin: 'maintainer',
+    lastEditedAt: null,
+  };
+  const result = resolveScopeOverrunReadiness(
+    scopeOverrunInput({ comments: [scopeOverrunRecordComment({}), decision] }),
+  );
+  assert.deepEqual(result, {
+    status: 'valid',
+    reason: 'accepted',
     recordedHeadSha: SCOPE_OVERRUN_HEAD,
   });
 });
@@ -396,7 +424,10 @@ test('pre-merge readiness preserves scope evidence after the issue body no longe
     scopeOverrunInput({
       issue,
       changedFiles: [],
-      comments: [scopeOverrunRecordComment({})],
+      comments: [
+        scopeOverrunRecordComment({}),
+        scopeOverrunDecisionComment(SCOPE_OVERRUN_HEAD),
+      ],
     }),
   );
   assert.equal(result?.status, 'invalid');
@@ -451,6 +482,14 @@ test('pre-merge readiness scope audit accepts both paths of a renamed PR file', 
                   branch: 'issue/7-task',
                   headSha: 'a'.repeat(40),
                 }),
+                authorLogin: 'maintainer',
+                lastEditedAt: null,
+              },
+              {
+                id: 46,
+                createdAt: '2026-05-12T10:31:00Z',
+                updatedAt: '2026-05-12T10:31:00Z',
+                body: `Scope decision: accept head ${'a'.repeat(40)}`,
                 authorLogin: 'maintainer',
                 lastEditedAt: null,
               },
@@ -588,6 +627,14 @@ test('collectPreMergeReadiness adds a blocker for an overrun without valid evide
                 authorLogin: 'maintainer',
                 lastEditedAt: null,
               },
+              {
+                id: 46,
+                createdAt: '2026-05-12T10:31:00Z',
+                updatedAt: '2026-05-12T10:31:00Z',
+                body: `Scope decision: accept head ${'a'.repeat(40)}`,
+                authorLogin: 'maintainer',
+                lastEditedAt: null,
+              },
             ]
           : comments;
       },
@@ -653,7 +700,7 @@ test('computePreMergeReadinessBlockers carries scope-overrun evidence into F3', 
       claim: {
         scopeOverrun: {
           status: 'valid',
-          reason: 'no-decision',
+          reason: 'accepted',
           recordedHeadSha: SCOPE_OVERRUN_HEAD,
         },
       },
@@ -723,7 +770,10 @@ test('pre-merge readiness rejects edited and mismatched post-push records', () =
 
   const wrongPr = resolveScopeOverrunReadiness(
     scopeOverrunInput({
-      comments: [scopeOverrunRecordComment({ pullRequestNumber: 9002 })],
+      comments: [
+        scopeOverrunRecordComment({ pullRequestNumber: 9002 }),
+        scopeOverrunDecisionComment(SCOPE_OVERRUN_HEAD),
+      ],
     }),
   );
   assert.equal(wrongPr?.status, 'invalid');
@@ -732,7 +782,10 @@ test('pre-merge readiness rejects edited and mismatched post-push records', () =
   const staleHead = resolveScopeOverrunReadiness(
     scopeOverrunInput({
       headSha: 'b'.repeat(40),
-      comments: [scopeOverrunRecordComment({})],
+      comments: [
+        scopeOverrunRecordComment({}),
+        scopeOverrunDecisionComment(SCOPE_OVERRUN_HEAD),
+      ],
     }),
   );
   assert.equal(staleHead?.status, 'invalid');
@@ -748,7 +801,10 @@ test('pre-merge readiness rejects edited and mismatched post-push records', () =
 
   const prePush = resolveScopeOverrunReadiness(
     scopeOverrunInput({
-      comments: [scopeOverrunRecordComment({ prePush: true })],
+      comments: [
+        scopeOverrunRecordComment({ prePush: true }),
+        scopeOverrunDecisionComment(SCOPE_OVERRUN_HEAD),
+      ],
     }),
   );
   assert.equal(prePush?.status, 'invalid');
@@ -781,7 +837,7 @@ test('pre-merge readiness schema validates scope-overrun evidence', () => {
         claim: Object.assign({}, summary.claim, {
           scopeOverrun: {
             status: 'valid',
-            reason: 'no-decision',
+            reason: 'accepted',
             recordedHeadSha: SCOPE_OVERRUN_HEAD,
           },
         }),

@@ -347,10 +347,10 @@ export function resolveScopeOverrunReadiness(input) {
       recordedHeadSha: null,
     };
   }
-  if (resolution.status === 'invalid') {
-    return { status: 'invalid', reason: resolution.reason, recordedHeadSha };
-  }
-  if (resolution.reason !== 'no-decision' && resolution.status === 'pending') {
+  // Only a trusted owner decision that names this record's head makes the
+  // record valid evidence. Invalid evidence, and a record still pending a
+  // decision (none yet, or one for another head), keeps F2 and F3 closed.
+  if (resolution.status !== 'accepted') {
     return { status: 'invalid', reason: resolution.reason, recordedHeadSha };
   }
   const record = resolution.record;
