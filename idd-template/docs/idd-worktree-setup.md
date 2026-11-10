@@ -138,19 +138,24 @@ hook rules are preventive; no observed incident yet.
 
 ## Install and verify dependencies
 
-Run the repository's configured `commands.install-deps` from inside
-the claimed worktree. The command name in the IDD configuration is a
-configuration key, not necessarily a package-manager script; invoke
-the configured command as written. It must be safe to rerun after a
-retry or worktree recreation.
+On a takeover, a pre-start hook that followed the hook rules in the lock
+section above may already have installed the dependencies. If it did, skip
+the configured `commands.install-deps` run below and verify the install
+instead. Otherwise, run the repository's configured `commands.install-deps`
+from inside the claimed worktree. The command name in the IDD configuration
+is a configuration key, not necessarily a package-manager script; invoke it
+as written. It must be safe to rerun after a retry or worktree recreation.
 
-Some package managers can report success while leaving a required
-binary absent, as observed in issue `#1237` (see the
+Verify the install after either path. Some package managers can report
+success while leaving a required binary absent, as observed in issue `#1237`
+(see the
 [incident rationale](idd-design-rationale.md#b1-step-3--install-deps-silent-under-install-detection)).
-If the configured command uses the
-[`verify-install-deps` helper](idd-helper-scripts.md),
-confirm that its key post-install artifact exists; the helper retries
-the install once and fails loudly if verification still fails.
+Confirm that the expected post-install artifact exists. If the configured
+command uses the [`verify-install-deps` helper](idd-helper-scripts.md), the
+helper checks its key artifact and retries the install once before it fails
+loudly. If a hook installed the dependencies and the artifact is missing, run
+the configured command once, which is safe to rerun, and check again. If it
+is still missing, post a hold and stop before B2, as the B1 self-check does.
 
 ## Run the B1 self-check
 
