@@ -11653,7 +11653,7 @@ node scripts/claimed-push.mjs --issue <n> --claim-id <id> --agent-id <id> \
    off, in a shell directly), then requires a clean tree again (next
    action: commit or discard what the gate changed, then rerun). A gate
    that exits non-zero or ends by signal refuses with the next action to
-   fix the failure, commit, and rerun, except three exits of the admitted
+   fix the failure, commit, and rerun, except four exits of the admitted
    call, whose next action names the stderr line that decides it. Exit
    `69`: a line exactly equal to `local-admission: pueue daemon is not accepting
    commands` means the gate did not start; report it, and do not rerun the
@@ -11663,11 +11663,16 @@ node scripts/claimed-push.mjs --issue <n> --claim-id <id> --agent-id <id> \
    Exit `2`: a `local-admission:` line that ends with
    `command not started`, or one that says the lock stays held until the
    command exits, means stop and report without changing the repository
-   policy, and do not rerun. Without such a line, each of these three exits
-   is the gate's own status: fix the failure, commit, and rerun. A gate that is
-   not configured, or that cannot start on Windows, refuses with the next
-   action to configure the command or run the written gate by hand. An
-   admission child that cannot start (for example a missing
+   policy, and do not rerun. Exit `3`: a line that contains
+   `local-admission: pueue task outcome unknown` or
+   `local-admission: pueue error:` means the gate may already have run, so
+   report it, check the state of the pueue task that line names by id or
+   label (if it names either), and do not rerun the helper or push by hand
+   (preventive; no observed incident yet). Without such a line, each of these
+   four exits is the gate's own status: fix the failure, commit, and rerun. A
+   gate that is not configured, or that cannot start on Windows, refuses with
+   the next action to configure the command or run the written gate by hand.
+   An admission child that cannot start (for example a missing
    `scripts/idd-local-admission.mjs`) refuses with the next action to
    check the helper installation, then rerun, because a gate run by hand
    would run outside admission.
