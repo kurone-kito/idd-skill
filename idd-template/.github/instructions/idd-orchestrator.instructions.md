@@ -52,10 +52,11 @@ only after its complete proof passes; otherwise use existing recovery/hold.
    worker runs B1). Start it with the delegation brief, a section 5 report
    request naming its report path, and the pre-created worktree it reuses
    without B1. Record a `running` entry with the returned handle.
-5. A pre-marker A4.5/A5 failure removes its worktree and branch, including the
-   lock. A post-marker failure is contested: follow idd-claim.instructions.md
-   and keep its claim and worktree. Neither failure starts a worker or creates
-   an entry.
+5. A pre-marker A4.5/A5 failure keeps its worktree, branch, and lock: with no
+   trusted marker there is no lineage for cleanup (`lost-claim-cleanup` in
+   idd-claim.instructions.md). A post-marker failure is contested: follow
+   idd-claim.instructions.md and keep its claim and worktree. Neither failure
+   starts a worker or creates an entry.
 6. Dispatched and failed picks leave `--issues` before a refill.
 
 ## 4. Waiting and refill

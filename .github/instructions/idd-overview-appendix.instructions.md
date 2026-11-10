@@ -65,17 +65,17 @@ heartbeat active.
 
 **Needs-decision claim release.** When no further session-side action
 is expected before a human responds, the session may apply the
-configured needs-decision label (`labels.needsDecisionLabelName`,
-default `status:needs-decision`) and release the claim. Any phase may
-do this, not only E6. After release, stop heartbeating; once the
-`unclaimed-by` is read back, run `lost-claim-cleanup`. A qualifying human
+needs-decision label (`labels.needsDecisionLabelName`, default
+`status:needs-decision`) and release the claim. Any phase may do this, not
+only E6. After release, stop heartbeating; once the `unclaimed-by` is read
+back, run `lost-claim-cleanup` if a worktree exists. A qualifying human
 decision lets a later session drop the label and re-claim; a response leaving
 the decision open does not re-enter.
 
 **Hold consolidation.** When a hold traces to the same root file or
 dependency as an earlier hold from this session (any issue), pause
 per-issue escalation and audit the shared root cause once, bringing one
-consolidated decision to the human instead of re-escalating per layer.
+consolidated decision to the human, not re-escalating per layer.
 
 **Provider-outage park**: release the claim immediately, no 12 h
 heartbeat -- see idd-ci.instructions.md's Hold-and-report failure shapes.

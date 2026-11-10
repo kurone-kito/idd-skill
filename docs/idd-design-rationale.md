@@ -696,8 +696,9 @@ the helper task (issue `#5134`) and the documentation task (issue `#5136`).
   marker and no matching lock, and the earlier script removed it on a clean
   status and a tip equal to the base. That generic unclaimed-worktree route is
   gone (issue `#5068`): the helper refuses it, and the instructions preserve
-  the worktree and stop. A failure that leaves a claim active is not a trigger
-  either. The session may release its own claim through Abort, and the verified
+  the worktree and stop, including the orchestrator's pre-created worktree. A
+  failure that leaves a claim active is not a trigger either. The session may
+  release its own claim through Abort, and the verified
   `unclaimed-by` is then a trigger, but only after step 4's `--acquire` has
   created the worktree lock: `--record-tokens` writes only the generated-tokens
   record, so an earlier exit has no lock for the helper to match and it holds at
@@ -726,9 +727,11 @@ the helper task (issue `#5134`) and the documentation task (issue `#5136`).
 - Apply is serialized. The helper takes the clone-scoped lock itself, and it
   re-verifies lineage, lock, and branch tip after taking it, after the
   preservation move, and before removal. A dry run takes no lock.
-- After a verified release, a failed cleanup keeps the `unclaimed-by` marker,
-  the worktree, and the branch, and stops with the helper's report. The
-  instructions never retry the removal by hand or claim a successor. A
+- After a verified release, a failed cleanup keeps the `unclaimed-by` marker
+  and whatever the helper's report says remains (the worktree and branch, a
+  preserved `node_modules/` destination, or only the branch), and stops with
+  that report. The instructions never retry the removal by hand or claim a
+  successor. A
   successful cleanup is followed by the fresh-claim gate, and the helper claims
   nothing.
 - On `instructions-only` there is no helper runtime, the clone-scoped lock has

@@ -357,11 +357,10 @@ claim marker, lock, and a clean status do not (issue `#3141`). Without that,
 keep and stop. After `status: complete`, rerun the `--fresh-claim-gate`;
 continue only on `claimable` or `stale-reclaimable`.
 
-On `hold` or `failed`, the `unclaimed-by` stands, the worktree and branch stay
-(`released-branch-remains` keeps only the branch), and you stop with the
-helper's report. Never retry removal by hand, claim a successor, `--force`, or
-`git branch -D`. Instructions-only (no helper runtime): preserve both and
-escalate; never remove by hand.
+On `hold` or `failed`, the `unclaimed-by` stands, you keep what remains (the
+report lists it), and you stop with the helper's report. Never retry removal by
+hand, claim a successor, `--force`, or `git branch -D`. Instructions-only (no
+helper runtime): preserve both and escalate; never remove by hand.
 
 Rationale: [design rationale](../../docs/idd-design-rationale.md#lost-claim-cleanup-issue-4042).
 
