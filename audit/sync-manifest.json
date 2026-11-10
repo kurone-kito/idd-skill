@@ -375,7 +375,7 @@
       "files": [
         ".github/instructions/lite/idd-work-lite.instructions.md"
       ],
-      "limitBytes": 33200
+      "limitBytes": 35200
     },
     {
       "id": "bundle-resume-lite",
@@ -561,7 +561,7 @@
         "bundle": "bundle-work-lite",
         "limitBytes": 33200,
         "issue": 4893,
-        "reason": "Operator chose to raise this limit before the split route lands on main (PR #5031, issue #4893), so the trial budget check can measure the raise on the base. This entry supersedes the manual approval from issue #5030 for this bundle (26,000 bytes). That record is removed here because the strictest-limit rule would otherwise keep the old ceiling in force; it remains in git history. Main measures 24,737 bytes (95.14% of 26,000). The Lite split procedure projects about 30,682 bytes for this bundle with the generated banner removed, measured on 2026-11-10. 33,200 leaves 2,518 bytes (7.6%) of headroom, about 92.4% utilization, below the 98% enforcement ceiling."
+        "reason": "Operator chose to raise this limit before the split route lands on main (PR #5031, issue #4893), so the trial budget check can measure the raise on the base. This entry supersedes the manual approval from issue #5030 for this bundle (26,000 bytes). That record is removed here because the strictest-limit rule would otherwise keep the old ceiling in force; it remains in git history. Main measures 24,737 bytes (95.14% of 26,000). The Lite split procedure projects about 30,682 bytes for this bundle with the generated banner removed, measured on 2026-11-10. 33,200 leaves 2,518 bytes (7.6%) of headroom, about 92.4% utilization, below the 98% enforcement ceiling. The standing entry at 35,200 (issue #5127) now supplies this bundle's approved limit and supersedes this record."
       }
     ],
     "standingRaiseApprovals": [
@@ -569,9 +569,9 @@
         "bundle": "bundle-work-lite",
         "standingClass": "budgetRaise",
         "ceilingPct": 10,
-        "limitBytes": 33200,
+        "limitBytes": 35200,
         "issue": 4893,
-        "reason": "Re-measured after merging main on 2026-11-10: the Lite split procedure brings bundle-work-lite to about 31,900 bytes (96.09% of 33,200) with the generated banner removed. The issue-authorized 10% standing raise permits up to about 35,090 bytes for that total, and the 98% enforcement ceiling requires a limit of at least about 32,550 bytes, so 33,200 sits inside both bounds."
+        "reason": "Re-measured on 2026-11-10 for issue #5127 after merging main: bundle-work-lite measures 33,244 bytes with the generated banner removed, as the documentation audit reports it. That is 100.13% of the earlier 33,200 limit, above the 98% enforcement ceiling. The issue-authorized 10% standing raise permits up to 36,500 bytes for that total, and the 98% ceiling requires a limit of at least 34,000 bytes, so the limit is set to 35,200, inside both bounds: 94.44% utilization, 1,252 bytes before the 98% threshold (34,496). It supersedes the 33,200 limit; the manual record of the operator choice on issue #4893 is unchanged."
       }
     ]
   },

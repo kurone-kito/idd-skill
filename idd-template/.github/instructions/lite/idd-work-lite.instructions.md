@@ -380,12 +380,17 @@ stop. On resume reconcile
 mappings with helper records/live issues; verify/skip mapped children and
 publish only unmapped proposals. Stop on conflict or unknown publication.
 Keep the parent claim/label and children held.
-Review each final child separately: send exact title/body and the bounded
-packet to the usable configured delegate, or use native review or structured
-self-critique. Bound wait by
-`issueAuthoring.adversarialReview.waitCeiling` (`PT20M` default). Require
-`"completed": true` and every finding `fixed` or `rejected`; stop on incomplete,
-unreadable, or unresolved review. A title/body correction invalidates its
+Review each final child separately: send exact title/body and the bounded packet
+per the contract's completed-draft mode table. A usable delegate runs; native
+review also runs for `combined`, for `on-success` after a delegate success, and
+for `fallback` (default) after a delegate failure (missing command, non-zero
+exit, timeout, cancel, or unreadable findings), but not for `never`. With no
+usable delegate, use native review or structured self-critique. Union findings.
+Wait for each mechanism that runs, bounded by
+`issueAuthoring.adversarialReview.waitCeiling` (`PT20M` default). Stop if none
+returned a readable list. Require `"completed": true` and every finding `fixed`
+or `rejected`; stop on an incomplete or unresolved review. A title/body
+correction invalidates its
 review and the proposal. Update/read back the full ordered proposal and repeat
 both checks for changed children. If uncertain, continue only when the full
 body matches exactly; otherwise keep the hold and stop. Immediately before
