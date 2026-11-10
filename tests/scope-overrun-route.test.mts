@@ -238,6 +238,11 @@ test('the authoring contract keeps its threshold table and calls it admission po
       /authoring-time admission policy, and the fresh-discovery `L` routing below is a planning policy/u,
     );
     assert.match(text, /Neither is runtime authority/u);
+    assert.match(
+      text,
+      /blob\/main\/idd-template\/docs\/idd-design-rationale\.md#b3--scope-overrun-returns-to-authoring/u,
+      'the contract links the synchronized rationale source, not the root docs copy',
+    );
     assert.match(text, /advisory drift that measures breadth, not intent/u);
     assert.match(
       text,
