@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   existsSync,
   mkdtempSync,
@@ -12,6 +13,7 @@ import { basename, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
+import { buildProvisionalDecisionEvidenceReader } from '../src/scripts/discover-readiness-check.mts';
 import {
   enumerateRoadmapGraph,
   type RoadmapGraphReport,
@@ -21,6 +23,7 @@ import {
   buildRoadmapCompletionAuditBody,
   type ConnectedPrEvent,
   createLocalCoordinationInputs,
+  createRoadmapAuditCollect,
   evaluateLocalCoordinationState,
   evaluateRoadmapAuditGates,
   evaluateRoadmapClaim,
@@ -37,7 +40,19 @@ import {
   safeHasTrustedCompletionEvidence,
 } from '../src/scripts/idd-roadmap-audit-execute.mts';
 import { renderClaimedByMarker } from '../src/scripts/protocol-helpers.mts';
-import { createFakeProviderAdapter } from '../src/scripts/provider-adapter-fake.mts';
+import {
+  createFakeProviderAdapter,
+  type FakeProviderFixture,
+} from '../src/scripts/provider-adapter-fake.mts';
+import { createGithubProviderAdapter } from '../src/scripts/provider-adapter-github.mts';
+import type {
+  ProviderComment,
+  ProviderPort,
+} from '../src/scripts/provider-port.mts';
+import {
+  PROVISIONAL_DECISION_ANSWER_MARKER,
+  PROVISIONAL_DECISION_RECORD_MARKER,
+} from '../src/scripts/provisional-decision-state.mts';
 import { fixtureEnv } from './test-utils.mts';
 
 const ROADMAP = 995;
@@ -3846,4 +3861,1053 @@ test('hasTrustedCompletionEvidenceComment recognises the body with and without t
       true,
     );
   }
+});
+
+// ---------------------------------------------------------------------------
+// #5122: the provisional-evidence read fan-out of a ten-node apply run
+//
+// A real traversal, the real evidence reader and the production `collect`
+// wiring run over a fake provider that counts every read, so the numbers
+// below are what a run makes, not what a mock was told to report.
+// ---------------------------------------------------------------------------
+
+const EVIDENCE_OWNER = 'acme';
+const EVIDENCE_REPO = 'repo';
+const EVIDENCE_ACTOR = 'trusted-automation';
+const EVIDENCE_BASE = Date.UTC(2026, 9, 1, 0, 0, 0);
+const evidenceAt = (seconds: number) =>
+  new Date(EVIDENCE_BASE + seconds * 1000).toISOString();
+
+/** The history of one source whose single decision is confirmed. */
+function confirmedChain(
+  number: number,
+  title: string,
+  body: string,
+  pullRequest: number,
+): ProviderComment[] {
+  const claimId = `claim-${number}`;
+  const agentId = `agent-${number}`;
+  const branch = `issue/${number}-source`;
+  const source = {
+    repository: `${EVIDENCE_OWNER}/${EVIDENCE_REPO}`,
+    issueNumber: number,
+    snapshot: {
+      title,
+      bodySha256: createHash('sha256').update(body).digest('hex'),
+      updatedAt: evidenceAt(-1),
+    },
+  };
+  const result = {
+    kind: 'merged-pull-request',
+    reference: `https://github.com/${EVIDENCE_OWNER}/${EVIDENCE_REPO}/pull/${pullRequest}`,
+    verifiedAt: evidenceAt(3),
+    headSha: String(pullRequest).padStart(40, 'a'),
+    mergeCommitSha: String(pullRequest).padStart(40, 'b'),
+  };
+  const comment = (
+    id: number,
+    text: string,
+    createdAt: string,
+  ): ProviderComment => ({
+    id,
+    body: text,
+    createdAt,
+    updatedAt: createdAt,
+    lastEditedAt: null,
+    authorLogin: EVIDENCE_ACTOR,
+  });
+  const record = (
+    id: number,
+    recordId: string,
+    event: Record<string, unknown>,
+    createdAt: string,
+  ) =>
+    comment(
+      id,
+      `${PROVISIONAL_DECISION_RECORD_MARKER}\n${JSON.stringify({
+        schemaVersion: 1,
+        recordId,
+        source,
+        bundleGeneration: 1,
+        decisionGeneration: 1,
+        claimLineage: [
+          {
+            claimId,
+            agentId,
+            branch,
+            claimedAt: evidenceAt(0),
+            supersedes: 'none',
+          },
+        ],
+        evidenceReferences: [
+          `https://github.com/${EVIDENCE_OWNER}/${EVIDENCE_REPO}/issues/${number}`,
+        ],
+        event,
+      })}`,
+      createdAt,
+    );
+  const selected = {
+    type: 'selected',
+    question: 'Which behavior should be used?',
+    selectedOption: {
+      id: 'keep',
+      description: 'Keep the existing behavior',
+      feasibilityRationale: 'The current implementation supports this option.',
+      requirementFit: 'It meets the verified requirement.',
+      consequences: 'No migration is needed.',
+      verification: 'Run the focused replay tests.',
+      reversalOrMigration: 'No migration is required.',
+      rationale: 'It matches the current evidence.',
+    },
+    feasibleAlternatives: [
+      {
+        id: 'change',
+        description: 'Adopt the alternate behavior',
+        feasibilityRationale: 'The repository can implement it.',
+        requirementFit: 'It also meets the requirement.',
+        consequences: 'It requires a migration.',
+        verification: 'Validate migrated records.',
+        reversalOrMigration: 'Existing records require migration.',
+        comparison: 'It adds migration without improving the fit.',
+        rejectionReason: 'The selected option better fits the evidence.',
+      },
+    ],
+    executionCriteria: ['All generated artifacts ship.'],
+  };
+  const answer = {
+    schemaVersion: 1,
+    source,
+    bundleGeneration: 1,
+    decisionGenerations: [1],
+    claimIds: [claimId],
+    presentedBundle: [
+      {
+        decisionGeneration: 1,
+        question: selected.question,
+        selectedOptionId: 'keep',
+        feasibleAlternativeIds: ['change'],
+        workCompletedRecordId: 'completed-1',
+        result,
+      },
+    ],
+    response: 'accepted',
+    answerText: 'Yes, I accept the presented completed choices.',
+  };
+  const claimMarkerAt = evidenceAt(0).replace(/\.\d{3}Z$/u, 'Z');
+  return [
+    comment(
+      1,
+      `<!-- claimed-by: ${agentId} ${claimId} supersedes: none ${claimMarkerAt} branch: ${branch} -->\n\n_${agentId}: issue claim -- IDD automation marker. Do not edit._`,
+      evidenceAt(0),
+    ),
+    record(2, 'selected-1', selected, evidenceAt(1)),
+    record(
+      3,
+      'started-1',
+      {
+        type: 'work-started',
+        startedAt: evidenceAt(2),
+        planReference: `https://github.com/${EVIDENCE_OWNER}/${EVIDENCE_REPO}/issues/${number}#issuecomment-2`,
+      },
+      evidenceAt(2),
+    ),
+    record(4, 'completed-1', { type: 'work-completed', result }, evidenceAt(4)),
+    comment(
+      5,
+      `${PROVISIONAL_DECISION_ANSWER_MARKER}\n${JSON.stringify(answer)}`,
+      evidenceAt(5),
+    ),
+    record(
+      6,
+      'confirmed-1',
+      {
+        type: 'confirmed',
+        confirmation: {
+          commentUrl: `https://github.com/${EVIDENCE_OWNER}/${EVIDENCE_REPO}/issues/${number}#issuecomment-5`,
+          response: 'accepted',
+          confirmedAt: evidenceAt(5),
+          confirmedBy: 'Operator',
+        },
+      },
+      evidenceAt(6),
+    ),
+  ];
+}
+
+/** The merged pull request behind a node's completion record. */
+const pullRequestOf = (number: number) =>
+  4000 + (number === ROADMAP ? 0 : number - 3000);
+
+/**
+ * A roadmap of `count` nodes (the root plus `count - 1` closed children), each
+ * with its own confirmed decision and its own merged pull request. One object
+ * feeds both the traversal's issue read and `getWorkItem`, so an edit shows
+ * up in whichever the code under test reads.
+ */
+function buildEvidenceWorld(count = 10) {
+  const numbers = [
+    ROADMAP,
+    ...Array.from({ length: count - 1 }, (_, index) => 3001 + index),
+  ];
+  const workItems: NonNullable<FakeProviderFixture['workItems']> = {};
+  const traversalIssueLookups: NonNullable<
+    FakeProviderFixture['traversalIssueLookups']
+  > = {};
+  const comments: NonNullable<FakeProviderFixture['comments']> = {};
+  const mergedChangeRequestMeta: NonNullable<
+    FakeProviderFixture['mergedChangeRequestMeta']
+  > = {};
+  const write = (
+    number: number,
+    issue: { title: string; body: string; state: string; updatedAt: string },
+  ) => {
+    workItems[number] = {
+      number,
+      title: issue.title,
+      body: issue.body,
+      state: issue.state,
+      createdAt: evidenceAt(-2),
+      updatedAt: issue.updatedAt,
+    };
+    traversalIssueLookups[number] = {
+      outcome: 'found',
+      item: {
+        number,
+        title: issue.title,
+        body: issue.body,
+        state: issue.state,
+        labels: number === ROADMAP ? [{ name: 'roadmap' }] : [],
+        updated_at: issue.updatedAt,
+      },
+    };
+  };
+  const children = numbers.slice(1);
+  for (const number of numbers) {
+    const title = number === ROADMAP ? 'audited roadmap' : `child ${number}`;
+    const body =
+      number === ROADMAP
+        ? `<!-- idd-skill-roadmap-id: evidence-world -->\n${children.map((child) => `- [x] #${child}`).join('\n')}`
+        : `body of ${number}`;
+    write(number, {
+      title,
+      body,
+      state: number === ROADMAP ? 'open' : 'closed',
+      updatedAt: evidenceAt(-1),
+    });
+    const pullRequest = pullRequestOf(number);
+    comments[number] = confirmedChain(number, title, body, pullRequest);
+    mergedChangeRequestMeta[pullRequest] = {
+      number: pullRequest,
+      merged: true,
+      mergedAt: evidenceAt(3),
+      headRefOid: String(pullRequest).padStart(40, 'a'),
+      mergeCommitOid: String(pullRequest).padStart(40, 'b'),
+    };
+  }
+  const fixture: FakeProviderFixture = {
+    workItems,
+    traversalIssueLookups,
+    comments,
+    mergedChangeRequestMeta,
+  };
+  const issueOf = (number: number) => {
+    const item = workItems[number];
+    if (!item) throw new Error(`no fixture issue #${number}`);
+    return item;
+  };
+  return {
+    numbers,
+    fixture,
+    /** The merged-pull-request proof the fake provider returns for a node. */
+    proofOf(number: number) {
+      const proof = mergedChangeRequestMeta[pullRequestOf(number)];
+      if (!proof) throw new Error(`no fixture proof for #${number}`);
+      return proof;
+    },
+    /** Remove a node's pull request, so the provider answers "not merged". */
+    dropProof(number: number) {
+      delete mergedChangeRequestMeta[pullRequestOf(number)];
+    },
+    /** The snapshot a traversal hands the reader for a node, as it stands now. */
+    snapshotOf(number: number) {
+      const item = issueOf(number);
+      return {
+        title: item.title,
+        body: item.body,
+        updatedAt: item.updatedAt ?? '',
+      };
+    },
+    /** Every node as a `loadStates` source, each with its own snapshot. */
+    sources() {
+      return numbers.map((issueNumber) => ({
+        issueNumber,
+        snapshot: this.snapshotOf(issueNumber),
+      }));
+    },
+    /** Edit a source the way an author would, in both of its reads. */
+    editIssue(number: number, patch: { title?: string; body?: string }) {
+      const current = issueOf(number);
+      write(number, {
+        title: patch.title ?? current.title,
+        body: patch.body ?? current.body,
+        state: current.state,
+        updatedAt: evidenceAt(100),
+      });
+    },
+  };
+}
+
+type EvidenceWorld = ReturnType<typeof buildEvidenceWorld>;
+
+interface EvidenceRead {
+  method: string;
+  pass: number;
+  args: unknown[];
+}
+
+const COUNTED_EVIDENCE_METHODS = new Set([
+  'getWorkItem',
+  'listWorkItemComments',
+  'getMergedChangeRequestMeta',
+  'getMergedChangeRequestMetaBatch',
+]);
+
+/** The fake provider, with every evidence-relevant read recorded per pass. */
+function countingEvidencePort(world: EvidenceWorld) {
+  const reads: EvidenceRead[] = [];
+  const state = { pass: 0 };
+  const port = createFakeProviderAdapter(world.fixture);
+  const counted = new Proxy(port, {
+    get(target, property, receiver) {
+      const value = Reflect.get(target, property, receiver);
+      if (
+        typeof property === 'string' &&
+        COUNTED_EVIDENCE_METHODS.has(property) &&
+        typeof value === 'function'
+      ) {
+        return (...args: unknown[]) => {
+          reads.push({ method: property, pass: state.pass, args });
+          return value.apply(target, args);
+        };
+      }
+      return value;
+    },
+  });
+  return { port, counted, reads, state };
+}
+
+function evidenceReader(port: ProviderPort) {
+  return buildProvisionalDecisionEvidenceReader({
+    owner: EVIDENCE_OWNER,
+    repo: EVIDENCE_REPO,
+    port,
+    readTrustedMarkerActors: () => [EVIDENCE_ACTOR],
+    policy: null,
+  });
+}
+
+interface EvidenceRun {
+  /** Edits applied to the provider before the run starts. */
+  configure?: (port: ProviderPort) => void;
+  /** Edits applied after the first pass, before the second one reads. */
+  beforeSecondPass?: (port: ProviderPort) => void;
+  /** Replace the per-node reader with the pre-#5122 `loadState`-only one. */
+  perNodeReader?: boolean;
+  dryRun?: boolean;
+}
+
+async function runEvidenceAudit(world: EvidenceWorld, run: EvidenceRun = {}) {
+  const { port, counted, reads, state } = countingEvidencePort(world);
+  run.configure?.(port);
+  const reader = evidenceReader(counted);
+  const provisionalReader = run.perNodeReader
+    ? ({
+        loadState: reader.loadState,
+        decisionIssueClassEnabled: reader.decisionIssueClassEnabled,
+      } as unknown as typeof reader)
+    : reader;
+  const collectOnce = createRoadmapAuditCollect({
+    owner: EVIDENCE_OWNER,
+    repo: EVIDENCE_REPO,
+    port: counted,
+    markerPrefix: 'idd-skill',
+    provisionalReader,
+  });
+  const { deps, calls } = makeDeps(readyReport(), {
+    collect: async (roadmapNumber) => {
+      state.pass += 1;
+      if (state.pass === 2) run.beforeSecondPass?.(port);
+      return collectOnce(roadmapNumber);
+    },
+  });
+  const args = run.dryRun ? ['--roadmap', String(ROADMAP)] : APPLY_ARGS;
+  try {
+    const { verdict, exitCode } = await runRoadmapAuditExecute(args, deps);
+    return {
+      verdict,
+      exitCode,
+      error: undefined,
+      reads,
+      calls,
+      passes: state.pass,
+    };
+  } catch (error) {
+    return {
+      verdict: undefined,
+      exitCode: undefined,
+      error,
+      reads,
+      calls,
+      passes: state.pass,
+    };
+  }
+}
+
+const readsOf = (reads: EvidenceRead[], method: string, pass?: number) =>
+  reads.filter(
+    (read) =>
+      read.method === method && (pass === undefined || read.pass === pass),
+  );
+
+function assertNothingMutated(calls: ReturnType<typeof makeDeps>['calls']) {
+  assert.deepEqual(calls.comments, [], 'no evidence comment is posted');
+  assert.deepEqual(calls.closed, [], 'the roadmap is not closed');
+  assert.deepEqual(calls.released, [], 'the claim is not released');
+}
+
+test('#5122: a ten-node apply run reads provisional evidence in 22 provider calls, at most 30, where the per-node reader made 60', async () => {
+  const batched = await runEvidenceAudit(buildEvidenceWorld());
+  assert.equal(batched.error, undefined);
+  assert.equal(
+    batched.verdict?.ready,
+    true,
+    JSON.stringify(batched.verdict?.blockers),
+  );
+  assert.equal(batched.verdict?.closed, true);
+  assert.equal(batched.exitCode, 0);
+  assert.equal(batched.passes, 2, 'apply mode makes two complete passes');
+  for (const pass of [1, 2]) {
+    // One complete comment history per node, one batch for the ten merged
+    // pull requests, and no second read of any issue.
+    assert.equal(
+      readsOf(batched.reads, 'listWorkItemComments', pass).length,
+      10,
+    );
+    assert.equal(
+      readsOf(batched.reads, 'getMergedChangeRequestMetaBatch', pass).length,
+      1,
+    );
+    assert.equal(
+      readsOf(batched.reads, 'getMergedChangeRequestMeta', pass).length,
+      0,
+    );
+    assert.equal(readsOf(batched.reads, 'getWorkItem', pass).length, 0);
+  }
+  assert.ok(
+    readsOf(batched.reads, 'listWorkItemComments').every(
+      (read) =>
+        (read.args[1] as { includeEditState?: boolean } | undefined)
+          ?.includeEditState === true,
+    ),
+    'every history read asks for the edit state',
+  );
+  assert.equal(batched.reads.length, 22);
+  assert.ok(batched.reads.length <= 30);
+
+  const perNode = await runEvidenceAudit(buildEvidenceWorld(), {
+    perNodeReader: true,
+  });
+  assert.equal(perNode.verdict?.closed, true);
+  assert.equal(
+    perNode.reads.length,
+    60,
+    'the per-node reader makes 3 reads per node per pass',
+  );
+  assert.deepEqual(
+    [
+      readsOf(perNode.reads, 'getWorkItem').length,
+      readsOf(perNode.reads, 'listWorkItemComments').length,
+      readsOf(perNode.reads, 'getMergedChangeRequestMeta').length,
+    ],
+    [20, 20, 20],
+  );
+});
+
+test('#5122: a dry run stays one complete pass of the same reads', async () => {
+  const run = await runEvidenceAudit(buildEvidenceWorld(), { dryRun: true });
+  assert.equal(run.error, undefined);
+  assert.equal(run.verdict?.ready, true);
+  assert.equal(run.verdict?.mode, 'dry-run');
+  assert.equal(run.passes, 1);
+  assert.equal(readsOf(run.reads, 'listWorkItemComments').length, 10);
+  assert.equal(readsOf(run.reads, 'getMergedChangeRequestMetaBatch').length, 1);
+  assert.equal(run.reads.length, 11);
+  assertNothingMutated(run.calls);
+});
+
+test('#5122: a change between the two passes stops the close, with no comment, close or release', async () => {
+  const sourceEdits: [string, (world: EvidenceWorld) => void, RegExp][] = [
+    [
+      'a source title is edited',
+      (world) => world.editIssue(3003, { title: 'edited title' }),
+      /source-binding-mismatch/,
+    ],
+    [
+      'a source body is edited',
+      (world) => world.editIssue(3003, { body: 'edited body' }),
+      /source-binding-mismatch/,
+    ],
+  ];
+  for (const [label, edit, expected] of sourceEdits) {
+    const world = buildEvidenceWorld();
+    const run = await runEvidenceAudit(world, {
+      beforeSecondPass: () => edit(world),
+    });
+    assert.equal(run.error, undefined, label);
+    assert.equal(run.passes, 2, label);
+    assert.equal(run.verdict?.ready, false, label);
+    assert.equal(run.exitCode, 1, label);
+    assert.match(
+      run.verdict?.blockers.map((blocker) => blocker.detail).join('\n') ?? '',
+      expected,
+      label,
+    );
+    assert.match(
+      run.verdict?.result ?? '',
+      /re-validation found new completion blockers immediately before close; no mutation/,
+      label,
+    );
+    assertNothingMutated(run.calls);
+  }
+
+  const proofEdits: [string, (world: EvidenceWorld) => void][] = [
+    [
+      'a merged pull request head changes',
+      (world) => {
+        world.proofOf(3003).headRefOid = 'c'.repeat(40);
+      },
+    ],
+    [
+      'a merged pull request merge commit changes',
+      (world) => {
+        world.proofOf(3003).mergeCommitOid = 'd'.repeat(40);
+      },
+    ],
+    ['a pull request is no longer merged', (world) => world.dropProof(3003)],
+  ];
+  for (const [label, edit] of proofEdits) {
+    const world = buildEvidenceWorld();
+    const run = await runEvidenceAudit(world, {
+      beforeSecondPass: () => edit(world),
+    });
+    assert.equal(run.error, undefined, label);
+    assert.equal(run.passes, 2, label);
+    assert.equal(run.verdict?.ready, false, label);
+    assert.match(
+      run.verdict?.blockers.map((blocker) => blocker.detail).join('\n') ?? '',
+      /issue #3003 has provisional decision evidence that cannot be replayed: completion-proof-mismatch/,
+      label,
+    );
+    assert.equal(
+      readsOf(run.reads, 'getMergedChangeRequestMetaBatch', 2).length,
+      1,
+      `${label}: the second pass read every proof again`,
+    );
+    assertNothingMutated(run.calls);
+  }
+
+  // The control: with no change between the passes the same run closes.
+  const control = await runEvidenceAudit(buildEvidenceWorld());
+  assert.equal(control.verdict?.closed, true);
+  assert.equal(control.calls.comments.length, 1);
+  assert.deepEqual(control.calls.closed, [ROADMAP]);
+});
+
+test('#5122: an incomplete or failed history read in either pass stops the run before any mutation', async () => {
+  const failHistory = (port: ProviderPort, node: number, failure: Error) => {
+    const read = port.listWorkItemComments.bind(port);
+    port.listWorkItemComments = (number, options) => {
+      if (number === node) throw failure;
+      return read(number, options);
+    };
+  };
+
+  // A history read that fails outright in the second pass.
+  const failure = new Error('comment history read failed');
+  const second = await runEvidenceAudit(buildEvidenceWorld(), {
+    beforeSecondPass: (port) => failHistory(port, 3004, failure),
+  });
+  assert.equal(second.passes, 2);
+  assert.equal(second.error, failure);
+  assertNothingMutated(second.calls);
+
+  // A page the real GitHub adapter cannot complete: it reports another page
+  // but no cursor to read it with. The adapter throws, so the run ends there.
+  const incompletePage = createGithubProviderAdapter(
+    EVIDENCE_OWNER,
+    EVIDENCE_REPO,
+    {
+      ghText: () =>
+        JSON.stringify({
+          data: {
+            repository: {
+              issue: {
+                comments: {
+                  nodes: [],
+                  pageInfo: { hasNextPage: true, endCursor: null },
+                },
+              },
+            },
+          },
+        }),
+      ghApiJson: () => {
+        throw new Error('ghApiJson not stubbed');
+      },
+      resolveViewerLogin: () => {
+        throw new Error('resolveViewerLogin not stubbed');
+      },
+      ghTextAsync: () => {
+        throw new Error('ghTextAsync not stubbed');
+      },
+      sleepSync: () => {},
+    } as never,
+  );
+  const useIncompletePage = (port: ProviderPort) => {
+    port.listWorkItemComments = incompletePage.listWorkItemComments;
+  };
+  for (const [label, run, passes] of [
+    ['first pass', { configure: useIncompletePage }, 1],
+    ['second pass', { beforeSecondPass: useIncompletePage }, 2],
+  ] as const) {
+    const result = await runEvidenceAudit(buildEvidenceWorld(), run);
+    assert.equal(result.passes, passes, label);
+    assert.match(
+      String((result.error as Error | undefined)?.message),
+      /hasNextPage without endCursor/,
+      label,
+    );
+    assertNothingMutated(result.calls);
+  }
+});
+
+test('#5122: loadStates gives the same verdicts as per-node loadState, including a refused replay', async () => {
+  const world = buildEvidenceWorld();
+  world.editIssue(3002, { body: 'edited after the decision' });
+  const sources = world.sources();
+  const { counted, reads } = countingEvidencePort(world);
+  const reader = evidenceReader(counted);
+
+  const batched = await reader.loadStates([...sources, ...sources]);
+  assert.equal(batched.size, 10, 'one result per distinct source');
+  assert.equal(reads.length, 11);
+  assert.equal(batched.get(3002)?.valid, false);
+  assert.ok(batched.get(3002)?.issues.includes('source-binding-mismatch'));
+  assert.equal(batched.get(3001)?.status, 'confirmed');
+
+  for (const issueNumber of world.numbers) {
+    assert.deepEqual(
+      batched.get(issueNumber),
+      await reader.loadState(issueNumber),
+      `#${issueNumber}`,
+    );
+  }
+});
+
+test('#5122: a failed batch falls back to single proof reads with the same verdicts, and a refusal is not retried', async () => {
+  const world = buildEvidenceWorld();
+  const sources = world.sources();
+  const expected = await evidenceReader(
+    createFakeProviderAdapter(world.fixture),
+  ).loadStates(sources);
+
+  const failing = countingEvidencePort(world);
+  failing.port.getMergedChangeRequestMetaBatch = () => {
+    throw new Error('GraphQL: something went wrong');
+  };
+  const fallback = await evidenceReader(failing.counted).loadStates(sources);
+  assert.deepEqual(fallback, expected);
+  assert.equal(
+    readsOf(failing.reads, 'getMergedChangeRequestMetaBatch').length,
+    1,
+  );
+  assert.equal(readsOf(failing.reads, 'getMergedChangeRequestMeta').length, 10);
+
+  const refused = countingEvidencePort(world);
+  const refusal = createLoadControlRefusal({
+    outcome: 'not-dispatched',
+    reason: 'busy',
+  });
+  refused.port.getMergedChangeRequestMetaBatch = () => {
+    throw refusal;
+  };
+  await assert.rejects(
+    evidenceReader(refused.counted).loadStates(sources),
+    (error: unknown) => error === refusal,
+  );
+  assert.equal(readsOf(refused.reads, 'getMergedChangeRequestMeta').length, 0);
+});
+
+test('#5122: an unusable snapshot is read live, and a lone proof is read singly', async () => {
+  const world = buildEvidenceWorld();
+  const expected = await evidenceReader(
+    createFakeProviderAdapter(world.fixture),
+  ).loadStates(world.numbers.map((issueNumber) => ({ issueNumber })));
+
+  const { counted, reads } = countingEvidencePort(world);
+  const reader = evidenceReader(counted);
+  const states = await reader.loadStates([
+    { issueNumber: 3001, snapshot: { ...world.snapshotOf(3001), title: '' } },
+    {
+      issueNumber: 3002,
+      snapshot: { ...world.snapshotOf(3002), updatedAt: 'not a date' },
+    },
+    { issueNumber: 3003 },
+    { issueNumber: 3004, snapshot: world.snapshotOf(3004) },
+    { issueNumber: 3005, snapshot: world.snapshotOf(3005) },
+  ]);
+  assert.deepEqual(
+    readsOf(reads, 'getWorkItem').map((read) => read.args[0]),
+    [3001, 3002, 3003],
+    'only the sources without a usable snapshot are read as issues',
+  );
+  assert.deepEqual(
+    [...states.entries()].map(([number, evidence]) => [number, evidence]),
+    [3001, 3002, 3003, 3004, 3005].map((number) => [
+      number,
+      expected.get(number),
+    ]),
+  );
+  // Two sources hold usable snapshots, so their two proofs go in one batch,
+  // and the three live ones read their own singly.
+  assert.equal(readsOf(reads, 'getMergedChangeRequestMetaBatch').length, 1);
+  assert.deepEqual(
+    readsOf(reads, 'getMergedChangeRequestMetaBatch')[0]?.args[0],
+    [pullRequestOf(3004), pullRequestOf(3005)],
+  );
+  assert.equal(readsOf(reads, 'getMergedChangeRequestMeta').length, 3);
+
+  // One source with a usable snapshot has one proof, read singly.
+  const lone = countingEvidencePort(buildEvidenceWorld());
+  await evidenceReader(lone.counted).loadStates([
+    { issueNumber: 3001, snapshot: world.snapshotOf(3001) },
+  ]);
+  assert.equal(
+    readsOf(lone.reads, 'getMergedChangeRequestMetaBatch').length,
+    0,
+  );
+  assert.equal(readsOf(lone.reads, 'getMergedChangeRequestMeta').length, 1);
+});
+
+test('#5122: sources are replayed in chunks of 25, one batch of proofs per chunk', async () => {
+  const world = buildEvidenceWorld(30);
+  const { counted, reads } = countingEvidencePort(world);
+  const states = await evidenceReader(counted).loadStates(world.sources());
+  assert.equal(states.size, 30);
+  assert.ok(
+    [...states.values()].every((evidence) => evidence.status === 'confirmed'),
+  );
+  assert.equal(readsOf(reads, 'listWorkItemComments').length, 30);
+  assert.deepEqual(
+    readsOf(reads, 'getMergedChangeRequestMetaBatch').map(
+      (read) => (read.args[0] as number[]).length,
+    ),
+    [25, 5],
+  );
+  assert.equal(readsOf(reads, 'getMergedChangeRequestMeta').length, 0);
+});
+
+test('#5122: a failed history read surfaces at its own source, as the per-node read did', async () => {
+  const world = buildEvidenceWorld();
+  const sources = world.sources();
+
+  // An inaccessible history is that source's refusal, not the run's.
+  const inaccessible = countingEvidencePort(world);
+  const read = inaccessible.port.listWorkItemComments.bind(inaccessible.port);
+  inaccessible.port.listWorkItemComments = (number, options) => {
+    if (number === 3004) {
+      throw Object.assign(new Error('GitHub lookup failed'), {
+        stderr: 'GraphQL: Resource not accessible by integration (HTTP 403)',
+      });
+    }
+    return read(number, options);
+  };
+  const states = await evidenceReader(inaccessible.counted).loadStates(sources);
+  assert.deepEqual(states.get(3004)?.issues, ['history-inaccessible']);
+  assert.equal(states.get(3003)?.status, 'confirmed');
+  assert.equal(states.get(3005)?.status, 'confirmed');
+
+  // Any other failure ends the run, as it did when each node read for itself.
+  const broken = countingEvidencePort(world);
+  const boom = new Error('boom');
+  broken.port.listWorkItemComments = (number) => {
+    if (number === 3004) throw boom;
+    return [];
+  };
+  await assert.rejects(
+    evidenceReader(broken.counted).loadStates(sources),
+    (error: unknown) => error === boom,
+  );
+});
+
+type EvidenceReader = ReturnType<typeof evidenceReader>;
+
+/** Run every source through `loadStates`, then through `loadState` one by one. */
+async function evidenceByBothRoutes(
+  world: EvidenceWorld,
+  options: {
+    configure?: (port: ProviderPort) => void;
+    extraSources?: { issueNumber: number }[];
+    makeReader?: (port: ProviderPort) => EvidenceReader;
+  } = {},
+) {
+  const sources = [...world.sources(), ...(options.extraSources ?? [])];
+  const build = () => {
+    const { port, counted } = countingEvidencePort(world);
+    options.configure?.(port);
+    return (options.makeReader ?? evidenceReader)(counted);
+  };
+  const viaStates = await build().loadStates(sources);
+  const reader = build();
+  const viaState = new Map<
+    number,
+    Awaited<ReturnType<typeof reader.loadState>>
+  >();
+  for (const { issueNumber } of sources) {
+    viaState.set(issueNumber, await reader.loadState(issueNumber));
+  }
+  return { viaStates, viaState };
+}
+
+const forbidden403 = () =>
+  Object.assign(new Error('GitHub lookup failed'), {
+    stderr: 'GraphQL: Resource not accessible by integration (HTTP 403)',
+  });
+
+test('#5122: loadStates reaches the same verdict as loadState for every refusal a source can draw', async () => {
+  const rewriteHistory = (
+    world: EvidenceWorld,
+    number: number,
+    change: (comments: ProviderComment[]) => ProviderComment[],
+  ) => {
+    const comments = world.fixture.comments?.[number];
+    if (!comments || !world.fixture.comments) throw new Error('no history');
+    world.fixture.comments[number] = change(comments);
+  };
+  const cases: {
+    label: string;
+    prepare: (world: EvidenceWorld) => void;
+    configure?: (port: ProviderPort) => void;
+    makeReader?: (port: ProviderPort) => EvidenceReader;
+    extraSources?: { issueNumber: number }[];
+    node: number;
+    expected: (evidence: { valid: boolean; issues: readonly string[] }) => void;
+  }[] = [
+    {
+      label: 'a record from an untrusted author',
+      prepare: (world) =>
+        rewriteHistory(world, 3002, (comments) =>
+          comments.map((comment) =>
+            comment.id === 4
+              ? { ...comment, authorLogin: 'someone-else' }
+              : comment,
+          ),
+        ),
+      node: 3002,
+      expected: (evidence) =>
+        assert.deepEqual(evidence.issues, ['record-authority-invalid']),
+    },
+    {
+      label: 'an edited record',
+      prepare: (world) =>
+        rewriteHistory(world, 3002, (comments) =>
+          comments.map((comment) =>
+            comment.id === 4
+              ? { ...comment, lastEditedAt: evidenceAt(50) }
+              : comment,
+          ),
+        ),
+      node: 3002,
+      expected: (evidence) =>
+        assert.deepEqual(evidence.issues, ['record-authority-invalid']),
+    },
+    {
+      label: 'a history that lost its claim marker',
+      prepare: (world) =>
+        rewriteHistory(world, 3002, (comments) =>
+          comments.filter((comment) => comment.id !== 1),
+        ),
+      node: 3002,
+      expected: (evidence) => {
+        assert.equal(evidence.valid, false);
+        assert.ok(
+          evidence.issues.some((issue) => /^claim-lineage-/u.test(issue)),
+        );
+      },
+    },
+    {
+      label: 'a history with no decision record at all',
+      prepare: (world) => rewriteHistory(world, 3002, () => []),
+      node: 3002,
+      expected: (evidence) => assert.equal(evidence.valid, true),
+    },
+    {
+      label:
+        'a completion record that names no pull request of this repository',
+      prepare: (world) =>
+        rewriteHistory(world, 3002, (comments) =>
+          comments.map((comment) =>
+            comment.id === 4
+              ? {
+                  ...comment,
+                  body: comment.body.replace(
+                    `github.com/${EVIDENCE_OWNER}/${EVIDENCE_REPO}/pull/`,
+                    `github.com/${EVIDENCE_OWNER}/another-repo/pull/`,
+                  ),
+                }
+              : comment,
+          ),
+        ),
+      node: 3002,
+      expected: (evidence) =>
+        assert.deepEqual(evidence.issues, ['completion-reference-invalid']),
+    },
+    {
+      label: 'a pull request that is no longer merged',
+      prepare: (world) => world.dropProof(3002),
+      node: 3002,
+      expected: (evidence) =>
+        assert.deepEqual(evidence.issues, ['completion-proof-mismatch']),
+    },
+    {
+      label: 'a merged pull request whose head no longer matches the record',
+      prepare: (world) => {
+        world.proofOf(3002).headRefOid = 'c'.repeat(40);
+      },
+      node: 3002,
+      expected: (evidence) =>
+        assert.deepEqual(evidence.issues, ['completion-proof-mismatch']),
+    },
+    {
+      label: 'a failed batch and an inaccessible proof for one pull request',
+      prepare: () => {},
+      configure: (port) => {
+        const single = port.getMergedChangeRequestMeta.bind(port);
+        port.getMergedChangeRequestMetaBatch = () => {
+          throw new Error('GraphQL: something went wrong');
+        };
+        port.getMergedChangeRequestMeta = (number) => {
+          if (number === pullRequestOf(3004)) throw forbidden403();
+          return single(number);
+        };
+      },
+      node: 3004,
+      expected: (evidence) =>
+        assert.deepEqual(evidence.issues, ['completion-pr-inaccessible']),
+    },
+    {
+      label: 'an unreadable trusted policy',
+      prepare: () => {},
+      makeReader: (port) =>
+        buildProvisionalDecisionEvidenceReader({
+          owner: EVIDENCE_OWNER,
+          repo: EVIDENCE_REPO,
+          port,
+          readTrustedMarkerActors: () => {
+            throw new Error('the trusted configuration cannot be read');
+          },
+          policy: null,
+        }),
+      node: 3002,
+      expected: (evidence) =>
+        assert.deepEqual(evidence.issues, ['trusted-policy-unreadable']),
+    },
+    {
+      label: 'a source with no snapshot that does not exist',
+      prepare: () => {},
+      extraSources: [{ issueNumber: 9001 }],
+      node: 9001,
+      expected: (evidence) =>
+        assert.deepEqual(evidence.issues, ['source-not-found']),
+    },
+    {
+      label: 'a source with no snapshot that is inaccessible',
+      prepare: () => {},
+      configure: (port) => {
+        const read = port.getWorkItem.bind(port);
+        port.getWorkItem = (number) => {
+          if (number === 9002) throw forbidden403();
+          return read(number);
+        };
+      },
+      extraSources: [{ issueNumber: 9002 }],
+      node: 9002,
+      expected: (evidence) =>
+        assert.deepEqual(evidence.issues, ['source-inaccessible']),
+    },
+  ];
+  for (const testCase of cases) {
+    const world = buildEvidenceWorld();
+    testCase.prepare(world);
+    const { viaStates, viaState } = await evidenceByBothRoutes(world, {
+      configure: testCase.configure,
+      makeReader: testCase.makeReader,
+      extraSources: testCase.extraSources,
+    });
+    assert.deepEqual(
+      [...viaStates.entries()],
+      [...viaState.entries()],
+      testCase.label,
+    );
+    const evidence = viaStates.get(testCase.node);
+    assert.ok(evidence, testCase.label);
+    testCase.expected(evidence);
+  }
+});
+
+test('#5122: a failure that is not an inaccessible lookup ends loadStates exactly as it ends loadState', async () => {
+  const world = buildEvidenceWorld();
+  const authError = Object.assign(new Error('Bad credentials (HTTP 401)'), {
+    stderr: 'gh: Bad credentials (HTTP 401)',
+  });
+  const configure = (port: ProviderPort) => {
+    const single = port.getMergedChangeRequestMeta.bind(port);
+    port.getMergedChangeRequestMetaBatch = () => {
+      throw new Error('GraphQL: something went wrong');
+    };
+    port.getMergedChangeRequestMeta = (number) => {
+      if (number === pullRequestOf(3004)) throw authError;
+      return single(number);
+    };
+  };
+  const { counted, port } = countingEvidencePort(world);
+  configure(port);
+  await assert.rejects(
+    evidenceReader(counted).loadState(3004),
+    (error: unknown) => error === authError,
+  );
+  const batched = countingEvidencePort(world);
+  configure(batched.port);
+  await assert.rejects(
+    evidenceReader(batched.counted).loadStates(world.sources()),
+    (error: unknown) => error === authError,
+  );
+});
+
+test('#5122: a snapshot the caller passes decides the replay, not a second live read of the issue', async () => {
+  const world = buildEvidenceWorld();
+  const sources = world.sources();
+  // The issue changes after the snapshot was taken. The replay must judge the
+  // snapshot it was given (the traversal's own read), and the live read must
+  // still see the change.
+  world.editIssue(3003, { body: 'edited after the traversal read it' });
+  const { counted, reads } = countingEvidencePort(world);
+  const reader = evidenceReader(counted);
+
+  const states = await reader.loadStates(sources);
+  assert.equal(states.get(3003)?.status, 'confirmed');
+  assert.equal(readsOf(reads, 'getWorkItem').length, 0);
+
+  const live = await reader.loadState(3003);
+  assert.equal(live.valid, false);
+  assert.ok(live.issues.includes('source-binding-mismatch'));
 });

@@ -2384,6 +2384,129 @@ test('provisional graph state stays attached to the source across shared provena
   );
 });
 
+const NO_PROVISIONAL_RECORDS = {
+  valid: true,
+  hasRecords: false,
+  status: 'none',
+  hasRework: false,
+  decisions: [],
+  issues: [],
+} as const;
+
+test('provisional batch read: one call carries every node with its own issue read as the snapshot, and the results attach (#5122)', async () => {
+  const stamp = (issue: Record<string, unknown>, updatedAt: string | null) =>
+    updatedAt === null ? issue : { ...issue, updated_at: updatedAt };
+  const issues = new Map<number, unknown>([
+    [
+      670,
+      stamp(
+        roadmapIssue(670, '- [x] #671\n- [x] #672', 'batch-root', 'open'),
+        '2026-11-01T00:00:00Z',
+      ),
+    ],
+    [
+      671,
+      stamp(executionIssue(671, 'body 671', 'closed'), '2026-11-02T00:00:00Z'),
+    ],
+    // No `updated_at`: no usable snapshot, so the reader reads it live.
+    [672, stamp(executionIssue(672, 'body 672', 'closed'), null)],
+  ]);
+  const singleReads: number[] = [];
+  const batches: unknown[] = [];
+  const graph = await enumerateRoadmapGraph(670, {
+    loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+    provisionalDecisionState: {
+      loadState: async (issueNumber) => {
+        singleReads.push(issueNumber);
+        return NO_PROVISIONAL_RECORDS;
+      },
+      loadStates: async (sources) => {
+        batches.push(sources);
+        return new Map(
+          sources.map((source) => [
+            source.issueNumber,
+            {
+              ...NO_PROVISIONAL_RECORDS,
+              issues: [`from-batch-${source.issueNumber}`],
+            },
+          ]),
+        );
+      },
+    },
+  });
+
+  assert.deepEqual(singleReads, [], 'the per-node read is not used');
+  assert.deepEqual(batches, [
+    [
+      {
+        issueNumber: 670,
+        snapshot: {
+          title: 'roadmap 670',
+          body: '<!-- idd-skill-roadmap-id: batch-root -->\n- [x] #671\n- [x] #672',
+          updatedAt: '2026-11-01T00:00:00Z',
+        },
+      },
+      {
+        issueNumber: 671,
+        snapshot: {
+          title: 'issue 671',
+          body: 'body 671',
+          updatedAt: '2026-11-02T00:00:00Z',
+        },
+      },
+      { issueNumber: 672 },
+    ],
+  ]);
+  assert.deepEqual(
+    graph.nodes.map((node) => [
+      node.number,
+      node.provisionalDecisionState?.issues,
+    ]),
+    [
+      [670, ['from-batch-670']],
+      [671, ['from-batch-671']],
+      [672, ['from-batch-672']],
+    ],
+  );
+});
+
+test('provisional batch read: a missing or empty result for any node fails the whole read (#5122)', async () => {
+  const issues = new Map<number, unknown>([
+    [680, roadmapIssue(680, '- [x] #681', 'short-root')],
+    [681, executionIssue(681, 'child', 'closed')],
+  ]);
+  const enumerate = (loadStates: () => Promise<Map<number, unknown>>) =>
+    enumerateRoadmapGraph(680, {
+      loadIssue: async (issueNumber) => issues.get(issueNumber) ?? null,
+      provisionalDecisionState: {
+        loadState: async () => NO_PROVISIONAL_RECORDS,
+        loadStates: loadStates as never,
+      },
+    });
+
+  // A short result must never read as "no decision records" for the node it
+  // omits, which would let a decision that was never replayed pass as
+  // confirmed.
+  await assert.rejects(
+    enumerate(async () => new Map([[680, NO_PROVISIONAL_RECORDS]])),
+    /provisional decision evidence was not returned for issue #681/,
+  );
+  await assert.rejects(
+    enumerate(
+      async () =>
+        new Map<number, unknown>([
+          [680, NO_PROVISIONAL_RECORDS],
+          [681, null],
+        ]),
+    ),
+    /provisional decision evidence was not returned for issue #681/,
+  );
+  await assert.rejects(
+    enumerate(async () => new Map()),
+    /provisional decision evidence was not returned for issue #680/,
+  );
+});
+
 function roadmapIssue(
   number: number,
   body: string,

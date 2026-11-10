@@ -18,6 +18,7 @@ import {
 import { parseCliArgs } from './cli-args.mts';
 import { extractDependencyReferences } from './dependency-grammar.mts';
 import { classifyInaccessibleIssueLookup } from './gh-http-status.mts';
+import { isNotDispatchedRefusal } from './github-api-refusal.mts';
 import type { HelperCliResult } from './helper-cli-runner.mts';
 import {
   applyHelperCliOutcomeWhenDisabled,
@@ -347,10 +348,53 @@ export interface ProvisionalDecisionEvidence {
   verifiedWorkReferences?: readonly string[];
 }
 
+/**
+ * One source for {@link ProvisionalDecisionEvidenceReader.loadStates}. The
+ * optional `snapshot` is the caller's own read of the source issue, reused in
+ * place of a second `getWorkItem` read. Pass one only when it comes from a
+ * live read taken during the same pass (not from a cache that can outlive
+ * it): it is then as old as that read, and the replay binds a decision to the
+ * title and body hash only. A snapshot with an empty title or an unparseable
+ * `updatedAt` is ignored and the source is read live, which yields the same
+ * `source-snapshot-incomplete` verdict as before.
+ */
+export interface ProvisionalEvidenceSource {
+  issueNumber: number;
+  snapshot?: { title: string; body: string; updatedAt: string };
+}
+
 export interface ProvisionalDecisionEvidenceReader {
   loadState(issueNumber: number): Promise<ProvisionalDecisionEvidence>;
+  /**
+   * Replay several sources in one pass and return one evidence object per
+   * distinct source number. Same verdicts as {@link loadState} per source,
+   * with fewer provider calls: a snapshot replaces the issue read, and the
+   * merged pull requests that trusted work-completed records name are read
+   * in one batch per chunk. Every source's complete comment history and every
+   * merged-PR proof is still read on each call; nothing is kept between calls.
+   */
+  loadStates(
+    sources: readonly ProvisionalEvidenceSource[],
+  ): Promise<Map<number, ProvisionalDecisionEvidence>>;
   decisionIssueClassEnabled(): boolean;
 }
+
+/**
+ * Sources replayed per chunk, and the most pull requests asked for in one
+ * batched read (the GitHub adapter allows the same number). A chunk's comment
+ * histories are held in memory together, so this also bounds that.
+ */
+const PROVISIONAL_EVIDENCE_CHUNK_SIZE = 25;
+
+/** The three reads one source's replay makes; the live port or a chunk's held reads. */
+type ProvisionalEvidenceReads = Pick<
+  ProviderPort,
+  'listWorkItemComments' | 'getMergedChangeRequestMeta'
+> & {
+  getWorkItem(
+    number: number,
+  ): Pick<ProviderWorkItem, 'title' | 'body' | 'updatedAt'> | null;
+};
 
 /**
  * Build the live, fail-closed reader shared by Discover and roadmap audits.
@@ -372,7 +416,7 @@ export function buildProvisionalDecisionEvidenceReader(input: {
     claimTiming?: { staleAge?: unknown };
   } | null;
 }): ProvisionalDecisionEvidenceReader {
-  const { owner, repo, port } = input;
+  const { owner, repo, port: livePort } = input;
   // The trusted actors and the claim stale age come from the trusted base
   // configuration, read live on the first replay that needs them (as the
   // class switch is), not at reader build. The caller's local policy is not
@@ -415,7 +459,10 @@ export function buildProvisionalDecisionEvidenceReader(input: {
   };
   let classEnabled: boolean | undefined;
 
-  return {
+  // `loadStateFrom` is the replay itself, reading through the `port` it is
+  // given: the live port for `loadState`, or a chunk's held reads for
+  // `loadStates`. The public `loadState` keeps its single argument.
+  const replay = {
     decisionIssueClassEnabled() {
       if (classEnabled === undefined) {
         classEnabled =
@@ -424,8 +471,11 @@ export function buildProvisionalDecisionEvidenceReader(input: {
       }
       return classEnabled;
     },
-    async loadState(issueNumber) {
-      let issue: ProviderWorkItem | null;
+    async loadStateFrom(
+      issueNumber: number,
+      port: ProvisionalEvidenceReads,
+    ): Promise<ProvisionalDecisionEvidence> {
+      let issue: Pick<ProviderWorkItem, 'title' | 'body' | 'updatedAt'> | null;
       try {
         issue = port.getWorkItem(issueNumber);
       } catch (error) {
@@ -631,6 +681,189 @@ export function buildProvisionalDecisionEvidenceReader(input: {
         decisions,
         issues: [],
       };
+    },
+  };
+
+  /**
+   * The reads one chunk of sources shares. A source with a usable snapshot
+   * skips the issue read and has its complete comment history read here, up
+   * front, with a thrown error kept to be thrown again at that source's turn.
+   * A source without one is replayed fully live, so the order of the verdicts
+   * it can reach is unchanged. The merged pull requests that trusted,
+   * unedited work-completed records name are then read in one batch.
+   *
+   * That pre-scan only chooses what to read ahead. A pull request it misses,
+   * or one it reads that no replay needs, changes no verdict: a number absent
+   * from the batch is read singly inside the replay, which keeps the
+   * inaccessible-versus-rethrow classification. It applies a per-record trust
+   * filter (author and edit state), whereas the replay refuses a whole history
+   * when any record marker is untrusted or edited, and it does not run the
+   * claim-lineage check, so it can name a proof for a source the replay then
+   * refuses. The cost is an extra alias in the batch; a refused batch ends
+   * the run, as the first refused read of the per-node path does. The held
+   * reads belong to this one chunk, so nothing outlives a call or crosses a
+   * pass.
+   */
+  const holdChunkReads = (
+    chunk: readonly ProvisionalEvidenceSource[],
+  ): ProvisionalEvidenceReads => {
+    const snapshots = new Map<
+      number,
+      Pick<ProviderWorkItem, 'title' | 'body' | 'updatedAt'>
+    >();
+    const histories = new Map<
+      number,
+      { comments: ProviderComment[] } | { thrown: unknown }
+    >();
+    for (const source of chunk) {
+      const snapshot = source.snapshot;
+      if (
+        snapshot === undefined ||
+        typeof snapshot.title !== 'string' ||
+        snapshot.title === '' ||
+        typeof snapshot.body !== 'string' ||
+        typeof snapshot.updatedAt !== 'string' ||
+        Number.isNaN(Date.parse(snapshot.updatedAt))
+      ) {
+        continue;
+      }
+      snapshots.set(source.issueNumber, {
+        title: snapshot.title,
+        body: snapshot.body,
+        updatedAt: snapshot.updatedAt,
+      });
+      try {
+        histories.set(source.issueNumber, {
+          comments: livePort.listWorkItemComments(source.issueNumber, {
+            includeEditState: true,
+          }),
+        });
+      } catch (error) {
+        // A refused request started nothing, and the replay would stop at it
+        // anyway; any other failure is thrown at this source's own turn.
+        if (isNotDispatchedRefusal(error)) throw error;
+        histories.set(source.issueNumber, { thrown: error });
+      }
+    }
+
+    const candidates = new Set<number>();
+    let trustedLogins: Set<string> | null | undefined;
+    for (const held of histories.values()) {
+      if (!('comments' in held)) continue;
+      for (const comment of held.comments) {
+        if (
+          !String(comment.body ?? '').startsWith(
+            PROVISIONAL_DECISION_RECORD_MARKER,
+          )
+        ) {
+          continue;
+        }
+        if (trustedLogins === undefined) {
+          const trusted = readTrustedPolicy();
+          trustedLogins =
+            trusted === null
+              ? null
+              : new Set(trusted.logins.map(normalizeLogin));
+        }
+        if (
+          trustedLogins === null ||
+          !trustedLogins.has(normalizeLogin(comment.authorLogin)) ||
+          classifyCommentEditState(comment) !== 'unedited'
+        ) {
+          continue;
+        }
+        const parsed = parseProvisionalDecisionRecordComment(comment.body);
+        if (!parsed.ok || parsed.record.event.type !== 'work-completed') {
+          continue;
+        }
+        const result = parsed.record.event.result as Record<string, unknown>;
+        const pullRequestNumber =
+          result.kind === 'merged-pull-request'
+            ? parseSameRepositoryPullRequestNumber(
+                result.reference,
+                owner,
+                repo,
+              )
+            : null;
+        if (pullRequestNumber !== null) candidates.add(pullRequestNumber);
+      }
+    }
+
+    const mergedMeta = new Map<
+      number,
+      ReturnType<ProviderPort['getMergedChangeRequestMeta']>
+    >();
+    const numbers = [...candidates].sort((left, right) => left - right);
+    // One pull request costs the same through the single read, so only a
+    // group is batched.
+    if (numbers.length >= 2) {
+      for (
+        let start = 0;
+        start < numbers.length;
+        start += PROVISIONAL_EVIDENCE_CHUNK_SIZE
+      ) {
+        try {
+          for (const [number, meta] of livePort.getMergedChangeRequestMetaBatch(
+            numbers.slice(start, start + PROVISIONAL_EVIDENCE_CHUNK_SIZE),
+          )) {
+            mergedMeta.set(number, meta);
+          }
+        } catch (error) {
+          if (isNotDispatchedRefusal(error)) throw error;
+          // Any other failure leaves these numbers to the single read.
+        }
+      }
+    }
+
+    return {
+      getWorkItem: (number) =>
+        snapshots.get(number) ?? livePort.getWorkItem(number),
+      listWorkItemComments: (number, options) => {
+        const held = histories.get(number);
+        if (held === undefined || options?.includeEditState !== true) {
+          return livePort.listWorkItemComments(number, options);
+        }
+        if ('thrown' in held) throw held.thrown;
+        return held.comments;
+      },
+      getMergedChangeRequestMeta: (number) =>
+        mergedMeta.has(number)
+          ? (mergedMeta.get(number) ?? null)
+          : livePort.getMergedChangeRequestMeta(number),
+    };
+  };
+
+  return {
+    decisionIssueClassEnabled: replay.decisionIssueClassEnabled,
+    loadState: (issueNumber: number) =>
+      replay.loadStateFrom(issueNumber, livePort),
+    async loadStates(sources) {
+      const distinct = new Map<number, ProvisionalEvidenceSource>();
+      for (const source of sources) {
+        if (!distinct.has(source.issueNumber)) {
+          distinct.set(source.issueNumber, source);
+        }
+      }
+      const ordered = [...distinct.values()];
+      const states = new Map<number, ProvisionalDecisionEvidence>();
+      for (
+        let start = 0;
+        start < ordered.length;
+        start += PROVISIONAL_EVIDENCE_CHUNK_SIZE
+      ) {
+        const chunk = ordered.slice(
+          start,
+          start + PROVISIONAL_EVIDENCE_CHUNK_SIZE,
+        );
+        const reads = holdChunkReads(chunk);
+        for (const source of chunk) {
+          states.set(
+            source.issueNumber,
+            await replay.loadStateFrom(source.issueNumber, reads),
+          );
+        }
+      }
+      return states;
     },
   };
 }
