@@ -5945,7 +5945,11 @@ The record does not reread the ordinary issue effort marker later, so an edit
 to that marker cannot rewrite the snapshot.
 
 This change does not invoke the helper automatically; the detecting session
-must run it explicitly. D2/F2 caller wiring is tracked by issue `#4676`.
+must run it explicitly. D2/F2 caller wiring is tracked by issue `#4676`. F2/F3
+readiness reads this record and still blocks a count-only audit failure that
+has no accepted decision. That consumer predates the advisory estimate-drift
+policy of issue `#5093`, which changes B3 and `claimed-push` only; a follow-up
+under roadmap `#5091` reconciles it.
 
 ```sh
 node scripts/post-idd-marker.mjs --type scope-overrun --target issue <issue> \
@@ -11329,11 +11333,13 @@ worker brief had told each of them not to. The pushed head commits were
 pushes, and the failed gate and the semicolon chain are recorded only in
 the operator's worker reports, which live outside this repository.
 
-The scope check is the pre-push stop of the work phase's "Scope overrun"
-rule, which nothing in the push path ran. On issue `#4375` it did not run
-before the first push (pull request `#4399`); it ran at F2 and tripped
+The scope check is the pre-push measurement behind the work phase's "Scope
+overrun" rule, which nothing in the push path ran. On issue `#4375` it did not
+run before the first push (pull request `#4399`); it ran at F2 and tripped
 (effort M, 15 candidate files, limit 8) after the branch was published.
-Issue `#4480` added it as the `scope` step.
+Issue `#4480` added it as the `scope` step; since issue `#5093` it stops on a
+count only for unusable effort evidence and reports a count over a coherent
+estimate as advisory drift.
 
 ```sh
 node scripts/claimed-push.mjs --issue <n> --claim-id <id> --agent-id <id> \
@@ -11423,11 +11429,12 @@ node scripts/claimed-push.mjs --issue <n> --claim-id <id> --agent-id <id> \
    cannot start (next action: check the helper installation, then rerun),
    ends by signal, prints anything but one JSON object with a `findings`
    array, or has no such finding refuses. The step fails when either
-   finding fails. Its reason names the canonical paths, how many the audit
+   finding fails, unless the estimate-drift rules below classify the failure
+   as advisory. Its reason names the canonical paths, how many the audit
    counts, and the counting rule: distinct parsed keys, and a token
    without `/` or `.`, or with whitespace, is not counted. The next action
-   is to stop without pushing and follow the Scope overrun rule in
-   `idd-work.instructions.md`, unless the S-to-M correction below qualifies.
+   is to stop without pushing: the effort evidence cannot support a numerical
+   advisory, so follow the Scope overrun rule in `idd-work.instructions.md`.
    When `refs/remotes/origin/<base>` is
    missing or differs from the SHA `git ls-remote` printed, the base is
    stale, and the step refuses before it reads the branch point, whatever
@@ -11447,40 +11454,70 @@ node scripts/claimed-push.mjs --issue <n> --claim-id <id> --agent-id <id> \
    title or body, a malformed audit result) has the next action to stop
    and report.
 
-   **Read-only S-to-M correction (issue `#5092`)**: only when either
-   original S limit finding fails, `parseEffortMarker` finds one coherent S,
-   the audit's `effort-visible-line-agreement` passes, and the offset locator
-   proves one active visible and hidden token after Markdown masking, the
-   step changes only those two tokens in an in-memory copy. CRLF is preserved
-   by mapping normalized UTF-16 offsets back to raw-body offsets. It reruns
-   both audits on that M copy and its canonical-path copy, and requires both
-   limit findings and both visible-line agreements to pass. It also requires
-   the actual canonical path count, before audit-parser omissions, to be at
-   most the existing M maximum of eight. Missing, malformed, mismatched,
-   duplicate, masked-only or ambiguous footer evidence, an M audit failure,
-   or more than eight actual paths keeps the existing stop. No issue body is
+   **Estimate drift (issues `#5092` and `#5093`)**: a count over the authored
+   estimate is advisory evidence, never a stop. It measures breadth, not
+   semantic intent, complexity, safety, or the ability to finish, and a
+   successful helper run proves none of those. The step recognizes drift only
+   from a coherent, checked S or M estimate: `parseEffortMarker` on the raw
+   body finds one coherent value, the audit's `effort-visible-line-agreement`
+   passes on both runs, and the offset locator proves one active visible and
+   one active hidden token after Markdown masking (the mask keeps HTML comments
+   and blocks, as the audit does). The helper then compares its own counts
+   (issue-body keys, audit-parsed canonical keys, actual canonical paths) with
+   the band limit of the authoring contract's Over-scope split threshold table
+   and requires each failing finding to be explained by its own count, so
+   neither the finding ID nor its prose decides. A recognized failure passes
+   with `assessment.disposition: "advisory-drift"`, the raw audit results and
+   counts, and no issue-body write, marker, or effort-L assignment, whatever
+   the count (nine and twelve paths included). A passing audit whose actual
+   count still exceeds the limit (the parser omits root and whitespace paths)
+   is advisory drift too, while a split child the audit exempts over the limit
+   is `not-assessed`. A body whose own candidate list is over the limit is
+   advisory drift as well; authoring admission is unchanged.
+
+   When the actual canonical paths and the body keys are both at most eight, an
+   S estimate also keeps the read-only S-to-M copy: only the two active tokens
+   change in an in-memory copy, CRLF is preserved by mapping normalized UTF-16
+   offsets back to raw-body offsets, both audits rerun on that M copy and its
+   canonical-path copy, and both limit findings and both visible-line
+   agreements must pass. Then `correctionApplied` is `true` and
+   `effectiveEffort` is `M`; if the M audits do not both pass, the step
+   refuses. Missing, malformed, mismatched, duplicate, masked-only or ambiguous
+   footer evidence, a failed finding no count explains, an unreadable audit or
+   canonical-path read, or a path a bullet cannot carry keep their existing
+   handling and never yield a numerical advisory. An L or absent estimate is
+   not applicable (`not-assessed`), not a measured overrun. No issue body is
    written.
 
    A successful scope step includes an `assessment` object in dry-run and
-   apply JSON: the original body SHA-256, authored and effective effort,
-   correction flag, canonical changed paths and actual count, audit-parsed
+   apply JSON: the original body SHA-256, authored and effective effort
+   (the estimate after the S-to-M copy, never a measured size or effort L),
+   correction flag, `disposition` (`within-estimate`, `advisory-drift`, or
+   `not-assessed`), canonical changed paths and actual count, audit-parsed
    count, original audit findings and (when corrected) M audit findings, and
    `assessmentSha256`. The assessment SHA covers the body digest, estimate,
-   path set/count and audit outcomes. Apply of a corrected assessment
-   requires `--expected-scope-sha256` equal to that SHA; it still rereads and
-   reassesses the live issue and branch. After the gate, `reassert` reassesses
-   corrected scope again and stops before push if the SHA changed. A missing
-   SHA, an older helper without structured assessment, or any changed result
-   cannot authorize the correction.
+   disposition, path set/count and audit outcomes. Apply after the S-to-M copy
+   requires `--expected-scope-sha256` equal to that SHA; for any other
+   advisory drift the SHA is optional, but one passed must match. Apply still
+   rereads and reassesses the live issue and branch. After the gate,
+   `reassert` reassesses scope again whenever a SHA was passed and stops
+   before push if it changed. A missing SHA after the S-to-M copy, an older
+   helper without structured assessment, or any changed result cannot
+   authorize the push. F2/F3 readiness (`pre-merge-readiness`, issue
+   `#4676`) runs its own scope audit and still blocks on a count-only
+   failure without an accepted decision; this step does not waive it.
 
-   B3 posts a report with S, M, canonical paths/count, current claim ID,
-   raw-body and assessment SHA values, and a unique attempt ID.
+   B3 posts a report with the estimate, the effective estimate (M after the
+   S-to-M copy, else unchanged), canonical paths/count, the reassessment
+   verdict, current claim ID, raw-body and assessment SHA values, and a
+   unique attempt ID.
    Revalidate claim, nonce, worktree, lock and tokens immediately before the
    POST; reread the body and rerun dry-run if its digest or assessment
    changed. Append the complete `idd-agent-authored` suffix. Verify the
    returned comment ID, author and exact body; reconcile an uncertain POST
    by attempt ID before retrying. If reporting remains unverified, stop and
-   retain the claim. Keep the verified assessment SHA for normal D2. B3 ends
+   retain the claim. Keep the verified assessment SHA for normal D2 (required
+   after the S-to-M copy, otherwise optional). B3 ends
    without `--apply` or a push: continue through C self-review and D1
    synchronization, then pass the SHA with `--expected-scope-sha256` to the
    normal D2 helper invocation. If D2's fresh scope differs, stop, reassess
@@ -11628,40 +11665,62 @@ node scripts/claimed-push.mjs --issue <n> --claim-id <id> --agent-id <id> \
   the claimed sibling path and its current branch is the claimed branch,
   using the cwd-vs-claim check in the
   [claim revalidation gate](../.github/instructions/idd-overview-core.instructions.md#claim-revalidation-gate).
-  Apply the `effort-candidate-file-limit` check that the scope step runs:
-  count the issue's parsed Candidate files and the canonical changed paths
-  separately, apply B3's canonical-path exclusions, and stop without
-  pushing when either count fails. Commit any validation or formatter
-  output first, so the tree is clean.
+  Count the issue's parsed Candidate files and the canonical changed paths
+  separately, apply B3's canonical-path exclusions, and compare each count with
+  the estimate's limit in the authoring contract's Over-scope split threshold
+  table. A count over the limit is advisory drift, not a stop: it measures
+  breadth, not intent, so reassess the plan once, note the count in the PR
+  notes, and continue; stop without pushing only for a reason other than the
+  number. Commit any validation or formatter output first, so the tree is
+  clean.
 
 ### B3 scope assessment outcomes
 
-When dry-run returns `assessment.correctionApplied: true`, follow the
-preceding read-only S-to-M correction and report procedure. Revalidate the
-claim, nonce, worktree, lock, and tokens immediately before reporting; require
-the live-body and assessment SHA-256 values to match or rerun dry-run. Verify
-the attempt's returned comment ID, author, and exact body; reconcile uncertain
-POSTs by attempt ID. If the report is unverified, retain the claim and stop.
-Do not apply in B3. Keep the verified assessment SHA and pass it with
-`--expected-scope-sha256` to the normal D2 `--apply` only after C self-review
-and D1 synchronization. If D2's fresh scope differs, return to B3, reassess
-and report, then repeat C and D1 before applying. Never reuse reports across
-claims or resumes, and do not edit or roll back the issue body. See the
+A count over the S/M estimate is advisory drift. It measures breadth, not
+semantic intent, complexity, safety, or the ability to finish, and helper
+success does not prove any of those. When dry-run returns
+`assessment.correctionApplied: true` or `assessment.disposition:
+"advisory-drift"`, make one evidence-backed plan reassessment before
+continuing. If the change is still one cohesive way to meet the accepted
+intent, needs no new authority or unresolved decision, and has a feasible
+validation plan, update the plan, report it as above, and continue the same
+claim. Count generated companions, tests and supporting docs by their purpose.
+Revalidate the claim, nonce, worktree, lock, and tokens immediately before
+reporting; require the live-body and assessment SHA-256 values to match or
+rerun dry-run. Verify the attempt's returned comment ID, author, and exact
+body; reconcile uncertain POSTs by attempt ID. If the report is unverified,
+retain the claim and stop. Do not apply in B3. Keep the verified assessment
+SHA and pass it with `--expected-scope-sha256` to the normal D2 `--apply` only
+after C self-review and D1 synchronization (required after
+`correctionApplied: true`, otherwise optional, and a SHA passed must match). If
+D2's fresh scope differs, return to B3, reassess and report, then repeat C and
+D1 before applying. Never reuse reports across claims or resumes, and do not
+edit or roll back the issue body. See the
 [B3 scope-overrun rationale](idd-design-rationale.md#b3--scope-overrun-returns-to-authoring).
 
-When the helper returns no `assessment.correctionApplied: true` (a qualifying
-correction whose report is unverified follows the retain-and-stop rule above)
-and the profile-selected
-`audit-authored-issue --shape child --stdin --marker-prefix {markerPrefix}`
-fails `effort-candidate-file-limit` on the issue body or with `## Candidate
-files` set to canonical changed paths, stop coding without pushing. Comment
-the estimate, candidate files, changed files, and split proposal; release per
-the Abort rule (`unclaimed-by`) and run `lost-claim-cleanup`. With the
-companion, hand it the proposal as a held split draft: it holds this issue,
-publishes a held roadmap whose children record `Split out of #<n>`, and
-comments the link. If refused, the comment stands. Never add needs-decision
-or ask a human. Do not edit or roll back the issue body. See the
-[scope-overrun rationale](idd-design-rationale.md#b3--scope-overrun-returns-to-authoring).
+A number alone never causes a release, held split, needs-decision label, or
+human count waiver. A genuinely new independent deliverable follows the
+unplanned follow-up work boundary of B3. An unresolved design, ownership,
+security, resource, or validation blocker keeps its existing handling; the
+no-question rule at the end of this section governs only the split route. F2/F3
+readiness still audits scope by count on its own (see the rationale), so
+advisory drift at B3 does not waive that gate until a follow-up reconciles it.
+
+When the helper returns no advisory disposition (`assessment.disposition` is
+not `advisory-drift` and `assessment.correctionApplied` is not `true`; a report
+that is unverified follows the retain-and-stop rule above) and the
+profile-selected `audit-authored-issue --shape child --stdin --marker-prefix
+{markerPrefix}` fails `effort-candidate-file-limit` on the issue body or with
+`## Candidate files` set to canonical changed paths, the effort evidence is
+unusable. The same route applies when reassessment finds one of the reasons
+above that makes the issue itself need a split, with evidence of that reason.
+In both cases, stop coding without pushing. Comment the reason, the estimate,
+candidate files, changed files, and split proposal; release per the Abort rule
+(`unclaimed-by`) and run `lost-claim-cleanup`. With the companion, hand it the
+proposal as a held split draft: it holds this issue, publishes a held roadmap
+whose children record `Split out of #<n>`, and comments the link. If refused,
+the comment stands. Never add needs-decision or ask a human. Do not edit or
+roll back the issue body. See the [scope-overrun rationale](idd-design-rationale.md#b3--scope-overrun-returns-to-authoring).
 
 ## Dead-export audit (kurone-kito/idd-skill#3478)
 

@@ -2409,6 +2409,16 @@ single source of the values.
 | `M`    | 8                       |
 | `L`    | not checked             |
 
+This table is an authoring-time admission policy, and the fresh-discovery
+`L` routing below is a planning policy. Neither is runtime authority: once a
+session holds a claim, a path count over the estimate is advisory drift that
+measures breadth, not intent, complexity, safety, or the ability to finish, so
+it triggers one evidence-backed plan reassessment and never a release, held
+split, `needs-decision` label, or count waiver on its own. A worker may split
+only for a genuine reason (an independent deliverable, or an unresolved design,
+ownership, security, resource, or validation blocker) with evidence of it. See
+[the B3 rationale](https://github.com/kurone-kito/idd-skill/blob/main/docs/idd-design-rationale.md#b3--scope-overrun-returns-to-authoring).
+
 When the target repository sets `autopilotSuitability.effortL` to
 `refuse` (the default is `allow`), an `L` child or orphan cannot be
 published as `ready`: split the work into `S` or `M` issues (a roadmap

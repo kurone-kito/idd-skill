@@ -442,25 +442,38 @@ a follow-up or start a second loop. If the companion is unavailable, record the
 proposal in a comment/PR follow-ups; never create it ad hoc or improvise
 worker-side authoring.
 
-**S-to-M correction** (helper runtime only): when dry-run returns
-`assessment.correctionApplied: true`, follow the
+**S-to-M correction and advisory drift** (helper runtime only): a count over
+the S/M estimate is advisory evidence, not a stop. When dry-run's scope step
+passes with `assessment.correctionApplied: true` or
+`assessment.disposition: "advisory-drift"` (even above eight; no effort-L
+marker is written or assigned), make one evidence-backed plan reassessment and
+follow the
 [read-only report procedure](../../docs/idd-helper-scripts.md#b3-scope-assessment-outcomes)
-without editing the issue body. Keep the verified assessment SHA for normal
-D2. Continue through C self-review and D1 synchronization before passing it to
-`claimed-push --apply` with
-`--expected-scope-sha256 <assessment-sha256>`. If D2's fresh scope check
+without editing the issue body. If the change is still one cohesive way to meet
+the accepted intent, needs no new authority or unresolved decision, and has a
+feasible validation plan, update the plan and report, then continue the same
+claim. Keep the verified assessment SHA for normal D2. Continue through C
+self-review and D1 synchronization before passing it to `claimed-push --apply`
+with `--expected-scope-sha256 <assessment-sha256>` (required after
+`correctionApplied: true`, otherwise optional). If D2's fresh scope check
 differs, return to B3, report the new assessment, and repeat C and D1 before
 D2.
 
-**Scope overrun** (helper runtime only): when the helper returns no
-`assessment.correctionApplied: true` (a qualifying correction whose report is
-unverified follows the retain-and-stop rule above) and the profile-selected
-scope audit fails `effort-candidate-file-limit`, follow the same
+**Scope overrun** (helper runtime only): a number alone never causes a release,
+held split, needs-decision label, or count waiver. A new independent
+deliverable uses the unplanned follow-up work route above, and a design,
+ownership, security, resource, or validation blocker keeps its existing
+handling. When the helper returns no advisory disposition (a qualifying report
+that is unverified follows the retain-and-stop rule above) and the
+profile-selected scope audit fails `effort-candidate-file-limit`, or
+reassessment finds such a reason that makes the issue itself need a split,
+follow the same
 [scope assessment routes](../../docs/idd-helper-scripts.md#b3-scope-assessment-outcomes)
 and stop without pushing.
 
 **Standing split** is the helper-runtime exception to the worker-side
-authoring and scope-overrun rules. Keep the parent claim and label held; skip
+authoring and scope-overrun rules, for a genuine-need split only (never a
+count alone). Keep the parent claim and label held; skip
 release/handoff. Resolve policy owner/repo from the claimed issue's canonical
 live URL. For a PR, query
 `gh api repos/<target-owner>/<target-repo>/pulls/<number> --jq '{owner:
