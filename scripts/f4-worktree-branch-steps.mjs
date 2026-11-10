@@ -485,9 +485,20 @@ function runReleasedClaimCleanup(input, deps) {
   const worktree = resolve(input.worktree);
   const steps = [];
   let currentStep = 'path-check';
-  const finish = (status, failedStep, reason, nextAction) => {
+  // `orderedAt` names the phase whose position in the order decides which
+  // steps have not run. It differs from `failedStep` when a repeated check
+  // fails later in the flow, such as the lineage re-check after preservation:
+  // a check at its first occurrence would wrongly list completed phases as
+  // not run.
+  const finish = (
+    status,
+    failedStep,
+    reason,
+    nextAction,
+    orderedAt = failedStep,
+  ) => {
     const index =
-      failedStep === null ? -1 : RELEASED_CLEANUP_ORDER.indexOf(failedStep);
+      orderedAt === null ? -1 : RELEASED_CLEANUP_ORDER.indexOf(orderedAt);
     return {
       protocolVersion: '1',
       issueNumber: input.issueNumber,
@@ -504,7 +515,13 @@ function runReleasedClaimCleanup(input, deps) {
           : RELEASED_CLEANUP_ORDER.slice(index + 1),
     };
   };
-  const stop = (step, code, detail = null, status = 'hold') => {
+  const stop = (
+    step,
+    code,
+    detail = null,
+    status = 'hold',
+    orderedAt = step,
+  ) => {
     const nextAction =
       code in NEXT_ACTIONS
         ? NEXT_ACTIONS[code]
@@ -516,7 +533,7 @@ function runReleasedClaimCleanup(input, deps) {
         detail,
       }),
     );
-    return finish(status, step, code, nextAction);
+    return finish(status, step, code, nextAction, orderedAt);
   };
   const verifyLineageAndLock = (expectedBranch) => {
     const route = classifyReleasedClaimRoute(
@@ -751,6 +768,8 @@ function runReleasedClaimCleanup(input, deps) {
           preservedDestination === null
             ? 'lineage or lock changed before final status and removal'
             : `lineage or lock changed after preserving node_modules/ at ${preservedDestination}`,
+          'hold',
+          'preserve',
         );
       }
       currentStep = 'worktree-check';
@@ -762,6 +781,8 @@ function runReleasedClaimCleanup(input, deps) {
           preservedDestination === null
             ? finalInspection.hold.detail
             : `${finalInspection.hold.detail ?? 'final worktree checks failed'}; node_modules/ remains preserved at ${preservedDestination}`,
+          'hold',
+          'preserve',
         );
       }
       if (!finalInspection.worktreePresent || !finalInspection.branchPresent) {
@@ -769,6 +790,8 @@ function runReleasedClaimCleanup(input, deps) {
           'worktree-check',
           'inconsistent-worktree-state',
           `the registered worktree or branch changed before removal${preservedDestination === null ? '' : `; node_modules/ remains preserved at ${preservedDestination}`}`,
+          'hold',
+          'preserve',
         );
       }
       currentStep = 'remove';

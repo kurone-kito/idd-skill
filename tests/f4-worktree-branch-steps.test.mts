@@ -1902,6 +1902,9 @@ test('released cleanup keeps the worktree and preserved data when lineage change
   );
   assert.equal(report.reason, 'released-lineage-unverified');
   assert.equal(report.failedStep, null);
+  // The re-check runs after preserve, so the phases that completed before it
+  // are not listed as not run. Only removal and the branch step remain.
+  assert.deepEqual(report.notRunSteps, ['remove', 'branch-remove']);
   assert.equal(h.renameCalls.length, 2);
   assert.equal(
     h.gitCalls.some(
