@@ -571,7 +571,7 @@
         "ceilingPct": 10,
         "limitBytes": 35200,
         "issue": 4893,
-        "reason": "Re-measured on 2026-11-10 for issue #5127 after merging main: bundle-work-lite measures 33,244 bytes with the generated banner removed, as the documentation audit reports it. That is 100.13% of the earlier 33,200 limit, above the 98% enforcement ceiling. The issue-authorized 10% standing raise permits up to 36,500 bytes for that total, and the 98% ceiling requires a limit of at least 34,000 bytes, so the limit is set to 35,200, inside both bounds: 94.44% utilization, 1,252 bytes before the 98% threshold (34,496). It supersedes the 33,200 limit; the manual record of the operator choice on issue #4893 is unchanged."
+        "reason": "Re-measured on 2026-11-10 for issue #5127 after merging main: bundle-work-lite measures 33,371 bytes with the generated banner removed, as the documentation audit reports it. That is 100.52% of the earlier 33,200 limit, above the 98% enforcement ceiling. The issue-authorized 10% standing raise permits up to 36,700 bytes for that total, and the 98% ceiling requires a limit of at least 34,100 bytes, so the limit is set to 35,200, inside both bounds: 94.80% utilization, 1,125 bytes before the 98% threshold (34,496). It supersedes the 33,200 limit; the manual record of the operator choice on issue #4893 is unchanged."
       }
     ]
   },

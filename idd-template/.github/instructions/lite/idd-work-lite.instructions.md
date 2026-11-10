@@ -390,10 +390,11 @@ for `fallback` (default) after a delegate failure (missing command, non-zero
 exit, timeout, cancel, or unreadable findings), but not for `never`. With no
 usable delegate, use native review or structured self-critique. Union findings.
 Wait for each mechanism that runs, bounded by
-`issueAuthoring.adversarialReview.waitCeiling` (`PT20M` default). Stop if none
-returned a readable list. Require `"completed": true` and every finding `fixed`
-or `rejected`; stop on an incomplete or unresolved review. A title/body
-correction invalidates its
+`issueAuthoring.adversarialReview.waitCeiling` (`PT20M` default). Require a
+readable list from each mechanism that ran, except a failed delegate that
+`fallback` replaces with native review; otherwise stop publication of that
+child. Require `"completed": true` and every finding `fixed` or `rejected`; stop
+on an incomplete or unresolved review. A title/body correction invalidates its
 review and the proposal. Update/read back the full ordered proposal and repeat
 both checks for changed children. If uncertain, continue only when the full
 body matches exactly; otherwise keep the hold and stop. Immediately before
