@@ -202,6 +202,22 @@ const REVIEWED_PRE_FLOOR_RUN_COMMANDS = new Set(
   REVIEWED_PRE_FLOOR_RUNS.map((entry) => entry.command),
 );
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
+
+/**
+ * The engines.node range and its leading semver floor, read from
+ * package.json at test time so that no test literal hard-codes the current
+ * low bound.
+ */
+function enginesNodeFloor(): { range: string; lowBound: string } {
+  const range = JSON.parse(
+    readFileSync(join(REPO_ROOT, 'package.json'), 'utf8'),
+  ).engines.node as string;
+  const match = /^\s*\^?(\d+\.\d+\.\d+)/.exec(range);
+  if (match === null) {
+    throw new Error('engines.node has no leading semver floor');
+  }
+  return { range, lowBound: match[1] };
+}
 const NODE_SCRIPT_COMMAND = /^node (scripts\/[\w./-]+\.mjs)(?: |$)/;
 const PROBES_HELPERS =
   /execFileSync\(\s*['"]node['"]\s*,\s*\[\s*helperPath\s*,\s*['"]--help['"]\s*\]/;
@@ -1684,15 +1700,16 @@ test('live workflow Node floor checks match the package-based lint assertion', (
     'only the two source-repository workflows belong in this equality check',
   );
 
+  const floor = enginesNodeFloor();
   for (const [workflowName, jobId] of workflowCases) {
     const workflow = readWorkflow(workflowName);
     assert.equal(
-      workflow.includes('22.23.2'),
+      workflow.includes(floor.lowBound),
       false,
       `${workflowName}: must not hard-code the Node floor`,
     );
     assert.equal(
-      workflow.includes('^22.23.2 || ^24.2.0 || >=26.0.0'),
+      workflow.includes(floor.range),
       false,
       `${workflowName}: must not hard-code the engines.node range`,
     );
@@ -1759,15 +1776,16 @@ test('the package-based Node floor matches every documented runtime boundary', (
   );
   const manifestText = readFileSync(join(REPO_ROOT, 'package.json'), 'utf8');
   const enginesRange = JSON.parse(manifestText).engines.node as string;
+  const { lowBound } = enginesNodeFloor();
   const cases: readonly [string, boolean][] = [
     ['22.23.1', false],
-    ['22.23.2', true],
+    [lowBound, true],
     ['23.0.0', false],
     ['24.1.9', false],
     ['24.2.0', true],
     ['25.0.0', false],
     ['26.0.0', true],
-    ['22.23.2-rc.1', false],
+    [`${lowBound}-rc.1`, false],
   ];
 
   for (const [runtimeVersion, expectedToPass] of cases) {
@@ -1795,33 +1813,35 @@ test('the package-based Node floor fails closed for malformed or unreadable mani
   const program = assertNodeVersionLogBeforeFloor(
     extractNamedStepBody(workflow, 'lint', 'Assert Node.js floor'),
   );
+  const { lowBound } = enginesNodeFloor();
+  const floorRange = `^${lowBound}`;
   const malformedManifests: readonly [string, string][] = [
     ['{}', '<unavailable>'],
     ['{"engines":{}}', '<unavailable>'],
     ['{"engines":{"node":24}}', '<unavailable>'],
-    ['{"engines":{"node":"^22.23.2"}}', '^22.23.2'],
+    [JSON.stringify({ engines: { node: floorRange } }), floorRange],
     ['{"engines":{"node":">=22.0.0 || ^24.0.0"}}', '>=22.0.0 || ^24.0.0'],
     ['{', '<unavailable>'],
   ];
   for (const [manifestText, expectedRange] of malformedManifests) {
-    const result = evaluateNodeFloorProgram(program, '22.23.2', manifestText);
+    const result = evaluateNodeFloorProgram(program, lowBound, manifestText);
     assert.equal(result.exitCode, 1);
     assert.equal(
       result.diagnostics[0],
-      `Node v22.23.2 does not satisfy package.json engines.node range: ${expectedRange}`,
+      `Node v${lowBound} does not satisfy package.json engines.node range: ${expectedRange}`,
     );
   }
 
   const unreadable = evaluateNodeFloorProgram(
     program,
-    '22.23.2',
+    lowBound,
     '',
     new Error('EACCES'),
   );
   assert.equal(unreadable.exitCode, 1);
   assert.equal(
     unreadable.diagnostics[0],
-    'Node v22.23.2 does not satisfy package.json engines.node range: <unavailable>',
+    `Node v${lowBound} does not satisfy package.json engines.node range: <unavailable>`,
   );
 });
 
