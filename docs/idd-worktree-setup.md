@@ -139,23 +139,27 @@ hook rules are preventive; no observed incident yet.
 ## Install and verify dependencies
 
 On a takeover, a pre-start hook that followed the hook rules in the lock
-section above may already have installed the dependencies. If it did, skip
-the configured `commands.install-deps` run below and verify the install
-instead. Otherwise, run the repository's configured `commands.install-deps`
-from inside the claimed worktree. The command name in the IDD configuration
-is a configuration key, not necessarily a package-manager script; invoke it
-as written. It must be safe to rerun after a retry or worktree recreation.
+section above may already have completed the whole configured
+`commands.install-deps`, not only its install step. If it did, skip the
+configured command below and go to verification. Otherwise, run the
+repository's configured `commands.install-deps` from inside the claimed
+worktree. The command name in the IDD configuration is a configuration key,
+not necessarily a package-manager script; invoke it as written. It must be
+safe to rerun after a retry or worktree recreation.
 
-Verify the install after either path. Some package managers can report
-success while leaving a required binary absent, as observed in issue `#1237`
-(see the
+When the configured command uses the
+[`verify-install-deps` helper](idd-helper-scripts.md), verify the install
+after either path. Some package managers can report success while leaving a
+required binary absent, as observed in issue `#1237` (see the
 [incident rationale](idd-design-rationale.md#b1-step-3--install-deps-silent-under-install-detection)).
-Confirm that the expected post-install artifact exists. If the configured
-command uses the [`verify-install-deps` helper](idd-helper-scripts.md), the
-helper checks its key artifact and retries the install once before it fails
-loudly. If a hook installed the dependencies and the artifact is missing, run
-the configured command once, which is safe to rerun, and check again. If it
-is still missing, post a hold and stop before B2, as the B1 self-check does.
+The helper checks the post-install artifact named by its `--key-binary` and
+retries the install once before it fails loudly. After a pre-start hook
+completed the install, check that artifact in the claimed worktree by its
+explicit path, not from the current directory, so an artifact in the primary
+checkout cannot satisfy the check. If it is still missing, run the configured
+command once, which is safe to rerun, and check again. If it is still missing,
+post a hold and stop before B2, as the B1 self-check does. Without the helper,
+no artifact check is defined here; the hook rules above are the only check.
 
 ## Run the B1 self-check
 
