@@ -81,6 +81,11 @@ const ADMISSION_UNAVAILABLE_STATUS = 69;
 const ADMISSION_EXPIRED_STATUS = 75;
 /** Exit status of an admission refusal, or of a stop it could not deliver. */
 const ADMISSION_REFUSED_STATUS = 2;
+/**
+ * Exit status when a pueue task may have started but its outcome could not be
+ * verified (issue #5156). A gate that exits 3 on its own shares the status.
+ */
+const ADMISSION_OUTCOME_UNKNOWN_STATUS = 3;
 /** The one audit finding the scope step reads. */
 const EFFORT_FINDING_ID = 'effort-candidate-file-limit';
 /** The sync manifest, read at the branch point for its `syncPairs` targets. */
@@ -150,6 +155,8 @@ const NEXT_ACTION = {
     'if the stderr above has a "local-admission: expired" line (a helper error envelope JSON line can follow it), the gate did not start: report it, and do not rerun the helper or push by hand; otherwise the gate itself exited 75: fix the failure, commit, and rerun',
   admissionRefused:
     'if the stderr above has a "local-admission:" line that ends with "command not started" (admission refused before the gate started) or says the lock stays held until the command exits (the gate started and could not be stopped), stop and report without changing the repository policy, and do not rerun; otherwise the gate itself exited 2: fix the failure, commit, and rerun',
+  admissionOutcomeUnknown:
+    'if the stderr above has a line that contains "local-admission: pueue task outcome unknown" or "local-admission: pueue error:", the gate may already have run: report it, check the state of the pueue task that line names by id or label (if it names either), and do not rerun the helper or push by hand; otherwise the gate itself exited 3: fix the failure, commit, and rerun',
   commitOrDiscard: 'commit or discard what the gate changed, then rerun',
   rerunForHead: 'rerun the helper so the gate sees the new HEAD',
   readGitError: 'read the git error in the worktree and fix it, then rerun',
@@ -1459,7 +1466,9 @@ function checkCleanTree(ctx, when) {
  * gate's output), so for the statuses `idd-local-admission` also returns
  * for its own outcomes, the next action names the line that tells them from
  * the gate's own status (core "Admission expiry": bare `75` is command
- * status).
+ * status). Exit `3` names its lines as text they contain, not lines that start
+ * with it: the gate's output shares this stream, so an unfinished gate line
+ * can carry the notice at its end (issue #5156).
  */
 function gateFailureAction(admission, status) {
   if (admission && status === ADMISSION_UNAVAILABLE_STATUS) {
@@ -1470,6 +1479,9 @@ function gateFailureAction(admission, status) {
   }
   if (admission && status === ADMISSION_REFUSED_STATUS) {
     return NEXT_ACTION.admissionRefused;
+  }
+  if (admission && status === ADMISSION_OUTCOME_UNKNOWN_STATUS) {
+    return NEXT_ACTION.admissionOutcomeUnknown;
   }
   return NEXT_ACTION.fixThenRerun;
 }

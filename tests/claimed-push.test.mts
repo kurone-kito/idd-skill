@@ -64,8 +64,9 @@ const NEXT = {
   readGitError: 'read the git error in the worktree and fix it, then rerun',
 } as const;
 
-// The admission next actions state issue 4525's exit-75/exit-2 rows and
-// issue 5117's exit-69 row; they are written out here for the same reason.
+// The admission next actions state issue 4525's exit-75/exit-2 rows, issue
+// 5117's exit-69 row, and issue 5156's exit-3 row; they are written out here
+// for the same reason.
 const ADMISSION_NEXT = {
   unavailable:
     'if the stderr above has a line exactly equal to "local-admission: pueue daemon is not accepting commands", the gate did not start: report it, and do not rerun the helper or push by hand; otherwise the gate itself exited 69: fix the failure, commit, and rerun',
@@ -73,6 +74,8 @@ const ADMISSION_NEXT = {
     'if the stderr above has a "local-admission: expired" line (a helper error envelope JSON line can follow it), the gate did not start: report it, and do not rerun the helper or push by hand; otherwise the gate itself exited 75: fix the failure, commit, and rerun',
   refused:
     'if the stderr above has a "local-admission:" line that ends with "command not started" (admission refused before the gate started) or says the lock stays held until the command exits (the gate started and could not be stopped), stop and report without changing the repository policy, and do not rerun; otherwise the gate itself exited 2: fix the failure, commit, and rerun',
+  outcomeUnknown:
+    'if the stderr above has a line that contains "local-admission: pueue task outcome unknown" or "local-admission: pueue error:", the gate may already have run: report it, check the state of the pueue task that line names by id or label (if it names either), and do not rerun the helper or push by hand; otherwise the gate itself exited 3: fix the failure, commit, and rerun',
 } as const;
 
 // The scope step's next actions are copied from items 4(c) and 6 of issue
@@ -758,10 +761,45 @@ test('an admitted gate that exits 2 names the refusal lines in its next action',
   noPush(r);
 });
 
-test('any other non-zero exit of an admitted gate is a gate failure', () => {
+test('an admitted gate that exits 3 names the outcome-unknown lines in its next action', () => {
+  const prefixes = [
+    'local-admission: pueue task outcome unknown',
+    'local-admission: pueue error:',
+  ];
+  // The helper does not read the gate's stderr (the next action is
+  // conditional on it), so every variant gets the same action; the variants
+  // record the lines an operator can meet.
+  for (const stderr of [
+    'local-admission: pueue task outcome unknown (task 7); command may have started\n',
+    'local-admission: pueue task outcome unknown (label idd-skill-label); command may have started\n',
+    // An unfinished gate line carries the notice at its end.
+    'building 40%local-admission: pueue task outcome unknown (task 7); command may have started\n',
+    'local-admission: pueue error: spawn pueue ENOENT\n',
+    '',
+    'the gate itself failed\n',
+  ]) {
+    const r = run({ world: { [K.gate]: result(3, '', stderr) } });
+    assertRefused(r, 'gate', ADMISSION_NEXT.outcomeUnknown, { exitStatus: 3 });
+    assert.match(
+      stepOf(r, 'gate').reason,
+      /through idd-local-admission exited 3/u,
+    );
+    // Issue 5156: the report's own next action names both prefixes and ends
+    // with the rerun advice.
+    const action = stepOf(r, 'gate').nextAction ?? '';
+    for (const prefix of prefixes) {
+      assert.ok(action.includes(prefix), `${prefix} is named`);
+    }
+    assert.ok(action.endsWith(NEXT.fixThenRerun), 'ends with the rerun advice');
+    assert.equal(r.count(K.assert), 1, 'no second assert');
+    noPush(r);
+  }
+});
+
+test('an admitted gate exit outside 2, 3, 69 and 75 is a gate failure', () => {
   // 143 is 128 plus SIGTERM, what idd-local-admission returns after it
   // forwarded the signal to the admitted command.
-  for (const status of [1, 3, 74, 76, 126, 127, 143]) {
+  for (const status of [1, 74, 76, 126, 127, 143]) {
     const r = run({ world: { [K.gate]: result(status) } });
     assertRefused(r, 'gate', NEXT.fixThenRerun, { exitStatus: status });
   }
@@ -775,8 +813,8 @@ test('an admission child killed by a signal is a gate failure with no exit statu
   assert.match(stepOf(r, 'gate').reason, /killed by signal SIGTERM/u);
 });
 
-test('on win32 exits 69, 75 and 2 keep the gate-failure next action', () => {
-  for (const status of [69, 75, 2]) {
+test('on win32 exits 69, 75, 2 and 3 keep the gate-failure next action', () => {
+  for (const status of [69, 75, 2, 3]) {
     const r = run({ platform: 'win32', world: { [K.gate]: result(status) } });
     assertRefused(r, 'gate', NEXT.fixThenRerun, { exitStatus: status });
     assert.equal(
@@ -1735,7 +1773,9 @@ test('with admission disabled the gate still runs and its own status decides', {
   const step = failing.report.steps[3];
   assert.equal(step?.status, 'failed');
   assert.equal(step?.exitStatus, 3);
-  assert.equal(step?.nextAction, NEXT.fixThenRerun);
+  // Admission is decided by platform, not by the config, so an exit 3 still
+  // gets the stderr-conditional action; its fallback clause is the rerun.
+  assert.equal(step?.nextAction, ADMISSION_NEXT.outcomeUnknown);
   assert.equal(failing.report.pushed, false);
   // claimed-push added no IDD_LOCAL_ADMISSION, and the disabled admission
   // passed its own environment to the gate as it was.
