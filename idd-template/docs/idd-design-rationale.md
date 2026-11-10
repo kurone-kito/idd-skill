@@ -710,39 +710,77 @@ after an authoring hold that followed a successful assert (`4242624520`);
 removal outside the clone-scoped lock (`4242577825`); and `git branch -d`
 refusing a branch whose tip is not merged into a lagging local `main`, so the
 branch survived (`4242489039`). The decided policy (maintainer hearing,
-2026-10-12) covers them. A later review of the procedure (PR `#4058`) led to the
-amendments below.
+2026-10-12) covers them. PR `#4058` amended the procedure, and the `#5068`
+split below then replaced its inline script with a mode of the F4 cleanup
+helper.
 
-- Gates run before removal, under one hold of the clone-scoped lock, after
-  the worktree-local claim lock is acquired. The route gate reads
-  `active_claim`, not the route `state`, because `state` is written for a
-  claiming session and a released claim can show a local-occupied state.
-  Removal needs `active_claim` to be null or another claim id. The HEAD gate
-  requires the worktree to be attached to the cleanup branch. The status gate
-  is `git status --porcelain --ignored --untracked-files=all
-  --ignore-submodules=none`, empty. The tip gate requires the branch to equal
-  local `origin/{development-branch}`, read without a fetch.
-- Removal comes before deletion. Git refuses to delete a branch checked out in
-  any worktree, so `git worktree remove` (no `--force`) runs first, and
-  `git branch -D` follows. The tip gate is the removal gate. If `-D` fails
-  after removal, or a harness denies it (the distributed Claude baseline denies
-  `Bash(git branch -D*)`), the procedure reports a leftover branch. The A5(e)
-  orphan hold covers the next claimant. The deny rule is unchanged.
-- Failures before removal keep the worktree, its branch, and its lock on
-  purpose. A later claim of the issue then stops at the collision check
-  instead of inheriting the path. No helper releases the lock, and a release
-  would need a new helper mode.
-- Plain `git branch -d` is not used, because it refuses against a lagging
-  local `{default-branch}`.
-- Placeholders are filled as single-quoted shell words, because a valid branch
-  name can contain shell metacharacters such as `$` and `;`.
-- On `instructions-only`, the worktree-local claim lock uses its helper-free
-  fallback. The clone-scoped steps are serialized by giving each worker its own
-  clone, because the clone-scoped lock has no helper-free fallback.
-- `git status --porcelain` cannot see assume-unchanged or skip-worktree entries,
-  so the gate also requires every `git ls-files -v` tag to be `H`. A legacy active
-  claim with a null id keeps the worktree, because it cannot be ruled out as
-  another session's claim.
+On 2026-11-07, in this repository's shared clone after fetching `origin/main`,
+twelve linked worktrees were ancestors of `origin/main`, had an empty
+non-ignored status, and had ignored content only under `node_modules/`. The
+exact-tip script kept every one, because no tip equaled `origin/main` and the
+ignored-inclusive status was not empty, so each stayed registered and blocked
+the next claim of its issue. Abort and needs-decision release did not run any
+cleanup. Issue `#5068` took on that gap and exceeded the M candidate-file
+limit: 10 changed paths and 9 parsed keys against a limit of 8, with the
+claim-push gate stopping before any push. Roadmap issue `#5133` split it into
+the helper task (issue `#5134`) and the documentation task (issue `#5136`).
+
+- Cleanup acts on one lineage. The helper accepts only fresh routing that
+  proves one exact released or stale claim (claim id, agent id, and branch)
+  whose only local occupant is the requested registered worktree, and only when
+  the worktree-local IDD lock names the same claim and agent. An active claim,
+  another claim id, a missing release marker, a held lock, or an ambiguous
+  route refuses with no mutation. A legacy active claim with a null id cannot
+  match, so it keeps the worktree.
+- A failure before a trusted `claimed-by` marker exists has no lineage. A
+  `--record-tokens` failure after `git worktree add` leaves a worktree with no
+  marker and no matching lock, and the earlier script removed it on a clean
+  status and a tip equal to the base. That generic unclaimed-worktree route is
+  gone (issue `#5068`): the helper refuses it, and the instructions preserve
+  the worktree and stop. A failure that leaves a claim active is not a trigger
+  either. The session may release its own claim through Abort, and the verified
+  `unclaimed-by` is then a trigger, but only after step 4's `--acquire` has
+  created the worktree lock: `--record-tokens` writes only the generated-tokens
+  record, so an earlier exit has no lock for the helper to match and it holds at
+  `claim-lock-mismatch`. It never posts `unclaimed-by` on another session's
+  nonce win.
+- Liveness needs independent confirmation. A claim marker, a matching lock, and
+  a clean status do not show that no session is working in a worktree: the lock
+  records no process liveness, and issue `#3141` showed that a matching
+  worktree can hold a same-host session's uncommitted work. Apply therefore
+  needs `--attest-no-live-session`, which records an operator's independent
+  confirmation, and a session never supplies it from its own claim evidence.
+  A dry run is read-only and needs no flag.
+- Removal comes before deletion, and nothing is forced. Git refuses to delete a
+  branch checked out in any worktree, so `git worktree remove` (no `--force`)
+  runs first. Branch deletion is `git branch -d`, not the earlier `-D`, because
+  a released branch may still hold commits that exist nowhere else. When `-d`
+  refuses, for example against a lagging local `{default-branch}`, the helper
+  reports the leftover branch (`released-branch-remains`) and never
+  force-deletes it. The deny rule on `git branch -D` is unchanged. The helper
+  never fetches, fast-forwards the primary checkout, resets, stashes, or
+  deletes a remote branch.
+- The worktree must be clean. The only allowed content is a lone ignored
+  `node_modules/`, which moves to the F4 private destination. `git status`
+  cannot see assume-unchanged or skip-worktree entries, so the helper also
+  checks every `git ls-files -v` tag.
+- Apply is serialized. The helper takes the clone-scoped lock itself, and it
+  re-verifies lineage, lock, and branch tip after taking it, after the
+  preservation move, and before removal. A dry run takes no lock.
+- After a verified release, a failed cleanup keeps the `unclaimed-by` marker,
+  the worktree, and the branch, and stops with the helper's report. The
+  instructions never retry the removal by hand or claim a successor. A
+  successful cleanup is followed by the fresh-claim gate, and the helper claims
+  nothing.
+- On `instructions-only` there is no helper runtime, the clone-scoped lock has
+  no helper-free fallback, and liveness cannot be checked. The instructions
+  preserve the worktree and branch and escalate instead of reproducing the
+  removal by hand. The earlier helper-free fallback, one clone per worker, is
+  retired with the inline script.
+- The inline script was removed from both claim files instead of kept beside
+  the helper, so its gates cannot drift from the helper's. The core, discovery,
+  and Lite claim bundles each had under 40 bytes of headroom, so the script's
+  bytes paid for the new instructions and no limit was raised.
 
 ## Work and self-review
 

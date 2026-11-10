@@ -7119,11 +7119,11 @@ run as one fenced `set -euo pipefail` block. The block fails closed. It exits
 non-zero at the first failure, and it prints `verified` only after
 `resume-claim-routing --assert` exits 0. The read after acquire is the
 generated-tokens check: an absent or malformed record exits non-zero. Lost-claim
-cleanup is not part of the block. Run cleanup only at the exits listed in
+cleanup is not part of the block. Run cleanup only on the triggers listed in
 [Lost-claim triggers](#lost-claim-triggers).
 
 Replace each placeholder with its value. Each placeholder already sits inside
-single quotes, so write any `'` in a value as `'\''`, as the cleanup script
+single quotes, so write any `'` in a value as `'\''`, as the cleanup command
 does. `<ts>` is the current UTC time in ISO 8601. `<settle-seconds>` is
 `claim.verifySettleDelay` converted to whole seconds: the distributed default
 `PT5S` is `5`.
@@ -7170,16 +7170,38 @@ echo verified
 
 ### Lost-claim triggers
 
-Run this after the step 1 worktree exists, at every exit where this session no
-longer holds the claim: a `--record-tokens` failure (step 2), a failed claim
-post (step 3), a failed second `--record-tokens --nonce` write before the
-activation-nonce post (step 3), a failed activation-nonce post (step 3), a
-`--acquire` collision or other non-success exit (step 4), a failed
-`--read-tokens` check after acquire (step 4), a failed settle `sleep` before the
-assert (step 5), an `--assert` result other than `already_owned`/`keep` (step
-5), or an `unclaimed-by` posted after an authoring hold that followed a
-successful assert (Claim verification step 5). Never use `--takeover`. The
-cleanup script is in
+Cleanup acts on one lineage: the `{claim-id}` and `{agent-id}` of an exact
+released or stale claim, which in the claim flow is this session's own. After
+the step 1 worktree exists, two triggers reach it:
+
+- a verified release: an `unclaimed-by` posted for this `{claim-id}` and read
+  back from the issue, as Abort, a needs-decision release, the scope-overrun
+  release, or the release after an authoring hold that followed a successful
+  assert (Claim verification step 5) post it; or
+- a lost claim: a fresh `resume-claim-routing --issue <n>` (without `--assert`)
+  reports `released-claim-local-worktree-occupied` or
+  `stale-claim-local-worktree-occupied` for this `{claim-id}` and `{agent-id}`,
+  with the step 1 worktree as the only occupant.
+
+Either trigger also needs the worktree-local IDD lock under the same ids. Step 4's
+`--acquire` creates it, and `--record-tokens` does not, so an exit before that
+acquire has no lock and the helper holds at `claim-lock-mismatch`.
+
+Every other exit is a preserve-and-stop route: keep the worktree and branch, run
+no cleanup, and stop with the worktree path and the failed gate. Never use
+`--takeover`.
+
+| Exit                                                                                                                                     | Route                                                                                                                                                                                                                                                                                   |
+| ---------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A `--record-tokens` failure (step 2)                                                                                                     | Preserve and stop. No trusted `claimed-by` marker exists, so there is no lineage and no lock to match.                                                                                                                                                                                  |
+| A failed claim post (step 3)                                                                                                             | Re-read the issue. With no trusted marker for this `{claim-id}`, preserve and stop. With one, the claim is active and no lock exists yet: take the next row.                                                                                                                            |
+| A failed second `--record-tokens --nonce` write or activation-nonce post (step 3), or an `--acquire` collision or other failure (step 4) | The claim marker is on the issue, but no lock under this session's ids exists. Preserve and stop; the helper would hold at `claim-lock-mismatch` even after a release. Release the claim per Abort only while this session still verifies it, and never on another session's nonce win. |
+| A failed `--read-tokens` check after acquire (step 4), or a failed settle `sleep` (step 5)                                               | The claim is still active, so the helper would refuse it. Preserve and stop. To end the attempt, release the claim per Abort while this session still verifies it; the lock exists, so that verified `unclaimed-by` is then a trigger.                                                  |
+| An `--assert` result other than `already_owned`/`keep` (step 5)                                                                          | Read fresh routing. Only a released or stale lineage of this `{claim-id}` is a trigger. A claim of another id, or a claim that is still active, is preserve-and-stop.                                                                                                                   |
+
+The helper, its flags, and its report are in
+[Released-claim worktree cleanup](#released-claim-worktree-cleanup). The route
+that runs it is
 [`idd-claim.instructions.md`](../.github/instructions/idd-claim.instructions.md#lost-claim-cleanup-lost-claim-cleanup).
 
 ### Clone-scoped lock
@@ -9938,6 +9960,10 @@ node scripts/f4-worktree-branch-cleanup.mjs --issue <n> \
   --worktree <absolute-path> [--apply]
 ```
 
+This command is the merged-pull-request mode. The `--released-claim` mode, which
+removes the worktree of a released claim without a head proof, is described
+under [Released-claim worktree cleanup](#released-claim-worktree-cleanup).
+
 The helper runs F4 steps 4 to 6 in order, and each step is gated on the head
 proof in `docs/idd-resume-detail.md` (F4 Head Proof). The steps are a no-follow
 check of the worktree path, a claim check, the proof dry run (the marker command
@@ -10002,6 +10028,130 @@ and that helper detail is the next action.
 | `worktree-remove-refused`       | Failed. git worktree remove refused after the checks passed, so the worktree may be partly changed. The step 5 record names any preserved `node_modules/` destination; keep it while inspecting the worktree. A rerun reads the proof again and posts nothing.                                                                                                                                                                                                                                                                                                                                                  |
 | `delete-setting-unreadable`     | Hold at step 6. delete_branch_on_merge could not be read as a boolean, and nothing remote was deleted. In a dry run nothing has changed, so rerun it once the setting is readable. In an applied run, steps 4 and 5 have already run. The operator first confirms by hand that delete_branch_on_merge is false: when it is true, step 6 is skipped, because GitHub deletes the branch on merge. Only when it is false does the operator complete step 6 by hand with delete-remote-branch and the expected SHA, and the session continues from step 7 after the operator confirms. Do not rerun an applied run. |
 | `remote-delete-unreadable`      | Hold at step 6. The output of the remote branch helper could not be read, and nothing remote was deleted. In a dry run nothing has changed, so rerun it. In an applied run, steps 4 and 5 have already run. The operator first confirms by hand that delete_branch_on_merge is false: when it is true, step 6 is skipped, because GitHub deletes the branch on merge. Only when it is false does the operator complete step 6 by hand with delete-remote-branch and the expected SHA, after reading its output, and the session continues from step 7 after the operator confirms. Do not rerun an applied run. |
+| `released-lineage-unverified`   | Released-claim mode: stop. Fresh routing does not prove one exact released or stale claim for this registered worktree. This includes an active claim, an issue with no trusted `claimed-by` marker, another claim id, and an ambiguous or unreadable route. Nothing was removed. Preserve the worktree and branch for operator review.                                                                                                                                                                                                                                                                         |
+| `claim-lock-mismatch`           | Released-claim mode: stop. The worktree-local IDD lock is absent, malformed, or belongs to a different claim or agent. Nothing was removed. Preserve the worktree and branch for operator review.                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `cleanup-attestation-required`  | Released-claim mode: stop. Apply needs `--attest-no-live-session`, which is the operator's independent confirmation that no session is working in the worktree. A claim marker, the lock, or a clean status is not that confirmation. Nothing ran.                                                                                                                                                                                                                                                                                                                                                              |
+| `released-branch-remains`       | Released-claim mode: stop. The worktree was removed, but `git branch -d` refused, so the local branch remains at the tip the report names. Do not force-delete it; the operator reviews it.                                                                                                                                                                                                                                                                                                                                                                                                                     |
+
+### Released-claim worktree cleanup
+
+This is the `--released-claim` mode of the F4 cleanup helper. The
+[lost-claim cleanup](../.github/instructions/idd-claim.instructions.md#lost-claim-cleanup-lost-claim-cleanup)
+route runs it after a verified `unclaimed-by` release, or for an exact released
+or stale lineage; the [lost-claim triggers](#lost-claim-triggers) say when. It
+removes one worktree and its local branch. It reads no merged pull request and
+no head proof, never fast-forwards the primary checkout, and never touches a
+remote branch.
+
+Run it from the primary worktree. Any other directory is refused. Use the form
+of the active profile:
+
+```sh
+# source repository and vendored-node
+node scripts/f4-worktree-branch-cleanup.mjs --released-claim --issue <n> \
+  --claim-id <claim-id> --agent-id <agent-id> \
+  --worktree <absolute-path> [--attest-no-live-session] [--apply]
+
+# package-manager (the example uses npm; substitute the configured manager)
+npm run idd:f4-worktree-branch-cleanup -- --released-claim --issue <n> \
+  --claim-id <claim-id> --agent-id <agent-id> \
+  --worktree <absolute-path> [--attest-no-live-session] [--apply]
+
+# ephemeral-npx
+npx --yes --package <helper-package-spec> \
+  idd-f4-worktree-branch-cleanup --released-claim --issue <n> \
+  --claim-id <claim-id> --agent-id <agent-id> \
+  --worktree <absolute-path> [--attest-no-live-session] [--apply]
+
+# user-global (the bin is on PATH)
+idd-f4-worktree-branch-cleanup --released-claim --issue <n> \
+  --claim-id <claim-id> --agent-id <agent-id> \
+  --worktree <absolute-path> [--attest-no-live-session] [--apply]
+```
+
+- `--claim-id` and `--agent-id` name the lineage to clean. They must equal the
+  ids of the released claim (`evidence.released_claim`) or of the stale active
+  claim, and the worktree's IDD lock must name the same pair. This mode takes
+  no `--nonce`.
+- `--worktree` is an absolute path. Dry-run is the default, and `--apply`
+  mutates.
+- `--attest-no-live-session` is accepted only with `--released-claim`. `--apply`
+  without it is a usage error (exit `1`), and a dry run does not need it.
+
+**Independent no-live-session confirmation.** The helper cannot see whether a
+session is working in the worktree: the claim lock records no process liveness
+([§LWR](idd-resume-detail.md#lwr--local-worktree-recovery) explains why). A
+released claim, a matching lock, and a clean status therefore do not prove that
+the worktree is idle, because a matching worktree can still hold a same-host
+session's uncommitted work (issue `#3141`). Before `--apply`, an operator
+confirms independently that no session is working in the target worktree. The
+flag only records that confirmation, and a session never supplies it from its
+own claim evidence. Without the confirmation, preserve the worktree and branch
+and stop.
+
+Gates, in order. A dry run runs the first five; apply repeats the lineage,
+lock, and worktree checks under the clone-scoped lock.
+
+1. `path-check`: the path is not the primary worktree, and no symlink lies on
+   it.
+2. `attestation-check`: apply needs `--attest-no-live-session`; nothing else
+   has run or changed yet.
+3. `lineage-check`: a fresh `resume-claim-routing --issue <n>` read, with no
+   `--assert` and no claim id. It passes only for the state
+   `local_worktree_occupied` with the action `stop`, no same-second contender,
+   no later competing claim, and exactly one local occupant, which is the
+   requested worktree. Either the reason is
+   `released-claim-local-worktree-occupied` and `evidence.released_claim`
+   matches both ids, or it is `stale-claim-local-worktree-occupied` and
+   `active_claim` matches both ids. An active claim that is not stale, another
+   claim id, a missing release marker, and an ambiguous or unreadable route all
+   refuse with `released-lineage-unverified`. An issue that never had a trusted
+   `claimed-by` marker has no lineage, so a just-created worktree left by a
+   failure before the marker, such as `--record-tokens` failing after
+   `git worktree add`, is refused and nothing changes.
+4. `lock-check`: a read-only `claim-lock --check` finds a well-formed lock whose
+   holder is the same claim id and agent id (`claim-lock-mismatch` otherwise).
+   The fresh-claim order's step 4 `--acquire` creates that lock, so an exit
+   before it has none. The helper never acquires or repairs the lock.
+5. `worktree-check`: the worktree is registered on the claim's branch, is not
+   locked by Git, and its branch tip is unchanged since the first read. Its
+   ignored-inclusive status is empty or exactly `!! node_modules/`. Any other
+   content holds as `dirty-worktree`, as does a tracked entry marked
+   skip-worktree or assume-unchanged. A populated submodule holds as
+   `submodule-worktree`, and a symlinked tracked entry as `symlink-path`.
+
+Apply then takes the clone-scoped lock (`lock-busy` when another session holds
+it) and re-verifies the lineage, the lock, the branch tip, and the registration
+before preserving and again before removing. A lone ignored `node_modules/`
+moves to the F4 private destination under the checks that the F4 section above
+describes, and the step record names the destination. Then `git worktree remove`
+runs without `--force`, and `git branch -d` removes the local branch. The helper
+never fetches, never resets or stashes, and never force-deletes the branch. When
+`git branch -d` refuses, for example because the branch holds commits that the
+local default branch lacks, the worktree is already gone and the report holds as
+`released-branch-remains`. A dry run reports `would-run` for the preservation,
+the removal, and the branch removal, and takes no lock.
+
+The reason table above applies as written, except that `branch-tip-mismatch`
+compares against the tip the helper read at the start of the run, since this
+mode has no proof.
+
+The report is one JSON document with `cleanupMode: "released-claim"`, `mode`,
+`status`, `steps[]`, `reason`, `nextAction`, `failedStep`, and `notRunSteps`.
+Status `dry-run` or `complete` exits `0`; `hold` or `failed` exits `1`.
+
+| Status             | Next action                                                                                                                                                                                                                                                                                       |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `dry-run`          | Review the steps. Apply only after the independent confirmation above, with `--apply --attest-no-live-session`.                                                                                                                                                                                   |
+| `complete`         | The worktree and branch are gone, and a preserved `node_modules/` destination is in the report. Rerun the fresh-claim gate before any claim. The helper claims nothing.                                                                                                                           |
+| `hold` or `failed` | Any `unclaimed-by` marker stays, and the worktree and branch stay (a `released-branch-remains` hold keeps only the branch). Stop with the report's `reason` and `nextAction`. Do not retry removal by hand, claim a successor, use `--takeover`, `--force`, a reset, a stash, or `git branch -D`. |
+
+On `instructions-only` profiles there is no helper runtime, the clone-scoped
+lock has no helper-free fallback, and liveness cannot be checked. Preserve the
+worktree and branch and escalate to the operator; do not reproduce the removal
+by hand. Rationale and observed cases:
+[Lost-claim cleanup](idd-design-rationale.md#lost-claim-cleanup-issue-4042)
+(issues `#4042`, `#5068`).
 
 ### Trial merge audit
 
