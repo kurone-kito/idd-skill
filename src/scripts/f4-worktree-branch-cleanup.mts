@@ -63,6 +63,8 @@ const F4_CLEANUP_FLAG_SPEC = {
   '--agent-id': { type: 'string' },
   '--worktree': { type: 'string' },
   '--apply': { type: 'boolean' },
+  '--released-claim': { type: 'boolean' },
+  '--attest-no-live-session': { type: 'boolean' },
   '--help': { type: 'boolean', short: 'h' },
 } as const;
 
@@ -80,6 +82,8 @@ export interface F4CleanupArgs {
   readonly agentId: string;
   readonly worktree: string;
   readonly apply: boolean;
+  readonly cleanupMode: 'merged-pr' | 'released-claim';
+  readonly attestNoLiveSession: boolean;
 }
 
 export function parseArgs(argv: string[]): F4CleanupArgs {
@@ -93,6 +97,8 @@ export function parseArgs(argv: string[]): F4CleanupArgs {
       agentId: '',
       worktree: '',
       apply: false,
+      cleanupMode: 'merged-pr',
+      attestNoLiveSession: false,
     };
   }
   const issue = (values.issue as string | undefined)?.trim() ?? '';
@@ -105,14 +111,35 @@ export function parseArgs(argv: string[]): F4CleanupArgs {
   const nonce = (values.nonce as string | undefined)?.trim() ?? '';
   const agentId = (values['agent-id'] as string | undefined)?.trim() ?? '';
   const worktree = (values.worktree as string | undefined)?.trim() ?? '';
+  const cleanupMode =
+    values['released-claim'] === true ? 'released-claim' : 'merged-pr';
+  const attestNoLiveSession = values['attest-no-live-session'] === true;
   for (const [flag, value] of [
     ['--claim-id', claimId],
-    ['--nonce', nonce],
     ['--agent-id', agentId],
   ] as const) {
     if (value.length === 0) {
       throw markCliUsageError(new Error(`${flag} must not be empty`));
     }
+  }
+  if (cleanupMode === 'merged-pr' && nonce.length === 0) {
+    throw markCliUsageError(new Error('--nonce must not be empty'));
+  }
+  if (cleanupMode === 'merged-pr' && attestNoLiveSession) {
+    throw markCliUsageError(
+      new Error('--attest-no-live-session requires --released-claim'),
+    );
+  }
+  if (
+    cleanupMode === 'released-claim' &&
+    values.apply === true &&
+    !attestNoLiveSession
+  ) {
+    throw markCliUsageError(
+      new Error(
+        '--apply with --released-claim requires --attest-no-live-session',
+      ),
+    );
   }
   if (!isAbsolute(worktree)) {
     throw markCliUsageError(
@@ -127,6 +154,8 @@ export function parseArgs(argv: string[]): F4CleanupArgs {
     agentId,
     worktree: resolve(worktree),
     apply: values.apply === true,
+    cleanupMode,
+    attestNoLiveSession,
   };
 }
 
@@ -134,8 +163,9 @@ function printUsage(): void {
   process.stdout.write(
     'Usage:\n' +
       '  node scripts/f4-worktree-branch-cleanup.mjs --issue <n> --claim-id <id> --nonce <nonce> --agent-id <id> --worktree <abs-path> [--apply]\n\n' +
+      '  node scripts/f4-worktree-branch-cleanup.mjs --issue <n> --claim-id <id> --agent-id <id> --worktree <abs-path> --released-claim [--attest-no-live-session] [--apply]\n\n' +
       'Run from the primary worktree. F4 steps 4 to 6, gated on the head proof.\n' +
-      'Dry-run is the default. --apply mutates: fetch, fast-forward, secure the state destination, preserve a lone ignored node_modules/, worktree and branch removal, remote branch deletion.\n',
+      'Dry-run is the default. --apply mutates the merged-PR F4 cleanup path. Released/stale cleanup is local-only; apply requires --attest-no-live-session and never fast-forwards or deletes a remote branch.\n',
   );
 }
 
@@ -273,6 +303,34 @@ export function claimCheckArgv(
   ];
 }
 
+/** A fresh, read-only route snapshot used only by released/stale cleanup. */
+export function releasedClaimRoutingArgv(
+  issueNumber: number,
+  owner: string,
+  repo: string,
+  root: string,
+): string[] {
+  return [
+    join(root, 'scripts', 'resume-claim-routing.mjs'),
+    '--issue',
+    String(issueNumber),
+    '--owner',
+    owner,
+    '--repo',
+    repo,
+  ];
+}
+
+/** Read the worktree-local lock without attempting to acquire or repair it. */
+export function claimLockCheckArgv(worktree: string, root: string): string[] {
+  return [
+    join(root, 'scripts', 'claim-lock.mjs'),
+    '--check',
+    '--worktree',
+    worktree,
+  ];
+}
+
 /**
  * The argv of the marker command's dry run. It never carries `--apply`:
  * this helper reads the proof and never posts one.
@@ -338,6 +396,12 @@ export function createLiveDeps(
     git: (args, cwd) => runGit(args, cwd),
     assertClaim: (worktree) =>
       runSpawned(claimCheckArgv(options, worktree, owner, repo, root)),
+    releasedClaimCheck: () =>
+      runSpawned(
+        releasedClaimRoutingArgv(options.issueNumber, owner, repo, root),
+      ),
+    claimLockCheck: (worktree) =>
+      runSpawned(claimLockCheckArgv(worktree, root)),
     proofDryRun: () =>
       runSpawned(proofDryRunArgv(options, options.worktree, root)),
     prBaseRef: (pr) => {
@@ -417,6 +481,8 @@ function main(): HelperCliResult {
       worktree: args.worktree,
       primaryRoot,
       apply: args.apply,
+      cleanupMode: args.cleanupMode,
+      attestNoLiveSession: args.attestNoLiveSession,
     },
     createLiveDeps({
       issueNumber: args.issueNumber,

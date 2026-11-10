@@ -26,10 +26,12 @@ import {
 import type { RemoteBranchDeleteVerdict } from '../src/scripts/delete-remote-branch.mts';
 import {
   claimCheckArgv,
+  claimLockCheckArgv,
   createLiveDeps,
   lstatKind,
   parseArgs,
   proofDryRunArgv,
+  releasedClaimRoutingArgv,
 } from '../src/scripts/f4-worktree-branch-cleanup.mts';
 import {
   type F4WorktreeBranchDeps,
@@ -161,6 +163,41 @@ const CLAIM_OK = {
   }),
 };
 
+const LOCK_OK = {
+  exitCode: 0,
+  stdout: JSON.stringify({
+    present: true,
+    malformed: false,
+    holder: { claimId: CLAIM, agentId: AGENT },
+  }),
+};
+
+/** A fresh routing answer for the worktree: a released or stale lineage. */
+function releasedRouteOk(
+  worktree: string,
+  kind: 'released' | 'stale' = 'released',
+): SpawnedResult {
+  const lineage = { agent_id: AGENT, claim_id: CLAIM, branch: BRANCH };
+  return {
+    exitCode: 0,
+    stdout: JSON.stringify({
+      state: 'local_worktree_occupied',
+      action: 'stop',
+      reason:
+        kind === 'released'
+          ? 'released-claim-local-worktree-occupied'
+          : 'stale-claim-local-worktree-occupied',
+      active_claim: kind === 'stale' ? lineage : null,
+      evidence: {
+        released_claim: kind === 'released' ? lineage : undefined,
+        local_worktree: { status: 'occupied', paths: [worktree], reason: null },
+        same_second_contenders: [],
+        later_competing_claim: null,
+      },
+    }),
+  };
+}
+
 interface RunOptions {
   readonly apply?: boolean;
   readonly branchTip?: string;
@@ -174,6 +211,9 @@ interface RunOptions {
   readonly beforeRename?: (source: string, destination: string) => void;
   readonly worktreeRemoveError?: boolean;
   readonly claims?: readonly SpawnedResult[];
+  readonly cleanupMode?: 'merged-pr' | 'released-claim';
+  readonly attest?: boolean;
+  readonly releasedRoute?: SpawnedResult;
 }
 
 /**
@@ -256,6 +296,9 @@ function runCleanup(
       return claim ?? CLAIM_OK;
     },
     proofDryRun: () => ({ exitCode: 0, stdout: proofStdout(tip, head) }),
+    releasedClaimCheck: () =>
+      options.releasedRoute ?? releasedRouteOk(worktree),
+    claimLockCheck: () => LOCK_OK,
     prBaseRef: () => 'main',
     deleteBranchOnMerge: () => options.autoDelete ?? true,
     remoteDelete: (mode, branch, sha) => {
@@ -281,6 +324,8 @@ function runCleanup(
     worktree,
     primaryRoot: primary,
     apply: options.apply ?? true,
+    cleanupMode: options.cleanupMode ?? 'merged-pr',
+    attestNoLiveSession: options.attest ?? false,
   };
   return { report: runF4WorktreeBranchSteps(input, deps), calls, remote };
 }
@@ -1195,6 +1240,24 @@ test('the claim check asserts with the nonce and the claimed worktree', () => {
   ]);
 });
 
+test('released cleanup reads fresh routing and the worktree-local lock', () => {
+  assert.deepEqual(releasedClaimRoutingArgv(ISSUE, 'owner', 'repo', '/root'), [
+    '/root/scripts/resume-claim-routing.mjs',
+    '--issue',
+    String(ISSUE),
+    '--owner',
+    'owner',
+    '--repo',
+    'repo',
+  ]);
+  assert.deepEqual(claimLockCheckArgv('/work/wt', '/root'), [
+    '/root/scripts/claim-lock.mjs',
+    '--check',
+    '--worktree',
+    '/work/wt',
+  ]);
+});
+
 test('parseArgs takes the flags and refuses a relative worktree, a bad issue, or no nonce', () => {
   const base = [
     '--issue',
@@ -1210,6 +1273,7 @@ test('parseArgs takes the flags and refuses a relative worktree, a bad issue, or
   ];
   assert.equal(parseArgs(base).apply, false);
   assert.equal(parseArgs([...base, '--apply']).apply, true);
+  assert.equal(parseArgs(base).cleanupMode, 'merged-pr');
   assert.equal(parseArgs(['--help']).help, true);
   assert.throws(() =>
     parseArgs([
@@ -1250,6 +1314,46 @@ test('parseArgs takes the flags and refuses a relative worktree, a bad issue, or
       '--worktree',
       '/work/wt',
     ]),
+  );
+});
+
+test('released cleanup requires explicit attestation only for apply', () => {
+  const base = [
+    '--issue',
+    String(ISSUE),
+    '--claim-id',
+    CLAIM,
+    '--agent-id',
+    AGENT,
+    '--worktree',
+    '/work/wt',
+    '--released-claim',
+  ];
+  assert.equal(parseArgs(base).cleanupMode, 'released-claim');
+  assert.equal(parseArgs(base).attestNoLiveSession, false);
+  assert.throws(
+    () => parseArgs([...base, '--apply']),
+    /requires --attest-no-live-session/u,
+  );
+  const applied = parseArgs([...base, '--attest-no-live-session', '--apply']);
+  assert.equal(applied.apply, true);
+  assert.equal(applied.attestNoLiveSession, true);
+  assert.throws(
+    () =>
+      parseArgs([
+        '--issue',
+        String(ISSUE),
+        '--claim-id',
+        CLAIM,
+        '--agent-id',
+        AGENT,
+        '--worktree',
+        '/work/wt',
+        '--nonce',
+        'nonce-for-tests',
+        '--attest-no-live-session',
+      ]),
+    /requires --released-claim/u,
   );
 });
 
@@ -1369,4 +1473,139 @@ test('the clone lock is released after a run that holds at step 5', () => {
   assert.equal(report.reason, 'dirty-worktree');
   const handle = acquireCloneLock(fx.primary, 'release-probe', 5000);
   releaseCloneLock(handle);
+});
+
+const isWorktreeRemove = (call: readonly string[]): boolean =>
+  call.includes('worktree') && call.includes('remove');
+const isBranchDelete = (call: readonly string[]): boolean =>
+  call.includes('branch') && call.includes('-d') && call.includes(BRANCH);
+
+test('released cleanup removes a stale eligible worktree and its local branch', () => {
+  const fx = makeFixture();
+  const { report, calls } = runCleanup(fx, {
+    cleanupMode: 'released-claim',
+    attest: true,
+    releasedRoute: releasedRouteOk(fx.worktree, 'stale'),
+  });
+
+  assert.equal(report.status, 'complete');
+  assert.equal(report.cleanupMode, 'released-claim');
+  assert.equal(existsSync(fx.worktree), false);
+  assert.equal(
+    existsSync(join(fx.primary, '.git', 'refs', 'heads', BRANCH)),
+    false,
+  );
+  assert.equal(calls.some(isWorktreeRemove), true);
+  assert.equal(calls.some(isBranchDelete), true);
+  assert.equal(
+    calls.some((call) => call.includes('--force') || call.includes('-D')),
+    false,
+  );
+});
+
+test('released cleanup lists the preserved node_modules destination before removal', () => {
+  const fx = makeFixture();
+  const stateRoot = join(fx.root, 'state');
+  mkdirSync(stateRoot, { mode: 0o777 });
+  mkdirSync(join(fx.worktree, 'node_modules'));
+  writeFileSync(join(fx.worktree, 'node_modules', 'keep.txt'), 'preserve me\n');
+  const destination = preservedPath(fx, stateRoot);
+
+  const { report } = runCleanup(fx, {
+    stateRoot,
+    cleanupMode: 'released-claim',
+    attest: true,
+    releasedRoute: releasedRouteOk(fx.worktree),
+  });
+
+  assert.equal(report.status, 'complete');
+  assert.equal(existsSync(fx.worktree), false);
+  assert.equal(
+    readFileSync(join(destination, 'keep.txt'), 'utf8'),
+    'preserve me\n',
+  );
+  assert.match(
+    report.steps.find((step) => step.step === 'preserve')?.detail ?? '',
+    new RegExp(destination.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&'), 'u'),
+  );
+});
+
+test('released cleanup keeps the worktree and node_modules when the state root is unsafe', () => {
+  const fx = makeFixture();
+  const stateTarget = join(fx.root, 'shared-state');
+  const stateLink = join(fx.root, 'state-link');
+  mkdirSync(stateTarget, { mode: 0o755 });
+  chmodSync(stateTarget, 0o755);
+  symlinkSync(stateTarget, stateLink);
+  mkdirSync(join(fx.worktree, 'node_modules'));
+  writeFileSync(join(fx.worktree, 'node_modules', 'keep.txt'), 'keep\n');
+
+  const { report, calls } = runCleanup(fx, {
+    stateRoot: stateLink,
+    cleanupMode: 'released-claim',
+    attest: true,
+    releasedRoute: releasedRouteOk(fx.worktree),
+  });
+
+  assert.equal(report.reason, 'dirty-worktree');
+  assert.equal(existsSync(fx.worktree), true);
+  assert.equal(
+    readFileSync(join(fx.worktree, 'node_modules', 'keep.txt'), 'utf8'),
+    'keep\n',
+  );
+  assert.equal(existsSync(join(stateTarget, 'idd-skill')), false);
+  assert.equal(calls.some(isWorktreeRemove), false);
+  assert.equal(calls.some(isBranchDelete), false);
+});
+
+test('released cleanup with no marker or an active claim leaves the worktree and branch untouched', () => {
+  const noMarker = JSON.stringify({
+    state: 'unclaimed',
+    action: 're_claim',
+    reason: 'unclaimed',
+    active_claim: null,
+    evidence: {},
+  });
+  const active = JSON.stringify({
+    state: 'non_inheritable',
+    action: 'stop',
+    reason: 'active-claim-non-stale',
+    active_claim: { agent_id: AGENT, claim_id: CLAIM, branch: BRANCH },
+    evidence: {},
+  });
+  for (const stdout of [noMarker, active]) {
+    const fx = makeFixture();
+    const { report, calls } = runCleanup(fx, {
+      cleanupMode: 'released-claim',
+      attest: true,
+      releasedRoute: { exitCode: 0, stdout },
+    });
+
+    assert.equal(report.reason, 'released-lineage-unverified');
+    assert.equal(existsSync(fx.worktree), true);
+    assert.equal(
+      existsSync(join(fx.primary, '.git', 'refs', 'heads', BRANCH)),
+      true,
+    );
+    assert.equal(calls.some(isWorktreeRemove), false);
+    assert.equal(calls.some(isBranchDelete), false);
+  }
+});
+
+test('released cleanup dry run reports the planned removal and changes nothing', () => {
+  const fx = makeFixture();
+  const { report, calls } = runCleanup(fx, {
+    apply: false,
+    cleanupMode: 'released-claim',
+    releasedRoute: releasedRouteOk(fx.worktree),
+  });
+
+  assert.equal(report.status, 'dry-run');
+  assert.equal(existsSync(fx.worktree), true);
+  assert.equal(
+    existsSync(join(fx.primary, '.git', 'refs', 'heads', BRANCH)),
+    true,
+  );
+  assert.equal(calls.some(isWorktreeRemove), false);
+  assert.equal(calls.some(isBranchDelete), false);
 });
