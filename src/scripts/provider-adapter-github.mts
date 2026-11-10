@@ -413,6 +413,13 @@ export function fetchLastEditedAtByNodeId(
   return result;
 }
 
+/**
+ * Most distinct pull requests one {@link ProviderPort.getMergedChangeRequestMetaBatch}
+ * call asks for (kurone-kito/idd-skill#5122): each is one aliased field of a
+ * single GraphQL query, so the bound keeps the query and its cost small.
+ */
+const MERGED_CHANGE_REQUEST_META_BATCH_LIMIT = 25;
+
 /** Page size for both the GraphQL edit-evidence collection and the plain
  * REST comment reads (#3590). */
 const WORK_ITEM_COMMENT_PAGE_SIZE = 100;
@@ -4311,6 +4318,102 @@ export function createGithubProviderAdapter(
         mergeCommitOid:
           pr.mergeCommit?.oid == null ? null : String(pr.mergeCommit.oid),
       };
+    },
+
+    getMergedChangeRequestMetaBatch(
+      numbers: readonly number[],
+    ): Map<number, ProviderMergedChangeRequestMeta | null> {
+      const distinct = [...new Set(numbers)];
+      for (const number of distinct) {
+        if (!Number.isSafeInteger(number) || number <= 0) {
+          throw new Error(
+            `getMergedChangeRequestMetaBatch: ${String(number)} is not a positive integer pull request number`,
+          );
+        }
+      }
+      if (distinct.length > MERGED_CHANGE_REQUEST_META_BATCH_LIMIT) {
+        throw new Error(
+          `getMergedChangeRequestMetaBatch: ${distinct.length} pull requests exceed the limit of ${MERGED_CHANGE_REQUEST_META_BATCH_LIMIT} per call`,
+        );
+      }
+      const answers = new Map<number, ProviderMergedChangeRequestMeta | null>();
+      if (distinct.length === 0) {
+        return answers;
+      }
+      // The same fields the single read selects, one aliased field per pull
+      // request. The numbers are checked positive integers above, so they
+      // are safe to write into the query text.
+      const selections = distinct
+        .map(
+          (number) =>
+            `pr${number}: pullRequest(number:${number}){ number merged mergedAt headRefOid mergeCommit{oid} }`,
+        )
+        .join('\n    ');
+      const query = `query($owner:String!,$repo:String!){
+  repository(owner:$owner,name:$repo){
+    ${selections}
+  }
+}`;
+      const apiArgs = [
+        'api',
+        'graphql',
+        ...graphqlHostnameArgs(),
+        '-f',
+        `query=${query}`,
+        '-f',
+        `owner=${owner}`,
+        '-f',
+        `repo=${repo}`,
+      ];
+      const raw = JSON.parse(deps.ghText(apiArgs, GH_TEXT_LOOP_OPTIONS));
+      // All-or-nothing: any error, missing answer or mismatched number makes
+      // the whole batch throw, so the caller falls back to the single reads
+      // and keeps their failure meaning.
+      assertNoGraphqlErrors(raw, 'getMergedChangeRequestMetaBatch');
+      const repository = (
+        raw as { data?: { repository?: Record<string, unknown> | null } }
+      ).data?.repository;
+      if (repository == null || typeof repository !== 'object') {
+        throw new Error(
+          'getMergedChangeRequestMetaBatch: the response has no repository',
+        );
+      }
+      for (const number of distinct) {
+        const pr = repository[`pr${number}`] as {
+          number?: unknown;
+          merged?: unknown;
+          mergedAt?: unknown;
+          headRefOid?: unknown;
+          mergeCommit?: { oid?: unknown } | null;
+        } | null;
+        if (pr == null || typeof pr !== 'object') {
+          throw new Error(
+            `getMergedChangeRequestMetaBatch: the response has no answer for pull request #${number}`,
+          );
+        }
+        if (Number(pr.number) !== number) {
+          throw new Error(
+            `getMergedChangeRequestMetaBatch: the answer for pull request #${number} names #${String(pr.number)}`,
+          );
+        }
+        answers.set(
+          number,
+          pr.merged !== true
+            ? null
+            : {
+                number,
+                merged: true,
+                mergedAt: pr.mergedAt == null ? null : String(pr.mergedAt),
+                headRefOid:
+                  pr.headRefOid == null ? null : String(pr.headRefOid),
+                mergeCommitOid:
+                  pr.mergeCommit?.oid == null
+                    ? null
+                    : String(pr.mergeCommit.oid),
+              },
+        );
+      }
+      return answers;
     },
 
     listChangeRequestChecks(number: number): ProviderRequiredCheck[] {

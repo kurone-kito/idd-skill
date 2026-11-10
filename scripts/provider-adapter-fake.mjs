@@ -362,6 +362,14 @@ export function createFakeProviderAdapter(fixture) {
     getMergedChangeRequestMeta(number) {
       return fixture.mergedChangeRequestMeta?.[number] ?? null;
     },
+    getMergedChangeRequestMetaBatch(numbers) {
+      // The single read's answer for each distinct number, in one call.
+      const answers = new Map();
+      for (const number of numbers) {
+        answers.set(number, fixture.mergedChangeRequestMeta?.[number] ?? null);
+      }
+      return answers;
+    },
     listChangeRequestChecks(number) {
       return fixture.allChecks?.[number] ?? [];
     },
