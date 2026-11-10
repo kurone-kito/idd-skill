@@ -710,39 +710,80 @@ after an authoring hold that followed a successful assert (`4242624520`);
 removal outside the clone-scoped lock (`4242577825`); and `git branch -d`
 refusing a branch whose tip is not merged into a lagging local `main`, so the
 branch survived (`4242489039`). The decided policy (maintainer hearing,
-2026-10-12) covers them. A later review of the procedure (PR `#4058`) led to the
-amendments below.
+2026-10-12) covers them. PR `#4058` amended the procedure, and the `#5068`
+split below then replaced its inline script with a mode of the F4 cleanup
+helper.
 
-- Gates run before removal, under one hold of the clone-scoped lock, after
-  the worktree-local claim lock is acquired. The route gate reads
-  `active_claim`, not the route `state`, because `state` is written for a
-  claiming session and a released claim can show a local-occupied state.
-  Removal needs `active_claim` to be null or another claim id. The HEAD gate
-  requires the worktree to be attached to the cleanup branch. The status gate
-  is `git status --porcelain --ignored --untracked-files=all
-  --ignore-submodules=none`, empty. The tip gate requires the branch to equal
-  local `origin/{development-branch}`, read without a fetch.
-- Removal comes before deletion. Git refuses to delete a branch checked out in
-  any worktree, so `git worktree remove` (no `--force`) runs first, and
-  `git branch -D` follows. The tip gate is the removal gate. If `-D` fails
-  after removal, or a harness denies it (the distributed Claude baseline denies
-  `Bash(git branch -D*)`), the procedure reports a leftover branch. The A5(e)
-  orphan hold covers the next claimant. The deny rule is unchanged.
-- Failures before removal keep the worktree, its branch, and its lock on
-  purpose. A later claim of the issue then stops at the collision check
-  instead of inheriting the path. No helper releases the lock, and a release
-  would need a new helper mode.
-- Plain `git branch -d` is not used, because it refuses against a lagging
-  local `{default-branch}`.
-- Placeholders are filled as single-quoted shell words, because a valid branch
-  name can contain shell metacharacters such as `$` and `;`.
-- On `instructions-only`, the worktree-local claim lock uses its helper-free
-  fallback. The clone-scoped steps are serialized by giving each worker its own
-  clone, because the clone-scoped lock has no helper-free fallback.
-- `git status --porcelain` cannot see assume-unchanged or skip-worktree entries,
-  so the gate also requires every `git ls-files -v` tag to be `H`. A legacy active
-  claim with a null id keeps the worktree, because it cannot be ruled out as
-  another session's claim.
+On 2026-11-07, in this repository's shared clone after fetching `origin/main`,
+twelve linked worktrees were ancestors of `origin/main`, had an empty
+non-ignored status, and had ignored content only under `node_modules/`. The
+exact-tip script kept every one, because no tip equaled `origin/main` and the
+ignored-inclusive status was not empty, so each stayed registered and blocked
+the next claim of its issue. Abort and needs-decision release did not run any
+cleanup. Issue `#5068` took on that gap and exceeded the M candidate-file
+limit: 10 changed paths and 9 parsed keys against a limit of 8, with the
+claim-push gate stopping before any push. Roadmap issue `#5133` split it into
+the helper task (issue `#5134`) and the documentation task (issue `#5136`).
+
+- Cleanup acts on one lineage. The helper accepts only fresh routing that
+  proves one exact released or stale claim (claim id, agent id, and branch)
+  whose only local occupant is the requested registered worktree, and only when
+  the worktree-local IDD lock names the same claim and agent. An active claim,
+  another claim id, a missing release marker, a held lock, or an ambiguous
+  route refuses with no mutation. A legacy active claim with a null id cannot
+  match, so it keeps the worktree.
+- A failure before a trusted `claimed-by` marker exists has no lineage. A
+  `--record-tokens` failure after `git worktree add` leaves a worktree with no
+  marker and no matching lock, and the earlier script removed it on a clean
+  status and a tip equal to the base. That generic unclaimed-worktree route is
+  gone (issue `#5068`): the helper refuses it, and the instructions preserve
+  the worktree and stop, including the orchestrator's pre-created worktree. A
+  failure that leaves a claim active is not a trigger either. The session may
+  release its own claim through Abort, and the verified
+  `unclaimed-by` is then a trigger, but only after step 4's `--acquire` has
+  created the worktree lock: `--record-tokens` writes only the generated-tokens
+  record, so an earlier exit has no lock for the helper to match and it holds at
+  `claim-lock-mismatch`. It never posts `unclaimed-by` on another session's
+  nonce win.
+- Liveness needs independent confirmation. A claim marker, a matching lock, and
+  a clean status do not show that no session is working in a worktree: the lock
+  records no process liveness, and issue `#3141` showed that a matching
+  worktree can hold a same-host session's uncommitted work. Apply therefore
+  needs `--attest-no-live-session`, which records an operator's independent
+  confirmation, and a session never supplies it from its own claim evidence.
+  A dry run is read-only and needs no flag.
+- Removal comes before deletion, and nothing is forced. Git refuses to delete a
+  branch checked out in any worktree, so `git worktree remove` (no `--force`)
+  runs first. Branch deletion is `git branch -d`, not the earlier `-D`, because
+  a released branch may still hold commits that exist nowhere else. When `-d`
+  refuses, for example against a lagging local `{default-branch}`, the helper
+  reports the leftover branch (`released-branch-remains`) and never
+  force-deletes it. The deny rule on `git branch -D` is unchanged. The helper
+  never fetches, fast-forwards the primary checkout, resets, stashes, or
+  deletes a remote branch.
+- The worktree must be clean. The only allowed content is a lone ignored
+  `node_modules/`, which moves to the F4 private destination. `git status`
+  cannot see assume-unchanged or skip-worktree entries, so the helper also
+  checks every `git ls-files -v` tag.
+- Apply is serialized. The helper takes the clone-scoped lock itself, and it
+  re-verifies lineage, lock, and branch tip after taking it, after the
+  preservation move, and before removal. A dry run takes no lock.
+- After a verified release, a failed cleanup keeps the `unclaimed-by` marker
+  and whatever the helper's report says remains (the worktree and branch, a
+  preserved `node_modules/` destination, or only the branch), and stops with
+  that report. The instructions never retry the removal by hand or claim a
+  successor. A
+  successful cleanup is followed by the fresh-claim gate, and the helper claims
+  nothing.
+- On `instructions-only` there is no helper runtime, the clone-scoped lock has
+  no helper-free fallback, and liveness cannot be checked. The instructions
+  preserve the worktree and branch and escalate instead of reproducing the
+  removal by hand. The earlier helper-free fallback, one clone per worker, is
+  retired with the inline script.
+- The inline script was removed from both claim files instead of kept beside
+  the helper, so its gates cannot drift from the helper's. The core, discovery,
+  and Lite claim bundles each had under 40 bytes of headroom, so the script's
+  bytes paid for the new instructions and no limit was raised.
 
 ## Work and self-review
 
@@ -1029,10 +1070,15 @@ it by hand. The hand split of #4064 then produced a duplicate child
 authoring-time check, the over-scope split threshold that
 `audit-authored-issue`'s `effort-candidate-file-limit` check enforces.
 This route is its work-phase counterpart (kurone-kito/idd-skill#4138).
+Issue kurone-kito/idd-skill#5093 later narrowed its trigger: a count over a
+coherent S or M estimate is advisory drift (see "Count drift is advisory
+evidence" below), so the stop and release steps in this list now apply only to
+a reason other than the number, or to a refusal for unusable effort evidence.
 
-- **Stop, do not push.** An over-threshold diff is what the authoring
-  check would have split before publication, so finishing it only
-  produces an oversized pull request. The trigger is the distributed
+- **Stop, do not push.** (Since issue #5093 this applies only to a reason
+  other than the number, or to unusable effort evidence.) For such a reason the
+  diff is what the authoring check would have split before publication, so
+  finishing it only produces an oversized pull request. The trigger is the distributed
   `audit-authored-issue` helper's own check (the profile-selected
   command, with the body on `--stdin` and the target's resolved
   `--marker-prefix`, so a target with another prefix or without a
@@ -1135,10 +1181,13 @@ independently caps actual canonical paths at eight, because the audit
 parser may omit a root path or one containing whitespace. Duplicate,
 masked-only, malformed, mismatched or ambiguous evidence keeps the
 existing route from issue
-`kurone-kito/idd-skill#4138`; so do M failures and more than eight
-actual paths. This preserves the authoring threshold from
-`kurone-kito/idd-skill#4130` and the overrun route's incident history
-in `kurone-kito/idd-skill#4064` and `kurone-kito/idd-skill#3824`.
+`kurone-kito/idd-skill#4138`. Issue `kurone-kito/idd-skill#5093` later
+made M failures and more than eight actual paths advisory drift (see
+"Count drift is advisory evidence" below) instead of a stop, keeping the
+copy only for S estimates of at most eight paths. This preserves the
+authoring threshold from `kurone-kito/idd-skill#4130` and the overrun
+route's incident history in `kurone-kito/idd-skill#4064` and
+`kurone-kito/idd-skill#3824`.
 
 The assessment records the raw issue-body SHA-256, original and
 effective estimates, both canonical path counts, original audit results,
@@ -1150,6 +1199,75 @@ recomputes scope before the gate and again before push, refusing any
 change. The SHA is a freshness guard, not a saved permission: every
 apply and resumed session performs the full assessment under its own
 current claim. No issue-body write or rollback is part of this route.
+
+**Count drift is advisory evidence, not a runtime stop.**
+
+Issue `kurone-kito/idd-skill#4138` made crossing the authoring estimate
+sufficient evidence of an oversized pull request, after the operator splits on
+`kurone-kito/idd-skill#4064` and `kurone-kito/idd-skill#3824`. Two later
+incidents showed what that costs when a planning proxy becomes execution
+authority. Issue `kurone-kito/idd-skill#5030` stopped otherwise sound work
+because an S estimate was low by one or two files, and its first repair edited
+the shared issue body to make the count pass, which pull request
+`kurone-kito/idd-skill#5086` showed could overwrite concurrent edits. Issue
+`kurone-kito/idd-skill#4932` recorded required edits that the authored
+`Candidate files` list omitted until after the claim. The operator asked in the
+2026-11-08 authoring session for root recurrence prevention, including a
+review of whether runtime volume assessment is rational at all.
+
+A path count measures breadth. It does not measure semantic intent,
+complexity, safety, or the ability to finish, so it cannot show that a larger
+change is unsafe or that it adds intent the issue never accepted. It was
+introduced as an authoring-time admission rule (the over-scope split threshold
+of `kurone-kito/idd-skill#4130`), where one fresh author splits a draft before
+anyone claims it. At runtime the authored estimate carries known error: the
+list omits files (`#4932`), generated companions and tests multiply paths, and
+the audit's parser omits root and whitespace paths. Counting the file list at
+runtime and stopping on it turns estimation error into aborted sessions.
+
+So the count stays a measurement, not a verdict. B3 reassessment, push, and
+resume recompute the canonical paths from current source state, and the
+helper reports a count over a coherent S or M estimate as structured advisory
+drift, including counts above eight, without writing or assigning an effort-L
+marker. One evidence-backed reassessment follows. When the change is still a
+cohesive way to meet the accepted intent, needs no new authority or unresolved
+decision, and has a feasible validation plan, the worker updates the plan and
+report and continues the same claim. A genuinely new independent deliverable
+follows the unplanned follow-up work boundary. An unresolved design,
+ownership, security, resource, or validation blocker keeps its existing
+handling, and a worker may split the issue because such a reason establishes
+the need, with evidence of that reason. A number alone causes no release, held
+split, needs-decision label, or human count waiver. Lost claims, unreadable
+audits or reads, unusable effort evidence, and failed validation still stop,
+and helper success states only that numerical drift is advisory. There is no
+bypass flag, no per-edit polling, and no new service.
+
+Two edges are deliberate. The S-to-M copy keeps the report SHA that issue
+`#5092` requires at apply, while other advisory drift treats a SHA as optional
+(a SHA passed must still match, before and after the gate), so a count alone
+cannot fail every later review-fix push. A body whose own candidate list is over
+the limit is also advisory drift, since admission is unchanged and the helper
+only measures; a split child that the audit exempts over the limit is reported
+as not assessed rather than as drift.
+
+The authoring audit is unchanged: a newly drafted S or M issue over its
+published candidate ceiling still fails admission, and the fresh-discovery
+effort-L policy and the `Split out of` exemption are untouched. Those are
+planning and admission policies. They are distinct from runtime correctness and
+ownership, which the claim, review, and validation gates decide.
+
+Related work is reconciled, not replaced. Issue `#5092` supplies the shared
+assessment and report that this change reuses; neither is duplicated by a second
+counter or a new permission protocol. Pull request `kurone-kito/idd-skill#5104`
+(issue `#4676`) landed F2/F3 readiness that runs its own scope audit and blocks
+on a count-only failure unless a trusted owner records a decision. It is a
+separate implementation surface with its own copy of the evaluator, so this
+change leaves it alone, and a follow-up under roadmap `#5091` must reconcile it
+before global recurrence prevention can be claimed. Until then a pull request
+whose canonical paths exceed its estimate can pass B3 as advisory drift and still
+wait at F2 for that decision. Issues `#4676`, `#5055`, and roadmap `#4673` stay
+with their authors, and standing split (`#4893`) keeps its route for a split a
+genuine reason requires.
 
 ### C1 — Search sibling code for the same defect shape before closing
 

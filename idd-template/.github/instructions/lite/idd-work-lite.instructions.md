@@ -272,9 +272,14 @@ never release a follow-up or start a second loop. If the companion is
 unavailable, record the proposal in a separate comment and PR follow-ups; never
 create it ad hoc or improvise worker-side authoring.
 
-**Read-only S-to-M correction**: when `claimed-push` dry-run returns
-`assessment.correctionApplied: true`, report S, M, canonical paths/count,
-claim ID, raw-body SHA-256, assessment SHA-256 and a unique attempt ID.
+**Read-only S-to-M correction and advisory drift**: a count over the
+estimate is advisory. When `claimed-push` dry-run passes with
+`assessment.correctionApplied: true` or `assessment.disposition:
+"advisory-drift"` (even above eight), reassess once. If the
+change stays one cohesive way to meet the accepted intent, needs no new
+authority or unresolved decision, and has a feasible validation plan, update the
+plan, report S, M (or none), canonical paths/count, claim ID, raw-body SHA-256,
+assessment SHA-256 and a unique attempt ID, and continue the same claim.
 Before posting, revalidate claim, nonce, worktree, lock and tokens; re-read the
 issue and rerun dry-run if the body or assessment changed. Add this complete
 `idd-agent-authored` suffix:
@@ -287,33 +292,33 @@ _{agent-id}: IDD automation comment; attribution is self-reported._
 
 Verify the returned comment ID, author and exact body; reconcile an uncertain
 POST by its attempt ID. If unverified, retain the claim and stop. Do not edit
-or roll back the issue body. Keep the verified assessment SHA for normal D2.
-Do not apply or push from B3: continue through C self-review and D1
-synchronization, then pass the SHA with
+or roll back the issue body. Do not apply or push from B3: keep the verified
+assessment SHA through C self-review and D1 synchronization, then pass it with
 `--expected-scope-sha256 <assessment-sha256>` to D2's normal
-`claimed-push --apply`. If D2's scope check differs, return to B3, reassess
+`claimed-push --apply` (required after `correctionApplied: true`, else
+optional). If D2's scope check differs, return to B3, reassess
 and report, then repeat C and D1 before applying. Never inherit the report
-across a claim change or resume. If structured assessment is absent, use the
-existing scope-overrun route.
+across a claim change or resume.
 
-**Scope overrun** (helper runtime only): unless that correction applies,
-when the profile-selected
-`audit-authored-issue --shape child --stdin --marker-prefix {markerPrefix}`
-fails `effort-candidate-file-limit` on the issue body or with
-`## Candidate files` set to the diff's canonical paths, stop coding without
-pushing. Comment the estimate, candidate files, changed files, and a split
-proposal. Then revalidate ownership: only if the active claim still uses your
-current `{claim-id}`, update the digest (`Phase: aborted/released`, the release
-in `Next action`, the claim and reason in `Authoritative by`) and post
-`unclaimed-by` for that same `{claim-id}`; otherwise post no release. Then run
-`lost-claim-cleanup`. With the companion, hand it that proposal as a held split
-draft: it holds this issue, publishes a held roadmap whose children record
-`Split out of #<n>`, and comments its link; if refused, the comment stands.
-Never add needs-decision or ask a human.
+**Scope overrun** (helper runtime only): a number alone never releases, splits,
+labels needs-decision, or needs a waiver. Independent deliverables use the
+follow-up route above; design, ownership, security, resource, or validation
+blockers keep theirs. Start this route only when such a reason (with evidence)
+makes the issue itself need a split, or the dry-run scope step fails
+`effort-candidate-file-limit` with no advisory disposition (unusable effort
+evidence): stop coding without pushing. Comment the reason, estimate, candidate
+files, changed files, and a split proposal. Then revalidate ownership: only if
+the active claim still uses your current `{claim-id}`, update the digest
+(`Phase: aborted/released`, the release in `Next action`, the claim and reason
+in `Authoritative by`) and post `unclaimed-by` for that same `{claim-id}`;
+otherwise post no release. Then run `lost-claim-cleanup`. With the companion,
+hand it that proposal as a held split draft: it holds this issue, publishes a
+held roadmap whose children record `Split out of #<n>`, and comments its link;
+if refused, the comment stands. Never add needs-decision or ask a human.
 
-**Standing split** alone bypasses the worker-side scope-overrun route; keep the
-parent claim and label held. Resolve policy owner/repo from the claimed issue's
-canonical live URL. For a PR, query
+**Standing split** alone bypasses the worker-side scope-overrun route (never
+for a count alone); keep the parent claim and label held. Resolve policy
+owner/repo from the claimed issue's canonical live URL. For a PR, query
 `gh api repos/<target-owner>/<target-repo>/pulls/<number> --jq '{owner:
 .base.repo.owner.login, repo: .base.repo.name, ref: .base.ref}'` and use its
 base owner/repo/ref; otherwise use the issue repo and live default branch.
@@ -347,7 +352,10 @@ target, add `Split out of #<parent>`, and update/read back each verified child i
 
 Only orphan-shaped children qualify. A sequential-roadmap `blocked-by` child
 is not an orphan; `--shape child` needs a separately held anchor this parent
-does not provide. Use the existing scope-overrun route for such children.
+does not provide. Use the existing scope-overrun route for such children, and
+for standalone orphans (parent not under a roadmap's `## Tracks`) when
+`<target-policy>` sets `issueScope` to `roadmap`, which discovers no orphans.
+Other values and an absent key are unchanged.
 
 Otherwise, use the existing comment/release route.
 
@@ -375,12 +383,18 @@ stop. On resume reconcile
 mappings with helper records/live issues; verify/skip mapped children and
 publish only unmapped proposals. Stop on conflict or unknown publication.
 Keep the parent claim/label and children held.
-Review each final child separately: send exact title/body and the bounded
-packet to the usable configured delegate, or use native review or structured
-self-critique. Bound wait by
-`issueAuthoring.adversarialReview.waitCeiling` (`PT20M` default). Require
-`"completed": true` and every finding `fixed` or `rejected`; stop on incomplete,
-unreadable, or unresolved review. A title/body correction invalidates its
+Review each final child separately: send exact title/body and the bounded packet
+per the contract's completed-draft mode table. A usable delegate runs; native
+review also runs for `combined`, for `on-success` after a delegate success, and
+for `fallback` (default) after a delegate failure (missing command, non-zero
+exit, timeout, cancel, or unreadable findings), but not for `never`. With no
+usable delegate, use native review or structured self-critique. Union findings.
+Wait for each mechanism that runs, bounded by
+`issueAuthoring.adversarialReview.waitCeiling` (`PT20M` default). Require a
+readable list from each mechanism that ran, except a failed delegate that
+`fallback` replaces with native review; otherwise stop publication of that
+child. Require `"completed": true` and every finding `fixed` or `rejected`; stop
+on an incomplete or unresolved review. A title/body correction invalidates its
 review and the proposal. Update/read back the full ordered proposal and repeat
 both checks for changed children. If uncertain, continue only when the full
 body matches exactly; otherwise keep the hold and stop. Immediately before
@@ -415,9 +429,11 @@ check, post the exact record below. On definite/uncertain POST failure, post a
 hold note naming verified children; keep all holds and stop. For uncertainty,
 proceed only after paginated read-back confirms one trusted exact record and
 the full set; never retry. On success, post the completion note, revalidate
-the claim, post/verify its exact `unclaimed-by` marker, then clean up. Mismatch,
-unreadable state, or uncertain release keeps the parent held. Keep the label
-until release or completion.
+the claim, update and read back the parent digest (`Phase: aborted/released`,
+the planned release in `Next action`, the verified claim and reason in
+`Authoritative by`), post/verify its exact `unclaimed-by` marker, then clean
+up. Mismatch, unreadable state, or uncertain release keeps the parent held.
+Keep the label until release or completion.
 `instructions-only` keeps the companion route.
 
 ```text

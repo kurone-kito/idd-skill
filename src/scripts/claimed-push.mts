@@ -11,7 +11,9 @@
 // `location`, `scope`, `gate`, `reassert`, and `push`. The `scope` step only
 // reads: it runs `audit-authored-issue` on the issue body and on a copy whose
 // leading `## Candidate files` section lists the paths the branch changed
-// since its branch point, so an over-scope branch stops before the push. The
+// since its branch point. A count over a coherent S or M estimate is advisory
+// drift (issue #5093), reported with structured evidence and never a stop;
+// evidence the helper cannot check still stops before the push. The
 // helper never forces, never retries, and never creates a commit. Every child
 // process runs through an injectable runner, so a test can stub the claim
 // assert, every git and gh read, the audit, the gate, and the push. The gate
@@ -91,6 +93,12 @@ const ADMISSION_EXPIRED_STATUS = 75;
 
 /** Exit status of an admission refusal, or of a stop it could not deliver. */
 const ADMISSION_REFUSED_STATUS = 2;
+
+/**
+ * Exit status when a pueue task may have started but its outcome could not be
+ * verified (issue #5156). A gate that exits 3 on its own shares the status.
+ */
+const ADMISSION_OUTCOME_UNKNOWN_STATUS = 3;
 
 /** The one audit finding the scope step reads. */
 const EFFORT_FINDING_ID = 'effort-candidate-file-limit';
@@ -175,6 +183,8 @@ const NEXT_ACTION = {
     'if the stderr above has a "local-admission: expired" line (a helper error envelope JSON line can follow it), the gate did not start: report it, and do not rerun the helper or push by hand; otherwise the gate itself exited 75: fix the failure, commit, and rerun',
   admissionRefused:
     'if the stderr above has a "local-admission:" line that ends with "command not started" (admission refused before the gate started) or says the lock stays held until the command exits (the gate started and could not be stopped), stop and report without changing the repository policy, and do not rerun; otherwise the gate itself exited 2: fix the failure, commit, and rerun',
+  admissionOutcomeUnknown:
+    'if the stderr above has a line that contains "local-admission: pueue task outcome unknown" or "local-admission: pueue error:", the gate may already have run: report it, check the state of the pueue task that line names by id or label (if it names either), and do not rerun the helper or push by hand; otherwise the gate itself exited 3: fix the failure, commit, and rerun',
   commitOrDiscard: 'commit or discard what the gate changed, then rerun',
   rerunForHead: 'rerun the helper so the gate sees the new HEAD',
   readGitError: 'read the git error in the worktree and fix it, then rerun',
@@ -182,7 +192,7 @@ const NEXT_ACTION = {
     `read git's message, fetch and inspect ${REMOTE_NAME}/${branch}, never force`,
   pushUnknown: 'read the remote branch before any new push, no retry',
   scopeOverrun:
-    'stop without pushing and follow the Scope overrun rule in idd-work.instructions.md',
+    'stop without pushing: the effort evidence cannot support a numerical advisory, so follow the Scope overrun rule in idd-work.instructions.md',
   scopeAssessmentChanged:
     'rerun the dry-run, reconcile the report, and retry with its assessment SHA-256',
   staleBase: (base: string): string =>
@@ -308,11 +318,33 @@ export interface ClaimedPushStep {
   assessment?: ClaimedPushScopeAssessment;
 }
 
+/**
+ * What the scope step can say about the authored estimate, from counts alone.
+ * `within-estimate`: a coherent checked S or M estimate with every own count
+ * at or under its limit. `advisory-drift`: a coherent checked S or M estimate
+ * with a count over its limit, including above eight; the drift is evidence,
+ * never a stop. `not-assessed`: no coherent checked S or M evidence (L,
+ * absent, malformed, or an unverifiable footer), an audit-exempt split child
+ * over its limit, or a refusal; the helper makes no numerical claim. The value
+ * measures breadth only, not intent,
+ * complexity, safety, or the ability to finish.
+ */
+export type ScopeDisposition =
+  | 'within-estimate'
+  | 'advisory-drift'
+  | 'not-assessed';
+
 export interface ClaimedPushScopeAssessment {
   originalBodySha256: string;
   estimatedEffort: EffortHint | null;
+  /**
+   * The estimate after the in-memory S-to-M copy, when that copy applied.
+   * Never a measured size, and never effort L.
+   */
   effectiveEffort: EffortHint | null;
+  /** True only when the in-memory S-to-M copy passed both M audits. */
   correctionApplied: boolean;
+  disposition: ScopeDisposition;
   canonicalChangedPaths: string[];
   actualCanonicalPathCount: number;
   auditParsedPathCount: number;
@@ -1339,18 +1371,21 @@ function rawOffsetForNormalizedIndex(raw: string, offset: number): number {
 }
 
 /**
- * Locate the visible and hidden S tokens only after the existing parser and
- * audit have established their classification and agreement. The mask keeps
- * HTML comments and HTML blocks visible, matching parseEffortMarker and the
- * audit; it masks fenced, indented, and inline code. Returned offsets address
- * the raw body, including CRLF line endings.
+ * Locate the visible and hidden tokens of one S or M estimate only after the
+ * existing parser and audit have established their classification and
+ * agreement. The mask keeps HTML comments and HTML blocks visible, matching
+ * parseEffortMarker and the audit; it masks fenced, indented, and inline
+ * code. Returned offsets address the raw body, including CRLF line endings.
+ * Finding exactly one active visible token and one active hidden token is the
+ * evidence that the estimate is coherent and checked.
  */
-function locateEffortSTokens(
+function locateEffortTokens(
   body: string,
   markerPrefix: string,
+  value: 'S' | 'M',
 ): { visible: EffortTokenRange; marker: EffortTokenRange } | null {
   const effort = parseEffortMarker(body, markerPrefix);
-  if (!effort.present || effort.malformed || effort.value !== 'S') {
+  if (!effort.present || effort.malformed || effort.value !== value) {
     return null;
   }
   const normalized = body.replace(/\r\n/gu, '\n');
@@ -1373,7 +1408,7 @@ function locateEffortSTokens(
   const markerStart = markerMatch?.index;
   if (
     markerMatch === undefined ||
-    markerValue?.toUpperCase() !== 'S' ||
+    markerValue?.toUpperCase() !== value ||
     markerStart === undefined
   ) {
     return null;
@@ -1386,7 +1421,7 @@ function locateEffortSTokens(
   const visibleMatches = [...paragraph.matchAll(visiblePattern)];
   if (
     visibleMatches.length !== 1 ||
-    visibleMatches[0]?.[1]?.toUpperCase() !== 'S'
+    visibleMatches[0]?.[1]?.toUpperCase() !== value
   ) {
     return null;
   }
@@ -1411,10 +1446,10 @@ function locateEffortSTokens(
   if (
     body
       .slice(visibleRawStart, visibleRawStart + visibleToken.length)
-      .toUpperCase() !== 'S' ||
+      .toUpperCase() !== value ||
     body
       .slice(markerRawStart, markerRawStart + markerValue.length)
-      .toUpperCase() !== 'S'
+      .toUpperCase() !== value
   ) {
     return null;
   }
@@ -1459,6 +1494,7 @@ function makeScopeAssessment(input: {
   estimatedEffort: EffortHint | null;
   effectiveEffort: EffortHint | null;
   correctionApplied: boolean;
+  disposition: ScopeDisposition;
   paths: readonly string[];
   auditParsedPathCount: number;
   originalBody: AuditVerdict & { ok: true };
@@ -1473,6 +1509,7 @@ function makeScopeAssessment(input: {
     estimatedEffort: input.estimatedEffort,
     effectiveEffort: input.effectiveEffort,
     correctionApplied: input.correctionApplied,
+    disposition: input.disposition,
     canonicalChangedPaths: [...input.paths],
     actualCanonicalPathCount: input.paths.length,
     auditParsedPathCount: input.auditParsedPathCount,
@@ -1616,24 +1653,82 @@ function stepScope(ctx: Context): StepOutcome {
     original.result === 'pass' &&
     scoped.result === 'pass' &&
     !originalVisibleLineMismatch;
-  if (originalsPass) {
+
+  // Numerical drift is advisory evidence, never a stop. It is recognized only
+  // from a coherent, checked S or M estimate: the existing parser, both
+  // audits' visible-line agreement, and the offset locator must each find one
+  // active visible and one active hidden token. Each count is then compared
+  // with the band's limit by the helper's own arithmetic, so neither the
+  // finding ID nor its prose decides it.
+  const bandEstimate =
+    estimatedEffort === 'S' || estimatedEffort === 'M' ? estimatedEffort : null;
+  const bandLimit =
+    bandEstimate === null ? null : EFFORT_CANDIDATE_FILE_LIMITS[bandEstimate];
+  const ranges =
+    bandEstimate !== null &&
+    original.visibleLineAgreement === 'pass' &&
+    scoped.visibleLineAgreement === 'pass'
+      ? locateEffortTokens(body, markerPrefix, bandEstimate)
+      : null;
+  const bodyKeyCount = ctx.deps.parseCandidates(body).length;
+  const overBody = bandLimit !== null && bodyKeyCount > bandLimit;
+  const overCanonical = bandLimit !== null && sectionKeys.length > bandLimit;
+  const overActual = bandLimit !== null && paths.length > bandLimit;
+  const driftNote =
+    bandEstimate === null || bandLimit === null
+      ? ''
+      : `the ${bandEstimate} estimate allows ${bandLimit} candidate file(s); the issue body lists ${bodyKeyCount}, and the canonical paths are ${sectionKeys.length} audit-parsed and ${paths.length} actual; the count measures breadth, not intent, so it is advisory evidence for one plan reassessment, never a stop`;
+  const assess = (extra: {
+    disposition: ScopeDisposition;
+    effectiveEffort?: EffortHint | null;
+    correctionApplied?: boolean;
+    correctedBody?: AuditVerdict & { ok: true };
+    correctedCanonical?: AuditVerdict & { ok: true };
+  }): ClaimedPushScopeAssessment => {
     const assessment = makeScopeAssessment({
       body,
       estimatedEffort,
-      effectiveEffort: estimatedEffort,
-      correctionApplied: false,
+      effectiveEffort: extra.effectiveEffort ?? estimatedEffort,
+      correctionApplied: extra.correctionApplied ?? false,
+      disposition: extra.disposition,
       paths,
       auditParsedPathCount: sectionKeys.length,
       originalBody: original,
       originalCanonical: scoped,
+      ...(extra.correctedBody === undefined
+        ? {}
+        : { correctedBody: extra.correctedBody }),
+      ...(extra.correctedCanonical === undefined
+        ? {}
+        : { correctedCanonical: extra.correctedCanonical }),
     });
     ctx.scopeAssessment = assessment;
+    return assessment;
+  };
+
+  if (originalsPass) {
+    // Both audits passed. A key count over the limit then means the audit
+    // exempted it (a `Split out of` child), so the helper makes no numerical
+    // claim; only paths the audit parser omitted leave actual drift.
+    const exempt = overBody || overCanonical;
+    const assessment = assess({
+      disposition:
+        ranges === null || exempt
+          ? 'not-assessed'
+          : overActual
+            ? 'advisory-drift'
+            : 'within-estimate',
+    });
     const guard = assessmentGuard(ctx, assessment);
     if (guard !== null) return { ...guard, assessment };
     return {
       status: 'passed',
       exitStatus: 0,
-      reason: `${EFFORT_FINDING_ID} passes on the issue body (${original.detail}) and with the canonical paths (${scoped.detail}); ${counted}`,
+      reason: `${EFFORT_FINDING_ID} passes on the issue body (${original.detail}) and with the canonical paths (${scoped.detail}); ${counted}${
+        assessment.disposition === 'advisory-drift'
+          ? `; advisory estimate drift: ${driftNote}; assessment ${assessment.assessmentSha256}`
+          : ''
+      }`,
       assessment,
     };
   }
@@ -1653,106 +1748,123 @@ function stepScope(ctx: Context): StepOutcome {
         ]
       : []),
   ];
-  const ranges =
-    estimatedEffort === 'S' &&
-    original.visibleLineAgreement === 'pass' &&
-    scoped.visibleLineAgreement === 'pass'
-      ? locateEffortSTokens(body, markerPrefix)
-      : null;
-  const correctedBody =
-    ranges === null ? null : correctEffortSTokens(body, ranges);
-  if (correctedBody !== null) {
-    const correctedCanonicalBody = `${section}${correctedBody}`;
-    const corrected = runAudit(
-      ctx,
-      'the corrected M issue body',
-      correctedBody,
-      markerPrefix,
-      title,
+  const explained =
+    (original.result !== 'fail' || overBody) &&
+    (scoped.result !== 'fail' || overCanonical);
+  const refuse = (): StepOutcome => {
+    const assessment = assess({ disposition: 'not-assessed' });
+    parts.push(counted);
+    const limitFailure =
+      original.result === 'fail'
+        ? original
+        : scoped.result === 'fail'
+          ? scoped
+          : null;
+    return {
+      ...failed(
+        parts.join('; '),
+        limitFailure === null
+          ? NEXT_ACTION.stopAndReport
+          : NEXT_ACTION.scopeOverrun,
+        limitFailure?.exitStatus ?? scoped.exitStatus,
+      ),
+      assessment,
+    };
+  };
+
+  if (ranges === null || bandEstimate === null) {
+    parts.push(
+      'the effort evidence is not one coherent S or M estimate with agreeing visible and hidden footers, so no numerical advisory applies',
     );
-    if (!corrected.ok) return corrected.failure;
-    const correctedScoped = runAudit(
-      ctx,
-      'the corrected M body with the canonical paths',
-      correctedCanonicalBody,
-      markerPrefix,
-      title,
+    return refuse();
+  }
+  if (!explained) {
+    parts.push(
+      `a failed finding is not explained by a candidate count over the ${bandEstimate} limit of ${bandLimit}, so no numerical advisory applies`,
     );
-    if (!correctedScoped.ok) return correctedScoped.failure;
-    const actualWithinM = paths.length <= EFFORT_CANDIDATE_FILE_LIMITS.M;
-    const correctedPass =
-      corrected.result === 'pass' &&
-      correctedScoped.result === 'pass' &&
-      corrected.visibleLineAgreement === 'pass' &&
-      correctedScoped.visibleLineAgreement === 'pass';
-    const correctionApplied = correctedPass && actualWithinM;
-    const assessment = makeScopeAssessment({
-      body,
-      estimatedEffort,
-      effectiveEffort: correctionApplied ? 'M' : estimatedEffort,
-      correctionApplied,
-      paths,
-      auditParsedPathCount: sectionKeys.length,
-      originalBody: original,
-      originalCanonical: scoped,
+    return refuse();
+  }
+
+  const withinM =
+    paths.length <= EFFORT_CANDIDATE_FILE_LIMITS.M &&
+    bodyKeyCount <= EFFORT_CANDIDATE_FILE_LIMITS.M;
+  if (bandEstimate !== 'S' || !withinM) {
+    // Counts above the M maximum have no M copy to verify, and an M estimate
+    // has no wider band: report the raw counts and assign no effort L.
+    const assessment = assess({ disposition: 'advisory-drift' });
+    const guard = assessmentGuard(ctx, assessment);
+    if (guard !== null) return { ...guard, assessment };
+    return {
+      status: 'passed',
+      exitStatus: 0,
+      reason: `advisory estimate drift: ${EFFORT_FINDING_ID} failed ${[
+        ...(original.result === 'fail' ? ['on the issue body'] : []),
+        ...(scoped.result === 'fail' ? ['with the canonical paths'] : []),
+      ].join(
+        ' and ',
+      )} (the raw audit results are in the assessment, and their authoring-time split advice does not apply to a claimed issue); ${counted}; ${driftNote}; assessment ${assessment.assessmentSha256}`,
+      assessment,
+    };
+  }
+
+  const correctedBody = correctEffortSTokens(body, ranges);
+  if (correctedBody === null) {
+    parts.push('the S tokens could not be rewritten in the in-memory copy');
+    return refuse();
+  }
+  const correctedCanonicalBody = `${section}${correctedBody}`;
+  const corrected = runAudit(
+    ctx,
+    'the corrected M issue body',
+    correctedBody,
+    markerPrefix,
+    title,
+  );
+  if (!corrected.ok) return corrected.failure;
+  const correctedScoped = runAudit(
+    ctx,
+    'the corrected M body with the canonical paths',
+    correctedCanonicalBody,
+    markerPrefix,
+    title,
+  );
+  if (!correctedScoped.ok) return correctedScoped.failure;
+  const correctedPass =
+    corrected.result === 'pass' &&
+    correctedScoped.result === 'pass' &&
+    corrected.visibleLineAgreement === 'pass' &&
+    correctedScoped.visibleLineAgreement === 'pass';
+  if (correctedPass) {
+    const assessment = assess({
+      disposition: 'advisory-drift',
+      effectiveEffort: 'M',
+      correctionApplied: true,
       correctedBody: corrected,
       correctedCanonical: correctedScoped,
     });
-    ctx.scopeAssessment = assessment;
-    if (correctedPass && actualWithinM) {
-      const guard = assessmentGuard(ctx, assessment);
-      if (guard !== null) return { ...guard, assessment };
-      return {
-        status: 'passed',
-        exitStatus: 0,
-        reason: `the coherent S estimate was reassessed as M: ${corrected.detail}; ${correctedScoped.detail}; ${counted}; the actual canonical path count is within the M maximum of ${EFFORT_CANDIDATE_FILE_LIMITS.M}; assessment ${assessment.assessmentSha256}`,
-        assessment,
-      };
-    }
-    if (!actualWithinM) {
-      parts.push(
-        `the actual canonical path count ${paths.length} exceeds the M maximum of ${EFFORT_CANDIDATE_FILE_LIMITS.M}`,
-      );
-    }
-    if (!correctedPass) {
-      parts.push(
-        `the M correction audits did not both pass with visible-line agreement (body: ${corrected.result}/${corrected.visibleLineAgreement}; canonical paths: ${correctedScoped.result}/${correctedScoped.visibleLineAgreement})`,
-      );
-    }
-    parts.push(counted);
-    const refusal = failed(
-      parts.join('; '),
-      NEXT_ACTION.scopeOverrun,
-      original.result === 'fail' ? original.exitStatus : scoped.exitStatus,
-    );
-    return { ...refusal, assessment };
+    const guard = assessmentGuard(ctx, assessment);
+    if (guard !== null) return { ...guard, assessment };
+    return {
+      status: 'passed',
+      exitStatus: 0,
+      reason: `the coherent S estimate was reassessed as M: ${corrected.detail}; ${correctedScoped.detail}; ${counted}; the actual canonical path count is within the M maximum of ${EFFORT_CANDIDATE_FILE_LIMITS.M}; advisory estimate drift: ${driftNote}; assessment ${assessment.assessmentSha256}`,
+      assessment,
+    };
   }
-
-  const assessment = makeScopeAssessment({
-    body,
-    estimatedEffort,
-    effectiveEffort: estimatedEffort,
-    correctionApplied: false,
-    paths,
-    auditParsedPathCount: sectionKeys.length,
-    originalBody: original,
-    originalCanonical: scoped,
+  parts.push(
+    `the M correction audits did not both pass with visible-line agreement (body: ${corrected.result}/${corrected.visibleLineAgreement}; canonical paths: ${correctedScoped.result}/${correctedScoped.visibleLineAgreement})`,
+  );
+  const assessment = assess({
+    disposition: 'not-assessed',
+    correctedBody: corrected,
+    correctedCanonical: correctedScoped,
   });
-  ctx.scopeAssessment = assessment;
   parts.push(counted);
-  const limitFailure =
-    original.result === 'fail'
-      ? original
-      : scoped.result === 'fail'
-        ? scoped
-        : null;
   return {
     ...failed(
       parts.join('; '),
-      limitFailure === null
-        ? NEXT_ACTION.stopAndReport
-        : NEXT_ACTION.scopeOverrun,
-      limitFailure?.exitStatus ?? scoped.exitStatus,
+      NEXT_ACTION.scopeOverrun,
+      original.result === 'fail' ? original.exitStatus : scoped.exitStatus,
     ),
     assessment,
   };
@@ -1798,7 +1910,9 @@ function checkCleanTree(
  * gate's output), so for the statuses `idd-local-admission` also returns
  * for its own outcomes, the next action names the line that tells them from
  * the gate's own status (core "Admission expiry": bare `75` is command
- * status).
+ * status). Exit `3` names its lines as text they contain, not lines that start
+ * with it: the gate's output shares this stream, so an unfinished gate line
+ * can carry the notice at its end (issue #5156).
  */
 function gateFailureAction(admission: boolean, status: number): string {
   if (admission && status === ADMISSION_UNAVAILABLE_STATUS) {
@@ -1809,6 +1923,9 @@ function gateFailureAction(admission: boolean, status: number): string {
   }
   if (admission && status === ADMISSION_REFUSED_STATUS) {
     return NEXT_ACTION.admissionRefused;
+  }
+  if (admission && status === ADMISSION_OUTCOME_UNKNOWN_STATUS) {
+    return NEXT_ACTION.admissionOutcomeUnknown;
   }
   return NEXT_ACTION.fixThenRerun;
 }
@@ -1909,11 +2026,19 @@ function stepReassert(ctx: Context): StepOutcome {
     );
   }
   const originalAssessment = ctx.scopeAssessment;
-  if (originalAssessment?.correctionApplied) {
+  // A report SHA the caller supplied (required for the S-to-M copy, optional
+  // otherwise) must still describe the scope after the gate has run. The
+  // rerun's own guard already refuses a mismatch; the explicit comparison
+  // below is defensive.
+  if (
+    originalAssessment !== null &&
+    ctx.input.expectedScopeSha256 !== undefined &&
+    ctx.input.expectedScopeSha256 !== null
+  ) {
     const currentScope = stepScope(ctx);
     if (currentScope.status !== 'passed') {
       return failed(
-        `the corrected scope changed or could not be revalidated before push: ${currentScope.reason}`,
+        `the reported scope changed or could not be revalidated before push: ${currentScope.reason}`,
         currentScope.nextAction ?? NEXT_ACTION.scopeAssessmentChanged,
         currentScope.exitStatus,
       );
@@ -1923,7 +2048,7 @@ function stepReassert(ctx: Context): StepOutcome {
       originalAssessment.assessmentSha256
     ) {
       return failed(
-        `the corrected scope assessment changed before push: expected ${originalAssessment.assessmentSha256}, read ${ctx.scopeAssessment?.assessmentSha256 ?? 'none'}`,
+        `the reported scope assessment changed before push: expected ${originalAssessment.assessmentSha256}, read ${ctx.scopeAssessment?.assessmentSha256 ?? 'none'}`,
         NEXT_ACTION.scopeAssessmentChanged,
         0,
       );
@@ -2504,10 +2629,11 @@ function printUsage(stdout: { write: (text: string) => unknown }): void {
       'push. The six steps are assert, location, scope, gate, reassert, and\n' +
       'push. The scope step runs audit-authored-issue on the issue body and on\n' +
       'a copy whose leading ## Candidate files section lists the paths the\n' +
-      'branch changed since its branch point. A coherent S-to-M correction\n' +
-      'includes structured evidence in the scope step; apply requires its\n' +
-      '--expected-scope-sha256 and rechecks that assessment before push.\n' +
-      'Other effort-candidate-file-limit failures stop before the gate.\n' +
+      'branch changed since its branch point. A count over a coherent S or M\n' +
+      'estimate passes as advisory drift with structured evidence, never a stop;\n' +
+      'only the S-to-M copy requires --expected-scope-sha256 at apply, and a\n' +
+      'SHA passed is rechecked before the push. Failed findings that no count\n' +
+      'explains, and unchecked effort evidence, stop before the gate.\n' +
       'Dry-run is the default: it runs the claim assert, the location check,\n' +
       'and the scope check, skips the gate, the second assert, and the push,\n' +
       'and exits 0 when all three pass. --apply runs all six steps and pushes\n' +

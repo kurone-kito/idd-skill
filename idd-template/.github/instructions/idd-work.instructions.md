@@ -437,25 +437,38 @@ a follow-up or start a second loop. If the companion is unavailable, record the
 proposal in a comment/PR follow-ups; never create it ad hoc or improvise
 worker-side authoring.
 
-**S-to-M correction** (helper runtime only): when dry-run returns
-`assessment.correctionApplied: true`, follow the
+**S-to-M correction and advisory drift** (helper runtime only): a count over
+the S/M estimate is advisory evidence, not a stop. When dry-run's scope step
+passes with `assessment.correctionApplied: true` or
+`assessment.disposition: "advisory-drift"` (even above eight; no effort-L
+marker is written or assigned), make one evidence-backed plan reassessment and
+follow the
 [read-only report procedure](../../docs/idd-helper-scripts.md#b3-scope-assessment-outcomes)
-without editing the issue body. Keep the verified assessment SHA for normal
-D2. Continue through C self-review and D1 synchronization before passing it to
-`claimed-push --apply` with
-`--expected-scope-sha256 <assessment-sha256>`. If D2's fresh scope check
+without editing the issue body. If the change is still one cohesive way to meet
+the accepted intent, needs no new authority or unresolved decision, and has a
+feasible validation plan, update the plan and report, then continue the same
+claim. Keep the verified assessment SHA for normal D2. Continue through C
+self-review and D1 synchronization before passing it to `claimed-push --apply`
+with `--expected-scope-sha256 <assessment-sha256>` (required after
+`correctionApplied: true`, otherwise optional). If D2's fresh scope check
 differs, return to B3, report the new assessment, and repeat C and D1 before
 D2.
 
-**Scope overrun** (helper runtime only): when the helper returns no
-`assessment.correctionApplied: true` (a qualifying correction whose report is
-unverified follows the retain-and-stop rule above) and the profile-selected
-scope audit fails `effort-candidate-file-limit`, follow the same
+**Scope overrun** (helper runtime only): a number alone never causes a release,
+held split, needs-decision label, or count waiver. A new independent
+deliverable uses the unplanned follow-up work route above, and a design,
+ownership, security, resource, or validation blocker keeps its existing
+handling. When the helper returns no advisory disposition (a qualifying report
+that is unverified follows the retain-and-stop rule above) and the
+profile-selected scope audit fails `effort-candidate-file-limit`, or
+reassessment finds such a reason that makes the issue itself need a split,
+follow the same
 [scope assessment routes](../../docs/idd-helper-scripts.md#b3-scope-assessment-outcomes)
 and stop without pushing.
 
 **Standing split** is the helper-runtime exception to the worker-side
-authoring and scope-overrun rules. Keep the parent claim and label held; skip
+authoring and scope-overrun rules, for a genuine-need split only (never a
+count alone). Keep the parent claim and label held; skip
 release/handoff. Resolve policy owner/repo from the claimed issue's canonical
 live URL. For a PR, query
 `gh api repos/<target-owner>/<target-repo>/pulls/<number> --jq '{owner:
@@ -496,6 +509,10 @@ in `## Tracks`; conflicts keep the parent and published children held.
 Publish only orphan-shaped children. A sequential-roadmap `blocked-by` child
 is not an orphan, and `--shape child` needs an independently held anchor this
 claimed parent does not provide. Use the existing route before publishing it.
+Use the existing route also for standalone orphans (parent not listed under a
+roadmap's `## Tracks`) when `<target-policy>` sets `issueScope` to `roadmap`:
+ordinary discovery skips them, so released children would stay undiscoverable.
+Other values and an absent key are unchanged.
 
 Otherwise use the existing comment/release/stop route.
 
@@ -567,11 +584,13 @@ Otherwise use the existing comment/release/stop route.
    post a hold note naming verified children; keep parent claim/label and child
    holds, then stop. For uncertainty, proceed only after paginated read-back
    confirms one trusted exact record and the complete set; never retry. On
-   success, post the completion note, revalidate the claim, post/verify its
-   exact `unclaimed-by` marker through the standard release procedure, then run
-   cleanup. Mismatch, unreadable state, or uncertain release keeps the parent
-   held and stops before cleanup. Keep the authoring label until release or
-   completion.
+   success, post the completion note, revalidate the claim, then update and
+   read back the parent digest (`Phase: aborted/released`, the planned release
+   in `Next action`, the verified claim and reason in `Authoritative by`).
+   Only then post/verify its exact `unclaimed-by` marker through the standard
+   release procedure and run cleanup. Mismatch, unreadable state, or uncertain
+   release keeps the parent held and stops before cleanup. Keep the authoring
+   label until release or completion.
 
 ```text
 <!-- idd-skill-standing-approval: class=split; set=none; anchor=<owner/repo#n>; ceiling=<maxCandidateFiles>; option=option-a -->

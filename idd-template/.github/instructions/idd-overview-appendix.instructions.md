@@ -8,8 +8,7 @@ are in `idd-overview-core.instructions.md`.
 
 The distributed claim, advisory, CI, and critique-loop defaults are
 named in `docs/policy-constants.md`. Read it before changing a timing
-or loop constant; record local deviations in onboarding or
-repository docs.
+or loop constant; record deviations in onboarding or repo docs.
 
 ## Live status digest
 
@@ -36,54 +35,53 @@ edits too.
 
 ## Abort
 
-On abort, re-validate ownership first. If the active claim still uses
-your current `{claim-id}`, update the digest before posting
-`unclaimed-by` so it shows `Phase: aborted/released`, the planned
-release in `Next action`, and the verified claim plus abort reason in
-`Authoritative by`; then post an `unclaimed-by` comment for that same
-`{claim-id}`. If the
-active claim no longer uses your `{claim-id}`, do not update the digest
-or post a release comment.
-Open PR and remote branch left by a stale or
-unclaimed state are inheritable by the next agent (see
-`idd-resume.instructions.md`).
+On abort, re-validate ownership first. If the active claim still uses your
+current `{claim-id}`, update the digest before posting `unclaimed-by`
+(`Phase: aborted/released`, the planned release in `Next action`, the verified
+claim plus abort reason in `Authoritative by`), then post an `unclaimed-by`
+comment for that same `{claim-id}`. Once that `unclaimed-by` is read back, run
+claim-phase `lost-claim-cleanup` if a worktree exists. If the active
+claim no longer uses your `{claim-id}`, leave the digest, post no release, run
+no cleanup. A stale or unclaimed state's open PR and remote branch are
+inheritable (see `idd-resume.instructions.md`).
 
 ## Hold / suspend
 
 Keep the claim. Post the hold reason and resume condition. After
-re-validating ownership, re-post the claim comment with the same
-`{claim-id}` every 12 h as heartbeat. Then upsert the digest with the
-hold phase, the blocking condition in `Open blockers`, and the resume
-condition in `Next action`. The digest does not reset the stale clock.
+re-validating ownership, re-post the claim comment (same `{claim-id}`) every
+12 h as heartbeat; then upsert the digest with the hold phase, the blocker in
+`Open blockers`, and the resume condition in `Next action`. The digest does
+not reset the stale clock.
 
-For an externally owned blocker (sibling PR/issue, maintainer-owned
-check, base-branch health), phrase the resume condition as a checkable invariant
-rather than the sibling alone, since the proxy may never resolve; this keeps the
-claim and 12 h heartbeat active.
+For an externally owned blocker (sibling PR/issue, maintainer-owned check,
+base-branch health), phrase the resume condition as a checkable invariant, not
+the sibling alone: the proxy may never resolve. This keeps the claim and 12 h
+heartbeat active.
 
 **Needs-decision claim release.** When no further session-side action
-is expected before a human responds, the holding session may apply the
-configured needs-decision label (`labels.needsDecisionLabelName`,
-default `status:needs-decision`) and release the claim. Any phase may
-do this, not only E6. After release, stop heartbeating. A qualifying
-human decision lets a later session drop the label and re-claim; a
-response leaving the decision open does not re-enter.
+is expected before a human responds, the session may apply the
+needs-decision label (`labels.needsDecisionLabelName`, default
+`status:needs-decision`) and release the claim. Any phase may do this, not
+only E6. After release, stop heartbeating; once the `unclaimed-by` is read
+back, run `lost-claim-cleanup` if a worktree exists. A qualifying human
+decision lets a later session drop the label and re-claim; a response leaving
+the decision open does not re-enter.
 
-**Hold consolidation.** When a hold traces to the same root file or dependency
-as an earlier hold from this session (even on a different issue), pause further
-per-issue escalation and audit the shared root cause's full scope once, bringing
-one consolidated decision to the human instead of re-escalating per newly
-discovered layer. A hold or stop in a switched-on auto-decide class goes to the
-[auto-decide procedure](../../docs/idd-workflow.md#auto-decide-at-a-stop) first.
+**Hold consolidation.** When a hold traces to the same root file or
+dependency as an earlier hold from this session (any issue), pause
+per-issue escalation and audit the shared root cause once, bringing one
+consolidated decision to the human, not re-escalating per layer. A hold or
+stop in a switched-on auto-decide class goes to the
+[auto-decide procedure](../../docs/idd-workflow.md#auto-decide-at-a-stop)
+first.
 
 **Provider-outage park**: release the claim immediately, no 12 h
 heartbeat -- see idd-ci.instructions.md's Hold-and-report failure shapes.
 
-**Parked-change bound** (conditional, only when responding to a known
-provider outage): before claiming a new issue, check
-`node scripts/provider-outage-park.mjs`'s `boundReached`. If `true`, do
-not claim -- route elsewhere or wait instead of manufacturing another
-unmergeable pull request.
+**Parked-change bound** (only when responding to a known provider outage):
+before claiming a new issue, check `node scripts/provider-outage-park.mjs`'s
+`boundReached`. If `true`, do not claim -- route elsewhere or wait instead of
+manufacturing another unmergeable pull request.
 
 ## Roadmap markers
 

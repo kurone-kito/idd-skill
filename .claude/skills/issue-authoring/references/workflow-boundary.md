@@ -774,10 +774,14 @@ keeps its confirmation label (`autoDecide.confirmationLabelName`), which keeps
 it out of Discover, so it never enters the loop. The operator confirms the
 choice by closing the issue.
 
-The worker-side authoring rule has one exception: a scope-overrun split when
+The worker-side authoring rule has one exception, and only for helper-runtime
+installations: a scope-overrun split when
 `standingApprovals.split.enabled` is true in the schema-valid trusted policy
 at the PR base (or live default before a PR exists), never from the feature
-checkout. Resolve the trusted owner/repo from the claimed issue's canonical
+checkout. An `instructions-only` installation has no helper runtime, so it
+keeps the existing scope-overrun and companion route and publishes no child
+([review finding](https://github.com/kurone-kito/idd-skill/pull/5031#discussion_r4505536220)).
+Resolve the trusted owner/repo from the claimed issue's canonical
 live URL. For a PR, query `gh api repos/<target-owner>/<target-repo>/pulls/<number>
 --jq '{owner: .base.repo.owner.login, repo: .base.repo.name, ref: .base.ref}'`
 and use its base owner/repo/ref. Without a PR, use issue owner/repo and the
@@ -805,6 +809,13 @@ checkbox-stripped parent acceptance criterion appears whole and verbatim in
 exactly one child, and every child contains at least one. After any title or
 body correction, repeat this entire eligibility check against the final child
 set immediately before dry-run or apply; a pre-correction check is not enough.
+Standalone orphan children, whose parent is not listed under a roadmap's
+`## Tracks`, also need orphan discovery: when `<target-policy>` sets
+`issueScope` to `roadmap`, ordinary discovery skips them and released children
+stay undiscoverable, so use the existing scope-overrun route instead
+([review finding](https://github.com/kurone-kito/idd-skill/pull/5031#discussion_r4505546682)).
+Roadmap-tracked children, other `issueScope` values, and an absent key behave
+as before.
 This procedure
 replaces the ordinary
 claim-release and companion-handoff route
@@ -840,8 +851,11 @@ creates a new issue ([resume finding](https://github.com/kurone-kito/idd-skill/p
 After all children
 and any roadmap tracks are verified, the worker posts the standing record with
 the parent issue as `anchor` and the numeric effective `maxCandidateFiles` as
-`ceiling`, posts a completion note, revalidates the parent claim, posts and
-verifies its `unclaimed-by` marker, then runs cleanup. A mismatch or uncertain
+`ceiling`, posts a completion note, revalidates the parent claim, updates and
+verifies the parent live status digest (`Phase: aborted/released`, the planned
+release in `Next action`, the verified claim and reason in `Authoritative by`),
+posts and verifies its `unclaimed-by` marker, then runs cleanup. The full and
+Lite work instructions follow the same order. A mismatch or uncertain
 release keeps the parent held and stops before cleanup. The authoring label
 stays until the set is deliberately released or completed. These failure modes
 were observed during review of PR #5031 on 2026-11-06. Follow the split

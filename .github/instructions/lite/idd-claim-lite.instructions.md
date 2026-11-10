@@ -315,36 +315,42 @@ no `claimed-by`, but it is a fresh activation, so it still runs step 5.
 
 ## Lost-claim cleanup (`lost-claim-cleanup`)
 
-After step 2's `git worktree add`, at any exit where this session no longer
-holds the claim (failed `--record-tokens`, claim, or nonce post; step 6 lock
-collision or `--assert` not `already_owned`/`keep`; verification step 5
-`unclaimed-by`), run the script below from the primary checkout as one
-clone-scoped hold (`node scripts/clone-lock.mjs --exec --agent-id <agent-id>
--- bash <script>`). Never `--takeover`. Quote placeholders as shell words.
-Failures before removal keep both worktree and branch, and report `<path>` and
-the failed gate. If `git branch -D`
-fails after removal or is denied, report a leftover branch at `<branch>`.
-Instructions-only: `docs/idd-helper-scripts.md#worktree-local-claim-lock`,
-one clone per worker (`docs/idd-workflow.md`), (c)'s written rules.
+Only an exact released or stale lineage reaches cleanup: after a read-back
+`unclaimed-by` (Abort, needs-decision release, authoring-hold release), or when
+a fresh `resume-claim-routing --issue <n>` (no `--assert`) shows
+`released-claim-local-worktree-occupied` or
+`stale-claim-local-worktree-occupied` for it. The helper also needs the lock
+that step 6's `--acquire` creates; before it, it holds at
+`claim-lock-mismatch`. Otherwise keep the worktree and branch and stop with
+`<path>` and the failed gate: a failure before a trusted `claimed-by` exists
+(`--record-tokens` after step 2's `git worktree add`, a claim post that never
+landed) or before that `--acquire`, or one that leaves a claim active. Release
+this session's claim per Abort only while it verifies the claim, never on
+another session's nonce win; that `unclaimed-by` triggers cleanup only after the
+`--acquire`.
+
+From the primary checkout, never `<path>`, run the profile-selected
+`f4-worktree-branch-cleanup` as a dry run:
 
 ```sh
-set -euo pipefail
-node scripts/claim-lock.mjs --acquire --worktree '<path>' --agent-id '{agent-id}' --claim-id '{claim-id}'
-set -- --issue '<n>' --claim-id '{claim-id}'
-if [[ '{agent-id}' =~ ^[^[:space:]-]+-[^[:space:]]*[A-Za-z0-9]{8}[^[:space:]]*$ ]]; then set -- "$@" --agent-id '{agent-id}'; fi
-route=$(node scripts/resume-claim-routing.mjs "$@" --worktree '<path>')
-printf '%s\n' "$route" | node -e 'const {active_claim:a,claim_id_checked:c,agent_id_checked:i}=JSON.parse(require("fs").readFileSync(0)),p=/^[^\s-]+-\S*[A-Z\d]{8}\S*$/i;process.exit(!a||a.claim_id&&a.claim_id!==c&&(a.agent_id&&!p.test(a.agent_id)||i&&i===a.agent_id)?0:1)'
-test "$(git -C '<path>' symbolic-ref -q HEAD)" = 'refs/heads/<branch>'
-tip=$(git rev-parse '<branch>')
-base=$(git rev-parse 'origin/{development-branch}')
-test "$tip" = "$base"
-tags=$(git -C '<path>' ls-files -v | cut -c1 | tr -d 'H\n')
-test -z "$tags"
-dirty=$(git -C '<path>' status --porcelain --ignored --untracked-files=all --ignore-submodules=none)
-test -z "$dirty"
-git worktree remove '<path>'
-git branch -D '<branch>'
+<cleanup-command> --released-claim --issue '<n>' \
+  --claim-id '{claim-id}' --agent-id '{agent-id}' --worktree '<absolute-path>'
 ```
+
+`<cleanup-command>` is `node scripts/f4-worktree-branch-cleanup.mjs` for
+source/vendored-node; other profiles use their form in
+`docs/idd-helper-scripts.md#released-claim-worktree-cleanup`.
+
+Apply with `--apply --attest-no-live-session` only after an operator
+independently confirms no session works in `<path>`; the claim marker, lock,
+and a clean status do not. Without it, keep and stop. After
+`status: complete`, rerun `--fresh-claim-gate`; continue only on
+`claimable`/`stale-reclaimable`.
+
+On `hold` or `failed`, the `unclaimed-by` stands; keep what remains and stop
+with the report. Never retry removal by hand, claim a successor,
+`--takeover`, `--force`, or `git branch -D`. Instructions-only (no helper
+runtime): preserve both and escalate.
 
 ## Heartbeat posting
 

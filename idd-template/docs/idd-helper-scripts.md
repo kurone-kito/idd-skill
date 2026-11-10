@@ -5979,7 +5979,11 @@ The record does not reread the ordinary issue effort marker later, so an edit
 to that marker cannot rewrite the snapshot.
 
 This change does not invoke the helper automatically; the detecting session
-must run it explicitly. D2/F2 caller wiring is tracked by issue `#4676`.
+must run it explicitly. D2/F2 caller wiring is tracked by issue `#4676`. F2/F3
+readiness reads this record and still blocks a count-only audit failure that
+has no accepted decision. That consumer predates the advisory estimate-drift
+policy of issue `#5093`, which changes B3 and `claimed-push` only; a follow-up
+under roadmap `#5091` reconciles it.
 
 ```sh
 node scripts/post-idd-marker.mjs --type scope-overrun --target issue <issue> \
@@ -7153,11 +7157,11 @@ run as one fenced `set -euo pipefail` block. The block fails closed. It exits
 non-zero at the first failure, and it prints `verified` only after
 `resume-claim-routing --assert` exits 0. The read after acquire is the
 generated-tokens check: an absent or malformed record exits non-zero. Lost-claim
-cleanup is not part of the block. Run cleanup only at the exits listed in
+cleanup is not part of the block. Run cleanup only on the triggers listed in
 [Lost-claim triggers](#lost-claim-triggers).
 
 Replace each placeholder with its value. Each placeholder already sits inside
-single quotes, so write any `'` in a value as `'\''`, as the cleanup script
+single quotes, so write any `'` in a value as `'\''`, as the cleanup command
 does. `<ts>` is the current UTC time in ISO 8601. `<settle-seconds>` is
 `claim.verifySettleDelay` converted to whole seconds: the distributed default
 `PT5S` is `5`.
@@ -7204,16 +7208,38 @@ echo verified
 
 ### Lost-claim triggers
 
-Run this after the step 1 worktree exists, at every exit where this session no
-longer holds the claim: a `--record-tokens` failure (step 2), a failed claim
-post (step 3), a failed second `--record-tokens --nonce` write before the
-activation-nonce post (step 3), a failed activation-nonce post (step 3), a
-`--acquire` collision or other non-success exit (step 4), a failed
-`--read-tokens` check after acquire (step 4), a failed settle `sleep` before the
-assert (step 5), an `--assert` result other than `already_owned`/`keep` (step
-5), or an `unclaimed-by` posted after an authoring hold that followed a
-successful assert (Claim verification step 5). Never use `--takeover`. The
-cleanup script is in
+Cleanup acts on one lineage: the `{claim-id}` and `{agent-id}` of an exact
+released or stale claim, which in the claim flow is this session's own. After
+the step 1 worktree exists, two triggers reach it:
+
+- a verified release: an `unclaimed-by` posted for this `{claim-id}` and read
+  back from the issue, as Abort, a needs-decision release, the scope-overrun
+  release, or the release after an authoring hold that followed a successful
+  assert (Claim verification step 5) post it; or
+- a lost claim: a fresh `resume-claim-routing --issue <n>` (without `--assert`)
+  reports `released-claim-local-worktree-occupied` or
+  `stale-claim-local-worktree-occupied` for this `{claim-id}` and `{agent-id}`,
+  with the step 1 worktree as the only occupant.
+
+Either trigger also needs the worktree-local IDD lock under the same ids. Step 4's
+`--acquire` creates it, and `--record-tokens` does not, so an exit before that
+acquire has no lock and the helper holds at `claim-lock-mismatch`.
+
+Every other exit is a preserve-and-stop route: keep the worktree and branch, run
+no cleanup, and stop with the worktree path and the failed gate. Never use
+`--takeover`.
+
+| Exit                                                                                                                                     | Route                                                                                                                                                                                                                                                                                   |
+| ---------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A `--record-tokens` failure (step 2)                                                                                                     | Preserve and stop. No trusted `claimed-by` marker exists, so there is no lineage and no lock to match.                                                                                                                                                                                  |
+| A failed claim post (step 3)                                                                                                             | Re-read the issue. With no trusted marker for this `{claim-id}`, preserve and stop. With one, the claim is active and no lock exists yet: take the next row.                                                                                                                            |
+| A failed second `--record-tokens --nonce` write or activation-nonce post (step 3), or an `--acquire` collision or other failure (step 4) | The claim marker is on the issue, but no lock under this session's ids exists. Preserve and stop; the helper would hold at `claim-lock-mismatch` even after a release. Release the claim per Abort only while this session still verifies it, and never on another session's nonce win. |
+| A failed `--read-tokens` check after acquire (step 4), or a failed settle `sleep` (step 5)                                               | The claim is still active, so the helper would refuse it. Preserve and stop. To end the attempt, release the claim per Abort while this session still verifies it; the lock exists, so that verified `unclaimed-by` is then a trigger.                                                  |
+| An `--assert` result other than `already_owned`/`keep` (step 5)                                                                          | Read fresh routing. Only a released or stale lineage of this `{claim-id}` is a trigger. A claim of another id, or a claim that is still active, is preserve-and-stop.                                                                                                                   |
+
+The helper, its flags, and its report are in
+[Released-claim worktree cleanup](#released-claim-worktree-cleanup). The route
+that runs it is
 [`idd-claim.instructions.md`](../.github/instructions/idd-claim.instructions.md#lost-claim-cleanup-lost-claim-cleanup).
 
 ### Clone-scoped lock
@@ -9972,6 +9998,10 @@ node scripts/f4-worktree-branch-cleanup.mjs --issue <n> \
   --worktree <absolute-path> [--apply]
 ```
 
+This command is the merged-pull-request mode. The `--released-claim` mode, which
+removes the worktree of a released claim without a head proof, is described
+under [Released-claim worktree cleanup](#released-claim-worktree-cleanup).
+
 The helper runs F4 steps 4 to 6 in order, and each step is gated on the head
 proof in `docs/idd-resume-detail.md` (F4 Head Proof). The steps are a no-follow
 check of the worktree path, a claim check, the proof dry run (the marker command
@@ -10036,6 +10066,131 @@ and that helper detail is the next action.
 | `worktree-remove-refused`       | Failed. git worktree remove refused after the checks passed, so the worktree may be partly changed. The step 5 record names any preserved `node_modules/` destination; keep it while inspecting the worktree. A rerun reads the proof again and posts nothing.                                                                                                                                                                                                                                                                                                                                                  |
 | `delete-setting-unreadable`     | Hold at step 6. delete_branch_on_merge could not be read as a boolean, and nothing remote was deleted. In a dry run nothing has changed, so rerun it once the setting is readable. In an applied run, steps 4 and 5 have already run. The operator first confirms by hand that delete_branch_on_merge is false: when it is true, step 6 is skipped, because GitHub deletes the branch on merge. Only when it is false does the operator complete step 6 by hand with delete-remote-branch and the expected SHA, and the session continues from step 7 after the operator confirms. Do not rerun an applied run. |
 | `remote-delete-unreadable`      | Hold at step 6. The output of the remote branch helper could not be read, and nothing remote was deleted. In a dry run nothing has changed, so rerun it. In an applied run, steps 4 and 5 have already run. The operator first confirms by hand that delete_branch_on_merge is false: when it is true, step 6 is skipped, because GitHub deletes the branch on merge. Only when it is false does the operator complete step 6 by hand with delete-remote-branch and the expected SHA, after reading its output, and the session continues from step 7 after the operator confirms. Do not rerun an applied run. |
+| `released-lineage-unverified`   | Released-claim mode: stop. Fresh routing does not prove one exact released or stale claim for this registered worktree. This includes an active claim, an issue with no trusted `claimed-by` marker, another claim id, and an ambiguous or unreadable route. Nothing was removed. Preserve the worktree and branch for operator review.                                                                                                                                                                                                                                                                         |
+| `claim-lock-mismatch`           | Released-claim mode: stop. The worktree-local IDD lock is absent, malformed, or belongs to a different claim or agent. Nothing was removed. Preserve the worktree and branch for operator review.                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `cleanup-attestation-required`  | Released-claim mode: stop. Apply needs `--attest-no-live-session`, which is the operator's independent confirmation that no session is working in the worktree. A claim marker, the lock, or a clean status is not that confirmation. Nothing ran.                                                                                                                                                                                                                                                                                                                                                              |
+| `released-branch-remains`       | Released-claim mode: stop. The worktree was removed, but `git branch -d` refused, so the local branch remains at the tip the report names. Do not force-delete it; the operator reviews it.                                                                                                                                                                                                                                                                                                                                                                                                                     |
+
+### Released-claim worktree cleanup
+
+This is the `--released-claim` mode of the F4 cleanup helper. The
+[lost-claim cleanup](../.github/instructions/idd-claim.instructions.md#lost-claim-cleanup-lost-claim-cleanup)
+route runs it after a verified `unclaimed-by` release, or for an exact released
+or stale lineage; the [lost-claim triggers](#lost-claim-triggers) say when. It
+removes one worktree and its local branch. It reads no merged pull request and
+no head proof, never fast-forwards the primary checkout, and never touches a
+remote branch.
+
+Run it from the primary worktree. Any other directory is refused. Use the form
+of the active profile:
+
+```sh
+# source repository and vendored-node
+node scripts/f4-worktree-branch-cleanup.mjs --released-claim --issue <n> \
+  --claim-id <claim-id> --agent-id <agent-id> \
+  --worktree <absolute-path> [--attest-no-live-session] [--apply]
+
+# package-manager (the example uses npm; substitute the configured manager)
+npm run idd:f4-worktree-branch-cleanup -- --released-claim --issue <n> \
+  --claim-id <claim-id> --agent-id <agent-id> \
+  --worktree <absolute-path> [--attest-no-live-session] [--apply]
+
+# ephemeral-npx
+npx --yes --package <helper-package-spec> \
+  idd-f4-worktree-branch-cleanup --released-claim --issue <n> \
+  --claim-id <claim-id> --agent-id <agent-id> \
+  --worktree <absolute-path> [--attest-no-live-session] [--apply]
+
+# user-global (the bin is on PATH)
+idd-f4-worktree-branch-cleanup --released-claim --issue <n> \
+  --claim-id <claim-id> --agent-id <agent-id> \
+  --worktree <absolute-path> [--attest-no-live-session] [--apply]
+```
+
+- `--claim-id` and `--agent-id` name the lineage to clean. They must equal the
+  ids of the released claim (`evidence.released_claim`) or of the stale active
+  claim, and the worktree's IDD lock must name the same pair. This mode takes
+  no `--nonce`.
+- `--worktree` is an absolute path. Dry-run is the default, and `--apply`
+  mutates.
+- `--attest-no-live-session` is accepted only with `--released-claim`. `--apply`
+  without it is a usage error (exit `1`), and a dry run does not need it.
+
+**Independent no-live-session confirmation.** The helper cannot see whether a
+session is working in the worktree: the claim lock records no process liveness
+([§LWR](idd-resume-detail.md#lwr--local-worktree-recovery) explains why). A
+released claim, a matching lock, and a clean status therefore do not prove that
+the worktree is idle, because a matching worktree can still hold a same-host
+session's uncommitted work (issue `#3141`). Before `--apply`, an operator
+confirms independently that no session is working in the target worktree. The
+flag only records that confirmation, and a session never supplies it from its
+own claim evidence. Without the confirmation, preserve the worktree and branch
+and stop.
+
+Gates, in order. A dry run runs the first five; apply repeats the lineage,
+lock, and worktree checks under the clone-scoped lock.
+
+1. `path-check`: the path is not the primary worktree, and no symlink lies on
+   it.
+2. `attestation-check`: apply needs `--attest-no-live-session`; nothing else
+   has run or changed yet.
+3. `lineage-check`: a fresh `resume-claim-routing --issue <n>` read, with no
+   `--assert` and no claim id. It passes only for the state
+   `local_worktree_occupied` with the action `stop`, no same-second contender,
+   no later competing claim, and exactly one local occupant, which is the
+   requested worktree. Either the reason is
+   `released-claim-local-worktree-occupied` and `evidence.released_claim`
+   matches both ids, or it is `stale-claim-local-worktree-occupied` and
+   `active_claim` matches both ids. An active claim that is not stale, another
+   claim id, a missing release marker, and an ambiguous or unreadable route all
+   refuse with `released-lineage-unverified`. An issue that never had a trusted
+   `claimed-by` marker has no lineage, so a just-created worktree left by a
+   failure before the marker, such as `--record-tokens` failing after
+   `git worktree add`, is refused and nothing changes.
+4. `lock-check`: a read-only `claim-lock --check` finds a well-formed lock whose
+   holder is the same claim id and agent id (`claim-lock-mismatch` otherwise).
+   The fresh-claim order's step 4 `--acquire` creates that lock, so an exit
+   before it has none. The helper never acquires or repairs the lock.
+5. `worktree-check`: the worktree is registered on the claim's branch, is not
+   locked by Git, and its branch tip is unchanged since the first read. Its
+   ignored-inclusive status is empty or exactly `!! node_modules/`. Any other
+   content holds as `dirty-worktree`, as does a tracked entry marked
+   skip-worktree or assume-unchanged. A populated submodule holds as
+   `submodule-worktree`, and a symlinked tracked entry as `symlink-path`.
+
+Apply then takes the clone-scoped lock (`lock-busy` when another session holds
+it) and re-verifies the lineage, the lock, the branch tip, and the registration
+before preserving and again before removing. A lone ignored `node_modules/`
+moves to the F4 private destination under the checks that the F4 section above
+describes, and the step record names the destination. Then `git worktree remove`
+runs without `--force`, and `git branch -d` removes the local branch. The helper
+never fetches, never resets or stashes, and never force-deletes the branch. When
+`git branch -d` refuses, for example because the branch holds commits that the
+local default branch lacks, the worktree is already gone and the report holds as
+`released-branch-remains`. A dry run reports `would-run` for the removal and the
+branch removal, and for the preservation only when a lone ignored `node_modules/`
+needs it (otherwise `skipped`). It takes no lock.
+
+The reason table above applies as written, except that `branch-tip-mismatch`
+compares against the tip the helper read at the start of the run, since this
+mode has no proof.
+
+The report is one JSON document with `cleanupMode: "released-claim"`, `mode`,
+`status`, `steps[]`, `reason`, `nextAction`, `failedStep`, and `notRunSteps`.
+Status `dry-run` or `complete` exits `0`; `hold` or `failed` exits `1`.
+
+| Status             | Next action                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `dry-run`          | Review the steps. Apply only after the independent confirmation above, with `--apply --attest-no-live-session`.                                                                                                                                                                                                                                                                                                                |
+| `complete`         | The worktree and branch are gone, and a preserved `node_modules/` destination is in the report. Rerun the fresh-claim gate before any claim. The helper claims nothing.                                                                                                                                                                                                                                                        |
+| `hold` or `failed` | Any `unclaimed-by` marker stays. The report shows what remains: the worktree and branch, a preserved `node_modules/` destination, or, after `released-branch-remains`, only the branch; `worktree-remove-refused` may leave the worktree partly changed. Stop with the report's `reason` and `nextAction`. Do not retry removal by hand, claim a successor, use `--takeover`, `--force`, a reset, a stash, or `git branch -D`. |
+
+On `instructions-only` profiles there is no helper runtime, the clone-scoped
+lock has no helper-free fallback, and liveness cannot be checked. Preserve the
+worktree and branch and escalate to the operator; do not reproduce the removal
+by hand. Rationale and observed cases:
+[Lost-claim cleanup](idd-design-rationale.md#lost-claim-cleanup-issue-4042)
+(issues `#4042`, `#5068`).
 
 ### Trial merge audit
 
@@ -11363,11 +11518,13 @@ worker brief had told each of them not to. The pushed head commits were
 pushes, and the failed gate and the semicolon chain are recorded only in
 the operator's worker reports, which live outside this repository.
 
-The scope check is the pre-push stop of the work phase's "Scope overrun"
-rule, which nothing in the push path ran. On issue `#4375` it did not run
-before the first push (pull request `#4399`); it ran at F2 and tripped
+The scope check is the pre-push measurement behind the work phase's "Scope
+overrun" rule, which nothing in the push path ran. On issue `#4375` it did not
+run before the first push (pull request `#4399`); it ran at F2 and tripped
 (effort M, 15 candidate files, limit 8) after the branch was published.
-Issue `#4480` added it as the `scope` step.
+Issue `#4480` added it as the `scope` step; since issue `#5093` it stops on a
+count only for unusable effort evidence and reports a count over a coherent
+estimate as advisory drift.
 
 ```sh
 node scripts/claimed-push.mjs --issue <n> --claim-id <id> --agent-id <id> \
@@ -11457,11 +11614,12 @@ node scripts/claimed-push.mjs --issue <n> --claim-id <id> --agent-id <id> \
    cannot start (next action: check the helper installation, then rerun),
    ends by signal, prints anything but one JSON object with a `findings`
    array, or has no such finding refuses. The step fails when either
-   finding fails. Its reason names the canonical paths, how many the audit
+   finding fails, unless the estimate-drift rules below classify the failure
+   as advisory. Its reason names the canonical paths, how many the audit
    counts, and the counting rule: distinct parsed keys, and a token
    without `/` or `.`, or with whitespace, is not counted. The next action
-   is to stop without pushing and follow the Scope overrun rule in
-   `idd-work.instructions.md`, unless the S-to-M correction below qualifies.
+   is to stop without pushing: the effort evidence cannot support a numerical
+   advisory, so follow the Scope overrun rule in `idd-work.instructions.md`.
    When `refs/remotes/origin/<base>` is
    missing or differs from the SHA `git ls-remote` printed, the base is
    stale, and the step refuses before it reads the branch point, whatever
@@ -11481,40 +11639,70 @@ node scripts/claimed-push.mjs --issue <n> --claim-id <id> --agent-id <id> \
    title or body, a malformed audit result) has the next action to stop
    and report.
 
-   **Read-only S-to-M correction (issue `#5092`)**: only when either
-   original S limit finding fails, `parseEffortMarker` finds one coherent S,
-   the audit's `effort-visible-line-agreement` passes, and the offset locator
-   proves one active visible and hidden token after Markdown masking, the
-   step changes only those two tokens in an in-memory copy. CRLF is preserved
-   by mapping normalized UTF-16 offsets back to raw-body offsets. It reruns
-   both audits on that M copy and its canonical-path copy, and requires both
-   limit findings and both visible-line agreements to pass. It also requires
-   the actual canonical path count, before audit-parser omissions, to be at
-   most the existing M maximum of eight. Missing, malformed, mismatched,
-   duplicate, masked-only or ambiguous footer evidence, an M audit failure,
-   or more than eight actual paths keeps the existing stop. No issue body is
+   **Estimate drift (issues `#5092` and `#5093`)**: a count over the authored
+   estimate is advisory evidence, never a stop. It measures breadth, not
+   semantic intent, complexity, safety, or the ability to finish, and a
+   successful helper run proves none of those. The step recognizes drift only
+   from a coherent, checked S or M estimate: `parseEffortMarker` on the raw
+   body finds one coherent value, the audit's `effort-visible-line-agreement`
+   passes on both runs, and the offset locator proves one active visible and
+   one active hidden token after Markdown masking (the mask keeps HTML comments
+   and blocks, as the audit does). The helper then compares its own counts
+   (issue-body keys, audit-parsed canonical keys, actual canonical paths) with
+   the band limit of the authoring contract's Over-scope split threshold table
+   and requires each failing finding to be explained by its own count, so
+   neither the finding ID nor its prose decides. A recognized failure passes
+   with `assessment.disposition: "advisory-drift"`, the raw audit results and
+   counts, and no issue-body write, marker, or effort-L assignment, whatever
+   the count (nine and twelve paths included). A passing audit whose actual
+   count still exceeds the limit (the parser omits root and whitespace paths)
+   is advisory drift too, while a split child the audit exempts over the limit
+   is `not-assessed`. A body whose own candidate list is over the limit is
+   advisory drift as well; authoring admission is unchanged.
+
+   When the actual canonical paths and the body keys are both at most eight, an
+   S estimate also keeps the read-only S-to-M copy: only the two active tokens
+   change in an in-memory copy, CRLF is preserved by mapping normalized UTF-16
+   offsets back to raw-body offsets, both audits rerun on that M copy and its
+   canonical-path copy, and both limit findings and both visible-line
+   agreements must pass. Then `correctionApplied` is `true` and
+   `effectiveEffort` is `M`; if the M audits do not both pass, the step
+   refuses. Missing, malformed, mismatched, duplicate, masked-only or ambiguous
+   footer evidence, a failed finding no count explains, an unreadable audit or
+   canonical-path read, or a path a bullet cannot carry keep their existing
+   handling and never yield a numerical advisory. An L or absent estimate is
+   not applicable (`not-assessed`), not a measured overrun. No issue body is
    written.
 
    A successful scope step includes an `assessment` object in dry-run and
-   apply JSON: the original body SHA-256, authored and effective effort,
-   correction flag, canonical changed paths and actual count, audit-parsed
+   apply JSON: the original body SHA-256, authored and effective effort
+   (the estimate after the S-to-M copy, never a measured size or effort L),
+   correction flag, `disposition` (`within-estimate`, `advisory-drift`, or
+   `not-assessed`), canonical changed paths and actual count, audit-parsed
    count, original audit findings and (when corrected) M audit findings, and
    `assessmentSha256`. The assessment SHA covers the body digest, estimate,
-   path set/count and audit outcomes. Apply of a corrected assessment
-   requires `--expected-scope-sha256` equal to that SHA; it still rereads and
-   reassesses the live issue and branch. After the gate, `reassert` reassesses
-   corrected scope again and stops before push if the SHA changed. A missing
-   SHA, an older helper without structured assessment, or any changed result
-   cannot authorize the correction.
+   disposition, path set/count and audit outcomes. Apply after the S-to-M copy
+   requires `--expected-scope-sha256` equal to that SHA; for any other
+   advisory drift the SHA is optional, but one passed must match. Apply still
+   rereads and reassesses the live issue and branch. After the gate,
+   `reassert` reassesses scope again whenever a SHA was passed and stops
+   before push if it changed. A missing SHA after the S-to-M copy, an older
+   helper without structured assessment, or any changed result cannot
+   authorize the push. F2/F3 readiness (`pre-merge-readiness`, issue
+   `#4676`) runs its own scope audit and still blocks on a count-only
+   failure without an accepted decision; this step does not waive it.
 
-   B3 posts a report with S, M, canonical paths/count, current claim ID,
-   raw-body and assessment SHA values, and a unique attempt ID.
+   B3 posts a report with the estimate, the effective estimate (M after the
+   S-to-M copy, else unchanged), canonical paths/count, the reassessment
+   verdict, current claim ID, raw-body and assessment SHA values, and a
+   unique attempt ID.
    Revalidate claim, nonce, worktree, lock and tokens immediately before the
    POST; reread the body and rerun dry-run if its digest or assessment
    changed. Append the complete `idd-agent-authored` suffix. Verify the
    returned comment ID, author and exact body; reconcile an uncertain POST
    by attempt ID before retrying. If reporting remains unverified, stop and
-   retain the claim. Keep the verified assessment SHA for normal D2. B3 ends
+   retain the claim. Keep the verified assessment SHA for normal D2 (required
+   after the S-to-M copy, otherwise optional). B3 ends
    without `--apply` or a push: continue through C self-review and D1
    synchronization, then pass the SHA with `--expected-scope-sha256` to the
    normal D2 helper invocation. If D2's fresh scope differs, stop, reassess
@@ -11536,7 +11724,7 @@ node scripts/claimed-push.mjs --issue <n> --claim-id <id> --agent-id <id> \
    off, in a shell directly), then requires a clean tree again (next
    action: commit or discard what the gate changed, then rerun). A gate
    that exits non-zero or ends by signal refuses with the next action to
-   fix the failure, commit, and rerun, except three exits of the admitted
+   fix the failure, commit, and rerun, except four exits of the admitted
    call, whose next action names the stderr line that decides it. Exit
    `69`: a line exactly equal to `local-admission: pueue daemon is not accepting
    commands` means the gate did not start; report it, and do not rerun the
@@ -11546,11 +11734,16 @@ node scripts/claimed-push.mjs --issue <n> --claim-id <id> --agent-id <id> \
    Exit `2`: a `local-admission:` line that ends with
    `command not started`, or one that says the lock stays held until the
    command exits, means stop and report without changing the repository
-   policy, and do not rerun. Without such a line, each of these three exits
-   is the gate's own status: fix the failure, commit, and rerun. A gate that is
-   not configured, or that cannot start on Windows, refuses with the next
-   action to configure the command or run the written gate by hand. An
-   admission child that cannot start (for example a missing
+   policy, and do not rerun. Exit `3`: a line that contains
+   `local-admission: pueue task outcome unknown` or
+   `local-admission: pueue error:` means the gate may already have run, so
+   report it, check the state of the pueue task that line names by id or
+   label (if it names either), and do not rerun the helper or push by hand
+   (preventive; no observed incident yet). Without such a line, each of these
+   four exits is the gate's own status: fix the failure, commit, and rerun. A
+   gate that is not configured, or that cannot start on Windows, refuses with
+   the next action to configure the command or run the written gate by hand.
+   An admission child that cannot start (for example a missing
    `scripts/idd-local-admission.mjs`) refuses with the next action to
    check the helper installation, then rerun, because a gate run by hand
    would run outside admission.
@@ -11662,40 +11855,62 @@ node scripts/claimed-push.mjs --issue <n> --claim-id <id> --agent-id <id> \
   the claimed sibling path and its current branch is the claimed branch,
   using the cwd-vs-claim check in the
   [claim revalidation gate](../.github/instructions/idd-overview-core.instructions.md#claim-revalidation-gate).
-  Apply the `effort-candidate-file-limit` check that the scope step runs:
-  count the issue's parsed Candidate files and the canonical changed paths
-  separately, apply B3's canonical-path exclusions, and stop without
-  pushing when either count fails. Commit any validation or formatter
-  output first, so the tree is clean.
+  Count the issue's parsed Candidate files and the canonical changed paths
+  separately, apply B3's canonical-path exclusions, and compare each count with
+  the estimate's limit in the authoring contract's Over-scope split threshold
+  table. A count over the limit is advisory drift, not a stop: it measures
+  breadth, not intent, so reassess the plan once, note the count in the PR
+  notes, and continue; stop without pushing only for a reason other than the
+  number. Commit any validation or formatter output first, so the tree is
+  clean.
 
 ### B3 scope assessment outcomes
 
-When dry-run returns `assessment.correctionApplied: true`, follow the
-preceding read-only S-to-M correction and report procedure. Revalidate the
-claim, nonce, worktree, lock, and tokens immediately before reporting; require
-the live-body and assessment SHA-256 values to match or rerun dry-run. Verify
-the attempt's returned comment ID, author, and exact body; reconcile uncertain
-POSTs by attempt ID. If the report is unverified, retain the claim and stop.
-Do not apply in B3. Keep the verified assessment SHA and pass it with
-`--expected-scope-sha256` to the normal D2 `--apply` only after C self-review
-and D1 synchronization. If D2's fresh scope differs, return to B3, reassess
-and report, then repeat C and D1 before applying. Never reuse reports across
-claims or resumes, and do not edit or roll back the issue body. See the
+A count over the S/M estimate is advisory drift. It measures breadth, not
+semantic intent, complexity, safety, or the ability to finish, and helper
+success does not prove any of those. When dry-run returns
+`assessment.correctionApplied: true` or `assessment.disposition:
+"advisory-drift"`, make one evidence-backed plan reassessment before
+continuing. If the change is still one cohesive way to meet the accepted
+intent, needs no new authority or unresolved decision, and has a feasible
+validation plan, update the plan, report it as above, and continue the same
+claim. Count generated companions, tests and supporting docs by their purpose.
+Revalidate the claim, nonce, worktree, lock, and tokens immediately before
+reporting; require the live-body and assessment SHA-256 values to match or
+rerun dry-run. Verify the attempt's returned comment ID, author, and exact
+body; reconcile uncertain POSTs by attempt ID. If the report is unverified,
+retain the claim and stop. Do not apply in B3. Keep the verified assessment
+SHA and pass it with `--expected-scope-sha256` to the normal D2 `--apply` only
+after C self-review and D1 synchronization (required after
+`correctionApplied: true`, otherwise optional, and a SHA passed must match). If
+D2's fresh scope differs, return to B3, reassess and report, then repeat C and
+D1 before applying. Never reuse reports across claims or resumes, and do not
+edit or roll back the issue body. See the
 [B3 scope-overrun rationale](idd-design-rationale.md#b3--scope-overrun-returns-to-authoring).
 
-When the helper returns no `assessment.correctionApplied: true` (a qualifying
-correction whose report is unverified follows the retain-and-stop rule above)
-and the profile-selected
-`audit-authored-issue --shape child --stdin --marker-prefix {markerPrefix}`
-fails `effort-candidate-file-limit` on the issue body or with `## Candidate
-files` set to canonical changed paths, stop coding without pushing. Comment
-the estimate, candidate files, changed files, and split proposal; release per
-the Abort rule (`unclaimed-by`) and run `lost-claim-cleanup`. With the
-companion, hand it the proposal as a held split draft: it holds this issue,
-publishes a held roadmap whose children record `Split out of #<n>`, and
-comments the link. If refused, the comment stands. Never add needs-decision
-or ask a human. Do not edit or roll back the issue body. See the
-[scope-overrun rationale](idd-design-rationale.md#b3--scope-overrun-returns-to-authoring).
+A number alone never causes a release, held split, needs-decision label, or
+human count waiver. A genuinely new independent deliverable follows the
+unplanned follow-up work boundary of B3. An unresolved design, ownership,
+security, resource, or validation blocker keeps its existing handling; the
+no-question rule at the end of this section governs only the split route. F2/F3
+readiness still audits scope by count on its own (see the rationale), so
+advisory drift at B3 does not waive that gate until a follow-up reconciles it.
+
+When the helper returns no advisory disposition (`assessment.disposition` is
+not `advisory-drift` and `assessment.correctionApplied` is not `true`; a report
+that is unverified follows the retain-and-stop rule above) and the
+profile-selected `audit-authored-issue --shape child --stdin --marker-prefix
+{markerPrefix}` fails `effort-candidate-file-limit` on the issue body or with
+`## Candidate files` set to canonical changed paths, the effort evidence is
+unusable. The same route applies when reassessment finds one of the reasons
+above that makes the issue itself need a split, with evidence of that reason.
+In both cases, stop coding without pushing. Comment the reason, the estimate,
+candidate files, changed files, and split proposal; release per the Abort rule
+(`unclaimed-by`) and run `lost-claim-cleanup`. With the companion, hand it the
+proposal as a held split draft: it holds this issue, publishes a held roadmap
+whose children record `Split out of #<n>`, and comments the link. If refused,
+the comment stands. Never add needs-decision or ask a human. Do not edit or
+roll back the issue body. See the [scope-overrun rationale](idd-design-rationale.md#b3--scope-overrun-returns-to-authoring).
 
 ## Dead-export audit (kurone-kito/idd-skill#3478)
 

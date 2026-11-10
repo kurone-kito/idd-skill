@@ -323,47 +323,46 @@ every fresh `{claim-id}`.
 
 ### Lost-claim cleanup (`lost-claim-cleanup`)
 
-At each [trigger](../../docs/idd-helper-scripts.md#lost-claim-triggers), run
-under [clone-scoped lock](../../docs/idd-helper-scripts.md#clone-scoped-lock)
-from primary checkout (or `--repo`), not from `<path>`:
-`node scripts/clone-lock.mjs --exec --agent-id '{agent-id}' -- bash <script>`.
-Quote placeholders (`'` as `'\''`); resolve helpers per A5(a).
-No `--takeover`.
+Only an exact released or stale lineage reaches cleanup (here, this session's
+`{claim-id}`), at a
+[trigger](../../docs/idd-helper-scripts.md#lost-claim-triggers): an
+`unclaimed-by` read back from the issue (Abort, needs-decision release,
+authoring-hold release), or a fresh `resume-claim-routing --issue <n>` (no
+`--assert`) showing `released-claim-local-worktree-occupied` or
+`stale-claim-local-worktree-occupied` for it. The helper also needs the
+worktree lock that step 4's `--acquire` creates for the same ids; before it,
+the helper holds at `claim-lock-mismatch`. Otherwise keep the worktree and
+branch and stop with `<path>` and the failed gate: a failure before a trusted
+`claimed-by` exists (`--record-tokens` after step 1's `git worktree add`, a
+claim post that never landed), a failure before that `--acquire`, or one that
+leaves a claim active. Release this session's claim per Abort only while it
+verifies the claim, never on another session's nonce win; that read-back
+`unclaimed-by` is a trigger only after the `--acquire`. No `--takeover`.
+
+From the primary checkout, never `<path>`, run the profile-selected
+`f4-worktree-branch-cleanup` as a dry run and read its report:
 
 ```sh
-set -euo pipefail
-node scripts/claim-lock.mjs --acquire --worktree '<path>' --agent-id '{agent-id}' --claim-id '{claim-id}'
-set -- --issue '<n>' --claim-id '{claim-id}'
-if [[ '{agent-id}' =~ ^[^[:space:]-]+-[^[:space:]]*[A-Za-z0-9]{8}[^[:space:]]*$ ]]; then set -- "$@" --agent-id '{agent-id}'; fi
-route=$(node scripts/resume-claim-routing.mjs "$@" --worktree '<path>')
-printf '%s\n' "$route" | node -e 'const {active_claim:a,claim_id_checked:c,agent_id_checked:i}=JSON.parse(require("fs").readFileSync(0)),p=/^[^\s-]+-\S*[A-Z\d]{8}\S*$/i;process.exit(!a||a.claim_id&&a.claim_id!==c&&(a.agent_id&&!p.test(a.agent_id)||i&&i===a.agent_id)?0:1)'
-test "$(git -C '<path>' symbolic-ref -q HEAD)" = 'refs/heads/<branch>'
-tip=$(git rev-parse '<branch>')
-base=$(git rev-parse 'origin/{development-branch}')
-test "$tip" = "$base"
-tags=$(git -C '<path>' ls-files -v | cut -c1 | tr -d 'H\n')
-test -z "$tags"
-dirty=$(git -C '<path>' status --porcelain --ignored --untracked-files=all --ignore-submodules=none)
-test -z "$dirty"
-git worktree remove '<path>'
-git branch -D '<branch>'
+<cleanup-command> --released-claim --issue '<n>' \
+  --claim-id '{claim-id}' --agent-id '{agent-id}' --worktree '<absolute-path>'
 ```
 
-Every gate runs before `git worktree remove`, the only removal step (no
-`--force`). A failure before removal keeps the worktree, branch, and lock on
-purpose, so a later claim stops at the collision check (A5(e)).
+`<cleanup-command>` is `node scripts/f4-worktree-branch-cleanup.mjs` for the
+source repo and vendored-node; other profiles use
+[their form](../../docs/idd-helper-scripts.md#released-claim-worktree-cleanup).
 
-If `git branch -D` fails after removal, or the harness denies it (the
-distributed Claude baseline denies `Bash(git branch -D*)`), report a leftover
-branch at `<branch>`; the A5(e) orphan hold covers the next claimant.
+Apply with `--apply --attest-no-live-session` (it takes the clone lock itself)
+only after an operator independently confirms no session works in `<path>`; the
+claim marker, lock, and a clean status do not (issue `#3141`). Without that,
+keep and stop. After `status: complete`, rerun the `--fresh-claim-gate`;
+continue only on `claimable` or `stale-reclaimable`.
 
-Instructions-only: take the worktree-local lock from its
-[helper-free fallback](../../docs/idd-helper-scripts.md#worktree-local-claim-lock),
-read the claim state under Claim-state parsing, and give each worker its own
-clone ([fan-out variant](../../docs/idd-workflow.md#orchestrator-fan-out-variant)).
+On `hold` or `failed`, the `unclaimed-by` stands, you keep what remains (the
+report lists it), and you stop with the helper's report. Never retry removal by
+hand, claim a successor, `--force`, or `git branch -D`. Instructions-only (no
+helper runtime): preserve both and escalate; never remove by hand.
 
-Observed in PR `#4018` review; rationale in
-[docs/idd-design-rationale.md](../../docs/idd-design-rationale.md#lost-claim-cleanup-issue-4042).
+Rationale: [design rationale](../../docs/idd-design-rationale.md#lost-claim-cleanup-issue-4042).
 
 ## Activation-nonce format
 
