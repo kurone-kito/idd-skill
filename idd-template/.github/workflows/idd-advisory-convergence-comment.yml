@@ -281,24 +281,24 @@ jobs:
       # impossible (e.g. a transient registry lag, or an offline GHES
       # runner that cannot reach the online Node versions manifest
       # `check-latest` needs and falls back to its cached build) --
-      # assert the floor explicitly, mirroring this source repository's
-      # own workflow floor-assert steps.
+      # assert the floor explicitly. The check reads only the runtime
+      # `setup-node` just installed for `node-version: 24.x`, never the
+      # adopter's `engines.node`: a looser adopter range must not admit
+      # 24.0 or 24.1, and a manifest of another shape must not fail the job.
       - name: Assert Node.js floor
         if: steps.profile.outputs.profile != 'instructions-only'
         run: |
           node -e '
             const versionParts = process.versions.node.split(".");
-            const [major, minor, patch] = versionParts.map(Number);
+            const [major, minor] = versionParts.map(Number);
             const isPrerelease = versionParts.some((part) => part.includes("-"));
             const ok =
-              !isPrerelease &&
-              ((major === 22 && (minor > 23 || (minor === 23 && patch >= 2))) ||
-                (major === 24 && minor >= 2) ||
-                major >= 26);
+              !isPrerelease && ((major === 24 && minor >= 2) || major >= 26);
             if (!ok) {
               console.error(
-                "Node " + process.version + " does not satisfy this " +
-                "repository'"'"'s engines.node range (^22.23.2 || ^24.2.0 || >=26.0.0).",
+                "Node " + process.version + " does not satisfy the Node 24.2 " +
+                "floor of this workflow (Node 24.2.0 or later in the 24 " +
+                "line, or Node 26 or later).",
               );
               process.exit(1);
             }
