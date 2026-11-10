@@ -840,8 +840,11 @@ creates a new issue ([resume finding](https://github.com/kurone-kito/idd-skill/p
 After all children
 and any roadmap tracks are verified, the worker posts the standing record with
 the parent issue as `anchor` and the numeric effective `maxCandidateFiles` as
-`ceiling`, posts a completion note, revalidates the parent claim, posts and
-verifies its `unclaimed-by` marker, then runs cleanup. A mismatch or uncertain
+`ceiling`, posts a completion note, revalidates the parent claim, updates and
+verifies the parent live status digest (`Phase: aborted/released`, the planned
+release in `Next action`, the verified claim and reason in `Authoritative by`),
+posts and verifies its `unclaimed-by` marker, then runs cleanup. The full and
+Lite work instructions follow the same order. A mismatch or uncertain
 release keeps the parent held and stops before cleanup. The authoring label
 stays until the set is deliberately released or completed. These failure modes
 were observed during review of PR #5031 on 2026-11-06. Follow the split
