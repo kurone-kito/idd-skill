@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { runInNewContext } from 'node:vm';
 import {
   defaultCheckGroups,
   selectCheckGroups,
@@ -5380,6 +5381,229 @@ test('RWA007 does not count a commented-out setup-node use', () => {
       JSON.stringify(violations),
     );
   });
+});
+
+// #5150: the template floor steps run in adopter repositories, which ship no
+// package.json from this repository. Each step checks only the runtime that
+// setup-node installed for node-version 24.x, so a patch bump of this
+// repository's Node 22 line never edits them.
+const TEMPLATE_FLOOR_WORKFLOWS = [
+  { path: TEMPLATE_ADVISORY, floorSteps: 2 },
+  { path: TEMPLATE_COMMENT, floorSteps: 1 },
+  { path: TEMPLATE_CLEANUP, floorSteps: 1 },
+] as const;
+const FLOOR_STEP_NAME = 'Assert Node.js floor';
+const FLOOR_PROGRAM_OPEN = "node -e '";
+const FORBIDDEN_FLOOR_TOKENS = [
+  '22.23.2',
+  '^22.23.2 || ^24.2.0 || >=26.0.0',
+] as const;
+
+interface TemplateFloorProgram {
+  label: string;
+  program: string;
+}
+
+function floorProgramSource(run: string, label: string): string {
+  const lines = run.trimEnd().split('\n');
+  assert.equal(
+    lines[0],
+    FLOOR_PROGRAM_OPEN,
+    `${label}: unexpected run opening`,
+  );
+  assert.equal(
+    lines.at(-1),
+    "'",
+    `${label}: the program must end the run body`,
+  );
+  const program = lines.slice(1, -1).join('\n');
+  assert.equal(
+    program.includes("'"),
+    false,
+    `${label}: an apostrophe would end the shell quote around the program`,
+  );
+  return program;
+}
+
+// Walks every job of the three live template files and returns the program of
+// each "Assert Node.js floor" step, after checking that an actions/setup-node
+// step comes right before it.
+function templateFloorPrograms(): TemplateFloorProgram[] {
+  const found: TemplateFloorProgram[] = [];
+  for (const { path } of TEMPLATE_FLOOR_WORKFLOWS) {
+    const jobs = yamlMapping(parsedWorkflowMapping(path).jobs, `${path} jobs`);
+    for (const [jobId, job] of Object.entries(jobs)) {
+      const steps = yamlMapping(job, `${path} jobs.${jobId}`).steps;
+      assert.ok(
+        Array.isArray(steps),
+        `${path} jobs.${jobId}.steps is not a list`,
+      );
+      steps.forEach((step, index) => {
+        const label = `${path} jobs.${jobId} step ${index}`;
+        const mapping = yamlMapping(step, label);
+        if (mapping.name !== FLOOR_STEP_NAME) {
+          return;
+        }
+        const previous = yamlMapping(steps[index - 1], `${label} predecessor`);
+        assert.ok(
+          typeof previous.uses === 'string' &&
+            previous.uses.startsWith('actions/setup-node@'),
+          `${label}: the floor step must immediately follow actions/setup-node`,
+        );
+        assert.equal(typeof mapping.run, 'string', `${label}: run is not text`);
+        found.push({
+          label,
+          program: floorProgramSource(mapping.run as string, label),
+        });
+      });
+    }
+  }
+  return found;
+}
+
+// A runtime version and whether the floor program must accept it. The program
+// runs in a context with no require, so a read of any file fails the case.
+const FLOOR_RUNTIME_CASES: readonly (readonly [string, boolean])[] = [
+  ['24.2.0', true],
+  ['24.2.1', true],
+  ['24.22.1', true],
+  ['26.0.0', true],
+  ['26.13.0', true],
+  ['27.1.0', true],
+  ['24.0.0', false],
+  ['24.1.0', false],
+  ['24.1.9', false],
+  ['22.23.2', false],
+  ['22.99.0', false],
+  ['23.9.0', false],
+  ['25.0.0', false],
+  ['25.9.0', false],
+  ['24.2.0-rc.1', false],
+  ['24.3.0-nightly20261101abcdef', false],
+  ['26.0.0-rc.1', false],
+];
+
+function runFloorProgram(
+  program: string,
+  version: string,
+): { exitCode: number | undefined; diagnostics: string[] } {
+  let exitCode: number | undefined;
+  const diagnostics: string[] = [];
+  runInNewContext(program, {
+    process: {
+      version: `v${version}`,
+      versions: { node: version },
+      exit: (code: number) => {
+        exitCode = code;
+      },
+    },
+    console: {
+      error: (message: unknown) => diagnostics.push(String(message)),
+    },
+  });
+  return { exitCode, diagnostics };
+}
+
+// Every way the program disagrees with the accept set. An empty list means the
+// program accepts exactly Node 24 from 24.2 and Node 26 or later, with no
+// prerelease, and names the 24.2 floor when it rejects.
+function floorProgramFailures(program: string): string[] {
+  const failures: string[] = [];
+  for (const [version, accepted] of FLOOR_RUNTIME_CASES) {
+    let result: ReturnType<typeof runFloorProgram>;
+    try {
+      result = runFloorProgram(program, version);
+    } catch (error) {
+      failures.push(`${version}: the program threw ${String(error)}`);
+      continue;
+    }
+    if (accepted && result.exitCode !== undefined) {
+      failures.push(`${version}: rejected a runtime inside the accept set`);
+    }
+    if (!accepted && result.exitCode !== 1) {
+      failures.push(`${version}: accepted a runtime outside the accept set`);
+    }
+    if (!accepted && result.exitCode === 1) {
+      const [message, ...rest] = result.diagnostics;
+      if (
+        rest.length > 0 ||
+        !(message ?? '').startsWith(`Node v${version} does not satisfy`) ||
+        !(message ?? '').includes('24.2')
+      ) {
+        failures.push(`${version}: the error must name the 24.2 floor once`);
+      }
+    }
+  }
+  return failures;
+}
+
+test('the template floor steps carry no copy of the engines.node range', () => {
+  for (const { path } of TEMPLATE_FLOOR_WORKFLOWS) {
+    const text = realText(path);
+    for (const token of FORBIDDEN_FLOOR_TOKENS) {
+      assert.equal(text.includes(token), false, `${path} contains ${token}`);
+    }
+  }
+  const programs = templateFloorPrograms();
+  for (const { label, program } of programs) {
+    for (const token of FORBIDDEN_FLOOR_TOKENS) {
+      assert.equal(
+        program.includes(token),
+        false,
+        `${label} contains ${token}`,
+      );
+    }
+  }
+});
+
+test('all four live template floor programs accept only Node 24.2 and later 24, or Node 26 and later', () => {
+  const programs = templateFloorPrograms();
+  // Both advisory-convergence jobs count, so a dropped step fails here.
+  assert.equal(
+    programs.length,
+    TEMPLATE_FLOOR_WORKFLOWS.reduce(
+      (sum, { floorSteps }) => sum + floorSteps,
+      0,
+    ),
+  );
+  for (const { path, floorSteps } of TEMPLATE_FLOOR_WORKFLOWS) {
+    assert.equal(
+      programs.filter(({ label }) => label.startsWith(`${path} `)).length,
+      floorSteps,
+      `${path} floor step count`,
+    );
+  }
+  for (const { label, program } of programs) {
+    assert.deepEqual(floorProgramFailures(program), [], label);
+  }
+});
+
+test('the template floor check fails a program that drifts from the accept set', () => {
+  const [live] = templateFloorPrograms();
+  assert.ok(live, 'no live floor program found');
+  const variants: readonly (readonly [string, string, string])[] = [
+    ['accepts a prerelease', '!isPrerelease && ', ''],
+    ['accepts Node 24.1', 'minor >= 2', 'minor >= 1'],
+    ['rejects Node 24.2', 'minor >= 2', 'minor >= 3'],
+    ['rejects Node 26', 'major >= 26', 'major >= 27'],
+    ['rejects Node 27', 'major >= 26', 'major === 26'],
+    ['accepts Node 25', 'major >= 26', 'major >= 25'],
+    [
+      'accepts Node 22',
+      'major === 24 && minor >= 2',
+      'major === 22 || (major === 24 && minor >= 2)',
+    ],
+  ];
+  for (const [name, from, to] of variants) {
+    assert.ok(live.program.includes(from), `fixture anchor not found: ${from}`);
+    const drifted = live.program.replace(from, to);
+    assert.notEqual(drifted, live.program, name);
+    assert.notDeepEqual(
+      floorProgramFailures(drifted),
+      [],
+      `a program that ${name}`,
+    );
+  }
 });
 
 test('RWA006 reads a poster whose run: value starts on the next line', () => {
