@@ -1781,18 +1781,18 @@ stopping. The procedure is in
 only when `dangerouslyAutoDecide` and that class's own `enabled` flag are both
 `true`.
 
-| Key                                      | Default                     | Effect                                                                                                                                 |
-| ---------------------------------------- | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `dangerouslyAutoDecide`                  | `false`                     | Master switch for every class.                                                                                                         |
-| `autoDecide.decisionIssue.enabled`       | off                         | Picks up a needs-decision issue.                                                                                                       |
-| `autoDecide.runtimeQuestion.enabled`     | off                         | Answers a product, technical, or scope question while implementing a claimed issue.                                                    |
-| `autoDecide.authoringChoice.enabled`     | off                         | Decides an issue-authoring choice when nobody asked for a hearing.                                                                     |
-| `autoDecide.worktreeRemnant.enabled`     | off                         | Acts on another session's worktree left on this host.                                                                                  |
-| `autoDecide.worktreeRemnant.quietWindow` | `PT2H`                      | How long that worktree must be unmodified first. A zero or malformed value turns only this class off.                                  |
-| `autoDecide.b1Leftover.enabled`          | off                         | Acts on B1 leftovers found before a claim.                                                                                             |
-| `autoDecide.maxPendingConfirmations`     | `10`                        | Integer from 1 to 100. No new decision is made while this many confirmations are pending. An out-of-range value turns every class off. |
-| `autoDecide.maxDecisionsPerClaim`        | `3`                         | Integer from 1 to 20. The most decisions under one claim. An out-of-range value turns every class off.                                 |
-| `autoDecide.confirmationLabelName`       | `status:needs-confirmation` | Label on each confirmation issue. A blank name turns every class off.                                                                  |
+| Key                                      | Default                     | Effect                                                                                                                                                                                                             |
+| ---------------------------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `dangerouslyAutoDecide`                  | `false`                     | Master switch for every class.                                                                                                                                                                                     |
+| `autoDecide.decisionIssue.enabled`       | off                         | Picks up a needs-decision issue.                                                                                                                                                                                   |
+| `autoDecide.runtimeQuestion.enabled`     | off                         | Answers a product, technical, or scope question while implementing a claimed issue.                                                                                                                                |
+| `autoDecide.authoringChoice.enabled`     | off                         | Decides an issue-authoring choice when nobody asked for a hearing.                                                                                                                                                 |
+| `autoDecide.worktreeRemnant.enabled`     | off                         | Acts on another session's worktree left on this host.                                                                                                                                                              |
+| `autoDecide.worktreeRemnant.quietWindow` | `PT2H`                      | How long that worktree must be unmodified first. A zero or malformed value turns only this class off in local normalization; the trusted read treats any malformed autoDecide value as unreadable for every class. |
+| `autoDecide.b1Leftover.enabled`          | off                         | Acts on B1 leftovers found before a claim.                                                                                                                                                                         |
+| `autoDecide.maxPendingConfirmations`     | `10`                        | Integer from 1 to 100. No new decision is made while this many confirmations are pending. An out-of-range value turns every class off.                                                                             |
+| `autoDecide.maxDecisionsPerClaim`        | `3`                         | Integer from 1 to 20. The most decisions under one claim. An out-of-range value turns every class off.                                                                                                             |
+| `autoDecide.confirmationLabelName`       | `status:needs-confirmation` | Label on each confirmation issue. A blank name turns every class off.                                                                                                                                              |
 
 Prerequisites:
 
