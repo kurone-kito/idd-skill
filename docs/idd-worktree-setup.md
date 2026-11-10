@@ -150,7 +150,7 @@ safe to rerun after a retry or worktree recreation.
 When the configured command uses the
 [`verify-install-deps` helper](idd-helper-scripts.md), verify the install
 after either path. Some package managers can report success while leaving a
-required binary absent, as observed in issue `#1237` (see the
+required binary absent, as observed on 2026-07-03 in issue `#1237` (see the
 [incident rationale](idd-design-rationale.md#b1-step-3--install-deps-silent-under-install-detection)).
 The helper checks the post-install artifact named by its `--key-binary` and
 retries the install once before it fails loudly. After a pre-start hook
