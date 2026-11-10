@@ -514,6 +514,10 @@ in `## Tracks`; conflicts keep the parent and published children held.
 Publish only orphan-shaped children. A sequential-roadmap `blocked-by` child
 is not an orphan, and `--shape child` needs an independently held anchor this
 claimed parent does not provide. Use the existing route before publishing it.
+Use the existing route also for standalone orphans (parent not listed under a
+roadmap's `## Tracks`) when `<target-policy>` sets `issueScope` to `roadmap`:
+ordinary discovery skips them, so released children would stay undiscoverable.
+Other values and an absent key are unchanged.
 
 Otherwise use the existing comment/release/stop route.
 
