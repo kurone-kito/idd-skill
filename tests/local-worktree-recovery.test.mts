@@ -112,6 +112,65 @@ test('copyPathWithSafeSymlinks materializes in-tree links and preserves external
   }
 });
 
+test('copyPathWithSafeSymlinks keeps exact executable bits under any umask', {
+  // See the platform note on the materialization test above.
+  skip: process.platform === 'win32',
+}, () => {
+  const root = mkdtempSync(join(tmpdir(), 'idd-lwr-copy-umask-'));
+  const sourceModes = [0o755, 0o750, 0o711, 0o700, 0o644, 0o600];
+  // The 0o000 umask passes with or without the fix: it only guards that a
+  // copy never gains group or other read/write bits. The restrictive masks
+  // are the regression guard for the lost execute bits.
+  const maskValues = [0o077, 0o027, 0o022, 0o000];
+  // Read the mask without the deprecated no-argument call: setting one
+  // returns the previous mask, which is put straight back.
+  const previousUmask = process.umask(0);
+  process.umask(previousUmask);
+  try {
+    for (const umask of maskValues) {
+      const label = umask.toString(8).padStart(4, '0');
+      const source = join(root, `source-${label}`);
+      const destination = join(root, `preserve-${label}`);
+      // Build the fixture first. chmodSync ignores the umask, so each source
+      // mode is exact, and the umask only changes around the copy itself.
+      mkdirSync(source);
+      for (const mode of sourceModes) {
+        const file = join(source, `mode-${mode.toString(8)}`);
+        writeFileSync(file, `mode ${mode.toString(8)}\n`);
+        chmodSync(file, mode);
+      }
+
+      process.umask(umask);
+      try {
+        copyPathWithSafeSymlinks(source, destination, source);
+      } finally {
+        process.umask(previousUmask);
+      }
+
+      for (const mode of sourceModes) {
+        const name = `mode-${mode.toString(8)}`;
+        const where = `umask ${label}, source mode ${mode.toString(8)}`;
+        const copied = lstatSync(join(destination, name)).mode;
+        assert.equal(copied & 0o111, mode & 0o111, `${where}: executable bits`);
+        assert.equal(copied & 0o066, 0, `${where}: group/other read/write`);
+        assert.equal(
+          copied & 0o777,
+          0o600 | (mode & 0o111),
+          `${where}: owner read/write plus the source execute bits`,
+        );
+        assert.equal(
+          readFileSync(join(destination, name), 'utf8'),
+          `mode ${mode.toString(8)}\n`,
+          `${where}: contents`,
+        );
+      }
+    }
+  } finally {
+    process.umask(previousUmask);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('copyPathWithSafeSymlinks materializes links into the enclosing worktree', {
   skip: process.platform === 'win32',
 }, () => {
