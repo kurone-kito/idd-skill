@@ -310,39 +310,42 @@ no `claimed-by`, but it is a fresh activation, so it still runs step 5.
 
 ## Lost-claim cleanup (`lost-claim-cleanup`)
 
-Only an exact released or stale lineage reaches cleanup: after a verified
+Only an exact released or stale lineage reaches cleanup: after a read-back
 `unclaimed-by` (Abort, needs-decision release, authoring-hold release), or when
 a fresh `resume-claim-routing --issue <n>` (no `--assert`) shows
 `released-claim-local-worktree-occupied` or
 `stale-claim-local-worktree-occupied` for it. The helper also needs the lock
-that step 6's `--acquire` creates for those ids; before it, the helper holds at
+that step 6's `--acquire` creates; before it, it holds at
 `claim-lock-mismatch`. Otherwise keep the worktree and branch and stop with
 `<path>` and the failed gate: a failure before a trusted `claimed-by` exists
 (`--record-tokens` after step 2's `git worktree add`, a claim post that never
 landed) or before that `--acquire`, or one that leaves a claim active. Release
 this session's claim per Abort only while it verifies the claim, never on
 another session's nonce win; that `unclaimed-by` triggers cleanup only after the
-`--acquire`. No `--takeover`.
+`--acquire`.
 
 From the primary checkout, never `<path>`, run the profile-selected
-`f4-worktree-branch-cleanup` (`docs/idd-helper-scripts.md#released-claim-worktree-cleanup`)
-as a dry run:
+`f4-worktree-branch-cleanup` as a dry run:
 
 ```sh
-node scripts/f4-worktree-branch-cleanup.mjs --released-claim --issue '<n>' \
+<cleanup-command> --released-claim --issue '<n>' \
   --claim-id '{claim-id}' --agent-id '{agent-id}' --worktree '<absolute-path>'
 ```
 
+`<cleanup-command>` is `node scripts/f4-worktree-branch-cleanup.mjs` for
+source/vendored-node; other profiles use their form in
+`docs/idd-helper-scripts.md#released-claim-worktree-cleanup`.
+
 Apply with `--apply --attest-no-live-session` only after an operator
 independently confirms no session works in `<path>`; the claim marker, lock,
-and a clean status do not (issue `#3141`). Without that, keep and stop. After
-`status: complete`, rerun `--fresh-claim-gate`; continue only on `claimable` or
-`stale-reclaimable`.
+and a clean status do not. Without it, keep and stop. After
+`status: complete`, rerun `--fresh-claim-gate`; continue only on
+`claimable`/`stale-reclaimable`.
 
-On `hold` or `failed`, the `unclaimed-by` stands; keep the worktree and branch
-(`released-branch-remains` keeps only the branch) and stop with the report.
-Never retry removal by hand, claim a successor, `--force`, or `git branch -D`.
-Instructions-only (no helper runtime): preserve both and escalate.
+On `hold` or `failed`, the `unclaimed-by` stands; keep what remains and stop
+with the report. Never retry removal by hand, claim a successor,
+`--takeover`, `--force`, or `git branch -D`. Instructions-only (no helper
+runtime): preserve both and escalate.
 
 ## Heartbeat posting
 

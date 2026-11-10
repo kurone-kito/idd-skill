@@ -10129,8 +10129,9 @@ runs without `--force`, and `git branch -d` removes the local branch. The helper
 never fetches, never resets or stashes, and never force-deletes the branch. When
 `git branch -d` refuses, for example because the branch holds commits that the
 local default branch lacks, the worktree is already gone and the report holds as
-`released-branch-remains`. A dry run reports `would-run` for the preservation,
-the removal, and the branch removal, and takes no lock.
+`released-branch-remains`. A dry run reports `would-run` for the removal and the
+branch removal, and for the preservation only when a lone ignored `node_modules/`
+needs it (otherwise `skipped`). It takes no lock.
 
 The reason table above applies as written, except that `branch-tip-mismatch`
 compares against the tip the helper read at the start of the run, since this

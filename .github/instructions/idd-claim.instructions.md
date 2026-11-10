@@ -325,10 +325,10 @@ every fresh `{claim-id}`.
 
 Only an exact released or stale lineage reaches cleanup (here, this session's
 `{claim-id}`), at a
-[trigger](../../docs/idd-helper-scripts.md#lost-claim-triggers): a verified
-`unclaimed-by` (Abort, needs-decision release, authoring-hold release), or a
-fresh `resume-claim-routing --issue <n>` (no `--assert`) showing
-`released-claim-local-worktree-occupied` or
+[trigger](../../docs/idd-helper-scripts.md#lost-claim-triggers): an
+`unclaimed-by` read back from the issue (Abort, needs-decision release,
+authoring-hold release), or a fresh `resume-claim-routing --issue <n>` (no
+`--assert`) showing `released-claim-local-worktree-occupied` or
 `stale-claim-local-worktree-occupied` for it. The helper also needs the
 worktree lock that step 4's `--acquire` creates for the same ids; before it,
 the helper holds at `claim-lock-mismatch`. Otherwise keep the worktree and
@@ -336,31 +336,34 @@ branch and stop with `<path>` and the failed gate: a failure before a trusted
 `claimed-by` exists (`--record-tokens` after step 1's `git worktree add`, a
 claim post that never landed), a failure before that `--acquire`, or one that
 leaves a claim active. Release this session's claim per Abort only while it
-verifies the claim, never on another session's nonce win; that verified
+verifies the claim, never on another session's nonce win; that read-back
 `unclaimed-by` is a trigger only after the `--acquire`. No `--takeover`.
 
 From the primary checkout, never `<path>`, run the profile-selected
-`f4-worktree-branch-cleanup` ([forms](../../docs/idd-helper-scripts.md#released-claim-worktree-cleanup))
-as a dry run and read its report:
+`f4-worktree-branch-cleanup` as a dry run and read its report:
 
 ```sh
-node scripts/f4-worktree-branch-cleanup.mjs --released-claim --issue '<n>' \
+<cleanup-command> --released-claim --issue '<n>' \
   --claim-id '{claim-id}' --agent-id '{agent-id}' --worktree '<absolute-path>'
 ```
 
-Apply with `--apply --attest-no-live-session` (it takes the clone-scoped lock
-itself) only after an operator independently confirms no session works in
-`<path>`; the claim marker, lock, and a clean status do not (issue `#3141`).
-Without that, keep and stop. After `status: complete`, rerun the
-`--fresh-claim-gate`; continue only on `claimable` or `stale-reclaimable`.
+`<cleanup-command>` is `node scripts/f4-worktree-branch-cleanup.mjs` for the
+source repo and vendored-node; other profiles use
+[their form](../../docs/idd-helper-scripts.md#released-claim-worktree-cleanup).
+
+Apply with `--apply --attest-no-live-session` (it takes the clone lock itself)
+only after an operator independently confirms no session works in `<path>`; the
+claim marker, lock, and a clean status do not (issue `#3141`). Without that,
+keep and stop. After `status: complete`, rerun the `--fresh-claim-gate`;
+continue only on `claimable` or `stale-reclaimable`.
 
 On `hold` or `failed`, the `unclaimed-by` stands, the worktree and branch stay
 (`released-branch-remains` keeps only the branch), and you stop with the
 helper's report. Never retry removal by hand, claim a successor, `--force`, or
-`git branch -D`. Instructions-only has no helper runtime: preserve the worktree
-and branch and escalate to the operator; never remove them by hand.
+`git branch -D`. Instructions-only (no helper runtime): preserve both and
+escalate; never remove by hand.
 
-Rationale: [docs/idd-design-rationale.md](../../docs/idd-design-rationale.md#lost-claim-cleanup-issue-4042).
+Rationale: [design rationale](../../docs/idd-design-rationale.md#lost-claim-cleanup-issue-4042).
 
 ## Activation-nonce format
 

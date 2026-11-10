@@ -8,8 +8,7 @@ are in `idd-overview-core.instructions.md`.
 
 The distributed claim, advisory, CI, and critique-loop defaults are
 named in `docs/policy-constants.md`. Read it before changing a timing
-or loop constant; record local deviations in onboarding or
-repository docs.
+or loop constant; record deviations in onboarding or repo docs.
 
 ## Live status digest
 
@@ -40,11 +39,11 @@ On abort, re-validate ownership first. If the active claim still uses your
 current `{claim-id}`, update the digest before posting `unclaimed-by`
 (`Phase: aborted/released`, the planned release in `Next action`, the verified
 claim plus abort reason in `Authoritative by`), then post an `unclaimed-by`
-comment for that same `{claim-id}`. Once verified, run `lost-claim-cleanup`
-(`idd-claim.instructions.md`) if a worktree exists. If the active claim no
-longer uses your `{claim-id}`, leave the digest, post no release, run no
-cleanup. A stale or unclaimed state's open PR and remote branch are inheritable
-(see `idd-resume.instructions.md`).
+comment for that same `{claim-id}`. Once that `unclaimed-by` is read back, run
+claim-phase `lost-claim-cleanup` if a worktree exists. If the active
+claim no longer uses your `{claim-id}`, leave the digest, post no release, run
+no cleanup. A stale or unclaimed state's open PR and remote branch are
+inheritable (see `idd-resume.instructions.md`).
 
 ## Hold / suspend
 
@@ -63,12 +62,13 @@ heartbeat active.
 is expected before a human responds, the session may apply the
 configured needs-decision label (`labels.needsDecisionLabelName`,
 default `status:needs-decision`) and release the claim. Any phase may
-do this, not only E6. After release, stop heartbeating; once it is verified,
-run `lost-claim-cleanup`. A qualifying human decision lets a later session drop
-the label and re-claim; a response leaving the decision open does not re-enter.
+do this, not only E6. After release, stop heartbeating; once the
+`unclaimed-by` is read back, run `lost-claim-cleanup`. A qualifying human
+decision lets a later session drop the label and re-claim; a response leaving
+the decision open does not re-enter.
 
 **Hold consolidation.** When a hold traces to the same root file or
-dependency as an earlier hold from this session (even on another issue), pause
+dependency as an earlier hold from this session (any issue), pause
 per-issue escalation and audit the shared root cause once, bringing one
 consolidated decision to the human instead of re-escalating per layer.
 
