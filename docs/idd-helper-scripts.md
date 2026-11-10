@@ -3798,6 +3798,40 @@ turning every adopter into a Node.js-first repository. The written
 decision tables remain the canonical protocol regardless of which helper
 profile is selected.
 
+### idd-auto-decision-records
+
+`idd-auto-decision-records` (kurone-kito/idd-skill#4963) reads the auto-decide
+confirmation records. It never writes. Its modes are:
+
+- `--pending-count`: the number of open issues that carry the confirmation
+  label, for the pending cap.
+- `--records --class <class> [--source <number>] [--claim <id> | --set <id>]
+  [--subject <value>] --state open|all`: the counting records of one class,
+  with their confirmation issue numbers. `--state open` lists only records
+  whose confirmation issue is still open.
+- `--confirmation <number>`: one confirmation issue, with whether it still
+  carries the authoring label.
+- `--links --issue <number>`: the link markers that point at one source issue.
+
+Each mode takes `--owner` and `--repo` (or reads them from the checkout) and an
+optional `--base-ref`. The confirmation and authoring label names and the trust
+rule come from the trusted repository policy at that ref, never from the local
+checkout, so a worktree whose configuration names another label cannot change
+the result.
+
+Output is one JSON object with `status` (`readable` or `unreadable`), `mode`,
+`repository`, and the mode's own fields. Exit codes:
+
+- `0`: the result was read. The output may still be an empty list.
+- `1`: the result is `unreadable`. A failed or malformed GitHub read, a missing
+  page, or a policy file that is present but unreadable all give this result,
+  never an empty list. A caller treats it as a count that cannot be read.
+- `2`: a usage error. The arguments were not valid.
+
+Network reads: GitHub GraphQL and REST reads of issues and their comments in
+the named repository, and one read of the repository policy at the trusted
+ref. The command writes nothing to GitHub or to the checkout.
+
 ### Practical footprint guidance
 
 Practical loop pressure depends on the helper runtime choice:

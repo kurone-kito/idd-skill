@@ -911,8 +911,8 @@ review, branch, or merge gates. Each repository decides whether to
 enable the feature; the IDD source repository records its own choice in
 its `AGENTS.md`.
 
-Before provisional work starts, persist a canonical decision record on
-the source issue. Its body begins with
+For a needs-decision source, before provisional work starts, persist a
+canonical decision record on the source issue. Its body begins with
 `<!-- idd-provisional-decision-record:v1 -->`, followed by one JSON value
 matching `provisional-decision-record.schema.json`. The record binds the
 source snapshot, decision bundle and generation, claim lineage, evidence,
@@ -921,13 +921,12 @@ execution criteria. Record events distinguish a provisional selection,
 work start, verified completion, confirmation, and alternate-choice
 rework. Keep every unresolved choice visible in the current bundle.
 
-A selection is provisional, not confirmation. Verified work completion
-leaves the source issue open in a confirmation-pending state; it does not
-make the decision confirmed, permit automatic close, or cause the same
-completed work to execute again. Downstream work can use completed
+A selection is provisional, not confirmation. For a needs-decision source,
+verified work completion leaves the source issue open in a confirmation-pending
+state; it does not make the decision confirmed, permit automatic close, or cause
+the same completed work to execute again. Downstream work can use completed
 provisional work only through its own opt-in and evidence gates. These
-boundaries preserve the roadmap's confirmed lifecycle contract
-([issue #4528](https://github.com/kurone-kito/idd-skill/issues/4528)).
+boundaries preserve the roadmap's confirmed lifecycle contract ([issue #4528](https://github.com/kurone-kito/idd-skill/issues/4528)).
 
 When asking for confirmation, present the complete implemented bundle,
 its alternatives, verified results, and the implications of rework. An
@@ -982,6 +981,271 @@ into its rework roadmap. Missing, edited, stale, untrusted, conflicting,
 or incomplete evidence grants no transition authority. Keep the complete
 record and answer history available through crashes, claim takeover, flag
 disablement, and comment cleanup so later sessions can replay it.
+
+Under roadmap #4955, the worktree-remnant and B1-leftover classes of
+auto-decide act on claim-ownership and destructive-operation stops. They act
+only while their own switch is on, and only through remedies that first save
+everything (a stash, a backup ref, or a preserve directory) and then remove.
+The statements about recording on the source and keeping the source open
+apply to needs-decision sources only, and the no-waiver statement above
+applies to every class, including these two. This exception is recorded by
+[issue #4528](https://github.com/kurone-kito/idd-skill/issues/4528).
+
+## Auto-decide at a stop
+
+When a session reaches a stop in a class that the repository has switched
+on, it runs the steps below before it stops: check the switches, rule out a
+false positive on mechanical evidence, check the caps, weigh the options,
+apply the needs-decision stop test, record a confirmation, and then act.
+Every check uses fresh, trusted reads. A check that cannot be judged leaves
+the stop as it is today. The per-class switches and caps are listed in
+[Auto-decide classes](customization.md#auto-decide-classes).
+
+### Who
+
+- A session acts only in the full execution profile, or as an authoring
+  session with a helper runtime (not `instructions-only`).
+- The profile-selected `idd-effective-config --trusted-auto-decide` must
+  report the class as `enabled`. Pass `--base-ref` with the pull request
+  base when there is a pull request. Any other result, a non-zero exit
+  included, leaves the stop as it is today.
+- The classes that file confirmation issues (all but `decisionIssue`) also
+  need the issue-authoring companion and `issueAuthoring.journalIssue`.
+- `decisionIssue` uses only the trusted read and the pending cap. Its
+  per-claim cap is applied by #4535 to the pickup choices, and its options
+  and record follow the #4528 lifecycle. A later question in the same claim
+  uses `runtimeQuestion` and counts the pickup choices too (see Caps).
+- The lite profile keeps its stronger-session handoff.
+
+### False positive
+
+- The same check, re-run on fresh reads, no longer reports the stop. The
+  session comments the command and its output on the issue or pull request,
+  and continues.
+- Primary data (labels, API responses, git state) shows that the trigger
+  does not hold, but the helper still refuses. The session uses only the
+  class's documented remedy, never an ad hoc flag or environment variable.
+  If no remedy applies, it files a bug issue through the issue-authoring
+  companion and keeps today's stop. It skips the bug issue when an open
+  issue titled `auto-decide false positive: <helper> <stop>` already exists.
+- The judgment that a rule is too strict is never a false positive.
+
+### Caps
+
+Counts come from `idd-auto-decision-records`. A count that cannot be read
+(exit 1) leaves the stop as it is today, and so does a count at or above
+`maxPendingConfirmations` or `maxDecisionsPerClaim`.
+
+- **Pending count.** `--pending-count`: the open issues that carry the
+  confirmation label. At selection, #4538 also counts its own
+  confirmation-pending needs-decision sources, which only makes that class
+  stricter.
+- **`runtimeQuestion`.** `--records --class runtimeQuestion --source <claimed
+  issue> --claim <current claim> --state all`. In a needs-decision source
+  under provisional execution, add the number of pickup choices in the plan
+  that this claim executes, so the claim's total stays within the cap.
+- **`authoringChoice`.** `--records --class authoringChoice --set <set ID>
+  --state all`.
+- **`worktreeRemnant` and `b1Leftover`.** `--records --class <class>
+  --source <issue> --state all`. These classes act before the session holds
+  a claim on that issue.
+
+### Options
+
+- Draft at least two materially different options, each with its main cost.
+  One of them is "Keep today's behavior".
+- A workaround is chosen only when it is better than that option, can be
+  undone, and stays inside the issue's scope. It must also need no
+  credential and waive no gate beyond the class's documented remedy, which
+  #4528 records as an exception.
+- It must pass the stop test judged against "Keep today's behavior":
+  - it adds no claim, lock, merge-gate, security, secret-handling, or
+    data-destroying behavior beyond the issue's stated scope or the class
+    remedy;
+  - it is not known to leave CI red, and the CI gate still applies
+    afterwards;
+  - it ships no instruction or helper contradiction;
+  - it can be undone.
+- The session never invents an option or evidence to get past a stop.
+
+### Record, then act
+
+- **Which record.** `--records --class <class> --source <source> --state
+  open` lists the counting records with their confirmation issue numbers.
+  For each distinct issue, `--confirmation <number>` shows whether it still
+  carries the authoring label.
+  - With no open issue for the same class and source, the session publishes
+    a new one.
+  - With exactly one, and it is released, the session appends to it.
+  - With one that still carries the authoring label, or with two or more,
+    it does neither: the decision is not recorded, the stop stays as it is
+    today, and the session reports it.
+- **New issue.** The session publishes with
+  `publish-authoring-hold --shape confirmation`.
+  - `outcome: "published"` with `release.state` `released` counts as
+    recorded.
+  - `release.state` `held` counts as recorded for `runtimeQuestion` and
+    `authoringChoice`: the issue waits for a person's release, and the
+    session reports it. For `worktreeRemnant` and `b1Leftover`, whose
+    helpers refuse a held record, `held` is not recorded.
+  - A `recovery-hold` or `refused` result (exit 1), or a `blocked-by-human`
+    result (exit 2), is not recorded. The stop stays as it is today, and the
+    session reports the state. A `recovery-hold` with `issue: null` (the
+    create call failed) leaves no issue to void; the session reports the
+    publication token so that a person can check for an issue that carries
+    it.
+- **Append.** The session lints the comment with `audit-authored-issue
+  --shape confirmation --confirmation-record --current-repo <owner>/<repo>
+  --expect-class <class> --expect-source <ref> --body-file <file>`, adding
+  the matching `--expect-claim` or `--expect-set`. It posts the comment,
+  then checks with `--confirmation <number>` that the record counts.
+  Anything else is not recorded.
+- **Not recorded, but something was written.** When a not-recorded outcome
+  leaves an issue or a comment behind (a `held` issue for `worktreeRemnant`
+  or `b1Leftover`, a `recovery-hold` issue with an issue number, or an
+  append that the check cannot confirm), the session comments the void
+  marker for that decision on the confirmation issue (#4961). A voided
+  decision is never completed and does not count. A `held` issue for the
+  other classes is recorded and never voided.
+- **Link.** Right after the record, the session posts the link marker as the
+  first line of a comment on the source issue. It posts there when it holds
+  that issue's claim or owns that authored target. For `worktreeRemnant` and
+  `b1Leftover`, it posts after its claim on the issue exists. If the post
+  fails, it retries once and reports it. The caps count records, not links,
+  so a missing link changes no count.
+- **Authoring order.** The authoring class publishes its target under the
+  authoring hold first, because a held target cannot run until a person
+  releases it.
+
+### Act, then note
+
+- The session comments on the confirmation issue where any preserved data,
+  stash, backup ref, or preserve directory now is, so a person can undo the
+  choice. The first line of that comment is the note marker with
+  `kind=location` for that decision (#4961). A decision whose action changed
+  nothing gets a `kind=location` note that says so.
+- If the action fails, the session comments the failure there, with the note
+  marker `kind=failure` as the first line, and falls back to today's stop.
+  A failure after a partial change gets both notes: the location of what
+  changed, then the failure. The open confirmation issue still counts toward
+  the pending cap until a person closes it.
+- If a comment fails, the session retries once and reports it in its run
+  report.
+
+### Resume after a crash
+
+The session finds its records with `--records --state all`: by claim for
+`runtimeQuestion`, by set for `authoringChoice`, and by source and subject
+for `worktreeRemnant` and `b1Leftover`, with the recovered claim as well for
+`worktreeRemnant`. It reads the class verdict again, then:
+
+- A voided decision, a record with a `failure` note, a record whose
+  confirmation issue is closed, and a `worktreeRemnant` or `b1Leftover`
+  record with a `location` note are never resumed. A location note on those
+  classes means the decision was acted on (#4961). A further attempt is a
+  new decision that runs the whole procedure, caps included.
+- A `runtimeQuestion` or `authoringChoice` record with only a `location`
+  note is verified. If its action turns out incomplete, the session posts a
+  `failure` note and keeps today's stop.
+- A `runtimeQuestion` or `authoringChoice` record with no note is verified or
+  completed, and gets the matching note. The label state of its issue is not
+  consulted.
+- A `worktreeRemnant` or `b1Leftover` record with no note is neither
+  completed nor verified against its subject, because the claim step can
+  recreate the subject and a new leftover can share it. The session posts a
+  `failure` note and keeps today's stop; a further attempt is a new decision.
+  Preserved data is never deleted, so nothing is lost.
+- When the class is not `enabled`, or the read fails, no action is completed
+  under any of these rules.
+
+Two accepted risks follow. A crash between a `recovery-hold` and its void
+marker, or a lost `failure` note, lets a `runtimeQuestion` or
+`authoringChoice` decision be completed once more under its record. A lost
+`location` note on a `worktreeRemnant` or `b1Leftover` decision costs one
+extra decision toward the caps.
+
+### Pull request
+
+- At D3, and at any later point through the E12 pull-request-body safeguards
+  whatever the phase, the body lists each confirmation issue with a `Refs`
+  line under its own "Auto-decide confirmations:" heading.
+- That list is not the follow-up section, so the needs-decision deferral cap
+  does not count it. The F2 follow-up gate matches only the defer-source
+  marker, so it ignores the list by design.
+- With no pull request, the list does not apply.
+
+### Never
+
+- No session answers, closes, relabels, or edits the body of a confirmation
+  issue, and Discover never selects one. The exception is
+  `publish-authoring-hold`'s own creation-hold release and its recovery.
+- Appending a record, a void marker, or a note marker is an addition, not an
+  edit.
+- Publishing a confirmation issue, including its self-release, is not
+  unplanned follow-up work and not the release of a follow-up that the work
+  phase forbids (see the confirmation creation-hold exception in
+  `contract.md`).
+
+### Classes
+
+- `decisionIssue`: #4538 and #4535, with the #4528 lifecycle.
+- `runtimeQuestion`: #4539.
+- `authoringChoice`: the Interactive choice rule in `contract.md`.
+- `worktreeRemnant`: §LWR in [idd-resume-detail.md](idd-resume-detail.md).
+- `b1Leftover`: the B1-leftover wiring child of the parent roadmap, which
+  adds its own subsection here.
+
+The classes that the hearing left out keep their behavior.
+
+### Decision table
+
+| Input                                                                                                                                                       | Expected verdict                                                                                        |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| Lite profile, `instructions-only`, trusted read not `enabled` or a non-zero exit; for confirmation-filing classes, no companion or no journal issue         | Today's stop                                                                                            |
+| Fresh re-run no longer reports the stop                                                                                                                     | Continue, with the command and output commented                                                         |
+| Primary data contradicts the trigger, but the helper still refuses and no class remedy applies                                                              | Bug issue filed unless a matching one is open; today's stop                                             |
+| The session only reads the rule as too strict                                                                                                               | Not a false positive; no ad hoc flag                                                                    |
+| A count at or above its cap, or a count that cannot be read                                                                                                 | Today's stop                                                                                            |
+| No workaround beats "Keep today's behavior", or the best one fails the adapted stop test                                                                    | Today's stop                                                                                            |
+| No open same-class, same-source confirmation issue                                                                                                          | Publish a new one                                                                                       |
+| An open, released same-class, same-source confirmation issue                                                                                                | Append a record                                                                                         |
+| A same-class, same-source issue still under its authoring hold                                                                                              | Not recorded; today's stop; reported                                                                    |
+| `outcome: "published"` with `release.state` `released`, or `held` for `runtimeQuestion` and `authoringChoice`                                               | Recorded; act                                                                                           |
+| `recovery-hold`, `refused`, `blocked-by-human`, or an append that does not count; `held` for `worktreeRemnant` or `b1Leftover`                              | Not recorded; today's stop; reported; a void marker when something was written                          |
+| Two or more open same-class, same-source confirmation issues                                                                                                | Not recorded; today's stop; reported                                                                    |
+| Link post fails twice                                                                                                                                       | Reported; caps unaffected                                                                               |
+| A `location` or `failure` note fails to post twice                                                                                                          | Reported; on resume, the record is handled by the rule for the notes it has                             |
+| Recorded; the action then fails                                                                                                                             | `failure` note, after a `location` note when something changed; today's stop; the issue still counts    |
+| Recorded; the action succeeds                                                                                                                               | `location` note                                                                                         |
+| `recovery-hold` with `issue: null`                                                                                                                          | Not recorded; no void marker possible; token reported                                                   |
+| Resume finds a voided decision, a record with a `failure` note, one in a closed issue, or a `worktreeRemnant` or `b1Leftover` record with a `location` note | Not resumed; a further attempt is a new decision through the whole procedure                            |
+| Resume finds a `runtimeQuestion` or `authoringChoice` record with only a `location` note                                                                    | Verified; a `failure` note and today's stop if incomplete                                               |
+| Resume finds a `runtimeQuestion` or `authoringChoice` record with no note, class `enabled`                                                                  | Verified or completed; the matching note; label state not consulted                                     |
+| Resume finds a `worktreeRemnant` or `b1Leftover` record with no note                                                                                        | `failure` note; today's stop; a further attempt is a new decision                                       |
+| Resume with the class no longer `enabled`, or the read fails                                                                                                | No action completed                                                                                     |
+| Pull request exists, or is opened later                                                                                                                     | "Auto-decide confirmations:" list maintained; not the follow-up section                                 |
+| Any session meets a confirmation issue                                                                                                                      | Never answered, closed, relabeled, edited, or selected (creation-hold release excepted)                 |
+| Pickup choices of a needs-decision source (`decisionIssue`)                                                                                                 | #4528 lifecycle; no confirmation issue; a later question during its execution follows `runtimeQuestion` |
+
+### Loosening a fail-closed check
+
+The region classifier is the trusted class read, the false-positive rule, the
+caps, and the adapted stop test, applied in that order. Each class names its
+own classifier and shapes on top. These shapes keep today's stop in every
+class:
+
+- the master or class switch is off or unreadable, and every case listed
+  under Who;
+- a helper still refuses, unless the class's documented remedy or a passing
+  re-run applies;
+- a cap is reached or unreadable;
+- no option beats "Keep today's behavior", or the best one fails the adapted
+  stop test;
+- a confirmation is not recorded, including a same-source issue still under
+  its authoring hold;
+- a resumed action whose class is no longer `enabled`;
+- every class the hearing left out, and the record-on-source lifecycle of
+  needs-decision sources.
 
 ## Roadmap completion audits
 

@@ -2790,3 +2790,24 @@ Two deliberate non-goals:
 2. Requiring `docs/idd-helper-scripts.md` on the exact same line as
    `profile-selected`: this would fail 14 more template files where the
    path is named within the same paragraph or surrounding list item.
+
+## Auto-decide at a stop
+
+The procedure is written once, and its order is fixed by the operator's hearing
+of 2026-11-01, recorded in roadmap #4955. The hearing set seven steps that a
+session takes at a stop in a switched-on class: check the switches, rule out a
+false positive on mechanical evidence, check the caps, weigh the options, apply
+the needs-decision stop test, record a confirmation, and then act. Each class
+child applies these steps at its own stop, so the steps are not restated there.
+
+Two incidents set the false-positive rule. On 2026-10-15 (UTC), a claim of issue
+issue `#4368` skipped the authoring-owner guard on the session's own reading.
+Later the same day, the worker on issue `#4375` read the B3 scope gate as a
+post-push gate, withdrew its own hold, and pushed. The rule therefore says that
+a judgment that a rule is too strict is never a false positive, and that a
+session may use only a class's documented remedy, never an ad hoc flag.
+
+The record comes before the action, so that a person can see and undo a choice
+from its confirmation issue. A decision that cannot be recorded leaves today's
+stop in place, and the caps count records, not links, so a failed link does not
+change them.
