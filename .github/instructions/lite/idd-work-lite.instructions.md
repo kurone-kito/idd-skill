@@ -357,7 +357,10 @@ target, add `Split out of #<parent>`, and update/read back each verified child i
 
 Only orphan-shaped children qualify. A sequential-roadmap `blocked-by` child
 is not an orphan; `--shape child` needs a separately held anchor this parent
-does not provide. Use the existing scope-overrun route for such children.
+does not provide. Use the existing scope-overrun route for such children, and
+for standalone orphans (parent not under a roadmap's `## Tracks`) when
+`<target-policy>` sets `issueScope` to `roadmap`, which discovers no orphans.
+Other values and an absent key are unchanged.
 
 Otherwise, use the existing comment/release route.
 
