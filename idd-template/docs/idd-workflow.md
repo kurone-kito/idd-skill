@@ -987,9 +987,17 @@ the stop as it is today. The per-class switches and caps are listed in
 - A session acts only in the full execution profile, or as an authoring
   session with a helper runtime (not `instructions-only`).
 - The profile-selected `idd-effective-config --trusted-auto-decide` must
-  report the class as `enabled`. Pass `--base-ref` with the pull request
-  base when there is a pull request. Any other result, a non-zero exit
-  included, leaves the stop as it is today.
+  report the class as `enabled`. Pass `--owner` and `--repo` for the
+  repository that owns the pull request's base branch, or for the issue's
+  repository when there is no pull request, so a fork checkout never
+  supplies its own `origin` policy. Pass `--base-ref` with the pull request's
+  base branch name only, never a head or feature ref; without a pull request,
+  omit it. Any other result, a non-zero exit included, leaves the stop as it
+  is today.
+- `worktreeRemnant` and `b1Leftover` are not wired to this procedure yet.
+  Until their consumer children land, a session keeps today's route for
+  their stops: §LWR's operator attestation and B1's manual leftover cleanup
+  still apply, and this section does not act on them.
 - The classes that file confirmation issues (all but `decisionIssue`) also
   need the issue-authoring companion and `issueAuthoring.journalIssue`.
 - `decisionIssue` uses only the trusted read and the pending cap. Its
@@ -1010,12 +1018,18 @@ the stop as it is today. The per-class switches and caps are listed in
   companion and keeps today's stop. It skips the bug issue when an open
   issue titled `auto-decide false positive: <helper> <stop>` already exists.
 - The judgment that a rule is too strict is never a false positive.
+- A re-run that finds no live process, or no occupancy, is not proof that a
+  `worktreeRemnant` stop was false: §LWR treats absent or unreadable
+  liveness evidence as inconclusive. Only a class whose contract calls the
+  re-run conclusive may continue on it; otherwise the stop stays.
 
 ### Caps
 
-Counts come from `idd-auto-decision-records`. A count that cannot be read
-(exit 1) leaves the stop as it is today, and so does a count at or above
-`maxPendingConfirmations` or `maxDecisionsPerClaim`.
+Counts come from `idd-auto-decision-records`. Every call in this section
+takes the same `--owner`, `--repo`, and `--base-ref` as the trusted verdict
+(see Who), so the verdict and the counts read one policy. A count that cannot
+be read (exit 1) leaves the stop as it is today, and so does a count at or
+above `maxPendingConfirmations` or `maxDecisionsPerClaim`.
 
 - **Pending count.** `--pending-count`: the open issues that carry the
   confirmation label. At selection, #4538 also counts its own

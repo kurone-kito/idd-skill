@@ -3814,10 +3814,15 @@ confirmation records. It never writes. Its modes are:
 - `--links --issue <number>`: the link markers that point at one source issue.
 
 Each mode takes `--owner` and `--repo` (or reads them from the checkout) and an
-optional `--base-ref`. The confirmation and authoring label names and the trust
-rule come from the trusted repository policy at that ref, never from the local
-checkout, so a worktree whose configuration names another label cannot change
-the result.
+optional `--base-ref`. A caller on a pull request passes the base repository's
+`--owner` and `--repo` and the pull request's base branch name as `--base-ref`,
+as the trusted read above requires, never a head or feature ref. Without a
+pull request, it passes the same owner and repo and omits `--base-ref`, so the
+helper reads the live default branch. In a fork checkout, omitting `--owner`
+and `--repo` reads the fork's `origin` instead. The confirmation and authoring
+label names and the trust rule come from the trusted repository policy at that
+ref, never from the local checkout, so a worktree whose configuration names
+another label cannot change the result.
 
 Output is one JSON object with `status` (`readable` or `unreadable`), `mode`,
 `repository`, and the mode's own fields. Exit codes:
