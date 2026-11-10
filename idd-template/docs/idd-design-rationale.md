@@ -1070,10 +1070,15 @@ it by hand. The hand split of #4064 then produced a duplicate child
 authoring-time check, the over-scope split threshold that
 `audit-authored-issue`'s `effort-candidate-file-limit` check enforces.
 This route is its work-phase counterpart (kurone-kito/idd-skill#4138).
+Issue kurone-kito/idd-skill#5093 later narrowed its trigger: a count over a
+coherent S or M estimate is advisory drift (see "Count drift is advisory
+evidence" below), so the stop and release steps in this list now apply only to
+a reason other than the number, or to a refusal for unusable effort evidence.
 
-- **Stop, do not push.** An over-threshold diff is what the authoring
-  check would have split before publication, so finishing it only
-  produces an oversized pull request. The trigger is the distributed
+- **Stop, do not push.** (Since issue #5093 this applies only to a reason
+  other than the number, or to unusable effort evidence.) For such a reason the
+  diff is what the authoring check would have split before publication, so
+  finishing it only produces an oversized pull request. The trigger is the distributed
   `audit-authored-issue` helper's own check (the profile-selected
   command, with the body on `--stdin` and the target's resolved
   `--marker-prefix`, so a target with another prefix or without a
@@ -1176,10 +1181,13 @@ independently caps actual canonical paths at eight, because the audit
 parser may omit a root path or one containing whitespace. Duplicate,
 masked-only, malformed, mismatched or ambiguous evidence keeps the
 existing route from issue
-`kurone-kito/idd-skill#4138`; so do M failures and more than eight
-actual paths. This preserves the authoring threshold from
-`kurone-kito/idd-skill#4130` and the overrun route's incident history
-in `kurone-kito/idd-skill#4064` and `kurone-kito/idd-skill#3824`.
+`kurone-kito/idd-skill#4138`. Issue `kurone-kito/idd-skill#5093` later
+made M failures and more than eight actual paths advisory drift (see
+"Count drift is advisory evidence" below) instead of a stop, keeping the
+copy only for S estimates of at most eight paths. This preserves the
+authoring threshold from `kurone-kito/idd-skill#4130` and the overrun
+route's incident history in `kurone-kito/idd-skill#4064` and
+`kurone-kito/idd-skill#3824`.
 
 The assessment records the raw issue-body SHA-256, original and
 effective estimates, both canonical path counts, original audit results,
@@ -1191,6 +1199,75 @@ recomputes scope before the gate and again before push, refusing any
 change. The SHA is a freshness guard, not a saved permission: every
 apply and resumed session performs the full assessment under its own
 current claim. No issue-body write or rollback is part of this route.
+
+**Count drift is advisory evidence, not a runtime stop.**
+
+Issue `kurone-kito/idd-skill#4138` made crossing the authoring estimate
+sufficient evidence of an oversized pull request, after the operator splits on
+`kurone-kito/idd-skill#4064` and `kurone-kito/idd-skill#3824`. Two later
+incidents showed what that costs when a planning proxy becomes execution
+authority. Issue `kurone-kito/idd-skill#5030` stopped otherwise sound work
+because an S estimate was low by one or two files, and its first repair edited
+the shared issue body to make the count pass, which pull request
+`kurone-kito/idd-skill#5086` showed could overwrite concurrent edits. Issue
+`kurone-kito/idd-skill#4932` recorded required edits that the authored
+`Candidate files` list omitted until after the claim. The operator asked in the
+2026-11-08 authoring session for root recurrence prevention, including a
+review of whether runtime volume assessment is rational at all.
+
+A path count measures breadth. It does not measure semantic intent,
+complexity, safety, or the ability to finish, so it cannot show that a larger
+change is unsafe or that it adds intent the issue never accepted. It was
+introduced as an authoring-time admission rule (the over-scope split threshold
+of `kurone-kito/idd-skill#4130`), where one fresh author splits a draft before
+anyone claims it. At runtime the authored estimate carries known error: the
+list omits files (`#4932`), generated companions and tests multiply paths, and
+the audit's parser omits root and whitespace paths. Counting the file list at
+runtime and stopping on it turns estimation error into aborted sessions.
+
+So the count stays a measurement, not a verdict. B3 reassessment, push, and
+resume recompute the canonical paths from current source state, and the
+helper reports a count over a coherent S or M estimate as structured advisory
+drift, including counts above eight, without writing or assigning an effort-L
+marker. One evidence-backed reassessment follows. When the change is still a
+cohesive way to meet the accepted intent, needs no new authority or unresolved
+decision, and has a feasible validation plan, the worker updates the plan and
+report and continues the same claim. A genuinely new independent deliverable
+follows the unplanned follow-up work boundary. An unresolved design,
+ownership, security, resource, or validation blocker keeps its existing
+handling, and a worker may split the issue because such a reason establishes
+the need, with evidence of that reason. A number alone causes no release, held
+split, needs-decision label, or human count waiver. Lost claims, unreadable
+audits or reads, unusable effort evidence, and failed validation still stop,
+and helper success states only that numerical drift is advisory. There is no
+bypass flag, no per-edit polling, and no new service.
+
+Two edges are deliberate. The S-to-M copy keeps the report SHA that issue
+`#5092` requires at apply, while other advisory drift treats a SHA as optional
+(a SHA passed must still match, before and after the gate), so a count alone
+cannot fail every later review-fix push. A body whose own candidate list is over
+the limit is also advisory drift, since admission is unchanged and the helper
+only measures; a split child that the audit exempts over the limit is reported
+as not assessed rather than as drift.
+
+The authoring audit is unchanged: a newly drafted S or M issue over its
+published candidate ceiling still fails admission, and the fresh-discovery
+effort-L policy and the `Split out of` exemption are untouched. Those are
+planning and admission policies. They are distinct from runtime correctness and
+ownership, which the claim, review, and validation gates decide.
+
+Related work is reconciled, not replaced. Issue `#5092` supplies the shared
+assessment and report that this change reuses; neither is duplicated by a second
+counter or a new permission protocol. Pull request `kurone-kito/idd-skill#5104`
+(issue `#4676`) landed F2/F3 readiness that runs its own scope audit and blocks
+on a count-only failure unless a trusted owner records a decision. It is a
+separate implementation surface with its own copy of the evaluator, so this
+change leaves it alone, and a follow-up under roadmap `#5091` must reconcile it
+before global recurrence prevention can be claimed. Until then a pull request
+whose canonical paths exceed its estimate can pass B3 as advisory drift and still
+wait at F2 for that decision. Issues `#4676`, `#5055`, and roadmap `#4673` stay
+with their authors, and standing split (`#4893`) keeps its route for a split a
+genuine reason requires.
 
 ### C1 — Search sibling code for the same defect shape before closing
 

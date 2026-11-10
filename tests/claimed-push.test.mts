@@ -82,7 +82,9 @@ const ADMISSION_NEXT = {
 // 4480 for the same reason.
 const SCOPE_NEXT = {
   overrun:
-    'stop without pushing and follow the Scope overrun rule in idd-work.instructions.md',
+    'stop without pushing: the effort evidence cannot support a numerical advisory, so follow the Scope overrun rule in idd-work.instructions.md',
+  assessmentChanged:
+    'rerun the dry-run, reconcile the report, and retry with its assessment SHA-256',
   staleBase: (base: string): string =>
     `run node scripts/clone-lock.mjs --exec --agent-id <your agent id> -- git fetch origin +refs/heads/${base}:refs/remotes/origin/${base} (see docs/idd-helper-scripts.md, "Clone-scoped lock"), then rerun the helper once; if the base is still stale, stop, report both SHAs, and do not push`,
 } as const;
@@ -2086,7 +2088,7 @@ function forceEffortFindingFailure(request: CommandRequest): CommandResult {
   return result(1, `${JSON.stringify(report)}\n`);
 }
 
-test('a body within the limit whose canonical paths exceed it fails scope in the dry run', () => {
+test('a hidden-only effort marker whose canonical paths exceed the limit is unusable evidence and fails scope in the dry run', () => {
   const { code, report, h } = cliRun({
     world: { [K.diff]: result(0, nulList(manyPaths(9))), [K.audit]: realAudit },
   });
@@ -2096,6 +2098,8 @@ test('a body within the limit whose canonical paths exceed it fails scope in the
   assert.equal(scope?.status, 'failed');
   assert.equal(scope?.nextAction, SCOPE_NEXT.overrun);
   assert.equal(scope?.exitStatus, 1);
+  assert.equal(scope?.assessment?.disposition, 'not-assessed');
+  assert.match(scope?.reason ?? '', /no numerical advisory applies/u);
   assert.match(
     scope?.reason ?? '',
     /fails with the canonical paths: effort M with 9 candidate files exceeds the limit of 8/u,
@@ -2116,7 +2120,7 @@ test('a body within the limit whose canonical paths exceed it fails scope in the
   assert.equal(report.pushed, false);
 });
 
-test('a body over the limit fails scope', () => {
+test('a hidden-only effort marker whose body list is over the limit is unusable evidence and fails scope', () => {
   const r = run({
     world: {
       [K.issueView]: result(0, issueJson(issueBody(manyPaths(9)))),
@@ -2124,6 +2128,7 @@ test('a body over the limit fails scope', () => {
     },
   });
   assertRefused(r, 'scope', SCOPE_NEXT.overrun, { exitStatus: 1 });
+  assert.equal(stepOf(r, 'scope').assessment?.disposition, 'not-assessed');
   assert.match(
     stepOf(r, 'scope').reason,
     /fails on the issue body: effort M with 9 candidate files exceeds the limit of 8/u,
@@ -2270,7 +2275,7 @@ test('the correction runs when the original body S audit fails, with either or b
   }
 });
 
-test('S at three stays S, while four through eight paths qualify and nine actual paths do not', () => {
+test('S at three stays within estimate, four through eight paths take the S-to-M copy, and nine or more are advisory drift', () => {
   const three = cliRun({
     world: {
       [K.issueView]: result(0, issueJson(issueBodyWithEffort('S', []))),
@@ -2281,6 +2286,10 @@ test('S at three stays S, while four through eight paths qualify and nine actual
   assert.equal(three.code, 0);
   assert.equal(three.report.steps[2]?.assessment?.correctionApplied, false);
   assert.equal(three.report.steps[2]?.assessment?.effectiveEffort, 'S');
+  assert.equal(
+    three.report.steps[2]?.assessment?.disposition,
+    'within-estimate',
+  );
 
   const eightPaths = [...manyPaths(6), 'README', 'path with spaces.mts'];
   const eight = cliRun({
@@ -2294,23 +2303,459 @@ test('S at three stays S, while four through eight paths qualify and nine actual
   assert.equal(eight.report.steps[2]?.assessment?.actualCanonicalPathCount, 8);
   assert.equal(eight.report.steps[2]?.assessment?.auditParsedPathCount, 6);
   assert.equal(eight.report.steps[2]?.assessment?.correctionApplied, true);
+  assert.equal(
+    eight.report.steps[2]?.assessment?.disposition,
+    'advisory-drift',
+  );
 
-  const ninePaths = [...manyPaths(7), 'README', 'path with spaces.mts'];
-  const nine = cliRun({
+  for (const [actual, parsed, withOmissions] of [
+    [9, 7, [...manyPaths(7), 'README', 'path with spaces.mts']],
+    [12, 12, manyPaths(12)],
+  ] as const) {
+    const over = cliRun({
+      world: {
+        [K.issueView]: result(0, issueJson(issueBodyWithEffort('S', []))),
+        [K.diff]: result(0, nulList(withOmissions)),
+        [K.audit]: realAudit,
+      },
+    });
+    const scope = over.report.steps[2];
+    const assessment = scope?.assessment;
+    assert.equal(over.code, 0, String(actual));
+    assert.equal(scope?.status, 'passed', String(actual));
+    assert.equal(scope?.exitStatus, 0, String(actual));
+    assert.equal(assessment?.actualCanonicalPathCount, actual);
+    assert.equal(assessment?.auditParsedPathCount, parsed);
+    assert.equal(assessment?.estimatedEffort, 'S');
+    assert.equal(assessment?.effectiveEffort, 'S', 'no effort L is assigned');
+    assert.equal(assessment?.correctionApplied, false);
+    assert.equal(assessment?.disposition, 'advisory-drift');
+    assert.equal(assessment?.originalCanonicalPathsAudit.result, 'fail');
+    assert.match(
+      assessment?.originalCanonicalPathsAudit.detail ?? '',
+      /exceeds the limit of 3/u,
+    );
+    assert.equal(assessment?.correctedIssueBodyAudit, undefined);
+    assert.equal(over.h.count(K.audit), 2, 'no M copy is audited above eight');
+    assert.match(scope?.reason ?? '', /advisory estimate drift/u);
+    assert.match(scope?.reason ?? '', /measures breadth, not intent/u);
+    assert.doesNotMatch(JSON.stringify(over.report), /"L"/u);
+  }
+});
+
+test('M at eight stays within estimate, while nine and twelve are advisory drift with raw counts and no effort L', () => {
+  const withinEight = cliRun({
     world: {
-      [K.issueView]: result(0, issueJson(issueBodyWithEffort('S', []))),
-      [K.diff]: result(0, nulList(ninePaths)),
+      [K.issueView]: result(0, issueJson(issueBodyWithEffort('M', []))),
+      [K.diff]: result(0, nulList(manyPaths(8))),
       [K.audit]: realAudit,
     },
   });
-  assert.equal(nine.code, 1);
-  assert.equal(nine.report.steps[2]?.assessment?.actualCanonicalPathCount, 9);
-  assert.equal(nine.report.steps[2]?.assessment?.auditParsedPathCount, 7);
-  assert.equal(nine.report.steps[2]?.assessment?.correctionApplied, false);
-  assert.match(
-    nine.report.steps[2]?.reason ?? '',
-    /actual canonical path count 9 exceeds the M maximum of 8/u,
+  assert.equal(
+    withinEight.report.steps[2]?.assessment?.disposition,
+    'within-estimate',
   );
+  for (const count of [9, 12]) {
+    const body = issueBodyWithEffort('M', []);
+    const dry = cliRun({
+      world: {
+        [K.issueView]: result(0, issueJson(body)),
+        [K.diff]: result(0, nulList(manyPaths(count))),
+        [K.audit]: realAudit,
+      },
+    });
+    const scope = dry.report.steps[2];
+    const assessment = scope?.assessment;
+    assert.equal(dry.code, 0, String(count));
+    assert.equal(scope?.status, 'passed');
+    assert.equal(assessment?.disposition, 'advisory-drift');
+    assert.equal(assessment?.estimatedEffort, 'M');
+    assert.equal(assessment?.effectiveEffort, 'M');
+    assert.equal(assessment?.correctionApplied, false);
+    assert.equal(assessment?.actualCanonicalPathCount, count);
+    assert.equal(assessment?.auditParsedPathCount, count);
+    assert.equal(assessment?.originalIssueBodyAudit.result, 'pass');
+    assert.equal(assessment?.originalCanonicalPathsAudit.result, 'fail');
+    assert.match(
+      assessment?.originalCanonicalPathsAudit.detail ?? '',
+      new RegExp(`${count} candidate files exceeds the limit of 8`, 'u'),
+    );
+    assert.equal(dry.h.count(K.audit), 2);
+    assert.equal(
+      dry.h.calls.some(
+        (call) => call.kind === 'gh' && call.args.includes('edit'),
+      ),
+      false,
+      'the issue body is never written',
+    );
+
+    // The same advisory result applies, with no SHA required, in apply mode.
+    const applied = run({
+      world: {
+        [K.issueView]: result(0, issueJson(body)),
+        [K.diff]: result(0, nulList(manyPaths(count))),
+        [K.audit]: realAudit,
+      },
+    });
+    assert.equal(stepOf(applied, 'scope').status, 'passed');
+    assert.equal(
+      stepOf(applied, 'scope').assessment?.assessmentSha256,
+      assessment?.assessmentSha256,
+      'dry-run and apply share one assessment identity',
+    );
+    assert.equal(applied.report.pushed, true);
+  }
+});
+
+test('each original audit can fail separately above eight and the drift stays advisory', () => {
+  const cases = [
+    {
+      name: 'body list over eight, canonical within the S limit',
+      bodyCandidates: manyPaths(9),
+      diffCount: 2,
+      body: 'fail',
+      canonical: 'pass',
+    },
+    {
+      name: 'body within M, canonical over eight',
+      bodyCandidates: manyPaths(5),
+      diffCount: 12,
+      body: 'fail',
+      canonical: 'fail',
+    },
+    {
+      name: 'empty body list, canonical over eight',
+      bodyCandidates: [],
+      diffCount: 12,
+      body: 'pass',
+      canonical: 'fail',
+    },
+  ] as const;
+  for (const scenario of cases) {
+    const r = cliRun({
+      world: {
+        [K.issueView]: result(
+          0,
+          issueJson(issueBodyWithEffort('S', scenario.bodyCandidates)),
+        ),
+        [K.diff]: result(0, nulList(manyPaths(scenario.diffCount))),
+        [K.audit]: realAudit,
+      },
+    });
+    const assessment = r.report.steps[2]?.assessment;
+    assert.equal(r.code, 0, scenario.name);
+    assert.equal(assessment?.disposition, 'advisory-drift', scenario.name);
+    assert.equal(assessment?.correctionApplied, false, scenario.name);
+    assert.equal(
+      assessment?.originalIssueBodyAudit.result,
+      scenario.body,
+      scenario.name,
+    );
+    assert.equal(
+      assessment?.originalCanonicalPathsAudit.result,
+      scenario.canonical,
+      scenario.name,
+    );
+    assert.equal(r.h.count(K.audit), 2, scenario.name);
+  }
+});
+
+test('actual paths over the limit that the audit parser omits are advisory evidence for S and M', () => {
+  const omitted = ['README', 'path with spaces.mts'];
+  const m = cliRun({
+    world: {
+      [K.issueView]: result(0, issueJson(issueBodyWithEffort('M', []))),
+      [K.diff]: result(0, nulList([...manyPaths(7), ...omitted])),
+      [K.audit]: realAudit,
+    },
+  });
+  const mAssessment = m.report.steps[2]?.assessment;
+  assert.equal(m.code, 0);
+  assert.equal(mAssessment?.originalCanonicalPathsAudit.result, 'pass');
+  assert.equal(mAssessment?.actualCanonicalPathCount, 9);
+  assert.equal(mAssessment?.auditParsedPathCount, 7);
+  assert.equal(mAssessment?.disposition, 'advisory-drift');
+
+  const s = run({
+    world: {
+      [K.issueView]: result(0, issueJson(issueBodyWithEffort('S', []))),
+      [K.diff]: result(0, nulList([...manyPaths(3), 'README'])),
+      [K.audit]: realAudit,
+    },
+  });
+  const sAssessment = stepOf(s, 'scope').assessment;
+  assert.equal(sAssessment?.originalCanonicalPathsAudit.result, 'pass');
+  assert.equal(sAssessment?.actualCanonicalPathCount, 4);
+  assert.equal(sAssessment?.disposition, 'advisory-drift');
+  assert.equal(
+    sAssessment?.correctionApplied,
+    false,
+    'a passing audit never adds a required SHA',
+  );
+  assert.equal(s.report.pushed, true);
+});
+
+test('a split child the audit exempts over its limit is not assessed, and a body list over the limit is advisory drift', () => {
+  const split = issueBodyWithEffort('M', []).replace(
+    'The helper reassesses scope.\n',
+    'The helper reassesses scope.\n\nSplit out of #4375\n',
+  );
+  assert.ok(split.includes('Split out of #4375'));
+  const exempt = cliRun({
+    world: {
+      [K.issueView]: result(0, issueJson(split)),
+      [K.diff]: result(0, nulList(manyPaths(12))),
+      [K.audit]: realAudit,
+    },
+  });
+  const exemptScope = exempt.report.steps[2];
+  assert.equal(exempt.code, 0);
+  assert.equal(
+    exemptScope?.assessment?.originalCanonicalPathsAudit.result,
+    'pass',
+  );
+  assert.equal(exemptScope?.assessment?.disposition, 'not-assessed');
+  assert.doesNotMatch(exemptScope?.reason ?? '', /advisory estimate drift/u);
+
+  const bodyOnly = cliRun({
+    world: {
+      [K.issueView]: result(
+        0,
+        issueJson(issueBodyWithEffort('M', manyPaths(12))),
+      ),
+      [K.diff]: result(0, nulList(manyPaths(2))),
+      [K.audit]: realAudit,
+    },
+  });
+  const bodyScope = bodyOnly.report.steps[2];
+  assert.equal(bodyOnly.code, 0);
+  assert.equal(bodyScope?.assessment?.originalIssueBodyAudit.result, 'fail');
+  assert.equal(
+    bodyScope?.assessment?.originalCanonicalPathsAudit.result,
+    'pass',
+  );
+  assert.equal(bodyScope?.assessment?.disposition, 'advisory-drift');
+  assert.equal(bodyScope?.assessment?.actualCanonicalPathCount, 2);
+  assert.equal(bodyOnly.h.count(K.audit), 2);
+});
+
+test('L, absent, malformed, and unverifiable footers are not assessed and never relabeled as measured drift', () => {
+  const lBody = issueBodyWithEffort('L', []);
+  const noMarker = issueBodyWithEffort('M', []).replace(
+    /\n_Effort:[\s\S]*$/u,
+    '\n',
+  );
+  const malformed = issueBodyWithEffort('M', []).replace(
+    '<!-- idd-skill-effort: M -->',
+    '<!-- idd-skill-effort: XL -->',
+  );
+  for (const [name, body] of [
+    ['L', lBody],
+    ['absent', noMarker],
+    ['malformed', malformed],
+  ] as const) {
+    const r = cliRun({
+      world: {
+        [K.issueView]: result(0, issueJson(body)),
+        [K.diff]: result(0, nulList(manyPaths(12))),
+        [K.audit]: realAudit,
+      },
+    });
+    const scope = r.report.steps[2];
+    assert.equal(r.code, 0, name);
+    assert.equal(scope?.status, 'passed', name);
+    assert.equal(scope?.assessment?.disposition, 'not-assessed', name);
+    assert.doesNotMatch(scope?.reason ?? '', /advisory estimate drift/u, name);
+  }
+  const unavailable = cliRun({
+    world: {
+      [K.issueView]: result(0, issueJson(issueBodyWithEffort('S', []))),
+      [K.diff]: result(0, nulList(manyPaths(2))),
+      [K.audit]: auditResult(
+        'pass',
+        'effort S within the limit',
+        0,
+        'unavailable',
+      ),
+    },
+  });
+  assert.equal(
+    unavailable.report.steps[2]?.assessment?.disposition,
+    'not-assessed',
+  );
+});
+
+test('numerical drift above eight never overrides unusable effort evidence', () => {
+  const coherentM = issueBodyWithEffort('M', []);
+  const coherentS = issueBodyWithEffort('S', []);
+  const cases = [
+    {
+      name: 'identical duplicate markers',
+      body: coherentS.replace(
+        '<!-- idd-skill-effort: S -->',
+        '<!-- idd-skill-effort: S -->\n\n<!-- idd-skill-effort: S -->',
+      ),
+    },
+    {
+      name: 'visible footer disagrees with the marker',
+      body: coherentM.replace('_Effort: M', '_Effort: S'),
+    },
+    {
+      name: 'no visible footer line',
+      body: coherentM.replace(/_Effort: M[^\n]*\n\n/u, ''),
+    },
+    {
+      name: 'footer example only inside masked code',
+      body: coherentM
+        .replace(/_Effort: M[^\n]*\n\n/u, '')
+        .replace(
+          '<!-- idd-skill-effort: M -->',
+          '```md\n_Effort: M -- quoted example._\n```\n\n<!-- idd-skill-effort: M -->',
+        ),
+    },
+    { name: 'default body with only a hidden marker', body: DEFAULT_BODY },
+  ];
+  for (const scenario of cases) {
+    const r = cliRun({
+      world: {
+        [K.issueView]: result(0, issueJson(scenario.body)),
+        [K.diff]: result(0, nulList(manyPaths(12))),
+        [K.audit]: realAudit,
+      },
+    });
+    const scope = r.report.steps[2];
+    assert.equal(scope?.status, 'failed', scenario.name);
+    assert.equal(scope?.nextAction, SCOPE_NEXT.overrun, scenario.name);
+    assert.equal(scope?.assessment?.disposition, 'not-assessed', scenario.name);
+    assert.match(scope?.reason ?? '', /no numerical advisory applies/u);
+    assert.equal(r.h.count(K.gate), 0);
+  }
+});
+
+test('a failed finding that no candidate count explains is not advisory', () => {
+  const r = cliRun({
+    world: {
+      [K.issueView]: result(0, issueJson(issueBodyWithEffort('M', []))),
+      [K.diff]: result(0, nulList(manyPaths(2))),
+      [K.audit]: forceEffortFindingFailure,
+    },
+  });
+  const scope = r.report.steps[2];
+  assert.equal(r.code, 1);
+  assert.equal(scope?.status, 'failed');
+  assert.equal(scope?.assessment?.disposition, 'not-assessed');
+  assert.match(scope?.reason ?? '', /not explained by a candidate count/u);
+});
+
+test('an unreadable path or body shape blocks even when the count is advisory', () => {
+  const backtick = cliRun({
+    world: {
+      [K.issueView]: result(0, issueJson(issueBodyWithEffort('M', []))),
+      [K.diff]: result(
+        0,
+        nulList([...manyPaths(11), 'src/with\u0060tick.mts']),
+      ),
+      [K.audit]: realAudit,
+    },
+  });
+  assert.equal(backtick.report.steps[2]?.status, 'failed');
+  assert.equal(backtick.report.steps[2]?.nextAction, NEXT.stopAndReport);
+  assert.equal(backtick.h.count(K.audit), 0);
+
+  const noHeading = cliRun({
+    world: {
+      [K.issueView]: result(
+        0,
+        issueJson('Only one line, no heading\n<!-- idd-skill-effort: M -->\n'),
+      ),
+      [K.diff]: result(0, nulList(manyPaths(12))),
+      [K.audit]: realAudit,
+    },
+  });
+  assert.equal(noHeading.report.steps[2]?.status, 'failed');
+  assert.equal(noHeading.h.count(K.audit), 0);
+
+  const missingFinding = cliRun({
+    world: {
+      [K.issueView]: result(0, issueJson(issueBodyWithEffort('M', []))),
+      [K.diff]: result(0, nulList(manyPaths(12))),
+      [K.audit]: result(1, `${JSON.stringify({ findings: [] })}\n`),
+    },
+  });
+  assert.equal(missingFinding.report.steps[2]?.status, 'failed');
+  assert.equal(missingFinding.report.steps[2]?.nextAction, NEXT.stopAndReport);
+});
+
+test('advisory drift still stops at a failing gate, a lost claim, and a changed scope', () => {
+  const body = issueBodyWithEffort('M', []);
+  const world = {
+    [K.issueView]: result(0, issueJson(body)),
+    [K.diff]: result(0, nulList(manyPaths(12))),
+    [K.audit]: realAudit,
+  };
+  const failingGate = run({ world: { ...world, [K.gate]: result(1) } });
+  assert.equal(stepOf(failingGate, 'scope').status, 'passed');
+  assertRefused(failingGate, 'gate', NEXT.fixThenRerun, { exitStatus: 1 });
+
+  const lostAtAssert = run({
+    world: { ...world, [K.assert]: result(1, claimJson(), 'claim lost') },
+  });
+  assertRefused(lostAtAssert, 'assert', NEXT.staleClaim, { exitStatus: 1 });
+  assert.equal(lostAtAssert.count(K.issueView), 0);
+
+  const lostAtReassert = run({
+    world: {
+      ...world,
+      [K.assert]: [result(0, claimJson()), result(1, claimJson(), 'lost')],
+    },
+  });
+  assertRefused(lostAtReassert, 'reassert', NEXT.staleClaim, { exitStatus: 1 });
+
+  // The report identity is optional for advisory drift, but a SHA passed must
+  // match before the gate and again after it, and a changed scope refuses.
+  const dry = cliRun({ world });
+  const sha = dry.report.steps[2]?.assessment?.assessmentSha256;
+  assert.ok(sha);
+  const wrong = run({
+    input: { expectedScopeSha256: 'a'.repeat(64) },
+    world,
+  });
+  assertRefused(wrong, 'scope', SCOPE_NEXT.assessmentChanged, {
+    exitStatus: 0,
+  });
+  const matching = run({ input: { expectedScopeSha256: sha }, world });
+  assert.equal(matching.report.pushed, true);
+  assert.equal(matching.count(K.issueView), 2, 'reassert reassesses scope');
+
+  const changed = run({
+    input: { expectedScopeSha256: sha },
+    world: {
+      ...world,
+      [K.issueView]: [
+        result(0, issueJson(body)),
+        result(0, issueJson(`${body}Changed after the report.\n`)),
+      ],
+    },
+  });
+  assert.equal(stepOf(changed, 'reassert').status, 'failed');
+  assert.match(stepOf(changed, 'reassert').reason, /scope assessment changed/u);
+  assert.equal(changed.report.pushed, false);
+  assert.equal(changed.count(K.pushNew), 0);
+
+  const grown = run({
+    input: { expectedScopeSha256: sha },
+    world: {
+      ...world,
+      [K.diff]: [
+        result(0, nulList(manyPaths(12))),
+        result(0, nulList(manyPaths(13))),
+      ],
+    },
+  });
+  assert.equal(stepOf(grown, 'reassert').status, 'failed');
+  assert.match(stepOf(grown, 'reassert').reason, /scope assessment changed/u);
+  assert.equal(grown.report.pushed, false);
+  assert.equal(grown.count(K.pushNew), 0);
 });
 
 test('a missing Candidate files section uses the existing leading canonical section', () => {
