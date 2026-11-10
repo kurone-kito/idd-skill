@@ -1743,6 +1743,150 @@ test('live provisional evidence refuses source edits and unverified rework', asy
   );
 });
 
+test('live provisional evidence looks each merged pull request up once per load (#5138)', async () => {
+  const owner = 'acme';
+  const repo = 'repo';
+  const sourceNumber = 202;
+  const sourceTitle = 'provisional decision source';
+  const sourceBody = 'source body';
+  const trustedActor = 'trusted-automation';
+  const baseTime = Date.now() - 60_000;
+  const at = (seconds: number) =>
+    new Date(baseTime + seconds * 1000).toISOString();
+  const claimId = 'claim-202-lookup-test';
+  const agentId = 'codex-lookup-test';
+  const branch = 'issue/202-provisional-source';
+  const claim = {
+    claimId,
+    agentId,
+    branch,
+    claimedAt: at(0),
+    supersedes: 'none',
+  };
+  const source = {
+    repository: `${owner}/${repo}`,
+    issueNumber: sourceNumber,
+    snapshot: {
+      title: sourceTitle,
+      bodySha256: createHash('sha256').update(sourceBody).digest('hex'),
+      updatedAt: at(-1),
+    },
+  };
+  const proofs = {
+    203: { headSha: 'a'.repeat(40), mergeCommitSha: 'b'.repeat(40) },
+    204: { headSha: 'c'.repeat(40), mergeCommitSha: 'd'.repeat(40) },
+  };
+  const claimComment = {
+    id: 1,
+    body: `<!-- claimed-by: ${agentId} ${claimId} supersedes: none ${at(0).replace(/\.\d{3}Z$/u, 'Z')} branch: ${branch} -->\n\n_${agentId}: issue claim — IDD automation marker. Do not edit._`,
+    createdAt: at(0),
+    updatedAt: at(0),
+    lastEditedAt: null,
+    authorLogin: trustedActor,
+  };
+  const completion = (
+    id: number,
+    pullRequestNumber: keyof typeof proofs,
+    headSha = proofs[pullRequestNumber].headSha,
+  ) => ({
+    id,
+    body: `${PROVISIONAL_DECISION_RECORD_MARKER}\n${JSON.stringify({
+      schemaVersion: 1,
+      recordId: `completed-${id}`,
+      source,
+      bundleGeneration: 1,
+      decisionGeneration: 1,
+      claimLineage: [claim],
+      evidenceReferences: [`https://github.com/${owner}/${repo}/issues/202`],
+      event: {
+        type: 'work-completed',
+        result: {
+          kind: 'merged-pull-request',
+          reference: `https://github.com/${owner}/${repo}/pull/${pullRequestNumber}`,
+          verifiedAt: at(3),
+          headSha,
+          mergeCommitSha: proofs[pullRequestNumber].mergeCommitSha,
+        },
+      },
+    })}`,
+    createdAt: at(id),
+    updatedAt: at(id),
+    lastEditedAt: null,
+    authorLogin: trustedActor,
+  });
+  const lookups: number[] = [];
+  const makeReader = (history: ReturnType<typeof completion>[]) => {
+    const port = createFakeProviderAdapter({
+      workItems: {
+        [sourceNumber]: {
+          number: sourceNumber,
+          title: sourceTitle,
+          body: sourceBody,
+          state: 'open',
+          createdAt: at(-2),
+          updatedAt: source.snapshot.updatedAt,
+        },
+      },
+      comments: { [sourceNumber]: [claimComment, ...history] },
+      mergedChangeRequestMeta: {
+        203: {
+          number: 203,
+          merged: true,
+          mergedAt: at(3),
+          headRefOid: proofs[203].headSha,
+          mergeCommitOid: proofs[203].mergeCommitSha,
+        },
+        204: {
+          number: 204,
+          merged: true,
+          mergedAt: at(3),
+          headRefOid: proofs[204].headSha,
+          mergeCommitOid: proofs[204].mergeCommitSha,
+        },
+      },
+    });
+    const lookUp = port.getMergedChangeRequestMeta.bind(port);
+    port.getMergedChangeRequestMeta = (number) => {
+      lookups.push(number);
+      return lookUp(number);
+    };
+    return buildProvisionalDecisionEvidenceReader({
+      owner,
+      repo,
+      port,
+      readTrustedMarkerActors: () => [trustedActor],
+      policy: { trustedMarkerActors: [trustedActor] },
+    });
+  };
+  const proofIssues = (evidence: ProvisionalDecisionEvidence) =>
+    evidence.issues.filter((issue) => issue.startsWith('completion-'));
+
+  // Two matching records name pull request 203; the distinct pull request 204
+  // comes last, so reaching its lookup shows the loop ran to the end. The
+  // replay verdict is not asserted: the lookups run before the replay.
+  const reader = makeReader([
+    completion(2, 203),
+    completion(3, 203),
+    completion(4, 204),
+  ]);
+  assert.deepEqual(proofIssues(await reader.loadState(sourceNumber)), []);
+  assert.deepEqual(lookups, [203, 204]);
+
+  // A later load on the same reader reads afresh.
+  await reader.loadState(sourceNumber);
+  assert.deepEqual(lookups, [203, 204, 203, 204]);
+
+  // The cache holds the provider's answer, not the verdict: a repeated record
+  // whose head differs from the merged one is still refused, on one lookup.
+  lookups.length = 0;
+  const mismatched = await makeReader([
+    completion(2, 203),
+    completion(3, 203, 'e'.repeat(40)),
+  ]).loadState(sourceNumber);
+  assert.deepEqual(mismatched.issues, ['completion-proof-mismatch']);
+  assert.deepEqual(lookups, [203]);
+});
+
 test('#3284: fails safe on a cross-repository "Blocked by" token, even alongside a closed local ref', async () => {
   const issues = new Map([
     [

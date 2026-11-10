@@ -569,6 +569,14 @@ export function buildProvisionalDecisionEvidenceReader(input: {
       }
 
       const verifiedWork: VerifiedProvisionalWork[] = [];
+      // Several completion records of one source can name the same merged
+      // pull request. Look each pull request up once per load; the cache holds
+      // the provider's answer only, so every record still compares its own
+      // proof against it. It lives in this call, so a later load reads afresh.
+      const mergedMetaByPullRequest = new Map<
+        number,
+        ReturnType<ProviderPort['getMergedChangeRequestMeta']>
+      >();
       for (let index = 0; index < comments.length; index += 1) {
         const comment = comments[index];
         if (!comment?.trustedAuthor || comment.edited) continue;
@@ -592,13 +600,18 @@ export function buildProvisionalDecisionEvidenceReader(input: {
           return invalidProvisionalEvidence('completion-reference-invalid');
         }
         let pullRequest: ReturnType<ProviderPort['getMergedChangeRequestMeta']>;
-        try {
-          pullRequest = port.getMergedChangeRequestMeta(pullRequestNumber);
-        } catch (error) {
-          if (isInaccessibleIssueLookupError(error)) {
-            return invalidProvisionalEvidence('completion-pr-inaccessible');
+        if (mergedMetaByPullRequest.has(pullRequestNumber)) {
+          pullRequest = mergedMetaByPullRequest.get(pullRequestNumber) ?? null;
+        } else {
+          try {
+            pullRequest = port.getMergedChangeRequestMeta(pullRequestNumber);
+          } catch (error) {
+            if (isInaccessibleIssueLookupError(error)) {
+              return invalidProvisionalEvidence('completion-pr-inaccessible');
+            }
+            throw error;
           }
-          throw error;
+          mergedMetaByPullRequest.set(pullRequestNumber, pullRequest);
         }
         if (
           pullRequest?.merged !== true ||
