@@ -555,7 +555,7 @@
         "bundle": "bundle-work-phase",
         "limitBytes": 41400,
         "issue": 4893,
-        "reason": "Operator chose to raise this limit before the split route lands on main (PR #5031, issue #4893), so the trial budget check could measure the raise on the base. Re-measured on 2026-11-10 for issue #5127: 38,100 bytes with the generated banner removed, as the documentation audit reports it. The issue-authorized 10% permit allows up to 41,900 bytes for that total (floor of 38,100 times 1.1 to the nearest 100), so the 41,400 limit stays inside it. It leaves 2,472 bytes before the 98% utilization threshold (40,572), about 92.0% utilization. This replaces the earlier 37,706-byte projection and the 28,344-byte main measurement."
+        "reason": "Operator chose to raise this limit before the split route lands on main (PR #5031, issue #4893), so the trial budget check could measure the raise on the base. Re-measured on 2026-11-10 for issue #5127: 37,819 bytes with the generated banner removed, as the documentation audit reports it. The issue-authorized 10% permit allows up to 41,600 bytes for that total (floor of 37,819 times 1.1 to the nearest 100), so the 41,400 limit stays inside it. It leaves 2,753 bytes before the 98% utilization threshold (40,572), about 91.4% utilization. This replaces the earlier 37,706-byte projection and the 28,344-byte main measurement."
       },
       {
         "bundle": "bundle-work-lite",
