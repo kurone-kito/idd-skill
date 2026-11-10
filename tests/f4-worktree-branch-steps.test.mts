@@ -221,6 +221,7 @@ function remoteVerdict(
 interface HarnessOptions {
   readonly routes?: Route[];
   readonly lstat?: (path: string) => LstatKind;
+  readonly realpath?: (path: string) => string | null;
   readonly claims?: SpawnedResult[];
   readonly releasedRoutes?: readonly SpawnedResult[];
   readonly lockChecks?: readonly SpawnedResult[];
@@ -305,7 +306,7 @@ function harness(options: HarnessOptions = {}): Harness {
         (lstat(path) === 'directory' ? `directory:${path}` : null)
       );
     },
-    realpath: (path) => path,
+    realpath: options.realpath ?? ((path) => path),
     stateRoot: options.stateRoot ?? STATE_ROOT,
     now: options.now ?? (() => new Date('2026-10-21T10:30:00.000Z')),
     temporaryId: options.temporaryId ?? (() => 'test-id'),
@@ -1941,6 +1942,35 @@ test('released cleanup reports a leftover branch when ordinary deletion refuses'
     h.gitCalls.some(
       (call) => call.args[0] === 'branch' && call.args[1] === '-D',
     ),
+    false,
+  );
+});
+
+test('released cleanup refuses a primary path spelled through an alias before any mutation', () => {
+  const alias = '/work/primary-alias';
+  const h = harness({
+    realpath: (path) => (path === alias ? PRIMARY : path),
+  });
+  const report = runF4WorktreeBranchSteps(
+    input({
+      cleanupMode: 'released-claim',
+      attestNoLiveSession: true,
+      worktree: alias,
+    }),
+    h.deps,
+  );
+
+  assert.equal(report.status, 'hold');
+  assert.equal(report.reason, 'inconsistent-worktree-state');
+  assert.equal(h.releasedRouteCalls.length, 0);
+  assert.equal(
+    h.gitCalls.some(
+      (call) => call.args[0] === 'worktree' && call.args[1] === 'remove',
+    ),
+    false,
+  );
+  assert.equal(
+    h.gitCalls.some((call) => call.args[0] === 'branch'),
     false,
   );
 });

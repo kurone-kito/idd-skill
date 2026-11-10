@@ -187,6 +187,16 @@ export function classifyClaimAssert(raw, claimId, agentId) {
   return { ok: false, code: 'claim-lost' };
 }
 /**
+ * The comparison key for one filesystem path: its real location when it can be
+ * read, folded to lower case on Windows, where paths are case-insensitive. Two
+ * spellings of one directory must map to the same key before any identity
+ * check, or a differently cased primary path could pass as "not the primary".
+ */
+export function canonicalPathKey(path, realpath) {
+  const resolved = realpath(path) ?? resolve(path);
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+/**
  * Accept only a fresh released/stale route whose sole local occupant is the
  * requested worktree and whose trusted claim fields exactly match the caller.
  */
@@ -219,11 +229,10 @@ export function classifyReleasedClaimRoute(
   ) {
     return { ok: false };
   }
-  const normalize = (path) => {
-    const resolved = realpath(path) ?? resolve(path);
-    return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
-  };
-  if (normalize(local.paths[0]) !== normalize(worktree)) {
+  if (
+    canonicalPathKey(local.paths[0], realpath) !==
+    canonicalPathKey(worktree, realpath)
+  ) {
     return { ok: false };
   }
   if (
@@ -574,7 +583,13 @@ function runReleasedClaimCleanup(input, deps) {
       branchTip,
     );
   try {
-    if (worktree === primary) {
+    // Compare canonical keys, not the resolved strings: a differently cased or
+    // aliased spelling of the primary path must still be refused here, before
+    // any gate that could reach `git worktree remove`.
+    if (
+      canonicalPathKey(worktree, deps.realpath) ===
+      canonicalPathKey(primary, deps.realpath)
+    ) {
       return stop(
         'path-check',
         'inconsistent-worktree-state',
