@@ -24,9 +24,11 @@ claimed, implemented issue.
 - Resolve active-profile `idd-local-admission` via manifest/docs; pass
   each configured string once as `-- <shell> -c <string>` (one argument).
 - If set in repo policy, admit `localExec.admission.testCommand` likewise.
-  Exit 75 expires only with stderr `local-admission: expired`: report
-  no start; do not rerun or count a pass (not a test rerun or Discover
-  incomplete-result retry). Otherwise, 75 is command status.
+- These exit/stderr pairs mean no start: `75` with
+  `local-admission: expired`, or `69` with
+  `local-admission: pueue daemon is not accepting commands`. Report; do not
+  rerun, push manually, or mark as pass/flaky (not a test rerun or Discover
+  incomplete-result retry). Bare `69`/`75`: command statuses.
 
 ## Stop-and-ask conditions
 
