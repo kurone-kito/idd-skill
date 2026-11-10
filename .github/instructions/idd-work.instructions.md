@@ -572,11 +572,13 @@ Otherwise use the existing comment/release/stop route.
    post a hold note naming verified children; keep parent claim/label and child
    holds, then stop. For uncertainty, proceed only after paginated read-back
    confirms one trusted exact record and the complete set; never retry. On
-   success, post the completion note, revalidate the claim, post/verify its
-   exact `unclaimed-by` marker through the standard release procedure, then run
-   cleanup. Mismatch, unreadable state, or uncertain release keeps the parent
-   held and stops before cleanup. Keep the authoring label until release or
-   completion.
+   success, post the completion note, revalidate the claim, then update and
+   read back the parent digest (`Phase: aborted/released`, the planned release
+   in `Next action`, the verified claim and reason in `Authoritative by`).
+   Only then post/verify its exact `unclaimed-by` marker through the standard
+   release procedure and run cleanup. Mismatch, unreadable state, or uncertain
+   release keeps the parent held and stops before cleanup. Keep the authoring
+   label until release or completion.
 
 ```text
 <!-- idd-skill-standing-approval: class=split; set=none; anchor=<owner/repo#n>; ceiling=<maxCandidateFiles>; option=option-a -->

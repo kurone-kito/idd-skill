@@ -420,9 +420,11 @@ check, post the exact record below. On definite/uncertain POST failure, post a
 hold note naming verified children; keep all holds and stop. For uncertainty,
 proceed only after paginated read-back confirms one trusted exact record and
 the full set; never retry. On success, post the completion note, revalidate
-the claim, post/verify its exact `unclaimed-by` marker, then clean up. Mismatch,
-unreadable state, or uncertain release keeps the parent held. Keep the label
-until release or completion.
+the claim, update and read back the parent digest (`Phase: aborted/released`,
+the planned release in `Next action`, the verified claim and reason in
+`Authoritative by`), post/verify its exact `unclaimed-by` marker, then clean
+up. Mismatch, unreadable state, or uncertain release keeps the parent held.
+Keep the label until release or completion.
 `instructions-only` keeps the companion route.
 
 ```text
