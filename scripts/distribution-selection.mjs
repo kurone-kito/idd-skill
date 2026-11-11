@@ -571,7 +571,7 @@ function losslessUtf8(bytes) {
   return Buffer.from(text, 'utf8').equals(bytes) ? text : null;
 }
 /** Render the stable dispatcher written from one prepared skill bundle. */
-function renderSkillDispatcher(
+export function renderSkillDispatcher(
   sourceBytes,
   templateBytes,
   skillName,
