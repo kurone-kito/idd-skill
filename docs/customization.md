@@ -1787,7 +1787,7 @@ only when `dangerouslyAutoDecide` and that class's own `enabled` flag are both
 | `autoDecide.decisionIssue.enabled`       | off                         | Picks up a needs-decision issue.                                                                                                                                                                                   |
 | `autoDecide.runtimeQuestion.enabled`     | off                         | Answers a product, technical, or scope question while implementing a claimed issue.                                                                                                                                |
 | `autoDecide.authoringChoice.enabled`     | off                         | Decides an issue-authoring choice when nobody asked for a hearing.                                                                                                                                                 |
-| `autoDecide.worktreeRemnant.enabled`     | off                         | Acts on another session's worktree left on this host.                                                                                                                                                              |
+| `autoDecide.worktreeRemnant.enabled`     | off                         | Not wired yet: the switch does not activate the procedure, and today's route stays.                                                                                                                                |
 | `autoDecide.worktreeRemnant.quietWindow` | `PT2H`                      | How long that worktree must be unmodified first. A zero or malformed value turns only this class off in local normalization; the trusted read treats any malformed autoDecide value as unreadable for every class. |
 | `autoDecide.b1Leftover.enabled`          | off                         | Acts on B1 leftovers found before a claim.                                                                                                                                                                         |
 | `autoDecide.maxPendingConfirmations`     | `10`                        | Integer from 1 to 100. No new decision is made while this many confirmations are pending. An out-of-range value turns every class off.                                                                             |
@@ -1804,10 +1804,13 @@ Prerequisites:
 To turn one class off, set its `enabled` to `false` or remove the key. To turn
 every class off, set `dangerouslyAutoDecide` to `false`.
 
-To rename the confirmation label, a person first adds the new label next to the
-old one on every open confirmation issue, merges the name change, and only then
-removes the old label. Discover then never sees a confirmation issue without
-the name it filters.
+To rename the confirmation label, a person first turns the classes off with
+`dangerouslyAutoDecide` set to `false`, so that no session publishes a new
+confirmation issue during the migration. The person then adds the new label
+next to the old one on every open confirmation issue, merges the name change,
+and only then removes the old label. Discover then never sees a confirmation
+issue without the name it filters. The person turns the classes back on after
+the old label is gone.
 
 ## Issue Scope
 
