@@ -37,6 +37,7 @@ import { createHash } from 'node:crypto';
 import {
   closeSync,
   constants,
+  fchmodSync,
   fstatSync,
   lstatSync,
   mkdirSync,
@@ -7281,11 +7282,17 @@ export function copyPathWithSafeSymlinks(
             `recovery source changed to a special file during copy: ${source}`,
           );
         }
+        const temporaryMode = 0o600 | (sourceStat.mode & 0o111);
         temporaryFd = openSync(
           temporaryPath,
           constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | noFollow,
-          0o600 | (sourceStat.mode & 0o111),
+          temporaryMode,
         );
+        // openSync applies the process umask to a creation mode, so a
+        // restrictive umask (for example 077) would drop the group and other
+        // execute bits the source had. fchmod ignores the umask and acts on
+        // the open descriptor, so set the exact mode before any byte is copied.
+        fchmodSync(temporaryFd, temporaryMode);
         const buffer = Buffer.allocUnsafe(64 * 1024);
         for (;;) {
           const bytesRead = readSync(sourceFd, buffer, 0, buffer.length, null);
