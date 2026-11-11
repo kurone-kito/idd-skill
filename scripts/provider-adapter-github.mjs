@@ -3590,6 +3590,11 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
           'getMergedChangeRequestMetaBatch: the response has no repository',
         );
       }
+      // A nullable metadata field is null or a string. An absent key is also
+      // malformed, because the query selects every field, so the batch throws
+      // rather than reading it as missing.
+      const isStringOrNull = (value) =>
+        value === null || typeof value === 'string';
       for (const number of distinct) {
         const pr = repository[`pr${number}`];
         if (pr == null || typeof pr !== 'object') {
@@ -3597,27 +3602,51 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
             `getMergedChangeRequestMetaBatch: the response has no answer for pull request #${number}`,
           );
         }
-        if (Number(pr.number) !== number) {
+        if (typeof pr.number !== 'number') {
+          throw new Error(
+            `getMergedChangeRequestMetaBatch: the answer for pull request #${number} has no numeric number field`,
+          );
+        }
+        if (pr.number !== number) {
           throw new Error(
             `getMergedChangeRequestMetaBatch: the answer for pull request #${number} names #${String(pr.number)}`,
           );
         }
-        answers.set(
+        if (typeof pr.merged !== 'boolean') {
+          throw new Error(
+            `getMergedChangeRequestMetaBatch: the answer for pull request #${number} has no boolean merged field`,
+          );
+        }
+        // Every answer's metadata is checked, merged or not, so a malformed
+        // answer never reaches the map. A merge commit is null, or an object
+        // whose oid is a string or null; a primitive or an array has no oid,
+        // so it fails the same check.
+        const { mergeCommit } = pr;
+        const mergeCommitValid =
+          mergeCommit === null || isStringOrNull(mergeCommit?.oid);
+        if (
+          !isStringOrNull(pr.mergedAt) ||
+          !isStringOrNull(pr.headRefOid) ||
+          !mergeCommitValid
+        ) {
+          throw new Error(
+            `getMergedChangeRequestMetaBatch: the answer for pull request #${number} has a malformed metadata field`,
+          );
+        }
+        if (pr.merged !== true) {
+          answers.set(number, null);
+          continue;
+        }
+        answers.set(number, {
           number,
-          pr.merged !== true
-            ? null
-            : {
-                number,
-                merged: true,
-                mergedAt: pr.mergedAt == null ? null : String(pr.mergedAt),
-                headRefOid:
-                  pr.headRefOid == null ? null : String(pr.headRefOid),
-                mergeCommitOid:
-                  pr.mergeCommit?.oid == null
-                    ? null
-                    : String(pr.mergeCommit.oid),
-              },
-        );
+          merged: true,
+          mergedAt: pr.mergedAt === null ? null : String(pr.mergedAt),
+          headRefOid: pr.headRefOid === null ? null : String(pr.headRefOid),
+          mergeCommitOid:
+            mergeCommit == null || mergeCommit.oid === null
+              ? null
+              : String(mergeCommit.oid),
+        });
       }
       return answers;
     },

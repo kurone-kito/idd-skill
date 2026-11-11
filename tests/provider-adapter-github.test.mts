@@ -3472,6 +3472,143 @@ test('getMergedChangeRequestMetaBatch is all-or-nothing: an error, a missing ans
   );
 });
 
+test('getMergedChangeRequestMetaBatch rejects a malformed answer rather than reading it as unmerged (#5122)', () => {
+  const withResponse = (response: unknown) =>
+    createGithubProviderAdapter(
+      'o',
+      'r',
+      fakeDeps({ ghText: () => JSON.stringify(response) }),
+    );
+
+  // A partial answer has no merged field: it throws, it does not map to null.
+  assert.throws(
+    () =>
+      withResponse({
+        data: { repository: { pr3: mergedAnswer(3), pr4: { number: 4 } } },
+      }).getMergedChangeRequestMetaBatch([3, 4]),
+    /pull request #4 has no boolean merged field/,
+  );
+  // A merged value that is not a boolean throws too.
+  assert.throws(
+    () =>
+      withResponse({
+        data: {
+          repository: {
+            pr3: mergedAnswer(3),
+            pr4: { ...mergedAnswer(4), merged: 'true' },
+          },
+        },
+      }).getMergedChangeRequestMetaBatch([3, 4]),
+    /pull request #4 has no boolean merged field/,
+  );
+  // A merged answer whose metadata has the wrong type throws.
+  assert.throws(
+    () =>
+      withResponse({
+        data: {
+          repository: {
+            pr3: mergedAnswer(3),
+            pr4: { ...mergedAnswer(4), mergedAt: 1_700_000_000 },
+          },
+        },
+      }).getMergedChangeRequestMetaBatch([3, 4]),
+    /pull request #4 has a malformed metadata field/,
+  );
+  // A number that is not a number, a metadata field of the wrong type, an
+  // absent key, and a merge commit that is neither null nor an object all
+  // throw, merged or not.
+  const reject = (pr4: unknown, message: RegExp) =>
+    assert.throws(
+      () =>
+        withResponse({
+          data: { repository: { pr3: mergedAnswer(3), pr4 } },
+        }).getMergedChangeRequestMetaBatch([3, 4]),
+      message,
+    );
+  reject(
+    { ...mergedAnswer(4), number: '4' },
+    /pull request #4 has no numeric number field/,
+  );
+  reject(
+    { ...mergedAnswer(4), headRefOid: 7 },
+    /pull request #4 has a malformed metadata field/,
+  );
+  reject(
+    { ...mergedAnswer(4), mergeCommit: { oid: 7 } },
+    /pull request #4 has a malformed metadata field/,
+  );
+  reject(
+    { ...mergedAnswer(4), mergeCommit: 'abc' },
+    /pull request #4 has a malformed metadata field/,
+  );
+  reject(
+    { ...mergedAnswer(4), mergeCommit: [] },
+    /pull request #4 has a malformed metadata field/,
+  );
+  reject(
+    { ...mergedAnswer(4), mergeCommit: {} },
+    /pull request #4 has a malformed metadata field/,
+  );
+  reject(
+    { number: 4, merged: true },
+    /pull request #4 has a malformed metadata field/,
+  );
+  // Each metadata key absent on its own is malformed too.
+  reject(
+    { ...mergedAnswer(4), mergedAt: undefined },
+    /pull request #4 has a malformed metadata field/,
+  );
+  reject(
+    { ...mergedAnswer(4), headRefOid: undefined },
+    /pull request #4 has a malformed metadata field/,
+  );
+  reject(
+    { ...mergedAnswer(4), mergeCommit: undefined },
+    /pull request #4 has a malformed metadata field/,
+  );
+  reject(
+    {
+      number: 4,
+      merged: false,
+      mergedAt: 1_700_000_000,
+      headRefOid: 'head-4',
+      mergeCommit: null,
+    },
+    /pull request #4 has a malformed metadata field/,
+  );
+  // Well-formed answers still map: an unmerged answer to null, and a merged
+  // answer with no merge commit to a null merge commit oid.
+  const unmerged = withResponse({
+    data: { repository: { pr3: mergedAnswer(3), pr4: mergedAnswer(4, false) } },
+  }).getMergedChangeRequestMetaBatch([3, 4]);
+  assert.equal(unmerged.get(4), null);
+  const merged = withResponse({
+    data: {
+      repository: {
+        pr3: mergedAnswer(3),
+        pr4: { ...mergedAnswer(4), mergeCommit: null },
+      },
+    },
+  }).getMergedChangeRequestMetaBatch([3, 4]);
+  assert.deepEqual(merged.get(4), {
+    number: 4,
+    merged: true,
+    mergedAt: '2026-01-01T00:00:00Z',
+    headRefOid: 'head-4',
+    mergeCommitOid: null,
+  });
+  // A merge commit whose oid is null maps to a null merge commit oid.
+  const nullOid = withResponse({
+    data: {
+      repository: {
+        pr3: mergedAnswer(3),
+        pr4: { ...mergedAnswer(4), mergeCommit: { oid: null } },
+      },
+    },
+  }).getMergedChangeRequestMetaBatch([3, 4]);
+  assert.equal(nullOid.get(4)?.mergeCommitOid, null);
+});
+
 test('getMergedChangeRequestMetaBatch lets a failed call and a load-control refusal propagate unchanged (#5122)', () => {
   const failure = new Error('gh failed');
   const refusal = createLoadControlRefusal({
