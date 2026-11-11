@@ -1106,7 +1106,13 @@ above `maxPendingConfirmations` or `maxDecisionsPerClaim`.
     it does neither: the decision is not recorded, the stop stays as it is
     today, and the session reports it.
 - **New issue.** The session publishes with
-  `publish-authoring-hold --shape confirmation`.
+  `publish-authoring-hold --shape confirmation`, passing `--owner` and
+  `--repo` for the base repository that the trusted verdict names. Without
+  them the helper uses the checkout, which in a fork is the fork. It also
+  passes `--policy` with the policy file read at the trusted base ref, and
+  `--marker-prefix` when the target repository is not this checkout, so that
+  no value comes from fork-controlled files. Before it records anything, the
+  session checks that the issue it created is in the base repository.
   - `outcome: "published"` with `release.state` `released` counts as
     recorded.
   - `release.state` `held` counts as recorded for `runtimeQuestion` and

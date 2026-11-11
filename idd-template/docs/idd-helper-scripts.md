@@ -3824,14 +3824,16 @@ label names and the trust rule come from the trusted repository policy at that
 ref, never from the local checkout, so a worktree whose configuration names
 another label cannot change the result.
 
-Output is one JSON object with `status` (`readable` or `unreadable`), `mode`,
-`repository`, and the mode's own fields. Exit codes:
+Output is one JSON object with `status` (`readable`, `unreadable`, or
+`usage-error`), `mode`, `repository`, and the mode's own fields. A usage error
+has `status: "usage-error"` and an `error` message instead. Exit codes:
 
 - `0`: the result was read. The output may still be an empty list.
 - `1`: the result is `unreadable`. A failed or malformed GitHub read, a missing
   page, or a policy file that is present but unreadable all give this result,
   never an empty list. A caller treats it as a count that cannot be read.
-- `2`: a usage error. The arguments were not valid.
+- `2`: a usage error, with `status: "usage-error"`. The arguments were not
+  valid.
 
 Network reads: GitHub GraphQL and REST reads of issues and their comments in
 the named repository, and one read of the repository policy at the trusted

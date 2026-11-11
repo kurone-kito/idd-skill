@@ -1807,9 +1807,13 @@ every class off, set `dangerouslyAutoDecide` to `false`.
 To rename the confirmation label, a person first turns the classes off with
 `dangerouslyAutoDecide` set to `false`, so that no session publishes a new
 confirmation issue during the migration. The person then adds the new label
-next to the old one on every open confirmation issue, merges the name change,
-and only then removes the old label. Discover then never sees a confirmation
-issue without the name it filters. The person turns the classes back on after
+next to the old one on every confirmation issue, open or closed, because
+`--records --state all` finds a closed issue only under the label that the
+trusted policy names. The person merges the name change into every base branch
+that a pull request targets, and removes the old label last. A base whose
+policy still names the old label would otherwise miss its existing
+confirmations. Discover then never sees a confirmation issue without the name
+it filters. The person turns the classes back on after
 the old label is gone.
 
 ## Issue Scope
