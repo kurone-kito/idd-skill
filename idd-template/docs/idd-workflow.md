@@ -994,10 +994,12 @@ the stop as it is today. The per-class switches and caps are listed in
   base branch name only, never a head or feature ref; without a pull request,
   omit it. Any other result, a non-zero exit included, leaves the stop as it
   is today.
-- `worktreeRemnant` and `b1Leftover` are not wired to this procedure yet.
-  Until their consumer children land, a session keeps today's route for
-  their stops: §LWR's operator attestation and B1's manual leftover cleanup
-  still apply, and this section does not act on them.
+- `worktreeRemnant` is not wired to this procedure yet. Until its consumer
+  child lands, a session keeps today's route for its stops: §LWR's operator
+  attestation still applies, and this section does not act on them.
+  `b1Leftover` is wired through `claim-issue --preserve-b1-leftovers`, which
+  points at this procedure, so it follows the procedure with that helper's
+  preconditions.
 - The classes that file confirmation issues (all but `decisionIssue`) also
   need the issue-authoring companion and `issueAuthoring.journalIssue`.
 - `decisionIssue` uses only the trusted read and the pending cap. Its
@@ -1067,10 +1069,12 @@ above `maxPendingConfirmations` or `maxDecisionsPerClaim`.
 
 - **Which record.** `--records --class <class> --source <source> --state
   open` lists the counting records with their confirmation issue numbers.
-  For each distinct issue, `--confirmation <number>` shows whether it still
-  carries the authoring label.
-  - With no open issue for the same class and source, the session publishes
-    a new one.
+  For `authoringChoice`, pass `--set <set ID>` in place of `--source`: its
+  confirmation identity is the authoring set, so a source-only lookup can
+  find another set's issue. For each distinct issue, `--confirmation
+  <number>` shows whether it still carries the authoring label.
+  - With no open issue for the same class and key (the source, or the set
+    for `authoringChoice`), the session publishes a new one.
   - With exactly one, and it is released, the session appends to it.
   - With one that still carries the authoring label, or with two or more,
     it does neither: the decision is not recorded, the stop stays as it is
