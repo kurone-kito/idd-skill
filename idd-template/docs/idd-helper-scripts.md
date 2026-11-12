@@ -7529,23 +7529,27 @@ that runs it is
   `<state>/idd-skill/lwr-preserved/<issue>-<UTC timestamp>/` under the shared
   preserve-destination guards (`--preserve-dir` is refused); the primary path
   and every worktree record, the target included, go to that inspection, which
-  also runs before the lock, so an unsafe state root refuses in a dry run. The
-  directory is created only after the recheck passes, and its identity is
-  rechecked before step 3 writes into it. A directory that fails the privacy
-  or identity check stops the run before step 3 and the report names its path;
-  the caller posts a `failure` note. The report (`evidence` in the JSON) lists
-  every condition with its result, the processes that were not inspected, the
-  stash tag, the backup refs, and the preserve directory, and says that the
-  basis was evidence, not an attestation, and that the evidence does not prove
-  the other session is gone. The caller comments the locations on the
-  confirmation issue. After a partial apply (preservation done, removal
-  failed) a retry refuses while any walked entry changed within the quiet
-  window, whatever the cause, and names it; the caller comments the failure,
-  then retries after the window or uses the attestation. Open risks that the
-  report names: the window between the recheck and step 3, the PR `#3550` race
-  in which a same-claim session re-acquires its lock just before recovery takes
-  the clone lock, and the resolution of a state root that is a link
-  (preventive; no observed incident yet).
+  also runs before the lock, so an unsafe state root refuses in a dry run; the
+  records are read again under the lock, and no registered worktree path, an
+  absent one included, may contain the destination. The directory is created
+  only after the recheck passes, and its identity is rechecked before step 3
+  writes into it. A directory that fails the privacy or identity check stops
+  the run before step 3 and the report names its path; the caller posts a
+  `failure` note. A creation step that fails after it made or restricted a
+  parent still marks the run as mutated and names what it changed. The report
+  (`evidence` in the JSON) lists every condition with its result, the
+  processes that were not inspected, the stash tag, the backup refs, and the
+  preserve directory, and says that the basis was evidence, not an
+  attestation, and that the evidence does not prove the other session is gone.
+  The caller comments the locations on the confirmation issue. After a partial
+  apply (preservation done, removal failed) a retry refuses while any walked
+  entry changed within the quiet window, whatever the cause, and names it; the
+  caller comments the failure, then retries after the window or uses the
+  attestation. Open risks that the report names: the window between the
+  recheck and step 3, the PR `#3550` race in which a same-claim session
+  re-acquires its lock just before recovery takes the clone lock, and the
+  resolution of a state root that is a link (preventive; no observed incident
+  yet).
 - Default mode is dry-run (no mutation): prints exactly what step 1 found
   and what step 3/4 would do (the full stash/backup-ref/removal plan),
   without mutating anything. `--apply` performs the mutation, still gated
