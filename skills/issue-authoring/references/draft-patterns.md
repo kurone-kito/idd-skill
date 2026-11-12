@@ -42,20 +42,25 @@ Draft a roadmap plus sub-issues when the request needs visible
 sequencing, parallel tracks, or multi-session handoff.
 
 Draft only stable non-ready buckets when the work still depends on a
-human decision, missing asset, or unclear verification. In an interactive
-session, ask first for an operator-answerable product, policy, or design
-choice, or for a missing concrete surface or objective verification, under the
-interactive rule in [Human-dependency isolation](contract.md#human-dependency-isolation),
-unless an unchanged route applies. A missing asset stays `blocked-by-human`.
+human decision, missing asset, or unclear verification. For an
+operator-answerable product, policy, or design choice, or for a missing
+concrete surface or objective verification, the auto-decide branch in
+[Human-dependency isolation](contract.md#human-dependency-isolation) takes a
+recommended option that cites repository evidence when it applies. When the
+branch does not apply, in an interactive session, ask first under the
+interactive rule there, unless an unchanged route applies. A missing asset
+stays `blocked-by-human`.
 
 ## Under-clarification stop rule
 
 Before drafting a `ready` issue, confirm you can name a concrete surface
 to edit and an objective verification for it. If, after bounded
-clarification, you still cannot, route the candidate to `needs-decision`,
-or for an interactive choice ask first under the interactive rule in
-[Human-dependency isolation](contract.md#human-dependency-isolation) — do not
-publish a confidently-vague `ready` issue. Reliability over speed.
+clarification, you still cannot, apply the auto-decide branch in
+[Human-dependency isolation](contract.md#human-dependency-isolation) when it
+applies. When the branch does not apply, route the candidate to
+`needs-decision`, or for an interactive choice ask first under the interactive
+rule there — do not publish a confidently-vague `ready` issue. Reliability
+over speed.
 
 This is an Intake-phase gate on your own confidence, not a wording
 judgment on an already-written draft — it is distinct from the
@@ -67,7 +72,9 @@ check — no concrete surface, no objective verification — even before
 you consider how detailed to write the body. Ask which endpoint or
 module, and what the observable failure mode is, under the interactive rule
 (or route the request to `needs-decision` in a session that is not
-interactive) instead of guessing at a plausible-sounding scope.
+interactive) unless the auto-decide branch applies and an option cites
+repository evidence for both its surface and its verification, instead of
+guessing at a plausible-sounding scope.
 
 ## Specificity target
 
@@ -213,9 +220,11 @@ Before you publish a `ready` issue, confirm:
 - the implementation does not still depend on unresolved credentials,
   access, or unavailable infrastructure
 - unresolved product, policy, or design choices have been routed to
-  `needs-decision` instead of being buried in implementation steps, and an
-  interactive session has asked the operator first under the interactive rule
-  in [Human-dependency isolation](contract.md#human-dependency-isolation)
+  `needs-decision` instead of being buried in implementation steps, unless
+  the auto-decide branch in
+  [Human-dependency isolation](contract.md#human-dependency-isolation) took
+  them or an interactive session asked the operator first under the interactive
+  rule there
 - acceptance criteria use objective verification, while optional
   post-implementation review stays optional
 - roadmap narrative does not hide human-dependent work that belongs in a
@@ -388,6 +397,32 @@ observed incident yet. The mechanical gate requires the marker, matching
 both configured labels; the completed-draft review checks these five
 headings because `--expect-bucket` does not lint headings for a non-ready
 body.
+
+## Auto-decided choice example
+
+When the `authoringChoice` class is `enabled` and the operator has not asked
+for a hearing, the auto-decide branch in
+[Human-dependency isolation](contract.md#human-dependency-isolation) drafts
+the recommended option into the ready body. The body carries one entry per
+auto-decided choice, which names the option, the alternatives, and the
+choice's `decision` ID, and states that no hearing was asked for. Replace the
+example path, setting, and ID with the real ones. When a confirmation is not
+recorded, rewrite or remove only that choice's entry, as the branch says.
+
+```markdown
+## Auto-decided choice
+
+No hearing was asked for, so the authoring session took the recommended
+option for each open choice below. It is an agent choice, not an operator
+decision: a confirmation issue records it, and closing that issue confirms it.
+
+### Retry cap source
+
+- Chosen option: read the cap from `sync.maxRetries` in `src/sync.mts`.
+- Alternatives: add a new `--max-retries` flag; `Keep today's behavior`
+  (no cap).
+- Decision ID: `decision-3f9a2c1e`
+```
 
 ## Example roadmap package
 
@@ -804,9 +839,11 @@ Before publishing an issue, apply a reuse-first decision tree:
 4. Does the issue have any of these properties? If yes, escalate to
    `needs-decision` or `blocked-by-human` during drafting:
    - Unclear intent or malformed body (→ fix during drafting or mark needs-decision)
-   - Requires maintainer or product decision (→ in an interactive session,
-     ask first when the operator can answer it, under the interactive rule
-     and unless an unchanged route applies; otherwise mark needs-decision)
+   - Requires maintainer or product decision (→ take the recommended option
+     under the auto-decide branch when it applies; otherwise, in an
+     interactive session, ask first when the operator can answer it, under
+     the interactive rule and unless an unchanged route applies; otherwise
+     mark needs-decision)
    - Blocked by external work or human coordination (→ mark
      blocked-by-human)
    - Depends on unavailable resources or credentials (→ mark blocked-by-human)

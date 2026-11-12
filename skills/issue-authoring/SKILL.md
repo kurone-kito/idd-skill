@@ -28,15 +28,18 @@ Use two stable phases:
 1. **Intake and Clarification** — inspect relevant context, identify
    ambiguity, run a secondary critique or explicit self-critique, and
    ask only the questions that block safe issue drafting; for an
-   interactive choice, the question blocks publishing, so it is asked (see
+   interactive choice, the question blocks publishing, so it is asked unless
+   the auto-decide branch applies and takes the recommended option (see
    [Human-dependency isolation](references/contract.md#human-dependency-isolation)).
    Keep clarification bounded; use the repository-local
    `issueAuthoring.maxClarificationRounds` value when available,
    otherwise default to 3 rounds. **Under-clarification stop rule**: if,
    after bounded clarification, you still cannot name the concrete
    surface to edit or an objective verification for a candidate task,
-   route it to `needs-decision`, or for an interactive choice ask first under
+   apply the auto-decide branch in
    [Human-dependency isolation](references/contract.md#human-dependency-isolation)
+   when it applies. When the branch does not apply, route it to
+   `needs-decision`, or for an interactive choice ask first under that section
    — do not publish a confidently-vague `ready` issue. Reliability over speed.
 2. **Decompose and Draft** — restate the request in implementation
    terms, split it into atomic tasks, classify readiness, reuse existing
@@ -197,7 +200,8 @@ needs-decision, blocked-by-human, and out-of-scope.
    before the create; the final message says the same and asks the user
    where to keep the drafts). A choice that the interactive rule in
    [Human-dependency isolation](references/contract.md#human-dependency-isolation)
-   holds unpublished is a pending question, not a reviewed draft. Manage
+   holds unpublished, where the auto-decide branch there does not take it, is
+   a pending question, not a reviewed draft. Manage
    the authoring label for each created or updated issue:
    - resolve `issueAuthoring.authoringLabelName`, defaulting to
      `status:authoring`
@@ -537,9 +541,11 @@ When storage stops the review, send the drafts to a carrier marked
   step 8.
 - Name a concrete surface to edit and an objective verification for
   every `ready` candidate; route anything else to `needs-decision` instead
-  of guessing, and ask first for an interactive choice under
+  of guessing. The auto-decide branch in
   [Human-dependency isolation](references/contract.md#human-dependency-isolation)
-  (the under-clarification stop rule).
+  takes a recommended option that cites repository evidence when it applies,
+  and otherwise an interactive choice is asked first (the under-clarification
+  stop rule).
 - Split an effort `L` task into `S` or `M` issues (or a roadmap whose
   children are each `S` or `M`), or publish it as `needs-decision` (an open
   design decision) or `blocked-by-human` (waiting on a person, credential,
