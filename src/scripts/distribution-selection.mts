@@ -752,7 +752,7 @@ function losslessUtf8(bytes: Buffer): string | null {
 }
 
 /** Render the stable dispatcher written from one prepared skill bundle. */
-function renderSkillDispatcher(
+export function renderSkillDispatcher(
   sourceBytes: Buffer,
   templateBytes: Buffer,
   skillName: string,
