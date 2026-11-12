@@ -96,6 +96,12 @@ that the guide references.
 Then create the worktree below; for a takeover, reuse the exact branch
 name from the claim comment.
 
+When the stop in pre-creation step 3 or in Worktree creation Step 1 falls
+under the `b1Leftover` auto-decide class, follow the
+[B1 leftovers](../../docs/idd-workflow.md#b1-leftovers) entry of the
+auto-decide section instead of stopping; if its checks keep the stop,
+stop as before.
+
 ### Anti-patterns
 
 Never create the implementation branch in the primary worktree with:
