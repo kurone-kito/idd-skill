@@ -33,6 +33,7 @@ import {
   readdirSync,
   readlinkSync,
   realpathSync,
+  statSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -68,7 +69,7 @@ export const EVIDENCE_STATEMENT =
   "The step 2 basis is mechanical evidence, not an attestation. No condition proves that the other session is gone: a harness can keep no working directory between commands, a session can be paused past the stale age or can only poll GitHub, and a same-user process can deny reads of its /proc entry. If the evidence is wrong, a live session's worktree is removed after its changes are preserved.";
 /** The risks the run cannot close; the report names them. */
 export const OPEN_RISKS = [
-  'The window between the post-lock recheck of conditions 4 and 5 and step 3 cannot be closed by this helper; only a writer outside IDD can use it, because IDD sessions take the clone lock.',
+  'The window between the post-lock recheck of conditions 1, 4, 5, and 6 and step 3 cannot be closed by this helper; only a writer outside IDD can use it, because IDD sessions take the clone lock.',
   'The PR #3550 race stays open: a same-claim session that re-acquires its worktree lock just before this run takes the clone lock is not detected.',
   'A state root that is a link is resolved once (kurone-kito/idd-skill#4957); a link retargeted afterwards is not detected.',
 ];
@@ -297,13 +298,15 @@ function errorCode(error) {
       : String(error);
 }
 /**
- * Condition 5: no process has its working directory inside a root. Both the
- * lexical path and its resolved path are compared. On Linux it reads
- * `/proc/<pid>/cwd`: an exited process (`ENOENT`, `ESRCH`) is skipped, a
- * process that denies the read (`EACCES`) is listed as not inspected without
- * refusing, and any other read error fails the condition. A platform without
- * `/proc` fails it too. Finding no process proves only the absence of a known
- * use.
+ * Condition 5: no process of the current user has its working directory
+ * inside a root. Both the lexical path and its resolved path are compared. On
+ * Linux it reads `/proc/<pid>/cwd`: an exited process (`ENOENT`, `ESRCH`) is
+ * skipped; a process of another user is outside the condition and only
+ * counted; a process that denies the read (`EACCES`), whose owner is this user
+ * or root (a process that forbids inspection shows as root-owned), is listed
+ * as not inspected without refusing; and any other read error fails the
+ * condition. A platform without `/proc`, or with no current user, fails it
+ * too. Finding no process proves only the absence of a known use.
  */
 export function inspectProcessDirectories(ports, roots) {
   const result = {
@@ -311,12 +314,21 @@ export function inspectProcessDirectories(ports, roots) {
     detail: '',
     matches: [],
     notInspected: { count: 0, sample: [] },
+    otherUsers: 0,
   };
   if (ports.platform !== 'linux') {
     return {
       ...result,
       status: 'unsupported',
       detail: `the process check reads /proc and cannot run on ${ports.platform}`,
+    };
+  }
+  const currentUid = ports.currentUid;
+  if (currentUid === null) {
+    return {
+      ...result,
+      status: 'error',
+      detail: 'the current user could not be determined',
     };
   }
   const targets = new Set();
@@ -343,6 +355,18 @@ export function inspectProcessDirectories(ports, roots) {
       detail: `/proc could not be listed: ${errorCode(error)}`,
     };
   }
+  // The owner of one process, or `null` when it exited since the listing.
+  const ownerOf = (pid) => {
+    try {
+      return ports.ownerUid(pid);
+    } catch (error) {
+      const code = errorCode(error);
+      if (code === 'ENOENT' || code === 'ESRCH') return null;
+      result.status = 'error';
+      result.detail = `the owner of process ${pid} could not be read: ${code}`;
+      return 'error';
+    }
+  };
   for (const pid of pids) {
     let cwd;
     try {
@@ -351,6 +375,11 @@ export function inspectProcessDirectories(ports, roots) {
       const code = errorCode(error);
       if (code === 'ENOENT' || code === 'ESRCH') continue;
       if (code === 'EACCES') {
+        const owner = ownerOf(pid);
+        if (owner === 'error') return result;
+        // Another user's process is outside the condition. A process that
+        // forbids inspection shows as root-owned, so root's stay listed.
+        if (owner === null || (owner !== currentUid && owner !== 0)) continue;
         result.notInspected.count += 1;
         if (result.notInspected.sample.length < NOT_INSPECTED_SAMPLE) {
           result.notInspected.sample.push({ pid: Number(pid), reason: code });
@@ -379,7 +408,15 @@ export function inspectProcessDirectories(ports, roots) {
         isWithinRoot(target, cwd) ||
         (real !== null && isWithinRoot(target, real)),
     );
-    if (inside) result.matches.push({ pid: Number(pid), cwd });
+    if (!inside) continue;
+    const owner = ownerOf(pid);
+    if (owner === 'error') return result;
+    if (owner === null) continue;
+    if (owner === currentUid) {
+      result.matches.push({ pid: Number(pid), cwd });
+    } else {
+      result.otherUsers += 1;
+    }
   }
   if (result.matches.length > 0) {
     const first = result.matches[0];
@@ -395,13 +432,20 @@ export function inspectProcessDirectories(ports, roots) {
   }
   return {
     ...result,
-    detail: `no process working directory is inside the worktree; ${result.notInspected.count} process(es) denied the read and were not inspected`,
+    detail: `no process of the current user has its working directory inside the worktree; ${result.notInspected.count} process(es) denied the read and were not inspected${
+      result.otherUsers > 0
+        ? `; ${result.otherUsers} process(es) of other users are there and are not counted`
+        : ''
+    }`,
   };
 }
 /**
- * Conditions 4 and 5 together, on the roots that need checking: the worktree
- * and its private git-admin directory, or only the admin directory for the
- * prunable shortcut. It runs twice: before the clone lock, and again right
+ * Conditions 4 and 5 together. The quiet-window walk covers `roots`: the
+ * worktree and its private git-admin directory, or only the admin directory for
+ * the prunable shortcut. The process check covers `processRoots`: the worktree
+ * alone, because the condition is about a working directory inside the
+ * worktree (and, for the prunable shortcut, inside the admin directory that is
+ * all that is left). It runs twice: before the clone lock, and again right
  * before step 3. `quietWindowMs` is `null` when condition 1 could not read it,
  * which leaves condition 4 unevaluated.
  */
@@ -409,6 +453,7 @@ export function evaluateQuietWindowAndProcesses(
   ports,
   report,
   roots,
+  processRoots,
   quietWindowMs,
 ) {
   if (quietWindowMs === null) {
@@ -433,7 +478,7 @@ export function evaluateQuietWindowAndProcesses(
       walk.detail,
     );
   }
-  const processes = inspectProcessDirectories(ports.proc, roots);
+  const processes = inspectProcessDirectories(ports.proc, processRoots);
   report.processesNotInspected = processes.notInspected;
   setCondition(
     report,
@@ -633,6 +678,8 @@ export function createDefaultEvidencePorts(options) {
       listPids: () =>
         readdirSync('/proc').filter((name) => /^[1-9][0-9]*$/.test(name)),
       readCwd: (pid) => readlinkSync(`/proc/${pid}/cwd`),
+      ownerUid: (pid) => statSync(`/proc/${pid}`).uid,
+      currentUid: process.getuid?.() ?? null,
       realpath: realpathOrNull,
     },
     nowMs: () => Date.now(),

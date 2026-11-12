@@ -7501,12 +7501,16 @@ that runs it is
      shortcut, only the admin directory that `findWorktreeAdminDir` reports is
      walked, if any.
   5. No process of the current user has its working directory inside the
-     worktree, compared by both the lexical and the resolved path. On Linux it
-     reads `/proc/<pid>/cwd`: an exited process (`ENOENT`) is skipped, a
-     process whose entry denies the read (`EACCES`) is listed in the report as
-     not inspected and does not refuse, and any other read error fails the
-     condition. On a platform where the check cannot run, the condition fails.
-     Finding no process is only the absence of a known use.
+     worktree (its git-admin directory is not part of this check, except for
+     the prunable shortcut, where it is all that is left), compared by both the
+     lexical and the resolved path. On Linux it reads `/proc/<pid>/cwd`: an
+     exited process (`ENOENT`) is skipped, a process of another user is not
+     counted, a process whose entry denies the read (`EACCES`) and whose owner
+     is the current user or root is listed in the report as not inspected and
+     does not refuse, and any other read error fails the condition. On a
+     platform where the check cannot run, or where the current user is
+     unknown, the condition fails. Finding no process is only the absence of a
+     known use.
   6. The confirmation issue and decision match a trusted record read through
      `idd-auto-decision-records`' reader: open, carrying the configured
      confirmation label, no longer carrying the authoring label, with
@@ -7517,10 +7521,10 @@ that runs it is
      `failure` note. A dry run reports this condition as unmet without
      refusing.
 
-  After the clone lock is held and the existing recheck passes, conditions 4
-  and 5 are evaluated again, right before step 3; every later routing read
-  must still meet the `stale-claim-`/`released-claim-` basis, the claim ID,
-  and the age floor. The preserve directory is always
+  After the clone lock is held and the existing recheck passes, conditions 1,
+  6, 4, and 5 are evaluated again in that order, right before step 3; every
+  later routing read must still meet the `stale-claim-`/`released-claim-`
+  basis, the claim ID, and the age floor. The preserve directory is always
   `<state>/idd-skill/lwr-preserved/<issue>-<UTC timestamp>/` under the shared
   preserve-destination guards (`--preserve-dir` is refused); the primary path
   and every worktree record, the target included, go to that inspection, which

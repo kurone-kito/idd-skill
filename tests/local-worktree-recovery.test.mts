@@ -9759,6 +9759,8 @@ function procPortsOf(
       }
       return value;
     },
+    ownerUid: () => 1000,
+    currentUid: 1000,
     realpath: (path) => path,
   };
 }
@@ -10839,6 +10841,8 @@ test('evidence: a process that appears under the clone lock refuses before step 
           return ['7'];
         },
         readCwd: () => (reads >= 2 ? '/repo/linked/src' : '/elsewhere'),
+        ownerUid: () => 1000,
+        currentUid: 1000,
         realpath: (path) => path,
       },
     },
@@ -11841,4 +11845,134 @@ test('sandbox evidence: the CLI refuses --mechanical-evidence while GH_REPO is s
   } finally {
     sandbox.cleanup();
   }
+});
+
+test('evidence: a process inside the private git-admin directory is outside condition 5', () => {
+  const fixture = evidenceFixture({
+    procs: { '7': '/repo/primary/.git/worktrees/linked/sub' },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    evidenceArgs({ apply: true }),
+    fixture.deps,
+  );
+  assert.equal(verdict.plan.removal?.ran, true, verdict.result);
+  assert.equal(condition(verdict, 5).status, 'met');
+});
+
+test('evidence: for the prunable shortcut the process check covers the admin directory', () => {
+  const fixture = evidenceFixture({
+    routing: {
+      state: 'local_worktree_occupied',
+      reason: 'stale-claim-local-worktree-unreadable',
+      stale_age_ms: EVIDENCE_STALE_AGE_MS,
+      active_claim: { claim_id: 'claim-x', branch: 'issue/1-task' },
+      evidence: {
+        local_worktree: {
+          status: 'unreadable',
+          paths: ['/repo/linked'],
+          reason: 'prunable',
+        },
+      },
+    },
+    procs: { '7': '/repo/primary/.git/worktrees/linked/sub' },
+    deps: {
+      listWorktreeRecords: () => [
+        {
+          path: '/repo/primary',
+          branchRef: 'refs/heads/main',
+          detached: false,
+          bare: false,
+          locked: false,
+          prunable: false,
+        },
+        {
+          path: '/repo/linked',
+          branchRef: 'refs/heads/issue/1-task',
+          detached: false,
+          bare: false,
+          locked: false,
+          prunable: true,
+        },
+      ],
+      pathExists: (path) => path !== '/repo/linked',
+      findWorktreeAdminDir: () => ({
+        path: '/repo/primary/.git/worktrees/linked',
+        error: null,
+      }),
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    evidenceArgs({ apply: true }),
+    fixture.deps,
+  );
+  assertRefusedBeforeMutation(fixture, verdict, /condition 5.*process 7/);
+});
+
+test('evidence: a process of another user inside the worktree does not refuse', () => {
+  const fixture = evidenceFixture({
+    ports: {
+      proc: {
+        ...procPortsOf({ '7': '/repo/linked/src' }),
+        ownerUid: () => 2000,
+      },
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    evidenceArgs({ apply: true }),
+    fixture.deps,
+  );
+  assert.equal(verdict.plan.removal?.ran, true, verdict.result);
+});
+
+test('evidence: a class switched off while the clone lock is awaited refuses before anything is created', () => {
+  let reads = 0;
+  const fixture = evidenceFixture({
+    ports: {
+      readTrusted: () => {
+        reads += 1;
+        return evidenceSnapshot(reads === 1 ? 'enabled' : 'class-off');
+      },
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    evidenceArgs({ apply: true }),
+    fixture.deps,
+  );
+  assert.equal(reads, 2, 'the trusted read runs again under the lock');
+  assert.equal(verdict.ready, false);
+  assert.equal(verdict.mutated, false);
+  assert.deepEqual(fixture.mutations, []);
+  assert.match(
+    verdict.result,
+    /no longer holds under the clone lock, so no destination was created.*condition 1.*class-off/,
+  );
+  assert.deepEqual(fixture.events, ['acquire', 'release']);
+  assert.equal(fixture.state.made.length, 0);
+  assert.equal(verdict.preserveDir, null);
+});
+
+test('evidence: a decision voided while the clone lock is awaited refuses before anything is created', () => {
+  let reads = 0;
+  const fixture = evidenceFixture({
+    ports: {
+      readConfirmation: () => {
+        reads += 1;
+        return reads === 1
+          ? evidenceRead()
+          : evidenceRead({ records: [], voidedDecisions: ['dec-1'] });
+      },
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    evidenceArgs({ apply: true }),
+    fixture.deps,
+  );
+  assert.equal(reads, 2, 'the record is read again under the lock');
+  assert.equal(verdict.mutated, false);
+  assert.deepEqual(fixture.mutations, []);
+  assert.match(
+    verdict.result,
+    /no longer holds under the clone lock.*condition 6.*it is voided/,
+  );
+  assert.equal(fixture.state.made.length, 0);
 });

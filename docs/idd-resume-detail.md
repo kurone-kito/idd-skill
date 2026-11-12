@@ -1120,7 +1120,8 @@ against an unrelated branch, and none has an observed incident of its own
    without refusing; the record on a confirmation issue; then `--apply` with
    `--confirmation <owner>/<repo>#<number>` and `--decision <id>`. An apply
    refuses before any mutation unless all of these hold, and the helper
-   repeats conditions 4 and 5 right before step 3, under the clone lock:
+   reads conditions 1, 4, 5, and 6 again right before step 3, under the clone
+   lock:
 
    1. The trusted read reports `worktreeRemnant` as `enabled`, and a
       `stale-claim-` reason has a stale age of at least `PT24H`. A repository
@@ -1140,8 +1141,10 @@ against an unrelated branch, and none has an observed incident of its own
       followed. Any tool that runs a plain `git status` in the worktree
       rewrites its index and restarts the window (replayed on git 2.53.0).
    5. No process of the current user has its working directory inside the
-      worktree (Linux `/proc` only; another platform fails). A process that
-      denies the read is listed as not inspected and does not refuse.
+      worktree, not counting its git-admin directory (Linux `/proc` only;
+      another platform fails). A process of another user is not counted. A
+      process that denies the read is listed as not inspected and does not
+      refuse.
    6. The confirmation issue and decision match a trusted record: open, with
       the confirmation label and without the authoring label, for
       `class=worktreeRemnant`, this issue as `source`, the recovered claim,

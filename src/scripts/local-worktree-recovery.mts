@@ -36,11 +36,13 @@
 //   (`worktree-remnant-evidence.mts`): the trusted class read and a 24-hour
 //   stale floor, a linked worktree, a stale or released claim with a claim
 //   ID, a quiet window over the worktree and its git-admin directory, no
-//   process working directory inside it, and a trusted confirmation record.
-//   The evidence does not prove that the other session is gone; the report
-//   says so. Steps 3 and 4 then run with a durable preserve directory under
-//   the state root, through the #4957 guards. Giving both bases is a usage
-//   error, and every check fails closed.
+//   working directory of a process of the current user inside the worktree,
+//   and a trusted confirmation record. The class, the walk, the process
+//   check, and the record are read again under the clone lock, before step
+//   3. The evidence does not prove that the other session is gone; the
+//   report says so. Steps 3 and 4 then run with a durable preserve directory
+//   under the state root, through the #4957 guards. Giving both bases is a
+//   usage error, and every check fails closed.
 //
 // Default mode is dry-run (no mutation); `--apply` performs steps 3 and 4.
 
@@ -4799,22 +4801,33 @@ function runRecoveryCore(
   // The roots conditions 4 and 5 check: the worktree and its private
   // git-admin directory, or, for the prunable shortcut, only the admin
   // directory that `findWorktreeAdminDir` reports, if any.
-  const evidenceRoots = (): { roots: string[]; error: string | null } => {
+  // The walk covers both. The process check covers the checkout alone, since
+  // the condition is about a working directory inside the worktree; for the
+  // shortcut the admin directory is all that is left to check.
+  const evidenceRoots = (): {
+    roots: string[];
+    processRoots: string[];
+    error: string | null;
+  } => {
     if (shortcut.eligible) {
       const lookup = deps.findWorktreeAdminDir
         ? deps.findWorktreeAdminDir(verdict.primaryWorktree ?? cwd, targetPath)
         : { path: null, error: null };
-      if (lookup.error) return { roots: [], error: lookup.error };
-      return { roots: lookup.path === null ? [] : [lookup.path], error: null };
+      if (lookup.error) {
+        return { roots: [], processRoots: [], error: lookup.error };
+      }
+      const found = lookup.path === null ? [] : [lookup.path];
+      return { roots: found, processRoots: found, error: null };
     }
     return {
       roots: targetGitDir === null ? [targetPath] : [targetPath, targetGitDir],
+      processRoots: [targetPath],
       error: null,
     };
   };
   const checkEvidenceWindowAndProcesses = (): void => {
     if (evidenceRun === null || evidencePorts === undefined) return;
-    const { roots, error } = evidenceRoots();
+    const { roots, processRoots, error } = evidenceRoots();
     if (error !== null) {
       const detail = `the private admin directory could not be located: ${error}`;
       setCondition(evidenceRun.report, 4, 'unmet', detail);
@@ -4825,8 +4838,51 @@ function runRecoveryCore(
       evidencePorts,
       evidenceRun.report,
       roots,
+      processRoots,
       evidenceRun.quietWindowMs,
     );
+  };
+  // Conditions 1 and 6: the trusted class read and the confirmation record,
+  // both read from GitHub. They run before the lock and again under it, so a
+  // class switched off, or a decision voided or replaced, while the clone lock
+  // was awaited stops the run before it creates anything.
+  const checkEvidenceClassAndRecord = (
+    routingNow: ConfirmBlockRouting,
+  ): void => {
+    if (evidenceRun === null || evidencePorts === undefined) return;
+    const report = evidenceRun.report;
+    const facts = evidenceRoutingFacts(routingNow);
+    const gate = evaluateClassGate(
+      evidencePorts.readTrusted,
+      evidencePorts.repository,
+      facts,
+    );
+    setCondition(report, 1, gate.ok ? 'met' : 'unmet', gate.detail);
+    report.quietWindow = gate.quietWindow;
+    evidenceRun.quietWindowMs = gate.quietWindowMs;
+    evidenceRun.snapshot = gate.snapshot;
+    if (recoveredClaimId === null) {
+      setCondition(
+        report,
+        6,
+        'unmet',
+        'the recovered claim has no claim ID, so no record can name it',
+      );
+      return;
+    }
+    const record = evaluateConfirmationRecord(
+      evidencePorts.readConfirmation,
+      gate.snapshot,
+      {
+        repository: evidencePorts.repository,
+        issue: args.issue as number,
+        confirmation: args.confirmation ?? null,
+        decision: args.decision ?? null,
+        claimId: recoveredClaimId,
+        subject: canonicalSubject(targetPath, deps.realpathOrNull),
+      },
+    );
+    setCondition(report, 6, record.ok ? 'met' : 'unmet', record.detail);
   };
   // The durable destination, inspected under the #4957 guards with the
   // primary path and every worktree record, the target included, so it can
@@ -4891,43 +4947,13 @@ function runRecoveryCore(
             : ", and step 1's lock check passed"
         }`,
     );
-    const gate = evaluateClassGate(
-      evidencePorts.readTrusted,
-      evidencePorts.repository,
-      facts,
-    );
-    setCondition(report, 1, gate.ok ? 'met' : 'unmet', gate.detail);
-    report.quietWindow = gate.quietWindow;
-    evidenceRun.quietWindowMs = gate.quietWindowMs;
-    evidenceRun.snapshot = gate.snapshot;
+    checkEvidenceClassAndRecord(routing);
     if (linked) {
       checkEvidenceWindowAndProcesses();
     } else {
       const detail = 'not evaluated: the target is not a linked worktree';
       setCondition(report, 4, 'not-evaluated', detail);
       setCondition(report, 5, 'not-evaluated', detail);
-    }
-    if (recoveredClaimId === null) {
-      setCondition(
-        report,
-        6,
-        'unmet',
-        'the recovered claim has no claim ID, so no record can name it',
-      );
-    } else {
-      const record = evaluateConfirmationRecord(
-        evidencePorts.readConfirmation,
-        gate.snapshot,
-        {
-          repository: evidencePorts.repository,
-          issue: args.issue as number,
-          confirmation: args.confirmation ?? null,
-          decision: args.decision ?? null,
-          claimId: recoveredClaimId,
-          subject: canonicalSubject(targetPath, deps.realpathOrNull),
-        },
-      );
-      setCondition(report, 6, record.ok ? 'met' : 'unmet', record.detail);
     }
     let destinationHold: string | null = null;
     if (linked) {
@@ -4969,12 +4995,16 @@ function runRecoveryCore(
       : args.preserveDir
         ? resolve(cwd, args.preserveDir)
         : null;
-  // Right before step 3, under the clone lock: conditions 4 and 5 again, then
-  // the destination is inspected afresh, created through #4957's creation
-  // step, and its identity rechecked. A refusal before the creation step
-  // creates nothing. A destination that fails the privacy check or the
-  // identity recheck stops the run before step 3 and is named.
-  const prepareEvidenceDestination = (): string | null => {
+  // Right before step 3, under the clone lock: the class and the record again
+  // (conditions 1 and 6, on the rechecked routing), then the walk and the
+  // process check (4 and 5), then the destination is inspected afresh, created
+  // through #4957's creation step, and its identity rechecked. A refusal
+  // before the creation step creates nothing. A destination that fails the
+  // privacy check or the identity recheck stops the run before step 3 and is
+  // named.
+  const prepareEvidenceDestination = (
+    routingNow: ConfirmBlockRouting,
+  ): string | null => {
     if (
       evidenceRun === null ||
       evidencePorts === undefined ||
@@ -4985,11 +5015,11 @@ function runRecoveryCore(
     // The destination planned before the lock is not a result: it is reported
     // only once it was created.
     verdict.preserveDir = null;
+    checkEvidenceClassAndRecord(routingNow);
     checkEvidenceWindowAndProcesses();
     const stale = evidenceRun.report.conditions.filter(
       (condition) =>
-        (condition.number === 4 || condition.number === 5) &&
-        condition.status !== 'met',
+        [1, 4, 5, 6].includes(condition.number) && condition.status !== 'met',
     );
     if (stale.length > 0) {
       return `the evidence no longer holds under the clone lock, so no destination was created -- ${stale
@@ -5447,10 +5477,10 @@ function runRecoveryCore(
       }
     }
 
-    // Mechanical evidence (#4969): conditions 4 and 5 again, then the durable
-    // destination, before the first preservation mutation.
+    // Mechanical evidence (#4969): conditions 1, 4, 5, and 6 again, then the
+    // durable destination, before the first preservation mutation.
     if (evidenceRun !== null) {
-      const stop = prepareEvidenceDestination();
+      const stop = prepareEvidenceDestination(recheck.routing);
       if (stop !== null) {
         return recordRemovalFailure(stop);
       }
@@ -9103,12 +9133,14 @@ class enabled in the trusted policy of the live default branch and, for a
 stale claim, a stale age of at least PT24H; a linked worktree (never the
 primary one); step 1's stale-claim-* or released-claim-* reason with a claim
 ID and a matching lock; no entry under the worktree or its git-admin
-directory changed within the trusted quietWindow; no process working
-directory inside the worktree (Linux /proc only; a denied read is listed, not
-refused); and a confirmation record that matches this claim, this path, and
-the decision. A dry run reports condition 6 (the record) as unmet without
-refusing, so the order is: dry run, record, apply. Steps 3 and 4 then run
-with a preserve directory under <state>/idd-skill/lwr-preserved/.
+directory changed within the trusted quietWindow; no working directory of a
+process of the current user inside the worktree (Linux /proc only; a denied
+read is listed, not refused); and a confirmation record that matches this
+claim, this path, and the decision. A dry run reports condition 6 (the
+record) as unmet without refusing, so the order is: dry run, record, apply.
+Under the clone lock, just before step 3, conditions 1, 4, 5, and 6 are read
+again. Steps 3 and 4 then run with a preserve directory under
+<state>/idd-skill/lwr-preserved/.
 
 Must be invoked from the primary worktree (or the primary worktree itself,
 when that IS <path>), never from the linked worktree being recovered.

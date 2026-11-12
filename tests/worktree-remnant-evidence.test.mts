@@ -379,6 +379,9 @@ test('walkQuietWindow: a real symlink to a directory is not followed', {
 // Condition 5: process working directories
 // ---------------------------------------------------------------------------
 
+/** The user these tests run as; a process owned by another user is 2000. */
+const ME = 1000;
+
 function virtualProc(
   workDirs: Record<string, string | Error>,
   extra: Partial<ProcPorts> = {},
@@ -392,6 +395,8 @@ function virtualProc(
       if (value instanceof Error) throw value;
       return value;
     },
+    ownerUid: () => ME,
+    currentUid: ME,
     realpath: (path) => path,
     ...extra,
   };
@@ -535,6 +540,129 @@ test('inspectProcessDirectories: a path that cannot be resolved fails the condit
   assert.match(later.detail, /process 7 could not be resolved/);
 });
 
+test('inspectProcessDirectories: a process of another user is outside the condition', () => {
+  const result = inspectProcessDirectories(
+    virtualProc(
+      { '7': '/repo/wt/src', '8': '/repo/wt/lib' },
+      { ownerUid: (pid) => (pid === '7' ? 2000 : ME) },
+    ),
+    ['/repo/wt'],
+  );
+  assert.equal(result.status, 'match');
+  assert.deepEqual(result.matches, [{ pid: 8, cwd: '/repo/wt/lib' }]);
+  assert.equal(result.otherUsers, 1);
+  const only = inspectProcessDirectories(
+    virtualProc({ '7': '/repo/wt/src' }, { ownerUid: () => 2000 }),
+    ['/repo/wt'],
+  );
+  assert.equal(only.status, 'clear');
+  assert.equal(only.otherUsers, 1);
+  assert.match(
+    only.detail,
+    /1 process\(es\) of other users are there and are not counted/,
+  );
+});
+
+test('inspectProcessDirectories: a denied read counts only for this user or root', () => {
+  const result = inspectProcessDirectories(
+    virtualProc(
+      {
+        '1': errno('EACCES'),
+        '2': errno('EACCES'),
+        '3': errno('EACCES'),
+        '4': errno('EACCES'),
+      },
+      {
+        ownerUid: (pid) => ({ '1': ME, '2': 0, '3': 2000, '4': ME })[pid] ?? 0,
+      },
+    ),
+    ['/repo/wt'],
+  );
+  assert.equal(result.status, 'clear');
+  assert.deepEqual(
+    result.notInspected.sample.map((entry) => entry.pid),
+    [1, 2, 4],
+  );
+  assert.equal(result.notInspected.count, 3);
+});
+
+test('inspectProcessDirectories: a process that exits before its owner is read is skipped', () => {
+  const result = inspectProcessDirectories(
+    virtualProc(
+      { '7': '/repo/wt/src', '8': errno('EACCES') },
+      {
+        ownerUid: () => {
+          throw errno('ENOENT');
+        },
+      },
+    ),
+    ['/repo/wt'],
+  );
+  assert.equal(result.status, 'clear');
+  assert.equal(result.notInspected.count, 0);
+});
+
+test('inspectProcessDirectories: an owner that cannot be read, or no current user, fails the condition', () => {
+  for (const workDirs of [
+    { '7': '/repo/wt/src' },
+    { '7': errno('EACCES') },
+  ] as Array<Record<string, string | Error>>) {
+    const result = inspectProcessDirectories(
+      virtualProc(workDirs, {
+        ownerUid: () => {
+          throw errno('EIO');
+        },
+      }),
+      ['/repo/wt'],
+    );
+    assert.equal(result.status, 'error');
+    assert.match(
+      result.detail,
+      /the owner of process 7 could not be read: EIO/,
+    );
+  }
+  const noUser = inspectProcessDirectories(
+    virtualProc({ '7': '/elsewhere' }, { currentUid: null }),
+    ['/repo/wt'],
+  );
+  assert.equal(noUser.status, 'error');
+  assert.match(noUser.detail, /current user could not be determined/);
+});
+
+test('evaluateQuietWindowAndProcesses: the process check covers only its own roots', () => {
+  const report = newEvidenceReport();
+  const { ports: walk } = virtualWalk({
+    '/wt': old({ isDirectory: true }),
+    '/admin': old({ isDirectory: true }),
+  });
+  // A process inside the admin directory is outside the worktree.
+  evaluateQuietWindowAndProcesses(
+    {
+      walk,
+      proc: virtualProc({ '7': '/admin/sub' }),
+      nowMs: () => 10 * HOUR,
+    },
+    report,
+    ['/wt', '/admin'],
+    ['/wt'],
+    HOUR,
+  );
+  assert.equal(report.conditions[3]?.status, 'met');
+  assert.equal(report.conditions[4]?.status, 'met');
+  evaluateQuietWindowAndProcesses(
+    {
+      walk,
+      proc: virtualProc({ '7': '/admin/sub' }),
+      nowMs: () => 10 * HOUR,
+    },
+    report,
+    ['/wt', '/admin'],
+    ['/wt', '/admin'],
+    HOUR,
+  );
+  assert.equal(report.conditions[4]?.status, 'unmet');
+});
+
 test('inspectProcessDirectories: an unreadable /proc fails the condition', () => {
   const result = inspectProcessDirectories(
     virtualProc(
@@ -570,6 +698,8 @@ test('inspectProcessDirectories: the production reader sees this process', {
   const own = ports.listPids();
   assert.ok(own.includes(String(process.pid)));
   assert.equal(ports.readCwd(String(process.pid)), realpathSync(process.cwd()));
+  assert.equal(ports.currentUid, process.getuid?.() ?? null);
+  assert.equal(ports.ownerUid(String(process.pid)), process.getuid?.());
   assert.equal(inspectProcessDirectories(ports, [root]).status, 'clear');
   assert.equal(
     inspectProcessDirectories(ports, [realpathSync(process.cwd())]).status,
@@ -822,6 +952,7 @@ test('evaluateQuietWindowAndProcesses: sets both conditions and the report field
     },
     report,
     ['/wt'],
+    ['/wt'],
     HOUR,
   );
   const [four, five] = [report.conditions[3], report.conditions[4]];
@@ -837,6 +968,7 @@ test('evaluateQuietWindowAndProcesses: an unread quiet window leaves condition 4
   evaluateQuietWindowAndProcesses(
     { walk, proc: virtualProc({}), nowMs: () => 10 * HOUR },
     report,
+    ['/wt'],
     ['/wt'],
     null,
   );
@@ -854,12 +986,14 @@ test('evaluateQuietWindowAndProcesses: the walk uses the clock it is given', () 
     { walk, proc, nowMs: () => 10 * HOUR },
     report,
     ['/wt'],
+    ['/wt'],
     HOUR,
   );
   assert.equal(report.conditions[3]?.status, 'unmet');
   evaluateQuietWindowAndProcesses(
     { walk, proc, nowMs: () => 12 * HOUR },
     report,
+    ['/wt'],
     ['/wt'],
     HOUR,
   );
