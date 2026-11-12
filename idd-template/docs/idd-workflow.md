@@ -1246,11 +1246,13 @@ comes before the record, because it lists the subjects:
 2. Dry run `claim-issue --preserve-b1-leftovers` without `--confirmation`.
    Its report lists each leftover with its subject: the short branch name,
    or the absolute path. Without `--confirmation` the helper reports the
-   record precondition as unmet, by design; go on only when every other
-   precondition is met. Then check the decision cap for the whole batch:
-   the decisions that Caps counts for this source, plus one per listed
-   subject, must not exceed `autoDecide.maxDecisionsPerClaim`, because the
-   helper does not enforce the count. Otherwise keep today's stop.
+   `record`, `decision-pairing`, and each subject's `record-match`
+   preconditions as unmet, by design, and the apply run checks them again.
+   Go on only when every other precondition is met. Then check the decision
+   cap for the whole batch: the decisions that Caps counts for this source,
+   plus one per listed subject, must not exceed
+   `autoDecide.maxDecisionsPerClaim`, because the helper does not enforce
+   the count. Otherwise keep today's stop.
 3. Record one decision per subject, as in Record, then act, each with its
    own decision ID and a `Subject:` line that holds that subject. All the
    records of the run go on one confirmation issue, the one that Which
