@@ -18,7 +18,7 @@ import {
 } from 'node:fs';
 import { createRequire } from 'node:module';
 import { devNull, tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
@@ -292,7 +292,12 @@ test('no default command reaches the check or lint aliases, so there is no cycle
 
 type PackageScripts = Readonly<Record<string, string>>;
 
-/** Whether one command line, split into arguments, runs tests. */
+/**
+ * Whether one command line, split into arguments, runs tests. The rule fails
+ * closed: a test file named anywhere in the arguments counts, so a lint command
+ * that merely names one fails loudly and the rule can be refined then, while a
+ * test file handed to some other runner could never pass silently.
+ */
 function isTestCommand(args: readonly string[]): boolean {
   const last = args.at(-1) ?? '';
   return (
@@ -307,6 +312,29 @@ function isTestCommand(args: readonly string[]): boolean {
   );
 }
 
+const PACKAGE_MANAGER = /^(?:pnpm|npm|yarn)(?:\.[cm]?js)?$/u;
+
+/**
+ * The package script that `<package manager> run <name>` runs, found in the
+ * executable and its arguments, or `undefined` when the command runs none. A
+ * `run` token that no package manager precedes, such as an argument of an
+ * ordinary node script, names no script.
+ */
+function packageScriptOf(
+  command: string,
+  args: readonly string[],
+): string | undefined {
+  const tokens = [command, ...args];
+  const manager = tokens.findIndex((token) =>
+    PACKAGE_MANAGER.test(basename(token)),
+  );
+  if (manager < 0) {
+    return undefined;
+  }
+  const [verb, name] = tokens.slice(manager + 1);
+  return verb === 'run' || verb === 'run-script' ? name : undefined;
+}
+
 /**
  * Whether the command runs tests, or runs a package script whose body does.
  * A body is split into its simple commands, and a `run <name>` inside it is
@@ -314,6 +342,7 @@ function isTestCommand(args: readonly string[]): boolean {
  * `run <name>` form names a script; the group's commands use no other form.
  */
 function runsTestCommand(
+  command: string,
   args: readonly string[],
   scripts: PackageScripts,
   seen: Set<string> = new Set(),
@@ -321,17 +350,15 @@ function runsTestCommand(
   if (isTestCommand(args)) {
     return true;
   }
-  const verb = args.findIndex((arg) => arg === 'run' || arg === 'run-script');
-  const name = verb < 0 ? undefined : args[verb + 1];
+  const name = packageScriptOf(command, args);
   if (name === undefined || seen.has(name) || !Object.hasOwn(scripts, name)) {
     return false;
   }
   seen.add(name);
-  return scripts[name]
-    .split(/&&|\|\||[;|]/u)
-    .some((part) =>
-      runsTestCommand(part.trim().split(/\s+/u).filter(Boolean), scripts, seen),
-    );
+  return scripts[name].split(/&&|\|\||[;|]/u).some((part) => {
+    const [executable = '', ...rest] = part.trim().split(/\s+/u);
+    return runsTestCommand(executable, rest, scripts, seen);
+  });
 }
 
 /** The label of each command in the group that runs tests, once each. */
@@ -340,8 +367,8 @@ function commandsRunningTests(
   scripts: PackageScripts,
 ): string[] {
   return group.commands
-    .filter((command) => runsTestCommand(command.args, scripts))
-    .map((command) => command.label);
+    .filter((entry) => runsTestCommand(entry.command, entry.args, scripts))
+    .map((entry) => entry.label);
 }
 
 test('the lint group never runs a test command, directly or through a package script (#5180)', () => {
@@ -373,25 +400,54 @@ test('the lint group never runs a test command, directly or through a package sc
     'pnpm run test:scripts',
   ]);
 
-  // A test command behind two script entries is reported through the bodies.
-  // The plain script and the self-referencing script are reported as clean.
+  // A test command behind two script entries is reported through the bodies,
+  // for both spawn shapes. The plain script and the self-referencing script are
+  // clean, and a `run` or `--run` argument of an ordinary node script names no
+  // package script, even when a script of that name would run tests.
   const fixtureScripts: PackageScripts = {
     'lint:slow': 'pnpm run lint:inner',
     'lint:inner': 'node scripts/x.mjs && node --test tests/a.test.mts',
     'lint:fast': 'node scripts/x.mjs',
     'lint:loop': 'pnpm run lint:loop',
   };
-  const runScript = (name: string): CheckGroup['commands'][number] => ({
-    label: `pnpm run ${name}`,
-    command: '/fixture/pnpm',
-    args: ['run', name],
-  });
   const nested: CheckGroup = {
     id: 'lint',
-    commands: ['lint:slow', 'lint:fast', 'lint:loop'].map(runScript),
+    commands: [
+      {
+        label: 'native pnpm run lint:slow',
+        command: '/fixture/pnpm',
+        args: ['run', 'lint:slow'],
+      },
+      {
+        label: 'node pnpm.cjs run lint:slow',
+        command: '/fixture/node',
+        args: ['/fixture/pnpm.cjs', 'run', 'lint:slow'],
+      },
+      {
+        label: 'native pnpm run lint:fast',
+        command: '/fixture/pnpm',
+        args: ['run', 'lint:fast'],
+      },
+      {
+        label: 'native pnpm run lint:loop',
+        command: '/fixture/pnpm',
+        args: ['run', 'lint:loop'],
+      },
+      {
+        label: 'node checker.mjs run lint:slow',
+        command: '/fixture/node',
+        args: ['checker.mjs', 'run', 'lint:slow'],
+      },
+      {
+        label: 'node checker.mjs --run lint:slow',
+        command: '/fixture/node',
+        args: ['checker.mjs', '--run', 'lint:slow'],
+      },
+    ],
   };
   assert.deepEqual(commandsRunningTests(nested, fixtureScripts), [
-    'pnpm run lint:slow',
+    'native pnpm run lint:slow',
+    'node pnpm.cjs run lint:slow',
   ]);
 });
 
