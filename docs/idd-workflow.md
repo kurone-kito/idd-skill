@@ -1251,11 +1251,10 @@ the procedure above supplies the checks and the records.
 - **Occupied path.** Something that is not a registered worktree sits at the
   computed worktree path. `claim-issue --apply` reports `path-occupied`. By
   hand this is Step 1 of Worktree creation in the same file.
-- **Left out.** The hearing left these out, so they keep today's route:
-  unpushed commits on the local default branch (`primary-not-ready`;
-  pre-creation step 1 by hand), anything in the primary worktree, a prunable
-  worktree entry (it also reports `b1-cleanup-needed`), and a branch that
-  `git branch -d` deletes.
+- **Left out.** These keep today's route: unpushed commits on the local
+  default branch (`primary-not-ready`; pre-creation step 1 by hand),
+  anything in the primary worktree, a prunable worktree entry (it also
+  reports `b1-cleanup-needed`), and a branch that `git branch -d` deletes.
 
 The order follows the procedure, with one addition: the helper's dry run
 comes before the record, because it lists the subjects:
