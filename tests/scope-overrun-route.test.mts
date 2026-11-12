@@ -583,3 +583,279 @@ test('standing split never applies to a count alone in either work file', () => 
     );
   }
 });
+
+// Issue #4678: once the companion has published a held replacement roadmap,
+// the standard PR-submit file finalizes the superseded pull request, worktree,
+// and source issue. The route is verify-first: every write waits for one
+// read-only preflight, then runs in a fixed order, and a failed cleanup keeps
+// the source issue open. The route is prose, so these tests pin its order, its
+// refusals, and its recovery, and keep the rationale and the autonomy contract
+// in agreement with it.
+const PR_SUBMIT_PATHS = [
+  'idd-template/.github/instructions/idd-pr-submit.instructions.md',
+  '.github/instructions/idd-pr-submit.instructions.md',
+] as const;
+const RATIONALE_PATH = 'idd-template/docs/idd-design-rationale.md';
+const AUTONOMY_PATHS = [
+  'idd-template/docs/idd-autonomy-contract.md',
+  'docs/idd-autonomy-contract.md',
+] as const;
+const FINALIZE_HEADING = '### Finalize a verified held scope split';
+const FINALIZE_RATIONALE_HEADING =
+  '### Finalize a verified held scope split (issue `#4678`)';
+
+/** The finalization section of a PR-submit file, unwrapped onto one line. */
+function finalizationRoute(relativePath: string): string {
+  const text = readRepoFile(relativePath);
+  const start = text.indexOf(FINALIZE_HEADING);
+  assert.notEqual(start, -1, `${relativePath} has the finalization route`);
+  const end = text.indexOf('\n## ', start);
+  assert.notEqual(end, -1, `${relativePath} ends the route at D3`);
+  return text.slice(start, end).replace(/\s+/gu, ' ');
+}
+
+/** The preflight item, the text before the first write step. */
+function preflightOf(route: string): string {
+  const start = route.indexOf('1. **Preflight**');
+  const end = route.indexOf('2. **Close the PR**');
+  assert.notEqual(start, -1, 'the route has a preflight');
+  assert.notEqual(end, -1, 'the route closes the PR after it');
+  return route.slice(start, end);
+}
+
+/** A GitHub heading anchor for a heading line. */
+function headingAnchor(heading: string): string {
+  return heading
+    .replace(/^#+\s*/u, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9 -]/gu, '')
+    .replace(/ /gu, '-');
+}
+
+const FINALIZATION_ORDERED_STEPS = [
+  'After the companion reports a held replacement roadmap',
+  'the session that released `{claim-id}` runs this from the primary worktree',
+  'No claim is active, so the preflight, re-read before each write, is the gate',
+  'Any miss or uncertainty makes no write: report it',
+  'A rerun skips each step whose verified result holds',
+  '1. **Preflight** (read-only)',
+  '2. **Close the PR** (post-push): `gh pr close <pr>`',
+  'verify closed, unmerged, at that head',
+  'Re-read before retrying an uncertain close',
+  '3. **Clean up**: LWR with `--apply --operator-confirmed-no-live-session`',
+  'On refusal or failure, keep the issue open and labeled',
+  '4. **Close the issue** only after step 3',
+  '`gh issue close {issue-number} --reason "not planned" --comment <roadmap link>`',
+  'then remove the needs-decision label, if present, and verify',
+  'Never release or relabel the replacement set',
+] as const;
+
+for (const relativePath of PR_SUBMIT_PATHS) {
+  test(`${relativePath}: the finalization route runs preflight, PR close, cleanup, and issue close in order`, () => {
+    const route = finalizationRoute(relativePath);
+    const positions = FINALIZATION_ORDERED_STEPS.map((step) =>
+      route.indexOf(step),
+    );
+    for (const [index, position] of positions.entries()) {
+      assert.notEqual(position, -1, FINALIZATION_ORDERED_STEPS[index]);
+    }
+    assert.deepEqual(
+      [...positions].sort((left, right) => left - right),
+      positions,
+      'the route keeps its gate, preflight, writes, and recovery in order',
+    );
+  });
+
+  test(`${relativePath}: the preflight refuses an incomplete set, an active claim, a changed or non-draft PR, and an unsafe LWR result before any write`, () => {
+    const route = finalizationRoute(relativePath);
+    const preflight = preflightOf(route);
+    for (const refusal of [
+      '`idd-authoring-set-members --set <set>`',
+      "the roadmap's trusted owner marker",
+      'is complete and equals the roadmap plus its `## Tracks`',
+      'each member is open with the authoring label',
+      'each child says `Split out of #{issue-number}`',
+      'This issue is unclaimed, open unless a rerun closed it',
+      'trusted `scope-overrun` record',
+      'the needs-decision label (pre-first-push may lack it)',
+      'Post-push, its PR is a draft at the recorded head (a rerun may find it closed, unmerged)',
+      '`idd-local-worktree-recovery --issue {issue-number} --worktree <path>`',
+      'dry run reports `ready: true` (or worktree and branch are gone)',
+      "a person or orchestrator, not this session's claim evidence, confirmed no live session",
+    ]) {
+      assert.ok(preflight.includes(refusal), refusal);
+    }
+    // Every write step comes after the preflight, and the preflight itself
+    // never names a write command.
+    for (const write of ['gh pr close', '--apply', 'gh issue close']) {
+      assert.equal(preflight.includes(write), false, write);
+      assert.ok(
+        route.indexOf(write) > route.indexOf('2. **Close the PR**') - 1,
+      );
+    }
+    assert.ok(
+      route.indexOf('makes no write') < route.indexOf('1. **Preflight**'),
+      'the no-write rule is stated before the steps',
+    );
+  });
+
+  test(`${relativePath}: a pre-first-push overrun skips the PR steps and keeps the held set and LWR gates`, () => {
+    const route = finalizationRoute(relativePath);
+    // The PR step is labelled post-push only, and the PR checks of the
+    // preflight are post-push only, so a pre-first-push overrun skips them.
+    assert.ok(route.includes('2. **Close the PR** (post-push)'));
+    assert.ok(
+      route.includes('Post-push, its PR is a draft at the recorded head'),
+    );
+    // The set check and the LWR dry run are not conditional on the push state.
+    const preflight = preflightOf(route);
+    assert.ok(
+      preflight.indexOf('`idd-authoring-set-members') <
+        preflight.indexOf('Post-push, its PR'),
+    );
+    assert.ok(
+      preflight.indexOf('Post-push, its PR') <
+        preflight.indexOf('`idd-local-worktree-recovery'),
+    );
+    // A worktree already removed by the B3 cleanup counts as cleaned.
+    assert.ok(route.includes('(skip if gone)'));
+    assert.ok(
+      preflightOf(route).includes('(or worktree and branch are gone)'),
+      'the dry-run item admits a worktree already removed by the B3 cleanup',
+    );
+  });
+
+  test(`${relativePath}: a failed cleanup keeps the source issue open and labeled, reports the partial state, and never forces`, () => {
+    const route = finalizationRoute(relativePath);
+    const cleanup = route.slice(
+      route.indexOf('3. **Clean up**'),
+      route.indexOf('4. **Close the issue**'),
+    );
+    for (const recovery of [
+      'On refusal or failure, keep the issue open and labeled, keep the remains',
+      'report the PR state, LWR report, and next action',
+      'Never `--force` or bypass its preservation or lock gates',
+    ]) {
+      assert.ok(cleanup.includes(recovery), recovery);
+    }
+    // The issue closes only after cleanup, and the label comes off only after
+    // that closure is verified.
+    const closing = route.slice(route.indexOf('4. **Close the issue**'));
+    assert.ok(closing.includes('only after step 3'));
+    assert.ok(
+      closing.indexOf('verify') <
+        closing.indexOf('remove the needs-decision label'),
+    );
+    assert.ok(route.includes('verify closed, unmerged, at that head'));
+    assert.ok(route.includes('Re-read before retrying an uncertain close'));
+  });
+
+  test(`${relativePath}: the route never touches the replacement set's release or the remote branch`, () => {
+    const route = finalizationRoute(relativePath);
+    assert.ok(
+      route.includes(
+        'Never release or relabel the replacement set: Stage 2 stays the human gate',
+      ),
+    );
+    assert.doesNotMatch(route, /--delete-branch|git push|--takeover/u);
+    assert.doesNotMatch(route, /dangerouslyAutoDecide/u);
+  });
+
+  test(`${relativePath}: the route links a rationale heading that exists`, () => {
+    const text = readRepoFile(relativePath);
+    const anchor = headingAnchor(FINALIZE_RATIONALE_HEADING);
+    assert.equal(anchor, 'finalize-a-verified-held-scope-split-issue-4678');
+    assert.ok(
+      text.includes(`/idd-design-rationale.md#${anchor}`),
+      'the route links the rationale anchor',
+    );
+    assert.ok(
+      readRepoFile(RATIONALE_PATH).includes(FINALIZE_RATIONALE_HEADING),
+    );
+  });
+}
+
+test('the finalization rationale cites its incidents and agrees with the route', () => {
+  const text = readRepoFile(RATIONALE_PATH).replace(/\s+/gu, ' ');
+  const start = text.indexOf(FINALIZE_RATIONALE_HEADING);
+  const end = text.indexOf('## Review triage', start);
+  assert.notEqual(start, -1, 'the rationale section exists');
+  assert.notEqual(end, -1, 'the rationale section has a boundary');
+  const section = text.slice(start, end);
+  for (const cited of [
+    '`#4435`',
+    'issues/4435#issuecomment-6231043615',
+    '`#4673`',
+    '`#4375`',
+    '`#4399`',
+    '`#4678`',
+    '`#5055`',
+  ]) {
+    assert.ok(section.includes(cited), cited);
+  }
+  for (const claim of [
+    'The route is verify-first',
+    'a safe LWR dry run',
+    'A missing child, a Tracks mismatch, or a released label means the set is not verified',
+    'a post-push pull request must still be a draft at the recorded head, or on a rerun already closed there',
+    'The pull request closes first and is re-read at the same head before LWR starts',
+    'An uncertain close is re-read before any retry',
+    'Only after cleanup succeeds does the source issue close as not planned',
+    'only after that closure is verified does the needs-decision label come off',
+    'the issue stays open with its label',
+    'A rerun then skips each step whose verified result already holds',
+    'LWR keeps its own step 2',
+    '`--operator-confirmed-no-live-session`',
+    'treats an independent confirmation as a preflight item',
+    'The route never releases or relabels the replacement set',
+    'Stage 2 remains the explicit human release gate',
+    'changes neither `dangerouslyAutoDecide` nor its default',
+  ]) {
+    assert.ok(section.includes(claim), claim);
+  }
+  // The B3 overrun rationale points at the finalization route instead of
+  // leaving the superseded-issue decision to the companion alone.
+  assert.ok(
+    text.includes(
+      'a verified held split of a published pull request is finalized by the [D2 route](#finalize-a-verified-held-scope-split-issue-4678)',
+    ),
+  );
+});
+
+for (const relativePath of AUTONOMY_PATHS) {
+  test(`${relativePath}: the autonomy contract classifies each finalization mutation`, () => {
+    const text = readRepoFile(relativePath);
+    const start = text.indexOf('### Scope-overrun finalization (D2)');
+    const end = text.indexOf('### Review markers & dispositions', start);
+    assert.notEqual(start, -1, 'the finalization rows exist');
+    assert.notEqual(end, -1, 'the finalization rows have a boundary');
+    const rows = text
+      .slice(start, end)
+      .split('\n')
+      .filter((line) => line.startsWith('| ') && !line.startsWith('| ---'))
+      .slice(1)
+      .map((line) => line.replace(/\s+/gu, ' '));
+    assert.equal(rows.length, 4);
+    const [closePr, cleanup, closeIssue, removeLabel] = rows;
+    assert.match(closePr, /Close the draft pull request.*`gh pr close`/u);
+    assert.match(cleanup, /`local-worktree-recovery --apply`/u);
+    assert.match(cleanup, /independent of this session's claim evidence/u);
+    assert.match(
+      closeIssue,
+      /as not planned, with the replacement roadmap linked/u,
+    );
+    assert.match(closeIssue, /only after cleanup succeeded/u);
+    assert.match(
+      removeLabel,
+      /only after the closure is read back as not planned/u,
+    );
+    assert.match(
+      removeLabel,
+      /never releases or relabels the replacement set/u,
+    );
+    for (const row of rows) {
+      assert.match(row, /\| Reversible \|/u);
+      assert.match(row, /idd-pr-submit\.instructions\.md/u);
+    }
+  });
+}
