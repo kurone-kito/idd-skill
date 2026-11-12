@@ -1264,9 +1264,12 @@ comes before the record, because it lists the subjects:
    leaves today's stop.
 2. Dry run `claim-issue --preserve-b1-leftovers` without `--confirmation`.
    Its report lists each leftover with its subject: the short branch name,
-   or the absolute path. Go on only when every precondition except the
-   record is met; without `--confirmation` the helper reports the record
-   precondition as unmet, by design.
+   or the absolute path. Without `--confirmation` the helper reports the
+   record precondition as unmet, by design; go on only when every other
+   precondition is met. Then check the decision cap for the whole batch:
+   the decisions that Caps counts for this source, plus one per listed
+   subject, must not exceed `autoDecide.maxDecisionsPerClaim`, because the
+   helper does not enforce the count. Otherwise keep today's stop.
 3. Record one decision per subject, as in Record, then act, each with its
    own decision ID and a `Subject:` line that holds that subject. All the
    records of the run go on one confirmation issue, the one that Which
@@ -1295,7 +1298,8 @@ The region classifier is the trusted class read and the procedure's checks,
 followed by the helper's preconditions. It loosens only the two stops above.
 These shapes keep today's hold or stop:
 
-- the class is not enabled, or a cap is reached or cannot be read;
+- the class is not enabled, a cap is reached or cannot be read, or the
+  run's decisions would take the count past its cap;
 - a branch that is the default or development branch, is checked out or
   mid-rebase or mid-bisect in any worktree, is one that `git branch -d`
   deletes, exists on a remote, or is the head of an open pull request;
