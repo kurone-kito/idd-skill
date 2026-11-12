@@ -534,10 +534,11 @@ isolated away from ready execution issues whenever possible.
       first posts the void marker for that decision on that confirmation
       issue, as the procedure requires. It then comments the failure on the
       target.
-    - Every rewrite touches only the failed choice's entry. The
-      `## Auto-decided choice` heading is removed only when no recorded choice
-      is left. A `## Decision` or `## Decision needed` section may sit next to
-      the remaining entries.
+    - Within the `## Auto-decided choice` section, every rewrite touches only
+      the failed choice's entry; the rewrites below also change the scope text
+      that depends on that choice. The `## Auto-decided choice` heading is
+      removed only when no recorded choice is left. A `## Decision` or
+      `## Decision needed` section may sit next to the remaining entries.
     - In an interactive session below `issueAuthoring.maxClarificationRounds`,
       the session asks the operator about the choice, and the ask counts as
       one clarification round. A reply that confirms the choice, or picks

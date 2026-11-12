@@ -233,7 +233,7 @@ test('the contract states the auto-decide branch and its release checklist item'
     'lists each such choice under `constraints` as an agent choice with its evidence',
     '`class=authoringChoice`, `source` set to the target, and `set` set to the target',
     'first posts the void marker for that decision on that confirmation issue',
-    'Every rewrite touches only the failed choice',
+    'every rewrite touches only the failed choice',
     'the ask counts as one clarification round',
     'authoring-bucket: needs-decision',
     'then edit the body',
