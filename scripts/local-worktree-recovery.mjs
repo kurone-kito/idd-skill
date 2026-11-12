@@ -4109,7 +4109,14 @@ function runRecoveryCore(args, deps, evidenceRun) {
       return { hold: `the inspection threw: ${errorMessage(error)}` };
     }
     if (inspected.hold !== null) return { hold: inspected.hold };
-    for (const root of [targetPath, targetGitDir]) {
+    // Every registered worktree path counts, an absent one included: the
+    // guard above tests the nearest existing ancestor of the destination, so a
+    // registered path that does not exist yet would slip through it.
+    for (const root of [
+      targetPath,
+      targetGitDir,
+      ...worktreeRecords.map((record) => record.path),
+    ]) {
       if (root === null) continue;
       const real = deps.realpathOrNull(root);
       if (
@@ -4117,7 +4124,7 @@ function runRecoveryCore(args, deps, evidenceRun) {
         (real !== null && isWithinRoot(real, inspected.destination))
       ) {
         return {
-          hold: `the destination ${inspected.destination} is inside ${root}, which step 4 removes`,
+          hold: `the destination ${inspected.destination} is inside ${root}, which a worktree removal or a later checkout can delete`,
         };
       }
     }
@@ -4238,6 +4245,22 @@ function runRecoveryCore(args, deps, evidenceRun) {
     }
     const { destination } = inspected;
     evidenceRun.report.preserveDestination.path = destination;
+    // The creation step may make parents and restrict others to their owner
+    // before it fails, so what it changed is read back, not inferred from the
+    // destination alone.
+    const absentParents = inspected.parents.filter(
+      (parent) => parent.identity === null,
+    );
+    const looseParents = inspected.parents.filter((parent) => {
+      try {
+        return (
+          parent.identity !== null &&
+          evidenceGuards.inspectDirectoryPrivacy(parent.path) === 'tightenable'
+        );
+      } catch {
+        return false;
+      }
+    });
     let created;
     try {
       created = createPreserveDestination(
@@ -4248,21 +4271,44 @@ function runRecoveryCore(args, deps, evidenceRun) {
     } catch (error) {
       created = { parents: [], hold: `threw: ${errorMessage(error)}` };
     }
-    let exists = false;
-    try {
-      exists = evidenceGuards.lstat(destination) !== 'absent';
-    } catch {
-      exists = false;
+    const presentNow = (path) => {
+      try {
+        return evidenceGuards.lstat(path) !== 'absent';
+      } catch {
+        return true;
+      }
+    };
+    const restrictedNow = (path) => {
+      try {
+        return evidenceGuards.inspectDirectoryPrivacy(path) === 'private';
+      } catch {
+        return true;
+      }
+    };
+    const exists = presentNow(destination);
+    const changedPaths = [
+      ...absentParents
+        .filter((parent) => presentNow(parent.path))
+        .map((parent) => `created ${parent.path}`),
+      ...looseParents
+        .filter((parent) => restrictedNow(parent.path))
+        .map((parent) => `restricted ${parent.path} to its owner`),
+    ];
+    if (changedPaths.length > 0 || exists) {
+      verdict.mutated = true;
     }
     if (exists) {
       verdict.preserveDir = destination;
-      verdict.mutated = true;
       evidenceRun.report.preserveDestination.created = true;
     }
     if (created.hold !== null) {
       return `the durable preserve destination ${destination} was not prepared: ${created.hold}${
         exists && !created.hold.includes('stays in place')
           ? '; it stays in place'
+          : ''
+      }${
+        changedPaths.length > 0
+          ? `; the creation step had already changed: ${changedPaths.join(', ')}`
           : ''
       }; step 3 did not start`;
     }

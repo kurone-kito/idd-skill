@@ -9678,12 +9678,15 @@ function virtualStateRoot(
     identity?: (path: string, read: number) => string | null;
     stateRoot?: string;
     dirs?: string[];
+    /** Make `mkdir` of this path fail, as a read-only or full volume would. */
+    mkdirFails?: string;
   } = {},
 ) {
   const stateRoot = options.stateRoot ?? '/state';
   const dirs = new Set<string>([stateRoot, ...(options.dirs ?? [])]);
   const reads = new Map<string, number>();
   const made: string[] = [];
+  const restricted = new Set<string>();
   const guards: PreserveGuardFilesystem = {
     lstat: (path) => (dirs.has(path) ? 'directory' : 'absent'),
     directoryIdentity: (path) => {
@@ -9696,9 +9699,15 @@ function virtualStateRoot(
       dirs.has(path) || EVIDENCE_REAL_PATHS.has(path) ? path : null,
     stateRoot,
     now: () => new Date('2026-11-10T01:02:03Z'),
-    inspectDirectoryPrivacy: (path) => options.privacy?.(path) ?? 'private',
-    ensurePrivateDirectory: () => {},
+    inspectDirectoryPrivacy: (path) =>
+      restricted.has(path) ? 'private' : (options.privacy?.(path) ?? 'private'),
+    ensurePrivateDirectory: (path) => {
+      restricted.add(path);
+    },
     mkdir: (path) => {
+      if (path === options.mkdirFails) {
+        throw new Error('ENOSPC');
+      }
       made.push(path);
       dirs.add(path);
     },
@@ -11008,7 +11017,7 @@ test('evidence: a created destination that fails the privacy check stops before 
   assert.match(
     verdict.result,
     new RegExp(
-      `${EVIDENCE_DESTINATION.replaceAll('/', '\\/')} was not prepared:.*not owned and private; it stays in place and nothing is written into it; step 3 did not start`,
+      `${EVIDENCE_DESTINATION.replaceAll('/', '\\/')} was not prepared:.*not owned and private; it stays in place and nothing is written into it; the creation step had already changed: created \\/state\\/idd-skill, created \\/state\\/idd-skill\\/lwr-preserved; step 3 did not start`,
     ),
   );
   assert.equal(verdict.preserveDir, EVIDENCE_DESTINATION);
@@ -12162,4 +12171,98 @@ test('evidence: a worktree list that fails under the clone lock refuses before a
   assert.equal(verdict.mutated, false);
   assert.deepEqual(fixture.mutations, []);
   assert.match(verdict.result, /refused under the clone lock/);
+});
+
+test('evidence: a registered worktree path that does not exist yet still protects the destination', () => {
+  const fixture = evidenceFixture({
+    deps: {
+      listWorktreeRecords: () => [
+        {
+          path: '/repo/primary',
+          branchRef: 'refs/heads/main',
+          detached: false,
+          bare: false,
+          locked: false,
+          prunable: false,
+        },
+        {
+          path: '/repo/linked',
+          branchRef: 'refs/heads/issue/1-task',
+          detached: false,
+          bare: false,
+          locked: false,
+          prunable: false,
+        },
+        // Registered, and absent on disk: the destination lies beneath it.
+        {
+          path: '/state/idd-skill',
+          branchRef: 'refs/heads/issue/9-other',
+          detached: false,
+          bare: false,
+          locked: false,
+          prunable: true,
+        },
+      ],
+    },
+  });
+  for (const apply of [false, true]) {
+    const verdict = runLocalWorktreeRecovery(
+      evidenceArgs({ apply }),
+      fixture.deps,
+    );
+    assertRefusedBeforeMutation(
+      fixture,
+      verdict,
+      /durable preserve destination: the destination .* is inside \/state\/idd-skill/,
+    );
+  }
+  assert.equal(fixture.state.made.length, 0);
+});
+
+test('evidence: a creation step that fails after making a parent still reports the run as mutated', () => {
+  const fixture = evidenceFixture({
+    state: { mkdirFails: '/state/idd-skill/lwr-preserved' },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    evidenceArgs({ apply: true }),
+    fixture.deps,
+  );
+  assert.equal(verdict.ready, false);
+  assert.equal(verdict.plan.removal?.ran, false);
+  // The first parent was made before the second mkdir failed; the destination
+  // itself does not exist.
+  assert.deepEqual(fixture.state.made, ['/state/idd-skill']);
+  assert.equal(verdict.mutated, true);
+  assert.equal(verdict.preserveDir, null);
+  assert.equal(verdict.evidence?.preserveDestination.created, false);
+  assert.match(
+    verdict.result,
+    /was not prepared: could not prepare .*ENOSPC.*the creation step had already changed: created \/state\/idd-skill; step 3 did not start/,
+  );
+  assert.deepEqual(
+    fixture.mutations.filter((entry) => !entry.startsWith('mkdir:')),
+    [],
+  );
+});
+
+test('evidence: a creation step that restricts a parent before failing reports it', () => {
+  const fixture = evidenceFixture({
+    state: {
+      dirs: ['/state/idd-skill'],
+      // The parent lets others in until the creation step restricts it.
+      privacy: (path) =>
+        path === '/state/idd-skill' ? 'tightenable' : 'private',
+      mkdirFails: '/state/idd-skill/lwr-preserved',
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    evidenceArgs({ apply: true }),
+    fixture.deps,
+  );
+  assert.equal(verdict.mutated, true);
+  assert.equal(verdict.preserveDir, null);
+  assert.match(
+    verdict.result,
+    /the creation step had already changed: restricted \/state\/idd-skill to its owner/,
+  );
 });
