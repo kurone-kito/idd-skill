@@ -1092,13 +1092,22 @@ test('only an exact, replay-verified provisional Blocked by criterion can procee
     1,
     'readiness computes and reuses one provisional decision match',
   );
-  // A closed decision source takes its own path through readiness.
+  // A closed decision source takes its own path through readiness, so its
+  // output is checked as well as the single read.
   decisionReads = 0;
-  await run(body, countedPending, true, 'CLOSED');
+  const closed = await run(body, countedPending, true, 'CLOSED');
   assert.equal(
     decisionReads,
     1,
     'a closed decision source also computes and reuses one match',
+  );
+  assert.deepEqual(
+    closed.ready.map((entry) => entry.number),
+    [201],
+  );
+  assert.deepEqual(
+    closed.ready[0]?.provisionalDependencies,
+    allowed.ready[0]?.provisionalDependencies,
   );
 
   const held = async (
