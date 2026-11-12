@@ -3304,6 +3304,334 @@ test('getMergedChangeRequestMeta returns null when the PR is not merged, and the
   });
 });
 
+/** One merged-pull-request answer as the batched GraphQL query returns it. */
+function mergedAnswer(number: number, merged = true) {
+  return {
+    number,
+    merged,
+    mergedAt: merged ? '2026-01-01T00:00:00Z' : null,
+    headRefOid: `head-${number}`,
+    mergeCommit: merged ? { oid: `merge-${number}` } : null,
+  };
+}
+
+test('getMergedChangeRequestMetaBatch reads several pull requests in one aliased query and maps merged and unmerged answers (#5122)', () => {
+  const calls: (readonly string[])[] = [];
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: (args) => {
+        calls.push([...args]);
+        return JSON.stringify({
+          data: {
+            repository: {
+              pr7: mergedAnswer(7),
+              pr9: mergedAnswer(9, false),
+              pr12: mergedAnswer(12),
+            },
+          },
+        });
+      },
+    }),
+  );
+  // 7 appears twice, so the query names it once.
+  const answers = port.getMergedChangeRequestMetaBatch([12, 7, 9, 7]);
+
+  assert.equal(calls.length, 1);
+  const query = calls[0]?.find((arg) => arg.startsWith('query=')) ?? '';
+  for (const number of [7, 9, 12]) {
+    assert.equal(
+      query.split(`pr${number}: pullRequest(number:${number})`).length,
+      2,
+      `pull request ${number} is selected exactly once`,
+    );
+  }
+  assert.match(query, /number merged mergedAt headRefOid mergeCommit\{oid\}/);
+  assert.ok(calls[0]?.includes('owner=o'));
+  assert.ok(calls[0]?.includes('repo=r'));
+  assert.deepEqual(
+    [...answers.keys()].sort((a, b) => a - b),
+    [7, 9, 12],
+  );
+  assert.deepEqual(answers.get(7), {
+    number: 7,
+    merged: true,
+    mergedAt: '2026-01-01T00:00:00Z',
+    headRefOid: 'head-7',
+    mergeCommitOid: 'merge-7',
+  });
+  assert.equal(answers.get(9), null);
+  assert.equal(answers.get(12)?.mergeCommitOid, 'merge-12');
+});
+
+test('getMergedChangeRequestMetaBatch makes no call for an empty list and bounds one call to 25 distinct pull requests (#5122)', () => {
+  let calls = 0;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => {
+        calls += 1;
+        return JSON.stringify({
+          data: {
+            repository: Object.fromEntries(
+              Array.from({ length: 25 }, (_, index) => [
+                `pr${index + 1}`,
+                mergedAnswer(index + 1),
+              ]),
+            ),
+          },
+        });
+      },
+    }),
+  );
+  assert.equal(port.getMergedChangeRequestMetaBatch([]).size, 0);
+  assert.equal(calls, 0);
+
+  const numbers = Array.from({ length: 25 }, (_, index) => index + 1);
+  // Repeats do not count toward the bound, and 25 distinct numbers make one call.
+  assert.equal(
+    port.getMergedChangeRequestMetaBatch([...numbers, ...numbers]).size,
+    25,
+  );
+  assert.equal(calls, 1);
+
+  assert.throws(
+    () => port.getMergedChangeRequestMetaBatch([...numbers, 26]),
+    /26 pull requests exceed the limit of 25/,
+  );
+  assert.equal(calls, 1, 'an oversized list sends nothing');
+});
+
+test('getMergedChangeRequestMetaBatch rejects a number that is not a positive integer before any call (#5122)', () => {
+  let calls = 0;
+  const port = createGithubProviderAdapter(
+    'o',
+    'r',
+    fakeDeps({
+      ghText: () => {
+        calls += 1;
+        return '{}';
+      },
+    }),
+  );
+  for (const bad of [0, -3, 1.5, Number.NaN, Number.MAX_SAFE_INTEGER + 2]) {
+    assert.throws(
+      () => port.getMergedChangeRequestMetaBatch([4, bad]),
+      /not a positive integer pull request number/,
+    );
+  }
+  assert.equal(calls, 0, 'the query text never carries an unchecked number');
+});
+
+test('getMergedChangeRequestMetaBatch is all-or-nothing: an error, a missing answer or a mismatched number throws (#5122)', () => {
+  const withResponse = (response: unknown) =>
+    createGithubProviderAdapter(
+      'o',
+      'r',
+      fakeDeps({ ghText: () => JSON.stringify(response) }),
+    );
+  const answered = { pr3: mergedAnswer(3), pr4: mergedAnswer(4) };
+
+  assert.throws(
+    () =>
+      withResponse({
+        data: { repository: answered },
+        errors: [{ message: 'Could not resolve to a PullRequest' }],
+      }).getMergedChangeRequestMetaBatch([3, 4]),
+    /getMergedChangeRequestMetaBatch failed: Could not resolve/,
+  );
+  assert.throws(
+    () =>
+      withResponse({
+        data: { repository: { pr3: mergedAnswer(3), pr4: null } },
+      }).getMergedChangeRequestMetaBatch([3, 4]),
+    /no answer for pull request #4/,
+  );
+  assert.throws(
+    () =>
+      withResponse({
+        data: { repository: { pr3: mergedAnswer(3) } },
+      }).getMergedChangeRequestMetaBatch([3, 4]),
+    /no answer for pull request #4/,
+  );
+  assert.throws(
+    () =>
+      withResponse({
+        data: { repository: { pr3: mergedAnswer(3), pr4: mergedAnswer(5) } },
+      }).getMergedChangeRequestMetaBatch([3, 4]),
+    /answer for pull request #4 names #5/,
+  );
+  assert.throws(
+    () =>
+      withResponse({
+        data: { repository: null },
+      }).getMergedChangeRequestMetaBatch([3, 4]),
+    /no repository/,
+  );
+});
+
+test('getMergedChangeRequestMetaBatch rejects a malformed answer rather than reading it as unmerged (#5122)', () => {
+  const withResponse = (response: unknown) =>
+    createGithubProviderAdapter(
+      'o',
+      'r',
+      fakeDeps({ ghText: () => JSON.stringify(response) }),
+    );
+
+  // A partial answer has no merged field: it throws, it does not map to null.
+  assert.throws(
+    () =>
+      withResponse({
+        data: { repository: { pr3: mergedAnswer(3), pr4: { number: 4 } } },
+      }).getMergedChangeRequestMetaBatch([3, 4]),
+    /pull request #4 has no boolean merged field/,
+  );
+  // A merged value that is not a boolean throws too.
+  assert.throws(
+    () =>
+      withResponse({
+        data: {
+          repository: {
+            pr3: mergedAnswer(3),
+            pr4: { ...mergedAnswer(4), merged: 'true' },
+          },
+        },
+      }).getMergedChangeRequestMetaBatch([3, 4]),
+    /pull request #4 has no boolean merged field/,
+  );
+  // A merged answer whose metadata has the wrong type throws.
+  assert.throws(
+    () =>
+      withResponse({
+        data: {
+          repository: {
+            pr3: mergedAnswer(3),
+            pr4: { ...mergedAnswer(4), mergedAt: 1_700_000_000 },
+          },
+        },
+      }).getMergedChangeRequestMetaBatch([3, 4]),
+    /pull request #4 has a malformed metadata field/,
+  );
+  // A number that is not a number, a metadata field of the wrong type, an
+  // absent key, and a merge commit that is neither null nor an object all
+  // throw, merged or not.
+  const reject = (pr4: unknown, message: RegExp) =>
+    assert.throws(
+      () =>
+        withResponse({
+          data: { repository: { pr3: mergedAnswer(3), pr4 } },
+        }).getMergedChangeRequestMetaBatch([3, 4]),
+      message,
+    );
+  reject(
+    { ...mergedAnswer(4), number: '4' },
+    /pull request #4 has no numeric number field/,
+  );
+  reject(
+    { ...mergedAnswer(4), headRefOid: 7 },
+    /pull request #4 has a malformed metadata field/,
+  );
+  reject(
+    { ...mergedAnswer(4), mergeCommit: { oid: 7 } },
+    /pull request #4 has a malformed metadata field/,
+  );
+  reject(
+    { ...mergedAnswer(4), mergeCommit: 'abc' },
+    /pull request #4 has a malformed metadata field/,
+  );
+  reject(
+    { ...mergedAnswer(4), mergeCommit: [] },
+    /pull request #4 has a malformed metadata field/,
+  );
+  reject(
+    { ...mergedAnswer(4), mergeCommit: {} },
+    /pull request #4 has a malformed metadata field/,
+  );
+  reject(
+    { number: 4, merged: true },
+    /pull request #4 has a malformed metadata field/,
+  );
+  // Each metadata key absent on its own is malformed too.
+  reject(
+    { ...mergedAnswer(4), mergedAt: undefined },
+    /pull request #4 has a malformed metadata field/,
+  );
+  reject(
+    { ...mergedAnswer(4), headRefOid: undefined },
+    /pull request #4 has a malformed metadata field/,
+  );
+  reject(
+    { ...mergedAnswer(4), mergeCommit: undefined },
+    /pull request #4 has a malformed metadata field/,
+  );
+  reject(
+    {
+      number: 4,
+      merged: false,
+      mergedAt: 1_700_000_000,
+      headRefOid: 'head-4',
+      mergeCommit: null,
+    },
+    /pull request #4 has a malformed metadata field/,
+  );
+  // Well-formed answers still map: an unmerged answer to null, and a merged
+  // answer with no merge commit to a null merge commit oid.
+  const unmerged = withResponse({
+    data: { repository: { pr3: mergedAnswer(3), pr4: mergedAnswer(4, false) } },
+  }).getMergedChangeRequestMetaBatch([3, 4]);
+  assert.equal(unmerged.get(4), null);
+  const merged = withResponse({
+    data: {
+      repository: {
+        pr3: mergedAnswer(3),
+        pr4: { ...mergedAnswer(4), mergeCommit: null },
+      },
+    },
+  }).getMergedChangeRequestMetaBatch([3, 4]);
+  assert.deepEqual(merged.get(4), {
+    number: 4,
+    merged: true,
+    mergedAt: '2026-01-01T00:00:00Z',
+    headRefOid: 'head-4',
+    mergeCommitOid: null,
+  });
+  // A merge commit whose oid is null maps to a null merge commit oid.
+  const nullOid = withResponse({
+    data: {
+      repository: {
+        pr3: mergedAnswer(3),
+        pr4: { ...mergedAnswer(4), mergeCommit: { oid: null } },
+      },
+    },
+  }).getMergedChangeRequestMetaBatch([3, 4]);
+  assert.equal(nullOid.get(4)?.mergeCommitOid, null);
+});
+
+test('getMergedChangeRequestMetaBatch lets a failed call and a load-control refusal propagate unchanged (#5122)', () => {
+  const failure = new Error('gh failed');
+  const refusal = createLoadControlRefusal({
+    outcome: 'not-dispatched',
+    reason: 'busy',
+  });
+  for (const thrown of [failure, refusal]) {
+    const port = createGithubProviderAdapter(
+      'o',
+      'r',
+      fakeDeps({
+        ghText: () => {
+          throw thrown;
+        },
+      }),
+    );
+    assert.throws(
+      () => port.getMergedChangeRequestMetaBatch([3, 4]),
+      (error: unknown) => error === thrown,
+    );
+  }
+});
+
 test('postReviewCommentReply POSTs to the PR-scoped comment-reply endpoint (regression guard: the PR number segment was dropped in an earlier draft)', () => {
   let capturedArgs: string[] | undefined;
   const port = createGithubProviderAdapter(
@@ -5403,6 +5731,31 @@ test('getChangeRequestAuthor omits --hostname for github.com (no regression on t
     port.getChangeRequestAuthor(7);
     assert.ok(!capturedArgs?.includes('--hostname'));
   });
+});
+
+test('getMergedChangeRequestMetaBatch targets the resolved GHES host, and omits --hostname for github.com (#5122)', () => {
+  const hostnameArgFor = (serverUrl: string) => {
+    let capturedArgs: string[] | undefined;
+    withGhHostEnv({ GITHUB_SERVER_URL: serverUrl }, () => {
+      const port = createGithubProviderAdapter(
+        'o',
+        'r',
+        fakeDeps({
+          ghText: (args) => {
+            capturedArgs = args;
+            return JSON.stringify({
+              data: { repository: { pr3: mergedAnswer(3) } },
+            });
+          },
+        }),
+      );
+      port.getMergedChangeRequestMetaBatch([3]);
+    });
+    const index = capturedArgs?.indexOf('--hostname') ?? -1;
+    return index < 0 ? null : capturedArgs?.[index + 1];
+  };
+  assert.equal(hostnameArgFor('https://ghes.example.com'), 'ghes.example.com');
+  assert.equal(hostnameArgFor('https://github.com'), null);
 });
 
 test('getChangeRequestReviewsWithHeadCommitDate throws on a GraphQL errors payload instead of treating it as no evidence (CodeRabbit review, PR #2429)', () => {

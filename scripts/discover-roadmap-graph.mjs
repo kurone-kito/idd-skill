@@ -774,9 +774,41 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
     );
   }
   if (options.provisionalDecisionState) {
-    for (const node of nodes) {
-      node.provisionalDecisionState =
-        await options.provisionalDecisionState.loadState(node.number);
+    const resolution = options.provisionalDecisionState;
+    if (resolution.loadStates) {
+      // One call for the whole graph. Each node's snapshot is the issue read
+      // this traversal just made for it, so the reader skips a second read of
+      // the same issue; a node without a usable one is read live there.
+      const states = await resolution.loadStates(
+        nodes.map((node) => {
+          const issue = issueCache.get(node.number);
+          return issue && !isInaccessibleIssue(issue) && issue.updatedAt
+            ? {
+                issueNumber: node.number,
+                snapshot: {
+                  title: issue.title,
+                  body: issue.body,
+                  updatedAt: issue.updatedAt,
+                },
+              }
+            : { issueNumber: node.number };
+        }),
+      );
+      // A node with no evidence would read as "no decision records", so a
+      // missing result fails the whole read instead.
+      for (const node of nodes) {
+        const state = states.get(node.number);
+        if (state == null) {
+          throw new Error(
+            `provisional decision evidence was not returned for issue #${node.number}`,
+          );
+        }
+        node.provisionalDecisionState = state;
+      }
+    } else {
+      for (const node of nodes) {
+        node.provisionalDecisionState = await resolution.loadState(node.number);
+      }
     }
   }
   return {
@@ -3293,6 +3325,10 @@ function normalizeIssue(issue) {
     subIssueSummaryTotal: extractSubIssueSummaryTotal(issue.sub_issues_summary),
     openMilestoneTitle: extractOpenMilestoneTitle(issue.milestone),
     stateReason: extractStateReason(issue.state_reason),
+    updatedAt:
+      typeof issue.updated_at === 'string' && issue.updated_at.length > 0
+        ? issue.updated_at
+        : null,
   };
 }
 /**

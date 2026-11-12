@@ -1435,6 +1435,28 @@ function closedDescendantNumbers(report) {
 // ---------------------------------------------------------------------------
 // Production dependency wiring (live gh + roadmap-graph traversal).
 // ---------------------------------------------------------------------------
+/**
+ * The `collect` dependency both audit passes use: the live single-root graph
+ * traversal with the provisional-decision evidence annotated on every node.
+ * The reader is handed over whole, so the graph reads all nodes' evidence in
+ * one batched call per pass and reuses its own issue read as each node's
+ * snapshot (kurone-kito/idd-skill#5122). Exported so a test can drive the
+ * production wiring over a fake provider.
+ */
+export function createRoadmapAuditCollect(input) {
+  const { owner, repo, port, markerPrefix, provisionalReader } = input;
+  const loadIssue = buildIssueLoader(port);
+  const loadSubIssues = buildSubIssueLoader(port);
+  return (roadmapNumber) =>
+    enumerateRoadmapGraph(roadmapNumber, {
+      markerPrefix,
+      owner,
+      repo,
+      loadIssue,
+      loadSubIssues,
+      provisionalDecisionState: provisionalReader,
+    });
+}
 function createProductionDeps(args) {
   const currentRepo =
     args.owner && args.repo ? null : resolveCurrentGithubRepository();
@@ -1459,8 +1481,6 @@ function createProductionDeps(args) {
   // those other gates, so this can no longer disagree with them.
   const staleAgeMs = readClaimStaleAgeMs(rawConfig);
   const labelsPolicy = normalizePolicyConfig(rawConfig).labels;
-  const loadIssue = buildIssueLoader(port);
-  const loadSubIssues = buildSubIssueLoader(port);
   const provisionalReader = buildProvisionalDecisionEvidenceReader({
     owner,
     repo,
@@ -1468,15 +1488,13 @@ function createProductionDeps(args) {
     policy: rawConfig,
   });
   return {
-    collect: (roadmapNumber) =>
-      enumerateRoadmapGraph(roadmapNumber, {
-        markerPrefix,
-        owner,
-        repo,
-        loadIssue,
-        loadSubIssues,
-        provisionalDecisionState: { loadState: provisionalReader.loadState },
-      }),
+    collect: createRoadmapAuditCollect({
+      owner,
+      repo,
+      port,
+      markerPrefix,
+      provisionalReader,
+    }),
     resolveOpenLinkedPrIssues: (issueNumbers) =>
       resolveOpenLinkedPrIssues(port, issueNumbers),
     blockedByHumanLabelName: labelsPolicy.blockedByHumanLabelName,

@@ -827,6 +827,17 @@ export function createFakeProviderAdapter(
       return fixture.mergedChangeRequestMeta?.[number] ?? null;
     },
 
+    getMergedChangeRequestMetaBatch(
+      numbers: readonly number[],
+    ): Map<number, ProviderMergedChangeRequestMeta | null> {
+      // The single read's answer for each distinct number, in one call.
+      const answers = new Map<number, ProviderMergedChangeRequestMeta | null>();
+      for (const number of numbers) {
+        answers.set(number, fixture.mergedChangeRequestMeta?.[number] ?? null);
+      }
+      return answers;
+    },
+
     listChangeRequestChecks(number: number): ProviderRequiredCheck[] {
       return fixture.allChecks?.[number] ?? [];
     },

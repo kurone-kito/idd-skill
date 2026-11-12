@@ -1094,6 +1094,24 @@ export interface ProviderPort {
   ): ProviderMergedChangeRequestMeta | null;
 
   /**
+   * change-requests. {@link getMergedChangeRequestMeta} for several pull
+   * requests in one provider call, deduplicated, so a caller that already
+   * knows every number it will verify pays one round trip instead of one per
+   * pull request. The result holds exactly one entry per distinct requested
+   * number, `null` for a pull request that is not merged (the same meaning as
+   * the single read). It is all-or-nothing: when the provider cannot answer
+   * every number cleanly (a GraphQL error, a missing or mismatched answer, a
+   * malformed shape) it throws and returns no partial result, so a caller
+   * falls back to the single reads and keeps their failure meaning. An empty
+   * list returns an empty result without a call. An adapter bounds the size of
+   * one call and throws above its bound, so a caller sends small groups (the
+   * GitHub adapter allows 25 distinct numbers).
+   */
+  getMergedChangeRequestMetaBatch(
+    numbers: readonly number[],
+  ): Map<number, ProviderMergedChangeRequestMeta | null>;
+
+  /**
    * change-requests, write. REST POST
    * `pulls/{pr}/comments/{commentId}/replies`, JSON stdin body -- distinct
    * from {@link ProviderPort.postWorkItemComment} (issues-comments API, a
