@@ -1262,7 +1262,10 @@ comes before the record, because it lists the subjects:
 4. Run the same command with `--apply` (and its required `--agent-id` and
    `--project-status`), `--confirmation` for that issue, and one
    `--decision` per subject. The helper checks every precondition again
-   before it changes anything.
+   before it changes anything. The run also creates the worktree and posts
+   the claim, so the session continues in that worktree at the install step
+   (the fresh-claim order of `idd-claim.instructions.md`, step 6) and does
+   not create the worktree again.
 5. Post the `kind=location` note (the note marker of
    kurone-kito/idd-skill#4961) for each decision on the confirmation issue.
    It names each backup ref and preserve directory, and it is posted even

@@ -104,7 +104,9 @@ name from the claim comment.
 When the stop in pre-creation step 3 or in Worktree creation Step 1 falls
 under the `b1Leftover` auto-decide class, follow the
 [B1 leftovers](../../docs/idd-workflow.md#b1-leftovers) entry of the
-auto-decide section instead of stopping; if its checks keep the stop,
+auto-decide section instead of stopping. Its `--apply` run creates the
+worktree and posts the claim, so continue in that worktree with
+**install-deps** and do not create it again. If its checks keep the stop,
 stop as before.
 
 ### Anti-patterns
