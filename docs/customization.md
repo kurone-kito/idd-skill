@@ -1773,6 +1773,49 @@ decision issue, waive existing gates, or enable the provisional
 decision lifecycle. Keep it absent or false until that complete
 lifecycle is available and the repository has explicitly opted in.
 
+### Auto-decide classes
+
+Auto-decide lets a session act at a stop in a switched-on class instead of
+stopping. The procedure is in
+[Auto-decide at a stop](idd-workflow.md#auto-decide-at-a-stop). A class acts
+only when `dangerouslyAutoDecide` and that class's own `enabled` flag are both
+`true`.
+
+| Key                                      | Default                     | Effect                                                                                                                                                                                                             |
+| ---------------------------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `dangerouslyAutoDecide`                  | `false`                     | Master switch for every class.                                                                                                                                                                                     |
+| `autoDecide.decisionIssue.enabled`       | off                         | Picks up a needs-decision issue.                                                                                                                                                                                   |
+| `autoDecide.runtimeQuestion.enabled`     | off                         | Answers a product, technical, or scope question while implementing a claimed issue.                                                                                                                                |
+| `autoDecide.authoringChoice.enabled`     | off                         | Decides an issue-authoring choice when nobody asked for a hearing.                                                                                                                                                 |
+| `autoDecide.worktreeRemnant.enabled`     | off                         | Not wired yet: the switch does not activate the procedure, and today's route stays.                                                                                                                                |
+| `autoDecide.worktreeRemnant.quietWindow` | `PT2H`                      | How long that worktree must be unmodified first. A zero or malformed value turns only this class off in local normalization; the trusted read treats any malformed autoDecide value as unreadable for every class. |
+| `autoDecide.b1Leftover.enabled`          | off                         | Acts on B1 leftovers found before a claim.                                                                                                                                                                         |
+| `autoDecide.maxPendingConfirmations`     | `10`                        | Integer from 1 to 100. No new decision is made while this many confirmations are pending. An out-of-range value turns every class off.                                                                             |
+| `autoDecide.maxDecisionsPerClaim`        | `3`                         | Integer from 1 to 20. The most decisions under one claim. An out-of-range value turns every class off.                                                                                                             |
+| `autoDecide.confirmationLabelName`       | `status:needs-confirmation` | Label on each confirmation issue. A blank name turns every class off.                                                                                                                                              |
+
+Prerequisites:
+
+- `decisionIssue` needs only the trusted read and the pending cap.
+- The other classes file confirmation issues, so they also need the
+  issue-authoring companion and `issueAuthoring.journalIssue`.
+- The lite profile keeps its stronger-session handoff and never acts.
+
+To turn one class off, set its `enabled` to `false` or remove the key. To turn
+every class off, set `dangerouslyAutoDecide` to `false`.
+
+To rename the confirmation label, a person first turns the classes off with
+`dangerouslyAutoDecide` set to `false`, so that no session publishes a new
+confirmation issue during the migration. The person then adds the new label
+next to the old one on every confirmation issue, open or closed, because
+`--records --state all` finds a closed issue only under the label that the
+trusted policy names. The person merges the name change into every base branch
+that a pull request targets, and removes the old label last. A base whose
+policy still names the old label would otherwise miss its existing
+confirmations. Discover then never sees a confirmation issue without the name
+it filters. The person turns the classes back on after
+the old label is gone.
+
 ## Issue Scope
 
 The default `issue-scope` is `roadmap-first`: Discover runs the roadmap

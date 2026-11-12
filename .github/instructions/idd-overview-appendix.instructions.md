@@ -75,7 +75,10 @@ the decision open does not re-enter.
 **Hold consolidation.** When a hold traces to the same root file or
 dependency as an earlier hold from this session (any issue), pause
 per-issue escalation and audit the shared root cause once, bringing one
-consolidated decision to the human, not re-escalating per layer.
+consolidated decision to the human, not re-escalating per layer. A hold or
+stop in a switched-on auto-decide class goes to the
+[auto-decide procedure](../../docs/idd-workflow.md#auto-decide-at-a-stop)
+first.
 
 **Provider-outage park**: release the claim immediately, no 12 h
 heartbeat -- see idd-ci.instructions.md's Hold-and-report failure shapes.
@@ -140,9 +143,6 @@ local customization).
 - **Qualifying**: a step says "proceed to step N" from inside step N
   itself, with no later step N — the control flow cannot be followed
   as written.
-- **Non-qualifying**: an adopter finds a step confusing given their own
-  branch-naming convention — followable as written; the friction is
-  local interpretation.
 
 **What to do.** Author (or extend, via the normal reuse-first checks)
 a local issue through `skills/issue-authoring/` as usual, additionally

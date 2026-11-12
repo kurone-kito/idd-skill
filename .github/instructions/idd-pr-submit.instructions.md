@@ -264,6 +264,11 @@ template's sections when one exists:
   Include only context grounded in the issue discussion, commits, diff,
   or explicit operator instructions; omit rather than speculate.
 
+- When auto-decide confirmation issues exist, list each one under an
+  "Auto-decide confirmations:" heading, as
+  [Auto-decide at a stop](../../docs/idd-workflow.md#auto-decide-at-a-stop)
+  describes.
+
 **Do not create follow-up issues directly.** An executing IDD session
 must never call `gh issue create` (or the REST issues API) itself.
 Recommended follow-ups stay in the PR body's own prose above. If a
