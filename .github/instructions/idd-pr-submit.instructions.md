@@ -200,30 +200,24 @@ an existing multi-job file makes every job in it dispatchable.
 Isolating the unproven job then is ordinary GitHub Actions authoring
 (for example a job-level `if:`), scoped to that file's own jobs and
 dependencies -- keep it minimal, removing it with the trigger-flip
-edit once validated. This step does **not** by itself reduce
-advisory-bot review invocation count -- that is driven by push count,
-not trigger wiring. Its real benefit is avoiding wasted CI
-Actions-minutes and false-failure noise from an unproven job
+edit once validated. This step does **not** reduce advisory-bot
+review invocation count (driven by push count); its benefit is avoiding
+wasted CI minutes and false-failure noise from an unproven job
 auto-running on every unrelated push. See
 [rationale](../../docs/idd-design-rationale.md#d2--adding-a-new-ci-job-dispatch-first-rollout).
 
 For a Linux-runner job, also validate it locally with `nektos/act`
-before pushing when `act` (and Docker) is available -- per the
-tool-availability convention in `idd-overview-core.instructions.md`'s
-Project commands table, skip this otherwise and rely on the dispatch
-validation above plus CI. `act`'s Docker-based execution cannot
-validate `windows-latest`/`macos-latest` runner-specific behavior from
-a WSL/Linux environment -- never treat "validated via `act`" as
-covering a Windows or macOS job.
+before pushing when `act` and Docker are available, else skip per
+`idd-overview-core.instructions.md`'s Project commands table and rely on
+the dispatch validation above plus CI. `act` cannot validate
+`windows-latest`/`macos-latest` behavior from WSL/Linux -- never treat
+"validated via `act`" as covering a Windows or macOS job.
 
-Optionally, for a job `act` cannot validate where shakeout is long or
-costly, a contributor may iterate it on a branch with no open PR yet,
-landing only the validated final version on the actual PR branch.
-Review automation that only fires on PR-associated pushes never runs
-during that shakeout, avoiding review cost entirely -- the one path
-here that actually reduces it. This deviates from the normal
-early-PR-then-iterate practice, so scope it to CI-infrastructure work,
-as the implementer's choice, not a mandate.
+Optionally, a CI-infrastructure job `act` cannot validate may be iterated
+on a branch with no open PR, landing only the validated final version on
+the PR branch: review automation that fires only on PR pushes never runs
+during that shakeout, the one path that avoids review cost. It is the
+implementer's choice, not a mandate.
 
 ## D3 — Create PR
 
@@ -294,16 +288,15 @@ issue on the side-fix's own merge). Formal `issue-authoring` tracking
 is still preferred when time allows, but it is not a start blocker for
 this carve-out.
 
-How the executing session obtains a branch, worktree, and claim for
-the side-fix while the originating claim stays active — and how the
-side-fix's own merge and cleanup avoid releasing that originating
-claim — is not yet defined. The shared claim revalidation gate
-(`idd-overview-core.instructions.md`) scopes its cwd-vs-claim check off
-the active claim's recorded `branch:` field, not the mutation's target
-branch, so no branch-naming convention alone exempts a same-session
-side-fix from it. Treat this as an open gap: this carve-out authorizes
-the _decision_ to proceed under live authority; the operator directing
-it owns the mechanics until a follow-up defines them.
+How the session obtains a branch, worktree, and claim for the side-fix
+while the originating claim stays active, and how the side-fix's merge
+and cleanup avoid releasing that claim, is not yet defined. The shared
+claim revalidation gate (`idd-overview-core.instructions.md`) scopes its
+cwd-vs-claim check off the active claim's recorded `branch:` field, so no
+branch-naming convention alone exempts a side-fix from it. This is an
+open gap: the carve-out authorizes only the _decision_ to proceed under
+live authority; the directing operator owns the mechanics until a
+follow-up defines them.
 
 D3's closing-keyword requirement and D3.5's presence-detection and
 auto-injection (steps 1-5, including step 4) apply only to the
@@ -616,13 +609,11 @@ condition D3.5 itself skips under, where `closingIssuesReferences`
 never populates and the check would be meaningless) — edited prose can
 otherwise introduce a stray keyword-adjacent reference.
 
-**Wired to F2/F3**: `idd-pre-merge.instructions.md` F2's "Closing-set
-and impact-checklist re-verification" condition names this step
-explicitly and re-runs it against the then-current HEAD, and
-`idd-merge.instructions.md` F3's Gate checklist re-runs it again
-immediately before merging (#2749) — F2 can run before further HEAD
-changes land, which is exactly why the F3 re-run also exists; no
-longer an implicit, name-only cross-reference.
+**Wired to F2/F3** (#2749): `idd-pre-merge.instructions.md` F2's
+"Closing-set and impact-checklist re-verification" condition re-runs
+this step against the then-current HEAD, and `idd-merge.instructions.md`
+F3's Gate checklist re-runs it again immediately before merging, since
+F2 can run before further HEAD changes land.
 
 ## D4 — Wait for CI
 
