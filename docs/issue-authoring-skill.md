@@ -613,10 +613,13 @@ isolated away from ready execution issues whenever possible.
   - **Resume and release.** A resumed authoring session that finds a held
     target whose `## Auto-decided choice` section lists a `decision` ID
     without a counting record takes the not-recorded branch above for that
-    choice. It reads the records with `idd-auto-decision-records --records
-    --class authoringChoice --source <target> --state all`, passing the
-    trusted `--owner`, `--repo`, and `--base-ref` of the procedure's Caps step.
-    When that read is unreadable (exit 1), the session makes no rewrite,
+    choice. The procedure keys an authoring decision by its authoring set, so
+    the session reads the records of the target's set with
+    `idd-auto-decision-records --records --class authoringChoice --set <set ID>
+    --state all`, passing the trusted `--owner`, `--repo`, and `--base-ref` of
+    the procedure's Caps step, and matches each listed `decision` ID to a
+    returned record whose `source` is the target. When that read is
+    unreadable (exit 1), the session makes no rewrite,
     reports it, and leaves the target held. The contract's Stage 2 release
     checklist, in Authoring hold and release, carries the same check: every
     `decision` ID listed under `## Auto-decided choice` has a counting record,
