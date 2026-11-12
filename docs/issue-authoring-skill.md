@@ -566,8 +566,12 @@ isolated away from ready execution issues whenever possible.
     `class=authoringChoice`, `source` set to the target, and `set` set to the
     target's authoring set (see "Auto-decide confirmation issue" in the
     contract). Whether that is a new issue or an appended record follows the
-    procedure's Record, then act step. The session then posts the link marker
-    on the target.
+    procedure's Record, then act step. A record counts only with the same
+    source as the confirmation issue's body record, so a later target of the
+    same set cannot append to an issue that another target opened: its record
+    does not count, so that decision is not recorded, and the not-recorded
+    branch below applies. The session then posts the link marker on the
+    target.
   - **A confirmation that is not recorded.** The procedure's Record, then act
     step says when that happens. A `held` outcome counts as recorded for this
     class and is never voided.
