@@ -283,6 +283,118 @@ test('no default command reaches the check or lint aliases, so there is no cycle
   }
 });
 
+// ---------------------------------------------------------------------------
+// #5180: the lint group never runs a test command. Until e79b0efef (#3756) the
+// lint script ran the test suite, and nothing stops a test command from being
+// added to the group again, directly or through a package script entry. The
+// rule and its fixtures live here, so no source file changes.
+// ---------------------------------------------------------------------------
+
+type PackageScripts = Readonly<Record<string, string>>;
+
+/** Whether one command line, split into arguments, runs tests. */
+function isTestCommand(args: readonly string[]): boolean {
+  const last = args.at(-1) ?? '';
+  return (
+    last === 'test' ||
+    last.startsWith('test:') ||
+    args.some(
+      (arg) =>
+        arg === '--test' ||
+        arg.startsWith('--test-') ||
+        arg.includes('.test.mts'),
+    )
+  );
+}
+
+/**
+ * Whether the command runs tests, or runs a package script whose body does.
+ * A body is split into its simple commands, and a `run <name>` inside it is
+ * followed once, so a chained or nested script entry is checked too. Only the
+ * `run <name>` form names a script; the group's commands use no other form.
+ */
+function runsTestCommand(
+  args: readonly string[],
+  scripts: PackageScripts,
+  seen: Set<string> = new Set(),
+): boolean {
+  if (isTestCommand(args)) {
+    return true;
+  }
+  const verb = args.findIndex((arg) => arg === 'run' || arg === 'run-script');
+  const name = verb < 0 ? undefined : args[verb + 1];
+  if (name === undefined || seen.has(name) || !Object.hasOwn(scripts, name)) {
+    return false;
+  }
+  seen.add(name);
+  return scripts[name]
+    .split(/&&|\|\||[;|]/u)
+    .some((part) =>
+      runsTestCommand(part.trim().split(/\s+/u).filter(Boolean), scripts, seen),
+    );
+}
+
+/** The label of each command in the group that runs tests, once each. */
+function commandsRunningTests(
+  group: CheckGroup,
+  scripts: PackageScripts,
+): string[] {
+  return group.commands
+    .filter((command) => runsTestCommand(command.args, scripts))
+    .map((command) => command.label);
+}
+
+test('the lint group never runs a test command, directly or through a package script (#5180)', () => {
+  const scripts = JSON.parse(
+    readFileSync(join(REPO_ROOT, 'package.json'), 'utf8'),
+  ).scripts as PackageScripts;
+  // Both spawn shapes: pnpm's entry point run under node, and a native pnpm.
+  for (const execPath of ['/fixture/pnpm.cjs', '/fixture/pnpm']) {
+    const lint = defaultCheckGroups(execPath).find(
+      (group) => group.id === 'lint',
+    );
+    assert.ok(lint);
+    assert.deepEqual(commandsRunningTests(lint, scripts), []);
+  }
+
+  // The rule must report a test command, or the check above passes on a rule
+  // that never reports anything.
+  const direct: CheckGroup = {
+    id: 'lint',
+    commands: [
+      {
+        label: 'pnpm run test:scripts',
+        command: '/fixture/pnpm',
+        args: ['run', 'test:scripts'],
+      },
+    ],
+  };
+  assert.deepEqual(commandsRunningTests(direct, scripts), [
+    'pnpm run test:scripts',
+  ]);
+
+  // A test command behind two script entries is reported through the bodies.
+  // The plain script and the self-referencing script are reported as clean.
+  const fixtureScripts: PackageScripts = {
+    'lint:slow': 'pnpm run lint:inner',
+    'lint:inner': 'node scripts/x.mjs && node --test tests/a.test.mts',
+    'lint:fast': 'node scripts/x.mjs',
+    'lint:loop': 'pnpm run lint:loop',
+  };
+  const runScript = (name: string): CheckGroup['commands'][number] => ({
+    label: `pnpm run ${name}`,
+    command: '/fixture/pnpm',
+    args: ['run', name],
+  });
+  const nested: CheckGroup = {
+    id: 'lint',
+    commands: ['lint:slow', 'lint:fast', 'lint:loop'].map(runScript),
+  };
+  assert.deepEqual(commandsRunningTests(nested, fixtureScripts), [
+    'pnpm run lint:slow',
+  ]);
+});
+
 test('a group that needs pnpm is skipped when npm_execpath is absent', () => {
   const lint = defaultCheckGroups(undefined).find(
     (group) => group.id === 'lint',
