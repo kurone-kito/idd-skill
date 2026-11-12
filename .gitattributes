@@ -185,6 +185,7 @@ scripts/verify-install-deps.mjs linguist-generated=true
 scripts/verify-workshop-integrity.mjs linguist-generated=true
 scripts/windows-acl.mjs linguist-generated=true
 scripts/workflow-yaml-subset.mjs linguist-generated=true
+scripts/worktree-remnant-evidence.mjs linguist-generated=true
 idd-template/scripts/minimize-superseded-markers.mjs linguist-generated=true
 # Every bin/ shim is generated from src/bin/*.mts (whole directory).
 bin/**/*.mjs linguist-generated=true

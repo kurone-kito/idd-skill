@@ -24,13 +24,23 @@
 //   -- both are pure/synchronous/network-free, so importing them directly
 //   avoids both a redundant subprocess and the manual `clone-lock.mjs
 //   --exec -- bash -c '...'` wrapper the issue cites as today's toil.
-// - §LWR's step 2 ("rule out a live session") is intentionally NOT
-//   automated: `claim-lock.mts`'s own header documents why no local
-//   process-liveness signal is recorded (a one-shot CLI's own PID would be
-//   a tombstone before any concurrent session could observe it as alive).
-//   `--operator-confirmed-no-live-session` is the operator's own explicit
-//   attestation for that step, checked before ANY mutation, regardless of
-//   what step 1 finds or whether `--apply` is set.
+// - §LWR's step 2 ("rule out a live session") is never a PID check:
+//   `claim-lock.mts`'s own header documents why no local process-liveness
+//   signal is recorded (a one-shot CLI's own PID would be a tombstone before
+//   any concurrent session could observe it as alive). Its default basis is
+//   `--operator-confirmed-no-live-session`, the operator's own explicit
+//   attestation, checked before ANY mutation, regardless of what step 1
+//   finds or whether `--apply` is set.
+// - #4969: with the `worktreeRemnant` auto-decide class switched on, the
+//   alternative basis `--mechanical-evidence` stands in for that attestation
+//   (`worktree-remnant-evidence.mts`): the trusted class read and a 24-hour
+//   stale floor, a linked worktree, a stale or released claim with a claim
+//   ID, a quiet window over the worktree and its git-admin directory, no
+//   process working directory inside it, and a trusted confirmation record.
+//   The evidence does not prove that the other session is gone; the report
+//   says so. Steps 3 and 4 then run with a durable preserve directory under
+//   the state root, through the #4957 guards. Giving both bases is a usage
+//   error, and every check fails closed.
 //
 // Default mode is dry-run (no mutation); `--apply` performs steps 3 and 4.
 
@@ -92,12 +102,38 @@ import {
   markCliUsageError,
   runHelperCli,
 } from './helper-cli-runner.mts';
+import type { TrustedAutoDecideSnapshot } from './idd-config.mts';
 import {
   type LocalWorktreeRecord,
   parseLocalWorktreeList,
 } from './local-worktree-occupancy.mts';
 import { inspectDevelopmentBranch } from './policy-helpers.mts';
+import {
+  checkPreservationParents,
+  createPreserveDestination,
+  inspectPreserveDestination,
+  isWithinRoot,
+  type PreservationParent,
+  type PreserveGuardDeps,
+} from './preserve-destination.mts';
 import { resolveCurrentGithubRepository } from './provider-adapter-github.mts';
+import {
+  type ConfirmationReference,
+  canonicalSubject,
+  claimBasisProblem,
+  createDefaultEvidencePorts,
+  type EvidenceRouting,
+  evaluateClassGate,
+  evaluateConfirmationRecord,
+  evaluateQuietWindowAndProcesses,
+  evidenceBasisProblem,
+  isDecisionIdText,
+  newEvidenceReport,
+  parseConfirmationReference,
+  setCondition,
+  type WorktreeRemnantEvidencePorts,
+  type WorktreeRemnantEvidenceReport,
+} from './worktree-remnant-evidence.mts';
 
 // ---------------------------------------------------------------------------
 // Local git plumbing (a file-scoped copy of the sanitized-environment /
@@ -343,6 +379,9 @@ export function pathFingerprintOnDisk(
 export interface ConfirmBlockRouting {
   state: string;
   reason: string;
+  /** The stale age, in milliseconds, that the routing used. Mechanical
+   * evidence (#4969) needs it for the 24-hour floor; absent on older output. */
+  stale_age_ms?: number;
   active_claim: { claim_id: string | null; branch: string | null } | null;
   evidence?: {
     local_worktree?: { status: string; paths: string[]; reason: string | null };
@@ -669,6 +708,10 @@ export interface LocalWorktreeRecoveryVerdict {
   preserveDir: string | null;
   mutated: boolean;
   result: string;
+  /** Only in mechanical-evidence mode (#4969): every condition with its
+   * result, the processes that were not inspected, and what step 3 preserved
+   * and where. The basis is evidence, not an attestation. */
+  evidence?: WorktreeRemnantEvidenceReport;
 }
 
 export interface LocalWorktreeRecoveryArgs {
@@ -683,6 +726,12 @@ export interface LocalWorktreeRecoveryArgs {
   now: string;
   preserveDir: string;
   help: boolean;
+  /** #4969: `--mechanical-evidence`, the alternative to the attestation. */
+  mechanicalEvidence?: boolean;
+  /** `--confirmation`: the confirmation issue that holds the record. */
+  confirmation?: ConfirmationReference | null;
+  /** `--decision`: the decision ID of the record. */
+  decision?: string;
 }
 
 type PrimaryRecoveryPreservationManifest = {
@@ -993,6 +1042,9 @@ export interface LocalWorktreeRecoveryDeps {
   removePath: (path: string) => void;
   ensurePreserveDir: () => string;
   now: () => string;
+  /** The ports of the mechanical-evidence mode (#4969). Absent, that mode
+   * refuses before any mutation. */
+  evidence?: WorktreeRemnantEvidencePorts;
 }
 
 function pathPresenceForDeps(
@@ -4067,17 +4119,126 @@ function refreshInitializedSubmoduleStashes(
   return { error: null, refreshed };
 }
 
+// ---------------------------------------------------------------------------
+// Mechanical evidence for step 2 (#4969)
+// ---------------------------------------------------------------------------
+
+/** The state one mechanical-evidence run carries through the core. */
+interface EvidenceRun {
+  report: WorktreeRemnantEvidenceReport;
+  /** The durable destination, once it was created and verified. */
+  destination: string | null;
+  /** The trusted quiet window in milliseconds; `null` until condition 1 read it. */
+  quietWindowMs: number | null;
+  /** The trusted snapshot condition 1 read; condition 6 reuses it. */
+  snapshot: TrustedAutoDecideSnapshot | null;
+}
+
+/** The facts of a routing that the evidence basis reads. */
+function evidenceRoutingFacts(routing: ConfirmBlockRouting): EvidenceRouting {
+  return {
+    reason: routing.reason,
+    claimId: extractRecoveredClaim(routing).claimId,
+    staleAgeMs:
+      typeof routing.stale_age_ms === 'number' ? routing.stale_age_ms : null,
+  };
+}
+
+/**
+ * Fill the preserved locations of the report from the verdict. It runs on
+ * every return path, so a partial apply (preservation done, removal failed)
+ * still says what was preserved and where.
+ */
+function finalizeEvidenceLocations(
+  verdict: LocalWorktreeRecoveryVerdict,
+  run: EvidenceRun,
+): void {
+  run.report.locations = {
+    stashTag: `idd-lwr ${verdict.step1.claimId ?? 'legacy'}`,
+    stashes: verdict.plan.stashes
+      .filter((stash) => stash.stashed)
+      .map(
+        (stash) => `${stash.scope}: ${stash.createdStashEntry ?? stash.tag}`,
+      ),
+    backupRefs: verdict.plan.backupRefs
+      .filter((ref) => ref.written)
+      .map((ref) => ref.ref),
+    preserveDir: verdict.preserveDir,
+  };
+}
+
 /**
  * Run the full §LWR steps 1/3/4 sequence. Pure over injected `deps` so a
  * unit test can assert exact call order (acquire-lock before recheck,
  * recheck before removal, release always runs) without a real git
- * repository. Never mutates when `!args.apply`, and never mutates when
- * `!args.operatorConfirmedNoLiveSession` regardless of `--apply` or what
- * step 1 finds -- both gates are checked before ANY git write.
+ * repository. Never mutates when `!args.apply`, and never mutates unless
+ * step 2 has a basis: `--operator-confirmed-no-live-session` (the operator's
+ * attestation), or, with `--mechanical-evidence`, every evidence condition.
+ * Both gates are checked before ANY git write.
+ *
+ * In evidence mode the wrapper vets every routing read after the first
+ * (the post-lock recheck, the shortcut rechecks, and the read just before
+ * removal) against the same stale-or-released basis, so a claim that changed
+ * under the run stops it; and it fills the report's preserved locations on
+ * every return path.
  */
 export function runLocalWorktreeRecovery(
   args: LocalWorktreeRecoveryArgs,
   deps: LocalWorktreeRecoveryDeps,
+): LocalWorktreeRecoveryVerdict {
+  if (args.mechanicalEvidence !== true) {
+    return runRecoveryCore(args, deps, null);
+  }
+  const report = newEvidenceReport();
+  report.confirmation = args.confirmation
+    ? `${args.confirmation.owner}/${args.confirmation.repo}#${args.confirmation.number}`
+    : null;
+  report.decision = args.decision ? args.decision : null;
+  const run: EvidenceRun = {
+    report,
+    destination: null,
+    quietWindowMs: null,
+    snapshot: null,
+  };
+  let routingReads = 0;
+  const evidenceDeps: LocalWorktreeRecoveryDeps = {
+    ...deps,
+    confirmBlock: (cwd) => {
+      const outcome = deps.confirmBlock(cwd);
+      routingReads += 1;
+      if (routingReads === 1 || !outcome.ok || outcome.routing === null) {
+        return outcome;
+      }
+      const problem = evidenceBasisProblem(
+        evidenceRoutingFacts(outcome.routing),
+      );
+      return problem === null
+        ? outcome
+        : {
+            ok: false,
+            routing: null,
+            error: `mechanical evidence no longer holds: ${problem}`,
+          };
+    },
+    ensurePreserveDir: () => {
+      if (run.destination === null) {
+        throw new Error(
+          'local-worktree-recovery: the durable preserve directory was not created',
+        );
+      }
+      return run.destination;
+    },
+  };
+  const verdict = runRecoveryCore(args, evidenceDeps, run);
+  verdict.evidence = report;
+  finalizeEvidenceLocations(verdict, run);
+  return verdict;
+}
+
+function runRecoveryCore(
+  args: LocalWorktreeRecoveryArgs,
+  deps: LocalWorktreeRecoveryDeps,
+  evidenceRun: EvidenceRun | null,
 ): LocalWorktreeRecoveryVerdict {
   const mode: 'dry-run' | 'apply' = args.apply ? 'apply' : 'dry-run';
   const cwd = deps.cwd();
@@ -4192,6 +4353,20 @@ export function runLocalWorktreeRecovery(
     );
     verdict.mutated ||= preserve.worktreeAdminCopy?.copiedTo != null;
   };
+
+  if (evidenceRun !== null) {
+    const early = args.operatorConfirmedNoLiveSession
+      ? 'give either --operator-confirmed-no-live-session or --mechanical-evidence, never both'
+      : args.preserveDir
+        ? '--preserve-dir is refused with --mechanical-evidence: the preserve directory is always the durable state directory'
+        : deps.evidence === undefined
+          ? 'the mechanical-evidence ports are not available'
+          : null;
+    if (early !== null) {
+      verdict.result = `refusing: ${early}; no mutation`;
+      return verdict;
+    }
+  }
 
   const records = deps.listWorktreeRecords(cwd);
   if (records === null || records.length === 0) {
@@ -4610,6 +4785,265 @@ export function runLocalWorktreeRecovery(
   verdict.step1.branch = recoveredBranch;
   verdict.ready = true;
 
+  // Mechanical evidence for step 2 (#4969). The conditions are evaluated
+  // before any mutation, in a dry run too, and the report lists every one.
+  // `evidenceGuards` is the #4957 filesystem plus this run's git.
+  const evidencePorts = deps.evidence;
+  const evidenceGuards: PreserveGuardDeps | null =
+    evidencePorts === undefined
+      ? null
+      : {
+          ...evidencePorts.guards,
+          git: (argv, gitCwd) => deps.runGit([...argv], gitCwd),
+        };
+  // The roots conditions 4 and 5 check: the worktree and its private
+  // git-admin directory, or, for the prunable shortcut, only the admin
+  // directory that `findWorktreeAdminDir` reports, if any.
+  const evidenceRoots = (): { roots: string[]; error: string | null } => {
+    if (shortcut.eligible) {
+      const lookup = deps.findWorktreeAdminDir
+        ? deps.findWorktreeAdminDir(verdict.primaryWorktree ?? cwd, targetPath)
+        : { path: null, error: null };
+      if (lookup.error) return { roots: [], error: lookup.error };
+      return { roots: lookup.path === null ? [] : [lookup.path], error: null };
+    }
+    return {
+      roots: targetGitDir === null ? [targetPath] : [targetPath, targetGitDir],
+      error: null,
+    };
+  };
+  const checkEvidenceWindowAndProcesses = (): void => {
+    if (evidenceRun === null || evidencePorts === undefined) return;
+    const { roots, error } = evidenceRoots();
+    if (error !== null) {
+      const detail = `the private admin directory could not be located: ${error}`;
+      setCondition(evidenceRun.report, 4, 'unmet', detail);
+      setCondition(evidenceRun.report, 5, 'unmet', detail);
+      return;
+    }
+    evaluateQuietWindowAndProcesses(
+      evidencePorts,
+      evidenceRun.report,
+      roots,
+      evidenceRun.quietWindowMs,
+    );
+  };
+  // The durable destination, inspected under the #4957 guards with the
+  // primary path and every worktree record, the target included, so it can
+  // never lie inside the tree that step 4 removes.
+  const inspectEvidenceDestination = ():
+    | { destination: string; parents: readonly PreservationParent[] }
+    | { hold: string } => {
+    if (evidenceGuards === null || records === null) {
+      return { hold: 'the preserve-destination guards are not available' };
+    }
+    let inspected: ReturnType<typeof inspectPreserveDestination>;
+    try {
+      inspected = inspectPreserveDestination(
+        evidenceGuards,
+        'lwr-preserved',
+        args.issue as number,
+        verdict.primaryWorktree ?? cwd,
+        records,
+      );
+    } catch (error) {
+      return { hold: `the inspection threw: ${errorMessage(error)}` };
+    }
+    if (inspected.hold !== null) return { hold: inspected.hold };
+    for (const root of [targetPath, targetGitDir]) {
+      if (root === null) continue;
+      const real = deps.realpathOrNull(root);
+      if (
+        isWithinRoot(root, inspected.destination) ||
+        (real !== null && isWithinRoot(real, inspected.destination))
+      ) {
+        return {
+          hold: `the destination ${inspected.destination} is inside ${root}, which step 4 removes`,
+        };
+      }
+    }
+    return { destination: inspected.destination, parents: inspected.parents };
+  };
+  if (evidenceRun !== null && evidencePorts !== undefined) {
+    const report = evidenceRun.report;
+    const facts = evidenceRoutingFacts(routing);
+    const linked =
+      verdict.primaryOrLinked === 'linked' && !primaryRecoveryResume;
+    setCondition(
+      report,
+      2,
+      linked ? 'met' : 'unmet',
+      linked
+        ? 'the target is a linked worktree'
+        : primaryRecoveryResume
+          ? 'the run resumes a primary-worktree recovery, which is never in scope'
+          : 'the target is the primary worktree, which is never in scope',
+    );
+    const basis = claimBasisProblem(facts);
+    setCondition(
+      report,
+      3,
+      basis === null ? 'met' : 'unmet',
+      basis ??
+        `${routing.reason} confirms the block for claim ${recoveredClaimId}${
+          shortcut.eligible
+            ? ' (prunable shortcut: step 1 skips the lock check, as for the attestation path)'
+            : ", and step 1's lock check passed"
+        }`,
+    );
+    const gate = evaluateClassGate(
+      evidencePorts.readTrusted,
+      evidencePorts.repository,
+      facts,
+    );
+    setCondition(report, 1, gate.ok ? 'met' : 'unmet', gate.detail);
+    report.quietWindow = gate.quietWindow;
+    evidenceRun.quietWindowMs = gate.quietWindowMs;
+    evidenceRun.snapshot = gate.snapshot;
+    if (linked) {
+      checkEvidenceWindowAndProcesses();
+    } else {
+      const detail = 'not evaluated: the target is not a linked worktree';
+      setCondition(report, 4, 'not-evaluated', detail);
+      setCondition(report, 5, 'not-evaluated', detail);
+    }
+    if (recoveredClaimId === null) {
+      setCondition(
+        report,
+        6,
+        'unmet',
+        'the recovered claim has no claim ID, so no record can name it',
+      );
+    } else {
+      const record = evaluateConfirmationRecord(
+        evidencePorts.readConfirmation,
+        gate.snapshot,
+        {
+          repository: evidencePorts.repository,
+          issue: args.issue as number,
+          confirmation: args.confirmation ?? null,
+          decision: args.decision ?? null,
+          claimId: recoveredClaimId,
+          subject: canonicalSubject(targetPath, deps.realpathOrNull),
+        },
+      );
+      setCondition(report, 6, record.ok ? 'met' : 'unmet', record.detail);
+    }
+    let destinationHold: string | null = null;
+    if (linked) {
+      const inspected = inspectEvidenceDestination();
+      if ('hold' in inspected) {
+        destinationHold = inspected.hold;
+      } else {
+        report.preserveDestination.path = inspected.destination;
+        verdict.preserveDir = inspected.destination;
+      }
+    }
+    // A dry run reports condition 6 as unmet without refusing, so that the
+    // order dry run, then record, then apply works. Every other unmet
+    // condition refuses, and so does an unsafe destination.
+    const blocking = report.conditions.filter(
+      (condition) =>
+        condition.status !== 'met' && !(condition.number === 6 && !args.apply),
+    );
+    if (blocking.length > 0 || destinationHold !== null) {
+      verdict.ready = false;
+      verdict.preserveDir = null;
+      verdict.result = `refusing: mechanical evidence does not stand in for the step 2 attestation (${[
+        ...blocking.map(
+          (condition) =>
+            `condition ${condition.number} (${condition.id}): ${condition.detail}`,
+        ),
+        ...(destinationHold === null
+          ? []
+          : [`durable preserve destination: ${destinationHold}`]),
+      ].join('; ')}); no mutation`;
+      return verdict;
+    }
+  }
+  // The destination a dry run plans, and an apply later creates: the durable
+  // one in evidence mode, else the operator's --preserve-dir.
+  const plannedPreserveDirArg: string | null =
+    evidenceRun !== null
+      ? evidenceRun.report.preserveDestination.path
+      : args.preserveDir
+        ? resolve(cwd, args.preserveDir)
+        : null;
+  // Right before step 3, under the clone lock: conditions 4 and 5 again, then
+  // the destination is inspected afresh, created through #4957's creation
+  // step, and its identity rechecked. A refusal before the creation step
+  // creates nothing. A destination that fails the privacy check or the
+  // identity recheck stops the run before step 3 and is named.
+  const prepareEvidenceDestination = (): string | null => {
+    if (
+      evidenceRun === null ||
+      evidencePorts === undefined ||
+      evidenceGuards === null
+    ) {
+      return 'the mechanical-evidence ports are not available';
+    }
+    // The destination planned before the lock is not a result: it is reported
+    // only once it was created.
+    verdict.preserveDir = null;
+    checkEvidenceWindowAndProcesses();
+    const stale = evidenceRun.report.conditions.filter(
+      (condition) =>
+        (condition.number === 4 || condition.number === 5) &&
+        condition.status !== 'met',
+    );
+    if (stale.length > 0) {
+      return `the evidence no longer holds under the clone lock, so no destination was created -- ${stale
+        .map(
+          (condition) =>
+            `condition ${condition.number} (${condition.id}): ${condition.detail}`,
+        )
+        .join('; ')}`;
+    }
+    const inspected = inspectEvidenceDestination();
+    if ('hold' in inspected) {
+      return `the durable preserve destination is refused under the clone lock, so nothing was created: ${inspected.hold}`;
+    }
+    const { destination } = inspected;
+    evidenceRun.report.preserveDestination.path = destination;
+    let created: ReturnType<typeof createPreserveDestination>;
+    try {
+      created = createPreserveDestination(
+        evidenceGuards,
+        destination,
+        inspected.parents,
+      );
+    } catch (error) {
+      created = { parents: [], hold: `threw: ${errorMessage(error)}` };
+    }
+    let exists = false;
+    try {
+      exists = evidenceGuards.lstat(destination) !== 'absent';
+    } catch {
+      exists = false;
+    }
+    if (exists) {
+      verdict.preserveDir = destination;
+      verdict.mutated = true;
+      evidenceRun.report.preserveDestination.created = true;
+    }
+    if (created.hold !== null) {
+      return `the durable preserve destination ${destination} was not prepared: ${created.hold}${
+        exists && !created.hold.includes('stays in place')
+          ? '; it stays in place'
+          : ''
+      }; step 3 did not start`;
+    }
+    const changed = checkPreservationParents(
+      evidenceGuards,
+      new Map(created.parents.map(({ path, identity }) => [path, identity])),
+    );
+    if (changed !== null) {
+      return `${changed}; the durable preserve destination ${destination} stays in place and step 3 did not start`;
+    }
+    evidenceRun.destination = destination;
+    return null;
+  };
+
   // Dry-run always reports the full plan, regardless of the operator flag
   // -- reporting never mutates, so there is no safety reason to withhold it,
   // and it lets the operator preview everything before adding both
@@ -4647,9 +5081,7 @@ export function runLocalWorktreeRecovery(
         );
       }
       if (adminLookup.path !== null) {
-        const plannedPreserveDir = args.preserveDir
-          ? resolve(cwd, args.preserveDir)
-          : null;
+        const plannedPreserveDir = plannedPreserveDirArg;
         const plannedDestination = plannedPreserveDir
           ? join(plannedPreserveDir, 'prunable-gitdir')
           : null;
@@ -4689,7 +5121,7 @@ export function runLocalWorktreeRecovery(
         tag,
         false,
         deps,
-        args.preserveDir ? resolve(cwd, args.preserveDir) : null,
+        plannedPreserveDirArg,
         targetGitDir,
       );
       verdict.preserveDir = preserve.preserveDir ?? verdict.preserveDir;
@@ -4751,13 +5183,21 @@ export function runLocalWorktreeRecovery(
           ? 'would checkout {development-branch} then hand-remove the lock file'
           : 'would run git worktree remove (retry --force only after a submodule-removal failure or a dirty removal failure with a freshly verified unmerged fallback)',
     };
-    verdict.result = 'dry-run: no mutation performed';
+    const recordCondition = evidenceRun?.report.conditions.find(
+      (condition) => condition.number === 6,
+    );
+    verdict.result =
+      recordCondition !== undefined && recordCondition.status !== 'met'
+        ? `dry-run: no mutation performed; condition 6 (${recordCondition.id}) is unmet, so an apply refuses until the record exists: ${recordCondition.detail}`
+        : 'dry-run: no mutation performed';
     return verdict;
   }
 
   // --apply: gate on the operator's own attestation BEFORE any mutation,
   // regardless of what step 1 found.
-  if (!args.operatorConfirmedNoLiveSession) {
+  // In evidence mode the gate above already refused unless every condition,
+  // the record included, is met.
+  if (!args.operatorConfirmedNoLiveSession && evidenceRun === null) {
     verdict.ready = false;
     verdict.result =
       'refusing: --operator-confirmed-no-live-session was not given (step 2 is never checked mechanically); no mutation';
@@ -5007,6 +5447,15 @@ export function runLocalWorktreeRecovery(
       }
     }
 
+    // Mechanical evidence (#4969): conditions 4 and 5 again, then the durable
+    // destination, before the first preservation mutation.
+    if (evidenceRun !== null) {
+      const stop = prepareEvidenceDestination();
+      if (stop !== null) {
+        return recordRemovalFailure(stop);
+      }
+    }
+
     // Resolve the development branch before any preservation mutation. A
     // malformed local config or failed default-branch lookup must leave the
     // operator with an intact verdict rather than throwing after stashes,
@@ -5084,7 +5533,9 @@ export function runLocalWorktreeRecovery(
       verdict.plan.submoduleListFailed = preserve.submoduleListFailed;
       verdict.plan.submoduleAdminCopies = preserve.submoduleAdminCopies;
       verdict.plan.worktreeAdminCopy = preserve.worktreeAdminCopy;
-      verdict.mutated =
+      // Keep a mutation made before step 3: the durable preserve directory of
+      // the evidence mode exists even when this scope stashed nothing.
+      verdict.mutated ||=
         preserve.stashes.some((s) => s.stashed) ||
         preserve.backupRefs.some((r) => r.written) ||
         preserve.uninitializedSubmodules.some((s) => s.copiedTo !== null) ||
@@ -8492,6 +8943,13 @@ function createProductionDeps(
       resolve(process.cwd(), args.worktree),
     ),
     now: () => args.now || new Date().toISOString(),
+    ...(args.mechanicalEvidence === true
+      ? {
+          evidence: createDefaultEvidencePorts({
+            repository: resolveCurrentGithubRepository(),
+          }),
+        }
+      : {}),
   };
 }
 
@@ -8510,6 +8968,9 @@ const LOCAL_WORKTREE_RECOVERY_FLAG_SPEC = {
   '--policy': { type: 'string' },
   '--now': { type: 'string' },
   '--preserve-dir': { type: 'string' },
+  '--mechanical-evidence': { type: 'boolean', default: false },
+  '--confirmation': { type: 'string' },
+  '--decision': { type: 'string' },
   '--help': { type: 'boolean', short: 'h' },
 } as const;
 
@@ -8534,13 +8995,63 @@ export function parseArgs(argv: string[]): LocalWorktreeRecoveryArgs {
       ),
     );
   }
+  const operatorConfirmedNoLiveSession = Boolean(
+    values['operator-confirmed-no-live-session'],
+  );
+  const mechanicalEvidence = Boolean(values['mechanical-evidence']);
+  const apply = Boolean(values.apply);
+  const confirmationText = (
+    (values.confirmation as string | undefined) ?? ''
+  ).trim();
+  const decision = ((values.decision as string | undefined) ?? '').trim();
+  const preserveDir = (
+    (values['preserve-dir'] as string | undefined) ?? ''
+  ).trim();
+  const usage = (message: string): never => {
+    throw markCliUsageError(new Error(`local-worktree-recovery: ${message}`));
+  };
+  let confirmation: ConfirmationReference | null = null;
+  if (mechanicalEvidence) {
+    if (operatorConfirmedNoLiveSession) {
+      usage(
+        'give either --operator-confirmed-no-live-session or --mechanical-evidence, never both',
+      );
+    }
+    if (preserveDir) {
+      usage(
+        '--preserve-dir is refused with --mechanical-evidence: the preserve directory is always the durable state directory',
+      );
+    }
+    if (confirmationText) {
+      confirmation = parseConfirmationReference(confirmationText);
+      if (confirmation === null) {
+        usage('--confirmation must be <owner>/<repo>#<number>');
+      }
+    }
+    if (decision && !isDecisionIdText(decision)) {
+      usage(
+        '--decision takes one token of at most 128 characters with no whitespace, no ;, and no -->',
+      );
+    }
+    if (decision && confirmation === null) {
+      usage('--decision needs --confirmation');
+    }
+    if (apply && (confirmation === null || !decision)) {
+      usage(
+        '--apply with --mechanical-evidence requires --confirmation and --decision',
+      );
+    }
+  } else if (confirmationText || decision) {
+    usage('--confirmation and --decision need --mechanical-evidence');
+  }
   return {
     issue,
     worktree: ((values.worktree as string | undefined) ?? '').trim(),
-    operatorConfirmedNoLiveSession: Boolean(
-      values['operator-confirmed-no-live-session'],
-    ),
-    apply: Boolean(values.apply),
+    operatorConfirmedNoLiveSession,
+    mechanicalEvidence,
+    confirmation,
+    decision,
+    apply,
     agentId: (
       (values['agent-id'] as string | undefined) ?? 'idd-lwr-operator'
     ).trim(),
@@ -8548,7 +9059,7 @@ export function parseArgs(argv: string[]): LocalWorktreeRecoveryArgs {
     repo,
     policy: ((values.policy as string | undefined) ?? '').trim(),
     now: ((values.now as string | undefined) ?? '').trim(),
-    preserveDir: ((values['preserve-dir'] as string | undefined) ?? '').trim(),
+    preserveDir,
     help: Boolean(help),
   };
 }
@@ -8572,16 +9083,32 @@ Options:
   --owner <owner> --repo <repo>             forwarded to the confirm-the-block check (both or neither)
   --policy <path>                           forwarded to the confirm-the-block check
   --now <ISO8601>                           forwarded to the confirm-the-block check
-  --preserve-dir <path>                     destination for ignored-file / uninitialized-submodule / unmerged-path copies (default: a fresh temp directory, created only when needed)
+  --preserve-dir <path>                     destination for ignored-file / uninitialized-submodule / unmerged-path copies (default: a fresh temp directory, created only when needed; refused with --mechanical-evidence)
+  --mechanical-evidence                     the alternative to --operator-confirmed-no-live-session (never both): with the worktreeRemnant auto-decide class enabled, mechanical evidence stands in for step 2; it does not prove that the other session is gone
+  --confirmation <owner>/<repo>#<number>    with --mechanical-evidence: the confirmation issue that holds the record (required with --apply)
+  --decision <id>                           with --mechanical-evidence: the decision ID of that record (required with --apply)
   --help                                    show this help
 
 Default (no --apply): dry-run. Reports step 1's confirm-the-block verdict
 and exactly what step 3/4 would do, without mutating anything.
 
 Refuses before ANY mutation, regardless of --apply or what step 1 finds,
-when --operator-confirmed-no-live-session is not given -- this flag is the
-operator's own attestation, never a mechanical check (claim-lock.mts's own
-header documents why no local process-liveness signal is recorded).
+unless step 2 has a basis: --operator-confirmed-no-live-session (the
+operator's own attestation, never a mechanical check; claim-lock.mts's own
+header documents why no local process-liveness signal is recorded), or
+--mechanical-evidence with every condition met.
+
+--mechanical-evidence (kurone-kito/idd-skill#4969) needs: the worktreeRemnant
+class enabled in the trusted policy of the live default branch and, for a
+stale claim, a stale age of at least PT24H; a linked worktree (never the
+primary one); step 1's stale-claim-* or released-claim-* reason with a claim
+ID and a matching lock; no entry under the worktree or its git-admin
+directory changed within the trusted quietWindow; no process working
+directory inside the worktree (Linux /proc only; a denied read is listed, not
+refused); and a confirmation record that matches this claim, this path, and
+the decision. A dry run reports condition 6 (the record) as unmet without
+refusing, so the order is: dry run, record, apply. Steps 3 and 4 then run
+with a preserve directory under <state>/idd-skill/lwr-preserved/.
 
 Must be invoked from the primary worktree (or the primary worktree itself,
 when that IS <path>), never from the linked worktree being recovered.
@@ -8608,6 +9135,16 @@ function runCli(): HelperCliResult {
   }
   if (!args.worktree) {
     throw markCliUsageError(new Error('--worktree is required'));
+  }
+  // gh honors GH_REPO, so the trusted policy, the routing, and the record
+  // could all name another repository than this clone's worktree. The evidence
+  // mode reads all three, so it refuses (as `claim-issue --apply` does).
+  if (args.mechanicalEvidence && process.env.GH_REPO) {
+    throw markCliUsageError(
+      new Error(
+        'local-worktree-recovery: --mechanical-evidence refuses to run with GH_REPO set, because gh would name a repository other than this clone; unset GH_REPO',
+      ),
+    );
   }
 
   const deps = createProductionDeps(args);

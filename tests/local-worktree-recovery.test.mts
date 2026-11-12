@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import {
   execFileSync,
   type SpawnSyncReturns,
+  spawn,
   spawnSync,
 } from 'node:child_process';
 import {
@@ -15,20 +16,31 @@ import {
   readlinkSync,
   realpathSync,
   rmSync,
+  statSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
+import type {
+  AutoDecisionRecord,
+  ConfirmationIssueInput,
+  ConfirmationIssueRead,
+} from '../src/scripts/auto-decision-records.mts';
 import {
+  checkClaimLock,
   type PrimaryRecoveryLockMarker,
   recordGeneratedClaimTokens,
 } from '../src/scripts/claim-lock.mts';
+import type { TrustedAutoDecideSnapshot } from '../src/scripts/idd-config.mts';
+import { parseLocalWorktreeList } from '../src/scripts/local-worktree-occupancy.mts';
 import {
   assertRepositoryOverrideMatchesLocal,
+  type ConfirmBlockRouting,
   copyPathWithSafeSymlinks,
   countTaggedStashEntries,
   detectInProgressOperation,
@@ -52,6 +64,14 @@ import {
   runLocalWorktreeRecovery,
   submoduleStatusEntries,
 } from '../src/scripts/local-worktree-recovery.mts';
+import {
+  createDefaultEvidencePorts,
+  type PreserveGuardFilesystem,
+  type ProcPorts,
+  type WalkEntry,
+  type WalkPorts,
+  type WorktreeRemnantEvidencePorts,
+} from '../src/scripts/worktree-remnant-evidence.mts';
 import { stubExecutable } from './test-utils.mts';
 
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -8813,7 +8833,17 @@ function runCli(
   issueNumber: number,
   extraArgs: string[],
   extraEnv: Record<string, string> = {},
+  /** Skip the lock and token preparation, which writes into the admin
+   * directory: for a run that must see that directory as the caller left it. */
+  prepared = false,
 ): SpawnSyncReturns<string> {
+  if (!prepared) {
+    prepareClaimLock(sandbox, issueNumber);
+  }
+  return spawnRecoveryCli(sandbox, issueNumber, extraArgs, extraEnv);
+}
+
+function prepareClaimLock(sandbox: Sandbox, issueNumber: number): void {
   execFileSync(
     process.execPath,
     [
@@ -8833,6 +8863,14 @@ function runCli(
     claimId: `claim-${issueNumber}`,
     nonce: `nonce-${issueNumber}`,
   });
+}
+
+function spawnRecoveryCli(
+  sandbox: Sandbox,
+  issueNumber: number,
+  extraArgs: string[],
+  extraEnv: Record<string, string>,
+): SpawnSyncReturns<string> {
   return spawnSync(
     process.execPath,
     [
@@ -9525,3 +9563,2276 @@ for (const testCase of PRODUCTION_BIRTH_CASES) {
     }
   });
 }
+
+// ---------------------------------------------------------------------------
+// Mechanical evidence for step 2 (#4969)
+// ---------------------------------------------------------------------------
+
+const EVIDENCE_HOUR = 60 * 60 * 1000;
+const EVIDENCE_STALE_AGE_MS = 24 * EVIDENCE_HOUR;
+const EVIDENCE_REPOSITORY = { owner: 'o', repo: 'r' };
+
+function evidenceRouting(
+  overrides: Partial<ConfirmBlockRouting> = {},
+): ConfirmBlockRouting {
+  return {
+    state: 'local_worktree_occupied',
+    reason: 'stale-claim-local-worktree-occupied',
+    stale_age_ms: EVIDENCE_STALE_AGE_MS,
+    active_claim: { claim_id: 'claim-x', branch: 'issue/1-task' },
+    evidence: {
+      local_worktree: {
+        status: 'occupied',
+        paths: ['/repo/linked'],
+        reason: null,
+      },
+    },
+    ...overrides,
+  };
+}
+
+function evidenceOk(routing: ConfirmBlockRouting) {
+  return { ok: true as const, routing, error: null };
+}
+
+function evidenceSnapshot(
+  worktreeRemnant:
+    | 'enabled'
+    | 'class-off'
+    | 'master-off'
+    | 'unreadable' = 'enabled',
+  quietWindow = 'PT2H',
+): TrustedAutoDecideSnapshot {
+  return {
+    report: {
+      status: 'readable',
+      source: 'repository',
+      ref: 'main',
+      master: 'enabled',
+      classes: {
+        decisionIssue: 'class-off',
+        runtimeQuestion: 'class-off',
+        authoringChoice: 'class-off',
+        worktreeRemnant,
+        b1Leftover: 'class-off',
+      },
+      confirmationLabelName: 'status:needs-confirmation',
+      maxPendingConfirmations: 10,
+      maxDecisionsPerClaim: 3,
+      quietWindow,
+    },
+    policyConfig: null,
+  };
+}
+
+function evidenceRecord(
+  overrides: Partial<AutoDecisionRecord> = {},
+): AutoDecisionRecord {
+  return {
+    issue: 5200,
+    from: 'body',
+    class: 'worktreeRemnant',
+    source: 'o/r#1',
+    claim: 'claim-x',
+    set: 'none',
+    decision: 'dec-1',
+    subject: '/repo/linked',
+    locationNote: false,
+    failureNote: false,
+    ...overrides,
+  };
+}
+
+function evidenceRead(
+  overrides: Partial<
+    Extract<ConfirmationIssueRead, { status: 'readable' }>
+  > = {},
+): ConfirmationIssueRead {
+  return {
+    status: 'readable',
+    number: 5200,
+    state: 'open',
+    confirmationLabel: true,
+    authoringLabel: false,
+    bodyRecordCounts: true,
+    bodyRecordReason: null,
+    records: [evidenceRecord()],
+    voidedDecisions: [],
+    conflictingDecisions: [],
+    notes: [],
+    ...overrides,
+  };
+}
+
+const EVIDENCE_REAL_PATHS = new Set([
+  '/repo/primary',
+  '/repo/primary/.git',
+  '/repo/linked',
+  '/repo/primary/.git/worktrees/linked',
+]);
+
+/** An in-memory state root for the #4957 guards. */
+function virtualStateRoot(
+  options: {
+    privacy?: (path: string) => 'private' | 'tightenable' | 'unsafe';
+    identity?: (path: string, read: number) => string | null;
+    stateRoot?: string;
+    dirs?: string[];
+  } = {},
+) {
+  const stateRoot = options.stateRoot ?? '/state';
+  const dirs = new Set<string>([stateRoot, ...(options.dirs ?? [])]);
+  const reads = new Map<string, number>();
+  const made: string[] = [];
+  const guards: PreserveGuardFilesystem = {
+    lstat: (path) => (dirs.has(path) ? 'directory' : 'absent'),
+    directoryIdentity: (path) => {
+      if (!dirs.has(path)) return null;
+      const read = (reads.get(path) ?? 0) + 1;
+      reads.set(path, read);
+      return options.identity ? options.identity(path, read) : `id:${path}`;
+    },
+    realpath: (path) =>
+      dirs.has(path) || EVIDENCE_REAL_PATHS.has(path) ? path : null,
+    stateRoot,
+    now: () => new Date('2026-11-10T01:02:03Z'),
+    inspectDirectoryPrivacy: (path) => options.privacy?.(path) ?? 'private',
+    ensurePrivateDirectory: () => {},
+    mkdir: (path) => {
+      made.push(path);
+      dirs.add(path);
+    },
+  };
+  return { guards, made, dirs };
+}
+
+const EVIDENCE_DESTINATION =
+  '/state/idd-skill/lwr-preserved/1-20261110T010203Z';
+
+function oldEntry(overrides: Partial<WalkEntry> = {}): WalkEntry {
+  return { isDirectory: false, nlink: 1, mtimeMs: 0, ctimeMs: 0, ...overrides };
+}
+
+function quietTree(
+  extra: Record<string, WalkEntry & { children?: string[] }> = {},
+): Record<string, WalkEntry & { children?: string[] }> {
+  return {
+    '/repo/linked': oldEntry({ isDirectory: true }) as WalkEntry & {
+      children?: string[];
+    },
+    '/repo/primary/.git/worktrees/linked': oldEntry({ isDirectory: true }),
+    ...extra,
+  };
+}
+
+function walkPortsOf(
+  tree: Record<string, WalkEntry & { children?: string[] }>,
+  calls: string[] = [],
+): WalkPorts {
+  return {
+    lstat: (path) => {
+      calls.push(`lstat:${path}`);
+      const entry = tree[path];
+      if (entry === undefined) {
+        throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      }
+      return entry;
+    },
+    readdir: (path) => tree[path]?.children ?? [],
+  };
+}
+
+function procPortsOf(
+  workDirs: Record<string, string | { code: string }> = { '1': '/elsewhere' },
+  platform: NodeJS.Platform = 'linux',
+): ProcPorts {
+  return {
+    platform,
+    listPids: () => Object.keys(workDirs),
+    readCwd: (pid) => {
+      const value = workDirs[pid];
+      if (value === undefined) {
+        throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      }
+      if (typeof value !== 'string') {
+        throw Object.assign(new Error(value.code), { code: value.code });
+      }
+      return value;
+    },
+    realpath: (path) => path,
+  };
+}
+
+interface EvidenceFixture {
+  deps: LocalWorktreeRecoveryDeps;
+  /** Every stash, ref, copy, removal, or directory creation. */
+  mutations: string[];
+  events: string[];
+  state: ReturnType<typeof virtualStateRoot>;
+  ports: WorktreeRemnantEvidencePorts;
+}
+
+function evidenceFixture(
+  options: {
+    routing?: ConfirmBlockRouting | (() => ConfirmBlockRouting);
+    deps?: Partial<LocalWorktreeRecoveryDeps>;
+    ports?: Partial<WorktreeRemnantEvidencePorts>;
+    state?: Parameters<typeof virtualStateRoot>[0];
+    tree?: Record<string, WalkEntry & { children?: string[] }>;
+    procs?: Record<string, string | { code: string }>;
+    runGit?: LocalWorktreeRecoveryDeps['runGit'];
+  } = {},
+): EvidenceFixture {
+  const mutations: string[] = [];
+  const events: string[] = [];
+  const state = virtualStateRoot(options.state);
+  const baseGuards = state.guards;
+  const guards: PreserveGuardFilesystem = {
+    ...baseGuards,
+    mkdir: (path, mode) => {
+      mutations.push(`mkdir:${path}`);
+      baseGuards.mkdir(path, mode);
+    },
+  };
+  const routing = options.routing ?? evidenceRouting();
+  const ports: WorktreeRemnantEvidencePorts = {
+    readTrusted: () => evidenceSnapshot(),
+    readConfirmation: () => evidenceRead(),
+    walk: walkPortsOf(options.tree ?? quietTree()),
+    proc: procPortsOf(options.procs),
+    nowMs: () => 10 * EVIDENCE_HOUR,
+    guards,
+    repository: EVIDENCE_REPOSITORY,
+    ...options.ports,
+  };
+  const inner = options.runGit ?? cleanRepoRunGit;
+  const deps = fakeDeps({
+    confirmBlock: () =>
+      evidenceOk(typeof routing === 'function' ? routing() : routing),
+    runGit: (argv, cwd) => {
+      if (argv[0] === 'rev-parse' && argv.includes('--git-common-dir')) {
+        return {
+          ok: true,
+          status: 0,
+          stdout: '/repo/primary/.git\n',
+          stderr: '',
+        };
+      }
+      if (
+        (argv[0] === 'stash' && argv[1] === 'push') ||
+        argv[0] === 'update-ref' ||
+        (argv[0] === 'worktree' && argv[1] === 'remove')
+      ) {
+        mutations.push(argv.slice(0, 2).join(' '));
+      }
+      return inner(argv, cwd);
+    },
+    copyPath: (from, to) => {
+      mutations.push(`copy:${from}`);
+      void to;
+    },
+    removePath: (path) => {
+      mutations.push(`remove:${path}`);
+    },
+    acquireCloneLock: () => {
+      events.push('acquire');
+      return { path: '/repo/.idd-clone.lock', token: 'tok' };
+    },
+    releaseCloneLock: () => {
+      events.push('release');
+    },
+    evidence: ports,
+    ...options.deps,
+  });
+  return { deps, mutations, events, state, ports };
+}
+
+function evidenceArgs(
+  overrides: Partial<Parameters<typeof runLocalWorktreeRecovery>[0]> = {},
+) {
+  return baseArgs({
+    mechanicalEvidence: true,
+    confirmation: { owner: 'o', repo: 'r', number: 5200 },
+    decision: 'dec-1',
+    ...overrides,
+  });
+}
+
+function assertRefusedBeforeMutation(
+  fixture: EvidenceFixture,
+  verdict: ReturnType<typeof runLocalWorktreeRecovery>,
+  pattern: RegExp,
+) {
+  assert.equal(verdict.ready, false, verdict.result);
+  assert.equal(verdict.mutated, false);
+  assert.deepEqual(fixture.mutations, []);
+  assert.match(verdict.result, pattern);
+}
+
+function condition(
+  verdict: ReturnType<typeof runLocalWorktreeRecovery>,
+  number: number,
+) {
+  const found = verdict.evidence?.conditions.find((c) => c.number === number);
+  assert.ok(found !== undefined, `condition ${number}`);
+  return found;
+}
+
+test('evidence: every condition holds, so steps 3 and 4 run with the durable preserve directory', () => {
+  const fixture = evidenceFixture();
+  const verdict = runLocalWorktreeRecovery(
+    evidenceArgs({ apply: true }),
+    fixture.deps,
+  );
+  assert.equal(verdict.plan.removal?.ran, true, verdict.result);
+  assert.equal(verdict.operatorConfirmed, false);
+  assert.equal(verdict.evidence?.met, true);
+  assert.equal(verdict.evidence?.basis, 'mechanical-evidence');
+  assert.deepEqual(
+    verdict.evidence?.conditions.map((c) => c.status),
+    ['met', 'met', 'met', 'met', 'met', 'met'],
+  );
+  assert.equal(verdict.preserveDir, EVIDENCE_DESTINATION);
+  assert.deepEqual(fixture.state.made, [
+    '/state/idd-skill',
+    '/state/idd-skill/lwr-preserved',
+    EVIDENCE_DESTINATION,
+  ]);
+  assert.ok(fixture.state.dirs.has(EVIDENCE_DESTINATION));
+  assert.deepEqual(verdict.evidence?.preserveDestination, {
+    path: EVIDENCE_DESTINATION,
+    created: true,
+  });
+  // The destination exists before the first preservation mutation, and the
+  // removal comes last.
+  assert.ok(
+    fixture.mutations.indexOf(`mkdir:${EVIDENCE_DESTINATION}`) <
+      fixture.mutations.indexOf('worktree remove'),
+  );
+  assert.match(verdict.evidence?.statement ?? '', /not an attestation/);
+  assert.equal(verdict.evidence?.quietWindow, 'PT2H');
+  assert.equal(verdict.evidence?.openRisks.length, 3);
+  assert.deepEqual(fixture.events, ['acquire', 'release']);
+});
+
+test('evidence: a dry run before the record exists reports condition 6 unmet and mutates nothing', () => {
+  const fixture = evidenceFixture({
+    ports: {
+      readConfirmation: () => ({ status: 'unreadable', error: 'none yet' }),
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    evidenceArgs({ confirmation: null, decision: '' }),
+    fixture.deps,
+  );
+  assert.equal(verdict.ready, true, verdict.result);
+  assert.equal(verdict.mutated, false);
+  assert.deepEqual(fixture.mutations, []);
+  assert.deepEqual(fixture.events, []);
+  assert.equal(condition(verdict, 6).status, 'unmet');
+  assert.match(verdict.result, /dry-run: no mutation performed; condition 6/);
+  assert.equal(verdict.evidence?.met, false);
+  for (const number of [1, 2, 3, 4, 5]) {
+    assert.equal(
+      condition(verdict, number).status,
+      'met',
+      `condition ${number}`,
+    );
+  }
+  // The plan is reported, and the durable destination is planned, not made.
+  assert.equal(verdict.plan.removal?.wouldRun, true);
+  assert.equal(verdict.preserveDir, EVIDENCE_DESTINATION);
+  assert.equal(verdict.evidence?.preserveDestination.created, false);
+  assert.equal(fixture.state.made.length, 0);
+});
+
+test('evidence: a dry run with a record that does not match still reports, then an apply refuses', () => {
+  const fixture = evidenceFixture({
+    ports: { readConfirmation: () => evidenceRead({ records: [] }) },
+  });
+  const dry = runLocalWorktreeRecovery(evidenceArgs(), fixture.deps);
+  assert.equal(dry.ready, true);
+  assert.equal(condition(dry, 6).status, 'unmet');
+  const apply = runLocalWorktreeRecovery(
+    evidenceArgs({ apply: true }),
+    fixture.deps,
+  );
+  assertRefusedBeforeMutation(fixture, apply, /condition 6/);
+  assert.deepEqual(fixture.events, []);
+});
+
+test('evidence: the class not enabled, an unreadable trusted read, or a stale age below PT24H refuses', () => {
+  const cases: Array<{
+    name: string;
+    ports?: Partial<WorktreeRemnantEvidencePorts>;
+    routing?: ConfirmBlockRouting;
+    pattern: RegExp;
+  }> = [
+    {
+      name: 'class off',
+      ports: { readTrusted: () => evidenceSnapshot('class-off') },
+      pattern: /condition 1 \(class-enabled\).*class-off/,
+    },
+    {
+      name: 'master off',
+      ports: { readTrusted: () => evidenceSnapshot('master-off') },
+      pattern: /condition 1.*master-off/,
+    },
+    {
+      name: 'unreadable',
+      ports: {
+        readTrusted: () => ({
+          report: {
+            status: 'unreadable',
+            source: 'repository',
+            ref: 'main',
+            master: 'unreadable',
+            classes: {
+              decisionIssue: 'unreadable',
+              runtimeQuestion: 'unreadable',
+              authoringChoice: 'unreadable',
+              worktreeRemnant: 'unreadable',
+              b1Leftover: 'unreadable',
+            },
+            error: 'no network',
+          },
+          policyConfig: null,
+        }),
+      },
+      pattern: /condition 1.*no network/,
+    },
+    {
+      name: 'read throws',
+      ports: {
+        readTrusted: () => {
+          throw new Error('gh missing');
+        },
+      },
+      pattern: /condition 1.*gh missing/,
+    },
+    {
+      name: 'a stale age below the floor',
+      routing: evidenceRouting({ stale_age_ms: EVIDENCE_STALE_AGE_MS - 1 }),
+      pattern: /condition 1.*PT24H/,
+    },
+    {
+      name: 'no stale age at all',
+      routing: (() => {
+        const routing = evidenceRouting();
+        delete routing.stale_age_ms;
+        return routing;
+      })(),
+      pattern: /condition 1.*no readable stale age/,
+    },
+    {
+      name: 'a repository stale age of four hours',
+      routing: evidenceRouting({ stale_age_ms: 4 * EVIDENCE_HOUR }),
+      pattern: /condition 1/,
+    },
+    {
+      name: 'a malformed quiet window',
+      ports: { readTrusted: () => evidenceSnapshot('enabled', 'soon') },
+      pattern: /condition 1.*quietWindow/,
+    },
+  ];
+  for (const testCase of cases) {
+    for (const apply of [false, true]) {
+      const fixture = evidenceFixture({
+        ports: testCase.ports ?? {},
+        ...(testCase.routing === undefined
+          ? {}
+          : { routing: testCase.routing }),
+      });
+      const verdict = runLocalWorktreeRecovery(
+        evidenceArgs({ apply }),
+        fixture.deps,
+      );
+      assertRefusedBeforeMutation(fixture, verdict, testCase.pattern);
+      assert.deepEqual(fixture.events, [], `${testCase.name}: no clone lock`);
+    }
+  }
+});
+
+test('evidence: a released claim needs no stale age', () => {
+  const routing = evidenceRouting({
+    reason: 'released-claim-local-worktree-occupied',
+    active_claim: null,
+    evidence: {
+      local_worktree: {
+        status: 'occupied',
+        paths: ['/repo/linked'],
+        reason: null,
+      },
+      released_claim: { claim_id: 'claim-x', branch: 'issue/1-task' },
+    },
+  });
+  delete routing.stale_age_ms;
+  const fixture = evidenceFixture({ routing });
+  const verdict = runLocalWorktreeRecovery(
+    evidenceArgs({ apply: true }),
+    fixture.deps,
+  );
+  assert.equal(verdict.plan.removal?.ran, true, verdict.result);
+  assert.equal(verdict.step1.outcome, 'blocked-released');
+});
+
+test('evidence: both the evidence flag and the operator flag is a usage error, and a refusal when called directly', () => {
+  assert.throws(
+    () =>
+      parseArgs([
+        '--issue',
+        '1',
+        '--worktree',
+        '/repo/linked',
+        '--mechanical-evidence',
+        '--operator-confirmed-no-live-session',
+      ]),
+    /never both/,
+  );
+  const fixture = evidenceFixture();
+  const verdict = runLocalWorktreeRecovery(
+    evidenceArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    fixture.deps,
+  );
+  assertRefusedBeforeMutation(fixture, verdict, /never both/);
+  assert.deepEqual(fixture.events, []);
+});
+
+test('evidence: --preserve-dir is a usage error and a refusal', () => {
+  assert.throws(
+    () =>
+      parseArgs([
+        '--issue',
+        '1',
+        '--worktree',
+        '/repo/linked',
+        '--mechanical-evidence',
+        '--preserve-dir',
+        '/tmp/x',
+      ]),
+    /--preserve-dir is refused with --mechanical-evidence/,
+  );
+  for (const apply of [false, true]) {
+    const fixture = evidenceFixture();
+    const verdict = runLocalWorktreeRecovery(
+      evidenceArgs({ apply, preserveDir: '/tmp/x' }),
+      fixture.deps,
+    );
+    assertRefusedBeforeMutation(fixture, verdict, /--preserve-dir is refused/);
+  }
+});
+
+test('evidence: missing ports refuse before anything runs', () => {
+  const fixture = evidenceFixture();
+  const { evidence: _omitted, ...withoutPorts } = fixture.deps;
+  const verdict = runLocalWorktreeRecovery(
+    evidenceArgs({ apply: true }),
+    withoutPorts,
+  );
+  assertRefusedBeforeMutation(fixture, verdict, /ports are not available/);
+  assert.deepEqual(fixture.events, []);
+});
+
+test('evidence: the flags parse, and their combinations are usage errors', () => {
+  const base = ['--issue', '1', '--worktree', '/repo/linked'];
+  const parsed = parseArgs([
+    ...base,
+    '--mechanical-evidence',
+    '--confirmation',
+    'kurone-kito/idd-skill#5200',
+    '--decision',
+    'dec-1',
+    '--apply',
+  ]);
+  assert.equal(parsed.mechanicalEvidence, true);
+  assert.deepEqual(parsed.confirmation, {
+    owner: 'kurone-kito',
+    repo: 'idd-skill',
+    number: 5200,
+  });
+  assert.equal(parsed.decision, 'dec-1');
+  // A dry run needs neither.
+  assert.equal(parseArgs([...base, '--mechanical-evidence']).apply, false);
+  // The operator flag parses as before, with the new fields empty.
+  const operator = parseArgs([...base, '--operator-confirmed-no-live-session']);
+  assert.equal(operator.mechanicalEvidence, false);
+  assert.equal(operator.confirmation, null);
+  assert.equal(operator.decision, '');
+  const refused: Array<[string[], RegExp]> = [
+    [[...base, '--confirmation', 'a/b#1'], /need --mechanical-evidence/],
+    [[...base, '--decision', 'dec-1'], /need --mechanical-evidence/],
+    [
+      [...base, '--mechanical-evidence', '--apply'],
+      /requires --confirmation and --decision/,
+    ],
+    [
+      [...base, '--mechanical-evidence', '--apply', '--confirmation', 'a/b#1'],
+      /requires --confirmation and --decision/,
+    ],
+    [
+      [...base, '--mechanical-evidence', '--confirmation', '5200'],
+      /--confirmation must be <owner>\/<repo>#<number>/,
+    ],
+    [
+      [
+        ...base,
+        '--mechanical-evidence',
+        '--confirmation',
+        'a/b#1',
+        '--decision',
+        'a b',
+      ],
+      /--decision takes one token/,
+    ],
+    [
+      [...base, '--mechanical-evidence', '--decision', 'dec-1'],
+      /--decision needs --confirmation/,
+    ],
+  ];
+  for (const [argv, pattern] of refused) {
+    assert.throws(() => parseArgs(argv), pattern, argv.join(' '));
+  }
+});
+
+test('evidence: the primary worktree is never in scope', () => {
+  const routing = evidenceRouting({
+    evidence: {
+      local_worktree: {
+        status: 'occupied',
+        paths: ['/repo/primary'],
+        reason: null,
+      },
+    },
+  });
+  for (const apply of [false, true]) {
+    const fixture = evidenceFixture({
+      routing,
+      deps: {
+        checkLock: () => ({
+          path: '/repo/primary/.git/idd-claim.lock',
+          present: true,
+          holder: {
+            agentId: 'agent-x',
+            claimId: 'claim-x',
+            acquiredAt: '2026-09-24T00:00:00Z',
+          },
+        }),
+      },
+    });
+    const verdict = runLocalWorktreeRecovery(
+      evidenceArgs({ apply, worktree: '/repo/primary' }),
+      fixture.deps,
+    );
+    assert.equal(verdict.primaryOrLinked, 'primary');
+    assertRefusedBeforeMutation(
+      fixture,
+      verdict,
+      /condition 2 \(linked-worktree\).*primary worktree/,
+    );
+    assert.equal(condition(verdict, 4).status, 'not-evaluated');
+    assert.equal(condition(verdict, 5).status, 'not-evaluated');
+    assert.deepEqual(fixture.events, []);
+  }
+  // The attestation path still reaches that plan.
+  const operator = evidenceFixture({
+    routing,
+    deps: { evidence: undefined },
+  });
+  const planned = runLocalWorktreeRecovery(
+    baseArgs({
+      worktree: '/repo/primary',
+      operatorConfirmedNoLiveSession: true,
+    }),
+    operator.deps,
+  );
+  assert.equal(planned.step1.outcome, 'blocked-stale');
+  assert.equal(planned.evidence, undefined);
+});
+
+test('evidence: a primary-recovery resume is never in scope', () => {
+  const preservation = JSON.stringify({
+    inProgressOperation: null,
+    submoduleInProgressOperations: [],
+    stashes: [],
+    uninitializedSubmodules: [],
+    backupRefs: [],
+    ignoredFilesCopied: [],
+    ignoredFilesScanFailed: false,
+    submoduleListFailed: false,
+    submoduleAdminCopies: [],
+    worktreeAdminCopy: null,
+  });
+  const fixture = evidenceFixture({
+    routing: {
+      state: 'stale',
+      reason: 'stale-claim-no-local-worktree',
+      stale_age_ms: EVIDENCE_STALE_AGE_MS,
+      active_claim: { claim_id: 'claim-x', branch: 'issue/1-task' },
+      evidence: {
+        local_worktree: { status: 'absent', paths: [], reason: null },
+      },
+    },
+    deps: {
+      listWorktreeRecords: () => [
+        {
+          path: '/repo/primary',
+          branchRef: 'refs/heads/main',
+          detached: false,
+          bare: false,
+          locked: false,
+          prunable: false,
+        },
+      ],
+      checkLock: () => ({
+        path: '/repo/primary/.git/idd-claim.lock',
+        present: true,
+        holder: {
+          agentId: 'agent-x',
+          claimId: 'claim-x',
+          acquiredAt: '2026-09-24T00:00:00Z',
+          primaryRecovery: {
+            phase: 'primary-checkout',
+            worktree: '/repo/primary',
+            claimId: 'claim-x',
+            branch: 'issue/1-task',
+            developmentBranch: 'main',
+            releasedClaim: false,
+            preserveDir: null,
+            preservation,
+          },
+        },
+      }),
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    evidenceArgs({ apply: true, worktree: '/repo/primary' }),
+    fixture.deps,
+  );
+  assert.equal(verdict.step1.outcome, 'blocked-primary-resume');
+  assertRefusedBeforeMutation(
+    fixture,
+    verdict,
+    /condition 2.*primary-worktree recovery/,
+  );
+  assert.deepEqual(fixture.events, []);
+});
+
+test('evidence: step 1 not confirming a stale or released claim, or a failing lock check, refuses', () => {
+  const cases: Array<{
+    name: string;
+    routing?: ConfirmBlockRouting;
+    deps?: Partial<LocalWorktreeRecoveryDeps>;
+    outcome: string;
+  }> = [
+    {
+      name: 'no block to recover',
+      routing: {
+        state: 'unclaimed',
+        reason: 'no-active-claim',
+        active_claim: null,
+        evidence: {
+          local_worktree: { status: 'absent', paths: [], reason: null },
+        },
+      },
+      outcome: 'not-blocked',
+    },
+    {
+      name: 'a lock held by another claim',
+      deps: {
+        checkLock: () => ({
+          path: '/repo/linked/.git/idd-claim.lock',
+          present: true,
+          holder: {
+            agentId: 'agent-y',
+            claimId: 'claim-y',
+            acquiredAt: '2026-09-24T00:00:00Z',
+          },
+        }),
+      },
+      outcome: 'lock-mismatch',
+    },
+    {
+      name: 'a malformed lock',
+      deps: {
+        checkLock: () => ({
+          path: '/repo/linked/.git/idd-claim.lock',
+          present: true,
+          malformed: true,
+        }),
+      },
+      outcome: 'lock-malformed',
+    },
+    {
+      name: 'an unreadable occupancy',
+      routing: evidenceRouting({
+        reason: 'stale-claim-local-worktree-unreadable',
+      }),
+      outcome: 'blocked-unreadable',
+    },
+    {
+      name: 'a routing that failed',
+      deps: {
+        confirmBlock: () => ({ ok: false, routing: null, error: 'gh failed' }),
+      },
+      outcome: 'confirm-failed',
+    },
+  ];
+  for (const testCase of cases) {
+    const fixture = evidenceFixture({
+      ...(testCase.routing === undefined ? {} : { routing: testCase.routing }),
+      ...(testCase.deps === undefined ? {} : { deps: testCase.deps }),
+    });
+    const verdict = runLocalWorktreeRecovery(
+      evidenceArgs({ apply: true }),
+      fixture.deps,
+    );
+    assert.equal(verdict.step1.outcome, testCase.outcome, testCase.name);
+    assertRefusedBeforeMutation(fixture, verdict, /./);
+    assert.deepEqual(fixture.events, [], testCase.name);
+  }
+});
+
+test('evidence: a legacy release has no claim ID, so only the attestation proceeds', () => {
+  const routing = evidenceRouting({
+    reason: 'released-claim-local-worktree-occupied',
+    active_claim: null,
+    evidence: {
+      local_worktree: {
+        status: 'occupied',
+        paths: ['/repo/linked'],
+        reason: null,
+      },
+      released_claim: { claim_id: null, branch: 'issue/1-task' },
+    },
+  });
+  const noLock = {
+    path: '/repo/linked/.git/idd-claim.lock',
+    present: false,
+  };
+  const evidence = evidenceFixture({
+    routing,
+    deps: { checkLock: () => noLock },
+  });
+  const refused = runLocalWorktreeRecovery(
+    evidenceArgs({ apply: true }),
+    evidence.deps,
+  );
+  assertRefusedBeforeMutation(
+    evidence,
+    refused,
+    /condition 3 \(stale-or-released-claim\).*legacy release/,
+  );
+  // The same inputs under the operator's attestation do proceed.
+  const operator = evidenceFixture({
+    routing,
+    deps: { checkLock: () => noLock },
+  });
+  const attested = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    operator.deps,
+  );
+  assert.equal(attested.plan.removal?.ran, true, attested.result);
+});
+
+test('evidence: an explicit-absence routing keeps the attestation path', () => {
+  const routing = {
+    state: 'stale',
+    reason: 'active-claim-stale',
+    stale_age_ms: EVIDENCE_STALE_AGE_MS,
+    active_claim: { claim_id: 'claim-x', branch: 'issue/1-task' },
+    evidence: { local_worktree: { status: 'absent', paths: [], reason: null } },
+  } satisfies ConfirmBlockRouting;
+  const records = [
+    {
+      path: '/repo/primary',
+      branchRef: 'refs/heads/main',
+      detached: false,
+      bare: false,
+      locked: false,
+      prunable: false,
+    },
+    {
+      path: '/repo/linked',
+      branchRef: 'refs/heads/issue/1-task',
+      detached: false,
+      bare: false,
+      locked: false,
+      prunable: true,
+    },
+  ];
+  const overrides = {
+    listWorktreeRecords: () => records,
+    pathExists: (path: string) => path !== '/repo/linked',
+  };
+  const evidence = evidenceFixture({ routing, deps: overrides });
+  const refused = runLocalWorktreeRecovery(
+    evidenceArgs({ apply: true }),
+    evidence.deps,
+  );
+  assert.equal(refused.step1.outcome, 'blocked-prunable');
+  assertRefusedBeforeMutation(
+    evidence,
+    refused,
+    /condition 3.*neither stale-claim-\* nor released-claim-\*/,
+  );
+  const operator = evidenceFixture({ routing, deps: overrides });
+  const attested = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    operator.deps,
+  );
+  assert.equal(attested.plan.removal?.ran, true, attested.result);
+});
+
+test('evidence: an entry changed within the quiet window refuses', () => {
+  const tree = quietTree({
+    '/repo/linked': {
+      ...oldEntry({ isDirectory: true }),
+      children: ['hot.txt'],
+    },
+    '/repo/linked/hot.txt': oldEntry({ mtimeMs: 10 * EVIDENCE_HOUR - 60_000 }),
+  });
+  for (const apply of [false, true]) {
+    const fixture = evidenceFixture({ tree });
+    const verdict = runLocalWorktreeRecovery(
+      evidenceArgs({ apply }),
+      fixture.deps,
+    );
+    assertRefusedBeforeMutation(
+      fixture,
+      verdict,
+      /condition 4 \(quiet-window\).*\/repo\/linked\/hot\.txt changed 60 s ago/,
+    );
+    assert.deepEqual(fixture.events, []);
+  }
+});
+
+test('evidence: a recent entry in the private git-admin directory refuses', () => {
+  const tree = quietTree({
+    '/repo/primary/.git/worktrees/linked': {
+      ...oldEntry({ isDirectory: true }),
+      children: ['index'],
+    },
+    '/repo/primary/.git/worktrees/linked/index': oldEntry({
+      mtimeMs: 10 * EVIDENCE_HOUR - 1000,
+    }),
+  });
+  const fixture = evidenceFixture({ tree });
+  const verdict = runLocalWorktreeRecovery(
+    evidenceArgs({ apply: true }),
+    fixture.deps,
+  );
+  assertRefusedBeforeMutation(
+    fixture,
+    verdict,
+    /condition 4.*worktrees\/linked\/index changed/,
+  );
+});
+
+test('evidence: a time in the future and an unreadable entry refuse', () => {
+  const future = evidenceFixture({
+    tree: quietTree({
+      '/repo/linked': { ...oldEntry({ isDirectory: true }), children: ['f'] },
+      '/repo/linked/f': oldEntry({ mtimeMs: 11 * EVIDENCE_HOUR }),
+    }),
+  });
+  assertRefusedBeforeMutation(
+    future,
+    runLocalWorktreeRecovery(evidenceArgs({ apply: true }), future.deps),
+    /condition 4.*time in the future/,
+  );
+  const unreadable = evidenceFixture({
+    tree: quietTree({
+      '/repo/linked': {
+        ...oldEntry({ isDirectory: true }),
+        children: ['gone'],
+      },
+    }),
+  });
+  assertRefusedBeforeMutation(
+    unreadable,
+    runLocalWorktreeRecovery(evidenceArgs({ apply: true }), unreadable.deps),
+    /condition 4.*gone could not be read: ENOENT/,
+  );
+});
+
+test('evidence: a multiply linked file with a recent change time does not refuse', () => {
+  const fixture = evidenceFixture({
+    tree: quietTree({
+      '/repo/linked': {
+        ...oldEntry({ isDirectory: true }),
+        children: ['store'],
+      },
+      '/repo/linked/store': oldEntry({
+        nlink: 4,
+        ctimeMs: 10 * EVIDENCE_HOUR - 1000,
+      }),
+    }),
+  });
+  const verdict = runLocalWorktreeRecovery(
+    evidenceArgs({ apply: true }),
+    fixture.deps,
+  );
+  assert.equal(verdict.plan.removal?.ran, true, verdict.result);
+});
+
+test('evidence: the quiet window uses its own clock, never the helper clock or --now', () => {
+  const tree = quietTree({
+    '/repo/linked': { ...oldEntry({ isDirectory: true }), children: ['f'] },
+    '/repo/linked/f': oldEntry({ mtimeMs: 10 * EVIDENCE_HOUR - 60_000 }),
+  });
+  const fixture = evidenceFixture({
+    tree,
+    // A helper clock far in the future would make the entry look old.
+    deps: { now: () => '2099-01-01T00:00:00Z' },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    evidenceArgs({ now: '2099-01-01T00:00:00Z' }),
+    fixture.deps,
+  );
+  assert.equal(verdict.ready, false);
+  assert.match(verdict.result, /condition 4/);
+});
+
+test('evidence: a process working directory inside the worktree refuses', () => {
+  for (const apply of [false, true]) {
+    const fixture = evidenceFixture({
+      procs: { '10': '/elsewhere', '4242': '/repo/linked/src' },
+    });
+    const verdict = runLocalWorktreeRecovery(
+      evidenceArgs({ apply }),
+      fixture.deps,
+    );
+    assertRefusedBeforeMutation(
+      fixture,
+      verdict,
+      /condition 5 \(no-process-cwd\).*process 4242 has its working directory at \/repo\/linked\/src/,
+    );
+    assert.deepEqual(fixture.events, []);
+  }
+});
+
+test('evidence: a process that denies its /proc read is listed and does not refuse', () => {
+  const fixture = evidenceFixture({
+    procs: { '10': { code: 'EACCES' }, '11': '/elsewhere' },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    evidenceArgs({ apply: true }),
+    fixture.deps,
+  );
+  assert.equal(verdict.plan.removal?.ran, true, verdict.result);
+  assert.deepEqual(verdict.evidence?.processesNotInspected, {
+    count: 1,
+    sample: [{ pid: 10, reason: 'EACCES' }],
+  });
+});
+
+test('evidence: another working-directory read error, or a platform without /proc, refuses', () => {
+  const read = evidenceFixture({ procs: { '10': { code: 'EIO' } } });
+  assertRefusedBeforeMutation(
+    read,
+    runLocalWorktreeRecovery(evidenceArgs({ apply: true }), read.deps),
+    /condition 5.*EIO/,
+  );
+  const platform = evidenceFixture({
+    ports: { proc: procPortsOf({ '1': '/elsewhere' }, 'darwin') },
+  });
+  assertRefusedBeforeMutation(
+    platform,
+    runLocalWorktreeRecovery(evidenceArgs({ apply: true }), platform.deps),
+    /condition 5.*cannot run on darwin/,
+  );
+});
+
+test('evidence: a missing, closed, unlabeled, held, or mismatched record refuses an apply', () => {
+  const cases: Array<{
+    name: string;
+    read: ConfirmationIssueRead;
+    args?: Partial<Parameters<typeof runLocalWorktreeRecovery>[0]>;
+    pattern: RegExp;
+  }> = [
+    {
+      name: 'unreadable',
+      read: { status: 'unreadable', error: 'gh failed' },
+      pattern: /unreadable: gh failed/,
+    },
+    {
+      name: 'closed',
+      read: evidenceRead({ state: 'closed' }),
+      pattern: /not open/,
+    },
+    {
+      name: 'unlabeled',
+      read: evidenceRead({ confirmationLabel: false }),
+      pattern: /lacks the status:needs-confirmation label/,
+    },
+    {
+      name: 'still held',
+      read: evidenceRead({ authoringLabel: true }),
+      pattern: /still carries the authoring label/,
+    },
+    {
+      name: 'no counting record (untrusted author)',
+      read: evidenceRead({ records: [] }),
+      pattern: /matches no record/,
+    },
+    {
+      name: 'another claim',
+      read: evidenceRead({ records: [evidenceRecord({ claim: 'claim-y' })] }),
+      pattern: /matches no record/,
+    },
+    {
+      name: 'another subject',
+      read: evidenceRead({
+        records: [evidenceRecord({ subject: '/repo/other' })],
+      }),
+      pattern: /matches no record/,
+    },
+    {
+      name: 'another decision',
+      read: evidenceRead({ records: [evidenceRecord({ decision: 'dec-2' })] }),
+      pattern: /matches no record/,
+    },
+    {
+      name: 'voided',
+      read: evidenceRead({ records: [], voidedDecisions: ['dec-1'] }),
+      pattern: /it is voided/,
+    },
+    {
+      name: 'a counting location note',
+      read: evidenceRead({ records: [evidenceRecord({ locationNote: true })] }),
+      pattern: /counting location note/,
+    },
+    {
+      name: 'a counting failure note',
+      read: evidenceRead({ records: [evidenceRecord({ failureNote: true })] }),
+      pattern: /counting failure note/,
+    },
+    {
+      name: 'the claimed issue itself',
+      read: evidenceRead(),
+      args: { confirmation: { owner: 'o', repo: 'r', number: 1 } },
+      pattern: /another issue of this repository/,
+    },
+    {
+      name: 'another repository',
+      read: evidenceRead(),
+      args: { confirmation: { owner: 'x', repo: 'y', number: 5200 } },
+      pattern: /another issue of this repository/,
+    },
+    {
+      name: 'no confirmation named',
+      read: evidenceRead(),
+      args: { confirmation: null, decision: '' },
+      pattern: /no --confirmation and --decision/,
+    },
+  ];
+  for (const testCase of cases) {
+    const fixture = evidenceFixture({
+      ports: { readConfirmation: () => testCase.read },
+    });
+    const verdict = runLocalWorktreeRecovery(
+      evidenceArgs({ apply: true, ...testCase.args }),
+      fixture.deps,
+    );
+    assertRefusedBeforeMutation(
+      fixture,
+      verdict,
+      new RegExp(
+        `condition 6 \\(confirmation-record\\).*${testCase.pattern.source}`,
+      ),
+    );
+    assert.deepEqual(fixture.events, [], `${testCase.name}: no clone lock`);
+    assert.equal(fixture.state.made.length, 0, testCase.name);
+  }
+});
+
+test('evidence: the record subject is the canonical path of the target, parent resolved', () => {
+  // The target's parent is a link: the real parent is /real/repo.
+  const realpathOrNull = (path: string): string | null =>
+    path === '/repo' ? '/real/repo' : path;
+  const withSubject = (subject: string) =>
+    evidenceFixture({
+      deps: { realpathOrNull },
+      ports: {
+        readConfirmation: () =>
+          evidenceRead({ records: [evidenceRecord({ subject })] }),
+      },
+    });
+  const matching = withSubject('/real/repo/linked');
+  const met = runLocalWorktreeRecovery(evidenceArgs(), matching.deps);
+  assert.equal(condition(met, 6).status, 'met', condition(met, 6).detail);
+  // The path as the operator typed it is not the canonical form.
+  const typed = withSubject('/repo/linked');
+  const unmet = runLocalWorktreeRecovery(evidenceArgs(), typed.deps);
+  assert.equal(condition(unmet, 6).status, 'unmet');
+  assert.match(condition(unmet, 6).detail, /subject \/real\/repo\/linked/);
+});
+
+test('evidence: the record is read from the named issue with the trusted label', () => {
+  let seen: ConfirmationIssueInput | undefined;
+  const fixture = evidenceFixture({
+    ports: {
+      readConfirmation: (input) => {
+        seen = input;
+        return evidenceRead();
+      },
+    },
+  });
+  runLocalWorktreeRecovery(evidenceArgs(), fixture.deps);
+  assert.equal(seen?.number, 5200);
+  assert.deepEqual(seen?.repository, EVIDENCE_REPOSITORY);
+  assert.equal(seen?.confirmationLabel, 'status:needs-confirmation');
+});
+
+test('evidence: conditions that held before the clone lock but not at the recheck refuse before step 3 and create nothing', () => {
+  let walks = 0;
+  const hot = quietTree({
+    '/repo/linked': {
+      ...oldEntry({ isDirectory: true }),
+      children: ['late.txt'],
+    },
+    '/repo/linked/late.txt': oldEntry({ mtimeMs: 10 * EVIDENCE_HOUR - 1000 }),
+  });
+  const quiet = quietTree();
+  const fixture = evidenceFixture({
+    ports: {
+      walk: {
+        lstat: (path) => {
+          // The first evaluation sees the quiet tree; the recheck, under the
+          // clone lock, sees a write that landed in between.
+          if (path === '/repo/linked') walks += 1;
+          const tree = walks >= 2 ? hot : quiet;
+          const entry = tree[path];
+          if (entry === undefined) {
+            throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+          }
+          return entry;
+        },
+        readdir: (path) => (walks >= 2 ? hot : quiet)[path]?.children ?? [],
+      },
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    evidenceArgs({ apply: true }),
+    fixture.deps,
+  );
+  assert.equal(verdict.ready, false);
+  assert.equal(verdict.mutated, false);
+  assert.deepEqual(fixture.mutations, []);
+  assert.match(
+    verdict.result,
+    /no longer holds under the clone lock, so no destination was created.*condition 4.*late\.txt/,
+  );
+  assert.deepEqual(fixture.events, ['acquire', 'release']);
+  assert.equal(fixture.state.made.length, 0);
+  assert.equal(verdict.preserveDir, null);
+});
+
+test('evidence: a process that appears under the clone lock refuses before step 3', () => {
+  let reads = 0;
+  const fixture = evidenceFixture({
+    ports: {
+      proc: {
+        platform: 'linux',
+        listPids: () => {
+          reads += 1;
+          return ['7'];
+        },
+        readCwd: () => (reads >= 2 ? '/repo/linked/src' : '/elsewhere'),
+        realpath: (path) => path,
+      },
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    evidenceArgs({ apply: true }),
+    fixture.deps,
+  );
+  assert.equal(verdict.mutated, false);
+  assert.deepEqual(fixture.mutations, []);
+  assert.match(verdict.result, /condition 5.*process 7/);
+});
+
+test('evidence: a routing read after the first that no longer meets the basis stops the run', () => {
+  const later: Array<[string, () => ConfirmBlockRouting]> = [
+    [
+      'an explicit-absence reason',
+      () => evidenceRouting({ reason: 'active-claim-stale' }),
+    ],
+    [
+      'a stale age that dropped below the floor',
+      () => evidenceRouting({ stale_age_ms: EVIDENCE_HOUR }),
+    ],
+    [
+      'a legacy claim',
+      () =>
+        evidenceRouting({
+          active_claim: { claim_id: null, branch: 'issue/1-task' },
+        }),
+    ],
+  ];
+  for (const [name, change] of later) {
+    let reads = 0;
+    const fixture = evidenceFixture({
+      routing: () => {
+        reads += 1;
+        return reads === 1 ? evidenceRouting() : change();
+      },
+    });
+    const verdict = runLocalWorktreeRecovery(
+      evidenceArgs({ apply: true }),
+      fixture.deps,
+    );
+    assert.equal(verdict.mutated, false, name);
+    assert.deepEqual(fixture.mutations, [], name);
+    assert.equal(verdict.plan.removal?.ran ?? false, false, name);
+    assert.match(verdict.result, /mechanical evidence no longer holds/, name);
+  }
+});
+
+test('evidence: a routing that changes claim under the lock stops through the existing recheck', () => {
+  let reads = 0;
+  const fixture = evidenceFixture({
+    routing: () => {
+      reads += 1;
+      return reads === 1
+        ? evidenceRouting()
+        : evidenceRouting({
+            active_claim: { claim_id: 'claim-y', branch: 'issue/1-task' },
+          });
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    evidenceArgs({ apply: true }),
+    fixture.deps,
+  );
+  assert.equal(verdict.mutated, false);
+  assert.deepEqual(fixture.mutations, []);
+  assert.match(verdict.result, /claim being recovered changed/);
+});
+
+test('evidence: an unsafe state root refuses in a dry run and before the clone lock', () => {
+  for (const apply of [false, true]) {
+    const fixture = evidenceFixture({
+      state: {
+        privacy: (path) => (path === '/state' ? 'unsafe' : 'private'),
+      },
+    });
+    const verdict = runLocalWorktreeRecovery(
+      evidenceArgs({ apply }),
+      fixture.deps,
+    );
+    assertRefusedBeforeMutation(
+      fixture,
+      verdict,
+      /durable preserve destination: the state root is not owned and private/,
+    );
+    assert.deepEqual(fixture.events, []);
+    assert.equal(verdict.preserveDir, null);
+  }
+});
+
+test('evidence: a destination inspection that throws refuses with a verdict', () => {
+  const fixture = evidenceFixture({
+    ports: {
+      guards: {
+        ...virtualStateRoot().guards,
+        realpath: () => {
+          throw new Error('EIO');
+        },
+      },
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    evidenceArgs({ apply: true }),
+    fixture.deps,
+  );
+  assertRefusedBeforeMutation(
+    fixture,
+    verdict,
+    /durable preserve destination: the inspection threw: EIO/,
+  );
+});
+
+test('evidence: a state root that is missing refuses', () => {
+  const fixture = evidenceFixture({
+    ports: {
+      guards: {
+        ...virtualStateRoot().guards,
+        lstat: () => 'absent',
+      },
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(evidenceArgs(), fixture.deps);
+  assertRefusedBeforeMutation(fixture, verdict, /state root does not exist/);
+});
+
+test('evidence: a destination inside the target, the primary worktree, or the Git common directory refuses', () => {
+  for (const [stateRoot, label] of [
+    ['/repo/linked/state', 'target'],
+    ['/repo/primary/state', 'primary worktree'],
+    ['/repo/primary/.git/state', 'Git common directory'],
+    ['/repo/primary/.git/worktrees/linked/state', 'target admin directory'],
+  ] as const) {
+    const fixture = evidenceFixture({ state: { stateRoot } });
+    const verdict = runLocalWorktreeRecovery(
+      evidenceArgs({ apply: true }),
+      fixture.deps,
+    );
+    assertRefusedBeforeMutation(
+      fixture,
+      verdict,
+      /durable preserve destination/,
+    );
+    assert.equal(fixture.state.made.length, 0, label);
+    assert.deepEqual(fixture.events, [], label);
+  }
+});
+
+test('evidence: a created destination that fails the privacy check stops before step 3 and names the path', () => {
+  const fixture = evidenceFixture({
+    state: {
+      privacy: (path) =>
+        path === EVIDENCE_DESTINATION ? 'tightenable' : 'private',
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    evidenceArgs({ apply: true }),
+    fixture.deps,
+  );
+  assert.equal(verdict.ready, false);
+  assert.equal(verdict.plan.removal?.ran, false);
+  assert.match(
+    verdict.result,
+    new RegExp(
+      `${EVIDENCE_DESTINATION.replaceAll('/', '\\/')} was not prepared:.*not owned and private; it stays in place and nothing is written into it; step 3 did not start`,
+    ),
+  );
+  assert.equal(verdict.preserveDir, EVIDENCE_DESTINATION);
+  assert.equal(verdict.mutated, true, 'the directory exists');
+  assert.equal(verdict.evidence?.preserveDestination.created, true);
+  // Nothing was written into it, and nothing was stashed, copied, or removed.
+  assert.deepEqual(
+    fixture.mutations.filter((entry) => !entry.startsWith('mkdir:')),
+    [],
+  );
+  assert.deepEqual(fixture.events, ['acquire', 'release']);
+});
+
+test('evidence: a destination whose identity changes after creation stops before step 3', () => {
+  const fixture = evidenceFixture({
+    state: {
+      // The creation step reads the destination twice; a third read is the
+      // recheck right before step 3.
+      identity: (path, read) =>
+        path === EVIDENCE_DESTINATION && read >= 3
+          ? 'id:replaced'
+          : `id:${path}`,
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    evidenceArgs({ apply: true }),
+    fixture.deps,
+  );
+  assert.equal(verdict.ready, false);
+  assert.match(
+    verdict.result,
+    /changed after inspection.*stays in place and step 3 did not start/,
+  );
+  assert.equal(verdict.preserveDir, EVIDENCE_DESTINATION);
+  assert.equal(verdict.mutated, true);
+  assert.deepEqual(
+    fixture.mutations.filter((entry) => !entry.startsWith('mkdir:')),
+    [],
+  );
+});
+
+test('evidence: the prunable shortcut through an unreadable reason walks only the admin directory', () => {
+  const calls: string[] = [];
+  const fixture = evidenceFixture({
+    routing: {
+      state: 'local_worktree_occupied',
+      reason: 'stale-claim-local-worktree-unreadable',
+      stale_age_ms: EVIDENCE_STALE_AGE_MS,
+      active_claim: { claim_id: 'claim-x', branch: 'issue/1-task' },
+      evidence: {
+        local_worktree: {
+          status: 'unreadable',
+          paths: ['/repo/linked'],
+          reason: 'prunable',
+        },
+      },
+    },
+    ports: {
+      walk: walkPortsOf(
+        {
+          '/repo/primary/.git/worktrees/linked': oldEntry({
+            isDirectory: true,
+          }),
+        },
+        calls,
+      ),
+    },
+    deps: {
+      listWorktreeRecords: () => [
+        {
+          path: '/repo/primary',
+          branchRef: 'refs/heads/main',
+          detached: false,
+          bare: false,
+          locked: false,
+          prunable: false,
+        },
+        {
+          path: '/repo/linked',
+          branchRef: 'refs/heads/issue/1-task',
+          detached: false,
+          bare: false,
+          locked: false,
+          prunable: true,
+        },
+      ],
+      pathExists: (path) => path !== '/repo/linked',
+      findWorktreeAdminDir: () => ({
+        path: '/repo/primary/.git/worktrees/linked',
+        error: null,
+      }),
+      // The lock check is skipped for the shortcut, so even a missing lock
+      // does not stop it.
+      checkLock: () => ({
+        path: '/repo/linked/.git/idd-claim.lock',
+        present: false,
+      }),
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    evidenceArgs({ apply: true }),
+    fixture.deps,
+  );
+  assert.equal(verdict.step1.outcome, 'blocked-prunable');
+  assert.equal(verdict.plan.removal?.ran, true, verdict.result);
+  assert.deepEqual(
+    [...new Set(calls)],
+    ['lstat:/repo/primary/.git/worktrees/linked'],
+    'the vanished worktree itself is never walked',
+  );
+  assert.equal(verdict.evidence?.met, true);
+  assert.equal(
+    verdict.plan.prunableAdminCopy?.plannedTo,
+    `${EVIDENCE_DESTINATION}/prunable-gitdir`,
+  );
+  assert.equal(verdict.preserveDir, EVIDENCE_DESTINATION);
+  assert.ok(
+    fixture.mutations.includes('copy:/repo/primary/.git/worktrees/linked'),
+  );
+});
+
+test('evidence: the prunable shortcut refuses when its admin directory changed within the window', () => {
+  const fixture = evidenceFixture({
+    routing: {
+      state: 'local_worktree_occupied',
+      reason: 'stale-claim-local-worktree-unreadable',
+      stale_age_ms: EVIDENCE_STALE_AGE_MS,
+      active_claim: { claim_id: 'claim-x', branch: 'issue/1-task' },
+      evidence: {
+        local_worktree: {
+          status: 'unreadable',
+          paths: ['/repo/linked'],
+          reason: 'prunable',
+        },
+      },
+    },
+    ports: {
+      walk: walkPortsOf({
+        '/repo/primary/.git/worktrees/linked': oldEntry({
+          isDirectory: true,
+          mtimeMs: 10 * EVIDENCE_HOUR - 1000,
+        }),
+      }),
+    },
+    deps: {
+      listWorktreeRecords: () => [
+        {
+          path: '/repo/primary',
+          branchRef: 'refs/heads/main',
+          detached: false,
+          bare: false,
+          locked: false,
+          prunable: false,
+        },
+        {
+          path: '/repo/linked',
+          branchRef: 'refs/heads/issue/1-task',
+          detached: false,
+          bare: false,
+          locked: false,
+          prunable: true,
+        },
+      ],
+      pathExists: (path) => path !== '/repo/linked',
+      findWorktreeAdminDir: () => ({
+        path: '/repo/primary/.git/worktrees/linked',
+        error: null,
+      }),
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    evidenceArgs({ apply: true }),
+    fixture.deps,
+  );
+  assertRefusedBeforeMutation(fixture, verdict, /condition 4/);
+});
+
+test('evidence: an admin directory that cannot be located refuses the shortcut', () => {
+  const fixture = evidenceFixture({
+    routing: {
+      state: 'local_worktree_occupied',
+      reason: 'stale-claim-local-worktree-unreadable',
+      stale_age_ms: EVIDENCE_STALE_AGE_MS,
+      active_claim: { claim_id: 'claim-x', branch: 'issue/1-task' },
+      evidence: {
+        local_worktree: {
+          status: 'unreadable',
+          paths: ['/repo/linked'],
+          reason: 'prunable',
+        },
+      },
+    },
+    deps: {
+      listWorktreeRecords: () => [
+        {
+          path: '/repo/primary',
+          branchRef: 'refs/heads/main',
+          detached: false,
+          bare: false,
+          locked: false,
+          prunable: false,
+        },
+        {
+          path: '/repo/linked',
+          branchRef: 'refs/heads/issue/1-task',
+          detached: false,
+          bare: false,
+          locked: false,
+          prunable: true,
+        },
+      ],
+      pathExists: (path) => path !== '/repo/linked',
+      findWorktreeAdminDir: () => ({ path: null, error: 'no pointer matched' }),
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    evidenceArgs({ apply: true }),
+    fixture.deps,
+  );
+  assertRefusedBeforeMutation(
+    fixture,
+    verdict,
+    /condition 4.*could not be located: no pointer matched/,
+  );
+});
+
+test('evidence: after a partial apply the report lists what was preserved and where', () => {
+  let stashListCalls = 0;
+  const fixture = evidenceFixture({
+    runGit: (argv) => {
+      if (argv[0] === 'status') {
+        return { ok: true, status: 0, stdout: ' M tracked.txt\n', stderr: '' };
+      }
+      if (argv[0] === 'stash' && argv[1] === 'list') {
+        stashListCalls += 1;
+        return {
+          ok: true,
+          status: 0,
+          stdout:
+            stashListCalls === 1
+              ? ''
+              : 'stash@{0}: On issue/1-task: idd-lwr claim-x',
+          stderr: '',
+        };
+      }
+      if (argv[0] === 'worktree' && argv[1] === 'remove') {
+        return { ok: false, status: 1, stdout: '', stderr: 'boom' };
+      }
+      return cleanRepoRunGit(argv);
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    evidenceArgs({ apply: true }),
+    fixture.deps,
+  );
+  assert.equal(verdict.plan.removal?.ran, false);
+  assert.equal(verdict.mutated, true);
+  const locations = verdict.evidence?.locations;
+  assert.equal(locations?.stashTag, 'idd-lwr claim-x');
+  // The late-preservation pass of step 3 stashes again under this fake, which
+  // reports a dirty tree every time, so the entry may be listed more than once.
+  assert.ok((locations?.stashes.length ?? 0) >= 1);
+  assert.ok(
+    locations?.stashes.every(
+      (entry) => entry === '.: stash@{0}: On issue/1-task: idd-lwr claim-x',
+    ),
+  );
+  assert.equal(locations?.preserveDir, EVIDENCE_DESTINATION);
+  assert.deepEqual(fixture.events, ['acquire', 'release']);
+});
+
+test('evidence: a refused run still reports a locations block with the tag and no artifacts', () => {
+  const fixture = evidenceFixture({
+    ports: { readTrusted: () => evidenceSnapshot('class-off') },
+  });
+  const verdict = runLocalWorktreeRecovery(evidenceArgs(), fixture.deps);
+  assert.deepEqual(verdict.evidence?.locations, {
+    stashTag: 'idd-lwr claim-x',
+    stashes: [],
+    backupRefs: [],
+    preserveDir: null,
+  });
+});
+
+test('evidence: the operator flag keeps its behavior and carries no evidence block', () => {
+  const deps = fakeDeps();
+  const verdict = runLocalWorktreeRecovery(
+    baseArgs({ apply: true, operatorConfirmedNoLiveSession: true }),
+    deps,
+  );
+  assert.equal(verdict.plan.removal?.ran, true);
+  assert.equal(verdict.operatorConfirmed, true);
+  assert.equal(verdict.evidence, undefined);
+  assert.ok(!('evidence' in verdict));
+});
+
+// ---------------------------------------------------------------------------
+// Mechanical evidence against a real git sandbox (#4969). Real git, real
+// worktree, a real walk and a real state directory, with an injected clock and
+// stubbed trusted read, record, and routing. The fake-based tests above cover
+// each row of the verdict table; these pin the two acceptance criteria that a
+// fake cannot, the durable preservation and the retry after a partial apply.
+// ---------------------------------------------------------------------------
+
+function realGit(
+  cwd: string,
+  argv: string[],
+): { ok: boolean; status: number | null; stdout: string; stderr: string } {
+  const result = spawnSync('git', argv, {
+    cwd,
+    encoding: 'utf8',
+    env: GIT_ENV,
+  });
+  return {
+    ok: result.status === 0,
+    status: result.status,
+    stdout: result.stdout ?? '',
+    stderr: result.stderr ?? '',
+  };
+}
+
+interface RealEvidenceRun {
+  sandbox: Sandbox;
+  stateRoot: string;
+  /** The real canonical path of the target, as the record's subject. */
+  subject: string;
+  run: (options?: {
+    apply?: boolean;
+    nowMs?: number;
+    removalFails?: boolean;
+    procs?: ProcPorts;
+  }) => ReturnType<typeof runLocalWorktreeRecovery>;
+}
+
+function realEvidenceSandbox(issue: number): RealEvidenceRun {
+  const branch = `issue/${issue}-task`;
+  const sandbox = buildSandbox(branch);
+  const claimId = `claim-${issue}`;
+  execFileSync(
+    process.execPath,
+    [
+      join(REPO_ROOT, 'scripts/claim-lock.mjs'),
+      '--acquire',
+      '--worktree',
+      sandbox.linked,
+      '--agent-id',
+      'agent-x',
+      '--claim-id',
+      claimId,
+    ],
+    { cwd: sandbox.primary, encoding: 'utf8' },
+  );
+  const stateRoot = join(sandbox.root, 'state');
+  mkdirSync(stateRoot, { mode: 0o700 });
+  chmodSync(stateRoot, 0o700);
+  const subject = realpathSync(sandbox.linked);
+  const run: RealEvidenceRun['run'] = (options = {}) => {
+    const apply = options.apply ?? true;
+    const ports = createDefaultEvidencePorts({
+      repository: EVIDENCE_REPOSITORY,
+      env: { XDG_STATE_HOME: stateRoot },
+    });
+    const evidence: WorktreeRemnantEvidencePorts = {
+      ...ports,
+      readTrusted: () => evidenceSnapshot(),
+      readConfirmation: () =>
+        evidenceRead({
+          records: [
+            evidenceRecord({
+              source: `o/r#${issue}`,
+              claim: claimId,
+              subject,
+            }),
+          ],
+        }),
+      nowMs: () => options.nowMs ?? Date.now(),
+      proc: options.procs ?? procPortsOf({ '1': '/elsewhere' }),
+      // The destination name carries the time to the second, so each run's
+      // clock names its own directory.
+      guards: {
+        ...ports.guards,
+        now: () => new Date(options.nowMs ?? Date.now()),
+      },
+    };
+    const gitFor = (argv: string[], cwd: string) =>
+      realGit(cwd, apply ? argv : ['--no-optional-locks', ...argv]);
+    const deps: LocalWorktreeRecoveryDeps = {
+      cwd: () => sandbox.primary,
+      listWorktreeRecords: (cwd) => {
+        const listed = realGit(cwd, ['worktree', 'list', '--porcelain', '-z']);
+        return listed.ok ? parseLocalWorktreeList(listed.stdout) : null;
+      },
+      confirmBlock: () => ({
+        ok: true,
+        routing: {
+          state: 'local_worktree_occupied',
+          reason: 'stale-claim-local-worktree-occupied',
+          stale_age_ms: EVIDENCE_STALE_AGE_MS,
+          active_claim: { claim_id: claimId, branch },
+          evidence: {
+            local_worktree: {
+              status: 'occupied',
+              paths: [sandbox.linked],
+              reason: null,
+            },
+          },
+        },
+        error: null,
+      }),
+      checkLock: (worktree) => checkClaimLock(worktree),
+      removeLockIfMatches: () => true,
+      removeWorktreeIfLockMatches: (worktree, repo, _expected, force) =>
+        options.removalFails
+          ? { ok: false, status: 1, stdout: '', stderr: 'removal refused' }
+          : realGit(repo, [
+              'worktree',
+              'remove',
+              ...(force ? ['--force'] : []),
+              worktree,
+            ]),
+      runGit: gitFor,
+      pathExists: (path) => existsSync(path),
+      readDirectoryIdentity: (path) => {
+        const stat = statSync(path, { bigint: true });
+        return {
+          dev: stat.dev.toString(),
+          ino: stat.ino.toString(),
+          birthtimeNs: stat.birthtimeNs.toString(),
+          ctimeNs: stat.ctimeNs.toString(),
+        };
+      },
+      realpathOrNull: (path) => {
+        try {
+          return realpathSync(path);
+        } catch {
+          return null;
+        }
+      },
+      readlinkOrNull: (path) => {
+        try {
+          return readlinkSync(path);
+        } catch {
+          return null;
+        }
+      },
+      readPathFingerprint: pathFingerprintOnDisk,
+      acquireCloneLock: () => ({
+        path: join(sandbox.root, 'clone.lock'),
+        token: 't',
+      }),
+      releaseCloneLock: () => {},
+      resolveDevelopmentBranch: () => 'main',
+      copyPath: copyPathWithSafeSymlinks,
+      removePath: (path) => rmSync(path, { recursive: true, force: true }),
+      ensurePreserveDir: () => {
+        throw new Error('replaced by the evidence wrapper');
+      },
+      now: () => new Date().toISOString(),
+      evidence,
+    };
+    return runLocalWorktreeRecovery(
+      baseArgs({
+        issue,
+        worktree: sandbox.linked,
+        apply,
+        agentId: 'idd-lwr-test',
+        mechanicalEvidence: true,
+        confirmation: { owner: 'o', repo: 'r', number: 5200 },
+        decision: 'dec-1',
+      }),
+      deps,
+    );
+  };
+  return { sandbox, stateRoot, subject, run };
+}
+
+test('sandbox evidence: every condition holds, so the worktree is stashed, removed, and preserved under the state root', {
+  skip: process.platform === 'win32',
+}, () => {
+  const fixture = realEvidenceSandbox(301);
+  try {
+    writeFileSync(join(fixture.sandbox.linked, 'untracked.txt'), 'new\n');
+    // The files were just written, so the injected clock sits three hours on:
+    // past the two-hour quiet window the stub trusted read reports.
+    const verdict = fixture.run({ nowMs: Date.now() + 3 * EVIDENCE_HOUR });
+    assert.equal(verdict.plan.removal?.ran, true, verdict.result);
+    assert.equal(verdict.evidence?.met, true);
+    assert.equal(verdict.operatorConfirmed, false);
+    assert.equal(verdict.plan.stashes[0]?.stashed, true);
+    const stashes = execFileSync('git', ['stash', 'list'], {
+      cwd: fixture.sandbox.primary,
+      encoding: 'utf8',
+    });
+    assert.match(stashes, /idd-lwr claim-301/);
+    assert.equal(verdict.evidence?.locations?.stashTag, 'idd-lwr claim-301');
+    const destination = verdict.preserveDir ?? '';
+    assert.ok(
+      destination.startsWith(
+        join(fixture.stateRoot, 'idd-skill', 'lwr-preserved'),
+      ),
+      destination,
+    );
+    assert.match(basename(destination), /^301-\d{8}T\d{6}Z$/);
+    assert.equal(lstatSync(destination).isDirectory(), true);
+    assert.equal(lstatSync(destination).mode & 0o077, 0, 'owner only');
+    assert.equal(
+      lstatSync(join(fixture.stateRoot, 'idd-skill')).mode & 0o077,
+      0,
+    );
+    const worktreeList = execFileSync(
+      'git',
+      ['worktree', 'list', '--porcelain'],
+      { cwd: fixture.sandbox.primary, encoding: 'utf8' },
+    );
+    assert.ok(!worktreeList.includes(fixture.sandbox.linked));
+  } finally {
+    fixture.sandbox.cleanup();
+  }
+});
+
+test('sandbox evidence: a worktree written inside the quiet window refuses and mutates nothing', {
+  skip: process.platform === 'win32',
+}, () => {
+  const fixture = realEvidenceSandbox(302);
+  try {
+    writeFileSync(join(fixture.sandbox.linked, 'untracked.txt'), 'new\n');
+    const verdict = fixture.run({ nowMs: Date.now() });
+    assert.equal(verdict.ready, false);
+    assert.equal(verdict.mutated, false);
+    assert.match(verdict.result, /condition 4 \(quiet-window\)/);
+    assert.match(verdict.result, /changed \d+ s ago, inside the quiet window/);
+    assert.equal(
+      execFileSync('git', ['stash', 'list'], {
+        cwd: fixture.sandbox.primary,
+        encoding: 'utf8',
+      }),
+      '',
+    );
+    assert.equal(existsSync(join(fixture.stateRoot, 'idd-skill')), false);
+    assert.equal(existsSync(fixture.sandbox.linked), true);
+  } finally {
+    fixture.sandbox.cleanup();
+  }
+});
+
+test('sandbox evidence: after a partial apply a retry refuses while a walked entry changed, and names it', {
+  skip: process.platform === 'win32',
+}, () => {
+  const fixture = realEvidenceSandbox(303);
+  try {
+    writeFileSync(join(fixture.sandbox.linked, 'untracked.txt'), 'new\n');
+    const first = fixture.run({
+      nowMs: Date.now() + 3 * EVIDENCE_HOUR,
+      removalFails: true,
+    });
+    // Preservation was done, removal failed: the report says what was
+    // preserved and where.
+    assert.equal(first.plan.removal?.ran, false);
+    assert.equal(first.plan.stashes[0]?.stashed, true);
+    assert.equal(first.evidence?.locations?.stashes.length, 1);
+    assert.ok(
+      first.evidence?.locations?.preserveDir?.includes('lwr-preserved'),
+    );
+    assert.equal(existsSync(fixture.sandbox.linked), true);
+
+    // The stash rewrote the index and removed the untracked file, so a retry
+    // inside the window refuses before any mutation, whatever the cause, and
+    // names the changed entry.
+    const retry = fixture.run({ nowMs: Date.now() + EVIDENCE_HOUR });
+    assert.equal(retry.ready, false);
+    assert.equal(retry.mutated, false);
+    assert.equal(retry.plan.stashes.length, 0);
+    assert.match(retry.result, /condition 4 \(quiet-window\)/);
+    const named = /(\/\S+) changed \d+ s ago/.exec(retry.result)?.[1] ?? '';
+    assert.ok(
+      named.startsWith(realpathSync(fixture.sandbox.primary)) ||
+        named.startsWith(fixture.subject),
+      named,
+    );
+    const stashes = execFileSync('git', ['stash', 'list'], {
+      cwd: fixture.sandbox.primary,
+      encoding: 'utf8',
+    });
+    assert.equal(stashes.trim().split('\n').length, 1, 'no second stash');
+
+    // After the window the retry is allowed again; that is the caller's
+    // choice, here it is only shown to be possible.
+    const later = fixture.run({
+      apply: false,
+      nowMs: Date.now() + 4 * EVIDENCE_HOUR,
+    });
+    assert.equal(later.ready, true, later.result);
+  } finally {
+    fixture.sandbox.cleanup();
+  }
+});
+
+test('sandbox evidence: a process whose working directory is inside the worktree refuses', {
+  skip: process.platform !== 'linux',
+}, () => {
+  const fixture = realEvidenceSandbox(304);
+  const child = spawn('sleep', ['30'], { cwd: fixture.sandbox.linked });
+  try {
+    const { proc } = createDefaultEvidencePorts({
+      repository: EVIDENCE_REPOSITORY,
+    });
+    const verdict = fixture.run({
+      nowMs: Date.now() + 3 * EVIDENCE_HOUR,
+      procs: proc,
+    });
+    assert.equal(verdict.ready, false);
+    assert.equal(verdict.mutated, false);
+    assert.match(
+      verdict.result,
+      new RegExp(`condition 5.*process ${child.pid} has its working directory`),
+    );
+    assert.equal(existsSync(fixture.sandbox.linked), true);
+  } finally {
+    child.kill();
+    fixture.sandbox.cleanup();
+  }
+});
+
+test('sandbox evidence: a dry run through the CLI changes no entry the quiet-window walk covers', {
+  skip: process.platform === 'win32',
+}, (t) => {
+  const sandbox = buildSandbox('issue/305-task');
+  const restoreGh = stubGhForStaleClaim({
+    issueNumber: 305,
+    branch: 'issue/305-task',
+    claimId: 'claim-305',
+    createdAt: '2026-09-24T00:00:00Z',
+  });
+  try {
+    // A staged file whose stat data is stale, so a plain `git status` has an
+    // index refresh to write.
+    const tracked = join(sandbox.linked, 'tracked.txt');
+    writeFileSync(tracked, 'same\n');
+    execFileSync('git', ['add', 'tracked.txt'], { cwd: sandbox.linked });
+    const admin = execFileSync('git', ['rev-parse', '--absolute-git-dir'], {
+      cwd: sandbox.linked,
+      encoding: 'utf8',
+    }).trim();
+    const older = new Date(Date.now() - 60_000);
+    utimesSync(tracked, older, older);
+    const times = (path: string) => {
+      const stat = lstatSync(path);
+      return `${stat.mtimeMs}:${stat.ctimeMs}`;
+    };
+    const entries = () =>
+      [
+        join(admin, 'index'),
+        join(admin, 'HEAD'),
+        admin,
+        tracked,
+        sandbox.linked,
+      ].map((path) => [path, times(path)]);
+
+    // Control: a plain `git status` does rewrite the index here. If it does
+    // not, the fixture cannot show anything.
+    const beforeControl = times(join(admin, 'index'));
+    execFileSync('git', ['status', '--short'], { cwd: sandbox.linked });
+    if (times(join(admin, 'index')) === beforeControl) {
+      t.skip('git did not rewrite the index for a plain status here');
+      return;
+    }
+    utimesSync(tracked, older, older);
+    execFileSync('git', ['add', 'tracked.txt'], { cwd: sandbox.linked });
+
+    // The lock and tokens are written once, as the claimed session would have.
+    prepareClaimLock(sandbox, 305);
+    const before = entries();
+    const result = runCli(
+      sandbox,
+      305,
+      ['--operator-confirmed-no-live-session'],
+      {},
+      true,
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).mutated, false);
+    assert.deepEqual(entries(), before);
+  } finally {
+    restoreGh();
+    sandbox.cleanup();
+  }
+});
+
+test('evidence: a routing read that loses the basis stops the run before removal, whichever read it is', () => {
+  const shortcutRecords = [
+    {
+      path: '/repo/primary',
+      branchRef: 'refs/heads/main',
+      detached: false,
+      bare: false,
+      locked: false,
+      prunable: false,
+    },
+    {
+      path: '/repo/linked',
+      branchRef: 'refs/heads/issue/1-task',
+      detached: false,
+      bare: false,
+      locked: false,
+      prunable: true,
+    },
+  ];
+  const shapes: Array<{
+    name: string;
+    routing: ConfirmBlockRouting;
+    deps: Partial<LocalWorktreeRecoveryDeps>;
+  }> = [
+    { name: 'ordinary', routing: evidenceRouting(), deps: {} },
+    {
+      name: 'prunable shortcut',
+      routing: {
+        state: 'local_worktree_occupied',
+        reason: 'stale-claim-local-worktree-unreadable',
+        stale_age_ms: EVIDENCE_STALE_AGE_MS,
+        active_claim: { claim_id: 'claim-x', branch: 'issue/1-task' },
+        evidence: {
+          local_worktree: {
+            status: 'unreadable',
+            paths: ['/repo/linked'],
+            reason: 'prunable',
+          },
+        },
+      },
+      deps: {
+        listWorktreeRecords: () => shortcutRecords,
+        pathExists: (path) => path !== '/repo/linked',
+        findWorktreeAdminDir: () => ({
+          path: '/repo/primary/.git/worktrees/linked',
+          error: null,
+        }),
+      },
+    },
+  ];
+  // Each way a later read can lose the basis, one read at a time.
+  const losses: Array<[string, Partial<ConfirmBlockRouting>]> = [
+    ['an explicit-absence reason', { reason: 'active-claim-stale' }],
+    ['a stale age below the floor', { stale_age_ms: EVIDENCE_HOUR }],
+    [
+      'a legacy claim',
+      { active_claim: { claim_id: null, branch: 'issue/1-task' } },
+    ],
+  ];
+  for (const shape of shapes) {
+    // The happy path: count the routing reads and note which one precedes the
+    // removal.
+    let reads = 0;
+    let readsAtRemoval = -1;
+    const happy = evidenceFixture({
+      routing: () => {
+        reads += 1;
+        return shape.routing;
+      },
+      deps: shape.deps,
+      runGit: (argv, cwd) => {
+        if (argv[0] === 'worktree' && argv[1] === 'remove') {
+          readsAtRemoval = reads;
+        }
+        return cleanRepoRunGit(argv, cwd);
+      },
+    });
+    const happyVerdict = runLocalWorktreeRecovery(
+      evidenceArgs({ apply: true }),
+      happy.deps,
+    );
+    assert.equal(happyVerdict.plan.removal?.ran, true, shape.name);
+    assert.ok(readsAtRemoval >= 3, `${shape.name}: ${readsAtRemoval} reads`);
+
+    for (let lost = 2; lost <= readsAtRemoval; lost += 1) {
+      for (const [lossName, loss] of losses) {
+        let index = 0;
+        const fixture = evidenceFixture({
+          routing: () => {
+            index += 1;
+            return index === lost
+              ? { ...shape.routing, ...loss }
+              : shape.routing;
+          },
+          deps: shape.deps,
+        });
+        const verdict = runLocalWorktreeRecovery(
+          evidenceArgs({ apply: true }),
+          fixture.deps,
+        );
+        const label = `${shape.name}, read ${lost} of ${readsAtRemoval}, ${lossName}`;
+        assert.ok(
+          !fixture.mutations.includes('worktree remove'),
+          `${label}: the worktree was removed`,
+        );
+        assert.notEqual(verdict.plan.removal?.ran, true, label);
+      }
+    }
+  }
+});
+
+test('evidence: a created destination keeps the run mutated when step 3 stashes nothing and removal fails', () => {
+  const fixture = evidenceFixture({
+    runGit: (argv, cwd) =>
+      argv[0] === 'worktree' && argv[1] === 'remove'
+        ? { ok: false, status: 1, stdout: '', stderr: 'boom' }
+        : cleanRepoRunGit(argv, cwd),
+  });
+  const verdict = runLocalWorktreeRecovery(
+    evidenceArgs({ apply: true }),
+    fixture.deps,
+  );
+  assert.equal(verdict.plan.removal?.ran, false);
+  assert.equal(verdict.plan.stashes[0]?.stashed, false);
+  assert.equal(verdict.preserveDir, EVIDENCE_DESTINATION);
+  assert.equal(verdict.mutated, true, 'the preserve directory exists');
+});
+
+test('sandbox evidence: the CLI refuses --mechanical-evidence while GH_REPO is set', {
+  skip: process.platform === 'win32',
+}, () => {
+  const sandbox = buildSandbox('issue/306-task');
+  try {
+    const result = spawnRecoveryCli(sandbox, 306, ['--mechanical-evidence'], {
+      GH_REPO: 'someone/else',
+    });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /refuses to run with GH_REPO set/);
+    assert.equal(result.stdout, '');
+  } finally {
+    sandbox.cleanup();
+  }
+});
