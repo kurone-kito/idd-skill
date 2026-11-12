@@ -1282,9 +1282,10 @@ location in the helper report and then the failure note, and today's stop
 follows. The saved state is finished or undone by hand before the helper
 runs again. When `--apply` preserved a leftover and a later claim step fails,
 the leftover stays preserved: the session posts the location note and then
-the failure note, and today's stop follows under that step's next action,
-which is the `lost-claim-cleanup` of `idd-claim.instructions.md` once a
-worktree exists. A further attempt is a new decision.
+the failure note, and today's stop follows under that step's reported next
+action. The `lost-claim-cleanup` of `idd-claim.instructions.md` is one
+possible action, under its own triggers. A further attempt is a new
+decision.
 
 The region classifier is the trusted class read and the procedure's checks,
 followed by the helper's preconditions. It loosens only the two stops above.
