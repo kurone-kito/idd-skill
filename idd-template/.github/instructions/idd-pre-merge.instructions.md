@@ -73,29 +73,23 @@ Verify **all** conditions below; each states its required evidence and
 failure route. The F2 snapshot at the end records the final
 activity-universe values the handoff phase consumes.
 
-Do not treat "one bot says clean" as sufficient evidence — checks must
-cover the full activity universe (human reviewers plus advisory bot
-surfaces such as Copilot, CodeRabbit, Codex connectors, and CI bots).
-Here "cover" means reading each item actually posted and dispositioning
-it. For a non-primary advisory bot, it never means waiting for a review
-that has not been posted.
+Do not treat "one bot says clean" as sufficient evidence: checks must cover
+the full activity universe (human reviewers and advisory bots such as
+Copilot, CodeRabbit, and Codex), meaning each item actually posted is read
+and dispositioned. Never wait for a non-primary bot's missing review.
 
 The advisory-wait window is Copilot-only
 (`idd-advisory-wait.instructions.md`) and does not cover non-Copilot
-`advisoryBotLogins`. That is this window, not all of F2: configured
-`secondaryQuietWindow` is the quiet-window blocker below (until
-`elapsed: true`, not until `secondaryBotLogin`'s logins review HEAD).
-F2/F3 MUST NOT merge on bare CI-green: **Review currency** must
-confirm a fresh `review-watermark` covers latest activity, so a late
-non-Copilot finding still returns to E1.
+`advisoryBotLogins`; configured `secondaryQuietWindow` is the quiet-window
+blocker below (until `elapsed: true`). F2/F3 MUST NOT merge on bare
+CI-green: **Review currency** must confirm a fresh `review-watermark` covers
+latest activity, so a late non-Copilot finding returns to E1.
 
-**Nonce passthrough**: when invoking the readiness collector below
-(directly, or via the documented merge-gate helper reference), pass
-`--nonce {nonce}` — this session's own locally-recorded activation-nonce
-from claim time (`idd-claim.instructions.md`'s activation-nonce format) —
-alongside `--claim-id`, extending Claim-verification-step-4's nonce
-collision check to this merge-time write-gate (Resume-phase cold
-recovery stays a distinct, not-yet-wired case — see
+**Nonce passthrough**: when invoking the readiness collector below, pass
+`--nonce {nonce}` (this session's activation nonce from claim time) with
+`--claim-id`, extending Claim-verification-step-4's nonce collision check to
+this merge-time write-gate (Resume-phase cold recovery stays a distinct,
+not-yet-wired case; see
 [rationale](../../docs/idd-design-rationale.md#activation-nonce-why-a-separate-marker-and-what-stays-deferred),
 kurone-kito/idd-skill#1529). Omitting `--nonce` silently skips the
 merge-time comparison rather than failing closed, so pass it whenever a
@@ -119,14 +113,12 @@ failure into a silent stall. A `deferred-followup-unreconciled` blocker
 never clears by polling: follow its `detail`.
 
 **Watermark before hold** (observed on pull request kurone-kito/idd-skill#4077,
-issue kurone-kito/idd-skill#4071): a readiness result computed
-before any review watermark exists can block on resolved threads that a
-watermark would clear, and a hold posted from that result can be wrong.
-The order is fixed: record a fresh review watermark for the current head
-first (E1 Step 1, then E1 Step 2), then re-run readiness, and post a hold
-only if the blocker still stands. A `disposition-evidence` or
-`review-currency` blocker that carries a `hint` names this step. The hint
-is diagnostic and never changes the verdict.
+issue kurone-kito/idd-skill#4071): a readiness result computed before any
+review watermark exists can block on resolved threads that a watermark would
+clear. The order is fixed: record a fresh review watermark for the current
+head (E1 Steps 1 and 2), re-run readiness, and post a hold only if the
+blocker still stands. A `disposition-evidence` or `review-currency` blocker
+with a `hint` names this step; the hint never changes the verdict.
 
 - **Review currency** (live re-fetch required, freshness gate): read the
   most recent `<!-- review-watermark: {agent-id} {claim-id} … -->`
@@ -304,6 +296,19 @@ is diagnostic and never changes the verdict.
   (default Copilot) is the only primary. When issue `#2544`'s settled
   buffer clamps the wait, the blocker names that buffer apart from the
   configured window.
+- **Scope-overrun evidence** (fail closed): record the current head as its
+  full 40-character SHA before readiness proceeds. A `claim.scopeOverrun` with
+  `status` `missing` or `invalid` (no record, or a malformed, stale, or
+  conflicting one), or a `scope-overrun` blocker, holds F2; an absent
+  `claim.scopeOverrun` is a clean scope. Only a trusted owner's
+  `Scope decision: accept head <full SHA>` comment for the current head marks
+  the PR ready; a changed head needs a new decision. Without it, apply
+  `status:needs-decision`, move the PR to draft, post the post-push
+  [`scope-overrun` record](../../docs/idd-helper-scripts.md#scope-overrun-evidence-marker),
+  verify the marker, the evidence, the label, and the draft state, then
+  release the claim and hand the split to the issue-authoring companion. If
+  the companion is unavailable, an audit fails, or a state is unverified, keep
+  the claim and report one next action.
 - **CI**: Current PR head SHA has all required CI checks generated and
   all passing (→ run CI wait per `idd-ci.instructions.md` using the
   same resolved `ciWait.runningTimeout`, `ciWait.generationTimeout`, and

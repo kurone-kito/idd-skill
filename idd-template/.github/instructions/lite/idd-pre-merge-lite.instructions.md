@@ -96,24 +96,22 @@ is standard-profile evidence and is not run here.
 2. If the helper fails, returns invalid or incomplete JSON (missing any
    of the required top-level fields listed in
    `schemas/pre-merge-readiness.schema.json`), or its evidence disagrees
-   with directly-observable live GitHub state (for example, the claim
-   is obviously lost): stop per the condition above. Do not discard the
-   helper output and fall back to live-fetch-plus-prose judgment — that
-   fallback is the judgment-heavy part the standard file allows and
-   this lite file deliberately excludes.
-3. Otherwise, record the verdict exactly as the helper reports it:
+   with directly-observable live GitHub state: stop per the condition above.
+   Do not fall back to prose judgment on the helper output.
+3. Stop per the condition above if the current full 40-character head
+   (`gh pr view <pr-number> --json headRefOid --jq .headRefOid`) differs from
+   the helper's `prHeadSha`, or if `claim.scopeOverrun` has a `status` of
+   `missing` or `invalid`, or a `scope-overrun` blocker is reported. Keep the
+   claim and report one next action; the scope-overrun route is prose in the
+   standard file.
+4. Otherwise, record the verdict exactly as the helper reports it:
    `prHeadSha` (F2.5 needs this exact value for its merge command
    candidate — never re-derive it locally), `ready`, and, if `ready` is
    `false`, every entry in `blockers[]` — each a `gate` name plus a
-   `detail` string. Do not interpret, re-route, or attempt to remedy
-   individual blockers yourself (for example, waiting out a `ci` or
-   `advisory-wait` blocker, returning to E1 for a `review-currency` or
-   `disposition-evidence` blocker, or amending a commit or editing the
-   PR body for a `closing-set` blocker — this file never does either
-   remedy) — that
-   per-blocker routing is exactly the standard file's prose-heavy part
-   this lite file excludes.
-4. Proceed to `idd-merge-handoff-lite.instructions.md` (F2.5) with this
+   `detail` string. Do not interpret, re-route, or remedy individual blockers
+   yourself, even for a `review-currency` blocker; the standard file holds
+   that prose.
+5. Proceed to `idd-merge-handoff-lite.instructions.md` (F2.5) with this
    recorded verdict, regardless of whether `ready` is `true` or
    `false`. Both outcomes hand off there — this file never runs
    `gh pr merge` or any other mutating merge action itself.

@@ -208,6 +208,15 @@ instead of returning to this D1 rebase path.
    wiring first — `gh workflow run` can't dispatch a branch-only file), validate
    with a manual dispatch run, commit the trigger-flip edit, re-run
    **pre-push-validate**, and push, before D3.
+5. Scope-overrun handoff: if the `claimed-push` scope step reports an
+   over-limit candidate set, confirm the claim still uses this session's
+   claim id, record the pre-push evidence, and stop without pushing. Dry-run
+   first, then add `--apply`:
+   `node scripts/post-idd-marker.mjs --type scope-overrun --target issue
+   <issue-number> --agent-id {agent-id} --effort <S|M|L> --candidate-files
+   '<JSON array of paths>'`. This section records the handoff evidence only;
+   the route after it is the work-phase scope-overrun route in
+   `idd-work-lite.instructions.md`.
 
 ## D3 — Create PR
 
