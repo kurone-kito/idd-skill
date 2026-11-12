@@ -18,7 +18,7 @@ import {
 } from 'node:fs';
 import { createRequire } from 'node:module';
 import { devNull, tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
@@ -281,6 +281,174 @@ test('no default command reaches the check or lint aliases, so there is no cycle
       assert.notEqual(scriptRun, 'lint:minimum');
     }
   }
+});
+
+// ---------------------------------------------------------------------------
+// #5180: the lint group never runs a test command. Until e79b0efef (#3756) the
+// lint script ran the test suite, and nothing stops a test command from being
+// added to the group again, directly or through a package script entry. The
+// rule and its fixtures live here, so no source file changes.
+// ---------------------------------------------------------------------------
+
+type PackageScripts = Readonly<Record<string, string>>;
+
+/**
+ * Whether one command line, split into arguments, runs tests. The rule fails
+ * closed: a test file named anywhere in the arguments counts, so a lint command
+ * that merely names one fails loudly and the rule can be refined then, while a
+ * test file handed to some other runner could never pass silently.
+ */
+function isTestCommand(args: readonly string[]): boolean {
+  const last = args.at(-1) ?? '';
+  return (
+    last === 'test' ||
+    last.startsWith('test:') ||
+    args.some(
+      (arg) =>
+        arg === '--test' ||
+        arg.startsWith('--test-') ||
+        arg.includes('.test.mts'),
+    )
+  );
+}
+
+const PACKAGE_MANAGER = /^(?:pnpm|npm|yarn)(?:\.[cm]?js)?$/u;
+
+/**
+ * The package script that `<package manager> run <name>` runs, found in the
+ * executable and its arguments, or `undefined` when the command runs none. A
+ * `run` token that no package manager precedes, such as an argument of an
+ * ordinary node script, names no script.
+ */
+function packageScriptOf(
+  command: string,
+  args: readonly string[],
+): string | undefined {
+  const tokens = [command, ...args];
+  const manager = tokens.findIndex((token) =>
+    PACKAGE_MANAGER.test(basename(token)),
+  );
+  if (manager < 0) {
+    return undefined;
+  }
+  const [verb, name] = tokens.slice(manager + 1);
+  return verb === 'run' || verb === 'run-script' ? name : undefined;
+}
+
+/**
+ * Whether the command runs tests, or runs a package script whose body does.
+ * A body is split into its simple commands, and a `run <name>` inside it is
+ * followed once, so a chained or nested script entry is checked too. Only the
+ * `run <name>` form names a script; the group's commands use no other form.
+ */
+function runsTestCommand(
+  command: string,
+  args: readonly string[],
+  scripts: PackageScripts,
+  seen: Set<string> = new Set(),
+): boolean {
+  if (isTestCommand(args)) {
+    return true;
+  }
+  const name = packageScriptOf(command, args);
+  if (name === undefined || seen.has(name) || !Object.hasOwn(scripts, name)) {
+    return false;
+  }
+  seen.add(name);
+  return scripts[name].split(/&&|\|\||[;|]/u).some((part) => {
+    const [executable = '', ...rest] = part.trim().split(/\s+/u);
+    return runsTestCommand(executable, rest, scripts, seen);
+  });
+}
+
+/** The label of each command in the group that runs tests, once each. */
+function commandsRunningTests(
+  group: CheckGroup,
+  scripts: PackageScripts,
+): string[] {
+  return group.commands
+    .filter((entry) => runsTestCommand(entry.command, entry.args, scripts))
+    .map((entry) => entry.label);
+}
+
+test('the lint group never runs a test command, directly or through a package script (#5180)', () => {
+  const scripts = JSON.parse(
+    readFileSync(join(REPO_ROOT, 'package.json'), 'utf8'),
+  ).scripts as PackageScripts;
+  // Both spawn shapes: pnpm's entry point run under node, and a native pnpm.
+  for (const execPath of ['/fixture/pnpm.cjs', '/fixture/pnpm']) {
+    const lint = defaultCheckGroups(execPath).find(
+      (group) => group.id === 'lint',
+    );
+    assert.ok(lint);
+    assert.deepEqual(commandsRunningTests(lint, scripts), []);
+  }
+
+  // The rule must report a test command, or the check above passes on a rule
+  // that never reports anything.
+  const direct: CheckGroup = {
+    id: 'lint',
+    commands: [
+      {
+        label: 'pnpm run test:scripts',
+        command: '/fixture/pnpm',
+        args: ['run', 'test:scripts'],
+      },
+    ],
+  };
+  assert.deepEqual(commandsRunningTests(direct, scripts), [
+    'pnpm run test:scripts',
+  ]);
+
+  // A test command behind two script entries is reported through the bodies,
+  // for both spawn shapes. The plain script and the self-referencing script are
+  // clean, and a `run` or `--run` argument of an ordinary node script names no
+  // package script, even when a script of that name would run tests.
+  const fixtureScripts: PackageScripts = {
+    'lint:slow': 'pnpm run lint:inner',
+    'lint:inner': 'node scripts/x.mjs && node --test tests/a.test.mts',
+    'lint:fast': 'node scripts/x.mjs',
+    'lint:loop': 'pnpm run lint:loop',
+  };
+  const nested: CheckGroup = {
+    id: 'lint',
+    commands: [
+      {
+        label: 'native pnpm run lint:slow',
+        command: '/fixture/pnpm',
+        args: ['run', 'lint:slow'],
+      },
+      {
+        label: 'node pnpm.cjs run lint:slow',
+        command: '/fixture/node',
+        args: ['/fixture/pnpm.cjs', 'run', 'lint:slow'],
+      },
+      {
+        label: 'native pnpm run lint:fast',
+        command: '/fixture/pnpm',
+        args: ['run', 'lint:fast'],
+      },
+      {
+        label: 'native pnpm run lint:loop',
+        command: '/fixture/pnpm',
+        args: ['run', 'lint:loop'],
+      },
+      {
+        label: 'node checker.mjs run lint:slow',
+        command: '/fixture/node',
+        args: ['checker.mjs', 'run', 'lint:slow'],
+      },
+      {
+        label: 'node checker.mjs --run lint:slow',
+        command: '/fixture/node',
+        args: ['checker.mjs', '--run', 'lint:slow'],
+      },
+    ],
+  };
+  assert.deepEqual(commandsRunningTests(nested, fixtureScripts), [
+    'native pnpm run lint:slow',
+    'node pnpm.cjs run lint:slow',
+  ]);
 });
 
 test('a group that needs pnpm is skipped when npm_execpath is absent', () => {
