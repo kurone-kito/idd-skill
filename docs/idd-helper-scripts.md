@@ -7476,8 +7476,9 @@ that runs it is
   1. The trusted read of the live default branch reports `worktreeRemnant` as
      `enabled`, and, when step 1's reason starts with `stale-claim-`, the
      stale age the routing used (`stale_age_ms` in its JSON) is at least
-     `PT24H`. A released claim needs no age. A repository whose
-     `claimTiming.staleAge` is shorter still gets the 24-hour floor.
+     `PT24H`. That is the configured `claimTiming.staleAge`, not the claim's own
+     age, so a repository that sets a shorter one is refused here and keeps
+     the attestation path. A released claim needs no age.
   2. The target is a linked worktree: not the primary worktree, and not a
      primary-recovery resume.
   3. Step 1 confirms the block with a `stale-claim-` or `released-claim-`

@@ -1124,9 +1124,10 @@ against an unrelated branch, and none has an observed incident of its own
    lock:
 
    1. The trusted read reports `worktreeRemnant` as `enabled`, and a
-      `stale-claim-` reason has a stale age of at least `PT24H`. A repository
-      whose `claimTiming.staleAge` is shorter still gets 24 hours. A released
-      claim needs no age.
+      `stale-claim-` reason has a stale age of at least `PT24H`: the stale age the
+      routing used, which is the repository's configured `claimTiming.staleAge`,
+      not the claim's own age. A repository that sets a shorter one is refused
+      here and keeps the attestation path. A released claim needs no age.
    2. The target is a linked worktree: never the primary worktree, and never a
       primary-recovery resume.
    3. Step 1 confirms a `stale-claim-` or `released-claim-` reason with a
