@@ -362,7 +362,8 @@ for standalone orphans (parent not under a roadmap's `## Tracks`) when
 `<target-policy>` sets `issueScope` to `roadmap`, which discovers no orphans.
 Other values and an absent key are unchanged.
 
-Otherwise, use the existing comment/release route.
+Use the existing comment/release route only when any standing-split condition
+above fails.
 
 Revalidate the parent claim; add/verify the snapshot's authoring label. An
 existing label resumes only from the same proposal; otherwise stop on the
