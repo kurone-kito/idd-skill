@@ -195,7 +195,13 @@ instead of returning to this D1 rebase path.
    `--issue {issue-number} --claim-id {claim-id} --agent-id {agent-id}
    [--nonce {nonce}] --expected-scope-sha256 {assessment-sha256} --apply`.
    Its `--apply` runs the gate and the push, so skip the plain push.
-   Require `pushed: true`; otherwise follow its `nextAction`.
+   Require `pushed: true`. If it is false at a failed `scope` step (not
+   `advisory-drift`), record the pre-push `scope-overrun` evidence first:
+   dry-run, then add `--apply` to `node scripts/post-idd-marker.mjs --type
+   scope-overrun --target issue <issue-number> --agent-id {agent-id} --effort
+   <S|M|L> --candidate-files '<JSON array of paths>'`. Then follow its
+   `nextAction`, which returns to the work-phase scope-overrun route in
+   `idd-work-lite.instructions.md`. Otherwise follow its `nextAction`.
    Otherwise push the branch: `git push -u origin {branch-name}`, plain on
    first publication or a no-open-PR resume (D1 step 1). Use
    `--force-with-lease` only
@@ -208,15 +214,6 @@ instead of returning to this D1 rebase path.
    wiring first — `gh workflow run` can't dispatch a branch-only file), validate
    with a manual dispatch run, commit the trigger-flip edit, re-run
    **pre-push-validate**, and push, before D3.
-5. Scope-overrun handoff: if the `claimed-push` scope step reports an
-   over-limit candidate set, confirm the claim still uses this session's
-   claim id, record the pre-push evidence, and stop without pushing. Dry-run
-   first, then add `--apply`:
-   `node scripts/post-idd-marker.mjs --type scope-overrun --target issue
-   <issue-number> --agent-id {agent-id} --effort <S|M|L> --candidate-files
-   '<JSON array of paths>'`. This section records the handoff evidence only;
-   the route after it is the work-phase scope-overrun route in
-   `idd-work-lite.instructions.md`.
 
 ## D3 — Create PR
 

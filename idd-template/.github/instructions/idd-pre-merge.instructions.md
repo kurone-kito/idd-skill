@@ -92,8 +92,7 @@ this merge-time write-gate (Resume-phase cold recovery stays a distinct,
 not-yet-wired case; see
 [rationale](../../docs/idd-design-rationale.md#activation-nonce-why-a-separate-marker-and-what-stays-deferred),
 kurone-kito/idd-skill#1529). Omitting `--nonce` silently skips the
-merge-time comparison rather than failing closed, so pass it whenever a
-nonce was recorded for the active claim.
+merge-time comparison, so pass it whenever one was recorded.
 
 **Claim identity with empty references**: an active claimed PR targeting a
 non-default branch can have empty `closingIssuesReferences` (#4697). Always
@@ -300,10 +299,11 @@ with a `hint` names this step; the hint never changes the verdict.
   full 40-character SHA before readiness proceeds. A `claim.scopeOverrun` with
   `status` `missing` or `invalid` (no record, or a malformed, stale, or
   conflicting one), or a `scope-overrun` blocker, holds F2; an absent
-  `claim.scopeOverrun` is a clean scope. Only a trusted owner's
-  `Scope decision: accept head <full SHA>` comment for the current head marks
-  the PR ready; a changed head needs a new decision. Without it, apply
-  `status:needs-decision`, move the PR to draft, post the post-push
+  `claim.scopeOverrun` is a clean scope, with no acceptance or draft step. For
+  an overrun, only a trusted owner's `Scope decision: accept head <full SHA>`
+  comment for the current head marks the PR ready; a changed head needs a new
+  decision. Without it, apply `status:needs-decision`, move the PR to draft,
+  post the post-push
   [`scope-overrun` record](../../docs/idd-helper-scripts.md#scope-overrun-evidence-marker),
   verify the marker, the evidence, the label, and the draft state, then
   release the claim and hand the split to the issue-authoring companion. If
