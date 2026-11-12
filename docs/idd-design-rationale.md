@@ -1109,9 +1109,12 @@ This route is its work-phase counterpart (kurone-kito/idd-skill#4138).
   and the evidence comment already carries the split proposal, so the
   refused handoff degrades to the no-companion path. Whether the
   original issue becomes the roadmap anchor or is closed as superseded
-  is the companion's decision. Without the companion, the split
-  proposal stays in the overrun comment for the next triage. In both
-  cases the worker still never creates authoring ad hoc. The
+  is the companion's decision, except that a verified held split of a
+  published pull request is finalized by the
+  [D2 route](#finalize-a-verified-held-scope-split-issue-4678). Without
+  the companion, the split proposal stays in the overrun comment for the
+  next triage. In both cases the worker still never creates authoring ad
+  hoc. The
   "Unplanned follow-up work" rule to keep the Stage 1 B–C hold does not
   apply here, because the claimed issue itself is being returned rather
   than continued.
@@ -1179,6 +1182,72 @@ each round could only be diagnosed by pushing and waiting on a real
 run, since this repository's own IDD implementation sessions are
 WSL/Linux-only and cannot exercise a `windows-latest` runner locally
 (Refs #2892, non-blocking).
+
+### Finalize a verified held scope split (issue `#4678`)
+
+The operator's 2026-10-17 hearing on issue `#4435` decided that a split
+issue's draft pull request is closed and that the §LWR route then removes its
+worktree (answers 7a and 7b,
+[decision comment](https://github.com/kurone-kito/idd-skill/issues/4435#issuecomment-6231043615)),
+but it left both steps to the owner. Roadmap `#4673` automates them once the
+replacement set is verified. The post-push gap behind it was observed on
+2026-10-15 (UTC) on issue `#4375`: F2 found 15 candidate files against an M
+limit of 8, yet pull request `#4399` merged. Issue `#4678` writes the last step
+of that handoff. After the companion publishes the held replacement roadmap,
+the standard PR-submit file finalizes the superseded pull request, worktree,
+and source issue. The pre-merge text that releases the claim and hands the
+split over belongs to issue `#5055`, so this route starts after that handoff
+and edits none of it.
+
+The route is verify-first. Every write waits for one read-only preflight over
+the whole replacement set and a safe LWR dry run, so an incomplete or uncertain
+set leaves the pull request, worktree, and source issue as they are, for
+recovery. The set check combines three sources, since none proves it alone.
+`authoring-set-members` lists the issues whose trusted, unedited owner marker
+carries the set. The roadmap's `## Tracks` list names the intended children. A
+fresh read of each issue shows that it is open, still carries the authoring
+label, and records `Split out of` the source. A missing child, a Tracks
+mismatch, or a released label means the set is not verified, so nothing is
+written. The source issue needs no active claim and a trusted `scope-overrun`
+record, and a post-push pull request must still be a draft at the recorded
+head, or on a rerun already closed there, so a head pushed after the decision
+cannot be closed unseen.
+
+The order of writes follows what each step protects. The pull request closes
+first and is re-read at the same head before LWR starts, because LWR would
+otherwise remove the worktree under a pull request that is still reviewable. An
+uncertain close is re-read before any retry, so a repeated call cannot hide a
+state change. LWR runs next. Only after cleanup succeeds does the source issue
+close as not planned, with the replacement roadmap linked, and only after that
+closure is verified does the needs-decision label come off. Removing the label
+first would leave an open, label-free, and therefore claimable issue between
+the steps. If LWR refuses or fails after the pull request is closed, the issue
+stays open with its label, which keeps it out of Discover, the remaining
+worktree data stays, and the report names the partial state and the next
+action. A rerun then skips each step whose verified result already holds, so a
+pull request already closed at the recorded head does not block it. This
+recovery is preventive; no observed incident yet. A pre-first-push overrun has
+no pull request, so that step is skipped, and its B3 release may have removed
+the worktree already, which the dry run reports as nothing to recover.
+
+LWR keeps its own step 2: nothing in the helpers shows whether another session
+is still working in the worktree, and `--apply` refuses without
+`--operator-confirmed-no-live-session`. The docs say a session never supplies
+that flag from its own claim evidence, and the `worktreeRemnant` auto-decide
+class is not wired to §LWR yet (see "Auto-decide at a stop"). The route
+therefore treats an independent confirmation as a preflight item. Without it,
+nothing is written, instead of the refusal appearing after the pull request is
+closed. This reads the existing rule and adds no waiver; it is preventive, with
+no observed incident yet.
+
+No claim is active when the route runs, because the handoff released it and LWR
+needs a released claim, so the claim revalidation gate has nothing to check.
+The preflight, repeated immediately before each write, takes its place and
+fails closed on any change. The route never releases or relabels the
+replacement set. Stage 2 remains the explicit human release gate, and the route
+changes neither `dangerouslyAutoDecide` nor its default. Closing the pull
+request leaves its remote branch in place, because remote-branch deletion
+belongs to F4 after a merge; this is preventive, with no observed incident yet.
 
 ## Review triage
 
