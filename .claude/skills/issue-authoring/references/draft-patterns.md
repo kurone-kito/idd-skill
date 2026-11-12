@@ -406,8 +406,11 @@ for a hearing, the auto-decide branch in
 the recommended option into the ready body. The body carries one entry per
 auto-decided choice, which names the option, the alternatives, and the
 choice's `decision` ID, and states that no hearing was asked for. Replace the
-example path, setting, and ID with the real ones. When a confirmation is not
-recorded, rewrite or remove only that choice's entry, as the branch says.
+example path, setting, and ID with the real ones. Every alternative other than
+`Keep today's behavior` cites its own path, symbol, or command, as the chosen
+option does, and the main cost of each option goes in the confirmation issue's
+`## Options` section, not in this entry. When a confirmation is not recorded,
+rewrite or remove only that choice's entry, as the branch says.
 
 ```markdown
 ## Auto-decided choice
@@ -419,8 +422,8 @@ decision: a confirmation issue records it, and closing that issue confirms it.
 ### Retry cap source
 
 - Chosen option: read the cap from `sync.maxRetries` in `src/sync.mts`.
-- Alternatives: add a new `--max-retries` flag; `Keep today's behavior`
-  (no cap).
+- Alternatives: read the cap from the `--retries` option in `src/cli.mts`;
+  `Keep today's behavior` (no cap).
 - Decision ID: `decision-3f9a2c1e`
 ```
 
