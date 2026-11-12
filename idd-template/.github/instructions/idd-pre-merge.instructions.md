@@ -99,17 +99,15 @@ non-default branch can have empty `closingIssuesReferences` (#4697). Always
 pass an active claim's `--claim-issue`, `--claim-id`, and recorded `--nonce`,
 regardless of that field. Use `--claimless` (#2017) only for a verified
 no-claim PR (no-issue or qualified bootstrap); it skips claim revalidation.
-See the [Readiness command](../../docs/idd-helper-scripts.md).
 
 **Polling loop failure mode**: a zero exit with the full readiness
 JSON (`ready: false` + `blockers`) is not-ready-yet — keep polling. A
 non-zero exit with `{ "error": ... }` is a **call failure**: a usage
-error (e.g. missing `--claim-issue`/`--claimless`) carries a `hint` —
-fix before retrying; a live `gh` lookup failure lacks one — use
-judgment (calls can fail transiently). Conflating either `{error}`
-shape with not-ready-yet (kurone-kito/idd-skill#2707) turns a real
-failure into a silent stall. A `deferred-followup-unreconciled` blocker
-never clears by polling: follow its `detail`.
+error carries a `hint` — fix before retrying; a live `gh` lookup failure
+lacks one — use judgment. Conflating either `{error}` shape with
+not-ready-yet (kurone-kito/idd-skill#2707) turns a real failure into a silent
+stall. A `deferred-followup-unreconciled` blocker never clears by polling:
+follow its `detail`.
 
 **Watermark before hold** (observed on pull request kurone-kito/idd-skill#4077,
 issue kurone-kito/idd-skill#4071): a readiness result computed before any
@@ -298,17 +296,18 @@ with a `hint` names this step; the hint never changes the verdict.
 - **Scope-overrun evidence** (fail closed): record the current head as its
   full 40-character SHA before readiness proceeds. A `claim.scopeOverrun` with
   `status` `missing` or `invalid` (no record, or a malformed, stale, or
-  conflicting one), or a `scope-overrun` blocker, holds F2; an absent
-  `claim.scopeOverrun` is a clean scope, with no acceptance or draft step. For
-  an overrun, only a trusted owner's `Scope decision: accept head <full SHA>`
-  comment for the current head marks the PR ready; a changed head needs a new
-  decision. Without it, apply `status:needs-decision`, move the PR to draft,
-  post the post-push
+  conflicting one), or a `scope-overrun` blocker, holds F2. An absent
+  `claim.scopeOverrun` is a clean scope only on a claim-bound run; `--claimless`
+  runs omit it. For an overrun, only a trusted owner's
+  `Scope decision: accept head <full SHA>` comment for the current head marks
+  the PR ready; a changed head needs a new decision. Without it, apply
+  `status:needs-decision`, move the PR to draft, post the post-push
   [`scope-overrun` record](../../docs/idd-helper-scripts.md#scope-overrun-evidence-marker),
   verify the marker, the evidence, the label, and the draft state, then
   release the claim and hand the split to the issue-authoring companion. If
   the companion is unavailable, an audit fails, or a state is unverified, keep
-  the claim and report one next action.
+  the claim and report one next action. After an accepted head, return the
+  draft to ready with the draft-state helper in `docs/idd-helper-scripts.md`.
 - **CI**: Current PR head SHA has all required CI checks generated and
   all passing (→ run CI wait per `idd-ci.instructions.md` using the
   same resolved `ciWait.runningTimeout`, `ciWait.generationTimeout`, and
