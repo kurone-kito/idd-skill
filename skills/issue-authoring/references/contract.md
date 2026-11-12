@@ -562,14 +562,15 @@ isolated away from ready execution issues whenever possible.
     - Every rewrite, on either route, runs in this order: prepare the body;
       run the completed-draft review, because the rewrite can change the scope
       or the readiness bucket; run the lint (for the needs-decision route,
-      with `--expect-bucket needs-decision` and both labels); run the conflict
-      check and the renew step for this set's anchor and target, as the
-      contract's "Conflict check before every edit" and "Renew before every
-      edit" rules in Authoring hold and release require; add the
-      needs-decision label when the route needs it and verify it; then edit
-      the body. A held body with an extra label fails safe, and a body with
-      the marker but without the label would not (preventive; no observed
-      incident yet).
+      with `--expect-bucket needs-decision` and both labels); when the route
+      needs the needs-decision label, run the conflict check and the renew
+      step for this set's anchor and target, add the label, and verify it;
+      then run the conflict check and the renew step again, immediately before
+      the body edit, as the contract's "Conflict check before every edit" and
+      "Renew before every edit" rules in Authoring hold and release require;
+      then edit the body. A held body with an extra label fails safe, and a
+      body with the marker but without the label would not (preventive; no
+      observed incident yet).
     - If the review is unavailable, the label add cannot be verified, or
       another step fails, the session makes no further edit, reports the
       recovery, and stops. The target stays held in every case.
