@@ -1291,10 +1291,16 @@ comes before the record, because it lists the subjects:
 
 A dry run or an `--apply` run that refuses before it preserves anything
 keeps today's stop, and the session comments the failure on the
-confirmation issue when one exists. When `--apply` preserved a leftover and
-a later claim step fails, the leftover stays preserved: the session posts the
-location note and then the failure note, and today's stop follows. A further
-attempt is a new decision.
+confirmation issue when one exists. When `--apply` fails after it changed
+state (`b1-preserve-failed`, for example the branch is saved and the path
+move then fails), the session posts the location note for every saved
+location in the helper report and then the failure note, and today's stop
+follows. The saved state is finished or undone by hand before the helper
+runs again. When `--apply` preserved a leftover and a later claim step fails,
+the leftover stays preserved: the session posts the location note and then
+the failure note, and today's stop follows under that step's next action,
+which is the `lost-claim-cleanup` of `idd-claim.instructions.md` once a
+worktree exists. A further attempt is a new decision.
 
 The region classifier is the trusted class read and the procedure's checks,
 followed by the helper's preconditions. It loosens only the two stops above.
