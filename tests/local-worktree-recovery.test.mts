@@ -11535,7 +11535,13 @@ test('sandbox evidence: a worktree written inside the quiet window refuses and m
     assert.equal(verdict.ready, false);
     assert.equal(verdict.mutated, false);
     assert.match(verdict.result, /condition 4 \(quiet-window\)/);
-    assert.match(verdict.result, /changed \d+ s ago, inside the quiet window/);
+    // The fixture's files were just written: the file clock can read a few
+    // milliseconds ahead of the clock the walk uses, and a time in the future
+    // counts as recent too.
+    assert.match(
+      verdict.result,
+      /changed \d+ s ago, inside the quiet window|carries a time in the future/,
+    );
     assert.equal(
       execFileSync('git', ['stash', 'list'], {
         cwd: fixture.sandbox.primary,
