@@ -11976,3 +11976,190 @@ test('evidence: a decision voided while the clone lock is awaited refuses before
   );
   assert.equal(fixture.state.made.length, 0);
 });
+
+const SHORTCUT_RECORDS = [
+  {
+    path: '/repo/primary',
+    branchRef: 'refs/heads/main',
+    detached: false,
+    bare: false,
+    locked: false,
+    prunable: false,
+  },
+  {
+    path: '/repo/linked',
+    branchRef: 'refs/heads/issue/1-task',
+    detached: false,
+    bare: false,
+    locked: false,
+    prunable: true,
+  },
+];
+
+function shortcutRouting(
+  overrides: Partial<ConfirmBlockRouting> = {},
+): ConfirmBlockRouting {
+  return {
+    state: 'local_worktree_occupied',
+    reason: 'stale-claim-local-worktree-unreadable',
+    stale_age_ms: EVIDENCE_STALE_AGE_MS,
+    active_claim: { claim_id: 'claim-x', branch: 'issue/1-task' },
+    evidence: {
+      local_worktree: {
+        status: 'unreadable',
+        paths: ['/repo/linked'],
+        reason: 'prunable',
+      },
+    },
+    ...overrides,
+  };
+}
+
+test('evidence: the prunable shortcut without an admin-directory locator refuses', () => {
+  const fixture = evidenceFixture({
+    routing: shortcutRouting(),
+    deps: {
+      listWorktreeRecords: () => SHORTCUT_RECORDS,
+      pathExists: (path) => path !== '/repo/linked',
+      findWorktreeAdminDir: undefined,
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    evidenceArgs({ apply: true }),
+    fixture.deps,
+  );
+  assertRefusedBeforeMutation(
+    fixture,
+    verdict,
+    /condition 4.*no admin-directory locator is available.*condition 5/,
+  );
+  assert.deepEqual(fixture.events, []);
+});
+
+test('evidence: routing JSON with no claim ID never passes condition 3', () => {
+  // The field is missing, so it reads as undefined, not null; the prunable
+  // shortcut skips the lock check, so nothing else would stop it.
+  const routing = shortcutRouting({
+    active_claim: { branch: 'issue/1-task' } as unknown as {
+      claim_id: string | null;
+      branch: string | null;
+    },
+  });
+  for (const apply of [false, true]) {
+    const fixture = evidenceFixture({
+      routing,
+      deps: {
+        listWorktreeRecords: () => SHORTCUT_RECORDS,
+        pathExists: (path) => path !== '/repo/linked',
+        findWorktreeAdminDir: () => ({
+          path: '/repo/primary/.git/worktrees/linked',
+          error: null,
+        }),
+      },
+    });
+    const verdict = runLocalWorktreeRecovery(
+      evidenceArgs({ apply }),
+      fixture.deps,
+    );
+    assertRefusedBeforeMutation(
+      fixture,
+      verdict,
+      /condition 3 \(stale-or-released-claim\).*no claim ID/,
+    );
+    assert.equal(condition(verdict, 6).status, 'unmet');
+  }
+});
+
+test('evidence: the worktree records are read again under the clone lock', () => {
+  let listings = 0;
+  const base = [
+    {
+      path: '/repo/primary',
+      branchRef: 'refs/heads/main',
+      detached: false,
+      bare: false,
+      locked: false,
+      prunable: false,
+    },
+    {
+      path: '/repo/linked',
+      branchRef: 'refs/heads/issue/1-task',
+      detached: false,
+      bare: false,
+      locked: false,
+      prunable: false,
+    },
+  ];
+  const fixture = evidenceFixture({
+    deps: {
+      // A worktree is registered at the state root once the lock is awaited.
+      listWorktreeRecords: () => {
+        listings += 1;
+        return listings === 1
+          ? base
+          : [
+              ...base,
+              {
+                path: '/state',
+                branchRef: 'refs/heads/issue/9-other',
+                detached: false,
+                bare: false,
+                locked: false,
+                prunable: false,
+              },
+            ];
+      },
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    evidenceArgs({ apply: true }),
+    fixture.deps,
+  );
+  assert.ok(listings >= 2, 'the worktree list is read again under the lock');
+  assert.equal(verdict.ready, false);
+  assert.equal(verdict.mutated, false);
+  assert.deepEqual(fixture.mutations, []);
+  assert.match(
+    verdict.result,
+    /refused under the clone lock, so nothing was created.*inside protected worktree/,
+  );
+  assert.equal(fixture.state.made.length, 0);
+});
+
+test('evidence: a worktree list that fails under the clone lock refuses before anything is created', () => {
+  let listings = 0;
+  const fixture = evidenceFixture({
+    deps: {
+      listWorktreeRecords: () => {
+        listings += 1;
+        return listings === 1
+          ? [
+              {
+                path: '/repo/primary',
+                branchRef: 'refs/heads/main',
+                detached: false,
+                bare: false,
+                locked: false,
+                prunable: false,
+              },
+              {
+                path: '/repo/linked',
+                branchRef: 'refs/heads/issue/1-task',
+                detached: false,
+                bare: false,
+                locked: false,
+                prunable: false,
+              },
+            ]
+          : null;
+      },
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    evidenceArgs({ apply: true }),
+    fixture.deps,
+  );
+  assert.equal(verdict.mutated, false);
+  assert.deepEqual(fixture.mutations, []);
+  assert.match(verdict.result, /refused under the clone lock/);
+});

@@ -220,7 +220,9 @@ export function claimBasisProblem(routing: EvidenceRouting): string | null {
   ) {
     return `the routing reason ${routing.reason} is neither stale-claim-* nor released-claim-*, so the attestation path applies`;
   }
-  if (routing.claimId === null || routing.claimId === '') {
+  // Strictly a non-empty string: routing JSON that lacks the field reads as
+  // `undefined`, and that must refuse like a legacy release does.
+  if (typeof routing.claimId !== 'string' || routing.claimId === '') {
     return 'the recovered claim has no claim ID (a legacy release), so the attestation path applies';
   }
   return null;

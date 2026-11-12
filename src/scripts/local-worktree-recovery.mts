@@ -4138,9 +4138,11 @@ interface EvidenceRun {
 
 /** The facts of a routing that the evidence basis reads. */
 function evidenceRoutingFacts(routing: ConfirmBlockRouting): EvidenceRouting {
+  const { claimId } = extractRecoveredClaim(routing);
   return {
     reason: routing.reason,
-    claimId: extractRecoveredClaim(routing).claimId,
+    // Routing JSON without the field reads as `undefined`, not `null`.
+    claimId: typeof claimId === 'string' ? claimId : null,
     staleAgeMs:
       typeof routing.stale_age_ms === 'number' ? routing.stale_age_ms : null,
   };
@@ -4810,9 +4812,19 @@ function runRecoveryCore(
     error: string | null;
   } => {
     if (shortcut.eligible) {
-      const lookup = deps.findWorktreeAdminDir
-        ? deps.findWorktreeAdminDir(verdict.primaryWorktree ?? cwd, targetPath)
-        : { path: null, error: null };
+      // Fail closed: a missing locator would leave nothing to inspect, and the
+      // checks would pass for want of a root.
+      if (!deps.findWorktreeAdminDir) {
+        return {
+          roots: [],
+          processRoots: [],
+          error: 'no admin-directory locator is available',
+        };
+      }
+      const lookup = deps.findWorktreeAdminDir(
+        verdict.primaryWorktree ?? cwd,
+        targetPath,
+      );
       if (lookup.error) {
         return { roots: [], processRoots: [], error: lookup.error };
       }
@@ -4887,10 +4899,16 @@ function runRecoveryCore(
   // The durable destination, inspected under the #4957 guards with the
   // primary path and every worktree record, the target included, so it can
   // never lie inside the tree that step 4 removes.
-  const inspectEvidenceDestination = ():
+  const inspectEvidenceDestination = (
+    worktreeRecords: readonly LocalWorktreeRecord[] | null,
+  ):
     | { destination: string; parents: readonly PreservationParent[] }
     | { hold: string } => {
-    if (evidenceGuards === null || records === null) {
+    if (
+      evidenceGuards === null ||
+      worktreeRecords === null ||
+      worktreeRecords.length === 0
+    ) {
       return { hold: 'the preserve-destination guards are not available' };
     }
     let inspected: ReturnType<typeof inspectPreserveDestination>;
@@ -4900,7 +4918,7 @@ function runRecoveryCore(
         'lwr-preserved',
         args.issue as number,
         verdict.primaryWorktree ?? cwd,
-        records,
+        worktreeRecords,
       );
     } catch (error) {
       return { hold: `the inspection threw: ${errorMessage(error)}` };
@@ -4957,7 +4975,7 @@ function runRecoveryCore(
     }
     let destinationHold: string | null = null;
     if (linked) {
-      const inspected = inspectEvidenceDestination();
+      const inspected = inspectEvidenceDestination(records);
       if ('hold' in inspected) {
         destinationHold = inspected.hold;
       } else {
@@ -5029,7 +5047,9 @@ function runRecoveryCore(
         )
         .join('; ')}`;
     }
-    const inspected = inspectEvidenceDestination();
+    // The worktree set is read again under the lock: a worktree registered
+    // since the first listing must be protected too.
+    const inspected = inspectEvidenceDestination(deps.listWorktreeRecords(cwd));
     if ('hold' in inspected) {
       return `the durable preserve destination is refused under the clone lock, so nothing was created: ${inspected.hold}`;
     }

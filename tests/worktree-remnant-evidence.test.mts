@@ -778,6 +778,17 @@ test('claimBasisProblem: an explicit-absence reason keeps the attestation path',
   }
 });
 
+test('claimBasisProblem: a claim ID that is missing from the routing JSON never passes', () => {
+  // A missing field reads as undefined, not null.
+  for (const claimId of [undefined, 7, {}, []] as unknown[]) {
+    assert.match(
+      claimBasisProblem({ ...STALE, claimId: claimId as string | null }) ?? '',
+      /no claim ID/,
+      String(claimId),
+    );
+  }
+});
+
 test('claimBasisProblem: a legacy release has no claim ID', () => {
   for (const claimId of [null, '']) {
     assert.match(
