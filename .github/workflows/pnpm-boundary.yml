@@ -7,7 +7,8 @@ name: Pnpm boundary guard
 # intentionally also runs in lint.yml.
 #
 # Rerun scope (#4993): this repository's pull_request run covers the four
-# check groups on Node 22, 24.x, and 26.x. "Re-run failed jobs" repeats only
+# check groups on Node 22, 24.x, and 26.x, except that the test group runs
+# only on Node 22.x and 24.x (decision #5182). "Re-run failed jobs" repeats only
 # the failed version/group lane and the small pnpm-boundary aggregate. The
 # manual Node 22 floor caller selects only the Node 22 column. Every other
 # caller, and any caller that passes its own lint-command, gets one full run
@@ -81,8 +82,9 @@ jobs:
           - test
           - distribution
         # check-groups partitions check-project: each group runs in exactly
-        # one shard for each Node version. pnpm passes a literal `--` to the
-        # script, so group ids follow the script name without one.
+        # one shard for each Node version, except that the test group has no
+        # Node 26.x shard (the exclude below; decision #5182). pnpm passes a
+        # literal `--` to the script, so group ids follow the script name.
         include:
           - shard: lint
             check-groups: lint
@@ -92,6 +94,11 @@ jobs:
             check-groups: test
           - shard: distribution
             check-groups: build:check audit
+        # The Node 26.x lane skips the test group (decision #5182): the full
+        # test suite runs on Node 22.x and 24.x only.
+        exclude:
+          - node-version: 26.x
+            shard: test
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

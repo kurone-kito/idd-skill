@@ -23,25 +23,26 @@ jobs:
     # Historical ubuntu-slim runs (#3728): 94 successes had a median of
     # 521s, p90 of 671s, and maximum of 858s. Three further runs
     # (36730573670, 36752800229, 36955823310) were cancelled at 920-944s
-    # with the maximum-execution annotation; they also set this 15-minute
-    # job timeout, so they do not alone identify which timer fired. GitHub
-    # documents ubuntu-slim's hard 15-minute cap, also seen in #3665 when a
-    # 20-minute job was cancelled at 15m. The first ubuntu-latest PR run
-    # (#3730, run 37040216385) used Ubuntu 24.04.5 and Node v22.23.3; the
-    # Node floor assertion passed without setup-node. Its lint job took
-    # 171s, including 159s for protocol tests. The slowest pnpm-boundary
-    # job on ubuntu-latest took 271s. That 171s figure is historical (#4333).
-    # Over the 12 most recent completed runs measured on 2026-10-15, the
-    # lint job took 336-525s (about 5.6 to 8.8 minutes); the 95 successful
-    # runs of 2026-10-14 and 2026-10-15 took 326-560s at workflow level.
-    # Two runs (38605475287, and attempt 1 of 38669168163) were cancelled
-    # in the protocol tests step, after 584s and 593s in that step alone,
-    # with "exceeded the maximum execution time of 10m0s", so a 10-minute
-    # limit no longer left a safe margin. 15 minutes is about 1.7 times the
-    # slowest of those 12 runs. It equals, and does not exceed, the
-    # ubuntu-slim cap above; ubuntu-latest has no such cap (GitHub-hosted
-    # jobs may run up to 6 hours). See issue #3728 for source run details.
-    timeout-minutes: 15
+    # with the maximum-execution annotation. GitHub documents ubuntu-slim's
+    # hard 15-minute cap, also seen in #3665 when a 20-minute job was
+    # cancelled at 15m. The first ubuntu-latest PR run (#3730, run
+    # 37040216385) used Ubuntu 24.04.5 and Node v22.23.3; the Node floor
+    # assertion passed without setup-node. Its lint job took 171s,
+    # including 159s for protocol tests. The slowest pnpm-boundary job on
+    # ubuntu-latest took 271s. That 171s figure is historical (#4333).
+    # See issue #3728 for source run details.
+    #
+    # ubuntu-latest has no such hard cap (GitHub-hosted jobs may run up to
+    # 6 hours), so the timeout below is a repository choice. The #5160
+    # decision (option 1) raised it from 15 to 30 minutes. #5160 records a
+    # slowest passing lint job of 898s on 2026-11-09, 2s under the old
+    # 15-minute value. On 2026-11-12, attempt 3 of run 43237594554 printed
+    # its suite summary (16,282 tests, 887.5s) only as the job was
+    # cancelled at that old value. 30 minutes matches the pnpm-boundary.yml
+    # job timeouts and is about twice that 887.5s suite duration. The cost
+    # is that a genuinely stuck lint job now runs up to 30 minutes before
+    # it fails.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

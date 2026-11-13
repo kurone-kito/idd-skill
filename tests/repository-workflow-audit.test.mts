@@ -4767,6 +4767,36 @@ const RULE_CASES: readonly RuleCase[] = [
   },
   {
     ruleId: 'RWA008',
+    name: 'a test-shard exclude that names Node 22.x instead of 26.x',
+    path: PNPM_BOUNDARY,
+    mutation: {
+      from: '          - node-version: 26.x\n            shard: test\n',
+      to: '          - node-version: 22.x\n            shard: test\n',
+    },
+    expected: [
+      {
+        prefix:
+          "pnpm-boundary-group's matrix must use the supported Node version selector",
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA008',
+    name: 'a shard matrix without the Node 26.x test exclude',
+    path: PNPM_BOUNDARY,
+    mutation: {
+      from: '        exclude:\n          - node-version: 26.x\n            shard: test\n',
+      to: '',
+    },
+    expected: [
+      {
+        prefix:
+          "pnpm-boundary-group's matrix must use the supported Node version selector",
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA008',
     name: 'a shard matrix with a second axis that multiplies the shards',
     path: PNPM_BOUNDARY,
     mutation: {

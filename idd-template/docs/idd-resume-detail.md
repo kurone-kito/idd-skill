@@ -952,24 +952,28 @@ stop, and Discover marks the candidate ineligible, rather than assume the
 claim is abandoned. In a shared-clone
 setup this stop has no defined recovery when the worktree's own session
 actually crashed, so its issue can never reach the normal stale takeover. This
-section defines that recovery. Step 2 (below) is operator-run, never
-automated, and checks no process-liveness signal —
+section defines that recovery. Step 2 (below) is the operator's attestation by
+default, and no helper reads a recorded process ID for it —
 `src/scripts/claim-lock.mts`'s header records why:
 this "deliberately excludes any local liveness signal (e.g. process PID)... the
 process invoking this CLI is a one-shot child that exits the moment the call
 returns, so a recorded PID would be a tombstone before any competing session
-could ever observe it as 'alive'".
+could ever observe it as 'alive'". With the `worktreeRemnant` auto-decide
+class enabled, a defined set of mechanical evidence may stand in for that
+attestation instead (step 2 below); it does not prove that the other session
+is gone.
 
 **Primary path: the `local-worktree-recovery` helper** (kurone-kito/idd-skill#3536)
 consolidates steps 1, 3, and 4 below into a single invocation, composed from
 the `resume-claim-routing`, `claim-lock`, and `clone-lock` building-block
 helpers rather than reimplementing their logic — see
 [Local worktree recovery](idd-helper-scripts.md#local-worktree-recovery) for
-the full CLI surface and invocation forms per `helperRuntime.profile`. It
-never checks step 2 mechanically either: `--operator-confirmed-no-live-session`
-is your own explicit attestation for that step, required before any mutation,
-regardless of `--apply` or what step 1 finds. Default mode is dry-run (no
-mutation); pass `--apply` once you have independently performed step 2 and
+the full CLI surface and invocation forms per `helperRuntime.profile`. Its
+default basis for step 2 is your own explicit attestation,
+`--operator-confirmed-no-live-session`, required before any mutation,
+regardless of `--apply` or what step 1 finds. The alternative basis is
+`--mechanical-evidence` (step 2 below; never both flags). Default mode is
+dry-run (no mutation); pass `--apply` once step 2 has its basis and you
 reviewed the dry-run's reported plan. The written procedure below remains the
 canonical spec this helper's own behavior must match, the authoritative
 fallback for an `instructions-only` profile, and the reference for any step
@@ -1095,9 +1099,80 @@ against an unrelated branch, and none has an observed incident of its own
    different claim-id (a live session may still own it), or a malformed
    or unreadable lock — unless a separately authorized owner-resume or
    forced-handoff path applies.
-2. **Rule out a live session.** Outside the helpers, independently
-   confirm no session is still working in the worktree — the helpers
-   never check process liveness (see the citation above).
+2. **Rule out a live session.** By default, outside the helpers,
+   independently confirm no session is still working in the worktree —
+   the helpers never read a recorded process ID (see the citation above).
+   That attestation is the basis for every case this paragraph does not
+   cover.
+
+   **Alternative: mechanical evidence** (`kurone-kito/idd-skill#4969`).
+   With the `worktreeRemnant` class enabled in the trusted policy of the
+   live default branch, a defined set of conditions may stand in for the
+   attestation. A session that means to take the issue over uses it at the
+   Claim (A5(e)) and Resume stops that route here, or an operator directs
+   it. Discover keeps skipping the issue, and resume-stall keeps its hold.
+   Those stops hold no claim yet, so the claim revalidation gate cannot
+   apply before the takeover; step 1's recheck under the clone lock stands
+   in for it until the takeover claim exists. Follow the
+   [auto-decide procedure](idd-workflow.md#auto-decide-at-a-stop) and run the
+   `local-worktree-recovery` helper with `--mechanical-evidence`, in this
+   order: a dry run, which reports every condition and shows condition 6 unmet
+   without refusing; the record on a confirmation issue; then `--apply` with
+   `--confirmation <owner>/<repo>#<number>` and `--decision <id>`. An apply
+   refuses before any mutation unless all of these hold, and the helper
+   reads conditions 1, 4, 5, and 6 again right before step 3, under the clone
+   lock:
+
+   1. The trusted read reports `worktreeRemnant` as `enabled`, and a
+      `stale-claim-` reason has a stale age of at least `PT24H`: the stale age the
+      routing used, which is the repository's configured `claimTiming.staleAge`,
+      not the claim's own age. A repository that sets a shorter one is refused
+      here and keeps the attestation path. A released claim needs no age.
+   2. The target is a linked worktree: never the primary worktree, and never a
+      primary-recovery resume.
+   3. Step 1 confirms a `stale-claim-` or `released-claim-` reason with a
+      claim ID, and its lock check passes. A legacy release (no claim ID) and
+      an explicit-absence routing (a reason such as `active-claim-stale` or
+      `no-active-claim`) keep the attestation path.
+   4. No entry under the worktree or under its private git-admin directory
+      changed within the trusted `quietWindow` (default `PT2H`). An entry
+      with more than one link counts by its modification time only, because
+      pnpm hard-links store files into every worktree. A time in the future
+      counts as recent, an unreadable entry fails, and links are not
+      followed. Any tool that runs a plain `git status` in the worktree
+      rewrites its index and restarts the window (replayed on git 2.53.0).
+   5. No process of the current user has its working directory inside the
+      worktree, not counting its git-admin directory (Linux `/proc` only;
+      another platform fails). A process of another user is not counted. A
+      process that denies the read is listed as not inspected and does not
+      refuse.
+   6. The confirmation issue and decision match a trusted record: open, with
+      the confirmation label and without the authoring label, for
+      `class=worktreeRemnant`, this issue as `source`, the recovered claim,
+      and a `Subject:` that equals the target path. A voided decision, or one
+      with a `location` or `failure` note, does not match; a retry after a
+      failure records a new decision.
+
+   Steps 3 and 4 then run unchanged, with the preserve directory fixed at
+   `<state>/idd-skill/lwr-preserved/<issue>-<UTC timestamp>/` under the
+   shared preserve-destination guards; `--preserve-dir` is refused. The
+   report lists every condition, the processes it could not inspect, the
+   stash tag, the backup refs, and the preserve directory; the caller
+   comments them on the confirmation issue and posts the link marker after
+   its takeover claim. A retry after a partial apply refuses while any
+   walked entry changed within the quiet window, whatever the cause, and the
+   report names it.
+
+   The evidence does not prove that the other session is gone: a harness can
+   keep no working directory between commands, a session can be paused past
+   the stale age or can only poll GitHub, and a same-user process can deny
+   reads of its `/proc` entry. The operator accepted the cost at the hearing
+   of 2026-11-01: if the evidence is wrong, a live session's worktree is
+   removed after its changes are preserved. The run leaves three risks open:
+   the window between the recheck and step 3, the PR `#3550` race in which a
+   same-claim session re-acquires its lock just before recovery takes the
+   clone lock, and the resolution of a state root that is a link (preventive;
+   no observed incident yet).
 3. **Preserve.** When `<path>` is a linked worktree, run this step and
    step 4 from the **surviving primary worktree**, never from `<path>`
    itself — the same cwd rule F4 uses for its own removal

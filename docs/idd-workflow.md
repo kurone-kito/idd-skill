@@ -1110,9 +1110,10 @@ above `maxPendingConfirmations` or `maxDecisionsPerClaim`.
   `--repo` for the base repository that the trusted verdict names. Without
   them the helper uses the checkout, which in a fork is the fork. It also
   passes `--policy` with the policy file read at the trusted base ref, and
-  `--marker-prefix` when the target repository is not this checkout, so that
-  no value comes from fork-controlled files. Before it records anything, the
-  session checks that the issue it created is in the base repository.
+  `--marker-prefix` when the target repository, or the repository of
+  `issueAuthoring.journalIssue`, is not this checkout, so that no value comes
+  from fork-controlled files. Before it records anything, the session checks
+  that the issue it created is in the base repository.
   - `outcome: "published"` with `release.state` `released` counts as
     recorded.
   - `release.state` `held` counts as recorded for `runtimeQuestion` and
@@ -1225,10 +1226,103 @@ costs one extra decision toward the caps.
 - `runtimeQuestion`: kurone-kito/idd-skill#4539.
 - `authoringChoice`: the Interactive choice rule in `contract.md`.
 - `worktreeRemnant`: §LWR in [idd-resume-detail.md](idd-resume-detail.md).
-- `b1Leftover`: the B1-leftover wiring child of the parent roadmap, which
-  adds its own subsection here.
+- `b1Leftover`: [B1 leftovers](#b1-leftovers).
 
 The classes that the hearing left out keep their behavior.
+
+### B1 leftovers
+
+The `b1Leftover` class covers two stops of B1 worktree setup. Both come
+before the session's claim exists, and both wait for a person today. The
+operator chose, at the 2026-11-01 hearing recorded in roadmap
+kurone-kito/idd-skill#4955, that with the class switched on the session
+preserves the leftover and continues. It acts only through
+`claim-issue --preserve-b1-leftovers`, which saves the leftover first (a
+backup ref for a branch, a move into a preserve directory for a path) and
+only then clears it out of the claim's way. A branch keeps its commits on
+the backup ref and loses its reflog and its `branch.<name>` configuration
+section. The helper's preconditions, actions, and report are in
+[B1 leftover preservation](idd-helper-scripts.md#b1-leftover-preservation);
+the procedure above supplies the checks and the records.
+
+- **Leftover branch.** A local branch with the claim's name exists.
+  `claim-issue --apply` reports `b1-cleanup-needed`. By hand this is the
+  hold-and-stop of pre-creation step 3 in `idd-work.instructions.md`, which
+  is reached only when `git branch -d` refuses the branch.
+- **Occupied path.** Something that is not a registered worktree sits at the
+  computed worktree path. `claim-issue --apply` reports `path-occupied`. By
+  hand this is Step 1 of Worktree creation in the same file.
+- **Left out.** These keep today's route: unpushed commits on the local
+  default branch (`primary-not-ready`; pre-creation step 1 by hand),
+  anything in the primary worktree, a prunable worktree entry (it also
+  reports `b1-cleanup-needed`), and a branch that `git branch -d` deletes.
+
+The order follows the procedure, with one addition: the helper's dry run
+comes before the record, because it lists the subjects:
+
+1. Run the procedure's checks, from Who through Options. A check that fails
+   leaves today's stop.
+2. Dry run `claim-issue --preserve-b1-leftovers` without `--confirmation`.
+   Its report lists each leftover with its subject: the short branch name,
+   or the absolute path. Without `--confirmation` the helper reports the
+   `record`, `decision-pairing`, and each subject's `record-match`
+   preconditions as unmet, by design, and the apply run checks them again.
+   Go on only when every other precondition is met. Then check the decision
+   cap for the whole batch: the decisions that Caps counts for this source,
+   plus one per listed subject, must not exceed
+   `autoDecide.maxDecisionsPerClaim`, because the helper does not enforce
+   the count. Otherwise keep today's stop.
+3. Record one decision per subject, as in Record, then act, each with its
+   own decision ID and a `Subject:` line that holds that subject. All the
+   records of the run go on one confirmation issue, the one that Which
+   record selects (a new issue, or an open released one to append to),
+   because `--confirmation` names one issue and two open same-source issues
+   stop the procedure.
+4. Run the same command with `--apply` (and its required `--agent-id` and
+   `--project-status`), `--confirmation` for that issue, and one
+   `--decision` per subject. The helper checks every precondition again
+   before it changes anything. The run also creates the worktree and posts
+   the claim, so the session continues in that worktree at the install step
+   (the fresh-claim order of `idd-claim.instructions.md`, step 6) and does
+   not create the worktree again.
+5. Post the `kind=location` note (the note marker of
+   kurone-kito/idd-skill#4961) for each decision on the confirmation issue.
+   It names each backup ref and preserve directory, and it is posted even
+   when a later claim step fails.
+6. Once the claim exists, post the link marker for each decision on the
+   claimed issue.
+
+A dry run or an `--apply` run that refuses before it preserves anything
+keeps today's stop, and the session comments the failure on the
+confirmation issue when one exists. When `--apply` fails after it changed
+state (`b1-preserve-failed`, for example the branch is saved and the path
+move then fails), the session posts the location note for every saved
+location in the helper report and then the failure note, and today's stop
+follows. The saved state is finished or undone by hand before the helper
+runs again. When `--apply` preserved a leftover and a later claim step fails,
+the leftover stays preserved: the session posts the location note and then
+the failure note, and today's stop follows under that step's reported next
+action. The `lost-claim-cleanup` of `idd-claim.instructions.md` is one
+possible action, under its own triggers. A further attempt is a new
+decision.
+
+The region classifier is the trusted class read and the procedure's checks,
+followed by the helper's preconditions. It loosens only the two stops above.
+These shapes keep today's hold or stop:
+
+- the class is not enabled, a cap is reached or cannot be read, or the
+  run's decisions would take the count past its cap;
+- a branch that is the default or development branch, is checked out or
+  mid-rebase or mid-bisect in any worktree, is one that `git branch -d`
+  deletes, exists on a remote, or is the head of an open pull request;
+- a path that is a registered worktree, contains or sits inside one, or is
+  owned by another user;
+- unpushed commits on the local default branch, the primary worktree, and a
+  prunable worktree entry;
+- a claim that is not fresh: the fresh-claim gate does not read `claimable`,
+  or the leftover is the branch of a released claim, or the path derived
+  from it, which is inheritable;
+- a confirmation record that is not recorded, or a refusal by the flag.
 
 ### Decision table
 
