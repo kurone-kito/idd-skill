@@ -21477,6 +21477,53 @@ test('claimClosingExpectation: a list item ends a lazy quote continuation, and a
   );
 });
 
+test('claimClosingExpectation: masked code cannot bridge a keyword and its reference, and a quoted fence stays code (#5149, Codex and CodeRabbit PR #5203)', () => {
+  // A code span or a fence between the keyword and the reference is not
+  // whitespace, even though masking turns it into spaces.
+  assert.equal(
+    claimIssueExpectedToClose('Refs #7\n\nCloses `example`\n#7', 7, 'o', 'r'),
+    false,
+  );
+  assert.equal(
+    claimIssueExpectedToClose(
+      'Refs #7\n\nCloses\n```\nx\n```\n#7',
+      7,
+      'o',
+      'r',
+    ),
+    false,
+  );
+  assert.equal(
+    claimIssueExpectedToClose('Refs\n```\nx\n```\n#7', 7, 'o', 'r'),
+    true,
+  );
+  // An open fence inside a quote is code, so an unmarked line after it is
+  // top-level prose, not a lazy continuation.
+  assert.equal(
+    claimIssueExpectedToClose(
+      'Refs #7\n\n> ```\n> example\nCloses #7',
+      7,
+      'o',
+      'r',
+    ),
+    true,
+  );
+  assert.equal(
+    claimIssueExpectedToClose(
+      'Refs #7\n\n> ```\n> example\n> ```\nCloses #7',
+      7,
+      'o',
+      'r',
+    ),
+    true,
+  );
+  // Real whitespace between the keyword and the reference still counts.
+  assert.equal(
+    claimIssueExpectedToClose('Refs #7\n\nCloses #7', 7, 'o', 'r'),
+    true,
+  );
+});
+
 test('collectPreMergeReadiness: a split PR that names the claim issue only with Refs reports the closing set as matching (#5149)', () => {
   const base = closingSetSmokeFakePort({ closingIssuesReferences: [] });
   const port = {

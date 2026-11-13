@@ -466,17 +466,38 @@ export function readScopeOverrunMergeBaseSha(
  * not.
  */
 export function claimIssueExpectedToClose(body, issueNumber, owner, repo) {
-  const prose = maskMarkdownForScan(stripBlockQuotesAndLazyContinuations(body));
+  const source = stripBlockQuotesAndLazyContinuations(body);
+  const masked = maskMarkdownForScan(source);
   const qualifier =
     owner && repo ? `(?:${escapeRegex(owner)}/${escapeRegex(repo)})?` : '';
   const target = `${qualifier}#${issueNumber}`;
   const closing = new RegExp(
-    `\\b${CLOSING_KEYWORD_PATTERN}\\s+${target}\\b`,
-    'iu',
+    `\\b(${CLOSING_KEYWORD_PATTERN})(\\s+)(${target})\\b`,
+    'giu',
   );
-  if (closing.test(prose)) return true;
-  const refs = new RegExp(`\\b(?:Refs?|References?)\\s+${target}\\b`, 'iu');
-  return !refs.test(prose);
+  if (hasSpacedMatch(masked, source, closing)) return true;
+  const refs = new RegExp(
+    `\\b((?:Refs?|References?))(\\s+)(${target})\\b`,
+    'giu',
+  );
+  return !hasSpacedMatch(masked, source, refs);
+}
+/**
+ * Whether a match of `pattern` on the masked text has whitespace-only spacing
+ * between its keyword and its reference in the un-masked source. Masking turns
+ * code into spaces, so without this check a code span or fence between the
+ * two could pass as plain whitespace (Codex review, PR #5203). This is the
+ * rule `hasD35ClosingReference` in `resume-route-selection.mts` applies.
+ */
+function hasSpacedMatch(masked, source, pattern) {
+  for (const match of masked.matchAll(pattern)) {
+    const keyword = match[1];
+    const spacing = match[2];
+    if (!keyword || !spacing) continue;
+    const start = (match.index ?? 0) + keyword.length;
+    if (/^\s+$/u.test(source.slice(start, start + spacing.length))) return true;
+  }
+  return false;
 }
 export function readRepositoryContentAtRef(port, owner, repo, path, ref) {
   const encodedPath = path.split('/').map(encodeURIComponent).join('/');

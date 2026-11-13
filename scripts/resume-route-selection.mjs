@@ -523,6 +523,8 @@ export function findIssueRelatedOpenPrs({ port, issueNumber }) {
 }
 export function stripBlockQuotesAndLazyContinuations(body) {
   let quotedParagraphOpen = false;
+  // Marker of a fenced code block open inside the current quote, or null.
+  let quotedFenceMarker = null;
   let paragraphOpen = false;
   // Content column of the list item that the previous line opened with
   // paragraph text, or `null`. A line inside that item continues the
@@ -555,6 +557,7 @@ export function stripBlockQuotesAndLazyContinuations(body) {
       lineStart += line.length + 1;
       if (line.trim() === '') {
         quotedParagraphOpen = false;
+        quotedFenceMarker = null;
         paragraphOpen = false;
         listItemParagraphColumn = null;
         followsListCode = false;
@@ -610,7 +613,18 @@ export function stripBlockQuotesAndLazyContinuations(body) {
       }
       if (scan.kind === 'quote') {
         followsListCode = false;
-        quotedParagraphOpen = startsBlockQuoteParagraph(scan.content);
+        // A fenced code block inside the quote is code, not a paragraph, so
+        // its lines never open a lazy continuation (CommonMark). CodeRabbit,
+        // PR #5203.
+        if (quotedFenceMarker !== null) {
+          if (closesQuotedFence(scan.content, quotedFenceMarker)) {
+            quotedFenceMarker = null;
+          }
+          quotedParagraphOpen = false;
+        } else {
+          quotedParagraphOpen = startsBlockQuoteParagraph(scan.content);
+          quotedFenceMarker = openingFenceMarker(scan.content);
+        }
         paragraphOpen = false;
         return blockQuoteScanBarrier;
       }
@@ -620,6 +634,8 @@ export function stripBlockQuotesAndLazyContinuations(body) {
         }
         followsListCode = false;
       }
+      // An unmarked line ends the quote, and with it any fence open inside.
+      quotedFenceMarker = null;
       if (quotedParagraphOpen) {
         if (!startsMarkdownBlock(line, true)) {
           return blockQuoteScanBarrier;
@@ -640,6 +656,17 @@ export function stripBlockQuotesAndLazyContinuations(body) {
       return isParagraphText ? defuseOrderedMarker(line) : line;
     })
     .join('\n');
+}
+/** The backtick or tilde run that opens a fenced code block, or null. */
+function openingFenceMarker(content) {
+  return /^ {0,3}(`{3,}|~{3,})/u.exec(content)?.[1] ?? null;
+}
+/** Whether `content` closes a fence opened with `marker` (same character, at least as long). */
+function closesQuotedFence(content, marker) {
+  const run = /^ {0,3}(`{3,}|~{3,})[ \t]*$/u.exec(content)?.[1];
+  return (
+    run !== undefined && run[0] === marker[0] && run.length >= marker.length
+  );
 }
 function defuseOrderedMarker(line) {
   return line.replace(/^([ \t]*\d{1,9})[.)]/u, '$1\u0001');
