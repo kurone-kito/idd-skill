@@ -91,7 +91,8 @@ In this phase, the agent:
 - runs a secondary critique pass on the emerging interpretation
 - asks the user only the questions that block safe issue drafting; for
   the two interactive cases in Human-dependency isolation, the question
-  blocks publishing, so it is asked
+  blocks publishing, so it is asked, unless the auto-decide branch there
+  applies and takes the recommended option instead
 
 The secondary critique pass must be agent-neutral:
 
@@ -128,8 +129,9 @@ Clarification must converge. The skill should:
 - avoid asking questions that are merely nice to know
 - prefer explicit assumptions when issue drafting is still safe without
   immediate user input; the assumption path stays only for a gap that is
-  not one of the two interactive cases in Human-dependency isolation and
-  still leaves a stable ready draft
+  not one of the two interactive cases in Human-dependency isolation (the
+  auto-decide branch or the interactive rule there settles those) and still
+  leaves a stable ready draft
 
 If bounded clarification is exhausted and safe drafting is still not
 possible, the skill should stop and report the unresolved blockers
@@ -137,13 +139,15 @@ instead of looping indefinitely.
 
 **Under-clarification stop rule.** If, after bounded clarification, the
 skill still cannot name the concrete surface to edit or an objective
-verification for a candidate task, for an interactive choice it should ask
-first under the interactive rule in Human-dependency isolation; otherwise it
-should route that candidate to `needs-decision`, instead of publishing a
-confidently-vague `ready` issue. Reliability over speed. This is distinct from the
-"Under-specified" specificity band below: that band judges an
-already-drafted body's wording, while this rule stops publication
-earlier, during Intake, before a body is even drafted.
+verification for a candidate task, it should apply the auto-decide branch in
+Human-dependency isolation when it applies. When the branch does not apply or
+can take no option, for an interactive choice it should ask first under the
+interactive rule there; otherwise it should route that candidate to
+`needs-decision`, instead of publishing a confidently-vague `ready` issue.
+Reliability over speed. This is distinct from the "Under-specified"
+specificity band below: that band judges an already-drafted body's wording,
+while this rule stops publication earlier, during Intake, before a body is
+even drafted.
 
 ### 2. Decompose and Draft
 
@@ -457,6 +461,7 @@ Recommended routing rules:
 - if **clear verification** fails because intent is unresolved, route to
   `needs-decision`; unclear intent stays on that route, and only one of the
   two interactive cases in Human-dependency isolation asks the operator first
+  or, when the auto-decide branch there applies, takes the recommended option
 - if **autonomous completion** fails because a human must act, route to
   `blocked-by-human`
 - if **confidence** is too low but the request may still become valid,
@@ -489,7 +494,8 @@ isolated away from ready execution issues whenever possible.
   `blocked-by-human`, use `deferred` when timing or decomposition is not
   strong enough yet, and keep approval-gated ready work in the
   approval-needed hold instead of the normal ready-to-start set.
-- **Interactive choice.** In an interactive session, meaning the operator
+- **Interactive choice.** This rule holds whenever the auto-decide branch
+  below does not apply. In an interactive session, meaning the operator
   asked for issue authoring in the current conversation, a product,
   policy, or design choice the operator can answer, and a candidate missing
   either a concrete surface or an objective verification, are asked about
@@ -509,8 +515,9 @@ isolated away from ready execution issues whenever possible.
   not ask again. With no reply after the question was sent, nothing is
   published for that choice, at, below, or above the cap. A later interactive
   session starts a new count. A session that is not interactive keeps the
-  `needs-decision` route for these two cases. The other routes stay as they
-  are: an incomplete previously-declined search, a same-shape follow-up with
+  `needs-decision` route for these two cases, unless the auto-decide branch
+  applies. The other routes stay as they are:
+  an incomplete previously-declined search, a same-shape follow-up with
   no new signal, unclear intent, a malformed body, possible incoherence, an
   uncertain check outside these two cases, a `review-needs-decision`
   follow-up, an unattended A1.5 gap filing, and a `credential`, another
@@ -518,6 +525,119 @@ isolated away from ready execution issues whenever possible.
   unchanged route wins when a candidate also matches one of the two cases:
   unclear intent, for example, stays on `needs-decision` even when the
   candidate also lacks a surface or a verification.
+- **Auto-decide branch.** The Interactive choice rule above asks the
+  operator, and a session that is not interactive publishes `needs-decision`.
+  When the operator has not asked for a hearing, this branch replaces both for
+  the same two cases. It applies the procedure "Auto-decide at a stop" in
+  `docs/idd-workflow.md` to issue authoring, and it loosens only those two
+  cases.
+  - **When it applies.** The procedure's Who conditions hold, which include a
+    trusted `idd-effective-config --trusted-auto-decide` read that reports the
+    `authoringChoice` class `enabled`, and the operator has not asked for a
+    hearing. Asking for a hearing means that an operator message in this
+    conversation asks to be consulted before publication. A plain request to
+    author issues is not such a request. One request covers the current
+    authoring set. In every other case today's rule holds: ask when
+    interactive, else publish `needs-decision`. That covers a class that is
+    not `enabled`, a trusted read that fails, a hearing that was asked for, a
+    cap that is reached or cannot be read, and an outcome in which the
+    procedure keeps today's behavior.
+  - **Options.** Draft at least two options. One of them is
+    `Keep today's behavior`, which the confirmation-issue linter requires by
+    name. Every other option cites repository evidence for its surface and for
+    its verification: an existing path, symbol, or command. An option backed by
+    cited evidence is not an invented option in the sense of the procedure.
+    When no option can cite such evidence, the branch does not apply, and
+    today's rule holds.
+  - **Taking the option.** The session takes the recommended option only when
+    it passes the procedure, the per-set cap included: the cap is counted from
+    the records of the target's authoring set, as the procedure's Caps step
+    says. It drafts that option into the ready scope. The body gains an
+    `## Auto-decided choice` section with one entry per auto-decided choice.
+    Each entry names the option, the alternatives, and the choice's `decision`
+    ID, and the section states that no hearing was asked for. The heading
+    differs from the provisional-decision wording that a needs-decision source
+    uses, because this target closes normally. The completed-draft review
+    packet lists each such choice under `constraints` as an agent choice with
+    its evidence, so a reviewer does not treat it as an operator decision
+    (preventive; no observed incident yet).
+  - **Publication order.** The session publishes the target under the
+    authoring hold first. It then files the confirmation issue with
+    `class=authoringChoice`, `source` set to the target, and `set` set to the
+    target's authoring set (see "Auto-decide confirmation issue" in the
+    contract). Whether that is a new issue or an appended record follows the
+    procedure's Record, then act step. A record counts only with the same
+    source as the confirmation issue's body record, so a later target of the
+    same set cannot append to an issue that another target opened: its record
+    does not count, so that decision is not recorded, and the not-recorded
+    branch below applies. The session then posts the link marker on the
+    target.
+  - **A confirmation that is not recorded.** The procedure's Record, then act
+    step says when that happens. A `held` outcome counts as recorded for this
+    class and is never voided.
+    - When the outcome left something behind (a `recovery-hold` issue with an
+      issue number, or an append that the check cannot confirm), the session
+      first posts the void marker for that decision on that confirmation
+      issue, as the procedure requires. It then comments the failure on the
+      target.
+    - Within the `## Auto-decided choice` section, every rewrite touches only
+      the failed choice's entry; the rewrites below also change the scope text
+      that depends on that choice. The `## Auto-decided choice` heading is
+      removed only when no recorded choice is left. A `## Decision` or
+      `## Decision needed` section may sit next to the remaining entries.
+    - In an interactive session below `issueAuthoring.maxClarificationRounds`,
+      the session asks the operator about the choice, and the ask counts as
+      one clarification round. A reply that confirms the choice, or picks
+      another option with a surface and a verification, replaces that entry
+      with a `## Decision` record of the operator's answer. In the second
+      case it also rewrites the target's scope to that option. A reply that
+      parks the choice or leaves it open leads to the needs-decision rewrite
+      below. Every other reply follows the Interactive choice rule as applied
+      to the held target. With no reply, the target stays held and the
+      session reports it.
+    - Unattended, or at or above the clarification cap, the session rewrites
+      the held target to the `needs-decision` route. The failed choice's entry
+      becomes a `## Decision needed` section that lists the open choice and
+      its options, today's route included. The chosen option is removed from
+      the proposed change and the acceptance criteria, and the body gains the
+      `authoring-bucket: needs-decision` marker.
+    - Every rewrite, on either route, runs in this order: prepare the body;
+      run the completed-draft review, because the rewrite can change the scope
+      or the readiness bucket; run the lint (for the needs-decision route,
+      with `--expect-bucket needs-decision` and both labels); when the route
+      needs the needs-decision label, run the conflict check and the renew
+      step for this set's anchor and target, add the label, and verify it;
+      then run the conflict check and the renew step again, immediately before
+      the body edit, as the contract's "Conflict check before every edit" and
+      "Renew before every edit" rules in Authoring hold and release require;
+      then edit the body. A held body with an extra label fails safe, and a
+      body with the marker but without the label would not (preventive; no
+      observed incident yet).
+    - If the review is unavailable, the label add cannot be verified, or
+      another step fails, the session makes no further edit, reports the
+      recovery, and stops. The target stays held in every case.
+  - **Resume and release.** A resumed authoring session that finds a held
+    target whose `## Auto-decided choice` section lists a `decision` ID
+    without a counting record takes the not-recorded branch above for that
+    choice. The procedure keys an authoring decision by its authoring set, so
+    the session reads the records of the target's set with
+    `idd-auto-decision-records --records --class authoringChoice --set <set ID>
+    --state all`, passing the trusted `--owner`, `--repo`, and `--base-ref` of
+    the procedure's Caps step, and matches each listed `decision` ID to a
+    returned record whose `source` is the target. When that read is
+    unreadable (exit 1), the session makes no rewrite,
+    reports it, and leaves the target held. The contract's Stage 2 release
+    checklist, in Authoring hold and release, carries the same check: every
+    `decision` ID listed under `## Auto-decided choice` has a counting record,
+    in any state, and the item fails while that read is unreadable.
+  - **Unchanged routes.** The routes that the Interactive choice rule lists at
+    its end stay as they are, and each wins over this branch when a candidate
+    also matches one of the two cases.
+  - **Release.** Releasing the target stays a person's action. When the
+    standing release approval (`standingApprovals.release`) acts, that
+    class's own rules apply. That approval could then release and run the
+    target before anyone reads the confirmation issue (preventive; no observed
+    incident yet).
 - If a task cannot be expressed without unresolved human coordination in
   the middle of implementation, it is not yet `ready`.
 
@@ -543,7 +663,8 @@ Ask these checks:
    product, policy, or design decision that has not been made? If yes,
    route the work to `needs-decision`, unless the interactive choice rule
    in Human-dependency isolation applies, in which case ask the operator
-   first.
+   first, or the auto-decide branch there applies, in which case that
+   branch takes the recommended option.
 3. Do the acceptance criteria require subjective human approval instead
    of objective verification? If yes, rewrite the ready issue around
    measurable checks and back-load the optional review or publication
@@ -2274,8 +2395,11 @@ must not infer either from the label alone.
 Remove the label from all published issues only after: the release
 checklist passes — every child issue is referenced from its parent roadmap's
 `## Tracks` list, no unsubstituted placeholder remains in any published
-body, and the `audit-authored-issue` linter (or its manual fallback) is green
-on every published body in the set — and the user explicitly requests
+body, the `audit-authored-issue` linter (or its manual fallback) is green
+on every published body in the set, and every `decision` ID listed under
+`## Auto-decided choice` in a published body has a counting record, in any
+state (the item fails while that read is unreadable) — and the user explicitly
+requests
 release from the authoring hold (see the
 [Narrow auto-release exception](#narrow-auto-release-exception)
 below for the marker-scoped exceptions to this precondition). Keep the
@@ -3658,10 +3782,11 @@ authors and publishes each `ready`, `needs-decision`, or
 default `status:authoring`), gated by the completed-draft adversarial
 review and then the mechanical `audit-authored-issue` check — no prior
 user
-approval of the drafted body is required. The interactive-choice ask in
-Human-dependency isolation is not an approval of the body, and this
-sentence does not waive it. It does not apply to a choice that the
-interactive rule holds unpublished, such as a question with no reply yet.
+approval of the drafted body is required. Neither the interactive-choice ask
+in Human-dependency isolation nor the confirmation issue of the auto-decide
+branch there is an approval of the body, and this sentence waives neither. It
+does not apply to a choice that the interactive rule holds unpublished, where
+the auto-decide branch does not take it, such as a question with no reply yet.
 
 A draft that cannot be published under the hold now (because of its shape,
 because its final form waits on something else, a planned stop before the

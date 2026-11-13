@@ -43,11 +43,13 @@ approval boundary that hands off to IDD execution.
 - Bundled skill then publishes directly under the configured authoring
   label (`issueAuthoring.authoringLabelName`, defaulting to
   `status:authoring`) — **no prior user approval of the drafted body
-  is required**. The interactive-choice ask in
-  [Human-dependency isolation](contract.md#human-dependency-isolation) is not an
-  approval of the body, and this sentence does not waive it. It does not apply
-  to a choice that the interactive rule holds unpublished, such as a question
-  with no reply yet. A reviewed draft does not end in local files only: a
+  is required**. Neither the interactive-choice ask in
+  [Human-dependency isolation](contract.md#human-dependency-isolation) nor the
+  confirmation issue of the auto-decide branch there is an approval of the
+  body, and this sentence waives neither. It does not apply to a choice that
+  the interactive rule holds unpublished, where the auto-decide branch does
+  not take it, such as a question with no reply yet. A reviewed draft does
+  not end in local files only: a
   draft that cannot be published under the hold now (its final shape cannot
   be created yet, its final form waits on something else, a preview
   request, or a stop before the review completes) is published as a draft
@@ -422,6 +424,9 @@ approval boundary that hands off to IDD execution.
     `instructions-only`) is green on every published body in the set; for
     a `needs-decision` body, pass `--expect-bucket needs-decision` and both
     configured labels
+  - every `decision` ID listed under `## Auto-decided choice` in a published
+    body has a counting record, in any state; the item fails while that read
+    is unreadable
 - Keep the set anchor held until every other target's label removal is
   verified, and remove the anchor label last. Every label removal in this
   release, the anchor label included, and every restore that follows uses `gh
