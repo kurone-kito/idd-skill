@@ -13064,7 +13064,7 @@ export function computePreMergeReadinessBlockers(
     if (status !== 'valid') {
       blockers.push({
         gate: 'scope-overrun',
-        detail: `scope overrun ${status || 'unavailable'}: ${String(scopeOverrun.reason ?? 'missing status')}`,
+        detail: `scope overrun ${status || 'unavailable'}: ${String(scopeOverrun.reason ?? 'missing reason')}`,
       });
     }
   }

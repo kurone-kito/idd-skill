@@ -1136,7 +1136,7 @@
             },
             "recordedHeadSha": {
               "type": ["string", "null"],
-              "description": "The full PR head SHA recorded by valid post-push evidence, or null when there is no valid record.",
+              "description": "The full head SHA of the post-push scope-overrun record that evidence resolution selected, whatever the status, so an invalid result (for example a record-conflict from a PR, branch, or candidate-file mismatch) can carry it too. Null when no post-push record was selected: no record, a pre-push-only record, or evidence rejected before a record was selected. Read status and reason, not this field, for validity.",
               "pattern": "^[0-9a-f]{40}$"
             }
           }
