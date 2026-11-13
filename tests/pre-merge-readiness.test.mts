@@ -987,6 +987,23 @@ test('pre-merge readiness rejects edited and mismatched post-push records', () =
   );
   assert.equal(wrongPr?.status, 'invalid');
   assert.equal(wrongPr?.reason, 'record-conflict');
+  // An invalid result still carries the head of the post-push record that
+  // evidence resolution selected, as the schema description states.
+  assert.equal(wrongPr?.recordedHeadSha, SCOPE_OVERRUN_HEAD);
+
+  // Conflicting snapshots select no record, so that conflict reports null.
+  const conflictingSnapshots = resolveScopeOverrunReadiness(
+    scopeOverrunInput({
+      comments: [
+        scopeOverrunRecordComment({ pullRequestNumber: 9001 }),
+        { ...scopeOverrunRecordComment({ pullRequestNumber: 9002 }), id: '44' },
+        scopeOverrunDecisionComment(SCOPE_OVERRUN_HEAD),
+      ],
+    }),
+  );
+  assert.equal(conflictingSnapshots?.status, 'invalid');
+  assert.equal(conflictingSnapshots?.reason, 'record-conflict');
+  assert.equal(conflictingSnapshots?.recordedHeadSha, null);
 
   const staleHead = resolveScopeOverrunReadiness(
     scopeOverrunInput({
