@@ -218,7 +218,8 @@ implementer's choice, not a mandate.
 
 After the companion reports a held replacement roadmap for this issue's scope
 overrun, the session that released `{claim-id}` runs this from the primary
-worktree. No claim is active, so the preflight, re-read before each write, is
+worktree, with a helper runtime (`instructions-only` makes no write and
+escalates). No claim is active, so the preflight, re-read before each write, is
 the gate. Any miss or uncertainty makes no write: report it. A rerun skips each
 step whose verified result holds.
 
@@ -238,9 +239,9 @@ step whose verified result holds.
 2. **Close the PR** (post-push): `gh pr close <pr>`; verify closed, unmerged, at
    that head. Re-read before retrying an uncertain close.
 3. **Clean up**: LWR with `--apply --operator-confirmed-no-live-session` (skip
-   if the worktree is gone). On refusal or failure, keep the issue open and
-   labeled, keep the remains, and report the PR state, LWR report, and next
-   action. Never `--force` or bypass its preservation or lock gates.
+   if the worktree is gone). On refusal or failure, keep the issue open,
+   apply the label if absent, keep the remains, and report the PR state, LWR
+   report, and next action. Never `--force` or bypass its preservation or lock gates.
 4. **Close the issue** only after step 3: `gh issue close {issue-number}
    --reason "not planned" --comment <roadmap link>`; verify, then remove that
    label, if present, and verify.
@@ -637,10 +638,8 @@ condition D3.5 itself skips under, where `closingIssuesReferences`
 never populates and the check would be meaningless) — edited prose can
 otherwise introduce a stray keyword-adjacent reference.
 
-**Wired to F2/F3** (#2749): `idd-pre-merge.instructions.md` F2's
-"Closing-set and impact-checklist re-verification" condition re-runs
-this step against the then-current HEAD, and `idd-merge.instructions.md`
-F3's Gate checklist re-runs it again immediately before merging, since
+**Wired to F2/F3** (#2749): F2's "Closing-set and impact-checklist
+re-verification" condition and F3's Gate checklist re-run this step, since
 F2 can run before further HEAD changes land.
 
 ## D4 — Wait for CI

@@ -635,6 +635,7 @@ function headingAnchor(heading: string): string {
 const FINALIZATION_ORDERED_STEPS = [
   'After the companion reports a held replacement roadmap',
   'the session that released `{claim-id}` runs this from the primary worktree',
+  'with a helper runtime (`instructions-only` makes no write and escalates)',
   'No claim is active, so the preflight, re-read before each write, is the gate',
   'Any miss or uncertainty makes no write: report it',
   'A rerun skips each step whose verified result holds',
@@ -643,7 +644,7 @@ const FINALIZATION_ORDERED_STEPS = [
   'verify closed, unmerged, at that head',
   'Re-read before retrying an uncertain close',
   '3. **Clean up**: LWR with `--apply --operator-confirmed-no-live-session`',
-  'On refusal or failure, keep the issue open and labeled',
+  'On refusal or failure, keep the issue open, apply the label if absent',
   '4. **Close the issue** only after step 3',
   '`gh issue close {issue-number} --reason "not planned" --comment <roadmap link>`',
   'then remove that label, if present, and verify',
@@ -733,7 +734,7 @@ for (const relativePath of PR_SUBMIT_PATHS) {
       route.indexOf('4. **Close the issue**'),
     );
     for (const recovery of [
-      'On refusal or failure, keep the issue open and labeled, keep the remains',
+      'On refusal or failure, keep the issue open, apply the label if absent, keep the remains',
       'report the PR state, LWR report, and next action',
       'Never `--force` or bypass its preservation or lock gates',
     ]) {
@@ -800,6 +801,9 @@ test('the finalization rationale cites its incidents and agrees with the route',
     'the issue stays open with its label',
     'A rerun then skips each step whose verified result already holds',
     "LWR removes the worktree but not its local branch, so the route counts only the worktree's absence as cleaned and leaves the branch",
+    'the route applies the label first when a pre-first-push issue lacks it',
+    'The route needs a helper runtime, for the set listing and for LWR',
+    'so the route stops before any write there',
     'LWR keeps its own step 2',
     '`--operator-confirmed-no-live-session`',
     'treats an independent confirmation as a preflight item',
@@ -831,8 +835,8 @@ for (const relativePath of AUTONOMY_PATHS) {
       .filter((line) => line.startsWith('| ') && !line.startsWith('| ---'))
       .slice(1)
       .map((line) => line.replace(/\s+/gu, ' '));
-    assert.equal(rows.length, 4);
-    const [closePr, cleanup, closeIssue, removeLabel] = rows;
+    assert.equal(rows.length, 5);
+    const [closePr, cleanup, applyLabel, closeIssue, removeLabel] = rows;
     assert.match(closePr, /Close the draft pull request.*`gh pr close`/u);
     assert.match(cleanup, /`local-worktree-recovery --apply`/u);
     assert.match(cleanup, /independent of this session's claim evidence/u);
@@ -840,6 +844,11 @@ for (const relativePath of AUTONOMY_PATHS) {
       closeIssue,
       /as not planned, with the replacement roadmap linked/u,
     );
+    assert.match(
+      applyLabel,
+      /after a refused or failed cleanup, when it lacks the label/u,
+    );
+    assert.match(applyLabel, /stays non-claimable/u);
     assert.match(closeIssue, /only after cleanup succeeded/u);
     assert.match(
       removeLabel,
