@@ -190,7 +190,17 @@ instead of returning to this D1 rebase path.
    `--issue {issue-number} --claim-id {claim-id} --agent-id {agent-id}
    [--nonce {nonce}] --expected-scope-sha256 {assessment-sha256} --apply`.
    Its `--apply` runs the gate and the push, so skip the plain push.
-   Require `pushed: true`; otherwise follow its `nextAction`.
+   Require `pushed: true`. If it is false at a failed `scope` step whose
+   reason is an over-limit candidate set (not `advisory-drift` or an
+   unreadable audit), first reassert the claim
+   (`resume-claim-routing.mjs --issue <n> --assert --agent-id {agent-id}
+   --claim-id {claim-id} --nonce {nonce}`), then record the pre-push
+   `scope-overrun` evidence: dry-run, then add `--apply` to `node
+   scripts/post-idd-marker.mjs --type scope-overrun --target issue
+   <issue-number> --agent-id {agent-id} --effort <S|M|L> --candidate-files
+   '<JSON array of paths>'`. Then follow its `nextAction` (the work-phase
+   route in `idd-work-lite.instructions.md`). Otherwise follow its
+   `nextAction`.
    Otherwise push the branch: `git push -u origin {branch-name}`, plain on
    first publication or a no-open-PR resume (D1 step 1). Use
    `--force-with-lease` only
