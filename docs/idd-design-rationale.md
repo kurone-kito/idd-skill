@@ -1208,10 +1208,12 @@ carries the set. The roadmap's `## Tracks` list names the intended children. A
 fresh read of each issue shows that it is open, still carries the authoring
 label, and records `Split out of` the source. A missing child, a Tracks
 mismatch, or a released label means the set is not verified, so nothing is
-written. The source issue needs no active claim and a trusted `scope-overrun`
-record, and a post-push pull request must still be a draft at the recorded
-head, or on a rerun already closed there, so a head pushed after the decision
-cannot be closed unseen.
+written. The set must also exclude the source issue: a pre-first-push split may
+use the source as the roadmap anchor, and step 4 would then close the
+replacement roadmap itself. The source issue needs no active claim and a
+trusted `scope-overrun` record, and a post-push pull request must still be a
+draft at the recorded head, or on a rerun already closed there, so a head
+pushed after the decision cannot be closed unseen.
 
 The order of writes follows what each step protects. The pull request closes
 first and is re-read at the same head before LWR starts, because LWR would
@@ -1239,10 +1241,13 @@ is still working in the worktree, and `--apply` refuses without
 `--operator-confirmed-no-live-session`. The docs say a session never supplies
 that flag from its own claim evidence, and the `worktreeRemnant` auto-decide
 class is not wired to §LWR yet (see "Auto-decide at a stop"). The route
-therefore treats an independent confirmation as a preflight item. Without it,
-nothing is written, instead of the refusal appearing after the pull request is
-closed. This reads the existing rule and adds no waiver; it is preventive, with
-no observed incident yet.
+therefore treats a recorded, independent confirmation as a preflight item: a
+trusted issue comment without the `idd-agent-authored` suffix, the attribution
+marker that already keeps an agent from accepting its own scope decision, so
+the session cannot supply it from its own claim evidence. Without it, nothing
+is written, instead of the refusal appearing after the pull request is closed.
+This reads the existing rule and adds no waiver; it is preventive, with no
+observed incident yet.
 
 The route needs a helper runtime, for the set listing and for LWR. Under
 `instructions-only` no helper lists the set, and a manual check would copy the

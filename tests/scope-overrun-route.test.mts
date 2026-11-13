@@ -676,12 +676,13 @@ for (const relativePath of PR_SUBMIT_PATHS) {
       'is complete and equals the roadmap plus its `## Tracks`',
       'each member is open with the authoring label',
       'each child says `Split out of #{issue-number}`',
-      'This issue is unclaimed, with a trusted `scope-overrun` record and the needs-decision label (`labels.needsDecisionLabelName`; pre-first-push may lack it)',
+      'and the set excludes this issue',
+      'It is unclaimed, with a trusted `scope-overrun` record and the needs-decision label (`labels.needsDecisionLabelName`; pre-first-push may lack it)',
       'and open (a rerun may find it closed as not planned with the roadmap link)',
       'Post-push, its PR is a draft at the recorded head (a rerun may find it closed, unmerged)',
       '`idd-local-worktree-recovery --issue {issue-number} --worktree <path>`',
       'dry run reports `ready: true` (or the worktree is gone, its branch may remain)',
-      "a person or orchestrator, not this session's claim evidence, confirmed no live session",
+      'a trusted issue comment without the `idd-agent-authored` suffix confirmed no live session in `<path>`',
     ]) {
       assert.ok(preflight.includes(refusal), refusal);
     }
@@ -806,7 +807,10 @@ test('the finalization rationale cites its incidents and agrees with the route',
     'so the route stops before any write there',
     'LWR keeps its own step 2',
     '`--operator-confirmed-no-live-session`',
-    'treats an independent confirmation as a preflight item',
+    'treats a recorded, independent confirmation as a preflight item',
+    'a trusted issue comment without the `idd-agent-authored` suffix',
+    'The set must also exclude the source issue',
+    'step 4 would then close the replacement roadmap itself',
     'The route never releases or relabels the replacement set',
     'Stage 2 remains the explicit human release gate',
     'changes neither `dangerouslyAutoDecide` nor its default',
@@ -839,7 +843,11 @@ for (const relativePath of AUTONOMY_PATHS) {
     const [closePr, cleanup, applyLabel, closeIssue, removeLabel] = rows;
     assert.match(closePr, /Close the draft pull request.*`gh pr close`/u);
     assert.match(cleanup, /`local-worktree-recovery --apply`/u);
-    assert.match(cleanup, /independent of this session's claim evidence/u);
+    assert.match(cleanup, /when one was published/u);
+    assert.match(
+      cleanup,
+      /recorded in a trusted issue comment without the `idd-agent-authored` suffix/u,
+    );
     assert.match(
       closeIssue,
       /as not planned, with the replacement roadmap linked/u,

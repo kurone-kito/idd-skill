@@ -226,7 +226,8 @@ step whose verified result holds.
 1. **Preflight** (read-only): `idd-authoring-set-members --set <set>` (from the
    roadmap's trusted owner marker) is complete and equals the roadmap plus its
    `## Tracks`; each member is open with the authoring label, each child says
-   `Split out of #{issue-number}`. This issue is unclaimed, with a trusted
+   `Split out of #{issue-number}`, and the set excludes this issue. It is
+   unclaimed, with a trusted
    `scope-overrun` record and the needs-decision label
    (`labels.needsDecisionLabelName`; pre-first-push may lack it), and open (a
    rerun may find it closed as not planned with the roadmap link). Post-push,
@@ -234,14 +235,15 @@ step whose verified result holds.
    unmerged). A
    `idd-local-worktree-recovery --issue {issue-number} --worktree <path>` dry
    run reports `ready: true` (or the worktree is gone, its branch may remain),
-   and a person or orchestrator, not this session's claim evidence, confirmed
-   no live session in `<path>`.
+   and a trusted issue comment without the `idd-agent-authored` suffix
+   confirmed no live session in `<path>`.
 2. **Close the PR** (post-push): `gh pr close <pr>`; verify closed, unmerged, at
    that head. Re-read before retrying an uncertain close.
 3. **Clean up**: LWR with `--apply --operator-confirmed-no-live-session` (skip
    if the worktree is gone). On refusal or failure, keep the issue open,
    apply the label if absent, keep the remains, and report the PR state, LWR
-   report, and next action. Never `--force` or bypass its preservation or lock gates.
+   report, and next action. Never `--force` or bypass its preservation or lock
+   gates.
 4. **Close the issue** only after step 3: `gh issue close {issue-number}
    --reason "not planned" --comment <roadmap link>`; verify, then remove that
    label, if present, and verify.
