@@ -455,20 +455,18 @@ export function readScopeOverrunMergeBaseSha(
  * at all, keeps the issue expected, so a body that forgets the keyword still
  * reports a mismatch.
  *
- * Only prose counts. Code (inline, fenced, indented) is masked and `>`
- * block-quote lines are dropped first, the surfaces GitHub's closing-keyword
- * detection ignores (`idd-pr-submit.instructions.md`, Anti-patterns; Codex
- * review, PR #5203). A same-repo qualified reference (`owner/repo#N`) counts
- * like `#N`; another repository's reference does not. The quote filter works
- * per line, so an unmarked lazy continuation of a quote still counts as prose.
- * The D3.5 stripper in `resume-route-selection.mts` handles that case, but
- * importing it would close an import cycle through `ci-wait-state.mts`.
+ * Only prose counts. Code (inline, fenced, indented) is masked first, and
+ * block-quote text is dropped together with its lazy continuation lines (see
+ * {@link dropBlockQuoteLines}). GitHub's closing-keyword detection ignores
+ * those forms (`idd-pr-submit.instructions.md`, Anti-patterns; Codex and
+ * CodeRabbit reviews, PR #5203). A same-repo qualified reference
+ * (`owner/repo#N`) counts like `#N`; another repository's reference does
+ * not. The D3.5 stripper in `resume-route-selection.mts` applies the same
+ * quote rule, but importing it would close an import cycle through
+ * `ci-wait-state.mts`, so the rule is restated here.
  */
 export function claimIssueExpectedToClose(body, issueNumber, owner, repo) {
-  const prose = maskMarkdownForScan(body)
-    .split('\n')
-    .filter((line) => !/^ {0,3}>/u.test(line))
-    .join('\n');
+  const prose = dropBlockQuoteLines(maskMarkdownForScan(body));
   const qualifier =
     owner && repo ? `(?:${escapeRegex(owner)}/${escapeRegex(repo)})?` : '';
   const target = `${qualifier}#${issueNumber}`;
@@ -479,6 +477,45 @@ export function claimIssueExpectedToClose(body, issueNumber, owner, repo) {
   if (closing.test(prose)) return true;
   const refs = new RegExp(`\\b(?:Refs?|References?)\\s+${target}\\b`, 'iu');
   return !refs.test(prose);
+}
+/** A `>` line that opens or continues a block quote. */
+const BLOCK_QUOTE_LINE_PATTERN = /^ {0,3}>/u;
+/**
+ * A line that starts its own block (ATX heading, code fence, thematic break)
+ * and so ends a lazy paragraph continuation. Other unmarked text after a
+ * quoted paragraph stays inside the quote under CommonMark.
+ */
+const BLOCK_INTERRUPTER_PATTERN =
+  /^ {0,3}(?:#{1,6}(?:\s|$)|`{3,}|~{3,}|(?:[-*_] *){3,}$)/u;
+/**
+ * Drops block-quote lines and the lazy paragraph continuation lines that
+ * CommonMark keeps inside a quote: an unmarked, non-blank line right after a
+ * quoted paragraph, up to a blank line or a block interrupter. Expects text
+ * already masked by {@link maskMarkdownForScan}, so masked code lines are
+ * blank and never count.
+ */
+function dropBlockQuoteLines(text) {
+  let lazyParagraphOpen = false;
+  return text
+    .split('\n')
+    .filter((line) => {
+      if (BLOCK_QUOTE_LINE_PATTERN.test(line)) {
+        const content = line.replace(/^ {0,3}>\s?/u, '');
+        lazyParagraphOpen =
+          /\S/u.test(content) && !BLOCK_INTERRUPTER_PATTERN.test(content);
+        return false;
+      }
+      if (
+        lazyParagraphOpen &&
+        /\S/u.test(line) &&
+        !BLOCK_INTERRUPTER_PATTERN.test(line)
+      ) {
+        return false;
+      }
+      lazyParagraphOpen = false;
+      return true;
+    })
+    .join('\n');
 }
 export function readRepositoryContentAtRef(port, owner, repo, path, ref) {
   const encodedPath = path.split('/').map(encodeURIComponent).join('/');

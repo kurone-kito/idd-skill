@@ -21405,6 +21405,44 @@ test('claimClosingExpectation: a same-repo qualified reference counts, another r
   );
 });
 
+test('claimClosingExpectation: an unmarked line after a quoted paragraph stays in the quote until a blank line or a block starter (#5149, CodeRabbit PR #5203)', () => {
+  // CommonMark keeps this lazy continuation inside the quote.
+  assert.equal(
+    claimIssueExpectedToClose(
+      'Refs #7\n\n> Previous proposal:\nCloses #7',
+      7,
+      'o',
+      'r',
+    ),
+    false,
+  );
+  // A blank line ends the quote, so the closing keyword is prose again.
+  assert.equal(
+    claimIssueExpectedToClose(
+      'Refs #7\n\n> Previous proposal:\n\nCloses #7',
+      7,
+      'o',
+      'r',
+    ),
+    true,
+  );
+  // A heading ends the lazy paragraph, so a closing heading is prose.
+  assert.equal(
+    claimIssueExpectedToClose('Refs #7\n\n> quoted\n# Closes #7', 7, 'o', 'r'),
+    true,
+  );
+  // A quoted heading is not a paragraph, so the next line is prose.
+  assert.equal(
+    claimIssueExpectedToClose('Refs #7\n\n> # Title\nCloses #7', 7, 'o', 'r'),
+    true,
+  );
+  // A lazy Refs inside a quote is no reference, so the issue stays expected.
+  assert.equal(
+    claimIssueExpectedToClose('> quoted\nRefs #7', 7, 'o', 'r'),
+    true,
+  );
+});
+
 test('collectPreMergeReadiness: a split PR that names the claim issue only with Refs reports the closing set as matching (#5149)', () => {
   const base = closingSetSmokeFakePort({ closingIssuesReferences: [] });
   const port = {
