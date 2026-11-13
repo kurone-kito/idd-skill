@@ -662,7 +662,7 @@ export function findIssueRelatedOpenPrs({
   });
 }
 
-function stripBlockQuotesAndLazyContinuations(body: string): string {
+export function stripBlockQuotesAndLazyContinuations(body: string): string {
   let quotedParagraphOpen = false;
   let paragraphOpen = false;
   // Content column of the list item that the previous line opened with

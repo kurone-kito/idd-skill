@@ -521,7 +521,7 @@ export function findIssueRelatedOpenPrs({ port, issueNumber }) {
     );
   });
 }
-function stripBlockQuotesAndLazyContinuations(body) {
+export function stripBlockQuotesAndLazyContinuations(body) {
   let quotedParagraphOpen = false;
   let paragraphOpen = false;
   // Content column of the list item that the previous line opened with

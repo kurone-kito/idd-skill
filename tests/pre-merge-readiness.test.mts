@@ -21443,6 +21443,40 @@ test('claimClosingExpectation: an unmarked line after a quoted paragraph stays i
   );
 });
 
+test('claimClosingExpectation: a list item ends a lazy quote continuation, and a quoted inline code paragraph still continues it (#5149, Codex and CodeRabbit PR #5203)', () => {
+  // A top-level list interrupts the quote, so its reference and closing
+  // keyword are prose.
+  assert.equal(
+    claimIssueExpectedToClose('> Background\n- Refs #7', 7, 'o', 'r'),
+    false,
+  );
+  assert.equal(
+    claimIssueExpectedToClose(
+      'Refs #7\n\n> Background\n- Closes #7',
+      7,
+      'o',
+      'r',
+    ),
+    true,
+  );
+  assert.equal(
+    claimIssueExpectedToClose('Refs #7\n\n> quoted\n1. Closes #7', 7, 'o', 'r'),
+    true,
+  );
+  // An ordered item other than 1 cannot interrupt a paragraph, so it stays
+  // in the quote.
+  assert.equal(
+    claimIssueExpectedToClose('Refs #7\n\n> quoted\n2. Closes #7', 7, 'o', 'r'),
+    false,
+  );
+  // A quoted paragraph that is only inline code still opens a lazy
+  // continuation under CommonMark.
+  assert.equal(
+    claimIssueExpectedToClose('Refs #7\n\n> `example`\nCloses #7', 7, 'o', 'r'),
+    false,
+  );
+});
+
 test('collectPreMergeReadiness: a split PR that names the claim issue only with Refs reports the closing set as matching (#5149)', () => {
   const base = closingSetSmokeFakePort({ closingIssuesReferences: [] });
   const port = {
