@@ -1348,10 +1348,11 @@ and source issue. The pre-merge text that releases the claim and hands the
 split over belongs to issue `#5055`, so this route starts after that handoff
 and edits none of it.
 
-The route is verify-first. Every write waits for one read-only preflight over
-the whole replacement set and a safe LWR dry run, so an incomplete or uncertain
-set leaves the pull request, worktree, and source issue as they are, for
-recovery. The set check combines three sources, since none proves it alone.
+The route is verify-first. Every write waits for the read-only preflight items
+it depends on, re-read just before it, and the preflight covers the whole
+replacement set and a safe LWR dry run, so an incomplete or uncertain set
+leaves the pull request, worktree, and source issue as they are, for recovery.
+The set check combines three sources, since none proves it alone.
 `authoring-set-members` lists the issues whose trusted, unedited owner marker
 carries the set. The roadmap's `## Tracks` list names the intended children. A
 fresh read of each issue shows that it is open, still carries the authoring
@@ -1361,8 +1362,8 @@ written. The set must also exclude the source issue: a pre-first-push split may
 use the source as the roadmap anchor, and step 4 would then close the
 replacement roadmap itself. The source issue needs no active claim and a
 trusted `scope-overrun` record, and a post-push pull request must still be a
-draft at the recorded head, or on a rerun already closed there, so a head
-pushed after the decision cannot be closed unseen.
+draft at the recorded head, so a head pushed after the decision cannot be
+closed unseen.
 
 The order of writes follows what each step protects. The pull request closes
 first and is re-read at the same head before LWR starts, because LWR would
@@ -1377,25 +1378,33 @@ between the steps. If LWR refuses or fails after the pull request is closed,
 the issue stays open with its label, which keeps it out of Discover (the route
 applies and verifies the label first when a pre-first-push issue lacks it), the
 remaining worktree data stays, and the report names the partial state and the
-next action. A rerun then skips each step whose verified result already holds,
-so a pull request already closed at the recorded head does not block it. This
-recovery is preventive; no observed incident yet. A pre-first-push overrun has
-no pull request, so that step is skipped, and its B3 release may have removed
-the worktree already, which the dry run reports as nothing to recover. LWR
-removes the worktree but not its local branch, so the route counts only the
-worktree's absence as cleaned and leaves the branch.
+next action. This recovery is preventive; no observed incident yet. A
+pre-first-push overrun has no pull request, so that step is skipped, and its B3
+release may have removed the worktree already, which the dry run reports as
+nothing to recover. LWR removes the worktree but not its local branch, so the
+route counts only the worktree's absence as cleaned and leaves the branch.
+
+The route has no resume path of its own. Review of pull request `#5197` on
+2026-11-13 ran six Copilot rounds, and four of them (rounds one, three, five,
+and six) attacked two constructs that the first draft added beyond the issue: a
+rule that a rerun skips each step whose result already holds, and a route-owned
+record of the no-live-session confirmation. Each repair added surface for the
+next finding, so E10's second escalation tier applied and both were removed.
+After a partial state the route reports the state and the next action, and a
+retry then stops at the preflight (a closed pull request is not a draft), so an
+operator finishes the remaining steps by hand. The issue asks only for that
+report.
 
 LWR keeps its own step 2: nothing in the helpers shows whether another session
-is still working in the worktree, and `--apply` refuses without
-`--operator-confirmed-no-live-session`. The docs say a session never supplies
-that flag from its own claim evidence, and the `worktreeRemnant`
-mechanical-evidence basis (issue `#4969`) is a separate path that needs the
-auto-decide procedure's confirmation issue and trusted policy, which this route
-does not run. The route therefore treats a recorded, independent confirmation
-as a preflight item: a trusted issue comment without the `idd-agent-authored`
-suffix, the attribution marker that already keeps an agent from accepting its
-own scope decision, so the session cannot supply it from its own claim
-evidence. Without it, nothing is written, instead of the refusal appearing
+is still working in the worktree, so the helper takes either the operator's
+attestation (`--operator-confirmed-no-live-session`) or the mechanical-evidence
+basis of issue `#4969`, and refuses a mutation without one. The docs say a
+session never supplies the attestation from its own claim evidence. The route
+adds no attestation record of its own: it requires §LWR step 2 to have a basis
+independent of this session's claim evidence before any write, and the
+attestation stays as unverifiable by the helpers as §LWR defines it, with the
+same accepted residual risk as the scope decision (hearing answer 3 on issue
+`#4435`). Without a basis nothing is written, instead of the refusal appearing
 after the pull request is closed. This reads the existing rule and adds no
 waiver; it is preventive, with no observed incident yet.
 
@@ -1410,12 +1419,14 @@ no observed incident yet.
 
 No claim is active when the route runs, because the handoff released it and LWR
 needs a released claim, so the claim revalidation gate has nothing to check.
-The preflight, repeated immediately before each write, takes its place and
-fails closed on any change. The route never releases or relabels the
-replacement set. Stage 2 remains the explicit human release gate, and the route
-changes neither `dangerouslyAutoDecide` nor its default. Closing the pull
-request leaves its remote branch in place, because remote-branch deletion
-belongs to F4 after a merge; this is preventive, with no observed incident yet.
+Each write waits on the preflight items it depends on, re-read just before it,
+which takes its place and fails closed on any change; a fresh LWR dry run
+cannot be one of them after cleanup, since it removes the worktree. The route
+never releases or relabels the replacement set. Stage 2 remains the explicit
+human release gate, and the route changes neither `dangerouslyAutoDecide` nor
+its default. Closing the pull request leaves its remote branch in place,
+because remote-branch deletion belongs to F4 after a merge; this is preventive,
+with no observed incident yet.
 
 ## Review triage
 
