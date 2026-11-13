@@ -1219,13 +1219,14 @@ otherwise remove the worktree under a pull request that is still reviewable. An
 uncertain close is re-read before any retry, so a repeated call cannot hide a
 state change. LWR runs next. Only after cleanup succeeds does the source issue
 close as not planned, with the replacement roadmap linked, and only after that
-closure is verified does the needs-decision label come off. Removing the label
-first would leave an open, label-free, and therefore claimable issue between
-the steps. If LWR refuses or fails after the pull request is closed, the issue
-stays open with its label, which keeps it out of Discover, the remaining
-worktree data stays, and the report names the partial state and the next
-action. A rerun then skips each step whose verified result already holds, so a
-pull request already closed at the recorded head does not block it. This
+closure is verified does the needs-decision label come off; the route names it
+by its configured key, `labels.needsDecisionLabelName`, not a literal. Removing
+the label first would leave an open, label-free, and therefore claimable issue
+between the steps. If LWR refuses or fails after the pull request is closed,
+the issue stays open with its label, which keeps it out of Discover, the
+remaining worktree data stays, and the report names the partial state and the
+next action. A rerun then skips each step whose verified result already holds,
+so a pull request already closed at the recorded head does not block it. This
 recovery is preventive; no observed incident yet. A pre-first-push overrun has
 no pull request, so that step is skipped, and its B3 release may have removed
 the worktree already, which the dry run reports as nothing to recover.

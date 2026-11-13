@@ -646,7 +646,7 @@ const FINALIZATION_ORDERED_STEPS = [
   'On refusal or failure, keep the issue open and labeled',
   '4. **Close the issue** only after step 3',
   '`gh issue close {issue-number} --reason "not planned" --comment <roadmap link>`',
-  'then remove the needs-decision label, if present, and verify',
+  'then remove that label, if present, and verify',
   'Never release or relabel the replacement set',
 ] as const;
 
@@ -675,9 +675,8 @@ for (const relativePath of PR_SUBMIT_PATHS) {
       'is complete and equals the roadmap plus its `## Tracks`',
       'each member is open with the authoring label',
       'each child says `Split out of #{issue-number}`',
-      'This issue is unclaimed, open unless a rerun closed it',
-      'trusted `scope-overrun` record',
-      'the needs-decision label (pre-first-push may lack it)',
+      'This issue is unclaimed, with a trusted `scope-overrun` record and the needs-decision label (`labels.needsDecisionLabelName`; pre-first-push may lack it)',
+      'and open (a rerun may find it closed as not planned with the roadmap link)',
       'Post-push, its PR is a draft at the recorded head (a rerun may find it closed, unmerged)',
       '`idd-local-worktree-recovery --issue {issue-number} --worktree <path>`',
       'dry run reports `ready: true` (or worktree and branch are gone)',
@@ -742,10 +741,7 @@ for (const relativePath of PR_SUBMIT_PATHS) {
     // that closure is verified.
     const closing = route.slice(route.indexOf('4. **Close the issue**'));
     assert.ok(closing.includes('only after step 3'));
-    assert.ok(
-      closing.indexOf('verify') <
-        closing.indexOf('remove the needs-decision label'),
-    );
+    assert.ok(closing.indexOf('verify') < closing.indexOf('remove that label'));
     assert.ok(route.includes('verify closed, unmerged, at that head'));
     assert.ok(route.includes('Re-read before retrying an uncertain close'));
   });
@@ -760,20 +756,17 @@ for (const relativePath of PR_SUBMIT_PATHS) {
     assert.doesNotMatch(route, /--delete-branch|git push|--takeover/u);
     assert.doesNotMatch(route, /dangerouslyAutoDecide/u);
   });
-
-  test(`${relativePath}: the route links a rationale heading that exists`, () => {
-    const text = readRepoFile(relativePath);
-    const anchor = headingAnchor(FINALIZE_RATIONALE_HEADING);
-    assert.equal(anchor, 'finalize-a-verified-held-scope-split-issue-4678');
-    assert.ok(
-      text.includes(`/idd-design-rationale.md#${anchor}`),
-      'the route links the rationale anchor',
-    );
-    assert.ok(
-      readRepoFile(RATIONALE_PATH).includes(FINALIZE_RATIONALE_HEADING),
-    );
-  });
 }
+
+test('the finalization rationale heading exists in both copies and the B3 pointer targets its anchor', () => {
+  const anchor = headingAnchor(FINALIZE_RATIONALE_HEADING);
+  assert.equal(anchor, 'finalize-a-verified-held-scope-split-issue-4678');
+  for (const rationale of [RATIONALE_PATH, 'docs/idd-design-rationale.md']) {
+    const text = readRepoFile(rationale);
+    assert.ok(text.includes(FINALIZE_RATIONALE_HEADING), rationale);
+    assert.ok(text.includes(`](#${anchor})`), `${rationale} points at it`);
+  }
+});
 
 test('the finalization rationale cites its incidents and agrees with the route', () => {
   const text = readRepoFile(RATIONALE_PATH).replace(/\s+/gu, ' ');

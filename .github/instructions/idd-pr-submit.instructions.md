@@ -230,10 +230,12 @@ step whose verified result holds.
 1. **Preflight** (read-only): `idd-authoring-set-members --set <set>` (from the
    roadmap's trusted owner marker) is complete and equals the roadmap plus its
    `## Tracks`; each member is open with the authoring label, each child says
-   `Split out of #{issue-number}`. This issue is unclaimed, open unless a rerun
-   closed it, with a trusted `scope-overrun` record and the needs-decision
-   label (pre-first-push may lack it). Post-push, its PR is a draft at the
-   recorded head (a rerun may find it closed, unmerged). A
+   `Split out of #{issue-number}`. This issue is unclaimed, with a trusted
+   `scope-overrun` record and the needs-decision label
+   (`labels.needsDecisionLabelName`; pre-first-push may lack it), and open (a
+   rerun may find it closed as not planned with the roadmap link). Post-push,
+   its PR is a draft at the recorded head (a rerun may find it closed,
+   unmerged). A
    `idd-local-worktree-recovery --issue {issue-number} --worktree <path>` dry
    run reports `ready: true` (or worktree and branch are gone), and a person or
    orchestrator, not this session's claim evidence, confirmed no live session
@@ -245,11 +247,10 @@ step whose verified result holds.
    remains, and report the PR state, LWR report, and next action. Never
    `--force` or bypass its preservation or lock gates.
 4. **Close the issue** only after step 3: `gh issue close {issue-number}
-   --reason "not planned" --comment <roadmap link>`; verify, then remove the
-   needs-decision label, if present, and verify.
+   --reason "not planned" --comment <roadmap link>`; verify, then remove that
+   label, if present, and verify.
 
 Never release or relabel the replacement set: Stage 2 stays the human gate.
-[Rationale](../../docs/idd-design-rationale.md#finalize-a-verified-held-scope-split-issue-4678).
 
 ## D3 — Create PR
 
