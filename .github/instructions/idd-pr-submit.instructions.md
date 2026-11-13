@@ -241,7 +241,8 @@ report it.
    must already be posted; re-check it without reposting against the live base
    and head SHAs (its fetch only updates remote-tracking refs), and confirm the
    live list still matches before step 3. A missing, stale, or unmet mapping
-   blocks steps 2 and 3.
+   blocks steps 2 and 3. Steps 3 and 4 also wait until each child-mapped commit
+   is confirmed.
 2. **Close the PR** (post-push): `gh pr close <pr>`; verify closed, unmerged, at
    that head. Re-read before retrying an uncertain close.
 3. **Clean up**: LWR with `--apply` and its step 2 basis (skip if the worktree
