@@ -2010,7 +2010,8 @@ function checkSingleRunStep(
 
 // RWA008: the shards of pnpm-boundary.yml (#4993). The two suite jobs select
 // complementary modes, the shards partition check-project's groups exactly
-// once per supported Node version, no job can cancel a sibling or hide a
+// once per supported Node version (the test group is excluded on Node 26.x,
+// decision #5182), no job can cancel a sibling or hide a
 // failure, the aggregate reads both results, and the manual Node 22 floor lane
 // selects only its matching version column.
 function checkPnpmBoundaryShards(root: string, report: Report): void {
@@ -2266,9 +2267,10 @@ function checkPnpmBoundaryMatrix(
     );
   }
 
-  // Every check-project group runs in exactly one shard. The shard table above
-  // is checked against check-project's own list, so the partition stays
-  // complete when check-project gains or loses a group.
+  // Every check-project group runs in exactly one shard per Node version. The
+  // shard table above is checked against check-project's own list, so the
+  // partition stays complete when check-project gains or loses a group. The
+  // test group has no Node 26.x shard (the exclude above, decision #5182).
   const known = defaultCheckGroups(undefined).map(({ id }) => id);
   const counts = new Map<string, number>(known.map((id) => [id, 0]));
   for (const { checkGroups } of PNPM_BOUNDARY_SHARDS) {

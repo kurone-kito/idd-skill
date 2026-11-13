@@ -82,8 +82,9 @@ jobs:
           - test
           - distribution
         # check-groups partitions check-project: each group runs in exactly
-        # one shard for each Node version. pnpm passes a literal `--` to the
-        # script, so group ids follow the script name without one.
+        # one shard for each Node version, except that the test group has no
+        # Node 26.x shard (the exclude below; decision #5182). pnpm passes a
+        # literal `--` to the script, so group ids follow the script name.
         include:
           - shard: lint
             check-groups: lint
