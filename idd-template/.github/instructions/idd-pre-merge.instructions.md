@@ -293,17 +293,18 @@ with a `hint` names this step; the hint never changes the verdict.
   (default Copilot) is the only primary. When issue `#2544`'s settled
   buffer clamps the wait, the blocker names that buffer apart from the
   configured window.
-- **Scope-overrun evidence** (fail closed): record the current head as its
-  full 40-character SHA before readiness proceeds. A `claim.scopeOverrun` with
-  `status` `missing` or `invalid` (no record, or a malformed, stale, or
-  conflicting one), or a `scope-overrun` blocker, holds F2. An absent
-  `claim.scopeOverrun` is a clean scope only on a claim-bound run; `--claimless`
-  runs omit it. For an overrun, only a trusted owner's
+- **Scope-overrun evidence** (fail closed): record the full 40-character head
+  SHA before readiness. A `claim.scopeOverrun` with `status` `missing` or
+  `invalid` (no record, or malformed, stale, or conflicting), or a
+  `scope-overrun` blocker, holds F2. An absent
+  `claim.scopeOverrun` is a clean scope only on a claim-bound run; a
+  `--claimless` run has no claimed issue to record on, so this bullet does not
+  apply to it. For an overrun, only a trusted owner's
   `Scope decision: accept head <full SHA>` comment for the current head marks
   the PR ready; a changed head needs a new decision. Without it, apply
   `status:needs-decision`, move the PR to draft, post the post-push
-  [`scope-overrun` record](../../docs/idd-helper-scripts.md#scope-overrun-evidence-marker),
-  verify the marker, the evidence, the label, and the draft state, then
+  `scope-overrun` record (`docs/idd-helper-scripts.md`), verify the marker,
+  the evidence, the label, and the draft state, then
   release the claim and hand the split to the issue-authoring companion. If
   the companion is unavailable, an audit fails, or a state is unverified, keep
   the claim and report one next action. After an accepted head, return the
