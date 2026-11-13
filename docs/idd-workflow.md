@@ -1239,10 +1239,11 @@ costs one extra decision toward the caps.
   class is not enabled, the trusted read fails, a cap is reached or
   unreadable, or the procedure keeps today's behavior, the stop stays as it
   is today. These routes stay unchanged: review findings handled by
-  `critiqueLoop.deferNeedsDecision` and the stops that route never applies
-  to; any other E or F phase question; a B2.1 premise conflict, which keeps
-  its addendum route; a B3 scope overrun; and the lite profile's
-  stronger-session handoff.
+  `critiqueLoop.deferNeedsDecision`, where a CODEOWNER or required reviewer,
+  `CHANGES_REQUESTED`, scope-fenced items, merge holds, and CI and
+  branch-sync holds still stop; any other E or F phase question; a B2.1
+  premise conflict, which keeps its addendum route; a B3 scope overrun; and
+  the lite profile's stronger-session handoff.
 - `authoringChoice`: the Interactive choice rule in `contract.md`.
 - `worktreeRemnant`: §LWR in [idd-resume-detail.md](idd-resume-detail.md).
 - `b1Leftover`: [B1 leftovers](#b1-leftovers).
