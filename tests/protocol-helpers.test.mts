@@ -4694,6 +4694,28 @@ test('#3485: secondary-quiet-window blocker keeps the applied-minutes wording wh
   );
 });
 
+test('computePreMergeReadinessBlockers: scope-overrun detail names the field that is absent', () => {
+  const scopeOverrunDetail = (scopeOverrun: Record<string, unknown>) =>
+    computePreMergeReadinessBlockers({
+      prHeadSha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      claim: { scopeOverrun },
+    }).find((blocker) => blocker.gate === 'scope-overrun')?.detail;
+
+  // An absent reason reads "missing reason"; the status keeps its own fallback.
+  assert.equal(
+    scopeOverrunDetail({ status: 'invalid' }),
+    'scope overrun invalid: missing reason',
+  );
+  assert.equal(
+    scopeOverrunDetail({ reason: 'no-record' }),
+    'scope overrun unavailable: no-record',
+  );
+  assert.equal(
+    scopeOverrunDetail({}),
+    'scope overrun unavailable: missing reason',
+  );
+});
+
 test('isTrustEvidenceComment: normalizes a mixed-case flat authorLogin field before checking trust', () => {
   const isTrusted = (login: string) => login === 'kurone-kito';
   assert.equal(
