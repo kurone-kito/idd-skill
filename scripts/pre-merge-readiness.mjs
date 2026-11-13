@@ -60,11 +60,13 @@ import {
 } from './helper-cli-runner.mjs';
 import { computeActivation } from './idd-activation.mjs';
 import { loadTrustedIddConfig } from './idd-config.mjs';
+import { maskMarkdownForScan } from './markdown-code.mjs';
 import {
   normalizeMarkerPrefix,
   parseForcedHandoffComment,
   resolveScopeOverrunEvidence,
 } from './marker-helpers.mjs';
+import { escapeRegex } from './marker-regex.mjs';
 import {
   inspectDevelopmentBranch,
   normalizePolicyConfig,
@@ -452,18 +454,31 @@ export function readScopeOverrunMergeBaseSha(
  * expect it to close. A closing keyword for the issue, or no reference to it
  * at all, keeps the issue expected, so a body that forgets the keyword still
  * reports a mismatch.
+ *
+ * Only prose counts. Code (inline, fenced, indented) is masked and `>`
+ * block-quote lines are dropped first, the surfaces GitHub's closing-keyword
+ * detection ignores (`idd-pr-submit.instructions.md`, Anti-patterns; Codex
+ * review, PR #5203). A same-repo qualified reference (`owner/repo#N`) counts
+ * like `#N`; another repository's reference does not. The quote filter works
+ * per line, so an unmarked lazy continuation of a quote still counts as prose.
+ * The D3.5 stripper in `resume-route-selection.mts` handles that case, but
+ * importing it would close an import cycle through `ci-wait-state.mts`.
  */
-export function claimIssueExpectedToClose(body, issueNumber) {
+export function claimIssueExpectedToClose(body, issueNumber, owner, repo) {
+  const prose = maskMarkdownForScan(body)
+    .split('\n')
+    .filter((line) => !/^ {0,3}>/u.test(line))
+    .join('\n');
+  const qualifier =
+    owner && repo ? `(?:${escapeRegex(owner)}/${escapeRegex(repo)})?` : '';
+  const target = `${qualifier}#${issueNumber}`;
   const closing = new RegExp(
-    `\\b${CLOSING_KEYWORD_PATTERN}\\s+#${issueNumber}\\b`,
+    `\\b${CLOSING_KEYWORD_PATTERN}\\s+${target}\\b`,
     'iu',
   );
-  if (closing.test(body)) return true;
-  const refs = new RegExp(
-    `\\b(?:Refs?|References?)\\s+#${issueNumber}\\b`,
-    'iu',
-  );
-  return !refs.test(body);
+  if (closing.test(prose)) return true;
+  const refs = new RegExp(`\\b(?:Refs?|References?)\\s+${target}\\b`, 'iu');
+  return !refs.test(prose);
 }
 export function readRepositoryContentAtRef(port, owner, repo, path, ref) {
   const encodedPath = path.split('/').map(encodeURIComponent).join('/');
@@ -1335,7 +1350,12 @@ export function collectPreMergeReadiness(
         : []
       : // #5149: a split PR that names the claim issue only with `Refs` does
         // not expect it to close on merge.
-        claimIssueExpectedToClose(snapshot.body ?? '', args.claimIssueNumber)
+        claimIssueExpectedToClose(
+            snapshot.body ?? '',
+            args.claimIssueNumber,
+            owner,
+            repo,
+          )
         ? [args.claimIssueNumber]
         : []);
   const closingSetEvidence = computeClosingSetEvidence({

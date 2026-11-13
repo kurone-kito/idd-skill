@@ -65,12 +65,14 @@ import {
 } from './helper-cli-runner.mts';
 import { type ActivationResult, computeActivation } from './idd-activation.mts';
 import { type IddConfig, loadTrustedIddConfig } from './idd-config.mts';
+import { maskMarkdownForScan } from './markdown-code.mts';
 import {
   normalizeMarkerPrefix,
   parseForcedHandoffComment,
   resolveScopeOverrunEvidence,
   type ScopeOverrunEvidenceComment,
 } from './marker-helpers.mts';
+import { escapeRegex } from './marker-regex.mts';
 import {
   inspectDevelopmentBranch,
   normalizePolicyConfig,
@@ -742,21 +744,36 @@ export function readScopeOverrunMergeBaseSha(
  * expect it to close. A closing keyword for the issue, or no reference to it
  * at all, keeps the issue expected, so a body that forgets the keyword still
  * reports a mismatch.
+ *
+ * Only prose counts. Code (inline, fenced, indented) is masked and `>`
+ * block-quote lines are dropped first, the surfaces GitHub's closing-keyword
+ * detection ignores (`idd-pr-submit.instructions.md`, Anti-patterns; Codex
+ * review, PR #5203). A same-repo qualified reference (`owner/repo#N`) counts
+ * like `#N`; another repository's reference does not. The quote filter works
+ * per line, so an unmarked lazy continuation of a quote still counts as prose.
+ * The D3.5 stripper in `resume-route-selection.mts` handles that case, but
+ * importing it would close an import cycle through `ci-wait-state.mts`.
  */
 export function claimIssueExpectedToClose(
   body: string,
   issueNumber: number,
+  owner: string,
+  repo: string,
 ): boolean {
+  const prose = maskMarkdownForScan(body)
+    .split('\n')
+    .filter((line) => !/^ {0,3}>/u.test(line))
+    .join('\n');
+  const qualifier =
+    owner && repo ? `(?:${escapeRegex(owner)}/${escapeRegex(repo)})?` : '';
+  const target = `${qualifier}#${issueNumber}`;
   const closing = new RegExp(
-    `\\b${CLOSING_KEYWORD_PATTERN}\\s+#${issueNumber}\\b`,
+    `\\b${CLOSING_KEYWORD_PATTERN}\\s+${target}\\b`,
     'iu',
   );
-  if (closing.test(body)) return true;
-  const refs = new RegExp(
-    `\\b(?:Refs?|References?)\\s+#${issueNumber}\\b`,
-    'iu',
-  );
-  return !refs.test(body);
+  if (closing.test(prose)) return true;
+  const refs = new RegExp(`\\b(?:Refs?|References?)\\s+${target}\\b`, 'iu');
+  return !refs.test(prose);
 }
 
 export function readRepositoryContentAtRef(
@@ -1692,6 +1709,8 @@ export function collectPreMergeReadiness(
         claimIssueExpectedToClose(
             snapshot.body ?? '',
             args.claimIssueNumber as number,
+            owner,
+            repo,
           )
         ? [args.claimIssueNumber as number]
         : []);

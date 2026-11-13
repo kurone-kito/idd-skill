@@ -21324,12 +21324,85 @@ test('a generated mirror is excluded from the scope-overrun count, with the same
 });
 
 test('claimClosingExpectation: a Refs-only claim issue is not expected to close, a closing keyword or no reference keeps it expected (#5149)', () => {
-  assert.equal(claimIssueExpectedToClose('Refs #7\n', 7), false);
-  assert.equal(claimIssueExpectedToClose('Ref #7 and more', 7), false);
-  assert.equal(claimIssueExpectedToClose('Closes #7', 7), true);
-  assert.equal(claimIssueExpectedToClose('Fixes: #7\nRefs #8', 7), true);
-  assert.equal(claimIssueExpectedToClose('', 7), true);
-  assert.equal(claimIssueExpectedToClose('Refs #70', 7), true);
+  assert.equal(claimIssueExpectedToClose('Refs #7\n', 7, 'o', 'r'), false);
+  assert.equal(
+    claimIssueExpectedToClose('Ref #7 and more', 7, 'o', 'r'),
+    false,
+  );
+  assert.equal(claimIssueExpectedToClose('Closes #7', 7, 'o', 'r'), true);
+  assert.equal(
+    claimIssueExpectedToClose('Fixes: #7\nRefs #8', 7, 'o', 'r'),
+    true,
+  );
+  assert.equal(claimIssueExpectedToClose('', 7, 'o', 'r'), true);
+  assert.equal(claimIssueExpectedToClose('Refs #70', 7, 'o', 'r'), true);
+});
+
+test('claimClosingExpectation: code and block quotes are not intent, so a quoted Closes keeps a Refs-only split (#5149, Codex PR #5203)', () => {
+  assert.equal(
+    claimIssueExpectedToClose(
+      'Refs #7\n\nDo not use `Closes #7` here',
+      7,
+      'o',
+      'r',
+    ),
+    false,
+  );
+  assert.equal(
+    claimIssueExpectedToClose('Refs #7\n\n```\nCloses #7\n```\n', 7, 'o', 'r'),
+    false,
+  );
+  assert.equal(
+    claimIssueExpectedToClose('Refs #7\n\n> Closes #7', 7, 'o', 'r'),
+    false,
+  );
+  // A Refs that is only quoted or in code is no reference at all, so the
+  // issue stays expected.
+  assert.equal(claimIssueExpectedToClose('> Refs #7', 7, 'o', 'r'), true);
+  assert.equal(claimIssueExpectedToClose('`Refs #7`', 7, 'o', 'r'), true);
+  // A real closing keyword outside code still counts.
+  assert.equal(
+    claimIssueExpectedToClose(
+      'Refs #7\n\n`Closes #7`\n\nCloses #7',
+      7,
+      'o',
+      'r',
+    ),
+    true,
+  );
+  // CRLF bodies are normalized before the scan.
+  assert.equal(
+    claimIssueExpectedToClose('Refs #7\r\n\r\nCloses #7\r\n', 7, 'o', 'r'),
+    true,
+  );
+  assert.equal(
+    claimIssueExpectedToClose('Refs #7\r\n> Closes #7\r\n', 7, 'o', 'r'),
+    false,
+  );
+});
+
+test('claimClosingExpectation: a same-repo qualified reference counts, another repository never does (#5149)', () => {
+  assert.equal(claimIssueExpectedToClose('Refs o/r#7', 7, 'o', 'r'), false);
+  assert.equal(claimIssueExpectedToClose('Refs O/R#7', 7, 'o', 'r'), false);
+  assert.equal(claimIssueExpectedToClose('Closes o/r#7', 7, 'o', 'r'), true);
+  assert.equal(claimIssueExpectedToClose('Refs other/r#7', 7, 'o', 'r'), true);
+  // Owner and repo names with regex-significant characters are escaped.
+  assert.equal(
+    claimIssueExpectedToClose('Refs a.b-c/d_e#7', 7, 'a.b-c', 'd_e'),
+    false,
+  );
+  assert.equal(
+    claimIssueExpectedToClose('Refs axb-c/d_e#7', 7, 'a.b-c', 'd_e'),
+    true,
+  );
+  // An empty owner or repo drops the qualifier; only the bare form counts.
+  assert.equal(claimIssueExpectedToClose('Refs #7', 7, '', ''), false);
+  assert.equal(claimIssueExpectedToClose('Refs o/r#7', 7, '', ''), true);
+  // A closing keyword for another repository does not close this issue.
+  assert.equal(
+    claimIssueExpectedToClose('Refs #7\nCloses other/r#7', 7, 'o', 'r'),
+    false,
+  );
 });
 
 test('collectPreMergeReadiness: a split PR that names the claim issue only with Refs reports the closing set as matching (#5149)', () => {
@@ -21363,6 +21436,74 @@ test('collectPreMergeReadiness: a split PR that names the claim issue only with 
   };
   assert.deepEqual(closingSet.expected, []);
   assert.equal(closingSet.status, 'match');
+});
+
+test('collectPreMergeReadiness: a Refs-only split whose Closes is only quoted in code expects no closing (#5149, Codex PR #5203)', () => {
+  const base = closingSetSmokeFakePort({ closingIssuesReferences: [] });
+  const port = {
+    ...base,
+    getChangeRequestReadinessSnapshot: (number: number) => ({
+      ...base.getChangeRequestReadinessSnapshot(number),
+      body: 'Split out of #6. Refs #7\n\nDo not use `Closes #7` here',
+    }),
+  } as ProviderPort;
+  const report = collectPreMergeReadiness(
+    [
+      '--pr',
+      '1',
+      '--claim-issue',
+      '7',
+      '--owner',
+      'o',
+      '--repo',
+      'r',
+      '--now',
+      '2026-08-01T00:00:00Z',
+    ],
+    () => port,
+    () => ({}),
+  );
+  const closingSet = report.closingSet as {
+    status: string;
+    expected: number[];
+  };
+  assert.deepEqual(closingSet.expected, []);
+  assert.equal(closingSet.status, 'match');
+});
+
+test('collectPreMergeReadiness: a Refs-only split whose closing set still reports the claim issue does not match (#5149)', () => {
+  const base = closingSetSmokeFakePort({
+    closingIssuesReferences: [{ number: 7 }],
+  });
+  const port = {
+    ...base,
+    getChangeRequestReadinessSnapshot: (number: number) => ({
+      ...base.getChangeRequestReadinessSnapshot(number),
+      body: 'Split out of #6. Refs #7',
+    }),
+  } as ProviderPort;
+  const report = collectPreMergeReadiness(
+    [
+      '--pr',
+      '1',
+      '--claim-issue',
+      '7',
+      '--owner',
+      'o',
+      '--repo',
+      'r',
+      '--now',
+      '2026-08-01T00:00:00Z',
+    ],
+    () => port,
+    () => ({}),
+  );
+  const closingSet = report.closingSet as {
+    status: string;
+    expected: number[];
+  };
+  assert.deepEqual(closingSet.expected, []);
+  assert.equal(closingSet.status, 'mismatch');
 });
 
 test('collectPreMergeReadiness: a PR that closes the claim issue expects it and matches the closing reference (#5149)', () => {
