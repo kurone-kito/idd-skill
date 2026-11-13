@@ -115,6 +115,7 @@ import {
   newEvidenceReport,
   parseConfirmationReference,
   setCondition,
+  staleAgeProblem,
 } from './worktree-remnant-evidence.mjs';
 
 // ---------------------------------------------------------------------------
@@ -3430,16 +3431,22 @@ export function runLocalWorktreeRecovery(args, deps) {
       if (routingReads === 1 || !outcome.ok || outcome.routing === null) {
         return outcome;
       }
-      const problem = evidenceBasisProblem(
-        evidenceRoutingFacts(outcome.routing),
+      const facts = evidenceRoutingFacts(outcome.routing);
+      const problem = evidenceBasisProblem(facts);
+      if (problem === null) return outcome;
+      // The report must not keep saying that the basis holds: the age floor
+      // is condition 1, the stale-or-released claim is condition 3.
+      setCondition(
+        report,
+        staleAgeProblem(facts) === null ? 3 : 1,
+        'unmet',
+        `under the clone lock: ${problem}`,
       );
-      return problem === null
-        ? outcome
-        : {
-            ok: false,
-            routing: null,
-            error: `mechanical evidence no longer holds: ${problem}`,
-          };
+      return {
+        ok: false,
+        routing: null,
+        error: `mechanical evidence no longer holds: ${problem}`,
+      };
     },
     ensurePreserveDir: () => {
       if (run.destination === null) {
@@ -4085,6 +4092,22 @@ function runRecoveryCore(args, deps, evidenceRun) {
     );
     setCondition(report, 6, record.ok ? 'met' : 'unmet', record.detail);
   };
+  // A recheck under the clone lock that stops the run on the claim or the
+  // routing also turns condition 3 unmet, so the report never says the
+  // evidence holds for a run that stopped because it no longer does.
+  const evidenceStopsUnderLock = (detail) => {
+    const condition = evidenceRun?.report.conditions.find(
+      (entry) => entry.number === 3,
+    );
+    if (evidenceRun !== null && condition?.status === 'met') {
+      setCondition(
+        evidenceRun.report,
+        3,
+        'unmet',
+        `under the clone lock: ${detail}`,
+      );
+    }
+  };
   // The durable destination, inspected under the #4957 guards with the
   // primary path and every worktree record, the target included, so it can
   // never lie inside the tree that step 4 removes.
@@ -4566,6 +4589,7 @@ function runRecoveryCore(args, deps, evidenceRun) {
         detail: `fresh re-check failed: ${recheck.error ?? 'unknown error'}`,
       };
       verdict.result = verdict.plan.removal.detail;
+      evidenceStopsUnderLock(verdict.plan.removal.detail);
       return verdict;
     }
     // CodeRabbit/Copilot findings: the shortcut path must be re-verified
@@ -4659,6 +4683,7 @@ function runRecoveryCore(args, deps, evidenceRun) {
         detail: staleReason,
       };
       verdict.result = verdict.plan.removal.detail;
+      evidenceStopsUnderLock(staleReason);
       return verdict;
     }
     // Copilot review: the fresh routing check above validates only
@@ -4685,6 +4710,7 @@ function runRecoveryCore(args, deps, evidenceRun) {
         detail: `the claim being recovered changed since step 1 (was claim-id ${recoveredClaimId ?? 'legacy'} / branch ${recoveredBranch ?? 'unknown'}, now claim-id ${freshRecovered.claimId ?? 'legacy'} / branch ${freshRecovered.branch ?? 'unknown'}); stopping`,
       };
       verdict.result = verdict.plan.removal.detail;
+      evidenceStopsUnderLock(verdict.plan.removal.detail);
       return verdict;
     }
     // Re-run the claim-lock check too, while the clone lock is held --
@@ -4714,6 +4740,7 @@ function runRecoveryCore(args, deps, evidenceRun) {
             'the worktree-local claim lock no longer matches the recovered claim-id (a different session may have taken over); stopping',
         };
         verdict.result = verdict.plan.removal.detail;
+        evidenceStopsUnderLock(verdict.plan.removal.detail);
         return verdict;
       }
     }

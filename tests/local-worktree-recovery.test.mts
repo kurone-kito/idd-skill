@@ -10899,6 +10899,24 @@ test('evidence: a routing read after the first that no longer meets the basis st
     assert.deepEqual(fixture.mutations, [], name);
     assert.equal(verdict.plan.removal?.ran ?? false, false, name);
     assert.match(verdict.result, /mechanical evidence no longer holds/, name);
+    // The report agrees with the refusal: it no longer says the basis holds.
+    assert.equal(verdict.evidence?.met, false, name);
+    assert.equal(
+      condition(
+        verdict,
+        name === 'a stale age that dropped below the floor' ? 1 : 3,
+      ).status,
+      'unmet',
+      name,
+    );
+    assert.match(
+      condition(
+        verdict,
+        name === 'a stale age that dropped below the floor' ? 1 : 3,
+      ).detail,
+      /under the clone lock/,
+      name,
+    );
   }
 });
 
@@ -10921,6 +10939,9 @@ test('evidence: a routing that changes claim under the lock stops through the ex
   assert.equal(verdict.mutated, false);
   assert.deepEqual(fixture.mutations, []);
   assert.match(verdict.result, /claim being recovered changed/);
+  assert.equal(verdict.evidence?.met, false);
+  assert.equal(condition(verdict, 3).status, 'unmet');
+  assert.match(condition(verdict, 3).detail, /under the clone lock.*changed/);
 });
 
 test('evidence: an unsafe state root refuses in a dry run and before the clone lock', () => {
@@ -11818,6 +11839,7 @@ test('evidence: a routing read that loses the basis stops the run before removal
           `${label}: the worktree was removed`,
         );
         assert.notEqual(verdict.plan.removal?.ran, true, label);
+        assert.equal(verdict.evidence?.met, false, `${label}: report`);
       }
     }
   }
@@ -12265,4 +12287,35 @@ test('evidence: a creation step that restricts a parent before failing reports i
     verdict.result,
     /the creation step had already changed: restricted \/state\/idd-skill to its owner/,
   );
+});
+
+test('evidence: a claim lock that stops matching under the clone lock turns condition 3 unmet', () => {
+  let locks = 0;
+  const fixture = evidenceFixture({
+    deps: {
+      checkLock: () => {
+        locks += 1;
+        // Step 1 sees the recovered claim's lock; the recheck sees another.
+        return {
+          path: '/repo/linked/.git/idd-claim.lock',
+          present: true,
+          holder: {
+            agentId: 'agent-x',
+            claimId: locks === 1 ? 'claim-x' : 'claim-y',
+            acquiredAt: '2026-09-24T00:00:00Z',
+          },
+        };
+      },
+    },
+  });
+  const verdict = runLocalWorktreeRecovery(
+    evidenceArgs({ apply: true }),
+    fixture.deps,
+  );
+  assert.equal(verdict.mutated, false);
+  assert.deepEqual(fixture.mutations, []);
+  assert.match(verdict.result, /claim lock no longer matches/);
+  assert.equal(verdict.evidence?.met, false);
+  assert.equal(condition(verdict, 3).status, 'unmet');
+  assert.match(condition(verdict, 3).detail, /under the clone lock.*lock/);
 });
