@@ -644,7 +644,7 @@ const FINALIZATION_ORDERED_STEPS = [
   'verify closed, unmerged, at that head',
   'Re-read before retrying an uncertain close',
   '3. **Clean up**: LWR with `--apply --operator-confirmed-no-live-session`',
-  'On refusal or failure, keep the issue open, apply the label if absent',
+  'On refusal or failure, keep the issue open, apply and verify the label if absent',
   '4. **Close the issue** only after step 3',
   '`gh issue close {issue-number} --reason "not planned" --comment <roadmap link>`',
   'then remove that label, if present, and verify',
@@ -671,7 +671,7 @@ for (const relativePath of PR_SUBMIT_PATHS) {
     const route = finalizationRoute(relativePath);
     const preflight = preflightOf(route);
     for (const refusal of [
-      '`idd-authoring-set-members --set <set>`',
+      'profile-selected `authoring-set-members --set <set>`',
       "the roadmap's trusted owner marker",
       'is complete and equals the roadmap plus its `## Tracks`',
       'each member is open with the authoring label',
@@ -680,7 +680,7 @@ for (const relativePath of PR_SUBMIT_PATHS) {
       'It is unclaimed, with a trusted `scope-overrun` record and the needs-decision label (`labels.needsDecisionLabelName`; pre-first-push may lack it)',
       'and open (a rerun may find it closed as not planned with the roadmap link)',
       'Post-push, its PR is a draft at the recorded head (a rerun may find it closed, unmerged)',
-      '`idd-local-worktree-recovery --issue {issue-number} --worktree <path>`',
+      'profile-selected `local-worktree-recovery --issue {issue-number} --worktree <path>`',
       'dry run reports `ready: true` (or the worktree is gone, its branch may remain)',
       'a trusted issue comment without the `idd-agent-authored` suffix confirmed no live session in `<path>`',
     ]) {
@@ -711,12 +711,12 @@ for (const relativePath of PR_SUBMIT_PATHS) {
     // The set check and the LWR dry run are not conditional on the push state.
     const preflight = preflightOf(route);
     assert.ok(
-      preflight.indexOf('`idd-authoring-set-members') <
+      preflight.indexOf('`authoring-set-members') <
         preflight.indexOf('Post-push, its PR'),
     );
     assert.ok(
       preflight.indexOf('Post-push, its PR') <
-        preflight.indexOf('`idd-local-worktree-recovery'),
+        preflight.indexOf('`local-worktree-recovery'),
     );
     // A worktree already removed by the B3 cleanup counts as cleaned.
     assert.ok(route.includes('(skip if the worktree is gone)'));
@@ -735,7 +735,7 @@ for (const relativePath of PR_SUBMIT_PATHS) {
       route.indexOf('4. **Close the issue**'),
     );
     for (const recovery of [
-      'On refusal or failure, keep the issue open, apply the label if absent, keep the remains',
+      'On refusal or failure, keep the issue open, apply and verify the label if absent, keep the remains',
       'report the PR state, LWR report, and next action',
       'Never `--force` or bypass its preservation or lock gates',
     ]) {
@@ -802,7 +802,8 @@ test('the finalization rationale cites its incidents and agrees with the route',
     'the issue stays open with its label',
     'A rerun then skips each step whose verified result already holds',
     "LWR removes the worktree but not its local branch, so the route counts only the worktree's absence as cleaned and leaves the branch",
-    'the route applies the label first when a pre-first-push issue lacks it',
+    'the route applies and verifies the label first when a pre-first-push issue lacks it',
+    'names both commands by their profile-selected form because a bare binary name only works under the user-global profile',
     'The route needs a helper runtime, for the set listing and for LWR',
     'so the route stops before any write there',
     'LWR keeps its own step 2',
@@ -856,6 +857,7 @@ for (const relativePath of AUTONOMY_PATHS) {
       applyLabel,
       /after a refused or failed cleanup, when it lacks the label/u,
     );
+    assert.match(applyLabel, /and the label is read back/u);
     assert.match(applyLabel, /stays non-claimable/u);
     assert.match(closeIssue, /only after cleanup succeeded/u);
     assert.match(

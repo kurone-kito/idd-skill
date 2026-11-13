@@ -1375,10 +1375,10 @@ by its configured key, `labels.needsDecisionLabelName`, not a literal. Removing
 the label first would leave an open, label-free, and therefore claimable issue
 between the steps. If LWR refuses or fails after the pull request is closed,
 the issue stays open with its label, which keeps it out of Discover (the route
-applies the label first when a pre-first-push issue lacks it), the remaining
-worktree data stays, and the report names the partial state and the next
-action. A rerun then skips each step whose verified result already holds, so a
-pull request already closed at the recorded head does not block it. This
+applies and verifies the label first when a pre-first-push issue lacks it), the
+remaining worktree data stays, and the report names the partial state and the
+next action. A rerun then skips each step whose verified result already holds,
+so a pull request already closed at the recorded head does not block it. This
 recovery is preventive; no observed incident yet. A pre-first-push overrun has
 no pull request, so that step is skipped, and its B3 release may have removed
 the worktree already, which the dry run reports as nothing to recover. LWR
@@ -1398,12 +1398,14 @@ is written, instead of the refusal appearing after the pull request is closed.
 This reads the existing rule and adds no waiver; it is preventive, with no
 observed incident yet.
 
-The route needs a helper runtime, for the set listing and for LWR. Under
-`instructions-only` no helper lists the set, and a manual check would copy the
-owner-marker grammar out of its single source, while §LWR's written fallback is
-operator-run, so the route stops before any write there. A supported adopter
-then learns that cleanup is unavailable before the pull request is closed, not
-after. This is preventive; no observed incident yet.
+The route needs a helper runtime, for the set listing and for LWR, and names
+both commands by their profile-selected form because a bare binary name only
+works under the user-global profile. Under `instructions-only` no helper lists
+the set, and a manual check would copy the owner-marker grammar out of its
+single source, while §LWR's written fallback is operator-run, so the route
+stops before any write there. A supported adopter then learns that cleanup is
+unavailable before the pull request is closed, not after. This is preventive;
+no observed incident yet.
 
 No claim is active when the route runs, because the handoff released it and LWR
 needs a released claim, so the claim revalidation gate has nothing to check.
