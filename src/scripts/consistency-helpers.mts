@@ -1920,6 +1920,23 @@ export const GENERATED_SOURCE_BANNER_PATTERN =
   /^\/\/ idd-generated-from:[ \t]+(\S+)/m;
 
 /**
+ * Whether `text` is a generated copy of a different source path. Only the
+ * first `scanBytes` bytes are read for the banner, the same window the audit
+ * tools use. #5149: the scope-overrun readiness audit and `claimed-push` both
+ * call this, so their canonical candidate sets use one detection.
+ */
+export function isGeneratedMirrorOf(
+  text: string,
+  path: string,
+  scanBytes = 200,
+): boolean {
+  const banner = GENERATED_SOURCE_BANNER_PATTERN.exec(
+    Buffer.from(text, 'utf8').subarray(0, scanBytes).toString('utf8'),
+  );
+  return banner?.[1] !== undefined && banner[1] !== path;
+}
+
+/**
  * Validate that a TypeScript helper source and its generated `.mjs`
  * artifact both carry a well-formed `// idd-generated-from: <sourcePath>`
  * banner within the first `scanBytes` **UTF-8 bytes** of each file. Pure

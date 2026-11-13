@@ -31,7 +31,7 @@ import {
   parseCliArgs,
   requireFlag,
 } from './cli-args.mjs';
-import { GENERATED_SOURCE_BANNER_PATTERN } from './consistency-helpers.mjs';
+import { isGeneratedMirrorOf } from './consistency-helpers.mjs';
 import { parseCandidateFiles } from './discover-shared-file-overlap.mjs';
 import { parseEffortMarker } from './effort.mjs';
 import { GH_TEXT_LOOP_TIMEOUT_OPTIONS, ghText } from './gh-exec.mjs';
@@ -830,15 +830,13 @@ function readCanonicalPaths(ctx, base) {
         failure: failed(text.reason, NEXT_ACTION.readGitError, null),
       };
     }
-    if (text.status === 'present') {
-      const banner = GENERATED_SOURCE_BANNER_PATTERN.exec(
-        Buffer.from(text.text, 'utf8')
-          .subarray(0, GENERATED_BANNER_SCAN_BYTES)
-          .toString('utf8'),
-      );
-      if (banner?.[1] !== undefined && banner[1] !== path) {
-        continue;
-      }
+    // #5149: the same generated-mirror detection the scope-overrun readiness
+    // audit uses (isGeneratedMirrorOf in consistency-helpers.mts).
+    if (
+      text.status === 'present' &&
+      isGeneratedMirrorOf(text.text, path, GENERATED_BANNER_SCAN_BYTES)
+    ) {
+      continue;
     }
     paths.push(path);
   }

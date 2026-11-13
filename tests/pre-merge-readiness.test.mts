@@ -20,6 +20,7 @@ import {
 } from '../src/scripts/advisory-wait-policy.mts';
 import { evaluateStaleRequestRecoveryAction } from '../src/scripts/advisory-wait-state.mts';
 import { EFFORT_CANDIDATE_FILE_LIMITS } from '../src/scripts/audit-authored-issue.mts';
+import { isGeneratedMirrorOf } from '../src/scripts/consistency-helpers.mts';
 import {
   GH_API_PAGINATED_MAX_BYTES,
   GhPaginatedResponseLimitError,
@@ -34,6 +35,7 @@ import {
   renderUnclaimedByMarker,
 } from '../src/scripts/marker-helpers.mts';
 import {
+  claimIssueExpectedToClose,
   collectPreMergeReadiness,
   computeDeferFollowUps,
   dispositionNoticeCommandHint,
@@ -21232,4 +21234,201 @@ test('#4717: collector recovery classification and gate use the same GraphQL rev
     );
     assert.equal('staleRequestRecovery' in restOffHeadReport, false);
   }
+});
+
+// #5149: the base-file read, the scope-overrun candidate count, and the
+// closing-set expectation for a split PR.
+
+test('a base contents entry with encoding "none" is absent for a source path and fails closed for the sync manifest', () => {
+  const portWith = (value: unknown) =>
+    ({ getRepositoryContentAtRef: () => value }) as unknown as ProviderPort;
+  const oversized = { type: 'file', encoding: 'none', content: '' };
+  assert.deepEqual(
+    readRepositoryContentAtRef(
+      portWith(oversized),
+      'o',
+      'r',
+      'src/big.mts',
+      'b',
+    ),
+    { outcome: 'not-found' },
+  );
+  assert.throws(
+    () =>
+      readRepositoryContentAtRef(
+        portWith(oversized),
+        'o',
+        'r',
+        'audit/sync-manifest.json',
+        'b',
+      ),
+    /base sync manifest/u,
+  );
+});
+
+test('a base file above 1 MiB counts as a candidate without a size error (#5149)', () => {
+  const oversizedPath = SCOPE_OVERRUN_FILES[0] as string;
+  const bigPlain = Buffer.alloc(1_200_000, 'a').toString('base64');
+  const readPlainBig = (path: string) =>
+    path === oversizedPath
+      ? { outcome: 'ok' as const, value: bigPlain }
+      : { outcome: 'not-found' as const };
+  // The issue lists the M limit of eight. Nine changed paths against it: the
+  // big plain file is counted, so the overrun is reported.
+  const eight = scopeOverrunIssue(SCOPE_OVERRUN_FILES.slice(0, 8));
+  const counted = resolveScopeOverrunReadiness(
+    scopeOverrunInput({ issue: eight, readBaseFile: readPlainBig }),
+  );
+  assert.notEqual(counted, null);
+  // The same file carrying a banner that names another source is a mirror,
+  // so eight candidates remain and the audit passes.
+  const mirrorText = `// idd-generated-from: src/other-source.mts\n${'a'.repeat(1_200_000)}`;
+  const mirrorBig = Buffer.from(mirrorText, 'utf8').toString('base64');
+  const readMirrorBig = (path: string) =>
+    path === oversizedPath
+      ? { outcome: 'ok' as const, value: mirrorBig }
+      : { outcome: 'not-found' as const };
+  assert.equal(
+    resolveScopeOverrunReadiness(
+      scopeOverrunInput({ issue: eight, readBaseFile: readMirrorBig }),
+    ),
+    null,
+  );
+});
+
+test('a generated mirror is excluded from the scope-overrun count, with the same detection claimed-push uses (#5149)', () => {
+  const mirror = 'src/mirror.mts';
+  const mirrorText = '// idd-generated-from: src/source.mts\nexport {};\n';
+  // Eight source files plus one mirror: the mirror is excluded, so the count
+  // stays at the M limit of eight and the audit passes.
+  const changed = [...SCOPE_OVERRUN_FILES.slice(0, 8), mirror];
+  const readBaseFile = (path: string) =>
+    path === mirror
+      ? {
+          outcome: 'ok' as const,
+          value: Buffer.from(mirrorText, 'utf8').toString('base64'),
+        }
+      : { outcome: 'not-found' as const };
+  assert.equal(
+    resolveScopeOverrunReadiness(
+      scopeOverrunInput({
+        issue: scopeOverrunIssue(SCOPE_OVERRUN_FILES.slice(0, 8)),
+        changedFiles: changed,
+        readBaseFile,
+      }),
+    ),
+    null,
+  );
+  assert.equal(isGeneratedMirrorOf(mirrorText, mirror), true);
+  assert.equal(isGeneratedMirrorOf(mirrorText, 'src/source.mts'), false);
+});
+
+test('claimClosingExpectation: a Refs-only claim issue is not expected to close, a closing keyword or no reference keeps it expected (#5149)', () => {
+  assert.equal(claimIssueExpectedToClose('Refs #7\n', 7), false);
+  assert.equal(claimIssueExpectedToClose('Ref #7 and more', 7), false);
+  assert.equal(claimIssueExpectedToClose('Closes #7', 7), true);
+  assert.equal(claimIssueExpectedToClose('Fixes: #7\nRefs #8', 7), true);
+  assert.equal(claimIssueExpectedToClose('', 7), true);
+  assert.equal(claimIssueExpectedToClose('Refs #70', 7), true);
+});
+
+test('collectPreMergeReadiness: a split PR that names the claim issue only with Refs reports the closing set as matching (#5149)', () => {
+  const base = closingSetSmokeFakePort({ closingIssuesReferences: [] });
+  const port = {
+    ...base,
+    getChangeRequestReadinessSnapshot: (number: number) => ({
+      ...base.getChangeRequestReadinessSnapshot(number),
+      body: 'Split out of #6. Refs #7',
+    }),
+  } as ProviderPort;
+  const report = collectPreMergeReadiness(
+    [
+      '--pr',
+      '1',
+      '--claim-issue',
+      '7',
+      '--owner',
+      'o',
+      '--repo',
+      'r',
+      '--now',
+      '2026-08-01T00:00:00Z',
+    ],
+    () => port,
+    () => ({}),
+  );
+  const closingSet = report.closingSet as {
+    status: string;
+    expected: number[];
+  };
+  assert.deepEqual(closingSet.expected, []);
+  assert.equal(closingSet.status, 'match');
+});
+
+test('collectPreMergeReadiness: a PR that closes the claim issue expects it and matches the closing reference (#5149)', () => {
+  const base = closingSetSmokeFakePort({
+    closingIssuesReferences: [{ number: 7 }],
+  });
+  const port = {
+    ...base,
+    getChangeRequestReadinessSnapshot: (number: number) => ({
+      ...base.getChangeRequestReadinessSnapshot(number),
+      body: 'Closes #7',
+    }),
+  } as ProviderPort;
+  const report = collectPreMergeReadiness(
+    [
+      '--pr',
+      '1',
+      '--claim-issue',
+      '7',
+      '--owner',
+      'o',
+      '--repo',
+      'r',
+      '--now',
+      '2026-08-01T00:00:00Z',
+    ],
+    () => port,
+    () => ({}),
+  );
+  const closingSet = report.closingSet as {
+    status: string;
+    expected: number[];
+  };
+  assert.deepEqual(closingSet.expected, [7]);
+  assert.equal(closingSet.status, 'match');
+});
+
+test('collectPreMergeReadiness: a PR with no reference to the claim issue still expects it to close (#5149)', () => {
+  const base = closingSetSmokeFakePort({ closingIssuesReferences: [] });
+  const port = {
+    ...base,
+    getChangeRequestReadinessSnapshot: (number: number) => ({
+      ...base.getChangeRequestReadinessSnapshot(number),
+      body: 'No reference to the claim issue here.',
+    }),
+  } as ProviderPort;
+  const report = collectPreMergeReadiness(
+    [
+      '--pr',
+      '1',
+      '--claim-issue',
+      '7',
+      '--owner',
+      'o',
+      '--repo',
+      'r',
+      '--now',
+      '2026-08-01T00:00:00Z',
+    ],
+    () => port,
+    () => ({}),
+  );
+  const closingSet = report.closingSet as {
+    status: string;
+    expected: number[];
+  };
+  assert.deepEqual(closingSet.expected, [7]);
+  assert.notEqual(closingSet.status, 'match');
 });

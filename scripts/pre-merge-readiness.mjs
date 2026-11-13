@@ -34,7 +34,7 @@ import { auditAuthoredIssue } from './audit-authored-issue.mjs';
 import { resolveAuthoringGuardPolicy } from './authoring-label-guard.mjs';
 import { parseCanonicalIntegerOrNull, parseCliArgs } from './cli-args.mjs';
 import { isAuthorizedForcedHandoffActor } from './collaborator-permission.mjs';
-import { GENERATED_SOURCE_BANNER_PATTERN } from './consistency-helpers.mjs';
+import { isGeneratedMirrorOf } from './consistency-helpers.mjs';
 import {
   extractDeferSourceRefsIssueNumbers,
   hasDeferSourceMarker,
@@ -117,7 +117,10 @@ import { enrichThreadsWithBotEditHistories } from './review-thread-edit-historie
 // closing-set evidence computation itself stays here rather than moving into
 // protocol-helpers.mts's computePreMergeReadinessBlockers, which only reads
 // the already-computed record.
-import { computeClosingSetEvidence } from './supersession-detection.mjs';
+import {
+  CLOSING_KEYWORD_PATTERN,
+  computeClosingSetEvidence,
+} from './supersession-detection.mjs';
 
 // GitHub's GraphQL `DateTime` scalar can't be null, so a `CheckRun` that
 // has not completed yet (and a `StatusContext`, which has no completedAt
@@ -304,11 +307,9 @@ export function resolveScopeOverrunReadiness(input) {
       candidateFiles.push(path);
       continue;
     }
+    // #5149: the same generated-mirror detection claimed-push uses.
     const text = decodeScopeOverrunBase64(base.value, path);
-    const banner = GENERATED_SOURCE_BANNER_PATTERN.exec(
-      Buffer.from(text, 'utf8').subarray(0, 200).toString('utf8'),
-    );
-    if (banner?.[1] === undefined || banner[1] === path) {
+    if (!isGeneratedMirrorOf(text, path)) {
       candidateFiles.push(path);
     }
   }
@@ -445,10 +446,45 @@ export function readScopeOverrunMergeBaseSha(
     );
   }
 }
+/**
+ * #5149: whether the claim issue is expected to close on merge. A split PR
+ * that names the claim issue only with `Refs` (no closing keyword) does not
+ * expect it to close. A closing keyword for the issue, or no reference to it
+ * at all, keeps the issue expected, so a body that forgets the keyword still
+ * reports a mismatch.
+ */
+export function claimIssueExpectedToClose(body, issueNumber) {
+  const closing = new RegExp(
+    `\\b${CLOSING_KEYWORD_PATTERN}\\s+#${issueNumber}\\b`,
+    'iu',
+  );
+  if (closing.test(body)) return true;
+  const refs = new RegExp(
+    `\\b(?:Refs?|References?)\\s+#${issueNumber}\\b`,
+    'iu',
+  );
+  return !refs.test(body);
+}
 export function readRepositoryContentAtRef(port, owner, repo, path, ref) {
   const encodedPath = path.split('/').map(encodeURIComponent).join('/');
   const result = port.getRepositoryContentAtRef(owner, repo, encodedPath, ref);
   if (result === null) return { outcome: 'not-found' };
+  // #5149: the contents API answers `encoding: "none"` with empty content for
+  // a file over its API limit, so the base content is unknown. Treat it as
+  // absent at the base, so the changed path counts as a candidate. The sync
+  // manifest is the one file whose content must be read, so it fails closed.
+  if (
+    typeof result === 'object' &&
+    result !== null &&
+    result.encoding === 'none'
+  ) {
+    if (path === 'audit/sync-manifest.json') {
+      throw new Error(
+        'scope-overrun audit cannot read the base sync manifest: its contents entry is over the API limit',
+      );
+    }
+    return { outcome: 'not-found' };
+  }
   // A directory listing or a submodule/symlink entry has no file content.
   // Treat it as absent at the base, so the changed path becomes a candidate
   // instead of aborting readiness. The sync manifest stays fail-closed.
@@ -1297,7 +1333,11 @@ export function collectPreMergeReadiness(
       ? outOfLoopMembership?.membership === 'out-of-loop-authorized'
         ? extractSameRepoClosingIssueNumbers(closingRefsAtEntry, owner, repo)
         : []
-      : [args.claimIssueNumber]);
+      : // #5149: a split PR that names the claim issue only with `Refs` does
+        // not expect it to close on merge.
+        claimIssueExpectedToClose(snapshot.body ?? '', args.claimIssueNumber)
+        ? [args.claimIssueNumber]
+        : []);
   const closingSetEvidence = computeClosingSetEvidence({
     expected: expectedClosingIssues,
     closingIssuesReferences: snapshot.closingIssuesReferences,

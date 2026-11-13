@@ -7402,3 +7402,71 @@ test('listWorkItemComments: a composite error that wraps a refused read stays a 
   assert.equal(classified.kind, 'transport');
   assert.notEqual(classified.notDispatched, true);
 });
+
+// #5149: the base-file contents read gets an explicit buffer above Node's 1 MiB
+// default, because the JSON envelope around base64 content can exceed it.
+test('getRepositoryContentAtRef reads contents with a buffer of at least 4 MiB and returns the parsed entry', () => {
+  let seenArgs: readonly string[] = [];
+  let seenOptions: { maxBuffer?: number } | undefined;
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghText: (args, options) => {
+        seenArgs = args;
+        seenOptions = options as { maxBuffer?: number } | undefined;
+        return JSON.stringify({
+          type: 'file',
+          encoding: 'base64',
+          content: 'YQ==',
+        });
+      },
+    }),
+  );
+  const entry = port.getRepositoryContentAtRef(
+    'kurone-kito',
+    'idd-skill',
+    'tests/a.test.mts',
+    'a'.repeat(40),
+  );
+  assert.deepEqual(entry, {
+    type: 'file',
+    encoding: 'base64',
+    content: 'YQ==',
+  });
+  assert.ok(
+    (seenOptions?.maxBuffer ?? 0) >= 4 * 1024 * 1024,
+    `contents read buffer is ${seenOptions?.maxBuffer ?? 'unset'}`,
+  );
+  assert.ok(
+    seenArgs.some((arg) =>
+      arg.startsWith(
+        'repos/kurone-kito/idd-skill/contents/tests/a.test.mts?ref=',
+      ),
+    ),
+    `unexpected contents path in ${JSON.stringify(seenArgs)}`,
+  );
+});
+
+test('getRepositoryContentAtRef returns null on a genuine 404 through the buffered read', () => {
+  const port = createGithubProviderAdapter(
+    'kurone-kito',
+    'idd-skill',
+    fakeDeps({
+      ghText: () => {
+        const error = new Error('HTTP 404') as Error & { stderr?: string };
+        error.stderr = 'gh: Not Found (HTTP 404)';
+        throw error;
+      },
+    }),
+  );
+  assert.equal(
+    port.getRepositoryContentAtRef(
+      'kurone-kito',
+      'idd-skill',
+      'missing.md',
+      'a'.repeat(40),
+    ),
+    null,
+  );
+});
