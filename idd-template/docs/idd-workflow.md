@@ -1214,9 +1214,9 @@ costs one extra decision toward the caps.
   on merge as usual. A needs-decision source follows the
   kurone-kito/idd-skill#4528 lifecycle and keeps its bundle unchanged, and
   its cap counts the pickup choices too. A choice whose options all leave
-  the issue's scope keeps today's hold. A diff that fails the
-  effort-candidate-file limit, with no advisory disposition from the helper,
-  takes the B3 scope-overrun route. When the
+  the issue's scope keeps today's hold. A diff that fails
+  `effort-candidate-file-limit`, with no advisory disposition from the
+  helper, takes the B3 scope-overrun route. When the
   class is not enabled, the trusted read fails, a cap is reached or
   unreadable, or the procedure keeps today's behavior, the stop stays as it
   is today. These routes stay unchanged: review findings handled by
