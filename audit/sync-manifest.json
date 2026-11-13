@@ -725,6 +725,7 @@
         "Stage 2 — Set-level release rollback safety",
         "Review-fix escalation examples",
         "Whole-class sweep: why the E13 reply names the pattern and the count",
+        "Inventory branch-only commits before scope-overrun cleanup (issue `#4683`)",
         "A body finding that names a file or line needs its own disposition",
         "Reconciling the deferred follow-up with its pull request (kurone-kito/idd-skill#3624)",
         "E6 bundles one follow-up per pass (kurone-kito/idd-skill#3866)",

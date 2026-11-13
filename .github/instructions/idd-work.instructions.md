@@ -479,6 +479,21 @@ follow the same
 [scope assessment routes](../../docs/idd-helper-scripts.md#b3-scope-assessment-outcomes)
 and stop without pushing.
 
+**Commit inventory** (helper runtime only; before any LWR, lost-claim cleanup,
+or source-issue closure of a stopped scope; under the clone-scoped
+[lock](../../docs/idd-helper-scripts.md#clone-scoped-lock)): fetch `origin`,
+name the source branch (never the primary HEAD), and list its branch-only
+commits with `git rev-list origin/{development-branch}..<source-branch>`. Map
+each commit, recording its SHA and changed paths, to a replacement child by
+issue number (path overlap with its Candidate files; an unclear overlap is a
+blocker), to already in base, or to not reusable. Post the inventory on the
+source issue. Before LWR `--apply`, the live list must equal the posted one;
+after it, each SHA must be an ancestor of `refs/idd-lwr/<branch>` or
+`origin/<branch>`, else stop and report. Transfers follow the [inventory rationale](../../docs/idd-design-rationale.md#inventory-branch-only-commits-before-scope-overrun-cleanup-issue-4683);
+with no safe transfer path, preserve the source worktree and report the blocker.
+A not-reusable mapping is a record only: discarding needs explicit owner or user
+authorization and the LWR `--apply` gate, never `--force`.
+
 **Standing split** is the helper-runtime exception to the worker-side
 authoring and scope-overrun rules, for a genuine-need split only (never a
 count alone). Keep the parent claim and label held; skip

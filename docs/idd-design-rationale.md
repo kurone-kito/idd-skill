@@ -1496,6 +1496,34 @@ recorded against a HEAD SHA that no longer matches the PR's current
 HEAD — for example, after a sync-path merge advances HEAD — is stale
 and does not satisfy the gate for the new HEAD.
 
+### Inventory branch-only commits before scope-overrun cleanup (issue `#4683`)
+
+Issue `#4683` reports that on 2026-10-25, in issue `#4531`, a clean worktree
+still held two unpublished commits whose changes matched the held replacement
+split. The `#4531` thread does not record that observation, so the date and
+count are as reported in `#4683`, unverified in `#4531`. A clean worktree is not
+proof that its branch is disposable: treating it as disposable could lose
+reusable implementation or make the replacement child repeat it.
+
+The gate has two halves because LWR creates `refs/idd-lwr/<branch>` only on
+`--apply`. Before `--apply`, the live `git rev-list` set must equal the posted
+inventory. After it, each unpushed SHA must be an ancestor of that ref, and each
+pushed SHA of `origin/<branch>`, checked with `git merge-base --is-ancestor`.
+Stop and report on a mismatch or on any exit code other than 0 or 1.
+
+Finalize never transfers, because the replacement children are not claimed yet.
+A child picks from its own worktree after its fresh claim, one SHA per `git
+cherry-pick -x <sha>`. It records `HEAD` before the pick and aborts only when
+`CHERRY_PICK_HEAD` exists. It confirms each pick by the `(cherry picked from
+commit <sha>)` trailer in `git log <recorded-HEAD>..HEAD`, not by patch-id,
+because a conflict-resolved pick differs from its source. It retries only the
+unconfirmed SHAs.
+
+A failed transfer keeps both worktrees, both branches, and the source issue
+open, and reports the SHA list with the reachability check. A not-reusable
+mapping is a record only: discarding it needs explicit owner or user
+authorization and the LWR `--apply` gate, never `--force`.
+
 ### An advisory bot's embedded-but-unthreaded findings: mirror the detection scope, not the gate scope
 
 `#2197`'s live 30-day sweep (337 merged PRs, observed 2026-09-03) found
