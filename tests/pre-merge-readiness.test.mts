@@ -21522,6 +21522,29 @@ test('claimClosingExpectation: masked code cannot bridge a keyword and its refer
     claimIssueExpectedToClose('Refs #7\n\nCloses #7', 7, 'o', 'r'),
     true,
   );
+  // A line with fewer quote markers ends a nested fence, so the paragraph it
+  // leaves is in the outer quote and the line after it is its lazy
+  // continuation (CodeRabbit, PR #5203).
+  assert.equal(
+    claimIssueExpectedToClose(
+      'Refs #7\n\n> > ```\n> quoted paragraph\nCloses #7',
+      7,
+      'o',
+      'r',
+    ),
+    false,
+  );
+  // A fence still open at the inner depth keeps its code, so an unmarked
+  // line after it is top-level prose.
+  assert.equal(
+    claimIssueExpectedToClose(
+      'Refs #7\n\n> > ```\n> > example\nCloses #7',
+      7,
+      'o',
+      'r',
+    ),
+    true,
+  );
 });
 
 test('collectPreMergeReadiness: a split PR that names the claim issue only with Refs reports the closing set as matching (#5149)', () => {

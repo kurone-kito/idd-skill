@@ -523,8 +523,10 @@ export function findIssueRelatedOpenPrs({ port, issueNumber }) {
 }
 export function stripBlockQuotesAndLazyContinuations(body) {
   let quotedParagraphOpen = false;
-  // Marker of a fenced code block open inside the current quote, or null.
+  // Marker of a fenced code block open inside the current quote, or null, and
+  // the quote depth (count of `>` markers) that the fence sits at.
   let quotedFenceMarker = null;
+  let quotedFenceDepth = 0;
   let paragraphOpen = false;
   // Content column of the list item that the previous line opened with
   // paragraph text, or `null`. A line inside that item continues the
@@ -614,9 +616,11 @@ export function stripBlockQuotesAndLazyContinuations(body) {
       if (scan.kind === 'quote') {
         followsListCode = false;
         // A fenced code block inside the quote is code, not a paragraph, so
-        // its lines never open a lazy continuation (CommonMark). CodeRabbit,
-        // PR #5203.
-        if (quotedFenceMarker !== null) {
+        // its lines never open a lazy continuation (CommonMark). A line with
+        // fewer `>` markers leaves the fence's quote, which ends the fence
+        // (CodeRabbit, PR #5203).
+        const depth = quoteDepthOf(line);
+        if (quotedFenceMarker !== null && depth >= quotedFenceDepth) {
           if (closesQuotedFence(scan.content, quotedFenceMarker)) {
             quotedFenceMarker = null;
           }
@@ -624,6 +628,7 @@ export function stripBlockQuotesAndLazyContinuations(body) {
         } else {
           quotedParagraphOpen = startsBlockQuoteParagraph(scan.content);
           quotedFenceMarker = openingFenceMarker(scan.content);
+          quotedFenceDepth = depth;
         }
         paragraphOpen = false;
         return blockQuoteScanBarrier;
@@ -656,6 +661,11 @@ export function stripBlockQuotesAndLazyContinuations(body) {
       return isParagraphText ? defuseOrderedMarker(line) : line;
     })
     .join('\n');
+}
+/** The number of `>` quote markers at the start of `line`. */
+function quoteDepthOf(line) {
+  const prefix = /^(?:[ \t]*>)+/u.exec(line)?.[0] ?? '';
+  return prefix.split('>').length - 1;
 }
 /** The backtick or tilde run that opens a fenced code block, or null. */
 function openingFenceMarker(content) {
