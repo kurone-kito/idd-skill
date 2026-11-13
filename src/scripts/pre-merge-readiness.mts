@@ -37,7 +37,7 @@ import { resolveAuthoringGuardPolicy } from './authoring-label-guard.mts';
 import { parseCanonicalIntegerOrNull, parseCliArgs } from './cli-args.mts';
 import type { CollaboratorPermissionCache } from './collaborator-permission.mts';
 import { isAuthorizedForcedHandoffActor } from './collaborator-permission.mts';
-import { GENERATED_SOURCE_BANNER_PATTERN } from './consistency-helpers.mts';
+import { isGeneratedMirrorOf } from './consistency-helpers.mts';
 import {
   extractDeferSourceRefsIssueNumbers,
   hasDeferSourceMarker,
@@ -65,12 +65,14 @@ import {
 } from './helper-cli-runner.mts';
 import { type ActivationResult, computeActivation } from './idd-activation.mts';
 import { type IddConfig, loadTrustedIddConfig } from './idd-config.mts';
+import { maskMarkdownForScan } from './markdown-code.mts';
 import {
   normalizeMarkerPrefix,
   parseForcedHandoffComment,
   resolveScopeOverrunEvidence,
   type ScopeOverrunEvidenceComment,
 } from './marker-helpers.mts';
+import { escapeRegex } from './marker-regex.mts';
 import {
   inspectDevelopmentBranch,
   normalizePolicyConfig,
@@ -125,6 +127,7 @@ import type {
   ProviderPort,
   ProviderReviewThreadWithComments,
 } from './provider-port.mts';
+import { stripBlockQuotesAndLazyContinuations } from './resume-route-selection.mts';
 import {
   fetchHeadObservedAt,
   fetchReviewsAndHeadCommit,
@@ -138,7 +141,10 @@ import { enrichThreadsWithBotEditHistories } from './review-thread-edit-historie
 // closing-set evidence computation itself stays here rather than moving into
 // protocol-helpers.mts's computePreMergeReadinessBlockers, which only reads
 // the already-computed record.
-import { computeClosingSetEvidence } from './supersession-detection.mts';
+import {
+  CLOSING_KEYWORD_PATTERN,
+  computeClosingSetEvidence,
+} from './supersession-detection.mts';
 
 /** Author reference embedded in GitHub REST/GraphQL payloads. */
 interface GhAuthorPayload {
@@ -590,11 +596,9 @@ export function resolveScopeOverrunReadiness(
       candidateFiles.push(path);
       continue;
     }
+    // #5149: the same generated-mirror detection claimed-push uses.
     const text = decodeScopeOverrunBase64(base.value, path);
-    const banner = GENERATED_SOURCE_BANNER_PATTERN.exec(
-      Buffer.from(text, 'utf8').subarray(0, 200).toString('utf8'),
-    );
-    if (banner?.[1] === undefined || banner[1] === path) {
+    if (!isGeneratedMirrorOf(text, path)) {
       candidateFiles.push(path);
     }
   }
@@ -737,6 +741,67 @@ export function readScopeOverrunMergeBaseSha(
   }
 }
 
+/**
+ * #5149: whether the claim issue is expected to close on merge. A split PR
+ * that names the claim issue only with `Refs` (no closing keyword) does not
+ * expect it to close. A closing keyword for the issue, or no reference to it
+ * at all, keeps the issue expected, so a body that forgets the keyword still
+ * reports a mismatch.
+ *
+ * Only prose counts. Block quotes, including their lazy continuation lines,
+ * are dropped by the same CommonMark-aware stripper D3.5 uses in
+ * `resume-route-selection.mts`, and code (inline, fenced, indented) is masked
+ * after that, so the scan sees the same prose GitHub's closing-keyword
+ * detection sees (`idd-pr-submit.instructions.md`, Anti-patterns; Codex and
+ * CodeRabbit reviews, PR #5203). A same-repo qualified reference
+ * (`owner/repo#N`) counts like `#N`; another repository's reference does
+ * not.
+ */
+export function claimIssueExpectedToClose(
+  body: string,
+  issueNumber: number,
+  owner: string,
+  repo: string,
+): boolean {
+  const source = stripBlockQuotesAndLazyContinuations(body);
+  const masked = maskMarkdownForScan(source);
+  const qualifier =
+    owner && repo ? `(?:${escapeRegex(owner)}/${escapeRegex(repo)})?` : '';
+  const target = `${qualifier}#${issueNumber}`;
+  const closing = new RegExp(
+    `\\b(${CLOSING_KEYWORD_PATTERN})(\\s+)(${target})\\b`,
+    'giu',
+  );
+  if (hasSpacedMatch(masked, source, closing)) return true;
+  const refs = new RegExp(
+    `\\b((?:Refs?|References?))(\\s+)(${target})\\b`,
+    'giu',
+  );
+  return !hasSpacedMatch(masked, source, refs);
+}
+
+/**
+ * Whether a match of `pattern` on the masked text has whitespace-only spacing
+ * between its keyword and its reference in the un-masked source. Masking turns
+ * code into spaces, so without this check a code span or fence between the
+ * two could pass as plain whitespace (Codex review, PR #5203). This is the
+ * rule `hasD35ClosingReference` in `resume-route-selection.mts` applies.
+ */
+function hasSpacedMatch(
+  masked: string,
+  source: string,
+  pattern: RegExp,
+): boolean {
+  for (const match of masked.matchAll(pattern)) {
+    const keyword = match[1];
+    const spacing = match[2];
+    if (!keyword || !spacing) continue;
+    const start = (match.index ?? 0) + keyword.length;
+    if (/^\s+$/u.test(source.slice(start, start + spacing.length))) return true;
+  }
+  return false;
+}
+
 export function readRepositoryContentAtRef(
   port: ProviderPort,
   owner: string,
@@ -747,6 +812,22 @@ export function readRepositoryContentAtRef(
   const encodedPath = path.split('/').map(encodeURIComponent).join('/');
   const result = port.getRepositoryContentAtRef(owner, repo, encodedPath, ref);
   if (result === null) return { outcome: 'not-found' };
+  // #5149: the contents API answers `encoding: "none"` with empty content for
+  // a file over its API limit, so the base content is unknown. Treat it as
+  // absent at the base, so the changed path counts as a candidate. The sync
+  // manifest is the one file whose content must be read, so it fails closed.
+  if (
+    typeof result === 'object' &&
+    result !== null &&
+    (result as { encoding?: unknown }).encoding === 'none'
+  ) {
+    if (path === 'audit/sync-manifest.json') {
+      throw new Error(
+        'scope-overrun audit cannot read the base sync manifest: its contents entry is over the API limit',
+      );
+    }
+    return { outcome: 'not-found' };
+  }
   // A directory listing or a submodule/symlink entry has no file content.
   // Treat it as absent at the base, so the changed path becomes a candidate
   // instead of aborting readiness. The sync manifest stays fail-closed.
@@ -1649,7 +1730,16 @@ export function collectPreMergeReadiness(
       ? outOfLoopMembership?.membership === 'out-of-loop-authorized'
         ? extractSameRepoClosingIssueNumbers(closingRefsAtEntry, owner, repo)
         : []
-      : [args.claimIssueNumber as number]);
+      : // #5149: a split PR that names the claim issue only with `Refs` does
+        // not expect it to close on merge.
+        claimIssueExpectedToClose(
+            snapshot.body ?? '',
+            args.claimIssueNumber as number,
+            owner,
+            repo,
+          )
+        ? [args.claimIssueNumber as number]
+        : []);
   const closingSetEvidence = computeClosingSetEvidence({
     expected: expectedClosingIssues,
     closingIssuesReferences: snapshot.closingIssuesReferences,

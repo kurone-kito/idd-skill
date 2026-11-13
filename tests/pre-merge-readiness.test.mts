@@ -20,6 +20,7 @@ import {
 } from '../src/scripts/advisory-wait-policy.mts';
 import { evaluateStaleRequestRecoveryAction } from '../src/scripts/advisory-wait-state.mts';
 import { EFFORT_CANDIDATE_FILE_LIMITS } from '../src/scripts/audit-authored-issue.mts';
+import { isGeneratedMirrorOf } from '../src/scripts/consistency-helpers.mts';
 import {
   GH_API_PAGINATED_MAX_BYTES,
   GhPaginatedResponseLimitError,
@@ -34,6 +35,7 @@ import {
   renderUnclaimedByMarker,
 } from '../src/scripts/marker-helpers.mts';
 import {
+  claimIssueExpectedToClose,
   collectPreMergeReadiness,
   computeDeferFollowUps,
   dispositionNoticeCommandHint,
@@ -21299,4 +21301,508 @@ test('#4717: collector recovery classification and gate use the same GraphQL rev
     );
     assert.equal('staleRequestRecovery' in restOffHeadReport, false);
   }
+});
+
+// #5149: the base-file read, the scope-overrun candidate count, and the
+// closing-set expectation for a split PR.
+
+test('a base contents entry with encoding "none" is absent for a source path and fails closed for the sync manifest', () => {
+  const portWith = (value: unknown) =>
+    ({ getRepositoryContentAtRef: () => value }) as unknown as ProviderPort;
+  const oversized = { type: 'file', encoding: 'none', content: '' };
+  assert.deepEqual(
+    readRepositoryContentAtRef(
+      portWith(oversized),
+      'o',
+      'r',
+      'src/big.mts',
+      'b',
+    ),
+    { outcome: 'not-found' },
+  );
+  assert.throws(
+    () =>
+      readRepositoryContentAtRef(
+        portWith(oversized),
+        'o',
+        'r',
+        'audit/sync-manifest.json',
+        'b',
+      ),
+    /base sync manifest/u,
+  );
+});
+
+test('a base file above 1 MiB counts as a candidate without a size error (#5149)', () => {
+  const oversizedPath = SCOPE_OVERRUN_FILES[0] as string;
+  const bigPlain = Buffer.alloc(1_200_000, 'a').toString('base64');
+  const readPlainBig = (path: string) =>
+    path === oversizedPath
+      ? { outcome: 'ok' as const, value: bigPlain }
+      : { outcome: 'not-found' as const };
+  // The issue lists the M limit of eight. Nine changed paths against it: the
+  // big plain file is counted, so the overrun is reported.
+  const eight = scopeOverrunIssue(SCOPE_OVERRUN_FILES.slice(0, 8));
+  const counted = resolveScopeOverrunReadiness(
+    scopeOverrunInput({ issue: eight, readBaseFile: readPlainBig }),
+  );
+  assert.notEqual(counted, null);
+  // The same file carrying a banner that names another source is a mirror,
+  // so eight candidates remain and the audit passes.
+  const mirrorText = `// idd-generated-from: src/other-source.mts\n${'a'.repeat(1_200_000)}`;
+  const mirrorBig = Buffer.from(mirrorText, 'utf8').toString('base64');
+  const readMirrorBig = (path: string) =>
+    path === oversizedPath
+      ? { outcome: 'ok' as const, value: mirrorBig }
+      : { outcome: 'not-found' as const };
+  assert.equal(
+    resolveScopeOverrunReadiness(
+      scopeOverrunInput({ issue: eight, readBaseFile: readMirrorBig }),
+    ),
+    null,
+  );
+});
+
+test('a generated mirror is excluded from the scope-overrun count, with the same detection claimed-push uses (#5149)', () => {
+  const mirror = 'src/mirror.mts';
+  const mirrorText = '// idd-generated-from: src/source.mts\nexport {};\n';
+  // Eight source files plus one mirror: the mirror is excluded, so the count
+  // stays at the M limit of eight and the audit passes.
+  const changed = [...SCOPE_OVERRUN_FILES.slice(0, 8), mirror];
+  const readBaseFile = (path: string) =>
+    path === mirror
+      ? {
+          outcome: 'ok' as const,
+          value: Buffer.from(mirrorText, 'utf8').toString('base64'),
+        }
+      : { outcome: 'not-found' as const };
+  assert.equal(
+    resolveScopeOverrunReadiness(
+      scopeOverrunInput({
+        issue: scopeOverrunIssue(SCOPE_OVERRUN_FILES.slice(0, 8)),
+        changedFiles: changed,
+        readBaseFile,
+      }),
+    ),
+    null,
+  );
+  assert.equal(isGeneratedMirrorOf(mirrorText, mirror), true);
+  assert.equal(isGeneratedMirrorOf(mirrorText, 'src/source.mts'), false);
+});
+
+test('claimClosingExpectation: a Refs-only claim issue is not expected to close, a closing keyword or no reference keeps it expected (#5149)', () => {
+  assert.equal(claimIssueExpectedToClose('Refs #7\n', 7, 'o', 'r'), false);
+  assert.equal(
+    claimIssueExpectedToClose('Ref #7 and more', 7, 'o', 'r'),
+    false,
+  );
+  assert.equal(claimIssueExpectedToClose('Closes #7', 7, 'o', 'r'), true);
+  assert.equal(
+    claimIssueExpectedToClose('Fixes: #7\nRefs #8', 7, 'o', 'r'),
+    true,
+  );
+  assert.equal(claimIssueExpectedToClose('', 7, 'o', 'r'), true);
+  assert.equal(claimIssueExpectedToClose('Refs #70', 7, 'o', 'r'), true);
+});
+
+test('claimClosingExpectation: code and block quotes are not intent, so a quoted Closes keeps a Refs-only split (#5149, Codex PR #5203)', () => {
+  assert.equal(
+    claimIssueExpectedToClose(
+      'Refs #7\n\nDo not use `Closes #7` here',
+      7,
+      'o',
+      'r',
+    ),
+    false,
+  );
+  assert.equal(
+    claimIssueExpectedToClose('Refs #7\n\n```\nCloses #7\n```\n', 7, 'o', 'r'),
+    false,
+  );
+  assert.equal(
+    claimIssueExpectedToClose('Refs #7\n\n> Closes #7', 7, 'o', 'r'),
+    false,
+  );
+  // A Refs that is only quoted or in code is no reference at all, so the
+  // issue stays expected.
+  assert.equal(claimIssueExpectedToClose('> Refs #7', 7, 'o', 'r'), true);
+  assert.equal(claimIssueExpectedToClose('`Refs #7`', 7, 'o', 'r'), true);
+  // A real closing keyword outside code still counts.
+  assert.equal(
+    claimIssueExpectedToClose(
+      'Refs #7\n\n`Closes #7`\n\nCloses #7',
+      7,
+      'o',
+      'r',
+    ),
+    true,
+  );
+  // CRLF bodies are normalized before the scan.
+  assert.equal(
+    claimIssueExpectedToClose('Refs #7\r\n\r\nCloses #7\r\n', 7, 'o', 'r'),
+    true,
+  );
+  assert.equal(
+    claimIssueExpectedToClose('Refs #7\r\n> Closes #7\r\n', 7, 'o', 'r'),
+    false,
+  );
+});
+
+test('claimClosingExpectation: a same-repo qualified reference counts, another repository never does (#5149)', () => {
+  assert.equal(claimIssueExpectedToClose('Refs o/r#7', 7, 'o', 'r'), false);
+  assert.equal(claimIssueExpectedToClose('Refs O/R#7', 7, 'o', 'r'), false);
+  assert.equal(claimIssueExpectedToClose('Closes o/r#7', 7, 'o', 'r'), true);
+  assert.equal(claimIssueExpectedToClose('Refs other/r#7', 7, 'o', 'r'), true);
+  // Owner and repo names with regex-significant characters are escaped.
+  assert.equal(
+    claimIssueExpectedToClose('Refs a.b-c/d_e#7', 7, 'a.b-c', 'd_e'),
+    false,
+  );
+  assert.equal(
+    claimIssueExpectedToClose('Refs axb-c/d_e#7', 7, 'a.b-c', 'd_e'),
+    true,
+  );
+  // An empty owner or repo drops the qualifier; only the bare form counts.
+  assert.equal(claimIssueExpectedToClose('Refs #7', 7, '', ''), false);
+  assert.equal(claimIssueExpectedToClose('Refs o/r#7', 7, '', ''), true);
+  // A closing keyword for another repository does not close this issue.
+  assert.equal(
+    claimIssueExpectedToClose('Refs #7\nCloses other/r#7', 7, 'o', 'r'),
+    false,
+  );
+});
+
+test('claimClosingExpectation: an unmarked line after a quoted paragraph stays in the quote until a blank line or a block starter (#5149, CodeRabbit PR #5203)', () => {
+  // CommonMark keeps this lazy continuation inside the quote.
+  assert.equal(
+    claimIssueExpectedToClose(
+      'Refs #7\n\n> Previous proposal:\nCloses #7',
+      7,
+      'o',
+      'r',
+    ),
+    false,
+  );
+  // A blank line ends the quote, so the closing keyword is prose again.
+  assert.equal(
+    claimIssueExpectedToClose(
+      'Refs #7\n\n> Previous proposal:\n\nCloses #7',
+      7,
+      'o',
+      'r',
+    ),
+    true,
+  );
+  // A heading ends the lazy paragraph, so a closing heading is prose.
+  assert.equal(
+    claimIssueExpectedToClose('Refs #7\n\n> quoted\n# Closes #7', 7, 'o', 'r'),
+    true,
+  );
+  // A quoted heading is not a paragraph, so the next line is prose.
+  assert.equal(
+    claimIssueExpectedToClose('Refs #7\n\n> # Title\nCloses #7', 7, 'o', 'r'),
+    true,
+  );
+  // A lazy Refs inside a quote is no reference, so the issue stays expected.
+  assert.equal(
+    claimIssueExpectedToClose('> quoted\nRefs #7', 7, 'o', 'r'),
+    true,
+  );
+});
+
+test('claimClosingExpectation: a list item ends a lazy quote continuation, and a quoted inline code paragraph still continues it (#5149, Codex and CodeRabbit PR #5203)', () => {
+  // A top-level list interrupts the quote, so its reference and closing
+  // keyword are prose.
+  assert.equal(
+    claimIssueExpectedToClose('> Background\n- Refs #7', 7, 'o', 'r'),
+    false,
+  );
+  assert.equal(
+    claimIssueExpectedToClose(
+      'Refs #7\n\n> Background\n- Closes #7',
+      7,
+      'o',
+      'r',
+    ),
+    true,
+  );
+  assert.equal(
+    claimIssueExpectedToClose('Refs #7\n\n> quoted\n1. Closes #7', 7, 'o', 'r'),
+    true,
+  );
+  // An ordered item other than 1 cannot interrupt a paragraph, so it stays
+  // in the quote.
+  assert.equal(
+    claimIssueExpectedToClose('Refs #7\n\n> quoted\n2. Closes #7', 7, 'o', 'r'),
+    false,
+  );
+  // A quoted paragraph that is only inline code still opens a lazy
+  // continuation under CommonMark.
+  assert.equal(
+    claimIssueExpectedToClose('Refs #7\n\n> `example`\nCloses #7', 7, 'o', 'r'),
+    false,
+  );
+});
+
+test('claimClosingExpectation: masked code cannot bridge a keyword and its reference, and a quoted fence stays code (#5149, Codex and CodeRabbit PR #5203)', () => {
+  // A code span or a fence between the keyword and the reference is not
+  // whitespace, even though masking turns it into spaces.
+  assert.equal(
+    claimIssueExpectedToClose('Refs #7\n\nCloses `example`\n#7', 7, 'o', 'r'),
+    false,
+  );
+  assert.equal(
+    claimIssueExpectedToClose(
+      'Refs #7\n\nCloses\n```\nx\n```\n#7',
+      7,
+      'o',
+      'r',
+    ),
+    false,
+  );
+  assert.equal(
+    claimIssueExpectedToClose('Refs\n```\nx\n```\n#7', 7, 'o', 'r'),
+    true,
+  );
+  // An open fence inside a quote is code, so an unmarked line after it is
+  // top-level prose, not a lazy continuation.
+  assert.equal(
+    claimIssueExpectedToClose(
+      'Refs #7\n\n> ```\n> example\nCloses #7',
+      7,
+      'o',
+      'r',
+    ),
+    true,
+  );
+  assert.equal(
+    claimIssueExpectedToClose(
+      'Refs #7\n\n> ```\n> example\n> ```\nCloses #7',
+      7,
+      'o',
+      'r',
+    ),
+    true,
+  );
+  // Real whitespace between the keyword and the reference still counts.
+  assert.equal(
+    claimIssueExpectedToClose('Refs #7\n\nCloses #7', 7, 'o', 'r'),
+    true,
+  );
+  // A line with fewer quote markers ends a nested fence, so the paragraph it
+  // leaves is in the outer quote and the line after it is its lazy
+  // continuation (CodeRabbit, PR #5203).
+  assert.equal(
+    claimIssueExpectedToClose(
+      'Refs #7\n\n> > ```\n> quoted paragraph\nCloses #7',
+      7,
+      'o',
+      'r',
+    ),
+    false,
+  );
+  // A fence still open at the inner depth keeps its code, so an unmarked
+  // line after it is top-level prose.
+  assert.equal(
+    claimIssueExpectedToClose(
+      'Refs #7\n\n> > ```\n> > example\nCloses #7',
+      7,
+      'o',
+      'r',
+    ),
+    true,
+  );
+  // A fence inside a list item in a quote ends with the item, so the
+  // unindented quoted paragraph after it is the lazy continuation's host
+  // (Codex, PR #5203).
+  assert.equal(
+    claimIssueExpectedToClose(
+      'Refs #7\n\n> - ```\n> paragraph\nCloses #7',
+      7,
+      'o',
+      'r',
+    ),
+    false,
+  );
+  // A deeper `>` run inside an open quoted fence is literal code, not its
+  // closer, so the fence stays open and the unmarked line after it is prose
+  // (Codex, PR #5203).
+  assert.equal(
+    claimIssueExpectedToClose(
+      'Refs #7\n\n> ```\n> > ```\n> example\nCloses #7',
+      7,
+      'o',
+      'r',
+    ),
+    true,
+  );
+});
+
+test('collectPreMergeReadiness: a split PR that names the claim issue only with Refs reports the closing set as matching (#5149)', () => {
+  const base = closingSetSmokeFakePort({ closingIssuesReferences: [] });
+  const port = {
+    ...base,
+    getChangeRequestReadinessSnapshot: (number: number) => ({
+      ...base.getChangeRequestReadinessSnapshot(number),
+      body: 'Split out of #6. Refs #7',
+    }),
+  } as ProviderPort;
+  const report = collectPreMergeReadiness(
+    [
+      '--pr',
+      '1',
+      '--claim-issue',
+      '7',
+      '--owner',
+      'o',
+      '--repo',
+      'r',
+      '--now',
+      '2026-08-01T00:00:00Z',
+    ],
+    () => port,
+    () => ({}),
+  );
+  const closingSet = report.closingSet as {
+    status: string;
+    expected: number[];
+  };
+  assert.deepEqual(closingSet.expected, []);
+  assert.equal(closingSet.status, 'match');
+});
+
+test('collectPreMergeReadiness: a Refs-only split whose Closes is only quoted in code expects no closing (#5149, Codex PR #5203)', () => {
+  const base = closingSetSmokeFakePort({ closingIssuesReferences: [] });
+  const port = {
+    ...base,
+    getChangeRequestReadinessSnapshot: (number: number) => ({
+      ...base.getChangeRequestReadinessSnapshot(number),
+      body: 'Split out of #6. Refs #7\n\nDo not use `Closes #7` here',
+    }),
+  } as ProviderPort;
+  const report = collectPreMergeReadiness(
+    [
+      '--pr',
+      '1',
+      '--claim-issue',
+      '7',
+      '--owner',
+      'o',
+      '--repo',
+      'r',
+      '--now',
+      '2026-08-01T00:00:00Z',
+    ],
+    () => port,
+    () => ({}),
+  );
+  const closingSet = report.closingSet as {
+    status: string;
+    expected: number[];
+  };
+  assert.deepEqual(closingSet.expected, []);
+  assert.equal(closingSet.status, 'match');
+});
+
+test('collectPreMergeReadiness: a Refs-only split whose closing set still reports the claim issue does not match (#5149)', () => {
+  const base = closingSetSmokeFakePort({
+    closingIssuesReferences: [{ number: 7 }],
+  });
+  const port = {
+    ...base,
+    getChangeRequestReadinessSnapshot: (number: number) => ({
+      ...base.getChangeRequestReadinessSnapshot(number),
+      body: 'Split out of #6. Refs #7',
+    }),
+  } as ProviderPort;
+  const report = collectPreMergeReadiness(
+    [
+      '--pr',
+      '1',
+      '--claim-issue',
+      '7',
+      '--owner',
+      'o',
+      '--repo',
+      'r',
+      '--now',
+      '2026-08-01T00:00:00Z',
+    ],
+    () => port,
+    () => ({}),
+  );
+  const closingSet = report.closingSet as {
+    status: string;
+    expected: number[];
+  };
+  assert.deepEqual(closingSet.expected, []);
+  assert.equal(closingSet.status, 'mismatch');
+});
+
+test('collectPreMergeReadiness: a PR that closes the claim issue expects it and matches the closing reference (#5149)', () => {
+  const base = closingSetSmokeFakePort({
+    closingIssuesReferences: [{ number: 7 }],
+  });
+  const port = {
+    ...base,
+    getChangeRequestReadinessSnapshot: (number: number) => ({
+      ...base.getChangeRequestReadinessSnapshot(number),
+      body: 'Closes #7',
+    }),
+  } as ProviderPort;
+  const report = collectPreMergeReadiness(
+    [
+      '--pr',
+      '1',
+      '--claim-issue',
+      '7',
+      '--owner',
+      'o',
+      '--repo',
+      'r',
+      '--now',
+      '2026-08-01T00:00:00Z',
+    ],
+    () => port,
+    () => ({}),
+  );
+  const closingSet = report.closingSet as {
+    status: string;
+    expected: number[];
+  };
+  assert.deepEqual(closingSet.expected, [7]);
+  assert.equal(closingSet.status, 'match');
+});
+
+test('collectPreMergeReadiness: a PR with no reference to the claim issue still expects it to close (#5149)', () => {
+  const base = closingSetSmokeFakePort({ closingIssuesReferences: [] });
+  const port = {
+    ...base,
+    getChangeRequestReadinessSnapshot: (number: number) => ({
+      ...base.getChangeRequestReadinessSnapshot(number),
+      body: 'No reference to the claim issue here.',
+    }),
+  } as ProviderPort;
+  const report = collectPreMergeReadiness(
+    [
+      '--pr',
+      '1',
+      '--claim-issue',
+      '7',
+      '--owner',
+      'o',
+      '--repo',
+      'r',
+      '--now',
+      '2026-08-01T00:00:00Z',
+    ],
+    () => port,
+    () => ({}),
+  );
+  const closingSet = report.closingSet as {
+    status: string;
+    expected: number[];
+  };
+  assert.deepEqual(closingSet.expected, [7]);
+  assert.notEqual(closingSet.status, 'match');
 });

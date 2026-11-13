@@ -2957,6 +2957,12 @@ function wrapTraversalGhFailure(error: unknown, args: string[]): string {
 // unbounded accumulation (Copilot review, #1463).
 const GH_ASYNC_MAX_BUFFER = 10 * 1024 * 1024;
 
+// #5149: the base-file read in the scope-overrun audit. The contents API
+// returns base64 inside a JSON envelope, so a file near the API limit (about
+// 729 KB at the base for tests/pre-merge-readiness.test.mts) can exceed
+// Node's 1 MiB default. 4 MiB covers that envelope with headroom.
+const CONTENTS_READ_MAX_BUFFER = 4 * 1024 * 1024;
+
 /**
  * Transport primitives {@link createGithubProviderAdapter} calls, injectable
  * so a unit test can assert the exact `gh` command/API argument shape each
@@ -4059,9 +4065,20 @@ export function createGithubProviderAdapter(
       ref: string,
     ): unknown | null {
       try {
-        return deps.ghApiJson(
-          `repos/${contentOwner}/${contentRepo}/contents/${path}?ref=${encodeURIComponent(ref)}`,
+        // The contents response wraps base64 content in a JSON envelope, so a
+        // file near the API limit can exceed Node's 1 MiB default buffer and
+        // fail with ENOBUFS. Only this read gets the larger buffer. The loop
+        // stdio options matter too: without them, `gh`'s stderr passes to
+        // this process, so every expected 404 for a missing file would print
+        // `gh: Not Found (HTTP 404)` (reproduced on PR #5203).
+        const raw = deps.ghText(
+          [
+            'api',
+            `repos/${contentOwner}/${contentRepo}/contents/${path}?ref=${encodeURIComponent(ref)}`,
+          ],
+          { ...GH_TEXT_LOOP_OPTIONS, maxBuffer: CONTENTS_READ_MAX_BUFFER },
         );
+        return JSON.parse(raw) as unknown;
       } catch (error) {
         if (deriveGhHttpStatus(error) === 404) {
           return null;

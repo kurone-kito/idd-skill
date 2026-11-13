@@ -662,8 +662,12 @@ export function findIssueRelatedOpenPrs({
   });
 }
 
-function stripBlockQuotesAndLazyContinuations(body: string): string {
+export function stripBlockQuotesAndLazyContinuations(body: string): string {
   let quotedParagraphOpen = false;
+  // Marker of a fenced code block open inside the current quote, or null, and
+  // the quote depth (count of `>` markers) that the fence sits at.
+  let quotedFenceMarker: string | null = null;
+  let quotedFenceDepth = 0;
   let paragraphOpen = false;
   // Content column of the list item that the previous line opened with
   // paragraph text, or `null`. A line inside that item continues the
@@ -696,6 +700,7 @@ function stripBlockQuotesAndLazyContinuations(body: string): string {
       lineStart += line.length + 1;
       if (line.trim() === '') {
         quotedParagraphOpen = false;
+        quotedFenceMarker = null;
         paragraphOpen = false;
         listItemParagraphColumn = null;
         followsListCode = false;
@@ -754,7 +759,30 @@ function stripBlockQuotesAndLazyContinuations(body: string): string {
       }
       if (scan.kind === 'quote') {
         followsListCode = false;
-        quotedParagraphOpen = startsBlockQuoteParagraph(scan.content);
+        // A fenced code block inside the quote is code, not a paragraph, so
+        // its lines never open a lazy continuation (CommonMark). A line with
+        // fewer `>` markers leaves the fence's quote, which ends the fence
+        // (CodeRabbit, PR #5203).
+        // Only a fence the quote holds directly is tracked. A fence opened
+        // inside a list item in the quote (`> - ```...`) keeps the lazy
+        // continuation rule it had before this tracking, because the list
+        // item's own indentation decides where that fence ends (Codex, PR #5203).
+        const depth = quoteDepthOf(line);
+        if (quotedFenceMarker !== null && depth >= quotedFenceDepth) {
+          // Only the fence's own quote prefix is removed: a deeper `>` run is
+          // literal content of the fence, not its closer (Codex, PR #5203).
+          const inside = stripQuoteMarkers(line, quotedFenceDepth);
+          if (closesQuotedFence(inside, quotedFenceMarker)) {
+            quotedFenceMarker = null;
+          }
+          quotedParagraphOpen = false;
+        } else {
+          quotedParagraphOpen = startsBlockQuoteParagraph(scan.content);
+          quotedFenceMarker = openingFenceMarker(
+            stripQuoteMarkers(line, depth),
+          );
+          quotedFenceDepth = depth;
+        }
         paragraphOpen = false;
         return blockQuoteScanBarrier;
       }
@@ -765,6 +793,8 @@ function stripBlockQuotesAndLazyContinuations(body: string): string {
         followsListCode = false;
       }
 
+      // An unmarked line ends the quote, and with it any fence open inside.
+      quotedFenceMarker = null;
       if (quotedParagraphOpen) {
         if (!startsMarkdownBlock(line, true)) {
           return blockQuoteScanBarrier;
@@ -786,6 +816,34 @@ function stripBlockQuotesAndLazyContinuations(body: string): string {
       return isParagraphText ? defuseOrderedMarker(line) : line;
     })
     .join('\n');
+}
+
+/** The number of `>` quote markers at the start of `line`. */
+function quoteDepthOf(line: string): number {
+  const prefix = /^(?:[ \t]*>)+/u.exec(line)?.[0] ?? '';
+  return prefix.split('>').length - 1;
+}
+
+/** `line` without its first `count` quote markers (each with one optional space). */
+function stripQuoteMarkers(line: string, count: number): string {
+  let rest = line;
+  for (let i = 0; i < count; i += 1) {
+    rest = rest.replace(/^[ \t]*>[ \t]?/u, '');
+  }
+  return rest;
+}
+
+/** The backtick or tilde run that opens a fenced code block, or null. */
+function openingFenceMarker(content: string): string | null {
+  return /^ {0,3}(`{3,}|~{3,})/u.exec(content)?.[1] ?? null;
+}
+
+/** Whether `content` closes a fence opened with `marker` (same character, at least as long). */
+function closesQuotedFence(content: string, marker: string): boolean {
+  const run = /^ {0,3}(`{3,}|~{3,})[ \t]*$/u.exec(content)?.[1];
+  return (
+    run !== undefined && run[0] === marker[0] && run.length >= marker.length
+  );
 }
 
 function defuseOrderedMarker(line: string): string {
