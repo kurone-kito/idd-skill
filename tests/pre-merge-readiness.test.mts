@@ -19,6 +19,7 @@ import {
   SELF_REFERENTIAL_BOOTSTRAP_AUTO_REASON,
 } from '../src/scripts/advisory-wait-policy.mts';
 import { evaluateStaleRequestRecoveryAction } from '../src/scripts/advisory-wait-state.mts';
+import { EFFORT_CANDIDATE_FILE_LIMITS } from '../src/scripts/audit-authored-issue.mts';
 import {
   GH_API_PAGINATED_MAX_BYTES,
   GhPaginatedResponseLimitError,
@@ -765,6 +766,122 @@ test('collectPreMergeReadiness adds a blocker for an overrun without valid evide
   } finally {
     restore();
   }
+});
+
+// #5147: the direct `readRepositoryContentAtRef` test above pins the reader on
+// its own. These cases run `collectPreMergeReadiness` end to end, so the path
+// that consumes the reader's result is exercised too. The claimed issue lists
+// one candidate file, which is within the effort M limit, so the readiness
+// report names a scope overrun only when the changed paths whose base entry is
+// not a plain file count as candidates.
+function collectScopeOverrunWithBaseEntries(
+  baseEntries: Readonly<Record<string, unknown>>,
+  changedFiles: readonly string[],
+) {
+  const restore = stubExecutable('gh', FORCED_HANDOFF_GH_STUB);
+  try {
+    const base = forcedHandoffMergeFakePort({
+      scope: 'issue-plus-pr',
+      earlierLinkedPr: false,
+      linkedLookupFails: false,
+    });
+    const issue = scopeOverrunIssue(['src/listed.mts']);
+    const keyedReads: Array<{ path: string; ref: string }> = [];
+    const port: ProviderPort = {
+      ...base,
+      getWorkItem: (number) =>
+        number === 7
+          ? { number, title: issue.title, body: issue.body, state: 'OPEN' }
+          : base.getWorkItem(number),
+      listChangeRequestChangedFiles: () => [...changedFiles],
+      // Key the fake on the given paths only and delegate every other read
+      // (the sync manifest, the CODEOWNERS files) to the base port.
+      getRepositoryContentAtRef: (owner, repo, path, ref) => {
+        if (!Object.hasOwn(baseEntries, path)) {
+          return base.getRepositoryContentAtRef(owner, repo, path, ref);
+        }
+        keyedReads.push({ path, ref });
+        return baseEntries[path];
+      },
+    };
+    const report = collectPreMergeReadiness(
+      [
+        '--pr',
+        '1',
+        '--claim-issue',
+        '7',
+        '--claim-id',
+        'scope-test',
+        '--owner',
+        'o',
+        '--repo',
+        'r',
+        '--now',
+        '2026-05-12T11:00:00Z',
+      ],
+      () => port,
+      () => ({ trustedMarkerActors: ['kurone-kito', 'maintainer'] }) as never,
+      undefined,
+      () => 'b'.repeat(40),
+    );
+    return { report, keyedReads };
+  } finally {
+    restore();
+  }
+}
+
+for (const [label, path, entry] of [
+  ['submodule', 'vendor/lib', { type: 'submodule', sha: 'c'.repeat(40) }],
+  ['symlink', 'docs/latest', { type: 'symlink', target: 'docs/v1' }],
+  [
+    'directory listing',
+    'docs/guides',
+    [{ type: 'file', path: 'docs/guides/a.md' }],
+  ],
+] as const) {
+  test(`collectPreMergeReadiness counts a ${label} base entry as a scope-overrun candidate`, () => {
+    // Exactly one path over the effort M limit, including the path under test.
+    // The other paths are absent at the base. If the entry under test were
+    // dropped from the candidates, the count would fall to the limit and the
+    // report would be null; if the reader rejected it, the call would throw.
+    const changedFiles = [
+      path,
+      ...Array.from(
+        { length: EFFORT_CANDIDATE_FILE_LIMITS.M },
+        (_, index) => `src/base-absent-${index + 1}.mts`,
+      ),
+    ];
+    assert.equal(changedFiles.length, EFFORT_CANDIDATE_FILE_LIMITS.M + 1);
+
+    const { report, keyedReads } = collectScopeOverrunWithBaseEntries(
+      { [path]: entry },
+      changedFiles,
+    );
+
+    assert.deepEqual(report.claim.scopeOverrun, {
+      status: 'missing',
+      reason: 'no-record',
+      recordedHeadSha: null,
+    });
+    assert.deepEqual(keyedReads, [{ path, ref: 'b'.repeat(40) }]);
+  });
+}
+
+test('collectPreMergeReadiness still throws when the base sync manifest read is a directory listing', () => {
+  // A changed path whose base entry is a directory is treated as absent, but a
+  // directory listing for the sync manifest stays a malformed-content error.
+  const changedFiles = Array.from(
+    { length: EFFORT_CANDIDATE_FILE_LIMITS.M + 1 },
+    (_, index) => `src/base-absent-${index + 1}.mts`,
+  );
+  assert.throws(
+    () =>
+      collectScopeOverrunWithBaseEntries(
+        { 'audit/sync-manifest.json': [{ type: 'file', path: 'audit' }] },
+        changedFiles,
+      ),
+    /malformed repository content for "audit\/sync-manifest\.json"/u,
+  );
 });
 
 test('computePreMergeReadinessBlockers carries scope-overrun evidence into F3', () => {
