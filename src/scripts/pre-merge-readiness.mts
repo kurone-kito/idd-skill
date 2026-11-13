@@ -567,7 +567,8 @@ export function resolveScopeOverrunReadiness(
     return null;
   }
   const mergeBaseSha = input.readMergeBaseSha().trim().toLowerCase();
-  if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(mergeBaseSha)) {
+  // 40 hex only, like the PR-head check below and the schema patterns.
+  if (!/^[0-9a-f]{40}$/u.test(mergeBaseSha)) {
     throw new Error('scope-overrun audit cannot resolve the PR merge base');
   }
 
@@ -724,8 +725,9 @@ export function readScopeOverrunMergeBaseSha(
         stdio: ['ignore', 'pipe', 'pipe'],
       },
     ).trim();
-    if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/iu.test(mergeBaseSha)) {
-      throw new Error('git merge-base did not print an object id');
+    // 40 hex only, like the PR-head check and the schema patterns.
+    if (!/^[0-9a-f]{40}$/iu.test(mergeBaseSha)) {
+      throw new Error('git merge-base did not print a 40-hex object id');
     }
     return mergeBaseSha.toLowerCase();
   } catch (error) {

@@ -398,6 +398,56 @@ test('scope-overrun merge-base uses the PR base ref and fails closed on missing 
   }
 });
 
+test('scope-overrun readiness rejects a 64-character merge base', () => {
+  assert.throws(
+    () =>
+      resolveScopeOverrunReadiness(
+        scopeOverrunInput({ readMergeBaseSha: () => 'c'.repeat(64) }),
+      ),
+    /scope-overrun audit cannot resolve the PR merge base/u,
+  );
+});
+
+test('scope-overrun merge-base reader rejects a SHA-256 repository merge base', (t) => {
+  const workingDirectory = mkdtempSync(
+    join(tmpdir(), 'idd-scope-overrun-sha256-'),
+  );
+  const restoreGitEnv = dropInheritedGitEnv();
+  try {
+    const git = (args: string[]) =>
+      execFileSync('git', args, { cwd: workingDirectory });
+    try {
+      git(['init', '--quiet', '--object-format=sha256']);
+    } catch {
+      t.skip('this git cannot create a SHA-256 repository');
+      return;
+    }
+    git(['config', 'commit.gpgsign', 'false']);
+    git(['config', 'user.name', 'IDD test']);
+    git(['config', 'user.email', 'idd-test@example.invalid']);
+    writeFileSync(join(workingDirectory, 'base.txt'), 'base\n');
+    git(['add', 'base.txt']);
+    git(['commit', '--quiet', '--no-verify', '-m', 'base']);
+    const baseSha = git(['rev-parse', 'HEAD']).toString('utf8').trim();
+    writeFileSync(join(workingDirectory, 'head.txt'), 'head\n');
+    git(['add', 'head.txt']);
+    git(['commit', '--quiet', '--no-verify', '-m', 'head']);
+    const headSha = git(['rev-parse', 'HEAD']).toString('utf8').trim();
+    git(['update-ref', 'refs/remotes/origin/main', baseSha]);
+    assert.equal(baseSha.length, 64);
+
+    // The path is 40-hex only, so a 64-character merge base fails closed.
+    // Pin the inner message so an unrelated git failure cannot satisfy this.
+    assert.throws(
+      () => readScopeOverrunMergeBaseSha('main', headSha, workingDirectory),
+      /did not print a 40-hex object id/u,
+    );
+  } finally {
+    restoreGitEnv();
+    rmSync(workingDirectory, { recursive: true, force: true });
+  }
+});
+
 function scopeOverrunRecordComment(options: {
   candidateFiles?: readonly string[];
   pullRequestNumber?: number;
