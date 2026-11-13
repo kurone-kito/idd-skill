@@ -1986,6 +1986,23 @@ function checkPnpmBoundaryWorkflow(path, workflow, report) {
     checkPnpmBoundaryAggregateStep(path, aggregate, report);
   }
 }
+/**
+ * The Node 26.x lane skips the test group (decision #5182), so the matrix must
+ * exclude exactly that combination: one entry, `node-version: 26.x` with
+ * `shard: test`. Any other exclude, or none, is a violation.
+ */
+function pnpmBoundaryTestExcludeMatches(exclude) {
+  if (!Array.isArray(exclude) || exclude.length !== 1) {
+    return false;
+  }
+  const entry = asMapping(exclude[0]);
+  return (
+    entry !== undefined &&
+    Object.keys(entry).length === 2 &&
+    entry['node-version'] === '26.x' &&
+    entry.shard === 'test'
+  );
+}
 function checkPnpmBoundaryMatrix(path, group, report) {
   const strategy = asMapping(group.strategy);
   if (strategy?.['fail-fast'] !== 'false') {
@@ -2002,7 +2019,10 @@ function checkPnpmBoundaryMatrix(path, group, report) {
   const entries = Array.isArray(include) ? include.map(asMapping) : undefined;
   const shardsMatch =
     matrix !== undefined &&
-    Object.keys(matrix).length === 3 &&
+    Object.keys(matrix).every((key) =>
+      ['node-version', 'shard', 'include', 'exclude'].includes(key),
+    ) &&
+    pnpmBoundaryTestExcludeMatches(matrix.exclude) &&
     matrix['node-version'] === PNPM_BOUNDARY_NODE_VERSION_MATRIX &&
     Array.isArray(shardAxis) &&
     shardAxis.length === expectedShards.length &&

@@ -47,12 +47,15 @@ type-only layer.
 
 The actual backstop is runtime, not type-level: the repository's
 `pull_request` lane runs the four check groups on Node 22, 24.x, and
-26.x. The Node 22 lane uses the version in `.node-version`; an explicit
+26.x, except that the test group runs only on Node 22.x and 24.x. The
+Node 22 lane uses the version in `.node-version`; an explicit
 `workflow_dispatch` run of `pnpm-boundary-node22-floor.yml` remains
 available when only the floor needs to be checked. The full matrix
-includes the whole test suite and `verify-workshop-integrity.mts` on
-every supported line. A helper that calls an API present in the types-26
-surface but missing or broken on the true floor version (the failure
+includes the whole test suite on Node 22.x and 24.x only, and
+`verify-workshop-integrity.mts` (in the audit group) on every supported
+line; the Node 26.x lane skips the test group. A helper that calls an API
+present in the types-26 surface but missing or broken on the true floor
+version (the failure
 class from issue `#1447`) crashes on Node 22 even though it typechecks
 cleanly, closing the gap that pinning `@types/node` down would only
 partially cover anyway (types don't model version-specific runtime bugs
