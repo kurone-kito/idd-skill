@@ -679,7 +679,7 @@ for (const relativePath of PR_SUBMIT_PATHS) {
       'and open (a rerun may find it closed as not planned with the roadmap link)',
       'Post-push, its PR is a draft at the recorded head (a rerun may find it closed, unmerged)',
       '`idd-local-worktree-recovery --issue {issue-number} --worktree <path>`',
-      'dry run reports `ready: true` (or worktree and branch are gone)',
+      'dry run reports `ready: true` (or the worktree is gone, its branch may remain)',
       "a person or orchestrator, not this session's claim evidence, confirmed no live session",
     ]) {
       assert.ok(preflight.includes(refusal), refusal);
@@ -717,9 +717,11 @@ for (const relativePath of PR_SUBMIT_PATHS) {
         preflight.indexOf('`idd-local-worktree-recovery'),
     );
     // A worktree already removed by the B3 cleanup counts as cleaned.
-    assert.ok(route.includes('(skip if gone)'));
+    assert.ok(route.includes('(skip if the worktree is gone)'));
     assert.ok(
-      preflightOf(route).includes('(or worktree and branch are gone)'),
+      preflightOf(route).includes(
+        '(or the worktree is gone, its branch may remain)',
+      ),
       'the dry-run item admits a worktree already removed by the B3 cleanup',
     );
   });
@@ -797,6 +799,7 @@ test('the finalization rationale cites its incidents and agrees with the route',
     'only after that closure is verified does the needs-decision label come off',
     'the issue stays open with its label',
     'A rerun then skips each step whose verified result already holds',
+    "LWR removes the worktree but not its local branch, so the route counts only the worktree's absence as cleaned and leaves the branch",
     'LWR keeps its own step 2',
     '`--operator-confirmed-no-live-session`',
     'treats an independent confirmation as a preflight item',

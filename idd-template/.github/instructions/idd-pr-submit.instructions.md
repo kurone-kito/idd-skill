@@ -232,15 +232,15 @@ step whose verified result holds.
    its PR is a draft at the recorded head (a rerun may find it closed,
    unmerged). A
    `idd-local-worktree-recovery --issue {issue-number} --worktree <path>` dry
-   run reports `ready: true` (or worktree and branch are gone), and a person or
-   orchestrator, not this session's claim evidence, confirmed no live session
-   in `<path>`.
+   run reports `ready: true` (or the worktree is gone, its branch may remain),
+   and a person or orchestrator, not this session's claim evidence, confirmed
+   no live session in `<path>`.
 2. **Close the PR** (post-push): `gh pr close <pr>`; verify closed, unmerged, at
    that head. Re-read before retrying an uncertain close.
 3. **Clean up**: LWR with `--apply --operator-confirmed-no-live-session` (skip
-   if gone). On refusal or failure, keep the issue open and labeled, keep the
-   remains, and report the PR state, LWR report, and next action. Never
-   `--force` or bypass its preservation or lock gates.
+   if the worktree is gone). On refusal or failure, keep the issue open and
+   labeled, keep the remains, and report the PR state, LWR report, and next
+   action. Never `--force` or bypass its preservation or lock gates.
 4. **Close the issue** only after step 3: `gh issue close {issue-number}
    --reason "not planned" --comment <roadmap link>`; verify, then remove that
    label, if present, and verify.

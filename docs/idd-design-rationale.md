@@ -1229,7 +1229,9 @@ next action. A rerun then skips each step whose verified result already holds,
 so a pull request already closed at the recorded head does not block it. This
 recovery is preventive; no observed incident yet. A pre-first-push overrun has
 no pull request, so that step is skipped, and its B3 release may have removed
-the worktree already, which the dry run reports as nothing to recover.
+the worktree already, which the dry run reports as nothing to recover. LWR
+removes the worktree but not its local branch, so the route counts only the
+worktree's absence as cleaned and leaves the branch.
 
 LWR keeps its own step 2: nothing in the helpers shows whether another session
 is still working in the worktree, and `--apply` refuses without
