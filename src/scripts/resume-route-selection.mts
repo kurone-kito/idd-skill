@@ -763,15 +763,20 @@ export function stripBlockQuotesAndLazyContinuations(body: string): string {
         // its lines never open a lazy continuation (CommonMark). A line with
         // fewer `>` markers leaves the fence's quote, which ends the fence
         // (CodeRabbit, PR #5203).
+        // Only a fence the quote holds directly is tracked. A fence opened
+        // inside a list item in the quote (`> - ```...`) keeps the lazy
+        // continuation rule it had before this tracking, because the list
+        // item's own indentation decides where that fence ends (Codex, PR #5203).
         const depth = quoteDepthOf(line);
+        const unquoted = line.replace(/^(?:[ \t]*>)+[ \t]?/u, '');
         if (quotedFenceMarker !== null && depth >= quotedFenceDepth) {
-          if (closesQuotedFence(scan.content, quotedFenceMarker)) {
+          if (closesQuotedFence(unquoted, quotedFenceMarker)) {
             quotedFenceMarker = null;
           }
           quotedParagraphOpen = false;
         } else {
           quotedParagraphOpen = startsBlockQuoteParagraph(scan.content);
-          quotedFenceMarker = openingFenceMarker(scan.content);
+          quotedFenceMarker = openingFenceMarker(unquoted);
           quotedFenceDepth = depth;
         }
         paragraphOpen = false;

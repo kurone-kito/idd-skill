@@ -21545,6 +21545,18 @@ test('claimClosingExpectation: masked code cannot bridge a keyword and its refer
     ),
     true,
   );
+  // A fence inside a list item in a quote ends with the item, so the
+  // unindented quoted paragraph after it is the lazy continuation's host
+  // (Codex, PR #5203).
+  assert.equal(
+    claimIssueExpectedToClose(
+      'Refs #7\n\n> - ```\n> paragraph\nCloses #7',
+      7,
+      'o',
+      'r',
+    ),
+    false,
+  );
 });
 
 test('collectPreMergeReadiness: a split PR that names the claim issue only with Refs reports the closing set as matching (#5149)', () => {
