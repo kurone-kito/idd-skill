@@ -1388,15 +1388,16 @@ worktree's absence as cleaned and leaves the branch.
 LWR keeps its own step 2: nothing in the helpers shows whether another session
 is still working in the worktree, and `--apply` refuses without
 `--operator-confirmed-no-live-session`. The docs say a session never supplies
-that flag from its own claim evidence, and the `worktreeRemnant` auto-decide
-class is not wired to §LWR yet (see "Auto-decide at a stop"). The route
-therefore treats a recorded, independent confirmation as a preflight item: a
-trusted issue comment without the `idd-agent-authored` suffix, the attribution
-marker that already keeps an agent from accepting its own scope decision, so
-the session cannot supply it from its own claim evidence. Without it, nothing
-is written, instead of the refusal appearing after the pull request is closed.
-This reads the existing rule and adds no waiver; it is preventive, with no
-observed incident yet.
+that flag from its own claim evidence, and the `worktreeRemnant`
+mechanical-evidence basis (issue `#4969`) is a separate path that needs the
+auto-decide procedure's confirmation issue and trusted policy, which this route
+does not run. The route therefore treats a recorded, independent confirmation
+as a preflight item: a trusted issue comment without the `idd-agent-authored`
+suffix, the attribution marker that already keeps an agent from accepting its
+own scope decision, so the session cannot supply it from its own claim
+evidence. Without it, nothing is written, instead of the refusal appearing
+after the pull request is closed. This reads the existing rule and adds no
+waiver; it is preventive, with no observed incident yet.
 
 The route needs a helper runtime, for the set listing and for LWR, and names
 both commands by their profile-selected form because a bare binary name only
