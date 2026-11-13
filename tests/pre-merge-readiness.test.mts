@@ -21557,6 +21557,18 @@ test('claimClosingExpectation: masked code cannot bridge a keyword and its refer
     ),
     false,
   );
+  // A deeper `>` run inside an open quoted fence is literal code, not its
+  // closer, so the fence stays open and the unmarked line after it is prose
+  // (Codex, PR #5203).
+  assert.equal(
+    claimIssueExpectedToClose(
+      'Refs #7\n\n> ```\n> > ```\n> example\nCloses #7',
+      7,
+      'o',
+      'r',
+    ),
+    true,
+  );
 });
 
 test('collectPreMergeReadiness: a split PR that names the claim issue only with Refs reports the closing set as matching (#5149)', () => {

@@ -624,15 +624,19 @@ export function stripBlockQuotesAndLazyContinuations(body) {
         // continuation rule it had before this tracking, because the list
         // item's own indentation decides where that fence ends (Codex, PR #5203).
         const depth = quoteDepthOf(line);
-        const unquoted = line.replace(/^(?:[ \t]*>)+[ \t]?/u, '');
         if (quotedFenceMarker !== null && depth >= quotedFenceDepth) {
-          if (closesQuotedFence(unquoted, quotedFenceMarker)) {
+          // Only the fence's own quote prefix is removed: a deeper `>` run is
+          // literal content of the fence, not its closer (Codex, PR #5203).
+          const inside = stripQuoteMarkers(line, quotedFenceDepth);
+          if (closesQuotedFence(inside, quotedFenceMarker)) {
             quotedFenceMarker = null;
           }
           quotedParagraphOpen = false;
         } else {
           quotedParagraphOpen = startsBlockQuoteParagraph(scan.content);
-          quotedFenceMarker = openingFenceMarker(unquoted);
+          quotedFenceMarker = openingFenceMarker(
+            stripQuoteMarkers(line, depth),
+          );
           quotedFenceDepth = depth;
         }
         paragraphOpen = false;
@@ -671,6 +675,14 @@ export function stripBlockQuotesAndLazyContinuations(body) {
 function quoteDepthOf(line) {
   const prefix = /^(?:[ \t]*>)+/u.exec(line)?.[0] ?? '';
   return prefix.split('>').length - 1;
+}
+/** `line` without its first `count` quote markers (each with one optional space). */
+function stripQuoteMarkers(line, count) {
+  let rest = line;
+  for (let i = 0; i < count; i += 1) {
+    rest = rest.replace(/^[ \t]*>[ \t]?/u, '');
+  }
+  return rest;
 }
 /** The backtick or tilde run that opens a fenced code block, or null. */
 function openingFenceMarker(content) {
