@@ -111,7 +111,8 @@ jobs:
       # onboarding catalog agreements run inside the audit-docs step above.
       - name: Run schema validation
         run: node scripts/validate-schemas.mjs
-      - name: Run protocol tests
+      # Runs every tests/*.test.mts file; no package install runs before this step.
+      - name: Run bare-Node test suite
         run: node --test --import ./tests/isolate-state.mts tests/*.test.mts
       - name: Run workshop integrity check
         run: node scripts/verify-workshop-integrity.mjs --format table

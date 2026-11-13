@@ -387,8 +387,8 @@ local 2026-10-27 check found `git` missing from the slim image and present
 in the full tag. The script runs these jobs in order and stops at the first
 failure:
 
-- `lint`: the bare-Node lane, which runs the audits and the protocol
-  tests with no dependency installed.
+- `lint`: the bare-Node lane. It runs the audits and the bare-Node test suite
+  with no dependency installed.
 - `pnpm-boundary`: the aggregate job (issue `#4993`). act runs the jobs it
   needs first. In this repository they are the four `pnpm-boundary-group`
   shards (`lint`, `typecheck`, `test`, and `distribution`). Each shard runs
@@ -410,8 +410,8 @@ bare-Node run with no installed dependency, the frozen-lockfile install
 with the pnpm boundary check, and the Node 22 floor run. The pre-push
 command set performs none of those.
 
-The lint job's protocol-tests step can fail when the host is under heavy
-load, because some tests use wall-clock limits: a 2000 ms limit in
+The lint job's bare-Node test suite step can fail when the host is under
+heavy load, because some tests use wall-clock limits: a 2000 ms limit in
 `tests/resume-route-selection.test.mts` and a 700 ms read budget in
 `tests/provider-outage-park-read-runtime.test.mts`. Local act runs of this
 change on 2026-10-27 hit this failure, as recorded in pull request `#4773`.
