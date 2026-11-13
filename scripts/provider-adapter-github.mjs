@@ -3347,13 +3347,16 @@ export function createGithubProviderAdapter(owner, repo, deps = DEFAULT_DEPS) {
       try {
         // The contents response wraps base64 content in a JSON envelope, so a
         // file near the API limit can exceed Node's 1 MiB default buffer and
-        // fail with ENOBUFS. Only this read gets the larger buffer.
+        // fail with ENOBUFS. Only this read gets the larger buffer. The loop
+        // stdio options matter too: without them, `gh`'s stderr passes to
+        // this process, so every expected 404 for a missing file would print
+        // `gh: Not Found (HTTP 404)` (reproduced on PR #5203).
         const raw = deps.ghText(
           [
             'api',
             `repos/${contentOwner}/${contentRepo}/contents/${path}?ref=${encodeURIComponent(ref)}`,
           ],
-          { maxBuffer: CONTENTS_READ_MAX_BUFFER },
+          { ...GH_TEXT_LOOP_OPTIONS, maxBuffer: CONTENTS_READ_MAX_BUFFER },
         );
         return JSON.parse(raw);
       } catch (error) {

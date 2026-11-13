@@ -7405,16 +7405,18 @@ test('listWorkItemComments: a composite error that wraps a refused read stays a 
 
 // #5149: the base-file contents read gets an explicit buffer above Node's 1 MiB
 // default, because the JSON envelope around base64 content can exceed it.
-test('getRepositoryContentAtRef reads contents with a buffer of at least 4 MiB and returns the parsed entry', () => {
+test('getRepositoryContentAtRef reads contents with a buffer of at least 4 MiB, the loop stdio options, and returns the parsed entry', () => {
   let seenArgs: readonly string[] = [];
-  let seenOptions: { maxBuffer?: number } | undefined;
+  let seenOptions: { maxBuffer?: number; stdio?: unknown } | undefined;
   const port = createGithubProviderAdapter(
     'kurone-kito',
     'idd-skill',
     fakeDeps({
       ghText: (args, options) => {
         seenArgs = args;
-        seenOptions = options as { maxBuffer?: number } | undefined;
+        seenOptions = options as
+          | { maxBuffer?: number; stdio?: unknown }
+          | undefined;
         return JSON.stringify({
           type: 'file',
           encoding: 'base64',
@@ -7438,6 +7440,9 @@ test('getRepositoryContentAtRef reads contents with a buffer of at least 4 MiB a
     (seenOptions?.maxBuffer ?? 0) >= 4 * 1024 * 1024,
     `contents read buffer is ${seenOptions?.maxBuffer ?? 'unset'}`,
   );
+  // Without these, gh's stderr passes to this process and every expected
+  // 404 prints a "gh: Not Found" line (reproduced on PR #5203).
+  assert.deepEqual(seenOptions?.stdio, ['ignore', 'pipe', 'pipe']);
   assert.ok(
     seenArgs.some((arg) =>
       arg.startsWith(
