@@ -275,17 +275,41 @@ function scopeOverrunInput(
   };
 }
 
-test('scope-overrun merge base refuses a target repository that the checkout origin does not name', () => {
-  assert.throws(
-    () =>
-      readScopeOverrunMergeBaseForRepo(
-        'not-this-owner',
-        'not-this-repo',
-        'main',
-        'a'.repeat(40),
-      ),
-    /does not name the target repository/u,
+/**
+ * Removes every inherited `GIT_*` variable from `process.env` and returns a
+ * function that restores them. An inherited `GIT_DIR` (set under a hook, for
+ * example) would point a git command that a test runs, directly or through
+ * the code under test, at the real checkout. Call the restore function in a
+ * `finally` block.
+ */
+function dropInheritedGitEnv(): () => void {
+  const inherited = Object.fromEntries(
+    Object.entries(process.env).filter(([key]) => key.startsWith('GIT_')),
   );
+  for (const key of Object.keys(inherited)) delete process.env[key];
+  return () => {
+    Object.assign(process.env, inherited);
+  };
+}
+
+test('scope-overrun merge base refuses a target repository that the checkout origin does not name', () => {
+  // The refusal path lists the worktrees through git, so run it without any
+  // inherited GIT_* variable.
+  const restoreGitEnv = dropInheritedGitEnv();
+  try {
+    assert.throws(
+      () =>
+        readScopeOverrunMergeBaseForRepo(
+          'not-this-owner',
+          'not-this-repo',
+          'main',
+          'a'.repeat(40),
+        ),
+      /does not name the target repository/u,
+    );
+  } finally {
+    restoreGitEnv();
+  }
 });
 
 test('scope-overrun base reads treat a directory or submodule entry as absent, and fail closed on the sync manifest', () => {
@@ -341,10 +365,7 @@ test('scope-overrun merge-base uses the PR base ref and fails closed on missing 
   // An inherited GIT_DIR (set under a hook, for example) would point the
   // fixture commands and the reader at the real checkout. Drop GIT_* for this
   // test only, and restore it in the finally block.
-  const inheritedGitEnv = Object.fromEntries(
-    Object.entries(process.env).filter(([key]) => key.startsWith('GIT_')),
-  );
-  for (const key of Object.keys(inheritedGitEnv)) delete process.env[key];
+  const restoreGitEnv = dropInheritedGitEnv();
   try {
     const git = (args: string[]) =>
       execFileSync('git', args, { cwd: workingDirectory });
@@ -371,7 +392,7 @@ test('scope-overrun merge-base uses the PR base ref and fails closed on missing 
       /scope-overrun audit cannot resolve the PR merge base/u,
     );
   } finally {
-    Object.assign(process.env, inheritedGitEnv);
+    restoreGitEnv();
     rmSync(workingDirectory, { recursive: true, force: true });
   }
 });
