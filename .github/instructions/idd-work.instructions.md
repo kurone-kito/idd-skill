@@ -480,25 +480,25 @@ follow the same
 and stop without pushing.
 
 **Commit inventory** (helper runtime only; before any LWR, lost-claim cleanup,
-or source-issue closure; under the clone-scoped
+or closure; under the clone-scoped
 [lock](../../docs/idd-helper-scripts.md#clone-scoped-lock)): fetch `origin`,
 name the source branch (never the primary HEAD), and list its branch-only
-commits with `git rev-list origin/{development-branch}..<source-branch>`. Mark
-patch-equivalent commits with `git cherry origin/{development-branch}
-<source-branch>` (`-`). Map each remaining commit, recording its SHA and changed
-paths, to a replacement child by issue number (path overlap with its Candidate
-files; unclear overlap blocks) or to not reusable. Post the inventory on the
-source issue with the branch, base SHA, head SHA, and one line per SHA. Before
-LWR `--apply`, the live list must equal the posted one; after it, check each
-unpushed SHA against `refs/idd-lwr/<branch>` and each pushed SHA against
-`origin/<branch>` (`git merge-base --is-ancestor`), else stop and report.
-Finalize never transfers. A child picks one SHA at a time with `git cherry-pick
--x <sha>` from its own worktree, after its fresh claim; it aborts only when
-`CHERRY_PICK_HEAD` exists, confirms each pick by its `(cherry picked from commit
-<sha>)` trailer, and retries only unconfirmed SHAs. With no safe transfer path,
-preserve the source worktree and report. A not-reusable mapping is a record
-only: discarding it needs explicit owner or user authorization and the LWR
-`--apply` gate, never `--force`.
+commits with `git rev-list origin/{development-branch}..<source-branch>`. Record
+each commit's SHA and paths. Mark patch-equivalent commits with `git cherry
+origin/{development-branch} <source-branch>` (`-`) as already in base. Map each
+other commit to a split-proposal child (path overlap with its Candidate files;
+unclear overlap blocks) or to not reusable, adding the child's issue number once
+published. Post it on the source issue (branch, base and head SHA, one line per
+SHA). Before LWR `--apply`, the live list must equal the posted one; after it,
+check each unpushed SHA against `refs/idd-lwr/<branch>` and each pushed SHA
+against `origin/<branch>` (`git merge-base --is-ancestor`), else stop and
+report. A child picks one SHA at a time with `git cherry-pick -x <sha>` from its
+own worktree, after its fresh claim; it aborts only when `CHERRY_PICK_HEAD`
+exists, confirms each pick by its `(cherry picked from commit <sha>)` trailer,
+and retries only unconfirmed SHAs. With no safe transfer path, preserve the
+source worktree and report. A not-reusable mapping is a record only; discarding
+needs explicit owner or user authorization and the LWR `--apply` gate, never
+`--force`.
 
 **Standing split** is the helper-runtime exception to the worker-side
 authoring and scope-overrun rules, for a genuine-need split only (never a
