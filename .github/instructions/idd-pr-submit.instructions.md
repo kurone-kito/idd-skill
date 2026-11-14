@@ -237,7 +237,12 @@ report it.
    profile-selected `local-worktree-recovery --issue {issue-number} --worktree
    <path>` dry run reports `ready: true` (or the worktree is gone, its branch
    may remain), and §LWR step 2 has a basis independent of this session's claim
-   evidence.
+   evidence. Its commit inventory (`idd-work.instructions.md`, Scope overrun)
+   must already be posted. Re-check it without reposting, as its procedure
+   requires: refresh the base first, then match the live SHAs, the `-` path
+   checks, and exactly one trusted, unedited comment. A missing, stale, or unmet
+   mapping blocks steps 2 and 3. Steps 3 and 4 also wait until each child-mapped
+   commit is confirmed.
 2. **Close the PR** (post-push): `gh pr close <pr>`; verify closed, unmerged, at
    that head. Re-read before retrying an uncertain close.
 3. **Clean up**: LWR with `--apply` and its step 2 basis (skip if the worktree

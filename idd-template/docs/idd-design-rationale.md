@@ -1639,6 +1639,88 @@ recorded against a HEAD SHA that no longer matches the PR's current
 HEAD — for example, after a sync-path merge advances HEAD — is stale
 and does not satisfy the gate for the new HEAD.
 
+### Inventory branch-only commits before scope-overrun cleanup (issue `#4683`)
+
+Issue `#4683` reports that on 2026-10-25, in issue `#4531`, a clean worktree
+still held two unpublished commits whose changes matched the held replacement
+split. The `#4531` thread does not record that observation, so the date and
+count are as reported in `#4683`, unverified in `#4531`. A clean worktree is not
+proof that its branch is disposable: treating it as disposable could lose
+reusable implementation or make the replacement child repeat it.
+
+The Scope overrun section of `idd-work.instructions.md` requires this inventory
+before LWR, lost-claim cleanup, or closure. Its commands, with `<dev>` for the
+development branch and `<source>` for the source branch:
+
+```sh
+git fetch origin "<dev>:refs/remotes/origin/<dev>"
+git rev-list "origin/<dev>..<source>"
+git cherry "origin/<dev>" "<source>"
+git log "origin/<dev>" -- <paths-of-the-SHA>
+```
+
+A plain `git fetch origin` follows only the configured refspec, which in a
+single-branch clone can leave `origin/<dev>` stale or absent. The explicit
+destination in the first command updates that remote-tracking ref either way.
+
+`git cherry` reports `-` for a patch-equivalent commit in base, even when a later
+base commit reverted that change, and it does not print the base-side SHA. So a
+`-` counts as already in base only when `git log origin/<dev> -- <paths>` lists
+exactly one commit, which is the equivalent. A second commit touching those
+paths, a revert or an unrelated later change, maps the commit instead. The test
+is conservative on purpose: a wrong "already in base" means the replacement
+child never receives the change.
+
+Each other commit maps to a split-proposal child by path overlap with the
+child's Candidate files (unclear overlap blocks), or to not reusable. A merge
+commit stops the inventory and cleanup, and the worktree and issue stay as they
+are. Post the inventory on the source issue with the branch, the base and head
+SHA, and one line per SHA that records pushed or unpushed. Child issue numbers
+come from the authoring set (`authoring-set-members`), not from this comment, so
+the posted inventory is never edited.
+
+Before `--apply`, the live `git rev-list` set and each `-` path check must match
+the posted inventory. LWR writes `refs/idd-lwr/<branch>` whenever the branch has
+unpushed commits. So when unpushed SHAs exist, the ref must exist after
+`--apply` and resolve to the tip recorded before `--apply`, because a ref left
+by an interrupted recovery can contain a SHA without backing up this cleanup. A
+missing ref means the backup did not happen, so cleanup stops. Each unpushed SHA
+must then be an ancestor of that ref. Each pushed SHA must be an ancestor of
+`origin/<branch>`. Both checks use `git merge-base --is-ancestor`, and any exit
+code other than 0 or 1 is a stop.
+
+The re-check before cleanup first refreshes the base with the explicit refspec
+and stops on failure, because a stale tracking ref can accept an inventory after
+the base advanced. It then matches the live SHA list and re-runs each `-` row's
+path check, because a new base commit can invalidate a `-` disposition without
+changing the SHA list. It reads exactly one trusted, unedited inventory comment
+for the live head; zero, several, or edited comments stop. This is an interim
+rule. The durable record contract (a marker type and a helper that parses and
+reads it back) is a follow-up, because it adds a marker and a helper outside
+this change's scope.
+
+Finalize never transfers, because the replacement children are not claimed yet.
+A child picks from its own worktree after its fresh claim, one SHA per `git
+cherry-pick -x <sha>`. It records `HEAD` before the pick and aborts only when
+`CHERRY_PICK_HEAD` exists. It confirms each pick by the `(cherry picked from
+commit <sha>)` trailer in `git log <recorded-HEAD>..HEAD`, not by patch-id,
+because a conflict-resolved pick differs from its source. It retries only the
+unconfirmed SHAs.
+
+A failed transfer keeps both worktrees, both branches, and the source issue
+open, and reports the SHA list with the reachability check. A held child cannot
+claim, and a released child no longer carries the authoring label that the
+finalize preflight requires, so a transfer can stall with no safe route forward.
+The source then stays open and is reported. A delayed-finalization path for
+released children is a follow-up, not part of this change.
+
+A base that advances after the inventory is posted leaves the record stale, and
+finalize then stops. Superseding a stale record is a follow-up, not part of this
+change.
+
+A not-reusable mapping is a record only: discarding it needs explicit owner or
+user authorization and the LWR `--apply` gate, never `--force`.
+
 ### An advisory bot's embedded-but-unthreaded findings: mirror the detection scope, not the gate scope
 
 A review bot can embed a specific, file/line-cited finding inside its
