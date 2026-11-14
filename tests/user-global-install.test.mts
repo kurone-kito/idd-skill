@@ -22,6 +22,11 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, test as nodeTest } from 'node:test';
 import {
+  bindDistributionSelection,
+  type DistributionSelectionOptions,
+  inspectDistributionRouting,
+} from '../src/scripts/distribution-selection.mts';
+import {
   assertHelperEntryClosureResolvable,
   readHelperExtraRuntimeFiles,
   resolveHelperEntryClosure,
@@ -110,6 +115,61 @@ const skillFileOf = (home: string, root: '.claude' | '.agents'): string =>
 const receiptOf = (home: string): string =>
   join(dataRootOf(home), 'receipt.json');
 
+/** The component digest a prepared set records for one source skill. */
+function skillBundleDigest(sourceRoot: string, skillName: string): string {
+  const skillDir = join(sourceRoot, 'skills', skillName);
+  const walk = (prefix: string): string[] =>
+    nodeFs
+      .readdirSync(join(skillDir, prefix), { withFileTypes: true })
+      .flatMap((entry) => {
+        const rel = prefix === '' ? entry.name : `${prefix}/${entry.name}`;
+        return entry.isDirectory() ? walk(rel) : [rel];
+      });
+  const listing = walk('')
+    .sort((left, right) =>
+      Buffer.compare(Buffer.from(left), Buffer.from(right)),
+    )
+    .map(
+      (rel) => `${sha256(nodeFs.readFileSync(join(skillDir, rel)))} ${rel}\n`,
+    )
+    .join('');
+  return `sha256:${sha256(listing)}`;
+}
+
+function expectedSkillDispatcher(
+  sourceRoot: string,
+  skillName: string,
+): string {
+  const source = nodeFs.readFileSync(
+    join(sourceRoot, 'skills', skillName, 'SKILL.md'),
+    'utf8',
+  );
+  const frontmatter = /^\uFEFF?---\r?\n(?:[\s\S]*?\r?\n)?---\r?\n/u.exec(
+    source,
+  )?.[0];
+  assert.ok(frontmatter, `${skillName} has frontmatter`);
+  const template = nodeFs.readFileSync(
+    join(sourceRoot, 'idd-template/user-global/skill-entry.md'),
+    'utf8',
+  );
+  return `${frontmatter}\n${template.trim()}\n\n<!-- idd-skill-bundle: ${skillBundleDigest(sourceRoot, skillName)} -->\n`;
+}
+
+function updateSkillDescription(
+  sourceRoot: string,
+  skillRelative: string,
+): Buffer {
+  const path = join(sourceRoot, 'skills', skillRelative);
+  const original = nodeFs.readFileSync(path, 'utf8');
+  const updated = original.replace(
+    /^description:[^\r\n]*$/mu,
+    'description: Updated for installer test.',
+  );
+  assert.notEqual(updated, original, `${skillRelative} has a description`);
+  nodeFs.writeFileSync(path, updated);
+  return Buffer.from(updated);
+}
+
 function sha256(bytes: Buffer | string): string {
   return createHash('sha256').update(bytes).digest('hex');
 }
@@ -141,6 +201,68 @@ function readReceiptEntries(home: string): { path: string; kind: string }[] {
   return parsed.entries;
 }
 
+/** Restore selected old receipt-owned skill files for migration tests. */
+function seedLegacySkillCopies(
+  home: string,
+  sourceRoot = REPO,
+  skillRelatives = ['issue-authoring/references/draft-patterns.md'],
+): void {
+  const receipt = JSON.parse(nodeFs.readFileSync(receiptOf(home), 'utf8')) as {
+    entries: { path: string; kind: string; sha256?: string }[];
+  };
+  const listed = new Set(receipt.entries.map((entry) => entry.path));
+  for (const rootName of ['.claude', '.agents'] as const) {
+    for (const skill of ['issue-authoring', 'idd-spec-audit']) {
+      const source = join(sourceRoot, 'skills', skill, 'SKILL.md');
+      const destination = join(home, rootName, 'skills', skill, 'SKILL.md');
+      const priorEntry = receipt.entries.find(
+        (entry) => entry.path === destination && entry.kind === 'file',
+      );
+      assert.ok(priorEntry, `${destination} is receipt-owned before migration`);
+      nodeFs.copyFileSync(source, destination);
+      priorEntry.sha256 = sha256(nodeFs.readFileSync(destination));
+    }
+    for (const relative of skillRelatives) {
+      const source = join(sourceRoot, 'skills', relative);
+      const destination = join(home, rootName, 'skills', relative);
+      if (!nodeFs.existsSync(source) || nodeFs.existsSync(destination))
+        continue;
+      const skillRoot = join(home, rootName, 'skills', relative.split('/')[0]);
+      nodeFs.mkdirSync(dirname(destination), { recursive: true });
+      let parent = dirname(destination);
+      const directories: string[] = [];
+      while (parent !== skillRoot) {
+        directories.unshift(parent);
+        parent = dirname(parent);
+      }
+      for (const directory of directories) {
+        if (listed.has(directory)) continue;
+        receipt.entries.push({ kind: 'directory', path: directory });
+        listed.add(directory);
+      }
+      nodeFs.copyFileSync(source, destination);
+      receipt.entries.push({
+        kind: 'file',
+        path: destination,
+        sha256: sha256(nodeFs.readFileSync(destination)),
+      });
+      listed.add(destination);
+    }
+  }
+  nodeFs.writeFileSync(receiptOf(home), `${JSON.stringify(receipt)}\n`);
+}
+
+function installLegacySkillCopies(
+  options: UserGlobalOptions,
+  skillRelatives?: string[],
+): void {
+  installPayload(options);
+  const home = options.homedir;
+  if (home === undefined)
+    throw new Error('legacy fixture needs a sandbox HOME');
+  seedLegacySkillCopies(home, options.sourceRoot ?? REPO, skillRelatives);
+}
+
 /** A source tree copy, so a test can change a skill file or the version. */
 function copySourceTree(): string {
   const dir = makeSandbox('user-global-source-');
@@ -154,6 +276,11 @@ interface PreparedFixtureOptions {
   runtimeFile?: string;
   runtimeBytes?: Buffer;
   authoringText?: string;
+  specAuditText?: string;
+  skillDispatcherText?: string;
+  coreInstructionPath?: string;
+  packageVersion?: string;
+  helperCommand?: string;
 }
 
 function makePreparedSource(extra: PreparedFixtureOptions = {}): string {
@@ -169,11 +296,14 @@ function makePreparedSource(extra: PreparedFixtureOptions = {}): string {
     nodeFs.writeFileSync(destination, content);
   };
   const runtimeFile = extra.runtimeFile ?? 'data/one.json';
+  const helperCommand = extra.helperCommand ?? 'scripts/sample.mjs';
+  const coreInstructionPath =
+    extra.coreInstructionPath ?? '.github/instructions/core.md';
   write(
     'package.json',
     JSON.stringify({
       name: 'idd-skill',
-      version: '0.17.0',
+      version: extra.packageVersion ?? '0.17.0',
       repository: 'github:kurone-kito/idd-skill',
     }),
   );
@@ -184,23 +314,37 @@ function makePreparedSource(extra: PreparedFixtureOptions = {}): string {
         {
           id: 'idd-template-core-files',
           stripPrefix: 'idd-template/',
-          paths: ['idd-template/.github/instructions/core.md'],
+          paths: [`idd-template/${coreInstructionPath}`],
         },
+      ],
+      userGlobalInstallerPayloads: [
+        'idd-template/user-global/entry.md',
+        'idd-template/user-global/skill-entry.md',
       ],
     }),
   );
-  write('idd-template/.github/instructions/core.md', '# Core instructions\n');
+  write(`idd-template/${coreInstructionPath}`, '# Core instructions\n');
   write('idd-template/user-global/entry.md', '# User global entry\n');
+  write(
+    'idd-template/user-global/skill-entry.md',
+    extra.skillDispatcherText ?? '# Installed skill dispatcher\n',
+  );
   write(
     'skills/issue-authoring/SKILL.md',
     extra.authoringText ?? '# Authoring\n',
   );
-  write('skills/idd-spec-audit/SKILL.md', '# Spec audit\n');
+  write(
+    'skills/idd-spec-audit/SKILL.md',
+    extra.specAuditText ?? '# Spec audit\n',
+  );
   write(
     'src/scripts/helper-runtime-manifest.mts',
-    `const EXTRA_RUNTIME_FILES = new Map<string, string[]>([\n  ['scripts/sample.mjs', ['${runtimeFile}']],\n]);\n`,
+    `const EXTRA_RUNTIME_FILES = new Map<string, string[]>([\n  ['${helperCommand}', ['${runtimeFile}']],\n]);\n`,
   );
-  write('scripts/sample.mjs', 'export const sample = true;\n');
+  write(
+    helperCommand,
+    `process.stdout.write(JSON.stringify({ helper: '${helperCommand}', argv: process.argv.slice(2), cwd: process.cwd() }));\n`,
+  );
   if (extra.runtimeBytes === undefined) {
     write(runtimeFile, '{"prepared":true}\n');
   } else {
@@ -261,11 +405,167 @@ function preparedManifest(path: string): {
   ) as ReturnType<typeof preparedManifest>;
 }
 
+function makeAdopterRepository(
+  home: string,
+  name: string,
+  sourceCommit: string | null,
+): string {
+  const repo = join(home, name);
+  nodeFs.mkdirSync(repo, { recursive: true });
+  for (const args of [
+    ['init', '--quiet'],
+    ['remote', 'add', 'origin', `https://github.com/acme/${name}.git`],
+  ]) {
+    const result = spawnSync('git', args, { cwd: repo, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+  }
+  if (sourceCommit === null) return repo;
+  const policyPath = join(repo, '.github', 'idd', 'config.json');
+  nodeFs.mkdirSync(dirname(policyPath), { recursive: true });
+  nodeFs.writeFileSync(
+    policyPath,
+    JSON.stringify({
+      helperRuntime: {
+        profile: 'vendored-node',
+        packageSpec: `github:acme/app#${sourceCommit}`,
+      },
+    }),
+  );
+  return repo;
+}
+
+/** A prepared-set source whose skills carry real frontmatter and a dispatcher. */
+function makeDispatchSource(
+  label: string,
+  helperCommand: string,
+  description = `Build ${label}.`,
+): string {
+  return makePreparedSource({
+    authoringText: `---\nname: issue-authoring\ndescription: ${description}\n---\n# Authoring ${label}\n`,
+    specAuditText: `---\nname: idd-spec-audit\ndescription: ${description}\n---\n# Audit ${label}\n`,
+    skillDispatcherText: nodeFs.readFileSync(
+      join(REPO, 'idd-template/user-global/skill-entry.md'),
+      'utf8',
+    ),
+    coreInstructionPath: ENTRY_RELATIVE,
+    helperCommand,
+  });
+}
+
+function distributionOptionsFor(
+  home: string,
+  repo: string,
+  sessionId: string,
+): DistributionSelectionOptions {
+  const runtimeRoot = join(home, 'runtime');
+  nodeFs.mkdirSync(runtimeRoot, { recursive: true });
+  return {
+    cwd: repo,
+    homedir: home,
+    runtimeRoot,
+    sessionId,
+    env: {
+      ...process.env,
+      HOME: home,
+      XDG_DATA_HOME: join(home, '.local', 'share'),
+      XDG_CONFIG_HOME: join(home, '.config'),
+    },
+  };
+}
+
+function dispatchSelectedSkill(
+  home: string,
+  report: ReturnType<typeof inspectDistributionRouting>['report'],
+  skillName: 'issue-authoring' | 'idd-spec-audit',
+): {
+  skill: string;
+  helperCommand: string;
+  helperPath: string;
+  helperArgv: string[];
+  helper: string;
+} {
+  assert.equal(report.preparation, 'prepared');
+  assert.equal(report.compatibility, 'compatible');
+  assert.ok(
+    ['coherent-candidate', 'pin-preserved', 'session-bound'].includes(
+      report.verdict,
+    ),
+  );
+  assert.ok(report.selected);
+  const selected = report.selected as {
+    sourceCommit: string;
+    components: {
+      skillBundles: Record<string, PreparedManifestComponent>;
+      helper: PreparedManifestComponent;
+    };
+  };
+  const setRoot = join(dataRootOf(home), 'prepared', selected.sourceCommit);
+  const manifest = preparedManifest(setRoot);
+  assert.equal(manifest.sourceCommit, selected.sourceCommit);
+  assert.deepEqual(manifest.components, selected.components);
+
+  const skillComponent = manifest.components.skillBundles[skillName];
+  assert.equal(skillComponent.provenance.commit, selected.sourceCommit);
+  const skillEntry = skillComponent.files.find(
+    (file) => file.path === 'SKILL.md',
+  );
+  assert.ok(skillEntry);
+  const skillBytes = nodeFs.readFileSync(
+    join(setRoot, 'skills', skillName, 'SKILL.md'),
+  );
+  assert.equal(sha256(skillBytes), skillEntry.sha256);
+
+  const helper = manifest.components.helper;
+  const invocation = helper.invocation;
+  assert.ok(invocation);
+  assert.ok(
+    invocation.command
+      .split('/')
+      .every(
+        (segment) => segment !== '' && segment !== '.' && segment !== '..',
+      ),
+  );
+  assert.ok(Array.isArray(invocation.argv));
+  assert.ok(invocation.argv.every((argument) => typeof argument === 'string'));
+  const helperEntry = helper.files.find(
+    (file) => file.path === invocation.command,
+  );
+  assert.ok(helperEntry);
+  const helperBytes = nodeFs.readFileSync(join(setRoot, invocation.command));
+  assert.equal(sha256(helperBytes), helperEntry.sha256);
+  return {
+    skill: skillBytes.toString('utf8'),
+    helperCommand: invocation.command,
+    helperPath: join(setRoot, invocation.command),
+    helperArgv: invocation.argv,
+    helper: helperBytes.toString('utf8'),
+  };
+}
+
+/** Run the dispatched helper the way the selected contract does. */
+function runSelectedHelper(
+  loaded: ReturnType<typeof dispatchSelectedSkill>,
+  cwd: string,
+): { helper: string; argv: string[]; cwd: string } {
+  const result = spawnSync(
+    process.execPath,
+    [loaded.helperPath, ...loaded.helperArgv, '--from-contract'],
+    { cwd, encoding: 'utf8' },
+  );
+  assert.equal(result.status, 0, result.stderr);
+  return JSON.parse(result.stdout) as {
+    helper: string;
+    argv: string[];
+    cwd: string;
+  };
+}
+
 interface PreparedManifestComponent {
   location: string;
   provenance: { kind: string; commit: string };
   files: { path: string; sha256: string }[];
   digest: string;
+  invocation?: { command: string; argv: string[] };
 }
 
 const WRITE_FLAGS =
@@ -314,6 +614,7 @@ test('preparation keeps equal-version commits separately and reuses verified byt
   const firstSource = makePreparedSource({ authoringText: '# First commit\n' });
   const secondSource = makePreparedSource({
     authoringText: '# Second commit\n',
+    helperCommand: 'scripts/new-publisher.mjs',
   });
   const firstCommit = 'a'.repeat(40);
   const secondCommit = 'b'.repeat(40);
@@ -325,13 +626,22 @@ test('preparation keeps equal-version commits separately and reuses verified byt
     prepareOptions(home, firstSource, firstCommit),
   );
   const second = prepareDistributionSet(
-    prepareOptions(home, secondSource, secondCommit),
+    prepareOptions(home, secondSource, secondCommit, {
+      invocation: {
+        command: 'scripts/new-publisher.mjs',
+        argv: ['--new-contract'],
+      },
+    }),
   );
 
   assert.equal(first.reused, false);
   assert.equal(reused.reused, true);
   assert.equal(second.reused, false);
   assert.notEqual(first.preparedPath, second.preparedPath);
+  assert.equal(
+    preparedManifest(second.preparedPath).sourceCommit,
+    secondCommit,
+  );
   assert.deepEqual(snapshot(first.preparedPath), firstBeforeReuse);
   assert.equal(
     nodeFs.readFileSync(
@@ -339,6 +649,26 @@ test('preparation keeps equal-version commits separately and reuses verified byt
       'utf8',
     ),
     '# Second commit\n',
+  );
+  const secondManifest = preparedManifest(second.preparedPath);
+  assert.equal(
+    secondManifest.components.helper.invocation?.command,
+    'scripts/new-publisher.mjs',
+  );
+  assert.deepEqual(secondManifest.components.helper.invocation?.argv, [
+    '--new-contract',
+  ]);
+  const secondCommand = secondManifest.components.helper.files.find(
+    (file) => file.path === 'scripts/new-publisher.mjs',
+  );
+  assert.ok(secondCommand, 'the recorded command belongs to the helper set');
+  assert.equal(
+    secondCommand.sha256,
+    sha256(
+      nodeFs.readFileSync(
+        join(second.preparedPath, 'scripts/new-publisher.mjs'),
+      ),
+    ),
   );
   assert.equal(nodeFs.existsSync(currentOf(home)), false);
 
@@ -382,10 +712,96 @@ test('preparation keeps equal-version commits separately and reuses verified byt
   }
   assert.deepEqual(
     manifest.components.instructions.files.map((file) => file.path),
-    ['.github/instructions/core.md', 'user-global/entry.md'],
+    [
+      '.github/instructions/core.md',
+      'user-global/entry.md',
+      'user-global/skill-entry.md',
+    ],
   );
   installPayload(optionsFor(home));
   assert.deepEqual(snapshot(first.preparedPath), firstBeforeReuse);
+});
+
+test('preparation refuses a source commit without the distribution manifest schema before any write', () => {
+  const home = makeHome();
+  const source = makePreparedSource();
+  nodeFs.rmSync(join(source, 'schemas/distribution-manifest.schema.json'));
+  const commit = 'e'.repeat(40);
+
+  assert.throws(
+    () => prepareDistributionSet(prepareOptions(home, source, commit)),
+    /schemas\/distribution-manifest\.schema\.json/,
+  );
+  assert.equal(
+    nodeFs.existsSync(join(dataRootOf(home), 'prepared', commit)),
+    false,
+  );
+});
+
+test('an older coherent set without the newer publisher or dispatcher metadata keeps its own helper invocation', () => {
+  const home = makeHome();
+  const source = makePreparedSource({
+    packageVersion: '0.14.0',
+    helperCommand: 'scripts/legacy-onboard.mjs',
+  });
+  const syncManifestPath = join(source, 'audit/sync-manifest.json');
+  const syncManifest = JSON.parse(
+    nodeFs.readFileSync(syncManifestPath, 'utf8'),
+  ) as Record<string, unknown>;
+  delete syncManifest.userGlobalInstallerPayloads;
+  nodeFs.writeFileSync(syncManifestPath, JSON.stringify(syncManifest));
+  nodeFs.rmSync(join(source, 'idd-template/user-global/skill-entry.md'));
+
+  const prepared = prepareDistributionSet(
+    prepareOptions(home, source, 'c'.repeat(40), {
+      invocation: {
+        command: 'scripts/legacy-onboard.mjs',
+        argv: ['--issue-authoring'],
+      },
+    }),
+  );
+  const manifest = JSON.parse(
+    nodeFs.readFileSync(join(prepared.preparedPath, 'manifest.json'), 'utf8'),
+  ) as {
+    components: {
+      instructions: { files: { path: string }[] };
+      helper: {
+        files: { path: string; sha256: string }[];
+        invocation: { command: string; argv: string[] };
+      };
+    };
+  };
+
+  assert.deepEqual(
+    manifest.components.instructions.files.map((file) => file.path),
+    ['.github/instructions/core.md', 'user-global/entry.md'],
+  );
+  assert.equal(
+    manifest.components.helper.invocation.command,
+    'scripts/legacy-onboard.mjs',
+  );
+  assert.deepEqual(manifest.components.helper.invocation.argv, [
+    '--issue-authoring',
+  ]);
+  assert.ok(
+    manifest.components.helper.files.some(
+      (file) => file.path === 'scripts/legacy-onboard.mjs',
+    ),
+    'the v0.14 helper command is in its own immutable helper set',
+  );
+  assert.ok(
+    !manifest.components.helper.files.some((file) =>
+      file.path.includes('publisher'),
+    ),
+    'the coherent old set does not require the newer publisher',
+  );
+  assert.equal(
+    nodeFs.readFileSync(
+      join(prepared.preparedPath, 'skills/issue-authoring/SKILL.md'),
+      'utf8',
+    ),
+    '# Authoring\n',
+  );
 });
 
 test('preparation derives each helper closure from that staged root runtime map', () => {
@@ -1656,11 +2072,33 @@ test('a fresh install lays down the payload, skills, and receipt, and uninstall 
       'utf8',
     ),
   );
+  const dispatcherTemplate = nodeFs.readFileSync(
+    join(REPO, 'idd-template/user-global/skill-entry.md'),
+    'utf8',
+  );
   for (const root of ['.claude', '.agents'] as const) {
-    assert.equal(
-      nodeFs.readFileSync(skillFileOf(home, root), 'utf8'),
-      nodeFs.readFileSync(join(REPO, 'skills', SKILL_RELATIVE), 'utf8'),
-    );
+    for (const skill of ['issue-authoring', 'idd-spec-audit'] as const) {
+      const source = nodeFs.readFileSync(
+        join(REPO, 'skills', skill, 'SKILL.md'),
+        'utf8',
+      );
+      const frontmatter = /^\uFEFF?---\r?\n(?:[\s\S]*?\r?\n)?---\r?\n/u.exec(
+        source,
+      )?.[0];
+      assert.ok(frontmatter, `${skill} keeps its original frontmatter`);
+      assert.equal(
+        nodeFs.readFileSync(
+          join(home, root, 'skills', skill, 'SKILL.md'),
+          'utf8',
+        ),
+        `${frontmatter}\n${dispatcherTemplate.trim()}\n\n<!-- idd-skill-bundle: ${skillBundleDigest(REPO, skill)} -->\n`,
+      );
+      assert.deepEqual(
+        nodeFs.readdirSync(join(home, root, 'skills', skill)),
+        ['SKILL.md'],
+        'the global skill root contains only the stable dispatcher',
+      );
+    }
   }
   const entries = readReceiptEntries(home);
   assert.ok(
@@ -1675,6 +2113,424 @@ test('a fresh install lays down the payload, skills, and receipt, and uninstall 
   assert.equal(nodeFs.existsSync(join(home, '.claude', 'skills')), false);
   assert.equal(nodeFs.existsSync(join(home, '.agents', 'skills')), false);
   assert.deepEqual(nodeFs.readdirSync(join(home, '.claude')), []);
+});
+
+test('the stable dispatcher preserves exact routing and helper checks', () => {
+  const dispatcher = nodeFs
+    .readFileSync(join(REPO, 'idd-template/user-global/skill-entry.md'), 'utf8')
+    .replace(/\s+/gu, ' ');
+  for (const requirement of [
+    'Honor a repository-local skill copy first.',
+    'When `active` is `false`, use step 4.',
+    'issue authoring included',
+    'stable session ID supplied by the host wrapper',
+    '`selection.status` is `ready`',
+    '`selection.report.selected`',
+    '`receipt.status: verified`',
+    '`pin-preserved`, or `session-bound`',
+    'Any `source` value can pass; do not require a particular one.',
+    'missing, ambiguous, incompatible, or unverified',
+    'Never prepare, bind, change the global default, or load another version on your own as an automatic fallback.',
+    '`prepared/<selected.sourceCommit>`',
+    "`digest` in the report's `selected.components`",
+    "recomputed from that component's `files` list",
+    '`components.skillBundles.<name>.provenance.commit`',
+    'verify each one against the SHA-256',
+    '`components.helper.invocation.command`',
+    '`components.helper.files`',
+    'safe relative path that exactly matches a `path` in',
+    '`argv` to be an array of strings',
+    "verify the command file's SHA-256 against that helper file entry",
+    "records the set's entry helper",
+    'The dispatcher does not run the helper itself.',
+    "Every other helper the contract names resolves through the repository's own `helperRuntime` profile",
+    'argument-array process API, never shell interpolation',
+    "the invocation's repository or worktree as the working directory, never the prepared-set root",
+    'External harness wrappers remain operator-owned',
+  ]) {
+    assert.ok(
+      dispatcher.includes(requirement),
+      `missing dispatch rule: ${requirement}`,
+    );
+  }
+});
+
+test('pinned sessions dispatch their own skills and helpers after global current moves', () => {
+  const home = makeHome();
+  const commitA = 'e'.repeat(40);
+  const commitB = 'f'.repeat(40);
+  const sourceA = makeDispatchSource('A', 'scripts/legacy-onboard.mjs');
+  const sourceB = makeDispatchSource('B', 'scripts/new-publisher.mjs');
+  assert.equal(
+    JSON.parse(nodeFs.readFileSync(join(sourceA, 'package.json'), 'utf8'))
+      .version,
+    JSON.parse(nodeFs.readFileSync(join(sourceB, 'package.json'), 'utf8'))
+      .version,
+  );
+
+  prepareDistributionSet(
+    prepareOptions(home, sourceA, commitA, {
+      invocation: {
+        command: 'scripts/legacy-onboard.mjs',
+        argv: ['--legacy'],
+      },
+    }),
+  );
+  installPayload(optionsFor(home, { sourceRoot: sourceA, version: '98.0.0' }));
+  const repoA = makeAdopterRepository(home, 'adopter-a', commitA);
+  const sessionA = distributionOptionsFor(home, repoA, 'session-a');
+  const boundA = bindDistributionSelection(sessionA);
+  assert.equal(boundA.authorized, true);
+  assert.equal(boundA.report.selected?.sourceCommit, commitA);
+
+  prepareDistributionSet(
+    prepareOptions(home, sourceB, commitB, {
+      invocation: {
+        command: 'scripts/new-publisher.mjs',
+        argv: ['--new-contract'],
+      },
+    }),
+  );
+  installPayload(
+    optionsFor(home, { sourceRoot: sourceB, version: UPGRADE_VERSION }),
+  );
+  assert.equal(
+    nodeFs.readlinkSync(currentOf(home)),
+    versionDirOf(home, UPGRADE_VERSION),
+  );
+  const repoB = makeAdopterRepository(home, 'adopter-b', commitB);
+  const sessionB = distributionOptionsFor(home, repoB, 'session-b');
+  const boundB = bindDistributionSelection(sessionB);
+  assert.equal(boundB.authorized, true);
+  assert.equal(boundB.report.selected?.sourceCommit, commitB);
+
+  const routingA = inspectDistributionRouting(sessionA);
+  const routingB = inspectDistributionRouting(sessionB);
+  assert.equal(routingA.route, 'prepared-set');
+  assert.equal(routingB.route, 'prepared-set');
+  assert.equal(routingA.report.selected?.sourceCommit, commitA);
+  assert.equal(routingB.report.selected?.sourceCommit, commitB);
+
+  const loadedA = dispatchSelectedSkill(
+    home,
+    routingA.report,
+    'issue-authoring',
+  );
+  const loadedB = dispatchSelectedSkill(
+    home,
+    routingB.report,
+    'issue-authoring',
+  );
+  assert.match(loadedA.skill, /# Authoring A/);
+  assert.equal(loadedA.helperCommand, 'scripts/legacy-onboard.mjs');
+  assert.deepEqual(loadedA.helperArgv, ['--legacy']);
+  assert.match(loadedA.helper, /scripts\/legacy-onboard\.mjs/);
+  assert.match(loadedB.skill, /# Authoring B/);
+  assert.equal(loadedB.helperCommand, 'scripts/new-publisher.mjs');
+  assert.deepEqual(loadedB.helperArgv, ['--new-contract']);
+  assert.match(loadedB.helper, /scripts\/new-publisher\.mjs/);
+  assert.notEqual(loadedA.skill, loadedB.skill);
+  assert.notEqual(loadedA.helper, loadedB.helper);
+  assert.deepEqual(runSelectedHelper(loadedA, repoA), {
+    helper: 'scripts/legacy-onboard.mjs',
+    argv: ['--legacy', '--from-contract'],
+    cwd: nodeFs.realpathSync(repoA),
+  });
+  assert.deepEqual(runSelectedHelper(loadedB, repoB), {
+    helper: 'scripts/new-publisher.mjs',
+    argv: ['--new-contract', '--from-contract'],
+    cwd: nodeFs.realpathSync(repoB),
+  });
+  assert.equal(
+    nodeFs.readFileSync(skillFileOf(home, '.claude'), 'utf8'),
+    expectedSkillDispatcher(sourceB, 'issue-authoring'),
+  );
+});
+
+test('an unpinned session keeps its bound global set after current moves, and a new session follows current', () => {
+  const home = makeHome();
+  const commitA = 'a'.repeat(40);
+  const commitB = 'b'.repeat(40);
+  const sourceA = makeDispatchSource('A', 'scripts/legacy-onboard.mjs');
+  const sourceB = makeDispatchSource('B', 'scripts/new-publisher.mjs');
+  prepareDistributionSet(
+    prepareOptions(home, sourceA, commitA, {
+      invocation: { command: 'scripts/legacy-onboard.mjs', argv: ['--legacy'] },
+    }),
+  );
+  installPayload(optionsFor(home, { sourceRoot: sourceA, version: '98.0.0' }));
+  const repo = makeAdopterRepository(home, 'adopter', null);
+  const running = distributionOptionsFor(home, repo, 'session-running');
+  const before = inspectDistributionRouting(running);
+  assert.equal(before.report.source, 'global-current');
+  assert.equal(before.report.verdict, 'coherent-candidate');
+  assert.equal(before.report.selected?.sourceCommit, commitA);
+  const bound = bindDistributionSelection(running);
+  assert.equal(bound.authorized, true);
+
+  prepareDistributionSet(
+    prepareOptions(home, sourceB, commitB, {
+      invocation: {
+        command: 'scripts/new-publisher.mjs',
+        argv: ['--new-contract'],
+      },
+    }),
+  );
+  installPayload(
+    optionsFor(home, { sourceRoot: sourceB, version: UPGRADE_VERSION }),
+  );
+  assert.equal(
+    nodeFs.readlinkSync(currentOf(home)),
+    versionDirOf(home, UPGRADE_VERSION),
+  );
+
+  const kept = inspectDistributionRouting(running);
+  assert.equal(kept.route, 'prepared-set');
+  assert.equal(kept.report.verdict, 'session-bound');
+  assert.equal(kept.report.selected?.sourceCommit, commitA);
+  const loadedKept = dispatchSelectedSkill(
+    home,
+    kept.report,
+    'issue-authoring',
+  );
+  assert.match(loadedKept.skill, /# Authoring A/);
+  assert.equal(
+    runSelectedHelper(loadedKept, repo).helper,
+    'scripts/legacy-onboard.mjs',
+  );
+
+  const fresh = inspectDistributionRouting(
+    distributionOptionsFor(home, repo, 'session-fresh'),
+  );
+  assert.equal(fresh.route, 'prepared-set');
+  assert.equal(fresh.report.verdict, 'coherent-candidate');
+  assert.equal(fresh.report.selected?.sourceCommit, commitB);
+  assert.match(
+    dispatchSelectedSkill(home, fresh.report, 'issue-authoring').skill,
+    /# Authoring B/,
+  );
+});
+
+test('a standalone inspection outside Git selects the set behind the installed dispatcher entries', () => {
+  const home = makeHome();
+  const commit = 'c'.repeat(40);
+  const source = makeDispatchSource('Solo', 'scripts/sample.mjs');
+  prepareDistributionSet(prepareOptions(home, source, commit));
+  installPayload(optionsFor(home, { sourceRoot: source, version: '98.0.0' }));
+  const outside = makeSandbox('user-global-outside-git-');
+
+  const routing = inspectDistributionRouting(
+    distributionOptionsFor(home, outside, 'session-solo'),
+  );
+
+  assert.equal(routing.report.source, 'installed-bundle');
+  assert.equal(routing.report.verdict, 'coherent-candidate');
+  assert.equal(routing.report.receipt.status, 'verified');
+  assert.equal(routing.report.selected?.sourceCommit, commit);
+  assert.match(
+    dispatchSelectedSkill(home, routing.report, 'idd-spec-audit').skill,
+    /# Audit Solo/,
+  );
+});
+
+test('a failed candidate preparation keeps a bound session on its verified set and stops the candidate pin', () => {
+  const home = makeHome();
+  const commitA = 'a'.repeat(40);
+  const commitB = 'b'.repeat(40);
+  const sourceA = makeDispatchSource('A', 'scripts/sample.mjs');
+  const sourceB = makeDispatchSource('B', 'scripts/sample.mjs');
+  prepareDistributionSet(prepareOptions(home, sourceA, commitA));
+  installPayload(optionsFor(home, { sourceRoot: sourceA, version: '98.0.0' }));
+  const repoA = makeAdopterRepository(home, 'adopter-a', commitA);
+  const sessionA = distributionOptionsFor(home, repoA, 'session-a');
+  assert.equal(bindDistributionSelection(sessionA).authorized, true);
+
+  const failedPath = join(
+    dataRootOf(home),
+    'prepared',
+    commitB,
+    'skills/issue-authoring/SKILL.md',
+  );
+  const fs = hookedFs((op, args) => {
+    if (op === 'linkSync' && args[1] === failedPath) {
+      throw new Error('injected candidate preparation failure');
+    }
+  });
+  assert.throws(
+    () =>
+      prepareDistributionSet({
+        ...prepareOptions(home, sourceB, commitB),
+        fs,
+      }),
+    /completion manifest .* is absent; staged paths .*receipt state is valid; one safe retry/,
+  );
+
+  const kept = inspectDistributionRouting(sessionA);
+  assert.equal(kept.route, 'prepared-set');
+  assert.equal(kept.report.verdict, 'session-bound');
+  assert.equal(kept.report.selected?.sourceCommit, commitA);
+  assert.match(
+    dispatchSelectedSkill(home, kept.report, 'issue-authoring').skill,
+    /# Authoring A/,
+  );
+
+  const repoB = makeAdopterRepository(home, 'adopter-b', commitB);
+  const candidate = inspectDistributionRouting(
+    distributionOptionsFor(home, repoB, 'session-b'),
+  );
+  assert.equal(candidate.route, 'none');
+  assert.equal(candidate.instructionsRoot, null);
+  assert.equal(candidate.report.selected, null);
+  assert.equal(candidate.report.verdict, 'not-verified-usable');
+  assert.equal(candidate.report.recovery, 'reselect');
+});
+
+test('a missing prepared skill asks for preparation and a tampered one for reselection', () => {
+  for (const damage of ['missing', 'tampered'] as const) {
+    const home = makeHome();
+    const commit = 'd'.repeat(40);
+    const source = makeDispatchSource('A', 'scripts/sample.mjs');
+    const prepared = prepareDistributionSet(
+      prepareOptions(home, source, commit),
+    );
+    installPayload(optionsFor(home, { sourceRoot: source, version: '98.0.0' }));
+    const repo = makeAdopterRepository(home, 'adopter', null);
+    const outside = makeSandbox('user-global-outside-git-');
+    const sessions = [
+      { cwd: repo, source: 'global-current' },
+      { cwd: outside, source: 'installed-bundle' },
+    ].map((route) => ({
+      ...route,
+      options: distributionOptionsFor(home, route.cwd, 'session-a'),
+    }));
+    for (const session of sessions) {
+      assert.equal(
+        inspectDistributionRouting(session.options).route,
+        'prepared-set',
+      );
+    }
+
+    const skill = join(
+      prepared.preparedPath,
+      'skills/issue-authoring/SKILL.md',
+    );
+    nodeFs.chmodSync(skill, 0o644);
+    if (damage === 'missing') {
+      nodeFs.rmSync(skill);
+    } else {
+      nodeFs.writeFileSync(skill, '# A newer copied contract\n');
+    }
+
+    for (const session of sessions) {
+      const routing = inspectDistributionRouting(session.options);
+      assert.equal(routing.route, 'none', `${damage} skill stops routing`);
+      assert.equal(routing.instructionsRoot, null);
+      if (damage === 'missing') {
+        assert.equal(routing.report.source, session.source);
+        assert.equal(routing.report.verdict, 'preparation-missing');
+        assert.equal(routing.report.recovery, 'prepare');
+        assert.equal(routing.report.selected?.sourceCommit, commit);
+      } else {
+        assert.equal(routing.report.verdict, 'not-verified-usable');
+        assert.equal(routing.report.recovery, 'reselect');
+        assert.equal(routing.report.selected, null);
+      }
+    }
+  }
+});
+
+test('builds with identical frontmatter and instructions are told apart by their bundle digest', () => {
+  const home = makeHome();
+  const sourceA = makeDispatchSource('A', 'scripts/sample.mjs', 'Same entry.');
+  const sourceB = makeDispatchSource('B', 'scripts/sample.mjs', 'Same entry.');
+  const commitA = 'a'.repeat(40);
+  const commitB = 'b'.repeat(40);
+  prepareDistributionSet(prepareOptions(home, sourceA, commitA));
+  prepareDistributionSet(prepareOptions(home, sourceB, commitB));
+  installPayload(
+    optionsFor(home, { sourceRoot: sourceB, version: UPGRADE_VERSION }),
+  );
+  assert.notEqual(
+    expectedSkillDispatcher(sourceA, 'issue-authoring'),
+    expectedSkillDispatcher(sourceB, 'issue-authoring'),
+    'only the bundle digest differs between the two entries',
+  );
+  const repo = makeAdopterRepository(home, 'adopter', null);
+  const outside = makeSandbox('user-global-outside-git-');
+  for (const cwd of [repo, outside]) {
+    const routing = inspectDistributionRouting(
+      distributionOptionsFor(home, cwd, 'session-a'),
+    );
+    assert.equal(routing.route, 'prepared-set');
+    assert.equal(routing.report.verdict, 'coherent-candidate');
+    assert.equal(routing.report.selected?.sourceCommit, commitB);
+    assert.match(
+      dispatchSelectedSkill(home, routing.report, 'issue-authoring').skill,
+      /# Authoring B/,
+    );
+  }
+
+  const onlyOlder = makeHome();
+  prepareDistributionSet(prepareOptions(onlyOlder, sourceA, commitA));
+  installPayload(
+    optionsFor(onlyOlder, { sourceRoot: sourceB, version: UPGRADE_VERSION }),
+  );
+  const olderRepo = makeAdopterRepository(onlyOlder, 'adopter', null);
+  for (const cwd of [olderRepo, outside]) {
+    const routing = inspectDistributionRouting(
+      distributionOptionsFor(onlyOlder, cwd, 'session-a'),
+    );
+    assert.equal(routing.route, 'none', 'the older set never stands in');
+    assert.equal(routing.report.verdict, 'migration-required');
+    assert.equal(routing.report.recovery, 'migrate');
+    assert.equal(routing.report.selected, null);
+  }
+});
+
+test('a failed installer upgrade keeps the bound set and the dispatch entries usable', () => {
+  const home = makeHome();
+  const commit = 'a'.repeat(40);
+  const source = makeDispatchSource('A', 'scripts/sample.mjs');
+  prepareDistributionSet(prepareOptions(home, source, commit));
+  installPayload(optionsFor(home, { sourceRoot: source, version: '98.0.0' }));
+  const repo = makeAdopterRepository(home, 'adopter', null);
+  const session = distributionOptionsFor(home, repo, 'session-a');
+  assert.equal(bindDistributionSelection(session).authorized, true);
+  const dispatcherBefore = nodeFs.readFileSync(skillFileOf(home, '.claude'));
+
+  const upgrade = makeDispatchSource('B', 'scripts/sample.mjs');
+  const fs = hookedFs((op, args) => {
+    if (
+      op === 'renameSync' &&
+      String(args[1]).endsWith(`/.agents/skills/${SKILL_RELATIVE}`)
+    ) {
+      throw new Error('injected replacement failure');
+    }
+  });
+  assert.throws(
+    () =>
+      installPayload(
+        optionsFor(home, { sourceRoot: upgrade, version: UPGRADE_VERSION, fs }),
+      ),
+    /rolled back/,
+  );
+
+  assert.deepEqual(
+    nodeFs.readFileSync(skillFileOf(home, '.claude')),
+    dispatcherBefore,
+  );
+  assert.equal(
+    nodeFs.readlinkSync(currentOf(home)),
+    versionDirOf(home, '98.0.0'),
+  );
+  const routing = inspectDistributionRouting(session);
+  assert.equal(routing.route, 'prepared-set');
+  assert.equal(routing.report.verdict, 'session-bound');
+  assert.equal(routing.report.selected?.sourceCommit, commit);
+  assert.match(
+    dispatchSelectedSkill(home, routing.report, 'issue-authoring').skill,
+    /# Authoring A/,
+  );
 });
 
 test('the installed entry uses the separately deployed activation command', () => {
@@ -1804,7 +2660,7 @@ test('an unlisted file with the same bytes is left in place and not recorded', (
   const options = optionsFor(home);
   const dest = skillFileOf(home, '.claude');
   nodeFs.mkdirSync(dirname(dest), { recursive: true });
-  nodeFs.copyFileSync(join(REPO, 'skills', SKILL_RELATIVE), dest);
+  nodeFs.writeFileSync(dest, expectedSkillDispatcher(REPO, 'issue-authoring'));
 
   installPayload(options);
   assert.ok(
@@ -1814,7 +2670,7 @@ test('an unlisted file with the same bytes is left in place and not recorded', (
   uninstallPayload(options);
   assert.equal(
     nodeFs.readFileSync(dest, 'utf8'),
-    nodeFs.readFileSync(join(REPO, 'skills', SKILL_RELATIVE), 'utf8'),
+    expectedSkillDispatcher(REPO, 'issue-authoring'),
   );
 });
 
@@ -2080,7 +2936,7 @@ test('a failed upgrade restores the replaced skill file and the prior current ta
   installPayload(optionsFor(home));
   const v1Claude = nodeFs.readFileSync(skillFileOf(home, '.claude'));
   const source = copySourceTree();
-  nodeFs.appendFileSync(join(source, 'skills', SKILL_RELATIVE), '\nupgrade\n');
+  updateSkillDescription(source, SKILL_RELATIVE);
   const fs = hookedFs((op, args) => {
     if (
       op === 'renameSync' &&
@@ -2107,8 +2963,10 @@ test('an upgrade replaces the listed skill file, re-records its hash, and repoin
   const options = optionsFor(home);
   installPayload(options);
   const source = copySourceTree();
-  nodeFs.appendFileSync(join(source, 'skills', SKILL_RELATIVE), '\nupgrade\n');
-  const newBytes = nodeFs.readFileSync(join(source, 'skills', SKILL_RELATIVE));
+  updateSkillDescription(source, SKILL_RELATIVE);
+  const newBytes = Buffer.from(
+    expectedSkillDispatcher(source, 'issue-authoring'),
+  );
 
   const result = installPayload(
     optionsFor(home, { sourceRoot: source, version: UPGRADE_VERSION }),
@@ -2143,7 +3001,7 @@ test('an upgrade refuses a listed skill file that was edited after the last inst
   installPayload(optionsFor(home));
   nodeFs.appendFileSync(skillFileOf(home, '.claude'), 'edit\n');
   const source = copySourceTree();
-  nodeFs.appendFileSync(join(source, 'skills', SKILL_RELATIVE), '\nupgrade\n');
+  updateSkillDescription(source, SKILL_RELATIVE);
 
   assert.throws(
     () =>
@@ -2266,7 +3124,7 @@ test('a retry after the receipt write failed on a replaced skill file refuses it
   const home = makeHome();
   installPayload(optionsFor(home));
   const source = copySourceTree();
-  nodeFs.appendFileSync(join(source, 'skills', SKILL_RELATIVE), '\nupgrade\n');
+  updateSkillDescription(source, SKILL_RELATIVE);
   const claudeSkill = skillFileOf(home, '.claude');
   let replaced = false;
   let failed = false;
@@ -2340,11 +3198,33 @@ test('a manifest path that escapes the payload directory makes install refuse be
   assert.deepEqual(snapshot(home), before);
 });
 
+test('a user-global payload manifest path outside its asset directory refuses before any write', () => {
+  const home = makeHome();
+  const source = copySourceTree();
+  const manifestPath = join(source, 'audit/sync-manifest.json');
+  const manifest = JSON.parse(nodeFs.readFileSync(manifestPath, 'utf8')) as {
+    userGlobalInstallerPayloads: string[];
+  };
+  manifest.userGlobalInstallerPayloads.push(
+    'idd-template/user-global/../../outside.md',
+  );
+  nodeFs.writeFileSync(manifestPath, JSON.stringify(manifest));
+
+  assert.throws(
+    () =>
+      planInstall(
+        optionsFor(home, { sourceRoot: source, version: UPGRADE_VERSION }),
+      ),
+    /invalid user-global payload file list/,
+  );
+  assert.equal(nodeFs.existsSync(dataRootOf(home)), false);
+});
+
 test('a stale temporary file beside a listed skill file makes install refuse before any write', () => {
   const home = makeHome();
   installPayload(optionsFor(home));
   const source = copySourceTree();
-  nodeFs.appendFileSync(join(source, 'skills', SKILL_RELATIVE), '\nupgrade\n');
+  updateSkillDescription(source, SKILL_RELATIVE);
   nodeFs.writeFileSync(`${skillFileOf(home, '.claude')}.tmp-7`, 'stale\n');
   const before = snapshot(home);
 
@@ -2362,7 +3242,7 @@ test('a listed skill file with a second hard link makes install refuse before an
   const home = makeHome();
   installPayload(optionsFor(home));
   const source = copySourceTree();
-  nodeFs.appendFileSync(join(source, 'skills', SKILL_RELATIVE), '\nupgrade\n');
+  updateSkillDescription(source, SKILL_RELATIVE);
   nodeFs.linkSync(skillFileOf(home, '.claude'), join(home, 'alias.md'));
   const before = snapshot(home);
 
@@ -2575,9 +3455,15 @@ function fsReportingIdentity(paths: string[], dev: bigint, ino: bigint): FsOps {
 
 test('an upgrade that drops an unchanged skill file removes it and its receipt entry', () => {
   const home = makeHome();
-  installPayload(optionsFor(home));
+  installLegacySkillCopies(optionsFor(home));
   const source = copySourceWithout(DROPPED_RELATIVE);
   const dropped = [droppedOf(home, '.claude'), droppedOf(home, '.agents')];
+  const kept = join(home, '.claude', 'skills', 'issue-authoring', 'references');
+  const unowned = join(kept, 'contract.md');
+  nodeFs.copyFileSync(
+    join(REPO, 'skills/issue-authoring/references/contract.md'),
+    unowned,
+  );
   for (const path of dropped) {
     assert.ok(nodeFs.existsSync(path), 'the file is installed first');
     assert.ok(isListed(home, path), 'the receipt lists it first');
@@ -2590,13 +3476,13 @@ test('an upgrade that drops an unchanged skill file removes it and its receipt e
     assert.equal(isListed(home, path), false);
     assert.ok(result.lines.includes(`remove ${path}`));
   }
-  const kept = join(home, '.claude', 'skills', 'issue-authoring', 'references');
   assert.ok(
     nodeFs.existsSync(join(kept, 'contract.md')),
-    'a shipped file stays',
+    'an unowned reference stays',
   );
-  assert.ok(isListed(home, join(kept, 'contract.md')));
+  assert.equal(isListed(home, join(kept, 'contract.md')), false);
   assert.ok(isListed(home, kept), 'the directory stays listed');
+  nodeFs.rmSync(unowned);
   const olderFile = join(versionDirOf(home), ENTRY_RELATIVE);
   assert.ok(nodeFs.existsSync(olderFile), 'the older version stays on disk');
   assert.ok(isListed(home, olderFile), 'the older version stays listed');
@@ -2615,7 +3501,7 @@ test('an upgrade that drops an unchanged skill file removes it and its receipt e
 
 test('a dropped skill file that was edited after install is refused, named, and left in place', () => {
   const home = makeHome();
-  installPayload(optionsFor(home));
+  installLegacySkillCopies(optionsFor(home));
   const source = copySourceWithout(DROPPED_RELATIVE);
   const edited = droppedOf(home, '.claude');
   nodeFs.appendFileSync(edited, 'my own notes\n');
@@ -2648,7 +3534,7 @@ test('a dropped skill file that is now a symbolic link is refused and nothing is
   const home = makeHome();
   const sentinel = join(makeSandbox('user-global-sentinel-'), 'sentinel.txt');
   nodeFs.writeFileSync(sentinel, 'sentinel\n');
-  installPayload(optionsFor(home));
+  installLegacySkillCopies(optionsFor(home));
   const source = copySourceWithout(DROPPED_RELATIVE);
   const dropped = droppedOf(home, '.claude');
   nodeFs.unlinkSync(dropped);
@@ -2669,7 +3555,7 @@ test('a dropped skill file that is now a symbolic link is refused and nothing is
 
 test('a dropped skill file that is now a directory is refused and left in place', () => {
   const home = makeHome();
-  installPayload(optionsFor(home));
+  installLegacySkillCopies(optionsFor(home));
   const source = copySourceWithout(DROPPED_RELATIVE);
   const dropped = droppedOf(home, '.claude');
   nodeFs.unlinkSync(dropped);
@@ -2689,7 +3575,7 @@ test('a dropped skill file that is now a directory is refused and left in place'
 
 test('a dropped skill file with a second hard link is refused and left in place', () => {
   const home = makeHome();
-  installPayload(optionsFor(home));
+  installLegacySkillCopies(optionsFor(home));
   const source = copySourceWithout(DROPPED_RELATIVE);
   const dropped = droppedOf(home, '.claude');
   nodeFs.linkSync(dropped, join(home, 'alias.md'));
@@ -2707,7 +3593,7 @@ test('a dropped skill file with a second hard link is refused and left in place'
 
 test('a dropped skill file that is already absent is unlisted and not recreated', () => {
   const home = makeHome();
-  installPayload(optionsFor(home));
+  installLegacySkillCopies(optionsFor(home), [SPEC_DROPPED_RELATIVE]);
   const source = copySourceWithout(SPEC_DROPPED_RELATIVE);
   const claudeCopy = join(home, '.claude', 'skills', SPEC_DROPPED_RELATIVE);
   const agentsCopy = join(home, '.agents', 'skills', SPEC_DROPPED_RELATIVE);
@@ -2729,7 +3615,7 @@ test('a dropped skill file that is already absent is unlisted and not recreated'
 
 test('a stale temporary file beside an already-absent dropped skill file makes install refuse before any write', () => {
   const home = makeHome();
-  installPayload(optionsFor(home));
+  installLegacySkillCopies(optionsFor(home));
   const source = copySourceWithout(DROPPED_RELATIVE);
   const absent = droppedOf(home, '.claude');
   nodeFs.rmSync(absent);
@@ -2757,10 +3643,10 @@ test('a stale temporary file beside an already-absent dropped skill file makes i
 
 test('a stale temporary file beside a dropped skill file that is the same file as a shipped one still refuses', () => {
   const home = makeHome();
-  installPayload(optionsFor(home));
+  installLegacySkillCopies(optionsFor(home));
   const source = copySourceWithout(DROPPED_RELATIVE);
   const dropped = droppedOf(home, '.claude');
-  const shipped = join(dirname(dropped), 'contract.md');
+  const shipped = skillFileOf(home, '.claude');
   nodeFs.writeFileSync(`${dropped}.tmp-7`, 'stale\n');
   const before = snapshot(home);
 
@@ -2778,7 +3664,7 @@ test('a stale temporary file beside a dropped skill file that is the same file a
 
 test('an edited dropped file of the second shipped skill is refused too', () => {
   const home = makeHome();
-  installPayload(optionsFor(home));
+  installLegacySkillCopies(optionsFor(home), [SPEC_DROPPED_RELATIVE]);
   const source = copySourceWithout(SPEC_DROPPED_RELATIVE);
   const edited = join(home, '.agents', 'skills', SPEC_DROPPED_RELATIVE);
   nodeFs.appendFileSync(edited, 'my own notes\n');
@@ -2795,7 +3681,7 @@ test('an edited dropped file of the second shipped skill is refused too', () => 
 
 test('a hard link made to a dropped skill file after the plan stops the prune and removes nothing', () => {
   const home = makeHome();
-  installPayload(optionsFor(home));
+  installLegacySkillCopies(optionsFor(home));
   const source = copySourceWithout(DROPPED_RELATIVE);
   const dropped = droppedOf(home, '.claude');
   const alias = join(home, 'alias.md');
@@ -2829,7 +3715,7 @@ test('a hard link made to a dropped skill file after the plan stops the prune an
 
 test('a file the user added beside a dropped skill file survives the prune', () => {
   const home = makeHome();
-  installPayload(optionsFor(home));
+  installLegacySkillCopies(optionsFor(home));
   const source = copySourceWithout(DROPPED_RELATIVE);
   const mine = join(dirname(droppedOf(home, '.claude')), 'mine.md');
   nodeFs.writeFileSync(mine, 'mine\n');
@@ -2892,7 +3778,7 @@ test('a dropped skill file under a directory that was swapped for a link is refu
   skip: NO_LINKS,
 }, () => {
   const home = makeHome();
-  installPayload(optionsFor(home));
+  installLegacySkillCopies(optionsFor(home));
   const source = copySourceWithout(DROPPED_RELATIVE);
   const references = dirname(droppedOf(home, '.claude'));
   const outside = join(makeSandbox('user-global-outside-'), 'references');
@@ -2911,10 +3797,10 @@ test('a dropped skill file under a directory that was swapped for a link is refu
 
 test('a dropped skill file that is the same file as a shipped one is kept, not removed', () => {
   const home = makeHome();
-  installPayload(optionsFor(home));
+  installLegacySkillCopies(optionsFor(home));
   const source = copySourceWithout(DROPPED_RELATIVE);
   const dropped = droppedOf(home, '.claude');
-  const shipped = join(dirname(dropped), 'contract.md');
+  const shipped = skillFileOf(home, '.claude');
 
   const result = installPayload(
     upgradeOptions(home, source, {
@@ -2941,10 +3827,10 @@ test('a dropped skill file that is the same file as a shipped one is kept, not r
 
 test('a filesystem that reports no inode number does not turn every dropped skill file into an alias', () => {
   const home = makeHome();
-  installPayload(optionsFor(home));
+  installLegacySkillCopies(optionsFor(home));
   const source = copySourceWithout(DROPPED_RELATIVE);
   const dropped = droppedOf(home, '.claude');
-  const shipped = join(dirname(dropped), 'contract.md');
+  const shipped = skillFileOf(home, '.claude');
 
   installPayload(
     upgradeOptions(home, source, {
@@ -2958,10 +3844,10 @@ test('a filesystem that reports no inode number does not turn every dropped skil
 
 test('two skill files with the same inode number on different devices are not the same file', () => {
   const home = makeHome();
-  installPayload(optionsFor(home));
+  installLegacySkillCopies(optionsFor(home));
   const source = copySourceWithout(DROPPED_RELATIVE);
   const dropped = droppedOf(home, '.claude');
-  const shipped = join(dirname(dropped), 'contract.md');
+  const shipped = skillFileOf(home, '.claude');
   const real = nodeFs as unknown as Record<
     string,
     (...args: unknown[]) => unknown
@@ -2994,7 +3880,7 @@ test('a byte-identical file that was there before install is never listed, so th
     nodeFs.mkdirSync(dirname(path), { recursive: true });
     nodeFs.copyFileSync(join(REPO, 'skills', DROPPED_RELATIVE), path);
   }
-  installPayload(optionsFor(home));
+  installLegacySkillCopies(optionsFor(home));
   const source = copySourceWithout(DROPPED_RELATIVE);
 
   const result = installPayload(upgradeOptions(home, source));
@@ -3009,7 +3895,7 @@ test('a byte-identical file that was there before install is never listed, so th
 
 test('a stale temporary file beside a dropped skill file makes install refuse before any write', () => {
   const home = makeHome();
-  installPayload(optionsFor(home));
+  installLegacySkillCopies(optionsFor(home));
   const source = copySourceWithout(DROPPED_RELATIVE);
   nodeFs.writeFileSync(`${droppedOf(home, '.claude')}.tmp-7`, 'stale\n');
   const before = snapshot(home);
@@ -3025,7 +3911,7 @@ test('a stale temporary file beside a dropped skill file makes install refuse be
 
 test('a dropped skill file edited after the plan stops the prune, keeps the edit, and a retry refuses it', () => {
   const home = makeHome();
-  installPayload(optionsFor(home));
+  installLegacySkillCopies(optionsFor(home));
   const source = copySourceWithout(DROPPED_RELATIVE);
   const racing = droppedOf(home, '.claude');
   let opens = 0;
@@ -3062,7 +3948,7 @@ test('a dropped skill file edited after the plan stops the prune, keeps the edit
 
 test('a failed removal leaves the new version installed and a consistent receipt, and a retry finishes the prune', () => {
   const home = makeHome();
-  installPayload(optionsFor(home));
+  installLegacySkillCopies(optionsFor(home));
   const source = copySourceWithout(DROPPED_RELATIVE);
   const first = droppedOf(home, '.claude');
   const second = droppedOf(home, '.agents');
@@ -3101,7 +3987,7 @@ test('a failed removal leaves the new version installed and a consistent receipt
 
 test('a failed receipt rewrite after a removal names the path, and a retry drops it as absent', () => {
   const home = makeHome();
-  installPayload(optionsFor(home));
+  installLegacySkillCopies(optionsFor(home));
   const source = copySourceWithout(DROPPED_RELATIVE);
   const first = droppedOf(home, '.claude');
   const second = droppedOf(home, '.agents');
@@ -3152,7 +4038,7 @@ test('a failed receipt rewrite after a removal names the path, and a retry drops
 
 test('a failed receipt rewrite after the last removal says that nothing else is left', () => {
   const home = makeHome();
-  installPayload(optionsFor(home));
+  installLegacySkillCopies(optionsFor(home));
   const source = copySourceWithout(DROPPED_RELATIVE);
   const last = droppedOf(home, '.agents');
   nodeFs.rmSync(droppedOf(home, '.claude'));
@@ -3180,54 +4066,15 @@ test('a failed receipt rewrite after the last removal says that nothing else is 
   assert.ok(failed);
 });
 
-test('an absent dropped skill file whose name the new version uses for a directory stays listed as that directory', () => {
-  const home = makeHome();
-  const oldSource = copySourceTree();
-  nodeFs.writeFileSync(
-    join(oldSource, 'skills', 'issue-authoring', 'notes'),
-    'old\n',
-  );
-  installPayload(
-    optionsFor(home, { sourceRoot: oldSource, version: '98.0.0' }),
-  );
-  const names = ['.claude', '.agents'].map((root) =>
-    join(home, root, 'skills', 'issue-authoring', 'notes'),
-  );
-  for (const name of names) {
-    assert.ok(isListed(home, name));
-    nodeFs.rmSync(name);
-  }
-  const source = copySourceTree();
-  nodeFs.mkdirSync(join(source, 'skills', 'issue-authoring', 'notes'));
-  nodeFs.writeFileSync(
-    join(source, 'skills', 'issue-authoring', 'notes', 'x.md'),
-    'new\n',
-  );
-
-  installPayload(upgradeOptions(home, source));
-
-  for (const name of names) {
-    assert.ok(nodeFs.statSync(name).isDirectory());
-    assert.equal(
-      receiptRows(home).find((entry) => entry.path === name)?.kind,
-      'directory',
-      `${name} is listed as the directory it now is`,
-    );
-  }
-  assertListedFilesMatchDisk(home);
-  uninstallPayload(upgradeOptions(home, source));
-  assert.equal(nodeFs.existsSync(dataRootOf(home)), false);
-  assert.equal(nodeFs.existsSync(join(home, '.claude', 'skills')), false);
-  assert.equal(nodeFs.existsSync(join(home, '.agents', 'skills')), false);
-});
-
 test('an upgrade that replaces one skill file, drops another, and keeps an entry file lists all of it', () => {
   const home = makeHome();
   const harnesses = ['claude'] as const;
-  installPayload(optionsFor(home, { harnesses }));
+  installLegacySkillCopies(optionsFor(home, { harnesses }));
   const source = copySourceWithout(DROPPED_RELATIVE);
-  nodeFs.appendFileSync(join(source, 'skills', SKILL_RELATIVE), '\nupgrade\n');
-  const newBytes = nodeFs.readFileSync(join(source, 'skills', SKILL_RELATIVE));
+  updateSkillDescription(source, SKILL_RELATIVE);
+  const newBytes = Buffer.from(
+    expectedSkillDispatcher(source, 'issue-authoring'),
+  );
   const entryFile = join(home, '.claude', 'CLAUDE.md');
   const entryBefore = nodeFs.readFileSync(entryFile);
 
@@ -3252,7 +4099,7 @@ test('an upgrade that replaces one skill file, drops another, and keeps an entry
 
 test('a dropped skill file that vanishes between the plan and the prune is only unlisted', () => {
   const home = makeHome();
-  installPayload(optionsFor(home));
+  installLegacySkillCopies(optionsFor(home));
   const source = copySourceWithout(DROPPED_RELATIVE);
   const dropped = [droppedOf(home, '.claude'), droppedOf(home, '.agents')];
   let fired = false;
@@ -3281,7 +4128,7 @@ test('a dropped skill file swapped for a symbolic link after the plan is not fol
   const home = makeHome();
   const sentinel = join(makeSandbox('user-global-sentinel-'), 'sentinel.txt');
   nodeFs.writeFileSync(sentinel, 'sentinel\n');
-  installPayload(optionsFor(home));
+  installLegacySkillCopies(optionsFor(home));
   const source = copySourceWithout(DROPPED_RELATIVE);
   const dropped = droppedOf(home, '.claude');
   let fired = false;
@@ -3310,7 +4157,7 @@ test('a skill directory swapped for a symbolic link after the plan is not follow
   skip: NO_LINKS,
 }, () => {
   const home = makeHome();
-  installPayload(optionsFor(home));
+  installLegacySkillCopies(optionsFor(home));
   const source = copySourceWithout(DROPPED_RELATIVE);
   const dropped = droppedOf(home, '.claude');
   const references = dirname(dropped);
@@ -3340,7 +4187,7 @@ test('a skill directory swapped for a symbolic link after the plan is not follow
 
 test('a failure in a late install step leaves the dropped skill files in place and listed', () => {
   const home = makeHome();
-  installPayload(optionsFor(home));
+  installLegacySkillCopies(optionsFor(home));
   const source = copySourceWithout(DROPPED_RELATIVE);
   const dropped = [droppedOf(home, '.claude'), droppedOf(home, '.agents')];
   let fired = false;
@@ -3401,7 +4248,7 @@ test('an older version directory inside a skill directory is not taken for a ski
 
 test('a source skill with no SKILL.md makes install refuse before any write', () => {
   const home = makeHome();
-  installPayload(optionsFor(home));
+  installLegacySkillCopies(optionsFor(home));
   const source = copySourceWithout('idd-spec-audit/SKILL.md');
   const before = snapshot(home);
 
@@ -3422,6 +4269,24 @@ test('a source skill with no SKILL.md makes install refuse before any write', ()
     /has no SKILL\.md/,
   );
   assert.equal(nodeFs.existsSync(dataRootOf(fresh)), false);
+});
+
+test('a source skill whose frontmatter does not open the file makes install refuse before any write', () => {
+  const home = makeHome();
+  const source = copySourceTree();
+  nodeFs.writeFileSync(
+    join(source, 'skills', 'idd-spec-audit', 'SKILL.md'),
+    '# Spec audit\n\n---\nname: idd-spec-audit\n---\n',
+  );
+
+  assert.throws(
+    () =>
+      installPayload(
+        optionsFor(home, { sourceRoot: source, version: UPGRADE_VERSION }),
+      ),
+    /idd-spec-audit\/SKILL\.md has no complete YAML frontmatter/,
+  );
+  assert.equal(nodeFs.existsSync(dataRootOf(home)), false);
 });
 
 test('an upgrade that drops nothing reports no removal and keeps every listed entry', () => {
@@ -3466,7 +4331,7 @@ test('an upgrade that drops nothing reports no removal and keeps every listed en
 
 test('planInstall reports the removals an upgrade would make and writes nothing', () => {
   const home = makeHome();
-  installPayload(optionsFor(home));
+  installLegacySkillCopies(optionsFor(home));
   const source = copySourceWithout(DROPPED_RELATIVE);
   const before = snapshot(home);
 
@@ -3667,7 +4532,7 @@ test('a HOME reached through a root-owned linked parent installs and uninstalls 
       skillFileOf(join(parentReal, 'home'), '.claude'),
       'utf8',
     ),
-    nodeFs.readFileSync(join(REPO, 'skills', SKILL_RELATIVE), 'utf8'),
+    expectedSkillDispatcher(REPO, 'issue-authoring'),
   );
   uninstallPayload(options);
   assert.equal(nodeFs.existsSync(dataRootOf(join(parentReal, 'home'))), false);
@@ -3888,7 +4753,7 @@ test('a link planted above the data root during an upgrade refuses and keeps the
   const home = makeHome();
   installPayload(optionsFor(home));
   const source = copySourceTree();
-  nodeFs.appendFileSync(join(source, 'skills', SKILL_RELATIVE), '\nupgrade\n');
+  updateSkillDescription(source, SKILL_RELATIVE);
   let planted = false;
   const fs = hookedFs((op, args) => {
     if (planted || op !== 'renameSync') return;

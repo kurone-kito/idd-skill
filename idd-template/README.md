@@ -21,7 +21,10 @@ multi-agent GitHub automation.
 8. Optional: install the issue-authoring companion skill if the project
    wants pre-execution issue drafting. The canonical source bundle in
    this repository lives at `skills/issue-authoring/`; install copies
-   into the agent-specific skill directory your runtime reads.
+   into the agent-specific skill directory your runtime reads. A
+   user-global installation instead places a stable dispatcher there and
+   loads the full contract from the immutable set selected for the
+   repository and session.
 
 ## Quick start (AI agent)
 
@@ -43,7 +46,9 @@ canonical source bundle lives at `skills/issue-authoring/` in the source
 repository. It is not required to run the IDD execution loop. Install
 it intentionally in the agent-specific skill directory your runtime
 reads when a project wants an agent to draft or decompose IDD-ready
-issues before execution starts.
+issues before execution starts. A user-global installation provides a
+stable dispatch entry instead; the host wrapper resolves and verifies the
+immutable repository/session selection before loading the full bundle.
 
 Keep the boundary clear: issue authoring prepares draft issues and
 roadmaps; `.github/instructions/*.instructions.md` execute approved
@@ -186,6 +191,7 @@ profiles/README.md
 README.md
 scripts/minimize-superseded-markers.mjs
 user-global/entry.md
+user-global/skill-entry.md
 ```
 
 <!-- /audit:generated -->

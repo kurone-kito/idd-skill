@@ -7,10 +7,12 @@ tags: [user-global, install, policy, activation]
 
 # User-global installation
 
-The user-global installer places the IDD instruction payload and two skill
-bundles, `issue-authoring` and `idd-spec-audit`, into the current user's own
-directories. It also wires the gated entry text into each selected harness's entry
-file. How the text is wired differs by harness, as the What gets written section
+The user-global installer places the IDD instruction payload and stable
+dispatch entries for `issue-authoring` and `idd-spec-audit` into the current
+user's own directories. Complete skill bundles are stored in immutable prepared
+sets and loaded only after the repository/session selection is verified. It
+also wires the gated entry text into each selected harness's entry file. How
+the text is wired differs by harness, as the What gets written section
 explains. A separate command removes what its receipt records. Paths
 that a failed receipt write leaves unlisted need manual cleanup, as described
 under [Failure outcome](#failure-outcome).
@@ -53,13 +55,13 @@ node scripts/idd-onboard.mjs --install-user-global [--harness <list>] [--dry-run
 node scripts/idd-onboard.mjs --uninstall [--dry-run]
 ```
 
-- `--install-user-global` installs the payload, both skill bundles, and the
-  receipt, then edits the selected entry files.
+- `--install-user-global` installs the payload, both skill dispatch
+  entries, and the receipt, then edits the selected entry files.
 - `--harness <list>` takes a comma-separated list of `claude`, `codex`, and
   `opencode`. The default is all three. Duplicates are ignored. An empty or
   unknown name is a usage error (exit 2). The flag chooses only which entry
-  files are edited. The skill bundles go to both skill roots whichever
-  harnesses are chosen.
+  files are edited. The skill dispatch entries go to both skill roots
+  whichever harnesses are chosen.
 - `--uninstall` removes what the receipt lists. It takes no `--harness`.
 - `--dry-run` prints the plan without writing anything.
 
@@ -106,8 +108,8 @@ before writing anything, or failed after a clean plan. 2 means a usage error.
 | Payload        | `$XDG_DATA_HOME/idd-skill/<version>/` when `XDG_DATA_HOME` is a qualified root, else `~/.local/share/idd-skill/<version>/` | Always              |
 | Current link   | `current` in the data root, pointing at the version directory                                                              | Always              |
 | Receipt        | `receipt.json` in the data root                                                                                            | Always              |
-| Claude skills  | `~/.claude/skills/issue-authoring/`, `~/.claude/skills/idd-spec-audit/`                                                    | Always              |
-| Agent skills   | `~/.agents/skills/issue-authoring/`, `~/.agents/skills/idd-spec-audit/`                                                    | Always              |
+| Claude skills  | `~/.claude/skills/issue-authoring/SKILL.md`, `~/.claude/skills/idd-spec-audit/SKILL.md`                                    | Always              |
+| Agent skills   | `~/.agents/skills/issue-authoring/SKILL.md`, `~/.agents/skills/idd-spec-audit/SKILL.md`                                    | Always              |
 | Claude entry   | `~/.claude/CLAUDE.md`                                                                                                      | `claude` selected   |
 | Codex entry    | `$CODEX_HOME/AGENTS.md` when `CODEX_HOME` is a qualified root, else `~/.codex/AGENTS.md`                                   | `codex` selected    |
 | OpenCode entry | `opencode.json` under `$XDG_CONFIG_HOME/opencode/` when `XDG_CONFIG_HOME` is a qualified root, else `~/.config/opencode/`  | `opencode` selected |
@@ -121,6 +123,98 @@ or replaces only its own managed block. For `opencode.json` it adds one string
 to the `instructions` array. The rest of the file stays as it was. When an entry
 file does not exist, the installer creates it as a whole file that the receipt
 lists.
+
+## Skill dispatch and migration
+
+Each installed skill's `SKILL.md` keeps its original `name` and `description`
+frontmatter, then uses the stable dispatcher body from
+`idd-template/user-global/skill-entry.md`, and ends with an
+`<!-- idd-skill-bundle: sha256:... -->` marker. The marker names the skill
+bundle's component digest, computed the same way a prepared manifest records
+it. The installer does not place the
+full skill contracts or their references in the global skill roots. The
+complete `skills/<name>/` trees live in each immutable set that
+`idd-onboard --distribution prepare` creates under
+`<data root>/prepared/<source commit>/`. `--install-user-global` prepares no
+set.
+
+Before reading a full contract, the host-owned wrapper must preserve
+repository-local skill precedence, supply the stable session ID, and resolve
+the active IDD selection with `idd-activation` or the standalone read-only
+`idd-onboard --distribution inspect` route. The standalone route accepts any
+report `source` whose report is verified, prepared, and compatible, with a
+`coherent-candidate`, `pin-preserved`, or `session-bound` verdict. The
+dispatcher checks that the prepared manifest names the selected commit and
+matches the reported component digests, verifies the selected skill's
+`SKILL.md` and each reference against the manifest hashes, then reads that
+skill from the same prepared set.
+
+The recorded `components.helper.invocation` is the set's entry helper; for a
+set that `idd-onboard --distribution prepare` creates, it is the activation
+command. The dispatcher does not run it. It passes the selected contract the
+absolute path of the recorded `command` inside the prepared set and the
+recorded `argv`, as data; callers must not rebuild the invocation from a
+mutable package. Before handing it over, require the command to be a safe
+relative path listed in `components.helper.files`, require `argv` to contain
+only strings, and verify the command file against its listed SHA-256. The
+contract starts the current Node.js executable with that path and arguments
+through an argument-array process API, never a shell, and uses the
+invocation's repository or worktree as the working directory, not the
+prepared-set root. Every other helper the contract names resolves through the
+repository's own `helperRuntime` profile, as the contract says. The contract
+and its entry helper therefore come from one set, and an older coherent build
+needs no newer publisher or selector. Those other helpers stay with the
+selected build across a global update only when the repository pins its
+`helperRuntime` package or vendors its helpers; a profile that runs the
+commands on `PATH` uses whatever build is installed there.
+
+The source repository records these installer-only payload files in
+`audit/sync-manifest.json` under `userGlobalInstallerPayloads`. They are
+included in the installed payload and prepared instruction component, but are
+not added to the portable adopter import block. Resolve
+`prepared/<source-commit>` under the qualified data root using the selected
+report's commit;
+`instructionsRoot` may name the checkout root for repository-local
+instructions, so it is not always the prepared-set parent.
+
+The selection resolver ties `global-current` and `installed-bundle` to a
+prepared set through these entries. For a set whose instructions include
+`user-global/skill-entry.md`, each global `SKILL.md` must be receipt-owned and
+equal that set's skill frontmatter followed by the set's dispatcher body and
+its bundle digest marker, so builds whose instructions and frontmatter are
+identical still match only their own set. An older set without that template
+still matches only through full copied bundles.
+
+Migrate from copied skills in this order:
+
+1. Prepare the build from a trusted checkout:
+   `idd-onboard --distribution prepare --session-id <id> --source <checkout>`.
+2. Run `--install-user-global` from the same build.
+3. In each repository session, rerun activation and bind when it reports
+   `binding-required`: `idd-onboard --distribution bind --session-id <id>`.
+
+Until a matching set is prepared, the dispatcher stops and reports the
+inspection `verdict` and `recovery`; it never loads a copied global contract
+instead. After an install with no matching prepared set, an unpinned
+repository or a run outside Git reports `migration-required` with recovery
+`migrate`, and a pinned repository reports `not-verified-usable` with
+recovery `reselect`. Recovery `prepare` appears only when a matching set
+exists but has lost files. In each case the fix is step 1 above: prepare the
+installed build, then rerun activation. Preparation reads
+`schemas/distribution-manifest.schema.json` from the source commit, so a commit
+without that file cannot be prepared. That covers every release through
+v0.17.0. The global dispatcher has no set to load for such a build and stops;
+a repository-local skill copy still takes precedence over it.
+
+An upgrade replaces each receipt-owned global `SKILL.md` with the dispatcher
+and prunes unchanged receipt-owned files from the former full skill copies.
+Their former subdirectories stay listed in the receipt, and on disk, until
+uninstall. Edited files, unowned collisions, or unsafe parents stop the
+migration. The installer does not inspect or change any prepared set or
+repository/session binding, so those remain available. It does not rewrite
+external host wrappers or silently fall back to a copied global contract.
+External wrappers remain operator-owned and must be diagnosed or updated by
+their owner.
 
 ## Uninstall
 
@@ -451,7 +545,9 @@ There are three standalone routes:
 
 1. Outside Git or in an inactive repository, the installed spec-audit
    dispatcher uses the immutable bundle recorded by its own verified
-   installation, reported as `installed-bundle`. This route is read-only and
+   installation. Outside Git the report names it `installed-bundle`; in an
+   inactive repository the same set is reported as `global-current`, or as
+   `repository-pin` when the repository pins one. This route is read-only and
    starts no IDD loop or workflow mutation.
 2. Authoring requires the target repository's existing activation and
    publication prerequisites. An inactive target keeps the existing
