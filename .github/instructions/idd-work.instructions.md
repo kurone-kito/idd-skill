@@ -490,15 +490,14 @@ merge commit stops the inventory and cleanup. Map other commits to a
 split-proposal child (path overlap; unclear overlap blocks) or to not reusable,
 and post the inventory on the source issue (branch, base and head SHA; a line per
 SHA, pushed/unpushed). Before LWR `--apply`, the live list must match the posted
-inventory; after it, unpushed SHAs must be ancestors of the backup ref when one
-exists, and pushed ones of `origin/<branch>`, else stop. Child numbers come from
-the authoring set. Cleanup needs exactly one trusted, unedited inventory comment
-for the live head. A child confirms each pick by its `(cherry picked from commit
-<sha>)` trailer, not by patch-id, and retries unconfirmed SHAs. Until every
-child-mapped commit is confirmed, or if no safe transfer path exists, keep the
-source worktree and issue open and report. A not-reusable mapping is a record
-only; discarding needs owner or user authorization and the LWR `--apply` gate,
-never `--force`.
+inventory. After it, if unpushed SHAs exist, the backup ref must exist, resolve
+to the pre-apply tip, and contain them; pushed SHAs must be ancestors of
+`origin/<branch>`; else stop. Child numbers come from the authoring set. Cleanup
+needs exactly one trusted, unedited inventory comment for the live head. A child
+confirms each pick by its `(cherry picked from commit <sha>)` trailer, not by
+patch-id. Until every child-mapped commit is confirmed, keep the source worktree
+and issue open and report. Discarding a not-reusable mapping needs owner or user
+authorization and the LWR `--apply` gate, never `--force`.
 
 **Standing split** is the helper-runtime exception to the worker-side
 authoring and scope-overrun rules, for a genuine-need split only (never a

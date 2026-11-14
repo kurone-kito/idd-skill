@@ -1680,13 +1680,14 @@ come from the authoring set (`authoring-set-members`), not from this comment, so
 the posted inventory is never edited.
 
 Before `--apply`, the live `git rev-list` set and each `-` path check must match
-the posted inventory. LWR writes `refs/idd-lwr/<branch>` only when the branch has
-unpushed commits, so the backup check applies only then. After `--apply`, the
-ref must resolve to the tip recorded before `--apply`, because a ref left by an
-interrupted recovery can contain a SHA without backing up this cleanup. Each
-unpushed SHA must then be an ancestor of that ref. Each pushed SHA must be an
-ancestor of `origin/<branch>`. Both checks use `git merge-base --is-ancestor`,
-and any exit code other than 0 or 1 is a stop.
+the posted inventory. LWR writes `refs/idd-lwr/<branch>` whenever the branch has
+unpushed commits. So when unpushed SHAs exist, the ref must exist after
+`--apply` and resolve to the tip recorded before `--apply`, because a ref left
+by an interrupted recovery can contain a SHA without backing up this cleanup. A
+missing ref means the backup did not happen, so cleanup stops. Each unpushed SHA
+must then be an ancestor of that ref. Each pushed SHA must be an ancestor of
+`origin/<branch>`. Both checks use `git merge-base --is-ancestor`, and any exit
+code other than 0 or 1 is a stop.
 
 The re-check before cleanup reads exactly one inventory comment by a trusted,
 unedited author for the live head. This is an interim rule: zero, several, or
@@ -1708,6 +1709,10 @@ claim, and a released child no longer carries the authoring label that the
 finalize preflight requires, so a transfer can stall with no safe route forward.
 The source then stays open and is reported. A delayed-finalization path for
 released children is a follow-up, not part of this change.
+
+A base that advances after the inventory is posted leaves the record stale, and
+finalize then stops. Superseding a stale record is a follow-up, not part of this
+change.
 
 A not-reusable mapping is a record only: discarding it needs explicit owner or
 user authorization and the LWR `--apply` gate, never `--force`.
