@@ -5565,3 +5565,54 @@ test('CLI: a malformed --origin-issue is refused before any write', () => {
     fixture.restore();
   }
 });
+
+test('CLI: an empty --origin-issue is refused, not treated as absent', () => {
+  const fixture = setup({ labels: ['status:authoring'] });
+  try {
+    const result = fixture.run([...files(fixture), '--origin-issue', '']);
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stderr, /positive integer/);
+    assert.deepEqual(writes(fixture.log()), []);
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('CLI: a marker quoted in code does not require --origin-issue', () => {
+  const fixture = setup({ labels: ['status:authoring'] });
+  try {
+    const argv = files(fixture, 'needs-decision');
+    writeFileSync(
+      join(fixture.dir, 'body.md'),
+      `${draftBody('needs-decision')}\n\`<!-- idd-skill-authoring-defer-source: review-needs-decision -->\`\n`,
+    );
+    const result = fixture.run(argv);
+    assert.equal(result.status, 0, result.stderr);
+    const report = JSON.parse(result.stdout);
+    const lint = report.steps.find((s: { step: string }) => s.step === 'lint');
+    assert.ok(!lint.detail.args.includes('--origin-issue'));
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('CLI: a needs-decision defer with --origin-issue passes that origin to the linter', () => {
+  const fixture = setup({ labels: ['status:authoring'] });
+  try {
+    const argv = files(fixture, 'needs-decision');
+    writeFileSync(
+      join(fixture.dir, 'body.md'),
+      `${draftBody('needs-decision')}\n<!-- idd-skill-authoring-defer-source: review-needs-decision -->\nRefs #4683\n`,
+    );
+    const result = fixture.run([...argv, '--origin-issue', '4683']);
+    assert.equal(result.status, 0, result.stderr);
+    const report = JSON.parse(result.stdout);
+    const lint = report.steps.find((s: { step: string }) => s.step === 'lint');
+    const at = lint.detail.args.indexOf('--origin-issue');
+    assert.ok(at >= 0);
+    assert.equal(lint.detail.args[at + 1], '4683');
+    assert.deepEqual(writes(fixture.log()), []);
+  } finally {
+    fixture.restore();
+  }
+});

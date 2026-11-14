@@ -46,6 +46,7 @@ import {
   readForcedHandoffAuthorityPolicy,
   readForcedHandoffMode,
 } from './collaborator-permission.mjs';
+import { hasDeferSourceMarker } from './discover-readiness-check.mjs';
 import {
   ghApiJson,
   ghText,
@@ -632,6 +633,7 @@ function parseArgs(argv) {
     policy: values.policy ?? '',
     markerPrefix: text('marker-prefix'),
     originIssue: text('origin-issue'),
+    originIssueGiven: values['origin-issue'] !== undefined,
     help,
   };
 }
@@ -1745,14 +1747,17 @@ function publish(input) {
       );
     }
   }
-  if (args.originIssue !== '' && !/^[1-9][0-9]*$/.test(args.originIssue)) {
+  if (args.originIssueGiven && !/^[1-9][0-9]*$/.test(args.originIssue)) {
     return refuse('--origin-issue must be a positive integer', base);
   }
-  const markerName = markerPrefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const needsDecisionDefer = new RegExp(
-    `<!--\\s*${markerName}-authoring-defer-source:\\s*review-needs-decision\\s*-->`,
-  ).test(input.injected);
-  if (needsDecisionDefer && args.originIssue === '') {
+  // The same code-masking check the linter applies, so a marker quoted in code
+  // is not treated as live.
+  const needsDecisionDefer = hasDeferSourceMarker(
+    input.injected,
+    markerPrefix,
+    'review-needs-decision',
+  );
+  if (needsDecisionDefer && !args.originIssueGiven) {
     return refuse(
       'a review-needs-decision defer-source publish requires --origin-issue <n> naming the expected Refs origin',
       base,
