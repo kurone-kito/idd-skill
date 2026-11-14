@@ -71,21 +71,11 @@ reading it. Never read a contract or reference from `~/.claude/skills/` or
 
 `components.helper.invocation` records the set's entry helper; for a set that
 `idd-onboard --distribution prepare` creates, that is the activation command.
-Before handing it over, require `components.helper.invocation.command` to be a
-safe relative path that exactly matches a `path` in
-`components.helper.files`. Require `argv` to be an array of
-strings, and verify the command file's SHA-256 against that helper file entry.
-If any field is absent, mismatched, or unverified, stop. The dispatcher does
-not run the helper itself. It passes the selected contract, as data, the
-absolute path of that command inside this prepared set and the recorded `argv`
-from the same verified manifest. When the contract runs that entry helper, it
-starts the current Node.js executable with that absolute path, the recorded
-`argv`, and the contract's own arguments. It uses an argument-array process
-API, never shell interpolation, and the invocation's repository or worktree as
-the working directory, never the prepared-set root. Do not reconstruct the
-command from the current package. Every other helper the contract names
-resolves through the repository's own `helperRuntime` profile, as the
-contract says; the dispatcher does not substitute another one.
+The dispatcher does not run that helper and does not pass it to the contract,
+so this build only records it. Do not reconstruct the command from the current
+package. Every helper the contract names resolves through the repository's own
+`helperRuntime` profile, as the contract says; the dispatcher does not
+substitute another one.
 
 ## Host wrapper contract
 

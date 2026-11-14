@@ -149,23 +149,16 @@ matches the reported component digests, verifies the selected skill's
 `SKILL.md` and each reference against the manifest hashes, then reads that
 skill from the same prepared set.
 
-The recorded `components.helper.invocation` is the set's entry helper; for a
-set that `idd-onboard --distribution prepare` creates, it is the activation
-command. The dispatcher does not run it. It passes the selected contract the
-absolute path of the recorded `command` inside the prepared set and the
-recorded `argv`, as data; callers must not rebuild the invocation from a
-mutable package. Before handing it over, require the command to be a safe
-relative path listed in `components.helper.files`, require `argv` to contain
-only strings, and verify the command file against its listed SHA-256. The
-contract starts the current Node.js executable with that path and arguments
-through an argument-array process API, never a shell, and uses the
-invocation's repository or worktree as the working directory, not the
-prepared-set root. Every other helper the contract names resolves through the
-repository's own `helperRuntime` profile, as the contract says. The contract
-and its entry helper therefore come from one set, and an older coherent build
-needs no newer publisher or selector. Those other helpers stay with the
-selected build across a global update only when the repository pins its
-`helperRuntime` package or vendors its helpers; a profile that runs the
+The recorded `components.helper.invocation` names the set's entry helper; for
+a set that `idd-onboard --distribution prepare` creates, it is the activation
+command. The dispatcher does not run that command and does not pass it to the
+contract, so this build only records it. Callers must not rebuild the
+invocation from a mutable package. Every helper the contract names resolves
+through the repository's own `helperRuntime` profile, as the contract says.
+The contract and its entry helper therefore come from one set, and an older
+coherent build needs no newer publisher or selector. Those other helpers stay
+with the selected build across a global update only when the repository pins
+its `helperRuntime` package or vendors its helpers; a profile that runs the
 commands on `PATH` uses whatever build is installed there.
 
 The source repository records these installer-only payload files in

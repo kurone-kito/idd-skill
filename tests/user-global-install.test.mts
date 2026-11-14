@@ -2136,16 +2136,10 @@ test('the stable dispatcher preserves exact routing and helper checks', () => {
     "recomputed from that component's `files` list",
     '`components.skillBundles.<name>.provenance.commit`',
     'verify each one against the SHA-256',
-    '`components.helper.invocation.command`',
-    '`components.helper.files`',
-    'safe relative path that exactly matches a `path` in',
-    '`argv` to be an array of strings',
-    "verify the command file's SHA-256 against that helper file entry",
     "records the set's entry helper",
-    'The dispatcher does not run the helper itself.',
-    "Every other helper the contract names resolves through the repository's own `helperRuntime` profile",
-    'argument-array process API, never shell interpolation',
-    "the invocation's repository or worktree as the working directory, never the prepared-set root",
+    'The dispatcher does not run that helper and does not pass it to the contract,',
+    "Every helper the contract names resolves through the repository's own",
+    '`helperRuntime` profile, as the contract says',
     'External harness wrappers remain operator-owned',
   ]) {
     assert.ok(
@@ -2153,6 +2147,16 @@ test('the stable dispatcher preserves exact routing and helper checks', () => {
       `missing dispatch rule: ${requirement}`,
     );
   }
+  // The dispatcher must not claim to hand the helper to the contract: no
+  // consumer of that handoff exists in the installed skill contracts.
+  assert.ok(
+    !dispatcher.includes('passes the selected contract'),
+    'the dispatcher must not describe a helper handoff it does not implement',
+  );
+  assert.ok(
+    !dispatcher.includes('absolute path of that command'),
+    'the dispatcher must not describe running the verified helper',
+  );
 });
 
 test('pinned sessions dispatch their own skills and helpers after global current moves', () => {
