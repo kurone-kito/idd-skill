@@ -1689,11 +1689,15 @@ must then be an ancestor of that ref. Each pushed SHA must be an ancestor of
 `origin/<branch>`. Both checks use `git merge-base --is-ancestor`, and any exit
 code other than 0 or 1 is a stop.
 
-The re-check before cleanup reads exactly one inventory comment by a trusted,
-unedited author for the live head. This is an interim rule: zero, several, or
-edited comments stop. The durable record contract (a marker type and a helper
-that parses and reads it back) is a follow-up, because it adds a marker and a
-helper outside this change's scope.
+The re-check before cleanup first refreshes the base with the explicit refspec
+and stops on failure, because a stale tracking ref can accept an inventory after
+the base advanced. It then matches the live SHA list and re-runs each `-` row's
+path check, because a new base commit can invalidate a `-` disposition without
+changing the SHA list. It reads exactly one trusted, unedited inventory comment
+for the live head; zero, several, or edited comments stop. This is an interim
+rule. The durable record contract (a marker type and a helper that parses and
+reads it back) is a follow-up, because it adds a marker and a helper outside
+this change's scope.
 
 Finalize never transfers, because the replacement children are not claimed yet.
 A child picks from its own worktree after its fresh claim, one SHA per `git
