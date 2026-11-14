@@ -1747,8 +1747,14 @@ function publish(input) {
       );
     }
   }
-  if (args.originIssueGiven && !/^[1-9][0-9]*$/.test(args.originIssue)) {
-    return refuse('--origin-issue must be a positive integer', base);
+  if (
+    args.originIssueGiven &&
+    !(
+      /^[1-9][0-9]*$/.test(args.originIssue) &&
+      Number.isSafeInteger(Number(args.originIssue))
+    )
+  ) {
+    return refuse('--origin-issue must be a positive safe integer', base);
   }
   // The same code-masking check the linter applies, so a marker quoted in code
   // is not treated as live.

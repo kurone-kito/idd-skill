@@ -5559,7 +5559,7 @@ test('CLI: a malformed --origin-issue is refused before any write', () => {
       '--apply',
     ]);
     assert.equal(result.status, 1, result.stderr);
-    assert.match(result.stderr, /positive integer/);
+    assert.match(result.stderr, /positive safe integer/);
     assert.deepEqual(writes(fixture.log()), []);
   } finally {
     fixture.restore();
@@ -5571,7 +5571,7 @@ test('CLI: an empty --origin-issue is refused, not treated as absent', () => {
   try {
     const result = fixture.run([...files(fixture), '--origin-issue', '']);
     assert.equal(result.status, 1, result.stderr);
-    assert.match(result.stderr, /positive integer/);
+    assert.match(result.stderr, /positive safe integer/);
     assert.deepEqual(writes(fixture.log()), []);
   } finally {
     fixture.restore();
@@ -5611,6 +5611,23 @@ test('CLI: a needs-decision defer with --origin-issue passes that origin to the 
     const at = lint.detail.args.indexOf('--origin-issue');
     assert.ok(at >= 0);
     assert.equal(lint.detail.args[at + 1], '4683');
+    assert.deepEqual(writes(fixture.log()), []);
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('CLI: an origin issue beyond the safe-integer range is refused before any write', () => {
+  const fixture = setup({ labels: ['status:authoring'] });
+  try {
+    const result = fixture.run([
+      ...files(fixture, 'needs-decision'),
+      '--origin-issue',
+      '9007199254740993',
+      '--apply',
+    ]);
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stderr, /positive safe integer/);
     assert.deepEqual(writes(fixture.log()), []);
   } finally {
     fixture.restore();
