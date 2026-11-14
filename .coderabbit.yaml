@@ -1,5 +1,5 @@
 chat:
-  auto_reply: true
+  auto_reply: false
 early_access: true
 language: en
 reviews:
