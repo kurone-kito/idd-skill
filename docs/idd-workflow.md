@@ -1223,7 +1223,27 @@ costs one extra decision toward the caps.
 
 - `decisionIssue`: kurone-kito/idd-skill#4538 and kurone-kito/idd-skill#4535,
   with the kurone-kito/idd-skill#4528 lifecycle.
-- `runtimeQuestion`: kurone-kito/idd-skill#4539.
+- `runtimeQuestion`: a product, technical, or scope choice that a
+  full-profile session meets while implementing a claimed issue (B2, B3,
+  or C), in an ordinary issue or in a needs-decision source under
+  provisional execution. With the class enabled and the procedure passing,
+  the session records `class=runtimeQuestion` with `source` set to the
+  claimed issue and `claim` to its claim ID, files the confirmation issue,
+  and continues within the issue's scope. An ordinary claimed issue closes
+  on merge as usual. A needs-decision source follows the
+  kurone-kito/idd-skill#4528 lifecycle and keeps its bundle unchanged, and
+  its cap counts the pickup choices too. A choice whose options all leave
+  the issue's scope keeps today's hold. A diff that fails
+  `effort-candidate-file-limit`, with no advisory disposition from the
+  helper, takes the B3 scope-overrun route. When the
+  class is not enabled, the trusted read fails, a cap is reached or
+  unreadable, or the procedure keeps today's behavior, the stop stays as it
+  is today. These routes stay unchanged: review findings handled by
+  `critiqueLoop.deferNeedsDecision`, where a CODEOWNER or required reviewer,
+  `CHANGES_REQUESTED`, scope-fenced items, merge holds, and CI and
+  branch-sync holds still stop; any other E or F phase question; a B2.1
+  premise conflict, which keeps its addendum route; a B3 scope overrun; and
+  the lite profile's stronger-session handoff.
 - `authoringChoice`: the Interactive choice rule in `contract.md`.
 - `worktreeRemnant`: §LWR in [idd-resume-detail.md](idd-resume-detail.md).
 - `b1Leftover`: [B1 leftovers](#b1-leftovers).
