@@ -153,7 +153,8 @@ The recorded `components.helper.invocation` names the set's entry helper; for
 a set that `idd-onboard --distribution prepare` creates, it is the activation
 command. The dispatcher does not run that command and does not pass it to the
 contract, so this build only records it. Callers must not rebuild the
-invocation from a mutable package. Every helper the contract names resolves
+invocation from a mutable package (preventive; no observed incident yet).
+Every helper the contract names resolves
 through the repository's own `helperRuntime` profile, as the contract says.
 The contract and its entry helper therefore come from one set, and an older
 coherent build needs no newer publisher or selector. Those other helpers stay
@@ -206,9 +207,9 @@ uninstall. Edited files, unowned collisions, or unsafe parents stop the
 migration. The installer does not change any prepared set or
 repository/session binding, so those remain available. An incomplete
 receipt-owned prepared set, such as one left without `manifest.json` by an
-interrupted preparation, stops the install. It does
-not rewrite external host wrappers or silently fall back to a copied global
-contract.
+interrupted preparation, stops the install (preventive; no observed incident
+yet). It does not rewrite external host wrappers or silently fall back to a
+copied global contract.
 External wrappers remain operator-owned and must be diagnosed or updated by
 their owner.
 
