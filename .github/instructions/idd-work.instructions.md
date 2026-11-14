@@ -482,19 +482,21 @@ and stop without pushing.
 **Commit inventory** (helper runtime only; before LWR, lost-claim cleanup, or
 closure; clone-scoped
 [lock](../../docs/idd-helper-scripts.md#clone-scoped-lock)): follow the
-[inventory procedure](../../docs/idd-design-rationale.md#inventory-branch-only-commits-before-scope-overrun-cleanup-issue-4683),
-failing closed. Fetch with `git fetch origin {development-branch}:refs/remotes/origin/{development-branch}`,
+[inventory procedure](../../docs/idd-design-rationale.md#inventory-branch-only-commits-before-scope-overrun-cleanup-issue-4683).
+Fetch with `git fetch origin {development-branch}:refs/remotes/origin/{development-branch}`,
 stop on failure, and count a `git cherry` `-` as already in base only when
 `git log origin/{development-branch} -- <paths>` lists exactly one commit. A
-merge commit stops the inventory and cleanup. Before LWR `--apply`, the live
-list must match the posted inventory; after it, unpushed SHAs must be ancestors
-of the backup ref when one exists, and pushed ones of `origin/<branch>`, else
-stop. Child numbers come from the authoring set, not the posted comment.
-Cleanup needs exactly one trusted, unedited inventory comment for the live head;
-any other count stops. A child confirms each pick by its `(cherry picked from
-commit <sha>)` trailer, not by patch-id, and retries unconfirmed SHAs. Until
-every child-mapped commit is confirmed, or if no safe transfer path exists, keep
-the source worktree and issue open and report. A not-reusable mapping is a record
+merge commit stops the inventory and cleanup. Map other commits to a
+split-proposal child (path overlap; unclear overlap blocks) or to not reusable,
+and post the inventory on the source issue (branch, base and head SHA; a line per
+SHA, pushed/unpushed). Before LWR `--apply`, the live list must match the posted
+inventory; after it, unpushed SHAs must be ancestors of the backup ref when one
+exists, and pushed ones of `origin/<branch>`, else stop. Child numbers come from
+the authoring set. Cleanup needs exactly one trusted, unedited inventory comment
+for the live head. A child confirms each pick by its `(cherry picked from commit
+<sha>)` trailer, not by patch-id, and retries unconfirmed SHAs. Until every
+child-mapped commit is confirmed, or if no safe transfer path exists, keep the
+source worktree and issue open and report. A not-reusable mapping is a record
 only; discarding needs owner or user authorization and the LWR `--apply` gate,
 never `--force`.
 
