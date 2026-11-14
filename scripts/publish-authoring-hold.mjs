@@ -110,6 +110,7 @@ const PUBLISH_AUTHORING_HOLD_FLAG_SPEC = {
   '--repo': { type: 'string' },
   '--policy': { type: 'string' },
   '--marker-prefix': { type: 'string' },
+  '--origin-issue': { type: 'string' },
   '--help': { type: 'boolean', short: 'h' },
 };
 const REPO_TOKEN_PATTERN = /^[A-Za-z0-9_.-]+$/;
@@ -348,6 +349,11 @@ export function buildLintArgs(input) {
   if (input.policy) {
     args.push('--config', input.policy);
   }
+  if (input.originIssue) {
+    // The linter compares it with the body's first Refs number, so it must
+    // come from the operator, never from the body itself.
+    args.push('--origin-issue', input.originIssue);
+  }
   if (input.shape === 'carrier' || input.shape === 'confirmation') {
     // audit-authored-issue refuses --expect-bucket with --shape carrier
     // (#4250); a confirmation issue has no bucket either (#4964).
@@ -441,7 +447,7 @@ function parseRetiredJournals(setting, journal) {
 }
 function printHelp() {
   process.stdout.write(`Usage:
-  node scripts/publish-authoring-hold.mjs --title <text> --body-file <path> [--review-result <path>] [--shape orphan|carrier|roadmap|child|confirmation] [--anchor <owner>/<repo>#<number>] [--bucket ready|needs-decision|blocked-by-human] [--owner <owner> --repo <repo>] [--policy <path>] [--marker-prefix <prefix>] [--apply]
+  node scripts/publish-authoring-hold.mjs --title <text> --body-file <path> [--review-result <path>] [--shape orphan|carrier|roadmap|child|confirmation] [--anchor <owner>/<repo>#<number>] [--bucket ready|needs-decision|blocked-by-human] [--owner <owner> --repo <repo>] [--policy <path>] [--marker-prefix <prefix>] [--origin-issue <n>] [--apply]
 
 Publishes one drafted issue under the issue-authoring hold, running
 contract.md's "New-issue ownership" steps in order. The default shape,
@@ -625,6 +631,7 @@ function parseArgs(argv) {
     repo: text('repo'),
     policy: values.policy ?? '',
     markerPrefix: text('marker-prefix'),
+    originIssue: text('origin-issue'),
     help,
   };
 }
@@ -1738,6 +1745,19 @@ function publish(input) {
       );
     }
   }
+  if (args.originIssue !== '' && !/^[1-9][0-9]*$/.test(args.originIssue)) {
+    return refuse('--origin-issue must be a positive integer', base);
+  }
+  const markerName = markerPrefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const needsDecisionDefer = new RegExp(
+    `<!--\\s*${markerName}-authoring-defer-source:\\s*review-needs-decision\\s*-->`,
+  ).test(input.injected);
+  if (needsDecisionDefer && args.originIssue === '') {
+    return refuse(
+      'a review-needs-decision defer-source publish requires --origin-issue <n> naming the expected Refs origin',
+      base,
+    );
+  }
   const lintArgs = buildLintArgs({
     shape: args.shape,
     title: args.title,
@@ -1749,6 +1769,7 @@ function publish(input) {
     // An explicit --config keeps the linter on the same repository file,
     // without its own user-global layers.
     policy: input.policyPath,
+    originIssue: args.originIssue || undefined,
   });
   const lint = runSiblingHelper('audit-authored-issue.mjs', lintArgs);
   const lintReport = { args: lintArgs, exitCode: lint.status };

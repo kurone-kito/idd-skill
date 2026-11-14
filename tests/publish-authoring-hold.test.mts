@@ -5512,3 +5512,56 @@ test('CLI: --help names the confirmation shape and its refusals', () => {
     fixture.restore();
   }
 });
+
+test('lint args: a supplied origin issue reaches the linter', () => {
+  const args = buildLintArgs({
+    shape: 'orphan',
+    title: 't',
+    bodyFile: 'b.md',
+    markerPrefix: 'idd-skill',
+    currentRepo: 'o/r',
+    bucket: 'needs-decision',
+    labels: resolvePublishLabels(
+      { labels: { needsDecisionLabelName: 'decide' } },
+      'needs-decision',
+    ),
+    originIssue: '4683',
+  });
+  const at = args.indexOf('--origin-issue');
+  assert.ok(at >= 0);
+  assert.equal(args[at + 1], '4683');
+});
+
+test('CLI: a needs-decision defer-source publish without --origin-issue is refused before any write', () => {
+  const fixture = setup({ labels: ['status:authoring'] });
+  try {
+    const argv = files(fixture, 'needs-decision');
+    writeFileSync(
+      join(fixture.dir, 'body.md'),
+      `${draftBody('needs-decision')}\n<!-- idd-skill-authoring-defer-source: review-needs-decision -->\n`,
+    );
+    const result = fixture.run([...argv, '--apply']);
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stderr, /requires --origin-issue/);
+    assert.deepEqual(writes(fixture.log()), []);
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('CLI: a malformed --origin-issue is refused before any write', () => {
+  const fixture = setup({ labels: ['status:authoring'] });
+  try {
+    const result = fixture.run([
+      ...files(fixture, 'needs-decision'),
+      '--origin-issue',
+      'abc',
+      '--apply',
+    ]);
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stderr, /positive integer/);
+    assert.deepEqual(writes(fixture.log()), []);
+  } finally {
+    fixture.restore();
+  }
+});
