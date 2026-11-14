@@ -50,6 +50,7 @@ import {
   readForcedHandoffAuthorityPolicy,
   readForcedHandoffMode,
 } from './collaborator-permission.mts';
+import { hasDeferSourceMarker } from './discover-readiness-check.mts';
 import {
   ghApiJson,
   ghText,
@@ -124,6 +125,7 @@ const PUBLISH_AUTHORING_HOLD_FLAG_SPEC = {
   '--repo': { type: 'string' },
   '--policy': { type: 'string' },
   '--marker-prefix': { type: 'string' },
+  '--origin-issue': { type: 'string' },
   '--help': { type: 'boolean', short: 'h' },
 } as const;
 
@@ -397,6 +399,7 @@ export function buildLintArgs(input: {
   bucket: PublishBucket;
   labels: readonly string[];
   policy?: string;
+  originIssue?: string;
 }): string[] {
   const args = [
     '--shape',
@@ -413,6 +416,11 @@ export function buildLintArgs(input: {
   ];
   if (input.policy) {
     args.push('--config', input.policy);
+  }
+  if (input.originIssue) {
+    // The linter compares it with the body's first Refs number, so it must
+    // come from the operator, never from the body itself.
+    args.push('--origin-issue', input.originIssue);
   }
   if (input.shape === 'carrier' || input.shape === 'confirmation') {
     // audit-authored-issue refuses --expect-bucket with --shape carrier
@@ -523,7 +531,7 @@ function parseRetiredJournals(
 
 function printHelp(): void {
   process.stdout.write(`Usage:
-  node scripts/publish-authoring-hold.mjs --title <text> --body-file <path> [--review-result <path>] [--shape orphan|carrier|roadmap|child|confirmation] [--anchor <owner>/<repo>#<number>] [--bucket ready|needs-decision|blocked-by-human] [--owner <owner> --repo <repo>] [--policy <path>] [--marker-prefix <prefix>] [--apply]
+  node scripts/publish-authoring-hold.mjs --title <text> --body-file <path> [--review-result <path>] [--shape orphan|carrier|roadmap|child|confirmation] [--anchor <owner>/<repo>#<number>] [--bucket ready|needs-decision|blocked-by-human] [--owner <owner> --repo <repo>] [--policy <path>] [--marker-prefix <prefix>] [--origin-issue <n>] [--apply]
 
 Publishes one drafted issue under the issue-authoring hold, running
 contract.md's "New-issue ownership" steps in order. The default shape,
@@ -705,6 +713,8 @@ interface ParsedArgs {
   repo: string;
   policy: string;
   markerPrefix: string;
+  originIssue: string;
+  originIssueGiven: boolean;
   help: boolean;
 }
 
@@ -726,6 +736,8 @@ function parseArgs(argv: string[]): ParsedArgs {
     repo: text('repo'),
     policy: (values.policy as string | undefined) ?? '',
     markerPrefix: text('marker-prefix'),
+    originIssue: text('origin-issue'),
+    originIssueGiven: values['origin-issue'] !== undefined,
     help,
   };
 }
@@ -2099,6 +2111,28 @@ function publish(input: {
       );
     }
   }
+  if (
+    args.originIssueGiven &&
+    !(
+      /^[1-9][0-9]*$/.test(args.originIssue) &&
+      Number.isSafeInteger(Number(args.originIssue))
+    )
+  ) {
+    return refuse('--origin-issue must be a positive safe integer', base);
+  }
+  // The same code-masking check the linter applies, so a marker quoted in code
+  // is not treated as live.
+  const needsDecisionDefer = hasDeferSourceMarker(
+    input.injected,
+    markerPrefix,
+    'review-needs-decision',
+  );
+  if (needsDecisionDefer && !args.originIssueGiven) {
+    return refuse(
+      'a review-needs-decision defer-source publish requires --origin-issue <n> naming the expected Refs origin',
+      base,
+    );
+  }
   const lintArgs = buildLintArgs({
     shape: args.shape,
     title: args.title,
@@ -2110,6 +2144,7 @@ function publish(input: {
     // An explicit --config keeps the linter on the same repository file,
     // without its own user-global layers.
     policy: input.policyPath,
+    originIssue: args.originIssue || undefined,
   });
   const lint = runSiblingHelper('audit-authored-issue.mjs', lintArgs);
   const lintReport = { args: lintArgs, exitCode: lint.status };
