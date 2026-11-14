@@ -210,9 +210,12 @@ An upgrade replaces each receipt-owned global `SKILL.md` with the dispatcher
 and prunes unchanged receipt-owned files from the former full skill copies.
 Their former subdirectories stay listed in the receipt, and on disk, until
 uninstall. Edited files, unowned collisions, or unsafe parents stop the
-migration. The installer does not inspect or change any prepared set or
-repository/session binding, so those remain available. It does not rewrite
-external host wrappers or silently fall back to a copied global contract.
+migration. The installer does not change any prepared set or
+repository/session binding, so those remain available. An incomplete
+receipt-owned prepared set, such as one left without `manifest.json` by an
+interrupted preparation, stops the install. It does
+not rewrite external host wrappers or silently fall back to a copied global
+contract.
 External wrappers remain operator-owned and must be diagnosed or updated by
 their owner.
 
