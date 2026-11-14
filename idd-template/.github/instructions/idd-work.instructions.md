@@ -476,24 +476,22 @@ and stop without pushing.
 
 **Commit inventory** (helper runtime only; before LWR, lost-claim cleanup, or
 closure; clone-scoped
-[lock](../../docs/idd-helper-scripts.md#clone-scoped-lock)): fetch `origin`,
-name the source branch (not primary HEAD), and list its branch-only commits via
-`git rev-list origin/{development-branch}..<source-branch>`. Mark
-patch-equivalent commits (`git cherry origin/{development-branch}
-<source-branch>`, `-`) as already in base unless a later base commit reverts
-them. Map each other commit (SHA and paths recorded) to a split-proposal child
-(path overlap with its Candidate files; unclear overlap blocks) or to not
-reusable; add its issue number once published. A merge commit stops the
-inventory. Post it on the source issue (branch, base and head SHA, a line per
-SHA). Before LWR `--apply`, the live list must match the posted one; after it,
-check unpushed SHAs against `refs/idd-lwr/<branch>` and pushed ones against
-`origin/<branch>`, else stop. A child picks each SHA with `git cherry-pick -x
-<sha>` from its own worktree after its fresh claim; it aborts only if
-`CHERRY_PICK_HEAD` exists, confirms each pick by its `(cherry picked from commit
-<sha>)` trailer, and retries unconfirmed SHAs. Until every child-mapped commit
-is confirmed, or if no safe transfer path exists, keep the source worktree and
-issue open and report. A not-reusable mapping is a record only; discarding needs
-owner or user authorization and the LWR `--apply` gate, never `--force`.
+[lock](../../docs/idd-helper-scripts.md#clone-scoped-lock)): follow the
+[inventory procedure](../../docs/idd-design-rationale.md#inventory-branch-only-commits-before-scope-overrun-cleanup-issue-4683),
+failing closed. Fetch with `git fetch origin {development-branch}:refs/remotes/origin/{development-branch}`,
+stop on failure, and count a `git cherry` `-` as already in base only when
+`git log origin/{development-branch} -- <paths>` lists exactly one commit. A
+merge commit stops the inventory and cleanup. Before LWR `--apply`, the live
+list must match the posted inventory; after it, unpushed SHAs must be ancestors
+of the backup ref when one exists, and pushed ones of `origin/<branch>`, else
+stop. Child numbers come from the authoring set, not the posted comment.
+Cleanup needs exactly one trusted, unedited inventory comment for the live head;
+any other count stops. A child confirms each pick by its `(cherry picked from
+commit <sha>)` trailer, not by patch-id, and retries unconfirmed SHAs. Until
+every child-mapped commit is confirmed, or if no safe transfer path exists, keep
+the source worktree and issue open and report. A not-reusable mapping is a record
+only; discarding needs owner or user authorization and the LWR `--apply` gate,
+never `--force`.
 
 **Standing split** is the helper-runtime exception to the worker-side
 authoring and scope-overrun rules, for a genuine-need split only (never a
@@ -507,8 +505,8 @@ Pass explicit `--owner <owner> --repo <repo>` to
 `idd-effective-config --trusted-auto-decide`; add `--base-ref <base>` only
 for a PR. Require `status: readable`; never let checkout `origin` choose
 policy. The helper validates only the live base branch and has no exact-ref
-mode. Read the base head commit (`<policy-sha>`), run the check, then read the
-base head commit again, and continue only when both SHAs are equal. Then read
+mode. Read the base head (`<policy-sha>`), run the check, re-read it, and continue
+only if both SHAs match. Then read
 `standingApprovals.split.enabled` and
 `standingApprovals.split.maxCandidateFiles` from `.github/idd/config.json` at
 `<policy-sha>` through GitHub Contents. Save its decoded contents as
