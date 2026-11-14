@@ -4,10 +4,11 @@
 // `pnpm run build`. Edit this source, never the generated copy.
 
 // User-global install and uninstall (#4243). Install copies the instruction
-// payload and the two skill trees into the user's roots, and records each
-// path it creates in a receipt. Uninstall removes only what the receipt lists
-// and what still matches it. Every write and removal goes through the
-// containment primitives in `user-global-paths.mts` (#4242).
+// payload and stable skill dispatch entries into the user's roots, and records
+// each path it creates in a receipt. Full skill trees stay in immutable
+// prepared sets. Uninstall removes only what the receipt lists and what still
+// matches it. Every write and removal goes through the containment primitives
+// in `user-global-paths.mts` (#4242).
 //
 // Ceilings (#4303). `resolveContext` declares the roots the operator named
 // (HOME first, then XDG_DATA_HOME, the parent of CODEX_HOME and
@@ -55,6 +56,7 @@ import {
 } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveBundleRoot } from './bundle-root.mts';
+import { renderSkillDispatcher } from './distribution-selection.mts';
 import {
   assertHelperEntryClosureResolvable,
   readHelperExtraRuntimeFiles,
@@ -189,7 +191,8 @@ const CHECKOUT_GIT_MAX_BUFFER_BYTES = 1024 * 1024 * 1024;
 
 const CURRENT = 'current';
 const PAYLOAD_BLOCK_ID = 'idd-template-core-files';
-const PAYLOAD_EXTRA_FILES = ['idd-template/user-global/entry.md'];
+const LEGACY_USER_GLOBAL_PAYLOAD_FILES = ['idd-template/user-global/entry.md'];
+const SKILL_DISPATCHER_TEMPLATE = 'idd-template/user-global/skill-entry.md';
 const SKILL_NAMES = ['issue-authoring', 'idd-spec-audit'];
 const SKILL_ROOT_NAMES = ['claude-skills', 'agents-skills'];
 const HARNESS_ROOT_NAMES = ['claude', 'codex', 'opencode'];
@@ -819,7 +822,9 @@ function repositoryWebUrl(packageJson: unknown): string {
   return `${url.origin}/${segments[0]}/${repo}`;
 }
 
-function componentListing(files: PreparedSourceFile[]): {
+function componentListing(
+  files: readonly Pick<PreparedSourceFile, 'componentPath' | 'sha256'>[],
+): {
   files: { path: string; sha256: string }[];
   digest: string;
 } {
@@ -1115,7 +1120,10 @@ function buildPreparedSet(
     };
   };
 
-  const instructions = [...block.paths, ...PAYLOAD_EXTRA_FILES].map((path) => {
+  const instructions = [
+    ...block.paths,
+    ...userGlobalPayloadFiles(syncManifest),
+  ].map((path) => {
     if (!path.startsWith('idd-template/')) {
       throw new Error(`payload path ${path} lacks the idd-template/ prefix`);
     }
@@ -1454,6 +1462,42 @@ function preparedExpectedEntries(build: PreparedSetBuild): {
 
 function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Payload extras are recorded in the sync manifest but are not part of the
+ * portable adopter import block. Older source commits predate that field and
+ * retain the original user-global entry as their complete extra-file list.
+ */
+function userGlobalPayloadFiles(
+  manifest: unknown,
+  requireSkillDispatcher = false,
+): string[] {
+  if (!isObjectRecord(manifest)) {
+    throw new Error('the sync manifest is not an object');
+  }
+  const configured = manifest.userGlobalInstallerPayloads;
+  const paths =
+    configured === undefined
+      ? [...LEGACY_USER_GLOBAL_PAYLOAD_FILES]
+      : configured;
+  if (
+    !Array.isArray(paths) ||
+    !paths.every(
+      (path): path is string =>
+        typeof path === 'string' &&
+        isSafeRelativeFilePath(path) &&
+        path.startsWith('idd-template/user-global/'),
+    ) ||
+    new Set(paths).size !== paths.length ||
+    !paths.includes('idd-template/user-global/entry.md') ||
+    (requireSkillDispatcher && !paths.includes(SKILL_DISPATCHER_TEMPLATE))
+  ) {
+    throw new Error(
+      'the sync manifest has an invalid user-global payload file list',
+    );
+  }
+  return paths;
 }
 
 function preparedManifestExpectedEntries(
@@ -2594,7 +2638,7 @@ function readPackageVersion(sourceRoot: string, fs: FsOps): string {
   return version;
 }
 
-/** Every payload and skill file, with its destination under the roots. */
+/** Every payload file and stable skill dispatch entry under the roots. */
 function buildTargets(
   ctx: Context,
   sourceRoot: string,
@@ -2605,6 +2649,7 @@ function buildTargets(
     fs.readFileSync(join(sourceRoot, 'audit', 'sync-manifest.json'), 'utf8'),
   ) as {
     generatedBlocks?: { id: string; stripPrefix: string; paths: string[] }[];
+    userGlobalInstallerPayloads?: unknown;
   };
   const block = (manifest.generatedBlocks ?? []).find(
     (candidate) => candidate.id === PAYLOAD_BLOCK_ID,
@@ -2613,7 +2658,8 @@ function buildTargets(
     throw new Error(`the sync manifest has no ${PAYLOAD_BLOCK_ID} block`);
   }
   const targets: Target[] = [];
-  for (const path of [...block.paths, ...PAYLOAD_EXTRA_FILES]) {
+  const extraPayloadFiles = userGlobalPayloadFiles(manifest, true);
+  for (const path of [...block.paths, ...extraPayloadFiles]) {
     if (!path.startsWith(block.stripPrefix)) {
       throw new Error(
         `payload path ${path} lacks the ${block.stripPrefix} prefix`,
@@ -2642,23 +2688,64 @@ function buildTargets(
       ...source,
     });
   }
+  const dispatcherTemplate = readSourceBytes(
+    sourceRoot,
+    SKILL_DISPATCHER_TEMPLATE,
+    fs,
+  );
+  const dispatchers = new Map<string, string>();
+  for (const skill of SKILL_NAMES) {
+    const skillDir = join(sourceRoot, 'skills', skill);
+    const files = listSourceFiles(skillDir, fs);
+    // A source skill with no SKILL.md is broken. Left alone it would also make
+    // every installed file of that skill look dropped, and the prune would
+    // remove them (#4302).
+    if (!files.includes('SKILL.md')) {
+      throw new Error(
+        `the source skill ${skillDir} has no SKILL.md; refusing; nothing was written`,
+      );
+    }
+    // The bundle digest uses the listing a prepared set records for this
+    // skill, so selection can tie the entry to that exact set.
+    const { digest } = componentListing(
+      files.map((path) => ({
+        componentPath: path,
+        sha256: readSource(join(skillDir, path), fs).sha256,
+      })),
+    );
+    const skillBytes = readSourceBytes(skillDir, 'SKILL.md', fs);
+    const rendered = renderSkillDispatcher(
+      skillBytes,
+      dispatcherTemplate,
+      skill,
+      digest,
+    );
+    // A null render means the source or template is not UTF-8, lacks valid
+    // frontmatter, or has a malformed digest. Refuse before any write, and name
+    // a missing frontmatter block the same way the installer always has.
+    if (rendered === null) {
+      if (
+        !/^\uFEFF?---\r?\n(?:[\s\S]*?\r?\n)?---\r?\n/u.test(
+          skillBytes.toString('utf8'),
+        )
+      ) {
+        throw new Error(`${skill}/SKILL.md has no complete YAML frontmatter`);
+      }
+      throw new Error(
+        `the dispatcher for ${skill} could not be rendered from its source; refusing; nothing was written`,
+      );
+    }
+    dispatchers.set(skill, rendered);
+  }
   for (const rootName of SKILL_ROOT_NAMES) {
     const root = rootNamed(ctx, rootName);
     for (const skill of SKILL_NAMES) {
-      const skillDir = join(sourceRoot, 'skills', skill);
-      const files = listSourceFiles(skillDir, fs);
-      // A source skill with no SKILL.md is broken. Left alone it would also make
-      // every installed file of that skill look dropped, and the prune would
-      // remove them (#4302).
-      if (!files.includes('SKILL.md')) {
-        throw new Error(
-          `the source skill ${skillDir} has no SKILL.md; refusing; nothing was written`,
-        );
-      }
-      for (const rel of files) {
-        const source = readSource(join(skillDir, rel), fs);
-        targets.push({ dest: join(root.path, skill, rel), ...source });
-      }
+      const text = dispatchers.get(skill) as string;
+      targets.push({
+        dest: join(root.path, skill, 'SKILL.md'),
+        text,
+        sha256: sha256Hex(text),
+      });
     }
   }
   return targets;
