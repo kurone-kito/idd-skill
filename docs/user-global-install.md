@@ -472,8 +472,9 @@ no network calls.
 
 The command takes `--cwd <path>` to classify another directory. On Command
 Prompt, run `"%USERPROFILE%\.local\bin\idd-activation.cmd" --session-id <id>`
-from the repository directory. On POSIX and PowerShell, run `idd-activation`
-from the repository directory. If it is absent from `PATH`, use
+from the repository directory. On POSIX and PowerShell, run
+`idd-activation --session-id <id>` from the repository directory. If it is
+absent from `PATH`, use
 `~/.local/bin/idd-activation` on POSIX, or
 `& "$HOME\.local\bin\idd-activation.cmd"` in PowerShell. Those
 executables are deployed by the host setup; `--install-user-global` installs
