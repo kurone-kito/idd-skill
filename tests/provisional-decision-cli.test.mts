@@ -187,6 +187,8 @@ function harness(options: {
   master?: 'enabled' | 'disabled';
   /** Master switch per read, in order; the last value repeats. */
   masterSequence?: readonly ('enabled' | 'disabled')[];
+  /** The trusted config changes once this many reads have happened. */
+  revisedAfterReads?: number;
   decisionIssue?: 'enabled' | 'class-off';
   store?: StubStore;
 }) {
@@ -209,7 +211,21 @@ function harness(options: {
         sequence[Math.min(trustReads.length - 1, sequence.length - 1)] ??
         options.master ??
         'enabled';
-      return trustSnapshot(master, options.decisionIssue ?? 'enabled');
+      const snapshot = trustSnapshot(
+        master,
+        options.decisionIssue ?? 'enabled',
+      );
+      const revised =
+        options.revisedAfterReads !== undefined &&
+        trustReads.length > options.revisedAfterReads;
+      return revised
+        ? {
+            ...snapshot,
+            policyConfig: {
+              trustedMarkerActors: ['someone-else'],
+            } as unknown as TrustedAutoDecideSnapshot['policyConfig'],
+          }
+        : snapshot;
     },
     createStore: (input) => {
       created.push({
@@ -571,4 +587,15 @@ test('an incomplete history read for a work transition is a recovery hold (exit 
   const report = lastReport(h.out);
   assert.equal(report.action, 'recovery-hold');
   assert.match(String(report.reason), /incomplete or undated/u);
+});
+
+test('a trusted config change between the planning read and the write blocks the write (exit 3)', async () => {
+  const h = harness({ revisedAfterReads: 1 });
+  const outcome = await runProvisionalDecisionCommandCli(
+    argv(requestFile(selectedRequest), ['--apply']),
+    h.deps,
+  );
+  assert.equal(exitCodeOf(outcome), 3);
+  assert.equal(lastReport(h.out).action, 'recovery-hold');
+  assert.deepEqual(h.store.appended, []);
 });

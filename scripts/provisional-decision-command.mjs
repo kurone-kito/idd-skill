@@ -269,6 +269,16 @@ function authorityFrom(report) {
   );
 }
 /**
+ * A fingerprint of the trusted authority and config. Null when the authority
+ * is not enabled. A write proceeds only while the fingerprint still matches the
+ * one taken at planning, so a change to the trusted config (marker actors, the
+ * label) blocks the write, not only a switch turning off.
+ */
+function trustFingerprint(snapshot) {
+  if (!authorityFrom(snapshot.report)) return null;
+  return JSON.stringify(snapshot.policyConfig ?? null);
+}
+/**
  * Re-check the authority before every append and label write. The planner's
  * gates use the trust read taken at the start, so a revocation between that
  * read and a write must still block the write.
@@ -530,6 +540,7 @@ export async function runProvisionalDecisionCommandCli(
     policy: trust.policyConfig,
   });
   const policyTrusted = authorityFrom(trust.report);
+  const startFingerprint = trustFingerprint(trust);
   let request;
   try {
     request = await buildRequest(shape, {
@@ -546,9 +557,10 @@ export async function runProvisionalDecisionCommandCli(
     // recovery hold, so it gets the same structured report and exit 3.
     return readFailureOutcome(error, args.apply, deps);
   }
-  const guarded = authorityCheckedStore(store, () =>
-    authorityFrom(deps.readTrust({ owner, repo }).report),
-  );
+  const guarded = authorityCheckedStore(store, () => {
+    const now = trustFingerprint(deps.readTrust({ owner, repo }));
+    return now !== null && now === startFingerprint;
+  });
   const result = await runProvisionalDecisionCommand(request, guarded, {
     apply: args.apply,
   });

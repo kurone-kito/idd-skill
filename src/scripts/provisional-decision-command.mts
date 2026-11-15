@@ -21,6 +21,7 @@ import {
 import {
   readTrustedAutoDecideWithConfig,
   type TrustedAutoDecideReport,
+  type TrustedAutoDecideSnapshot,
 } from './idd-config.mts';
 import {
   type ProvisionalDecisionBaseline,
@@ -320,6 +321,17 @@ function authorityFrom(report: TrustedAutoDecideReport): boolean {
   return (
     report.master === 'enabled' && report.classes.decisionIssue === 'enabled'
   );
+}
+
+/**
+ * A fingerprint of the trusted authority and config. Null when the authority
+ * is not enabled. A write proceeds only while the fingerprint still matches the
+ * one taken at planning, so a change to the trusted config (marker actors, the
+ * label) blocks the write, not only a switch turning off.
+ */
+function trustFingerprint(snapshot: TrustedAutoDecideSnapshot): string | null {
+  if (!authorityFrom(snapshot.report)) return null;
+  return JSON.stringify(snapshot.policyConfig ?? null);
 }
 
 /**
@@ -648,6 +660,7 @@ export async function runProvisionalDecisionCommandCli(
   });
 
   const policyTrusted = authorityFrom(trust.report);
+  const startFingerprint = trustFingerprint(trust);
   let request: ProvisionalDecisionCommandRequest;
   try {
     request = await buildRequest(shape, {
@@ -665,9 +678,10 @@ export async function runProvisionalDecisionCommandCli(
     return readFailureOutcome(error, args.apply, deps);
   }
 
-  const guarded = authorityCheckedStore(store, () =>
-    authorityFrom(deps.readTrust({ owner, repo }).report),
-  );
+  const guarded = authorityCheckedStore(store, () => {
+    const now = trustFingerprint(deps.readTrust({ owner, repo }));
+    return now !== null && now === startFingerprint;
+  });
   const result = await runProvisionalDecisionCommand(request, guarded, {
     apply: args.apply,
   });
