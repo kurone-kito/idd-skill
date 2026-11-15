@@ -246,6 +246,36 @@ function readFileOrNull(path: string): string | null {
   }
 }
 
+/** The lstat fields a fingerprint hashes. `stable` leaves out the inode change
+ * time, which moves when a hard-linked sibling is unlinked. */
+function statFingerprintSignature(stat: Stats, stable: boolean): string {
+  return [
+    stat.dev,
+    stat.ino,
+    stat.mode,
+    stat.size,
+    stat.mtimeMs,
+    ...(stable ? [] : [stat.ctimeMs]),
+  ].join(':');
+}
+
+/** True when two lstat snapshots taken around ONE read describe the same
+ * file. The ctime must agree even in `stable` mode: a rewrite that keeps the
+ * length and restores the mtime still moves it. Only a sibling's removal
+ * between two separate reads (the batches of one cleanup) is meant to be
+ * ignored, and `stable` does that through the signature alone. */
+export function statSnapshotsAgree(
+  before: Stats,
+  after: Stats,
+  stable: boolean,
+): boolean {
+  return (
+    before.ctimeMs === after.ctimeMs &&
+    statFingerprintSignature(before, stable) ===
+      statFingerprintSignature(after, stable)
+  );
+}
+
 /** Return a content-and-identity fingerprint for a recovery source path.
  * Ignored files are copied before destructive cleanup, so checking only that
  * the path is still ignored is insufficient: a writer can replace its
@@ -262,7 +292,8 @@ function readFileOrNull(path: string): string | null {
  * (unlinking one hard link updates the other's ctime) and the symlink target
  * walk (an earlier removal can delete a link's in-tree target). A batched
  * cleanup compares stable fingerprints from before its first clean with
- * ones read after earlier batches were removed (issue #5224). */
+ * ones read after earlier batches were removed (issue #5224). The ctime still
+ * has to hold still across the two lstat calls around one read. */
 export function pathFingerprintOnDisk(
   path: string,
   sourceRoots: readonly string[] = [],
@@ -284,20 +315,9 @@ export function pathFingerprintOnDisk(
     }
   }
   const statSignature = (stat: Stats): string =>
-    [
-      stat.dev,
-      stat.ino,
-      stat.mode,
-      stat.size,
-      stat.mtimeMs,
-      ...(stable ? [] : [stat.ctimeMs]),
-    ].join(':');
-  // Two lstat calls around one read must agree on the ctime even in stable
-  // mode: a rewrite that keeps the length and restores the mtime still moves
-  // it, and only a sibling's removal between *batches* is meant to be ignored.
+    statFingerprintSignature(stat, stable);
   const sameStat = (before: Stats, after: Stats): boolean =>
-    before.ctimeMs === after.ctimeMs &&
-    statSignature(before) === statSignature(after);
+    statSnapshotsAgree(before, after, stable);
   const targetIsInsideRemovedRoot = (resolvedTarget: string): boolean =>
     sourceRootsReal.some((root) => isPathContainedIn(resolvedTarget, root));
   const visit = (candidate: string): boolean => {
@@ -1045,7 +1065,8 @@ export interface LocalWorktreeRecoveryDeps {
   /** Fingerprint a recovery path before destructive cleanup. `sourceRoots`
    * are the soon-to-be-removed trees; symlink targets outside them are not
    * walked. `options.stable` drops the inode change time and the symlink
-   * target walk, so a sibling's removal does not change the result. */
+   * target walk between reads, so a sibling's removal does not change the
+   * result; the ctime must still hold across one read. */
   readPathFingerprint: (
     path: string,
     sourceRoots?: readonly string[],
@@ -2774,17 +2795,13 @@ export function cleanPreservedIgnoredFilesBeforeDestructiveRemoval(
     }
     // Only a confirmed absence counts as removed: an unreadable path is not
     // proof, and the state report above already lists it as still present.
-    const unconfirmed = batch.paths
-      .map((path) => ({
-        path,
-        presence: pathPresenceForDeps(deps, join(batch.scopePath, path)),
-      }))
-      .find(({ presence }) => presence !== 'absent');
-    if (unconfirmed !== undefined) {
+    for (const path of batch.paths) {
+      const presence = pathPresenceForDeps(deps, join(batch.scopePath, path));
+      if (presence === 'absent') continue;
       return withCleanState(
-        unconfirmed.presence === 'unknown'
-          ? `could not confirm the preserved ignored path ${batch.scope}/${unconfirmed.path} was removed after cleanup`
-          : `preserved ignored path ${batch.scope}/${unconfirmed.path} remained after cleanup`,
+        presence === 'unknown'
+          ? `could not confirm the preserved ignored path ${batch.scope}/${path} was removed after cleanup`
+          : `preserved ignored path ${batch.scope}/${path} remained after cleanup`,
       );
     }
   }

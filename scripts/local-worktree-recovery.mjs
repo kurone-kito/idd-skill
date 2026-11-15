@@ -200,6 +200,30 @@ function readFileOrNull(path) {
     return null;
   }
 }
+/** The lstat fields a fingerprint hashes. `stable` leaves out the inode change
+ * time, which moves when a hard-linked sibling is unlinked. */
+function statFingerprintSignature(stat, stable) {
+  return [
+    stat.dev,
+    stat.ino,
+    stat.mode,
+    stat.size,
+    stat.mtimeMs,
+    ...(stable ? [] : [stat.ctimeMs]),
+  ].join(':');
+}
+/** True when two lstat snapshots taken around ONE read describe the same
+ * file. The ctime must agree even in `stable` mode: a rewrite that keeps the
+ * length and restores the mtime still moves it. Only a sibling's removal
+ * between two separate reads (the batches of one cleanup) is meant to be
+ * ignored, and `stable` does that through the signature alone. */
+export function statSnapshotsAgree(before, after, stable) {
+  return (
+    before.ctimeMs === after.ctimeMs &&
+    statFingerprintSignature(before, stable) ===
+      statFingerprintSignature(after, stable)
+  );
+}
 /** Return a content-and-identity fingerprint for a recovery source path.
  * Ignored files are copied before destructive cleanup, so checking only that
  * the path is still ignored is insufficient: a writer can replace its
@@ -216,7 +240,8 @@ function readFileOrNull(path) {
  * (unlinking one hard link updates the other's ctime) and the symlink target
  * walk (an earlier removal can delete a link's in-tree target). A batched
  * cleanup compares stable fingerprints from before its first clean with
- * ones read after earlier batches were removed (issue #5224). */
+ * ones read after earlier batches were removed (issue #5224). The ctime still
+ * has to hold still across the two lstat calls around one read. */
 export function pathFingerprintOnDisk(path, sourceRoots = [], options = {}) {
   const stable = options.stable === true;
   const hash = createHash('sha256');
@@ -233,21 +258,8 @@ export function pathFingerprintOnDisk(path, sourceRoots = [], options = {}) {
       return null;
     }
   }
-  const statSignature = (stat) =>
-    [
-      stat.dev,
-      stat.ino,
-      stat.mode,
-      stat.size,
-      stat.mtimeMs,
-      ...(stable ? [] : [stat.ctimeMs]),
-    ].join(':');
-  // Two lstat calls around one read must agree on the ctime even in stable
-  // mode: a rewrite that keeps the length and restores the mtime still moves
-  // it, and only a sibling's removal between *batches* is meant to be ignored.
-  const sameStat = (before, after) =>
-    before.ctimeMs === after.ctimeMs &&
-    statSignature(before) === statSignature(after);
+  const statSignature = (stat) => statFingerprintSignature(stat, stable);
+  const sameStat = (before, after) => statSnapshotsAgree(before, after, stable);
   const targetIsInsideRemovedRoot = (resolvedTarget) =>
     sourceRootsReal.some((root) => isPathContainedIn(resolvedTarget, root));
   const visit = (candidate) => {
@@ -2156,17 +2168,13 @@ export function cleanPreservedIgnoredFilesBeforeDestructiveRemoval(
     }
     // Only a confirmed absence counts as removed: an unreadable path is not
     // proof, and the state report above already lists it as still present.
-    const unconfirmed = batch.paths
-      .map((path) => ({
-        path,
-        presence: pathPresenceForDeps(deps, join(batch.scopePath, path)),
-      }))
-      .find(({ presence }) => presence !== 'absent');
-    if (unconfirmed !== undefined) {
+    for (const path of batch.paths) {
+      const presence = pathPresenceForDeps(deps, join(batch.scopePath, path));
+      if (presence === 'absent') continue;
       return withCleanState(
-        unconfirmed.presence === 'unknown'
-          ? `could not confirm the preserved ignored path ${batch.scope}/${unconfirmed.path} was removed after cleanup`
-          : `preserved ignored path ${batch.scope}/${unconfirmed.path} remained after cleanup`,
+        presence === 'unknown'
+          ? `could not confirm the preserved ignored path ${batch.scope}/${path} was removed after cleanup`
+          : `preserved ignored path ${batch.scope}/${path} remained after cleanup`,
       );
     }
   }

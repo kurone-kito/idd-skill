@@ -18,6 +18,7 @@ import {
   readlinkSync,
   realpathSync,
   rmSync,
+  type Stats,
   statSync,
   symlinkSync,
   unlinkSync,
@@ -68,6 +69,7 @@ import {
   resolveEffectiveRealpath,
   runLocalWorktreeRecovery,
   splitPreservedCleanPaths,
+  statSnapshotsAgree,
   submoduleStatusEntries,
 } from '../src/scripts/local-worktree-recovery.mts';
 import {
@@ -12405,45 +12407,49 @@ function hostArgumentLimit(): number | null {
     const probe = spawnSync(
       process.execPath,
       ['-e', '0', ...Array.from({ length: bytes / 1024 }, () => chunk)],
-      { stdio: 'ignore' },
+      { stdio: 'ignore', timeout: 30_000 },
     );
-    if ((probe.error as NodeJS.ErrnoException | undefined)?.code === 'E2BIG') {
+    const code = (probe.error as NodeJS.ErrnoException | undefined)?.code;
+    if (code === 'E2BIG') {
       probedArgumentLimit = bytes;
       break;
     }
+    // Any other failure leaves the limit unknown, so the tests skip.
+    if (probe.error !== undefined || probe.status !== 0) break;
   }
   return probedArgumentLimit;
 }
 
+/** The recorded argv: 80000 `:(literal)ignored/N.txt` pathspecs. */
+const RECORDED_ARGV_BYTES = 2_228_904;
+
 /** Preserved paths under `ignored/`, like the recorded `ignored/N.txt`
- * pathspecs, whose literal pathspecs together exceed both the recorded 80000
- * `:(literal)ignored/N.txt` argv (2228904 bytes) and 1.25 times the probed
- * limit. Long directory segments pad each path, so the argument count stays
- * near 20000: a spread of several hundred thousand arguments overflows the
- * JavaScript call stack in Node itself, which would hide the spawn failure
- * under test. */
-function oversizedIgnoredPaths(limit: number): string[] {
-  const target = Math.max(2_228_904, Math.ceil(limit * 1.25));
+ * pathspecs, whose literal pathspecs together reach `targetBytes`. Long
+ * directory segments pad each path, so the argument count stays under 20000:
+ * a spread of several hundred thousand arguments overflows the JavaScript
+ * call stack in Node itself, which would hide the spawn failure under test. */
+function oversizedIgnoredPaths(targetBytes: number): string[] {
   const count = 20_000;
-  const perPath = Math.ceil(target / count) + 1;
+  const perPath = Math.ceil(targetBytes / count) + 1;
   const segmentLength = 200;
   const overhead = ':(literal)ignored//'.length + `${count}.txt`.length + 1;
-  const segments = Math.max(
-    0,
-    Math.ceil((perPath - overhead) / (segmentLength + 1)),
-  );
+  const segments = Math.ceil((perPath - overhead) / (segmentLength + 1));
   const padding = Array.from({ length: segments }, (_, index) =>
     String(index % 10).repeat(segmentLength),
   ).join('/');
-  const directory = padding === '' ? 'ignored' : `ignored/${padding}`;
   const paths: string[] = [];
   let bytes = 0;
-  for (let index = 0; bytes < target; index += 1) {
-    const path = `${directory}/${index}.txt`;
+  for (let index = 0; bytes < targetBytes; index += 1) {
+    const path = `ignored/${padding}/${index}.txt`;
     paths.push(path);
     bytes += Buffer.byteLength(`:(literal)${path}`) + 1;
   }
   return paths;
+}
+
+/** Argv bytes that exceed both the recorded argv and the probed host limit. */
+function oversizedTargetBytes(limit: number): number {
+  return Math.max(RECORDED_ARGV_BYTES, Math.ceil(limit * 1.25));
 }
 
 function initIgnoredFixtureRepo(repo: string): void {
@@ -12467,7 +12473,7 @@ test('one git clean argv beyond the OS limit fails with E2BIG before git starts'
   const repo = mkdtempSync(join(tmpdir(), 'idd-lwr-e2big-'));
   try {
     initIgnoredFixtureRepo(repo);
-    const paths = oversizedIgnoredPaths(limit);
+    const paths = oversizedIgnoredPaths(oversizedTargetBytes(limit));
     const kept = join(repo, paths[0] as string);
     mkdirSync(dirname(kept), { recursive: true });
     writeFileSync(kept, 'kept\n');
@@ -12488,11 +12494,8 @@ test('one git clean argv beyond the OS limit fails with E2BIG before git starts'
     } catch (error) {
       failure = error as NodeJS.ErrnoException;
     }
-    if (
-      failure === null ||
-      typeof (failure as { status?: unknown }).status === 'number'
-    ) {
-      // Git started (and exited), so the host accepted the argv. The
+    if (failure === null) {
+      // Git started and succeeded, so the host accepted the argv. The
       // throwaway repo is the only thing it could have cleaned, and the
       // premise of this regression cannot be observed here.
       context.skip('git accepted the oversized argv on this host');
@@ -12501,7 +12504,7 @@ test('one git clean argv beyond the OS limit fails with E2BIG before git starts'
     assert.equal(
       failure?.code,
       'E2BIG',
-      `expected the spawn to fail before git started, got ${failure?.code}: ${failure?.message}`,
+      `expected the spawn to fail before git started, got ${failure.code} (exit ${(failure as { status?: unknown }).status}): ${failure.message}`,
     );
     assert.equal(
       readFileSync(kept, 'utf8'),
@@ -12531,7 +12534,7 @@ interface OversizedCleanupFixture {
  * absent, which the cleanup allows, so the fixture needs no 80000 files while
  * every batch still spawns real `git status` and `git clean`. */
 function buildOversizedCleanupFixture(
-  limit: number,
+  targetBytes: number,
   afterClean: (
     cleanCount: number,
     fixture: OversizedCleanupFixture,
@@ -12542,7 +12545,12 @@ function buildOversizedCleanupFixture(
     join(tmpdir(), 'idd-lwr-bounded-clean-preserve-'),
   );
   try {
-    return populateOversizedCleanupFixture(repo, preserve, limit, afterClean);
+    return populateOversizedCleanupFixture(
+      repo,
+      preserve,
+      targetBytes,
+      afterClean,
+    );
   } catch (error) {
     rmSync(repo, { recursive: true, force: true });
     rmSync(preserve, { recursive: true, force: true });
@@ -12553,11 +12561,11 @@ function buildOversizedCleanupFixture(
 function populateOversizedCleanupFixture(
   repo: string,
   preserve: string,
-  limit: number,
+  targetBytes: number,
   afterClean: (cleanCount: number, fixture: OversizedCleanupFixture) => void,
 ): OversizedCleanupFixture {
   initIgnoredFixtureRepo(repo);
-  const paths = oversizedIgnoredPaths(limit);
+  const paths = oversizedIgnoredPaths(targetBytes);
   const realIndexes = new Set([
     0,
     Math.floor(paths.length / 2),
@@ -12644,7 +12652,7 @@ test('the bounded preserved cleanup removes an oversized path set without E2BIG'
     context.skip('the host accepts every probed argument size');
     return;
   }
-  const fixture = buildOversizedCleanupFixture(limit);
+  const fixture = buildOversizedCleanupFixture(oversizedTargetBytes(limit));
   try {
     const error = cleanPreservedIgnoredFilesBeforeDestructiveRemoval(
       fixture.entries,
@@ -12672,15 +12680,8 @@ test('the bounded preserved cleanup removes an oversized path set without E2BIG'
   }
 });
 
-test('a preserved path that failed the pre-clean check is not removed and no clean starts', {
-  skip: process.platform === 'win32',
-}, (context) => {
-  const limit = hostArgumentLimit();
-  if (limit === null) {
-    context.skip('the host accepts every probed argument size');
-    return;
-  }
-  const fixture = buildOversizedCleanupFixture(limit);
+test('a preserved path that failed the pre-clean check is not removed and no clean starts', () => {
+  const fixture = buildOversizedCleanupFixture(RECORDED_ARGV_BYTES);
   try {
     const changed = fixture.realPaths[1] as string;
     writeFileSync(join(fixture.repo, changed), 'edited after the copy\n');
@@ -12711,20 +12712,16 @@ test('a preserved path that failed the pre-clean check is not removed and no cle
   }
 });
 
-test('a path edited after earlier batches were cleaned stops the later batches', {
-  skip: process.platform === 'win32',
-}, (context) => {
-  const limit = hostArgumentLimit();
-  if (limit === null) {
-    context.skip('the host accepts every probed argument size');
-    return;
-  }
+test('a path edited after earlier batches were cleaned stops the later batches', () => {
   let lastPath = '';
-  const fixture = buildOversizedCleanupFixture(limit, (cleanCount, current) => {
-    if (cleanCount !== 1) return;
-    lastPath = current.realPaths[2] as string;
-    writeFileSync(join(current.repo, lastPath), 'edited between batches\n');
-  });
+  const fixture = buildOversizedCleanupFixture(
+    RECORDED_ARGV_BYTES,
+    (cleanCount, current) => {
+      if (cleanCount !== 1) return;
+      lastPath = current.realPaths[2] as string;
+      writeFileSync(join(current.repo, lastPath), 'edited between batches\n');
+    },
+  );
   try {
     const error = cleanPreservedIgnoredFilesBeforeDestructiveRemoval(
       fixture.entries,
@@ -13309,4 +13306,31 @@ test('a path that cannot be read after the clean is not treated as removed', () 
     `could not confirm the preserved ignored path ./p2 was removed after cleanup; removed so far: ${JSON.stringify(['./p1'])}; still present: ${JSON.stringify(['./p2', './p3', './p4', './p5', './p6'])}`,
   );
   assert.equal(stage.cleanRuns.length, 1, 'later batches are not started');
+});
+
+test('statSnapshotsAgree keeps the ctime strict within one read in either mode', () => {
+  const stat = (overrides: Record<string, number> = {}): Stats =>
+    ({
+      dev: 1,
+      ino: 2,
+      mode: 0o100644,
+      size: 10,
+      mtimeMs: 1000,
+      ctimeMs: 2000,
+      ...overrides,
+    }) as unknown as Stats;
+  for (const stable of [false, true]) {
+    assert.equal(statSnapshotsAgree(stat(), stat(), stable), true);
+    // A same-length rewrite that restores the mtime moves only the ctime.
+    assert.equal(
+      statSnapshotsAgree(stat(), stat({ ctimeMs: 2001 }), stable),
+      false,
+      `ctime must hold across one read (stable ${stable})`,
+    );
+    assert.equal(
+      statSnapshotsAgree(stat(), stat({ mtimeMs: 1001 }), stable),
+      false,
+    );
+    assert.equal(statSnapshotsAgree(stat(), stat({ size: 11 }), stable), false);
+  }
 });
