@@ -12441,28 +12441,31 @@ function probeHostArgumentLimit(): {
 }
 
 /** The recorded argv: 80000 `:(literal)ignored/N.txt` pathspecs. */
+const RECORDED_ARGV_COUNT = 80_000;
 const RECORDED_ARGV_BYTES = 2_228_904;
 
-/** Preserved paths under `ignored/`, like the recorded `ignored/N.txt`
- * pathspecs, whose literal pathspecs together reach `targetBytes`. Long
- * directory segments pad each path, so the argument count stays under 20000:
- * a spread of several hundred thousand arguments overflows the JavaScript
- * call stack in Node itself, which would hide the spawn failure under test. */
+/** Preserved paths under `ignored/` whose literal pathspecs together reach
+ * `targetBytes`. They start with the recorded `ignored/N.txt` shape, all
+ * 80000 of them, and only grow past that, for a host whose limit is higher,
+ * with paths padded by long directory segments. The padding keeps the
+ * argument count near 100000: a spread of several hundred thousand arguments
+ * overflows the JavaScript call stack in Node itself, which would hide the
+ * spawn failure under test. */
 function oversizedIgnoredPaths(targetBytes: number): string[] {
-  const count = 20_000;
-  const perPath = Math.ceil(targetBytes / count) + 1;
-  const segmentLength = 200;
-  const overhead = ':(literal)ignored//'.length + `${count}.txt`.length + 1;
-  const segments = Math.ceil((perPath - overhead) / (segmentLength + 1));
-  const padding = Array.from({ length: segments }, (_, index) =>
-    String(index % 10).repeat(segmentLength),
-  ).join('/');
   const paths: string[] = [];
   let bytes = 0;
-  for (let index = 0; bytes < targetBytes; index += 1) {
-    const path = `ignored/${padding}/${index}.txt`;
+  const add = (path: string): void => {
     paths.push(path);
     bytes += Buffer.byteLength(`:(literal)${path}`) + 1;
+  };
+  for (let index = 0; index < RECORDED_ARGV_COUNT; index += 1) {
+    add(`ignored/${index}.txt`);
+  }
+  const padding = Array.from({ length: 10 }, (_, index) =>
+    String(index).repeat(200),
+  ).join('/');
+  for (let index = RECORDED_ARGV_COUNT; bytes < targetBytes; index += 1) {
+    add(`ignored/${padding}/${index}.txt`);
   }
   return paths;
 }
