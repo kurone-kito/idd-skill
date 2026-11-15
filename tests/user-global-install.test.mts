@@ -20,7 +20,7 @@ import { createHash } from 'node:crypto';
 import * as nodeFs from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { after, test as nodeTest } from 'node:test';
+import { after, test as nodeTest, type TestContext } from 'node:test';
 import {
   bindDistributionSelection,
   type DistributionSelectionOptions,
@@ -560,6 +560,137 @@ function runSelectedHelper(
   };
 }
 
+/**
+ * The commit behind the released `v0.14.0` tag. The released-layout tests read
+ * it from this clone's own history.
+ */
+const RELEASED_V0_14_0_COMMIT = 'ae16f497434a5023dfaa28f965fc2af92ebf055d';
+/** A helper in the current tree that the v0.14.0 release never shipped. */
+const NEWER_PUBLISHER_HELPER = 'scripts/publish-authoring-hold.mjs';
+/**
+ * The two paths the installer requires that the v0.14.0 release predates: the
+ * user-global entry text and the distribution manifest schema. The fixture
+ * overlays exactly these on the release archive, and every other byte comes
+ * from the release. The fixture builder fails if the release ever ships one, so
+ * a stale overlay cannot hide.
+ */
+const V0_14_0_INSTALLER_OVERLAY = [
+  'idd-template/user-global/entry.md',
+  'schemas/distribution-manifest.schema.json',
+] as const;
+/** The release paths a prepared set can read, so the archive stays small. */
+const RELEASED_SOURCE_PATHS = [
+  'package.json',
+  'audit/sync-manifest.json',
+  'idd-template',
+  'skills',
+  'scripts',
+  'schemas',
+  'fixtures',
+  'src/scripts/helper-runtime-manifest.mts',
+];
+const GIT_BUFFER_BYTES = 256 * 1024 * 1024;
+
+function runGit(args: string[]): { status: number | null; stdout: Buffer } {
+  const result = spawnSync('git', ['-C', REPO, ...args], {
+    maxBuffer: GIT_BUFFER_BYTES,
+  });
+  if (result.status !== 0 && result.error !== undefined) throw result.error;
+  return { status: result.status, stdout: result.stdout };
+}
+
+/**
+ * Skips the calling test and returns true when the release commit is not
+ * readable in this clone, so a shallow clone does not fail the suite. A
+ * GitHub-hosted run (not a local `act` run) fails instead: every job that runs
+ * this file fetches full history, and a skip there would hide the check.
+ */
+function skipWithoutReleasedCommit(t: TestContext): boolean {
+  const probe = spawnSync(
+    'git',
+    ['-C', REPO, 'cat-file', '-e', `${RELEASED_V0_14_0_COMMIT}^{commit}`],
+    { encoding: 'utf8' },
+  );
+  if (probe.error !== undefined) throw probe.error;
+  if (probe.status === 0) return false;
+  const reason = `commit ${RELEASED_V0_14_0_COMMIT} (v0.14.0) is not readable in this clone (git: ${probe.stderr.trim() || `exit ${probe.status}`}): fetch the full history and tags`;
+  if (process.env.GITHUB_ACTIONS === 'true' && process.env.ACT === undefined) {
+    assert.fail(reason);
+  }
+  t.skip(reason);
+  return true;
+}
+
+function releaseHas(path: string): boolean {
+  return (
+    runGit(['cat-file', '-e', `${RELEASED_V0_14_0_COMMIT}:${path}`]).status ===
+    0
+  );
+}
+
+/** The exact bytes git stores for one file of the release. */
+function releaseBytes(path: string): Buffer {
+  const result = runGit(['show', `${RELEASED_V0_14_0_COMMIT}:${path}`]);
+  assert.equal(result.status, 0, `${path} is in the v0.14.0 release`);
+  return result.stdout;
+}
+
+/** Every file path of the release tree. */
+function releaseTree(): Set<string> {
+  const result = runGit([
+    'ls-tree',
+    '-r',
+    '-z',
+    '--name-only',
+    RELEASED_V0_14_0_COMMIT,
+  ]);
+  assert.equal(result.status, 0, 'the v0.14.0 release tree is listable');
+  return new Set(result.stdout.toString('utf8').split('\0').filter(Boolean));
+}
+
+let releasedSourceRoot: string | undefined;
+
+/**
+ * A source tree archived from the v0.14.0 release commit, plus the two
+ * installer-required paths the release predates. Prepared sets only read it,
+ * so every test shares one copy.
+ */
+function makeReleasedSource(): string {
+  if (releasedSourceRoot !== undefined) return releasedSourceRoot;
+  for (const path of V0_14_0_INSTALLER_OVERLAY) {
+    assert.equal(
+      releaseHas(path),
+      false,
+      `${path} is now in the v0.14.0 release: drop it from the overlay`,
+    );
+  }
+  const root = makeSandbox('user-global-released-source-');
+  const archive = runGit([
+    'archive',
+    '--format=tar',
+    RELEASED_V0_14_0_COMMIT,
+    '--',
+    ...RELEASED_SOURCE_PATHS,
+  ]);
+  assert.equal(archive.status, 0, 'the release archives');
+  const extract = spawnSync('tar', ['-x', '-f', '-', '-C', root], {
+    input: archive.stdout,
+  });
+  assert.equal(extract.status, 0, String(extract.stderr));
+  nodeFs.mkdirSync(join(root, 'idd-template/user-global'), { recursive: true });
+  nodeFs.writeFileSync(
+    join(root, 'idd-template/user-global/entry.md'),
+    '# User global entry\n',
+  );
+  nodeFs.mkdirSync(join(root, 'schemas'), { recursive: true });
+  nodeFs.copyFileSync(
+    join(REPO, 'schemas/distribution-manifest.schema.json'),
+    join(root, 'schemas/distribution-manifest.schema.json'),
+  );
+  releasedSourceRoot = root;
+  return root;
+}
+
 interface PreparedManifestComponent {
   location: string;
   provenance: { kind: string; commit: string };
@@ -738,7 +869,7 @@ test('preparation refuses a source commit without the distribution manifest sche
   );
 });
 
-test('an older coherent set without the newer publisher or dispatcher metadata keeps its own helper invocation', () => {
+test('an older coherent set without dispatcher metadata keeps its own helper invocation', () => {
   const home = makeHome();
   const source = makePreparedSource({
     packageVersion: '0.14.0',
@@ -789,18 +920,172 @@ test('an older coherent set without the newer publisher or dispatcher metadata k
     ),
     'the v0.14 helper command is in its own immutable helper set',
   );
-  assert.ok(
-    !manifest.components.helper.files.some((file) =>
-      file.path.includes('publisher'),
-    ),
-    'the coherent old set does not require the newer publisher',
-  );
+  // This synthetic source never holds a publisher file, so it cannot show that
+  // the installer skips one. The released-layout tests below do.
   assert.equal(
     nodeFs.readFileSync(
       join(prepared.preparedPath, 'skills/issue-authoring/SKILL.md'),
       'utf8',
     ),
     '# Authoring\n',
+  );
+});
+
+test('a set prepared from the released v0.14.0 tree keeps that release layout, and a pinned session loads it', (t) => {
+  if (skipWithoutReleasedCommit(t)) return;
+  const commit = RELEASED_V0_14_0_COMMIT;
+  const released = makeReleasedSource();
+  const home = makeHome();
+  const invocation = {
+    command: 'scripts/idd-onboard.mjs',
+    argv: ['--issue-authoring'],
+  };
+
+  const prepared = prepareDistributionSet(
+    prepareOptions(home, released, commit, { invocation }),
+  );
+  const manifest = preparedManifest(prepared.preparedPath);
+
+  assert.equal(manifest.sourceCommit, commit);
+  const releaseSync = JSON.parse(
+    releaseBytes('audit/sync-manifest.json').toString('utf8'),
+  ) as {
+    generatedBlocks: { id: string; paths?: string[] }[];
+    userGlobalInstallerPayloads?: unknown;
+  };
+  assert.equal(
+    releaseSync.userGlobalInstallerPayloads,
+    undefined,
+    'the release has no installer payload list',
+  );
+  const releaseCore = releaseSync.generatedBlocks.find(
+    (block) => block.id === 'idd-template-core-files',
+  )?.paths;
+  assert.ok(releaseCore && releaseCore.length > 0, 'the release lists a core');
+  const instructionFiles = manifest.components.instructions.files.map(
+    (file) => file.path,
+  );
+  assert.deepEqual(
+    [...instructionFiles].sort(),
+    [
+      ...releaseCore.map((path) => path.slice('idd-template/'.length)),
+      'user-global/entry.md',
+    ].sort(),
+    'the instructions are the release core plus the overlaid entry only',
+  );
+  assert.ok(!instructionFiles.includes('user-global/skill-entry.md'));
+
+  const tree = releaseTree();
+  const preparedPaths = [
+    ...instructionFiles.map((path) => `idd-template/${path}`),
+    ...Object.entries(manifest.components.skillBundles).flatMap(
+      ([skill, component]) =>
+        component.files.map((file) => `skills/${skill}/${file.path}`),
+    ),
+    ...manifest.components.helper.files.map((file) => file.path),
+  ];
+  assert.deepEqual(
+    preparedPaths.filter((path) => !tree.has(path)),
+    ['idd-template/user-global/entry.md'],
+    'the overlaid entry is the only prepared path the release did not ship',
+  );
+  for (const skill of ['issue-authoring', 'idd-spec-audit']) {
+    assert.deepEqual(
+      manifest.components.skillBundles[skill].files.map((file) => file.path),
+      [...tree]
+        .filter((path) => path.startsWith(`skills/${skill}/`))
+        .map((path) => path.slice(`skills/${skill}/`.length))
+        .sort(),
+      `${skill} keeps every file of the release bundle`,
+    );
+  }
+
+  const helper = manifest.components.helper;
+  assert.deepEqual(helper.invocation, invocation);
+  const helperEntry = helper.files.find(
+    (file) => file.path === invocation.command,
+  );
+  assert.ok(helperEntry, 'the released helper command is in its helper set');
+  assert.equal(
+    helperEntry.sha256,
+    sha256(releaseBytes(invocation.command)),
+    'the helper command is the release blob',
+  );
+  assert.ok(
+    nodeFs.existsSync(join(REPO, NEWER_PUBLISHER_HELPER)),
+    'the publisher the guard names still exists in the current tree',
+  );
+  assert.equal(releaseHas(NEWER_PUBLISHER_HELPER), false);
+  // The installer reads every path it needs from the source, so a required
+  // file the release lacks fails at prepare above (ENOENT), before this
+  // check. This line only states the outcome; the guard is that prepare
+  // returns for the real tree.
+  assert.ok(
+    !helper.files.some((file) => file.path === NEWER_PUBLISHER_HELPER),
+    'the released set does not require the newer publisher',
+  );
+
+  installPayload(optionsFor(home, { version: UPGRADE_VERSION }));
+  assert.equal(
+    nodeFs.readlinkSync(currentOf(home)),
+    versionDirOf(home, UPGRADE_VERSION),
+  );
+  const repo = makeAdopterRepository(home, 'adopter-v0-14-0', commit);
+  const session = distributionOptionsFor(home, repo, 'session-v0-14-0');
+  assert.equal(bindDistributionSelection(session).authorized, true);
+  const routing = inspectDistributionRouting(session);
+  assert.equal(routing.route, 'prepared-set');
+  assert.equal(routing.report.selected?.sourceCommit, commit);
+  // These two differ from the current tree, so only a set that keeps the
+  // release bytes passes the equality checks below. The idd-spec-audit bundle
+  // happens to match the current tree today, so it adds no such proof.
+  for (const path of ['skills/issue-authoring/SKILL.md', invocation.command]) {
+    assert.notDeepEqual(
+      releaseBytes(path),
+      nodeFs.readFileSync(join(REPO, path)),
+      `${path} differs between the release and the current tree`,
+    );
+  }
+  for (const skill of ['issue-authoring', 'idd-spec-audit'] as const) {
+    const loaded = dispatchSelectedSkill(home, routing.report, skill);
+    assert.equal(
+      loaded.skill,
+      releaseBytes(`skills/${skill}/SKILL.md`).toString('utf8'),
+      `${skill} loads its own release skill`,
+    );
+    assert.equal(loaded.helperCommand, invocation.command);
+    assert.deepEqual(loaded.helperArgv, invocation.argv);
+    assert.equal(
+      loaded.helper,
+      releaseBytes(invocation.command).toString('utf8'),
+      'the contract helper is the release helper',
+    );
+  }
+  assert.equal(
+    nodeFs.readFileSync(skillFileOf(home, '.claude'), 'utf8'),
+    expectedSkillDispatcher(REPO, 'issue-authoring'),
+    'the global entry is the newer build while the session keeps the release',
+  );
+});
+
+test('preparing the released v0.14.0 tree refuses a helper that release never shipped', (t) => {
+  if (skipWithoutReleasedCommit(t)) return;
+  const commit = RELEASED_V0_14_0_COMMIT;
+  const home = makeHome();
+  const released = makeReleasedSource();
+
+  assert.throws(
+    () =>
+      prepareDistributionSet(
+        prepareOptions(home, released, commit, {
+          invocation: { command: NEWER_PUBLISHER_HELPER, argv: [] },
+        }),
+      ),
+    /ENOENT.*publish-authoring-hold\.mjs/,
+  );
+  assert.equal(
+    nodeFs.existsSync(join(dataRootOf(home), 'prepared', commit)),
+    false,
   );
 });
 
