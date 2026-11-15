@@ -126,7 +126,8 @@ CI-polling shared helper file), never this one. Read
   resume polling, or stop and ask on `hold`). `action_required` /
   `startup_failure` / `stale` rarely clear on a blind rerun — stop and
   ask, except the `idd-advisory-convergence` gated-bot-rerun case named
-  in Rerun mechanics below.
+  in Rerun mechanics below and the `idd-advisory-convergence`
+  `startup_failure` reopen case in the next bullet.
 - A `startup_failure` of `idd-advisory-convergence` (observed 2026-11-09,
   `kurone-kito/idd-skill#5153`) is recovered by closing and reopening the
   PR on the same head, with no new commit, so a new `pull_request_target`
