@@ -1279,17 +1279,18 @@ in this preamble, since the fallback differs per helper.
   detected by a live comment-log reader (PR #2901 review rounds 5-7,
   chatgpt-codex-connector and Copilot). Reused-issue provenance stays
   manual: the helper reads only the target's own owner-marker log, under
-  every verdict (`pass` included), and never follows an anchor to
-  another issue, so it does not perform the anchor-log step of
-  contract.md's rule for a non-anchor target (the trusted
-  `mode=release-complete` check on the anchor's log before a fresh
-  `mode=acquire` of an issue that an earlier set released). That step
-  is performed by hand. For a reused issue the helper reports
-  `not-found` (for example, its first acquire names another anchor) or
-  `mismatch` (the body changed since that acquire), as on issue `#4703`
-  (observed 2026-10-31) and issue `#4694`. Either result means the
-  helper did not do the step, and neither authorizes acquiring the
-  issue as a new set
+  every verdict, and never follows an anchor to another issue, so it
+  does not perform the anchor-log step of contract.md's rule for a
+  non-anchor target (the trusted `mode=release-complete` check on the
+  anchor's log before a fresh `mode=acquire` of an issue that an
+  earlier set released). That step is performed by hand, and no verdict
+  stands in for it: `pass` shows only that the target's first acquire
+  still matches the live body. On an issue an earlier set held, the
+  helper may report `not-found` (for example, its first acquire names
+  another anchor) or `mismatch` (the body changed since that acquire),
+  as on issue `#4703` (observed 2026-10-31) and issue `#4694`. Either
+  result means the helper did not do the step, and neither authorizes
+  acquiring the issue as a new set
 
 **Review & Merge Phase Helpers:**
 

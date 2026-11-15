@@ -2964,17 +2964,19 @@ mechanically (`#2891`).
 
 **Reused-issue provenance stays manual.** The
 `authoring-owner-provenance` helper reads only the target's own
-owner-marker log, under every verdict (`pass` included), and never
-follows an anchor to another issue. It does not perform the anchor-log
-step of the rule for a non-anchor target ("A non-anchor target cannot
-prove that its previous set finished" above): the trusted
-`mode=release-complete` check on the anchor's log before a fresh
-`mode=acquire` of an issue that an earlier set released. That step is
-performed by hand. For a reused issue the helper reports `not-found`
-(for example, its first acquire names another anchor) or `mismatch`
-(the body changed since that acquire), as on issue `#4703` (observed
-2026-10-31) and issue `#4694`. Either result means the helper did not
-do the step, and neither authorizes acquiring the issue as a new set.
+owner-marker log, under every verdict, and never follows an anchor to
+another issue. It does not perform the anchor-log step of the rule for
+a non-anchor target ("A non-anchor target cannot prove that its
+previous set finished" above): the trusted `mode=release-complete`
+check on the anchor's log before a fresh `mode=acquire` of an issue
+that an earlier set released. That step is performed by hand, and no
+verdict stands in for it: `pass` shows only that the target's first
+acquire still matches the live body. On an issue an earlier set held,
+the helper may report `not-found` (for example, its first acquire
+names another anchor) or `mismatch` (the body changed since that
+acquire), as on issue `#4703` (observed 2026-10-31) and issue
+`#4694`. Either result means the helper did not do the step, and
+neither authorizes acquiring the issue as a new set.
 
 **Roadmap-anchor scope (accepted limitation, `#2877`).** The "never a
 roadmap anchor" exclusion above is permanent, not a gap awaiting a fix:
