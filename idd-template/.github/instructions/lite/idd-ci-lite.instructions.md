@@ -122,6 +122,12 @@ CI-polling shared helper file), never this one. Read
   `startup_failure` / `stale` rarely clear on a blind rerun — stop and
   ask, except the `idd-advisory-convergence` gated-bot-rerun case named
   in Rerun mechanics below.
+- A `startup_failure` of `idd-advisory-convergence` (observed 2026-11-09,
+  `kurone-kito/idd-skill#5153`) is recovered by closing and reopening the
+  PR on the same head, with no new commit, so a new `pull_request_target`
+  run starts. If the new run, or the check on that head, does not succeed,
+  hold as the "rarely clear on a blind rerun" sentence says, and do not
+  loop reruns.
 - Any non-pass `cancelled` / `timed_out`: same code-caused vs.
   infra-caused split as above.
 - Any required check running: keep polling. After
