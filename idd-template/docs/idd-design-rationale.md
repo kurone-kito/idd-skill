@@ -1382,8 +1382,10 @@ worktree. The preflight has no trusted record of a released child's pre-pick
 HEAD, so it reads the branch range instead. A child with no mapped SHA fails, so
 an empty mapping is never confirmed. A later revert of a pick keeps its trailer
 in history, and this check does not detect it. That limit is accepted here.
-Before either cleanup path, the route re-runs the whole preflight item,
-re-fetching the set snapshot, because LWR runs after the preflight and a
+Before either cleanup path, the route re-runs the preflight item, re-fetching
+the set snapshot. Step 2 closes the PR, so the later re-runs replace its draft
+check with a closed, unmerged PR at the recorded head; requiring the draft again
+would block every completed post-push split. LWR runs after the preflight, and a
 pre-first-push overrun skips the PR close. The roadmap has no `Split out of`,
 branch, or trailers, so only its own state applies to it. Finalize never touches
 a child's worktree, so a dirty child worktree or commits beyond the transfer do
