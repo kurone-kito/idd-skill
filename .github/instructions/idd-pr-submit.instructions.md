@@ -228,30 +228,30 @@ depends on, re-read just before it. Any miss or uncertainty makes no write:
 report it.
 
 1. **Preflight** (read-only): profile-selected `authoring-set-members --set
-   <set>` (from the roadmap's trusted owner marker) is complete and equals the
-   roadmap plus its `## Tracks`; every member is open and unclaimed, and either
-   every member carries the authoring label (held), or the anchor's trusted
-   `release-complete` marker for the latest generation of this set is present,
-   its snapshot re-fetched and verified, and no member carries the authoring
-   label (released); each child has at least one child-mapped SHA, and every
-   child-mapped SHA is confirmed by a `(cherry picked from commit <sha>)`
-   trailer in `git log --format=%B "{development-branch}..<child-branch>"`; each
-   child says `Split out of #{issue-number}`; and the set excludes this issue.
-   The source issue is open and unclaimed, with a trusted `scope-overrun` record
-   and the needs-decision label (`labels.needsDecisionLabelName`; pre-first-push
-   may lack it). Post-push, its PR is a draft at the recorded head. A
+   <set>` (trusted owner marker) is complete and equals the roadmap plus its `##
+   Tracks`; every member is open and unclaimed, and either every member carries
+   the authoring label (held), or the anchor's trusted `release-complete` marker
+   for the latest generation of this set is present, its snapshot re-fetched and
+   verified, and no member carries the authoring label (released); each released
+   child has at least one child-mapped SHA, and every child-mapped SHA of a
+   released child is confirmed by a `(cherry picked from commit <sha>)` trailer
+   in `git log --format=%B "{development-branch}..<child-branch>"`; each child
+   says `Split out of #{issue-number}`; and the set excludes this issue. The
+   source issue is open and unclaimed, with a trusted `scope-overrun` record and
+   the needs-decision label (`labels.needsDecisionLabelName`; pre-first-push may
+   lack it). Post-push, its PR is a draft at the recorded head. A
    profile-selected `local-worktree-recovery --issue {issue-number} --worktree
    <path>` dry run reports `ready: true` (or the worktree is gone, its branch
-   may remain), and §LWR step 2 has a basis independent of this session's claim
-   evidence. Its commit inventory (`idd-work.instructions.md`, Scope overrun)
-   must already be posted. Re-check it without reposting, as its procedure
-   requires: refresh the base first, then match the live SHAs, the `-` path
-   checks, and exactly one trusted, unedited comment. A missing, stale, or unmet
-   mapping blocks steps 2 and 3. Steps 3 and 4 also wait until each child-mapped
-   commit is confirmed. Before step 2, re-run item 1 in full, re-fetching the
-   set snapshot. Before step 3 and step 4, re-run it with the PR check replaced
-   by a verified closed, unmerged pull request at the recorded head (post-push
-   runs only; a pre-first-push run omits the PR check). Any change stops.
+   may remain), and §LWR step 2 has a basis independent of this claim. Its
+   commit inventory (`idd-work.instructions.md`, Scope overrun) must already be
+   posted. Re-check it without reposting, per its procedure: refresh the base
+   first, then match the live SHAs, the `-` path checks, and exactly one
+   trusted, unedited comment. A missing, stale, or unmet mapping blocks steps 2
+   and 3. Steps 3 and 4 also wait until each child-mapped commit of every child
+   is confirmed. Before step 2, re-run item 1 in full, re-fetching the set
+   snapshot. Before step 3 and step 4, re-run it with the PR check replaced by a
+   verified closed, unmerged pull request at the recorded head (post-push runs
+   only; a pre-first-push run omits the PR check). Any change stops.
 2. **Close the PR** (post-push): `gh pr close <pr>`; verify closed, unmerged, at
    that head. Re-read before retrying an uncertain close.
 3. **Clean up**: LWR with `--apply` and its step 2 basis (skip if the worktree

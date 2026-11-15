@@ -1230,19 +1230,19 @@ appear in a `(cherry picked from commit <sha>)` trailer on the child's branch,
 read with `git log --format=%B {development-branch}..<child-branch>`. The
 transfer checks the same trailer in `<recorded-HEAD>..HEAD` of the child's
 worktree. The preflight has no trusted record of a released child's pre-pick
-HEAD, so it reads the branch range instead. A child with no mapped SHA fails, so
-an empty mapping is never confirmed. A later revert of a pick keeps its trailer
-in history, and this check does not detect it. That limit is accepted here.
-Before either cleanup path, the route re-runs the preflight item, re-fetching
-the set snapshot. Step 2 closes the PR, so the later re-runs replace its draft
-check with a closed, unmerged PR at the recorded head; requiring the draft again
-would block every completed post-push split. A pre-first-push run has no PR, so
-it omits the PR check. LWR runs after the preflight, and a pre-first-push
-overrun skips the PR close. The roadmap has no `Split out of`, branch, or
-trailers, so only its own state applies to it. Finalize never touches a child's
-worktree, so a dirty child worktree or commits beyond the transfer do not block
-it. Cleanup still reports the PR state, the LWR report, and the next action, and
-never bypasses the LWR preservation or lock gates.
+HEAD, so it reads the branch range instead. A released child with no mapped SHA
+fails, so an empty mapping is never confirmed. A later revert of a pick keeps
+its trailer in history, and this check does not detect it. That limit is
+accepted here. Before either cleanup path, the route re-runs the preflight item,
+re-fetching the set snapshot. Step 2 closes the PR, so the later re-runs replace
+its draft check with a closed, unmerged PR at the recorded head; requiring the
+draft again would block every completed post-push split. A pre-first-push run
+has no PR, so it omits the PR check. LWR runs after the preflight, and a
+pre-first-push overrun skips the PR close. The roadmap has no `Split out of`,
+branch, or trailers, so only its own state applies to it. Finalize never touches
+a child's worktree, so a dirty child worktree or commits beyond the transfer do
+not block it. Cleanup still reports the PR state, the LWR report, and the next
+action, and never bypasses the LWR preservation or lock gates.
 
 The order of writes follows what each step protects. The pull request closes
 first and is re-read at the same head before LWR starts, because LWR would
@@ -1600,10 +1600,11 @@ finalize preflight requires, so a transfer can stall with no safe route forward.
 A released child takes a delayed route instead. The preflight accepts it when
 every child-mapped SHA in the trusted inventory appears in a `(cherry picked
 from commit <sha>)` trailer on the child's branch, the same trailer the transfer
-checks, so a conflict-resolved pick is confirmed too. Every child must pass this
-trailer check, released or held, and a child that still carries the label also
-keeps the label check. A child whose transfer is unconfirmed stops the route:
-the source stays open and is reported.
+checks, so a conflict-resolved pick is confirmed too. A released child must pass
+this trailer check at preflight. A held child keeps the rule that its
+child-mapped commits are confirmed before steps 3 and 4, not before the PR
+close, and it also keeps the label check. A child whose transfer is unconfirmed
+stops the route: the source stays open and is reported.
 
 A base that advances after the inventory is posted leaves the record stale, and
 finalize then stops. Superseding a stale record is a follow-up, not part of this
