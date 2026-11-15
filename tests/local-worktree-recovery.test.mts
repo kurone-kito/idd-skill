@@ -12388,22 +12388,37 @@ function realRunGit(argv: string[], cwd: string): LocalGitCommandResult {
   }
 }
 
-let probedArgumentLimit: number | null | undefined;
+let probedArgumentLimit: { limit: number | null; reason: string } | undefined;
 
 /** The smallest probed argv size, in bytes, that the host refuses with
- * `E2BIG`, or null when the host accepts every probed size (or the platform
- * reports a different error for an oversized command line). Probing instead
- * of reading `getconf ARG_MAX` matters: with an unlimited stack `getconf`
- * reports a small legacy value while the kernel accepts several MiB, and CI
- * runners differ from developer hosts. The probe starts `node` with one
- * argument per KiB, so a size that fits runs a no-op and a size that does not
- * fails before the child starts. */
-function hostArgumentLimit(): number | null {
+ * `E2BIG`, or null with the reason the tests that need it skip: the host
+ * accepts every probed size (up to 16 MiB, where a padded path would pass
+ * PATH_MAX), the platform reports a different error for an oversized command
+ * line, or the probe itself failed. Probing instead of reading
+ * `getconf ARG_MAX` matters: with an unlimited stack `getconf` reports a small
+ * legacy value while the kernel accepts several MiB, and CI runners differ
+ * from developer hosts. The probe starts `node` with one argument per KiB, so
+ * a size that fits runs a no-op and a size that does not fails before the
+ * child starts. */
+function probeHostArgumentLimit(): {
+  limit: number | null;
+  reason: string;
+} {
   if (probedArgumentLimit !== undefined) return probedArgumentLimit;
-  probedArgumentLimit = null;
-  if (process.platform === 'win32') return null;
+  const unsupported = {
+    limit: null,
+    reason: 'this platform reports no E2BIG for an oversized command line',
+  };
+  if (process.platform === 'win32') {
+    probedArgumentLimit = unsupported;
+    return unsupported;
+  }
   const chunk = 'x'.repeat(1023);
-  for (let bytes = 256 * 1024; bytes <= 64 * 1024 * 1024; bytes *= 2) {
+  probedArgumentLimit = {
+    limit: null,
+    reason: 'the host accepts every probed argument size',
+  };
+  for (let bytes = 256 * 1024; bytes <= 16 * 1024 * 1024; bytes *= 2) {
     const probe = spawnSync(
       process.execPath,
       ['-e', '0', ...Array.from({ length: bytes / 1024 }, () => chunk)],
@@ -12411,11 +12426,16 @@ function hostArgumentLimit(): number | null {
     );
     const code = (probe.error as NodeJS.ErrnoException | undefined)?.code;
     if (code === 'E2BIG') {
-      probedArgumentLimit = bytes;
+      probedArgumentLimit = { limit: bytes, reason: '' };
       break;
     }
-    // Any other failure leaves the limit unknown, so the tests skip.
-    if (probe.error !== undefined || probe.status !== 0) break;
+    if (probe.error !== undefined || probe.status !== 0) {
+      probedArgumentLimit = {
+        limit: null,
+        reason: `the argument-limit probe failed at ${bytes} bytes (${code ?? `exit ${probe.status}`})`,
+      };
+      break;
+    }
   }
   return probedArgumentLimit;
 }
@@ -12465,9 +12485,9 @@ function initIgnoredFixtureRepo(repo: string): void {
 test('one git clean argv beyond the OS limit fails with E2BIG before git starts', {
   skip: process.platform === 'win32',
 }, (context) => {
-  const limit = hostArgumentLimit();
+  const { limit, reason } = probeHostArgumentLimit();
   if (limit === null) {
-    context.skip('the host accepts every probed argument size');
+    context.skip(reason);
     return;
   }
   const repo = mkdtempSync(join(tmpdir(), 'idd-lwr-e2big-'));
@@ -12647,9 +12667,9 @@ function pathspecBytes(argv: readonly string[]): number {
 test('the bounded preserved cleanup removes an oversized path set without E2BIG', {
   skip: process.platform === 'win32',
 }, (context) => {
-  const limit = hostArgumentLimit();
+  const { limit, reason } = probeHostArgumentLimit();
   if (limit === null) {
-    context.skip('the host accepts every probed argument size');
+    context.skip(reason);
     return;
   }
   const fixture = buildOversizedCleanupFixture(oversizedTargetBytes(limit));
