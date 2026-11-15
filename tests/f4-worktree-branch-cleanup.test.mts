@@ -1635,9 +1635,15 @@ test('a deinitialized submodule removal refused by real git names the modules di
   const detail =
     report.steps.find((step) => step.reason === 'worktree-remove-refused')
       ?.detail ?? '';
-  const named = /remains at (\S+\/modules),/u.exec(detail)?.[1] ?? '';
-  assert.notEqual(named, '', detail);
-  assert.equal(existsSync(named), true, `${named} must exist on disk`);
+  // Derive the expected path from the worktree git directory, the same way the
+  // helper does, instead of parsing it out of the detail. This keeps the check
+  // valid for paths with spaces and for Windows separators.
+  const expected = join(
+    git(fx.worktree, ['rev-parse', '--absolute-git-dir']),
+    'modules',
+  );
+  assert.equal(existsSync(expected), true, `${expected} must exist on disk`);
+  assert.ok(detail.includes(`remains at ${expected},`), detail);
   assert.match(detail, /§LWR step 4/u);
   assert.equal(
     calls.some((args) => args.includes('--force')),
