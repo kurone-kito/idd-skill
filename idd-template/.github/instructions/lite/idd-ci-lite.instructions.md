@@ -135,8 +135,10 @@ CI-polling shared helper file), never this one. Read
   `ciWait.rerunPolicy` once; the same route recurring after that rerun,
   or a `hold` policy, is a stop-and-ask.
 - Required checks not yet generated: treat as running, capped at
-  `ciWait.generationTimeout`. If the workflow run does not exist at all
-  when that window elapses, stop and ask.
+  `ciWait.generationTimeout`. If `idd-advisory-convergence` is the missing
+  check and its workflow run concluded `startup_failure` on the PR head,
+  use the `startup_failure` reopen bullet above. If the workflow run does
+  not exist at all when that window elapses, stop and ask.
 
 ## Rerun mechanics
 
