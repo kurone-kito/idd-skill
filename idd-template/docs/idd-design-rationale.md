@@ -1378,14 +1378,15 @@ the same trailer in `<recorded-HEAD>..HEAD` of the child's worktree. The
 preflight has no trusted record of a released child's pre-pick HEAD, so it reads
 the branch range instead. A child with no mapped SHA fails, so an empty mapping
 is never confirmed. A later revert of a pick keeps its trailer in history, and
-this check does not detect it. That limit is accepted here. Step 2 re-fetches
-the set snapshot and re-checks each released member, and re-reads each released
-child's claim, branch tip, and trailers, before the pull request closes, because
-LWR runs after the preflight. The roadmap has no `Split out of`, branch, or
-trailers, so only its own state applies to it. Finalize never touches a child's
-worktree, so a dirty child worktree or commits beyond the transfer do not block
-it. Cleanup still reports the PR state, the LWR report, and the next action, and
-never bypasses the LWR preservation or lock gates.
+this check does not detect it. That limit is accepted here. Before either
+cleanup path, the route re-fetches the set snapshot and re-checks each released
+member, and re-reads each released child's claim, branch tip, and trailers,
+because LWR runs after the preflight and a pre-first-push overrun skips the PR
+close. The roadmap has no `Split out of`, branch, or trailers, so only its own
+state applies to it. Finalize never touches a child's worktree, so a dirty child
+worktree or commits beyond the transfer do not block it. Cleanup still reports
+the PR state, the LWR report, and the next action, and never bypasses the LWR
+preservation or lock gates.
 
 The order of writes follows what each step protects. The pull request closes
 first and is re-read at the same head before LWR starts, because LWR would
