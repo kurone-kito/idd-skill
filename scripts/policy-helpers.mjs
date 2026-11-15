@@ -593,6 +593,93 @@ export const LOCAL_EXEC_ADMISSION_MAX_CONCURRENT = 8;
 /** Longest `localExec.admission.maxWait`, six hours; a longer value falls back to the default. */
 export const LOCAL_EXEC_ADMISSION_MAX_WAIT_MS = 6 * HOUR_MS;
 const LOCAL_EXEC_BACKENDS = new Set(['flock', 'pueue']);
+/**
+ * The merge-policy values `mergePolicy` and `mergePolicyAck` accept, either
+ * as one string for every model tier or as each tier's value in the
+ * per-tier object (#5208).
+ */
+export const MERGE_POLICY_VALUES = Object.freeze([
+  'fully_autonomous_merge',
+  'human_merge',
+  'separate_merge_agent',
+]);
+/** The three model-tier keys of the per-tier `mergePolicy` object. */
+export const MERGE_POLICY_TIERS = Object.freeze([
+  'frontier',
+  'middle-tier',
+  'lightweight',
+]);
+function isMergePolicyValue(value) {
+  return typeof value === 'string' && MERGE_POLICY_VALUES.includes(value);
+}
+function isMergePolicyTier(value) {
+  return MERGE_POLICY_TIERS.includes(value);
+}
+/**
+ * Resolves the one merge policy that applies to `tier` (#5210). A string
+ * applies to every tier, and an absent value is the `human_merge` default.
+ * An object must hold exactly the three tier keys, each a known value, and
+ * `tier` must name one of them. Any other input fails with a reason and no
+ * policy. Never throws.
+ */
+export function resolveMergePolicy(mergePolicy, tier) {
+  if (mergePolicy === undefined) {
+    return { ok: true, policy: 'human_merge' };
+  }
+  if (isMergePolicyValue(mergePolicy)) {
+    return { ok: true, policy: mergePolicy };
+  }
+  if (
+    typeof mergePolicy !== 'object' ||
+    mergePolicy === null ||
+    Array.isArray(mergePolicy)
+  ) {
+    return {
+      ok: false,
+      reason:
+        'mergePolicy is neither a known policy string nor a per-tier object',
+    };
+  }
+  const record = mergePolicy;
+  const keys = Object.keys(record).sort();
+  const expected = [...MERGE_POLICY_TIERS].sort();
+  if (
+    keys.length !== expected.length ||
+    keys.some((key, index) => key !== expected[index])
+  ) {
+    return {
+      ok: false,
+      reason: `mergePolicy object must have exactly the keys ${MERGE_POLICY_TIERS.join(', ')}`,
+    };
+  }
+  for (const key of MERGE_POLICY_TIERS) {
+    if (!isMergePolicyValue(record[key])) {
+      return {
+        ok: false,
+        reason: `mergePolicy.${key} is not one of ${MERGE_POLICY_VALUES.join(', ')}`,
+      };
+    }
+  }
+  if (tier === null) {
+    return {
+      ok: false,
+      reason:
+        'mergePolicy is a per-tier object; name the tier with --model-tier or IDD_MODEL_TIER',
+    };
+  }
+  if (!isMergePolicyTier(tier)) {
+    return {
+      ok: false,
+      reason: `tier "${tier}" is not one of ${MERGE_POLICY_TIERS.join(', ')}`,
+    };
+  }
+  const value = record[tier];
+  if (!isMergePolicyValue(value)) {
+    // Unreachable after the key loop above; kept so the narrowing is local.
+    return { ok: false, reason: `mergePolicy.${tier} is not a known value` };
+  }
+  return { ok: true, policy: value };
+}
 export const POLICY_DEFAULTS = Object.freeze({
   issueScope: 'roadmap-first',
   orphanFirstPolicy: 'none',

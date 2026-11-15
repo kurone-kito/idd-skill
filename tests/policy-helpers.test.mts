@@ -31,9 +31,11 @@ import {
   resolveEffectiveIssueAuthoringDelegate,
   resolveEffectiveProvider,
   resolveIssueAuthoringAdversarialWaitCeiling,
+  resolveMergePolicy,
   selectDesyncedIndex,
   type TriageRecord,
 } from '../src/scripts/policy-helpers.mts';
+import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
 
 test('issueScope defaults to roadmap-first and accepts all values', () => {
   assert.equal(POLICY_DEFAULTS.issueScope, 'roadmap-first');
@@ -3763,4 +3765,93 @@ test('autoDecide: an inherited value counts as absent, so an inherited enabled t
       label,
     );
   }
+});
+
+test('resolveMergePolicy gives a string to every tier and an absent value the human_merge default (#5210)', () => {
+  assert.deepEqual(resolveMergePolicy(undefined, null), {
+    ok: true,
+    policy: 'human_merge',
+  });
+  assert.deepEqual(resolveMergePolicy('fully_autonomous_merge', null), {
+    ok: true,
+    policy: 'fully_autonomous_merge',
+  });
+  assert.deepEqual(resolveMergePolicy('separate_merge_agent', 'lightweight'), {
+    ok: true,
+    policy: 'separate_merge_agent',
+  });
+});
+
+test('resolveMergePolicy picks the named tier of a complete object and fails otherwise (#5210)', () => {
+  const tiers = {
+    frontier: 'fully_autonomous_merge',
+    'middle-tier': 'human_merge',
+    lightweight: 'separate_merge_agent',
+  };
+  assert.deepEqual(resolveMergePolicy(tiers, 'frontier'), {
+    ok: true,
+    policy: 'fully_autonomous_merge',
+  });
+  assert.deepEqual(resolveMergePolicy(tiers, 'middle-tier'), {
+    ok: true,
+    policy: 'human_merge',
+  });
+  assert.deepEqual(resolveMergePolicy(tiers, 'lightweight'), {
+    ok: true,
+    policy: 'separate_merge_agent',
+  });
+  for (const tier of [null, '', 'premium']) {
+    assert.equal(
+      resolveMergePolicy(tiers, tier).ok,
+      false,
+      `tier ${JSON.stringify(tier)} must fail`,
+    );
+  }
+  assert.equal(
+    resolveMergePolicy(
+      { frontier: 'human_merge', 'middle-tier': 'human_merge' },
+      'frontier',
+    ).ok,
+    false,
+    'a partial object fails',
+  );
+  assert.equal(
+    resolveMergePolicy({ ...tiers, extra: 'human_merge' }, 'frontier').ok,
+    false,
+    'an extra key fails',
+  );
+  assert.equal(
+    resolveMergePolicy({ ...tiers, lightweight: 'auto' }, 'lightweight').ok,
+    false,
+    'a value outside the enum fails',
+  );
+  assert.equal(
+    resolveMergePolicy('auto', null).ok,
+    false,
+    'an unknown string fails',
+  );
+  assert.equal(resolveMergePolicy(null, null).ok, false, 'null fails');
+  assert.equal(
+    resolveMergePolicy(['human_merge'], null).ok,
+    false,
+    'an array fails',
+  );
+});
+
+test('the schema-valid per-tier fixture validates before the resolver reads it (#5210)', () => {
+  const fixture = loadJson(
+    'fixtures/schemas/policy.merge-by-tier.valid.json',
+  ) as Record<string, unknown>;
+  assert.deepEqual(
+    validate(fixture, loadJson('schemas/policy.schema.json')),
+    [],
+  );
+  assert.deepEqual(resolveMergePolicy(fixture.mergePolicy, 'frontier'), {
+    ok: true,
+    policy: 'fully_autonomous_merge',
+  });
+  assert.deepEqual(resolveMergePolicy(fixture.mergePolicy, 'lightweight'), {
+    ok: true,
+    policy: 'human_merge',
+  });
 });
