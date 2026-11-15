@@ -275,6 +275,9 @@ function authorityFrom(report) {
  */
 function authorityCheckedStore(store, authorityNow) {
   return {
+    // The planner reads claim trust and the label name from this policy, so
+    // the wrapper must carry it, not fall back to the working-tree config.
+    policy: store.policy,
     readHistory: () => store.readHistory(),
     readSourceIssue: () => store.readSourceIssue(),
     readPullRequest: (url) => store.readPullRequest(url),
