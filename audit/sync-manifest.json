@@ -451,7 +451,7 @@
         ".github/instructions/idd-ci.instructions.md",
         ".github/instructions/idd-review-fix.instructions.md"
       ],
-      "limitBytes": 82600
+      "limitBytes": 86500
     },
     {
       "id": "bundle-merge-phase",
@@ -463,7 +463,7 @@
         ".github/instructions/idd-merge.instructions.md",
         ".github/instructions/idd-pre-merge.instructions.md"
       ],
-      "limitBytes": 124800
+      "limitBytes": 130000
     },
     {
       "id": "bundle-onboarding-front-door",
@@ -576,6 +576,22 @@
         "limitBytes": 35200,
         "issue": 4893,
         "reason": "Re-measured on 2026-11-10 for issue #5127 after merging main: bundle-work-lite measures 33,371 bytes with the generated banner removed, as the documentation audit reports it. That is 100.52% of the earlier 33,200 limit, above the 98% enforcement ceiling. The issue-authorized 10% standing raise permits up to 36,700 bytes for that total, and the 98% ceiling requires a limit of at least 34,100 bytes, so the limit is set to 35,200, inside both bounds: 94.80% utilization, 1,125 bytes before the 98% threshold (34,496). It supersedes the 33,200 limit; the manual record of the operator choice on issue #4893 is unchanged."
+      },
+      {
+        "bundle": "bundle-review-fix-phase",
+        "standingClass": "budgetRaise",
+        "ceilingPct": 10,
+        "limitBytes": 86500,
+        "issue": 5161,
+        "reason": "Re-measured on 2026-11-15 for issue #5161: bundle-review-fix-phase measures 81,646 bytes with the generated banner removed, as the documentation audit reports it (80,934 bytes at main before the advisory-convergence reopen sentences). That is 98.85% of the earlier 82,600 limit, above the 98% enforcement ceiling. The standing 10% budgetRaise class that repository policy enables (standingApprovals.budgetRaise, maxRaisePct 10; enabled by the operator decision of 2026-11-06 on issue #4893) permits up to 89,800 bytes for that total, and the 98% ceiling requires a limit of at least 83,400 bytes, so the limit is set to 86,500, inside both bounds: 94.39% utilization, 3,124 bytes before the 98% threshold (84,770). It supersedes the 82,600 limit; the manual record from issue #3943 is unchanged."
+      },
+      {
+        "bundle": "bundle-merge-phase",
+        "standingClass": "budgetRaise",
+        "ceilingPct": 10,
+        "limitBytes": 130000,
+        "issue": 5161,
+        "reason": "Re-measured on 2026-11-15 for issue #5161: bundle-merge-phase measures 122,983 bytes with the generated banner removed, as the documentation audit reports it (122,271 bytes at main before the advisory-convergence reopen sentences). That is 98.54% of the earlier 124,800 limit, above the 98% enforcement ceiling. The standing 10% budgetRaise class that repository policy enables (standingApprovals.budgetRaise, maxRaisePct 10; enabled by the operator decision of 2026-11-06 on issue #4893) permits up to 135,200 bytes for that total, and the 98% ceiling requires a limit of at least 125,500 bytes, so the limit is set to 130,000, inside both bounds: 94.60% utilization, 4,417 bytes before the 98% threshold (127,400). It supersedes the 124,800 limit; the manual record from issue #4142 is unchanged."
       }
     ]
   },

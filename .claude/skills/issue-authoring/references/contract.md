@@ -1060,6 +1060,15 @@ preventive (no observed incident yet).
   like a path — backtick-quoted or a bare bulleted leading token — is
   parsed as a candidate file, so keep unrelated notes, caveats, or
   subheadings outside the section.
+- A required edit is a bullet that begins `Required edit:` and names
+  one backticked repository path. List that path under
+  `## Candidate files` too: the effort limit counts only the listed
+  paths, and a body that named a required edit but left it out of the
+  list was observed on closed issue `#4809`.
+  `audit-authored-issue` reports each such path that the section does
+  not list as a warning (`required-edit-candidate-files`). The audit
+  still passes, and the path is not added to the effort count. A body
+  that does not use the bullet is never warned.
 
 ### Orphan issue
 
@@ -2382,6 +2391,20 @@ as a false child. Unlike every other check above, a
 changes the linter's exit code: it prompts the author to either
 convert the prose into a proper dependency marker or consciously
 confirm the reference is a mere breadcrumb.
+
+For the `orphan` and `child` shapes, the linter emits a second
+**advisory, warning-severity-only** finding,
+`required-edit-candidate-files`. A required edit is a bullet that begins
+`Required edit:` and names one backticked repository path (see
+[Candidate files format](#candidate-files-format)). The finding names,
+in one warning, each such path that `## Candidate files` does not list.
+It reads the first backticked path of a bullet, including the bullet's
+wrapped continuation lines, and compares the same normalized path keys
+the effort count uses, so an `idd-template/` source and its mirror count
+as one file. It ignores a bullet quoted in a code block or an HTML
+comment, and it never warns a body that has no such bullet. Like
+`prose-dependency`, it never flips `passed` to `false` and never
+changes the linter's exit code, so publication still passes.
 
 ```sh
 node scripts/audit-authored-issue.mjs --shape <orphan|roadmap|child|carrier> \

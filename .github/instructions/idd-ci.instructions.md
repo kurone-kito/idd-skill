@@ -308,7 +308,11 @@ recovery is a new event: a branch-sync merge (merge
 branch-sync check in `idd-review-triage.instructions.md`) or reopening
 the PR. Treat this as reachable at D4/pre-review, not only after E8 — the
 ordering dependency a shared check-definition change creates is
-invisible to disjoint-file-set track planning.
+invisible to disjoint-file-set track planning. A `startup_failure` of
+`idd-advisory-convergence` (observed 2026-11-09,
+`kurone-kito/idd-skill#5153`) is recovered by closing and reopening the
+PR on the same head, with no new commit, so a new `pull_request_target`
+run starts.
 
 **Code-scanning-alerts lookup**: an unscoped call hides a PR-only
 alert, even one failing this PR's own check. Pass `pr=<n>`.
@@ -319,10 +323,10 @@ alert, even one failing this PR's own check. Pass `pr=<n>`.
 | State (required checks only, normalized) | Action |
 | --- | --- |
 | All required checks are generated and pass-equivalent | → **on-success** (caller-defined) |
-| Any required check is non-pass `failure`, `action_required`, `startup_failure`, or `stale` | Inspect the log. Infra/flaky: apply `ciWait.rerunPolicy` (default `rerun-once`) — rerun the exact failed run once and resume polling, or hold and stop. Code-caused: fix, **fix-validate**, commit atomically, return to caller's pre-push step. `action_required`/`startup_failure`/`stale` rarely clear on a blind rerun — if it needs a maintainer action or fresh run, hold rather than loop reruns. Exception 1: `idd-advisory-convergence` stuck at `action_required` from a gated bot run recovers by rerunning the existing run per `ciWait.rerunPolicy` (see §Rerun mechanics). Exception 2: `idd-advisory-convergence` alone non-pass with `pending: false` and outstanding review reasons — D4/E15 exit to E1 (both carve out a just-posted maintainer waiver, which still needs the rerun — see D4); F2/F3 unaffected. Exception 3: `idd-advisory-convergence` alone non-pass with `pending: true` (the check evaluated before Copilot's review exists for this HEAD SHA, e.g. "Copilot has not reviewed this pull request yet") — the literal opposite boolean from Exception 2, and an expected, self-resolving timing race rather than infra/flaky or code-caused: apply D4's `pending: true` recovery check (`idd-skill#2622`). |
+| Any required check is non-pass `failure`, `action_required`, `startup_failure`, or `stale` | Inspect the log. Infra/flaky: apply `ciWait.rerunPolicy` (default `rerun-once`) — rerun the exact failed run once and resume polling, or hold and stop. Code-caused: fix, **fix-validate**, commit atomically, return to caller's pre-push step. `action_required`/`startup_failure`/`stale` rarely clear on a blind rerun — if it needs a maintainer action or fresh run, hold rather than loop reruns. Exception 1: `idd-advisory-convergence` stuck at `action_required` from a gated bot run recovers by rerunning the existing run per `ciWait.rerunPolicy` (see §Rerun mechanics). Exception 2: `idd-advisory-convergence` alone non-pass with `pending: false` and outstanding review reasons — D4/E15 exit to E1 (both carve out a just-posted maintainer waiver, which still needs the rerun — see D4); F2/F3 unaffected. Exception 3: `idd-advisory-convergence` alone non-pass with `pending: true` (the check evaluated before Copilot's review exists for this HEAD SHA, e.g. "Copilot has not reviewed this pull request yet") — the literal opposite boolean from Exception 2, and an expected, self-resolving timing race rather than infra/flaky or code-caused: apply D4's `pending: true` recovery check (`idd-skill#2622`). Exception 4: `idd-advisory-convergence` `startup_failure` recovers by closing and reopening the PR on the same head, with no new commit (see §Stale workflow definition after a rerun). If the new run, or the check on that head, does not succeed, hold as the "rarely clear on a blind rerun" sentence says, and do not loop reruns. |
 | Any required check is non-pass `cancelled` or `timed_out` | Code-caused: fix, **fix-validate**, commit atomically, return to caller's pre-push step. Infra-caused: apply `ciWait.rerunPolicy`; rerun/re-push only within budget, otherwise hold and stop. |
 | Any required check is running (`pending`/`requested`/`waiting`/`expected`/...) | Continue waiting. After `ciWait.runningTimeout` (from server `startedAt`; default 30 min) with no completion, apply `ciWait.rerunPolicy` — rerun once and resume, or hold and stop if the route recurs or policy is `hold`. |
-| Required checks are not generated after `ciWait.generationTimeout` | Treat as running (default 10 min). If the workflow run doesn't exist at all when that window elapses, hold and escalate to a maintainer, then stop. |
+| Required checks are not generated after `ciWait.generationTimeout` | Treat as running (default 10 min). If `idd-advisory-convergence` is the missing check and its workflow run concluded `startup_failure` on the PR head, apply Exception 4 of the non-pass row. If the workflow run doesn't exist at all when that window elapses, hold and escalate to a maintainer, then stop. |
 <!-- dprint-ignore-end -->
 
 ## Hold-and-report failure shapes
