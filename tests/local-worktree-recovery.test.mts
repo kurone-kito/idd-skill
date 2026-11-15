@@ -13075,15 +13075,29 @@ function sleepSync(milliseconds: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
 }
 
+/** True for the errors a filesystem without hard-link or symlink support
+ * raises, so a test that needs links can skip instead of failing. */
+function linkingUnavailable(error: unknown): boolean {
+  return ['EACCES', 'EPERM', 'ENOSYS', 'EOPNOTSUPP', 'EXDEV'].includes(
+    (error as NodeJS.ErrnoException).code ?? '',
+  );
+}
+
 test('a stable fingerprint ignores a removed hard-link sibling and a removed symlink target', {
   // Hard links and symlinks need extra privileges or other semantics on Windows.
   skip: process.platform === 'win32',
-}, () => {
+}, (context) => {
   const root = mkdtempSync(join(tmpdir(), 'idd-lwr-fp-stable-'));
   try {
     writeFileSync(join(root, 'a.txt'), 'shared\n');
-    linkSync(join(root, 'a.txt'), join(root, 'b.txt'));
-    symlinkSync('a.txt', join(root, 'c-link'));
+    try {
+      linkSync(join(root, 'a.txt'), join(root, 'b.txt'));
+      symlinkSync('a.txt', join(root, 'c-link'));
+    } catch (error) {
+      if (!linkingUnavailable(error)) throw error;
+      context.skip('this filesystem does not support hard links or symlinks');
+      return;
+    }
     const roots = [root];
     const read = (name: string, stable: boolean): string | null =>
       pathFingerprintOnDisk(join(root, name), roots, { stable });
@@ -13098,6 +13112,10 @@ test('a stable fingerprint ignores a removed hard-link sibling and a removed sym
 
     unlinkSync(join(root, 'a.txt'));
 
+    if (read('b.txt', false) === fullHardLink) {
+      context.skip('this filesystem does not move the ctime on an unlink');
+      return;
+    }
     assert.notEqual(
       read('b.txt', false),
       fullHardLink,
@@ -13123,15 +13141,21 @@ test('a stable fingerprint ignores a removed hard-link sibling and a removed sym
 
 test('batched cleanup tolerates a hard link and a symlink target removed by earlier batches', {
   skip: process.platform === 'win32',
-}, () => {
+}, (context) => {
   const repo = mkdtempSync(join(tmpdir(), 'idd-lwr-batch-links-'));
   const preserve = mkdtempSync(join(tmpdir(), 'idd-lwr-batch-links-preserve-'));
   try {
     initIgnoredFixtureRepo(repo);
     const roots = [repo, join(repo, '.git')];
     writeFileSync(join(repo, 'ignored', 'a.txt'), 'shared\n');
-    linkSync(join(repo, 'ignored', 'a.txt'), join(repo, 'ignored', 'b.txt'));
-    symlinkSync('a.txt', join(repo, 'ignored', 'c-link'));
+    try {
+      linkSync(join(repo, 'ignored', 'a.txt'), join(repo, 'ignored', 'b.txt'));
+      symlinkSync('a.txt', join(repo, 'ignored', 'c-link'));
+    } catch (error) {
+      if (!linkingUnavailable(error)) throw error;
+      context.skip('this filesystem does not support hard links or symlinks');
+      return;
+    }
     const paths = ['ignored/a.txt', 'ignored/b.txt', 'ignored/c-link'];
     mkdirSync(join(preserve, 'ignored'));
     const entries = paths.map((path): IgnoredFileEntry => {
@@ -13179,4 +13203,25 @@ test('batched cleanup tolerates a hard link and a symlink target removed by earl
     rmSync(repo, { recursive: true, force: true });
     rmSync(preserve, { recursive: true, force: true });
   }
+});
+
+test('a preserved path recreated after pass 1 is refused before its batch is cleaned', () => {
+  const stage = fakeCleanStage(['/t/p1', '/t/p2']);
+  // p3 is a preserved path that was already absent when pass 1 ran; it shows
+  // up again while the first batch is rechecked.
+  stage.onBatchStatus = (current) => {
+    current.present.add('/t/p3');
+  };
+  const error = cleanPreservedIgnoredFilesBeforeDestructiveRemoval(
+    ['p1', 'p2', 'p3'].map((path) => fakeEntry('.', path)),
+    '/t',
+    fakeCleanDeps(stage),
+    TWO_PER_BATCH,
+  );
+  assert.equal(
+    error,
+    `preserved ignored path ./p3 changed contents or identity before cleanup; removed so far: ${JSON.stringify(['./p1', './p2'])}; still present: ${JSON.stringify(['./p3'])}`,
+  );
+  assert.equal(stage.cleanRuns.length, 1);
+  assert.equal(stage.present.has('/t/p3'), true);
 });

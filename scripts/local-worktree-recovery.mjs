@@ -2004,6 +2004,15 @@ function validatePreservedIgnoredPaths(
         return `preserved ignored path ${scope}/${path} backup changed before cleanup`;
       }
       const sourcePath = join(scopePath, path);
+      // Read the stable fingerprint first: a write between the two reads then
+      // changes the full one, which pass 1 compares with the copy-time value,
+      // instead of being recorded as the baseline.
+      const stableFingerprint = deps.readPathFingerprint(sourcePath, roots, {
+        stable: true,
+      });
+      if (stableFingerprint === null) {
+        return `could not fingerprint preserved ignored path ${scope}/${path} before cleanup`;
+      }
       if (options.recordStableFingerprints) {
         const currentFingerprint = deps.readPathFingerprint(sourcePath, roots);
         if (currentFingerprint === null) {
@@ -2012,18 +2021,12 @@ function validatePreservedIgnoredPaths(
         if (currentFingerprint !== entry.sourceFingerprint) {
           return `preserved ignored path ${scope}/${path} changed contents or identity before cleanup`;
         }
-      }
-      const stableFingerprint = deps.readPathFingerprint(sourcePath, roots, {
-        stable: true,
-      });
-      if (stableFingerprint === null) {
-        return `could not fingerprint preserved ignored path ${scope}/${path} before cleanup`;
-      }
-      if (options.recordStableFingerprints) {
         options.stableFingerprints.set(`${scope}/${path}`, stableFingerprint);
       } else if (
         stableFingerprint !== options.stableFingerprints.get(`${scope}/${path}`)
       ) {
+        // Also refuses a path that was absent when pass 1 ran: it has no
+        // stored fingerprint, so recreated content is never cleaned.
         return `preserved ignored path ${scope}/${path} changed contents or identity before cleanup`;
       }
     }
