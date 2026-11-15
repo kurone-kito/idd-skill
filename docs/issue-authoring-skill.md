@@ -1001,6 +1001,12 @@ instructions.
   [Destructive operations](#destructive-operations), or names the guard that
   makes the case impossible; the reviewer flags a destructive operation whose
   criteria leave a case unanswered
+- a draft that deletes, renames, or moves a repository path or tree includes
+  the reference inventory under [Destructive operations](#destructive-operations):
+  repository references, including prose documentation that names the path, and
+  executable consumers (links, tests, hooks, workflows, templates, and scripts);
+  the reviewer flags a draft with no inventory, or one where a reference or
+  consumer is neither in Candidate files nor explained as still valid
 
 #### Resolver
 
@@ -3479,7 +3485,20 @@ between a check and the act, which item 4 describes. The refusals in items 4
 to 6 take precedence, so the open risk applies only where no item refuses the
 case.
 
-Observed incident:
+**Reference inventory.** This requirement applies on its own, whether or not
+one of the six cases applies, and it replaces none of them. A drafted change
+that deletes, renames, or moves a repository path or tree includes, before
+publication, an inventory of the repository references to that path and of its
+executable consumers. The inventory covers prose documentation that names the
+path, and links, tests, hooks, workflows, templates, and scripts that read,
+open, or point at it. Like the restating-site search in
+[Codebase-fidelity validation](#codebase-fidelity-validation), it adds each
+reference or consumer that must change to Candidate files, and the body names
+each one that stays valid with the reason it remains valid; that statement is
+body prose, not an acceptance criterion. The completed-draft critique checklist
+asks the reviewer to check this; `audit-authored-issue` does not.
+
+Observed incidents:
 
 - Observed 2026-10-12 to 2026-10-13, PR `kurone-kito/idd-skill#4073`, closed
   without merging, for issue `kurone-kito/idd-skill#3825`: the issue's
@@ -3490,6 +3509,15 @@ Observed incident:
   and managed data paths that followed a symlink component, so writes
   resolved outside the data root (cases 4 and 6, comment 4249375009). Cases
   3 and 5 have no observed incident yet; they are preventive.
+- For the reference inventory, observed in issue `kurone-kito/dotfiles#680`,
+  closed 2026-10-28 on the merge of PR `kurone-kito/dotfiles#691`: its
+  Candidate files listed two instruction and skill directories, two docs, and
+  two helper tests. At the parent commit
+  `8681c44c7dfc4c0e1bbdc55f5ba74c58c8512f8f`, six references to the removed
+  paths sat outside that list: two tests that open an instruction file, a doc
+  that names one in prose, a docs index that links the instruction set, an
+  issue template that links the skill, and a hook that points at an
+  instruction file.
 
 ## Draft schemas
 
