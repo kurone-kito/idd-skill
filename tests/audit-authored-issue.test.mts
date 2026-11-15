@@ -2974,7 +2974,7 @@ test('required-edit-candidate-files does not warn when the body has no Required 
   assertNoRequiredEditWarning(orphanBody(), { shape: 'orphan' });
 });
 
-test('required-edit-candidate-files reads a wrapped, nested, or CRLF bullet (#4932)', () => {
+test('required-edit-candidate-files reads a wrapped, nested, tab-indented, or CRLF bullet (#4932)', () => {
   const cases: [string, string][] = [
     [
       'path on a continuation line',
@@ -2992,6 +2992,20 @@ test('required-edit-candidate-files reads a wrapped, nested, or CRLF bullet (#49
       withRequiredEdit(
         childBody(),
         '- Parent bullet\n  - Required edit: `src/example.mts`',
+      ),
+    ],
+    [
+      'a tab-indented nested bullet',
+      withRequiredEdit(
+        childBody(),
+        '- Parent bullet\n\t- Required edit: `src/example.mts`',
+      ),
+    ],
+    [
+      'a nested bullet indented with spaces and a tab',
+      withRequiredEdit(
+        childBody(),
+        '- Parent bullet\n  \t- Required edit: `src/example.mts`',
       ),
     ],
     [

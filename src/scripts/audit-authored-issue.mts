@@ -190,10 +190,12 @@ const SPLIT_OUT_OF_LINE_PATTERN =
 
 // The opening of a required-edit bullet (#4932): a `-`, `*`, or `+` list
 // item whose text begins with the literal, case-sensitive `Required edit:`.
-// Neither an ordered-list marker, a task-list checkbox, an emphasis
-// wrapper, nor a spelling variant opens one, so the contract's one-line
-// definition stays the whole grammar.
-const REQUIRED_EDIT_BULLET_PATTERN = /^ *[-*+]\s+Required edit:/u;
+// The indent may be spaces or tabs, since a tab-indented item is a real
+// nested list item that the masked scan view keeps. Neither an
+// ordered-list marker, a task-list checkbox, an emphasis wrapper, nor a
+// spelling variant opens one, so the contract's one-line definition stays
+// the whole grammar.
+const REQUIRED_EDIT_BULLET_PATTERN = /^[ \t]*[-*+]\s+Required edit:/u;
 
 // Shared "not applicable" detail for every triage-a4-*/triage-a45-*/
 // triage-title-missing finding (#3289) when `shape === 'roadmap'`: Discover
