@@ -2051,3 +2051,151 @@ test('the path helpers keep the walk inside the root', () => {
   assert.deepEqual(ancestorChain('/a/b/c'), ['/', '/a', '/a/b', '/a/b/c']);
   assert.deepEqual(parseNulList('x\0y\0\0'), ['x', 'y']);
 });
+
+const WORKTREE_GIT_DIR = '/repo/.git/worktrees/issue-worktree';
+const SUBMODULE_FATAL =
+  'fatal: working trees containing submodules cannot be moved or removed';
+
+/** Healthy routes up to the removal, then a refused submodule removal (#5225). */
+function submoduleRemovalRoutes(revParse: GitResult): Route[] {
+  return [
+    ...healthyRoutes().slice(0, 10),
+    {
+      match: (a) => a[0] === 'worktree' && a[1] === 'remove',
+      result: fail(SUBMODULE_FATAL),
+    },
+    {
+      match: (a) => a[0] === '-C' && a[2] === 'rev-parse',
+      result: revParse,
+    },
+  ];
+}
+
+/** The detail of the record that carries the refused removal (#5225). */
+function removeStepDetail(report: {
+  readonly steps: readonly {
+    readonly reason: string | null;
+    readonly detail: string | null;
+  }[];
+}): string {
+  return (
+    report.steps.find((step) => step.reason === 'worktree-remove-refused')
+      ?.detail ?? ''
+  );
+}
+
+test('a submodule refusal names the modules directory and the operator route, with no --force (#5225)', () => {
+  const h = harness({
+    routes: submoduleRemovalRoutes(ok(`${WORKTREE_GIT_DIR}\n`)),
+  });
+  const report = runF4WorktreeBranchSteps(input(), h.deps);
+  assert.equal(report.reason, 'worktree-remove-refused');
+  const detail = removeStepDetail(report);
+  assert.ok(detail.includes(`remains at ${WORKTREE_GIT_DIR}/modules`), detail);
+  assert.ok(
+    detail.includes('§LWR step 4 of docs/idd-resume-detail.md'),
+    detail,
+  );
+  assert.equal(
+    h.gitCalls.some((c) => c.args.includes('--force')),
+    false,
+  );
+});
+
+test('a submodule refusal with no modules directory keeps the generic detail (#5225)', () => {
+  const h = harness({
+    routes: submoduleRemovalRoutes(ok(`${WORKTREE_GIT_DIR}\n`)),
+    lstat: (path) =>
+      path === `${WORKTREE_GIT_DIR}/modules` ? 'absent' : 'directory',
+  });
+  const report = runF4WorktreeBranchSteps(input(), h.deps);
+  assert.equal(report.reason, 'worktree-remove-refused');
+  const detail = removeStepDetail(report);
+  assert.ok(detail.startsWith('git worktree remove refused:'), detail);
+  assert.equal(detail.includes('§LWR'), false, detail);
+});
+
+test('a failed or empty rev-parse keeps the generic detail and does not throw (#5225)', () => {
+  for (const revParse of [fail('fatal: not a git repository'), ok('')]) {
+    const h = harness({ routes: submoduleRemovalRoutes(revParse) });
+    const report = runF4WorktreeBranchSteps(input(), h.deps);
+    assert.equal(report.reason, 'worktree-remove-refused');
+    const detail = removeStepDetail(report);
+    assert.ok(detail.startsWith('git worktree remove refused:'), detail);
+    assert.equal(detail.includes('§LWR'), false, detail);
+  }
+});
+
+test('a different removal fatal keeps the generic detail with no operator route (#5225)', () => {
+  const h = harness({
+    routes: [
+      ...healthyRoutes().slice(0, 10),
+      {
+        match: (a) => a[0] === 'worktree' && a[1] === 'remove',
+        result: fail('fatal: contains modified files'),
+      },
+      {
+        match: (a) => a[0] === '-C' && a[2] === 'rev-parse',
+        result: ok(`${WORKTREE_GIT_DIR}\n`),
+      },
+    ],
+  });
+  const report = runF4WorktreeBranchSteps(input(), h.deps);
+  assert.equal(report.reason, 'worktree-remove-refused');
+  const detail = removeStepDetail(report);
+  assert.ok(detail.includes('contains modified files'), detail);
+  assert.equal(detail.includes('§LWR'), false, detail);
+});
+
+test('a populated submodule hold states that a later run does not remove the worktree (#5225)', () => {
+  const report = runF4WorktreeBranchSteps(
+    input(),
+    harness({
+      routes: [
+        ...healthyRoutes().slice(0, 8),
+        {
+          match: (a) => a[0] === '-C' && a[2] === 'submodule',
+          result: ok(` ${OTHER} vendor/lib (heads/main)\n`),
+        },
+      ],
+    }).deps,
+  );
+  assert.equal(report.reason, 'submodule-worktree');
+  assert.ok(
+    (report.nextAction ?? '').includes(
+      'A later run does not remove the worktree while the modules directory of its git directory remains.',
+    ),
+    report.nextAction ?? '',
+  );
+});
+
+test('a released-claim submodule refusal names the modules directory too (#5225)', () => {
+  const h = harness({
+    routes: submoduleRemovalRoutes(ok(`${WORKTREE_GIT_DIR}\n`)),
+  });
+  const report = runF4WorktreeBranchSteps(
+    input({ cleanupMode: 'released-claim', attestNoLiveSession: true }),
+    h.deps,
+  );
+  assert.equal(report.cleanupMode, 'released-claim');
+  assert.equal(report.reason, 'worktree-remove-refused');
+  assert.ok(
+    removeStepDetail(report).includes(`remains at ${WORKTREE_GIT_DIR}/modules`),
+    removeStepDetail(report),
+  );
+});
+
+test('a file or symlink at the modules path keeps the generic detail (#5225)', () => {
+  for (const kind of ['file', 'symlink'] as const) {
+    const h = harness({
+      routes: submoduleRemovalRoutes(ok(`${WORKTREE_GIT_DIR}\n`)),
+      lstat: (path) =>
+        path === `${WORKTREE_GIT_DIR}/modules` ? kind : 'directory',
+    });
+    const report = runF4WorktreeBranchSteps(input(), h.deps);
+    assert.equal(report.reason, 'worktree-remove-refused');
+    const detail = removeStepDetail(report);
+    assert.ok(detail.startsWith('git worktree remove refused:'), detail);
+    assert.equal(detail.includes('§LWR'), false, `${kind}: ${detail}`);
+  }
+});

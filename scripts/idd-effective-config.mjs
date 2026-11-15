@@ -4,14 +4,17 @@
 // The scripts/idd-effective-config.mjs copy is generated from this file by
 // `pnpm run build`. Edit this source, never the generated copy.
 //
-// Read-only policy diagnostic with two modes. The default mode (#3820) prints
+// Read-only policy diagnostic with three modes. The default mode (#3820) prints
 // the effective local policy as JSON with the layer each leaf came from, the
 // selected user-global override, and any layering diagnostics; it reads only
 // local files. The `--trusted-auto-decide` mode (#4958) instead reads the
 // repository policy and its schema from a trusted base on GitHub (a pull
 // request's base name, or the live default branch) and prints the trusted
-// auto-decide verdict for every class; it reads none of the local layers.
-// Neither mode writes, claims, posts, or changes any state.
+// auto-decide verdict for every class; it reads none of the local layers. The
+// `--resolve-merge-policy` mode (#5210) prints the one merge policy for a model
+// tier from the repository policy alone. No mode writes, claims, posts, or
+// changes any state.
+import { join } from 'node:path';
 import { parseCliArgs } from './cli-args.mjs';
 import {
   applyHelperCliOutcomeWhenDisabled,
@@ -20,10 +23,12 @@ import {
 } from './helper-cli-runner.mjs';
 import {
   deriveRepositoryIdentity,
+  LEGACY_POLICY_FILENAME,
   loadLayeredLocalPolicy,
+  policyEntryPresent,
   readTrustedAutoDecide,
 } from './idd-config.mjs';
-import { POLICY_DEFAULTS } from './policy-helpers.mjs';
+import { POLICY_DEFAULTS, resolveMergePolicy } from './policy-helpers.mjs';
 
 // Declared above the import.meta.main trigger below, for the same
 // temporal-dead-zone reason documented in idd-critique-delegate.mts.
@@ -34,6 +39,8 @@ const IDD_EFFECTIVE_CONFIG_FLAG_SPEC = {
   '--base-ref': { type: 'string' },
   '--owner': { type: 'string' },
   '--repo': { type: 'string' },
+  '--resolve-merge-policy': { type: 'boolean', default: false },
+  '--model-tier': { type: 'string' },
   '--help': { type: 'boolean', short: 'h' },
 };
 if (import.meta.main) {
@@ -106,6 +113,9 @@ function runCli() {
     printHelp();
     return 0;
   }
+  if (args.resolveMergePolicy || args.modelTierGiven) {
+    return runResolveMergePolicy(args);
+  }
   if (args.trustedAutoDecide || args.trustedOnlyFlagGiven) {
     return runTrustedAutoDecide(args);
   }
@@ -123,6 +133,69 @@ function runCli() {
 function usage(message) {
   process.stderr.write(`idd-effective-config: ${message}\n`);
   return { exitCode: 2, kind: 'usage', message, httpStatus: null };
+}
+/**
+ * The `--resolve-merge-policy` mode (#5210). Prints the one merge policy that
+ * applies to the model tier: `--model-tier`, else `IDD_MODEL_TIER`, with the
+ * flag winning. Stdout carries only the enum on success. A failure writes its
+ * reason to stderr, prints nothing to stdout, and exits 1 (`gate`).
+ *
+ * Two checkouts fail closed rather than print a default. An unreadable or
+ * malformed canonical `.github/idd/config.json` carries a loader diagnostic,
+ * and the loader then falls back to defaults, so the diagnostic is checked
+ * first. A checkout with the legacy `idd-policy.json` and no canonical file
+ * also fails closed, because the loader never reads the legacy file as policy.
+ */
+function runResolveMergePolicy(args) {
+  if (!args.resolveMergePolicy) {
+    return usage('--model-tier is accepted only with --resolve-merge-policy');
+  }
+  if (args.keyGiven) {
+    return usage('--resolve-merge-policy cannot be combined with --key');
+  }
+  if (args.trustedAutoDecide || args.trustedOnlyFlagGiven) {
+    return usage(
+      '--resolve-merge-policy cannot be combined with --trusted-auto-decide, --base-ref, --owner, or --repo',
+    );
+  }
+  // Repository policy only. The user-global layers are never read here: merge
+  // authority is recorded in the repository (F2.5 step 2), so an operator's own
+  // global `mergePolicy` must not resolve to one. A repository with no policy
+  // then resolves to the human_merge default, the conservative answer.
+  const loaded = loadLayeredLocalPolicy({
+    noUserGlobal: true,
+    defaults: POLICY_DEFAULTS,
+  });
+  if (loaded.local.diagnostic !== undefined) {
+    const reason = `the repository policy cannot be read: ${loaded.local.diagnostic}`;
+    process.stderr.write(`idd-effective-config: ${reason}\n`);
+    return { exitCode: 1, kind: 'gate', message: reason, httpStatus: null };
+  }
+  if (
+    !loaded.local.exists &&
+    policyEntryPresent(join(process.cwd(), LEGACY_POLICY_FILENAME))
+  ) {
+    const reason =
+      'the legacy idd-policy.json is present without .github/idd/config.json; the legacy file is never read as policy, so no merge policy can be resolved';
+    process.stderr.write(`idd-effective-config: ${reason}\n`);
+    return { exitCode: 1, kind: 'gate', message: reason, httpStatus: null };
+  }
+  const tier = args.modelTier ?? nonEmpty(process.env.IDD_MODEL_TIER);
+  const resolved = resolveMergePolicy(loaded.config?.mergePolicy, tier);
+  if (!resolved.ok) {
+    process.stderr.write(`idd-effective-config: ${resolved.reason}\n`);
+    return {
+      exitCode: 1,
+      kind: 'gate',
+      message: resolved.reason,
+      httpStatus: null,
+    };
+  }
+  process.stdout.write(`${resolved.policy}\n`);
+  return 0;
+}
+function nonEmpty(value) {
+  return value === undefined || value === '' ? null : value;
 }
 /**
  * The `--trusted-auto-decide` mode (#4958). Every usage check runs before any
@@ -197,6 +270,7 @@ function parseArgs(argv) {
   const baseRef = optional('base-ref');
   const owner = optional('owner');
   const repo = optional('repo');
+  const modelTier = optional('model-tier');
   return {
     noUserGlobal: values['no-user-global'],
     key: values.key ?? '',
@@ -207,6 +281,9 @@ function parseArgs(argv) {
     baseRef,
     owner,
     repo,
+    resolveMergePolicy: values['resolve-merge-policy'],
+    modelTierGiven: modelTier !== undefined,
+    modelTier,
     help,
   };
 }
@@ -214,6 +291,7 @@ function printHelp() {
   process.stdout.write(`Usage:
   node scripts/idd-effective-config.mjs [--key <dotted.path>] [--no-user-global]
   node scripts/idd-effective-config.mjs --trusted-auto-decide [--base-ref <name>] [--owner <owner> --repo <repo>]
+  node scripts/idd-effective-config.mjs --resolve-merge-policy [--model-tier <name>] [--no-user-global]
 
 Prints the effective local policy as JSON, with the layer each leaf came from
 (repository, user-global override, user-global, or default), the selected
@@ -240,5 +318,19 @@ stdout.
   --repo <repo>        repository name. Without both, the repository comes
                        from this checkout's GitHub "origin" remote; in a fork
                        checkout, pass both for the base repository.
+
+--resolve-merge-policy prints the one merge policy that applies to a model tier
+(frontier, middle-tier, or lightweight) as a bare value on stdout. A string
+mergePolicy applies to every tier. It reads the repository policy only, never
+the user-global layers. Exit 1 with the reason on stderr and nothing on stdout
+when no single policy resolves, including when the repository policy cannot be
+read or only the legacy idd-policy.json is present. Exit 2 for a flag it cannot
+combine: --key, --trusted-auto-decide, --base-ref, --owner, or --repo, and
+--model-tier without --resolve-merge-policy. --no-user-global is accepted and
+changes nothing in this mode.
+
+  --model-tier <name>  the tier to resolve; without it, IDD_MODEL_TIER is read,
+                       and the flag wins when both are set. An empty value is
+                       not a tier, so it fails rather than reading the env
 `);
 }

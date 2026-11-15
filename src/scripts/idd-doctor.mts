@@ -54,6 +54,7 @@ import {
 import { payloadPolicyCoverageWarnings } from './payload-placeholders.mts';
 import {
   inspectHelperRuntimeConfig,
+  MERGE_POLICY_TIERS,
   POLICY_DEFAULTS,
   parseProjectCommandRows,
 } from './policy-helpers.mts';
@@ -1989,12 +1990,20 @@ export interface MergePolicyAckFinding {
  * `mergePolicyAck` in a *different* candidate than the one this doctor
  * run selected would not silence the warning.
  *
- * Returns null (no finding) for every `mergePolicy` value other than
+ * For a per-tier object `mergePolicy` (#5208), the check runs per tier: it
+ * warns when a tier's own value is `fully_autonomous_merge` and that tier is
+ * not covered. A string `mergePolicyAck` of `fully_autonomous_merge` covers
+ * every tier; an object `mergePolicyAck` covers a tier only when its entry for
+ * that tier is `fully_autonomous_merge`. The string branch is unchanged. This
+ * check does not resolve a tier (the doctor has none), so it does not call
+ * `resolveMergePolicy`.
+ *
+ * Returns null (no finding) for every `mergePolicy` string other than
  * `fully_autonomous_merge`, for a missing/absent `mergePolicy` key, or
  * when `mergePolicyAck` already equals `"fully_autonomous_merge"`.
  *
  * The ack is scoped to that exact value rather than a boolean: while
- * `mergePolicy` is any value *other than* `fully_autonomous_merge`, this
+ * `mergePolicy` is any string *other than* `fully_autonomous_merge`, this
  * always returns null regardless of `mergePolicyAck` (the check only
  * fires for that one value). But this is NOT a full time/generation-scoped
  * reset -- a round trip that later lands back on the exact same
@@ -2014,6 +2023,14 @@ export function classifyMergePolicyAcknowledgement(
     | undefined,
   file: string = '.github/idd/config.json',
 ): MergePolicyAckFinding | null {
+  const policy = config?.mergePolicy;
+  if (policy !== null && typeof policy === 'object' && !Array.isArray(policy)) {
+    return classifyTierMergePolicyAcknowledgement(
+      policy as Record<string, unknown>,
+      config?.mergePolicyAck,
+      file,
+    );
+  }
   if (config?.mergePolicy !== 'fully_autonomous_merge') {
     return null;
   }
@@ -2027,6 +2044,43 @@ export function classifyMergePolicyAcknowledgement(
       'the distributed "human_merge" default -- confirm this choice by ' +
       `setting mergePolicyAck: "fully_autonomous_merge" in ${file} to ` +
       'silence this reminder.',
+  };
+}
+
+/**
+ * The per-tier arm of {@link classifyMergePolicyAcknowledgement} (#5208): one
+ * warning naming every tier that is set to `fully_autonomous_merge` without
+ * a covering acknowledgement.
+ */
+function classifyTierMergePolicyAcknowledgement(
+  policy: Record<string, unknown>,
+  ack: unknown,
+  file: string,
+): MergePolicyAckFinding | null {
+  if (ack === 'fully_autonomous_merge') {
+    return null;
+  }
+  const ackRecord =
+    ack !== null && typeof ack === 'object' && !Array.isArray(ack)
+      ? (ack as Record<string, unknown>)
+      : {};
+  const uncovered = MERGE_POLICY_TIERS.filter(
+    (tier) =>
+      policy[tier] === 'fully_autonomous_merge' &&
+      ackRecord[tier] !== 'fully_autonomous_merge',
+  );
+  if (uncovered.length === 0) {
+    return null;
+  }
+  return {
+    level: 'warning',
+    message:
+      `mergePolicy gives "fully_autonomous_merge" to ${uncovered.join(', ')}, ` +
+      'an explicit opt-in against the distributed "human_merge" default -- ' +
+      'confirm each tier by setting mergePolicyAck in ' +
+      `${file} (a string, or an object that names frontier, middle-tier, ` +
+      'and lightweight, with each uncovered tier set to ' +
+      '"fully_autonomous_merge") to silence this reminder.',
   };
 }
 

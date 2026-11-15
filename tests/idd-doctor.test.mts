@@ -5742,3 +5742,66 @@ process.stdout.write('{}');
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('classifyMergePolicyAcknowledgement warns per tier for a per-tier object (#5210)', () => {
+  const tiers = {
+    frontier: 'fully_autonomous_merge',
+    'middle-tier': 'human_merge',
+    lightweight: 'fully_autonomous_merge',
+  };
+  const finding = classifyMergePolicyAcknowledgement({ mergePolicy: tiers });
+  assert.equal(finding?.level, 'warning');
+  assert.match(finding?.message ?? '', /frontier, lightweight/);
+  assert.equal(
+    classifyMergePolicyAcknowledgement({
+      mergePolicy: tiers,
+      mergePolicyAck: 'fully_autonomous_merge',
+    }),
+    null,
+    'a string ack covers every tier',
+  );
+  assert.equal(
+    classifyMergePolicyAcknowledgement({
+      mergePolicy: tiers,
+      mergePolicyAck: {
+        frontier: 'fully_autonomous_merge',
+        lightweight: 'fully_autonomous_merge',
+      },
+    }),
+    null,
+    'an object ack that covers each fully tier clears the warning',
+  );
+  const partial = classifyMergePolicyAcknowledgement({
+    mergePolicy: tiers,
+    mergePolicyAck: { frontier: 'fully_autonomous_merge' },
+  });
+  assert.match(
+    partial?.message ?? '',
+    /gives "fully_autonomous_merge" to lightweight,/,
+  );
+  assert.doesNotMatch(
+    partial?.message ?? '',
+    /gives "fully_autonomous_merge" to frontier/,
+  );
+  assert.equal(
+    classifyMergePolicyAcknowledgement({
+      mergePolicy: {
+        frontier: 'human_merge',
+        'middle-tier': 'human_merge',
+        lightweight: 'separate_merge_agent',
+      },
+    }),
+    null,
+    'no tier set to fully_autonomous_merge gives no warning',
+  );
+});
+
+test('classifyMergePolicyAcknowledgement leaves non-object and non-string mergePolicy values unwarned (#5210)', () => {
+  for (const mergePolicy of [42, null, true, ['fully_autonomous_merge']]) {
+    assert.equal(
+      classifyMergePolicyAcknowledgement({ mergePolicy }),
+      null,
+      `mergePolicy ${JSON.stringify(mergePolicy)} must not warn`,
+    );
+  }
+});

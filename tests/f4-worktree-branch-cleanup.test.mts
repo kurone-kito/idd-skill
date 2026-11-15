@@ -1609,3 +1609,45 @@ test('released cleanup dry run reports the planned removal and changes nothing',
   assert.equal(calls.some(isWorktreeRemove), false);
   assert.equal(calls.some(isBranchDelete), false);
 });
+
+test('a deinitialized submodule removal refused by real git names the modules directory, with no --force (#5225)', () => {
+  const fx = makeFixture();
+  const sub = join(fx.root, 'lib-source');
+  mkdirSync(sub);
+  git(sub, ['init', '-q', '-b', 'main']);
+  writeAndCommit(sub, 'lib.txt', 'lib\n');
+  git(fx.worktree, [
+    '-c',
+    'protocol.file.allow=always',
+    'submodule',
+    'add',
+    '-q',
+    sub,
+    'vendor/lib',
+  ]);
+  git(fx.worktree, ['commit', '-q', '-m', 'add submodule']);
+  git(fx.worktree, ['submodule', 'deinit', '--all']);
+  const { report, calls } = runCleanup(fx, {
+    apply: true,
+    branchTip: tipOf(fx.worktree, BRANCH),
+  });
+  assert.equal(report.reason, 'worktree-remove-refused');
+  const detail =
+    report.steps.find((step) => step.reason === 'worktree-remove-refused')
+      ?.detail ?? '';
+  // Derive the expected path from the worktree git directory, the same way the
+  // helper does, instead of parsing it out of the detail. This keeps the check
+  // valid for paths with spaces and for Windows separators.
+  const expected = join(
+    git(fx.worktree, ['rev-parse', '--absolute-git-dir']),
+    'modules',
+  );
+  assert.equal(existsSync(expected), true, `${expected} must exist on disk`);
+  assert.ok(detail.includes(`remains at ${expected},`), detail);
+  assert.match(detail, /§LWR step 4/u);
+  assert.equal(
+    calls.some((args) => args.includes('--force')),
+    false,
+  );
+  assert.equal(existsSync(fx.worktree), true);
+});
