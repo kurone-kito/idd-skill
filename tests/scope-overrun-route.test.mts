@@ -676,6 +676,7 @@ for (const relativePath of PR_SUBMIT_PATHS) {
       'is complete and equals the roadmap plus its `## Tracks`',
       'each member is open and unclaimed, and either carries the authoring label',
       "or is released (no label, and the anchor's trusted `release-complete` marker for the latest generation of this set is present, with the snapshot re-fetched and verified)",
+      'each child has at least one child-mapped SHA',
       'every child-mapped SHA is confirmed by a `(cherry picked from commit <sha>)` trailer in `git log --format=%B {development-branch}..<child-branch>`',
       'each child says `Split out of #{issue-number}`',
       'and the set excludes this issue',
