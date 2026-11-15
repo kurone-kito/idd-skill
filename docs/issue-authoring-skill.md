@@ -1829,6 +1829,22 @@ as a false child. A
 to convert the prose into a proper dependency marker or consciously
 confirm the reference is a mere breadcrumb.
 
+For the `orphan` and `child` shapes, it emits a second **advisory,
+warning-severity-only** finding, `required-edit-candidate-files`. A
+required edit is a bullet that begins `Required edit:` and names one
+backticked repository path. The finding names, in one warning, each such
+path that `## Candidate files` does not list, because the effort limit
+counts only the listed paths (a body that named a required edit and left
+it out of the list was observed on closed issue `#4809`). It reads the
+first backticked path of a bullet, including the bullet's wrapped
+continuation lines, ignores a bullet quoted in a code block or an HTML
+comment, and never warns a body that has no such bullet. The audit still
+passes: the warning never flips `passed` to `false`, never changes the
+linter's exit code, and never adds the path to the effort count. The
+contract's
+[Candidate files format](https://github.com/kurone-kito/idd-skill/blob/main/skills/issue-authoring/references/contract.md#candidate-files-format)
+section defines the bullet.
+
 ```sh
 node scripts/audit-authored-issue.mjs \
   --shape <orphan|roadmap|child|carrier|confirmation> \
