@@ -1365,26 +1365,27 @@ The source issue needs no active claim and a trusted `scope-overrun` record,
 and a post-push pull request must still be a draft at the recorded head, so a
 head pushed after the decision cannot be closed unseen.
 
-A released member counts only when it is open and unclaimed, carries no authoring
-label, and the anchor's trusted `release-complete` marker for the latest
-generation of this set is present, with the set's snapshot re-fetched and
+A released member counts only when it is open and unclaimed, carries no
+authoring label, and the anchor's trusted `release-complete` marker for the
+latest generation of this set is present, with the set's snapshot re-fetched and
 verified. The roadmap is a member too: after release it carries no label either,
 so the same rule covers it, and the child-mapped SHA check does not apply to it.
 That marker closes its own generation, so an earlier generation's marker does
-not count. Every child-mapped SHA in the
-trusted inventory must appear in a `(cherry picked from commit <sha>)` trailer
-on the child's branch, read with `git log --format=%B
-{development-branch}..<child-branch>`. The transfer checks the same trailer in
-`<recorded-HEAD>..HEAD` of the child's worktree. The preflight has no trusted
-record of a released child's pre-pick HEAD, so it reads the branch range
-instead. A child with no mapped SHA fails, so an empty mapping is never
-confirmed. A later revert of a pick keeps its trailer in history, and this check
-does not detect it. That limit is accepted here. Step 2 re-reads each released
-child's claim, branch tip, and trailers before the pull request closes, because
-LWR runs after the preflight. Finalize never touches a child's worktree, so a
-dirty child worktree or commits beyond the transfer do not block it. Cleanup
-still reports the PR state, the LWR report, and the next action, and never
-bypasses the LWR preservation or lock gates.
+not count. Every child-mapped SHA in the trusted inventory must appear in a
+`(cherry picked from commit <sha>)` trailer on the child's branch, read with
+`git log --format=%B {development-branch}..<child-branch>`. The transfer checks
+the same trailer in `<recorded-HEAD>..HEAD` of the child's worktree. The
+preflight has no trusted record of a released child's pre-pick HEAD, so it reads
+the branch range instead. A child with no mapped SHA fails, so an empty mapping
+is never confirmed. A later revert of a pick keeps its trailer in history, and
+this check does not detect it. That limit is accepted here. Step 2 re-fetches
+the set snapshot and re-checks each released member, and re-reads each released
+child's claim, branch tip, and trailers, before the pull request closes, because
+LWR runs after the preflight. The roadmap has no `Split out of`, branch, or
+trailers, so only its own state applies to it. Finalize never touches a child's
+worktree, so a dirty child worktree or commits beyond the transfer do not block
+it. Cleanup still reports the PR state, the LWR report, and the next action, and
+never bypasses the LWR preservation or lock gates.
 
 The order of writes follows what each step protects. The pull request closes
 first and is re-read at the same head before LWR starts, because LWR would

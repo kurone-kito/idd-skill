@@ -248,11 +248,11 @@ report it.
    base first, then match the live SHAs, the `-` path checks, and exactly one
    trusted, unedited comment. A missing, stale, or unmet mapping blocks steps 2
    and 3. Steps 3 and 4 also wait until each child-mapped commit is confirmed.
-2. **Close the PR** (post-push): first re-read each released member's state
-   (open, unclaimed, label, `release-complete` marker, `Split out of`) and each
-   released child's claim, branch tip, and trailers; any change stops. Then `gh
-   pr close <pr>`; verify closed, unmerged, at that head. Re-read before
-   retrying an uncertain close.
+2. **Close the PR** (post-push): first re-fetch the set snapshot and re-check
+   each released member (open, unclaimed, no label, the same `release-complete`
+   marker), and for each released child also its `Split out of`, claim, branch
+   tip, and trailers; any change stops. Then `gh pr close <pr>`; verify closed,
+   unmerged, at that head. Re-read before retrying an uncertain close.
 3. **Clean up**: LWR with `--apply` and its step 2 basis (skip if the worktree
    is gone), never touching a child's worktree. On refusal or failure, keep the
    issue open, apply and verify the label if absent, keep the remains, and report
