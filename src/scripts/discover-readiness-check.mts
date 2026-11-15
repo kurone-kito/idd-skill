@@ -912,7 +912,7 @@ function normalizeLogin(value: unknown): string {
     .toLowerCase();
 }
 
-function parseSameRepositoryPullRequestNumber(
+export function parseSameRepositoryPullRequestNumber(
   value: unknown,
   owner: string,
   repo: string,

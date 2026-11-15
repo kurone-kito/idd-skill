@@ -575,7 +575,7 @@ function normalizeLogin(value) {
     .trim()
     .toLowerCase();
 }
-function parseSameRepositoryPullRequestNumber(value, owner, repo) {
+export function parseSameRepositoryPullRequestNumber(value, owner, repo) {
   if (typeof value !== 'string') return null;
   try {
     const url = new URL(value);

@@ -2188,3 +2188,67 @@ export function replayProvisionalDecisionHistory(input) {
   else status = 'selected';
   return { valid: true, status, decisions, issues: [] };
 }
+/**
+ * Bind a replayed history to one claim and one pull request head. Only a valid
+ * replay whose current bundle still holds an unconfirmed decision
+ * (`selected`, `in-progress`, or `confirmation-pending`) can bind. Every such
+ * decision's latest record must carry a claim lineage that contains the live
+ * claim, and both that lineage claim and the live claim must name the live
+ * head ref as their branch. Anything else is a stop that grants nothing: a
+ * confirmed bundle stays on the ordinary close path, and a rework state has
+ * no current work to bind. A claim that is absent from the lineage, as after
+ * a takeover, stops with `claim-mismatch`; this binder does not follow
+ * `supersedes` chains.
+ */
+export function bindProvisionalDecision(replay, target) {
+  const stop = (reason) => ({ bound: false, reason });
+  if (!replay.valid) return stop('replay-invalid');
+  if (replay.status === 'none' || replay.decisions.length === 0) {
+    return stop('record-missing');
+  }
+  if (replay.status === 'confirmed') return stop('source-confirmed');
+  if (
+    replay.status === 'rework-requested' ||
+    replay.status === 'rework-authored'
+  ) {
+    return stop('rework-pending');
+  }
+  const liveClaim = target.claimChain.find(
+    (claim) => claim.claimId === target.claimId,
+  );
+  if (liveClaim === undefined) return stop('claim-mismatch');
+  const currentBundleGeneration = Math.max(
+    ...replay.decisions.map((decision) => decision.bundleGeneration),
+  );
+  const unconfirmed = replay.decisions.filter(
+    (decision) =>
+      decision.bundleGeneration === currentBundleGeneration &&
+      decision.status !== 'confirmed',
+  );
+  if (unconfirmed.length === 0) return stop('source-confirmed');
+  const bound = [];
+  let branchMatches = liveClaim.branch === target.headRef;
+  for (const decision of unconfirmed) {
+    const latest =
+      decision.workCompleted ?? decision.workStarted ?? decision.selection;
+    const ownedClaim = latest.claimLineage.find(
+      (claim) => claim.claimId === target.claimId,
+    );
+    if (ownedClaim === undefined) return stop('claim-mismatch');
+    if (ownedClaim.branch !== target.headRef) branchMatches = false;
+    bound.push({
+      bundleGeneration: decision.bundleGeneration,
+      decisionGeneration: decision.decisionGeneration,
+      status: decision.status,
+      recordId: latest.recordId,
+    });
+  }
+  if (target.headRef === '' || !branchMatches) return stop('head-mismatch');
+  return {
+    bound: true,
+    claimId: liveClaim.claimId,
+    branch: liveClaim.branch,
+    bundleGeneration: currentBundleGeneration,
+    decisions: bound,
+  };
+}
