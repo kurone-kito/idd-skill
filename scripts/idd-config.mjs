@@ -137,7 +137,7 @@ function errorText(error) {
  * operator's global value must not win over a repository whose own policy
  * cannot be read.
  */
-function policyEntryPresent(path) {
+export function policyEntryPresent(path) {
   try {
     lstatSync(path);
     return true;
@@ -239,7 +239,7 @@ export function isUpstreamEscalationEnabled(config) {
 /** Default `.github/idd/config.json` path, relative to the process cwd. */
 export const DEFAULT_POLICY_CONFIG_PATH = '.github/idd/config.json';
 /** The legacy repository policy filename, read only as a presence signal (#3820). */
-const LEGACY_POLICY_FILENAME = 'idd-policy.json';
+export const LEGACY_POLICY_FILENAME = 'idd-policy.json';
 /**
  * Build the `gh api` argv that reads `.github/idd/config.json` for
  * `owner/repo` **at `ref`** via the Contents API, narrowed to `.content`

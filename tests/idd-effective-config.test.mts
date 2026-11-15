@@ -745,3 +745,255 @@ test('--help lists the --trusted-auto-decide mode (#4958)', () => {
   );
   assert.match(out, /never authority/);
 });
+
+/** Run `--resolve-merge-policy` in a fixture checkout, with IDD_MODEL_TIER unset unless given. */
+function runResolve(
+  f: { cwd: string; env: NodeJS.ProcessEnv },
+  args: string[],
+  extraEnv: Record<string, string> = {},
+): { status: number | null; stdout: string; stderr: string } {
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    ...f.env,
+    GITHUB_ACTIONS: '',
+  };
+  Reflect.deleteProperty(env, 'IDD_MODEL_TIER');
+  Object.assign(env, extraEnv);
+  const result = spawnSync(
+    process.execPath,
+    [SCRIPT, '--resolve-merge-policy', ...args],
+    { cwd: resolve(f.cwd), env, encoding: 'utf8' },
+  );
+  return {
+    status: result.status,
+    stdout: result.stdout,
+    stderr: result.stderr,
+  };
+}
+
+const TIERED_LOCAL = JSON.stringify({
+  mergePolicy: {
+    frontier: 'fully_autonomous_merge',
+    'middle-tier': 'human_merge',
+    lightweight: 'separate_merge_agent',
+  },
+});
+
+test('--resolve-merge-policy prints the enum for the named tier, and the flag wins over IDD_MODEL_TIER (#5210)', () => {
+  const f = fixture({ local: TIERED_LOCAL, global: null });
+  try {
+    assert.deepEqual(runResolve(f, ['--model-tier', 'middle-tier']), {
+      status: 0,
+      stdout: 'human_merge\n',
+      stderr: '',
+    });
+    assert.equal(
+      runResolve(f, ['--model-tier', 'lightweight'], {
+        IDD_MODEL_TIER: 'frontier',
+      }).stdout,
+      'separate_merge_agent\n',
+    );
+    assert.equal(
+      runResolve(f, [], { IDD_MODEL_TIER: 'frontier' }).stdout,
+      'fully_autonomous_merge\n',
+    );
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('--resolve-merge-policy prints a string for every tier and an absent value as human_merge (#5210)', () => {
+  const stringPolicy = fixture({
+    local: '{"mergePolicy":"fully_autonomous_merge"}',
+    global: null,
+  });
+  const absent = fixture({
+    local: '{"markerPrefix":"idd-skill"}',
+    global: null,
+  });
+  try {
+    assert.equal(
+      runResolve(stringPolicy, ['--model-tier', 'frontier']).stdout,
+      'fully_autonomous_merge\n',
+    );
+    assert.equal(
+      runResolve(stringPolicy, []).stdout,
+      'fully_autonomous_merge\n',
+    );
+    assert.equal(runResolve(absent, []).stdout, 'human_merge\n');
+  } finally {
+    stringPolicy.cleanup();
+    absent.cleanup();
+  }
+});
+
+test('--resolve-merge-policy exits 1 with no stdout when a per-tier object has no usable tier (#5210)', () => {
+  const f = fixture({ local: TIERED_LOCAL, global: null });
+  try {
+    const none = runResolve(f, []);
+    assert.equal(none.status, 1);
+    assert.equal(none.stdout, '');
+    assert.match(none.stderr, /--model-tier or IDD_MODEL_TIER/);
+    const unknown = runResolve(f, ['--model-tier', 'premium']);
+    assert.equal(unknown.status, 1);
+    assert.equal(unknown.stdout, '');
+    assert.match(unknown.stderr, /tier "premium" is not one of/);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('--resolve-merge-policy fails closed on a partial per-tier object (#5210)', () => {
+  const f = fixture({
+    local:
+      '{"mergePolicy":{"frontier":"human_merge","middle-tier":"human_merge"}}',
+    global: null,
+  });
+  try {
+    const result = runResolve(f, ['--model-tier', 'frontier']);
+    assert.equal(result.status, 1);
+    assert.equal(result.stdout, '');
+    assert.match(result.stderr, /exactly the keys/);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('--resolve-merge-policy resolves the #5208 schema-valid fixture per tier (#5210)', () => {
+  const fixturePath = resolve(
+    dirname(fileURLToPath(import.meta.url)),
+    '..',
+    'fixtures/schemas/policy.merge-by-tier.valid.json',
+  );
+  const f = fixture({
+    local: readFileSync(fixturePath, 'utf8'),
+    global: null,
+  });
+  try {
+    assert.equal(
+      runResolve(f, ['--model-tier', 'frontier']).stdout,
+      'fully_autonomous_merge\n',
+    );
+    assert.equal(
+      runResolve(f, ['--model-tier', 'middle-tier']).stdout,
+      'human_merge\n',
+    );
+    assert.equal(
+      runResolve(f, ['--model-tier', 'lightweight']).stdout,
+      'human_merge\n',
+    );
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('a repository mergePolicy string stays a string beside a user-global object (#5210)', () => {
+  const f = fixture({
+    local: '{"mergePolicy":"human_merge"}',
+    global: TIERED_LOCAL,
+  });
+  try {
+    assert.equal(
+      runResolve(f, ['--model-tier', 'frontier']).stdout,
+      'human_merge\n',
+    );
+    const key = execFileSync(
+      process.execPath,
+      [SCRIPT, '--key', 'mergePolicy'],
+      {
+        cwd: resolve(f.cwd),
+        env: { ...process.env, ...f.env, GITHUB_ACTIONS: '' },
+        encoding: 'utf8',
+      },
+    );
+    assert.equal((JSON.parse(key) as { value: unknown }).value, 'human_merge');
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('--resolve-merge-policy fails closed for a legacy-only checkout (#5210)', () => {
+  const f = fixture({ local: null, global: null });
+  try {
+    writeFileSync(
+      join(f.cwd, 'idd-policy.json'),
+      '{"mergePolicy":"fully_autonomous_merge"}',
+    );
+    const result = runResolve(f, []);
+    assert.equal(result.status, 1);
+    assert.equal(result.stdout, '');
+    assert.match(result.stderr, /legacy idd-policy\.json/);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('--resolve-merge-policy and --model-tier reject incompatible flags with a usage exit (#5210)', () => {
+  const f = fixture({ local: TIERED_LOCAL, global: null });
+  try {
+    assert.equal(runResolve(f, ['--key', 'mergePolicy']).status, 2);
+    assert.equal(runResolve(f, ['--trusted-auto-decide']).status, 2);
+    assert.equal(runResolve(f, ['--base-ref', 'main']).status, 2);
+    const tierWithoutMode = spawnSync(
+      process.execPath,
+      [SCRIPT, '--model-tier', 'frontier'],
+      {
+        cwd: resolve(f.cwd),
+        env: { ...process.env, ...f.env },
+        encoding: 'utf8',
+      },
+    );
+    assert.equal(tierWithoutMode.status, 2);
+    assert.equal(tierWithoutMode.stdout, '');
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('--help lists the --resolve-merge-policy mode and --model-tier (#5210)', () => {
+  const out = execFileSync(process.execPath, [SCRIPT, '--help'], {
+    encoding: 'utf8',
+  });
+  assert.match(out, /--resolve-merge-policy \[--model-tier <name>\]/);
+  assert.match(out, /--model-tier <name>/);
+});
+
+test('--resolve-merge-policy fails closed on a malformed canonical policy file (#5210)', () => {
+  const f = fixture({ local: '{"mergePolicy":', global: null });
+  try {
+    const result = runResolve(f, ['--model-tier', 'frontier']);
+    assert.equal(result.status, 1);
+    assert.equal(result.stdout, '');
+    assert.match(result.stderr, /cannot be read/);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('--resolve-merge-policy does not fall back to IDD_MODEL_TIER for an empty --model-tier (#5210)', () => {
+  const f = fixture({ local: TIERED_LOCAL, global: null });
+  try {
+    const result = runResolve(f, ['--model-tier', ''], {
+      IDD_MODEL_TIER: 'frontier',
+    });
+    assert.equal(result.status, 1);
+    assert.equal(result.stdout, '');
+    assert.match(result.stderr, /tier "" is not one of/);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('--resolve-merge-policy never reads the user-global layers, so a global policy grants no merge authority (#5210)', () => {
+  const f = fixture({
+    local: null,
+    global: '{"mergePolicy":"fully_autonomous_merge"}',
+  });
+  try {
+    const result = runResolve(f, ['--model-tier', 'frontier']);
+    assert.equal(result.status, 0);
+    assert.equal(result.stdout, 'human_merge\n');
+  } finally {
+    f.cleanup();
+  }
+});
