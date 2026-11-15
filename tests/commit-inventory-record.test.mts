@@ -121,6 +121,18 @@ test('a single trusted, unedited record for the live head is accepted', () => {
   assert.equal(result.status, 'accepted');
 });
 
+test('an empty entry list is a valid record, so an overrun with no branch-only commits can post one', () => {
+  // The source branch can equal the development branch before the first
+  // implementation commit, so the inventory is legitimately empty (Codex P2
+  // on PR #5241). The empty record must parse and govern the live head.
+  const body = record(HEAD, []);
+  const parsed = parseCommitInventoryComment(body, PREFIX);
+  assert.ok(parsed, 'the empty record parses');
+  assert.deepEqual(parsed.entries, []);
+  const result = select([trustedUnedited(body)]);
+  assert.equal(result.status, 'accepted');
+});
+
 test('no record-shaped comment for this issue is absent, so prose applies', () => {
   assert.deepEqual(select([]), { status: 'absent' });
 });

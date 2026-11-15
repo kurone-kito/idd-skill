@@ -3650,12 +3650,15 @@ function isFullSha(value) {
   return typeof value === 'string' && /^[0-9a-f]{40}$/.test(value);
 }
 /**
- * Validate the entry list. Returns null when any entry is unreadable, a SHA
- * repeats, or an entry omits its reach (issue #5213: such an entry does not
- * count, so the record does not count either).
+ * Validate the entry list. An empty list is valid: a scope overrun before the
+ * first implementation commit has no branch-only commits, and its record must
+ * still be postable (kurone-kito/idd-skill#5213). Returns null when the value
+ * is not an array, any entry is unreadable, a SHA repeats, or an entry omits
+ * its reach (issue #5213: such an entry does not count, so the record does not
+ * count either).
  */
 function normalizeCommitInventoryEntries(value) {
-  if (!Array.isArray(value) || value.length === 0) {
+  if (!Array.isArray(value)) {
     return null;
   }
   const seen = new Set();
@@ -3715,7 +3718,7 @@ export function renderCommitInventoryComment(payload) {
     !entries
   ) {
     throw new Error(
-      'invalid commit inventory payload: provide a marker prefix, agent ID, positive issue number, branch, full base and head SHAs, and a non-empty entry list where each entry has a full SHA, paths, a disposition of child, in-base, or not-reusable, and a reach of pushed or unpushed',
+      'invalid commit inventory payload: provide a marker prefix, agent ID, positive issue number, branch, full base and head SHAs, and an entry list (empty when no commit is branch-only) where each entry has a full SHA, paths, a disposition of child, in-base, or not-reusable, and a reach of pushed or unpushed',
     );
   }
   // The entries are percent-encoded, as the scope-overrun file list is, so a

@@ -1567,7 +1567,8 @@ come from the authoring set (`authoring-set-members`), not from this comment, so
 the posted inventory is never edited. The machine record is posted with
 `post-idd-marker --type commit-inventory`. A failed or uncertain POST stops
 cleanup (preventive; no observed incident yet), and the comments are read back
-before any retry, because a second live record stops cleanup.
+before any retry, because a second live record stops cleanup. With no
+branch-only commit, the entry list is empty, and the record is still posted.
 
 Before `--apply`, the live `git rev-list` set and each `-` path check must match
 the posted inventory. LWR writes `refs/idd-lwr/<branch>` whenever the branch has
