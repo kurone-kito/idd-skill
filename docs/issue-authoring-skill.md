@@ -2424,7 +2424,10 @@ state (the item fails while that read is unreadable) — and the user explicitly
 requests
 release from the authoring hold (see the
 [Narrow auto-release exception](#narrow-auto-release-exception)
-below for the marker-scoped exceptions to this precondition). Keep the
+below for the marker-scoped exceptions to this precondition; when
+`standingApprovals.release` is enabled, the
+[standing release approval](https://github.com/kurone-kito/idd-skill/blob/main/skills/issue-authoring/references/contract.md#authoring-hold-and-release)
+is one more exception). Keep the
 set anchor held until every other
 target's label removal is verified, and remove the anchor label last. Every
 label removal in this release, the anchor label included, and every restore that
@@ -2448,7 +2451,12 @@ entries in this order: entry 1 for every target, entry 2 once, entries 3
 and 4 for each non-anchor target in turn, entries 3 and 4 for the anchor,
 and entry 5 last. The defer-source auto-release exception adds a
 sole-member check before the first label removal. This checklist does not
-cover that path; follow the contract for it.
+cover that path; follow the contract for it. When `standingApprovals.release`
+is enabled, the standing release approval replaces the verified user request
+with conditions the contract owns, so that request precondition does not apply
+to it; follow
+[Authoring hold and release](https://github.com/kurone-kito/idd-skill/blob/main/skills/issue-authoring/references/contract.md#authoring-hold-and-release)
+for those conditions.
 
 1. **Preflight, every target.** Run the contract's sweep against the target
    and the journal first (attempted, not blocking, so the command ends in
@@ -2755,12 +2763,16 @@ state; leave every target generation open and stop. If restoration cannot be
 completed or a newer owner has appeared, record a set-level recovery hold and
 never claim a partial release. This release checklist plus the user's
 explicit request together form the single approval boundary in this
-contract, except for the narrow, marker-scoped exceptions below.
+contract, except for the narrow, marker-scoped exceptions below and, when
+`standingApprovals.release` is enabled, the
+[standing release approval](https://github.com/kurone-kito/idd-skill/blob/main/skills/issue-authoring/references/contract.md#authoring-hold-and-release).
 
 Removing the authoring label releases the Discover guard and
 authorizes IDD execution for the released issues. Do it only as part
-of that explicit release request, or one of the narrow auto-release
-exceptions below; nothing else removes the label or starts Discover,
+of that explicit release request, one of the narrow auto-release
+exceptions below, or, when `standingApprovals.release` is enabled, the
+[standing release approval](https://github.com/kurone-kito/idd-skill/blob/main/skills/issue-authoring/references/contract.md#authoring-hold-and-release);
+nothing else removes the label or starts Discover,
 Claim, and Work on its own. A draft carrier's release authorizes no
 execution: the carrier keeps its authoring-only label and never enters
 the loop. An auto-decide confirmation issue's release authorizes no
@@ -3869,8 +3881,10 @@ relayed release claim must refuse it and require the party holding
 the actual request to act directly, even when that party is its own
 orchestrator. This rule does not extend to the
 [Narrow auto-release exception](#narrow-auto-release-exception),
-the carrier creation-hold exception, or the confirmation creation-hold
-exception, which by design run with no user
+the carrier creation-hold exception, the confirmation creation-hold
+exception, or, when `standingApprovals.release` is enabled, the
+[standing release approval](https://github.com/kurone-kito/idd-skill/blob/main/skills/issue-authoring/references/contract.md#authoring-hold-and-release),
+which by design run with no user
 release request for any party to hold in the first place (observed
 2026-09-17, kurone-kito/idd-skill#3102).
 
