@@ -250,8 +250,8 @@ report it.
    mapping blocks steps 2 and 3. Steps 3 and 4 also wait until each child-mapped
    commit is confirmed. Before step 2, re-run item 1 in full, re-fetching the
    set snapshot. Before step 3 and step 4, re-run it with the PR check replaced
-   by a verified closed, unmerged pull request at the recorded head. Any change
-   stops.
+   by a verified closed, unmerged pull request at the recorded head (post-push
+   runs only; a pre-first-push run omits the PR check). Any change stops.
 2. **Close the PR** (post-push): `gh pr close <pr>`; verify closed, unmerged, at
    that head. Re-read before retrying an uncertain close.
 3. **Clean up**: LWR with `--apply` and its step 2 basis (skip if the worktree
