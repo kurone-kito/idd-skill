@@ -246,6 +246,36 @@ function readFileOrNull(path: string): string | null {
   }
 }
 
+/** The lstat fields a fingerprint hashes. `stable` leaves out the inode change
+ * time, which moves when a hard-linked sibling is unlinked. */
+function statFingerprintSignature(stat: Stats, stable: boolean): string {
+  return [
+    stat.dev,
+    stat.ino,
+    stat.mode,
+    stat.size,
+    stat.mtimeMs,
+    ...(stable ? [] : [stat.ctimeMs]),
+  ].join(':');
+}
+
+/** True when two lstat snapshots taken around ONE read describe the same
+ * file. The ctime must agree even in `stable` mode: a rewrite that keeps the
+ * length and restores the mtime still moves it. Only a sibling's removal
+ * between two separate reads (the batches of one cleanup) is meant to be
+ * ignored, and `stable` does that through the signature alone. */
+export function statSnapshotsAgree(
+  before: Stats,
+  after: Stats,
+  stable: boolean,
+): boolean {
+  return (
+    before.ctimeMs === after.ctimeMs &&
+    statFingerprintSignature(before, stable) ===
+      statFingerprintSignature(after, stable)
+  );
+}
+
 /** Return a content-and-identity fingerprint for a recovery source path.
  * Ignored files are copied before destructive cleanup, so checking only that
  * the path is still ignored is insufficient: a writer can replace its
@@ -256,11 +286,20 @@ function readFileOrNull(path: string): string | null {
  * links are preserved as links rather than materialized, so walking their
  * targets would fingerprint data this recovery does not remove (Codex review
  * #4125636076). Any unreadable or concurrently changing path fails closed by
- * returning null. */
+ * returning null.
+ *
+ * `stable` drops what removing a sibling path changes: the inode change time
+ * (unlinking one hard link updates the other's ctime) and the symlink target
+ * walk (an earlier removal can delete a link's in-tree target). A batched
+ * cleanup compares stable fingerprints from before its first clean with
+ * ones read after earlier batches were removed (issue #5224). The ctime still
+ * has to hold still across the two lstat calls around one read. */
 export function pathFingerprintOnDisk(
   path: string,
   sourceRoots: readonly string[] = [],
+  options: { stable?: boolean } = {},
 ): string | null {
+  const stable = options.stable === true;
   const hash = createHash('sha256');
   const activeDirectories = new Set<string>();
   const sourceRootsReal: string[] = [];
@@ -276,11 +315,9 @@ export function pathFingerprintOnDisk(
     }
   }
   const statSignature = (stat: Stats): string =>
-    [stat.dev, stat.ino, stat.mode, stat.size, stat.mtimeMs, stat.ctimeMs].join(
-      ':',
-    );
+    statFingerprintSignature(stat, stable);
   const sameStat = (before: Stats, after: Stats): boolean =>
-    statSignature(before) === statSignature(after);
+    statSnapshotsAgree(before, after, stable);
   const targetIsInsideRemovedRoot = (resolvedTarget: string): boolean =>
     sourceRootsReal.some((root) => isPathContainedIn(resolvedTarget, root));
   const visit = (candidate: string): boolean => {
@@ -301,7 +338,7 @@ export function pathFingerprintOnDisk(
       hash.update(`link:${linkText}\0`);
       let resolvedTarget: string | null = null;
       try {
-        resolvedTarget = realpathSync(candidate);
+        resolvedTarget = stable ? null : realpathSync(candidate);
       } catch {
         // A dangling link has no target contents to fingerprint. Its own
         // lstat metadata and link text still provide the identity evidence.
@@ -1027,10 +1064,13 @@ export interface LocalWorktreeRecoveryDeps {
   readlinkOrNull: (path: string) => string | null;
   /** Fingerprint a recovery path before destructive cleanup. `sourceRoots`
    * are the soon-to-be-removed trees; symlink targets outside them are not
-   * walked. */
+   * walked. `options.stable` drops the inode change time and the symlink
+   * target walk between reads, so a sibling's removal does not change the
+   * result; the ctime must still hold across one read. */
   readPathFingerprint: (
     path: string,
     sourceRoots?: readonly string[],
+    options?: { stable?: boolean },
   ) => string | null;
   acquireCloneLock: (repoPath: string, agentId: string) => CloneLockHandle;
   releaseCloneLock: (handle: CloneLockHandle) => void;
@@ -2466,20 +2506,200 @@ function recoverySourceRoots(
   return roots;
 }
 
+/** Upper bound, in argv bytes, for the literal pathspecs one preserved-path
+ * `git clean` (or the status read before it) may carry. One `git clean` that
+ * names a whole scope's paths can exceed the operating system's argument
+ * limit: with 80000 `:(literal)ignored/N.txt` pathspecs `execFileSync` failed
+ * with `E2BIG` before git started (issue #5224). 24 KiB stays far under the
+ * 32767-unit Windows command line and the 128 KiB Linux floor, which also
+ * counts the environment. */
+const PRESERVED_CLEAN_ARGV_BUDGET_BYTES = 24 * 1024;
+
+/** Bytes charged per pathspec on top of its UTF-8 length: the NUL terminator,
+ * the 8-byte argv pointer Linux counts toward the limit, and slack for the
+ * separator and quoting a Windows command line adds. */
+const PRESERVED_CLEAN_ARGV_ENTRY_OVERHEAD_BYTES = 10;
+
+/** Split `paths` into consecutive batches whose literal pathspecs each cost at
+ * most `budgetBytes`. Order is kept and no batch is empty; a single pathspec
+ * larger than the budget gets a batch of its own, because it cannot be split
+ * and its spawn failure is reported like any other. */
+export function splitPreservedCleanPaths(
+  paths: readonly string[],
+  budgetBytes: number = PRESERVED_CLEAN_ARGV_BUDGET_BYTES,
+): string[][] {
+  const batches: string[][] = [];
+  let current: string[] = [];
+  let used = 0;
+  for (const path of paths) {
+    const cost =
+      Buffer.byteLength(literalGitPathspec(path)) +
+      PRESERVED_CLEAN_ARGV_ENTRY_OVERHEAD_BYTES;
+    if (current.length > 0 && used + cost > budgetBytes) {
+      batches.push(current);
+      current = [];
+      used = 0;
+    }
+    current.push(path);
+    used += cost;
+  }
+  if (current.length > 0) batches.push(current);
+  return batches;
+}
+
+/** True when `relativePath` only names its own scope root (`.`, `./`):
+ * `:(literal).` would make the clean remove the whole scope. */
+function namesScopeRoot(relativePath: string): boolean {
+  const separators = sep === '\\' ? /[\\/]+/ : /[/]+/;
+  return relativePath
+    .split(separators)
+    .every((segment) => segment === '' || segment === '.');
+}
+
+type PreservedCleanDeps = Pick<
+  LocalWorktreeRecoveryDeps,
+  'runGit' | 'pathExists' | 'pathPresence' | 'readPathFingerprint'
+>;
+
+interface PreservedCleanCheckOptions {
+  /** Narrow the status read to the checked paths' literal pathspecs, so a
+   * per-batch recheck costs the batch rather than the repository. */
+  limitStatusToPaths: boolean;
+  /** `scope/path` to the stable fingerprint of a present source. The first
+   * pass (`recordStableFingerprints`) checks each source against the
+   * fingerprint recorded at copy time and stores its stable fingerprint;
+   * later per-batch rechecks compare against the stored one, because removing
+   * an earlier batch changes what the full fingerprint hashes (the ctime of a
+   * hard-linked sibling, a symlink's in-tree target). */
+  stableFingerprints: Map<string, string>;
+  recordStableFingerprints: boolean;
+  /** Collects the `scope/path` names found present. */
+  presentSink?: Set<string>;
+}
+
+/** Check that each of `paths` may still be removed from `scopePath`: still
+ * ignored (or already gone), and the source and backup fingerprints still
+ * match. Returns the failure string, or null when every path passes. */
+function validatePreservedIgnoredPaths(
+  scope: string,
+  scopePath: string,
+  paths: readonly string[],
+  entriesByPath: ReadonlyMap<string, IgnoredFileEntry>,
+  targetPath: string,
+  deps: PreservedCleanDeps,
+  options: PreservedCleanCheckOptions,
+): string | null {
+  const currentStatus = deps.runGit(
+    [
+      'status',
+      '--porcelain=v1',
+      '-z',
+      '--ignored',
+      '--untracked-files=all',
+      '--ignore-submodules=none',
+      ...(options.limitStatusToPaths
+        ? ['--', ...paths.map(literalGitPathspec)]
+        : []),
+    ],
+    scopePath,
+  );
+  if (!currentStatus.ok) {
+    return `could not revalidate preserved ignored paths in ${scope} before cleanup: ${currentStatus.stderr}`;
+  }
+  const currentIgnoredPaths = new Set(
+    extractIgnoredPaths(currentStatus.stdout),
+  );
+  let roots: string[] | null = null;
+  for (const path of paths) {
+    // An already-removed path is safe: an earlier cleanup may have handled
+    // it. A path that still exists but is no longer reported as ignored may
+    // have been replaced with new untracked or tracked content, so do not
+    // let the path-scoped clean delete that unpreserved content (Copilot
+    // review #4120862945).
+    if (
+      deps.pathExists(join(scopePath, path)) &&
+      !currentIgnoredPaths.has(path)
+    ) {
+      return `preserved ignored path ${scope}/${path} changed status before cleanup`;
+    }
+    const presence = pathPresenceForDeps(deps, join(scopePath, path));
+    if (presence === 'unknown') {
+      return `could not establish the preserved ignored path ${scope}/${path} before cleanup`;
+    }
+    if (presence === 'present') {
+      options.presentSink?.add(`${scope}/${path}`);
+      const entry = entriesByPath.get(path);
+      if (entry?.sourceFingerprint === null) {
+        return `preserved ignored path ${scope}/${path} has no source fingerprint`;
+      }
+      if (entry?.destinationFingerprint == null || entry.copiedTo === null) {
+        return `preserved ignored path ${scope}/${path} has no destination fingerprint`;
+      }
+      // The roots depend on the scope, not the path: resolve them once per
+      // call instead of spawning git for every present path.
+      roots ??= recoverySourceRoots(targetPath, scopePath, deps);
+      const destinationFingerprint = deps.readPathFingerprint(
+        entry.copiedTo,
+        roots,
+      );
+      if (destinationFingerprint !== entry.destinationFingerprint) {
+        return `preserved ignored path ${scope}/${path} backup changed before cleanup`;
+      }
+      const sourcePath = join(scopePath, path);
+      // Read the stable fingerprint first: a write between the two reads then
+      // changes the full one, which pass 1 compares with the copy-time value,
+      // instead of being recorded as the baseline.
+      const stableFingerprint = deps.readPathFingerprint(sourcePath, roots, {
+        stable: true,
+      });
+      if (stableFingerprint === null) {
+        return `could not fingerprint preserved ignored path ${scope}/${path} before cleanup`;
+      }
+      if (options.recordStableFingerprints) {
+        const currentFingerprint = deps.readPathFingerprint(sourcePath, roots);
+        if (currentFingerprint === null) {
+          return `could not fingerprint preserved ignored path ${scope}/${path} before cleanup`;
+        }
+        if (currentFingerprint !== entry.sourceFingerprint) {
+          return `preserved ignored path ${scope}/${path} changed contents or identity before cleanup`;
+        }
+        options.stableFingerprints.set(`${scope}/${path}`, stableFingerprint);
+      } else if (
+        stableFingerprint !== options.stableFingerprints.get(`${scope}/${path}`)
+      ) {
+        // Also refuses a path that was absent when pass 1 ran: it has no
+        // stored fingerprint, so recreated content is never cleaned.
+        return `preserved ignored path ${scope}/${path} changed contents or identity before cleanup`;
+      }
+    }
+  }
+  return null;
+}
+
 /** Remove ignored paths that were copied out before destructive cleanup.
  * Unlike linked-worktree removal, a checkout leaves ignored files in place,
  * while a linked-worktree removal can refuse an untracked file that became
  * visible after `stash push --include-untracked` restored the committed
  * ignore rules. The caller has already verified the backup, so remove only
  * the exact relative paths recorded by the preservation scan and fail closed
- * if any path remains. */
-function cleanPreservedIgnoredFilesBeforeDestructiveRemoval(
+ * if any path remains.
+ *
+ * Every scope is checked before the first `git clean`, so a failure in that
+ * pass removes nothing. The clean then runs in argv-bounded batches (issue
+ * #5224), each rechecked immediately before its own clean. Once a clean has
+ * started, a failure also names the paths already removed and the paths still
+ * present, because earlier batches stay removed and later ones are not
+ * started; the caller keeps its recovery hold, and a later run treats an
+ * already-absent preserved path as safe and rechecks every path still
+ * present. `removed` lists the paths that were present before the first clean
+ * and are gone now, whoever removed them; `still present` lists every other
+ * path not confirmed absent, including one whose presence cannot be read.
+ * `argvBudgetBytes` exists for tests that force several batches. */
+export function cleanPreservedIgnoredFilesBeforeDestructiveRemoval(
   entries: readonly IgnoredFileEntry[],
   targetPath: string,
-  deps: Pick<
-    LocalWorktreeRecoveryDeps,
-    'runGit' | 'pathExists' | 'pathPresence' | 'readPathFingerprint'
-  >,
+  deps: PreservedCleanDeps,
+  argvBudgetBytes: number = PRESERVED_CLEAN_ARGV_BUDGET_BYTES,
 ): string | null {
   const pathsByScope = new Map<string, Map<string, IgnoredFileEntry>>();
   for (const entry of entries) {
@@ -2489,7 +2709,7 @@ function cleanPreservedIgnoredFilesBeforeDestructiveRemoval(
     if (entry.copiedTo === null) {
       return `ignored path ${entry.scope}/${entry.path} was not preserved`;
     }
-    if (!isSafeRelativePath(entry.path)) {
+    if (!isSafeRelativePath(entry.path) || namesScopeRoot(entry.path)) {
       return `ignored path ${entry.scope}/${entry.path} is unsafe`;
     }
     const paths = pathsByScope.get(entry.scope) ?? new Map();
@@ -2498,81 +2718,91 @@ function cleanPreservedIgnoredFilesBeforeDestructiveRemoval(
     paths.set(entry.path, entry);
     pathsByScope.set(entry.scope, paths);
   }
-  for (const [scope, entriesByPath] of pathsByScope) {
-    const paths = new Set(entriesByPath.keys());
-    const scopePath = scope === '.' ? targetPath : join(targetPath, scope);
-    const currentStatus = deps.runGit(
-      [
-        'status',
-        '--porcelain=v1',
-        '-z',
-        '--ignored',
-        '--untracked-files=all',
-        '--ignore-submodules=none',
-      ],
+  const scopes = Array.from(pathsByScope, ([scope, entriesByPath]) => ({
+    scope,
+    entriesByPath,
+    scopePath: scope === '.' ? targetPath : join(targetPath, scope),
+    paths: Array.from(entriesByPath.keys()),
+  }));
+  // Pass 1: check every scope before the first clean starts.
+  const presentBeforeClean = new Set<string>();
+  const stableFingerprints = new Map<string, string>();
+  for (const { scope, scopePath, paths, entriesByPath } of scopes) {
+    const failure = validatePreservedIgnoredPaths(
+      scope,
       scopePath,
+      paths,
+      entriesByPath,
+      targetPath,
+      deps,
+      {
+        limitStatusToPaths: false,
+        stableFingerprints,
+        recordStableFingerprints: true,
+        presentSink: presentBeforeClean,
+      },
     );
-    if (!currentStatus.ok) {
-      return `could not revalidate preserved ignored paths in ${scope} before cleanup: ${currentStatus.stderr}`;
-    }
-    const currentIgnoredPaths = new Set(
-      extractIgnoredPaths(currentStatus.stdout),
-    );
-    for (const path of paths) {
-      // An already-removed path is safe: an earlier cleanup may have handled
-      // it. A path that still exists but is no longer reported as ignored may
-      // have been replaced with new untracked or tracked content, so do not
-      // let the path-scoped clean delete that unpreserved content (Copilot
-      // review #4120862945).
-      if (
-        deps.pathExists(join(scopePath, path)) &&
-        !currentIgnoredPaths.has(path)
-      ) {
-        return `preserved ignored path ${scope}/${path} changed status before cleanup`;
-      }
-      const presence = pathPresenceForDeps(deps, join(scopePath, path));
-      if (presence === 'unknown') {
-        return `could not establish the preserved ignored path ${scope}/${path} before cleanup`;
-      }
-      if (presence === 'present') {
-        const entry = entriesByPath.get(path);
-        if (entry?.sourceFingerprint === null) {
-          return `preserved ignored path ${scope}/${path} has no source fingerprint`;
-        }
-        if (entry?.destinationFingerprint == null || entry.copiedTo === null) {
-          return `preserved ignored path ${scope}/${path} has no destination fingerprint`;
-        }
-        const roots = recoverySourceRoots(targetPath, scopePath, deps);
-        const destinationFingerprint = deps.readPathFingerprint(
-          entry.copiedTo,
-          roots,
-        );
-        if (destinationFingerprint !== entry.destinationFingerprint) {
-          return `preserved ignored path ${scope}/${path} backup changed before cleanup`;
-        }
-        const currentFingerprint = deps.readPathFingerprint(
-          join(scopePath, path),
-          roots,
-        );
-        if (currentFingerprint === null) {
-          return `could not fingerprint preserved ignored path ${scope}/${path} before cleanup`;
-        }
-        if (currentFingerprint !== entry.sourceFingerprint) {
-          return `preserved ignored path ${scope}/${path} changed contents or identity before cleanup`;
-        }
+    if (failure !== null) return failure;
+  }
+  const batches = scopes.flatMap((scope) =>
+    splitPreservedCleanPaths(scope.paths, argvBudgetBytes).map((paths) => ({
+      ...scope,
+      paths,
+    })),
+  );
+  let cleanStarted = false;
+  const withCleanState = (message: string): string => {
+    if (!cleanStarted) return message;
+    const removed: string[] = [];
+    const stillPresent: string[] = [];
+    for (const { scope, scopePath, entriesByPath } of scopes) {
+      for (const path of entriesByPath.keys()) {
+        const name = `${scope}/${path}`;
+        const presence = pathPresenceForDeps(deps, join(scopePath, path));
+        if (presence !== 'absent') stillPresent.push(name);
+        else if (presentBeforeClean.has(name)) removed.push(name);
       }
     }
+    return `${message}; removed so far: ${JSON.stringify(removed)}; still present: ${JSON.stringify(stillPresent)}`;
+  };
+  for (const batch of batches) {
+    // Pass 2: recheck this batch immediately before its own clean.
+    const stale = validatePreservedIgnoredPaths(
+      batch.scope,
+      batch.scopePath,
+      batch.paths,
+      batch.entriesByPath,
+      targetPath,
+      deps,
+      {
+        limitStatusToPaths: true,
+        stableFingerprints,
+        recordStableFingerprints: false,
+      },
+    );
+    if (stale !== null) return withCleanState(stale);
+    // A spawn that fails reports no usable exit status, and git may already
+    // have removed some paths, so the clean counts as started either way.
+    cleanStarted = true;
     const cleaned = deps.runGit(
-      ['clean', '-fdx', '--', ...Array.from(paths, literalGitPathspec)],
-      scopePath,
+      ['clean', '-fdx', '--', ...batch.paths.map(literalGitPathspec)],
+      batch.scopePath,
     );
     if (!cleaned.ok) {
-      return `git clean failed for preserved ignored paths in ${scope}: ${cleaned.stderr}`;
+      return withCleanState(
+        `git clean failed for preserved ignored paths in ${batch.scope}: ${cleaned.stderr}`,
+      );
     }
-    for (const path of paths) {
-      if (deps.pathExists(join(scopePath, path))) {
-        return `preserved ignored path ${scope}/${path} remained after cleanup`;
-      }
+    // Only a confirmed absence counts as removed: an unreadable path is not
+    // proof, and the state report above already lists it as still present.
+    for (const path of batch.paths) {
+      const presence = pathPresenceForDeps(deps, join(batch.scopePath, path));
+      if (presence === 'absent') continue;
+      return withCleanState(
+        presence === 'unknown'
+          ? `could not confirm the preserved ignored path ${batch.scope}/${path} was removed after cleanup`
+          : `preserved ignored path ${batch.scope}/${path} remained after cleanup`,
+      );
     }
   }
   return null;
