@@ -1727,8 +1727,11 @@ changing the SHA list. It reads exactly one trusted, unedited inventory comment
 for the live head; zero, several, or edited comments stop. This is an interim
 rule. The durable record is the `commit-inventory` marker
 (kurone-kito/idd-skill#5213). Its selector accepts it only when exactly one
-trusted, unedited record exists for the live head. Otherwise the prose rule
-applies, and an edited, untrusted, malformed, or repeated record stops cleanup.
+trusted, unedited record exists for the live head. The prose rule applies only
+when no machine record exists for the live head. Separately, an edited,
+untrusted, malformed, wrong-issue, or repeated record stops cleanup, and so does
+a trusted, unedited record for an older head when no record names the live head.
+None of these falls back to prose.
 
 Finalize never transfers: a child picks only under its own fresh claim, so a
 released child must already carry its trailers when finalize runs. A child picks

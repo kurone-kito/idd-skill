@@ -498,12 +498,13 @@ needs exactly one trusted, unedited inventory record for the live head. The
 machine record (`<prefix>-commit-inventory`, posted with `post-idd-marker --type
 commit-inventory`) is that record when one exists for the live head. Otherwise
 the record is exactly one trusted, unedited prose comment. An edited, untrusted,
-malformed, repeated, or unknown-edit-state record stops cleanup and never falls
-back to prose. A child confirms each pick by its `(cherry picked from commit
-<sha>)` trailer, not by patch-id. Until every child-mapped commit is confirmed,
-keep the source worktree and issue open and report. Discarding a not-reusable
-mapping needs owner or user authorization and the LWR `--apply` gate, never
-`--force`.
+malformed, wrong-issue, repeated, or unknown-edit-state record stops cleanup,
+and so does a trusted, unedited record for an older head when none names the
+live head. None of these falls back to prose. A child confirms each pick by its
+`(cherry picked from commit <sha>)` trailer, not by patch-id. Until every
+child-mapped commit is confirmed, keep the source worktree and issue open and
+report. Discarding a not-reusable mapping needs owner or user authorization and
+the LWR `--apply` gate, never `--force`.
 
 **Standing split** is the helper-runtime exception to the worker-side
 authoring and scope-overrun rules, for a genuine-need split only (never a
