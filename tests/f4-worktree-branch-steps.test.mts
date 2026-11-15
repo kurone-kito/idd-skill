@@ -2184,3 +2184,18 @@ test('a released-claim submodule refusal names the modules directory too (#5225)
     removeStepDetail(report),
   );
 });
+
+test('a file or symlink at the modules path keeps the generic detail (#5225)', () => {
+  for (const kind of ['file', 'symlink'] as const) {
+    const h = harness({
+      routes: submoduleRemovalRoutes(ok(`${WORKTREE_GIT_DIR}\n`)),
+      lstat: (path) =>
+        path === `${WORKTREE_GIT_DIR}/modules` ? kind : 'directory',
+    });
+    const report = runF4WorktreeBranchSteps(input(), h.deps);
+    assert.equal(report.reason, 'worktree-remove-refused');
+    const detail = removeStepDetail(report);
+    assert.ok(detail.startsWith('git worktree remove refused:'), detail);
+    assert.equal(detail.includes('§LWR'), false, `${kind}: ${detail}`);
+  }
+});

@@ -177,7 +177,9 @@ function worktreeRemoveRefusalDetail(deps, worktree, primary, stderr) {
     const dir = gitDir.status === 0 ? gitDir.stdout.trim() : '';
     if (dir === '') return generic;
     const modules = join(dir, 'modules');
-    if (deps.lstat(modules) === 'absent') return generic;
+    // Only a real directory names the cause. A file or symlink at that path
+    // would otherwise send the operator to a forced removal for nothing.
+    if (deps.lstat(modules) !== 'directory') return generic;
     return `${generic}; the modules directory of the worktree git directory remains at ${modules}, so a rerun does not remove the worktree. The operator route is the operator's own forced removal in §LWR step 4 of docs/idd-resume-detail.md, after preservation; the F4 session never runs it`;
   } catch {
     return generic;
