@@ -645,9 +645,10 @@ holds commits only, so it does not clear the check. Make the helper's own
 `git status` check print nothing, then rerun. For a populated submodule, the
 operator runs `git -C <issue-worktree-path> submodule deinit --all` after
 preservation, with the worktree still registered, and then the helper is
-rerun. A forced removal is not an F4 route: it unregisters the path, so the
-proof dry run and this helper cannot finish afterward. The F4 session never
-runs `git worktree remove --force`.
+rerun. A later run does not remove the worktree while the modules directory of
+its git directory remains. A forced removal is not an F4 route: it unregisters
+the path, so the proof dry run and this helper cannot finish afterward. The F4
+session never runs `git worktree remove --force`.
 
 For step 6, use the profile-selected `delete-remote-branch` helper with
 `BRANCH_NAME` and the verified `PR_HEAD_SHA_F3`. The removal helper makes
