@@ -3513,11 +3513,11 @@ Observed incidents:
   closed 2026-10-28 on the merge of PR `kurone-kito/dotfiles#691`: its
   Candidate files listed two instruction and skill directories, two docs, and
   two helper tests. At the parent commit
-  `8681c44c7dfc4c0e1bbdc55f5ba74c58c8512f8f`, six references to the removed
-  paths sat outside that list: two tests that open an instruction file, a doc
-  that names one in prose, a docs index that links the instruction set, an
-  issue template that links the skill, and a hook that points at an
-  instruction file.
+  `8681c44c7dfc4c0e1bbdc55f5ba74c58c8512f8f`, at least six references to the
+  removed paths sat outside that list, among them two tests that open an
+  instruction file, a doc that names one in prose, a docs index that links the
+  instruction set, an issue template that links the skill, and a hook that
+  points at an instruction file.
 
 ## Draft schemas
 
