@@ -7,6 +7,7 @@ import {
 } from 'node:child_process';
 import {
   chmodSync,
+  copyFileSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -22,7 +23,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
@@ -41,6 +42,7 @@ import { parseLocalWorktreeList } from '../src/scripts/local-worktree-occupancy.
 import {
   assertRepositoryOverrideMatchesLocal,
   type ConfirmBlockRouting,
+  cleanPreservedIgnoredFilesBeforeDestructiveRemoval,
   copyPathWithSafeSymlinks,
   countTaggedStashEntries,
   detectInProgressOperation,
@@ -50,6 +52,7 @@ import {
   extractIgnoredPaths,
   extractRecoveredClaim,
   hasWorkingTreeChanges,
+  type IgnoredFileEntry,
   isAcceptedBlockReason,
   isPathContainedIn,
   isSafeRelativePath,
@@ -62,6 +65,7 @@ import {
   resolveDevelopmentBranchProduction,
   resolveEffectiveRealpath,
   runLocalWorktreeRecovery,
+  splitPreservedCleanPaths,
   submoduleStatusEntries,
 } from '../src/scripts/local-worktree-recovery.mts';
 import {
@@ -72,7 +76,7 @@ import {
   type WalkPorts,
   type WorktreeRemnantEvidencePorts,
 } from '../src/scripts/worktree-remnant-evidence.mts';
-import { stubExecutable } from './test-utils.mts';
+import { fixtureEnv, stubExecutable } from './test-utils.mts';
 
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 
@@ -3954,6 +3958,7 @@ test('late preservation rescans initialized submodule ignored files before remov
     additionalSourceRoots: string[] | undefined;
   }> = [];
   let submoduleIgnoredScans = 0;
+  let lastSubmoduleIgnoredStatus = '';
   const cleanedPaths = new Set<string>();
   const deps = fakeDeps({
     runGit: (argv, cwd) => {
@@ -3970,18 +3975,29 @@ test('late preservation rescans initialized submodule ignored files before remov
       }
       if (argv[0] === 'status' && argv[1] === '--porcelain=v1') {
         if (cwd === '/repo/linked/submodule') {
+          // A per-batch recheck names its paths after `--` (issue #5224). It
+          // re-reads what the cleanup scan just saw; it is not a new scan.
+          if (argv.includes('--')) {
+            return {
+              ok: true,
+              status: 0,
+              stdout: lastSubmoduleIgnoredStatus,
+              stderr: '',
+            };
+          }
           submoduleIgnoredScans += 1;
+          lastSubmoduleIgnoredStatus =
+            submoduleIgnoredScans === 1
+              ? ''
+              : submoduleIgnoredScans <= 3
+                ? '!! cache.tmp\0'
+                : submoduleIgnoredScans <= 5
+                  ? '!! final-cache.tmp\0'
+                  : '';
           return {
             ok: true,
             status: 0,
-            stdout:
-              submoduleIgnoredScans === 1
-                ? ''
-                : submoduleIgnoredScans <= 3
-                  ? '!! cache.tmp\0'
-                  : submoduleIgnoredScans <= 5
-                    ? '!! final-cache.tmp\0'
-                    : '',
+            stdout: lastSubmoduleIgnoredStatus,
             stderr: '',
           };
         }
@@ -4531,30 +4547,32 @@ test('captures ignored files before stash can change the ignore rules', () => {
 
 test('rescans ignored files immediately before ordinary linked removal', () => {
   let ignoredScanCalls = 0;
+  let lastIgnoredStatus = '';
   let removalAttempted = false;
   const copied: string[] = [];
   const cleanedPaths = new Set<string>();
   const deps = fakeDeps({
     runGit: (argv) => {
       if (argv[0] === 'status' && argv[1] === '--porcelain=v1') {
+        // A per-batch recheck names its paths after `--` (issue #5224). It
+        // re-reads what the cleanup scan just saw; it is not a new scan.
+        if (argv.includes('--')) {
+          return { ok: true, status: 0, stdout: lastIgnoredStatus, stderr: '' };
+        }
         ignoredScanCalls += 1;
-        return {
-          ok: true,
-          status: 0,
-          stdout:
-            ignoredScanCalls === 1
-              ? ''
-              : ignoredScanCalls <= 3
-                ? '!! late.env\0'
-                : ignoredScanCalls <= 5
-                  ? '!! final.env\0'
-                  : ignoredScanCalls <= 7
-                    ? '!! after-confirm.env\0'
-                    : ignoredScanCalls === 9
-                      ? '!! after-final-confirmation.env\0'
-                      : '',
-          stderr: '',
-        };
+        lastIgnoredStatus =
+          ignoredScanCalls === 1
+            ? ''
+            : ignoredScanCalls <= 3
+              ? '!! late.env\0'
+              : ignoredScanCalls <= 5
+                ? '!! final.env\0'
+                : ignoredScanCalls <= 7
+                  ? '!! after-confirm.env\0'
+                  : ignoredScanCalls === 9
+                    ? '!! after-final-confirmation.env\0'
+                    : '';
+        return { ok: true, status: 0, stdout: lastIgnoredStatus, stderr: '' };
       }
       if (argv[0] === 'clean') {
         cleanedPaths.add(
@@ -4786,6 +4804,7 @@ test('blocks ignored preservation when the source changes during its copy', () =
 
 test('linked removal rechecks routing after final ignored-file cleanup', () => {
   let ignoredScanCalls = 0;
+  let lastIgnoredStatus = '';
   let finalScanComplete = false;
   let removalAttempted = false;
   const cleanedPaths = new Set<string>();
@@ -4811,19 +4830,20 @@ test('linked removal rechecks routing after final ignored-file cleanup', () => {
     }),
     runGit: (argv) => {
       if (argv[0] === 'status' && argv[1] === '--porcelain=v1') {
+        // A per-batch recheck names its paths after `--` (issue #5224). It
+        // re-reads what the cleanup scan just saw; it is not a new scan.
+        if (argv.includes('--')) {
+          return { ok: true, status: 0, stdout: lastIgnoredStatus, stderr: '' };
+        }
         ignoredScanCalls += 1;
         if (ignoredScanCalls === 4) finalScanComplete = true;
-        return {
-          ok: true,
-          status: 0,
-          stdout:
-            ignoredScanCalls === 1
-              ? ''
-              : ignoredScanCalls <= 3
-                ? '!! late.env\0'
-                : '!! final.env\0',
-          stderr: '',
-        };
+        lastIgnoredStatus =
+          ignoredScanCalls === 1
+            ? ''
+            : ignoredScanCalls <= 3
+              ? '!! late.env\0'
+              : '!! final.env\0';
+        return { ok: true, status: 0, stdout: lastIgnoredStatus, stderr: '' };
       }
       if (argv[0] === 'clean') {
         cleanedPaths.add(
@@ -6920,6 +6940,7 @@ test('primary recovery removes late ignored files before reporting release', () 
   let postCheckoutIgnoredPresent = false;
   let finalIgnoredPresent = false;
   let ignoredScanCalls = 0;
+  let lastIgnoredStatus = '';
   let confirmCalls = 0;
   let submoduleUpdateArgs: string[] = [];
   const events: string[] = [];
@@ -6974,20 +6995,31 @@ test('primary recovery removes late ignored files before reporting release', () 
       },
       runGit: (argv, cwd) => {
         if (argv[0] === 'status' && argv[1] === '--porcelain=v1') {
+          // A per-batch recheck names its paths after `--` (issue #5224). It
+          // re-reads what the cleanup scan just saw; it is not a new scan.
+          if (argv.includes('--')) {
+            return {
+              ok: true,
+              status: 0,
+              stdout: lastIgnoredStatus,
+              stderr: '',
+            };
+          }
           ignoredScanCalls += 1;
           if (ignoredScanCalls === 4) postCheckoutIgnoredPresent = true;
           if (ignoredScanCalls === 6) finalIgnoredPresent = true;
+          lastIgnoredStatus =
+            ignoredScanCalls === 1
+              ? ''
+              : ignoredScanCalls <= 3
+                ? '!! stale*\0'
+                : ignoredScanCalls <= 5
+                  ? '!! generated-during-checkout*\0'
+                  : '!! generated-before-release*\0';
           return {
             ok: true,
             status: 0,
-            stdout:
-              ignoredScanCalls === 1
-                ? ''
-                : ignoredScanCalls <= 3
-                  ? '!! stale*\0'
-                  : ignoredScanCalls <= 5
-                    ? '!! generated-during-checkout*\0'
-                    : '!! generated-before-release*\0',
+            stdout: lastIgnoredStatus,
             stderr: '',
           };
         }
@@ -12318,4 +12350,704 @@ test('evidence: a claim lock that stops matching under the clone lock turns cond
   assert.equal(verdict.evidence?.met, false);
   assert.equal(condition(verdict, 3).status, 'unmet');
   assert.match(condition(verdict, 3).detail, /under the clone lock.*lock/);
+});
+
+// ---------------------------------------------------------------------------
+// Bounded preserved-path `git clean` (issue #5224)
+// ---------------------------------------------------------------------------
+
+/** Non-throwing `git <argv>` in `cwd`, shaped like the production runner but
+ * with the sanitized fixture environment, so a hook's `GIT_DIR` cannot point a
+ * clean at a real repository. */
+function realRunGit(argv: string[], cwd: string): LocalGitCommandResult {
+  try {
+    const stdout = execFileSync('git', argv, {
+      cwd,
+      env: fixtureEnv(),
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    return { ok: true, status: 0, stdout, stderr: '' };
+  } catch (error) {
+    const execError = error as {
+      status?: number | null;
+      stdout?: string;
+      stderr?: string;
+      message?: string;
+    };
+    return {
+      ok: false,
+      status: execError.status ?? null,
+      stdout: execError.stdout ?? '',
+      stderr: execError.stderr ?? execError.message ?? '',
+    };
+  }
+}
+
+/** The host's argument limit in bytes, or null when it cannot be read or the
+ * platform reports a different error for an oversized command line. */
+function hostArgumentLimit(): number | null {
+  if (process.platform === 'win32') return null;
+  try {
+    const limit = Number(
+      execFileSync('getconf', ['ARG_MAX'], { encoding: 'utf8' }).trim(),
+    );
+    return Number.isFinite(limit) && limit > 0 ? limit : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Preserved paths shaped like the recorded `ignored/N.txt` pathspecs: at
+ * least 80000 of them, and more when the host limit is higher, until their
+ * argv exceeds 1.25 times that limit. */
+function oversizedIgnoredPaths(limit: number): string[] {
+  const paths: string[] = [];
+  let bytes = 0;
+  for (let index = 0; bytes < limit * 1.25 || index < 80000; index += 1) {
+    const path = `ignored/${index}.txt`;
+    paths.push(path);
+    bytes += Buffer.byteLength(`:(literal)${path}`) + 1;
+  }
+  return paths;
+}
+
+function initIgnoredFixtureRepo(repo: string): void {
+  execFileSync('git', ['init', '--quiet', '-b', 'main'], {
+    cwd: repo,
+    env: fixtureEnv(),
+    stdio: 'ignore',
+  });
+  writeFileSync(join(repo, '.gitignore'), 'ignored/\n');
+  mkdirSync(join(repo, 'ignored'));
+}
+
+test('one git clean argv beyond the OS limit fails with E2BIG before git starts', {
+  skip: hostArgumentLimit() === null,
+}, () => {
+  const limit = hostArgumentLimit() as number;
+  const repo = mkdtempSync(join(tmpdir(), 'idd-lwr-e2big-'));
+  try {
+    initIgnoredFixtureRepo(repo);
+    writeFileSync(join(repo, 'ignored', '0.txt'), 'kept\n');
+    const argv = [
+      'clean',
+      '-fdx',
+      '--',
+      ...oversizedIgnoredPaths(limit).map((path) => `:(literal)${path}`),
+    ];
+    let failure: NodeJS.ErrnoException | null = null;
+    try {
+      execFileSync('git', argv, {
+        cwd: repo,
+        env: fixtureEnv(),
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+    } catch (error) {
+      failure = error as NodeJS.ErrnoException;
+    }
+    assert.notEqual(
+      failure,
+      null,
+      'git started with the oversized argv; the host limit is higher than getconf ARG_MAX reports',
+    );
+    assert.equal(
+      failure?.code,
+      'E2BIG',
+      `expected the spawn to fail before git started, got ${failure?.code}: ${failure?.message}`,
+    );
+    assert.equal(
+      readFileSync(join(repo, 'ignored', '0.txt'), 'utf8'),
+      'kept\n',
+      'the failed spawn must remove nothing',
+    );
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+interface OversizedCleanupFixture {
+  repo: string;
+  preserve: string;
+  entries: IgnoredFileEntry[];
+  realPaths: string[];
+  backups: Map<string, string>;
+  deps: Parameters<
+    typeof cleanPreservedIgnoredFilesBeforeDestructiveRemoval
+  >[2];
+  cleanCalls: string[][];
+  cleanup: () => void;
+}
+
+/** A throwaway repo whose preserved set is the oversized path list. Only the
+ * first, middle, and last paths are real ignored files; the rest are already
+ * absent, which the cleanup allows, so the fixture needs no 80000 files while
+ * every batch still spawns real `git status` and `git clean`. */
+function buildOversizedCleanupFixture(
+  limit: number,
+  afterClean: (
+    cleanCount: number,
+    fixture: OversizedCleanupFixture,
+  ) => void = () => {},
+): OversizedCleanupFixture {
+  const repo = mkdtempSync(join(tmpdir(), 'idd-lwr-bounded-clean-'));
+  const preserve = mkdtempSync(
+    join(tmpdir(), 'idd-lwr-bounded-clean-preserve-'),
+  );
+  initIgnoredFixtureRepo(repo);
+  const paths = oversizedIgnoredPaths(limit);
+  const realIndexes = new Set([
+    0,
+    Math.floor(paths.length / 2),
+    paths.length - 1,
+  ]);
+  const roots = [repo, join(repo, '.git')];
+  const realPaths: string[] = [];
+  const backups = new Map<string, string>();
+  const entries = paths.map((path, index): IgnoredFileEntry => {
+    const copiedTo = join(preserve, path);
+    if (!realIndexes.has(index)) {
+      return {
+        scope: '.',
+        path,
+        copiedTo,
+        sourceFingerprint: 'already-absent',
+        destinationFingerprint: 'already-absent',
+        copyFailed: false,
+      };
+    }
+    writeFileSync(join(repo, path), `ignored content ${index}\n`);
+    mkdirSync(dirname(copiedTo), { recursive: true });
+    copyFileSync(join(repo, path), copiedTo);
+    realPaths.push(path);
+    backups.set(path, readFileSync(copiedTo, 'utf8'));
+    return {
+      scope: '.',
+      path,
+      copiedTo,
+      sourceFingerprint: pathFingerprintOnDisk(join(repo, path), roots),
+      destinationFingerprint: pathFingerprintOnDisk(copiedTo, roots),
+      copyFailed: false,
+    };
+  });
+  const cleanCalls: string[][] = [];
+  const fixture: OversizedCleanupFixture = {
+    repo,
+    preserve,
+    entries,
+    realPaths,
+    backups,
+    cleanCalls,
+    deps: {
+      runGit: (argv, cwd) => {
+        const result = realRunGit(argv, cwd);
+        if (argv[0] === 'clean') {
+          cleanCalls.push(argv);
+          afterClean(cleanCalls.length, fixture);
+        }
+        return result;
+      },
+      pathExists: (path) => existsSync(path) || isDanglingLink(path),
+      readPathFingerprint: (path, roots) => pathFingerprintOnDisk(path, roots),
+    },
+    cleanup: () => {
+      rmSync(repo, { recursive: true, force: true });
+      rmSync(preserve, { recursive: true, force: true });
+    },
+  };
+  return fixture;
+}
+
+function isDanglingLink(path: string): boolean {
+  try {
+    return lstatSync(path).isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+function pathspecBytes(argv: readonly string[]): number {
+  return argv
+    .slice(argv.indexOf('--') + 1)
+    .reduce((total, spec) => total + Buffer.byteLength(spec) + 1, 0);
+}
+
+test('the bounded preserved cleanup removes an oversized path set without E2BIG', {
+  skip: hostArgumentLimit() === null,
+}, () => {
+  const limit = hostArgumentLimit() as number;
+  const fixture = buildOversizedCleanupFixture(limit);
+  try {
+    const error = cleanPreservedIgnoredFilesBeforeDestructiveRemoval(
+      fixture.entries,
+      fixture.repo,
+      fixture.deps,
+    );
+    assert.equal(error, null);
+    assert.ok(fixture.cleanCalls.length > 1, 'the set needs several batches');
+    for (const argv of fixture.cleanCalls) {
+      assert.ok(
+        pathspecBytes(argv) < 32 * 1024,
+        `a clean batch carried ${pathspecBytes(argv)} pathspec bytes`,
+      );
+    }
+    for (const path of fixture.realPaths) {
+      assert.equal(existsSync(join(fixture.repo, path)), false, path);
+      assert.equal(
+        readFileSync(join(fixture.preserve, path), 'utf8'),
+        fixture.backups.get(path),
+        `the preserved copy of ${path} must stay unchanged`,
+      );
+    }
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('a preserved path that failed the pre-clean check is not removed and no clean starts', {
+  skip: hostArgumentLimit() === null,
+}, () => {
+  const limit = hostArgumentLimit() as number;
+  const fixture = buildOversizedCleanupFixture(limit);
+  try {
+    const changed = fixture.realPaths[1] as string;
+    writeFileSync(join(fixture.repo, changed), 'edited after the copy\n');
+    const error = cleanPreservedIgnoredFilesBeforeDestructiveRemoval(
+      fixture.entries,
+      fixture.repo,
+      fixture.deps,
+    );
+    assert.equal(
+      error,
+      `preserved ignored path ./${changed} changed contents or identity before cleanup`,
+    );
+    assert.deepEqual(fixture.cleanCalls, []);
+    for (const path of fixture.realPaths) {
+      assert.equal(existsSync(join(fixture.repo, path)), true, path);
+      assert.equal(
+        readFileSync(join(fixture.preserve, path), 'utf8'),
+        fixture.backups.get(path),
+        `the preserved copy of ${path} must stay unchanged`,
+      );
+    }
+    assert.equal(
+      readFileSync(join(fixture.repo, changed), 'utf8'),
+      'edited after the copy\n',
+    );
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('a path edited after earlier batches were cleaned stops the later batches', {
+  skip: hostArgumentLimit() === null,
+}, () => {
+  const limit = hostArgumentLimit() as number;
+  let lastPath = '';
+  const fixture = buildOversizedCleanupFixture(limit, (cleanCount, current) => {
+    if (cleanCount !== 1) return;
+    lastPath = current.realPaths[2] as string;
+    writeFileSync(join(current.repo, lastPath), 'edited between batches\n');
+  });
+  try {
+    const error = cleanPreservedIgnoredFilesBeforeDestructiveRemoval(
+      fixture.entries,
+      fixture.repo,
+      fixture.deps,
+    );
+    const [first, middle] = fixture.realPaths as [string, string, string];
+    assert.equal(
+      error,
+      `preserved ignored path ./${lastPath} changed contents or identity before cleanup; removed so far: ${JSON.stringify([`./${first}`, `./${middle}`])}; still present: ${JSON.stringify([`./${lastPath}`])}`,
+    );
+    assert.equal(existsSync(join(fixture.repo, first)), false);
+    assert.equal(existsSync(join(fixture.repo, middle)), false);
+    assert.equal(
+      readFileSync(join(fixture.repo, lastPath), 'utf8'),
+      'edited between batches\n',
+    );
+    assert.ok(fixture.cleanCalls.length > 1);
+    for (const argv of fixture.cleanCalls) {
+      assert.equal(
+        argv.includes(`:(literal)${lastPath}`),
+        false,
+        'the batch holding the edited path must not be cleaned',
+      );
+    }
+    for (const path of fixture.realPaths) {
+      assert.equal(
+        readFileSync(join(fixture.preserve, path), 'utf8'),
+        fixture.backups.get(path),
+        `the preserved copy of ${path} must stay unchanged`,
+      );
+    }
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+// In-memory cleanup stage: paths live in a set, `git status` lists the ones
+// still present, and `git clean` removes the named ones. Hooks inject the
+// failure under test.
+interface FakeCleanStage {
+  present: Set<string>;
+  notIgnored: Set<string>;
+  fingerprints: Map<string, string>;
+  statusArgvs: string[][];
+  cleanArgvs: string[][];
+  onClean: (
+    argv: string[],
+    stage: FakeCleanStage,
+  ) => LocalGitCommandResult | null;
+  onBatchStatus: (stage: FakeCleanStage) => void;
+}
+
+function fakeCleanStage(present: readonly string[]): FakeCleanStage {
+  return {
+    present: new Set(present),
+    notIgnored: new Set(),
+    fingerprints: new Map(),
+    statusArgvs: [],
+    cleanArgvs: [],
+    onClean: () => null,
+    onBatchStatus: () => {},
+  };
+}
+
+function fakeCleanDeps(
+  stage: FakeCleanStage,
+): Parameters<typeof cleanPreservedIgnoredFilesBeforeDestructiveRemoval>[2] {
+  return {
+    runGit: (argv, cwd) => {
+      if (argv[0] === 'status') {
+        stage.statusArgvs.push(argv);
+        const limited = argv.includes('--');
+        if (limited) stage.onBatchStatus(stage);
+        const specs = limited
+          ? new Set(
+              argv
+                .slice(argv.indexOf('--') + 1)
+                .map((spec) => spec.replace(':(literal)', '')),
+            )
+          : null;
+        const listed = [...stage.present]
+          .filter((path) => path.startsWith(`${cwd}/`))
+          .map((path) => path.slice(cwd.length + 1))
+          .filter((path) => specs === null || specs.has(path))
+          .filter((path) => !stage.notIgnored.has(`${cwd}/${path}`));
+        return {
+          ok: true,
+          status: 0,
+          stdout: listed.map((path) => `!! ${path}\0`).join(''),
+          stderr: '',
+        };
+      }
+      if (argv[0] === 'clean') {
+        stage.cleanArgvs.push(argv);
+        const injected = stage.onClean(argv, stage);
+        if (injected !== null) return injected;
+        for (const spec of argv.slice(argv.indexOf('--') + 1)) {
+          stage.present.delete(`${cwd}/${spec.replace(':(literal)', '')}`);
+        }
+        return { ok: true, status: 0, stdout: '', stderr: '' };
+      }
+      if (argv[0] === 'rev-parse') {
+        return { ok: true, status: 0, stdout: `${cwd}/.git\n`, stderr: '' };
+      }
+      return { ok: true, status: 0, stdout: '', stderr: '' };
+    },
+    pathExists: (path) => stage.present.has(path),
+    readPathFingerprint: (path) => stage.fingerprints.get(path) ?? 'fp',
+  };
+}
+
+function fakeEntry(scope: string, path: string): IgnoredFileEntry {
+  return {
+    scope,
+    path,
+    copiedTo: `/preserve/${scope}/${path}`,
+    sourceFingerprint: 'fp',
+    destinationFingerprint: 'fp',
+    copyFailed: false,
+  };
+}
+
+/** A budget that fits two of the short pathspecs below per batch. */
+const TWO_PER_BATCH = 50;
+
+const SIX_PATHS = ['p1', 'p2', 'p3', 'p4', 'p5', 'p6'];
+
+function sixPathStage(): {
+  stage: FakeCleanStage;
+  entries: IgnoredFileEntry[];
+} {
+  return {
+    stage: fakeCleanStage(SIX_PATHS.map((path) => `/t/${path}`)),
+    entries: SIX_PATHS.map((path) => fakeEntry('.', path)),
+  };
+}
+
+test('splitPreservedCleanPaths keeps order and never builds an empty batch', () => {
+  assert.deepEqual(splitPreservedCleanPaths([]), []);
+  const paths = ['a', 'b', 'c', 'd', 'e'];
+  const cost = Buffer.byteLength(':(literal)a') + 10;
+  assert.deepEqual(splitPreservedCleanPaths(paths, cost * 2), [
+    ['a', 'b'],
+    ['c', 'd'],
+    ['e'],
+  ]);
+  assert.deepEqual(splitPreservedCleanPaths(paths, cost * 2 - 1), [
+    ['a'],
+    ['b'],
+    ['c'],
+    ['d'],
+    ['e'],
+  ]);
+  assert.deepEqual(splitPreservedCleanPaths(paths).flat(), paths);
+});
+
+test('splitPreservedCleanPaths gives an oversized pathspec its own batch', () => {
+  const huge = 'x'.repeat(100);
+  assert.deepEqual(splitPreservedCleanPaths(['a', huge, 'b'], 60), [
+    ['a'],
+    [huge],
+    ['b'],
+  ]);
+});
+
+test('splitPreservedCleanPaths charges UTF-8 bytes, not characters', () => {
+  // `é` is one character but two bytes, so two of them cost 4 more bytes.
+  const ascii = Buffer.byteLength(':(literal)a') + 10;
+  const accented = Buffer.byteLength(':(literal)é') + 10;
+  assert.equal(accented, ascii + 1);
+  assert.deepEqual(splitPreservedCleanPaths(['é', 'é', 'é'], accented * 2), [
+    ['é', 'é'],
+    ['é'],
+  ]);
+  assert.deepEqual(splitPreservedCleanPaths(['é', 'é'], accented * 2 - 1), [
+    ['é'],
+    ['é'],
+  ]);
+});
+
+test('every scope is checked before the first clean, so a later scope failure removes nothing', () => {
+  const stage = fakeCleanStage(['/t/a', '/t/sub/b']);
+  stage.notIgnored.add('/t/sub/b');
+  const error = cleanPreservedIgnoredFilesBeforeDestructiveRemoval(
+    [fakeEntry('.', 'a'), fakeEntry('sub', 'b')],
+    '/t',
+    fakeCleanDeps(stage),
+  );
+  assert.equal(
+    error,
+    'preserved ignored path sub/b changed status before cleanup',
+  );
+  assert.deepEqual(stage.cleanArgvs, []);
+  assert.equal(stage.present.has('/t/a'), true);
+});
+
+test('a preserved path that names the scope root is refused before any git call', () => {
+  const stage = fakeCleanStage(['/t/a']);
+  for (const path of ['.', './']) {
+    const error = cleanPreservedIgnoredFilesBeforeDestructiveRemoval(
+      [fakeEntry('.', 'a'), fakeEntry('.', path)],
+      '/t',
+      fakeCleanDeps(stage),
+    );
+    assert.equal(error, `ignored path ./${path} is unsafe`);
+  }
+  assert.deepEqual(stage.statusArgvs, []);
+  assert.deepEqual(stage.cleanArgvs, []);
+});
+
+test('each batch is rechecked with its own pathspecs and cleaned with only those', () => {
+  const { stage, entries } = sixPathStage();
+  const error = cleanPreservedIgnoredFilesBeforeDestructiveRemoval(
+    entries,
+    '/t',
+    fakeCleanDeps(stage),
+    TWO_PER_BATCH,
+  );
+  assert.equal(error, null);
+  assert.deepEqual(
+    stage.cleanArgvs.map((argv) => argv.slice(3)),
+    [
+      [':(literal)p1', ':(literal)p2'],
+      [':(literal)p3', ':(literal)p4'],
+      [':(literal)p5', ':(literal)p6'],
+    ],
+  );
+  const [whole, ...batches] = stage.statusArgvs;
+  assert.equal(whole?.includes('--'), false, 'pass 1 reads the whole scope');
+  assert.deepEqual(
+    batches.map((argv) => argv.slice(argv.indexOf('--') + 1)),
+    [
+      [':(literal)p1', ':(literal)p2'],
+      [':(literal)p3', ':(literal)p4'],
+      [':(literal)p5', ':(literal)p6'],
+    ],
+  );
+});
+
+test('a failed first-batch recheck returns the plain hold string and starts no clean', () => {
+  const { stage, entries } = sixPathStage();
+  stage.onBatchStatus = (current) => {
+    current.notIgnored.add('/t/p1');
+  };
+  const error = cleanPreservedIgnoredFilesBeforeDestructiveRemoval(
+    entries,
+    '/t',
+    fakeCleanDeps(stage),
+    TWO_PER_BATCH,
+  );
+  assert.equal(
+    error,
+    'preserved ignored path ./p1 changed status before cleanup',
+  );
+  assert.deepEqual(stage.cleanArgvs, []);
+  assert.equal(stage.present.size, 6);
+});
+
+test('a path changed between batches names the removed and the still-present paths', () => {
+  const { stage, entries } = sixPathStage();
+  // p1..p4 are already preserved and cleaned when p5 changes under batch 3.
+  stage.onClean = (_argv, current) => {
+    if (current.cleanArgvs.length === 2)
+      current.fingerprints.set('/t/p5', 'changed');
+    return null;
+  };
+  const error = cleanPreservedIgnoredFilesBeforeDestructiveRemoval(
+    entries,
+    '/t',
+    fakeCleanDeps(stage),
+    TWO_PER_BATCH,
+  );
+  assert.equal(
+    error,
+    `preserved ignored path ./p5 changed contents or identity before cleanup; removed so far: ${JSON.stringify(['./p1', './p2', './p3', './p4'])}; still present: ${JSON.stringify(['./p5', './p6'])}`,
+  );
+  assert.equal(
+    stage.cleanArgvs.length,
+    2,
+    'the changed batch is never cleaned',
+  );
+  assert.deepEqual([...stage.present].sort(), ['/t/p5', '/t/p6']);
+});
+
+test('a path already absent before the run is not reported as removed', () => {
+  const stage = fakeCleanStage(['/t/p2', '/t/p3']);
+  stage.onClean = (_argv, current) => {
+    if (current.cleanArgvs.length === 1)
+      current.fingerprints.set('/t/p3', 'changed');
+    return null;
+  };
+  const error = cleanPreservedIgnoredFilesBeforeDestructiveRemoval(
+    ['p1', 'p2', 'p3'].map((path) => fakeEntry('.', path)),
+    '/t',
+    fakeCleanDeps(stage),
+    TWO_PER_BATCH,
+  );
+  assert.equal(
+    error,
+    `preserved ignored path ./p3 changed contents or identity before cleanup; removed so far: ${JSON.stringify(['./p2'])}; still present: ${JSON.stringify(['./p3'])}`,
+  );
+});
+
+test('git clean returning not ok after removing some paths names both sets', () => {
+  const { stage, entries } = sixPathStage();
+  stage.onClean = (argv, current) => {
+    current.present.delete('/t/p1');
+    return {
+      ok: false,
+      status: 1,
+      stdout: '',
+      stderr: `boom after ${argv.length - 3}`,
+    };
+  };
+  const error = cleanPreservedIgnoredFilesBeforeDestructiveRemoval(
+    entries,
+    '/t',
+    fakeCleanDeps(stage),
+    TWO_PER_BATCH,
+  );
+  assert.equal(
+    error,
+    `git clean failed for preserved ignored paths in .: boom after 2; removed so far: ${JSON.stringify(['./p1'])}; still present: ${JSON.stringify(['./p2', './p3', './p4', './p5', './p6'])}`,
+  );
+  assert.equal(stage.cleanArgvs.length, 1, 'later batches are not started');
+});
+
+test('a spawn that fails without a status is not assumed to have changed nothing', () => {
+  const { stage, entries } = sixPathStage();
+  stage.onClean = (_argv, current) => {
+    current.present.delete('/t/p1');
+    return {
+      ok: false,
+      status: null,
+      stdout: '',
+      stderr: 'spawnSync git ENOBUFS',
+    };
+  };
+  const error = cleanPreservedIgnoredFilesBeforeDestructiveRemoval(
+    entries,
+    '/t',
+    fakeCleanDeps(stage),
+    TWO_PER_BATCH,
+  );
+  assert.equal(
+    error,
+    `git clean failed for preserved ignored paths in .: spawnSync git ENOBUFS; removed so far: ${JSON.stringify(['./p1'])}; still present: ${JSON.stringify(['./p2', './p3', './p4', './p5', './p6'])}`,
+  );
+  assert.equal(stage.cleanArgvs.length, 1);
+});
+
+test('git clean returning ok with paths remaining names every remaining path', () => {
+  const { stage, entries } = sixPathStage();
+  stage.onClean = (argv, current) => {
+    // Batch 2 leaves both of its paths behind.
+    if (current.cleanArgvs.length === 2)
+      return { ok: true, status: 0, stdout: '', stderr: '' };
+    for (const spec of argv.slice(3))
+      current.present.delete(`/t/${spec.replace(':(literal)', '')}`);
+    return { ok: true, status: 0, stdout: '', stderr: '' };
+  };
+  const error = cleanPreservedIgnoredFilesBeforeDestructiveRemoval(
+    entries,
+    '/t',
+    fakeCleanDeps(stage),
+    TWO_PER_BATCH,
+  );
+  assert.equal(
+    error,
+    `preserved ignored path ./p3 remained after cleanup; removed so far: ${JSON.stringify(['./p1', './p2'])}; still present: ${JSON.stringify(['./p3', './p4', './p5', './p6'])}`,
+  );
+  assert.equal(stage.cleanArgvs.length, 2, 'later batches are not started');
+});
+
+test('a later run treats already-removed preserved paths as safe and rechecks the rest', () => {
+  const { stage, entries } = sixPathStage();
+  stage.present.delete('/t/p1');
+  stage.present.delete('/t/p2');
+  stage.fingerprints.set('/t/p4', 'changed');
+  const first = cleanPreservedIgnoredFilesBeforeDestructiveRemoval(
+    entries,
+    '/t',
+    fakeCleanDeps(stage),
+    TWO_PER_BATCH,
+  );
+  assert.equal(
+    first,
+    'preserved ignored path ./p4 changed contents or identity before cleanup',
+  );
+  assert.deepEqual(stage.cleanArgvs, []);
+  stage.fingerprints.delete('/t/p4');
+  const second = cleanPreservedIgnoredFilesBeforeDestructiveRemoval(
+    entries,
+    '/t',
+    fakeCleanDeps(stage),
+    TWO_PER_BATCH,
+  );
+  assert.equal(second, null);
+  assert.equal(stage.present.size, 0);
 });
