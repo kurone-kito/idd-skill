@@ -2317,14 +2317,26 @@ function printHelp() {
 Output (selected fields; the JSON also carries repository / issue / policy /
 warnings / evidence):
 {
-  "state": "unclaimed|already_owned|stale|local_worktree_occupied|non_inheritable|owner_evidence_required|disputed",
+  "state": "unclaimed|already_owned|stale|local_worktree_occupied|local_branch_present|non_inheritable|owner_evidence_required|disputed",
   "action": "re_claim|takeover|keep|stop",
   "reason": "...",
   "agent_id_checked": "...",  // only with --agent-id
   "active_claim": {"agent_id":"...","claim_id":"...","created_at":"...","branch":"..."} | null,
-  "evidence": {"...": "...", "activation_nonce_winner": "..."|null, "owner_evidence": {...}},  // owner_evidence: one field per owner proof, see docs/idd-helper-scripts.md
-  "fresh_claim_gate": {"verdict":"claimable|already-claimed|stale-reclaimable","winning_claim_id":"..."|null}  // only with --fresh-claim-gate
+  "evidence": {"...": "...", "activation_nonce_winner": "..."|null, "owner_evidence": {...}, "local_branch": {...}},  // owner_evidence: one field per owner proof, see docs/idd-helper-scripts.md; local_branch: only with --fresh-claim-gate on an unclaimed issue
+  "fresh_claim_gate": {"verdict":"claimable|already-claimed|stale-reclaimable|local-branch-present","winning_claim_id":"..."|null}  // only with --fresh-claim-gate
 }
+
+With --fresh-claim-gate on an unclaimed issue the helper also looks for a
+local issue/<number>-* branch ref that no worktree holds and origin lacks, and
+never reads it as "no branch found" (#4914). evidence.local_branch holds
+{"status":"absent|inheritable|unexpected|unreadable","branch","tip","refs":
+[{"branch","tip"}],"detail"}. Any status but absent turns the state into
+local_branch_present (action stop) and the verdict into local-branch-present,
+with reason local-branch-inheritable, local-branch-unexpected, or
+local-branch-unreadable and a null winning_claim_id. inheritable names the sole
+exact branch of a trusted released claim that has no open linked pull request
+and an unchanged tip; the helper only reports it and never creates, resets, or
+deletes a ref.
 
 policy.trusted_marker_actors_source reports which input supplied the
 trusted-marker-logins ladder's value: "flag" | "env" | "config" | "none".

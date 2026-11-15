@@ -8900,3 +8900,22 @@ test('--fresh-claim-gate CLI: one evaluation probes the refs once and the gate m
     sandbox.restore();
   }
 });
+
+test('--help advertises the local-only branch state, verdict, reasons, and evidence', () => {
+  const result = spawnSync(
+    process.execPath,
+    [join(REPO_ROOT, 'scripts/resume-claim-routing.mjs'), '--help'],
+    { cwd: REPO_ROOT, encoding: 'utf8', env: fixtureEnv() },
+  );
+  assert.equal(result.status, 0, result.stderr);
+  for (const needle of [
+    '|local_branch_present|',
+    '|local-branch-present"',
+    'evidence.local_branch',
+    'local-branch-inheritable',
+    'local-branch-unexpected',
+    'local-branch-unreadable',
+  ]) {
+    assert.ok(result.stdout.includes(needle), needle);
+  }
+});
