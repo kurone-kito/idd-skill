@@ -366,6 +366,7 @@ export function createGithubProvisionalDecisionStore(input) {
     return { comments, complete, serverDate };
   }
   return {
+    policy,
     readHistory,
     async readSourceIssue() {
       const issue = object(ghApiJson(issuePath));

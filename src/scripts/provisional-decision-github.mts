@@ -402,6 +402,7 @@ export function createGithubProvisionalDecisionStore(input: {
   }
 
   return {
+    policy,
     readHistory,
     async readSourceIssue() {
       const issue = object(ghApiJson(issuePath));

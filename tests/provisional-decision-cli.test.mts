@@ -191,7 +191,11 @@ function harness(options: {
   store?: StubStore;
 }) {
   const out: string[] = [];
-  const created: Array<{ repository: string; issueNumber: number }> = [];
+  const created: Array<{
+    repository: string;
+    issueNumber: number;
+    policy: unknown;
+  }> = [];
   const trustReads: Array<{ owner: string; repo: string }> = [];
   const store = options.store ?? new StubStore(baseComments());
   const deps: ProvisionalDecisionCliDeps = {
@@ -211,6 +215,7 @@ function harness(options: {
       created.push({
         repository: input.repository,
         issueNumber: input.issueNumber,
+        policy: input.policy,
       });
       return store;
     },
@@ -394,7 +399,9 @@ test('a dry run plans the selection with trust read from the trusted source', as
   );
   assert.equal(outcome, 0);
   assert.deepEqual(h.trustReads, [{ owner: 'kurone-kito', repo: 'idd-skill' }]);
-  assert.deepEqual(h.created, [{ repository, issueNumber }]);
+  // The store gets the trusted snapshot's policy (null here), never undefined,
+  // which would make the planner read the working-tree config.
+  assert.deepEqual(h.created, [{ repository, issueNumber, policy: null }]);
   assert.deepEqual(h.store.appended, [], 'a dry run must not append');
   assert.deepEqual(h.store.labelRequests, []);
   const report = lastReport(h.out);
