@@ -363,6 +363,58 @@ test('policy schema accepts distinct dotted x-extension keys', () => {
   );
 });
 
+test('policy schema takes mergePolicy and mergePolicyAck as a string or a per-tier object', () => {
+  const schema = loadJson('schemas/policy.schema.json');
+  const tiered = loadJson(
+    'fixtures/schemas/policy.merge-by-tier.valid.json',
+  ) as JsonRecord;
+  assert.deepEqual(validate(tiered, schema), []);
+  assert.notDeepEqual(
+    validate(
+      loadJson('fixtures/schemas/policy.merge-by-tier.invalid.json'),
+      schema,
+    ),
+    [],
+    'a tier object missing lightweight must fail',
+  );
+
+  const tiers: Record<string, string> = {
+    frontier: 'fully_autonomous_merge',
+    'middle-tier': 'human_merge',
+    lightweight: 'human_merge',
+  };
+  const withPolicy = (
+    key: 'mergePolicy' | 'mergePolicyAck',
+    value: unknown,
+  ): JsonRecord => {
+    const doc = loadJson('fixtures/schemas/policy.valid.json') as JsonRecord;
+    doc[key] = value;
+    return doc;
+  };
+  assert.deepEqual(validate(withPolicy('mergePolicyAck', tiers), schema), []);
+  for (const key of ['mergePolicy', 'mergePolicyAck'] as const) {
+    for (const tierKey of Object.keys(tiers)) {
+      const withoutTier: Record<string, string> = { ...tiers };
+      Reflect.deleteProperty(withoutTier, tierKey);
+      assert.notDeepEqual(
+        validate(withPolicy(key, withoutTier), schema),
+        [],
+        `${key} without ${tierKey} must fail`,
+      );
+      assert.notDeepEqual(
+        validate(withPolicy(key, { ...tiers, [tierKey]: 'nope' }), schema),
+        [],
+        `${key}.${tierKey} with a value outside the enum must fail`,
+      );
+    }
+    assert.notDeepEqual(
+      validate(withPolicy(key, { ...tiers, extra: 'human_merge' }), schema),
+      [],
+      `${key} with an extra tier key must fail`,
+    );
+  }
+});
+
 test('user-global nested policy fields are partial while array entries stay complete', () => {
   const schema = loadJson('schemas/user-global-config.schema.json');
   const context = {

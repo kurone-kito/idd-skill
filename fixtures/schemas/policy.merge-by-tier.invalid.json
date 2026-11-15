@@ -1,0 +1,124 @@
+{
+  "iddVersion": "1.0.0",
+  "markerPrefix": "idd-skill",
+  "mergePolicy": {
+    "frontier": "fully_autonomous_merge",
+    "middle-tier": "human_merge"
+  },
+  "reviewPolicy": "copilot-advisory",
+  "threadResolutionPolicy": "fast-agent-resolve",
+  "claimTiming": {
+    "staleAge": "PT24H",
+    "heartbeatInterval": "PT12H"
+  },
+  "trustedMarkerActors": [
+    "copilot-cli"
+  ],
+  "commands": {
+    "install-deps": "true",
+    "fix-validate": "npx dprint fmt",
+    "pre-push-validate": "npx dprint check",
+    "post-fix-validate": "npx dprint fmt && npx markdownlint-cli2"
+  },
+  "stallRecovery": {
+    "quietWindow": "PT30M"
+  },
+  "forcedHandoff": {
+    "mode": "disabled",
+    "authorityPolicy": "owners-and-maintainers-only"
+  },
+  "markerTrust": {
+    "allowCollaboratorMarkers": false
+  },
+  "advisoryWait": {
+    "requestCap": 30,
+    "pendingWindow": "PT30M",
+    "settledWindow": "PT10M",
+    "pollInterval": "PT2M",
+    "capExhaustedRoute": "phase-specific"
+  },
+  "ciWait": {
+    "runningTimeout": "PT30M",
+    "generationTimeout": "PT10M",
+    "rerunPolicy": "rerun-once"
+  },
+  "ciGate": {
+    "externalChecks": {
+      "advisory": [
+        {
+          "selector": "Copilot code review",
+          "matchMode": "exact"
+        }
+      ],
+      "waivable": [
+        {
+          "selector": "CodeRabbit*",
+          "matchMode": "glob"
+        }
+      ]
+    },
+    "externalCheckWaivers": {
+      "mode": "maintainer-authorized",
+      "authorityPolicy": "owners-and-maintainers-only",
+      "maxValidity": "PT24H"
+    }
+  },
+  "discover": {
+    "activeClaimPreScanBatchSize": 10,
+    "legacyRoots": [
+      1234
+    ],
+    "milestoneScope": "v0.8.0"
+  },
+  "orchestrator": {
+    "maxWorkers": 8
+  },
+  "claim": {
+    "verifySettleDelay": "PT5S"
+  },
+  "critiqueLoop": {
+    "cPhaseLowSeveritySkipAfter": 3,
+    "e10NoProgressHoldAfter": 3,
+    "e10MaxPasses": 2,
+    "telemetryHook": {
+      "command": "notify-critique-telemetry"
+    }
+  },
+  "reviewEscalation": {
+    "changesRequestedFirstEscalation": "PT24H",
+    "changesRequestedSecondEscalation": "PT48H"
+  },
+  "approvalSignals": {
+    "readyLabelName": "idd:ready",
+    "labelFreshnessMode": "presence-only"
+  },
+  "issueAuthoring": {
+    "maxClarificationRounds": 3,
+    "authoringLabelName": "status:authoring",
+    "authoringStaleAge": "PT4H",
+    "heartbeatCoalesceWindow": "PT2M"
+  },
+  "autopilotSuitability": {
+    "floor": 3,
+    "enabled": true
+  },
+  "worktreeGuard": {
+    "enabled": true,
+    "branchPatterns": [
+      "issue/*",
+      "roadmap-audit/*"
+    ]
+  },
+  "labels": {
+    "roadmapLabelName": "roadmap",
+    "blockedByHumanLabelName": "status:blocked-by-human",
+    "needsDecisionLabelName": "status:needs-decision",
+    "authoringOnlyLabelName": "status:authoring-only",
+    "untrustedLabelerLogins": [
+      "triage-bot"
+    ]
+  },
+  "mergeGate": {
+    "soloCodeownerAdminFallback": "auto-admin-retry"
+  }
+}

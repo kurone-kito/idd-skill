@@ -48,6 +48,21 @@ interface SchemaNode {
   properties?: Record<string, SchemaNode>;
   items?: SchemaNode;
   required?: string[];
+  oneOf?: SchemaNode[];
+}
+
+/**
+ * Enum values of a property, including the string branch of a `oneOf` such
+ * as the `mergePolicy` string-or-tier-object union.
+ */
+function enumOf(node: SchemaNode): unknown[] {
+  return node.enum ?? node.oneOf?.find((branch) => branch.enum)?.enum ?? [];
+}
+
+/** Tier keys of a property's object branch in a `oneOf`, if it has one. */
+function tierKeysOf(node: SchemaNode): string[] {
+  const branch = node.oneOf?.find((candidate) => candidate.properties);
+  return Object.keys(branch?.properties ?? {});
 }
 
 type JsonRecord = Record<string, unknown>;
@@ -528,9 +543,7 @@ test('each enum and boolean comment marks the default value', () => {
   const gaps: string[] = [];
   for (const { path, node, legacy } of schemaPaths(SCHEMA)) {
     if (legacy || isExampleOnly(path, entries)) continue;
-    const stringEnum = (node.enum ?? []).some(
-      (value) => typeof value === 'string',
-    );
+    const stringEnum = enumOf(node).some((value) => typeof value === 'string');
     if (!stringEnum && node.type !== 'boolean') continue;
     // An inline array item shows an example; its default is the runtime's.
     const expected = path.includes('[]')
@@ -556,9 +569,15 @@ test('the comments describe every enum value and both outcomes of every boolean'
     const text = explanationFor(path, entries);
     // Integer enums (orchestrator.maxWorkers, autopilotSuitability.floor) are
     // described as ranges, so only string enums are checked value by value.
-    for (const value of node.enum ?? []) {
+    for (const value of enumOf(node)) {
       if (typeof value === 'string' && !text.includes(`"${value}"`)) {
         gaps.push(`${path}: "${value}"`);
+      }
+    }
+    // A per-tier object branch names its keys in the comment, not as enum values.
+    for (const tierKey of tierKeysOf(node)) {
+      if (!text.includes(tierKey)) {
+        gaps.push(`${path}: tier key ${tierKey}`);
       }
     }
     // Each boolean outcome is its own "- true" or "- false" bullet.

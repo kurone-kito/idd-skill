@@ -41,14 +41,70 @@
       "description": "Git-hosting provider selection for the future provider adapter boundary (#2265; see docs/provider-boundary.md). Not to be confused with `providerOutage`, which names an unrelated CI/Actions-service outage-relief declaration policy. Optional; absent resolves to `github`, the same effective policy as today. Setting `gitlab` or `bitbucket` only validates and records the selection -- no adapter for either provider exists yet, so every current helper still only speaks to GitHub through `gh`."
     },
     "mergePolicy": {
-      "type": "string",
-      "enum": ["fully_autonomous_merge", "human_merge", "separate_merge_agent"],
-      "description": "Selects which session is authorized to execute the F3 merge. Required when `config.json` exists; changing it is a workflow behavior change needing matching phase-file updates. An absent `config.json` is treated as the `human_merge` profile."
+      "description": "Selects which session is authorized to execute the F3 merge. Required when `config.json` exists; changing it is a workflow behavior change needing matching phase-file updates. An absent `config.json` is treated as the `human_merge` profile. Either one string applies to every model tier, or an object with `frontier`, `middle-tier`, and `lightweight` sets a policy per tier. The object form validates here; the merge handoff does not resolve it yet (see roadmap #5207).",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": ["fully_autonomous_merge", "human_merge", "separate_merge_agent"],
+          "description": "One merge policy for every model tier."
+        },
+        {
+          "type": "object",
+          "description": "A merge policy per model tier. Exactly the three tier keys; each value is one of the same three policy strings.",
+          "required": ["frontier", "middle-tier", "lightweight"],
+          "additionalProperties": false,
+          "properties": {
+            "frontier": {
+              "type": "string",
+              "enum": ["fully_autonomous_merge", "human_merge", "separate_merge_agent"],
+              "description": "Merge policy for frontier-class models."
+            },
+            "middle-tier": {
+              "type": "string",
+              "enum": ["fully_autonomous_merge", "human_merge", "separate_merge_agent"],
+              "description": "Merge policy for middle-tier cloud models."
+            },
+            "lightweight": {
+              "type": "string",
+              "enum": ["fully_autonomous_merge", "human_merge", "separate_merge_agent"],
+              "description": "Merge policy for lightweight local or compact cloud models."
+            }
+          }
+        }
+      ]
     },
     "mergePolicyAck": {
-      "type": "string",
-      "enum": ["fully_autonomous_merge", "human_merge", "separate_merge_agent"],
-      "description": "Diagnostics-only confirmation that the operator has explicitly reconsidered the current `mergePolicy` value. Optional; never participates in F2.5/F3 merge-authority resolution and never changes what any `mergePolicy` value authorizes. `idd-doctor` warns when `mergePolicy` is `fully_autonomous_merge` and this field is absent or does not equal that same value; any other value here (including one that does not match the live `mergePolicy`) still validates against this schema."
+      "description": "Diagnostics-only confirmation that the operator has explicitly reconsidered the current `mergePolicy` value. Optional; never participates in F2.5/F3 merge-authority resolution and never changes what any `mergePolicy` value authorizes. `idd-doctor` warns when `mergePolicy` is `fully_autonomous_merge` and this field is absent or does not equal that same value; any other value here (including one that does not match the live `mergePolicy`) still validates against this schema. Accepts the same string-or-tier-object union as `mergePolicy`.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": ["fully_autonomous_merge", "human_merge", "separate_merge_agent"],
+          "description": "One confirmation value for every model tier."
+        },
+        {
+          "type": "object",
+          "description": "A confirmation value per model tier. Exactly the three tier keys; each value is one of the same three policy strings.",
+          "required": ["frontier", "middle-tier", "lightweight"],
+          "additionalProperties": false,
+          "properties": {
+            "frontier": {
+              "type": "string",
+              "enum": ["fully_autonomous_merge", "human_merge", "separate_merge_agent"],
+              "description": "Confirmation value for frontier-class models."
+            },
+            "middle-tier": {
+              "type": "string",
+              "enum": ["fully_autonomous_merge", "human_merge", "separate_merge_agent"],
+              "description": "Confirmation value for middle-tier cloud models."
+            },
+            "lightweight": {
+              "type": "string",
+              "enum": ["fully_autonomous_merge", "human_merge", "separate_merge_agent"],
+              "description": "Confirmation value for lightweight local or compact cloud models."
+            }
+          }
+        }
+      ]
     },
     "reviewPolicy": {
       "type": "string",

@@ -244,6 +244,17 @@ interface CheckSelectorConfig {
   matchMode?: 'exact' | 'glob';
 }
 
+type MergePolicyValue =
+  | 'fully_autonomous_merge'
+  | 'human_merge'
+  | 'separate_merge_agent';
+
+type MergePolicyByTier = {
+  frontier: MergePolicyValue;
+  'middle-tier': MergePolicyValue;
+  lightweight: MergePolicyValue;
+};
+
 /**
  * Policy config file shape (schemas/policy.schema.json).
  *
@@ -261,14 +272,8 @@ interface PolicyConfigFile {
   markerPrefix: string;
   developmentBranch?: string;
   provider?: 'github' | 'gitlab' | 'bitbucket';
-  mergePolicy:
-    | 'fully_autonomous_merge'
-    | 'human_merge'
-    | 'separate_merge_agent';
-  mergePolicyAck?:
-    | 'fully_autonomous_merge'
-    | 'human_merge'
-    | 'separate_merge_agent';
+  mergePolicy: MergePolicyValue | MergePolicyByTier;
+  mergePolicyAck?: MergePolicyValue | MergePolicyByTier;
   reviewPolicy:
     | 'copilot-advisory'
     | 'human-required'
