@@ -126,7 +126,14 @@ CI-polling shared helper file), never this one. Read
   resume polling, or stop and ask on `hold`). `action_required` /
   `startup_failure` / `stale` rarely clear on a blind rerun — stop and
   ask, except the `idd-advisory-convergence` gated-bot-rerun case named
-  in Rerun mechanics below.
+  in Rerun mechanics below and the `idd-advisory-convergence`
+  `startup_failure` reopen case in the next bullet.
+- A `startup_failure` of `idd-advisory-convergence` (observed 2026-11-09,
+  `kurone-kito/idd-skill#5153`) is recovered by closing and reopening the
+  PR on the same head, with no new commit, so a new `pull_request_target`
+  run starts. If the new run, or the check on that head, does not succeed,
+  hold as the "rarely clear on a blind rerun" sentence says, and do not
+  loop reruns.
 - Any non-pass `cancelled` / `timed_out`: same code-caused vs.
   infra-caused split as above.
 - Any required check running: keep polling. After
@@ -134,8 +141,10 @@ CI-polling shared helper file), never this one. Read
   `ciWait.rerunPolicy` once; the same route recurring after that rerun,
   or a `hold` policy, is a stop-and-ask.
 - Required checks not yet generated: treat as running, capped at
-  `ciWait.generationTimeout`. If the workflow run does not exist at all
-  when that window elapses, stop and ask.
+  `ciWait.generationTimeout`. If `idd-advisory-convergence` is the missing
+  check and its workflow run concluded `startup_failure` on the PR head,
+  use the `startup_failure` reopen bullet above. If the workflow run does
+  not exist at all when that window elapses, stop and ask.
 
 ## Rerun mechanics
 
