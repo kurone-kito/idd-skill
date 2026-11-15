@@ -2400,6 +2400,34 @@ test('a fresh install lays down the payload, skills, and receipt, and uninstall 
   assert.deepEqual(nodeFs.readdirSync(join(home, '.claude')), []);
 });
 
+test('the stable dispatcher names a Command Prompt exception for the bare launcher (#5227)', () => {
+  const dispatcher = nodeFs
+    .readFileSync(join(REPO, 'idd-template/user-global/skill-entry.md'), 'utf8')
+    .replace(/\s+/gu, ' ');
+  const step3 = dispatcher.slice(
+    dispatcher.indexOf('3. In a Git repository'),
+    dispatcher.indexOf('4. Outside a Git repository'),
+  );
+  assert.ok(step3.includes('read its JSON on POSIX and PowerShell.'), step3);
+  assert.ok(
+    step3.includes('On Command Prompt, or when the command is not on `PATH`,'),
+    step3,
+  );
+  assert.ok(
+    step3.includes(
+      'use the platform-specific command in the installed `user-global/entry.md` instead.',
+    ),
+    step3,
+  );
+  assert.equal(
+    step3.includes(
+      'run `idd-activation --session-id <stable-id>` and read its JSON. If the command is not on',
+    ),
+    false,
+    'step 3 must not give the bare command to Command Prompt',
+  );
+});
+
 test('the stable dispatcher preserves exact routing and helper checks', () => {
   const dispatcher = nodeFs
     .readFileSync(join(REPO, 'idd-template/user-global/skill-entry.md'), 'utf8')

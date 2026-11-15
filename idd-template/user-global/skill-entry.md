@@ -12,8 +12,9 @@ contract or reference.
 2. Use the stable session ID supplied by the host wrapper. The wrapper owns
    creating and persisting it; never mint a new ID for an invocation.
 3. In a Git repository, run `idd-activation --session-id <stable-id>` and
-   read its JSON. If the command is not on `PATH`, follow the
-   platform-specific command in the installed `user-global/entry.md`. When
+   read its JSON on POSIX and PowerShell. On Command Prompt, or when the
+   command is not on `PATH`, use the platform-specific command in the
+   installed `user-global/entry.md` instead. When
    `active` is `false`, use step 4. When `active` is `true`, this route
    applies to every skill invocation in that repository, issue authoring
    included:

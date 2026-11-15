@@ -448,7 +448,7 @@ not require the optional full-core import. See the
 
 ## Activation gate and context cost
 
-The entry text tells the agent to run `idd-activation` from the repository
+The entry text tells the agent to run the launcher from the repository
 directory and to read its JSON output. If `active` is `false`, the agent does
 nothing IDD-specific. If `active` is `true` and `selection.status` is `ready`
 with a non-null `instructionsRoot`, the agent opens
@@ -470,11 +470,12 @@ each session of an installed harness loads it. The IDD overview and the phase
 files load only after the gate reports `active`. The gate is read-only and makes
 no network calls.
 
-Run `idd-activation` from the repository directory. The command takes `--cwd
-<path>` to classify another directory. If the command is absent from `PATH`, use
-`~/.local/bin/idd-activation` on POSIX. On Windows, use
-`& "$HOME\.local\bin\idd-activation.cmd"` in PowerShell or
-`"%USERPROFILE%\.local\bin\idd-activation.cmd"` in Command Prompt. Those
+The command takes `--cwd <path>` to classify another directory. On Command
+Prompt, run `"%USERPROFILE%\.local\bin\idd-activation.cmd" --session-id <id>`
+from the repository directory. On POSIX and PowerShell, run `idd-activation`
+from the repository directory. If it is absent from `PATH`, use
+`~/.local/bin/idd-activation` on POSIX, or
+`& "$HOME\.local\bin\idd-activation.cmd"` in PowerShell. Those
 executables are deployed by the host setup; `--install-user-global` installs
 the payload and does not copy CLI helpers or write to `~/.local/bin`. The
 onboarding output prints separate `npm install -g` and `pnpm add -g` commands
