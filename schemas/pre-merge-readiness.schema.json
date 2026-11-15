@@ -2015,6 +2015,181 @@
       },
       "additionalProperties": false
     },
+    "provisionalRead": {
+      "description": "kurone-kito/idd-skill#5237: the trusted provisional read of the claimed source, taken before the closing-set evidence is built. It is evidence for a later closing-set exception, never a decision: it adds no blocker, changes no ready verdict, and leaves closingSet unchanged. Present on every claim-bound run; omitted for a claimless run. 'bound' means the replayed, trusted, unedited history of the claimed source holds unconfirmed work whose verified claim lineage contains this run's claim and whose claim branch equals the live pull request head ref. No provisional record carries a head before merge, so that binding is derived, and the evaluated head is the report's prHeadSha. 'stopped' means the source is not treated as provisional, with the reason; 'unavailable' means the instructions-only profile cannot run the read.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["status", "reason"],
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "enum": ["unavailable"],
+              "description": "The read did not run."
+            },
+            "reason": {
+              "enum": ["instructions-only"],
+              "description": "The trusted configuration names no helper runtime (or names instructions-only), so the replay is not called and no provisional treatment is granted."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["status", "reason"],
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "enum": ["stopped"],
+              "description": "The source is not treated as provisional; the read fails closed."
+            },
+            "reason": {
+              "type": "string",
+              "description": "Why the read stopped; a replay refusal has its own arm with the replay issue codes. record-missing: no provisional record marker on the claimed issue (every ordinary issue). record-untrusted: a record marker comment was not authored by a trusted marker actor. record-edited: a record marker comment was edited. history-unreadable: the issue, its comments, their edit state, or the head ref could not be read. claim-unverified: no usable claim id, or the claim history could not be verified. completion-unverified: a completion record has no verified merged pull request proof. source-confirmed: every current-bundle decision is confirmed, so the ordinary close path applies. rework-pending: the current bundle is in a rework state with no current work to bind. claim-mismatch: unconfirmed work does not belong to this run's claim lineage. head-mismatch: the claim branch does not equal the live pull request head ref.",
+              "enum": [
+                "record-missing",
+                "record-untrusted",
+                "record-edited",
+                "history-unreadable",
+                "claim-unverified",
+                "completion-unverified",
+                "source-confirmed",
+                "rework-pending",
+                "claim-mismatch",
+                "head-mismatch"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["status", "reason", "replayIssues"],
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "enum": ["stopped"],
+              "description": "The source is not treated as provisional; the read fails closed."
+            },
+            "reason": {
+              "enum": ["replay-invalid"],
+              "description": "The replay refused the history; replayIssues names why."
+            },
+            "replayIssues": {
+              "type": "array",
+              "description": "The distinct replay issue codes that refused the history.",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "status",
+            "source",
+            "pullRequestNumber",
+            "headSha",
+            "headRef",
+            "claimId",
+            "branch",
+            "bundleGeneration",
+            "decisions"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "enum": ["bound"],
+              "description": "A trusted, unedited, replay-valid record is bound to this source, claim, pull request, and head."
+            },
+            "source": {
+              "type": "object",
+              "description": "The claimed source issue the history belongs to.",
+              "required": ["repository", "issueNumber"],
+              "additionalProperties": false,
+              "properties": {
+                "repository": {
+                  "type": "string",
+                  "description": "Lowercase owner/repo of the source issue."
+                },
+                "issueNumber": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "description": "The claimed source issue number."
+                }
+              }
+            },
+            "pullRequestNumber": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "The pull request this report evaluated."
+            },
+            "headSha": {
+              "type": "string",
+              "description": "The pull request head the binding was evaluated at; equals prHeadSha.",
+              "pattern": "^[0-9a-f]{40}$"
+            },
+            "headRef": {
+              "type": "string",
+              "minLength": 1,
+              "description": "The live head ref of the pull request."
+            },
+            "claimId": {
+              "type": "string",
+              "minLength": 1,
+              "description": "This run's claim id, found in the verified claim chain."
+            },
+            "branch": {
+              "type": "string",
+              "minLength": 1,
+              "description": "The live claim's branch; equals headRef."
+            },
+            "bundleGeneration": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "The current decision bundle generation."
+            },
+            "decisions": {
+              "type": "array",
+              "description": "The unconfirmed decisions of the current bundle that bound to this claim and head.",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "required": [
+                  "bundleGeneration",
+                  "decisionGeneration",
+                  "status",
+                  "recordId"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "bundleGeneration": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "The decision's bundle generation."
+                  },
+                  "decisionGeneration": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "The decision generation within its bundle."
+                  },
+                  "status": {
+                    "type": "string",
+                    "description": "The decision's replayed lifecycle state.",
+                    "enum": ["selected", "in-progress", "confirmation-pending"]
+                  },
+                  "recordId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "The decision's latest lifecycle record id."
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
     "ready": {
       "description": "Strict merge-gate rollup: true only when blockers is empty. Does NOT apply the dispositionEvidence.soleCauseAckOnlyPostDisposition override (a separate flag the F2 checklist layers on top).",
       "type": "boolean"
