@@ -3808,13 +3808,15 @@ export function isCommitInventoryRecordShaped(body, markerPrefix) {
 /**
  * Decide what the commit inventory record says about one live head.
  *
- * - `absent`: no record-shaped comment names the live head. The caller then
- *   applies the prose rule (exactly one trusted, unedited prose comment).
+ * - `absent`: no record-shaped comment exists for this issue. The caller then
+ *   applies the prose rule (exactly one trusted, unedited prose comment for
+ *   the live head). Prose is used only in this case.
  * - `accepted`: exactly one record names the live head, and it is trusted,
- *   unedited, and well formed. This record governs; no prose is consulted.
- * - `stop`: anything else. A record for a different head is ignored, because
- *   it is not live. A live record that is untrusted, edited, of unknown edit
- *   state, malformed, or repeated stops the cleanup. It never falls back.
+ *   unedited, well formed, and for this issue. Older records are ignored.
+ * - `stop`: anything else, and never a fallback to prose. An untrusted,
+ *   edited, malformed, or wrong-issue record stops. A trusted, unedited record
+ *   for an older head stops when no record names the live head, so a fresh
+ *   record must be posted. Two records for the live head stop.
  *
  * Callers pass `trustedLogins` from `resolveTrustedMarkerActors`.
  */
@@ -3825,14 +3827,14 @@ export function selectCommitInventoryForHead(comments, options) {
   const trusted = new Set(
     options.trustedLogins.map((login) => login.toLowerCase()),
   );
-  const accepted = [];
+  const live = [];
+  const stale = [];
   for (const comment of comments) {
     if (!isCommitInventoryRecordShaped(comment.body, prefix)) {
       continue;
     }
-    // Author and edit state are checked before the head, for every record
-    // shaped comment: an edited or untrusted record that names another head
-    // must not be skipped as not live (fail-closed).
+    // Author and edit state come before any reading of the record, so an
+    // edited or untrusted record is refused whatever head it names.
     if (
       comment.authorLogin === null ||
       !trusted.has(comment.authorLogin.toLowerCase())
@@ -3845,27 +3847,27 @@ export function selectCommitInventoryForHead(comments, options) {
     if (comment.lastEditedAt !== null) {
       return { status: 'stop', reason: 'edited' };
     }
-    // The head is read from the marker line only, never from visible prose
-    // further down the comment. A missing or non-SHA head token is malformed.
-    const markerLine = comment.body.split('\n', 1)[0] ?? '';
-    const headToken = markerLine.match(/ head=(\S+)/)?.[1];
-    if (headToken === undefined || !/^[0-9a-f]{40}$/.test(headToken)) {
-      return { status: 'stop', reason: 'malformed' };
-    }
-    if (headToken !== head) {
-      continue;
-    }
     const record = parseCommitInventoryComment(comment.body, prefix);
-    if (!record || record.headSha !== head) {
+    if (!record) {
       return { status: 'stop', reason: 'malformed' };
     }
-    accepted.push(record);
+    if (record.issueNumber !== options.issueNumber) {
+      return { status: 'stop', reason: 'wrong-issue' };
+    }
+    if (record.headSha === head) {
+      live.push(record);
+    } else {
+      stale.push(record);
+    }
   }
-  if (accepted.length === 0) {
-    return { status: 'absent' };
-  }
-  if (accepted.length > 1) {
+  if (live.length > 1) {
     return { status: 'stop', reason: 'duplicate' };
   }
-  return { status: 'accepted', record: accepted[0] };
+  if (live.length === 1) {
+    return { status: 'accepted', record: live[0] };
+  }
+  if (stale.length > 0) {
+    return { status: 'stop', reason: 'stale-record' };
+  }
+  return { status: 'absent' };
 }

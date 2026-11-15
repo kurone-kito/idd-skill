@@ -52,6 +52,7 @@ function select(comments: CommitInventoryCommentInput[], head = HEAD) {
   return selectCommitInventoryForHead(comments, {
     markerPrefix: PREFIX,
     headSha: head,
+    issueNumber: ISSUE,
     trustedLogins: TRUSTED,
   });
 }
@@ -120,14 +121,41 @@ test('a single trusted, unedited record for the live head is accepted', () => {
   assert.equal(result.status, 'accepted');
 });
 
-test('no record-shaped comment for the live head is absent, so prose applies', () => {
+test('no record-shaped comment for this issue is absent, so prose applies', () => {
   assert.deepEqual(select([]), { status: 'absent' });
-  // A record for another head is not live and is ignored.
+});
+
+test('a trusted, unedited record for an older head stops, so a fresh record must be posted', () => {
   assert.deepEqual(select([trustedUnedited(record(OTHER_HEAD))], HEAD), {
-    status: 'absent',
+    status: 'stop',
+    reason: 'stale-record',
   });
 });
 
+test('a live record beside an older record is accepted, and the older one is ignored', () => {
+  const result = select([
+    trustedUnedited(record(OTHER_HEAD)),
+    trustedUnedited(record(HEAD)),
+  ]);
+  assert.equal(result.status, 'accepted');
+});
+
+test('a record that names another issue stops, even when its head is live', () => {
+  // A record that is well formed for another issue, copied onto this one.
+  const copied = renderCommitInventoryComment({
+    markerPrefix: PREFIX,
+    agentId: 'worker-1',
+    issueNumber: 9999,
+    branch: 'issue/9999-x',
+    baseSha: BASE,
+    headSha: HEAD,
+    entries: entries(),
+  });
+  assert.deepEqual(select([trustedUnedited(copied)]), {
+    status: 'stop',
+    reason: 'wrong-issue',
+  });
+});
 test('an edited live record stops', () => {
   const result = select([
     {
