@@ -8829,6 +8829,26 @@ Compare the live base and default for D3.5 with
   blocker, whose detail names the extra/missing issue numbers (an extra
   number's detail names `--closing-issues` as the remedy for a genuine
   multi-issue close) and each stray commit's `sha` + issue number.
+- `provisionalRead` (#5237) is the trusted read of the claimed source
+  issue's provisional-decision history, taken before the `closingSet`
+  evidence is built. It is evidence for a later closing-set exception
+  only: it adds no blocker, changes neither `ready` nor `closingSet`, and
+  grants no provisional treatment by itself. A claim-bound run always
+  emits it (optional in the schema); `--claimless` omits it. `status` is
+  `"bound"` when the replayed history of the source, with every record
+  marker trusted and unedited, holds unconfirmed work whose verified claim
+  lineage contains this run's claim and whose claim branch equals the live
+  head ref of the PR; no provisional record carries a head before merge,
+  so that binding is derived and the evaluated head is `prHeadSha`. It then
+  names the source, PR, head, claim, branch, bundle generation, and each
+  bound decision's latest record id. `"stopped"` names a `reason`: a
+  missing record (`record-missing`, every ordinary issue, which costs no
+  extra read), an untrusted or edited record marker, an unreadable history,
+  an unverifiable claim or completion proof, a replay refusal (with its
+  issue codes), a confirmed or reworked source, or a claim or head
+  mismatch. `"unavailable"` means the profile is `instructions-only` (or
+  names no helper runtime), so the replay is not called. A stop never
+  creates the exception.
 - `deferFollowUps` (#3624) is the deferred-follow-up merge-gate evidence:
   `{ checked, unverifiedReason, items: [{ number, heldByAuthoringLabel,
   origin, reconciled }] }`. A follow-up is an open issue carrying the
