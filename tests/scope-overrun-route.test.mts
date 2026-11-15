@@ -678,7 +678,7 @@ for (const relativePath of PR_SUBMIT_PATHS) {
       'every member is open and unclaimed, and either every member carries the authoring label (held)',
       "or the anchor's trusted `release-complete` marker for the latest generation of this set is present, its snapshot re-fetched and verified, and no member carries the authoring label (released)",
       'each released child has at least one child-mapped SHA',
-      'every child-mapped SHA of a released child is confirmed by a `(cherry picked from commit <sha>)` trailer in `git log --format=%B "{development-branch}..origin/<child-branch>"`, after a fetch',
+      'every child-mapped SHA of a released child is confirmed by a `(cherry picked from commit <sha>)` trailer in `git log --format=%B "{development-branch}..origin/<child-branch>"`, after `git fetch origin +<child-branch>:refs/remotes/origin/<child-branch>`',
       'each child says `Split out of #{issue-number}`',
       'and the set excludes this issue',
       'The source issue is open and unclaimed, with a trusted `scope-overrun` record and the needs-decision label (`labels.needsDecisionLabelName`; pre-first-push may lack it)',
