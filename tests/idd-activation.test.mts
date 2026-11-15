@@ -27,7 +27,9 @@ import {
 
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
 const ENTRY_PATH = join(REPO_ROOT, 'idd-template/user-global/entry.md');
-const ENTRY_LIMIT_BYTES = 1200;
+// 1240 is the entry budget the maintainer approved for #5227: the off-PATH
+// fallbacks now carry --session-id, which the 1200-byte limit could not hold.
+const ENTRY_LIMIT_BYTES = 1240;
 
 function sandbox(): {
   root: string;
@@ -484,6 +486,59 @@ test('the user-global entry names installed activation fallbacks', () => {
   assert.ok(text.includes('& "$HOME\\.local\\bin\\idd-activation.cmd"'));
   assert.ok(text.includes('"%USERPROFILE%\\.local\\bin\\idd-activation.cmd"'));
   assert.doesNotMatch(text, /\$PAYLOAD\/scripts\/idd-activation\.mjs/);
+});
+
+test('the user-global entry opens with the Command Prompt launcher, not the bare command (#5227)', () => {
+  const lines = readFileSync(ENTRY_PATH, 'utf8').split('\n');
+  const commandPrompt = lines.indexOf(
+    'Command Prompt, with stable ID; read JSON.',
+  );
+  assert.notEqual(commandPrompt, -1, 'the Command Prompt launcher line exists');
+  const firstLauncher = lines.findIndex((line) =>
+    line.includes('idd-activation'),
+  );
+  assert.equal(
+    firstLauncher,
+    commandPrompt + 1,
+    'the first line that names the launcher is the Command Prompt form',
+  );
+  assert.ok(
+    lines[commandPrompt + 1].includes(
+      '"%USERPROFILE%\\.local\\bin\\idd-activation.cmd"',
+    ),
+  );
+  assert.ok(lines[commandPrompt + 1].includes('--session-id'));
+  const bare = lines
+    .map((line, index) => ({ line, index }))
+    .filter(({ line }) => /(?:^|[\s`])idd-activation --session-id/u.test(line));
+  assert.equal(bare.length, 1, 'the bare command appears exactly once');
+  assert.ok(
+    bare[0].line.startsWith('POSIX/PowerShell:'),
+    'the bare command sits on the POSIX/PowerShell line',
+  );
+});
+
+test('the user-global entry uses the shortened scope and routing wording (#5227)', () => {
+  const text = readFileSync(ENTRY_PATH, 'utf8');
+  assert.ok(text.includes('Git repos; IDD issues/PRs only.'));
+  assert.equal(text.includes('In Git repos'), false);
+  assert.equal(text.includes('follow phase routing.'), false);
+  assert.match(text, /instructionsRoot`;\s*follow routing\./u);
+  // The off-PATH sentence wraps across two lines to stay under the 80-column
+  // rule, so compare it with whitespace collapsed.
+  const flat = text.replace(/\s+/gu, ' ');
+  assert.ok(
+    flat.includes(
+      'Off PATH: POSIX `~/.local/bin/idd-activation --session-id <id>`; PowerShell `& "$HOME\\.local\\bin\\idd-activation.cmd" --session-id <id>`.',
+    ),
+  );
+  const offPathStart = flat.indexOf('Off PATH:');
+  const offPath = flat.slice(
+    offPathStart,
+    flat.indexOf('`.', flat.indexOf('PowerShell', offPathStart)) + 2,
+  );
+  assert.ok(offPath.includes('PowerShell'), offPath);
+  assert.equal(offPath.includes('USERPROFILE'), false, offPath);
 });
 
 test('Windows cmd resolves the user-profile activation fallback', {
