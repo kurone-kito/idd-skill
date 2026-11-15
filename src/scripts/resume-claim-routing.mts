@@ -32,6 +32,7 @@ import {
 import { loadPolicyConfig } from './idd-config.mts';
 import {
   inspectLocalWorktreeBranch,
+  inspectLocalWorktreeBranchPrefix,
   type LocalWorktreeInspection,
   parseLocalWorktreeList,
   sanitizedGitEnvironment,
@@ -210,7 +211,71 @@ interface ResumeClaimRoutingOptions {
    * claim's probe are never relaxed.
    */
   isOwnPristineWorktree?: (path: string, branchName: string) => boolean;
+  /**
+   * #4914: read the local `issue/<n>-*` branch refs that no worktree holds and
+   * origin lacks. Consulted only when the routing state is `unclaimed` after
+   * the worktree check, and wired only by the CLI's `--fresh-claim-gate`, so
+   * every other caller keeps its output byte-identical. Not wired: the field
+   * `evidence.local_branch` is absent.
+   */
+  inspectLocalBranchRefs?: () => LocalBranchRefRead;
+  /**
+   * #4914: read the open linked pull requests of the issue. Consulted only to
+   * prove an exact local-only ref inheritable; not wired reads as unproven, so
+   * the ref is never inheritable.
+   */
+  readOpenLinkedPrs?: () => OpenLinkedPrRead;
 }
+
+/** A local `issue/<n>-*` ref that no worktree holds and origin lacks (#4914). */
+export interface LocalOnlyBranchRef {
+  branch: string;
+  /** The full object id the ref pointed at when it was read. */
+  tip: string;
+}
+
+/**
+ * One read of the local `issue/<n>-*` branch refs (#4914). `worktree` means a
+ * worktree holds some `issue/<n>-*` branch (or its metadata cannot be read), so
+ * the worktree scan of A5(e) owns the answer and no ref is reported here.
+ */
+export type LocalBranchRefRead =
+  | { status: 'read'; refs: LocalOnlyBranchRef[] }
+  | { status: 'worktree' }
+  | { status: 'unreadable'; reason: string };
+
+/** The open linked pull requests read for the inheritable check (#4914). */
+export type OpenLinkedPrRead =
+  | { status: 'none' }
+  | { status: 'present'; references: string[] }
+  | { status: 'unreadable'; reason: string };
+
+/** The four local-ref results of the fresh-claim gate (#4914). */
+export type LocalBranchStatus =
+  | 'absent'
+  | 'inheritable'
+  | 'unexpected'
+  | 'unreadable';
+
+/**
+ * `evidence.local_branch` (#4914). `branch` and `tip` name the inheritable
+ * ref and are `null` for every other status, so the tip a later step must
+ * re-check under the worktree lock is printed only when it is proven.
+ */
+export interface LocalBranchEvidence {
+  status: LocalBranchStatus;
+  branch: string | null;
+  tip: string | null;
+  refs: LocalOnlyBranchRef[];
+  detail: string | null;
+}
+
+/** The top-level reasons of the local-ref routing state (#4914). */
+export const LOCAL_BRANCH_REASONS = {
+  inheritable: 'local-branch-inheritable',
+  unexpected: 'local-branch-unexpected',
+  unreadable: 'local-branch-unreadable',
+} as const;
 
 /** State already established by the claim parser for an owner check. */
 export interface CurrentSessionOwnerContext {
@@ -1260,6 +1325,34 @@ export function evaluateResumeClaimRouting(
     }
   }
 
+  // #4914: a local ref no worktree holds and origin lacks is neither "no
+  // branch found" nor safe to create over. Only a state that would otherwise
+  // read as claimable is re-judged, so a live claim, a stale takeover, and an
+  // occupied worktree keep their own verdicts. The own pristine worktree of a
+  // fresh claim holds its branch, so the probe defers to the worktree scan.
+  let localBranch: LocalBranchEvidence | null = null;
+  if (routeState === 'unclaimed' && options.inspectLocalBranchRefs) {
+    const released = state.releasedClaim;
+    const outcome = classifyLocalBranch(
+      options,
+      released
+        ? {
+            claimId: 'claimId' in released ? released.claimId : null,
+            branch: released.branch,
+          }
+        : null,
+    );
+    localBranch = outcome.evidence;
+    if (outcome.reason !== null) {
+      routeState = 'local_branch_present';
+      action = 'stop';
+      reason = outcome.reason;
+      warnings.push(
+        `local-only branch ref (${outcome.evidence.status}): ${outcome.evidence.detail ?? outcome.evidence.refs.map((ref) => ref.branch).join(', ')}`,
+      );
+    }
+  }
+
   // #3276: neither side of an issue-only forced handoff that was blocked
   // solely because the linked-PR lookup failed (PR state unknown) may read
   // as an ordinary claim-state outcome for a --claim-id check -- not the
@@ -1370,6 +1463,9 @@ export function evaluateResumeClaimRouting(
       // resolver again; omitting `absent` makes that successful production
       // result indistinguishable from a probe that never ran.
       ...(localWorktree !== null ? { local_worktree: localWorktree } : {}),
+      // #4914: present only when the local-ref probe ran (the fresh-claim
+      // gate, state `unclaimed`), so no other caller's output changes.
+      ...(localBranch !== null ? { local_branch: localBranch } : {}),
       // #3667: one field per owner proof, in evaluation order (see
       // CurrentSessionOwnerEvidence). Absent unless a structured owner
       // callback ran against a probe that was not `absent`.
@@ -1412,7 +1508,8 @@ function toForcedHandoffEvidenceEntry(
 export type FreshClaimVerdict =
   | 'claimable'
   | 'already-claimed'
-  | 'stale-reclaimable';
+  | 'stale-reclaimable'
+  | 'local-branch-present';
 
 /** Result of {@link evaluateFreshClaimGate}. */
 export interface FreshClaimGateResult {
@@ -1432,6 +1529,8 @@ export interface FreshClaimGateResult {
  * - `unclaimed` → `claimable`
  * - `stale` → `stale-reclaimable`
  * - `non_inheritable` / `disputed` (a live competitor) → `already-claimed`
+ * - `local_branch_present` (#4914: a local `issue/<n>-*` ref no worktree holds
+ *   and origin lacks) → `local-branch-present`, with a `null` winner
  *
  * `owner_evidence_required` (#3272) is never produced here: that state only
  * arises on the claim-id-match branch, and a fresh claim always passes
@@ -1466,7 +1565,9 @@ export function evaluateFreshClaimGate(
       ? 'claimable'
       : routing.state === 'stale'
         ? 'stale-reclaimable'
-        : 'already-claimed';
+        : routing.state === 'local_branch_present'
+          ? 'local-branch-present'
+          : 'already-claimed';
   // Only a verified-occupied probe proves a local worktree is what a
   // caller would actually be taking over -- an `unreadable` result
   // (occupancy could not be inspected either way) must not expose either
@@ -1483,9 +1584,13 @@ export function evaluateFreshClaimGate(
   const localWorktreeUnverified =
     routing.state === 'local_worktree_occupied' &&
     routing.evidence.local_worktree?.status !== 'occupied';
+  // #4914: a local-only ref is preserved, not taken over, so the released
+  // claim's id is never exposed as a takeover target for it.
+  const noWinner =
+    localWorktreeUnverified || routing.state === 'local_branch_present';
   return {
     verdict,
-    winningClaimId: localWorktreeUnverified
+    winningClaimId: noWinner
       ? null
       : (routing.active_claim?.claim_id ??
         (routing.state === 'local_worktree_occupied'
@@ -1493,6 +1598,349 @@ export function evaluateFreshClaimGate(
           : null)),
     reason: routing.reason,
   };
+}
+
+/** What {@link classifyLocalBranch} needs of the latest released claim. */
+interface ReleasedBranchClaim {
+  /** `null` for a legacy release, which carries no claim-id. */
+  claimId: string | null;
+  branch: string;
+}
+
+/**
+ * The evidence fields of a result with no inheritable ref. A function, not a
+ * module constant: the CLI trigger near the top of this file runs `runCli()`
+ * during module evaluation, before a `const` declared down here would exist.
+ */
+function noInheritableBranch(): {
+  branch: null;
+  tip: null;
+  refs: LocalOnlyBranchRef[];
+} {
+  return { branch: null, tip: null, refs: [] };
+}
+
+function sameLocalOnlyRefs(
+  left: readonly LocalOnlyBranchRef[],
+  right: readonly LocalOnlyBranchRef[],
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every(
+      (ref, index) =>
+        ref.branch === right[index]?.branch && ref.tip === right[index]?.tip,
+    )
+  );
+}
+
+/** A read the classifier trusts: well-formed refs with unique branch names. */
+function isWellFormedRefRead(read: unknown): read is LocalBranchRefRead {
+  if (read === null || typeof read !== 'object') {
+    return false;
+  }
+  const record = read as Record<string, unknown>;
+  if (record.status === 'worktree') {
+    return true;
+  }
+  if (record.status === 'unreadable') {
+    return typeof record.reason === 'string';
+  }
+  if (record.status !== 'read' || !Array.isArray(record.refs)) {
+    return false;
+  }
+  const branches = new Set<string>();
+  for (const ref of record.refs as unknown[]) {
+    const entry = ref as Record<string, unknown> | null;
+    if (
+      entry === null ||
+      typeof entry !== 'object' ||
+      typeof entry.branch !== 'string' ||
+      entry.branch === '' ||
+      typeof entry.tip !== 'string' ||
+      entry.tip === '' ||
+      branches.has(entry.branch)
+    ) {
+      return false;
+    }
+    branches.add(entry.branch);
+  }
+  return true;
+}
+
+/**
+ * Judge the local-only refs of an `unclaimed` issue (#4914). No ref, or a
+ * worktree that owns the answer, is `absent`. An exact ref of a trusted
+ * released claim is `inheritable` only when it is the sole ref, no open linked
+ * pull request exists, and a second read after the pull request lookup shows
+ * the same refs and tips. Anything else with a ref is `unexpected`, and a
+ * failed read is `unreadable`; neither is ever read as no branch.
+ */
+function classifyLocalBranch(
+  options: ResumeClaimRoutingOptions,
+  released: ReleasedBranchClaim | null,
+): { evidence: LocalBranchEvidence; reason: string | null } {
+  const probe = options.inspectLocalBranchRefs;
+  const failure = (
+    status: 'unexpected' | 'unreadable',
+    refs: LocalOnlyBranchRef[],
+    detail: string,
+  ) => ({
+    evidence: { status, ...noInheritableBranch(), refs, detail },
+    reason: LOCAL_BRANCH_REASONS[status],
+  });
+  const read = (): LocalBranchRefRead => {
+    try {
+      const result: unknown = probe?.();
+      return isWellFormedRefRead(result)
+        ? result
+        : { status: 'unreadable', reason: 'the ref probe answered malformed' };
+    } catch (error) {
+      return {
+        status: 'unreadable',
+        reason: `the ref probe threw: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+  };
+
+  const first = read();
+  if (first.status === 'worktree') {
+    return {
+      evidence: {
+        status: 'absent',
+        ...noInheritableBranch(),
+        detail:
+          'a worktree holds an issue branch, so the worktree scan reports it',
+      },
+      reason: null,
+    };
+  }
+  if (first.status === 'unreadable') {
+    return failure('unreadable', [], first.reason);
+  }
+  if (first.refs.length === 0) {
+    return {
+      evidence: { status: 'absent', ...noInheritableBranch(), detail: null },
+      reason: null,
+    };
+  }
+  const refs = first.refs;
+  const named = refs.map((ref) => ref.branch).join(', ');
+  if (released === null) {
+    return failure(
+      'unexpected',
+      refs,
+      `no trusted released claim names a branch for ${named}`,
+    );
+  }
+  if (released.claimId === null) {
+    return failure(
+      'unexpected',
+      refs,
+      `the released claim is a legacy marker without a claim-id, so ${named} is not inheritable`,
+    );
+  }
+  if (refs.length !== 1 || refs[0].branch !== released.branch) {
+    return failure(
+      'unexpected',
+      refs,
+      `${named} is not only the released claim's branch ${released.branch}`,
+    );
+  }
+  const prs: OpenLinkedPrRead = (() => {
+    try {
+      return (
+        options.readOpenLinkedPrs?.() ?? {
+          status: 'unreadable',
+          reason: 'the linked pull request read is not wired',
+        }
+      );
+    } catch (error) {
+      return {
+        status: 'unreadable',
+        reason: `the linked pull request read threw: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+  })();
+  if (prs.status === 'unreadable') {
+    return failure('unreadable', refs, prs.reason);
+  }
+  if (prs.status === 'present') {
+    return failure(
+      'unexpected',
+      refs,
+      `${named} has an open linked pull request (${prs.references.map((reference) => `#${reference}`).join(', ')})`,
+    );
+  }
+  if (prs.status !== 'none') {
+    return failure(
+      'unreadable',
+      refs,
+      'the linked pull request read answered malformed',
+    );
+  }
+  const second = read();
+  if (second.status === 'unreadable') {
+    return failure('unreadable', refs, second.reason);
+  }
+  if (second.status === 'worktree') {
+    return failure(
+      'unexpected',
+      refs,
+      `a worktree now holds an issue branch, so ${named} changed`,
+    );
+  }
+  if (!sameLocalOnlyRefs(refs, second.refs)) {
+    return failure(
+      'unexpected',
+      second.refs.length > 0 ? second.refs : refs,
+      `the tip or the ref set of ${named} changed between two reads`,
+    );
+  }
+  return {
+    evidence: {
+      status: 'inheritable',
+      branch: refs[0].branch,
+      tip: refs[0].tip,
+      refs,
+      detail: null,
+    },
+    reason: LOCAL_BRANCH_REASONS.inheritable,
+  };
+}
+
+/** A failed git call as one fixed phrase: stderr can carry a remote URL. */
+function describeGitFailure(error: unknown): string {
+  const record = error as { status?: unknown; code?: unknown } | null;
+  if (record?.code === 'ETIMEDOUT') {
+    return 'timed out';
+  }
+  return typeof record?.status === 'number'
+    ? `exit code ${record.status}`
+    : 'no exit status';
+}
+
+/**
+ * Read the local `issue/<n>-*` branch refs that no worktree holds and origin
+ * lacks (#4914). The worktree scan of A5(e) runs first and owns every ref a
+ * worktree has checked out, the caller's own pristine worktree included, so
+ * the own-worktree second gate of a fresh claim never sees its own branch. The
+ * local ref listing is the only read when no ref exists; one `ls-remote` per
+ * ref runs only after that. Every failed read is `unreadable`, and the reason
+ * is a fixed phrase, never git's stderr (a remote URL can sit in it).
+ */
+export function inspectLocalBranchRefs(
+  issueNumber: number,
+  cwd: string = process.cwd(),
+  environment: NodeJS.ProcessEnv = process.env,
+  execute: typeof execFileSync = execFileSync,
+): LocalBranchRefRead {
+  if (!Number.isSafeInteger(issueNumber) || issueNumber <= 0) {
+    return {
+      status: 'unreadable',
+      reason: `invalid issue number ${issueNumber}`,
+    };
+  }
+  const worktrees = inspectLocalWorktreeBranchPrefix(
+    issueNumber,
+    cwd,
+    environment,
+    execute,
+  );
+  if (worktrees.status !== 'absent') {
+    return { status: 'worktree' };
+  }
+  const env = sanitizedGitEnvironment(environment);
+  const prefix = `refs/heads/issue/${issueNumber}-`;
+  let listing: string;
+  try {
+    listing = String(
+      execute(
+        'git',
+        ['for-each-ref', '--format=%(refname) %(objectname)', `${prefix}*`],
+        { cwd, encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'] },
+      ),
+    );
+  } catch (error) {
+    return {
+      status: 'unreadable',
+      reason: `git for-each-ref ended with ${describeGitFailure(error)}`,
+    };
+  }
+  const listed: LocalOnlyBranchRef[] = [];
+  for (const line of listing.split('\n')) {
+    if (line === '') {
+      continue;
+    }
+    const [ref, tip, ...rest] = line.split(' ');
+    if (
+      rest.length > 0 ||
+      !ref?.startsWith(prefix) ||
+      !tip ||
+      !/^[0-9a-f]{40,64}$/u.test(tip)
+    ) {
+      return {
+        status: 'unreadable',
+        reason: 'git for-each-ref printed a malformed line',
+      };
+    }
+    listed.push({ branch: ref.slice('refs/heads/'.length), tip });
+  }
+  // A read that times out fails closed, so a stalled network cannot hang the gate.
+  const lsRemoteTimeoutMs = 30_000;
+  const localOnly: LocalOnlyBranchRef[] = [];
+  for (const entry of listed) {
+    const remoteRef = `refs/heads/${entry.branch}`;
+    let remote: string;
+    try {
+      remote = String(
+        execute('git', ['ls-remote', '--heads', 'origin', remoteRef], {
+          cwd,
+          encoding: 'utf8',
+          env: { ...env, GIT_TERMINAL_PROMPT: '0' },
+          stdio: ['ignore', 'pipe', 'pipe'],
+          timeout: lsRemoteTimeoutMs,
+        }),
+      );
+    } catch (error) {
+      return {
+        status: 'unreadable',
+        reason: `git ls-remote origin ended with ${describeGitFailure(error)} for ${entry.branch}`,
+      };
+    }
+    if (!remote.split('\n').some((line) => line.endsWith(`\t${remoteRef}`))) {
+      localOnly.push(entry);
+    }
+  }
+  return { status: 'read', refs: localOnly };
+}
+
+/**
+ * Read the open linked pull requests for the inheritable check (#4914). A
+ * found pull request wins whatever the lookup state; a failed lookup that
+ * found none is `unreadable`, never "none".
+ */
+export function readOpenLinkedPrs(
+  port: ProviderPort,
+  issueNumber: number | null,
+  repository: string,
+): OpenLinkedPrRead {
+  try {
+    const linked = fetchOpenLinkedPrReferences(port, issueNumber, repository);
+    if (linked.references.size > 0) {
+      return { status: 'present', references: [...linked.references].sort() };
+    }
+    return linked.lookupFailed
+      ? {
+          status: 'unreadable',
+          reason: 'the linked pull request lookup failed',
+        }
+      : { status: 'none' };
+  } catch {
+    return {
+      status: 'unreadable',
+      reason: 'the linked pull request lookup threw',
+    };
+  }
 }
 
 function runCli(): HelperCliResult {
@@ -1664,6 +2112,15 @@ function runCli(): HelperCliResult {
         },
       ),
     linkedPrLookupFailed,
+    // #4914: only the fresh-claim gate looks for a local-only ref. Every
+    // other caller (recovery, F4 proof and cleanup, --assert) keeps its output.
+    ...(args.freshClaimGate
+      ? {
+          inspectLocalBranchRefs: () => inspectLocalBranchRefs(args.issue ?? 0),
+          readOpenLinkedPrs: () =>
+            readOpenLinkedPrs(port, args.issue, `${owner}/${repo}`),
+        }
+      : {}),
     // #4019: only with --own-worktree, which requires --fresh-claim-gate.
     ...(args.ownWorktree
       ? {
