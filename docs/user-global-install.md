@@ -465,7 +465,7 @@ repair, the session reruns activation with the same session ID. It continues
 when the status is `ready`, and it binds only when the status is
 `binding-required`.
 
-The context cost is the entry text itself, kept under 1200 bytes by a test, and
+The context cost is the entry text itself, kept under 1240 bytes by a test, and
 each session of an installed harness loads it. The IDD overview and the phase
 files load only after the gate reports `active`. The gate is read-only and makes
 no network calls.

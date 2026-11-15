@@ -5,7 +5,8 @@ Git repos; IDD issues/PRs only.
 Command Prompt, with stable ID; read JSON.
 `"%USERPROFILE%\.local\bin\idd-activation.cmd" --session-id <id>`.
 POSIX/PowerShell: `idd-activation --session-id <id>`.
-Off PATH: POSIX `~/.local/bin/idd-activation`; PowerShell `& "$HOME\.local\bin\idd-activation.cmd"`.
+Off PATH: POSIX `~/.local/bin/idd-activation --session-id <id>`;
+PowerShell `& "$HOME\.local\bin\idd-activation.cmd" --session-id <id>`.
 
 - `active: false`: stop.
 - `selection.status: binding-required`: run

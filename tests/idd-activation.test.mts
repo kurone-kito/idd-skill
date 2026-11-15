@@ -27,7 +27,9 @@ import {
 
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
 const ENTRY_PATH = join(REPO_ROOT, 'idd-template/user-global/entry.md');
-const ENTRY_LIMIT_BYTES = 1200;
+// 1240 is the entry budget the maintainer approved for #5227: the off-PATH
+// fallbacks now carry --session-id, which the 1200-byte limit could not hold.
+const ENTRY_LIMIT_BYTES = 1240;
 
 function sandbox(): {
   root: string;
@@ -508,7 +510,7 @@ test('the user-global entry opens with the Command Prompt launcher, not the bare
   assert.ok(lines[commandPrompt + 1].includes('--session-id'));
   const bare = lines
     .map((line, index) => ({ line, index }))
-    .filter(({ line }) => /idd-activation --session-id/.test(line));
+    .filter(({ line }) => /(?:^|[\s`])idd-activation --session-id/u.test(line));
   assert.equal(bare.length, 1, 'the bare command appears exactly once');
   assert.ok(
     bare[0].line.startsWith('POSIX/PowerShell:'),
@@ -522,13 +524,19 @@ test('the user-global entry uses the shortened scope and routing wording (#5227)
   assert.equal(text.includes('In Git repos'), false);
   assert.equal(text.includes('follow phase routing.'), false);
   assert.match(text, /instructionsRoot`;\s*follow routing\./u);
+  // The off-PATH sentence wraps across two lines to stay under the 80-column
+  // rule, so compare it with whitespace collapsed.
+  const flat = text.replace(/\s+/gu, ' ');
   assert.ok(
-    text.includes(
-      'Off PATH: POSIX `~/.local/bin/idd-activation`; PowerShell `& "$HOME\\.local\\bin\\idd-activation.cmd"`.',
+    flat.includes(
+      'Off PATH: POSIX `~/.local/bin/idd-activation --session-id <id>`; PowerShell `& "$HOME\\.local\\bin\\idd-activation.cmd" --session-id <id>`.',
     ),
   );
-  const offPath =
-    text.split('\n').find((line) => line.startsWith('Off PATH:')) ?? '';
+  const offPathStart = flat.indexOf('Off PATH:');
+  const offPath = flat.slice(
+    offPathStart,
+    flat.indexOf('`.', flat.indexOf('PowerShell', offPathStart)) + 2,
+  );
   assert.ok(offPath.includes('PowerShell'), offPath);
   assert.equal(offPath.includes('USERPROFILE'), false, offPath);
 });
