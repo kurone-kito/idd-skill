@@ -783,8 +783,13 @@ export type ProvisionalReadReport =
   | { status: 'unavailable'; reason: 'instructions-only' }
   | {
       status: 'stopped';
-      reason: ProvisionalReadStopReason;
-      replayIssues?: string[];
+      reason: Exclude<ProvisionalReadStopReason, 'replay-invalid'>;
+    }
+  | {
+      status: 'stopped';
+      reason: 'replay-invalid';
+      /** The distinct replay issue codes that refused the history. */
+      replayIssues: string[];
     }
   | {
       status: 'bound';
@@ -822,11 +827,11 @@ export interface ProvisionalReadinessInput {
 
 function provisionalStop(
   reason: ProvisionalReadStopReason,
-  replayIssues?: string[],
+  replayIssues: string[] = [],
 ): ProvisionalReadReport {
-  return replayIssues === undefined
-    ? { status: 'stopped', reason }
-    : { status: 'stopped', reason, replayIssues };
+  return reason === 'replay-invalid'
+    ? { status: 'stopped', reason, replayIssues }
+    : { status: 'stopped', reason };
 }
 
 /**

@@ -22206,20 +22206,19 @@ test('provisional read stops closed when the live claim is not in the verified l
 });
 
 test('provisional read reports the replay refusal codes of a stale source', () => {
-  const result = resolveProvisionalReadiness(
-    provisionalReadInput([
-      provisionalClaimComment(),
-      provisionalSelectedComment({}, 'A different title'),
-    ]),
+  assert.deepEqual(
+    resolveProvisionalReadiness(
+      provisionalReadInput([
+        provisionalClaimComment(),
+        provisionalSelectedComment({}, 'A different title'),
+      ]),
+    ),
+    {
+      status: 'stopped',
+      reason: 'replay-invalid',
+      replayIssues: ['source-binding-mismatch'],
+    },
   );
-  assert.equal(result.status, 'stopped');
-  assert.equal(
-    result.status === 'stopped' ? result.reason : '',
-    'replay-invalid',
-  );
-  assert.deepEqual(result.status === 'stopped' ? result.replayIssues : [], [
-    'source-binding-mismatch',
-  ]);
 });
 
 test('provisional read stops closed on a completion without merged pull request proof', () => {
@@ -22582,19 +22581,35 @@ test('pre-merge readiness schema accepts every provisionalRead shape', () => {
     collectProvisional(withRecord, helperOn),
     collectProvisional([provisionalClaimComment()], helperOn),
     collectProvisional(withRecord, {}),
+    collectProvisional(
+      [provisionalClaimComment(), provisionalSelectedComment({}, 'Another')],
+      helperOn,
+    ),
   ];
   assert.deepEqual(
     reports.map((report) => report.provisionalRead?.status),
-    ['bound', 'stopped', 'unavailable'],
+    ['bound', 'stopped', 'unavailable', 'stopped'],
   );
+  assert.deepEqual(reports[3]?.provisionalRead, {
+    status: 'stopped',
+    reason: 'replay-invalid',
+    replayIssues: ['source-binding-mismatch'],
+  });
   for (const report of reports) {
     assert.deepEqual(validate(report, readinessSchema), []);
   }
-  const incomplete = { ...reports[0], provisionalRead: { status: 'bound' } };
-  assert.notDeepEqual(validate(incomplete, readinessSchema), []);
-  const unknownReason = {
+  const withRead = (provisionalRead: unknown) => ({
     ...reports[0],
-    provisionalRead: { status: 'stopped', reason: 'no-such-reason' },
-  };
-  assert.notDeepEqual(validate(unknownReason, readinessSchema), []);
+    provisionalRead,
+  });
+  for (const rejected of [
+    { status: 'bound' },
+    { status: 'stopped', reason: 'no-such-reason' },
+    // The replay codes belong to the replay-invalid stop only.
+    { status: 'stopped', reason: 'record-missing', replayIssues: ['x'] },
+    { status: 'stopped', reason: 'replay-invalid' },
+    { status: 'unavailable', reason: 'record-missing' },
+  ]) {
+    assert.notDeepEqual(validate(withRead(rejected), readinessSchema), []);
+  }
 });

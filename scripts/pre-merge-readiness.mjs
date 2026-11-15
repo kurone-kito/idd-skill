@@ -461,10 +461,10 @@ export function readScopeOverrunMergeBaseSha(
     );
   }
 }
-function provisionalStop(reason, replayIssues) {
-  return replayIssues === undefined
-    ? { status: 'stopped', reason }
-    : { status: 'stopped', reason, replayIssues };
+function provisionalStop(reason, replayIssues = []) {
+  return reason === 'replay-invalid'
+    ? { status: 'stopped', reason, replayIssues }
+    : { status: 'stopped', reason };
 }
 /**
  * Read the claimed source's trusted provisional history and bind it to this

@@ -2044,7 +2044,7 @@
             },
             "reason": {
               "type": "string",
-              "description": "Why the read stopped. record-missing: no provisional record marker on the claimed issue (every ordinary issue). record-untrusted: a record marker comment was not authored by a trusted marker actor. record-edited: a record marker comment was edited. history-unreadable: the issue, its comments, their edit state, or the head ref could not be read. claim-unverified: no usable claim id, or the claim history could not be verified. completion-unverified: a completion record has no verified merged pull request proof. replay-invalid: the replay refused the history (see replayIssues). source-confirmed: every current-bundle decision is confirmed, so the ordinary close path applies. rework-pending: the current bundle is in a rework state with no current work to bind. claim-mismatch: unconfirmed work does not belong to this run's claim lineage. head-mismatch: the claim branch does not equal the live pull request head ref.",
+              "description": "Why the read stopped; a replay refusal has its own arm with the replay issue codes. record-missing: no provisional record marker on the claimed issue (every ordinary issue). record-untrusted: a record marker comment was not authored by a trusted marker actor. record-edited: a record marker comment was edited. history-unreadable: the issue, its comments, their edit state, or the head ref could not be read. claim-unverified: no usable claim id, or the claim history could not be verified. completion-unverified: a completion record has no verified merged pull request proof. source-confirmed: every current-bundle decision is confirmed, so the ordinary close path applies. rework-pending: the current bundle is in a rework state with no current work to bind. claim-mismatch: unconfirmed work does not belong to this run's claim lineage. head-mismatch: the claim branch does not equal the live pull request head ref.",
               "enum": [
                 "record-missing",
                 "record-untrusted",
@@ -2052,16 +2052,30 @@
                 "history-unreadable",
                 "claim-unverified",
                 "completion-unverified",
-                "replay-invalid",
                 "source-confirmed",
                 "rework-pending",
                 "claim-mismatch",
                 "head-mismatch"
               ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["status", "reason", "replayIssues"],
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "enum": ["stopped"],
+              "description": "The source is not treated as provisional; the read fails closed."
+            },
+            "reason": {
+              "enum": ["replay-invalid"],
+              "description": "The replay refused the history; replayIssues names why."
             },
             "replayIssues": {
               "type": "array",
-              "description": "Present only for replay-invalid: the distinct replay issue codes.",
+              "description": "The distinct replay issue codes that refused the history.",
               "items": {
                 "type": "string",
                 "minLength": 1
