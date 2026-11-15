@@ -12386,31 +12386,60 @@ function realRunGit(argv: string[], cwd: string): LocalGitCommandResult {
   }
 }
 
-/** The host's argument limit in bytes, or null when it cannot be read or the
- * platform reports a different error for an oversized command line. */
+let probedArgumentLimit: number | null | undefined;
+
+/** The smallest probed argv size, in bytes, that the host refuses with
+ * `E2BIG`, or null when the host accepts every probed size (or the platform
+ * reports a different error for an oversized command line). Probing instead
+ * of reading `getconf ARG_MAX` matters: with an unlimited stack `getconf`
+ * reports a small legacy value while the kernel accepts several MiB, and CI
+ * runners differ from developer hosts. The probe starts `node` with one
+ * argument per KiB, so a size that fits runs a no-op and a size that does not
+ * fails before the child starts. */
 function hostArgumentLimit(): number | null {
+  if (probedArgumentLimit !== undefined) return probedArgumentLimit;
+  probedArgumentLimit = null;
   if (process.platform === 'win32') return null;
-  try {
-    const limit = Number(
-      execFileSync('getconf', ['ARG_MAX'], { encoding: 'utf8' }).trim(),
+  const chunk = 'x'.repeat(1023);
+  for (let bytes = 256 * 1024; bytes <= 64 * 1024 * 1024; bytes *= 2) {
+    const probe = spawnSync(
+      process.execPath,
+      ['-e', '0', ...Array.from({ length: bytes / 1024 }, () => chunk)],
+      { stdio: 'ignore' },
     );
-    // A limit above 16 MiB would make the oversized set unreasonably large.
-    return Number.isFinite(limit) && limit > 0 && limit <= 16 * 1024 * 1024
-      ? limit
-      : null;
-  } catch {
-    return null;
+    if ((probe.error as NodeJS.ErrnoException | undefined)?.code === 'E2BIG') {
+      probedArgumentLimit = bytes;
+      break;
+    }
   }
+  return probedArgumentLimit;
 }
 
-/** Preserved paths shaped like the recorded `ignored/N.txt` pathspecs: at
- * least 80000 of them, and more when the host limit is higher, until their
- * argv exceeds 1.25 times that limit. */
+/** Preserved paths under `ignored/`, like the recorded `ignored/N.txt`
+ * pathspecs, whose literal pathspecs together exceed both the recorded 80000
+ * `:(literal)ignored/N.txt` argv (2228904 bytes) and 1.25 times the probed
+ * limit. Long directory segments pad each path, so the argument count stays
+ * near 20000: a spread of several hundred thousand arguments overflows the
+ * JavaScript call stack in Node itself, which would hide the spawn failure
+ * under test. */
 function oversizedIgnoredPaths(limit: number): string[] {
+  const target = Math.max(2_228_904, Math.ceil(limit * 1.25));
+  const count = 20_000;
+  const perPath = Math.ceil(target / count) + 1;
+  const segmentLength = 200;
+  const overhead = ':(literal)ignored//'.length + `${count}.txt`.length + 1;
+  const segments = Math.max(
+    0,
+    Math.ceil((perPath - overhead) / (segmentLength + 1)),
+  );
+  const padding = Array.from({ length: segments }, (_, index) =>
+    String(index % 10).repeat(segmentLength),
+  ).join('/');
+  const directory = padding === '' ? 'ignored' : `ignored/${padding}`;
   const paths: string[] = [];
   let bytes = 0;
-  for (let index = 0; bytes < limit * 1.25 || index < 80000; index += 1) {
-    const path = `ignored/${index}.txt`;
+  for (let index = 0; bytes < target; index += 1) {
+    const path = `${directory}/${index}.txt`;
     paths.push(path);
     bytes += Buffer.byteLength(`:(literal)${path}`) + 1;
   }
@@ -12428,18 +12457,25 @@ function initIgnoredFixtureRepo(repo: string): void {
 }
 
 test('one git clean argv beyond the OS limit fails with E2BIG before git starts', {
-  skip: hostArgumentLimit() === null,
+  skip: process.platform === 'win32',
 }, (context) => {
-  const limit = hostArgumentLimit() as number;
+  const limit = hostArgumentLimit();
+  if (limit === null) {
+    context.skip('the host accepts every probed argument size');
+    return;
+  }
   const repo = mkdtempSync(join(tmpdir(), 'idd-lwr-e2big-'));
   try {
     initIgnoredFixtureRepo(repo);
-    writeFileSync(join(repo, 'ignored', '0.txt'), 'kept\n');
+    const paths = oversizedIgnoredPaths(limit);
+    const kept = join(repo, paths[0] as string);
+    mkdirSync(dirname(kept), { recursive: true });
+    writeFileSync(kept, 'kept\n');
     const argv = [
       'clean',
       '-fdx',
       '--',
-      ...oversizedIgnoredPaths(limit).map((path) => `:(literal)${path}`),
+      ...paths.map((path) => `:(literal)${path}`),
     ];
     let failure: NodeJS.ErrnoException | null = null;
     try {
@@ -12452,9 +12488,12 @@ test('one git clean argv beyond the OS limit fails with E2BIG before git starts'
     } catch (error) {
       failure = error as NodeJS.ErrnoException;
     }
-    if (failure === null) {
-      // The throwaway repo is the only thing git could have cleaned. The host
-      // accepts more argument bytes than `getconf ARG_MAX` reports, so the
+    if (
+      failure === null ||
+      typeof (failure as { status?: unknown }).status === 'number'
+    ) {
+      // Git started (and exited), so the host accepted the argv. The
+      // throwaway repo is the only thing it could have cleaned, and the
       // premise of this regression cannot be observed here.
       context.skip('git accepted the oversized argv on this host');
       return;
@@ -12465,7 +12504,7 @@ test('one git clean argv beyond the OS limit fails with E2BIG before git starts'
       `expected the spawn to fail before git started, got ${failure?.code}: ${failure?.message}`,
     );
     assert.equal(
-      readFileSync(join(repo, 'ignored', '0.txt'), 'utf8'),
+      readFileSync(kept, 'utf8'),
       'kept\n',
       'the failed spawn must remove nothing',
     );
@@ -12539,6 +12578,7 @@ function populateOversizedCleanupFixture(
         copyFailed: false,
       };
     }
+    mkdirSync(dirname(join(repo, path)), { recursive: true });
     writeFileSync(join(repo, path), `ignored content ${index}\n`);
     mkdirSync(dirname(copiedTo), { recursive: true });
     copyFileSync(join(repo, path), copiedTo);
@@ -12597,9 +12637,13 @@ function pathspecBytes(argv: readonly string[]): number {
 }
 
 test('the bounded preserved cleanup removes an oversized path set without E2BIG', {
-  skip: hostArgumentLimit() === null,
-}, () => {
-  const limit = hostArgumentLimit() as number;
+  skip: process.platform === 'win32',
+}, (context) => {
+  const limit = hostArgumentLimit();
+  if (limit === null) {
+    context.skip('the host accepts every probed argument size');
+    return;
+  }
   const fixture = buildOversizedCleanupFixture(limit);
   try {
     const error = cleanPreservedIgnoredFilesBeforeDestructiveRemoval(
@@ -12629,9 +12673,13 @@ test('the bounded preserved cleanup removes an oversized path set without E2BIG'
 });
 
 test('a preserved path that failed the pre-clean check is not removed and no clean starts', {
-  skip: hostArgumentLimit() === null,
-}, () => {
-  const limit = hostArgumentLimit() as number;
+  skip: process.platform === 'win32',
+}, (context) => {
+  const limit = hostArgumentLimit();
+  if (limit === null) {
+    context.skip('the host accepts every probed argument size');
+    return;
+  }
   const fixture = buildOversizedCleanupFixture(limit);
   try {
     const changed = fixture.realPaths[1] as string;
@@ -12664,9 +12712,13 @@ test('a preserved path that failed the pre-clean check is not removed and no cle
 });
 
 test('a path edited after earlier batches were cleaned stops the later batches', {
-  skip: hostArgumentLimit() === null,
-}, () => {
-  const limit = hostArgumentLimit() as number;
+  skip: process.platform === 'win32',
+}, (context) => {
+  const limit = hostArgumentLimit();
+  if (limit === null) {
+    context.skip('the host accepts every probed argument size');
+    return;
+  }
   let lastPath = '';
   const fixture = buildOversizedCleanupFixture(limit, (cleanCount, current) => {
     if (cleanCount !== 1) return;
@@ -12715,6 +12767,8 @@ test('a path edited after earlier batches were cleaned stops the later batches',
 // failure under test.
 interface FakeCleanStage {
   present: Set<string>;
+  /** Paths whose presence cannot be read (the fake reports `unknown`). */
+  unreadable: Set<string>;
   notIgnored: Set<string>;
   fingerprints: Map<string, string>;
   statusCalls: string[][];
@@ -12729,6 +12783,7 @@ interface FakeCleanStage {
 function fakeCleanStage(present: readonly string[]): FakeCleanStage {
   return {
     present: new Set(present),
+    unreadable: new Set(),
     notIgnored: new Set(),
     fingerprints: new Map(),
     statusCalls: [],
@@ -12780,7 +12835,16 @@ function fakeCleanDeps(
       }
       return { ok: true, status: 0, stdout: '', stderr: '' };
     },
-    pathExists: (path) => stage.present.has(path),
+    // A real unreadable path collapses to "not present" in `pathExists`, which
+    // is why the cleanup asks for the three-state presence instead.
+    pathExists: (path) =>
+      stage.present.has(path) && !stage.unreadable.has(path),
+    pathPresence: (path) =>
+      stage.unreadable.has(path)
+        ? 'unknown'
+        : stage.present.has(path)
+          ? 'present'
+          : 'absent',
     readPathFingerprint: (path) => stage.fingerprints.get(path) ?? 'fp',
   };
 }
@@ -13224,4 +13288,25 @@ test('a preserved path recreated after pass 1 is refused before its batch is cle
   );
   assert.equal(stage.cleanRuns.length, 1);
   assert.equal(stage.present.has('/t/p3'), true);
+});
+
+test('a path that cannot be read after the clean is not treated as removed', () => {
+  const { stage, entries } = sixPathStage();
+  stage.onClean = (_argv, current) => {
+    current.present.delete('/t/p1');
+    // After a successful clean p2 cannot be inspected (for example EACCES).
+    current.unreadable.add('/t/p2');
+    return { ok: true, status: 0, stdout: '', stderr: '' };
+  };
+  const error = cleanPreservedIgnoredFilesBeforeDestructiveRemoval(
+    entries,
+    '/t',
+    fakeCleanDeps(stage),
+    TWO_PER_BATCH,
+  );
+  assert.equal(
+    error,
+    `could not confirm the preserved ignored path ./p2 was removed after cleanup; removed so far: ${JSON.stringify(['./p1'])}; still present: ${JSON.stringify(['./p2', './p3', './p4', './p5', './p6'])}`,
+  );
+  assert.equal(stage.cleanRuns.length, 1, 'later batches are not started');
 });

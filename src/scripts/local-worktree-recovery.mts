@@ -292,7 +292,11 @@ export function pathFingerprintOnDisk(
       stat.mtimeMs,
       ...(stable ? [] : [stat.ctimeMs]),
     ].join(':');
+  // Two lstat calls around one read must agree on the ctime even in stable
+  // mode: a rewrite that keeps the length and restores the mtime still moves
+  // it, and only a sibling's removal between *batches* is meant to be ignored.
   const sameStat = (before: Stats, after: Stats): boolean =>
+    before.ctimeMs === after.ctimeMs &&
     statSignature(before) === statSignature(after);
   const targetIsInsideRemovedRoot = (resolvedTarget: string): boolean =>
     sourceRootsReal.some((root) => isPathContainedIn(resolvedTarget, root));
@@ -2768,12 +2772,19 @@ export function cleanPreservedIgnoredFilesBeforeDestructiveRemoval(
         `git clean failed for preserved ignored paths in ${batch.scope}: ${cleaned.stderr}`,
       );
     }
-    const remaining = batch.paths.filter((path) =>
-      deps.pathExists(join(batch.scopePath, path)),
-    );
-    if (remaining.length > 0) {
+    // Only a confirmed absence counts as removed: an unreadable path is not
+    // proof, and the state report above already lists it as still present.
+    const unconfirmed = batch.paths
+      .map((path) => ({
+        path,
+        presence: pathPresenceForDeps(deps, join(batch.scopePath, path)),
+      }))
+      .find(({ presence }) => presence !== 'absent');
+    if (unconfirmed !== undefined) {
       return withCleanState(
-        `preserved ignored path ${batch.scope}/${remaining[0]} remained after cleanup`,
+        unconfirmed.presence === 'unknown'
+          ? `could not confirm the preserved ignored path ${batch.scope}/${unconfirmed.path} was removed after cleanup`
+          : `preserved ignored path ${batch.scope}/${unconfirmed.path} remained after cleanup`,
       );
     }
   }
