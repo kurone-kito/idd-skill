@@ -733,16 +733,20 @@ function readLocalBranchEvidence(
     return null;
   }
   const refs: { branch: string; tip: string }[] = [];
+  const seen = new Set<string>();
   for (const ref of local.refs as unknown[]) {
     if (
       !isRecord(ref) ||
       typeof ref.branch !== 'string' ||
       ref.branch === '' ||
       typeof ref.tip !== 'string' ||
-      ref.tip === ''
+      ref.tip === '' ||
+      // The probe never lists a branch twice, so a repeat is malformed.
+      seen.has(ref.branch)
     ) {
       return null;
     }
+    seen.add(ref.branch);
     refs.push({ branch: ref.branch, tip: ref.tip });
   }
   const inheritable = local.status === 'inheritable';

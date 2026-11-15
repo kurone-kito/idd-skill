@@ -4793,6 +4793,32 @@ test('local-branch-present: the closed lists reject an unknown state and a pair 
     );
     void name;
   }
+  // The probe never lists a branch twice, so a repeat in any status is malformed.
+  for (const reads of [
+    [
+      {
+        status: 'read',
+        refs: [refAt(`${PREFIX}other-slug`), refAt(`${PREFIX}second`)],
+      },
+    ],
+  ] satisfies LocalBranchRefRead[][]) {
+    const twoRefs = evaluatorRouting(reads, { released: null });
+    assertStoppedAt(
+      a5cReport(asResult(twoRefs)),
+      'a5c-claim-state',
+      'local-branch-present',
+    );
+    assertStoppedAt(
+      a5cReport(
+        mutated(twoRefs, (copy) => {
+          copy.evidence.local_branch.refs[1].branch =
+            copy.evidence.local_branch.refs[0].branch;
+        }),
+      ),
+      'a5c-claim-state',
+      'precheck-unavailable',
+    );
+  }
   // A non-inheritable status names no inheritable branch or tip.
   const unexpected = evaluatorRouting([
     { status: 'read', refs: [refAt(`${PREFIX}other-slug`)] },

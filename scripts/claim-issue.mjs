@@ -500,16 +500,20 @@ function readLocalBranchEvidence(routing) {
     return null;
   }
   const refs = [];
+  const seen = new Set();
   for (const ref of local.refs) {
     if (
       !isRecord(ref) ||
       typeof ref.branch !== 'string' ||
       ref.branch === '' ||
       typeof ref.tip !== 'string' ||
-      ref.tip === ''
+      ref.tip === '' ||
+      // The probe never lists a branch twice, so a repeat is malformed.
+      seen.has(ref.branch)
     ) {
       return null;
     }
+    seen.add(ref.branch);
     refs.push({ branch: ref.branch, tip: ref.tip });
   }
   const inheritable = local.status === 'inheritable';
