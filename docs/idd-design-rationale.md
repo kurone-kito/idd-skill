@@ -1216,10 +1216,13 @@ The source issue needs no active claim and a trusted `scope-overrun` record,
 and a post-push pull request must still be a draft at the recorded head, so a
 head pushed after the decision cannot be closed unseen.
 
-A released child counts only when it is open and unclaimed, carries no authoring
+A released member counts only when it is open and unclaimed, carries no authoring
 label, and the anchor's trusted `release-complete` marker for the latest
-generation of this set is present. That marker closes its own generation, so an
-earlier generation's marker does not count. Every child-mapped SHA in the
+generation of this set is present, with the set's snapshot re-fetched and
+verified. The roadmap is a member too: after release it carries no label either,
+so the same rule covers it, and the child-mapped SHA check does not apply to it.
+That marker closes its own generation, so an earlier generation's marker does
+not count. Every child-mapped SHA in the
 trusted inventory must appear in a `(cherry picked from commit <sha>)` trailer
 on the child's branch, read with `git log --format=%B
 {development-branch}..<child-branch>`. The transfer checks the same trailer in
