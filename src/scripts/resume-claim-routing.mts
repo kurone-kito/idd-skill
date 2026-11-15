@@ -1558,10 +1558,21 @@ export function evaluateFreshClaimGate(
   input: ResumeClaimRoutingInput,
   options: ResumeClaimRoutingOptions = {},
 ): FreshClaimGateResult {
-  const routing = evaluateResumeClaimRouting(
-    { ...input, claimId: undefined },
-    options,
+  return freshClaimGateFromRouting(
+    evaluateResumeClaimRouting({ ...input, claimId: undefined }, options),
   );
+}
+
+/**
+ * Map one routing evaluation to the fresh-claim vocabulary (see
+ * {@link evaluateFreshClaimGate}). A caller that already holds the routing of
+ * a claim-id-less read maps it instead of evaluating again, so the top-level
+ * routing and `fresh_claim_gate` share one snapshot and the local-ref probe
+ * runs once (#4914).
+ */
+export function freshClaimGateFromRouting(
+  routing: ReturnType<typeof evaluateResumeClaimRouting>,
+): FreshClaimGateResult {
   const verdict: FreshClaimVerdict =
     routing.state === 'unclaimed'
       ? 'claimable'
@@ -2126,15 +2137,6 @@ function runCli(): HelperCliResult {
         },
       ),
     linkedPrLookupFailed,
-    // #4914: only the fresh-claim gate looks for a local-only ref. Every
-    // other caller (recovery, F4 proof and cleanup, --assert) keeps its output.
-    ...(args.freshClaimGate
-      ? {
-          inspectLocalBranchRefs: () => inspectLocalBranchRefs(args.issue ?? 0),
-          readOpenLinkedPrs: () =>
-            readOpenLinkedPrs(port, args.issue, `${owner}/${repo}`),
-        }
-      : {}),
     // #4019: only with --own-worktree, which requires --fresh-claim-gate.
     ...(args.ownWorktree
       ? {
@@ -2149,6 +2151,22 @@ function runCli(): HelperCliResult {
         }
       : {}),
   };
+  // #4914: only the fresh-claim gate looks for a local-only ref. Every other
+  // caller (recovery, F4 proof and cleanup, --assert) keeps its output.
+  const localBranchOptions = args.freshClaimGate
+    ? {
+        inspectLocalBranchRefs: () => inspectLocalBranchRefs(args.issue ?? 0),
+        readOpenLinkedPrs: () =>
+          readOpenLinkedPrs(port, args.issue, `${owner}/${repo}`),
+      }
+    : {};
+  // Without a --claim-id the routing below is already the claim-id-less read
+  // a fresh claim needs, so the gate maps that one evaluation: the local-ref
+  // probe and its linked-PR read run once, and the top-level fields and
+  // `fresh_claim_gate` describe the same snapshot. With a --claim-id the
+  // top-level routing keeps its owner view without a probe, and the gate
+  // evaluates once on its own.
+  const gateSharesRouting = args.freshClaimGate && !args.claimId;
   const result = evaluateResumeClaimRouting(
     {
       events: routingEvents,
@@ -2158,17 +2176,21 @@ function runCli(): HelperCliResult {
       staleAgeMs,
       now: args.now || undefined,
     },
-    routingOptions,
+    gateSharesRouting
+      ? { ...routingOptions, ...localBranchOptions }
+      : routingOptions,
   );
 
   // The fresh-claim (A5) gate re-uses the same resolver over the same markers
   // but ignores any --claim-id (a fresh claim owns none yet), mapping the
   // routing state to the write-side claimability vocabulary.
   const freshClaimGate = args.freshClaimGate
-    ? evaluateFreshClaimGate(
-        { events: routingEvents, staleAgeMs, now: args.now || undefined },
-        routingOptions,
-      )
+    ? gateSharesRouting
+      ? freshClaimGateFromRouting(result)
+      : evaluateFreshClaimGate(
+          { events: routingEvents, staleAgeMs, now: args.now || undefined },
+          { ...routingOptions, ...localBranchOptions },
+        )
     : null;
 
   const output = {

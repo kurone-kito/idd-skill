@@ -49,6 +49,7 @@ import {
   evaluateFreshClaimGate as evaluateFreshClaimGateImpl,
   evaluateResumeClaimRouting as evaluateResumeClaimRoutingImpl,
   fetchOpenLinkedPrReferences,
+  freshClaimGateFromRouting,
   inspectLocalBranchRefs,
   isPristineOwnWorktree,
   type LocalBranchRefRead,
@@ -8776,6 +8777,125 @@ test('routing without --fresh-claim-gate never reports a local-only ref', () => 
     const output = JSON.parse(result.stdout);
     assert.equal(output.state, 'unclaimed');
     assert.equal(Object.hasOwn(output.evidence, 'local_branch'), false);
+  } finally {
+    sandbox.restore();
+  }
+});
+
+test('freshClaimGateFromRouting maps one routing evaluation exactly as evaluateFreshClaimGate does', () => {
+  const scenarios: {
+    name: string;
+    events: unknown;
+    reads: LocalBranchRefRead[];
+  }[] = [
+    {
+      name: 'no ref',
+      events: releasedEventsFor(),
+      reads: [{ status: 'read', refs: [] }],
+    },
+    {
+      name: 'an inheritable ref',
+      events: releasedEventsFor(),
+      reads: [{ status: 'read', refs: [refOf('issue/24-task')] }],
+    },
+    {
+      name: 'an unexpected ref',
+      events: [],
+      reads: [{ status: 'read', refs: [refOf('issue/24-task')] }],
+    },
+    {
+      name: 'an unreadable probe',
+      events: releasedEventsFor(),
+      reads: [{ status: 'unreadable', reason: 'listing failed' }],
+    },
+  ];
+  for (const scenario of scenarios) {
+    const options = () => ({
+      isTrustedAuthor: trusted(['maintainer']),
+      inspectLocalBranchRefs: probeOf(...scenario.reads).probe,
+      readOpenLinkedPrs: (): OpenLinkedPrRead => ({ status: 'none' }),
+    });
+    const input = { now: '2026-05-12T11:00:00Z', events: scenario.events };
+    assert.deepEqual(
+      freshClaimGateFromRouting(evaluateResumeClaimRouting(input, options())),
+      evaluateFreshClaimGate(input, options()),
+      scenario.name,
+    );
+  }
+});
+
+interface TracedGateOutput {
+  state: string;
+  reason: string;
+  evidence: { local_branch?: { status: string } };
+  fresh_claim_gate: { verdict: string; winning_claim_id: string | null };
+}
+
+function traceCliRun(
+  sandbox: LocalRefSandbox,
+  extraArgs: string[],
+): {
+  status: number | null;
+  stderr: string;
+  output: TracedGateOutput;
+  lsRemoteCalls: number;
+} {
+  const trace = join(sandbox.root, `git-trace-${extraArgs.length}.log`);
+  const result = spawnSync(
+    process.execPath,
+    [
+      join(REPO_ROOT, 'scripts/resume-claim-routing.mjs'),
+      '--issue',
+      '1',
+      '--owner',
+      'o',
+      '--repo',
+      'r',
+      '--now',
+      '2026-09-24T00:01:00Z',
+      '--policy',
+      sandbox.policyPath,
+      '--fresh-claim-gate',
+      ...extraArgs,
+    ],
+    {
+      cwd: sandbox.primary,
+      encoding: 'utf8',
+      env: { ...fixtureEnv(), IDD_TRUSTED_MARKER_ACTORS: '', GIT_TRACE: trace },
+    },
+  );
+  const lsRemoteCalls = readFileSync(trace, 'utf8')
+    .split('\n')
+    .filter((line) => /built-in: git ls-remote/u.test(line)).length;
+  return {
+    status: result.status,
+    stderr: result.stderr,
+    output: result.status === 0 ? JSON.parse(result.stdout) : null,
+    lsRemoteCalls,
+  };
+}
+
+test('--fresh-claim-gate CLI: one evaluation probes the refs once and the gate matches the top-level routing', () => {
+  const sandbox = localRefSandbox();
+  try {
+    sandbox.git(['branch', 'issue/1-other', 'origin/main']);
+    const read = traceCliRun(sandbox, []);
+    assert.equal(read.status, 0, read.stderr);
+    assert.equal(read.lsRemoteCalls, 1);
+    assert.equal(read.output.state, 'local_branch_present');
+    assert.equal(read.output.reason, 'local-branch-unexpected');
+    assert.equal(read.output.evidence.local_branch?.status, 'unexpected');
+    assert.equal(read.output.fresh_claim_gate.verdict, 'local-branch-present');
+    assert.equal(read.output.fresh_claim_gate.winning_claim_id, null);
+
+    // A --claim-id keeps the owner view at the top level, with no probe of its
+    // own; the gate still evaluates once, so the refs are read once in total.
+    const owner = traceCliRun(sandbox, ['--claim-id', 'claim-someone-else']);
+    assert.equal(owner.status, 0, owner.stderr);
+    assert.equal(owner.lsRemoteCalls, 1);
+    assert.equal(owner.output.state, 'unclaimed');
+    assert.equal(Object.hasOwn(owner.output.evidence, 'local_branch'), false);
+    assert.equal(owner.output.fresh_claim_gate.verdict, 'local-branch-present');
   } finally {
     sandbox.restore();
   }
