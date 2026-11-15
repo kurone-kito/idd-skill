@@ -8461,7 +8461,7 @@ test('inspectLocalBranchRefs: no ref reads one listing and no remote', () => {
   });
   assert.deepEqual(git.calls, [
     'worktree list --porcelain -z',
-    'for-each-ref --format=%(refname) %(objectname) refs/heads/issue/24-*',
+    'for-each-ref --format=%(refname) %(objectname) refs/heads/issue/',
   ]);
 });
 
@@ -8487,7 +8487,7 @@ test('inspectLocalBranchRefs: an unreadable worktree scan fails closed once a lo
   });
   assert.deepEqual(none.calls, [
     'worktree list --porcelain -z',
-    'for-each-ref --format=%(refname) %(objectname) refs/heads/issue/24-*',
+    'for-each-ref --format=%(refname) %(objectname) refs/heads/issue/',
   ]);
 
   // Every ref is on origin: A5(e)'s remote scan owns it, as with a readable scan.
@@ -8535,6 +8535,25 @@ test('inspectLocalBranchRefs: remote-backed refs are excluded, local-only refs k
   );
 });
 
+test('inspectLocalBranchRefs: a nested branch counts, another issue and a lookalike do not', () => {
+  const git = scriptedGit({
+    refs: [
+      `refs/heads/issue/2-other ${MOVED_TIP}`,
+      `refs/heads/issue/24-task/subtask ${LOCAL_TIP}`,
+      `refs/heads/issue/240-lookalike not-even-an-object-id`,
+      '',
+    ].join('\n'),
+  });
+  assert.deepEqual(inspectLocalBranchRefs(24, '/primary', {}, git.execute), {
+    status: 'read',
+    refs: [refOf('issue/24-task/subtask')],
+  });
+  assert.deepEqual(
+    git.calls.filter((call) => call.startsWith('ls-remote')),
+    ['ls-remote --heads origin refs/heads/issue/24-task/subtask'],
+  );
+});
+
 test('inspectLocalBranchRefs: a failed read is unreadable and never prints git stderr', () => {
   const leaky = Object.assign(
     new Error('fatal: unable to access https://user:secret@example.com/r.git'),
@@ -8569,8 +8588,8 @@ test('inspectLocalBranchRefs: a failed read is unreadable and never prints git s
       /printed a malformed line/,
     ],
     [
-      'the listing names a ref outside the prefix',
-      { refs: `refs/heads/issue/240-task ${LOCAL_TIP}\n` },
+      'the listing has an extra field on one of its lines',
+      { refs: `refs/heads/issue/24-task ${LOCAL_TIP} extra\n` },
       /printed a malformed line/,
     ],
   ];
@@ -8618,15 +8637,21 @@ test('inspectLocalBranchRefs: a real clone separates local-only, remote-backed, 
 
     const base = sandbox.git(['rev-parse', 'origin/main']);
     sandbox.git(['branch', 'issue/1-local', 'origin/main']);
+    // A nested ref under the issue prefix counts too: a glob would miss it.
+    sandbox.git(['branch', 'issue/1-nested/sub', 'origin/main']);
     // Another issue's ref and a prefix lookalike never count.
     sandbox.git(['branch', 'issue/10-lookalike', 'origin/main']);
     sandbox.git(['branch', 'issue/2-other', 'origin/main']);
     assert.deepEqual(probe(), {
       status: 'read',
-      refs: [{ branch: 'issue/1-local', tip: base }],
+      refs: [
+        { branch: 'issue/1-local', tip: base },
+        { branch: 'issue/1-nested/sub', tip: base },
+      ],
     });
 
     sandbox.git(['push', '--quiet', 'origin', 'issue/1-local']);
+    sandbox.git(['push', '--quiet', 'origin', 'issue/1-nested/sub']);
     assert.deepEqual(probe(), { status: 'read', refs: [] });
 
     sandbox.git(['branch', 'issue/1-second', 'origin/main']);

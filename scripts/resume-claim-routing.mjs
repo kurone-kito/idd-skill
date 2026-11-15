@@ -1429,7 +1429,13 @@ export function inspectLocalBranchRefs(
     listing = String(
       execute(
         'git',
-        ['for-each-ref', '--format=%(refname) %(objectname)', `${prefix}*`],
+        // The whole `issue/` namespace: a glob such as `<prefix>*` does not
+        // cross a slash, so it would miss a nested `issue/<n>-task/subtask`.
+        [
+          'for-each-ref',
+          '--format=%(refname) %(objectname)',
+          'refs/heads/issue/',
+        ],
         { cwd, encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'] },
       ),
     );
@@ -1445,12 +1451,11 @@ export function inspectLocalBranchRefs(
       continue;
     }
     const [ref, tip, ...rest] = line.split(' ');
-    if (
-      rest.length > 0 ||
-      !ref?.startsWith(prefix) ||
-      !tip ||
-      !/^[0-9a-f]{40,64}$/u.test(tip)
-    ) {
+    // Another issue's ref (or a lookalike such as `issue/<n>0-x`) is not ours.
+    if (ref === undefined || !ref.startsWith(prefix)) {
+      continue;
+    }
+    if (rest.length > 0 || !tip || !/^[0-9a-f]{40,64}$/u.test(tip)) {
       return {
         status: 'unreadable',
         reason: 'git for-each-ref printed a malformed line',
