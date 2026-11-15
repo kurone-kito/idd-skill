@@ -13,8 +13,8 @@ Lite profile for helper-enabled weak/local models. Read this file after
 `ready` is `true` or `false`. This file's job is to read the
 repository's recorded `mergePolicy`, then draft and post a handoff
 comment quoting that evidence and decide whether to release the worker
-claim; a resolved `fully_autonomous_merge` instead continues at
-`idd-merge-handoff.instructions.md`, which then decides. It never
+claim; a resolved `fully_autonomous_merge` with `ready: true` instead
+continues at `idd-merge-handoff.instructions.md`, which then decides. It never
 evaluates whether autonomous merge should
 proceed and never continues to `idd-merge.instructions.md` (F3-F5)
 itself or runs `gh pr merge`.

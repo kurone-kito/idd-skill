@@ -26,27 +26,28 @@ gate, the routing below still decides, and `ready: false` holds.
      `separate_merge_agent` actor path in step 5, or the
      `fully_autonomous_merge` policy path in step 6. Other paths must
      stop.
-2. Resolve the recorded policy to one enum; steps 3-6 use it. After
-   `git fetch origin {development-branch}`, a non-zero exit from
-   `git diff --quiet origin/{development-branch} -- .github/idd/config.json`
-   means the PR changes its own policy. With helper runtime, run the
-   profile-selected form of
+2. Resolve the recorded policy to one enum; steps 3-6 use it. Run
+   `git fetch origin {development-branch}` and
+   `git diff --quiet origin/{development-branch} -- .github/idd/config.json`;
+   a failed fetch or a non-zero diff is an unknown policy (step 3). With
+   helper runtime, run the profile-selected form of
    `node scripts/idd-effective-config.mjs --resolve-merge-policy` and use
    its stdout; pass `--model-tier <tier>` only when the operator's own
-   instructions named the tier, never invent one; after a helper
+   session instructions named the tier, never invent one; after a helper
    failure, do not parse the raw object. On `instructions-only`, read it
    from repository documentation (none: `human_merge`). A string is the
    enum and reads no tier. An object needs exactly
    `frontier`, `middle-tier`, and `lightweight`, each a known enum, and
    the `IDD_MODEL_TIER` environment variable (never inferred) names its
-   property. A changed policy, a non-zero helper exit, a missing or other
-   tier name, or any other value is an unknown policy (step 3).
+   property. A non-zero helper exit, a missing or other tier name, or
+   any other value is an unknown policy (step 3).
 3. If the resolved value is not one of `fully_autonomous_merge`,
    `human_merge`, or `separate_merge_agent`, treat it as an unknown merge
-   policy: stop, post a hold comment, and request maintainer decision.
+   policy: stop, post a hold comment naming the cause, and request
+   maintainer decision.
 4. If the resolved policy is `human_merge`, stop before the final
-   freshness fetch and before `gh pr merge`. After claim revalidation,
-   post a handoff summary comment that includes:
+   freshness fetch and before `gh pr merge`. Post a handoff summary
+   comment that includes:
    - PR number and branch
    - full F2 snapshot (`{f2-head-SHA}`, `{f2-max-activity-updatedAt}`,
      `{f2-total-item-count}`, `{f2-latest-ci-completed-at|none}`)
