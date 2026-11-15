@@ -97,22 +97,29 @@ class StubStore implements ProvisionalDecisionStore {
   private readonly comments: ProvisionalDecisionHistoryComment[];
   private readonly hideAppends: boolean;
   private readonly failRead: boolean;
+  private readonly incomplete: boolean;
 
   constructor(
     comments: readonly ProvisionalDecisionHistoryComment[],
     options: {
       readonly hideAppends?: boolean;
       readonly failRead?: boolean;
+      readonly incomplete?: boolean;
     } = {},
   ) {
     this.comments = [...comments];
     this.hideAppends = options.hideAppends === true;
     this.failRead = options.failRead === true;
+    this.incomplete = options.incomplete === true;
   }
 
   async readHistory(): Promise<ProvisionalDecisionHistoryRead> {
     if (this.failRead) throw new Error('gh transport failure (simulated)');
-    return { comments: [...this.comments], complete: true, serverDate };
+    return {
+      comments: [...this.comments],
+      complete: !this.incomplete,
+      serverDate,
+    };
   }
 
   async readSourceIssue(): Promise<ProvisionalDecisionSourceIssueRead> {
@@ -155,9 +162,13 @@ class StubStore implements ProvisionalDecisionStore {
 
 function trustSnapshot(
   master: 'enabled' | 'disabled',
+  decisionIssue: 'enabled' | 'class-off',
 ): TrustedAutoDecideSnapshot {
   const classes = Object.fromEntries(
-    AUTO_DECIDE_CLASSES.map((cls) => [cls, 'class-off']),
+    AUTO_DECIDE_CLASSES.map((cls) => [
+      cls,
+      cls === 'decisionIssue' ? decisionIssue : 'class-off',
+    ]),
   ) as TrustedAutoDecideReport['classes'];
   return {
     report: {
@@ -174,6 +185,9 @@ function trustSnapshot(
 /** Capture stdout, the store factory's inputs, and the trust reads. */
 function harness(options: {
   master?: 'enabled' | 'disabled';
+  /** Master switch per read, in order; the last value repeats. */
+  masterSequence?: readonly ('enabled' | 'disabled')[];
+  decisionIssue?: 'enabled' | 'class-off';
   store?: StubStore;
 }) {
   const out: string[] = [];
@@ -186,7 +200,12 @@ function harness(options: {
     },
     readTrust: (input) => {
       trustReads.push({ owner: input.owner, repo: input.repo });
-      return trustSnapshot(options.master ?? 'enabled');
+      const sequence = options.masterSequence ?? [];
+      const master =
+        sequence[Math.min(trustReads.length - 1, sequence.length - 1)] ??
+        options.master ??
+        'enabled';
+      return trustSnapshot(master, options.decisionIssue ?? 'enabled');
     },
     createStore: (input) => {
       created.push({
@@ -498,4 +517,51 @@ test('a failed history read for a work transition is a recovery hold (exit 3)', 
   assert.equal(report.action, 'recovery-hold');
   assert.match(String(report.reason), /gh transport failure \(simulated\)/u);
   assert.deepEqual(h.store.appended, []);
+});
+
+test('a disabled decisionIssue class refuses the write even with the master switch on', async () => {
+  const h = harness({ decisionIssue: 'class-off' });
+  const outcome = await runProvisionalDecisionCommandCli(
+    argv(requestFile(selectedRequest), ['--apply']),
+    h.deps,
+  );
+  assert.equal(exitCodeOf(outcome), 4);
+  const report = lastReport(h.out);
+  assert.equal(report.action, 'fix-input');
+  assert.match(
+    String(report.reason),
+    /trusted dangerouslyAutoDecide policy is not enabled/u,
+  );
+  assert.deepEqual(h.store.appended, []);
+});
+
+test('authority revoked between the planning read and the write blocks the write (exit 3)', async () => {
+  const h = harness({ masterSequence: ['enabled', 'disabled'] });
+  const outcome = await runProvisionalDecisionCommandCli(
+    argv(requestFile(selectedRequest), ['--apply']),
+    h.deps,
+  );
+  assert.equal(exitCodeOf(outcome), 3);
+  assert.equal(lastReport(h.out).action, 'recovery-hold');
+  assert.deepEqual(h.store.appended, []);
+});
+
+test('an incomplete history read for a work transition is a recovery hold (exit 3)', async () => {
+  const store = new StubStore(baseComments(), { incomplete: true });
+  const h = harness({ store });
+  const outcome = await runProvisionalDecisionCommandCli(
+    argv(
+      requestFile({
+        type: 'work-started',
+        claimId,
+        worktreeBranch: branch,
+        planCommentUrl: evidenceUrl,
+      }),
+    ),
+    h.deps,
+  );
+  assert.equal(exitCodeOf(outcome), 3);
+  const report = lastReport(h.out);
+  assert.equal(report.action, 'recovery-hold');
+  assert.match(String(report.reason), /incomplete or undated/u);
 });

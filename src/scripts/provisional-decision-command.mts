@@ -18,7 +18,10 @@ import {
   isHelperErrorEnvelopeEnabled,
   runHelperCli,
 } from './helper-cli-runner.mts';
-import { readTrustedAutoDecideWithConfig } from './idd-config.mts';
+import {
+  readTrustedAutoDecideWithConfig,
+  type TrustedAutoDecideReport,
+} from './idd-config.mts';
 import {
   type ProvisionalDecisionBaseline,
   type ProvisionalDecisionCommandRequest,
@@ -309,11 +312,58 @@ function validateRequestShape(raw: unknown): {
   return { type: requestType, raw };
 }
 
+/**
+ * The authority to act: the master `dangerouslyAutoDecide` switch and the
+ * decision-issue class must both be enabled. An unreadable report is not.
+ */
+function authorityFrom(report: TrustedAutoDecideReport): boolean {
+  return (
+    report.master === 'enabled' && report.classes.decisionIssue === 'enabled'
+  );
+}
+
+/**
+ * Re-check the authority before every append and label write. The planner's
+ * gates use the trust read taken at the start, so a revocation between that
+ * read and a write must still block the write.
+ */
+function authorityCheckedStore(
+  store: ProvisionalDecisionStore,
+  authorityNow: () => boolean,
+): ProvisionalDecisionStore {
+  return {
+    readHistory: () => store.readHistory(),
+    readSourceIssue: () => store.readSourceIssue(),
+    readPullRequest: (url) => store.readPullRequest(url),
+    async appendRecordBody(recordId, body) {
+      if (!authorityNow()) {
+        throw new Error(
+          'trusted decision authority was withdrawn before the record append',
+        );
+      }
+      return store.appendRecordBody(recordId, body);
+    },
+    async applyOrReadDecisionLabel(input) {
+      if (input.apply && !authorityNow()) {
+        throw new Error(
+          'trusted decision authority was withdrawn before the label write',
+        );
+      }
+      return store.applyOrReadDecisionLabel(input);
+    },
+  };
+}
+
 /** The newest trusted, parseable decision record on the issue, if any. */
 async function latestStoredRecord(
   store: ProvisionalDecisionStore,
 ): Promise<ProvisionalDecisionRecord | null> {
   const history = await store.readHistory();
+  // An incomplete or undated history is an unreliable read. It is reported as
+  // a read failure (a recovery hold), not as a request error.
+  if (!history.complete || !Number.isFinite(Date.parse(history.serverDate))) {
+    throw new Error('the issue history read was incomplete or undated');
+  }
   let latest: ProvisionalDecisionRecord | null = null;
   for (const comment of history.comments) {
     if (!comment.trustedAuthor || comment.edited) continue;
@@ -594,12 +644,13 @@ export async function runProvisionalDecisionCommandCli(
     policy: trust.policyConfig,
   });
 
+  const policyTrusted = authorityFrom(trust.report);
   let request: ProvisionalDecisionCommandRequest;
   try {
     request = await buildRequest(shape, {
       repository: args.repository,
       issueNumber: args.issueNumber,
-      policyTrusted: trust.report.master === 'enabled',
+      policyTrusted,
       store,
     });
   } catch (error) {
@@ -611,7 +662,10 @@ export async function runProvisionalDecisionCommandCli(
     return readFailureOutcome(error, args.apply, deps);
   }
 
-  const result = await runProvisionalDecisionCommand(request, store, {
+  const guarded = authorityCheckedStore(store, () =>
+    authorityFrom(deps.readTrust({ owner, repo }).report),
+  );
+  const result = await runProvisionalDecisionCommand(request, guarded, {
     apply: args.apply,
   });
   writeReport(reportFor(result, args.apply), deps);
