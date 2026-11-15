@@ -1216,30 +1216,30 @@ The source issue needs no active claim and a trusted `scope-overrun` record,
 and a post-push pull request must still be a draft at the recorded head, so a
 head pushed after the decision cannot be closed unseen.
 
-A released set is one whose every member is open, unclaimed, and unlabeled, with
-the anchor's trusted `release-complete` marker for the latest generation of this
-set present and the set's snapshot re-fetched and verified. A mixed set, with
-some members labeled and some not, is not a released set: `release-complete` is
-set-level, and the autonomy contract permits it only after every target has lost
-its label, so a mixed set fails closed. The roadmap is a member too: after
-release it carries no label either, so the same rule covers it, and the
-child-mapped SHA check does not apply to it. That marker closes its own
-generation, so an earlier generation's marker does not count. Every child-mapped
-SHA in the trusted inventory must appear in a `(cherry picked from commit
-<sha>)` trailer on the child's branch, read with `git log --format=%B
-{development-branch}..<child-branch>`. The transfer checks the same trailer in
-`<recorded-HEAD>..HEAD` of the child's worktree. The preflight has no trusted
-record of a released child's pre-pick HEAD, so it reads the branch range
-instead. A child with no mapped SHA fails, so an empty mapping is never
-confirmed. A later revert of a pick keeps its trailer in history, and this check
-does not detect it. That limit is accepted here. Before either cleanup path, the
-route re-runs the whole preflight item, re-fetching the set snapshot, because
-LWR runs after the preflight and a pre-first-push overrun skips the PR close.
-The roadmap has no `Split out of`, branch, or trailers, so only its own state
-applies to it. Finalize never touches a child's worktree, so a dirty child
-worktree or commits beyond the transfer do not block it. Cleanup still reports
-the PR state, the LWR report, and the next action, and never bypasses the LWR
-preservation or lock gates.
+A released set is one whose every member is open and unclaimed, without the
+authoring label, with the anchor's trusted `release-complete` marker for the
+latest generation of this set present and the set's snapshot re-fetched and
+verified. A mixed set, with some members carrying the authoring label and some
+not, is not a released set: `release-complete` is set-level, and the autonomy
+contract permits it only after every target has lost its label, so a mixed set
+fails closed. The roadmap is a member too: after release it carries no label
+either, so the same rule covers it, and the child-mapped SHA check does not
+apply to it. That marker closes its own generation, so an earlier generation's
+marker does not count. Every child-mapped SHA in the trusted inventory must
+appear in a `(cherry picked from commit <sha>)` trailer on the child's branch,
+read with `git log --format=%B {development-branch}..<child-branch>`. The
+transfer checks the same trailer in `<recorded-HEAD>..HEAD` of the child's
+worktree. The preflight has no trusted record of a released child's pre-pick
+HEAD, so it reads the branch range instead. A child with no mapped SHA fails, so
+an empty mapping is never confirmed. A later revert of a pick keeps its trailer
+in history, and this check does not detect it. That limit is accepted here.
+Before either cleanup path, the route re-runs the whole preflight item,
+re-fetching the set snapshot, because LWR runs after the preflight and a
+pre-first-push overrun skips the PR close. The roadmap has no `Split out of`,
+branch, or trailers, so only its own state applies to it. Finalize never touches
+a child's worktree, so a dirty child worktree or commits beyond the transfer do
+not block it. Cleanup still reports the PR state, the LWR report, and the next
+action, and never bypasses the LWR preservation or lock gates.
 
 The order of writes follows what each step protects. The pull request closes
 first and is re-read at the same head before LWR starts, because LWR would
@@ -1581,9 +1581,10 @@ rule. The durable record contract (a marker type and a helper that parses and
 reads it back) is a follow-up, because it adds a marker and a helper outside
 this change's scope.
 
-Finalize never transfers, because the replacement children are not claimed yet.
-A child picks from its own worktree after its fresh claim, one SHA per `git
-cherry-pick -x <sha>`. It records `HEAD` before the pick and aborts only when
+Finalize never transfers: a child picks only under its own fresh claim, so a
+released child must already carry its trailers when finalize runs. A child picks
+from its own worktree after its fresh claim, one SHA per `git cherry-pick -x
+<sha>`. It records `HEAD` before the pick and aborts only when
 `CHERRY_PICK_HEAD` exists. It confirms each pick by the `(cherry picked from
 commit <sha>)` trailer in `git log <recorded-HEAD>..HEAD`, not by patch-id,
 because a conflict-resolved pick differs from its source. It retries only the

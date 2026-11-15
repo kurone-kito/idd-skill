@@ -232,10 +232,10 @@ report it.
    roadmap plus its `## Tracks`; every member is open and unclaimed, and either
    every member carries the authoring label (held), or the anchor's trusted
    `release-complete` marker for the latest generation of this set is present,
-   its snapshot re-fetched and verified, and no member carries a label
-   (released); each child has at least one child-mapped SHA, and every
+   its snapshot re-fetched and verified, and no member carries the authoring
+   label (released); each child has at least one child-mapped SHA, and every
    child-mapped SHA is confirmed by a `(cherry picked from commit <sha>)`
-   trailer in `git log --format=%B {development-branch}..<child-branch>`; each
+   trailer in `git log --format=%B "{development-branch}..<child-branch>"`; each
    child says `Split out of #{issue-number}`; and the set excludes this issue.
    The source issue is open and unclaimed, with a trusted `scope-overrun` record
    and the needs-decision label (`labels.needsDecisionLabelName`; pre-first-push
@@ -248,7 +248,7 @@ report it.
    requires: refresh the base first, then match the live SHAs, the `-` path
    checks, and exactly one trusted, unedited comment. A missing, stale, or unmet
    mapping blocks steps 2 and 3. Steps 3 and 4 also wait until each child-mapped
-   commit is confirmed. Before step 2 or step 3, re-run item 1 in full,
+   commit is confirmed. Before step 2, step 3, or step 4, re-run item 1 in full,
    re-fetching the set snapshot; any change stops.
 2. **Close the PR** (post-push): `gh pr close <pr>`; verify closed, unmerged, at
    that head. Re-read before retrying an uncertain close.
