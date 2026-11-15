@@ -1707,7 +1707,10 @@ commit stops the inventory and cleanup, and the worktree and issue stay as they
 are. Post the inventory on the source issue with the branch, the base and head
 SHA, and one line per SHA that records pushed or unpushed. Child issue numbers
 come from the authoring set (`authoring-set-members`), not from this comment, so
-the posted inventory is never edited.
+the posted inventory is never edited. The machine record is posted with
+`post-idd-marker --type commit-inventory`. A failed or uncertain POST stops
+cleanup (preventive; no observed incident yet), and the comments are read back
+before any retry, because a second live record stops cleanup.
 
 Before `--apply`, the live `git rev-list` set and each `-` path check must match
 the posted inventory. LWR writes `refs/idd-lwr/<branch>` whenever the branch has

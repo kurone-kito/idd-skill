@@ -489,10 +489,11 @@ pushed/unpushed). Before LWR `--apply`, the live list must match the posted
 inventory. After it, if unpushed SHAs exist, the backup ref must exist, resolve
 to the pre-apply tip, and contain them; pushed SHAs must be ancestors of
 `origin/<branch>`; else stop. Child numbers come from the authoring set. Cleanup
-needs exactly one trusted, unedited inventory record for the live head. The
-machine record (`<prefix>-commit-inventory`, posted with `post-idd-marker --type
-commit-inventory`) is that record when one exists for the live head. Otherwise
-the record is exactly one trusted, unedited prose comment. An edited, untrusted,
+needs exactly one trusted, unedited inventory record for the live head. Post
+the machine record (`<prefix>-commit-inventory`, `post-idd-marker --type
+commit-inventory`); a failed or uncertain POST stops cleanup. It is that record
+when one exists for the live head. Only when none exists is the record exactly
+one trusted, unedited prose comment. An edited, untrusted,
 malformed, wrong-issue, repeated, or unknown-edit-state record stops cleanup,
 and so does a trusted, unedited record for an older head when none names the
 live head. None of these falls back to prose. A child confirms each pick by its
