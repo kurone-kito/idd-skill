@@ -8,6 +8,7 @@
 
 import { Buffer } from 'node:buffer';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   ADVISORY_CONVERGENCE_WORKFLOW_PATH,
   resolveSelfReferentialTriggerFiles,
@@ -41,6 +42,7 @@ import { isGeneratedMirrorOf } from './consistency-helpers.mts';
 import {
   extractDeferSourceRefsIssueNumbers,
   hasDeferSourceMarker,
+  parseSameRepositoryPullRequestNumber,
 } from './discover-readiness-check.mts';
 import { parseCandidateFiles } from './discover-shared-file-overlap.mts';
 import { buildDispositionPlan } from './disposition-non-review-notices.mts';
@@ -92,6 +94,7 @@ import type {
 import {
   buildEffectiveTrustedMarkerLogins,
   buildPreMergeReadinessSummary,
+  classifyCommentEditState,
   classifyIddPrComment,
   classifyPrLoopMembership,
   DEFAULT_ADVISORY_BOT_LOGINS,
@@ -124,9 +127,23 @@ import {
 } from './provider-outage-declaration.mts';
 import type {
   ProviderComment,
+  ProviderMergedChangeRequestMeta,
   ProviderPort,
   ProviderReviewThreadWithComments,
 } from './provider-port.mts';
+import { buildVerifiedClaimLineage } from './provisional-claim-lineage.mts';
+import type {
+  BoundProvisionalDecision,
+  ProvisionalBindingStopReason,
+  ProvisionalDecisionComment,
+  VerifiedProvisionalWork,
+} from './provisional-decision-state.mts';
+import {
+  bindProvisionalDecision,
+  PROVISIONAL_DECISION_RECORD_MARKER,
+  parseProvisionalDecisionRecordComment,
+  replayProvisionalDecisionHistory,
+} from './provisional-decision-state.mts';
 import { stripBlockQuotesAndLazyContinuations } from './resume-route-selection.mts';
 import {
   fetchHeadObservedAt,
@@ -493,6 +510,12 @@ export type PreMergeReadinessReport = Omit<
   // without an agent ID still fails closed through the stale-request-recovery
   // blocker; the claimless `none` sentinel has no blocker from this rule.
   staleRequestRecovery?: { action: string; reason: string };
+  /**
+   * kurone-kito/idd-skill#5237: the trusted provisional read of the claimed
+   * source, present on every claim-bound run and omitted under `--claimless`.
+   * Evidence only: it never adds a blocker or changes `ready`.
+   */
+  provisionalRead?: ProvisionalReadReport;
   trustedMarkerActors: string[];
   trustedMarkerActorsSource: TrustedMarkerActorResolution['source'];
 };
@@ -739,6 +762,260 @@ export function readScopeOverrunMergeBaseSha(
       `scope-overrun audit cannot resolve the PR merge base: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
+}
+
+/** Why a trusted provisional read did not bind (a stop is data, not a blocker). */
+export type ProvisionalReadStopReason =
+  | ProvisionalBindingStopReason
+  | 'record-untrusted'
+  | 'record-edited'
+  | 'history-unreadable'
+  | 'claim-unverified'
+  | 'completion-unverified';
+
+/**
+ * Result of the trusted provisional read for the claimed source. It is
+ * evidence for the closing-set exception (#4532), never a decision: it adds
+ * no blocker, changes no `ready` verdict, and grants no closing-set
+ * treatment by itself.
+ */
+export type ProvisionalReadReport =
+  | { status: 'unavailable'; reason: 'instructions-only' }
+  | {
+      status: 'stopped';
+      reason: ProvisionalReadStopReason;
+      replayIssues?: string[];
+    }
+  | {
+      status: 'bound';
+      source: { repository: string; issueNumber: number };
+      pullRequestNumber: number;
+      headSha: string;
+      headRef: string;
+      claimId: string;
+      branch: string;
+      bundleGeneration: number;
+      decisions: BoundProvisionalDecision[];
+    };
+
+/** Live evidence for one provisional read of the claimed source. */
+export interface ProvisionalReadinessInput {
+  /** Trusted-base `helperRuntime.profile`; absent means instructions-only. */
+  helperRuntimeProfile: string | undefined;
+  owner: string;
+  repo: string;
+  issueNumber: number;
+  /** The claim this session owns (`--claim-id`). */
+  claimId: string;
+  pullRequestNumber: number;
+  headSha: string;
+  /** The claimed issue's complete oldest-first comments, edit state included. */
+  comments: readonly ProviderComment[];
+  trustedMarkerLogins: readonly string[];
+  staleAgeMs: number;
+  readIssue(): { title?: unknown; body?: unknown; updatedAt?: unknown } | null;
+  readHeadRef(): string;
+  readMergedPullRequest(number: number): ProviderMergedChangeRequestMeta | null;
+  /** Injectable for tests; the real replay by default. */
+  replay?: typeof replayProvisionalDecisionHistory;
+}
+
+function provisionalStop(
+  reason: ProvisionalReadStopReason,
+  replayIssues?: string[],
+): ProvisionalReadReport {
+  return replayIssues === undefined
+    ? { status: 'stopped', reason }
+    : { status: 'stopped', reason, replayIssues };
+}
+
+/**
+ * Read the claimed source's trusted provisional history and bind it to this
+ * claim and the live PR head. Fails closed with a named stop reason and never
+ * throws. With no record marker in the history it stops at once with no
+ * further read, so an ordinary issue costs nothing; the instructions-only
+ * profile never calls the replay.
+ */
+export function resolveProvisionalReadiness(
+  input: ProvisionalReadinessInput,
+): ProvisionalReadReport {
+  if (
+    input.helperRuntimeProfile === undefined ||
+    input.helperRuntimeProfile === 'instructions-only'
+  ) {
+    return { status: 'unavailable', reason: 'instructions-only' };
+  }
+  try {
+    return readProvisionalState(input);
+  } catch {
+    return provisionalStop('history-unreadable');
+  }
+}
+
+function readProvisionalState(
+  input: ProvisionalReadinessInput,
+): ProvisionalReadReport {
+  const normalizeLogin = (login: unknown) =>
+    String(login ?? '')
+      .trim()
+      .toLowerCase();
+  const trusted = new Set(input.trustedMarkerLogins.map(normalizeLogin));
+  const isTrusted = (comment: ProviderComment) =>
+    comment.authorLogin !== '' &&
+    trusted.has(normalizeLogin(comment.authorLogin));
+  const recordComments = input.comments.filter((comment) =>
+    String(comment.body ?? '').startsWith(PROVISIONAL_DECISION_RECORD_MARKER),
+  );
+  if (recordComments.length === 0) return provisionalStop('record-missing');
+  // As the Discover reader does, an untrusted or edited record marker refuses
+  // the whole history: it must not be skipped in favor of another record.
+  for (const comment of recordComments) {
+    if (!isTrusted(comment)) return provisionalStop('record-untrusted');
+    const editState = classifyCommentEditState({
+      lastEditedAt: comment.lastEditedAt,
+    });
+    if (editState === 'edited') return provisionalStop('record-edited');
+    if (editState === 'unknown') return provisionalStop('history-unreadable');
+  }
+  if (input.claimId === '' || input.claimId === 'none') {
+    return provisionalStop('claim-unverified');
+  }
+
+  const issue = input.readIssue();
+  const title = issue?.title;
+  const updatedAt = String(issue?.updatedAt ?? '');
+  if (
+    issue === null ||
+    typeof title !== 'string' ||
+    title === '' ||
+    updatedAt === '' ||
+    Number.isNaN(Date.parse(updatedAt))
+  ) {
+    return provisionalStop('history-unreadable');
+  }
+  const body = String(issue.body ?? '');
+  const comments: ProvisionalDecisionComment[] = input.comments.map(
+    (comment) => ({
+      id: String(comment.id),
+      url: `https://github.com/${input.owner}/${input.repo}/issues/${input.issueNumber}#issuecomment-${comment.id}`,
+      body: comment.body,
+      authorLogin: comment.authorLogin,
+      createdAt: comment.createdAt,
+      edited:
+        classifyCommentEditState({ lastEditedAt: comment.lastEditedAt }) !==
+        'unedited',
+      trustedAuthor: isTrusted(comment),
+    }),
+  );
+  const lineage = buildVerifiedClaimLineage({
+    comments: input.comments.map((comment, index) => ({
+      id: String(comment.id),
+      url: comments[index]?.url ?? '',
+      body: comment.body,
+      createdAt: comment.createdAt,
+      authorLogin: comment.authorLogin,
+      lastEditedAt: comment.lastEditedAt,
+      trustedAuthor: isTrusted(comment),
+    })),
+    completeHistory: true,
+    staleAgeMs: input.staleAgeMs,
+    trustedMarkerLogins: [...input.trustedMarkerLogins],
+  });
+  if (lineage.status !== 'ok') return provisionalStop('claim-unverified');
+
+  // Replay accepts a `work-completed` record only with independent proof that
+  // the merged PR carried exactly that head and merge commit.
+  const verifiedWork: VerifiedProvisionalWork[] = [];
+  const mergedByPullRequest = new Map<
+    number,
+    ProviderMergedChangeRequestMeta | null
+  >();
+  for (const comment of comments) {
+    if (!comment.trustedAuthor || comment.edited) continue;
+    const parsed = parseProvisionalDecisionRecordComment(comment.body);
+    if (!parsed.ok || parsed.record.event.type !== 'work-completed') continue;
+    const result = parsed.record.event.result as Record<string, unknown>;
+    const pullRequestNumber = parseSameRepositoryPullRequestNumber(
+      result.reference,
+      input.owner,
+      input.repo,
+    );
+    if (
+      result.kind !== 'merged-pull-request' ||
+      pullRequestNumber === null ||
+      typeof result.verifiedAt !== 'string' ||
+      typeof result.headSha !== 'string' ||
+      typeof result.mergeCommitSha !== 'string'
+    ) {
+      return provisionalStop('completion-unverified');
+    }
+    if (!mergedByPullRequest.has(pullRequestNumber)) {
+      mergedByPullRequest.set(
+        pullRequestNumber,
+        input.readMergedPullRequest(pullRequestNumber),
+      );
+    }
+    const merged = mergedByPullRequest.get(pullRequestNumber);
+    if (
+      merged?.merged !== true ||
+      merged.headRefOid !== result.headSha ||
+      merged.mergeCommitOid !== result.mergeCommitSha
+    ) {
+      return provisionalStop('completion-unverified');
+    }
+    verifiedWork.push({
+      source: parsed.record.source,
+      bundleGeneration: parsed.record.bundleGeneration,
+      decisionGeneration: parsed.record.decisionGeneration,
+      reference: String(result.reference),
+      verifiedAt: result.verifiedAt,
+      headSha: result.headSha,
+      mergeCommitSha: result.mergeCommitSha,
+      executionCriteriaSatisfied: true,
+    });
+  }
+
+  const repository = `${input.owner}/${input.repo}`.toLowerCase();
+  const replay = (input.replay ?? replayProvisionalDecisionHistory)({
+    comments,
+    completeHistory: true,
+    currentSource: {
+      repository,
+      issueNumber: input.issueNumber,
+      snapshot: {
+        title,
+        bodySha256: createHash('sha256').update(body).digest('hex'),
+        updatedAt,
+      },
+    },
+    verifiedClaimLineage: lineage.claims,
+    verifiedWork,
+    verifiedReworkRoadmaps: [],
+  });
+  if (!replay.valid) {
+    return provisionalStop('replay-invalid', [
+      ...new Set(replay.issues.map((entry) => entry.code)),
+    ]);
+  }
+  const headRef = input.readHeadRef().trim();
+  if (headRef === '') return provisionalStop('history-unreadable');
+  const binding = bindProvisionalDecision(replay, {
+    claimId: input.claimId,
+    headRef,
+    claimChain: lineage.claims,
+  });
+  if (!binding.bound) return provisionalStop(binding.reason);
+  return {
+    status: 'bound',
+    source: { repository, issueNumber: input.issueNumber },
+    pullRequestNumber: input.pullRequestNumber,
+    headSha: input.headSha.toLowerCase(),
+    headRef,
+    claimId: binding.claimId,
+    branch: binding.branch,
+    bundleGeneration: binding.bundleGeneration,
+    decisions: [...binding.decisions],
+  };
 }
 
 /**
@@ -1344,15 +1621,17 @@ export function collectPreMergeReadiness(
   const comments = port
     .listWorkItemComments(args.prNumber, { includeEditState: true })
     .map(toIssueCommentPayload);
-  const claimComments = args.claimless
+  // The raw provider comments are kept for the trusted provisional read
+  // (kurone-kito/idd-skill#5237), which needs the same complete, edit-state
+  // history the claim gate reads.
+  const claimProviderComments: ProviderComment[] = args.claimless
     ? []
-    : port
-        // Non-null: the earlier `!args.claimless && !args.claimIssueNumber`
-        // guard already rejected this branch with a missing claim issue.
-        .listWorkItemComments(args.claimIssueNumber as number, {
-          includeEditState: true,
-        })
-        .map(toIssueCommentPayload);
+    : // Non-null: the earlier `!args.claimless && !args.claimIssueNumber`
+      // guard already rejected this branch with a missing claim issue.
+      port.listWorkItemComments(args.claimIssueNumber as number, {
+        includeEditState: true,
+      });
+  const claimComments = claimProviderComments.map(toIssueCommentPayload);
   // kurone-kito/idd-skill#3328: hoisted from further below (it used to sit
   // just before `normalizedReviews`) -- `classifyPrLoopMembership` below
   // needs the `CommentLike`-shaped comments too, and this derivation has no
@@ -1740,6 +2019,40 @@ export function collectPreMergeReadiness(
           )
         ? [args.claimIssueNumber as number]
         : []);
+  // kurone-kito/idd-skill#5237: the trusted provisional read of the claimed
+  // source, taken before the closing-set evidence is built. `normalizePolicyConfig`
+  // does not carry `helperRuntime` through its normalized shape (that section
+  // is validated, not defaulted, elsewhere), and `IddConfig`'s index signature
+  // already types this access as `unknown` with no cast needed. It is evidence
+  // for the closing-set exception (#4532) and changes neither the closing-set
+  // result nor any gate verdict.
+  const rawHelperRuntime = iddConfig?.helperRuntime;
+  const helperRuntimeProfile =
+    rawHelperRuntime &&
+    typeof rawHelperRuntime === 'object' &&
+    typeof (rawHelperRuntime as { profile?: unknown }).profile === 'string'
+      ? (rawHelperRuntime as { profile: string }).profile
+      : undefined;
+  const provisionalRead: ProvisionalReadReport | undefined =
+    args.claimless || args.claimIssueNumber === null
+      ? undefined
+      : resolveProvisionalReadiness({
+          helperRuntimeProfile,
+          owner,
+          repo,
+          issueNumber: args.claimIssueNumber,
+          claimId: args.expectedClaimId,
+          pullRequestNumber: args.prNumber as number,
+          headSha: prHeadSha,
+          comments: claimProviderComments,
+          trustedMarkerLogins,
+          staleAgeMs: readClaimStaleAgeMs(iddConfig),
+          readIssue: () => port.getWorkItem(args.claimIssueNumber as number),
+          readHeadRef: () =>
+            port.getChangeRequestHeadRef(args.prNumber as number),
+          readMergedPullRequest: (number) =>
+            port.getMergedChangeRequestMeta(number),
+        });
   const closingSetEvidence = computeClosingSetEvidence({
     expected: expectedClosingIssues,
     closingIssuesReferences: snapshot.closingIssuesReferences,
@@ -1987,19 +2300,8 @@ export function collectPreMergeReadiness(
   // same value by convention, not by import.
   const MAX_PRE_MERGE_AUTO_WAIVER_RUN_LOOKUPS = 20;
 
-  // #2657/#2911: the same raw `helperRuntime.profile` config field
-  // `advisory-convergence.mts`'s own `collectFromGitHub` reads directly --
-  // `normalizePolicyConfig` does not carry `helperRuntime` through its
-  // normalized shape (that section is validated, not defaulted,
-  // elsewhere), and `IddConfig`'s index signature already types this
-  // access as `unknown` with no cast needed.
-  const rawHelperRuntime = iddConfig?.helperRuntime;
-  const helperRuntimeProfile =
-    rawHelperRuntime &&
-    typeof rawHelperRuntime === 'object' &&
-    typeof (rawHelperRuntime as { profile?: unknown }).profile === 'string'
-      ? (rawHelperRuntime as { profile: string }).profile
-      : undefined;
+  // #2657/#2911: `helperRuntimeProfile` is derived once, above the closing-set
+  // evidence (kurone-kito/idd-skill#5237), from the same raw config field.
   const repositoryFullName = owner && repo ? `${owner}/${repo}` : '';
 
   // The load-bearing security boundary (kurone-kito/idd-skill#2911's
@@ -2366,6 +2668,7 @@ export function collectPreMergeReadiness(
       : {
           claim: Object.assign({}, reportSummary.claim, { scopeOverrun }),
         }),
+    ...(provisionalRead === undefined ? {} : { provisionalRead }),
     ...(summary.dispositionEvidence && dispositionNoticeHint !== null
       ? {
           dispositionEvidence: {

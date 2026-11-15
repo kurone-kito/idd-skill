@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -51,6 +52,7 @@ import {
   resolveDeclarationActiveSince,
   resolveDeferMarkerPrefix,
   resolveEligibleCodeownerUserLogins,
+  resolveProvisionalReadiness,
   resolveScopeOverrunReadiness,
   resolveToleratedGhFailure,
 } from '../src/scripts/pre-merge-readiness.mts';
@@ -105,6 +107,15 @@ import type {
   ProviderPort,
   ProviderReviewClauseNode,
 } from '../src/scripts/provider-port.mts';
+import { buildVerifiedClaimLineage } from '../src/scripts/provisional-claim-lineage.mts';
+import {
+  bindProvisionalDecision,
+  PROVISIONAL_DECISION_RECORD_MARKER,
+  type ProvisionalDecisionClaim,
+  type ProvisionalDecisionRecord,
+  type ProvisionalDecisionReplayResult,
+  type ReplayedProvisionalDecision,
+} from '../src/scripts/provisional-decision-state.mts';
 
 import {
   computeClosingSetEvidence,
@@ -21805,4 +21816,785 @@ test('collectPreMergeReadiness: a PR with no reference to the claim issue still 
   };
   assert.deepEqual(closingSet.expected, [7]);
   assert.notEqual(closingSet.status, 'match');
+});
+
+// kurone-kito/idd-skill#5237: the trusted provisional read of the claimed
+// source. No provisional record carries a head before merge, so a record is
+// "bound" through the verified claim lineage and the live head ref.
+const PROVISIONAL_ISSUE = {
+  title: 'Decision source',
+  body: 'Which behavior should the feature use?',
+  updatedAt: '2026-05-12T09:00:00Z',
+};
+const PROVISIONAL_CLAIM_ID = 'claim-5237';
+const PROVISIONAL_BRANCH = 'issue/7-task';
+const PROVISIONAL_HEAD_SHA = 'a'.repeat(40);
+
+function provisionalClaimComment(
+  overrides: Partial<ProviderComment> = {},
+  branch = PROVISIONAL_BRANCH,
+): ProviderComment {
+  const timestamp = '2026-05-12T10:00:00Z';
+  return {
+    id: 1,
+    body: renderClaimedByMarker({
+      agentId: 'codex-5237',
+      claimId: PROVISIONAL_CLAIM_ID,
+      supersedes: 'none',
+      timestamp,
+      branch,
+    }),
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    authorLogin: 'kurone-kito',
+    lastEditedAt: null,
+    ...overrides,
+  };
+}
+
+function provisionalClaimLineage(): ProvisionalDecisionClaim[] {
+  const claim = provisionalClaimComment();
+  const lineage = buildVerifiedClaimLineage({
+    comments: [
+      {
+        id: String(claim.id),
+        url: 'https://github.com/o/r/issues/7#issuecomment-1',
+        body: claim.body,
+        createdAt: claim.createdAt,
+        authorLogin: claim.authorLogin,
+        lastEditedAt: null,
+        trustedAuthor: true,
+      },
+    ],
+    completeHistory: true,
+    staleAgeMs: 24 * 60 * 60 * 1000,
+    trustedMarkerLogins: ['kurone-kito'],
+  });
+  assert.equal(lineage.status, 'ok');
+  return lineage.status === 'ok'
+    ? lineage.claims.map((entry) => ({
+        claimId: entry.claimId,
+        agentId: entry.agentId,
+        branch: entry.branch,
+        claimedAt: entry.claimedAt,
+        ...(entry.supersedes === undefined
+          ? {}
+          : { supersedes: entry.supersedes }),
+      }))
+    : [];
+}
+
+function provisionalSelectedEvent() {
+  return {
+    type: 'selected',
+    question: 'Which behavior should be used?',
+    selectedOption: {
+      id: 'keep',
+      description: 'Keep the existing behavior',
+      feasibilityRationale: 'The current implementation supports this option.',
+      requirementFit: 'It meets the verified requirement.',
+      consequences: 'No migration is needed.',
+      verification: 'Run the focused tests.',
+      reversalOrMigration: 'No migration is required.',
+      rationale: 'It matches the current evidence.',
+    },
+    feasibleAlternatives: [
+      {
+        id: 'change',
+        description: 'Adopt the alternate behavior',
+        feasibilityRationale: 'The repository can implement it.',
+        requirementFit: 'It also meets the requirement.',
+        consequences: 'It requires a migration.',
+        verification: 'Validate migrated records.',
+        reversalOrMigration: 'Existing records require migration.',
+        comparison: 'It adds migration without improving the fit.',
+        rejectionReason: 'The selected option better fits the evidence.',
+      },
+    ],
+    executionCriteria: ['The selected behavior passes focused validation.'],
+  };
+}
+
+function provisionalRecordComment(
+  id: number,
+  recordId: string,
+  event: Record<string, unknown>,
+  createdAt: string,
+  overrides: Partial<ProviderComment> = {},
+  titleOverride?: string,
+): ProviderComment {
+  const record = {
+    schemaVersion: 1,
+    recordId,
+    source: {
+      repository: 'o/r',
+      issueNumber: 7,
+      snapshot: {
+        title: titleOverride ?? PROVISIONAL_ISSUE.title,
+        bodySha256: createHash('sha256')
+          .update(PROVISIONAL_ISSUE.body)
+          .digest('hex'),
+        updatedAt: PROVISIONAL_ISSUE.updatedAt,
+      },
+    },
+    bundleGeneration: 1,
+    decisionGeneration: 1,
+    claimLineage: provisionalClaimLineage(),
+    evidenceReferences: ['https://github.com/o/r/issues/7'],
+    event,
+  } as unknown as ProvisionalDecisionRecord;
+  return {
+    id,
+    body: `${PROVISIONAL_DECISION_RECORD_MARKER}\n${JSON.stringify(record)}`,
+    createdAt,
+    updatedAt: createdAt,
+    authorLogin: 'kurone-kito',
+    lastEditedAt: null,
+    ...overrides,
+  };
+}
+
+function provisionalSelectedComment(
+  overrides: Partial<ProviderComment> = {},
+  titleOverride?: string,
+): ProviderComment {
+  return provisionalRecordComment(
+    2,
+    'record-selected',
+    provisionalSelectedEvent(),
+    '2026-05-12T10:01:00Z',
+    overrides,
+    titleOverride,
+  );
+}
+
+function provisionalWorkStartedComment(): ProviderComment {
+  return provisionalRecordComment(
+    3,
+    'record-started',
+    {
+      type: 'work-started',
+      startedAt: '2026-05-12T10:02:00Z',
+      planReference: 'https://github.com/o/r/issues/7#issuecomment-9',
+    },
+    '2026-05-12T10:03:00Z',
+  );
+}
+
+function provisionalReadInput(
+  comments: ProviderComment[],
+  overrides: Partial<Parameters<typeof resolveProvisionalReadiness>[0]> = {},
+): Parameters<typeof resolveProvisionalReadiness>[0] {
+  return {
+    helperRuntimeProfile: 'package-manager',
+    owner: 'O',
+    repo: 'R',
+    issueNumber: 7,
+    claimId: PROVISIONAL_CLAIM_ID,
+    pullRequestNumber: 1,
+    headSha: PROVISIONAL_HEAD_SHA,
+    comments,
+    trustedMarkerLogins: ['kurone-kito'],
+    staleAgeMs: 24 * 60 * 60 * 1000,
+    readIssue: () => ({ ...PROVISIONAL_ISSUE }),
+    readHeadRef: () => PROVISIONAL_BRANCH,
+    readMergedPullRequest: () => null,
+    ...overrides,
+  };
+}
+
+// A reader that must not run: the read stops before touching the provider.
+const PROVISIONAL_NO_READS = {
+  readIssue: () => {
+    throw new Error('the issue must not be read');
+  },
+  readHeadRef: () => {
+    throw new Error('the head ref must not be read');
+  },
+  readMergedPullRequest: () => {
+    throw new Error('no merged pull request must be read');
+  },
+  replay: () => {
+    throw new Error('the replay must not be called');
+  },
+};
+
+test('provisional read binds one trusted, unedited record to the claim and head', () => {
+  const result = resolveProvisionalReadiness(
+    provisionalReadInput([
+      provisionalClaimComment(),
+      provisionalSelectedComment(),
+    ]),
+  );
+  assert.deepEqual(result, {
+    status: 'bound',
+    source: { repository: 'o/r', issueNumber: 7 },
+    pullRequestNumber: 1,
+    headSha: PROVISIONAL_HEAD_SHA,
+    headRef: PROVISIONAL_BRANCH,
+    claimId: PROVISIONAL_CLAIM_ID,
+    branch: PROVISIONAL_BRANCH,
+    bundleGeneration: 1,
+    decisions: [
+      {
+        bundleGeneration: 1,
+        decisionGeneration: 1,
+        status: 'selected',
+        recordId: 'record-selected',
+      },
+    ],
+  });
+});
+
+test('provisional read names the latest lifecycle record of an in-progress decision', () => {
+  const result = resolveProvisionalReadiness(
+    provisionalReadInput([
+      provisionalClaimComment(),
+      provisionalSelectedComment(),
+      provisionalWorkStartedComment(),
+    ]),
+  );
+  assert.equal(result.status, 'bound');
+  assert.deepEqual(result.status === 'bound' ? result.decisions : [], [
+    {
+      bundleGeneration: 1,
+      decisionGeneration: 1,
+      status: 'in-progress',
+      recordId: 'record-started',
+    },
+  ]);
+});
+
+test('provisional read stops closed with no record and reads nothing more', () => {
+  assert.deepEqual(
+    resolveProvisionalReadiness(
+      provisionalReadInput([provisionalClaimComment()], PROVISIONAL_NO_READS),
+    ),
+    { status: 'stopped', reason: 'record-missing' },
+  );
+});
+
+test('provisional read stops closed on an untrusted record author', () => {
+  assert.deepEqual(
+    resolveProvisionalReadiness(
+      provisionalReadInput(
+        [
+          provisionalClaimComment(),
+          provisionalSelectedComment({ authorLogin: 'stranger' }),
+        ],
+        PROVISIONAL_NO_READS,
+      ),
+    ),
+    { status: 'stopped', reason: 'record-untrusted' },
+  );
+});
+
+test('provisional read refuses the history when any record was forged, even beside a valid one', () => {
+  assert.deepEqual(
+    resolveProvisionalReadiness(
+      provisionalReadInput([
+        provisionalClaimComment(),
+        provisionalSelectedComment(),
+        provisionalWorkStartedComment(),
+        provisionalRecordComment(
+          4,
+          'record-forged',
+          { type: 'work-started' },
+          '2026-05-12T10:04:00Z',
+          { authorLogin: 'stranger' },
+        ),
+      ]),
+    ),
+    { status: 'stopped', reason: 'record-untrusted' },
+  );
+});
+
+test('provisional read stops closed on an edited record', () => {
+  assert.deepEqual(
+    resolveProvisionalReadiness(
+      provisionalReadInput(
+        [
+          provisionalClaimComment(),
+          provisionalSelectedComment({
+            lastEditedAt: '2026-05-12T10:05:00Z',
+          }),
+        ],
+        PROVISIONAL_NO_READS,
+      ),
+    ),
+    { status: 'stopped', reason: 'record-edited' },
+  );
+});
+
+test('provisional read stops closed when the history or its inputs are unreadable', () => {
+  const comments = [provisionalClaimComment(), provisionalSelectedComment()];
+  const unreadable = { status: 'stopped', reason: 'history-unreadable' };
+  // An unresolved edit state is unreadable, never "unedited".
+  assert.deepEqual(
+    resolveProvisionalReadiness(
+      provisionalReadInput(
+        [
+          provisionalClaimComment(),
+          provisionalSelectedComment({ lastEditedAt: undefined }),
+        ],
+        PROVISIONAL_NO_READS,
+      ),
+    ),
+    unreadable,
+  );
+  for (const overrides of [
+    { readIssue: () => null },
+    { readIssue: () => ({ ...PROVISIONAL_ISSUE, title: '' }) },
+    { readIssue: () => ({ ...PROVISIONAL_ISSUE, updatedAt: 'not a date' }) },
+    {
+      readIssue: () => {
+        throw new Error('issue read failed');
+      },
+    },
+    { readHeadRef: () => '' },
+    {
+      readHeadRef: () => {
+        throw new Error('head ref read failed');
+      },
+    },
+  ]) {
+    assert.deepEqual(
+      resolveProvisionalReadiness(provisionalReadInput(comments, overrides)),
+      unreadable,
+    );
+  }
+});
+
+test('provisional read stops closed on a record bound to a different head', () => {
+  const comments = [provisionalClaimComment(), provisionalSelectedComment()];
+  assert.deepEqual(
+    resolveProvisionalReadiness(
+      provisionalReadInput(comments, {
+        readHeadRef: () => 'issue/7-another-branch',
+      }),
+    ),
+    { status: 'stopped', reason: 'head-mismatch' },
+  );
+});
+
+test('provisional read stops closed when the live claim is not in the verified lineage', () => {
+  const comments = [provisionalClaimComment(), provisionalSelectedComment()];
+  assert.deepEqual(
+    resolveProvisionalReadiness(
+      provisionalReadInput(comments, { claimId: 'claim-someone-else' }),
+    ),
+    { status: 'stopped', reason: 'claim-mismatch' },
+  );
+  for (const claimId of ['', 'none']) {
+    assert.deepEqual(
+      resolveProvisionalReadiness(
+        provisionalReadInput(comments, { claimId, ...PROVISIONAL_NO_READS }),
+      ),
+      { status: 'stopped', reason: 'claim-unverified' },
+    );
+  }
+  // A claim marker by an untrusted author is not a verified lineage.
+  assert.deepEqual(
+    resolveProvisionalReadiness(
+      provisionalReadInput([
+        provisionalClaimComment({ authorLogin: 'stranger' }),
+        provisionalSelectedComment(),
+      ]),
+    ),
+    { status: 'stopped', reason: 'claim-unverified' },
+  );
+});
+
+test('provisional read reports the replay refusal codes of a stale source', () => {
+  const result = resolveProvisionalReadiness(
+    provisionalReadInput([
+      provisionalClaimComment(),
+      provisionalSelectedComment({}, 'A different title'),
+    ]),
+  );
+  assert.equal(result.status, 'stopped');
+  assert.equal(
+    result.status === 'stopped' ? result.reason : '',
+    'replay-invalid',
+  );
+  assert.deepEqual(result.status === 'stopped' ? result.replayIssues : [], [
+    'source-binding-mismatch',
+  ]);
+});
+
+test('provisional read stops closed on a completion without merged pull request proof', () => {
+  const completion = provisionalRecordComment(
+    4,
+    'record-completed',
+    {
+      type: 'work-completed',
+      result: {
+        kind: 'merged-pull-request',
+        reference: 'https://github.com/o/r/pull/9',
+        verifiedAt: '2026-05-12T10:03:30Z',
+        headSha: 'b'.repeat(40),
+        mergeCommitSha: 'c'.repeat(40),
+      },
+    },
+    '2026-05-12T10:04:00Z',
+  );
+  const comments = [
+    provisionalClaimComment(),
+    provisionalSelectedComment(),
+    provisionalWorkStartedComment(),
+    completion,
+  ];
+  const stopped = { status: 'stopped', reason: 'completion-unverified' };
+  const requested: number[] = [];
+  assert.deepEqual(
+    resolveProvisionalReadiness(
+      provisionalReadInput(comments, {
+        readMergedPullRequest: (number) => {
+          requested.push(number);
+          return null;
+        },
+      }),
+    ),
+    stopped,
+  );
+  assert.deepEqual(requested, [9]);
+  assert.deepEqual(
+    resolveProvisionalReadiness(
+      provisionalReadInput(comments, {
+        readMergedPullRequest: (number) => ({
+          number,
+          merged: true,
+          mergedAt: '2026-05-12T10:03:45Z',
+          mergeCommitOid: 'c'.repeat(40),
+          headRefOid: 'd'.repeat(40),
+        }),
+      }),
+    ),
+    stopped,
+  );
+  const bound = resolveProvisionalReadiness(
+    provisionalReadInput(comments, {
+      readMergedPullRequest: (number) => ({
+        number,
+        merged: true,
+        mergedAt: '2026-05-12T10:03:45Z',
+        mergeCommitOid: 'c'.repeat(40),
+        headRefOid: 'b'.repeat(40),
+      }),
+    }),
+  );
+  assert.equal(bound.status, 'bound');
+  assert.deepEqual(bound.status === 'bound' ? bound.decisions : [], [
+    {
+      bundleGeneration: 1,
+      decisionGeneration: 1,
+      status: 'confirmation-pending',
+      recordId: 'record-completed',
+    },
+  ]);
+});
+
+test('provisional read is unavailable on the instructions-only profile and calls nothing', () => {
+  const comments = [provisionalClaimComment(), provisionalSelectedComment()];
+  for (const helperRuntimeProfile of [undefined, 'instructions-only']) {
+    assert.deepEqual(
+      resolveProvisionalReadiness(
+        provisionalReadInput(comments, {
+          helperRuntimeProfile,
+          ...PROVISIONAL_NO_READS,
+        }),
+      ),
+      { status: 'unavailable', reason: 'instructions-only' },
+    );
+  }
+});
+
+test('provisional read never throws on an unexpected failure', () => {
+  const comments = [provisionalClaimComment(), provisionalSelectedComment()];
+  assert.deepEqual(
+    resolveProvisionalReadiness(
+      provisionalReadInput(comments, {
+        replay: () => {
+          throw new Error('replay exploded');
+        },
+      }),
+    ),
+    { status: 'stopped', reason: 'history-unreadable' },
+  );
+});
+
+function replayedDecision(
+  overrides: Partial<ReplayedProvisionalDecision> & {
+    lineage?: ProvisionalDecisionClaim[];
+  } = {},
+): ReplayedProvisionalDecision {
+  const { lineage, ...rest } = overrides;
+  const selection = {
+    recordId: 'record-1',
+    claimLineage: lineage ?? provisionalClaimLineage(),
+  } as unknown as ProvisionalDecisionRecord;
+  return {
+    bundleGeneration: 1,
+    decisionGeneration: 1,
+    selection,
+    status: 'selected',
+    ...rest,
+  };
+}
+
+function validReplay(
+  status: ProvisionalDecisionReplayResult['status'],
+  decisions: ReplayedProvisionalDecision[],
+): ProvisionalDecisionReplayResult {
+  return { valid: true, status, decisions, issues: [] };
+}
+
+test('provisional binding leaves a confirmed, reworked, or invalid history unbound', () => {
+  const target = {
+    claimId: PROVISIONAL_CLAIM_ID,
+    headRef: PROVISIONAL_BRANCH,
+    claimChain: provisionalClaimLineage(),
+  };
+  const cases: Array<[ProvisionalDecisionReplayResult, string]> = [
+    [
+      validReplay('confirmed', [replayedDecision({ status: 'confirmed' })]),
+      'source-confirmed',
+    ],
+    [
+      validReplay('rework-requested', [
+        replayedDecision({ status: 'rework-requested' }),
+      ]),
+      'rework-pending',
+    ],
+    [
+      validReplay('rework-authored', [
+        replayedDecision({ status: 'rework-authored' }),
+      ]),
+      'rework-pending',
+    ],
+    [validReplay('none', []), 'record-missing'],
+    [
+      { valid: false, status: 'invalid', decisions: [], issues: [] },
+      'replay-invalid',
+    ],
+  ];
+  for (const [replay, reason] of cases) {
+    assert.deepEqual(bindProvisionalDecision(replay, target), {
+      bound: false,
+      reason,
+    });
+  }
+});
+
+test('provisional binding checks every unconfirmed decision of the current bundle', () => {
+  const target = {
+    claimId: PROVISIONAL_CLAIM_ID,
+    headRef: PROVISIONAL_BRANCH,
+    claimChain: provisionalClaimLineage(),
+  };
+  const foreign: ProvisionalDecisionClaim[] = [
+    {
+      claimId: 'claim-other',
+      agentId: 'codex-other',
+      branch: PROVISIONAL_BRANCH,
+      claimedAt: '2026-05-12T09:00:00Z',
+    },
+  ];
+  assert.deepEqual(
+    bindProvisionalDecision(
+      validReplay('confirmation-pending', [
+        replayedDecision({ status: 'confirmation-pending' }),
+        replayedDecision({ decisionGeneration: 2, lineage: foreign }),
+      ]),
+      target,
+    ),
+    { bound: false, reason: 'claim-mismatch' },
+  );
+  // A confirmed decision of an older bundle, or already confirmed, is not in
+  // the set that has to bind.
+  const bound = bindProvisionalDecision(
+    validReplay('confirmation-pending', [
+      replayedDecision({ bundleGeneration: 1, lineage: foreign }),
+      replayedDecision({
+        bundleGeneration: 2,
+        decisionGeneration: 1,
+        status: 'confirmed',
+        lineage: foreign,
+      }),
+      replayedDecision({
+        bundleGeneration: 2,
+        decisionGeneration: 2,
+        status: 'confirmation-pending',
+      }),
+    ]),
+    target,
+  );
+  assert.equal(bound.bound, true);
+  assert.deepEqual(bound.bound ? bound.decisions : [], [
+    {
+      bundleGeneration: 2,
+      decisionGeneration: 2,
+      status: 'confirmation-pending',
+      recordId: 'record-1',
+    },
+  ]);
+  // A takeover claim is not followed through `supersedes`: it stays unbound.
+  const takeover: ProvisionalDecisionClaim = {
+    claimId: 'claim-takeover',
+    agentId: 'codex-takeover',
+    branch: PROVISIONAL_BRANCH,
+    claimedAt: '2026-05-13T10:00:00Z',
+    supersedes: PROVISIONAL_CLAIM_ID,
+  };
+  assert.deepEqual(
+    bindProvisionalDecision(validReplay('selected', [replayedDecision()]), {
+      claimId: takeover.claimId,
+      headRef: PROVISIONAL_BRANCH,
+      claimChain: [...provisionalClaimLineage(), takeover],
+    }),
+    { bound: false, reason: 'claim-mismatch' },
+  );
+  // A head ref that differs from the lineage claim's branch is not bound.
+  assert.deepEqual(
+    bindProvisionalDecision(validReplay('selected', [replayedDecision()]), {
+      ...target,
+      headRef: '',
+    }),
+    { bound: false, reason: 'head-mismatch' },
+  );
+});
+
+// Collector-level cases: the report carries `provisionalRead` for a
+// claim-bound run only, and the read never changes the closing set, `ready`,
+// or the blockers.
+function provisionalCollectorPort(comments: ProviderComment[]): ProviderPort {
+  const base = forcedHandoffMergeFakePort({
+    scope: 'issue-only',
+    earlierLinkedPr: false,
+    linkedLookupFails: false,
+  });
+  return {
+    ...base,
+    getWorkItem: (number) =>
+      number === 7
+        ? {
+            number,
+            title: PROVISIONAL_ISSUE.title,
+            body: PROVISIONAL_ISSUE.body,
+            state: 'OPEN',
+            updatedAt: PROVISIONAL_ISSUE.updatedAt,
+          }
+        : base.getWorkItem(number),
+    getChangeRequestHeadRef: () => PROVISIONAL_BRANCH,
+    listWorkItemComments: (number, options) =>
+      number === 7 ? comments : base.listWorkItemComments(number, options),
+  };
+}
+
+function collectProvisional(
+  comments: ProviderComment[],
+  config: Record<string, unknown>,
+  options: { claimless?: boolean } = {},
+) {
+  const restore = stubExecutable('gh', FORCED_HANDOFF_GH_STUB);
+  try {
+    const base = provisionalCollectorPort(comments);
+    // A claimless run needs a PR with no closing references.
+    const port: ProviderPort = options.claimless
+      ? {
+          ...base,
+          getChangeRequestReadinessSnapshot: (number) => ({
+            ...base.getChangeRequestReadinessSnapshot(number),
+            closingIssuesReferences: [],
+          }),
+        }
+      : base;
+    return collectPreMergeReadiness(
+      [
+        '--pr',
+        '1',
+        ...(options.claimless
+          ? ['--claimless']
+          : ['--claim-issue', '7', '--claim-id', PROVISIONAL_CLAIM_ID]),
+        '--owner',
+        'o',
+        '--repo',
+        'r',
+        '--now',
+        '2026-05-12T11:00:00Z',
+      ],
+      () => port,
+      () => ({ trustedMarkerActors: ['kurone-kito'], ...config }) as never,
+    );
+  } finally {
+    restore();
+  }
+}
+
+test('collectPreMergeReadiness reports the bound provisional record without changing the closing set or gates', () => {
+  const withRecord = [
+    provisionalClaimComment(),
+    provisionalSelectedComment(),
+    provisionalWorkStartedComment(),
+  ];
+  const withoutRecord = [provisionalClaimComment()];
+  const helperOn = { helperRuntime: { profile: 'package-manager' } };
+
+  const bound = collectProvisional(withRecord, helperOn);
+  assert.equal(bound.provisionalRead?.status, 'bound');
+  assert.equal(
+    bound.provisionalRead?.status === 'bound'
+      ? bound.provisionalRead.headSha
+      : '',
+    bound.prHeadSha,
+  );
+
+  const ordinary = collectProvisional(withoutRecord, helperOn);
+  assert.deepEqual(ordinary.provisionalRead, {
+    status: 'stopped',
+    reason: 'record-missing',
+  });
+  const instructionsOnly = collectProvisional(withRecord, {});
+  assert.deepEqual(instructionsOnly.provisionalRead, {
+    status: 'unavailable',
+    reason: 'instructions-only',
+  });
+
+  // The read is evidence only: the closing set, the verdict, and the blockers
+  // match the ordinary run in every case.
+  for (const report of [bound, instructionsOnly]) {
+    assert.deepEqual(report.closingSet, ordinary.closingSet);
+    assert.equal(report.ready, ordinary.ready);
+    assert.deepEqual(report.blockers, ordinary.blockers);
+  }
+
+  // A claimless run has no claimed source, so the field is omitted.
+  const claimless = collectProvisional(withRecord, helperOn, {
+    claimless: true,
+  });
+  assert.equal('provisionalRead' in claimless, false);
+});
+
+test('pre-merge readiness schema accepts every provisionalRead shape', () => {
+  const withRecord = [provisionalClaimComment(), provisionalSelectedComment()];
+  const helperOn = { helperRuntime: { profile: 'package-manager' } };
+  const reports = [
+    collectProvisional(withRecord, helperOn),
+    collectProvisional([provisionalClaimComment()], helperOn),
+    collectProvisional(withRecord, {}),
+  ];
+  assert.deepEqual(
+    reports.map((report) => report.provisionalRead?.status),
+    ['bound', 'stopped', 'unavailable'],
+  );
+  for (const report of reports) {
+    assert.deepEqual(validate(report, readinessSchema), []);
+  }
+  const incomplete = { ...reports[0], provisionalRead: { status: 'bound' } };
+  assert.notDeepEqual(validate(incomplete, readinessSchema), []);
+  const unknownReason = {
+    ...reports[0],
+    provisionalRead: { status: 'stopped', reason: 'no-such-reason' },
+  };
+  assert.notDeepEqual(validate(unknownReason, readinessSchema), []);
 });
