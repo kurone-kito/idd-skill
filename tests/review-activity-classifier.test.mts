@@ -141,6 +141,28 @@ const RENDERER_CASES: Array<{
     expected: 'review',
   },
   {
+    name: 'renderCommitInventoryComment',
+    render: () =>
+      markerHelpers.renderCommitInventoryComment({
+        markerPrefix: 'idd-skill',
+        agentId: TRUSTED_LOGIN,
+        issueNumber: 1,
+        branch: 'issue/1-example',
+        baseSha: 'c'.repeat(40),
+        headSha: 'a'.repeat(40),
+        entries: [
+          {
+            sha: 'a'.repeat(40),
+            paths: ['src/example.mts'],
+            disposition: 'child',
+            reach: 'unpushed',
+          },
+        ],
+      }),
+    // Issue-scoped evidence like scope-overrun (kurone-kito/idd-skill#5213).
+    expected: 'review',
+  },
+  {
     name: 'renderReviewWatermarkMarker',
     render: () =>
       markerHelpers.renderReviewWatermarkMarker({
@@ -434,6 +456,22 @@ const FIELDS_BY_MARKER_TYPE: Record<MarkerType, Record<string, string>> = {
     effort: 'M',
     'candidate-files': '["src/example.mts"]',
   },
+  'commit-inventory': {
+    'agent-id': TRUSTED_LOGIN,
+    'marker-prefix': 'idd-skill',
+    issue: '1',
+    branch: 'issue/1-example',
+    'base-sha': SHA,
+    'head-sha': SHA,
+    entries: JSON.stringify([
+      {
+        sha: SHA,
+        paths: ['src/example.mts'],
+        disposition: 'child',
+        reach: 'unpushed',
+      },
+    ]),
+  },
   'authoring-owner': {
     'agent-id': TRUSTED_LOGIN,
     'marker-prefix': 'idd-skill',
@@ -482,6 +520,8 @@ const EXPECTED_BY_MARKER_TYPE: Record<MarkerType, IddPrCommentClassification> =
     'f4-head-proof': 'review',
     // Issue-scoped evidence marker, never posted to a PR.
     'scope-overrun': 'review',
+    // Issue-scoped evidence marker like scope-overrun (kurone-kito/idd-skill#5213).
+    'commit-inventory': 'review',
     // Not part of OPERATIONAL_MARKERS at all (issue-authoring lifecycle
     // markers, contract.md) -- never recognized as PR review-activity.
     'authoring-owner': 'review',
