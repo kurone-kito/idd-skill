@@ -14,7 +14,7 @@ Lite profile for helper-enabled weak/local models. Read this file after
 repository's recorded `mergePolicy`, then draft and post a handoff
 comment quoting that evidence and decide whether to release the worker
 claim; a resolved `fully_autonomous_merge` instead continues at
-`idd-merge-handoff.instructions.md`, whose verdict applies. It never
+`idd-merge-handoff.instructions.md`, which then decides. It never
 evaluates whether autonomous merge should
 proceed and never continues to `idd-merge.instructions.md` (F3-F5)
 itself or runs `gh pr merge`.
@@ -24,9 +24,8 @@ not evaluate the standard file's step 5 prose-recorded sub-cases
 whether an actor and resume condition are recorded) — it reads only the
 machine-readable
 `mergePolicy` value below. Consequently, with no recorded merge-capable
-actor, releasing the claim here leaves no designated merger, where the
-standard file would hold: expect claim and handoff-comment churn until
-someone merges. If the repository is
+actor, releasing the claim here leaves no designated merger (the standard
+file would hold): expect claim and handoff-comment churn. If the repository is
 `instructions-only`, use `idd-merge-handoff.instructions.md` instead.
 
 ## Stop-and-ask conditions
@@ -92,15 +91,19 @@ the same as a commit or push:
      above (a tier object): the resolver reads the worktree copy, so
      only when
      `git diff --quiet origin/{development-branch} -- .github/idd/config.json`
-     exits 0 (else unrecognized), run the profile-selected form of
+     exits with status 0 (else unrecognized), run the profile-selected
+     form of
      `node scripts/idd-effective-config.mjs --resolve-merge-policy`.
      Pass `--model-tier <tier>` only when the operator's own session
-     instructions named the tier; never invent one. Exit 0: stdout is
-     the resolved enum. Any other exit: unrecognized.
-   - A resolved `fully_autonomous_merge` (string or resolver): skip
-     steps 2-5, posting no comment and no release, since F3's freshness
-     check counts that comment; continue at
-     `idd-merge-handoff.instructions.md`.
+     instructions named the tier; never invent one. Exit 0 with stdout
+     exactly one of the three policy strings: that enum. Any other exit
+     or stdout: unrecognized.
+   - A resolved `fully_autonomous_merge` (string or resolver) with
+     `ready: true`: skip steps 2-5 (no comment, no release: F3's
+     freshness check counts a comment), run F2 in
+     `idd-pre-merge.instructions.md` (lite F2 records only three
+     fields), then continue at `idd-merge-handoff.instructions.md`. With
+     `ready: false`, run steps 2-5.
    - Every other outcome — the fetch itself failing, a `git show`
      error other than the missing-path case, a config file that fails
      to parse, a config file without a `mergePolicy` key, or a present
@@ -112,8 +115,8 @@ the same as a commit or push:
      key, a note that the key was absent.
 2. Compose a comment containing:
    - The PR number and branch.
-   - The recorded F2 verdict: `prHeadSha` (the HEAD this verdict
-     applies to — include it regardless of `ready`),
+   - The recorded F2 verdict: `prHeadSha` (the HEAD it applies to —
+     include it regardless of `ready`),
      `ready` (`true`/`false`), and, if `false`, every `blockers[]`
      entry verbatim (`gate` plus `detail`).
    - The active `{claim-id}`.
@@ -128,10 +131,9 @@ the same as a commit or push:
      (using the recorded `prHeadSha` value from F2, not a locally
      re-derived SHA).
 3. Immediately before posting, repeat the pre-mutation guard in full
-   (checks 1-4) — step 1's fetch and read take time, so another session
-   may have released or replaced the claim, or the worktree may have
-   moved. If any check fails, stop per the condition above without
-   posting. Otherwise, post the comment.
+   (checks 1-4) — step 1's fetch and read take time, so the claim or
+   worktree may have changed. If any check fails, stop per the condition
+   above without posting. Otherwise, post the comment.
 4. Decide whether to release the worker claim, gated on both the
    `mergePolicy` resolved in step 1 and the recorded F2 verdict:
    - `ready: false`: keep the claim under every `mergePolicy` value
@@ -161,6 +163,5 @@ the same as a commit or push:
         trusted claim-state marker.
 5. Stop. Do not run `gh pr merge`, `idd-merge-execute.mjs`, or any
    other command that would merge, close, or otherwise mutate the PR
-   beyond this comment and, when step 4 applies, the claim release —
-   a human or a designated merge-capable session decides and executes
-   the actual merge from here.
+   beyond this comment and, when step 4 applies, the claim release; a
+   human or designated merge-capable session merges from here.
