@@ -210,8 +210,15 @@ function readFileOrNull(path) {
  * links are preserved as links rather than materialized, so walking their
  * targets would fingerprint data this recovery does not remove (Codex review
  * #4125636076). Any unreadable or concurrently changing path fails closed by
- * returning null. */
-export function pathFingerprintOnDisk(path, sourceRoots = []) {
+ * returning null.
+ *
+ * `stable` drops what removing a sibling path changes: the inode change time
+ * (unlinking one hard link updates the other's ctime) and the symlink target
+ * walk (an earlier removal can delete a link's in-tree target). A batched
+ * cleanup compares stable fingerprints from before its first clean with
+ * ones read after earlier batches were removed (issue #5224). */
+export function pathFingerprintOnDisk(path, sourceRoots = [], options = {}) {
+  const stable = options.stable === true;
   const hash = createHash('sha256');
   const activeDirectories = new Set();
   const sourceRootsReal = [];
@@ -227,9 +234,14 @@ export function pathFingerprintOnDisk(path, sourceRoots = []) {
     }
   }
   const statSignature = (stat) =>
-    [stat.dev, stat.ino, stat.mode, stat.size, stat.mtimeMs, stat.ctimeMs].join(
-      ':',
-    );
+    [
+      stat.dev,
+      stat.ino,
+      stat.mode,
+      stat.size,
+      stat.mtimeMs,
+      ...(stable ? [] : [stat.ctimeMs]),
+    ].join(':');
   const sameStat = (before, after) =>
     statSignature(before) === statSignature(after);
   const targetIsInsideRemovedRoot = (resolvedTarget) =>
@@ -252,7 +264,7 @@ export function pathFingerprintOnDisk(path, sourceRoots = []) {
       hash.update(`link:${linkText}\0`);
       let resolvedTarget = null;
       try {
-        resolvedTarget = realpathSync(candidate);
+        resolvedTarget = stable ? null : realpathSync(candidate);
       } catch {
         // A dangling link has no target contents to fingerprint. Its own
         // lstat metadata and link text still provide the identity evidence.
@@ -1925,11 +1937,7 @@ function namesScopeRoot(relativePath) {
 }
 /** Check that each of `paths` may still be removed from `scopePath`: still
  * ignored (or already gone), and the source and backup fingerprints still
- * match what the preserving copy recorded. Returns the failure string, or
- * null when every path passes. `limitStatusToPaths` narrows the status read
- * to these paths' literal pathspecs, so a per-batch recheck costs the batch
- * rather than the repository. `presentSink` collects the `scope/path` names
- * found present. */
+ * match. Returns the failure string, or null when every path passes. */
 function validatePreservedIgnoredPaths(
   scope,
   scopePath,
@@ -1995,14 +2003,27 @@ function validatePreservedIgnoredPaths(
       if (destinationFingerprint !== entry.destinationFingerprint) {
         return `preserved ignored path ${scope}/${path} backup changed before cleanup`;
       }
-      const currentFingerprint = deps.readPathFingerprint(
-        join(scopePath, path),
-        roots,
-      );
-      if (currentFingerprint === null) {
+      const sourcePath = join(scopePath, path);
+      if (options.recordStableFingerprints) {
+        const currentFingerprint = deps.readPathFingerprint(sourcePath, roots);
+        if (currentFingerprint === null) {
+          return `could not fingerprint preserved ignored path ${scope}/${path} before cleanup`;
+        }
+        if (currentFingerprint !== entry.sourceFingerprint) {
+          return `preserved ignored path ${scope}/${path} changed contents or identity before cleanup`;
+        }
+      }
+      const stableFingerprint = deps.readPathFingerprint(sourcePath, roots, {
+        stable: true,
+      });
+      if (stableFingerprint === null) {
         return `could not fingerprint preserved ignored path ${scope}/${path} before cleanup`;
       }
-      if (currentFingerprint !== entry.sourceFingerprint) {
+      if (options.recordStableFingerprints) {
+        options.stableFingerprints.set(`${scope}/${path}`, stableFingerprint);
+      } else if (
+        stableFingerprint !== options.stableFingerprints.get(`${scope}/${path}`)
+      ) {
         return `preserved ignored path ${scope}/${path} changed contents or identity before cleanup`;
       }
     }
@@ -2024,7 +2045,10 @@ function validatePreservedIgnoredPaths(
  * present, because earlier batches stay removed and later ones are not
  * started; the caller keeps its recovery hold, and a later run treats an
  * already-absent preserved path as safe and rechecks every path still
- * present. `argvBudgetBytes` exists for tests that force several batches. */
+ * present. `removed` lists the paths that were present before the first clean
+ * and are gone now, whoever removed them; `still present` lists every other
+ * path not confirmed absent, including one whose presence cannot be read.
+ * `argvBudgetBytes` exists for tests that force several batches. */
 export function cleanPreservedIgnoredFilesBeforeDestructiveRemoval(
   entries,
   targetPath,
@@ -2056,6 +2080,7 @@ export function cleanPreservedIgnoredFilesBeforeDestructiveRemoval(
   }));
   // Pass 1: check every scope before the first clean starts.
   const presentBeforeClean = new Set();
+  const stableFingerprints = new Map();
   for (const { scope, scopePath, paths, entriesByPath } of scopes) {
     const failure = validatePreservedIgnoredPaths(
       scope,
@@ -2064,7 +2089,12 @@ export function cleanPreservedIgnoredFilesBeforeDestructiveRemoval(
       entriesByPath,
       targetPath,
       deps,
-      { limitStatusToPaths: false, presentSink: presentBeforeClean },
+      {
+        limitStatusToPaths: false,
+        stableFingerprints,
+        recordStableFingerprints: true,
+        presentSink: presentBeforeClean,
+      },
     );
     if (failure !== null) return failure;
   }
@@ -2098,7 +2128,11 @@ export function cleanPreservedIgnoredFilesBeforeDestructiveRemoval(
       batch.entriesByPath,
       targetPath,
       deps,
-      { limitStatusToPaths: true },
+      {
+        limitStatusToPaths: true,
+        stableFingerprints,
+        recordStableFingerprints: false,
+      },
     );
     if (stale !== null) return withCleanState(stale);
     // A spawn that fails reports no usable exit status, and git may already
