@@ -13,8 +13,8 @@ Lite profile for helper-enabled weak/local models. Read this file after
 `ready` is `true` or `false`. This file's job is to read the
 repository's recorded `mergePolicy`, then draft and post a handoff
 comment quoting that evidence and decide whether to release the worker
-claim; a resolved `fully_autonomous_merge` with `ready: true` instead
-continues at `idd-merge-handoff.instructions.md`, which then decides. It never
+claim; a resolved `fully_autonomous_merge` instead continues at
+`idd-merge-handoff.instructions.md`, which then decides. It never
 evaluates whether autonomous merge should
 proceed and never continues to `idd-merge.instructions.md` (F3-F5)
 itself or runs `gh pr merge`.
@@ -98,12 +98,11 @@ the same as a commit or push:
      instructions named the tier; never invent one. Exit 0 with stdout
      exactly one of the three policy strings: that enum. Any other exit
      or stdout: unrecognized.
-   - A resolved `fully_autonomous_merge` (string or resolver) with
-     `ready: true`: skip steps 2-5 (no comment, no release: F3's
-     freshness check counts a comment), run F2 in
-     `idd-pre-merge.instructions.md` (lite F2 records only three
-     fields), then continue at `idd-merge-handoff.instructions.md`. With
-     `ready: false`, run steps 2-5.
+   - A resolved `fully_autonomous_merge` (string or resolver): skip
+     steps 2-5 (no comment, no release: F3's freshness check counts a
+     comment), run F2 in `idd-pre-merge.instructions.md` (lite F2
+     records only three fields), then continue at
+     `idd-merge-handoff.instructions.md`.
    - Every other outcome — the fetch itself failing, a `git show`
      error other than the missing-path case, a config file that fails
      to parse, a config file without a `mergePolicy` key, or a present
