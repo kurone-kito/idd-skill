@@ -559,13 +559,13 @@
         "bundle": "instruction-size-budgets-dogfood",
         "limitBytes": 41000,
         "issue": 5206,
-        "reason": "Operator decision in the 2026-11-15 IDD autopilot session for issue #5206: the finalize route for released held children restores the safety statements that the independent critique required (a confirmation gate for every child, a child open and unclaimed check, the latest-generation release-complete marker, never --force, and the inventory re-check). idd-pr-submit.instructions.md is 39,971 bytes at main and 40,765 bytes at this head (the generated copy is 40,976 bytes), so 41,000 leaves 24 bytes of headroom on the generated copy. As in issue #4233, the raise applies to the whole phase budget entry, not to that one file."
+        "reason": "Operator decision in the 2026-11-15 IDD autopilot session for issue #5206: the finalize route for released held children restores the safety statements that the independent critique required (a confirmation gate for every child, a child open and unclaimed check, the latest-generation release-complete marker, never --force, and the inventory re-check). idd-pr-submit.instructions.md is 39,971 bytes at main and 40,767 bytes at this head (the generated copy is 40,978 bytes), so 41,000 leaves 22 bytes of headroom on the generated copy. As in issue #4233, the raise applies to the whole phase budget entry, not to that one file."
       },
       {
         "bundle": "instruction-size-budgets-idd-template",
         "limitBytes": 41000,
         "issue": 5206,
-        "reason": "Operator decision in the 2026-11-15 IDD autopilot session for issue #5206: the finalize route for released held children restores the safety statements that the independent critique required (a confirmation gate for every child, a child open and unclaimed check, the latest-generation release-complete marker, never --force, and the inventory re-check). idd-template idd-pr-submit.instructions.md is 39,971 bytes at main and 40,765 bytes at this head (the generated copy is 40,976 bytes), so 41,000 leaves 24 bytes of headroom on the generated copy. As in issue #4233, the raise applies to the whole phase budget entry, not to that one file."
+        "reason": "Operator decision in the 2026-11-15 IDD autopilot session for issue #5206: the finalize route for released held children restores the safety statements that the independent critique required (a confirmation gate for every child, a child open and unclaimed check, the latest-generation release-complete marker, never --force, and the inventory re-check). idd-template idd-pr-submit.instructions.md is 39,971 bytes at main and 40,767 bytes at this head (the generated copy is 40,978 bytes), so 41,000 leaves 22 bytes of headroom on the generated copy. As in issue #4233, the raise applies to the whole phase budget entry, not to that one file."
       }
     ],
     "standingRaiseApprovals": [

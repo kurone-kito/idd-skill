@@ -1377,7 +1377,7 @@ apply to it. That marker closes its own generation, so an earlier generation's
 marker does not count. Every child-mapped SHA in the trusted inventory must
 appear in a `(cherry picked from commit <sha>)` trailer on the child's branch,
 read with `git log --format=%B "{development-branch}..origin/<child-branch>"`,
-after `git fetch origin +<child-branch>:refs/remotes/origin/<child-branch>`,
+after `git fetch origin "+<child-branch>:refs/remotes/origin/<child-branch>"`,
 because a single-branch clone may leave that ref absent or stale. The transfer
 checks the same trailer in `<recorded-HEAD>..HEAD` of the child's worktree. The
 preflight has no trusted record of a released child's pre-pick HEAD, so it reads
