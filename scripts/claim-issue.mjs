@@ -141,7 +141,7 @@ const LOCAL_BRANCH_UNEXPECTED_NEXT =
   'Preserve the local-only branch named in the detail: never delete or overwrite it. Inspect it by hand, then rerun this helper. This helper removed nothing.';
 /** The next action for an unreadable local branch probe (issue 4914). */
 const LOCAL_BRANCH_UNREADABLE_NEXT =
-  'Resolve the failed read named in the detail (the local ref listing, the origin read, or the linked pull request lookup), then rerun this helper. Do not read the branch as absent. This helper created no worktree or branch.';
+  'Resolve the failed read named in the detail (the local ref listing, the local worktree scan, the origin read, or the linked pull request lookup), then rerun this helper. Do not read the branch as absent. This helper created no worktree or branch.';
 /** The timestamp shape the marker grammar prints (second precision, UTC). */
 const MARKER_TIMESTAMP = '(?<ts>\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z)';
 /**

@@ -1382,10 +1382,13 @@ function describeGitFailure(error) {
  * Read the local `issue/<n>-*` branch refs that no worktree holds and origin
  * lacks (#4914). The worktree scan of A5(e) runs first and owns every ref a
  * worktree has checked out, the caller's own pristine worktree included, so
- * the own-worktree second gate of a fresh claim never sees its own branch. The
- * local ref listing is the only read when no ref exists; one `ls-remote` per
- * ref runs only after that. Every failed read is `unreadable`, and the reason
- * is a fixed phrase, never git's stderr (a remote URL can sit in it).
+ * the own-worktree second gate of a fresh claim never sees its own branch. A
+ * scan that cannot be read cannot rule a worktree out: it is `unreadable` as
+ * soon as a local-only ref exists (a ref that origin has stays with A5(e)'s
+ * remote scan, and no ref leaves nothing to misjudge). The local ref listing
+ * is the only read when no ref exists; one `ls-remote` per ref runs only after
+ * that. Every failed read is `unreadable`, and the reason is a fixed phrase,
+ * never git's stderr (a remote URL can sit in it).
  */
 export function inspectLocalBranchRefs(
   issueNumber,
@@ -1405,9 +1408,12 @@ export function inspectLocalBranchRefs(
     environment,
     execute,
   );
-  if (worktrees.status !== 'absent') {
+  if (worktrees.status === 'occupied') {
     return { status: 'worktree' };
   }
+  // Anything other than a proven absence fails closed once a local-only ref
+  // exists, so an unknown scan result is not read as "no worktree".
+  const worktreeScanProven = worktrees.status === 'absent';
   const env = sanitizedGitEnvironment(environment);
   const prefix = `refs/heads/issue/${issueNumber}-`;
   let listing;
@@ -1469,6 +1475,12 @@ export function inspectLocalBranchRefs(
     if (!remote.split('\n').some((line) => line.endsWith(`\t${remoteRef}`))) {
       localOnly.push(entry);
     }
+  }
+  if (!worktreeScanProven && localOnly.length > 0) {
+    return {
+      status: 'unreadable',
+      reason: `the local worktree scan could not be read (a failed listing or a prunable or malformed entry), so a worktree holding ${localOnly.map((ref) => ref.branch).join(', ')} cannot be ruled out`,
+    };
   }
   return { status: 'read', refs: localOnly };
 }

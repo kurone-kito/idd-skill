@@ -8465,16 +8465,50 @@ test('inspectLocalBranchRefs: no ref reads one listing and no remote', () => {
 });
 
 test('inspectLocalBranchRefs: a worktree on the prefix defers to the worktree scan', () => {
-  for (const worktrees of [
-    `worktree /primary\0HEAD ${LOCAL_TIP}\0branch refs/heads/main\0\0worktree /own\0HEAD ${LOCAL_TIP}\0branch refs/heads/issue/24-task\0\0`,
-    'not a porcelain listing',
-  ]) {
-    const git = scriptedGit({ worktrees });
-    assert.deepEqual(inspectLocalBranchRefs(24, '/primary', {}, git.execute), {
-      status: 'worktree',
-    });
-    assert.deepEqual(git.calls, ['worktree list --porcelain -z']);
-  }
+  const git = scriptedGit({
+    worktrees: `worktree /primary\0HEAD ${LOCAL_TIP}\0branch refs/heads/main\0\0worktree /own\0HEAD ${LOCAL_TIP}\0branch refs/heads/issue/24-task\0\0`,
+  });
+  assert.deepEqual(inspectLocalBranchRefs(24, '/primary', {}, git.execute), {
+    status: 'worktree',
+  });
+  assert.deepEqual(git.calls, ['worktree list --porcelain -z']);
+});
+
+test('inspectLocalBranchRefs: an unreadable worktree scan fails closed once a local-only ref exists', () => {
+  const unreadable = 'not a porcelain listing';
+  const taskRef = `refs/heads/issue/24-task ${LOCAL_TIP}\n`;
+
+  // No ref: nothing to misjudge, so no remote read and no failure.
+  const none = scriptedGit({ worktrees: unreadable });
+  assert.deepEqual(inspectLocalBranchRefs(24, '/primary', {}, none.execute), {
+    status: 'read',
+    refs: [],
+  });
+  assert.deepEqual(none.calls, [
+    'worktree list --porcelain -z',
+    'for-each-ref --format=%(refname) %(objectname) refs/heads/issue/24-*',
+  ]);
+
+  // Every ref is on origin: A5(e)'s remote scan owns it, as with a readable scan.
+  const pushed = scriptedGit({
+    worktrees: unreadable,
+    refs: taskRef,
+    remote: (ref) => `${LOCAL_TIP}\t${ref}\n`,
+  });
+  assert.deepEqual(inspectLocalBranchRefs(24, '/primary', {}, pushed.execute), {
+    status: 'read',
+    refs: [],
+  });
+
+  // A local-only ref that a worktree might hold cannot be reported as local-only
+  // or as absent: the read is unreadable, with a fixed phrase.
+  const local = scriptedGit({ worktrees: unreadable, refs: taskRef });
+  const read = inspectLocalBranchRefs(24, '/primary', {}, local.execute);
+  assert.equal(read.status, 'unreadable');
+  assert.match(
+    read.status === 'unreadable' ? read.reason : '',
+    /the local worktree scan could not be read .* holding issue\/24-task cannot be ruled out/,
+  );
 });
 
 test('inspectLocalBranchRefs: remote-backed refs are excluded, local-only refs keep their tip', () => {
@@ -8597,6 +8631,33 @@ test('inspectLocalBranchRefs: a real clone separates local-only, remote-backed, 
     sandbox.git(['branch', 'issue/1-second', 'origin/main']);
     sandbox.addOwnWorktree();
     assert.deepEqual(probe(), { status: 'worktree' });
+  } finally {
+    sandbox.restore();
+  }
+});
+
+test('inspectLocalBranchRefs: a prunable worktree entry on the prefix makes a local-only ref unreadable', () => {
+  const sandbox = localRefSandbox();
+  try {
+    // A worktree whose directory vanished stays registered as prunable, which
+    // the worktree scan cannot rule out, so its branch is not a local-only ref.
+    const gone = join(sandbox.root, 'gone');
+    sandbox.git([
+      'worktree',
+      'add',
+      '--quiet',
+      gone,
+      '-b',
+      'issue/1-gone',
+      'origin/main',
+    ]);
+    rmSync(gone, { recursive: true, force: true });
+    const read = inspectLocalBranchRefs(1, sandbox.primary, sandbox.gitEnv);
+    assert.equal(read.status, 'unreadable');
+    assert.match(
+      read.status === 'unreadable' ? read.reason : '',
+      /worktree scan could not be read/,
+    );
   } finally {
     sandbox.restore();
   }
