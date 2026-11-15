@@ -1582,9 +1582,10 @@ the base advanced. It then matches the live SHA list and re-runs each `-` row's
 path check, because a new base commit can invalidate a `-` disposition without
 changing the SHA list. It reads exactly one trusted, unedited inventory comment
 for the live head; zero, several, or edited comments stop. This is an interim
-rule. The durable record contract (a marker type and a helper that parses and
-reads it back) is a follow-up, because it adds a marker and a helper outside
-this change's scope.
+rule. The durable record is the `commit-inventory` marker
+(kurone-kito/idd-skill#5213). Its selector accepts it only when exactly one
+trusted, unedited record exists for the live head. Otherwise the prose rule
+applies, and an edited, untrusted, malformed, or repeated record stops cleanup.
 
 Finalize never transfers: a child picks only under its own fresh claim, so a
 released child must already carry its trailers when finalize runs. A child picks
