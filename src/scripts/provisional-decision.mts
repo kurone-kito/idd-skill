@@ -1538,7 +1538,6 @@ async function applyCompletionLabel(
  * Run the provisional-decision protocol. The default is read-only; `apply`
  * re-reads every gate before appending or applying a completion label.
  */
-// audit:ignore-dead-export: consumed by the command child #4799
 export async function runProvisionalDecisionCommand(
   request: ProvisionalDecisionCommandRequest,
   store: ProvisionalDecisionStore,
