@@ -85,6 +85,7 @@ import { resolveTrustedMarkerActors } from './protocol-helpers.mts';
 const AUTO_DECISION_CLI_FLAG_SPEC = {
   '--pending-count': { type: 'boolean' },
   '--records': { type: 'boolean' },
+  '--open-issues': { type: 'boolean' },
   '--class': { type: 'string' },
   '--source': { type: 'string' },
   '--claim': { type: 'string' },
@@ -250,6 +251,32 @@ export interface ConfirmationFinderIssue {
 
 export type ConfirmationFinderRead =
   | { status: 'readable'; issues: ConfirmationFinderIssue[] }
+  | AutoDecisionUnreadable;
+
+/** One open confirmation issue the open-issue lookup returns. */
+export interface OpenConfirmationIssue {
+  number: number;
+  state: 'open';
+  confirmationLabel: boolean;
+  /** The caller's authoring label is still present (trimmed, case-insensitive). */
+  authoringLabel: boolean;
+  /** The decision IDs of the issue's matching records, sorted. */
+  decisions: string[];
+  /** A counting void marker names every one of those decisions. */
+  voided: boolean;
+}
+
+export type OpenConfirmationRead =
+  | {
+      status: 'readable';
+      /**
+       * `blocked` when the lookup lists any open issue, so the session
+       * publishes no second confirmation issue for the class and key; `free`
+       * when it lists none.
+       */
+      publication: 'blocked' | 'free';
+      issues: OpenConfirmationIssue[];
+    }
   | AutoDecisionUnreadable;
 
 /** Input for counting open issues that carry the confirmation label. */
@@ -932,12 +959,38 @@ function countingVoids(
   return voids;
 }
 
+/**
+ * The report of one confirmation issue, with the evidence it was built from:
+ * every record the issue posted before void and conflict resolution (the body
+ * record and the trusted record comments of its class and source), and the
+ * decision IDs its counting void markers name.
+ */
+interface ConfirmationIssueEvaluation {
+  report: ConfirmationIssueReport;
+  entries: AutoDecisionRecord[];
+  voids: Set<string>;
+}
+
 function evaluateConfirmationIssue(
   snapshot: IssueSnapshot,
   repository: AutoDecisionRepository,
   context: TrustContext,
   labels: { confirmationLabel: string; authoringLabel: string },
 ): ConfirmationIssueReport {
+  return evaluateConfirmationIssueDetailed(
+    snapshot,
+    repository,
+    context,
+    labels,
+  ).report;
+}
+
+function evaluateConfirmationIssueDetailed(
+  snapshot: IssueSnapshot,
+  repository: AutoDecisionRepository,
+  context: TrustContext,
+  labels: { confirmationLabel: string; authoringLabel: string },
+): ConfirmationIssueEvaluation {
   const body = evaluateBodyRecord(snapshot, repository, context);
   const entries: AutoDecisionRecord[] =
     body.record === null ? [] : [body.record];
@@ -977,20 +1030,24 @@ function evaluateConfirmationIssue(
       ),
     }));
   return {
-    number: snapshot.number,
-    state: snapshot.state,
-    confirmationLabel: snapshot.labels.some((name) =>
-      sameText(name, labels.confirmationLabel),
-    ),
-    authoringLabel: snapshot.labels.some((name) =>
-      sameText(name, labels.authoringLabel),
-    ),
-    bodyRecordCounts: body.record !== null,
-    bodyRecordReason: body.reason,
-    records,
-    voidedDecisions: sortedUnique(voids),
-    conflictingDecisions: conflicting,
-    notes,
+    report: {
+      number: snapshot.number,
+      state: snapshot.state,
+      confirmationLabel: snapshot.labels.some((name) =>
+        sameText(name, labels.confirmationLabel),
+      ),
+      authoringLabel: snapshot.labels.some((name) =>
+        sameText(name, labels.authoringLabel),
+      ),
+      bodyRecordCounts: body.record !== null,
+      bodyRecordReason: body.reason,
+      records,
+      voidedDecisions: sortedUnique(voids),
+      conflictingDecisions: conflicting,
+      notes,
+    },
+    entries,
+    voids,
   };
 }
 
@@ -1449,6 +1506,128 @@ export function findConfirmationIssues(
   }
 }
 
+export interface OpenConfirmationInput extends AutoDecisionReadOptions {
+  repository: AutoDecisionRepository;
+  class: AutoDecideConfirmationClass;
+  /** From the trusted read of #4958, never from the local checkout. */
+  confirmationLabel: string;
+  /** Resolved as `publish-authoring-hold` resolves it. */
+  authoringLabel: string;
+  /**
+   * The key of the lookup: the source issue reference, or the authoring set
+   * ID for `authoringChoice`. Name at least one, so the lookup never blocks
+   * every publication of a class.
+   */
+  source?: string;
+  set?: string;
+}
+
+/**
+ * List the open confirmation issues for one class and key, including an issue
+ * whose records were all voided (kurone-kito/idd-skill#5177). The ordinary
+ * finder omits a voided record, and a confirmation issue can stay open, with
+ * the authoring label, after its only record was voided, so a list built from
+ * counting records alone would call the class and key free and let a later
+ * session publish a second issue for it.
+ *
+ * An issue is listed when its body record counts and any record it posted
+ * before void and conflict resolution (the body record or a trusted record
+ * comment of the body's class and source) has the class and matches the key.
+ * Voids and conflicts never remove an issue from this list; `voided` only
+ * reports that every matching decision was voided. Like the finder, the lookup
+ * sees only issues whose body record counts, and it rechecks the label and
+ * state of each issue after the REST scan, so a closed confirmation issue
+ * never blocks a new publication. A failed read is `unreadable`, never `free`.
+ */
+export function findOpenConfirmationIssues(
+  input: OpenConfirmationInput,
+  provider: AutoDecisionRecordsProvider = createGithubProvider(),
+): OpenConfirmationRead {
+  try {
+    assertRepository(input.repository);
+    assertListableConfirmationLabel(input.confirmationLabel);
+    assertLabel(input.authoringLabel, 'authoring label');
+    if (!isConfirmationClass(input.class)) {
+      throw new Error(
+        `the class must be one of ${AUTO_DECIDE_CONFIRMATION_CLASSES.join(', ')}`,
+      );
+    }
+    for (const [name, value] of [
+      ['source', input.source],
+      ['set', input.set],
+    ] as const) {
+      if (value !== undefined && value.trim() === '') {
+        throw new Error(`the ${name} must be non-empty when given`);
+      }
+    }
+    if (input.source === undefined && input.set === undefined) {
+      throw new Error('the lookup needs a source or a set as its key');
+    }
+    const { owner, repo } = input.repository;
+    const context = readTrustContext(input);
+    if (context.trustedList.length === 0) {
+      // With no trusted actor no body record counts, so an empty result could
+      // not show that the class and key are free.
+      throw new Error(
+        'trustedMarkerActors is empty or missing, so no open confirmation issue can be verified',
+      );
+    }
+    const listed = listLabelledIssues(
+      provider,
+      owner,
+      repo,
+      input.confirmationLabel,
+      'open',
+    );
+    const evaluations: ConfirmationIssueEvaluation[] = [];
+    const voids = new Set<string>();
+    for (const entry of listed) {
+      const evaluation = evaluateConfirmationIssueDetailed(
+        readIssueSnapshot(provider, owner, repo, entry.number),
+        input.repository,
+        context,
+        input,
+      );
+      // Keep voids from every scanned snapshot, as the finder does, even if
+      // its label or state changed before this read.
+      for (const decision of evaluation.voids) {
+        voids.add(decision);
+      }
+      evaluations.push(evaluation);
+    }
+    const issues: OpenConfirmationIssue[] = [];
+    for (const { report, entries } of evaluations) {
+      if (!report.confirmationLabel || report.state !== 'open') {
+        continue;
+      }
+      const matching = entries.filter(
+        (record) =>
+          record.class === input.class && recordMatchesFilters(record, input),
+      );
+      if (matching.length === 0) {
+        continue;
+      }
+      const decisions = sortedUnique(matching.map((record) => record.decision));
+      issues.push({
+        number: report.number,
+        state: 'open',
+        confirmationLabel: report.confirmationLabel,
+        authoringLabel: report.authoringLabel,
+        decisions,
+        voided: decisions.every((decision) => voids.has(decision)),
+      });
+    }
+    issues.sort((a, b) => a.number - b.number);
+    return {
+      status: 'readable',
+      publication: issues.length > 0 ? 'blocked' : 'free',
+      issues,
+    };
+  } catch (error) {
+    return unreadable(error);
+  }
+}
+
 /**
  * Count every open issue carrying the trusted confirmation label. The REST
  * list is scanned until two consecutive all-page snapshots agree, so a closure
@@ -1549,6 +1728,7 @@ export function matchDecisionRecord(
 type AutoDecisionCliMode =
   | 'pending-count'
   | 'records'
+  | 'open-issues'
   | 'confirmation'
   | 'links';
 
@@ -1606,6 +1786,7 @@ export function parseAutoDecisionRecordsArgs(
   const modes: Array<AutoDecisionCliMode | null> = [
     flag('pending-count') ? 'pending-count' : null,
     flag('records') ? 'records' : null,
+    flag('open-issues') ? 'open-issues' : null,
     values.confirmation === undefined ? null : 'confirmation',
     flag('links') ? 'links' : null,
   ];
@@ -1614,7 +1795,7 @@ export function parseAutoDecisionRecordsArgs(
   );
   if (selected.length !== 1) {
     throw new Error(
-      'give exactly one mode: --pending-count, --records, --confirmation, or --links',
+      'give exactly one mode: --pending-count, --records, --open-issues, --confirmation, or --links',
     );
   }
   const mode = selected[0] as AutoDecisionCliMode;
@@ -1637,6 +1818,7 @@ export function parseAutoDecisionRecordsArgs(
   const modeFlags: Record<AutoDecisionCliMode, readonly string[]> = {
     'pending-count': ['pending-count'],
     records: ['records', 'class', 'source', 'claim', 'set', 'subject', 'state'],
+    'open-issues': ['open-issues', 'class', 'source', 'set'],
     confirmation: ['confirmation'],
     links: ['links', 'issue'],
   };
@@ -1694,6 +1876,32 @@ export function parseAutoDecisionRecordsArgs(
     if (claim !== undefined) parsed.claim = claim;
     if (set !== undefined) parsed.set = set;
     if (subject !== undefined) parsed.subject = subject;
+    return parsed;
+  }
+
+  if (mode === 'open-issues') {
+    const className = optional('class');
+    if (className === undefined) {
+      throw new Error('--open-issues requires --class <class>');
+    }
+    if (!isConfirmationClass(className)) {
+      throw new Error(
+        `--class must be one of ${AUTO_DECIDE_CONFIRMATION_CLASSES.join(', ')}`,
+      );
+    }
+    const source = optional('source');
+    const set = optional('set');
+    if (source === undefined && set === undefined) {
+      throw new Error('--open-issues requires --source <number> or --set <id>');
+    }
+    if (set !== undefined && set.trim() === '') {
+      throw new Error('--set must be non-empty when given');
+    }
+    parsed.class = className;
+    if (source !== undefined) {
+      parsed.source = parsePositiveIssueNumber(source, '--source');
+    }
+    if (set !== undefined) parsed.set = set;
     return parsed;
   }
 
@@ -1776,6 +1984,7 @@ function printAutoDecisionRecordsHelp(output: (text: string) => void): void {
   output(`Usage:
   node scripts/auto-decision-records.mjs --pending-count [--owner <owner> --repo <repo>] [--base-ref <name>]
   node scripts/auto-decision-records.mjs --records --class <class> [--source <number>] [--claim <id> | --set <id>] [--subject <value>] --state open|all [--owner <owner> --repo <repo>] [--base-ref <name>]
+  node scripts/auto-decision-records.mjs --open-issues --class <class> (--source <number> | --set <id>) [--owner <owner> --repo <repo>] [--base-ref <name>]
   node scripts/auto-decision-records.mjs --confirmation <number> [--owner <owner> --repo <repo>] [--base-ref <name>]
   node scripts/auto-decision-records.mjs --links --issue <number> [--owner <owner> --repo <repo>] [--base-ref <name>]
 
@@ -1849,11 +2058,20 @@ export function runAutoDecisionRecordsCli(
 
   let trustedPolicyConfig: AutoDecisionReadOptions['trustedPolicyConfig'];
   let authoringLabel: string | undefined;
-  if (mode === 'records' || mode === 'confirmation' || mode === 'links') {
+  if (
+    mode === 'records' ||
+    mode === 'open-issues' ||
+    mode === 'confirmation' ||
+    mode === 'links'
+  ) {
     const config = trustedSnapshot.policyConfig;
     trustedPolicyConfig =
       config as AutoDecisionReadOptions['trustedPolicyConfig'];
-    if (mode === 'records' || mode === 'confirmation') {
+    if (
+      mode === 'records' ||
+      mode === 'open-issues' ||
+      mode === 'confirmation'
+    ) {
       try {
         authoringLabel =
           normalizePolicyConfig(config).issueAuthoring.authoringLabelName;
@@ -1924,6 +2142,40 @@ export function runAutoDecisionRecordsCli(
       class: args.class,
       state: args.state,
       records,
+    });
+    return 0;
+  }
+
+  if (mode === 'open-issues') {
+    const result = findOpenConfirmationIssues(
+      {
+        repository,
+        class: args.class as AutoDecideConfirmationClass,
+        confirmationLabel,
+        authoringLabel: authoringLabel as string,
+        ...(args.source === undefined
+          ? {}
+          : {
+              source: `${repository.owner}/${repository.repo}#${args.source}`,
+            }),
+        ...(args.set === undefined ? {} : { set: args.set }),
+        ...(dependencies.policyPath === undefined
+          ? {}
+          : { policyPath: dependencies.policyPath }),
+        ...(trustedPolicyConfig === undefined ? {} : { trustedPolicyConfig }),
+      },
+      provider,
+    );
+    if (result.status === 'unreadable') {
+      return unreadableResult(output, mode, repository, result.error);
+    }
+    outputJson(output, {
+      status: 'readable',
+      mode,
+      repository,
+      class: args.class,
+      publication: result.publication,
+      issues: result.issues,
     });
     return 0;
   }

@@ -1099,12 +1099,26 @@ above `maxPendingConfirmations` or `maxDecisionsPerClaim`.
   of `--source`: its confirmation identity is the authoring set, so a
   source-only lookup can find another set's issue. For each distinct issue,
   `--confirmation <number>` shows whether it still carries the authoring label.
-  - With no open issue for the same class and key (the source, or the set
-    for `authoringChoice`), the session publishes a new one.
-  - With exactly one, and it is released, the session appends to it.
-  - With one that still carries the authoring label, or with two or more,
-    it does neither: the decision is not recorded, the stop stays as it is
-    today, and the session reports it.
+  That list omits a voided record, yet its confirmation issue can stay open with
+  the authoring label, and a later session would then call the class and key
+  free and publish a second issue for it (kurone-kito/idd-skill#5177, found
+  while reviewing kurone-kito/idd-skill#5168). So before it treats the class
+  and key as free, the session also runs
+  `--open-issues --class <class> --source <source>` (`--set <set ID>` in place
+  of `--source` for `authoringChoice`), with the same trusted flags. That
+  separate read lists every open confirmation issue for the class and key,
+  including one whose record was voided, and reports `publication` as
+  `blocked` when it lists any. Like `--records`, it sees only an issue whose
+  body record counts.
+  - With `publication` `free` (no open issue for the same class and key: the
+    source, or the set for `authoringChoice`), the session publishes a new one.
+  - With exactly one, which `--records` lists too, and it is released, the
+    session appends to it.
+  - With one that still carries the authoring label, one that `--records` does
+    not list (its record was voided), two or more, or a lookup that cannot be
+    read (exit 1), it does neither: the decision is not recorded, the stop
+    stays as it is today, and the session reports it. It never publishes
+    another issue while `publication` is `blocked`.
 - **New issue.** The session publishes with
   `publish-authoring-hold --shape confirmation`, passing `--owner` and
   `--repo` for the base repository that the trusted verdict names. Without

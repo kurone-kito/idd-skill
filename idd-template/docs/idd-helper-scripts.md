@@ -3809,6 +3809,14 @@ confirmation records. It never writes. Its modes are:
   [--subject <value>] --state open|all`: the counting records of one class,
   with their confirmation issue numbers. `--state open` lists only records
   whose confirmation issue is still open.
+- `--open-issues --class <class> (--source <number> | --set <id>)`: the open
+  confirmation issues for one class and key, with `publication` `blocked` when
+  it lists any and `free` otherwise (kurone-kito/idd-skill#5177). A trusted void
+  marker removes a record from `--records` but never an issue from this list:
+  an issue stays listed, with `voided` true, while it is open and its body
+  record counts. A closed issue is never listed. Like `--records`, it does not
+  see an issue whose body record does not count, so it is `unreadable` rather
+  than `free` when the trusted policy lists no marker actor.
 - `--confirmation <number>`: one confirmation issue, with whether it still
   carries the authoring label.
 - `--links --issue <number>`: the link markers that point at one source issue.
