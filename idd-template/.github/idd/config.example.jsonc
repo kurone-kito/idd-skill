@@ -65,6 +65,11 @@
   //   session that runs only the merge phase.
   // - "fully_autonomous_merge": an explicit opt-in; the same session merges
   //   once every gate passes. Read docs/permissions.md before you choose it.
+  //
+  // The value can also be an object with the keys frontier, middle-tier, and
+  // lightweight, each set to one of the values above, for one policy per
+  // model tier. Until the merge handoff resolves that object, the handoff
+  // treats the value as an unknown merge policy and stops.
   "mergePolicy": "human_merge",
 
   // Diagnostics only: confirms that you reconsidered mergePolicy, and never
@@ -73,6 +78,9 @@
   // Default: omitted.
   // - "human_merge", "separate_merge_agent", or "fully_autonomous_merge":
   //   records that you confirmed that mergePolicy value.
+  //
+  // The value can also be an object with the keys frontier, middle-tier, and
+  // lightweight, one value per model tier, as for mergePolicy.
   // "mergePolicyAck": "human_merge",
 
   // Required. The pull request review profile. A profile other than the
