@@ -2890,6 +2890,329 @@ test('effort-candidate-file-limit and candidate-files-not-empty both pass a chil
   }
 });
 
+// --- required-edit-candidate-files (#4932): advisory, warning-severity only ---
+
+const REQUIRED_EDIT_ID = 'required-edit-candidate-files';
+
+/** Place the given lines under the fixture's `## Proposed change` text. */
+function withRequiredEdit(body: string, ...lines: string[]): string {
+  const anchorText = body.includes('Implement the task.')
+    ? 'Implement the task.'
+    : 'Do the thing.';
+  return body.replace(anchorText, `${anchorText}\n\n${lines.join('\n')}`);
+}
+
+function requiredEditAudit(
+  body: string,
+  options: Partial<Parameters<typeof auditAuthoredIssue>[1]> = {},
+) {
+  const report = auditAuthoredIssue(body, { shape: 'child', ...options });
+  const finding = report.findings.find(
+    (entry) => entry.id === REQUIRED_EDIT_ID,
+  );
+  assert.ok(finding, `expected a finding with id ${REQUIRED_EDIT_ID}`);
+  return { report, finding };
+}
+
+function assertNoRequiredEditWarning(
+  body: string,
+  options: Partial<Parameters<typeof auditAuthoredIssue>[1]> = {},
+  label = '',
+): void {
+  const { finding } = requiredEditAudit(body, options);
+  assert.equal(finding.result, 'pass', label);
+  assert.equal(finding.severity, undefined, `${label}: ${finding.detail}`);
+}
+
+test('required-edit-candidate-files warns, and the audit still passes, when a required edit is missing from the candidate list (#4932)', () => {
+  const bullet = '- Required edit: `src/example.mts`';
+  for (const [shape, body] of [
+    ['child', childBody()],
+    ['orphan', orphanBody()],
+  ] as const) {
+    const { report, finding } = requiredEditAudit(
+      withRequiredEdit(body, bullet),
+      { shape },
+    );
+    assert.equal(finding.result, 'pass', shape);
+    assert.equal(finding.severity, 'warning', shape);
+    assert.match(finding.detail, /`src\/example\.mts`/u, shape);
+    assert.equal(report.passed, true, shape);
+  }
+});
+
+test('required-edit-candidate-files does not warn when the required edit is listed (#4932)', () => {
+  for (const [shape, body] of [
+    ['child', childBody({ candidateFiles: ['`src/example.mts`'] })],
+    ['orphan', orphanBody({ candidateFiles: ['`src/example.mts`'] })],
+  ] as const) {
+    const { report, finding } = requiredEditAudit(
+      withRequiredEdit(body, '- Required edit: `src/example.mts`'),
+      { shape },
+    );
+    assert.equal(finding.result, 'pass', shape);
+    assert.equal(finding.severity, undefined, shape);
+    assert.equal(report.passed, true, shape);
+  }
+});
+
+test('required-edit-candidate-files does not warn on a path mentioned only in prose (#4932)', () => {
+  const body = withRequiredEdit(
+    childBody(),
+    'Also change `src/example.mts` so the helper reads it.',
+    '',
+    '- Update `src/example.mts` as part of this change.',
+  );
+  const { report, finding } = requiredEditAudit(body);
+  assert.equal(finding.result, 'pass');
+  assert.equal(finding.severity, undefined);
+  assert.equal(report.passed, true);
+});
+
+test('required-edit-candidate-files does not warn when the body has no Required edit bullet at all (#4932)', () => {
+  assertNoRequiredEditWarning(childBody());
+  assertNoRequiredEditWarning(orphanBody(), { shape: 'orphan' });
+});
+
+test('required-edit-candidate-files reads a wrapped, nested, or CRLF bullet (#4932)', () => {
+  const cases: [string, string][] = [
+    [
+      'path on a continuation line',
+      withRequiredEdit(childBody(), '- Required edit:\n  `src/example.mts`'),
+    ],
+    [
+      'prose before the path on a wrapped bullet',
+      withRequiredEdit(
+        childBody(),
+        '- Required edit: change the parser in\n  `src/example.mts` and nothing else',
+      ),
+    ],
+    [
+      'a nested bullet',
+      withRequiredEdit(
+        childBody(),
+        '- Parent bullet\n  - Required edit: `src/example.mts`',
+      ),
+    ],
+    [
+      'a star marker',
+      withRequiredEdit(childBody(), '* Required edit: `src/example.mts`'),
+    ],
+    [
+      'a plus marker',
+      withRequiredEdit(childBody(), '+ Required edit: `src/example.mts`'),
+    ],
+    [
+      'CRLF line endings',
+      withRequiredEdit(
+        childBody(),
+        '- Required edit:\n  `src/example.mts`',
+      ).replaceAll('\n', '\r\n'),
+    ],
+  ];
+  for (const [label, body] of cases) {
+    const { finding } = requiredEditAudit(body);
+    assert.equal(finding.severity, 'warning', label);
+    assert.match(finding.detail, /`src\/example\.mts`/u, label);
+  }
+});
+
+test('required-edit-candidate-files stops a bullet at its blank line, next item, or heading (#4932)', () => {
+  for (const body of [
+    withRequiredEdit(
+      childBody(),
+      '- Required edit: the parser',
+      '',
+      'See `src/example.mts` for context.',
+    ),
+    withRequiredEdit(
+      childBody(),
+      '- Required edit: the parser',
+      '- Related file: `src/example.mts`',
+    ),
+    withRequiredEdit(
+      childBody(),
+      '- Required edit: the parser',
+      '### Notes `src/example.mts`',
+    ),
+  ]) {
+    assertNoRequiredEditWarning(body);
+  }
+});
+
+test('required-edit-candidate-files names every missing path once, in first-seen order, spelled as written (#4932)', () => {
+  const body = withRequiredEdit(
+    childBody({ candidateFiles: ['`src/listed.mts`'] }),
+    '- Required edit: `src/b.mts`',
+    '- Required edit: `src/listed.mts`',
+    '- Required edit: `src/a.mts`',
+    '- Required edit: `src/b.mts`',
+    '- Required edit: `./src/b.mts`',
+  );
+  const { report, finding } = requiredEditAudit(body);
+  assert.equal(finding.severity, 'warning');
+  assert.match(
+    finding.detail,
+    /missing from ## Candidate files: `src\/b\.mts`, `src\/a\.mts`;/u,
+  );
+  assert.ok(!finding.detail.includes('src/listed.mts'), finding.detail);
+  assert.equal(finding.detail.match(/src\/b\.mts/gu)?.length, 1);
+  assert.equal(report.passed, true);
+});
+
+test('required-edit-candidate-files compares by contention key, so a mirror or ./ spelling counts as listed (#4932)', () => {
+  const cases: [string, string][] = [
+    ['`docs/example.md`', 'idd-template/docs/example.md'],
+    ['`idd-template/docs/example.md`', 'docs/example.md'],
+    ['`src/example.mts`', './src/example.mts'],
+    [
+      '`idd-template/.github/instructions/idd-example.instructions.md`',
+      '.github/instructions/idd-example.instructions.md',
+    ],
+  ];
+  for (const [listed, required] of cases) {
+    assertNoRequiredEditWarning(
+      withRequiredEdit(
+        childBody({ candidateFiles: [listed] }),
+        `- Required edit: \`${required}\``,
+      ),
+      {},
+      `${listed} vs ${required}`,
+    );
+  }
+});
+
+test('required-edit-candidate-files warns for every required edit when there is no candidate section (#4932)', () => {
+  const body = withRequiredEdit(
+    childBody({ candidateFiles: null }),
+    '- Required edit: `src/example.mts`',
+  );
+  const { finding } = requiredEditAudit(body);
+  assert.equal(finding.severity, 'warning');
+});
+
+test('required-edit-candidate-files ignores a bullet quoted in a fence, a comment, or indented code (#4932)', () => {
+  const bullet = '- Required edit: `src/example.mts`';
+  for (const [label, lines] of [
+    ['fence', ['```md', bullet, '```']],
+    ['tilde fence', ['~~~md', bullet, '~~~']],
+    ['multi-line comment', ['<!--', bullet, '-->']],
+    ['indented code', ['', `    ${bullet}`]],
+  ] as const) {
+    assertNoRequiredEditWarning(
+      withRequiredEdit(childBody(), ...lines),
+      {},
+      label,
+    );
+  }
+});
+
+test('required-edit-candidate-files recognizes only the literal bullet prefix (#4932)', () => {
+  for (const line of [
+    'Required edit: `src/example.mts`',
+    '- required edit: `src/example.mts`',
+    '- **Required edit:** `src/example.mts`',
+    '- _Required edit:_ `src/example.mts`',
+    '- Required Edit: `src/example.mts`',
+    '- Required edit - `src/example.mts`',
+    '- Required edits: `src/example.mts`',
+    '1. Required edit: `src/example.mts`',
+    '- [ ] Required edit: `src/example.mts`',
+    '> - Required edit: `src/example.mts`',
+    '- Note. Required edit: `src/example.mts`',
+  ]) {
+    assertNoRequiredEditWarning(withRequiredEdit(childBody(), line), {}, line);
+  }
+});
+
+test('required-edit-candidate-files reads the first path-like span of a bullet and skips a bullet with none (#4932)', () => {
+  assertNoRequiredEditWarning(
+    withRequiredEdit(childBody(), '- Required edit: the parser'),
+  );
+  assertNoRequiredEditWarning(
+    withRequiredEdit(childBody(), '- Required edit: add `thing` to the parser'),
+  );
+  const first = requiredEditAudit(
+    withRequiredEdit(
+      childBody(),
+      '- Required edit: add `thing` to `src/a.mts`, then `src/b.mts`',
+    ),
+  ).finding;
+  assert.equal(first.severity, 'warning');
+  assert.match(first.detail, /`src\/a\.mts`;/u);
+  assert.ok(!first.detail.includes('src/b.mts'), first.detail);
+});
+
+test('required-edit-candidate-files never adds the path to the effort count (#4932)', () => {
+  const body = withRequiredEdit(
+    childBody({ effort: 'S', candidateFiles: candidatePaths(3) }),
+    '- Required edit: `src/example.mts`',
+  );
+  const { report, finding } = requiredEditAudit(body);
+  assert.equal(finding.severity, 'warning');
+  assert.equal(findingResult(report, 'effort-candidate-file-limit'), 'pass');
+  assert.equal(report.passed, true);
+});
+
+test('required-edit-candidate-files is not applicable to a roadmap or a bucket audit (#4932)', () => {
+  const bullet = '- Required edit: `src/example.mts`';
+  assertNoRequiredEditWarning(
+    roadmapBody().replace(
+      'Ship the initiative.',
+      `Ship the initiative.\n\n${bullet}`,
+    ),
+    { shape: 'roadmap' },
+    'roadmap',
+  );
+  const bucket = requiredEditAudit(withRequiredEdit(childBody(), bullet), {
+    expectedAuthoringBucket: 'needs-decision',
+  }).finding;
+  assert.equal(bucket.result, 'pass');
+  assert.equal(bucket.severity, undefined);
+  assert.match(bucket.detail, /not applicable/u);
+});
+
+test('the compiled CLI surfaces the required-edit warning and still exits 0 (#4932)', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'idd-required-edit-'));
+  try {
+    const bodyPath = join(tempRoot, 'draft.md');
+    writeFileSync(
+      bodyPath,
+      withRequiredEdit(childBody(), '- Required edit: `src/example.mts`'),
+    );
+    const args = [
+      '--shape',
+      'child',
+      '--title',
+      'Add a sample child feature',
+      '--body-file',
+      bodyPath,
+      '--marker-prefix',
+      'idd-skill',
+    ];
+    const json = runCliRaw(args);
+    assert.equal(json.status, 0, json.stderr);
+    const report = JSON.parse(json.stdout) as {
+      passed: boolean;
+      findings: { id: string; severity?: string; detail: string }[];
+    };
+    assert.equal(report.passed, true);
+    const finding = report.findings.find(
+      (entry) => entry.id === REQUIRED_EDIT_ID,
+    );
+    assert.equal(finding?.severity, 'warning');
+    assert.match(finding?.detail ?? '', /`src\/example\.mts`/u);
+    const table = runCliRaw([...args, '--format', 'table']);
+    assert.equal(table.status, 0, table.stderr);
+    assert.match(
+      table.stdout,
+      /required-edit-candidate-files\tpass\twarning\t/u,
+    );
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 function effortLReadyResult(
   body: string,
   options: Partial<Parameters<typeof auditAuthoredIssue>[1]> = {},

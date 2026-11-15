@@ -18,7 +18,9 @@
 // visible/hidden line agreement for the suitability and effort
 // footers, the candidate-file count of a child or an S/M orphan against
 // its effort threshold (see checkEffortCandidateFileLimit, #4130 and
-// #4434), an L-effort
+// #4434), an advisory warning-severity check that flags a path a
+// `Required edit:` bullet names but `## Candidate files` omits (see
+// checkRequiredEditCandidateFiles, #4932), an L-effort
 // draft refused as ready while the opt-in autopilotSuitability.effortL
 // policy is `refuse` (see checkEffortLReady, #4198), an advisory
 // warning-severity check that flags an issue/PR
@@ -77,7 +79,10 @@ import {
   isTaskListCheckboxLine,
   type RoadmapGraphReference,
 } from './discover-roadmap-graph.mts';
-import { parseCandidateFiles } from './discover-shared-file-overlap.mts';
+import {
+  normalizeContentionPath,
+  parseCandidateFiles,
+} from './discover-shared-file-overlap.mts';
 import { evaluateA4Viability } from './discover-viability-gate.mts';
 import type { EffortMarkerDetection } from './effort.mts';
 import { parseEffortMarker } from './effort.mts';
@@ -98,6 +103,7 @@ import {
   findHtmlBlockRanges,
   findHtmlCommentRanges,
   findIndentedCodeRanges,
+  findMarkdownCodeRanges,
   maskMarkdownForScan,
   stripMarkdownCodeRegions,
 } from './markdown-code.mts';
@@ -181,6 +187,13 @@ export const EFFORT_CANDIDATE_FILE_LIMITS: Readonly<Record<'S' | 'M', number>> =
 // `#0` or a leading-zero form never exempts a child either.
 const SPLIT_OUT_OF_LINE_PATTERN =
   /^[ \t]*(?:>[ \t]*)?(?:(?:[-*+]|\d+[.)])[ \t]+)?[_*]{0,2}Split out of (?:[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)?#[1-9][0-9]*(?=[_*.,;:!?)]*(?:[ \t]|$))/m;
+
+// The opening of a required-edit bullet (#4932): a `-`, `*`, or `+` list
+// item whose text begins with the literal, case-sensitive `Required edit:`.
+// Neither an ordered-list marker, a task-list checkbox, an emphasis
+// wrapper, nor a spelling variant opens one, so the contract's one-line
+// definition stays the whole grammar.
+const REQUIRED_EDIT_BULLET_PATTERN = /^ *[-*+]\s+Required edit:/u;
 
 // Shared "not applicable" detail for every triage-a4-*/triage-a45-*/
 // triage-title-missing finding (#3289) when `shape === 'roadmap'`: Discover
@@ -284,8 +297,10 @@ export interface AuditFinding {
    * Present on an advisory finding that stays `result: 'pass'` but still
    * has something worth surfacing: `prose-dependency` (an unencoded
    * dependency), `roadmap-tracks-parse` (an unresolved `## Tracks`
-   * checkbox line, #2765), and `authoring-marker-minimization-backlog` (a
-   * nonzero not-yet-minimized marker count, #2896). Deliberately separate
+   * checkbox line, #2765), `required-edit-candidate-files` (a `Required
+   * edit:` path missing from `## Candidate files`, #4932), and
+   * `authoring-marker-minimization-backlog` (a nonzero not-yet-minimized
+   * marker count, #2896). Deliberately separate
    * from `result` (which stays `'pass'` for every one of these checks in
    * every case): an advisory finding must never flip
    * {@link AuditReport.passed} to `false` or change the CLI exit code, and
@@ -293,10 +308,10 @@ export interface AuditFinding {
    * instead of relying on a special case in the `passed` aggregation
    * below.
    *
-   * A fourth, differently-shaped source (#3289): under `--expect-bucket`,
+   * A further, differently-shaped source (#3289): under `--expect-bucket`,
    * any `triage-a4-*`/`triage-a45-*` finding that would otherwise have
    * failed is rewritten to `result: 'pass'` with this field set, via
-   * `demoteIfBucketAudit` in `buildTriageFindings`. Unlike the three
+   * `demoteIfBucketAudit` in `buildTriageFindings`. Unlike the
    * always-pass advisory checks above, this finding's underlying
    * evaluation genuinely failed -- the demotion is conditional on
    * `--expect-bucket` (a needs-decision/blocked-by-human body is meant to
@@ -1084,12 +1099,13 @@ if (import.meta.main) {
  * Audit a drafted issue body against the issue-authoring contract's
  * structural expectations for the declared shape. Every check runs
  * independently (no short-circuit), so one report surfaces every problem
- * at once instead of stopping at the first failure. Three checks
- * (`prose-dependency`, `roadmap-tracks-parse`, and
+ * at once instead of stopping at the first failure. Four checks
+ * (`prose-dependency`, `roadmap-tracks-parse`,
+ * `required-edit-candidate-files`, and
  * `authoring-marker-minimization-backlog`) are advisory-only: each
  * always reports `result: 'pass'` and only ever adds a `severity:
  * 'warning'` marker plus detail on the specific condition it flags, so
- * none of the three ever affects `passed` or the caller's exit code. See
+ * none of the four ever affects `passed` or the caller's exit code. See
  * {@link AuditFinding.severity}.
  */
 function backlogOptionsFor(options: AuditOptions): AuditOptions {
@@ -1323,6 +1339,7 @@ export function auditAuthoredIssue(
       suitability,
     ),
     checkEffortCandidateFileLimit(rawText, shape, isBucketAudit, markerPrefix),
+    checkRequiredEditCandidateFiles(rawText, shape, isBucketAudit),
     checkEffortLReady(
       rawText,
       shape,
@@ -3600,6 +3617,144 @@ function checkEffortCandidateFileLimit(
     name,
     `effort ${effort.value} with ${count} candidate files exceeds the limit of ${limit}; split the draft into a roadmap with children before publication (or record a Split out of #<n> line if it is already a split child)`,
   );
+}
+
+/**
+ * The first backticked repository path of each required-edit bullet in the
+ * body, in document order (#4932). A required edit is a `-`, `*`, or `+`
+ * list item whose text begins `Required edit:` ({@link
+ * REQUIRED_EDIT_BULLET_PATTERN}); the item runs through its wrapped
+ * continuation lines (the span rule the `## Tracks` check uses), because a
+ * hard-wrapped body often moves the path off the first line. Within that
+ * span the path is the first genuine inline code span that has no
+ * whitespace and contains a `/` or a `.`, the same shape test the
+ * `## Candidate files` parser applies to a backticked entry. A bullet with
+ * no such span names no path and is skipped.
+ *
+ * Scans the same masked view as `parseCandidateFileEntries` (fences,
+ * indented code, HTML comments, and HTML blocks masked; inline code kept),
+ * so a bullet quoted in a fence or a comment never counts and the
+ * backticked path is still readable. A span counts only when it falls
+ * inside a real code-span range of that view, never a backtick pair that
+ * sits in an HTML attribute or a link title.
+ */
+function extractRequiredEditPaths(rawText: string): string[] {
+  const masked = maskMarkdownForScan(rawText, {
+    inlineCode: 'keep',
+    htmlComments: 'mask',
+    htmlBlocks: 'mask',
+  });
+  // The mask normalizes `\r\n` to `\n`, so splitting on `\n` keeps every
+  // line offset exact.
+  const lines = masked.split('\n');
+  const lineStarts: number[] = [];
+  let offset = 0;
+  for (const line of lines) {
+    lineStarts.push(offset);
+    offset += line.length + 1;
+  }
+  const codeRanges = findMarkdownCodeRanges(masked);
+  const paths: string[] = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const opening = lines[index].match(REQUIRED_EDIT_BULLET_PATTERN);
+    if (opening === null) {
+      continue;
+    }
+    let end = index;
+    while (end + 1 < lines.length && !isTaskListBlockBoundary(lines[end + 1])) {
+      end += 1;
+    }
+    const itemStart = lineStarts[index] + opening[0].length;
+    const itemEnd = lineStarts[end] + lines[end].length;
+    for (const match of masked
+      .slice(itemStart, itemEnd)
+      .matchAll(/`([^`]+)`/gu)) {
+      const spanStart = itemStart + match.index;
+      const spanEnd = spanStart + match[0].length;
+      if (
+        !codeRanges.some(
+          (range) => spanStart >= range.start && spanEnd <= range.end,
+        )
+      ) {
+        continue;
+      }
+      const raw = match[1].trim();
+      if (raw.length > 0 && !/\s/u.test(raw) && /[/.]/u.test(raw)) {
+        paths.push(raw);
+        break;
+      }
+    }
+  }
+  return paths;
+}
+
+/**
+ * Orphan and child shapes (#4932): an advisory, warning-severity-only
+ * check that each path a `Required edit:` bullet names also appears in
+ * `## Candidate files`. The effort limit counts only the listed paths, so a
+ * body that names a required edit and leaves it out of the list slips
+ * under the count (observed on closed issue `#4809`). Always reports
+ * `result: 'pass'`: a missing path adds `severity: 'warning'` and names
+ * every missing path once, in first-seen order and spelled as written, and
+ * never changes `passed` or the exit code. It also never adds the path to
+ * the effort count.
+ *
+ * A path is listed when its contention key ({@link normalizeContentionPath},
+ * the key the effort count and the A4 shared-file check use) is in the
+ * parsed candidate list, so an `idd-template/` source and its mirror, or a
+ * `./`-prefixed spelling, count as the same file. A body with no
+ * `## Candidate files` section lists nothing, so every required edit warns.
+ * A body with no `Required edit:` bullet is never warned. Not applicable to
+ * a bucket audit or to any shape other than orphan and child; the
+ * confirmation shape returns before the checks run.
+ */
+function checkRequiredEditCandidateFiles(
+  rawText: string,
+  shape: IssueShape,
+  isBucketAudit: boolean,
+): AuditFinding {
+  const id = 'required-edit-candidate-files';
+  const name = 'Required-edit paths are listed under ## Candidate files';
+  if (isBucketAudit) {
+    return pass(id, name, NOT_APPLICABLE_BUCKET_AUDIT_DETAIL);
+  }
+  if (shape !== 'child' && shape !== 'orphan') {
+    return pass(
+      id,
+      name,
+      'not applicable: only the orphan and child shapes are checked for required-edit paths',
+    );
+  }
+  const requiredEdits = extractRequiredEditPaths(rawText);
+  if (requiredEdits.length === 0) {
+    return pass(id, name, 'no Required edit: bullet names a repository path');
+  }
+  const listed = new Set(parseCandidateFiles(rawText));
+  const seen = new Set<string>();
+  const missing: string[] = [];
+  for (const raw of requiredEdits) {
+    const key = normalizeContentionPath(raw);
+    if (listed.has(key) || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    missing.push(raw);
+  }
+  if (missing.length === 0) {
+    return pass(
+      id,
+      name,
+      `every Required edit: path (${requiredEdits.length} bullet(s)) is listed under ## Candidate files`,
+    );
+  }
+  const listing = missing.map((path) => `\`${path}\``).join(', ');
+  return {
+    id,
+    name,
+    result: 'pass',
+    severity: 'warning',
+    detail: `Required edit: path(s) missing from ## Candidate files: ${listing}; list each one there so the effort limit counts it (this warning does not fail the audit)`,
+  };
 }
 
 /**
@@ -7034,7 +7189,9 @@ for defined values, a sole
 Refs origin, and the review-needs-decision label/bucket/origin contract,
 and an advisory (warning-severity only) check that flags an issue/PR
 reference used near coordination language with no corresponding
-dependency marker, (when --comments-file is supplied) the
+dependency marker, an advisory check that flags a path a "Required edit:"
+bullet names but ## Candidate files omits (required-edit-candidate-files),
+(when --comments-file is supplied) the
 authoring-owner-marker-trail check that verifies an authoring-labeled
 issue carries the owner-marker/publication-token trail, and (when
 --comments-file and/or --journal-comments-file is supplied) the
@@ -7050,7 +7207,7 @@ every triage finding as not applicable (Discover never routes a roadmap
 node through A4/A4.5). With --expect-bucket, a failing triage finding is
 downgraded to a warning instead of failing the report, since such a body
 is meant to be non-ready. Exits 0 when every check passes, 1 when any
-check fails, 2 on a usage error; the advisory check and
+check fails, 2 on a usage error; the advisory checks and
 authoring-marker-minimization-backlog never affect the exit code.
 
 Options:
