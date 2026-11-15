@@ -1609,3 +1609,39 @@ test('released cleanup dry run reports the planned removal and changes nothing',
   assert.equal(calls.some(isWorktreeRemove), false);
   assert.equal(calls.some(isBranchDelete), false);
 });
+
+test('a deinitialized submodule removal refused by real git names the modules directory, with no --force (#5225)', () => {
+  const fx = makeFixture();
+  const sub = join(fx.root, 'lib-source');
+  mkdirSync(sub);
+  git(sub, ['init', '-q', '-b', 'main']);
+  writeAndCommit(sub, 'lib.txt', 'lib\n');
+  git(fx.worktree, [
+    '-c',
+    'protocol.file.allow=always',
+    'submodule',
+    'add',
+    '-q',
+    sub,
+    'vendor/lib',
+  ]);
+  git(fx.worktree, ['commit', '-q', '-m', 'add submodule']);
+  git(fx.worktree, ['submodule', 'deinit', '--all']);
+  const { report, calls } = runCleanup(fx, {
+    apply: true,
+    branchTip: tipOf(fx.worktree, BRANCH),
+  });
+  assert.equal(report.reason, 'worktree-remove-refused');
+  const detail =
+    report.steps.find((step) => step.reason === 'worktree-remove-refused')
+      ?.detail ?? '';
+  const named = /remains at (\S+\/modules),/u.exec(detail)?.[1] ?? '';
+  assert.notEqual(named, '', detail);
+  assert.equal(existsSync(named), true, `${named} must exist on disk`);
+  assert.match(detail, /§LWR step 4/u);
+  assert.equal(
+    calls.some((args) => args.includes('--force')),
+    false,
+  );
+  assert.equal(existsSync(fx.worktree), true);
+});

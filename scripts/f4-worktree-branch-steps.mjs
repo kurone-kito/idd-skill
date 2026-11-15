@@ -121,7 +121,7 @@ export const NEXT_ACTIONS = {
   'dirty-worktree':
     'Hold. The worktree holds untracked, modified, or ignored files. Nothing was removed. The helper moves only a lone ignored node_modules/ directory; when the detail says it did not move node_modules/, the F4 session preserves that directory by hand too. Preserve all other content outside the worktree, including reproducible configured-command output, then rerun.',
   'submodule-worktree':
-    'Hold. The worktree holds a populated submodule. Nothing was removed. The F4 session preserves that content outside the worktree by hand. The operator then runs git -C <issue-worktree-path> submodule deinit --all with the worktree still registered, and the helper is rerun.',
+    'Hold. The worktree holds a populated submodule. Nothing was removed. The F4 session preserves that content outside the worktree by hand. The operator then runs git -C <issue-worktree-path> submodule deinit --all with the worktree still registered, and the helper is rerun. A later run does not remove the worktree while the modules directory of its git directory remains.',
   'branch-tip-mismatch':
     'Hold. The local branch tip does not equal the proof branch tip, or the ref is missing while its worktree exists. Nothing was removed. The operator checks the branch state.',
   'local-branch-unmerged-commits':
@@ -153,6 +153,35 @@ export function ancestorChain(target) {
  */
 export function parseNulList(output) {
   return output.split('\0').filter((entry) => entry.length > 0);
+}
+/** The fatal `git worktree remove` prints for a populated submodule (#5225). */
+const SUBMODULE_REMOVAL_FATAL =
+  'working trees containing submodules cannot be moved or removed';
+/**
+ * The detail for a refused `git worktree remove` (#5225). After a populated
+ * submodule is deinitialized, the worktree's `modules` directory can remain, and a
+ * later run does not remove the worktree while it does. That case names the
+ * full path and the operator route (§LWR step 4 of idd-resume-detail.md). Only
+ * that refusal costs an extra git call. Any failure to find the directory
+ * keeps the generic detail, so no exception escapes after the refusal, and
+ * nothing is deleted here.
+ */
+function worktreeRemoveRefusalDetail(deps, worktree, primary, stderr) {
+  const generic = `git worktree remove refused: ${stderr.trim()}`;
+  if (!stderr.includes(SUBMODULE_REMOVAL_FATAL)) return generic;
+  try {
+    const gitDir = deps.git(
+      ['-C', worktree, 'rev-parse', '--absolute-git-dir'],
+      primary,
+    );
+    const dir = gitDir.status === 0 ? gitDir.stdout.trim() : '';
+    if (dir === '') return generic;
+    const modules = join(dir, 'modules');
+    if (deps.lstat(modules) === 'absent') return generic;
+    return `${generic}; the modules directory of the worktree git directory remains at ${modules}, so a rerun does not remove the worktree. The operator route is the operator's own forced removal in §LWR step 4 of docs/idd-resume-detail.md, after preservation; the F4 session never runs it`;
+  } catch {
+    return generic;
+  }
 }
 /**
  * Classify the output of `resume-claim-routing --assert`. Only an
@@ -815,7 +844,7 @@ function runReleasedClaimCleanup(input, deps) {
         return stop(
           'remove',
           'worktree-remove-refused',
-          `git worktree remove refused: ${removed.stderr.trim()}${preservedDestination === null ? '' : `; node_modules/ remains preserved at ${preservedDestination}`}`,
+          `${worktreeRemoveRefusalDetail(deps, worktree, primary, removed.stderr)}${preservedDestination === null ? '' : `; node_modules/ remains preserved at ${preservedDestination}`}`,
           'failed',
         );
       }
@@ -1257,7 +1286,7 @@ function runStep4And5(
         error: {
           kind: 'failed',
           code: 'worktree-remove-refused',
-          detail: `git worktree remove refused: ${removed.stderr.trim()}${preservedDestination === null ? '' : `; node_modules/ was preserved at ${preservedDestination}`}`,
+          detail: `${worktreeRemoveRefusalDetail(deps, worktree, primary, removed.stderr)}${preservedDestination === null ? '' : `; node_modules/ was preserved at ${preservedDestination}`}`,
         },
         at: 'step-5',
       };
