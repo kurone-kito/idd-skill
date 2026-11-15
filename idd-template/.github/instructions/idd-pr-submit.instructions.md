@@ -241,12 +241,12 @@ report it.
    may remain), and §LWR step 2 has a basis independent of this claim. Its
    inventory (`idd-work.instructions.md`) must already be posted. Re-check it
    per its procedure: refresh the base first, then match the live SHAs, the `-`
-   path checks, and exactly one trusted, unedited comment. A missing, stale, or
-   unmet mapping blocks steps 2 and 3. Steps 3 and 4 also wait until each
-   child-mapped commit of every child is confirmed. Before step 2, re-run item 1
-   in full, re-fetching the set snapshot. Before step 3 and step 4, re-run it
-   with the PR check replaced by a verified closed, unmerged pull request at the
-   recorded head (post-push only). Any change stops.
+   path checks, and exactly one trusted, unedited inventory record. A missing,
+   stale, or unmet mapping blocks steps 2 and 3. Steps 3 and 4 also wait until
+   each child-mapped commit of every child is confirmed. Before step 2, re-run
+   item 1 in full, re-fetching the set snapshot. Before step 3 and step 4,
+   re-run it with the PR check replaced by a verified closed, unmerged pull
+   request at the recorded head (post-push only). Any change stops.
 2. **Close the PR** (post-push): `gh pr close <pr>`; verify closed, unmerged, at
    that head. Re-read before retrying an uncertain close.
 3. **Clean up**: LWR with `--apply` and its step 2 basis (skip if the worktree

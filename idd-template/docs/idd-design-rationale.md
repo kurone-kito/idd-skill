@@ -1707,7 +1707,11 @@ commit stops the inventory and cleanup, and the worktree and issue stay as they
 are. Post the inventory on the source issue with the branch, the base and head
 SHA, and one line per SHA that records pushed or unpushed. Child issue numbers
 come from the authoring set (`authoring-set-members`), not from this comment, so
-the posted inventory is never edited.
+the posted inventory is never edited. The machine record is posted with
+`post-idd-marker --type commit-inventory`. A failed or uncertain POST stops
+cleanup (preventive; no observed incident yet), and the comments are read back
+before any retry, because a second live record stops cleanup. With no
+branch-only commit, the entry list is empty, and the record is still posted.
 
 Before `--apply`, the live `git rev-list` set and each `-` path check must match
 the posted inventory. LWR writes `refs/idd-lwr/<branch>` whenever the branch has
@@ -1725,9 +1729,13 @@ the base advanced. It then matches the live SHA list and re-runs each `-` row's
 path check, because a new base commit can invalidate a `-` disposition without
 changing the SHA list. It reads exactly one trusted, unedited inventory comment
 for the live head; zero, several, or edited comments stop. This is an interim
-rule. The durable record contract (a marker type and a helper that parses and
-reads it back) is a follow-up, because it adds a marker and a helper outside
-this change's scope.
+rule. The durable record is the `commit-inventory` marker
+(kurone-kito/idd-skill#5213). Its selector accepts it only when exactly one
+trusted, unedited record exists for the live head. The prose rule applies only
+when no machine record exists for the live head. Separately, an edited,
+untrusted, malformed, wrong-issue, or repeated record stops cleanup, and so does
+a trusted, unedited record for an older head when no record names the live head.
+None of these falls back to prose.
 
 Finalize never transfers: a child picks only under its own fresh claim, so a
 released child must already carry its trailers when finalize runs. A child picks

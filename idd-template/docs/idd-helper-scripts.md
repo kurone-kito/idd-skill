@@ -7735,6 +7735,14 @@ that runs it is
   --candidate-files '<JSON array>'` and only `--target issue`; optionally
   add `--pull-request --branch --head-sha` together for the post-push record
   (see the [scope-overrun evidence marker](#scope-overrun-evidence-marker)).
+- Commit inventory (`commit-inventory`, kurone-kito/idd-skill#5213) takes
+  `--agent-id --branch --base-sha --head-sha --entries '<JSON array>'` and only
+  `--target issue`. Each entry has a full `sha`, `paths`, a `disposition` of
+  `child`, `in-base`, or `not-reusable`, and a `reach` of `pushed` or
+  `unpushed`; an entry without a valid reach is refused. `marker-helpers.mts`
+  holds the reference selector for this rule. The cleanup procedure applies the
+  same rule by reading the comments, and it accepts the record only when exactly
+  one trusted, unedited one exists for the live head.
 - One-command watermark (`watermark` only): `--from-pr <n>` derives
   `--head-sha` / `--max-activity-at` / `--total-item-count` /
   `--ci-completed-at` from a fresh `review-activity-snapshot` of PR `<n>` and

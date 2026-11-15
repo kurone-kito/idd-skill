@@ -4745,3 +4745,324 @@ export function normalizeNowFlag(raw: string): string | null {
   }
   return parsed.toISOString().replace('.000Z', 'Z');
 }
+
+// ---------------------------------------------------------------------------
+// Commit inventory record (kurone-kito/idd-skill#5213)
+//
+// A machine-readable form of the scope-overrun commit inventory. Cleanup
+// accepts it only when exactly one trusted, unedited record exists for the
+// live head. Every other shape stops; none falls back to the prose rule.
+// The rules are fail-closed: an unknown edit state, an untrusted author, an
+// unreadable or reach-less entry, and a second live record each stop.
+// ---------------------------------------------------------------------------
+
+export type CommitInventoryDisposition = 'child' | 'in-base' | 'not-reusable';
+export type CommitInventoryReach = 'pushed' | 'unpushed';
+
+export interface CommitInventoryEntry {
+  sha: string;
+  paths: string[];
+  disposition: CommitInventoryDisposition;
+  reach: CommitInventoryReach;
+}
+
+export interface ParsedCommitInventoryRecord {
+  agentId: string;
+  issueNumber: number;
+  branch: string;
+  baseSha: string;
+  headSha: string;
+  entries: CommitInventoryEntry[];
+}
+
+const COMMIT_INVENTORY_DISPOSITIONS: readonly string[] = [
+  'child',
+  'in-base',
+  'not-reusable',
+];
+const COMMIT_INVENTORY_REACHES: readonly string[] = ['pushed', 'unpushed'];
+
+function isFullSha(value: unknown): value is string {
+  return typeof value === 'string' && /^[0-9a-f]{40}$/.test(value);
+}
+
+/**
+ * Validate the entry list. An empty list is valid: a scope overrun before the
+ * first implementation commit has no branch-only commits, and its record must
+ * still be postable (kurone-kito/idd-skill#5213). Returns null when the value
+ * is not an array, any entry is unreadable, a SHA repeats, or an entry omits
+ * its reach (issue #5213: such an entry does not count, so the record does not
+ * count either).
+ */
+function normalizeCommitInventoryEntries(
+  value: unknown,
+): CommitInventoryEntry[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const seen = new Set<string>();
+  const entries: CommitInventoryEntry[] = [];
+  for (const raw of value) {
+    if (typeof raw !== 'object' || raw === null) {
+      return null;
+    }
+    const { sha, paths, disposition, reach } = raw as Record<string, unknown>;
+    if (!isFullSha(sha) || seen.has(sha)) {
+      return null;
+    }
+    seen.add(sha);
+    if (
+      !Array.isArray(paths) ||
+      paths.some((path) => typeof path !== 'string' || path.length === 0)
+    ) {
+      return null;
+    }
+    if (
+      typeof disposition !== 'string' ||
+      !COMMIT_INVENTORY_DISPOSITIONS.includes(disposition)
+    ) {
+      return null;
+    }
+    if (
+      typeof reach !== 'string' ||
+      !COMMIT_INVENTORY_REACHES.includes(reach)
+    ) {
+      return null;
+    }
+    entries.push({
+      sha,
+      paths: [...paths] as string[],
+      disposition: disposition as CommitInventoryDisposition,
+      reach: reach as CommitInventoryReach,
+    });
+  }
+  return entries;
+}
+
+/** Render the commit inventory record comment for one head. */
+export function renderCommitInventoryComment(payload: {
+  markerPrefix?: unknown;
+  agentId?: unknown;
+  issueNumber?: unknown;
+  branch?: unknown;
+  baseSha?: unknown;
+  headSha?: unknown;
+  entries?: unknown;
+}): string {
+  const markerPrefix = normalizeNonWhitespaceToken(payload?.markerPrefix);
+  const agentId = normalizeNonWhitespaceToken(payload?.agentId);
+  const issueNumber = normalizePositiveIntegerToken(payload?.issueNumber);
+  const branch = normalizeNonWhitespaceToken(payload?.branch);
+  const baseSha = normalizeNonWhitespaceToken(payload?.baseSha).toLowerCase();
+  const headSha = normalizeNonWhitespaceToken(payload?.headSha).toLowerCase();
+  const entries = normalizeCommitInventoryEntries(payload?.entries);
+  if (
+    !markerPrefix ||
+    !agentId ||
+    issueNumber === null ||
+    !branch ||
+    !isFullSha(baseSha) ||
+    !isFullSha(headSha) ||
+    !entries
+  ) {
+    throw new Error(
+      'invalid commit inventory payload: provide a marker prefix, agent ID, positive issue number, branch, full base and head SHAs, and an entry list (empty when no commit is branch-only) where each entry has a full SHA, paths, a disposition of child, in-base, or not-reusable, and a reach of pushed or unpushed',
+    );
+  }
+  // The entries are percent-encoded, as the scope-overrun file list is, so a
+  // path that contains `-->` cannot end the marker early.
+  const encodedEntries = encodeURIComponent(JSON.stringify(entries));
+  const record =
+    `<!-- ${markerPrefix}-commit-inventory: v1 agent=${agentId} ` +
+    `issue=${issueNumber} branch=${encodeURIComponent(branch)} ` +
+    `base=${baseSha} head=${headSha} entries=${encodedEntries} -->`;
+  const visibleNote =
+    '_' +
+    agentId +
+    ': commit inventory record for issue #' +
+    issueNumber +
+    ' at HEAD `' +
+    headSha +
+    '` (' +
+    entries.length +
+    ' entries) — IDD automation marker. Do not edit._';
+  return [record, '', visibleNote].join('\n');
+}
+
+/**
+ * Parse one canonical commit inventory record. Returns null unless the
+ * comment re-renders from the parsed fields. Trailing whitespace at the end
+ * of the comment is ignored, as the scope-overrun parser ignores it; any
+ * other difference, including leading whitespace or CRLF inside the record,
+ * is refused.
+ */
+export function parseCommitInventoryComment(
+  body: string,
+  markerPrefix: string,
+): ParsedCommitInventoryRecord | null {
+  const prefix = normalizeNonWhitespaceToken(markerPrefix);
+  if (!prefix || typeof body !== 'string') {
+    return null;
+  }
+  const match = body.match(
+    new RegExp(
+      `^<!-- ${escapeRegex(prefix)}-commit-inventory: v1 agent=(\\S+) ` +
+        `issue=(\\d+) branch=(\\S+) base=([0-9a-f]{40}) head=([0-9a-f]{40}) ` +
+        `entries=(\\S+) -->\\n\\n`,
+    ),
+  );
+  if (!match) {
+    return null;
+  }
+  const agentId = normalizeNonWhitespaceToken(match[1]);
+  const issueNumber = normalizePositiveIntegerToken(match[2]);
+  let branch: string;
+  let entries: CommitInventoryEntry[] | null;
+  try {
+    branch = normalizeNonWhitespaceToken(decodeURIComponent(match[3]));
+    entries = normalizeCommitInventoryEntries(
+      JSON.parse(decodeURIComponent(match[6])) as unknown,
+    );
+  } catch {
+    return null;
+  }
+  if (!agentId || issueNumber === null || !branch || !entries) {
+    return null;
+  }
+  const parsed: ParsedCommitInventoryRecord = {
+    agentId,
+    issueNumber,
+    branch,
+    baseSha: match[4],
+    headSha: match[5],
+    entries,
+  };
+  try {
+    return renderCommitInventoryComment({
+      markerPrefix: prefix,
+      agentId,
+      issueNumber,
+      branch,
+      baseSha: parsed.baseSha,
+      headSha: parsed.headSha,
+      entries,
+    }) === body.trimEnd()
+      ? parsed
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/** A comment as the selector reads it. Mirrors GraphQL IssueComment fields. */
+export interface CommitInventoryCommentInput {
+  body: string;
+  /** Login of the comment author, or null when GitHub reports none. */
+  authorLogin: string | null;
+  /**
+   * GraphQL `IssueComment.lastEditedAt`: null means never edited, a string
+   * means edited, and undefined means the edit state is unknown.
+   */
+  lastEditedAt?: string | null;
+}
+
+export type CommitInventorySelection =
+  | { status: 'absent' }
+  | { status: 'accepted'; record: ParsedCommitInventoryRecord }
+  | {
+      status: 'stop';
+      reason:
+        | 'untrusted-author'
+        | 'unknown-edit-state'
+        | 'edited'
+        | 'malformed'
+        | 'wrong-issue'
+        | 'stale-record'
+        | 'duplicate';
+    };
+
+/** True when a comment opens with this prefix's commit inventory marker. */
+export function isCommitInventoryRecordShaped(
+  body: string,
+  markerPrefix: string,
+): boolean {
+  return new RegExp(
+    `^<!--\\s*${escapeRegex(markerPrefix)}-commit-inventory\\b`,
+    'i',
+  ).test(body.trimStart());
+}
+
+/**
+ * Decide what the commit inventory record says about one live head.
+ *
+ * - `absent`: no record-shaped comment exists for this issue. The caller then
+ *   applies the prose rule (exactly one trusted, unedited prose comment for
+ *   the live head). Prose is used only in this case.
+ * - `accepted`: exactly one record names the live head, and it is trusted,
+ *   unedited, well formed, and for this issue. Older records are ignored.
+ * - `stop`: anything else, and never a fallback to prose. An untrusted,
+ *   edited, malformed, or wrong-issue record stops. A trusted, unedited record
+ *   for an older head stops when no record names the live head, so a fresh
+ *   record must be posted. Two records for the live head stop.
+ *
+ * Callers pass `trustedLogins` from `resolveTrustedMarkerActors`.
+ */
+// audit:ignore-dead-export: the reference selector for the agent-applied cleanup rule (kurone-kito/idd-skill#5213); the procedure applies the same rule by reading comments, and tests pin it.
+export function selectCommitInventoryForHead(
+  comments: readonly CommitInventoryCommentInput[],
+  options: {
+    markerPrefix: string;
+    headSha: string;
+    issueNumber: number;
+    trustedLogins: readonly string[];
+  },
+): CommitInventorySelection {
+  const prefix = normalizeNonWhitespaceToken(options.markerPrefix);
+  const head = options.headSha.toLowerCase();
+  const trusted = new Set(
+    options.trustedLogins.map((login) => login.toLowerCase()),
+  );
+  const live: ParsedCommitInventoryRecord[] = [];
+  const stale: ParsedCommitInventoryRecord[] = [];
+  for (const comment of comments) {
+    if (!isCommitInventoryRecordShaped(comment.body, prefix)) {
+      continue;
+    }
+    // Author and edit state come before any reading of the record, so an
+    // edited or untrusted record is refused whatever head it names.
+    if (
+      comment.authorLogin === null ||
+      !trusted.has(comment.authorLogin.toLowerCase())
+    ) {
+      return { status: 'stop', reason: 'untrusted-author' };
+    }
+    if (comment.lastEditedAt === undefined) {
+      return { status: 'stop', reason: 'unknown-edit-state' };
+    }
+    if (comment.lastEditedAt !== null) {
+      return { status: 'stop', reason: 'edited' };
+    }
+    const record = parseCommitInventoryComment(comment.body, prefix);
+    if (!record) {
+      return { status: 'stop', reason: 'malformed' };
+    }
+    if (record.issueNumber !== options.issueNumber) {
+      return { status: 'stop', reason: 'wrong-issue' };
+    }
+    if (record.headSha === head) {
+      live.push(record);
+    } else {
+      stale.push(record);
+    }
+  }
+  if (live.length > 1) {
+    return { status: 'stop', reason: 'duplicate' };
+  }
+  if (live.length === 1) {
+    return { status: 'accepted', record: live[0] };
+  }
+  if (stale.length > 0) {
+    return { status: 'stop', reason: 'stale-record' };
+  }
+  return { status: 'absent' };
+}

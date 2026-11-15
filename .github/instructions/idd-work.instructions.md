@@ -483,21 +483,29 @@ and stop without pushing.
 closure; clone-scoped
 [lock](../../docs/idd-helper-scripts.md#clone-scoped-lock)): follow the
 [inventory procedure](../../docs/idd-design-rationale.md#inventory-branch-only-commits-before-scope-overrun-cleanup-issue-4683).
-Fetch with `git fetch origin {development-branch}:refs/remotes/origin/{development-branch}`,
-stop on failure, and count a `git cherry` `-` as already in base only when
-`git log origin/{development-branch} -- <paths>` lists exactly one commit. A
-merge commit stops the inventory and cleanup. Map other commits to a
-split-proposal child (path overlap; unclear overlap blocks) or to not reusable,
-and post the inventory on the source issue (branch, base and head SHA; a line per
-SHA, pushed/unpushed). Before LWR `--apply`, the live list must match the posted
+Fetch with `git fetch origin
+{development-branch}:refs/remotes/origin/{development-branch}`, stop on failure,
+and count a `git cherry` `-` as already in base only when `git log
+origin/{development-branch} -- <paths>` lists exactly one commit. A merge commit
+stops the inventory and cleanup. Map other commits to a split-proposal child
+(path overlap; unclear overlap blocks) or to not reusable, and post the
+inventory on the source issue (branch, base and head SHA; a line per SHA,
+pushed/unpushed). Before LWR `--apply`, the live list must match the posted
 inventory. After it, if unpushed SHAs exist, the backup ref must exist, resolve
 to the pre-apply tip, and contain them; pushed SHAs must be ancestors of
 `origin/<branch>`; else stop. Child numbers come from the authoring set. Cleanup
-needs exactly one trusted, unedited inventory comment for the live head. A child
-confirms each pick by its `(cherry picked from commit <sha>)` trailer, not by
-patch-id. Until every child-mapped commit is confirmed, keep the source worktree
-and issue open and report. Discarding a not-reusable mapping needs owner or user
-authorization and the LWR `--apply` gate, never `--force`.
+needs exactly one trusted, unedited inventory record for the live head. Post
+the machine record (`<prefix>-commit-inventory`, `post-idd-marker --type
+commit-inventory`); a failed or uncertain POST stops cleanup. It is that record
+when one exists for the live head. Only when none exists is the record exactly
+one trusted, unedited prose comment. An edited, untrusted,
+malformed, wrong-issue, repeated, or unknown-edit-state record stops cleanup,
+and so does a trusted, unedited record for an older head when none names the
+live head. None of these falls back to prose. A child confirms each pick by its
+`(cherry picked from commit <sha>)` trailer, not by patch-id. Until every
+child-mapped commit is confirmed, keep the source worktree and issue open and
+report. Discarding a not-reusable mapping needs owner or user authorization and
+the LWR `--apply` gate, never `--force`.
 
 **Standing split** is the helper-runtime exception to the worker-side
 authoring and scope-overrun rules, for a genuine-need split only (never a

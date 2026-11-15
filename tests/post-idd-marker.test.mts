@@ -22,6 +22,7 @@ import type { ActivationResult } from '../src/scripts/idd-activation.mts';
 import {
   detectMalformedOperationalMarker,
   parseAuthoringOwnerComment,
+  parseCommitInventoryComment,
   parseScopeOverrunRecordComment,
 } from '../src/scripts/marker-helpers.mts';
 import {
@@ -1142,7 +1143,7 @@ test('buildMarkerBody throws on an invalid field set (renderer validation)', () 
   );
 });
 
-test('MARKER_TYPES lists exactly the sixteen supported types', () => {
+test('MARKER_TYPES lists exactly the seventeen supported types', () => {
   assert.deepEqual(
     [...MARKER_TYPES],
     [
@@ -1160,6 +1161,7 @@ test('MARKER_TYPES lists exactly the sixteen supported types', () => {
       'idd-hold',
       'f4-head-proof',
       'scope-overrun',
+      'commit-inventory',
       'authoring-owner',
       'authoring-publication-intent',
     ],
@@ -3026,6 +3028,21 @@ const FULL_FIELDS_BY_TYPE: Record<string, Record<string, string>> = {
     effort: 'M',
     'candidate-files': '["src/z.mts","src/a.mts"]',
   },
+  // kurone-kito/idd-skill#5213: issue-scoped, like scope-overrun.
+  'commit-inventory': {
+    'agent-id': 'worker-1',
+    branch: 'issue/4674-scope-overrun',
+    'base-sha': 'c'.repeat(40),
+    'head-sha': 'a'.repeat(40),
+    entries: JSON.stringify([
+      {
+        sha: 'a'.repeat(40),
+        paths: ['src/a.mts'],
+        disposition: 'child',
+        reach: 'pushed',
+      },
+    ]),
+  },
 };
 
 function postIddMarkerArgv(
@@ -3033,7 +3050,7 @@ function postIddMarkerArgv(
   fields: Record<string, string>,
   destination: { owner?: string; repo?: string } = {},
 ): string[] {
-  const scopeOverrun = type === 'scope-overrun';
+  const scopeOverrun = type === 'scope-overrun' || type === 'commit-inventory';
   const argv = [
     join(REPO_ROOT, 'scripts/post-idd-marker.mjs'),
     '--type',
@@ -3105,6 +3122,24 @@ test('post-idd-marker CLI: the full flag set for every marker type succeeds (dry
     assert.equal(parsed.mode, 'dry-run', `${type} should dry-run cleanly`);
     assert.equal(parsed.type, type);
   }
+});
+
+test('post-idd-marker CLI: commit-inventory renders a record the selector reads back', () => {
+  const output = JSON.parse(
+    execFileSync(
+      process.execPath,
+      postIddMarkerArgv(
+        'commit-inventory',
+        FULL_FIELDS_BY_TYPE['commit-inventory'],
+      ),
+      { cwd: REPO_ROOT, encoding: 'utf8' },
+    ),
+  );
+  const parsed = parseCommitInventoryComment(output.body, 'idd-skill');
+  assert.ok(parsed, 'the rendered record parses');
+  assert.equal(parsed.issueNumber, 4674);
+  assert.equal(parsed.headSha, 'a'.repeat(40));
+  assert.equal(parsed.entries[0].reach, 'pushed');
 });
 
 test('post-idd-marker CLI: scope-overrun renders both pre-push and post-push records', () => {

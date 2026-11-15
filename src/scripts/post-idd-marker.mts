@@ -57,6 +57,7 @@ import {
   normalizeMarkerPrefix,
   type ParsedAuthoringOwnerMarker,
   parseAuthoringOwnerComment,
+  renderCommitInventoryComment,
   renderScopeOverrunRecordComment,
 } from './marker-helpers.mts';
 import {
@@ -130,6 +131,7 @@ export const MARKER_TYPES = [
   'idd-hold',
   'f4-head-proof',
   'scope-overrun',
+  'commit-inventory',
   'authoring-owner',
   'authoring-publication-intent',
 ] as const;
@@ -272,6 +274,9 @@ const REQUIRED_FIELDS_BY_TYPE: Record<MarkerType, readonly string[]> = {
   // listed here; `worktree` is read by the gate and is not a body field.
   'f4-head-proof': ['agent-id', 'claim-id', 'worktree'],
   'scope-overrun': ['agent-id', 'effort', 'candidate-files'],
+  // kurone-kito/idd-skill#5213: the entries are a JSON array passed inline,
+  // the same way the scope-overrun file list is.
+  'commit-inventory': ['agent-id', 'branch', 'base-sha', 'head-sha', 'entries'],
   'authoring-owner': [
     'marker-target',
     'anchor',
@@ -571,6 +576,23 @@ export function buildMarkerBody(
         ...(fields['head-sha'] === undefined
           ? {}
           : { headSha: fields['head-sha'] }),
+      });
+    }
+    case 'commit-inventory': {
+      let entries: unknown;
+      try {
+        entries = JSON.parse(fields.entries ?? '');
+      } catch {
+        throw new Error('--entries must be a JSON array of inventory entries');
+      }
+      return renderCommitInventoryComment({
+        markerPrefix: fields['marker-prefix'],
+        agentId: fields['agent-id'],
+        issueNumber: fields.issue,
+        branch: fields.branch,
+        baseSha: fields['base-sha'],
+        headSha: fields['head-sha'],
+        entries,
       });
     }
     case 'authoring-owner':
@@ -2003,6 +2025,10 @@ below).
   --type <type>        one of: ${MARKER_TYPES.join(', ')}
   --target <issue|pr>  the comment target kind (both use the issues comments API)
   <number>             issue or PR number (positional; required unless --from-pr)
+  commit-inventory     issue only; requires --agent-id --branch --base-sha
+                       --head-sha --entries '<JSON array>' (kurone-kito/idd-skill#5213:
+                       one entry per SHA with paths, disposition child,
+                       in-base, or not-reusable, and reach pushed or unpushed)
   scope-overrun        issue only; requires --agent-id --effort
                        --candidate-files '<JSON array>'. Optional
                        --pull-request --branch --head-sha must be supplied
@@ -4726,17 +4752,19 @@ function main(): HelperCliResult {
   // #4674: the scope snapshot is an issue record. Its marker prefix comes
   // from repository configuration, and its issue number is derived from the
   // actual posting destination so the record cannot name a different issue.
-  if (args.type === 'scope-overrun') {
+  // kurone-kito/idd-skill#5213: the commit inventory record follows the same
+  // rule. Only the scope-overrun pull-request field check below is specific
+  // to scope-overrun, because its branch and head SHA are optional.
+  if (args.type === 'scope-overrun' || args.type === 'commit-inventory') {
     if (args.target !== 'issue') {
-      const message = '--type scope-overrun requires --target issue';
+      const message = `--type ${args.type} requires --target issue`;
       process.stderr.write(`${message}\n`);
       return { exitCode: 1, kind: 'usage', message };
     }
     args.fields.issue = String(args.number);
     const suppliedPrefix = args.fields['marker-prefix'];
     if (Boolean(args.owner) !== Boolean(args.repo)) {
-      const message =
-        '--owner and --repo must be provided together for scope-overrun';
+      const message = `--owner and --repo must be provided together for ${args.type}`;
       process.stderr.write(`${message}\n`);
       return { exitCode: 1, kind: 'usage', message };
     }
@@ -4746,8 +4774,7 @@ function main(): HelperCliResult {
           ? normalizeMarkerPrefix(suppliedPrefix)
           : '';
       if (!targetPrefix) {
-        const message =
-          'scope-overrun with --owner/--repo requires an explicit non-empty --marker-prefix for the target repository';
+        const message = `${args.type} with --owner/--repo requires an explicit non-empty --marker-prefix for the target repository`;
         process.stderr.write(`${message}\n`);
         return { exitCode: 1, kind: 'usage', message };
       }
@@ -4760,8 +4787,7 @@ function main(): HelperCliResult {
         suppliedPrefix !== undefined &&
         normalizeMarkerPrefix(suppliedPrefix) !== configuredPrefix
       ) {
-        const message =
-          '--marker-prefix for scope-overrun must match configured markerPrefix';
+        const message = `--marker-prefix for ${args.type} must match configured markerPrefix`;
         process.stderr.write(`${message}\n`);
         return { exitCode: 1, kind: 'usage', message };
       }
@@ -4770,7 +4796,20 @@ function main(): HelperCliResult {
     const pullRequestFields = ['pull-request', 'branch', 'head-sha'].filter(
       (field) => args.fields[field] !== undefined,
     );
-    if (pullRequestFields.length !== 0 && pullRequestFields.length !== 3) {
+    if (
+      args.type === 'commit-inventory' &&
+      args.fields['pull-request'] !== undefined
+    ) {
+      const message =
+        '--pull-request does not apply to --type commit-inventory; the record names a branch and head SHA only';
+      process.stderr.write(`${message}\n`);
+      return { exitCode: 1, kind: 'usage', message };
+    }
+    if (
+      args.type === 'scope-overrun' &&
+      pullRequestFields.length !== 0 &&
+      pullRequestFields.length !== 3
+    ) {
       const message =
         '--pull-request, --branch, and --head-sha must be provided together';
       process.stderr.write(`${message}\n`);
