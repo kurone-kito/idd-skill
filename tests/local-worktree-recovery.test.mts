@@ -12440,17 +12440,19 @@ function probeHostArgumentLimit(): {
   return probedArgumentLimit;
 }
 
-/** The recorded argv: 80000 `:(literal)ignored/N.txt` pathspecs. */
+/** The recorded argv: 80000 `:(literal)ignored/N.txt` pathspecs, 2228904
+ * argv bytes together with `clean`, `-fdx`, and `--`. */
 const RECORDED_ARGV_COUNT = 80_000;
 const RECORDED_ARGV_BYTES = 2_228_904;
 
 /** Preserved paths under `ignored/` whose literal pathspecs together reach
  * `targetBytes`. They start with the recorded `ignored/N.txt` shape, all
  * 80000 of them, and only grow past that, for a host whose limit is higher,
- * with paths padded by long directory segments. The padding keeps the
- * argument count near 100000: a spread of several hundred thousand arguments
- * overflows the JavaScript call stack in Node itself, which would hide the
- * spawn failure under test. */
+ * with absent paths padded by long directory segments. A padded path stays
+ * under macOS's 1024-byte `PATH_MAX`, though no test materializes one. The
+ * padding keeps the argument count near 100000: a spread of several hundred
+ * thousand arguments overflows the JavaScript call stack in Node itself,
+ * which would hide the spawn failure under test. */
 function oversizedIgnoredPaths(targetBytes: number): string[] {
   const paths: string[] = [];
   let bytes = 0;
@@ -12461,7 +12463,7 @@ function oversizedIgnoredPaths(targetBytes: number): string[] {
   for (let index = 0; index < RECORDED_ARGV_COUNT; index += 1) {
     add(`ignored/${index}.txt`);
   }
-  const padding = Array.from({ length: 10 }, (_, index) =>
+  const padding = Array.from({ length: 4 }, (_, index) =>
     String(index).repeat(200),
   ).join('/');
   for (let index = RECORDED_ARGV_COUNT; bytes < targetBytes; index += 1) {
@@ -12469,6 +12471,13 @@ function oversizedIgnoredPaths(targetBytes: number): string[] {
   }
   return paths;
 }
+
+/** Pathspec bytes of exactly the recorded 80000 paths: asking for no more
+ * yields the recorded set alone, with no padded path. */
+const RECORDED_PATHSPEC_BYTES = oversizedIgnoredPaths(0).reduce(
+  (total, path) => total + Buffer.byteLength(`:(literal)${path}`) + 1,
+  0,
+);
 
 /** Argv bytes that exceed both the recorded argv and the probed host limit. */
 function oversizedTargetBytes(limit: number): number {
@@ -12589,10 +12598,12 @@ function populateOversizedCleanupFixture(
 ): OversizedCleanupFixture {
   initIgnoredFixtureRepo(repo);
   const paths = oversizedIgnoredPaths(targetBytes);
+  // Real files only among the recorded-shape paths: a padded path could pass
+  // the pathname limit of a host such as macOS.
   const realIndexes = new Set([
     0,
-    Math.floor(paths.length / 2),
-    paths.length - 1,
+    Math.floor(RECORDED_ARGV_COUNT / 2),
+    RECORDED_ARGV_COUNT - 1,
   ]);
   const roots = [repo, join(repo, '.git')];
   const realPaths: string[] = [];
@@ -12704,7 +12715,7 @@ test('the bounded preserved cleanup removes an oversized path set without E2BIG'
 });
 
 test('a preserved path that failed the pre-clean check is not removed and no clean starts', () => {
-  const fixture = buildOversizedCleanupFixture(RECORDED_ARGV_BYTES);
+  const fixture = buildOversizedCleanupFixture(RECORDED_PATHSPEC_BYTES);
   try {
     const changed = fixture.realPaths[1] as string;
     writeFileSync(join(fixture.repo, changed), 'edited after the copy\n');
@@ -12738,7 +12749,7 @@ test('a preserved path that failed the pre-clean check is not removed and no cle
 test('a path edited after earlier batches were cleaned stops the later batches', () => {
   let lastPath = '';
   const fixture = buildOversizedCleanupFixture(
-    RECORDED_ARGV_BYTES,
+    RECORDED_PATHSPEC_BYTES,
     (cleanCount, current) => {
       if (cleanCount !== 1) return;
       lastPath = current.realPaths[2] as string;
