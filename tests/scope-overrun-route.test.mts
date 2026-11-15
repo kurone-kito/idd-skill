@@ -639,7 +639,8 @@ const FINALIZATION_ORDERED_STEPS = [
   'No claim is active, so each write waits on the preflight items it depends on, re-read just before it',
   'Any miss or uncertainty makes no write: report it',
   '1. **Preflight** (read-only)',
-  '2. **Close the PR** (post-push): `gh pr close <pr>`',
+  '2. **Close the PR** (post-push): first re-read each released child',
+  'Then `gh pr close <pr>`',
   'verify closed, unmerged, at that head',
   'Re-read before retrying an uncertain close',
   '3. **Clean up**: LWR with `--apply` and its step 2 basis',
@@ -673,14 +674,17 @@ for (const relativePath of PR_SUBMIT_PATHS) {
       'profile-selected `authoring-set-members --set <set>`',
       "the roadmap's trusted owner marker",
       'is complete and equals the roadmap plus its `## Tracks`',
-      'each member is open with the authoring label',
+      'each member is open and unclaimed, and either carries the authoring label',
+      "or is a released child (no label, and the latest generation's anchor `release-complete` marker for this set is present)",
+      'every child-mapped SHA is confirmed by a `(cherry picked from commit <sha>)` trailer in `git log --format=%B {development-branch}..<child-branch>`',
       'each child says `Split out of #{issue-number}`',
       'and the set excludes this issue',
-      'It is open and unclaimed, with a trusted `scope-overrun` record and the needs-decision label (`labels.needsDecisionLabelName`; pre-first-push may lack it)',
+      'The source issue is open and unclaimed, with a trusted `scope-overrun` record and the needs-decision label (`labels.needsDecisionLabelName`; pre-first-push may lack it)',
       'Post-push, its PR is a draft at the recorded head',
       'profile-selected `local-worktree-recovery --issue {issue-number} --worktree <path>`',
-      'dry run reports `ready: true` (or the worktree is gone, its branch may remain)',
+      'or the worktree is gone, its branch may remain',
       "and §LWR step 2 has a basis independent of this session's claim evidence",
+      'Steps 3 and 4 also wait until each child-mapped commit is confirmed',
     ]) {
       assert.ok(preflight.includes(refusal), refusal);
     }
@@ -736,6 +740,7 @@ for (const relativePath of PR_SUBMIT_PATHS) {
       'On refusal or failure, keep the issue open, apply and verify the label if absent, keep the remains',
       'report the PR state, LWR report, and next action',
       'Never `--force` or bypass its preservation or lock gates',
+      "never touching a child's worktree",
     ]) {
       assert.ok(cleanup.includes(recovery), recovery);
     }
@@ -770,6 +775,29 @@ test('the finalization rationale heading exists in both copies and the B3 pointe
   }
 });
 
+test('both rationale copies describe the delayed route for released children and no longer defer it', () => {
+  for (const rationale of [RATIONALE_PATH, 'docs/idd-design-rationale.md']) {
+    const text = readRepoFile(rationale).replace(/\s+/gu, ' ');
+    assert.ok(
+      text.includes('A released child takes a delayed route instead.'),
+      `${rationale} states the delayed route`,
+    );
+    assert.ok(
+      text.includes(
+        "every child-mapped SHA in the trusted inventory appears in a `(cherry picked from commit <sha>)` trailer on the child's branch",
+      ),
+      `${rationale} states the confirmation rule`,
+    );
+    assert.equal(
+      text.includes(
+        'A delayed-finalization path for released children is a follow-up',
+      ),
+      false,
+      `${rationale} no longer defers the path`,
+    );
+  }
+});
+
 test('the finalization rationale cites its incidents and agrees with the route', () => {
   const text = readRepoFile(RATIONALE_PATH).replace(/\s+/gu, ' ');
   const start = text.indexOf(FINALIZE_RATIONALE_HEADING);
@@ -791,7 +819,13 @@ test('the finalization rationale cites its incidents and agrees with the route',
   for (const claim of [
     'The route is verify-first',
     'a safe LWR dry run',
-    'A missing child, a Tracks mismatch, or a released label means the set is not verified',
+    'A missing child or a Tracks mismatch means the set is not verified, so nothing is written',
+    'for a released child, is confirmed by its trailers (see the delayed route below)',
+    "That marker closes its own generation, so an earlier generation's marker does not count",
+    'A child with no mapped SHA fails, so an empty mapping is never confirmed',
+    'A later revert of a pick keeps its trailer in history, and this check does not detect it',
+    'Step 2 re-reads each released child',
+    "Finalize never touches a child's worktree",
     'a post-push pull request must still be a draft at the recorded head',
     'The pull request closes first and is re-read at the same head before LWR starts',
     'An uncertain close is re-read before any retry',

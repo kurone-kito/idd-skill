@@ -224,26 +224,31 @@ report it.
 
 1. **Preflight** (read-only): profile-selected `authoring-set-members --set
    <set>` (from the roadmap's trusted owner marker) is complete and equals the
-   roadmap plus its `## Tracks`; each member is open with the authoring label,
-   each child says `Split out of #{issue-number}`, and the set excludes this
-   issue. It is open and unclaimed, with a trusted `scope-overrun` record and
-   the needs-decision label (`labels.needsDecisionLabelName`; pre-first-push
-   may lack it). Post-push, its PR is a draft at the recorded head. A
-   profile-selected `local-worktree-recovery --issue {issue-number} --worktree
-   <path>` dry run reports `ready: true` (or the worktree is gone, its branch
-   may remain), and §LWR step 2 has a basis independent of this session's claim
-   evidence. Its commit inventory (`idd-work.instructions.md`, Scope overrun)
-   must already be posted. Re-check it without reposting, as its procedure
-   requires: refresh the base first, then match the live SHAs, the `-` path
-   checks, and exactly one trusted, unedited comment. A missing, stale, or unmet
-   mapping blocks steps 2 and 3. Steps 3 and 4 also wait until each child-mapped
-   commit is confirmed.
-2. **Close the PR** (post-push): `gh pr close <pr>`; verify closed, unmerged, at
-   that head. Re-read before retrying an uncertain close.
+   roadmap plus its `## Tracks`; each member is open and unclaimed, and either
+   carries the authoring label or is a released child (no label, and the latest
+   generation's anchor `release-complete` marker for this set is present); every
+   child-mapped SHA is confirmed by a `(cherry picked from commit <sha>)` trailer
+   in `git log --format=%B {development-branch}..<child-branch>`; each child says
+   `Split out of #{issue-number}`; and the set excludes this issue. The source
+   issue is open and unclaimed, with a trusted `scope-overrun` record and the
+   needs-decision label (`labels.needsDecisionLabelName`; pre-first-push may lack
+   it). Post-push, its PR is a draft at the recorded head. A profile-selected
+   `local-worktree-recovery --issue {issue-number} --worktree <path>` dry run
+   reports `ready: true` (or the worktree is gone, its branch may remain), and
+   §LWR step 2 has a basis independent of this session's claim evidence. Its
+   commit inventory (`idd-work.instructions.md`, Scope overrun) must already be
+   posted. Re-check it without reposting, as its procedure requires: refresh the
+   base first, then match the live SHAs, the `-` path checks, and exactly one
+   trusted, unedited comment. A missing, stale, or unmet mapping blocks steps 2
+   and 3. Steps 3 and 4 also wait until each child-mapped commit is confirmed.
+2. **Close the PR** (post-push): first re-read each released child's claim,
+   branch tip, and trailers; any change stops. Then `gh pr close <pr>`; verify
+   closed, unmerged, at that head. Re-read before retrying an uncertain close.
 3. **Clean up**: LWR with `--apply` and its step 2 basis (skip if the worktree
-   is gone). On refusal or failure, keep the issue open, apply and verify the
-   label if absent, keep the remains, and report the PR state, LWR report, and
-   next action. Never `--force` or bypass its preservation or lock gates.
+   is gone), never touching a child's worktree. On refusal or failure, keep the
+   issue open, apply and verify the label if absent, keep the remains, and report
+   the PR state, LWR report, and next action. Never `--force` or bypass its
+   preservation or lock gates.
 4. **Close the issue** only after step 3: `gh issue close {issue-number}
    --reason "not planned" --comment <roadmap link>`; verify, then remove that
    label, if present, and verify.

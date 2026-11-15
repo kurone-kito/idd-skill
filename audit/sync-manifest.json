@@ -311,14 +311,14 @@
       "glob": ".github/instructions/idd-*.instructions.md",
       "alwaysLoadedPattern": "applyTo:\\s*\"\\*\\*\"",
       "alwaysLoadedLimitBytes": 20000,
-      "phaseLimitBytes": 40000
+      "phaseLimitBytes": 41000
     },
     {
       "id": "instruction-size-budgets-idd-template",
       "glob": "idd-template/.github/instructions/idd-*.instructions.md",
       "alwaysLoadedPattern": "applyTo:\\s*\"\\*\\*\"",
       "alwaysLoadedLimitBytes": 20000,
-      "phaseLimitBytes": 40000
+      "phaseLimitBytes": 41000
     }
   ],
   "bundleBudgets": [
@@ -544,18 +544,6 @@
         "reason": "maintainer-approved raise (kurone-kito, 2026-10-14) for issue #4142: the decline-shape decision path adds about 230 bytes, and the bundle was at 98% after the #4168 and #4098 merges; sized at about 10% headroom over the measured need"
       },
       {
-        "bundle": "instruction-size-budgets-dogfood",
-        "limitBytes": 40000,
-        "issue": 4233,
-        "reason": "maintainer-approved per-file phaseLimitBytes raise (kurone-kito, comment 6162851754 on issue #4233; checker decision in comment 6168271034): the A0-T step 1 hold-label stop adds about 370 bytes to idd-discover.instructions.md, which sat at 35,997 of 36,000 bytes. The raise is the maintainer's explicit exception to E12's per-file-cap rule. The entry name is the instructionSizeBudgets id, and only phaseLimitBytes is covered."
-      },
-      {
-        "bundle": "instruction-size-budgets-idd-template",
-        "limitBytes": 40000,
-        "issue": 4233,
-        "reason": "maintainer-approved per-file phaseLimitBytes raise (kurone-kito, comment 6162851754 on issue #4233; checker decision in comment 6168271034): the A0-T step 1 hold-label stop adds about 370 bytes to the idd-template idd-discover.instructions.md, which sat at 35,997 of 36,000 bytes. The raise is the maintainer's explicit exception to E12's per-file-cap rule. The entry name is the instructionSizeBudgets id, and only phaseLimitBytes is covered."
-      },
-      {
         "bundle": "bundle-work-phase",
         "limitBytes": 41400,
         "issue": 4893,
@@ -566,6 +554,18 @@
         "limitBytes": 33200,
         "issue": 4893,
         "reason": "Operator chose to raise this limit before the split route lands on main (PR #5031, issue #4893), so the trial budget check can measure the raise on the base. This entry supersedes the manual approval from issue #5030 for this bundle (26,000 bytes). That record is removed here because the strictest-limit rule would otherwise keep the old ceiling in force; it remains in git history. Main measures 24,737 bytes (95.14% of 26,000). The Lite split procedure projects about 30,682 bytes for this bundle with the generated banner removed, measured on 2026-11-10. 33,200 leaves 2,518 bytes (7.6%) of headroom, about 92.4% utilization, below the 98% enforcement ceiling. The standing entry at 35,200 (issue #5127) now supplies this bundle's approved limit and supersedes this record."
+      },
+      {
+        "bundle": "instruction-size-budgets-dogfood",
+        "limitBytes": 41000,
+        "issue": 5206,
+        "reason": "Operator decision in the 2026-11-15 IDD autopilot session for issue #5206: the finalize route for released held children restores the safety statements that the independent critique required (a confirmation gate for every child, a child open and unclaimed check, the latest-generation release-complete marker, never --force, and the inventory re-check). idd-pr-submit.instructions.md sat at 39,778 bytes against the 40,000 phase limit and needs about 200 bytes more. 41,000 leaves about 800 bytes of headroom. As in issue #4233, the raise applies to the whole phase budget entry, not to that one file."
+      },
+      {
+        "bundle": "instruction-size-budgets-idd-template",
+        "limitBytes": 41000,
+        "issue": 5206,
+        "reason": "Operator decision in the 2026-11-15 IDD autopilot session for issue #5206: the finalize route for released held children restores the safety statements that the independent critique required (a confirmation gate for every child, a child open and unclaimed check, the latest-generation release-complete marker, never --force, and the inventory re-check). idd-template idd-pr-submit.instructions.md sat at 39,778 bytes against the 40,000 phase limit and needs about 200 bytes more. 41,000 leaves about 800 bytes of headroom. As in issue #4233, the raise applies to the whole phase budget entry, not to that one file."
       }
     ],
     "standingRaiseApprovals": [

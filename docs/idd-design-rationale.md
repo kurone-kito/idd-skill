@@ -1206,15 +1206,33 @@ leaves the pull request, worktree, and source issue as they are, for recovery.
 The set check combines three sources, since none proves it alone.
 `authoring-set-members` lists the issues whose trusted, unedited owner marker
 carries the set. The roadmap's `## Tracks` list names the intended children. A
-fresh read of each issue shows that it is open, still carries the authoring
-label, and records `Split out of` the source. A missing child, a Tracks
-mismatch, or a released label means the set is not verified, so nothing is
-written. The set must also exclude the source issue: a pre-first-push split may
-use the source as the roadmap anchor, and step 4 would then close the
-replacement roadmap itself. The source issue needs no active claim and a
-trusted `scope-overrun` record, and a post-push pull request must still be a
-draft at the recorded head, so a head pushed after the decision cannot be
-closed unseen.
+fresh read of each issue shows that it is open, carries the authoring label or,
+for a released child, is confirmed by its trailers (see the delayed route
+below), and records `Split out of` the source. A missing child or a Tracks
+mismatch means the set is not verified, so nothing is written. The set must
+also exclude the source issue: a pre-first-push split may use the source as the
+roadmap anchor, and step 4 would then close the replacement roadmap itself.
+The source issue needs no active claim and a trusted `scope-overrun` record,
+and a post-push pull request must still be a draft at the recorded head, so a
+head pushed after the decision cannot be closed unseen.
+
+A released child counts only when it is open and unclaimed, carries no authoring
+label, and the anchor's trusted `release-complete` marker for the latest
+generation of this set is present. That marker closes its own generation, so an
+earlier generation's marker does not count. Every child-mapped SHA in the
+trusted inventory must appear in a `(cherry picked from commit <sha>)` trailer
+on the child's branch, read with `git log --format=%B
+{development-branch}..<child-branch>`. The transfer checks the same trailer in
+`<recorded-HEAD>..HEAD` of the child's worktree. The preflight has no trusted
+record of a released child's pre-pick HEAD, so it reads the branch range
+instead. A child with no mapped SHA fails, so an empty mapping is never
+confirmed. A later revert of a pick keeps its trailer in history, and this check
+does not detect it. That limit is accepted here. Step 2 re-reads each released
+child's claim, branch tip, and trailers before the pull request closes, because
+LWR runs after the preflight. Finalize never touches a child's worktree, so a
+dirty child worktree or commits beyond the transfer do not block it. Cleanup
+still reports the PR state, the LWR report, and the next action, and never
+bypasses the LWR preservation or lock gates.
 
 The order of writes follows what each step protects. The pull request closes
 first and is re-read at the same head before LWR starts, because LWR would
@@ -1568,8 +1586,13 @@ A failed transfer keeps both worktrees, both branches, and the source issue
 open, and reports the SHA list with the reachability check. A held child cannot
 claim, and a released child no longer carries the authoring label that the
 finalize preflight requires, so a transfer can stall with no safe route forward.
-The source then stays open and is reported. A delayed-finalization path for
-released children is a follow-up, not part of this change.
+A released child takes a delayed route instead. The preflight accepts it when
+every child-mapped SHA in the trusted inventory appears in a `(cherry picked
+from commit <sha>)` trailer on the child's branch, the same trailer the transfer
+checks, so a conflict-resolved pick is confirmed too. Every child must pass this
+trailer check, released or held, and a child that still carries the label also
+keeps the label check. A child whose transfer is unconfirmed stops the route:
+the source stays open and is reported.
 
 A base that advances after the inventory is posted leaves the record stale, and
 finalize then stops. Superseding a stale record is a follow-up, not part of this
