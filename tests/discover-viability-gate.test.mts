@@ -4622,3 +4622,32 @@ test('collectProvisionalAssessment treats a Candidate files section with no path
     ['candidate-files-empty'],
   );
 });
+
+test('A4 provisional: a credential named in inline code is a live requirement under a relaxation (AC3, AC4)', () => {
+  for (const sentence of [
+    'An operator must supply `credentials` before work starts.',
+    'The rollout needs `production access` first.',
+  ]) {
+    const body = DECISION_BODY.replace(
+      '## Acceptance criteria',
+      `${sentence}\n\n## Acceptance criteria`,
+    );
+    const result = evaluateA4Viability(a4Issue(body), undefined, assess(body));
+    assert.equal(
+      result.failedCriteria.includes('autonomous_completion'),
+      true,
+      sentence,
+    );
+  }
+  // A credential in a fenced example stays an example.
+  const example = DECISION_BODY.replace(
+    '## Acceptance criteria',
+    '```text\nsupply credentials\n```\n\n## Acceptance criteria',
+  );
+  const result = evaluateA4Viability(
+    a4Issue(example),
+    undefined,
+    assess(example),
+  );
+  assert.equal(result.passed, true);
+});

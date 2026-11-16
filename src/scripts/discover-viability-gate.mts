@@ -1771,17 +1771,19 @@ export function evaluateAutonomousCompletion(
   // already CRLF-normalized, so maskMarkdownForScan's own normalization
   // step is a no-op here and the two corpora share the same length/line
   // structure (position-preserving masking).
-  const corpus = maskMarkdownForScan(rawCorpus, { htmlComments: 'mask' });
-  // #4535: the decision phrase is relaxed only when the same approval-sentence
-  // safety net A4.5 applies finds nothing in the body.
+  // #4535: under an eligible provisional plan the whole scan keeps inline code
+  // visible, so a credential or approval named in backticks still counts as a
+  // live requirement; fenced examples and comments stay masked. Without one
+  // the corpus is masked exactly as before.
+  const relaxing = isEligibleProvisionalAssessment(provisional, issue);
+  const corpus = maskMarkdownForScan(rawCorpus, {
+    htmlComments: 'mask',
+    ...(relaxing ? { inlineCode: 'keep' as const } : {}),
+  });
+  // The decision phrase is relaxed only when the same approval-sentence safety
+  // net A4.5 applies finds nothing in the body.
   const relaxedDecisionSignals: string[] | undefined =
-    isEligibleProvisionalAssessment(provisional, issue) &&
-    findApprovalRequirementSentence(
-      maskMarkdownForScan(rawCorpus, {
-        htmlComments: 'mask',
-        inlineCode: 'keep',
-      }),
-    ) === null
+    relaxing && findApprovalRequirementSentence(corpus) === null
       ? []
       : undefined;
   const match = findUnexcludedExternalCoordinationMatch(

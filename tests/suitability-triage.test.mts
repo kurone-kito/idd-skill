@@ -13777,3 +13777,13 @@ test('A4.5 provisional Check 6: a standing approval or budget requirement in a s
     assert.equal(result.passed, true, line);
   }
 });
+
+test('A4.5 provisional: a credential in inline code keeps the needs-decision label blocking (AC4)', () => {
+  const body = `${READY_DECISION_BODY}\nAn operator must supply \`credentials\` before work starts.\n`;
+  const result = evaluateSuitability(decisionIssue(body), {
+    needsDecisionLabelName: NEEDS_DECISION_LABEL,
+    provisionalAssessment: provAssess(body),
+  });
+  assert.equal(result.passed, false);
+  assert.equal(result.failedCheck, 'autonomy');
+});
