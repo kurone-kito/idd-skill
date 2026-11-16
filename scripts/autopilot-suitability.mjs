@@ -438,6 +438,13 @@ function needsCredential(text) {
     withoutFormatting(text).replace(NEGATED_CREDENTIAL_PATTERN, ' '),
   );
 }
+// An approval word that names software, not a person's decision: "the
+// authorization parser must reject an unknown role" asks the code to behave,
+// not anyone to approve.
+const APPROVAL_SOFTWARE_PATTERN = new RegExp(
+  String.raw`(?<![\w-])${APPROVAL_WORD_SOURCE}\s+(?:parser|state\s+machine|service|module|handler|logic|engine|api|library|model|table|column|field|endpoint|middleware|function|class|helper|script|tests?)(?![\w-])`,
+  'gi',
+);
 /**
  * The first sentence of `text` that states an approval, sign-off or
  * authorization requirement, or `null`. A sentence qualifies when it holds an
@@ -454,7 +461,8 @@ export function findApprovalRequirementSentence(source) {
   // sentence ends; drop them and keep the link text.
   const text = source
     .replace(/\]\([^)\n]*\)/g, ']')
-    .replace(/https?:\/\/\S+/gi, ' ');
+    .replace(/https?:\/\/\S+/gi, ' ')
+    .replace(APPROVAL_SOFTWARE_PATTERN, ' ');
   let start = 0;
   const sentences = [];
   for (const found of text.matchAll(DECISION_CLAUSE_BREAK_PATTERN)) {

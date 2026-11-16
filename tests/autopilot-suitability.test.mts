@@ -1536,6 +1536,8 @@ test('findApprovalRequirementSentence keeps a negation to its own sentence (AC3)
     'No approval is needed.',
     'Approval is not required.',
     "This doesn't need explicit sign-off.",
+    'The authorization parser must reject an unknown role.',
+    'The approval state machine must reject an unknown transition.',
     'Approval criteria are listed below.',
     'The reviewer approved the earlier draft.',
   ]) {
@@ -1907,6 +1909,12 @@ test('provisional assessment: formatting does not hide an opinion, and a denied 
     'criteria-needs-credential',
   ]);
   assert.deepEqual(codes('Do not ship without legal approval.'), [
+    'criteria-needs-approval',
+  ]);
+  assert.deepEqual(codes('Do not proceed without approval.'), [
+    'criteria-needs-approval',
+  ]);
+  assert.deepEqual(codes('This cannot ship without sign-off.'), [
     'criteria-needs-approval',
   ]);
   // A denial of one thing does not hide a need for another.

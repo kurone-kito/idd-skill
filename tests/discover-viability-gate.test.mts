@@ -4696,3 +4696,12 @@ test('A4 provisional: an approval requirement blocks the criterion on its own, i
   );
   assert.equal(bodied.failedCriteria.includes('autonomous_completion'), true);
 });
+
+test('A4 provisional: a requirement on authorization software is not an approval requirement (AC3)', () => {
+  const body = DECISION_BODY.replace(
+    '## Acceptance criteria',
+    'The authorization parser must reject an unknown role.\n\n## Acceptance criteria',
+  );
+  const result = evaluateA4Viability(a4Issue(body), undefined, assess(body));
+  assert.equal(result.passed, true);
+});
