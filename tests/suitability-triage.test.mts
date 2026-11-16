@@ -13749,6 +13749,8 @@ test('A4.5 provisional Check 6: a standing approval or budget requirement in a s
     'Legal authorization is required before work starts.',
     'The rollout must be approved by legal.',
     'Sign-off is pending.',
+    'Do not proceed until legal approval is granted.',
+    'The rollout requires legal approval, not just passing tests.',
     'No migration is needed. The budget raise needs a standing approval.',
     'The rollout requires, after the long and careful qualification of every moving part in this very long sentence about scope, a formal approval.',
   ]) {

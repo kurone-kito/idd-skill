@@ -1513,10 +1513,23 @@ test('findApprovalRequirementSentence keeps a negation to its own sentence (AC3)
     'This does not need any approval.',
     'This requires no approval.',
     'Nothing here needs sign-off.',
+    'No approval is needed.',
+    'Approval is not required.',
+    "This doesn't need explicit sign-off.",
     'Approval criteria are listed below.',
     'The reviewer approved the earlier draft.',
   ]) {
     assert.equal(findApprovalRequirementSentence(text), null, text);
+  }
+  // A bare "not" is not a denial: a prohibition or a contrast still requires it.
+  for (const text of [
+    'Do not proceed until legal approval is granted.',
+    'The rollout requires legal approval, not just passing tests.',
+    'Do not ship without approval.',
+    'This does not need to wait, but the rollout requires legal approval.',
+    'This does not need any approval, but the rollout requires legal approval.',
+  ]) {
+    assert.notEqual(findApprovalRequirementSentence(text), null, text);
   }
   assert.notEqual(
     findApprovalRequirementSentence(

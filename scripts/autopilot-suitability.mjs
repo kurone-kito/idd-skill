@@ -334,15 +334,37 @@ export function isDecisionCausedSignal(text, index, length) {
 const APPROVAL_WORD_PATTERN =
   /(?<![\w-])(?:approv\w*|sign(?:s|ed|ing)?[- ]?off|authori[sz]\w*|permissions?|consent|go-ahead|grant(?:s|ed)?\s+(?:access|permission))(?![\w-])/i;
 const REQUIREMENT_CUE_PATTERN =
-  /(?<![\w-])(?:needs?|needed|requires?|required|requiring|requirement|must|has to|have to|pending|awaiting|awaits?|subject to|gated|blocked|depends?|until|mandatory|prerequisite|first)(?![\w-])/i;
-const NEGATION_CUE_PATTERN =
-  /(?<![\w-])(?:no|not|never|none|nothing|without|neither|nor)(?![\w-])|n't\b/i;
+  /(?<![\w-])(?:needs?|needed|requires?|required|requiring|requirement|must|has to|have to|pending|awaiting|awaits?|subject to|gated|blocked|depends?|until|mandatory|prerequisite|first)(?![\w-])|(?<![\w-])(?:cannot|can't|do not|don't|must not|never|not)\s+(?:\w+\s+){0,4}?without(?![\w-])/i;
+// A phrase that denies the approval requirement itself. A bare "not" or "no"
+// elsewhere in the sentence does not count: "Do not proceed until legal
+// approval is granted" and "requires legal approval, not just passing tests"
+// still state the requirement. Each alternative ties the negation to the
+// requirement verb and the approval word, and "without" never denies one
+// ("do not ship without approval" asks for it).
+const APPROVAL_WORD_SOURCE =
+  '(?:approv\\w*|sign(?:s|ed|ing)?[- ]?off|authori[sz]\\w*|permissions?|consent)';
+const NEGATED_REQUIREMENT_PATTERN = new RegExp(
+  [
+    // "does not need any approval", "doesn't require explicit sign-off"
+    String.raw`(?<![\w-])(?:(?:does|do|did|will|would|should|shall|can|could)\s+not|doesn't|don't|didn't|won't|wouldn't)\s+(?:really\s+|actually\s+)?(?:need|require)\s+(?:\w+\s+){0,4}?${APPROVAL_WORD_SOURCE}`,
+    // "requires no approval", "needs zero sign-off"
+    String.raw`(?<![\w-])(?:needs?|needed|requires?|required|requiring)\s+(?:no|zero)\s+(?:\w+\s+){0,3}?${APPROVAL_WORD_SOURCE}`,
+    // "no approval is needed", "approval is not required"
+    String.raw`(?<![\w-])no\s+(?:\w+\s+){0,3}?${APPROVAL_WORD_SOURCE}\s+(?:is|are|will\s+be)\s+(?:needed|required|necessary)`,
+    String.raw`(?<![\w-])${APPROVAL_WORD_SOURCE}\s+(?:is|are|will\s+be)\s+not\s+(?:needed|required|necessary)`,
+    // "nothing here needs sign-off"
+    String.raw`(?<![\w-])(?:nothing|none)\b[^.;]{0,60}?\b(?:needs?|requires?)\s+(?:\w+\s+){0,3}?${APPROVAL_WORD_SOURCE}`,
+  ].join('|'),
+  'gi',
+);
 /**
  * The first sentence of `text` that states an approval, sign-off or
  * authorization requirement, or `null`. A sentence qualifies when it holds an
- * approval word and a requirement cue, in either order and at any distance,
- * and no negation cue of its own; a negation in another sentence never
- * cancels it. Pass text with code spans already masked. It is a safety net
+ * approval word and a requirement cue, in either order and at any distance.
+ * A phrase that denies the requirement itself ("does not need any approval")
+ * is set aside first, so a prohibition or a contrast that merely holds a
+ * "not" still counts, and a negation in another sentence never cancels it.
+ * Pass text with code spans already masked. It is a safety net
  * under a provisional relaxation, never a parser: the plan's
  * `independentObstacles` is where a session declares such a requirement.
  */
@@ -355,12 +377,13 @@ export function findApprovalRequirementSentence(text) {
   }
   sentences.push(text.slice(start));
   return (
-    sentences.find(
-      (sentence) =>
-        APPROVAL_WORD_PATTERN.test(sentence) &&
-        REQUIREMENT_CUE_PATTERN.test(sentence) &&
-        !NEGATION_CUE_PATTERN.test(sentence),
-    ) ?? null
+    sentences.find((sentence) => {
+      const remaining = sentence.replace(NEGATED_REQUIREMENT_PATTERN, ' ');
+      return (
+        APPROVAL_WORD_PATTERN.test(remaining) &&
+        REQUIREMENT_CUE_PATTERN.test(remaining)
+      );
+    }) ?? null
   );
 }
 // Every assessment that assessProvisionalChoicePlan returns, so a hand-built
