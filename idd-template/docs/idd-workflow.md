@@ -1004,12 +1004,13 @@ policy, never a feature branch) instead of relying on an earlier selection.
 With the class absent, false, or unreadable, the current needs-decision route
 stays, and so it does when the plan's choices exceed `maxDecisionsPerClaim`
 from that same read or the cap cannot be read. A source whose body names no
-choice at all (code blocks, inline code, and comments do not count) is not a
-decision source, whatever its label says. A source that already has records,
-or whose record state is inconsistent, is not assessed afresh. A fresh
-assessment starts a new decision bundle, so the generations the bundle would
-hold after selection are exactly the plan's pickup choices. Runtime questions
-later in the same
+choice word (decision, option, whether, and similar; a keyword check, not a
+judgment of the choice, and code blocks, inline code, and comments do not
+count) is not a decision source, whatever its label says. A source that
+already has records, or whose record state is inconsistent, is not assessed
+afresh. A fresh assessment starts a new decision bundle, so the generations
+the bundle would hold after selection are exactly the plan's pickup choices.
+Runtime questions later in the same
 claim count against the same cap
 ([issue #4955](https://github.com/kurone-kito/idd-skill/issues/4955)).
 
@@ -1093,7 +1094,9 @@ itself causes:
 
 Never relaxed: Checks 1 to 4; the blocked-by-human label, title prefix, and
 authoring-bucket marker; approval, sign-off, credential, secret, and
-production-access requirements; an empty `## Candidate files` section; the
+production-access requirements, as far as the lexical scans above and the
+plan's `independentObstacles` declaration reach; an empty
+`## Candidate files` section; the
 standing-rejection pre-check; effort limits; and authoring, claim, and open
 pull request conflicts.
 

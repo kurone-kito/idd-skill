@@ -456,7 +456,7 @@ const ALTERNATIVE_OPTION_KEYS = [
 // body. Without any of these words the label alone does not make it a decision
 // source for the purpose of relaxing a check.
 const DECISION_SIGNAL_PATTERN =
-  /(?<![\w-])(?:decision|decid\w*|choose|chosen|choice|options?|alternatives?|which|whether|tbd|undecided|open question|trade-?offs?|prefer\w*)(?![\w-])/i;
+  /(?<![\w-])(?:decision|decid\w*|choose|chosen|choice|options?|alternatives?|whether|tbd|undecided|open question|trade-?offs?|prefer\w*)(?![\w-])/i;
 const DELIVERABLE_KINDS = ['file', 'document', 'issue-comment'];
 // An execution criterion must be checkable without a person's opinion.
 const SUBJECTIVE_CRITERION_PATTERN =
@@ -520,7 +520,7 @@ export function isDecisionCausedSignal(
 const APPROVAL_WORD_PATTERN =
   /(?<![\w-])(?:approv\w*|sign(?:s|ed|ing)?[- ]?off|authori[sz]\w*|permissions?|consent|go-ahead|grant(?:s|ed)?\s+(?:access|permission))(?![\w-])/i;
 const REQUIREMENT_CUE_PATTERN =
-  /(?<![\w-])(?:needs?|needed|requires?|required|requiring|requirement|must|has to|have to|pending|awaiting|awaits?|subject to|gated|blocked|depends?|until|mandatory|prerequisite|first|before|gates?|obtain|secure|seek|get|ask|wait(?:ing)?)(?![\w-])|(?<![\w-])(?:cannot|can't|do not|don't|must not|never|not)\s+(?:\w+\s+){0,4}?without(?![\w-])/i;
+  /(?<![\w-])(?:needs?|needed|requires?|required|requiring|requirement|must|has to|have to|pending|awaiting|awaits?|subject to|gated|blocked|depends?|until|mandatory|prerequisite|first|before|gates?|obtain|secure|seek|get|ask|wait(?:ing)?|contingent|conditional|dependent|unless)(?![\w-])|(?<![\w-])(?:cannot|can't|do not|don't|must not|never|not)\s+(?:\w+\s+){0,4}?without(?![\w-])/i;
 // A phrase that denies the approval requirement itself. A bare "not" or "no"
 // elsewhere in the sentence does not count: "Do not proceed until legal
 // approval is granted" and "requires legal approval, not just passing tests"
@@ -529,17 +529,20 @@ const REQUIREMENT_CUE_PATTERN =
 // ("do not ship without approval" asks for it).
 const APPROVAL_WORD_SOURCE =
   '(?:approv\\w*|sign(?:s|ed|ing)?[- ]?off|authori[sz]\\w*|permissions?|consent)';
+// One word that is not a contrast or a join, so a denial never reaches across
+// "but requires" or "and requires" into a requirement of its own.
+const PLAIN_WORD = String.raw`(?:(?!(?:but|however|yet|although|though|while|whereas|except|and|then)\b)\w+\s+)`;
 const NEGATED_REQUIREMENT_PATTERN = new RegExp(
   [
     // "does not need any approval", "doesn't require explicit sign-off"
-    String.raw`(?<![\w-])(?:(?:does|do|did|will|would|should|shall|can|could)\s+not|doesn't|don't|didn't|won't|wouldn't)\s+(?:really\s+|actually\s+)?(?:need|require)\s+(?:\w+\s+){0,4}?${APPROVAL_WORD_SOURCE}`,
+    String.raw`(?<![\w-])(?:(?:does|do|did|will|would|should|shall|can|could)\s+not|doesn't|don't|didn't|won't|wouldn't)\s+(?:really\s+|actually\s+)?(?:need|require)\s+${PLAIN_WORD}{0,4}?${APPROVAL_WORD_SOURCE}`,
     // "requires no approval", "needs zero sign-off"
-    String.raw`(?<![\w-])(?:needs?|needed|requires?|required|requiring)\s+(?:no|zero)\s+(?:\w+\s+){0,3}?${APPROVAL_WORD_SOURCE}`,
+    String.raw`(?<![\w-])(?:needs?|needed|requires?|required|requiring)\s+(?:no|zero)\s+${PLAIN_WORD}{0,3}?${APPROVAL_WORD_SOURCE}`,
     // "no approval is needed", "approval is not required"
-    String.raw`(?<![\w-])no\s+(?:\w+\s+){0,3}?${APPROVAL_WORD_SOURCE}\s+(?:is|are|will\s+be)\s+(?:needed|required|necessary)`,
+    String.raw`(?<![\w-])no\s+${PLAIN_WORD}{0,3}?${APPROVAL_WORD_SOURCE}\s+(?:is|are|will\s+be)\s+(?:needed|required|necessary)`,
     String.raw`(?<![\w-])${APPROVAL_WORD_SOURCE}\s+(?:is|are|will\s+be)\s+not\s+(?:needed|required|necessary)`,
     // "nothing here needs sign-off"
-    String.raw`(?<![\w-])(?:nothing|none)\b[^.;]{0,60}?\b(?:needs?|requires?)\s+(?:\w+\s+){0,3}?${APPROVAL_WORD_SOURCE}`,
+    String.raw`(?<![\w-])(?:nothing|none)\b[^.;]{0,60}?\b(?:needs?|requires?)\s+${PLAIN_WORD}{0,3}?${APPROVAL_WORD_SOURCE}`,
   ].join('|'),
   'gi',
 );
@@ -555,7 +558,12 @@ const NEGATED_REQUIREMENT_PATTERN = new RegExp(
  * under a provisional relaxation, never a parser: the plan's
  * `independentObstacles` is where a session declares such a requirement.
  */
-export function findApprovalRequirementSentence(text: string): string | null {
+export function findApprovalRequirementSentence(source: string): string | null {
+  // A link destination or a bare URL holds `?`, `;` and `.` that are not
+  // sentence ends; drop them and keep the link text.
+  const text = source
+    .replace(/\]\([^)\n]*\)/g, ']')
+    .replace(/https?:\/\/\S+/gi, ' ');
   let start = 0;
   const sentences: string[] = [];
   for (const found of text.matchAll(DECISION_CLAUSE_BREAK_PATTERN)) {

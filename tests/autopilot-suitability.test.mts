@@ -517,7 +517,7 @@ test('rankAndRouteBySuitability ignores routeEffortL when no getEffort is given 
 // (row 1-6) of issue #4535 that it covers.
 
 const SOURCE_BODY =
-  'Which cache layer should we use?\n\n## Acceptance criteria\n\n- [ ] a maintainer picks the layer\n';
+  'Which cache layer should we use? This is a decision.\n\n## Acceptance criteria\n\n- [ ] a maintainer picks the layer\n';
 const sha256 = (text: string): string =>
   createHash('sha256').update(text, 'utf8').digest('hex');
 const planOption = (id: string): Record<string, string> => ({
@@ -1126,6 +1126,22 @@ test('provisional assessment: other recorded state belongs to Resume, and an unr
 
 test('provisional assessment: a labeled source that names no choice is not a decision source (AC3)', () => {
   const body = 'Fix the helper so that it runs.';
+  const relative = 'Fix the bug which causes retries to fail.';
+  assert.deepEqual(
+    blockerCodes(
+      assessProvisionalChoicePlan(
+        assessInput({
+          issue: {
+            number: 7,
+            body: relative,
+            labels: ['status:needs-decision'],
+          },
+          plan: validPlan({ humanChoiceCriteria: [relative] }, relative),
+        }),
+      ),
+    ),
+    ['no-decision-signal'],
+  );
   const assessment = assessProvisionalChoicePlan(
     assessInput({
       issue: { number: 7, body, labels: ['status:needs-decision'] },
@@ -1534,6 +1550,11 @@ test('findApprovalRequirementSentence keeps a negation to its own sentence (AC3)
     'Obtain sign-off from the security team first.',
     'Wait for legal authorization.',
     'Seek consent from the owner.',
+    'Implementation is contingent on legal approval.',
+    'This does not require migration but requires legal approval.',
+    'This does not need migration and needs legal approval.',
+    'Security [approval](https://example.test/policy?team=security) is required before work starts.',
+    'Approval at https://example.test/a?b=c is required.',
   ]) {
     assert.notEqual(findApprovalRequirementSentence(text), null, text);
   }

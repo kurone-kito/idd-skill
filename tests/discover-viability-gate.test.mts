@@ -4570,6 +4570,9 @@ test('A4 provisional: an approval requirement in another sentence keeps the deci
     'Approval from legal is required before work starts.',
     'The budget raise needs a standing approval.',
     'The rollout must be approved by legal.',
+    'This does not require migration but requires legal approval.',
+    'Implementation is contingent on legal approval.',
+    'Security [approval](https://example.test/policy?team=security) is required before work starts.',
   ]) {
     const body = DECISION_BODY.replace(
       '## Acceptance criteria',
