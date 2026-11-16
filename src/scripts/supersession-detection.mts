@@ -469,12 +469,12 @@ function isWellFormedRepository(value: unknown): boolean {
   const owner = record.owner;
   return (
     typeof record.name === 'string' &&
-    record.name !== '' &&
+    record.name.trim() !== '' &&
     owner !== null &&
     typeof owner === 'object' &&
     !Array.isArray(owner) &&
     typeof (owner as { login?: unknown }).login === 'string' &&
-    (owner as { login: string }).login !== ''
+    (owner as { login: string }).login.trim() !== ''
   );
 }
 
@@ -664,9 +664,16 @@ export function computeClosingSetEvidence(options: {
       strayCommitCloses: [],
     };
   }
-  // A protected source whose title or body could not be read fails closed:
-  // nothing shows that the PR does not close it.
-  if (protectedSource !== undefined && protectedSource.bodyCloses === null) {
+  // A protected source whose title or body could not be read, or whose
+  // repository is unknown (so a registered reference cannot be told from
+  // another repository's), fails closed: nothing shows that the PR does not
+  // close it.
+  if (
+    protectedSource !== undefined &&
+    (protectedSource.bodyCloses === null ||
+      options.owner.trim() === '' ||
+      options.repo.trim() === '')
+  ) {
     return {
       status: 'unavailable',
       expected,

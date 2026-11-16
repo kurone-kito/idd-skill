@@ -18123,6 +18123,8 @@ test('closingSet protectedSource: a registered reference to the source blocks on
     { name: CLOSING_SET_REPO, owner: {} },
     { name: '', owner: { login: CLOSING_SET_OWNER } },
     { name: CLOSING_SET_REPO, owner: [] },
+    { name: '  ', owner: { login: CLOSING_SET_OWNER } },
+    { name: CLOSING_SET_REPO, owner: { login: ' ' } },
   ]) {
     assert.equal(
       computeClosingSetEvidence(
@@ -18153,6 +18155,35 @@ test('closingSet protectedSource: a registered reference to the source blocks on
       JSON.stringify(malformed),
     );
   }
+});
+
+test('closingSet protectedSource: an unknown repository fails closed on either base, while an ordinary claim keeps its result', () => {
+  for (const base of [
+    {},
+    { baseRefName: 'feature-branch', liveDefaultBranch: 'main' },
+  ]) {
+    for (const unknown of [
+      { owner: '' },
+      { repo: '' },
+      { owner: ' ', repo: ' ' },
+    ]) {
+      assert.equal(
+        computeClosingSetEvidence(
+          protectedClosingSetOptions({ ...base, ...unknown }),
+        ).status,
+        'unavailable',
+        JSON.stringify(unknown),
+      );
+    }
+  }
+  assert.equal(
+    computeClosingSetEvidence({
+      ...baseClosingSetOptions(),
+      owner: '',
+      repo: '',
+    }).status,
+    'match',
+  );
 });
 
 test('closingSet protectedSource: a commit without a message fails closed on either base, while an ordinary claim keeps its result', () => {
