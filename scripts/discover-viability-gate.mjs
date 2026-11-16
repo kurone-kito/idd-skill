@@ -1643,12 +1643,22 @@ export function parseArgs(argv) {
       ? occurrence.value.split(',')
       : [occurrence.value],
   );
+  // The CSV report has no column for an assessment or a rejected plan file, so
+  // the pair would hide the one thing the flag adds.
+  const provisionalPlans = values['provisional-plan'] ?? [];
+  if (values.csv === true && provisionalPlans.length > 0) {
+    throw markCliUsageError(
+      new Error(
+        '--provisional-plan cannot be combined with --csv: the CSV report cannot carry the assessment or a rejected plan file; use the default JSON output',
+      ),
+    );
+  }
   return {
     issueNumbers: normalizeIssueNumbers(issueTokens),
     csv: values.csv,
     owner: values.owner,
     repo: values.repo,
-    provisionalPlans: values['provisional-plan'] ?? [],
+    provisionalPlans,
     help,
   };
 }
@@ -1796,7 +1806,8 @@ assessment"), binds it to its issue by its "source.issueNumber", and reports
 a "provisional" assessment for that issue. A fresh trusted read of the
 decisionIssue class, the cap and the replayed record state decide whether
 a decision-only coordination signal is relaxed; every other criterion is
-unchanged. Without the flag the output is unchanged.
+unchanged. Without the flag the output is unchanged. The flag cannot be
+combined with --csv, which has no column for the assessment.
 
 Output schema (JSON mode):
   {

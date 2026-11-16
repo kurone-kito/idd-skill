@@ -4481,6 +4481,15 @@ test('parseArgs: --provisional-plan is repeatable and defaults to none (#4535)',
   assert.throws(() => parseArgs(['--issue', '7', '--provisional-plan']));
 });
 
+test('parseArgs: --provisional-plan cannot be combined with --csv, which has no column for it (#4535)', () => {
+  assert.throws(
+    () =>
+      parseArgs(['--issue', '7', '--csv', '--provisional-plan', 'plan.json']),
+    /cannot be combined with --csv/,
+  );
+  assert.equal(parseArgs(['--issue', '7', '--csv']).csv, true);
+});
+
 test('collectProvisionalAssessment binds file deliverables to the issue Candidate files (AC1, AC4)', async () => {
   const withFiles = `${DECISION_BODY}\n## Candidate files\n\n- \`docs/cache.md\`\n`;
   const sources = {
