@@ -37,12 +37,11 @@ synchronization path. Later branch updates should return through the
 E-phase review loop and, by default, merge `{development-branch}` into
 the published PR branch so the synchronization diff is reviewable.
 
-This D-phase file records the publication boundary only: post-push
-synchronization itself runs through `idd-review-triage.instructions.md`'s
-E-phase branch-sync check (`Esync`), which uses the
-`branch-conflict-state` helper when helper runtime is enabled (a
-`gh pr view` fallback otherwise), and `idd-resume.instructions.md`
-already routes a content-conflict branch there on restart.
+This file records the publication boundary only: post-push sync runs
+through `idd-review-triage.instructions.md`'s E-phase branch-sync check
+(`Esync`; the `branch-conflict-state` helper when enabled, else `gh pr
+view`), and `idd-resume.instructions.md` routes a content-conflict branch
+there on restart.
 
 If D1 itself reveals content conflicts before the first push, resolve
 them and continue the rebase. After completing the rebase, if any files
@@ -265,10 +264,9 @@ Never release or relabel the replacement set: Stage 2 stays the human gate.
 Before drafting the PR body, check whether the repository defines
 `.github/pull_request_template.md`. If it exists, shape the PR body to
 follow that template's section structure from the start, rather than
-drafting free-form text and reconciling it against the template
-afterward — repository review tooling (for example, CodeRabbit's
-default description check) can compare the PR description against
-that template when present, and a mismatched body can trigger an
+reconciling free-form text with it afterward — review tooling (for
+example, CodeRabbit's default description check) can compare the PR
+description against that template, and a mismatch can trigger an
 avoidable advisory finding. If no template file exists, use the
 structure below directly.
 
@@ -292,7 +290,7 @@ template's sections when one exists:
 
 - A concise summary of the branch's changes
 - A closing keyword on its own line linking the claimed issue (see
-  Closing keyword below)
+  Closing keyword below), unless it is a bound provisional source (D3.5)
 - Recommended follow-up issues (if any)
 - Relevant background/rationale, when it materially affects review (for
   example, reuse constraints, intentional trade-offs, or non-goals).
@@ -421,10 +419,8 @@ Resolves #N (case-insensitive) where N is the claimed issue number.
 Render that example literally in the body — no backticks, no code
 fences, no block-quote prefix.
 
-When referring to keyword forms _as forms_ (not as the literal body
-text), inline code is fine in surrounding prose; the no-wrapper
-constraint applies only to the actual PR body content that GitHub
-must parse.
+Inline code is fine for keyword forms _as forms_ in surrounding prose;
+the no-wrapper rule covers only the literal body text GitHub parses.
 
 GitHub recognizes the following keyword forms: close, closes, closed,
 fix, fixes, fixed, resolve, resolves, resolved. GitHub's merge-time
@@ -468,15 +464,12 @@ not close, in both locations:
 - Safe — reorder so no recognized keyword is adjacent to the
   reference: "Refs #42 (deliberately not a closing keyword — see the
   discussion there for why this PR does not resolve it directly)".
-  Here `resolve` is followed by "it", not a `#N` token, so nothing
-  adjacent to `#42` matches. The same reordering works verbatim inside
-  a commit subject or body.
+  Here `resolve` is followed by "it", not `#N`. The same reordering
+  works verbatim in a commit subject or body.
 
-Do not rely on careful phrasing alone as the only safeguard — the
-strengthened checks in D3.5 below verify `closingIssuesReferences`
-against the deliberate closing set exactly and scan the branch's own
-commit messages, catching a spurious extra close even if phrasing
-slips.
+Phrasing alone is no safeguard: D3.5 below verifies
+`closingIssuesReferences` against the deliberate closing set exactly and
+scans the branch's own commit messages, catching a stray close.
 
 #### Multiple closing issues
 
@@ -502,18 +495,24 @@ gh pr edit {pr-number} --add-reviewer {reviewer-login}
 issue when the merging PR targets the repository's **default** branch
 — a closing keyword on a PR based on any other branch, including a
 configured `{development-branch}`, never populates
-`closingIssuesReferences` and never auto-closes on merge, regardless of
-body wording. When `{development-branch}` is not the repository's
-default branch, still include the closing keyword line in the PR body
-for reviewer clarity, but **skip this entire sub-step** (steps 1-7
-below verify a mechanism that cannot fire here) and close the claimed
-issue explicitly after F3 merges (`idd-merge.instructions.md` F4 notes
-this).
+`closingIssuesReferences` and never auto-closes on merge. When
+`{development-branch}` is not the repository's default branch, still
+include the closing keyword line in the PR body for reviewer clarity, but
+**skip this entire sub-step** (steps 1-7 verify a mechanism that cannot
+fire here) and close the claimed issue explicitly after F3 merges
+(`idd-merge.instructions.md` F4 notes this).
 
 After PR creation and before D4, confirm GitHub recognized the
 closing keyword for the claimed issue. Resume routing should re-enter
 this sub-step when a session restarts after PR creation but before CI
 completion.
+
+**Bound provisional source** (`provisionalRead.status` is `bound`, or Resume's
+`evidence.provisional_work` is unconfirmed): it must stay open, so write
+`Refs #N`, never a keyword, in the body and every branch commit. Steps 3-5
+add none (on re-entry too), step 6's set omits it, step 7 reads a keyword for
+it as stray
+([details](../../docs/idd-resume-detail.md#provisional-source-finalization)).
 
 1. Re-fetch the PR body:
 
@@ -607,12 +606,10 @@ completion.
    remains, post a hold note on the issue citing the PR URL and stop
    before D4.
 
-   **Scripted-rebase hazards**: before a scripted reword or rebase,
-   apply the
-   [abbreviated-command and `rebase.updateRefs` guards](../../docs/idd-helper-scripts.md#scripted-rebase-hazards).
-   After any scripted reword or rebase, verify that the target message
-   changed and rerun the stray-keyword scan; do not trust only the exit
-   status or `Successfully rebased` text.
+   **Scripted-rebase hazards**: before a scripted reword or rebase, apply the
+   [abbreviated-command and `rebase.updateRefs` guards](../../docs/idd-helper-scripts.md#scripted-rebase-hazards);
+   afterwards verify the target message changed and rerun this scan, not
+   trusting the exit status or `Successfully rebased` text alone.
 
    **Re-run before merge**: this scan only covers commits present at
    D3.5 time. Later branch commits — accepted review fixes
