@@ -58,6 +58,12 @@ import {
 } from '../src/scripts/provider-adapter-github.mts';
 import type { ProviderPort } from '../src/scripts/provider-port.mts';
 import {
+  evaluateFreshClaimGate,
+  evaluateResumeClaimRouting,
+  type LocalBranchRefRead,
+  type OpenLinkedPrRead,
+} from '../src/scripts/resume-claim-routing.mts';
+import {
   fixtureEnv,
   spawnHelperBinWithEnvelope,
   stubExecutable,
@@ -1704,6 +1710,8 @@ interface ApplyScenario {
   /** Per marker type, the outcome of each post in order; `ok` once exhausted. */
   posts?: Record<string, PostOutcome[]>;
   ownGate?: CommandResult;
+  /** The answer of every fresh-claim gate read without `--own-worktree` (default: claimable). */
+  gate?: CommandResult;
   assert?: CommandResult;
   recordTokensFails?: boolean;
   acquireFails?: boolean;
@@ -2139,6 +2147,9 @@ function runApply(
         return scenario.ownGate ?? CLAIMABLE;
       }
       gateCalls += 1;
+      if (scenario.gate !== undefined) {
+        return scenario.gate;
+      }
       // The real routing always prints an evidence object, which the
       // preservation reads for a released claim (the second call onward).
       if (
@@ -4535,5 +4546,542 @@ test('ports that cannot be built stop an apply run before any change, and a dry 
     const b1 = (dry.report as ClaimIssueReport).b1Leftovers;
     assert.equal(b1?.common[0]?.id, 'dry-run-inputs');
     assert.equal(b1?.outcome, 'unmet-preconditions');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue 4914: the fresh-claim gate's `local-branch-present` verdict. Every
+// accepted answer is the real `resume-claim-routing` evaluator's own output, so
+// the two files cannot drift apart on a state, verdict, reason, or field name.
+// ---------------------------------------------------------------------------
+
+const LOCAL_TIP = 'a'.repeat(40);
+const refAt = (branch: string, tip = LOCAL_TIP) => ({ branch, tip });
+
+/** What the CLI prints for the gate, from the real evaluators and their injected probes. */
+function evaluatorRouting(
+  reads: LocalBranchRefRead[],
+  options: {
+    released?: string | null;
+    prs?: OpenLinkedPrRead;
+  } = {},
+): Record<string, unknown> {
+  const released = options.released === undefined ? BRANCH : options.released;
+  const events =
+    released === null
+      ? []
+      : [
+          {
+            createdAt: '2026-05-12T10:00:00Z',
+            author: { login: 'maintainer' },
+            lastEditedAt: null,
+            body: `<!-- claimed-by: copilot claim-released supersedes: none 2026-05-12T10:00:00Z branch: ${released} -->`,
+          },
+          {
+            createdAt: '2026-05-12T10:05:00Z',
+            author: { login: 'maintainer' },
+            lastEditedAt: null,
+            body: '<!-- unclaimed-by: copilot claim-released 2026-05-12T10:05:00Z -->',
+          },
+        ];
+  const optionsFor = () => {
+    let calls = 0;
+    return {
+      isTrustedAuthor: (login: string) => login === 'maintainer',
+      inspectLocalBranchRefs: (): LocalBranchRefRead => {
+        const read = reads[Math.min(calls, reads.length - 1)];
+        calls += 1;
+        return read;
+      },
+      readOpenLinkedPrs: (): OpenLinkedPrRead =>
+        options.prs ?? { status: 'none' },
+    };
+  };
+  const input = { now: '2026-05-12T11:00:00Z', events };
+  const result = evaluateResumeClaimRouting(input, optionsFor());
+  const gate = evaluateFreshClaimGate(input, optionsFor());
+  return JSON.parse(
+    JSON.stringify({
+      issue: { number: ISSUE },
+      ...result,
+      fresh_claim_gate: {
+        verdict: gate.verdict,
+        winning_claim_id: gate.winningClaimId,
+      },
+    }),
+  ) as Record<string, unknown>;
+}
+
+const asResult = (routing: Record<string, unknown>): CommandResult =>
+  ok(JSON.stringify(routing));
+
+/** The parts of the routing JSON the mutation rows change. */
+interface MutableRouting {
+  state: string;
+  action: string;
+  reason: string;
+  fresh_claim_gate: { verdict: string; winning_claim_id: string | null };
+  evidence: {
+    local_branch: {
+      status: string;
+      branch: string | null;
+      tip: string | null;
+      refs: { branch: string; tip: string }[];
+      detail: string | null;
+    };
+  };
+}
+
+/** The routing JSON with a change applied to a copy. */
+function mutated(
+  routing: Record<string, unknown>,
+  change: (copy: MutableRouting) => void,
+): CommandResult {
+  const copy = JSON.parse(JSON.stringify(routing)) as MutableRouting;
+  change(copy);
+  return ok(JSON.stringify(copy));
+}
+
+const LOCAL_EXACT_READ: LocalBranchRefRead = {
+  status: 'read',
+  refs: [refAt(BRANCH)],
+};
+
+function a5cReport(routing: CommandResult, preserve = false): ClaimIssueReport {
+  const record = makeRun({ routing });
+  const outcome = runClaimPrechecks(ISSUE, record.deps, {
+    preserveB1Leftovers: preserve,
+  });
+  assert.equal(outcome.kind, 'report');
+  assertReadOnly(record);
+  return (outcome as Extract<typeof outcome, { kind: 'report' }>).report;
+}
+
+test('local-branch-present: each result of the real gate is accepted and stops A5(c) as one stop', () => {
+  const rows: {
+    name: string;
+    routing: Record<string, unknown>;
+    reason: string;
+    next: RegExp;
+  }[] = [
+    {
+      name: 'an exact inheritable ref',
+      routing: evaluatorRouting([LOCAL_EXACT_READ]),
+      reason: 'local-branch-inheritable',
+      next: /exact branch of this issue's released claim.*cannot re-claim it/s,
+    },
+    {
+      name: 'a slug variant',
+      routing: evaluatorRouting([
+        { status: 'read', refs: [refAt(`${PREFIX}other-slug`)] },
+      ]),
+      reason: 'local-branch-unexpected',
+      next: /Preserve the local-only branch named in the detail/,
+    },
+    {
+      name: "the computed branch's leftover on a never-claimed issue",
+      routing: evaluatorRouting([LOCAL_EXACT_READ], { released: null }),
+      reason: 'local-branch-unexpected',
+      next: /If the `b1Leftover` auto-decide class is enabled/,
+    },
+    {
+      name: 'an unreadable probe',
+      routing: evaluatorRouting([
+        {
+          status: 'unreadable',
+          reason: 'git for-each-ref ended with exit code 128',
+        },
+      ]),
+      reason: 'local-branch-unreadable',
+      next: /Do not read the branch as absent/,
+    },
+  ];
+  for (const row of rows) {
+    assert.equal(row.routing.state, 'local_branch_present', row.name);
+    const report = a5cReport(asResult(row.routing));
+    assertStoppedAt(report, 'a5c-claim-state', 'local-branch-present');
+    assert.equal(report.gateReason, row.reason, row.name);
+    assert.equal(report.winningClaimId, null, row.name);
+    const step = report.steps[2];
+    assert.match(step.nextAction ?? '', row.next, row.name);
+    assert.match(step.detail ?? '', new RegExp(row.reason), row.name);
+  }
+});
+
+test('local-branch-present: the closed lists reject an unknown state and a pair the gate never emits, and accept the new one', () => {
+  const real = evaluatorRouting([LOCAL_EXACT_READ]);
+  // The control: the unchanged answer passes both closed lists.
+  assertStoppedAt(
+    a5cReport(asResult(real)),
+    'a5c-claim-state',
+    'local-branch-present',
+  );
+  const rows: [string, (copy: MutableRouting) => void][] = [
+    [
+      'an unknown routing state',
+      (copy) => {
+        copy.state = 'local_branch_unknown';
+      },
+    ],
+    [
+      'the new state with the claimable action',
+      (copy) => {
+        copy.action = 're_claim';
+      },
+    ],
+    [
+      'the new verdict with another state',
+      (copy) => {
+        copy.state = 'non_inheritable';
+      },
+    ],
+    [
+      'the new state with another verdict',
+      (copy) => {
+        copy.fresh_claim_gate.verdict = 'already-claimed';
+        Reflect.deleteProperty(copy.evidence, 'local_branch');
+      },
+    ],
+    [
+      'a winner for a preserved branch',
+      (copy) => {
+        copy.fresh_claim_gate.winning_claim_id = 'claim-released';
+      },
+    ],
+    [
+      'a reason of another verdict',
+      (copy) => {
+        copy.reason = 'released-claim-local-worktree-occupied';
+      },
+    ],
+    [
+      'no local_branch evidence',
+      (copy) => {
+        Reflect.deleteProperty(copy.evidence, 'local_branch');
+      },
+    ],
+    [
+      'a status that does not match the reason',
+      (copy) => {
+        copy.evidence.local_branch.status = 'unexpected';
+      },
+    ],
+    [
+      'an inheritable result with two refs',
+      (copy) => {
+        copy.evidence.local_branch.refs.push(refAt(`${PREFIX}second`));
+      },
+    ],
+    [
+      'an inheritable result without a tip',
+      (copy) => {
+        copy.evidence.local_branch.tip = null;
+      },
+    ],
+    [
+      'a ref without a tip',
+      (copy) => {
+        copy.evidence.local_branch.refs[0].tip = '';
+      },
+    ],
+  ];
+  for (const [name, change] of rows) {
+    assertStoppedAt(
+      a5cReport(mutated(real, change)),
+      'a5c-claim-state',
+      'precheck-unavailable',
+    );
+    void name;
+  }
+  // The probe never lists a branch twice, so a repeat in any status is malformed.
+  for (const reads of [
+    [
+      {
+        status: 'read',
+        refs: [refAt(`${PREFIX}other-slug`), refAt(`${PREFIX}second`)],
+      },
+    ],
+  ] satisfies LocalBranchRefRead[][]) {
+    const twoRefs = evaluatorRouting(reads, { released: null });
+    assertStoppedAt(
+      a5cReport(asResult(twoRefs)),
+      'a5c-claim-state',
+      'local-branch-present',
+    );
+    assertStoppedAt(
+      a5cReport(
+        mutated(twoRefs, (copy) => {
+          copy.evidence.local_branch.refs[1].branch =
+            copy.evidence.local_branch.refs[0].branch;
+        }),
+      ),
+      'a5c-claim-state',
+      'precheck-unavailable',
+    );
+  }
+  // A non-inheritable status names no inheritable branch or tip.
+  const unexpected = evaluatorRouting([
+    { status: 'read', refs: [refAt(`${PREFIX}other-slug`)] },
+  ]);
+  for (const change of [
+    (copy: MutableRouting) => {
+      copy.evidence.local_branch.branch = `${PREFIX}other-slug`;
+    },
+    (copy: MutableRouting) => {
+      copy.evidence.local_branch.refs = [];
+    },
+  ]) {
+    assertStoppedAt(
+      a5cReport(mutated(unexpected, change)),
+      'a5c-claim-state',
+      'precheck-unavailable',
+    );
+  }
+});
+
+test('a verdict other than local-branch-present never carries a local-branch reason or evidence', () => {
+  // The control: a claimable answer with a well-formed absent result passes.
+  const absent = evaluatorRouting([{ status: 'read', refs: [] }]);
+  assert.equal(absent.state, 'unclaimed');
+  assertEligible(a5cReport(asResult(absent)));
+
+  const unexpected = evaluatorRouting(
+    [{ status: 'read', refs: [refAt(`${PREFIX}other-slug`)] }],
+    { released: null },
+  );
+  const rows: [
+    string,
+    Record<string, unknown>,
+    (copy: MutableRouting) => void,
+  ][] = [
+    [
+      'a claimable answer that names a local-branch reason',
+      absent,
+      (copy) => {
+        copy.reason = 'local-branch-unexpected';
+      },
+    ],
+    [
+      'a claimable answer with an unexpected local_branch result',
+      absent,
+      (copy) => {
+        copy.evidence.local_branch =
+          unexpected.evidence as MutableRouting['evidence']['local_branch'];
+      },
+    ],
+    [
+      'a claimable answer whose absent result lists a ref',
+      absent,
+      (copy) => {
+        copy.evidence.local_branch.refs = [refAt(`${PREFIX}other-slug`)];
+      },
+    ],
+    [
+      'a claimable answer whose absent result names a branch',
+      absent,
+      (copy) => {
+        copy.evidence.local_branch.branch = `${PREFIX}other-slug`;
+      },
+    ],
+    [
+      'the absent result that claims to be inheritable',
+      absent,
+      (copy) => {
+        copy.evidence.local_branch.status = 'inheritable';
+      },
+    ],
+  ];
+  for (const [name, base, change] of rows) {
+    assertStoppedAt(
+      a5cReport(mutated(base, change)),
+      'a5c-claim-state',
+      'precheck-unavailable',
+    );
+    void name;
+  }
+
+  // Another verdict carries no local_branch object at all, not even an absent one.
+  const taken = routingOutput('already-claimed', {
+    reason: 'active-claim-non-stale',
+    winning: 'other-claim',
+  });
+  const withAbsent = JSON.parse(taken.stdout) as Record<string, unknown>;
+  withAbsent.evidence = {
+    local_branch: {
+      status: 'absent',
+      branch: null,
+      tip: null,
+      refs: [],
+      detail: null,
+    },
+  };
+  assertStoppedAt(
+    a5cReport(asResult(withAbsent)),
+    'a5c-claim-state',
+    'precheck-unavailable',
+  );
+  assertStoppedAt(a5cReport(taken), 'a5c-claim-state', 'already-claimed');
+});
+
+test('local-branch-present with --preserve-b1-leftovers: only the computed branch leftover passes A5(c)', () => {
+  const leftover = evaluatorRouting([LOCAL_EXACT_READ], { released: null });
+  assert.equal(leftover.reason, 'local-branch-unexpected');
+
+  // Without the flag the same leftover stops, with the B1 leftover guidance.
+  const stopped = a5cReport(asResult(leftover));
+  assertStoppedAt(stopped, 'a5c-claim-state', 'local-branch-present');
+  assert.match(
+    stopped.steps[2].nextAction ?? '',
+    /If the `b1Leftover` auto-decide class is enabled/,
+  );
+
+  // With the flag it passes and the later pre-checks run.
+  const passed = a5cReport(asResult(leftover), true);
+  assertEligible(passed);
+  assert.match(passed.steps[2].detail ?? '', /left to --preserve-b1-leftovers/);
+
+  const stays: [string, Record<string, unknown>][] = [
+    [
+      'a slug variant',
+      evaluatorRouting(
+        [{ status: 'read', refs: [refAt(`${PREFIX}other-slug`)] }],
+        { released: null },
+      ),
+    ],
+    [
+      'the computed branch beside a second ref',
+      evaluatorRouting(
+        [
+          {
+            status: 'read',
+            refs: [refAt(BRANCH), refAt(`${PREFIX}other-slug`)],
+          },
+        ],
+        { released: null },
+      ),
+    ],
+    ['an inheritable ref', evaluatorRouting([LOCAL_EXACT_READ])],
+    [
+      'an unreadable probe',
+      evaluatorRouting([{ status: 'unreadable', reason: 'listing failed' }]),
+    ],
+  ];
+  for (const [name, routing] of stays) {
+    assertStoppedAt(
+      a5cReport(asResult(routing), true),
+      'a5c-claim-state',
+      'local-branch-present',
+    );
+    void name;
+  }
+});
+
+test('--apply stops at A5(c) for a computed-branch leftover and changes nothing', () => {
+  withApplyFixture((fixture) => {
+    unmergedBranch(fixture.primary);
+    const before = refsOf(fixture.primary);
+    const gate = asResult(
+      evaluatorRouting([LOCAL_EXACT_READ], { released: null }),
+    );
+    const run = runApply(fixture, { gate });
+    const report = assertStopped(run, 'local-branch-present');
+    assert.equal(report.gateReason, 'local-branch-unexpected');
+    assert.equal(report.winningClaimId, null);
+    assert.match(
+      report.nextAction ?? '',
+      /If the `b1Leftover` auto-decide class is enabled/,
+    );
+    assert.equal(refsOf(fixture.primary), before);
+    assert.equal(branchExists(fixture.primary), true);
+    assert.equal(
+      run.log.some((entry) => /worktree add|update-ref/.test(entry)),
+      false,
+    );
+  });
+});
+
+test('--apply with --preserve-b1-leftovers still reaches the preservation for the computed branch leftover', () => {
+  withApplyFixture((fixture) => {
+    const tip = unmergedBranch(fixture.primary);
+    gitIn(fixture.primary, ['config', `branch.${BRANCH}.remote`, 'origin']);
+    const gate = asResult(
+      evaluatorRouting([{ status: 'read', refs: [refAt(BRANCH, tip)] }], {
+        released: null,
+      }),
+    );
+    const run = runApply(fixture, { b1: {}, gate }, PRESERVE_ARGS);
+    assert.equal(exitOf(run.result), 0, run.stderr);
+    const report = run.report as ClaimApplyReport;
+    assert.equal(report.eligible, true);
+    assert.equal(report.b1Leftovers?.outcome, 'preserved');
+    const gateCheck = report.b1Leftovers?.common.find(
+      (entry) => entry.id === 'fresh-claim-gate',
+    );
+    assert.equal(gateCheck?.status, 'met');
+    assert.match(gateCheck?.detail ?? '', /says claimable/);
+  });
+});
+
+test('a dry run with --preserve-b1-leftovers lists the computed branch leftover the gate now reports', () => {
+  withApplyFixture((fixture) => {
+    unmergedBranch(fixture.primary);
+    const gate = asResult(
+      evaluatorRouting([LOCAL_EXACT_READ], { released: null }),
+    );
+    const run = runApply(fixture, { b1: {}, gate }, DRY_ARGS);
+    assert.equal(exitOf(run.result), 0, run.stderr);
+    const b1 = (run.report as ClaimIssueReport).b1Leftovers;
+    assert.equal(b1?.outcome, 'ready');
+    assert.equal(
+      b1?.common.find((entry) => entry.id === 'fresh-claim-gate')?.status,
+      'met',
+    );
+  });
+});
+
+test('--apply with --preserve-b1-leftovers keeps the inheritable and slug-variant stops', () => {
+  const rows: [string, Record<string, unknown>][] = [
+    ['an inheritable ref', evaluatorRouting([LOCAL_EXACT_READ])],
+    [
+      'a slug variant',
+      evaluatorRouting(
+        [{ status: 'read', refs: [refAt(`${PREFIX}other-slug`)] }],
+        { released: null },
+      ),
+    ],
+  ];
+  for (const [name, routing] of rows) {
+    withApplyFixture((fixture) => {
+      unmergedBranch(fixture.primary);
+      const before = refsOf(fixture.primary);
+      const run = runApply(
+        fixture,
+        { b1: {}, gate: asResult(routing) },
+        PRESERVE_ARGS,
+      );
+      const report = assertStopped(run, 'local-branch-present');
+      assert.equal(report.b1Leftovers, undefined, name);
+      assert.equal(refsOf(fixture.primary), before, name);
+    });
+  }
+});
+
+test('an own-worktree gate that reports a local-only ref stops before the claim write', () => {
+  withApplyFixture((fixture) => {
+    const ownGate = asResult(
+      evaluatorRouting([
+        {
+          status: 'unreadable',
+          reason: 'git ls-remote origin ended with timed out',
+        },
+      ]),
+    );
+    const run = runApply(fixture, { ownGate });
+    const report = assertStopped(run, 'local-branch-present');
+    assert.equal(report.gateReason, 'local-branch-unreadable');
+    assert.equal(report.winningClaimId, null);
+    assert.equal(report.claimPosted, false);
+    assert.equal(report.lostClaimCleanupRequired, true);
+    assert.equal(run.posts.length, 0);
   });
 });

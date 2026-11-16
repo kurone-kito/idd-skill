@@ -156,6 +156,15 @@ const AUTO_DECIDE_SENTENCE =
   'If the `b1Leftover` auto-decide class is enabled, follow the auto-decide procedure and run `claim-issue --preserve-b1-leftovers`.';
 const LEFTOVER_BRANCH_NEXT = `${CLEANUP_STEPS} ${AUTO_DECIDE_SENTENCE} This helper removed nothing.`;
 const PATH_NEXT = `Inspect the path by hand. This helper never removes it: move or clean it, then rerun this helper. ${AUTO_DECIDE_SENTENCE}`;
+/** The next action for an exact local-only branch of a released claim (issue 4914). */
+const LOCAL_BRANCH_INHERITABLE_NEXT =
+  "The local-only branch is an exact branch of this issue's released claim. Preserve it: never create, reset, or delete it, and do not run `git worktree add -b` over it. This helper cannot re-claim it, so stop for an operator decision. This helper removed nothing.";
+/** The next action for any other local-only branch (issue 4914). */
+const LOCAL_BRANCH_UNEXPECTED_NEXT =
+  'Preserve the local-only branch named in the detail: never delete or overwrite it. Inspect it by hand, then rerun this helper. This helper removed nothing.';
+/** The next action for an unreadable local branch probe (issue 4914). */
+const LOCAL_BRANCH_UNREADABLE_NEXT =
+  'Resolve the failed read named in the detail (the local ref listing, the local worktree scan, the origin read, or the linked pull request lookup), then rerun this helper. Do not read the branch as absent. This helper created no worktree or branch.';
 /** The timestamp shape the marker grammar prints (second precision, UTC). */
 const MARKER_TIMESTAMP = '(?<ts>\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z)';
 /**
@@ -185,7 +194,20 @@ const FRESH_CLAIM_VERDICTS: readonly string[] = [
   'claimable',
   'already-claimed',
   'stale-reclaimable',
+  'local-branch-present',
 ];
+
+/**
+ * The reasons the gate pairs with `local-branch-present` (issue 4914), one per
+ * result: an exact inheritable local-only ref, any other local-only ref, and an
+ * unreadable probe. They match the top-level `reason` and the `status` of
+ * `evidence.local_branch`, in that order.
+ */
+const LOCAL_BRANCH_STATUS_BY_REASON: Readonly<Record<string, string>> = {
+  'local-branch-inheritable': 'inheritable',
+  'local-branch-unexpected': 'unexpected',
+  'local-branch-unreadable': 'unreadable',
+};
 
 /**
  * What the fresh-claim gate pairs with each routing state it can emit: the
@@ -199,6 +221,7 @@ const ROUTING_PAIRS: Readonly<
   non_inheritable: { verdict: 'already-claimed', action: 'stop' },
   disputed: { verdict: 'already-claimed', action: 'stop' },
   local_worktree_occupied: { verdict: 'already-claimed', action: 'stop' },
+  local_branch_present: { verdict: 'local-branch-present', action: 'stop' },
 };
 
 /** The reasons `claim-approval-gate` pairs with `approved: false`. */
@@ -245,6 +268,7 @@ export type ClaimStopReason =
   | 'precheck-unavailable'
   | 'local-worktree-occupied'
   | 'local-worktree-unreadable'
+  | 'local-branch-present'
   | 'branch-collision'
   | 'primary-not-ready'
   | 'primary-worktree-dirty'
@@ -674,8 +698,131 @@ type FreshGateReading =
       winningClaimId: string | null;
       /** The routing's `evidence.released_claim`, kept for the B1 preservation. */
       releasedClaim: { present: boolean; branch: string | null };
+      /** The routing's `evidence.local_branch`; set only for `local-branch-present`. */
+      localBranch: LocalBranchReading | null;
     }
   | { ok: false; detail: string };
+
+/** What the gate printed for a local-only branch (issue 4914), once it is checked. */
+interface LocalBranchReading {
+  status: string;
+  /** The branch names of `evidence.local_branch.refs`. */
+  refs: string[];
+  detail: string | null;
+}
+
+/**
+ * The `evidence.local_branch` of a `local-branch-present` verdict, or `null`
+ * when it is malformed: the status must match the reason, every ref needs a
+ * branch and a tip, an inheritable result names exactly one ref as its branch
+ * and tip, and any other status names no inheritable branch.
+ */
+function readLocalBranchEvidence(
+  routing: Record<string, unknown>,
+): LocalBranchReading | null {
+  const evidence = routing.evidence;
+  const local = isRecord(evidence) ? evidence.local_branch : undefined;
+  if (
+    !isRecord(local) ||
+    typeof routing.reason !== 'string' ||
+    !Object.hasOwn(LOCAL_BRANCH_STATUS_BY_REASON, routing.reason) ||
+    local.status !== LOCAL_BRANCH_STATUS_BY_REASON[routing.reason] ||
+    !Array.isArray(local.refs) ||
+    (local.detail !== null && typeof local.detail !== 'string')
+  ) {
+    return null;
+  }
+  const refs: { branch: string; tip: string }[] = [];
+  const seen = new Set<string>();
+  for (const ref of local.refs as unknown[]) {
+    if (
+      !isRecord(ref) ||
+      typeof ref.branch !== 'string' ||
+      ref.branch === '' ||
+      typeof ref.tip !== 'string' ||
+      ref.tip === '' ||
+      // The probe never lists a branch twice, so a repeat is malformed.
+      seen.has(ref.branch)
+    ) {
+      return null;
+    }
+    seen.add(ref.branch);
+    refs.push({ branch: ref.branch, tip: ref.tip });
+  }
+  const inheritable = local.status === 'inheritable';
+  if (
+    inheritable
+      ? refs.length !== 1 ||
+        local.branch !== refs[0].branch ||
+        local.tip !== refs[0].tip
+      : local.branch !== null ||
+        local.tip !== null ||
+        (local.status === 'unexpected' && refs.length === 0)
+  ) {
+    return null;
+  }
+  return {
+    status: local.status,
+    refs: refs.map((ref) => ref.branch),
+    detail: local.detail === null ? null : (local.detail as string),
+  };
+}
+
+/**
+ * Whether a verdict other than `local-branch-present` still carries a
+ * local-branch signal (issue 4914): a local-branch reason, or
+ * `evidence.local_branch` that is not exactly a well-formed `absent` result.
+ * Only a `claimable` verdict may carry the `absent` object; every other
+ * verdict carries none. Such a response is malformed, so a drift between the
+ * producer and this consumer can never read a local-only branch as claimable.
+ */
+function carriesLocalBranchSignal(
+  routing: Record<string, unknown>,
+  verdict: string,
+): boolean {
+  if (
+    typeof routing.reason === 'string' &&
+    Object.hasOwn(LOCAL_BRANCH_STATUS_BY_REASON, routing.reason)
+  ) {
+    return true;
+  }
+  const evidence = routing.evidence;
+  const local = isRecord(evidence) ? evidence.local_branch : undefined;
+  if (local === undefined) {
+    return false;
+  }
+  return !(
+    verdict === 'claimable' &&
+    isRecord(local) &&
+    local.status === 'absent' &&
+    local.branch === null &&
+    local.tip === null &&
+    Array.isArray(local.refs) &&
+    local.refs.length === 0 &&
+    (local.detail === null || typeof local.detail === 'string')
+  );
+}
+
+/**
+ * A `local-branch-present` result that only names this claim's own computed
+ * branch and is neither inheritable nor unreadable. It is the leftover
+ * `--preserve-b1-leftovers` exists to preserve (issue 4970), so with the flag
+ * it passes A5(c) and reads as `claimable` for the preservation module, which
+ * checks the rest itself. A slug variant or a second ref never qualifies.
+ */
+function isComputedBranchLeftover(
+  reading: FreshGateReading,
+  branch: string,
+): boolean {
+  return (
+    reading.ok &&
+    reading.verdict === 'local-branch-present' &&
+    reading.reason === 'local-branch-unexpected' &&
+    reading.localBranch !== null &&
+    reading.localBranch.refs.length === 1 &&
+    reading.localBranch.refs[0] === branch
+  );
+}
 
 /**
  * The released claim the routing names, if any. `resume-claim-routing` always
@@ -774,12 +921,35 @@ function readFreshClaimGate(
     pair === undefined ||
     pair.verdict !== gate.verdict ||
     pair.action !== routing.action ||
-    (gate.verdict === 'claimable' && winningClaimId !== null)
+    (gate.verdict === 'claimable' && winningClaimId !== null) ||
+    // A preserved local-only branch is never a takeover target (issue 4914).
+    (gate.verdict === 'local-branch-present' && winningClaimId !== null)
   ) {
     return {
       ok: false,
       detail:
         'resume-claim-routing printed a verdict, state, action, or winner it never pairs together',
+    };
+  }
+  if (
+    gate.verdict !== 'local-branch-present' &&
+    carriesLocalBranchSignal(routing, gate.verdict)
+  ) {
+    return {
+      ok: false,
+      detail:
+        'resume-claim-routing printed a local-branch reason or evidence.local_branch that its verdict never carries',
+    };
+  }
+  const localBranch =
+    gate.verdict === 'local-branch-present'
+      ? readLocalBranchEvidence(routing)
+      : null;
+  if (gate.verdict === 'local-branch-present' && localBranch === null) {
+    return {
+      ok: false,
+      detail:
+        'resume-claim-routing printed a local-branch-present verdict without matching evidence.local_branch',
     };
   }
   return {
@@ -788,6 +958,42 @@ function readFreshClaimGate(
     reason: routing.reason,
     winningClaimId: winningClaimId === null ? null : (winningClaimId as string),
     releasedClaim: readReleasedClaim(routing),
+    localBranch,
+  };
+}
+
+/**
+ * A `local-branch-present` verdict as a stop (issue 4914). The detail names the
+ * result and the refs; the next action is one static sentence per result, and a
+ * leftover that is only this claim's computed branch keeps the B1 leftover
+ * guidance it had before the gate saw local refs.
+ */
+function localBranchStop(
+  reading: Extract<FreshGateReading, { ok: true }>,
+  branch: string,
+  detailPrefix: string,
+): {
+  nextAction: string;
+  detail: string;
+  extra: { gateReason: string; winningClaimId: null };
+} {
+  const local = reading.localBranch;
+  const nextAction =
+    reading.reason === 'local-branch-inheritable'
+      ? LOCAL_BRANCH_INHERITABLE_NEXT
+      : reading.reason === 'local-branch-unreadable'
+        ? LOCAL_BRANCH_UNREADABLE_NEXT
+        : isComputedBranchLeftover(reading, branch)
+          ? LEFTOVER_BRANCH_NEXT
+          : LOCAL_BRANCH_UNEXPECTED_NEXT;
+  const named =
+    local !== null && local.refs.length > 0 ? ` ${local.refs.join(', ')}` : '';
+  const why =
+    local?.detail === null || local === null ? '' : `: ${local.detail}`;
+  return {
+    nextAction,
+    detail: `${detailPrefix} local-branch-present (${reading.reason})${named}${why}`,
+    extra: { gateReason: reading.reason, winningClaimId: null },
   };
 }
 
@@ -795,6 +1001,7 @@ function readFreshClaimGate(
 function checkClaimState(
   issueNumber: number,
   deps: ClaimIssueDeps,
+  options: { branch: string; preserveB1Leftovers: boolean },
 ): CheckOutcome {
   const reading = readFreshClaimGate(issueNumber, [], deps);
   if (!reading.ok) {
@@ -802,6 +1009,30 @@ function checkClaimState(
   }
   if (reading.verdict === 'claimable') {
     return pass('claimable');
+  }
+  if (reading.verdict === 'local-branch-present') {
+    // With --preserve-b1-leftovers, the computed branch's own leftover is the
+    // input of that mode (issue 4970): A5(c) lets it through and the
+    // preservation step decides, exactly as before the gate read local refs.
+    if (
+      options.preserveB1Leftovers &&
+      isComputedBranchLeftover(reading, options.branch)
+    ) {
+      return pass(
+        `the local-only branch ${options.branch} is left to --preserve-b1-leftovers`,
+      );
+    }
+    const stopped = localBranchStop(
+      reading,
+      options.branch,
+      'the fresh-claim gate returned',
+    );
+    return stop(
+      'local-branch-present',
+      stopped.nextAction,
+      stopped.detail,
+      stopped.extra,
+    );
   }
   if (reading.verdict === 'stale-reclaimable') {
     return stop(
@@ -1042,6 +1273,7 @@ function checkBranchCollision(
 export function runClaimPrechecks(
   issueNumber: number,
   deps: ClaimIssueDeps,
+  options: { preserveB1Leftovers?: boolean } = {},
 ): ClaimPrecheckOutcome {
   let repository: { owner: string; repo: string };
   try {
@@ -1106,7 +1338,11 @@ export function runClaimPrechecks(
       id: 'a5c-claim-state',
       label: 'A5(c)',
       onThrow: 'precheck-unavailable',
-      run: () => checkClaimState(issueNumber, deps),
+      run: () =>
+        checkClaimState(issueNumber, deps, {
+          branch,
+          preserveB1Leftovers: options.preserveB1Leftovers === true,
+        }),
     },
     {
       id: 'a5d-open-pr',
@@ -2002,13 +2238,21 @@ function fastForwardPrimary(state: ApplyState): ApplyOutcome {
   return applyPass(`${base} is on origin/${base} (fast-forwarded)`);
 }
 
-/** The gate reading in the shape the preservation module takes. */
-function toB1Gate(reading: FreshGateReading): B1GateReading {
+/**
+ * The gate reading in the shape the preservation module takes. The computed
+ * branch's own leftover reads as `claimable` here, as it did before the gate
+ * saw local refs (issue 4914); the module's released-claim check still refuses
+ * an exact released branch, and every other `local-branch-present` result
+ * keeps its verdict.
+ */
+function toB1Gate(reading: FreshGateReading, branch: string): B1GateReading {
   return reading.ok
     ? {
         ok: true,
         detail: '',
-        verdict: reading.verdict,
+        verdict: isComputedBranchLeftover(reading, branch)
+          ? 'claimable'
+          : reading.verdict,
         releasedClaim: reading.releasedClaim,
       }
     : {
@@ -2045,7 +2289,10 @@ function b1Request(
     confirmation: preserve.confirmation,
     decisions: preserve.decisions,
     readGate: () =>
-      toB1Gate(readFreshClaimGate(state.issue, [], state.deps, state.primary)),
+      toB1Gate(
+        readFreshClaimGate(state.issue, [], state.deps, state.primary),
+        state.branch,
+      ),
     inspectLocalWorktrees: () => {
       try {
         return state.deps.inspectLocalWorktrees(state.issue);
@@ -2609,6 +2856,19 @@ function checkOwnWorktreeGate(state: ApplyState): ApplyOutcome {
   }
   if (reading.verdict === 'claimable') {
     return applyPass('the own-worktree gate says claimable');
+  }
+  if (reading.verdict === 'local-branch-present') {
+    const stopped = localBranchStop(
+      reading,
+      state.branch,
+      'the own-worktree gate returned',
+    );
+    return applyFail(
+      'local-branch-present',
+      lostClaimNext(identity.claimId),
+      stopped.detail,
+      stopped.extra,
+    );
   }
   const reason: ClaimStopReason =
     reading.verdict === 'stale-reclaimable'
@@ -3453,7 +3713,9 @@ export function runClaimIssue(
       );
     }
   }
-  const outcome = runClaimPrechecks(issueNumber, deps);
+  const outcome = runClaimPrechecks(issueNumber, deps, {
+    preserveB1Leftovers: preserveInput !== null,
+  });
   if (outcome.kind === 'transport') {
     io.stderr(`claim-issue: ${outcome.message}\n`);
     return { exitCode: 1, kind: 'transport', message: outcome.message };
@@ -3540,6 +3802,11 @@ A failed helper or gh call never reads as eligible: it is reported as
 precheck-unavailable (approval-unproven for A5(a), local-worktree-unreadable
 for the local scan) with the written path as the next action.
 
+A5(c) also stops as local-branch-present when a local issue/<number>-* ref that
+no worktree holds and origin lacks exists: an exact inheritable ref of a
+released claim, any other ref, or an unreadable read of it (the report's
+gateReason says which). The helper never creates, resets, or deletes that ref.
+
 With --apply, when every pre-check passes, the helper runs the fresh-claim
 order of idd-claim.instructions.md: B1 step 1 and the worktree (under the
 clone-scoped lock), the generated tokens, the own-worktree gate, the
@@ -3558,10 +3825,12 @@ lock; the report's nextAction says what to run next (lost-claim-cleanup).
 
 --preserve-b1-leftovers (issue 4970) is the one mode that changes a B1
 leftover: a local branch of the claim's name, or something at the computed
-worktree path. It acts only where the run would stop with b1-cleanup-needed (a
-leftover branch) or path-occupied, and only when every precondition holds for
-every leftover: the trusted b1Leftover auto-decide class is enabled, the
-fresh-claim gate is claimable, and each leftover has a matching confirmation
+worktree path. It acts only where the run would stop on a leftover branch (as
+local-branch-present at A5(c) without the flag, as b1-cleanup-needed once the
+flag lets A5(c) pass) or with path-occupied, and only when every precondition
+holds for every leftover: the trusted b1Leftover auto-decide class is enabled,
+the fresh-claim gate is claimable (a local-only branch that is only the claim's
+own computed branch counts as claimable here), and each leftover has a matching confirmation
 record named by --confirmation, paired with one --decision per leftover through
 the record's Subject line. A branch is backed up to
 refs/idd-b1/<issue>/<commit>, the ref is read back, and only then is the branch
