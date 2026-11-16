@@ -1845,3 +1845,26 @@ test('provisional assessment: Markdown formatting does not hide a prerequisite i
     assert.deepEqual(blockerCodes(assessment), [code], criterion);
   }
 });
+
+test('provisional assessment: a long qualification cannot separate a need from what is needed (AC1, AC4)', () => {
+  for (const [criterion, code] of [
+    [
+      'The result requires, after the long qualification of the rollout and its environment, approval.',
+      'criteria-needs-approval',
+    ],
+    [
+      'The job needs, once the long qualification of the rollout and its environment is done, credentials.',
+      'criteria-needs-credential',
+    ],
+    ['Ask for the production credentials first.', 'criteria-needs-credential'],
+  ] as const) {
+    const assessment = assessProvisionalChoicePlan(
+      assessInput({
+        plan: validPlan({
+          choices: [planChoice({ executionCriteria: [criterion] })],
+        }),
+      }),
+    );
+    assert.deepEqual(blockerCodes(assessment), [code], criterion);
+  }
+});

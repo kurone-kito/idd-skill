@@ -568,6 +568,11 @@ function withoutFormatting(text: string): string {
     .replace(/[`*_~]+/g, '');
 }
 
+// Up to fifteen words, with commas, between a verb of needing and what is
+// needed, so a long qualification cannot separate them. It stays inside one
+// text: a criterion is a single sentence by construction.
+const GAP_WORDS = String.raw`(?:[\w'-]+[\s,]+){0,15}?`;
+
 // "requires approval", "needs sign-off", "obtain consent" and the like: a verb
 // of needing, getting or waiting, then the approval word within a few words.
 // "must reject" and "returns false" are not such verbs, so a criterion about
@@ -575,7 +580,7 @@ function withoutFormatting(text: string): string {
 // is not caught.
 const NEEDS_APPROVAL_PATTERN = new RegExp(
   [
-    String.raw`(?<![\w-])(?:require[sd]?|requiring|needs?|needed|awaiting|awaits?|pending|obtain|obtaining|get|seek|ask|wait(?:ing)?\s+for)\s+(?:\w+\s+){0,3}?${APPROVAL_WORD_SOURCE}`,
+    String.raw`(?<![\w-])(?:require[sd]?|requiring|needs?|needed|awaiting|awaits?|pending|obtain|obtaining|get|seek|ask|wait(?:ing)?\s+for)[\s,]+${GAP_WORDS}${APPROVAL_WORD_SOURCE}`,
     String.raw`(?<![\w-])${APPROVAL_WORD_SOURCE}\s+(?:is|are|will\s+be)\s+(?:required|needed|necessary|pending|essential|mandatory)`,
   ].join('|'),
   'i',
@@ -608,7 +613,7 @@ const CREDENTIAL_TERM_SOURCE =
   '(?:credentials?|secrets?|api[- ]keys?|passwords?|access\\s+tokens?|production\\s+access|third-?party\\s+access)';
 const NEEDS_CREDENTIAL_PATTERN = new RegExp(
   [
-    String.raw`(?<![\w-])(?:supply|supplies|supplied|provide[sd]?|providing|obtain|obtaining|get|receive[sd]?|request(?:s|ed|ing)?|ask(?:s|ed|ing)?(?:\\s+for)?|secure[sd]?|require[sd]?|requiring|needs?|needed|awaiting|awaits?|wait(?:ing)?\s+for)\s+(?:\w+\s+){0,3}?${CREDENTIAL_TERM_SOURCE}`,
+    String.raw`(?<![\w-])(?:supply|supplies|supplied|provide[sd]?|providing|obtain|obtaining|get|receive[sd]?|request(?:s|ed|ing)?|ask(?:s|ed|ing)?(?:\s+for)?|secure[sd]?|require[sd]?|requiring|needs?|needed|awaiting|awaits?|wait(?:ing)?\s+for)[\s,]+${GAP_WORDS}${CREDENTIAL_TERM_SOURCE}`,
     String.raw`(?<![\w-])${CREDENTIAL_TERM_SOURCE}\s+(?:is|are|will\s+be)\s+(?:required|needed|necessary|pending|essential|mandatory)`,
   ].join('|'),
   'i',
