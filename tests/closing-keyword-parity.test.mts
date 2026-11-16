@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { extractKeywordReferences } from '../src/scripts/discover-roadmap-graph.mts';
 import {
   CLOSING_KEYWORD_ALTERNATION,
+  findCommitClosesForIssue,
   findStrayCommitCloses,
   prReferencesIssue,
 } from '../src/scripts/supersession-detection.mts';
@@ -53,6 +54,43 @@ test('parity: the stray-close scan flags the same rows for an out-of-set issue',
     );
     const flagged = strays.some((stray) => stray.issue === ISSUE);
     assert.equal(flagged, row.closes, `stray scan on: ${row.text}`);
+  }
+});
+
+test('parity: the protected-source scan (#4532) agrees with the shared row table', () => {
+  // The collector reads a protected source's PR title, PR body, and commits
+  // through this one scan, so it must answer every row as the other consumers
+  // do.
+  for (const row of ROWS) {
+    assert.equal(
+      findCommitClosesForIssue(
+        [{ sha: 'abc1234', commit: { message: `docs: note\n\n${row.text}` } }],
+        ISSUE,
+        'o',
+        'r',
+      ).length > 0,
+      row.closes,
+      `commit scan on: ${row.text}`,
+    );
+  }
+  // The GH-N, same-repository qualified, and URL forms count; another
+  // repository's reference does not.
+  for (const [text, closes] of [
+    ['Closes o/r#3145', true],
+    ['Closes GH-3145', true],
+    ['Closes https://github.com/o/r/issues/3145', true],
+    ['Closes other/repo#3145', false],
+  ] as const) {
+    assert.equal(
+      findCommitClosesForIssue(
+        [{ sha: 'abc1234', commit: { message: text } }],
+        ISSUE,
+        'o',
+        'r',
+      ).length > 0,
+      closes,
+      text,
+    );
   }
 });
 

@@ -371,6 +371,59 @@ export function findStrayCommitCloses(
   return strays;
 }
 
+/**
+ * The regex source naming `issue` in every form GitHub reads as a reference to
+ * it, for a closing-keyword scan (#4532): the bare `#N`, the `GH-N` autolink,
+ * the same-repository qualified `owner/repo#N`, and the same-repository issue
+ * URL (`https://<host>/owner/repo/issues/N`). An empty `owner` or `repo`
+ * leaves only the bare and `GH-N` forms.
+ */
+function issueReferencePattern(
+  issue: number,
+  owner: string,
+  repo: string,
+): string {
+  const slug =
+    owner && repo ? `${escapeRegex(owner)}/${escapeRegex(repo)}` : '';
+  return slug
+    ? `(?:(?:${slug})?#${issue}|GH-${issue}|https?://[^\\s/]+/${slug}/issues/${issue})`
+    : `(?:#${issue}|GH-${issue})`;
+}
+
+/**
+ * Every commit whose full message names `issue` with a closing keyword, in any
+ * form GitHub reads as a close of that issue: the bare `#N`, the `GH-N`
+ * autolink, the same-repository qualified `owner/repo#N`, and the
+ * same-repository issue URL (`https://<host>/owner/repo/issues/N`). It backs
+ * the protected-source scan
+ * of {@link computeClosingSetEvidence} (#4532), which must catch the forms
+ * {@link findStrayCommitCloses} does not read (it matches the bare form only).
+ * An empty `owner` or `repo` leaves only the bare and `GH-N` forms. A commit
+ * with no message contributes nothing, and one commit reports the issue once.
+ */
+export function findCommitClosesForIssue(
+  commits: readonly ClosingKeywordCommitPayload[],
+  issue: number,
+  owner: string,
+  repo: string,
+): StrayCommitClose[] {
+  if (!Number.isInteger(issue) || issue <= 0) {
+    return [];
+  }
+  const pattern = new RegExp(
+    `\\b${CLOSING_KEYWORD_PATTERN}\\s+${issueReferencePattern(issue, owner, repo)}\\b`,
+    'i',
+  );
+  const found: StrayCommitClose[] = [];
+  for (const commit of commits) {
+    const message = String(commit?.commit?.message ?? '');
+    if (message && pattern.test(message)) {
+      found.push({ sha: String(commit?.sha ?? ''), issue });
+    }
+  }
+  return found;
+}
+
 /** `closingSet` merge-gate evidence embedded in a pre-merge-readiness
  * report (`schemas/pre-merge-readiness.schema.json`), computed once by
  * `collectPreMergeReadiness` via {@link computeClosingSetEvidence} and
@@ -388,119 +441,68 @@ export interface ClosingSetEvidence {
 }
 
 /**
- * Compute the `closingSet` merge-gate evidence: whether the PR's live
- * `closingIssuesReferences` (GitHub's own merge-time closing-keyword
- * resolution) and its branch commit messages agree with the deliberate
- * closing set, mirroring `idd-pr-submit.instructions.md`'s D3.5 steps 6-7
- * so both the lite and standard profiles get this safety check from the
- * helper verdict itself (#3298).
- *
- * - `expected`: the deliberate closing set, already resolved by the caller
- *   (`--closing-issues`, else `[claimIssueNumber]`, else `[]` under
- *   `--claimless`).
- * - `liveDefaultBranch === null`, or `baseRefName` is empty/missing, means
- *   the PR's real base branch cannot be verified against the live default
- *   -- fails closed to `"unavailable"` before even comparing the two
- *   (Copilot review, PR #3353: an empty `baseRefName` previously compared
- *   unequal to a non-empty `liveDefaultBranch` and fell through to
- *   `"skipped-non-default-branch"`, reporting a successful exemption for
- *   an unverified PR target instead of failing closed).
- * - `baseRefName !== liveDefaultBranch` reproduces D3.5's own exemption:
- *   `closingIssuesReferences` never populates against a non-default base
- *   branch, so `"skipped-non-default-branch"` short-circuits before any
- *   commit-list read -- D3.5 skips both step 6 (the reference compare) and
- *   step 7 (the commit-message scan) together under this same condition, so
- *   this status covers both.
- * - `commits === null` (the caller's own `pulls/{pr}/commits` read threw)
- *   or `commits.length >= 250` (the endpoint's documented cap, which
- *   pagination cannot get past) fails closed to `"unavailable"` --
- *   completeness cannot be shown.
- * - `closingIssuesReferences` must itself be an array to count as verified
- *   evidence -- a missing, `null`, or otherwise malformed value also fails
- *   closed to `"unavailable"` rather than silently coercing to `[]` (Copilot
- *   review, PR #3353: the coerced-empty shape let a `--claimless` run,
- *   whose `expected` is itself `[]`, report `"match"` on an unread field).
- * - Each `closingIssuesReferences` entry is compared by repository as well
- *   as number when it carries a `repository` field (the real
- *   `gh pr view --json closingIssuesReferences` shape, confirmed
- *   empirically: `{ number, repository: { name, owner: { login } }, ... }`):
- *   an entry for a different owner/repo never satisfies an `expected`
- *   number, even when the bare numbers coincide, and always counts as
- *   `extra` -- computed here (not re-derived from plain `expected`/`actual`
- *   number sets downstream) so a coincidental cross-repo number collision
- *   still surfaces as `extra`, not a false "match".
- * - Each entry must itself resolve to a valid positive-integer `number`,
- *   and its `repository` field (when present and non-null) must be a real
- *   object, or the whole result fails closed to `"unavailable"` rather than
- *   silently dropping just that entry (Copilot review, PR #3353: since
- *   `closingIssuesReferences` is an unvalidated provider passthrough, an
- *   entry this file cannot interpret -- a missing `number`, or a
- *   non-object `repository` -- could just as easily be an undetected extra
- *   close as genuinely nothing; expected `[7]` plus
- *   `[{ number: 7 }, {}]` previously reported `"match"`).
+ * A provisional source the closing set must keep out (#4532): the claimed
+ * issue whose trusted provisional read is `bound`, so a merge must leave it
+ * open for its human confirmation. The collector derives this only from a
+ * bound read, never from a missing record, an untrusted marker, or a
+ * user-supplied set.
  */
-export function computeClosingSetEvidence(options: {
-  expected: readonly number[];
-  closingIssuesReferences: unknown;
-  owner: string;
-  repo: string;
-  baseRefName: string;
-  liveDefaultBranch: string | null;
-  commits: readonly ClosingKeywordCommitPayload[] | null;
-}): ClosingSetEvidence {
-  const expected = [...new Set(options.expected)].sort((a, b) => a - b);
-  if (!options.liveDefaultBranch || !options.baseRefName) {
-    return {
-      status: 'unavailable',
-      expected,
-      actual: [],
-      extra: [],
-      missing: [],
-      strayCommitCloses: [],
-    };
-  }
-  if (options.baseRefName !== options.liveDefaultBranch) {
-    return {
-      status: 'skipped-non-default-branch',
-      expected,
-      actual: [],
-      extra: [],
-      missing: [],
-      strayCommitCloses: [],
-    };
-  }
-  if (options.commits === null || options.commits.length >= 250) {
-    return {
-      status: 'unavailable',
-      expected,
-      actual: [],
-      extra: [],
-      missing: [],
-      strayCommitCloses: [],
-    };
-  }
-  // Copilot review, PR #3353: a non-array closingIssuesReferences (missing,
-  // null, or otherwise malformed) previously coerced to `[]` here, silently
-  // treating "not verified" as "verified empty" -- under `--claimless`
-  // (`expected: []`), that let a genuinely unread closing-reference field
-  // report `status: "match"` instead of failing closed. `[]` is only ever
-  // treated as real evidence once it has actually been confirmed to be an
-  // array.
-  if (!Array.isArray(options.closingIssuesReferences)) {
-    return {
-      status: 'unavailable',
-      expected,
-      actual: [],
-      extra: [],
-      missing: [],
-      strayCommitCloses: [],
-    };
-  }
+export interface ProtectedClosingSource {
+  /** The claimed issue number kept out of the deliberate closing set. */
+  issue: number;
+  /**
+   * Whether the PR title or body names `issue` with a closing keyword,
+   * scanned by the caller as raw text (GitHub's own `closingIssuesReferences`
+   * can lag the body, and the scan reads the title through a provider call
+   * this file does not make). `null` means the title or body could not be
+   * read.
+   */
+  bodyCloses: boolean | null;
+}
 
-  const ownerLower = options.owner.toLowerCase();
-  const repoLower = options.repo.toLowerCase();
-  const rawRefs = options.closingIssuesReferences;
-  const expectedSet = new Set(expected);
+/** Whether `value` is a repository payload with a name and an owner login. */
+function isWellFormedRepository(value: unknown): boolean {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return false;
+  }
+  const record = value as { name?: unknown; owner?: unknown };
+  const owner = record.owner;
+  return (
+    typeof record.name === 'string' &&
+    record.name.trim() !== '' &&
+    owner !== null &&
+    typeof owner === 'object' &&
+    !Array.isArray(owner) &&
+    typeof (owner as { login?: unknown }).login === 'string' &&
+    (owner as { login: string }).login.trim() !== ''
+  );
+}
+
+/** Whether every commit carries a message, so a scan can rely on its result. */
+function allCommitMessagesReadable(
+  commits: readonly ClosingKeywordCommitPayload[],
+): boolean {
+  return commits.every((commit) => typeof commit?.commit?.message === 'string');
+}
+
+/** The closing references of one pull request, split by repository. */
+interface ParsedClosingReferences {
+  actual: number[];
+  sameRepoNumbers: Set<number>;
+  crossRepoNumbers: number[];
+}
+
+/**
+ * Read the raw `closingIssuesReferences` passthrough into numbers split by
+ * repository, or `null` when any entry cannot be interpreted -- the caller
+ * then fails closed to `"unavailable"`.
+ */
+function parseClosingReferences(
+  rawRefs: readonly unknown[],
+  ownerLower: string,
+  repoLower: string,
+  strictRepository = false,
+): ParsedClosingReferences | null {
   const actual: number[] = [];
   const sameRepoNumbers = new Set<number>();
   // Cross-repo numbers stay a separate bucket (not folded into
@@ -532,14 +534,7 @@ export function computeClosingSetEvidence(options: {
       // passthrough (no schema guarantee), so an entry this file cannot
       // interpret makes the whole comparison untrustworthy, not just that
       // one entry.
-      return {
-        status: 'unavailable',
-        expected,
-        actual: [],
-        extra: [],
-        missing: [],
-        strayCommitCloses: [],
-      };
+      return null;
     }
     actual.push(number);
     const repository = record?.repository;
@@ -552,14 +547,14 @@ export function computeClosingSetEvidence(options: {
         // defaulting to the same-repo assumption below -- the same
         // false-match risk the malformed-number case above fails closed
         // on, just one field over.
-        return {
-          status: 'unavailable',
-          expected,
-          actual: [],
-          extra: [],
-          missing: [],
-          strayCommitCloses: [],
-        };
+        return null;
+      }
+      // A protected source on a non-default base ignores cross-repository
+      // numbers, so there a repository payload that cannot be read as
+      // `{ name, owner: { login } }` (an array, or a missing name or login)
+      // must not pass as another repository's issue: fail closed instead.
+      if (strictRepository && !isWellFormedRepository(repository)) {
+        return null;
       }
       const repoRecord = repository as {
         name?: unknown;
@@ -574,8 +569,265 @@ export function computeClosingSetEvidence(options: {
     }
     sameRepoNumbers.add(number);
   }
+  return { actual, sameRepoNumbers, crossRepoNumbers };
+}
+
+/**
+ * Compute the `closingSet` merge-gate evidence: whether the PR's live
+ * `closingIssuesReferences` (GitHub's own merge-time closing-keyword
+ * resolution) and its branch commit messages agree with the deliberate
+ * closing set, mirroring `idd-pr-submit.instructions.md`'s D3.5 steps 6-7
+ * so both the lite and standard profiles get this safety check from the
+ * helper verdict itself (#3298).
+ *
+ * - `expected`: the deliberate closing set, already resolved by the caller
+ *   (`--closing-issues`, else `[claimIssueNumber]`, else `[]` under
+ *   `--claimless`, for a bound provisional source (#4532), or for a body that
+ *   names the claimed issue only with `Refs` (#5149)).
+ * - `liveDefaultBranch === null`, or `baseRefName` is empty/missing, means
+ *   the PR's real base branch cannot be verified against the live default
+ *   -- fails closed to `"unavailable"` before even comparing the two
+ *   (Copilot review, PR #3353: an empty `baseRefName` previously compared
+ *   unequal to a non-empty `liveDefaultBranch` and fell through to
+ *   `"skipped-non-default-branch"`, reporting a successful exemption for
+ *   an unverified PR target instead of failing closed).
+ * - `baseRefName !== liveDefaultBranch` reproduces D3.5's own exemption:
+ *   `closingIssuesReferences` does not populate from a closing keyword against
+ *   a non-default base branch, so `"skipped-non-default-branch"` short-circuits before any
+ *   commit-list read -- D3.5 skips both step 6 (the reference compare) and
+ *   step 7 (the commit-message scan) together under this same condition, so
+ *   this status covers both. The one exception is a `protectedSource`
+ *   (below), which still reads the commit list, the caller's body scan, and
+ *   the registered references for that one number.
+ * - `commits === null` (the caller's own `pulls/{pr}/commits` read threw)
+ *   or `commits.length >= 250` (the endpoint's documented cap, which
+ *   pagination cannot get past) fails closed to `"unavailable"` --
+ *   completeness cannot be shown.
+ * - `closingIssuesReferences` must itself be an array to count as verified
+ *   evidence -- a missing, `null`, or otherwise malformed value also fails
+ *   closed to `"unavailable"` rather than silently coercing to `[]` (Copilot
+ *   review, PR #3353: the coerced-empty shape let a `--claimless` run,
+ *   whose `expected` is itself `[]`, report `"match"` on an unread field).
+ * - Each `closingIssuesReferences` entry is compared by repository as well
+ *   as number when it carries a `repository` field (the real
+ *   `gh pr view --json closingIssuesReferences` shape, confirmed
+ *   empirically: `{ number, repository: { name, owner: { login } }, ... }`):
+ *   an entry for a different owner/repo never satisfies an `expected`
+ *   number, even when the bare numbers coincide, and always counts as
+ *   `extra` -- computed here (not re-derived from plain `expected`/`actual`
+ *   number sets downstream) so a coincidental cross-repo number collision
+ *   still surfaces as `extra`, not a false "match".
+ * - Each entry must itself resolve to a valid positive-integer `number`,
+ *   and its `repository` field (when present and non-null) must be a real
+ *   object, or the whole result fails closed to `"unavailable"` rather than
+ *   silently dropping just that entry (Copilot review, PR #3353: since
+ *   `closingIssuesReferences` is an unvalidated provider passthrough, an
+ *   entry this file cannot interpret -- a missing `number`, or a
+ *   non-object `repository` -- could just as easily be an undetected extra
+ *   close as genuinely nothing; expected `[7]` plus
+ *   `[{ number: 7 }, {}]` previously reported `"match"`).
+ * - `protectedSource` (#4532) names a provisional source that must stay open:
+ *   it is dropped from `expected`, and any closing reference to it blocks on
+ *   every base branch -- GitHub's own `closingIssuesReferences` (a malformed
+ *   entry fails closed), the caller's title/body scan (`bodyCloses`, folded into `actual`
+ *   and `extra` because registration can lag), and every branch commit message
+ *   in the bare, qualified, and URL forms. A `null` `bodyCloses`, or an
+ *   unreadable commit list (or a commit with no message), fails closed to
+ *   `"unavailable"`. A clean protected source keeps the status the base branch
+ *   would give anyway.
+ */
+export function computeClosingSetEvidence(options: {
+  expected: readonly number[];
+  closingIssuesReferences: unknown;
+  owner: string;
+  repo: string;
+  baseRefName: string;
+  liveDefaultBranch: string | null;
+  commits: readonly ClosingKeywordCommitPayload[] | null;
+  protectedSource?: ProtectedClosingSource;
+}): ClosingSetEvidence {
+  const protectedSource = options.protectedSource;
+  const ownerLower = options.owner.toLowerCase();
+  const repoLower = options.repo.toLowerCase();
+  // A protected source is never part of the deliberate set, whatever the
+  // caller passed, so a closing reference to it always reads as extra.
+  const expected = [...new Set(options.expected)]
+    .filter((number) => number !== protectedSource?.issue)
+    .sort((a, b) => a - b);
+  if (!options.liveDefaultBranch || !options.baseRefName) {
+    return {
+      status: 'unavailable',
+      expected,
+      actual: [],
+      extra: [],
+      missing: [],
+      strayCommitCloses: [],
+    };
+  }
+  // A protected source whose title or body could not be read, or whose
+  // repository is unknown (so a registered reference cannot be told from
+  // another repository's), fails closed: nothing shows that the PR does not
+  // close it.
+  if (
+    protectedSource !== undefined &&
+    (protectedSource.bodyCloses === null ||
+      options.owner.trim() === '' ||
+      options.repo.trim() === '')
+  ) {
+    return {
+      status: 'unavailable',
+      expected,
+      actual: [],
+      extra: [],
+      missing: [],
+      strayCommitCloses: [],
+    };
+  }
+  if (options.baseRefName !== options.liveDefaultBranch) {
+    if (protectedSource === undefined) {
+      return {
+        status: 'skipped-non-default-branch',
+        expected,
+        actual: [],
+        extra: [],
+        missing: [],
+        strayCommitCloses: [],
+      };
+    }
+    // The shortcut skips the reference compare for every other number, but a
+    // closing reference to a protected source stays blocked on any base.
+    if (options.commits === null || options.commits.length >= 250) {
+      return {
+        status: 'unavailable',
+        expected,
+        actual: [],
+        extra: [],
+        missing: [],
+        strayCommitCloses: [],
+      };
+    }
+    // GitHub's registration can still hold a reference here (a manual link
+    // counts), so read it; a malformed entry fails closed. Other numbers keep
+    // the exemption.
+    const registered = Array.isArray(options.closingIssuesReferences)
+      ? parseClosingReferences(
+          options.closingIssuesReferences,
+          ownerLower,
+          repoLower,
+          true,
+        )
+      : null;
+    if (registered === null || !allCommitMessagesReadable(options.commits)) {
+      return {
+        status: 'unavailable',
+        expected,
+        actual: [],
+        extra: [],
+        missing: [],
+        strayCommitCloses: [],
+      };
+    }
+    const protectedRefs =
+      protectedSource.bodyCloses ||
+      registered.sameRepoNumbers.has(protectedSource.issue)
+        ? [protectedSource.issue]
+        : [];
+    const protectedStrays = findCommitClosesForIssue(
+      options.commits,
+      protectedSource.issue,
+      options.owner,
+      options.repo,
+    );
+    return {
+      status:
+        protectedRefs.length > 0 || protectedStrays.length > 0
+          ? 'mismatch'
+          : 'skipped-non-default-branch',
+      expected,
+      actual: protectedRefs,
+      extra: protectedRefs,
+      missing: [],
+      strayCommitCloses: protectedStrays,
+    };
+  }
+  if (options.commits === null || options.commits.length >= 250) {
+    return {
+      status: 'unavailable',
+      expected,
+      actual: [],
+      extra: [],
+      missing: [],
+      strayCommitCloses: [],
+    };
+  }
+  // Copilot review, PR #3353: a non-array closingIssuesReferences (missing,
+  // null, or otherwise malformed) previously coerced to `[]` here, silently
+  // treating "not verified" as "verified empty" -- under `--claimless`
+  // (`expected: []`), that let a genuinely unread closing-reference field
+  // report `status: "match"` instead of failing closed. `[]` is only ever
+  // treated as real evidence once it has actually been confirmed to be an
+  // array.
+  if (!Array.isArray(options.closingIssuesReferences)) {
+    return {
+      status: 'unavailable',
+      expected,
+      actual: [],
+      extra: [],
+      missing: [],
+      strayCommitCloses: [],
+    };
+  }
+
+  const rawRefs = options.closingIssuesReferences;
+  const expectedSet = new Set(expected);
+  const parsedRefs = parseClosingReferences(rawRefs, ownerLower, repoLower);
+  if (
+    parsedRefs === null ||
+    (protectedSource !== undefined &&
+      !allCommitMessagesReadable(options.commits))
+  ) {
+    return {
+      status: 'unavailable',
+      expected,
+      actual: [],
+      extra: [],
+      missing: [],
+      strayCommitCloses: [],
+    };
+  }
+  const { actual, sameRepoNumbers, crossRepoNumbers } = parsedRefs;
+
+  // The caller's body scan stands in for a registration that has not caught
+  // up yet (D3.5, "pending registration"): a protected source the title or
+  // body closes counts as a same-repository closing reference.
+  if (
+    protectedSource?.bodyCloses === true &&
+    !sameRepoNumbers.has(protectedSource.issue)
+  ) {
+    sameRepoNumbers.add(protectedSource.issue);
+    if (!actual.includes(protectedSource.issue)) {
+      actual.push(protectedSource.issue);
+    }
+  }
 
   const strayCommitCloses = findStrayCommitCloses(options.commits, expectedSet);
+  if (protectedSource !== undefined) {
+    // The stray scan reads the bare `#N` only; add the qualified and URL forms
+    // for the protected source, once per (commit, issue).
+    const seen = new Set(
+      strayCommitCloses.map((stray) => `${stray.sha}#${stray.issue}`),
+    );
+    for (const stray of findCommitClosesForIssue(
+      options.commits,
+      protectedSource.issue,
+      options.owner,
+      options.repo,
+    )) {
+      if (!seen.has(`${stray.sha}#${stray.issue}`)) {
+        strayCommitCloses.push(stray);
+      }
+    }
+  }
   const missing = expected.filter((n) => !sameRepoNumbers.has(n));
   const extra = [
     ...[...sameRepoNumbers].filter((n) => !expectedSet.has(n)),

@@ -28,6 +28,10 @@ import {
 } from '../src/scripts/gh-exec.mts';
 import { loadTrustedIddConfig } from '../src/scripts/idd-config.mts';
 import {
+  type MergeExecuteDeps,
+  runMergeExecute,
+} from '../src/scripts/idd-merge-execute.mts';
+import {
   renderClaimedByMarker,
   renderExternalCheckWaiverComment,
   renderForcedHandoffComment,
@@ -119,7 +123,9 @@ import {
 } from '../src/scripts/provisional-decision-state.mts';
 
 import {
+  type ClosingSetEvidence,
   computeClosingSetEvidence,
+  findCommitClosesForIssue,
   findStrayCommitCloses,
 } from '../src/scripts/supersession-detection.mts';
 import { loadJson, validate } from '../src/scripts/validate-schemas.mts';
@@ -17786,12 +17792,7 @@ test('closingSet: --closing-issues N,M with matching references -> match; the sa
   assert.match(blockers[0].detail, /--closing-issues/);
 });
 
-test('closingSet: --closing-issues omitting the claimed issue, or combined with --claimless, is a parseArgs usage error', () => {
-  assert.throws(
-    () =>
-      parseArgs(['--pr', '1', '--claim-issue', '7', '--closing-issues', '8,9']),
-    /--closing-issues must include the claimed issue number 7/,
-  );
+test('closingSet: --closing-issues combined with --claimless, or with a non-numeric entry, is a parseArgs usage error', () => {
   assert.throws(
     () => parseArgs(['--pr', '1', '--claimless', '--closing-issues', '7']),
     /--closing-issues cannot be combined with --claimless/,
@@ -17808,6 +17809,23 @@ test('closingSet: --closing-issues omitting the claimed issue, or combined with 
       ]),
     /invalid --closing-issues value/,
   );
+  // An empty set is not a deliberate set (#4532): it is rejected here, so it
+  // can never stand in for the closing set of a provisional source.
+  for (const empty of ['', ',', ' ']) {
+    assert.throws(
+      () =>
+        parseArgs([
+          '--pr',
+          '1',
+          '--claim-issue',
+          '7',
+          '--closing-issues',
+          empty,
+        ]),
+      /invalid --closing-issues value/,
+      JSON.stringify(empty),
+    );
+  }
   const parsed = parseArgs([
     '--pr',
     '1',
@@ -17817,6 +17835,14 @@ test('closingSet: --closing-issues omitting the claimed issue, or combined with 
     '7,8',
   ]);
   assert.deepEqual(parsed.closingIssueNumbers, [7, 8]);
+  // #4532: whether the set must include the claimed issue now depends on the
+  // provisional read, so parsing alone accepts a set that omits it; the
+  // collector tests below pin the usage error for an unbound claim.
+  assert.deepEqual(
+    parseArgs(['--pr', '1', '--claim-issue', '7', '--closing-issues', '8,9'])
+      .closingIssueNumbers,
+    [8, 9],
+  );
 });
 
 test('closingSet: --claimless with a closing keyword in a commit message -> blocker', () => {
@@ -17854,6 +17880,403 @@ test('closingSet: an unreadable live default branch -> unavailable, blocker', ()
   const blockers = closingSetBlockers(evidence);
   assert.equal(blockers.length, 1);
   assert.match(blockers[0].detail, /unavailable/);
+});
+
+// ---------------------------------------------------------------------------
+// #4532: a provisional source stays outside the closing set. The collector
+// passes `protectedSource` only for a bound provisional read; these tests
+// drive the pure evidence computation with hand-built inputs.
+// ---------------------------------------------------------------------------
+
+/** A protected-source run: the source (7) is not in the deliberate set. */
+function protectedClosingSetOptions(
+  overrides: Partial<Parameters<typeof computeClosingSetEvidence>[0]> = {},
+  bodyCloses: boolean | null = false,
+): Parameters<typeof computeClosingSetEvidence>[0] {
+  return {
+    ...baseClosingSetOptions(),
+    expected: [],
+    closingIssuesReferences: [],
+    protectedSource: { issue: 7, bodyCloses },
+    ...overrides,
+  };
+}
+
+test('closingSet protectedSource: a clean PR leaves the source out of the set and matches', () => {
+  const evidence = computeClosingSetEvidence(
+    protectedClosingSetOptions({
+      commits: [commitPayload('a'.repeat(40), 'Refs #7')],
+    }),
+  );
+  assert.deepEqual(evidence, {
+    status: 'match',
+    expected: [],
+    actual: [],
+    extra: [],
+    missing: [],
+    strayCommitCloses: [],
+  });
+  assert.deepEqual(closingSetBlockers(evidence), []);
+});
+
+test('closingSet protectedSource: the source is dropped from a caller-supplied set, so a reference to it is extra', () => {
+  const evidence = computeClosingSetEvidence(
+    protectedClosingSetOptions({
+      expected: [7, 8],
+      closingIssuesReferences: [{ number: 7 }, { number: 8 }],
+    }),
+  );
+  assert.equal(evidence.status, 'mismatch');
+  assert.deepEqual(evidence.expected, [8]);
+  assert.deepEqual(evidence.extra, [7]);
+  assert.equal(closingSetBlockers(evidence).length, 1);
+
+  // The other deliberate targets of a multi-issue PR still match exactly.
+  const multi = computeClosingSetEvidence(
+    protectedClosingSetOptions({
+      expected: [8, 9],
+      closingIssuesReferences: [{ number: 8 }, { number: 9 }],
+    }),
+  );
+  assert.equal(multi.status, 'match');
+  assert.deepEqual(multi.expected, [8, 9]);
+});
+
+test('closingSet protectedSource: a body that closes the source blocks even while closingIssuesReferences is still empty', () => {
+  const evidence = computeClosingSetEvidence(
+    protectedClosingSetOptions({}, true),
+  );
+  assert.equal(evidence.status, 'mismatch');
+  assert.deepEqual(evidence.actual, [7]);
+  assert.deepEqual(evidence.extra, [7]);
+  const blockers = closingSetBlockers(evidence);
+  assert.equal(blockers.length, 1);
+  assert.match(blockers[0].detail, /\b7\b/);
+
+  // Once GitHub registers the same reference the number is reported once.
+  const registered = computeClosingSetEvidence(
+    protectedClosingSetOptions(
+      { closingIssuesReferences: [{ number: 7 }] },
+      true,
+    ),
+  );
+  assert.deepEqual(registered.actual, [7]);
+  assert.deepEqual(registered.extra, [7]);
+});
+
+test('closingSet protectedSource: a registered closing reference alone blocks', () => {
+  const evidence = computeClosingSetEvidence(
+    protectedClosingSetOptions({ closingIssuesReferences: [{ number: 7 }] }),
+  );
+  assert.equal(evidence.status, 'mismatch');
+  assert.deepEqual(evidence.extra, [7]);
+});
+
+test('closingSet protectedSource: a commit that closes the source blocks in the bare, qualified, and URL forms, once per commit', () => {
+  const shas = [
+    '1'.repeat(40),
+    '2'.repeat(40),
+    '3'.repeat(40),
+    '4'.repeat(40),
+    '5'.repeat(40),
+  ];
+  const evidence = computeClosingSetEvidence(
+    protectedClosingSetOptions({
+      commits: [
+        commitPayload(shas[0], 'fix: x\n\nCloses #7'),
+        commitPayload(shas[1], 'fix: y\n\nFixes: kurone-kito/idd-skill#7'),
+        commitPayload(
+          shas[2],
+          'fix: z\n\nResolves https://github.com/kurone-kito/idd-skill/issues/7',
+        ),
+        commitPayload(shas[3], 'fix: w\n\nCloses #7 and closes #7 again'),
+        commitPayload(shas[4], 'fix: v\n\nFixes GH-7'),
+      ],
+    }),
+  );
+  assert.equal(evidence.status, 'mismatch');
+  // The bare-form scan reports first and the other forms follow, each commit
+  // once, so compare the set of commits rather than their order.
+  assert.deepEqual(
+    evidence.strayCommitCloses.map((stray) => stray.sha).sort(),
+    [...shas].sort(),
+  );
+  assert.ok(evidence.strayCommitCloses.every((stray) => stray.issue === 7));
+  assert.match(closingSetBlockers(evidence)[0].detail, /stray closing keyword/);
+
+  // A commit that only references the source, or closes another repository's
+  // issue of the same number, is not a close.
+  const clean = computeClosingSetEvidence(
+    protectedClosingSetOptions({
+      commits: [
+        commitPayload(shas[0], 'Refs #7'),
+        commitPayload(shas[1], 'Closes other/repo#7'),
+      ],
+    }),
+  );
+  assert.equal(clean.status, 'match');
+});
+
+test('closingSet protectedSource: on a non-default base the source stays protected while every other number keeps the exemption', () => {
+  const nonDefault = {
+    baseRefName: 'feature-branch',
+    liveDefaultBranch: 'main',
+    closingIssuesReferences: [{ number: 999 }],
+  };
+  const clean = computeClosingSetEvidence(
+    protectedClosingSetOptions({
+      ...nonDefault,
+      commits: [commitPayload('a'.repeat(40), 'Fixes #999')],
+    }),
+  );
+  assert.equal(clean.status, 'skipped-non-default-branch');
+  assert.deepEqual(closingSetBlockers(clean), []);
+
+  const body = computeClosingSetEvidence(
+    protectedClosingSetOptions(nonDefault, true),
+  );
+  assert.equal(body.status, 'mismatch');
+  assert.deepEqual(body.extra, [7]);
+
+  const commit = computeClosingSetEvidence(
+    protectedClosingSetOptions({
+      ...nonDefault,
+      commits: [
+        commitPayload('b'.repeat(40), 'Closes #7'),
+        commitPayload('c'.repeat(40), 'Fixes #999'),
+      ],
+    }),
+  );
+  assert.equal(commit.status, 'mismatch');
+  assert.deepEqual(commit.strayCommitCloses, [
+    { sha: 'b'.repeat(40), issue: 7 },
+  ]);
+});
+
+test('closingSet protectedSource: a registered reference to the source blocks on a non-default base, a malformed entry fails closed, and other numbers stay exempt', () => {
+  const nonDefault = {
+    baseRefName: 'feature-branch',
+    liveDefaultBranch: 'main',
+  };
+  const registered = computeClosingSetEvidence(
+    protectedClosingSetOptions({
+      ...nonDefault,
+      closingIssuesReferences: [{ number: 999 }, { number: 7 }],
+    }),
+  );
+  assert.equal(registered.status, 'mismatch');
+  assert.deepEqual(registered.actual, [7]);
+  assert.deepEqual(registered.extra, [7]);
+  assert.equal(closingSetBlockers(registered).length, 1);
+
+  // The same entry in the same repository, written out in full, also blocks;
+  // another repository's issue of the same number does not.
+  const sameRepo = {
+    number: 7,
+    repository: {
+      name: CLOSING_SET_REPO,
+      owner: { login: CLOSING_SET_OWNER },
+    },
+  };
+  assert.equal(
+    computeClosingSetEvidence(
+      protectedClosingSetOptions({
+        ...nonDefault,
+        closingIssuesReferences: [sameRepo],
+      }),
+    ).status,
+    'mismatch',
+  );
+  assert.equal(
+    computeClosingSetEvidence(
+      protectedClosingSetOptions({
+        ...nonDefault,
+        closingIssuesReferences: [
+          {
+            number: 7,
+            repository: { name: 'elsewhere', owner: { login: 'x' } },
+          },
+        ],
+      }),
+    ).status,
+    'skipped-non-default-branch',
+  );
+
+  // A bare number entry, which a provider may pass through, is the same
+  // repository and blocks.
+  assert.equal(
+    computeClosingSetEvidence(
+      protectedClosingSetOptions({
+        ...nonDefault,
+        closingIssuesReferences: [7],
+      }),
+    ).status,
+    'mismatch',
+  );
+  // A repository payload that cannot be read must not pass as another
+  // repository's issue: this path ignores cross-repository numbers, so it
+  // fails closed instead.
+  for (const repository of [
+    {},
+    [],
+    { name: CLOSING_SET_REPO },
+    { name: CLOSING_SET_REPO, owner: {} },
+    { name: '', owner: { login: CLOSING_SET_OWNER } },
+    { name: CLOSING_SET_REPO, owner: [] },
+    { name: '  ', owner: { login: CLOSING_SET_OWNER } },
+    { name: CLOSING_SET_REPO, owner: { login: ' ' } },
+  ]) {
+    assert.equal(
+      computeClosingSetEvidence(
+        protectedClosingSetOptions({
+          ...nonDefault,
+          closingIssuesReferences: [{ number: 7, repository }],
+        }),
+      ).status,
+      'unavailable',
+      JSON.stringify(repository),
+    );
+  }
+  for (const malformed of [
+    [{}],
+    [{ number: true }],
+    [{ number: 999 }, {}],
+    'not-an-array',
+    null,
+  ]) {
+    assert.equal(
+      computeClosingSetEvidence(
+        protectedClosingSetOptions({
+          ...nonDefault,
+          closingIssuesReferences: malformed,
+        }),
+      ).status,
+      'unavailable',
+      JSON.stringify(malformed),
+    );
+  }
+});
+
+test('closingSet protectedSource: an unknown repository fails closed on either base, while an ordinary claim keeps its result', () => {
+  for (const base of [
+    {},
+    { baseRefName: 'feature-branch', liveDefaultBranch: 'main' },
+  ]) {
+    for (const unknown of [
+      { owner: '' },
+      { repo: '' },
+      { owner: ' ', repo: ' ' },
+    ]) {
+      assert.equal(
+        computeClosingSetEvidence(
+          protectedClosingSetOptions({ ...base, ...unknown }),
+        ).status,
+        'unavailable',
+        JSON.stringify(unknown),
+      );
+    }
+  }
+  assert.equal(
+    computeClosingSetEvidence({
+      ...baseClosingSetOptions(),
+      owner: '',
+      repo: '',
+    }).status,
+    'match',
+  );
+});
+
+test('closingSet protectedSource: a commit without a message fails closed on either base, while an ordinary claim keeps its result', () => {
+  const unreadable = [
+    commitPayload('a'.repeat(40), 'fix: x'),
+    { sha: 'b'.repeat(40), commit: null },
+    { sha: 'c'.repeat(40), commit: {} },
+  ];
+  for (const base of [
+    {},
+    { baseRefName: 'feature-branch', liveDefaultBranch: 'main' },
+  ]) {
+    for (const commits of [unreadable, [unreadable[1]], [unreadable[2]]]) {
+      assert.equal(
+        computeClosingSetEvidence(
+          protectedClosingSetOptions({ ...base, commits }),
+        ).status,
+        'unavailable',
+      );
+    }
+  }
+  // Only a protected source reads this strictly: the ordinary result is as
+  // before.
+  assert.equal(
+    computeClosingSetEvidence({
+      ...baseClosingSetOptions(),
+      commits: unreadable,
+    }).status,
+    'match',
+  );
+});
+
+test('closingSet protectedSource: an unreadable body or commit list fails closed to unavailable on either base', () => {
+  for (const base of [
+    {},
+    { baseRefName: 'feature-branch', liveDefaultBranch: 'main' },
+  ]) {
+    assert.equal(
+      computeClosingSetEvidence(protectedClosingSetOptions(base, null)).status,
+      'unavailable',
+    );
+    assert.equal(
+      computeClosingSetEvidence(
+        protectedClosingSetOptions({ ...base, commits: null }),
+      ).status,
+      'unavailable',
+    );
+    assert.equal(
+      computeClosingSetEvidence(
+        protectedClosingSetOptions({
+          ...base,
+          commits: Array.from({ length: 250 }, (_, index) =>
+            commitPayload(String(index), 'chore: x'),
+          ),
+        }),
+      ).status,
+      'unavailable',
+    );
+  }
+});
+
+test('closingSet protectedSource: findCommitClosesForIssue reads the closing forms for one issue only', () => {
+  const commits = [
+    commitPayload('c1', 'Closes #7'),
+    commitPayload('c2', 'closes: #7'),
+    commitPayload('c3', 'Fixes O/R#7'),
+    commitPayload('c4', 'Resolved http://ghe.example.com/o/r/issues/7'),
+    commitPayload('c5', 'Closes #8'),
+    commitPayload('c6', 'Closes #70'),
+    commitPayload('c7', 'Closes x/y#7'),
+    commitPayload('c8', 'Refs #7'),
+    commitPayload('c9', 'Closes#7'),
+    commitPayload('c10', ''),
+    commitPayload('c11', 'Closes GH-7'),
+    commitPayload('c12', 'Closes GH-70'),
+    // A commit message is raw text: Markdown code and quotes have no meaning
+    // there, so each of these still closes the issue.
+    commitPayload('c13', 'docs: x\n\n> Closes #7'),
+    commitPayload('c14', 'docs: x\n\n`Closes #7`'),
+    commitPayload('c15', 'docs: x\n\n```\nCloses #7\n```'),
+    commitPayload('c16', 'docs: x\r\n\r\nCloses #7\r\n'),
+    commitPayload('c17', 'docs: x\n\nCloses\n#7'),
+  ];
+  assert.deepEqual(
+    findCommitClosesForIssue(commits, 7, 'o', 'r').map((entry) => entry.sha),
+    ['c1', 'c2', 'c3', 'c4', 'c11', 'c13', 'c14', 'c15', 'c16', 'c17'],
+  );
+  // Without a repository only the bare and GH-N forms can match.
+  assert.deepEqual(
+    findCommitClosesForIssue(commits, 7, '', '').map((entry) => entry.sha),
+    ['c1', 'c2', 'c11', 'c13', 'c14', 'c15', 'c16', 'c17'],
+  );
+  assert.deepEqual(findCommitClosesForIssue(commits, 0, 'o', 'r'), []);
 });
 
 // Copilot review, PR #3353: an empty/missing `baseRefName` previously
@@ -23408,9 +23831,29 @@ test('provisional binding checks every unconfirmed decision of the current bundl
 });
 
 // Collector-level cases: the report carries `provisionalRead` for a
-// claim-bound run only, and the read never changes the closing set, `ready`,
-// or the blockers.
-function provisionalCollectorPort(comments: ProviderComment[]): ProviderPort {
+// claim-bound run only. Only a bound read (#4532) changes the closing set: it
+// keeps the claimed source out of it, and every other read leaves it as the
+// ordinary claim has it.
+interface ProvisionalPrOptions {
+  /** The pull request body; defaults to a non-closing `Refs` line. */
+  body?: string;
+  title?: string;
+  /** Makes the title read fail, so a protected source cannot be scanned. */
+  titleReadFails?: boolean;
+  commitMessages?: string[];
+  closingIssuesReferences?: unknown[];
+  baseRefName?: string;
+  headRef?: string;
+  /** Appended as `--closing-issues`. */
+  closingIssues?: string;
+  /** The `--claim-id` this run owns; defaults to the record's own claim. */
+  claimId?: string;
+}
+
+function provisionalCollectorPort(
+  comments: ProviderComment[],
+  pr: ProvisionalPrOptions = {},
+): ProviderPort {
   const base = forcedHandoffMergeFakePort({
     scope: 'issue-only',
     earlierLinkedPr: false,
@@ -23418,8 +23861,18 @@ function provisionalCollectorPort(comments: ProviderComment[]): ProviderPort {
   });
   return {
     ...base,
-    getWorkItem: (number) =>
-      number === 7
+    getWorkItem: (number) => {
+      if (number === 1) {
+        if (pr.titleReadFails) throw new Error('title read failed');
+        return {
+          number,
+          title: pr.title ?? 'feat: a provisional source',
+          body: pr.body ?? 'Refs #7',
+          state: 'OPEN',
+          updatedAt: '2026-05-12T09:00:00Z',
+        };
+      }
+      return number === 7
         ? {
             number,
             title: PROVISIONAL_ISSUE.title,
@@ -23427,21 +23880,47 @@ function provisionalCollectorPort(comments: ProviderComment[]): ProviderPort {
             state: 'OPEN',
             updatedAt: PROVISIONAL_ISSUE.updatedAt,
           }
-        : base.getWorkItem(number),
-    getChangeRequestHeadRef: () => PROVISIONAL_BRANCH,
+        : base.getWorkItem(number);
+    },
+    getChangeRequestHeadRef: () => pr.headRef ?? PROVISIONAL_BRANCH,
+    getChangeRequestReadinessSnapshot: (number) => ({
+      ...base.getChangeRequestReadinessSnapshot(number),
+      body: pr.body ?? 'Refs #7',
+      baseRefName: pr.baseRefName ?? 'main',
+      closingIssuesReferences: pr.closingIssuesReferences ?? [],
+    }),
+    listChangeRequestCommits: (number) =>
+      number === 1
+        ? (pr.commitMessages ?? ['feat: implement the chosen option']).map(
+            (message, index) => ({
+              sha: String(index + 1).padStart(40, '0'),
+              commit: {
+                message,
+                committer: { date: '2026-05-12T10:30:00Z' },
+              },
+            }),
+          )
+        : base.listChangeRequestCommits(number),
     listWorkItemComments: (number, options) =>
       number === 7 ? comments : base.listWorkItemComments(number, options),
   };
 }
 
+/** The collected report with the two fields these tests read typed: the
+ * report type carries `closingSet` as `unknown` and omits `blockers`. */
+type ProvisionalCollected = ReturnType<typeof collectPreMergeReadiness> & {
+  closingSet: ClosingSetEvidence;
+  blockers: { gate: string; detail: string }[];
+};
+
 function collectProvisional(
   comments: ProviderComment[],
   config: Record<string, unknown>,
-  options: { claimless?: boolean } = {},
-) {
+  options: { claimless?: boolean; pr?: ProvisionalPrOptions } = {},
+): ProvisionalCollected {
   const restore = stubExecutable('gh', FORCED_HANDOFF_GH_STUB);
   try {
-    const base = provisionalCollectorPort(comments);
+    const base = provisionalCollectorPort(comments, options.pr);
     // A claimless run needs a PR with no closing references.
     const port: ProviderPort = options.claimless
       ? {
@@ -23458,7 +23937,15 @@ function collectProvisional(
         '1',
         ...(options.claimless
           ? ['--claimless']
-          : ['--claim-issue', '7', '--claim-id', PROVISIONAL_CLAIM_ID]),
+          : [
+              '--claim-issue',
+              '7',
+              '--claim-id',
+              options.pr?.claimId ?? PROVISIONAL_CLAIM_ID,
+            ]),
+        ...(options.pr?.closingIssues === undefined
+          ? []
+          : ['--closing-issues', options.pr.closingIssues]),
         '--owner',
         'o',
         '--repo',
@@ -23468,22 +23955,28 @@ function collectProvisional(
       ],
       () => port,
       () => ({ trustedMarkerActors: ['kurone-kito'], ...config }) as never,
-    );
+    ) as ProvisionalCollected;
   } finally {
     restore();
   }
 }
 
-test('collectPreMergeReadiness reports the bound provisional record without changing the closing set or gates', () => {
-  const withRecord = [
-    provisionalClaimComment(),
-    provisionalSelectedComment(),
-    provisionalWorkStartedComment(),
-  ];
-  const withoutRecord = [provisionalClaimComment()];
-  const helperOn = { helperRuntime: { profile: 'package-manager' } };
+const PROVISIONAL_HELPER_ON = { helperRuntime: { profile: 'package-manager' } };
+const PROVISIONAL_BOUND_COMMENTS = () => [
+  provisionalClaimComment(),
+  provisionalSelectedComment(),
+  provisionalWorkStartedComment(),
+];
 
-  const bound = collectProvisional(withRecord, helperOn);
+function closingSetGates(report: { blockers: { gate: string }[] }) {
+  return report.blockers.filter((blocker) => blocker.gate === 'closing-set');
+}
+
+test('collectPreMergeReadiness reports the bound provisional record and keeps the source out of the closing set', () => {
+  const bound = collectProvisional(
+    PROVISIONAL_BOUND_COMMENTS(),
+    PROVISIONAL_HELPER_ON,
+  );
   assert.equal(bound.provisionalRead?.status, 'bound');
   assert.equal(
     bound.provisionalRead?.status === 'bound'
@@ -23491,31 +23984,499 @@ test('collectPreMergeReadiness reports the bound provisional record without chan
       : '',
     bound.prHeadSha,
   );
+  // The source is not in the deliberate set, and a body that only refers to it
+  // closes nothing, so the closing-set gate is clean.
+  assert.deepEqual(bound.closingSet, {
+    status: 'match',
+    expected: [],
+    actual: [],
+    extra: [],
+    missing: [],
+    strayCommitCloses: [],
+  });
+  assert.deepEqual(closingSetGates(bound), []);
+  // Nothing but the closing set differs from the ordinary claim that closes
+  // its issue: the verdict and every other gate are the same.
+  const ordinaryClosing = collectProvisional(
+    [provisionalClaimComment()],
+    PROVISIONAL_HELPER_ON,
+    { pr: { body: 'Closes #7', closingIssuesReferences: [{ number: 7 }] } },
+  );
+  assert.equal(bound.ready, ordinaryClosing.ready);
+  assert.deepEqual(bound.blockers, ordinaryClosing.blockers);
 
-  const ordinary = collectProvisional(withoutRecord, helperOn);
+  // A body with no mention of the source at all is also accepted, which an
+  // unbound claim reports as a missing closing reference.
+  const silent = collectProvisional(
+    PROVISIONAL_BOUND_COMMENTS(),
+    PROVISIONAL_HELPER_ON,
+    { pr: { body: 'Implements the chosen option.' } },
+  );
+  assert.equal(silent.closingSet.status, 'match');
+  assert.deepEqual(closingSetGates(silent), []);
+  const ordinarySilent = collectProvisional(
+    [provisionalClaimComment()],
+    PROVISIONAL_HELPER_ON,
+    { pr: { body: 'Implements the chosen option.' } },
+  );
+  assert.equal(ordinarySilent.closingSet.status, 'mismatch');
+  assert.deepEqual(ordinarySilent.closingSet.missing, [7]);
+
+  // A claimless run has no claimed source, so the field is omitted.
+  const claimless = collectProvisional(
+    PROVISIONAL_BOUND_COMMENTS(),
+    PROVISIONAL_HELPER_ON,
+    { claimless: true },
+  );
+  assert.equal('provisionalRead' in claimless, false);
+});
+
+test('collectPreMergeReadiness: an ordinary claim keeps its closing set, and an instructions-only run matches it', () => {
+  const closing = {
+    body: 'Closes #7',
+    closingIssuesReferences: [{ number: 7 }],
+  };
+  const ordinary = collectProvisional(
+    [provisionalClaimComment()],
+    PROVISIONAL_HELPER_ON,
+    { pr: closing },
+  );
   assert.deepEqual(ordinary.provisionalRead, {
     status: 'stopped',
     reason: 'record-missing',
   });
-  const instructionsOnly = collectProvisional(withRecord, {});
+  assert.equal(ordinary.closingSet.status, 'match');
+  assert.deepEqual(ordinary.closingSet.expected, [7]);
+
+  // The same record, read on the instructions-only profile, cannot bind, so
+  // the closing set is the ordinary one.
+  const instructionsOnly = collectProvisional(
+    PROVISIONAL_BOUND_COMMENTS(),
+    {},
+    { pr: closing },
+  );
   assert.deepEqual(instructionsOnly.provisionalRead, {
     status: 'unavailable',
     reason: 'instructions-only',
   });
+  assert.deepEqual(instructionsOnly.closingSet, ordinary.closingSet);
+  assert.equal(instructionsOnly.ready, ordinary.ready);
+  assert.deepEqual(instructionsOnly.blockers, ordinary.blockers);
+});
 
-  // The read is evidence only: the closing set, the verdict, and the blockers
-  // match the ordinary run in every case.
-  for (const report of [bound, instructionsOnly]) {
-    assert.deepEqual(report.closingSet, ordinary.closingSet);
-    assert.equal(report.ready, ordinary.ready);
-    assert.deepEqual(report.blockers, ordinary.blockers);
+test('collectPreMergeReadiness: a closing reference to a bound source blocks, from the body, the title, GitHub, a commit, or the explicit set', () => {
+  const cases: Array<[string, ProvisionalPrOptions]> = [
+    // GitHub's registration can lag: the body alone must block.
+    ['body keyword', { body: 'Closes #7' }],
+    ['qualified body keyword', { body: 'Fixes o/r#7' }],
+    ['GH-N body keyword', { body: 'Resolves GH-7' }],
+    ['title keyword', { title: 'feat: resolves #7' }],
+    // The default merge commit copies the title verbatim, so Markdown code
+    // around the keyword protects nothing there.
+    ['title keyword in a code span', { title: 'feat: `Fixes #7`' }],
+    // A merge commit can copy the body verbatim (the repository's merge-commit
+    // message setting), where Markdown code and quotes have no meaning.
+    ['body keyword in a code span', { body: 'Refs #7\n\n`Closes #7`' }],
+    ['body keyword in a quote', { body: 'Refs #7\n\n> Closes #7' }],
+    ['body keyword in a fence', { body: 'Refs #7\n\n```\nFixes #7\n```' }],
+    [
+      'registered reference',
+      { body: 'Refs #7', closingIssuesReferences: [{ number: 7 }] },
+    ],
+    ['commit keyword', { commitMessages: ['feat: x\n\nCloses #7'] }],
+    ['qualified commit keyword', { commitMessages: ['Fixes o/r#7'] }],
+  ];
+  for (const [label, pr] of cases) {
+    const report = collectProvisional(
+      PROVISIONAL_BOUND_COMMENTS(),
+      PROVISIONAL_HELPER_ON,
+      { pr },
+    );
+    assert.equal(report.provisionalRead?.status, 'bound', label);
+    assert.equal(report.closingSet.status, 'mismatch', label);
+    assert.equal(report.ready, false, label);
+    assert.equal(closingSetGates(report).length, 1, label);
+    assert.deepEqual(validate(report, readinessSchema), [], label);
   }
 
-  // A claimless run has no claimed source, so the field is omitted.
-  const claimless = collectProvisional(withRecord, helperOn, {
-    claimless: true,
+  assert.throws(
+    () =>
+      collectProvisional(PROVISIONAL_BOUND_COMMENTS(), PROVISIONAL_HELPER_ON, {
+        pr: { closingIssues: '7,8' },
+      }),
+    /--closing-issues must not include the claimed issue number 7/,
+  );
+});
+
+test('collectPreMergeReadiness: a multi-issue set may omit a bound source, and its other targets still match exactly', () => {
+  const matching = collectProvisional(
+    PROVISIONAL_BOUND_COMMENTS(),
+    PROVISIONAL_HELPER_ON,
+    {
+      pr: {
+        body: 'Closes #8\n\nCloses #9\n\nRefs #7',
+        closingIssues: '8,9',
+        closingIssuesReferences: [{ number: 8 }, { number: 9 }],
+      },
+    },
+  );
+  assert.equal(matching.closingSet.status, 'match');
+  assert.deepEqual(matching.closingSet.expected, [8, 9]);
+
+  const missing = collectProvisional(
+    PROVISIONAL_BOUND_COMMENTS(),
+    PROVISIONAL_HELPER_ON,
+    {
+      pr: {
+        closingIssues: '8,9',
+        closingIssuesReferences: [{ number: 8 }],
+      },
+    },
+  );
+  assert.equal(missing.closingSet.status, 'mismatch');
+  assert.deepEqual(missing.closingSet.missing, [9]);
+});
+
+test('collectPreMergeReadiness: a bound source stays protected on a non-default base, and an unreadable title fails closed', () => {
+  const clean = collectProvisional(
+    PROVISIONAL_BOUND_COMMENTS(),
+    PROVISIONAL_HELPER_ON,
+    { pr: { baseRefName: 'release/1.x' } },
+  );
+  assert.equal(clean.closingSet.status, 'skipped-non-default-branch');
+  assert.deepEqual(closingSetGates(clean), []);
+
+  const closing = collectProvisional(
+    PROVISIONAL_BOUND_COMMENTS(),
+    PROVISIONAL_HELPER_ON,
+    { pr: { baseRefName: 'release/1.x', body: 'Closes #7' } },
+  );
+  assert.equal(closing.closingSet.status, 'mismatch');
+  assert.deepEqual(closing.closingSet.extra, [7]);
+  assert.equal(closingSetGates(closing).length, 1);
+
+  // A reference GitHub already registered (a manual link counts) blocks on a
+  // non-default base too, even when no text names the source.
+  const registered = collectProvisional(
+    PROVISIONAL_BOUND_COMMENTS(),
+    PROVISIONAL_HELPER_ON,
+    {
+      pr: {
+        baseRefName: 'release/1.x',
+        closingIssuesReferences: [{ number: 7 }],
+      },
+    },
+  );
+  assert.equal(registered.closingSet.status, 'mismatch');
+  assert.deepEqual(registered.closingSet.extra, [7]);
+  assert.equal(closingSetGates(registered).length, 1);
+
+  const unreadable = collectProvisional(
+    PROVISIONAL_BOUND_COMMENTS(),
+    PROVISIONAL_HELPER_ON,
+    { pr: { titleReadFails: true } },
+  );
+  assert.equal(unreadable.closingSet.status, 'unavailable');
+  assert.equal(closingSetGates(unreadable).length, 1);
+  // The adapter turns a missing REST title into an empty string, and a pull
+  // request title is never blank, so a blank title is an unreadable one.
+  for (const title of ['', '   ']) {
+    const blank = collectProvisional(
+      PROVISIONAL_BOUND_COMMENTS(),
+      PROVISIONAL_HELPER_ON,
+      { pr: { title } },
+    );
+    assert.equal(blank.closingSet.status, 'unavailable', JSON.stringify(title));
+    assert.equal(closingSetGates(blank).length, 1);
+  }
+  for (const report of [clean, closing, registered, unreadable]) {
+    assert.deepEqual(validate(report, readinessSchema), []);
+  }
+});
+
+// An unbound read never creates the exception and never adds a block: the
+// closing set is the ordinary claim's, including the `Refs`-only body that
+// #5149 already accepts for any claim.
+const UNBOUND_READS: Array<
+  [string, ProviderComment[], Record<string, unknown>, ProvisionalPrOptions]
+> = [
+  ['no record', [provisionalClaimComment()], PROVISIONAL_HELPER_ON, {}],
+  [
+    'an untrusted record author',
+    [
+      provisionalClaimComment(),
+      provisionalSelectedComment({ authorLogin: 'someone-else' }),
+    ],
+    PROVISIONAL_HELPER_ON,
+    {},
+  ],
+  [
+    'an edited record',
+    [
+      provisionalClaimComment(),
+      provisionalSelectedComment({ lastEditedAt: '2026-05-12T10:30:00Z' }),
+    ],
+    PROVISIONAL_HELPER_ON,
+    {},
+  ],
+  [
+    'a head that is not the claim branch',
+    PROVISIONAL_BOUND_COMMENTS(),
+    PROVISIONAL_HELPER_ON,
+    { headRef: 'issue/7-another-branch' },
+  ],
+  ['the instructions-only profile', PROVISIONAL_BOUND_COMMENTS(), {}, {}],
+  [
+    'a claim id outside the record lineage',
+    PROVISIONAL_BOUND_COMMENTS(),
+    PROVISIONAL_HELPER_ON,
+    { claimId: 'claim-someone-else' },
+  ],
+];
+
+for (const [label, comments, config, pr] of UNBOUND_READS) {
+  test(`collectPreMergeReadiness: ${label} never creates the closing-set exception`, () => {
+    const read = collectProvisional(comments, config, { pr });
+    assert.notEqual(read.provisionalRead?.status, 'bound');
+    // The ordinary claim: a closing body matches the set [7] ...
+    const closing = collectProvisional(comments, config, {
+      pr: {
+        ...pr,
+        body: 'Closes #7',
+        closingIssuesReferences: [{ number: 7 }],
+      },
+    });
+    assert.deepEqual(closing.closingSet.expected, [7]);
+    assert.equal(closing.closingSet.status, 'match');
+    // ... a body with no mention of it still misses the reference ...
+    const silent = collectProvisional(comments, config, {
+      pr: { ...pr, body: 'Implements the chosen option.' },
+    });
+    assert.equal(silent.closingSet.status, 'mismatch');
+    assert.deepEqual(silent.closingSet.missing, [7]);
+    // ... the `Refs`-only split body (#5149) keeps its own result ...
+    const refsOnly = collectProvisional(comments, config, { pr });
+    assert.deepEqual(refsOnly.closingSet.expected, []);
+    assert.equal(refsOnly.closingSet.status, 'match');
+    // ... and an explicit set must still include the claimed issue.
+    assert.throws(
+      () =>
+        collectProvisional(comments, config, {
+          pr: { ...pr, closingIssues: '8,9' },
+        }),
+      /--closing-issues must include the claimed issue number 7/,
+    );
   });
-  assert.equal('provisionalRead' in claimless, false);
+}
+
+test('collectPreMergeReadiness: the closing-issues usage error names a stopped read that left a record behind, and a missing record adds nothing', () => {
+  const stopped = [
+    provisionalClaimComment(),
+    provisionalSelectedComment({ authorLogin: 'someone-else' }),
+  ];
+  assert.throws(
+    () =>
+      collectProvisional(stopped, PROVISIONAL_HELPER_ON, {
+        pr: { closingIssues: '8' },
+      }),
+    /claimed issue number 7 \(provisional read stopped: record-untrusted; a claimed source whose read binds must be left out of the set instead\)$/,
+  );
+  assert.throws(
+    () =>
+      collectProvisional([provisionalClaimComment()], PROVISIONAL_HELPER_ON, {
+        pr: { closingIssues: '8' },
+      }),
+    /claimed issue number 7$/,
+  );
+});
+
+// #4532, F3: `idd-merge-execute` evaluates the gates over the same collector
+// report as F2, at the first gate and again just before the merge. These cases
+// run the real collector for a bound or unbound source (the provisional
+// fixtures live in this file) and put its `closingSet` and `provisionalRead`
+// on a report whose every other gate is satisfied, so only the closing set
+// decides the verdict.
+function f3Deps(
+  collectFor: (
+    call: number,
+    passthrough: string[],
+  ) => ReturnType<typeof collectProvisional>,
+) {
+  const merged: string[] = [];
+  let calls = 0;
+  const reportFor = (call: number, passthrough: string[]) => {
+    const real = collectFor(call, passthrough);
+    return {
+      prHeadSha: real.prHeadSha,
+      reviewCurrency: { comparisonRoute: 'proceed', comparisonReason: 'match' },
+      threads: { actionableCount: 0 },
+      advisoryWait: { f3Outcome: 'SATISFIED' },
+      ci: {
+        status: 'success',
+        requiredChecksPassing: true,
+        noRequiredChecksConfigured: false,
+        presentRunConclusion: 'all-passing',
+        discardedNonPassingRequiredChecks: [],
+      },
+      reviewerStates: {
+        requiredApprovalsSatisfied: true,
+        codeownerApprovalSatisfied: true,
+        codeownerSelfApproval: { status: 'not_applicable' },
+      },
+      claim: { matchesExpectedClaim: true, reason: 'match' },
+      dispositionEvidence: { route: 'proceed', blockingCount: 0 },
+      branchCurrency: {
+        mergeStateStatus: 'CLEAN',
+        mergeable: 'MERGEABLE',
+        requiresUpToDateHead: false,
+        requiresUpToDateHeadSource: 'none',
+      },
+      closingSet: real.closingSet,
+      provisionalRead: real.provisionalRead,
+    } as Record<string, unknown>;
+  };
+  const deps: MergeExecuteDeps = {
+    collect: (passthrough) => reportFor(calls++, passthrough),
+    fetchHeadSha: () => 'a'.repeat(40),
+    fetchMergeState: () => ({
+      mergeable: 'MERGEABLE',
+      mergeStateStatus: 'CLEAN',
+    }),
+    mergePr: (prNumber, headSha) => {
+      merged.push(`${prNumber}:${headSha}`);
+      return 'Merged PR.';
+    },
+    mergePrAdmin: () => {
+      throw new Error('the admin merge must not run');
+    },
+    resolveSoloCodeownerAdminFallbackMode: () => 'hold-and-report',
+    getLocalHeadState: () => ({ branch: null, headSha: null }),
+    fetchHeadRefName: () => '',
+  };
+  return { deps, merged };
+}
+
+const F3_ARGS = [
+  '--pr',
+  '1',
+  '--claim-issue',
+  '7',
+  '--claim-id',
+  PROVISIONAL_CLAIM_ID,
+  '--apply',
+];
+
+test('F3 merges a bound source only while the PR leaves it open', () => {
+  const { deps, merged } = f3Deps(() =>
+    collectProvisional(PROVISIONAL_BOUND_COMMENTS(), PROVISIONAL_HELPER_ON),
+  );
+  const run = runMergeExecute(F3_ARGS, deps);
+  assert.deepEqual(run.verdict.blockers, []);
+  assert.equal(run.verdict.merged, true);
+  assert.deepEqual(merged, [`1:${'a'.repeat(40)}`]);
+});
+
+test('F3 refuses to merge a bound source that a body, a title, or a commit would close', () => {
+  const closing: ProvisionalPrOptions[] = [
+    { body: 'Closes #7' },
+    { title: 'feat: fixes #7' },
+    { commitMessages: ['feat: x\n\nResolves #7'] },
+    { body: 'Refs #7', closingIssuesReferences: [{ number: 7 }] },
+  ];
+  for (const pr of closing) {
+    const { deps, merged } = f3Deps(() =>
+      collectProvisional(PROVISIONAL_BOUND_COMMENTS(), PROVISIONAL_HELPER_ON, {
+        pr,
+      }),
+    );
+    const run = runMergeExecute(F3_ARGS, deps);
+    assert.equal(run.verdict.ready, false, JSON.stringify(pr));
+    assert.equal(run.verdict.merged, false, JSON.stringify(pr));
+    assert.deepEqual(merged, [], JSON.stringify(pr));
+    assert.deepEqual(
+      run.verdict.blockers.map((blocker) => blocker.gate),
+      ['closing-set'],
+      JSON.stringify(pr),
+    );
+    assert.notEqual(run.exitCode, 0);
+  }
+});
+
+test('F3 revalidation catches a closing reference added after the first gate', () => {
+  const { deps, merged } = f3Deps((call) =>
+    collectProvisional(PROVISIONAL_BOUND_COMMENTS(), PROVISIONAL_HELPER_ON, {
+      pr: call === 0 ? {} : { body: 'Closes #7' },
+    }),
+  );
+  const run = runMergeExecute(F3_ARGS, deps);
+  assert.equal(run.verdict.merged, false);
+  assert.deepEqual(merged, []);
+  assert.match(run.verdict.mergeResult, /re-validation found new blockers/);
+  assert.deepEqual(
+    run.verdict.blockers.map((blocker) => blocker.gate),
+    ['closing-set'],
+  );
+});
+
+test('F3 forwards --closing-issues to the collector: a set naming a bound source never merges, and one that omits it does', () => {
+  const collectWithSet = (passthrough: string[]) => {
+    const at = passthrough.indexOf('--closing-issues');
+    return collectProvisional(
+      PROVISIONAL_BOUND_COMMENTS(),
+      PROVISIONAL_HELPER_ON,
+      {
+        pr: {
+          closingIssues: at < 0 ? undefined : passthrough[at + 1],
+          body: 'Closes #8\n\nCloses #9\n\nRefs #7',
+          closingIssuesReferences: [{ number: 8 }, { number: 9 }],
+        },
+      },
+    );
+  };
+  const refused = f3Deps((_call, passthrough) => collectWithSet(passthrough));
+  assert.throws(
+    () =>
+      runMergeExecute([...F3_ARGS, '--closing-issues', '7,8,9'], refused.deps),
+    /--closing-issues must not include the claimed issue number 7/,
+  );
+  assert.deepEqual(refused.merged, []);
+
+  const accepted = f3Deps((_call, passthrough) => collectWithSet(passthrough));
+  const run = runMergeExecute(
+    [...F3_ARGS, '--closing-issues', '8,9'],
+    accepted.deps,
+  );
+  assert.deepEqual(run.verdict.blockers, []);
+  assert.equal(run.verdict.merged, true);
+  assert.deepEqual(accepted.merged, [`1:${'a'.repeat(40)}`]);
+});
+
+test('F3 gives an unbound source no exception: a PR that never names it is refused', () => {
+  const unbound: Array<[ProviderComment[], Record<string, unknown>]> = [
+    [[provisionalClaimComment()], PROVISIONAL_HELPER_ON],
+    [
+      [
+        provisionalClaimComment(),
+        provisionalSelectedComment({ authorLogin: 'someone-else' }),
+      ],
+      PROVISIONAL_HELPER_ON,
+    ],
+    [PROVISIONAL_BOUND_COMMENTS(), {}],
+  ];
+  for (const [comments, config] of unbound) {
+    const { deps, merged } = f3Deps(() =>
+      collectProvisional(comments, config, {
+        pr: { body: 'Implements the chosen option.' },
+      }),
+    );
+    const run = runMergeExecute(F3_ARGS, deps);
+    assert.equal(run.verdict.merged, false);
+    assert.deepEqual(merged, []);
+    assert.deepEqual(
+      run.verdict.blockers.map((blocker) => blocker.gate),
+      ['closing-set'],
+    );
+  }
 });
 
 test('pre-merge readiness schema accepts every provisionalRead shape', () => {
