@@ -2664,6 +2664,34 @@ test('another class, source, or set does not block the lookup', () => {
   );
 });
 
+test('the lookup refuses the wrong key instead of reporting free', () => {
+  // An open authoringChoice issue for set-x, whose source is #100. A caller
+  // that gave the source #101 instead of the set would see no match.
+  const github = new FakeGithub(
+    confirmationIssue(201, {
+      fields: { cls: 'authoringChoice', set: 'set-x', decision: 'd9' },
+    }),
+  );
+  const wrongKey = open(github, {
+    class: 'authoringChoice',
+    source: OTHER_SOURCE,
+    set: undefined,
+  });
+  assert.equal(wrongKey.status, 'unreadable');
+  const bothKeys = open(github, {
+    class: 'authoringChoice',
+    source: OTHER_SOURCE,
+    set: 'set-x',
+  });
+  assert.equal(bothKeys.status, 'unreadable');
+  assert.deepEqual(github.listCalls, []);
+  // The right key finds the open issue.
+  const byKey = readable(
+    open(github, { class: 'authoringChoice', source: undefined, set: 'set-x' }),
+  );
+  assert.equal(byKey.publication, 'blocked');
+});
+
 test('the lookup sees only an issue whose body record counts', () => {
   const github = new FakeGithub(
     confirmationIssue(200, { lastEditedAt: EDITED_AT }),
@@ -2690,9 +2718,28 @@ test('a failed or invalid lookup is unreadable, never free', () => {
 
   const github = new FakeGithub(confirmationIssue(200));
   const invalid: Array<[Partial<OpenConfirmationInput>, RegExp]> = [
-    [{ source: undefined, set: undefined }, /needs a source or a set/],
+    // A source-keyed class needs its source and no set.
+    [{ source: undefined }, /worktreeRemnant is keyed by its source/],
+    [{ source: undefined, set: 'set-x' }, /worktreeRemnant is keyed by its/],
+    [{ set: 'set-x' }, /worktreeRemnant is keyed by its source/],
+    // authoringChoice needs its set and no source.
+    [
+      { class: 'authoringChoice', source: SOURCE },
+      /authoringChoice is keyed by its set/,
+    ],
+    [
+      { class: 'authoringChoice', source: SOURCE, set: 'set-x' },
+      /authoringChoice is keyed by its set/,
+    ],
+    [
+      { class: 'authoringChoice', source: undefined },
+      /authoringChoice is keyed by its set/,
+    ],
     [{ source: '  ' }, /source must be non-empty/],
-    [{ source: undefined, set: ' ' }, /set must be non-empty/],
+    [
+      { class: 'authoringChoice', source: undefined, set: ' ' },
+      /set must be non-empty/,
+    ],
     [
       { class: 'decisionIssue' as OpenConfirmationInput['class'] },
       /class must be one of/,
@@ -2833,14 +2880,50 @@ test('CLI open-issues rejects arguments it does not take before any read', () =>
     ],
     [
       ['--open-issues', '--class', 'worktreeRemnant'],
-      /requires --source <number> or --set <id>/,
+      /--class worktreeRemnant requires --source <number> and no --set/,
+    ],
+    [
+      ['--open-issues', '--class', 'worktreeRemnant', '--set', 'set-x'],
+      /--class worktreeRemnant requires --source <number> and no --set/,
+    ],
+    [
+      [
+        '--open-issues',
+        '--class',
+        'worktreeRemnant',
+        '--source',
+        '100',
+        '--set',
+        'set-x',
+      ],
+      /--class worktreeRemnant requires --source <number> and no --set/,
+    ],
+    [
+      ['--open-issues', '--class', 'authoringChoice'],
+      /--class authoringChoice requires --set <id> and no --source/,
+    ],
+    [
+      ['--open-issues', '--class', 'authoringChoice', '--source', '100'],
+      /--class authoringChoice requires --set <id> and no --source/,
+    ],
+    [
+      [
+        '--open-issues',
+        '--class',
+        'authoringChoice',
+        '--source',
+        '100',
+        '--set',
+        'set-x',
+      ],
+      /--class authoringChoice requires --set <id> and no --source/,
     ],
     [
       ['--open-issues', '--class', 'worktreeRemnant', '--source', 'abc'],
       /--source must be a positive issue number/,
     ],
     [
-      ['--open-issues', '--class', 'worktreeRemnant', '--set', ' '],
+      ['--open-issues', '--class', 'authoringChoice', '--set', ' '],
       /--set must be non-empty/,
     ],
     [

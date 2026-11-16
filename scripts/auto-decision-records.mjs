@@ -1103,6 +1103,17 @@ export function findOpenConfirmationIssues(
         `the class must be one of ${AUTO_DECIDE_CONFIRMATION_CLASSES.join(', ')}`,
       );
     }
+    if (input.class === 'authoringChoice') {
+      if (input.set === undefined || input.source !== undefined) {
+        throw new Error(
+          'authoringChoice is keyed by its set: give a set and no source',
+        );
+      }
+    } else if (input.source === undefined || input.set !== undefined) {
+      throw new Error(
+        `${input.class} is keyed by its source: give a source and no set`,
+      );
+    }
     for (const [name, value] of [
       ['source', input.source],
       ['set', input.set],
@@ -1110,9 +1121,6 @@ export function findOpenConfirmationIssues(
       if (value !== undefined && value.trim() === '') {
         throw new Error(`the ${name} must be non-empty when given`);
       }
-    }
-    if (input.source === undefined && input.set === undefined) {
-      throw new Error('the lookup needs a source or a set as its key');
     }
     const { owner, repo } = input.repository;
     const context = readTrustContext(input);
@@ -1388,8 +1396,16 @@ export function parseAutoDecisionRecordsArgs(argv) {
     }
     const source = optional('source');
     const set = optional('set');
-    if (source === undefined && set === undefined) {
-      throw new Error('--open-issues requires --source <number> or --set <id>');
+    if (className === 'authoringChoice') {
+      if (set === undefined || source !== undefined) {
+        throw new Error(
+          '--open-issues with --class authoringChoice requires --set <id> and no --source',
+        );
+      }
+    } else if (source === undefined || set !== undefined) {
+      throw new Error(
+        `--open-issues with --class ${className} requires --source <number> and no --set`,
+      );
     }
     if (set !== undefined && set.trim() === '') {
       throw new Error('--set must be non-empty when given');
@@ -1461,7 +1477,8 @@ function printAutoDecisionRecordsHelp(output) {
   output(`Usage:
   node scripts/auto-decision-records.mjs --pending-count [--owner <owner> --repo <repo>] [--base-ref <name>]
   node scripts/auto-decision-records.mjs --records --class <class> [--source <number>] [--claim <id> | --set <id>] [--subject <value>] --state open|all [--owner <owner> --repo <repo>] [--base-ref <name>]
-  node scripts/auto-decision-records.mjs --open-issues --class <class> (--source <number> | --set <id>) [--owner <owner> --repo <repo>] [--base-ref <name>]
+  node scripts/auto-decision-records.mjs --open-issues --class <class> --source <number> [--owner <owner> --repo <repo>] [--base-ref <name>]
+  node scripts/auto-decision-records.mjs --open-issues --class authoringChoice --set <id> [--owner <owner> --repo <repo>] [--base-ref <name>]
   node scripts/auto-decision-records.mjs --confirmation <number> [--owner <owner> --repo <repo>] [--base-ref <name>]
   node scripts/auto-decision-records.mjs --links --issue <number> [--owner <owner> --repo <repo>] [--base-ref <name>]
 
