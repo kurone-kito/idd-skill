@@ -993,6 +993,90 @@ apply to needs-decision sources only, and the no-waiver statement above
 applies to every class, including these two. This exception is recorded by
 [issue #4528](https://github.com/kurone-kito/idd-skill/issues/4528).
 
+### Resolving a confirmation-pending source
+
+This applies to a needs-decision source whose current bundle has verified
+completed work for every decision. The `runProvisionalResolution` function
+of `provisional-decision.mts` runs it; the `idd-provisional-decision`
+command does not call it yet. It reads no opt-in switch, so confirmation
+and rework still work after `dangerouslyAutoDecide` is turned off.
+
+1. **Coordination claim.** Take the review under a fresh claim on the
+   source, posted through the normal claim protocol with a branch of the
+   form `issue/<number>-<slug>`. It is separate from implementation
+   execution: it needs no worktree, and the resolution refuses when another
+   claim is active or when the active claim is one that the bundle's records
+   name as having run the implementation. An uncertain release of an earlier
+   coordination claim is reconciled first, because that claim stays active.
+2. **Present.** A dry run reports the presentation: for every decision its
+   question, the selected option, the verified result, and each alternative
+   with its consequences and the rework it implies, plus a SHA-256 digest
+   of that presentation and the next step. Show the presentation and ask
+   `Were the implemented choices above acceptable? [y/N]`.
+3. **Read the actual answer.** The input adapter reads one reported event
+   and never creates input; a pending question produces no answer by itself.
+   An answer must also carry the digest it answered, so a changed source,
+   bundle, or result makes it stale.
+4. **Persist, close, release.** For an affirmative answer the helper
+   appends the answer comment, reads it back, appends one `confirmed` record
+   for each decision the answer applies to, replays the history to show
+   them, closes the source as completed once every decision of the bundle is
+   confirmed, reads the closed state back, and releases the coordination
+   claim. Each write is preceded by a second fresh plan that must name the
+   same step, and followed by a fresh read that must show it.
+
+| Reported input                                                      | Verdict                                   |
+| ------------------------------------------------------------------- | ----------------------------------------- |
+| `y` or `yes` typed by a user at an interactive prompt               | Accepted                                  |
+| A user's conversation reply that the agent reads as acceptance      | Accepted, with the reply kept verbatim    |
+| `option <id> <rationale>` or a reply naming a recorded alternative  | Alternate preference for one decision     |
+| `n`, Enter, EOF, cancellation, timeout, missing or unclear input    | Pending; the claim is released, no record |
+| A generic request to resolve, or a preselected option               | Pending                                   |
+| Assistant-written user dialogue, agent-fed or piped terminal input  | Pending; origin is not the user           |
+| A prior answer that no longer matches the bundle, source, or result | Ignored; it is stale or partial           |
+
+An answer comment keeps the canonical shape described above and adds the
+question that was asked and the decisions it applies to, so one answer can
+confirm some decisions of a bundle while another receives a different
+preference. The first valid answer in history wins: a later input does not
+replace it, and a valid persisted answer or confirmation resumes without
+another prompt.
+
+Agents follow an input-boundary rule: never write the user's reply, and
+never feed `y` to a prompt the agent is waiting on (preventive; no observed
+incident yet). A TTY only shows that a prompt can be displayed. It does not
+authenticate anyone, and the adapter does not try to identify who supplied
+the bytes; a deliberately dishonest authorized caller is outside the
+guarantee.
+
+Every next step is derived from fresh reads, so a crash or uncertain write
+resumes exactly the remaining step and never executes the implementation
+again. A write that throws is checked by one fresh read, and a write that is
+still absent is a recovery hold, not a retry. If the confirmation is stored
+but the close failed, only the close resumes. If the close succeeded but the
+claim release failed, only the release resumes and the issue is not closed
+again. A pending outcome persists nothing except the claim release; an
+uncertain release is reported as `reconciled` and the next run repeats it.
+
+An alternate preference persists the answer and one `rework-requested`
+record for the one decision it names. The record carries a `handoff` with
+a stable identity shared by the bundle, the authoring set and session
+preallocated for the rework, the source issue as the anchor, the completed
+results it affects, and any downstream results the recorder knows. It
+grants no publication permission and never reuses an earlier set, and
+replay refuses a handoff that does. If the handoff write fails, the
+coordination claim is kept as a recovery hold and a retry reuses the
+persisted answer. After the write succeeds, the claim is released before
+the authoring pass acquires ownership, and the same request cannot produce
+another handoff or erase an earlier choice.
+
+The `rework-authored` transition is a separate guarded request. It needs
+the coordination claim to be released, an authoring owner that is trusted,
+fresh, and matches the handoff's set, session, and anchor, an audited
+roadmap on the same source, and real child issues wired under it. It only
+appends the record. It never releases the authoring hold, and unknown
+ownership or wiring refuses it.
+
 ### Provisional plan assessment (A4 and A4.5)
 
 This applies only to a needs-decision source, and only when the trusted
