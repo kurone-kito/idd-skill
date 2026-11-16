@@ -1,13 +1,19 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 
 import {
+  assessProvisionalChoicePlan,
+  type ProvisionalAssessment,
+} from '../src/scripts/autopilot-suitability.mts';
+import {
   DEFAULT_BUNDLE_IDS,
   DEFAULT_MANIFEST_PATH,
 } from '../src/scripts/discover-shared-file-overlap.mts';
+import { evaluateA4Viability } from '../src/scripts/discover-viability-gate.mts';
 import { stripMarkdownCodeRegions } from '../src/scripts/markdown-code.mts';
 import { hasResolvedDecision } from '../src/scripts/resolved-decision.mts';
 import {
@@ -13202,4 +13208,552 @@ test('trust safety bounds pathological agent-mention scans by failing closed -- 
     trustSafetyAmbiguous: false,
   } as Context);
   assert.equal(result.pass, false);
+});
+
+// --- #4535: provisional plan assessment at A4.5 -------------------------------
+//
+// Each test names the acceptance criterion (AC1-AC5) or verdict-table row of
+// issue #4535 that it covers.
+
+const NEEDS_DECISION_LABEL = 'status:needs-decision';
+const provSha256 = (text: string): string =>
+  createHash('sha256').update(text, 'utf8').digest('hex');
+const provOption = (id: string): Record<string, string> => ({
+  id,
+  description: `Option ${id} behavior`,
+  feasibilityRationale: 'feasible in this repository',
+  requirementFit: 'fits the stated need',
+  consequences: 'a known cost',
+  verification: 'a unit test',
+  reversalOrMigration: 'none needed',
+});
+const provPlan = (
+  body: string,
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> => ({
+  schemaVersion: 1,
+  source: { repository: 'o/r', issueNumber: 7, bodySha256: provSha256(body) },
+  humanChoiceCriteria: ['A maintainer picks the cache layer'],
+  recordedChoices: [],
+  choices: [
+    {
+      question: 'Which cache layer?',
+      selectedOption: { ...provOption('keep'), rationale: 'best fit' },
+      feasibleAlternatives: [
+        {
+          ...provOption('swap'),
+          comparison: 'slower to ship',
+          rejectionReason: 'costs more',
+        },
+      ],
+      executionCriteria: ['pnpm test passes for the cache module'],
+    },
+  ],
+  deliverables: [{ kind: 'file', target: 'src/cache.mts', purpose: 'edit' }],
+  evidence: ['src/cache.mts:10'],
+  evidenceGaps: [],
+  independentObstacles: [],
+  ...overrides,
+});
+const provAssess = (
+  body: string,
+  overrides: Record<string, unknown> = {},
+): ProvisionalAssessment =>
+  assessProvisionalChoicePlan({
+    issue: { number: 7, body, labels: [NEEDS_DECISION_LABEL] },
+    repository: 'o/r',
+    needsDecisionLabelName: NEEDS_DECISION_LABEL,
+    policy: {
+      status: 'readable',
+      source: 'repository',
+      ref: 'main',
+      master: 'enabled',
+      classes: { decisionIssue: 'enabled' },
+      maxDecisionsPerClaim: 3,
+    },
+    state: {
+      valid: true,
+      hasRecords: false,
+      status: 'none',
+      hasRework: false,
+      decisions: [],
+    },
+    plan: provPlan(body),
+    authoredScore: 4,
+    floor: 3,
+    effort: 'M',
+    effortLPolicy: 'allow',
+    ...overrides,
+  });
+const decisionIssue = (body: string, labels = [NEEDS_DECISION_LABEL]) => ({
+  ...BASE_ISSUE,
+  number: 7,
+  title: 'feat: pick the cache layer',
+  body,
+  labels,
+});
+const asCheckContext = (
+  body: string,
+  extra: Record<string, unknown> = {},
+  labels = [NEEDS_DECISION_LABEL],
+): Context =>
+  ({
+    issue: decisionIssue(body, labels),
+    ...extra,
+  }) as Context;
+const READY_DECISION_BODY = [
+  '## Purpose',
+  '',
+  'Pick the cache layer for the helper. This needs a maintainer decision.',
+  '',
+  '## Acceptance Criteria',
+  '',
+  '- [ ] tests pass for the cache module',
+  '',
+].join('\n');
+
+test('A4.5 provisional: an eligible plan carries a needs-decision source through all seven checks (AC3, row 1)', () => {
+  const issue = decisionIssue(READY_DECISION_BODY);
+  const plain = evaluateSuitability(issue, {
+    needsDecisionLabelName: NEEDS_DECISION_LABEL,
+  });
+  assert.equal(plain.passed, false);
+  assert.equal(plain.failedCheck, 'autonomy');
+  assert.equal(plain.outcome, 'blocked-by-human');
+  assert.equal('provisional' in plain, false);
+
+  const assessment = provAssess(READY_DECISION_BODY);
+  const relaxed = evaluateSuitability(issue, {
+    needsDecisionLabelName: NEEDS_DECISION_LABEL,
+    provisionalAssessment: assessment,
+  });
+  assert.equal(relaxed.passed, true);
+  assert.equal(relaxed.outcome, 'ready');
+  const autonomy = relaxed.checks.find((check) => check.id === 'autonomy');
+  assert.equal(autonomy?.result, 'warn');
+  assert.match(
+    autonomy?.evidence ?? '',
+    /relaxed by the validated provisional plan/,
+  );
+  assert.equal(relaxed.provisional, assessment);
+});
+
+test('A4.5 provisional: an ineligible assessment keeps the current verdict and is still reported (AC3, rows 2-5)', () => {
+  const issue = decisionIssue(READY_DECISION_BODY);
+  for (const overrides of [
+    { plan: undefined },
+    { state: undefined },
+    { policy: undefined },
+  ]) {
+    const assessment = provAssess(READY_DECISION_BODY, overrides);
+    assert.equal(assessment.eligible, false);
+    const result = evaluateSuitability(issue, {
+      needsDecisionLabelName: NEEDS_DECISION_LABEL,
+      provisionalAssessment: assessment,
+    });
+    assert.equal(result.passed, false);
+    assert.equal(result.outcome, 'blocked-by-human');
+    assert.equal(result.provisional, assessment);
+  }
+  // A lookalike object never relaxes anything.
+  for (const lookalike of [{ eligible: true }, 'eligible', 1, [], null]) {
+    const result = evaluateSuitability(issue, {
+      needsDecisionLabelName: NEEDS_DECISION_LABEL,
+      provisionalAssessment: lookalike,
+    });
+    assert.equal(result.passed, false);
+  }
+});
+
+test('A4.5 provisional: A4 and A4.5 report the same assessment object for the same source (AC3)', () => {
+  const assessment = provAssess(READY_DECISION_BODY);
+  const a4 = evaluateA4Viability(
+    { number: 7, title: 'x', body: READY_DECISION_BODY, state: 'OPEN' },
+    undefined,
+    assessment,
+  );
+  const a45 = evaluateSuitability(decisionIssue(READY_DECISION_BODY), {
+    needsDecisionLabelName: NEEDS_DECISION_LABEL,
+    provisionalAssessment: assessment,
+  });
+  assert.equal(a4.passed, true);
+  assert.equal(a45.passed, true);
+  assert.deepEqual(a4.provisional, a45.provisional);
+  assert.deepEqual(a4.provisional, provAssess(READY_DECISION_BODY));
+});
+
+test('A4.5 provisional: with no assessment the result has no provisional field (AC5)', () => {
+  const issue = decisionIssue(
+    '## Purpose\n\nAdd the helper.\n\n## Acceptance Criteria\n- [ ] tests pass\n',
+    ['enhancement'],
+  );
+  const result = evaluateSuitability(issue, {});
+  assert.equal(result.passed, true);
+  assert.deepEqual(Object.keys(result), [
+    'passed',
+    'outcome',
+    'failedCheck',
+    'checks',
+  ]);
+  assert.deepEqual(
+    result,
+    evaluateSuitability(issue, { provisionalAssessment: undefined }),
+  );
+});
+
+test('A4.5 provisional Check 5: missing acceptance detail is relaxed only for an eligible plan (AC3)', () => {
+  const body = 'Pick the cache layer for the helper. A maintainer decides.';
+  assert.equal(checkActionability(asCheckContext(body)).pass, false);
+  const relaxed = checkActionability(
+    asCheckContext(body, { provisionalAssessment: provAssess(body) }),
+  );
+  assert.equal(relaxed.pass, true);
+  assert.equal(relaxed.demoted, true);
+  assert.equal(
+    checkActionability(
+      asCheckContext(body, {
+        provisionalAssessment: provAssess(body, { plan: undefined }),
+      }),
+    ).pass,
+    false,
+  );
+  // An empty `## Candidate files` section is malformed intent, never relaxed.
+  const emptyFiles = `${body}\n\n## Candidate files\n\nnone yet\n`;
+  assert.equal(
+    checkActionability(
+      asCheckContext(emptyFiles, {
+        provisionalAssessment: provAssess(emptyFiles),
+      }),
+    ).pass,
+    false,
+  );
+});
+
+test('A4.5 provisional Check 6: the needs-decision label and decision phrases are relaxed (AC3)', () => {
+  const body = READY_DECISION_BODY;
+  const eligible = provAssess(body);
+  assert.equal(checkAutonomy(asCheckContext(body)).pass, false);
+  const relaxed = checkAutonomy(
+    asCheckContext(body, { provisionalAssessment: eligible }),
+  );
+  assert.equal(relaxed.pass, true);
+  assert.equal(relaxed.demoted, true);
+  assert.match(relaxed.evidence, /label status:needs-decision/);
+  // The same decision phrases without the label are relaxed too.
+  const noLabel = checkAutonomy(
+    asCheckContext(body, { provisionalAssessment: eligible }, []),
+  );
+  assert.equal(noLabel.pass, true);
+  for (const phrase of [
+    'Requires maintainer decision on the layer.',
+    'Which layer is still undecided.',
+    'The layer is TBD.',
+    'Either keep Redis, or switch; this is still undecided.',
+    'An open question for the maintainer: which layer?',
+  ]) {
+    const phraseBody = `## Purpose\n\n${phrase}\n\n## Acceptance Criteria\n- [ ] tests pass\n`;
+    const assessment = provAssess(phraseBody);
+    assert.equal(
+      checkAutonomy(asCheckContext(phraseBody, {}, [])).pass,
+      false,
+      phrase,
+    );
+    assert.equal(
+      checkAutonomy(
+        asCheckContext(phraseBody, { provisionalAssessment: assessment }, []),
+      ).pass,
+      true,
+      phrase,
+    );
+  }
+});
+
+test('A4.5 provisional Check 6: approvals, sign-offs, credentials and human holds are never relaxed (AC3, AC4)', () => {
+  for (const sentence of [
+    'This requires maintainer approval before work starts.',
+    'The work needs stakeholder sign-off.',
+    'The rollout is pending approval from the release manager.',
+    'Awaiting approval for the budget increase.',
+    'This requires maintainer decision and approval from legal.',
+  ]) {
+    const body = `## Purpose\n\n${sentence}\n\n## Acceptance Criteria\n- [ ] tests pass\n`;
+    const result = checkAutonomy(
+      asCheckContext(body, { provisionalAssessment: provAssess(body) }, []),
+    );
+    assert.equal(result.pass, false, sentence);
+  }
+});
+
+test('A4.5 provisional Check 6: the needs-decision label is waived only when A4 autonomy also passes (AC3, AC4)', () => {
+  for (const sentence of [
+    'A maintainer decision on the production access policy is pending.',
+    'The rollout needs the maintainer to supply the production access token.',
+    'This waits for third-party access to the vendor system.',
+  ]) {
+    const body = `## Purpose\n\n${sentence}\n\n## Acceptance Criteria\n- [ ] tests pass\n`;
+    const result = checkAutonomy(
+      asCheckContext(body, { provisionalAssessment: provAssess(body) }),
+    );
+    assert.equal(result.pass, false, sentence);
+    assert.match(
+      result.evidence,
+      /Blocking label present: status:needs-decision \(not relaxed: /,
+    );
+  }
+});
+
+test('A4.5 provisional Check 6: a later approval phrase still fails after a relaxed decision phrase (AC3)', () => {
+  const body = [
+    '## Purpose',
+    '',
+    'This requires maintainer decision on the layer.',
+    '',
+    'Separately, the rollout requires maintainer approval.',
+    '',
+    '## Acceptance Criteria',
+    '- [ ] tests pass',
+    '',
+  ].join('\n');
+  const result = checkAutonomy(
+    asCheckContext(body, { provisionalAssessment: provAssess(body) }, []),
+  );
+  assert.equal(result.pass, false);
+  assert.match(result.evidence, /maintainer approval/);
+});
+
+test('A4.5 provisional Check 6: the blocked-by-human label, title prefix and bucket marker keep blocking (AC3, row 5)', () => {
+  const body = READY_DECISION_BODY;
+  const eligible = provAssess(body);
+  const labelled = checkAutonomy(
+    asCheckContext(body, { provisionalAssessment: eligible }, [
+      NEEDS_DECISION_LABEL,
+      'status:blocked-by-human',
+    ]),
+  );
+  assert.equal(labelled.pass, false);
+  assert.match(labelled.evidence, /status:blocked-by-human/);
+  const titled = checkAutonomy({
+    issue: {
+      ...decisionIssue(body),
+      title: 'blocked-by-human: pick the layer',
+    },
+    provisionalAssessment: eligible,
+  } as Context);
+  assert.equal(titled.pass, false);
+  const marked = checkAutonomy(
+    asCheckContext(
+      `${body}\n<!-- idd-skill-authoring-bucket: blocked-by-human -->\n`,
+      { provisionalAssessment: eligible },
+    ),
+  );
+  assert.equal(marked.pass, false);
+  // One label name for both holds cannot be told apart, so it is not relaxed.
+  const sameName = checkAutonomy({
+    ...asCheckContext(body, { provisionalAssessment: eligible }),
+    blockedByHumanLabelName: NEEDS_DECISION_LABEL,
+    needsDecisionLabelName: NEEDS_DECISION_LABEL,
+  } as Context);
+  assert.equal(sameName.pass, false);
+});
+
+test('A4.5 provisional Check 7: a missing verification signal and a preference line are relaxed (AC3)', () => {
+  const bare = 'Pick the cache layer. This is a maintainer decision.';
+  assert.equal(checkVerifiability(asCheckContext(bare)).pass, false);
+  const bareRelaxed = checkVerifiability(
+    asCheckContext(bare, { provisionalAssessment: provAssess(bare) }),
+  );
+  assert.equal(bareRelaxed.pass, true);
+  assert.equal(bareRelaxed.demoted, true);
+  const preference = [
+    '## Acceptance Criteria',
+    '- [ ] tests pass',
+    '',
+    "The maintainer's preference decides the layer.",
+    '',
+  ].join('\n');
+  assert.equal(checkVerifiability(asCheckContext(preference)).pass, false);
+  const relaxed = checkVerifiability(
+    asCheckContext(preference, {
+      provisionalAssessment: provAssess(preference),
+    }),
+  );
+  assert.equal(relaxed.pass, true);
+  assert.match(relaxed.evidence, /relaxed by the validated provisional plan/);
+});
+
+test('A4.5 provisional Check 7: an approval or sign-off line keeps failing (AC3, AC4)', () => {
+  for (const line of [
+    'The maintainer must give final approval.',
+    'The stakeholder sign-off decides it.',
+    'A maintainer decision on the production access policy decides it.',
+  ]) {
+    const body = `## Acceptance Criteria\n- [ ] tests pass\n\n${line}\n`;
+    const result = checkVerifiability(
+      asCheckContext(body, { provisionalAssessment: provAssess(body) }),
+    );
+    assert.equal(result.pass, false, line);
+  }
+  // A later sign-off line is not hidden by an earlier relaxed preference line.
+  const mixed = [
+    '## Acceptance Criteria',
+    '- [ ] tests pass',
+    '',
+    "The maintainer's preference decides the layer.",
+    '',
+    'The stakeholder sign-off is the final gate.',
+    '',
+  ].join('\n');
+  assert.equal(
+    checkVerifiability(
+      asCheckContext(mixed, { provisionalAssessment: provAssess(mixed) }),
+    ).pass,
+    false,
+  );
+});
+
+test('A4.5 provisional: a human-only credential, an unsafe change and an incoherent source keep their outcomes (AC4)', () => {
+  const credential = `${READY_DECISION_BODY}\nThe rollout needs the maintainer to supply the production access token.\n`;
+  const credentialResult = evaluateSuitability(decisionIssue(credential), {
+    needsDecisionLabelName: NEEDS_DECISION_LABEL,
+    provisionalAssessment: provAssess(credential),
+  });
+  assert.equal(credentialResult.passed, false);
+  const secret = `${READY_DECISION_BODY}\nUse ghp_${'a'.repeat(30)} for the deploy.\n`;
+  const unsafe = evaluateSuitability(decisionIssue(secret), {
+    needsDecisionLabelName: NEEDS_DECISION_LABEL,
+    provisionalAssessment: provAssess(secret),
+  });
+  assert.equal(unsafe.outcome, 'invalid');
+  assert.equal(unsafe.failedCheck, 'trust_safety');
+  const incoherent = evaluateSuitability(
+    { ...decisionIssue('too short'), title: 'ab' },
+    {
+      needsDecisionLabelName: NEEDS_DECISION_LABEL,
+      provisionalAssessment: provAssess('too short'),
+    },
+  );
+  assert.equal(incoherent.outcome, 'unclear');
+  assert.equal(incoherent.failedCheck, 'coherence');
+});
+
+test('A4.5 provisional: an explicit human constraint keeps the source blocked (AC4)', () => {
+  const body = `${READY_DECISION_BODY}\nA stakeholder must approve the choice before any work starts.\n`;
+  const result = evaluateSuitability(decisionIssue(body), {
+    needsDecisionLabelName: NEEDS_DECISION_LABEL,
+    provisionalAssessment: provAssess(body),
+  });
+  assert.equal(result.passed, false);
+  assert.equal(result.failedCheck, 'autonomy');
+});
+
+test('A4.5 provisional: an oversized, effort-L-refused or already-complete source is not eligible, so nothing relaxes (AC4, row 6)', () => {
+  const issue = decisionIssue(READY_DECISION_BODY);
+  const nine = Array.from({ length: 9 }, (_, n) => ({
+    kind: 'file',
+    target: `src/f${n}.mts`,
+    purpose: 'edit',
+  }));
+  const cases: Record<string, ProvisionalAssessment> = {
+    oversized: provAssess(READY_DECISION_BODY, {
+      plan: provPlan(READY_DECISION_BODY, { deliverables: nine }),
+    }),
+    effortL: provAssess(READY_DECISION_BODY, {
+      effort: 'L',
+      effortLPolicy: 'refuse',
+    }),
+    pending: provAssess(READY_DECISION_BODY, {
+      state: {
+        valid: true,
+        hasRecords: true,
+        status: 'confirmation-pending',
+        hasRework: false,
+        decisions: [
+          {
+            bundleGeneration: 1,
+            decisionGeneration: 1,
+            status: 'confirmation-pending',
+          },
+        ],
+      },
+    }),
+  };
+  for (const [name, assessment] of Object.entries(cases)) {
+    assert.equal(assessment.eligible, false, name);
+    const result = evaluateSuitability(issue, {
+      needsDecisionLabelName: NEEDS_DECISION_LABEL,
+      provisionalAssessment: assessment,
+    });
+    assert.equal(result.passed, false, name);
+    assert.equal(result.provisional?.route === 'claim-and-record', false, name);
+  }
+  assert.equal(cases.pending?.route, 'no-new-execution');
+});
+
+test('A4.5 provisional: the local dry-run never carries an assessment (AC5)', () => {
+  const result = evaluateSuitabilityLocal(
+    'feat: pick the cache layer\n\nPick the layer. Needs a maintainer decision.\n',
+  );
+  assert.equal('provisional' in result, false);
+  assert.throws(() => parseArgs(['--issue', '7', '--provisional-plan']));
+  assert.equal(
+    parseArgs(['--issue', '7', '--provisional-plan', 'p.json']).provisionalPlan,
+    'p.json',
+  );
+  assert.equal(parseArgs(['--issue', '7']).provisionalPlan, undefined);
+});
+
+test('A4.5 provisional: an assessment of another issue or body relaxes no check (AC3)', () => {
+  const forOther = provAssess(READY_DECISION_BODY, {
+    issue: {
+      number: 8,
+      body: READY_DECISION_BODY,
+      labels: [NEEDS_DECISION_LABEL],
+    },
+    plan: provPlan(READY_DECISION_BODY, {
+      source: {
+        repository: 'o/r',
+        issueNumber: 8,
+        bodySha256: provSha256(READY_DECISION_BODY),
+      },
+    }),
+  });
+  assert.equal(forOther.eligible, true);
+  const body = 'Pick the cache layer for the helper. A maintainer decides.';
+  const otherBody = provAssess(body);
+  for (const [check, issueBody, assessment] of [
+    [checkAutonomy, READY_DECISION_BODY, forOther],
+    [checkActionability, body, forOther],
+    [checkVerifiability, body, forOther],
+    [checkActionability, `${body} edited`, otherBody],
+  ] as const) {
+    assert.equal(
+      check(asCheckContext(issueBody, { provisionalAssessment: assessment }))
+        .pass,
+      false,
+    );
+  }
+});
+
+test('A4.5 provisional Check 6: a standing approval or budget requirement in a sentence of its own keeps the source blocked (AC4)', () => {
+  for (const sentence of [
+    'The budget raise needs a standing approval.',
+    'The rollout requires release-manager sign-off.',
+    'This is subject to legal authorization.',
+    'The change is pending permission from the owner.',
+  ]) {
+    const body = `${READY_DECISION_BODY}\n${sentence}\n`;
+    const result = evaluateSuitability(decisionIssue(body), {
+      needsDecisionLabelName: NEEDS_DECISION_LABEL,
+      provisionalAssessment: provAssess(body),
+    });
+    assert.equal(result.passed, false, sentence);
+    assert.equal(result.failedCheck, 'autonomy', sentence);
+  }
+  // A negated mention is not a requirement.
+  const negated = `${READY_DECISION_BODY}\nThis does not need any approval.\n`;
+  const result = evaluateSuitability(decisionIssue(negated), {
+    needsDecisionLabelName: NEEDS_DECISION_LABEL,
+    provisionalAssessment: provAssess(negated),
+  });
+  assert.equal(result.passed, true);
 });

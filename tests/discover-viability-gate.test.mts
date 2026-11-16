@@ -1,13 +1,21 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 import {
+  assessProvisionalChoicePlan,
+  type ProvisionalAssessment,
+} from '../src/scripts/autopilot-suitability.mts';
+import {
   BARE_NOUN_DEPENDENCY_RULES,
+  collectProvisionalAssessment,
   evaluateA4Viability,
   evaluateAutonomousCompletion,
   evaluateDiscoverViability,
   parseArgs,
+  provisionalLabelNames,
+  readProvisionalPlanFiles,
   renderCsv,
 } from '../src/scripts/discover-viability-gate.mts';
 import type { StructuralEvidence } from '../src/scripts/triage-structural-evidence.mts';
@@ -4006,4 +4014,548 @@ test('#3721: removing any one rule makes the rows pinned to it pass', () => {
     ids,
     'the table is restored in its original order',
   );
+});
+
+// --- #4535: provisional plan assessment at A4 --------------------------------
+//
+// Each test names the acceptance criterion (AC1-AC5) or verdict-table row of
+// issue #4535 that it covers.
+
+const DECISION_BODY = [
+  'Add a cache module.',
+  '',
+  'The layer needs a maintainer decision.',
+  '',
+  '## Acceptance criteria',
+  '',
+  '- [ ] tests pass for the cache module',
+  '',
+].join('\n');
+const sha256 = (text: string): string =>
+  createHash('sha256').update(text, 'utf8').digest('hex');
+const planOption = (id: string): Record<string, string> => ({
+  id,
+  description: `Option ${id} behavior`,
+  feasibilityRationale: 'feasible in this repository',
+  requirementFit: 'fits the stated need',
+  consequences: 'a known cost',
+  verification: 'a unit test',
+  reversalOrMigration: 'none needed',
+});
+const decisionPlan = (
+  body: string,
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> => ({
+  schemaVersion: 1,
+  source: { repository: 'o/r', issueNumber: 7, bodySha256: sha256(body) },
+  humanChoiceCriteria: ['A maintainer picks the cache layer'],
+  recordedChoices: [],
+  choices: [
+    {
+      question: 'Which cache layer?',
+      selectedOption: { ...planOption('keep'), rationale: 'best fit' },
+      feasibleAlternatives: [
+        {
+          ...planOption('swap'),
+          comparison: 'slower to ship',
+          rejectionReason: 'costs more',
+        },
+      ],
+      executionCriteria: ['pnpm test passes for the cache module'],
+    },
+  ],
+  deliverables: [{ kind: 'file', target: 'src/cache.mts', purpose: 'edit' }],
+  evidence: ['src/cache.mts:10'],
+  evidenceGaps: [],
+  independentObstacles: [],
+  ...overrides,
+});
+const enabledPolicy = {
+  status: 'readable',
+  source: 'repository',
+  ref: 'main',
+  master: 'enabled',
+  classes: { decisionIssue: 'enabled' },
+  maxDecisionsPerClaim: 3,
+};
+const emptyState = {
+  valid: true,
+  hasRecords: false,
+  status: 'none',
+  hasRework: false,
+  decisions: [],
+};
+function assess(
+  body: string,
+  overrides: Record<string, unknown> = {},
+): ProvisionalAssessment {
+  return assessProvisionalChoicePlan({
+    issue: { number: 7, body, labels: ['status:needs-decision'] },
+    repository: 'o/r',
+    needsDecisionLabelName: 'status:needs-decision',
+    policy: enabledPolicy,
+    state: emptyState,
+    plan: decisionPlan(body),
+    authoredScore: 4,
+    floor: 3,
+    effort: 'M',
+    effortLPolicy: 'allow',
+    ...overrides,
+  });
+}
+const a4Issue = (body: string) => ({
+  number: 7,
+  title: 'cache layer',
+  body,
+  state: 'OPEN',
+});
+const failedIds = (result: { failedCriteria: string[] }): string[] =>
+  result.failedCriteria;
+
+test('A4 provisional: a decision phrase fails without a plan and passes with an eligible one (AC3, row 1)', () => {
+  const plain = evaluateA4Viability(a4Issue(DECISION_BODY));
+  assert.deepEqual(failedIds(plain), ['autonomous_completion']);
+  const relaxed = evaluateA4Viability(
+    a4Issue(DECISION_BODY),
+    undefined,
+    assess(DECISION_BODY),
+  );
+  assert.equal(relaxed.passed, true);
+  const criterion = relaxed.criteria.find(
+    (entry) => entry.id === 'autonomous_completion',
+  );
+  assert.equal(criterion?.result, 'warn');
+  assert.match(
+    criterion?.evidence ?? '',
+    /relaxed by the validated provisional plan/,
+  );
+  assert.equal(relaxed.provisional?.eligible, true);
+});
+
+test('A4 provisional: an ineligible assessment relaxes nothing and is still reported (AC3, rows 2-5)', () => {
+  for (const overrides of [
+    { policy: { ...enabledPolicy, classes: { decisionIssue: 'class-off' } } },
+    {
+      policy: {
+        ...enabledPolicy,
+        master: 'disabled',
+        classes: { decisionIssue: 'master-off' },
+      },
+    },
+    { policy: undefined },
+    { plan: undefined },
+    { state: undefined },
+  ]) {
+    const assessment = assess(DECISION_BODY, overrides);
+    assert.equal(assessment.eligible, false);
+    const result = evaluateA4Viability(
+      a4Issue(DECISION_BODY),
+      undefined,
+      assessment,
+    );
+    assert.deepEqual(failedIds(result), ['autonomous_completion']);
+    assert.equal(result.provisional, assessment);
+  }
+});
+
+test('A4 provisional: a human-only credential or production access is never relaxed (AC3, row 5)', () => {
+  for (const sentence of [
+    'The rollout needs production access.',
+    'Requires a maintainer-supplied credential before shipping.',
+    'This is waiting for maintainer sign-off.',
+    'Needs third-party access to the vendor system.',
+  ]) {
+    const body = DECISION_BODY.replace(
+      'The layer needs a maintainer decision.',
+      `The layer needs a maintainer decision. ${sentence}`,
+    );
+    const result = evaluateA4Viability(a4Issue(body), undefined, assess(body));
+    assert.equal(
+      result.failedCriteria.includes('autonomous_completion'),
+      true,
+      sentence,
+    );
+  }
+});
+
+test('A4 provisional: a credential after a decision phrase still fails (AC3)', () => {
+  const body = DECISION_BODY.replace(
+    '## Acceptance criteria',
+    'Separately, the deploy needs production access.\n\n## Acceptance criteria',
+  );
+  const result = evaluateA4Viability(a4Issue(body), undefined, assess(body));
+  assert.deepEqual(failedIds(result), ['autonomous_completion']);
+  const evidence = result.criteria.find(
+    (entry) => entry.id === 'autonomous_completion',
+  )?.evidence;
+  assert.match(evidence ?? '', /production access/);
+});
+
+test('A4 provisional: a decision phrase sharing a clause with an approval is not relaxed (AC3, standing approval row)', () => {
+  const body = DECISION_BODY.replace(
+    'The layer needs a maintainer decision.',
+    'The layer needs a maintainer decision and a manual approval.',
+  );
+  const result = evaluateA4Viability(a4Issue(body), undefined, assess(body));
+  assert.deepEqual(failedIds(result), ['autonomous_completion']);
+});
+
+test('A4 provisional: only an eligible assessment object relaxes, never a lookalike (AC3)', () => {
+  const eligible = assess(DECISION_BODY);
+  for (const fake of [
+    { ...eligible, eligible: false },
+    { ...eligible, blockers: [{ code: 'x', detail: 'y' }] },
+    { ...eligible, route: 'current-route' },
+    { eligible: true },
+  ]) {
+    const result = evaluateAutonomousCompletion(
+      { number: 7, title: 'cache layer', body: DECISION_BODY, state: 'OPEN' },
+      undefined,
+      fake as ProvisionalAssessment,
+    );
+    assert.equal(result.pass, false);
+  }
+});
+
+test('A4 provisional: the other criteria are unchanged by a plan (AC3)', () => {
+  const broad = DECISION_BODY.replace(
+    'Add a cache module.',
+    'Redesign the public interface across many subsystems.',
+  );
+  const result = evaluateA4Viability(a4Issue(broad), undefined, assess(broad));
+  assert.equal(result.failedCriteria.includes('limited_scope'), true);
+  const unverifiable =
+    'Add a cache module that looks good.\n\nThe layer needs a maintainer decision.\n';
+  const second = evaluateA4Viability(
+    a4Issue(unverifiable),
+    undefined,
+    assess(unverifiable),
+  );
+  assert.equal(second.failedCriteria.includes('clear_verification'), true);
+});
+
+test('A4 provisional: with no assessment the result is byte-identical (AC5)', () => {
+  const issue = a4Issue(DECISION_BODY);
+  const plain = evaluateA4Viability(issue);
+  assert.equal('provisional' in plain, false);
+  assert.deepEqual(plain, evaluateA4Viability(issue, undefined, undefined));
+  assert.deepEqual(Object.keys(plain), [
+    'passed',
+    'failedCriteria',
+    'criteria',
+  ]);
+});
+
+test('evaluateDiscoverViability reports the assessment only when a hook supplies one (AC5)', async () => {
+  const issue = {
+    number: 7,
+    title: 'cache layer',
+    body: DECISION_BODY,
+    state: 'OPEN',
+  };
+  const without = await evaluateDiscoverViability([7], {
+    loadIssue: () => issue,
+  });
+  assert.equal(without.viable.length, 0);
+  assert.equal('provisional' in (without.discarded[0] ?? {}), false);
+  assert.equal('provisionalPlanErrors' in without, false);
+  const assessment = assess(DECISION_BODY);
+  const withPlan = await evaluateDiscoverViability([7], {
+    loadIssue: () => issue,
+    loadProvisionalAssessment: () => assessment,
+  });
+  assert.deepEqual(
+    withPlan.viable.map((item) => item.number),
+    [7],
+  );
+  assert.equal(withPlan.viable[0]?.provisional, assessment);
+  const noAssessment = await evaluateDiscoverViability([7], {
+    loadIssue: () => issue,
+    loadProvisionalAssessment: () => undefined,
+  });
+  assert.deepEqual(noAssessment.discarded[0]?.failedCriteria, [
+    'autonomous_completion',
+  ]);
+  const rejected = await evaluateDiscoverViability([7], {
+    loadIssue: () => issue,
+    loadProvisionalAssessment: () => {
+      throw new Error('boom');
+    },
+  });
+  assert.deepEqual(rejected.discarded[0]?.failedCriteria, [
+    'autonomous_completion',
+  ]);
+});
+
+test('collectProvisionalAssessment gathers one fresh trusted read, the replayed state and the plan (AC3, AC5)', async () => {
+  let trustedReads = 0;
+  let stateReads = 0;
+  const assessment = await collectProvisionalAssessment({
+    issue: {
+      number: 7,
+      body: DECISION_BODY,
+      labels: ['status:needs-decision'],
+    },
+    owner: 'o',
+    repo: 'r',
+    plan: decisionPlan(DECISION_BODY),
+    needsDecisionLabelName: 'status:needs-decision',
+    markerPrefix: 'idd-skill',
+    config: {},
+    sources: {
+      readTrusted: () => {
+        trustedReads += 1;
+        return enabledPolicy;
+      },
+      loadState: () => {
+        stateReads += 1;
+        return emptyState;
+      },
+    },
+  });
+  assert.equal(assessment.eligible, true);
+  assert.equal(trustedReads, 1);
+  assert.equal(stateReads, 1);
+  // The same inputs A4.5 gathers give the same answer.
+  assert.deepEqual(assessment, assess(DECISION_BODY, { authoredScore: null }));
+});
+
+test('collectProvisionalAssessment fails closed when a read throws or rejects (rows 3-4)', async () => {
+  const common = {
+    issue: {
+      number: 7,
+      body: DECISION_BODY,
+      labels: ['status:needs-decision'],
+    },
+    owner: 'o',
+    repo: 'r',
+    plan: decisionPlan(DECISION_BODY),
+    needsDecisionLabelName: 'status:needs-decision',
+    markerPrefix: 'idd-skill',
+    config: {},
+  };
+  const trustedFails = await collectProvisionalAssessment({
+    ...common,
+    sources: {
+      readTrusted: () => {
+        throw new Error('no network');
+      },
+      loadState: () => emptyState,
+    },
+  });
+  assert.deepEqual(
+    trustedFails.blockers.map((blocker) => blocker.code),
+    ['policy-unreadable'],
+  );
+  const stateFails = await collectProvisionalAssessment({
+    ...common,
+    sources: {
+      readTrusted: () => enabledPolicy,
+      loadState: () => Promise.reject(new Error('replay failed')),
+    },
+  });
+  assert.deepEqual(
+    stateFails.blockers.map((blocker) => blocker.code),
+    ['state-unreadable'],
+  );
+});
+
+test('collectProvisionalAssessment reads the score, effort and operator choice from the issue and policy (AC4)', async () => {
+  const lowScoreBody = `${DECISION_BODY}\n<!-- idd-skill-autopilot-suitability: 2 -->\n<!-- idd-skill-effort: S -->\n`;
+  const sources = {
+    readTrusted: () => enabledPolicy,
+    loadState: () => emptyState,
+  };
+  const reassessed = await collectProvisionalAssessment({
+    issue: { number: 7, body: lowScoreBody, labels: ['status:needs-decision'] },
+    owner: 'o',
+    repo: 'r',
+    plan: decisionPlan(lowScoreBody, {
+      suitability: {
+        lowScoreCause: 'input-choice-only',
+        reassessedScore: 3,
+        rationale: 'only the cache choice lowered it',
+      },
+    }),
+    needsDecisionLabelName: 'status:needs-decision',
+    markerPrefix: 'idd-skill',
+    config: { autopilotSuitability: { floor: 3 } },
+    sources,
+  });
+  assert.equal(reassessed.eligible, true);
+  assert.equal(reassessed.score.route, 'reassessed-with-plan');
+  const independent = await collectProvisionalAssessment({
+    issue: { number: 7, body: lowScoreBody, labels: ['status:needs-decision'] },
+    owner: 'o',
+    repo: 'r',
+    plan: decisionPlan(lowScoreBody),
+    needsDecisionLabelName: 'status:needs-decision',
+    markerPrefix: 'idd-skill',
+    config: { autopilotSuitability: { floor: 3 } },
+    sources,
+  });
+  assert.deepEqual(
+    independent.blockers.map((blocker) => blocker.code),
+    ['score-below-floor'],
+  );
+  const resolvedBody = `## Decision (resolved 2026-10-19)\n\nThe operator kept Redis.\n\n${DECISION_BODY}`;
+  const unacknowledged = await collectProvisionalAssessment({
+    issue: { number: 7, body: resolvedBody, labels: ['status:needs-decision'] },
+    owner: 'o',
+    repo: 'r',
+    plan: decisionPlan(resolvedBody),
+    needsDecisionLabelName: 'status:needs-decision',
+    markerPrefix: 'idd-skill',
+    config: {},
+    sources,
+  });
+  assert.deepEqual(
+    unacknowledged.blockers.map((blocker) => blocker.code),
+    ['recorded-choice-unacknowledged'],
+  );
+});
+
+test('readProvisionalPlanFiles binds each plan to its issue and reports every unusable file (AC5)', () => {
+  const files: Record<string, string> = {
+    'a.json': JSON.stringify({ source: { issueNumber: 7 } }),
+    'b.json': JSON.stringify({ source: { issueNumber: 9 } }),
+    'bad.json': '{ not json',
+    'unbound.json': JSON.stringify({ choices: [] }),
+    'dup.json': JSON.stringify({ source: { issueNumber: 7 } }),
+  };
+  const read = (file: string): string => {
+    const text = files[file];
+    if (text === undefined) throw new Error(`no such file: ${file}`);
+    return text;
+  };
+  const { plans, errors } = readProvisionalPlanFiles(
+    [
+      'a.json',
+      'b.json',
+      'bad.json',
+      'unbound.json',
+      'missing.json',
+      'dup.json',
+    ],
+    [7, 8],
+    read,
+  );
+  // Issue 7 has two plans, so neither binds; issue 9 is not a listed issue.
+  assert.deepEqual([...plans.keys()], []);
+  assert.deepEqual(
+    errors.map((entry) => entry.file),
+    ['b.json', 'bad.json', 'unbound.json', 'missing.json', 'dup.json'],
+  );
+  const single = readProvisionalPlanFiles(['a.json'], [7], read);
+  assert.deepEqual([...single.plans.keys()], [7]);
+  assert.deepEqual(single.errors, []);
+});
+
+test('provisionalLabelNames reads strings and name objects, ignoring anything else', () => {
+  assert.deepEqual(
+    provisionalLabelNames(['a', { name: 'b' }, { name: 3 }, null, 7]),
+    ['a', 'b'],
+  );
+  assert.deepEqual(provisionalLabelNames(undefined), []);
+  assert.deepEqual(provisionalLabelNames('a'), []);
+});
+
+test('parseArgs: --provisional-plan is repeatable and defaults to none (#4535)', () => {
+  assert.deepEqual(
+    parseArgs([
+      '--issue',
+      '7',
+      '--provisional-plan',
+      'a.json',
+      '--provisional-plan',
+      'b.json',
+    ]).provisionalPlans,
+    ['a.json', 'b.json'],
+  );
+  assert.deepEqual(parseArgs(['--issue', '7']).provisionalPlans, []);
+  assert.throws(() => parseArgs(['--issue', '7', '--provisional-plan']));
+});
+
+test('collectProvisionalAssessment binds file deliverables to the issue Candidate files (AC1, AC4)', async () => {
+  const withFiles = `${DECISION_BODY}\n## Candidate files\n\n- \`docs/cache.md\`\n`;
+  const sources = {
+    readTrusted: () => enabledPolicy,
+    loadState: () => emptyState,
+  };
+  const common = {
+    owner: 'o',
+    repo: 'r',
+    needsDecisionLabelName: 'status:needs-decision',
+    markerPrefix: 'idd-skill',
+    config: {},
+    sources,
+  };
+  const outside = await collectProvisionalAssessment({
+    ...common,
+    issue: { number: 7, body: withFiles, labels: ['status:needs-decision'] },
+    plan: decisionPlan(withFiles),
+  });
+  assert.deepEqual(
+    outside.blockers.map((blocker) => blocker.code),
+    ['surface-outside-candidate-files'],
+  );
+  const inside = await collectProvisionalAssessment({
+    ...common,
+    issue: { number: 7, body: withFiles, labels: ['status:needs-decision'] },
+    plan: decisionPlan(withFiles, {
+      deliverables: [
+        { kind: 'file', target: 'docs/cache.md', purpose: 'record it' },
+      ],
+    }),
+  });
+  assert.equal(inside.eligible, true);
+});
+
+test('A4 provisional: an assessment of another issue or body relaxes nothing (AC3)', () => {
+  const forOther = assess(DECISION_BODY, {
+    issue: {
+      number: 8,
+      body: DECISION_BODY,
+      labels: ['status:needs-decision'],
+    },
+    plan: decisionPlan(DECISION_BODY, {
+      source: {
+        repository: 'o/r',
+        issueNumber: 8,
+        bodySha256: sha256(DECISION_BODY),
+      },
+    }),
+  });
+  assert.equal(forOther.eligible, true);
+  const mismatched = evaluateA4Viability(
+    a4Issue(DECISION_BODY),
+    undefined,
+    forOther,
+  );
+  assert.deepEqual(failedIds(mismatched), ['autonomous_completion']);
+  const edited = `${DECISION_BODY}\nA later edit.\n`;
+  const stale = evaluateA4Viability(
+    a4Issue(edited),
+    undefined,
+    assess(DECISION_BODY),
+  );
+  assert.deepEqual(failedIds(stale), ['autonomous_completion']);
+});
+
+test('A4 provisional: an abbreviation or a dotted path does not hide an authority word (AC3)', () => {
+  for (const sentence of [
+    'The layer needs a maintainer decision, i.e. sign-off from legal.',
+    'The layer needs a maintainer decision (see docs/x.md) and production access.',
+  ]) {
+    const body = DECISION_BODY.replace(
+      'The layer needs a maintainer decision.',
+      sentence,
+    );
+    const result = evaluateA4Viability(a4Issue(body), undefined, assess(body));
+    assert.equal(
+      result.failedCriteria.includes('autonomous_completion'),
+      true,
+      sentence,
+    );
+  }
 });
