@@ -13787,3 +13787,31 @@ test('A4.5 provisional: a credential in inline code keeps the needs-decision lab
   assert.equal(result.passed, false);
   assert.equal(result.failedCheck, 'autonomy');
 });
+
+test('A4.5 provisional: an approval requirement in the title keeps the label blocking (AC4)', () => {
+  const body =
+    '## Purpose\n\nChoose the cache layer.\n\n## Acceptance Criteria\n- [ ] tests pass\n';
+  const assessment = provAssess(body);
+  const issue = {
+    ...decisionIssue(body),
+    title: 'feat: choose cache layer (legal approval required)',
+  };
+  const result = evaluateSuitability(issue, {
+    needsDecisionLabelName: NEEDS_DECISION_LABEL,
+    provisionalAssessment: assessment,
+  });
+  assert.equal(result.passed, false);
+  assert.equal(result.failedCheck, 'autonomy');
+  const ok = evaluateSuitability(decisionIssue(body), {
+    needsDecisionLabelName: NEEDS_DECISION_LABEL,
+    provisionalAssessment: assessment,
+  });
+  assert.equal(ok.passed, true);
+  // Check 6 reads the title itself, without the label waiver to lean on.
+  const titled = checkAutonomy({
+    issue: { ...decisionIssue(body, []), title: issue.title },
+    provisionalAssessment: assessment,
+  } as Context);
+  assert.equal(titled.pass, false);
+  assert.match(titled.evidence, /approval requirement/);
+});

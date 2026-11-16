@@ -1548,12 +1548,19 @@ export function evaluateAutonomousCompletion(
     htmlComments: 'mask',
     ...(relaxing ? { inlineCode: 'keep' } : {}),
   });
-  // The decision phrase is relaxed only when the same approval-sentence safety
-  // net A4.5 applies finds nothing in the body.
-  const relaxedDecisionSignals =
-    relaxing && findApprovalRequirementSentence(corpus) === null
-      ? []
-      : undefined;
+  // The same approval-sentence safety net A4.5 applies, over the title and the
+  // body: an approval requirement is not a coordination phrase to skip but a
+  // blocker of its own, so under a relaxation it fails this criterion directly.
+  const approvalSentence = relaxing
+    ? findApprovalRequirementSentence(corpus)
+    : null;
+  if (approvalSentence !== null) {
+    return {
+      pass: false,
+      evidence: `Approval requirement that a provisional plan cannot relax: "${approvalSentence.trim().slice(0, 160)}".`,
+    };
+  }
+  const relaxedDecisionSignals = relaxing ? [] : undefined;
   const match = findUnexcludedExternalCoordinationMatch(
     corpus,
     rawCorpus,

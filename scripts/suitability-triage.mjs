@@ -6710,8 +6710,12 @@ export function checkAutonomy(context) {
   // in a sentence of its own, keeps the source blocked.
   if (provisionalRelaxes) {
     // Inline code stays visible: formatting must not hide an approval word.
+    // The title counts too: a requirement there blocks as much as one in the body.
     const sentence = findApprovalRequirementSentence(
-      maskMarkdownForScan(body, { htmlComments: 'mask', inlineCode: 'keep' }),
+      maskMarkdownForScan(`${issue.title}\n\n${body}`, {
+        htmlComments: 'mask',
+        inlineCode: 'keep',
+      }),
     );
     if (sentence !== null) {
       return {

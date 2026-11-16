@@ -4654,3 +4654,33 @@ test('A4 provisional: a credential named in inline code is a live requirement un
   );
   assert.equal(result.passed, true);
 });
+
+test('A4 provisional: an approval requirement blocks the criterion on its own, in the title or the body (AC3, AC4)', () => {
+  const body =
+    'Choose the cache layer.\n\n## Acceptance criteria\n\n- [ ] tests pass\n';
+  const assessment = assess(body);
+  const clean = evaluateA4Viability(a4Issue(body), undefined, assessment);
+  assert.equal(clean.passed, true);
+  // The title names the requirement, and the body has no decision phrase to skip.
+  const titled = evaluateA4Viability(
+    {
+      ...a4Issue(body),
+      title: 'feat: choose cache layer (legal approval required)',
+    },
+    undefined,
+    assessment,
+  );
+  assert.equal(titled.failedCriteria.includes('autonomous_completion'), true);
+  assert.match(
+    titled.criteria.find((entry) => entry.id === 'autonomous_completion')
+      ?.evidence ?? '',
+    /Approval requirement that a provisional plan cannot relax/,
+  );
+  const inBody = `${body}\nApproval from legal is required before work starts.\n`;
+  const bodied = evaluateA4Viability(
+    a4Issue(inBody),
+    undefined,
+    assess(inBody),
+  );
+  assert.equal(bodied.failedCriteria.includes('autonomous_completion'), true);
+});

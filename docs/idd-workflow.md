@@ -1100,9 +1100,10 @@ itself causes:
   or unresolved-choice phrases. Check 7 accepts the plan's execution criteria
   for a missing verification signal and for a decision or preference line.
 - Each phrase is judged on its own, so a later credential or sign-off
-  phrase still blocks. Under a relaxation, A4 keeps a decision phrase and
-  A4.5 Check 6 stays blocked while the body names an approval, sign-off, or
-  authorization requirement in any sentence (inline code included), in either
+  phrase still blocks. Under a relaxation, A4's autonomy criterion fails and
+  A4.5 Check 6 stays blocked while the title or body names an approval,
+  sign-off, or authorization requirement in any sentence (inline code
+  included), in either
   word order and at any distance, unless a phrase in it denies that very
   requirement, such as "does not need any approval". The needs-decision label
   was the only catch-all before. This lexical net is not complete: the plan's
