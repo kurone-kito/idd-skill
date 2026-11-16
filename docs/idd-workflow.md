@@ -1035,8 +1035,9 @@ and rework still work after `dangerouslyAutoDecide` is turned off.
    of that presentation, the next step, and `needsUserAnswer`. When it is
    true, the user has not answered yet: show the presentation and ask
    `Were the implemented choices above acceptable? [y/N]`. When it is
-   false, the user already answered, a persisted answer resumes, or a
-   finishing step runs, so ask nothing.
+   false, the user has already given an answer (including a no or an
+   abort), a persisted answer resumes, or a finishing step runs, so ask
+   nothing.
 3. **Read the actual answer.** The input adapter reads one reported event
    and never creates input; a pending question produces no answer by itself.
    An answer must also carry the digest it answered, so a changed source,
@@ -1076,8 +1077,11 @@ confirmation cannot be undone: an N or a conversational no, Enter, EOF,
 cancellation, an unclear reply, or another option. The same refusal applies
 after the confirmation or rework request record is stored, and before any
 write when any targeted decision already has one. While another targeted
-decision is still undecided, an N or an abort only keeps that decision
-pending. A generic request to resolve is not a conflict.
+decision is still undecided, an N, an abort, or an unclear reply only keeps
+that decision pending, unless a valid persisted answer already covers it.
+A resumed request should name only the undecided decisions, because an
+accepted or alternate reading is compared with every persisted response of
+the decisions it names. A generic request to resolve is not a conflict.
 
 Agents follow an input-boundary rule: never write the user's reply, and
 never feed `y` to a prompt the agent is waiting on (preventive; no observed
@@ -1089,19 +1093,21 @@ guarantee.
 Every next step is derived from fresh reads, so a crash or uncertain write
 resumes exactly the remaining step and never executes the implementation
 again (preventive; no observed incident yet). A write that throws is checked
-by one fresh read: one whose content is in place is counted and reported in
-`warnings`, and one that is still absent is a recovery hold, not a retry.
-`warnings` also names downstream results that could not be recorded. The
-close step passes the title and the SHA-256 hex digest of the body's UTF-8
-bytes that the plan read, and a store must close only while they still
-match. A record step is compared by its whole content before it is written.
-Every refusal and recovery hold keeps the coordination claim until its cause
-is fixed. If the
-confirmation is stored but the close failed, only the close resumes. If the
-close succeeded but the claim release failed, only the release resumes and
-the issue is not closed again. A pending outcome records nothing new and
-only releases the claim; it reports `rework-handoff-recorded` when a rework
-request for the bundle is already stored. A release that a fresh read cannot
+by one fresh read: one whose own content is in place (a trusted, unedited
+comment with the same content, or a source closed as completed) is counted
+and reported in `warnings`, and one that is still absent is a recovery hold,
+not a retry. `warnings` also names downstream results that could not be
+recorded. The close step passes the title and the SHA-256 hex digest of the
+body's UTF-8 bytes that the plan read; a store should close only while they
+still match, as far as its API allows, and the planner re-reads just before
+the write. A record step is compared by its whole content before it is
+written. Every refusal and recovery hold keeps the coordination claim until
+its cause is fixed. If the confirmation is stored but the close failed, only
+the close resumes. If the close succeeded but the claim release failed, only
+the release resumes and the issue is not closed again. A pending outcome
+records nothing new and only releases the claim; it reports
+`rework-handoff-recorded` when a rework request for the bundle is already
+stored. A release that a fresh read cannot
 confirm is reported as `reconciled` with `nextStep` set to `release-claim`,
 and the next run repeats it while the claim is still active; `reconciled`
 without a `nextStep` means everything is already done. A refusal with action
