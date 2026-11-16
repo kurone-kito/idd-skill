@@ -1895,23 +1895,23 @@
     },
     "closingSet": {
       "type": "object",
-      "description": "#3298: the closing-set / stray-commit-close merge-gate evidence, mirroring idd-pr-submit.instructions.md's D3.5 steps 6-7 so both the lite and standard profiles get this safety check from the helper verdict itself. Unlike developmentBranchTarget above, this is deliberately REQUIRED (a real collectPreMergeReadiness run always emits it) so an older report missing this field is caught by the lite 'missing required field -> stop' rule. A status other than 'match' or 'skipped-non-default-branch' adds a closing-set blocker.",
+      "description": "#3298: the closing-set / stray-commit-close merge-gate evidence, mirroring idd-pr-submit.instructions.md's D3.5 steps 6-7 so both the lite and standard profiles get this safety check from the helper verdict itself. Unlike developmentBranchTarget above, this is deliberately REQUIRED (a real collectPreMergeReadiness run always emits it) so an older report missing this field is caught by the lite 'missing required field -> stop' rule. A status other than 'match' or 'skipped-non-default-branch' adds a closing-set blocker. kurone-kito/idd-skill#4532: a claimed source whose provisionalRead is 'bound' is kept out of the deliberate set and stays blocked on every base branch, so a closing reference to it (GitHub's own, the PR title or body, or a branch commit message) is a mismatch.",
       "required": ["status", "expected", "actual", "extra", "missing", "strayCommitCloses"],
       "additionalProperties": false,
       "properties": {
         "status": {
           "type": "string",
-          "description": "'match' (actual equals expected and no stray commit-message close) or 'skipped-non-default-branch' (the PR base branch is not the live repository default branch -- D3.5's own exemption, which skips both the reference compare and the commit-message scan) never block; 'mismatch' (actual differs from expected in either direction, or a stray commit-message close exists) or 'unavailable' (the live default branch or the PR commit list could not be read, or the commit list hit the REST API's 250-commit pagination cap) always block.",
+          "description": "'match' (actual equals expected and no stray commit-message close) or 'skipped-non-default-branch' (the PR base branch is not the live repository default branch -- D3.5's own exemption, which skips both the reference compare and the commit-message scan, except that a bound provisional source (kurone-kito/idd-skill#4532) is still scanned) never block; 'mismatch' (actual differs from expected in either direction, or a stray commit-message close exists) or 'unavailable' (the live default branch or the PR commit list could not be read, or the commit list hit the REST API's 250-commit pagination cap) always block.",
           "enum": ["match", "mismatch", "skipped-non-default-branch", "unavailable"]
         },
         "expected": {
           "type": "array",
-          "description": "The deliberate closing set: --closing-issues when given (must include the claimed issue), else the single claimed issue number, else empty under --claimless.",
+          "description": "The deliberate closing set: --closing-issues when given (must include the claimed issue, and must leave out a claimed source whose provisionalRead is 'bound'), else the single claimed issue number, else empty under --claimless or for a bound provisional source.",
           "items": { "type": "integer" }
         },
         "actual": {
           "type": "array",
-          "description": "Every issue number from the PR's live closingIssuesReferences (GitHub's own merge-time closing-keyword resolution), including a cross-repository entry's bare number.",
+          "description": "Every issue number from the PR's live closingIssuesReferences (GitHub's own merge-time closing-keyword resolution), including a cross-repository entry's bare number. For a bound provisional source it also lists that source when the PR title or body names it with a closing keyword, because GitHub's registration can lag.",
           "items": { "type": "integer" }
         },
         "extra": {
@@ -2016,7 +2016,7 @@
       "additionalProperties": false
     },
     "provisionalRead": {
-      "description": "kurone-kito/idd-skill#5237: the trusted provisional read of the claimed source, taken before the closing-set evidence is built. It is evidence for a later closing-set exception, never a decision: it adds no blocker, changes no ready verdict, and leaves closingSet unchanged. Present on every claim-bound run; omitted for a claimless run. 'bound' means the replayed, trusted, unedited history of the claimed source holds unconfirmed work whose verified claim lineage contains this run's claim and whose claim branch equals the live pull request head ref. No provisional record carries a head before merge, so that binding is derived, and the evaluated head is the report's prHeadSha. 'stopped' means the source is not treated as provisional, with the reason; 'unavailable' means the instructions-only profile cannot run the read.",
+      "description": "kurone-kito/idd-skill#5237: the trusted provisional read of the claimed source, taken before the closing-set evidence is built. It adds no blocker of its own, but only a 'bound' read changes closingSet (kurone-kito/idd-skill#4532): the claimed source is then kept out of the deliberate closing set and any closing reference to it blocks. Every other status leaves closingSet as an ordinary claim has it. Present on every claim-bound run; omitted for a claimless run. 'bound' means the replayed, trusted, unedited history of the claimed source holds unconfirmed work whose verified claim lineage contains this run's claim and whose claim branch equals the live pull request head ref. No provisional record carries a head before merge, so that binding is derived, and the evaluated head is the report's prHeadSha. 'stopped' means the source is not treated as provisional, with the reason; 'unavailable' means the instructions-only profile cannot run the read.",
       "oneOf": [
         {
           "type": "object",

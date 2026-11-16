@@ -445,7 +445,8 @@ interface PreMergeReadinessArgs {
   globalOnly: boolean;
   /** #3298: the deliberate multi-issue closing set (`--closing-issues
    * <n>[,<n>...]`), when given. `null` means "not given" -- the caller
-   * falls back to `[claimIssueNumber]`, or `[]` under `--claimless`. */
+   * falls back to `[claimIssueNumber]`, or `[]` under `--claimless` or for a
+   * bound provisional source (#4532). */
   closingIssueNumbers: number[] | null;
 }
 
@@ -513,7 +514,10 @@ export type PreMergeReadinessReport = Omit<
   /**
    * kurone-kito/idd-skill#5237: the trusted provisional read of the claimed
    * source, present on every claim-bound run and omitted under `--claimless`.
-   * Evidence only: it never adds a blocker or changes `ready`.
+   * It adds no blocker of its own. Only a `bound` read changes the closing
+   * set (#4532): the claimed source is kept out of it, and a closing
+   * reference to it blocks. Every other status leaves the closing set as an
+   * ordinary claim has it.
    */
   provisionalRead?: ProvisionalReadReport;
   trustedMarkerActors: string[];
@@ -774,10 +778,11 @@ export type ProvisionalReadStopReason =
   | 'completion-unverified';
 
 /**
- * Result of the trusted provisional read for the claimed source. It is
- * evidence for the closing-set exception (#4532), never a decision: it adds
- * no blocker, changes no `ready` verdict, and grants no closing-set
- * treatment by itself.
+ * Result of the trusted provisional read for the claimed source. It adds no
+ * blocker of its own. Only `bound` grants the closing-set exception (#4532):
+ * the collector keeps that source out of the deliberate set and blocks any
+ * closing reference to it, while a stop, an unavailable read, or a missing
+ * read never creates the exception.
  */
 export type ProvisionalReadReport =
   | { status: 'unavailable'; reason: 'instructions-only' }
@@ -1021,6 +1026,79 @@ function readProvisionalState(
     bundleGeneration: binding.bundleGeneration,
     decisions: [...binding.decisions],
   };
+}
+
+/**
+ * #4532: why a `--closing-issues` check stopped without a bound read, as a
+ * suffix for its usage error. A record that exists but did not bind (a
+ * transient `history-unreadable`, a head mismatch) would otherwise leave the
+ * agent with no hint why the set was refused; an ordinary issue with no record
+ * (`record-missing`) and a profile with no read add nothing.
+ */
+function describeUnboundProvisionalRead(
+  read: ProvisionalReadReport | undefined,
+): string {
+  if (read === undefined || read.status !== 'stopped') return '';
+  if (read.reason === 'record-missing') return '';
+  return ` (provisional read stopped: ${read.reason})`;
+}
+
+/**
+ * #4532: whether the PR title or body names `issueNumber` with a closing
+ * keyword, the one input a protected source needs beyond GitHub's own
+ * `closingIssuesReferences` (which can lag the body, D3.5). The title is read
+ * through the work-item read because the readiness snapshot carries no title,
+ * and the default merge-commit message repeats it. Returns `null` when either
+ * text cannot be read, so the closing set fails closed.
+ */
+function readProtectedSourceBodyCloses(
+  port: ProviderPort,
+  prNumber: number,
+  body: string | undefined,
+  issueNumber: number,
+  owner: string,
+  repo: string,
+): boolean | null {
+  if (typeof body !== 'string') return null;
+  let title: unknown;
+  try {
+    title = port.getWorkItem(prNumber)?.title;
+  } catch {
+    return null;
+  }
+  if (typeof title !== 'string') return null;
+  return (
+    textClosesIssue(title, issueNumber, owner, repo) ||
+    textClosesIssue(body, issueNumber, owner, repo)
+  );
+}
+
+/**
+ * #4532: whether `text` names `issueNumber` with a closing keyword that GitHub
+ * would read as prose. It uses the same quote- and code-aware scan as
+ * {@link claimIssueExpectedToClose}, and also reads the `GH-N` autolink, the
+ * same-repository qualified form (`owner/repo#N`), and the same-repository
+ * issue URL, since a protected source must stay open whichever form closes it.
+ * Another repository's reference never matches.
+ */
+export function textClosesIssue(
+  text: string,
+  issueNumber: number,
+  owner: string,
+  repo: string,
+): boolean {
+  const source = stripBlockQuotesAndLazyContinuations(text);
+  const masked = maskMarkdownForScan(source);
+  const slug =
+    owner && repo ? `${escapeRegex(owner)}/${escapeRegex(repo)}` : '';
+  const target = slug
+    ? `(?:(?:${slug})?#${issueNumber}|GH-${issueNumber}|https?://[^\\s/]+/${slug}/issues/${issueNumber})`
+    : `(?:#${issueNumber}|GH-${issueNumber})`;
+  const closing = new RegExp(
+    `\\b(${CLOSING_KEYWORD_PATTERN})(\\s+)(${target})\\b`,
+    'giu',
+  );
+  return hasSpacedMatch(masked, source, closing);
 }
 
 /**
@@ -1992,45 +2070,14 @@ export function collectPreMergeReadiness(
       closingSetLiveDefaultBranch = null;
     }
   }
-  // #3298: the deliberate closing set -- --closing-issues when given
-  // (parseArgs already validated it includes the claimed issue and does
-  // not combine with --claimless), else the single claimed issue, else
-  // empty under --claimless. kurone-kito/idd-skill#3328: an
-  // `out-of-loop-authorized` PR is the one exception to the plain
-  // --claimless "[]" default -- it carries no claim-derived deliberate
-  // set to diff against, so the valid marker authorizes exactly the PR's
-  // own live `closingIssuesReferences` instead (the same same-repo
-  // extraction the membership check above already ran). A malformed or
-  // cross-repo entry still fails `computeClosingSetEvidence` closed to
-  // `'unavailable'`/`'mismatch'` regardless of this expected set (its own
-  // malformed-entry and cross-repo-`extra` checks run unconditionally), and
-  // `missing` is structurally empty on this path since `expected` is
-  // always a subset of the same-repo `actual` numbers by construction --
-  // there is no separate "should have closed but didn't" question left to
-  // ask once a marker authorizes the PR's own declared closing set.
-  const expectedClosingIssues =
-    args.closingIssueNumbers ??
-    (args.claimless
-      ? outOfLoopMembership?.membership === 'out-of-loop-authorized'
-        ? extractSameRepoClosingIssueNumbers(closingRefsAtEntry, owner, repo)
-        : []
-      : // #5149: a split PR that names the claim issue only with `Refs` does
-        // not expect it to close on merge.
-        claimIssueExpectedToClose(
-            snapshot.body ?? '',
-            args.claimIssueNumber as number,
-            owner,
-            repo,
-          )
-        ? [args.claimIssueNumber as number]
-        : []);
   // kurone-kito/idd-skill#5237: the trusted provisional read of the claimed
-  // source, taken before the closing-set evidence is built. `normalizePolicyConfig`
-  // does not carry `helperRuntime` through its normalized shape (that section
-  // is validated, not defaulted, elsewhere), and `IddConfig`'s index signature
-  // already types this access as `unknown` with no cast needed. It is evidence
-  // for the closing-set exception (#4532) and changes neither the closing-set
-  // result nor any gate verdict.
+  // source, taken before the deliberate closing set is derived.
+  // `normalizePolicyConfig` does not carry `helperRuntime` through its
+  // normalized shape (that section is validated, not defaulted, elsewhere),
+  // and `IddConfig`'s index signature already types this access as `unknown`
+  // with no cast needed. Only a `bound` read (#4532) changes the closing set:
+  // it keeps the claimed source out of it, and every other read leaves it as
+  // it was.
   const rawHelperRuntime = iddConfig?.helperRuntime;
   const helperRuntimeProfile =
     rawHelperRuntime &&
@@ -2058,6 +2105,78 @@ export function collectPreMergeReadiness(
           readMergedPullRequest: (number) =>
             port.getMergedChangeRequestMeta(number),
         });
+  // #3298: the deliberate closing set -- --closing-issues when given
+  // (parseArgs already validated it includes the claimed issue and does
+  // not combine with --claimless), else the single claimed issue, else
+  // empty under --claimless. kurone-kito/idd-skill#3328: an
+  // `out-of-loop-authorized` PR is the one exception to the plain
+  // --claimless "[]" default -- it carries no claim-derived deliberate
+  // set to diff against, so the valid marker authorizes exactly the PR's
+  // own live `closingIssuesReferences` instead (the same same-repo
+  // extraction the membership check above already ran). A malformed or
+  // cross-repo entry still fails `computeClosingSetEvidence` closed to
+  // `'unavailable'`/`'mismatch'` regardless of this expected set (its own
+  // malformed-entry and cross-repo-`extra` checks run unconditionally), and
+  // `missing` is structurally empty on this path since `expected` is
+  // always a subset of the same-repo `actual` numbers by construction --
+  // there is no separate "should have closed but didn't" question left to
+  // ask once a marker authorizes the PR's own declared closing set.
+  //
+  // kurone-kito/idd-skill#4532: a `bound` provisional read is the only new
+  // allow. It marks the claimed issue as a protected source that must stay
+  // open for its human confirmation, so the deliberate set omits it (the
+  // explicit set when given, else empty) and any closing reference to it
+  // blocks. Every other read, including a `Refs`-only body (#5149) on an
+  // unbound claim, keeps the ordinary set.
+  const protectedSourceIssue =
+    provisionalRead?.status === 'bound'
+      ? provisionalRead.source.issueNumber
+      : null;
+  if (
+    args.closingIssueNumbers !== null &&
+    args.claimIssueNumber !== null &&
+    !args.claimless
+  ) {
+    // The explicit set used to be checked at parse time, before any read.
+    if (
+      protectedSourceIssue !== null &&
+      args.closingIssueNumbers.includes(protectedSourceIssue)
+    ) {
+      throw markCliUsageError(
+        new Error(
+          `--closing-issues must not include the claimed issue number ${protectedSourceIssue}: it is an unconfirmed provisional source that a merge must leave open`,
+        ),
+      );
+    }
+    if (
+      protectedSourceIssue === null &&
+      !args.closingIssueNumbers.includes(args.claimIssueNumber)
+    ) {
+      throw markCliUsageError(
+        new Error(
+          `--closing-issues must include the claimed issue number ${args.claimIssueNumber}${describeUnboundProvisionalRead(provisionalRead)}`,
+        ),
+      );
+    }
+  }
+  const expectedClosingIssues =
+    args.closingIssueNumbers ??
+    (args.claimless
+      ? outOfLoopMembership?.membership === 'out-of-loop-authorized'
+        ? extractSameRepoClosingIssueNumbers(closingRefsAtEntry, owner, repo)
+        : []
+      : protectedSourceIssue !== null
+        ? []
+        : // #5149: a split PR that names the claim issue only with `Refs` does
+          // not expect it to close on merge.
+          claimIssueExpectedToClose(
+              snapshot.body ?? '',
+              args.claimIssueNumber as number,
+              owner,
+              repo,
+            )
+          ? [args.claimIssueNumber as number]
+          : []);
   const closingSetEvidence = computeClosingSetEvidence({
     expected: expectedClosingIssues,
     closingIssuesReferences: snapshot.closingIssuesReferences,
@@ -2066,6 +2185,21 @@ export function collectPreMergeReadiness(
     baseRefName,
     liveDefaultBranch: closingSetLiveDefaultBranch,
     commits: prCommits,
+    ...(protectedSourceIssue === null
+      ? {}
+      : {
+          protectedSource: {
+            issue: protectedSourceIssue,
+            bodyCloses: readProtectedSourceBodyCloses(
+              port,
+              args.prNumber as number,
+              snapshot.body,
+              protectedSourceIssue,
+              owner,
+              repo,
+            ),
+          },
+        }),
   });
   // #3624: open follow-ups deferred from this PR's origin issue(s) that the PR
   // never names. `--claimless` has no origin (even an out-of-loop PR that
@@ -3342,20 +3476,9 @@ export function parseArgs(argv: string[]): PreMergeReadinessArgs {
       }
       return Number(trimmed);
     });
-    const claimIssueNumber = requirePositiveInteger(
-      values['claim-issue'] as string | undefined,
-      '--claim-issue',
-    );
-    if (
-      claimIssueNumber !== null &&
-      !closingIssueNumbers.includes(claimIssueNumber)
-    ) {
-      throw markCliUsageError(
-        new Error(
-          `--closing-issues must include the claimed issue number ${claimIssueNumber}`,
-        ),
-      );
-    }
+    // Whether the set must include the claimed issue is decided in
+    // `collectPreMergeReadiness`, after the provisional read (#4532): a bound
+    // provisional source must be left out, and every other claim must be in.
   }
 
   return {
@@ -3414,9 +3537,11 @@ function printHelp(): void {
                     unclaimed shape.
   --closing-issues <n>[,<n>...]  (#3298) the deliberate multi-issue closing
                     set for the closing-set merge gate; must include
-                    --claim-issue's own number. Cannot combine with
-                    --claimless. Omit to use the single claimed issue (or
-                    the empty set under --claimless) as the deliberate set.
+                    --claim-issue's own number, except that (#4532) it must
+                    leave out a claimed issue whose provisional read is
+                    bound. Cannot combine with --claimless. Omit to use the
+                    single claimed issue (or the empty set under --claimless)
+                    as the deliberate set.
 `);
 }
 
