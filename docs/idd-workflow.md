@@ -1049,9 +1049,9 @@ The plan is one JSON object with `schemaVersion` 1 and these keys, all
 required except `suitability`; an unknown key is refused, so a plan cannot
 claim approval (preventive; no observed incident yet):
 
-- `source`: the repository, the issue number, and the SHA-256 of the issue
-  body, so a plan for another issue or an edited body is stale. A refusal
-  names the current hash.
+- `source`: an object with `repository` (`owner/repo`), `issueNumber`, and
+  `bodySha256`, the SHA-256 of the issue body, so a plan for another issue or
+  an edited body is stale. A refusal names the current hash.
 - `humanChoiceCriteria`: the original human-choice criteria, copied from the
   source; each must be an excerpt of its body (case and spacing aside). They
   stay pending; no plan marks them satisfied or speaks as a maintainer.
@@ -1067,8 +1067,9 @@ claim approval (preventive; no observed incident yet):
   credential; a deliverable's `purpose` depends on none either.
 - `deliverables`: the concrete edit or deliverable surface, each a `file` (a
   repository-relative path), a `document`, or an `issue-comment`, within the
-  effort estimate's limit (3 paths for S, 8 for M; effort L stays refused
-  under `autopilotSuitability.effortL: "refuse"`). When the issue lists
+  effort estimate's limit on the number of deliverables, of any kind (3 for
+  S, 8 for M; effort L stays refused under
+  `autopilotSuitability.effortL: "refuse"`). When the issue lists
   `## Candidate files`, every file deliverable must be one of them, and a
   section that lists no path blocks, so the plan never widens the source into
   other code changes (preventive; no observed incident yet).
