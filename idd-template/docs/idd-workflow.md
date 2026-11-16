@@ -1050,9 +1050,10 @@ preference. The reply is stored verbatim, with its whitespace. An at-sign in
 it, or in a source title, is JSON-escaped in every comment the flow writes,
 so none notifies anybody. The first valid answer in history wins, and a
 valid persisted answer or confirmation resumes without another prompt; only
-an answer that carries the canonical question and was recorded under a
-coordination claim, never one the implementation session wrote on its own,
-is reused (preventive; no observed incident yet). A later input that agrees
+an answer that carries the canonical question and was recorded while a
+coordination claim was active, never one the implementation session wrote on
+its own or one posted between two claims, is reused (preventive; no observed
+incident yet). A later input that agrees
 with it, or none, resumes it. A conflicting input is refused, because a
 confirmation cannot be undone: an N or a conversational no, Enter, EOF,
 cancellation, an unclear reply, or another option. The same refusal applies
@@ -1117,7 +1118,9 @@ the coordination claim to be released and to be one that recorded a rework
 request of the bundle, a source that the authoring pass already rewrote, an
 authoring owner that is trusted, fresh, and matches the handoff's set,
 session, and anchor, an audited roadmap on the same source, and real child
-issues wired under it. It only appends the record. It never releases the
+issues wired under it. The evidence names the title and body digest of the
+source the audit read, and they must still match the source when the record
+is written. It only appends the record. It never releases the
 authoring hold, and unknown ownership or wiring refuses it. It is terminal
 only when every decision of the bundle is confirmed or has its record.
 
