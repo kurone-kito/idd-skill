@@ -791,8 +791,11 @@ for labels, comment-and-stop defaults, and close boundaries:
 A negative regression fixture or expected-rejection example is descriptive
 context, not a live prerequisite, only when an explicit, positively framed
 fixture/rejection cue precedes the external-access phrase in the same
-Markdown paragraph or list item. On a list marker line, the cue and phrase
-must remain in the same sentence; a separate sentence is part of the same
+Markdown paragraph or list item. The accepted cues are `negative fixture:`,
+`regression fixture:`, `expected rejection:`, and `expected failure:` (the
+last two may also be written with a hyphen), each followed by a colon. On a
+list marker line, the cue and phrase must remain in the same sentence; a
+separate sentence is part of the same
 context only when it is a correctly indented loose-list continuation
 paragraph whose cue text also identifies the external/access context. A
 heading at the list item's indentation ends that context. Inline-code terms
@@ -1019,8 +1022,9 @@ A0-T included, so each one reads the trusted verdict again (a fresh
 policy, never a feature branch) instead of relying on an earlier selection.
 With the class absent, false, or unreadable, the current needs-decision route
 stays, and so it does when the plan's choices exceed `maxDecisionsPerClaim`
-from that same read or the cap cannot be read. A fresh assessment starts a
-new decision bundle, so the generations the bundle would hold after selection
+from that same read or the cap cannot be read. A source whose body names no choice
+at all is not a decision source, whatever its label says. A fresh assessment
+starts a new decision bundle, so the generations the bundle would hold after selection
 are exactly the plan's pickup choices. Runtime questions later in the same
 claim count against the same cap
 ([issue #4955](https://github.com/kurone-kito/idd-skill/issues/4955)).
@@ -1044,17 +1048,19 @@ claim approval (preventive; no observed incident yet):
 - `source`: the repository, the issue number, and the SHA-256 of the issue
   body, so a plan for another issue or an edited body is stale. A refusal
   names the current hash.
-- `humanChoiceCriteria`: the original human-choice criteria, copied as they
-  are. They stay pending; no plan marks them satisfied or speaks as a
-  maintainer.
-- `recordedChoices`: each operator choice already recorded in the source,
-  with `respected: true`. A source that records one needs at least one entry,
-  and a `false` blocks.
+- `humanChoiceCriteria`: the original human-choice criteria, copied from the
+  source; each must be an excerpt of its body (case and spacing aside). They
+  stay pending; no plan marks them satisfied or speaks as a maintainer.
+- `recordedChoices`: each operator choice already recorded in the source: a
+  `reference` that is a verbatim excerpt of it, a `summary`, and
+  `respected: true`. A source that records one needs at least one entry, and
+  a `false` blocks.
 - `choices`: one entry per choice, in the shape of the `selected` event of
   the decision record: `question`, `selectedOption`, `feasibleAlternatives`
   (at least one, so at least two feasible options, all distinct), and
   `executionCriteria`, each checkable without a person's opinion.
-- `deliverables`: the concrete edit or deliverable surface, within the
+- `deliverables`: the concrete edit or deliverable surface, each a `file`
+  (a repository-relative path), a `document`, or an `issue-comment`, within the
   effort estimate's limit (3 paths for S, 8 for M; effort L stays refused
   under `autopilotSuitability.effortL: "refuse"`). When the issue lists
   `## Candidate files`, every file deliverable must be one of them, so the
@@ -1090,11 +1096,15 @@ itself causes:
   or unresolved-choice phrases. Check 7 accepts the plan's execution criteria
   for a missing verification signal and for a decision or preference line.
 - Each phrase is judged on its own, so a later credential or sign-off
-  phrase still blocks. Under a relaxation, Check 6 also stays blocked while
-  the body names an approval, sign-off, or authorization requirement in any
-  sentence, because the needs-decision label was the only catch-all before.
+  phrase still blocks. Under a relaxation, A4 keeps a decision phrase and
+  A4.5 Check 6 stays blocked while the body names an approval, sign-off, or
+  authorization requirement in any sentence, in either word order and at any
+  distance, unless that sentence itself negates it. The needs-decision label
+  was the only catch-all before. This lexical net is not complete: the plan's
+  `independentObstacles` is where a session declares such a requirement.
 - An assessment relaxes only the issue and body snapshot it was computed
-  for; the number and the body hash must match the source under evaluation.
+  for, and only an assessment that the helper made in the same process; the
+  number and the body hash must match the source under evaluation.
 
 Never relaxed: Checks 1 to 4; the blocked-by-human label, title prefix, and
 authoring-bucket marker; approval, sign-off, credential, secret, and
