@@ -1042,11 +1042,15 @@ and rework still work after `dangerouslyAutoDecide` is turned off.
 An answer comment keeps the canonical shape described above and adds the
 question that was asked and the decisions it applies to, so one answer can
 confirm some decisions of a bundle while another receives a different
-preference. The first valid answer in history wins, and a valid persisted
-answer or confirmation resumes without another prompt. A later input that
-agrees with it, or none, resumes it. An explicit conflicting input (an N,
-Enter, EOF, cancellation, or another option) is refused, because a
-confirmation cannot be undone.
+preference. An at-sign in the user's words is JSON-escaped, so the comment
+notifies nobody. The first valid answer in history wins, and a valid
+persisted answer or confirmation resumes without another prompt; only an
+answer that carries the canonical question is reused. A later input that
+agrees with it, or none, resumes it. A conflicting input is refused,
+because a confirmation cannot be undone: an N or a conversational no,
+Enter, EOF, cancellation, an unclear reply, or another option. The same
+refusal applies after the confirmation or rework request record is stored.
+A generic request to resolve is not a conflict.
 
 Agents follow an input-boundary rule: never write the user's reply, and
 never feed `y` to a prompt the agent is waiting on (preventive; no observed
@@ -1062,9 +1066,11 @@ still absent is a recovery hold, not a retry. Every refusal and recovery
 hold keeps the coordination claim until its cause is fixed. If the
 confirmation is stored but the close failed, only the close resumes. If the
 close succeeded but the claim release failed, only the release resumes and
-the issue is not closed again. A pending outcome persists nothing except the
-claim release; an uncertain release is reported as `reconciled`, and the
-next run repeats it while the claim is still active.
+the issue is not closed again. A pending outcome records nothing new and only
+releases the claim; it reports `rework-handoff-recorded` when a rework
+request for the bundle is already stored. A release that a fresh read cannot
+confirm is reported as `reconciled`, and the next run repeats it while the
+claim is still active.
 
 An alternate preference persists the answer and one `rework-requested`
 record for the one decision it names. The record carries a `handoff` with
@@ -1079,13 +1085,13 @@ the authoring pass acquires ownership, and the same request cannot produce
 another handoff or erase an earlier choice.
 
 The `rework-authored` transition is a separate guarded request. It needs
-the coordination claim to be released and to be the latest claim on the
-source, a source that the authoring pass already rewrote, an authoring
-owner that is trusted,
-fresh, and matches the handoff's set, session, and anchor, an audited
-roadmap on the same source, and real child issues wired under it. It only
-appends the record. It never releases the authoring hold, and unknown
-ownership or wiring refuses it.
+the coordination claim to be released and to be one that recorded a rework
+request of the bundle, a source that the authoring pass already rewrote, an
+authoring owner that is trusted, fresh, and matches the handoff's set,
+session, and anchor, an audited roadmap on the same source, and real child
+issues wired under it. It only appends the record. It never releases the
+authoring hold, and unknown ownership or wiring refuses it. It is terminal
+only when every decision of the bundle is confirmed or has its record.
 
 ### Provisional plan assessment (A4 and A4.5)
 
