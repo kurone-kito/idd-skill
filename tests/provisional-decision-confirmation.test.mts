@@ -2106,6 +2106,10 @@ function authoring(
     },
     roadmap: {
       audited: true,
+      auditedSource: {
+        title: fixture.store.source.title,
+        bodySha256: sha256(fixture.store.source.body),
+      },
       issueNumber,
       markerId: 'roadmap-rework-4536',
       url: issueUrl,
@@ -4283,4 +4287,92 @@ test('the close also needs the source still open and the claim still active', as
       });
     },
   );
+});
+
+test('rework-authored needs the audit to describe the source as it is now', async () => {
+  const fixture = await authoredFixture();
+  // The audit read the roadmap body; the source is edited before the record.
+  const evidence = authoring(fixture);
+  fixture.store.source = {
+    ...fixture.store.source,
+    body: `${roadmapBody}\n\nThe Tracks section was edited away.`,
+  };
+  const result = await runProvisionalResolution(
+    authoredRequest(fixture, evidence),
+    fixture.store,
+    { apply: true },
+  );
+  assertRefused(result, 'fix-input', /changed after the roadmap/);
+  assert.equal(eventsOf(fixture.store).includes('rework-authored'), false);
+  // A title edit is caught the same way.
+  const other = await authoredFixture();
+  const stale = authoring(other);
+  other.store.source = { ...other.store.source, title: 'Retitled after audit' };
+  assertRefused(
+    await runProvisionalResolution(authoredRequest(other, stale), other.store, {
+      apply: true,
+    }),
+    'fix-input',
+    /changed after the roadmap/,
+  );
+});
+
+test('an answer is adopted only if a coordination claim was active when it was posted', async (t) => {
+  await t.test(
+    'posted between the release of one claim and the next',
+    async () => {
+      const store = new MemoryStore();
+      await completeDecision(store, { evidenceId: '2', pullNumber: 6000 });
+      releaseImplementation(store);
+      postCoordinationClaim(store, 'claim-4536-coord');
+      store.addComment((at) =>
+        renderUnclaimedByMarker({
+          agentId: coordAgent,
+          claimId: 'claim-4536-coord',
+          timestamp: at,
+        }),
+      );
+      // The answer still names the released claim, but none was active.
+      store.addComment(() => craftedAnswer(store, () => {}));
+      postCoordinationClaim(store, 'claim-4536-coord-b');
+      store.resetCounters();
+      const result = await runProvisionalResolution(
+        resolveRequest(
+          {
+            input: {
+              channel: 'conversation',
+              origin: 'user',
+              message: 'Please resolve issue 4536.',
+              interpretation: { response: 'none' },
+            },
+          },
+          'claim-4536-coord-b',
+        ),
+        store,
+        { apply: true },
+      );
+      assert.equal(result.outcome, 'pending-released', JSON.stringify(result));
+      assert.equal(eventsOf(store).includes('confirmed'), false);
+    },
+  );
+
+  await t.test('posted under a claim that a later claim followed', async () => {
+    const store = await pendingStore();
+    store.addComment(() => craftedAnswer(store, () => {}));
+    store.addComment((at) =>
+      renderUnclaimedByMarker({
+        agentId: coordAgent,
+        claimId: 'claim-4536-coord',
+        timestamp: at,
+      }),
+    );
+    postCoordinationClaim(store, 'claim-4536-coord-b');
+    const result = await runProvisionalResolution(
+      resolveRequest({}, 'claim-4536-coord-b'),
+      store,
+      { apply: true },
+    );
+    assert.equal(result.outcome, 'confirmed-closed', JSON.stringify(result));
+    assert.equal(answersOf(store).length, 1);
+  });
 });

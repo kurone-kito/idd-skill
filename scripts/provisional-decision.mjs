@@ -1825,6 +1825,14 @@ async function readResolutionContext(request, store) {
     verifiedWork,
     lineage,
     active: folded?.active ?? null,
+    activeClaimAt: (index) => {
+      const truncated = {
+        ...history,
+        comments: history.comments.slice(0, index + 1),
+      };
+      const result = resolveClaimFold(truncated, store);
+      return result && !('failure' in result) ? result.active : null;
+    },
   };
 }
 function evidenceCountMatches(context, evidence) {
@@ -1881,6 +1889,19 @@ function releaseStep(context, outcome, reason) {
       ...(reason ? { reason } : {}),
     },
   };
+}
+function answeredUnderCoordinationClaim(
+  context,
+  commentIndex,
+  answer,
+  implementationClaims,
+) {
+  const active = context.activeClaimAt(commentIndex);
+  return (
+    active !== null &&
+    !implementationClaims.has(active.claimId) &&
+    answer.claimIds.at(-1) === active.claimId
+  );
 }
 function alternativeIdsOf(bundle, decisionGeneration) {
   return (
@@ -2111,9 +2132,14 @@ async function planResolve(context, request) {
     if (
       !parsed.ok ||
       parsed.answer.presentedQuestion !== PROVISIONAL_CONFIRMATION_QUESTION ||
-      // Only an answer recorded under a coordination claim, never one that
-      // the implementation session wrote before any review began.
-      !parsed.answer.claimIds.some((id) => !implementationClaims.has(id))
+      // Only an answer recorded while a coordination claim was active, never
+      // one the implementation session wrote or one posted between two claims.
+      !answeredUnderCoordinationClaim(
+        context,
+        context.history.comments.indexOf(comment),
+        parsed.answer,
+        implementationClaims,
+      )
     ) {
       continue;
     }
@@ -2305,6 +2331,12 @@ function authoringGateFailure(evidence, handoff, source) {
     roadmap.markerId.trim() === ''
   ) {
     return 'the source is not an audited rework roadmap';
+  }
+  if (
+    roadmap.auditedSource?.title !== source.snapshot.title ||
+    roadmap.auditedSource?.bodySha256 !== source.snapshot.bodySha256
+  ) {
+    return 'the source changed after the roadmap and its children were audited';
   }
   const numbers = children.map((child) => child.issueNumber);
   if (

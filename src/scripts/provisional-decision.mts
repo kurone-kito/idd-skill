@@ -2005,6 +2005,11 @@ export interface ProvisionalReworkAuthoringEvidence {
   };
   readonly roadmap: {
     readonly audited: boolean;
+    /** The title and body digest of the source the audit and the wiring read. */
+    readonly auditedSource: {
+      readonly title: string;
+      readonly bodySha256: string;
+    };
     readonly issueNumber: number;
     readonly markerId: string;
     readonly url: string;
@@ -2259,6 +2264,8 @@ interface ResolutionContext {
   readonly verifiedWork: readonly VerifiedProvisionalWork[];
   readonly lineage: readonly VerifiedProvisionalDecisionClaim[];
   readonly active: ClaimIdentity | null;
+  /** The claim that was active once the comment at `index` had been posted. */
+  readonly activeClaimAt: (index: number) => ClaimIdentity | null;
 }
 
 function replayContext(
@@ -2556,6 +2563,14 @@ async function readResolutionContext(
     verifiedWork,
     lineage,
     active: folded?.active ?? null,
+    activeClaimAt: (index) => {
+      const truncated = {
+        ...history,
+        comments: history.comments.slice(0, index + 1),
+      };
+      const result = resolveClaimFold(truncated, store);
+      return result && !('failure' in result) ? result.active : null;
+    },
   };
 }
 
@@ -2625,6 +2640,20 @@ function releaseStep(
       ...(reason ? { reason } : {}),
     },
   };
+}
+
+function answeredUnderCoordinationClaim(
+  context: ResolutionContext,
+  commentIndex: number,
+  answer: ProvisionalDecisionAnswer,
+  implementationClaims: ReadonlySet<string>,
+): boolean {
+  const active = context.activeClaimAt(commentIndex);
+  return (
+    active !== null &&
+    !implementationClaims.has(active.claimId) &&
+    answer.claimIds.at(-1) === active.claimId
+  );
 }
 
 function alternativeIdsOf(
@@ -2879,9 +2908,14 @@ async function planResolve(
     if (
       !parsed.ok ||
       parsed.answer.presentedQuestion !== PROVISIONAL_CONFIRMATION_QUESTION ||
-      // Only an answer recorded under a coordination claim, never one that
-      // the implementation session wrote before any review began.
-      !parsed.answer.claimIds.some((id) => !implementationClaims.has(id))
+      // Only an answer recorded while a coordination claim was active, never
+      // one the implementation session wrote or one posted between two claims.
+      !answeredUnderCoordinationClaim(
+        context,
+        context.history.comments.indexOf(comment),
+        parsed.answer,
+        implementationClaims,
+      )
     ) {
       continue;
     }
@@ -3082,6 +3116,12 @@ function authoringGateFailure(
     roadmap.markerId.trim() === ''
   ) {
     return 'the source is not an audited rework roadmap';
+  }
+  if (
+    roadmap.auditedSource?.title !== source.snapshot.title ||
+    roadmap.auditedSource?.bodySha256 !== source.snapshot.bodySha256
+  ) {
+    return 'the source changed after the roadmap and its children were audited';
   }
   const numbers = children.map((child) => child.issueNumber);
   if (
