@@ -1003,10 +1003,13 @@ A0-T included, so each one reads the trusted verdict again (a fresh
 policy, never a feature branch) instead of relying on an earlier selection.
 With the class absent, false, or unreadable, the current needs-decision route
 stays, and so it does when the plan's choices exceed `maxDecisionsPerClaim`
-from that same read or the cap cannot be read. A source whose body names no choice
-at all is not a decision source, whatever its label says. A fresh assessment
-starts a new decision bundle, so the generations the bundle would hold after selection
-are exactly the plan's pickup choices. Runtime questions later in the same
+from that same read or the cap cannot be read. A source whose body names no
+choice at all (code blocks, inline code, and comments do not count) is not a
+decision source, whatever its label says. A source that already has records,
+or whose record state is inconsistent, is not assessed afresh. A fresh
+assessment starts a new decision bundle, so the generations the bundle would
+hold after selection are exactly the plan's pickup choices. Runtime questions
+later in the same
 claim count against the same cap
 ([issue #4955](https://github.com/kurone-kito/idd-skill/issues/4955)).
 
@@ -1040,13 +1043,13 @@ claim approval (preventive; no observed incident yet):
   the decision record: `question`, `selectedOption`, `feasibleAlternatives`
   (at least one, so at least two feasible options, all distinct), and
   `executionCriteria`, each checkable without a person's opinion.
-- `deliverables`: the concrete edit or deliverable surface, each a `file`
-  (a repository-relative path), a `document`, or an `issue-comment`, within the
+- `deliverables`: the concrete edit or deliverable surface, each a `file` (a
+  repository-relative path), a `document`, or an `issue-comment`, within the
   effort estimate's limit (3 paths for S, 8 for M; effort L stays refused
   under `autopilotSuitability.effortL: "refuse"`). When the issue lists
-  `## Candidate files`, every file deliverable must be one of them, so the
-  plan never widens the source into other code changes (preventive; no
-  observed incident yet).
+  `## Candidate files`, every file deliverable must be one of them, and a
+  section that lists no path blocks, so the plan never widens the source into
+  other code changes (preventive; no observed incident yet).
 - `evidence`: the repository references the choice rests on.
 - `evidenceGaps`: each open gap with an authorized measurement. A gap closes
   only when that measurement ran and its result and reference are recorded.
@@ -1079,8 +1082,9 @@ itself causes:
 - Each phrase is judged on its own, so a later credential or sign-off
   phrase still blocks. Under a relaxation, A4 keeps a decision phrase and
   A4.5 Check 6 stays blocked while the body names an approval, sign-off, or
-  authorization requirement in any sentence, in either word order and at any
-  distance, unless that sentence itself negates it. The needs-decision label
+  authorization requirement in any sentence (inline code included), in either
+  word order and at any distance, unless a phrase in it denies that very
+  requirement, such as "does not need any approval". The needs-decision label
   was the only catch-all before. This lexical net is not complete: the plan's
   `independentObstacles` is where a session declares such a requirement.
 - An assessment relaxes only the issue and body snapshot it was computed
