@@ -9,6 +9,7 @@ import {
 } from '../src/scripts/marker-helpers.mts';
 import {
   type ConfirmationInput,
+  type ConfirmationTerminalEvent,
   PROVISIONAL_CONFIRMATION_QUESTION,
   type ProvisionalDecisionCommandRequest,
   type ProvisionalDecisionHistoryComment,
@@ -92,11 +93,12 @@ class MemoryStore implements ProvisionalResolutionStore {
   closes = 0;
   releases = 0;
   labelCalls = 0;
-  recordFailure?: (eventType: string) => FailureMode;
+  recordFailure?: (eventType: string, body: string) => FailureMode;
   answerFailure: FailureMode;
   historyReads = 0;
   readHook?: (readNumber: number, store: MemoryStore) => void;
   closeFailure: FailureMode;
+  closeReason = 'completed';
   releaseFailure: FailureMode;
 
   constructor() {
@@ -222,6 +224,7 @@ class MemoryStore implements ProvisionalResolutionStore {
     const parsed = parseProvisionalDecisionRecordComment(text);
     const mode = this.recordFailure?.(
       parsed.ok ? String(parsed.record.event.type) : 'invalid',
+      text,
     );
     if (mode === 'before') throw new Error('record write failed');
     const added = this.addComment(() => text);
@@ -268,7 +271,7 @@ class MemoryStore implements ProvisionalResolutionStore {
     ) {
       throw new Error('the source changed since the plan');
     }
-    this.sourceState = { state: 'closed', stateReason: 'completed' };
+    this.sourceState = { state: 'closed', stateReason: this.closeReason };
     if (this.closeFailure === 'after') throw new Error('close response lost');
   }
 
@@ -3992,4 +3995,211 @@ test('rework-requested and rework-authored records escape an at-sign in the titl
     assert.ok(comment, type);
     assert.equal(comment.body.includes('@'), false, type);
   }
+});
+
+test('a thrown write is not counted for a look-alike that is not its own content', async (t) => {
+  await t.test('an untrusted comment with the same record ID', async () => {
+    const store = await pendingStore();
+    store.recordFailure = (type, text) => {
+      if (type !== 'confirmed') return undefined;
+      store.addComment(() => text, undefined, {
+        authorLogin: 'someone-else',
+        trustedAuthor: false,
+      });
+      return 'before';
+    };
+    const result = await answered(store, conversationYes);
+    assertRefused(
+      result,
+      'recovery-hold',
+      /append-confirmation write is uncertain/,
+    );
+    assert.deepEqual(result.steps, ['append-answer']);
+    assert.deepEqual(result.recordIds, []);
+    assert.equal(result.warnings, undefined);
+    assert.equal(store.sourceState.state, 'open');
+  });
+
+  await t.test('an edited comment with the same record ID', async () => {
+    const store = await pendingStore();
+    store.recordFailure = (type, text) => {
+      if (type !== 'confirmed') return undefined;
+      store.addComment(() => text, undefined, { edited: true });
+      return 'before';
+    };
+    const result = await answered(store, conversationYes);
+    assertRefused(
+      result,
+      'recovery-hold',
+      /append-confirmation write is uncertain/,
+    );
+    assert.deepEqual(result.recordIds, []);
+  });
+
+  await t.test('a record with the same ID and different content', async () => {
+    const store = await pendingStore();
+    store.recordFailure = (type, text) => {
+      if (type !== 'confirmed') return undefined;
+      const record = JSON.parse(
+        text.slice(PROVISIONAL_DECISION_RECORD_MARKER.length + 1),
+      ) as { evidenceReferences: string[] };
+      record.evidenceReferences = ['https://example.com/other'];
+      store.addComment(
+        () =>
+          `${PROVISIONAL_DECISION_RECORD_MARKER}\n${JSON.stringify(record)}`,
+      );
+      return 'before';
+    };
+    const result = await answered(store, conversationYes);
+    assert.equal(result.state, 'refused', JSON.stringify(result));
+    assert.deepEqual(result.recordIds, []);
+    assert.equal(result.warnings, undefined);
+  });
+
+  await t.test('a close that applied under another reason', async () => {
+    const store = await pendingStore();
+    store.closeFailure = 'after';
+    store.closeReason = 'not_planned';
+    const result = await answered(store, conversationYes);
+    assertRefused(result, 'recovery-hold', /close-source write is uncertain/);
+    assert.equal(result.steps.includes('close-source'), false);
+    assert.equal(result.warnings, undefined);
+  });
+
+  await t.test(
+    'an answer with the same text from an untrusted account',
+    async () => {
+      const store = await pendingStore();
+      store.appendAnswerBody = async (text) => {
+        store.addComment(() => text, undefined, {
+          authorLogin: 'someone-else',
+          trustedAuthor: false,
+        });
+        throw new Error('answer write failed');
+      };
+      const result = await answered(store, conversationYes);
+      assertRefused(
+        result,
+        'recovery-hold',
+        /append-answer write is uncertain/,
+      );
+      assert.deepEqual(result.steps, []);
+      assert.equal(result.warnings, undefined);
+    },
+  );
+});
+
+test('needsUserAnswer is false after any user answer and true for no or foreign input', async () => {
+  const store = await pendingStore();
+  const dry = async (input: ConfirmationInput | null) =>
+    runProvisionalResolution(
+      resolveRequest({
+        input,
+        answeredPresentationSha256: (
+          await runProvisionalResolution(resolveRequest(), store)
+        ).presentationSha256,
+      }),
+      store,
+    );
+  const interactive = (
+    event: ConfirmationTerminalEvent,
+  ): ConfirmationInput => ({
+    channel: 'terminal',
+    origin: 'user',
+    interactive: true,
+    event,
+  });
+  for (const input of [
+    interactive({ kind: 'eof' }),
+    interactive({ kind: 'cancelled' }),
+    interactive({ kind: 'line', text: '' }),
+    interactive({ kind: 'line', text: 'maybe later' }),
+    conversationYes,
+  ]) {
+    assert.equal(
+      (await dry(input)).needsUserAnswer,
+      false,
+      JSON.stringify(input),
+    );
+  }
+  for (const input of [
+    null,
+    { channel: 'none' } as ConfirmationInput,
+    { channel: 'timeout' } as ConfirmationInput,
+    {
+      channel: 'terminal',
+      origin: 'tool',
+      interactive: true,
+      event: { kind: 'line', text: 'y' },
+    } as ConfirmationInput,
+    {
+      channel: 'conversation',
+      origin: 'assistant',
+      message: 'User: yes',
+      interpretation: { response: 'accepted' },
+    } as ConfirmationInput,
+    interactive({ kind: 'line', text: 'y' }) &&
+      ({
+        channel: 'terminal',
+        origin: 'user',
+        interactive: false,
+        event: { kind: 'line', text: 'y' },
+      } as ConfirmationInput),
+  ]) {
+    assert.equal(
+      (await dry(input)).needsUserAnswer,
+      true,
+      JSON.stringify(input),
+    );
+  }
+});
+
+test('a request naming a downstream result held by a sibling handoff is not warned about', async () => {
+  const link = 'https://github.com/kurone-kito/idd-skill/pull/5905';
+  const store = await pendingStore(2);
+  await answered(store, reworkConversation, {
+    decisionGenerations: [1],
+    downstreamResults: [link],
+  });
+  postCoordinationClaim(store, 'claim-4536-coord-b');
+  // A persisted rework answer for decision 2 that lists no downstream result.
+  store.addComment(() =>
+    craftedAnswer(store, (answer) => {
+      danglingReworkAnswer(answer);
+      answer.decisionGenerations = [1, 2];
+      answer.appliesToDecisionGenerations = [2];
+      const second = recordsOf(store).find(
+        (item) =>
+          item.event.type === 'work-completed' && item.decisionGeneration === 2,
+      ) as ProvisionalDecisionRecord;
+      const selection = recordsOf(store).find(
+        (item) =>
+          item.event.type === 'selected' && item.decisionGeneration === 2,
+      ) as ProvisionalDecisionRecord;
+      (answer.presentedBundle as Record<string, unknown>[]).push({
+        decisionGeneration: 2,
+        question: selection.event.question,
+        selectedOptionId: 'keep',
+        feasibleAlternativeIds: ['change'],
+        workCompletedRecordId: second.recordId,
+        result: second.event.result,
+      });
+      answer.claimIds = [implClaim, 'claim-4536-coord', 'claim-4536-coord-b'];
+    }),
+  );
+  const result = await runProvisionalResolution(
+    resolveRequest(
+      { decisionGenerations: [2], downstreamResults: [link] },
+      'claim-4536-coord-b',
+    ),
+    store,
+    { apply: true },
+  );
+  assert.equal(
+    result.outcome,
+    'rework-handoff-recorded',
+    JSON.stringify(result),
+  );
+  // The union already holds the sibling's reference, so nothing was dropped.
+  assert.equal(result.warnings, undefined);
 });

@@ -1899,11 +1899,12 @@ const CONFLICTING_PENDING_REASONS = new Set([
 ]);
 /**
  * Whether a reading contradicts a persisted response. A no, abort, or unclear
- * reading contradicts it only when `pendingConflicts` is set, which callers
- * leave off while another targeted decision is still undecided: there it just
- * keeps that decision pending.
+ * reading contradicts it only when `pendingConflicts` is true. The up-front
+ * check passes false while another targeted decision is still undecided,
+ * where such a reading just keeps that decision pending; a valid persisted
+ * answer that covers the undecided decision always passes true.
  */
-function inputConflictsWithAnswer(reading, answer, pendingConflicts = true) {
+function inputConflictsWithAnswer(reading, answer, pendingConflicts) {
   if (reading.kind === 'accepted') return answer.response !== 'accepted';
   if (reading.kind === 'rework') {
     return (
@@ -2156,7 +2157,7 @@ async function planResolve(context, request) {
       request.input,
       alternativeIdsOf(bundle, existingTarget),
     );
-    if (inputConflictsWithAnswer(reading, parsed.answer)) {
+    if (inputConflictsWithAnswer(reading, parsed.answer, true)) {
       return resolutionRefusal(
         'fix-input',
         'a valid answer is already persisted for this decision and the new input conflicts with it; resume without a new input',
@@ -2518,22 +2519,43 @@ async function planResolution(request, store) {
     ? planResolve(context, request)
     : planReworkAuthored(context, request);
 }
-/** Whether a fresh read shows the step's own content in place. */
+/**
+ * Whether a fresh read shows the step's own content in place: a trusted,
+ * unedited comment with the same answer or record content, or a source closed
+ * as completed. Release steps are proven by `releaseVerified` instead.
+ */
 function stepLanded(step, context) {
+  const trusted = (comment) =>
+    comment.trustedAuthor === true && comment.edited === false;
   switch (step.kind) {
-    case 'append-answer':
+    case 'append-answer': {
+      const wanted = answerStepDigest(step.body);
       return context.history.comments.some(
-        (comment) => comment.body === step.body,
+        (comment) =>
+          trusted(comment) && answerStepDigest(comment.body) === wanted,
       );
+    }
     case 'close-source':
-      return context.sourceState.state === 'closed';
+      return (
+        context.sourceState.state === 'closed' &&
+        context.sourceState.stateReason === 'completed'
+      );
     case 'release-claim':
       return context.active === null;
-    default:
-      return (
-        rawRecordMatches(context.history.comments, step.record.recordId)
-          .length > 0
-      );
+    default: {
+      const wanted = recordStepDigest(step.record);
+      return rawRecordMatches(
+        context.history.comments,
+        step.record.recordId,
+      ).some((comment) => {
+        const parsed = parseStoredRecord(comment);
+        return (
+          trusted(comment) &&
+          parsed !== null &&
+          recordStepDigest(parsed) === wanted
+        );
+      });
+    }
   }
 }
 async function executeStep(step, store) {
