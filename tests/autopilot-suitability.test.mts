@@ -1828,6 +1828,83 @@ test("provisional assessment: the selected option's verification is read like a 
   assert.equal(verifiedBy('the unit tests pass').eligible, true);
 });
 
+test('provisional assessment: a passive prerequisite is refused in a criterion, a verification and a purpose (AC1, AC4)', () => {
+  const cases: [string, string][] = [
+    [
+      'Credentials must be supplied by an operator before work starts.',
+      'criteria-needs-credential',
+    ],
+    [
+      'The API key should be provided by the owner first.',
+      'criteria-needs-credential',
+    ],
+    [
+      'The credentials for the vault must first be supplied.',
+      'criteria-needs-credential',
+    ],
+    [
+      'Production access has to be granted before the migration.',
+      'criteria-needs-credential',
+    ],
+    ['Approval must be granted before work starts.', 'criteria-needs-approval'],
+    ['Sign-off has to be obtained from legal.', 'criteria-needs-approval'],
+    [
+      'Permission is to be given by the owner first.',
+      'criteria-needs-approval',
+    ],
+  ];
+  for (const [text, code] of cases) {
+    const inCriterion = assessProvisionalChoicePlan(
+      assessInput({
+        plan: validPlan({
+          choices: [planChoice({ executionCriteria: [text] })],
+        }),
+      }),
+    );
+    assert.deepEqual(blockerCodes(inCriterion), [code], `criterion: ${text}`);
+    const choice = planChoice();
+    choice.selectedOption = {
+      ...(choice.selectedOption as Record<string, string>),
+      verification: text,
+    };
+    const inVerification = assessProvisionalChoicePlan(
+      assessInput({ plan: validPlan({ choices: [choice] }) }),
+    );
+    assert.deepEqual(
+      blockerCodes(inVerification),
+      [code],
+      `verification: ${text}`,
+    );
+    const inPurpose = assessProvisionalChoicePlan(
+      assessInput({
+        plan: validPlan({
+          deliverables: [{ kind: 'file', target: 'a.mts', purpose: text }],
+        }),
+      }),
+    );
+    assert.deepEqual(blockerCodes(inPurpose), [code], `purpose: ${text}`);
+  }
+});
+
+test('provisional assessment: a passive form about software, a denial or a plain statement is not a prerequisite (AC1, AC4)', () => {
+  for (const text of [
+    'The API key parser must be given a string.',
+    'The authorization parser must be given a role table.',
+    'Approval must not be granted automatically.',
+    'Passwords must be hashed with bcrypt.',
+    'The credential is rotated by the test.',
+  ]) {
+    const assessment = assessProvisionalChoicePlan(
+      assessInput({
+        plan: validPlan({
+          choices: [planChoice({ executionCriteria: [text] })],
+        }),
+      }),
+    );
+    assert.equal(assessment.eligible, true, text);
+  }
+});
+
 test('provisional assessment: Markdown formatting does not hide a prerequisite in a plan (AC1, AC4)', () => {
   for (const [criterion, code] of [
     [

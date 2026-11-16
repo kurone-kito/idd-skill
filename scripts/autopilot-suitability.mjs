@@ -384,6 +384,15 @@ function withoutFormatting(text) {
 // needed, so a long qualification cannot separate them. It stays inside one
 // text: a criterion is a single sentence by construction.
 const GAP_WORDS = String.raw`(?:[\w'-]+[\s,]+){0,15}?`;
+// A noun that makes an approval or credential word describe software, not a
+// person's decision: "the authorization parser", "an API key helper".
+const SOFTWARE_NOUN_SOURCE = String.raw`(?:parser|state\s+machine|service|module|handler|logic|engine|api|library|model|table|column|field|endpoint|middleware|function|class|helper|script|tests?)(?![\w-])`;
+// The passive form of a prerequisite: "credentials must be supplied",
+// "sign-off has to be obtained". The term comes first, so the needing verbs
+// above do not see it. Up to three plain words may sit between the term and
+// the modal, and a software noun among them ("the API key parser must be
+// given a string") ends the match.
+const PASSIVE_PREREQUISITE = String.raw`(?:[\s,]+(?!${SOFTWARE_NOUN_SOURCE})[\w'-]+){0,3}?[\s,]+(?:must|should|shall|need(?:s)?\s+to|ha(?:s|ve)\s+to|is\s+to|are\s+to)\s+(?:(?:first|also)\s+)?be\s+(?:supplied|provided|obtained|issued|granted|given|acquired|secured|received|requested|sought|sourced)(?![\w-])`;
 // "requires approval", "needs sign-off", "obtain consent" and the like: a verb
 // of needing, getting or waiting, then the approval word within a few words.
 // "must reject" and "returns false" are not such verbs, so a criterion about
@@ -395,6 +404,7 @@ const NEEDS_APPROVAL_PATTERN = new RegExp(
     String.raw`(?<![\w-])(?:cannot|can't|do\s+not|don't|must\s+not|never|not)\s+(?:\w+\s+){0,4}?without\s+${GAP_WORDS}${APPROVAL_WORD_SOURCE}`,
     String.raw`(?<![\w-])(?:require[sd]?|requiring|needs?|needed|awaiting|awaits?|pending|obtain|obtaining|get|seek|ask|wait(?:ing)?\s+for|depend(?:s|ed|ent)?\s+on|rel(?:y|ies|ied)\s+on|hinges?\s+on|contingent\s+on|conditional\s+on|subject\s+to|gated\s+(?:on|by)|blocked\s+(?:on|by))[\s,]+${GAP_WORDS}${APPROVAL_WORD_SOURCE}`,
     String.raw`(?<![\w-])${APPROVAL_WORD_SOURCE}\s+(?:is|are|will\s+be)\s+(?:required|needed|necessary|pending|essential|mandatory)`,
+    String.raw`(?<![\w-])${APPROVAL_WORD_SOURCE}${PASSIVE_PREREQUISITE}`,
   ].join('|'),
   'i',
 );
@@ -429,6 +439,7 @@ const NEEDS_CREDENTIAL_PATTERN = new RegExp(
     String.raw`(?<![\w-])(?:cannot|can't|do\s+not|don't|must\s+not|never|not)\s+(?:\w+\s+){0,4}?without\s+${GAP_WORDS}${CREDENTIAL_TERM_SOURCE}`,
     String.raw`(?<![\w-])(?:supply|supplies|supplied|provide[sd]?|providing|obtain|obtaining|get|receive[sd]?|request(?:s|ed|ing)?|ask(?:s|ed|ing)?(?:\s+for)?|secure[sd]?|require[sd]?|requiring|needs?|needed|awaiting|awaits?|wait(?:ing)?\s+for|depend(?:s|ed|ent)?\s+on|rel(?:y|ies|ied)\s+on|hinges?\s+on|contingent\s+on|conditional\s+on|subject\s+to|gated\s+(?:on|by)|blocked\s+(?:on|by))[\s,]+${GAP_WORDS}${CREDENTIAL_TERM_SOURCE}`,
     String.raw`(?<![\w-])${CREDENTIAL_TERM_SOURCE}\s+(?:is|are|will\s+be)\s+(?:required|needed|necessary|pending|essential|mandatory)`,
+    String.raw`(?<![\w-])${CREDENTIAL_TERM_SOURCE}${PASSIVE_PREREQUISITE}`,
   ].join('|'),
   'i',
 );
@@ -442,7 +453,7 @@ function needsCredential(text) {
 // authorization parser must reject an unknown role" asks the code to behave,
 // not anyone to approve.
 const APPROVAL_SOFTWARE_PATTERN = new RegExp(
-  String.raw`(?<![\w-])${APPROVAL_WORD_SOURCE}\s+(?:parser|state\s+machine|service|module|handler|logic|engine|api|library|model|table|column|field|endpoint|middleware|function|class|helper|script|tests?)(?![\w-])`,
+  String.raw`(?<![\w-])${APPROVAL_WORD_SOURCE}\s+${SOFTWARE_NOUN_SOURCE}`,
   'gi',
 );
 /**
