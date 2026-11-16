@@ -1014,10 +1014,10 @@ and rework still work after `dangerouslyAutoDecide` is turned off.
    question, the selected option, the verified result, and each alternative
    with its consequences and the rework it implies, plus a SHA-256 digest
    of that presentation, the next step, and `needsUserAnswer`. When it is
-   true, show the presentation and ask
+   true, the user has not answered yet: show the presentation and ask
    `Were the implemented choices above acceptable? [y/N]`. When it is
-   false, a persisted answer or a finishing step resumes, so ask nothing:
-   a prompt there would only invite a refused N.
+   false, the user already answered, a persisted answer resumes, or a
+   finishing step runs, so ask nothing.
 3. **Read the actual answer.** The input adapter reads one reported event
    and never creates input; a pending question produces no answer by itself.
    An answer must also carry the digest it answered, so a changed source,
@@ -1051,12 +1051,14 @@ so none notifies anybody. The first valid answer in history wins, and a
 valid persisted answer or confirmation resumes without another prompt; only
 an answer that carries the canonical question and was recorded under a
 coordination claim, never one the implementation session wrote on its own,
-is reused. A later input that agrees with it, or none, resumes it. A
-conflicting input is refused, because a confirmation cannot be undone: an N
-or a conversational no, Enter, EOF, cancellation, an unclear reply, or
-another option. The same refusal applies after the confirmation or rework
-request record is stored, and before any write when any targeted decision
-already has one. A generic request to resolve is not a conflict.
+is reused (preventive; no observed incident yet). A later input that agrees
+with it, or none, resumes it. A conflicting input is refused, because a
+confirmation cannot be undone: an N or a conversational no, Enter, EOF,
+cancellation, an unclear reply, or another option. The same refusal applies
+after the confirmation or rework request record is stored, and before any
+write when any targeted decision already has one. While another targeted
+decision is still undecided, an N or an abort only keeps that decision
+pending. A generic request to resolve is not a conflict.
 
 Agents follow an input-boundary rule: never write the user's reply, and
 never feed `y` to a prompt the agent is waiting on (preventive; no observed
@@ -1068,11 +1070,14 @@ guarantee.
 Every next step is derived from fresh reads, so a crash or uncertain write
 resumes exactly the remaining step and never executes the implementation
 again (preventive; no observed incident yet). A write that throws is checked
-by one fresh read: one that landed is counted and reported in `warnings`,
-and one that is still absent is a recovery hold, not a retry. The close is
-guarded by the title and body digest the plan evaluated, and a record step
-is compared by its whole content before it is written. Every refusal and
-recovery hold keeps the coordination claim until its cause is fixed. If the
+by one fresh read: one whose content is in place is counted and reported in
+`warnings`, and one that is still absent is a recovery hold, not a retry.
+`warnings` also names downstream results that could not be recorded. The
+close step passes the title and the SHA-256 hex digest of the body's UTF-8
+bytes that the plan read, and a store must close only while they still
+match. A record step is compared by its whole content before it is written.
+Every refusal and recovery hold keeps the coordination claim until its cause
+is fixed. If the
 confirmation is stored but the close failed, only the close resumes. If the
 close succeeded but the claim release failed, only the release resumes and
 the issue is not closed again. A pending outcome records nothing new and
