@@ -30,17 +30,17 @@ pure no-op. **Skip the rebase entirely and proceed to D2** — D1's
 pre-publication synchronization goal is already met. In a
 sibling-worktree setup a no-op `git rebase origin/{development-branch}`
 can still detach HEAD at the upstream tip without replaying the local
-commit, and retrying that no-op re-detaches every time, so skip it.
-Post-rebase verification cannot converge for that no-op.
+commit, and retrying re-detaches every time, so skip it. Post-rebase
+verification cannot converge for that no-op.
 
 Otherwise the branch **is** behind `origin/{development-branch}`: rebase
 it onto `{development-branch}` (`git rebase origin/{development-branch}`),
 then apply Post-rebase verification below.
 
-After the first D-phase push, do not reuse D1 as the normal
-synchronization path. Later branch updates should return through the
-E-phase review loop and, by default, merge `{development-branch}` into
-the published PR branch so the synchronization diff is reviewable.
+After the first D-phase push, D1 is no longer the sync path: later updates
+return through the E-phase review loop and, by default, merge
+`{development-branch}` into the published PR branch so the synchronization
+diff is reviewable.
 
 This file records the publication boundary only: post-push sync runs
 through `idd-review-triage.instructions.md`'s E-phase branch-sync check
@@ -503,12 +503,13 @@ configured `{development-branch}`, never populates
 include the closing keyword line in the PR body for reviewer clarity (a
 bound provisional source gets `Refs #N`), but **skip this entire sub-step**
 (steps 1-7 verify a mechanism that cannot fire here) and close the claimed
-issue explicitly after F3 merges (`idd-merge.instructions.md` F4 notes this).
+issue explicitly after F3 merges (F4 notes this; never a bound provisional
+source).
 
 After PR creation and before D4, confirm GitHub recognized the
-closing keyword for the claimed issue. Resume routing should re-enter
-this sub-step when a session restarts after PR creation but before CI
-completion.
+closing keyword for the claimed issue (not for a bound provisional source,
+below). Resume routing should re-enter this sub-step when a session
+restarts after PR creation but before CI completion.
 
 **Bound provisional source** (`provisionalRead.status` is `bound`, or Resume's
 `evidence.provisional_work` is unconfirmed): it must stay open, so write
