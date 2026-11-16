@@ -356,6 +356,86 @@ function validateOption(value, path, alternative, issues) {
   const option = exactObject(value, required, [], path, issues);
   if (option) checkStringFields(option, required, path, issues);
 }
+const HANDOFF_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/u;
+const HANDOFF_ANCHOR_PATTERN =
+  /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+#[1-9][0-9]*$/u;
+function validateHandoff(value, path, issues) {
+  const handoff = exactObject(
+    value,
+    [
+      'handoffId',
+      'authoringSetId',
+      'authoringSessionId',
+      'anchor',
+      'priorResults',
+      'downstreamResults',
+    ],
+    [],
+    path,
+    issues,
+  );
+  if (!handoff) return;
+  for (const key of ['handoffId', 'authoringSetId', 'authoringSessionId']) {
+    const id = handoff[key];
+    if (typeof id !== 'string' || !HANDOFF_ID_PATTERN.test(id)) {
+      issues.push({
+        code: 'handoff-id-invalid',
+        path: `${path}.${key}`,
+        message: 'Expected a stable identity token.',
+      });
+    }
+  }
+  if (
+    typeof handoff.anchor !== 'string' ||
+    !HANDOFF_ANCHOR_PATTERN.test(handoff.anchor)
+  ) {
+    issues.push({
+      code: 'handoff-anchor-invalid',
+      path: `${path}.anchor`,
+      message: 'Expected an owner/repo#number anchor.',
+    });
+  }
+  if (
+    !Array.isArray(handoff.priorResults) ||
+    handoff.priorResults.length === 0
+  ) {
+    issues.push({
+      code: 'handoff-prior-results-required',
+      path: `${path}.priorResults`,
+      message: 'At least one affected prior result is required.',
+    });
+  } else {
+    handoff.priorResults.forEach((entry, index) => {
+      const entryPath = `${path}.priorResults[${index}]`;
+      const result = exactObject(
+        entry,
+        ['decisionGeneration', 'workCompletedRecordId', 'reference'],
+        [],
+        entryPath,
+        issues,
+      );
+      if (!result) return;
+      positiveSafeInteger(
+        result.decisionGeneration,
+        `${entryPath}.decisionGeneration`,
+        issues,
+      );
+      checkStringFields(result, ['workCompletedRecordId'], entryPath, issues);
+      httpUrl(result.reference, `${entryPath}.reference`, issues);
+    });
+  }
+  if (!Array.isArray(handoff.downstreamResults)) {
+    issues.push({
+      code: 'handoff-downstream-results-invalid',
+      path: `${path}.downstreamResults`,
+      message: 'Expected an array of downstream result references.',
+    });
+  } else {
+    handoff.downstreamResults.forEach((reference, index) => {
+      httpUrl(reference, `${path}.downstreamResults[${index}]`, issues);
+    });
+  }
+}
 function validateEvent(value, issues) {
   if (!isObject(value) || typeof value.type !== 'string') {
     issues.push({
@@ -576,7 +656,7 @@ function validateEvent(value, issues) {
       const request = exactObject(
         shape.reworkRequest,
         ['commentUrl', 'requestedAt', 'requestedOptionId', 'rationale'],
-        [],
+        ['handoff'],
         '$.event.reworkRequest',
         issues,
       );
@@ -593,6 +673,12 @@ function validateEvent(value, issues) {
         '$.event.reworkRequest',
         issues,
       );
+      if (request.handoff !== undefined)
+        validateHandoff(
+          request.handoff,
+          '$.event.reworkRequest.handoff',
+          issues,
+        );
       return;
     }
     case 'rework-authored': {
@@ -869,11 +955,40 @@ function validateAnswerShape(value) {
       'response',
       'answerText',
     ],
-    ['requestedOptionId', 'rationale'],
+    [
+      'requestedOptionId',
+      'rationale',
+      'presentedQuestion',
+      'appliesToDecisionGenerations',
+    ],
     '$',
     issues,
   );
   if (!answer) return issues;
+  if (answer.presentedQuestion !== undefined)
+    nonEmptyString(answer.presentedQuestion, '$.presentedQuestion', issues);
+  if (answer.appliesToDecisionGenerations !== undefined) {
+    const applies = answer.appliesToDecisionGenerations;
+    const covered = Array.isArray(answer.decisionGenerations)
+      ? answer.decisionGenerations
+      : [];
+    if (
+      !Array.isArray(applies) ||
+      applies.length === 0 ||
+      new Set(applies).size !== applies.length ||
+      applies.some(
+        (generation) =>
+          typeof generation !== 'number' || !covered.includes(generation),
+      )
+    ) {
+      issues.push({
+        code: 'applies-to-invalid',
+        path: '$.appliesToDecisionGenerations',
+        message:
+          'Expected unique decision generations from the presented bundle.',
+      });
+    }
+  }
   if (answer.schemaVersion !== 1) {
     issues.push({
       code: 'schema-version-unsupported',
@@ -1034,6 +1149,10 @@ function parseAnswerComment(body) {
   const issues = validateAnswerShape(value);
   if (issues.length > 0) return { ok: false, issues };
   return { ok: true, answer: value };
+}
+/** Parse one canonical agent-answer comment. */
+export function parseProvisionalDecisionAnswerComment(body) {
+  return parseAnswerComment(body);
 }
 function stableJson(value) {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
@@ -1418,6 +1537,12 @@ function validateAnswerBinding(
     sameValue(answer.presentedBundle, expectedPresentation)
   );
 }
+function answerAppliesTo(answer, decisionGeneration) {
+  return (
+    answer.appliesToDecisionGenerations === undefined ||
+    answer.appliesToDecisionGenerations.includes(decisionGeneration)
+  );
+}
 function answerFollowsEveryCompletion(
   answerComment,
   recordComment,
@@ -1455,6 +1580,71 @@ function decisionStatus(decision) {
   if (decision.workCompleted) return 'confirmation-pending';
   if (decision.workStarted) return 'in-progress';
   return 'selected';
+}
+function reworkHandoffIssue(handoff, record, currentBundle, allStates) {
+  if (handoff === undefined) return undefined;
+  const sourceRef = `${record.source.repository}#${record.source.issueNumber}`;
+  if (handoff.anchor.toLowerCase() !== sourceRef.toLowerCase()) {
+    return {
+      code: 'rework-handoff-anchor-invalid',
+      message: 'The handoff anchor must be the source issue being reworked.',
+    };
+  }
+  const expectedResults = [...currentBundle]
+    .sort(
+      (left, right) =>
+        left.selection.record.decisionGeneration -
+        right.selection.record.decisionGeneration,
+    )
+    .map((state) => ({
+      decisionGeneration: state.selection.record.decisionGeneration,
+      workCompletedRecordId: state.workCompleted?.record.recordId,
+      reference: state.workCompleted
+        ? resultFor(state.workCompleted.record)?.reference
+        : undefined,
+    }));
+  if (!sameValue(handoff.priorResults, expectedResults)) {
+    return {
+      code: 'rework-handoff-results-mismatch',
+      message:
+        'The handoff must name the completed results of the whole current bundle.',
+    };
+  }
+  for (const state of allStates) {
+    const otherRequest = state.reworkRequested?.record.event.reworkRequest;
+    const other = otherRequest?.handoff;
+    const sameBundle =
+      state.selection.record.bundleGeneration === record.bundleGeneration;
+    const authoredSet = state.reworkAuthored?.record.event.reworkRoadmap;
+    if (!sameBundle) {
+      if (
+        authoredSet?.authoringSetId === handoff.authoringSetId ||
+        (other &&
+          (other.authoringSetId === handoff.authoringSetId ||
+            other.authoringSessionId === handoff.authoringSessionId ||
+            other.handoffId === handoff.handoffId))
+      ) {
+        return {
+          code: 'rework-handoff-set-reused',
+          message:
+            'A rework handoff cannot reuse the identities of another bundle generation.',
+        };
+      }
+    } else if (
+      other &&
+      (other.handoffId !== handoff.handoffId ||
+        other.authoringSetId !== handoff.authoringSetId ||
+        other.authoringSessionId !== handoff.authoringSessionId ||
+        other.anchor !== handoff.anchor)
+    ) {
+      return {
+        code: 'rework-handoff-conflict',
+        message:
+          'Every rework request of one bundle must carry the same handoff identity.',
+      };
+    }
+  }
+  return undefined;
 }
 /**
  * Replay a complete, oldest-first issue-comment history without network or
@@ -1952,6 +2142,16 @@ export function replayProvisionalDecisionHistory(input) {
         );
         continue;
       }
+      if (!answerAppliesTo(parsedAnswer.answer, record.decisionGeneration)) {
+        issues.push(
+          createReplayIssue(
+            'confirmation-scope-mismatch',
+            'The referenced answer does not apply to this decision generation.',
+            comment.id,
+          ),
+        );
+        continue;
+      }
       if (parsedAnswer.answer.response !== 'accepted') {
         issues.push(
           createReplayIssue(
@@ -2062,6 +2262,7 @@ export function replayProvisionalDecisionHistory(input) {
         parsedAnswer.answer.response !== 'rework' ||
         parsedAnswer.answer.requestedOptionId !== request.requestedOptionId ||
         parsedAnswer.answer.rationale !== request.rationale ||
+        !answerAppliesTo(parsedAnswer.answer, record.decisionGeneration) ||
         answerRequestOrder !== 0 ||
         answerRecordOrder === undefined ||
         answerRecordOrder > 0 ||
@@ -2089,6 +2290,22 @@ export function replayProvisionalDecisionHistory(input) {
         );
         continue;
       }
+      const handoffIssue = reworkHandoffIssue(
+        request.handoff,
+        record,
+        currentBundle,
+        [...states.values()],
+      );
+      if (handoffIssue) {
+        issues.push(
+          createReplayIssue(
+            handoffIssue.code,
+            handoffIssue.message,
+            comment.id,
+          ),
+        );
+        continue;
+      }
       existing.reworkRequested = entry;
       continue;
     }
@@ -2107,7 +2324,11 @@ export function replayProvisionalDecisionHistory(input) {
       const source = record.source;
       const reworkSource = reworkSources.get(record.recordId);
       const expectedUrl = sourceIssueUrl(source);
+      const requestedHandoff =
+        existing.reworkRequested.record.event.reworkRequest.handoff;
       if (
+        (requestedHandoff !== undefined &&
+          roadmap.authoringSetId !== requestedHandoff.authoringSetId) ||
         roadmap.roadmapIssueNumber !== source.issueNumber ||
         !sameGitHubIssueUrl(roadmap.url, expectedUrl) ||
         !reworkSource ||
