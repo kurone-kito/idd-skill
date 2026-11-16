@@ -1023,10 +1023,12 @@ and rework still work after `dangerouslyAutoDecide` is turned off.
 1. **Coordination claim.** Take the review under a fresh claim on the
    source, posted through the normal claim protocol with a branch of the
    form `issue/<number>-<slug>`. It is separate from implementation
-   execution: it needs no worktree, and the resolution refuses when another
-   claim is active or when the active claim is one that the bundle's records
-   name as having run the implementation. An uncertain release of an earlier
-   coordination claim is reconciled first, because that claim stays active.
+   execution: it needs no worktree. The request names the claim's ID, agent,
+   and branch, and all three must match the active claim marker. The
+   resolution refuses when another claim is active or when the active claim
+   is one that the bundle's records name as having run the implementation. An
+   uncertain release of an earlier coordination claim is reconciled first,
+   because that claim stays active.
 2. **Present.** A dry run reports the presentation: for every decision its
    question, the selected option, the verified result, and each alternative
    with its consequences and the rework it implies, plus a SHA-256 digest
@@ -1037,12 +1039,14 @@ and rework still work after `dangerouslyAutoDecide` is turned off.
    An answer must also carry the digest it answered, so a changed source,
    bundle, or result makes it stale.
 4. **Persist, close, release.** For an affirmative answer the helper
-   appends the answer comment, reads it back, appends one `confirmed` record
-   for each decision the answer applies to, replays the history to show
-   them, closes the source as completed once every decision of the bundle is
-   confirmed, reads the closed state back, and releases the coordination
-   claim. Each write is preceded by a second fresh plan that must name the
-   same step, and followed by a fresh read that must show it.
+   appends the answer comment (a one-line note, then its JSON), reads it
+   back, appends one `confirmed` record for each decision the answer applies
+   to, replays the history to show them, closes the source as completed once
+   every decision of the bundle is confirmed, reads the closed state back,
+   and releases the coordination claim. A source that is closed for any other
+   reason is a recovery hold, not a confirmed close. Each write is preceded
+   by a second fresh plan that must name the same step, and followed by a
+   fresh read that must show it.
 
 | Reported input                                                      | Verdict                                   |
 | ------------------------------------------------------------------- | ----------------------------------------- |
@@ -1057,9 +1061,11 @@ and rework still work after `dangerouslyAutoDecide` is turned off.
 An answer comment keeps the canonical shape described above and adds the
 question that was asked and the decisions it applies to, so one answer can
 confirm some decisions of a bundle while another receives a different
-preference. The first valid answer in history wins: a later input does not
-replace it, and a valid persisted answer or confirmation resumes without
-another prompt.
+preference. The first valid answer in history wins, and a valid persisted
+answer or confirmation resumes without another prompt. A later input that
+agrees with it, or none, resumes it. An explicit conflicting input (an N,
+Enter, EOF, cancellation, or another option) is refused, because a
+confirmation cannot be undone.
 
 Agents follow an input-boundary rule: never write the user's reply, and
 never feed `y` to a prompt the agent is waiting on (preventive; no observed
@@ -1071,11 +1077,13 @@ guarantee.
 Every next step is derived from fresh reads, so a crash or uncertain write
 resumes exactly the remaining step and never executes the implementation
 again. A write that throws is checked by one fresh read, and a write that is
-still absent is a recovery hold, not a retry. If the confirmation is stored
-but the close failed, only the close resumes. If the close succeeded but the
-claim release failed, only the release resumes and the issue is not closed
-again. A pending outcome persists nothing except the claim release; an
-uncertain release is reported as `reconciled` and the next run repeats it.
+still absent is a recovery hold, not a retry. Every refusal and recovery
+hold keeps the coordination claim until its cause is fixed. If the
+confirmation is stored but the close failed, only the close resumes. If the
+close succeeded but the claim release failed, only the release resumes and
+the issue is not closed again. A pending outcome persists nothing except the
+claim release; an uncertain release is reported as `reconciled`, and the
+next run repeats it while the claim is still active.
 
 An alternate preference persists the answer and one `rework-requested`
 record for the one decision it names. The record carries a `handoff` with
@@ -1090,7 +1098,9 @@ the authoring pass acquires ownership, and the same request cannot produce
 another handoff or erase an earlier choice.
 
 The `rework-authored` transition is a separate guarded request. It needs
-the coordination claim to be released, an authoring owner that is trusted,
+the coordination claim to be released and to be the latest claim on the
+source, a source that the authoring pass already rewrote, an authoring
+owner that is trusted,
 fresh, and matches the handoff's set, session, and anchor, an audited
 roadmap on the same source, and real child issues wired under it. It only
 appends the record. It never releases the authoring hold, and unknown
