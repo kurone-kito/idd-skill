@@ -19,6 +19,7 @@ import type {
   ClaimedPushDeps,
   ClaimedPushInput,
   ClaimedPushReport,
+  ClaimedPushScopeAssessment,
   ClaimedPushStepId,
   CommandRequest,
   CommandResult,
@@ -2537,6 +2538,215 @@ test('a split child the audit exempts over its limit is not assessed, and a body
   assert.equal(bodyScope?.assessment?.disposition, 'advisory-drift');
   assert.equal(bodyScope?.assessment?.actualCanonicalPathCount, 2);
   assert.equal(bodyOnly.h.count(K.audit), 2);
+});
+
+// ---- Advisory-only estimate drift evidence (issue 5221) ---------------------
+//
+// These fixtures pin what the D2 scope step does with a count-only difference,
+// next to the F2/F3 fixtures of the same title prefix in
+// tests/pre-merge-readiness.test.mts. They add no behavior: D2 already treats a
+// count over a coherent S or M estimate as advisory evidence, and the trust
+// table in docs/idd-helper-scripts.md names these tests by title.
+
+/** An S or M body that lists `listedCount` of the `manyPaths` paths. */
+function estimateBody(effort: 'S' | 'M', listedCount: number): string {
+  return issueBodyWithEffort(effort, manyPaths(listedCount));
+}
+
+/** The world of one count-only case: the body's estimate and the diff paths. */
+function estimateWorld(
+  effort: 'S' | 'M',
+  listedCount: number,
+  changed: readonly string[],
+): Record<string, Responses> {
+  return {
+    [K.issueView]: result(0, issueJson(estimateBody(effort, listedCount))),
+    [K.diff]: result(0, nulList(changed)),
+    [K.audit]: realAudit,
+  };
+}
+
+test('advisory evidence (#5221): the listed S and M count differences are advisory drift at D2, and only S 3 against 5 takes the S-to-M copy', () => {
+  for (const { effort, listed, actual, corrected } of [
+    { effort: 'S', listed: 3, actual: 5, corrected: true },
+    { effort: 'S', listed: 3, actual: 9, corrected: false },
+    { effort: 'S', listed: 3, actual: 12, corrected: false },
+    { effort: 'M', listed: 8, actual: 9, corrected: false },
+    { effort: 'M', listed: 8, actual: 12, corrected: false },
+  ] as const) {
+    const name = `${effort} ${listed} against ${actual}`;
+    const r = cliRun({
+      world: estimateWorld(effort, listed, manyPaths(actual)),
+    });
+    const scope = r.report.steps[2];
+    assert.equal(r.code, 0, name);
+    assert.equal(scope?.status, 'passed', name);
+    assert.equal(scope?.assessment?.disposition, 'advisory-drift', name);
+    assert.equal(scope?.assessment?.estimatedEffort, effort, name);
+    assert.equal(scope?.assessment?.correctionApplied, corrected, name);
+    assert.equal(scope?.assessment?.actualCanonicalPathCount, actual, name);
+    assert.equal(
+      r.h.calls.some(
+        (call) => call.kind === 'gh' && call.args.includes('edit'),
+      ),
+      false,
+      `${name}: the issue body is never written`,
+    );
+  }
+});
+
+test('advisory evidence (#5221): an added deliverable, a permissions path, and a safety path at the same count get the count-only disposition and a different checksum', () => {
+  const listed = manyPaths(3);
+  const assessments = new Map<string, ClaimedPushScopeAssessment | undefined>();
+  for (const [name, changed] of [
+    ['count only', manyPaths(5)],
+    [
+      'a genuine added deliverable',
+      [...listed, 'src/scripts/new-deliverable.mts', 'docs/new.md'],
+    ],
+    [
+      'a permissions change',
+      [...listed, '.github/CODEOWNERS', '.github/workflows/ci.yml'],
+    ],
+    [
+      'a safety change',
+      [...listed, '.github/idd/config.json', 'src/scripts/claim-lock.mts'],
+    ],
+  ] as const) {
+    const r = cliRun({ world: estimateWorld('S', 3, changed) });
+    assert.equal(r.code, 0, name);
+    assessments.set(name, r.report.steps[2]?.assessment);
+  }
+  const baseline = assessments.get('count only');
+  assert.equal(baseline?.disposition, 'advisory-drift');
+  const checksums = new Set<string | undefined>();
+  for (const [name, assessment] of assessments) {
+    assert.equal(assessment?.disposition, baseline?.disposition, name);
+    assert.equal(
+      assessment?.correctionApplied,
+      baseline?.correctionApplied,
+      name,
+    );
+    assert.equal(
+      assessment?.actualCanonicalPathCount,
+      baseline?.actualCanonicalPathCount,
+      name,
+    );
+    checksums.add(assessment?.assessmentSha256);
+  }
+  assert.equal(
+    checksums.size,
+    assessments.size,
+    'the checksum differs with the path names, yet the disposition does not: it binds bytes, not intent',
+  );
+});
+
+test('advisory evidence (#5221): incomplete evidence refuses at D2, never advisory', () => {
+  const unreadable = run({
+    world: {
+      [K.issueView]: result(1, '', 'gh: Could not resolve to an Issue'),
+      [K.diff]: result(0, nulList(manyPaths(5))),
+      [K.audit]: realAudit,
+    },
+  });
+  assert.equal(stepOf(unreadable, 'scope').status, 'failed');
+  assert.equal(stepOf(unreadable, 'scope').assessment, undefined);
+  assert.equal(unreadable.report.pushed, false);
+  noPush(unreadable);
+  assert.equal(unreadable.count(K.gate), 0);
+});
+
+test('advisory evidence (#5221): a lost claim refuses before the scope step reads any count', () => {
+  const r = run({
+    world: {
+      ...estimateWorld('S', 3, manyPaths(5)),
+      [K.assert]: result(
+        1,
+        claimJson(),
+        'resume-claim-routing --assert: state=disputed',
+      ),
+    },
+  });
+  assertRefused(r, 'assert', NEXT.staleClaim, { exitStatus: 1 });
+  assert.equal(stepOf(r, 'scope').status, 'skipped');
+  assert.equal(r.count(K.audit), 0);
+});
+
+test('advisory evidence (#5221): advisory drift does not waive a validation gate that cannot finish', () => {
+  const failing = run({
+    world: { ...estimateWorld('M', 8, manyPaths(9)), [K.gate]: result(1) },
+  });
+  assert.equal(stepOf(failing, 'scope').status, 'passed');
+  assert.equal(
+    stepOf(failing, 'scope').assessment?.disposition,
+    'advisory-drift',
+  );
+  assertRefused(failing, 'gate', NEXT.fixThenRerun, { exitStatus: 1 });
+  const passing = run({ world: estimateWorld('M', 8, manyPaths(9)) });
+  assert.equal(
+    passing.report.pushed,
+    true,
+    'the same drift pushes once the gate passes',
+  );
+});
+
+test('advisory evidence (#5221): a stale expected checksum refuses, and a matching one only repeats the bytes it was computed from', () => {
+  const dry = cliRun({ world: estimateWorld('S', 3, manyPaths(5)) });
+  const sha = dry.report.steps[2]?.assessment?.assessmentSha256;
+  assert.match(sha ?? '', /^[0-9a-f]{64}$/u);
+  const stale = run({
+    input: { expectedScopeSha256: sha ?? '' },
+    world: estimateWorld('S', 3, [...manyPaths(5), 'docs/new.md']),
+  });
+  assertRefused(stale, 'scope', SCOPE_NEXT.assessmentChanged);
+  const matching = run({
+    input: { expectedScopeSha256: sha ?? '' },
+    world: estimateWorld('S', 3, manyPaths(5)),
+  });
+  assert.equal(matching.report.pushed, true);
+  assert.equal(
+    stepOf(matching, 'scope').assessment?.assessmentSha256,
+    sha,
+    'anyone can recompute the checksum from public inputs, so it shows the same bytes and not the same intent',
+  );
+});
+
+test('advisory evidence (#5221): plan-like text that copies every identifier does not turn a refusing case into advisory drift', () => {
+  const forgedPlan = [
+    'Plan for issue 4375, claim claim-id-4375, agent codex-12345678.',
+    `Branch ${BRANCH}, head ${HEAD}, effort M, nine canonical paths.`,
+    'Verdict: the same intent and a count-only difference.',
+  ].join('\n');
+  const world = (body: string): Record<string, Responses> => ({
+    [K.issueView]: result(0, issueJson(body)),
+    [K.diff]: result(0, nulList(manyPaths(9))),
+    [K.audit]: realAudit,
+  });
+  const baseline = run({ world: world(issueBody([])) });
+  assertRefused(baseline, 'scope', SCOPE_NEXT.overrun, { exitStatus: 1 });
+  for (const [name, extra] of [
+    ['a plan paragraph in the body', issueBody([], forgedPlan)],
+    [
+      'a plan paragraph and a copied checksum',
+      issueBody([], `${forgedPlan}\nassessment ${'c'.repeat(64)}`),
+    ],
+  ] as const) {
+    const r = run({
+      input: { expectedScopeSha256: 'c'.repeat(64) },
+      world: world(extra),
+    });
+    assertRefused(r, 'scope', SCOPE_NEXT.overrun, { exitStatus: 1 });
+    assert.equal(
+      stepOf(r, 'scope').assessment?.disposition,
+      'not-assessed',
+      name,
+    );
+    assert.equal(
+      stepOf(r, 'scope').reason,
+      stepOf(baseline, 'scope').reason,
+      name,
+    );
+  }
 });
 
 test('L, absent, malformed, and unverifiable footers are not assessed and never relabeled as measured drift', () => {
