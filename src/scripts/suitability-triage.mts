@@ -8,6 +8,12 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import {
+  findApprovalRequirementSentence,
+  isDecisionCausedSignal,
+  isEligibleProvisionalAssessment,
+  type ProvisionalAssessment,
+} from './autopilot-suitability.mts';
 import { computeBranchName } from './branch-name.mts';
 import { parseCliArgs } from './cli-args.mts';
 import {
@@ -21,6 +27,12 @@ import {
   parseCandidateFiles,
   resolveHighContentionFiles,
 } from './discover-shared-file-overlap.mts';
+import {
+  collectProvisionalAssessment,
+  createLiveProvisionalSources,
+  evaluateAutonomousCompletion,
+  readProvisionalPlanFiles,
+} from './discover-viability-gate.mts';
 import {
   GH_TEXT_LOOP_TIMEOUT_OPTIONS,
   ghText,
@@ -124,6 +136,8 @@ interface SuitabilityTriageArgs {
    * `discover-shared-file-overlap.mts`'s own `--bundles` flag. `null` means
    * "not passed" -- the caller falls back to `DEFAULT_BUNDLE_IDS`. */
   bundles: string[] | null;
+  /** #4535: a provisional choice plan file, `--issue` mode only. */
+  provisionalPlan?: string;
   verbose: boolean;
   help: boolean;
 }
@@ -160,6 +174,7 @@ const SUITABILITY_TRIAGE_FLAG_SPEC = {
   '--policy': { type: 'string', default: '' },
   '--manifest': { type: 'string', default: DEFAULT_MANIFEST_PATH },
   '--bundles': { type: 'string' },
+  '--provisional-plan': { type: 'string' },
   '--verbose': { type: 'boolean', default: false },
   '--help': { type: 'boolean', short: 'h' },
 } as const;
@@ -241,6 +256,10 @@ interface Context {
    * trust) means `hasAllStructuralSignals` is false, so behavior is
    * identical to before this field existed. */
   structuralEvidence?: StructuralEvidence;
+  /** #4535: the provisional plan assessment shared with A4. Only an
+   * eligible one relaxes a decision-caused obstacle in Checks 5-7; absent
+   * (the default) or ineligible leaves every check exactly as it was. */
+  provisionalAssessment?: ProvisionalAssessment;
 }
 
 interface CheckResult {
@@ -259,6 +278,8 @@ interface SuitabilityResult {
   outcome: string;
   failedCheck: string | null;
   checks: CheckResult[];
+  /** #4535: present only when an assessment was supplied. */
+  provisional?: ProvisionalAssessment;
 }
 
 interface SuitabilityOptions {
@@ -278,6 +299,9 @@ interface SuitabilityOptions {
    * as `unknown` like every other option here; normalized (or dropped
    * if malformed) before being copied into `Context`. */
   structuralEvidence?: unknown;
+  /** #4535 -- see `Context.provisionalAssessment`. Accepted as `unknown`;
+   * only a plain object is kept, and only an eligible one relaxes a check. */
+  provisionalAssessment?: unknown;
 }
 
 const CHECKS: {
@@ -330,7 +354,7 @@ const CHECKS: {
   },
 ];
 
-// cspell:ignore AKIA baprs xoxbaprs
+// cspell:ignore AKIA baprs xoxbaprs approv
 const SECRET_PATTERNS = [
   /ghp_[A-Za-z0-9]{20,}/,
   /github_pat_[A-Za-z0-9_]{20,}/,
@@ -6060,11 +6084,15 @@ function findUnsafeExecutionDirectiveMatch(
 
 if (import.meta.main) {
   // #3343: call runCli() directly when the envelope is disabled -- see
-  // applyHelperCliOutcomeWhenDisabled's own doc comment for why.
+  // applyHelperCliOutcomeWhenDisabled's own doc comment for why. #4535:
+  // runCli is async (the provisional record replay awaits), so it is chained
+  // with .then() the way discover-viability-gate.mts chains its async main.
   if (isHelperErrorEnvelopeEnabled()) {
     runHelperCli('suitability-triage', runCli);
   } else {
-    applyHelperCliOutcomeWhenDisabled(runCli());
+    runCli().then(applyHelperCliOutcomeWhenDisabled, (error) => {
+      throw error;
+    });
   }
 }
 
@@ -6100,7 +6128,13 @@ export function evaluateSuitability(
       options.highConfidenceCollectionDegraded,
     ),
     structuralEvidence: normalizeStructuralEvidence(options.structuralEvidence),
+    provisionalAssessment: normalizeProvisionalAssessment(
+      options.provisionalAssessment,
+    ),
   };
+  const provisionalReport = context.provisionalAssessment
+    ? { provisional: context.provisionalAssessment }
+    : {};
 
   const checks: CheckResult[] = [];
   for (const check of CHECKS) {
@@ -6121,6 +6155,7 @@ export function evaluateSuitability(
         outcome: check.failureOutcome,
         failedCheck: check.id,
         checks,
+        ...provisionalReport,
       };
     }
   }
@@ -6130,7 +6165,17 @@ export function evaluateSuitability(
     outcome: 'ready',
     failedCheck: null,
     checks,
+    ...provisionalReport,
   };
+}
+
+/** #4535: keeps a plain object for reporting; only an eligible one relaxes. */
+function normalizeProvisionalAssessment(
+  value: unknown,
+): ProvisionalAssessment | undefined {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as ProvisionalAssessment)
+    : undefined;
 }
 
 export function checkRepositoryFit(context: Context): CheckOutcome {
@@ -6939,6 +6984,23 @@ export function checkActionability(context: Context): CheckOutcome {
   // evidence on realistic content. Removed (previously demoted here)
   // rather than left as effectively-dead code; the PR's own scope is
   // Checks 6/7 for this reason.
+  // #4535: for a needs-decision source the missing scope and acceptance
+  // detail is the input choice itself; an eligible provisional plan supplies
+  // both (concrete deliverables and objective execution criteria). The empty
+  // `## Candidate files` failure above is never relaxed.
+  if (
+    isEligibleProvisionalAssessment(
+      context.provisionalAssessment,
+      context.issue,
+    )
+  ) {
+    return {
+      pass: true,
+      demoted: true,
+      evidence:
+        'Concrete scope and acceptance detail come from the validated provisional plan (decision-caused gap relaxed).',
+    };
+  }
   return {
     pass: false,
     evidence: 'Issue lacks concrete actionable scope or acceptance detail.',
@@ -6992,16 +7054,55 @@ export function checkAutonomy(context: Context): CheckOutcome {
     context.blockedByHumanLabelName,
     POLICY_DEFAULTS.labels.blockedByHumanLabelName,
   );
+  const needsDecisionLabelName = normalizeConfiguredLabelName(
+    context.needsDecisionLabelName,
+    POLICY_DEFAULTS.labels.needsDecisionLabelName,
+  );
   const blockedLabels = new Set([
     blockedByHumanLabelName,
-    normalizeConfiguredLabelName(
-      context.needsDecisionLabelName,
-      POLICY_DEFAULTS.labels.needsDecisionLabelName,
-    ),
+    needsDecisionLabelName,
   ]);
+  // #4535: with an eligible provisional plan the needs-decision label and the
+  // decision-caused phrases below are the input choice itself. Each phrase is
+  // judged on its own through `isDecisionCausedSignal`, so an approval,
+  // sign-off or credential requirement, the blocked-by-human label, the
+  // title prefix and the authoring-bucket marker keep failing.
+  const provisionalRelaxes = isEligibleProvisionalAssessment(
+    context.provisionalAssessment,
+    context.issue,
+  );
+  const relaxedSignals: string[] = [];
 
   for (const label of blockedLabels) {
     if (labels.has(label)) {
+      if (
+        provisionalRelaxes &&
+        label === needsDecisionLabelName &&
+        label !== blockedByHumanLabelName
+      ) {
+        // A4.5 has no credential or external-system patterns of its own (A4
+        // owns them), and the label used to be the only blocker here. So the
+        // label is waived only when A4's autonomous-completion criterion,
+        // read with the same assessment, also passes for this body.
+        const a4Autonomy = evaluateAutonomousCompletion(
+          {
+            number: issue.number,
+            title: issue.title,
+            body: issue.body,
+            state: issue.state,
+          },
+          undefined,
+          context.provisionalAssessment,
+        );
+        if (a4Autonomy.pass) {
+          relaxedSignals.push(`label ${label}`);
+          continue;
+        }
+        return {
+          pass: false,
+          evidence: `Blocking label present: ${label} (not relaxed: ${formatQuotedEvidence(a4Autonomy.evidence)})`,
+        };
+      }
       return {
         pass: false,
         evidence: `Blocking label present: ${label}`,
@@ -7122,6 +7223,13 @@ export function checkAutonomy(context: Context): CheckOutcome {
       ) {
         continue;
       }
+      if (
+        provisionalRelaxes &&
+        isDecisionCausedSignal(body, markerIndex, markerText.length)
+      ) {
+        relaxedSignals.push(markerText);
+        continue;
+      }
 
       const markerEnd = markerIndex + markerText.length;
       const isNearOrInsideEitherOr = eitherOrMatches.some((eitherOr) => {
@@ -7183,6 +7291,15 @@ export function checkAutonomy(context: Context): CheckOutcome {
       // This is a negated non-requirement; skip this match
       continue;
     }
+    // #4535: only a decision phrase is relaxed, never an approval or sign-off.
+    if (
+      provisionalRelaxes &&
+      /\bdecision$/i.test(matchedText) &&
+      isDecisionCausedSignal(body, matchIndex, matchedText.length)
+    ) {
+      relaxedSignals.push(matchedText);
+      continue;
+    }
 
     // #2767: demotable -- see the either/or branch's comment above.
     if (hasAllStructuralSignals(context.structuralEvidence)) {
@@ -7210,6 +7327,13 @@ export function checkAutonomy(context: Context): CheckOutcome {
     if (isEnumeratedParentheticalEntry(body, markerIndex, markerText.length)) {
       continue;
     }
+    if (
+      provisionalRelaxes &&
+      isDecisionCausedSignal(body, markerIndex, markerText.length)
+    ) {
+      relaxedSignals.push(markerText);
+      continue;
+    }
 
     // #2767: demotable -- see the either/or branch's comment above.
     if (hasAllStructuralSignals(context.structuralEvidence)) {
@@ -7225,6 +7349,33 @@ export function checkAutonomy(context: Context): CheckOutcome {
     };
   }
 
+  // #4535: the needs-decision label used to be the catch-all here, and A4.5
+  // has no approval patterns beyond the narrow ones above. So under a
+  // relaxation an approval or sign-off requirement anywhere in the body, even
+  // in a sentence of its own, keeps the source blocked.
+  if (provisionalRelaxes) {
+    // Inline code stays visible: formatting must not hide an approval word.
+    // The title counts too. It is plain text, so it is scanned as written; only
+    // the body is masked.
+    const sentence =
+      findApprovalRequirementSentence(issue.title) ??
+      findApprovalRequirementSentence(
+        maskMarkdownForScan(body, { htmlComments: 'mask', inlineCode: 'keep' }),
+      );
+    if (sentence !== null) {
+      return {
+        pass: false,
+        evidence: `Issue names an approval requirement that a provisional plan cannot relax: "${formatQuotedEvidence(sentence)}".`,
+      };
+    }
+  }
+  if (relaxedSignals.length > 0) {
+    return {
+      pass: true,
+      demoted: true,
+      evidence: `Decision-caused signals relaxed by the validated provisional plan: ${[...new Set(relaxedSignals)].map((signal) => `"${signal}"`).join(', ')}.`,
+    };
+  }
   return {
     pass: true,
     evidence: 'No external coordination blockers detected.',
@@ -7234,6 +7385,16 @@ export function checkAutonomy(context: Context): CheckOutcome {
 export function checkVerifiability(context: Context): CheckOutcome {
   const { issue } = context;
   const body = issue.body;
+  // #4535: with an eligible provisional plan, a missing verification signal
+  // and a decision-or-preference line are the input choice itself; the plan's
+  // objective execution criteria supply the verification. Each relaxation is
+  // recorded and the later checks still run, so an approval or sign-off line,
+  // or an undocumented escape hatch, keeps failing.
+  const provisionalRelaxes = isEligibleProvisionalAssessment(
+    context.provisionalAssessment,
+    context.issue,
+  );
+  const relaxedSignals: string[] = [];
   const hasVerificationChannel =
     /\btests?\b|\bverification\b|\bvalidate\b|\blint\b|\bci\b/i.test(body);
 
@@ -7439,7 +7600,9 @@ export function checkVerifiability(context: Context): CheckOutcome {
 
   const hasObjectiveSignals = hasVerificationChannel || hasObjectiveCriteria;
 
-  if (!hasObjectiveSignals) {
+  if (!hasObjectiveSignals && provisionalRelaxes) {
+    relaxedSignals.push('no objective verification signal in the body');
+  } else if (!hasObjectiveSignals) {
     // #2767: demotable -- this is the "no objective verification signal"
     // shape the issue names, distinct from the escape-hatch either/or
     // branch further below (deliberately left un-demoted; see that
@@ -7491,6 +7654,24 @@ export function checkVerifiability(context: Context): CheckOutcome {
   // #2767: captures the matched text (not just a boolean) so a demoted
   // warn's evidence can name the matched phrase, matching the pattern
   // discover-viability-gate.mts's demotable criteria already use.
+  // #4535: a subjective line is relaxed only when it names a decision or a
+  // preference and no approval or sign-off, and its own clause names no
+  // authority requirement; it is then recorded, and scanning goes on.
+  const isRelaxedDecisionLine = (
+    text: string,
+    offset: number,
+    length: number,
+  ): boolean => {
+    if (
+      !provisionalRelaxes ||
+      /(?<![\w-])(?:approval|sign-?off)(?![\w-])/i.test(text) ||
+      !isDecisionCausedSignal(normalizedBody, offset, length)
+    ) {
+      return false;
+    }
+    relaxedSignals.push(text.trim());
+    return true;
+  };
   const subjectiveApprovalMatch = ((): string | null => {
     let lineOffset = 0;
     for (const line of normalizedBody.split('\n')) {
@@ -7499,6 +7680,10 @@ export function checkVerifiability(context: Context): CheckOutcome {
         SUBJECTIVE_GATE_PATTERN.test(line) &&
         !isFramedAsDescriptive(normalizedBody, paragraphSpans, lineOffset)
       ) {
+        if (isRelaxedDecisionLine(line, lineOffset, line.length)) {
+          lineOffset += line.length + 1;
+          continue;
+        }
         return line.trim();
       }
       lineOffset += line.length + 1;
@@ -7515,6 +7700,11 @@ export function checkVerifiability(context: Context): CheckOutcome {
           normalizedBody,
           paragraphSpans,
           proximityMatch.index,
+        ) &&
+        !isRelaxedDecisionLine(
+          proximityMatch[0],
+          proximityMatch.index,
+          proximityMatch[0].length,
         )
       ) {
         return proximityMatch[0];
@@ -7840,6 +8030,13 @@ export function checkVerifiability(context: Context): CheckOutcome {
     }
   }
 
+  if (relaxedSignals.length > 0) {
+    return {
+      pass: true,
+      demoted: true,
+      evidence: `Decision-caused verification gaps relaxed by the validated provisional plan: ${[...new Set(relaxedSignals)].map((signal) => `"${formatQuotedEvidence(signal)}"`).join(', ')}.`,
+    };
+  }
   return {
     pass: true,
     evidence:
@@ -8008,7 +8205,7 @@ export function collectHighConfidenceDuplicateEvidence(
   };
 }
 
-function runCli(): HelperCliResult {
+async function runCli(): Promise<HelperCliResult> {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
     printHelp();
@@ -8018,6 +8215,13 @@ function runCli(): HelperCliResult {
   // #2102: --body-file/--stdin never touch the network -- resolved before
   // any of the --issue-only setup below.
   if (resolveInputMode(args) === 'local') {
+    if (args.provisionalPlan !== undefined) {
+      throw markCliUsageError(
+        new Error(
+          '--provisional-plan requires --issue; local mode has no live source',
+        ),
+      );
+    }
     runLocalCli(args);
     return 0;
   }
@@ -8135,7 +8339,33 @@ function runCli(): HelperCliResult {
     collectionWarnings = evidence.collectionWarnings;
   }
 
+  // #4535: the same assessment A4 reads (`discover-viability-gate.mts`), from
+  // a fresh trusted read, the replayed record state and the session's plan. An
+  // unusable plan file is reported, never silently ignored.
+  let provisional: ProvisionalAssessment | undefined;
+  let provisionalPlanErrors: { file: string; error: string }[] = [];
+  if (args.provisionalPlan !== undefined) {
+    const bound = readProvisionalPlanFiles(
+      [args.provisionalPlan],
+      [issue.number],
+    );
+    provisionalPlanErrors = bound.errors;
+    if (bound.plans.has(issue.number)) {
+      provisional = await collectProvisionalAssessment({
+        issue: { number: issue.number, body: issue.body, labels: issue.labels },
+        owner,
+        repo,
+        plan: bound.plans.get(issue.number),
+        needsDecisionLabelName: labelsPolicy.needsDecisionLabelName,
+        markerPrefix: resolveMarkerPrefix(policyConfig),
+        config: policyConfig,
+        sources: createLiveProvisionalSources(owner, repo),
+      });
+    }
+  }
+
   const suitabilityOptions: SuitabilityOptions = {
+    ...(provisional ? { provisionalAssessment: provisional } : {}),
     repository: { owner, repo },
     duplicateCandidates,
     blockedByHumanLabelName: labelsPolicy.blockedByHumanLabelName,
@@ -8235,6 +8465,8 @@ function runCli(): HelperCliResult {
     outcome: result.outcome,
     failedCheck: result.failedCheck,
     ...(existingRejection ? { existingRejection } : {}),
+    ...(provisional ? { provisional } : {}),
+    ...(provisionalPlanErrors.length > 0 ? { provisionalPlanErrors } : {}),
     ...(existingRejectionCollectionWarnings.length > 0
       ? { existingRejectionCollectionWarnings }
       : {}),
@@ -8494,6 +8726,7 @@ export function parseArgs(argv: string[]): SuitabilityTriageArgs {
             .split(',')
             .map((part) => part.trim())
             .filter(Boolean),
+    provisionalPlan: values['provisional-plan'] as string | undefined,
     verbose: values.verbose as boolean,
     help,
   };
@@ -8513,7 +8746,7 @@ function loadPolicy(policyPath: string): unknown {
 
 function printHelp(): void {
   process.stdout.write(`Usage:
-  node scripts/suitability-triage.mjs --issue <number> [--gh-token <token>] [--owner <owner>] [--repo <repo>] [--policy <path>] [--manifest <path>] [--bundles <id1,id2,...>] [--verbose] [--help]
+  node scripts/suitability-triage.mjs --issue <number> [--gh-token <token>] [--owner <owner>] [--repo <repo>] [--policy <path>] [--manifest <path>] [--bundles <id1,id2,...>] [--provisional-plan <file>] [--verbose] [--help]
   node scripts/suitability-triage.mjs (--body-file <path> | --stdin) [--policy <path>] [--verbose] [--help]
   Deprecated aliases (one release): --token -> --gh-token
 
@@ -8528,6 +8761,16 @@ blank lines immediately after the title, is the body. See "Local mode
 output schema" below -- it is a distinct, deliberately
 incompatible shape from the live --issue output directly below it, so a
 local dry-run result can never be mistaken for a live verdict.
+
+--provisional-plan <file> (#4535, --issue mode only) reads a session-written
+provisional choice plan (docs/idd-workflow.md, "Provisional plan assessment")
+bound to this issue by its "source.issueNumber" and adds a "provisional"
+assessment block to the output (a "provisionalPlanErrors" array when the file
+is unusable). A fresh trusted read of the decisionIssue class, the cap and the
+replayed record state decide whether a decision-caused obstacle in the
+actionability, autonomy and verifiability checks is relaxed; every other check
+and every approval, sign-off or credential requirement is unchanged. Without
+the flag the output is unchanged.
 
 --manifest / --bundles override the Check 4 high-confidence tier's
 high-contention exclusion set (default: the same manifest path and bundle

@@ -15,7 +15,14 @@
 // advisory ranking/routing hint only — it never replaces the A4.5
 // suitability gate or the A5 claim safety checks, which still run on
 // whatever candidate is selected.
+//
+// cspell:ignore approv decid judg
+//
+// This module also holds the shared provisional-choice plan assessment
+// (#4535) that A4 (discover-viability-gate) and A4.5 (suitability-triage)
+// both read, so one normalized policy/plan evidence object drives both.
 
+import { createHash } from 'node:crypto';
 import { maskMarkdownForScan } from './markdown-code.mts';
 
 const DEFAULT_MARKER_PREFIX = 'idd-skill';
@@ -275,6 +282,1252 @@ export function resolveEffortLPolicy(config: unknown): 'allow' | 'refuse' {
   return (section as { effortL?: unknown }).effortL === 'refuse'
     ? 'refuse'
     : 'allow';
+}
+
+// ---------------------------------------------------------------------------
+// Provisional choice plan assessment (#4535, roadmaps #4528 and #4955)
+//
+// A4 and A4.5 ask one question about a needs-decision source: may it advance
+// to the claim-and-record path under the provisional-decision feature? The
+// session compares the options and writes a structured plan. This code only
+// validates that plan against the trusted policy report, the replayed record
+// state and the issue itself. It never ranks options, never fills a missing
+// recommendation or a missing measurement, and never edits the authored
+// score. The trusted report, the replay state and the plan are injected, so
+// the module reads no policy, calls no API and gains no import.
+// ---------------------------------------------------------------------------
+
+/** Where an assessed source goes next. Only `claim-and-record` relaxes anything. */
+export type ProvisionalRoute =
+  | 'claim-and-record'
+  | 'current-route'
+  | 'no-new-execution';
+
+/** One precise reason the existing route stays. */
+export interface ProvisionalBlocker {
+  code: string;
+  detail: string;
+}
+
+export interface ProvisionalPlanOption {
+  id: string;
+  description: string;
+  feasibilityRationale: string;
+  requirementFit: string;
+  consequences: string;
+  verification: string;
+  reversalOrMigration: string;
+}
+
+/** One choice, in the shape of the `selected` event of the decision record. */
+export interface ProvisionalPlanChoice {
+  question: string;
+  selectedOption: ProvisionalPlanOption & { rationale: string };
+  feasibleAlternatives: (ProvisionalPlanOption & {
+    comparison: string;
+    rejectionReason: string;
+  })[];
+  executionCriteria: string[];
+}
+
+export interface ProvisionalNormalizedPlan {
+  schemaVersion: 1;
+  source: { repository: string; issueNumber: number; bodySha256: string };
+  /** The original human-choice criteria, kept pending (never satisfied here). */
+  humanChoiceCriteria: { text: string; status: 'pending' }[];
+  recordedChoices: { reference: string; summary: string }[];
+  choices: ProvisionalPlanChoice[];
+  deliverables: { kind: string; target: string; purpose: string }[];
+  evidence: string[];
+  resolvedEvidenceGaps: {
+    description: string;
+    measurement: string;
+    result: string;
+    reference: string;
+  }[];
+  suitability: {
+    lowScoreCause: 'none' | 'input-choice-only' | 'independent';
+    reassessedScore: number | null;
+    rationale: string | null;
+  };
+}
+
+export type ProvisionalScoreRoute =
+  | 'at-or-above-floor'
+  | 'no-score'
+  | 'ranking-disabled'
+  | 'reassessed-with-plan'
+  | 'below-floor';
+
+export interface ProvisionalAssessment {
+  eligible: boolean;
+  route: ProvisionalRoute;
+  blockers: ProvisionalBlocker[];
+  policy: {
+    decisionIssue: 'enabled' | 'master-off' | 'class-off' | 'unreadable';
+    maxDecisionsPerClaim: number | null;
+  };
+  caps: {
+    choices: number | null;
+    /** What the latest bundle holds after selection; a fresh assessment starts a new bundle. */
+    decisionGenerationsAfterSelection: number | null;
+    maxDecisionsPerClaim: number | null;
+  };
+  score: {
+    authored: number | null;
+    floor: number;
+    route: ProvisionalScoreRoute;
+    reassessed: number | null;
+  };
+  source: { issueNumber: number; bodySha256: string };
+  /** The auditable candidate plan; present only when `eligible`. */
+  plan: ProvisionalNormalizedPlan | null;
+  pendingHumanCriteria: string[];
+  /** Persist and verify the `selected` record after ownership, before execution. */
+  nextStep: 'claim-then-persist-selection' | null;
+}
+
+export interface ProvisionalAssessmentInput {
+  issue: {
+    number: number;
+    body: string;
+    labels?: readonly string[];
+  };
+  /** `owner/repo` when known; a plan that names another repository is stale. */
+  repository?: string | null;
+  needsDecisionLabelName: string;
+  /** The fresh trusted read of the auto-decide classes (`readTrustedAutoDecide`). */
+  policy: unknown;
+  /** The replayed provisional record state of the source. */
+  state: unknown;
+  /** The session's structured plan; `undefined` when none was supplied. */
+  plan: unknown;
+  /** Whether the body already records an operator choice (a resolved decision). */
+  bodyRecordsOperatorChoice?: boolean;
+  /**
+   * The paths the source declares under `## Candidate files`, as written.
+   * When there are any, every file deliverable must be one of them, so the
+   * plan cannot widen a decision-only source into other code changes.
+   */
+  candidateFiles?: readonly string[];
+  /** Whether the body has a `## Candidate files` section at all. */
+  candidateFilesDeclared?: boolean;
+  authoredScore: number | null;
+  floor: number;
+  /** `false` is the ranking kill-switch; no floor routing applies. */
+  suitabilityEnabled?: boolean;
+  effort: 'S' | 'M' | 'L' | null;
+  effortLPolicy: 'allow' | 'refuse';
+}
+
+/**
+ * Edit-surface limit per effort hint. It mirrors `EFFORT_CANDIDATE_FILE_LIMITS`
+ * in `audit-authored-issue.mts`, which cannot be imported here without an
+ * import cycle (that module imports both A4 evaluators). A test pins the two
+ * together.
+ */
+export const PROVISIONAL_SURFACE_LIMITS: Readonly<Record<'S' | 'M', number>> =
+  Object.freeze({ S: 3, M: 8 });
+
+const PROVISIONAL_PLAN_SCHEMA_VERSION = 1;
+const SHA256_HEX_PATTERN = /^[0-9a-f]{64}$/;
+const SELECTED_OPTION_KEYS = [
+  'id',
+  'description',
+  'feasibilityRationale',
+  'requirementFit',
+  'consequences',
+  'verification',
+  'reversalOrMigration',
+  'rationale',
+] as const;
+const ALTERNATIVE_OPTION_KEYS = [
+  'id',
+  'description',
+  'feasibilityRationale',
+  'requirementFit',
+  'consequences',
+  'verification',
+  'reversalOrMigration',
+  'comparison',
+  'rejectionReason',
+] as const;
+// A source whose gaps a choice could cause names that choice somewhere in its
+// body. Without any of these words the label alone does not make it a decision
+// source for the purpose of relaxing a check.
+const DECISION_SIGNAL_PATTERN =
+  /(?<![\w-])(?:decision|decid\w*|choose|chosen|choice|options?|alternatives?|whether|tbd|undecided|open question|trade-?offs?|prefer\w*)(?![\w-])/i;
+const DELIVERABLE_KINDS = ['file', 'document', 'issue-comment'];
+// An execution criterion must be checkable without a person's opinion.
+const SUBJECTIVE_CRITERION_PATTERN =
+  /(?<![\w-])(?:feels?|looks? (?:good|right)|opinion|subjective|maintainer (?:approv\w*|prefer\w*|sign-?off|review\w*)|stakeholder|human (?:review|judg\w*|approv\w*)|manual (?:review|approval))(?![\w-])/i;
+// A clause naming one of these is an approval, an external action or a
+// security matter, never a product choice (#4535: judged by the actual
+// requirement, not by the needs-decision label alone).
+const AUTHORITY_REQUIREMENT_PATTERN =
+  /(?<![\w-])(?:approv\w*|sign-?off|permissions?|authori[sz]\w*|credentials?|secrets?|tokens?|passwords?|api[- ]keys?|access|production|third-?party|external|legal|compliance|budget|vendor)(?![\w-])/i;
+// A clause ends at `!`, `?`, `;`, a blank line, a list marker, or a full stop
+// that ends a sentence (followed by a capital letter or the end of the text).
+// A full stop inside "i.e.", "docs/x.md" or "v1.2" is not an end, so an
+// authority word after one is still in the same clause: it fails closed.
+const DECISION_CLAUSE_BREAK_PATTERN =
+  /[!?;]|\.(?=\s+[A-Z]|\s*$)|\n[ \t]*\n|\n[ \t]*(?:[-*+]|\d+[.)])[ \t]/g;
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function nonEmptyText(value: unknown): string | null {
+  return typeof value === 'string' && value.trim().length > 0
+    ? value.trim()
+    : null;
+}
+
+/**
+ * True when the text match at `[index, index + length)` is a decision-caused
+ * signal: its own clause names no approval, sign-off, permission, credential,
+ * secret, token, access, production, external, legal, compliance, budget or
+ * vendor requirement. Both evaluators relax a decision phrase only through
+ * this one test, and judge each phrase on its own, so a later credential or
+ * sign-off phrase in the same body still fails.
+ */
+export function isDecisionCausedSignal(
+  text: string,
+  index: number,
+  length: number,
+): boolean {
+  // The clause runs from the last break before the phrase to the first break
+  // after it, found in the whole text, so no window can cut an authority word
+  // off and a full stop is judged by what follows it, not by a slice's end.
+  let start = 0;
+  let end = text.length;
+  for (const found of text.matchAll(DECISION_CLAUSE_BREAK_PATTERN)) {
+    const at = found.index ?? 0;
+    if (at + found[0].length <= index) {
+      start = at + found[0].length;
+    } else if (at >= index + length) {
+      end = at;
+      break;
+    }
+  }
+  return !AUTHORITY_REQUIREMENT_PATTERN.test(text.slice(start, end));
+}
+
+// Approval-type words, used with a requirement cue to find a standing
+// approval, sign-off or authorization requirement in any sentence. Broader
+// authority vocabulary (credentials, access, production) stays in the clause
+// test above and in A4's own patterns.
+const APPROVAL_WORD_PATTERN =
+  /(?<![\w-])(?:approv\w*|sign(?:s|ed|ing)?[- ]?off|authori[sz]\w*|permissions?|consent|go-ahead|grant(?:s|ed)?\s+(?:access|permission))(?![\w-])/i;
+const REQUIREMENT_CUE_PATTERN =
+  /(?<![\w-])(?:needs?|needed|requires?|required|requiring|requirement|must|has to|have to|pending|awaiting|awaits?|subject to|gated|blocked|depends?|until|mandatory|prerequisite|first|before|gates?|obtain|secure|seek|get|ask|wait(?:ing)?|contingent|conditional|dependent|unless|necessary|essential|compulsory|obligatory|imperative)(?![\w-])|(?<![\w-])(?:cannot|can't|do not|don't|must not|never|not)\s+(?:\w+\s+){0,4}?without(?![\w-])/i;
+// A phrase that denies the approval requirement itself. A bare "not" or "no"
+// elsewhere in the sentence does not count: "Do not proceed until legal
+// approval is granted" and "requires legal approval, not just passing tests"
+// still state the requirement. Each alternative ties the negation to the
+// requirement verb and the approval word, and "without" never denies one
+// ("do not ship without approval" asks for it).
+const APPROVAL_WORD_SOURCE =
+  '(?:approv\\w*|sign(?:s|ed|ing)?[- ]?off|authori[sz]\\w*|permissions?|consent|grant(?:s|ed)?\\s+(?:access|permission))';
+// One word that is not a contrast or a join, so a denial never reaches across
+// "but requires" or "and requires" into a requirement of its own.
+const PLAIN_WORD = String.raw`(?:(?!(?:but|however|yet|although|though|while|whereas|except|and|then)\b)\w+\s+)`;
+// The phrases that deny a requirement for `term`: "does not need any T",
+// "requires no T", "no T is needed", "T is not required", "nothing needs T".
+function negationPattern(term: string): RegExp {
+  return new RegExp(
+    [
+      String.raw`(?<![\w-])(?:(?:does|do|did|will|would|should|shall|can|could|must|may|might)\s+not|doesn't|don't|didn't|won't|wouldn't|mustn't)\s+(?:really\s+|actually\s+)?(?:need|require)\s+${PLAIN_WORD}{0,4}?${term}`,
+      String.raw`(?<![\w-])(?:needs?|needed|requires?|required|requiring)\s+(?:no|zero)\s+${PLAIN_WORD}{0,3}?${term}`,
+      String.raw`(?<![\w-])no\s+${PLAIN_WORD}{0,3}?${term}\s+(?:is|are|will\s+be)\s+(?:needed|required|necessary)`,
+      String.raw`(?<![\w-])${term}\s+(?:is|are|will\s+be)\s+not\s+(?:needed|required|necessary)`,
+      String.raw`(?<![\w-])(?:nothing|none)\b[^.;]{0,60}?\b(?:needs?|requires?)\s+${PLAIN_WORD}{0,3}?${term}`,
+    ].join('|'),
+    'gi',
+  );
+}
+const NEGATED_REQUIREMENT_PATTERN = negationPattern(APPROVAL_WORD_SOURCE);
+
+// A person or body that can give an approval. An approval word next to one of
+// these, within a few words, is a dependency on that person; the same word in
+// "the authorization parser" or "the approval state machine" is software.
+const APPROVER_SOURCE =
+  '(?:users?|maintainers?|owners?|reviewers?|legal|teams?|stakeholders?|managers?|admins?|administrators?|operators?|humans?|persons?|people|customers?|security|approvers?|committee|board|leads?|counsel|officers?)';
+const APPROVER_ADJACENT_PATTERN = new RegExp(
+  [
+    String.raw`(?<![\w-])${APPROVER_SOURCE}\s+(?:\w+\s+){0,2}?${APPROVAL_WORD_SOURCE}`,
+    String.raw`(?<![\w-])${APPROVAL_WORD_SOURCE}\s+(?:\w+\s+){0,2}?(?:by|from)\s+(?:the\s+|a\s+)?${APPROVER_SOURCE}`,
+  ].join('|'),
+  'i',
+);
+
+// Markdown emphasis and code marks are formatting, not words: "Legal `approval`
+// is required" and "**approval** is required" read the same as the plain text.
+function withoutFormatting(text: string): string {
+  return text
+    .replace(/\[([^\]\n]*)\]\([^)\n]*\)/g, '$1')
+    .replace(/[`*_~]+/g, '');
+}
+
+// Up to fifteen words, with commas, between a verb of needing and what is
+// needed, so a long qualification cannot separate them. It stays inside one
+// text: a criterion is a single sentence by construction.
+const GAP_WORDS = String.raw`(?:[\w'-]+[\s,]+){0,15}?`;
+
+// A noun that makes an approval or credential word describe software, not a
+// person's decision: "the authorization parser", "an API key helper".
+const SOFTWARE_NOUN_SOURCE = String.raw`(?:parser|state\s+machine|service|module|handler|logic|engine|api|library|model|table|column|field|endpoint|middleware|function|class|helper|script|tests?)(?![\w-])`;
+
+// The passive form of a prerequisite: "credentials must be supplied",
+// "sign-off has to be obtained". The term comes first, so the needing verbs
+// above do not see it. Up to three plain words may sit between the term and
+// the modal, and a software noun among them ("the API key parser must be
+// given a string") ends the match.
+const PASSIVE_PREREQUISITE = String.raw`(?:[\s,]+(?!${SOFTWARE_NOUN_SOURCE})[\w'-]+){0,3}?[\s,]+(?:must|should|shall|need(?:s)?\s+to|ha(?:s|ve)\s+to|is\s+to|are\s+to)\s+(?:(?:first|also)\s+)?be\s+(?:supplied|provided|obtained|issued|granted|given|acquired|secured|received|requested|sought|sourced)(?![\w-])`;
+
+// "requires approval", "needs sign-off", "obtain consent" and the like: a verb
+// of needing, getting or waiting, then the approval word within a few words.
+// "must reject" and "returns false" are not such verbs, so a criterion about
+// approval software ("the authorization parser must reject an unknown role")
+// is not caught.
+const NEEDS_APPROVAL_PATTERN = new RegExp(
+  [
+    // "do not proceed without approval"
+    String.raw`(?<![\w-])(?:cannot|can't|do\s+not|don't|must\s+not|never|not)\s+(?:\w+\s+){0,4}?without\s+${GAP_WORDS}${APPROVAL_WORD_SOURCE}`,
+    String.raw`(?<![\w-])(?:require[sd]?|requiring|needs?|needed|awaiting|awaits?|pending|obtain|obtaining|get|seek|ask|wait(?:ing)?\s+for|depend(?:s|ed|ent)?\s+on|rel(?:y|ies|ied)\s+on|hinges?\s+on|contingent\s+on|conditional\s+on|subject\s+to|gated\s+(?:on|by)|blocked\s+(?:on|by))[\s,]+${GAP_WORDS}${APPROVAL_WORD_SOURCE}`,
+    String.raw`(?<![\w-])${APPROVAL_WORD_SOURCE}\s+(?:is|are|will\s+be)\s+(?:required|needed|necessary|pending|essential|mandatory)`,
+    String.raw`(?<![\w-])${APPROVAL_WORD_SOURCE}${PASSIVE_PREREQUISITE}`,
+  ].join('|'),
+  'i',
+);
+
+/**
+ * True when `text` depends on an approval, sign-off or authorization that no
+ * phrase in it denies: it needs one, or ties the approval to a person or body
+ * that gives it. An execution criterion must be checkable by the agent, so
+ * such a text is not objective, whatever its verb. A criterion about approval
+ * software ("the authorization parser must reject an unknown role") is not
+ * one.
+ */
+function mentionsApproval(text: string): boolean {
+  const remaining = withoutFormatting(text).replace(
+    NEGATED_REQUIREMENT_PATTERN,
+    ' ',
+  );
+  return (
+    NEEDS_APPROVAL_PATTERN.test(remaining) ||
+    APPROVER_ADJACENT_PATTERN.test(remaining)
+  );
+}
+
+// A credential, a secret or production access that the work waits for: a verb
+// of supplying, getting or needing, then the term within a few words, or the
+// term followed by "is required". "The token parser rejects an expired token"
+// names no prerequisite.
+const CREDENTIAL_TERM_SOURCE =
+  '(?:credentials?|secrets?|api[- ]keys?|passwords?|access\\s+tokens?|production\\s+access|third-?party\\s+access)';
+const NEGATED_CREDENTIAL_PATTERN = negationPattern(CREDENTIAL_TERM_SOURCE);
+const NEEDS_CREDENTIAL_PATTERN = new RegExp(
+  [
+    // "do not proceed without credentials"
+    String.raw`(?<![\w-])(?:cannot|can't|do\s+not|don't|must\s+not|never|not)\s+(?:\w+\s+){0,4}?without\s+${GAP_WORDS}${CREDENTIAL_TERM_SOURCE}`,
+    String.raw`(?<![\w-])(?:supply|supplies|supplied|provide[sd]?|providing|obtain|obtaining|get|receive[sd]?|request(?:s|ed|ing)?|ask(?:s|ed|ing)?(?:\s+for)?|secure[sd]?|require[sd]?|requiring|needs?|needed|awaiting|awaits?|wait(?:ing)?\s+for|depend(?:s|ed|ent)?\s+on|rel(?:y|ies|ied)\s+on|hinges?\s+on|contingent\s+on|conditional\s+on|subject\s+to|gated\s+(?:on|by)|blocked\s+(?:on|by))[\s,]+${GAP_WORDS}${CREDENTIAL_TERM_SOURCE}`,
+    String.raw`(?<![\w-])${CREDENTIAL_TERM_SOURCE}\s+(?:is|are|will\s+be)\s+(?:required|needed|necessary|pending|essential|mandatory)`,
+    String.raw`(?<![\w-])${CREDENTIAL_TERM_SOURCE}${PASSIVE_PREREQUISITE}`,
+  ].join('|'),
+  'i',
+);
+
+/** True when `text` makes a credential, secret or production access a prerequisite. */
+function needsCredential(text: string): boolean {
+  return NEEDS_CREDENTIAL_PATTERN.test(
+    withoutFormatting(text).replace(NEGATED_CREDENTIAL_PATTERN, ' '),
+  );
+}
+
+// An approval word that names software, not a person's decision: "the
+// authorization parser must reject an unknown role" asks the code to behave,
+// not anyone to approve.
+const APPROVAL_SOFTWARE_PATTERN = new RegExp(
+  String.raw`(?<![\w-])${APPROVAL_WORD_SOURCE}\s+${SOFTWARE_NOUN_SOURCE}`,
+  'gi',
+);
+
+/**
+ * The first sentence of `text` that states an approval, sign-off or
+ * authorization requirement, or `null`. A sentence qualifies when it holds an
+ * approval word and a requirement cue, in either order and at any distance.
+ * A phrase that denies the requirement itself ("does not need any approval")
+ * is set aside first, so a prohibition or a contrast that merely holds a
+ * "not" still counts, and a negation in another sentence never cancels it.
+ * Pass text with code spans already masked. It is a safety net
+ * under a provisional relaxation, never a parser: the plan's
+ * `independentObstacles` is where a session declares such a requirement.
+ */
+export function findApprovalRequirementSentence(source: string): string | null {
+  // A link destination or a bare URL holds `?`, `;` and `.` that are not
+  // sentence ends; drop them and keep the link text.
+  const text = source
+    .replace(/\]\([^)\n]*\)/g, ']')
+    .replace(/https?:\/\/\S+/gi, ' ')
+    .replace(APPROVAL_SOFTWARE_PATTERN, ' ');
+  let start = 0;
+  const sentences: string[] = [];
+  for (const found of text.matchAll(DECISION_CLAUSE_BREAK_PATTERN)) {
+    sentences.push(text.slice(start, found.index ?? 0));
+    start = (found.index ?? 0) + found[0].length;
+  }
+  sentences.push(text.slice(start));
+  return (
+    sentences.find((sentence) => {
+      const remaining = sentence.replace(NEGATED_REQUIREMENT_PATTERN, ' ');
+      return (
+        APPROVAL_WORD_PATTERN.test(remaining) &&
+        REQUIREMENT_CUE_PATTERN.test(remaining)
+      );
+    }) ?? null
+  );
+}
+
+// Every assessment that assessProvisionalChoicePlan returns, so a hand-built
+// object of the same shape never relaxes a check.
+const ASSESSED = new WeakSet<object>();
+
+/**
+ * True only for a fully clean assessment, made by assessProvisionalChoicePlan
+ * in this process, that was computed for this very
+ * issue: its source number and body SHA-256 must match `issue`. Anything else
+ * relaxes nothing, so an assessment of one source or one body snapshot never
+ * relaxes another.
+ */
+export function isEligibleProvisionalAssessment(
+  value: unknown,
+  issue: { number: number; body: string },
+): value is ProvisionalAssessment {
+  if (
+    !(
+      isPlainRecord(value) &&
+      ASSESSED.has(value) &&
+      value.eligible === true &&
+      value.route === 'claim-and-record' &&
+      Array.isArray(value.blockers) &&
+      value.blockers.length === 0 &&
+      isPlainRecord(value.plan) &&
+      isPlainRecord(value.source)
+    )
+  ) {
+    return false;
+  }
+  return (
+    value.source.issueNumber === issue.number &&
+    value.source.bodySha256 ===
+      createHash('sha256')
+        .update(String(issue.body ?? ''), 'utf8')
+        .digest('hex')
+  );
+}
+
+/** Reads the trusted `decisionIssue` verdict and cap from the injected report. */
+function readProvisionalPolicy(report: unknown): {
+  verdict: ProvisionalAssessment['policy']['decisionIssue'];
+  cap: number | null;
+} {
+  if (!isPlainRecord(report) || report.status !== 'readable') {
+    return { verdict: 'unreadable', cap: null };
+  }
+  const classes = isPlainRecord(report.classes) ? report.classes : null;
+  const verdict = classes?.decisionIssue;
+  const cap = report.maxDecisionsPerClaim;
+  return {
+    verdict:
+      verdict === 'enabled' ||
+      verdict === 'master-off' ||
+      verdict === 'class-off'
+        ? verdict
+        : 'unreadable',
+    cap:
+      typeof cap === 'number' && Number.isInteger(cap) && cap >= 1 ? cap : null,
+  };
+}
+
+function stripLeadingDotSlash(path: string): string {
+  return path.trim().replace(/^(?:\.\/)+/, '');
+}
+
+function normalizeForExcerpt(text: string): string {
+  return text.replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+function optionDistinctKey(description: string): string {
+  return description.toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * What the plan reader found. `issues` are structural problems (a wrong shape,
+ * a missing or unknown key). `findings` are semantic and each carries its own
+ * blocker code: an evidence gap, a measurement that was not run, an obstacle other than
+ * the input choice, a recorded choice that the plan does not respect.
+ */
+interface PlanReaderState {
+  issues: string[];
+  findings: ProvisionalBlocker[];
+}
+
+function readExactObject(
+  value: unknown,
+  path: string,
+  required: readonly string[],
+  optional: readonly string[],
+  state: PlanReaderState,
+): Record<string, unknown> | null {
+  if (!isPlainRecord(value)) {
+    state.issues.push(`${path} must be an object`);
+    return null;
+  }
+  for (const key of required) {
+    if (!Object.hasOwn(value, key)) {
+      state.issues.push(`${path}.${key} is required`);
+    }
+  }
+  for (const key of Object.keys(value)) {
+    if (!required.includes(key) && !optional.includes(key)) {
+      state.issues.push(`${path}.${key} is not allowed`);
+    }
+  }
+  return value;
+}
+
+function readText(
+  value: unknown,
+  path: string,
+  state: PlanReaderState,
+): string {
+  const text = nonEmptyText(value);
+  if (text === null) {
+    state.issues.push(`${path} must be a non-empty string`);
+    return '';
+  }
+  return text;
+}
+
+function readArray(
+  value: unknown,
+  path: string,
+  state: PlanReaderState,
+): unknown[] {
+  if (Array.isArray(value)) return value;
+  state.issues.push(`${path} must be an array`);
+  return [];
+}
+
+function readTextList(
+  value: unknown,
+  path: string,
+  state: PlanReaderState,
+): string[] {
+  return readArray(value, path, state).map((item, position) =>
+    readText(item, `${path}[${position}]`, state),
+  );
+}
+
+function readOption<K extends readonly string[]>(
+  value: unknown,
+  path: string,
+  keys: K,
+  state: PlanReaderState,
+): Record<K[number], string> {
+  const record = readExactObject(value, path, keys, [], state);
+  const out = {} as Record<K[number], string>;
+  for (const key of keys) {
+    out[key as K[number]] = readText(record?.[key], `${path}.${key}`, state);
+  }
+  return out;
+}
+
+function readChoice(
+  value: unknown,
+  path: string,
+  state: PlanReaderState,
+): ProvisionalPlanChoice {
+  const entry = readExactObject(
+    value,
+    path,
+    ['question', 'selectedOption', 'feasibleAlternatives', 'executionCriteria'],
+    [],
+    state,
+  );
+  return {
+    question: readText(entry?.question, `${path}.question`, state),
+    selectedOption: readOption(
+      entry?.selectedOption,
+      `${path}.selectedOption`,
+      SELECTED_OPTION_KEYS,
+      state,
+    ),
+    feasibleAlternatives: readArray(
+      entry?.feasibleAlternatives,
+      `${path}.feasibleAlternatives`,
+      state,
+    ).map((alternative, position) =>
+      readOption(
+        alternative,
+        `${path}.feasibleAlternatives[${position}]`,
+        ALTERNATIVE_OPTION_KEYS,
+        state,
+      ),
+    ),
+    executionCriteria: readTextList(
+      entry?.executionCriteria,
+      `${path}.executionCriteria`,
+      state,
+    ),
+  };
+}
+
+function readDeliverable(
+  value: unknown,
+  path: string,
+  state: PlanReaderState,
+): ProvisionalNormalizedPlan['deliverables'][number] {
+  const entry = readExactObject(
+    value,
+    path,
+    ['kind', 'target', 'purpose'],
+    [],
+    state,
+  );
+  const kind = readText(entry?.kind, `${path}.kind`, state);
+  const target = readText(entry?.target, `${path}.target`, state);
+  if (kind !== '' && !DELIVERABLE_KINDS.includes(kind)) {
+    state.issues.push(
+      `${path}.kind must be one of ${DELIVERABLE_KINDS.join(', ')}`,
+    );
+  }
+  if (
+    kind === 'file' &&
+    (target.startsWith('/') ||
+      /^[A-Za-z]:/.test(target) ||
+      /(?:^|[\\/])\.\.(?:[\\/]|$)|[\\`\n]/.test(target))
+  ) {
+    state.issues.push(`${path}.target must be a repository-relative path`);
+  }
+  return {
+    kind,
+    target,
+    purpose: readText(entry?.purpose, `${path}.purpose`, state),
+  };
+}
+
+/**
+ * Reads one evidence gap. A gap closes only through an authorized measurement
+ * that was actually run, with its result and the reference that proves the
+ * run; every other state is a blocker, and a result is never taken on trust.
+ */
+function readEvidenceGap(
+  value: unknown,
+  path: string,
+  state: PlanReaderState,
+): ProvisionalNormalizedPlan['resolvedEvidenceGaps'][number] | null {
+  const entry = readExactObject(
+    value,
+    path,
+    ['description'],
+    ['measurement'],
+    state,
+  );
+  const description = readText(
+    entry?.description,
+    `${path}.description`,
+    state,
+  );
+  const find = (code: string, detail: string): null => {
+    state.findings.push({ code, detail: `${detail}: ${description}` });
+    return null;
+  };
+  if (entry?.measurement === undefined) {
+    return find('evidence-gap', 'an evidence gap has no measurement');
+  }
+  const measurement = readExactObject(
+    entry.measurement,
+    `${path}.measurement`,
+    ['description', 'authorized', 'status'],
+    ['result', 'reference'],
+    state,
+  );
+  const measurementText = readText(
+    measurement?.description,
+    `${path}.measurement.description`,
+    state,
+  );
+  const status = measurement?.status;
+  const result = nonEmptyText(measurement?.result);
+  const reference = nonEmptyText(measurement?.reference);
+  if (measurement?.authorized !== true) {
+    return find('evidence-gap', 'the measurement for a gap is not authorized');
+  }
+  if (status === 'unavailable') {
+    return find(
+      'measurement-unavailable',
+      'the needed measurement is unavailable',
+    );
+  }
+  if (status === 'proposed' && result === null) {
+    return find(
+      'measurement-needed',
+      'an authorized measurement is proposed but not run; run it, then reassess',
+    );
+  }
+  if (status !== 'run' || result === null || reference === null) {
+    return find(
+      'measurement-unverified',
+      'a measurement result is claimed without a run and its reference',
+    );
+  }
+  return { description, measurement: measurementText, result, reference };
+}
+
+function readSuitability(
+  value: unknown,
+  state: PlanReaderState,
+): ProvisionalNormalizedPlan['suitability'] {
+  const none: ProvisionalNormalizedPlan['suitability'] = {
+    lowScoreCause: 'none',
+    reassessedScore: null,
+    rationale: null,
+  };
+  if (value === undefined) return none;
+  const entry = readExactObject(
+    value,
+    'plan.suitability',
+    ['lowScoreCause'],
+    ['reassessedScore', 'rationale'],
+    state,
+  );
+  const cause = entry?.lowScoreCause;
+  if (
+    cause !== 'none' &&
+    cause !== 'input-choice-only' &&
+    cause !== 'independent'
+  ) {
+    state.issues.push(
+      'plan.suitability.lowScoreCause must be none, input-choice-only or independent',
+    );
+    return none;
+  }
+  const reassessed = entry?.reassessedScore;
+  return {
+    lowScoreCause: cause,
+    reassessedScore: isAutopilotSuitabilityScore(reassessed)
+      ? reassessed
+      : null,
+    rationale: nonEmptyText(entry?.rationale),
+  };
+}
+
+/**
+ * Validates the plan's structure and returns its normalized form, or `null`
+ * when it is not even an object. Findings land in `state`; the caller turns
+ * them into blockers.
+ */
+function readProvisionalPlan(
+  raw: unknown,
+  state: PlanReaderState,
+): ProvisionalNormalizedPlan | null {
+  const record = readExactObject(
+    raw,
+    'plan',
+    [
+      'schemaVersion',
+      'source',
+      'humanChoiceCriteria',
+      'recordedChoices',
+      'choices',
+      'deliverables',
+      'evidence',
+      'evidenceGaps',
+      'independentObstacles',
+    ],
+    ['suitability'],
+    state,
+  );
+  if (record === null) return null;
+  if (record.schemaVersion !== PROVISIONAL_PLAN_SCHEMA_VERSION) {
+    state.issues.push(
+      `plan.schemaVersion must be ${PROVISIONAL_PLAN_SCHEMA_VERSION}`,
+    );
+  }
+  const source = readExactObject(
+    record.source,
+    'plan.source',
+    ['repository', 'issueNumber', 'bodySha256'],
+    [],
+    state,
+  );
+  const issueNumber = source?.issueNumber;
+  if (typeof issueNumber !== 'number' || !Number.isInteger(issueNumber)) {
+    state.issues.push('plan.source.issueNumber must be an integer');
+  }
+  const bodySha256 = readText(
+    source?.bodySha256,
+    'plan.source.bodySha256',
+    state,
+  );
+  if (bodySha256 !== '' && !SHA256_HEX_PATTERN.test(bodySha256)) {
+    state.issues.push('plan.source.bodySha256 must be 64 lowercase hex digits');
+  }
+  const recordedChoices = readArray(
+    record.recordedChoices,
+    'plan.recordedChoices',
+    state,
+  ).map((item, position) => {
+    const path = `plan.recordedChoices[${position}]`;
+    const entry = readExactObject(
+      item,
+      path,
+      ['reference', 'summary', 'respected'],
+      [],
+      state,
+    );
+    if (entry?.respected !== true) {
+      state.findings.push({
+        code: 'recorded-choice-contradicted',
+        detail: `${path} is not respected by the plan`,
+      });
+    }
+    return {
+      reference: readText(entry?.reference, `${path}.reference`, state),
+      summary: readText(entry?.summary, `${path}.summary`, state),
+    };
+  });
+  const resolvedEvidenceGaps = readArray(
+    record.evidenceGaps,
+    'plan.evidenceGaps',
+    state,
+  ).flatMap((item, position) => {
+    const gap = readEvidenceGap(item, `plan.evidenceGaps[${position}]`, state);
+    return gap === null ? [] : [gap];
+  });
+  for (const obstacle of readTextList(
+    record.independentObstacles,
+    'plan.independentObstacles',
+    state,
+  )) {
+    state.findings.push({
+      code: 'independent-obstacle',
+      detail: `an obstacle other than the input choice remains: ${obstacle}`,
+    });
+  }
+  return {
+    schemaVersion: PROVISIONAL_PLAN_SCHEMA_VERSION,
+    source: {
+      repository: readText(source?.repository, 'plan.source.repository', state),
+      issueNumber: typeof issueNumber === 'number' ? issueNumber : 0,
+      bodySha256,
+    },
+    humanChoiceCriteria: readTextList(
+      record.humanChoiceCriteria,
+      'plan.humanChoiceCriteria',
+      state,
+    ).map((text) => ({ text, status: 'pending' as const })),
+    recordedChoices,
+    choices: readArray(record.choices, 'plan.choices', state).map(
+      (item, position) => readChoice(item, `plan.choices[${position}]`, state),
+    ),
+    deliverables: readArray(
+      record.deliverables,
+      'plan.deliverables',
+      state,
+    ).map((item, position) =>
+      readDeliverable(item, `plan.deliverables[${position}]`, state),
+    ),
+    evidence: readTextList(record.evidence, 'plan.evidence', state),
+    resolvedEvidenceGaps,
+    suitability: readSuitability(record.suitability, state),
+  };
+}
+
+/**
+ * The conditions that keep the current route before any plan is read: the
+ * class is not enabled or its cap is unreadable, the record state cannot be
+ * replayed or already holds provisional records, the source is not a
+ * needs-decision source, or effort L is refused.
+ */
+function provisionalPreconditionBlockers(
+  input: ProvisionalAssessmentInput,
+  policy: ReturnType<typeof readProvisionalPolicy>,
+): ProvisionalBlocker[] {
+  const blockers: ProvisionalBlocker[] = [];
+  const block = (code: string, detail: string): void => {
+    blockers.push({ code, detail });
+  };
+  if (policy.verdict === 'master-off') {
+    block(
+      'master-off',
+      'dangerouslyAutoDecide is not true in the trusted policy',
+    );
+  } else if (policy.verdict === 'class-off') {
+    block(
+      'class-off',
+      'the decisionIssue class is not enabled in the trusted policy',
+    );
+  } else if (policy.verdict === 'unreadable') {
+    block(
+      'policy-unreadable',
+      'the trusted auto-decide policy could not be read',
+    );
+  } else if (policy.cap === null) {
+    block(
+      'cap-unreadable',
+      'maxDecisionsPerClaim could not be read from the trusted policy',
+    );
+  }
+  const state = input.state;
+  if (
+    !isPlainRecord(state) ||
+    state.valid !== true ||
+    typeof state.hasRecords !== 'boolean' ||
+    typeof state.status !== 'string' ||
+    !Array.isArray(state.decisions)
+  ) {
+    block(
+      'state-unreadable',
+      'the provisional record state could not be replayed',
+    );
+  } else {
+    const decisions: readonly unknown[] = state.decisions;
+    const awaitingConfirmation =
+      state.status === 'confirmation-pending' ||
+      decisions.some(
+        (decision) =>
+          isPlainRecord(decision) && decision.status === 'confirmation-pending',
+      );
+    if (awaitingConfirmation) {
+      // Checked whether or not `hasRecords` says so: a source awaiting
+      // confirmation never starts anything new.
+      block(
+        'pending-confirmation',
+        'the recorded provisional work is complete and awaits confirmation; nothing executes again',
+      );
+    } else if (state.hasRecords) {
+      block(
+        'existing-provisional-records',
+        'the source already has provisional records; Resume owns that state, not a fresh assessment',
+      );
+    } else if (state.status !== 'none' || decisions.length > 0) {
+      block(
+        'state-unreadable',
+        'the provisional record state is inconsistent: it reports a status or decisions without records',
+      );
+    }
+  }
+  const wanted = input.needsDecisionLabelName.trim().toLowerCase();
+  if (
+    !(input.issue.labels ?? []).some((l) => l.trim().toLowerCase() === wanted)
+  ) {
+    block(
+      'not-a-needs-decision-source',
+      `the source does not carry the ${input.needsDecisionLabelName} label`,
+    );
+  }
+  if (
+    !DECISION_SIGNAL_PATTERN.test(
+      maskMarkdownForScan(String(input.issue.body ?? ''), {
+        htmlComments: 'mask',
+      }),
+    )
+  ) {
+    block(
+      'no-decision-signal',
+      'the source body names no choice, so its gaps are not caused by one',
+    );
+  }
+  if (input.effort === 'L' && input.effortLPolicy === 'refuse') {
+    block(
+      'effort-refused',
+      'effort L is refused by autopilotSuitability.effortL',
+    );
+  }
+  return blockers;
+}
+
+/** The findings about a structurally valid plan, each with its own code. */
+function provisionalPlanBlockers(
+  plan: ProvisionalNormalizedPlan,
+  input: ProvisionalAssessmentInput,
+  bodySha256: string,
+  cap: number | null,
+): ProvisionalBlocker[] {
+  const blockers: ProvisionalBlocker[] = [];
+  const block = (code: string, detail: string): void => {
+    blockers.push({ code, detail });
+  };
+  const repository = input.repository ?? '';
+  if (
+    plan.source.issueNumber !== input.issue.number ||
+    plan.source.bodySha256 !== bodySha256 ||
+    (repository !== '' &&
+      plan.source.repository.toLowerCase() !== repository.toLowerCase())
+  ) {
+    block(
+      'plan-stale',
+      `the plan is not bound to this source snapshot; the current body SHA-256 is ${bodySha256}`,
+    );
+  }
+  const sourceText = normalizeForExcerpt(input.issue.body);
+  const inSource = (excerpt: string): boolean =>
+    sourceText.includes(normalizeForExcerpt(excerpt));
+  if (plan.humanChoiceCriteria.length === 0) {
+    block(
+      'human-criteria-missing',
+      'the original human-choice criteria must be listed as pending',
+    );
+  }
+  const foreignCriteria = plan.humanChoiceCriteria.filter(
+    (criterion) => !inSource(criterion.text),
+  );
+  if (foreignCriteria.length > 0) {
+    block(
+      'criteria-not-in-source',
+      `a human-choice criterion is not a verbatim excerpt of the source: ${foreignCriteria[0]?.text}`,
+    );
+  }
+  const foreignChoices = plan.recordedChoices.filter(
+    (recorded) => !inSource(recorded.reference),
+  );
+  if (foreignChoices.length > 0) {
+    block(
+      'recorded-choice-not-in-source',
+      `a recorded choice is not a verbatim excerpt of the source: ${foreignChoices[0]?.reference}`,
+    );
+  }
+  if (plan.choices.length === 0) {
+    block('choices-missing', 'the plan decides no choice');
+  }
+  plan.choices.forEach((choice, position) => {
+    const label = `choice ${position + 1}`;
+    if (choice.feasibleAlternatives.length === 0) {
+      block(
+        'alternatives-insufficient',
+        `${label} needs the selected option and at least one feasible alternative`,
+      );
+    }
+    const options = [choice.selectedOption, ...choice.feasibleAlternatives];
+    const ids = new Set(options.map((option) => option.id));
+    const descriptions = new Set(
+      options.map((option) => optionDistinctKey(option.description)),
+    );
+    if (ids.size !== options.length || descriptions.size !== options.length) {
+      block(
+        'options-not-distinct',
+        `${label} repeats an option id or description`,
+      );
+    }
+    // The selected option's verification says how its result is checked, so it
+    // is read like an execution criterion.
+    const checks = [
+      ...choice.executionCriteria,
+      choice.selectedOption.verification,
+    ];
+    const subjective = checks.find((check) =>
+      SUBJECTIVE_CRITERION_PATTERN.test(withoutFormatting(check)),
+    );
+    const approvalCriterion = checks.find(mentionsApproval);
+    const credentialCriterion = checks.find(needsCredential);
+    if (choice.executionCriteria.length === 0) {
+      block(
+        'criteria-missing',
+        `${label} has no objective execution criterion`,
+      );
+    } else if (subjective !== undefined) {
+      block(
+        'criteria-subjective',
+        `${label} has a criterion or verification that needs a person's opinion: ${subjective}`,
+      );
+    }
+    if (approvalCriterion !== undefined) {
+      block(
+        'criteria-needs-approval',
+        `${label} has an execution criterion that depends on an approval: ${approvalCriterion}`,
+      );
+    }
+    if (credentialCriterion !== undefined) {
+      block(
+        'criteria-needs-credential',
+        `${label} has an execution criterion that waits for a credential or access: ${credentialCriterion}`,
+      );
+    }
+  });
+  const declared = (input.candidateFiles ?? []).map(stripLeadingDotSlash);
+  if (input.candidateFilesDeclared === true && declared.length === 0) {
+    block(
+      'candidate-files-empty',
+      'the source has a Candidate files section that lists no path, so no file edit is bounded',
+    );
+  }
+  const outside = plan.deliverables.filter(
+    (deliverable) =>
+      deliverable.kind === 'file' &&
+      declared.length > 0 &&
+      !declared.includes(stripLeadingDotSlash(deliverable.target)),
+  );
+  if (outside.length > 0) {
+    block(
+      'surface-outside-candidate-files',
+      `the plan edits ${outside
+        .slice(0, 5)
+        .map((deliverable) => deliverable.target)
+        .join(', ')}, which the source does not list under Candidate files`,
+    );
+  }
+  const approvalDeliverable = plan.deliverables.find((deliverable) =>
+    mentionsApproval(deliverable.purpose),
+  );
+  if (approvalDeliverable !== undefined) {
+    block(
+      'criteria-needs-approval',
+      `a deliverable's purpose depends on an approval: ${approvalDeliverable.purpose}`,
+    );
+  }
+  const credentialDeliverable = plan.deliverables.find((deliverable) =>
+    needsCredential(deliverable.purpose),
+  );
+  if (credentialDeliverable !== undefined) {
+    block(
+      'criteria-needs-credential',
+      `a deliverable's purpose waits for a credential or access: ${credentialDeliverable.purpose}`,
+    );
+  }
+  if (plan.deliverables.length === 0) {
+    block(
+      'deliverables-missing',
+      'the plan names no concrete edit or deliverable surface',
+    );
+  } else {
+    const limit =
+      input.effort === 'L'
+        ? Number.POSITIVE_INFINITY
+        : PROVISIONAL_SURFACE_LIMITS[input.effort ?? 'M'];
+    if (plan.deliverables.length > limit) {
+      block(
+        'surface-oversized',
+        `the plan names ${plan.deliverables.length} deliverables, above the ${limit} that effort ${input.effort ?? 'M'} allows`,
+      );
+    }
+  }
+  if (plan.evidence.length === 0) {
+    block('evidence-missing', 'the plan cites no repository evidence');
+  }
+  if (
+    input.bodyRecordsOperatorChoice === true &&
+    plan.recordedChoices.length === 0
+  ) {
+    block(
+      'recorded-choice-unacknowledged',
+      'the source records an operator choice that the plan does not list as respected',
+    );
+  }
+  if (cap !== null && plan.choices.length > cap) {
+    block(
+      'cap-exceeded',
+      `the plan decides ${plan.choices.length} choices, above the trusted maxDecisionsPerClaim of ${cap}`,
+    );
+  }
+  return blockers;
+}
+
+/**
+ * Assesses one needs-decision source for the provisional claim-and-record
+ * path. A4 and A4.5 call it with the same inputs and therefore get the same
+ * answer. An ineligible result never loosens a check: the caller keeps the
+ * current needs-decision route (or, for `no-new-execution`, starts nothing).
+ */
+export function assessProvisionalChoicePlan(
+  input: ProvisionalAssessmentInput,
+): ProvisionalAssessment {
+  const body = String(input.issue.body ?? '');
+  const bodySha256 = createHash('sha256').update(body, 'utf8').digest('hex');
+  const policy = readProvisionalPolicy(input.policy);
+  const floor = normalizeAutopilotSuitabilityFloor(input.floor);
+  const authored = isAutopilotSuitabilityScore(input.authoredScore)
+    ? input.authoredScore
+    : null;
+  let scoreRoute: ProvisionalScoreRoute =
+    input.suitabilityEnabled === false
+      ? 'ranking-disabled'
+      : authored === null
+        ? 'no-score'
+        : authored >= floor
+          ? 'at-or-above-floor'
+          : 'below-floor';
+  let reassessed: number | null = null;
+  let plan: ProvisionalNormalizedPlan | null = null;
+  const blockers = provisionalPreconditionBlockers(input, policy);
+  const cap = policy.verdict === 'enabled' ? policy.cap : null;
+
+  if (blockers.length === 0) {
+    if (input.plan === undefined || input.plan === null) {
+      blockers.push({
+        code: 'plan-missing',
+        detail: 'no provisional plan was supplied',
+      });
+    } else {
+      const reader: PlanReaderState = { issues: [], findings: [] };
+      plan = readProvisionalPlan(input.plan, reader);
+      blockers.push(...reader.findings);
+      if (reader.issues.length > 0) {
+        blockers.push({
+          code: 'plan-malformed',
+          detail: reader.issues.slice(0, 8).join('; '),
+        });
+      } else if (plan !== null) {
+        blockers.push(...provisionalPlanBlockers(plan, input, bodySha256, cap));
+        // Only a score caused solely by the input choice may be reassessed
+        // with the plan; the floor and the authored marker stay as they are.
+        if (scoreRoute === 'below-floor') {
+          const { lowScoreCause, reassessedScore, rationale } =
+            plan.suitability;
+          if (
+            lowScoreCause === 'input-choice-only' &&
+            reassessedScore !== null &&
+            reassessedScore >= floor &&
+            rationale !== null
+          ) {
+            scoreRoute = 'reassessed-with-plan';
+            reassessed = reassessedScore;
+          } else {
+            blockers.push({
+              code: 'score-below-floor',
+              detail: `the authored score ${authored} is below the floor ${floor} and the plan does not show that the input choice alone causes it`,
+            });
+          }
+        }
+      }
+    }
+  }
+  const eligible = blockers.length === 0 && plan !== null;
+  const choiceCount = plan?.choices.length ?? null;
+  const assessment: ProvisionalAssessment = {
+    eligible,
+    route: eligible
+      ? 'claim-and-record'
+      : blockers.some((blocker) => blocker.code === 'pending-confirmation')
+        ? 'no-new-execution'
+        : 'current-route',
+    blockers,
+    policy: { decisionIssue: policy.verdict, maxDecisionsPerClaim: cap },
+    caps: {
+      choices: choiceCount,
+      decisionGenerationsAfterSelection: choiceCount,
+      maxDecisionsPerClaim: cap,
+    },
+    score: { authored, floor, route: scoreRoute, reassessed },
+    source: { issueNumber: input.issue.number, bodySha256 },
+    plan: eligible ? plan : null,
+    pendingHumanCriteria: plan?.humanChoiceCriteria.map((c) => c.text) ?? [],
+    nextStep: eligible ? 'claim-then-persist-selection' : null,
+  };
+  ASSESSED.add(assessment);
+  return assessment;
 }
 
 function escapeRegex(value: string): string {

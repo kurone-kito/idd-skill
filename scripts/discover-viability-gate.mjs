@@ -4,23 +4,42 @@
 // The scripts/discover-viability-gate.mjs copy is generated from the .mts
 // source named above by `pnpm run build`. Edit the .mts source, never the
 // generated .mjs. See docs/typescript-sources.md.
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import {
+  assessProvisionalChoicePlan,
+  findApprovalRequirementSentence,
+  isDecisionCausedSignal,
+  isEligibleProvisionalAssessment,
+  normalizeAutopilotSuitabilityFloor,
+  parseAutopilotSuitability,
+  resolveEffortLPolicy,
+} from './autopilot-suitability.mjs';
 import { parseCliArgs } from './cli-args.mjs';
 import { collaboratorPermission } from './collaborator-permission.mjs';
+import { buildProvisionalDecisionEvidenceReader } from './discover-readiness-check.mjs';
+import {
+  hasCandidateFilesHeading,
+  parseCandidateFileEntries,
+} from './discover-shared-file-overlap.mjs';
+import { parseEffort } from './effort.mjs';
 import {
   applyHelperCliOutcomeWhenDisabled,
   isHelperErrorEnvelopeEnabled,
   markCliUsageError,
   runHelperCli,
 } from './helper-cli-runner.mjs';
-import { loadPolicyConfig } from './idd-config.mjs';
+import { loadPolicyConfig, readTrustedAutoDecide } from './idd-config.mjs';
 import { maskMarkdownForScan } from './markdown-code.mjs';
+import { normalizePolicyConfig } from './policy-helpers.mjs';
 import { resolveTrustedMarkerActors } from './protocol-helpers.mjs';
 import {
   createGithubProviderAdapter,
   resolveCurrentGithubRepository,
 } from './provider-adapter-github.mjs';
-import { findInlineResolvedDecisionSpans } from './resolved-decision.mjs';
+import {
+  findInlineResolvedDecisionSpans,
+  hasResolvedDecision,
+} from './resolved-decision.mjs';
 import {
   buildTrustedLoginPredicate,
   candidateFilesExistOnDisk,
@@ -101,6 +120,9 @@ const SUBJECTIVE_VERIFICATION_PATTERN =
   /\b(feels?|looks? good|opinion|judgement?|ux call|maintainer preference|stakeholder preference|subjective)\b/i;
 const EXTERNAL_COORDINATION_PATTERN =
   /\b(external coordination|human decision|maintainer decision|stakeholder sign-?off|manual approval|waiting for (?:maintainer|stakeholder)|external system|third-?party access|credentials?|keys?|tokens?|production access|cross-repo dependency)\b/gi;
+// #4535: the two decision-class phrases of EXTERNAL_COORDINATION_PATTERN. All
+// its other alternatives name an approval, a credential or an external system.
+const DECISION_COORDINATION_PATTERN = /^(?:human|maintainer) decision$/i;
 const SECURITY_VOCABULARY_PATTERN = /^(?:credentials?|keys?|tokens?)$/i;
 const CREDENTIAL_EXTERNAL_ACTOR_PATTERN =
   '(?:maintainers?|operators?|owners?|teams?|customers?|administrators?|vendors?|providers?|externals?|third-?part(?:y|ies)|humans?)';
@@ -542,6 +564,7 @@ const DISCOVER_VIABILITY_GATE_FLAG_SPEC = {
   '--owner': { type: 'string', default: '' },
   '--repo': { type: 'string', default: '' },
   '--csv': { type: 'boolean', default: false },
+  '--provisional-plan': { type: 'string', multiple: true },
   '--help': { type: 'boolean', short: 'h' },
 };
 if (import.meta.main) {
@@ -580,6 +603,12 @@ async function main() {
   const owner = args.owner || currentRepo?.owner || '';
   const repo = args.repo || currentRepo?.repo || '';
   const port = createGithubProviderAdapter(owner, repo);
+  const provisional = prepareProvisionalAssessments(
+    args.provisionalPlans,
+    args.issueNumbers,
+    owner,
+    repo,
+  );
   // #2767: shared across every computeLiveStructuralEvidence call below,
   // so a repeated editor login across --issue candidates costs one live
   // collaborator-permission lookup (Codex review, PR #2840, round 21).
@@ -594,7 +623,11 @@ async function main() {
         issue,
         collaboratorCache,
       ),
+    ...(provisional ? { loadProvisionalAssessment: provisional.load } : {}),
   });
+  if (provisional && provisional.errors.length > 0) {
+    summary.provisionalPlanErrors = provisional.errors;
+  }
   if (args.csv) {
     process.stdout.write(renderCsv(summary));
   } else {
@@ -603,7 +636,8 @@ async function main() {
   return 0;
 }
 export async function evaluateDiscoverViability(issueNumbers, options = {}) {
-  const { loadIssue, computeStructuralEvidence } = options;
+  const { loadIssue, computeStructuralEvidence, loadProvisionalAssessment } =
+    options;
   if (typeof loadIssue !== 'function') {
     throw new Error(
       'evaluateDiscoverViability requires loadIssue(issueNumber)',
@@ -640,7 +674,15 @@ export async function evaluateDiscoverViability(issueNumbers, options = {}) {
     // this fetch for a `clear_verification`-only failure too, spending an
     // editor-history request plus a collaborator-permission lookup that
     // could never change the outcome.
-    let result = evaluateA4Viability(issue);
+    let provisional;
+    if (loadProvisionalAssessment) {
+      try {
+        provisional = await loadProvisionalAssessment(issue);
+      } catch {
+        provisional = undefined;
+      }
+    }
+    let result = evaluateA4Viability(issue, undefined, provisional);
     const hasDemotableFailure = result.failedCriteria.some(
       (id) => id === 'limited_scope' || id === 'autonomous_completion',
     );
@@ -657,7 +699,7 @@ export async function evaluateDiscoverViability(issueNumbers, options = {}) {
         structuralEvidence = undefined;
       }
       if (structuralEvidence) {
-        result = evaluateA4Viability(issue, structuralEvidence);
+        result = evaluateA4Viability(issue, structuralEvidence, provisional);
       }
     }
     if (result.passed) {
@@ -672,6 +714,7 @@ export async function evaluateDiscoverViability(issueNumbers, options = {}) {
         number: Number(issue.number ?? issueNumber),
         title: String(issue.title ?? ''),
         ...(hasWarning ? { criteria: result.criteria } : {}),
+        ...(provisional === undefined ? {} : { provisional }),
       });
       continue;
     }
@@ -680,6 +723,7 @@ export async function evaluateDiscoverViability(issueNumbers, options = {}) {
       title: String(issue.title ?? ''),
       failedCriteria: result.failedCriteria,
       criteria: result.criteria,
+      ...(provisional === undefined ? {} : { provisional }),
     });
   }
   return {
@@ -693,12 +737,16 @@ export async function evaluateDiscoverViability(issueNumbers, options = {}) {
     },
   };
 }
-export function evaluateA4Viability(issue, structuralEvidence) {
+export function evaluateA4Viability(issue, structuralEvidence, provisional) {
   const normalizedIssue = normalizeIssue(issue);
   const criteria = [];
   const failedCriteria = [];
   for (const criterion of CRITERIA) {
-    const result = criterion.evaluate(normalizedIssue, structuralEvidence);
+    const result = criterion.evaluate(
+      normalizedIssue,
+      structuralEvidence,
+      provisional,
+    );
     criteria.push({
       id: criterion.id,
       name: criterion.name,
@@ -716,6 +764,7 @@ export function evaluateA4Viability(issue, structuralEvidence) {
     passed: failedCriteria.length === 0,
     failedCriteria,
     criteria,
+    ...(provisional === undefined ? {} : { provisional }),
   };
 }
 function isGovernedByAvoidanceCue(corpus, matchIndex) {
@@ -1395,7 +1444,11 @@ function isWithinResolvedDecisionSpan(spans, index) {
  * `maskMarkdownForScan` preserves length and line structure, so spans
  * computed against `rawCorpus` apply to `corpus` at the same offsets.
  */
-function findUnexcludedExternalCoordinationMatch(corpus, rawCorpus) {
+function findUnexcludedExternalCoordinationMatch(
+  corpus,
+  rawCorpus,
+  relaxedDecisionSignals,
+) {
   const resolvedDecisionSpans = findInlineResolvedDecisionSpans(rawCorpus);
   for (const match of corpus.matchAll(
     INDEPENDENT_EXTERNAL_COMPLETION_COORDINATION_PATTERN,
@@ -1444,11 +1497,27 @@ function findUnexcludedExternalCoordinationMatch(corpus, rawCorpus) {
     ) {
       continue;
     }
+    // #4535: with an eligible provisional plan, a decision-class phrase whose
+    // own clause names no approval, credential or other authority is the
+    // input choice itself. It is skipped on its own, so a later phrase still
+    // fails; every other coordination pattern above and below is unchanged.
+    if (
+      relaxedDecisionSignals !== undefined &&
+      DECISION_COORDINATION_PATTERN.test(match[0]) &&
+      isDecisionCausedSignal(corpus, index, match[0].length)
+    ) {
+      relaxedDecisionSignals.push(match[0]);
+      continue;
+    }
     return match[0];
   }
   return null;
 }
-export function evaluateAutonomousCompletion(issue, structuralEvidence) {
+export function evaluateAutonomousCompletion(
+  issue,
+  structuralEvidence,
+  provisional,
+) {
   // A blank line (not a bare "\n") between title and body, unlike the
   // other two evaluate* functions' corpus join: CUE_HARD_BREAK_PATTERN
   // treats "\n[ \t]*\n" as a hard break, so a negation or past-investigation
@@ -1470,8 +1539,36 @@ export function evaluateAutonomousCompletion(issue, structuralEvidence) {
   // already CRLF-normalized, so maskMarkdownForScan's own normalization
   // step is a no-op here and the two corpora share the same length/line
   // structure (position-preserving masking).
-  const corpus = maskMarkdownForScan(rawCorpus, { htmlComments: 'mask' });
-  const match = findUnexcludedExternalCoordinationMatch(corpus, rawCorpus);
+  // #4535: under an eligible provisional plan the whole scan keeps inline code
+  // visible, so a credential or approval named in backticks still counts as a
+  // live requirement; fenced examples and comments stay masked. Without one
+  // the corpus is masked exactly as before.
+  const relaxing = isEligibleProvisionalAssessment(provisional, issue);
+  const corpus = maskMarkdownForScan(rawCorpus, {
+    htmlComments: 'mask',
+    ...(relaxing ? { inlineCode: 'keep' } : {}),
+  });
+  // The same approval-sentence safety net A4.5 applies, over the title and the
+  // body: an approval requirement is not a coordination phrase to skip but a
+  // blocker of its own, so under a relaxation it fails this criterion directly.
+  // The title is plain text, so it is scanned as written, apart from the masked
+  // corpus.
+  const approvalSentence = relaxing
+    ? (findApprovalRequirementSentence(issue.title) ??
+      findApprovalRequirementSentence(corpus))
+    : null;
+  if (approvalSentence !== null) {
+    return {
+      pass: false,
+      evidence: `Approval requirement that a provisional plan cannot relax: "${approvalSentence.trim().slice(0, 160)}".`,
+    };
+  }
+  const relaxedDecisionSignals = relaxing ? [] : undefined;
+  const match = findUnexcludedExternalCoordinationMatch(
+    corpus,
+    rawCorpus,
+    relaxedDecisionSignals,
+  );
   if (match !== null) {
     // #2767: same demotion contract as evaluateLimitedScope above.
     if (hasAllStructuralSignals(structuralEvidence)) {
@@ -1484,6 +1581,16 @@ export function evaluateAutonomousCompletion(issue, structuralEvidence) {
     return {
       pass: false,
       evidence: `External coordination or manual decision signal detected: "${match}".`,
+    };
+  }
+  if (
+    relaxedDecisionSignals !== undefined &&
+    relaxedDecisionSignals.length > 0
+  ) {
+    return {
+      pass: true,
+      demoted: true,
+      evidence: `Decision signal relaxed by the validated provisional plan: "${relaxedDecisionSignals[0]}".`,
     };
   }
   return {
@@ -1536,19 +1643,171 @@ export function parseArgs(argv) {
       ? occurrence.value.split(',')
       : [occurrence.value],
   );
+  // The CSV report has no column for an assessment or a rejected plan file, so
+  // the pair would hide the one thing the flag adds.
+  const provisionalPlans = values['provisional-plan'] ?? [];
+  if (values.csv === true && provisionalPlans.length > 0) {
+    throw markCliUsageError(
+      new Error(
+        '--provisional-plan cannot be combined with --csv: the CSV report cannot carry the assessment or a rejected plan file; use the default JSON output',
+      ),
+    );
+  }
   return {
     issueNumbers: normalizeIssueNumbers(issueTokens),
     csv: values.csv,
     owner: values.owner,
     repo: values.repo,
+    provisionalPlans,
     help,
+  };
+}
+/**
+ * Gathers the inputs of one provisional plan assessment and runs it (#4535).
+ * A4 and A4.5 both call this, so the two gates see the same trusted verdict,
+ * replayed state, score, effort and plan. A read that throws is "unreadable":
+ * the assessment then keeps the current route, never relaxes anything.
+ */
+export async function collectProvisionalAssessment(input) {
+  const { issue, owner, repo, config, sources } = input;
+  let policy;
+  try {
+    policy = sources.readTrusted(owner, repo);
+  } catch {
+    policy = undefined;
+  }
+  let state;
+  try {
+    state = await sources.loadState(issue.number);
+  } catch {
+    state = undefined;
+  }
+  const suitability = config?.autopilotSuitability;
+  return assessProvisionalChoicePlan({
+    issue,
+    repository: owner && repo ? `${owner}/${repo}` : null,
+    needsDecisionLabelName: input.needsDecisionLabelName,
+    policy,
+    state,
+    plan: input.plan,
+    bodyRecordsOperatorChoice: hasResolvedDecision(issue.body),
+    candidateFiles: parseCandidateFileEntries(issue.body).map(
+      (entry) => entry.raw,
+    ),
+    candidateFilesDeclared: hasCandidateFilesHeading(issue.body),
+    authoredScore: parseAutopilotSuitability(issue.body, input.markerPrefix),
+    floor: normalizeAutopilotSuitabilityFloor(suitability?.floor),
+    suitabilityEnabled: suitability?.enabled !== false,
+    effort: parseEffort(issue.body, input.markerPrefix),
+    effortLPolicy: resolveEffortLPolicy(config),
+  });
+}
+/** The live sources: a fresh trusted read and the real record replay. */
+export function createLiveProvisionalSources(owner, repo) {
+  const reader = buildProvisionalDecisionEvidenceReader({
+    owner,
+    repo,
+    port: createGithubProviderAdapter(owner, repo),
+    policy: null,
+  });
+  return {
+    readTrusted: (trustedOwner, trustedRepo) =>
+      readTrustedAutoDecide({ owner: trustedOwner, repo: trustedRepo }),
+    loadState: (issueNumber) => reader.loadState(issueNumber),
+  };
+}
+/** Label names from a raw REST `labels` array (strings or `{ name }`). */
+export function provisionalLabelNames(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((label) => {
+    const name = typeof label === 'string' ? label : label?.name;
+    return typeof name === 'string' ? [name] : [];
+  });
+}
+/**
+ * Reads `--provisional-plan` files and binds each to the issue named by its
+ * `source.issueNumber`. A file that cannot be read, is not JSON, names no
+ * listed issue or duplicates another plan for the same issue binds nothing.
+ */
+export function readProvisionalPlanFiles(
+  files,
+  issueNumbers,
+  readFile = (file) => readFileSync(file, 'utf8'),
+) {
+  const plans = new Map();
+  const duplicated = new Set();
+  const errors = [];
+  for (const file of files) {
+    let plan;
+    try {
+      plan = JSON.parse(readFile(file));
+    } catch (error) {
+      errors.push({
+        file,
+        error: `cannot read a JSON plan: ${error instanceof Error ? error.message : String(error)}`,
+      });
+      continue;
+    }
+    const number = plan?.source?.issueNumber;
+    if (typeof number !== 'number' || !issueNumbers.includes(number)) {
+      errors.push({ file, error: 'source.issueNumber names no listed issue' });
+    } else if (plans.has(number)) {
+      duplicated.add(number);
+      errors.push({ file, error: `a second plan names issue #${number}` });
+    } else {
+      plans.set(number, plan);
+    }
+  }
+  for (const number of duplicated) plans.delete(number);
+  return { plans, errors };
+}
+function prepareProvisionalAssessments(files, issueNumbers, owner, repo) {
+  if (files.length === 0) return undefined;
+  const { plans, errors } = readProvisionalPlanFiles(files, issueNumbers);
+  const { config } = loadPolicyConfig();
+  const sources = createLiveProvisionalSources(owner, repo);
+  const policy = normalizePolicyConfig(config);
+  const markerPrefix =
+    typeof config?.markerPrefix === 'string'
+      ? String(config.markerPrefix)
+      : 'idd-skill';
+  return {
+    errors,
+    load: async (issue) => {
+      const number = Number(issue.number);
+      if (!plans.has(number)) return undefined;
+      return collectProvisionalAssessment({
+        issue: {
+          number,
+          body: String(issue.body ?? ''),
+          labels: provisionalLabelNames(issue.labels),
+        },
+        owner,
+        repo,
+        plan: plans.get(number),
+        needsDecisionLabelName: policy.labels.needsDecisionLabelName,
+        markerPrefix,
+        config,
+        sources,
+      });
+    },
   };
 }
 function printHelp() {
   process.stdout.write(`Usage:
   node scripts/discover-viability-gate.mjs --issue <number> [--issue <number> ...]
   node scripts/discover-viability-gate.mjs --issues <n1,n2,...>
-    [--csv] [--owner <owner>] [--repo <repo>] [--help]
+    [--csv] [--owner <owner>] [--repo <repo>]
+    [--provisional-plan <file> ...] [--help]
+
+--provisional-plan <file> (repeatable, #4535) reads a session-written
+provisional choice plan (docs/idd-workflow.md, "Provisional plan
+assessment"), binds it to its issue by its "source.issueNumber", and reports
+a "provisional" assessment for that issue. A fresh trusted read of the
+decisionIssue class, the cap and the replayed record state decide whether
+a decision-only coordination signal is relaxed; every other criterion is
+unchanged. Without the flag the output is unchanged. The flag cannot be
+combined with --csv, which has no column for the assessment.
 
 Output schema (JSON mode):
   {
