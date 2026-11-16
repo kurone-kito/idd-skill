@@ -136,6 +136,7 @@ node scripts/resume-claim-routing.mjs --issue <N> --fresh-claim-gate
 | `claimable` | Proceed to Claim execution (fresh) |
 | `stale-reclaimable` | Proceed to Claim execution (takeover) |
 | `already-claimed` | **STOP** unless `winning_claim_id` matches your verified released id |
+| `local-branch-present` | `reason` `local-branch-inheritable`: claim first, then `git worktree add <path> <branch>`, no `-b` (`docs/idd-resume-detail.md#local-only-branch-ref`); else **STOP**, keep the ref, no claim marker |
 <!-- dprint-ignore-end -->
 
 Written fallback (`instructions-only` profile only): read issue comments
