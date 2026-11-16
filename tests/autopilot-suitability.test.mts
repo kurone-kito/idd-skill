@@ -1868,3 +1868,41 @@ test('provisional assessment: a long qualification cannot separate a need from w
     assert.deepEqual(blockerCodes(assessment), [code], criterion);
   }
 });
+
+test('provisional assessment: formatting does not hide an opinion, and a denied credential is not a prerequisite (AC1, AC4)', () => {
+  const codes = (criterion: string) =>
+    blockerCodes(
+      assessProvisionalChoicePlan(
+        assessInput({
+          plan: validPlan({
+            choices: [planChoice({ executionCriteria: [criterion] })],
+          }),
+        }),
+      ),
+    );
+  assert.deepEqual(codes('The implementation looks **good** to the author.'), [
+    'criteria-subjective',
+  ]);
+  assert.deepEqual(codes('Execution depends on approval.'), [
+    'criteria-needs-approval',
+  ]);
+  assert.deepEqual(codes('The rollout is contingent on legal sign-off.'), [
+    'criteria-needs-approval',
+  ]);
+  assert.deepEqual(codes('Work relies on production access.'), [
+    'criteria-needs-credential',
+  ]);
+  for (const denied of [
+    'No credentials are required to run the test.',
+    'The test does not need any credentials.',
+    'The job requires no credentials.',
+    'Credentials are not needed for the unit tests.',
+  ]) {
+    assert.deepEqual(codes(denied), [], denied);
+  }
+  // A denial of one thing does not hide a need for another.
+  assert.deepEqual(
+    codes('No credentials are required but the job requires legal approval.'),
+    ['criteria-needs-approval'],
+  );
+});
