@@ -528,7 +528,7 @@ const REQUIREMENT_CUE_PATTERN =
 // requirement verb and the approval word, and "without" never denies one
 // ("do not ship without approval" asks for it).
 const APPROVAL_WORD_SOURCE =
-  '(?:approv\\w*|sign(?:s|ed|ing)?[- ]?off|authori[sz]\\w*|permissions?|consent)';
+  '(?:approv\\w*|sign(?:s|ed|ing)?[- ]?off|authori[sz]\\w*|permissions?|consent|grant(?:s|ed)?\\s+(?:access|permission))';
 // One word that is not a contrast or a join, so a denial never reaches across
 // "but requires" or "and requires" into a requirement of its own.
 const PLAIN_WORD = String.raw`(?:(?!(?:but|however|yet|although|though|while|whereas|except|and|then)\b)\w+\s+)`;
@@ -560,22 +560,52 @@ const APPROVER_ADJACENT_PATTERN = new RegExp(
   'i',
 );
 
+// "requires approval", "needs sign-off", "obtain consent" and the like: a verb
+// of needing, getting or waiting, then the approval word within a few words.
+// "must reject" and "returns false" are not such verbs, so a criterion about
+// approval software ("the authorization parser must reject an unknown role")
+// is not caught.
+const NEEDS_APPROVAL_PATTERN = new RegExp(
+  [
+    String.raw`(?<![\w-])(?:require[sd]?|requiring|needs?|needed|awaiting|awaits?|pending|obtain|obtaining|get|seek|ask|wait(?:ing)?\s+for)\s+(?:\w+\s+){0,3}?${APPROVAL_WORD_SOURCE}`,
+    String.raw`(?<![\w-])${APPROVAL_WORD_SOURCE}\s+(?:is|are|will\s+be)\s+(?:required|needed|necessary|pending|essential|mandatory)`,
+  ].join('|'),
+  'i',
+);
+
 /**
  * True when `text` depends on an approval, sign-off or authorization that no
- * phrase in it denies: it states the requirement (see
- * {@link findApprovalRequirementSentence}) or ties the approval to a person or
- * body that gives it. An execution criterion must be checkable by the agent,
- * so such a text is not objective, whatever its verb. A criterion about
- * approval software ("the authorization parser rejects an unknown role") is not
+ * phrase in it denies: it needs one, or ties the approval to a person or body
+ * that gives it. An execution criterion must be checkable by the agent, so
+ * such a text is not objective, whatever its verb. A criterion about approval
+ * software ("the authorization parser must reject an unknown role") is not
  * one.
  */
 function mentionsApproval(text: string): boolean {
   const remaining = text.replace(NEGATED_REQUIREMENT_PATTERN, ' ');
   return (
-    APPROVAL_WORD_PATTERN.test(remaining) &&
-    (findApprovalRequirementSentence(remaining) !== null ||
-      APPROVER_ADJACENT_PATTERN.test(remaining))
+    NEEDS_APPROVAL_PATTERN.test(remaining) ||
+    APPROVER_ADJACENT_PATTERN.test(remaining)
   );
+}
+
+// A credential, a secret or production access that the work waits for: a verb
+// of supplying, getting or needing, then the term within a few words, or the
+// term followed by "is required". "The token parser rejects an expired token"
+// names no prerequisite.
+const CREDENTIAL_TERM_SOURCE =
+  '(?:credentials?|secrets?|api[- ]keys?|passwords?|access\\s+tokens?|production\\s+access|third-?party\\s+access)';
+const NEEDS_CREDENTIAL_PATTERN = new RegExp(
+  [
+    String.raw`(?<![\w-])(?:supply|supplies|supplied|provide[sd]?|providing|obtain|obtaining|get|receive[sd]?|request(?:s|ed|ing)?|ask(?:s|ed|ing)?(?:\\s+for)?|secure[sd]?|require[sd]?|requiring|needs?|needed|awaiting|awaits?|wait(?:ing)?\s+for)\s+(?:\w+\s+){0,3}?${CREDENTIAL_TERM_SOURCE}`,
+    String.raw`(?<![\w-])${CREDENTIAL_TERM_SOURCE}\s+(?:is|are|will\s+be)\s+(?:required|needed|necessary|pending|essential|mandatory)`,
+  ].join('|'),
+  'i',
+);
+
+/** True when `text` makes a credential, secret or production access a prerequisite. */
+function needsCredential(text: string): boolean {
+  return NEEDS_CREDENTIAL_PATTERN.test(text);
 }
 
 /**
@@ -1250,6 +1280,7 @@ function provisionalPlanBlockers(
       SUBJECTIVE_CRITERION_PATTERN.test(criterion),
     );
     const approvalCriterion = choice.executionCriteria.find(mentionsApproval);
+    const credentialCriterion = choice.executionCriteria.find(needsCredential);
     if (choice.executionCriteria.length === 0) {
       block(
         'criteria-missing',
@@ -1265,6 +1296,12 @@ function provisionalPlanBlockers(
       block(
         'criteria-needs-approval',
         `${label} has an execution criterion that depends on an approval: ${approvalCriterion}`,
+      );
+    }
+    if (credentialCriterion !== undefined) {
+      block(
+        'criteria-needs-credential',
+        `${label} has an execution criterion that waits for a credential or access: ${credentialCriterion}`,
       );
     }
   });
@@ -1297,6 +1334,15 @@ function provisionalPlanBlockers(
     block(
       'criteria-needs-approval',
       `a deliverable's purpose depends on an approval: ${approvalDeliverable.purpose}`,
+    );
+  }
+  const credentialDeliverable = plan.deliverables.find((deliverable) =>
+    needsCredential(deliverable.purpose),
+  );
+  if (credentialDeliverable !== undefined) {
+    block(
+      'criteria-needs-credential',
+      `a deliverable's purpose waits for a credential or access: ${credentialDeliverable.purpose}`,
     );
   }
   if (plan.deliverables.length === 0) {

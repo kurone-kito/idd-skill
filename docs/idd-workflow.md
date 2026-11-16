@@ -1063,7 +1063,8 @@ claim approval (preventive; no observed incident yet):
   the decision record: `question`, `selectedOption`, `feasibleAlternatives`
   (at least one, so at least two feasible options, all distinct), and
   `executionCriteria`, each checkable without a person's opinion and
-  depending on no approval; a deliverable's `purpose` depends on none either.
+  depending on no approval or credential; a deliverable's `purpose` depends
+  on none either.
 - `deliverables`: the concrete edit or deliverable surface, each a `file` (a
   repository-relative path), a `document`, or an `issue-comment`, within the
   effort estimate's limit (3 paths for S, 8 for M; effort L stays refused

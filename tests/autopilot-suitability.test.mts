@@ -1710,6 +1710,8 @@ test('provisional assessment: approval software is not an approval dependency (A
   for (const criterion of [
     'The authorization parser returns false for an unknown role.',
     'The approval state machine rejects an unknown transition.',
+    'The authorization parser must reject an unknown role.',
+    'The token parser rejects an expired token.',
   ]) {
     const assessment = assessProvisionalChoicePlan(
       assessInput({
@@ -1748,4 +1750,41 @@ test('provisional assessment: approval software is not an approval dependency (A
     );
     assert.equal(assessment.eligible, false, criterion);
   }
+});
+
+test('provisional assessment: a credential or access prerequisite in a criterion or purpose is refused (AC1, AC4)', () => {
+  for (const criterion of [
+    'An operator must supply credentials before work starts.',
+    'Wait for the vendor to provide production access.',
+    'A secret is required before the job runs.',
+  ]) {
+    const assessment = assessProvisionalChoicePlan(
+      assessInput({
+        plan: validPlan({
+          choices: [planChoice({ executionCriteria: [criterion] })],
+        }),
+      }),
+    );
+    assert.equal(assessment.eligible, false, criterion);
+    assert.deepEqual(
+      blockerCodes(assessment),
+      ['criteria-needs-credential'],
+      criterion,
+    );
+  }
+  const purpose = assessProvisionalChoicePlan(
+    assessInput({
+      plan: validPlan({
+        deliverables: [
+          {
+            kind: 'issue-comment',
+            target: 'the source issue',
+            purpose: 'request the production credentials',
+          },
+        ],
+      }),
+    }),
+  );
+  assert.equal(purpose.eligible, false);
+  assert.deepEqual(blockerCodes(purpose), ['criteria-needs-credential']);
 });
