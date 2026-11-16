@@ -1773,7 +1773,9 @@ export interface ProvisionalResolutionStore extends ProvisionalDecisionStore {
   }>;
   /**
    * Close the source issue with the completed reason, but only while its title
-   * and body still match `expected`; otherwise throw without closing.
+   * and body still match `expected` (`bodySha256` is the lowercase SHA-256 hex
+   * of the body's UTF-8 bytes); otherwise throw without closing. A store must
+   * enforce this so the close never acts on content the plan did not read.
    */
   closeSourceIssue(expected: {
     readonly title: string;
@@ -2631,9 +2633,16 @@ interface PersistedResponse {
   readonly requestedOptionId?: string;
 }
 
+/**
+ * Whether a reading contradicts a persisted response. A no, abort, or unclear
+ * reading contradicts it only when `pendingConflicts` is set, which callers
+ * leave off while another targeted decision is still undecided: there it just
+ * keeps that decision pending.
+ */
 function inputConflictsWithAnswer(
   reading: ConfirmationAnswer,
   answer: PersistedResponse,
+  pendingConflicts = true,
 ): boolean {
   if (reading.kind === 'accepted') return answer.response !== 'accepted';
   if (reading.kind === 'rework') {
@@ -2642,7 +2651,15 @@ function inputConflictsWithAnswer(
       answer.requestedOptionId !== reading.requestedOptionId
     );
   }
-  return CONFLICTING_PENDING_REASONS.has(reading.reason);
+  return pendingConflicts && CONFLICTING_PENDING_REASONS.has(reading.reason);
+}
+
+/** True once the user has actually said something, even a no or an abort. */
+function userHasAnswered(reading: ConfirmationAnswer): boolean {
+  return (
+    reading.kind !== 'pending' ||
+    CONFLICTING_PENDING_REASONS.has(reading.reason)
+  );
 }
 
 /** What the records already say about each targeted, resolved decision. */
@@ -2657,7 +2674,10 @@ function persistedResponses(
     if (decision?.status === 'confirmed') {
       return [{ response: 'accepted' as const }];
     }
-    if (decision?.status === 'rework-requested') {
+    if (
+      decision?.status === 'rework-requested' ||
+      decision?.status === 'rework-authored'
+    ) {
       return [
         {
           response: 'rework' as const,
@@ -2731,7 +2751,11 @@ async function planResolve(
       request.input,
       targets.flatMap((generation) => alternativeIdsOf(bundle, generation)),
     );
-    if (persisted.some((answer) => inputConflictsWithAnswer(reading, answer))) {
+    if (
+      persisted.some((answer) =>
+        inputConflictsWithAnswer(reading, answer, unresolved.length === 0),
+      )
+    ) {
       return resolutionRefusal(
         'fix-input',
         'a confirmation or rework request is already persisted for these decisions and the new input conflicts with it; resume without a new input',
@@ -2893,9 +2917,14 @@ async function planResolve(
         { presentation, presentationSha256: digest },
       );
     }
+    const recordedDownstream =
+      (
+        asRecord(candidate.record.event.reworkRequest).handoff as
+          | ProvisionalReworkHandoff
+          | undefined
+      )?.downstreamResults ?? [];
     const ignored = (request.downstreamResults ?? []).filter(
-      (reference) =>
-        !(parsed.answer.downstreamResults ?? []).includes(reference),
+      (reference) => !recordedDownstream.includes(reference),
     );
     return {
       kind: 'step',
@@ -2906,7 +2935,7 @@ async function planResolve(
       ...(ignored.length > 0
         ? {
             warnings: [
-              'the request named downstream results that the persisted answer does not record; they were not added',
+              'the request named downstream results that the persisted answer or the bundle handoff does not record, or that an acceptance cannot carry; they were not added',
             ],
           }
         : {}),
@@ -2930,7 +2959,7 @@ async function planResolve(
           ...released,
           presentation,
           presentationSha256: digest,
-          needsUserAnswer: true,
+          needsUserAnswer: !userHasAnswered(answer),
         }
       : released;
   }
@@ -3010,7 +3039,7 @@ async function planResolve(
     step: { kind: 'append-answer', body },
     presentation,
     presentationSha256: digest,
-    needsUserAnswer: true,
+    needsUserAnswer: false,
   };
 }
 
@@ -3266,6 +3295,25 @@ async function planResolution(
     : planReworkAuthored(context, request);
 }
 
+/** Whether a fresh read shows the step's own content in place. */
+function stepLanded(step: ResolutionStep, context: ResolutionContext): boolean {
+  switch (step.kind) {
+    case 'append-answer':
+      return context.history.comments.some(
+        (comment) => comment.body === step.body,
+      );
+    case 'close-source':
+      return context.sourceState.state === 'closed';
+    case 'release-claim':
+      return context.active === null;
+    default:
+      return (
+        rawRecordMatches(context.history.comments, step.record.recordId)
+          .length > 0
+      );
+  }
+}
+
 async function executeStep(
   step: ResolutionStep,
   store: ProvisionalResolutionStore,
@@ -3436,14 +3484,14 @@ export async function runProvisionalResolution(
           recordIds,
         });
       }
-      // Count the step only when a fresh read proves that it landed.
-      const after = await planResolution(request, store);
-      if (after.kind === 'refused') {
+      // Count the step only when a fresh read shows its content in place.
+      const fresh = await readResolutionContext(request, store);
+      if ('kind' in fresh) {
         return hold(
-          `the ${plan.step.kind} write is uncertain: ${errorText(error)}; the fresh read refused: ${after.result.reason ?? 'refused'}`,
+          `the ${plan.step.kind} write is uncertain: ${errorText(error)}; the fresh read refused: ${fresh.kind === 'refused' ? (fresh.result.reason ?? 'refused') : 'unavailable'}`,
         );
       }
-      if (after.kind === 'step' && stepKey(after.step) === key) {
+      if (!stepLanded(plan.step, fresh)) {
         return hold(
           `the ${plan.step.kind} write is uncertain: ${errorText(error)}; read the history before retrying`,
         );
