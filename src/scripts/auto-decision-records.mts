@@ -1526,7 +1526,8 @@ export interface OpenConfirmationInput extends AutoDecisionReadOptions {
 
 /**
  * List the open confirmation issues for one class and key, including an issue
- * whose records were all voided (kurone-kito/idd-skill#5177). The ordinary
+ * whose records were all voided (observed 2026-11-11,
+ * kurone-kito/idd-skill#5177). The ordinary
  * finder omits a voided record, and a confirmation issue can stay open, with
  * the authoring label, after its only record was voided, so a list built from
  * counting records alone would call the class and key free and let a later
@@ -1612,7 +1613,11 @@ export function findOpenConfirmationIssues(
       }
       const matching = entries.filter(
         (record) =>
-          record.class === input.class && recordMatchesFilters(record, input),
+          record.class === input.class &&
+          recordMatchesFilters(record, {
+            source: input.source,
+            set: input.set,
+          }),
       );
       if (matching.length === 0) {
         continue;

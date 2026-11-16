@@ -2692,6 +2692,19 @@ test('the lookup refuses the wrong key instead of reporting free', () => {
   assert.equal(byKey.publication, 'blocked');
 });
 
+test('the lookup matches on its key only, never on an extra claim or subject', () => {
+  const github = new FakeGithub(confirmationIssue(200));
+  // A structurally compatible input can carry fields the lookup does not
+  // declare. They must not narrow the match and hide the open issue.
+  const wider = {
+    claim: 'claim-other',
+    subject: '/work/other',
+  } as unknown as Partial<OpenConfirmationInput>;
+  const result = readable(open(github, wider));
+  assert.equal(result.publication, 'blocked');
+  assert.deepEqual(openNumbers(open(github, wider)), [200]);
+});
+
 test('the lookup sees only an issue whose body record counts', () => {
   const github = new FakeGithub(
     confirmationIssue(200, { lastEditedAt: EDITED_AT }),

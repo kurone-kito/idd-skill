@@ -1101,9 +1101,10 @@ above `maxPendingConfirmations` or `maxDecisionsPerClaim`.
   `--confirmation <number>` shows whether it still carries the authoring label.
   That list omits a voided record, yet its confirmation issue can stay open with
   the authoring label, and a later session would then call the class and key
-  free and publish a second issue for it (kurone-kito/idd-skill#5177, found
-  while reviewing kurone-kito/idd-skill#5168). So before it treats the class
-  and key as free, the session also runs
+  free and publish a second issue for it (observed 2026-11-11,
+  kurone-kito/idd-skill#5177, found while reviewing
+  kurone-kito/idd-skill#5168). So before it treats the class and key as free,
+  the session also runs
   `--open-issues --class <class> --source <source>` (`--set <set ID>` in place
   of `--source` for `authoringChoice`), with the same trusted flags. That
   separate read lists every open confirmation issue for the class and key,
