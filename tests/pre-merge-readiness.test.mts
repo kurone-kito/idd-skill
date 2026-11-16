@@ -740,27 +740,30 @@ test('scope-overrun historical evidence: the helper-scripts section carries one 
     ),
     'utf8',
   );
-  // Count lines that start with the label: an unrelated `syncRecommendation:`
-  // elsewhere in the file ends with the same letters but is not such a line.
+  // Count lines that start with the label inside this section only. Another
+  // section of the same file (the scope-decision owner opt-out design) carries
+  // its own line, and an unrelated `syncRecommendation:` field ends with the
+  // same letters without starting such a line.
   const lines = text.split('\n');
-  const recommendationLines = lines.filter((line) =>
+  const heading = lines.indexOf('#### Historical scope-overrun evidence');
+  assert.notEqual(heading, -1);
+  const nextHeading = lines.findIndex(
+    (line, index) => index > heading && /^#{1,4} /u.test(line),
+  );
+  assert.notEqual(nextHeading, -1);
+  const sectionLines = lines.slice(heading, nextHeading);
+  const recommendationLines = sectionLines.filter((line) =>
     line.startsWith('Recommendation:'),
   );
   assert.deepEqual(recommendationLines, [HISTORICAL_SCOPE_RECOMMENDATION]);
+  // The first sentence is allowed only when the pair is valid, so it appears
+  // nowhere in the file.
   assert.equal(
     text.includes('existing records can tell a past overrun'),
     false,
   );
-  const heading = lines.indexOf('#### Historical scope-overrun evidence');
-  assert.notEqual(heading, -1);
-  const recommendation = lines.indexOf(HISTORICAL_SCOPE_RECOMMENDATION);
-  assert.ok(recommendation > heading);
-  const nextHeading = lines.findIndex(
-    (line, index) => index > heading && /^#{1,4} /u.test(line),
-  );
-  assert.ok(nextHeading > recommendation);
   // The evidence table names every binding the issue lists.
-  const section = lines.slice(heading, nextHeading).join('\n');
+  const section = sectionLines.join('\n');
   for (const binding of [
     'Claim identity',
     'Unchanged issue scope',
