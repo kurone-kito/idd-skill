@@ -26,6 +26,7 @@ import {
   GH_API_PAGINATED_MAX_BYTES,
   GhPaginatedResponseLimitError,
 } from '../src/scripts/gh-exec.mts';
+import { loadTrustedIddConfig } from '../src/scripts/idd-config.mts';
 import {
   renderClaimedByMarker,
   renderExternalCheckWaiverComment,
@@ -981,6 +982,384 @@ test('computePreMergeReadinessBlockers carries scope-overrun evidence into F3', 
   );
   assert.deepEqual(scopeBlockers({ prHeadSha: SCOPE_OVERRUN_HEAD }), []);
 });
+
+// #5222: fixtures for the scope-decision owner opt-out design in
+// idd-template/docs/idd-helper-scripts.md. The design adds no setting, so each
+// case below pins today's blocking result: only the exact
+// `Scope decision: accept head <sha>` comment on the live head replaces a
+// missing owner decision.
+const SCOPE_OPT_OUT_BASE_CONFIG = {
+  trustedMarkerActors: ['kurone-kito', 'maintainer'],
+};
+// Placeholder only: no such key exists in schemas/policy.schema.json.
+const SCOPE_OPT_OUT_PLACEHOLDER = { fixtureOnlyOptOut: { enabled: true } };
+
+type ScopeOptOutComment = ReturnType<
+  ProviderPort['listWorkItemComments']
+>[number];
+
+function scopeOptOutComment(
+  id: number,
+  body: string,
+  lastEditedAt: string | null = null,
+): ScopeOptOutComment {
+  return {
+    id,
+    createdAt: '2026-05-12T10:30:00Z',
+    updatedAt: '2026-05-12T10:30:00Z',
+    body,
+    authorLogin: 'maintainer',
+    lastEditedAt,
+  };
+}
+
+function scopeOptOutRecord(): ScopeOptOutComment {
+  return scopeOptOutComment(
+    44,
+    renderScopeOverrunRecordComment({
+      markerPrefix: 'idd-skill',
+      agentId: 'codex-test',
+      issueNumber: 7,
+      effort: 'M',
+      candidateFiles: SCOPE_OVERRUN_FILES,
+      pullRequestNumber: 1,
+      branch: 'issue/7-task',
+      headSha: 'a'.repeat(40),
+    }),
+  );
+}
+
+function scopeOptOutReview(
+  commitId: string,
+  body: string,
+  state = 'APPROVED',
+): ProviderReviewClauseNode {
+  return {
+    id: 'PRR_scope_opt_out',
+    authorLogin: 'maintainer',
+    authorTypename: 'User',
+    submittedAt: '2026-05-12T10:40:00Z',
+    commitId,
+    commentCount: 0,
+    body,
+    state,
+  };
+}
+
+function collectScopeOptOut(
+  options: {
+    loadConfig?: (owner: string, repo: string, ref: string) => unknown;
+    extraComments?: readonly ScopeOptOutComment[];
+    graphQlReviews?: ProviderReviewClauseNode[];
+  } = {},
+) {
+  const restore = stubExecutable('gh', FORCED_HANDOFF_GH_STUB);
+  try {
+    const base = forcedHandoffMergeFakePort({
+      scope: 'issue-plus-pr',
+      earlierLinkedPr: false,
+      linkedLookupFails: false,
+      ...(options.graphQlReviews
+        ? { graphQlReviews: options.graphQlReviews }
+        : {}),
+    });
+    const issue = scopeOverrunIssue(SCOPE_OVERRUN_FILES);
+    const port: ProviderPort = {
+      ...base,
+      getWorkItem: (number) =>
+        number === 7
+          ? { number, title: issue.title, body: issue.body, state: 'OPEN' }
+          : base.getWorkItem(number),
+      listChangeRequestChangedFiles: () => [...SCOPE_OVERRUN_FILES],
+      getChangeRequestHeadRef: () => 'issue/7-task',
+      listWorkItemComments: (number, listOptions) => {
+        const comments = base.listWorkItemComments(number, listOptions);
+        return number === 7
+          ? [...comments, scopeOptOutRecord(), ...(options.extraComments ?? [])]
+          : comments;
+      },
+    };
+    return collectPreMergeReadiness(
+      [
+        '--pr',
+        '1',
+        '--claim-issue',
+        '7',
+        '--claim-id',
+        'scope-test',
+        '--owner',
+        'o',
+        '--repo',
+        'r',
+        '--now',
+        '2026-05-12T11:00:00Z',
+      ],
+      () => port,
+      (options.loadConfig ?? (() => SCOPE_OPT_OUT_BASE_CONFIG)) as never,
+      undefined,
+      () => 'b'.repeat(40),
+    );
+  } finally {
+    restore();
+  }
+}
+
+function assertScopeOptOutBlocks(
+  report: ReturnType<typeof collectScopeOptOut>,
+  reason: string,
+) {
+  assert.deepEqual(report.claim.scopeOverrun, {
+    status: 'invalid',
+    reason,
+    recordedHeadSha: 'a'.repeat(40),
+  });
+  assert.equal(
+    (report.blockers as Array<{ gate: string }>).some(
+      (blocker) => blocker.gate === 'scope-overrun',
+    ),
+    true,
+  );
+  assert.equal(report.ready, false);
+}
+
+test('scope-decision opt-out design: the exact comment on the live head is the control', () => {
+  const report = collectScopeOptOut({
+    extraComments: [
+      scopeOptOutComment(46, `Scope decision: accept head ${'a'.repeat(40)}`),
+    ],
+  });
+  assert.equal(report.claim.scopeOverrun?.status, 'valid');
+  assert.equal(
+    (report.blockers as Array<{ gate: string }>).some(
+      (blocker) => blocker.gate === 'scope-overrun',
+    ),
+    false,
+  );
+});
+
+test('scope-decision opt-out design: an absent value still requires the exact comment', () => {
+  assertScopeOptOutBlocks(collectScopeOptOut(), 'no-decision');
+});
+
+test('scope-decision opt-out design: an invalid value still requires the exact comment', () => {
+  // The placeholder has the wrong type, and no reader consumes it today.
+  const report = collectScopeOptOut({
+    loadConfig: () => ({
+      ...SCOPE_OPT_OUT_BASE_CONFIG,
+      fixtureOnlyOptOut: 'not-an-object',
+    }),
+  });
+  assertScopeOptOutBlocks(report, 'no-decision');
+});
+
+for (const [label, fetchEncodedConfig] of [
+  [
+    'a failed read',
+    () => {
+      throw new Error('gh: HTTP 500 (Internal Server Error)');
+    },
+  ],
+  ['a malformed body', () => Buffer.from('{not json').toString('base64')],
+  ['a non-object body', () => Buffer.from('[]').toString('base64')],
+] as const) {
+  test(`scope-decision opt-out design: ${label} reading the trusted config stops readiness`, () => {
+    // An unreadable value is not a 404: the real trusted-ref reader throws, so
+    // no readiness report exists that could accept any decision. A 404 is not
+    // used here because it takes the user-global fallback, which reads files
+    // on the host running the test.
+    assert.throws(
+      () =>
+        collectScopeOptOut({
+          loadConfig: (owner, repo, ref) =>
+            loadTrustedIddConfig(
+              owner,
+              repo,
+              ref,
+              fetchEncodedConfig,
+              () => {
+                throw new Error('the legacy policy probe must not run');
+              },
+              { userGlobalFallback: false },
+            ),
+        }),
+      /cannot confirm \.github\/idd\/config\.json for o\/r@main/u,
+    );
+  });
+}
+
+test('scope-decision opt-out design: a value only on the pull request head is never read', () => {
+  const requestedRefs: string[] = [];
+  const report = collectScopeOptOut({
+    loadConfig: (_owner, _repo, ref) => {
+      requestedRefs.push(ref);
+      return ref === 'main'
+        ? SCOPE_OPT_OUT_BASE_CONFIG
+        : { ...SCOPE_OPT_OUT_BASE_CONFIG, ...SCOPE_OPT_OUT_PLACEHOLDER };
+    },
+  });
+  // The trusted read names only the pull request's base ref, so a value that
+  // exists on the head cannot be selected.
+  assert.ok(requestedRefs.length > 0);
+  assert.deepEqual([...new Set(requestedRefs)], ['main']);
+  assertScopeOptOutBlocks(report, 'no-decision');
+});
+
+for (const [label, reviews] of [
+  [
+    'a generic approval at the live head',
+    [scopeOptOutReview('a'.repeat(40), 'Looks good to me.')],
+  ],
+  [
+    'a trusted approval left on an older head',
+    [scopeOptOutReview('b'.repeat(40), 'Looks good to me.')],
+  ],
+  [
+    'a scope-naming approval at the live head',
+    [
+      scopeOptOutReview(
+        'a'.repeat(40),
+        `The changed scope (${SCOPE_OVERRUN_FILES.join(', ')}) is accepted for head ${'a'.repeat(40)}.`,
+      ),
+    ],
+  ],
+] as const) {
+  test(`scope-decision opt-out design: ${label} does not replace the exact comment`, () => {
+    // Pull request review nodes carry no edit state, so an edited review is
+    // expressed below as an issue comment, the only record readiness reads.
+    assertScopeOptOutBlocks(
+      collectScopeOptOut({ graphQlReviews: [...reviews] }),
+      'no-decision',
+    );
+  });
+}
+
+for (const [label, input, reason, recordedHeadSha] of [
+  [
+    'a decision recorded for a head that has since moved',
+    {
+      comments: [scopeOverrunDecisionComment(SCOPE_OVERRUN_HEAD)],
+      headSha: 'c'.repeat(40),
+    },
+    'current-head-mismatch',
+    SCOPE_OVERRUN_HEAD,
+  ],
+  [
+    'a decision that names the moved head while the record names the old one',
+    {
+      comments: [scopeOverrunDecisionComment('c'.repeat(40))],
+      headSha: 'c'.repeat(40),
+    },
+    'decision-head-mismatch',
+    SCOPE_OVERRUN_HEAD,
+  ],
+  [
+    'a stale owner review for an older head',
+    {
+      comments: [
+        {
+          id: '43',
+          createdAt: '2026-11-07T12:05:00Z',
+          body: `Owner review: the changed scope is accepted for head ${'b'.repeat(40)}.`,
+          authorLogin: 'maintainer',
+          lastEditedAt: null,
+        },
+      ],
+    },
+    'no-decision',
+    SCOPE_OVERRUN_HEAD,
+  ],
+  [
+    'an edited owner review for the live head',
+    {
+      comments: [
+        {
+          id: '43',
+          createdAt: '2026-11-07T12:05:00Z',
+          body: `Owner review: the changed scope is accepted for head ${SCOPE_OVERRUN_HEAD}.`,
+          authorLogin: 'maintainer',
+          lastEditedAt: '2026-11-07T12:10:00Z',
+        },
+      ],
+    },
+    'no-decision',
+    SCOPE_OVERRUN_HEAD,
+  ],
+  [
+    'an edited exact comment',
+    {
+      comments: [
+        {
+          ...scopeOverrunDecisionComment(SCOPE_OVERRUN_HEAD),
+          lastEditedAt: '2026-11-07T12:10:00Z',
+        },
+      ],
+    },
+    'decision-edited-or-unknown',
+    // The decision is rejected before any record is selected.
+    null,
+  ],
+  [
+    'a generic approval comment',
+    {
+      comments: [
+        {
+          id: '43',
+          createdAt: '2026-11-07T12:05:00Z',
+          body: 'LGTM, the pull request looks fine.',
+          authorLogin: 'maintainer',
+          lastEditedAt: null,
+        },
+      ],
+    },
+    'no-decision',
+    SCOPE_OVERRUN_HEAD,
+  ],
+  [
+    'a decision-shaped approval without a head',
+    {
+      comments: [
+        {
+          id: '43',
+          createdAt: '2026-11-07T12:05:00Z',
+          body: 'Scope decision: approved',
+          authorLogin: 'maintainer',
+          lastEditedAt: null,
+        },
+      ],
+    },
+    'decision-malformed',
+    // The decision is rejected before any record is selected.
+    null,
+  ],
+  [
+    'a self-authored exact comment',
+    {
+      comments: [
+        {
+          ...scopeOverrunDecisionComment(SCOPE_OVERRUN_HEAD),
+          body: `Scope decision: accept head ${SCOPE_OVERRUN_HEAD}\n\n<!-- idd-agent-authored: codex-test -->`,
+        },
+      ],
+    },
+    'decision-agent-authored',
+    // The decision is rejected before any record is selected.
+    null,
+  ],
+] as const) {
+  test(`scope-decision opt-out design: ${label} does not count as the decision`, () => {
+    const result = resolveScopeOverrunReadiness(
+      scopeOverrunInput({
+        ...input,
+        comments: [scopeOverrunRecordComment({}), ...input.comments],
+      }),
+    );
+    assert.deepEqual(result, {
+      status: 'invalid',
+      reason,
+      recordedHeadSha,
+    });
+  });
+}
 
 test('collectPreMergeReadiness blocks when a claimed issue is unreadable', () => {
   const restore = stubExecutable('gh', FORCED_HANDOFF_GH_STUB);
