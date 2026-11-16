@@ -873,7 +873,10 @@ function duplicateJsonKeys(json) {
   }
   return duplicates;
 }
-function parseMarkedJson(body, marker, issues) {
+/** The one-line italic explanation an answer comment may show before its JSON. */
+export const PROVISIONAL_DECISION_ANSWER_NOTE =
+  '_Provisional decision answer — IDD automation record. Do not edit._';
+function parseMarkedJson(body, marker, issues, allowVisibleNote = false) {
   if (!body.startsWith(marker)) {
     issues.push({
       code: 'marker-required',
@@ -892,6 +895,11 @@ function parseMarkedJson(body, marker, issues) {
       message: 'The marker must be followed by a newline.',
     });
     return undefined;
+  }
+  if (allowVisibleNote) {
+    // An optional one-line italic note keeps the comment readable on GitHub.
+    const note = /^_[^\r\n]+_\r?\n/u.exec(payload);
+    if (note) payload = payload.slice(note[0].length);
   }
   if (payload.trim().length === 0) {
     issues.push({
@@ -1144,6 +1152,7 @@ function parseAnswerComment(body) {
     body,
     PROVISIONAL_DECISION_ANSWER_MARKER,
     parseIssues,
+    true,
   );
   if (parseIssues.length > 0) return { ok: false, issues: parseIssues };
   const issues = validateAnswerShape(value);
@@ -1651,7 +1660,6 @@ function reworkHandoffIssue(handoff, record, currentBundle, allStates) {
  * prompt access. The caller owns API pagination, author trust, edit checks,
  * claim verification, and independent work verification.
  */
-// audit:ignore-dead-export: runtime consumer is tracked in issue #4536
 export function replayProvisionalDecisionHistory(input) {
   const issues = [];
   if (!input.completeHistory) {

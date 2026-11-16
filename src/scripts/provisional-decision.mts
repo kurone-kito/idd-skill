@@ -23,6 +23,7 @@ import {
 import { buildVerifiedClaimLineage } from './provisional-claim-lineage.mts';
 import {
   PROVISIONAL_DECISION_ANSWER_MARKER,
+  PROVISIONAL_DECISION_ANSWER_NOTE,
   type ProvisionalDecisionAnswer,
   type ProvisionalDecisionComment,
   type ProvisionalDecisionRecord,
@@ -1864,7 +1865,7 @@ function pending(reason: ConfirmationPendingReason): ConfirmationAnswer {
  * not authentication, and a dishonest authorized caller is outside the
  * guarantee.
  */
-// audit:ignore-dead-export: the CLI and GitHub store wiring is the follow-up of issue #4536; tests lock the input rules until then
+// audit:ignore-dead-export: no production caller until the command and GitHub store wiring lands (follow-up of roadmap #4528, not yet filed); tests lock the input rules until then
 export function readConfirmationAnswer(
   input: ConfirmationInput | null | undefined,
   alternativeIds: readonly string[],
@@ -1946,6 +1947,9 @@ interface ResolutionRequestBase {
   readonly issueNumber: number;
   /** The coordination claim this session holds for the operator-directed review. */
   readonly claimId: string;
+  /** The agent and branch named by that claim's marker, checked with its ID. */
+  readonly agentId: string;
+  readonly branch: string;
   /** Caller-verified evidence for every rework-authored record in history. */
   readonly verifiedReworkRoadmaps: readonly VerifiedProvisionalReworkRoadmap[];
 }
@@ -2099,10 +2103,22 @@ function stepKey(step: ResolutionStep): string {
   }
 }
 
+/** Key order by code unit, so the digest is the same in every process. */
+function digestJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(digestJson).join(',')}]`;
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>).sort(
+      ([left], [right]) => (left < right ? -1 : left > right ? 1 : 0),
+    );
+    return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${digestJson(item)}`).join(',')}}`;
+  }
+  return JSON.stringify(value) ?? 'null';
+}
+
 function presentationSha256(
   presentation: ProvisionalResolutionPresentation,
 ): string {
-  return bodySha256(stableJson(presentation));
+  return bodySha256(digestJson(presentation));
 }
 
 function uuidFromSeed(seed: string): string {
@@ -2304,7 +2320,7 @@ function reworkHandoffFor(
 }
 
 function answerBodyFor(answer: ProvisionalDecisionAnswer): string {
-  return `${ANSWER_MARKER}\n${JSON.stringify(answer)}`;
+  return `${ANSWER_MARKER}\n${PROVISIONAL_DECISION_ANSWER_NOTE}\n${JSON.stringify(answer)}`;
 }
 
 /** The candidate record an answer would back for one decision, if any. */
@@ -2502,6 +2518,15 @@ function firstClaimGateFailure(
       'a different claim is active; reconcile its release before a new resolution',
     );
   }
+  if (
+    active.agentId !== context.request.agentId ||
+    active.branch !== context.request.branch
+  ) {
+    return resolutionRefusal(
+      'fix-input',
+      'the active claim marker names a different agent or branch than the request',
+    );
+  }
   if (implementationClaimIds(replay).has(active.claimId)) {
     return resolutionRefusal(
       'fix-input',
@@ -2527,6 +2552,39 @@ function releaseStep(
       ...(reason ? { reason } : {}),
     },
   };
+}
+
+function alternativeIdsOf(
+  bundle: readonly ReplayedProvisionalDecision[],
+  decisionGeneration: number,
+): string[] {
+  return (
+    (bundle.find(
+      (decision) => decision.decisionGeneration === decisionGeneration,
+    )?.selection.event.feasibleAlternatives ?? []) as JsonRecord[]
+  ).map((alternative) => String(alternative.id));
+}
+
+/** Pending reasons that are a deliberate "no" or abort by the user. */
+const EXPLICIT_NO_REASONS: ReadonlySet<ConfirmationPendingReason> = new Set([
+  'declined',
+  'default-no',
+  'eof',
+  'cancelled',
+]);
+
+function inputConflictsWithAnswer(
+  reading: ConfirmationAnswer,
+  answer: ProvisionalDecisionAnswer,
+): boolean {
+  if (reading.kind === 'accepted') return answer.response !== 'accepted';
+  if (reading.kind === 'rework') {
+    return (
+      answer.response !== 'rework' ||
+      answer.requestedOptionId !== reading.requestedOptionId
+    );
+  }
+  return EXPLICIT_NO_REASONS.has(reading.reason);
 }
 
 async function planResolve(
@@ -2591,6 +2649,12 @@ async function planResolve(
         }
         return { kind: 'step', step: { kind: 'close-source' } };
       }
+      if (context.sourceState.stateReason !== 'completed') {
+        return resolutionRefusal(
+          'recovery-hold',
+          `the source is closed as ${context.sourceState.stateReason ?? 'an unknown reason'}, not completed; reconcile it before releasing the claim`,
+        );
+      }
       return releaseStep(
         context,
         'confirmed-closed',
@@ -2633,7 +2697,9 @@ async function planResolve(
   const target = unresolved[0] as number;
   const downstream = request.downstreamResults ?? [];
 
-  // An existing valid answer is durable: the first one wins, with no prompt.
+  // An existing valid answer is durable: the first one wins. A new input may
+  // agree with it or be absent, but an explicit conflicting input is refused,
+  // because a confirmation cannot be undone.
   for (const comment of context.history.comments) {
     if (
       !comment.body.startsWith(ANSWER_MARKER) ||
@@ -2644,14 +2710,25 @@ async function planResolve(
       continue;
     }
     const parsed = parseProvisionalDecisionAnswerComment(comment.body);
-    if (!parsed.ok) continue;
-    if (parsed.answer.response === 'rework' && unresolved.length !== 1)
+    if (!parsed.ok || !parsed.answer.presentedQuestion) continue;
+    const covered = unresolved.filter((generation) =>
+      (
+        parsed.answer.appliesToDecisionGenerations ??
+        parsed.answer.decisionGenerations
+      ).includes(generation),
+    );
+    if (
+      covered.length === 0 ||
+      (parsed.answer.response === 'rework' && covered.length !== 1)
+    ) {
       continue;
+    }
+    const existingTarget = covered[0] as number;
     const candidate = recordForAnswer(
       context,
       bundle,
       bundleGeneration,
-      target,
+      existingTarget,
       parsed.answer,
       comment.url,
       comment.createdAt,
@@ -2662,29 +2739,40 @@ async function planResolve(
       recordComment(context, candidate.record),
     ]);
     if (
-      replayAccepts(
+      !replayAccepts(
         preview,
         bundleGeneration,
-        target,
+        existingTarget,
         parsed.answer.response === 'accepted'
           ? 'confirmed'
           : 'rework-requested',
       )
     ) {
-      return {
-        kind: 'step',
-        step: { kind: candidate.kind, record: candidate.record },
-        presentation,
-        presentationSha256: digest,
-      };
+      continue;
     }
+    const reading = readConfirmationAnswer(
+      request.input,
+      alternativeIdsOf(bundle, existingTarget),
+    );
+    if (inputConflictsWithAnswer(reading, parsed.answer)) {
+      return resolutionRefusal(
+        'fix-input',
+        'a valid answer is already persisted for this decision and the new input conflicts with it; resume without a new input',
+        { presentation, presentationSha256: digest },
+      );
+    }
+    return {
+      kind: 'step',
+      step: { kind: candidate.kind, record: candidate.record },
+      presentation,
+      presentationSha256: digest,
+    };
   }
 
-  const alternativeIds = (
-    (bundle.find((decision) => decision.decisionGeneration === target)
-      ?.selection.event.feasibleAlternatives ?? []) as JsonRecord[]
-  ).map((alternative) => String(alternative.id));
-  const answer = readConfirmationAnswer(request.input, alternativeIds);
+  const answer = readConfirmationAnswer(
+    request.input,
+    alternativeIdsOf(bundle, target),
+  );
   if (answer.kind === 'pending') {
     const released = releaseStep(
       context,
@@ -2828,12 +2916,15 @@ function derivedReworkEvidence(
     const parsed = parseProvisionalDecisionRecordComment(comment.body);
     if (!parsed.ok) continue;
     const record = parsed.record;
+    const roadmap = asRecord(record.event.reworkRoadmap);
     if (
       record.event.type === 'rework-authored' &&
       latest &&
-      !evidence.some((item) => item.recordId === record.recordId)
+      !evidence.some((item) => item.recordId === record.recordId) &&
+      roadmap.authoringSetId === request.authoring.owner.setId &&
+      roadmap.roadmapMarkerId === request.authoring.roadmap.markerId &&
+      roadmap.url === request.authoring.roadmap.url
     ) {
-      const roadmap = asRecord(record.event.reworkRoadmap);
       evidence.push({
         recordId: record.recordId,
         sourceBefore: latest,
@@ -2913,6 +3004,28 @@ async function planReworkAuthored(
     return resolutionRefusal(
       'none',
       'no rework request is waiting for its authoring record',
+    );
+  }
+  const lastClaim = context.lineage.at(-1);
+  if (
+    !lastClaim ||
+    lastClaim.claimId !== request.claimId ||
+    lastClaim.agentId !== request.agentId ||
+    lastClaim.branch !== request.branch
+  ) {
+    return resolutionRefusal(
+      'fix-input',
+      'the latest claim on the source is not the released coordination claim named by the request',
+    );
+  }
+  if (
+    !bundle.some((decision) => decision.status === 'rework-authored') &&
+    latestRecorded.snapshot.title === context.source.snapshot.title &&
+    latestRecorded.snapshot.bodySha256 === context.source.snapshot.bodySha256
+  ) {
+    return resolutionRefusal(
+      'fix-input',
+      'the source has not been rewritten into the rework roadmap',
     );
   }
   const target = awaiting[0] as ReplayedProvisionalDecision;
@@ -3053,7 +3166,7 @@ async function releaseVerified(
  * about. With `apply`, each write is preceded by a second fresh plan that must
  * name the same step, and followed by a fresh read that must show it.
  */
-// audit:ignore-dead-export: the CLI and GitHub store wiring is the follow-up of issue #4536; tests lock the lifecycle until then
+// audit:ignore-dead-export: no production caller until the command and GitHub store wiring lands (follow-up of roadmap #4528, not yet filed); tests lock the lifecycle until then
 export async function runProvisionalResolution(
   request: ProvisionalResolutionRequest,
   store: ProvisionalResolutionStore,
@@ -3106,7 +3219,11 @@ export async function runProvisionalResolution(
 
     const again = await planResolution(request, store);
     if (again.kind !== 'step' || stepKey(again.step) !== key) {
-      return hold('the plan changed before the write; nothing was written');
+      return hold(
+        again.kind === 'refused'
+          ? `the plan changed before the write; nothing was written: ${again.result.reason ?? 'refused'}`
+          : 'the plan changed before the write; nothing was written',
+      );
     }
     try {
       await executeStep(plan.step, store);
@@ -3120,7 +3237,13 @@ export async function runProvisionalResolution(
           recordIds,
         };
       }
+      // Count the step only when a fresh read proves that it landed.
       const after = await planResolution(request, store);
+      if (after.kind === 'refused') {
+        return hold(
+          `the ${plan.step.kind} write is uncertain: ${errorText(error)}; the fresh read refused: ${after.result.reason ?? 'refused'}`,
+        );
+      }
       if (after.kind === 'step' && stepKey(after.step) === key) {
         return hold(
           `the ${plan.step.kind} write is uncertain: ${errorText(error)}; read the history before retrying`,
