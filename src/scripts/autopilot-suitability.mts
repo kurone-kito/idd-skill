@@ -537,7 +537,7 @@ const PLAIN_WORD = String.raw`(?:(?!(?:but|however|yet|although|though|while|whe
 function negationPattern(term: string): RegExp {
   return new RegExp(
     [
-      String.raw`(?<![\w-])(?:(?:does|do|did|will|would|should|shall|can|could)\s+not|doesn't|don't|didn't|won't|wouldn't)\s+(?:really\s+|actually\s+)?(?:need|require)\s+${PLAIN_WORD}{0,4}?${term}`,
+      String.raw`(?<![\w-])(?:(?:does|do|did|will|would|should|shall|can|could|must|may|might)\s+not|doesn't|don't|didn't|won't|wouldn't|mustn't)\s+(?:really\s+|actually\s+)?(?:need|require)\s+${PLAIN_WORD}{0,4}?${term}`,
       String.raw`(?<![\w-])(?:needs?|needed|requires?|required|requiring)\s+(?:no|zero)\s+${PLAIN_WORD}{0,3}?${term}`,
       String.raw`(?<![\w-])no\s+${PLAIN_WORD}{0,3}?${term}\s+(?:is|are|will\s+be)\s+(?:needed|required|necessary)`,
       String.raw`(?<![\w-])${term}\s+(?:is|are|will\s+be)\s+not\s+(?:needed|required|necessary)`,
@@ -581,6 +581,8 @@ const GAP_WORDS = String.raw`(?:[\w'-]+[\s,]+){0,15}?`;
 // is not caught.
 const NEEDS_APPROVAL_PATTERN = new RegExp(
   [
+    // "do not proceed without approval"
+    String.raw`(?<![\w-])(?:cannot|can't|do\s+not|don't|must\s+not|never|not)\s+(?:\w+\s+){0,4}?without\s+${GAP_WORDS}${APPROVAL_WORD_SOURCE}`,
     String.raw`(?<![\w-])(?:require[sd]?|requiring|needs?|needed|awaiting|awaits?|pending|obtain|obtaining|get|seek|ask|wait(?:ing)?\s+for|depend(?:s|ed|ent)?\s+on|rel(?:y|ies|ied)\s+on|hinges?\s+on|contingent\s+on|conditional\s+on|subject\s+to|gated\s+(?:on|by)|blocked\s+(?:on|by))[\s,]+${GAP_WORDS}${APPROVAL_WORD_SOURCE}`,
     String.raw`(?<![\w-])${APPROVAL_WORD_SOURCE}\s+(?:is|are|will\s+be)\s+(?:required|needed|necessary|pending|essential|mandatory)`,
   ].join('|'),
@@ -615,6 +617,8 @@ const CREDENTIAL_TERM_SOURCE =
 const NEGATED_CREDENTIAL_PATTERN = negationPattern(CREDENTIAL_TERM_SOURCE);
 const NEEDS_CREDENTIAL_PATTERN = new RegExp(
   [
+    // "do not proceed without credentials"
+    String.raw`(?<![\w-])(?:cannot|can't|do\s+not|don't|must\s+not|never|not)\s+(?:\w+\s+){0,4}?without\s+${GAP_WORDS}${CREDENTIAL_TERM_SOURCE}`,
     String.raw`(?<![\w-])(?:supply|supplies|supplied|provide[sd]?|providing|obtain|obtaining|get|receive[sd]?|request(?:s|ed|ing)?|ask(?:s|ed|ing)?(?:\s+for)?|secure[sd]?|require[sd]?|requiring|needs?|needed|awaiting|awaits?|wait(?:ing)?\s+for|depend(?:s|ed|ent)?\s+on|rel(?:y|ies|ied)\s+on|hinges?\s+on|contingent\s+on|conditional\s+on|subject\s+to|gated\s+(?:on|by)|blocked\s+(?:on|by))[\s,]+${GAP_WORDS}${CREDENTIAL_TERM_SOURCE}`,
     String.raw`(?<![\w-])${CREDENTIAL_TERM_SOURCE}\s+(?:is|are|will\s+be)\s+(?:required|needed|necessary|pending|essential|mandatory)`,
   ].join('|'),

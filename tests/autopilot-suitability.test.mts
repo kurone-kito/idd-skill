@@ -1897,9 +1897,18 @@ test('provisional assessment: formatting does not hide an opinion, and a denied 
     'The test does not need any credentials.',
     'The job requires no credentials.',
     'Credentials are not needed for the unit tests.',
+    'The CLI must not require credentials.',
+    'The CLI may not need any credentials.',
   ]) {
     assert.deepEqual(codes(denied), [], denied);
   }
+  // A prohibition is not a denial: it still asks for the prerequisite.
+  assert.deepEqual(codes('Do not proceed without credentials.'), [
+    'criteria-needs-credential',
+  ]);
+  assert.deepEqual(codes('Do not ship without legal approval.'), [
+    'criteria-needs-approval',
+  ]);
   // A denial of one thing does not hide a need for another.
   assert.deepEqual(
     codes('No credentials are required but the job requires legal approval.'),
