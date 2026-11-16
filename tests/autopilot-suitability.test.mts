@@ -1559,6 +1559,8 @@ test('findApprovalRequirementSentence keeps a negation to its own sentence (AC3)
     'This does not need migration and needs legal approval.',
     'Security [approval](https://example.test/policy?team=security) is required before work starts.',
     'Approval at https://example.test/a?b=c is required.',
+    'Legal approval is necessary.',
+    'Sign-off is essential before shipping.',
   ]) {
     assert.notEqual(findApprovalRequirementSentence(text), null, text);
   }
@@ -1702,4 +1704,48 @@ test('provisional assessment: a deliverable whose purpose depends on an approval
     }),
   );
   assert.equal(path.eligible, true);
+});
+
+test('provisional assessment: approval software is not an approval dependency (AC1)', () => {
+  for (const criterion of [
+    'The authorization parser returns false for an unknown role.',
+    'The approval state machine rejects an unknown transition.',
+  ]) {
+    const assessment = assessProvisionalChoicePlan(
+      assessInput({
+        plan: validPlan({
+          choices: [planChoice({ executionCriteria: [criterion] })],
+        }),
+      }),
+    );
+    assert.equal(assessment.eligible, true, criterion);
+  }
+  const doc = assessProvisionalChoicePlan(
+    assessInput({
+      plan: validPlan({
+        deliverables: [
+          {
+            kind: 'document',
+            target: 'a design note',
+            purpose: 'Document the approval state machine.',
+          },
+        ],
+      }),
+    }),
+  );
+  assert.equal(doc.eligible, true);
+  for (const criterion of [
+    'The maintainer approves the layer.',
+    'Sign-off from the security team is recorded.',
+    'Approved by the owner.',
+  ]) {
+    const assessment = assessProvisionalChoicePlan(
+      assessInput({
+        plan: validPlan({
+          choices: [planChoice({ executionCriteria: [criterion] })],
+        }),
+      }),
+    );
+    assert.equal(assessment.eligible, false, criterion);
+  }
 });

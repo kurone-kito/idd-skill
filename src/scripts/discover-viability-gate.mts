@@ -1783,8 +1783,11 @@ export function evaluateAutonomousCompletion(
   // The same approval-sentence safety net A4.5 applies, over the title and the
   // body: an approval requirement is not a coordination phrase to skip but a
   // blocker of its own, so under a relaxation it fails this criterion directly.
+  // The title is plain text, so it is scanned as written, apart from the masked
+  // corpus.
   const approvalSentence = relaxing
-    ? findApprovalRequirementSentence(corpus)
+    ? (findApprovalRequirementSentence(issue.title) ??
+      findApprovalRequirementSentence(corpus))
     : null;
   if (approvalSentence !== null) {
     return {

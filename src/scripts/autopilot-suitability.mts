@@ -520,7 +520,7 @@ export function isDecisionCausedSignal(
 const APPROVAL_WORD_PATTERN =
   /(?<![\w-])(?:approv\w*|sign(?:s|ed|ing)?[- ]?off|authori[sz]\w*|permissions?|consent|go-ahead|grant(?:s|ed)?\s+(?:access|permission))(?![\w-])/i;
 const REQUIREMENT_CUE_PATTERN =
-  /(?<![\w-])(?:needs?|needed|requires?|required|requiring|requirement|must|has to|have to|pending|awaiting|awaits?|subject to|gated|blocked|depends?|until|mandatory|prerequisite|first|before|gates?|obtain|secure|seek|get|ask|wait(?:ing)?|contingent|conditional|dependent|unless)(?![\w-])|(?<![\w-])(?:cannot|can't|do not|don't|must not|never|not)\s+(?:\w+\s+){0,4}?without(?![\w-])/i;
+  /(?<![\w-])(?:needs?|needed|requires?|required|requiring|requirement|must|has to|have to|pending|awaiting|awaits?|subject to|gated|blocked|depends?|until|mandatory|prerequisite|first|before|gates?|obtain|secure|seek|get|ask|wait(?:ing)?|contingent|conditional|dependent|unless|necessary|essential|compulsory|obligatory|imperative)(?![\w-])|(?<![\w-])(?:cannot|can't|do not|don't|must not|never|not)\s+(?:\w+\s+){0,4}?without(?![\w-])/i;
 // A phrase that denies the approval requirement itself. A bare "not" or "no"
 // elsewhere in the sentence does not count: "Do not proceed until legal
 // approval is granted" and "requires legal approval, not just passing tests"
@@ -547,14 +547,34 @@ const NEGATED_REQUIREMENT_PATTERN = new RegExp(
   'gi',
 );
 
+// A person or body that can give an approval. An approval word next to one of
+// these, within a few words, is a dependency on that person; the same word in
+// "the authorization parser" or "the approval state machine" is software.
+const APPROVER_SOURCE =
+  '(?:users?|maintainers?|owners?|reviewers?|legal|teams?|stakeholders?|managers?|admins?|administrators?|operators?|humans?|persons?|people|customers?|security|approvers?|committee|board|leads?|counsel|officers?)';
+const APPROVER_ADJACENT_PATTERN = new RegExp(
+  [
+    String.raw`(?<![\w-])${APPROVER_SOURCE}\s+(?:\w+\s+){0,2}?${APPROVAL_WORD_SOURCE}`,
+    String.raw`(?<![\w-])${APPROVAL_WORD_SOURCE}\s+(?:\w+\s+){0,2}?(?:by|from)\s+(?:the\s+|a\s+)?${APPROVER_SOURCE}`,
+  ].join('|'),
+  'i',
+);
+
 /**
- * True when `text` names an approval, sign-off or authorization that no phrase
- * in it denies. An execution criterion must be checkable by the agent, so one
- * that depends on any approval is not objective, whatever its verb.
+ * True when `text` depends on an approval, sign-off or authorization that no
+ * phrase in it denies: it states the requirement (see
+ * {@link findApprovalRequirementSentence}) or ties the approval to a person or
+ * body that gives it. An execution criterion must be checkable by the agent,
+ * so such a text is not objective, whatever its verb. A criterion about
+ * approval software ("the authorization parser rejects an unknown role") is not
+ * one.
  */
 function mentionsApproval(text: string): boolean {
-  return APPROVAL_WORD_PATTERN.test(
-    text.replace(NEGATED_REQUIREMENT_PATTERN, ' '),
+  const remaining = text.replace(NEGATED_REQUIREMENT_PATTERN, ' ');
+  return (
+    APPROVAL_WORD_PATTERN.test(remaining) &&
+    (findApprovalRequirementSentence(remaining) !== null ||
+      APPROVER_ADJACENT_PATTERN.test(remaining))
   );
 }
 

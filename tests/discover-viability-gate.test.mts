@@ -4676,6 +4676,18 @@ test('A4 provisional: an approval requirement blocks the criterion on its own, i
       ?.evidence ?? '',
     /Approval requirement that a provisional plan cannot relax/,
   );
+  const hiddenTitle = evaluateA4Viability(
+    {
+      ...a4Issue(body),
+      title: 'feat: choose <!-- legal approval required -->',
+    },
+    undefined,
+    assessment,
+  );
+  assert.equal(
+    hiddenTitle.failedCriteria.includes('autonomous_completion'),
+    true,
+  );
   const inBody = `${body}\nApproval from legal is required before work starts.\n`;
   const bodied = evaluateA4Viability(
     a4Issue(inBody),

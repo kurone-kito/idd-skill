@@ -13814,4 +13814,14 @@ test('A4.5 provisional: an approval requirement in the title keeps the label blo
   } as Context);
   assert.equal(titled.pass, false);
   assert.match(titled.evidence, /approval requirement/);
+  // A comment marker in the title does not hide the requirement: a title is
+  // plain text, scanned as written.
+  const hidden = checkAutonomy({
+    issue: {
+      ...decisionIssue(body, []),
+      title: 'feat: choose cache layer <!-- legal approval required -->',
+    },
+    provisionalAssessment: assessment,
+  } as Context);
+  assert.equal(hidden.pass, false);
 });
