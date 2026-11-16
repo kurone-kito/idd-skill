@@ -18,6 +18,10 @@ import { parseCliArgs } from './cli-args.mts';
 import type { CollaboratorPermissionCache } from './collaborator-permission.mts';
 import { isAuthorizedForcedHandoffActor } from './collaborator-permission.mts';
 import {
+  buildProvisionalDecisionEvidenceReader,
+  type ProvisionalDecisionEvidence,
+} from './discover-readiness-check.mts';
+import {
   type CurrentSessionOwnerEvidence,
   evaluateCurrentSessionOwnerEvidence,
   firstFailedOwnerProof,
@@ -72,6 +76,10 @@ import {
   resolveCurrentGithubRepository,
 } from './provider-adapter-github.mts';
 import type { ProviderPort } from './provider-port.mts';
+import {
+  PROVISIONAL_DECISION_RECORD_MARKER,
+  type ProvisionalDecisionStatus,
+} from './provisional-decision-state.mts';
 
 /** Author reference embedded in GitHub REST payloads. */
 interface GhAuthorPayload {
@@ -225,6 +233,74 @@ interface ResumeClaimRoutingOptions {
    * the ref is never inheritable.
    */
   readOpenLinkedPrs?: () => OpenLinkedPrRead;
+  /**
+   * #4534: the trusted replay of the source issue's provisional-decision
+   * history, read by the CLI only for a plain routing read of an open issue
+   * whose comments carry a record marker. A `confirmation-pending` status
+   * turns an `unclaimed` verdict into a stop; every other status, and an
+   * absent field, leaves the verdict alone. The field is evidence only for
+   * every other claim state, and absent from the output when not supplied.
+   */
+  provisionalWork?: ProvisionalWorkEvidence | null;
+}
+
+/**
+ * `evidence.provisional_work` (#4534): the replayed status of the source
+ * issue's provisional-decision history. `invalid` is a refused replay and
+ * `unreadable` a read that threw; neither changes a verdict. An aggregate
+ * `confirmation-pending` means every decision of the current bundle has
+ * verified completed work, so the source stays open until it is confirmed.
+ */
+export interface ProvisionalWorkEvidence {
+  status: ProvisionalDecisionStatus | 'unreadable';
+  decisions: {
+    bundleGeneration: number;
+    decisionGeneration: number;
+    status: ProvisionalDecisionStatus;
+  }[];
+  /** The replay refusal codes of an `invalid` history; otherwise empty. */
+  issues: string[];
+}
+
+/** The top-level reason of the provisional completion stop (#4534). */
+export const PROVISIONAL_WORK_COMPLETE_REASON = 'provisional-work-complete';
+
+/**
+ * Read the provisional-decision state of a source issue for one routing run
+ * (#4534). A history with no record marker returns `null` without calling
+ * `loadState`, so an ordinary issue costs no extra read and its output is
+ * unchanged. A marker makes one trusted replay: a refused replay is
+ * `invalid`, a thrown read is `unreadable`, and a replay with no record
+ * returns `null`.
+ */
+export async function readProvisionalWorkEvidence(input: {
+  comments: readonly IssueCommentPayload[];
+  loadState: () =>
+    | Promise<ProvisionalDecisionEvidence>
+    | ProvisionalDecisionEvidence;
+}): Promise<ProvisionalWorkEvidence | null> {
+  const hasMarker = input.comments.some((comment) =>
+    String(comment.body ?? '').startsWith(PROVISIONAL_DECISION_RECORD_MARKER),
+  );
+  if (!hasMarker) return null;
+  try {
+    const state = await input.loadState();
+    if (!state.valid) {
+      return { status: 'invalid', decisions: [], issues: [...state.issues] };
+    }
+    if (!state.hasRecords) return null;
+    return {
+      status: state.status,
+      decisions: state.decisions.map((decision) => ({
+        bundleGeneration: decision.bundleGeneration,
+        decisionGeneration: decision.decisionGeneration,
+        status: decision.status,
+      })),
+      issues: [],
+    };
+  } catch {
+    return { status: 'unreadable', decisions: [], issues: [] };
+  }
 }
 
 /** A local `issue/<n>-*` ref that no worktree holds and origin lacks (#4914). */
@@ -411,7 +487,11 @@ if (import.meta.main) {
   if (isHelperErrorEnvelopeEnabled()) {
     runHelperCli('resume-claim-routing', runCli);
   } else {
-    applyHelperCliOutcomeWhenDisabled(runCli());
+    // #4534: runCli is async (the provisional replay reader is), so chain
+    // instead of calling directly, per applyHelperCliOutcomeWhenDisabled.
+    runCli().then(applyHelperCliOutcomeWhenDisabled, (error) => {
+      throw error;
+    });
   }
 }
 
@@ -1355,6 +1435,38 @@ export function evaluateResumeClaimRouting(
     }
   }
 
+  // #4534: a source whose provisional work is complete stays open until it is
+  // confirmed, so an `unclaimed` read on it is not a fresh decision candidate:
+  // re-claiming it would implement the same choice again. Only a verified,
+  // completed bundle stops; a refused or unreadable history keeps the verdict
+  // and warns, and a live claim, a stale takeover and an owner check keep
+  // theirs (F4 and every `--assert` depend on `already_owned` / `keep`).
+  const provisionalWork = options.provisionalWork ?? null;
+  if (provisionalWork !== null) {
+    if (
+      routeState === 'unclaimed' &&
+      provisionalWork.status === 'confirmation-pending'
+    ) {
+      routeState = 'non_inheritable';
+      action = 'stop';
+      reason = PROVISIONAL_WORK_COMPLETE_REASON;
+      warnings.push(
+        'the source issue holds completed provisional work that awaits confirmation: report it as pending and do not start a new implementation',
+      );
+    } else if (
+      provisionalWork.status === 'invalid' ||
+      provisionalWork.status === 'unreadable'
+    ) {
+      warnings.push(
+        `the provisional-decision history is ${provisionalWork.status}${
+          provisionalWork.issues.length > 0
+            ? ` (${provisionalWork.issues.join(', ')})`
+            : ''
+        }; the claim verdict is unchanged, but treat the source as unverified before any re-claim`,
+      );
+    }
+  }
+
   // #3276: neither side of an issue-only forced handoff that was blocked
   // solely because the linked-PR lookup failed (PR state unknown) may read
   // as an ordinary claim-state outcome for a --claim-id check -- not the
@@ -1468,6 +1580,11 @@ export function evaluateResumeClaimRouting(
       // #4914: present only when the local-ref probe ran (the fresh-claim
       // gate, state `unclaimed`), so no other caller's output changes.
       ...(localBranch !== null ? { local_branch: localBranch } : {}),
+      // #4534: present only when the source's history carries a provisional
+      // record marker, so an ordinary issue's output does not change.
+      ...(provisionalWork !== null
+        ? { provisional_work: provisionalWork }
+        : {}),
       // #3667: one field per owner proof, in evaluation order (see
       // CurrentSessionOwnerEvidence). Absent unless a structured owner
       // callback ran against a probe that was not `absent`.
@@ -2008,7 +2125,7 @@ export function readOpenLinkedPrs(
   }
 }
 
-function runCli(): HelperCliResult {
+async function runCli(): Promise<HelperCliResult> {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
     printHelp();
@@ -2096,6 +2213,24 @@ function runCli(): HelperCliResult {
     html_url: rawIssue.htmlUrl,
     url: rawIssue.url,
   };
+  // #4534: the provisional replay runs only for an open source whose
+  // comments carry a record marker, so every other issue costs no extra read
+  // and keeps its output (`--assert` prints the same JSON as a plain read).
+  // The fresh-claim gate never reaches it: a completed source can still be
+  // claimed by a confirmation or rework flow, and Discover owns selection.
+  const provisionalWork =
+    args.freshClaimGate || issue.state !== 'open'
+      ? null
+      : await readProvisionalWorkEvidence({
+          comments,
+          loadState: () =>
+            buildProvisionalDecisionEvidenceReader({
+              owner,
+              repo,
+              port,
+              policy: null,
+            }).loadState(args.issue ?? 0),
+        });
   const forcedHandoffEnabled = policy.forcedHandoff.mode === 'human-gated';
   const forcedHandoffAuthorityPolicy = policy.forcedHandoff.authorityPolicy;
   const permissionCache: CollaboratorPermissionCache = new Map();
@@ -2177,6 +2312,7 @@ function runCli(): HelperCliResult {
         },
       ),
     linkedPrLookupFailed,
+    ...(provisionalWork !== null ? { provisionalWork } : {}),
     // #4019: only with --own-worktree, which requires --fresh-claim-gate.
     ...(args.ownWorktree
       ? {
@@ -2903,7 +3039,7 @@ warnings / evidence):
   "reason": "...",
   "agent_id_checked": "...",  // only with --agent-id
   "active_claim": {"agent_id":"...","claim_id":"...","created_at":"...","branch":"..."} | null,
-  "evidence": {"...": "...", "activation_nonce_winner": "..."|null, "owner_evidence": {...}, "local_branch": {...}},  // owner_evidence: one field per owner proof, see docs/idd-helper-scripts.md; local_branch: only with --fresh-claim-gate on an unclaimed issue
+  "evidence": {"...": "...", "activation_nonce_winner": "..."|null, "owner_evidence": {...}, "local_branch": {...}, "provisional_work": {...}},  // owner_evidence: one field per owner proof, see docs/idd-helper-scripts.md; local_branch: only with --fresh-claim-gate on an unclaimed issue; provisional_work: only on an open issue whose comments carry a provisional-decision record marker, never with --fresh-claim-gate
   "fresh_claim_gate": {"verdict":"claimable|already-claimed|stale-reclaimable|local-branch-present","winning_claim_id":"..."|null}  // only with --fresh-claim-gate
 }
 
@@ -2918,6 +3054,18 @@ local-branch-unreadable and a null winning_claim_id. inheritable names the sole
 exact branch of a trusted released claim that has no open linked pull request
 and an unchanged tip; the helper only reports it and never creates, resets, or
 deletes a ref.
+
+On an open issue whose comments carry a provisional-decision record marker the
+helper replays that history once (#4534) and reports evidence.provisional_work
+{"status","decisions":[{"bundleGeneration","decisionGeneration","status"}],
+"issues"}; status is a replay status, "invalid" (a refused replay), or
+"unreadable". When the claim state is unclaimed and the status is
+confirmation-pending (every decision of the current bundle has verified
+completed work, so the source stays open until it is confirmed), the state is
+non_inheritable (action stop) with reason provisional-work-complete: report the
+source as pending confirmation and never start a new implementation. Every
+other claim state and status keeps its verdict, and an invalid or unreadable
+history adds a warning only.
 
 policy.trusted_marker_actors_source reports which input supplied the
 trusted-marker-logins ladder's value: "flag" | "env" | "config" | "none".

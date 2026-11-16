@@ -235,6 +235,61 @@ test('classifyClaimAssertResult: a non-zero exit is not-owned for every routing 
   }
 });
 
+// kurone-kito/idd-skill#4534: an unconfirmed provisional source stays open
+// after its PR merges. The head proof reads claim ownership, not issue state,
+// so F4 cleanup of such a source resumes exactly as for an ordinary one.
+const PROVISIONAL_WORK = {
+  status: 'confirmation-pending',
+  decisions: [
+    {
+      bundleGeneration: 1,
+      decisionGeneration: 1,
+      status: 'confirmation-pending',
+    },
+  ],
+  issues: [],
+};
+
+test('classifyClaimAssertResult: an owned verdict with completed provisional work is still owned (cleanup before unclaim)', () => {
+  assert.deepEqual(
+    classifyClaimAssertResult(
+      0,
+      routing({
+        evidence: {
+          forced_handoff: null,
+          linked_pr_lookup: 'ok',
+          provisional_work: PROVISIONAL_WORK,
+        },
+      }),
+      CLAIM,
+      AGENT,
+    ),
+    { status: 'owned', branch: BRANCH, forcedHandoff: null },
+  );
+});
+
+test('classifyClaimAssertResult: the completed-provisional-work stop of a released claim is not-owned (unclaim before the final report)', () => {
+  assert.deepEqual(
+    classifyClaimAssertResult(
+      1,
+      routing({
+        state: 'non_inheritable',
+        action: 'stop',
+        reason: 'provisional-work-complete',
+        active_claim: null,
+        evidence: {
+          forced_handoff: null,
+          linked_pr_lookup: 'ok',
+          provisional_work: PROVISIONAL_WORK,
+        },
+      }),
+      CLAIM,
+      AGENT,
+    ),
+    { status: 'not-owned' },
+  );
+});
+
 test('classifyClaimAssertResult: a non-zero exit with a routing verdict is not-owned', () => {
   for (const body of [
     routing({ state: 'owner_evidence_required', action: 'stop' }),
