@@ -28,10 +28,7 @@ Resolve `<profile-selected-claim-approval-command>` from
 `docs/idd-helper-scripts.md`; do not hardcode `node scripts/...` for
 non-vendored profiles.
 
-Contract: `docs/idd-helper-scripts.md#claim-approval-evidence` (required
-fields: `approved`, `reason`, `gateEnabled`,
-`policy.maintainerApprovalActorPolicy`, `policy.approvalSignals`,
-`checks`).
+Contract: `docs/idd-helper-scripts.md#claim-approval-evidence`.
 
 If the helper exits non-zero, returns invalid or incomplete JSON, or
 conflicts with live approval state, ignore it and use the written A5(a)
@@ -84,9 +81,7 @@ canonical A5(c) evidence collector:
 node scripts/resume-claim-routing.mjs --issue <number> --fresh-claim-gate
 ```
 
-It reuses the shared `resolveActiveClaim` / `evaluateResumeClaimRouting`
-resolver and returns a `fresh_claim_gate.verdict` of `claimable |
-already-claimed | stale-reclaimable` with the winning `{claim-id}`:
+It returns a `fresh_claim_gate.verdict` with the winning `{claim-id}`:
 
 - `claimable` → proceed to the claim write below.
 - `stale-reclaimable` → proceed with takeover (the stale path below).
@@ -94,6 +89,10 @@ already-claimed | stale-reclaimable` with the winning `{claim-id}`:
   released branch: use lock takeover only if `winning_claim_id` matches
   this session's verified claim; otherwise apply the contested-claim
   routing below.
+- `local-branch-present` → a local-only ref, not "no branch found". Reason
+  `local-branch-inheritable`: claim first, then `git worktree add <path>
+  <branch>`, no `-b` ([route](../../docs/idd-resume-detail.md#local-only-branch-ref));
+  any other reason: preserve it, stop before claim markers.
 
 GitHub comments lack compare-and-swap, so this only narrows claim→write
 TOCTOU window; stale-takeover and same-second tie-break remain. If the helper
