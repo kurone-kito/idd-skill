@@ -744,6 +744,59 @@ the helper task (issue `#5134`) and the documentation task (issue `#5136`).
   and Lite claim bundles each had under 40 bytes of headroom, so the script's
   bytes paid for the new instructions and no limit was raised.
 
+### Local-only issue branch refs (issues `#4914` and `#5238`)
+
+On 2026-11-01, issue `#4675` kept a local-only branch and its commit after its
+implementation exceeded the declared candidate-file limit, and nothing was
+pushed (roadmap `#4913` records it). A5 scanned local worktrees and matching
+remote refs but not local branch refs, so that ref read as "no branch found". A
+fresh claim would have met `git worktree add -b` refusing the existing branch
+before the claim POST. A released claim that named the ref as an
+inheritable branch would have entered the re-claim sequence, which expects a
+remote branch and could discover the missing remote ref only after the claim
+markers were posted. Issue `#4914` added the helper side to
+`resume-claim-routing` and `claim-issue`. This entry records the decisions that
+the procedure text in the claim files and the resume detail follows.
+
+- One verdict, three reasons. `local-branch-present` is a single verdict, but
+  its results differ in what is safe, so every instruction keys on the
+  `reason`: `local-branch-inheritable`, `local-branch-unexpected`, or
+  `local-branch-unreadable`. A row keyed on the verdict alone would send an
+  unexpected ref to the attach command.
+- Preserve, never delete. A local-only ref can be the only copy of work. The
+  gate therefore stops before any marker, worktree, or branch, and an uncertain
+  ref (unowned, changed, unreadable, or out of scope) is kept with no claim
+  marker posted. The gate only reads.
+- The attach is a written route, and the claim comes first. The helper's next
+  action says it cannot re-claim an inheritable ref. The own-worktree gate of
+  the fresh-claim order (issue `#4067`) ignores a pre-created worktree only when
+  it is clean and has no commit beyond the base or sits at its live remote tip,
+  and a local-only branch with kept commits meets neither condition, so
+  attaching first reads as an occupied worktree. The existing re-claim sequence
+  already orders the claim before the attach (issue `#4071`), so the local-only
+  route replaces its gate, preflight, and attach script rather than adding a
+  second sequence. It reads no remote and attaches with
+  `git worktree add <path> <branch>`, never with `-b`.
+- The tip is checked again, and a moved tip stops the route. The helper
+  compares two reads of its own. The route re-checks the recorded tip before the
+  claim POST, again in the attach script under the clone-scoped lock, and reads
+  `HEAD` under the worktree lock before B2. It does not restart after a
+  mismatch, because the next gate read would take the moved tip as inheritable.
+- Scope stays a manual step. The helper checks released-claim identity, linked
+  pull requests, worktrees, and tip stability, and it reads no changed path, so
+  the content-scope audit (§CSA) runs before any marker.
+- The claim files stay short. The discovery and Lite claim bundles had 37 and
+  11 bytes below their 98% ceiling, so each file carries only the verdict, the
+  `reason` key, the attach command, and one link. The three results, the
+  preserve rules, and the attach route live in the resume detail, which has no
+  bundle budget. The standard file paid for its bullet by dropping a resolver
+  implementation note, the verdict list its bullets repeat, and a field list
+  that the helper reference already holds, and it ends 7 bytes under its
+  ceiling. The Lite file cannot move obligations out (E12 step 1 skips lite
+  files), and its row took `bundle-claim-lite` from 21,549 to 21,775 of 22,000
+  bytes, so the operator approved raising that limit to 23,900 on 2026-11-16
+  (a `nearCeilingRaiseApprovals` record).
+
 ## Work and self-review
 
 The 2026-10-17 review error reported in

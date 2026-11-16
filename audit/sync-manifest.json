@@ -396,7 +396,7 @@
       "files": [
         ".github/instructions/lite/idd-claim-lite.instructions.md"
       ],
-      "limitBytes": 22000
+      "limitBytes": 23900
     },
     {
       "id": "bundle-pre-merge-lite",
@@ -495,6 +495,12 @@
     "noticeUtilizationPct": 95,
     "exemptBundles": [],
     "nearCeilingRaiseApprovals": [
+      {
+        "bundle": "bundle-claim-lite",
+        "limitBytes": 23900,
+        "issue": 5238,
+        "reason": "The operator approved this raise on 2026-11-16, in the decision relayed to the issue #5238 worker, so that the lite claim pre-check table can name the local-branch-present verdict and its attach command (acceptance criterion 1 of #5238). At the base ref the bundle measured 21,549 of 22,000 bytes (97.95%), 11 bytes below the 98% enforcement ceiling (21,560), and E12 step 1 does not apply to lite files. The required table row brings it to 21,775 bytes (98.98%), 215 bytes over that ceiling; the audit measures the file without its generated-from banner, so the copy on disk is larger. 23,900 is floor(21,775 * 1.10 / 100) * 100, the upper bound of the standingRaiseApprovals rule, and gives 91.1% utilization at 21,775 bytes, below the 95% notice band. The standard claim bundle, bundle-discovery-phase, kept its limit: it ends at 77,021 of 78,600 bytes (97.99%) after the same file removed a resolver note, a repeated verdict list, and a field list that docs/idd-helper-scripts.md already holds."
+      },
       {
         "bundle": "bundle-pr-submit-lite",
         "limitBytes": 27300,

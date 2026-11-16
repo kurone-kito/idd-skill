@@ -1530,7 +1530,8 @@ no new base ref: the branch keeps its own history, which may be based on
 `kurone-kito/idd-skill#3708` (PR `#4030`): the claimant attached the existing
 PR branch as a sibling worktree before the claim, and the lite order
 succeeded. Run all five pre-checks in `idd-claim.instructions.md` before
-step 1. This sequence does not repeat them.
+step 1. This sequence does not repeat them. A branch that exists only in the
+local clone follows [Local-only branch ref](#local-only-branch-ref) instead.
 
 1. Fresh-claim gate with no worktree:
    `node scripts/resume-claim-routing.mjs --issue <N> --fresh-claim-gate`
@@ -1734,3 +1735,127 @@ the claim verification rules in `idd-claim.instructions.md`.
 
 The claim comes before the attach because #4071's decided sequence orders them
 that way.
+
+## Local-only branch ref
+
+`resume-claim-routing.mjs --fresh-claim-gate`, the A5(c) gate that
+`claim-issue` also runs, reads the local `issue/<number>-*` refs that no
+worktree holds and origin lacks (issue `#4914`). Such a ref is not "no branch
+found": `git worktree add -b` refuses to overwrite it, and a fresh branch
+beside it hides its commits. When the issue is otherwise claimable, the gate
+answers `fresh_claim_gate.verdict: local-branch-present` (state
+`local_branch_present`, action `stop`, `winning_claim_id` null), and
+`claim-issue` stops with the stop reason `local-branch-present` before it
+creates a worktree, a branch, or a marker. The gate only reads: it never
+creates, resets, moves, or deletes a ref.
+
+One verdict covers three results. The top-level `reason` and
+`evidence.local_branch.status` say which:
+
+- `local-branch-inheritable` (`inheritable`): the only local-only ref is the
+  exact branch of the latest trusted released claim, that claim carries a
+  claim-id, no open pull request links the issue, and two reads around the
+  pull request lookup show the same refs and tip. `evidence.local_branch.branch`
+  and `.tip` name it; every other status leaves both `null`.
+- `local-branch-unexpected` (`unexpected`): any other local-only ref. No
+  trusted released claim names a branch for it, the release is a legacy marker
+  with no claim-id, the ref is not the only one or not the released branch (a
+  slug variant or a second ref), an open pull request links the issue, or a
+  worktree appeared or the refs or the tip changed between the two reads.
+  `evidence.local_branch.detail` says which.
+- `local-branch-unreadable` (`unreadable`): a read failed, that is the ref
+  listing, the local worktree scan, the origin read of a ref, or the linked
+  pull request lookup.
+
+Key every decision on the `reason`, never on the verdict alone. Only
+`local-branch-inheritable` may reach the attach route below.
+
+For every other result, and for an inheritable ref the attach route stops on,
+preserve the ref and claim nothing:
+
+- Never delete, reset, or move the ref, and never create the branch over it
+  with `git worktree add -b` or from `origin/{development-branch}`.
+- Post no `claimed-by` or activation-nonce marker, and create no worktree.
+- Report the branch name, the tip, and `evidence.local_branch.detail`, and
+  stop for an operator decision, as the A5(e) unexpected-branch case does (hold
+  note, no claim). When the branch holds commits worth keeping, the B3 commit
+  inventory (issue `#4683`) comes before any cleanup.
+- For `local-branch-unreadable`, resolve the failed read that `detail` names and
+  rerun the gate. Never read it as an absent branch.
+
+The one exception is `claim-issue --preserve-b1-leftovers` (the
+[B1 leftovers](idd-workflow.md#b1-leftovers) auto-decide class, issue `#4970`):
+it lets exactly one result through A5(c), `local-branch-unexpected` naming only
+this claim's own computed branch, and every other result stops as above.
+
+### Attach an inheritable local-only ref
+
+The helper cannot re-claim an inheritable ref: `claim-issue` stops on it, and
+its next action says so. The attach is therefore a written route with no
+wrapper. Claim first, then attach. The own-worktree gate of the fresh-claim
+order ignores a pre-created worktree only when it is clean and either has no
+commit beyond the base or sits at its live remote tip (issue `#4067`), and a
+local-only branch with kept commits meets neither condition, so attaching first
+would read as an occupied worktree.
+
+Run [Re-claim an inheritable branch](#re-claim-an-inheritable-branch) with
+these replacements. Write `<tip>`, `<branch>`, and `<path>` below as
+single-quoted arguments, as that section requires.
+
+- **Before any marker:** audit the ref against this issue's scope. The helper
+  checks no changed path. Run the content-scope audit (§CSA) on
+  `origin/{development-branch}...<branch>`. A change outside the issue's
+  declared scope, or an audit that cannot finish, leaves the ref preserved: post
+  no marker and stop, as above.
+- **Step 1:** the gate returns `local-branch-present` with the reason
+  `local-branch-inheritable` instead of `claimable`. Use
+  `evidence.local_branch.branch` verbatim as `BRANCH`, and keep
+  `evidence.local_branch.tip`, the full object id, as `<tip>`.
+- **Step 2:** keep the branch-name validation and the primary-worktree token
+  record. Replace the preflight, whose fetch and `origin/<branch>` read have
+  nothing to find, with this read-only check under the clone-scoped lock. It
+  repeats the checks of the step 5 script without attaching:
+
+  ```sh
+  node scripts/clone-lock.mjs --exec --agent-id <id> -- sh -c '
+    [ "$(git rev-parse --verify "refs/heads/$1")" = "$2" ] ||
+      { echo "preflight: local $1 is not at the recorded tip: hold" >&2; exit 1; }
+    WT=$(git worktree list --porcelain) ||
+      { echo "preflight: unreadable worktree list: hold" >&2; exit 1; }
+    if printf "%s\n" "$WT" | grep -Fqx "branch refs/heads/$1"; then
+      echo "preflight: branch $1 is checked out in another worktree: hold" >&2
+      exit 1
+    fi
+  ' sh '<branch>' '<tip>'
+  ```
+
+- **Steps 3 and 4:** unchanged. The claim POST names the same branch, and the
+  activation nonce follows.
+- **Step 5:** replace the script. There is no fetch and no `git branch`,
+  because the ref already exists. It attaches only when the ref still resolves
+  to the recorded tip and no worktree holds it, and it never passes `-b`:
+
+  ```sh
+  node scripts/clone-lock.mjs --exec --agent-id <id> -- sh -c '
+    [ "$(git rev-parse --verify "refs/heads/$1")" = "$2" ] ||
+      { echo "local $1 is not at the recorded tip: hold" >&2; exit 1; }
+    WT=$(git worktree list --porcelain) ||
+      { echo "unreadable worktree list: hold" >&2; exit 1; }
+    if printf "%s\n" "$WT" | grep -Fqx "branch refs/heads/$1"; then
+      echo "branch $1 is checked out in another worktree: hold" >&2
+      exit 1
+    fi &&
+    git worktree add -- "$3" "$1"
+  ' sh '<branch>' '<tip>' '<path>'
+  ```
+
+- **Steps 6 to 8:** unchanged. After step 8 returns `already_owned` with action
+  `keep`, and while the worktree lock from step 7 is held,
+  `git -C <linked> rev-parse HEAD` must print `<tip>` before B2 continues. A
+  mismatch means something moved the ref: stop, report both ids, and keep the
+  worktree and branch.
+
+A failed attach for a tip or worktree mismatch changes the step 5 failure rule.
+Release your own pair as that rule says, when its proof holds, but do not
+restart from step 1: the gate only compares its own two reads, so a restart
+would read the moved tip as inheritable. Stop and report both tips instead.
