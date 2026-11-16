@@ -1788,3 +1788,25 @@ test('provisional assessment: a credential or access prerequisite in a criterion
   assert.equal(purpose.eligible, false);
   assert.deepEqual(blockerCodes(purpose), ['criteria-needs-credential']);
 });
+
+test("provisional assessment: the selected option's verification is read like a criterion (AC1)", () => {
+  const verifiedBy = (verification: string) => {
+    const choice = planChoice();
+    choice.selectedOption = {
+      ...(choice.selectedOption as Record<string, string>),
+      verification,
+    };
+    return assessProvisionalChoicePlan(
+      assessInput({ plan: validPlan({ choices: [choice] }) }),
+    );
+  };
+  assert.deepEqual(
+    blockerCodes(verifiedBy('Legal approval is required to confirm it.')),
+    ['criteria-needs-approval'],
+  );
+  assert.deepEqual(
+    blockerCodes(verifiedBy('An operator must supply credentials first.')),
+    ['criteria-needs-credential'],
+  );
+  assert.equal(verifiedBy('the unit tests pass').eligible, true);
+});

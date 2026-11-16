@@ -1003,8 +1003,14 @@ function provisionalPlanBlockers(plan, input, bodySha256, cap) {
     const subjective = choice.executionCriteria.find((criterion) =>
       SUBJECTIVE_CRITERION_PATTERN.test(criterion),
     );
-    const approvalCriterion = choice.executionCriteria.find(mentionsApproval);
-    const credentialCriterion = choice.executionCriteria.find(needsCredential);
+    // The selected option's verification says how its result is checked, so it
+    // is read like an execution criterion.
+    const checks = [
+      ...choice.executionCriteria,
+      choice.selectedOption.verification,
+    ];
+    const approvalCriterion = checks.find(mentionsApproval);
+    const credentialCriterion = checks.find(needsCredential);
     if (choice.executionCriteria.length === 0) {
       block(
         'criteria-missing',
