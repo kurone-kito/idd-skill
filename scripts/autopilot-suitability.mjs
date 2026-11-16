@@ -16,7 +16,7 @@
 // suitability gate or the A5 claim safety checks, which still run on
 // whatever candidate is selected.
 //
-// cspell:ignore approv judg
+// cspell:ignore approv decid judg
 //
 // This module also holds the shared provisional-choice plan assessment
 // (#4535) that A4 (discover-viability-gate) and A4.5 (suitability-triage)
@@ -274,7 +274,12 @@ const ALTERNATIVE_OPTION_KEYS = [
   'comparison',
   'rejectionReason',
 ];
-const DELIVERABLE_KINDS = ['file', 'document', 'issue-comment', 'other'];
+// A source whose gaps a choice could cause names that choice somewhere in its
+// body. Without any of these words the label alone does not make it a decision
+// source for the purpose of relaxing a check.
+const DECISION_SIGNAL_PATTERN =
+  /(?<![\w-])(?:decision|decid\w*|choose|chosen|choice|options?|alternatives?|which|whether|tbd|undecided|open question|trade-?offs?|prefer\w*)(?![\w-])/i;
+const DELIVERABLE_KINDS = ['file', 'document', 'issue-comment'];
 // An execution criterion must be checkable without a person's opinion.
 const SUBJECTIVE_CRITERION_PATTERN =
   /(?<![\w-])(?:feels?|looks? (?:good|right)|opinion|subjective|maintainer (?:approv\w*|prefer\w*|sign-?off|review\w*)|stakeholder|human (?:review|judg\w*|approv\w*)|manual (?:review|approval))(?![\w-])/i;
@@ -289,7 +294,6 @@ const AUTHORITY_REQUIREMENT_PATTERN =
 // authority word after one is still in the same clause: it fails closed.
 const DECISION_CLAUSE_BREAK_PATTERN =
   /[!?;]|\.(?=\s+[A-Z]|\s*$)|\n[ \t]*\n|\n[ \t]*(?:[-*+]|\d+[.)])[ \t]/g;
-const DECISION_CLAUSE_WINDOW_CHARS = 160;
 function isPlainRecord(value) {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -307,27 +311,64 @@ function nonEmptyText(value) {
  * sign-off phrase in the same body still fails.
  */
 export function isDecisionCausedSignal(text, index, length) {
-  const before = text.slice(
-    Math.max(0, index - DECISION_CLAUSE_WINDOW_CHARS),
-    index,
-  );
-  let clauseStart = 0;
-  for (const found of before.matchAll(DECISION_CLAUSE_BREAK_PATTERN)) {
-    clauseStart = (found.index ?? 0) + found[0].length;
+  // The clause runs from the last break before the phrase to the first break
+  // after it, found in the whole text, so no window can cut an authority word
+  // off and a full stop is judged by what follows it, not by a slice's end.
+  let start = 0;
+  let end = text.length;
+  for (const found of text.matchAll(DECISION_CLAUSE_BREAK_PATTERN)) {
+    const at = found.index ?? 0;
+    if (at + found[0].length <= index) {
+      start = at + found[0].length;
+    } else if (at >= index + length) {
+      end = at;
+      break;
+    }
   }
-  const afterStart = index + length;
-  const after = text.slice(
-    afterStart,
-    afterStart + DECISION_CLAUSE_WINDOW_CHARS,
-  );
-  const nextBreak = new RegExp(DECISION_CLAUSE_BREAK_PATTERN.source).exec(
-    after,
-  );
-  const clause = `${before.slice(clauseStart)}${text.slice(index, afterStart)}${nextBreak ? after.slice(0, nextBreak.index) : after}`;
-  return !AUTHORITY_REQUIREMENT_PATTERN.test(clause);
+  return !AUTHORITY_REQUIREMENT_PATTERN.test(text.slice(start, end));
 }
+// Approval-type words, used with a requirement cue to find a standing
+// approval, sign-off or authorization requirement in any sentence. Broader
+// authority vocabulary (credentials, access, production) stays in the clause
+// test above and in A4's own patterns.
+const APPROVAL_WORD_PATTERN =
+  /(?<![\w-])(?:approv\w*|sign(?:s|ed|ing)?[- ]?off|authori[sz]\w*|permissions?|consent|go-ahead|grant(?:s|ed)?\s+(?:access|permission))(?![\w-])/i;
+const REQUIREMENT_CUE_PATTERN =
+  /(?<![\w-])(?:needs?|needed|requires?|required|requiring|requirement|must|has to|have to|pending|awaiting|awaits?|subject to|gated|blocked|depends?|until|mandatory|prerequisite|first)(?![\w-])/i;
+const NEGATION_CUE_PATTERN =
+  /(?<![\w-])(?:no|not|never|none|nothing|without|neither|nor)(?![\w-])|n't\b/i;
 /**
- * True only for a fully clean assessment that was computed for this very
+ * The first sentence of `text` that states an approval, sign-off or
+ * authorization requirement, or `null`. A sentence qualifies when it holds an
+ * approval word and a requirement cue, in either order and at any distance,
+ * and no negation cue of its own; a negation in another sentence never
+ * cancels it. Pass text with code spans already masked. It is a safety net
+ * under a provisional relaxation, never a parser: the plan's
+ * `independentObstacles` is where a session declares such a requirement.
+ */
+export function findApprovalRequirementSentence(text) {
+  let start = 0;
+  const sentences = [];
+  for (const found of text.matchAll(DECISION_CLAUSE_BREAK_PATTERN)) {
+    sentences.push(text.slice(start, found.index ?? 0));
+    start = (found.index ?? 0) + found[0].length;
+  }
+  sentences.push(text.slice(start));
+  return (
+    sentences.find(
+      (sentence) =>
+        APPROVAL_WORD_PATTERN.test(sentence) &&
+        REQUIREMENT_CUE_PATTERN.test(sentence) &&
+        !NEGATION_CUE_PATTERN.test(sentence),
+    ) ?? null
+  );
+}
+// Every assessment that assessProvisionalChoicePlan returns, so a hand-built
+// object of the same shape never relaxes a check.
+const ASSESSED = new WeakSet();
+/**
+ * True only for a fully clean assessment, made by assessProvisionalChoicePlan
+ * in this process, that was computed for this very
  * issue: its source number and body SHA-256 must match `issue`. Anything else
  * relaxes nothing, so an assessment of one source or one body snapshot never
  * relaxes another.
@@ -336,6 +377,7 @@ export function isEligibleProvisionalAssessment(value, issue) {
   if (
     !(
       isPlainRecord(value) &&
+      ASSESSED.has(value) &&
       value.eligible === true &&
       value.route === 'claim-and-record' &&
       Array.isArray(value.blockers) &&
@@ -375,6 +417,9 @@ function readProvisionalPolicy(report) {
 }
 function stripLeadingDotSlash(path) {
   return path.trim().replace(/^(?:\.\/)+/, '');
+}
+function normalizeForExcerpt(text) {
+  return text.replace(/\s+/g, ' ').trim().toLowerCase();
 }
 function optionDistinctKey(description) {
   return description.toLowerCase().replace(/\s+/g, ' ').trim();
@@ -771,6 +816,12 @@ function provisionalPreconditionBlockers(input, policy) {
       `the source does not carry the ${input.needsDecisionLabelName} label`,
     );
   }
+  if (!DECISION_SIGNAL_PATTERN.test(String(input.issue.body ?? ''))) {
+    block(
+      'no-decision-signal',
+      'the source body names no choice, so its gaps are not caused by one',
+    );
+  }
   if (input.effort === 'L' && input.effortLPolicy === 'refuse') {
     block(
       'effort-refused',
@@ -797,10 +848,31 @@ function provisionalPlanBlockers(plan, input, bodySha256, cap) {
       `the plan is not bound to this source snapshot; the current body SHA-256 is ${bodySha256}`,
     );
   }
+  const sourceText = normalizeForExcerpt(input.issue.body);
+  const inSource = (excerpt) =>
+    sourceText.includes(normalizeForExcerpt(excerpt));
   if (plan.humanChoiceCriteria.length === 0) {
     block(
       'human-criteria-missing',
       'the original human-choice criteria must be listed as pending',
+    );
+  }
+  const foreignCriteria = plan.humanChoiceCriteria.filter(
+    (criterion) => !inSource(criterion.text),
+  );
+  if (foreignCriteria.length > 0) {
+    block(
+      'criteria-not-in-source',
+      `a human-choice criterion is not a verbatim excerpt of the source: ${foreignCriteria[0]?.text}`,
+    );
+  }
+  const foreignChoices = plan.recordedChoices.filter(
+    (recorded) => !inSource(recorded.reference),
+  );
+  if (foreignChoices.length > 0) {
+    block(
+      'recorded-choice-not-in-source',
+      `a recorded choice is not a verbatim excerpt of the source: ${foreignChoices[0]?.reference}`,
     );
   }
   if (plan.choices.length === 0) {
@@ -961,7 +1033,7 @@ export function assessProvisionalChoicePlan(input) {
   }
   const eligible = blockers.length === 0 && plan !== null;
   const choiceCount = plan?.choices.length ?? null;
-  return {
+  const assessment = {
     eligible,
     route: eligible
       ? 'claim-and-record'
@@ -981,6 +1053,8 @@ export function assessProvisionalChoicePlan(input) {
     pendingHumanCriteria: plan?.humanChoiceCriteria.map((c) => c.text) ?? [],
     nextStep: eligible ? 'claim-then-persist-selection' : null,
   };
+  ASSESSED.add(assessment);
+  return assessment;
 }
 function escapeRegex(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

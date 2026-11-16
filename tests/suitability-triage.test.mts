@@ -13216,6 +13216,11 @@ test('trust safety bounds pathological agent-mention scans by failing closed -- 
 // issue #4535 that it covers.
 
 const NEEDS_DECISION_LABEL = 'status:needs-decision';
+const firstProseLine = (body: string): string =>
+  body
+    .split('\n')
+    .map((line) => line.trim())
+    .find((line) => line !== '' && !line.startsWith('#')) ?? '';
 const provSha256 = (text: string): string =>
   createHash('sha256').update(text, 'utf8').digest('hex');
 const provOption = (id: string): Record<string, string> => ({
@@ -13233,7 +13238,7 @@ const provPlan = (
 ): Record<string, unknown> => ({
   schemaVersion: 1,
   source: { repository: 'o/r', issueNumber: 7, bodySha256: provSha256(body) },
-  humanChoiceCriteria: ['A maintainer picks the cache layer'],
+  humanChoiceCriteria: [firstProseLine(body)],
   recordedChoices: [],
   choices: [
     {
@@ -13490,7 +13495,7 @@ test('A4.5 provisional Check 6: the needs-decision label is waived only when A4 
     'The rollout needs the maintainer to supply the production access token.',
     'This waits for third-party access to the vendor system.',
   ]) {
-    const body = `## Purpose\n\n${sentence}\n\n## Acceptance Criteria\n- [ ] tests pass\n`;
+    const body = `## Purpose\n\nPick the layer; this is a maintainer decision.\n${sentence}\n\n## Acceptance Criteria\n- [ ] tests pass\n`;
     const result = checkAutonomy(
       asCheckContext(body, { provisionalAssessment: provAssess(body) }),
     );
@@ -13740,6 +13745,12 @@ test('A4.5 provisional Check 6: a standing approval or budget requirement in a s
     'The rollout requires release-manager sign-off.',
     'This is subject to legal authorization.',
     'The change is pending permission from the owner.',
+    'Approval from legal is required before work starts.',
+    'Legal authorization is required before work starts.',
+    'The rollout must be approved by legal.',
+    'Sign-off is pending.',
+    'No migration is needed. The budget raise needs a standing approval.',
+    'The rollout requires, after the long and careful qualification of every moving part in this very long sentence about scope, a formal approval.',
   ]) {
     const body = `${READY_DECISION_BODY}\n${sentence}\n`;
     const result = evaluateSuitability(decisionIssue(body), {
@@ -13750,10 +13761,15 @@ test('A4.5 provisional Check 6: a standing approval or budget requirement in a s
     assert.equal(result.failedCheck, 'autonomy', sentence);
   }
   // A negated mention is not a requirement.
-  const negated = `${READY_DECISION_BODY}\nThis does not need any approval.\n`;
-  const result = evaluateSuitability(decisionIssue(negated), {
-    needsDecisionLabelName: NEEDS_DECISION_LABEL,
-    provisionalAssessment: provAssess(negated),
-  });
-  assert.equal(result.passed, true);
+  for (const line of [
+    'This does not need any approval.',
+    'This requires no approval.',
+  ]) {
+    const negated = `${READY_DECISION_BODY}\n${line}\n`;
+    const result = evaluateSuitability(decisionIssue(negated), {
+      needsDecisionLabelName: NEEDS_DECISION_LABEL,
+      provisionalAssessment: provAssess(negated),
+    });
+    assert.equal(result.passed, true, line);
+  }
 });

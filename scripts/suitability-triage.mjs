@@ -7,6 +7,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import {
+  findApprovalRequirementSentence,
   isDecisionCausedSignal,
   isEligibleProvisionalAssessment,
 } from './autopilot-suitability.mjs';
@@ -267,10 +268,6 @@ const SUBJECTIVE_PROXIMITY_PATTERN = new RegExp(
   `${SUBJECTIVE_GATE_PATTERN.source}[\\s\\S]{0,80}${SUBJECTIVE_SUBJECT_PATTERN.source}`,
   'i',
 );
-// #4535: an approval, sign-off or authorization named as a requirement, in any
-// sentence of the body. Read only while a provisional plan relaxes Check 6.
-const PROVISIONAL_AUTHORITY_PATTERN =
-  /\b(?:needs?|requires?|required|requiring|awaiting|awaits?|pending|subject to|blocked (?:on|by)|depends? on|must (?:first )?(?:be )?(?:approved|authori[sz]ed|signed off))\b[^.;\n]{0,80}?\b(?:approv\w*|sign-?off|authori[sz]\w*|permissions?)\b/gi;
 // #4374: the longest quoted match a failing evidence string carries, in code
 // points (never UTF-16 units, so a surrogate pair is never split). A longer
 // match is cut to this many code points and followed by `...`, so the quoted
@@ -6712,16 +6709,11 @@ export function checkAutonomy(context) {
   // relaxation an approval or sign-off requirement anywhere in the body, even
   // in a sentence of its own, keeps the source blocked.
   if (provisionalRelaxes) {
-    const maskedBody = maskMarkdownForScan(body);
-    for (const match of maskedBody.matchAll(PROVISIONAL_AUTHORITY_PATTERN)) {
-      const text = match[0];
-      const index = match.index ?? 0;
-      if (isNegatedNearby(maskedBody, text, index, NEGATION_WINDOW_CHARS)) {
-        continue;
-      }
+    const sentence = findApprovalRequirementSentence(maskMarkdownForScan(body));
+    if (sentence !== null) {
       return {
         pass: false,
-        evidence: `Issue names an approval requirement that a provisional plan cannot relax: "${formatQuotedEvidence(text)}".`,
+        evidence: `Issue names an approval requirement that a provisional plan cannot relax: "${formatQuotedEvidence(sentence)}".`,
       };
     }
   }

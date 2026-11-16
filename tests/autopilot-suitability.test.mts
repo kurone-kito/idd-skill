@@ -5,6 +5,7 @@ import { EFFORT_CANDIDATE_FILE_LIMITS } from '../src/scripts/audit-authored-issu
 import {
   assessProvisionalChoicePlan,
   DEFAULT_AUTOPILOT_SUITABILITY_FLOOR,
+  findApprovalRequirementSentence,
   isAutopilotSuitabilityScore,
   isDecisionCausedSignal,
   isEligibleProvisionalAssessment,
@@ -549,7 +550,7 @@ const validPlan = (
 ): Record<string, unknown> => ({
   schemaVersion: 1,
   source: { repository: 'o/r', issueNumber: 7, bodySha256: sha256(body) },
-  humanChoiceCriteria: ['A maintainer picks the cache layer'],
+  humanChoiceCriteria: ['a maintainer picks the layer'],
   recordedChoices: [],
   choices: [planChoice()],
   deliverables: [{ kind: 'file', target: 'src/cache.mts', purpose: 'edit' }],
@@ -626,10 +627,10 @@ test('provisional assessment: an eligible plan returns an auditable candidate pl
 test('provisional assessment: the original human-choice criteria stay pending (AC1)', () => {
   const assessment = assessProvisionalChoicePlan(assessInput());
   assert.deepEqual(assessment.pendingHumanCriteria, [
-    'A maintainer picks the cache layer',
+    'a maintainer picks the layer',
   ]);
   assert.deepEqual(assessment.plan?.humanChoiceCriteria, [
-    { text: 'A maintainer picks the cache layer', status: 'pending' },
+    { text: 'a maintainer picks the layer', status: 'pending' },
   ]);
   // A plan cannot claim approval: an unknown key is refused outright.
   const claimed = assessProvisionalChoicePlan(
@@ -913,7 +914,7 @@ test('provisional assessment: a recorded operator choice must be listed and resp
       plan: validPlan({
         recordedChoices: [
           {
-            reference: 'Decision section',
+            reference: 'Which cache layer should we use?',
             summary: 'keep Redis',
             respected: false,
           },
@@ -930,7 +931,7 @@ test('provisional assessment: a recorded operator choice must be listed and resp
       plan: validPlan({
         recordedChoices: [
           {
-            reference: 'Decision section',
+            reference: 'Which cache layer should we use?',
             summary: 'keep Redis',
             respected: true,
           },
@@ -940,7 +941,7 @@ test('provisional assessment: a recorded operator choice must be listed and resp
   );
   assert.equal(respected.eligible, true);
   assert.deepEqual(respected.plan?.recordedChoices, [
-    { reference: 'Decision section', summary: 'keep Redis' },
+    { reference: 'Which cache layer should we use?', summary: 'keep Redis' },
   ]);
 });
 
@@ -1121,6 +1122,18 @@ test('provisional assessment: other recorded state belongs to Resume, and an unr
     const assessment = assessProvisionalChoicePlan(assessInput({ state }));
     assert.deepEqual(blockerCodes(assessment), ['state-unreadable']);
   }
+});
+
+test('provisional assessment: a labeled source that names no choice is not a decision source (AC3)', () => {
+  const body = 'Fix the helper so that it runs.';
+  const assessment = assessProvisionalChoicePlan(
+    assessInput({
+      issue: { number: 7, body, labels: ['status:needs-decision'] },
+      plan: validPlan({ humanChoiceCriteria: [body] }, body),
+    }),
+  );
+  assert.deepEqual(blockerCodes(assessment), ['no-decision-signal']);
+  assert.equal(assessment.eligible, false);
 });
 
 test('provisional assessment: only a needs-decision source is assessed (AC3)', () => {
@@ -1391,4 +1404,124 @@ test('provisional assessment: file deliverables stay within the declared Candida
     }),
   );
   assert.equal(documentOnly.eligible, true);
+});
+
+test('isEligibleProvisionalAssessment rejects a hand-built object of the right shape (AC3)', () => {
+  const eligible = assessProvisionalChoicePlan(assessInput());
+  const forged = JSON.parse(JSON.stringify(eligible));
+  assert.equal(forged.eligible, true);
+  assert.equal(isEligibleProvisionalAssessment(forged, SOURCE_ISSUE), false);
+  assert.equal(
+    isEligibleProvisionalAssessment({ ...eligible }, SOURCE_ISSUE),
+    false,
+  );
+  assert.equal(isEligibleProvisionalAssessment(eligible, SOURCE_ISSUE), true);
+});
+
+test('provisional assessment: a deliverable kind outside file, document and issue-comment is refused (AC1)', () => {
+  const assessment = assessProvisionalChoicePlan(
+    assessInput({
+      plan: validPlan({
+        deliverables: [
+          { kind: 'other', target: 'a production deploy', purpose: 'ship' },
+        ],
+      }),
+    }),
+  );
+  assert.deepEqual(blockerCodes(assessment), ['plan-malformed']);
+  assert.match(assessment.blockers[0]?.detail ?? '', /kind must be one of/);
+});
+
+test('provisional assessment: the human-choice criteria and recorded choices must be excerpts of the source (AC1, AC2)', () => {
+  const foreignCriterion = assessProvisionalChoicePlan(
+    assessInput({
+      plan: validPlan({ humanChoiceCriteria: ['an invented criterion'] }),
+    }),
+  );
+  assert.deepEqual(blockerCodes(foreignCriterion), ['criteria-not-in-source']);
+  // Case and whitespace do not matter; the words do.
+  const respaced = assessProvisionalChoicePlan(
+    assessInput({
+      plan: validPlan({
+        humanChoiceCriteria: ['A  Maintainer\npicks the layer'],
+      }),
+    }),
+  );
+  assert.equal(respaced.eligible, true);
+  const foreignChoice = assessProvisionalChoicePlan(
+    assessInput({
+      bodyRecordsOperatorChoice: true,
+      plan: validPlan({
+        recordedChoices: [
+          { reference: 'an arbitrary entry', summary: 'x', respected: true },
+        ],
+      }),
+    }),
+  );
+  assert.deepEqual(blockerCodes(foreignChoice), [
+    'recorded-choice-not-in-source',
+  ]);
+});
+
+test('isDecisionCausedSignal scans the whole clause, with no window and no slice-edge sentence end (AC3)', () => {
+  const decision = 'maintainer decision';
+  const backward =
+    'Legal sign-off is mandatory, i.e. maintainer decision for the cache layer.';
+  assert.equal(
+    isDecisionCausedSignal(
+      backward,
+      backward.indexOf(decision),
+      decision.length,
+    ),
+    false,
+  );
+  const filler = ' about the layout and the review policy'.repeat(8);
+  const long = `A maintainer decision${filler} requires approval before implementation.`;
+  assert.equal(
+    isDecisionCausedSignal(long, long.indexOf(decision), decision.length),
+    false,
+  );
+  const before = `${'x '.repeat(100)}needs production access, so the maintainer decision is next.`;
+  assert.equal(
+    isDecisionCausedSignal(before, before.indexOf(decision), decision.length),
+    false,
+  );
+});
+
+test('findApprovalRequirementSentence finds a requirement in either word order and at any distance (AC3, AC4)', () => {
+  for (const sentence of [
+    'Approval from legal is required before work starts.',
+    'Legal authorization is required before work starts.',
+    'The rollout must be approved by legal.',
+    'Sign-off is pending.',
+    'Legal has to sign off before shipping.',
+    'We cannot start until compliance signs off.',
+    'The vendor must grant access first.',
+    'The budget raise needs a standing approval.',
+    'The rollout requires, after the long and careful qualification of every moving part in this very long sentence about scope, a formal approval.',
+  ]) {
+    assert.notEqual(
+      findApprovalRequirementSentence(`Pick the layer. ${sentence} More.`),
+      null,
+      sentence,
+    );
+  }
+});
+
+test('findApprovalRequirementSentence keeps a negation to its own sentence (AC3)', () => {
+  for (const text of [
+    'This does not need any approval.',
+    'This requires no approval.',
+    'Nothing here needs sign-off.',
+    'Approval criteria are listed below.',
+    'The reviewer approved the earlier draft.',
+  ]) {
+    assert.equal(findApprovalRequirementSentence(text), null, text);
+  }
+  assert.notEqual(
+    findApprovalRequirementSentence(
+      'No migration is needed. The budget raise needs a standing approval.',
+    ),
+    null,
+  );
 });

@@ -7,6 +7,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import {
   assessProvisionalChoicePlan,
+  findApprovalRequirementSentence,
   isDecisionCausedSignal,
   isEligibleProvisionalAssessment,
   normalizeAutopilotSuitabilityFloor,
@@ -1536,12 +1537,13 @@ export function evaluateAutonomousCompletion(
   // step is a no-op here and the two corpora share the same length/line
   // structure (position-preserving masking).
   const corpus = maskMarkdownForScan(rawCorpus, { htmlComments: 'mask' });
-  const relaxedDecisionSignals = isEligibleProvisionalAssessment(
-    provisional,
-    issue,
-  )
-    ? []
-    : undefined;
+  // #4535: the decision phrase is relaxed only when the same approval-sentence
+  // safety net A4.5 applies finds nothing in the body.
+  const relaxedDecisionSignals =
+    isEligibleProvisionalAssessment(provisional, issue) &&
+    findApprovalRequirementSentence(corpus) === null
+      ? []
+      : undefined;
   const match = findUnexcludedExternalCoordinationMatch(
     corpus,
     rawCorpus,

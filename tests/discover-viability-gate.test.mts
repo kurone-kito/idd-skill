@@ -4031,6 +4031,11 @@ const DECISION_BODY = [
   '- [ ] tests pass for the cache module',
   '',
 ].join('\n');
+const firstProseLine = (body: string): string =>
+  body
+    .split('\n')
+    .map((line) => line.trim())
+    .find((line) => line !== '' && !line.startsWith('#')) ?? '';
 const sha256 = (text: string): string =>
   createHash('sha256').update(text, 'utf8').digest('hex');
 const planOption = (id: string): Record<string, string> => ({
@@ -4048,7 +4053,7 @@ const decisionPlan = (
 ): Record<string, unknown> => ({
   schemaVersion: 1,
   source: { repository: 'o/r', issueNumber: 7, bodySha256: sha256(body) },
-  humanChoiceCriteria: ['A maintainer picks the cache layer'],
+  humanChoiceCriteria: [firstProseLine(body)],
   recordedChoices: [],
   choices: [
     {
@@ -4550,6 +4555,25 @@ test('A4 provisional: an abbreviation or a dotted path does not hide an authorit
     const body = DECISION_BODY.replace(
       'The layer needs a maintainer decision.',
       sentence,
+    );
+    const result = evaluateA4Viability(a4Issue(body), undefined, assess(body));
+    assert.equal(
+      result.failedCriteria.includes('autonomous_completion'),
+      true,
+      sentence,
+    );
+  }
+});
+
+test('A4 provisional: an approval requirement in another sentence keeps the decision phrase blocking (AC3, AC4)', () => {
+  for (const sentence of [
+    'Approval from legal is required before work starts.',
+    'The budget raise needs a standing approval.',
+    'The rollout must be approved by legal.',
+  ]) {
+    const body = DECISION_BODY.replace(
+      '## Acceptance criteria',
+      `${sentence}\n\n## Acceptance criteria`,
     );
     const result = evaluateA4Viability(a4Issue(body), undefined, assess(body));
     assert.equal(
