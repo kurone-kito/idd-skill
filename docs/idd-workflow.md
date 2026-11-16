@@ -1097,10 +1097,12 @@ by one fresh read: one whose own content is in place (a trusted, unedited
 comment with the same content, or a source closed as completed) is counted
 and reported in `warnings`, and one that is still absent is a recovery hold,
 not a retry. `warnings` also names downstream results that could not be
-recorded. The close step passes the title and the SHA-256 hex digest of the
-body's UTF-8 bytes that the plan read; a store should close only while they
-still match, as far as its API allows, and the planner re-reads just before
-the write. A record step is compared by its whole content before it is
+recorded. The close step passes what the plan evaluated: the open state, the
+title and the SHA-256 hex digest of the body's UTF-8 bytes, and the
+coordination claim that must still be active. A store should verify them as
+far as its API allows, so a close never overwrites an intervening close and
+never runs under a claim that was taken over; the planner re-reads just
+before the write. A record step is compared by its whole content before it is
 written. Every refusal and recovery hold keeps the coordination claim until
 its cause is fixed. If the confirmation is stored but the close failed, only
 the close resumes. If the close succeeded but the claim release failed, only
