@@ -133,6 +133,8 @@ import { enrichThreadsWithBotEditHistories } from './review-thread-edit-historie
 import {
   CLOSING_KEYWORD_PATTERN,
   computeClosingSetEvidence,
+  findCommitClosesForIssue,
+  issueReferencePattern,
 } from './supersession-detection.mjs';
 
 // GitHub's GraphQL `DateTime` scalar can't be null, so a `CheckRun` that
@@ -651,15 +653,18 @@ function readProvisionalState(input) {
 function describeUnboundProvisionalRead(read) {
   if (read === undefined || read.status !== 'stopped') return '';
   if (read.reason === 'record-missing') return '';
-  return ` (provisional read stopped: ${read.reason})`;
+  return ` (provisional read stopped: ${read.reason}; a claimed source whose read binds must be left out of the set instead)`;
 }
 /**
  * #4532: whether the PR title or body names `issueNumber` with a closing
  * keyword, the one input a protected source needs beyond GitHub's own
  * `closingIssuesReferences` (which can lag the body, D3.5). The title is read
  * through the work-item read because the readiness snapshot carries no title,
- * and the default merge-commit message repeats it. Returns `null` when either
- * text cannot be read, so the closing set fails closed.
+ * and the default merge-commit message copies it verbatim. So the title is
+ * scanned as raw commit-message text, where Markdown code has no meaning,
+ * while the body keeps the Markdown-aware scan GitHub applies to a PR
+ * description. Returns `null` when either text cannot be read, so the closing
+ * set fails closed.
  */
 function readProtectedSourceBodyCloses(
   port,
@@ -678,8 +683,12 @@ function readProtectedSourceBodyCloses(
   }
   if (typeof title !== 'string') return null;
   return (
-    textClosesIssue(title, issueNumber, owner, repo) ||
-    textClosesIssue(body, issueNumber, owner, repo)
+    findCommitClosesForIssue(
+      [{ commit: { message: title } }],
+      issueNumber,
+      owner,
+      repo,
+    ).length > 0 || textClosesIssue(body, issueNumber, owner, repo)
   );
 }
 /**
@@ -693,11 +702,7 @@ function readProtectedSourceBodyCloses(
 export function textClosesIssue(text, issueNumber, owner, repo) {
   const source = stripBlockQuotesAndLazyContinuations(text);
   const masked = maskMarkdownForScan(source);
-  const slug =
-    owner && repo ? `${escapeRegex(owner)}/${escapeRegex(repo)}` : '';
-  const target = slug
-    ? `(?:(?:${slug})?#${issueNumber}|GH-${issueNumber}|https?://[^\\s/]+/${slug}/issues/${issueNumber})`
-    : `(?:#${issueNumber}|GH-${issueNumber})`;
+  const target = issueReferencePattern(issueNumber, owner, repo);
   const closing = new RegExp(
     `\\b(${CLOSING_KEYWORD_PATTERN})(\\s+)(${target})\\b`,
     'giu',
@@ -1637,9 +1642,10 @@ export function collectPreMergeReadiness(
             port.getMergedChangeRequestMeta(number),
         });
   // #3298: the deliberate closing set -- --closing-issues when given
-  // (parseArgs already validated it includes the claimed issue and does
-  // not combine with --claimless), else the single claimed issue, else
-  // empty under --claimless. kurone-kito/idd-skill#3328: an
+  // (parseArgs rejected a combination with --claimless, and the check below,
+  // which follows the provisional read, requires it to include the claimed
+  // issue unless that issue is a bound provisional source), else the single
+  // claimed issue, else empty under --claimless. kurone-kito/idd-skill#3328: an
   // `out-of-loop-authorized` PR is the one exception to the plain
   // --claimless "[]" default -- it carries no claim-derived deliberate
   // set to diff against, so the valid marker authorizes exactly the PR's
@@ -2927,8 +2933,8 @@ function printHelp() {
                     --claim-issue's own number, except that (#4532) it must
                     leave out a claimed issue whose provisional read is
                     bound. Cannot combine with --claimless. Omit to use the
-                    single claimed issue (or the empty set under --claimless)
-                    as the deliberate set.
+                    single claimed issue as the deliberate set (the empty set
+                    under --claimless or for a bound source).
 `);
 }
 /**

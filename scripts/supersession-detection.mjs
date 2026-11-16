@@ -235,6 +235,22 @@ export function findStrayCommitCloses(commits, expectedIssueNumbers) {
   return strays;
 }
 /**
+ * The regex source naming `issue` in every form GitHub reads as a reference to
+ * it, for a closing-keyword scan (#4532): the bare `#N`, the `GH-N` autolink,
+ * the same-repository qualified `owner/repo#N`, and the same-repository issue
+ * URL (`https://<host>/owner/repo/issues/N`). An empty `owner` or `repo`
+ * leaves only the bare and `GH-N` forms. One builder serves the commit scan
+ * here and the title and body scan in `pre-merge-readiness.mts`, so the two
+ * cannot drift.
+ */
+export function issueReferencePattern(issue, owner, repo) {
+  const slug =
+    owner && repo ? `${escapeRegex(owner)}/${escapeRegex(repo)}` : '';
+  return slug
+    ? `(?:(?:${slug})?#${issue}|GH-${issue}|https?://[^\\s/]+/${slug}/issues/${issue})`
+    : `(?:#${issue}|GH-${issue})`;
+}
+/**
  * Every commit whose full message names `issue` with a closing keyword, in any
  * form GitHub reads as a close of that issue: the bare `#N`, the `GH-N`
  * autolink, the same-repository qualified `owner/repo#N`, and the
@@ -249,13 +265,8 @@ export function findCommitClosesForIssue(commits, issue, owner, repo) {
   if (!Number.isInteger(issue) || issue <= 0) {
     return [];
   }
-  const slug =
-    owner && repo ? `${escapeRegex(owner)}/${escapeRegex(repo)}` : '';
-  const target = slug
-    ? `(?:(?:${slug})?#${issue}|GH-${issue}|https?://[^\\s/]+/${slug}/issues/${issue})`
-    : `(?:#${issue}|GH-${issue})`;
   const pattern = new RegExp(
-    `\\b${CLOSING_KEYWORD_PATTERN}\\s+${target}\\b`,
+    `\\b${CLOSING_KEYWORD_PATTERN}\\s+${issueReferencePattern(issue, owner, repo)}\\b`,
     'i',
   );
   const found = [];
@@ -266,6 +277,67 @@ export function findCommitClosesForIssue(commits, issue, owner, repo) {
     }
   }
   return found;
+}
+/**
+ * Read the raw `closingIssuesReferences` passthrough into numbers split by
+ * repository, or `null` when any entry cannot be interpreted -- the caller
+ * then fails closed to `"unavailable"`.
+ */
+function parseClosingReferences(rawRefs, ownerLower, repoLower) {
+  const actual = [];
+  const sameRepoNumbers = new Set();
+  // Cross-repo numbers stay a separate bucket (not folded into
+  // `sameRepoNumbers`) precisely so a coincidental number collision with an
+  // `expected` entry still surfaces as `extra` below, rather than a plain
+  // `expected`/`actual` number-set diff silently canceling the two out.
+  const crossRepoNumbers = [];
+  for (const entry of rawRefs) {
+    const record = entry !== null && typeof entry === 'object' ? entry : null;
+    const rawNumber = record && 'number' in record ? record.number : entry;
+    // Copilot review, PR #3353: `Number(rawNumber)` alone accepts a
+    // malformed JSON value such as `true` (`Number(true) === 1`) as a
+    // legitimate issue number -- `{ number: true }` would otherwise match
+    // expected issue 1 and read as clean. Require the raw value to
+    // already be a real `number` before coercing it, so only an actual
+    // JSON number (never a boolean, string, array, or object) is ever
+    // accepted as an issue number.
+    const number = typeof rawNumber === 'number' ? rawNumber : Number.NaN;
+    if (!Number.isInteger(number) || number <= 0) {
+      // A malformed entry (no resolvable positive `number`) previously
+      // fell through `continue`, silently dropping it from `actual` --
+      // e.g. expected `[7]` plus `[{ number: 7 }, {}]` reported `"match"`,
+      // even though the second, unverifiable entry could just as easily
+      // have been an undetected extra close whose `number` field was lost
+      // or mistransformed. `closingIssuesReferences` is a raw provider
+      // passthrough (no schema guarantee), so an entry this file cannot
+      // interpret makes the whole comparison untrustworthy, not just that
+      // one entry.
+      return null;
+    }
+    actual.push(number);
+    const repository = record?.repository;
+    if (repository !== null && repository !== undefined) {
+      if (typeof repository !== 'object') {
+        // Copilot review, PR #3353: a present-but-unusable `repository`
+        // value (a string/number/boolean, never a real GraphQL repository
+        // object) previously fell through this whole check unexamined
+        // (only `typeof repository === 'object'` was tested), silently
+        // defaulting to the same-repo assumption below -- the same
+        // false-match risk the malformed-number case above fails closed
+        // on, just one field over.
+        return null;
+      }
+      const repoRecord = repository;
+      const entryOwner = String(repoRecord.owner?.login ?? '').toLowerCase();
+      const entryRepo = String(repoRecord.name ?? '').toLowerCase();
+      if (entryOwner !== ownerLower || entryRepo !== repoLower) {
+        crossRepoNumbers.push(number);
+        continue;
+      }
+    }
+    sameRepoNumbers.add(number);
+  }
+  return { actual, sameRepoNumbers, crossRepoNumbers };
 }
 /**
  * Compute the `closingSet` merge-gate evidence: whether the PR's live
@@ -292,7 +364,8 @@ export function findCommitClosesForIssue(commits, issue, owner, repo) {
  *   commit-list read -- D3.5 skips both step 6 (the reference compare) and
  *   step 7 (the commit-message scan) together under this same condition, so
  *   this status covers both. The one exception is a `protectedSource`
- *   (below), which still reads the commit list and the caller's body scan.
+ *   (below), which still reads the commit list, the caller's body scan, and
+ *   the registered references for that one number.
  * - `commits === null` (the caller's own `pulls/{pr}/commits` read threw)
  *   or `commits.length >= 250` (the endpoint's documented cap, which
  *   pagination cannot get past) fails closed to `"unavailable"` --
@@ -322,8 +395,8 @@ export function findCommitClosesForIssue(commits, issue, owner, repo) {
  *   `[{ number: 7 }, {}]` previously reported `"match"`).
  * - `protectedSource` (#4532) names a provisional source that must stay open:
  *   it is dropped from `expected`, and any closing reference to it blocks on
- *   every base branch -- GitHub's own `closingIssuesReferences` (default base
- *   only), the caller's title/body scan (`bodyCloses`, folded into `actual`
+ *   every base branch -- GitHub's own `closingIssuesReferences` (a malformed
+ *   entry fails closed), the caller's title/body scan (`bodyCloses`, folded into `actual`
  *   and `extra` because registration can lag), and every branch commit message
  *   in the bare, qualified, and URL forms. A `null` `bodyCloses`, or an
  *   unreadable commit list, fails closed to `"unavailable"`. A clean protected
@@ -331,6 +404,8 @@ export function findCommitClosesForIssue(commits, issue, owner, repo) {
  */
 export function computeClosingSetEvidence(options) {
   const protectedSource = options.protectedSource;
+  const ownerLower = options.owner.toLowerCase();
+  const repoLower = options.repo.toLowerCase();
   // A protected source is never part of the deliberate set, whatever the
   // caller passed, so a closing reference to it always reads as extra.
   const expected = [...new Set(options.expected)]
@@ -381,9 +456,31 @@ export function computeClosingSetEvidence(options) {
         strayCommitCloses: [],
       };
     }
-    const protectedRefs = protectedSource.bodyCloses
-      ? [protectedSource.issue]
-      : [];
+    // GitHub's registration can still hold a reference here (a manual link
+    // counts), so read it; a malformed entry fails closed. Other numbers keep
+    // the exemption.
+    const registered = Array.isArray(options.closingIssuesReferences)
+      ? parseClosingReferences(
+          options.closingIssuesReferences,
+          ownerLower,
+          repoLower,
+        )
+      : null;
+    if (registered === null) {
+      return {
+        status: 'unavailable',
+        expected,
+        actual: [],
+        extra: [],
+        missing: [],
+        strayCommitCloses: [],
+      };
+    }
+    const protectedRefs =
+      protectedSource.bodyCloses ||
+      registered.sameRepoNumbers.has(protectedSource.issue)
+        ? [protectedSource.issue]
+        : [];
     const protectedStrays = findCommitClosesForIssue(
       options.commits,
       protectedSource.issue,
@@ -429,77 +526,20 @@ export function computeClosingSetEvidence(options) {
       strayCommitCloses: [],
     };
   }
-  const ownerLower = options.owner.toLowerCase();
-  const repoLower = options.repo.toLowerCase();
   const rawRefs = options.closingIssuesReferences;
   const expectedSet = new Set(expected);
-  const actual = [];
-  const sameRepoNumbers = new Set();
-  // Cross-repo numbers stay a separate bucket (not folded into
-  // `sameRepoNumbers`) precisely so a coincidental number collision with an
-  // `expected` entry still surfaces as `extra` below, rather than a plain
-  // `expected`/`actual` number-set diff silently canceling the two out.
-  const crossRepoNumbers = [];
-  for (const entry of rawRefs) {
-    const record = entry !== null && typeof entry === 'object' ? entry : null;
-    const rawNumber = record && 'number' in record ? record.number : entry;
-    // Copilot review, PR #3353: `Number(rawNumber)` alone accepts a
-    // malformed JSON value such as `true` (`Number(true) === 1`) as a
-    // legitimate issue number -- `{ number: true }` would otherwise match
-    // expected issue 1 and read as clean. Require the raw value to
-    // already be a real `number` before coercing it, so only an actual
-    // JSON number (never a boolean, string, array, or object) is ever
-    // accepted as an issue number.
-    const number = typeof rawNumber === 'number' ? rawNumber : Number.NaN;
-    if (!Number.isInteger(number) || number <= 0) {
-      // A malformed entry (no resolvable positive `number`) previously
-      // fell through `continue`, silently dropping it from `actual` --
-      // e.g. expected `[7]` plus `[{ number: 7 }, {}]` reported `"match"`,
-      // even though the second, unverifiable entry could just as easily
-      // have been an undetected extra close whose `number` field was lost
-      // or mistransformed. `closingIssuesReferences` is a raw provider
-      // passthrough (no schema guarantee), so an entry this file cannot
-      // interpret makes the whole comparison untrustworthy, not just that
-      // one entry.
-      return {
-        status: 'unavailable',
-        expected,
-        actual: [],
-        extra: [],
-        missing: [],
-        strayCommitCloses: [],
-      };
-    }
-    actual.push(number);
-    const repository = record?.repository;
-    if (repository !== null && repository !== undefined) {
-      if (typeof repository !== 'object') {
-        // Copilot review, PR #3353: a present-but-unusable `repository`
-        // value (a string/number/boolean, never a real GraphQL repository
-        // object) previously fell through this whole check unexamined
-        // (only `typeof repository === 'object'` was tested), silently
-        // defaulting to the same-repo assumption below -- the same
-        // false-match risk the malformed-number case above fails closed
-        // on, just one field over.
-        return {
-          status: 'unavailable',
-          expected,
-          actual: [],
-          extra: [],
-          missing: [],
-          strayCommitCloses: [],
-        };
-      }
-      const repoRecord = repository;
-      const entryOwner = String(repoRecord.owner?.login ?? '').toLowerCase();
-      const entryRepo = String(repoRecord.name ?? '').toLowerCase();
-      if (entryOwner !== ownerLower || entryRepo !== repoLower) {
-        crossRepoNumbers.push(number);
-        continue;
-      }
-    }
-    sameRepoNumbers.add(number);
+  const parsedRefs = parseClosingReferences(rawRefs, ownerLower, repoLower);
+  if (parsedRefs === null) {
+    return {
+      status: 'unavailable',
+      expected,
+      actual: [],
+      extra: [],
+      missing: [],
+      strayCommitCloses: [],
+    };
   }
+  const { actual, sameRepoNumbers, crossRepoNumbers } = parsedRefs;
   // The caller's body scan stands in for a registration that has not caught
   // up yet (D3.5, "pending registration"): a protected source the title or
   // body closes counts as a same-repository closing reference.

@@ -8910,7 +8910,7 @@ reflexively as any other CLI option.
   this after the provisional read, so the usage error appears once the PR
   has been read, and it names a stopped read that left a record behind.
   Omit it for the ordinary single-issue case, where the claimed issue alone
-  is the deliberate set.
+  is the deliberate set (the empty set for a bound source).
 
 #### Readiness branch fixture (#4697)
 
@@ -9067,13 +9067,15 @@ Compare the live base and default for D3.5 with
   when given, else empty, so `expected` omits it), and a closing reference
   to it blocks on every base branch, including the non-default one whose
   other references are exempt. The references read are GitHub's own
-  `closingIssuesReferences`, a closing keyword in the PR title or body
-  prose (the code- and quote-aware scan #5149 uses for a split PR; the
-  `GH-N`, same-repository qualified, and URL forms count), which is added to
-  `actual` and `extra` because GitHub's registration can lag, and every
-  branch commit message (bare, `GH-N`, qualified, and URL forms), reported in
-  `strayCommitCloses`. An unreadable title, body, or commit list fails
-  closed to `"unavailable"`. The blocker detail's `--closing-issues`
+  `closingIssuesReferences` (a manual link counts, and a malformed entry
+  fails closed), a closing keyword in the PR title or body (the body gets
+  the code- and quote-aware scan #5149 uses for a split PR; the title is
+  scanned as raw commit-message text, because the default merge commit
+  copies it; the `GH-N`, same-repository qualified, and URL forms count),
+  which is added to `actual` and `extra` because GitHub's registration can
+  lag, and every branch commit message (bare, `GH-N`, qualified, and URL
+  forms), reported in `strayCommitCloses`. An unreadable title, body, or
+  commit list fails closed to `"unavailable"`. The blocker detail's `--closing-issues`
   remedy does not apply to a protected source, which `--closing-issues`
   cannot include: reword the reference to `Refs` instead. A body that
   names the claimed issue only with `Refs` expects no close (#5149), and

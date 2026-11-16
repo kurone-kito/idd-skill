@@ -17810,6 +17810,23 @@ test('closingSet: --closing-issues combined with --claimless, or with a non-nume
       ]),
     /invalid --closing-issues value/,
   );
+  // An empty set is not a deliberate set (#4532): it is rejected here, so it
+  // can never stand in for the closing set of a provisional source.
+  for (const empty of ['', ',', ' ']) {
+    assert.throws(
+      () =>
+        parseArgs([
+          '--pr',
+          '1',
+          '--claim-issue',
+          '7',
+          '--closing-issues',
+          empty,
+        ]),
+      /invalid --closing-issues value/,
+      JSON.stringify(empty),
+    );
+  }
   const parsed = parseArgs([
     '--pr',
     '1',
@@ -18037,6 +18054,69 @@ test('closingSet protectedSource: on a non-default base the source stays protect
   ]);
 });
 
+test('closingSet protectedSource: a registered reference to the source blocks on a non-default base, a malformed entry fails closed, and other numbers stay exempt', () => {
+  const nonDefault = {
+    baseRefName: 'feature-branch',
+    liveDefaultBranch: 'main',
+  };
+  const registered = computeClosingSetEvidence(
+    protectedClosingSetOptions({
+      ...nonDefault,
+      closingIssuesReferences: [{ number: 999 }, { number: 7 }],
+    }),
+  );
+  assert.equal(registered.status, 'mismatch');
+  assert.deepEqual(registered.actual, [7]);
+  assert.deepEqual(registered.extra, [7]);
+  assert.equal(closingSetBlockers(registered).length, 1);
+
+  // The same entry in the same repository, written out in full, also blocks;
+  // another repository's issue of the same number does not.
+  const sameRepo = {
+    number: 7,
+    repository: {
+      name: CLOSING_SET_REPO,
+      owner: { login: CLOSING_SET_OWNER },
+    },
+  };
+  assert.equal(
+    computeClosingSetEvidence(
+      protectedClosingSetOptions({
+        ...nonDefault,
+        closingIssuesReferences: [sameRepo],
+      }),
+    ).status,
+    'mismatch',
+  );
+  assert.equal(
+    computeClosingSetEvidence(
+      protectedClosingSetOptions({
+        ...nonDefault,
+        closingIssuesReferences: [
+          {
+            number: 7,
+            repository: { name: 'elsewhere', owner: { login: 'x' } },
+          },
+        ],
+      }),
+    ).status,
+    'skipped-non-default-branch',
+  );
+
+  for (const malformed of [[{}], [{ number: true }], 'not-an-array', null]) {
+    assert.equal(
+      computeClosingSetEvidence(
+        protectedClosingSetOptions({
+          ...nonDefault,
+          closingIssuesReferences: malformed,
+        }),
+      ).status,
+      'unavailable',
+      JSON.stringify(malformed),
+    );
+  }
+});
+
 test('closingSet protectedSource: an unreadable body or commit list fails closed to unavailable on either base', () => {
   for (const base of [
     {},
@@ -18080,15 +18160,22 @@ test('closingSet protectedSource: findCommitClosesForIssue reads the closing for
     commitPayload('c10', ''),
     commitPayload('c11', 'Closes GH-7'),
     commitPayload('c12', 'Closes GH-70'),
+    // A commit message is raw text: Markdown code and quotes have no meaning
+    // there, so each of these still closes the issue.
+    commitPayload('c13', 'docs: x\n\n> Closes #7'),
+    commitPayload('c14', 'docs: x\n\n`Closes #7`'),
+    commitPayload('c15', 'docs: x\n\n```\nCloses #7\n```'),
+    commitPayload('c16', 'docs: x\r\n\r\nCloses #7\r\n'),
+    commitPayload('c17', 'docs: x\n\nCloses\n#7'),
   ];
   assert.deepEqual(
     findCommitClosesForIssue(commits, 7, 'o', 'r').map((entry) => entry.sha),
-    ['c1', 'c2', 'c3', 'c4', 'c11'],
+    ['c1', 'c2', 'c3', 'c4', 'c11', 'c13', 'c14', 'c15', 'c16', 'c17'],
   );
   // Without a repository only the bare and GH-N forms can match.
   assert.deepEqual(
     findCommitClosesForIssue(commits, 7, '', '').map((entry) => entry.sha),
-    ['c1', 'c2', 'c11'],
+    ['c1', 'c2', 'c11', 'c13', 'c14', 'c15', 'c16', 'c17'],
   );
   assert.deepEqual(findCommitClosesForIssue(commits, 0, 'o', 'r'), []);
 });
@@ -18100,6 +18187,11 @@ test('closingSet protectedSource: textClosesIssue reads prose closing references
     'Intro\n\nResolves o/r#7\n',
     'Closes https://github.com/o/r/issues/7',
     'Fixes GH-7',
+    'Intro\r\n\r\nCloses #7\r\n',
+    'Closes\n#7',
+    // An HTML comment is not masked, so a hidden keyword still blocks: the
+    // scan errs toward blocking a protected source.
+    '<!-- Closes #7 -->',
   ];
   for (const text of yes) {
     assert.equal(textClosesIssue(text, 7, 'o', 'r'), true, text);
@@ -23914,6 +24006,9 @@ test('collectPreMergeReadiness: a closing reference to a bound source blocks, fr
     ['qualified body keyword', { body: 'Fixes o/r#7' }],
     ['GH-N body keyword', { body: 'Resolves GH-7' }],
     ['title keyword', { title: 'feat: resolves #7' }],
+    // The default merge commit copies the title verbatim, so Markdown code
+    // around the keyword protects nothing there.
+    ['title keyword in a code span', { title: 'feat: `Fixes #7`' }],
     [
       'registered reference',
       { body: 'Refs #7', closingIssuesReferences: [{ number: 7 }] },
@@ -23990,6 +24085,22 @@ test('collectPreMergeReadiness: a bound source stays protected on a non-default 
   assert.deepEqual(closing.closingSet.extra, [7]);
   assert.equal(closingSetGates(closing).length, 1);
 
+  // A reference GitHub already registered (a manual link counts) blocks on a
+  // non-default base too, even when no text names the source.
+  const registered = collectProvisional(
+    PROVISIONAL_BOUND_COMMENTS(),
+    PROVISIONAL_HELPER_ON,
+    {
+      pr: {
+        baseRefName: 'release/1.x',
+        closingIssuesReferences: [{ number: 7 }],
+      },
+    },
+  );
+  assert.equal(registered.closingSet.status, 'mismatch');
+  assert.deepEqual(registered.closingSet.extra, [7]);
+  assert.equal(closingSetGates(registered).length, 1);
+
   const unreadable = collectProvisional(
     PROVISIONAL_BOUND_COMMENTS(),
     PROVISIONAL_HELPER_ON,
@@ -23997,6 +24108,9 @@ test('collectPreMergeReadiness: a bound source stays protected on a non-default 
   );
   assert.equal(unreadable.closingSet.status, 'unavailable');
   assert.equal(closingSetGates(unreadable).length, 1);
+  for (const report of [clean, closing, registered, unreadable]) {
+    assert.deepEqual(validate(report, readinessSchema), []);
+  }
 });
 
 // An unbound read never creates the exception and never adds a block: the
@@ -24084,7 +24198,7 @@ test('collectPreMergeReadiness: the closing-issues usage error names a stopped r
       collectProvisional(stopped, PROVISIONAL_HELPER_ON, {
         pr: { closingIssues: '8' },
       }),
-    /claimed issue number 7 \(provisional read stopped: record-untrusted\)$/,
+    /claimed issue number 7 \(provisional read stopped: record-untrusted; a claimed source whose read binds must be left out of the set instead\)$/,
   );
   assert.throws(
     () =>
