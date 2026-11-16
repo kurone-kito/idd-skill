@@ -376,11 +376,9 @@ export function findStrayCommitCloses(
  * it, for a closing-keyword scan (#4532): the bare `#N`, the `GH-N` autolink,
  * the same-repository qualified `owner/repo#N`, and the same-repository issue
  * URL (`https://<host>/owner/repo/issues/N`). An empty `owner` or `repo`
- * leaves only the bare and `GH-N` forms. One builder serves the commit scan
- * here and the title and body scan in `pre-merge-readiness.mts`, so the two
- * cannot drift.
+ * leaves only the bare and `GH-N` forms.
  */
-export function issueReferencePattern(
+function issueReferencePattern(
   issue: number,
   owner: string,
   repo: string,
@@ -454,9 +452,10 @@ export interface ProtectedClosingSource {
   issue: number;
   /**
    * Whether the PR title or body names `issue` with a closing keyword,
-   * scanned by the caller (GitHub's own `closingIssuesReferences` can lag the
-   * body, and the scan lives in `pre-merge-readiness.mts`, which this file
-   * cannot import). `null` means the title or body could not be read.
+   * scanned by the caller as raw text (GitHub's own `closingIssuesReferences`
+   * can lag the body, and the scan reads the title through a provider call
+   * this file does not make). `null` means the title or body could not be
+   * read.
    */
   bodyCloses: boolean | null;
 }
@@ -560,8 +559,8 @@ function parseClosingReferences(
  *   `"skipped-non-default-branch"`, reporting a successful exemption for
  *   an unverified PR target instead of failing closed).
  * - `baseRefName !== liveDefaultBranch` reproduces D3.5's own exemption:
- *   `closingIssuesReferences` never populates against a non-default base
- *   branch, so `"skipped-non-default-branch"` short-circuits before any
+ *   `closingIssuesReferences` does not populate from a closing keyword against
+ *   a non-default base branch, so `"skipped-non-default-branch"` short-circuits before any
  *   commit-list read -- D3.5 skips both step 6 (the reference compare) and
  *   step 7 (the commit-message scan) together under this same condition, so
  *   this status covers both. The one exception is a `protectedSource`

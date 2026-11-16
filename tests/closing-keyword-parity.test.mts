@@ -4,7 +4,6 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { extractKeywordReferences } from '../src/scripts/discover-roadmap-graph.mts';
-import { textClosesIssue } from '../src/scripts/pre-merge-readiness.mts';
 import {
   CLOSING_KEYWORD_ALTERNATION,
   findCommitClosesForIssue,
@@ -58,15 +57,11 @@ test('parity: the stray-close scan flags the same rows for an out-of-set issue',
   }
 });
 
-test('parity: the protected-source scans (#4532) agree with the shared row table', () => {
-  // The collector reads a protected source's PR text and commits through these
-  // two scans, so they must answer every row as the other consumers do.
+test('parity: the protected-source scan (#4532) agrees with the shared row table', () => {
+  // The collector reads a protected source's PR title, PR body, and commits
+  // through this one scan, so it must answer every row as the other consumers
+  // do.
   for (const row of ROWS) {
-    assert.equal(
-      textClosesIssue(row.text, ISSUE, 'o', 'r'),
-      row.closes,
-      `textClosesIssue on: ${row.text}`,
-    );
     assert.equal(
       findCommitClosesForIssue(
         [{ sha: 'abc1234', commit: { message: `docs: note\n\n${row.text}` } }],
@@ -78,14 +73,14 @@ test('parity: the protected-source scans (#4532) agree with the shared row table
       `commit scan on: ${row.text}`,
     );
   }
-  // A same-repository qualified reference counts; another repository's does
-  // not.
+  // The GH-N, same-repository qualified, and URL forms count; another
+  // repository's reference does not.
   for (const [text, closes] of [
     ['Closes o/r#3145', true],
     ['Closes GH-3145', true],
+    ['Closes https://github.com/o/r/issues/3145', true],
     ['Closes other/repo#3145', false],
   ] as const) {
-    assert.equal(textClosesIssue(text, ISSUE, 'o', 'r'), closes, text);
     assert.equal(
       findCommitClosesForIssue(
         [{ sha: 'abc1234', commit: { message: text } }],

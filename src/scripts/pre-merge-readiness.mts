@@ -162,7 +162,6 @@ import {
   CLOSING_KEYWORD_PATTERN,
   computeClosingSetEvidence,
   findCommitClosesForIssue,
-  issueReferencePattern,
 } from './supersession-detection.mts';
 
 /** Author reference embedded in GitHub REST/GraphQL payloads. */
@@ -1050,12 +1049,14 @@ function describeUnboundProvisionalRead(
  * #4532: whether the PR title or body names `issueNumber` with a closing
  * keyword, the one input a protected source needs beyond GitHub's own
  * `closingIssuesReferences` (which can lag the body, D3.5). The title is read
- * through the work-item read because the readiness snapshot carries no title,
- * and the default merge-commit message copies it verbatim. So the title is
- * scanned as raw commit-message text, where Markdown code has no meaning,
- * while the body keeps the Markdown-aware scan GitHub applies to a PR
- * description. Returns `null` when either text cannot be read, so the closing
- * set fails closed.
+ * through the work-item read because the readiness snapshot carries no title.
+ * Both are scanned as raw commit-message text, with no Markdown masking,
+ * because the merge commit can copy either one verbatim (the default message
+ * carries the title, and the repository's merge-commit message setting can
+ * add the body), and a keyword in a code span or a quote still closes the
+ * issue there. Over-blocking a protected source is the safe direction.
+ * Returns `null` when either text cannot be read, so the closing set fails
+ * closed.
  */
 function readProtectedSourceBodyCloses(
   port: ProviderPort,
@@ -1075,36 +1076,12 @@ function readProtectedSourceBodyCloses(
   if (typeof title !== 'string') return null;
   return (
     findCommitClosesForIssue(
-      [{ commit: { message: title } }],
+      [{ commit: { message: title } }, { commit: { message: body } }],
       issueNumber,
       owner,
       repo,
-    ).length > 0 || textClosesIssue(body, issueNumber, owner, repo)
+    ).length > 0
   );
-}
-
-/**
- * #4532: whether `text` names `issueNumber` with a closing keyword that GitHub
- * would read as prose. It uses the same quote- and code-aware scan as
- * {@link claimIssueExpectedToClose}, and also reads the `GH-N` autolink, the
- * same-repository qualified form (`owner/repo#N`), and the same-repository
- * issue URL, since a protected source must stay open whichever form closes it.
- * Another repository's reference never matches.
- */
-export function textClosesIssue(
-  text: string,
-  issueNumber: number,
-  owner: string,
-  repo: string,
-): boolean {
-  const source = stripBlockQuotesAndLazyContinuations(text);
-  const masked = maskMarkdownForScan(source);
-  const target = issueReferencePattern(issueNumber, owner, repo);
-  const closing = new RegExp(
-    `\\b(${CLOSING_KEYWORD_PATTERN})(\\s+)(${target})\\b`,
-    'giu',
-  );
-  return hasSpacedMatch(masked, source, closing);
 }
 
 /**

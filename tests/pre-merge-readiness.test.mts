@@ -60,7 +60,6 @@ import {
   resolveProvisionalReadiness,
   resolveScopeOverrunReadiness,
   resolveToleratedGhFailure,
-  textClosesIssue,
 } from '../src/scripts/pre-merge-readiness.mts';
 import {
   attachReviewThreadCommentEditHistories,
@@ -18103,7 +18102,24 @@ test('closingSet protectedSource: a registered reference to the source blocks on
     'skipped-non-default-branch',
   );
 
-  for (const malformed of [[{}], [{ number: true }], 'not-an-array', null]) {
+  // A bare number entry, which a provider may pass through, is the same
+  // repository and blocks.
+  assert.equal(
+    computeClosingSetEvidence(
+      protectedClosingSetOptions({
+        ...nonDefault,
+        closingIssuesReferences: [7],
+      }),
+    ).status,
+    'mismatch',
+  );
+  for (const malformed of [
+    [{}],
+    [{ number: true }],
+    [{ number: 999 }, {}],
+    'not-an-array',
+    null,
+  ]) {
     assert.equal(
       computeClosingSetEvidence(
         protectedClosingSetOptions({
@@ -18178,40 +18194,6 @@ test('closingSet protectedSource: findCommitClosesForIssue reads the closing for
     ['c1', 'c2', 'c11', 'c13', 'c14', 'c15', 'c16', 'c17'],
   );
   assert.deepEqual(findCommitClosesForIssue(commits, 0, 'o', 'r'), []);
-});
-
-test('closingSet protectedSource: textClosesIssue reads prose closing references only', () => {
-  const yes = [
-    'Closes #7',
-    'fixes: #7',
-    'Intro\n\nResolves o/r#7\n',
-    'Closes https://github.com/o/r/issues/7',
-    'Fixes GH-7',
-    'Intro\r\n\r\nCloses #7\r\n',
-    'Closes\n#7',
-    // An HTML comment is not masked, so a hidden keyword still blocks: the
-    // scan errs toward blocking a protected source.
-    '<!-- Closes #7 -->',
-  ];
-  for (const text of yes) {
-    assert.equal(textClosesIssue(text, 7, 'o', 'r'), true, text);
-  }
-  const no = [
-    'Refs #7',
-    'Part of #7',
-    'Closes #70',
-    'Closes other/repo#7',
-    'Closes https://github.com/other/repo/issues/7',
-    '`Closes #7`',
-    '```\nCloses #7\n```',
-    '> Closes #7',
-    'Closes #8',
-    'Closes GH-70',
-    '',
-  ];
-  for (const text of no) {
-    assert.equal(textClosesIssue(text, 7, 'o', 'r'), false, text);
-  }
 });
 
 // Copilot review, PR #3353: an empty/missing `baseRefName` previously
@@ -24009,6 +23991,11 @@ test('collectPreMergeReadiness: a closing reference to a bound source blocks, fr
     // The default merge commit copies the title verbatim, so Markdown code
     // around the keyword protects nothing there.
     ['title keyword in a code span', { title: 'feat: `Fixes #7`' }],
+    // A merge commit can copy the body verbatim (the repository's merge-commit
+    // message setting), where Markdown code and quotes have no meaning.
+    ['body keyword in a code span', { body: 'Refs #7\n\n`Closes #7`' }],
+    ['body keyword in a quote', { body: 'Refs #7\n\n> Closes #7' }],
+    ['body keyword in a fence', { body: 'Refs #7\n\n```\nFixes #7\n```' }],
     [
       'registered reference',
       { body: 'Refs #7', closingIssuesReferences: [{ number: 7 }] },
