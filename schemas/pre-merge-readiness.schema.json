@@ -1901,7 +1901,7 @@
       "properties": {
         "status": {
           "type": "string",
-          "description": "'match' (actual equals expected and no stray commit-message close) or 'skipped-non-default-branch' (the PR base branch is not the live repository default branch -- D3.5's own exemption, which skips both the reference compare and the commit-message scan, except that a bound provisional source (kurone-kito/idd-skill#4532) is still scanned) never block; 'mismatch' (actual differs from expected in either direction, or a stray commit-message close exists) or 'unavailable' (the live default branch or the PR commit list could not be read, or the commit list hit the REST API's 250-commit pagination cap; for a bound provisional source also an unreadable PR title or body, or a malformed closingIssuesReferences entry) always block.",
+          "description": "'match' (actual equals expected and no stray commit-message close) or 'skipped-non-default-branch' (the PR base branch is not the live repository default branch -- D3.5's own exemption, which skips both the reference compare and the commit-message scan, except that a bound provisional source (kurone-kito/idd-skill#4532) is still scanned) never block; 'mismatch' (actual differs from expected in either direction, or a stray commit-message close exists) or 'unavailable' (the live default branch or the PR commit list could not be read, or the commit list hit the REST API's 250-commit pagination cap; for a bound provisional source also an unreadable or blank PR title, an unreadable PR body, a commit with no message, or a malformed closingIssuesReferences entry) always block.",
           "enum": ["match", "mismatch", "skipped-non-default-branch", "unavailable"]
         },
         "expected": {

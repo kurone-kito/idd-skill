@@ -276,12 +276,38 @@ export function findCommitClosesForIssue(commits, issue, owner, repo) {
   }
   return found;
 }
+/** Whether `value` is a repository payload with a name and an owner login. */
+function isWellFormedRepository(value) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return false;
+  }
+  const record = value;
+  const owner = record.owner;
+  return (
+    typeof record.name === 'string' &&
+    record.name !== '' &&
+    owner !== null &&
+    typeof owner === 'object' &&
+    !Array.isArray(owner) &&
+    typeof owner.login === 'string' &&
+    owner.login !== ''
+  );
+}
+/** Whether every commit carries a message, so a scan can rely on its result. */
+function allCommitMessagesReadable(commits) {
+  return commits.every((commit) => typeof commit?.commit?.message === 'string');
+}
 /**
  * Read the raw `closingIssuesReferences` passthrough into numbers split by
  * repository, or `null` when any entry cannot be interpreted -- the caller
  * then fails closed to `"unavailable"`.
  */
-function parseClosingReferences(rawRefs, ownerLower, repoLower) {
+function parseClosingReferences(
+  rawRefs,
+  ownerLower,
+  repoLower,
+  strictRepository = false,
+) {
   const actual = [];
   const sameRepoNumbers = new Set();
   // Cross-repo numbers stay a separate bucket (not folded into
@@ -323,6 +349,13 @@ function parseClosingReferences(rawRefs, ownerLower, repoLower) {
         // defaulting to the same-repo assumption below -- the same
         // false-match risk the malformed-number case above fails closed
         // on, just one field over.
+        return null;
+      }
+      // A protected source on a non-default base ignores cross-repository
+      // numbers, so there a repository payload that cannot be read as
+      // `{ name, owner: { login } }` (an array, or a missing name or login)
+      // must not pass as another repository's issue: fail closed instead.
+      if (strictRepository && !isWellFormedRepository(repository)) {
         return null;
       }
       const repoRecord = repository;
@@ -397,8 +430,9 @@ function parseClosingReferences(rawRefs, ownerLower, repoLower) {
  *   entry fails closed), the caller's title/body scan (`bodyCloses`, folded into `actual`
  *   and `extra` because registration can lag), and every branch commit message
  *   in the bare, qualified, and URL forms. A `null` `bodyCloses`, or an
- *   unreadable commit list, fails closed to `"unavailable"`. A clean protected
- *   source keeps the status the base branch would give anyway.
+ *   unreadable commit list (or a commit with no message), fails closed to
+ *   `"unavailable"`. A clean protected source keeps the status the base branch
+ *   would give anyway.
  */
 export function computeClosingSetEvidence(options) {
   const protectedSource = options.protectedSource;
@@ -462,9 +496,10 @@ export function computeClosingSetEvidence(options) {
           options.closingIssuesReferences,
           ownerLower,
           repoLower,
+          true,
         )
       : null;
-    if (registered === null) {
+    if (registered === null || !allCommitMessagesReadable(options.commits)) {
       return {
         status: 'unavailable',
         expected,
@@ -527,7 +562,11 @@ export function computeClosingSetEvidence(options) {
   const rawRefs = options.closingIssuesReferences;
   const expectedSet = new Set(expected);
   const parsedRefs = parseClosingReferences(rawRefs, ownerLower, repoLower);
-  if (parsedRefs === null) {
+  if (
+    parsedRefs === null ||
+    (protectedSource !== undefined &&
+      !allCommitMessagesReadable(options.commits))
+  ) {
     return {
       status: 'unavailable',
       expected,

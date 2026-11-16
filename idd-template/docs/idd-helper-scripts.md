@@ -9074,8 +9074,10 @@ Compare the live base and default for D3.5 with
   qualified, and URL forms count), which is added to `actual` and `extra`
   because GitHub's registration can lag, and every branch commit message
   (bare, `GH-N`, qualified, and URL forms), reported in
-  `strayCommitCloses`. An unreadable title, body, or commit list fails
-  closed to `"unavailable"`. The blocker detail's `--closing-issues`
+  `strayCommitCloses`. An unreadable title (a blank title counts), body,
+  or commit list, or a commit with no message, fails closed to
+  `"unavailable"`; so does, on a non-default base, a registered reference
+  whose repository payload cannot be read. The blocker detail's `--closing-issues`
   remedy does not apply to a protected source, which `--closing-issues`
   cannot include: reword the reference to `Refs` instead. A body that
   names the claimed issue only with `Refs` expects no close (#5149), and

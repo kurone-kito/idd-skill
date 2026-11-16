@@ -18113,6 +18113,28 @@ test('closingSet protectedSource: a registered reference to the source blocks on
     ).status,
     'mismatch',
   );
+  // A repository payload that cannot be read must not pass as another
+  // repository's issue: this path ignores cross-repository numbers, so it
+  // fails closed instead.
+  for (const repository of [
+    {},
+    [],
+    { name: CLOSING_SET_REPO },
+    { name: CLOSING_SET_REPO, owner: {} },
+    { name: '', owner: { login: CLOSING_SET_OWNER } },
+    { name: CLOSING_SET_REPO, owner: [] },
+  ]) {
+    assert.equal(
+      computeClosingSetEvidence(
+        protectedClosingSetOptions({
+          ...nonDefault,
+          closingIssuesReferences: [{ number: 7, repository }],
+        }),
+      ).status,
+      'unavailable',
+      JSON.stringify(repository),
+    );
+  }
   for (const malformed of [
     [{}],
     [{ number: true }],
@@ -18131,6 +18153,36 @@ test('closingSet protectedSource: a registered reference to the source blocks on
       JSON.stringify(malformed),
     );
   }
+});
+
+test('closingSet protectedSource: a commit without a message fails closed on either base, while an ordinary claim keeps its result', () => {
+  const unreadable = [
+    commitPayload('a'.repeat(40), 'fix: x'),
+    { sha: 'b'.repeat(40), commit: null },
+    { sha: 'c'.repeat(40), commit: {} },
+  ];
+  for (const base of [
+    {},
+    { baseRefName: 'feature-branch', liveDefaultBranch: 'main' },
+  ]) {
+    for (const commits of [unreadable, [unreadable[1]], [unreadable[2]]]) {
+      assert.equal(
+        computeClosingSetEvidence(
+          protectedClosingSetOptions({ ...base, commits }),
+        ).status,
+        'unavailable',
+      );
+    }
+  }
+  // Only a protected source reads this strictly: the ordinary result is as
+  // before.
+  assert.equal(
+    computeClosingSetEvidence({
+      ...baseClosingSetOptions(),
+      commits: unreadable,
+    }).status,
+    'match',
+  );
 });
 
 test('closingSet protectedSource: an unreadable body or commit list fails closed to unavailable on either base', () => {
@@ -24095,6 +24147,17 @@ test('collectPreMergeReadiness: a bound source stays protected on a non-default 
   );
   assert.equal(unreadable.closingSet.status, 'unavailable');
   assert.equal(closingSetGates(unreadable).length, 1);
+  // The adapter turns a missing REST title into an empty string, and a pull
+  // request title is never blank, so a blank title is an unreadable one.
+  for (const title of ['', '   ']) {
+    const blank = collectProvisional(
+      PROVISIONAL_BOUND_COMMENTS(),
+      PROVISIONAL_HELPER_ON,
+      { pr: { title } },
+    );
+    assert.equal(blank.closingSet.status, 'unavailable', JSON.stringify(title));
+    assert.equal(closingSetGates(blank).length, 1);
+  }
   for (const report of [clean, closing, registered, unreadable]) {
     assert.deepEqual(validate(report, readinessSchema), []);
   }

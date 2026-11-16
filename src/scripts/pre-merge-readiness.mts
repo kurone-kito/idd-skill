@@ -1073,7 +1073,9 @@ function readProtectedSourceBodyCloses(
   } catch {
     return null;
   }
-  if (typeof title !== 'string') return null;
+  // The adapter normalizes a missing REST title to an empty string, and a
+  // pull request title is never blank, so a blank title is an unreadable one.
+  if (typeof title !== 'string' || title.trim() === '') return null;
   return (
     findCommitClosesForIssue(
       [{ commit: { message: title } }, { commit: { message: body } }],
