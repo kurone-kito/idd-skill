@@ -766,7 +766,11 @@ test('provisional assessment: a criterion that needs a person is not objective (
       }),
     }),
   );
-  assert.deepEqual(blockerCodes(assessment), ['criteria-subjective']);
+  // "approves" is both an opinion and an approval, so both findings stand.
+  assert.deepEqual(blockerCodes(assessment), [
+    'criteria-subjective',
+    'criteria-needs-approval',
+  ]);
 });
 
 test('provisional assessment: a deliverable path must stay inside the repository (AC1)', () => {
@@ -1629,4 +1633,73 @@ test('provisional assessment: a choice named only in code or a comment is not a 
     }),
   );
   assert.deepEqual(blockerCodes(assessment), ['no-decision-signal']);
+});
+
+test('provisional assessment: an execution criterion that depends on an approval is refused (AC1, AC4)', () => {
+  for (const criterion of [
+    'Legal approval is required before work starts.',
+    'The user approves the implementation.',
+    'The change is signed off by the owner.',
+    'A maintainer grants permission to ship.',
+  ]) {
+    const assessment = assessProvisionalChoicePlan(
+      assessInput({
+        plan: validPlan({
+          choices: [planChoice({ executionCriteria: [criterion] })],
+        }),
+      }),
+    );
+    assert.equal(assessment.eligible, false, criterion);
+    assert.deepEqual(
+      blockerCodes(assessment),
+      ['criteria-needs-approval'],
+      criterion,
+    );
+  }
+  // A criterion that denies an approval, or names none, stays objective.
+  for (const criterion of [
+    'No approval is needed and the tests pass.',
+    'pnpm test passes for the cache module',
+  ]) {
+    const assessment = assessProvisionalChoicePlan(
+      assessInput({
+        plan: validPlan({
+          choices: [planChoice({ executionCriteria: [criterion] })],
+        }),
+      }),
+    );
+    assert.equal(assessment.eligible, true, criterion);
+  }
+});
+
+test('provisional assessment: a deliverable whose purpose depends on an approval is refused (AC1)', () => {
+  const assessment = assessProvisionalChoicePlan(
+    assessInput({
+      plan: validPlan({
+        deliverables: [
+          {
+            kind: 'issue-comment',
+            target: 'the source issue',
+            purpose: 'ask legal for sign-off',
+          },
+        ],
+      }),
+    }),
+  );
+  assert.deepEqual(blockerCodes(assessment), ['criteria-needs-approval']);
+  // A path that merely contains the word is not scanned.
+  const path = assessProvisionalChoicePlan(
+    assessInput({
+      plan: validPlan({
+        deliverables: [
+          {
+            kind: 'file',
+            target: 'docs/approval-flow.md',
+            purpose: 'document the flow',
+          },
+        ],
+      }),
+    }),
+  );
+  assert.equal(path.eligible, true);
 });

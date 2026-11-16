@@ -548,6 +548,17 @@ const NEGATED_REQUIREMENT_PATTERN = new RegExp(
 );
 
 /**
+ * True when `text` names an approval, sign-off or authorization that no phrase
+ * in it denies. An execution criterion must be checkable by the agent, so one
+ * that depends on any approval is not objective, whatever its verb.
+ */
+function mentionsApproval(text: string): boolean {
+  return APPROVAL_WORD_PATTERN.test(
+    text.replace(NEGATED_REQUIREMENT_PATTERN, ' '),
+  );
+}
+
+/**
  * The first sentence of `text` that states an approval, sign-off or
  * authorization requirement, or `null`. A sentence qualifies when it holds an
  * approval word and a requirement cue, in either order and at any distance.
@@ -1218,6 +1229,7 @@ function provisionalPlanBlockers(
     const subjective = choice.executionCriteria.find((criterion) =>
       SUBJECTIVE_CRITERION_PATTERN.test(criterion),
     );
+    const approvalCriterion = choice.executionCriteria.find(mentionsApproval);
     if (choice.executionCriteria.length === 0) {
       block(
         'criteria-missing',
@@ -1227,6 +1239,12 @@ function provisionalPlanBlockers(
       block(
         'criteria-subjective',
         `${label} has a criterion that needs a person's opinion: ${subjective}`,
+      );
+    }
+    if (approvalCriterion !== undefined) {
+      block(
+        'criteria-needs-approval',
+        `${label} has an execution criterion that depends on an approval: ${approvalCriterion}`,
       );
     }
   });
@@ -1250,6 +1268,15 @@ function provisionalPlanBlockers(
         .slice(0, 5)
         .map((deliverable) => deliverable.target)
         .join(', ')}, which the source does not list under Candidate files`,
+    );
+  }
+  const approvalDeliverable = plan.deliverables.find((deliverable) =>
+    mentionsApproval(deliverable.purpose),
+  );
+  if (approvalDeliverable !== undefined) {
+    block(
+      'criteria-needs-approval',
+      `a deliverable's purpose depends on an approval: ${approvalDeliverable.purpose}`,
     );
   }
   if (plan.deliverables.length === 0) {
