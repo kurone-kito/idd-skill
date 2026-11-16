@@ -246,31 +246,40 @@ export function collectRoutingInput({
   // 5xx/timeout REST failure before the identical error is re-thrown --
   // transport hygiene (widened resilience), not a distinct call shape.
   const viewerLogin = port.resolveViewerLogin().toLowerCase();
-  let prs = findIssueRelatedOpenPrs({ port, issueNumber, openPrs });
-  if (prs.length === 0) {
-    // #4534: a protected provisional source's PR names it with `Refs`, never a
-    // closing keyword, so the matcher above cannot see it.
-    prs = findProvisionalSourceOpenPrs({
-      port,
-      issueNumber,
-      openPrs,
-      readTrustedLogins: () => {
-        const repository = port.resolveRepositoryLocator();
-        const ref = port.getRepositoryDefaultBranch(
-          repository.owner,
-          repository.name,
+  // #4534: a protected provisional source's PR names it with `Refs`, never a
+  // closing keyword, so the closing-keyword matcher cannot see it. Both
+  // matchers read the same open list, and a PR found by both counts once, so
+  // a closing PR and a provisional PR of one issue still read as ambiguous.
+  const closingPrs = findIssueRelatedOpenPrs({ port, issueNumber, openPrs });
+  const provisionalPrs = findProvisionalSourceOpenPrs({
+    port,
+    issueNumber,
+    openPrs,
+    readTrustedLogins: () => {
+      const repository = port.resolveRepositoryLocator();
+      const ref = port.getRepositoryDefaultBranch(
+        repository.owner,
+        repository.name,
+      );
+      if (!ref) {
+        throw new Error(
+          `cannot resolve a trusted ref for the provisional record check: the live default branch of ${repository.owner}/${repository.name} could not be determined`,
         );
-        if (!ref) return [];
-        return [
-          viewerLogin,
-          ...resolveTrustedMarkerActors({
-            envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
-            config: loadTrustedConfig(repository.owner, repository.name, ref),
-          }).actors,
-        ];
-      },
-    });
-  }
+      }
+      return [
+        viewerLogin,
+        ...resolveTrustedMarkerActors({
+          envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
+          config: loadTrustedConfig(repository.owner, repository.name, ref),
+        }).actors,
+      ];
+    },
+  });
+  const prs = [
+    ...new Map(
+      [...closingPrs, ...provisionalPrs].map((pr) => [pr.number, pr]),
+    ).values(),
+  ];
   const issuePr = prs.length === 1 ? prs[0] : null;
   const gitState = collectGitState();
   if (!issuePr) {
@@ -561,8 +570,10 @@ export function findIssueRelatedOpenPrs({ port, issueNumber, openPrs }) {
  * (`issue/<number>-*`). The relation only chooses which PR Resume reads: it
  * grants nothing, and F2/F3 still bind the source through the trusted replay.
  *
- * An issue with no `Refs` reference costs nothing, and any failed read returns
- * no PR, which is the route this helper had before the source existed.
+ * An issue that no PR names with `Refs` costs nothing, and an issue whose
+ * comments carry no record marker costs one comment read and no config read.
+ * A failed read throws: answering "no PR" would send a session with unpushed
+ * fixes to D1 although its branch is already published.
  */
 export function findProvisionalSourceOpenPrs({
   port,
@@ -574,42 +585,41 @@ export function findProvisionalSourceOpenPrs({
     return [];
   }
   const targetIssueNumber = Number(issueNumber);
-  try {
-    const repository = port.resolveRepositoryLocator();
-    const referencing = openPrs.filter((pr) => {
-      const body = stripBlockQuotesAndLazyContinuations(pr.body);
-      return hasD35ClosingReference(
-        maskMarkdownForScan(body),
-        body,
-        /\b(refs?)(\s+)(#\d+|[\w.-]+\/[\w.-]+#\d+)\b/gi,
-        {
-          issueNumber: targetIssueNumber,
-          owner: repository.owner,
-          repo: repository.name,
-        },
-      );
-    });
-    if (referencing.length === 0) return [];
-    const trusted = new Set(
-      readTrustedLogins().map((login) => login.trim().toLowerCase()),
+  const repository = port.resolveRepositoryLocator();
+  const referencing = openPrs.filter((pr) => {
+    const body = stripBlockQuotesAndLazyContinuations(pr.body);
+    return hasD35ClosingReference(
+      maskMarkdownForScan(body),
+      body,
+      /\b(refs?)(\s+)(#\d+|[\w.-]+\/[\w.-]+#\d+)\b/gi,
+      {
+        issueNumber: targetIssueNumber,
+        owner: repository.owner,
+        repo: repository.name,
+      },
     );
-    const hasTrustedRecord = port
-      .listWorkItemComments(targetIssueNumber, { includeEditState: true })
-      .some(
-        (comment) =>
-          comment.body.startsWith(PROVISIONAL_DECISION_RECORD_MARKER) &&
-          trusted.has(comment.authorLogin.trim().toLowerCase()) &&
-          classifyCommentEditState({ lastEditedAt: comment.lastEditedAt }) ===
-            'unedited',
-      );
-    if (!hasTrustedRecord) return [];
-    const branchPrefix = `issue/${targetIssueNumber}-`;
-    return referencing.filter((pr) =>
-      port.getChangeRequestHeadRef(pr.number).startsWith(branchPrefix),
+  });
+  if (referencing.length === 0) return [];
+  const markers = port
+    .listWorkItemComments(targetIssueNumber, { includeEditState: true })
+    .filter((comment) =>
+      comment.body.startsWith(PROVISIONAL_DECISION_RECORD_MARKER),
     );
-  } catch {
-    return [];
-  }
+  if (markers.length === 0) return [];
+  const trusted = new Set(
+    readTrustedLogins().map((login) => login.trim().toLowerCase()),
+  );
+  const hasTrustedRecord = markers.some(
+    (comment) =>
+      trusted.has(comment.authorLogin.trim().toLowerCase()) &&
+      classifyCommentEditState({ lastEditedAt: comment.lastEditedAt }) ===
+        'unedited',
+  );
+  if (!hasTrustedRecord) return [];
+  const branchPrefix = `issue/${targetIssueNumber}-`;
+  return referencing.filter((pr) =>
+    port.getChangeRequestHeadRef(pr.number).startsWith(branchPrefix),
+  );
 }
 export function stripBlockQuotesAndLazyContinuations(body) {
   let quotedParagraphOpen = false;
