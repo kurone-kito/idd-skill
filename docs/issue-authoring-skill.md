@@ -3863,7 +3863,10 @@ the final message says the same and asks the user where to keep the drafts).
 See [Draft carrier](#draft-carrier).
 
 Starting the IDD execution loop requires the user's explicit
-hold-release request — the single approval boundary in this contract.
+hold-release request — the single approval boundary in this contract —
+except for the [Narrow auto-release exception](#narrow-auto-release-exception)
+and, when `standingApprovals.release` is enabled, the
+[standing release approval](https://github.com/kurone-kito/idd-skill/blob/main/skills/issue-authoring/references/contract.md#authoring-hold-and-release).
 That same request also authorizes removing the authoring label (see
 [Authoring label lifecycle](#authoring-label-lifecycle)). Publishing a
 ready issue set under the hold does not by itself authorize the agent
