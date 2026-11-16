@@ -589,6 +589,195 @@ test('pre-merge readiness preserves scope evidence after the issue body no longe
   assert.equal(result?.reason, 'record-conflict');
 });
 
+// kurone-kito/idd-skill#5219: read-only evidence for whether the existing
+// records can tell a past scope overrun from the current head. These cases
+// only characterize the unchanged resolveScopeOverrunReadiness; none of them
+// edits a fixture above or a helper default.
+const SCOPE_OVERRUN_EARLIER_HEAD = SCOPE_OVERRUN_HEAD;
+const SCOPE_OVERRUN_CURRENT_HEAD = 'b'.repeat(40);
+// Eight declared files at effort M is inside the limit, so a current head that
+// changes exactly these paths is inside the declared scope.
+const SCOPE_OVERRUN_DECLARED_FILES = SCOPE_OVERRUN_FILES.slice(0, 8);
+const HISTORICAL_SCOPE_RECOMMENDATION =
+  'Recommendation: existing records cannot prove that distinction. Smallest follow-up: a versioned receipt, not implemented here.';
+
+function historicalPairInput(
+  overrides: Partial<Parameters<typeof resolveScopeOverrunReadiness>[0]> = {},
+) {
+  return scopeOverrunInput({
+    issue: scopeOverrunIssue(SCOPE_OVERRUN_DECLARED_FILES),
+    headSha: SCOPE_OVERRUN_CURRENT_HEAD,
+    changedFiles: SCOPE_OVERRUN_DECLARED_FILES,
+    ...overrides,
+  });
+}
+
+test('scope-overrun historical evidence: a missing record keeps status missing', () => {
+  // The input still overruns (nine changed files against eight declared), so
+  // the audit applies and finds no record at all.
+  const result = resolveScopeOverrunReadiness(
+    scopeOverrunInput({
+      issue: scopeOverrunIssue(SCOPE_OVERRUN_DECLARED_FILES),
+    }),
+  );
+  assert.deepEqual(result, {
+    status: 'missing',
+    reason: 'no-record',
+    recordedHeadSha: null,
+  });
+});
+
+test('scope-overrun historical evidence: a record for a different head stays invalid with current-head-mismatch', () => {
+  // A record and an owner decision both name the earlier head, while the live
+  // head differs and still overruns.
+  const result = resolveScopeOverrunReadiness(
+    scopeOverrunInput({
+      headSha: SCOPE_OVERRUN_CURRENT_HEAD,
+      comments: [
+        scopeOverrunRecordComment({ headSha: SCOPE_OVERRUN_EARLIER_HEAD }),
+        scopeOverrunDecisionComment(SCOPE_OVERRUN_EARLIER_HEAD),
+      ],
+    }),
+  );
+  assert.deepEqual(result, {
+    status: 'invalid',
+    reason: 'current-head-mismatch',
+    recordedHeadSha: SCOPE_OVERRUN_EARLIER_HEAD,
+  });
+});
+
+test('scope-overrun historical evidence: a past overrun record without acceptance of the current head is not valid', () => {
+  // Earlier head: nine changed files against eight declared (over the
+  // estimate), recorded post-push. Current head: exactly the eight declared
+  // files. No comment is an owner decision for the current head.
+  const earlierRecord = scopeOverrunRecordComment({
+    headSha: SCOPE_OVERRUN_EARLIER_HEAD,
+  });
+
+  // Without the record, the current head alone is inside the declared scope
+  // and the audit has nothing to report.
+  assert.equal(resolveScopeOverrunReadiness(historicalPairInput()), null);
+
+  // With the record for the earlier head, the audit reports on the pair.
+  const pair = resolveScopeOverrunReadiness(
+    historicalPairInput({ comments: [earlierRecord] }),
+  );
+  assert.notEqual(pair, null);
+  assert.notEqual(pair?.status, 'valid');
+  assert.deepEqual(pair, {
+    status: 'invalid',
+    reason: 'no-decision',
+    recordedHeadSha: SCOPE_OVERRUN_EARLIER_HEAD,
+  });
+
+  // An owner decision that names only the earlier head does not make the
+  // current head valid either. This decision is not acceptance of the current
+  // head.
+  const earlierOnly = resolveScopeOverrunReadiness(
+    historicalPairInput({
+      comments: [
+        earlierRecord,
+        scopeOverrunDecisionComment(SCOPE_OVERRUN_EARLIER_HEAD),
+      ],
+    }),
+  );
+  assert.notEqual(earlierOnly?.status, 'valid');
+  assert.deepEqual(earlierOnly, {
+    status: 'invalid',
+    reason: 'current-head-mismatch',
+    recordedHeadSha: SCOPE_OVERRUN_EARLIER_HEAD,
+  });
+});
+
+test('scope-overrun historical evidence: a record for the current head with another path set conflicts with the lineage', () => {
+  // A lineage holds one effort and one sorted path set, so a record for the
+  // current head that lists its own, smaller set cannot sit beside the earlier
+  // record. An owner decision for the current head does not change that.
+  const comments = [
+    scopeOverrunRecordComment({ headSha: SCOPE_OVERRUN_EARLIER_HEAD }),
+    {
+      ...scopeOverrunRecordComment({
+        headSha: SCOPE_OVERRUN_CURRENT_HEAD,
+        candidateFiles: SCOPE_OVERRUN_DECLARED_FILES,
+      }),
+      id: '44',
+    },
+  ];
+  for (const withDecision of [false, true]) {
+    const result = resolveScopeOverrunReadiness(
+      historicalPairInput({
+        comments: withDecision
+          ? [
+              ...comments,
+              scopeOverrunDecisionComment(SCOPE_OVERRUN_CURRENT_HEAD),
+            ]
+          : comments,
+      }),
+    );
+    assert.deepEqual(result, {
+      status: 'invalid',
+      reason: 'record-conflict',
+      recordedHeadSha: null,
+    });
+  }
+});
+
+test('scope-overrun historical evidence: the helper-scripts section carries one recommendation line matching the pair result', () => {
+  const pair = resolveScopeOverrunReadiness(
+    historicalPairInput({
+      comments: [
+        scopeOverrunRecordComment({ headSha: SCOPE_OVERRUN_EARLIER_HEAD }),
+      ],
+    }),
+  );
+  // The pair result decides which sentence the doc may carry: only a `valid`
+  // status allows the first sentence, and the pair test above pins it as not
+  // valid, so the line is the second sentence.
+  assert.notEqual(pair?.status, 'valid');
+  const text = readFileSync(
+    fileURLToPath(
+      new URL('../idd-template/docs/idd-helper-scripts.md', import.meta.url),
+    ),
+    'utf8',
+  );
+  // Count lines that start with the label inside this section only. Another
+  // section of the same file (the scope-decision owner opt-out design) carries
+  // its own line, and an unrelated `syncRecommendation:` field ends with the
+  // same letters without starting such a line.
+  const lines = text.split('\n');
+  const heading = lines.indexOf('#### Historical scope-overrun evidence');
+  assert.notEqual(heading, -1);
+  const nextHeading = lines.findIndex(
+    (line, index) => index > heading && /^#{1,4} /u.test(line),
+  );
+  assert.notEqual(nextHeading, -1);
+  const sectionLines = lines.slice(heading, nextHeading);
+  const recommendationLines = sectionLines.filter((line) =>
+    line.startsWith('Recommendation:'),
+  );
+  assert.deepEqual(recommendationLines, [HISTORICAL_SCOPE_RECOMMENDATION]);
+  // The first sentence is allowed only when the pair is valid, so it appears
+  // nowhere in the file.
+  assert.equal(
+    text.includes('existing records can tell a past overrun'),
+    false,
+  );
+  // The evidence table names every binding the issue lists.
+  const section = sectionLines.join('\n');
+  for (const binding of [
+    'Claim identity',
+    'Unchanged issue scope',
+    'Pull request and branch',
+    'Historical base and head',
+    'Current base and head',
+    'Canonical path sets',
+    'Record authorship',
+    'Edit status',
+  ]) {
+    assert.ok(section.includes(`| ${binding} |`), binding);
+  }
+});
+
 test('pre-merge readiness scope audit accepts both paths of a renamed PR file', () => {
   const restore = stubExecutable('gh', FORCED_HANDOFF_GH_STUB);
   try {
