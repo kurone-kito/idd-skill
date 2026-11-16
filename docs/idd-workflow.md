@@ -1181,8 +1181,12 @@ for `worktreeRemnant`. It reads the class verdict again, then:
   note is verified. If its action turns out incomplete, the session posts a
   `failure` note and keeps today's stop.
 - A `runtimeQuestion` or `authoringChoice` record with no note is verified or
-  completed, and gets the matching note. The label state of its issue is not
-  consulted.
+  completed, and gets the matching note, only when a counting record names the
+  decision: a record that [Record, then act](#record-then-act) counts as
+  recorded. A `recovery-hold` result, including one whose void marker was
+  never written, is not that evidence (kurone-kito/idd-skill#5184). That
+  decision is not recorded, so it keeps today's stop and the session reports
+  it. The label state of its issue is not consulted.
 - A `worktreeRemnant` or `b1Leftover` record with no note is neither
   completed nor verified against its subject, because the claim step can
   recreate the subject and a new leftover can share it. The session posts a
@@ -1191,11 +1195,11 @@ for `worktreeRemnant`. It reads the class verdict again, then:
 - When the class is not `enabled`, or the read fails, no action is completed
   under any of these rules.
 
-Two accepted risks follow (both preventive; no observed incident yet). A crash
-between a `recovery-hold` and its void marker, or a lost `failure` note, lets a
-`runtimeQuestion` or `authoringChoice` decision be completed once more under its
-record. A lost `location` note on a `worktreeRemnant` or `b1Leftover` decision
-costs one extra decision toward the caps.
+Two accepted risks follow (both preventive; no observed incident yet). A lost
+`failure` note lets a `runtimeQuestion` or `authoringChoice` decision be
+completed once more under its record. A lost `location` note on a
+`worktreeRemnant` or `b1Leftover` decision costs one extra decision toward the
+caps.
 
 ### Pull request
 
@@ -1370,7 +1374,8 @@ for `authoringChoice`.
 | `recovery-hold` with `issue: null`                                                                                                                          | Not recorded; no void marker possible; token reported                                                                        |
 | Resume finds a voided decision, a record with a `failure` note, one in a closed issue, or a `worktreeRemnant` or `b1Leftover` record with a `location` note | Not resumed; a further attempt is a new decision through the whole procedure                                                 |
 | Resume finds a `runtimeQuestion` or `authoringChoice` record with only a `location` note                                                                    | Verified; a `failure` note and today's stop if incomplete                                                                    |
-| Resume finds a `runtimeQuestion` or `authoringChoice` record with no note, class `enabled`                                                                  | Verified or completed; the matching note; label state not consulted                                                          |
+| Resume finds a `runtimeQuestion` or `authoringChoice` record with no note that a counting record names, class `enabled`                                     | Verified or completed; the matching note; label state not consulted                                                          |
+| Resume finds a `runtimeQuestion` or `authoringChoice` record with no note and no counting record, such as a `recovery-hold`                                 | Not completed; today's stop; reported                                                                                        |
 | Resume finds a `worktreeRemnant` or `b1Leftover` record with no note                                                                                        | `failure` note; today's stop; a further attempt is a new decision                                                            |
 | Resume with the class no longer `enabled`, or the read fails                                                                                                | No action completed                                                                                                          |
 | Pull request exists, or is opened later                                                                                                                     | "Auto-decide confirmations:" list maintained; not the follow-up section                                                      |
