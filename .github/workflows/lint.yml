@@ -8,11 +8,14 @@ name: Linting workflow
 #
 # This workflow dogfoods the toolless bare-node adopter path: it runs
 # with NO package-manager install, so every script and test it executes
-# must import only `node:` builtins. The same six commands also run
-# via `pnpm run check` in pnpm-boundary.yml — that overlap is
-# intentional redundancy proving both the installed and the bare-node
-# runtimes. The formatting and spelling tools (dprint, cspell,
-# markdownlint) run exactly once, in pnpm-boundary.yml.
+# must import only `node:` builtins. The `lint` job runs the static
+# audits only (#5182), and the Windows job runs a targeted subset of the
+# tests. Each static audit command also runs via `pnpm run check` in
+# pnpm-boundary.yml — that overlap is intentional redundancy proving
+# both the installed and the bare-node runtimes. The formatting and
+# spelling tools (dprint, cspell, markdownlint) run exactly once, in
+# pnpm-boundary.yml. The full test suite runs only in the installed
+# pnpm-boundary test shards.
 on:
   pull_request:
 permissions:
@@ -33,16 +36,18 @@ jobs:
     # See issue #3728 for source run details.
     #
     # ubuntu-latest has no such hard cap (GitHub-hosted jobs may run up to
-    # 6 hours), so the timeout below is a repository choice. The #5160
-    # decision (option 1) raised it from 15 to 30 minutes. #5160 records a
-    # slowest passing lint job of 898s on 2026-11-09, 2s under the old
-    # 15-minute value. On 2026-11-12, attempt 3 of run 43237594554 printed
-    # its suite summary (16,282 tests, 887.5s) only as the job was
-    # cancelled at that old value. 30 minutes matches the pnpm-boundary.yml
-    # job timeouts and is about twice that 887.5s suite duration. The cost
-    # is that a genuinely stuck lint job now runs up to 30 minutes before
-    # it fails.
-    timeout-minutes: 30
+    # 6 hours), so the timeout below is a repository choice. While this job
+    # still ran the test suite, the #5160 decision (option 1) raised it from
+    # 15 to 30 minutes. #5160 records a slowest passing lint job of 898s on
+    # 2026-11-09, 2s under the old 15-minute value. On 2026-11-12, attempt 3
+    # of run 43237594554 printed its suite summary (16,282 tests, 887.5s)
+    # only as the job was cancelled at that old value. The #5182 decision
+    # then removed the suite from this job; the installed pnpm-boundary
+    # test shards still run it. In run 43953743650 (2026-11-16) the suite
+    # step took 656s of a 688s job, so checkout and every other step took
+    # about 32s. The timeout is back to 10 minutes, far above that, and a
+    # genuinely stuck lint job now fails within 10 minutes instead of 30.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -111,9 +116,6 @@ jobs:
       # onboarding catalog agreements run inside the audit-docs step above.
       - name: Run schema validation
         run: node scripts/validate-schemas.mjs
-      # Runs every tests/*.test.mts file; no package install runs before this step.
-      - name: Run bare-Node test suite
-        run: node --test --import ./tests/isolate-state.mts tests/*.test.mts
       - name: Run workshop integrity check
         run: node scripts/verify-workshop-integrity.mjs --format table
   lint-windows:
