@@ -1763,6 +1763,19 @@ export interface ProvisionalDecisionSourceStateRead {
   readonly stateReason: string | null;
 }
 
+/** What a close must still find true; see `closeSourceIssue`. */
+export interface ProvisionalResolutionCloseExpectation {
+  readonly state: 'open';
+  readonly title: string;
+  readonly bodySha256: string;
+  /** The coordination claim that must still be the active claim. */
+  readonly claim: {
+    readonly claimId: string;
+    readonly agentId: string;
+    readonly branch: string;
+  };
+}
+
 /** The writes a resolution needs on top of the decision store. */
 export interface ProvisionalResolutionStore extends ProvisionalDecisionStore {
   readSourceState(): Promise<ProvisionalDecisionSourceStateRead>;
@@ -1772,16 +1785,19 @@ export interface ProvisionalResolutionStore extends ProvisionalDecisionStore {
     readonly record: ProvisionalDecisionStoredRecord;
   }>;
   /**
-   * Close the source issue with the completed reason, but only while its title
-   * and body still match `expected` (`bodySha256` is the lowercase SHA-256 hex
-   * of the body's UTF-8 bytes); otherwise throw without closing. A store
-   * should narrow the window as far as its API allows, for example by
+   * Close the source issue with the completed reason, but only while it is
+   * still in the state the plan evaluated; otherwise throw without closing. A
+   * store checks, as far as its API allows, that the issue is still open (so
+   * an intervening close with another reason is never overwritten), that its
+   * title and body still match (`bodySha256` is the lowercase SHA-256 hex of
+   * the body's UTF-8 bytes), and that the named coordination claim is still
+   * the active claim (so a takeover after the final plan read cannot close
+   * under a stale claim). It can narrow the window further, for example by
    * comparing the issue's update time; the planner re-reads just before.
    */
-  closeSourceIssue(expected: {
-    readonly title: string;
-    readonly bodySha256: string;
-  }): Promise<void>;
+  closeSourceIssue(
+    expected: ProvisionalResolutionCloseExpectation,
+  ): Promise<void>;
   /** Post the unclaim marker of the coordination claim, per the claim protocol. */
   releaseCoordinationClaim(claim: {
     readonly claimId: string;
@@ -2068,11 +2084,8 @@ type ResolutionStep =
     }
   | {
       readonly kind: 'close-source';
-      /** The source content the plan evaluated; the store closes only if it still matches. */
-      readonly expected: {
-        readonly title: string;
-        readonly bodySha256: string;
-      };
+      /** What the plan evaluated; the store closes only while it still holds. */
+      readonly expected: ProvisionalResolutionCloseExpectation;
     }
   | {
       readonly kind: 'release-claim';
@@ -2779,8 +2792,10 @@ async function planResolve(
           step: {
             kind: 'close-source',
             expected: {
+              state: 'open',
               title: context.source.snapshot.title,
               bodySha256: context.source.snapshot.bodySha256,
+              claim: context.active,
             },
           },
         };

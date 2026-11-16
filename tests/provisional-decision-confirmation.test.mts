@@ -17,6 +17,7 @@ import {
   type ProvisionalDecisionPullRequestRead,
   type ProvisionalDecisionSourceIssueRead,
   type ProvisionalDecisionSourceStateRead,
+  type ProvisionalResolutionCloseExpectation,
   type ProvisionalResolutionRequest,
   type ProvisionalResolutionResult,
   type ProvisionalResolutionStore,
@@ -257,14 +258,30 @@ class MemoryStore implements ProvisionalResolutionStore {
 
   beforeClose?: (store: MemoryStore) => void;
 
-  async closeSourceIssue(expected: {
-    title: string;
-    bodySha256: string;
-  }): Promise<void> {
+  /** The claim ID of the latest unreleased claimed-by marker, if any. */
+  activeClaimId(): string | null {
+    let active: string | null = null;
+    for (const comment of this.history.comments) {
+      const claim = parseClaimComment(comment.body, comment.createdAt);
+      if (claim) active = claim.claimId;
+      else if (comment.body.startsWith('<!-- unclaimed-by')) active = null;
+    }
+    return active;
+  }
+
+  async closeSourceIssue(
+    expected: ProvisionalResolutionCloseExpectation,
+  ): Promise<void> {
     this.closes += 1;
     this.beforeClose?.(this);
     if (this.closeFailure === 'before') throw new Error('close failed');
-    // The store closes only while the source still matches the plan.
+    // The store closes only while everything the plan evaluated still holds.
+    if (this.sourceState.state !== expected.state) {
+      throw new Error('the source is no longer open');
+    }
+    if (this.activeClaimId() !== expected.claim.claimId) {
+      throw new Error('the coordination claim is no longer active');
+    }
     if (
       this.source.title !== expected.title ||
       sha256(this.source.body) !== expected.bodySha256
@@ -4202,4 +4219,68 @@ test('a request naming a downstream result held by a sibling handoff is not warn
   );
   // The union already holds the sibling's reference, so nothing was dropped.
   assert.equal(result.warnings, undefined);
+});
+
+test('the close also needs the source still open and the claim still active', async (t) => {
+  await t.test(
+    'an intervening close with another reason is not overwritten',
+    async () => {
+      const store = await pendingStore();
+      store.beforeClose = (target) => {
+        target.sourceState = { state: 'closed', stateReason: 'not_planned' };
+      };
+      const result = await answered(store, conversationYes);
+      assertRefused(result, 'recovery-hold', /close-source write is uncertain/);
+      assert.match(result.reason ?? '', /no longer open/);
+      assert.deepEqual(store.sourceState, {
+        state: 'closed',
+        stateReason: 'not_planned',
+      });
+      assert.equal(result.steps.includes('close-source'), false);
+      assert.equal(activeCoordinationClaim(store), true);
+    },
+  );
+
+  await t.test(
+    'a coordination claim taken over after the final plan read',
+    async () => {
+      const store = await pendingStore();
+      store.beforeClose = (target) => {
+        target.addComment((at) =>
+          renderUnclaimedByMarker({
+            agentId: coordAgent,
+            claimId: 'claim-4536-coord',
+            timestamp: at,
+          }),
+        );
+        postCoordinationClaim(target, 'claim-4536-takeover');
+      };
+      const result = await answered(store, conversationYes);
+      assertRefused(result, 'recovery-hold', /close-source write is uncertain/);
+      assert.match(result.reason ?? '', /no longer active/);
+      assert.equal(store.sourceState.state, 'open');
+    },
+  );
+
+  await t.test(
+    'the plan names the open state and the active claim',
+    async () => {
+      const store = await pendingStore();
+      const seen: ProvisionalResolutionCloseExpectation[] = [];
+      const original = store.closeSourceIssue.bind(store);
+      store.closeSourceIssue = async (expected) => {
+        seen.push(expected);
+        return original(expected);
+      };
+      const result = await answered(store, conversationYes);
+      assert.equal(result.outcome, 'confirmed-closed', JSON.stringify(result));
+      assert.equal(seen.length, 1);
+      assert.equal(seen[0]?.state, 'open');
+      assert.deepEqual(seen[0]?.claim, {
+        claimId: 'claim-4536-coord',
+        agentId: coordAgent,
+        branch: coordBranch,
+      });
+    },
+  );
 });

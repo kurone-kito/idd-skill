@@ -2026,8 +2026,10 @@ async function planResolve(context, request) {
           step: {
             kind: 'close-source',
             expected: {
+              state: 'open',
               title: context.source.snapshot.title,
               bodySha256: context.source.snapshot.bodySha256,
+              claim: context.active,
             },
           },
         };
