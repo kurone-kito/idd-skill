@@ -572,8 +572,9 @@ export function findIssueRelatedOpenPrs({ port, issueNumber, openPrs }) {
  *
  * An issue that no PR names with `Refs` costs nothing, and an issue whose
  * comments carry no record marker costs one comment read and no config read.
- * A failed read throws: answering "no PR" would send a session with unpushed
- * fixes to D1 although its branch is already published.
+ * A failed read throws, and so does a refused history (an untrusted or edited
+ * marker) beside a `Refs` PR on a claim branch: answering "no PR" would send a
+ * session with unpushed fixes to D1 although its branch is already published.
  */
 export function findProvisionalSourceOpenPrs({
   port,
@@ -609,6 +610,10 @@ export function findProvisionalSourceOpenPrs({
   const trusted = new Set(
     readTrustedLogins().map((login) => login.trim().toLowerCase()),
   );
+  const branchPrefix = `issue/${targetIssueNumber}-`;
+  const claimBranchPrs = referencing.filter((pr) =>
+    port.getChangeRequestHeadRef(pr.number).startsWith(branchPrefix),
+  );
   // The authoritative replay refuses the whole history when any record marker
   // is untrusted or edited, so one valid marker beside a forged one is not a
   // record: every marker must be trusted and unedited.
@@ -618,11 +623,20 @@ export function findProvisionalSourceOpenPrs({
       classifyCommentEditState({ lastEditedAt: comment.lastEditedAt }) ===
         'unedited',
   );
-  if (!allTrusted) return [];
-  const branchPrefix = `issue/${targetIssueNumber}-`;
-  return referencing.filter((pr) =>
-    port.getChangeRequestHeadRef(pr.number).startsWith(branchPrefix),
-  );
+  if (allTrusted) return claimBranchPrs;
+  // A refused history is not an absent relationship. A published PR on a claim
+  // branch must not read as "no PR": that would route a session with unpushed
+  // fixes to D1 after publication. Stop until the marker is removed.
+  if (claimBranchPrs.length > 0) {
+    throw new Error(
+      `issue #${targetIssueNumber} has an untrusted or edited provisional record marker, so open PR ${claimBranchPrs
+        .map((pr) => `#${pr.number}`)
+        .join(
+          ', ',
+        )} on its claim branch cannot be related to it; resolve the marker, then rerun`,
+    );
+  }
+  return [];
 }
 export function stripBlockQuotesAndLazyContinuations(body) {
   let quotedParagraphOpen = false;

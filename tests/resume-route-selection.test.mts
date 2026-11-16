@@ -2812,20 +2812,8 @@ test('the provisional relation costs nothing without a Refs reference', () => {
   assert.equal(fixture.calls.includes('getChangeRequestHeadRef'), false);
 });
 
-test('the provisional relation needs a trusted, unedited record marker before any head read', () => {
-  const marker = (overrides: object = {}) => ({
-    body: PROVISIONAL_RECORD,
-    authorLogin: 'maintainer',
-    ...overrides,
-  });
-  for (const comments of [
-    [],
-    [{ body: 'prose', authorLogin: 'maintainer' }],
-    [marker({ authorLogin: 'stranger' })],
-    [marker({ lastEditedAt: '2026-11-16T01:00:00Z' })],
-    // An unknown edit state fails closed, like an edit.
-    [marker({ lastEditedAt: 'omit' })],
-  ]) {
+test('the provisional relation reads no head ref without a record marker', () => {
+  for (const comments of [[], [{ body: 'prose', authorLogin: 'maintainer' }]]) {
     const fixture = provisionalSourcePort({ comments });
     assert.deepEqual(findProvisional(fixture), [], JSON.stringify(comments));
     assert.equal(
@@ -2836,7 +2824,7 @@ test('the provisional relation needs a trusted, unedited record marker before an
   }
 });
 
-test('one valid record marker beside an untrusted or edited one is not a record', () => {
+test('a refused record history stops the relation instead of answering no PR', () => {
   const valid = { body: PROVISIONAL_RECORD, authorLogin: 'maintainer' };
   for (const extra of [
     { body: PROVISIONAL_RECORD, authorLogin: 'stranger' },
@@ -2846,13 +2834,18 @@ test('one valid record marker beside an untrusted or edited one is not a record'
       lastEditedAt: '2026-11-16T01:00:00Z',
     },
   ]) {
-    for (const comments of [
-      [valid, extra],
-      [extra, valid],
-    ]) {
-      const fixture = provisionalSourcePort({ comments });
-      assert.deepEqual(findProvisional(fixture), []);
-      assert.equal(fixture.calls.includes('getChangeRequestHeadRef'), false);
+    for (const comments of [[valid, extra], [extra, valid], [extra]]) {
+      // A published PR on a claim branch cannot be related: stop.
+      assert.throws(
+        () => findProvisional(provisionalSourcePort({ comments })),
+        /untrusted or edited provisional record marker.*open PR #7/,
+      );
+      // A Refs PR on another branch has nothing to relate: no PR, no stop.
+      const other = provisionalSourcePort({
+        comments,
+        headRefs: { 7: 'feature/other-work' },
+      });
+      assert.deepEqual(findProvisional(other), []);
     }
   }
   // Every marker valid is still a record.
@@ -2860,6 +2853,42 @@ test('one valid record marker beside an untrusted or edited one is not a record'
   assert.deepEqual(
     findProvisional(two).map((pr) => pr.number),
     [7],
+  );
+});
+
+test('a refused record history cannot route unpushed fixes to D1', () => {
+  const marker = (authorLogin: string) => ({
+    id: 1,
+    body: PROVISIONAL_RECORD,
+    createdAt: '2026-11-16T00:00:00Z',
+    updatedAt: '2026-11-16T00:00:00Z',
+    authorLogin,
+    lastEditedAt: null,
+  });
+  const port = createFakeProviderAdapter({
+    locator: { provider: 'github', owner: 'fake-owner', name: 'fake-repo' },
+    viewerLogin: 'tester',
+    repositoryDefaultBranch: 'main',
+    openChangeRequests: [
+      { number: 7, title: 'PR 7', body: 'Refs #3145', url: 'u7' },
+    ],
+    changeRequestHeadRefs: { 7: 'issue/3145-feat-provisional-source' },
+    comments: {
+      3145: [marker('tester'), { ...marker('stranger'), id: 2 }],
+    },
+  });
+  assert.throws(
+    () =>
+      collectRoutingInput({
+        port,
+        issueNumber: 3145,
+        loadTrustedConfig: () => null,
+        collectGitState: () => ({
+          hasUnpushedCommits: true,
+          worktreeDirty: false,
+        }),
+      }),
+    /cannot be related to it/,
   );
 });
 
