@@ -4459,3 +4459,36 @@ test('docs copy mirrors the ledger storage subsection and separates structural c
   assert.match(docs, /Structural checks and a live run differ/);
   assert.match(docs, /they never run an authoring session/);
 });
+
+test('auto-decide resume completes a crashed decision only from a counting record (#5184)', () => {
+  for (const path of [
+    'idd-template/docs/idd-workflow.md',
+    'docs/idd-workflow.md',
+  ]) {
+    const raw = readText(path);
+    const resume = normalizeWhitespace(
+      extractSection(raw, '### Resume after a crash', '### Pull request'),
+    );
+    for (const needle of [
+      'A `runtimeQuestion` or `authoringChoice` record with no note is verified or completed, and gets the matching note, only when a counting record names the decision: a record that [Record, then act](#record-then-act) counts as recorded.',
+      "A `recovery-hold` result, including one whose void marker was never written, is not that evidence (kurone-kito/idd-skill#5184). That decision is not recorded, so it keeps today's stop and the session reports it.",
+      'A lost `failure` note lets a `runtimeQuestion` or `authoringChoice` decision be completed once more under its record.',
+      'A lost `location` note on a `worktreeRemnant` or `b1Leftover` decision costs one extra decision toward the caps.',
+    ]) {
+      assert.ok(resume.includes(needle), `${path}: missing "${needle}"`);
+    }
+    assert.doesNotMatch(
+      resume,
+      /crash between a `recovery-hold` and its void marker/u,
+      `${path}: a crashed recovery-hold decision must not be completed on resume`,
+    );
+
+    const table = normalizeWhitespace(raw);
+    for (const row of [
+      '| Resume finds a `runtimeQuestion` or `authoringChoice` record with no note that a counting record names, class `enabled` | Verified or completed; the matching note; label state not consulted |',
+      "| Resume finds a `runtimeQuestion` or `authoringChoice` record with no note and no counting record, such as a `recovery-hold` | Not completed; today's stop; reported |",
+    ]) {
+      assert.ok(table.includes(row), `${path}: missing table row "${row}"`);
+    }
+  }
+});

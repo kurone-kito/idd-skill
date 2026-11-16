@@ -49,8 +49,13 @@ import {
   evaluateFreshClaimGate as evaluateFreshClaimGateImpl,
   evaluateResumeClaimRouting as evaluateResumeClaimRoutingImpl,
   fetchOpenLinkedPrReferences,
+  freshClaimGateFromRouting,
+  inspectLocalBranchRefs,
   isPristineOwnWorktree,
+  type LocalBranchRefRead,
   loadPolicy,
+  type OpenLinkedPrRead,
+  readOpenLinkedPrs,
   resolveAssertOutcome,
   resolveResumeLinkedPrState,
 } from '../src/scripts/resume-claim-routing.mts';
@@ -7906,4 +7911,1093 @@ test('--own-worktree (#4019) with an empty value is a usage error', () => {
   );
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /--own-worktree requires a non-empty path/);
+});
+
+// ---------------------------------------------------------------------------
+// #4914: a local-only issue branch ref in the fresh-claim gate. The probe and
+// the linked-PR read are injected here; the production probe has its own tests
+// below, and the CLI runs against a real clone further down.
+// ---------------------------------------------------------------------------
+
+const LOCAL_TIP = 'a'.repeat(40);
+const MOVED_TIP = 'b'.repeat(40);
+
+function releasedEventsFor(
+  branch = 'issue/24-task',
+  claimId = 'claim-released',
+) {
+  return [
+    {
+      createdAt: '2026-05-12T10:00:00Z',
+      author: { login: 'maintainer' },
+      body: `<!-- claimed-by: copilot ${claimId} supersedes: none 2026-05-12T10:00:00Z branch: ${branch} -->`,
+    },
+    {
+      createdAt: '2026-05-12T10:05:00Z',
+      author: { login: 'maintainer' },
+      body: `<!-- unclaimed-by: copilot ${claimId} 2026-05-12T10:05:00Z -->`,
+    },
+  ];
+}
+
+const LEGACY_RELEASED_EVENTS = [
+  {
+    createdAt: '2026-05-12T10:00:00Z',
+    author: { login: 'maintainer' },
+    body: '<!-- claimed-by: old-agent 2026-05-12T10:00:00Z branch: issue/24-task -->',
+  },
+  {
+    createdAt: '2026-05-12T10:05:00Z',
+    author: { login: 'maintainer' },
+    body: '<!-- unclaimed-by: old-agent 2026-05-12T10:05:00Z -->',
+  },
+];
+
+const refOf = (branch: string, tip = LOCAL_TIP) => ({ branch, tip });
+
+/** A probe that answers each call from `reads` in order, then repeats the last. */
+function probeOf(...reads: LocalBranchRefRead[]) {
+  let calls = 0;
+  return {
+    probe: (): LocalBranchRefRead => {
+      const read = reads[Math.min(calls, reads.length - 1)];
+      calls += 1;
+      return read;
+    },
+    calls: () => calls,
+  };
+}
+
+function prReadOf(read: OpenLinkedPrRead | 'unwired') {
+  let calls = 0;
+  return {
+    options:
+      read === 'unwired'
+        ? {}
+        : {
+            readOpenLinkedPrs: (): OpenLinkedPrRead => {
+              calls += 1;
+              return read;
+            },
+          },
+    calls: () => calls,
+  };
+}
+
+/** A list of reads gives each evaluation its own probe; a function is used as is. */
+type ProbeSource = LocalBranchRefRead[] | (() => LocalBranchRefRead);
+
+function localBranchGate(
+  events: unknown,
+  source: ProbeSource,
+  prs: ReturnType<typeof prReadOf>,
+  extra: Parameters<typeof evaluateFreshClaimGate>[1] = {},
+) {
+  const optionsFor = () => ({
+    isTrustedAuthor: trusted(['maintainer']),
+    inspectLocalBranchRefs: Array.isArray(source)
+      ? probeOf(...source).probe
+      : source,
+    ...prs.options,
+    ...extra,
+  });
+  const routing = evaluateResumeClaimRouting(
+    { now: '2026-05-12T11:00:00Z', events },
+    optionsFor(),
+  );
+  const gate = evaluateFreshClaimGate(
+    { now: '2026-05-12T11:00:00Z', events },
+    optionsFor(),
+  );
+  return { routing, gate };
+}
+
+test('local-ref gate: no local-only ref is absent and claimable, and reads no pull request', () => {
+  for (const events of [[], releasedEventsFor()]) {
+    for (const read of [
+      { status: 'read', refs: [] },
+      { status: 'worktree' },
+    ] satisfies LocalBranchRefRead[]) {
+      const probe = probeOf(read);
+      const prs = prReadOf({ status: 'none' });
+      const { routing, gate } = localBranchGate(events, probe.probe, prs);
+      assert.equal(routing.state, 'unclaimed');
+      assert.equal(gate.verdict, 'claimable');
+      assert.equal(routing.evidence.local_branch?.status, 'absent');
+      assert.equal(routing.evidence.local_branch?.branch, null);
+      assert.equal(routing.evidence.local_branch?.tip, null);
+      assert.deepEqual(routing.evidence.local_branch?.refs, []);
+      // One ref listing per evaluation and no linked-PR read without a ref.
+      assert.equal(probe.calls(), 2);
+      assert.equal(prs.calls(), 0);
+    }
+  }
+});
+
+test('local-ref gate: the sole exact ref of a trusted released claim is inheritable', () => {
+  const { routing, gate } = localBranchGate(
+    releasedEventsFor(),
+    [{ status: 'read', refs: [refOf('issue/24-task')] }],
+    prReadOf({ status: 'none' }),
+  );
+  assert.equal(routing.state, 'local_branch_present');
+  assert.equal(routing.action, 'stop');
+  assert.equal(routing.reason, 'local-branch-inheritable');
+  assert.deepEqual(routing.evidence.local_branch, {
+    status: 'inheritable',
+    branch: 'issue/24-task',
+    tip: LOCAL_TIP,
+    refs: [refOf('issue/24-task')],
+    detail: null,
+  });
+  assert.equal(gate.verdict, 'local-branch-present');
+  assert.equal(gate.reason, 'local-branch-inheritable');
+  // A preserved ref is never a takeover target.
+  assert.equal(gate.winningClaimId, null);
+  assert.equal(routing.evidence.released_claim?.claim_id, 'claim-released');
+  assert.ok(
+    routing.warnings.some((warning) => warning.includes('inheritable')),
+    JSON.stringify(routing.warnings),
+  );
+});
+
+test('local-ref gate: the tip is read again after the pull request lookup', () => {
+  const calls: string[] = [];
+  const reads: LocalBranchRefRead[] = [
+    { status: 'read', refs: [refOf('issue/24-task')] },
+    { status: 'read', refs: [refOf('issue/24-task')] },
+  ];
+  const result = evaluateResumeClaimRouting(
+    { now: '2026-05-12T11:00:00Z', events: releasedEventsFor() },
+    {
+      isTrustedAuthor: trusted(['maintainer']),
+      inspectLocalBranchRefs: () => {
+        calls.push('ref-read');
+        return reads[
+          Math.min(calls.filter((c) => c === 'ref-read').length - 1, 1)
+        ];
+      },
+      readOpenLinkedPrs: () => {
+        calls.push('pr-read');
+        return { status: 'none' };
+      },
+    },
+  );
+  assert.equal(result.reason, 'local-branch-inheritable');
+  assert.deepEqual(calls, ['ref-read', 'pr-read', 'ref-read']);
+});
+
+test('local-ref gate: any other local-only ref is unexpected, never claimable', () => {
+  const exact: LocalBranchRefRead = {
+    status: 'read',
+    refs: [refOf('issue/24-task')],
+  };
+  const rows: {
+    name: string;
+    events: unknown;
+    reads: LocalBranchRefRead[];
+    prs: OpenLinkedPrRead | 'unwired';
+    detail: RegExp;
+    refs: string[];
+  }[] = [
+    {
+      name: 'a slug variant of the released branch',
+      events: releasedEventsFor(),
+      reads: [{ status: 'read', refs: [refOf('issue/24-other')] }],
+      prs: { status: 'none' },
+      detail: /is not only the released claim's branch issue\/24-task/,
+      refs: ['issue/24-other'],
+    },
+    {
+      name: 'the exact branch beside a second ref',
+      events: releasedEventsFor(),
+      reads: [
+        {
+          status: 'read',
+          refs: [refOf('issue/24-other'), refOf('issue/24-task')],
+        },
+      ],
+      prs: { status: 'none' },
+      detail: /is not only the released claim's branch/,
+      refs: ['issue/24-other', 'issue/24-task'],
+    },
+    {
+      name: 'a never-claimed issue',
+      events: [],
+      reads: [exact],
+      prs: { status: 'none' },
+      detail: /no trusted released claim names a branch/,
+      refs: ['issue/24-task'],
+    },
+    {
+      name: 'a legacy release without a claim-id',
+      events: LEGACY_RELEASED_EVENTS,
+      reads: [exact],
+      prs: { status: 'none' },
+      detail: /legacy marker without a claim-id/,
+      refs: ['issue/24-task'],
+    },
+    {
+      name: 'an open linked pull request',
+      events: releasedEventsFor(),
+      reads: [exact],
+      prs: { status: 'present', references: ['77'] },
+      detail: /open linked pull request \(#77\)/,
+      refs: ['issue/24-task'],
+    },
+    {
+      name: 'a tip that moved between the two reads',
+      events: releasedEventsFor(),
+      reads: [
+        exact,
+        { status: 'read', refs: [refOf('issue/24-task', MOVED_TIP)] },
+      ],
+      prs: { status: 'none' },
+      detail: /changed between two reads/,
+      refs: ['issue/24-task'],
+    },
+    {
+      name: 'a ref that vanished between the two reads',
+      events: releasedEventsFor(),
+      reads: [exact, { status: 'read', refs: [] }],
+      prs: { status: 'none' },
+      detail: /changed between two reads/,
+      refs: ['issue/24-task'],
+    },
+    {
+      name: 'a worktree that appeared between the two reads',
+      events: releasedEventsFor(),
+      reads: [exact, { status: 'worktree' }],
+      prs: { status: 'none' },
+      detail: /a worktree now holds an issue branch/,
+      refs: ['issue/24-task'],
+    },
+  ];
+  for (const row of rows) {
+    const { routing, gate } = localBranchGate(
+      row.events,
+      row.reads,
+      prReadOf(row.prs),
+    );
+    assert.equal(routing.state, 'local_branch_present', row.name);
+    assert.equal(routing.reason, 'local-branch-unexpected', row.name);
+    assert.equal(gate.verdict, 'local-branch-present', row.name);
+    assert.equal(gate.winningClaimId, null, row.name);
+    const local = routing.evidence.local_branch;
+    assert.equal(local?.status, 'unexpected', row.name);
+    assert.equal(local?.branch, null, row.name);
+    assert.equal(local?.tip, null, row.name);
+    assert.deepEqual(
+      local?.refs.map((ref) => ref.branch),
+      row.refs,
+      row.name,
+    );
+    assert.match(local?.detail ?? '', row.detail, row.name);
+  }
+});
+
+test('local-ref gate: an unreadable probe is its own result, never claimable', () => {
+  const exact: LocalBranchRefRead = {
+    status: 'read',
+    refs: [refOf('issue/24-task')],
+  };
+  const rows: {
+    name: string;
+    events: unknown;
+    probe: ProbeSource;
+    prs: OpenLinkedPrRead | 'unwired';
+    detail: RegExp;
+  }[] = [
+    {
+      name: 'the first ref read fails',
+      events: releasedEventsFor(),
+      probe: [{ status: 'unreadable', reason: 'listing failed' }],
+      prs: { status: 'none' },
+      detail: /listing failed/,
+    },
+    {
+      name: 'the first ref read throws',
+      events: [],
+      probe: () => {
+        throw new Error('spawn blew up');
+      },
+      prs: { status: 'none' },
+      detail: /the ref probe threw: spawn blew up/,
+    },
+    {
+      name: 'the first ref read answers malformed',
+      events: releasedEventsFor(),
+      probe: (() => ({
+        status: 'read',
+        refs: [{ branch: '', tip: 'x' }],
+      })) as () => LocalBranchRefRead,
+      prs: { status: 'none' },
+      detail: /answered malformed/,
+    },
+    {
+      name: 'a duplicate branch in one read',
+      events: releasedEventsFor(),
+      probe: [
+        {
+          status: 'read',
+          refs: [refOf('issue/24-task'), refOf('issue/24-task')],
+        },
+      ],
+      prs: { status: 'none' },
+      detail: /answered malformed/,
+    },
+    {
+      name: 'the linked pull request lookup fails',
+      events: releasedEventsFor(),
+      probe: [exact],
+      prs: { status: 'unreadable', reason: 'the lookup failed' },
+      detail: /the lookup failed/,
+    },
+    {
+      name: 'the linked pull request read is not wired',
+      events: releasedEventsFor(),
+      probe: [exact],
+      prs: 'unwired',
+      detail: /not wired/,
+    },
+    {
+      name: 'the second ref read fails',
+      events: releasedEventsFor(),
+      probe: [exact, { status: 'unreadable', reason: 'second failed' }],
+      prs: { status: 'none' },
+      detail: /second failed/,
+    },
+  ];
+  for (const row of rows) {
+    const { routing, gate } = localBranchGate(
+      row.events,
+      row.probe,
+      prReadOf(row.prs),
+    );
+    assert.equal(routing.state, 'local_branch_present', row.name);
+    assert.equal(routing.reason, 'local-branch-unreadable', row.name);
+    assert.equal(gate.verdict, 'local-branch-present', row.name);
+    assert.equal(gate.winningClaimId, null, row.name);
+    assert.equal(routing.evidence.local_branch?.status, 'unreadable', row.name);
+    assert.match(
+      routing.evidence.local_branch?.detail ?? '',
+      row.detail,
+      row.name,
+    );
+  }
+});
+
+test('local-ref gate: other routing states keep their verdict and never probe', () => {
+  const never = (): LocalBranchRefRead => {
+    throw new Error('the probe must not run');
+  };
+  const options = {
+    isTrustedAuthor: trusted(['maintainer']),
+    inspectLocalBranchRefs: never,
+  };
+  const live = {
+    createdAt: '2026-05-12T10:00:00Z',
+    author: { login: 'maintainer' },
+    body: '<!-- claimed-by: copilot claim-live supersedes: none 2026-05-12T10:00:00Z branch: issue/24-task -->',
+  };
+  const cases: {
+    name: string;
+    now: string;
+    events: unknown;
+    extra?: Partial<Parameters<typeof evaluateFreshClaimGate>[1]>;
+    state: string;
+    verdict: string;
+  }[] = [
+    {
+      name: 'a live claim',
+      now: '2026-05-12T11:00:00Z',
+      events: [live],
+      state: 'non_inheritable',
+      verdict: 'already-claimed',
+    },
+    {
+      name: 'a stale claim',
+      now: '2026-05-14T11:00:00Z',
+      events: [live],
+      state: 'stale',
+      verdict: 'stale-reclaimable',
+    },
+    {
+      name: 'a released claim with an occupied worktree',
+      now: '2026-05-12T11:00:00Z',
+      events: releasedEventsFor(),
+      extra: {
+        inspectLocalWorktree: () => ({
+          status: 'occupied',
+          paths: ['/tmp/repo.issue-24-task'],
+          reason: 'matching local worktree for issue/24-task',
+        }),
+      },
+      state: 'local_worktree_occupied',
+      verdict: 'already-claimed',
+    },
+  ];
+  for (const row of cases) {
+    const input = { now: row.now, events: row.events };
+    const merged = { ...options, ...row.extra };
+    const routing = evaluateResumeClaimRouting(input, merged);
+    const gate = evaluateFreshClaimGate(input, merged);
+    assert.equal(routing.state, row.state, row.name);
+    assert.equal(gate.verdict, row.verdict, row.name);
+    assert.equal(routing.evidence.local_branch, undefined, row.name);
+  }
+});
+
+test('local-ref gate: an own pristine worktree on the released branch stays claimable', () => {
+  // The second gate of the fresh-claim order: the caller's own worktree holds
+  // its branch, so the probe defers to the worktree scan instead of reporting
+  // that branch as a local-only ref.
+  const { routing, gate } = localBranchGate(
+    releasedEventsFor(),
+    probeOf({ status: 'worktree' }).probe,
+    prReadOf({ status: 'none' }),
+    {
+      inspectLocalWorktree: () => ({
+        status: 'occupied',
+        paths: ['/tmp/own'],
+        reason: 'matching local worktree for issue/24-task',
+      }),
+      isOwnPristineWorktree: (path) => path === '/tmp/own',
+    },
+  );
+  assert.equal(routing.state, 'unclaimed');
+  assert.equal(gate.verdict, 'claimable');
+  assert.equal(routing.evidence.local_branch?.status, 'absent');
+});
+
+test('local-ref gate: a caller that wires no probe sees no local_branch evidence', () => {
+  const routing = evaluateResumeClaimRouting(
+    { now: '2026-05-12T11:00:00Z', events: releasedEventsFor() },
+    { isTrustedAuthor: trusted(['maintainer']) },
+  );
+  assert.equal(routing.state, 'unclaimed');
+  assert.equal(Object.hasOwn(routing.evidence, 'local_branch'), false);
+});
+
+test('readOpenLinkedPrs: a found pull request wins, a failed empty lookup is unreadable', () => {
+  const port = (overrides: Partial<ProviderPort>): ProviderPort =>
+    ({
+      getConnectedPullRequestEventsPage: () => ({
+        events: [],
+        hasNextPage: false,
+        endCursor: null,
+      }),
+      getWorkItemClosingPullRequestsPage: () => ({
+        nodes: [],
+        hasNextPage: false,
+        endCursor: null,
+      }),
+      ...overrides,
+    }) as unknown as ProviderPort;
+  assert.deepEqual(readOpenLinkedPrs(port({}), 24, 'o/r'), { status: 'none' });
+  assert.deepEqual(
+    readOpenLinkedPrs(
+      port({
+        getWorkItemClosingPullRequestsPage: () => ({
+          nodes: [{ number: 9, state: 'OPEN', repository: 'o/r' }],
+          hasNextPage: false,
+          endCursor: null,
+        }),
+      }),
+      24,
+      'o/r',
+    ),
+    { status: 'present', references: ['9'] },
+  );
+  const failing = readOpenLinkedPrs(
+    port({
+      getConnectedPullRequestEventsPage: () => {
+        throw new Error('graphql failed');
+      },
+    }),
+    24,
+    'o/r',
+  );
+  assert.equal(failing.status, 'unreadable');
+});
+
+// A scripted `git` for the production probe: each call is matched by its
+// subcommand, so the test sees exactly which reads ran.
+function scriptedGit(script: {
+  worktrees?: string;
+  refs?: string | Error;
+  /** An answer, an error, or `null` for git's exit 2 (no matching ref). */
+  remote?: (ref: string) => string | Error | null;
+}) {
+  const calls: string[] = [];
+  const execute = ((_file: string, args: readonly string[]) => {
+    calls.push(args.join(' '));
+    const [subcommand] = args;
+    let answer: string | Error | undefined;
+    if (subcommand === 'worktree') {
+      answer =
+        script.worktrees ??
+        `worktree /primary\0HEAD ${LOCAL_TIP}\0branch refs/heads/main\0\0`;
+    } else if (subcommand === 'for-each-ref') {
+      answer = script.refs ?? '';
+    } else if (subcommand === 'ls-remote') {
+      answer =
+        script.remote?.(String(args.at(-1))) ??
+        Object.assign(new Error('no matching ref'), { status: 2 });
+    }
+    if (answer === undefined) {
+      throw new Error(`unexpected git call: ${args.join(' ')}`);
+    }
+    if (answer instanceof Error) {
+      throw answer;
+    }
+    return answer;
+  }) as unknown as typeof execFileSync;
+  return { execute, calls };
+}
+
+test('inspectLocalBranchRefs: no ref reads one listing and no remote', () => {
+  const git = scriptedGit({});
+  assert.deepEqual(inspectLocalBranchRefs(24, '/primary', {}, git.execute), {
+    status: 'read',
+    refs: [],
+  });
+  assert.deepEqual(git.calls, [
+    'worktree list --porcelain -z',
+    'for-each-ref --format=%(refname) %(objectname) refs/heads/issue/',
+  ]);
+});
+
+test('inspectLocalBranchRefs: a worktree on the prefix defers to the worktree scan', () => {
+  const git = scriptedGit({
+    worktrees: `worktree /primary\0HEAD ${LOCAL_TIP}\0branch refs/heads/main\0\0worktree /own\0HEAD ${LOCAL_TIP}\0branch refs/heads/issue/24-task\0\0`,
+  });
+  assert.deepEqual(inspectLocalBranchRefs(24, '/primary', {}, git.execute), {
+    status: 'worktree',
+  });
+  assert.deepEqual(git.calls, ['worktree list --porcelain -z']);
+});
+
+test('inspectLocalBranchRefs: an unreadable worktree scan fails closed once a local-only ref exists', () => {
+  const unreadable = 'not a porcelain listing';
+  const taskRef = `refs/heads/issue/24-task ${LOCAL_TIP}\n`;
+
+  // No ref: nothing to misjudge, so no remote read and no failure.
+  const none = scriptedGit({ worktrees: unreadable });
+  assert.deepEqual(inspectLocalBranchRefs(24, '/primary', {}, none.execute), {
+    status: 'read',
+    refs: [],
+  });
+  assert.deepEqual(none.calls, [
+    'worktree list --porcelain -z',
+    'for-each-ref --format=%(refname) %(objectname) refs/heads/issue/',
+  ]);
+
+  // Every ref is on origin: A5(e)'s remote scan owns it, as with a readable scan.
+  const pushed = scriptedGit({
+    worktrees: unreadable,
+    refs: taskRef,
+    remote: (ref) => `${LOCAL_TIP}\t${ref}\n`,
+  });
+  assert.deepEqual(inspectLocalBranchRefs(24, '/primary', {}, pushed.execute), {
+    status: 'read',
+    refs: [],
+  });
+
+  // A local-only ref that a worktree might hold cannot be reported as local-only
+  // or as absent: the read is unreadable, with a fixed phrase.
+  const local = scriptedGit({ worktrees: unreadable, refs: taskRef });
+  const read = inspectLocalBranchRefs(24, '/primary', {}, local.execute);
+  assert.equal(read.status, 'unreadable');
+  assert.match(
+    read.status === 'unreadable' ? read.reason : '',
+    /the local worktree scan could not be read .* holding issue\/24-task cannot be ruled out/,
+  );
+});
+
+test('inspectLocalBranchRefs: remote-backed refs are excluded, local-only refs keep their tip', () => {
+  const git = scriptedGit({
+    refs: [
+      `refs/heads/issue/24-pushed ${MOVED_TIP}`,
+      `refs/heads/issue/24-task ${LOCAL_TIP}`,
+      '',
+    ].join('\n'),
+    remote: (ref) =>
+      ref === 'refs/heads/issue/24-pushed' ? `${MOVED_TIP}\t${ref}\n` : null,
+  });
+  assert.deepEqual(inspectLocalBranchRefs(24, '/primary', {}, git.execute), {
+    status: 'read',
+    refs: [refOf('issue/24-task')],
+  });
+  assert.deepEqual(
+    git.calls.filter((call) => call.startsWith('ls-remote')),
+    [
+      'ls-remote --exit-code --heads origin refs/heads/issue/24-pushed',
+      'ls-remote --exit-code --heads origin refs/heads/issue/24-task',
+    ],
+  );
+});
+
+test('inspectLocalBranchRefs: only git exit 2 proves the ref is absent from origin', () => {
+  const taskRef = `refs/heads/issue/24-task ${LOCAL_TIP}\n`;
+  const read = (remote: (ref: string) => string | Error | null) =>
+    inspectLocalBranchRefs(
+      24,
+      '/primary',
+      {},
+      scriptedGit({ refs: taskRef, remote }).execute,
+    );
+  const task = 'refs/heads/issue/24-task';
+
+  // Exit 2 is the one answer that means origin lacks the ref.
+  assert.deepEqual(
+    read(() => null),
+    {
+      status: 'read',
+      refs: [refOf('issue/24-task')],
+    },
+  );
+
+  // A line of the asked-for ref proves it is there, whatever its line ending.
+  for (const answer of [
+    `${LOCAL_TIP}\t${task}\n`,
+    `${LOCAL_TIP}\t${task}\r\n`,
+    `${LOCAL_TIP}\t${task}`,
+  ]) {
+    assert.deepEqual(
+      read(() => answer),
+      { status: 'read', refs: [] },
+      answer,
+    );
+  }
+
+  // Empty output after exit 0, another ref, a malformed line, or an extra
+  // field is not an answer to the question, so it is never read as absence.
+  for (const answer of [
+    '',
+    '\n',
+    `${LOCAL_TIP}\trefs/heads/issue/24-other\n`,
+    `not-an-object-id\t${task}\n`,
+    `${LOCAL_TIP}\t${task}\textra\n`,
+    `<html>proxy error</html>\n`,
+    `${LOCAL_TIP}\t${task}\nstray line\n`,
+  ]) {
+    const result = read(() => answer);
+    assert.equal(result.status, 'unreadable', JSON.stringify(answer));
+    assert.match(
+      result.status === 'unreadable' ? result.reason : '',
+      /printed an unexpected answer for issue\/24-task/,
+      JSON.stringify(answer),
+    );
+  }
+});
+
+test('inspectLocalBranchRefs: a nested branch counts, another issue and a lookalike do not', () => {
+  const git = scriptedGit({
+    refs: [
+      `refs/heads/issue/2-other ${MOVED_TIP}`,
+      `refs/heads/issue/24-task/subtask ${LOCAL_TIP}`,
+      `refs/heads/issue/240-lookalike not-even-an-object-id`,
+      '',
+    ].join('\n'),
+  });
+  assert.deepEqual(inspectLocalBranchRefs(24, '/primary', {}, git.execute), {
+    status: 'read',
+    refs: [refOf('issue/24-task/subtask')],
+  });
+  assert.deepEqual(
+    git.calls.filter((call) => call.startsWith('ls-remote')),
+    ['ls-remote --exit-code --heads origin refs/heads/issue/24-task/subtask'],
+  );
+});
+
+test('inspectLocalBranchRefs: a failed read is unreadable and never prints git stderr', () => {
+  const leaky = Object.assign(
+    new Error('fatal: unable to access https://user:secret@example.com/r.git'),
+    { status: 128, stderr: 'https://user:secret@example.com/r.git' },
+  );
+  const cases: [string, Parameters<typeof scriptedGit>[0], RegExp][] = [
+    [
+      'the ref listing fails',
+      { refs: leaky },
+      /git for-each-ref ended with exit code 128/,
+    ],
+    [
+      'the remote read fails',
+      {
+        refs: `refs/heads/issue/24-task ${LOCAL_TIP}\n`,
+        remote: () => leaky,
+      },
+      /git ls-remote origin ended with exit code 128 for issue\/24-task/,
+    ],
+    [
+      'the remote read times out',
+      {
+        refs: `refs/heads/issue/24-task ${LOCAL_TIP}\n`,
+        remote: () =>
+          Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' }),
+      },
+      /ended with timed out for issue\/24-task/,
+    ],
+    [
+      'the listing is malformed',
+      { refs: 'refs/heads/issue/24-task not-an-object-id\n' },
+      /printed a malformed line/,
+    ],
+    [
+      'the listing has an extra field on one of its lines',
+      { refs: `refs/heads/issue/24-task ${LOCAL_TIP} extra\n` },
+      /printed a malformed line/,
+    ],
+  ];
+  for (const [name, script, message] of cases) {
+    const read = inspectLocalBranchRefs(
+      24,
+      '/primary',
+      {},
+      scriptedGit(script).execute,
+    );
+    assert.equal(read.status, 'unreadable', name);
+    assert.match(
+      read.status === 'unreadable' ? read.reason : '',
+      message,
+      name,
+    );
+    assert.doesNotMatch(JSON.stringify(read), /secret|example\.com/, name);
+  }
+  assert.equal(inspectLocalBranchRefs(0).status, 'unreadable');
+});
+
+interface LocalRefSandbox extends OwnWorktreeSandbox {
+  git: (args: string[]) => string;
+}
+
+function localRefSandbox(): LocalRefSandbox {
+  const sandbox = ownWorktreeSandbox();
+  return {
+    ...sandbox,
+    git: (args) =>
+      execFileSync('git', args, {
+        cwd: sandbox.primary,
+        env: sandbox.gitEnv,
+        encoding: 'utf8',
+      }).trim(),
+  };
+}
+
+test('inspectLocalBranchRefs: a real clone separates local-only, remote-backed, and worktree-held refs', () => {
+  const sandbox = localRefSandbox();
+  try {
+    const probe = () =>
+      inspectLocalBranchRefs(1, sandbox.primary, sandbox.gitEnv);
+    assert.deepEqual(probe(), { status: 'read', refs: [] });
+
+    const base = sandbox.git(['rev-parse', 'origin/main']);
+    sandbox.git(['branch', 'issue/1-local', 'origin/main']);
+    // A nested ref under the issue prefix counts too: a glob would miss it.
+    sandbox.git(['branch', 'issue/1-nested/sub', 'origin/main']);
+    // Another issue's ref and a prefix lookalike never count.
+    sandbox.git(['branch', 'issue/10-lookalike', 'origin/main']);
+    sandbox.git(['branch', 'issue/2-other', 'origin/main']);
+    assert.deepEqual(probe(), {
+      status: 'read',
+      refs: [
+        { branch: 'issue/1-local', tip: base },
+        { branch: 'issue/1-nested/sub', tip: base },
+      ],
+    });
+
+    sandbox.git(['push', '--quiet', 'origin', 'issue/1-local']);
+    sandbox.git(['push', '--quiet', 'origin', 'issue/1-nested/sub']);
+    assert.deepEqual(probe(), { status: 'read', refs: [] });
+
+    sandbox.git(['branch', 'issue/1-second', 'origin/main']);
+    sandbox.addOwnWorktree();
+    assert.deepEqual(probe(), { status: 'worktree' });
+  } finally {
+    sandbox.restore();
+  }
+});
+
+test('inspectLocalBranchRefs: a prunable worktree entry on the prefix makes a local-only ref unreadable', () => {
+  const sandbox = localRefSandbox();
+  try {
+    // A worktree whose directory vanished stays registered as prunable, which
+    // the worktree scan cannot rule out, so its branch is not a local-only ref.
+    const gone = join(sandbox.root, 'gone');
+    sandbox.git([
+      'worktree',
+      'add',
+      '--quiet',
+      gone,
+      '-b',
+      'issue/1-gone',
+      'origin/main',
+    ]);
+    rmSync(gone, { recursive: true, force: true });
+    const read = inspectLocalBranchRefs(1, sandbox.primary, sandbox.gitEnv);
+    assert.equal(read.status, 'unreadable');
+    assert.match(
+      read.status === 'unreadable' ? read.reason : '',
+      /worktree scan could not be read/,
+    );
+  } finally {
+    sandbox.restore();
+  }
+});
+
+test('local-ref gate: a never-claimed issue with the caller own pristine worktree stays claimable', () => {
+  const sandbox = localRefSandbox();
+  try {
+    const gate = () =>
+      evaluateFreshClaimGate(
+        { now: '2026-05-12T11:00:00Z', events: [] },
+        {
+          inspectLocalBranchRefs: () =>
+            inspectLocalBranchRefs(1, sandbox.primary, sandbox.gitEnv),
+          readOpenLinkedPrs: () => ({ status: 'none' }),
+        },
+      );
+    assert.equal(gate().verdict, 'claimable');
+
+    // The worktree-first order creates the branch before the second gate.
+    sandbox.addOwnWorktree();
+    assert.equal(gate().verdict, 'claimable');
+    sandbox.git(['worktree', 'remove', '--force', sandbox.own]);
+
+    // With the worktree gone the branch is a local-only ref and no longer fresh.
+    const blocked = gate();
+    assert.equal(blocked.verdict, 'local-branch-present');
+    assert.equal(blocked.reason, 'local-branch-unexpected');
+  } finally {
+    sandbox.restore();
+  }
+});
+
+test('--fresh-claim-gate CLI: a local-only ref is reported, a remote-backed one is not', () => {
+  const sandbox = localRefSandbox();
+  try {
+    const clean = sandbox.gate([]);
+    assert.equal(clean.status, 0, clean.stderr);
+    assert.equal(clean.output.fresh_claim_gate.verdict, 'claimable');
+
+    sandbox.git(['branch', 'issue/1-other', 'origin/main']);
+    const variant = sandbox.gate([]);
+    assert.equal(variant.status, 0, variant.stderr);
+    assert.equal(variant.output.state, 'local_branch_present');
+    assert.equal(variant.output.reason, 'local-branch-unexpected');
+    assert.equal(
+      variant.output.fresh_claim_gate.verdict,
+      'local-branch-present',
+    );
+    assert.equal(variant.output.fresh_claim_gate.winning_claim_id, null);
+
+    sandbox.git(['push', '--quiet', 'origin', 'issue/1-other']);
+    const pushed = sandbox.gate([]);
+    assert.equal(pushed.status, 0, pushed.stderr);
+    assert.equal(pushed.output.fresh_claim_gate.verdict, 'claimable');
+  } finally {
+    sandbox.restore();
+  }
+});
+
+test('--fresh-claim-gate CLI: the exact released ref fails closed when the pull request read fails', () => {
+  const sandbox = localRefSandbox();
+  try {
+    sandbox.git(['branch', sandbox.branch, 'origin/main']);
+    const read = sandbox.gate([]);
+    assert.equal(read.status, 0, read.stderr);
+    // The fixture's gh answers no pull request query, so the inheritable
+    // check cannot be proven: the result is unreadable, never claimable.
+    assert.equal(read.output.state, 'local_branch_present');
+    assert.equal(read.output.reason, 'local-branch-unreadable');
+    assert.equal(read.output.fresh_claim_gate.winning_claim_id, null);
+  } finally {
+    sandbox.restore();
+  }
+});
+
+test('--fresh-claim-gate CLI: the own-worktree second gate stays claimable on the released branch', () => {
+  const sandbox = localRefSandbox();
+  try {
+    sandbox.addOwnWorktree();
+    const second = sandbox.gate(['--own-worktree', sandbox.own]);
+    assert.equal(second.status, 0, second.stderr);
+    assert.equal(second.output.fresh_claim_gate.verdict, 'claimable');
+    assert.equal(second.output.state, 'unclaimed');
+  } finally {
+    sandbox.restore();
+  }
+});
+
+test('routing without --fresh-claim-gate never reports a local-only ref', () => {
+  const sandbox = localRefSandbox();
+  try {
+    sandbox.git(['branch', 'issue/1-other', 'origin/main']);
+    const result = spawnSync(
+      process.execPath,
+      [
+        join(REPO_ROOT, 'scripts/resume-claim-routing.mjs'),
+        '--issue',
+        '1',
+        '--owner',
+        'o',
+        '--repo',
+        'r',
+        '--now',
+        '2026-09-24T00:01:00Z',
+        '--policy',
+        sandbox.policyPath,
+      ],
+      {
+        cwd: sandbox.primary,
+        encoding: 'utf8',
+        env: { ...fixtureEnv(), IDD_TRUSTED_MARKER_ACTORS: '' },
+      },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.state, 'unclaimed');
+    assert.equal(Object.hasOwn(output.evidence, 'local_branch'), false);
+  } finally {
+    sandbox.restore();
+  }
+});
+
+test('freshClaimGateFromRouting maps one routing evaluation exactly as evaluateFreshClaimGate does', () => {
+  const scenarios: {
+    name: string;
+    events: unknown;
+    reads: LocalBranchRefRead[];
+  }[] = [
+    {
+      name: 'no ref',
+      events: releasedEventsFor(),
+      reads: [{ status: 'read', refs: [] }],
+    },
+    {
+      name: 'an inheritable ref',
+      events: releasedEventsFor(),
+      reads: [{ status: 'read', refs: [refOf('issue/24-task')] }],
+    },
+    {
+      name: 'an unexpected ref',
+      events: [],
+      reads: [{ status: 'read', refs: [refOf('issue/24-task')] }],
+    },
+    {
+      name: 'an unreadable probe',
+      events: releasedEventsFor(),
+      reads: [{ status: 'unreadable', reason: 'listing failed' }],
+    },
+  ];
+  for (const scenario of scenarios) {
+    const options = () => ({
+      isTrustedAuthor: trusted(['maintainer']),
+      inspectLocalBranchRefs: probeOf(...scenario.reads).probe,
+      readOpenLinkedPrs: (): OpenLinkedPrRead => ({ status: 'none' }),
+    });
+    const input = { now: '2026-05-12T11:00:00Z', events: scenario.events };
+    assert.deepEqual(
+      freshClaimGateFromRouting(evaluateResumeClaimRouting(input, options())),
+      evaluateFreshClaimGate(input, options()),
+      scenario.name,
+    );
+  }
+});
+
+interface TracedGateOutput {
+  state: string;
+  reason: string;
+  evidence: { local_branch?: { status: string } };
+  fresh_claim_gate: { verdict: string; winning_claim_id: string | null };
+}
+
+function traceCliRun(
+  sandbox: LocalRefSandbox,
+  extraArgs: string[],
+): {
+  status: number | null;
+  stderr: string;
+  output: TracedGateOutput;
+  lsRemoteCalls: number;
+} {
+  const trace = join(sandbox.root, `git-trace-${extraArgs.length}.log`);
+  const result = spawnSync(
+    process.execPath,
+    [
+      join(REPO_ROOT, 'scripts/resume-claim-routing.mjs'),
+      '--issue',
+      '1',
+      '--owner',
+      'o',
+      '--repo',
+      'r',
+      '--now',
+      '2026-09-24T00:01:00Z',
+      '--policy',
+      sandbox.policyPath,
+      '--fresh-claim-gate',
+      ...extraArgs,
+    ],
+    {
+      cwd: sandbox.primary,
+      encoding: 'utf8',
+      env: { ...fixtureEnv(), IDD_TRUSTED_MARKER_ACTORS: '', GIT_TRACE: trace },
+    },
+  );
+  const lsRemoteCalls = readFileSync(trace, 'utf8')
+    .split('\n')
+    .filter((line) => /built-in: git ls-remote/u.test(line)).length;
+  return {
+    status: result.status,
+    stderr: result.stderr,
+    output: result.status === 0 ? JSON.parse(result.stdout) : null,
+    lsRemoteCalls,
+  };
+}
+
+test('--fresh-claim-gate CLI: one evaluation probes the refs once and the gate matches the top-level routing', () => {
+  const sandbox = localRefSandbox();
+  try {
+    sandbox.git(['branch', 'issue/1-other', 'origin/main']);
+    const read = traceCliRun(sandbox, []);
+    assert.equal(read.status, 0, read.stderr);
+    assert.equal(read.lsRemoteCalls, 1);
+    assert.equal(read.output.state, 'local_branch_present');
+    assert.equal(read.output.reason, 'local-branch-unexpected');
+    assert.equal(read.output.evidence.local_branch?.status, 'unexpected');
+    assert.equal(read.output.fresh_claim_gate.verdict, 'local-branch-present');
+    assert.equal(read.output.fresh_claim_gate.winning_claim_id, null);
+
+    // A --claim-id keeps the owner view at the top level, with no probe of its
+    // own; the gate still evaluates once, so the refs are read once in total.
+    const owner = traceCliRun(sandbox, ['--claim-id', 'claim-someone-else']);
+    assert.equal(owner.status, 0, owner.stderr);
+    assert.equal(owner.lsRemoteCalls, 1);
+    assert.equal(owner.output.state, 'unclaimed');
+    assert.equal(Object.hasOwn(owner.output.evidence, 'local_branch'), false);
+    assert.equal(owner.output.fresh_claim_gate.verdict, 'local-branch-present');
+  } finally {
+    sandbox.restore();
+  }
+});
+
+test('--help advertises the local-only branch state, verdict, reasons, and evidence', () => {
+  const result = spawnSync(
+    process.execPath,
+    [join(REPO_ROOT, 'scripts/resume-claim-routing.mjs'), '--help'],
+    { cwd: REPO_ROOT, encoding: 'utf8', env: fixtureEnv() },
+  );
+  assert.equal(result.status, 0, result.stderr);
+  for (const needle of [
+    '|local_branch_present|',
+    '|local-branch-present"',
+    'evidence.local_branch',
+    'local-branch-inheritable',
+    'local-branch-unexpected',
+    'local-branch-unreadable',
+  ]) {
+    assert.ok(result.stdout.includes(needle), needle);
+  }
 });
