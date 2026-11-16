@@ -8426,7 +8426,8 @@ test('readOpenLinkedPrs: a found pull request wins, a failed empty lookup is unr
 function scriptedGit(script: {
   worktrees?: string;
   refs?: string | Error;
-  remote?: (ref: string) => string | Error;
+  /** An answer, an error, or `null` for git's exit 2 (no matching ref). */
+  remote?: (ref: string) => string | Error | null;
 }) {
   const calls: string[] = [];
   const execute = ((_file: string, args: readonly string[]) => {
@@ -8440,7 +8441,9 @@ function scriptedGit(script: {
     } else if (subcommand === 'for-each-ref') {
       answer = script.refs ?? '';
     } else if (subcommand === 'ls-remote') {
-      answer = script.remote?.(String(args.at(-1))) ?? '';
+      answer =
+        script.remote?.(String(args.at(-1))) ??
+        Object.assign(new Error('no matching ref'), { status: 2 });
     }
     if (answer === undefined) {
       throw new Error(`unexpected git call: ${args.join(' ')}`);
@@ -8520,7 +8523,7 @@ test('inspectLocalBranchRefs: remote-backed refs are excluded, local-only refs k
       '',
     ].join('\n'),
     remote: (ref) =>
-      ref === 'refs/heads/issue/24-pushed' ? `${MOVED_TIP}\t${ref}\n` : '',
+      ref === 'refs/heads/issue/24-pushed' ? `${MOVED_TIP}\t${ref}\n` : null,
   });
   assert.deepEqual(inspectLocalBranchRefs(24, '/primary', {}, git.execute), {
     status: 'read',
@@ -8529,10 +8532,64 @@ test('inspectLocalBranchRefs: remote-backed refs are excluded, local-only refs k
   assert.deepEqual(
     git.calls.filter((call) => call.startsWith('ls-remote')),
     [
-      'ls-remote --heads origin refs/heads/issue/24-pushed',
-      'ls-remote --heads origin refs/heads/issue/24-task',
+      'ls-remote --exit-code --heads origin refs/heads/issue/24-pushed',
+      'ls-remote --exit-code --heads origin refs/heads/issue/24-task',
     ],
   );
+});
+
+test('inspectLocalBranchRefs: only git exit 2 proves the ref is absent from origin', () => {
+  const taskRef = `refs/heads/issue/24-task ${LOCAL_TIP}\n`;
+  const read = (remote: (ref: string) => string | Error | null) =>
+    inspectLocalBranchRefs(
+      24,
+      '/primary',
+      {},
+      scriptedGit({ refs: taskRef, remote }).execute,
+    );
+  const task = 'refs/heads/issue/24-task';
+
+  // Exit 2 is the one answer that means origin lacks the ref.
+  assert.deepEqual(
+    read(() => null),
+    {
+      status: 'read',
+      refs: [refOf('issue/24-task')],
+    },
+  );
+
+  // A line of the asked-for ref proves it is there, whatever its line ending.
+  for (const answer of [
+    `${LOCAL_TIP}\t${task}\n`,
+    `${LOCAL_TIP}\t${task}\r\n`,
+    `${LOCAL_TIP}\t${task}`,
+  ]) {
+    assert.deepEqual(
+      read(() => answer),
+      { status: 'read', refs: [] },
+      answer,
+    );
+  }
+
+  // Empty output after exit 0, another ref, a malformed line, or an extra
+  // field is not an answer to the question, so it is never read as absence.
+  for (const answer of [
+    '',
+    '\n',
+    `${LOCAL_TIP}\trefs/heads/issue/24-other\n`,
+    `not-an-object-id\t${task}\n`,
+    `${LOCAL_TIP}\t${task}\textra\n`,
+    `<html>proxy error</html>\n`,
+    `${LOCAL_TIP}\t${task}\nstray line\n`,
+  ]) {
+    const result = read(() => answer);
+    assert.equal(result.status, 'unreadable', JSON.stringify(answer));
+    assert.match(
+      result.status === 'unreadable' ? result.reason : '',
+      /printed an unexpected answer for issue\/24-task/,
+      JSON.stringify(answer),
+    );
+  }
 });
 
 test('inspectLocalBranchRefs: a nested branch counts, another issue and a lookalike do not', () => {
@@ -8550,7 +8607,7 @@ test('inspectLocalBranchRefs: a nested branch counts, another issue and a lookal
   });
   assert.deepEqual(
     git.calls.filter((call) => call.startsWith('ls-remote')),
-    ['ls-remote --heads origin refs/heads/issue/24-task/subtask'],
+    ['ls-remote --exit-code --heads origin refs/heads/issue/24-task/subtask'],
   );
 });
 

@@ -1914,25 +1914,60 @@ export function inspectLocalBranchRefs(
   const localOnly: LocalOnlyBranchRef[] = [];
   for (const entry of listed) {
     const remoteRef = `refs/heads/${entry.branch}`;
-    let remote: string;
+    // `--exit-code` makes the answer unambiguous: exit 0 means origin has the
+    // ref, exit 2 means it does not, and anything else is a failed read. Empty
+    // or unexpected output is never read as absence.
+    let remote: string | null;
     try {
       remote = String(
-        execute('git', ['ls-remote', '--heads', 'origin', remoteRef], {
-          cwd,
-          encoding: 'utf8',
-          env: { ...env, GIT_TERMINAL_PROMPT: '0' },
-          stdio: ['ignore', 'pipe', 'pipe'],
-          timeout: lsRemoteTimeoutMs,
-        }),
+        execute(
+          'git',
+          ['ls-remote', '--exit-code', '--heads', 'origin', remoteRef],
+          {
+            cwd,
+            encoding: 'utf8',
+            env: { ...env, GIT_TERMINAL_PROMPT: '0' },
+            stdio: ['ignore', 'pipe', 'pipe'],
+            timeout: lsRemoteTimeoutMs,
+          },
+        ),
       );
     } catch (error) {
+      if ((error as { status?: unknown } | null)?.status === 2) {
+        remote = null;
+      } else {
+        return {
+          status: 'unreadable',
+          reason: `git ls-remote origin ended with ${describeGitFailure(error)} for ${entry.branch}`,
+        };
+      }
+    }
+    if (remote === null) {
+      localOnly.push(entry);
+      continue;
+    }
+    // Every line is `<object id><TAB><ref>`, and only the asked-for ref can
+    // match. A CRLF ending is tolerated; any other shape, or no line at all
+    // after an exit 0, is an unreadable answer.
+    const lines = remote
+      .split('\n')
+      .map((line) => line.replace(/\r$/u, ''))
+      .filter((line) => line !== '');
+    if (
+      lines.length === 0 ||
+      !lines.every((line) => {
+        const [tip, ref, ...rest] = line.split('\t');
+        return (
+          rest.length === 0 &&
+          ref === remoteRef &&
+          /^[0-9a-f]{40,64}$/u.test(tip ?? '')
+        );
+      })
+    ) {
       return {
         status: 'unreadable',
-        reason: `git ls-remote origin ended with ${describeGitFailure(error)} for ${entry.branch}`,
+        reason: `git ls-remote origin printed an unexpected answer for ${entry.branch}`,
       };
-    }
-    if (!remote.split('\n').some((line) => line.endsWith(`\t${remoteRef}`))) {
-      localOnly.push(entry);
     }
   }
   if (!worktreeScanProven && localOnly.length > 0) {
