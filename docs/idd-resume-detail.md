@@ -502,15 +502,15 @@ unedited record marker, since no closing keyword names it.
 1. Close nothing. Step 1's explicit close and step 7's close loop skip the
    source; GitHub's auto-close never fires because D3 wrote no keyword.
 2. After step 2 (its head proof gives the verified `PR_HEAD_SHA_F3`) and
-   before step 3, run the `work-completed` transition of the
-   provisional-decision command (`idd-provisional-decision`): a dry run, then
-   `--apply`. The request names the claim ID, the worktree branch, the merged
-   pull request URL, that verified head SHA, and `executionCriteriaSatisfied`
-   (true only when every execution criterion of the selected choice is met and
-   verified). The helper appends the
-   completion record, reads it back, and reads the needs-decision label back.
-   It never removes the label, and neither does F4. A profile with no such
-   command holds here; never write the record or the label by hand.
+   before step 3, run the `work-completed` transition of the profile's
+   provisional-decision command: a dry run, then `--apply`. The request names
+   the claim ID, the worktree branch, the merged pull request URL, that
+   verified head SHA, and `executionCriteriaSatisfied` (true only when every
+   execution criterion of the selected choice is met and verified). The helper
+   appends the completion record, reads it back, and reads the needs-decision
+   label back. It never removes the label, and neither does F4. A profile
+   that exposes no such command has no verified result, so F4 holds here;
+   never write the record or the label by hand.
 3. Continue to step 3 only on a verified result:
 
    | Result                      | Meaning                                         | F4                                                                                              |
@@ -538,14 +538,14 @@ although the issue is open, so Step 1's merged-PR rows apply; F4's provisional
 step replaces the explicit close on them. Find the merged PR with `gh pr list
 --head <branch> --state merged`, never from the issue state.
 
-| State found                                        | Evidence                                                                             | Result                                                                                                           |
-| -------------------------------------------------- | ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
-| Merged, no completion record                       | owned claim; status `in-progress`; claim-branch PR merged                            | finalize: F4's transition (dry run, then `--apply`), then steps 3 to 7                                           |
-| Completion record, label unverified                | owned claim; status `confirmation-pending`; label absent or unread                   | reconcile: the dry run shows `planned`; `--apply` writes the label; verified only on a read-back                 |
-| Cleanup done, claim still active                   | owned claim; status `confirmation-pending`; worktree and branch gone; proof reusable | steps 3 to 6 are resume-safe no-ops; revalidate, then post `unclaimed-by`                                        |
-| Claim released                                     | `unclaimed` becomes `non_inheritable` / `stop`, reason `provisional-work-complete`   | report pending confirmation; post nothing; no new implementation                                                 |
-| Released with status `in-progress` and a merged PR | no active claim                                                                      | stop and report: finalization needs an owning session, so hand it to the operator; never a second implementation |
-| Merge, proof or cleanup unreadable                 | any                                                                                  | the existing recovery hold                                                                                       |
+| State found                                        | Evidence                                                                                                              | Result                                                                                                               |
+| -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| Merged, no completion record                       | owned claim; status `in-progress`; claim-branch PR merged                                                             | finalize: F4's transition (dry run, then `--apply`), then steps 3 to 7                                               |
+| Completion record, label unverified                | owned claim; status `confirmation-pending`; label absent or unread                                                    | reconcile: the dry run shows `planned`; `--apply` writes the label; verified only on a read-back                     |
+| Cleanup done, claim still active                   | owned claim; status `confirmation-pending`; worktree and branch gone; proof reusable                                  | steps 3 to 6 are resume-safe no-ops; revalidate, then post `unclaimed-by`                                            |
+| Claim released                                     | `unclaimed` becomes `non_inheritable` / `stop`, reason `provisional-work-complete`                                    | report pending confirmation; post nothing; no new implementation                                                     |
+| Released with status `in-progress` and a merged PR | no active claim; the helper cannot see the PR and reads `unclaimed` / `re_claim`, so Step 0's "PR merged" row decides | stop and report: finalization needs an owning session, so hand it to the operator; never re-claim to implement again |
+| Merge, proof or cleanup unreadable                 | any                                                                                                                   | the existing recovery hold                                                                                           |
 
 `already_owned` / `keep` is never changed by this evidence; F4's head proof and
 every `--assert` depend on it.
