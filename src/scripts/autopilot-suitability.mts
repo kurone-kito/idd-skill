@@ -893,6 +893,7 @@ function readDeliverable(
   if (
     kind === 'file' &&
     (target.startsWith('/') ||
+      /^[A-Za-z]:/.test(target) ||
       /(?:^|[\\/])\.\.(?:[\\/]|$)|[\\`\n]/.test(target))
   ) {
     state.issues.push(`${path}.target must be a repository-relative path`);
@@ -1171,14 +1172,16 @@ function provisionalPreconditionBlockers(
   if (
     !isPlainRecord(state) ||
     state.valid !== true ||
-    typeof state.hasRecords !== 'boolean'
+    typeof state.hasRecords !== 'boolean' ||
+    typeof state.status !== 'string' ||
+    !Array.isArray(state.decisions)
   ) {
     block(
       'state-unreadable',
       'the provisional record state could not be replayed',
     );
   } else {
-    const decisions = Array.isArray(state.decisions) ? state.decisions : [];
+    const decisions: readonly unknown[] = state.decisions;
     const awaitingConfirmation =
       state.status === 'confirmation-pending' ||
       decisions.some(
@@ -1197,10 +1200,7 @@ function provisionalPreconditionBlockers(
         'existing-provisional-records',
         'the source already has provisional records; Resume owns that state, not a fresh assessment',
       );
-    } else if (
-      (state.status !== undefined && state.status !== 'none') ||
-      decisions.length > 0
-    ) {
+    } else if (state.status !== 'none' || decisions.length > 0) {
       block(
         'state-unreadable',
         'the provisional record state is inconsistent: it reports a status or decisions without records',
@@ -1309,15 +1309,15 @@ function provisionalPlanBlockers(
         `${label} repeats an option id or description`,
       );
     }
-    const subjective = choice.executionCriteria.find((criterion) =>
-      SUBJECTIVE_CRITERION_PATTERN.test(withoutFormatting(criterion)),
-    );
     // The selected option's verification says how its result is checked, so it
     // is read like an execution criterion.
     const checks = [
       ...choice.executionCriteria,
       choice.selectedOption.verification,
     ];
+    const subjective = checks.find((check) =>
+      SUBJECTIVE_CRITERION_PATTERN.test(withoutFormatting(check)),
+    );
     const approvalCriterion = checks.find(mentionsApproval);
     const credentialCriterion = checks.find(needsCredential);
     if (choice.executionCriteria.length === 0) {
@@ -1328,7 +1328,7 @@ function provisionalPlanBlockers(
     } else if (subjective !== undefined) {
       block(
         'criteria-subjective',
-        `${label} has a criterion that needs a person's opinion: ${subjective}`,
+        `${label} has a criterion or verification that needs a person's opinion: ${subjective}`,
       );
     }
     if (approvalCriterion !== undefined) {

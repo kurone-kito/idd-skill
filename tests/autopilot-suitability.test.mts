@@ -774,7 +774,13 @@ test('provisional assessment: a criterion that needs a person is not objective (
 });
 
 test('provisional assessment: a deliverable path must stay inside the repository (AC1)', () => {
-  for (const target of ['/etc/passwd', '../outside.mts', 'a/`b`.mts']) {
+  for (const target of [
+    '/etc/passwd',
+    '../outside.mts',
+    'a/`b`.mts',
+    'C:/outside/file.mts',
+    'c:file.mts',
+  ]) {
     const assessment = assessProvisionalChoicePlan(
       assessInput({
         plan: validPlan({
@@ -1122,6 +1128,11 @@ test('provisional assessment: other recorded state belongs to Resume, and an unr
     null,
     { valid: false, hasRecords: false },
     { valid: true },
+    // An empty state needs its status and its decisions array, not a default.
+    { valid: true, hasRecords: false, decisions: [] },
+    { valid: true, hasRecords: false, status: 'none' },
+    { valid: true, hasRecords: false, status: 'none', decisions: 'none' },
+    { valid: true, hasRecords: false, status: 7, decisions: [] },
   ]) {
     const assessment = assessProvisionalChoicePlan(assessInput({ state }));
     assert.deepEqual(blockerCodes(assessment), ['state-unreadable']);
@@ -1809,6 +1820,10 @@ test("provisional assessment: the selected option's verification is read like a 
   assert.deepEqual(
     blockerCodes(verifiedBy('An operator must supply credentials first.')),
     ['criteria-needs-credential'],
+  );
+  assert.deepEqual(
+    blockerCodes(verifiedBy('The maintainer decides whether it looks good.')),
+    ['criteria-subjective'],
   );
   assert.equal(verifiedBy('the unit tests pass').eligible, true);
 });
