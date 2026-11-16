@@ -15,7 +15,10 @@ import {
   countPendingConfirmationIssues,
   type DecisionLinksRead,
   findConfirmationIssues,
+  findOpenConfirmationIssues,
   matchDecisionRecord,
+  type OpenConfirmationInput,
+  type OpenConfirmationRead,
   readConfirmationIssue,
   readDecisionLinks,
   runAutoDecisionRecordsCli,
@@ -417,6 +420,28 @@ function find(
     },
     github,
   );
+}
+
+function open(
+  github: FakeGithub,
+  input: Partial<OpenConfirmationInput> = {},
+): OpenConfirmationRead {
+  return findOpenConfirmationIssues(
+    {
+      repository: REPOSITORY,
+      class: 'worktreeRemnant',
+      confirmationLabel: CONFIRMATION_LABEL,
+      authoringLabel: AUTHORING_LABEL,
+      source: SOURCE,
+      policyPath: TRUSTED_POLICY,
+      ...input,
+    },
+    github,
+  );
+}
+
+function openNumbers(result: OpenConfirmationRead): number[] {
+  return readable(result).issues.map((issue) => issue.number);
 }
 
 function links(
@@ -2410,6 +2435,18 @@ test('CLI returns unreadable for provider failures in every mode', () => {
       issues: [confirmationIssue(200)],
     },
     {
+      name: 'open issues list failure',
+      argv: ['--open-issues', '--class', 'worktreeRemnant', '--source', '100'],
+      fail: 'list',
+      issues: [confirmationIssue(200)],
+    },
+    {
+      name: 'open issues issue failure',
+      argv: ['--open-issues', '--class', 'worktreeRemnant', '--source', '100'],
+      fail: 'issue',
+      issues: [confirmationIssue(200)],
+    },
+    {
       name: 'confirmation issue failure',
       argv: ['--confirmation', '200'],
       fail: 'issue',
@@ -2442,6 +2479,545 @@ test('CLI returns unreadable for provider failures in every mode', () => {
       typeof result.outcome === 'number' ? 'success' : result.outcome.kind,
       'transport',
       fixture.name,
+    );
+  }
+});
+
+// ---------------------------------------------------------------------
+// The open-issue lookup (kurone-kito/idd-skill#5177)
+// ---------------------------------------------------------------------
+
+const OTHER_SOURCE = `${OWNER}/${REPO}#101`;
+
+test('an open confirmation issue is found after its only record was voided', () => {
+  const github = new FakeGithub(
+    confirmationIssue(200, {
+      labels: [CONFIRMATION_LABEL, AUTHORING_LABEL],
+      comments: [{ id: 200002, body: voidComment('d1') }],
+    }),
+  );
+  // The ordinary list still omits a voided record.
+  assert.deepEqual(foundNumbers(find(github, { source: SOURCE })), []);
+  assert.deepEqual(readable(read(github, 200)).records, []);
+  assert.deepEqual(readable(open(github)), {
+    status: 'readable',
+    publication: 'blocked',
+    issues: [
+      {
+        number: 200,
+        state: 'open',
+        confirmationLabel: true,
+        authoringLabel: true,
+        decisions: ['d1'],
+        voided: true,
+      },
+    ],
+  });
+});
+
+test('a counting record is listed with voided false, and an untrusted void is ignored', () => {
+  const counting = new FakeGithub(confirmationIssue(200));
+  const result = readable(open(counting));
+  assert.equal(result.publication, 'blocked');
+  assert.equal(result.issues[0]?.voided, false);
+  assert.deepEqual(result.issues[0]?.decisions, ['d1']);
+  assert.equal(result.issues[0]?.authoringLabel, false);
+
+  const untrustedVoid = new FakeGithub(
+    confirmationIssue(200, {
+      comments: [
+        { id: 200002, author: STRANGER, body: voidComment('d1') },
+        {
+          id: 200003,
+          lastEditedAt: EDITED_AT,
+          body: voidComment('d1'),
+        },
+      ],
+    }),
+  );
+  assert.equal(readable(open(untrustedVoid)).issues[0]?.voided, false);
+});
+
+test('a void on a record comment leaves voided false while the body decision counts', () => {
+  const github = new FakeGithub(
+    confirmationIssue(200, {
+      comments: [
+        { id: 200002, body: recordComment({ decision: 'd2' }) },
+        { id: 200003, body: voidComment('d2') },
+      ],
+    }),
+  );
+  const [issue] = readable(open(github)).issues;
+  assert.deepEqual(issue?.decisions, ['d1', 'd2']);
+  assert.equal(issue?.voided, false);
+});
+
+test('a void on another confirmation issue marks the decision voided', () => {
+  const github = new FakeGithub(
+    confirmationIssue(200),
+    confirmationIssue(201, {
+      fields: { source: OTHER_SOURCE, decision: 'd2' },
+      comments: [{ id: 201002, body: voidComment('d1') }],
+    }),
+  );
+  const result = readable(open(github));
+  assert.deepEqual(
+    result.issues.map((issue) => [issue.number, issue.voided]),
+    [[200, true]],
+  );
+});
+
+test('a conflict between decisions never removes an issue from the lookup', () => {
+  const github = new FakeGithub(
+    confirmationIssue(200),
+    confirmationIssue(201, { fields: { claim: 'claim-b' } }),
+  );
+  // The finder drops both records because decision d1 disagrees.
+  assert.deepEqual(foundNumbers(find(github, { source: SOURCE })), []);
+  assert.deepEqual(openNumbers(open(github)), [200, 201]);
+});
+
+test('a closed confirmation issue does not block a new publication', () => {
+  const closed = confirmationIssue(200, {
+    state: 'CLOSED',
+    comments: [{ id: 200002, body: voidComment('d1') }],
+  });
+  const github = new FakeGithub(closed);
+  assert.deepEqual(readable(open(github)), {
+    status: 'readable',
+    publication: 'free',
+    issues: [],
+  });
+  assert.ok(github.listCalls.every((request) => request.state === 'open'));
+  assert.deepEqual(github.issueCalls, []);
+
+  // The issue closes between the REST scan and its read.
+  const closedAfterScan = new FakeGithub(
+    confirmationIssue(200, {
+      comments: [{ id: 200002, body: voidComment('d1') }],
+    }),
+  );
+  closedAfterScan.issuePageOverride = (request) => {
+    const page = new FakeGithub(
+      confirmationIssue(200, {
+        comments: [{ id: 200002, body: voidComment('d1') }],
+      }),
+    ).readIssuePage(request) as {
+      data: { repository: { issue: { state: string } } };
+    };
+    page.data.repository.issue.state = 'CLOSED';
+    return page;
+  };
+  assert.equal(readable(open(closedAfterScan)).publication, 'free');
+});
+
+test('an issue that lost its confirmation label after the scan is not listed', () => {
+  const issue = confirmationIssue(200);
+  const github = new FakeGithub(issue);
+  github.issuePageOverride = (request) => {
+    const page = new FakeGithub(issue).readIssuePage(request) as {
+      data: {
+        repository: { issue: { labels: { nodes: unknown[] } } };
+      };
+    };
+    page.data.repository.issue.labels.nodes = [];
+    return page;
+  };
+  assert.equal(readable(open(github)).publication, 'free');
+});
+
+test('another class, source, or set does not block the lookup', () => {
+  const github = new FakeGithub(
+    confirmationIssue(200),
+    confirmationIssue(201, {
+      fields: { cls: 'authoringChoice', set: 'set-x', decision: 'd9' },
+      comments: [{ id: 201002, body: voidComment('d9') }],
+    }),
+  );
+  assert.deepEqual(openNumbers(open(github)), [200]);
+  assert.equal(
+    readable(open(github, { class: 'b1Leftover' })).publication,
+    'free',
+  );
+  assert.equal(
+    readable(open(github, { source: OTHER_SOURCE })).publication,
+    'free',
+  );
+  // The authoringChoice key is the set, and a voided record is still found.
+  const bySet = readable(
+    open(github, { class: 'authoringChoice', source: undefined, set: 'set-x' }),
+  );
+  assert.equal(bySet.publication, 'blocked');
+  assert.deepEqual(
+    bySet.issues.map((issue) => [issue.number, issue.voided]),
+    [[201, true]],
+  );
+  assert.equal(
+    readable(
+      open(github, {
+        class: 'authoringChoice',
+        source: undefined,
+        set: 'set-y',
+      }),
+    ).publication,
+    'free',
+  );
+});
+
+test('the lookup refuses the wrong key instead of reporting free', () => {
+  // An open authoringChoice issue for set-x, whose source is #100. A caller
+  // that gave the source #101 instead of the set would see no match.
+  const github = new FakeGithub(
+    confirmationIssue(201, {
+      fields: { cls: 'authoringChoice', set: 'set-x', decision: 'd9' },
+    }),
+  );
+  const wrongKey = open(github, {
+    class: 'authoringChoice',
+    source: OTHER_SOURCE,
+    set: undefined,
+  });
+  assert.equal(wrongKey.status, 'unreadable');
+  const bothKeys = open(github, {
+    class: 'authoringChoice',
+    source: OTHER_SOURCE,
+    set: 'set-x',
+  });
+  assert.equal(bothKeys.status, 'unreadable');
+  assert.deepEqual(github.listCalls, []);
+  // The right key finds the open issue.
+  const byKey = readable(
+    open(github, { class: 'authoringChoice', source: undefined, set: 'set-x' }),
+  );
+  assert.equal(byKey.publication, 'blocked');
+});
+
+test('the lookup matches on its key only, never on an extra claim or subject', () => {
+  const github = new FakeGithub(confirmationIssue(200));
+  // A structurally compatible input can carry fields the lookup does not
+  // declare. They must not narrow the match and hide the open issue.
+  const wider = {
+    claim: 'claim-other',
+    subject: '/work/other',
+  } as unknown as Partial<OpenConfirmationInput>;
+  const result = readable(open(github, wider));
+  assert.equal(result.publication, 'blocked');
+  assert.deepEqual(openNumbers(open(github, wider)), [200]);
+});
+
+test('the lookup sees only an issue whose body record counts', () => {
+  const github = new FakeGithub(
+    confirmationIssue(200, { lastEditedAt: EDITED_AT }),
+  );
+  assert.equal(readable(open(github)).publication, 'free');
+});
+
+test('a failed or invalid lookup is unreadable, never free', () => {
+  const failingList = new FakeGithub(confirmationIssue(200));
+  failingList.listPageOverride = () => {
+    throw new Error('gh: HTTP 502');
+  };
+  const failingIssue = new FakeGithub(confirmationIssue(200));
+  failingIssue.issuePageOverride = () => {
+    throw new Error('gh: HTTP 502');
+  };
+  for (const github of [failingList, failingIssue]) {
+    const result = open(github);
+    assert.equal(result.status, 'unreadable');
+    if (result.status === 'unreadable') {
+      assert.match(result.error, /HTTP 502/);
+    }
+  }
+
+  const github = new FakeGithub(confirmationIssue(200));
+  const invalid: Array<[Partial<OpenConfirmationInput>, RegExp]> = [
+    // A source-keyed class needs its source and no set.
+    [{ source: undefined }, /worktreeRemnant is keyed by its source/],
+    [{ source: undefined, set: 'set-x' }, /worktreeRemnant is keyed by its/],
+    [{ set: 'set-x' }, /worktreeRemnant is keyed by its source/],
+    // authoringChoice needs its set and no source.
+    [
+      { class: 'authoringChoice', source: SOURCE },
+      /authoringChoice is keyed by its set/,
+    ],
+    [
+      { class: 'authoringChoice', source: SOURCE, set: 'set-x' },
+      /authoringChoice is keyed by its set/,
+    ],
+    [
+      { class: 'authoringChoice', source: undefined },
+      /authoringChoice is keyed by its set/,
+    ],
+    [{ source: '  ' }, /source must be non-empty/],
+    [
+      { class: 'authoringChoice', source: undefined, set: ' ' },
+      /set must be non-empty/,
+    ],
+    [
+      { class: 'decisionIssue' as OpenConfirmationInput['class'] },
+      /class must be one of/,
+    ],
+  ];
+  for (const [input, message] of invalid) {
+    const result = open(github, input);
+    assert.equal(result.status, 'unreadable', JSON.stringify(input));
+    if (result.status === 'unreadable') {
+      assert.match(result.error, message);
+    }
+  }
+  assert.deepEqual(github.listCalls, []);
+
+  // No trusted actor means no record can count, so "free" would be a guess.
+  const noActors = open(github, {
+    trustedPolicyConfig: { markerPrefix: PREFIX, trustedMarkerActors: [] },
+  });
+  assert.equal(noActors.status, 'unreadable');
+  if (noActors.status === 'unreadable') {
+    assert.match(noActors.error, /trustedMarkerActors is empty or missing/);
+  }
+  assert.deepEqual(github.listCalls, []);
+});
+
+test('CLI open-issues stops on a voided record and passes --base-ref', () => {
+  const github = new FakeGithub(
+    confirmationIssue(200, {
+      labels: [CONFIRMATION_LABEL, AUTHORING_LABEL],
+      comments: [{ id: 200002, body: voidComment('d1') }],
+    }),
+  );
+  const records = runCliFixture(github, [
+    '--records',
+    '--class',
+    'worktreeRemnant',
+    '--source',
+    '100',
+    '--state',
+    'open',
+  ]);
+  assert.equal(cliExitCode(records.outcome), 0);
+  assert.deepEqual(records.report.records, []);
+
+  const result = runCliFixture(github, [
+    '--open-issues',
+    '--class',
+    'worktreeRemnant',
+    '--source',
+    '100',
+    '--owner',
+    OWNER,
+    '--repo',
+    REPO,
+    '--base-ref',
+    'release/2026',
+  ]);
+  assert.equal(cliExitCode(result.outcome), 0);
+  assert.equal(result.report.status, 'readable');
+  assert.equal(result.report.mode, 'open-issues');
+  assert.equal(result.report.class, 'worktreeRemnant');
+  assert.equal(result.report.publication, 'blocked');
+  assert.deepEqual(result.report.issues, [
+    {
+      number: 200,
+      state: 'open',
+      confirmationLabel: true,
+      authoringLabel: true,
+      decisions: ['d1'],
+      voided: true,
+    },
+  ]);
+  assert.deepEqual(result.trustedInputs, [
+    { owner: OWNER, repo: REPO, baseRefName: 'release/2026' },
+  ]);
+  assert.equal(result.trustedReadCount, 1);
+});
+
+test('CLI open-issues reports free for a closed issue and takes the set key', () => {
+  const github = new FakeGithub(
+    confirmationIssue(200, { state: 'CLOSED' }),
+    confirmationIssue(201, {
+      fields: { cls: 'authoringChoice', set: 'set-x', decision: 'd9' },
+    }),
+  );
+  const closed = runCliFixture(github, [
+    '--open-issues',
+    '--class',
+    'worktreeRemnant',
+    '--source',
+    '100',
+  ]);
+  assert.equal(cliExitCode(closed.outcome), 0);
+  assert.equal(closed.report.publication, 'free');
+  assert.deepEqual(closed.report.issues, []);
+
+  const bySet = runCliFixture(github, [
+    '--open-issues',
+    '--class',
+    'authoringChoice',
+    '--set',
+    'set-x',
+  ]);
+  assert.equal(cliExitCode(bySet.outcome), 0);
+  assert.equal(bySet.report.publication, 'blocked');
+  assert.deepEqual(
+    (bySet.report.issues as Array<{ number: number }>).map(
+      (issue) => issue.number,
+    ),
+    [201],
+  );
+});
+
+test('CLI open-issues takes trust from the trusted ref rather than the checkout policy', () => {
+  const localPolicy = policyFile(
+    'untrusted-open-issues.json',
+    JSON.stringify({
+      markerPrefix: 'local-only',
+      trustedMarkerActors: [STRANGER],
+    }),
+  );
+  const github = new FakeGithub(confirmationIssue(200));
+  const result = runCliFixture(
+    github,
+    ['--open-issues', '--class', 'worktreeRemnant', '--source', '100'],
+    { localPolicyPath: localPolicy },
+  );
+  assert.equal(cliExitCode(result.outcome), 0);
+  assert.equal(result.report.publication, 'blocked');
+});
+
+test('CLI open-issues rejects arguments it does not take before any read', () => {
+  const cases: Array<[readonly string[], RegExp]> = [
+    [['--open-issues', '--source', '100'], /requires --class/],
+    [
+      ['--open-issues', '--class', 'nonsense', '--source', '100'],
+      /--class must be one of/,
+    ],
+    [
+      ['--open-issues', '--class', 'worktreeRemnant'],
+      /--class worktreeRemnant requires --source <number> and no --set/,
+    ],
+    [
+      ['--open-issues', '--class', 'worktreeRemnant', '--set', 'set-x'],
+      /--class worktreeRemnant requires --source <number> and no --set/,
+    ],
+    [
+      [
+        '--open-issues',
+        '--class',
+        'worktreeRemnant',
+        '--source',
+        '100',
+        '--set',
+        'set-x',
+      ],
+      /--class worktreeRemnant requires --source <number> and no --set/,
+    ],
+    [
+      ['--open-issues', '--class', 'authoringChoice'],
+      /--class authoringChoice requires --set <id> and no --source/,
+    ],
+    [
+      ['--open-issues', '--class', 'authoringChoice', '--source', '100'],
+      /--class authoringChoice requires --set <id> and no --source/,
+    ],
+    [
+      [
+        '--open-issues',
+        '--class',
+        'authoringChoice',
+        '--source',
+        '100',
+        '--set',
+        'set-x',
+      ],
+      /--class authoringChoice requires --set <id> and no --source/,
+    ],
+    [
+      ['--open-issues', '--class', 'worktreeRemnant', '--source', 'abc'],
+      /--source must be a positive issue number/,
+    ],
+    [
+      ['--open-issues', '--class', 'authoringChoice', '--set', ' '],
+      /--set must be non-empty/,
+    ],
+    [
+      [
+        '--open-issues',
+        '--class',
+        'worktreeRemnant',
+        '--source',
+        '100',
+        '--state',
+        'open',
+      ],
+      /--state is not valid with --open-issues/,
+    ],
+    [
+      [
+        '--open-issues',
+        '--class',
+        'worktreeRemnant',
+        '--source',
+        '100',
+        '--claim',
+        'claim-a',
+      ],
+      /--claim is not valid with --open-issues/,
+    ],
+    [
+      ['--open-issues', '--records', '--class', 'worktreeRemnant'],
+      /give exactly one mode/,
+    ],
+  ];
+  for (const [argv, message] of cases) {
+    let stdout = '';
+    const outcome = runAutoDecisionRecordsCli(argv, {
+      readTrustedAutoDecide: () => {
+        throw new Error('the trusted policy must not be read');
+      },
+      writeOutput: (text) => {
+        stdout += text;
+      },
+    });
+    assert.equal(cliExitCode(outcome), 2, argv.join(' '));
+    const report = JSON.parse(stdout) as { status?: string; error?: string };
+    assert.equal(report.status, 'usage-error', argv.join(' '));
+    assert.match(String(report.error), message, argv.join(' '));
+  }
+});
+
+test('both workflow docs make the Which record step stop on an open match', () => {
+  for (const file of [
+    'docs/idd-workflow.md',
+    'idd-template/docs/idd-workflow.md',
+  ]) {
+    const text = readFileSync(
+      new URL(`../${file}`, import.meta.url),
+      'utf8',
+    ).replace(/\s+/g, ' ');
+    const start = text.indexOf('- **Which record.**');
+    const end = text.indexOf('- **New issue.**');
+    assert.ok(start >= 0 && end > start, file);
+    const step = text.slice(start, end);
+    assert.match(
+      step,
+      /`--open-issues --class <class> --source <source>`/,
+      file,
+    );
+    assert.match(step, /including one whose record was voided/, file);
+    assert.match(
+      step,
+      /With `publication` `free` .*, the session publishes a new one\./,
+      file,
+    );
+    assert.match(
+      step,
+      /one that `--records` does not list \(its record was voided\).*a lookup that cannot be read \(exit 1\), it does neither/,
+      file,
+    );
+    assert.match(
+      step,
+      /It never publishes another issue while `publication` is `blocked`\./,
+      file,
     );
   }
 });
