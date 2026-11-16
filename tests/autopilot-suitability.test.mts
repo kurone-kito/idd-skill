@@ -1810,3 +1810,38 @@ test("provisional assessment: the selected option's verification is read like a 
   );
   assert.equal(verifiedBy('the unit tests pass').eligible, true);
 });
+
+test('provisional assessment: Markdown formatting does not hide a prerequisite in a plan (AC1, AC4)', () => {
+  for (const [criterion, code] of [
+    [
+      'Legal `approval` is required before work starts.',
+      'criteria-needs-approval',
+    ],
+    [
+      'Legal **approval** is required before work starts.',
+      'criteria-needs-approval',
+    ],
+    ['The _user_ `approves` the implementation.', 'criteria-needs-approval'],
+    [
+      'An operator must supply `credentials` before work starts.',
+      'criteria-needs-credential',
+    ],
+    [
+      'An operator must supply **credentials** first.',
+      'criteria-needs-credential',
+    ],
+    [
+      'Legal [approval](https://example.test/policy) is required first.',
+      'criteria-needs-approval',
+    ],
+  ] as const) {
+    const assessment = assessProvisionalChoicePlan(
+      assessInput({
+        plan: validPlan({
+          choices: [planChoice({ executionCriteria: [criterion] })],
+        }),
+      }),
+    );
+    assert.deepEqual(blockerCodes(assessment), [code], criterion);
+  }
+});

@@ -560,6 +560,14 @@ const APPROVER_ADJACENT_PATTERN = new RegExp(
   'i',
 );
 
+// Markdown emphasis and code marks are formatting, not words: "Legal `approval`
+// is required" and "**approval** is required" read the same as the plain text.
+function withoutFormatting(text: string): string {
+  return text
+    .replace(/\[([^\]\n]*)\]\([^)\n]*\)/g, '$1')
+    .replace(/[`*_~]+/g, '');
+}
+
 // "requires approval", "needs sign-off", "obtain consent" and the like: a verb
 // of needing, getting or waiting, then the approval word within a few words.
 // "must reject" and "returns false" are not such verbs, so a criterion about
@@ -582,7 +590,10 @@ const NEEDS_APPROVAL_PATTERN = new RegExp(
  * one.
  */
 function mentionsApproval(text: string): boolean {
-  const remaining = text.replace(NEGATED_REQUIREMENT_PATTERN, ' ');
+  const remaining = withoutFormatting(text).replace(
+    NEGATED_REQUIREMENT_PATTERN,
+    ' ',
+  );
   return (
     NEEDS_APPROVAL_PATTERN.test(remaining) ||
     APPROVER_ADJACENT_PATTERN.test(remaining)
@@ -605,7 +616,7 @@ const NEEDS_CREDENTIAL_PATTERN = new RegExp(
 
 /** True when `text` makes a credential, secret or production access a prerequisite. */
 function needsCredential(text: string): boolean {
-  return NEEDS_CREDENTIAL_PATTERN.test(text);
+  return NEEDS_CREDENTIAL_PATTERN.test(withoutFormatting(text));
 }
 
 /**
