@@ -4583,3 +4583,42 @@ test('A4 provisional: an approval requirement in another sentence keeps the deci
     );
   }
 });
+
+test('A4 provisional: an approval word in inline code still keeps the decision phrase blocking (AC3, AC4)', () => {
+  for (const sentence of [
+    '`Approval` from legal is required before work starts.',
+    'Legal `authorization` is required before work starts.',
+  ]) {
+    const body = DECISION_BODY.replace(
+      '## Acceptance criteria',
+      `${sentence}\n\n## Acceptance criteria`,
+    );
+    const result = evaluateA4Viability(a4Issue(body), undefined, assess(body));
+    assert.equal(
+      result.failedCriteria.includes('autonomous_completion'),
+      true,
+      sentence,
+    );
+  }
+});
+
+test('collectProvisionalAssessment treats a Candidate files section with no path as malformed scope (AC1)', async () => {
+  const body = `${DECISION_BODY}\n## Candidate files\n\nnone yet\n`;
+  const assessment = await collectProvisionalAssessment({
+    issue: { number: 7, body, labels: ['status:needs-decision'] },
+    owner: 'o',
+    repo: 'r',
+    plan: decisionPlan(body),
+    needsDecisionLabelName: 'status:needs-decision',
+    markerPrefix: 'idd-skill',
+    config: {},
+    sources: {
+      readTrusted: () => enabledPolicy,
+      loadState: () => emptyState,
+    },
+  });
+  assert.deepEqual(
+    assessment.blockers.map((blocker) => blocker.code),
+    ['candidate-files-empty'],
+  );
+});

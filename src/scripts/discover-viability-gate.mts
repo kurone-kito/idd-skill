@@ -23,7 +23,10 @@ import {
   collaboratorPermission,
 } from './collaborator-permission.mts';
 import { buildProvisionalDecisionEvidenceReader } from './discover-readiness-check.mts';
-import { parseCandidateFileEntries } from './discover-shared-file-overlap.mts';
+import {
+  hasCandidateFilesHeading,
+  parseCandidateFileEntries,
+} from './discover-shared-file-overlap.mts';
 import { parseEffort } from './effort.mts';
 import type { HelperCliResult } from './helper-cli-runner.mts';
 import {
@@ -1773,7 +1776,12 @@ export function evaluateAutonomousCompletion(
   // safety net A4.5 applies finds nothing in the body.
   const relaxedDecisionSignals: string[] | undefined =
     isEligibleProvisionalAssessment(provisional, issue) &&
-    findApprovalRequirementSentence(corpus) === null
+    findApprovalRequirementSentence(
+      maskMarkdownForScan(rawCorpus, {
+        htmlComments: 'mask',
+        inlineCode: 'keep',
+      }),
+    ) === null
       ? []
       : undefined;
   const match = findUnexcludedExternalCoordinationMatch(
@@ -1927,6 +1935,7 @@ export async function collectProvisionalAssessment(input: {
     candidateFiles: parseCandidateFileEntries(issue.body).map(
       (entry) => entry.raw,
     ),
+    candidateFilesDeclared: hasCandidateFilesHeading(issue.body),
     authoredScore: parseAutopilotSuitability(issue.body, input.markerPrefix),
     floor: normalizeAutopilotSuitabilityFloor(suitability?.floor),
     suitabilityEnabled: suitability?.enabled !== false,

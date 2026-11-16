@@ -13747,6 +13747,8 @@ test('A4.5 provisional Check 6: a standing approval or budget requirement in a s
     'The change is pending permission from the owner.',
     'Approval from legal is required before work starts.',
     'Legal authorization is required before work starts.',
+    '`Approval` from legal is required before work starts.',
+    'Legal `authorization` is required before work starts.',
     'The rollout must be approved by legal.',
     'Sign-off is pending.',
     'Do not proceed until legal approval is granted.',

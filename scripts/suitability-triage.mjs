@@ -6709,7 +6709,10 @@ export function checkAutonomy(context) {
   // relaxation an approval or sign-off requirement anywhere in the body, even
   // in a sentence of its own, keeps the source blocked.
   if (provisionalRelaxes) {
-    const sentence = findApprovalRequirementSentence(maskMarkdownForScan(body));
+    // Inline code stays visible: formatting must not hide an approval word.
+    const sentence = findApprovalRequirementSentence(
+      maskMarkdownForScan(body, { htmlComments: 'mask', inlineCode: 'keep' }),
+    );
     if (sentence !== null) {
       return {
         pass: false,

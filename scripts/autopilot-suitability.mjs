@@ -334,7 +334,7 @@ export function isDecisionCausedSignal(text, index, length) {
 const APPROVAL_WORD_PATTERN =
   /(?<![\w-])(?:approv\w*|sign(?:s|ed|ing)?[- ]?off|authori[sz]\w*|permissions?|consent|go-ahead|grant(?:s|ed)?\s+(?:access|permission))(?![\w-])/i;
 const REQUIREMENT_CUE_PATTERN =
-  /(?<![\w-])(?:needs?|needed|requires?|required|requiring|requirement|must|has to|have to|pending|awaiting|awaits?|subject to|gated|blocked|depends?|until|mandatory|prerequisite|first)(?![\w-])|(?<![\w-])(?:cannot|can't|do not|don't|must not|never|not)\s+(?:\w+\s+){0,4}?without(?![\w-])/i;
+  /(?<![\w-])(?:needs?|needed|requires?|required|requiring|requirement|must|has to|have to|pending|awaiting|awaits?|subject to|gated|blocked|depends?|until|mandatory|prerequisite|first|before|gates?|obtain|secure|seek|get|ask|wait(?:ing)?)(?![\w-])|(?<![\w-])(?:cannot|can't|do not|don't|must not|never|not)\s+(?:\w+\s+){0,4}?without(?![\w-])/i;
 // A phrase that denies the approval requirement itself. A bare "not" or "no"
 // elsewhere in the sentence does not count: "Do not proceed until legal
 // approval is granted" and "requires legal approval, not just passing tests"
@@ -810,7 +810,7 @@ function provisionalPreconditionBlockers(input, policy) {
       'state-unreadable',
       'the provisional record state could not be replayed',
     );
-  } else if (state.hasRecords) {
+  } else {
     const decisions = Array.isArray(state.decisions) ? state.decisions : [];
     const awaitingConfirmation =
       state.status === 'confirmation-pending' ||
@@ -819,14 +819,24 @@ function provisionalPreconditionBlockers(input, policy) {
           isPlainRecord(decision) && decision.status === 'confirmation-pending',
       );
     if (awaitingConfirmation) {
+      // Checked whether or not `hasRecords` says so: a source awaiting
+      // confirmation never starts anything new.
       block(
         'pending-confirmation',
         'the recorded provisional work is complete and awaits confirmation; nothing executes again',
       );
-    } else {
+    } else if (state.hasRecords) {
       block(
         'existing-provisional-records',
         'the source already has provisional records; Resume owns that state, not a fresh assessment',
+      );
+    } else if (
+      (state.status !== undefined && state.status !== 'none') ||
+      decisions.length > 0
+    ) {
+      block(
+        'state-unreadable',
+        'the provisional record state is inconsistent: it reports a status or decisions without records',
       );
     }
   }
@@ -839,7 +849,13 @@ function provisionalPreconditionBlockers(input, policy) {
       `the source does not carry the ${input.needsDecisionLabelName} label`,
     );
   }
-  if (!DECISION_SIGNAL_PATTERN.test(String(input.issue.body ?? ''))) {
+  if (
+    !DECISION_SIGNAL_PATTERN.test(
+      maskMarkdownForScan(String(input.issue.body ?? ''), {
+        htmlComments: 'mask',
+      }),
+    )
+  ) {
     block(
       'no-decision-signal',
       'the source body names no choice, so its gaps are not caused by one',
@@ -936,6 +952,12 @@ function provisionalPlanBlockers(plan, input, bodySha256, cap) {
     }
   });
   const declared = (input.candidateFiles ?? []).map(stripLeadingDotSlash);
+  if (input.candidateFilesDeclared === true && declared.length === 0) {
+    block(
+      'candidate-files-empty',
+      'the source has a Candidate files section that lists no path, so no file edit is bounded',
+    );
+  }
   const outside = plan.deliverables.filter(
     (deliverable) =>
       deliverable.kind === 'file' &&

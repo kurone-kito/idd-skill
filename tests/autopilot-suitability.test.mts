@@ -1528,6 +1528,12 @@ test('findApprovalRequirementSentence keeps a negation to its own sentence (AC3)
     'Do not ship without approval.',
     'This does not need to wait, but the rollout requires legal approval.',
     'This does not need any approval, but the rollout requires legal approval.',
+    'No approval is needed for selection, but deployment requires approval.',
+    'Get legal approval before starting.',
+    'Legal approval gates this.',
+    'Obtain sign-off from the security team first.',
+    'Wait for legal authorization.',
+    'Seek consent from the owner.',
   ]) {
     assert.notEqual(findApprovalRequirementSentence(text), null, text);
   }
@@ -1537,4 +1543,69 @@ test('findApprovalRequirementSentence keeps a negation to its own sentence (AC3)
     ),
     null,
   );
+});
+
+test('provisional assessment: a status or decisions without records is inconsistent state, and a pending status always stops (row 6)', () => {
+  const pendingWithoutRecords = assessProvisionalChoicePlan(
+    assessInput({
+      state: {
+        valid: true,
+        hasRecords: false,
+        status: 'confirmation-pending',
+        hasRework: false,
+        decisions: [],
+      },
+    }),
+  );
+  assert.deepEqual(blockerCodes(pendingWithoutRecords), [
+    'pending-confirmation',
+  ]);
+  assert.equal(pendingWithoutRecords.route, 'no-new-execution');
+  for (const state of [
+    { valid: true, hasRecords: false, status: 'selected', decisions: [] },
+    {
+      valid: true,
+      hasRecords: false,
+      status: 'none',
+      decisions: [{ bundleGeneration: 1, decisionGeneration: 1 }],
+    },
+  ]) {
+    const assessment = assessProvisionalChoicePlan(assessInput({ state }));
+    assert.deepEqual(blockerCodes(assessment), ['state-unreadable']);
+    assert.equal(assessment.route, 'current-route');
+  }
+});
+
+test('provisional assessment: a Candidate files section that lists no path bounds no edit (AC1)', () => {
+  const assessment = assessProvisionalChoicePlan(
+    assessInput({ candidateFiles: [], candidateFilesDeclared: true }),
+  );
+  assert.deepEqual(blockerCodes(assessment), ['candidate-files-empty']);
+  const absent = assessProvisionalChoicePlan(
+    assessInput({ candidateFiles: [], candidateFilesDeclared: false }),
+  );
+  assert.equal(absent.eligible, true);
+});
+
+test('provisional assessment: a choice named only in code or a comment is not a live choice (AC3)', () => {
+  const body = [
+    'Fix the helper so that it runs.',
+    '',
+    '```text',
+    'which option should we choose? a decision',
+    '```',
+    '',
+    'Example: `decision` and <!-- whether to proceed -->',
+    '',
+  ].join('\n');
+  const assessment = assessProvisionalChoicePlan(
+    assessInput({
+      issue: { number: 7, body, labels: ['status:needs-decision'] },
+      plan: validPlan(
+        { humanChoiceCriteria: ['Fix the helper so that it runs.'] },
+        body,
+      ),
+    }),
+  );
+  assert.deepEqual(blockerCodes(assessment), ['no-decision-signal']);
 });
