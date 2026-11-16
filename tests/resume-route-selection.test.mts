@@ -2836,6 +2836,33 @@ test('the provisional relation needs a trusted, unedited record marker before an
   }
 });
 
+test('one valid record marker beside an untrusted or edited one is not a record', () => {
+  const valid = { body: PROVISIONAL_RECORD, authorLogin: 'maintainer' };
+  for (const extra of [
+    { body: PROVISIONAL_RECORD, authorLogin: 'stranger' },
+    {
+      body: PROVISIONAL_RECORD,
+      authorLogin: 'maintainer',
+      lastEditedAt: '2026-11-16T01:00:00Z',
+    },
+  ]) {
+    for (const comments of [
+      [valid, extra],
+      [extra, valid],
+    ]) {
+      const fixture = provisionalSourcePort({ comments });
+      assert.deepEqual(findProvisional(fixture), []);
+      assert.equal(fixture.calls.includes('getChangeRequestHeadRef'), false);
+    }
+  }
+  // Every marker valid is still a record.
+  const two = provisionalSourcePort({ comments: [valid, valid] });
+  assert.deepEqual(
+    findProvisional(two).map((pr) => pr.number),
+    [7],
+  );
+});
+
 test('the provisional relation needs the head ref to be a claim branch of the issue', () => {
   for (const head of [
     'issue/3146-feat-other',

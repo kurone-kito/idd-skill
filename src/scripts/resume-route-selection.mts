@@ -709,8 +709,8 @@ export function findIssueRelatedOpenPrs({
  * after its PR merges, so its PR names it with `Refs` and never a closing
  * keyword, which {@link findIssueRelatedOpenPrs} cannot match. A PR relates
  * only when all three hold: its body (outside code and quotes) names the issue
- * with `Refs`, the issue carries a trusted, unedited provisional record
- * marker, and the PR's head ref is a claim branch of that issue
+ * with `Refs`, every provisional record marker on the issue is trusted and
+ * unedited (and at least one exists), and the PR's head ref is a claim branch of that issue
  * (`issue/<number>-*`). The relation only chooses which PR Resume reads: it
  * grants nothing, and F2/F3 still bind the source through the trusted replay.
  *
@@ -759,13 +759,16 @@ export function findProvisionalSourceOpenPrs({
   const trusted = new Set(
     readTrustedLogins().map((login) => login.trim().toLowerCase()),
   );
-  const hasTrustedRecord = markers.some(
+  // The authoritative replay refuses the whole history when any record marker
+  // is untrusted or edited, so one valid marker beside a forged one is not a
+  // record: every marker must be trusted and unedited.
+  const allTrusted = markers.every(
     (comment) =>
       trusted.has(comment.authorLogin.trim().toLowerCase()) &&
       classifyCommentEditState({ lastEditedAt: comment.lastEditedAt }) ===
         'unedited',
   );
-  if (!hasTrustedRecord) return [];
+  if (!allTrusted) return [];
   const branchPrefix = `issue/${targetIssueNumber}-`;
   return referencing.filter((pr) =>
     port.getChangeRequestHeadRef(pr.number).startsWith(branchPrefix),
