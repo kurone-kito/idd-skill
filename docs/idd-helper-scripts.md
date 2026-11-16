@@ -8904,9 +8904,13 @@ reflexively as any other CLI option.
   `--expected-claim-id` alias) unless `--claimless` is passed
   (`#3252`). Optional `--closing-issues <n>[,<n>...]` (#3298) declares
   the deliberate multi-issue closing set for the `closingSet` gate
-  below; it must include `--claim-issue`'s own number and cannot
-  combine with `--claimless`. Omit it for the ordinary single-issue
-  case, where the claimed issue alone is the deliberate set.
+  below; it must include `--claim-issue`'s own number, except that it
+  must leave out a claimed issue whose `provisionalRead` is `"bound"` (#4532;
+  see below), and it cannot combine with `--claimless`. The collector checks
+  this after the provisional read, so the usage error appears once the PR
+  has been read, and it names a stopped read that left a record behind.
+  Omit it for the ordinary single-issue case, where the claimed issue alone
+  is the deliberate set.
 
 #### Readiness branch fixture (#4697)
 
@@ -9058,11 +9062,31 @@ Compare the live base and default for D3.5 with
   blocker, whose detail names the extra/missing issue numbers (an extra
   number's detail names `--closing-issues` as the remedy for a genuine
   multi-issue close) and each stray commit's `sha` + issue number.
+  A claimed source whose `provisionalRead` is `"bound"` (#4532) is a
+  protected source: the deliberate set leaves it out (`--closing-issues`
+  when given, else empty, so `expected` omits it), and a closing reference
+  to it blocks on every base branch, including the non-default one whose
+  other references are exempt. The references read are GitHub's own
+  `closingIssuesReferences`, a closing keyword in the PR title or body
+  prose (the code- and quote-aware scan #5149 uses for a split PR; the
+  `GH-N`, same-repository qualified, and URL forms count), which is added to
+  `actual` and `extra` because GitHub's registration can lag, and every
+  branch commit message (bare, `GH-N`, qualified, and URL forms), reported in
+  `strayCommitCloses`. An unreadable title, body, or commit list fails
+  closed to `"unavailable"`. The blocker detail's `--closing-issues`
+  remedy does not apply to a protected source, which `--closing-issues`
+  cannot include: reword the reference to `Refs` instead. A body that
+  names the claimed issue only with `Refs` expects no close (#5149), and
+  keeps that result for every unbound claim. Only a
+  `"bound"` read changes the closing set, so a missing record, an untrusted
+  or edited marker, a head or claim mismatch, the `instructions-only`
+  profile, and `--claimless` never create the exception, and none of them
+  adds a block.
 - `provisionalRead` (#5237) is the trusted read of the claimed source
   issue's provisional-decision history, taken before the `closingSet`
-  evidence is built. It is evidence for a later closing-set exception
-  only: it adds no blocker, changes neither `ready` nor `closingSet`, and
-  grants no provisional treatment by itself. A claim-bound run always
+  evidence is built. It adds no blocker of its own, and only a `"bound"`
+  read changes `closingSet` (above, #4532); every other status leaves the
+  closing set as an ordinary claim has it. A claim-bound run always
   emits it (optional in the schema); `--claimless` omits it. `status` is
   `"bound"` when the replayed history of the source, with every record
   marker trusted and unedited, holds unconfirmed work whose verified claim
@@ -9077,7 +9101,10 @@ Compare the live base and default for D3.5 with
   issue codes), a confirmed or reworked source, or a claim or head
   mismatch. `"unavailable"` means the profile is `instructions-only` (or
   names no helper runtime), so the replay is not called. A stop never
-  creates the exception.
+  creates the exception. `idd-merge-execute` (F3) recomputes its gates from
+  a fresh collector report, at the first gate and again just before the
+  merge, so F2 and F3 apply the same rule with no verdict field of their
+  own.
 - `deferFollowUps` (#3624) is the deferred-follow-up merge-gate evidence:
   `{ checked, unverifiedReason, items: [{ number, heldByAuthoringLabel,
   origin, reconciled }] }`. A follow-up is an open issue carrying the
