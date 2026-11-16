@@ -1417,8 +1417,9 @@ export function readConfirmationAnswer(input, alternativeIds) {
   if (input.channel === 'timeout') return pending('timeout');
   if (input.origin !== 'user') return pending('input-not-from-user');
   if (input.channel === 'conversation') {
-    const message = input.message.trim();
-    if (message === '') return pending('no-input');
+    // The actual reply is kept verbatim; trimming serves only the checks.
+    const message = input.message;
+    if (message.trim() === '') return pending('no-input');
     const reading = input.interpretation;
     if (reading.response === 'accepted') {
       return { kind: 'accepted', channel: 'conversation', answerText: message };
@@ -1448,7 +1449,7 @@ export function readConfirmationAnswer(input, alternativeIds) {
   const text = event.text.trim();
   if (text === '') return pending('default-no');
   if (/^(?:y|yes)$/iu.test(text)) {
-    return { kind: 'accepted', channel: 'terminal', answerText: text };
+    return { kind: 'accepted', channel: 'terminal', answerText: event.text };
   }
   if (/^(?:n|no|nope)$/iu.test(text)) return pending('declined');
   const rework = TERMINAL_REWORK_PATTERN.exec(text);
@@ -1456,7 +1457,7 @@ export function readConfirmationAnswer(input, alternativeIds) {
     return {
       kind: 'rework',
       channel: 'terminal',
-      answerText: text,
+      answerText: event.text,
       requestedOptionId: rework[1],
       rationale: rework[2].trim(),
     };
@@ -1496,8 +1497,15 @@ function stepKey(step) {
     case 'release-claim':
       return `release:${step.claim.claimId}`;
     default:
-      return `record:${step.record.recordId}`;
+      return `record:${step.record.recordId}:${recordStepDigest(step.record)}`;
   }
+}
+/** The record's whole content except the source update time any edit moves. */
+function recordStepDigest(record) {
+  const { updatedAt: _updatedAt, ...snapshot } = record.source.snapshot;
+  return bodySha256(
+    digestJson({ ...record, source: { ...record.source, snapshot } }),
+  );
 }
 /** Key order by code unit, so the digest is the same in every process. */
 function digestJson(value) {
@@ -1640,18 +1648,26 @@ function baseRecord(
   };
 }
 function reworkHandoffFor(context, bundle, bundleGeneration, downstream) {
-  const existing = bundle
+  const stored = bundle
     .map(
       (decision) =>
         asRecord(decision.reworkRequested?.event.reworkRequest).handoff,
     )
-    .find((handoff) => handoff !== undefined);
+    .filter((handoff) => !!handoff);
+  const existing = stored[0];
+  // Every known downstream result stays: the stored ones, then the new ones.
+  const downstreamResults = [
+    ...new Set([
+      ...stored.flatMap((handoff) => handoff.downstreamResults),
+      ...downstream,
+    ]),
+  ];
   const prior = presentedBundleFor(bundle).map((entry) => ({
     decisionGeneration: entry.decisionGeneration,
     workCompletedRecordId: entry.workCompletedRecordId,
     reference: String(asRecord(entry.result).reference),
   }));
-  if (existing) return { ...existing, priorResults: prior };
+  if (existing) return { ...existing, priorResults: prior, downstreamResults };
   const seed = `${normalizeRepository(context.request.repository)}|${context.request.issueNumber}|${bundleGeneration}`;
   return {
     handoffId: `handoff-${bodySha256(`${seed}|handoff`).slice(0, 32)}`,
@@ -1659,7 +1675,7 @@ function reworkHandoffFor(context, bundle, bundleGeneration, downstream) {
     authoringSessionId: `session-${uuidFromSeed(`${seed}|session`)}`,
     anchor: `${context.source.repository}#${context.source.issueNumber}`,
     priorResults: prior,
-    downstreamResults: [...downstream],
+    downstreamResults,
   };
 }
 /** A JSON escape keeps an at-sign in the user's words from notifying anyone. */
@@ -1679,7 +1695,6 @@ function recordForAnswer(
   answer,
   answerUrl,
   answerCreatedAt,
-  downstream,
 ) {
   if (answer.response === 'accepted') {
     return {
@@ -1721,7 +1736,7 @@ function recordForAnswer(
             context,
             bundle,
             bundleGeneration,
-            downstream,
+            answer.downstreamResults ?? [],
           ),
         },
       },
@@ -1961,24 +1976,22 @@ async function planResolve(context, request) {
   const unresolved = targets
     .filter((generation) => statusOf(generation) === 'confirmation-pending')
     .sort((left, right) => left - right);
-  if (unresolved.length === 0) {
-    // A persisted confirmation or rework request cannot be undone, so an
-    // explicit conflicting input is refused before the remaining steps.
-    const persisted = persistedResponses(bundle, targets);
-    if (persisted.length > 0) {
-      const reading = readConfirmationAnswer(
-        request.input,
-        targets.flatMap((generation) => alternativeIdsOf(bundle, generation)),
+  // A persisted confirmation or rework request cannot be undone, so an
+  // explicit conflicting input is refused before any write for these targets.
+  const persisted = persistedResponses(bundle, targets);
+  if (persisted.length > 0) {
+    const reading = readConfirmationAnswer(
+      request.input,
+      targets.flatMap((generation) => alternativeIdsOf(bundle, generation)),
+    );
+    if (persisted.some((answer) => inputConflictsWithAnswer(reading, answer))) {
+      return resolutionRefusal(
+        'fix-input',
+        'a confirmation or rework request is already persisted for these decisions and the new input conflicts with it; resume without a new input',
       );
-      if (
-        persisted.some((answer) => inputConflictsWithAnswer(reading, answer))
-      ) {
-        return resolutionRefusal(
-          'fix-input',
-          'a confirmation or rework request is already persisted for these decisions and the new input conflicts with it; resume without a new input',
-        );
-      }
     }
+  }
+  if (unresolved.length === 0) {
     if (bundle.every((decision) => decision.status === 'confirmed')) {
       if (context.sourceState.state === 'open') {
         if (!context.active) {
@@ -1987,7 +2000,16 @@ async function planResolve(context, request) {
             'an active coordination claim is required to close the source',
           );
         }
-        return { kind: 'step', step: { kind: 'close-source' } };
+        return {
+          kind: 'step',
+          step: {
+            kind: 'close-source',
+            expected: {
+              title: context.source.snapshot.title,
+              bodySha256: context.source.snapshot.bodySha256,
+            },
+          },
+        };
       }
       if (context.sourceState.stateReason !== 'completed') {
         return resolutionRefusal(
@@ -2001,16 +2023,27 @@ async function planResolve(context, request) {
         'bundle confirmed and source closed',
       );
     }
-    if (bundle.some((decision) => decision.status === 'rework-authored')) {
-      return releaseStep(
-        context,
-        'rework-authored',
-        'rework authoring is already recorded',
-      );
-    }
     const reworking = bundle.some(
       (decision) => decision.status === 'rework-requested',
     );
+    const finished = bundle.every(
+      (decision) =>
+        decision.status === 'confirmed' ||
+        decision.status === 'rework-authored',
+    );
+    if (bundle.some((decision) => decision.status === 'rework-authored')) {
+      return releaseStep(
+        context,
+        finished
+          ? 'rework-authored'
+          : reworking
+            ? 'rework-handoff-recorded'
+            : 'pending-released',
+        finished
+          ? 'rework authoring is already recorded'
+          : 'rework authoring is recorded for some decisions; others have no final state',
+      );
+    }
     return releaseStep(
       context,
       reworking ? 'rework-handoff-recorded' : 'pending-released',
@@ -2038,7 +2071,7 @@ async function planResolve(context, request) {
   );
   const digest = presentationSha256(presentation);
   const target = unresolved[0];
-  const downstream = request.downstreamResults ?? [];
+  const implementationClaims = implementationClaimIds(replay);
   // An existing valid answer is durable: the first one wins. A new input may
   // agree with it or be absent, but an explicit conflicting input is refused,
   // because a confirmation cannot be undone.
@@ -2054,7 +2087,10 @@ async function planResolve(context, request) {
     const parsed = parseProvisionalDecisionAnswerComment(comment.body);
     if (
       !parsed.ok ||
-      parsed.answer.presentedQuestion !== PROVISIONAL_CONFIRMATION_QUESTION
+      parsed.answer.presentedQuestion !== PROVISIONAL_CONFIRMATION_QUESTION ||
+      // Only an answer recorded under a coordination claim, never one that
+      // the implementation session wrote before any review began.
+      !parsed.answer.claimIds.some((id) => !implementationClaims.has(id))
     ) {
       continue;
     }
@@ -2079,7 +2115,6 @@ async function planResolve(context, request) {
       parsed.answer,
       comment.url,
       comment.createdAt,
-      downstream,
     );
     if (!candidate) continue;
     const preview = replayContext(context, [
@@ -2108,11 +2143,23 @@ async function planResolve(context, request) {
         { presentation, presentationSha256: digest },
       );
     }
+    const ignored = (request.downstreamResults ?? []).filter(
+      (reference) =>
+        !(parsed.answer.downstreamResults ?? []).includes(reference),
+    );
     return {
       kind: 'step',
       step: { kind: candidate.kind, record: candidate.record },
       presentation,
       presentationSha256: digest,
+      needsUserAnswer: false,
+      ...(ignored.length > 0
+        ? {
+            warnings: [
+              'the request named downstream results that the persisted answer does not record; they were not added',
+            ],
+          }
+        : {}),
     };
   }
   const answer = readConfirmationAnswer(
@@ -2128,7 +2175,12 @@ async function planResolve(context, request) {
       `no further confirmation was given (${answer.reason}); the undecided decisions stay confirmation-pending`,
     );
     return released.kind === 'step'
-      ? { ...released, presentation, presentationSha256: digest }
+      ? {
+          ...released,
+          presentation,
+          presentationSha256: digest,
+          needsUserAnswer: true,
+        }
       : released;
   }
   if (request.answeredPresentationSha256 !== digest) {
@@ -2160,6 +2212,9 @@ async function planResolve(context, request) {
       ? {
           requestedOptionId: answer.requestedOptionId,
           rationale: answer.rationale,
+          ...((request.downstreamResults ?? []).length > 0
+            ? { downstreamResults: [...(request.downstreamResults ?? [])] }
+            : {}),
         }
       : {}),
     appliesToDecisionGenerations: [...unresolved],
@@ -2176,7 +2231,6 @@ async function planResolve(context, request) {
     answerRecord,
     virtualAnswer.url,
     virtualAnswer.createdAt,
-    downstream,
   );
   const preview = candidate
     ? replayContext(context, [
@@ -2205,6 +2259,7 @@ async function planResolve(context, request) {
     step: { kind: 'append-answer', body },
     presentation,
     presentationSha256: digest,
+    needsUserAnswer: true,
   };
 }
 function authoringGateFailure(evidence, handoff, source) {
@@ -2447,7 +2502,7 @@ async function executeStep(step, store) {
       await store.appendAnswerBody(step.body);
       return;
     case 'close-source':
-      await store.closeSourceIssue();
+      await store.closeSourceIssue(step.expected);
       return;
     case 'release-claim':
       await store.releaseCoordinationClaim(step.claim);
@@ -2455,9 +2510,7 @@ async function executeStep(step, store) {
     default:
       await store.appendRecordBody(
         step.record.recordId,
-        step.kind === 'append-rework-request'
-          ? escapeMentions(recordCommentBody(step.record))
-          : recordCommentBody(step.record),
+        escapeMentions(recordCommentBody(step.record)),
       );
   }
 }
@@ -2467,12 +2520,14 @@ function plannedResult(plan, steps, recordIds) {
     nextStep: plan.step.kind,
     steps,
     recordIds,
+    needsUserAnswer: plan.needsUserAnswer ?? false,
     ...(plan.presentation
       ? {
           presentation: plan.presentation,
           presentationSha256: plan.presentationSha256,
         }
       : {}),
+    ...(plan.warnings?.length ? { warnings: plan.warnings } : {}),
   };
 }
 async function releaseVerified(request, store) {
@@ -2496,37 +2551,46 @@ async function releaseVerified(request, store) {
 export async function runProvisionalResolution(request, store, options = {}) {
   const steps = [];
   const recordIds = [];
-  const hold = (reason, extra = {}) => ({
-    state: 'refused',
-    action: 'recovery-hold',
-    reason,
-    steps,
-    recordIds,
-    ...extra,
-  });
+  const warnings = [];
+  const out = (result) =>
+    warnings.length > 0 ? { ...result, warnings: [...warnings] } : result;
+  const hold = (reason, extra = {}) =>
+    out({
+      state: 'refused',
+      action: 'recovery-hold',
+      reason,
+      steps,
+      recordIds,
+      ...extra,
+    });
   let previousKey = null;
-  for (let iteration = 0; iteration < 32; iteration += 1) {
+  for (let iteration = 0; iteration < 64; iteration += 1) {
     const plan = await planResolution(request, store);
     if (plan.kind === 'refused') {
-      return { ...plan.result, steps, recordIds };
+      return out({ ...plan.result, steps, recordIds });
     }
     if (plan.kind === 'done') {
-      return steps.length > 0
-        ? {
-            state: 'applied',
-            outcome: plan.outcome,
-            reason: plan.reason,
-            steps,
-            recordIds,
-          }
-        : {
-            state: 'reconciled',
-            action: 'reconcile',
-            outcome: plan.outcome,
-            reason: plan.reason,
-            steps,
-            recordIds,
-          };
+      return out(
+        steps.length > 0
+          ? {
+              state: 'applied',
+              outcome: plan.outcome,
+              reason: plan.reason,
+              steps,
+              recordIds,
+            }
+          : {
+              state: 'reconciled',
+              action: 'reconcile',
+              outcome: plan.outcome,
+              reason: plan.reason,
+              steps,
+              recordIds,
+            },
+      );
+    }
+    for (const warning of plan.warnings ?? []) {
+      if (!warnings.includes(warning)) warnings.push(warning);
     }
     const key = stepKey(plan.step);
     if (key === previousKey) {
@@ -2534,7 +2598,9 @@ export async function runProvisionalResolution(request, store, options = {}) {
         `the ${plan.step.kind} write is not visible in a fresh read; inspect the source before retrying`,
       );
     }
-    if (options.apply !== true) return plannedResult(plan, steps, recordIds);
+    if (options.apply !== true) {
+      return out(plannedResult(plan, steps, recordIds));
+    }
     const again = await planResolution(request, store);
     if (again.kind !== 'step' || stepKey(again.step) !== key) {
       return hold(
@@ -2550,24 +2616,27 @@ export async function runProvisionalResolution(request, store, options = {}) {
         plan.step.kind === 'release-claim' &&
         !(await releaseVerified(request, store))
       ) {
-        return {
+        return out({
           state: 'reconciled',
           action: 'reconcile',
           reason: `release of the coordination claim is uncertain: ${errorText(error)}`,
           nextStep: 'release-claim',
           steps,
           recordIds,
-        };
+        });
       }
       if (plan.step.kind === 'release-claim') {
+        warnings.push(
+          `the release-claim write threw (${errorText(error)}) but a fresh read shows it landed`,
+        );
         steps.push('release-claim');
-        return {
+        return out({
           state: 'applied',
           outcome: plan.step.outcome,
           reason: plan.step.reason ?? 'complete',
           steps,
           recordIds,
-        };
+        });
       }
       // Count the step only when a fresh read proves that it landed.
       const after = await planResolution(request, store);
@@ -2581,12 +2650,15 @@ export async function runProvisionalResolution(request, store, options = {}) {
           `the ${plan.step.kind} write is uncertain: ${errorText(error)}; read the history before retrying`,
         );
       }
+      warnings.push(
+        `the ${plan.step.kind} write threw (${errorText(error)}) but a fresh read shows it landed`,
+      );
     }
     steps.push(plan.step.kind);
     if ('record' in plan.step) recordIds.push(plan.step.record.recordId);
     if (plan.step.kind === 'release-claim') {
       if (!(await releaseVerified(request, store))) {
-        return {
+        return out({
           state: 'reconciled',
           action: 'reconcile',
           reason:
@@ -2594,15 +2666,15 @@ export async function runProvisionalResolution(request, store, options = {}) {
           nextStep: 'release-claim',
           steps,
           recordIds,
-        };
+        });
       }
-      return {
+      return out({
         state: 'applied',
         outcome: plan.step.outcome,
         reason: plan.step.reason ?? 'complete',
         steps,
         recordIds,
-      };
+      });
     }
     previousKey = key;
   }

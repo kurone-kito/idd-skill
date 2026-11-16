@@ -974,6 +974,7 @@ function validateAnswerShape(value) {
     [
       'requestedOptionId',
       'rationale',
+      'downstreamResults',
       'presentedQuestion',
       'appliesToDecisionGenerations',
     ],
@@ -983,6 +984,26 @@ function validateAnswerShape(value) {
   if (!answer) return issues;
   if (answer.presentedQuestion !== undefined)
     nonEmptyString(answer.presentedQuestion, '$.presentedQuestion', issues);
+  if (answer.downstreamResults !== undefined) {
+    if (answer.response !== 'rework') {
+      issues.push({
+        code: 'answer-response-shape-invalid',
+        path: '$.downstreamResults',
+        message: 'Only a rework response can carry downstream results.',
+      });
+    }
+    if (!Array.isArray(answer.downstreamResults)) {
+      issues.push({
+        code: 'handoff-downstream-results-invalid',
+        path: '$.downstreamResults',
+        message: 'Expected an array of downstream result references.',
+      });
+    } else {
+      answer.downstreamResults.forEach((reference, index) => {
+        httpUrl(reference, `$.downstreamResults[${index}]`, issues);
+      });
+    }
+  }
   if (answer.appliesToDecisionGenerations !== undefined) {
     const applies = answer.appliesToDecisionGenerations;
     const covered = Array.isArray(answer.decisionGenerations)

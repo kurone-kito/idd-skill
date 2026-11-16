@@ -244,13 +244,30 @@ class MemoryStore implements ProvisionalResolutionStore {
     if (this.answerFailure === 'silent') {
       return { result: 'created', record: { id: '1', url: this.url('1') } };
     }
+    if (this.answerFailure === 'before') throw new Error('answer write failed');
     const added = this.addComment(() => text);
+    if (this.answerFailure === 'after') {
+      throw new Error('answer write response lost');
+    }
     return { result: 'created', record: { id: added.id, url: added.url } };
   }
 
-  async closeSourceIssue(): Promise<void> {
+  beforeClose?: (store: MemoryStore) => void;
+
+  async closeSourceIssue(expected: {
+    title: string;
+    bodySha256: string;
+  }): Promise<void> {
     this.closes += 1;
+    this.beforeClose?.(this);
     if (this.closeFailure === 'before') throw new Error('close failed');
+    // The store closes only while the source still matches the plan.
+    if (
+      this.source.title !== expected.title ||
+      sha256(this.source.body) !== expected.bodySha256
+    ) {
+      throw new Error('the source changed since the plan');
+    }
     this.sourceState = { state: 'closed', stateReason: 'completed' };
     if (this.closeFailure === 'after') throw new Error('close response lost');
   }
@@ -579,7 +596,7 @@ test('an interactive terminal y accepts and the default N does not', () => {
     assert.deepEqual(accepted(text), {
       kind: 'accepted',
       channel: 'terminal',
-      answerText: text.trim(),
+      answerText: text,
     });
   }
   assert.deepEqual(accepted(''), { kind: 'pending', reason: 'default-no' });
@@ -866,11 +883,14 @@ test('an interactive terminal y confirms the same way', async () => {
 });
 
 test('confirmation does not need the opt-in to stay enabled', async () => {
-  const store = await pendingStore();
-  store.policy = { ...loadIddConfig(), dangerouslyAutoDecide: false };
-  const result = await answered(store, conversationYes);
-  assert.equal(result.outcome, 'confirmed-closed', JSON.stringify(result));
-  assert.equal(store.sourceState.state, 'closed');
+  // The outcome is the same with the switch on and off: nothing reads it.
+  for (const enabled of [true, false]) {
+    const store = await pendingStore();
+    store.policy = { ...loadIddConfig(), dangerouslyAutoDecide: enabled };
+    const result = await answered(store, conversationYes);
+    assert.equal(result.outcome, 'confirmed-closed', JSON.stringify(result));
+    assert.equal(store.sourceState.state, 'closed');
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -1315,7 +1335,7 @@ test('an answer needs the digest of the presentation it answered', async (t) => 
   });
 });
 
-test('a changed source after the presentation holds before any write', async () => {
+test('a source edit after the presentation is held by the replay before any write', async () => {
   const store = await pendingStore();
   const digest = await shownDigest(store);
   store.source = { ...store.source, body: `${body}\nEdited after the answer.` };
@@ -3401,4 +3421,341 @@ test('a rework request record also keeps an at-sign from notifying anyone', asyn
     | { rationale: string }
     | undefined;
   assert.equal(request?.rationale, 'Ask @someone about the migration.');
+});
+
+test('a conversation reply is stored verbatim, including its whitespace', async () => {
+  const store = await pendingStore();
+  const verbatim = '  Yes, I accept.  \n';
+  const result = await answered(store, {
+    ...conversationYes,
+    message: verbatim,
+  } as ConfirmationInput);
+  assert.equal(result.outcome, 'confirmed-closed', JSON.stringify(result));
+  assert.equal(answersOf(store)[0]?.answer.answerText, verbatim);
+  assert.deepEqual(
+    readConfirmationAnswer({ ...conversationYes, message: verbatim }, [
+      'change',
+    ]),
+    { kind: 'accepted', channel: 'conversation', answerText: verbatim },
+  );
+});
+
+test('downstream results of a rework request are kept and merged, not dropped', async (t) => {
+  const first = 'https://github.com/kurone-kito/idd-skill/pull/5901';
+  const second = 'https://github.com/kurone-kito/idd-skill/pull/5902';
+
+  await t.test('the answer keeps them for a retry', async () => {
+    const store = await pendingStore();
+    store.recordFailure = (type) =>
+      type === 'rework-requested' ? 'before' : undefined;
+    const failed = await answered(store, reworkConversation, {
+      downstreamResults: [first],
+    });
+    assertRefused(failed, 'recovery-hold', /append-rework-request/);
+    assert.deepEqual(answersOf(store)[0]?.answer.downstreamResults, [first]);
+    // The retry has no input and no downstream list, yet the handoff keeps it.
+    store.recordFailure = undefined;
+    const retry = await runProvisionalResolution(resolveRequest(), store, {
+      apply: true,
+    });
+    assert.equal(
+      retry.outcome,
+      'rework-handoff-recorded',
+      JSON.stringify(retry),
+    );
+    assert.deepEqual(handoffOf(store).downstreamResults, [first]);
+  });
+
+  await t.test(
+    'a later request merges its own into the bundle handoff',
+    async () => {
+      const store = await pendingStore(2);
+      await answered(store, reworkConversation, {
+        decisionGenerations: [1],
+        downstreamResults: [first],
+      });
+      postCoordinationClaim(store, 'claim-4536-coord-b');
+      const result = await answered(
+        store,
+        reworkConversation,
+        { decisionGenerations: [2], downstreamResults: [second, first] },
+        'claim-4536-coord-b',
+      );
+      assert.equal(
+        result.outcome,
+        'rework-handoff-recorded',
+        JSON.stringify(result),
+      );
+      const handoffs = recordsOf(store)
+        .filter((record) => record.event.type === 'rework-requested')
+        .map(
+          (record) =>
+            (
+              record.event.reworkRequest as {
+                handoff: ProvisionalReworkHandoff;
+              }
+            ).handoff,
+        );
+      assert.deepEqual(handoffs[0]?.downstreamResults, [first]);
+      assert.deepEqual(handoffs[1]?.downstreamResults, [first, second]);
+      assert.equal(handoffs[0]?.handoffId, handoffs[1]?.handoffId);
+      assert.equal(replayOf(store).valid, true);
+    },
+  );
+
+  await t.test(
+    'an adopted answer ignores a different request list, with a warning',
+    async () => {
+      const store = await pendingStore();
+      store.addComment(() =>
+        craftedAnswer(store, (answer) => {
+          danglingReworkAnswer(answer);
+          answer.appliesToDecisionGenerations = [1];
+          answer.downstreamResults = [first];
+        }),
+      );
+      const result = await runProvisionalResolution(
+        resolveRequest({ downstreamResults: [second] }),
+        store,
+        { apply: true },
+      );
+      assert.equal(
+        result.outcome,
+        'rework-handoff-recorded',
+        JSON.stringify(result),
+      );
+      assert.match(result.warnings?.[0] ?? '', /not added/);
+      assert.deepEqual(handoffOf(store).downstreamResults, [first]);
+    },
+  );
+
+  await t.test('only a rework answer may carry them', async () => {
+    const store = await pendingStore();
+    const comment = store.addComment(() =>
+      craftedAnswer(store, (answer) => {
+        answer.downstreamResults = [first];
+      }),
+    );
+    assert.equal(parseProvisionalDecisionAnswerComment(comment.body).ok, false);
+    const bad = store.addComment(() =>
+      craftedAnswer(store, (answer) => {
+        danglingReworkAnswer(answer);
+        answer.downstreamResults = ['not a url'];
+      }),
+    );
+    assert.equal(parseProvisionalDecisionAnswerComment(bad.body).ok, false);
+  });
+});
+
+test('a persisted rework for one decision refuses a conflicting input before any write', async () => {
+  const store = await pendingStore(2);
+  await answered(store, reworkConversation, { decisionGenerations: [1] });
+  postCoordinationClaim(store, 'claim-4536-coord-b');
+  const writesBefore = store.writes();
+  const digest = await shownDigest(
+    store,
+    { decisionGenerations: [1, 2] },
+    'claim-4536-coord-b',
+  );
+  const result = await runProvisionalResolution(
+    resolveRequest(
+      {
+        decisionGenerations: [1, 2],
+        input: conversationYes,
+        answeredPresentationSha256: digest,
+      },
+      'claim-4536-coord-b',
+    ),
+    store,
+    { apply: true },
+  );
+  assertRefused(result, 'fix-input', /already persisted/);
+  assert.equal(store.writes(), writesBefore);
+  assert.equal(eventsOf(store).includes('confirmed'), false);
+});
+
+test('a partly authored bundle reports a non-terminal outcome', async () => {
+  const store = await pendingStore(2);
+  await answered(store, reworkConversation, { decisionGenerations: [1] });
+  const fixture = await authoredFixtureFor(store);
+  const authored = await runProvisionalResolution(
+    authoredRequest(fixture),
+    store,
+    { apply: true },
+  );
+  assert.deepEqual(authored.steps, ['append-rework-authored']);
+  postCoordinationClaim(store, 'claim-4536-coord-b');
+  const evidence = reworkEvidenceFor(store, fixture);
+  const result = await runProvisionalResolution(
+    resolveRequest({ verifiedReworkRoadmaps: evidence }, 'claim-4536-coord-b'),
+    store,
+    { apply: true },
+  );
+  // Decision 2 has no final state, so the bundle is not finished.
+  assert.equal(result.state, 'applied', JSON.stringify(result));
+  assert.equal(result.outcome, 'pending-released');
+});
+
+function reworkEvidenceFor(
+  store: MemoryStore,
+  fixture: AuthoredFixture,
+): VerifiedProvisionalReworkRoadmap[] {
+  const authored = recordsOf(store).find(
+    (item) => item.event.type === 'rework-authored',
+  ) as ProvisionalDecisionRecord;
+  const requested = recordsOf(store).find(
+    (item) => item.event.type === 'rework-requested',
+  ) as ProvisionalDecisionRecord;
+  const roadmap = authored.event.reworkRoadmap as Record<string, unknown>;
+  return [
+    {
+      recordId: authored.recordId,
+      sourceBefore: requested.source,
+      sourceAfter: authored.source,
+      roadmapIssueNumber: issueNumber,
+      roadmapMarkerId: String(roadmap.roadmapMarkerId),
+      authoringSetId: String(roadmap.authoringSetId),
+      url: issueUrl,
+      publishedCommentId: fixture.publishedId,
+      publishedAt: fixture.publishedAt,
+    },
+  ];
+}
+
+test('the close is guarded by the source content the plan evaluated', async () => {
+  const store = await pendingStore();
+  store.beforeClose = (target) => {
+    target.source = { ...target.source, body: `${body}\nEdited at close.` };
+  };
+  const result = await answered(store, conversationYes);
+  assertRefused(
+    result,
+    'recovery-hold',
+    /close-source write is uncertain|fresh read refused/,
+  );
+  assert.equal(store.sourceState.state, 'open');
+  assert.equal(activeCoordinationClaim(store), true);
+});
+
+test('a record step is keyed by its whole content, so an edited answer cannot slip through', async () => {
+  const store = await pendingStore();
+  const first = store.addComment(() => craftedAnswer(store, () => {}));
+  store.addComment(() =>
+    craftedAnswer(store, (answer) => {
+      answer.answerText = 'Yes, the second answer.';
+    }),
+  );
+  const before = store.historyReads;
+  store.readHook = (readNumber, target) => {
+    // The first answer is edited between the two plans of the apply run.
+    if (readNumber === before + 2)
+      target.replaceComment(first.id, { edited: true });
+  };
+  const result = await runProvisionalResolution(resolveRequest(), store, {
+    apply: true,
+  });
+  assertRefused(result, 'recovery-hold', /the plan changed before the write/);
+  assert.equal(store.writes(), 0);
+  assert.equal(eventsOf(store).includes('confirmed'), false);
+});
+
+test('an answer write that throws is recovered by a fresh read', async (t) => {
+  await t.test('before it landed', async () => {
+    const store = await pendingStore();
+    store.answerFailure = 'before';
+    const result = await answered(store, conversationYes);
+    assertRefused(result, 'recovery-hold', /append-answer write is uncertain/);
+    assert.equal(answersOf(store).length, 0);
+    assert.equal(eventsOf(store).includes('confirmed'), false);
+    assert.equal(store.sourceState.state, 'open');
+    assert.equal(activeCoordinationClaim(store), true);
+  });
+
+  await t.test('after it landed, with the response lost', async () => {
+    const store = await pendingStore();
+    store.answerFailure = 'after';
+    const result = await answered(store, conversationYes);
+    assert.equal(result.outcome, 'confirmed-closed', JSON.stringify(result));
+    assert.equal(answersOf(store).length, 1);
+    assert.match(result.warnings?.[0] ?? '', /append-answer write threw/);
+  });
+});
+
+test('an answer recorded before any coordination claim is not adopted', async () => {
+  const store = new MemoryStore();
+  await completeDecision(store, { evidenceId: '2', pullNumber: 6000 });
+  releaseImplementation(store);
+  // The implementation session wrote a canonical-looking answer on its own.
+  store.addComment(() =>
+    craftedAnswer(store, (answer) => {
+      answer.claimIds = [implClaim];
+    }),
+  );
+  postCoordinationClaim(store, 'claim-4536-coord');
+  store.resetCounters();
+  const result = await runProvisionalResolution(
+    resolveRequest({
+      input: {
+        channel: 'conversation',
+        origin: 'user',
+        message: 'Please resolve issue 4536.',
+        interpretation: { response: 'none' },
+      },
+    }),
+    store,
+    { apply: true },
+  );
+  assert.equal(result.outcome, 'pending-released', JSON.stringify(result));
+  assert.equal(eventsOf(store).includes('confirmed'), false);
+});
+
+test('a dry run says whether the user still has to be asked', async () => {
+  const fresh = await pendingStore();
+  const ask = await runProvisionalResolution(resolveRequest(), fresh);
+  assert.equal(ask.state, 'planned');
+  assert.equal(ask.needsUserAnswer, true);
+  assert.ok(ask.presentation);
+
+  const resume = await pendingStore();
+  resume.addComment(() => craftedAnswer(resume, () => {}));
+  const noAsk = await runProvisionalResolution(resolveRequest(), resume);
+  assert.equal(noAsk.nextStep, 'append-confirmation');
+  assert.equal(noAsk.needsUserAnswer, false);
+
+  const done = await pendingStore();
+  await answered(done, conversationYes);
+  postCoordinationClaim(done, 'claim-4536-coord-b');
+  const finish = await runProvisionalResolution(
+    resolveRequest({}, 'claim-4536-coord-b'),
+    done,
+  );
+  assert.equal(finish.needsUserAnswer, false);
+  const accepted = await runProvisionalResolution(
+    resolveRequest({
+      input: conversationYes,
+      answeredPresentationSha256: ask.presentationSha256,
+    }),
+    fresh,
+  );
+  assert.equal(accepted.nextStep, 'append-answer');
+  assert.equal(accepted.needsUserAnswer, true);
+});
+
+test('every record this flow writes escapes an at-sign in a source title', async () => {
+  // The title is part of every record's source snapshot, so it is set before
+  // the lifecycle starts.
+  const store = new MemoryStore();
+  store.source = { ...store.source, title: 'Ask @someone first' };
+  await completeDecision(store, { evidenceId: '2', pullNumber: 6000 });
+  releaseImplementation(store);
+  postCoordinationClaim(store, 'claim-4536-coord');
+  store.resetCounters();
+  const result = await answered(store, conversationYes);
+  assert.equal(result.outcome, 'confirmed-closed', JSON.stringify(result));
+  const confirmed = store.history.comments.find((comment) => {
+    const parsed = parseProvisionalDecisionRecordComment(comment.body);
+    return parsed.ok && parsed.record.event.type === 'confirmed';
+  });
+  assert.ok(confirmed);
+  assert.equal(confirmed.body.includes('@'), false);
 });
