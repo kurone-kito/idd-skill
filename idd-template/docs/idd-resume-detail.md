@@ -513,13 +513,14 @@ unedited record marker, since no closing keyword names it.
    command holds here; never write the record or the label by hand.
 3. Continue to step 3 only on a verified result:
 
-   | Result                      | Meaning                                       | F4                                                                              |
-   | --------------------------- | --------------------------------------------- | ------------------------------------------------------------------------------- |
-   | `applied`                   | record appended and read back, label present  | continue                                                                        |
-   | `reconciled`, no reason     | record already stored, label present          | continue                                                                        |
-   | `reconciled`, with a reason | label absent or unverified after the write    | rerun the dry run once; continue only on `reconciled` with no reason, else hold |
-   | `refused`, `recovery-hold`  | a read, write or replay could not be verified | hold before cleanup and release; keep the claim                                 |
-   | `refused`, `fix-input`      | the request or the issue needs correcting     | hold; correct it, then rerun                                                    |
+   | Result                      | Meaning                                         | F4                                                                                              |
+   | --------------------------- | ----------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+   | `applied`                   | record appended and read back, label present    | continue                                                                                        |
+   | `reconciled`, no reason     | record already stored, label present            | continue                                                                                        |
+   | `planned` (dry run)         | no record yet, or a stored record with no label | run `--apply`: it writes only what is missing, then reads it back                               |
+   | `reconciled`, with a reason | label absent or unverified after the write      | rerun with `--apply` once; continue only on `applied` or `reconciled` with no reason, else hold |
+   | `refused`, `recovery-hold`  | a read, write or replay could not be verified   | hold before cleanup and release; keep the claim                                                 |
+   | `refused`, `fix-input`      | the request or the issue needs correcting       | hold; correct it, then rerun                                                                    |
 
    An unreadable merge, head or proof never reaches this step: take the
    existing recovery hold, and manufacture no record.
@@ -540,7 +541,7 @@ step replaces the explicit close on them. Find the merged PR with `gh pr list
 | State found                                        | Evidence                                                                             | Result                                                                                                           |
 | -------------------------------------------------- | ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
 | Merged, no completion record                       | owned claim; status `in-progress`; claim-branch PR merged                            | finalize: F4's transition (dry run, then `--apply`), then steps 3 to 7                                           |
-| Completion record, label unverified                | owned claim; status `confirmation-pending`; label absent or unread                   | reconcile: rerun the same transition; verified only on a read-back                                               |
+| Completion record, label unverified                | owned claim; status `confirmation-pending`; label absent or unread                   | reconcile: the dry run shows `planned`; `--apply` writes the label; verified only on a read-back                 |
 | Cleanup done, claim still active                   | owned claim; status `confirmation-pending`; worktree and branch gone; proof reusable | steps 3 to 6 are resume-safe no-ops; revalidate, then post `unclaimed-by`                                        |
 | Claim released                                     | `unclaimed` becomes `non_inheritable` / `stop`, reason `provisional-work-complete`   | report pending confirmation; post nothing; no new implementation                                                 |
 | Released with status `in-progress` and a merged PR | no active claim                                                                      | stop and report: finalization needs an owning session, so hand it to the operator; never a second implementation |

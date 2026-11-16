@@ -207,10 +207,10 @@ the dispatch validation above plus CI. `act` cannot validate
 `windows-latest`/`macos-latest` behavior from WSL/Linux -- never treat
 "validated via `act`" as covering a Windows or macOS job.
 
-Optionally, a CI-infrastructure job `act` cannot validate may be iterated
+A CI-infrastructure job `act` cannot validate may optionally be iterated
 on a branch with no open PR, landing only the validated final version on
-the PR branch: review automation that fires only on PR pushes never runs
-during that shakeout, the one path that avoids review cost.
+the PR branch: PR-push review automation never runs during that shakeout,
+the one path that avoids review cost.
 
 ### Finalize a verified held scope split
 
@@ -354,8 +354,8 @@ never populates there regardless of this carve-out.
 
 While a side-fix PR that the claimed issue's PR depends on is in
 flight, periodically re-check the claimed issue's own PR review and CI
-state — unresolved review threads and failing checks — rather than
-discovering that backlog only after the side-fix merges.
+state (unresolved threads, failing checks) rather than discovering that
+backlog only after the side-fix merges.
 
 ### D3.6 — Derive the IDD impact checklist
 
@@ -413,11 +413,11 @@ would silently break auto-close detection.
 
 ### Closing keyword
 
-The closing keyword must appear in the PR **body** (not the title) as
-plain markdown text. Write a line such as Closes #N, Fixes #N, or
-Resolves #N (case-insensitive) where N is the claimed issue number.
-Render that example literally in the body — no backticks, no code
-fences, no block-quote prefix.
+Except for a bound provisional source (D3.5), the closing keyword must
+appear in the PR **body** (not the title) as plain markdown text. Write a
+line such as Closes #N, Fixes #N, or Resolves #N (case-insensitive) where
+N is the claimed issue number. Render that example literally in the body —
+no backticks, no code fences, no block-quote prefix.
 
 Inline code is fine for keyword forms _as forms_ in surrounding prose;
 the no-wrapper rule covers only the literal body text GitHub parses.
@@ -431,17 +431,15 @@ structural-separation rule that covers both surfaces.
 #### Anti-patterns
 
 GitHub's closing-keyword detection does NOT activate when the keyword
-is wrapped in any of these markdown forms — even if the underlying
-text is correct:
+is wrapped in any of these markdown forms:
 
 - inline code (backtick-wrapped, e.g. `` `Closes #1` ``) — not
   detected
 - fenced code block (triple backtick or triple tilde) — not detected
 - block quote prefix (`>` at line start) — not detected
 
-When detection fails, GitHub will not auto-close the linked issue on
-merge and the issue↔PR linking surfaces (sidebar, timeline) will not
-populate.
+When detection fails, GitHub neither auto-closes the issue on merge nor
+populates the issue↔PR linking surfaces.
 
 **Mirror false-positive — negation-blind detection**: the same literal
 matching runs in the other direction too, and it is not limited to the
@@ -497,10 +495,10 @@ issue when the merging PR targets the repository's **default** branch
 configured `{development-branch}`, never populates
 `closingIssuesReferences` and never auto-closes on merge. When
 `{development-branch}` is not the repository's default branch, still
-include the closing keyword line in the PR body for reviewer clarity, but
-**skip this entire sub-step** (steps 1-7 verify a mechanism that cannot
-fire here) and close the claimed issue explicitly after F3 merges
-(`idd-merge.instructions.md` F4 notes this).
+include the closing keyword line in the PR body for reviewer clarity (a
+bound provisional source gets `Refs #N`), but **skip this entire sub-step**
+(steps 1-7 verify a mechanism that cannot fire here) and close the claimed
+issue explicitly after F3 merges (`idd-merge.instructions.md` F4 notes this).
 
 After PR creation and before D4, confirm GitHub recognized the
 closing keyword for the claimed issue. Resume routing should re-enter
@@ -509,9 +507,9 @@ completion.
 
 **Bound provisional source** (`provisionalRead.status` is `bound`, or Resume's
 `evidence.provisional_work` is unconfirmed): it must stay open, so write
-`Refs #N`, never a keyword, in the body and every branch commit. Steps 3-5
-add none (on re-entry too), step 6's set omits it, step 7 reads a keyword for
-it as stray
+`Refs #N`, never a keyword, in the body and every branch commit. Skip steps
+1-5 (on re-entry too), step 6's set omits it, step 7 reads a keyword for it as
+stray
 ([details](../../docs/idd-resume-detail.md#provisional-source-finalization)).
 
 1. Re-fetch the PR body:
