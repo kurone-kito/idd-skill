@@ -12232,6 +12232,89 @@ whose children record `Split out of #<n>`, and comments the link. If refused,
 the comment stands. Never add needs-decision or ask a human. Do not edit or
 roll back the issue body. See the [scope-overrun rationale](idd-design-rationale.md#b3--scope-overrun-returns-to-authoring).
 
+### Advisory estimate drift evidence at F2/F3
+
+Issue `#5221` asked for the smallest existing evidence that could keep a
+count-only difference between a checked S or M estimate and the canonical
+changed paths advisory at merge readiness, or a statement that no such
+evidence exists. This section records the answer. It changes no merge-readiness
+result: `resolveScopeOverrunReadiness`, the claim-bound readiness gate, and
+`claimed-push` are unchanged, the issue body effort marker is untouched, and a
+plan comment stays evidence, not an owner acceptance and not permission to
+merge.
+
+The two readers disagree today. D2 (`claimed-push`) reports a count over a
+coherent S or M estimate as `advisory-drift` and lets the push continue (see
+[B3 scope assessment outcomes](#b3-scope-assessment-outcomes)). F2/F3 reads the
+same count through `resolveScopeOverrunReadiness` and returns status `missing`
+with reason `no-record`; the `scope-overrun` blocker then stays until a trusted
+owner names the exact head (see the
+[Scope-overrun evidence marker](#scope-overrun-evidence-marker)). That is the
+case for an S estimate of 3 against 5, 9, or 12 canonical paths and for an M
+estimate of 8 against 9 or 12. Counts at 3 and at 8 are within the estimate and
+raise no blocker.
+
+#### Trust table
+
+`Verified evidence` means a helper recomputes the binding from provider, git, or
+trusted-marker data and a reviewer can rerun that computation. `Worker
+assertion` means the binding rests on what the worker wrote, or on a value that
+neither F2/F3 nor D2 rechecks against an owner act.
+
+<!-- dprint-ignore-start -->
+| Binding | Where it comes from | Trust | What it does not show |
+| --- | --- | --- | --- |
+| Active claim | The `claim-ownership` gate reads the trusted `claimed-by` markers and the activation nonce winner; D2 runs `resume-claim-routing --assert` with the worktree lock and token record | Verified evidence | Who owns the work. The scope audit takes no claim input, so a held claim does not soften the count, and a lost claim keeps its own blocker next to it |
+| Accepted issue body | The live issue title and body from the provider, and a SHA-256 of the body bytes in the D2 assessment | Worker assertion | That the owner accepted this text, or that the change still meets it. No record ties the body to an owner act, and neither the readiness collector nor `claimed-push` reads the body's edit history. The checksum shows only that the bytes are the ones assessed |
+| Branch and pull request | The pull request number and head ref from the provider; a scope record's fields must match them, or the result is `record-conflict` | Verified evidence | What the change is for. It names which change is audited |
+| Merge base | `git merge-base` of `refs/remotes/origin/<base>` and the pull request head, computed locally | Verified evidence | That the local base ref is fresh. The helper does not fetch, so a stale ref is the caller's to catch; a missing ref fails closed |
+| Exact head | The pull request head SHA from the provider; a scope record and an owner decision each name one 40-character SHA | Verified evidence | Why the bytes changed. A new head needs its own record and decision; the evidence of an earlier head returns `current-head-mismatch` or `decision-head-mismatch` |
+| Numerical audit | The `effort-candidate-file-limit` finding of `audit-authored-issue`, run on the body and on the body led by the canonical paths | Verified evidence | Intent, complexity, safety, or the ability to finish. It measures breadth only, and anyone can rerun the arithmetic |
+| Canonical change set | The pull request's changed files plus rename sources, minus sync targets and generated mirrors read at the merge base, in UTF-8 byte order | Verified evidence | That the paths serve the accepted intent. A different deliverable can reuse the same names and the same count |
+| B2 plan comment | A free-form comment the worker posts on the issue | Worker assertion | Anything the audit reads: neither F2/F3 nor D2 reads it, and the trusted-login filter cannot tell a worker's comment from an owner's when both post as one login |
+<!-- dprint-ignore-end -->
+
+A checksum, a self-authored plan, and matching file names do not by themselves
+show the same intent. Anyone can recompute a checksum from the public inputs,
+and a forged plan can copy the issue number, claim, branch, pull request, head,
+effort, and both path lists (preventive; no observed incident yet). The only
+existing path that makes the count over a checked S or M
+estimate non-blocking is an exact-head owner decision on a trusted, unedited
+post-push scope record. That is a human acceptance of one head, not advisory
+evidence, and it is outside this decision.
+
+#### Fixtures
+
+The tests named below carry the prefix `advisory evidence (#5221)`. Each asserts
+the result of the unchanged code; none relabels a blocked count as advisory.
+
+- `tests/pre-merge-readiness.test.mts`: a count-only S or M difference stays
+  `missing` with reason `no-record`, and counts within the estimate return no
+  scope result; an added deliverable, a permissions path, and a safety path at the
+  same count return the count-only result; incomplete evidence throws or stays
+  blocked; a lost claim and unfinished validation keep their own blockers next
+  to the count block; a stale decision or an `idd-agent-authored` decision stays
+  `invalid`; a forged plan whose copied identifiers all match is deep-equal to
+  the no-plan result.
+- `tests/claimed-push.test.mts`: the same S and M counts are `advisory-drift` at
+  D2, and only S 3 against 5 takes the S-to-M copy; the same count with an
+  added deliverable, a permissions path, or a safety path keeps the
+  disposition but changes the checksum; an unreadable issue, a lost claim, a
+  failing validation gate, and a stale expected checksum each refuse or stop the
+  push; plan-like text copied into a case that already refuses leaves the
+  refusal unchanged.
+
+#### Finding
+
+None of the verified bindings ties the change to the accepted intent. The one
+binding that would, the accepted issue body measured against the diff, is a
+worker assertion, and the B2 plan comment is another. Existing evidence
+therefore cannot separate a count-only difference from a new scope. Counts, a
+checksum, or matching names can make a difference look small; only an owner act
+accepts it. This section files no follow-up and removes none that other issues
+already name. <!-- markdownlint-disable-next-line MD013 -->
+Recommendation: existing evidence cannot separate them. Leave the count blocked at merge readiness. No follow-up in this issue.
+
 ## Dead-export audit (kurone-kito/idd-skill#3478)
 
 `node scripts/audit-dead-exports.mjs --check` (source repository /

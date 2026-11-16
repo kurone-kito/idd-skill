@@ -1495,6 +1495,382 @@ test('pre-merge readiness rejects edited and mismatched post-push records', () =
   assert.equal(malformed?.reason, 'record-malformed');
 });
 
+// ---- Advisory-only estimate drift evidence (issue 5221) ---------------------
+//
+// These fixtures pin what the unchanged F2/F3 scope audit does with a
+// count-only difference between a checked S or M estimate and the canonical
+// changed paths. Each result below is the current one: none of them changes a
+// result, and none of them calls an unblocked count advisory. The trust table
+// in docs/idd-helper-scripts.md names these tests by title.
+
+type EstimateEffort = 'S' | 'M';
+
+/** `count` canonical paths that the audit parser counts one by one. */
+function estimatePaths(count: number): string[] {
+  return Array.from(
+    { length: count },
+    (_, index) => `src/estimate-${index + 1}.mts`,
+  );
+}
+
+/** The overrun issue body with its hidden effort marker set to `effort`. */
+function scopeEstimateIssue(effort: EstimateEffort, listedCount: number) {
+  const issue = scopeOverrunIssue(estimatePaths(listedCount));
+  return {
+    ...issue,
+    body: issue.body.replace(
+      '<!-- idd-skill-effort: M -->',
+      `<!-- idd-skill-effort: ${effort} -->`,
+    ),
+  };
+}
+
+const COUNT_ONLY_BLOCK = {
+  status: 'missing',
+  reason: 'no-record',
+  recordedHeadSha: null,
+} as const;
+
+function estimateReadiness(options: {
+  effort: EstimateEffort;
+  listedCount: number;
+  changedFiles: readonly string[];
+  comments?: Parameters<typeof resolveScopeOverrunReadiness>[0]['comments'];
+}) {
+  return resolveScopeOverrunReadiness(
+    scopeOverrunInput({
+      issue: scopeEstimateIssue(options.effort, options.listedCount),
+      changedFiles: options.changedFiles,
+      comments: options.comments ?? [],
+    }),
+  );
+}
+
+/** A trusted, unedited post-push record whose fields all match the PR. */
+function estimateRecordComment(
+  effort: EstimateEffort,
+  candidateFiles: readonly string[],
+  overrides: Record<string, unknown> = {},
+) {
+  return {
+    id: '42',
+    createdAt: '2026-11-07T12:00:00Z',
+    body: renderScopeOverrunRecordComment({
+      markerPrefix: 'idd-skill',
+      agentId: 'codex-test',
+      issueNumber: 4676,
+      effort,
+      candidateFiles,
+      pullRequestNumber: 9001,
+      branch: 'issue/4676-scope-overrun',
+      headSha: SCOPE_OVERRUN_HEAD,
+    }),
+    authorLogin: 'maintainer',
+    lastEditedAt: null,
+    ...overrides,
+  };
+}
+
+/**
+ * A plan comment from a trusted login that copies every identifier the audit
+ * binds: issue, claim, branch, pull request, head, effort, and both path lists.
+ */
+function forgedPlanComment(
+  effort: EstimateEffort,
+  listed: readonly string[],
+  changed: readonly string[],
+  trailer: string[] = [],
+) {
+  return {
+    id: '41',
+    createdAt: '2026-11-07T11:55:00Z',
+    body: [
+      '## Plan',
+      '',
+      'Issue: 4676',
+      'Claim: claim-id-4676',
+      'Agent: codex-test',
+      'Branch: issue/4676-scope-overrun',
+      'Pull request: 9001',
+      `Head: ${SCOPE_OVERRUN_HEAD}`,
+      `Effort: ${effort}`,
+      `Candidate files: ${listed.join(', ')}`,
+      `Changed files: ${changed.join(', ')}`,
+      'Verdict: the same intent and a count-only difference.',
+      ...trailer,
+    ].join('\n'),
+    authorLogin: 'maintainer',
+    lastEditedAt: null,
+  };
+}
+
+test('advisory evidence (#5221): a count-only S or M difference stays blocked at F2/F3, and counts within the estimate return no scope result', () => {
+  for (const { effort, listedCount, actualCount } of [
+    { effort: 'S', listedCount: 3, actualCount: 5 },
+    { effort: 'S', listedCount: 3, actualCount: 9 },
+    { effort: 'S', listedCount: 3, actualCount: 12 },
+    { effort: 'M', listedCount: 8, actualCount: 9 },
+    { effort: 'M', listedCount: 8, actualCount: 12 },
+  ] as const) {
+    assert.deepEqual(
+      estimateReadiness({
+        effort,
+        listedCount,
+        changedFiles: estimatePaths(actualCount),
+      }),
+      COUNT_ONLY_BLOCK,
+      `${effort} ${listedCount} against ${actualCount}`,
+    );
+  }
+  for (const { effort, count } of [
+    { effort: 'S', count: 3 },
+    { effort: 'M', count: 8 },
+  ] as const) {
+    assert.equal(
+      estimateReadiness({
+        effort,
+        listedCount: count,
+        changedFiles: estimatePaths(count),
+      }),
+      null,
+      `${effort} at ${count}`,
+    );
+  }
+});
+
+test('advisory evidence (#5221): an added deliverable, a permissions path, and a safety path at the same count get the count-only result', () => {
+  const listed = estimatePaths(3);
+  const baseline = estimateReadiness({
+    effort: 'S',
+    listedCount: 3,
+    changedFiles: estimatePaths(5),
+  });
+  assert.deepEqual(baseline, COUNT_ONLY_BLOCK);
+  for (const [name, extra] of [
+    ['a genuine added deliverable', ['src/new-deliverable.mts', 'docs/new.md']],
+    [
+      'a permissions change',
+      ['.github/CODEOWNERS', '.github/workflows/ci.yml'],
+    ],
+    [
+      'a safety change',
+      ['.github/idd/config.json', 'src/scripts/claim-lock.mts'],
+    ],
+  ] as const) {
+    assert.deepEqual(
+      estimateReadiness({
+        effort: 'S',
+        listedCount: 3,
+        changedFiles: [...listed, ...extra],
+      }),
+      baseline,
+      `${name} reads exactly like a count-only difference: the audit sees paths, not meaning`,
+    );
+  }
+});
+
+test('advisory evidence (#5221): incomplete evidence throws or stays blocked, never advisory', () => {
+  const changedFiles = estimatePaths(5);
+  const issue = scopeEstimateIssue('S', 3);
+  assert.throws(
+    () =>
+      resolveScopeOverrunReadiness(
+        scopeOverrunInput({ issue: { ...issue, body: '  ' }, changedFiles }),
+      ),
+    /incomplete issue or PR evidence/u,
+  );
+  assert.throws(
+    () =>
+      resolveScopeOverrunReadiness(
+        scopeOverrunInput({ issue: { ...issue, title: ' ' }, changedFiles }),
+      ),
+    /incomplete issue or PR evidence/u,
+  );
+  const record = estimateRecordComment('S', changedFiles);
+  assert.deepEqual(
+    estimateReadiness({
+      effort: 'S',
+      listedCount: 3,
+      changedFiles,
+      comments: [record],
+    }),
+    {
+      status: 'invalid',
+      reason: 'no-decision',
+      recordedHeadSha: SCOPE_OVERRUN_HEAD,
+    },
+    'a record that no owner decision names stays blocked',
+  );
+  assert.deepEqual(
+    estimateReadiness({
+      effort: 'S',
+      listedCount: 3,
+      changedFiles,
+      comments: [{ ...record, id: 'not-a-number' }],
+    }),
+    { status: 'invalid', reason: 'record-malformed', recordedHeadSha: null },
+    'a record without ordering metadata is incomplete evidence',
+  );
+});
+
+test('advisory evidence (#5221): a lost claim and unfinished validation keep their own blockers next to the count block', () => {
+  const scopeOverrun = estimateReadiness({
+    effort: 'S',
+    listedCount: 3,
+    changedFiles: estimatePaths(5),
+  });
+  assert.deepEqual(scopeOverrun, COUNT_ONLY_BLOCK);
+  for (const [name, gate] of [
+    ['claim-lost', 'claim-ownership'],
+    ['ci-not-ready', 'ci'],
+  ] as const) {
+    const fixture = readJson(`fixtures/pre-merge-readiness/${name}.json`);
+    const summary = buildPreMergeReadinessSummary(
+      fixture.input,
+      fixture.options,
+    );
+    const blockers: Array<{ gate: string }> = computePreMergeReadinessBlockers({
+      ...summary,
+      claim: Object.assign({}, summary.claim, { scopeOverrun }),
+    });
+    const gates: string[] = blockers.map((blocker) => blocker.gate);
+    assert.ok(gates.includes(gate), `${name} keeps its ${gate} blocker`);
+    assert.ok(
+      gates.includes('scope-overrun'),
+      `${name} also carries the count block`,
+    );
+    assert.deepEqual(
+      gates.filter((candidate) => candidate !== 'scope-overrun'),
+      (fixture.expected.blockers as Array<{ gate: string }>).map(
+        (blocker) => blocker.gate,
+      ),
+      `${name} adds only the count block to the fixture's own blockers`,
+    );
+  }
+});
+
+test('advisory evidence (#5221): a stale or self-authored decision stays invalid', () => {
+  const changedFiles = estimatePaths(5);
+  const record = estimateRecordComment('S', changedFiles);
+  const stale = estimateReadiness({
+    effort: 'S',
+    listedCount: 3,
+    changedFiles,
+    comments: [record, scopeOverrunDecisionComment('b'.repeat(40))],
+  });
+  assert.deepEqual(
+    stale,
+    {
+      status: 'invalid',
+      reason: 'decision-head-mismatch',
+      recordedHeadSha: SCOPE_OVERRUN_HEAD,
+    },
+    'a decision that names another head does not carry over',
+  );
+  const selfAuthored = estimateReadiness({
+    effort: 'S',
+    listedCount: 3,
+    changedFiles,
+    comments: [
+      record,
+      {
+        ...scopeOverrunDecisionComment(SCOPE_OVERRUN_HEAD),
+        body: `Scope decision: accept head ${SCOPE_OVERRUN_HEAD}\n\n<!-- idd-agent-authored: codex-test -->\n`,
+      },
+    ],
+  });
+  assert.deepEqual(selfAuthored, {
+    status: 'invalid',
+    reason: 'decision-agent-authored',
+    recordedHeadSha: null,
+  });
+});
+
+test('advisory evidence (#5221): a forged plan whose copied identifiers all match does not become advisory', () => {
+  const listed = estimatePaths(3);
+  const changedFiles = estimatePaths(5);
+  const baseline = estimateReadiness({
+    effort: 'S',
+    listedCount: 3,
+    changedFiles,
+  });
+  assert.deepEqual(baseline, COUNT_ONLY_BLOCK);
+  assert.deepEqual(
+    estimateReadiness({
+      effort: 'S',
+      listedCount: 3,
+      changedFiles,
+      comments: [forgedPlanComment('S', listed, changedFiles)],
+    }),
+    baseline,
+    'a plan comment is not evidence the audit reads, whoever wrote it',
+  );
+  assert.deepEqual(
+    estimateReadiness({
+      effort: 'S',
+      listedCount: 3,
+      changedFiles,
+      comments: [
+        forgedPlanComment('S', listed, changedFiles, [
+          `Scope decision: accept head ${SCOPE_OVERRUN_HEAD}`,
+        ]),
+      ],
+    }),
+    baseline,
+    'a decision line that is not the first line of the comment is ignored',
+  );
+  assert.deepEqual(
+    estimateReadiness({
+      effort: 'S',
+      listedCount: 3,
+      changedFiles,
+      comments: [
+        {
+          ...scopeOverrunDecisionComment(SCOPE_OVERRUN_HEAD),
+          body: `Scope decision: accept head ${SCOPE_OVERRUN_HEAD} (the same intent)`,
+        },
+      ],
+    }),
+    { status: 'invalid', reason: 'decision-malformed', recordedHeadSha: null },
+    'a first-line decision with trailing text is malformed',
+  );
+  assert.deepEqual(
+    estimateReadiness({
+      effort: 'S',
+      listedCount: 3,
+      changedFiles,
+      comments: [
+        forgedPlanComment('S', listed, changedFiles),
+        estimateRecordComment('S', changedFiles),
+      ],
+    }),
+    {
+      status: 'invalid',
+      reason: 'no-decision',
+      recordedHeadSha: SCOPE_OVERRUN_HEAD,
+    },
+    'a record with every field matching still waits for the owner',
+  );
+  const accepted = estimateReadiness({
+    effort: 'S',
+    listedCount: 3,
+    changedFiles,
+    comments: [
+      estimateRecordComment('S', changedFiles),
+      scopeOverrunDecisionComment(SCOPE_OVERRUN_HEAD),
+    ],
+  });
+  assert.deepEqual(
+    accepted,
+    {
+      status: 'valid',
+      reason: 'accepted',
+      recordedHeadSha: SCOPE_OVERRUN_HEAD,
+    },
+    'the one existing unblocking path is an exact-head owner decision, not advisory evidence',
+  );
+});
+
 test('pre-merge readiness schema validates scope-overrun evidence', () => {
   const fixture = readJson('fixtures/pre-merge-readiness/clean.json');
   const summary = buildPreMergeReadinessSummary(fixture.input, fixture.options);
