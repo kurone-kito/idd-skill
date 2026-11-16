@@ -246,8 +246,7 @@ function requiredChecksPassing(pr, repository, number) {
     return false;
   }
 }
-/** GitHub transport for the command consumer in issue #4799. */
-// audit:ignore-dead-export: consumed by the command child #4799
+/** GitHub transport for the provisional-decision command (issue #4799). */
 export function createGithubProvisionalDecisionStore(input) {
   const { repository, issueNumber } = input;
   if (
@@ -367,6 +366,7 @@ export function createGithubProvisionalDecisionStore(input) {
     return { comments, complete, serverDate };
   }
   return {
+    policy,
     readHistory,
     async readSourceIssue() {
       const issue = object(ghApiJson(issuePath));

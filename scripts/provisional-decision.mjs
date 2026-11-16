@@ -58,8 +58,12 @@ function sourceFromRead(request, read) {
 function normalizeLogin(login) {
   return (login ?? '').trim().toLowerCase();
 }
-function resolveClaimFold(history) {
-  const config = loadIddConfig();
+/** The config the planner reads: the store's trusted policy when it has one. */
+function plannerConfig(store) {
+  return store.policy === undefined ? loadIddConfig() : store.policy;
+}
+function resolveClaimFold(history, store) {
+  const config = plannerConfig(store);
   const trustedLogins = resolveTrustedMarkerActors({ config }).actors.map(
     (login) => login.trim().toLowerCase(),
   );
@@ -394,8 +398,8 @@ function baselineMatches(baseline, source) {
     baseline.bodySha256 === source.snapshot.bodySha256
   );
 }
-function chooseLabelName() {
-  const config = loadIddConfig();
+function chooseLabelName(store) {
+  const config = plannerConfig(store);
   const labels = config?.labels;
   if (
     labels &&
@@ -681,7 +685,7 @@ async function planProvisionalDecisionCommand(request, store) {
       `historical completion verification failed: ${errorText(error)}`,
     );
   }
-  const folded = resolveClaimFold(history);
+  const folded = resolveClaimFold(history, store);
   if (!folded)
     return refused(
       'recovery-hold',
@@ -914,7 +918,7 @@ async function planProvisionalDecisionCommand(request, store) {
       let labelPresent = false;
       if (request.type === 'work-completed') {
         const label = await store.applyOrReadDecisionLabel({
-          labelName: chooseLabelName(),
+          labelName: chooseLabelName(store),
           apply: false,
         });
         labelPresent = label.present === true;
@@ -1182,7 +1186,7 @@ async function applyCompletionLabel(request, store, planned) {
   }
   try {
     const label = await store.applyOrReadDecisionLabel({
-      labelName: chooseLabelName(),
+      labelName: chooseLabelName(store),
       apply: true,
     });
     if (label.present === true)
@@ -1208,7 +1212,6 @@ async function applyCompletionLabel(request, store, planned) {
  * Run the provisional-decision protocol. The default is read-only; `apply`
  * re-reads every gate before appending or applying a completion label.
  */
-// audit:ignore-dead-export: consumed by the command child #4799
 export async function runProvisionalDecisionCommand(
   request,
   store,

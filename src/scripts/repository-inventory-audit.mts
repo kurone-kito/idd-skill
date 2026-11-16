@@ -90,6 +90,7 @@ export const COVERED_HELPERS = [
   'provider-health',
   'provider-outage-declaration',
   'provider-outage-park',
+  'provisional-decision-command',
   'publish-authoring-hold',
   'release-tag',
   'rerun-advisory-convergence',

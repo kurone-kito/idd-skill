@@ -5,7 +5,7 @@
 // docs/typescript-sources.md.
 
 import { createHash } from 'node:crypto';
-import { loadIddConfig } from './idd-config.mts';
+import { type IddConfig, loadIddConfig } from './idd-config.mts';
 import {
   parseClaimComment,
   parseForcedHandoffComment,
@@ -77,6 +77,11 @@ export interface ProvisionalDecisionStoredRecord {
 }
 
 export interface ProvisionalDecisionStore {
+  /**
+   * The trusted policy the planner reads for claim trust and the label name.
+   * Undefined reads the local config, as the planner always has.
+   */
+  readonly policy?: IddConfig | null;
   readHistory(): Promise<ProvisionalDecisionHistoryRead>;
   readSourceIssue(): Promise<ProvisionalDecisionSourceIssueRead>;
   readPullRequest(url: string): Promise<ProvisionalDecisionPullRequestRead>;
@@ -262,10 +267,16 @@ function normalizeLogin(login: string | null): string {
   return (login ?? '').trim().toLowerCase();
 }
 
+/** The config the planner reads: the store's trusted policy when it has one. */
+function plannerConfig(store: ProvisionalDecisionStore): IddConfig | null {
+  return store.policy === undefined ? loadIddConfig() : store.policy;
+}
+
 function resolveClaimFold(
   history: ProvisionalDecisionHistoryRead,
+  store: ProvisionalDecisionStore,
 ): ClaimFoldVerification | null {
-  const config = loadIddConfig();
+  const config = plannerConfig(store);
   const trustedLogins = resolveTrustedMarkerActors({ config }).actors.map(
     (login) => login.trim().toLowerCase(),
   );
@@ -653,8 +664,8 @@ function baselineMatches(
   );
 }
 
-function chooseLabelName(): string {
-  const config = loadIddConfig();
+function chooseLabelName(store: ProvisionalDecisionStore): string {
+  const config = plannerConfig(store);
   const labels = config?.labels;
   if (
     labels &&
@@ -971,7 +982,7 @@ async function planProvisionalDecisionCommand(
     );
   }
 
-  const folded = resolveClaimFold(history);
+  const folded = resolveClaimFold(history, store);
   if (!folded)
     return refused(
       'recovery-hold',
@@ -1214,7 +1225,7 @@ async function planProvisionalDecisionCommand(
       let labelPresent = false;
       if (request.type === 'work-completed') {
         const label = await store.applyOrReadDecisionLabel({
-          labelName: chooseLabelName(),
+          labelName: chooseLabelName(store),
           apply: false,
         });
         labelPresent = label.present === true;
@@ -1511,7 +1522,7 @@ async function applyCompletionLabel(
 
   try {
     const label = await store.applyOrReadDecisionLabel({
-      labelName: chooseLabelName(),
+      labelName: chooseLabelName(store),
       apply: true,
     });
     if (label.present === true)
@@ -1538,7 +1549,6 @@ async function applyCompletionLabel(
  * Run the provisional-decision protocol. The default is read-only; `apply`
  * re-reads every gate before appending or applying a completion label.
  */
-// audit:ignore-dead-export: consumed by the command child #4799
 export async function runProvisionalDecisionCommand(
   request: ProvisionalDecisionCommandRequest,
   store: ProvisionalDecisionStore,

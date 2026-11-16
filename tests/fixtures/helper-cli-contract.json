@@ -649,6 +649,18 @@
         }
       }
     },
+    "idd-provisional-decision.mjs": {
+      "runs": {
+        "unknownFlag": {
+          "exitCode": 1,
+          "kind": "usage"
+        },
+        "noArgs": {
+          "exitCode": 2,
+          "kind": "usage"
+        }
+      }
+    },
     "idd-publish-authoring-hold.mjs": {
       "runs": {
         "unknownFlag": {
