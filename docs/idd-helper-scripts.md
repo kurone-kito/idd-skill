@@ -6110,6 +6110,46 @@ marker does not change the stored scope or decision.
 This record is durable issue evidence: it is not added to the transient
 `OPERATIONAL_MARKERS` cleanup or hide-at-post-time registries.
 
+#### Historical scope-overrun evidence
+
+Issue `#5219` asks whether F2/F3 can tell a past scope overrun from the
+current head using only the records that exist today, without a new receipt.
+Reports on pull request `#5205` and pull request `#5212` showed a count over
+the estimate and no usable scope record; they do not show that either pull
+request may merge. This section is read-only evidence: it adds no helper, no
+marker field, and no change to any F2/F3 result. The tests whose names start
+with `scope-overrun historical evidence` in `tests/pre-merge-readiness.test.mts`
+pin the facts below against the unchanged `resolveScopeOverrunReadiness()`.
+
+<!-- dprint-ignore-start -->
+| Binding | What current records and live reads supply | Reconstructible from current records |
+| --- | --- | --- |
+| Claim identity | A record carries only a self-reported `agent=` token. `resolveScopeOverrunEvidence()` and the readiness input take no claim ID, and the audit reads every comment on the claimed issue. | No. An agent-id and timestamp comparison against `claimed-by` markers could approximate it, but no helper binds a record to one claim lineage. |
+| Unchanged issue scope | A record snapshots `effort` and the changed-path set (`files=`). The audit reads the live issue body for the effort marker and `## Candidate files`; ordinary body edits are intentionally not an input. | No. No record holds the declared candidate files or a body digest, so an unchanged declared scope cannot be checked. |
+| Pull request and branch | A post-push record carries `pr=` and `branch=`, compared with the live PR number and head ref; a mismatch is `record-conflict`. A pre-push record carries neither. | Yes for a post-push record. No for a pre-push record. |
+| Historical base and head | A post-push record names its head in `head=`. No base SHA is recorded anywhere. | Head: yes, as the record's own statement. Base: no. |
+| Current base and head | The audit reads the live PR head and the merge base of `refs/remotes/origin/<base>` and that head (`readMergeBaseSha`). | Yes at audit time. Nothing retains them afterwards. |
+| Canonical path sets | The earlier set is the record's `files=` list, supplied by the caller through `--candidate-files` and never recomputed from Git. The current set is recomputed live from changed files, rename sources, sync targets, and generated mirrors read at the merge base. A lineage holds one set: every record must share `effort` and the sorted set, so a record with another set is `record-conflict`. | Current set: yes. Earlier set: only as the author's list; no helper recomputes it at a recorded head, and the lineage cannot hold a second set for the current head. |
+| Record authorship | The GitHub comment author (`authorLogin`) is checked against the trusted marker actors resolved at audit time. `agent=` is self-reported, and a shared GitHub login cannot say which process or person wrote an unmarked comment. | Author login: yes. Which actor wrote it: no. |
+| Edit status | `lastEditedAt` must be explicitly `null` for each record and decision; any other value or an unknown one is `record-edited-or-unknown` or `decision-edited-or-unknown`. | Whether a comment was edited at all: yes. What an edited comment said before: no. |
+<!-- dprint-ignore-end -->
+
+For the historical pair, an earlier head over the estimate and a current head
+inside the declared scope with no owner acceptance of the current head, the
+unchanged function returns `invalid` with reason `no-decision` and the earlier
+head as `recordedHeadSha`; it never returns `valid`. With an owner decision for
+the earlier head only, it returns `invalid` with `current-head-mismatch`. A
+record for the current head with its own path set conflicts with the lineage.
+The rows marked not reconstructible are the ones a check would need before it
+could treat the earlier head's record as history rather than as a pending
+decision on the current head.
+
+<!-- markdownlint-disable MD013 -->
+
+Recommendation: existing records cannot prove that distinction. Smallest follow-up: a versioned receipt, not implemented here.
+
+<!-- markdownlint-enable MD013 -->
+
 ### Local validation evidence helper
 
 - Command:
