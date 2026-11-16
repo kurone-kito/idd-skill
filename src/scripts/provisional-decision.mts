@@ -1797,6 +1797,7 @@ export type ConfirmationInterpretation =
       readonly requestedOptionId: string;
       readonly rationale: string;
     }
+  | { readonly response: 'declined' }
   | { readonly response: 'none' };
 
 /**
@@ -1880,6 +1881,7 @@ export function readConfirmationAnswer(
     if (reading.response === 'accepted') {
       return { kind: 'accepted', channel: 'conversation', answerText: message };
     }
+    if (reading.response === 'declined') return pending('declined');
     if (reading.response === 'rework') {
       if (
         !alternativeIds.includes(reading.requestedOptionId) ||
@@ -1906,7 +1908,7 @@ export function readConfirmationAnswer(
   if (/^(?:y|yes)$/iu.test(text)) {
     return { kind: 'accepted', channel: 'terminal', answerText: text };
   }
-  if (/^(?:n|no)$/iu.test(text)) return pending('declined');
+  if (/^(?:n|no|nope)$/iu.test(text)) return pending('declined');
   const rework = TERMINAL_REWORK_PATTERN.exec(text);
   if (rework?.[1] && rework[2] && alternativeIds.includes(rework[1])) {
     return {
@@ -2090,10 +2092,19 @@ function resolutionRefusal(
   };
 }
 
+/** The answer's identity without the source's update time, which any edit moves. */
+function answerStepDigest(body: string): string {
+  const parsed = parseProvisionalDecisionAnswerComment(body);
+  if (!parsed.ok) return bodySha256(body);
+  const { source, ...rest } = parsed.answer;
+  const { updatedAt: _updatedAt, ...snapshot } = source.snapshot;
+  return bodySha256(digestJson({ ...rest, source: { ...source, snapshot } }));
+}
+
 function stepKey(step: ResolutionStep): string {
   switch (step.kind) {
     case 'append-answer':
-      return `answer:${bodySha256(step.body)}`;
+      return `answer:${answerStepDigest(step.body)}`;
     case 'close-source':
       return 'close';
     case 'release-claim':
@@ -2319,8 +2330,14 @@ function reworkHandoffFor(
   };
 }
 
+/** A JSON escape keeps an at-sign in the user's words from notifying anyone. */
+function escapeMentions(jsonText: string): string {
+  return jsonText.replaceAll('@', '\\u0040');
+}
+
 function answerBodyFor(answer: ProvisionalDecisionAnswer): string {
-  return `${ANSWER_MARKER}\n${PROVISIONAL_DECISION_ANSWER_NOTE}\n${JSON.stringify(answer)}`;
+  const json = escapeMentions(JSON.stringify(answer));
+  return `${ANSWER_MARKER}\n${PROVISIONAL_DECISION_ANSWER_NOTE}\n${json}`;
 }
 
 /** The candidate record an answer would back for one decision, if any. */
@@ -2565,17 +2582,18 @@ function alternativeIdsOf(
   ).map((alternative) => String(alternative.id));
 }
 
-/** Pending reasons that are a deliberate "no" or abort by the user. */
-const EXPLICIT_NO_REASONS: ReadonlySet<ConfirmationPendingReason> = new Set([
-  'declined',
-  'default-no',
-  'eof',
-  'cancelled',
-]);
+/** Pending reasons that are a deliberate no, an abort, or an unclear reply. */
+const CONFLICTING_PENDING_REASONS: ReadonlySet<ConfirmationPendingReason> =
+  new Set(['declined', 'default-no', 'eof', 'cancelled', 'unrecognized']);
+
+interface PersistedResponse {
+  readonly response: 'accepted' | 'rework';
+  readonly requestedOptionId?: string;
+}
 
 function inputConflictsWithAnswer(
   reading: ConfirmationAnswer,
-  answer: ProvisionalDecisionAnswer,
+  answer: PersistedResponse,
 ): boolean {
   if (reading.kind === 'accepted') return answer.response !== 'accepted';
   if (reading.kind === 'rework') {
@@ -2584,7 +2602,34 @@ function inputConflictsWithAnswer(
       answer.requestedOptionId !== reading.requestedOptionId
     );
   }
-  return EXPLICIT_NO_REASONS.has(reading.reason);
+  return CONFLICTING_PENDING_REASONS.has(reading.reason);
+}
+
+/** What the records already say about each targeted, resolved decision. */
+function persistedResponses(
+  bundle: readonly ReplayedProvisionalDecision[],
+  targets: readonly number[],
+): PersistedResponse[] {
+  return targets.flatMap((generation): PersistedResponse[] => {
+    const decision = bundle.find(
+      (item) => item.decisionGeneration === generation,
+    );
+    if (decision?.status === 'confirmed') {
+      return [{ response: 'accepted' as const }];
+    }
+    if (decision?.status === 'rework-requested') {
+      return [
+        {
+          response: 'rework' as const,
+          requestedOptionId: String(
+            asRecord(decision.reworkRequested?.event.reworkRequest)
+              .requestedOptionId,
+          ),
+        },
+      ];
+    }
+    return [];
+  });
 }
 
 async function planResolve(
@@ -2639,6 +2684,23 @@ async function planResolve(
     .sort((left, right) => left - right);
 
   if (unresolved.length === 0) {
+    // A persisted confirmation or rework request cannot be undone, so an
+    // explicit conflicting input is refused before the remaining steps.
+    const persisted = persistedResponses(bundle, targets);
+    if (persisted.length > 0) {
+      const reading = readConfirmationAnswer(
+        request.input,
+        targets.flatMap((generation) => alternativeIdsOf(bundle, generation)),
+      );
+      if (
+        persisted.some((answer) => inputConflictsWithAnswer(reading, answer))
+      ) {
+        return resolutionRefusal(
+          'fix-input',
+          'a confirmation or rework request is already persisted for these decisions and the new input conflicts with it; resume without a new input',
+        );
+      }
+    }
     if (bundle.every((decision) => decision.status === 'confirmed')) {
       if (context.sourceState.state === 'open') {
         if (!context.active) {
@@ -2662,7 +2724,11 @@ async function planResolve(
       );
     }
     if (bundle.some((decision) => decision.status === 'rework-authored')) {
-      return resolutionRefusal('none', 'rework authoring is already recorded');
+      return releaseStep(
+        context,
+        'rework-authored',
+        'rework authoring is already recorded',
+      );
     }
     const reworking = bundle.some(
       (decision) => decision.status === 'rework-requested',
@@ -2710,7 +2776,12 @@ async function planResolve(
       continue;
     }
     const parsed = parseProvisionalDecisionAnswerComment(comment.body);
-    if (!parsed.ok || !parsed.answer.presentedQuestion) continue;
+    if (
+      !parsed.ok ||
+      parsed.answer.presentedQuestion !== PROVISIONAL_CONFIRMATION_QUESTION
+    ) {
+      continue;
+    }
     const covered = unresolved.filter((generation) =>
       (
         parsed.answer.appliesToDecisionGenerations ??
@@ -2776,8 +2847,10 @@ async function planResolve(
   if (answer.kind === 'pending') {
     const released = releaseStep(
       context,
-      'pending-released',
-      `no confirmation was given (${answer.reason}); the source stays confirmation-pending`,
+      bundle.some((decision) => decision.status === 'rework-requested')
+        ? 'rework-handoff-recorded'
+        : 'pending-released',
+      `no further confirmation was given (${answer.reason}); the undecided decisions stay confirmation-pending`,
     );
     return released.kind === 'step'
       ? { ...released, presentation, presentationSha256: digest }
@@ -2994,6 +3067,17 @@ async function planReworkAuthored(
     const authored = bundle.some(
       (decision) => decision.status === 'rework-authored',
     );
+    const unfinished = bundle.some(
+      (decision) =>
+        decision.status !== 'confirmed' &&
+        decision.status !== 'rework-authored',
+    );
+    if (authored && unfinished) {
+      return resolutionRefusal(
+        'none',
+        'the bundle still has decisions without a final state',
+      );
+    }
     if (authored && replayContext(context, [], { evidence: known }).valid) {
       return {
         kind: 'done',
@@ -3006,16 +3090,19 @@ async function planReworkAuthored(
       'no rework request is waiting for its authoring record',
     );
   }
-  const lastClaim = context.lineage.at(-1);
-  if (
-    !lastClaim ||
-    lastClaim.claimId !== request.claimId ||
-    lastClaim.agentId !== request.agentId ||
-    lastClaim.branch !== request.branch
-  ) {
+  const target = awaiting[0] as ReplayedProvisionalDecision;
+  const namesRequestingClaim = bundle.some((decision) => {
+    const named = decision.reworkRequested?.claimLineage.at(-1);
+    return (
+      named?.claimId === request.claimId &&
+      named.agentId === request.agentId &&
+      named.branch === request.branch
+    );
+  });
+  if (!namesRequestingClaim) {
     return resolutionRefusal(
       'fix-input',
-      'the latest claim on the source is not the released coordination claim named by the request',
+      'the request does not name a coordination claim that recorded a rework request of this bundle',
     );
   }
   if (
@@ -3028,7 +3115,6 @@ async function planReworkAuthored(
       'the source has not been rewritten into the rework roadmap',
     );
   }
-  const target = awaiting[0] as ReplayedProvisionalDecision;
   const handoff = asRecord(target.reworkRequested?.event.reworkRequest)
     .handoff as ProvisionalReworkHandoff | undefined;
   if (!handoff) {
@@ -3116,7 +3202,9 @@ async function executeStep(
     default:
       await store.appendRecordBody(
         step.record.recordId,
-        recordCommentBody(step.record),
+        step.kind === 'append-rework-request'
+          ? escapeMentions(recordCommentBody(step.record))
+          : recordCommentBody(step.record),
       );
   }
 }
@@ -3228,11 +3316,25 @@ export async function runProvisionalResolution(
     try {
       await executeStep(plan.step, store);
     } catch (error) {
-      if (plan.step.kind === 'release-claim') {
+      if (
+        plan.step.kind === 'release-claim' &&
+        !(await releaseVerified(request, store))
+      ) {
         return {
           state: 'reconciled',
           action: 'reconcile',
           reason: `release of the coordination claim is uncertain: ${errorText(error)}`,
+          nextStep: 'release-claim',
+          steps,
+          recordIds,
+        };
+      }
+      if (plan.step.kind === 'release-claim') {
+        steps.push('release-claim');
+        return {
+          state: 'applied',
+          outcome: plan.step.outcome,
+          reason: plan.step.reason ?? 'complete',
           steps,
           recordIds,
         };
@@ -3260,6 +3362,7 @@ export async function runProvisionalResolution(
           action: 'reconcile',
           reason:
             'the coordination claim release is not confirmed by a fresh read',
+          nextStep: 'release-claim',
           steps,
           recordIds,
         };

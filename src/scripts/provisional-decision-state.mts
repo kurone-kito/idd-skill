@@ -1191,9 +1191,17 @@ function parseMarkedJson(
     return undefined;
   }
   if (allowVisibleNote) {
-    // An optional one-line italic note keeps the comment readable on GitHub.
-    const note = /^_[^\r\n]+_\r?\n/u.exec(payload);
-    if (note) payload = payload.slice(note[0].length);
+    // The canonical one-line note keeps the comment readable on GitHub; no
+    // other text may stand between the marker and the JSON.
+    for (const note of [
+      `${PROVISIONAL_DECISION_ANSWER_NOTE}\r\n`,
+      `${PROVISIONAL_DECISION_ANSWER_NOTE}\n`,
+    ]) {
+      if (payload.startsWith(note)) {
+        payload = payload.slice(note.length);
+        break;
+      }
+    }
   }
   if (payload.trim().length === 0) {
     issues.push({

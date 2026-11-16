@@ -988,6 +988,7 @@ test('an uncertain release is reported and the same release is reconciled next',
       /release of the coordination claim is uncertain/,
     );
     assert.equal(first.outcome, undefined);
+    assert.equal(first.nextStep, 'release-claim');
     assert.equal(activeCoordinationClaim(store), true);
     assert.equal(eventsOf(store).includes('confirmed'), false);
     // A new resolution attempt under another claim must not start first.
@@ -1008,7 +1009,10 @@ test('an uncertain release is reported and the same release is reconciled next',
     const store = await pendingStore();
     store.releaseFailure = 'after';
     const first = await answered(store, null);
-    assert.equal(first.state, 'reconciled', JSON.stringify(first));
+    // A fresh read proves the release landed, so it counts as done.
+    assert.equal(first.state, 'applied', JSON.stringify(first));
+    assert.equal(first.outcome, 'pending-released');
+    assert.deepEqual(first.steps, ['release-claim']);
     assert.equal(activeCoordinationClaim(store), false);
     store.releaseFailure = undefined;
     const releasesBefore = store.releases;
@@ -1923,6 +1927,7 @@ test('the same request cannot produce another handoff, set, or confirmation', as
 
   // A new claim that tries to confirm instead cannot erase the choice.
   postCoordinationClaim(store, 'claim-4536-coord-b');
+  const writesBefore = store.writes();
   const confirm = await runProvisionalResolution(
     resolveRequest(
       { input: conversationYes, answeredPresentationSha256: 'x' },
@@ -1931,15 +1936,26 @@ test('the same request cannot produce another handoff, set, or confirmation', as
     store,
     { apply: true },
   );
-  assert.equal(
-    confirm.outcome,
-    'rework-handoff-recorded',
-    JSON.stringify(confirm),
-  );
-  assert.deepEqual(confirm.steps, ['release-claim']);
+  assertRefused(confirm, 'fix-input', /conflicts with it/);
+  assert.equal(store.writes(), writesBefore);
   assert.equal(eventsOf(store).length, records);
   assert.equal(answersOf(store).length, answers);
   assert.equal(store.sourceState.state, 'open');
+
+  // Resuming without an input only releases the new claim.
+  const resume = await runProvisionalResolution(
+    resolveRequest({}, 'claim-4536-coord-b'),
+    store,
+    { apply: true },
+  );
+  assert.equal(
+    resume.outcome,
+    'rework-handoff-recorded',
+    JSON.stringify(resume),
+  );
+  assert.deepEqual(resume.steps, ['release-claim']);
+  assert.equal(eventsOf(store).length, records);
+  assert.equal(answersOf(store).length, answers);
   assert.deepEqual(handoffOf(store), handoff);
 });
 
@@ -2926,7 +2942,7 @@ test('the result schema accepts a candidate record that carries a handoff', asyn
   assert.ok(validate(broken, schema).length > 0);
 });
 
-test('rework-authored needs a rewritten source and the released coordination claim', async (t) => {
+test('rework-authored needs a rewritten source and the requesting coordination claim', async (t) => {
   await t.test('an unchanged source', async () => {
     const fixture = await authoredFixture();
     fixture.store.source = { ...fixture.store.source, body };
@@ -2940,10 +2956,9 @@ test('rework-authored needs a rewritten source and the released coordination cla
   });
 
   await t.test(
-    'another claim than the coordination claim is the latest',
+    'a claim posted and released since does not block it',
     async () => {
       const fixture = await authoredFixture();
-      // A later claim was posted and released since, so none is active.
       fixture.store.addComment((at) =>
         renderClaimedByMarker({
           agentId: 'another-agent',
@@ -2965,8 +2980,8 @@ test('rework-authored needs a rewritten source and the released coordination cla
         fixture.store,
         { apply: true },
       );
-      assertRefused(result, 'fix-input', /latest claim on the source/);
-      assert.equal(eventsOf(fixture.store).includes('rework-authored'), false);
+      assert.equal(result.outcome, 'rework-authored', JSON.stringify(result));
+      assert.equal(eventsOf(fixture.store).includes('rework-authored'), true);
     },
   );
 
@@ -2979,7 +2994,7 @@ test('rework-authored needs a rewritten source and the released coordination cla
     const result = await runProvisionalResolution(request, fixture.store, {
       apply: true,
     });
-    assertRefused(result, 'fix-input', /latest claim on the source/);
+    assertRefused(result, 'fix-input', /does not name a coordination claim/);
   });
 });
 
@@ -3007,4 +3022,383 @@ test('evidence is derived only for records of the attested authoring set', async
     { apply: true },
   );
   assertRefused(result, 'recovery-hold', /evidence is missing or duplicated/);
+});
+
+test('a conversational no, nope, or unclear reply cannot be overridden by a persisted answer', async (t) => {
+  const refusals: [string, ConfirmationInput][] = [
+    [
+      'a conversational no',
+      {
+        channel: 'conversation',
+        origin: 'user',
+        message: 'No, not yet.',
+        interpretation: { response: 'declined' },
+      },
+    ],
+    [
+      'nope at the prompt',
+      {
+        channel: 'terminal',
+        origin: 'user',
+        interactive: true,
+        event: { kind: 'line', text: 'nope' },
+      },
+    ],
+    [
+      'an unclear reply',
+      {
+        channel: 'terminal',
+        origin: 'user',
+        interactive: true,
+        event: { kind: 'line', text: 'maybe later' },
+      },
+    ],
+  ];
+  for (const [name, input] of refusals) {
+    await t.test(name, async () => {
+      const store = await pendingStore();
+      store.addComment(() => craftedAnswer(store, () => {}));
+      const result = await runProvisionalResolution(
+        resolveRequest({ input }),
+        store,
+        { apply: true },
+      );
+      assertRefused(result, 'fix-input', /conflicts with it/);
+      assert.equal(store.writes(), 0);
+    });
+  }
+  // A generic request to resolve is the normal trigger, not a refusal.
+  const store = await pendingStore();
+  store.addComment(() => craftedAnswer(store, () => {}));
+  const generic = await runProvisionalResolution(
+    resolveRequest({
+      input: {
+        channel: 'conversation',
+        origin: 'user',
+        message: 'Please resolve issue 4536.',
+        interpretation: { response: 'none' },
+      },
+    }),
+    store,
+    { apply: true },
+  );
+  assert.equal(generic.outcome, 'confirmed-closed', JSON.stringify(generic));
+  assert.deepEqual(
+    readConfirmationAnswer(
+      {
+        channel: 'conversation',
+        origin: 'user',
+        message: 'No.',
+        interpretation: { response: 'declined' },
+      },
+      ['change'],
+    ),
+    { kind: 'pending', reason: 'declined' },
+  );
+});
+
+test('a stored confirmation or rework request is not overridden by a conflicting input on resume', async (t) => {
+  await t.test('a confirmation whose close failed', async () => {
+    const store = await pendingStore();
+    store.closeFailure = 'before';
+    await answered(store, conversationYes);
+    store.closeFailure = undefined;
+    for (const input of [terminalNo, reworkConversation]) {
+      const result = await runProvisionalResolution(
+        resolveRequest({ input }),
+        store,
+        { apply: true },
+      );
+      assertRefused(result, 'fix-input', /already persisted/);
+    }
+    assert.equal(store.sourceState.state, 'open');
+    // The same acceptance, or none, resumes the close.
+    const agree = await runProvisionalResolution(
+      resolveRequest({ input: conversationYes }),
+      store,
+      { apply: true },
+    );
+    assert.equal(agree.outcome, 'confirmed-closed', JSON.stringify(agree));
+  });
+
+  await t.test('a rework request whose release failed', async () => {
+    const store = await pendingStore();
+    store.releaseFailure = 'before';
+    await answered(store, reworkConversation);
+    store.releaseFailure = undefined;
+    const conflict = await runProvisionalResolution(
+      resolveRequest({ input: conversationYes }),
+      store,
+      { apply: true },
+    );
+    assertRefused(conflict, 'fix-input', /already persisted/);
+    assert.equal(activeCoordinationClaim(store), true);
+    const agree = await runProvisionalResolution(
+      resolveRequest({ input: reworkConversation }),
+      store,
+      { apply: true },
+    );
+    assert.equal(
+      agree.outcome,
+      'rework-handoff-recorded',
+      JSON.stringify(agree),
+    );
+  });
+});
+
+test('a partially resolved bundle reports the outcome of what was recorded', async () => {
+  const store = await pendingStore(2);
+  // A persisted rework answer for decision 1, then a run that also targets 2.
+  store.addComment(() =>
+    craftedAnswer(store, (answer) => {
+      answer.response = 'rework';
+      answer.requestedOptionId = 'change';
+      answer.rationale = 'Revise this comparison.';
+      answer.answerText = 'I prefer the alternative.';
+      answer.decisionGenerations = [1, 2];
+      answer.appliesToDecisionGenerations = [1];
+      const bundle = answer.presentedBundle as Record<string, unknown>[];
+      const second = recordsOf(store).find(
+        (item) =>
+          item.event.type === 'work-completed' && item.decisionGeneration === 2,
+      ) as ProvisionalDecisionRecord;
+      const selection = recordsOf(store).find(
+        (item) =>
+          item.event.type === 'selected' && item.decisionGeneration === 2,
+      ) as ProvisionalDecisionRecord;
+      bundle.push({
+        decisionGeneration: 2,
+        question: selection.event.question,
+        selectedOptionId: 'keep',
+        feasibleAlternativeIds: ['change'],
+        workCompletedRecordId: second.recordId,
+        result: second.event.result,
+      });
+    }),
+  );
+  const result = await runProvisionalResolution(
+    resolveRequest({ decisionGenerations: [1, 2] }),
+    store,
+    { apply: true },
+  );
+  assert.equal(result.state, 'applied', JSON.stringify(result));
+  assert.equal(result.outcome, 'rework-handoff-recorded');
+  assert.deepEqual(result.steps, ['append-rework-request', 'release-claim']);
+  assert.equal(activeCoordinationClaim(store), false);
+});
+
+async function authoredFixtureFor(
+  store: MemoryStore,
+): Promise<AuthoredFixture> {
+  store.source = { ...store.source, body: roadmapBody };
+  const published = store.addComment(() => 'Rework roadmap published.');
+  const requested = recordsOf(store).find(
+    (item) => item.event.type === 'rework-requested',
+  ) as ProvisionalDecisionRecord;
+  const handoff = (
+    requested.event.reworkRequest as { handoff: ProvisionalReworkHandoff }
+  ).handoff;
+  return {
+    store,
+    handoff,
+    publishedAt: published.createdAt,
+    publishedId: published.id,
+  };
+}
+
+test('one authoring run records every decision that awaits it', async () => {
+  const store = await pendingStore(2);
+  const first = await answered(store, reworkConversation, {
+    decisionGenerations: [1],
+  });
+  assert.equal(first.outcome, 'rework-handoff-recorded', JSON.stringify(first));
+  postCoordinationClaim(store, 'claim-4536-coord-b');
+  const second = await answered(
+    store,
+    reworkConversation,
+    { decisionGenerations: [2] },
+    'claim-4536-coord-b',
+  );
+  assert.equal(
+    second.outcome,
+    'rework-handoff-recorded',
+    JSON.stringify(second),
+  );
+  const fixture = await authoredFixtureFor(store);
+  const result = await runProvisionalResolution(
+    authoredRequest(fixture),
+    store,
+    { apply: true },
+  );
+  assert.equal(result.state, 'applied', JSON.stringify(result));
+  assert.equal(result.outcome, 'rework-authored');
+  assert.deepEqual(result.steps, [
+    'append-rework-authored',
+    'append-rework-authored',
+  ]);
+  assert.equal(
+    eventsOf(store).filter((type) => type === 'rework-authored').length,
+    2,
+  );
+  const rerun = await runProvisionalResolution(
+    authoredRequest(fixture),
+    store,
+    { apply: true },
+  );
+  assert.equal(rerun.state, 'reconciled', JSON.stringify(rerun));
+});
+
+test('rework-authored is not terminal while another decision has no final state', async () => {
+  const store = await pendingStore(2);
+  const first = await answered(store, reworkConversation, {
+    decisionGenerations: [1],
+  });
+  assert.equal(first.outcome, 'rework-handoff-recorded', JSON.stringify(first));
+  const fixture = await authoredFixtureFor(store);
+  const result = await runProvisionalResolution(
+    authoredRequest(fixture),
+    store,
+    { apply: true },
+  );
+  // Decision 1 is recorded, but decision 2 is still pending.
+  assert.deepEqual(result.steps, ['append-rework-authored']);
+  assertRefused(result, 'none', /decisions without a final state/);
+});
+
+test('a coordination claim taken after authoring is released, not stranded', async () => {
+  const store = await pendingStore(2);
+  await answered(store, reworkConversation, { decisionGenerations: [1] });
+  const fixture = await authoredFixtureFor(store);
+  const authoredRun = await runProvisionalResolution(
+    authoredRequest(fixture),
+    store,
+    { apply: true },
+  );
+  assert.deepEqual(authoredRun.steps, ['append-rework-authored']);
+  const authored = recordsOf(store).find(
+    (item) => item.event.type === 'rework-authored',
+  ) as ProvisionalDecisionRecord;
+  const requested = recordsOf(store).find(
+    (item) => item.event.type === 'rework-requested',
+  ) as ProvisionalDecisionRecord;
+  const roadmap = authored.event.reworkRoadmap as Record<string, unknown>;
+  const evidence: VerifiedProvisionalReworkRoadmap[] = [
+    {
+      recordId: authored.recordId,
+      sourceBefore: requested.source,
+      sourceAfter: authored.source,
+      roadmapIssueNumber: issueNumber,
+      roadmapMarkerId: String(roadmap.roadmapMarkerId),
+      authoringSetId: String(roadmap.authoringSetId),
+      url: issueUrl,
+      publishedCommentId: fixture.publishedId,
+      publishedAt: fixture.publishedAt,
+    },
+  ];
+  // Decision 2 is confirmed under a new claim; decision 1 stays reworked.
+  postCoordinationClaim(store, 'claim-4536-coord-b');
+  const confirm = await answered(
+    store,
+    conversationYes,
+    { decisionGenerations: [2], verifiedReworkRoadmaps: evidence },
+    'claim-4536-coord-b',
+  );
+  assert.equal(confirm.state, 'applied', JSON.stringify(confirm));
+  assert.equal(confirm.steps.includes('append-confirmation'), true);
+  assert.equal(store.sourceState.state, 'open');
+  assert.equal(store.closes, 0);
+  const claim = store.history.comments.filter((comment) =>
+    comment.body.includes('claim-4536-coord-b'),
+  );
+  assert.equal(
+    claim.some((comment) => comment.body.startsWith('<!-- unclaimed-by')),
+    true,
+  );
+});
+
+test('a plan keyed without the source update time survives an unrelated edit', async () => {
+  const store = await pendingStore();
+  const digest = await shownDigest(store);
+  const before = store.historyReads;
+  store.readHook = (readNumber, target) => {
+    if (readNumber === before + 2) {
+      // A label or comment edit moves updatedAt but not the title or body.
+      target.source = { ...target.source, updatedAt: '2026-11-03T11:30:00Z' };
+    }
+  };
+  const result = await runProvisionalResolution(
+    resolveRequest({
+      input: conversationYes,
+      answeredPresentationSha256: digest,
+    }),
+    store,
+    { apply: true },
+  );
+  assert.equal(result.outcome, 'confirmed-closed', JSON.stringify(result));
+});
+
+test('the answer comment escapes an at-sign and needs the canonical note and question', async () => {
+  const store = await pendingStore();
+  const mention: ConfirmationInput = {
+    ...conversationYes,
+    message: 'Yes, and thanks @someone for the review.',
+  } as ConfirmationInput;
+  const result = await answered(store, mention);
+  assert.equal(result.outcome, 'confirmed-closed', JSON.stringify(result));
+  const stored = answersOf(store)[0];
+  assert.ok(stored);
+  assert.equal(stored.comment.body.includes('@'), false);
+  assert.equal(
+    stored.answer.answerText,
+    'Yes, and thanks @someone for the review.',
+  );
+
+  // Another note or another question is not the canonical answer.
+  const json = stored.comment.body.split('\n').slice(2).join('\n');
+  const custom = `${PROVISIONAL_DECISION_ANSWER_MARKER}\n_Some other note._\n${json}`;
+  assert.equal(parseProvisionalDecisionAnswerComment(custom).ok, false);
+
+  const other = await pendingStore();
+  other.addComment(() =>
+    craftedAnswer(other, (answer) => {
+      answer.presentedQuestion = 'Is this fine?';
+    }),
+  );
+  const pendingRun = await answered(other, null);
+  assert.equal(
+    pendingRun.outcome,
+    'pending-released',
+    JSON.stringify(pendingRun),
+  );
+  assert.equal(eventsOf(other).includes('confirmed'), false);
+});
+
+test('a rework request record also keeps an at-sign from notifying anyone', async () => {
+  const store = await pendingStore();
+  const result = await answered(store, {
+    ...reworkConversation,
+    interpretation: {
+      response: 'rework',
+      requestedOptionId: 'change',
+      rationale: 'Ask @someone about the migration.',
+    },
+  } as ConfirmationInput);
+  assert.equal(
+    result.outcome,
+    'rework-handoff-recorded',
+    JSON.stringify(result),
+  );
+  const comment = store.history.comments.find((item) => {
+    const parsed = parseProvisionalDecisionRecordComment(item.body);
+    return parsed.ok && parsed.record.event.type === 'rework-requested';
+  });
+  assert.ok(comment);
+  assert.equal(comment.body.includes('@'), false);
+  const record = recordsOf(store).find(
+    (item) => item.event.type === 'rework-requested',
+  );
+  const request = record?.event.reworkRequest as
+    | { rationale: string }
+    | undefined;
+  assert.equal(request?.rationale, 'Ask @someone about the migration.');
 });
