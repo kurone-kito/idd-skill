@@ -652,6 +652,15 @@ const HELPER_COMMANDS = [
     contractPaths: ['schemas/provider-outage-park.schema.json'],
   },
   {
+    id: 'provisional-decision',
+    scriptName: 'idd:provisional-decision',
+    binName: 'idd-provisional-decision',
+    entryPath: 'scripts/provisional-decision-command.mjs',
+    vendoredCommand: 'node scripts/provisional-decision-command.mjs',
+    description:
+      'Plan, apply, or reconcile one provisional decision. Dry run by default; --apply appends the record or the completion label. Exits 0 for none, 2 for reconcile, 3 for recovery-hold, and 4 for fix-input.',
+  },
+  {
     id: 'publish-authoring-hold',
     scriptName: 'idd:publish-authoring-hold',
     binName: 'idd-publish-authoring-hold',
