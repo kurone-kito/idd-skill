@@ -1032,8 +1032,11 @@ and rework still work after `dangerouslyAutoDecide` is turned off.
 2. **Present.** A dry run reports the presentation: for every decision its
    question, the selected option, the verified result, and each alternative
    with its consequences and the rework it implies, plus a SHA-256 digest
-   of that presentation and the next step. Show the presentation and ask
-   `Were the implemented choices above acceptable? [y/N]`.
+   of that presentation, the next step, and `needsUserAnswer`. When it is
+   true, show the presentation and ask
+   `Were the implemented choices above acceptable? [y/N]`. When it is
+   false, a persisted answer or a finishing step resumes, so ask nothing:
+   a prompt there would only invite a refused N.
 3. **Read the actual answer.** The input adapter reads one reported event
    and never creates input; a pending question produces no answer by itself.
    An answer must also carry the digest it answered, so a changed source,
@@ -1061,15 +1064,18 @@ and rework still work after `dangerouslyAutoDecide` is turned off.
 An answer comment keeps the canonical shape described above and adds the
 question that was asked and the decisions it applies to, so one answer can
 confirm some decisions of a bundle while another receives a different
-preference. An at-sign in the user's words is JSON-escaped, so the comment
-notifies nobody. The first valid answer in history wins, and a valid
-persisted answer or confirmation resumes without another prompt; only an
-answer that carries the canonical question is reused. A later input that
-agrees with it, or none, resumes it. A conflicting input is refused,
-because a confirmation cannot be undone: an N or a conversational no,
-Enter, EOF, cancellation, an unclear reply, or another option. The same
-refusal applies after the confirmation or rework request record is stored.
-A generic request to resolve is not a conflict.
+preference. The reply is stored verbatim, with its whitespace. An at-sign in
+it, or in a source title, is JSON-escaped in every comment the flow writes,
+so none notifies anybody. The first valid answer in history wins, and a
+valid persisted answer or confirmation resumes without another prompt; only
+an answer that carries the canonical question and was recorded under a
+coordination claim, never one the implementation session wrote on its own,
+is reused. A later input that agrees with it, or none, resumes it. A
+conflicting input is refused, because a confirmation cannot be undone: an N
+or a conversational no, Enter, EOF, cancellation, an unclear reply, or
+another option. The same refusal applies after the confirmation or rework
+request record is stored, and before any write when any targeted decision
+already has one. A generic request to resolve is not a conflict.
 
 Agents follow an input-boundary rule: never write the user's reply, and
 never feed `y` to a prompt the agent is waiting on (preventive; no observed
@@ -1080,27 +1086,36 @@ guarantee.
 
 Every next step is derived from fresh reads, so a crash or uncertain write
 resumes exactly the remaining step and never executes the implementation
-again. A write that throws is checked by one fresh read, and a write that is
-still absent is a recovery hold, not a retry. Every refusal and recovery
-hold keeps the coordination claim until its cause is fixed. If the
+again (preventive; no observed incident yet). A write that throws is checked
+by one fresh read: one that landed is counted and reported in `warnings`,
+and one that is still absent is a recovery hold, not a retry. The close is
+guarded by the title and body digest the plan evaluated, and a record step
+is compared by its whole content before it is written. Every refusal and
+recovery hold keeps the coordination claim until its cause is fixed. If the
 confirmation is stored but the close failed, only the close resumes. If the
 close succeeded but the claim release failed, only the release resumes and
-the issue is not closed again. A pending outcome records nothing new and only
-releases the claim; it reports `rework-handoff-recorded` when a rework
+the issue is not closed again. A pending outcome records nothing new and
+only releases the claim; it reports `rework-handoff-recorded` when a rework
 request for the bundle is already stored. A release that a fresh read cannot
-confirm is reported as `reconciled`, and the next run repeats it while the
-claim is still active.
+confirm is reported as `reconciled` with `nextStep` set to `release-claim`,
+and the next run repeats it while the claim is still active; `reconciled`
+without a `nextStep` means everything is already done. A refusal with action
+`none` means nothing can be resolved yet and keeps the claim, so release it
+with the normal unclaim.
 
 An alternate preference persists the answer and one `rework-requested`
 record for the one decision it names. The record carries a `handoff` with
 a stable identity shared by the bundle, the authoring set and session
 preallocated for the rework, the source issue as the anchor, the completed
-results it affects, and any downstream results the recorder knows. It
-grants no publication permission and never reuses an earlier set, and
-replay refuses a handoff that does. If the handoff write fails, the
-coordination claim is kept as a recovery hold and a retry reuses the
-persisted answer. After the write succeeds, the claim is released before
-the authoring pass acquires ownership, and the same request cannot produce
+results it affects, and any downstream results the recorder knows. The
+downstream results are kept in the answer too, so a retry recovers them, and
+a later request of the bundle adds its own to the earlier ones; read the
+union of the bundle's handoffs. It grants no publication permission and
+never reuses an earlier set, and replay refuses a handoff that does. If the
+handoff write fails, the coordination claim is kept as a recovery hold
+(preventive; no observed incident yet) and a retry reuses the persisted
+answer. After the write succeeds, the claim is released before the
+authoring pass acquires ownership, and the same request cannot produce
 another handoff or erase an earlier choice.
 
 The `rework-authored` transition is a separate guarded request. It needs
