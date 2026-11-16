@@ -2343,6 +2343,24 @@ export function replayProvisionalDecisionHistory(input) {
         );
         continue;
       }
+      // The record's handoff holds every downstream result its answer names;
+      // it may hold more, because a later request adds to the bundle's list.
+      const requestedHandoff = request.handoff;
+      if (
+        parsedAnswer.answer.downstreamResults?.some(
+          (reference) =>
+            !requestedHandoff?.downstreamResults.includes(reference),
+        )
+      ) {
+        issues.push(
+          createReplayIssue(
+            'rework-handoff-downstream-mismatch',
+            'The handoff must keep every downstream result its answer records.',
+            comment.id,
+          ),
+        );
+        continue;
+      }
       existing.reworkRequested = entry;
       continue;
     }
