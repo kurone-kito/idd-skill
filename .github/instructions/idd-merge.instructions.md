@@ -304,10 +304,22 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
 
 ## F4 — Cleanup
 
+**Bound provisional source** (F3's `provisionalRead.status` is `bound`, or
+Resume's `evidence.provisional_work` is unconfirmed): never close it. Skip
+step 1 and step 7's close for it. After step 2, run the provisional-decision
+`work-completed` transition (dry run, then apply) with the merged PR URL and
+the proven `PR_HEAD_SHA_F3`; continue to step 3 only once it is verified: the
+completion record read back and the needs-decision label present. Otherwise
+keep the claim and hold before cleanup and release. Never write the record by
+hand or remove the label, and read an uncertain `unclaimed-by` back before
+posting another
+([details](../../docs/idd-resume-detail.md#provisional-source-finalization)).
+
 1. **Non-default development branch**: if `{development-branch}` is not
    the repository's default branch, GitHub did not auto-close any issue
    on merge (see `idd-pr-submit.instructions.md` D3.5) — close each
-   issue in D3's deliberate closing set explicitly, not only the
+   issue in D3's deliberate closing set (never a bound provisional
+   source) explicitly, not only the
    claimed issue. Revalidate the active claim immediately before each
    `gh issue close`; if it no longer matches this session, stop before
    that close and every later F4 mutation. Then run
@@ -668,9 +680,10 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
    none`, `Branch: none`, `Open blockers: none`, `Next action: none`,
    and `Authoritative by` the merge SHA (#3079). Accept only
    `create`/`update`/`noop`; otherwise keep claim, re-validate, post the
-   helper-output hold, and stop. For each issue in step 1's closing set,
-   re-validate, read state once, then re-validate before closing if open
-   (a racing close counts). On failure, hold; do not retry or unclaim.
+   helper-output hold, and stop. For each issue in step 1's closing set
+   (a bound provisional source is never in it), re-validate, read state
+   once, then re-validate before closing if open (a racing close
+   counts). On failure, hold; do not retry or unclaim.
    Finally, while the claim still matches, post your
    `{agent-id}` / `{claim-id}` `unclaimed-by` (see
    [Unclaim format](idd-overview-core.instructions.md#unclaim-format))

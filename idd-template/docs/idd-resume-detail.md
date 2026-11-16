@@ -443,6 +443,113 @@ naming this session as displaced, or a merged PR whose issue was never
 claimed at all) the same way: each needs a human or a future resume pass
 with better evidence, never a mechanical removal.
 
+**Provisional source.** A merged PR whose issue stays open because it is a
+provisional source takes the first two rows with F4's provisional step in place
+of the explicit close; see
+[Provisional Source Finalization](#provisional-source-finalization).
+
+## Provisional Source Finalization
+
+An unconfirmed provisional source (the
+[provisional decision lifecycle](idd-workflow.md#provisional-decision-lifecycle))
+stays open after its pull request merges. GitHub's auto-close and F4's
+explicit close must never reach it, and a session that finds it open with no
+open pull request must not read it as a fresh decision candidate (preventive;
+no observed incident yet). D3 and D3.5
+in `idd-pr-submit.instructions.md`, F4 in `idd-merge.instructions.md`, and the
+merged-PR rows of Step 1 cite this section. It binds only a source whose
+trusted provisional history is recorded; every other issue keeps its current
+route. It reads recorded state and never `dangerouslyAutoDecide`, so it holds
+with either value. A Lite session makes no new decision and gains no merge or
+cleanup authority here: it stops at the F2 `closing-set` gate (preventive; no
+observed incident yet).
+
+### Source status reads
+
+Two trusted reads name a provisional source:
+
+- With a pull request, `pre-merge-readiness` reports
+  `provisionalRead.status`. `bound` means the replayed history holds
+  unconfirmed work whose verified claim lineage contains this claim and whose
+  claim branch is the PR head ref. Only `bound` changes the closing set; every
+  other status keeps the ordinary set.
+- Without one (Resume), `resume-claim-routing` reports
+  `evidence.provisional_work` on an open issue whose comments carry a record
+  marker. `status` is the replayed status (`selected`, `in-progress`,
+  `confirmation-pending`, `confirmed`, `rework-requested`, `rework-authored`),
+  `invalid` (a refused replay) or `unreadable`. `confirmation-pending` is the
+  aggregate: every decision of the current bundle has verified completed work.
+  The field is absent for an ordinary issue and with `--fresh-claim-gate`.
+  A source counts as unconfirmed, and so as a provisional source, when that
+  status is `selected`, `in-progress` or `confirmation-pending`.
+
+### Submission (D3 and D3.5)
+
+For a bound source, the PR body names the claimed issue (the real claim
+target: the issue number of the active claim) with `Refs #N`, on a line with
+no recognized keyword next to it, and no branch commit message carries a
+closing keyword for it either (use a `Refs` footer). D3.5 steps 3 to 5 never
+add or restore a keyword for it, and that includes a re-entry after a restart.
+Step 6's expected set omits it (empty when it is the only issue), so an entry
+for it is an extra; step 7 reads any keyword for it as a stray close. The F2
+and F3 `closing-set` gate is the check: a closing reference to a bound source
+blocks, a `Refs` reference does not. `resume-route-selection` finds such a PR
+through its `Refs` reference, its `issue/<number>-*` head ref, and a trusted,
+unedited record marker, since no closing keyword names it.
+
+### F4 for a bound source
+
+1. Close nothing. Step 1's explicit close and step 7's close loop skip the
+   source; GitHub's auto-close never fires because D3 wrote no keyword.
+2. After step 2 (its head proof gives the verified `PR_HEAD_SHA_F3`) and
+   before step 3, run the `work-completed` transition of the profile's
+   provisional-decision command: a dry run, then `--apply`. The request names
+   the claim ID, the worktree branch, the merged pull request URL, that
+   verified head SHA, and `executionCriteriaSatisfied` (true only when every
+   execution criterion of the selected choice is met and verified). The helper
+   appends the completion record, reads it back, and reads the needs-decision
+   label back. It never removes the label, and neither does F4. A profile
+   that exposes no such command has no verified result, so F4 holds here;
+   never write the record or the label by hand.
+3. Continue to step 3 only on a verified result:
+
+   | Result                      | Meaning                                         | F4                                                                                              |
+   | --------------------------- | ----------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+   | `applied`                   | record appended and read back, label present    | continue                                                                                        |
+   | `reconciled`, no reason     | record already stored, label present            | continue                                                                                        |
+   | `planned` (dry run)         | no record yet, or a stored record with no label | run `--apply`: it writes only what is missing, then reads it back                               |
+   | `reconciled`, with a reason | label absent or unverified after the write      | rerun with `--apply` once; continue only on `applied` or `reconciled` with no reason, else hold |
+   | `refused`, `recovery-hold`  | a read, write or replay could not be verified   | hold before cleanup and release; keep the claim                                                 |
+   | `refused`, `fix-input`      | the request or the issue needs correcting       | hold; correct it, then rerun                                                                    |
+
+   An unreadable merge, head or proof never reaches this step: take the
+   existing recovery hold, and manufacture no record.
+4. Steps 3 to 6 run unchanged. A cleanup failure keeps the normal recovery
+   hold and the claim. Step 7 posts the final `unclaimed-by` only after steps
+   2 to 6 pass. When that POST is uncertain, read every comment page back and
+   re-run `resume-claim-routing` before posting another one.
+5. Report the source as pending confirmation: open, needs-decision label kept,
+   the completion record and the merged pull request named.
+
+### Resume recovery
+
+A source's merged PR on the claim branch satisfies Step 0's "PR merged" row
+although the issue is open, so Step 1's merged-PR rows apply; F4's provisional
+step replaces the explicit close on them. Find the merged PR with `gh pr list
+--head <branch> --state merged`, never from the issue state.
+
+| State found                                        | Evidence                                                                                                              | Result                                                                                                               |
+| -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| Merged, no completion record                       | owned claim; status `in-progress`; claim-branch PR merged                                                             | finalize: F4's transition (dry run, then `--apply`), then steps 3 to 7                                               |
+| Completion record, label unverified                | owned claim; status `confirmation-pending`; label absent or unread                                                    | reconcile: the dry run shows `planned`; `--apply` writes the label; verified only on a read-back                     |
+| Cleanup done, claim still active                   | owned claim; status `confirmation-pending`; worktree and branch gone; proof reusable                                  | steps 3 to 6 are resume-safe no-ops; revalidate, then post `unclaimed-by`                                            |
+| Claim released                                     | `unclaimed` becomes `non_inheritable` / `stop`, reason `provisional-work-complete`                                    | report pending confirmation; post nothing; no new implementation                                                     |
+| Released with status `in-progress` and a merged PR | no active claim; the helper cannot see the PR and reads `unclaimed` / `re_claim`, so Step 0's "PR merged" row decides | stop and report: finalization needs an owning session, so hand it to the operator; never re-claim to implement again |
+| Merge, proof or cleanup unreadable                 | any                                                                                                                   | the existing recovery hold                                                                                           |
+
+`already_owned` / `keep` is never changed by this evidence; F4's head proof and
+every `--assert` depend on it.
+
 ## F4 Head Proof
 
 F4's final PR-digest check may run after PR comments and branch refs have

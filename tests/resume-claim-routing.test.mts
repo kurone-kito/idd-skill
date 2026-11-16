@@ -22,6 +22,7 @@ import {
   readGeneratedClaimTokens,
   recordGeneratedClaimTokens,
 } from '../src/scripts/claim-lock.mts';
+import type { ProvisionalDecisionEvidence } from '../src/scripts/discover-readiness-check.mts';
 import {
   evaluateCurrentSessionOwnerEvidence,
   firstFailedOwnerProof,
@@ -55,7 +56,10 @@ import {
   type LocalBranchRefRead,
   loadPolicy,
   type OpenLinkedPrRead,
+  PROVISIONAL_WORK_COMPLETE_REASON,
+  type ProvisionalWorkEvidence,
   readOpenLinkedPrs,
+  readProvisionalWorkEvidence,
   resolveAssertOutcome,
   resolveResumeLinkedPrState,
 } from '../src/scripts/resume-claim-routing.mts';
@@ -8997,6 +9001,264 @@ test('--help advertises the local-only branch state, verdict, reasons, and evide
     'local-branch-inheritable',
     'local-branch-unexpected',
     'local-branch-unreadable',
+  ]) {
+    assert.ok(result.stdout.includes(needle), needle);
+  }
+});
+
+// kurone-kito/idd-skill#4534: a source whose provisional work is complete
+// stays open until it is confirmed. A resuming session must read that as
+// finished work to report, not as a fresh decision candidate.
+const PROVISIONAL_RELEASED_EVENTS = [
+  {
+    createdAt: '2026-05-12T10:00:00Z',
+    author: { login: 'maintainer' },
+    body: '<!-- claimed-by: copilot claim-released supersedes: none 2026-05-12T10:00:00Z branch: issue/24-task -->',
+  },
+  {
+    createdAt: '2026-05-12T10:05:00Z',
+    author: { login: 'maintainer' },
+    body: '<!-- unclaimed-by: copilot claim-released 2026-05-12T10:05:00Z -->',
+  },
+];
+
+function provisionalWork(
+  status: ProvisionalWorkEvidence['status'],
+  issues: string[] = [],
+): ProvisionalWorkEvidence {
+  return {
+    status,
+    decisions:
+      status === 'invalid' || status === 'unreadable'
+        ? []
+        : [
+            {
+              bundleGeneration: 1,
+              decisionGeneration: 1,
+              status,
+            },
+          ],
+    issues,
+  };
+}
+
+test('a released claim on completed provisional work stops instead of re-claiming (unclaim before the final report)', () => {
+  const work = provisionalWork('confirmation-pending');
+  const result = evaluateResumeClaimRouting(
+    { now: '2026-05-12T11:00:00Z', events: PROVISIONAL_RELEASED_EVENTS },
+    { isTrustedAuthor: trusted(['maintainer']), provisionalWork: work },
+  );
+  assert.equal(result.state, 'non_inheritable');
+  assert.equal(result.action, 'stop');
+  assert.equal(result.reason, PROVISIONAL_WORK_COMPLETE_REASON);
+  assert.equal(result.reason, 'provisional-work-complete');
+  assert.ok(
+    result.warnings.some((warning) => /awaits confirmation/.test(warning)),
+  );
+  assert.deepEqual(result.evidence.provisional_work, work);
+  // The fresh-claim vocabulary reads a stop as already claimed: never claimable.
+  assert.equal(freshClaimGateFromRouting(result).verdict, 'already-claimed');
+});
+
+test('a released claim keeps re_claim for every provisional status that is not complete work', () => {
+  for (const status of [
+    'selected',
+    'in-progress',
+    'confirmed',
+    'rework-requested',
+    'rework-authored',
+  ] as const) {
+    const work = provisionalWork(status);
+    const result = evaluateResumeClaimRouting(
+      { now: '2026-05-12T11:00:00Z', events: PROVISIONAL_RELEASED_EVENTS },
+      { isTrustedAuthor: trusted(['maintainer']), provisionalWork: work },
+    );
+    assert.equal(result.state, 'unclaimed', status);
+    assert.equal(result.action, 're_claim', status);
+    assert.deepEqual(result.evidence.provisional_work, work, status);
+  }
+});
+
+test('a refused or unreadable provisional history keeps the verdict and only warns', () => {
+  for (const work of [
+    provisionalWork('invalid', ['completion-proof-mismatch']),
+    provisionalWork('unreadable'),
+  ]) {
+    const result = evaluateResumeClaimRouting(
+      { now: '2026-05-12T11:00:00Z', events: PROVISIONAL_RELEASED_EVENTS },
+      { isTrustedAuthor: trusted(['maintainer']), provisionalWork: work },
+    );
+    assert.equal(result.state, 'unclaimed');
+    assert.equal(result.action, 're_claim');
+    const warning = result.warnings.find((entry) =>
+      entry.startsWith('the provisional-decision history is'),
+    );
+    assert.ok(warning?.includes(work.status), work.status);
+    if (work.issues.length > 0) {
+      assert.ok(warning?.includes('completion-proof-mismatch'));
+    }
+  }
+});
+
+test('an owned claim keeps already_owned and keep with completed provisional work (cleanup before unclaim)', () => {
+  const events = [
+    {
+      createdAt: '2026-05-12T10:00:00Z',
+      author: { login: 'maintainer' },
+      body: '<!-- claimed-by: copilot claim-owned supersedes: none 2026-05-12T10:00:00Z branch: issue/24-task -->',
+    },
+  ];
+  for (const status of ['in-progress', 'confirmation-pending'] as const) {
+    const work = provisionalWork(status);
+    const result = evaluateResumeClaimRouting(
+      { now: '2026-05-12T11:00:00Z', events, claimId: 'claim-owned' },
+      { isTrustedAuthor: trusted(['maintainer']), provisionalWork: work },
+    );
+    assert.equal(result.state, 'already_owned', status);
+    assert.equal(result.action, 'keep', status);
+    assert.equal(resolveAssertOutcome(result).exitCode, 0, status);
+    assert.deepEqual(result.evidence.provisional_work, work, status);
+  }
+});
+
+test('a stale claim keeps its takeover verdict with completed provisional work', () => {
+  const result = evaluateResumeClaimRouting(
+    {
+      now: '2026-05-14T11:00:00Z',
+      events: [
+        {
+          createdAt: '2026-05-12T10:00:00Z',
+          author: { login: 'maintainer' },
+          body: '<!-- claimed-by: copilot claim-stale supersedes: none 2026-05-12T10:00:00Z branch: issue/24-task -->',
+        },
+      ],
+    },
+    {
+      isTrustedAuthor: trusted(['maintainer']),
+      provisionalWork: provisionalWork('confirmation-pending'),
+    },
+  );
+  assert.equal(result.state, 'stale');
+  assert.equal(result.action, 'takeover');
+});
+
+test('an issue with no provisional state keeps its output byte-for-byte', () => {
+  const plain = evaluateResumeClaimRouting(
+    { now: '2026-05-12T11:00:00Z', events: PROVISIONAL_RELEASED_EVENTS },
+    { isTrustedAuthor: trusted(['maintainer']) },
+  );
+  const withNull = evaluateResumeClaimRouting(
+    { now: '2026-05-12T11:00:00Z', events: PROVISIONAL_RELEASED_EVENTS },
+    { isTrustedAuthor: trusted(['maintainer']), provisionalWork: null },
+  );
+  assert.equal(plain.state, 'unclaimed');
+  assert.equal(plain.action, 're_claim');
+  assert.equal(Object.hasOwn(plain.evidence, 'provisional_work'), false);
+  assert.deepEqual(withNull, plain);
+});
+
+function provisionalState(
+  overrides: Partial<ProvisionalDecisionEvidence> = {},
+): ProvisionalDecisionEvidence {
+  return {
+    valid: true,
+    hasRecords: true,
+    status: 'confirmation-pending',
+    hasRework: false,
+    decisions: [
+      {
+        bundleGeneration: 1,
+        decisionGeneration: 2,
+        status: 'confirmation-pending',
+        executionCriteria: ['criterion'],
+        workReference: 'https://github.com/o/r/pull/9',
+      },
+    ],
+    issues: [],
+    ...overrides,
+  };
+}
+
+test('readProvisionalWorkEvidence makes no read without a record marker', async () => {
+  let reads = 0;
+  const loadState = () => {
+    reads += 1;
+    return provisionalState();
+  };
+  const noMarker = await readProvisionalWorkEvidence({
+    comments: [
+      { body: '<!-- claimed-by: a b supersedes: none t branch: x -->' },
+      { body: 'see <!-- idd-provisional-decision-record:v1 --> in prose' },
+      { body: null },
+    ],
+    loadState,
+  });
+  assert.equal(noMarker, null);
+  assert.equal(reads, 0);
+});
+
+test('readProvisionalWorkEvidence maps a replay, a refusal, an empty replay and a failed read', async () => {
+  const marked = [{ body: '<!-- idd-provisional-decision-record:v1 -->\n{}' }];
+  assert.deepEqual(
+    await readProvisionalWorkEvidence({
+      comments: marked,
+      loadState: () => provisionalState(),
+    }),
+    {
+      status: 'confirmation-pending',
+      decisions: [
+        {
+          bundleGeneration: 1,
+          decisionGeneration: 2,
+          status: 'confirmation-pending',
+        },
+      ],
+      issues: [],
+    },
+  );
+  assert.deepEqual(
+    await readProvisionalWorkEvidence({
+      comments: marked,
+      loadState: async () =>
+        provisionalState({
+          valid: false,
+          hasRecords: true,
+          status: 'invalid',
+          decisions: [],
+          issues: ['record-authority-invalid'],
+        }),
+    }),
+    { status: 'invalid', decisions: [], issues: ['record-authority-invalid'] },
+  );
+  assert.equal(
+    await readProvisionalWorkEvidence({
+      comments: marked,
+      loadState: () => provisionalState({ hasRecords: false, status: 'none' }),
+    }),
+    null,
+  );
+  assert.deepEqual(
+    await readProvisionalWorkEvidence({
+      comments: marked,
+      loadState: () => {
+        throw new Error('gh failed');
+      },
+    }),
+    { status: 'unreadable', decisions: [], issues: [] },
+  );
+});
+
+test('--help documents the provisional completion stop and its evidence', () => {
+  const result = spawnSync(
+    process.execPath,
+    [join(REPO_ROOT, 'scripts/resume-claim-routing.mjs'), '--help'],
+    { cwd: REPO_ROOT, encoding: 'utf8', env: fixtureEnv() },
+  );
+  assert.equal(result.status, 0, result.stderr);
+  for (const needle of [
+    'evidence.provisional_work',
+    'provisional-work-complete',
+    'confirmation-pending',
   ]) {
     assert.ok(result.stdout.includes(needle), needle);
   }

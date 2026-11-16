@@ -12,6 +12,7 @@ import {
   collectRoutingInput,
   countLatestChangesRequestedByReviewer,
   findIssueRelatedOpenPrs,
+  findProvisionalSourceOpenPrs,
   selectResumeRoute,
 } from '../src/scripts/resume-route-selection.mts';
 import { stubExecutable } from './test-utils.mts';
@@ -2716,4 +2717,398 @@ test('findIssueRelatedOpenPrs is exported and applies the D3.5 body matcher to t
   );
   assert.ok(calls.includes('listOpenChangeRequests'));
   assert.deepEqual(findIssueRelatedOpenPrs({ port, issueNumber: null }), []);
+});
+
+// kurone-kito/idd-skill#4534: a protected provisional source stays open after
+// its PR merges, so its PR names the issue with `Refs` and never a closing
+// keyword. Resume must still find that PR instead of reading "no PR".
+const PROVISIONAL_RECORD = '<!-- idd-provisional-decision-record:v1 -->\n{}';
+
+function provisionalSourcePort(options: {
+  comments?: {
+    body: string;
+    authorLogin: string;
+    /** `omit` leaves the edit state unknown, as a read that skipped it. */
+    lastEditedAt?: string | null;
+  }[];
+  headRefs?: Record<number, string>;
+  openChangeRequests?: { number: number; body: string }[];
+}) {
+  const calls: string[] = [];
+  const inner = createFakeProviderAdapter({
+    locator: { provider: 'github', owner: 'fake-owner', name: 'fake-repo' },
+    viewerLogin: 'tester',
+    repositoryDefaultBranch: 'main',
+    openChangeRequests: (
+      options.openChangeRequests ?? [{ number: 7, body: 'Refs #3145' }]
+    ).map((pr) => ({
+      number: pr.number,
+      title: `PR ${pr.number}`,
+      body: pr.body,
+      url: `u${pr.number}`,
+    })),
+    changeRequestHeadRefs: options.headRefs ?? {
+      7: 'issue/3145-feat-provisional-source',
+    },
+    comments: {
+      3145: (options.comments ?? []).map((comment, index) => ({
+        id: index + 1,
+        body: comment.body,
+        createdAt: '2026-11-16T00:00:00Z',
+        updatedAt: '2026-11-16T00:00:00Z',
+        authorLogin: comment.authorLogin,
+        ...(comment.lastEditedAt === 'omit'
+          ? {}
+          : { lastEditedAt: comment.lastEditedAt ?? null }),
+      })),
+    },
+  });
+  const port = new Proxy(inner, {
+    get(target, property, receiver) {
+      const value = Reflect.get(target, property, receiver);
+      if (typeof value !== 'function') return value;
+      return (...args: unknown[]) => {
+        calls.push(String(property));
+        return value.apply(target, args);
+      };
+    },
+  });
+  return { port, calls };
+}
+
+function findProvisional(
+  fixture: ReturnType<typeof provisionalSourcePort>,
+  trusted: string[] = ['maintainer'],
+) {
+  return findProvisionalSourceOpenPrs({
+    port: fixture.port,
+    issueNumber: 3145,
+    openPrs: fixture.port.listOpenChangeRequests(),
+    readTrustedLogins: () => trusted,
+  });
+}
+
+test('a Refs-only PR on a claim branch of a source with a trusted record is found', () => {
+  const fixture = provisionalSourcePort({
+    comments: [{ body: PROVISIONAL_RECORD, authorLogin: 'Maintainer' }],
+  });
+  assert.deepEqual(
+    findProvisional(fixture).map((pr) => pr.number),
+    [7],
+  );
+});
+
+test('the provisional relation costs nothing without a Refs reference', () => {
+  const fixture = provisionalSourcePort({
+    openChangeRequests: [
+      { number: 7, body: 'See #3145' },
+      { number: 8, body: 'Refs #31450' },
+      { number: 9, body: '> Refs #3145' },
+      { number: 10, body: 'Use `Refs #3145` here' },
+    ],
+  });
+  assert.deepEqual(findProvisional(fixture), []);
+  assert.equal(fixture.calls.includes('listWorkItemComments'), false);
+  assert.equal(fixture.calls.includes('getChangeRequestHeadRef'), false);
+});
+
+test('the provisional relation reads no head ref without a record marker', () => {
+  for (const comments of [[], [{ body: 'prose', authorLogin: 'maintainer' }]]) {
+    const fixture = provisionalSourcePort({ comments });
+    assert.deepEqual(findProvisional(fixture), [], JSON.stringify(comments));
+    assert.equal(
+      fixture.calls.includes('getChangeRequestHeadRef'),
+      false,
+      JSON.stringify(comments),
+    );
+  }
+});
+
+test('a refused record history stops the relation instead of answering no PR', () => {
+  const valid = { body: PROVISIONAL_RECORD, authorLogin: 'maintainer' };
+  for (const extra of [
+    { body: PROVISIONAL_RECORD, authorLogin: 'stranger' },
+    {
+      body: PROVISIONAL_RECORD,
+      authorLogin: 'maintainer',
+      lastEditedAt: '2026-11-16T01:00:00Z',
+    },
+  ]) {
+    for (const comments of [[valid, extra], [extra, valid], [extra]]) {
+      // A published PR on a claim branch cannot be related: stop.
+      assert.throws(
+        () => findProvisional(provisionalSourcePort({ comments })),
+        /untrusted or edited provisional record marker.*open PR #7/,
+      );
+      // A Refs PR on another branch has nothing to relate: no PR, no stop.
+      const other = provisionalSourcePort({
+        comments,
+        headRefs: { 7: 'feature/other-work' },
+      });
+      assert.deepEqual(findProvisional(other), []);
+    }
+  }
+  // Every marker valid is still a record.
+  const two = provisionalSourcePort({ comments: [valid, valid] });
+  assert.deepEqual(
+    findProvisional(two).map((pr) => pr.number),
+    [7],
+  );
+});
+
+test('a refused record history cannot route unpushed fixes to D1', () => {
+  const marker = (authorLogin: string) => ({
+    id: 1,
+    body: PROVISIONAL_RECORD,
+    createdAt: '2026-11-16T00:00:00Z',
+    updatedAt: '2026-11-16T00:00:00Z',
+    authorLogin,
+    lastEditedAt: null,
+  });
+  const port = createFakeProviderAdapter({
+    locator: { provider: 'github', owner: 'fake-owner', name: 'fake-repo' },
+    viewerLogin: 'tester',
+    repositoryDefaultBranch: 'main',
+    openChangeRequests: [
+      { number: 7, title: 'PR 7', body: 'Refs #3145', url: 'u7' },
+    ],
+    changeRequestHeadRefs: { 7: 'issue/3145-feat-provisional-source' },
+    comments: {
+      3145: [marker('tester'), { ...marker('stranger'), id: 2 }],
+    },
+  });
+  assert.throws(
+    () =>
+      collectRoutingInput({
+        port,
+        issueNumber: 3145,
+        loadTrustedConfig: () => null,
+        collectGitState: () => ({
+          hasUnpushedCommits: true,
+          worktreeDirty: false,
+        }),
+      }),
+    /cannot be related to it/,
+  );
+});
+
+test('the provisional relation needs the head ref to be a claim branch of the issue', () => {
+  for (const head of [
+    'issue/3146-feat-other',
+    'issue/31450-feat-prefix',
+    'feature/3145-x',
+    'issue/3145',
+  ]) {
+    const fixture = provisionalSourcePort({
+      comments: [{ body: PROVISIONAL_RECORD, authorLogin: 'maintainer' }],
+      headRefs: { 7: head },
+    });
+    assert.deepEqual(findProvisional(fixture), [], head);
+  }
+});
+
+test('a failed read fails the provisional relation instead of answering no PR', () => {
+  // A PR exists but its head ref cannot be read: "no PR" would send a session
+  // with unpushed fixes to D1 although its branch is already published.
+  const fixture = provisionalSourcePort({
+    comments: [{ body: PROVISIONAL_RECORD, authorLogin: 'maintainer' }],
+    headRefs: {},
+  });
+  assert.throws(() => findProvisional(fixture), /no head-ref fixture/);
+});
+
+test('the trusted logins are read only once a record marker is present', () => {
+  let reads = 0;
+  const readTrustedLogins = () => {
+    reads += 1;
+    return ['maintainer'];
+  };
+  const run = (comments: { body: string; authorLogin: string }[]) => {
+    const fixture = provisionalSourcePort({ comments });
+    return findProvisionalSourceOpenPrs({
+      port: fixture.port,
+      issueNumber: 3145,
+      openPrs: fixture.port.listOpenChangeRequests(),
+      readTrustedLogins,
+    });
+  };
+  assert.deepEqual(run([{ body: 'prose', authorLogin: 'maintainer' }]), []);
+  assert.equal(reads, 0);
+  assert.equal(
+    run([{ body: PROVISIONAL_RECORD, authorLogin: 'maintainer' }]).length,
+    1,
+  );
+  assert.equal(reads, 1);
+});
+
+test('the collector routes a bound source PR that has no closing keyword', () => {
+  const marker = [{ body: PROVISIONAL_RECORD, authorLogin: 'tester' }];
+  const port = (comments: typeof marker) => {
+    const fixture = provisionalSourcePort({ comments });
+    return createFakeProviderAdapter({
+      locator: { provider: 'github', owner: 'fake-owner', name: 'fake-repo' },
+      viewerLogin: 'tester',
+      repositoryDefaultBranch: 'main',
+      openChangeRequests: fixture.port.listOpenChangeRequests(),
+      changeRequestHeadRefs: { 7: 'issue/3145-feat-provisional-source' },
+      comments: {
+        3145: fixture.port.listWorkItemComments(3145, {
+          includeEditState: true,
+        }),
+      },
+      changeRequestBranchAndChecks: {
+        7: { headSha: 'head-sha', baseRefName: 'main', statusCheckRollup: [] },
+      },
+      requiredChecksSummary: {
+        7: { checks: [], noRequiredChecksConfigured: false },
+      },
+      branchRules: { 'fake-owner/fake-repo/main': [] },
+      branchProtection: { 'fake-owner/fake-repo/main': {} },
+      changeRequests: {
+        7: { mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN' },
+      },
+    });
+  };
+  const collect = (comments: typeof marker) =>
+    collectRoutingInput({
+      port: port(comments),
+      issueNumber: 3145,
+      loadTrustedConfig: () => null,
+      collectGitState: () => ({
+        hasUnpushedCommits: false,
+        worktreeDirty: false,
+      }),
+    });
+  const found = collect(marker);
+  assert.equal(found.prExists, true);
+  assert.equal(found.prNumber, 7);
+  // The same PR on an ordinary issue (no record) is still not related.
+  const ordinary = collect([]);
+  assert.equal(ordinary.prExists, false);
+  assert.equal(ordinary.prNumber, null);
+});
+
+function provisionalCollectorPort(options: {
+  openChangeRequests: { number: number; body: string }[];
+  headRefs: Record<number, string>;
+  repositoryDefaultBranch?: string | null;
+  withMarker?: boolean;
+}) {
+  const checks = (number: number) => ({
+    [number]: {
+      headSha: 'head-sha',
+      baseRefName: 'main',
+      statusCheckRollup: [],
+    },
+  });
+  const numbers = options.openChangeRequests.map((pr) => pr.number);
+  return createFakeProviderAdapter({
+    locator: { provider: 'github', owner: 'fake-owner', name: 'fake-repo' },
+    viewerLogin: 'tester',
+    repositoryDefaultBranch:
+      options.repositoryDefaultBranch === undefined
+        ? 'main'
+        : options.repositoryDefaultBranch,
+    openChangeRequests: options.openChangeRequests.map((pr) => ({
+      number: pr.number,
+      title: `PR ${pr.number}`,
+      body: pr.body,
+      url: `u${pr.number}`,
+    })),
+    changeRequestHeadRefs: options.headRefs,
+    comments: {
+      3145:
+        options.withMarker === false
+          ? []
+          : [
+              {
+                id: 1,
+                body: PROVISIONAL_RECORD,
+                createdAt: '2026-11-16T00:00:00Z',
+                updatedAt: '2026-11-16T00:00:00Z',
+                authorLogin: 'tester',
+                lastEditedAt: null,
+              },
+            ],
+    },
+    changeRequestBranchAndChecks: Object.assign({}, ...numbers.map(checks)),
+    requiredChecksSummary: Object.fromEntries(
+      numbers.map((number) => [
+        number,
+        { checks: [], noRequiredChecksConfigured: false },
+      ]),
+    ),
+    branchRules: { 'fake-owner/fake-repo/main': [] },
+    branchProtection: { 'fake-owner/fake-repo/main': {} },
+    changeRequests: Object.fromEntries(
+      numbers.map((number) => [
+        number,
+        { mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN' },
+      ]),
+    ),
+  });
+}
+
+const collectProvisional = (
+  port: ReturnType<typeof provisionalCollectorPort>,
+) =>
+  collectRoutingInput({
+    port,
+    issueNumber: 3145,
+    loadTrustedConfig: () => null,
+    collectGitState: () => ({
+      hasUnpushedCommits: false,
+      worktreeDirty: false,
+    }),
+  });
+
+test('a closing-keyword PR and a provisional PR of one issue read as ambiguous', () => {
+  const input = collectProvisional(
+    provisionalCollectorPort({
+      openChangeRequests: [
+        { number: 7, body: 'Refs #3145' },
+        { number: 8, body: 'Closes #3145' },
+      ],
+      headRefs: { 7: 'issue/3145-feat-provisional-source' },
+    }),
+  );
+  assert.equal(input.prAmbiguous, true);
+  assert.equal(input.prCount, 2);
+  assert.equal(selectResumeRoute(input).route, 'stop');
+});
+
+test('a PR that names the issue both ways counts once', () => {
+  const input = collectProvisional(
+    provisionalCollectorPort({
+      openChangeRequests: [{ number: 7, body: 'Closes #3145\n\nRefs #3145' }],
+      headRefs: { 7: 'issue/3145-feat-provisional-source' },
+    }),
+  );
+  assert.equal(input.prAmbiguous, false);
+  assert.equal(input.prCount, 1);
+  assert.equal(input.prNumber, 7);
+});
+
+test('an unresolved default branch fails the provisional record check instead of routing without the PR', () => {
+  assert.throws(
+    () =>
+      collectProvisional(
+        provisionalCollectorPort({
+          openChangeRequests: [{ number: 7, body: 'Refs #3145' }],
+          headRefs: { 7: 'issue/3145-feat-provisional-source' },
+          repositoryDefaultBranch: null,
+        }),
+      ),
+    /cannot resolve a trusted ref for the provisional record check/,
+  );
+  // No record marker, no config read: an ordinary issue keeps its route.
+  const ordinary = collectProvisional(
+    provisionalCollectorPort({
+      openChangeRequests: [{ number: 7, body: 'Refs #3145' }],
+      headRefs: { 7: 'issue/3145-feat-provisional-source' },
+      repositoryDefaultBranch: null,
+      withMarker: false,
+    }),
+  );
+  assert.equal(ordinary.prExists, false);
 });

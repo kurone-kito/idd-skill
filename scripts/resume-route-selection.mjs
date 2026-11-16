@@ -30,11 +30,16 @@ import {
   stripLeadingIndentColumns,
 } from './markdown-code.mjs';
 import { normalizePolicyConfig } from './policy-helpers.mjs';
-import { summarizeBranchReviewRequirements } from './protocol-helpers.mjs';
+import {
+  classifyCommentEditState,
+  resolveTrustedMarkerActors,
+  summarizeBranchReviewRequirements,
+} from './protocol-helpers.mjs';
 import {
   createGithubProviderAdapter,
   resolveCurrentGithubRepository,
 } from './provider-adapter-github.mjs';
+import { PROVISIONAL_DECISION_RECORD_MARKER } from './provisional-decision-state.mjs';
 import { CLOSING_KEYWORD_PATTERN } from './supersession-detection.mjs';
 
 /** A GitHub task-list checkbox after a list marker, with its padding. */
@@ -234,14 +239,48 @@ export function collectRoutingInput({
   loadTrustedConfig = loadTrustedIddConfig,
   collectGitState = collectLocalGitState,
 }) {
-  const prs = findIssueRelatedOpenPrs({ port, issueNumber });
-  const issuePr = prs.length === 1 ? prs[0] : null;
+  const openPrs = port.listOpenChangeRequests();
   // resolveViewerLogin's REST leg is the exact gh api user --jq .login call
   // this file made directly pre-migration (same args, same options
   // profile); the only behavior delta is a GraphQL fallback attempt on a
   // 5xx/timeout REST failure before the identical error is re-thrown --
   // transport hygiene (widened resilience), not a distinct call shape.
   const viewerLogin = port.resolveViewerLogin().toLowerCase();
+  // #4534: a protected provisional source's PR names it with `Refs`, never a
+  // closing keyword, so the closing-keyword matcher cannot see it. Both
+  // matchers read the same open list, and a PR found by both counts once, so
+  // a closing PR and a provisional PR of one issue still read as ambiguous.
+  const closingPrs = findIssueRelatedOpenPrs({ port, issueNumber, openPrs });
+  const provisionalPrs = findProvisionalSourceOpenPrs({
+    port,
+    issueNumber,
+    openPrs,
+    readTrustedLogins: () => {
+      const repository = port.resolveRepositoryLocator();
+      const ref = port.getRepositoryDefaultBranch(
+        repository.owner,
+        repository.name,
+      );
+      if (!ref) {
+        throw new Error(
+          `cannot resolve a trusted ref for the provisional record check: the live default branch of ${repository.owner}/${repository.name} could not be determined`,
+        );
+      }
+      return [
+        viewerLogin,
+        ...resolveTrustedMarkerActors({
+          envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
+          config: loadTrustedConfig(repository.owner, repository.name, ref),
+        }).actors,
+      ];
+    },
+  });
+  const prs = [
+    ...new Map(
+      [...closingPrs, ...provisionalPrs].map((pr) => [pr.number, pr]),
+    ).values(),
+  ];
+  const issuePr = prs.length === 1 ? prs[0] : null;
   const gitState = collectGitState();
   if (!issuePr) {
     return {
@@ -486,12 +525,12 @@ function detectUnpushedCommits() {
   }
   return runGit(['rev-list', '--count', 'HEAD']).trim() !== '0';
 }
-export function findIssueRelatedOpenPrs({ port, issueNumber }) {
+export function findIssueRelatedOpenPrs({ port, issueNumber, openPrs }) {
   if (!Number.isInteger(issueNumber) || (issueNumber ?? 0) <= 0) {
     return [];
   }
   const targetIssueNumber = Number(issueNumber);
-  const candidates = port.listOpenChangeRequests();
+  const candidates = openPrs ?? port.listOpenChangeRequests();
   const repository = port.resolveRepositoryLocator();
   return candidates.filter((pr) => {
     // D3.5 defines a relationship through a plain-text closing keyword in
@@ -520,6 +559,84 @@ export function findIssueRelatedOpenPrs({ port, issueNumber }) {
       },
     );
   });
+}
+/**
+ * Open PRs of a protected provisional source (#4534). Such a source stays open
+ * after its PR merges, so its PR names it with `Refs` and never a closing
+ * keyword, which {@link findIssueRelatedOpenPrs} cannot match. A PR relates
+ * only when all three hold: its body (outside code and quotes) names the issue
+ * with `Refs`, every provisional record marker on the issue is trusted and
+ * unedited (and at least one exists), and the PR's head ref is a claim branch of that issue
+ * (`issue/<number>-*`). The relation only chooses which PR Resume reads: it
+ * grants nothing, and F2/F3 still bind the source through the trusted replay.
+ *
+ * An issue that no PR names with `Refs` costs nothing, and an issue whose
+ * comments carry no record marker costs one comment read and no config read.
+ * A failed read throws, and so does a refused history (an untrusted or edited
+ * marker) beside a `Refs` PR on a claim branch: answering "no PR" would send a
+ * session with unpushed fixes to D1 although its branch is already published.
+ */
+export function findProvisionalSourceOpenPrs({
+  port,
+  issueNumber,
+  openPrs,
+  readTrustedLogins,
+}) {
+  if (!Number.isInteger(issueNumber) || (issueNumber ?? 0) <= 0) {
+    return [];
+  }
+  const targetIssueNumber = Number(issueNumber);
+  const repository = port.resolveRepositoryLocator();
+  const referencing = openPrs.filter((pr) => {
+    const body = stripBlockQuotesAndLazyContinuations(pr.body);
+    return hasD35ClosingReference(
+      maskMarkdownForScan(body),
+      body,
+      /\b(refs?)(\s+)(#\d+|[\w.-]+\/[\w.-]+#\d+)\b/gi,
+      {
+        issueNumber: targetIssueNumber,
+        owner: repository.owner,
+        repo: repository.name,
+      },
+    );
+  });
+  if (referencing.length === 0) return [];
+  const markers = port
+    .listWorkItemComments(targetIssueNumber, { includeEditState: true })
+    .filter((comment) =>
+      comment.body.startsWith(PROVISIONAL_DECISION_RECORD_MARKER),
+    );
+  if (markers.length === 0) return [];
+  const trusted = new Set(
+    readTrustedLogins().map((login) => login.trim().toLowerCase()),
+  );
+  const branchPrefix = `issue/${targetIssueNumber}-`;
+  const claimBranchPrs = referencing.filter((pr) =>
+    port.getChangeRequestHeadRef(pr.number).startsWith(branchPrefix),
+  );
+  // The authoritative replay refuses the whole history when any record marker
+  // is untrusted or edited, so one valid marker beside a forged one is not a
+  // record: every marker must be trusted and unedited.
+  const allTrusted = markers.every(
+    (comment) =>
+      trusted.has(comment.authorLogin.trim().toLowerCase()) &&
+      classifyCommentEditState({ lastEditedAt: comment.lastEditedAt }) ===
+        'unedited',
+  );
+  if (allTrusted) return claimBranchPrs;
+  // A refused history is not an absent relationship. A published PR on a claim
+  // branch must not read as "no PR": that would route a session with unpushed
+  // fixes to D1 after publication. Stop until the marker is removed.
+  if (claimBranchPrs.length > 0) {
+    throw new Error(
+      `issue #${targetIssueNumber} has an untrusted or edited provisional record marker, so open PR ${claimBranchPrs
+        .map((pr) => `#${pr.number}`)
+        .join(
+          ', ',
+        )} on its claim branch cannot be related to it; resolve the marker, then rerun`,
+    );
+  }
+  return [];
 }
 export function stripBlockQuotesAndLazyContinuations(body) {
   let quotedParagraphOpen = false;
