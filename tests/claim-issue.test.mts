@@ -4839,6 +4839,90 @@ test('local-branch-present: the closed lists reject an unknown state and a pair 
   }
 });
 
+test('a verdict other than local-branch-present never carries a local-branch reason or evidence', () => {
+  // The control: a claimable answer with a well-formed absent result passes.
+  const absent = evaluatorRouting([{ status: 'read', refs: [] }]);
+  assert.equal(absent.state, 'unclaimed');
+  assertEligible(a5cReport(asResult(absent)));
+
+  const unexpected = evaluatorRouting(
+    [{ status: 'read', refs: [refAt(`${PREFIX}other-slug`)] }],
+    { released: null },
+  );
+  const rows: [
+    string,
+    Record<string, unknown>,
+    (copy: MutableRouting) => void,
+  ][] = [
+    [
+      'a claimable answer that names a local-branch reason',
+      absent,
+      (copy) => {
+        copy.reason = 'local-branch-unexpected';
+      },
+    ],
+    [
+      'a claimable answer with an unexpected local_branch result',
+      absent,
+      (copy) => {
+        copy.evidence.local_branch =
+          unexpected.evidence as MutableRouting['evidence']['local_branch'];
+      },
+    ],
+    [
+      'a claimable answer whose absent result lists a ref',
+      absent,
+      (copy) => {
+        copy.evidence.local_branch.refs = [refAt(`${PREFIX}other-slug`)];
+      },
+    ],
+    [
+      'a claimable answer whose absent result names a branch',
+      absent,
+      (copy) => {
+        copy.evidence.local_branch.branch = `${PREFIX}other-slug`;
+      },
+    ],
+    [
+      'the absent result that claims to be inheritable',
+      absent,
+      (copy) => {
+        copy.evidence.local_branch.status = 'inheritable';
+      },
+    ],
+  ];
+  for (const [name, base, change] of rows) {
+    assertStoppedAt(
+      a5cReport(mutated(base, change)),
+      'a5c-claim-state',
+      'precheck-unavailable',
+    );
+    void name;
+  }
+
+  // Another verdict carries no local_branch object at all, not even an absent one.
+  const taken = routingOutput('already-claimed', {
+    reason: 'active-claim-non-stale',
+    winning: 'other-claim',
+  });
+  const withAbsent = JSON.parse(taken.stdout) as Record<string, unknown>;
+  withAbsent.evidence = {
+    local_branch: {
+      status: 'absent',
+      branch: null,
+      tip: null,
+      refs: [],
+      detail: null,
+    },
+  };
+  assertStoppedAt(
+    a5cReport(asResult(withAbsent)),
+    'a5c-claim-state',
+    'precheck-unavailable',
+  );
+  assertStoppedAt(a5cReport(taken), 'a5c-claim-state', 'already-claimed');
+});
+
 test('local-branch-present with --preserve-b1-leftovers: only the computed branch leftover passes A5(c)', () => {
   const leftover = evaluatorRouting([LOCAL_EXACT_READ], { released: null });
   assert.equal(leftover.reason, 'local-branch-unexpected');

@@ -769,6 +769,41 @@ function readLocalBranchEvidence(
 }
 
 /**
+ * Whether a verdict other than `local-branch-present` still carries a
+ * local-branch signal (issue 4914): a local-branch reason, or
+ * `evidence.local_branch` that is not exactly a well-formed `absent` result.
+ * Only a `claimable` verdict may carry the `absent` object; every other
+ * verdict carries none. Such a response is malformed, so a drift between the
+ * producer and this consumer can never read a local-only branch as claimable.
+ */
+function carriesLocalBranchSignal(
+  routing: Record<string, unknown>,
+  verdict: string,
+): boolean {
+  if (
+    typeof routing.reason === 'string' &&
+    Object.hasOwn(LOCAL_BRANCH_STATUS_BY_REASON, routing.reason)
+  ) {
+    return true;
+  }
+  const evidence = routing.evidence;
+  const local = isRecord(evidence) ? evidence.local_branch : undefined;
+  if (local === undefined) {
+    return false;
+  }
+  return !(
+    verdict === 'claimable' &&
+    isRecord(local) &&
+    local.status === 'absent' &&
+    local.branch === null &&
+    local.tip === null &&
+    Array.isArray(local.refs) &&
+    local.refs.length === 0 &&
+    (local.detail === null || typeof local.detail === 'string')
+  );
+}
+
+/**
  * A `local-branch-present` result that only names this claim's own computed
  * branch and is neither inheritable nor unreadable. It is the leftover
  * `--preserve-b1-leftovers` exists to preserve (issue 4970), so with the flag
@@ -894,6 +929,16 @@ function readFreshClaimGate(
       ok: false,
       detail:
         'resume-claim-routing printed a verdict, state, action, or winner it never pairs together',
+    };
+  }
+  if (
+    gate.verdict !== 'local-branch-present' &&
+    carriesLocalBranchSignal(routing, gate.verdict)
+  ) {
+    return {
+      ok: false,
+      detail:
+        'resume-claim-routing printed a local-branch reason or evidence.local_branch that its verdict never carries',
     };
   }
   const localBranch =
