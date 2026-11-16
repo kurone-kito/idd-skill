@@ -41,6 +41,11 @@ For the candidate picked in A4 Step 2 (or the explicit target verified
 by A0-T), evaluate the following checks in order. Stop and fail on the
 first check that is not satisfied.
 
+**Provisional plan** (needs-decision source, trusted `decisionIssue` class
+`enabled`): pass `--provisional-plan` to the A4 and A4.5 helpers. Only an
+eligible plan relaxes the decision-caused part of Checks 5-7; every other
+check stays. See [Provisional plan assessment](../../docs/idd-workflow.md#provisional-plan-assessment-a4-and-a45).
+
 ### Check 1: Repository Fit
 
 Does the issue describe work scoped to this repository?
@@ -50,20 +55,9 @@ Does the issue describe work scoped to this repository?
 - **Fail**: Issue crosses repository boundaries, requires external system
   access, or is out-of-scope for this repository
 - A negative regression fixture or expected-rejection example is descriptive
-  context, not a live prerequisite, only when an explicit, positively framed
-  fixture/rejection cue precedes the external-access phrase in the same
-  Markdown paragraph or list item. On a list marker line, the cue and phrase
-  must remain in the same sentence; a separate sentence is part of the same
-  context only when it is a correctly indented loose-list continuation
-  paragraph whose cue text also identifies the external/access context. A
-  heading at the list item's indentation ends that context. Inline-code terms
-  remain scannable when they occur in a live prerequisite, while fixture cues
-  inside inline code, strikethrough, and inline-code-only examples are
-  ignored. A separate live prerequisite still fails this check, while
-  unrelated or negated cues (including `non-`/`not-` prefixed variants), a cue
-  after the access phrase, a cue in another paragraph, and ambiguous wording
-  remain fail-closed. This boundary follows the observed false positive in
-  issue #3522.
+  context, not a live prerequisite, only under the cue rules in
+  [Check 1 fixture cues](../../docs/idd-workflow.md#check-1-fixture-cues-a45);
+  anything else fails closed.
 - **Outcome on fail**: `out-of-scope`
 
 ### Check 2: Issue Coherence
