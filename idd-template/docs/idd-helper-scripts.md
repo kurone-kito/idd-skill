@@ -6120,11 +6120,15 @@ schema entry, and no code, and it changes no current merge-readiness result.
 Issue `#5221` owns the separate question of whether a count-only difference
 should be advisory; this section does not touch that classification.
 
-Today only the exact comment counts. F2 and F3 readiness accept it when a
-configured trusted actor wrote it, its `lastEditedAt` is explicitly `null`, it
-carries no `idd-agent-authored` marker, and its SHA equals both the recorded
-post-push head and the live head. That rule is the default and stays in force
-unless the setting below is present and valid.
+Today only the exact comment counts. F2 and F3 readiness accept it when its
+author is in the resolved trusted-actor set, its `lastEditedAt` is explicitly
+`null`, it carries no `idd-agent-authored` marker, and its SHA equals both the
+recorded post-push head and the live head. The resolved set is the
+authenticated viewer plus the first non-empty of the `--trusted-marker-logins`
+flag, the `IDD_TRUSTED_MARKER_ACTORS` environment variable, and the base
+config's `trustedMarkerActors`, plus collaborator logins when collaborator
+marker trust is enabled. The exact-comment rule is the default and stays in
+force unless the setting below is present and valid.
 
 #### Scope-decision opt-out setting contract
 
@@ -6192,7 +6196,8 @@ Each existing candidate, with what it binds and what it lacks:
 
 - **Approving pull request review** (`hasTrustedHeadApproval` in
   `advisory-convergence.mts`, added for decision-rule diffs under issue
-  `#4015`). It binds a login in the configured trusted actors, the `APPROVED`
+  `#4015`). It binds a login in the resolved trusted actors (flag, environment
+  variable, or base config; no viewer or collaborator logins), the `APPROVED`
   state, a review commit equal to the live head, and latest-review freshness (a
   later `CHANGES_REQUESTED` review withdraws it, and a dismissal changes its
   state). It lacks scope, claim, issue body, base, and path set. It also lacks
@@ -6257,7 +6262,10 @@ commit; parse one canonical review-body grammar that names the claim ID, the
 issue-body digest, the pull request number, the head SHA, the base ref and
 merge-base SHA, and the canonical path set; compare each of them against live
 records; and apply the same trusted-actor, edit, and freshness rules as the
-exact comment, plus a rule that shows the review was not self-authored. Its
+exact comment, plus a rule that shows the review was not self-authored. The
+exact comment's actor set can today come from a flag or an environment
+variable, so the verifier must also name which actor set authenticates a
+review. Its
 design is the follow-up. This issue implements none of it and adds no setting.
 
 <!-- markdownlint-disable MD013 -->
