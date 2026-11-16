@@ -35,7 +35,11 @@ import {
   stripLeadingIndentColumns,
 } from './markdown-code.mts';
 import { normalizePolicyConfig } from './policy-helpers.mts';
-import { summarizeBranchReviewRequirements } from './protocol-helpers.mts';
+import {
+  classifyCommentEditState,
+  resolveTrustedMarkerActors,
+  summarizeBranchReviewRequirements,
+} from './protocol-helpers.mts';
 import {
   createGithubProviderAdapter,
   resolveCurrentGithubRepository,
@@ -46,6 +50,7 @@ import type {
   ProviderGovernanceReadOutcome,
   ProviderPort,
 } from './provider-port.mts';
+import { PROVISIONAL_DECISION_RECORD_MARKER } from './provisional-decision-state.mts';
 import { CLOSING_KEYWORD_PATTERN } from './supersession-detection.mts';
 
 /** A GitHub task-list checkbox after a list marker, with its padding. */
@@ -346,14 +351,39 @@ export function collectRoutingInput({
     worktreeDirty: boolean;
   };
 }) {
-  const prs = findIssueRelatedOpenPrs({ port, issueNumber });
-  const issuePr = prs.length === 1 ? prs[0] : null;
+  const openPrs = port.listOpenChangeRequests();
   // resolveViewerLogin's REST leg is the exact gh api user --jq .login call
   // this file made directly pre-migration (same args, same options
   // profile); the only behavior delta is a GraphQL fallback attempt on a
   // 5xx/timeout REST failure before the identical error is re-thrown --
   // transport hygiene (widened resilience), not a distinct call shape.
   const viewerLogin = port.resolveViewerLogin().toLowerCase();
+  let prs = findIssueRelatedOpenPrs({ port, issueNumber, openPrs });
+  if (prs.length === 0) {
+    // #4534: a protected provisional source's PR names it with `Refs`, never a
+    // closing keyword, so the matcher above cannot see it.
+    prs = findProvisionalSourceOpenPrs({
+      port,
+      issueNumber,
+      openPrs,
+      readTrustedLogins: () => {
+        const repository = port.resolveRepositoryLocator();
+        const ref = port.getRepositoryDefaultBranch(
+          repository.owner,
+          repository.name,
+        );
+        if (!ref) return [];
+        return [
+          viewerLogin,
+          ...resolveTrustedMarkerActors({
+            envValue: process.env.IDD_TRUSTED_MARKER_ACTORS,
+            config: loadTrustedConfig(repository.owner, repository.name, ref),
+          }).actors,
+        ];
+      },
+    });
+  }
+  const issuePr = prs.length === 1 ? prs[0] : null;
   const gitState = collectGitState();
 
   if (!issuePr) {
@@ -623,15 +653,18 @@ function detectUnpushedCommits(): boolean {
 export function findIssueRelatedOpenPrs({
   port,
   issueNumber,
+  openPrs,
 }: {
   port: ProviderPort;
   issueNumber: number | null;
+  /** The open list a caller already read; read here when absent. */
+  openPrs?: ProviderChangeRequestSummary[];
 }): ProviderChangeRequestSummary[] {
   if (!Number.isInteger(issueNumber) || (issueNumber ?? 0) <= 0) {
     return [];
   }
   const targetIssueNumber = Number(issueNumber);
-  const candidates = port.listOpenChangeRequests();
+  const candidates = openPrs ?? port.listOpenChangeRequests();
   const repository = port.resolveRepositoryLocator();
   return candidates.filter((pr) => {
     // D3.5 defines a relationship through a plain-text closing keyword in
@@ -660,6 +693,73 @@ export function findIssueRelatedOpenPrs({
       },
     );
   });
+}
+
+/**
+ * Open PRs of a protected provisional source (#4534). Such a source stays open
+ * after its PR merges, so its PR names it with `Refs` and never a closing
+ * keyword, which {@link findIssueRelatedOpenPrs} cannot match. A PR relates
+ * only when all three hold: its body (outside code and quotes) names the issue
+ * with `Refs`, the issue carries a trusted, unedited provisional record
+ * marker, and the PR's head ref is a claim branch of that issue
+ * (`issue/<number>-*`). The relation only chooses which PR Resume reads: it
+ * grants nothing, and F2/F3 still bind the source through the trusted replay.
+ *
+ * An issue with no `Refs` reference costs nothing, and any failed read returns
+ * no PR, which is the route this helper had before the source existed.
+ */
+export function findProvisionalSourceOpenPrs({
+  port,
+  issueNumber,
+  openPrs,
+  readTrustedLogins,
+}: {
+  port: ProviderPort;
+  issueNumber: number | null;
+  openPrs: ProviderChangeRequestSummary[];
+  /** Trusted marker logins; read only once a PR names the issue with `Refs`. */
+  readTrustedLogins: () => string[];
+}): ProviderChangeRequestSummary[] {
+  if (!Number.isInteger(issueNumber) || (issueNumber ?? 0) <= 0) {
+    return [];
+  }
+  const targetIssueNumber = Number(issueNumber);
+  try {
+    const repository = port.resolveRepositoryLocator();
+    const referencing = openPrs.filter((pr) => {
+      const body = stripBlockQuotesAndLazyContinuations(pr.body);
+      return hasD35ClosingReference(
+        maskMarkdownForScan(body),
+        body,
+        /\b(refs?)(\s+)(#\d+|[\w.-]+\/[\w.-]+#\d+)\b/gi,
+        {
+          issueNumber: targetIssueNumber,
+          owner: repository.owner,
+          repo: repository.name,
+        },
+      );
+    });
+    if (referencing.length === 0) return [];
+    const trusted = new Set(
+      readTrustedLogins().map((login) => login.trim().toLowerCase()),
+    );
+    const hasTrustedRecord = port
+      .listWorkItemComments(targetIssueNumber, { includeEditState: true })
+      .some(
+        (comment) =>
+          comment.body.startsWith(PROVISIONAL_DECISION_RECORD_MARKER) &&
+          trusted.has(comment.authorLogin.trim().toLowerCase()) &&
+          classifyCommentEditState({ lastEditedAt: comment.lastEditedAt }) ===
+            'unedited',
+      );
+    if (!hasTrustedRecord) return [];
+    const branchPrefix = `issue/${targetIssueNumber}-`;
+    return referencing.filter((pr) =>
+      port.getChangeRequestHeadRef(pr.number).startsWith(branchPrefix),
+    );
+  } catch {
+    return [];
+  }
 }
 
 export function stripBlockQuotesAndLazyContinuations(body: string): string {
