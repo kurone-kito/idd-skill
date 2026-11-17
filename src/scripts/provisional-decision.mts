@@ -3272,6 +3272,14 @@ async function planReworkAuthored(
     );
   }
   const target = awaiting[0] as ReplayedProvisionalDecision;
+  // The authoring record needs the source open; an already recorded authoring
+  // stays recoverable above, even after the roadmap closes.
+  if (context.sourceState.state === 'closed') {
+    return resolutionRefusal(
+      'recovery-hold',
+      `the source is closed (${context.sourceState.stateReason ?? 'an unknown reason'}) before the rework authoring is recorded; reopen it first`,
+    );
+  }
   const namesRequestingClaim = bundle.some((decision) => {
     const named = decision.reworkRequested?.claimLineage.at(-1);
     return (

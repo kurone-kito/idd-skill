@@ -4466,3 +4466,40 @@ test('the step bound is a backstop that a caller can lower', async () => {
   });
   assert.equal(dry.state, 'planned', JSON.stringify(dry));
 });
+
+test('rework-authored is not recorded for a closed source, but a recorded one stays recoverable', async () => {
+  const closed = await authoredFixture();
+  closed.store.sourceState = { state: 'closed', stateReason: 'not_planned' };
+  const refused = await runProvisionalResolution(
+    authoredRequest(closed),
+    closed.store,
+    { apply: true },
+  );
+  assertRefused(
+    refused,
+    'recovery-hold',
+    /before the rework authoring is recorded/,
+  );
+  assert.equal(eventsOf(closed.store).includes('rework-authored'), false);
+
+  const later = await authoredFixture();
+  const first = await runProvisionalResolution(
+    authoredRequest(later),
+    later.store,
+    {
+      apply: true,
+    },
+  );
+  assert.equal(first.outcome, 'rework-authored', JSON.stringify(first));
+  // The roadmap closes after its authoring was recorded: a rerun still settles.
+  later.store.sourceState = { state: 'closed', stateReason: 'completed' };
+  const rerun = await runProvisionalResolution(
+    authoredRequest(later),
+    later.store,
+    {
+      apply: true,
+    },
+  );
+  assert.equal(rerun.state, 'reconciled', JSON.stringify(rerun));
+  assert.equal(rerun.outcome, 'rework-authored');
+});
