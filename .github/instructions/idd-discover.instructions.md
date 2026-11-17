@@ -95,7 +95,8 @@ routing:
    check runs before step 2, so an authoring-held roadmap is never routed
    into step 2's traversal. If it carries
    `labels.blockedByHumanLabelName` (default `status:blocked-by-human`),
-   `labels.needsDecisionLabelName` (default `status:needs-decision`),
+   `labels.needsDecisionLabelName` (default `status:needs-decision`; no
+   stop for a non-roadmap A3 `decisionSource`),
    `labels.authoringOnlyLabelName` (default `status:authoring-only`), or
    `autoDecide.confirmationLabelName` (default
    `status:needs-confirmation`, any case), also stop without claiming:
@@ -206,8 +207,7 @@ them, manually omit those recorded leaf numbers. (c)/(d), orphan-first: none.
 Search all open issues in the repository. Collect every issue that does
 NOT contain an `idd-skill-roadmap-id` marker (not itself
 a roadmap) or an `idd-skill-blocked-by` marker, AND
-otherwise passes A3's own readiness bullets (the same six criteria A3
-lists; do not re-derive them here).
+otherwise passes A3's own readiness bullets (do not re-derive).
 
 Apply the configured policy before passing A0-O candidates to A3.5:
 
@@ -264,9 +264,8 @@ commit to one umbrella. Enumerate the open execution leaves across **all**
 open roadmap roots via A2's per-root A1.5 audit, then carry the top-ranked
 candidate through the normal A3/A4/A4.5/A5 gates. The single-root
 selection above stays the default; orphan-first filtering still applies
-only to true orphans, since cross-roadmap leaves come from a parent
-roadmap's task list and never carry their own
-`idd-skill-roadmap-id` marker.
+only to true orphans: cross-roadmap leaves come from a parent's task list
+and never carry their own `idd-skill-roadmap-id` marker.
 
 **Legacy roots**: `--all-roadmaps` finds roots only by
 `idd-skill-roadmap-id` marker. Add the marker to a legacy
@@ -365,9 +364,8 @@ authorizes an alternate scope for the current run:
 traversal path; record the back-edge as a cycle with its path and
 continue with the next reference.
 
-**Single visit.** A node is identified by issue number; a node
-reached again through another path is the same node — collect it
-once, never enter it into the candidate set twice.
+**Single visit.** A node is its issue number; reaching it again by
+another path collects it once.
 
 **Provenance.** Keep and report every distinct path that reaches a
 node, not only the first.
@@ -400,17 +398,16 @@ continues to A2 still unions that root. Then rank as in A4 Step 2.
 
 ## A3 — Filter to ready-to-start
 
-Active-claim eligibility is evaluated by A4 Step 1.5's pre-scan
-(after Step 1's viability gate, before Step 2 selection, A4.5,
-and B-phase scope work) — not an A3 filter. An all-claimed
-candidate set exits through Step 1's exhaustion-exit routing,
-which Step 1.5 invokes, never A3's zero-survivor decision tree
-below.
+A4 Step 1.5's pre-scan, not A3, evaluates active-claim eligibility.
+An all-claimed set exits via Step 1's exhaustion-exit routing,
+never A3's zero-survivor decision tree below.
 
 From A2, keep only issues that satisfy **all** of the following:
 
-- No configured blocked-by-human, needs-decision, authoring-only, or
-  confirmation label
+- No configured blocked-by-human, authoring-only, or confirmation label;
+  needs-decision only as a helper-reported `decisionSource`
+  ([auto-decide](../../docs/idd-workflow.md#auto-decide-at-a-stop)), else
+  excluded. List `confirmationQueue` sources; none is startable
 - No configured authoring label
 - No open dependent issues (parent epics / aggregate issues that are
   still open are acceptable)
@@ -632,7 +629,8 @@ the **highest authored autopilot-suitability score** (the
 `<!-- idd-skill-autopilot-suitability: N -->` footer, or the
 `discover-roadmap-graph` node's `autopilotSuitability`), tie-broken by
 **lowest issue number**. In autopilot runs, skip scores below
-`autopilotSuitability.floor` (default `3`) as human-oriented; a missing
+`autopilotSuitability.floor` (default `3`) as human-oriented, except a
+`decisionSource`, which A4.5 assesses; a missing
 or out-of-range score defaults to the floor and is never skipped
 (subject to the scored-vs-unscored tie-breaker below; an `L`-effort orphan
 candidate under `effortL: refuse` is the exception, see A0-O). Advisory only —

@@ -17,6 +17,10 @@ import {
   isDiscoverIncompleteResult as isIncomplete,
 } from '../src/scripts/discover-progress.mts';
 import {
+  buildDecisionSourceResolver,
+  type ProvisionalDecisionEvidence,
+} from '../src/scripts/discover-readiness-check.mts';
+import {
   annotateLeafClaimState,
   buildClaimStateResolution,
   buildCommentLoader,
@@ -6624,3 +6628,342 @@ for (const entry of CLOSING_DECLARATION_CORPUS) {
     assert.deepEqual(edges, entry.edges, JSON.stringify(entry.body));
   });
 }
+
+// --- #4538: decision sources and the confirmation queue --------------------
+
+const DECISION_NAME = 'status:needs-decision';
+
+const noDecisionState: ProvisionalDecisionEvidence = {
+  valid: true,
+  hasRecords: false,
+  status: 'none',
+  hasRework: false,
+  decisions: [],
+  issues: [],
+};
+
+const completedDecisionState: ProvisionalDecisionEvidence = {
+  valid: true,
+  hasRecords: true,
+  status: 'confirmation-pending',
+  hasRework: false,
+  decisions: [
+    {
+      bundleGeneration: 1,
+      decisionGeneration: 1,
+      status: 'confirmation-pending',
+      executionCriteria: ['All generated artifacts ship.'],
+      workReference: 'https://github.com/acme/repo/pull/9',
+      verifiedAt: '2026-11-01T00:00:00Z',
+      question: 'Which behavior?',
+      selectedOption: 'Keep it',
+    },
+  ],
+  issues: [],
+};
+
+const decisionLeaf = (number: number, body = `decision ${number}`) => ({
+  number,
+  title: `issue ${number}`,
+  state: 'open',
+  body,
+  labels: [{ name: DECISION_NAME }],
+});
+
+const dependentBody = (source: number) =>
+  [
+    `Blocked by #${source}`,
+    '',
+    `For the edge \`Blocked by #${source}\`, the producer output is the selected work completion. The blocked criterion is that all generated artifacts ship. The evidence is the merged implementation PR.`,
+  ].join('\n');
+
+// 1000 (decision roadmap) -> 1001 (open decision), 1002 (completed decision),
+// 1003 (needs 1002's verified work), 1004 (needs the still-open 1001), 1005
+// (ordinary). 1100 (ordinary roadmap) -> 1001 (shared) and 1106.
+function decisionGraphIssues() {
+  return new Map<number, unknown>([
+    [
+      1000,
+      roadmapIssue(
+        1000,
+        '- [ ] #1001\n- [ ] #1002\n- [ ] #1003\n- [ ] #1004\n- [ ] #1005',
+        'decision-roadmap',
+      ),
+    ],
+    [1001, decisionLeaf(1001)],
+    [1002, decisionLeaf(1002)],
+    [1003, executionIssue(1003, dependentBody(1002))],
+    [1004, executionIssue(1004, dependentBody(1001))],
+    [1005, executionIssue(1005, 'ordinary leaf 1005')],
+    [1100, roadmapIssue(1100, '- [ ] #1001\n- [ ] #1106', 'ordinary-roadmap')],
+    [1106, executionIssue(1106, 'ordinary leaf 1106')],
+  ]);
+}
+
+function decisionReadiness(
+  evidence: Record<number, ProvisionalDecisionEvidence> = {
+    1002: completedDecisionState,
+  },
+  options: {
+    classEnabled?: boolean;
+    withGate?: boolean;
+    trusted?: Record<string, unknown>;
+  } = {},
+) {
+  const classEnabled = options.classEnabled ?? true;
+  const stateOf = (number: number) => evidence[number] ?? noDecisionState;
+  return {
+    ...readinessResolution(),
+    loadProvisionalDecisionState: async (number: number) => stateOf(number),
+    decisionIssueClassEnabled: () => classEnabled,
+    ...(options.withGate === false
+      ? {}
+      : {
+          decisionSources: buildDecisionSourceResolver({
+            loadStates: async (sources) =>
+              new Map(
+                sources.map((source) => [
+                  source.issueNumber,
+                  stateOf(source.issueNumber),
+                ]),
+              ),
+            readTrusted: () => ({
+              classEnabled,
+              maxPendingConfirmations: 3,
+              confirmationLabelName: 'status:needs-confirmation',
+              ...options.trusted,
+            }),
+            countOpenConfirmationIssues: () => 0,
+          }),
+        }),
+  };
+}
+
+const queueOfCompleted = [
+  {
+    number: 1002,
+    title: 'issue 1002',
+    bundleGeneration: 1,
+    choices: [
+      {
+        decisionGeneration: 1,
+        status: 'confirmation-pending',
+        question: 'Which behavior?',
+        selectedOption: 'Keep it',
+      },
+    ],
+    implementationLinks: ['https://github.com/acme/repo/pull/9'],
+  },
+];
+
+test('decision gate: a decision-bearing roadmap opens only paths its own verdict or verified dependency evidence justifies', async () => {
+  const issues = decisionGraphIssues();
+  const report = await enumerateAllRoadmapsGraph({
+    loadOpenRoadmapRoots: async () => [1000, 1100],
+    loadIssue: async (number) => issues.get(number) ?? null,
+    readiness: decisionReadiness(),
+  });
+  const leaf = (number: number) =>
+    report.leaves.find((entry) => entry.number === number);
+  // The open decision is admitted; its dependent stays blocked on it.
+  assert.deepEqual(leaf(1001)?.readiness, {
+    ready: true,
+    reasons: [],
+    authoringHeld: false,
+    startable: true,
+    decisionSource: true,
+  });
+  assert.deepEqual(leaf(1001)?.sourceRoots, [1000, 1100]);
+  assert.deepEqual(leaf(1004)?.readiness?.reasons, [
+    'blocked_by_open_issue:#1001',
+  ]);
+  assert.equal(leaf(1004)?.readiness?.ready, false);
+  // The completed decision is queued, never ready; its dependent opens only
+  // through the exact verified provisional edge.
+  assert.deepEqual(leaf(1002)?.readiness?.reasons, [
+    'confirmation_pending',
+    `label:${DECISION_NAME}`,
+  ]);
+  assert.equal(leaf(1002)?.readiness?.startable, false);
+  assert.equal(leaf(1003)?.readiness?.ready, true);
+  assert.equal(
+    leaf(1003)?.readiness?.provisionalDependencies?.[0]?.issueNumber,
+    1002,
+  );
+  assert.equal('decisionSource' in (leaf(1003)?.readiness ?? {}), false);
+  assert.equal(leaf(1005)?.readiness?.ready, true);
+  assert.equal(leaf(1106)?.readiness?.ready, true);
+  assert.deepEqual(report.diagnostics.confirmationQueue, queueOfCompleted);
+  // The union report validates against the published schema, and the schema
+  // still rejects a queue entry or a decisionSource value it does not define.
+  const schema = loadJson('schemas/discover-roadmap-union.schema.json');
+  const context = {
+    root: process.cwd(),
+    schemaPath: 'schemas/discover-roadmap-union.schema.json',
+  };
+  assert.deepEqual(validate(report, schema, '$', context), []);
+  const forged = structuredClone(report) as typeof report;
+  const forgedLeaf = forged.leaves.find((entry) => entry.number === 1001);
+  assert.ok(forgedLeaf?.readiness);
+  (forgedLeaf.readiness as { decisionSource: unknown }).decisionSource = false;
+  (forged.diagnostics.confirmationQueue?.[0] as { extra?: number }).extra = 1;
+  assert.ok(validate(forged, schema, '$', context).length >= 2);
+});
+
+test('decision gate: the single-root report names the same decisions', async () => {
+  const issues = decisionGraphIssues();
+  const report = await enumerateRoadmapGraph(1000, {
+    loadIssue: async (number) => issues.get(number) ?? null,
+    readiness: decisionReadiness(),
+  });
+  const node = (number: number) =>
+    report.nodes.find((entry) => entry.number === number);
+  assert.equal(node(1001)?.readiness?.decisionSource, true);
+  assert.equal(node(1002)?.readiness?.ready, false);
+  assert.equal(node(1003)?.readiness?.ready, true);
+  assert.deepEqual(report.diagnostics.confirmationQueue, queueOfCompleted);
+});
+
+test('decision gate: a below-floor decision leaf stays in the union with its real score', async () => {
+  const issues = new Map<number, unknown>([
+    [1200, roadmapIssue(1200, '- [ ] #1201\n- [ ] #1202', 'floor-roadmap')],
+    [
+      1201,
+      decisionLeaf(
+        1201,
+        'decision\n<!-- idd-skill-autopilot-suitability: 1 -->',
+      ),
+    ],
+    [
+      1202,
+      executionIssue(
+        1202,
+        'plain\n<!-- idd-skill-autopilot-suitability: 4 -->',
+      ),
+    ],
+  ]);
+  const report = await enumerateAllRoadmapsGraph({
+    loadOpenRoadmapRoots: async () => [1200],
+    loadIssue: async (number) => issues.get(number) ?? null,
+    floor: 3,
+    readiness: decisionReadiness({}),
+  });
+  assert.deepEqual(
+    report.leaves.map((leaf) => [leaf.number, leaf.autopilotSuitability]),
+    [
+      [1202, 4],
+      [1201, 1],
+    ],
+  );
+  assert.equal(report.leaves[1]?.readiness?.decisionSource, true);
+});
+
+test('decision gate: class off, no gate, or an unreadable trust keeps the report byte for byte unchanged', async () => {
+  const run = async (readiness: ReturnType<typeof decisionReadiness>) => {
+    const issues = decisionGraphIssues();
+    return enumerateAllRoadmapsGraph({
+      loadOpenRoadmapRoots: async () => [1000, 1100],
+      loadIssue: async (number) => issues.get(number) ?? null,
+      readiness,
+    });
+  };
+  const baseline = await run(decisionReadiness({}, { withGate: false }));
+  assert.equal('confirmationQueue' in baseline.diagnostics, false);
+  assert.deepEqual(
+    baseline.leaves.find((leaf) => leaf.number === 1001)?.readiness?.reasons,
+    [`label:${DECISION_NAME}`],
+  );
+  const off = await run(decisionReadiness({}, { classEnabled: false }));
+  assert.deepEqual(off, baseline);
+  const unreadable = await run(
+    decisionReadiness(
+      {},
+      { trusted: { classEnabled: false, maxPendingConfirmations: null } },
+    ),
+  );
+  assert.deepEqual(unreadable.leaves, baseline.leaves);
+});
+
+test('decision gate: the pending cap skips a decision leaf with its reason', async () => {
+  const issues = decisionGraphIssues();
+  const report = await enumerateAllRoadmapsGraph({
+    loadOpenRoadmapRoots: async () => [1000],
+    loadIssue: async (number) => issues.get(number) ?? null,
+    readiness: decisionReadiness(
+      { 1002: completedDecisionState },
+      { trusted: { maxPendingConfirmations: 1 } },
+    ),
+  });
+  const leaf = report.leaves.find((entry) => entry.number === 1001);
+  assert.deepEqual(leaf?.readiness?.reasons, [
+    `label:${DECISION_NAME}`,
+    'provisional_pending_cap:1/1',
+  ]);
+  assert.equal('decisionSource' in (leaf?.readiness ?? {}), false);
+});
+
+test('decision gate: a needs-decision roadmap node is never a decision source and its leaves keep their own verdicts', async () => {
+  const issues = new Map<number, unknown>([
+    [
+      1300,
+      {
+        ...roadmapIssue(1300, '- [ ] #1301', 'decision-root'),
+        labels: [{ name: 'roadmap' }, { name: DECISION_NAME }],
+      },
+    ],
+    [1301, executionIssue(1301, 'leaf under a decision root')],
+  ]);
+  const report = await enumerateAllRoadmapsGraph({
+    loadOpenRoadmapRoots: async () => [1300],
+    loadIssue: async (number) => issues.get(number) ?? null,
+    readiness: decisionReadiness({}),
+  });
+  // The root is a roadmap node, so it is not an execution leaf at all, and
+  // the helper adds no decision-root rule (A1.5 keeps its stop).
+  assert.deepEqual(
+    report.leaves.map((leaf) => leaf.number),
+    [1301],
+  );
+  assert.equal(report.leaves[0]?.readiness?.ready, true);
+  assert.equal('decisionSource' in (report.leaves[0]?.readiness ?? {}), false);
+  assert.equal('confirmationQueue' in report.diagnostics, false);
+});
+
+test('decision gate: a refused replay surfaces as an interrupted scan, never a normal report', async () => {
+  const issues = decisionGraphIssues();
+  const readiness = {
+    ...decisionReadiness(),
+    decisionSources: buildDecisionSourceResolver({
+      async loadStates() {
+        throw createLoadControlRefusal({
+          outcome: 'deadline-expired',
+          reason: 'cooldown',
+          retryAt: '2026-11-17T03:15:00.000Z',
+          retryAtSource: 'server',
+        });
+      },
+      readTrusted: () => ({
+        classEnabled: true,
+        maxPendingConfirmations: 3,
+        confirmationLabelName: 'status:needs-confirmation',
+      }),
+      countOpenConfirmationIssues: () => 0,
+    }),
+  };
+  const result = await enumerateAllRoadmapsGraphWithRecovery(
+    {
+      loadOpenRoadmapRoots: async () => [1000],
+      loadIssue: async (number) => issues.get(number) ?? null,
+      readiness,
+    },
+    {
+      progress: createDiscoverProgress(),
+      rerunArguments: ['--all-roadmaps', '--with-readiness', '--with-progress'],
+    },
+  );
+  assert.equal('leaves' in result, false);
+  assert.ok(isIncomplete(result));
+  assert.equal(result.status, 'incomplete');
+  assert.equal(result.incomplete.reason, 'rate-limit');
+  assert.equal(result.incomplete.exhausted, false);
+});

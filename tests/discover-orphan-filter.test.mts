@@ -24,6 +24,11 @@ import {
   loadPolicy,
   resolveClaimStateNow,
 } from '../src/scripts/discover-orphan-filter.mts';
+import {
+  buildDecisionSourceResolver,
+  type DecisionSourceInputs,
+  type ProvisionalDecisionEvidence,
+} from '../src/scripts/discover-readiness-check.mts';
 import { classifyIssue as classifyGraphIssue } from '../src/scripts/discover-roadmap-graph.mts';
 import {
   NOW_FLAG_USAGE_MESSAGE,
@@ -4464,4 +4469,600 @@ process.exit(1);
     restore();
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// --- #4538: the shared decision-source gate -------------------------------
+
+const DECISION = 'status:needs-decision';
+const CONFIRM = 'status:needs-confirmation';
+
+const noDecisionRecords: ProvisionalDecisionEvidence = {
+  valid: true,
+  hasRecords: false,
+  status: 'none',
+  hasRework: false,
+  decisions: [],
+  issues: [],
+};
+
+const completedSource: ProvisionalDecisionEvidence = {
+  valid: true,
+  hasRecords: true,
+  status: 'confirmation-pending',
+  hasRework: false,
+  decisions: [
+    {
+      bundleGeneration: 1,
+      decisionGeneration: 1,
+      status: 'confirmation-pending',
+      executionCriteria: ['It ships.'],
+      workReference: 'https://github.com/acme/repo/pull/9',
+      verifiedAt: '2026-11-01T00:00:00Z',
+      question: 'Which behavior?',
+      selectedOption: 'Keep it',
+    },
+  ],
+  issues: [],
+};
+
+function orphanGate(
+  evidence: Record<number, ProvisionalDecisionEvidence> = {},
+  overrides: Partial<DecisionSourceInputs> = {},
+  trusted: Partial<ReturnType<DecisionSourceInputs['readTrusted']>> = {},
+) {
+  const prepared: number[][] = [];
+  const resolver = buildDecisionSourceResolver({
+    async loadStates(sources) {
+      prepared.push(sources.map((source) => source.issueNumber));
+      return new Map(
+        sources.map((source) => [
+          source.issueNumber,
+          evidence[source.issueNumber] ?? noDecisionRecords,
+        ]),
+      );
+    },
+    readTrusted: () => ({
+      classEnabled: true,
+      maxPendingConfirmations: 3,
+      confirmationLabelName: CONFIRM,
+      ...trusted,
+    }),
+    countOpenConfirmationIssues: () => 0,
+    ...overrides,
+  });
+  return { resolver, prepared };
+}
+
+const decisionIssue = (
+  number: number,
+  labels: string[] = [DECISION],
+  body = `task ${number}`,
+) => ({
+  number,
+  title: `issue ${number}`,
+  state: 'OPEN',
+  body,
+  labels: labels.map((name) => ({ name })),
+});
+
+const runOrphans = (
+  issues: ReturnType<typeof decisionIssue>[],
+  options: Parameters<typeof filterOrphanIssues>[1] = {},
+) =>
+  filterOrphanIssues(issues, {
+    issueStateByNumber: new Map(issues.map((issue) => [issue.number, 'OPEN'])),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    ...options,
+  });
+
+test('decision gate: class off, absent, unreadable or a failing replay leaves the orphan output byte for byte unchanged', async () => {
+  const issues = [decisionIssue(1), decisionIssue(2, [])];
+  const baseline = await runOrphans(issues);
+  assert.deepEqual(
+    baseline.orphans.map((o) => o.number),
+    [2],
+  );
+  assert.deepEqual(
+    baseline.filtered.blocked_label.map((e) => [e.number, e.details]),
+    [[1, DECISION]],
+  );
+  assert.equal('confirmationQueue' in baseline, false);
+
+  for (const gate of [
+    orphanGate({}, {}, { classEnabled: false }),
+    orphanGate(
+      {},
+      {
+        readTrusted() {
+          throw new Error('trusted read failed');
+        },
+      },
+    ),
+    orphanGate(
+      {},
+      {
+        async loadStates() {
+          throw new Error('replay refused');
+        },
+      },
+      { classEnabled: false },
+    ),
+  ]) {
+    assert.deepEqual(
+      await runOrphans(issues, { decisionSources: gate.resolver }),
+      baseline,
+    );
+  }
+});
+
+test('decision gate: an eligible needs-decision orphan reaches the assessment and keeps the other holds', async () => {
+  const { resolver } = orphanGate();
+  const result = await runOrphans(
+    [
+      decisionIssue(1),
+      decisionIssue(2, [DECISION, 'status:blocked-by-human']),
+      decisionIssue(3, [DECISION, 'status:authoring-only']),
+      decisionIssue(4, [DECISION, 'status:authoring']),
+      decisionIssue(5, [DECISION, CONFIRM]),
+      decisionIssue(6, [DECISION], 'Blocked by #99'),
+      decisionIssue(7, [DECISION], '<!-- idd-skill-roadmap-id: epic -->'),
+      decisionIssue(8, [DECISION], 'Depends on #99'),
+    ],
+    {
+      decisionSources: resolver,
+      issueStateByNumber: new Map([[99, 'OPEN']]),
+    },
+  );
+  assert.deepEqual(
+    result.orphans.map((o) => [o.number, o.decisionSource]),
+    [[1, true]],
+  );
+  const reasons = (name: keyof typeof result.filtered) =>
+    result.filtered[name].map((e) => [e.number, e.details]);
+  assert.deepEqual(reasons('blocked_label'), [
+    [2, 'status:blocked-by-human'],
+    [3, 'status:authoring-only'],
+    // The trusted confirmation label makes the verdict a plain block, so the
+    // first matching label in stored order names the exclusion.
+    [5, DECISION],
+  ]);
+  assert.deepEqual(reasons('authoring_label'), [[4, 'status:authoring']]);
+  assert.deepEqual(reasons('blocked_by_open_reference'), [[6, 99]]);
+  assert.deepEqual(reasons('roadmap_marker'), [[7, null]]);
+  assert.deepEqual(reasons('open_dependency_reference'), [[8, 99]]);
+});
+
+test('decision gate: the pending cap and an unreadable count skip a source with a reason in blocked_label', async () => {
+  const run = (open: number | null, cap = 3, evidence = {}) => {
+    const { resolver } = orphanGate(
+      evidence,
+      { countOpenConfirmationIssues: () => open },
+      { maxPendingConfirmations: cap },
+    );
+    return runOrphans([decisionIssue(1), decisionIssue(2, [])], {
+      decisionSources: resolver,
+    });
+  };
+  const below = await run(2);
+  assert.deepEqual(
+    below.orphans.map((o) => o.number),
+    [1, 2],
+  );
+  const atCap = await run(3);
+  assert.deepEqual(
+    atCap.orphans.map((o) => o.number),
+    [2],
+  );
+  assert.deepEqual(
+    atCap.filtered.blocked_label.map((e) => e.details),
+    [`${DECISION} (provisional_pending_cap:3/3)`],
+  );
+  const above = await run(9);
+  assert.deepEqual(
+    above.filtered.blocked_label.map((e) => e.details),
+    [`${DECISION} (provisional_pending_cap:9/3)`],
+  );
+  const unreadable = await run(null);
+  assert.deepEqual(
+    unreadable.filtered.blocked_label.map((e) => e.details),
+    [`${DECISION} (provisional_pending_unreadable)`],
+  );
+  // The queue counts toward the cap in any listing order: 2 open + 1 queued.
+  for (const issues of [
+    [decisionIssue(1), decisionIssue(3)],
+    [decisionIssue(3), decisionIssue(1)],
+  ]) {
+    const { resolver } = orphanGate(
+      { 3: completedSource },
+      { countOpenConfirmationIssues: () => 2 },
+    );
+    const result = await runOrphans(issues, { decisionSources: resolver });
+    assert.deepEqual(result.orphans, []);
+    assert.deepEqual(
+      result.filtered.blocked_label
+        .map((e) => [e.number, e.details])
+        .sort(([a], [b]) => (a as number) - (b as number)),
+      [
+        [1, `${DECISION} (provisional_pending_cap:3/3)`],
+        [3, `${DECISION} (confirmation_pending)`],
+      ],
+    );
+  }
+  const unavailable = await runOrphans([decisionIssue(1)], {
+    decisionSources: orphanGate(
+      {},
+      {
+        async loadStates() {
+          throw new Error('replay refused');
+        },
+      },
+    ).resolver,
+  });
+  assert.deepEqual(
+    unavailable.filtered.blocked_label.map((e) => e.details),
+    [`${DECISION} (provisional_state_unavailable)`],
+  );
+});
+
+test('decision gate: a completed source is queued and never an orphan, with either class value', async () => {
+  for (const classEnabled of [true, false]) {
+    const { resolver } = orphanGate(
+      { 1: completedSource },
+      {},
+      { classEnabled },
+    );
+    const result = await runOrphans([decisionIssue(1), decisionIssue(2, [])], {
+      decisionSources: resolver,
+    });
+    assert.deepEqual(
+      result.orphans.map((o) => o.number),
+      [2],
+    );
+    assert.deepEqual(
+      result.filtered.blocked_label.map((e) => e.details),
+      [`${DECISION} (confirmation_pending)`],
+    );
+    assert.deepEqual(result.confirmationQueue, [
+      {
+        number: 1,
+        title: 'issue 1',
+        bundleGeneration: 1,
+        choices: [
+          {
+            decisionGeneration: 1,
+            status: 'confirmation-pending',
+            question: 'Which behavior?',
+            selectedOption: 'Keep it',
+          },
+        ],
+        implementationLinks: ['https://github.com/acme/repo/pull/9'],
+      },
+    ]);
+  }
+});
+
+test('decision gate: only needs-decision sources of the unfiltered open listing are replayed', async () => {
+  const port = createFakeProviderAdapter({
+    workItems: {
+      1: {
+        number: 1,
+        title: 'decision',
+        body: 'task',
+        state: 'open',
+        labels: [{ name: DECISION }],
+      },
+      2: {
+        number: 2,
+        title: 'ordinary',
+        body: 'task',
+        state: 'open',
+        labels: [],
+      },
+      3: {
+        number: 3,
+        title: 'roadmap',
+        body: '<!-- idd-skill-roadmap-id: x -->',
+        state: 'open',
+        labels: [{ name: DECISION }],
+      },
+      4: {
+        number: 4,
+        title: 'follow-up',
+        body: '<!-- idd-skill-authoring-defer-source: review-needs-decision -->\nRefs #2',
+        state: 'open',
+        labels: [{ name: DECISION }],
+      },
+      5: {
+        number: 5,
+        title: 'carrier',
+        body: '<!-- idd-skill-draft-carrier: x -->',
+        state: 'open',
+        labels: [{ name: DECISION }, { name: 'status:authoring-only' }],
+      },
+      6: {
+        number: 6,
+        title: 'excluded leaf',
+        body: 'task',
+        state: 'open',
+        labels: [{ name: DECISION }],
+      },
+      7: {
+        number: 7,
+        title: 'outage target',
+        body: 'task',
+        state: 'open',
+        labels: [{ name: DECISION }],
+      },
+      8: {
+        number: 8,
+        title: 'confirmation issue',
+        body: 'task',
+        state: 'open',
+        labels: [{ name: DECISION }, { name: CONFIRM }],
+      },
+    },
+  });
+  // The listing carries every open issue, whatever its label: no label query.
+  const issues = fetchOpenIssues(port);
+  assert.deepEqual(
+    issues.map((issue) => issue.number),
+    [1, 2, 3, 4, 5, 6, 7, 8],
+  );
+  const { resolver, prepared } = orphanGate();
+  const result = await filterOrphanIssues(issues, {
+    issueStateByNumber: new Map(issues.map((issue) => [issue.number, 'OPEN'])),
+    fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+    decisionSources: resolver,
+    excludeIssueNumbers: [6],
+    providerOutageDeclarationTarget: 7,
+  });
+  assert.deepEqual(prepared, [[1]]);
+  assert.deepEqual(
+    result.orphans.map((o) => [o.number, o.decisionSource]),
+    [
+      [1, true],
+      [2, undefined],
+    ],
+  );
+  // No decision-shaped issue at all: nothing is replayed.
+  const none = orphanGate();
+  await runOrphans([decisionIssue(2, [])], { decisionSources: none.resolver });
+  assert.deepEqual(none.prepared, []);
+});
+
+test('decision gate: a below-floor decision source is not routed to human by score; ordinary and effort-L routing stay', async () => {
+  const score = (n: number, effort?: string) =>
+    `task\n<!-- idd-skill-autopilot-suitability: ${n} -->${effort ? `\n<!-- idd-skill-effort: ${effort} -->` : ''}`;
+  const issues = [
+    decisionIssue(1, [DECISION], score(1)),
+    decisionIssue(2, [], score(1)),
+    decisionIssue(3, [], score(5)),
+    decisionIssue(4, [DECISION], score(3)),
+    decisionIssue(5, [DECISION], score(1, 'L')),
+    decisionIssue(6, [], score(3)),
+  ];
+  const base = {
+    autopilotSuitabilityFloor: 3,
+    autopilot: true,
+    effortLPolicy: 'refuse' as const,
+  };
+  const { resolver } = orphanGate();
+  const result = await runOrphans(issues, {
+    ...base,
+    decisionSources: resolver,
+  });
+  // Real score order, ties by number; the below-floor source stays listed.
+  assert.deepEqual(
+    result.orphans.map((o) => o.number),
+    [3, 4, 6, 1],
+  );
+  assert.deepEqual(
+    result.routed_to_human.map((o) => o.number),
+    [2, 5],
+  );
+  assert.equal(result.counts.orphans, 4);
+  assert.equal(result.counts.routed_to_human, 2);
+  // Without the gate the same issues keep today's routing.
+  const plain = await runOrphans(issues, base);
+  assert.deepEqual(
+    plain.orphans.map((o) => o.number),
+    [3, 6],
+  );
+  assert.deepEqual(
+    plain.routed_to_human.map((o) => o.number),
+    [2],
+  );
+  // Attended runs and the score kill switch keep their own behavior.
+  const attended = await runOrphans(issues, {
+    ...base,
+    autopilot: false,
+    decisionSources: orphanGate().resolver,
+  });
+  assert.deepEqual(
+    attended.orphans.map((o) => o.number),
+    [3, 4, 6, 1, 2, 5],
+  );
+  const off = await runOrphans(issues, {
+    ...base,
+    autopilotSuitabilityEnabled: false,
+    decisionSources: orphanGate().resolver,
+  });
+  assert.deepEqual(
+    off.orphans.map((o) => o.number),
+    [1, 2, 3, 4, 6],
+  );
+  assert.deepEqual(
+    off.routed_to_human.map((o) => o.number),
+    [5],
+  );
+});
+
+test('decision gate: a needs-decision name that collides with another configured name never relaxes', async () => {
+  for (const [name, options] of [
+    ['authoring-only', { needsDecisionLabelName: 'status:authoring-only' }],
+    [
+      'blocked-by-human',
+      {
+        needsDecisionLabelName: 'Hold:Human',
+        blockedByHumanLabelName: 'hold:human',
+      },
+    ],
+    ['authoring', { needsDecisionLabelName: 'status:authoring' }],
+    ['confirmation', { needsDecisionLabelName: CONFIRM }],
+    ['ready', { needsDecisionLabelName: 'idd:ready' }],
+  ] as const) {
+    const label = options.needsDecisionLabelName;
+    const { resolver, prepared } = orphanGate();
+    const result = await runOrphans([decisionIssue(1, [label])], {
+      ...options,
+      decisionSources: resolver,
+    });
+    assert.deepEqual(result.orphans, [], name);
+    assert.deepEqual(prepared, [], name);
+  }
+  // classifyIssue itself refuses an eligible verdict for a shared name, so a
+  // shared name can never drop another hold from the blocked set.
+  const verdict = { kind: 'eligible' } as const;
+  const classified = classifyIssue(
+    decisionIssue(1, ['status:authoring-only']),
+    {
+      issueStateByNumber: new Map(),
+      fetchIssueStateByNumber: () => 'UNRESOLVABLE',
+      needsDecisionLabelName: 'status:authoring-only',
+      decisionSourceVerdict: verdict,
+    },
+  );
+  assert.deepEqual(classified, {
+    orphan: false,
+    reason: 'blocked_label',
+    details: 'status:authoring-only',
+  });
+  // Configured label names are honored.
+  const configured = await runOrphans(
+    [
+      decisionIssue(1, ['needs:decision']),
+      decisionIssue(2, ['needs:decision', 'hold:human']),
+    ],
+    {
+      needsDecisionLabelName: 'needs:decision',
+      blockedByHumanLabelName: 'hold:human',
+      decisionSources: orphanGate().resolver,
+    },
+  );
+  assert.deepEqual(
+    configured.orphans.map((o) => o.number),
+    [1],
+  );
+  assert.deepEqual(
+    configured.filtered.blocked_label.map((e) => [e.number, e.details]),
+    [[2, 'hold:human']],
+  );
+});
+
+test('decision gate: a source edited between two scans is judged again from fresh state', async () => {
+  let evidence: ProvisionalDecisionEvidence = noDecisionRecords;
+  const { resolver } = orphanGate(
+    {},
+    {
+      async loadStates(sources) {
+        return new Map(sources.map((source) => [source.issueNumber, evidence]));
+      },
+    },
+  );
+  const scan = () =>
+    runOrphans([decisionIssue(1)], { decisionSources: resolver });
+  assert.deepEqual(
+    (await scan()).orphans.map((o) => o.number),
+    [1],
+  );
+  evidence = completedSource;
+  const second = await scan();
+  assert.deepEqual(second.orphans, []);
+  assert.deepEqual(
+    second.confirmationQueue?.map((entry) => entry.number),
+    [1],
+  );
+  evidence = {
+    ...noDecisionRecords,
+    valid: false,
+    hasRecords: true,
+    status: 'invalid',
+    issues: ['source-snapshot-mismatch'],
+  };
+  const third = await scan();
+  assert.equal('confirmationQueue' in third, false);
+  assert.deepEqual(
+    third.filtered.blocked_label.map((e) => e.details),
+    [`${DECISION} (provisional_state_unavailable)`],
+  );
+});
+
+test('decision gate: a reused gate holds only the current orphan pass', async () => {
+  const { resolver } = orphanGate({ 1: completedSource });
+  const first = await runOrphans([decisionIssue(1)], {
+    decisionSources: resolver,
+  });
+  assert.deepEqual(
+    first.confirmationQueue?.map((entry) => entry.number),
+    [1],
+  );
+  // A colliding name never reports the earlier queue, which the gate still
+  // holds from the first pass.
+  const collided = await runOrphans(
+    [decisionIssue(3, ['status:authoring-only'])],
+    {
+      decisionSources: resolver,
+      needsDecisionLabelName: 'status:authoring-only',
+    },
+  );
+  assert.equal('confirmationQueue' in collided, false);
+  // No needs-decision source in the next listing: no stale queue.
+  const second = await runOrphans([decisionIssue(2, [])], {
+    decisionSources: resolver,
+  });
+  assert.equal('confirmationQueue' in second, false);
+});
+
+test('decision gate: a confirmation issue or draft carrier with completed records is never queued or counted', async () => {
+  const carrierBody = '<!-- idd-skill-draft-carrier: carrier-1 -->\nbody';
+  const { resolver, prepared } = orphanGate(
+    { 1: completedSource, 2: completedSource, 3: completedSource },
+    { countOpenConfirmationIssues: () => 1 },
+    { maxPendingConfirmations: 3 },
+  );
+  const result = await runOrphans(
+    [
+      decisionIssue(1, [DECISION, CONFIRM]),
+      decisionIssue(2, [DECISION, 'status:authoring-only'], carrierBody),
+      decisionIssue(3),
+      decisionIssue(4),
+    ],
+    { decisionSources: resolver },
+  );
+  assert.deepEqual(prepared, [[3, 4]]);
+  assert.equal(result.confirmationQueue?.length, 1);
+  assert.equal(result.confirmationQueue?.[0]?.number, 3);
+  // 1 open + 1 queued is below the cap of 3, so source 4 stays eligible.
+  assert.deepEqual(
+    result.orphans.map((o) => [o.number, o.decisionSource]),
+    [[4, true]],
+  );
+  // The trusted name may differ from the local one: only the trusted name on a
+  // completed source keeps it out of the queue.
+  const trustedOnly = orphanGate(
+    { 5: completedSource },
+    {},
+    { confirmationLabelName: 'auto:confirm' },
+  );
+  const outcome = await runOrphans(
+    [decisionIssue(5, [DECISION, 'auto:confirm'])],
+    {
+      decisionSources: trustedOnly.resolver,
+      confirmationLabelName: 'auto:other',
+    },
+  );
+  assert.equal('confirmationQueue' in outcome, false);
+  assert.deepEqual(outcome.orphans, []);
+  // Dropped before any replay: the gate never read it.
+  assert.deepEqual(trustedOnly.prepared, []);
 });
