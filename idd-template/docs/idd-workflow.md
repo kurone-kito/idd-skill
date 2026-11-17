@@ -1119,9 +1119,12 @@ request of the bundle, a source that the authoring pass already rewrote, an
 authoring owner that is trusted, fresh, and matches the handoff's set,
 session, and anchor, an audited roadmap on the same source, and real child
 issues wired under it. The evidence names the title and body digest of the
-source the audit read, and they must still match the source when the record
-is written. It only appends the record. It never releases the
-authoring hold, and unknown ownership or wiring refuses it. It is terminal
+source as it was when the audit began, which the caller captures before it
+reads the roadmap and its children, and they must still match the source
+when the record is written. A source that is closed while a rework request
+still awaits authoring is a recovery hold, not a release. It only appends
+the record. It never releases the authoring hold, and unknown ownership or
+wiring refuses it. It is terminal
 only when every decision of the bundle is confirmed or has its record.
 
 ### Provisional plan assessment (A4 and A4.5)
