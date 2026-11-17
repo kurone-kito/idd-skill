@@ -2963,3 +2963,45 @@ test('commented or unreachable JavaScript cannot satisfy the Node floor guard', 
     );
   }
 });
+
+// #5262: the static lint job runs on Node 22 from .node-version. The
+// setup-node step comes after the Node floor check, so the shared floor
+// program and its checkout-adjacency invariant stay unchanged; the step
+// after setup-node fails unless the active runtime major is 22.
+test('lint.yml selects Node 22 from .node-version after the floor check', () => {
+  const workflow = readWorkflow('lint.yml');
+  const lintJob = extractJobBody(workflow, 'lint');
+  assertFloorImmediatelyFollowsCheckout(workflow, 'lint');
+  assert.equal(
+    unpinnedPreFloorCommand(lintJob, REPO_ROOT),
+    undefined,
+    'lint.yml: a reviewed pre-floor run must execute the pinned closure',
+  );
+  assert.equal(
+    readSharedSetupNodePin(),
+    '820762786026740c76f36085b0efc47a31fe5020',
+    'lint.yml: the Node 22 setup must use the repository shared setup-node pin',
+  );
+  const setupStep = extractNamedStepBody(
+    workflow,
+    'lint',
+    'Set up Node.js from .node-version',
+  );
+  assert.match(
+    setupStep,
+    /^\s*uses: actions\/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7\.0\.0$/mu,
+  );
+  assert.match(setupStep, /^\s*node-version-file: \.node-version$/mu);
+  assert.equal(
+    /^\s*(?:check-latest|cache|node-version)\s*:/mu.test(setupStep),
+    false,
+    'lint.yml: the Node 22 setup takes only node-version-file',
+  );
+  const assertStep = extractNamedStepBody(
+    workflow,
+    'lint',
+    'Assert Node.js 22 for static lint',
+  );
+  assert.match(assertStep, /process\.versions\.node/u);
+  assert.match(assertStep, /process\.exit\(1\)/u);
+});
