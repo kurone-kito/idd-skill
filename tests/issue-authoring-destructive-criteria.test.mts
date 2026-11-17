@@ -127,25 +127,43 @@ function checklistBullets(text: string): string[] {
     .map((bullet) => flat(bullet).trim());
 }
 
-/** The Reference inventory paragraph, flattened, from its bold lead-in to the blank line. */
-function referenceInventoryParagraph(text: string): string {
-  const start = text.indexOf('**Reference inventory.**');
-  assert.notEqual(start, -1, 'the Reference inventory paragraph is present');
-  const blank = text.indexOf('\n\n', start);
-  return flat(text.slice(start, blank === -1 ? text.length : blank));
+/** The Reference inventory paragraph inside the named section, flattened. */
+function referenceInventoryParagraph(text: string, heading: string): string {
+  const section = sectionUnder(text, heading);
+  const start = section.indexOf('**Reference inventory.**');
+  assert.notEqual(
+    start,
+    -1,
+    `the Reference inventory paragraph is under "${heading}"`,
+  );
+  const blank = section.indexOf('\n\n', start);
+  return flat(section.slice(start, blank === -1 ? section.length : blank));
 }
 
-/** The completed-draft critique checklist bullet for the inventory, flattened. */
+/** The completed-draft critique checklist bullet, searched only inside that checklist, flattened. */
 function critiqueInventoryBullet(text: string): string {
-  const start = text.indexOf(
+  const lead = text.indexOf('**Issue-authoring critique checklist.**');
+  assert.notEqual(
+    lead,
+    -1,
+    'the completed-draft critique checklist is present',
+  );
+  const nextHeading = text.slice(lead).search(/\n#{1,6} /u);
+  const checklist =
+    nextHeading === -1
+      ? text.slice(lead)
+      : text.slice(lead, lead + nextHeading);
+  const start = checklist.indexOf(
     '\n- a draft that deletes, renames, or moves a repository path or tree includes',
   );
   assert.notEqual(start, -1, 'the critique checklist has the inventory bullet');
   const ends = [
-    text.indexOf('\n- ', start + 1),
-    text.indexOf('\n\n', start + 1),
+    checklist.indexOf('\n- ', start + 1),
+    checklist.indexOf('\n\n', start + 1),
   ].filter((index) => index !== -1);
-  return flat(text.slice(start, ends.length ? Math.min(...ends) : text.length));
+  return flat(
+    checklist.slice(start, ends.length ? Math.min(...ends) : checklist.length),
+  );
 }
 
 // Each statement below is a sentence or clause of the rule. Removing it from
@@ -171,11 +189,11 @@ function repoRootMaintenanceCopy(): string {
 }
 
 test('the Reference inventory paragraph keeps every statement in the contract and the repo-root copy', () => {
-  for (const text of [
-    readBundle('references/contract.md'),
-    repoRootMaintenanceCopy(),
-  ]) {
-    const paragraph = referenceInventoryParagraph(text);
+  for (const [text, heading] of [
+    [readBundle('references/contract.md'), '### Destructive operations'],
+    [repoRootMaintenanceCopy(), '## Destructive operations'],
+  ] as const) {
+    const paragraph = referenceInventoryParagraph(text, heading);
     for (const statement of PARAGRAPH_STATEMENTS) {
       assert.ok(
         paragraph.includes(statement),
