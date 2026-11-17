@@ -1782,6 +1782,36 @@ function shellQuoteEnd(line: string, start: number): number {
   return -1;
 }
 
+/** Returns whether the line pipes or redirects output outside quotes: the
+ * output of an `echo` there can become code (`echo 'node --test' | bash`,
+ * `echo 'node --test' > run.sh`). A comment is not skipped, so a pipe in a
+ * comment only keeps more text, which fails loudly. */
+function hasPipeOrRedirect(line: string): boolean {
+  let index = 0;
+  while (index < line.length) {
+    const char = line.charAt(index);
+    if (char === '\\') {
+      index += 2;
+    } else if (char === '"' || char === "'") {
+      const end = shellQuoteEnd(line, index);
+      if (end === -1) {
+        return false;
+      }
+      index = end + 1;
+    } else if (
+      char === '>' ||
+      (char === '|' &&
+        line.charAt(index - 1) !== '|' &&
+        line.charAt(index + 1) !== '|')
+    ) {
+      return true;
+    } else {
+      index += 1;
+    }
+  }
+  return false;
+}
+
 /** Returns the part of one shell line that can start a command, so that
  * `NODE_TEST_COMMAND` does not match text that only mentions `node --test`
  * (issue #5269; observed 2026-11-16 in the review of pull request #5268: the
@@ -1796,18 +1826,19 @@ function shellQuoteEnd(line: string, start: number): number {
  *   start is read from the original line, never from the output.
  * - A quoted argument that holds whitespace or `;&|` becomes one space when
  *   the current simple command, the text since the last `;`, `&`, `|`, or
- *   `(`, starts with `echo`. Any other quoted span is kept with
- *   its quotes, because it can be code: `bash -c '...'`, `eval "$CMD"`,
- *   `CMD='...'`, `for c in '...'`, `node -e '...'`.
+ *   `(`, starts with `echo` and was not opened by a `(`. Any other quoted
+ *   span is kept with its quotes, because it can be code: `bash -c '...'`,
+ *   `eval "$CMD"`, `CMD='...'`, `for c in '...'`, `node -e '...'`.
  *
  * A quoted span with no whitespace or `;&|`, an empty one included, is
  * unquoted in place, so `"node" --test`, `node '--test'`, and `node --te""st`
  * all still match. A line that holds a `${{` removes nothing, because GitHub
  * Actions substitutes the expression, quotes and all, before the shell reads
- * the line: it only unquotes spans in place. The rest of the line is kept
- * verbatim from a backtick, from a `$'...'` or `$"..."` quote, from a
- * double-quoted span with a `$(` or backtick in it, and from a quote that
- * never closes.
+ * the line; nor does a line that pipes or redirects, because the output of
+ * an `echo` there can become code. Such a line only unquotes spans in place.
+ * The rest of the line is kept verbatim from a backtick, from a `$'...'` or
+ * `$"..."` quote, from a double-quoted span with a `$(` or backtick in it,
+ * and from a quote that never closes.
  *
  * Known limits. These fail loudly, as a false rejection: text that stays
  * unquoted (`echo node --test`, a heredoc body); a quoted argument of any
@@ -1815,24 +1846,25 @@ function shellQuoteEnd(line: string, start: number): number {
  * after `then` or `{` or after a `>&` redirection, because the first word
  * since the last `;`, `&`, `|`, or `(` names the command; a `#` inside a kept
  * quoted span or after a backtick (`bash -c 'echo ok # node --test'`); and
- * any line with a `${{`. These pass, as a false acceptance, although they
- * can run the test runner: a string that `echo` pipes into a shell or writes
- * to a script file (`echo 'node --test' | bash`); a string that `echo` builds
- * into a variable that runs later (`x=$(echo 'node --test'); eval "$x"`); a
- * `#` inside `${...}`; a quoted variable glued to `node`; a comment that ends
- * in a backslash (the backslash-newline join runs first, as it always did);
- * and a command between two quotes on a line that starts inside a quote
- * opened on an earlier line, when that line starts with `echo`. The scan
- * reads one line alone, so it reads such a line as if it started outside a
- * quote. */
+ * any line with a `${{`, a pipe, or a redirection. These pass, as a false
+ * acceptance, although they can run the test runner: a word that an
+ * expansion or an escape builds, such as `node$IFS--test` or
+ * `node\ --test` (the raw-line check missed them too); a `#` inside
+ * `${...}`; a quoted variable glued to `node`; a comment that ends in a
+ * backslash (the backslash-newline join runs first, as it always did); and a
+ * command between two quotes on a line that starts inside a quote opened on
+ * an earlier line, when that line starts with `echo`. The scan reads one line
+ * alone, so it reads such a line as if it started outside a quote. */
 function executableShellText(line: string): string {
   // GitHub Actions substitutes a `${{ ... }}` expression, quotes and all,
-  // before the shell reads the line, so a line with one removes nothing.
-  const keepAll = line.includes('${{');
+  // before the shell reads the line, so a line with one removes nothing. Nor
+  // does a line that pipes or redirects, where an `echo` can feed code.
+  const keepAll = line.includes('${{') || hasPipeOrRedirect(line);
   let text = '';
   let index = 0;
   let afterEscape = false;
   let commandStart = 0;
+  let commandOpener = '';
   while (index < line.length) {
     const char = line.charAt(index);
     if (char === '\\') {
@@ -1855,6 +1887,7 @@ function executableShellText(line: string): string {
       index += 1;
       if (/[;&|(]/.test(char)) {
         commandStart = text.length;
+        commandOpener = char;
       }
       continue;
     }
@@ -1869,7 +1902,11 @@ function executableShellText(line: string): string {
     const command = /^\s*(\S+)/.exec(text.slice(commandStart))?.[1] ?? '';
     if (/^[^\s;&|]*$/.test(body)) {
       text += body;
-    } else if (!keepAll && TEXT_PRINTING_COMMAND.test(command)) {
+    } else if (
+      !keepAll &&
+      commandOpener !== '(' &&
+      TEXT_PRINTING_COMMAND.test(command)
+    ) {
       text += ' ';
     } else {
       text += line.slice(index, end + 1);
@@ -2092,6 +2129,8 @@ test('the lint job node --test guard ignores quoted and commented text but still
     'echo "" "node --test"',
     'echo "a" "node --test" "b"',
     'echo "a b" "node --test"',
+    'echo "node --test" || true',
+    'echo "node --test" && echo ok',
     'echo "" # node --test',
     "echo 'node --test'",
     'echo "node --test" # node --test',
@@ -2147,6 +2186,9 @@ test('the lint job node --test guard ignores quoted and commented text but still
     'for CMD in \'node --test\'; do eval "$CMD"; done',
     'export CMD="node --test"',
     'grep -q "node --test" tests/x',
+    "echo 'node --test' | bash",
+    "echo 'node --test' > run.sh",
+    'x=$(echo \'node --test\'); eval "$x"',
     "echo ok; bash -c 'node --test'",
     "echo ok && bash -c 'node --test'",
     "echo ok | bash -c 'node --test'",
