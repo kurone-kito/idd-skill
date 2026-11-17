@@ -9,9 +9,13 @@ import { fileURLToPath } from 'node:url';
 
 import {
   buildConfirmationLabelMatcher,
+  buildDecisionSourceResolver,
   buildProvisionalDecisionEvidenceReader,
   buildRoadmapMarkerSearchQuery,
+  CONFIRMATION_PENDING_REASON,
+  countIssuesWithLabel,
   DEFER_SOURCE_VALUES,
+  type DecisionSourceInputs,
   evaluateDiscoverReadiness,
   extractBlockedByIssueNumbers,
   extractBlockedByRoadmapMarkers,
@@ -20,6 +24,7 @@ import {
   extractExplicitBlockedCriterion,
   hasDeferSourceMarker,
   isInaccessibleIssueLookupError,
+  needsDecisionNameCollides,
   type ProvisionalDecisionEvidence,
   parseArgs,
   parseSwarmFloorArg,
@@ -3770,4 +3775,912 @@ test('evaluateDiscoverReadiness reports a named closed journal without loading i
     [['authoring_journal_target']],
   );
   assert.equal(loads, 0);
+});
+
+// --- #4538: the shared decision-source gate -------------------------------
+
+const DECISION_LABEL = 'status:needs-decision';
+const CONFIRMATION_LABEL = 'status:needs-confirmation';
+
+const noRecords: ProvisionalDecisionEvidence = {
+  valid: true,
+  hasRecords: false,
+  status: 'none',
+  hasRework: false,
+  decisions: [],
+  issues: [],
+};
+
+const pendingEvidence = (
+  overrides: Partial<ProvisionalDecisionEvidence['decisions'][number]> = {},
+): ProvisionalDecisionEvidence => ({
+  valid: true,
+  hasRecords: true,
+  status: 'confirmation-pending',
+  hasRework: false,
+  decisions: [
+    {
+      bundleGeneration: 1,
+      decisionGeneration: 1,
+      status: 'confirmation-pending',
+      executionCriteria: ['All generated artifacts ship.'],
+      workReference: 'https://github.com/acme/repo/pull/9',
+      verifiedAt: '2026-11-01T00:00:00Z',
+      question: 'Which behavior?',
+      selectedOption: 'Keep the existing behavior',
+      ...overrides,
+    },
+  ],
+  issues: [],
+});
+
+const PENDING_DECISION = pendingEvidence()
+  .decisions[0] as ProvisionalDecisionEvidence['decisions'][number];
+
+/** Gate inputs with spies; each field can be replaced per test. */
+function decisionGate(
+  evidenceByNumber: Record<number, ProvisionalDecisionEvidence | undefined>,
+  overrides: Partial<DecisionSourceInputs> = {},
+  trusted: Partial<ReturnType<DecisionSourceInputs['readTrusted']>> = {},
+) {
+  const calls = { loadStates: [] as number[][], count: 0, trusted: 0 };
+  const inputs: DecisionSourceInputs = {
+    async loadStates(sources) {
+      calls.loadStates.push(sources.map((source) => source.issueNumber));
+      const states = new Map<number, ProvisionalDecisionEvidence>();
+      for (const source of sources) {
+        const evidence = evidenceByNumber[source.issueNumber] ?? noRecords;
+        states.set(source.issueNumber, evidence);
+      }
+      return states;
+    },
+    readTrusted() {
+      calls.trusted += 1;
+      return {
+        classEnabled: true,
+        maxPendingConfirmations: 3,
+        confirmationLabelName: CONFIRMATION_LABEL,
+        ...trusted,
+      };
+    },
+    countOpenConfirmationIssues() {
+      calls.count += 1;
+      return 0;
+    },
+    ...overrides,
+  };
+  return { resolver: buildDecisionSourceResolver(inputs), calls };
+}
+
+type GateIssue = {
+  number: number;
+  title: string;
+  state: string;
+  body: string;
+  labels: { name: string }[];
+};
+
+const gateIssue = (
+  number: number,
+  labels: string[] = [DECISION_LABEL],
+  body = `source ${number}`,
+): GateIssue => ({
+  number,
+  title: `issue ${number}`,
+  state: 'OPEN',
+  body,
+  labels: labels.map((name) => ({ name })),
+});
+
+async function runGate(
+  numbers: number[],
+  issues: GateIssue[],
+  resolver: ReturnType<typeof decisionGate>['resolver'] | undefined,
+  extra: Partial<Parameters<typeof evaluateDiscoverReadiness>[1]> = {},
+) {
+  const byNumber = new Map(issues.map((issue) => [issue.number, issue]));
+  return evaluateDiscoverReadiness(numbers, {
+    loadIssue: async (number) => byNumber.get(number) ?? null,
+    findRoadmapsByMarker: async () => [],
+    ...(resolver === undefined ? {} : { decisionSources: resolver }),
+    ...extra,
+  });
+}
+
+test('decision gate: class off, absent, or unreadable keeps the current exclusion byte for byte', async () => {
+  const issues = [gateIssue(11), gateIssue(12, [])];
+  const baseline = await runGate([11, 12], issues, undefined);
+  assert.deepEqual(
+    baseline.ready.map((entry) => entry.number),
+    [12],
+  );
+  assert.deepEqual(baseline.filteredOut[0]?.reasons, [
+    `label:${DECISION_LABEL}`,
+  ]);
+  assert.equal('confirmationQueue' in baseline, false);
+
+  for (const trusted of [
+    { classEnabled: false },
+    { classEnabled: false, maxPendingConfirmations: null },
+  ]) {
+    const { resolver } = decisionGate({}, {}, trusted);
+    assert.deepEqual(await runGate([11, 12], issues, resolver), baseline);
+  }
+  // A trusted read that throws is the same as an unreadable class.
+  const throwing = decisionGate(
+    {},
+    {
+      readTrusted() {
+        throw new Error('trusted read failed');
+      },
+    },
+  );
+  assert.deepEqual(
+    await runGate([11, 12], issues, throwing.resolver),
+    baseline,
+  );
+  // A replay that throws never aborts a run whose class is off (default-off
+  // repositories must not regress): the output equals the no-gate output.
+  const failing = decisionGate(
+    {},
+    {
+      async loadStates() {
+        throw new Error('replay refused');
+      },
+    },
+    { classEnabled: false },
+  );
+  assert.deepEqual(await runGate([11, 12], issues, failing.resolver), baseline);
+});
+
+test('decision gate: an eligible source is ready, marked, and keeps every other hold', async () => {
+  const { resolver } = decisionGate({});
+  const result = await runGate(
+    [11, 12, 13, 14, 15, 16],
+    [
+      gateIssue(11),
+      gateIssue(12, [DECISION_LABEL, 'status:blocked-by-human']),
+      gateIssue(13, [DECISION_LABEL, 'status:authoring-only']),
+      gateIssue(14, [DECISION_LABEL, 'status:authoring']),
+      gateIssue(15, [DECISION_LABEL, CONFIRMATION_LABEL]),
+      gateIssue(16, [DECISION_LABEL], 'Blocked by #99\n'),
+      gateIssue(99, []),
+    ],
+    resolver,
+  );
+  assert.deepEqual(
+    result.ready.find((entry) => entry.number === 11),
+    {
+      number: 11,
+      title: 'issue 11',
+      autopilotSuitability: null,
+      belowFloor: false,
+      isRoadmap: false,
+      decisionSource: true,
+    },
+  );
+  const byNumber = new Map(
+    result.filteredOut.map((entry) => [entry.number, entry]),
+  );
+  assert.deepEqual(byNumber.get(12)?.reasons, [
+    'label:status:blocked-by-human',
+  ]);
+  assert.deepEqual(byNumber.get(13)?.reasons, ['label:status:authoring-only']);
+  assert.deepEqual(byNumber.get(14)?.reasons, ['label:status:authoring']);
+  assert.deepEqual(byNumber.get(15)?.reasons, [
+    `label:${CONFIRMATION_LABEL}`,
+    `label:${DECISION_LABEL}`,
+  ]);
+  // The open blocker still blocks (99 is open): the gate only skips the label.
+  assert.deepEqual(byNumber.get(16)?.reasons, ['blocked_by_open_issue:#99']);
+});
+
+test('decision gate: only labelled open sources are replayed, once, before any verdict', async () => {
+  const { resolver, calls } = decisionGate({});
+  const closed = { ...gateIssue(13), state: 'CLOSED' };
+  await runGate(
+    [11, 12, 13, 14],
+    [gateIssue(11), gateIssue(12, []), closed, gateIssue(14)],
+    resolver,
+  );
+  assert.deepEqual(calls.loadStates, [[11, 14]]);
+
+  const none = decisionGate({});
+  await runGate([12], [gateIssue(12, [])], none.resolver);
+  assert.deepEqual(none.calls.loadStates, []);
+  assert.equal(none.calls.trusted, 0);
+});
+
+test('decision gate: durable records, roadmap nodes, and review-needs-decision follow-ups are never relaxed or replayed', async () => {
+  const { resolver, calls } = decisionGate({});
+  const roadmapByLabel = gateIssue(21, [DECISION_LABEL, 'roadmap']);
+  const roadmapByMarker = gateIssue(
+    22,
+    [DECISION_LABEL],
+    '<!-- idd-skill-roadmap-id: epic -->',
+  );
+  const deferFollowUp = gateIssue(
+    23,
+    [DECISION_LABEL],
+    '<!-- idd-skill-authoring-defer-source: review-needs-decision -->\nRefs #99',
+  );
+  const result = await runGate(
+    [21, 22, 23, 24],
+    [
+      roadmapByLabel,
+      roadmapByMarker,
+      deferFollowUp,
+      gateIssue(24),
+      gateIssue(99),
+    ],
+    resolver,
+    { providerOutageTarget: 24 },
+  );
+  assert.deepEqual(calls.loadStates, []);
+  assert.deepEqual(result.ready, []);
+  for (const entry of result.filteredOut) {
+    assert.ok(
+      entry.reasons.includes(`label:${DECISION_LABEL}`) ||
+        entry.reasons.includes('provider_outage_target'),
+      String(entry.number),
+    );
+  }
+});
+
+test('decision gate: a needs-decision name that collides with another configured label never relaxes', async () => {
+  // The issue carries the needs-decision name exactly; the other configured
+  // name differs only in case or surrounding whitespace.
+  const cases: [
+    string,
+    Partial<Parameters<typeof evaluateDiscoverReadiness>[1]>,
+  ][] = [
+    [
+      'authoring',
+      {
+        needsDecisionLabelName: 'status:authoring',
+        authoringLabelName: ' STATUS:Authoring',
+      },
+    ],
+    ['authoring-only', { needsDecisionLabelName: 'status:authoring-only' }],
+    ['blocked-by-human', { needsDecisionLabelName: 'status:blocked-by-human' }],
+    [
+      'blocked-by-human case',
+      {
+        needsDecisionLabelName: 'Hold:Human',
+        blockedByHumanLabelName: 'hold:human ',
+      },
+    ],
+    ['roadmap', { needsDecisionLabelName: 'roadmap' }],
+    ['ready', { needsDecisionLabelName: 'idd:ready' }],
+    ['confirmation', { needsDecisionLabelName: CONFIRMATION_LABEL }],
+    [
+      'confirmation case',
+      {
+        needsDecisionLabelName: 'AUTO:Confirm',
+        confirmationLabelName: 'auto:confirm',
+      },
+    ],
+  ];
+  for (const [name, options] of cases) {
+    const labelName = String(options.needsDecisionLabelName);
+    const { resolver, calls } = decisionGate({});
+    const result = await runGate(
+      [31],
+      [gateIssue(31, [labelName])],
+      resolver,
+      options,
+    );
+    assert.deepEqual(result.ready, [], name);
+    assert.deepEqual(calls.loadStates, [], name);
+    assert.ok(result.filteredOut[0]?.reasons.length, name);
+  }
+  assert.equal(
+    needsDecisionNameCollides({
+      needsDecisionLabelName: ' STATUS:needs-decision',
+      authoringLabelName: 'status:authoring',
+      authoringOnlyLabelName: 'status:authoring-only',
+      blockedByHumanLabelName: 'status:blocked-by-human',
+      roadmapLabelName: 'roadmap',
+      confirmationLabelName: CONFIRMATION_LABEL,
+      confirmationLabelCollides: false,
+    }),
+    false,
+  );
+});
+
+test('decision gate: configured label names are honored', async () => {
+  const { resolver } = decisionGate(
+    {},
+    {},
+    { confirmationLabelName: 'auto:confirm' },
+  );
+  const result = await runGate(
+    [41, 42, 43],
+    [
+      gateIssue(41, ['needs:decision']),
+      gateIssue(42, ['needs:decision', 'hold:human']),
+      gateIssue(43, ['needs:decision', 'AUTO:CONFIRM ']),
+    ],
+    resolver,
+    {
+      needsDecisionLabelName: 'needs:decision',
+      blockedByHumanLabelName: 'hold:human',
+      confirmationLabelName: 'auto:other',
+    },
+  );
+  assert.deepEqual(
+    result.ready.map((entry) => entry.number),
+    [41],
+  );
+  const byNumber = new Map(
+    result.filteredOut.map((entry) => [entry.number, entry]),
+  );
+  assert.deepEqual(byNumber.get(42)?.reasons, ['label:hold:human']);
+  // The trusted confirmation name is refused even when the local name differs.
+  assert.deepEqual(byNumber.get(43)?.reasons, ['label:needs:decision']);
+});
+
+test('decision gate: the pending cap counts open confirmation issues plus the queue, in any scan order', async () => {
+  const run = async (open: number | null, numbers: number[], cap = 3) => {
+    const { resolver } = decisionGate(
+      { 52: pendingEvidence() },
+      { countOpenConfirmationIssues: () => open },
+      { maxPendingConfirmations: cap },
+    );
+    return runGate(numbers, [gateIssue(51), gateIssue(52)], resolver);
+  };
+  // Below the cap: 1 open + 1 queued = 2 < 3.
+  const below = await run(1, [51, 52]);
+  assert.deepEqual(
+    below.ready.map((entry) => entry.number),
+    [51],
+  );
+  // At the cap, whichever issue the run scans first: 2 open + 1 queued = 3.
+  for (const order of [
+    [51, 52],
+    [52, 51],
+  ]) {
+    const atCap = await run(2, order);
+    assert.deepEqual(atCap.ready, []);
+    const skipped = atCap.filteredOut.find((entry) => entry.number === 51);
+    assert.deepEqual(skipped?.reasons, [
+      `label:${DECISION_LABEL}`,
+      'provisional_pending_cap:3/3',
+    ]);
+  }
+  // Above the cap.
+  const above = await run(7, [51]);
+  assert.deepEqual(above.filteredOut[0]?.reasons, [
+    `label:${DECISION_LABEL}`,
+    'provisional_pending_cap:7/3',
+  ]);
+  // An unreadable count (null or a throw) or cap fails closed.
+  for (const open of [null, Number.NaN, -1]) {
+    const unreadable = await run(open as number | null, [51]);
+    assert.deepEqual(unreadable.filteredOut[0]?.reasons, [
+      `label:${DECISION_LABEL}`,
+      'provisional_pending_unreadable',
+    ]);
+  }
+  const thrown = decisionGate(
+    {},
+    {
+      countOpenConfirmationIssues() {
+        throw new Error('list failed');
+      },
+    },
+  );
+  const thrownResult = await runGate([51], [gateIssue(51)], thrown.resolver);
+  assert.deepEqual(thrownResult.filteredOut[0]?.reasons, [
+    `label:${DECISION_LABEL}`,
+    'provisional_pending_unreadable',
+  ]);
+  for (const trusted of [
+    { maxPendingConfirmations: null },
+    { confirmationLabelName: null },
+  ]) {
+    const gate = decisionGate({}, {}, trusted);
+    const result = await runGate([51], [gateIssue(51)], gate.resolver);
+    assert.deepEqual(result.filteredOut[0]?.reasons, [
+      `label:${DECISION_LABEL}`,
+      'provisional_pending_unreadable',
+    ]);
+  }
+  // The count is read once per gate, however many sources reach the cap step.
+  const counted = decisionGate({});
+  await runGate([51, 53], [gateIssue(51), gateIssue(53)], counted.resolver);
+  assert.equal(counted.calls.count, 1);
+  assert.equal(counted.calls.trusted, 1);
+});
+
+test('decision gate: a completed source is queued with either class value and is never ready', async () => {
+  for (const classEnabled of [true, false]) {
+    const { resolver } = decisionGate(
+      { 61: pendingEvidence() },
+      {},
+      { classEnabled },
+    );
+    const result = await runGate([61], [gateIssue(61)], resolver);
+    assert.deepEqual(result.ready, []);
+    assert.deepEqual(result.filteredOut[0]?.reasons, [
+      CONFIRMATION_PENDING_REASON,
+      `label:${DECISION_LABEL}`,
+    ]);
+    assert.deepEqual(result.confirmationQueue, [
+      {
+        number: 61,
+        title: 'issue 61',
+        bundleGeneration: 1,
+        choices: [
+          {
+            decisionGeneration: 1,
+            status: 'confirmation-pending',
+            question: 'Which behavior?',
+            selectedOption: 'Keep the existing behavior',
+          },
+        ],
+        implementationLinks: ['https://github.com/acme/repo/pull/9'],
+      },
+    ]);
+    const swarm = summarizeSwarmFloorEligibility(result);
+    assert.deepEqual(swarm.confirmationQueue, result.confirmationQueue);
+    assert.equal(swarm.eligible_count, 0);
+  }
+  // A mixed bundle (one decision complete, one still running) still awaits.
+  const mixed: ProvisionalDecisionEvidence = {
+    ...pendingEvidence(),
+    status: 'in-progress',
+    decisions: [
+      ...pendingEvidence().decisions,
+      {
+        ...PENDING_DECISION,
+        decisionGeneration: 2,
+        status: 'in-progress',
+        workReference: undefined,
+      },
+    ],
+  };
+  const { resolver } = decisionGate({ 62: mixed });
+  const result = await runGate([62], [gateIssue(62)], resolver);
+  assert.deepEqual(
+    result.confirmationQueue?.[0]?.choices.map(
+      (choice) => choice.decisionGeneration,
+    ),
+    [1, 2],
+  );
+  // Without a resolver nothing is reported and nothing changes.
+  assert.equal(
+    'confirmationQueue' in (await runGate([61], [gateIssue(61)], undefined)),
+    false,
+  );
+});
+
+test('decision gate: unreadable, invalid, inconsistent, or Resume-owned state blocks with a reason only when the class is on', async () => {
+  const cases: [string, ProvisionalDecisionEvidence | undefined, string][] = [
+    ['missing', undefined, 'provisional_state_unavailable'],
+    [
+      'invalid',
+      {
+        ...noRecords,
+        valid: false,
+        hasRecords: true,
+        status: 'invalid',
+        issues: ['record-authority-invalid'],
+      },
+      'provisional_state_unavailable',
+    ],
+    [
+      'inconsistent',
+      { ...noRecords, status: 'selected' },
+      'provisional_state_unavailable',
+    ],
+    [
+      'decisions without records',
+      {
+        ...noRecords,
+        decisions: [{ ...PENDING_DECISION, status: 'selected' as const }],
+      },
+      'provisional_state_unavailable',
+    ],
+    [
+      'in progress',
+      {
+        ...pendingEvidence(),
+        status: 'in-progress',
+        decisions: [{ ...PENDING_DECISION, status: 'in-progress' }],
+      },
+      'provisional_records_present',
+    ],
+    [
+      'rework',
+      {
+        ...pendingEvidence(),
+        status: 'rework-requested',
+        hasRework: true,
+        decisions: [{ ...PENDING_DECISION, status: 'rework-requested' }],
+      },
+      'provisional_records_present',
+    ],
+    [
+      'confirmed',
+      {
+        ...pendingEvidence(),
+        status: 'confirmed',
+        decisions: [{ ...PENDING_DECISION, status: 'confirmed' }],
+      },
+      'provisional_records_present',
+    ],
+  ];
+  for (const [name, evidence, reason] of cases) {
+    const on = decisionGate(
+      {},
+      {
+        async loadStates(sources) {
+          return new Map(
+            evidence === undefined
+              ? []
+              : sources.map(
+                  (source) => [source.issueNumber, evidence] as const,
+                ),
+          );
+        },
+      },
+    );
+    const enabled = await runGate([71], [gateIssue(71)], on.resolver);
+    assert.deepEqual(enabled.ready, [], name);
+    assert.deepEqual(
+      enabled.filteredOut[0]?.reasons,
+      [`label:${DECISION_LABEL}`, reason],
+      name,
+    );
+    assert.equal('confirmationQueue' in enabled, false, name);
+    const off = decisionGate(
+      {},
+      {
+        async loadStates(sources) {
+          return new Map(
+            evidence === undefined
+              ? []
+              : sources.map(
+                  (source) => [source.issueNumber, evidence] as const,
+                ),
+          );
+        },
+      },
+      { classEnabled: false },
+    );
+    const disabled = await runGate([71], [gateIssue(71)], off.resolver);
+    assert.deepEqual(
+      disabled.filteredOut[0]?.reasons,
+      [`label:${DECISION_LABEL}`],
+      name,
+    );
+  }
+  // A replay that throws leaves every source without evidence.
+  const failing = decisionGate(
+    {},
+    {
+      async loadStates() {
+        throw new Error('replay refused');
+      },
+    },
+  );
+  const result = await runGate([71], [gateIssue(71)], failing.resolver);
+  assert.deepEqual(result.filteredOut[0]?.reasons, [
+    `label:${DECISION_LABEL}`,
+    'provisional_state_unavailable',
+  ]);
+  // A malformed value from the seam is unusable, never relaxing.
+  const malformed = decisionGate(
+    {},
+    {
+      async loadStates(sources) {
+        return new Map(
+          sources.map((source) => [
+            source.issueNumber,
+            { valid: true } as never,
+          ]),
+        );
+      },
+    },
+  );
+  const bad = await runGate([71], [gateIssue(71)], malformed.resolver);
+  assert.deepEqual(bad.filteredOut[0]?.reasons, [
+    `label:${DECISION_LABEL}`,
+    'provisional_state_unavailable',
+  ]);
+});
+
+test('decision gate: a source edited between two scans is judged again from fresh state', async () => {
+  let evidence: ProvisionalDecisionEvidence = noRecords;
+  let labels = [DECISION_LABEL];
+  let replays = 0;
+  const gate = decisionGate(
+    {},
+    {
+      async loadStates(sources) {
+        replays += 1;
+        return new Map(sources.map((source) => [source.issueNumber, evidence]));
+      },
+    },
+  );
+  const scan = () => runGate([81], [gateIssue(81, labels)], gate.resolver);
+  assert.deepEqual(
+    (await scan()).ready.map((entry) => entry.number),
+    [81],
+  );
+  // Its record state changes before the claim: no stale eligibility.
+  evidence = {
+    ...noRecords,
+    valid: false,
+    hasRecords: true,
+    status: 'invalid',
+    issues: ['source-snapshot-mismatch'],
+  };
+  assert.deepEqual((await scan()).filteredOut[0]?.reasons, [
+    `label:${DECISION_LABEL}`,
+    'provisional_state_unavailable',
+  ]);
+  evidence = pendingEvidence();
+  assert.deepEqual(
+    (await scan()).confirmationQueue?.map((entry) => entry.number),
+    [81],
+  );
+  // The label disappears, so nothing consults the gate any more.
+  evidence = noRecords;
+  labels = [];
+  const gone = await scan();
+  assert.deepEqual(
+    gone.ready.map((entry) => entry.number),
+    [81],
+  );
+  assert.equal('decisionSource' in (gone.ready[0] ?? {}), false);
+  assert.equal(replays, 3);
+});
+
+test('decision gate: a below-floor decision source stays eligible for the swarm sweep, ordinary below-floor does not', async () => {
+  const lowScore = (number: number, labels: string[]) =>
+    gateIssue(
+      number,
+      labels,
+      `body\n<!-- idd-skill-autopilot-suitability: 1 -->`,
+    );
+  const { resolver } = decisionGate({});
+  const result = await runGate(
+    [91, 92],
+    [lowScore(91, [DECISION_LABEL]), lowScore(92, [])],
+    resolver,
+    { autopilotSuitabilityFloor: 3 },
+  );
+  assert.deepEqual(
+    result.ready.map((entry) => [entry.number, entry.belowFloor]),
+    [
+      [91, true],
+      [92, true],
+    ],
+  );
+  const swarm = summarizeSwarmFloorEligibility(result);
+  assert.deepEqual(
+    swarm.eligible.map((entry) => entry.number),
+    [91],
+  );
+  assert.equal(swarm.total, 2);
+});
+
+test('decision gate: the live replay names the chosen option and verified link of a completed source', async () => {
+  const owner = 'acme';
+  const repo = 'repo';
+  const sourceNumber = 202;
+  const trustedActor = 'trusted-automation';
+  const baseTime = Date.now() - 60_000;
+  const at = (seconds: number) =>
+    new Date(baseTime + seconds * 1000).toISOString();
+  const claimId = 'claim-202-gate-test';
+  const agentId = 'codex-gate-test';
+  const branch = 'issue/202-gate-source';
+  const claim = {
+    claimId,
+    agentId,
+    branch,
+    claimedAt: at(0),
+    supersedes: 'none',
+  };
+  const sourceBody = 'source body';
+  const source = {
+    repository: `${owner}/${repo}`,
+    issueNumber: sourceNumber,
+    snapshot: {
+      title: 'gate source',
+      bodySha256: createHash('sha256').update(sourceBody).digest('hex'),
+      updatedAt: at(-1),
+    },
+  };
+  const result = {
+    kind: 'merged-pull-request',
+    reference: `https://github.com/${owner}/${repo}/pull/203`,
+    verifiedAt: at(3),
+    headSha: 'a'.repeat(40),
+    mergeCommitSha: 'b'.repeat(40),
+  };
+  const option = (id: string, extra: Record<string, string>) => ({
+    id,
+    description: `Option ${id}`,
+    feasibilityRationale: 'Feasible.',
+    requirementFit: 'Fits.',
+    consequences: 'Some.',
+    verification: 'Run the tests.',
+    reversalOrMigration: 'None.',
+    ...extra,
+  });
+  const comment = (
+    id: number,
+    recordId: string,
+    event: Record<string, unknown>,
+    createdAt: string,
+    overrides: Record<string, unknown> = {},
+  ) => ({
+    id,
+    body: `${PROVISIONAL_DECISION_RECORD_MARKER}\n${JSON.stringify({
+      schemaVersion: 1,
+      recordId,
+      source,
+      bundleGeneration: 1,
+      decisionGeneration: 1,
+      claimLineage: [claim],
+      evidenceReferences: [`https://github.com/${owner}/${repo}/issues/202`],
+      event,
+    })}`,
+    createdAt,
+    updatedAt: createdAt,
+    lastEditedAt: null,
+    authorLogin: trustedActor,
+    ...overrides,
+  });
+  const history = (overrides: Record<string, unknown> = {}) => [
+    {
+      id: 1,
+      body: `<!-- claimed-by: ${agentId} ${claimId} supersedes: none ${at(0).replace(/\.\d{3}Z$/u, 'Z')} branch: ${branch} -->\n\n_${agentId}: issue claim — IDD automation marker. Do not edit._`,
+      createdAt: at(0),
+      updatedAt: at(0),
+      lastEditedAt: null,
+      authorLogin: trustedActor,
+    },
+    comment(
+      2,
+      'selected-1',
+      {
+        type: 'selected',
+        question: 'Which behavior should be used?',
+        selectedOption: option('keep', { rationale: 'Matches the evidence.' }),
+        feasibleAlternatives: [
+          option('change', {
+            comparison: 'Costs more.',
+            rejectionReason: 'Worse fit.',
+          }),
+        ],
+        executionCriteria: ['All generated artifacts ship.'],
+      },
+      at(1),
+      overrides,
+    ),
+    comment(
+      3,
+      'started-1',
+      {
+        type: 'work-started',
+        startedAt: at(2),
+        planReference: `https://github.com/${owner}/${repo}/issues/${sourceNumber}#issuecomment-2`,
+      },
+      at(2),
+    ),
+    comment(4, 'completed-1', { type: 'work-completed', result }, at(4)),
+  ];
+  const reader = (comments: ReturnType<typeof history>) =>
+    buildProvisionalDecisionEvidenceReader({
+      owner,
+      repo,
+      port: createFakeProviderAdapter({
+        workItems: {
+          [sourceNumber]: {
+            number: sourceNumber,
+            title: 'gate source',
+            body: sourceBody,
+            state: 'open',
+            createdAt: at(-2),
+            updatedAt: source.snapshot.updatedAt,
+          },
+        },
+        comments: { [sourceNumber]: comments },
+        mergedChangeRequestMeta: {
+          203: {
+            number: 203,
+            merged: true,
+            mergedAt: at(3),
+            headRefOid: result.headSha,
+            mergeCommitOid: result.mergeCommitSha,
+          },
+        },
+      }),
+      readTrustedMarkerActors: () => [trustedActor],
+      policy: { trustedMarkerActors: [trustedActor] },
+    });
+  const gate = (comments: ReturnType<typeof history>) =>
+    buildDecisionSourceResolver({
+      loadStates: (sources) => reader(comments).loadStates(sources),
+      readTrusted: () => ({
+        classEnabled: true,
+        maxPendingConfirmations: 10,
+        confirmationLabelName: CONFIRMATION_LABEL,
+      }),
+      countOpenConfirmationIssues: () => 0,
+    });
+
+  const queued = gate(history());
+  const outcome = await runGate(
+    [sourceNumber],
+    [gateIssue(sourceNumber)],
+    queued,
+  );
+  assert.deepEqual(outcome.confirmationQueue, [
+    {
+      number: sourceNumber,
+      title: 'issue 202',
+      bundleGeneration: 1,
+      choices: [
+        {
+          decisionGeneration: 1,
+          status: 'confirmation-pending',
+          question: 'Which behavior should be used?',
+          selectedOption: 'Option keep',
+        },
+      ],
+      implementationLinks: [`https://github.com/${owner}/${repo}/pull/203`],
+    },
+  ]);
+  // A forged record marker (an untrusted author) is never queued.
+  const forged = gate(history({ authorLogin: 'someone-else' }));
+  const forgedOutcome = await runGate(
+    [sourceNumber],
+    [gateIssue(sourceNumber)],
+    forged,
+  );
+  assert.equal('confirmationQueue' in forgedOutcome, false);
+  assert.deepEqual(forgedOutcome.filteredOut[0]?.reasons, [
+    `label:${DECISION_LABEL}`,
+    'provisional_state_unavailable',
+  ]);
+  // An edited record marker is the same.
+  const edited = gate(history({ lastEditedAt: at(5) }));
+  const editedOutcome = await runGate(
+    [sourceNumber],
+    [gateIssue(sourceNumber)],
+    edited,
+  );
+  assert.equal('confirmationQueue' in editedOutcome, false);
+});
+
+test('decision gate: a completed source whose label was removed by hand is not replayed (documented limit)', async () => {
+  const { resolver, calls } = decisionGate({ 95: pendingEvidence() });
+  const result = await runGate([95], [gateIssue(95, [])], resolver);
+  assert.deepEqual(calls.loadStates, []);
+  assert.deepEqual(
+    result.ready.map((entry) => entry.number),
+    [95],
+  );
+});
+
+test('countIssuesWithLabel counts open issues by trimmed, case-insensitive label name', () => {
+  assert.equal(
+    countIssuesWithLabel(
+      [
+        { labels: [{ name: 'Status:Needs-Confirmation ' }] },
+        { labels: ['status:needs-confirmation', 'other'] },
+        { labels: [{ name: 'status:needs-decision' }] },
+        { labels: null },
+        {},
+      ],
+      'status:needs-confirmation',
+    ),
+    2,
+  );
 });

@@ -29,7 +29,7 @@ import {
   readTrustedAutoDecide,
 } from './idd-config.mjs';
 import { maskMarkdownForScan } from './markdown-code.mjs';
-import { escapeRegex } from './marker-regex.mjs';
+import { createMarkerRegex, escapeRegex } from './marker-regex.mjs';
 import {
   findAutoDecideLabelCollisions,
   normalizePolicyConfig,
@@ -107,9 +107,30 @@ const TRAILING_LOCAL_ISSUE_REF_PATTERN = /(?<![\w/-])#\d+\b/;
  */
 export const CONFIRMATION_LABEL_COLLISION_REASON =
   'needs_confirmation_label_collision';
+// Declared above the CLI block for the same TDZ reason as the constant above.
+/** The readiness reason of a source queued for confirmation (issue #4538). */
+export const CONFIRMATION_PENDING_REASON = 'confirmation_pending';
 const INACCESSIBLE_ISSUE_SENTINEL = Object.freeze({
   __iddLookupStatus: 'inaccessible',
 });
+/** Summarize one trusted read; every missing or invalid field fails closed. */
+function summarizeTrustedDecisionPolicy(report) {
+  const classEnabled =
+    report.status === 'readable' && report.classes.decisionIssue === 'enabled';
+  const cap = report.maxPendingConfirmations;
+  const label = report.confirmationLabelName;
+  return {
+    classEnabled,
+    maxPendingConfirmations:
+      classEnabled && typeof cap === 'number' && Number.isFinite(cap) && cap > 0
+        ? cap
+        : null,
+    confirmationLabelName:
+      classEnabled && typeof label === 'string' && label.trim() !== ''
+        ? label.trim()
+        : null,
+  };
+}
 /**
  * Sources replayed per chunk, and the most pull requests asked for in one
  * batched read (the GitHub adapter allows the same number). A chunk's comment
@@ -160,19 +181,31 @@ export function buildProvisionalDecisionEvidenceReader(input) {
     }
     return trustedCache;
   };
-  let classEnabled;
+  let trustedPolicy;
+  const readTrustedDecisionPolicy = () => {
+    if (trustedPolicy === undefined) {
+      try {
+        trustedPolicy = summarizeTrustedDecisionPolicy(
+          readTrustedAutoDecide({ owner, repo }),
+        );
+      } catch {
+        trustedPolicy = {
+          classEnabled: false,
+          maxPendingConfirmations: null,
+          confirmationLabelName: null,
+        };
+      }
+    }
+    return trustedPolicy;
+  };
   // `loadStateFrom` is the replay itself, reading through the `port` it is
   // given: the live port for `loadState`, or a chunk's held reads for
   // `loadStates`. The public `loadState` keeps its single argument.
   const replay = {
     decisionIssueClassEnabled() {
-      if (classEnabled === undefined) {
-        classEnabled =
-          readTrustedAutoDecide({ owner, repo }).classes.decisionIssue ===
-          'enabled';
-      }
-      return classEnabled;
+      return readTrustedDecisionPolicy().classEnabled;
     },
+    trustedDecisionPolicy: readTrustedDecisionPolicy,
     async loadStateFrom(issueNumber, port) {
       let issue;
       try {
@@ -367,6 +400,7 @@ export function buildProvisionalDecisionEvidenceReader(input) {
           ...(typeof result.verifiedAt === 'string'
             ? { verifiedAt: result.verifiedAt }
             : {}),
+          ...selectionSummary(decision.selection.event),
         };
       });
       return {
@@ -519,6 +553,7 @@ export function buildProvisionalDecisionEvidenceReader(input) {
   };
   return {
     decisionIssueClassEnabled: replay.decisionIssueClassEnabled,
+    trustedDecisionPolicy: replay.trustedDecisionPolicy,
     loadState: (issueNumber) => replay.loadStateFrom(issueNumber, livePort),
     async loadStates(sources) {
       const distinct = new Map();
@@ -569,6 +604,241 @@ function invalidProvisionalEvidence(...issues) {
     decisions: [],
     issues,
   };
+}
+/**
+ * The question and chosen option of a replayed `selected` event, for the
+ * confirmation queue (issue #4538). A value the record does not carry as a
+ * non-empty string is left out.
+ */
+function selectionSummary(event) {
+  const fields = event ?? {};
+  const description = fields.selectedOption?.description;
+  return {
+    ...(typeof fields.question === 'string' && fields.question !== ''
+      ? { question: fields.question }
+      : {}),
+    ...(typeof description === 'string' && description !== ''
+      ? { selectedOption: description }
+      : {}),
+  };
+}
+/** A pending decision, whatever the bundle status says (as A4.5 reads it). */
+function awaitsConfirmation(evidence) {
+  return (
+    evidence.valid === true &&
+    (evidence.status === 'confirmation-pending' ||
+      evidence.decisions.some(
+        (decision) => decision.status === 'confirmation-pending',
+      ))
+  );
+}
+/** Whether an injected value has the shape the gate reads. */
+function isUsableEvidence(value) {
+  const evidence = value;
+  return (
+    typeof evidence === 'object' &&
+    evidence !== null &&
+    typeof evidence.valid === 'boolean' &&
+    typeof evidence.hasRecords === 'boolean' &&
+    typeof evidence.status === 'string' &&
+    Array.isArray(evidence.decisions)
+  );
+}
+function buildQueueEntry(candidate, evidence) {
+  const pending = evidence.decisions.filter(
+    (decision) => decision.status === 'confirmation-pending',
+  );
+  const bundleGeneration = Math.max(
+    0,
+    ...(pending.length > 0 ? pending : evidence.decisions).map(
+      (decision) => decision.bundleGeneration,
+    ),
+  );
+  const bundle = evidence.decisions
+    .filter((decision) => decision.bundleGeneration === bundleGeneration)
+    .sort((left, right) => left.decisionGeneration - right.decisionGeneration);
+  return {
+    number: candidate.issueNumber,
+    title: candidate.title,
+    bundleGeneration,
+    choices: bundle.map((decision) => ({
+      decisionGeneration: decision.decisionGeneration,
+      status: decision.status,
+      ...(decision.question === undefined
+        ? {}
+        : { question: decision.question }),
+      ...(decision.selectedOption === undefined
+        ? {}
+        : { selectedOption: decision.selectedOption }),
+    })),
+    implementationLinks: [
+      ...new Set(
+        bundle.flatMap((decision) =>
+          decision.workReference === undefined ? [] : [decision.workReference],
+        ),
+      ),
+    ].sort(),
+  };
+}
+/**
+ * Build the shared decision-source gate (issue #4538). It decides, for an
+ * open issue that carries the needs-decision label, whether Discover may offer
+ * it as eligible decision work. The order is fixed:
+ *
+ * 1. A source whose provisional work is complete and awaits confirmation is
+ *    queued, whatever the flag or the class says, so the work never repeats.
+ * 2. A class that is not `enabled` in the trusted read keeps today's silent
+ *    exclusion. So does a read that throws.
+ * 3. Unusable, invalid, or inconsistent state, or any other record state
+ *    (selected, in progress, rework, confirmed, which Resume owns), blocks.
+ * 4. A source that carries the trusted confirmation label is never a source.
+ * 5. An unreadable cap or count, or a pending count at or above the cap,
+ *    skips the source. The pending count is the open issues that carry the
+ *    trusted confirmation label plus this run's queue, so scan coverage can
+ *    only make the cap stricter.
+ * 6. Anything else is eligible. An eligible source is only a candidate: A4
+ *    and A4.5 still assess the plan before any claim.
+ *
+ * The trusted read and the count run lazily, once per gate. A failed replay
+ * never throws out of `prepare`.
+ */
+export function buildDecisionSourceResolver(inputs) {
+  const candidates = new Map();
+  const evidenceByNumber = new Map();
+  const queueByNumber = new Map();
+  let trusted;
+  let openConfirmationCount;
+  const readTrusted = () => {
+    if (trusted === undefined) {
+      try {
+        trusted = inputs.readTrusted();
+      } catch {
+        trusted = {
+          classEnabled: false,
+          maxPendingConfirmations: null,
+          confirmationLabelName: null,
+        };
+      }
+    }
+    return trusted;
+  };
+  const readOpenConfirmationCount = (labelName) => {
+    if (openConfirmationCount === undefined) {
+      try {
+        const count = inputs.countOpenConfirmationIssues(labelName);
+        openConfirmationCount =
+          typeof count === 'number' && Number.isInteger(count) && count >= 0
+            ? count
+            : null;
+      } catch {
+        openConfirmationCount = null;
+      }
+    }
+    return openConfirmationCount;
+  };
+  return {
+    async prepare(sources) {
+      candidates.clear();
+      evidenceByNumber.clear();
+      queueByNumber.clear();
+      for (const source of sources) {
+        candidates.set(source.issueNumber, source);
+      }
+      if (candidates.size === 0) return;
+      let states;
+      try {
+        states = await inputs.loadStates(
+          [...candidates.keys()].map((issueNumber) => ({ issueNumber })),
+        );
+      } catch {
+        return;
+      }
+      for (const [issueNumber, candidate] of candidates) {
+        const evidence = states.get(issueNumber);
+        if (!isUsableEvidence(evidence)) continue;
+        evidenceByNumber.set(issueNumber, evidence);
+        if (awaitsConfirmation(evidence)) {
+          queueByNumber.set(issueNumber, buildQueueEntry(candidate, evidence));
+        }
+      }
+    },
+    verdict(issueNumber) {
+      const candidate = candidates.get(issueNumber);
+      if (candidate === undefined) return { kind: 'blocked' };
+      const queued = queueByNumber.get(issueNumber);
+      if (queued !== undefined) return { kind: 'queued', entry: queued };
+      const policy = readTrusted();
+      if (!policy.classEnabled) return { kind: 'blocked' };
+      const evidence = evidenceByNumber.get(issueNumber);
+      if (evidence === undefined || !evidence.valid) {
+        return { kind: 'blocked', reason: 'provisional_state_unavailable' };
+      }
+      if (evidence.hasRecords) {
+        return { kind: 'blocked', reason: 'provisional_records_present' };
+      }
+      if (evidence.status !== 'none' || evidence.decisions.length > 0) {
+        return { kind: 'blocked', reason: 'provisional_state_unavailable' };
+      }
+      const labelName = policy.confirmationLabelName;
+      const cap = policy.maxPendingConfirmations;
+      if (labelName === null || cap === null) {
+        return { kind: 'blocked', reason: 'provisional_pending_unreadable' };
+      }
+      const comparable = labelName.toLowerCase();
+      if (
+        candidate.labels.some(
+          (label) => label.trim().toLowerCase() === comparable,
+        )
+      ) {
+        return { kind: 'blocked' };
+      }
+      const open = readOpenConfirmationCount(labelName);
+      if (open === null) {
+        return { kind: 'blocked', reason: 'provisional_pending_unreadable' };
+      }
+      const pending = open + queueByNumber.size;
+      return pending >= cap
+        ? {
+            kind: 'blocked',
+            reason: `provisional_pending_cap:${pending}/${cap}`,
+          }
+        : { kind: 'eligible' };
+    },
+    queue() {
+      return [...queueByNumber.values()].sort(
+        (left, right) => left.number - right.number,
+      );
+    },
+  };
+}
+/** Count the issues of `items` that carry `labelName` (trimmed, any case). */
+export function countIssuesWithLabel(items, labelName) {
+  const comparable = labelName.trim().toLowerCase();
+  return items.filter((item) =>
+    [...normalizeLabels(item.labels)].some(
+      (label) => label.trim().toLowerCase() === comparable,
+    ),
+  ).length;
+}
+/**
+ * The live gate for a CLI: the evidence reader's replay and trusted read, and
+ * the open issue list as the pending count's source. This module cannot read
+ * the count through `auto-decision-records.mts`, which imports a module that
+ * imports this one; both count the open issues that carry the trusted
+ * confirmation label, and an unreadable list is an unreadable count.
+ * `openIssues` lets a caller that already holds the full open list (the
+ * orphan filter) skip a second read.
+ */
+export function buildLiveDecisionSourceResolver(input) {
+  return buildDecisionSourceResolver({
+    loadStates: (sources) => input.reader.loadStates(sources),
+    readTrusted: () => input.reader.trustedDecisionPolicy(),
+    countOpenConfirmationIssues: (labelName) =>
+      countIssuesWithLabel(
+        input.openIssues ?? input.port.listOpenWorkItems(),
+        labelName,
+      ),
+  });
 }
 function normalizeLogin(value) {
   return String(value ?? '')
@@ -821,6 +1091,10 @@ async function main() {
     ),
     loadProvisionalDecisionState: provisionalReader.loadState,
     decisionIssueClassEnabled: provisionalReader.decisionIssueClassEnabled,
+    decisionSources: buildLiveDecisionSourceResolver({
+      reader: provisionalReader,
+      port: createGithubProviderAdapter(owner, repo),
+    }),
     trustedMarkerLogins,
     // `--swarm-floor` output never surfaces the stale-authoring warning, so
     // skip the per-issue timeline fetch this loader runs — over a whole-repo
@@ -886,6 +1160,7 @@ export async function evaluateDiscoverReadiness(issueNumbers, options) {
     authoringJournalTarget,
     loadProvisionalDecisionState,
     decisionIssueClassEnabled,
+    decisionSources,
   } = options ?? {};
   const triageVerdictCheckEnabled =
     typeof fetchCommentsByIssueNumber === 'function' &&
@@ -963,7 +1238,61 @@ export async function evaluateDiscoverReadiness(issueNumbers, options) {
   const warnings = [];
   const issueCache = new Map();
   const markerCache = new Map();
-  for (const issueNumber of normalizeIssueNumbers(issueNumbers)) {
+  const evaluatedNumbers = normalizeIssueNumbers(issueNumbers);
+  // #4538: the shared decision-source gate replays every needs-decision source
+  // of this run before any verdict, so its pending cap cannot depend on scan
+  // order. With no gate, or a name collision, nothing is read and the label
+  // keeps excluding as before. Only an open issue that carries the label is
+  // replayed, and never a durable record, a roadmap node, or a follow-up that
+  // waits on a reviewer's decision.
+  const decisionNameCollides = needsDecisionNameCollides({
+    needsDecisionLabelName,
+    authoringLabelName,
+    authoringOnlyLabelName,
+    blockedByHumanLabelName,
+    roadmapLabelName,
+    confirmationLabelName: confirmationLabel.labelName,
+    confirmationLabelCollides: confirmationLabel.collision,
+    readyLabelName: rawReadyLabelName,
+  });
+  const isDecisionSourceShaped = (issue) =>
+    issue.labels.has(needsDecisionLabelName) &&
+    !issue.labels.has(roadmapLabelName) &&
+    !createMarkerRegex(resolvedMarkerPrefix, 'roadmap-id').test(
+      maskMarkdownForScan(issue.body),
+    ) &&
+    !hasDeferSourceMarker(
+      issue.body,
+      resolvedMarkerPrefix,
+      'review-needs-decision',
+    );
+  if (decisionSources !== undefined && !decisionNameCollides) {
+    const labelled = [];
+    for (const issueNumber of evaluatedNumbers) {
+      if (
+        issueNumber === providerOutageTarget ||
+        issueNumber === authoringJournalTarget
+      ) {
+        continue;
+      }
+      const issue = await getIssue(issueNumber, issueCache, loadIssue);
+      if (
+        !issue ||
+        isInaccessibleIssue(issue) ||
+        issue.state !== 'OPEN' ||
+        !isDecisionSourceShaped(issue)
+      ) {
+        continue;
+      }
+      labelled.push({
+        issueNumber: issue.number,
+        title: issue.title,
+        labels: [...issue.labels],
+      });
+    }
+    if (labelled.length > 0) await decisionSources.prepare(labelled);
+  }
+  for (const issueNumber of evaluatedNumbers) {
     // #4115: a configured durable record is excluded by number before any
     // GitHub read, matching discover-orphan-filter's number-first check. The
     // outage target keeps precedence when both numbers are equal. Unlike
@@ -1026,8 +1355,26 @@ export async function evaluateDiscoverReadiness(issueNumbers, options) {
     if (labels.has(blockedByHumanLabelName)) {
       reasons.add(`label:${blockedByHumanLabelName}`);
     }
+    // #4538: decided before the reasons are built, and it only skips adding
+    // the needs-decision reason; every other hold below still applies.
+    let decisionSource = false;
     if (labels.has(needsDecisionLabelName)) {
-      reasons.add(`label:${needsDecisionLabelName}`);
+      const verdict =
+        decisionSources !== undefined &&
+        !decisionNameCollides &&
+        isDecisionSourceShaped(issue)
+          ? decisionSources.verdict(issue.number)
+          : { kind: 'blocked' };
+      if (verdict.kind === 'eligible') {
+        decisionSource = true;
+      } else {
+        reasons.add(`label:${needsDecisionLabelName}`);
+        if (verdict.kind === 'queued') {
+          reasons.add(CONFIRMATION_PENDING_REASON);
+        } else if (verdict.reason !== undefined) {
+          reasons.add(verdict.reason);
+        }
+      }
     }
     if (labels.has(authoringOnlyLabelName)) {
       reasons.add(`label:${authoringOnlyLabelName}`);
@@ -1417,6 +1764,7 @@ export async function evaluateDiscoverReadiness(issueNumbers, options) {
         ...(provisionalDependencies.length > 0
           ? { provisionalDependencies }
           : {}),
+        ...(decisionSource ? { decisionSource: true } : {}),
       });
       continue;
     }
@@ -1435,6 +1783,7 @@ export async function evaluateDiscoverReadiness(issueNumbers, options) {
     });
   }
   const filteredByReason = countReasons(filteredOut);
+  const confirmationQueue = decisionSources?.queue() ?? [];
   return {
     ready,
     filteredOut,
@@ -1447,7 +1796,35 @@ export async function evaluateDiscoverReadiness(issueNumbers, options) {
       unresolvableCount: unresolvable.length,
       filteredByReason,
     },
+    ...(confirmationQueue.length > 0 ? { confirmationQueue } : {}),
   };
+}
+/**
+ * Whether the needs-decision label name cannot be told apart from another
+ * configured label name, comparing trimmed and case-insensitively like the
+ * confirmation-label matcher. A collision means a hold label could pass for
+ * the needs-decision label, so the gate never relaxes (issue #4538).
+ */
+export function needsDecisionNameCollides(names) {
+  if (names.confirmationLabelCollides) return true;
+  const comparable = (value) =>
+    String(value ?? '')
+      .trim()
+      .toLowerCase();
+  const own = comparable(names.needsDecisionLabelName);
+  const ready = comparable(
+    normalizePolicyConfig({
+      approvalSignals: { readyLabelName: names.readyLabelName },
+    }).approvalSignals.readyLabelName,
+  );
+  return [
+    names.authoringLabelName,
+    names.authoringOnlyLabelName,
+    names.blockedByHumanLabelName,
+    names.roadmapLabelName,
+    names.confirmationLabelName,
+    ready,
+  ].some((name) => comparable(name) === own);
 }
 /**
  * Reduce a full readiness summary to the swarm-floor answer: the ready issues
@@ -1456,11 +1833,18 @@ export async function evaluateDiscoverReadiness(issueNumbers, options) {
  * the `--swarm-floor` CLI sweep and the tests share one definition.
  */
 export function summarizeSwarmFloorEligibility(summary) {
-  const eligible = summary.ready.filter((issue) => !issue.belowFloor);
+  // #4538: a decision source below the floor stays eligible, because its low
+  // score may come from the open choice itself; A4.5 assesses that.
+  const eligible = summary.ready.filter(
+    (issue) => !issue.belowFloor || issue.decisionSource === true,
+  );
   return {
     eligible,
     eligible_count: eligible.length,
     total: summary.summary.total,
+    ...(summary.confirmationQueue === undefined
+      ? {}
+      : { confirmationQueue: summary.confirmationQueue }),
   };
 }
 /**
@@ -1866,20 +2250,44 @@ function printHelp() {
   IDD label name or approvalSignals.readyLabelName, such an issue gets the
   reason needs_confirmation_label_collision instead, and the run continues.
 
+  #4538 decision sources: an open issue carrying the configured needs-decision
+  label stays excluded (reason: label:<name>) unless the shared decision-source
+  gate admits it. The gate reads the trusted default branch once (the master
+  dangerouslyAutoDecide switch and the decisionIssue class must both be on,
+  never a feature branch). An admitted source is ready with
+  "decisionSource": true, and a
+  below-floor one stays eligible under --swarm-floor, because its score may come
+  from the open choice; A4 and A4.5 still assess the plan before any claim.
+  The label keeps excluding, with an added reason, when its state cannot be
+  read (provisional_state_unavailable), records exist that Resume owns
+  (provisional_records_present), the pending count cannot be read
+  (provisional_pending_unreadable), or the count of open confirmation-label
+  issues plus the queue below reaches maxPendingConfirmations
+  (provisional_pending_cap:<count>/<cap>). The gate never relaxes for a label
+  name that collides with another configured label, a roadmap node, a durable
+  record, or a review-needs-decision follow-up. A source whose provisional
+  work is complete and awaits confirmation is never ready, whatever the flag or
+  class says (reasons: label:<name>, confirmation_pending) and is listed in
+  "confirmationQueue" (present only when non-empty): its number, title, bundle
+  generation, chosen choices, and verified implementation links.
+
 Output schema (JSON mode):
   {
     "ready": [{ "number": 123, "title": "...", "autopilotSuitability": 4, "belowFloor": false, "isRoadmap": false }],
     "filteredOut": [{ "number": 124, "title": "...", "reasons": ["..."], "autopilotSuitability": null, "belowFloor": false, "isRoadmap": false }],
     "unresolvable": [{ "issueNumber": 124, "kind": "...", "reference": "...", "reason": "..." }],
     "warnings": [{ "issueNumber": 124, "message": "Warning: ..." }],
-    "summary": { "total": 2, "readyCount": 1, "filteredCount": 1, "unresolvableCount": 0, "filteredByReason": { "...": 1 } }
+    "summary": { "total": 2, "readyCount": 1, "filteredCount": 1, "unresolvableCount": 0, "filteredByReason": { "...": 1 } },
+    "confirmationQueue": [{ "number": 125, "title": "...", "bundleGeneration": 1, "choices": [{ "decisionGeneration": 1, "status": "confirmation-pending", "question": "...", "selectedOption": "..." }], "implementationLinks": ["https://github.com/owner/repo/pull/9"] }]
   }
+  (a ready entry also carries "decisionSource": true when the gate admitted it)
 
 Output schema (--swarm-floor mode):
   {
     "eligible": [{ "number": 123, "title": "...", "autopilotSuitability": 4, "belowFloor": false, "isRoadmap": false }],
     "eligible_count": 1,
-    "total": 7
+    "total": 7,
+    "confirmationQueue": [...]
   }
 `);
 }
