@@ -16,7 +16,8 @@ import type {
   ProvisionalDecisionHistoryRead,
   ProvisionalDecisionPullRequestRead,
   ProvisionalDecisionSourceIssueRead,
-  ProvisionalDecisionStore,
+  ProvisionalDecisionSourceStateRead,
+  ProvisionalResolutionStore,
 } from '../src/scripts/provisional-decision.mts';
 import {
   type ProvisionalDecisionCliDeps,
@@ -91,7 +92,7 @@ function baseComments(): ProvisionalDecisionHistoryComment[] {
 }
 
 /** A history store that keeps appended records, so the read-back sees them. */
-class StubStore implements ProvisionalDecisionStore {
+class StubStore implements ProvisionalResolutionStore {
   readonly appended: string[] = [];
   readonly labelRequests: boolean[] = [];
   private readonly comments: ProvisionalDecisionHistoryComment[];
@@ -157,6 +158,28 @@ class StubStore implements ProvisionalDecisionStore {
   }): Promise<{ readonly present: boolean }> {
     this.labelRequests.push(input.apply);
     return { present: false };
+  }
+
+  // The resolution reads and writes: the GitHub store tests cover them. This
+  // stub only lets a resolve request reach the planner and refuse early.
+  async readSourceState(): Promise<ProvisionalDecisionSourceStateRead> {
+    return { state: 'open', stateReason: null };
+  }
+
+  async appendAnswerBody(): Promise<never> {
+    throw new Error('no resolution write is expected in this test');
+  }
+
+  async appendReworkAuthoredBody(): Promise<never> {
+    throw new Error('no resolution write is expected in this test');
+  }
+
+  async closeSourceIssue(): Promise<never> {
+    throw new Error('no resolution write is expected in this test');
+  }
+
+  async releaseCoordinationClaim(): Promise<never> {
+    throw new Error('no resolution write is expected in this test');
   }
 }
 
@@ -598,4 +621,179 @@ test('a trusted config change between the planning read and the write blocks the
   assert.equal(exitCodeOf(outcome), 3);
   assert.equal(lastReport(h.out).action, 'recovery-hold');
   assert.deepEqual(h.store.appended, []);
+});
+
+const resolveRequest = {
+  type: 'resolve',
+  claimId,
+  agentId: 'cli-test-agent',
+  branch,
+  decisionGenerations: [1],
+};
+
+test('--help names the resolve action, its input and its exit codes', async () => {
+  const h = harness({});
+  const outcome = await runProvisionalDecisionCommandCli(['--help'], h.deps);
+  assert.equal(outcome, 0);
+  const usage = h.out.join('');
+  assert.match(usage, /resolve a confirmation-pending source/u);
+  assert.match(usage, /resolve:\s+type, claimId, agentId, branch/u);
+  assert.match(usage, /still works when\s+dangerouslyAutoDecide is off/u);
+  assert.match(usage, /rework-authored request is not run by\s+this command/u);
+  assert.match(usage, /"channel":"conversation"/u);
+  assert.match(usage, /nextStep names/u);
+  assert.match(usage, /--apply only releases the coordination claim/u);
+  assert.match(usage, /finds everything\s+done/u);
+  assert.deepEqual(h.trustReads, []);
+});
+
+test('a malformed resolve request is a fix-input refusal naming the field, before any read', async () => {
+  const cases: Array<[string, Record<string, unknown>, RegExp]> = [
+    [
+      'no generations',
+      { decisionGenerations: undefined },
+      /decisionGenerations/u,
+    ],
+    ['empty generations', { decisionGenerations: [] }, /decisionGenerations/u],
+    [
+      'fractional generation',
+      { decisionGenerations: [1.5] },
+      /decisionGenerations/u,
+    ],
+    ['zero generation', { decisionGenerations: [0] }, /decisionGenerations/u],
+    ['no agent', { agentId: undefined }, /"agentId"/u],
+    [
+      'a transition field',
+      { worktreeBranch: branch },
+      /not allowed for type resolve/u,
+    ],
+    ['a trust field', { verifiedReworkRoadmaps: [] }, /derives trust fields/u],
+    ['a non-object input', { input: 'y' }, /"input" must be an object/u],
+    ['an unknown channel', { input: { channel: 'voice' } }, /input\.channel/u],
+    [
+      'an unknown input key',
+      { input: { channel: 'none', extra: true } },
+      /unknown key "extra"/u,
+    ],
+    [
+      'a conversation with no interpretation',
+      { input: { channel: 'conversation', origin: 'user', message: 'y' } },
+      /input\.interpretation/u,
+    ],
+    [
+      'an origin outside the list',
+      {
+        input: {
+          channel: 'conversation',
+          origin: 'person',
+          message: 'y',
+          interpretation: { response: 'accepted' },
+        },
+      },
+      /input\.origin/u,
+    ],
+    [
+      'a rework with no rationale',
+      {
+        input: {
+          channel: 'conversation',
+          origin: 'user',
+          message: 'option b',
+          interpretation: { response: 'rework', requestedOptionId: 'b' },
+        },
+      },
+      /input\.interpretation\.rationale/u,
+    ],
+    [
+      'a terminal that does not say it was interactive',
+      {
+        input: {
+          channel: 'terminal',
+          origin: 'user',
+          event: { kind: 'line', text: 'y' },
+        },
+      },
+      /input\.interactive/u,
+    ],
+    [
+      'a terminal event of an unknown kind',
+      {
+        input: {
+          channel: 'terminal',
+          origin: 'user',
+          interactive: true,
+          event: { kind: 'pipe' },
+        },
+      },
+      /input\.event\.kind/u,
+    ],
+    [
+      'downstream results that are not strings',
+      { downstreamResults: [1] },
+      /downstreamResults/u,
+    ],
+  ];
+  for (const [name, patch, reason] of cases) {
+    const h = harness({});
+    const outcome = await runProvisionalDecisionCommandCli(
+      argv(requestFile({ ...resolveRequest, ...patch })),
+      h.deps,
+    );
+    assert.equal(exitCodeOf(outcome), 4, name);
+    const report = lastReport(h.out);
+    assert.equal(report.state, 'refused', name);
+    assert.equal(report.action, 'fix-input', name);
+    assert.equal(report.apply, false, name);
+    // The resolve shape, whichever check refused it.
+    assert.deepEqual(report.steps, [], name);
+    assert.deepEqual(report.recordIds, [], name);
+    assert.match(String(report.reason), reason, name);
+    assert.deepEqual(h.trustReads, [], name);
+    assert.deepEqual(h.created, [], name);
+  }
+});
+
+test('a resolve request with no usable trusted policy is a recovery hold (exit 3)', async () => {
+  // The default harness trust read returns no policy document.
+  const h = harness({});
+  const outcome = await runProvisionalDecisionCommandCli(
+    argv(requestFile(resolveRequest), ['--apply']),
+    h.deps,
+  );
+  assert.equal(exitCodeOf(outcome), 3);
+  assert.equal(kindOf(outcome), 'gate');
+  const report = lastReport(h.out);
+  assert.equal(report.state, 'refused');
+  assert.equal(report.action, 'recovery-hold');
+  assert.equal(report.apply, true);
+  assert.match(String(report.reason), /trusted repository policy/u);
+  assert.deepEqual(h.created, []);
+});
+
+test('a resolve request runs the resolution with the master switch off', async () => {
+  const h = harness({ master: 'disabled', decisionIssue: 'class-off' });
+  const trusted = { trustedMarkerActors: ['kurone-kito'] };
+  const deps: ProvisionalDecisionCliDeps = {
+    ...h.deps,
+    readTrust: (input) => ({
+      ...h.deps.readTrust(input),
+      policyConfig:
+        trusted as unknown as TrustedAutoDecideSnapshot['policyConfig'],
+    }),
+  };
+  const outcome = await runProvisionalDecisionCommandCli(
+    argv(requestFile(resolveRequest)),
+    deps,
+  );
+  // The fixture holds no provisional decision, so the resolution refuses with
+  // action none: nothing to resolve yet. It reached the planner regardless of
+  // the switch, and the store was built from the trusted snapshot.
+  assert.equal(exitCodeOf(outcome), 0, JSON.stringify(lastReport(h.out)));
+  const report = lastReport(h.out);
+  assert.equal(report.state, 'refused');
+  assert.equal(report.action, 'none');
+  assert.match(String(report.reason), /no provisional decision/u);
+  assert.deepEqual(report.steps, []);
+  assert.equal(report.apply, false);
+  assert.deepEqual(h.created, [{ repository, issueNumber, policy: trusted }]);
 });

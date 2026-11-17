@@ -1397,6 +1397,28 @@ export async function runProvisionalDecisionCommand(
 /** The question every resolution presents and every answer record retains. */
 export const PROVISIONAL_CONFIRMATION_QUESTION =
   'Were the implemented choices above acceptable? [y/N]';
+/**
+ * The claim a history shows as active, by the planner's own claim fold and
+ * trust rules, or null when none is. A store uses it to guard a write that
+ * depends on a claim. It throws when the history is incomplete or its claim
+ * lineage cannot be verified, so such a guard fails closed.
+ */
+export function readActiveClaimFromHistory(history, store) {
+  const folded = resolveClaimFold(history, store);
+  if (folded === null) return null;
+  if ('failure' in folded) {
+    throw new Error(`claim lineage could not be verified: ${folded.failure}`);
+  }
+  return folded.active;
+}
+/**
+ * Whether two answer comment bodies carry the same answer, compared as the
+ * planner compares them: the source's update time, which any comment moves, is
+ * not part of the identity. A store uses it to find an identical answer.
+ */
+export function sameProvisionalAnswerBody(left, right) {
+  return answerStepDigest(left) === answerStepDigest(right);
+}
 const TERMINAL_REWORK_PATTERN = /^option\s+(\S+)\s+(\S.*)$/iu;
 function pending(reason) {
   return { kind: 'pending', reason };
@@ -1412,7 +1434,6 @@ function pending(reason) {
  * not authentication, and a dishonest authorized caller is outside the
  * guarantee.
  */
-// audit:ignore-dead-export: no production caller until the command and GitHub store wiring lands (follow-up of roadmap #4528, not yet filed); tests lock the input rules until then
 export function readConfirmationAnswer(input, alternativeIds) {
   if (!input || input.channel === 'none') return pending('no-input');
   if (input.channel === 'timeout') return pending('timeout');
@@ -2710,7 +2731,6 @@ async function releaseVerified(request, store) {
  * about. With `apply`, each write is preceded by a second fresh plan that must
  * name the same step, and followed by a fresh read that must show it.
  */
-// audit:ignore-dead-export: no production caller until the command and GitHub store wiring lands (follow-up of roadmap #4528, not yet filed); tests lock the lifecycle until then
 export async function runProvisionalResolution(request, store, options = {}) {
   const steps = [];
   const recordIds = [];

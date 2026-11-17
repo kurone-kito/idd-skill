@@ -186,6 +186,7 @@ jobs:
               tests/provider-adapter-fake.test.mts
               tests/provider-adapter-github.test.mts
               tests/provisional-decision-cli.test.mts
+              tests/provisional-decision-github-store.test.mts
               tests/provisional-decision-github.test.mts
               tests/provisional-decision-result-schema.test.mts
               tests/provisional-decision-state.test.mts

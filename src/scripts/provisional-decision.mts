@@ -274,13 +274,15 @@ function normalizeLogin(login: string | null): string {
 }
 
 /** The config the planner reads: the store's trusted policy when it has one. */
-function plannerConfig(store: ProvisionalDecisionStore): IddConfig | null {
+function plannerConfig(
+  store: Pick<ProvisionalDecisionStore, 'policy'>,
+): IddConfig | null {
   return store.policy === undefined ? loadIddConfig() : store.policy;
 }
 
 function resolveClaimFold(
   history: ProvisionalDecisionHistoryRead,
-  store: ProvisionalDecisionStore,
+  store: Pick<ProvisionalDecisionStore, 'policy'>,
   onNoActiveClaim?: (
     lineage: readonly VerifiedProvisionalDecisionClaim[],
   ) => void,
@@ -1811,7 +1813,9 @@ export interface ProvisionalResolutionStore extends ProvisionalDecisionStore {
    * that the issue is still open and that its title and body still match
    * (`bodySha256` is the lowercase SHA-256 hex of the body's UTF-8 bytes), so a
    * close or an edit after the final plan read cannot take a record. The
-   * planner re-reads just before, and holds when this throws.
+   * planner plans this record only once the coordination claim is released, so
+   * a store also refuses while a claim is active. The planner re-reads just
+   * before, and holds when this throws.
    */
   appendReworkAuthoredBody(
     recordId: string,
@@ -1827,6 +1831,36 @@ export interface ProvisionalResolutionStore extends ProvisionalDecisionStore {
     readonly agentId: string;
     readonly branch: string;
   }): Promise<void>;
+}
+
+/**
+ * The claim a history shows as active, by the planner's own claim fold and
+ * trust rules, or null when none is. A store uses it to guard a write that
+ * depends on a claim. It throws when the history is incomplete or its claim
+ * lineage cannot be verified, so such a guard fails closed.
+ */
+export function readActiveClaimFromHistory(
+  history: ProvisionalDecisionHistoryRead,
+  store: Pick<ProvisionalDecisionStore, 'policy'>,
+): ProvisionalResolutionCloseExpectation['claim'] | null {
+  const folded = resolveClaimFold(history, store);
+  if (folded === null) return null;
+  if ('failure' in folded) {
+    throw new Error(`claim lineage could not be verified: ${folded.failure}`);
+  }
+  return folded.active;
+}
+
+/**
+ * Whether two answer comment bodies carry the same answer, compared as the
+ * planner compares them: the source's update time, which any comment moves, is
+ * not part of the identity. A store uses it to find an identical answer.
+ */
+export function sameProvisionalAnswerBody(
+  left: string,
+  right: string,
+): boolean {
+  return answerStepDigest(left) === answerStepDigest(right);
 }
 
 /** Who produced an input event. Only a user-origin event can answer. */
@@ -1914,7 +1948,6 @@ function pending(reason: ConfirmationPendingReason): ConfirmationAnswer {
  * not authentication, and a dishonest authorized caller is outside the
  * guarantee.
  */
-// audit:ignore-dead-export: no production caller until the command and GitHub store wiring lands (follow-up of roadmap #4528, not yet filed); tests lock the input rules until then
 export function readConfirmationAnswer(
   input: ConfirmationInput | null | undefined,
   alternativeIds: readonly string[],
@@ -3564,7 +3597,6 @@ async function releaseVerified(
  * about. With `apply`, each write is preceded by a second fresh plan that must
  * name the same step, and followed by a fresh read that must show it.
  */
-// audit:ignore-dead-export: no production caller until the command and GitHub store wiring lands (follow-up of roadmap #4528, not yet filed); tests lock the lifecycle until then
 export async function runProvisionalResolution(
   request: ProvisionalResolutionRequest,
   store: ProvisionalResolutionStore,

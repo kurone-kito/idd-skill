@@ -7,8 +7,9 @@
 //
 // The provisional-decision command (issue #4799, from roadmap #4722). It reads
 // one request JSON file, derives every trust field from a trusted source, and
-// runs the planner. A dry run is the default: only `--apply` may append a
-// record or apply the completion label.
+// runs the planner, or, for a `resolve` request (issue #5276), the
+// confirmation-pending resolution. A dry run is the default: only `--apply`
+// may write.
 
 import { readFileSync } from 'node:fs';
 import { parseCanonicalIntegerOrThrow, parseCliArgs } from './cli-args.mts';
@@ -24,13 +25,17 @@ import {
   type TrustedAutoDecideSnapshot,
 } from './idd-config.mts';
 import {
+  type ConfirmationInput,
   type ProvisionalDecisionBaseline,
   type ProvisionalDecisionCommandRequest,
   type ProvisionalDecisionCommandResult,
   type ProvisionalDecisionOption,
   type ProvisionalDecisionPlan,
   type ProvisionalDecisionStore,
+  type ProvisionalResolutionResult,
+  type ProvisionalResolveRequest,
   runProvisionalDecisionCommand,
+  runProvisionalResolution,
 } from './provisional-decision.mts';
 import { createGithubProvisionalDecisionStore } from './provisional-decision-github.mts';
 import {
@@ -49,22 +54,25 @@ const PROVISIONAL_DECISION_FLAG_SPEC = {
 const USAGE = `Usage:
   node scripts/provisional-decision-command.mjs --issue <n> --repo <owner/repo> --request <path> [--apply]
 
-Run one provisional-decision transition for an IDD issue. The request file is
-JSON. The command derives the trust fields itself: the trusted
-dangerouslyAutoDecide master switch, the option comparison, the baseline of a
-work transition (from the stored record), and the rework roadmaps. A request
-file that supplies any of them is refused. Without --apply the command plans
-only and writes nothing.
+Run one provisional-decision transition for an IDD issue (type selected,
+work-started, or work-completed), or resolve a confirmation-pending source
+(type resolve). The request file is JSON. The command derives the trust fields
+itself: for a transition, the trusted dangerouslyAutoDecide master switch, the
+option comparison, the baseline of a work transition (from the stored record),
+and the rework roadmaps; for resolve, the rework roadmaps. A request file that
+supplies any of them is refused. Without --apply the command plans only and
+writes nothing.
 
 Options:
   --issue <n>          the source issue number
   --repo <owner/repo>  the repository that owns the issue
   --request <path>     the request JSON file
-  --apply              append the record and apply the completion label
+  --apply              write: append the record and apply the completion label
+                       (a transition), or run the resolution writes (resolve)
   --help, -h           show this help
 
 Request fields by "type":
-  all:            type, claimId, worktreeBranch, evidenceUrl (optional)
+  all transitions: type, claimId, worktreeBranch, evidenceUrl (optional)
   selected:       baseline {title, bodySha256}, selectedOption,
                   feasibleAlternatives, executionCriteria (optional).
                   bodySha256 is the hex SHA-256 of the issue body's UTF-8
@@ -72,19 +80,49 @@ Request fields by "type":
   work-started:   planCommentUrl (optional)
   work-completed: verifiedHeadSha, executionCriteriaSatisfied,
                   pullRequestUrl (optional)
+  resolve:        type, claimId, agentId, branch (the coordination claim this
+                  session holds for the review), decisionGenerations (the
+                  decisions of the current bundle the answer applies to),
+                  input (optional), answeredPresentationSha256 (required
+                  when the input answers: echo the presentationSha256 of
+                  the dry run), downstreamResults (optional array of strings)
 
-Output: one JSON line on stdout with state, action, reason, recordId,
-commentUrl, and a plan summary when the planner made one.
+The resolve action asks whether the implemented choices were acceptable and acts
+only on an actual answer. A dry run reports the next step and needsUserAnswer,
+and the presentation and its digest when there is one; show the presentation
+and ask only when needsUserAnswer is true. With no actual answer and no stored
+answer to resume, --apply only releases the coordination claim and leaves the
+source pending, so run the dry run first. The action reads no opt-in switch, so
+it still works when dangerouslyAutoDecide is off, but it needs a readable
+trusted repository policy. The rework-authored request is not run by this command.
+resolve input is what the user actually did, never an assistant assertion or
+agent-fed text. One of:
+  {"channel":"conversation","origin":"user","message":"...",
+   "interpretation":{"response":"accepted" | "declined" | "none"}}
+  {"channel":"conversation","origin":"user","message":"...",
+   "interpretation":{"response":"rework","requestedOptionId":"...","rationale":"..."}}
+  {"channel":"terminal","origin":"user","interactive":true,
+   "event":{"kind":"line","text":"y"} | {"kind":"eof"} | {"kind":"cancelled"}}
+  {"channel":"timeout"} or {"channel":"none"}
+
+Output: one JSON line on stdout. A transition reports state, action, reason,
+recordId, commentUrl, and a plan summary when the planner made one; resolve
+reports state, action, outcome, reason, nextStep, steps, recordIds,
+needsUserAnswer, presentation, presentationSha256, and warnings. Both carry
+apply.
 Exit codes: 0 planned, applied, or refused with action none (nothing to do
-yet); 2 reconciled (the record already exists; read state and action on
-stdout) or a usage error (message on stderr); 3 recovery-hold (inspect
-before any retry); 4 fix-input (correct the request or the issue, then
-re-run).
+yet); 2 reconciled (the record already exists, a resolve run finds everything
+done, or a resolve step that nextStep names is still to do: read its reason,
+then run again; read state and action on stdout) or a usage error (message on
+stderr); 3 recovery-hold (inspect before any retry); 4
+fix-input (correct the request or the issue, then re-run).
 `;
 
 const REPOSITORY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9_.-]+$/;
 
-type RequestType = ProvisionalDecisionCommandRequest['type'];
+type TransitionType = ProvisionalDecisionCommandRequest['type'];
+
+type RequestType = TransitionType | 'resolve';
 
 type RawRequest = Readonly<Record<string, unknown>>;
 
@@ -120,6 +158,16 @@ const REQUEST_KEYS_BY_TYPE: Readonly<Record<RequestType, readonly string[]>> = {
     'pullRequestUrl',
     'verifiedHeadSha',
     'executionCriteriaSatisfied',
+  ],
+  resolve: [
+    'type',
+    'claimId',
+    'agentId',
+    'branch',
+    'decisionGenerations',
+    'input',
+    'answeredPresentationSha256',
+    'downstreamResults',
   ],
 };
 
@@ -298,7 +346,7 @@ function validateRequestShape(raw: unknown): {
   const type = raw.type;
   if (typeof type !== 'string' || !Object.hasOwn(REQUEST_KEYS_BY_TYPE, type)) {
     throw new RequestInputError(
-      'request field "type" must be selected, work-started, or work-completed',
+      'request field "type" must be selected, work-started, work-completed, or resolve',
     );
   }
   const requestType = type as RequestType;
@@ -397,7 +445,7 @@ interface BuildContext {
 
 /** Build the planner request, deriving every trust field from trusted reads. */
 async function buildRequest(
-  shape: { readonly type: RequestType; readonly raw: RawRequest },
+  shape: { readonly type: TransitionType; readonly raw: RawRequest },
   context: BuildContext,
 ): Promise<ProvisionalDecisionCommandRequest> {
   const { raw, type } = shape;
@@ -492,6 +540,201 @@ function isStringArray(value: unknown): value is string[] {
   );
 }
 
+const CONFIRMATION_ORIGINS = ['user', 'assistant', 'tool', 'unknown'] as const;
+
+/** Refuse a key outside the list, so a request cannot smuggle extra fields. */
+function allowOnlyKeys(
+  raw: RawRequest,
+  allowed: readonly string[],
+  field: string,
+): void {
+  for (const key of Object.keys(raw)) {
+    if (!allowed.includes(key)) {
+      throw new RequestInputError(
+        `request field "${field}" has an unknown key "${key}"`,
+      );
+    }
+  }
+}
+
+function requireObject(value: unknown, field: string): RawRequest {
+  if (!isPlainObject(value)) {
+    throw new RequestInputError(`request field "${field}" must be an object`);
+  }
+  return value;
+}
+
+function requireString(raw: RawRequest, key: string, field: string): string {
+  const value = raw[key];
+  if (typeof value !== 'string') {
+    throw new RequestInputError(
+      `request field "${field}.${key}" must be a string`,
+    );
+  }
+  return value;
+}
+
+function parseOrigin(raw: RawRequest): (typeof CONFIRMATION_ORIGINS)[number] {
+  const origin = raw.origin;
+  const known = CONFIRMATION_ORIGINS.find((candidate) => candidate === origin);
+  if (known === undefined) {
+    throw new RequestInputError(
+      'request field "input.origin" must be user, assistant, tool, or unknown',
+    );
+  }
+  return known;
+}
+
+function parseTerminalEvent(
+  value: unknown,
+): Extract<ConfirmationInput, { channel: 'terminal' }>['event'] {
+  const event = requireObject(value, 'input.event');
+  if (event.kind === 'line') {
+    allowOnlyKeys(event, ['kind', 'text'], 'input.event');
+    return { kind: 'line', text: requireString(event, 'text', 'input.event') };
+  }
+  if (event.kind === 'eof' || event.kind === 'cancelled') {
+    allowOnlyKeys(event, ['kind'], 'input.event');
+    return { kind: event.kind };
+  }
+  throw new RequestInputError(
+    'request field "input.event.kind" must be line, eof, or cancelled',
+  );
+}
+
+function parseInterpretation(
+  value: unknown,
+): Extract<ConfirmationInput, { channel: 'conversation' }>['interpretation'] {
+  const reading = requireObject(value, 'input.interpretation');
+  if (
+    reading.response === 'accepted' ||
+    reading.response === 'declined' ||
+    reading.response === 'none'
+  ) {
+    allowOnlyKeys(reading, ['response'], 'input.interpretation');
+    return { response: reading.response };
+  }
+  if (reading.response === 'rework') {
+    allowOnlyKeys(
+      reading,
+      ['response', 'requestedOptionId', 'rationale'],
+      'input.interpretation',
+    );
+    return {
+      response: 'rework',
+      requestedOptionId: requireString(
+        reading,
+        'requestedOptionId',
+        'input.interpretation',
+      ),
+      rationale: requireString(reading, 'rationale', 'input.interpretation'),
+    };
+  }
+  throw new RequestInputError(
+    'request field "input.interpretation.response" must be accepted, declined, none, or rework',
+  );
+}
+
+/**
+ * Check the reported input event's whole shape. The planner's reader
+ * dereferences its fields without checks, so a malformed event must stop here
+ * as a request error, not as a thrown TypeError. The event is still what the
+ * caller reports: nothing here can tell who typed it.
+ */
+function parseConfirmationInput(value: unknown): ConfirmationInput {
+  const input = requireObject(value, 'input');
+  if (input.channel === 'none' || input.channel === 'timeout') {
+    allowOnlyKeys(input, ['channel'], 'input');
+    return { channel: input.channel };
+  }
+  if (input.channel === 'terminal') {
+    allowOnlyKeys(
+      input,
+      ['channel', 'origin', 'interactive', 'event'],
+      'input',
+    );
+    if (typeof input.interactive !== 'boolean') {
+      throw new RequestInputError(
+        'request field "input.interactive" must be a boolean',
+      );
+    }
+    return {
+      channel: 'terminal',
+      origin: parseOrigin(input),
+      interactive: input.interactive,
+      event: parseTerminalEvent(input.event),
+    };
+  }
+  if (input.channel === 'conversation') {
+    allowOnlyKeys(
+      input,
+      ['channel', 'origin', 'message', 'interpretation'],
+      'input',
+    );
+    return {
+      channel: 'conversation',
+      origin: parseOrigin(input),
+      message: requireString(input, 'message', 'input'),
+      interpretation: parseInterpretation(input.interpretation),
+    };
+  }
+  throw new RequestInputError(
+    'request field "input.channel" must be terminal, conversation, timeout, or none',
+  );
+}
+
+function parseDecisionGenerations(value: unknown): number[] {
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    !value.every((item) => Number.isSafeInteger(item) && item >= 1)
+  ) {
+    throw new RequestInputError(
+      'request field "decisionGenerations" must be a non-empty array of positive integers',
+    );
+  }
+  return value as number[];
+}
+
+/**
+ * Build the resolution request. The rework roadmaps stay derived as none, so a
+ * source that already holds a rework-authored record is a recovery hold until
+ * the store can verify that evidence itself.
+ */
+function buildResolveRequest(
+  raw: RawRequest,
+  context: { readonly repository: string; readonly issueNumber: number },
+): ProvisionalResolveRequest {
+  const downstream = raw.downstreamResults;
+  if (downstream !== undefined && !isStringArray(downstream)) {
+    throw new RequestInputError(
+      'request field "downstreamResults" must be an array of strings',
+    );
+  }
+  const answeredPresentationSha256 = optionalString(
+    raw,
+    'answeredPresentationSha256',
+  );
+  return {
+    type: 'resolve',
+    repository: context.repository,
+    issueNumber: context.issueNumber,
+    claimId: requireNonEmptyString(raw, 'claimId'),
+    agentId: requireNonEmptyString(raw, 'agentId'),
+    branch: requireNonEmptyString(raw, 'branch'),
+    verifiedReworkRoadmaps: [],
+    decisionGenerations: parseDecisionGenerations(raw.decisionGenerations),
+    input:
+      raw.input === undefined || raw.input === null
+        ? null
+        : parseConfirmationInput(raw.input),
+    ...(answeredPresentationSha256 === undefined
+      ? {}
+      : { answeredPresentationSha256 }),
+    ...(downstream === undefined ? {} : { downstreamResults: downstream }),
+  };
+}
+
 /** One stdout line: the planner's state, with the plan minus its history. */
 interface CommandReport {
   readonly state: string;
@@ -572,8 +815,10 @@ function readFailureOutcome(
   return { exitCode: 3, kind: 'gate', message: reason };
 }
 
-/** The exit code and envelope kind for a planner result. */
-function outcomeFor(result: ProvisionalDecisionCommandResult): HelperCliResult {
+/** The exit code and envelope kind for a planner or resolution result. */
+function outcomeFor(
+  result: Pick<ProvisionalResolutionResult, 'state' | 'action' | 'reason'>,
+): HelperCliResult {
   if (result.state === 'refused' && result.action === 'recovery-hold') {
     return {
       exitCode: 3,
@@ -618,6 +863,121 @@ function requestInputOutcome(
 }
 
 /**
+ * A fingerprint of what a resolution trusts: the trusted policy snapshot
+ * without the auto-decide keys. A resolution reads no opt-in switch, so a
+ * switch turning on or off never blocks it, while a change to the trusted
+ * marker actors or claim timing does. Null when the snapshot is unreadable.
+ */
+function policyFingerprint(snapshot: TrustedAutoDecideSnapshot): string | null {
+  if (snapshot.policyConfig === null) return null;
+  const {
+    dangerouslyAutoDecide: _master,
+    autoDecide: _classes,
+    ...rest
+  } = snapshot.policyConfig as Record<string, unknown>;
+  return JSON.stringify(rest);
+}
+
+/** One stdout line for a resolution: the result's own fields, plus `apply`. */
+function writeResolutionReport(
+  result: ProvisionalResolutionResult,
+  apply: boolean,
+  deps: ProvisionalDecisionCliDeps,
+): void {
+  deps.writeStdout(
+    `${JSON.stringify({
+      ...result,
+      action: result.action ?? null,
+      reason: result.reason ?? null,
+      apply,
+    })}\n`,
+  );
+}
+
+/** A refusal before any resolution read, in the resolution's stdout shape. */
+function resolutionRefusalOutcome(
+  action: 'recovery-hold' | 'fix-input',
+  reason: string,
+  apply: boolean,
+  deps: ProvisionalDecisionCliDeps,
+): HelperCliResult {
+  const result: ProvisionalResolutionResult = {
+    state: 'refused',
+    action,
+    reason,
+    steps: [],
+    recordIds: [],
+  };
+  writeResolutionReport(result, apply, deps);
+  return outcomeFor(result);
+}
+
+/** Run the `resolve` action: ask whether the choices were acceptable, and act. */
+async function runResolveAction(
+  raw: RawRequest,
+  args: CommandArgs,
+  deps: ProvisionalDecisionCliDeps,
+): Promise<HelperCliResult> {
+  let request: ProvisionalResolveRequest;
+  try {
+    request = buildResolveRequest(raw, {
+      repository: args.repository,
+      issueNumber: args.issueNumber,
+    });
+  } catch (error) {
+    if (error instanceof RequestInputError) {
+      return resolutionRefusalOutcome(
+        'fix-input',
+        error.message,
+        args.apply,
+        deps,
+      );
+    }
+    throw error;
+  }
+  const [owner, repo] = args.repository.split('/') as [string, string];
+  // Trusted marker actors come from the trusted snapshot, never the working
+  // tree. A resolution reads no opt-in switch, but it cannot run without them.
+  const trust = deps.readTrust({ owner, repo });
+  const startFingerprint = policyFingerprint(trust);
+  if (startFingerprint === null) {
+    return resolutionRefusalOutcome(
+      'recovery-hold',
+      `the trusted repository policy is absent or unreadable: ${trust.report.error ?? 'no policy document'}`,
+      args.apply,
+      deps,
+    );
+  }
+  const store = deps.createStore({
+    repository: args.repository,
+    issueNumber: args.issueNumber,
+    policy: trust.policyConfig,
+    // The store checks that this claim is still the active one before an
+    // answer or record append writes, as it does for the close and release.
+    coordinationClaim: {
+      claimId: request.claimId,
+      agentId: request.agentId,
+      branch: request.branch,
+    },
+    // The store plans and reads on the trusted snapshot taken above, so a
+    // change to it after planning must still block a write. The store calls
+    // this as its last check before each write, after its own history reads.
+    beforeWrite: (write) => {
+      if (
+        policyFingerprint(deps.readTrust({ owner, repo })) !== startFingerprint
+      ) {
+        throw new Error(`the trusted policy changed before the ${write}`);
+      }
+    },
+  });
+  const result = await runProvisionalResolution(request, store, {
+    apply: args.apply,
+  });
+  writeResolutionReport(result, args.apply, deps);
+  return outcomeFor(result);
+}
+
+/**
  * Run the command for one argv. Exported so a test can drive the whole flow
  * against a stub store and trust read; the bin entry passes the real deps.
  */
@@ -639,14 +999,31 @@ export async function runProvisionalDecisionCommandCli(
     return 0;
   }
 
-  let shape: { readonly type: RequestType; readonly raw: RawRequest };
+  let rawJson: unknown;
   try {
-    shape = validateRequestShape(readRequestJson(args.requestPath));
+    rawJson = readRequestJson(args.requestPath);
   } catch (error) {
     if (error instanceof RequestInputError) {
       return requestInputOutcome(error, args.apply, deps);
     }
     throw error;
+  }
+  // A resolve request is refused in the resolve shape, whichever check fails.
+  const wantsResolve = isPlainObject(rawJson) && rawJson.type === 'resolve';
+  let shape: { readonly type: RequestType; readonly raw: RawRequest };
+  try {
+    shape = validateRequestShape(rawJson);
+  } catch (error) {
+    if (error instanceof RequestInputError) {
+      return wantsResolve
+        ? resolutionRefusalOutcome('fix-input', error.message, args.apply, deps)
+        : requestInputOutcome(error, args.apply, deps);
+    }
+    throw error;
+  }
+  const { type: requestType, raw: rawRequest } = shape;
+  if (requestType === 'resolve') {
+    return runResolveAction(rawRequest, args, deps);
   }
 
   const [owner, repo] = args.repository.split('/') as [string, string];
@@ -663,12 +1040,15 @@ export async function runProvisionalDecisionCommandCli(
   const startFingerprint = trustFingerprint(trust);
   let request: ProvisionalDecisionCommandRequest;
   try {
-    request = await buildRequest(shape, {
-      repository: args.repository,
-      issueNumber: args.issueNumber,
-      policyTrusted,
-      store,
-    });
+    request = await buildRequest(
+      { type: requestType, raw: rawRequest },
+      {
+        repository: args.repository,
+        issueNumber: args.issueNumber,
+        policyTrusted,
+        store,
+      },
+    );
   } catch (error) {
     if (error instanceof RequestInputError) {
       return requestInputOutcome(error, args.apply, deps);

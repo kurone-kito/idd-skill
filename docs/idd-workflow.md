@@ -1016,9 +1016,27 @@ applies to every class, including these two. This exception is recorded by
 
 This applies to a needs-decision source whose current bundle has verified
 completed work for every decision. The `runProvisionalResolution` function
-of `provisional-decision.mts` runs it; the `idd-provisional-decision`
-command does not call it yet. It reads no opt-in switch, so confirmation
-and rework still work after `dangerouslyAutoDecide` is turned off.
+of `provisional-decision.mts` runs it, and the `idd-provisional-decision`
+command runs it for a request of type `resolve`. That request names the
+coordination claim (`claimId`, `agentId`, `branch`), the decisions of the
+current bundle (`decisionGenerations`), and optionally what the user did
+(`input`) with the digest it answered (`answeredPresentationSha256`, required
+when the input answers: echo the digest a dry run reported) and the later
+results that relied on the prior ones (`downstreamResults`). A dry run
+reports the next step and `needsUserAnswer`, and the presentation and its
+digest when there is one. With no answer to give and none stored to resume,
+`--apply` only releases the coordination claim, so run the dry run first. The
+action reads no opt-in switch, so confirmation and rework still work after
+`dangerouslyAutoDecide` is turned off, but the command needs a readable
+trusted repository policy, which supplies the trusted marker actors, and a
+change to that policy between the planning read and a write blocks the write.
+The command does not run the `rework-authored` request, because it cannot
+derive that request's authoring evidence, and it derives no rework roadmap
+evidence, so a source that already holds a `rework-authored` record is a
+recovery hold there. It exits `0`, `2`, `3`, or `4` as for a transition, and
+exit `2` with a `nextStep` means that step is still to do: read its `reason`,
+then run it again. The `input` is what the caller reports, so the
+input-boundary rule below applies to it.
 
 1. **Coordination claim.** Take the review under a fresh claim on the
    source, posted through the normal claim protocol with a branch of the
@@ -1116,6 +1134,31 @@ and the next run repeats it while the claim is still active; `reconciled`
 without a `nextStep` means everything is already done. A refusal with action
 `none` means nothing can be resolved yet and keeps the claim, so release it
 with the normal unclaim.
+
+The command's GitHub store takes a record or an answer as already written only
+when its comment is unedited and its author is a trusted marker actor or this
+run posted it. An untrusted comment that pre-posts a deterministic record ID is
+therefore ignored and cannot stall the resolution (found in the review of pull
+request `#5264`, merged 2026-11-17). The decision transitions keep their own
+rule: their planner holds while an untrusted or edited comment carries the ID
+of the record it would write. In a resolution the store checks the claim
+against the history it has just read, right before every answer or record
+append of the `resolve` action that writes. The close re-reads the issue
+and then the claim, and the release re-reads the claim, just before the write,
+and the close reads the closed state back. In a resolution the store also
+calls a caller-supplied hook, which re-checks the trusted policy, as its last
+step before each write. It refuses every write when the authenticated GitHub
+account cannot be read or is not a trusted marker actor (the planner ignores
+that account's markers, so a retry could never advance, and an app
+installation token names no user, so a resolution needs a user token, as the
+claim collectors do). It refuses the rework-authored append while a
+coordination claim is active, and counts a write as landed only from a
+complete history read-back. GitHub offers no conditional write, so a close
+that another actor
+made with another reason before the `gh` close call is reported and never
+overwritten, while a foreign close inside that call cannot be told from this
+one (preventive; no observed incident yet). Neither write invalidates the
+Discover hints, which age out or refresh like any other raw write.
 
 An alternate preference persists the answer and one `rework-requested`
 record for the one decision it names. The record carries a `handoff` with
