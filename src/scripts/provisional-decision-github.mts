@@ -373,9 +373,11 @@ export function createGithubProvisionalDecisionStore(input: {
    * be the active claim, checked against the history read right before the
    * post, and every write needs the authenticated GitHub account to be a
    * trusted marker actor, because the planner ignores a marker from any other
-   * account. The appends carry no claim of their own, and the rework-authored
-   * append needs the claim released, so neither it nor the decision
-   * transitions (which leave this unset) check the claim.
+   * account. The appends carry no claim of their own, so this is the claim an
+   * answer or record append is checked against. The rework-authored append
+   * needs the claim released and refuses while any claim is active, whether or
+   * not this is set; the decision transitions leave it unset and check neither
+   * the claim nor the account.
    */
   readonly coordinationClaim?: {
     readonly claimId: string;

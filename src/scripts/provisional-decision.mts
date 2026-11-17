@@ -1813,7 +1813,9 @@ export interface ProvisionalResolutionStore extends ProvisionalDecisionStore {
    * that the issue is still open and that its title and body still match
    * (`bodySha256` is the lowercase SHA-256 hex of the body's UTF-8 bytes), so a
    * close or an edit after the final plan read cannot take a record. The
-   * planner re-reads just before, and holds when this throws.
+   * planner plans this record only once the coordination claim is released, so
+   * a store also refuses while a claim is active. The planner re-reads just
+   * before, and holds when this throws.
    */
   appendReworkAuthoredBody(
     recordId: string,

@@ -1021,8 +1021,8 @@ command runs it for a request of type `resolve`. That request names the
 coordination claim (`claimId`, `agentId`, `branch`), the decisions of the
 current bundle (`decisionGenerations`), and optionally what the user did
 (`input`) with the digest it answered (`answeredPresentationSha256`, required
-with an input: echo the digest a dry run reported) and the later results that
-relied on the prior ones (`downstreamResults`). A dry run
+when the input answers: echo the digest a dry run reported) and the later
+results that relied on the prior ones (`downstreamResults`). A dry run
 reports the next step and `needsUserAnswer`, and the presentation and its
 digest when there is one. `--apply` without an answer only releases the
 coordination claim, so run the dry run first. The
