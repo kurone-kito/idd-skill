@@ -95,8 +95,8 @@ routing:
    check runs before step 2, so an authoring-held roadmap is never routed
    into step 2's traversal. If it carries
    `labels.blockedByHumanLabelName` (default `status:blocked-by-human`),
-   `labels.needsDecisionLabelName` (default `status:needs-decision`; not
-   for a non-roadmap A3 `decisionSource`),
+   `labels.needsDecisionLabelName` (default `status:needs-decision`; no
+   stop for a non-roadmap A3 `decisionSource`),
    `labels.authoringOnlyLabelName` (default `status:authoring-only`), or
    `autoDecide.confirmationLabelName` (default
    `status:needs-confirmation`, any case), also stop without claiming:
@@ -399,7 +399,7 @@ continues to A2 still unions that root. Then rank as in A4 Step 2.
 ## A3 — Filter to ready-to-start
 
 A4 Step 1.5's pre-scan, not A3, evaluates active-claim eligibility.
-An all-claimed set exits through Step 1's exhaustion-exit routing,
+An all-claimed set exits via Step 1's exhaustion-exit routing,
 never A3's zero-survivor decision tree below.
 
 From A2, keep only issues that satisfy **all** of the following:
