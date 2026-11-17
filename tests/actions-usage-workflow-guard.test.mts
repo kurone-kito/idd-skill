@@ -1802,15 +1802,19 @@ function shellQuoteEnd(line: string, start: number): number {
  *
  * A quoted span with no whitespace or `;&|`, an empty one included, is
  * unquoted in place, so `"node" --test`, `node '--test'`, and `node --te""st`
- * all still match. The rest of the line is kept verbatim from a backtick,
- * from a `$'...'` or `$"..."` quote, from a double-quoted span with a `$(`,
- * backtick, or `${{` in it, and from a quote that never closes.
+ * all still match. The whole line is kept verbatim when it holds a `${{`
+ * (GitHub Actions substitutes the expression, quotes and all, before the
+ * shell reads the line). The rest of the line is kept verbatim from a
+ * backtick, from a `$'...'` or `$"..."` quote, from a double-quoted span with
+ * a `$(` or backtick in it, and from a quote that never closes.
  *
  * Known limits. These fail loudly, as a false rejection: text that stays
  * unquoted (`echo node --test`, a heredoc body); a quoted argument of any
- * command but `echo` (`grep -q "node --test" f`); a comment after a kept span
- * or a backtick (`bash -c 'echo ok # node --test'`); and text in an
- * `echo "${{ ... }}"` span. These pass, as a false acceptance, although they
+ * command but `echo` (`grep -q "node --test" f`), which includes an `echo`
+ * after `then` or `{` or after a `>&` redirection, because the first word
+ * since the last `;`, `&`, `|`, or `(` names the command; a `#` inside a kept
+ * quoted span or after a backtick (`bash -c 'echo ok # node --test'`); and
+ * any line with a `${{`. These pass, as a false acceptance, although they
  * can run the test runner: a string that `echo` pipes into a shell or writes
  * to a script file (`echo 'node --test' | bash`); a string that `echo` builds
  * into a variable that runs later (`x=$(echo 'node --test'); eval "$x"`); a
@@ -1821,6 +1825,9 @@ function shellQuoteEnd(line: string, start: number): number {
  * reads one line alone, so it reads such a line as if it started outside a
  * quote. */
 function executableShellText(line: string): string {
+  if (line.includes('${{')) {
+    return line;
+  }
   let text = '';
   let index = 0;
   let afterEscape = false;
@@ -1855,7 +1862,7 @@ function executableShellText(line: string): string {
       return text + line.slice(index);
     }
     const body = line.slice(index + 1, end);
-    if (char === '"' && /\$\(|`|\$\{\{/.test(body)) {
+    if (char === '"' && /\$\(|`/.test(body)) {
       return text + line.slice(index);
     }
     const command = /^\s*(\S+)/.exec(text.slice(commandStart))?.[1] ?? '';
@@ -2083,6 +2090,7 @@ test('the lint job node --test guard ignores quoted and commented text but still
     'echo ok # node --test',
     'echo "" "node --test"',
     'echo "a" "node --test" "b"',
+    'echo "a b" "node --test"',
     'echo "" # node --test',
     "echo 'node --test'",
     'echo "node --test" # node --test',
@@ -2138,12 +2146,23 @@ test('the lint job node --test guard ignores quoted and commented text but still
     'for CMD in \'node --test\'; do eval "$CMD"; done',
     'export CMD="node --test"',
     'grep -q "node --test" tests/x',
+    "echo ok; bash -c 'node --test'",
+    "echo ok && bash -c 'node --test'",
+    "echo ok | bash -c 'node --test'",
+    "echo $(bash -c 'node --test')",
+    'echo=\'node --test\'; eval "$echo"',
     // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
     "${{ 'node --test tests/' }}",
     // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
     "\\${{ 'node --test tests/' }}",
     // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
     'echo "${{ \'node --test\' }}"',
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
+    "echo ${{ '; node --test' }}",
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
+    "echo \\${{ '; node --test' }}",
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
+    "echo 'x ${{ '''' }} ; node --test ; echo 'y'",
     // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
     "echo ok && ${{ 'node --test tests/' }}",
     // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
