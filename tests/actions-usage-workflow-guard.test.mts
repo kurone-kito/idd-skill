@@ -1796,27 +1796,30 @@ function shellQuoteEnd(line: string, start: number): number {
  * - An unquoted `#` at the start of a word drops the rest of the line. The
  *   word start is read from the original line, never from the output.
  * - A quoted span that holds whitespace or `;&|` is only an argument and
- *   becomes one space. A non-empty span without them is unquoted in place, so
- *   `"node" --test` and `node '--test'` still match.
+ *   becomes one space. Any other span, an empty one included, is unquoted in
+ *   place, so `"node" --test`, `node '--test'`, and `node --te""st` all
+ *   still match.
  * - The rest of the line is kept verbatim, comments included, from a quote
  *   after a shell-string introducer on the line, from a `$'...'` or `$"..."`
  *   quote, from a double-quoted span with a `$(` or backtick substitution,
- *   and from a quote that never closes. Each of them can run code, and the
- *   guard fails closed.
+ *   from an unquoted backtick, from an unquoted `${{`, and from a quote that
+ *   never closes. Each of them can run code (GitHub Actions substitutes a
+ *   `${{ ... }}` expression, whose string literals are single-quoted, before
+ *   the shell reads the line), and the guard fails closed.
  *
  * Known limits. These fail loudly, as a false rejection: text that stays
  * unquoted (`echo node --test`, a heredoc body), a quote that only follows an
- * introducer (`grep -c "node --test"`), and a comment after a kept span
- * (`bash -c 'echo ok # node --test'`). These pass, as a false acceptance,
- * although they can run the test runner: a code string that no introducer
- * names (`node -e`, `ssh host '...'`, `watch`, `env -S`, a non-bash `shell:`
- * step), a command string kept in a variable and run later (`CMD='node
- * --test'; eval "$CMD"`), a string piped into a shell or written to a script
- * file, a `#` inside `${...}`, a quoted variable glued to `node`, a comment
- * that ends in a backslash (the backslash-newline join runs first, as it
- * always did), and a command between two quotes on a line that starts inside
- * a quote opened on an earlier line. The scan reads one line alone, so it
- * reads such a line as if it started outside a quote. */
+ * introducer (`grep -c "node --test"`), and a comment after a kept span or
+ * an unquoted backtick (`bash -c 'echo ok # node --test'`). These pass, as a
+ * false acceptance, although they can run the test runner: a code string that
+ * no introducer names (`node -e`, `ssh host '...'`, `watch`, `env -S`, a
+ * non-bash `shell:` step), a command string kept in a variable and run later
+ * (`CMD='node --test'; eval "$CMD"`), a string piped into a shell or written
+ * to a script file, a `#` inside `${...}`, a quoted variable glued to `node`,
+ * a comment that ends in a backslash (the backslash-newline join runs first,
+ * as it always did), and a command between two quotes on a line that starts
+ * inside a quote opened on an earlier line. The scan reads one line alone, so
+ * it reads such a line as if it started outside a quote. */
 function executableShellText(line: string): string {
   let text = '';
   let index = 0;
@@ -1835,6 +1838,9 @@ function executableShellText(line: string): string {
     if (char === '#' && startsWord) {
       break;
     }
+    if (char === '`' || line.startsWith('${{', index)) {
+      return text + line.slice(index);
+    }
     if (char !== '"' && char !== "'") {
       text += char;
       index += 1;
@@ -1847,12 +1853,12 @@ function executableShellText(line: string): string {
     const body = line.slice(index + 1, end);
     if (
       text.endsWith('$') ||
-      SHELL_STRING_INTRODUCER.test(text) ||
+      SHELL_STRING_INTRODUCER.test(text.replaceAll('\\', '')) ||
       (char === '"' && /\$\(|`/.test(body))
     ) {
       return text + line.slice(index);
     }
-    text += /^[^\s;&|]+$/.test(body) ? body : ' ';
+    text += /^[^\s;&|]*$/.test(body) ? body : ' ';
     index = end + 1;
   }
   return text;
@@ -2120,6 +2126,15 @@ test('the lint job node --test guard ignores quoted and commented text but still
     "bash -c 'node --test tests/'",
     'echo "x" && node --test tests/',
     'echo `node --test`',
+    'echo `echo a #b` ; node --test',
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
+    "${{ 'node --test tests/' }}",
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
+    "${{ runner.os == 'Windows' && 'node.exe --test tests/' || 'node --test tests/' }}",
+    'node --te""st',
+    'n""ode --test',
+    "bash -\\c 'node --test tests/'",
+    "ev\\al 'node --test'",
     'echo "$(node --test)"',
     'echo "$(echo "x"; node --test)"',
     'echo "`node --test`"',
