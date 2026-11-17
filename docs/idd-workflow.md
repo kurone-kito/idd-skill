@@ -1012,6 +1012,144 @@ apply to needs-decision sources only, and the no-waiver statement above
 applies to every class, including these two. This exception is recorded by
 [issue #4528](https://github.com/kurone-kito/idd-skill/issues/4528).
 
+### Resolving a confirmation-pending source
+
+This applies to a needs-decision source whose current bundle has verified
+completed work for every decision. The `runProvisionalResolution` function
+of `provisional-decision.mts` runs it; the `idd-provisional-decision`
+command does not call it yet. It reads no opt-in switch, so confirmation
+and rework still work after `dangerouslyAutoDecide` is turned off.
+
+1. **Coordination claim.** Take the review under a fresh claim on the
+   source, posted through the normal claim protocol with a branch of the
+   form `issue/<number>-<slug>`. It is separate from implementation
+   execution: it needs no worktree. The request names the claim's ID, agent,
+   and branch, and all three must match the active claim marker. The
+   resolution refuses when another claim is active or when the active claim
+   is one that the bundle's records name as having run the implementation. An
+   uncertain release of an earlier coordination claim is reconciled first,
+   because that claim stays active.
+2. **Present.** A dry run reports the presentation: for every decision its
+   question, the selected option, the verified result, and each alternative
+   with its consequences and the rework it implies, plus a SHA-256 digest
+   of that presentation, the next step, and `needsUserAnswer`. When it is
+   true, the user has not answered yet: show the presentation and ask
+   `Were the implemented choices above acceptable? [y/N]`. When it is
+   false, the user has already given an answer (including a no or an
+   abort), a persisted answer resumes, or a finishing step runs, so ask
+   nothing.
+3. **Read the actual answer.** The input adapter reads one reported event
+   and never creates input; a pending question produces no answer by itself.
+   An answer must also carry the digest it answered, so a changed source,
+   bundle, or result makes it stale.
+4. **Persist, close, release.** For an affirmative answer the helper
+   appends the answer comment (a one-line note, then its JSON), reads it
+   back, appends one `confirmed` record for each decision the answer applies
+   to, replays the history to show them, closes the source as completed once
+   every decision of the bundle is confirmed, reads the closed state back,
+   and releases the coordination claim. A source that is closed for any other
+   reason is a recovery hold, not a confirmed close. Each write is preceded
+   by a second fresh plan that must name the same step, and followed by a
+   fresh read that must show it.
+
+| Reported input                                                      | Verdict                                   |
+| ------------------------------------------------------------------- | ----------------------------------------- |
+| `y` or `yes` typed by a user at an interactive prompt               | Accepted                                  |
+| A user's conversation reply that the agent reads as acceptance      | Accepted, with the reply kept verbatim    |
+| `option <id> <rationale>` or a reply naming a recorded alternative  | Alternate preference for one decision     |
+| `n`, Enter, EOF, cancellation, timeout, missing or unclear input    | Pending; the claim is released, no record |
+| A generic request to resolve, or a preselected option               | Pending                                   |
+| Assistant-written user dialogue, agent-fed or piped terminal input  | Pending; origin is not the user           |
+| A prior answer that no longer matches the bundle, source, or result | Ignored; it is stale or partial           |
+
+An answer comment keeps the canonical shape described above and adds the
+question that was asked and the decisions it applies to, so one answer can
+confirm some decisions of a bundle while another receives a different
+preference. The reply is stored verbatim, with its whitespace. An at-sign in
+it, or in a source title, is JSON-escaped in every comment the flow writes,
+so none notifies anybody. The first valid answer in history wins, and a
+valid persisted answer or confirmation resumes without another prompt; only
+an answer that carries the canonical question and was recorded while a
+coordination claim was active, never one the implementation session wrote on
+its own or one posted between two claims, is reused (preventive; no observed
+incident yet). A later input that agrees
+with it, or none, resumes it. A conflicting input is refused, because a
+confirmation cannot be undone: an N or a conversational no, Enter, EOF,
+cancellation, an unclear reply, or another option. The same refusal applies
+after the confirmation or rework request record is stored, and before any
+write when any targeted decision already has one. While another targeted
+decision is still undecided, an N, an abort, or an unclear reply only keeps
+that decision pending, unless a valid persisted answer already covers it.
+A resumed request should name only the undecided decisions, because an
+accepted or alternate reading is compared with every persisted response of
+the decisions it names. A generic request to resolve is not a conflict.
+
+Agents follow an input-boundary rule: never write the user's reply, and
+never feed `y` to a prompt the agent is waiting on (preventive; no observed
+incident yet). A TTY only shows that a prompt can be displayed. It does not
+authenticate anyone, and the adapter does not try to identify who supplied
+the bytes; a deliberately dishonest authorized caller is outside the
+guarantee.
+
+Every next step is derived from fresh reads, so a crash or uncertain write
+resumes exactly the remaining step and never executes the implementation
+again (preventive; no observed incident yet). A write that throws is checked
+by one fresh read: one whose own content is in place (a trusted, unedited
+comment with the same content, or a source closed as completed) is counted
+and reported in `warnings`, and one that is still absent is a recovery hold,
+not a retry. `warnings` also names downstream results that could not be
+recorded. The close step passes what the plan evaluated: the open state, the
+title and the SHA-256 hex digest of the body's UTF-8 bytes, and the
+coordination claim that must still be active. A store should verify them as
+far as its API allows, so a close never overwrites an intervening close and
+never runs under a claim that was taken over; the planner re-reads just
+before the write. A record step is compared by its whole content before it is
+written. Every refusal and recovery hold keeps the coordination claim until
+its cause is fixed. If the confirmation is stored but the close failed, only
+the close resumes. If the close succeeded but the claim release failed, only
+the release resumes and the issue is not closed again. A pending outcome
+records nothing new and only releases the claim; it reports
+`rework-handoff-recorded` when a rework request for the bundle is already
+stored. A release that a fresh read cannot
+confirm is reported as `reconciled` with `nextStep` set to `release-claim`,
+and the next run repeats it while the claim is still active; `reconciled`
+without a `nextStep` means everything is already done. A refusal with action
+`none` means nothing can be resolved yet and keeps the claim, so release it
+with the normal unclaim.
+
+An alternate preference persists the answer and one `rework-requested`
+record for the one decision it names. The record carries a `handoff` with
+a stable identity shared by the bundle, the authoring set and session
+preallocated for the rework, the source issue as the anchor, the completed
+results it affects, and any downstream results the recorder knows. The
+downstream results are kept in the answer too, so a retry recovers them, and
+a later request of the bundle adds its own to the earlier ones; read the
+union of the bundle's handoffs. It grants no publication permission and
+never reuses an earlier set, and replay refuses a handoff that does. If the
+handoff write fails, the coordination claim is kept as a recovery hold
+(preventive; no observed incident yet) and a retry reuses the persisted
+answer. After the write succeeds, the claim is released before the
+authoring pass acquires ownership, unless the source was closed meanwhile,
+which is a recovery hold because the rework needs the source open. The same
+request cannot produce another handoff or erase an earlier choice.
+
+The `rework-authored` transition is a separate guarded request. It needs
+the coordination claim to be released and to be one that recorded a rework
+request of the bundle, a source that the authoring pass already rewrote, an
+authoring owner that is trusted, fresh, and matches the handoff's set,
+session, and anchor, an audited roadmap on the same source, and real child
+issues wired under it. The evidence names the title and body digest of the
+source as it was when the audit began, which the caller captures before it
+reads the roadmap and its children, and they must still match the source
+when the record is written, and the store appends it only while that still
+holds, so a source closed or edited after the final check holds the run and
+records nothing. The source must still be open: a closed source is a recovery
+hold, while an authoring that is already recorded stays recoverable after the
+roadmap closes. It only appends the record. It never releases the authoring
+hold, and unknown ownership or wiring refuses it. It is
+terminal only when every decision of the bundle is confirmed or has its
+record.
+
 ### Provisional plan assessment (A4 and A4.5)
 
 This applies only to a needs-decision source, and only when the trusted

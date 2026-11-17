@@ -9,6 +9,7 @@ import { type IddConfig, loadIddConfig } from './idd-config.mts';
 import {
   parseClaimComment,
   parseForcedHandoffComment,
+  parseReleaseComment,
 } from './marker-helpers.mts';
 import {
   applyClaimEvent,
@@ -22,10 +23,15 @@ import {
 } from './protocol-helpers.mts';
 import { buildVerifiedClaimLineage } from './provisional-claim-lineage.mts';
 import {
+  PROVISIONAL_DECISION_ANSWER_MARKER,
+  PROVISIONAL_DECISION_ANSWER_NOTE,
+  type ProvisionalDecisionAnswer,
   type ProvisionalDecisionComment,
   type ProvisionalDecisionRecord,
   type ProvisionalDecisionReplayResult,
   type ProvisionalDecisionSource,
+  type ProvisionalReworkHandoff,
+  parseProvisionalDecisionAnswerComment,
   parseProvisionalDecisionRecordComment,
   type ReplayedProvisionalDecision,
   replayProvisionalDecisionHistory,
@@ -275,6 +281,9 @@ function plannerConfig(store: ProvisionalDecisionStore): IddConfig | null {
 function resolveClaimFold(
   history: ProvisionalDecisionHistoryRead,
   store: ProvisionalDecisionStore,
+  onNoActiveClaim?: (
+    lineage: readonly VerifiedProvisionalDecisionClaim[],
+  ) => void,
 ): ClaimFoldVerification | null {
   const config = plannerConfig(store);
   const trustedLogins = resolveTrustedMarkerActors({ config }).actors.map(
@@ -438,7 +447,10 @@ function resolveClaimFold(
   ) {
     return { failure: 'canonical claim trace and lineage disagree' };
   }
-  if (!trace.activeClaim) return null;
+  if (!trace.activeClaim) {
+    onNoActiveClaim?.(lineage);
+    return null;
+  }
   const lastClaim = lineage.at(-1);
   if (
     !lastClaim ||
@@ -1731,4 +1743,1969 @@ export async function runProvisionalDecisionCommand(
     recordId: initialPlan.candidateRecord.recordId,
     commentUrl: append.record.url,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Resolution of an execution-complete, confirmation-pending source (#4536).
+//
+// A separate entry point from `runProvisionalDecisionCommand`: it shares the
+// replay and claim machinery above but leaves the existing request union and
+// store untouched. Every step is derived from fresh reads, so a crash, an
+// uncertain write, or a failed close resumes exactly the remaining step.
+// ---------------------------------------------------------------------------
+
+/** The question every resolution presents and every answer record retains. */
+export const PROVISIONAL_CONFIRMATION_QUESTION =
+  'Were the implemented choices above acceptable? [y/N]';
+
+export interface ProvisionalDecisionSourceStateRead {
+  readonly state: 'open' | 'closed';
+  /** GitHub's close reason when closed, or null while open. */
+  readonly stateReason: string | null;
+}
+
+/** What a write must still find true of the source issue. */
+export interface ProvisionalResolutionSourceExpectation {
+  readonly state: 'open';
+  readonly title: string;
+  readonly bodySha256: string;
+}
+
+/** What a close must still find true; see `closeSourceIssue`. */
+export interface ProvisionalResolutionCloseExpectation
+  extends ProvisionalResolutionSourceExpectation {
+  /** The coordination claim that must still be the active claim. */
+  readonly claim: {
+    readonly claimId: string;
+    readonly agentId: string;
+    readonly branch: string;
+  };
+}
+
+/** The writes a resolution needs on top of the decision store. */
+export interface ProvisionalResolutionStore extends ProvisionalDecisionStore {
+  readSourceState(): Promise<ProvisionalDecisionSourceStateRead>;
+  /** Append an agent-answer comment, or return the identical existing one. */
+  appendAnswerBody(body: string): Promise<{
+    readonly result: 'created' | 'existed';
+    readonly record: ProvisionalDecisionStoredRecord;
+  }>;
+  /**
+   * Close the source issue with the completed reason, but only while it is
+   * still in the state the plan evaluated; otherwise throw without closing. A
+   * store checks, as far as its API allows, that the issue is still open (so
+   * an intervening close with another reason is never overwritten), that its
+   * title and body still match (`bodySha256` is the lowercase SHA-256 hex of
+   * the body's UTF-8 bytes), and that the named coordination claim is still
+   * the active claim (so a takeover after the final plan read cannot close
+   * under a stale claim). It can narrow the window further, for example by
+   * comparing the issue's update time; the planner re-reads just before.
+   */
+  closeSourceIssue(
+    expected: ProvisionalResolutionCloseExpectation,
+  ): Promise<void>;
+  /**
+   * Append the `rework-authored` record, or return the identical existing one,
+   * but only while the source is still the one the authoring audit described;
+   * otherwise throw without writing. A store checks, as far as its API allows,
+   * that the issue is still open and that its title and body still match
+   * (`bodySha256` is the lowercase SHA-256 hex of the body's UTF-8 bytes), so a
+   * close or an edit after the final plan read cannot take a record. The
+   * planner re-reads just before, and holds when this throws.
+   */
+  appendReworkAuthoredBody(
+    recordId: string,
+    body: string,
+    expected: ProvisionalResolutionSourceExpectation,
+  ): Promise<{
+    readonly result: 'created' | 'existed';
+    readonly record: ProvisionalDecisionStoredRecord;
+  }>;
+  /** Post the unclaim marker of the coordination claim, per the claim protocol. */
+  releaseCoordinationClaim(claim: {
+    readonly claimId: string;
+    readonly agentId: string;
+    readonly branch: string;
+  }): Promise<void>;
+}
+
+/** Who produced an input event. Only a user-origin event can answer. */
+export type ConfirmationInputOrigin = 'user' | 'assistant' | 'tool' | 'unknown';
+
+export type ConfirmationTerminalEvent =
+  | { readonly kind: 'line'; readonly text: string }
+  | { readonly kind: 'eof' }
+  | { readonly kind: 'cancelled' };
+
+/** The agent's reading of a user's conversation reply. */
+export type ConfirmationInterpretation =
+  | { readonly response: 'accepted' }
+  | {
+      readonly response: 'rework';
+      readonly requestedOptionId: string;
+      readonly rationale: string;
+    }
+  | { readonly response: 'declined' }
+  | { readonly response: 'none' };
+
+/**
+ * An actual input event. A pending question never produces one by itself:
+ * the caller reports what the user did, and `none` or `timeout` mean the user
+ * did nothing.
+ */
+export type ConfirmationInput =
+  | {
+      readonly channel: 'terminal';
+      readonly origin: ConfirmationInputOrigin;
+      /** True only when a prompt was displayed to a person at a terminal. */
+      readonly interactive: boolean;
+      readonly event: ConfirmationTerminalEvent;
+    }
+  | {
+      readonly channel: 'conversation';
+      readonly origin: ConfirmationInputOrigin;
+      readonly message: string;
+      readonly interpretation: ConfirmationInterpretation;
+    }
+  | { readonly channel: 'timeout' }
+  | { readonly channel: 'none' };
+
+export type ConfirmationPendingReason =
+  | 'no-input'
+  | 'timeout'
+  | 'cancelled'
+  | 'eof'
+  | 'default-no'
+  | 'declined'
+  | 'unrecognized'
+  | 'generic-request'
+  | 'input-not-from-user'
+  | 'non-interactive-terminal';
+
+export type ConfirmationAnswer =
+  | {
+      readonly kind: 'accepted';
+      readonly channel: 'terminal' | 'conversation';
+      readonly answerText: string;
+    }
+  | {
+      readonly kind: 'rework';
+      readonly channel: 'terminal' | 'conversation';
+      readonly answerText: string;
+      readonly requestedOptionId: string;
+      readonly rationale: string;
+    }
+  | { readonly kind: 'pending'; readonly reason: ConfirmationPendingReason };
+
+const TERMINAL_REWORK_PATTERN = /^option\s+(\S+)\s+(\S.*)$/iu;
+
+function pending(reason: ConfirmationPendingReason): ConfirmationAnswer {
+  return { kind: 'pending', reason };
+}
+
+/**
+ * Read one input event as an answer. Only an interactive terminal line typed
+ * by a user (`y` or `yes`) or a user-origin conversation reply that the agent
+ * classified can accept. N, Enter, EOF, cancellation, a timeout, missing
+ * input, an unrecognized line, a non-user origin, and a terminal that showed
+ * no prompt all leave the source pending. The adapter never creates input.
+ *
+ * It does not identify who supplied the bytes: a TTY is a prompt capability,
+ * not authentication, and a dishonest authorized caller is outside the
+ * guarantee.
+ */
+// audit:ignore-dead-export: no production caller until the command and GitHub store wiring lands (follow-up of roadmap #4528, not yet filed); tests lock the input rules until then
+export function readConfirmationAnswer(
+  input: ConfirmationInput | null | undefined,
+  alternativeIds: readonly string[],
+): ConfirmationAnswer {
+  if (!input || input.channel === 'none') return pending('no-input');
+  if (input.channel === 'timeout') return pending('timeout');
+  if (input.origin !== 'user') return pending('input-not-from-user');
+  if (input.channel === 'conversation') {
+    // The actual reply is kept verbatim; trimming serves only the checks.
+    const message = input.message;
+    if (message.trim() === '') return pending('no-input');
+    const reading = input.interpretation;
+    if (reading.response === 'accepted') {
+      return { kind: 'accepted', channel: 'conversation', answerText: message };
+    }
+    if (reading.response === 'declined') return pending('declined');
+    if (reading.response === 'rework') {
+      if (
+        !alternativeIds.includes(reading.requestedOptionId) ||
+        reading.rationale.trim() === ''
+      ) {
+        return pending('unrecognized');
+      }
+      return {
+        kind: 'rework',
+        channel: 'conversation',
+        answerText: message,
+        requestedOptionId: reading.requestedOptionId,
+        rationale: reading.rationale.trim(),
+      };
+    }
+    return pending('generic-request');
+  }
+  if (!input.interactive) return pending('non-interactive-terminal');
+  const event = input.event;
+  if (event.kind === 'eof') return pending('eof');
+  if (event.kind === 'cancelled') return pending('cancelled');
+  const text = event.text.trim();
+  if (text === '') return pending('default-no');
+  if (/^(?:y|yes)$/iu.test(text)) {
+    return { kind: 'accepted', channel: 'terminal', answerText: event.text };
+  }
+  if (/^(?:n|no|nope)$/iu.test(text)) return pending('declined');
+  const rework = TERMINAL_REWORK_PATTERN.exec(text);
+  if (rework?.[1] && rework[2] && alternativeIds.includes(rework[1])) {
+    return {
+      kind: 'rework',
+      channel: 'terminal',
+      answerText: event.text,
+      requestedOptionId: rework[1],
+      rationale: rework[2].trim(),
+    };
+  }
+  return pending('unrecognized');
+}
+
+export interface ProvisionalResolutionPresentation {
+  readonly question: string;
+  readonly source: {
+    readonly repository: string;
+    readonly issueNumber: number;
+    readonly title: string;
+    readonly bodySha256: string;
+  };
+  readonly bundleGeneration: number;
+  readonly decisions: readonly {
+    readonly decisionGeneration: number;
+    readonly status: ReplayedProvisionalDecision['status'];
+    readonly question: string;
+    readonly selectedOption: JsonRecord;
+    /** Each alternative carries its consequences and the rework it implies. */
+    readonly alternatives: readonly JsonRecord[];
+    readonly result: JsonRecord;
+  }[];
+}
+
+type JsonRecord = Record<string, unknown>;
+
+interface ResolutionRequestBase {
+  readonly repository: string;
+  readonly issueNumber: number;
+  /** The coordination claim this session holds for the operator-directed review. */
+  readonly claimId: string;
+  /** The agent and branch named by that claim's marker, checked with its ID. */
+  readonly agentId: string;
+  readonly branch: string;
+  /** Caller-verified evidence for every rework-authored record in history. */
+  readonly verifiedReworkRoadmaps: readonly VerifiedProvisionalReworkRoadmap[];
+}
+
+export interface ProvisionalResolveRequest extends ResolutionRequestBase {
+  readonly type: 'resolve';
+  /** The decision generations of the current bundle this answer applies to. */
+  readonly decisionGenerations: readonly number[];
+  /** What the user actually did, or nothing. Never an assistant assertion. */
+  readonly input?: ConfirmationInput | null;
+  /** SHA-256 of the presentation the input answered. */
+  readonly answeredPresentationSha256?: string;
+  /** Later work that relied on the prior results, for a rework handoff. */
+  readonly downstreamResults?: readonly string[];
+}
+
+/** Caller-verified authoring facts a rework-authored record needs. */
+export interface ProvisionalReworkAuthoringEvidence {
+  readonly owner: {
+    readonly trusted: boolean;
+    readonly fresh: boolean;
+    readonly setId: string;
+    readonly sessionId: string;
+    readonly anchor: string;
+  };
+  readonly roadmap: {
+    readonly audited: boolean;
+    /**
+     * The title and body digest of the source as it was when the audit began,
+     * captured by the caller before it read the roadmap and its children. A
+     * copy taken from a later read would make the freshness check meaningless.
+     */
+    readonly auditedSource: {
+      readonly title: string;
+      readonly bodySha256: string;
+    };
+    readonly issueNumber: number;
+    readonly markerId: string;
+    readonly url: string;
+    readonly publishedCommentId: string;
+    readonly publishedAt: string;
+  };
+  /** The real child issues of the rework roadmap, each wired under it. */
+  readonly children: readonly {
+    readonly issueNumber: number;
+    readonly wired: boolean;
+  }[];
+}
+
+export interface ProvisionalReworkAuthoredRequest
+  extends ResolutionRequestBase {
+  readonly type: 'rework-authored';
+  readonly authoring: ProvisionalReworkAuthoringEvidence;
+}
+
+export type ProvisionalResolutionRequest =
+  | ProvisionalResolveRequest
+  | ProvisionalReworkAuthoredRequest;
+
+export type ProvisionalResolutionStepKind =
+  | 'append-answer'
+  | 'append-confirmation'
+  | 'append-rework-request'
+  | 'append-rework-authored'
+  | 'close-source'
+  | 'release-claim';
+
+export type ProvisionalResolutionOutcome =
+  | 'confirmed-closed'
+  | 'pending-released'
+  | 'rework-handoff-recorded'
+  | 'rework-authored';
+
+export interface ProvisionalResolutionResult {
+  readonly state: 'planned' | 'applied' | 'reconciled' | 'refused';
+  readonly action?: ProvisionalDecisionAction;
+  readonly outcome?: ProvisionalResolutionOutcome;
+  readonly reason?: string;
+  /** The step a dry run would take next. */
+  readonly nextStep?: ProvisionalResolutionStepKind;
+  /** The writes this run completed, in order. */
+  readonly steps: readonly ProvisionalResolutionStepKind[];
+  readonly recordIds: readonly string[];
+  readonly presentation?: ProvisionalResolutionPresentation;
+  readonly presentationSha256?: string;
+  /**
+   * On a planned result: true when the user still has to be asked, false when
+   * the step resumes a persisted answer or finishes the lifecycle, so the
+   * presentation is context and no prompt is needed.
+   */
+  readonly needsUserAnswer?: boolean;
+  /** Notes about writes that threw but were proven by a fresh read, or ignored input. */
+  readonly warnings?: readonly string[];
+}
+
+interface ClaimIdentity {
+  readonly claimId: string;
+  readonly agentId: string;
+  readonly branch: string;
+}
+
+type ResolutionStep =
+  | {
+      readonly kind: 'append-answer';
+      readonly body: string;
+    }
+  | {
+      readonly kind: 'append-confirmation' | 'append-rework-request';
+      readonly record: ProvisionalDecisionRecord;
+    }
+  | {
+      readonly kind: 'append-rework-authored';
+      readonly record: ProvisionalDecisionRecord;
+      /** The audited source the record may be appended under. */
+      readonly expected: ProvisionalResolutionSourceExpectation;
+    }
+  | {
+      readonly kind: 'close-source';
+      /** What the plan evaluated; the store closes only while it still holds. */
+      readonly expected: ProvisionalResolutionCloseExpectation;
+    }
+  | {
+      readonly kind: 'release-claim';
+      readonly claim: ClaimIdentity;
+      readonly outcome: ProvisionalResolutionOutcome;
+      readonly reason?: string;
+    };
+
+type ResolutionPlan =
+  | {
+      readonly kind: 'step';
+      readonly step: ResolutionStep;
+      readonly presentation?: ProvisionalResolutionPresentation;
+      readonly presentationSha256?: string;
+      /** True when the user still has to be asked; false on a resume step. */
+      readonly needsUserAnswer?: boolean;
+      readonly warnings?: readonly string[];
+    }
+  | {
+      readonly kind: 'done';
+      readonly outcome: ProvisionalResolutionOutcome;
+      readonly reason: string;
+    }
+  | { readonly kind: 'refused'; readonly result: ProvisionalResolutionResult };
+
+const ANSWER_MARKER = PROVISIONAL_DECISION_ANSWER_MARKER;
+const PREVIEW_ANSWER_ID = '900000000000001';
+const PREVIEW_RECORD_ID = '900000000000002';
+
+function resolutionRefusal(
+  action: Exclude<ProvisionalDecisionAction, 'reconcile'>,
+  reason: string,
+  extra: Partial<ProvisionalResolutionResult> = {},
+): ResolutionPlan {
+  return {
+    kind: 'refused',
+    result: {
+      state: 'refused',
+      action,
+      reason,
+      steps: [],
+      recordIds: [],
+      ...extra,
+    },
+  };
+}
+
+/** The answer's identity without the source's update time, which any edit moves. */
+function answerStepDigest(body: string): string {
+  const parsed = parseProvisionalDecisionAnswerComment(body);
+  if (!parsed.ok) return bodySha256(body);
+  const { source, ...rest } = parsed.answer;
+  const { updatedAt: _updatedAt, ...snapshot } = source.snapshot;
+  return bodySha256(digestJson({ ...rest, source: { ...source, snapshot } }));
+}
+
+function stepKey(step: ResolutionStep): string {
+  switch (step.kind) {
+    case 'append-answer':
+      return `answer:${answerStepDigest(step.body)}`;
+    case 'close-source':
+      return 'close';
+    case 'release-claim':
+      return `release:${step.claim.claimId}`;
+    default:
+      return `record:${step.record.recordId}:${recordStepDigest(step.record)}`;
+  }
+}
+
+/** The record's whole content except the source update time any edit moves. */
+function recordStepDigest(record: ProvisionalDecisionRecord): string {
+  const { updatedAt: _updatedAt, ...snapshot } = record.source.snapshot;
+  return bodySha256(
+    digestJson({ ...record, source: { ...record.source, snapshot } }),
+  );
+}
+
+/** Key order by code unit, so the digest is the same in every process. */
+function digestJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(digestJson).join(',')}]`;
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>).sort(
+      ([left], [right]) => (left < right ? -1 : left > right ? 1 : 0),
+    );
+    return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${digestJson(item)}`).join(',')}}`;
+  }
+  return JSON.stringify(value) ?? 'null';
+}
+
+function presentationSha256(
+  presentation: ProvisionalResolutionPresentation,
+): string {
+  return bodySha256(digestJson(presentation));
+}
+
+function uuidFromSeed(seed: string): string {
+  const hex = createHash('sha256').update(seed, 'utf8').digest('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+}
+
+function asRecord(value: unknown): JsonRecord {
+  return (value ?? {}) as JsonRecord;
+}
+
+function buildPresentation(
+  decisions: readonly ReplayedProvisionalDecision[],
+  source: ProvisionalDecisionSource,
+  bundleGeneration: number,
+): ProvisionalResolutionPresentation {
+  const ordered = [...decisions].sort(
+    (left, right) => left.decisionGeneration - right.decisionGeneration,
+  );
+  return {
+    question: PROVISIONAL_CONFIRMATION_QUESTION,
+    source: {
+      repository: source.repository,
+      issueNumber: source.issueNumber,
+      title: source.snapshot.title,
+      bodySha256: source.snapshot.bodySha256,
+    },
+    bundleGeneration,
+    decisions: ordered.map((decision) => {
+      const selection = decision.selection.event;
+      const alternatives = (selection.feasibleAlternatives ??
+        []) as JsonRecord[];
+      return {
+        decisionGeneration: decision.decisionGeneration,
+        status: decision.status,
+        question: String(selection.question),
+        selectedOption: asRecord(selection.selectedOption),
+        alternatives: alternatives.map((alternative) => ({
+          id: alternative.id,
+          description: alternative.description,
+          consequences: alternative.consequences,
+          reworkImpact: alternative.reversalOrMigration,
+        })),
+        result: asRecord(decision.workCompleted?.event.result),
+      };
+    }),
+  };
+}
+
+function presentedBundleFor(
+  decisions: readonly ReplayedProvisionalDecision[],
+): ProvisionalDecisionAnswer['presentedBundle'] {
+  return [...decisions]
+    .sort((left, right) => left.decisionGeneration - right.decisionGeneration)
+    .map((decision) => {
+      const selection = decision.selection.event;
+      return {
+        decisionGeneration: decision.decisionGeneration,
+        question: String(selection.question),
+        selectedOptionId: String(asRecord(selection.selectedOption).id),
+        feasibleAlternativeIds: (
+          (selection.feasibleAlternatives ?? []) as JsonRecord[]
+        )
+          .map((alternative) => String(alternative.id))
+          .sort(),
+        workCompletedRecordId: decision.workCompleted?.recordId ?? '',
+        result: asRecord(decision.workCompleted?.event.result),
+      };
+    });
+}
+
+interface ResolutionContext {
+  readonly request: ProvisionalResolutionRequest;
+  readonly history: ProvisionalDecisionHistoryRead;
+  readonly source: ProvisionalDecisionSource;
+  readonly sourceState: ProvisionalDecisionSourceStateRead;
+  readonly verifiedAt: string;
+  readonly verifiedWork: readonly VerifiedProvisionalWork[];
+  readonly lineage: readonly VerifiedProvisionalDecisionClaim[];
+  readonly active: ClaimIdentity | null;
+  /** The claim that was active once the comment at `index` had been posted. */
+  readonly activeClaimAt: (index: number) => ClaimIdentity | null;
+}
+
+function replayContext(
+  context: ResolutionContext,
+  extra: readonly ProvisionalDecisionHistoryComment[] = [],
+  options: {
+    readonly currentSource?: ProvisionalDecisionSource;
+    readonly evidence?: readonly VerifiedProvisionalReworkRoadmap[];
+  } = {},
+): ProvisionalDecisionReplayResult {
+  return replayProvisionalDecisionHistory({
+    comments: [...context.history.comments, ...extra].map((comment) => ({
+      ...comment,
+      trustedAuthor: comment.trustedAuthor === true,
+      edited: comment.edited !== false,
+    })),
+    completeHistory: context.history.complete === true,
+    currentSource: options.currentSource ?? context.source,
+    verifiedClaimLineage: context.lineage,
+    verifiedWork: context.verifiedWork,
+    verifiedReworkRoadmaps:
+      options.evidence ?? context.request.verifiedReworkRoadmaps,
+  });
+}
+
+/** A virtual trailing comment, so a candidate is checked by the real replay. */
+function previewComment(
+  context: ResolutionContext,
+  id: string,
+  body: string,
+): ProvisionalDecisionHistoryComment {
+  const last = context.history.comments.at(-1)?.createdAt;
+  const createdAt =
+    last && Date.parse(last) > Date.parse(context.verifiedAt)
+      ? last
+      : context.verifiedAt;
+  return {
+    id,
+    url: `https://github.com/${context.source.repository}/issues/${context.source.issueNumber}#issuecomment-${id}`,
+    body,
+    authorLogin: 'resolution-preview',
+    createdAt,
+    edited: false,
+    trustedAuthor: true,
+  };
+}
+
+function implementationClaimIds(
+  replay: ProvisionalDecisionReplayResult,
+): Set<string> {
+  const ids = new Set<string>();
+  for (const decision of replay.decisions) {
+    for (const record of [
+      decision.selection,
+      decision.workStarted,
+      decision.workCompleted,
+    ]) {
+      for (const claim of record?.claimLineage ?? []) ids.add(claim.claimId);
+    }
+  }
+  return ids;
+}
+
+function baseRecord(
+  context: ResolutionContext,
+  bundleGeneration: number,
+  decisionGeneration: number,
+  eventType: string,
+  answerUrl: string,
+  event: Record<string, unknown>,
+): ProvisionalDecisionRecord {
+  return {
+    schemaVersion: 1,
+    recordId: recordIdFor(
+      context.request.repository,
+      context.request.issueNumber,
+      bundleGeneration,
+      decisionGeneration,
+      eventType,
+    ),
+    source: context.source,
+    bundleGeneration,
+    decisionGeneration,
+    claimLineage: toClaimLineage(context.lineage),
+    evidenceReferences: [answerUrl],
+    event,
+  } as unknown as ProvisionalDecisionRecord;
+}
+
+function reworkHandoffFor(
+  context: ResolutionContext,
+  bundle: readonly ReplayedProvisionalDecision[],
+  bundleGeneration: number,
+  downstream: readonly string[],
+): ProvisionalReworkHandoff {
+  const stored = bundle
+    .map(
+      (decision) =>
+        asRecord(decision.reworkRequested?.event.reworkRequest).handoff as
+          | ProvisionalReworkHandoff
+          | undefined,
+    )
+    .filter((handoff): handoff is ProvisionalReworkHandoff => !!handoff);
+  const existing = stored[0];
+  // Every known downstream result stays: the stored ones, then the new ones.
+  const downstreamResults = [
+    ...new Set([
+      ...stored.flatMap((handoff) => handoff.downstreamResults),
+      ...downstream,
+    ]),
+  ];
+  const prior = presentedBundleFor(bundle).map((entry) => ({
+    decisionGeneration: entry.decisionGeneration,
+    workCompletedRecordId: entry.workCompletedRecordId,
+    reference: String(asRecord(entry.result).reference),
+  }));
+  if (existing) return { ...existing, priorResults: prior, downstreamResults };
+  const seed = `${normalizeRepository(context.request.repository)}|${context.request.issueNumber}|${bundleGeneration}`;
+  return {
+    handoffId: `handoff-${bodySha256(`${seed}|handoff`).slice(0, 32)}`,
+    authoringSetId: `set-${uuidFromSeed(`${seed}|set`)}`,
+    authoringSessionId: `session-${uuidFromSeed(`${seed}|session`)}`,
+    anchor: `${context.source.repository}#${context.source.issueNumber}`,
+    priorResults: prior,
+    downstreamResults,
+  };
+}
+
+/** A JSON escape keeps an at-sign in the user's words from notifying anyone. */
+function escapeMentions(jsonText: string): string {
+  return jsonText.replaceAll('@', '\\u0040');
+}
+
+function answerBodyFor(answer: ProvisionalDecisionAnswer): string {
+  const json = escapeMentions(JSON.stringify(answer));
+  return `${ANSWER_MARKER}\n${PROVISIONAL_DECISION_ANSWER_NOTE}\n${json}`;
+}
+
+/** The candidate record an answer would back for one decision, if any. */
+function recordForAnswer(
+  context: ResolutionContext,
+  bundle: readonly ReplayedProvisionalDecision[],
+  bundleGeneration: number,
+  decisionGeneration: number,
+  answer: ProvisionalDecisionAnswer,
+  answerUrl: string,
+  answerCreatedAt: string,
+): {
+  readonly kind: 'append-confirmation' | 'append-rework-request';
+  readonly record: ProvisionalDecisionRecord;
+} | null {
+  if (answer.response === 'accepted') {
+    return {
+      kind: 'append-confirmation',
+      record: baseRecord(
+        context,
+        bundleGeneration,
+        decisionGeneration,
+        'confirmed',
+        answerUrl,
+        {
+          type: 'confirmed',
+          confirmation: {
+            commentUrl: answerUrl,
+            response: 'accepted',
+            confirmedAt: answerCreatedAt,
+          },
+        },
+      ),
+    };
+  }
+  if (!answer.requestedOptionId || !answer.rationale) return null;
+  return {
+    kind: 'append-rework-request',
+    record: baseRecord(
+      context,
+      bundleGeneration,
+      decisionGeneration,
+      'rework-requested',
+      answerUrl,
+      {
+        type: 'rework-requested',
+        reworkRequest: {
+          commentUrl: answerUrl,
+          requestedAt: answerCreatedAt,
+          requestedOptionId: answer.requestedOptionId,
+          rationale: answer.rationale,
+          handoff: reworkHandoffFor(
+            context,
+            bundle,
+            bundleGeneration,
+            answer.downstreamResults ?? [],
+          ),
+        },
+      },
+    ),
+  };
+}
+
+function recordComment(
+  context: ResolutionContext,
+  record: ProvisionalDecisionRecord,
+): ProvisionalDecisionHistoryComment {
+  return previewComment(context, PREVIEW_RECORD_ID, recordCommentBody(record));
+}
+
+function replayAccepts(
+  replay: ProvisionalDecisionReplayResult,
+  bundleGeneration: number,
+  decisionGeneration: number,
+  status: ReplayedProvisionalDecision['status'],
+): boolean {
+  return (
+    replay.valid &&
+    replay.decisions.find(
+      (decision) =>
+        decision.bundleGeneration === bundleGeneration &&
+        decision.decisionGeneration === decisionGeneration,
+    )?.status === status
+  );
+}
+
+function readContextFailure(error: unknown): ResolutionPlan {
+  return resolutionRefusal(
+    'recovery-hold',
+    `fresh read failed: ${errorText(error)}`,
+  );
+}
+
+async function readResolutionContext(
+  request: ProvisionalResolutionRequest,
+  store: ProvisionalResolutionStore,
+): Promise<ResolutionContext | ResolutionPlan> {
+  let history: ProvisionalDecisionHistoryRead;
+  let sourceRead: ProvisionalDecisionSourceIssueRead;
+  let sourceState: ProvisionalDecisionSourceStateRead;
+  let verifiedAt: string;
+  try {
+    [history, sourceRead, sourceState] = await Promise.all([
+      store.readHistory(),
+      store.readSourceIssue(),
+      store.readSourceState(),
+    ]);
+    const parsedDate = parseServerDate(history.serverDate);
+    if (history.complete !== true || !parsedDate) {
+      return resolutionRefusal(
+        'recovery-hold',
+        'history is incomplete or its server Date is invalid',
+      );
+    }
+    verifiedAt = parsedDate;
+  } catch (error) {
+    return readContextFailure(error);
+  }
+  let verifiedWork: VerifiedProvisionalWork[];
+  try {
+    verifiedWork = await rebuildHistoricalWork(history, store);
+  } catch (error) {
+    return resolutionRefusal(
+      'recovery-hold',
+      `historical completion verification failed: ${errorText(error)}`,
+    );
+  }
+  const holder: {
+    released?: readonly VerifiedProvisionalDecisionClaim[];
+  } = {};
+  const folded = resolveClaimFold(history, store, (lineage) => {
+    holder.released = lineage;
+  });
+  if (folded && 'failure' in folded) {
+    return resolutionRefusal(
+      'recovery-hold',
+      `claim lineage could not be verified: ${folded.failure}`,
+    );
+  }
+  const lineage = folded?.lineage ?? holder.released;
+  if (!lineage) {
+    return resolutionRefusal(
+      'recovery-hold',
+      'claim lineage could not be verified',
+    );
+  }
+  return {
+    request,
+    history,
+    source: sourceFromRead(
+      {
+        repository: request.repository,
+        issueNumber: request.issueNumber,
+      } as RequestBase,
+      sourceRead,
+    ),
+    sourceState,
+    verifiedAt,
+    verifiedWork,
+    lineage,
+    active: folded?.active ?? null,
+    activeClaimAt: (index) => {
+      const truncated = {
+        ...history,
+        comments: history.comments.slice(0, index + 1),
+      };
+      const result = resolveClaimFold(truncated, store);
+      return result && !('failure' in result) ? result.active : null;
+    },
+  };
+}
+
+function evidenceCountMatches(
+  context: ResolutionContext,
+  evidence: readonly VerifiedProvisionalReworkRoadmap[],
+): boolean {
+  const ids = context.history.comments.flatMap((comment) => {
+    if (comment.trustedAuthor !== true || comment.edited !== false) return [];
+    const parsed = parseProvisionalDecisionRecordComment(comment.body);
+    return parsed.ok && parsed.record.event.type === 'rework-authored'
+      ? [parsed.record.recordId]
+      : [];
+  });
+  return (
+    evidence.length === ids.length &&
+    ids.every(
+      (recordId) =>
+        evidence.filter((item) => item.recordId === recordId).length === 1,
+    )
+  );
+}
+
+function firstClaimGateFailure(
+  context: ResolutionContext,
+  replay: ProvisionalDecisionReplayResult,
+): ResolutionPlan | null {
+  const active = context.active;
+  if (!active) return null;
+  if (active.claimId !== context.request.claimId) {
+    return resolutionRefusal(
+      'fix-input',
+      'a different claim is active; reconcile its release before a new resolution',
+    );
+  }
+  if (
+    active.agentId !== context.request.agentId ||
+    active.branch !== context.request.branch
+  ) {
+    return resolutionRefusal(
+      'fix-input',
+      'the active claim marker names a different agent or branch than the request',
+    );
+  }
+  if (implementationClaimIds(replay).has(active.claimId)) {
+    return resolutionRefusal(
+      'fix-input',
+      'the active claim ran the implementation; release it and use a separate coordination claim',
+    );
+  }
+  return null;
+}
+
+function releaseStep(
+  context: ResolutionContext,
+  outcome: ProvisionalResolutionOutcome,
+  reason?: string,
+): ResolutionPlan {
+  const active = context.active;
+  if (!active) return { kind: 'done', outcome, reason: reason ?? 'complete' };
+  return {
+    kind: 'step',
+    step: {
+      kind: 'release-claim',
+      claim: active,
+      outcome,
+      ...(reason ? { reason } : {}),
+    },
+  };
+}
+
+function answeredUnderCoordinationClaim(
+  context: ResolutionContext,
+  commentIndex: number,
+  answer: ProvisionalDecisionAnswer,
+  implementationClaims: ReadonlySet<string>,
+): boolean {
+  const active = context.activeClaimAt(commentIndex);
+  return (
+    active !== null &&
+    !implementationClaims.has(active.claimId) &&
+    answer.claimIds.at(-1) === active.claimId
+  );
+}
+
+function alternativeIdsOf(
+  bundle: readonly ReplayedProvisionalDecision[],
+  decisionGeneration: number,
+): string[] {
+  return (
+    (bundle.find(
+      (decision) => decision.decisionGeneration === decisionGeneration,
+    )?.selection.event.feasibleAlternatives ?? []) as JsonRecord[]
+  ).map((alternative) => String(alternative.id));
+}
+
+/** Pending reasons that are a deliberate no, an abort, or an unclear reply. */
+const CONFLICTING_PENDING_REASONS: ReadonlySet<ConfirmationPendingReason> =
+  new Set(['declined', 'default-no', 'eof', 'cancelled', 'unrecognized']);
+
+interface PersistedResponse {
+  readonly response: 'accepted' | 'rework';
+  readonly requestedOptionId?: string;
+}
+
+/**
+ * Whether a reading contradicts a persisted response. A no, abort, or unclear
+ * reading contradicts it only when `pendingConflicts` is true. The up-front
+ * check passes false while another targeted decision is still undecided,
+ * where such a reading just keeps that decision pending; a valid persisted
+ * answer that covers the undecided decision always passes true.
+ */
+function inputConflictsWithAnswer(
+  reading: ConfirmationAnswer,
+  answer: PersistedResponse,
+  pendingConflicts: boolean,
+): boolean {
+  if (reading.kind === 'accepted') return answer.response !== 'accepted';
+  if (reading.kind === 'rework') {
+    return (
+      answer.response !== 'rework' ||
+      answer.requestedOptionId !== reading.requestedOptionId
+    );
+  }
+  return pendingConflicts && CONFLICTING_PENDING_REASONS.has(reading.reason);
+}
+
+/** True once the user has actually said something, even a no or an abort. */
+function userHasAnswered(reading: ConfirmationAnswer): boolean {
+  return (
+    reading.kind !== 'pending' ||
+    CONFLICTING_PENDING_REASONS.has(reading.reason)
+  );
+}
+
+/** What the records already say about each targeted, resolved decision. */
+function persistedResponses(
+  bundle: readonly ReplayedProvisionalDecision[],
+  targets: readonly number[],
+): PersistedResponse[] {
+  return targets.flatMap((generation): PersistedResponse[] => {
+    const decision = bundle.find(
+      (item) => item.decisionGeneration === generation,
+    );
+    if (decision?.status === 'confirmed') {
+      return [{ response: 'accepted' as const }];
+    }
+    if (
+      decision?.status === 'rework-requested' ||
+      decision?.status === 'rework-authored'
+    ) {
+      return [
+        {
+          response: 'rework' as const,
+          requestedOptionId: String(
+            asRecord(decision.reworkRequested?.event.reworkRequest)
+              .requestedOptionId,
+          ),
+        },
+      ];
+    }
+    return [];
+  });
+}
+
+async function planResolve(
+  context: ResolutionContext,
+  request: ProvisionalResolveRequest,
+): Promise<ResolutionPlan> {
+  if (!evidenceCountMatches(context, request.verifiedReworkRoadmaps)) {
+    return resolutionRefusal(
+      'recovery-hold',
+      'verified rework evidence is missing or duplicated',
+    );
+  }
+  const replay = replayContext(context);
+  if (!replay.valid) {
+    return resolutionRefusal(
+      'recovery-hold',
+      `decision history replay refused: ${replay.issues[0]?.code ?? 'unknown'}`,
+    );
+  }
+  const bundleGeneration = replay.decisions.reduce(
+    (latest, decision) => Math.max(latest, decision.bundleGeneration),
+    0,
+  );
+  const bundle = replay.decisions.filter(
+    (decision) => decision.bundleGeneration === bundleGeneration,
+  );
+  if (bundle.length === 0) {
+    return resolutionRefusal('none', 'the source has no provisional decision');
+  }
+  if (bundle.some((decision) => !decision.workCompleted)) {
+    return resolutionRefusal(
+      'none',
+      'the current bundle still has decisions without verified completed work',
+    );
+  }
+  const known = new Set(bundle.map((decision) => decision.decisionGeneration));
+  const targets = [...new Set(request.decisionGenerations)];
+  if (targets.length === 0 || targets.some((target) => !known.has(target))) {
+    return resolutionRefusal(
+      'fix-input',
+      'decisionGenerations must name decisions of the current bundle',
+    );
+  }
+  const claimFailure = firstClaimGateFailure(context, replay);
+  if (claimFailure) return claimFailure;
+
+  const statusOf = (generation: number) =>
+    bundle.find((decision) => decision.decisionGeneration === generation)
+      ?.status;
+  const unresolved = targets
+    .filter((generation) => statusOf(generation) === 'confirmation-pending')
+    .sort((left, right) => left - right);
+
+  // A persisted confirmation or rework request cannot be undone, so an
+  // explicit conflicting input is refused before any write for these targets.
+  const persisted = persistedResponses(bundle, targets);
+  if (persisted.length > 0) {
+    const reading = readConfirmationAnswer(
+      request.input,
+      targets.flatMap((generation) => alternativeIdsOf(bundle, generation)),
+    );
+    if (
+      persisted.some((answer) =>
+        inputConflictsWithAnswer(reading, answer, unresolved.length === 0),
+      )
+    ) {
+      return resolutionRefusal(
+        'fix-input',
+        'a confirmation or rework request is already persisted for these decisions and the new input conflicts with it; resume without a new input',
+      );
+    }
+  }
+
+  if (unresolved.length === 0) {
+    if (bundle.every((decision) => decision.status === 'confirmed')) {
+      if (context.sourceState.state === 'open') {
+        if (!context.active) {
+          return resolutionRefusal(
+            'fix-input',
+            'an active coordination claim is required to close the source',
+          );
+        }
+        return {
+          kind: 'step',
+          step: {
+            kind: 'close-source',
+            expected: {
+              state: 'open',
+              title: context.source.snapshot.title,
+              bodySha256: context.source.snapshot.bodySha256,
+              claim: context.active,
+            },
+          },
+        };
+      }
+      if (context.sourceState.stateReason !== 'completed') {
+        return resolutionRefusal(
+          'recovery-hold',
+          `the source is closed as ${context.sourceState.stateReason ?? 'an unknown reason'}, not completed; reconcile it before releasing the claim`,
+        );
+      }
+      return releaseStep(
+        context,
+        'confirmed-closed',
+        'bundle confirmed and source closed',
+      );
+    }
+    // Same-source rework needs the source open for its authoring pass.
+    if (
+      context.sourceState.state === 'closed' &&
+      bundle.some((decision) => decision.status === 'rework-requested')
+    ) {
+      return resolutionRefusal(
+        'recovery-hold',
+        `the source is closed (${context.sourceState.stateReason ?? 'an unknown reason'}) while a rework request awaits authoring; reopen it before releasing the claim`,
+      );
+    }
+    const reworking = bundle.some(
+      (decision) => decision.status === 'rework-requested',
+    );
+    const finished = bundle.every(
+      (decision) =>
+        decision.status === 'confirmed' ||
+        decision.status === 'rework-authored',
+    );
+    if (bundle.some((decision) => decision.status === 'rework-authored')) {
+      return releaseStep(
+        context,
+        finished
+          ? 'rework-authored'
+          : reworking
+            ? 'rework-handoff-recorded'
+            : 'pending-released',
+        finished
+          ? 'rework authoring is already recorded'
+          : 'rework authoring is recorded for some decisions; others have no final state',
+      );
+    }
+    return releaseStep(
+      context,
+      reworking ? 'rework-handoff-recorded' : 'pending-released',
+      reworking
+        ? 'rework handoff recorded; authoring acquisition may follow the release'
+        : 'other decisions of the bundle remain pending',
+    );
+  }
+
+  if (context.sourceState.state === 'closed') {
+    return resolutionRefusal(
+      'none',
+      'the source is already closed while its bundle is unconfirmed',
+    );
+  }
+  if (!context.active) {
+    return resolutionRefusal(
+      'fix-input',
+      'an active coordination claim is required to resolve the source',
+    );
+  }
+  const presentation = buildPresentation(
+    bundle,
+    context.source,
+    bundleGeneration,
+  );
+  const digest = presentationSha256(presentation);
+  const target = unresolved[0] as number;
+  const implementationClaims = implementationClaimIds(replay);
+
+  // An existing valid answer is durable: the first one wins. A new input may
+  // agree with it or be absent, but an explicit conflicting input is refused,
+  // because a confirmation cannot be undone.
+  for (const comment of context.history.comments) {
+    if (
+      !comment.body.startsWith(ANSWER_MARKER) ||
+      comment.trustedAuthor !== true ||
+      comment.edited !== false ||
+      !comment.authorLogin
+    ) {
+      continue;
+    }
+    const parsed = parseProvisionalDecisionAnswerComment(comment.body);
+    if (
+      !parsed.ok ||
+      parsed.answer.presentedQuestion !== PROVISIONAL_CONFIRMATION_QUESTION ||
+      // Only an answer recorded while a coordination claim was active, never
+      // one the implementation session wrote or one posted between two claims.
+      !answeredUnderCoordinationClaim(
+        context,
+        context.history.comments.indexOf(comment),
+        parsed.answer,
+        implementationClaims,
+      )
+    ) {
+      continue;
+    }
+    const covered = unresolved.filter((generation) =>
+      (
+        parsed.answer.appliesToDecisionGenerations ??
+        parsed.answer.decisionGenerations
+      ).includes(generation),
+    );
+    if (
+      covered.length === 0 ||
+      (parsed.answer.response === 'rework' && covered.length !== 1)
+    ) {
+      continue;
+    }
+    const existingTarget = covered[0] as number;
+    const candidate = recordForAnswer(
+      context,
+      bundle,
+      bundleGeneration,
+      existingTarget,
+      parsed.answer,
+      comment.url,
+      comment.createdAt,
+    );
+    if (!candidate) continue;
+    const preview = replayContext(context, [
+      recordComment(context, candidate.record),
+    ]);
+    if (
+      !replayAccepts(
+        preview,
+        bundleGeneration,
+        existingTarget,
+        parsed.answer.response === 'accepted'
+          ? 'confirmed'
+          : 'rework-requested',
+      )
+    ) {
+      continue;
+    }
+    const reading = readConfirmationAnswer(
+      request.input,
+      alternativeIdsOf(bundle, existingTarget),
+    );
+    if (inputConflictsWithAnswer(reading, parsed.answer, true)) {
+      return resolutionRefusal(
+        'fix-input',
+        'a valid answer is already persisted for this decision and the new input conflicts with it; resume without a new input',
+        { presentation, presentationSha256: digest },
+      );
+    }
+    const recordedDownstream =
+      (
+        asRecord(candidate.record.event.reworkRequest).handoff as
+          | ProvisionalReworkHandoff
+          | undefined
+      )?.downstreamResults ?? [];
+    const ignored = (request.downstreamResults ?? []).filter(
+      (reference) => !recordedDownstream.includes(reference),
+    );
+    return {
+      kind: 'step',
+      step: { kind: candidate.kind, record: candidate.record },
+      presentation,
+      presentationSha256: digest,
+      needsUserAnswer: false,
+      ...(ignored.length > 0
+        ? {
+            warnings: [
+              'the request named downstream results that the persisted answer or the bundle handoff does not record, or that an acceptance cannot carry; they were not added',
+            ],
+          }
+        : {}),
+    };
+  }
+
+  const answer = readConfirmationAnswer(
+    request.input,
+    alternativeIdsOf(bundle, target),
+  );
+  if (answer.kind === 'pending') {
+    const released = releaseStep(
+      context,
+      bundle.some((decision) => decision.status === 'rework-requested')
+        ? 'rework-handoff-recorded'
+        : 'pending-released',
+      `no further confirmation was given (${answer.reason}); the undecided decisions stay confirmation-pending`,
+    );
+    return released.kind === 'step'
+      ? {
+          ...released,
+          presentation,
+          presentationSha256: digest,
+          needsUserAnswer: !userHasAnswered(answer),
+        }
+      : released;
+  }
+  if (request.answeredPresentationSha256 !== digest) {
+    return resolutionRefusal(
+      'fix-input',
+      request.answeredPresentationSha256 === undefined
+        ? 'answeredPresentationSha256 is required with an input'
+        : 'the answer was given for a presentation that no longer matches the current bundle',
+      { presentation, presentationSha256: digest },
+    );
+  }
+  if (answer.kind === 'rework' && unresolved.length !== 1) {
+    return resolutionRefusal(
+      'fix-input',
+      'an alternate preference applies to exactly one decision per answer',
+    );
+  }
+  const answerRecord: ProvisionalDecisionAnswer = {
+    schemaVersion: 1,
+    source: context.source,
+    bundleGeneration,
+    decisionGenerations: bundle
+      .map((decision) => decision.decisionGeneration)
+      .sort((left, right) => left - right),
+    claimIds: context.lineage.map((claim) => claim.claimId),
+    presentedBundle: presentedBundleFor(bundle),
+    response: answer.kind === 'accepted' ? 'accepted' : 'rework',
+    ...(answer.kind === 'rework'
+      ? {
+          requestedOptionId: answer.requestedOptionId,
+          rationale: answer.rationale,
+          ...((request.downstreamResults ?? []).length > 0
+            ? { downstreamResults: [...(request.downstreamResults ?? [])] }
+            : {}),
+        }
+      : {}),
+    appliesToDecisionGenerations: [...unresolved],
+    presentedQuestion: PROVISIONAL_CONFIRMATION_QUESTION,
+    answerText: answer.answerText,
+  };
+  const body = answerBodyFor(answerRecord);
+  const virtualAnswer = previewComment(context, PREVIEW_ANSWER_ID, body);
+  const candidate = recordForAnswer(
+    context,
+    bundle,
+    bundleGeneration,
+    target,
+    answerRecord,
+    virtualAnswer.url,
+    virtualAnswer.createdAt,
+  );
+  const preview = candidate
+    ? replayContext(context, [
+        virtualAnswer,
+        recordComment(context, candidate.record),
+      ])
+    : null;
+  if (
+    !candidate ||
+    !preview ||
+    !replayAccepts(
+      preview,
+      bundleGeneration,
+      target,
+      answer.kind === 'accepted' ? 'confirmed' : 'rework-requested',
+    )
+  ) {
+    return resolutionRefusal(
+      'fix-input',
+      `the answer does not verify against the current bundle: ${preview?.issues[0]?.code ?? 'unknown'}`,
+      { presentation, presentationSha256: digest },
+    );
+  }
+  return {
+    kind: 'step',
+    step: { kind: 'append-answer', body },
+    presentation,
+    presentationSha256: digest,
+    needsUserAnswer: false,
+  };
+}
+
+function authoringGateFailure(
+  evidence: ProvisionalReworkAuthoringEvidence,
+  handoff: ProvisionalReworkHandoff,
+  source: ProvisionalDecisionSource,
+): string | null {
+  const { owner, roadmap, children } = evidence;
+  if (owner.trusted !== true || owner.fresh !== true) {
+    return 'the authoring owner is not verified as trusted and fresh';
+  }
+  if (
+    owner.setId !== handoff.authoringSetId ||
+    owner.sessionId !== handoff.authoringSessionId ||
+    owner.anchor.toLowerCase() !== handoff.anchor.toLowerCase()
+  ) {
+    return 'the authoring owner does not match the recorded handoff';
+  }
+  if (
+    roadmap.audited !== true ||
+    roadmap.issueNumber !== source.issueNumber ||
+    roadmap.markerId.trim() === ''
+  ) {
+    return 'the source is not an audited rework roadmap';
+  }
+  if (
+    roadmap.auditedSource?.title !== source.snapshot.title ||
+    roadmap.auditedSource?.bodySha256 !== source.snapshot.bodySha256
+  ) {
+    return 'the source changed after the roadmap and its children were audited';
+  }
+  const numbers = children.map((child) => child.issueNumber);
+  if (
+    children.length === 0 ||
+    numbers.some(
+      (number) =>
+        !Number.isSafeInteger(number) ||
+        number < 1 ||
+        number === source.issueNumber,
+    ) ||
+    new Set(numbers).size !== numbers.length ||
+    children.some((child) => child.wired !== true)
+  ) {
+    return 'the rework children are not real, distinct, and wired under the roadmap';
+  }
+  return null;
+}
+
+/**
+ * Evidence for rework-authored records this flow already wrote, derived from
+ * the same caller-verified authoring facts, so a retry or a multi-decision
+ * bundle does not need the caller to re-supply it.
+ */
+function derivedReworkEvidence(
+  context: ResolutionContext,
+  request: ProvisionalReworkAuthoredRequest,
+): VerifiedProvisionalReworkRoadmap[] {
+  const evidence = [...request.verifiedReworkRoadmaps];
+  let latest: ProvisionalDecisionSource | null = null;
+  for (const comment of context.history.comments) {
+    if (comment.trustedAuthor !== true || comment.edited !== false) continue;
+    const parsed = parseProvisionalDecisionRecordComment(comment.body);
+    if (!parsed.ok) continue;
+    const record = parsed.record;
+    const roadmap = asRecord(record.event.reworkRoadmap);
+    if (
+      record.event.type === 'rework-authored' &&
+      latest &&
+      !evidence.some((item) => item.recordId === record.recordId) &&
+      roadmap.authoringSetId === request.authoring.owner.setId &&
+      roadmap.roadmapMarkerId === request.authoring.roadmap.markerId &&
+      roadmap.url === request.authoring.roadmap.url
+    ) {
+      evidence.push({
+        recordId: record.recordId,
+        sourceBefore: latest,
+        sourceAfter: record.source,
+        roadmapIssueNumber: Number(roadmap.roadmapIssueNumber),
+        roadmapMarkerId: String(roadmap.roadmapMarkerId),
+        authoringSetId: String(roadmap.authoringSetId),
+        url: String(roadmap.url),
+        publishedCommentId: request.authoring.roadmap.publishedCommentId,
+        publishedAt: request.authoring.roadmap.publishedAt,
+      });
+    }
+    latest = record.source;
+  }
+  return evidence;
+}
+
+async function planReworkAuthored(
+  context: ResolutionContext,
+  request: ProvisionalReworkAuthoredRequest,
+): Promise<ResolutionPlan> {
+  if (context.active) {
+    return resolutionRefusal(
+      'fix-input',
+      'the coordination claim is still active; reconcile its release first',
+    );
+  }
+  const known = derivedReworkEvidence(context, request);
+  if (!evidenceCountMatches(context, known)) {
+    return resolutionRefusal(
+      'recovery-hold',
+      'verified rework evidence is missing or duplicated',
+    );
+  }
+  // The decisions are read against the latest recorded source, because the
+  // authoring pass may already have rewritten the source body.
+  let latestRecorded: ProvisionalDecisionSource | null = null;
+  for (const comment of context.history.comments) {
+    if (comment.trustedAuthor !== true || comment.edited !== false) continue;
+    const parsed = parseProvisionalDecisionRecordComment(comment.body);
+    if (parsed.ok) latestRecorded = parsed.record.source;
+  }
+  if (!latestRecorded) {
+    return resolutionRefusal('none', 'the source has no provisional decision');
+  }
+  const basis = replayContext(context, [], {
+    currentSource: latestRecorded,
+    evidence: known,
+  });
+  if (!basis.valid) {
+    return resolutionRefusal(
+      'recovery-hold',
+      `decision history replay refused: ${basis.issues[0]?.code ?? 'unknown'}`,
+    );
+  }
+  const bundleGeneration = basis.decisions.reduce(
+    (latest, decision) => Math.max(latest, decision.bundleGeneration),
+    0,
+  );
+  const bundle = basis.decisions.filter(
+    (decision) => decision.bundleGeneration === bundleGeneration,
+  );
+  const awaiting = bundle
+    .filter((decision) => decision.status === 'rework-requested')
+    .sort((left, right) => left.decisionGeneration - right.decisionGeneration);
+  if (awaiting.length === 0) {
+    const authored = bundle.some(
+      (decision) => decision.status === 'rework-authored',
+    );
+    const unfinished = bundle.some(
+      (decision) =>
+        decision.status !== 'confirmed' &&
+        decision.status !== 'rework-authored',
+    );
+    if (authored && unfinished) {
+      return resolutionRefusal(
+        'none',
+        'the bundle still has decisions without a final state',
+      );
+    }
+    if (authored && replayContext(context, [], { evidence: known }).valid) {
+      return {
+        kind: 'done',
+        outcome: 'rework-authored',
+        reason: 'rework authoring is already recorded',
+      };
+    }
+    return resolutionRefusal(
+      'none',
+      'no rework request is waiting for its authoring record',
+    );
+  }
+  const target = awaiting[0] as ReplayedProvisionalDecision;
+  // The authoring record needs the source open; an already recorded authoring
+  // stays recoverable above, even after the roadmap closes.
+  if (context.sourceState.state === 'closed') {
+    return resolutionRefusal(
+      'recovery-hold',
+      `the source is closed (${context.sourceState.stateReason ?? 'an unknown reason'}) before the rework authoring is recorded; reopen it first`,
+    );
+  }
+  const namesRequestingClaim = bundle.some((decision) => {
+    const named = decision.reworkRequested?.claimLineage.at(-1);
+    return (
+      named?.claimId === request.claimId &&
+      named.agentId === request.agentId &&
+      named.branch === request.branch
+    );
+  });
+  if (!namesRequestingClaim) {
+    return resolutionRefusal(
+      'fix-input',
+      'the request does not name a coordination claim that recorded a rework request of this bundle',
+    );
+  }
+  if (
+    !bundle.some((decision) => decision.status === 'rework-authored') &&
+    latestRecorded.snapshot.title === context.source.snapshot.title &&
+    latestRecorded.snapshot.bodySha256 === context.source.snapshot.bodySha256
+  ) {
+    return resolutionRefusal(
+      'fix-input',
+      'the source has not been rewritten into the rework roadmap',
+    );
+  }
+  const handoff = asRecord(target.reworkRequested?.event.reworkRequest)
+    .handoff as ProvisionalReworkHandoff | undefined;
+  if (!handoff) {
+    return resolutionRefusal(
+      'fix-input',
+      'the rework request recorded no handoff identity',
+    );
+  }
+  const gate = authoringGateFailure(request.authoring, handoff, context.source);
+  if (gate) return resolutionRefusal('fix-input', gate);
+  const candidate = baseRecord(
+    context,
+    target.bundleGeneration,
+    target.decisionGeneration,
+    'rework-authored',
+    request.authoring.roadmap.url,
+    {
+      type: 'rework-authored',
+      reworkRoadmap: {
+        roadmapIssueNumber: request.authoring.roadmap.issueNumber,
+        roadmapMarkerId: request.authoring.roadmap.markerId,
+        authoringSetId: request.authoring.owner.setId,
+        url: request.authoring.roadmap.url,
+      },
+    },
+  );
+  const evidence: VerifiedProvisionalReworkRoadmap = {
+    recordId: candidate.recordId,
+    sourceBefore: latestRecorded,
+    sourceAfter: context.source,
+    roadmapIssueNumber: request.authoring.roadmap.issueNumber,
+    roadmapMarkerId: request.authoring.roadmap.markerId,
+    authoringSetId: request.authoring.owner.setId,
+    url: request.authoring.roadmap.url,
+    publishedCommentId: request.authoring.roadmap.publishedCommentId,
+    publishedAt: request.authoring.roadmap.publishedAt,
+  };
+  const preview = replayContext(context, [recordComment(context, candidate)], {
+    evidence: [...known, evidence],
+  });
+  if (
+    !replayAccepts(
+      preview,
+      target.bundleGeneration,
+      target.decisionGeneration,
+      'rework-authored',
+    )
+  ) {
+    return resolutionRefusal(
+      'fix-input',
+      `the authoring evidence does not verify: ${preview.issues[0]?.code ?? 'unknown'}`,
+    );
+  }
+  return {
+    kind: 'step',
+    step: {
+      kind: 'append-rework-authored',
+      record: candidate,
+      expected: {
+        state: 'open',
+        title: context.source.snapshot.title,
+        bodySha256: context.source.snapshot.bodySha256,
+      },
+    },
+  };
+}
+
+async function planResolution(
+  request: ProvisionalResolutionRequest,
+  store: ProvisionalResolutionStore,
+): Promise<ResolutionPlan> {
+  const context = await readResolutionContext(request, store);
+  if ('kind' in context) return context;
+  return request.type === 'resolve'
+    ? planResolve(context, request)
+    : planReworkAuthored(context, request);
+}
+
+/**
+ * Whether a fresh read shows the claim released: it is no longer the active
+ * claim and the verified history holds a trusted, unedited unclaim marker of
+ * that agent and claim posted after the claim itself. Another claim being
+ * active, or no claim being visible at all, proves nothing: only the claim's
+ * own unclaim marker does.
+ */
+function claimReleased(
+  context: ResolutionContext,
+  claim: { readonly claimId: string; readonly agentId: string },
+): boolean {
+  if (context.active?.claimId === claim.claimId) return false;
+  const claimed = context.lineage.find(
+    (entry) =>
+      entry.claimId === claim.claimId && entry.agentId === claim.agentId,
+  );
+  if (!claimed) return false;
+  const claimedIndex = context.history.comments.findIndex(
+    (comment) => String(comment.id) === claimed.commentId,
+  );
+  if (claimedIndex < 0) return false;
+  return context.history.comments.slice(claimedIndex + 1).some((comment) => {
+    if (comment.trustedAuthor !== true || comment.edited !== false) {
+      return false;
+    }
+    const release = parseReleaseComment(comment.body);
+    return (
+      release !== null &&
+      release.claimId === claim.claimId &&
+      release.agentId === claim.agentId
+    );
+  });
+}
+
+/**
+ * Whether a fresh read shows the step's own content in place: a trusted,
+ * unedited comment with the same answer or record content, or a source closed
+ * as completed, or a claim shown released by its own unclaim marker.
+ */
+function stepLanded(step: ResolutionStep, context: ResolutionContext): boolean {
+  const trusted = (comment: ProvisionalDecisionHistoryComment) =>
+    comment.trustedAuthor === true && comment.edited === false;
+  switch (step.kind) {
+    case 'append-answer': {
+      const wanted = answerStepDigest(step.body);
+      return context.history.comments.some(
+        (comment) =>
+          trusted(comment) && answerStepDigest(comment.body) === wanted,
+      );
+    }
+    case 'close-source':
+      return (
+        context.sourceState.state === 'closed' &&
+        context.sourceState.stateReason === 'completed'
+      );
+    case 'release-claim':
+      return claimReleased(context, step.claim);
+    default: {
+      const wanted = recordStepDigest(step.record);
+      return rawRecordMatches(
+        context.history.comments,
+        step.record.recordId,
+      ).some((comment) => {
+        const parsed = parseStoredRecord(comment);
+        return (
+          trusted(comment) &&
+          parsed !== null &&
+          recordStepDigest(parsed) === wanted
+        );
+      });
+    }
+  }
+}
+
+async function executeStep(
+  step: ResolutionStep,
+  store: ProvisionalResolutionStore,
+): Promise<void> {
+  switch (step.kind) {
+    case 'append-answer':
+      await store.appendAnswerBody(step.body);
+      return;
+    case 'close-source':
+      await store.closeSourceIssue(step.expected);
+      return;
+    case 'release-claim':
+      await store.releaseCoordinationClaim(step.claim);
+      return;
+    case 'append-rework-authored':
+      await store.appendReworkAuthoredBody(
+        step.record.recordId,
+        escapeMentions(recordCommentBody(step.record)),
+        step.expected,
+      );
+      return;
+    default:
+      await store.appendRecordBody(
+        step.record.recordId,
+        escapeMentions(recordCommentBody(step.record)),
+      );
+  }
+}
+
+function plannedResult(
+  plan: Extract<ResolutionPlan, { kind: 'step' }>,
+  steps: readonly ProvisionalResolutionStepKind[],
+  recordIds: readonly string[],
+): ProvisionalResolutionResult {
+  return {
+    state: 'planned',
+    nextStep: plan.step.kind,
+    steps,
+    recordIds,
+    needsUserAnswer: plan.needsUserAnswer ?? false,
+    ...(plan.presentation
+      ? {
+          presentation: plan.presentation,
+          presentationSha256: plan.presentationSha256 as string,
+        }
+      : {}),
+    ...(plan.warnings?.length ? { warnings: plan.warnings } : {}),
+  };
+}
+
+/**
+ * A backstop only: every loop turn must make visible progress (a repeated step
+ * is a hold), so a valid bundle of any realistic size settles well inside it.
+ */
+const DEFAULT_RESOLUTION_STEP_BOUND = 1024;
+
+export interface ProvisionalResolutionOptions {
+  /** Defaults to false. Only true may write. */
+  readonly apply?: boolean;
+  /** The backstop on loop turns, at least 1; defaults to a generous value. */
+  readonly maxSteps?: number;
+}
+
+async function releaseVerified(
+  request: ProvisionalResolutionRequest,
+  store: ProvisionalResolutionStore,
+): Promise<boolean> {
+  try {
+    const context = await readResolutionContext(request, store);
+    if ('kind' in context) return false;
+    return claimReleased(context, request);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Resolve a confirmation-pending source, or record its rework authoring. The
+ * default is read-only: it reports the next step and the presentation to ask
+ * about. With `apply`, each write is preceded by a second fresh plan that must
+ * name the same step, and followed by a fresh read that must show it.
+ */
+// audit:ignore-dead-export: no production caller until the command and GitHub store wiring lands (follow-up of roadmap #4528, not yet filed); tests lock the lifecycle until then
+export async function runProvisionalResolution(
+  request: ProvisionalResolutionRequest,
+  store: ProvisionalResolutionStore,
+  options: ProvisionalResolutionOptions = {},
+): Promise<ProvisionalResolutionResult> {
+  const steps: ProvisionalResolutionStepKind[] = [];
+  const recordIds: string[] = [];
+  const warnings: string[] = [];
+  const out = (
+    result: ProvisionalResolutionResult,
+  ): ProvisionalResolutionResult =>
+    warnings.length > 0 ? { ...result, warnings: [...warnings] } : result;
+  const hold = (
+    reason: string,
+    extra: Partial<ProvisionalResolutionResult> = {},
+  ): ProvisionalResolutionResult =>
+    out({
+      state: 'refused',
+      action: 'recovery-hold',
+      reason,
+      steps,
+      recordIds,
+      ...extra,
+    });
+  let previousKey: string | null = null;
+  const bound = Math.max(1, options.maxSteps ?? DEFAULT_RESOLUTION_STEP_BOUND);
+  for (let iteration = 0; iteration < bound; iteration += 1) {
+    const plan = await planResolution(request, store);
+    if (plan.kind === 'refused') {
+      return out({ ...plan.result, steps, recordIds });
+    }
+    if (plan.kind === 'done') {
+      return out(
+        steps.length > 0
+          ? {
+              state: 'applied',
+              outcome: plan.outcome,
+              reason: plan.reason,
+              steps,
+              recordIds,
+            }
+          : {
+              state: 'reconciled',
+              action: 'reconcile',
+              outcome: plan.outcome,
+              reason: plan.reason,
+              steps,
+              recordIds,
+            },
+      );
+    }
+    for (const warning of plan.warnings ?? []) {
+      if (!warnings.includes(warning)) warnings.push(warning);
+    }
+    const key = stepKey(plan.step);
+    if (key === previousKey) {
+      return hold(
+        `the ${plan.step.kind} write is not visible in a fresh read; inspect the source before retrying`,
+      );
+    }
+    if (options.apply !== true) {
+      return out(plannedResult(plan, steps, recordIds));
+    }
+
+    const again = await planResolution(request, store);
+    if (again.kind !== 'step' || stepKey(again.step) !== key) {
+      return hold(
+        again.kind === 'refused'
+          ? `the plan changed before the write; nothing was written: ${again.result.reason ?? 'refused'}`
+          : 'the plan changed before the write; nothing was written',
+      );
+    }
+    try {
+      await executeStep(plan.step, store);
+    } catch (error) {
+      if (
+        plan.step.kind === 'release-claim' &&
+        !(await releaseVerified(request, store))
+      ) {
+        return out({
+          state: 'reconciled',
+          action: 'reconcile',
+          reason: `release of the coordination claim is uncertain: ${errorText(error)}`,
+          nextStep: 'release-claim',
+          steps,
+          recordIds,
+        });
+      }
+      if (plan.step.kind === 'release-claim') {
+        warnings.push(
+          `the release-claim write threw (${errorText(error)}) but a fresh read shows it landed`,
+        );
+        steps.push('release-claim');
+        return out({
+          state: 'applied',
+          outcome: plan.step.outcome,
+          reason: plan.step.reason ?? 'complete',
+          steps,
+          recordIds,
+        });
+      }
+      // Count the step only when a fresh read shows its content in place.
+      const fresh = await readResolutionContext(request, store);
+      if ('kind' in fresh) {
+        return hold(
+          `the ${plan.step.kind} write is uncertain: ${errorText(error)}; the fresh read refused: ${fresh.kind === 'refused' ? (fresh.result.reason ?? 'refused') : 'unavailable'}`,
+        );
+      }
+      if (!stepLanded(plan.step, fresh)) {
+        return hold(
+          `the ${plan.step.kind} write is uncertain: ${errorText(error)}; read the history before retrying`,
+        );
+      }
+      warnings.push(
+        `the ${plan.step.kind} write threw (${errorText(error)}) but a fresh read shows it landed`,
+      );
+    }
+    steps.push(plan.step.kind);
+    if ('record' in plan.step) recordIds.push(plan.step.record.recordId);
+
+    if (plan.step.kind === 'release-claim') {
+      if (!(await releaseVerified(request, store))) {
+        return out({
+          state: 'reconciled',
+          action: 'reconcile',
+          reason:
+            'the coordination claim release is not confirmed by a fresh read',
+          nextStep: 'release-claim',
+          steps,
+          recordIds,
+        });
+      }
+      return out({
+        state: 'applied',
+        outcome: plan.step.outcome,
+        reason: plan.step.reason ?? 'complete',
+        steps,
+        recordIds,
+      });
+    }
+    previousKey = key;
+  }
+  return hold('the resolution did not settle within its step bound');
 }
