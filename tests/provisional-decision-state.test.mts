@@ -3026,11 +3026,33 @@ test('the rework handoff is refused for every state that is not a verified pendi
     'history-incomplete',
   );
   refusal(readReworkHandoff(handoffInput([])), 'record-missing');
-  // An untrusted record marker is not read, so it leaves no record at all.
+  // An untrusted record marker refuses the whole history, even beside trusted
+  // records, as Discover does, and the refusal names the comment.
+  const untrusted = readReworkHandoff(
+    handoffInput([recordComment('1', selected, 1, { trustedAuthor: false })]),
+  );
+  refusal(untrusted, 'record-authority-invalid');
+  assert.equal(untrusted.ok ? '' : untrusted.commentId, '1');
+  const mixed = readReworkHandoff(
+    handoffInput([
+      ...comments,
+      recordComment('6', selected, 6, { trustedAuthor: false }),
+    ]),
+  );
+  refusal(mixed, 'record-authority-invalid');
+  assert.equal(mixed.ok ? '' : mixed.commentId, '6');
   refusal(
     readReworkHandoff(
-      handoffInput([recordComment('1', selected, 1, { trustedAuthor: false })]),
+      handoffInput([
+        ...comments,
+        recordComment('6', selected, 6, { authorLogin: null }),
+      ]),
     ),
+    'record-authority-invalid',
+  );
+  // A history with no record marker at all has nothing to read.
+  refusal(
+    readReworkHandoff(handoffInput([comment('1', 'an ordinary comment', 1)])),
     'record-missing',
   );
 
@@ -3069,8 +3091,9 @@ test('the rework handoff is refused for every state that is not a verified pendi
     'source-confirmed',
   );
 
-  // An edited record, a stale source and a mismatched handoff are replay
-  // refusals, and the reader reports the codes.
+  // An edited record refuses the history like an untrusted one. A stale source
+  // and a mismatched handoff are replay refusals, and the reader reports the
+  // codes.
   const edited = readReworkHandoff(
     handoffInput(
       comments.map((item) =>
@@ -3078,10 +3101,8 @@ test('the rework handoff is refused for every state that is not a verified pendi
       ),
     ),
   );
-  refusal(edited, 'replay-invalid');
-  assert.deepEqual(edited.ok ? [] : edited.issueCodes, [
-    'record-authority-invalid',
-  ]);
+  refusal(edited, 'record-authority-invalid');
+  assert.equal(edited.ok ? '' : edited.commentId, '5');
   const wrongAnchor = reworkRequestedHistory({
     handoff: { anchor: 'kurone-kito/idd-skill#1' },
   });

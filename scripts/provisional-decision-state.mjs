@@ -2528,8 +2528,10 @@ export function bindProvisionalDecision(replay, target) {
     decisions: bound,
   };
 }
-function reworkHandoffRefusal(reason, issueCodes = []) {
-  return { ok: false, reason, issueCodes };
+function reworkHandoffRefusal(reason, issueCodes = [], commentId) {
+  return commentId === undefined
+    ? { ok: false, reason, issueCodes }
+    : { ok: false, reason, issueCodes, commentId };
 }
 /**
  * Read the trusted rework handoff of a retained decision source from its
@@ -2537,9 +2539,11 @@ function reworkHandoffRefusal(reason, issueCodes = []) {
  * bundle has at least one rework request and no recorded rework authoring,
  * and whose requests agree on one handoff identity. A decision of the bundle
  * that is still awaiting its own answer does not stop it: the lifecycle lets
- * that answer follow the source rewrite. Any other state, including an incomplete,
- * untrusted, edited, stale, or conflicting history, refuses with a named
- * reason, so a handoff that is not verified never authorizes a consumer.
+ * that answer follow the source rewrite. Any record marker from an untrusted
+ * or unnamed author, or one that was edited, refuses the whole history, as
+ * Discover does, instead of being skipped. Any other state, including an
+ * incomplete, stale, or conflicting history, refuses with a named reason, so a
+ * handoff that is not verified never authorizes a consumer.
  * Because the replay basis is the last recorded source, a source rewritten by
  * the authoring pass still reads; whether the rewrite happened under the right
  * owner is the caller's check.
@@ -2550,13 +2554,11 @@ export function readReworkHandoff(input) {
   let recordedSource;
   let authoredRecorded = false;
   for (const comment of input.comments) {
-    if (
-      !comment.body.startsWith(PROVISIONAL_DECISION_RECORD_MARKER) ||
-      !comment.trustedAuthor ||
-      !comment.authorLogin ||
-      comment.edited
-    ) {
+    if (!comment.body.startsWith(PROVISIONAL_DECISION_RECORD_MARKER)) {
       continue;
+    }
+    if (!comment.trustedAuthor || !comment.authorLogin || comment.edited) {
+      return reworkHandoffRefusal('record-authority-invalid', [], comment.id);
     }
     const parsed = parseProvisionalDecisionRecordComment(comment.body);
     if (!parsed.ok) continue;
@@ -2573,9 +2575,17 @@ export function readReworkHandoff(input) {
   if (!replay.valid) {
     const codes = [...new Set(replay.issues.map((issue) => issue.code))];
     // A caller with no authoring evidence cannot replay a history that already
-    // records a rework authoring, so name that state instead of a bare refusal.
+    // records a rework authoring, so name that state when the refusal is the
+    // unverified source rewrite, and keep any other cause as it is.
+    const unverifiedAuthoring = codes.some(
+      (code) =>
+        code === 'source-binding-mismatch' ||
+        code === 'rework-roadmap-unverified',
+    );
     return reworkHandoffRefusal(
-      authoredRecorded ? 'rework-already-authored' : 'replay-invalid',
+      authoredRecorded && unverifiedAuthoring
+        ? 'rework-already-authored'
+        : 'replay-invalid',
       codes,
     );
   }
