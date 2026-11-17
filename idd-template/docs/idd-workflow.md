@@ -1005,8 +1005,8 @@ current bundle (`decisionGenerations`), and optionally what the user did
 when the input answers: echo the digest a dry run reported) and the later
 results that relied on the prior ones (`downstreamResults`). A dry run
 reports the next step and `needsUserAnswer`, and the presentation and its
-digest when there is one. `--apply` without an answer only releases the
-coordination claim, so run the dry run first. The
+digest when there is one. With no answer to give and none stored to resume,
+`--apply` only releases the coordination claim, so run the dry run first. The
 action reads no opt-in switch, so confirmation and rework still work after
 `dangerouslyAutoDecide` is turned off, but the command needs a readable
 trusted repository policy, which supplies the trusted marker actors, and a

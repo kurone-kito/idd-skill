@@ -70,11 +70,11 @@ Request fields by "type":
 The resolve action asks whether the implemented choices were acceptable and acts
 only on an actual answer. A dry run reports the next step and needsUserAnswer,
 and the presentation and its digest when there is one; show the presentation
-and ask only when needsUserAnswer is true. Without an actual answer,
---apply only releases the coordination claim and leaves the source pending, so
-run the dry run first. The action reads no opt-in switch, so it still works when
-dangerouslyAutoDecide is off, but it needs a readable trusted repository
-policy. The rework-authored request is not run by this command.
+and ask only when needsUserAnswer is true. With no actual answer and no stored
+answer to resume, --apply only releases the coordination claim and leaves the
+source pending, so run the dry run first. The action reads no opt-in switch, so
+it still works when dangerouslyAutoDecide is off, but it needs a readable
+trusted repository policy. The rework-authored request is not run by this command.
 resolve input is what the user actually did, never an assistant assertion or
 agent-fed text. One of:
   {"channel":"conversation","origin":"user","message":"...",
