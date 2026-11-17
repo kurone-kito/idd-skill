@@ -2005,7 +2005,11 @@ export interface ProvisionalReworkAuthoringEvidence {
   };
   readonly roadmap: {
     readonly audited: boolean;
-    /** The title and body digest of the source the audit and the wiring read. */
+    /**
+     * The title and body digest of the source as it was when the audit began,
+     * captured by the caller before it read the roadmap and its children. A
+     * copy taken from a later read would make the freshness check meaningless.
+     */
     readonly auditedSource: {
       readonly title: string;
       readonly bodySha256: string;
@@ -2841,6 +2845,16 @@ async function planResolve(
         'bundle confirmed and source closed',
       );
     }
+    // Same-source rework needs the source open for its authoring pass.
+    if (
+      context.sourceState.state === 'closed' &&
+      bundle.some((decision) => decision.status === 'rework-requested')
+    ) {
+      return resolutionRefusal(
+        'recovery-hold',
+        `the source is closed (${context.sourceState.stateReason ?? 'an unknown reason'}) while a rework request awaits authoring; reopen it before releasing the claim`,
+      );
+    }
     const reworking = bundle.some(
       (decision) => decision.status === 'rework-requested',
     );
@@ -3435,9 +3449,17 @@ function plannedResult(
   };
 }
 
+/**
+ * A backstop only: every loop turn must make visible progress (a repeated step
+ * is a hold), so a valid bundle of any realistic size settles well inside it.
+ */
+const DEFAULT_RESOLUTION_STEP_BOUND = 1024;
+
 export interface ProvisionalResolutionOptions {
   /** Defaults to false. Only true may write. */
   readonly apply?: boolean;
+  /** The backstop on loop turns; defaults to a generous value. */
+  readonly maxSteps?: number;
 }
 
 async function releaseVerified(
@@ -3487,7 +3509,8 @@ export async function runProvisionalResolution(
       ...extra,
     });
   let previousKey: string | null = null;
-  for (let iteration = 0; iteration < 64; iteration += 1) {
+  const bound = options.maxSteps ?? DEFAULT_RESOLUTION_STEP_BOUND;
+  for (let iteration = 0; iteration < bound; iteration += 1) {
     const plan = await planResolution(request, store);
     if (plan.kind === 'refused') {
       return out({ ...plan.result, steps, recordIds });

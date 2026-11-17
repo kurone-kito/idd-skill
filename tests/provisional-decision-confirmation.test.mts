@@ -461,10 +461,12 @@ async function pendingStore(
 ): Promise<MemoryStore> {
   const store = new MemoryStore();
   for (let index = 0; index < count; index += 1) {
-    await completeDecision(store, {
-      evidenceId: String(index + 2),
-      pullNumber: 6000 + index,
-    });
+    // The fixture starts with two evidence comments; later ones are added.
+    const evidenceId =
+      index < 2
+        ? String(index + 2)
+        : store.addComment(() => `Option comparison evidence ${index + 1}.`).id;
+    await completeDecision(store, { evidenceId, pullNumber: 6000 + index });
   }
   releaseImplementation(store);
   postCoordinationClaim(store, coordClaim);
@@ -4375,4 +4377,89 @@ test('an answer is adopted only if a coordination claim was active when it was p
     assert.equal(result.outcome, 'confirmed-closed', JSON.stringify(result));
     assert.equal(answersOf(store).length, 1);
   });
+});
+
+test('a source closed while a rework request awaits authoring is held, not released', async (t) => {
+  await t.test(
+    'closed as not planned after the handoff was recorded',
+    async () => {
+      const store = await pendingStore();
+      store.releaseFailure = 'before';
+      const first = await answered(store, reworkConversation);
+      assert.equal(first.state, 'reconciled', JSON.stringify(first));
+      store.releaseFailure = undefined;
+      store.sourceState = { state: 'closed', stateReason: 'not_planned' };
+      const releasesBefore = store.releases;
+      const result = await runProvisionalResolution(resolveRequest(), store, {
+        apply: true,
+      });
+      assertRefused(
+        result,
+        'recovery-hold',
+        /while a rework request awaits authoring/,
+      );
+      assert.equal(store.releases, releasesBefore);
+      assert.equal(activeCoordinationClaim(store), true);
+    },
+  );
+
+  await t.test(
+    'an authored roadmap that was closed later releases the claim',
+    async () => {
+      const store = await pendingStore();
+      await answered(store, reworkConversation);
+      const fixture = await authoredFixtureFor(store);
+      const authored = await runProvisionalResolution(
+        authoredRequest(fixture),
+        store,
+        { apply: true },
+      );
+      assert.equal(
+        authored.outcome,
+        'rework-authored',
+        JSON.stringify(authored),
+      );
+      store.sourceState = { state: 'closed', stateReason: 'completed' };
+      postCoordinationClaim(store, 'claim-4536-coord-b');
+      const evidence = reworkEvidenceFor(store, fixture);
+      const result = await runProvisionalResolution(
+        resolveRequest(
+          { verifiedReworkRoadmaps: evidence },
+          'claim-4536-coord-b',
+        ),
+        store,
+        { apply: true },
+      );
+      assert.equal(result.outcome, 'rework-authored', JSON.stringify(result));
+      assert.deepEqual(result.steps, ['release-claim']);
+    },
+  );
+});
+
+test('the step bound is a backstop that can be lowered, not a cap on bundle size', async () => {
+  const store = await pendingStore(3);
+  const low = await answered(
+    store,
+    conversationYes,
+    { decisionGenerations: [1, 2, 3] },
+    'claim-4536-coord',
+    true,
+  ).catch(() => null);
+  assert.ok(low);
+  assert.equal(low.outcome, 'confirmed-closed', JSON.stringify(low));
+  // The same lifecycle needs seven steps (answer, three records, close,
+  // release), so a bound of two holds without settling.
+  const other = await pendingStore(3);
+  const digest = await shownDigest(other, { decisionGenerations: [1, 2, 3] });
+  const held = await runProvisionalResolution(
+    resolveRequest({
+      decisionGenerations: [1, 2, 3],
+      input: conversationYes,
+      answeredPresentationSha256: digest,
+    }),
+    other,
+    { apply: true, maxSteps: 2 },
+  );
+  assertRefused(held, 'recovery-hold', /did not settle within its step bound/);
+  assert.equal(held.steps.length, 2);
 });

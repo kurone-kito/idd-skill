@@ -2067,6 +2067,16 @@ async function planResolve(context, request) {
         'bundle confirmed and source closed',
       );
     }
+    // Same-source rework needs the source open for its authoring pass.
+    if (
+      context.sourceState.state === 'closed' &&
+      bundle.some((decision) => decision.status === 'rework-requested')
+    ) {
+      return resolutionRefusal(
+        'recovery-hold',
+        `the source is closed (${context.sourceState.stateReason ?? 'an unknown reason'}) while a rework request awaits authoring; reopen it before releasing the claim`,
+      );
+    }
     const reworking = bundle.some(
       (decision) => decision.status === 'rework-requested',
     );
@@ -2626,6 +2636,11 @@ function plannedResult(plan, steps, recordIds) {
     ...(plan.warnings?.length ? { warnings: plan.warnings } : {}),
   };
 }
+/**
+ * A backstop only: every loop turn must make visible progress (a repeated step
+ * is a hold), so a valid bundle of any realistic size settles well inside it.
+ */
+const DEFAULT_RESOLUTION_STEP_BOUND = 1024;
 async function releaseVerified(request, store) {
   try {
     const context = await readResolutionContext(request, store);
@@ -2660,7 +2675,8 @@ export async function runProvisionalResolution(request, store, options = {}) {
       ...extra,
     });
   let previousKey = null;
-  for (let iteration = 0; iteration < 64; iteration += 1) {
+  const bound = options.maxSteps ?? DEFAULT_RESOLUTION_STEP_BOUND;
+  for (let iteration = 0; iteration < bound; iteration += 1) {
     const plan = await planResolution(request, store);
     if (plan.kind === 'refused') {
       return out({ ...plan.result, steps, recordIds });
