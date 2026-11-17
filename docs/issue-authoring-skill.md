@@ -3038,6 +3038,19 @@ and outcomes are in the contract's
 [Authoring hold and release](https://github.com/kurone-kito/idd-skill/blob/main/skills/issue-authoring/references/contract.md#authoring-hold-and-release)
 section.
 
+### Rework adoption of a retained decision source
+
+When the operator of an opted-in decision source chooses another option, the
+same issue becomes its rework roadmap under the normal authoring hold. The
+recorded handoff supplies the fresh set and session identities. It is not
+ownership: the authoring label, the owner `acquire` marker, the handoff's own
+journal hold, the body snapshots, and the anchor heartbeats all precede the
+rewrite and each child, and the old creation token stays untouched as history.
+`publish-authoring-hold --shape child --anchor <source>` verifies the adoption
+from the trusted provisional records, with no flag, and leaves the whole set
+held for a normal release. The bundled contract's "Rework adoption of a
+retained decision source" section holds the full procedure and the checks.
+
 ## Draft carrier
 
 A **draft carrier** is an issue that holds drafts which cannot be published
