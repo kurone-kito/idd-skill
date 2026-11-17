@@ -7515,6 +7515,108 @@ for (const failure of [
   });
 }
 
+/**
+ * The own-hold scenario with its rework request record replaced, in place, by
+ * a record the parser cannot read, so the valid request cannot take the rework
+ * path and the ordinary-path guard is the check that decides. The unreadable
+ * text keeps the part of the record that names the event type and the set.
+ */
+function unreadableRequestScenario(
+  unreadable: (record: string) => string,
+  author?: string,
+): ReworkScenario {
+  const scenario = reworkScenario({
+    bodyLine: `<!-- idd-skill-authoring-publication: target=${ANCHOR_REF}; anchor=${ANCHOR_REF}; set=${REWORK_SET}; session=${REWORK_SESSION}; token=${REWORK_HANDOFF} -->`,
+  });
+  const request = scenario.comments.find((item) =>
+    item.body.includes('"recordId":"rework-1"'),
+  );
+  assert.ok(request !== undefined, 'the scenario holds the request record');
+  request.body = unreadable(request.body);
+  if (author !== undefined) {
+    request.user = author;
+  }
+  return scenario;
+}
+
+/** The record cut off in the middle of the handoff, after the set id. */
+const truncatedRecord = (record: string): string =>
+  record.slice(0, record.indexOf('"authoringSessionId"'));
+
+/** Valid JSON that is not a provisional-decision record: its shape fails. */
+const shapeInvalidRecord = (): string =>
+  `${PROVISIONAL_DECISION_RECORD_MARKER}\n${JSON.stringify({
+    schemaVersion: 1,
+    event: {
+      type: 'rework-requested',
+      reworkRequest: { handoff: { authoringSetId: REWORK_SET } },
+    },
+  })}`;
+
+for (const failure of [
+  {
+    name: 'a truncated record written by a trusted author',
+    scenario: () => unreadableRequestScenario(truncatedRecord),
+  },
+  {
+    name: 'a record that is valid JSON of another shape, written by a trusted author',
+    scenario: () => unreadableRequestScenario(shapeInvalidRecord),
+  },
+  {
+    name: 'a truncated record written by an author the default branch does not trust',
+    scenario: () => unreadableRequestScenario(truncatedRecord, 'stranger'),
+  },
+]) {
+  test(`rework: a body line naming the own hold of a handoff is refused when a rework request record that cannot be read names the open set (${failure.name})`, () => {
+    const fixture = reworkFixture(failure.scenario());
+    try {
+      for (const apply of [false, true]) {
+        const report = refusalOf(fixture, apply);
+        assert.match(
+          report.reason,
+          /carries a rework handoff for its open set set-rework that could not be verified/,
+        );
+        assert.equal(report.standardCheck, undefined);
+      }
+    } finally {
+      fixture.restore();
+    }
+  });
+}
+
+for (const miss of [
+  {
+    name: 'a longer set id (set-rework0)',
+    unreadable: (record: string) =>
+      truncatedRecord(record).replace('"set-rework"', '"set-rework0"'),
+  },
+  {
+    name: 'a set id with a longer prefix (old-set-rework)',
+    unreadable: (record: string) =>
+      truncatedRecord(record).replace('"set-rework"', '"old-set-rework"'),
+  },
+  {
+    name: 'the open set under another event type',
+    unreadable: (record: string) =>
+      truncatedRecord(record).replace('"rework-requested"', '"selected"'),
+  },
+]) {
+  test(`rework: an unreadable record that does not name the open set as a rework request does not refuse the ordinary path (${miss.name})`, () => {
+    const fixture = reworkFixture(unreadableRequestScenario(miss.unreadable));
+    try {
+      const result = fixture.run(childArgs(fixture));
+      assert.doesNotMatch(
+        `${result.stdout}\n${result.stderr}`,
+        /carries a rework handoff for its open set/,
+      );
+      assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+      assert.equal(JSON.parse(result.stdout).outcome, 'planned');
+    } finally {
+      fixture.restore();
+    }
+  });
+}
+
 test('rework: a plain anchor keeps the original check and its messages', () => {
   const fixture = setup({
     labels: ['status:authoring'],
