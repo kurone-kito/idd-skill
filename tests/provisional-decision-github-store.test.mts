@@ -94,6 +94,8 @@ interface FakeState {
     pages?: boolean;
     /** Fail the Nth paginated comment read (1-based), and only that one. */
     failPagesOn?: number;
+    /** The authenticated-account lookup fails, as with an app installation token. */
+    userFail?: boolean;
     /** Serve every row of the Nth paginated read, then fail it (a partial page). */
     partialPagesOn?: number;
     post?: boolean;
@@ -166,7 +168,10 @@ if (args[0] === 'issue' && args[1] === 'close') {
 if (args[0] === 'issue' && args[1] === 'edit') reply('edited');
 if (args[0] !== 'api') fail(2, 'unexpected command ' + args[0]);
 const endpoint = args.slice(1).find((arg, i, tail) => !arg.startsWith('-') && tail[i - 1] !== '--hostname');
-if (endpoint === 'user') reply(JSON.stringify({ login: state.postAs }));
+if (endpoint === 'user') {
+  if (state.failures.userFail) fail(403, 'Resource not accessible by integration');
+  reply(args.includes('--jq') ? state.postAs : JSON.stringify({ login: state.postAs }));
+}
 if (endpoint === 'graphql') {
   const query = args.find((arg) => arg.startsWith('query=')) || '';
   const data = {};
@@ -398,6 +403,21 @@ function withReplacedClaim(state: FakeState): void {
       id: '3',
     },
   );
+}
+
+/** The coordination claim was posted and then released: no claim is active. */
+function withReplacedClaimReleased(state: FakeState): void {
+  withClaim(state);
+  state.comments.push({
+    id: '2',
+    body: renderUnclaimedByMarker({
+      agentId: coordAgent,
+      claimId: coordClaim,
+      timestamp: '2026-11-03T11:30:00Z',
+    }),
+    user: trustedLogin,
+    createdAt: '2026-11-03T11:30:00Z',
+  });
 }
 
 /** The claim went stale and another session took it over. */
@@ -782,6 +802,94 @@ test('in resolution mode every write needs the authenticated account to be a tru
   );
 });
 
+test('the beforeWrite hook also guards the rework-authored append', async () => {
+  await withFake(
+    withReplacedClaimReleased,
+    async ({ fake, store }) => {
+      await assert.rejects(
+        store.appendReworkAuthoredBody(recordId, recordBody, sourceExpectation),
+        /refused: rework record append/,
+      );
+      assert.deepEqual(fake.writes(), []);
+    },
+    {
+      beforeWrite: (write) => {
+        throw new Error(`refused: ${write}`);
+      },
+    },
+  );
+});
+
+test('a resolution refuses its writes when the authenticated account cannot be read', async () => {
+  await withFake(
+    (state) => {
+      withClaim(state);
+      state.failures.userFail = true;
+    },
+    async ({ fake, store }) => {
+      await assert.rejects(
+        store.appendRecordBody(recordId, recordBody),
+        /account could not be read[\s\S]*token that names a user/,
+      );
+      await assert.rejects(
+        store.releaseCoordinationClaim(coordinationClaim),
+        /account could not be read/,
+      );
+      assert.deepEqual(fake.writes(), []);
+    },
+    { coordinationClaim },
+  );
+});
+
+test('a rework-authored record is not appended while a coordination claim is active', async () => {
+  // The claim is active: the planner only plans this record once it is released.
+  await withFake(withClaim, async ({ fake, store }) => {
+    await assert.rejects(
+      store.appendReworkAuthoredBody(recordId, recordBody, sourceExpectation),
+      /coordination claim is active/,
+    );
+    assert.deepEqual(fake.writes(), []);
+  });
+  // A record that already landed is still returned, and a released claim writes.
+  await withFake(
+    (state) => {
+      withClaim(state);
+      state.comments.push({
+        id: '7',
+        body: recordBody,
+        user: trustedLogin,
+        createdAt: '2026-11-03T11:50:00Z',
+      });
+    },
+    async ({ fake, store }) => {
+      assert.equal(
+        (
+          await store.appendReworkAuthoredBody(
+            recordId,
+            recordBody,
+            sourceExpectation,
+          )
+        ).result,
+        'existed',
+      );
+      assert.deepEqual(fake.writes(), []);
+    },
+  );
+  await withFake(withReplacedClaimReleased, async ({ fake, store }) => {
+    assert.equal(
+      (
+        await store.appendReworkAuthoredBody(
+          recordId,
+          recordBody,
+          sourceExpectation,
+        )
+      ).result,
+      'created',
+    );
+    assert.deepEqual(fake.writes(), ['POST']);
+  });
+});
+
 test('the beforeWrite hook runs as the last check before each write and can refuse it', async () => {
   const seen: string[] = [];
   await withFake(
@@ -807,10 +915,6 @@ test('the beforeWrite hook runs as the last check before each write and can refu
       await assert.rejects(
         store.appendAnswerBody('text'),
         /refused: answer append/,
-      );
-      await assert.rejects(
-        store.appendReworkAuthoredBody(recordId, recordBody, sourceExpectation),
-        /refused: rework record append/,
       );
       await assert.rejects(
         store.closeSourceIssue(expectedClose()),
@@ -885,28 +989,25 @@ test('the source state read fails on a missing issue and refuses a pull request'
 // ---------------------------------------------------------------------------
 
 test('a rework-authored record is appended while the source is the audited one', async () => {
-  await withFake(
-    () => {},
-    async ({ fake, store }) => {
-      const result = await store.appendReworkAuthoredBody(
+  await withFake(withReplacedClaimReleased, async ({ fake, store }) => {
+    const result = await store.appendReworkAuthoredBody(
+      recordId,
+      recordBody,
+      sourceExpectation,
+    );
+    assert.equal(result.result, 'created');
+    assert.deepEqual(fake.writes(), ['POST']);
+    // The identical record is returned on a retry, with no second write.
+    assert.deepEqual(
+      await store.appendReworkAuthoredBody(
         recordId,
         recordBody,
         sourceExpectation,
-      );
-      assert.equal(result.result, 'created');
-      assert.deepEqual(fake.writes(), ['POST']);
-      // The identical record is returned on a retry, with no second write.
-      assert.deepEqual(
-        await store.appendReworkAuthoredBody(
-          recordId,
-          recordBody,
-          sourceExpectation,
-        ),
-        { result: 'existed', record: result.record },
-      );
-      assert.deepEqual(fake.writes(), ['POST']);
-    },
-  );
+      ),
+      { result: 'existed', record: result.record },
+    );
+    assert.deepEqual(fake.writes(), ['POST']);
+  });
 });
 
 test('a rework-authored record is refused, with no write, once the source changed or closed', async () => {
@@ -966,6 +1067,7 @@ test('an existing rework-authored record is not returned for a changed source', 
 test('an untrusted pre-posted rework-authored record ID does not stand in for the record', async () => {
   await withFake(
     (state) => {
+      withReplacedClaimReleased(state);
       state.comments.push({
         id: '7',
         body: recordBody,

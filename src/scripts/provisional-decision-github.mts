@@ -11,6 +11,7 @@ import {
   ghGraphql,
   ghText,
   resolveGhApiHostname,
+  resolveViewerLogin,
   serverUrlHost,
 } from './gh-exec.mts';
 import { deriveGhHttpStatus } from './gh-http-status.mts';
@@ -576,11 +577,21 @@ export function createGithubProvisionalDecisionStore(input: {
   /**
    * In resolution mode, throw unless the authenticated account is a trusted
    * marker actor: the planner ignores a marker from any other account, so a
-   * write would only start a retry cycle that never advances.
+   * write would only start a retry cycle that never advances. The account is
+   * read as the claim collectors read it, which a token that names no user (an
+   * app installation token) cannot do; that refusal is fail-closed too.
    */
   function requireTrustedActor(): void {
     if (input.coordinationClaim === undefined) return;
-    actingLogin ??= text(object(ghApiJson('user')).login);
+    if (actingLogin === undefined) {
+      try {
+        actingLogin = resolveViewerLogin();
+      } catch (error) {
+        throw new Error(
+          `cannot write: the authenticated GitHub account could not be read (${error instanceof Error ? error.message : String(error)}), so its trust cannot be checked; a resolution needs a token that names a user, as the claim collectors do`,
+        );
+      }
+    }
     if (!trusted.has(actingLogin.trim().toLowerCase())) {
       throw new Error(
         `cannot write: the authenticated GitHub account "${actingLogin}" is not a trusted marker actor, so the planner would ignore what it writes; authenticate as a trusted actor`,
@@ -741,6 +752,15 @@ export function createGithubProvisionalDecisionStore(input: {
             expected,
             'append the record',
           ),
+        // The planner plans this record only once the coordination claim is
+        // released, so an active claim at the post is a takeover after the plan.
+        beforePost: (history) => {
+          if (readActiveClaimFromHistory(history, { policy }) !== null) {
+            throw new Error(
+              'cannot append the record: a coordination claim is active',
+            );
+          }
+        },
       });
     },
     async closeSourceIssue(expected) {
