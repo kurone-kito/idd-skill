@@ -2982,6 +2982,16 @@ test('lint.yml selects Node 22 from .node-version after the floor check', () => 
     '820762786026740c76f36085b0efc47a31fe5020',
     'lint.yml: the Node 22 setup must use the repository shared setup-node pin',
   );
+  // The three steps must be adjacent and in order: floor, setup, assertion.
+  const stepNames = lintJob
+    .split('\n')
+    .filter((line) => /^ {6}- name: /u.test(line))
+    .map((line) => line.replace(/^ {6}- name: /u, ''));
+  const floorAt = stepNames.indexOf('Assert Node.js floor');
+  assert.notEqual(floorAt, -1);
+  assert.equal(stepNames[floorAt + 1], 'Set up Node.js from .node-version');
+  assert.equal(stepNames[floorAt + 2], 'Assert Node.js 22 for static lint');
+
   const setupStep = extractNamedStepBody(
     workflow,
     'lint',
@@ -2991,17 +3001,24 @@ test('lint.yml selects Node 22 from .node-version after the floor check', () => 
     setupStep,
     /^\s*uses: actions\/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7\.0\.0$/mu,
   );
-  assert.match(setupStep, /^\s*node-version-file: \.node-version$/mu);
-  assert.equal(
-    /^\s*(?:check-latest|cache|node-version)\s*:/mu.test(setupStep),
-    false,
+  const withBlock = setupStep.split(/^ {8}with:\s*$/mu)[1] ?? '';
+  const withKeys = [...withBlock.matchAll(/^ {10}([A-Za-z][\w-]*)\s*:/gmu)].map(
+    (match) => match[1],
+  );
+  assert.deepEqual(
+    withKeys,
+    ['node-version-file'],
     'lint.yml: the Node 22 setup takes only node-version-file',
   );
+  assert.match(withBlock, /^ {10}node-version-file: \.node-version$/mu);
+
   const assertStep = extractNamedStepBody(
     workflow,
     'lint',
     'Assert Node.js 22 for static lint',
   );
-  assert.match(assertStep, /process\.versions\.node/u);
+  assert.match(assertStep, /readFileSync\("\.node-version"/u);
+  assert.match(assertStep, /pinned !== "22"/u);
+  assert.match(assertStep, /active\.split\("\."\)\[0\] !== "22"/u);
   assert.match(assertStep, /process\.exit\(1\)/u);
 });
