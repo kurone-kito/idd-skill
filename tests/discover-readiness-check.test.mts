@@ -5024,15 +5024,21 @@ test('decision gate: a confirmation issue or a draft carrier is never replayed, 
     'label:status:authoring-only',
     `label:${DECISION_LABEL}`,
   ]);
-  // The excluded issues do not count toward the cap: 2 queued and 0 open is
-  // below a cap of 3, so a further ordinary source is still eligible. (Were 71
-  // and 72 counted, it would sit at the cap.)
-  const capped = decisionGate({
-    71: pendingEvidence(),
-    72: pendingEvidence(),
-    73: pendingEvidence(),
-    74: pendingEvidence(),
-  });
+  // The open confirmation issue (71) counts toward the cap, as the live count
+  // does: it is open and carries the confirmation label, so the stub reports 1.
+  // The draft carrier (72) carries no such label and is not queued either. One
+  // open plus two queued (73, 74) reaches the cap of 3, so a further ordinary
+  // source is blocked. Were 71 or 72 also queued, the count would read 4/3, and
+  // were the open count left at 0, source 75 would stay eligible.
+  const capped = decisionGate(
+    {
+      71: pendingEvidence(),
+      72: pendingEvidence(),
+      73: pendingEvidence(),
+      74: pendingEvidence(),
+    },
+    { countOpenConfirmationIssues: () => 1 },
+  );
   const fifth = await runGate(
     [71, 72, 73, 74, 75],
     [
@@ -5044,9 +5050,14 @@ test('decision gate: a confirmation issue or a draft carrier is never replayed, 
     ],
     capped.resolver,
   );
+  assert.deepEqual(fifth.ready, []);
   assert.deepEqual(
-    fifth.ready.map((entry) => entry.number),
-    [75],
+    fifth.confirmationQueue?.map((entry) => entry.number),
+    [73, 74],
+  );
+  assert.deepEqual(
+    fifth.filteredOut.find((entry) => entry.number === 75)?.reasons,
+    [`label:${DECISION_LABEL}`, 'provisional_pending_cap:3/3'],
   );
   // The trusted confirmation name can differ from the local one: a completed
   // source that carries only the trusted name is not replayed or queued, even
