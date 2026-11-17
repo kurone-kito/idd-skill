@@ -390,11 +390,13 @@ failure:
 - `lint`: the bare-Node lane. It runs the static audits with no dependency
   installed and no longer runs the test suite (issue `#5182`).
 - `pnpm-boundary`: the aggregate job (issue `#4993`). act runs the jobs it
-  needs first. In this repository they are the four `pnpm-boundary-group`
-  shards (`lint`, `typecheck`, `test`, and `distribution`). Each shard runs
+  needs first. In this repository they are the `pnpm-boundary-group`
+  shards: `lint` (Node 22 only), `typecheck`, three `test` parts, and
+  `distribution`. Each shard runs
   `pnpm install --frozen-lockfile --prefer-offline` with `HUSKY=0`, then
-  its own `pnpm run check` groups, and the `distribution` shard also runs
-  `node scripts/check-pnpm-boundary.mjs`. When act does not resolve the
+  its own `pnpm run check` groups (a test part runs its own list of test
+  files with `pnpm exec node --test`), and the `distribution` shard also
+  runs `node scripts/check-pnpm-boundary.mjs`. When act does not resolve the
   repository as `kurone-kito/idd-skill`, the `pnpm-boundary-full` job runs
   the whole suite instead. Before the first push of PR `#5018`, the shard
   path (`pnpm-boundary.yml` with `-j pnpm-boundary`) was replayed locally
@@ -402,8 +404,15 @@ failure:
   fixed before the push. The `pnpm-boundary-full` fallback path has
   not been replayed under act.
 - `pnpm-boundary-node22-floor`: the same reusable workflow on the Node
-  version set by its `node-version` input. It is the only one of the three
-  jobs that covers Node 22.
+  version that its `node-version-file: .node-version` input selects, which
+  is Node 22. Under act the `pnpm-boundary` job takes the `node-version`
+  fallback lane, Node 24.x, for its typecheck, test, and distribution shards
+  (an act 0.2.97 dry run of `-j pnpm-boundary` on 2026-11-17 listed no other
+  version for those shards), so the floor job is the only one of the three
+  jobs that runs those shards on Node 22. The lint shard of the
+  `pnpm-boundary` job always runs on Node 22 (issue `#5263`). On GitHub, the
+  `pull_request` matrix runs every shard but lint on Node 22, 24.x, and
+  26.x.
 
 Compared with `commands.pre-push-validate`, the script adds the
 bare-Node run with no installed dependency, the frozen-lockfile install
@@ -416,7 +425,7 @@ tests use wall-clock limits: a 2000 ms limit in
 `tests/provider-outage-park-read-runtime.test.mts`. Local act runs of this
 change on 2026-10-27 hit this failure in the lint job's bare-Node test suite
 step, as recorded in pull request `#4773`. Issue `#5182` removed that step,
-and the same test files still run in the `test` shard of the
+and the same test files still run in the `test` parts of the
 `pnpm-boundary` job. Rerun the job on a quieter host before treating such a
 failure as a code defect.
 

@@ -6,10 +6,12 @@ name: Pnpm boundary guard
 # the same suite), with installed dependencies; the bare-node subset
 # intentionally also runs in lint.yml.
 #
-# Rerun scope (#4993): this repository's pull_request run covers the four
-# check groups on Node 22, 24.x, and 26.x, except that the test group runs
-# only on Node 22.x and 24.x (decision #5182). "Re-run failed jobs" repeats only
-# the failed version/group lane and the small pnpm-boundary aggregate. The
+# Rerun scope (#4993, #5263): this repository's pull_request run covers the
+# check groups on Node 22, 24.x, and 26.x, except that static lint runs on
+# Node 22 only. The test group runs as the three parts test-1 to test-3, each
+# on all three versions, so no part sums to more than 15 minutes of the
+# per-file durations that #5261 measured. "Re-run failed jobs" repeats only
+# the failed version/shard lane and the small pnpm-boundary aggregate. The
 # manual Node 22 floor caller selects only the Node 22 column. Every other
 # caller, and any caller that passes its own lint-command, gets one full run
 # in pnpm-boundary-full instead. The two job-level if: expressions are exact
@@ -76,29 +78,323 @@ jobs:
         # Other same-repository callers keep their node-version or
         # node-version-file input; the floor caller selects .node-version.
         node-version: ${{ fromJSON(github.repository == 'kurone-kito/idd-skill' && contains(github.workflow_ref, 'kurone-kito/idd-skill/.github/workflows/pnpm-boundary.yml@') && inputs.node-version-file == '' && '["22.x","24.x","26.x"]' || github.repository == 'kurone-kito/idd-skill' && inputs.node-version-file == '.node-version' && '["22.x"]' || github.repository == 'kurone-kito/idd-skill' && inputs.node-version-file != '' && '["file"]' || format('[{0}]', toJSON(inputs.node-version || '24.x'))) }}
+        # The lint shard is not on this axis. Its include entry below names
+        # node-version: 22.x and a shard value that no axis combination has,
+        # so GitHub adds exactly one lint job, pinned to Node 22 in every
+        # lane this matrix can take (issue #5263). The other shards run on
+        # every version in node-version.
         shard:
-          - lint
           - typecheck
-          - test
+          - test-1
+          - test-2
+          - test-3
           - distribution
         # check-groups partitions check-project: each group runs in exactly
-        # one shard for each Node version, except that the test group has no
-        # Node 26.x shard (the exclude below; decision #5182). pnpm passes a
+        # one shard for each Node version it is built for. pnpm passes a
         # literal `--` to the script, so group ids follow the script name.
+        # The test group is split into the three parts test-1 to test-3. Each
+        # part runs its own test-files, one path per line, with the command of
+        # `pnpm run test:scripts`; the audit and
+        # tests/repository-workflow-audit.test.mts check the command. Every
+        # tests/*.test.mts file belongs to exactly one part, and since
+        # decision #5182 these parts are the only full-suite run. That
+        # repository test, not the audit, fails and names a file that no part
+        # lists. Add a new file to any part, at its sorted position so the
+        # lists stay in path order. Issue #5263 sized the parts from the
+        # per-file durations of #5261 (run 43977792866): each part sums to
+        # 856.8 seconds on Node 22, against 900, so about 43 seconds of
+        # headroom remain there. Repack by dispatching test-duration.yml and
+        # assigning the files again so that no part sums above 900 seconds on
+        # any version.
         include:
-          - shard: lint
+          - node-version: 22.x
+            shard: lint
             check-groups: lint
           - shard: typecheck
             check-groups: typecheck
-          - shard: test
+          - shard: test-1
             check-groups: test
+            test-files: |-
+              tests/advisory-convergence.test.mts
+              tests/advisory-wait-marker-grammar.test.mts
+              tests/advisory-wait-recovery.test.mts
+              tests/audit-authored-issue.test.mts
+              tests/audit-dead-exports.test.mts
+              tests/audit-docs-file-sets.test.mts
+              tests/audit-docs-generated-blocks.test.mts
+              tests/audit-docs-lite-gate-parity.test.mts
+              tests/audit-docs-near-ceiling-ratchet.test.mts
+              tests/audit-pr-cleanup.test.mts
+              tests/authoring-owner-marker.test.mts
+              tests/authoring-set-members.test.mts
+              tests/bot-comment-corpus.test.mts
+              tests/branch-name.test.mts
+              tests/build-ts.test.mts
+              tests/check-stray-commit-closes.test.mts
+              tests/ci-wait-state.test.mts
+              tests/claim-issue.test.mts
+              tests/claim-lifecycle.test.mts
+              tests/claim-parser.test.mts
+              tests/claimed-push.test.mts
+              tests/cli-args.test.mts
+              tests/commit-inventory-record.test.mts
+              tests/copilot-review-body-remark.test.mts
+              tests/delete-remote-branch.test.mts
+              tests/discover-hint-cache.test.mts
+              tests/discover-hint-integration.test.mts
+              tests/distribution-selection.test.mts
+              tests/e10-recurrence.test.mts
+              tests/f4-head-proof.test.mts
+              tests/forced-handoff-marker.test.mts
+              tests/gh-exec-load-control.test.mts
+              tests/gh-exec.test.mts
+              tests/gh-pagination-parsing-smoke.test.mts
+              tests/gh-spawn-guard.test.mts
+              tests/github-api-refusal-recovery.test.mts
+              tests/github-api-request-class.test.mts
+              tests/global-only-profile.test.mts
+              tests/helper-cli-runner.test.mts
+              tests/helper-runtime-manifest.test.mts
+              tests/helper-runtime-profiles.test.mts
+              tests/idd-config.test.mts
+              tests/idd-critique-report.test.mts
+              tests/idd-load-gate.test.mts
+              tests/idd-local-admission.test.mts
+              tests/isolate-gh.test.mts
+              tests/isolate-state.test.mts
+              tests/issue-authoring-destructive-criteria.test.mts
+              tests/lint-source-boundaries.test.mts
+              tests/local-admission-shell-fallback.test.mts
+              tests/local-worktree-recovery.test.mts
+              tests/markdown-code.test.mts
+              tests/markdown-link-audit.test.mts
+              tests/marker-helpers.test.mts
+              tests/marker-regex.test.mts
+              tests/merged-pr-feedback-sweep.test.mts
+              tests/minimize-superseded-markers.test.mts
+              tests/near-ceiling-ratchet.test.mts
+              tests/no-nul-bytes.test.mts
+              tests/node-options.test.mts
+              tests/onboarding-hearing.test.mts
+              tests/package-lifecycle-scripts.test.mts
+              tests/post-idd-marker-schema.test.mts
+              tests/post-idd-marker.test.mts
+              tests/pr-loop-membership.test.mts
+              tests/pre-merge-readiness-collection-smoke.test.mts
+              tests/preserve-destination.test.mts
+              tests/protocol-helpers-gh-pagination.test.mts
+              tests/provider-adapter-fake.test.mts
+              tests/provider-adapter-github.test.mts
+              tests/provisional-decision-cli.test.mts
+              tests/provisional-decision-github.test.mts
+              tests/provisional-decision-result-schema.test.mts
+              tests/provisional-decision-state.test.mts
+              tests/pull-request-draft-state.test.mts
+              tests/release-tag-cli.test.mts
+              tests/repository-inventory-audit.test.mts
+              tests/repository-schema-audit.test.mts
+              tests/required-checks-summary.test.mts
+              tests/rerun-advisory-convergence.test.mts
+              tests/resolve-trusted-marker-actors.test.mts
+              tests/review-clause-ack.test.mts
+              tests/schema-output-roundtrip.test.mts
+              tests/select-desynced-index.test.mts
+              tests/standing-approval-report.test.mts
+              tests/suitability-close-execute.test.mts
+              tests/supersession-detection.test.mts
+              tests/token-cost-harvest.test.mts
+              tests/user-global-ci-dispatch.test.mts
+              tests/validate-schemas-cli.test.mts
+              tests/wave-gradient-docs.test.mts
+              tests/workflow-yaml-subset.test.mts
+          - shard: test-2
+            check-groups: test
+            test-files: |-
+              tests/actions-usage-report.test.mts
+              tests/actions-usage-workflow-guard.test.mts
+              tests/advisory-comment-debounce.test.mts
+              tests/advisory-convergence-fake-provider.test.mts
+              tests/advisory-wait-policy.test.mts
+              tests/advisory-wait.test.mts
+              tests/auto-decision-records.test.mts
+              tests/branch-conflict-state.test.mts
+              tests/bundle-ceiling-remedy-order.test.mts
+              tests/bundle-root.test.mts
+              tests/check-build-artifacts.test.mts
+              tests/check-untracked-artifacts.test.mts
+              tests/ci-wait-policy.test.mts
+              tests/claim-approval-gate.test.mts
+              tests/claim-lock.test.mts
+              tests/cli-entry-smoke.test.mts
+              tests/collaborator-permission.test.mts
+              tests/consistency-helpers.test.mts
+              tests/context-ceiling.test.mts
+              tests/copilot-review-wave-audit.test.mts
+              tests/discover-progress.test.mts
+              tests/discover-readiness-check.test.mts
+              tests/discover-shared-file-overlap.test.mts
+              tests/discover-viability-gate.test.mts
+              tests/disposition-marker-punctuation.test.mts
+              tests/disposition-non-review-notices.test.mts
+              tests/effort.test.mts
+              tests/emit-marker.test.mts
+              tests/execution-mode-decision.test.mts
+              tests/external-check-waiver.test.mts
+              tests/f4-head-proof-gate.test.mts
+              tests/f4-head-proof-verdict.test.mts
+              tests/f4-worktree-branch-cleanup.test.mts
+              tests/f4-worktree-branch-steps.test.mts
+              tests/github-api-load-control.test.mts
+              tests/github-api-read-cache.test.mts
+              tests/helper-flag-drift.test.mts
+              tests/helper-invocation-profile.test.mts
+              tests/idd-activation.test.mts
+              tests/idd-effective-config.test.mts
+              tests/idd-roadmap-audit-execute.test.mts
+              tests/idd-suggest-untrusted-labelers.test.mts
+              tests/idd-worker-budget.test.mts
+              tests/idd-worker-report.test.mts
+              tests/inventory-ordering.test.mts
+              tests/lint-source-contracts.test.mts
+              tests/live-status-digest.test.mts
+              tests/markdown-structure.test.mts
+              tests/marker-helpers-authoring-family-classify.test.mts
+              tests/marker-helpers-timestamp.test.mts
+              tests/node-runtime-guard.test.mts
+              tests/phase-id-resolver.test.mts
+              tests/pnpm-boundary.test.mts
+              tests/policy-config-example.test.mts
+              tests/pr-head-freshness.test.mts
+              tests/pre-merge-readiness.test.mts
+              tests/pre-push-trial-merge-budget.test.mts
+              tests/protocol-helpers.test.mts
+              tests/provider-adapter-parity.test.mts
+              tests/provider-health.test.mts
+              tests/provider-outage-park-read-runtime.test.mts
+              tests/provider-outage-park.test.mts
+              tests/provider-port-migration-guard.test.mts
+              tests/provisional-claim-lineage.test.mts
+              tests/provisional-decision-confirmation.test.mts
+              tests/provisional-decision.test.mts
+              tests/publish-authoring-hold.test.mts
+              tests/repository-policy-audit.test.mts
+              tests/resume-claim-routing.test.mts
+              tests/review-comment-origin.test.mts
+              tests/review-defer-bundle.test.mts
+              tests/review-reply-stamp.test.mts
+              tests/review-snapshot.test.mts
+              tests/review-thread-edit-histories.test.mts
+              tests/schema-type-reconciliation.test.mts
+              tests/schema-validation.test.mts
+              tests/scope-overrun-route.test.mts
+              tests/standalone-mirror-imports.test.mts
+              tests/stub-executable.test.mts
+              tests/sweep-authoring-markers.test.mts
+              tests/sync-docs.test.mts
+              tests/triage-structural-evidence.test.mts
+              tests/type-suppression-budgets.test.mts
+              tests/user-global-entry-files.test.mts
+              tests/verify-import-mirror.test.mts
+              tests/verify-workshop-integrity.test.mts
+              tests/workflow-helper-runtime-keys.test.mts
+              tests/workflow-package-manager-install.test.mts
+              tests/worktree-guard-hook.test.mts
+          - shard: test-3
+            check-groups: test
+            test-files: |-
+              tests/adopter-shaped-bundle.test.mts
+              tests/advisory-wait-shell-fallback.test.mts
+              tests/advisory-wait-state.test.mts
+              tests/audit-code-span-wrap.test.mts
+              tests/audit-docs-exact-mode-placeholders.test.mts
+              tests/audit-docs-generated-banner.test.mts
+              tests/audit-docs-report.test.mts
+              tests/audit-docs-shared-sections.test.mts
+              tests/audit-docs-source-root.test.mts
+              tests/audit-pr-cleanup-summary.test.mts
+              tests/authoring-label-guard.test.mts
+              tests/authoring-owner-provenance.test.mts
+              tests/auto-decided-choice-body.test.mts
+              tests/autopilot-suitability.test.mts
+              tests/b1-leftover-preserve.test.mts
+              tests/branch-state-enum.test.mts
+              tests/check-pnpm-boundary.test.mts
+              tests/check-project.test.mts
+              tests/cleanup-boundaries.test.mts
+              tests/clone-lock.test.mts
+              tests/closing-keyword-parity.test.mts
+              tests/code-span-wrap.test.mts
+              tests/consistency.test.mts
+              tests/dependency-grammar.test.mts
+              tests/discover-orphan-filter.test.mts
+              tests/discover-roadmap-graph.test.mts
+              tests/distribution-contract.test.mts
+              tests/examples-minimal-run.test.mts
+              tests/f4-head-proof-live.test.mts
+              tests/f4-submodule-probe.test.mts
+              tests/force-handoff.test.mts
+              tests/fresh-claim-order.test.mts
+              tests/gh-http-status.test.mts
+              tests/github-api-observation.test.mts
+              tests/global-only-readiness.test.mts
+              tests/help-text-flags.test.mts
+              tests/helper-cli-contract.test.mts
+              tests/helper-cli-gate-envelope.test.mts
+              tests/hold-marker.test.mts
+              tests/idd-critique-delegate.test.mts
+              tests/idd-critique-harvest.test.mts
+              tests/idd-critique-telemetry-hook.test.mts
+              tests/idd-doctor-cleanup-backlog-cli-smoke.test.mts
+              tests/idd-doctor.test.mts
+              tests/idd-issue-authoring-delegate.test.mts
+              tests/idd-merge-execute.test.mts
+              tests/idd-onboard.test.mts
+              tests/issue-body-corpus.test.mts
+              tests/local-validation-evidence.test.mts
+              tests/local-worktree-occupancy.test.mts
+              tests/marker-helpers-facade.test.mts
+              tests/node-import-boundary.test.mts
+              tests/operational-marker-start-pattern.test.mts
+              tests/payload-placeholders.test.mts
+              tests/policy-helpers.test.mts
+              tests/protocol-helpers-advisory-bot-login.test.mts
+              tests/protocol-helpers-coderabbit-embedded-findings.test.mts
+              tests/provider-contract.test.mts
+              tests/provider-outage-declaration.test.mts
+              tests/pull-request-draft-state-execute.test.mts
+              tests/release-tag.test.mts
+              tests/repository-instruction-audit.test.mts
+              tests/repository-workflow-audit.test.mts
+              tests/resolve-review-thread.test.mts
+              tests/resume-route-selection.test.mts
+              tests/review-activity-classifier.test.mts
+              tests/review-activity-snapshot.test.mts
+              tests/review-disposition-verify.test.mts
+              tests/review-gate.test.mts
+              tests/root-markdown-allowlist.test.mts
+              tests/run-helper.test.mts
+              tests/shadow-path-check.test.mts
+              tests/stalled-session-quiet-check.test.mts
+              tests/suitability-triage.test.mts
+              tests/temp-fixtures.test.mts
+              tests/token-cost-adapter-claude.test.mts
+              tests/token-cost-adapter-codex.test.mts
+              tests/token-cost-adapter-grok.test.mts
+              tests/token-cost-core.test.mts
+              tests/token-cost-event.test.mts
+              tests/token-cost-report.test.mts
+              tests/trial-merge-audit.test.mts
+              tests/trial-scratch.test.mts
+              tests/update-fixtures.test.mts
+              tests/upstream-candidate.test.mts
+              tests/user-global-install.test.mts
+              tests/user-global-paths.test.mts
+              tests/validation-command-contract.test.mts
+              tests/verify-install-deps.test.mts
+              tests/windows-acl.test.mts
+              tests/worktree-remnant-evidence.test.mts
           - shard: distribution
             check-groups: build:check audit
-        # The Node 26.x lane skips the test group (decision #5182): the full
-        # test suite runs on Node 22.x and 24.x only.
-        exclude:
-          - node-version: 26.x
-            shard: test
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -127,7 +423,13 @@ jobs:
           HUSKY: 0
         run: ${{ inputs.install-command || 'pnpm install --frozen-lockfile --prefer-offline' }}
       - name: Run project check groups
+        if: ${{ !startsWith(matrix.shard, 'test-') }}
         run: pnpm run check ${{ matrix.check-groups }}
+      - name: Run test part
+        if: ${{ startsWith(matrix.shard, 'test-') }}
+        env:
+          TEST_FILES: ${{ matrix.test-files }}
+        run: pnpm exec node --test --import ./tests/isolate-state.mts $TEST_FILES
       - name: Check distributable pnpm boundary
         if: ${{ matrix.shard == 'distribution' }}
         run: ${{ inputs.boundary-command || 'node scripts/check-pnpm-boundary.mjs' }}
