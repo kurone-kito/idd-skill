@@ -646,8 +646,8 @@ generation's opening marker carries the handoff's session, and the set is not
 closed in the owner history; the generation opened after the first rework
 request and no claim, release, nonce or forced-handoff marker follows its
 opening; the opening marker's body digest is the source the handoff covers, the
-latest owner marker records the live body (a heartbeat after saving), and every
-read of the run sees the body digest of its first read; the old creation token, when the
+latest owner marker records the live body at every check (a heartbeat after
+saving), and every read of the run sees the body digest of its first read; the old creation token, when the
 body has one, names another set that the owner history shows as closed (an
 unreadable line, the handoff set, or an unproven set is refused, and the line
 is never rewritten); the handoff's own hold (token = handoff id, target and
@@ -2350,14 +2350,17 @@ function evaluateReworkAnchor(input: {
         'the generation opened on a body other than the source the handoff covers',
       );
     }
-    const { latest } = checked.generation;
-    if (latest.bodySha256 !== liveDigest) {
-      return refused(
-        `the source body is not the one the latest owner marker (comment ${latest.id}) records, so it was edited without a same-owner heartbeat: post that heartbeat after saving the body, then run again`,
-      );
-    }
   } else if (liveDigest !== expected.bodySha256) {
     return refused('the source body changed during this run');
+  }
+  // Every evaluation, the first and each re-verification, needs the latest
+  // owner marker of the generation to record the live body: a heartbeat that
+  // the owner posts after saving, or one that this run posted.
+  const { latest } = checked.generation;
+  if (latest.bodySha256 !== liveDigest) {
+    return refused(
+      `the source body is not the one the latest owner marker (comment ${latest.id}) records, so it was edited without a same-owner heartbeat: post that heartbeat after saving the body, then run again`,
+    );
   }
 
   // The old creation token is historical evidence only: it never serves as the

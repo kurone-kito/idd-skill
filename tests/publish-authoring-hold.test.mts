@@ -339,6 +339,13 @@ if ((match = /^repos\/o\/r\/issues\/(\d+)\/comments$/.exec(path))) {
         // Someone edits the anchor's body right after the post (#4537).
         state.issues[${ANCHOR}].body += rule.text;
       }
+      if (rule.action === 'staleHeartbeat') {
+        // A heartbeat of the anchor's own owner, set and session that records another body (#4537).
+        const owner = /owner=([^;]+);/.exec(body)[1];
+        const setId = /set=([^;]+);/.exec(body)[1];
+        const session = /session=([^;]+);/.exec(body)[1];
+        state.comments.push({ id: 7700 + state.comments.length, issue: ${ANCHOR}, body: '<!-- idd-skill-authoring-owner: target=o/r#${ANCHOR}; anchor=o/r#${ANCHOR}; mode=heartbeat; owner=' + owner + '; set=' + setId + '; session=' + session + '; body-sha256=' + '0'.repeat(64) + '; snapshot-sha256=none; supersedes=' + owner + ' -->', user, createdAt: '2026-10-13T01:05:00Z' });
+      }
       if (rule.action === 'trustedPolicy') {
         // The default branch's trusted policy changes right after the post (#4537).
         state.trustedConfig = rule.config;
@@ -7451,6 +7458,25 @@ test('rework: a verified handoff cannot take the ordinary path through a body li
       );
       assert.equal(report.standardCheck, undefined);
     }
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('rework: a heartbeat of the owner that records another body, posted during the run, stops it', () => {
+  const fixture = reworkFixture(reworkScenario(), {
+    afterPost: [{ mode: 'heartbeat', action: 'staleHeartbeat' }],
+  });
+  try {
+    const result = fixture.run([...childArgs(fixture), '--apply']);
+    assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
+    const hold = JSON.parse(result.stdout);
+    assert.equal(hold.outcome, 'recovery-hold');
+    assert.match(
+      hold.reason,
+      /no longer holds: the source body is not the one the latest owner marker \(comment \d+\) records/,
+    );
+    assert.ok(!writeKinds(fixture).includes('member'));
   } finally {
     fixture.restore();
   }

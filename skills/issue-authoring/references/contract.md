@@ -4104,9 +4104,10 @@ claim of the confirmation review is released:
      `claimed-by`, `unclaimed-by`, `activation-nonce`, or `forced-handoff`
      marker from a trusted author follows its opening;
    - the opening marker's body digest is the source the handoff covers, the
-     latest owner marker of the generation records the live body (the
-     heartbeat after saving that step 4 requires; a body edited since is
-     refused until that heartbeat is posted), and every read of the run sees
+     latest owner marker of the generation records the live body at every
+     check (the heartbeat after saving that step 4 requires; a body edited
+     since is refused until that heartbeat is posted, and a later heartbeat
+     that records another body stops a run), and every read of the run sees
      the body digest of its first read, so an edit during a run stops it;
    - when the body carries a creation token, it names another set that the
      owner history proves closed; an unreadable line, a line naming the
