@@ -4079,8 +4079,8 @@ claim of the confirmation review is released:
 5. Publish each child with `publish-authoring-hold --shape child --anchor
    <source>`, one call at a time, each under its own completed-draft review.
    There is no flag: the helper checks the hold named by the anchor's body
-   line first, unchanged, and only when that refuses does it read the anchor's
-   trusted provisional records as Discover does: the default-branch trusted
+   line first, unchanged, and then reads the anchor's trusted provisional
+   records (when it has any) as Discover does: the default-branch trusted
    policy, not the local file (read again by every check, so a revoked actor
    stops a run), and an untrusted or edited record marker refuses the whole
    history. It does not use the environment actor list or the
@@ -4091,9 +4091,11 @@ claim of the confirmation review is released:
    marker is refused, and that history is append-only, so a maintainer decides
    how such a source is handled. The
    rework check applies only when the records replay to a handoff whose set is
-   the open generation's set. Otherwise the original refusal stands, with the
-   handoff reason in its report. When it applies, every item holds or the call
-   stops before any write:
+   the open generation's set. Otherwise the original check decides, and its
+   refusal carries the handoff reason in its report. When it applies, the
+   original check passing is not enough: every item holds or the call stops
+   before any write, so a body line rewritten to the handoff's own hold cannot
+   take the ordinary path:
 
    - the handoff names this anchor, the generation's opening marker carries the
      handoff's session (so a resumed set still verifies), and the set is not
@@ -4101,12 +4103,11 @@ claim of the confirmation review is released:
    - the generation opened after the first rework request, and no
      `claimed-by`, `unclaimed-by`, `activation-nonce`, or `forced-handoff`
      marker from a trusted author follows its opening;
-   - the opening marker's body digest is the source the handoff covers, and
-     every read of the run sees the body digest of its first read, so an edit
-     during a run stops it. An edit before the run is recorded by the run's
-     own first heartbeat, as for any anchor; the heartbeat after saving that
-     step 4 requires is the evidence the guarded request reads, not a
-     condition of this check;
+   - the opening marker's body digest is the source the handoff covers, the
+     latest owner marker of the generation records the live body (the
+     heartbeat after saving that step 4 requires; a body edited since is
+     refused until that heartbeat is posted), and every read of the run sees
+     the body digest of its first read, so an edit during a run stops it;
    - when the body carries a creation token, it names another set that the
      owner history proves closed; an unreadable line, a line naming the
      handoff set, or an unproven set is an unknown prior set and is refused. A
