@@ -4923,8 +4923,8 @@ test('decision gate: a confirmation issue or a draft carrier is never replayed, 
     [75],
   );
   // The trusted confirmation name can differ from the local one: a completed
-  // source that carries only the trusted name is not queued, even with the
-  // class off, and does not count either.
+  // source that carries only the trusted name is not replayed or queued, even
+  // with the class off, and does not count either.
   for (const classEnabled of [true, false]) {
     const trustedOnly = decisionGate(
       { 76: pendingEvidence() },
@@ -4939,5 +4939,7 @@ test('decision gate: a confirmation issue or a draft carrier is never replayed, 
     );
     assert.equal('confirmationQueue' in outcome, false, String(classEnabled));
     assert.deepEqual(outcome.ready, [], String(classEnabled));
+    // The source is dropped before any replay, so it is never read at all.
+    assert.deepEqual(trustedOnly.calls.loadStates, [], String(classEnabled));
   }
 });

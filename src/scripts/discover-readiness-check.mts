@@ -1096,7 +1096,7 @@ export interface DecisionSourceInputs {
 /**
  * Whether a source carries the trusted confirmation label (trimmed, any
  * case). Such an issue waits for a person and is never a decision source, so
- * it is neither queued nor counted by the queue.
+ * `prepare` drops it before any replay: it is neither queued nor counted.
  */
 function carriesConfirmationLabel(
   labels: readonly string[],
@@ -1178,7 +1178,10 @@ function buildQueueEntry(
 /**
  * Build the shared decision-source gate (issue #4538). It decides, for an
  * open issue that carries the needs-decision label, whether Discover may offer
- * it as eligible decision work. The order is fixed:
+ * it as eligible decision work. Before any replay, `prepare` drops a source
+ * that carries the trusted confirmation label (a person's answer is pending,
+ * so it is never a decision source): it is not read, queued, or counted, and
+ * its verdict is `blocked`. The order for every other source is fixed:
  *
  * 1. A source whose provisional work is complete and awaits confirmation is
  *    queued, whatever the flag or the class says, so the work never repeats.
@@ -1186,17 +1189,17 @@ function buildQueueEntry(
  *    exclusion. So does a read that throws.
  * 3. Unusable, invalid, or inconsistent state, or any other record state
  *    (selected, in progress, rework, confirmed, which Resume owns), blocks.
- * 4. A source that carries the trusted confirmation label is never a source.
- * 5. An unreadable cap or count, or a pending count at or above the cap,
+ * 4. An unreadable cap or count, or a pending count at or above the cap,
  *    skips the source. The pending count is the open issues that carry the
  *    trusted confirmation label plus this run's queue. The queue term counts
  *    only the sources this run scanned, so it never lowers the count below the
  *    label count alone but can miss a completed source the run did not scan.
- * 6. Anything else is eligible. An eligible source is only a candidate: A4
+ * 5. Anything else is eligible. An eligible source is only a candidate: A4
  *    and A4.5 still assess the plan before any claim.
  *
- * The trusted read and the count run lazily, once per gate. A failed replay
- * never throws out of `prepare`.
+ * The trusted read runs once per gate, when a pass has a source, and the count
+ * once per pass, at the cap step. A failed replay never throws out of
+ * `prepare`.
  */
 export function buildDecisionSourceResolver(
   inputs: DecisionSourceInputs,
@@ -1244,7 +1247,18 @@ export function buildDecisionSourceResolver(
       evidenceByNumber.clear();
       queueByNumber.clear();
       openConfirmationCount = undefined;
+      // A source that carries the trusted confirmation label is never replayed,
+      // queued, counted, or relaxed, whatever name the checkout's own policy
+      // uses. The trusted read is the one this gate reads anyway, taken once
+      // and only when the pass has a source.
+      const policy = sources.length > 0 ? readTrusted() : undefined;
       for (const source of sources) {
+        if (
+          policy !== undefined &&
+          carriesConfirmationLabel(source.labels, policy)
+        ) {
+          continue;
+        }
         candidates.set(source.issueNumber, source);
       }
       if (candidates.size === 0) return;
@@ -1275,10 +1289,7 @@ export function buildDecisionSourceResolver(
         const evidence: unknown = states.get(issueNumber);
         if (!isUsableEvidence(evidence)) continue;
         evidenceByNumber.set(issueNumber, evidence);
-        if (
-          awaitsConfirmation(evidence) &&
-          !carriesConfirmationLabel(candidate.labels, readTrusted())
-        ) {
+        if (awaitsConfirmation(evidence)) {
           queueByNumber.set(issueNumber, buildQueueEntry(candidate, evidence));
         }
       }
@@ -1304,9 +1315,6 @@ export function buildDecisionSourceResolver(
       const cap = policy.maxPendingConfirmations;
       if (labelName === null || cap === null) {
         return { kind: 'blocked', reason: 'provisional_pending_unreadable' };
-      }
-      if (carriesConfirmationLabel(candidate.labels, policy)) {
-        return { kind: 'blocked' };
       }
       const open = readOpenConfirmationCount(labelName);
       if (open === null) {

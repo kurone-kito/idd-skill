@@ -5063,4 +5063,6 @@ test('decision gate: a confirmation issue or draft carrier with completed record
   );
   assert.equal('confirmationQueue' in outcome, false);
   assert.deepEqual(outcome.orphans, []);
+  // Dropped before any replay: the gate never read it.
+  assert.deepEqual(trustedOnly.prepared, []);
 });
