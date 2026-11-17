@@ -1071,8 +1071,10 @@ export type DecisionSourceVerdict =
 export interface DecisionSourceResolver {
   /**
    * Replay every scanned needs-decision source of this run, once, before any
-   * verdict, so the pending cap cannot depend on scan order. A failed read
-   * leaves those sources without evidence and never throws.
+   * verdict, so the pending cap cannot depend on scan order. An ordinary
+   * failed read leaves those sources without evidence. An interruption (a
+   * load-control refusal, a rate limit, or a timeout) propagates, so the
+   * scan's recovery handler sees it.
    */
   prepare(candidates: readonly DecisionSourceCandidate[]): Promise<void>;
   /** The verdict for a prepared source; an unprepared one is `blocked`. */
@@ -1086,11 +1088,15 @@ export interface DecisionSourceInputs {
   loadStates(
     sources: readonly ProvisionalEvidenceSource[],
   ): Promise<ReadonlyMap<number, ProvisionalDecisionEvidence>>;
-  /** The trusted auto-decide read; a throw means the class is off. */
+  /**
+   * The trusted auto-decide read; an ordinary throw means the class is off,
+   * and an interruption propagates.
+   */
   readTrusted(): TrustedDecisionPolicy;
   /**
    * The number of open issues that carry the trusted confirmation label, or
-   * `null` when it cannot be read; a throw means the same.
+   * `null` when it cannot be read; an ordinary throw means the same, and an
+   * interruption propagates.
    */
   countOpenConfirmationIssues(labelName: string): number | null;
 }
@@ -1216,8 +1222,8 @@ function buildQueueEntry(
  *    and A4.5 still assess the plan before any claim.
  *
  * The trusted read runs once per gate, when a pass has a source, and the count
- * once per pass, at the cap step. A failed replay never throws out of
- * `prepare`.
+ * once per pass, at the cap step. An ordinary failed replay never throws out
+ * of `prepare`; an interruption does.
  */
 export function buildDecisionSourceResolver(
   inputs: DecisionSourceInputs,

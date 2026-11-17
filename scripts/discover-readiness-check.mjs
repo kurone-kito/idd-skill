@@ -739,8 +739,8 @@ function buildQueueEntry(candidate, evidence) {
  *    and A4.5 still assess the plan before any claim.
  *
  * The trusted read runs once per gate, when a pass has a source, and the count
- * once per pass, at the cap step. A failed replay never throws out of
- * `prepare`.
+ * once per pass, at the cap step. An ordinary failed replay never throws out
+ * of `prepare`; an interruption does.
  */
 export function buildDecisionSourceResolver(inputs) {
   const candidates = new Map();

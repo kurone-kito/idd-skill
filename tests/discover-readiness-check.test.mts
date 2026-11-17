@@ -4993,6 +4993,46 @@ test('decision gate: an interruption propagates to the caller, and only ordinary
   await assert.rejects(runGate([81, 82], sources, single.resolver), isRefusal);
   assert.deepEqual(calls, [[81, 82], [81], [82]]);
 
+  // A timeout is an interruption too (the classifier reads `killed`), while an
+  // ordinary error in the same read stays isolated to its source.
+  const timedOut = decisionGate(
+    {},
+    {
+      async loadStates(requested) {
+        if (requested.length > 1) throw new Error('batch failed');
+        if (requested[0]?.issueNumber === 82) {
+          thrown = Object.assign(new Error('timed out'), { killed: true });
+          throw thrown;
+        }
+        return new Map([[81, noRecords]]);
+      },
+    },
+  );
+  await assert.rejects(
+    runGate([81, 82], sources, timedOut.resolver),
+    isRefusal,
+  );
+  const ordinary = decisionGate(
+    {},
+    {
+      async loadStates(requested) {
+        if (requested.length > 1) throw new Error('batch failed');
+        if (requested[0]?.issueNumber === 82) throw new Error('source failed');
+        return new Map([[81, noRecords]]);
+      },
+      countOpenConfirmationIssues() {
+        throw new Error('list failed');
+      },
+    },
+  );
+  const isolated = await runGate([81, 82], sources, ordinary.resolver);
+  assert.deepEqual(
+    isolated.filteredOut.map((entry) => [entry.number, entry.reasons]),
+    [
+      [81, [`label:${DECISION_LABEL}`, 'provisional_pending_unreadable']],
+      [82, [`label:${DECISION_LABEL}`, 'provisional_state_unavailable']],
+    ],
+  );
   // The same holds for the pending count and the trusted read.
   const count = decisionGate(
     {},
