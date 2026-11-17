@@ -4103,11 +4103,14 @@ claim of the confirmation review is released:
      marker from a trusted author follows its opening;
    - the opening marker's body digest is the source the handoff covers, and
      every read of the run sees the body digest of its first read, so an edit
-     during a run stops it (an edit before a run is covered by a heartbeat
-     that records the saved body);
-   - a creation token in the body names another set that the owner history
-     proves closed; an unreadable line, a line naming the handoff set, or an
-     unproven set is an unknown prior set and is refused;
+     during a run stops it. An edit before the run is recorded by the run's
+     own first heartbeat, as for any anchor; the heartbeat after saving that
+     step 4 requires is the evidence the guarded request reads, not a
+     condition of this check;
+   - when the body carries a creation token, it names another set that the
+     owner history proves closed; an unreadable line, a line naming the
+     handoff set, or an unproven set is an unknown prior set and is refused. A
+     source with no creation token passes this item;
    - the handoff's own hold replays to `member`, its `member` record follows
      the generation's opening (the hold is written after the owner acquires),
      and, on the first read only, every other token of the set replays through
