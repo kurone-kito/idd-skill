@@ -50,7 +50,10 @@ import {
   readForcedHandoffAuthorityPolicy,
   readForcedHandoffMode,
 } from './collaborator-permission.mts';
-import { hasDeferSourceMarker } from './discover-readiness-check.mts';
+import {
+  hasDeferSourceMarker,
+  parseSameRepositoryPullRequestNumber,
+} from './discover-readiness-check.mts';
 import {
   ghApiJson,
   ghText,
@@ -96,6 +99,15 @@ import {
   createGithubProviderAdapter,
   resolveCurrentGithubRepository,
 } from './provider-adapter-github.mts';
+import type { ProviderMergedChangeRequestMeta } from './provider-port.mts';
+import { buildVerifiedClaimLineage } from './provisional-claim-lineage.mts';
+import {
+  PROVISIONAL_DECISION_RECORD_MARKER,
+  type ProvisionalDecisionComment,
+  parseProvisionalDecisionRecordComment,
+  readReworkHandoff,
+  type VerifiedProvisionalWork,
+} from './provisional-decision-state.mts';
 
 export const PUBLISH_BUCKETS = [
   'ready',
@@ -171,6 +183,10 @@ const CONFIRMATION_HELD_NEXT_ACTION =
   "A person's Stage 2 release is required. Both labels stay, and any release, release-guard, or heartbeat marker already posted stays for that release to reuse. Do not rerun this command: a rerun would file a second confirmation issue for one decision.";
 const CONFIRMATION_RECOVERY_NEXT_ACTION =
   "Replay the confirmation issue's owner-marker log and the journal's publication-intent log before any release, and check its labels: a failed or unverified restore can leave the authoring label removed. Do not release from this report. Do not rerun this command: a rerun would file a second confirmation issue for one decision.";
+/** A claim, release, nonce or forced-handoff marker. */
+const CLAIM_FAMILY_MARKER =
+  /^\s*<!--\s*(?:claimed-by|unclaimed-by|activation-nonce|forced-handoff)\s*:/iu;
+
 /** Heartbeat coalescing: only these modes may be reused (contract.md). */
 const COALESCING_MODES = new Set([
   'acquire',
@@ -617,6 +633,47 @@ anchor's body, so the roadmap's Tracks list stays a separate reviewed edit.
      (released, held or recovery-hold), failedStep, nextAction, sweeps and
      backlog. --shape confirmation runs the same release, with the
      confirmation audit in the preconditions; the confirmation label stays.
+
+A child's anchor can also be a retained decision source whose operator chose
+another option (a rework). There is no flag. The original check above runs
+first and unchanged, with its messages. When the anchor carries trusted
+provisional-decision records that replay to a rework handoff whose set is the
+open generation's set, the rework check applies in place of the body
+publication line, and a passing original check does not skip it (a body line
+rewritten to the handoff's own hold is refused, also when a record that names
+the open set cannot be verified); both reasons are reported when neither holds. The rework check requires: the handoff names this anchor, the
+generation's opening marker carries the handoff's session, and the set is not
+closed in the owner history; the generation opened after the first rework
+request and no claim, release, nonce or forced-handoff marker follows its
+opening; the opening marker's body digest is the source the handoff covers, the
+latest owner marker records the live body at every check (a heartbeat after
+saving), and every read of the run sees the body digest of its first read; the old creation token, when the
+body has one, names another set that the owner history shows as closed (an
+unreadable line, the handoff set, or an unproven set is refused, and the line
+is never rewritten); the handoff's own hold (token = handoff id, target and
+anchor = the handoff's anchor) replays to member in the journals, with its
+member record after the generation's opening; and, on the first read, every
+other token of the set replays in record order and ends settled (member, or
+cleanup then abandoned) with records that name the journal they are in, an
+actor that is their author, one target, one session, one set (and this anchor
+for a record of this set), a readable minimization state, and a latest record
+not minimized as outdated, and
+no issue updated since a minute before the first record of a token that never
+got an issue carries that token (one listing, filtered inside gh, finds it). The
+provisional records, the claim lineage and the stale age come from the
+default-branch trusted policy (read again by every check), never the local
+file, without the environment actor list or the user-global layer, and an untrusted or edited record marker
+refuses the history, as Discover does; the trusted default branch must also see
+no active claim. The same checks run again right before the first write, at
+each heartbeat read and before member, so a changed owner, handoff, request or
+source stops the run. A handoff that did not apply is reported in a
+reworkHandoff object with its reason, its issue codes and, for a refused record
+marker, the comment. The report's anchor object then carries a rework object
+with the handoff id, its downstream results and the owner facts the guarded
+rework-authored request takes. The handoff is not ownership: adoption (label,
+owner acquire marker, hold records, the reviewed body rewrite) stays the
+authoring session's own work (contract.md, "Rework adoption of a retained
+decision source").
 
 Every policy value (the journal, the marker prefix, the label names, the
 trusted marker actors and claim.verifySettleDelay) comes from the
@@ -1391,8 +1448,35 @@ function checkAnchorHold(input: {
   if (publication.set !== input.set) {
     return `the authoring-publication line of ${input.anchorRef} names set ${publication.set}, not the open generation's set ${input.set}`;
   }
-  // The configured journal and each listed retired journal, and no other
-  // issue: a failed read of any of them refuses the child.
+  return replayHold({
+    journal: input.journal,
+    retired: input.retired,
+    anchorRef: input.anchorRef,
+    publication,
+    markerPrefix: input.markerPrefix,
+    trusted: input.trusted,
+  }).problem;
+}
+
+/** The journals a hold lives in: the configured one and each listed retired
+ * journal, and no other issue. A failed read of any of them is a problem. */
+function readHoldJournals(input: {
+  journal: { owner: string; repo: string; number: number; ref: string };
+  retired: readonly {
+    owner: string;
+    repo: string;
+    number: number;
+    ref: string;
+  }[];
+  anchorRef: string;
+}):
+  | {
+      journals: {
+        ref: string;
+        comments: AuthoringOwnerProvenanceComment[];
+      }[];
+    }
+  | { problem: string } {
   const journals: {
     ref: string;
     comments: AuthoringOwnerProvenanceComment[];
@@ -1408,20 +1492,63 @@ function checkAnchorHold(input: {
         ),
       });
     } catch (error) {
-      return `the journal ${journal.ref} cannot be read, so the hold of the anchor ${input.anchorRef} is not verified: ${messageOf(error)}`;
+      return {
+        problem: `the journal ${journal.ref} cannot be read, so the hold of the anchor ${input.anchorRef} is not verified: ${messageOf(error)}`,
+      };
     }
   }
+  return { journals };
+}
+
+/**
+ * Read the journals and replay the hold of one publication tuple on them (see
+ * {@link replayAnchorHold}). The tuple comes from the anchor's own publication
+ * line, or, for a retained decision source adopted for rework, from the
+ * trusted handoff. The journals are returned with a problem too, so a caller
+ * can read more from the same pass. Returns a problem, or null.
+ */
+function replayHold(input: {
+  journal: { owner: string; repo: string; number: number; ref: string };
+  retired: readonly {
+    owner: string;
+    repo: string;
+    number: number;
+    ref: string;
+  }[];
+  anchorRef: string;
+  publication: {
+    target: string;
+    anchor: string;
+    set: string;
+    session: string;
+    token: string;
+  };
+  markerPrefix: string;
+  trusted: readonly string[];
+}): {
+  problem: string | null;
+  journals: { ref: string; comments: AuthoringOwnerProvenanceComment[] }[];
+} {
+  const read = readHoldJournals(input);
+  if ('problem' in read) {
+    return { problem: read.problem, journals: [] };
+  }
+  const { journals } = read;
   const problem = replayAnchorHold({
     journals,
-    publication,
+    publication: input.publication,
     anchorRef: input.anchorRef,
     markerPrefix: input.markerPrefix,
     trusted: input.trusted,
   });
-  const read = journals.map((journal) => journal.ref).join(', ');
-  return problem === null
-    ? null
-    : `the originating hold of the anchor ${input.anchorRef} is not verified in ${journals.length === 1 ? 'the journal' : 'the journals'} ${read}: ${problem}`;
+  const names = journals.map((journal) => journal.ref).join(', ');
+  return {
+    problem:
+      problem === null
+        ? null
+        : `the originating hold of the anchor ${input.anchorRef} is not verified in ${journals.length === 1 ? 'the journal' : 'the journals'} ${names}: ${problem}`,
+    journals,
+  };
 }
 
 /** The verified set anchor of a child (#4251). */
@@ -1431,6 +1558,33 @@ interface AnchorContext {
   repo: string;
   number: number;
   generation: AnchorGeneration;
+  /**
+   * The verified rework adoption of a retained decision source (#4537), or
+   * null for every other anchor. It decides which originating hold the anchor
+   * was verified against, and the checks it needs again wherever the anchor is
+   * read again.
+   */
+  rework: ReworkAdoption | null;
+  /** Re-verifies the adoption on a fresh anchor read, or null when none. */
+  reverify: ((fresh: AnchorRead) => string | null) | null;
+}
+
+/** A successful {@link checkAnchor}: the set anchor and what was read of it. */
+interface AnchorRead {
+  generation: AnchorGeneration;
+  snapshot: IssueSnapshot;
+  /** The anchor's whole comment log, as read. */
+  comments: AuthoringOwnerProvenanceComment[];
+  /** Every set the verified owner history proves closed, former-child
+   * memberships included. */
+  closedSets: ReadonlySet<string>;
+  /** The marker that opened the open generation. */
+  opening: {
+    id: number;
+    createdAt: string;
+    bodySha256: string;
+    session: string;
+  };
 }
 
 function sameGeneration(a: AnchorGeneration, b: AnchorGeneration): boolean {
@@ -1451,13 +1605,7 @@ function checkAnchor(input: {
   markerPrefix: string;
   trusted: readonly string[];
   claimGate: ClaimGate;
-}):
-  | {
-      generation: AnchorGeneration;
-      snapshot: IssueSnapshot;
-      comments: AuthoringOwnerProvenanceComment[];
-    }
-  | { problem: string } {
+}): AnchorRead | { problem: string } {
   const ref = `${input.owner}/${input.repo}#${input.number}`;
   let snapshot: IssueSnapshot;
   let comments: AuthoringOwnerProvenanceComment[];
@@ -1552,8 +1700,819 @@ function checkAnchor(input: {
       problem: `the open generation of ${ref} reuses a set already closed in its verified owner history`,
     };
   }
-  const { owner, set, session, latest } = replay.generation;
-  return { generation: { owner, set, session, latest }, snapshot, comments };
+  const { owner, set, session, latest, lineageOpeningIds } = replay.generation;
+  // The generation's first opening marker is its acquire or bootstrap; a later
+  // resume only continues it.
+  const openingId = lineageOpeningIds[0];
+  const openingComment = reconciliation.comments.find(
+    (comment) => comment.id === openingId,
+  );
+  const opening =
+    openingComment === undefined
+      ? null
+      : parseAuthoringOwnerComment(openingComment.body, input.markerPrefix);
+  if (openingComment === undefined || opening === null) {
+    return {
+      problem: `the opening owner marker of the open generation of ${ref} cannot be read`,
+    };
+  }
+  return {
+    generation: { owner, set, session, latest },
+    snapshot,
+    comments,
+    closedSets: new Set([...replay.closedSets, ...reconciliation.closedSets]),
+    opening: {
+      id: openingComment.id,
+      createdAt: openingComment.createdAt,
+      bodySha256: opening.bodySha256,
+      session: opening.session,
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Rework adoption of a retained decision source (#4537). A decision source whose
+// operator asked for another option becomes the anchor of a fresh set, so its
+// hold is not the creation token in its body but the hold of the trusted rework
+// handoff. The handoff is not ownership: every check below still runs on the
+// live anchor, and a source with no verified handoff keeps the original path.
+// ---------------------------------------------------------------------------
+
+/** What a verified rework adoption of the anchor holds. */
+interface ReworkAdoption {
+  handoffId: string;
+  bundleGeneration: number;
+  decisionGenerations: readonly number[];
+  requestRecordIds: readonly string[];
+  /** The downstream results the handoff names, for the revised roadmap. */
+  downstreamResults: readonly string[];
+  /** The live body digest of this run's first read of the anchor. */
+  bodySha256: string;
+  /**
+   * The owner facts the guarded `rework-authored` request takes (contract.md,
+   * "Rework adoption"): the trusted owner generation, the handoff's set, the
+   * opening session (which the handoff names even after a resume), and the
+   * anchor. `latestMarker` lets the caller decide freshness against
+   * `issueAuthoring.authoringStaleAge`.
+   */
+  owner: {
+    trusted: true;
+    setId: string;
+    sessionId: string;
+    anchor: string;
+    latestMarker: { id: number; mode: string; createdAt: string };
+  };
+}
+
+type ReworkEvaluation =
+  | {
+      mode: 'standard';
+      /** Why the handoff did not apply, when the anchor has provisional records. */
+      note?: { reason: string; issueCodes: readonly string[]; detail?: string };
+    }
+  | { mode: 'refused'; problem: string }
+  | { mode: 'rework'; adoption: ReworkAdoption };
+
+/** True when `later` comes after `earlier` in GitHub order (time, then id). */
+function followsComment(
+  later: { createdAt: string; id: number | string },
+  earlier: { createdAt: string; id: number | string },
+): boolean {
+  const laterTime = Date.parse(later.createdAt);
+  const earlierTime = Date.parse(earlier.createdAt);
+  if (!Number.isFinite(laterTime) || !Number.isFinite(earlierTime)) {
+    return false;
+  }
+  return (
+    laterTime > earlierTime ||
+    (laterTime === earlierTime && Number(later.id) > Number(earlier.id))
+  );
+}
+
+/**
+ * No other publication token of the set may be left half done. Each token's
+ * records replay through the same state machine as {@link replayAnchorHold}
+ * (`pending` without an issue, `pending` with one, `member`, then `cleanup` and
+ * `abandoned`); a token that ends at `cleanup`, or at `pending` after an issue
+ * was attached, made an issue that no record has settled, and a second child
+ * publication could duplicate it, so the set takes no further child until a
+ * person reconciles that exact token (contract.md: `pending` and `cleanup`
+ * remain recovery holds). A token whose records break the machine (out of
+ * order, an issue dropped or changed, `member` with no issue) is unreconciled
+ * too. A token whose records never attached an issue cannot be closed by any
+ * record sequence, so it does not block by itself; it is returned in
+ * `unattached` with its first record time, because a create whose answer was
+ * lost may still have made an issue, and the caller scans for one. A record of
+ * a trusted author that names the set but does not parse counts as
+ * unreconciled, a record of an untrusted author is ignored, and an edited
+ * trusted record fails closed. Each record is held to the identity checks of
+ * {@link replayAnchorHold}: it names the journal it was read from, its actor is
+ * its author, its minimization state is readable, a token's records agree on
+ * one target and one session and name one set, a record of this set names this
+ * anchor, and the latest record is not minimized as outdated. The session is
+ * not tied to the handoff's, because a child published after a resume carries
+ * the resumed session.
+ */
+function checkSettledSetRecords(input: {
+  journals: readonly {
+    ref: string;
+    comments: readonly AuthoringOwnerProvenanceComment[];
+  }[];
+  set: string;
+  anchorRef: string;
+  /** The anchor's own hold token, which `replayAnchorHold` already checked. */
+  holdToken: string;
+  markerPrefix: string;
+  trusted: readonly string[];
+}): {
+  problem: string | null;
+  unattached: { token: string; since: string }[];
+} {
+  const trustedSet = new Set(input.trusted.map((login) => login.toLowerCase()));
+  const intentToken = `${input.markerPrefix.toLowerCase()}-authoring-publication-intent:`;
+  const tokens = new Map<
+    string,
+    {
+      id: number;
+      time: number;
+      state: string;
+      issue: string;
+      target: string;
+      session: string;
+      outdated: boolean;
+    }[]
+  >();
+  const stop = (problem: string) => ({ problem, unattached: [] });
+  // Whether the records of a token name this set: a token whose records name
+  // both this set and another one is a journal that disagrees with itself, as
+  // `replayAnchorHold` refuses for the hold token.
+  const identities = new Map<string, boolean>();
+  for (const journal of input.journals) {
+    for (const comment of journal.comments) {
+      if (
+        !comment.body.toLowerCase().includes(intentToken) ||
+        !trustedSet.has(comment.authorLogin.trim().toLowerCase())
+      ) {
+        continue;
+      }
+      const intent = parseAuthoringPublicationIntentComment(
+        comment.body,
+        input.markerPrefix,
+      );
+      if (intent === null) {
+        if (comment.body.includes(input.set)) {
+          return stop(
+            `publication-intent record ${comment.id} of ${journal.ref} names the set ${input.set} but does not parse, so a child create may be unreconciled`,
+          );
+        }
+        continue;
+      }
+      const ours = intent.set === input.set;
+      const seen = identities.get(intent.token);
+      if (seen !== undefined && seen !== ours) {
+        return stop(
+          `the records of the publication token ${intent.token} name different sets, so a child create may be unreconciled`,
+        );
+      }
+      identities.set(intent.token, ours);
+      if (!ours) {
+        continue;
+      }
+      if (!sameIssueRef(intent.anchor, input.anchorRef)) {
+        // Every token of the rework set is anchored at the source, so a token
+        // of this set under another anchor is not this set's own child.
+        return stop(
+          `publication-intent record ${comment.id} of the token ${intent.token} in ${journal.ref} names the set ${input.set} under the anchor ${intent.anchor}, not this anchor, so a child create may be unreconciled`,
+        );
+      }
+      if (intent.token === input.holdToken) {
+        continue;
+      }
+      const where = `publication-intent record ${comment.id} of the token ${intent.token} in ${journal.ref}`;
+      if (inspectLastEditedAt(comment) !== null) {
+        return stop(
+          `${where} was edited after posting, or its edit state is unreadable, so a child create may be unreconciled`,
+        );
+      }
+      if (
+        typeof comment.isMinimized !== 'boolean' ||
+        (comment.isMinimized &&
+          (typeof comment.minimizedReason !== 'string' ||
+            comment.minimizedReason.trim() === ''))
+      ) {
+        return stop(
+          `${where} has no readable minimization state, so a child create may be unreconciled`,
+        );
+      }
+      if (!sameIssueRef(intent.journal, journal.ref)) {
+        return stop(
+          `${where} names journal ${intent.journal}, so it is misplaced and a child create may be unreconciled`,
+        );
+      }
+      if (
+        intent.actor.toLowerCase() !== comment.authorLogin.trim().toLowerCase()
+      ) {
+        return stop(
+          `${where} names the actor ${intent.actor}, who is not its author, so a child create may be unreconciled`,
+        );
+      }
+      const time = Date.parse(comment.createdAt);
+      if (!Number.isFinite(time)) {
+        return stop(
+          `${where} has a creation time that cannot be read, so a child create may be unreconciled`,
+        );
+      }
+      const records = tokens.get(intent.token) ?? [];
+      const lead = records[0];
+      if (
+        lead !== undefined &&
+        (lead.target !== intent.target || lead.session !== intent.session)
+      ) {
+        return stop(
+          `the records of the publication token ${intent.token} of the set ${input.set} disagree on their target or session, so a child create may be unreconciled`,
+        );
+      }
+      records.push({
+        id: comment.id,
+        time,
+        state: intent.state,
+        issue: intent.issue,
+        target: intent.target,
+        session: intent.session,
+        outdated: isOutdatedMinimized(comment),
+      });
+      tokens.set(intent.token, records);
+    }
+  }
+  const unattached: { token: string; since: string }[] = [];
+  for (const [token, records] of tokens) {
+    records.sort((a, b) => a.time - b.time || a.id - b.id);
+    let state: string | null = null;
+    let attached: string | null = null;
+    let ordered = true;
+    for (const record of records) {
+      const none = record.issue.toLowerCase() === 'none';
+      if (state === null) {
+        ordered = record.state === 'pending' && none;
+      } else if (!(INTENT_TRANSITIONS[state] ?? []).includes(record.state)) {
+        ordered = false;
+      } else if (
+        state === 'pending' &&
+        record.state === 'pending' &&
+        (attached !== null || none)
+      ) {
+        ordered = false;
+      }
+      if (record.state === 'member' && attached === null) {
+        ordered = false;
+      }
+      if (none) {
+        if (attached !== null || record.state !== 'pending') {
+          ordered = false;
+        }
+      } else if (attached === null) {
+        attached = record.issue;
+      } else if (!sameIssueRef(record.issue, attached)) {
+        ordered = false;
+      }
+      state = record.state;
+      if (!ordered) {
+        break;
+      }
+    }
+    if (!ordered) {
+      return stop(
+        `the records of the publication token ${token} of the set ${input.set} are out of order, so a child create may be unreconciled: reconcile that exact token (member, or cleanup then abandoned) before publishing another child`,
+      );
+    }
+    const latest = records[records.length - 1];
+    if (latest?.outdated === true) {
+      return stop(
+        `the latest record of the publication token ${token} of the set ${input.set}, comment ${latest.id}, is minimized as outdated, so it cannot settle the token and a child create may be unreconciled`,
+      );
+    }
+    if (state === 'cleanup' || (state === 'pending' && attached !== null)) {
+      return stop(
+        `the publication token ${token} of the set ${input.set} ends at ${state}${attached === null ? '' : ` with ${attached} attached`}, so a child create may be unreconciled: finish that issue, then append its member record, or cleanup and then abandoned, before publishing another child`,
+      );
+    }
+    const first = records[0];
+    if (state === 'pending' && first !== undefined) {
+      unattached.push({
+        token,
+        since: new Date(first.time).toISOString(),
+      });
+    }
+  }
+  return { problem: null, unattached };
+}
+
+/**
+ * The default-branch trusted policy's marker actors and claim stale age, which
+ * Discover and pre-merge also use for provisional records. The repository
+ * policy file is not read, so a feature branch cannot widen either, and no
+ * user-global layer fills an absent file. Throws when the default branch or the
+ * policy cannot be read.
+ */
+function readTrustedBasePolicy(
+  owner: string,
+  repo: string,
+): { logins: string[]; staleAgeMs: number } {
+  const ref = readGithubRepoDefaultBranch(owner, repo);
+  if (ref === null || ref.trim() === '') {
+    throw new Error(
+      `the default branch of ${owner}/${repo} cannot be resolved`,
+    );
+  }
+  const trustedConfig = loadTrustedIddConfig(
+    owner,
+    repo,
+    ref,
+    undefined,
+    undefined,
+    { userGlobalFallback: false },
+  );
+  return {
+    logins: resolveTrustedMarkerActors({ config: trustedConfig }).actors,
+    staleAgeMs: readClaimStaleAgeMs(trustedConfig),
+  };
+}
+
+/**
+ * The `since` of the one issue listing that looks for an issue carrying a
+ * publication token that never got an issue in the journal: a minute before
+ * the earliest first record of those tokens, because the filter has second
+ * granularity. An issue created after that record is updated after it too.
+ */
+export function tokenListingSince(
+  tokens: readonly { token: string; since: string }[],
+): string {
+  const earliest = Math.min(...tokens.map((entry) => Date.parse(entry.since)));
+  return new Date(earliest - 60_000).toISOString().replace('.000Z', 'Z');
+}
+
+/**
+ * The jq program of that listing, run by `gh api --paginate --jq`, so only a
+ * few lines come back and no issue body counts toward the response size cap.
+ * It skips pull requests, tolerates an empty body, and prints
+ * `<token><TAB><number>` for each issue whose body contains one of the tokens.
+ * Each token is a JSON string literal, which jq reads as written.
+ */
+export function tokenListingProgram(tokens: readonly string[]): string {
+  const literals = tokens.map((token) => JSON.stringify(token)).join(',');
+  return `.[] | select(.pull_request == null) | . as $issue | [${literals}][] | select(. as $token | ($issue.body // "") | contains($token)) | "\\(.)\\t\\($issue.number)"`;
+}
+
+/**
+ * Decide whether a read of the anchor is a retained decision source adopted for
+ * rework (#4537), and verify it. The anchor's comments are replayed as
+ * provisional-decision records against the source as it was last recorded,
+ * because the authoring pass may already have rewritten the body, and the
+ * result must be a trusted rework handoff whose set is the open generation's
+ * set. The caller runs this only after the original hold check refused. With no
+ * such handoff the original refusal stands. With one, every check below must
+ * hold, or the anchor is refused:
+ *
+ * - the handoff names this anchor; the generation's opening marker carries the
+ *   handoff's session (so a resumed set still verifies); the set is not closed;
+ * - the generation opened after the first rework request, and no claim marker
+ *   follows its opening (the coordination claim was released first);
+ * - the opening marker snapshot is the source the handoff covers (before any
+ *   write), and every read of the run sees the body digest of its first read,
+ *   so an edit during the run stops it;
+ * - the old creation token is historical: a body line must name another set
+ *   that is proven closed, and an unreadable line is an unknown prior set;
+ * - the handoff's own hold (token = handoff id, target and anchor = the
+ *   handoff's anchor) replays to `member` in the journals, that `member` record
+ *   follows the generation's opening, and, on the first read only, no other
+ *   token of the set is half done.
+ *
+ * Provisional records, claim lineage and the stale age use the default-branch
+ * trusted policy, as Discover and pre-merge do, never the local file.
+ * `expected` is set when the run already verified an adoption and reads the
+ * anchor again: the same adoption must still hold, or the run stops.
+ */
+function evaluateReworkAnchor(input: {
+  owner: string;
+  repo: string;
+  number: number;
+  ref: string;
+  checked: AnchorRead;
+  journal: { owner: string; repo: string; number: number; ref: string };
+  retired: readonly {
+    owner: string;
+    repo: string;
+    number: number;
+    ref: string;
+  }[];
+  markerPrefix: string;
+  /** The repository policy file's marker actors, as the rest of this command. */
+  trusted: readonly string[];
+  /** The default-branch trusted policy's marker actors and claim stale age. */
+  readTrustedBase: () => { logins: readonly string[]; staleAgeMs: number };
+  readMerged: (number: number) => ProviderMergedChangeRequestMeta | null;
+  /**
+   * The first issue, updated since a minute before the earliest of the tokens'
+   * `since` times, whose body carries one of the tokens, or null. It throws
+   * when the listing cannot be read or its output is not understood.
+   */
+  findTokenIssue: (
+    tokens: readonly { token: string; since: string }[],
+  ) => { token: string; issue: string } | null;
+  expected: ReworkAdoption | null;
+}): ReworkEvaluation {
+  const { checked, expected } = input;
+  const refused = (reason: string): ReworkEvaluation => ({
+    mode: 'refused',
+    problem:
+      expected === null
+        ? `the rework adoption of the anchor ${input.ref} is refused: ${reason}`
+        : `the rework adoption of the anchor ${input.ref} no longer holds: ${reason}`,
+  });
+  // Until a handoff is read and its set matches the open generation, a problem
+  // keeps the original refusal and is only noted. A re-read has no such
+  // fallback: the adoption was verified, so any lapse is a refusal.
+  const standard = (
+    reason: string,
+    issueCodes: readonly string[] = [],
+    detail?: string,
+  ): ReworkEvaluation =>
+    expected === null
+      ? {
+          mode: 'standard',
+          note:
+            detail === undefined
+              ? { reason, issueCodes }
+              : { reason, issueCodes, detail },
+        }
+      : refused(`the handoff is no longer verified (${reason})`);
+  if (
+    !checked.comments.some((comment) =>
+      comment.body.startsWith(PROVISIONAL_DECISION_RECORD_MARKER),
+    )
+  ) {
+    return expected === null
+      ? { mode: 'standard' }
+      : refused('the anchor has no provisional decision record');
+  }
+  let base: { logins: readonly string[]; staleAgeMs: number };
+  try {
+    base = input.readTrustedBase();
+  } catch (error) {
+    return standard(
+      `the trusted policy cannot be read, so the provisional records are not verified: ${messageOf(error)}`,
+    );
+  }
+  const baseTrusted = new Set(base.logins.map((login) => login.toLowerCase()));
+  const isBaseTrusted = (login: string): boolean =>
+    baseTrusted.has(login.trim().toLowerCase());
+  // As Discover does, a record marker from an untrusted author, or one that
+  // was edited, refuses the whole history instead of being skipped.
+  const untrustedRecord = checked.comments.find(
+    (comment) =>
+      comment.body.startsWith(PROVISIONAL_DECISION_RECORD_MARKER) &&
+      (!isBaseTrusted(comment.authorLogin) ||
+        inspectLastEditedAt(comment) !== null),
+  );
+  if (untrustedRecord !== undefined) {
+    return standard(
+      'record-authority-invalid',
+      [],
+      `comment ${untrustedRecord.id}`,
+    );
+  }
+
+  const commentUrl = (id: number): string =>
+    `https://github.com/${input.owner}/${input.repo}/issues/${input.number}#issuecomment-${id}`;
+  const comments: ProvisionalDecisionComment[] = checked.comments.map(
+    (comment) => ({
+      id: String(comment.id),
+      url: commentUrl(comment.id),
+      body: comment.body,
+      authorLogin: comment.authorLogin,
+      createdAt: comment.createdAt,
+      edited: inspectLastEditedAt(comment) !== null,
+      trustedAuthor: isBaseTrusted(comment.authorLogin),
+    }),
+  );
+  const lineage = buildVerifiedClaimLineage({
+    comments: checked.comments.map((comment, index) => ({
+      id: String(comment.id),
+      url: commentUrl(comment.id),
+      body: comment.body,
+      createdAt: comment.createdAt,
+      authorLogin: comment.authorLogin,
+      lastEditedAt: comment.lastEditedAt,
+      trustedAuthor: comments[index]?.trustedAuthor === true,
+    })),
+    completeHistory: true,
+    staleAgeMs: base.staleAgeMs,
+    trustedMarkerLogins: [...base.logins],
+  });
+  if (lineage.status !== 'ok') {
+    return standard(`claim-lineage-${lineage.reason}`);
+  }
+
+  // A completion record counts only with independent proof that the merged
+  // pull request carried exactly its head and merge commit. One that cannot be
+  // proven is left out, and the replay refuses it.
+  const verifiedWork: VerifiedProvisionalWork[] = [];
+  for (const comment of comments) {
+    if (!comment.trustedAuthor || comment.edited) {
+      continue;
+    }
+    const parsed = parseProvisionalDecisionRecordComment(comment.body);
+    if (!parsed.ok || parsed.record.event.type !== 'work-completed') {
+      continue;
+    }
+    const result = parsed.record.event.result as Record<string, unknown>;
+    const pullRequest = parseSameRepositoryPullRequestNumber(
+      result.reference,
+      input.owner,
+      input.repo,
+    );
+    if (
+      result.kind !== 'merged-pull-request' ||
+      pullRequest === null ||
+      typeof result.verifiedAt !== 'string' ||
+      typeof result.headSha !== 'string' ||
+      typeof result.mergeCommitSha !== 'string'
+    ) {
+      continue;
+    }
+    let merged: ProviderMergedChangeRequestMeta | null;
+    try {
+      merged = input.readMerged(pullRequest);
+    } catch (error) {
+      return standard(
+        `the completion proof of ${String(result.reference)} cannot be read: ${messageOf(error)}`,
+      );
+    }
+    if (
+      merged?.merged !== true ||
+      merged.headRefOid !== result.headSha ||
+      merged.mergeCommitOid !== result.mergeCommitSha
+    ) {
+      continue;
+    }
+    verifiedWork.push({
+      source: parsed.record.source,
+      bundleGeneration: parsed.record.bundleGeneration,
+      decisionGeneration: parsed.record.decisionGeneration,
+      reference: String(result.reference),
+      verifiedAt: result.verifiedAt,
+      headSha: result.headSha,
+      mergeCommitSha: result.mergeCommitSha,
+      executionCriteriaSatisfied: true,
+    });
+  }
+
+  const read = readReworkHandoff({
+    comments,
+    completeHistory: true,
+    verifiedClaimLineage: lineage.claims,
+    verifiedWork,
+    verifiedReworkRoadmaps: [],
+  });
+  if (!read.ok) {
+    return standard(
+      read.reason,
+      read.issueCodes,
+      read.commentId === undefined ? undefined : `comment ${read.commentId}`,
+    );
+  }
+  const { handoff } = read;
+  const { generation, opening } = checked;
+  if (generation.set !== handoff.authoringSetId) {
+    return standard('the open generation is not the handoff set');
+  }
+  // The anchor check judged claims with the repository policy file's actors;
+  // the trusted default branch must see no active claim either.
+  if (lineage.active !== null) {
+    return refused(
+      `the claim ${lineage.active.claimId} is active under the trusted default-branch policy`,
+    );
+  }
+  if (
+    expected !== null &&
+    (expected.handoffId !== handoff.handoffId ||
+      expected.bundleGeneration !== read.bundleGeneration ||
+      expected.requestRecordIds.join(',') !== read.requestRecordIds.join(','))
+  ) {
+    return refused('the handoff changed');
+  }
+  if (!sameIssueRef(handoff.anchor, input.ref)) {
+    return refused(`the handoff names ${handoff.anchor}, not this anchor`);
+  }
+  if (opening.session !== handoff.authoringSessionId) {
+    return refused(
+      `the generation opened with session ${opening.session}, not the handoff's ${handoff.authoringSessionId}`,
+    );
+  }
+  if (checked.closedSets.has(handoff.authoringSetId)) {
+    return refused(
+      `the handoff set ${handoff.authoringSetId} is already closed in the verified owner history`,
+    );
+  }
+  if (
+    !followsComment(opening, {
+      id: read.firstRequest.commentId,
+      createdAt: read.firstRequest.createdAt,
+    })
+  ) {
+    return refused(
+      `the generation opened at comment ${opening.id}, before the first rework request (comment ${read.firstRequest.commentId}), so the handoff did not precede its ownership`,
+    );
+  }
+  const claimActors = new Set([
+    ...baseTrusted,
+    ...input.trusted.map((login) => login.toLowerCase()),
+  ]);
+  const openingIndex = checked.comments.findIndex(
+    (comment) => comment.id === opening.id,
+  );
+  const claimAfterOpening = checked.comments
+    .slice(openingIndex + 1)
+    .find(
+      (comment) =>
+        claimActors.has(comment.authorLogin.trim().toLowerCase()) &&
+        CLAIM_FAMILY_MARKER.test(comment.body),
+    );
+  if (claimAfterOpening !== undefined) {
+    return refused(
+      `a claim marker (comment ${claimAfterOpening.id}) follows the opening of the generation, so execution may have begun during authoring`,
+    );
+  }
+  const liveDigest = sha256Hex(checked.snapshot.body);
+  if (expected === null) {
+    if (opening.bodySha256 !== read.recordedSource.snapshot.bodySha256) {
+      return refused(
+        'the generation opened on a body other than the source the handoff covers',
+      );
+    }
+  } else if (liveDigest !== expected.bodySha256) {
+    return refused('the source body changed during this run');
+  }
+  // Every evaluation, the first and each re-verification, needs the latest
+  // owner marker of the generation to record the live body: a heartbeat that
+  // the owner posts after saving, or one that this run posted.
+  const { latest } = checked.generation;
+  if (latest.bodySha256 !== liveDigest) {
+    return refused(
+      `the source body is not the one the latest owner marker (comment ${latest.id}) records, so it was edited without a same-owner heartbeat: post that heartbeat after saving the body, then run again`,
+    );
+  }
+
+  // The old creation token is historical evidence only: it never serves as the
+  // new set's hold, is never rewritten, and must belong to a proven closed set.
+  const creation = parseAuthoringPublicationComment(
+    checked.snapshot.body,
+    input.markerPrefix,
+  );
+  if (creation === null) {
+    if (
+      maskMarkdownCodeRegionsPreservingPositions(checked.snapshot.body)
+        .toLowerCase()
+        .includes(`${input.markerPrefix.toLowerCase()}-authoring-publication:`)
+    ) {
+      return refused(
+        'the body carries an unreadable authoring-publication line, so its prior set is unknown',
+      );
+    }
+  } else if (creation.set === handoff.authoringSetId) {
+    return refused(
+      `the creation token of the body already names the handoff set ${creation.set}, so a prior set would be reused`,
+    );
+  } else if (!checked.closedSets.has(creation.set)) {
+    return refused(
+      `the creation token of the body names set ${creation.set}, which the verified owner history does not show as closed, so its state is unknown`,
+    );
+  }
+
+  const hold = replayHold({
+    journal: input.journal,
+    retired: input.retired,
+    anchorRef: input.ref,
+    publication: {
+      target: handoff.anchor,
+      anchor: handoff.anchor,
+      set: handoff.authoringSetId,
+      session: handoff.authoringSessionId,
+      token: handoff.handoffId,
+    },
+    markerPrefix: input.markerPrefix,
+    trusted: input.trusted,
+  });
+  if (hold.problem !== null) {
+    return refused(hold.problem);
+  }
+  // The hold is written after the owner acquires and the generation is
+  // verified (contract.md), so its `member` record follows the opening.
+  const member = hold.journals
+    .flatMap((journal) => journal.comments)
+    .filter((comment) => {
+      const intent = parseAuthoringPublicationIntentComment(
+        comment.body,
+        input.markerPrefix,
+      );
+      return (
+        intent !== null &&
+        intent.token === handoff.handoffId &&
+        intent.state === 'member'
+      );
+    })
+    .at(-1);
+  if (member === undefined) {
+    return refused('the hold of the handoff has no member record to order');
+  }
+  if (!followsComment(member, opening)) {
+    return refused(
+      `the hold of the handoff reached member at comment ${member.id}, before the generation opened at comment ${opening.id}, so the hold did not follow the owner's acquisition`,
+    );
+  }
+  if (expected === null) {
+    const unsettled = checkSettledSetRecords({
+      journals: hold.journals,
+      set: handoff.authoringSetId,
+      anchorRef: input.ref,
+      holdToken: handoff.handoffId,
+      markerPrefix: input.markerPrefix,
+      trusted: input.trusted,
+    });
+    if (unsettled.problem !== null) {
+      return refused(unsettled.problem);
+    }
+    // A create whose answer was lost leaves a token with no issue attached, and
+    // the issue may exist. One listing of the issues updated since the earliest
+    // such token's first record finds it with no search-index lag, and finding
+    // one blocks. No record can close a token that never got an issue, so this
+    // scan is the only reconciliation the helper can make.
+    if (unsettled.unattached.length > 0) {
+      let found: { token: string; issue: string } | null;
+      try {
+        found = input.findTokenIssue(unsettled.unattached);
+      } catch (error) {
+        return refused(
+          `the issues of ${input.owner}/${input.repo} cannot be scanned for the publication tokens ${unsettled.unattached.map((entry) => entry.token).join(', ')}, so a child create may be unreconciled: ${messageOf(error)}`,
+        );
+      }
+      if (found !== null) {
+        return refused(
+          `the publication token ${found.token} of the set ${handoff.authoringSetId} has no issue attached in the journal, but ${found.issue} carries it: confirm it is the unfinished child, then attach and settle it, before publishing another child`,
+        );
+      }
+    }
+  }
+  return {
+    mode: 'rework',
+    adoption: {
+      handoffId: handoff.handoffId,
+      bundleGeneration: read.bundleGeneration,
+      decisionGenerations: read.decisionGenerations,
+      requestRecordIds: read.requestRecordIds,
+      downstreamResults: handoff.downstreamResults,
+      bodySha256: expected?.bodySha256 ?? liveDigest,
+      owner: {
+        trusted: true,
+        setId: handoff.authoringSetId,
+        sessionId: opening.session,
+        anchor: handoff.anchor,
+        latestMarker: {
+          id: generation.latest.id,
+          mode: generation.latest.mode,
+          createdAt: generation.latest.createdAt,
+        },
+      },
+    },
+  };
+}
+
+/**
+ * Whether any record comment of the anchor, trusted or not, asks for a rework
+ * under a handoff that names `set`. It decides nothing about trust: it only
+ * keeps an anchor whose records claim a handoff for its open set off the
+ * ordinary path when the rework check cannot verify them.
+ */
+function namesHandoffSet(
+  comments: readonly { body: string }[],
+  set: string,
+): boolean {
+  for (const comment of comments) {
+    if (!comment.body.startsWith(PROVISIONAL_DECISION_RECORD_MARKER)) {
+      continue;
+    }
+    const parsed = parseProvisionalDecisionRecordComment(comment.body);
+    if (!parsed.ok || parsed.record.event.type !== 'rework-requested') {
+      continue;
+    }
+    const request = parsed.record.event.reworkRequest as
+      | { handoff?: { authoringSetId?: unknown } }
+      | undefined;
+    if (request?.handoff?.authoringSetId === set) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -1598,6 +2557,10 @@ function heartbeatAnchor(input: {
     throw new Error(
       `the owner generation of the anchor ${anchor.ref} changed since it was verified`,
     );
+  }
+  const reworkProblem = anchor.reverify?.(fresh) ?? null;
+  if (reworkProblem !== null) {
+    throw new Error(reworkProblem);
   }
   const digest = sha256Hex(fresh.snapshot.body);
   const latest = fresh.generation.latest;
@@ -1652,6 +2615,10 @@ function heartbeatAnchor(input: {
     throw new Error(
       `the owner generation of the anchor ${anchor.ref} changed during the heartbeat`,
     );
+  }
+  const afterRework = anchor.reverify?.(replay) ?? null;
+  if (afterRework !== null) {
+    throw new Error(`after the heartbeat: ${afterRework}`);
   }
   if (!replay.comments.some((comment) => comment.id === commentId)) {
     throw new Error(
@@ -1966,6 +2933,10 @@ function runCli(): HelperCliResult {
         anchor: ref,
       });
     }
+    // The hold named by the anchor's own publication line is checked first and
+    // unchanged. Only when it refuses, a retained decision source whose operator
+    // asked for another option can still be adopted for rework under its
+    // trusted handoff (#4537); both reasons are reported when neither holds.
     const holdProblem = checkAnchorHold({
       journal,
       retired: retiredJournals,
@@ -1975,11 +2946,134 @@ function runCli(): HelperCliResult {
       markerPrefix,
       trusted,
     });
-    if (holdProblem !== null) {
-      return refuse(holdProblem, {
-        repository: { owner, repo },
-        anchor: ref,
-      });
+    let rework: ReworkAdoption | null = null;
+    let reverify: AnchorContext['reverify'] = null;
+    // The rework evaluation also runs when the original check passes, so a
+    // retained source whose body line already names the handoff's own hold
+    // cannot take the ordinary path and skip the rework checks. It reads
+    // nothing for an anchor with no provisional decision record.
+    {
+      // A merged pull request stays merged, so its proof is kept for the run.
+      const mergedProofs = new Map<
+        number,
+        ProviderMergedChangeRequestMeta | null
+      >();
+      const evaluateRework = (
+        fresh: AnchorRead,
+        expected: ReworkAdoption | null,
+      ): ReworkEvaluation => {
+        // The default-branch trust policy is read again by every evaluation
+        // (the first one and each re-verification), so a revoked record actor
+        // or a changed stale age stops the run; one evaluation reads it once.
+        let trustedBase: { logins: string[]; staleAgeMs: number } | null = null;
+        return evaluateReworkAnchor({
+          owner,
+          repo,
+          number: anchorRef.number,
+          ref,
+          checked: fresh,
+          journal,
+          retired: retiredJournals,
+          markerPrefix,
+          trusted,
+          readTrustedBase: () => {
+            if (trustedBase === null) {
+              trustedBase = readTrustedBasePolicy(owner, repo);
+            }
+            return trustedBase;
+          },
+          readMerged: (pullRequest) => {
+            if (!mergedProofs.has(pullRequest)) {
+              mergedProofs.set(
+                pullRequest,
+                createGithubProviderAdapter(
+                  owner,
+                  repo,
+                ).getMergedChangeRequestMeta(pullRequest),
+              );
+            }
+            return mergedProofs.get(pullRequest) ?? null;
+          },
+          findTokenIssue: (tokens) => {
+            const lines = ghText(
+              [
+                'api',
+                '--paginate',
+                '--jq',
+                tokenListingProgram(tokens.map((entry) => entry.token)),
+                `repos/${owner}/${repo}/issues?state=all&since=${encodeURIComponent(tokenListingSince(tokens))}&per_page=100`,
+              ],
+              { timeout: 300_000 },
+            )
+              .split('\n')
+              .filter((line) => line.trim() !== '');
+            const [first] = lines;
+            if (first === undefined) {
+              return null;
+            }
+            const tab = first.lastIndexOf('\t');
+            const token = first.slice(0, tab);
+            const number = first.slice(tab + 1);
+            if (tab < 0 || !/^[1-9][0-9]*$/.test(number)) {
+              throw new Error(
+                `the issue listing printed an unexpected line: ${JSON.stringify(first)}`,
+              );
+            }
+            return { token, issue: `${owner}/${repo}#${number}` };
+          },
+          expected,
+        });
+      };
+      const evaluation = evaluateRework(checked, null);
+      if (evaluation.mode === 'refused') {
+        return refuse(evaluation.problem, {
+          repository: { owner, repo },
+          anchor: ref,
+          ...(holdProblem === null ? {} : { standardCheck: holdProblem }),
+        });
+      }
+      if (
+        evaluation.mode === 'standard' &&
+        holdProblem === null &&
+        namesHandoffSet(checked.comments, checked.generation.set)
+      ) {
+        // The original check passed, but a record of the anchor asks for a
+        // rework under a handoff for the open set, and the rework check could
+        // not verify it (an unreadable policy, an untrusted record, a replay
+        // that refuses). It must not fall back to the ordinary path.
+        return refuse(
+          `the anchor ${ref} carries a rework handoff for its open set ${checked.generation.set} that could not be verified${evaluation.note === undefined ? '' : ` (${evaluation.note.reason})`}, so the ordinary path is not taken`,
+          {
+            repository: { owner, repo },
+            anchor: ref,
+            ...(evaluation.note === undefined
+              ? {}
+              : { reworkHandoff: evaluation.note }),
+          },
+        );
+      }
+      if (evaluation.mode === 'standard' && holdProblem !== null) {
+        return refuse(holdProblem, {
+          repository: { owner, repo },
+          anchor: ref,
+          ...(evaluation.note === undefined
+            ? {}
+            : { reworkHandoff: evaluation.note }),
+        });
+      }
+      if (evaluation.mode === 'rework') {
+        const adopted = evaluation.adoption;
+        rework = adopted;
+        reverify = (fresh) => {
+          const again = evaluateRework(fresh, adopted);
+          // A re-read never answers `standard` (it refuses instead).
+          return again.mode === 'rework'
+            ? null
+            : again.mode === 'refused'
+              ? again.problem
+              : 'the rework adoption no longer applies';
+        };
+      }
     }
     anchor = {
       ref,
@@ -1987,6 +3081,8 @@ function runCli(): HelperCliResult {
       repo,
       number: anchorRef.number,
       generation: checked.generation,
+      rework,
+      reverify,
     };
   }
   const ids =
@@ -2076,6 +3172,7 @@ function publish(input: {
             set: anchor.generation.set,
             session: anchor.generation.session,
             latestMode: anchor.generation.latest.mode,
+            ...(anchor.rework === null ? {} : { rework: anchor.rework }),
           },
         }),
   };
@@ -2316,6 +3413,29 @@ function publish(input: {
           base,
         );
       }
+    }
+  }
+  // A retained decision source is read once more right before the first
+  // write, so an edit or a claim that landed since the first read stops here
+  // and not after a child exists.
+  if (anchor?.reverify) {
+    const fresh = checkAnchor({
+      owner: anchor.owner,
+      repo: anchor.repo,
+      number: anchor.number,
+      authoringLabel: labels[0] ?? '',
+      markerPrefix,
+      trusted: input.trusted,
+      claimGate,
+    });
+    const problem =
+      'problem' in fresh
+        ? fresh.problem
+        : !sameGeneration(fresh.generation, anchor.generation)
+          ? `the owner generation of the anchor ${anchor.ref} changed since it was verified`
+          : anchor.reverify(fresh);
+    if (problem !== null) {
+      return refuse(problem, base);
     }
   }
   for (const name of missing) {
@@ -2765,6 +3885,10 @@ function publish(input: {
         throw new Error(
           `the owner generation of the anchor ${anchor.ref} changed before member`,
         );
+      }
+      const reworkProblem = anchor.reverify?.(again) ?? null;
+      if (reworkProblem !== null) {
+        throw new Error(reworkProblem);
       }
       steps.push({
         step: 'anchor-verify',
