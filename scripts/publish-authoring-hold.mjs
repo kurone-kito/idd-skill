@@ -1391,7 +1391,12 @@ function followsComment(later, earlier) {
  * lost may still have made an issue, and the caller scans for one. A record of
  * a trusted author that names the set but does not parse counts as
  * unreconciled, a record of an untrusted author is ignored, and an edited
- * trusted record fails closed.
+ * trusted record fails closed. Each record is held to the identity checks of
+ * {@link replayAnchorHold}: it names the journal it was read from, its actor is
+ * its author, its minimization state is readable, a token's records agree on
+ * one target and one session, and the latest record is not minimized as
+ * outdated. The session is not tied to the handoff's, because a child
+ * published after a resume carries the resumed session.
  */
 function checkSettledSetRecords(input) {
   const trustedSet = new Set(input.trusted.map((login) => login.toLowerCase()));
@@ -1425,23 +1430,58 @@ function checkSettledSetRecords(input) {
       ) {
         continue;
       }
+      const where = `publication-intent record ${comment.id} of the token ${intent.token} in ${journal.ref}`;
       if (inspectLastEditedAt(comment) !== null) {
         return stop(
-          `publication-intent record ${comment.id} of the set ${input.set} was edited after posting, or its edit state is unreadable`,
+          `${where} was edited after posting, or its edit state is unreadable, so a child create may be unreconciled`,
+        );
+      }
+      if (
+        typeof comment.isMinimized !== 'boolean' ||
+        (comment.isMinimized &&
+          (typeof comment.minimizedReason !== 'string' ||
+            comment.minimizedReason.trim() === ''))
+      ) {
+        return stop(
+          `${where} has no readable minimization state, so a child create may be unreconciled`,
+        );
+      }
+      if (!sameIssueRef(intent.journal, journal.ref)) {
+        return stop(
+          `${where} names journal ${intent.journal}, so it is misplaced and a child create may be unreconciled`,
+        );
+      }
+      if (
+        intent.actor.toLowerCase() !== comment.authorLogin.trim().toLowerCase()
+      ) {
+        return stop(
+          `${where} names the actor ${intent.actor}, who is not its author, so a child create may be unreconciled`,
         );
       }
       const time = Date.parse(comment.createdAt);
       if (!Number.isFinite(time)) {
         return stop(
-          `publication-intent record ${comment.id} of the set ${input.set} has a creation time that cannot be read`,
+          `${where} has a creation time that cannot be read, so a child create may be unreconciled`,
         );
       }
       const records = tokens.get(intent.token) ?? [];
+      const lead = records[0];
+      if (
+        lead !== undefined &&
+        (lead.target !== intent.target || lead.session !== intent.session)
+      ) {
+        return stop(
+          `the records of the publication token ${intent.token} of the set ${input.set} disagree on their target or session, so a child create may be unreconciled`,
+        );
+      }
       records.push({
         id: comment.id,
         time,
         state: intent.state,
         issue: intent.issue,
+        target: intent.target,
+        session: intent.session,
+        outdated: isOutdatedMinimized(comment),
       });
       tokens.set(intent.token, records);
     }
@@ -1485,6 +1525,12 @@ function checkSettledSetRecords(input) {
     if (!ordered) {
       return stop(
         `the records of the publication token ${token} of the set ${input.set} are out of order, so a child create may be unreconciled: reconcile that exact token (member, or cleanup then abandoned) before publishing another child`,
+      );
+    }
+    const latest = records[records.length - 1];
+    if (latest?.outdated === true) {
+      return stop(
+        `the latest record of the publication token ${token} of the set ${input.set}, comment ${latest.id}, is minimized as outdated, so it cannot settle the token and a child create may be unreconciled`,
       );
     }
     if (state === 'cleanup' || (state === 'pending' && attached !== null)) {
@@ -1588,9 +1634,18 @@ function evaluateReworkAnchor(input) {
         ? `the rework adoption of the anchor ${input.ref} is refused: ${reason}`
         : `the rework adoption of the anchor ${input.ref} no longer holds: ${reason}`,
   });
-  const standard = (reason, issueCodes = []) =>
+  // Until a handoff is read and its set matches the open generation, a problem
+  // keeps the original refusal and is only noted. A re-read has no such
+  // fallback: the adoption was verified, so any lapse is a refusal.
+  const standard = (reason, issueCodes = [], detail) =>
     expected === null
-      ? { mode: 'standard', note: { reason, issueCodes } }
+      ? {
+          mode: 'standard',
+          note:
+            detail === undefined
+              ? { reason, issueCodes }
+              : { reason, issueCodes, detail },
+        }
       : refused(`the handoff is no longer verified (${reason})`);
   if (
     !checked.comments.some((comment) =>
@@ -1605,7 +1660,7 @@ function evaluateReworkAnchor(input) {
   try {
     base = input.readTrustedBase();
   } catch (error) {
-    return refused(
+    return standard(
       `the trusted policy cannot be read, so the provisional records are not verified: ${messageOf(error)}`,
     );
   }
@@ -1613,15 +1668,18 @@ function evaluateReworkAnchor(input) {
   const isBaseTrusted = (login) => baseTrusted.has(login.trim().toLowerCase());
   // As Discover does, a record marker from an untrusted author, or one that
   // was edited, refuses the whole history instead of being skipped.
-  if (
-    checked.comments.some(
-      (comment) =>
-        comment.body.startsWith(PROVISIONAL_DECISION_RECORD_MARKER) &&
-        (!isBaseTrusted(comment.authorLogin) ||
-          inspectLastEditedAt(comment) !== null),
-    )
-  ) {
-    return standard('record-authority-invalid');
+  const untrustedRecord = checked.comments.find(
+    (comment) =>
+      comment.body.startsWith(PROVISIONAL_DECISION_RECORD_MARKER) &&
+      (!isBaseTrusted(comment.authorLogin) ||
+        inspectLastEditedAt(comment) !== null),
+  );
+  if (untrustedRecord !== undefined) {
+    return standard(
+      'record-authority-invalid',
+      [],
+      `comment ${untrustedRecord.id}`,
+    );
   }
   const commentUrl = (id) =>
     `https://github.com/${input.owner}/${input.repo}/issues/${input.number}#issuecomment-${id}`;
@@ -1650,13 +1708,6 @@ function evaluateReworkAnchor(input) {
   });
   if (lineage.status !== 'ok') {
     return standard(`claim-lineage-${lineage.reason}`);
-  }
-  // The anchor check judged claims with the repository policy file's actors;
-  // the trusted default branch must see no active claim either.
-  if (lineage.active !== null) {
-    return refused(
-      `the claim ${lineage.active.claimId} is active under the trusted default-branch policy`,
-    );
   }
   // A completion record counts only with independent proof that the merged
   // pull request carried exactly its head and merge commit. One that cannot be
@@ -1689,7 +1740,7 @@ function evaluateReworkAnchor(input) {
     try {
       merged = input.readMerged(pullRequest);
     } catch (error) {
-      return refused(
+      return standard(
         `the completion proof of ${String(result.reference)} cannot be read: ${messageOf(error)}`,
       );
     }
@@ -1719,12 +1770,23 @@ function evaluateReworkAnchor(input) {
     verifiedReworkRoadmaps: [],
   });
   if (!read.ok) {
-    return standard(read.reason, read.issueCodes);
+    return standard(
+      read.reason,
+      read.issueCodes,
+      read.commentId === undefined ? undefined : `comment ${read.commentId}`,
+    );
   }
   const { handoff } = read;
   const { generation, opening } = checked;
   if (generation.set !== handoff.authoringSetId) {
     return standard('the open generation is not the handoff set');
+  }
+  // The anchor check judged claims with the repository policy file's actors;
+  // the trusted default branch must see no active claim either.
+  if (lineage.active !== null) {
+    return refused(
+      `the claim ${lineage.active.claimId} is active under the trusted default-branch policy`,
+    );
   }
   if (
     expected !== null &&
@@ -2376,6 +2438,7 @@ function runCli() {
       rework = adopted;
       reverify = (fresh) => {
         const again = evaluateRework(fresh, adopted);
+        // A re-read never answers `standard` (it refuses instead).
         return again.mode === 'rework'
           ? null
           : again.mode === 'refused'

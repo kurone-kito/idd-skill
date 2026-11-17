@@ -5713,6 +5713,8 @@ interface ScenarioComment {
   id?: number;
   user?: string;
   lastEditedAt?: string | null;
+  /** A minimization reason, as `outdated` for a hidden record. */
+  minimizedReason?: string;
 }
 
 interface ReworkScenario {
@@ -6051,6 +6053,9 @@ function seedRework(fixture: Fixture, scenario: ReworkScenario): void {
         ...(item.lastEditedAt === undefined
           ? {}
           : { lastEditedAt: item.lastEditedAt }),
+        ...(item.minimizedReason === undefined
+          ? {}
+          : { minimizedReason: item.minimizedReason }),
       });
     }
     stored.issues[String(ANCHOR)] = {
@@ -6099,7 +6104,7 @@ function refusalOf(fixture: Fixture, apply = false) {
     outcome: string;
     reason: string;
     standardCheck?: string;
-    reworkHandoff?: { reason: string; issueCodes: string[] };
+    reworkHandoff?: { reason: string; issueCodes: string[]; detail?: string };
   };
 }
 
@@ -6405,13 +6410,24 @@ test('rework: a failure after the child create keeps the set, blocks a duplicate
       (fixture.state().issues[String(NEW_ISSUE)] as { body: string }).body,
     )?.[1];
     assert.ok(token);
+    // The records of the person's reconciliation carry the target and session
+    // that the helper's own records of the token carry.
+    const own = fixture
+      .state()
+      .comments.find(
+        (comment) =>
+          comment.issue === 2674 && comment.body.includes(`token=${token};`),
+      );
+    const ownTarget = /target=([^;]+);/.exec(own?.body ?? '')?.[1];
+    const ownSession = /session=([^;]+);/.exec(own?.body ?? '')?.[1];
+    assert.ok(ownTarget && ownSession);
     fixture.seed((stored) => {
       for (const [index, state] of ['cleanup', 'abandoned'].entries()) {
         stored.comments.push({
           id: 5900 + index,
           issue: 2674,
           body: [
-            `<!-- idd-skill-authoring-publication-intent: target=target-lost; anchor=${ANCHOR_REF}; set=${REWORK_SET}; session=${REWORK_SESSION}; token=${token}; journal=o/r#2674; issue=o/r#${NEW_ISSUE}; actor=kurone-kito; state=${state} -->`,
+            `<!-- idd-skill-authoring-publication-intent: target=${ownTarget}; anchor=${ANCHOR_REF}; set=${REWORK_SET}; session=${ownSession}; token=${token}; journal=o/r#2674; issue=o/r#${NEW_ISSUE}; actor=kurone-kito; state=${state} -->`,
             '_Issue-authoring publication-intent record. Do not edit or delete._',
           ].join('\n'),
           user: 'kurone-kito',
@@ -6487,7 +6503,11 @@ interface RefusalCase {
   /** The reason the unchanged hold check gave, when the rework path ran. */
   standard?: RegExp;
   /** The handoff note, when the handoff did not apply. */
-  note?: { reason: string; issueCodes?: string[] };
+  note?: {
+    reason: string | RegExp;
+    issueCodes?: string[];
+    detail?: RegExp;
+  };
 }
 
 const REFUSALS: RefusalCase[] = [
@@ -6503,7 +6523,7 @@ const REFUSALS: RefusalCase[] = [
     reason: /has no open owner generation/,
   },
   {
-    name: 'a label alone',
+    name: 'an anchor without the authoring label despite a fresh generation and hold',
     scenario: () => {
       const scenario = reworkScenario();
       scenario.labels = [];
@@ -6752,8 +6772,13 @@ const REFUSALS: RefusalCase[] = [
     name: 'a trusted policy that cannot be read',
     scenario: () => reworkScenario(),
     options: { trustedConfigError: 'gh: HTTP 502 Bad Gateway (policy)' },
-    reason:
-      /the trusted policy cannot be read, so the provisional records are not verified/,
+    // The original refusal stands, and the note says why the handoff did not
+    // apply.
+    reason: /names set set-original, not the open generation's set set-rework/,
+    note: {
+      reason:
+        /the trusted policy cannot be read, so the provisional records are not verified/,
+    },
   },
   {
     name: 'a trusted base policy that does not list the record author',
@@ -6793,7 +6818,7 @@ const REFUSALS: RefusalCase[] = [
       return scenario;
     },
     reason:
-      /publication-intent record \d+ of the set set-rework was edited after posting/,
+      /publication-intent record \d+ of the token token-edit in o\/r#2674 was edited after posting/,
   },
   {
     name: 'an unreadable record that names the set',
@@ -6958,6 +6983,161 @@ const REFUSALS: RefusalCase[] = [
     reason:
       /the hold of the handoff reached member at comment \d+, before the generation opened at comment \d+/,
   },
+  {
+    name: 'a lone untrusted record marker beside trusted records',
+    scenario: () => {
+      const scenario = reworkScenario();
+      scenario.comments.push({
+        issue: ANCHOR,
+        at: 36,
+        user: 'stranger',
+        body: `${PROVISIONAL_DECISION_RECORD_MARKER}\n{}`,
+      });
+      return scenario;
+    },
+    reason: /names set set-original, not the open generation's set set-rework/,
+    note: { reason: 'record-authority-invalid', detail: /comment \d+/ },
+  },
+  {
+    name: 'a history that was never asked for a rework',
+    scenario: () => {
+      const scenario = reworkScenario();
+      dropComments(
+        scenario,
+        (item) =>
+          item.body.includes('"recordId":"rework-1"') ||
+          item.body.startsWith(PROVISIONAL_DECISION_ANSWER_MARKER),
+      );
+      return scenario;
+    },
+    reason: /names set set-original, not the open generation's set set-rework/,
+    note: { reason: 'no-rework-request' },
+  },
+  {
+    name: 'a history whose rework authoring is already recorded',
+    scenario: () => {
+      const scenario = reworkScenario();
+      scenario.comments.push({
+        issue: ANCHOR,
+        at: 36,
+        body: sourceRecord(
+          'rework-2',
+          {
+            type: 'rework-authored',
+            reworkRoadmap: {
+              roadmapIssueNumber: ANCHOR,
+              roadmapMarkerId: 'rework-roadmap',
+              authoringSetId: REWORK_SET,
+              url: `https://github.com/o/r/issues/${ANCHOR}`,
+            },
+          },
+          [
+            {
+              claimId: 'claim-impl-4000',
+              agentId: 'codex-impl00001',
+              branch: 'issue/4000-decide-option',
+              claimedAt: at(10),
+              supersedes: 'none',
+            },
+            {
+              claimId: 'claim-review-4000',
+              agentId: 'codex-review0001',
+              branch: 'issue/4000-review-option',
+              claimedAt: at(30),
+              supersedes: 'none',
+            },
+          ],
+          SOURCE_BODY,
+        ),
+      });
+      return scenario;
+    },
+    reason: /names set set-original, not the open generation's set set-rework/,
+    note: { reason: 'rework-already-authored' },
+  },
+  {
+    name: 'a sibling record that names another journal',
+    scenario: () => {
+      const scenario = reworkScenario();
+      for (const [at, state] of [
+        [46, 'pending'],
+        [47, 'member'],
+      ] as const) {
+        scenario.comments.push({
+          issue: 2674,
+          at,
+          body: [
+            `<!-- idd-skill-authoring-publication-intent: target=target-far; anchor=${ANCHOR_REF}; set=${REWORK_SET}; session=${REWORK_SESSION}; token=token-far; journal=o/r#9999; issue=${state === 'pending' ? 'none' : 'o/r#5006'}; actor=kurone-kito; state=${state} -->`,
+            '_Issue-authoring publication-intent record. Do not edit or delete._',
+          ].join('\n'),
+        });
+      }
+      return scenario;
+    },
+    reason: /names journal o\/r#9999, so it is misplaced/,
+  },
+  {
+    name: 'a sibling record whose actor is not its author',
+    scenario: () => {
+      const scenario = reworkScenario();
+      scenario.comments.push({
+        issue: 2674,
+        at: 46,
+        body: [
+          `<!-- idd-skill-authoring-publication-intent: target=target-forged; anchor=${ANCHOR_REF}; set=${REWORK_SET}; session=${REWORK_SESSION}; token=token-forged; journal=o/r#2674; issue=none; actor=someone-else; state=pending -->`,
+          '_Issue-authoring publication-intent record. Do not edit or delete._',
+        ].join('\n'),
+      });
+      return scenario;
+    },
+    reason: /names the actor someone-else, who is not its author/,
+  },
+  {
+    name: 'sibling records of one token that disagree on their target',
+    scenario: () => {
+      const scenario = reworkScenario();
+      for (const [at, target, issue] of [
+        [46, 'target-one', 'none'],
+        [47, 'target-two', 'o/r#5007'],
+      ] as const) {
+        scenario.comments.push({
+          issue: 2674,
+          at,
+          body: [
+            `<!-- idd-skill-authoring-publication-intent: target=${target}; anchor=${ANCHOR_REF}; set=${REWORK_SET}; session=${REWORK_SESSION}; token=token-split; journal=o/r#2674; issue=${issue}; actor=kurone-kito; state=pending -->`,
+            '_Issue-authoring publication-intent record. Do not edit or delete._',
+          ].join('\n'),
+        });
+      }
+      return scenario;
+    },
+    reason:
+      /records of the publication token token-split of the set set-rework disagree on their target or session/,
+  },
+  {
+    name: 'a sibling token whose settling record is minimized as outdated',
+    scenario: () => {
+      const scenario = reworkScenario();
+      for (const [at, state, issue] of [
+        [46, 'pending', 'none'],
+        [47, 'pending', 'o/r#5008'],
+        [48, 'member', 'o/r#5008'],
+      ] as const) {
+        scenario.comments.push({
+          issue: 2674,
+          at,
+          ...(state === 'member' ? { minimizedReason: 'outdated' } : {}),
+          body: [
+            `<!-- idd-skill-authoring-publication-intent: target=target-hidden; anchor=${ANCHOR_REF}; set=${REWORK_SET}; session=${REWORK_SESSION}; token=token-hidden; journal=o/r#2674; issue=${issue}; actor=kurone-kito; state=${state} -->`,
+            '_Issue-authoring publication-intent record. Do not edit or delete._',
+          ].join('\n'),
+        });
+      }
+      return scenario;
+    },
+    reason:
+      /latest record of the publication token token-hidden of the set set-rework, comment \d+, is minimized as outdated/,
+  },
 ];
 
 for (const refusal of REFUSALS) {
@@ -6972,7 +7152,20 @@ for (const refusal of REFUSALS) {
           assert.match(report.standardCheck ?? '', refusal.standard);
         }
         if (refusal.note !== undefined) {
-          assert.equal(report.reworkHandoff?.reason, refusal.note.reason);
+          if (typeof refusal.note.reason === 'string') {
+            assert.equal(report.reworkHandoff?.reason, refusal.note.reason);
+          } else {
+            assert.match(
+              report.reworkHandoff?.reason ?? '',
+              refusal.note.reason,
+            );
+          }
+          if (refusal.note.detail !== undefined) {
+            assert.match(
+              report.reworkHandoff?.detail ?? '',
+              refusal.note.detail,
+            );
+          }
           if (refusal.note.issueCodes !== undefined) {
             assert.deepEqual(
               report.reworkHandoff?.issueCodes,
@@ -7093,7 +7286,13 @@ test('rework: an unreadable completion proof or an unreadable token scan refuses
       stored.prReadsFail = true;
     });
     const report = refusalOf(proofFixture);
-    assert.match(report.reason, /the completion proof of .* cannot be read/);
+    // The original refusal stands, and the note says why the handoff did not
+    // apply.
+    assert.match(report.reason, /names set set-original/);
+    assert.match(
+      report.reworkHandoff?.reason ?? '',
+      /the completion proof of .* cannot be read/,
+    );
   } finally {
     proofFixture.restore();
   }
@@ -7187,9 +7386,10 @@ test('token listing: the since is a minute before the earliest first record', ()
   );
 });
 
-test('token listing: the jq program prints one line per issue and token, skips pull requests, and keeps its quoting', () => {
+test('token listing: the jq program prints one line per issue and token, skips pull requests, and keeps its quoting', (t) => {
   const jq = spawnSync('jq', ['--version'], { encoding: 'utf8' });
   if (jq.status !== 0) {
+    t.skip('jq is not installed');
     return;
   }
   const awkward = 'token-"q"\\x';
