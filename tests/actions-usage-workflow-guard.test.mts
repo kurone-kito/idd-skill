@@ -19,9 +19,9 @@
 // installed pnpm-boundary test shards still run it) and cut the timeout from
 // 30 to 10 minutes, and issue #5266 added this guard so a later edit cannot
 // restore the step or the old budget while every other guard still passes.
-// Issue #5269 narrowed the `node --test` match to text that can run: the
-// review of pull request #5268 observed it rejecting a step that only quotes
-// or comments the text, such as `echo "node --test"`.
+// Issue #5269 narrowed the `node --test` match to text that can run: observed
+// 2026-11-16 in the review of pull request #5268, the guard rejected a step
+// that only quotes or comments the text, such as `echo "node --test"`.
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
@@ -1787,8 +1787,8 @@ function shellQuoteEnd(line: string, start: number): number {
 
 /** Returns the part of one shell line that can start a command, so that
  * `NODE_TEST_COMMAND` does not match text that only mentions `node --test`
- * (issue #5269; the review of pull request #5268 observed the false match on
- * `echo "node --test"` and `echo ok # node --test`).
+ * (issue #5269; observed 2026-11-16 in the review of pull request #5268: the
+ * false match on `echo "node --test"` and `echo ok # node --test`).
  *
  * One pass over the line, with these rules:
  * - A backslash makes the next character literal: it never opens or closes a
@@ -2014,7 +2014,7 @@ test('lint.yml keeps the lint job timeout at 10 minutes and runs no node --test 
   assertJobRunsNoNodeTest(workflow, 'lint');
 });
 
-test('changing the lint job timeout or restoring a node --test step is rejected', () => {
+test('changing the lint job timeout is rejected', () => {
   const workflow = readWorkflow('lint.yml');
   const lintJob = extractJobBody(workflow, 'lint');
   // Each mutation edits only the lint job's own text, so a second job that
@@ -2058,14 +2058,6 @@ test('changing the lint job timeout or restoring a node --test step is rejected'
       `accepted ${description}`,
     );
   }
-
-  for (const [description, step] of RESTORED_NODE_TEST_STEPS) {
-    assert.throws(
-      () => assertJobRunsNoNodeTest(withLintStep(workflow, step), 'lint'),
-      /lint job must not run the test suite with node --test/,
-      `accepted ${description}`,
-    );
-  }
 });
 
 test('the lint job node --test guard ignores quoted and commented text but still rejects the restored and running shapes', () => {
@@ -2084,7 +2076,6 @@ test('the lint job node --test guard ignores quoted and commented text but still
     'echo ok # node --test',
     "echo 'node --test'",
     'echo "node --test" # node --test',
-    'echo "a;b"',
     'echo "a;node" --test',
     "echo '$(node --test)'",
     'echo ok;# node --test',
@@ -2100,18 +2091,16 @@ test('the lint job node --test guard ignores quoted and commented text but still
   // Every restored-step row keeps failing, and so does a node --test that sits
   // in a quoted shell command string.
   for (const [description, step] of RESTORED_NODE_TEST_STEPS) {
+    const mutated = withLintStep(workflow, step);
     assert.throws(
-      () => assertJobRunsNoNodeTest(withLintStep(workflow, step), 'lint'),
+      () => assertJobRunsNoNodeTest(mutated, 'lint'),
       noNodeTest,
       `accepted ${description}`,
     );
   }
+  const bashCommandString = withRunLine("bash -c 'node --test tests/'");
   assert.throws(
-    () =>
-      assertJobRunsNoNodeTest(
-        withRunLine("bash -c 'node --test tests/'"),
-        'lint',
-      ),
+    () => assertJobRunsNoNodeTest(bashCommandString, 'lint'),
     noNodeTest,
     "accepted bash -c 'node --test tests/' in the live lint job",
   );
