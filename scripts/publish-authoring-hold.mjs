@@ -2009,15 +2009,32 @@ function evaluateReworkAnchor(input) {
  * Whether any record comment of the anchor, trusted or not, asks for a rework
  * under a handoff that names `set`. It decides nothing about trust: it only
  * keeps an anchor whose records claim a handoff for its open set off the
- * ordinary path when the rework check cannot verify them.
+ * ordinary path when the rework check cannot verify them. A record that
+ * parses must name the set in its handoff. One the parser cannot read
+ * (truncated, a shape the record schema refuses, or a duplicate key) cannot say
+ * what it asks for, so its text decides: it counts when it holds the event type
+ * and the set id, each as a whole quoted string.
  */
 function namesHandoffSet(comments, set) {
+  const quotedSet = JSON.stringify(set);
   for (const comment of comments) {
     if (!comment.body.startsWith(PROVISIONAL_DECISION_RECORD_MARKER)) {
       continue;
     }
     const parsed = parseProvisionalDecisionRecordComment(comment.body);
-    if (!parsed.ok || parsed.record.event.type !== 'rework-requested') {
+    if (!parsed.ok) {
+      // A plain substring test on purpose: a quoted string written with a JSON
+      // unicode escape for one of its characters is not matched, and the record
+      // is not parsed again to reach it.
+      if (
+        comment.body.includes('"rework-requested"') &&
+        comment.body.includes(quotedSet)
+      ) {
+        return true;
+      }
+      continue;
+    }
+    if (parsed.record.event.type !== 'rework-requested') {
       continue;
     }
     const request = parsed.record.event.reworkRequest;
