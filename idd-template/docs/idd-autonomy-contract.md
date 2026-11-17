@@ -325,6 +325,28 @@ close.
 | Delete remote branch (when GitHub auto-delete is disabled)            | Reversible                | Content is preserved via the merge commit on `{development-branch}`; only runs after a successful merge                                     | F4 (`idd-merge.instructions.md`) |
 | Update local `{development-branch}`                                   | Reversible                | Trivial fast-forward re-fetch                                                                                                               | F4 (`idd-merge.instructions.md`) |
 
+### Provisional decisions (A4.5, D3.5, F3, F4)
+
+The selection and completion rows apply only to a repository that opts in (see
+[Provisional Decision Opt-in](customization.md#provisional-decision-opt-in))
+and only to a needs-decision source whose `decisionIssue` class is enabled in
+the trusted policy. The `Refs` and merge rows follow the recorded history of the
+claimed source, not a switch. No row adds a permission: every gate is a
+condition the phase file already states, and a gate that is not met leaves the
+existing stop in place. The roadmap audit never closes a roadmap while any
+descendant holds an unconfirmed provisional decision (A1.5,
+`idd-roadmap-audit.instructions.md`); that is a further condition on the
+existing roadmap-close row, not a new mutation. The `work-started` record has
+no phase-file rule yet, so it stays under the default rule above.
+
+| Mutation                                                                                                | Reversible / Irreversible | Undo path / Governing gate                                                                                                                                                                                                                                                                                       | Source                                                                                                                         |
+| ------------------------------------------------------------------------------------------------------- | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| Run the provisional plan assessment (`--provisional-plan` on the A4 and A4.5 helpers)                   | Reversible                | Read-only; it relaxes only the part of Checks 5-7 that the decision itself causes and changes no state                                                                                                                                                                                                           | A4.5 "Provisional plan" (`idd-suitability.instructions.md`)                                                                    |
+| Append the `selected` record of a needs-decision source (`idd-provisional-decision`)                    | Irreversible              | No undo: records are append-only, and editing or deleting one makes the history refuse replay, which holds the source; a rework request redirects it. Gate: the trusted opt-in, the claim lineage, an eligible assessment, and the `selected` record read back before any B2 or B3 work                          | `idd-workflow.md` "Provisional plan assessment", linked from A4.5 (`idd-suitability.instructions.md`)                          |
+| Edit the PR body of a bound provisional source to refer to it with `Refs #N`, never a closing keyword   | Reversible                | Edit again. Gate: the merge-readiness `provisionalRead.status` is `bound`, or Resume's `evidence.provisional_work` is unconfirmed; every branch commit uses `Refs` too, under the ordinary commit rows                                                                                                           | D3, D3.5 (`idd-pr-submit.instructions.md`)                                                                                     |
+| `gh pr merge --merge` for a bound provisional source                                                    | Irreversible              | The plain-merge gate applies unchanged. The claimed source is left out of the closing set, and a closing reference to it in the body, the title, GitHub's registered references, or a commit is a `closing-set` blocker, and naming it in the explicit set is refused                                            | F3 (`idd-merge.instructions.md`), D3.5 (`idd-pr-submit.instructions.md`), and the closing-set rules of `idd-helper-scripts.md` |
+| Append the `work-completed` record and verify the needs-decision label (F4, `idd-provisional-decision`) | Irreversible              | No undo: the record is append-only, never written by hand, and the label is never removed. Gate: the merged pull request URL and the proven `PR_HEAD_SHA_F3`, a dry run and then the write, then the record read back and the label present; otherwise the claim is kept and F4 holds before cleanup and release | F4 "Bound provisional source" (`idd-merge.instructions.md`)                                                                    |
+
 ### Live status digest & hold comments
 
 | Mutation                                             | Reversible / Irreversible | Undo path / Governing gate                                                                                            | Source                                                                                                  |
@@ -340,8 +362,8 @@ close.
 
 ## Not covered
 
-Two mutation-adjacent actions are deliberately out of this page because
-autopilot never performs them — only a human maintainer does:
+Three mutation-adjacent actions are deliberately out of this page because
+autopilot never performs them on its own:
 
 - **Authoring a `forced-handoff` marker.** Autopilot only consumes
   already-recorded, human-gated forced-handoff evidence (see Claim &
@@ -350,6 +372,15 @@ autopilot never performs them — only a human maintainer does:
   skipping a specific registered check under
   `ciGate.externalCheckWaivers`; the loop only reads and validates
   `waiverEvidence`, never posts a waiver.
+- **Recording a person's confirmation or rework request.** Only a human
+  maintainer, or a session at a person's explicit direction, does this. The
+  answer comment, the `confirmed`, `rework-requested` and `rework-authored` records,
+  the close of a confirmed source and the rewrite of the same source into a
+  rework roadmap are performed by no phase file and no shipped command. A
+  session does them only at a person's explicit direction, through
+  [Resolving a confirmation-pending source](idd-workflow.md#resolving-a-confirmation-pending-source).
+  By the default rule above they stay irreversible until a phase file
+  classifies them.
 
 ## Coverage
 
