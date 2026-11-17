@@ -1885,7 +1885,6 @@ export async function evaluateDiscoverReadiness(
       labels: issue.labels,
       body: issue.body,
       needsDecisionLabelName,
-      roadmapLabelName,
       authoringOnlyLabelName,
       confirmationLabel,
       markerPrefix: resolvedMarkerPrefix,
@@ -2443,17 +2442,18 @@ export async function evaluateDiscoverReadiness(
 
 /**
  * Whether an issue has the shape of a decision source (issue #4538): it
- * carries the needs-decision label, is not a roadmap node (by label or by
- * `roadmap-id` marker), carries no confirmation label, is not a draft
- * carrier (authoring-only label plus the `draft-carrier` marker), and is not
- * a follow-up that waits for a reviewer's decision. Shared by every Discover
- * helper so they replay and relax the same issues.
+ * carries the needs-decision label, is not a roadmap node, carries no
+ * confirmation label, is not a draft carrier (authoring-only label plus the
+ * `draft-carrier` marker), and is not a follow-up that waits for a reviewer's
+ * decision. A roadmap node is an issue whose body carries the `roadmap-id`
+ * marker, as A2 defines it; an issue that carries only the roadmap label is an
+ * execution leaf, so it can be a decision source (issue #5280). Shared by every
+ * Discover helper so they replay and relax the same issues.
  */
 export function isDecisionSourceShape(input: {
   labels: ReadonlySet<string>;
   body: string;
   needsDecisionLabelName: string;
-  roadmapLabelName: string;
   authoringOnlyLabelName: string;
   confirmationLabel: Pick<ConfirmationLabelMatcher, 'matches'>;
   markerPrefix: string;
@@ -2461,7 +2461,6 @@ export function isDecisionSourceShape(input: {
   const { labels, markerPrefix } = input;
   if (
     !labels.has(input.needsDecisionLabelName) ||
-    labels.has(input.roadmapLabelName) ||
     [...labels].some((label) => input.confirmationLabel.matches(label))
   ) {
     return false;

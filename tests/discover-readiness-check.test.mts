@@ -23,6 +23,7 @@ import {
   extractDependencyIssueNumbers,
   extractExplicitBlockedCriterion,
   hasDeferSourceMarker,
+  isDecisionSourceShape,
   isInaccessibleIssueLookupError,
   needsDecisionNameCollides,
   type ProvisionalDecisionEvidence,
@@ -3994,7 +3995,13 @@ test('decision gate: only labelled open sources are replayed, once, before any v
 
 test('decision gate: durable records, roadmap nodes, and review-needs-decision follow-ups are never relaxed or replayed', async () => {
   const { resolver, calls } = decisionGate({});
-  const roadmapByLabel = gateIssue(21, [DECISION_LABEL, 'roadmap']);
+  // A roadmap node carries the roadmap-id marker (A2), with or without the
+  // roadmap label.
+  const roadmapByLabel = gateIssue(
+    21,
+    [DECISION_LABEL, 'roadmap'],
+    '<!-- idd-skill-roadmap-id: epic-a -->',
+  );
   const roadmapByMarker = gateIssue(
     22,
     [DECISION_LABEL],
@@ -4026,6 +4033,124 @@ test('decision gate: durable records, roadmap nodes, and review-needs-decision f
       String(entry.number),
     );
   }
+});
+
+test('decision gate: a needs-decision issue with only the roadmap label is an ordinary source (#5280)', async () => {
+  // A2 defines a roadmap node by its roadmap-id marker alone, so an issue that
+  // carries just the roadmap label is an execution leaf: replayed, admitted,
+  // queued, and capped like any other source. The marker keeps a node out.
+  const labelOnly = gateIssue(51, [DECISION_LABEL, 'roadmap']);
+  const node = gateIssue(
+    52,
+    [DECISION_LABEL, 'roadmap'],
+    '<!-- idd-skill-roadmap-id: node -->',
+  );
+  const eligible = decisionGate({});
+  const result = await runGate([51, 52], [labelOnly, node], eligible.resolver);
+  assert.deepEqual(eligible.calls.loadStates, [[51]]);
+  assert.deepEqual(result.ready, [
+    {
+      number: 51,
+      title: 'issue 51',
+      autopilotSuitability: null,
+      belowFloor: false,
+      isRoadmap: true,
+      decisionSource: true,
+    },
+  ]);
+  assert.deepEqual(
+    result.filteredOut.map((entry) => [entry.number, entry.reasons]),
+    [[52, [`label:${DECISION_LABEL}`]]],
+  );
+
+  // Completed provisional work queues the label-only source. The node has
+  // completed work too, but is never replayed, queued, or given the pending
+  // reason.
+  const queued = decisionGate({ 51: pendingEvidence(), 52: pendingEvidence() });
+  const waiting = await runGate([51, 52], [labelOnly, node], queued.resolver);
+  assert.deepEqual(queued.calls.loadStates, [[51]]);
+  assert.deepEqual(
+    waiting.confirmationQueue?.map((entry) => entry.number),
+    [51],
+  );
+  const reasons = new Map(
+    waiting.filteredOut.map((entry) => [entry.number, entry.reasons]),
+  );
+  assert.deepEqual(reasons.get(51), [
+    CONFIRMATION_PENDING_REASON,
+    `label:${DECISION_LABEL}`,
+  ]);
+  assert.deepEqual(reasons.get(52), [`label:${DECISION_LABEL}`]);
+
+  // It counts against the pending cap like any other source.
+  const full = decisionGate({}, { countOpenConfirmationIssues: () => 3 });
+  const capped = await runGate([51], [labelOnly], full.resolver);
+  assert.deepEqual(capped.ready, []);
+  assert.deepEqual(capped.filteredOut[0]?.reasons, [
+    `label:${DECISION_LABEL}`,
+    'provisional_pending_cap:3/3',
+  ]);
+
+  // The trusted confirmation name still keeps it out when it differs from the
+  // local name: it is dropped before any replay and never queued.
+  const trustedOnly = decisionGate(
+    { 53: pendingEvidence() },
+    {},
+    { confirmationLabelName: 'auto:confirm' },
+  );
+  const confirmed = await runGate(
+    [53],
+    [gateIssue(53, [DECISION_LABEL, 'roadmap', 'Auto:Confirm '])],
+    trustedOnly.resolver,
+    { confirmationLabelName: 'auto:other' },
+  );
+  assert.deepEqual(trustedOnly.calls.loadStates, []);
+  assert.equal('confirmationQueue' in confirmed, false);
+  assert.deepEqual(confirmed.ready, []);
+});
+
+test('decision gate: isDecisionSourceShape reads the roadmap-id marker, not the roadmap label (#5280)', () => {
+  const confirmationLabel = buildConfirmationLabelMatcher({
+    confirmationLabelName: CONFIRMATION_LABEL,
+  });
+  const shape = (labels: string[], body = 'plain source') =>
+    isDecisionSourceShape({
+      labels: new Set(labels),
+      body,
+      needsDecisionLabelName: DECISION_LABEL,
+      authoringOnlyLabelName: 'status:authoring-only',
+      confirmationLabel,
+      markerPrefix: 'idd-skill',
+    });
+  const roadmapMarker = '<!-- idd-skill-roadmap-id: epic -->';
+  const carrierMarker = '<!-- idd-skill-draft-carrier: carrier-1 -->';
+  const deferMarker =
+    '<!-- idd-skill-authoring-defer-source: review-needs-decision -->\nRefs #99';
+
+  // A source: the needs-decision label, with or without the roadmap label.
+  assert.equal(shape([DECISION_LABEL]), true);
+  assert.equal(shape([DECISION_LABEL, 'roadmap']), true);
+  // The carrier marker needs the authoring-only label, and the authoring-only
+  // label needs the marker, to make a draft carrier.
+  assert.equal(shape([DECISION_LABEL], carrierMarker), true);
+  assert.equal(shape([DECISION_LABEL, 'status:authoring-only']), true);
+
+  // Never a source: no needs-decision label.
+  assert.equal(shape([]), false);
+  assert.equal(shape(['roadmap']), false);
+  // A roadmap node, with or without the label.
+  assert.equal(shape([DECISION_LABEL], roadmapMarker), false);
+  assert.equal(shape([DECISION_LABEL, 'roadmap'], roadmapMarker), false);
+  // The configured confirmation label, in any case or with padding.
+  assert.equal(shape([DECISION_LABEL, CONFIRMATION_LABEL]), false);
+  assert.equal(shape([DECISION_LABEL, ' STATUS:Needs-Confirmation']), false);
+  // A draft carrier.
+  assert.equal(
+    shape([DECISION_LABEL, 'status:authoring-only'], carrierMarker),
+    false,
+  );
+  // A follow-up that waits for a reviewer's decision.
+  assert.equal(shape([DECISION_LABEL], deferMarker), false);
 });
 
 test('decision gate: a needs-decision name that collides with another configured label never relaxes', async () => {
@@ -4899,15 +5024,21 @@ test('decision gate: a confirmation issue or a draft carrier is never replayed, 
     'label:status:authoring-only',
     `label:${DECISION_LABEL}`,
   ]);
-  // The excluded issues do not count toward the cap: 2 queued and 0 open is
-  // below a cap of 3, so a further ordinary source is still eligible. (Were 71
-  // and 72 counted, it would sit at the cap.)
-  const capped = decisionGate({
-    71: pendingEvidence(),
-    72: pendingEvidence(),
-    73: pendingEvidence(),
-    74: pendingEvidence(),
-  });
+  // The open confirmation issue (71) counts toward the cap, as the live count
+  // does: it is open and carries the confirmation label, so the stub reports 1.
+  // The draft carrier (72) carries no such label and is not queued either. One
+  // open plus two queued (73, 74) reaches the cap of 3, so a further ordinary
+  // source is blocked. Were 71 or 72 also queued, the count would read 4/3, and
+  // were the open count left at 0, source 75 would stay eligible.
+  const capped = decisionGate(
+    {
+      71: pendingEvidence(),
+      72: pendingEvidence(),
+      73: pendingEvidence(),
+      74: pendingEvidence(),
+    },
+    { countOpenConfirmationIssues: () => 1 },
+  );
   const fifth = await runGate(
     [71, 72, 73, 74, 75],
     [
@@ -4919,9 +5050,14 @@ test('decision gate: a confirmation issue or a draft carrier is never replayed, 
     ],
     capped.resolver,
   );
+  assert.deepEqual(fifth.ready, []);
   assert.deepEqual(
-    fifth.ready.map((entry) => entry.number),
-    [75],
+    fifth.confirmationQueue?.map((entry) => entry.number),
+    [73, 74],
+  );
+  assert.deepEqual(
+    fifth.filteredOut.find((entry) => entry.number === 75)?.reasons,
+    [`label:${DECISION_LABEL}`, 'provisional_pending_cap:3/3'],
   );
   // The trusted confirmation name can differ from the local one: a completed
   // source that carries only the trusted name is not replayed or queued, even
