@@ -92,6 +92,8 @@ interface FakeState {
   postAs: string;
   failures: {
     pages?: boolean;
+    /** Fail the Nth paginated comment read (1-based), and only that one. */
+    failPagesOn?: number;
     post?: boolean;
     /** A comment POST succeeds but the comment never appears in a read. */
     hidePost?: boolean;
@@ -99,6 +101,7 @@ interface FakeState {
   };
   /** Another actor closes the issue with this reason just before gh does. */
   raceOnClose?: string;
+  pageCalls?: number;
   calls: { args: string[]; input: string }[];
 }
 
@@ -178,7 +181,8 @@ if (endpoint.includes('/comments')) {
     reply(JSON.stringify({ id, html_url: repoUrl + '#issuecomment-' + id }));
   }
   if (args.includes('--paginate')) {
-    if (state.failures.pages) fail(503, 'unavailable');
+    state.pageCalls = (state.pageCalls || 0) + 1;
+    if (state.failures.pages || state.failures.failPagesOn === state.pageCalls) fail(503, 'unavailable');
     reply(state.comments.map((c) => JSON.stringify(commentRow(c))).join('\\n'));
   }
   reply(JSON.stringify(state.comments.slice(0, 1).map(commentRow)));
@@ -559,6 +563,27 @@ test('an own post is remembered even when the read-back fails', async () => {
   await withFake(
     (state) => {
       state.postAs = 'session-bot';
+      // The first read is the lookup, the second is the read-back of the post.
+      state.failures.failPagesOn = 2;
+    },
+    async ({ fake, store }) => {
+      await assert.rejects(
+        store.appendRecordBody(recordId, recordBody),
+        /absent from history read-back/,
+      );
+      assert.deepEqual(fake.writes(), ['POST']);
+      // The comment is now visible, from an author the policy does not name,
+      // but this store posted it, so it is found and nothing is posted again.
+      const result = await store.appendRecordBody(recordId, recordBody);
+      assert.equal(result.result, 'existed');
+      assert.deepEqual(fake.writes(), ['POST']);
+    },
+  );
+});
+
+test('a post that never becomes visible fails its read-back', async () => {
+  await withFake(
+    (state) => {
       state.failures.hidePost = true;
     },
     async ({ fake, store }) => {
@@ -1246,6 +1271,16 @@ function confirmedRecords(fake: Fake) {
 test('the command resolves a pending source end to end through the GitHub store', async () => {
   const seed = await seedBundle();
   await withFake(loadSeed(seed), async ({ fake, store }) => {
+    // A claim that is not the active one is a request to fix, not a hold.
+    const wrongClaim = await runCommand(seed, {
+      ...resolveRequest,
+      claimId: 'claim-4536-someone-else',
+    });
+    assert.equal(exitCodeOf(wrongClaim.outcome), 4);
+    assert.equal(wrongClaim.report.state, 'refused');
+    assert.equal(wrongClaim.report.action, 'fix-input');
+    assert.deepEqual(fake.writes(), []);
+
     const dry = await runCommand(seed, resolveRequest);
     assert.equal(exitCodeOf(dry.outcome), 0);
     assert.equal(dry.report.state, 'planned');
@@ -1286,6 +1321,22 @@ test('the command resolves a pending source end to end through the GitHub store'
         comment.body.startsWith('<!-- unclaimed-by: codex-coordination-agent'),
       ),
     );
+    // Running the same request again finds everything done: reconciled, exit 2.
+    const writesDone = fake.writes().length;
+    const again = await runCommand(
+      seed,
+      {
+        ...resolveRequest,
+        input: conversationYes,
+        answeredPresentationSha256: dry.report.presentationSha256,
+      },
+      { apply: true },
+    );
+    assert.equal(exitCodeOf(again.outcome), 2, JSON.stringify(again.report));
+    assert.equal(again.report.state, 'reconciled');
+    assert.equal(again.report.action, 'reconcile');
+    assert.equal(fake.writes().length, writesDone);
+
     const answers = state.comments.filter(
       (comment) => parseProvisionalDecisionAnswerComment(comment.body).ok,
     );

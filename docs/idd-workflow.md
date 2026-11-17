@@ -1138,8 +1138,9 @@ keep their own rule: their planner holds while an untrusted or edited comment
 carries the ID of the record it would write. The close and the release re-read
 the issue and the claim just before the write, and the close reads the closed
 state back. GitHub offers no conditional write, so a close that another actor
-made before the `gh` close call is reported and never overwritten, while one
-made inside that call cannot be told from this close. Neither write
+made with another reason before the `gh` close call is reported and never
+overwritten, while a foreign close inside that call cannot be told from this
+one. Neither write
 invalidates the Discover hints, which age out or refresh like any other raw
 write.
 
