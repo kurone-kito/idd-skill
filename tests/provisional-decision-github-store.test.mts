@@ -1315,6 +1315,23 @@ test('the command resolves a pending source end to end through the GitHub store'
     });
     assert.equal((await store.appendAnswerBody(answer.body)).result, 'created');
     assert.equal(fake.writes().length, writes + 1);
+
+    // An edited trusted answer is not one the planner counts either.
+    fake.update((current) => {
+      for (const comment of current.comments) {
+        if (comment.id === answer.id) {
+          comment.user = trustedLogin;
+          comment.edited = true;
+        }
+      }
+      // The answer the previous check posted is not the one under test.
+      current.comments = current.comments.filter(
+        (comment) =>
+          comment.id === answer.id ||
+          !parseProvisionalDecisionAnswerComment(comment.body).ok,
+      );
+    });
+    assert.equal((await store.appendAnswerBody(answer.body)).result, 'created');
   });
 });
 

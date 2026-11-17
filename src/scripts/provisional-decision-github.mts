@@ -686,8 +686,10 @@ export function createGithubProvisionalDecisionStore(input: {
         '--reason',
         'completed',
       ]);
-      // gh leaves an issue that another actor closed meanwhile untouched, so
-      // only a read-back shows the close is the completed one this call meant.
+      // gh leaves an issue that is already closed untouched, so a close another
+      // actor made before this call shows in the read-back as another reason.
+      // GitHub offers no conditional write: one made inside the call itself
+      // cannot be told apart from this close.
       const after = sourceStateOf(readIssueObject());
       if (after.state !== 'closed' || after.stateReason !== 'completed') {
         throw new Error(
