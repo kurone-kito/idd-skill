@@ -7482,6 +7482,39 @@ test('rework: a heartbeat of the owner that records another body, posted during 
   }
 });
 
+for (const failure of [
+  {
+    name: 'an unreadable trusted policy',
+    options: { trustedConfigError: 'gh: HTTP 502 Bad Gateway (policy)' },
+    reason: /\(the trusted policy cannot be read/,
+  },
+  {
+    name: 'a record author the default branch does not trust',
+    options: { trustedConfig: { trustedMarkerActors: ['someone-else'] } },
+    reason: /\(record-authority-invalid\)/,
+  },
+]) {
+  test(`rework: a body line naming the own hold of a handoff is refused when the rework check cannot verify it (${failure.name})`, () => {
+    const scenario = reworkScenario({
+      bodyLine: `<!-- idd-skill-authoring-publication: target=${ANCHOR_REF}; anchor=${ANCHOR_REF}; set=${REWORK_SET}; session=${REWORK_SESSION}; token=${REWORK_HANDOFF} -->`,
+    });
+    const fixture = reworkFixture(scenario, failure.options);
+    try {
+      for (const apply of [false, true]) {
+        const report = refusalOf(fixture, apply);
+        assert.match(
+          report.reason,
+          /carries a rework handoff for its open set set-rework that could not be verified/,
+        );
+        assert.match(report.reason, failure.reason);
+        assert.equal(report.standardCheck, undefined);
+      }
+    } finally {
+      fixture.restore();
+    }
+  });
+}
+
 test('rework: a plain anchor keeps the original check and its messages', () => {
   const fixture = setup({
     labels: ['status:authoring'],

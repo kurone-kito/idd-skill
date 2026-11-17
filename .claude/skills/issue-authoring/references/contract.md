@@ -4095,7 +4095,9 @@ claim of the confirmation review is released:
    refusal carries the handoff reason in its report. When it applies, the
    original check passing is not enough: every item holds or the call stops
    before any write, so a body line rewritten to the handoff's own hold cannot
-   take the ordinary path:
+   take the ordinary path. A record of the anchor that asks for a rework under
+   a handoff for the open set, but that the check cannot verify (an unreadable
+   policy, an untrusted record, a refused replay), refuses the call too:
 
    - the handoff names this anchor, the generation's opening marker carries the
      handoff's session (so a resumed set still verifies), and the set is not

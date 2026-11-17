@@ -640,8 +640,8 @@ first and unchanged, with its messages. When the anchor carries trusted
 provisional-decision records that replay to a rework handoff whose set is the
 open generation's set, the rework check applies in place of the body
 publication line, and a passing original check does not skip it (a body line
-rewritten to the handoff's own hold is refused); both reasons are reported when
-neither holds. The rework check requires: the handoff names this anchor, the
+rewritten to the handoff's own hold is refused, also when a record that names
+the open set cannot be verified); both reasons are reported when neither holds. The rework check requires: the handoff names this anchor, the
 generation's opening marker carries the handoff's session, and the set is not
 closed in the owner history; the generation opened after the first rework
 request and no claim, release, nonce or forced-handoff marker follows its
@@ -2488,6 +2488,34 @@ function evaluateReworkAnchor(input: {
 }
 
 /**
+ * Whether any record comment of the anchor, trusted or not, asks for a rework
+ * under a handoff that names `set`. It decides nothing about trust: it only
+ * keeps an anchor whose records claim a handoff for its open set off the
+ * ordinary path when the rework check cannot verify them.
+ */
+function namesHandoffSet(
+  comments: readonly { body: string }[],
+  set: string,
+): boolean {
+  for (const comment of comments) {
+    if (!comment.body.startsWith(PROVISIONAL_DECISION_RECORD_MARKER)) {
+      continue;
+    }
+    const parsed = parseProvisionalDecisionRecordComment(comment.body);
+    if (!parsed.ok || parsed.record.event.type !== 'rework-requested') {
+      continue;
+    }
+    const request = parsed.record.event.reworkRequest as
+      | { handoff?: { authoringSetId?: unknown } }
+      | undefined;
+    if (request?.handoff?.authoringSetId === set) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * The anchor heartbeat a child needs before its own owner marker (contract.md,
  * "Acquire one set anchor before acquiring any other target"): re-read the
  * anchor, reuse a fresh matching marker under the coalescing rule or post a
@@ -3003,6 +3031,26 @@ function runCli(): HelperCliResult {
           anchor: ref,
           ...(holdProblem === null ? {} : { standardCheck: holdProblem }),
         });
+      }
+      if (
+        evaluation.mode === 'standard' &&
+        holdProblem === null &&
+        namesHandoffSet(checked.comments, checked.generation.set)
+      ) {
+        // The original check passed, but a record of the anchor asks for a
+        // rework under a handoff for the open set, and the rework check could
+        // not verify it (an unreadable policy, an untrusted record, a replay
+        // that refuses). It must not fall back to the ordinary path.
+        return refuse(
+          `the anchor ${ref} carries a rework handoff for its open set ${checked.generation.set} that could not be verified${evaluation.note === undefined ? '' : ` (${evaluation.note.reason})`}, so the ordinary path is not taken`,
+          {
+            repository: { owner, repo },
+            anchor: ref,
+            ...(evaluation.note === undefined
+              ? {}
+              : { reworkHandoff: evaluation.note }),
+          },
+        );
       }
       if (evaluation.mode === 'standard' && holdProblem !== null) {
         return refuse(holdProblem, {
