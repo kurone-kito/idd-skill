@@ -15,6 +15,7 @@ import {
 } from './autopilot-suitability.mjs';
 import { parseCliArgs } from './cli-args.mjs';
 import { extractDependencyReferences } from './dependency-grammar.mjs';
+import { classifyDiscoverInterruption } from './discover-progress.mjs';
 import { classifyInaccessibleIssueLookup } from './gh-http-status.mjs';
 import { isNotDispatchedRefusal } from './github-api-refusal.mjs';
 import {
@@ -195,7 +196,8 @@ export function buildProvisionalDecisionEvidenceReader(input) {
             repo,
           }),
         );
-      } catch {
+      } catch (error) {
+        rethrowInterruption(error);
         trustedPolicy = {
           classEnabled: false,
           maxPendingConfirmations: null,
@@ -630,6 +632,21 @@ function selectionSummary(event) {
   };
 }
 /**
+ * Rethrow a failure that interrupts a Discover scan: a load-control refusal, a
+ * rate limit, or a timeout. The scan's own recovery handler must see it, so it
+ * is never swallowed into an "unavailable" verdict, which would let a scan end
+ * as a normal report with no startable work. Every other failure returns, so
+ * the caller keeps it isolated to its source (issue #4538, Codex review).
+ */
+function rethrowInterruption(error) {
+  if (
+    isNotDispatchedRefusal(error) ||
+    classifyDiscoverInterruption(error, Date.now()) !== null
+  ) {
+    throw error;
+  }
+}
+/**
  * Whether a source carries the trusted confirmation label (trimmed, any
  * case). Such an issue waits for a person and is never a decision source, so
  * `prepare` drops it before any replay: it is neither queued nor counted.
@@ -735,7 +752,8 @@ export function buildDecisionSourceResolver(inputs) {
     if (trusted === undefined) {
       try {
         trusted = inputs.readTrusted();
-      } catch {
+      } catch (error) {
+        rethrowInterruption(error);
         trusted = {
           classEnabled: false,
           maxPendingConfirmations: null,
@@ -753,7 +771,8 @@ export function buildDecisionSourceResolver(inputs) {
           typeof count === 'number' && Number.isInteger(count) && count >= 0
             ? count
             : null;
-      } catch {
+      } catch (error) {
+        rethrowInterruption(error);
         openConfirmationCount = null;
       }
     }
@@ -791,17 +810,20 @@ export function buildDecisionSourceResolver(inputs) {
         for (const [issueNumber, evidence] of batch) {
           states.set(issueNumber, evidence);
         }
-      } catch {
+      } catch (error) {
+        // An interruption (refusal, rate limit, timeout) goes to the caller.
+        rethrowInterruption(error);
         // One failing source must not hide the others (a completed source
         // keeps its queue row), so read them one by one, each isolated. A
-        // source that still fails keeps no evidence.
+        // source that still fails keeps no evidence, unless it is an
+        // interruption, which also goes to the caller.
         for (const issueNumber of numbers) {
           try {
             const single = await inputs.loadStates([{ issueNumber }]);
             const evidence = single.get(issueNumber);
             if (evidence !== undefined) states.set(issueNumber, evidence);
-          } catch {
-            // No evidence for this source.
+          } catch (singleError) {
+            rethrowInterruption(singleError);
           }
         }
       }

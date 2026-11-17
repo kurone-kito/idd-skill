@@ -31,6 +31,7 @@ import {
   renderCsv,
   summarizeSwarmFloorEligibility,
 } from '../src/scripts/discover-readiness-check.mts';
+import { createLoadControlRefusal } from '../src/scripts/github-api-refusal.mts';
 import { createFakeProviderAdapter } from '../src/scripts/provider-adapter-fake.mts';
 import type { ProviderPort } from '../src/scripts/provider-port.mts';
 import {
@@ -4942,4 +4943,94 @@ test('decision gate: a confirmation issue or a draft carrier is never replayed, 
     // The source is dropped before any replay, so it is never read at all.
     assert.deepEqual(trustedOnly.calls.loadStates, [], String(classEnabled));
   }
+});
+
+test('decision gate: an interruption propagates to the caller, and only ordinary failures stay isolated', async () => {
+  const refusal = () =>
+    createLoadControlRefusal({
+      outcome: 'deadline-expired',
+      reason: 'cooldown',
+      retryAt: '2026-11-17T03:15:00.000Z',
+      retryAtSource: 'server',
+    });
+  const sources = [gateIssue(81), gateIssue(82)];
+  const isRefusal = (error: unknown) =>
+    error instanceof Error && error === thrown;
+  let thrown: unknown;
+
+  // A batched replay that is refused is not retried source by source.
+  let attempts = 0;
+  const batch = decisionGate(
+    {},
+    {
+      async loadStates() {
+        attempts += 1;
+        thrown = refusal();
+        throw thrown;
+      },
+    },
+  );
+  await assert.rejects(runGate([81, 82], sources, batch.resolver), isRefusal);
+  assert.equal(attempts, 1);
+
+  // An ordinary batch failure falls back to single reads; a refusal in one of
+  // them is not swallowed either.
+  const calls: number[][] = [];
+  const single = decisionGate(
+    {},
+    {
+      async loadStates(requested) {
+        calls.push(requested.map((source) => source.issueNumber));
+        if (requested.length > 1) throw new Error('batch failed');
+        if (requested[0]?.issueNumber === 82) {
+          thrown = refusal();
+          throw thrown;
+        }
+        return new Map([[81, noRecords]]);
+      },
+    },
+  );
+  await assert.rejects(runGate([81, 82], sources, single.resolver), isRefusal);
+  assert.deepEqual(calls, [[81, 82], [81], [82]]);
+
+  // The same holds for the pending count and the trusted read.
+  const count = decisionGate(
+    {},
+    {
+      countOpenConfirmationIssues() {
+        thrown = refusal();
+        throw thrown;
+      },
+    },
+  );
+  await assert.rejects(
+    runGate([81], [gateIssue(81)], count.resolver),
+    isRefusal,
+  );
+  const trusted = decisionGate(
+    {},
+    {
+      readTrusted() {
+        thrown = refusal();
+        throw thrown;
+      },
+    },
+  );
+  await assert.rejects(
+    runGate([81], [gateIssue(81)], trusted.resolver),
+    isRefusal,
+  );
+  // A reader whose trusted read is refused does not turn it into "class off".
+  const reader = buildProvisionalDecisionEvidenceReader({
+    owner: 'acme',
+    repo: 'repo',
+    port: createFakeProviderAdapter({}),
+    readTrustedMarkerActors: () => [],
+    policy: null,
+    readTrustedAutoDecide: () => {
+      thrown = refusal();
+      throw thrown;
+    },
+  });
+  assert.throws(() => reader.trustedDecisionPolicy(), isRefusal);
 });

@@ -6928,3 +6928,42 @@ test('decision gate: a needs-decision roadmap node is never a decision source an
   assert.equal('decisionSource' in (report.leaves[0]?.readiness ?? {}), false);
   assert.equal('confirmationQueue' in report.diagnostics, false);
 });
+
+test('decision gate: a refused replay surfaces as an interrupted scan, never a normal report', async () => {
+  const issues = decisionGraphIssues();
+  const readiness = {
+    ...decisionReadiness(),
+    decisionSources: buildDecisionSourceResolver({
+      async loadStates() {
+        throw createLoadControlRefusal({
+          outcome: 'deadline-expired',
+          reason: 'cooldown',
+          retryAt: '2026-11-17T03:15:00.000Z',
+          retryAtSource: 'server',
+        });
+      },
+      readTrusted: () => ({
+        classEnabled: true,
+        maxPendingConfirmations: 3,
+        confirmationLabelName: 'status:needs-confirmation',
+      }),
+      countOpenConfirmationIssues: () => 0,
+    }),
+  };
+  const result = await enumerateAllRoadmapsGraphWithRecovery(
+    {
+      loadOpenRoadmapRoots: async () => [1000],
+      loadIssue: async (number) => issues.get(number) ?? null,
+      readiness,
+    },
+    {
+      progress: createDiscoverProgress(),
+      rerunArguments: ['--all-roadmaps', '--with-readiness', '--with-progress'],
+    },
+  );
+  assert.equal('leaves' in result, false);
+  assert.ok(isIncomplete(result));
+  assert.equal(result.status, 'incomplete');
+  assert.equal(result.incomplete.reason, 'rate-limit');
+  assert.equal(result.incomplete.exhausted, false);
+});
