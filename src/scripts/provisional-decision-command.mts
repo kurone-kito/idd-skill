@@ -33,7 +33,6 @@ import {
   type ProvisionalDecisionPlan,
   type ProvisionalDecisionStore,
   type ProvisionalResolutionResult,
-  type ProvisionalResolutionStore,
   type ProvisionalResolveRequest,
   runProvisionalDecisionCommand,
   runProvisionalResolution,
@@ -878,53 +877,6 @@ function policyFingerprint(snapshot: TrustedAutoDecideSnapshot): string | null {
   return JSON.stringify(rest);
 }
 
-/**
- * Re-check the trusted policy before every resolution write. The planner and
- * the store trust the snapshot read at the start, so a change between that read
- * and a write must still block the write.
- */
-function policyCheckedResolutionStore(
-  store: ProvisionalResolutionStore,
-  stillTrusted: () => boolean,
-): ProvisionalResolutionStore {
-  const check = (write: string) => {
-    if (!stillTrusted()) {
-      throw new Error(`the trusted policy changed before the ${write}`);
-    }
-  };
-  return {
-    policy: store.policy,
-    readHistory: () => store.readHistory(),
-    readSourceIssue: () => store.readSourceIssue(),
-    readSourceState: () => store.readSourceState(),
-    readPullRequest: (url) => store.readPullRequest(url),
-    async applyOrReadDecisionLabel(input) {
-      if (input.apply) check('label write');
-      return store.applyOrReadDecisionLabel(input);
-    },
-    async appendRecordBody(recordId, body) {
-      check('record append');
-      return store.appendRecordBody(recordId, body);
-    },
-    async appendAnswerBody(body) {
-      check('answer append');
-      return store.appendAnswerBody(body);
-    },
-    async appendReworkAuthoredBody(recordId, body, expected) {
-      check('rework record append');
-      return store.appendReworkAuthoredBody(recordId, body, expected);
-    },
-    async closeSourceIssue(expected) {
-      check('source close');
-      return store.closeSourceIssue(expected);
-    },
-    async releaseCoordinationClaim(claim) {
-      check('claim release');
-      return store.releaseCoordinationClaim(claim);
-    },
-  };
-}
-
 /** One stdout line for a resolution: the result's own fields, plus `apply`. */
 function writeResolutionReport(
   result: ProvisionalResolutionResult,
@@ -995,22 +947,28 @@ async function runResolveAction(
       deps,
     );
   }
-  const store = policyCheckedResolutionStore(
-    deps.createStore({
-      repository: args.repository,
-      issueNumber: args.issueNumber,
-      policy: trust.policyConfig,
-      // The store checks that this claim is still the active one before an
-      // answer or record append writes, as it does for the close and release.
-      coordinationClaim: {
-        claimId: request.claimId,
-        agentId: request.agentId,
-        branch: request.branch,
-      },
-    }),
-    () =>
-      policyFingerprint(deps.readTrust({ owner, repo })) === startFingerprint,
-  );
+  const store = deps.createStore({
+    repository: args.repository,
+    issueNumber: args.issueNumber,
+    policy: trust.policyConfig,
+    // The store checks that this claim is still the active one before an
+    // answer or record append writes, as it does for the close and release.
+    coordinationClaim: {
+      claimId: request.claimId,
+      agentId: request.agentId,
+      branch: request.branch,
+    },
+    // The store plans and reads on the trusted snapshot taken above, so a
+    // change to it after planning must still block a write. The store calls
+    // this as its last check before each write, after its own history reads.
+    beforeWrite: (write) => {
+      if (
+        policyFingerprint(deps.readTrust({ owner, repo })) !== startFingerprint
+      ) {
+        throw new Error(`the trusted policy changed before the ${write}`);
+      }
+    },
+  });
   const result = await runProvisionalResolution(request, store, {
     apply: args.apply,
   });

@@ -367,17 +367,27 @@ export function createGithubProvisionalDecisionStore(input: {
   readonly issueNumber: number;
   readonly policy?: IddConfig | null;
   /**
-   * The coordination claim a resolution holds. When set, an answer or record
-   * append that would write needs it to be the active claim, checked against
-   * the history read right before the post. The appends carry no claim of
-   * their own, and the rework-authored append needs the claim released, so
-   * neither it nor the decision transitions (which leave this unset) check it.
+   * The coordination claim a resolution holds. When set, the store is in
+   * resolution mode: an answer or record append that would write needs it to
+   * be the active claim, checked against the history read right before the
+   * post, and every write needs the authenticated GitHub account to be a
+   * trusted marker actor, because the planner ignores a marker from any other
+   * account. The appends carry no claim of their own, and the rework-authored
+   * append needs the claim released, so neither it nor the decision
+   * transitions (which leave this unset) check the claim.
    */
   readonly coordinationClaim?: {
     readonly claimId: string;
     readonly agentId: string;
     readonly branch: string;
   };
+  /**
+   * Called with the write's name as the last check before each write the
+   * resolution makes (an answer or record append, the close, the release).
+   * It throws to refuse, so a caller can re-validate what it trusts at the
+   * latest moment, after the store's own reads.
+   */
+  readonly beforeWrite?: (write: string) => void;
 }): ProvisionalResolutionStore {
   const { repository, issueNumber } = input;
   if (
@@ -561,6 +571,29 @@ export function createGithubProvisionalDecisionStore(input: {
     return { id, url: text(posted.html_url) };
   }
 
+  let actingLogin: string | undefined;
+
+  /**
+   * In resolution mode, throw unless the authenticated account is a trusted
+   * marker actor: the planner ignores a marker from any other account, so a
+   * write would only start a retry cycle that never advances.
+   */
+  function requireTrustedActor(): void {
+    if (input.coordinationClaim === undefined) return;
+    actingLogin ??= text(object(ghApiJson('user')).login);
+    if (!trusted.has(actingLogin.trim().toLowerCase())) {
+      throw new Error(
+        `cannot write: the authenticated GitHub account "${actingLogin}" is not a trusted marker actor, so the planner would ignore what it writes; authenticate as a trusted actor`,
+      );
+    }
+  }
+
+  /** The last checks before a write: the caller's hook, then the actor. */
+  function beforeWrite(write: string): void {
+    input.beforeWrite?.(write);
+    requireTrustedActor();
+  }
+
   /** Throw unless the held coordination claim, if any, is the active claim. */
   function requireCoordinationClaim(
     history: ProvisionalDecisionHistoryRead,
@@ -582,6 +615,7 @@ export function createGithubProvisionalDecisionStore(input: {
    * still returned.
    */
   async function appendOnce(
+    write: string,
     matches: (comment: ProvisionalDecisionHistoryComment) => boolean,
     body: string,
     guards: {
@@ -604,14 +638,19 @@ export function createGithubProvisionalDecisionStore(input: {
       };
     }
     guards.beforePost?.(before);
+    beforeWrite(write);
     const { id, url } = await postComment(body);
     const after = await readHistory();
+    // A partial history that happens to hold the comment is not a read-back.
     if (
+      !after.complete ||
       !after.comments.some(
         (comment) => comment.id === id && comment.url === url,
       )
     ) {
-      throw new Error('posted record is absent from history read-back');
+      throw new Error(
+        'posted record is absent from history read-back (or the read-back is incomplete)',
+      );
     }
     return { result: 'created', record: { id, url } };
   }
@@ -677,7 +716,7 @@ export function createGithubProvisionalDecisionStore(input: {
       };
     },
     async appendRecordBody(recordId, body) {
-      return appendOnce(recordMatcher(recordId), body, {
+      return appendOnce('record append', recordMatcher(recordId), body, {
         beforePost: requireCoordinationClaim,
       });
     },
@@ -686,6 +725,7 @@ export function createGithubProvisionalDecisionStore(input: {
     },
     async appendAnswerBody(body) {
       return appendOnce(
+        'answer append',
         (comment) =>
           comment.body.startsWith(PROVISIONAL_DECISION_ANSWER_MARKER) &&
           sameProvisionalAnswerBody(comment.body, body),
@@ -694,7 +734,7 @@ export function createGithubProvisionalDecisionStore(input: {
       );
     },
     async appendReworkAuthoredBody(recordId, body, expected) {
-      return appendOnce(recordMatcher(recordId), body, {
+      return appendOnce('rework record append', recordMatcher(recordId), body, {
         guard: () =>
           assertSourceExpected(
             readIssueObject(),
@@ -715,6 +755,7 @@ export function createGithubProvisionalDecisionStore(input: {
           'cannot close the source: the coordination claim is not the active claim',
         );
       }
+      beforeWrite('source close');
       ghText([
         'issue',
         'close',
@@ -743,6 +784,7 @@ export function createGithubProvisionalDecisionStore(input: {
           'cannot release: the coordination claim is not the active claim',
         );
       }
+      beforeWrite('claim release');
       const posted = await postComment(
         renderUnclaimedByMarker({
           agentId: claim.agentId,
@@ -752,12 +794,13 @@ export function createGithubProvisionalDecisionStore(input: {
       );
       const after = await readHistory();
       if (
+        !after.complete ||
         !after.comments.some(
           (comment) => comment.id === posted.id && comment.url === posted.url,
         )
       ) {
         throw new Error(
-          'posted unclaim marker is absent from history read-back',
+          'posted unclaim marker is absent from history read-back (or the read-back is incomplete)',
         );
       }
     },

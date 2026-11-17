@@ -481,6 +481,26 @@ export function createGithubProvisionalDecisionStore(input) {
     ownPostIds.add(id);
     return { id, url: text(posted.html_url) };
   }
+  let actingLogin;
+  /**
+   * In resolution mode, throw unless the authenticated account is a trusted
+   * marker actor: the planner ignores a marker from any other account, so a
+   * write would only start a retry cycle that never advances.
+   */
+  function requireTrustedActor() {
+    if (input.coordinationClaim === undefined) return;
+    actingLogin ??= text(object(ghApiJson('user')).login);
+    if (!trusted.has(actingLogin.trim().toLowerCase())) {
+      throw new Error(
+        `cannot write: the authenticated GitHub account "${actingLogin}" is not a trusted marker actor, so the planner would ignore what it writes; authenticate as a trusted actor`,
+      );
+    }
+  }
+  /** The last checks before a write: the caller's hook, then the actor. */
+  function beforeWrite(write) {
+    input.beforeWrite?.(write);
+    requireTrustedActor();
+  }
   /** Throw unless the held coordination claim, if any, is the active claim. */
   function requireCoordinationClaim(history) {
     const held = input.coordinationClaim;
@@ -498,7 +518,7 @@ export function createGithubProvisionalDecisionStore(input) {
    * only when a write follows, so an identical comment that already landed is
    * still returned.
    */
-  async function appendOnce(matches, body, guards = {}) {
+  async function appendOnce(write, matches, body, guards = {}) {
     const before = await readCompleteHistory('append');
     const existing = before.comments.find(
       (comment) => countsAsLanded(comment) && matches(comment),
@@ -511,14 +531,19 @@ export function createGithubProvisionalDecisionStore(input) {
       };
     }
     guards.beforePost?.(before);
+    beforeWrite(write);
     const { id, url } = await postComment(body);
     const after = await readHistory();
+    // A partial history that happens to hold the comment is not a read-back.
     if (
+      !after.complete ||
       !after.comments.some(
         (comment) => comment.id === id && comment.url === url,
       )
     ) {
-      throw new Error('posted record is absent from history read-back');
+      throw new Error(
+        'posted record is absent from history read-back (or the read-back is incomplete)',
+      );
     }
     return { result: 'created', record: { id, url } };
   }
@@ -583,7 +608,7 @@ export function createGithubProvisionalDecisionStore(input) {
       };
     },
     async appendRecordBody(recordId, body) {
-      return appendOnce(recordMatcher(recordId), body, {
+      return appendOnce('record append', recordMatcher(recordId), body, {
         beforePost: requireCoordinationClaim,
       });
     },
@@ -592,6 +617,7 @@ export function createGithubProvisionalDecisionStore(input) {
     },
     async appendAnswerBody(body) {
       return appendOnce(
+        'answer append',
         (comment) =>
           comment.body.startsWith(PROVISIONAL_DECISION_ANSWER_MARKER) &&
           sameProvisionalAnswerBody(comment.body, body),
@@ -600,7 +626,7 @@ export function createGithubProvisionalDecisionStore(input) {
       );
     },
     async appendReworkAuthoredBody(recordId, body, expected) {
-      return appendOnce(recordMatcher(recordId), body, {
+      return appendOnce('rework record append', recordMatcher(recordId), body, {
         guard: () =>
           assertSourceExpected(
             readIssueObject(),
@@ -621,6 +647,7 @@ export function createGithubProvisionalDecisionStore(input) {
           'cannot close the source: the coordination claim is not the active claim',
         );
       }
+      beforeWrite('source close');
       ghText([
         'issue',
         'close',
@@ -649,6 +676,7 @@ export function createGithubProvisionalDecisionStore(input) {
           'cannot release: the coordination claim is not the active claim',
         );
       }
+      beforeWrite('claim release');
       const posted = await postComment(
         renderUnclaimedByMarker({
           agentId: claim.agentId,
@@ -658,12 +686,13 @@ export function createGithubProvisionalDecisionStore(input) {
       );
       const after = await readHistory();
       if (
+        !after.complete ||
         !after.comments.some(
           (comment) => comment.id === posted.id && comment.url === posted.url,
         )
       ) {
         throw new Error(
-          'posted unclaim marker is absent from history read-back',
+          'posted unclaim marker is absent from history read-back (or the read-back is incomplete)',
         );
       }
     },

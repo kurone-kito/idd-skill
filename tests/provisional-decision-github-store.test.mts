@@ -94,6 +94,8 @@ interface FakeState {
     pages?: boolean;
     /** Fail the Nth paginated comment read (1-based), and only that one. */
     failPagesOn?: number;
+    /** Serve every row of the Nth paginated read, then fail it (a partial page). */
+    partialPagesOn?: number;
     post?: boolean;
     /** A comment POST succeeds but the comment never appears in a read. */
     hidePost?: boolean;
@@ -164,6 +166,7 @@ if (args[0] === 'issue' && args[1] === 'close') {
 if (args[0] === 'issue' && args[1] === 'edit') reply('edited');
 if (args[0] !== 'api') fail(2, 'unexpected command ' + args[0]);
 const endpoint = args.slice(1).find((arg, i, tail) => !arg.startsWith('-') && tail[i - 1] !== '--hostname');
+if (endpoint === 'user') reply(JSON.stringify({ login: state.postAs }));
 if (endpoint === 'graphql') {
   const query = args.find((arg) => arg.startsWith('query=')) || '';
   const data = {};
@@ -190,6 +193,10 @@ if (endpoint.includes('/comments')) {
       state.comments.push(...state.injectOnPage.comments);
     }
     if (state.failures.pages || state.failures.failPagesOn === state.pageCalls) fail(503, 'unavailable');
+    if (state.failures.partialPagesOn === state.pageCalls) {
+      process.stdout.write(state.comments.map((c) => JSON.stringify(commentRow(c))).join('\\n'));
+      fail(503, 'unavailable');
+    }
     reply(state.comments.map((c) => JSON.stringify(commentRow(c))).join('\\n'));
   }
   reply(JSON.stringify(state.comments.slice(0, 1).map(commentRow)));
@@ -256,6 +263,7 @@ async function withFake(
   options: {
     policy?: IddConfig | null;
     coordinationClaim?: typeof coordinationClaim;
+    beforeWrite?: (write: string) => void;
   } = {},
 ): Promise<void> {
   const directory = mkdtempSync(join(tmpdir(), 'idd-provisional-fake-'));
@@ -321,6 +329,7 @@ async function withFake(
       ...(options.coordinationClaim
         ? { coordinationClaim: options.coordinationClaim }
         : {}),
+      ...(options.beforeWrite ? { beforeWrite: options.beforeWrite } : {}),
     });
     await run({ fake, store, statePath });
   } finally {
@@ -698,6 +707,128 @@ test('an append under a held coordination claim needs it to be the active claim,
       'created',
     );
   });
+});
+
+test('a read-back from an incomplete history does not confirm a write', async () => {
+  // The first read is the lookup, the second the read-back, which here serves
+  // every row, the new comment included, and then fails like a later page.
+  await withFake(
+    (state) => {
+      state.failures.partialPagesOn = 2;
+    },
+    async ({ fake, store }) => {
+      await assert.rejects(
+        store.appendRecordBody(recordId, recordBody),
+        /read-back is incomplete/,
+      );
+      assert.deepEqual(fake.writes(), ['POST']);
+    },
+  );
+  await withFake(
+    (state) => {
+      withClaim(state);
+      state.failures.partialPagesOn = 2;
+    },
+    async ({ fake, store }) => {
+      await assert.rejects(
+        store.releaseCoordinationClaim(coordinationClaim),
+        /read-back is incomplete/,
+      );
+      assert.deepEqual(fake.writes(), ['POST']);
+    },
+  );
+});
+
+test('in resolution mode every write needs the authenticated account to be a trusted marker actor', async () => {
+  await withFake(
+    (state) => {
+      withClaim(state);
+      // Not named by the policy: the planner would ignore what it writes.
+      state.postAs = 'session-bot';
+    },
+    async ({ fake, store }) => {
+      await assert.rejects(
+        store.appendRecordBody(recordId, recordBody),
+        /"session-bot" is not a trusted marker actor/,
+      );
+      await assert.rejects(
+        store.appendAnswerBody('text'),
+        /not a trusted marker actor/,
+      );
+      await assert.rejects(
+        store.closeSourceIssue(expectedClose()),
+        /not a trusted marker actor/,
+      );
+      await assert.rejects(
+        store.releaseCoordinationClaim(coordinationClaim),
+        /not a trusted marker actor/,
+      );
+      assert.deepEqual(fake.writes(), []);
+      assert.equal(fake.state().issue.state, 'open');
+    },
+    { coordinationClaim },
+  );
+  // A policy actor written with spaces or capitals still counts.
+  await withFake(
+    withClaim,
+    async ({ fake, store }) => {
+      await store.releaseCoordinationClaim(coordinationClaim);
+      assert.deepEqual(fake.writes(), ['POST']);
+    },
+    {
+      coordinationClaim,
+      policy: { trustedMarkerActors: ['  KURONE-kito '] } as IddConfig,
+    },
+  );
+});
+
+test('the beforeWrite hook runs as the last check before each write and can refuse it', async () => {
+  const seen: string[] = [];
+  await withFake(
+    withClaim,
+    async ({ fake, store }) => {
+      await store.appendAnswerBody('text');
+      await store.appendRecordBody(recordId, recordBody);
+      await store.closeSourceIssue(expectedClose());
+      await store.releaseCoordinationClaim(coordinationClaim);
+      assert.deepEqual(seen, [
+        'answer append',
+        'record append',
+        'source close',
+        'claim release',
+      ]);
+      assert.deepEqual(fake.writes(), ['POST', 'POST', 'issue close', 'POST']);
+    },
+    { coordinationClaim, beforeWrite: (write) => seen.push(write) },
+  );
+  await withFake(
+    withClaim,
+    async ({ fake, store }) => {
+      await assert.rejects(
+        store.appendAnswerBody('text'),
+        /refused: answer append/,
+      );
+      await assert.rejects(
+        store.appendReworkAuthoredBody(recordId, recordBody, sourceExpectation),
+        /refused: rework record append/,
+      );
+      await assert.rejects(
+        store.closeSourceIssue(expectedClose()),
+        /refused: source close/,
+      );
+      await assert.rejects(
+        store.releaseCoordinationClaim(coordinationClaim),
+        /refused: claim release/,
+      );
+      assert.deepEqual(fake.writes(), []);
+    },
+    {
+      coordinationClaim,
+      beforeWrite: (write) => {
+        throw new Error(`refused: ${write}`);
+      },
+    },
+  );
 });
 
 // ---------------------------------------------------------------------------
