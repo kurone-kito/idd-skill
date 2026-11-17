@@ -276,6 +276,7 @@ jobs:
               tests/provider-port-migration-guard.test.mts
               tests/provisional-claim-lineage.test.mts
               tests/provisional-decision-confirmation.test.mts
+              tests/provisional-decision-lifecycle.test.mts
               tests/provisional-decision.test.mts
               tests/publish-authoring-hold.test.mts
               tests/repository-policy-audit.test.mts
