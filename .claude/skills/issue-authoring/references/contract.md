@@ -4081,8 +4081,9 @@ claim of the confirmation review is released:
    There is no flag: the helper checks the hold named by the anchor's body
    line first, unchanged, and only when that refuses does it read the anchor's
    trusted provisional records as Discover does: the default-branch trusted
-   policy, not the local file, and an untrusted or edited record marker refuses
-   the whole history. It does not use the environment actor list or the
+   policy, not the local file (read again by every check, so a revoked actor
+   stops a run), and an untrusted or edited record marker refuses the whole
+   history. It does not use the environment actor list or the
    user-global layer, so a record that Discover accepts through them is refused
    here. The claim history must also pass the lineage check, and the trusted
    default branch must see no active claim. A source whose claims include a
@@ -4113,16 +4114,17 @@ claim of the confirmation review is released:
      the same record order and ends settled (`member`, or `cleanup` then
      `abandoned`). Each of its records names the journal it was read from, its
      actor is its author, its minimization state is readable, the token's
-     records agree on one target, one session, and one set and anchor, and
-     the latest record is not minimized as outdated. A token that ends at
-     `cleanup`, or at `pending` after an issue was attached, or whose records
-     break those rules, is a created but unfinished child that must be
-     reconciled before another child (preventive; no observed incident yet). A
-     token that never got an issue cannot be closed by any record, so the
-     helper lists the repository's issues updated since a minute before the
-     token's first record (one paginated call that filters inside `gh`, with no
-     search-index lag) and refuses when one carries it; a failed listing
-     refuses too.
+     records agree on one target, one session, and one set, a record of this
+     set names this anchor (the set's own children are all anchored at the
+     source), and the latest record is not minimized as outdated. A token
+     that ends at `cleanup`, or at `pending` after an issue was attached, or
+     whose records break those rules, is a created but unfinished child that
+     must be reconciled before another child (preventive; no observed incident
+     yet). A token that never got an issue cannot be closed by any record, so
+     the helper lists the repository's issues updated since a minute before
+     the token's first record (one paginated call that filters inside `gh`,
+     with no search-index lag) and refuses when one carries it; a failed
+     listing refuses too.
 
    The same items, except the token checks of the first read, run again right
    before the first write, at the heartbeat reads, and before `member`, so a
@@ -4152,9 +4154,9 @@ claim of the confirmation review is released:
    | `children[]`                                                      | each published child's number, `wired` once listed in `## Tracks`                                                                    |
 
 The check compares body digests, not titles, because no owner marker records a
-title. A history that already records a rework authoring is refused, because
-the helper has no authoring evidence to replay it with, so a second rework of
-one source is not supported by this path. Discover, roadmap audit,
+title. A history that records a rework authoring in any bundle is refused,
+because the helper has no authoring evidence to replay it with, so a second
+rework of one source is not supported by this path. Discover, roadmap audit,
 and the pre-merge check replay without authoring evidence and keep a source
 with a rework record blocked, which is the operator's fail-closed choice on
 issue `#4533` ("consuming verified rework transitions needs its own child"). So
