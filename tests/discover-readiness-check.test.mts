@@ -4708,7 +4708,16 @@ test('decision gate: a reused gate holds only the current pass (queue and count)
     first.ready.map((entry) => entry.number),
     [97],
   );
-  // A second pass with no needs-decision source reports no queue.
+  // A pass whose label name collides never reports the earlier queue, which
+  // the gate still holds from the first pass.
+  const collided = await runGate(
+    [97],
+    [gateIssue(97, ['status:authoring'])],
+    gate.resolver,
+    { needsDecisionLabelName: 'status:authoring' },
+  );
+  assert.equal('confirmationQueue' in collided, false);
+  // A pass with no needs-decision source reports no queue.
   const second = await runGate([98], [gateIssue(98, [])], gate.resolver);
   assert.equal('confirmationQueue' in second, false);
   // A third pass reads the count again, not the first pass's value.
@@ -4718,16 +4727,6 @@ test('decision gate: a reused gate holds only the current pass (queue and count)
     `label:${DECISION_LABEL}`,
     'provisional_pending_cap:3/3',
   ]);
-  // A pass whose label name collides never reports the earlier queue either.
-  const collided = await runGate(
-    [97],
-    [gateIssue(97, ['status:authoring'])],
-    gate.resolver,
-    {
-      needsDecisionLabelName: 'status:authoring',
-    },
-  );
-  assert.equal('confirmationQueue' in collided, false);
 });
 
 test('decision gate: one source whose replay fails does not hide the other sources', async () => {

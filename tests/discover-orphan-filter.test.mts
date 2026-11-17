@@ -4999,12 +4999,8 @@ test('decision gate: a reused gate holds only the current orphan pass', async ()
     first.confirmationQueue?.map((entry) => entry.number),
     [1],
   );
-  // No needs-decision source in the next listing: no stale queue.
-  const second = await runOrphans([decisionIssue(2, [])], {
-    decisionSources: resolver,
-  });
-  assert.equal('confirmationQueue' in second, false);
-  // A colliding name never reports the earlier queue either.
+  // A colliding name never reports the earlier queue, which the gate still
+  // holds from the first pass.
   const collided = await runOrphans(
     [decisionIssue(3, ['status:authoring-only'])],
     {
@@ -5013,4 +5009,9 @@ test('decision gate: a reused gate holds only the current orphan pass', async ()
     },
   );
   assert.equal('confirmationQueue' in collided, false);
+  // No needs-decision source in the next listing: no stale queue.
+  const second = await runOrphans([decisionIssue(2, [])], {
+    decisionSources: resolver,
+  });
+  assert.equal('confirmationQueue' in second, false);
 });

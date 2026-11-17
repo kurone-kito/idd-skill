@@ -2628,7 +2628,7 @@ provisional work is complete and awaits confirmation stays excluded with
 "details" "<label> (confirmation_pending)" whatever the flag or class says, and
 is listed in "confirmationQueue" (present only when non-empty): its number,
 title, bundle generation, chosen choices, and verified implementation links.
-Reading that state costs one work-item read and one comment read per
+Reading that state costs at least one work-item read and one comment read per
 needs-decision issue, whatever the flag says, because the queue must stay
 visible when it is off.
 

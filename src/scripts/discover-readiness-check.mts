@@ -2969,8 +2969,9 @@ function printHelp() {
   class says (reasons: label:<name>, confirmation_pending) and is listed in
   "confirmationQueue" (present only when non-empty): its number, title, bundle
   generation, chosen choices, and verified implementation links. Reading that
-  state costs one work-item read and one comment read per needs-decision issue,
-  whatever the flag says, because the queue must stay visible when it is off.
+  state costs at least one work-item read and one comment read per
+  needs-decision issue, whatever the flag says, because the queue must stay
+  visible when it is off.
 
 Output schema (JSON mode):
   {
