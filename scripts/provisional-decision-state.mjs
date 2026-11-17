@@ -2528,3 +2528,122 @@ export function bindProvisionalDecision(replay, target) {
     decisions: bound,
   };
 }
+function reworkHandoffRefusal(reason, issueCodes = []) {
+  return { ok: false, reason, issueCodes };
+}
+/**
+ * Read the trusted rework handoff of a retained decision source from its
+ * complete record history. It succeeds only for a valid replay whose current
+ * bundle has at least one rework request and no recorded rework authoring,
+ * and whose requests agree on one handoff identity. A decision of the bundle
+ * that is still awaiting its own answer does not stop it: the lifecycle lets
+ * that answer follow the source rewrite. Any other state, including an incomplete,
+ * untrusted, edited, stale, or conflicting history, refuses with a named
+ * reason, so a handoff that is not verified never authorizes a consumer.
+ * Because the replay basis is the last recorded source, a source rewritten by
+ * the authoring pass still reads; whether the rewrite happened under the right
+ * owner is the caller's check.
+ */
+export function readReworkHandoff(input) {
+  if (!input.completeHistory) return reworkHandoffRefusal('history-incomplete');
+  const recordComments = new Map();
+  let recordedSource;
+  let authoredRecorded = false;
+  for (const comment of input.comments) {
+    if (
+      !comment.body.startsWith(PROVISIONAL_DECISION_RECORD_MARKER) ||
+      !comment.trustedAuthor ||
+      !comment.authorLogin ||
+      comment.edited
+    ) {
+      continue;
+    }
+    const parsed = parseProvisionalDecisionRecordComment(comment.body);
+    if (!parsed.ok) continue;
+    recordComments.set(parsed.record.recordId, comment);
+    recordedSource = parsed.record.source;
+    if (parsed.record.event.type === 'rework-authored') authoredRecorded = true;
+  }
+  if (recordedSource === undefined)
+    return reworkHandoffRefusal('record-missing');
+  const replay = replayProvisionalDecisionHistory({
+    ...input,
+    currentSource: recordedSource,
+  });
+  if (!replay.valid) {
+    const codes = [...new Set(replay.issues.map((issue) => issue.code))];
+    // A caller with no authoring evidence cannot replay a history that already
+    // records a rework authoring, so name that state instead of a bare refusal.
+    return reworkHandoffRefusal(
+      authoredRecorded ? 'rework-already-authored' : 'replay-invalid',
+      codes,
+    );
+  }
+  const currentBundleGeneration = Math.max(
+    ...replay.decisions.map((decision) => decision.bundleGeneration),
+  );
+  const bundle = replay.decisions.filter(
+    (decision) => decision.bundleGeneration === currentBundleGeneration,
+  );
+  if (bundle.some((decision) => decision.status === 'rework-authored')) {
+    return reworkHandoffRefusal('rework-already-authored');
+  }
+  const requested = bundle.filter(
+    (decision) => decision.status === 'rework-requested',
+  );
+  if (requested.length === 0) {
+    return reworkHandoffRefusal(
+      bundle.every((decision) => decision.status === 'confirmed')
+        ? 'source-confirmed'
+        : 'no-rework-request',
+    );
+  }
+  const handoffs = [];
+  for (const decision of requested) {
+    const request = decision.reworkRequested?.event.reworkRequest;
+    const handoff = isObject(request) ? request.handoff : undefined;
+    if (handoff === undefined) return reworkHandoffRefusal('handoff-missing');
+    handoffs.push(handoff);
+  }
+  // The replay already refuses requests of one bundle that disagree on the
+  // handoff identity or on the prior results, so the first one speaks for all.
+  const [lead] = handoffs;
+  if (lead === undefined) return reworkHandoffRefusal('handoff-missing');
+  const ordered = [...requested].sort(
+    (left, right) => left.decisionGeneration - right.decisionGeneration,
+  );
+  const requestComments = ordered.flatMap((decision) => {
+    const requestComment = decision.reworkRequested
+      ? recordComments.get(decision.reworkRequested.recordId)
+      : undefined;
+    return requestComment === undefined ? [] : [requestComment];
+  });
+  const indexes = commentIndexOf(input.comments);
+  const [firstRequest] = [...requestComments].sort((left, right) =>
+    commentPrecedes(left, right, indexes) ? -1 : 1,
+  );
+  if (firstRequest === undefined)
+    return reworkHandoffRefusal('handoff-missing');
+  return {
+    ok: true,
+    bundleGeneration: currentBundleGeneration,
+    decisionGenerations: ordered.map((decision) => decision.decisionGeneration),
+    requestRecordIds: ordered.map(
+      (decision) => decision.reworkRequested.recordId,
+    ),
+    handoff: {
+      ...lead,
+      downstreamResults: [
+        ...new Set(handoffs.flatMap((handoff) => handoff.downstreamResults)),
+      ].sort(),
+    },
+    recordedSource,
+    firstRequest: {
+      commentId: firstRequest.id,
+      createdAt: firstRequest.createdAt,
+    },
+  };
+}
+function commentIndexOf(comments) {
+  return new Map(comments.map((comment, index) => [comment.id, index]));
+}

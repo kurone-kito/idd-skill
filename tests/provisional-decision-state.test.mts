@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
+  bindProvisionalDecision,
   PROVISIONAL_DECISION_ANSWER_MARKER,
   PROVISIONAL_DECISION_RECORD_MARKER,
   type ProvisionalDecisionClaim,
@@ -8,7 +9,9 @@ import {
   type ProvisionalDecisionRecord,
   type ProvisionalDecisionReplayInput,
   type ProvisionalDecisionSource,
+  type ProvisionalReworkHandoff,
   parseProvisionalDecisionRecordComment,
+  readReworkHandoff,
   replayProvisionalDecisionHistory,
   type VerifiedProvisionalReworkRoadmap,
 } from '../src/scripts/provisional-decision-state.mts';
@@ -2805,4 +2808,404 @@ test('replay refuses a rework roadmap with no rework request as rework-roadmap-o
     ),
   );
   assertReplayIssue(result, 'rework-roadmap-order-invalid');
+});
+
+// ---------------------------------------------------------------------------
+// The trusted rework handoff reader (issue #4537).
+// ---------------------------------------------------------------------------
+
+function handoffFor(
+  completed: readonly ProvisionalDecisionRecord[],
+  extra: Partial<ProvisionalReworkHandoff> = {},
+): ProvisionalReworkHandoff {
+  return {
+    handoffId: 'handoff-4599',
+    authoringSetId: 'set-4599-rework',
+    authoringSessionId: 'session-4599-rework',
+    anchor: `${source.repository}#${source.issueNumber}`,
+    priorResults: [...completed]
+      .sort((left, right) => left.decisionGeneration - right.decisionGeneration)
+      .map((item) => ({
+        decisionGeneration: item.decisionGeneration,
+        workCompletedRecordId: item.recordId,
+        reference: (item.event.result as Event).reference as string,
+      })),
+    downstreamResults: [],
+    ...extra,
+  };
+}
+
+/** One answered decision of the first bundle that asks for rework. */
+function reworkRequestedHistory(
+  options: {
+    handoff?: Partial<ProvisionalReworkHandoff> | null;
+    recordSource?: ProvisionalDecisionSource;
+  } = {},
+) {
+  const { selected, started, completed } = oneCompletedDecision();
+  const rationale = 'The alternate choice better fits the current need.';
+  const answer = answerComment(
+    '4',
+    buildAnswer(
+      [selected],
+      [completed],
+      [firstClaim],
+      'rework',
+      'change',
+      rationale,
+    ),
+    4,
+  );
+  const request = record(
+    'rework-1',
+    {
+      type: 'rework-requested',
+      reworkRequest: {
+        commentUrl: answer.url,
+        requestedAt: answer.createdAt,
+        requestedOptionId: 'change',
+        rationale,
+        ...(options.handoff === null
+          ? {}
+          : { handoff: handoffFor([completed], options.handoff) }),
+      },
+    },
+    1,
+    1,
+    [firstClaim],
+    options.recordSource ?? source,
+  );
+  const comments = [
+    recordComment('1', selected, 1),
+    recordComment('2', started, 2),
+    recordComment('3', completed, 3),
+    answer,
+    recordComment('5', request, 5),
+  ];
+  return { selected, started, completed, answer, request, comments };
+}
+
+function handoffInput(
+  comments: readonly ProvisionalDecisionComment[],
+  extra: Partial<ProvisionalDecisionReplayInput> = {},
+) {
+  const { currentSource: _ignored, ...rest } = input(comments, extra);
+  return rest;
+}
+
+test('the rework handoff reads from a requested rework and names the recorded source', () => {
+  const { comments } = reworkRequestedHistory();
+  const read = readReworkHandoff(handoffInput(comments));
+  assert.equal(read.ok, true, JSON.stringify(read));
+  if (!read.ok) return;
+  assert.equal(read.handoff.handoffId, 'handoff-4599');
+  assert.equal(read.handoff.authoringSetId, 'set-4599-rework');
+  assert.equal(read.handoff.authoringSessionId, 'session-4599-rework');
+  assert.equal(read.handoff.anchor, 'kurone-kito/idd-skill#4599');
+  assert.equal(read.bundleGeneration, 1);
+  assert.deepEqual(read.decisionGenerations, [1]);
+  assert.deepEqual(read.requestRecordIds, ['rework-1']);
+  assert.deepEqual(read.recordedSource, source);
+  assert.deepEqual(read.firstRequest, {
+    commentId: '5',
+    createdAt: dateAt(5),
+  });
+});
+
+test('the rework handoff reads against the recorded source, not a rewritten live body', () => {
+  const { comments } = reworkRequestedHistory();
+  // A live replay of a rewritten body is refused, while the reader replays
+  // against the last recorded source, so the rewrite is the caller's check and
+  // does not hide the handoff.
+  const read = readReworkHandoff(handoffInput(comments));
+  assert.equal(read.ok, true);
+  const rewritten: ProvisionalDecisionSource = {
+    ...source,
+    snapshot: { ...source.snapshot, bodySha256: 'd'.repeat(64) },
+  };
+  const replayAgainstRewrite = replayProvisionalDecisionHistory(
+    input(comments, { currentSource: rewritten }),
+  );
+  assert.equal(replayAgainstRewrite.valid, false);
+  assert.ok(
+    replayAgainstRewrite.issues.some(
+      (issue) => issue.code === 'source-binding-mismatch',
+    ),
+  );
+});
+
+test('the rework handoff keeps the union of every request downstream results', () => {
+  const selectedOne = record('u-select-one', selectedEvent('Question one?'), 1);
+  const selectedTwo = record('u-select-two', selectedEvent('Question two?'), 2);
+  const startedOne = record('u-start-one', workStartedEvent(), 1);
+  const startedTwo = record('u-start-two', workStartedEvent(), 2);
+  const completedOne = record('u-complete-one', workCompletedEvent(1), 1);
+  const completedTwo = record('u-complete-two', workCompletedEvent(2), 2);
+  const rationale = 'The alternate better fits this decision.';
+  const downstream = (name: string) =>
+    `https://github.com/kurone-kito/idd-skill/pull/${name}`;
+  const requests = [1, 2].map((generation) => {
+    const answer = answerComment(
+      `u-answer-${generation}`,
+      {
+        ...buildAnswer(
+          [selectedOne, selectedTwo],
+          [completedOne, completedTwo],
+          [firstClaim],
+          'rework',
+          'change',
+          rationale,
+        ),
+        appliesToDecisionGenerations: [generation],
+        downstreamResults: [downstream(String(generation === 1 ? 9002 : 9001))],
+        answerText: `I prefer the alternate option for decision ${generation}.`,
+      },
+      3 + generation,
+    );
+    const request = record(
+      `u-request-${generation}`,
+      {
+        type: 'rework-requested',
+        reworkRequest: {
+          commentUrl: answer.url,
+          requestedAt: answer.createdAt,
+          requestedOptionId: 'change',
+          rationale,
+          handoff: handoffFor([completedOne, completedTwo], {
+            downstreamResults:
+              generation === 1
+                ? [downstream('9002')]
+                : [downstream('9001'), downstream('9002')],
+          }),
+        },
+      },
+      generation,
+    );
+    return { answer, request };
+  });
+  const comments = [
+    recordComment('1', selectedOne, 1),
+    recordComment('2', selectedTwo, 1),
+    recordComment('3', startedOne, 2),
+    recordComment('4', startedTwo, 2),
+    recordComment('5', completedOne, 3),
+    recordComment('6', completedTwo, 3),
+    requests[0]?.answer as ProvisionalDecisionComment,
+    recordComment('8', requests[0]?.request as ProvisionalDecisionRecord, 5),
+    requests[1]?.answer as ProvisionalDecisionComment,
+    recordComment('10', requests[1]?.request as ProvisionalDecisionRecord, 7),
+  ];
+  const read = readReworkHandoff(
+    handoffInput(comments, {
+      verifiedWork: [workEvidence(1), workEvidence(2)],
+    }),
+  );
+  assert.equal(read.ok, true, JSON.stringify(read));
+  if (!read.ok) return;
+  assert.deepEqual(read.decisionGenerations, [1, 2]);
+  assert.deepEqual(read.requestRecordIds, ['u-request-1', 'u-request-2']);
+  assert.deepEqual(read.handoff.downstreamResults, [
+    downstream('9001'),
+    downstream('9002'),
+  ]);
+  assert.equal(read.firstRequest.commentId, '8');
+});
+
+test('the rework handoff is refused for every state that is not a verified pending rework', () => {
+  const { selected, started, completed, comments } = reworkRequestedHistory();
+  const refusal = (
+    read: ReturnType<typeof readReworkHandoff>,
+    reason: string,
+  ) => {
+    assert.equal(read.ok, false, reason);
+    assert.equal(read.ok ? '' : read.reason, reason);
+  };
+
+  refusal(
+    readReworkHandoff(handoffInput(comments, { completeHistory: false })),
+    'history-incomplete',
+  );
+  refusal(readReworkHandoff(handoffInput([])), 'record-missing');
+  // An untrusted record marker is not read, so it leaves no record at all.
+  refusal(
+    readReworkHandoff(
+      handoffInput([recordComment('1', selected, 1, { trustedAuthor: false })]),
+    ),
+    'record-missing',
+  );
+
+  // A selected, started or completed bundle has no rework request yet.
+  refusal(
+    readReworkHandoff(
+      handoffInput(comments.slice(0, 3), { verifiedWork: [workEvidence()] }),
+    ),
+    'no-rework-request',
+  );
+  refusal(
+    readReworkHandoff(
+      handoffInput([
+        recordComment('1', selected, 1),
+        recordComment('2', started, 2),
+      ]),
+    ),
+    'no-rework-request',
+  );
+
+  // A confirmed bundle is the ordinary close path, not a rework.
+  const accepted = answerComment(
+    '4',
+    buildAnswer([selected], [completed], [firstClaim], 'accepted'),
+    4,
+  );
+  const confirmation = record('confirm-1', confirmedEvent(accepted));
+  refusal(
+    readReworkHandoff(
+      handoffInput([
+        ...comments.slice(0, 3),
+        accepted,
+        recordComment('5', confirmation, 5),
+      ]),
+    ),
+    'source-confirmed',
+  );
+
+  // An edited record, a stale source and a mismatched handoff are replay
+  // refusals, and the reader reports the codes.
+  const edited = readReworkHandoff(
+    handoffInput(
+      comments.map((item) =>
+        item.id === '5' ? { ...item, edited: true } : item,
+      ),
+    ),
+  );
+  refusal(edited, 'replay-invalid');
+  assert.deepEqual(edited.ok ? [] : edited.issueCodes, [
+    'record-authority-invalid',
+  ]);
+  const wrongAnchor = reworkRequestedHistory({
+    handoff: { anchor: 'kurone-kito/idd-skill#1' },
+  });
+  const anchorRead = readReworkHandoff(handoffInput(wrongAnchor.comments));
+  refusal(anchorRead, 'replay-invalid');
+  assert.deepEqual(anchorRead.ok ? [] : anchorRead.issueCodes, [
+    'rework-handoff-anchor-invalid',
+  ]);
+  const unknownResults = reworkRequestedHistory({
+    handoff: {
+      priorResults: [
+        {
+          decisionGeneration: 1,
+          workCompletedRecordId: 'other-record',
+          reference: 'https://github.com/kurone-kito/idd-skill/pull/4601',
+        },
+      ],
+    },
+  });
+  const resultsRead = readReworkHandoff(handoffInput(unknownResults.comments));
+  refusal(resultsRead, 'replay-invalid');
+  assert.deepEqual(resultsRead.ok ? [] : resultsRead.issueCodes, [
+    'rework-handoff-results-mismatch',
+  ]);
+
+  // A request recorded without a handoff names no set to adopt.
+  refusal(
+    readReworkHandoff(
+      handoffInput(reworkRequestedHistory({ handoff: null }).comments),
+    ),
+    'handoff-missing',
+  );
+});
+
+test('a verified rework-authored history ends the old bundle without confirming it', () => {
+  const { comments, request } = reworkRequestedHistory();
+  const sourceAfter: ProvisionalDecisionSource = {
+    ...source,
+    snapshot: {
+      ...source.snapshot,
+      bodySha256: 'c'.repeat(64),
+      updatedAt: dateAt(6),
+    },
+  };
+  const authored = {
+    ...record('rework-2', {
+      type: 'rework-authored',
+      reworkRoadmap: {
+        roadmapIssueNumber: source.issueNumber,
+        roadmapMarkerId: 'same-source-rework',
+        authoringSetId: 'set-4599-rework',
+        url: `https://github.com/${source.repository}/issues/${source.issueNumber}`,
+      },
+    }),
+    source: sourceAfter,
+  };
+  const history = [
+    ...comments,
+    reworkPublicationComment('rework-2'),
+    recordComment('6', authored, 6),
+  ];
+  const evidence = [reworkEvidence('rework-2', source, sourceAfter)];
+  const replay = replayProvisionalDecisionHistory(
+    input(history, {
+      currentSource: sourceAfter,
+      verifiedReworkRoadmaps: evidence,
+    }),
+  );
+  assert.equal(replay.valid, true, JSON.stringify(replay.issues));
+  assert.equal(replay.status, 'rework-authored');
+  // No decision waits for confirmation: the explicit alternative needs no
+  // provisional confirmation of its own.
+  assert.deepEqual(
+    replay.decisions.map((decision) => decision.status),
+    ['rework-authored'],
+  );
+  // The old bundle can bind nothing, so it cannot execute again.
+  const binding = bindProvisionalDecision(replay, {
+    claimId: firstClaim.claimId,
+    headRef: firstClaim.branch,
+    claimChain: [firstClaim],
+  });
+  assert.deepEqual(binding, { bound: false, reason: 'rework-pending' });
+  // The request this record answers stays in history, and no second adoption
+  // of the same bundle is read from it.
+  assert.equal(request.event.type, 'rework-requested');
+  const read = readReworkHandoff({
+    comments: history,
+    completeHistory: true,
+    verifiedClaimLineage: [firstClaim],
+    verifiedWork: [workEvidence()],
+    verifiedReworkRoadmaps: evidence,
+  });
+  assert.equal(read.ok, false);
+  assert.equal(read.ok ? '' : read.reason, 'rework-already-authored');
+});
+
+test('a history that records a rework authoring is named, even when no evidence is supplied', () => {
+  const { comments } = reworkRequestedHistory();
+  const sourceAfter: ProvisionalDecisionSource = {
+    ...source,
+    snapshot: { ...source.snapshot, bodySha256: 'c'.repeat(64) },
+  };
+  const authored = {
+    ...record('rework-2', {
+      type: 'rework-authored',
+      reworkRoadmap: {
+        roadmapIssueNumber: source.issueNumber,
+        roadmapMarkerId: 'same-source-rework',
+        authoringSetId: 'set-4599-rework',
+        url: `https://github.com/${source.repository}/issues/${source.issueNumber}`,
+      },
+    }),
+    source: sourceAfter,
+  };
+  // The caller of the reader has no authoring evidence (the publisher has
+  // none), so the replay refuses the history, and the reason says why.
+  const read = readReworkHandoff(
+    handoffInput([...comments, recordComment('6', authored, 6)]),
+  );
+  assert.equal(read.ok, false);
+  assert.equal(read.ok ? '' : read.reason, 'rework-already-authored');
+  assert.ok(
+    !read.ok && read.issueCodes.includes('source-binding-mismatch'),
+    JSON.stringify(read),
+  );
 });
