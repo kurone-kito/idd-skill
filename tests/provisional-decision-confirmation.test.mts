@@ -20,6 +20,7 @@ import {
   type ProvisionalResolutionCloseExpectation,
   type ProvisionalResolutionRequest,
   type ProvisionalResolutionResult,
+  type ProvisionalResolutionSourceExpectation,
   type ProvisionalResolutionStore,
   type ProvisionalResolveRequest,
   type ProvisionalReworkAuthoringEvidence,
@@ -93,6 +94,7 @@ class MemoryStore implements ProvisionalResolutionStore {
   recordAppends = 0;
   closes = 0;
   releases = 0;
+  authoringAppends: ProvisionalResolutionSourceExpectation[] = [];
   labelCalls = 0;
   recordFailure?: (eventType: string, body: string) => FailureMode;
   answerFailure: FailureMode;
@@ -257,6 +259,30 @@ class MemoryStore implements ProvisionalResolutionStore {
   }
 
   beforeClose?: (store: MemoryStore) => void;
+  beforeAuthoring?: (store: MemoryStore) => void;
+
+  /** Like the GitHub store will: append only while the audited source holds. */
+  async appendReworkAuthoredBody(
+    recordId: string,
+    text: string,
+    expected: ProvisionalResolutionSourceExpectation,
+  ): Promise<{
+    result: 'created' | 'existed';
+    record: { id: string; url: string };
+  }> {
+    this.authoringAppends.push(expected);
+    this.beforeAuthoring?.(this);
+    if (this.sourceState.state !== expected.state) {
+      throw new Error('the source is no longer open');
+    }
+    if (
+      this.source.title !== expected.title ||
+      sha256(this.source.body) !== expected.bodySha256
+    ) {
+      throw new Error('the source changed since the audit');
+    }
+    return this.appendRecordBody(recordId, text);
+  }
 
   /** The claim ID of the latest unreleased claimed-by marker, if any. */
   activeClaimId(): string | null {
@@ -4502,4 +4528,101 @@ test('rework-authored is not recorded for a closed source, but a recorded one st
   );
   assert.equal(rerun.state, 'reconciled', JSON.stringify(rerun));
   assert.equal(rerun.outcome, 'rework-authored');
+});
+
+test('the authoring record is appended only under the audited, open source', async (t) => {
+  await t.test(
+    'the plan names the open state and the audited source',
+    async () => {
+      const fixture = await authoredFixture();
+      const result = await runProvisionalResolution(
+        authoredRequest(fixture),
+        fixture.store,
+        { apply: true },
+      );
+      assert.equal(result.outcome, 'rework-authored', JSON.stringify(result));
+      assert.deepEqual(fixture.store.authoringAppends, [
+        {
+          state: 'open',
+          title: fixture.store.source.title,
+          bodySha256: sha256(roadmapBody),
+        },
+      ]);
+    },
+  );
+
+  await t.test(
+    'a source closed after the final plan holds and records nothing',
+    async () => {
+      const fixture = await authoredFixture();
+      fixture.store.beforeAuthoring = (target) => {
+        target.sourceState = { state: 'closed', stateReason: 'not_planned' };
+      };
+      const result = await runProvisionalResolution(
+        authoredRequest(fixture),
+        fixture.store,
+        { apply: true },
+      );
+      assertRefused(
+        result,
+        'recovery-hold',
+        /append-rework-authored write is uncertain/,
+      );
+      assert.match(result.reason ?? '', /no longer open/);
+      assert.equal(eventsOf(fixture.store).includes('rework-authored'), false);
+      assert.deepEqual(result.steps, []);
+    },
+  );
+
+  await t.test(
+    'a source edited after the final plan holds and records nothing',
+    async () => {
+      const fixture = await authoredFixture();
+      fixture.store.beforeAuthoring = (target) => {
+        target.source = {
+          ...target.source,
+          body: `${roadmapBody}\n\nEdited after the audit.`,
+        };
+      };
+      const result = await runProvisionalResolution(
+        authoredRequest(fixture),
+        fixture.store,
+        { apply: true },
+      );
+      assertRefused(
+        result,
+        'recovery-hold',
+        /append-rework-authored write is uncertain/,
+      );
+      assert.match(result.reason ?? '', /changed since the audit/);
+      assert.equal(eventsOf(fixture.store).includes('rework-authored'), false);
+    },
+  );
+});
+
+test('a release is proven by the claim own unclaim marker, not by its absence', async () => {
+  const store = await pendingStore();
+  // The release write fails, and the claim then disappears from the history.
+  store.releaseCoordinationClaim = async () => {
+    store.history = {
+      ...store.history,
+      comments: store.history.comments.filter(
+        (comment) => !comment.body.includes('claim-4536-coord'),
+      ),
+    };
+    throw new Error('release response lost');
+  };
+  const result = await answered(store, conversationYes);
+  assert.equal(result.state, 'reconciled', JSON.stringify(result));
+  assert.equal(result.nextStep, 'release-claim');
+  assert.match(
+    result.reason ?? '',
+    /release of the coordination claim is uncertain/,
+  );
+  assert.equal(
+    store.history.comments.some((c) =>
+      c.body.includes('unclaimed-by: ' + coordAgent),
+    ),
+    false,
+  );
 });

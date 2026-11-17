@@ -8,6 +8,7 @@ import { loadIddConfig } from './idd-config.mjs';
 import {
   parseClaimComment,
   parseForcedHandoffComment,
+  parseReleaseComment,
 } from './marker-helpers.mjs';
 import {
   applyClaimEvent,
@@ -2561,7 +2562,15 @@ async function planReworkAuthored(context, request) {
   }
   return {
     kind: 'step',
-    step: { kind: 'append-rework-authored', record: candidate },
+    step: {
+      kind: 'append-rework-authored',
+      record: candidate,
+      expected: {
+        state: 'open',
+        title: context.source.snapshot.title,
+        bodySha256: context.source.snapshot.bodySha256,
+      },
+    },
   };
 }
 async function planResolution(request, store) {
@@ -2572,9 +2581,39 @@ async function planResolution(request, store) {
     : planReworkAuthored(context, request);
 }
 /**
+ * Whether a fresh read shows the claim released: it is no longer the active
+ * claim and the verified history holds a trusted, unedited unclaim marker of
+ * that agent and claim posted after the claim itself. Another claim being
+ * active, or no claim being visible at all, proves nothing: only the claim's
+ * own unclaim marker does.
+ */
+function claimReleased(context, claim) {
+  if (context.active?.claimId === claim.claimId) return false;
+  const claimed = context.lineage.find(
+    (entry) =>
+      entry.claimId === claim.claimId && entry.agentId === claim.agentId,
+  );
+  if (!claimed) return false;
+  const claimedIndex = context.history.comments.findIndex(
+    (comment) => String(comment.id) === claimed.commentId,
+  );
+  if (claimedIndex < 0) return false;
+  return context.history.comments.slice(claimedIndex + 1).some((comment) => {
+    if (comment.trustedAuthor !== true || comment.edited !== false) {
+      return false;
+    }
+    const release = parseReleaseComment(comment.body);
+    return (
+      release !== null &&
+      release.claimId === claim.claimId &&
+      release.agentId === claim.agentId
+    );
+  });
+}
+/**
  * Whether a fresh read shows the step's own content in place: a trusted,
  * unedited comment with the same answer or record content, or a source closed
- * as completed. Release steps are proven by `releaseVerified` instead.
+ * as completed, or a claim shown released by its own unclaim marker.
  */
 function stepLanded(step, context) {
   const trusted = (comment) =>
@@ -2593,7 +2632,7 @@ function stepLanded(step, context) {
         context.sourceState.stateReason === 'completed'
       );
     case 'release-claim':
-      return context.active === null;
+      return claimReleased(context, step.claim);
     default: {
       const wanted = recordStepDigest(step.record);
       return rawRecordMatches(
@@ -2620,6 +2659,13 @@ async function executeStep(step, store) {
       return;
     case 'release-claim':
       await store.releaseCoordinationClaim(step.claim);
+      return;
+    case 'append-rework-authored':
+      await store.appendReworkAuthoredBody(
+        step.record.recordId,
+        escapeMentions(recordCommentBody(step.record)),
+        step.expected,
+      );
       return;
     default:
       await store.appendRecordBody(
@@ -2653,9 +2699,7 @@ async function releaseVerified(request, store) {
   try {
     const context = await readResolutionContext(request, store);
     if ('kind' in context) return false;
-    return (
-      context.active === null || context.active.claimId !== request.claimId
-    );
+    return claimReleased(context, request);
   } catch {
     return false;
   }

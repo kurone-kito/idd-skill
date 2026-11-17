@@ -9,6 +9,7 @@ import { type IddConfig, loadIddConfig } from './idd-config.mts';
 import {
   parseClaimComment,
   parseForcedHandoffComment,
+  parseReleaseComment,
 } from './marker-helpers.mts';
 import {
   applyClaimEvent,
@@ -1763,11 +1764,16 @@ export interface ProvisionalDecisionSourceStateRead {
   readonly stateReason: string | null;
 }
 
-/** What a close must still find true; see `closeSourceIssue`. */
-export interface ProvisionalResolutionCloseExpectation {
+/** What a write must still find true of the source issue. */
+export interface ProvisionalResolutionSourceExpectation {
   readonly state: 'open';
   readonly title: string;
   readonly bodySha256: string;
+}
+
+/** What a close must still find true; see `closeSourceIssue`. */
+export interface ProvisionalResolutionCloseExpectation
+  extends ProvisionalResolutionSourceExpectation {
   /** The coordination claim that must still be the active claim. */
   readonly claim: {
     readonly claimId: string;
@@ -1798,6 +1804,23 @@ export interface ProvisionalResolutionStore extends ProvisionalDecisionStore {
   closeSourceIssue(
     expected: ProvisionalResolutionCloseExpectation,
   ): Promise<void>;
+  /**
+   * Append the `rework-authored` record, or return the identical existing one,
+   * but only while the source is still the one the authoring audit described;
+   * otherwise throw without writing. A store checks, as far as its API allows,
+   * that the issue is still open and that its title and body still match
+   * (`bodySha256` is the lowercase SHA-256 hex of the body's UTF-8 bytes), so a
+   * close or an edit after the final plan read cannot take a record. The
+   * planner re-reads just before, and holds when this throws.
+   */
+  appendReworkAuthoredBody(
+    recordId: string,
+    body: string,
+    expected: ProvisionalResolutionSourceExpectation,
+  ): Promise<{
+    readonly result: 'created' | 'existed';
+    readonly record: ProvisionalDecisionStoredRecord;
+  }>;
   /** Post the unclaim marker of the coordination claim, per the claim protocol. */
   releaseCoordinationClaim(claim: {
     readonly claimId: string;
@@ -2085,11 +2108,14 @@ type ResolutionStep =
       readonly body: string;
     }
   | {
-      readonly kind:
-        | 'append-confirmation'
-        | 'append-rework-request'
-        | 'append-rework-authored';
+      readonly kind: 'append-confirmation' | 'append-rework-request';
       readonly record: ProvisionalDecisionRecord;
+    }
+  | {
+      readonly kind: 'append-rework-authored';
+      readonly record: ProvisionalDecisionRecord;
+      /** The audited source the record may be appended under. */
+      readonly expected: ProvisionalResolutionSourceExpectation;
     }
   | {
       readonly kind: 'close-source';
@@ -3359,7 +3385,15 @@ async function planReworkAuthored(
   }
   return {
     kind: 'step',
-    step: { kind: 'append-rework-authored', record: candidate },
+    step: {
+      kind: 'append-rework-authored',
+      record: candidate,
+      expected: {
+        state: 'open',
+        title: context.source.snapshot.title,
+        bodySha256: context.source.snapshot.bodySha256,
+      },
+    },
   };
 }
 
@@ -3375,9 +3409,43 @@ async function planResolution(
 }
 
 /**
+ * Whether a fresh read shows the claim released: it is no longer the active
+ * claim and the verified history holds a trusted, unedited unclaim marker of
+ * that agent and claim posted after the claim itself. Another claim being
+ * active, or no claim being visible at all, proves nothing: only the claim's
+ * own unclaim marker does.
+ */
+function claimReleased(
+  context: ResolutionContext,
+  claim: { readonly claimId: string; readonly agentId: string },
+): boolean {
+  if (context.active?.claimId === claim.claimId) return false;
+  const claimed = context.lineage.find(
+    (entry) =>
+      entry.claimId === claim.claimId && entry.agentId === claim.agentId,
+  );
+  if (!claimed) return false;
+  const claimedIndex = context.history.comments.findIndex(
+    (comment) => String(comment.id) === claimed.commentId,
+  );
+  if (claimedIndex < 0) return false;
+  return context.history.comments.slice(claimedIndex + 1).some((comment) => {
+    if (comment.trustedAuthor !== true || comment.edited !== false) {
+      return false;
+    }
+    const release = parseReleaseComment(comment.body);
+    return (
+      release !== null &&
+      release.claimId === claim.claimId &&
+      release.agentId === claim.agentId
+    );
+  });
+}
+
+/**
  * Whether a fresh read shows the step's own content in place: a trusted,
  * unedited comment with the same answer or record content, or a source closed
- * as completed. Release steps are proven by `releaseVerified` instead.
+ * as completed, or a claim shown released by its own unclaim marker.
  */
 function stepLanded(step: ResolutionStep, context: ResolutionContext): boolean {
   const trusted = (comment: ProvisionalDecisionHistoryComment) =>
@@ -3396,7 +3464,7 @@ function stepLanded(step: ResolutionStep, context: ResolutionContext): boolean {
         context.sourceState.stateReason === 'completed'
       );
     case 'release-claim':
-      return context.active === null;
+      return claimReleased(context, step.claim);
     default: {
       const wanted = recordStepDigest(step.record);
       return rawRecordMatches(
@@ -3427,6 +3495,13 @@ async function executeStep(
       return;
     case 'release-claim':
       await store.releaseCoordinationClaim(step.claim);
+      return;
+    case 'append-rework-authored':
+      await store.appendReworkAuthoredBody(
+        step.record.recordId,
+        escapeMentions(recordCommentBody(step.record)),
+        step.expected,
+      );
       return;
     default:
       await store.appendRecordBody(
@@ -3477,9 +3552,7 @@ async function releaseVerified(
   try {
     const context = await readResolutionContext(request, store);
     if ('kind' in context) return false;
-    return (
-      context.active === null || context.active.claimId !== request.claimId
-    );
+    return claimReleased(context, request);
   } catch {
     return false;
   }
