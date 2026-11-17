@@ -295,6 +295,16 @@ function replaceInJob(
   return text.slice(0, start) + job.split(from).join(to) + text.slice(end);
 }
 
+// The first path listed by one test part of the real pnpm-boundary.yml, for
+// fixture mutations that must touch a part without hardcoding a test file.
+function testPartFirstPath(text: string, part: string): string {
+  const header = `          - shard: ${part}\n            check-groups: test\n            test-files: |-\n`;
+  const at = anchored(text, header) + header.length;
+  const first = /^ {14}(tests\/\S+\.test\.mts)$/m.exec(text.slice(at))?.[1];
+  assert.ok(first, `no test file listed by ${part}`);
+  return first;
+}
+
 // Each case mutates one copy and names the messages its rule must raise, so
 // every assertion of the replaced tests has a violating fixture. Every anchor
 // is checked against the real file when the fixture is built.
@@ -4741,8 +4751,8 @@ const RULE_CASES: readonly RuleCase[] = [
     name: 'a shard matrix entry with an unsupported key',
     path: PNPM_BOUNDARY,
     mutation: {
-      from: '          - shard: lint\n            check-groups: lint\n',
-      to: '          - shard: lint\n            check-groups: lint\n            unsupported: true\n',
+      from: '            shard: lint\n            check-groups: lint\n',
+      to: '            shard: lint\n            check-groups: lint\n            unsupported: true\n',
     },
     expected: [
       {
@@ -4767,11 +4777,11 @@ const RULE_CASES: readonly RuleCase[] = [
   },
   {
     ruleId: 'RWA008',
-    name: 'a test-shard exclude that names Node 22.x instead of 26.x',
+    name: 'a shard matrix that restores a Node 26.x exclude for a test part',
     path: PNPM_BOUNDARY,
     mutation: {
-      from: '          - node-version: 26.x\n            shard: test\n',
-      to: '          - node-version: 22.x\n            shard: test\n',
+      from: '            check-groups: build:check audit\n',
+      to: '            check-groups: build:check audit\n        exclude:\n          - node-version: 26.x\n            shard: test-1\n',
     },
     expected: [
       {
@@ -4782,16 +4792,170 @@ const RULE_CASES: readonly RuleCase[] = [
   },
   {
     ruleId: 'RWA008',
-    name: 'a shard matrix without the Node 26.x test exclude',
+    name: 'a shard matrix that excludes lint from Node 24.x instead of pinning it',
     path: PNPM_BOUNDARY,
     mutation: {
-      from: '        exclude:\n          - node-version: 26.x\n            shard: test\n',
-      to: '',
+      from: '            check-groups: build:check audit\n',
+      to: '            check-groups: build:check audit\n        exclude:\n          - node-version: 24.x\n            shard: lint\n',
     },
     expected: [
       {
         prefix:
           "pnpm-boundary-group's matrix must use the supported Node version selector",
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA008',
+    name: 'a lint include pinned to Node 24.x',
+    path: PNPM_BOUNDARY,
+    mutation: {
+      from: '          - node-version: 22.x\n            shard: lint\n',
+      to: '          - node-version: 24.x\n            shard: lint\n',
+    },
+    expected: [
+      {
+        prefix:
+          "pnpm-boundary-group's matrix must use the supported Node version selector",
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA008',
+    name: 'a lint include with no Node version',
+    path: PNPM_BOUNDARY,
+    mutation: {
+      from: '          - node-version: 22.x\n            shard: lint\n',
+      to: '          - shard: lint\n',
+    },
+    expected: [
+      {
+        prefix:
+          "pnpm-boundary-group's matrix must use the supported Node version selector",
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA008',
+    name: 'a lint shard on the shard axis, where it would run on every version',
+    path: PNPM_BOUNDARY,
+    mutation: {
+      from: '        shard:\n          - typecheck\n',
+      to: '        shard:\n          - lint\n          - typecheck\n',
+    },
+    expected: [
+      {
+        prefix:
+          "pnpm-boundary-group's matrix must use the supported Node version selector",
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA008',
+    name: 'a test part that drops its test-files',
+    path: PNPM_BOUNDARY,
+    mutation: {
+      transform: (text: string) => {
+        const start = anchored(text, '          - shard: test-3\n');
+        const end = anchored(text, '          - shard: distribution\n');
+        return `${text.slice(0, start)}          - shard: test-3\n            check-groups: test\n${text.slice(end)}`;
+      },
+    },
+    expected: [{ includes: 'each test part also lists its test-files' }],
+  },
+  {
+    ruleId: 'RWA008',
+    name: 'a test file listed in two test parts',
+    path: PNPM_BOUNDARY,
+    mutation: {
+      transform: (text: string) => {
+        const first = testPartFirstPath(text, 'test-1');
+        const header =
+          '          - shard: test-2\n            check-groups: test\n            test-files: |-\n';
+        const at = anchored(text, header) + header.length;
+        return `${text.slice(0, at)}              ${first}\n${text.slice(at)}`;
+      },
+    },
+    expected: [{ includes: 'is listed in more than one test part' }],
+  },
+  {
+    ruleId: 'RWA008',
+    name: 'a test part list that drops the repository test of the audit',
+    path: PNPM_BOUNDARY,
+    mutation: {
+      transform: (text: string) => {
+        const line = '              tests/repository-workflow-audit.test.mts\n';
+        anchored(text, line);
+        return text.replace(line, '');
+      },
+    },
+    expected: [
+      {
+        message:
+          'tests/repository-workflow-audit.test.mts must be listed in a test part -- that file holds the repository test that fails when any other test file is listed in no part',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA008',
+    name: 'a test part that lists a path outside tests/',
+    path: PNPM_BOUNDARY,
+    mutation: {
+      transform: (text: string) =>
+        text.replace(
+          testPartFirstPath(text, 'test-3'),
+          'scripts/repository-workflow-audit.mjs',
+        ),
+    },
+    expected: [{ includes: 'each test part also lists its test-files' }],
+  },
+  {
+    ruleId: 'RWA008',
+    name: 'a test part step that drops the isolate-state import',
+    path: PNPM_BOUNDARY,
+    mutation: {
+      from: 'pnpm exec node --test --import ./tests/isolate-state.mts $TEST_FILES',
+      to: 'pnpm exec node --test $TEST_FILES',
+    },
+    expected: [{ includes: 'in exactly one step with if:' }],
+  },
+  {
+    ruleId: 'RWA008',
+    name: 'a test part step that reads its files from another matrix key',
+    path: PNPM_BOUNDARY,
+    mutation: {
+      from: `          TEST_FILES: \${{ matrix.test-files }}\n`,
+      to: `          TEST_FILES: \${{ matrix.check-groups }}\n`,
+    },
+    expected: [{ includes: 'in exactly one step with if:' }],
+  },
+  {
+    ruleId: 'RWA008',
+    name: 'a check-groups step that also runs for the test parts',
+    path: PNPM_BOUNDARY,
+    mutation: {
+      from: `        if: \${{ !startsWith(matrix.shard, 'test-') }}\n`,
+      to: '',
+    },
+    expected: [{ includes: 'in exactly one step with if:' }],
+  },
+  {
+    ruleId: 'RWA008',
+    name: 'a full run that runs a test part',
+    path: PNPM_BOUNDARY,
+    mutation: {
+      transform: (text: string) =>
+        replaceInJob(
+          text,
+          'pnpm-boundary-full',
+          `      - name: Check distributable pnpm boundary\n`,
+          `      - name: Run a test part\n        run: pnpm exec node --test $TEST_FILES\n      - name: Check distributable pnpm boundary\n`,
+        ),
+    },
+    expected: [
+      {
+        message:
+          'pnpm-boundary-full must not run a test part -- its lint-command step runs the whole suite once',
       },
     ],
   },
@@ -4858,7 +5022,7 @@ const RULE_CASES: readonly RuleCase[] = [
       {
         message:
           // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
-          'pnpm-boundary-group must run `pnpm run check ${{ matrix.check-groups }}` in exactly one step with no if:',
+          "pnpm-boundary-group must run `pnpm run check ${{ matrix.check-groups }}` in exactly one step with if: ${{ !startsWith(matrix.shard, 'test-') }}",
       },
     ],
   },
@@ -6119,7 +6283,13 @@ test('the direct pull_request matrix covers Node 22, 24.x, and 26.x while reusab
     String(matrix['node-version']),
     /contains\(github\.workflow_ref, 'kurone-kito\/idd-skill\/\.github\/workflows\/pnpm-boundary\.yml@'\)/,
   );
-  assert.deepEqual(matrix.shard, ['lint', 'typecheck', 'test', 'distribution']);
+  assert.deepEqual(matrix.shard, [
+    'typecheck',
+    'test-1',
+    'test-2',
+    'test-3',
+    'distribution',
+  ]);
   const floor = parsedWorkflowMapping(
     '.github/workflows/pnpm-boundary-node22-floor.yml',
   );
@@ -6145,10 +6315,10 @@ test('the Node 22 floor caller selects .node-version through node-version-file a
   assert.equal(Object.hasOwn(callerWith, 'node-version'), false);
 });
 
-// #4993: this repository runs the suite as four shards that rerun on their
-// own. These tests read the real workflow, so the partition, the
-// required-check name, and the aggregate's decision are checked as they will
-// run.
+// #4993: this repository runs the suite as shards that rerun on their own
+// (six since #5263, with the test group in three parts). These tests read the
+// real workflow, so the partition, the required-check name, and the
+// aggregate's decision are checked as they will run.
 function shardEntries(): { shard: string; checkGroups: string[] }[] {
   const strategy = yamlMapping(
     pnpmBoundaryJob('pnpm-boundary-group').strategy,
@@ -6171,12 +6341,20 @@ test('the pnpm-boundary shards run every check-project group exactly once', () =
   const entries = shardEntries();
   assert.deepEqual(
     entries.map(({ shard }) => shard),
-    ['lint', 'typecheck', 'test', 'distribution'],
+    ['lint', 'typecheck', 'test-1', 'test-2', 'test-3', 'distribution'],
   );
   const known = defaultCheckGroups('/fixture/pnpm.cjs').map(({ id }) => id);
-  const ran = entries.flatMap(({ checkGroups }) => checkGroups);
+  // The three test parts together are the one run of the test group.
+  const ran = entries
+    .filter(({ shard }) => !shard.startsWith('test-') || shard === 'test-1')
+    .flatMap(({ checkGroups }) => checkGroups);
   assert.deepEqual([...ran].sort(), [...known].sort());
   assert.equal(new Set(ran).size, ran.length, 'a group runs in two shards');
+  for (const { shard, checkGroups } of entries) {
+    if (shard.startsWith('test-')) {
+      assert.deepEqual(checkGroups, ['test'], shard);
+    }
+  }
   for (const { shard, checkGroups } of entries) {
     // Each shard's arguments are ones check-project accepts.
     const selected = selectCheckGroups(
@@ -6294,4 +6472,198 @@ test('the pnpm-boundary aggregate passes only when exactly one suite mode ran an
       );
     }
   }
+});
+
+// #5263: static lint runs on Node 22 only, and the test group runs as three
+// parts on Node 22, 24, and 26. These tests expand the real matrix the way
+// GitHub does for every lane its node-version expression can yield, so the
+// jobs a pull request gets are checked as they will run.
+interface ExpandedJob {
+  [key: string]: WorkflowYamlValue | undefined;
+  'node-version'?: string;
+  shard?: string;
+}
+
+function realShardMatrix(): WorkflowYamlMapping {
+  return yamlMapping(
+    yamlMapping(
+      pnpmBoundaryJob('pnpm-boundary-group').strategy,
+      'pnpm-boundary-group.strategy',
+    ).matrix,
+    'strategy.matrix',
+  );
+}
+
+// GitHub's expansion: the cross product of the axes, then each include entry
+// merged into every combination of that original product whose axis values it
+// matches. An include entry that matches none, because it names a value that
+// is on no axis, becomes a combination of its own. The matrix has no exclude
+// by policy, so the test fails if one appears rather than applying it.
+function expandShardMatrix(nodeVersions: readonly string[]): ExpandedJob[] {
+  const matrix = realShardMatrix();
+  assert.equal(Object.hasOwn(matrix, 'exclude'), false, 'unexpected exclude');
+  const shards = matrix.shard;
+  assert.ok(
+    Array.isArray(shards) && shards.every((shard) => typeof shard === 'string'),
+  );
+  const include = matrix.include;
+  assert.ok(Array.isArray(include), 'strategy.matrix.include is not a list');
+  const product: ExpandedJob[] = nodeVersions.flatMap((nodeVersion) =>
+    (shards as string[]).map((shard) => ({
+      'node-version': nodeVersion,
+      shard,
+    })),
+  );
+  const added: ExpandedJob[] = [];
+  for (const [index, entry] of include.entries()) {
+    const mapping = yamlMapping(entry, `include ${index}`);
+    const targets = product.filter((combination) =>
+      ['node-version', 'shard'].every(
+        (axis) => !(axis in mapping) || mapping[axis] === combination[axis],
+      ),
+    );
+    if (targets.length === 0) {
+      added.push({ ...mapping } as ExpandedJob);
+    }
+    for (const target of targets) {
+      Object.assign(target, mapping);
+    }
+  }
+  return [...product, ...added];
+}
+
+// Every lane the node-version expression can yield: the direct pull_request
+// list, the floor caller's, a version file, and the node-version fallback.
+function shardMatrixLanes(): { name: string; versions: string[] }[] {
+  const expression = String(realShardMatrix()['node-version']);
+  const lists = [...expression.matchAll(/&& '(\[[^']*\])'/g)].map(
+    (match) => JSON.parse(match[1]) as string[],
+  );
+  assert.deepEqual(
+    lists.map((versions) => versions.length),
+    [3, 1, 1],
+    'the expression no longer has the three literal lanes',
+  );
+  assert.match(expression, /toJSON\(inputs\.node-version \|\| '24\.x'\)/);
+  return [
+    { name: 'pull_request', versions: lists[0] },
+    { name: 'Node 22 floor caller', versions: lists[1] },
+    { name: 'version file caller', versions: lists[2] },
+    { name: 'node-version fallback', versions: ['24.x'] },
+  ];
+}
+
+function nodeVersionsOf(jobs: readonly ExpandedJob[], shard: string) {
+  return jobs
+    .filter((job) => job.shard === shard)
+    .map((job) => job['node-version']);
+}
+
+test('every lane runs lint once on Node 22 and the other shards on its own versions', () => {
+  for (const { name, versions } of shardMatrixLanes()) {
+    const jobs = expandShardMatrix(versions);
+    assert.deepEqual(nodeVersionsOf(jobs, 'lint'), ['22.x'], name);
+    for (const shard of [
+      'typecheck',
+      'test-1',
+      'test-2',
+      'test-3',
+      'distribution',
+    ]) {
+      assert.deepEqual(
+        nodeVersionsOf(jobs, shard),
+        versions,
+        `${name} ${shard}`,
+      );
+    }
+    for (const job of jobs) {
+      assert.equal(typeof job['node-version'], 'string', name);
+      assert.equal(
+        typeof job['check-groups'],
+        'string',
+        `${name} ${job.shard}`,
+      );
+      assert.equal(String(job['node-version']).startsWith('27'), false, name);
+    }
+    assert.equal(jobs.length, 1 + 5 * versions.length, name);
+  }
+});
+
+test('a pull request runs lint on Node 22 only and the test parts on Node 22, 24, and 26', () => {
+  const lane = shardMatrixLanes()[0];
+  assert.equal(lane.name, 'pull_request');
+  assert.deepEqual(lane.versions, ['22.x', '24.x', '26.x']);
+  const jobs = expandShardMatrix(lane.versions);
+  assert.deepEqual(nodeVersionsOf(jobs, 'lint'), ['22.x']);
+  for (const part of ['test-1', 'test-2', 'test-3']) {
+    assert.deepEqual(
+      nodeVersionsOf(jobs, part),
+      ['22.x', '24.x', '26.x'],
+      part,
+    );
+  }
+});
+
+test('the test parts list every tests/*.test.mts file exactly once', () => {
+  const parts = expandShardMatrix(['22.x']).filter((job) =>
+    String(job.shard).startsWith('test-'),
+  );
+  assert.equal(parts.length, 3);
+  const listed = new Map<string, string>();
+  for (const part of parts) {
+    const files = part['test-files'];
+    assert.equal(
+      typeof files,
+      'string',
+      `${String(part.shard)} has no test-files`,
+    );
+    for (const file of String(files).split('\n')) {
+      assert.equal(
+        listed.has(file),
+        false,
+        `${file} is in ${String(listed.get(file))} and ${String(part.shard)}`,
+      );
+      listed.set(file, String(part.shard));
+    }
+  }
+  // Since #5182 these parts are the only full-suite run, so a test file that no
+  // part lists would run nowhere while every check stays green. Node ignores a
+  // path that matches no file, so this comparison is also the only guard
+  // against a misspelled entry.
+  const onDisk = readdirSync(join(REPO_ROOT, 'tests'))
+    .filter((name) => name.endsWith('.test.mts'))
+    .map((name) => `tests/${name}`)
+    .sort();
+  const unassigned = onDisk.filter((file) => !listed.has(file));
+  const missing = [...listed.keys()].filter((file) => !onDisk.includes(file));
+  assert.deepEqual(
+    unassigned,
+    [],
+    `add each of these to a test part in ${PNPM_BOUNDARY}: ${unassigned.join(' ')}`,
+  );
+  assert.deepEqual(
+    missing,
+    [],
+    `remove each of these from ${PNPM_BOUNDARY}, they are not test files: ${missing.join(' ')}`,
+  );
+  assert.equal(listed.size, onDisk.length);
+});
+
+test('the test part step runs the same command as the test:scripts script', () => {
+  const manifest = JSON.parse(realText('package.json')) as {
+    scripts?: Record<string, string>;
+  };
+  const script = manifest.scripts?.['test:scripts'];
+  assert.ok(
+    script?.endsWith(' tests/*.test.mts'),
+    `test:scripts must end with the tests glob, so ${PNPM_BOUNDARY} can replace it with each part's files: ${String(script)}`,
+  );
+  const steps = pnpmBoundarySteps('pnpm-boundary-group').filter(
+    (step) => typeof step.run === 'string' && step.run.includes('--test'),
+  );
+  assert.equal(steps.length, 1);
+  assert.equal(
+    steps[0].run,
+    `pnpm exec ${String(script).replace('tests/*.test.mts', '$TEST_FILES')}`,
+  );
 });
