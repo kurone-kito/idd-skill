@@ -858,6 +858,33 @@ test('a resolution refuses its writes when the authenticated account cannot be r
   );
 });
 
+test('the claim check is the last guard before a rework-authored append: a claim taken after the source read is seen', async () => {
+  await withFake(
+    (state) => {
+      withReplacedClaimReleased(state);
+      // Another session takes a coordination claim right after the issue read.
+      state.injectAfterIssueRead = [
+        {
+          ...claimComment(
+            'codex-other-agent',
+            'claim-4536-other',
+            'issue/4536-other-session',
+            '2026-11-03T11:40:00Z',
+          ),
+          id: '9',
+        },
+      ];
+    },
+    async ({ fake, store }) => {
+      await assert.rejects(
+        store.appendReworkAuthoredBody(recordId, recordBody, sourceExpectation),
+        /coordination claim is active/,
+      );
+      assert.deepEqual(fake.writes(), []);
+    },
+  );
+});
+
 test('a rework-authored record is not appended while a coordination claim is active', async () => {
   // The claim is active: the planner only plans this record once it is released.
   await withFake(withClaim, async ({ fake, store }) => {
@@ -927,13 +954,10 @@ test('the beforeWrite hook runs as the last check before each write and can refu
       ]);
       assert.deepEqual(fake.writes(), ['POST', 'POST', 'issue close', 'POST']);
       // After the hook only the write is left, so the hook follows every read
-      // of the store: the first write reads the acting account once, then posts.
+      // of the store, the acting account's read on the first write included.
       const calls = fake.state().calls;
       const after = callsAtHook.map((index) => calls[index]?.args ?? []);
-      assert.ok(
-        after[0]?.includes('user'),
-        'the first write reads the account',
-      );
+      assert.ok(after[0]?.includes('POST'));
       assert.ok(after[1]?.includes('POST'));
       assert.deepEqual(after[2]?.slice(0, 2), ['issue', 'close']);
       assert.ok(after[3]?.includes('POST'));

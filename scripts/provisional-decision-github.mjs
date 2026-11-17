@@ -507,10 +507,14 @@ export function createGithubProvisionalDecisionStore(input) {
       );
     }
   }
-  /** The last checks before a write: the caller's hook, then the actor. */
+  /**
+   * The last checks before a write: the acting account first, which can read
+   * it over the network on a run's first write, then the caller's hook, so the
+   * hook is the final check and no call separates it from the write.
+   */
   function beforeWrite(write) {
-    input.beforeWrite?.(write);
     requireTrustedActor();
+    input.beforeWrite?.(write);
   }
   /** Throw unless the held coordination claim, if any, is the active claim. */
   function requireCoordinationClaim(history) {
@@ -524,17 +528,18 @@ export function createGithubProvisionalDecisionStore(input) {
   }
   /**
    * Return the identical comment a lookup counts, or post `body` once and read
-   * it back. `guard` runs after the history read and before any return or
-   * write, so a refusal writes nothing. `beforePost` runs the same way but
+   * it back. `guard` runs before the history read and before any return or
+   * write, so a refusal writes nothing and a check on the history that follows
+   * (the claim) is the later one. `beforePost` runs after the history read, but
    * only when a write follows, so an identical comment that already landed is
    * still returned.
    */
   async function appendOnce(write, matches, body, guards = {}) {
+    guards.guard?.();
     const before = await readCompleteHistory('append');
     const existing = before.comments.find(
       (comment) => countsAsLanded(comment) && matches(comment),
     );
-    guards.guard?.();
     if (existing) {
       return {
         result: 'existed',
