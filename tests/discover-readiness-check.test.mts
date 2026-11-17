@@ -4901,7 +4901,12 @@ test('decision gate: a confirmation issue or a draft carrier is never replayed, 
   // The excluded issues do not count toward the cap: 2 queued and 0 open is
   // below a cap of 3, so a further ordinary source is still eligible. (Were 71
   // and 72 counted, it would sit at the cap.)
-  const capped = decisionGate({ 73: pendingEvidence(), 74: pendingEvidence() });
+  const capped = decisionGate({
+    71: pendingEvidence(),
+    72: pendingEvidence(),
+    73: pendingEvidence(),
+    74: pendingEvidence(),
+  });
   const fifth = await runGate(
     [71, 72, 73, 74, 75],
     [

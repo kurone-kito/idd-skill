@@ -2625,9 +2625,9 @@ be read (provisional_state_unavailable), records exist that Resume owns
 (provisional_pending_unreadable), or the open confirmation-label issues plus
 the queue below reach maxPendingConfirmations
 (provisional_pending_cap:<count>/<cap>). The gate never relaxes, replays, or
-queues a label name that collides with another configured label, a roadmap node,
-a durable record, a confirmation issue, a draft carrier, or a
-review-needs-decision follow-up. A source whose
+queues an issue whose needs-decision label name collides with another configured
+label, or that is a roadmap node, a durable record, a confirmation issue, a
+draft carrier, or a review-needs-decision follow-up. A source whose
 provisional work is complete and awaits confirmation stays excluded with
 "details" "<label> (confirmation_pending)" whatever the flag or class says, and
 is listed in "confirmationQueue" (present only when non-empty): its number,

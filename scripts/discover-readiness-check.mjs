@@ -2328,9 +2328,9 @@ function printHelp() {
   (provisional_pending_unreadable), or the count of open confirmation-label
   issues plus the queue below reaches maxPendingConfirmations
   (provisional_pending_cap:<count>/<cap>). The gate never relaxes, replays, or
-  queues a label name that collides with another configured label, a roadmap
-  node, a durable record, a confirmation issue, a draft carrier, or a
-  review-needs-decision follow-up. A source whose provisional
+  queues an issue whose needs-decision label name collides with another
+  configured label, or that is a roadmap node, a durable record, a
+  confirmation issue, a draft carrier, or a review-needs-decision follow-up. A source whose provisional
   work is complete and awaits confirmation is never ready, whatever the flag or
   class says (reasons: label:<name>, confirmation_pending) and is listed in
   "confirmationQueue" (present only when non-empty): its number, title, bundle
