@@ -16,6 +16,10 @@ import type { AuthoringOwnerProvenanceComment } from '../src/scripts/authoring-o
 import { markdownItAvailable } from '../src/scripts/markdown-structure.mts';
 import { resolveAnchorOwnerGeneration } from '../src/scripts/post-idd-marker.mts';
 import {
+  PROVISIONAL_DECISION_ANSWER_MARKER,
+  PROVISIONAL_DECISION_RECORD_MARKER,
+} from '../src/scripts/provisional-decision-state.mts';
+import {
   buildLintArgs,
   carrierSetSnapshot,
   checkCarrierReviewResult,
@@ -28,6 +32,8 @@ import {
   parseJournalReference,
   replayAnchorHold,
   resolvePublishLabels,
+  tokenListingProgram,
+  tokenListingSince,
 } from '../src/scripts/publish-authoring-hold.mts';
 import { stubExecutable } from './test-utils.mts';
 
@@ -147,6 +153,12 @@ if (args[0] !== 'api') fail('unexpected gh call: ' + args.join(' '));
 if (args.includes('graphql')) {
   const queryText = args.find((arg) => arg.startsWith('query=')) || '';
   if (state.readsFail) fail('gh: HTTP 502 Bad Gateway (read)');
+  if (queryText.includes('pullRequest(number')) {
+    // The merged pull request a completion record names (#4537).
+    const prArg = args.find((arg) => arg.startsWith('number=')) || '';
+    if (state.prReadsFail) fail('gh: HTTP 502 Bad Gateway (pull request read)');
+    out({ data: { repository: { pullRequest: (state.pullRequests || {})[Number(prArg.slice('number='.length))] ?? null } } });
+  }
   if (state.removed && state.mutateBodyOnSweep && queryText.includes('comments(first:100')) {
     state.issues[${NEW_ISSUE}].body += state.mutateBodyOnSweep;
     state.mutateBodyOnSweep = '';
@@ -170,6 +182,11 @@ if (args.includes('graphql')) {
   }
   if (queryArg.includes('timelineItems')) page('timelineItems', []);
   state.commentReads = (state.commentReads || 0) + 1;
+  if (number === 2674 && state.anchorEditAtJournalRead) {
+    // Edit the anchor right after the n-th read of the journal (#4537).
+    state.journalReads = (state.journalReads || 0) + 1;
+    if (state.journalReads === state.anchorEditAtJournalRead) state.issues[${ANCHOR}].body += '\nedited between the reads';
+  }
   if (state.foreignOwnerOnRead && state.commentReads === state.foreignOwnerOnRead) {
     state.comments.push({ id: 6998, issue: number, body: '<!-- idd-skill-authoring-owner: target=o/r#' + number + '; anchor=o/r#' + number + '; mode=acquire; owner=owner-other; set=set-other; session=session-other; body-sha256=none; snapshot-sha256=none; supersedes=none -->', user, createdAt: '2026-10-13T00:10:00Z' });
   }
@@ -178,7 +195,7 @@ if (args.includes('graphql')) {
     id: 'IC_' + c.id,
     url: 'https://github.com/o/r/issues/' + number + '#issuecomment-' + c.id,
     databaseId: c.id,
-    lastEditedAt: state.editedComments ? '2026-10-13T00:00:01Z' : null,
+    lastEditedAt: c.lastEditedAt ?? (state.editedComments ? '2026-10-13T00:00:01Z' : null),
     createdAt: c.createdAt,
     updatedAt: c.createdAt,
     body: c.body,
@@ -197,7 +214,15 @@ if (searchPath) {
 const path = args.find((arg) => arg === 'user' || arg.startsWith('repos/'));
 if (path && path.startsWith('repos/o/r/issues?')) {
   if (state.indexLagFull) out(Array.from({ length: 100 }, (_, index) => ({ number: 9000 + index, updated_at: '2026-10-13T00:00:00Z' })));
-  out(Object.keys(state.issues).map((number) => ({ number: Number(number), updated_at: '2026-10-13T00:00:00Z' })));
+  if (state.tokenListFails && path.includes('since=')) fail('gh: HTTP 502 Bad Gateway (issue list)');
+  if (args.includes('--jq') && path.includes('since=')) {
+    // The publisher filters inside gh; print the lines its jq program would.
+    const jqExpression = args[args.indexOf('--jq') + 1];
+    out(Object.entries(state.tokenIssues || {}).filter(([token]) => jqExpression.includes(JSON.stringify(token))).map(([token, number]) => token + '\t' + number).join('\n') + '\n');
+  }
+  const listed = Object.keys(state.issues).map((number) => ({ number: Number(number), updated_at: '2026-10-13T00:00:00Z', body: state.issues[number].body }));
+  Object.entries(state.tokenIssues || {}).forEach(([token, number]) => listed.push({ number, updated_at: '2026-10-13T00:00:00Z', body: 'carries ' + token }));
+  out(listed);
 }
 if (path === 'user') {
   state.userCalls = (state.userCalls || 0) + 1;
@@ -310,6 +335,10 @@ if ((match = /^repos\/o\/r\/issues\/(\d+)\/comments$/.exec(path))) {
         const anchorRef = /anchor=([^;]+);/.exec(body)[1];
         state.comments.push({ id: 7600 + state.comments.length, issue: ${NEW_ISSUE}, body: '<!-- idd-skill-authoring-owner: target=o/r#9998; anchor=' + anchorRef + '; mode=heartbeat; owner=' + owner + '; set=' + setId + '; session=' + session + '; body-sha256=' + '0'.repeat(64) + '; snapshot-sha256=none; supersedes=' + owner + ' -->', user, createdAt: '2026-10-13T00:44:00Z' });
       }
+      if (rule.action === 'anchorBodyEdit') {
+        // Someone edits the anchor's body right after the post (#4537).
+        state.issues[${ANCHOR}].body += rule.text;
+      }
       if (rule.action === 'dropRelease') {
         state.comments = state.comments.filter((c) => !(c.issue === ${NEW_ISSUE} && /mode=release;/.test(c.body)));
       }
@@ -334,7 +363,7 @@ if ((match = /^repos\/o\/r\/issues\/(\d+)$/.exec(path))) {
   if (number === 2674) out({ number, title: 'journal', state: 'closed', body: 'journal', labels: [], html_url: 'https://github.com/o/r/issues/2674' });
   const issue = state.issues[number];
   if (!issue) fail('gh: Not Found (HTTP 404)');
-  out({ number, title: 'x', state: issue.state || 'open', body: issue.body, labels: issue.labels.map((name) => ({ name })), html_url: 'https://github.com/o/r/issues/' + number });
+  out({ number, title: issue.title || 'x', state: issue.state || 'open', body: issue.body, labels: issue.labels.map((name) => ({ name })), html_url: 'https://github.com/o/r/issues/' + number });
 }
 if ((match = /^repos\/o\/r\/collaborators\/([^/]+)\/permission$/.exec(path))) {
   const level = state.permission || 'admin';
@@ -360,6 +389,8 @@ interface StubState {
     user: string;
     createdAt: string;
     minimizedReason?: string | null;
+    /** An edit time for this comment alone; the global flag edits all. */
+    lastEditedAt?: string | null;
   }[];
   [key: string]: unknown;
 }
@@ -5632,4 +5663,1554 @@ test('CLI: an origin issue beyond the safe-integer range is refused before any w
   } finally {
     fixture.restore();
   }
+});
+
+// ---------------------------------------------------------------------------
+// Rework adoption of a retained decision source (#4537). The anchor is a
+// decision source whose operator asked for another option. Its comments hold
+// the provisional-decision records and the handoff, its owner log holds a
+// completed (or no) earlier set and the fresh generation, and the journal holds
+// the handoff's own hold.
+// ---------------------------------------------------------------------------
+
+const REWORK_SET = 'set-rework';
+const REWORK_SESSION = 'session-rework';
+const REWORK_OWNER = 'owner-rework';
+const REWORK_HANDOFF = 'handoff-4000';
+const ORIGINAL_SET = 'set-original';
+const ORIGINAL_SESSION = 'session-original';
+const ORIGINAL_OWNER = 'owner-original';
+const FORMER_ANCHOR = 3000;
+const FORMER_ANCHOR_REF = `o/r#${FORMER_ANCHOR}`;
+const SOURCE_TITLE = 'Decide the sample option';
+const SOURCE_BODY = [
+  '## Background',
+  '',
+  'Which option should the sample feature use?',
+  '',
+  '## Options',
+  '',
+  '- keep the current behavior',
+  '- change the behavior',
+].join('\n');
+const REWORK_PR = 4601;
+const REWORK_HEAD = '1'.repeat(40);
+const REWORK_MERGE = '2'.repeat(40);
+const REWORK_PR_URL = `https://github.com/o/r/pull/${REWORK_PR}`;
+
+/** An RFC 3339 second of the scenario clock, without a fraction. */
+function at(second: number): string {
+  return new Date(Date.UTC(2026, 9, 12, 0, 0, second))
+    .toISOString()
+    .replace('.000Z', 'Z');
+}
+
+interface ScenarioComment {
+  issue: number;
+  at: number;
+  body: string;
+  /** A fixed comment id, for a comment another one points at. */
+  id?: number;
+  user?: string;
+  lastEditedAt?: string | null;
+}
+
+interface ReworkScenario {
+  title: string;
+  /** The body the records and the opening marker snapshot. */
+  body: string;
+  /** The body the issue holds now, when the authoring pass rewrote it. */
+  liveBody?: string;
+  labels: string[];
+  openPr: boolean;
+  comments: ScenarioComment[];
+  pullRequests: Record<string, unknown>;
+  /** Open issues the stub's issue list holds by token, as token -> number. */
+  tokenIssues?: Record<string, number>;
+}
+
+interface ReworkScenarioOptions {
+  /** The origin of the source: a completed original set with its creation
+   * line, no creation token at all, or a former child of another set. */
+  origin?: 'completed' | 'none' | 'former-child';
+  handoff?: Record<string, unknown>;
+  /** The body digest the fresh generation's acquire marker records. */
+  acquireDigest?: string;
+  /** The fresh generation's markers; the default is one acquire. */
+  generation?: Partial<{ owner: string; set: string; session: string }>;
+  /** The scenario second the fresh generation opens at. */
+  acquireAt?: number;
+  /** The first line of the body, when it is not the original creation line. */
+  bodyLine?: string;
+  /** The `target` and `anchor` of the handoff's hold records, as written. */
+  holdAnchor?: string;
+}
+
+function sourceRecord(
+  recordId: string,
+  event: Record<string, unknown>,
+  claims: Record<string, unknown>[],
+  body: string,
+): string {
+  return `${PROVISIONAL_DECISION_RECORD_MARKER}\n${JSON.stringify({
+    schemaVersion: 1,
+    recordId,
+    source: {
+      repository: 'o/r',
+      issueNumber: ANCHOR,
+      snapshot: {
+        title: SOURCE_TITLE,
+        bodySha256: sha256Of(body),
+        updatedAt: at(0),
+      },
+    },
+    bundleGeneration: 1,
+    decisionGeneration: 1,
+    claimLineage: claims,
+    evidenceReferences: ['https://github.com/o/r/issues/4000'],
+    event,
+  })}`;
+}
+
+function claimMarker(claim: Record<string, unknown>): string {
+  return [
+    `<!-- claimed-by: ${claim.agentId} ${claim.claimId} supersedes: none ${claim.claimedAt} branch: ${claim.branch} -->`,
+    '',
+    `_${claim.agentId}: issue claim -- IDD automation marker. Do not edit._`,
+  ].join('\n');
+}
+
+function unclaimMarker(claim: Record<string, unknown>, second: number): string {
+  return [
+    `<!-- unclaimed-by: ${claim.agentId} ${claim.claimId} ${at(second)} -->`,
+    '',
+    `_${claim.agentId}: issue claim released -- IDD automation marker. Do not edit._`,
+  ].join('\n');
+}
+
+/** A publication-intent record of the handoff's own hold. */
+function reworkIntent(
+  state: string,
+  issue: string,
+  holdAnchor = ANCHOR_REF,
+): string {
+  return [
+    `<!-- idd-skill-authoring-publication-intent: target=${holdAnchor}; anchor=${holdAnchor}; set=${REWORK_SET}; session=${REWORK_SESSION}; token=${REWORK_HANDOFF}; journal=o/r#2674; issue=${issue}; actor=kurone-kito; state=${state} -->`,
+    '_Issue-authoring publication-intent record. Do not edit or delete._',
+  ].join('\n');
+}
+
+/**
+ * The complete history of a source whose operator asked for another option: a
+ * completed implementation under one claim, then a review under another that
+ * recorded the answer and the rework request with its handoff, and then the
+ * fresh authoring generation with its hold.
+ */
+function reworkScenario(options: ReworkScenarioOptions = {}): ReworkScenario {
+  const origin = options.origin ?? 'completed';
+  const line =
+    options.bodyLine ??
+    (origin === 'completed'
+      ? `<!-- idd-skill-authoring-publication: target=target-original; anchor=target-original; set=${ORIGINAL_SET}; session=${ORIGINAL_SESSION}; token=token-original -->`
+      : origin === 'former-child'
+        ? `<!-- idd-skill-authoring-publication: target=target-child; anchor=${FORMER_ANCHOR_REF}; set=${ORIGINAL_SET}; session=${ORIGINAL_SESSION}; token=token-child -->`
+        : null);
+  const body = line === null ? SOURCE_BODY : `${line}\n\n${SOURCE_BODY}`;
+  const comments: ScenarioComment[] = [];
+  const add = (issue: number, second: number, text: string): void => {
+    comments.push({ issue, at: second, body: text });
+  };
+  if (origin === 'completed') {
+    const fields = {
+      owner: ORIGINAL_OWNER,
+      set: ORIGINAL_SET,
+      session: ORIGINAL_SESSION,
+      bodySha256: sha256Of(body),
+    };
+    add(ANCHOR, 0, ownerMarkerText('acquire', fields));
+    add(ANCHOR, 1, ownerMarkerText('release', fields));
+    add(
+      ANCHOR,
+      2,
+      ownerMarkerText('release-complete', {
+        owner: ORIGINAL_OWNER,
+        set: ORIGINAL_SET,
+        session: ORIGINAL_SESSION,
+      }),
+    );
+  }
+  if (origin === 'former-child') {
+    const child = {
+      owner: 'owner-child',
+      set: ORIGINAL_SET,
+      session: ORIGINAL_SESSION,
+      anchor: FORMER_ANCHOR_REF,
+      bodySha256: sha256Of(body),
+    };
+    add(ANCHOR, 0, ownerMarkerText('acquire', child));
+    add(ANCHOR, 1, ownerMarkerText('release', child));
+    const former = {
+      owner: 'owner-former',
+      set: ORIGINAL_SET,
+      session: ORIGINAL_SESSION,
+      target: FORMER_ANCHOR_REF,
+      anchor: FORMER_ANCHOR_REF,
+    };
+    add(FORMER_ANCHOR, 0, ownerMarkerText('acquire', former));
+    add(FORMER_ANCHOR, 2, ownerMarkerText('release', former));
+    add(FORMER_ANCHOR, 3, ownerMarkerText('release-complete', former));
+  }
+
+  const impl = {
+    claimId: 'claim-impl-4000',
+    agentId: 'codex-impl00001',
+    branch: 'issue/4000-decide-option',
+    claimedAt: at(10),
+    supersedes: 'none',
+  };
+  const review = {
+    claimId: 'claim-review-4000',
+    agentId: 'codex-review0001',
+    branch: 'issue/4000-review-option',
+    claimedAt: at(30),
+    supersedes: 'none',
+  };
+  const option = (id: string, extra: Record<string, unknown>) => ({
+    id,
+    description: `The ${id} behavior`,
+    feasibilityRationale: 'The repository can implement it.',
+    requirementFit: 'It meets the verified requirement.',
+    consequences: 'Consequences are bounded.',
+    verification: 'Run the focused tests.',
+    reversalOrMigration: 'Reversal is a small change.',
+    ...extra,
+  });
+  const selectedEvent = {
+    type: 'selected',
+    question: 'Which behavior should be used?',
+    selectedOption: option('keep', { rationale: 'It matches the evidence.' }),
+    feasibleAlternatives: [
+      option('change', {
+        comparison: 'It adds migration without improving the fit.',
+        rejectionReason: 'The selected option better fits the evidence.',
+      }),
+    ],
+    executionCriteria: ['The selected behavior passes focused validation.'],
+  };
+  const result = {
+    kind: 'merged-pull-request',
+    reference: REWORK_PR_URL,
+    verifiedAt: at(22),
+    headSha: REWORK_HEAD,
+    mergeCommitSha: REWORK_MERGE,
+  };
+  const rationale = 'The alternate choice better fits the current need.';
+  const answerId = 5800;
+  const answer = {
+    schemaVersion: 1,
+    source: {
+      repository: 'o/r',
+      issueNumber: ANCHOR,
+      snapshot: {
+        title: SOURCE_TITLE,
+        bodySha256: sha256Of(body),
+        updatedAt: at(0),
+      },
+    },
+    bundleGeneration: 1,
+    decisionGenerations: [1],
+    claimIds: [impl.claimId, review.claimId],
+    presentedBundle: [
+      {
+        decisionGeneration: 1,
+        question: selectedEvent.question,
+        selectedOptionId: 'keep',
+        feasibleAlternativeIds: ['change'],
+        workCompletedRecordId: 'complete-1',
+        result,
+      },
+    ],
+    response: 'rework',
+    requestedOptionId: 'change',
+    rationale,
+    answerText: 'I prefer the alternate option.',
+  };
+  add(ANCHOR, 10, claimMarker(impl));
+  add(ANCHOR, 20, sourceRecord('select-1', selectedEvent, [impl], body));
+  add(
+    ANCHOR,
+    21,
+    sourceRecord(
+      'start-1',
+      {
+        type: 'work-started',
+        startedAt: at(21),
+        planReference: 'https://github.com/o/r/issues/4000#issuecomment-5101',
+      },
+      [impl],
+      body,
+    ),
+  );
+  add(
+    ANCHOR,
+    22,
+    sourceRecord(
+      'complete-1',
+      { type: 'work-completed', result },
+      [impl],
+      body,
+    ),
+  );
+  add(ANCHOR, 25, unclaimMarker(impl, 25));
+  add(ANCHOR, 30, claimMarker(review));
+  comments.push({
+    issue: ANCHOR,
+    at: 31,
+    id: answerId,
+    body: `${PROVISIONAL_DECISION_ANSWER_MARKER}\n${JSON.stringify(answer)}`,
+  });
+  add(
+    ANCHOR,
+    32,
+    sourceRecord(
+      'rework-1',
+      {
+        type: 'rework-requested',
+        reworkRequest: {
+          commentUrl: `https://github.com/o/r/issues/4000#issuecomment-${answerId}`,
+          requestedAt: at(31),
+          requestedOptionId: 'change',
+          rationale,
+          handoff: {
+            handoffId: REWORK_HANDOFF,
+            authoringSetId: REWORK_SET,
+            authoringSessionId: REWORK_SESSION,
+            anchor: ANCHOR_REF,
+            priorResults: [
+              {
+                decisionGeneration: 1,
+                workCompletedRecordId: 'complete-1',
+                reference: REWORK_PR_URL,
+              },
+            ],
+            downstreamResults: [],
+            ...(options.handoff ?? {}),
+          },
+        },
+      },
+      [impl, review],
+      body,
+    ),
+  );
+  add(ANCHOR, 33, unclaimMarker(review, 33));
+  add(
+    ANCHOR,
+    options.acquireAt ?? 38,
+    ownerMarkerText('acquire', {
+      owner: options.generation?.owner ?? REWORK_OWNER,
+      set: options.generation?.set ?? REWORK_SET,
+      session: options.generation?.session ?? REWORK_SESSION,
+      bodySha256: options.acquireDigest ?? sha256Of(body),
+    }),
+  );
+  const holdAnchor = options.holdAnchor ?? ANCHOR_REF;
+  add(2674, 40, reworkIntent('pending', 'none', holdAnchor));
+  add(2674, 41, reworkIntent('pending', ANCHOR_REF, holdAnchor));
+  add(2674, 42, reworkIntent('member', ANCHOR_REF, holdAnchor));
+  return {
+    title: SOURCE_TITLE,
+    body,
+    labels: ['status:authoring'],
+    openPr: false,
+    comments,
+    pullRequests: {
+      [String(REWORK_PR)]: {
+        number: REWORK_PR,
+        merged: true,
+        mergedAt: at(22),
+        headRefOid: REWORK_HEAD,
+        mergeCommit: { oid: REWORK_MERGE },
+      },
+    },
+  };
+}
+
+/** Put the scenario in the stub: ids follow the order of the seconds. */
+function seedRework(fixture: Fixture, scenario: ReworkScenario): void {
+  fixture.seed((stored) => {
+    const sorted = [...scenario.comments].sort(
+      (left, right) => left.at - right.at,
+    );
+    for (const [index, item] of sorted.entries()) {
+      stored.comments.push({
+        id: item.id ?? 5100 + index,
+        issue: item.issue,
+        body: item.body,
+        user: item.user ?? 'kurone-kito',
+        createdAt: at(item.at),
+        ...(item.lastEditedAt === undefined
+          ? {}
+          : { lastEditedAt: item.lastEditedAt }),
+      });
+    }
+    stored.issues[String(ANCHOR)] = {
+      body: scenario.liveBody ?? scenario.body,
+      title: scenario.title,
+      labels: scenario.labels,
+      state: 'open',
+    };
+    stored.pullRequests = scenario.pullRequests;
+    stored.openPr = scenario.openPr;
+    stored.tokenIssues = scenario.tokenIssues ?? {};
+  });
+}
+
+/** The comment ids are not known until seeding, so tests pick by body. */
+function dropComments(
+  scenario: ReworkScenario,
+  matches: (item: ScenarioComment) => boolean,
+): void {
+  scenario.comments = scenario.comments.filter((item) => !matches(item));
+}
+
+const TRUSTED_BASE = { trustedMarkerActors: ['kurone-kito'] };
+
+function reworkFixture(
+  scenario: ReworkScenario = reworkScenario(),
+  options: Parameters<typeof setup>[0] = {},
+): Fixture {
+  const fixture = setup({
+    labels: ['status:authoring'],
+    trustedConfig: TRUSTED_BASE,
+    ...options,
+  });
+  seedRework(fixture, scenario);
+  return fixture;
+}
+
+function refusalOf(fixture: Fixture, apply = false) {
+  const result = fixture.run([
+    ...childArgs(fixture),
+    ...(apply ? ['--apply'] : []),
+  ]);
+  assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
+  assert.deepEqual(writes(fixture.log()), []);
+  return JSON.parse(result.stdout) as {
+    outcome: string;
+    reason: string;
+    standardCheck?: string;
+    reworkHandoff?: { reason: string; issueCodes: string[] };
+  };
+}
+
+for (const origin of ['completed', 'none', 'former-child'] as const) {
+  test(`rework: a retained source (${origin}) is adopted under its handoff and a dry run writes nothing`, () => {
+    const fixture = reworkFixture(reworkScenario({ origin }));
+    try {
+      const result = fixture.run(childArgs(fixture));
+      assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+      const report = JSON.parse(result.stdout);
+      assert.equal(report.mode, 'dry-run');
+      assert.equal(report.outcome, 'planned');
+      assert.equal(report.ids.anchor, ANCHOR_REF);
+      assert.equal(report.ids.set, REWORK_SET);
+      assert.equal(report.ids.session, REWORK_SESSION);
+      assert.equal(report.anchor.owner, REWORK_OWNER);
+      assert.equal(report.anchor.rework.handoffId, REWORK_HANDOFF);
+      assert.deepEqual(report.anchor.rework.decisionGenerations, [1]);
+      assert.deepEqual(report.anchor.rework.owner, {
+        trusted: true,
+        setId: REWORK_SET,
+        sessionId: REWORK_SESSION,
+        anchor: ANCHOR_REF,
+        latestMarker: report.anchor.rework.owner.latestMarker,
+      });
+      assert.equal(report.anchor.rework.owner.latestMarker.mode, 'acquire');
+      assert.deepEqual(
+        report.steps.map((s: { step: string }) => s.step),
+        [
+          'anchor-check',
+          'lint',
+          'labels',
+          'journal-pending',
+          'create',
+          'identity-attach',
+          'anchor-heartbeat',
+          'owner-marker',
+          'provenance',
+          'anchor-verify',
+          'member',
+        ],
+      );
+      assert.deepEqual(writes(fixture.log()), []);
+      if (origin !== 'completed') {
+        // The source with no creation token and the former child publish too.
+        const applied = fixture.run([...childArgs(fixture), '--apply']);
+        assert.equal(applied.status, 0, `${applied.stdout}\n${applied.stderr}`);
+        const published = JSON.parse(applied.stdout);
+        assert.equal(published.outcome, 'published');
+        assert.equal(published.ids.set, REWORK_SET);
+      }
+    } finally {
+      fixture.restore();
+    }
+  });
+}
+
+test('rework: an apply joins the handoff set, preserves the old creation token and never edits the source', () => {
+  const scenario = reworkScenario();
+  const fixture = reworkFixture(scenario);
+  try {
+    const result = fixture.run([...childArgs(fixture), '--apply']);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.outcome, 'published');
+    assert.equal(report.journalState, 'member');
+    assert.equal(report.anchor.rework.handoffId, REWORK_HANDOFF);
+    assert.deepEqual(writeKinds(fixture), [
+      'journal-pending',
+      'create status:authoring',
+      'identity-attach',
+      'anchor:heartbeat',
+      'owner-marker',
+      'member',
+    ]);
+    const stored = fixture.state();
+    const source = stored.issues[String(ANCHOR)] as { body: string };
+    assert.equal(source.body, scenario.body);
+    assert.match(
+      source.body,
+      /^<!-- idd-skill-authoring-publication: .*set=set-original/,
+    );
+    const created = stored.issues[String(NEW_ISSUE)] as { body: string };
+    assert.match(
+      created.body,
+      new RegExp(
+        `^<!-- idd-skill-authoring-publication: target=target-[^;]+; anchor=${ANCHOR_REF}; set=${REWORK_SET}; session=${REWORK_SESSION}; token=token-`,
+      ),
+    );
+    const [heartbeat] = anchorComments(fixture).slice(-1);
+    assert.match(
+      heartbeat ?? '',
+      new RegExp(
+        `mode=heartbeat; owner=${REWORK_OWNER}; set=${REWORK_SET}; session=${REWORK_SESSION}; body-sha256=${sha256Of(scenario.body)}`,
+      ),
+    );
+    const [childMarker] = childComments(fixture);
+    assert.match(
+      childMarker ?? '',
+      new RegExp(
+        `target=o/r#${NEW_ISSUE}; anchor=${ANCHOR_REF}; mode=acquire;.*set=${REWORK_SET}; session=${REWORK_SESSION};`,
+      ),
+    );
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('rework: a source rewritten after the renew-before-edit heartbeat is still adopted, and the heartbeat snapshots the saved body', () => {
+  const scenario = reworkScenario();
+  const rewritten = `${scenario.body}\n\n## Success criteria\n\n- [ ] The alternative is delivered\n`;
+  scenario.liveBody = rewritten;
+  // The contract renews before an edit, so the latest owner marker still
+  // carries the pre-edit digest when the rewrite is saved.
+  scenario.comments.push({
+    issue: ANCHOR,
+    at: 55,
+    body: ownerMarkerText('heartbeat', {
+      owner: REWORK_OWNER,
+      set: REWORK_SET,
+      session: REWORK_SESSION,
+      bodySha256: sha256Of(scenario.body),
+    }),
+  });
+  const fixture = reworkFixture(scenario);
+  try {
+    const result = fixture.run([...childArgs(fixture), '--apply']);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.equal(
+      JSON.parse(result.stdout).anchor.rework.bodySha256,
+      sha256Of(rewritten),
+    );
+    const [heartbeat] = anchorComments(fixture).slice(-1);
+    assert.match(
+      heartbeat ?? '',
+      new RegExp(`mode=heartbeat;.*body-sha256=${sha256Of(rewritten)}`),
+    );
+    assert.equal(
+      (fixture.state().issues[String(ANCHOR)] as { body: string }).body,
+      rewritten,
+    );
+  } finally {
+    fixture.restore();
+  }
+});
+
+for (const origin of ['completed', 'none', 'former-child'] as const) {
+  test(`rework: the documented adoption sequence, run through post-idd-marker, leads to a publishable child (${origin})`, () => {
+    const scenario = reworkScenario({ origin });
+    dropComments(
+      scenario,
+      (item) =>
+        item.at >= 40 ||
+        (item.issue === ANCHOR && item.at === 38) ||
+        item.body.includes(`owner=${REWORK_OWNER};`),
+    );
+    const fixture = reworkFixture(scenario);
+    try {
+      const helper = (script: string, args: string[]) => {
+        const run = spawnSync(
+          process.execPath,
+          [join(REPO_ROOT, 'scripts', script), ...args, '--apply'],
+          {
+            cwd: join(fixture.dir, 'work'),
+            encoding: 'utf8',
+            env: {
+              ...process.env,
+              PUBLISH_STUB_DIR: fixture.dir,
+              HOME: join(fixture.dir, 'home'),
+              XDG_CONFIG_HOME: join(fixture.dir, 'home/.config'),
+              XDG_CACHE_HOME: join(fixture.dir, 'home/.cache'),
+              XDG_STATE_HOME: join(fixture.dir, 'home/.state'),
+              IDD_TRUSTED_MARKER_ACTORS: '',
+              IDD_HELPER_ERROR_ENVELOPE: '',
+              GH_HOST: 'github.com',
+              GH_TOKEN: 'credential-publish-test',
+              GITHUB_TOKEN: '',
+            },
+          },
+        );
+        assert.equal(run.status, 0, `${script}: ${run.stdout}\n${run.stderr}`);
+      };
+      const common = [
+        '--owner',
+        'o',
+        '--repo',
+        'r',
+        '--marker-prefix',
+        'idd-skill',
+        '--trusted-marker-logins',
+        'kurone-kito',
+      ];
+      // Before adoption the handoff alone grants nothing.
+      refusalOf(fixture);
+      helper('post-idd-marker.mjs', [
+        '--type',
+        'authoring-owner',
+        '--target',
+        'issue',
+        String(ANCHOR),
+        '--marker-target',
+        ANCHOR_REF,
+        '--anchor',
+        ANCHOR_REF,
+        '--mode',
+        'acquire',
+        '--marker-owner',
+        REWORK_OWNER,
+        '--set',
+        REWORK_SET,
+        '--session',
+        REWORK_SESSION,
+        '--snapshot-sha256',
+        'none',
+        '--supersedes',
+        'none',
+        ...common,
+      ]);
+      for (const [state, issue] of [
+        ['pending', 'none'],
+        ['pending', ANCHOR_REF],
+        ['member', ANCHOR_REF],
+      ] as const) {
+        // The owner acquired; the hold records follow, so the hold is missing
+        // until the last of them is posted.
+        helper('post-idd-marker.mjs', [
+          '--type',
+          'authoring-publication-intent',
+          '--target',
+          'issue',
+          '2674',
+          '--marker-target',
+          ANCHOR_REF,
+          '--anchor',
+          ANCHOR_REF,
+          '--set',
+          REWORK_SET,
+          '--session',
+          REWORK_SESSION,
+          '--token',
+          REWORK_HANDOFF,
+          '--journal',
+          'o/r#2674',
+          '--issue',
+          issue,
+          '--actor',
+          'kurone-kito',
+          '--state',
+          state,
+          ...common,
+        ]);
+      }
+      const dryRun = fixture.run(childArgs(fixture));
+      assert.equal(dryRun.status, 0, `${dryRun.stdout}\n${dryRun.stderr}`);
+      assert.equal(
+        JSON.parse(dryRun.stdout).anchor.rework.handoffId,
+        REWORK_HANDOFF,
+      );
+      const applied = fixture.run([...childArgs(fixture), '--apply']);
+      assert.equal(applied.status, 0, `${applied.stdout}\n${applied.stderr}`);
+      assert.equal(JSON.parse(applied.stdout).outcome, 'published');
+    } finally {
+      fixture.restore();
+    }
+  });
+}
+
+test('rework: a failure after the child create keeps the set, blocks a duplicate, and resumes the same set once reconciled', () => {
+  const fixture = reworkFixture(reworkScenario(), {
+    postFail: { mode: 'acquire', status: 422, landed: false },
+  });
+  try {
+    const first = fixture.run([...childArgs(fixture), '--apply']);
+    assert.equal(first.status, 1, `${first.stdout}\n${first.stderr}`);
+    const hold = JSON.parse(first.stdout);
+    assert.equal(hold.outcome, 'recovery-hold');
+    assert.equal(hold.failedStep, 'owner-marker');
+    assert.equal(hold.ids.set, REWORK_SET);
+    const logBefore = fixture.log().length;
+
+    // The set identity is durable: the same hold still verifies, and the
+    // child that was created but never became a member blocks a second child.
+    fixture.seed((stored) => {
+      stored.postFail = null;
+    });
+    const second = fixture.run([...childArgs(fixture), '--apply']);
+    assert.equal(second.status, 1, `${second.stdout}\n${second.stderr}`);
+    assert.match(
+      JSON.parse(second.stdout).reason,
+      /ends at pending with o\/r#5000 attached, so a child create may be unreconciled/,
+    );
+    assert.deepEqual(
+      fixture
+        .log()
+        .slice(logBefore)
+        .filter((entry) => entry.args.includes('POST')),
+      [],
+    );
+
+    // A person reconciles that exact token, and the next child joins the same
+    // set instead of opening another.
+    const token = /token=(token-[0-9a-f-]+) -->/.exec(
+      (fixture.state().issues[String(NEW_ISSUE)] as { body: string }).body,
+    )?.[1];
+    assert.ok(token);
+    fixture.seed((stored) => {
+      for (const [index, state] of ['cleanup', 'abandoned'].entries()) {
+        stored.comments.push({
+          id: 5900 + index,
+          issue: 2674,
+          body: [
+            `<!-- idd-skill-authoring-publication-intent: target=target-lost; anchor=${ANCHOR_REF}; set=${REWORK_SET}; session=${REWORK_SESSION}; token=${token}; journal=o/r#2674; issue=o/r#${NEW_ISSUE}; actor=kurone-kito; state=${state} -->`,
+            '_Issue-authoring publication-intent record. Do not edit or delete._',
+          ].join('\n'),
+          user: 'kurone-kito',
+          createdAt: new Date(Date.UTC(2026, 9, 14, 0, 0, index)).toISOString(),
+        });
+      }
+      delete (stored.issues as Record<string, unknown>)[String(NEW_ISSUE)];
+    });
+    const third = fixture.run([...childArgs(fixture), '--apply']);
+    assert.equal(third.status, 0, `${third.stdout}\n${third.stderr}`);
+    const report = JSON.parse(third.stdout);
+    assert.equal(report.outcome, 'published');
+    assert.equal(report.ids.set, REWORK_SET);
+    assert.equal(report.ids.session, REWORK_SESSION);
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('rework: a source that never got an issue for a token does not block the set', () => {
+  const scenario = reworkScenario();
+  scenario.comments.push({
+    issue: 2674,
+    at: 45,
+    body: [
+      `<!-- idd-skill-authoring-publication-intent: target=target-never; anchor=${ANCHOR_REF}; set=${REWORK_SET}; session=${REWORK_SESSION}; token=token-never; journal=o/r#2674; issue=none; actor=kurone-kito; state=pending -->`,
+      '_Issue-authoring publication-intent record. Do not edit or delete._',
+    ].join('\n'),
+  });
+  const fixture = reworkFixture(scenario);
+  try {
+    const result = fixture.run(childArgs(fixture));
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('rework: the heartbeat re-read stops the run when the source body changes', () => {
+  const fixture = reworkFixture(reworkScenario(), {
+    afterPost: [
+      {
+        mode: 'heartbeat',
+        action: 'anchorBodyEdit',
+        text: '\nedited by someone else',
+      },
+    ],
+  });
+  try {
+    const result = fixture.run([...childArgs(fixture), '--apply']);
+    assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
+    const hold = JSON.parse(result.stdout);
+    assert.equal(hold.outcome, 'recovery-hold');
+    assert.equal(hold.failedStep, 'anchor-heartbeat');
+    assert.match(
+      hold.reason,
+      /no longer holds: the source body changed during this run/,
+    );
+    // No owner marker or member record follows the changed source.
+    assert.equal(childComments(fixture).length, 0);
+    assert.ok(!writeKinds(fixture).includes('member'));
+  } finally {
+    fixture.restore();
+  }
+});
+
+interface RefusalCase {
+  name: string;
+  scenario: () => ReworkScenario;
+  options?: Parameters<typeof setup>[0];
+  /** The reason the run is refused with. */
+  reason: RegExp;
+  /** The reason the unchanged hold check gave, when the rework path ran. */
+  standard?: RegExp;
+  /** The handoff note, when the handoff did not apply. */
+  note?: { reason: string; issueCodes?: string[] };
+}
+
+const REFUSALS: RefusalCase[] = [
+  {
+    name: 'a valid handoff and an old completed set without a fresh owner generation',
+    scenario: () => {
+      const scenario = reworkScenario();
+      dropComments(scenario, (item) =>
+        item.body.includes(`owner=${REWORK_OWNER};`),
+      );
+      return scenario;
+    },
+    reason: /has no open owner generation/,
+  },
+  {
+    name: 'a label alone',
+    scenario: () => {
+      const scenario = reworkScenario();
+      scenario.labels = [];
+      return scenario;
+    },
+    reason: /does not carry the authoring label/,
+  },
+  {
+    name: 'an active competing coordination claim',
+    scenario: () => {
+      const scenario = reworkScenario();
+      dropComments(
+        scenario,
+        (item) => item.body.startsWith('<!-- unclaimed-by') && item.at === 33,
+      );
+      return scenario;
+    },
+    reason: /has an active claim/,
+  },
+  {
+    name: 'an open pull request',
+    scenario: () => {
+      const scenario = reworkScenario();
+      scenario.openPr = true;
+      return scenario;
+    },
+    reason: /has an open linked pull request/,
+  },
+  {
+    name: 'a foreign owner generation of another set',
+    scenario: () =>
+      reworkScenario({
+        generation: {
+          owner: 'owner-foreign',
+          set: 'set-foreign',
+          session: 'session-foreign',
+        },
+      }),
+    reason: /names set set-original, not the open generation's set set-foreign/,
+    note: { reason: 'the open generation is not the handoff set' },
+  },
+  {
+    name: 'the handoff set opened under another session',
+    scenario: () =>
+      reworkScenario({ generation: { session: 'session-other' } }),
+    reason:
+      /the generation opened with session session-other, not the handoff's session-rework/,
+    standard:
+      /names set set-original, not the open generation's set set-rework/,
+  },
+  {
+    name: 'a set the owner history already closed',
+    scenario: () => {
+      const scenario = reworkScenario();
+      const closed = {
+        owner: 'owner-early',
+        set: REWORK_SET,
+        session: REWORK_SESSION,
+      };
+      scenario.comments.push(
+        { issue: ANCHOR, at: 3, body: ownerMarkerText('acquire', closed) },
+        { issue: ANCHOR, at: 4, body: ownerMarkerText('release', closed) },
+        {
+          issue: ANCHOR,
+          at: 5,
+          body: ownerMarkerText('release-complete', closed),
+        },
+      );
+      return scenario;
+    },
+    reason:
+      /reuses set set-rework, which a release-complete marker already closed/,
+  },
+  {
+    name: 'a generation opened before the rework request',
+    scenario: () => reworkScenario({ acquireAt: 15 }),
+    reason: /before the first rework request/,
+  },
+  {
+    name: 'a claim marker after the generation opened',
+    scenario: () => {
+      const scenario = reworkScenario();
+      scenario.comments.push({
+        issue: ANCHOR,
+        at: 60,
+        body: unclaimMarker(
+          { claimId: 'claim-review-4000', agentId: 'codex-review0001' },
+          60,
+        ),
+      });
+      return scenario;
+    },
+    reason:
+      /a claim marker \(comment \d+\) follows the opening of the generation/,
+  },
+  {
+    name: 'a source edited after the handoff',
+    scenario: () => reworkScenario({ acquireDigest: 'e'.repeat(64) }),
+    reason: /opened on a body other than the source the handoff covers/,
+  },
+  {
+    name: 'an old creation token whose set the owner history does not show as closed',
+    scenario: () =>
+      reworkScenario({
+        origin: 'none',
+        bodyLine:
+          '<!-- idd-skill-authoring-publication: target=target-x; anchor=target-x; set=set-unknown; session=session-unknown; token=token-x -->',
+      }),
+    reason:
+      /names set set-unknown, which the verified owner history does not show as closed/,
+  },
+  {
+    name: 'an old creation token that names the handoff set',
+    scenario: () =>
+      reworkScenario({
+        origin: 'none',
+        bodyLine: `<!-- idd-skill-authoring-publication: target=target-x; anchor=target-x; set=${REWORK_SET}; session=${REWORK_SESSION}; token=token-x -->`,
+      }),
+    reason:
+      /already names the handoff set set-rework, so a prior set would be reused/,
+  },
+  {
+    name: 'an unreadable creation line',
+    scenario: () =>
+      reworkScenario({
+        origin: 'none',
+        bodyLine: '<!-- idd-skill-authoring-publication: garbage -->',
+      }),
+    reason: /unreadable authoring-publication line/,
+  },
+  {
+    name: 'a missing hold in the journal',
+    scenario: () => {
+      const scenario = reworkScenario();
+      dropComments(scenario, (item) => item.issue === 2674);
+      return scenario;
+    },
+    reason:
+      /no publication-intent record of the anchor's token is in the journal/,
+  },
+  {
+    name: 'a hold that never reached member',
+    scenario: () => {
+      const scenario = reworkScenario();
+      dropComments(scenario, (item) => item.issue === 2674 && item.at === 42);
+      return scenario;
+    },
+    reason: /is pending, not member/,
+  },
+  {
+    name: 'an unsettled child token of the set',
+    scenario: () => {
+      const scenario = reworkScenario();
+      for (const [at, issue] of [
+        [45, 'none'],
+        [46, 'o/r#5001'],
+      ] as const) {
+        scenario.comments.push({
+          issue: 2674,
+          at,
+          body: [
+            `<!-- idd-skill-authoring-publication-intent: target=target-half; anchor=${ANCHOR_REF}; set=${REWORK_SET}; session=${REWORK_SESSION}; token=token-half; journal=o/r#2674; issue=${issue}; actor=kurone-kito; state=pending -->`,
+            '_Issue-authoring publication-intent record. Do not edit or delete._',
+          ].join('\n'),
+        });
+      }
+      return scenario;
+    },
+    reason:
+      /token-half of the set set-rework ends at pending with o\/r#5001 attached/,
+  },
+  {
+    name: 'an untrusted record author',
+    scenario: () => {
+      const scenario = reworkScenario();
+      for (const item of scenario.comments) {
+        if (item.body.startsWith(PROVISIONAL_DECISION_RECORD_MARKER))
+          item.user = 'stranger';
+      }
+      return scenario;
+    },
+    reason: /names set set-original, not the open generation's set set-rework/,
+    note: { reason: 'record-authority-invalid' },
+  },
+  {
+    name: 'an edited rework request record',
+    scenario: () => {
+      const scenario = reworkScenario();
+      for (const item of scenario.comments) {
+        if (item.body.includes('"recordId":"rework-1"'))
+          item.lastEditedAt = '2026-10-12T01:00:00Z';
+      }
+      return scenario;
+    },
+    reason: /names set set-original, not the open generation's set set-rework/,
+    note: { reason: 'record-authority-invalid' },
+  },
+  {
+    name: 'a handoff that does not name the completed results of its bundle',
+    scenario: () =>
+      reworkScenario({
+        handoff: {
+          priorResults: [
+            {
+              decisionGeneration: 1,
+              workCompletedRecordId: 'other-record',
+              reference: REWORK_PR_URL,
+            },
+          ],
+        },
+      }),
+    reason: /names set set-original, not the open generation's set set-rework/,
+    note: {
+      reason: 'replay-invalid',
+      issueCodes: ['rework-handoff-results-mismatch'],
+    },
+  },
+  {
+    name: 'a handoff for another anchor',
+    scenario: () => reworkScenario({ handoff: { anchor: 'o/r#1' } }),
+    reason: /names set set-original, not the open generation's set set-rework/,
+    note: {
+      reason: 'replay-invalid',
+      issueCodes: ['rework-handoff-anchor-invalid'],
+    },
+  },
+  {
+    name: 'a completion that its merged pull request does not prove',
+    scenario: () => {
+      const scenario = reworkScenario();
+      scenario.pullRequests = {
+        [String(REWORK_PR)]: {
+          number: REWORK_PR,
+          merged: true,
+          mergedAt: at(22),
+          headRefOid: '3'.repeat(40),
+          mergeCommit: { oid: REWORK_MERGE },
+        },
+      };
+      return scenario;
+    },
+    reason: /names set set-original, not the open generation's set set-rework/,
+    note: { reason: 'replay-invalid' },
+  },
+  {
+    name: 'a trusted policy that cannot be read',
+    scenario: () => reworkScenario(),
+    options: { trustedConfigError: 'gh: HTTP 502 Bad Gateway (policy)' },
+    reason:
+      /the trusted policy cannot be read, so the provisional records are not verified/,
+  },
+  {
+    name: 'a trusted base policy that does not list the record author',
+    scenario: () => reworkScenario(),
+    options: { trustedConfig: { trustedMarkerActors: ['someone-else'] } },
+    reason: /names set set-original, not the open generation's set set-rework/,
+    // The record authors are not trusted by the base policy.
+    note: { reason: 'record-authority-invalid' },
+  },
+  {
+    name: 'an activation nonce after the generation opened',
+    scenario: () => {
+      const scenario = reworkScenario();
+      scenario.comments.push({
+        issue: ANCHOR,
+        at: 60,
+        body: `<!-- activation-nonce: codex-review0001 claim-review-4000 nonce-late ${at(60)} -->`,
+      });
+      return scenario;
+    },
+    reason:
+      /a claim marker \(comment \d+\) follows the opening of the generation/,
+  },
+  {
+    name: 'an edited child record of the set',
+    scenario: () => {
+      const scenario = reworkScenario();
+      scenario.comments.push({
+        issue: 2674,
+        at: 46,
+        lastEditedAt: '2026-10-12T02:00:00Z',
+        body: [
+          `<!-- idd-skill-authoring-publication-intent: target=target-edit; anchor=${ANCHOR_REF}; set=${REWORK_SET}; session=${REWORK_SESSION}; token=token-edit; journal=o/r#2674; issue=none; actor=kurone-kito; state=pending -->`,
+          '_Issue-authoring publication-intent record. Do not edit or delete._',
+        ].join('\n'),
+      });
+      return scenario;
+    },
+    reason:
+      /publication-intent record \d+ of the set set-rework was edited after posting/,
+  },
+  {
+    name: 'an unreadable record that names the set',
+    scenario: () => {
+      const scenario = reworkScenario();
+      scenario.comments.push({
+        issue: 2674,
+        at: 46,
+        body: `<!-- idd-skill-authoring-publication-intent: set=${REWORK_SET}; garbage -->`,
+      });
+      return scenario;
+    },
+    reason: /names the set set-rework but does not parse/,
+  },
+  {
+    name: 'a child token whose first record carries an issue and that then drops it',
+    scenario: () => {
+      const scenario = reworkScenario();
+      for (const [at, issue] of [
+        [46, 'o/r#5002'],
+        [47, 'none'],
+      ] as const) {
+        scenario.comments.push({
+          issue: 2674,
+          at,
+          body: [
+            `<!-- idd-skill-authoring-publication-intent: target=target-bad; anchor=${ANCHOR_REF}; set=${REWORK_SET}; session=${REWORK_SESSION}; token=token-bad; journal=o/r#2674; issue=${issue}; actor=kurone-kito; state=pending -->`,
+            '_Issue-authoring publication-intent record. Do not edit or delete._',
+          ].join('\n'),
+        });
+      }
+      return scenario;
+    },
+    reason:
+      /records of the publication token token-bad of the set set-rework are out of order/,
+  },
+  {
+    name: 'a child token that reaches cleanup without ever getting an issue',
+    scenario: () => {
+      const scenario = reworkScenario();
+      for (const [at, state] of [
+        [46, 'pending'],
+        [47, 'cleanup'],
+      ] as const) {
+        scenario.comments.push({
+          issue: 2674,
+          at,
+          body: [
+            `<!-- idd-skill-authoring-publication-intent: target=target-gone; anchor=${ANCHOR_REF}; set=${REWORK_SET}; session=${REWORK_SESSION}; token=token-gone; journal=o/r#2674; issue=none; actor=kurone-kito; state=${state} -->`,
+            '_Issue-authoring publication-intent record. Do not edit or delete._',
+          ].join('\n'),
+        });
+      }
+      return scenario;
+    },
+    reason:
+      /records of the publication token token-gone of the set set-rework are out of order/,
+  },
+  {
+    name: 'a token with no issue attached whose issue exists',
+    scenario: () => {
+      const scenario = reworkScenario();
+      scenario.comments.push({
+        issue: 2674,
+        at: 46,
+        body: [
+          `<!-- idd-skill-authoring-publication-intent: target=target-lost; anchor=${ANCHOR_REF}; set=${REWORK_SET}; session=${REWORK_SESSION}; token=token-lost; journal=o/r#2674; issue=none; actor=kurone-kito; state=pending -->`,
+          '_Issue-authoring publication-intent record. Do not edit or delete._',
+        ].join('\n'),
+      });
+      scenario.tokenIssues = { 'token-lost': 5555 };
+      return scenario;
+    },
+    reason:
+      /token-lost of the set set-rework has no issue attached in the journal, but o\/r#5555 carries it/,
+  },
+  {
+    name: 'a child token abandoned straight after an attached pending record',
+    scenario: () => {
+      const scenario = reworkScenario();
+      for (const [at, state, issue] of [
+        [46, 'pending', 'none'],
+        [47, 'pending', 'o/r#5003'],
+        [48, 'abandoned', 'o/r#5003'],
+      ] as const) {
+        scenario.comments.push({
+          issue: 2674,
+          at,
+          body: [
+            `<!-- idd-skill-authoring-publication-intent: target=target-skip; anchor=${ANCHOR_REF}; set=${REWORK_SET}; session=${REWORK_SESSION}; token=token-skip; journal=o/r#2674; issue=${issue}; actor=kurone-kito; state=${state} -->`,
+            '_Issue-authoring publication-intent record. Do not edit or delete._',
+          ].join('\n'),
+        });
+      }
+      return scenario;
+    },
+    reason:
+      /records of the publication token token-skip of the set set-rework are out of order/,
+  },
+  {
+    name: 'a child token that became a member before any issue was attached',
+    scenario: () => {
+      const scenario = reworkScenario();
+      for (const [at, state, issue] of [
+        [46, 'pending', 'none'],
+        [47, 'member', 'o/r#5004'],
+      ] as const) {
+        scenario.comments.push({
+          issue: 2674,
+          at,
+          body: [
+            `<!-- idd-skill-authoring-publication-intent: target=target-early; anchor=${ANCHOR_REF}; set=${REWORK_SET}; session=${REWORK_SESSION}; token=token-early; journal=o/r#2674; issue=${issue}; actor=kurone-kito; state=${state} -->`,
+            '_Issue-authoring publication-intent record. Do not edit or delete._',
+          ].join('\n'),
+        });
+      }
+      return scenario;
+    },
+    reason:
+      /records of the publication token token-early of the set set-rework are out of order/,
+  },
+  {
+    name: 'a malformed claim marker in the claim history',
+    scenario: () => {
+      const scenario = reworkScenario();
+      scenario.comments.push({
+        issue: ANCHOR,
+        at: 5,
+        body: '<!-- claimed-by: garbage -->',
+      });
+      return scenario;
+    },
+    reason: /names set set-original, not the open generation's set set-rework/,
+    note: { reason: 'claim-lineage-malformed-claim-marker' },
+  },
+  {
+    name: 'a claim that only the default-branch policy sees as active',
+    scenario: () => {
+      const scenario = reworkScenario();
+      scenario.comments.push({
+        issue: ANCHOR,
+        at: 34,
+        user: 'claimer',
+        body: claimMarker({
+          claimId: 'claim-base-only',
+          agentId: 'codex-claimer001',
+          branch: 'issue/4000-base-only',
+          claimedAt: at(34),
+        }),
+      });
+      return scenario;
+    },
+    options: {
+      trustedConfig: { trustedMarkerActors: ['kurone-kito', 'claimer'] },
+    },
+    reason:
+      /the claim claim-base-only is active under the trusted default-branch policy/,
+  },
+  {
+    name: 'a hold completed before the generation opened',
+    scenario: () => reworkScenario({ acquireAt: 60 }),
+    reason:
+      /the hold of the handoff reached member at comment \d+, before the generation opened at comment \d+/,
+  },
+];
+
+for (const refusal of REFUSALS) {
+  test(`rework: ${refusal.name} is refused before any write`, () => {
+    const fixture = reworkFixture(refusal.scenario(), refusal.options ?? {});
+    try {
+      for (const apply of [false, true]) {
+        const report = refusalOf(fixture, apply);
+        assert.equal(report.outcome, 'refused');
+        assert.match(report.reason, refusal.reason);
+        if (refusal.standard !== undefined) {
+          assert.match(report.standardCheck ?? '', refusal.standard);
+        }
+        if (refusal.note !== undefined) {
+          assert.equal(report.reworkHandoff?.reason, refusal.note.reason);
+          if (refusal.note.issueCodes !== undefined) {
+            assert.deepEqual(
+              report.reworkHandoff?.issueCodes,
+              refusal.note.issueCodes,
+            );
+          }
+        }
+      }
+    } finally {
+      fixture.restore();
+    }
+  });
+}
+
+test('rework: a plain anchor keeps the original check and its messages', () => {
+  const fixture = setup({
+    labels: ['status:authoring'],
+    trustedConfig: TRUSTED_BASE,
+  });
+  try {
+    seedAnchor(fixture, { body: roadmapDraftBody() });
+    const result = fixture.run(childArgs(fixture));
+    assert.equal(result.status, 1, result.stdout);
+    const report = JSON.parse(result.stdout);
+    assert.match(
+      report.reason,
+      /the body of the anchor o\/r#4000 carries no authoring-publication line/,
+    );
+    assert.equal(report.standardCheck, undefined);
+    assert.equal(report.reworkHandoff, undefined);
+    // No provisional record, so nothing beyond the original reads happened.
+    assert.ok(
+      !fixture
+        .log()
+        .some((entry) =>
+          entry.args.some((arg) => arg.includes('contents/.github')),
+        ),
+    );
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('rework: a resumed generation still verifies against the opening session', () => {
+  const scenario = reworkScenario();
+  scenario.comments.push({
+    issue: ANCHOR,
+    at: 55,
+    body: ownerMarkerText('resume', {
+      owner: 'owner-resumed',
+      set: REWORK_SET,
+      session: 'session-resumed',
+      supersedes: REWORK_OWNER,
+      bodySha256: sha256Of(scenario.body),
+    }),
+  });
+  const fixture = reworkFixture(scenario);
+  try {
+    const result = fixture.run([...childArgs(fixture), '--apply']);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.outcome, 'published');
+    // The child takes the resumed session, and the owner facts keep the
+    // opening session that the handoff names.
+    assert.equal(report.ids.session, 'session-resumed');
+    assert.equal(report.anchor.owner, 'owner-resumed');
+    assert.equal(report.anchor.rework.owner.sessionId, REWORK_SESSION);
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('rework: the check before member stops the run when the source body changes after the child owner marker', () => {
+  const fixture = reworkFixture(reworkScenario(), {
+    afterPost: [
+      { mode: 'acquire', action: 'anchorBodyEdit', text: '\nedited late' },
+    ],
+  });
+  try {
+    const result = fixture.run([...childArgs(fixture), '--apply']);
+    assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
+    const hold = JSON.parse(result.stdout);
+    assert.equal(hold.outcome, 'recovery-hold');
+    assert.equal(hold.failedStep, 'anchor-verify');
+    assert.match(
+      hold.reason,
+      /no longer holds: the source body changed during this run/,
+    );
+    assert.ok(!writeKinds(fixture).includes('member'));
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('rework: a handoff hold written with a mixed-case anchor verifies', () => {
+  const fixture = reworkFixture(
+    reworkScenario({
+      handoff: { anchor: 'O/R#4000' },
+      holdAnchor: 'O/R#4000',
+    }),
+  );
+  try {
+    const result = fixture.run(childArgs(fixture));
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.equal(
+      JSON.parse(result.stdout).anchor.rework.owner.anchor,
+      'O/R#4000',
+    );
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('rework: an unreadable completion proof or an unreadable token scan refuses the run', () => {
+  const proofFixture = reworkFixture(reworkScenario());
+  try {
+    proofFixture.seed((stored) => {
+      stored.prReadsFail = true;
+    });
+    const report = refusalOf(proofFixture);
+    assert.match(report.reason, /the completion proof of .* cannot be read/);
+  } finally {
+    proofFixture.restore();
+  }
+  const scenario = reworkScenario();
+  scenario.comments.push({
+    issue: 2674,
+    at: 46,
+    body: [
+      `<!-- idd-skill-authoring-publication-intent: target=target-lost; anchor=${ANCHOR_REF}; set=${REWORK_SET}; session=${REWORK_SESSION}; token=token-lost; journal=o/r#2674; issue=none; actor=kurone-kito; state=pending -->`,
+      '_Issue-authoring publication-intent record. Do not edit or delete._',
+    ].join('\n'),
+  });
+  const scanFixture = reworkFixture(scenario);
+  try {
+    scanFixture.seed((stored) => {
+      stored.tokenListFails = true;
+    });
+    const report = refusalOf(scanFixture);
+    assert.match(
+      report.reason,
+      /cannot be scanned for the publication tokens token-lost, so a child create may be unreconciled/,
+    );
+  } finally {
+    scanFixture.restore();
+  }
+});
+
+test('rework: a source edited between the first read and the first write is refused before any write', () => {
+  const fixture = reworkFixture(reworkScenario());
+  try {
+    fixture.seed((stored) => {
+      // The scenario body names another set, so the original hold check reads
+      // no journal, and the first journal read is the last read of the first
+      // evaluation.
+      stored.anchorEditAtJournalRead = 1;
+    });
+    const report = refusalOf(fixture, true);
+    assert.match(
+      report.reason,
+      /no longer holds: the source body changed during this run/,
+    );
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('rework: the token scan lists issues since just before the token first record and filters inside gh', () => {
+  const scenario = reworkScenario();
+  scenario.comments.push({
+    issue: 2674,
+    at: 46,
+    body: [
+      `<!-- idd-skill-authoring-publication-intent: target=target-lost; anchor=${ANCHOR_REF}; set=${REWORK_SET}; session=${REWORK_SESSION}; token=token-lost; journal=o/r#2674; issue=none; actor=kurone-kito; state=pending -->`,
+      '_Issue-authoring publication-intent record. Do not edit or delete._',
+    ].join('\n'),
+  });
+  const fixture = reworkFixture(scenario);
+  try {
+    // No issue carries the token, so the run is not blocked.
+    const result = fixture.run(childArgs(fixture));
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    const listing = fixture
+      .log()
+      .find((entry) =>
+        entry.args.some((arg) => arg.includes('issues?state=all&since=')),
+      );
+    assert.ok(listing, 'the issue listing ran');
+    assert.ok(listing.args.includes('--paginate'));
+    assert.ok(listing.args.includes('--jq'));
+    // Sixty seconds before the first record of the token, at second 46.
+    assert.ok(
+      listing.args.some((arg) =>
+        arg.includes(`since=${encodeURIComponent('2026-10-11T23:59:46Z')}`),
+      ),
+      JSON.stringify(listing.args),
+    );
+    const program = listing.args[listing.args.indexOf('--jq') + 1] ?? '';
+    assert.match(program, /"token-lost"/);
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('token listing: the since is a minute before the earliest first record', () => {
+  assert.equal(
+    tokenListingSince([
+      { token: 'a', since: '2026-10-12T00:05:00.000Z' },
+      { token: 'b', since: '2026-10-12T00:01:30.000Z' },
+    ]),
+    '2026-10-12T00:00:30Z',
+  );
+});
+
+test('token listing: the jq program prints one line per issue and token, skips pull requests, and keeps its quoting', () => {
+  const jq = spawnSync('jq', ['--version'], { encoding: 'utf8' });
+  if (jq.status !== 0) {
+    return;
+  }
+  const awkward = 'token-"q"\\x';
+  const rows = [
+    { number: 7, body: 'body with token-a inside', pull_request: null },
+    { number: 8, body: 'token-a in a pull request', pull_request: {} },
+    { number: 9, body: null },
+    { number: 10, body: `quotes ${awkward} and token-b` },
+    { number: 11, body: 'token-a and token-b' },
+  ];
+  const run = spawnSync(
+    'jq',
+    ['-r', tokenListingProgram(['token-a', 'token-b', awkward])],
+    { input: JSON.stringify(rows), encoding: 'utf8' },
+  );
+  assert.equal(run.status, 0, run.stderr);
+  assert.deepEqual(run.stdout.trim().split('\n'), [
+    'token-a\t7',
+    `token-b\t10`,
+    `${awkward}\t10`,
+    'token-a\t11',
+    'token-b\t11',
+  ]);
 });
