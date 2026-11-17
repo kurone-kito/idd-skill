@@ -4880,6 +4880,24 @@ const RULE_CASES: readonly RuleCase[] = [
   },
   {
     ruleId: 'RWA008',
+    name: 'a test part list that drops the repository test of the audit',
+    path: PNPM_BOUNDARY,
+    mutation: {
+      transform: (text: string) => {
+        const line = '              tests/repository-workflow-audit.test.mts\n';
+        anchored(text, line);
+        return text.replace(line, '');
+      },
+    },
+    expected: [
+      {
+        message:
+          'tests/repository-workflow-audit.test.mts must be listed in a test part -- that file holds the repository test that fails when any other test file is listed in no part',
+      },
+    ],
+  },
+  {
+    ruleId: 'RWA008',
     name: 'a test part that lists a path outside tests/',
     path: PNPM_BOUNDARY,
     mutation: {

@@ -1936,6 +1936,11 @@ const PNPM_BOUNDARY_TEST_PART_RUN =
   'pnpm exec node --test --import ./tests/isolate-state.mts $TEST_FILES';
 const PNPM_BOUNDARY_TEST_FILE_PATTERN =
   /^tests\/[A-Za-z0-9][\w.-]*\.test\.mts$/;
+// The repository test that fails when any other test file is listed in no part.
+// The audit cannot read tests/, so it requires this one path, and a repack
+// cannot drop that test from CI unnoticed (preventive; no observed incident
+// yet).
+const PNPM_BOUNDARY_GUARD_TEST = 'tests/repository-workflow-audit.test.mts';
 const PNPM_BOUNDARY_FULL_RUN = `\${{ inputs.lint-command || 'pnpm run check' }}`;
 const PNPM_BOUNDARY_BOUNDARY_RUN = `\${{ inputs.boundary-command || 'node scripts/check-pnpm-boundary.mjs' }}`;
 const PNPM_BOUNDARY_BOUNDARY_IF = `\${{ matrix.shard == 'distribution' }}`;
@@ -2355,9 +2360,13 @@ function checkPnpmBoundaryMatrix(
   // A file in two parts would run twice and could not keep both parts within
   // their measured duration, so each path is listed once across the parts.
   const listed = new Set<string>();
+  let everyPartParsed = true;
   for (const entry of entries ?? []) {
-    for (const listedPath of pnpmBoundaryTestFilePaths(entry?.['test-files']) ??
-      []) {
+    const listedPaths = pnpmBoundaryTestFilePaths(entry?.['test-files']);
+    if (listedPaths === undefined && isTestPart(String(entry?.shard))) {
+      everyPartParsed = false;
+    }
+    for (const listedPath of listedPaths ?? []) {
       if (listed.has(listedPath)) {
         report(
           RWA008,
@@ -2367,6 +2376,15 @@ function checkPnpmBoundaryMatrix(
       }
       listed.add(listedPath);
     }
+  }
+  // A part that failed to parse already has its own report above, and its
+  // paths cannot be read, so the guard path is only checked once all parse.
+  if (everyPartParsed && !listed.has(PNPM_BOUNDARY_GUARD_TEST)) {
+    report(
+      RWA008,
+      path,
+      `${PNPM_BOUNDARY_GUARD_TEST} must be listed in a test part -- that file holds the repository test that fails when any other test file is listed in no part`,
+    );
   }
 
   // Every check-project group is owned by exactly one shard per Node version.
