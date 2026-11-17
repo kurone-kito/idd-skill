@@ -636,16 +636,18 @@ anchor's body, so the roadmap's Tracks list stays a separate reviewed edit.
 
 A child's anchor can also be a retained decision source whose operator chose
 another option (a rework). There is no flag. The original check above runs
-first and unchanged, with its messages. Only when it refuses, and the anchor
-carries trusted provisional-decision records that replay to a rework handoff
-whose set is the open generation's set, does the rework check apply instead of
-the body publication line; both reasons are reported when neither holds. The
-rework check requires: the handoff names this anchor, the generation's opening
-marker carries the handoff's session, and the set is not closed in the owner
-history; the generation opened after the first rework request and no claim,
-release, nonce or forced-handoff marker follows its opening; the opening
-marker's body digest is the source the handoff covers, and every read of the
-run sees the body digest of its first read; the old creation token, when the
+first and unchanged, with its messages. When the anchor carries trusted
+provisional-decision records that replay to a rework handoff whose set is the
+open generation's set, the rework check applies in place of the body
+publication line, and a passing original check does not skip it (a body line
+rewritten to the handoff's own hold is refused); both reasons are reported when
+neither holds. The rework check requires: the handoff names this anchor, the
+generation's opening marker carries the handoff's session, and the set is not
+closed in the owner history; the generation opened after the first rework
+request and no claim, release, nonce or forced-handoff marker follows its
+opening; the opening marker's body digest is the source the handoff covers, the
+latest owner marker records the live body (a heartbeat after saving), and every
+read of the run sees the body digest of its first read; the old creation token, when the
 body has one, names another set that the owner history shows as closed (an
 unreadable line, the handoff set, or an unproven set is refused, and the line
 is never rewritten); the handoff's own hold (token = handoff id, target and
@@ -2348,6 +2350,12 @@ function evaluateReworkAnchor(input: {
         'the generation opened on a body other than the source the handoff covers',
       );
     }
+    const { latest } = checked.generation;
+    if (latest.bodySha256 !== liveDigest) {
+      return refused(
+        `the source body is not the one the latest owner marker (comment ${latest.id}) records, so it was edited without a same-owner heartbeat: post that heartbeat after saving the body, then run again`,
+      );
+    }
   } else if (liveDigest !== expected.bodySha256) {
     return refused('the source body changed during this run');
   }
@@ -2909,7 +2917,11 @@ function runCli(): HelperCliResult {
     });
     let rework: ReworkAdoption | null = null;
     let reverify: AnchorContext['reverify'] = null;
-    if (holdProblem !== null) {
+    // The rework evaluation also runs when the original check passes, so a
+    // retained source whose body line already names the handoff's own hold
+    // cannot take the ordinary path and skip the rework checks. It reads
+    // nothing for an anchor with no provisional decision record.
+    {
       // A merged pull request stays merged, so its proof is kept for the run.
       const mergedProofs = new Map<
         number,
@@ -2982,31 +2994,35 @@ function runCli(): HelperCliResult {
         });
       };
       const evaluation = evaluateRework(checked, null);
-      if (evaluation.mode !== 'rework') {
-        return refuse(
-          evaluation.mode === 'refused' ? evaluation.problem : holdProblem,
-          {
-            repository: { owner, repo },
-            anchor: ref,
-            ...(evaluation.mode === 'refused'
-              ? { standardCheck: holdProblem }
-              : evaluation.note === undefined
-                ? {}
-                : { reworkHandoff: evaluation.note }),
-          },
-        );
+      if (evaluation.mode === 'refused') {
+        return refuse(evaluation.problem, {
+          repository: { owner, repo },
+          anchor: ref,
+          ...(holdProblem === null ? {} : { standardCheck: holdProblem }),
+        });
       }
-      const adopted = evaluation.adoption;
-      rework = adopted;
-      reverify = (fresh) => {
-        const again = evaluateRework(fresh, adopted);
-        // A re-read never answers `standard` (it refuses instead).
-        return again.mode === 'rework'
-          ? null
-          : again.mode === 'refused'
-            ? again.problem
-            : 'the rework adoption no longer applies';
-      };
+      if (evaluation.mode === 'standard' && holdProblem !== null) {
+        return refuse(holdProblem, {
+          repository: { owner, repo },
+          anchor: ref,
+          ...(evaluation.note === undefined
+            ? {}
+            : { reworkHandoff: evaluation.note }),
+        });
+      }
+      if (evaluation.mode === 'rework') {
+        const adopted = evaluation.adoption;
+        rework = adopted;
+        reverify = (fresh) => {
+          const again = evaluateRework(fresh, adopted);
+          // A re-read never answers `standard` (it refuses instead).
+          return again.mode === 'rework'
+            ? null
+            : again.mode === 'refused'
+              ? again.problem
+              : 'the rework adoption no longer applies';
+        };
+      }
     }
     anchor = {
       ref,

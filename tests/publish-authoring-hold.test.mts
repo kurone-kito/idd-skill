@@ -6222,10 +6222,9 @@ test('rework: an apply joins the handoff set, preserves the old creation token a
   }
 });
 
-test('rework: a source rewritten after the renew-before-edit heartbeat is still adopted, and the heartbeat snapshots the saved body', () => {
+test('rework: a source edited after the latest owner heartbeat is refused until a heartbeat records the saved body', () => {
   const scenario = reworkScenario();
-  const rewritten = `${scenario.body}\n\n## Success criteria\n\n- [ ] The alternative is delivered\n`;
-  scenario.liveBody = rewritten;
+  scenario.liveBody = `${scenario.body}\n\n## Success criteria\n\n- [ ] The alternative is delivered\n`;
   // The contract renews before an edit, so the latest owner marker still
   // carries the pre-edit digest when the rewrite is saved.
   scenario.comments.push({
@@ -6238,6 +6237,39 @@ test('rework: a source rewritten after the renew-before-edit heartbeat is still 
       bodySha256: sha256Of(scenario.body),
     }),
   });
+  const fixture = reworkFixture(scenario);
+  try {
+    for (const apply of [false, true]) {
+      const report = refusalOf(fixture, apply);
+      assert.match(
+        report.reason,
+        /the source body is not the one the latest owner marker \(comment \d+\) records, so it was edited without a same-owner heartbeat/,
+      );
+    }
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('rework: a source rewritten and recorded by a heartbeat after saving is adopted, and the run keeps that digest', () => {
+  const scenario = reworkScenario();
+  const rewritten = `${scenario.body}\n\n## Success criteria\n\n- [ ] The alternative is delivered\n`;
+  scenario.liveBody = rewritten;
+  for (const [at, digest] of [
+    [55, sha256Of(scenario.body)],
+    [56, sha256Of(rewritten)],
+  ] as const) {
+    scenario.comments.push({
+      issue: ANCHOR,
+      at,
+      body: ownerMarkerText('heartbeat', {
+        owner: REWORK_OWNER,
+        set: REWORK_SET,
+        session: REWORK_SESSION,
+        bodySha256: digest,
+      }),
+    });
+  }
   const fixture = reworkFixture(scenario);
   try {
     const result = fixture.run([...childArgs(fixture), '--apply']);
@@ -7398,6 +7430,27 @@ test('rework: the default-branch trust policy is read again at each re-verificat
     assert.match(hold.reason, /no longer holds/);
     // No member record follows the revoked trust.
     assert.ok(!writeKinds(fixture).includes('member'));
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('rework: a verified handoff cannot take the ordinary path through a body line naming its own hold', () => {
+  // The old creation line was rewritten to the handoff's own hold, so the
+  // original check passes; the rework check still refuses the reused set.
+  const scenario = reworkScenario({
+    bodyLine: `<!-- idd-skill-authoring-publication: target=${ANCHOR_REF}; anchor=${ANCHOR_REF}; set=${REWORK_SET}; session=${REWORK_SESSION}; token=${REWORK_HANDOFF} -->`,
+  });
+  const fixture = reworkFixture(scenario);
+  try {
+    for (const apply of [false, true]) {
+      const report = refusalOf(fixture, apply);
+      assert.match(
+        report.reason,
+        /the creation token of the body already names the handoff set set-rework/,
+      );
+      assert.equal(report.standardCheck, undefined);
+    }
   } finally {
     fixture.restore();
   }
