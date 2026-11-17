@@ -2794,8 +2794,12 @@ only approval boundary.
   order pending without an issue, pending with the issue, member, and only
   then cleanup and abandoned, with any conflicting or out-of-order record
   failing closed. That is how this command verifies the set's originating
-  Stage 1 hold, so it cannot extend a set whose hold lives elsewhere. For
-  `--shape child`, the anchor's hold is read from `issueAuthoring.journalIssue`
+  Stage 1 hold, so it cannot extend a set whose hold lives elsewhere. The one
+  exception is a retained decision source adopted for rework, whose hold is the
+  handoff's (see
+  [Rework adoption of a retained decision source](#rework-adoption-of-a-retained-decision-source)).
+  For `--shape child`, the anchor's hold is read from
+  `issueAuthoring.journalIssue`
   and from every journal listed in `issueAuthoring.retiredJournalIssues`, the
   records merged in time order; every record this command writes still goes
   to `issueAuthoring.journalIssue`, and a hold in any other issue is refused.
@@ -4027,6 +4031,146 @@ only approval boundary.
      backlog check for that journal by hand at each of the three sweep points
      above: the per-target preflight, the anchor before release-complete, and
      the closing sweep.
+
+### Rework adoption of a retained decision source
+
+A needs-decision source that carries provisional-decision records can end with
+the operator choosing another option. That choice is recorded as a
+`rework-requested` record whose `handoff` preallocates the fresh authoring set
+and session, a stable `handoffId`, and the source as the `anchor`. The same
+issue then becomes its rework roadmap under the normal hold. Never create a
+second source roadmap, and never release the new set automatically (preventive;
+no observed incident yet). The handoff
+is not ownership and grants no edit or publication permission: every claim,
+pull request, label, owner, snapshot, heartbeat, and journal check below still
+precedes each edit and each child.
+
+The authoring session runs these steps, in this order, after the coordination
+claim of the confirmation review is released:
+
+1. Re-read the source. It must be open (reopen a closed source first, because
+   the guarded transition needs it open), not a pull request, with no active
+   claim and no open linked pull request. Do not edit its body before step 2.
+2. Apply the authoring label, then append a `mode=acquire` owner marker with
+   `target` and `anchor` both the source, the handoff's `authoringSetId` and
+   `authoringSessionId`, a new owner token, `supersedes=none`, and the digest
+   of the body just read. That body must be the source the handoff covers.
+3. Verify the generation as for any acquisition (settle delay, full paginated
+   replay, claim and pull-request re-check), then append the handoff's own hold
+   to `issueAuthoring.journalIssue`: the `authoring-publication-intent`
+   records `pending` with `issue=none`, `pending` with the source reference,
+   and `member`, all with `token` the `handoffId`, `target` and `anchor` the
+   handoff's `anchor` verbatim, and the handoff's set and session. The body's
+   old creation token, if it has one, stays as historical evidence: do not
+   rewrite it, and never use it as the new set's token or reuse its set.
+4. Rewrite the source body as the rework roadmap under the per-target
+   rules: the completed-draft adversarial review and the mechanical
+   `audit-authored-issue` pass first, a same-owner heartbeat before each
+   edit, and one after saving whose digest is the saved body. The rewritten
+   body keeps its first line, carries exactly one roadmap identity marker and
+   a `## Tracks` list of every active child, and states revised success
+   criteria that are objective and implement the operator's selected
+   alternative. It names the downstream work the handoff lists
+   (`anchor.rework.downstreamResults` in the report of a child dry run, which
+   you run before the rewrite and again before saving it, because a rework
+   request recorded during authoring adds to that list), keeps the earlier
+   options, the selected choice, and the implementation links, and keeps any
+   parent or nested-roadmap line so those relationships stay coherent.
+5. Publish each child with `publish-authoring-hold --shape child --anchor
+   <source>`, one call at a time, each under its own completed-draft review.
+   There is no flag: the helper checks the hold named by the anchor's body
+   line first, unchanged, and then reads the anchor's trusted provisional
+   records (when it has any) as Discover does: the default-branch trusted
+   policy, not the local file (read again by every check, so a revoked actor
+   stops a run), and an untrusted or edited record marker refuses the whole
+   history. It does not use the environment actor list or the
+   user-global layer, so a record that Discover accepts through them is refused
+   here. The claim history must also pass the lineage check, and the trusted
+   default branch must see no active claim. A source whose claims include a
+   takeover, two claims in one second, or a legacy, edited, or malformed claim
+   marker is refused, and that history is append-only, so a maintainer decides
+   how such a source is handled. The
+   rework check applies only when the records replay to a handoff whose set is
+   the open generation's set. Otherwise the original check decides, and its
+   refusal carries the handoff reason in its report. When it applies, the
+   original check passing is not enough: every item holds or the call stops
+   before any write, so a body line rewritten to the handoff's own hold cannot
+   take the ordinary path. A record of the anchor that asks for a rework under
+   a handoff for the open set, but that the check cannot verify (an unreadable
+   policy, an untrusted record, a refused replay), refuses the call too:
+
+   - the handoff names this anchor, the generation's opening marker carries the
+     handoff's session (so a resumed set still verifies), and the set is not
+     closed in the verified owner history, former-child memberships included;
+   - the generation opened after the first rework request, and no
+     `claimed-by`, `unclaimed-by`, `activation-nonce`, or `forced-handoff`
+     marker from a trusted author follows its opening;
+   - the opening marker's body digest is the source the handoff covers, the
+     latest owner marker of the generation records the live body at every
+     check (the heartbeat after saving that step 4 requires; a body edited
+     since is refused until that heartbeat is posted, and a later heartbeat
+     that records another body stops a run), and every read of the run sees
+     the body digest of its first read, so an edit during a run stops it;
+   - when the body carries a creation token, it names another set that the
+     owner history proves closed; an unreadable line, a line naming the
+     handoff set, or an unproven set is an unknown prior set and is refused. A
+     source with no creation token passes this item;
+   - the handoff's own hold replays to `member`, its `member` record follows
+     the generation's opening (the hold is written after the owner acquires),
+     and, on the first read only, every other token of the set replays through
+     the same record order and ends settled (`member`, or `cleanup` then
+     `abandoned`). Each of its records names the journal it was read from, its
+     actor is its author, its minimization state is readable, the token's
+     records agree on one target, one session, and one set, a record of this
+     set names this anchor (the set's own children are all anchored at the
+     source), and the latest record is not minimized as outdated. A token
+     that ends at `cleanup`, or at `pending` after an issue was attached, or
+     whose records break those rules, is a created but unfinished child that
+     must be reconciled before another child (preventive; no observed incident
+     yet). A token that never got an issue cannot be closed by any record, so
+     the helper lists the repository's issues updated since a minute before
+     the token's first record (one paginated call that filters inside `gh`,
+     with no search-index lag) and refuses when one carries it; a failed
+     listing refuses too.
+
+   The same items, except the token checks of the first read, run again right
+   before the first write, at the heartbeat reads, and before `member`, so a
+   changed owner, handoff, request, or source stops the run. A failure after a
+   create is a recovery hold: the set identity is already durable in the
+   handoff, the owner log, and the hold, and the next call joins the same set
+   once that exact token is reconciled.
+6. Wire each child's number into `## Tracks` as a separate reviewed edit, with
+   the same review, lint, and heartbeat rules.
+7. Record the `rework-authored` transition with the guarded `rework-authored`
+   request of `runProvisionalResolution` (`docs/idd-workflow.md`, "Resolving a
+   confirmation-pending source"), then leave the set held for the normal
+   Stage 2 release. No shipped command runs that request yet: the
+   `idd-provisional-decision` command takes only the `selected`,
+   `work-started` and `work-completed` requests, so the request is made by
+   calling the function from a script. The report's `anchor.rework.owner` gives
+   the values of the owner fields, and the other facts come from these
+   sources:
+
+   | Fact                                                              | Source                                                                                                                               |
+   | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+   | `owner.trusted`, `owner.setId`, `owner.sessionId`, `owner.anchor` | `anchor.rework.owner` of the helper report; the session is the opening session                                                       |
+   | `owner.fresh`                                                     | `anchor.rework.owner.latestMarker.createdAt` younger than `issueAuthoring.authoringStaleAge`; renew first                            |
+   | `roadmap.audited`, `roadmap.auditedSource`                        | `audit-authored-issue --shape roadmap` on the saved body; the title and digest are captured before the roadmap and children are read |
+   | `roadmap.markerId`, `roadmap.url`, `roadmap.issueNumber`          | the roadmap identity marker value, and the source's URL and number                                                                   |
+   | `roadmap.publishedCommentId`, `roadmap.publishedAt`               | the saved-body owner heartbeat on the source, posted after the request record                                                        |
+   | `children[]`                                                      | each published child's number, `wired` once listed in `## Tracks`                                                                    |
+
+The check compares body digests, not titles, because no owner marker records a
+title. A history that records a rework authoring in any bundle is refused,
+because the helper has no authoring evidence to replay it with, so a second
+rework of one source is not supported by this path. Discover, roadmap audit,
+and the pre-merge check replay without authoring evidence and keep a source
+with a rework record blocked, which is the operator's fail-closed choice on
+issue `#4533` ("consuming verified rework transitions needs its own child"). So
+the revised roadmap's own completion audit waits for that follow-up. The active
+claim check of the anchor uses the repository policy file's actors, and the
+claim markers after the opening use the union of those actors and the trusted
+default branch's.
 
 ### Needs-decision follow-up body
 

@@ -26,8 +26,8 @@ gate, the routing below still decides, and `ready: false` holds.
      `separate_merge_agent` actor path in step 5, or the
      `fully_autonomous_merge` policy path in step 6. Other paths must
      stop.
-2. Resolve the recorded policy to one enum; steps 3-6 use it. First run
-   `git fetch origin {development-branch}`, then
+2. Resolve the recorded policy to one enum, `{f25-policy}`; steps 3-6
+   use it. First run `git fetch origin {development-branch}`, then
    `git diff --quiet origin/{development-branch} -- .github/idd/config.json`.
    With helper runtime, run the profile-selected form of
    `node scripts/idd-effective-config.mjs --resolve-merge-policy` and use

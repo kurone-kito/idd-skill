@@ -21,16 +21,22 @@ F3 apply follows [the livelock rule](idd-review-triage.instructions.md#merge-dev
    different `{claim-id}` (even under the same agent ID), the claim was
    lost — report and stop.
 2. Defensive route check: re-read the repository's recorded merge
-   policy (missing → treat as `human_merge`, the distributed
-   default). Then apply:
+   policy (missing → `human_merge`). A string skips the object rule.
+   Resolve an object per F2.5 step 2, taking the tier as it did in this
+   session (never inferred), into F3's own enum; stop unless that enum
+   equals `{f25-policy}`, which this resolution does not update (unset:
+   stop). Any other value (unknown string, null, array, number,
+   boolean), an unreadable source, or a failed resolution is an unknown
+   policy. Then apply:
    - `fully_autonomous_merge`: continue.
    - `separate_merge_agent`: continue only when repository documentation
      explicitly records the **current session** as the designated
      merge-capable actor and the documented resume condition is
-     satisfied; otherwise route to `idd-merge-handoff.instructions.md`
-     and stop.
-   - `human_merge` or unknown policy: route to
-     `idd-merge-handoff.instructions.md` and stop.
+     satisfied; otherwise stop.
+   - `human_merge` or unknown policy: stop.
+
+   Each stop routes to `idd-merge-handoff.instructions.md`; F3 step 2
+   posts no comment itself.
 3. Immediately before executing the merge command, do one final live
    fetch using the **exact same activity-universe scope as E1 Step 1**
    (all review threads, review bodies, and regular PR comments,

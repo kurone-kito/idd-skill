@@ -223,6 +223,137 @@
           "claimEligible": {
             "description": "Derived eligibility, present only under --with-claim-state: true when no present, non-stale, trusted-actor claim or unverified stale/released-claim local worktree blocks this leaf.",
             "type": "boolean"
+          },
+          "readiness": {
+            "description": "A3 readiness annotation, present only under --with-readiness on open union leaves. A soft discovery hint: the A3/A4/A4.5/A5 written gates remain authoritative.",
+            "type": "object",
+            "required": [
+              "ready",
+              "reasons",
+              "authoringHeld",
+              "startable"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "ready": {
+                "type": "boolean",
+                "description": "True when the leaf passes every A3 readiness filter (labels and dependencies), exactly as evaluateDiscoverReadiness evaluates them."
+              },
+              "reasons": {
+                "type": "array",
+                "description": "Sorted filter reasons, empty when ready; e.g. blocked_by_open_issue:#N or label:<name>. A needs-decision leaf the decision-source gate keeps excluding also carries provisional_state_unavailable, provisional_records_present, provisional_pending_unreadable, provisional_pending_cap:<count>/<cap>, or confirmation_pending.",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "authoringHeld": {
+                "type": "boolean",
+                "description": "True when the configured authoring-hold label is present on this leaf."
+              },
+              "startable": {
+                "type": "boolean",
+                "description": "Combined soft start hint: ready and not claim-blocked."
+              },
+              "provisionalDependencies": {
+                "type": "array",
+                "description": "Exact replay-verified provisional edges that let this leaf proceed.",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "issueNumber",
+                    "criterion",
+                    "bundleGeneration",
+                    "decisionGeneration",
+                    "status"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "issueNumber": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "description": "Issue number of the provisional decision source this leaf's Blocked by edge names."
+                    },
+                    "criterion": {
+                      "type": "string",
+                      "description": "The normalized blocked criterion the edge rationale states and the replayed decision's execution criteria exactly match."
+                    },
+                    "bundleGeneration": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "description": "Decision bundle generation whose verified work discharges the edge."
+                    },
+                    "decisionGeneration": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "description": "Decision generation within that bundle whose verified work discharges the edge."
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "confirmation-pending",
+                        "confirmed"
+                      ],
+                      "description": "Replayed status of that decision: confirmation-pending (verified work awaits a person's confirmation) or confirmed."
+                    },
+                    "workReference": {
+                      "type": "string",
+                      "description": "Replay-verified merged pull request that proves the work, when the decision carries one."
+                    },
+                    "verifiedAt": {
+                      "type": "string",
+                      "description": "When that work was verified, as recorded by the completion record."
+                    }
+                  }
+                }
+              },
+              "potentiallyAffectedDependencies": {
+                "type": "array",
+                "description": "Blocked provisional edges whose prior merged work may need review.",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "issueNumber",
+                    "criterion",
+                    "reason",
+                    "workReferences"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "issueNumber": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "description": "Issue number of the provisional decision source whose verified work may be affected."
+                    },
+                    "criterion": {
+                      "type": "string",
+                      "description": "The normalized blocked criterion of the affected edge."
+                    },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "rework",
+                        "evidence-invalid"
+                      ],
+                      "description": "Why the edge no longer holds: rework (a different choice was requested) or evidence-invalid (the record state no longer replays)."
+                    },
+                    "workReferences": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Replay-verified merged work references the affected edge relied on, sorted."
+                    }
+                  }
+                }
+              },
+              "decisionSource": {
+                "type": "boolean",
+                "enum": [
+                  true
+                ],
+                "description": "Present (always true) only when the shared decision-source gate admitted this needs-decision leaf as eligible decision work (issue #4538). A4 and A4.5 still assess its plan before any claim, and the autopilot floor does not drop it before that assessment."
+              }
+            }
           }
         }
       }
@@ -390,6 +521,75 @@
               "reason": {
                 "type": "string",
                 "description": "Machine-readable failure token for why this reference could not be resolved."
+              }
+            }
+          }
+        },
+        "confirmationQueue": {
+          "type": "array",
+          "description": "Needs-decision leaves whose provisional work is complete and awaits a person's confirmation (issue #4538), reported instead of being offered as work. Present only under --with-readiness and only when non-empty. It sits under diagnostics because a top-level key would change the report's key list. No entry is ever startable, whatever dangerouslyAutoDecide and the class switches say.",
+          "items": {
+            "type": "object",
+            "required": [
+              "number",
+              "title",
+              "bundleGeneration",
+              "choices",
+              "implementationLinks"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "number": {
+                "type": "integer",
+                "description": "Issue number of the source.",
+                "minimum": 1
+              },
+              "title": {
+                "type": "string",
+                "description": "Title of the source."
+              },
+              "bundleGeneration": {
+                "type": "integer",
+                "description": "The decision bundle generation that awaits confirmation.",
+                "minimum": 0
+              },
+              "choices": {
+                "type": "array",
+                "description": "Every choice of that bundle, in decision-generation order.",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "decisionGeneration",
+                    "status"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "decisionGeneration": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "description": "Decision generation of this choice within its bundle."
+                    },
+                    "status": {
+                      "type": "string",
+                      "description": "The replayed status of this choice, e.g. confirmation-pending."
+                    },
+                    "question": {
+                      "type": "string",
+                      "description": "The question this choice answers."
+                    },
+                    "selectedOption": {
+                      "type": "string",
+                      "description": "The chosen option's description."
+                    }
+                  }
+                }
+              },
+              "implementationLinks": {
+                "type": "array",
+                "description": "Replay-verified merged-work references of the bundle, sorted.",
+                "items": {
+                  "type": "string"
+                }
               }
             }
           }

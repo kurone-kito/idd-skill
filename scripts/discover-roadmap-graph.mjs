@@ -32,6 +32,7 @@ import {
   isDiscoverIncompleteResult,
 } from './discover-progress.mjs';
 import {
+  buildLiveDecisionSourceResolver,
   buildProvisionalDecisionEvidenceReader,
   buildRoadmapMarkerResolver,
   evaluateDiscoverReadiness,
@@ -741,6 +742,7 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
     options.claimState || options.readiness
       ? new Set(executionCandidates)
       : null;
+  let confirmationQueue = [];
   // Opt-in (#1008): annotate each open execution-leaf node with active-claim
   // eligibility. Gated on `options.claimState` so the default path makes no
   // extra GitHub API call and the output shape stays byte-stable.
@@ -765,7 +767,7 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
     const executionNodes = nodes.filter((node) =>
       executionCandidateSet.has(node.number),
     );
-    await annotateReadiness(
+    confirmationQueue = await annotateReadiness(
       executionNodes,
       options.readiness,
       loadIssue,
@@ -833,6 +835,7 @@ export async function enumerateRoadmapGraph(rootIssueNumber, options = {}) {
         diagnostics.inaccessibleReferences.sort(compareDiagnostics),
       unresolvedReferences:
         diagnostics.unresolvedReferences.sort(compareDiagnostics),
+      ...(confirmationQueue.length > 0 ? { confirmationQueue } : {}),
     },
     summary: {
       rootNumber: rootNode.number,
@@ -1382,6 +1385,7 @@ export async function enumerateAllRoadmapsGraph(options = {}) {
     }
     progress.complete();
   }
+  let confirmationQueue = [];
   // Opt-in (#1123): annotate the open union leaves with their A3 readiness in a
   // single batch call. Runs after the claim loop so `startable` can fold in
   // `claimEligible`. Gated on `options.readiness`, so the default path adds no
@@ -1399,7 +1403,7 @@ export async function enumerateAllRoadmapsGraph(options = {}) {
       leaves.filter((leaf) => String(leaf.state).toUpperCase() === 'OPEN')
         .length,
     );
-    await annotateReadiness(
+    confirmationQueue = await annotateReadiness(
       leaves,
       options.readiness,
       sharedLoadIssue,
@@ -1443,6 +1447,7 @@ export async function enumerateAllRoadmapsGraph(options = {}) {
       unresolvedReferences: [...unresolvedReferences.values()].sort(
         compareDiagnostics,
       ),
+      ...(confirmationQueue.length > 0 ? { confirmationQueue } : {}),
     },
     summary: {
       rootCount: roots.length,
@@ -1609,7 +1614,7 @@ async function annotateReadiness(
     (entry) => String(entry.state).toUpperCase() === 'OPEN',
   );
   if (openEntries.length === 0) {
-    return;
+    return [];
   }
   const summary = await evaluateDiscoverReadiness(
     openEntries.map((entry) => entry.number),
@@ -1640,10 +1645,16 @@ async function annotateReadiness(
       currentRepo: currentRepo || undefined,
       loadProvisionalDecisionState: readiness.loadProvisionalDecisionState,
       decisionIssueClassEnabled: readiness.decisionIssueClassEnabled,
+      decisionSources: readiness.decisionSources,
       now: readiness.nowIso,
     },
   );
   const readyNumbers = new Set(summary.ready.map((entry) => entry.number));
+  const decisionSourceNumbers = new Set(
+    summary.ready
+      .filter((entry) => entry.decisionSource === true)
+      .map((entry) => entry.number),
+  );
   const reasonsByNumber = new Map(
     summary.filteredOut.map((entry) => [entry.number, entry.reasons]),
   );
@@ -1679,8 +1690,12 @@ async function annotateReadiness(
       authoringHeld: reasons.includes(authoringReason),
       startable: ready && entry.claimEligible !== false,
       ...dependencyEvidence,
+      ...(decisionSourceNumbers.has(entry.number)
+        ? { decisionSource: true }
+        : {}),
     };
   }
+  return summary.confirmationQueue ?? [];
 }
 /**
  * Resolve one execution leaf's active-claim eligibility (#1008).
@@ -2291,6 +2306,11 @@ function buildReadinessResolution(owner, repo, policy) {
     nowIso: new Date().toISOString(),
     loadProvisionalDecisionState: provisionalReader.loadState,
     decisionIssueClassEnabled: provisionalReader.decisionIssueClassEnabled,
+    // #4538: the shared decision-source gate, with its own trusted read.
+    decisionSources: buildLiveDecisionSourceResolver({
+      reader: provisionalReader,
+      port: createGithubProviderAdapter(owner, repo),
+    }),
   };
 }
 /**
@@ -3223,6 +3243,23 @@ function printHelp() {
   Absent the flag, NO extra API calls are made and no readiness field is emitted
   (the output shape is byte-stable). Like claimEligible this is a SOFT hint; the
   A3/A4/A4.5/A5 gates remain authoritative.
+
+  #4538 decision sources (under --with-readiness only): a needs-decision leaf
+  stays not ready (reason "label:<name>") unless the shared decision-source gate
+  of discover-readiness-check admits it; it then gains "decisionSource": true
+  inside "readiness", is not dropped by the autopilot floor (A4.5 assesses it),
+  and A4/A4.5 still assess its plan before any claim. The gate reads the trusted
+  default branch (the master dangerouslyAutoDecide switch and the decisionIssue
+  class must both be on) and adds a reason when it keeps the label excluding:
+  provisional_state_unavailable, provisional_records_present,
+  provisional_pending_unreadable, or provisional_pending_cap:<count>/<cap>. A
+  leaf reached through a decision-bearing roadmap opens only through its own
+  decisionSource verdict or its exact verified "provisionalDependencies"; a
+  roadmap node that itself carries the label stays stopped by A1.5. A leaf whose
+  provisional work is complete and awaits confirmation is never ready, whatever
+  the flag or class says (reasons: "label:<name>", "confirmation_pending"), and
+  is listed in "diagnostics.confirmationQueue" (present only when non-empty): its
+  number, title, bundle generation, chosen choices, and implementation links.
 
   --with-progress (opt-in, --all-roadmaps only) prints bounded progress lines
   to stderr, one JSON object per line keyed by iddProgress (stderr can also

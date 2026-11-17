@@ -60,6 +60,13 @@ approval boundary that hands off to IDD execution.
 - A draft carrier is a Stage 1 output, and re-authoring a ready carrier is
   Stage 1 work. A carrier never enters the IDD execution loop: its
   authoring-only label keeps it out of Discover
+- A retained decision source whose operator chose another option is converted
+  in place into its rework roadmap, never into a second roadmap. It takes the
+  fresh set and session that the recorded handoff names, and the handoff is not
+  ownership: label, owner marker, hold, snapshots, and heartbeats still precede
+  every edit and every child. Its children are published under the ordinary
+  hold, and the set stays held for a normal Stage 2 release. See
+  [Rework adoption of a retained decision source](contract.md#rework-adoption-of-a-retained-decision-source)
 - If the label does not exist in the target repository, bundled skill
   creates it with `gh label create` before first use; label creation or
   application failure blocks publishing

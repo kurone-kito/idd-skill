@@ -170,6 +170,18 @@ custom runtime. See
 framing and [docs/idd-workflow.md](docs/idd-workflow.md) for the full
 phase map.
 
+## Optional: provisional decisions
+
+By default, an issue that needs a decision waits for a person. A repository can
+opt in (`dangerouslyAutoDecide`, off by default, plus a switch for each class of
+stop) so a session picks among real alternatives, implements the choice through
+every normal CI, review, and claim gate, and leaves the issue open for a person
+to confirm. The trade is waiting time against possible rework: a person who
+prefers another option turns the same issue into a held rework roadmap. The
+execution half ships as a command; the confirmation half is not wired into one
+yet. See
+[Provisional decision opt-in](docs/customization.md#provisional-decision-opt-in).
+
 ## Learn by example
 
 Follow the [VRChat Event Calendar workshop](docs/workshop/README.md)

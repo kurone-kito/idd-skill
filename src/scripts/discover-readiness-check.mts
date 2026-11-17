@@ -17,6 +17,7 @@ import {
 } from './autopilot-suitability.mts';
 import { parseCliArgs } from './cli-args.mts';
 import { extractDependencyReferences } from './dependency-grammar.mts';
+import { classifyDiscoverInterruption } from './discover-progress.mts';
 import { classifyInaccessibleIssueLookup } from './gh-http-status.mts';
 import { isNotDispatchedRefusal } from './github-api-refusal.mts';
 import type { HelperCliResult } from './helper-cli-runner.mts';
@@ -30,9 +31,10 @@ import {
   loadPolicyConfig,
   loadTrustedActorConfig,
   readTrustedAutoDecide,
+  type TrustedAutoDecideReport,
 } from './idd-config.mts';
 import { maskMarkdownForScan } from './markdown-code.mts';
-import { escapeRegex } from './marker-regex.mts';
+import { createMarkerRegex, escapeRegex } from './marker-regex.mts';
 import {
   findAutoDecideLabelCollisions,
   normalizePolicyConfig,
@@ -126,6 +128,10 @@ const TRAILING_LOCAL_ISSUE_REF_PATTERN = /(?<![\w/-])#\d+\b/;
 export const CONFIRMATION_LABEL_COLLISION_REASON =
   'needs_confirmation_label_collision';
 
+// Declared above the CLI block for the same TDZ reason as the constant above.
+/** The readiness reason of a source queued for confirmation (issue #4538). */
+export const CONFIRMATION_PENDING_REASON = 'confirmation_pending';
+
 const INACCESSIBLE_ISSUE_SENTINEL = Object.freeze({
   __iddLookupStatus: 'inaccessible',
 });
@@ -168,6 +174,12 @@ export interface ReadinessReadyIssue
   number: number;
   title: string;
   provisionalDependencies?: ProvisionalDependencyProgress[];
+  /**
+   * Present (always `true`) only when the shared decision-source gate admitted
+   * a needs-decision source as eligible decision work (issue #4538). The
+   * pre-claim assessment of A4/A4.5 still decides whether work starts.
+   */
+  decisionSource?: true;
 }
 
 export interface ProvisionalDependencyProgress {
@@ -221,6 +233,12 @@ export interface ReadinessSummary {
     unresolvableCount: number;
     filteredByReason: Record<string, number>;
   };
+  /**
+   * Needs-decision sources whose provisional work is complete and awaits a
+   * person's confirmation (issue #4538). Present only when non-empty, so a
+   * run with none keeps its output unchanged.
+   */
+  confirmationQueue?: ConfirmationQueueEntry[];
 }
 
 interface NormalizedIssue {
@@ -324,6 +342,11 @@ interface EvaluateDiscoverReadinessOptions {
   ) => Promise<ProvisionalDecisionEvidence> | ProvisionalDecisionEvidence;
   /** Trusted-base decisionIssue class switch; absent is fail-closed. */
   decisionIssueClassEnabled?: () => boolean;
+  /**
+   * Shared decision-source gate (issue #4538). Absent keeps the current
+   * needs-decision exclusion, so a caller that builds none sees no change.
+   */
+  decisionSources?: DecisionSourceResolver;
 }
 
 export interface ProvisionalDecisionEvidence {
@@ -338,6 +361,10 @@ export interface ProvisionalDecisionEvidence {
     executionCriteria: readonly string[];
     workReference?: string;
     verifiedAt?: string;
+    /** The question this choice answers (issue #4538's confirmation queue). */
+    question?: string;
+    /** The chosen option's description (issue #4538's confirmation queue). */
+    selectedOption?: string;
   }[];
   issues: readonly string[];
   /**
@@ -377,6 +404,53 @@ export interface ProvisionalDecisionEvidenceReader {
     sources: readonly ProvisionalEvidenceSource[],
   ): Promise<Map<number, ProvisionalDecisionEvidence>>;
   decisionIssueClassEnabled(): boolean;
+  /**
+   * The one trusted auto-decide read of this reader, summarized for the
+   * decision-source gate (issue #4538). Read once, on first use, from the
+   * live default branch of the repository, never from a pull request head or
+   * a feature worktree.
+   */
+  trustedDecisionPolicy(): TrustedDecisionPolicy;
+}
+
+/**
+ * What the trusted auto-decide read says about the decision-source gate.
+ * Any unreadable value is fail-closed: the class is off or the value is
+ * `null`. The cap is set only while the class is enabled; the label name for
+ * any readable report.
+ */
+export interface TrustedDecisionPolicy {
+  /** True only for a readable report whose `decisionIssue` class is `enabled`. */
+  classEnabled: boolean;
+  /** The trusted `maxPendingConfirmations`, or `null` when unreadable. */
+  maxPendingConfirmations: number | null;
+  /** The trusted confirmation label name, or `null` when unreadable. */
+  confirmationLabelName: string | null;
+}
+
+/** Summarize one trusted read; every missing or invalid field fails closed. */
+function summarizeTrustedDecisionPolicy(
+  report: TrustedAutoDecideReport,
+): TrustedDecisionPolicy {
+  const classEnabled =
+    report.status === 'readable' && report.classes.decisionIssue === 'enabled';
+  const cap = report.maxPendingConfirmations;
+  const label = report.confirmationLabelName;
+  return {
+    classEnabled,
+    maxPendingConfirmations:
+      classEnabled && typeof cap === 'number' && Number.isFinite(cap) && cap > 0
+        ? cap
+        : null,
+    // The label name is kept for any readable report, so a completed source
+    // that carries it is never queued while the class is off either.
+    confirmationLabelName:
+      report.status === 'readable' &&
+      typeof label === 'string' &&
+      label.trim() !== ''
+        ? label.trim()
+        : null,
+  };
 }
 
 /**
@@ -407,6 +481,11 @@ export function buildProvisionalDecisionEvidenceReader(input: {
   port: ProviderPort;
   /** Injectable trusted actor source for deterministic tests. */
   readTrustedMarkerActors?: () => string[];
+  /** Injectable trusted auto-decide read for deterministic tests. */
+  readTrustedAutoDecide?: (input: {
+    owner: string;
+    repo: string;
+  }) => TrustedAutoDecideReport;
   /**
    * Not read. The trusted base configuration supplies the actors and the
    * stale age; kept so the existing callers keep compiling.
@@ -457,20 +536,36 @@ export function buildProvisionalDecisionEvidenceReader(input: {
     }
     return trustedCache;
   };
-  let classEnabled: boolean | undefined;
+  let trustedPolicy: TrustedDecisionPolicy | undefined;
+  const readTrustedDecisionPolicy = (): TrustedDecisionPolicy => {
+    if (trustedPolicy === undefined) {
+      try {
+        trustedPolicy = summarizeTrustedDecisionPolicy(
+          (input.readTrustedAutoDecide ?? readTrustedAutoDecide)({
+            owner,
+            repo,
+          }),
+        );
+      } catch (error) {
+        rethrowInterruption(error);
+        trustedPolicy = {
+          classEnabled: false,
+          maxPendingConfirmations: null,
+          confirmationLabelName: null,
+        };
+      }
+    }
+    return trustedPolicy;
+  };
 
   // `loadStateFrom` is the replay itself, reading through the `port` it is
   // given: the live port for `loadState`, or a chunk's held reads for
   // `loadStates`. The public `loadState` keeps its single argument.
   const replay = {
     decisionIssueClassEnabled() {
-      if (classEnabled === undefined) {
-        classEnabled =
-          readTrustedAutoDecide({ owner, repo }).classes.decisionIssue ===
-          'enabled';
-      }
-      return classEnabled;
+      return readTrustedDecisionPolicy().classEnabled;
     },
+    trustedDecisionPolicy: readTrustedDecisionPolicy,
     async loadStateFrom(
       issueNumber: number,
       port: ProvisionalEvidenceReads,
@@ -681,6 +776,7 @@ export function buildProvisionalDecisionEvidenceReader(input: {
           ...(typeof result.verifiedAt === 'string'
             ? { verifiedAt: result.verifiedAt }
             : {}),
+          ...selectionSummary(decision.selection.event),
         };
       });
       return {
@@ -849,6 +945,7 @@ export function buildProvisionalDecisionEvidenceReader(input: {
 
   return {
     decisionIssueClassEnabled: replay.decisionIssueClassEnabled,
+    trustedDecisionPolicy: replay.trustedDecisionPolicy,
     loadState: (issueNumber: number) =>
       replay.loadStateFrom(issueNumber, livePort),
     async loadStates(sources) {
@@ -904,6 +1001,406 @@ function invalidProvisionalEvidence(
     decisions: [],
     issues,
   };
+}
+
+/**
+ * The question and chosen option of a replayed `selected` event, for the
+ * confirmation queue (issue #4538). A value the record does not carry as a
+ * non-empty string is left out.
+ */
+function selectionSummary(event: unknown): {
+  question?: string;
+  selectedOption?: string;
+} {
+  const fields = (event ?? {}) as {
+    question?: unknown;
+    selectedOption?: { description?: unknown } | null;
+  };
+  const description = fields.selectedOption?.description;
+  return {
+    ...(typeof fields.question === 'string' && fields.question !== ''
+      ? { question: fields.question }
+      : {}),
+    ...(typeof description === 'string' && description !== ''
+      ? { selectedOption: description }
+      : {}),
+  };
+}
+
+/**
+ * One needs-decision source whose provisional work is complete and awaits a
+ * person's confirmation (issue #4538): the source, its chosen option bundle,
+ * and the verified implementation links. Reported beside the ready and
+ * filtered lists; no entry is ever startable.
+ */
+export interface ConfirmationQueueEntry {
+  number: number;
+  title: string;
+  /** The bundle generation that awaits confirmation. */
+  bundleGeneration: number;
+  /** Every choice of that bundle, in generation order. */
+  choices: {
+    decisionGeneration: number;
+    status: ProvisionalDecisionStatus;
+    question?: string;
+    selectedOption?: string;
+  }[];
+  /** Replay-verified merged-work references of that bundle, sorted. */
+  implementationLinks: string[];
+}
+
+/** One needs-decision source a run scanned, as the gate sees it. */
+export interface DecisionSourceCandidate {
+  issueNumber: number;
+  title: string;
+  /** Raw label names; compared trimmed and case-insensitively. */
+  labels: readonly string[];
+}
+
+/**
+ * The gate's verdict for one scanned needs-decision source. `blocked` keeps
+ * today's exclusion; its optional `reason` is set only when the trusted class
+ * is enabled, so a repository that never opted in sees no new reason.
+ */
+export type DecisionSourceVerdict =
+  | { kind: 'eligible' }
+  | { kind: 'queued'; entry: ConfirmationQueueEntry }
+  | { kind: 'blocked'; reason?: string };
+
+/** The shared decision-source gate of Discover (issue #4538). */
+export interface DecisionSourceResolver {
+  /**
+   * Replay every scanned needs-decision source of this run, once, before any
+   * verdict, so the pending cap cannot depend on scan order. An ordinary
+   * failed read leaves those sources without evidence. An interruption (a
+   * load-control refusal, a rate limit, or a timeout) propagates, so the
+   * scan's recovery handler sees it.
+   */
+  prepare(candidates: readonly DecisionSourceCandidate[]): Promise<void>;
+  /** The verdict for a prepared source; an unprepared one is `blocked`. */
+  verdict(issueNumber: number): DecisionSourceVerdict;
+  /** The completed-confirmation sources found by `prepare`, by number. */
+  queue(): ConfirmationQueueEntry[];
+}
+
+/** Injectable reads behind {@link buildDecisionSourceResolver}. */
+export interface DecisionSourceInputs {
+  loadStates(
+    sources: readonly ProvisionalEvidenceSource[],
+  ): Promise<ReadonlyMap<number, ProvisionalDecisionEvidence>>;
+  /**
+   * The trusted auto-decide read; an ordinary throw means the class is off,
+   * and an interruption propagates.
+   */
+  readTrusted(): TrustedDecisionPolicy;
+  /**
+   * The number of open issues that carry the trusted confirmation label, or
+   * `null` when it cannot be read; an ordinary throw means the same, and an
+   * interruption propagates.
+   */
+  countOpenConfirmationIssues(labelName: string): number | null;
+}
+
+/**
+ * Rethrow a failure that interrupts a Discover scan: a load-control refusal, a
+ * rate limit, or a timeout. The scan's own recovery handler must see it, so it
+ * is never swallowed into an "unavailable" verdict, which would let a scan end
+ * as a normal report with no startable work. Every other failure returns, so
+ * the caller keeps it isolated to its source (issue #4538, Codex review).
+ */
+function rethrowInterruption(error: unknown): void {
+  if (
+    isNotDispatchedRefusal(error) ||
+    classifyDiscoverInterruption(error, Date.now()) !== null
+  ) {
+    throw error;
+  }
+}
+
+/**
+ * Whether a source carries the trusted confirmation label (trimmed, any
+ * case). Such an issue waits for a person and is never a decision source, so
+ * `prepare` drops it before any replay: it is neither queued nor counted.
+ */
+function carriesConfirmationLabel(
+  labels: readonly string[],
+  policy: TrustedDecisionPolicy,
+): boolean {
+  const name = policy.confirmationLabelName?.toLowerCase();
+  return (
+    name !== undefined &&
+    labels.some((label) => label.trim().toLowerCase() === name)
+  );
+}
+
+/** A pending decision, whatever the bundle status says (as A4.5 reads it). */
+function awaitsConfirmation(evidence: ProvisionalDecisionEvidence): boolean {
+  return (
+    evidence.valid === true &&
+    (evidence.status === 'confirmation-pending' ||
+      evidence.decisions.some(
+        (decision) => decision.status === 'confirmation-pending',
+      ))
+  );
+}
+
+/** Whether an injected value has the shape the gate reads. */
+function isUsableEvidence(
+  value: unknown,
+): value is ProvisionalDecisionEvidence {
+  const evidence = value as Partial<ProvisionalDecisionEvidence> | null;
+  return (
+    typeof evidence === 'object' &&
+    evidence !== null &&
+    typeof evidence.valid === 'boolean' &&
+    typeof evidence.hasRecords === 'boolean' &&
+    typeof evidence.status === 'string' &&
+    Array.isArray(evidence.decisions)
+  );
+}
+
+function buildQueueEntry(
+  candidate: DecisionSourceCandidate,
+  evidence: ProvisionalDecisionEvidence,
+): ConfirmationQueueEntry {
+  const pending = evidence.decisions.filter(
+    (decision) => decision.status === 'confirmation-pending',
+  );
+  const bundleGeneration = Math.max(
+    0,
+    ...(pending.length > 0 ? pending : evidence.decisions).map(
+      (decision) => decision.bundleGeneration,
+    ),
+  );
+  const bundle = evidence.decisions
+    .filter((decision) => decision.bundleGeneration === bundleGeneration)
+    .sort((left, right) => left.decisionGeneration - right.decisionGeneration);
+  return {
+    number: candidate.issueNumber,
+    title: candidate.title,
+    bundleGeneration,
+    choices: bundle.map((decision) => ({
+      decisionGeneration: decision.decisionGeneration,
+      status: decision.status,
+      ...(decision.question === undefined
+        ? {}
+        : { question: decision.question }),
+      ...(decision.selectedOption === undefined
+        ? {}
+        : { selectedOption: decision.selectedOption }),
+    })),
+    implementationLinks: [
+      ...new Set(
+        bundle.flatMap((decision) =>
+          decision.workReference === undefined ? [] : [decision.workReference],
+        ),
+      ),
+    ].sort(),
+  };
+}
+
+/**
+ * Build the shared decision-source gate (issue #4538). It decides, for an
+ * open issue that carries the needs-decision label, whether Discover may offer
+ * it as eligible decision work. Before any replay, `prepare` drops a source
+ * that carries the trusted confirmation label (a person's answer is pending,
+ * so it is never a decision source): it is not read, queued, or counted, and
+ * its verdict is `blocked`. The order for every other source is fixed:
+ *
+ * 1. A source whose provisional work is complete and awaits confirmation is
+ *    queued, whatever the flag or the class says, so the work never repeats.
+ * 2. A class that is not `enabled` in the trusted read keeps today's silent
+ *    exclusion. So does a read that throws.
+ * 3. Unusable, invalid, or inconsistent state, or any other record state
+ *    (selected, in progress, rework, confirmed, which Resume owns), blocks.
+ * 4. An unreadable cap or count, or a pending count at or above the cap,
+ *    skips the source. The pending count is the open issues that carry the
+ *    trusted confirmation label plus this run's queue. The queue term counts
+ *    only the sources this run scanned, so it never lowers the count below the
+ *    label count alone but can miss a completed source the run did not scan.
+ * 5. Anything else is eligible. An eligible source is only a candidate: A4
+ *    and A4.5 still assess the plan before any claim.
+ *
+ * The trusted read runs once per gate, when a pass has a source, and the count
+ * once per pass, at the cap step. An ordinary failed replay never throws out
+ * of `prepare`; an interruption does.
+ */
+export function buildDecisionSourceResolver(
+  inputs: DecisionSourceInputs,
+): DecisionSourceResolver {
+  const candidates = new Map<number, DecisionSourceCandidate>();
+  const evidenceByNumber = new Map<number, ProvisionalDecisionEvidence>();
+  const queueByNumber = new Map<number, ConfirmationQueueEntry>();
+  let trusted: TrustedDecisionPolicy | undefined;
+  let openConfirmationCount: number | null | undefined;
+
+  const readTrusted = (): TrustedDecisionPolicy => {
+    if (trusted === undefined) {
+      try {
+        trusted = inputs.readTrusted();
+      } catch (error) {
+        rethrowInterruption(error);
+        trusted = {
+          classEnabled: false,
+          maxPendingConfirmations: null,
+          confirmationLabelName: null,
+        };
+      }
+    }
+    return trusted;
+  };
+  const readOpenConfirmationCount = (labelName: string): number | null => {
+    if (openConfirmationCount === undefined) {
+      try {
+        const count = inputs.countOpenConfirmationIssues(labelName);
+        openConfirmationCount =
+          typeof count === 'number' && Number.isInteger(count) && count >= 0
+            ? count
+            : null;
+      } catch (error) {
+        rethrowInterruption(error);
+        openConfirmationCount = null;
+      }
+    }
+    return openConfirmationCount;
+  };
+
+  return {
+    async prepare(sources) {
+      // Every pass starts clean, so a reused gate never reports the queue or
+      // the count of an earlier pass (an empty list clears them too).
+      candidates.clear();
+      evidenceByNumber.clear();
+      queueByNumber.clear();
+      openConfirmationCount = undefined;
+      // A source that carries the trusted confirmation label is never replayed,
+      // queued, counted, or relaxed, whatever name the checkout's own policy
+      // uses. The trusted read is the one this gate reads anyway, taken once
+      // and only when the pass has a source.
+      const policy = sources.length > 0 ? readTrusted() : undefined;
+      for (const source of sources) {
+        if (
+          policy !== undefined &&
+          carriesConfirmationLabel(source.labels, policy)
+        ) {
+          continue;
+        }
+        candidates.set(source.issueNumber, source);
+      }
+      if (candidates.size === 0) return;
+      const states = new Map<number, unknown>();
+      const numbers = [...candidates.keys()];
+      try {
+        const batch = await inputs.loadStates(
+          numbers.map((issueNumber) => ({ issueNumber })),
+        );
+        for (const [issueNumber, evidence] of batch) {
+          states.set(issueNumber, evidence);
+        }
+      } catch (error) {
+        // An interruption (refusal, rate limit, timeout) goes to the caller.
+        rethrowInterruption(error);
+        // One failing source must not hide the others (a completed source
+        // keeps its queue row), so read them one by one, each isolated. A
+        // source that still fails keeps no evidence, unless it is an
+        // interruption, which also goes to the caller.
+        for (const issueNumber of numbers) {
+          try {
+            const single = await inputs.loadStates([{ issueNumber }]);
+            const evidence = single.get(issueNumber);
+            if (evidence !== undefined) states.set(issueNumber, evidence);
+          } catch (singleError) {
+            rethrowInterruption(singleError);
+          }
+        }
+      }
+      for (const [issueNumber, candidate] of candidates) {
+        const evidence: unknown = states.get(issueNumber);
+        if (!isUsableEvidence(evidence)) continue;
+        evidenceByNumber.set(issueNumber, evidence);
+        if (awaitsConfirmation(evidence)) {
+          queueByNumber.set(issueNumber, buildQueueEntry(candidate, evidence));
+        }
+      }
+    },
+    verdict(issueNumber) {
+      const candidate = candidates.get(issueNumber);
+      if (candidate === undefined) return { kind: 'blocked' };
+      const queued = queueByNumber.get(issueNumber);
+      if (queued !== undefined) return { kind: 'queued', entry: queued };
+      const policy = readTrusted();
+      if (!policy.classEnabled) return { kind: 'blocked' };
+      const evidence = evidenceByNumber.get(issueNumber);
+      if (evidence === undefined || !evidence.valid) {
+        return { kind: 'blocked', reason: 'provisional_state_unavailable' };
+      }
+      if (evidence.hasRecords) {
+        return { kind: 'blocked', reason: 'provisional_records_present' };
+      }
+      if (evidence.status !== 'none' || evidence.decisions.length > 0) {
+        return { kind: 'blocked', reason: 'provisional_state_unavailable' };
+      }
+      const labelName = policy.confirmationLabelName;
+      const cap = policy.maxPendingConfirmations;
+      if (labelName === null || cap === null) {
+        return { kind: 'blocked', reason: 'provisional_pending_unreadable' };
+      }
+      const open = readOpenConfirmationCount(labelName);
+      if (open === null) {
+        return { kind: 'blocked', reason: 'provisional_pending_unreadable' };
+      }
+      const pending = open + queueByNumber.size;
+      return pending >= cap
+        ? {
+            kind: 'blocked',
+            reason: `provisional_pending_cap:${pending}/${cap}`,
+          }
+        : { kind: 'eligible' };
+    },
+    queue() {
+      return [...queueByNumber.values()].sort(
+        (left, right) => left.number - right.number,
+      );
+    },
+  };
+}
+
+/** Count the issues of `items` that carry `labelName` (trimmed, any case). */
+export function countIssuesWithLabel(
+  items: readonly { labels?: unknown }[],
+  labelName: string,
+): number {
+  const comparable = labelName.trim().toLowerCase();
+  return items.filter((item) =>
+    [...normalizeLabels(item.labels)].some(
+      (label) => label.trim().toLowerCase() === comparable,
+    ),
+  ).length;
+}
+
+/**
+ * The live gate for a CLI: the evidence reader's replay and trusted read, and
+ * the open issue list as the pending count's source. This module cannot read
+ * the count through `auto-decision-records.mts`, which imports a module that
+ * imports this one; both count the open issues that carry the trusted
+ * confirmation label, and an unreadable list is an unreadable count.
+ * `openIssues` lets a caller that already holds the full open list (the
+ * orphan filter) skip a second read.
+ */
+export function buildLiveDecisionSourceResolver(input: {
+  reader: ProvisionalDecisionEvidenceReader;
+  port: ProviderPort;
+  openIssues?: readonly { labels?: unknown }[];
+}): DecisionSourceResolver {
+  return buildDecisionSourceResolver({
+    loadStates: (sources) => input.reader.loadStates(sources),
+    readTrusted: () => input.reader.trustedDecisionPolicy(),
+    countOpenConfirmationIssues: (labelName) =>
+      countIssuesWithLabel(
+        input.openIssues ?? input.port.listOpenWorkItems(),
+        labelName,
+      ),
+  });
 }
 
 function normalizeLogin(value: unknown): string {
@@ -1210,6 +1707,10 @@ async function main(): Promise<HelperCliResult> {
     ),
     loadProvisionalDecisionState: provisionalReader.loadState,
     decisionIssueClassEnabled: provisionalReader.decisionIssueClassEnabled,
+    decisionSources: buildLiveDecisionSourceResolver({
+      reader: provisionalReader,
+      port: createGithubProviderAdapter(owner, repo),
+    }),
     trustedMarkerLogins,
     // `--swarm-floor` output never surfaces the stale-authoring warning, so
     // skip the per-issue timeline fetch this loader runs — over a whole-repo
@@ -1280,6 +1781,7 @@ export async function evaluateDiscoverReadiness(
     authoringJournalTarget,
     loadProvisionalDecisionState,
     decisionIssueClassEnabled,
+    decisionSources,
   } = options ?? {};
   const triageVerdictCheckEnabled =
     typeof fetchCommentsByIssueNumber === 'function' &&
@@ -1360,8 +1862,62 @@ export async function evaluateDiscoverReadiness(
     [];
   const issueCache = new Map<number, CachedIssue>();
   const markerCache = new Map<string, NormalizedIssue[]>();
+  const evaluatedNumbers = normalizeIssueNumbers(issueNumbers);
 
-  for (const issueNumber of normalizeIssueNumbers(issueNumbers)) {
+  // #4538: the shared decision-source gate replays every needs-decision source
+  // of this run before any verdict, so its pending cap cannot depend on scan
+  // order. With no gate, or a name collision, nothing is read and the label
+  // keeps excluding as before. Only an open issue that carries the label is
+  // replayed, and never a durable record, a roadmap node, a confirmation
+  // issue, a draft carrier, or a follow-up that waits on a reviewer's decision.
+  const decisionNameCollides = needsDecisionNameCollides({
+    needsDecisionLabelName,
+    authoringLabelName,
+    authoringOnlyLabelName,
+    blockedByHumanLabelName,
+    roadmapLabelName,
+    confirmationLabelName: confirmationLabel.labelName,
+    confirmationLabelCollides: confirmationLabel.collision,
+    readyLabelName: rawReadyLabelName,
+  });
+  const isDecisionSourceShaped = (issue: NormalizedIssue): boolean =>
+    isDecisionSourceShape({
+      labels: issue.labels,
+      body: issue.body,
+      needsDecisionLabelName,
+      authoringOnlyLabelName,
+      confirmationLabel,
+      markerPrefix: resolvedMarkerPrefix,
+    });
+  if (decisionSources !== undefined && !decisionNameCollides) {
+    const labelled: DecisionSourceCandidate[] = [];
+    for (const issueNumber of evaluatedNumbers) {
+      if (
+        issueNumber === providerOutageTarget ||
+        issueNumber === authoringJournalTarget
+      ) {
+        continue;
+      }
+      const issue = await getIssue(issueNumber, issueCache, loadIssue);
+      if (
+        !issue ||
+        isInaccessibleIssue(issue) ||
+        issue.state !== 'OPEN' ||
+        !isDecisionSourceShaped(issue)
+      ) {
+        continue;
+      }
+      labelled.push({
+        issueNumber: issue.number,
+        title: issue.title,
+        labels: [...issue.labels],
+      });
+    }
+    // Always prepared, even with no source, so the gate holds only this pass.
+    await decisionSources.prepare(labelled);
+  }
+
+  for (const issueNumber of evaluatedNumbers) {
     // #4115: a configured durable record is excluded by number before any
     // GitHub read, matching discover-orphan-filter's number-first check. The
     // outage target keeps precedence when both numbers are equal. Unlike
@@ -1426,8 +1982,26 @@ export async function evaluateDiscoverReadiness(
     if (labels.has(blockedByHumanLabelName)) {
       reasons.add(`label:${blockedByHumanLabelName}`);
     }
+    // #4538: decided before the reasons are built, and it only skips adding
+    // the needs-decision reason; every other hold below still applies.
+    let decisionSource = false;
     if (labels.has(needsDecisionLabelName)) {
-      reasons.add(`label:${needsDecisionLabelName}`);
+      const verdict: DecisionSourceVerdict =
+        decisionSources !== undefined &&
+        !decisionNameCollides &&
+        isDecisionSourceShaped(issue)
+          ? decisionSources.verdict(issue.number)
+          : { kind: 'blocked' };
+      if (verdict.kind === 'eligible') {
+        decisionSource = true;
+      } else {
+        reasons.add(`label:${needsDecisionLabelName}`);
+        if (verdict.kind === 'queued') {
+          reasons.add(CONFIRMATION_PENDING_REASON);
+        } else if (verdict.reason !== undefined) {
+          reasons.add(verdict.reason);
+        }
+      }
     }
     if (labels.has(authoringOnlyLabelName)) {
       reasons.add(`label:${authoringOnlyLabelName}`);
@@ -1825,6 +2399,7 @@ export async function evaluateDiscoverReadiness(
         ...(provisionalDependencies.length > 0
           ? { provisionalDependencies }
           : {}),
+        ...(decisionSource ? { decisionSource: true as const } : {}),
       });
       continue;
     }
@@ -1845,6 +2420,10 @@ export async function evaluateDiscoverReadiness(
   }
 
   const filteredByReason = countReasons(filteredOut);
+  const confirmationQueue =
+    decisionSources !== undefined && !decisionNameCollides
+      ? decisionSources.queue()
+      : [];
   return {
     ready,
     filteredOut,
@@ -1857,13 +2436,87 @@ export async function evaluateDiscoverReadiness(
       unresolvableCount: unresolvable.length,
       filteredByReason,
     },
+    ...(confirmationQueue.length > 0 ? { confirmationQueue } : {}),
   };
+}
+
+/**
+ * Whether an issue has the shape of a decision source (issue #4538): it
+ * carries the needs-decision label, is not a roadmap node, carries no
+ * confirmation label, is not a draft carrier (authoring-only label plus the
+ * `draft-carrier` marker), and is not a follow-up that waits for a reviewer's
+ * decision. A roadmap node is an issue whose body carries the `roadmap-id`
+ * marker, as A2 defines it; an issue that carries only the roadmap label is an
+ * execution leaf, so it can be a decision source (issue #5280). Shared by every
+ * Discover helper so they replay and relax the same issues.
+ */
+export function isDecisionSourceShape(input: {
+  labels: ReadonlySet<string>;
+  body: string;
+  needsDecisionLabelName: string;
+  authoringOnlyLabelName: string;
+  confirmationLabel: Pick<ConfirmationLabelMatcher, 'matches'>;
+  markerPrefix: string;
+}): boolean {
+  const { labels, markerPrefix } = input;
+  if (
+    !labels.has(input.needsDecisionLabelName) ||
+    [...labels].some((label) => input.confirmationLabel.matches(label))
+  ) {
+    return false;
+  }
+  const masked = maskMarkdownForScan(input.body);
+  return !(
+    createMarkerRegex(markerPrefix, 'roadmap-id').test(masked) ||
+    (labels.has(input.authoringOnlyLabelName) &&
+      createMarkerRegex(markerPrefix, 'draft-carrier').test(masked)) ||
+    hasDeferSourceMarker(input.body, markerPrefix, 'review-needs-decision')
+  );
+}
+
+/**
+ * Whether the needs-decision label name cannot be told apart from another
+ * configured label name, comparing trimmed and case-insensitively like the
+ * confirmation-label matcher. A collision means a hold label could pass for
+ * the needs-decision label, so the gate never relaxes (issue #4538).
+ */
+export function needsDecisionNameCollides(names: {
+  needsDecisionLabelName: string;
+  authoringLabelName: string;
+  authoringOnlyLabelName: string;
+  blockedByHumanLabelName: string;
+  roadmapLabelName: string;
+  confirmationLabelName: string;
+  confirmationLabelCollides: boolean;
+  readyLabelName?: unknown;
+}): boolean {
+  if (names.confirmationLabelCollides) return true;
+  const comparable = (value: unknown): string =>
+    String(value ?? '')
+      .trim()
+      .toLowerCase();
+  const own = comparable(names.needsDecisionLabelName);
+  const ready = comparable(
+    normalizePolicyConfig({
+      approvalSignals: { readyLabelName: names.readyLabelName },
+    }).approvalSignals.readyLabelName,
+  );
+  return [
+    names.authoringLabelName,
+    names.authoringOnlyLabelName,
+    names.blockedByHumanLabelName,
+    names.roadmapLabelName,
+    names.confirmationLabelName,
+    ready,
+  ].some((name) => comparable(name) === own);
 }
 
 export interface SwarmFloorEligibility {
   eligible: ReadinessReadyIssue[];
   eligible_count: number;
   total: number;
+  /** See {@link ReadinessSummary.confirmationQueue}; present only when non-empty. */
+  confirmationQueue?: ConfirmationQueueEntry[];
 }
 
 /**
@@ -1875,11 +2528,18 @@ export interface SwarmFloorEligibility {
 export function summarizeSwarmFloorEligibility(
   summary: ReadinessSummary,
 ): SwarmFloorEligibility {
-  const eligible = summary.ready.filter((issue) => !issue.belowFloor);
+  // #4538: a decision source below the floor stays eligible, because its low
+  // score may come from the open choice itself; A4.5 assesses that.
+  const eligible = summary.ready.filter(
+    (issue) => !issue.belowFloor || issue.decisionSource === true,
+  );
   return {
     eligible,
     eligible_count: eligible.length,
     total: summary.summary.total,
+    ...(summary.confirmationQueue === undefined
+      ? {}
+      : { confirmationQueue: summary.confirmationQueue }),
   };
 }
 
@@ -2353,20 +3013,48 @@ function printHelp() {
   IDD label name or approvalSignals.readyLabelName, such an issue gets the
   reason needs_confirmation_label_collision instead, and the run continues.
 
+  #4538 decision sources: an open issue carrying the configured needs-decision
+  label stays excluded (reason: label:<name>) unless the shared decision-source
+  gate admits it. The gate reads the trusted default branch once (the master
+  dangerouslyAutoDecide switch and the decisionIssue class must both be on,
+  never a feature branch). An admitted source is ready with
+  "decisionSource": true, and a
+  below-floor one stays eligible under --swarm-floor, because its score may come
+  from the open choice; A4 and A4.5 still assess the plan before any claim.
+  The label keeps excluding, with an added reason, when its state cannot be
+  read (provisional_state_unavailable), records exist that Resume owns
+  (provisional_records_present), the pending count cannot be read
+  (provisional_pending_unreadable), or the count of open confirmation-label
+  issues plus the queue below reaches maxPendingConfirmations
+  (provisional_pending_cap:<count>/<cap>). The gate never relaxes, replays, or
+  queues an issue whose needs-decision label name collides with another
+  configured label, or that is a roadmap node, a durable record, a
+  confirmation issue, a draft carrier, or a review-needs-decision follow-up. A source whose provisional
+  work is complete and awaits confirmation is never ready, whatever the flag or
+  class says (reasons: label:<name>, confirmation_pending) and is listed in
+  "confirmationQueue" (present only when non-empty): its number, title, bundle
+  generation, chosen choices, and verified implementation links. Reading that
+  state costs at least one work-item read and one comment read per
+  needs-decision issue, whatever the flag says, because the queue must stay
+  visible when it is off.
+
 Output schema (JSON mode):
   {
     "ready": [{ "number": 123, "title": "...", "autopilotSuitability": 4, "belowFloor": false, "isRoadmap": false }],
     "filteredOut": [{ "number": 124, "title": "...", "reasons": ["..."], "autopilotSuitability": null, "belowFloor": false, "isRoadmap": false }],
     "unresolvable": [{ "issueNumber": 124, "kind": "...", "reference": "...", "reason": "..." }],
     "warnings": [{ "issueNumber": 124, "message": "Warning: ..." }],
-    "summary": { "total": 2, "readyCount": 1, "filteredCount": 1, "unresolvableCount": 0, "filteredByReason": { "...": 1 } }
+    "summary": { "total": 2, "readyCount": 1, "filteredCount": 1, "unresolvableCount": 0, "filteredByReason": { "...": 1 } },
+    "confirmationQueue": [{ "number": 125, "title": "...", "bundleGeneration": 1, "choices": [{ "decisionGeneration": 1, "status": "confirmation-pending", "question": "...", "selectedOption": "..." }], "implementationLinks": ["https://github.com/owner/repo/pull/9"] }]
   }
+  (a ready entry also carries "decisionSource": true when the gate admitted it)
 
 Output schema (--swarm-floor mode):
   {
     "eligible": [{ "number": 123, "title": "...", "autopilotSuitability": 4, "belowFloor": false, "isRoadmap": false }],
     "eligible_count": 1,
-    "total": 7
+    "total": 7,
+    "confirmationQueue": [...]
   }
 `);
 }

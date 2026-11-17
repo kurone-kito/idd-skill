@@ -2653,6 +2653,159 @@ test('idd-merge.instructions.md F4 verifies the PR digest before the issue diges
   assert.match(finalCheck, /if\s+lost, post no hold/);
 });
 
+/**
+ * Slices the lines of `text` from the one line that starts with `startPrefix`
+ * up to, but not including, the one line that starts with `endPrefix`.
+ */
+function sliceLinesBetween(
+  text: string,
+  startPrefix: string,
+  endPrefix: string,
+): string {
+  const lines = text.split('\n');
+  const start = lines.findIndex((line) => line.startsWith(startPrefix));
+  const end = lines.findIndex(
+    (line, index) => index > start && line.startsWith(endPrefix),
+  );
+  assert.ok(
+    start >= 0 && end > start,
+    `missing slice markers: "${startPrefix}" ... "${endPrefix}"`,
+  );
+  assert.equal(
+    lines.filter((line) => line.startsWith(startPrefix)).length,
+    1,
+    `"${startPrefix}" must start exactly one line`,
+  );
+  return lines.slice(start, end).join('\n');
+}
+
+/**
+ * The prose checks on F3 step 2 of `idd-merge.instructions.md` (#5248). F3
+ * step 2 is instruction prose that no code runs, so this guard pins the
+ * wording that routes a per-tier object through the F2.5 carrier. One pure
+ * function serves the real text and the mutated copies, so a mutant that
+ * still passes shows the guard has gone vacuous.
+ */
+function collectF3Step2PerTierViolations(step2: string): string[] {
+  const violations: string[] = [];
+  // Flatten line breaks so a rewrap of the prose cannot hide or fake a match.
+  const flat = normalizeWhitespace(step2);
+  if (!flat.includes('F2.5 step 2')) {
+    violations.push('F3 step 2 must cite F2.5 step 2');
+  }
+  for (const copied of [
+    'IDD_MODEL_TIER',
+    'resolve-merge-policy',
+    'git fetch',
+    'git diff',
+    'instructions-only',
+    'frontier',
+    'middle-tier',
+    'lightweight',
+  ]) {
+    if (flat.includes(copied)) {
+      violations.push(`F3 step 2 must not copy F2.5 step 2's "${copied}"`);
+    }
+  }
+  for (const named of [
+    "repository's",
+    '{f25-policy}',
+    'idd-merge-handoff.instructions.md',
+  ]) {
+    if (!flat.includes(named)) {
+      violations.push(`F3 step 2 must name "${named}"`);
+    }
+  }
+  const segments = flat.split(/(?<=[.)])\s+(?=[A-Z])/u);
+  const carrier = segments.filter((segment) =>
+    segment.includes('{f25-policy}'),
+  );
+  if (carrier.length !== 1) {
+    violations.push(
+      `exactly one sentence must name {f25-policy}, found ${carrier.length}`,
+    );
+  } else {
+    for (const word of [
+      'object',
+      'equal',
+      'unset',
+      'stop',
+      'does not update',
+    ]) {
+      if (!carrier[0].includes(word)) {
+        violations.push(`the {f25-policy} sentence must contain "${word}"`);
+      }
+    }
+  }
+  if (
+    !segments.some(
+      (segment) =>
+        !segment.includes('{f25-policy}') &&
+        /\bstring\b[^.]*\bskips?\b[^.]*\bobject\b/u.test(segment),
+    )
+  ) {
+    violations.push(
+      'a sentence apart from the {f25-policy} one must say a string skips the object rule',
+    );
+  }
+  return violations;
+}
+
+test('F3 step 2 routes a per-tier merge policy object through the F2.5 step 2 carrier (#5248)', () => {
+  const step2 = sliceLinesBetween(
+    readText('idd-template/.github/instructions/idd-merge.instructions.md'),
+    '2. Defensive route check',
+    '3. Immediately before executing the merge command',
+  );
+  assert.deepEqual(collectF3Step2PerTierViolations(step2), []);
+
+  const handoffStep2 = sliceLinesBetween(
+    readText(
+      'idd-template/.github/instructions/idd-merge-handoff.instructions.md',
+    ),
+    '2. Resolve the recorded policy',
+    '3. If the resolved value',
+  );
+  assert.match(
+    normalizeWhitespace(handoffStep2),
+    /one enum, `\{f25-policy\}`/u,
+    'F2.5 step 2 must name its resolved enum {f25-policy}',
+  );
+
+  // Mutate the flattened text, so each literal below matches however the prose
+  // is wrapped.
+  const flat = normalizeWhitespace(step2);
+  const mutants: Array<[string, string]> = [
+    ['without the F2.5 step 2 citation', flat.replace('F2.5 step 2', 'it')],
+    ['without the unset stop', flat.replace('(unset: stop)', '')],
+    ['without the carrier name', flat.replace('`{f25-policy}`', 'a value')],
+    ['without the comparison', flat.replace('equals', 'follows')],
+    [
+      'without the carrier protection',
+      flat.replace(', which this resolution does not update', ''),
+    ],
+    ['without the repository source', flat.replace("repository's", 'the')],
+    [
+      'without the handoff route',
+      flat.replace('`idd-merge-handoff.instructions.md`', 'the handoff'),
+    ],
+    [
+      'without the string exemption',
+      flat.replace('A string skips the object rule.', ''),
+    ],
+    ['with a copied fetch', `${flat} git fetch origin`],
+    ['with a copied tier variable', `${flat} IDD_MODEL_TIER`],
+  ];
+  for (const [label, mutant] of mutants) {
+    assert.notEqual(mutant, flat, `mutant ${label} must change the text`);
+    assert.notDeepEqual(
+      collectF3Step2PerTierViolations(mutant),
+      [],
+      `the guard must fail for the mutant ${label}`,
+    );
+  }
+});
+
 // #4377: the fan-out variant's "Delegation brief template" assembles the brief
 // elements that four places state separately. Each row names an element, the
 // file that supplies its single-line anchor, the anchor, and the template label

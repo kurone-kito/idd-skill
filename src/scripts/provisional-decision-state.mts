@@ -145,8 +145,38 @@ export interface ProvisionalDecisionAnswer {
   readonly response: 'accepted' | 'rework';
   readonly requestedOptionId?: string;
   readonly rationale?: string;
+  /** Later work the rework request affects, kept for the rework handoff. */
+  readonly downstreamResults?: readonly string[];
+  /**
+   * The decisions this answer applies to, when it covers only some of the
+   * bundle it presents. Absent means every decision of the bundle.
+   */
+  readonly appliesToDecisionGenerations?: readonly number[];
+  /** The question the user was asked, retained beside the answer. */
+  readonly presentedQuestion?: string;
   /** The actual answer received from the user, retained on the source issue. */
   readonly answerText: string;
+}
+
+/**
+ * The durable rework handoff recorded with an alternate preference. It
+ * preallocates the fresh authoring identities so a later authoring pass
+ * resumes one intended set. It grants no authoring or publication permission.
+ */
+export interface ProvisionalReworkHandoff {
+  readonly handoffId: string;
+  readonly authoringSetId: string;
+  readonly authoringSessionId: string;
+  /** `owner/repo#number` of the source issue that becomes the roadmap. */
+  readonly anchor: string;
+  /** Completed results of the bundle that the alternate preference affects. */
+  readonly priorResults: readonly {
+    readonly decisionGeneration: number;
+    readonly workCompletedRecordId: string;
+    readonly reference: string;
+  }[];
+  /** Later work that relied on the prior results, when the caller knows it. */
+  readonly downstreamResults: readonly string[];
 }
 
 export type ProvisionalDecisionStatus =
@@ -602,6 +632,92 @@ function validateOption(
   if (option) checkStringFields(option, required, path, issues);
 }
 
+const HANDOFF_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/u;
+const HANDOFF_ANCHOR_PATTERN =
+  /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+#[1-9][0-9]*$/u;
+
+function validateHandoff(
+  value: unknown,
+  path: string,
+  issues: ProvisionalDecisionParseIssue[],
+): void {
+  const handoff = exactObject(
+    value,
+    [
+      'handoffId',
+      'authoringSetId',
+      'authoringSessionId',
+      'anchor',
+      'priorResults',
+      'downstreamResults',
+    ],
+    [],
+    path,
+    issues,
+  );
+  if (!handoff) return;
+  for (const key of ['handoffId', 'authoringSetId', 'authoringSessionId']) {
+    const id = handoff[key];
+    if (typeof id !== 'string' || !HANDOFF_ID_PATTERN.test(id)) {
+      issues.push({
+        code: 'handoff-id-invalid',
+        path: `${path}.${key}`,
+        message: 'Expected a stable identity token.',
+      });
+    }
+  }
+  if (
+    typeof handoff.anchor !== 'string' ||
+    !HANDOFF_ANCHOR_PATTERN.test(handoff.anchor)
+  ) {
+    issues.push({
+      code: 'handoff-anchor-invalid',
+      path: `${path}.anchor`,
+      message: 'Expected an owner/repo#number anchor.',
+    });
+  }
+  if (
+    !Array.isArray(handoff.priorResults) ||
+    handoff.priorResults.length === 0
+  ) {
+    issues.push({
+      code: 'handoff-prior-results-required',
+      path: `${path}.priorResults`,
+      message: 'At least one affected prior result is required.',
+    });
+  } else {
+    handoff.priorResults.forEach((entry, index) => {
+      const entryPath = `${path}.priorResults[${index}]`;
+      const result = exactObject(
+        entry,
+        ['decisionGeneration', 'workCompletedRecordId', 'reference'],
+        [],
+        entryPath,
+        issues,
+      );
+      if (!result) return;
+      positiveSafeInteger(
+        result.decisionGeneration,
+        `${entryPath}.decisionGeneration`,
+        issues,
+      );
+      checkStringFields(result, ['workCompletedRecordId'], entryPath, issues);
+      httpUrl(result.reference, `${entryPath}.reference`, issues);
+    });
+  }
+  if (!Array.isArray(handoff.downstreamResults)) {
+    issues.push({
+      code: 'handoff-downstream-results-invalid',
+      path: `${path}.downstreamResults`,
+      message: 'Expected an array of downstream result references.',
+    });
+  } else {
+    handoff.downstreamResults.forEach((reference, index) => {
+      httpUrl(reference, `${path}.downstreamResults[${index}]`, issues);
+    });
+  }
+}
+
 function validateEvent(
   value: unknown,
   issues: ProvisionalDecisionParseIssue[],
@@ -825,7 +941,7 @@ function validateEvent(
       const request = exactObject(
         shape.reworkRequest,
         ['commentUrl', 'requestedAt', 'requestedOptionId', 'rationale'],
-        [],
+        ['handoff'],
         '$.event.reworkRequest',
         issues,
       );
@@ -842,6 +958,12 @@ function validateEvent(
         '$.event.reworkRequest',
         issues,
       );
+      if (request.handoff !== undefined)
+        validateHandoff(
+          request.handoff,
+          '$.event.reworkRequest.handoff',
+          issues,
+        );
       return;
     }
     case 'rework-authored': {
@@ -1041,10 +1163,15 @@ function duplicateJsonKeys(json: string): string[] {
   return duplicates;
 }
 
+/** The one-line italic explanation an answer comment may show before its JSON. */
+export const PROVISIONAL_DECISION_ANSWER_NOTE =
+  '_Provisional decision answer — IDD automation record. Do not edit._';
+
 function parseMarkedJson(
   body: string,
   marker: string,
   issues: ProvisionalDecisionParseIssue[],
+  allowVisibleNote = false,
 ): unknown | undefined {
   if (!body.startsWith(marker)) {
     issues.push({
@@ -1064,6 +1191,19 @@ function parseMarkedJson(
       message: 'The marker must be followed by a newline.',
     });
     return undefined;
+  }
+  if (allowVisibleNote) {
+    // The canonical one-line note keeps the comment readable on GitHub; no
+    // other text may stand between the marker and the JSON.
+    for (const note of [
+      `${PROVISIONAL_DECISION_ANSWER_NOTE}\r\n`,
+      `${PROVISIONAL_DECISION_ANSWER_NOTE}\n`,
+    ]) {
+      if (payload.startsWith(note)) {
+        payload = payload.slice(note.length);
+        break;
+      }
+    }
   }
   if (payload.trim().length === 0) {
     issues.push({
@@ -1131,11 +1271,61 @@ function validateAnswerShape(value: unknown): ProvisionalDecisionParseIssue[] {
       'response',
       'answerText',
     ],
-    ['requestedOptionId', 'rationale'],
+    [
+      'requestedOptionId',
+      'rationale',
+      'downstreamResults',
+      'presentedQuestion',
+      'appliesToDecisionGenerations',
+    ],
     '$',
     issues,
   );
   if (!answer) return issues;
+  if (answer.presentedQuestion !== undefined)
+    nonEmptyString(answer.presentedQuestion, '$.presentedQuestion', issues);
+  if (answer.downstreamResults !== undefined) {
+    if (answer.response !== 'rework') {
+      issues.push({
+        code: 'answer-response-shape-invalid',
+        path: '$.downstreamResults',
+        message: 'Only a rework response can carry downstream results.',
+      });
+    }
+    if (!Array.isArray(answer.downstreamResults)) {
+      issues.push({
+        code: 'handoff-downstream-results-invalid',
+        path: '$.downstreamResults',
+        message: 'Expected an array of downstream result references.',
+      });
+    } else {
+      answer.downstreamResults.forEach((reference, index) => {
+        httpUrl(reference, `$.downstreamResults[${index}]`, issues);
+      });
+    }
+  }
+  if (answer.appliesToDecisionGenerations !== undefined) {
+    const applies = answer.appliesToDecisionGenerations;
+    const covered = Array.isArray(answer.decisionGenerations)
+      ? answer.decisionGenerations
+      : [];
+    if (
+      !Array.isArray(applies) ||
+      applies.length === 0 ||
+      new Set(applies).size !== applies.length ||
+      applies.some(
+        (generation) =>
+          typeof generation !== 'number' || !covered.includes(generation),
+      )
+    ) {
+      issues.push({
+        code: 'applies-to-invalid',
+        path: '$.appliesToDecisionGenerations',
+        message:
+          'Expected unique decision generations from the presented bundle.',
+      });
+    }
+  }
   if (answer.schemaVersion !== 1) {
     issues.push({
       code: 'schema-version-unsupported',
@@ -1297,11 +1487,22 @@ function parseAnswerComment(body: string):
     body,
     PROVISIONAL_DECISION_ANSWER_MARKER,
     parseIssues,
+    true,
   );
   if (parseIssues.length > 0) return { ok: false, issues: parseIssues };
   const issues = validateAnswerShape(value);
   if (issues.length > 0) return { ok: false, issues };
   return { ok: true, answer: value as ProvisionalDecisionAnswer };
+}
+
+/** Parse one canonical agent-answer comment. */
+export function parseProvisionalDecisionAnswerComment(body: string):
+  | { readonly ok: true; readonly answer: ProvisionalDecisionAnswer }
+  | {
+      readonly ok: false;
+      readonly issues: readonly ProvisionalDecisionParseIssue[];
+    } {
+  return parseAnswerComment(body);
 }
 
 function stableJson(value: unknown): string {
@@ -1732,6 +1933,16 @@ function validateAnswerBinding(
   );
 }
 
+function answerAppliesTo(
+  answer: ProvisionalDecisionAnswer,
+  decisionGeneration: number,
+): boolean {
+  return (
+    answer.appliesToDecisionGenerations === undefined ||
+    answer.appliesToDecisionGenerations.includes(decisionGeneration)
+  );
+}
+
 function answerFollowsEveryCompletion(
   answerComment: ProvisionalDecisionComment,
   recordComment: ProvisionalDecisionComment,
@@ -1782,12 +1993,86 @@ function decisionStatus(
   return 'selected';
 }
 
+function reworkHandoffIssue(
+  handoff: ProvisionalReworkHandoff | undefined,
+  record: ProvisionalDecisionRecord,
+  currentBundle: readonly MutableDecision[],
+  allStates: readonly MutableDecision[],
+): { readonly code: string; readonly message: string } | undefined {
+  if (handoff === undefined) return undefined;
+  const sourceRef = `${record.source.repository}#${record.source.issueNumber}`;
+  if (handoff.anchor.toLowerCase() !== sourceRef.toLowerCase()) {
+    return {
+      code: 'rework-handoff-anchor-invalid',
+      message: 'The handoff anchor must be the source issue being reworked.',
+    };
+  }
+  const expectedResults = [...currentBundle]
+    .sort(
+      (left, right) =>
+        left.selection.record.decisionGeneration -
+        right.selection.record.decisionGeneration,
+    )
+    .map((state) => ({
+      decisionGeneration: state.selection.record.decisionGeneration,
+      workCompletedRecordId: state.workCompleted?.record.recordId,
+      reference: state.workCompleted
+        ? resultFor(state.workCompleted.record)?.reference
+        : undefined,
+    }));
+  if (!sameValue(handoff.priorResults, expectedResults)) {
+    return {
+      code: 'rework-handoff-results-mismatch',
+      message:
+        'The handoff must name the completed results of the whole current bundle.',
+    };
+  }
+  for (const state of allStates) {
+    const otherRequest = state.reworkRequested?.record.event.reworkRequest as
+      | JsonObject
+      | undefined;
+    const other = otherRequest?.handoff as ProvisionalReworkHandoff | undefined;
+    const sameBundle =
+      state.selection.record.bundleGeneration === record.bundleGeneration;
+    const authoredSet = state.reworkAuthored?.record.event.reworkRoadmap as
+      | JsonObject
+      | undefined;
+    if (!sameBundle) {
+      if (
+        authoredSet?.authoringSetId === handoff.authoringSetId ||
+        (other &&
+          (other.authoringSetId === handoff.authoringSetId ||
+            other.authoringSessionId === handoff.authoringSessionId ||
+            other.handoffId === handoff.handoffId))
+      ) {
+        return {
+          code: 'rework-handoff-set-reused',
+          message:
+            'A rework handoff cannot reuse the identities of another bundle generation.',
+        };
+      }
+    } else if (
+      other &&
+      (other.handoffId !== handoff.handoffId ||
+        other.authoringSetId !== handoff.authoringSetId ||
+        other.authoringSessionId !== handoff.authoringSessionId ||
+        other.anchor !== handoff.anchor)
+    ) {
+      return {
+        code: 'rework-handoff-conflict',
+        message:
+          'Every rework request of one bundle must carry the same handoff identity.',
+      };
+    }
+  }
+  return undefined;
+}
+
 /**
  * Replay a complete, oldest-first issue-comment history without network or
  * prompt access. The caller owns API pagination, author trust, edit checks,
  * claim verification, and independent work verification.
  */
-// audit:ignore-dead-export: runtime consumer is tracked in issue #4536
 export function replayProvisionalDecisionHistory(
   input: ProvisionalDecisionReplayInput,
 ): ProvisionalDecisionReplayResult {
@@ -2291,6 +2576,16 @@ export function replayProvisionalDecisionHistory(
         );
         continue;
       }
+      if (!answerAppliesTo(parsedAnswer.answer, record.decisionGeneration)) {
+        issues.push(
+          createReplayIssue(
+            'confirmation-scope-mismatch',
+            'The referenced answer does not apply to this decision generation.',
+            comment.id,
+          ),
+        );
+        continue;
+      }
       if (parsedAnswer.answer.response !== 'accepted') {
         issues.push(
           createReplayIssue(
@@ -2401,6 +2696,7 @@ export function replayProvisionalDecisionHistory(
         parsedAnswer.answer.response !== 'rework' ||
         parsedAnswer.answer.requestedOptionId !== request.requestedOptionId ||
         parsedAnswer.answer.rationale !== request.rationale ||
+        !answerAppliesTo(parsedAnswer.answer, record.decisionGeneration) ||
         answerRequestOrder !== 0 ||
         answerRecordOrder === undefined ||
         answerRecordOrder > 0 ||
@@ -2428,6 +2724,42 @@ export function replayProvisionalDecisionHistory(
         );
         continue;
       }
+      const handoffIssue = reworkHandoffIssue(
+        request.handoff as ProvisionalReworkHandoff | undefined,
+        record,
+        currentBundle,
+        [...states.values()],
+      );
+      if (handoffIssue) {
+        issues.push(
+          createReplayIssue(
+            handoffIssue.code,
+            handoffIssue.message,
+            comment.id,
+          ),
+        );
+        continue;
+      }
+      // The record's handoff holds every downstream result its answer names;
+      // it may hold more, because a later request adds to the bundle's list.
+      const requestedHandoff = request.handoff as
+        | ProvisionalReworkHandoff
+        | undefined;
+      if (
+        parsedAnswer.answer.downstreamResults?.some(
+          (reference) =>
+            !requestedHandoff?.downstreamResults.includes(reference),
+        )
+      ) {
+        issues.push(
+          createReplayIssue(
+            'rework-handoff-downstream-mismatch',
+            'The handoff must keep every downstream result its answer records.',
+            comment.id,
+          ),
+        );
+        continue;
+      }
       existing.reworkRequested = entry;
       continue;
     }
@@ -2446,7 +2778,12 @@ export function replayProvisionalDecisionHistory(
       const source = record.source;
       const reworkSource = reworkSources.get(record.recordId);
       const expectedUrl = sourceIssueUrl(source);
+      const requestedHandoff = (
+        existing.reworkRequested.record.event.reworkRequest as JsonObject
+      ).handoff as ProvisionalReworkHandoff | undefined;
       if (
+        (requestedHandoff !== undefined &&
+          roadmap.authoringSetId !== requestedHandoff.authoringSetId) ||
         roadmap.roadmapIssueNumber !== source.issueNumber ||
         !sameGitHubIssueUrl(roadmap.url as string, expectedUrl) ||
         !reworkSource ||
@@ -2643,4 +2980,212 @@ export function bindProvisionalDecision(
     bundleGeneration: currentBundleGeneration,
     decisions: bound,
   };
+}
+
+/**
+ * Evidence for reading the rework handoff of a retained decision source. It is
+ * the replay input without a current source: the reader replays against the
+ * source as it was last recorded, because the authoring pass may already have
+ * rewritten the body when a later step asks.
+ */
+export type ProvisionalReworkHandoffReadInput = Omit<
+  ProvisionalDecisionReplayInput,
+  'currentSource'
+>;
+
+export type ProvisionalReworkHandoffRefusal =
+  | 'history-incomplete'
+  | 'record-missing'
+  | 'record-authority-invalid'
+  | 'replay-invalid'
+  | 'source-confirmed'
+  | 'no-rework-request'
+  | 'rework-already-authored'
+  | 'handoff-missing';
+
+/**
+ * The trusted rework handoff of a source whose current bundle awaits its
+ * rework authoring. Reading it grants nothing: it names the identities a
+ * verified authoring pass must use, and every ownership, claim, and hold check
+ * still belongs to the caller.
+ */
+export type ProvisionalReworkHandoffRead =
+  | {
+      readonly ok: true;
+      readonly bundleGeneration: number;
+      /** The decisions that received a rework request, in generation order. */
+      readonly decisionGenerations: readonly number[];
+      readonly requestRecordIds: readonly string[];
+      /**
+       * The shared identity of the bundle's requests. Its downstream results
+       * are the sorted union over every request, because a later request adds
+       * its own to the earlier ones.
+       */
+      readonly handoff: ProvisionalReworkHandoff;
+      /** The source as the last trusted record saw it, before any rewrite. */
+      readonly recordedSource: ProvisionalDecisionSource;
+      /** The earliest rework request comment of the bundle. */
+      readonly firstRequest: {
+        readonly commentId: string;
+        readonly createdAt: string;
+      };
+    }
+  | {
+      readonly ok: false;
+      readonly reason: ProvisionalReworkHandoffRefusal;
+      /** The replay refusal codes, when the replay was the reason. */
+      readonly issueCodes: readonly string[];
+      /** The offending record comment, when its authority was the reason. */
+      readonly commentId?: string;
+    };
+
+function reworkHandoffRefusal(
+  reason: ProvisionalReworkHandoffRefusal,
+  issueCodes: readonly string[] = [],
+  commentId?: string,
+): ProvisionalReworkHandoffRead {
+  return commentId === undefined
+    ? { ok: false, reason, issueCodes }
+    : { ok: false, reason, issueCodes, commentId };
+}
+
+/**
+ * Read the trusted rework handoff of a retained decision source from its
+ * complete record history. It succeeds only for a valid replay whose current
+ * bundle has at least one rework request and no recorded rework authoring,
+ * and whose requests agree on one handoff identity. A decision of the bundle
+ * that is still awaiting its own answer does not stop it: the lifecycle lets
+ * that answer follow the source rewrite. Any record marker from an untrusted
+ * or unnamed author, or one that was edited, refuses the whole history, as
+ * Discover does, instead of being skipped. Any other state, including an
+ * incomplete, stale, or conflicting history, refuses with a named reason, so a
+ * handoff that is not verified never authorizes a consumer.
+ * Because the replay basis is the last recorded source, a source rewritten by
+ * the authoring pass still reads; whether the rewrite happened under the right
+ * owner is the caller's check.
+ */
+export function readReworkHandoff(
+  input: ProvisionalReworkHandoffReadInput,
+): ProvisionalReworkHandoffRead {
+  if (!input.completeHistory) return reworkHandoffRefusal('history-incomplete');
+  const recordComments = new Map<string, ProvisionalDecisionComment>();
+  let recordedSource: ProvisionalDecisionSource | undefined;
+  let authoredRecorded = false;
+  for (const comment of input.comments) {
+    if (!comment.body.startsWith(PROVISIONAL_DECISION_RECORD_MARKER)) {
+      continue;
+    }
+    if (!comment.trustedAuthor || !comment.authorLogin || comment.edited) {
+      return reworkHandoffRefusal('record-authority-invalid', [], comment.id);
+    }
+    const parsed = parseProvisionalDecisionRecordComment(comment.body);
+    if (!parsed.ok) continue;
+    recordComments.set(parsed.record.recordId, comment);
+    recordedSource = parsed.record.source;
+    if (parsed.record.event.type === 'rework-authored') authoredRecorded = true;
+  }
+  if (recordedSource === undefined)
+    return reworkHandoffRefusal('record-missing');
+
+  const replay = replayProvisionalDecisionHistory({
+    ...input,
+    currentSource: recordedSource,
+  });
+  if (!replay.valid) {
+    const codes = [...new Set(replay.issues.map((issue) => issue.code))];
+    // A caller with no authoring evidence cannot replay a history that already
+    // records a rework authoring, so name that state when the refusal is the
+    // unverified source rewrite, and keep any other cause as it is.
+    const unverifiedAuthoring = codes.some(
+      (code) =>
+        code === 'source-binding-mismatch' ||
+        code === 'rework-roadmap-unverified',
+    );
+    return reworkHandoffRefusal(
+      authoredRecorded && unverifiedAuthoring
+        ? 'rework-already-authored'
+        : 'replay-invalid',
+      codes,
+    );
+  }
+  const currentBundleGeneration = Math.max(
+    ...replay.decisions.map((decision) => decision.bundleGeneration),
+  );
+  const bundle = replay.decisions.filter(
+    (decision) => decision.bundleGeneration === currentBundleGeneration,
+  );
+  // A rework authoring recorded in any bundle ends the adoption of this source,
+  // even when a later bundle generation asks for another rework.
+  if (
+    authoredRecorded ||
+    bundle.some((decision) => decision.status === 'rework-authored')
+  ) {
+    return reworkHandoffRefusal('rework-already-authored');
+  }
+  const requested = bundle.filter(
+    (decision) => decision.status === 'rework-requested',
+  );
+  if (requested.length === 0) {
+    return reworkHandoffRefusal(
+      bundle.every((decision) => decision.status === 'confirmed')
+        ? 'source-confirmed'
+        : 'no-rework-request',
+    );
+  }
+
+  const handoffs: ProvisionalReworkHandoff[] = [];
+  for (const decision of requested) {
+    const request = decision.reworkRequested?.event.reworkRequest;
+    const handoff = isObject(request)
+      ? (request.handoff as ProvisionalReworkHandoff | undefined)
+      : undefined;
+    if (handoff === undefined) return reworkHandoffRefusal('handoff-missing');
+    handoffs.push(handoff);
+  }
+  // The replay already refuses requests of one bundle that disagree on the
+  // handoff identity or on the prior results, so the first one speaks for all.
+  const [lead] = handoffs;
+  if (lead === undefined) return reworkHandoffRefusal('handoff-missing');
+
+  const ordered = [...requested].sort(
+    (left, right) => left.decisionGeneration - right.decisionGeneration,
+  );
+  const requestComments = ordered.flatMap((decision) => {
+    const requestComment = decision.reworkRequested
+      ? recordComments.get(decision.reworkRequested.recordId)
+      : undefined;
+    return requestComment === undefined ? [] : [requestComment];
+  });
+  const indexes = commentIndexOf(input.comments);
+  const [firstRequest] = [...requestComments].sort((left, right) =>
+    commentPrecedes(left, right, indexes) ? -1 : 1,
+  );
+  if (firstRequest === undefined)
+    return reworkHandoffRefusal('handoff-missing');
+  return {
+    ok: true,
+    bundleGeneration: currentBundleGeneration,
+    decisionGenerations: ordered.map((decision) => decision.decisionGeneration),
+    requestRecordIds: ordered.map(
+      (decision) =>
+        (decision.reworkRequested as ProvisionalDecisionRecord).recordId,
+    ),
+    handoff: {
+      ...lead,
+      downstreamResults: [
+        ...new Set(handoffs.flatMap((handoff) => handoff.downstreamResults)),
+      ].sort(),
+    },
+    recordedSource,
+    firstRequest: {
+      commentId: firstRequest.id,
+      createdAt: firstRequest.createdAt,
+    },
+  };
+}
+
+function commentIndexOf(
+  comments: readonly ProvisionalDecisionComment[],
+): ReadonlyMap<string, number> {
+  return new Map(comments.map((comment, index) => [comment.id, index]));
 }
