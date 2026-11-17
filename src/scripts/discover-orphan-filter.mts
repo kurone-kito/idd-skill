@@ -31,13 +31,22 @@ import {
 } from './discover-hint-cache.mts';
 import {
   buildConfirmationLabelMatcher,
+  buildLiveDecisionSourceResolver,
+  buildProvisionalDecisionEvidenceReader,
   CONFIRMATION_LABEL_COLLISION_REASON,
+  CONFIRMATION_PENDING_REASON,
   type ConfirmationLabelMatcher,
+  type ConfirmationQueueEntry,
+  type DecisionSourceCandidate,
+  type DecisionSourceResolver,
+  type DecisionSourceVerdict,
   extractBlockedByIssueNumbers,
   extractDeferSourceRefsIssueNumbers,
   extractDependencyIssueNumbers,
   hasDeferSourceMarker,
+  isDecisionSourceShape,
   isParentEpicIssue,
+  needsDecisionNameCollides,
 } from './discover-readiness-check.mts';
 import {
   annotateLeafClaimState,
@@ -225,6 +234,9 @@ export type OrphanClassification =
        * `warnings[]` array, mirroring the existing stale-authoring-label
        * warning shape. */
       warning?: 'runtime_observation_precondition_demoted';
+      /** #4538: set only when the shared decision-source gate admitted this
+       * needs-decision source; A4/A4.5 still assess it before any claim. */
+      decisionSource?: true;
     }
   | {
       orphan: false;
@@ -310,6 +322,13 @@ interface ClassifyIssueOptions {
   /** Prebuilt per-run matcher; omitted for direct `classifyIssue` callers. */
   confirmationLabelMatcher?: ConfirmationLabelMatcher;
   /**
+   * #4538: the shared decision-source gate's verdict for this issue. Only an
+   * `eligible` verdict lets the needs-decision label pass, and only while its
+   * name collides with no other configured label name. A `blocked` verdict's
+   * reason and a `queued` verdict are named in the `blocked_label` details.
+   */
+  decisionSourceVerdict?: DecisionSourceVerdict;
+  /**
    * The configured `providerOutage.declarationTarget` issue number
    * (#2800), or `null`/absent when unconfigured. That issue is a
    * permanent, adopter-authored coordination issue meant to stay open
@@ -362,6 +381,13 @@ interface FilterOrphanIssuesOptions {
   confirmationLabelName?: unknown;
   /** See {@link ClassifyIssueOptions.readyLabelName}. */
   readyLabelName?: unknown;
+  /**
+   * #4538: the shared decision-source gate. Absent keeps every needs-decision
+   * issue excluded. When present, every open needs-decision source of the
+   * listing is replayed before any classification, so the pending cap cannot
+   * depend on scan order.
+   */
+  decisionSources?: DecisionSourceResolver;
   /** See {@link ClassifyIssueOptions.providerOutageDeclarationTarget}. */
   providerOutageDeclarationTarget?: number | null;
   /** See {@link ClassifyIssueOptions.authoringJournalTarget}. */
@@ -464,6 +490,8 @@ interface OrphanCandidate {
   state: unknown;
   reason: string;
   url: unknown;
+  /** #4538: present only when the decision-source gate admitted this source. */
+  decisionSource?: true;
   autopilotSuitability: number | null;
   effort: EffortHint | null;
   /**
@@ -825,9 +853,26 @@ export function classifyIssue(
   // roadmap node or blocked leaf. Mask first, HTML comments kept (the default):
   // the markers themselves are HTML comments.
   const bodyForMarkerTests = maskMarkdownForScan(body);
+  // #4538: the needs-decision name leaves the blocked set only for an
+  // `eligible` verdict while it collides with no other configured name, so a
+  // shared name can never drop another hold from the set.
+  const decisionRelaxed =
+    options.decisionSourceVerdict?.kind === 'eligible' &&
+    !needsDecisionNameCollides({
+      needsDecisionLabelName,
+      authoringLabelName,
+      authoringOnlyLabelName,
+      blockedByHumanLabelName,
+      roadmapLabelName: normalizeRoadmapLabelName(options.roadmapLabelName),
+      confirmationLabelName: normalizePolicyConfig({
+        autoDecide: { confirmationLabelName: options.confirmationLabelName },
+      }).autoDecide.confirmationLabelName.trim(),
+      confirmationLabelCollides: false,
+      readyLabelName: options.readyLabelName,
+    });
   const blockedLabels = new Set([
     blockedByHumanLabelName,
-    needsDecisionLabelName,
+    ...(decisionRelaxed ? [] : [needsDecisionLabelName]),
     authoringOnlyLabelName,
   ]);
   // #4960: the confirmation label is treated like the blocked-by-human label,
@@ -853,6 +898,18 @@ export function classifyIssue(
           (label) =>
             blockedLabels.has(label) || confirmationLabel.matches(label),
         );
+  // #4538: a gate verdict that kept the needs-decision label blocking is named
+  // in the details, next to the label, so the reason stays in `blocked_label`.
+  const decisionVerdict = options.decisionSourceVerdict;
+  const blockedLabelDetails =
+    blockedLabel === needsDecisionLabelName && decisionVerdict !== undefined
+      ? decisionVerdict.kind === 'queued'
+        ? `${blockedLabel} (${CONFIRMATION_PENDING_REASON})`
+        : decisionVerdict.kind === 'blocked' &&
+            decisionVerdict.reason !== undefined
+          ? `${blockedLabel} (${decisionVerdict.reason})`
+          : blockedLabel
+      : blockedLabel;
 
   // #4257: a draft carrier is filed as blocked_label before the number-based
   // targets below, so every carrier lands there, as the listing's acceptance
@@ -904,7 +961,11 @@ export function classifyIssue(
   }
 
   if (blockedLabel) {
-    return { orphan: false, reason: 'blocked_label', details: blockedLabel };
+    return {
+      orphan: false,
+      reason: 'blocked_label',
+      details: blockedLabelDetails ?? blockedLabel,
+    };
   }
 
   if (labels.has(authoringLabelName)) {
@@ -931,9 +992,16 @@ export function classifyIssue(
       return { orphan: false, reason: 'runtime_observation_precondition' };
     }
   }
-  const demotionWarning = runtimeObservationDemoted
-    ? ({ warning: 'runtime_observation_precondition_demoted' } as const)
-    : {};
+  const demotionWarning = {
+    ...(runtimeObservationDemoted
+      ? ({ warning: 'runtime_observation_precondition_demoted' } as const)
+      : {}),
+    // #4538: marks an orphan that only passed because the gate relaxed the
+    // needs-decision label.
+    ...(decisionRelaxed && labels.has(needsDecisionLabelName)
+      ? ({ decisionSource: true } as const)
+      : {}),
+  };
 
   // Two independent reference families, matching A3's own dependency check
   // in `discover-readiness-check.mts` (#1536): visible `Blocked by #NNN`
@@ -1453,6 +1521,70 @@ export async function filterOrphanIssues(
     readyLabelName: options.readyLabelName,
   });
 
+  // #4538: replay every needs-decision source of the listing before any
+  // classification, so the shared gate's pending cap cannot depend on scan
+  // order, and no label filter hides a decision source from the assessment.
+  // Never replayed: an excluded roadmap leaf, a durable record, a draft
+  // carrier, a roadmap node, a review-needs-decision follow-up, or any issue
+  // whose needs-decision name collides with another configured name.
+  const decisionSources = options.decisionSources;
+  const decisionVerdicts = new Map<number, DecisionSourceVerdict>();
+  if (decisionSources !== undefined) {
+    const labelNames = {
+      needsDecisionLabelName: normalizeNeedsDecisionLabelName(
+        options.needsDecisionLabelName,
+      ),
+      authoringLabelName: normalizeAuthoringLabelName(
+        options.authoringLabelName,
+      ),
+      authoringOnlyLabelName: normalizeAuthoringOnlyLabelName(
+        options.authoringOnlyLabelName,
+      ),
+      blockedByHumanLabelName: normalizeBlockedByHumanLabelName(
+        options.blockedByHumanLabelName,
+      ),
+      roadmapLabelName: normalizeRoadmapLabelName(options.roadmapLabelName),
+    };
+    const markerPrefix = normalizeMarkerPrefix(options.markerPrefix);
+    const candidates: DecisionSourceCandidate[] = [];
+    const collides = needsDecisionNameCollides({
+      ...labelNames,
+      confirmationLabelName: confirmationLabelMatcher.labelName,
+      confirmationLabelCollides: confirmationLabelMatcher.collision,
+      readyLabelName: options.readyLabelName,
+    });
+    for (const issue of collides ? [] : issues) {
+      const labels = new Set(normalizeLabels(issue.labels));
+      const body = String(issue.body ?? '');
+      if (
+        excludedIssueNumbers.has(issue.number) ||
+        issue.number === options.providerOutageDeclarationTarget ||
+        issue.number === options.authoringJournalTarget ||
+        (labels.has(labelNames.authoringOnlyLabelName) &&
+          createMarkerRegex(markerPrefix, 'draft-carrier').test(
+            maskMarkdownForScan(body),
+          )) ||
+        !isDecisionSourceShape({ labels, body, markerPrefix, ...labelNames })
+      ) {
+        continue;
+      }
+      candidates.push({
+        issueNumber: issue.number,
+        title: String(issue.title ?? ''),
+        labels: [...labels],
+      });
+    }
+    if (candidates.length > 0) {
+      await decisionSources.prepare(candidates);
+      for (const candidate of candidates) {
+        decisionVerdicts.set(
+          candidate.issueNumber,
+          decisionSources.verdict(candidate.issueNumber),
+        );
+      }
+    }
+  }
+
   for (const issue of issues) {
     if (excludedIssueNumbers.has(issue.number)) {
       filtered.excluded_roadmap_leaf.push({
@@ -1481,6 +1613,7 @@ export async function filterOrphanIssues(
       authoringJournalTarget: options.authoringJournalTarget,
       openIssueDetailsByNumber,
       currentRepo: options.currentRepo,
+      decisionSourceVerdict: decisionVerdicts.get(issue.number),
     };
     let result = classifyIssue(issue, classifyOptions);
     // #2767: only a `runtime_observation_precondition` filter can ever be
@@ -1585,6 +1718,7 @@ export async function filterOrphanIssues(
         state: issue.state,
         reason: result.reason,
         url: issue.url ?? '',
+        ...(result.decisionSource ? { decisionSource: true as const } : {}),
         autopilotSuitability: parseAutopilotSuitability(
           issue.body,
           typeof options.markerPrefix === 'string'
@@ -1725,21 +1859,58 @@ export async function filterOrphanIssues(
       effortOrdinal(left.effort) - effortOrdinal(right.effort) ||
       left.number - right.number,
   );
-  const { ranked, routedToHuman } = rankAndRouteBySuitability(
-    orphansByEffortThenNumber,
-    {
-      floor:
-        options.autopilotSuitabilityFloor ??
-        DEFAULT_AUTOPILOT_SUITABILITY_FLOOR,
-      enabled: options.autopilotSuitabilityEnabled !== false,
-      routeBelowFloor: options.autopilot === true,
-      getScore: (orphan) => orphan.autopilotSuitability,
-      // #4199: effort `L` routing is autopilot-only and opt-in via refuse.
-      routeEffortL:
-        options.autopilot === true && options.effortLPolicy === 'refuse',
-      getEffort: (orphan) => orphan.effort,
-    },
-  );
+  const rankOptions = {
+    floor:
+      options.autopilotSuitabilityFloor ?? DEFAULT_AUTOPILOT_SUITABILITY_FLOOR,
+    enabled: options.autopilotSuitabilityEnabled !== false,
+    routeBelowFloor: options.autopilot === true,
+    getScore: (orphan: OrphanCandidate) => orphan.autopilotSuitability,
+    // #4199: effort `L` routing is autopilot-only and opt-in via refuse.
+    routeEffortL:
+      options.autopilot === true && options.effortLPolicy === 'refuse',
+    getEffort: (orphan: OrphanCandidate) => orphan.effort,
+  };
+  let ranked: OrphanCandidate[];
+  let routedToHuman: OrphanCandidate[];
+  if (!orphansByEffortThenNumber.some((orphan) => orphan.decisionSource)) {
+    ({ ranked, routedToHuman } = rankAndRouteBySuitability(
+      orphansByEffortThenNumber,
+      rankOptions,
+    ));
+  } else {
+    // #4538: a below-floor decision source reaches the assessment instead of
+    // human routing, because its low score may come from the open choice, which
+    // A4.5 reassesses. It keeps its real score for ranking and its effort-L
+    // routing. The two groups are routed apart, then re-ranked together over
+    // the original tie-break order, with no further routing.
+    const plain = orphansByEffortThenNumber.filter(
+      (orphan) => !orphan.decisionSource,
+    );
+    const decision = orphansByEffortThenNumber.filter(
+      (orphan) => orphan.decisionSource,
+    );
+    const plainResult = rankAndRouteBySuitability(plain, rankOptions);
+    const decisionResult = rankAndRouteBySuitability(decision, {
+      ...rankOptions,
+      routeBelowFloor: false,
+    });
+    const inputOrder = new Map(
+      orphansByEffortThenNumber.map((orphan, index) => [orphan, index]),
+    );
+    const byInputOrder = (items: OrphanCandidate[]) =>
+      [...items].sort(
+        (left, right) =>
+          (inputOrder.get(left) ?? 0) - (inputOrder.get(right) ?? 0),
+      );
+    ranked = rankAndRouteBySuitability(
+      byInputOrder([...plainResult.ranked, ...decisionResult.ranked]),
+      { ...rankOptions, routeBelowFloor: false, routeEffortL: false },
+    ).ranked;
+    routedToHuman = byInputOrder([
+      ...plainResult.routedToHuman,
+      ...decisionResult.routedToHuman,
+    ]);
+  }
 
   // #2767 (CodeRabbit review, PR #2840): emit the demotion warning only
   // for a candidate that actually survives to the final `ranked` orphans
@@ -1793,6 +1964,11 @@ export async function filterOrphanIssues(
     draftCarriersWaiting: draftCarriers.waiting.length,
   };
 
+  // #4538: a completed source awaiting confirmation is reported here, never
+  // offered as work and never dropped silently. Present only when non-empty.
+  const confirmationQueue: ConfirmationQueueEntry[] =
+    decisionSources?.queue() ?? [];
+
   return {
     orphans: ranked,
     routed_to_human: routedToHuman,
@@ -1801,6 +1977,7 @@ export async function filterOrphanIssues(
     warnings,
     counts,
     draftCarriers,
+    ...(confirmationQueue.length > 0 ? { confirmationQueue } : {}),
   };
 }
 
@@ -2135,6 +2312,18 @@ async function produceOutput(
 
   const result = await filterOrphanIssues(openIssues, {
     currentRepo: owner && repo ? `${owner}/${repo}` : undefined,
+    // #4538: the shared decision-source gate. The listing above already holds
+    // every open issue, so it also serves as the pending count's source.
+    decisionSources: buildLiveDecisionSourceResolver({
+      reader: buildProvisionalDecisionEvidenceReader({
+        owner,
+        repo,
+        port,
+        policy: { trustedMarkerActors: policy.trustedMarkerActors },
+      }),
+      port,
+      openIssues,
+    }),
     issueStateByNumber: openStateByNumber,
     fetchIssueStateByNumber: (issueNumber) =>
       fetchIssueState(port, issueNumber),
@@ -2384,8 +2573,10 @@ Output schema:
   "unresolvable": [{"issue": 1, "reference": 2, "reason": "issue-not-found-or-inaccessible"}],
   "warnings": [{"issueNumber": 1, "message": "Warning: ..."}],
   "draftCarriers": {"held": [{"number": 1, "title": "...", "url": "...", "heldSince": "...|null", "stale": false}], "ready": [{"number": 2, "title": "...", "url": "..."}], "waiting": [{"number": 3, "title": "...", "url": "...", "blockers": [{"reference": 4, "reason": "open|issue-not-found-or-inaccessible|cross_repository_reference"}]}]},
-  "counts": {"scanned": 0, "orphans": 0, "routed_to_human": 0, "filtered": {...}, "unresolvable": 0, "draftCarriersHeld": 0, "draftCarriersReady": 0, "draftCarriersWaiting": 0}
+  "counts": {"scanned": 0, "orphans": 0, "routed_to_human": 0, "filtered": {...}, "unresolvable": 0, "draftCarriersHeld": 0, "draftCarriersReady": 0, "draftCarriersWaiting": 0},
+  "confirmationQueue": [{"number": 5, "title": "...", "bundleGeneration": 1, "choices": [{"decisionGeneration": 1, "status": "confirmation-pending", "question": "...", "selectedOption": "..."}], "implementationLinks": ["https://github.com/owner/repo/pull/9"]}]
 }
+(an orphan also carries "decisionSource": true when the gate admitted it)
 
 "filtered.provider_outage_target" (#2800) excludes the exact issue named by
 the configured "providerOutage.declarationTarget" -- a permanent,
@@ -2414,6 +2605,27 @@ dangerouslyAutoDecide and the autoDecide class switches say; "details" is the
 label as stored. When that name equals another configured IDD label name or
 approvalSignals.readyLabelName, such an issue is filed there with "details"
 "needs_confirmation_label_collision" instead.
+
+"filtered.blocked_label" (#4538) also keeps excluding an issue carrying the
+configured needs-decision label unless the shared decision-source gate admits
+it. The gate reads the trusted default branch once: the master
+dangerouslyAutoDecide switch and the decisionIssue class must both be on,
+never a feature branch. An admitted source is an orphan with "decisionSource":
+true, and --autopilot does not route it to human by score (its low score may
+come from the open choice, which A4.5 reassesses; effort-L routing still
+applies). A4 and A4.5 still assess the plan before any claim. The label keeps
+excluding, with "details" "<label> (<reason>)", when the record state cannot
+be read (provisional_state_unavailable), records exist that Resume owns
+(provisional_records_present), the pending count cannot be read
+(provisional_pending_unreadable), or the open confirmation-label issues plus
+the queue below reach maxPendingConfirmations
+(provisional_pending_cap:<count>/<cap>). The gate never relaxes for a label name
+that collides with another configured label, a roadmap node, a durable record,
+a draft carrier, or a review-needs-decision follow-up. A source whose
+provisional work is complete and awaits confirmation stays excluded with
+"details" "<label> (confirmation_pending)" whatever the flag or class says, and
+is listed in "confirmationQueue" (present only when non-empty): its number,
+title, bundle generation, chosen choices, and verified implementation links.
 
 "filtered.runtime_observation_precondition" (#2467) excludes an issue whose
 body names a runtime/production-observation precondition in prose --

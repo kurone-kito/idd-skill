@@ -1798,16 +1798,13 @@ export async function evaluateDiscoverReadiness(
     readyLabelName: rawReadyLabelName,
   });
   const isDecisionSourceShaped = (issue: NormalizedIssue): boolean =>
-    issue.labels.has(needsDecisionLabelName) &&
-    !issue.labels.has(roadmapLabelName) &&
-    !createMarkerRegex(resolvedMarkerPrefix, 'roadmap-id').test(
-      maskMarkdownForScan(issue.body),
-    ) &&
-    !hasDeferSourceMarker(
-      issue.body,
-      resolvedMarkerPrefix,
-      'review-needs-decision',
-    );
+    isDecisionSourceShape({
+      labels: issue.labels,
+      body: issue.body,
+      needsDecisionLabelName,
+      roadmapLabelName,
+      markerPrefix: resolvedMarkerPrefix,
+    });
   if (decisionSources !== undefined && !decisionNameCollides) {
     const labelled: DecisionSourceCandidate[] = [];
     for (const issueNumber of evaluatedNumbers) {
@@ -2353,6 +2350,34 @@ export async function evaluateDiscoverReadiness(
     },
     ...(confirmationQueue.length > 0 ? { confirmationQueue } : {}),
   };
+}
+
+/**
+ * Whether an issue has the shape of a decision source (issue #4538): it
+ * carries the needs-decision label, is not a roadmap node (by label or by
+ * `roadmap-id` marker), and is not a follow-up that waits for a reviewer's
+ * decision. Shared by every Discover helper so they replay and relax the same
+ * issues.
+ */
+export function isDecisionSourceShape(input: {
+  labels: ReadonlySet<string>;
+  body: string;
+  needsDecisionLabelName: string;
+  roadmapLabelName: string;
+  markerPrefix: string;
+}): boolean {
+  return (
+    input.labels.has(input.needsDecisionLabelName) &&
+    !input.labels.has(input.roadmapLabelName) &&
+    !createMarkerRegex(input.markerPrefix, 'roadmap-id').test(
+      maskMarkdownForScan(input.body),
+    ) &&
+    !hasDeferSourceMarker(
+      input.body,
+      input.markerPrefix,
+      'review-needs-decision',
+    )
+  );
 }
 
 /**
