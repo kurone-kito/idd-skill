@@ -566,13 +566,14 @@ anchor = the handoff's anchor) replays to member in the journals, with its
 member record after the generation's opening; and, on the first read, every
 other token of the set replays in record order and ends settled (member, or
 cleanup then abandoned) with records that name the journal they are in, an
-actor that is their author, one target, one session, one set and anchor, a
-readable minimization state, and a latest record not minimized as outdated, and
+actor that is their author, one target, one session, one set (and this anchor
+for a record of this set), a readable minimization state, and a latest record
+not minimized as outdated, and
 no issue updated since a minute before the first record of a token that never
 got an issue carries that token (one listing, filtered inside gh, finds it). The
 provisional records, the claim lineage and the stale age come from the
-default-branch trusted policy, never the local file, without the environment
-actor list or the user-global layer, and an untrusted or edited record marker
+default-branch trusted policy (read again by every check), never the local
+file, without the environment actor list or the user-global layer, and an untrusted or edited record marker
 refuses the history, as Discover does; the trusted default branch must also see
 no active claim. The same checks run again right before the first write, at
 each heartbeat read and before member, so a changed owner, handoff, request or
@@ -1398,18 +1399,19 @@ function followsComment(later, earlier) {
  * trusted record fails closed. Each record is held to the identity checks of
  * {@link replayAnchorHold}: it names the journal it was read from, its actor is
  * its author, its minimization state is readable, a token's records agree on
- * one target and one session and name one set and anchor, and the latest record
- * is not minimized as outdated. The session is not tied to the handoff's,
- * because a child published after a resume carries the resumed session.
+ * one target and one session and name one set, a record of this set names this
+ * anchor, and the latest record is not minimized as outdated. The session is
+ * not tied to the handoff's, because a child published after a resume carries
+ * the resumed session.
  */
 function checkSettledSetRecords(input) {
   const trustedSet = new Set(input.trusted.map((login) => login.toLowerCase()));
   const intentToken = `${input.markerPrefix.toLowerCase()}-authoring-publication-intent:`;
   const tokens = new Map();
   const stop = (problem) => ({ problem, unattached: [] });
-  // Whether the records of a token name this set and anchor: a token whose
-  // records name both this set and another one is a journal that disagrees
-  // with itself, as `replayAnchorHold` refuses for the hold token.
+  // Whether the records of a token name this set: a token whose records name
+  // both this set and another one is a journal that disagrees with itself, as
+  // `replayAnchorHold` refuses for the hold token.
   const identities = new Map();
   for (const journal of input.journals) {
     for (const comment of journal.comments) {
@@ -1431,17 +1433,25 @@ function checkSettledSetRecords(input) {
         }
         continue;
       }
-      const ours =
-        intent.set === input.set &&
-        sameIssueRef(intent.anchor, input.anchorRef);
+      const ours = intent.set === input.set;
       const seen = identities.get(intent.token);
       if (seen !== undefined && seen !== ours) {
         return stop(
-          `the records of the publication token ${intent.token} name different sets or anchors, so a child create may be unreconciled`,
+          `the records of the publication token ${intent.token} name different sets, so a child create may be unreconciled`,
         );
       }
       identities.set(intent.token, ours);
-      if (!ours || intent.token === input.holdToken) {
+      if (!ours) {
+        continue;
+      }
+      if (!sameIssueRef(intent.anchor, input.anchorRef)) {
+        // Every token of the rework set is anchored at the source, so a token
+        // of this set under another anchor is not this set's own child.
+        return stop(
+          `publication-intent record ${comment.id} of the token ${intent.token} in ${journal.ref} names the set ${input.set} under the anchor ${intent.anchor}, not this anchor, so a child create may be unreconciled`,
+        );
+      }
+      if (intent.token === input.holdToken) {
         continue;
       }
       const where = `publication-intent record ${comment.id} of the token ${intent.token} in ${journal.ref}`;
@@ -2373,10 +2383,14 @@ function runCli() {
     let rework = null;
     let reverify = null;
     if (holdProblem !== null) {
-      let trustedBase = null;
+      // A merged pull request stays merged, so its proof is kept for the run.
       const mergedProofs = new Map();
-      const evaluateRework = (fresh, expected) =>
-        evaluateReworkAnchor({
+      const evaluateRework = (fresh, expected) => {
+        // The default-branch trust policy is read again by every evaluation
+        // (the first one and each re-verification), so a revoked record actor
+        // or a changed stale age stops the run; one evaluation reads it once.
+        let trustedBase = null;
+        return evaluateReworkAnchor({
           owner,
           repo,
           number: anchorRef.number,
@@ -2433,6 +2447,7 @@ function runCli() {
           },
           expected,
         });
+      };
       const evaluation = evaluateRework(checked, null);
       if (evaluation.mode !== 'rework') {
         return refuse(

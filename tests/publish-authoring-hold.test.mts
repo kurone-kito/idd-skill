@@ -339,6 +339,10 @@ if ((match = /^repos\/o\/r\/issues\/(\d+)\/comments$/.exec(path))) {
         // Someone edits the anchor's body right after the post (#4537).
         state.issues[${ANCHOR}].body += rule.text;
       }
+      if (rule.action === 'trustedPolicy') {
+        // The default branch's trusted policy changes right after the post (#4537).
+        state.trustedConfig = rule.config;
+      }
       if (rule.action === 'dropRelease') {
         state.comments = state.comments.filter((c) => !(c.issue === ${NEW_ISSUE} && /mode=release;/.test(c.body)));
       }
@@ -438,7 +442,12 @@ function setup(
     postFail?: { mode: string; status: number; landed: boolean };
     anchorPostFail?: { mode: string; status: number; landed: boolean };
     anchorClockNow?: boolean;
-    afterPost?: { mode: string; action: string; text?: string }[];
+    afterPost?: {
+      mode: string;
+      action: string;
+      text?: string;
+      config?: unknown;
+    }[];
     removeLabelFailure?: 'unchanged' | 'landed';
     keepLabelOnRemove?: boolean;
     dropReleaseAfterRemove?: boolean;
@@ -7186,7 +7195,7 @@ const REFUSALS: RefusalCase[] = [
       return scenario;
     },
     reason:
-      /records of the publication token token-straddle name different sets or anchors/,
+      /records of the publication token token-straddle name different sets/,
   },
   {
     name: 'a sibling token whose later records name another anchor',
@@ -7214,7 +7223,28 @@ const REFUSALS: RefusalCase[] = [
       return scenario;
     },
     reason:
-      /records of the publication token token-moved name different sets or anchors/,
+      /record \d+ of the token token-moved in o\/r#2674 names the set set-rework under the anchor o\/r#4999, not this anchor/,
+  },
+  {
+    name: 'an unsettled token of the set that names another anchor',
+    scenario: () => {
+      const scenario = reworkScenario();
+      for (const [at, issue] of [
+        [46, 'none'],
+        [47, 'o/r#5014'],
+      ] as const) {
+        siblingRecord(scenario, {
+          at,
+          token: 'token-elsewhere',
+          state: 'pending',
+          issue,
+          anchor: 'o/r#4999',
+        });
+      }
+      return scenario;
+    },
+    reason:
+      /record \d+ of the token token-elsewhere in o\/r#2674 names the set set-rework under the anchor o\/r#4999, not this anchor/,
   },
   {
     name: 'sibling records of one token that disagree on their session',
@@ -7344,6 +7374,30 @@ test('rework: a hidden earlier record of a settled sibling does not block the se
   try {
     const result = fixture.run(childArgs(fixture));
     assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  } finally {
+    fixture.restore();
+  }
+});
+
+test('rework: the default-branch trust policy is read again at each re-verification and a revoked actor stops the run', () => {
+  const fixture = reworkFixture(reworkScenario(), {
+    afterPost: [
+      {
+        mode: 'heartbeat',
+        action: 'trustedPolicy',
+        config: { trustedMarkerActors: ['someone-else'] },
+      },
+    ],
+  });
+  try {
+    const result = fixture.run([...childArgs(fixture), '--apply']);
+    assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
+    const hold = JSON.parse(result.stdout);
+    assert.equal(hold.outcome, 'recovery-hold');
+    assert.equal(hold.failedStep, 'anchor-heartbeat');
+    assert.match(hold.reason, /no longer holds/);
+    // No member record follows the revoked trust.
+    assert.ok(!writeKinds(fixture).includes('member'));
   } finally {
     fixture.restore();
   }
