@@ -1145,11 +1145,15 @@ write. The store checks the claim against the history it has just read, right
 before every answer or record append that writes. The close re-reads the issue
 and then the claim, and the release re-reads the claim, just before the write,
 and the close reads the closed state back. In a resolution the store also
-re-checks the trusted policy as its last step before each write, refuses
-every write when the authenticated GitHub account is not a trusted marker
-actor (the planner ignores that account's markers, so a retry could never
-advance), and counts a write as landed only from a complete history
-read-back. GitHub offers no conditional write, so a close that another actor
+calls a caller-supplied hook, which re-checks the trusted policy, as its last
+step before each write. It refuses every write when the authenticated GitHub
+account cannot be read or is not a trusted marker actor (the planner ignores
+that account's markers, so a retry could never advance, and an app
+installation token names no user, so a resolution needs a user token, as the
+claim collectors do). It refuses the rework-authored append while a
+coordination claim is active, and counts a write as landed only from a
+complete history read-back. GitHub offers no conditional write, so a close
+that another actor
 made with another reason before the `gh` close call is reported and never
 overwritten, while a foreign close inside that call cannot be told from this
 one (preventive; no observed incident yet). Neither write invalidates the
