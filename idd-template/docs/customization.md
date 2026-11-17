@@ -1352,13 +1352,13 @@ A downstream caller gets one full run. The `pnpm-boundary-full` job runs
 `<caller-job> / pnpm-boundary` check keeps working. The caller also sees a
 skipped `pnpm-boundary-group` job. In this source repository, when
 `lint-command` keeps its default, `pnpm-boundary-group` runs the suite as
-four matrix shards instead: `lint`, `typecheck`, `test`, and
-`distribution` (`build:check`, `audit`, and the boundary command). GitHub's
-"Re-run failed jobs" then repeats only the failed shard and the
-`pnpm-boundary` job (issue `#4993`). The workflow selects the shards by the
-repository name, which in a `workflow_call` run is the caller's, so a
-downstream caller never gets them. v0.17.0 and earlier run the whole suite
-in the `pnpm-boundary` job itself.
+matrix shards instead: `lint` (Node 22 only), `typecheck`, three `test`
+parts, and `distribution` (`build:check`, `audit`, and the boundary
+command). GitHub's "Re-run failed jobs" then repeats only the failed shard
+and the `pnpm-boundary` job (issue `#4993`). The workflow selects the
+shards by the repository name, which in a `workflow_call` run is the
+caller's, so a downstream caller never gets them. v0.17.0 and earlier run
+the whole suite in the `pnpm-boundary` job itself.
 
 Example downstream usage:
 

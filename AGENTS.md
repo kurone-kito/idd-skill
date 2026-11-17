@@ -390,11 +390,13 @@ failure:
 - `lint`: the bare-Node lane. It runs the static audits with no dependency
   installed and no longer runs the test suite (issue `#5182`).
 - `pnpm-boundary`: the aggregate job (issue `#4993`). act runs the jobs it
-  needs first. In this repository they are the four `pnpm-boundary-group`
-  shards (`lint`, `typecheck`, `test`, and `distribution`). Each shard runs
+  needs first. In this repository they are the `pnpm-boundary-group`
+  shards: `lint` (Node 22 only), `typecheck`, three `test` parts, and
+  `distribution`. Each shard runs
   `pnpm install --frozen-lockfile --prefer-offline` with `HUSKY=0`, then
-  its own `pnpm run check` groups, and the `distribution` shard also runs
-  `node scripts/check-pnpm-boundary.mjs`. When act does not resolve the
+  its own `pnpm run check` groups (a test part runs its own list of test
+  files with `pnpm exec node --test`), and the `distribution` shard also
+  runs `node scripts/check-pnpm-boundary.mjs`. When act does not resolve the
   repository as `kurone-kito/idd-skill`, the `pnpm-boundary-full` job runs
   the whole suite instead. Before the first push of PR `#5018`, the shard
   path (`pnpm-boundary.yml` with `-j pnpm-boundary`) was replayed locally
@@ -403,7 +405,9 @@ failure:
   not been replayed under act.
 - `pnpm-boundary-node22-floor`: the same reusable workflow on the Node
   version set by its `node-version` input. It is the only one of the three
-  jobs that covers Node 22.
+  jobs that runs the typecheck, test, and distribution shards on Node 22; the
+  lint shard of the `pnpm-boundary` job always runs on Node 22 (issue
+  `#5263`).
 
 Compared with `commands.pre-push-validate`, the script adds the
 bare-Node run with no installed dependency, the frozen-lockfile install
@@ -416,7 +420,7 @@ tests use wall-clock limits: a 2000 ms limit in
 `tests/provider-outage-park-read-runtime.test.mts`. Local act runs of this
 change on 2026-10-27 hit this failure in the lint job's bare-Node test suite
 step, as recorded in pull request `#4773`. Issue `#5182` removed that step,
-and the same test files still run in the `test` shard of the
+and the same test files still run in the `test` parts of the
 `pnpm-boundary` job. Rerun the job on a quieter host before treating such a
 failure as a code defect.
 
