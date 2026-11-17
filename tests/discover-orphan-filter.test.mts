@@ -4793,13 +4793,20 @@ test('decision gate: only needs-decision sources of the unfiltered open listing 
         state: 'open',
         labels: [{ name: DECISION }],
       },
+      8: {
+        number: 8,
+        title: 'confirmation issue',
+        body: 'task',
+        state: 'open',
+        labels: [{ name: DECISION }, { name: CONFIRM }],
+      },
     },
   });
   // The listing carries every open issue, whatever its label: no label query.
   const issues = fetchOpenIssues(port);
   assert.deepEqual(
     issues.map((issue) => issue.number),
-    [1, 2, 3, 4, 5, 6, 7],
+    [1, 2, 3, 4, 5, 6, 7, 8],
   );
   const { resolver, prepared } = orphanGate();
   const result = await filterOrphanIssues(issues, {
@@ -5014,4 +5021,46 @@ test('decision gate: a reused gate holds only the current orphan pass', async ()
     decisionSources: resolver,
   });
   assert.equal('confirmationQueue' in second, false);
+});
+
+test('decision gate: a confirmation issue or draft carrier with completed records is never queued or counted', async () => {
+  const carrierBody = '<!-- idd-skill-draft-carrier: carrier-1 -->\nbody';
+  const { resolver, prepared } = orphanGate(
+    { 1: completedSource, 2: completedSource, 3: completedSource },
+    { countOpenConfirmationIssues: () => 1 },
+    { maxPendingConfirmations: 3 },
+  );
+  const result = await runOrphans(
+    [
+      decisionIssue(1, [DECISION, CONFIRM]),
+      decisionIssue(2, [DECISION, 'status:authoring-only'], carrierBody),
+      decisionIssue(3),
+      decisionIssue(4),
+    ],
+    { decisionSources: resolver },
+  );
+  assert.deepEqual(prepared, [[3, 4]]);
+  assert.equal(result.confirmationQueue?.length, 1);
+  assert.equal(result.confirmationQueue?.[0]?.number, 3);
+  // 1 open + 1 queued is below the cap of 3, so source 4 stays eligible.
+  assert.deepEqual(
+    result.orphans.map((o) => [o.number, o.decisionSource]),
+    [[4, true]],
+  );
+  // The trusted name may differ from the local one: only the trusted name on a
+  // completed source keeps it out of the queue.
+  const trustedOnly = orphanGate(
+    { 5: completedSource },
+    {},
+    { confirmationLabelName: 'auto:confirm' },
+  );
+  const outcome = await runOrphans(
+    [decisionIssue(5, [DECISION, 'auto:confirm'])],
+    {
+      decisionSources: trustedOnly.resolver,
+      confirmationLabelName: 'auto:other',
+    },
+  );
+  assert.equal('confirmationQueue' in outcome, false);
+  assert.deepEqual(outcome.orphans, []);
 });

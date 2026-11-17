@@ -1525,8 +1525,9 @@ export async function filterOrphanIssues(
   // classification, so the shared gate's pending cap cannot depend on scan
   // order, and no label filter hides a decision source from the assessment.
   // Never replayed: an excluded roadmap leaf, a durable record, a draft
-  // carrier, a roadmap node, a review-needs-decision follow-up, or any issue
-  // whose needs-decision name collides with another configured name.
+  // carrier, a confirmation issue, a roadmap node, a review-needs-decision
+  // follow-up, or any issue whose needs-decision name collides with another
+  // configured name.
   const decisionSources = options.decisionSources;
   const decisionVerdicts = new Map<number, DecisionSourceVerdict>();
   let decisionGateRan = false;
@@ -1561,11 +1562,13 @@ export async function filterOrphanIssues(
         excludedIssueNumbers.has(issue.number) ||
         issue.number === options.providerOutageDeclarationTarget ||
         issue.number === options.authoringJournalTarget ||
-        (labels.has(labelNames.authoringOnlyLabelName) &&
-          createMarkerRegex(markerPrefix, 'draft-carrier').test(
-            maskMarkdownForScan(body),
-          )) ||
-        !isDecisionSourceShape({ labels, body, markerPrefix, ...labelNames })
+        !isDecisionSourceShape({
+          labels,
+          body,
+          markerPrefix,
+          confirmationLabel: confirmationLabelMatcher,
+          ...labelNames,
+        })
       ) {
         continue;
       }
@@ -2621,9 +2624,10 @@ be read (provisional_state_unavailable), records exist that Resume owns
 (provisional_records_present), the pending count cannot be read
 (provisional_pending_unreadable), or the open confirmation-label issues plus
 the queue below reach maxPendingConfirmations
-(provisional_pending_cap:<count>/<cap>). The gate never relaxes for a label name
-that collides with another configured label, a roadmap node, a durable record,
-a draft carrier, or a review-needs-decision follow-up. A source whose
+(provisional_pending_cap:<count>/<cap>). The gate never relaxes, replays, or
+queues a label name that collides with another configured label, a roadmap node,
+a durable record, a confirmation issue, a draft carrier, or a
+review-needs-decision follow-up. A source whose
 provisional work is complete and awaits confirmation stays excluded with
 "details" "<label> (confirmation_pending)" whatever the flag or class says, and
 is listed in "confirmationQueue" (present only when non-empty): its number,

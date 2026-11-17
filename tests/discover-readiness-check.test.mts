@@ -4815,15 +4815,25 @@ test('the trusted read behind the gate fails closed and is read once', () => {
     maxPendingConfirmations: null,
     confirmationLabelName: null,
   };
-  for (const unusable of [
+  // A readable report whose class is off keeps the label name (so a completed
+  // source that carries it is never queued), but no cap and no class.
+  for (const off of [
     report({ classes: { decisionIssue: 'class-off' } }),
     report({ classes: { decisionIssue: 'master-off' } }),
-    report({ status: 'unreadable', classes: { decisionIssue: 'unreadable' } }),
   ]) {
-    const result = policyOf(() => unusable);
-    assert.deepEqual(result.policy, closed);
+    const result = policyOf(() => off);
+    assert.deepEqual(result.policy, {
+      classEnabled: false,
+      maxPendingConfirmations: null,
+      confirmationLabelName: 'status:needs-confirmation',
+    });
     assert.equal(result.classEnabled, false);
   }
+  const unreadable = policyOf(() =>
+    report({ status: 'unreadable', classes: { decisionIssue: 'unreadable' } }),
+  );
+  assert.deepEqual(unreadable.policy, closed);
+  assert.equal(unreadable.classEnabled, false);
   // An enabled class with an unusable cap or label keeps the class but fails
   // the number or the name closed.
   for (const [overrides, expected] of [
@@ -4847,4 +4857,82 @@ test('the trusted read behind the gate fails closed and is read once', () => {
   });
   assert.deepEqual(throwing.policy, closed);
   assert.equal(throwing.reads(), 1);
+});
+
+test('decision gate: a confirmation issue or a draft carrier is never replayed, queued, or counted', async () => {
+  const carrierBody = '<!-- idd-skill-draft-carrier: carrier-1 -->\nbody';
+  const gate = decisionGate({
+    71: pendingEvidence(),
+    72: pendingEvidence(),
+    73: pendingEvidence(),
+    74: pendingEvidence(),
+  });
+  const result = await runGate(
+    [71, 72, 73, 74],
+    [
+      // Carries the local confirmation label.
+      gateIssue(71, [DECISION_LABEL, CONFIRMATION_LABEL]),
+      // A draft carrier: the authoring-only label plus the carrier marker.
+      gateIssue(72, [DECISION_LABEL, 'status:authoring-only'], carrierBody),
+      // The marker without the authoring-only label is an ordinary source.
+      gateIssue(73, [DECISION_LABEL], carrierBody),
+      // The authoring-only label without the marker is an ordinary source.
+      gateIssue(74, [DECISION_LABEL, 'status:authoring-only']),
+    ],
+    gate.resolver,
+  );
+  // Only the two ordinary sources were replayed and queued.
+  assert.deepEqual(gate.calls.loadStates, [[73, 74]]);
+  assert.deepEqual(
+    result.confirmationQueue?.map((entry) => entry.number),
+    [73, 74],
+  );
+  const reasons = new Map(
+    result.filteredOut.map((entry) => [entry.number, entry.reasons]),
+  );
+  assert.deepEqual(reasons.get(71), [
+    `label:${CONFIRMATION_LABEL}`,
+    `label:${DECISION_LABEL}`,
+  ]);
+  assert.deepEqual(reasons.get(72), [
+    'label:status:authoring-only',
+    `label:${DECISION_LABEL}`,
+  ]);
+  // The excluded issues do not count toward the cap: 2 queued and 0 open is
+  // below a cap of 3, so a further ordinary source is still eligible. (Were 71
+  // and 72 counted, it would sit at the cap.)
+  const capped = decisionGate({ 73: pendingEvidence(), 74: pendingEvidence() });
+  const fifth = await runGate(
+    [71, 72, 73, 74, 75],
+    [
+      gateIssue(71, [DECISION_LABEL, CONFIRMATION_LABEL]),
+      gateIssue(72, [DECISION_LABEL, 'status:authoring-only'], carrierBody),
+      gateIssue(73),
+      gateIssue(74),
+      gateIssue(75),
+    ],
+    capped.resolver,
+  );
+  assert.deepEqual(
+    fifth.ready.map((entry) => entry.number),
+    [75],
+  );
+  // The trusted confirmation name can differ from the local one: a completed
+  // source that carries only the trusted name is not queued, even with the
+  // class off, and does not count either.
+  for (const classEnabled of [true, false]) {
+    const trustedOnly = decisionGate(
+      { 76: pendingEvidence() },
+      {},
+      { classEnabled, confirmationLabelName: 'auto:confirm' },
+    );
+    const outcome = await runGate(
+      [76],
+      [gateIssue(76, [DECISION_LABEL, 'Auto:Confirm '])],
+      trustedOnly.resolver,
+      { confirmationLabelName: 'auto:other' },
+    );
+    assert.equal('confirmationQueue' in outcome, false, String(classEnabled));
+    assert.deepEqual(outcome.ready, [], String(classEnabled));
+  }
 });

@@ -125,8 +125,12 @@ function summarizeTrustedDecisionPolicy(report) {
       classEnabled && typeof cap === 'number' && Number.isFinite(cap) && cap > 0
         ? cap
         : null,
+    // The label name is kept for any readable report, so a completed source
+    // that carries it is never queued while the class is off either.
     confirmationLabelName:
-      classEnabled && typeof label === 'string' && label.trim() !== ''
+      report.status === 'readable' &&
+      typeof label === 'string' &&
+      label.trim() !== ''
         ? label.trim()
         : null,
   };
@@ -625,6 +629,18 @@ function selectionSummary(event) {
       : {}),
   };
 }
+/**
+ * Whether a source carries the trusted confirmation label (trimmed, any
+ * case). Such an issue waits for a person and is never a decision source, so
+ * it is neither queued nor counted by the queue.
+ */
+function carriesConfirmationLabel(labels, policy) {
+  const name = policy.confirmationLabelName?.toLowerCase();
+  return (
+    name !== undefined &&
+    labels.some((label) => label.trim().toLowerCase() === name)
+  );
+}
 /** A pending decision, whatever the bundle status says (as A4.5 reads it). */
 function awaitsConfirmation(evidence) {
   return (
@@ -697,8 +713,9 @@ function buildQueueEntry(candidate, evidence) {
  * 4. A source that carries the trusted confirmation label is never a source.
  * 5. An unreadable cap or count, or a pending count at or above the cap,
  *    skips the source. The pending count is the open issues that carry the
- *    trusted confirmation label plus this run's queue, so scan coverage can
- *    only make the cap stricter.
+ *    trusted confirmation label plus this run's queue. The queue term counts
+ *    only the sources this run scanned, so it never lowers the count below the
+ *    label count alone but can miss a completed source the run did not scan.
  * 6. Anything else is eligible. An eligible source is only a candidate: A4
  *    and A4.5 still assess the plan before any claim.
  *
@@ -778,7 +795,10 @@ export function buildDecisionSourceResolver(inputs) {
         const evidence = states.get(issueNumber);
         if (!isUsableEvidence(evidence)) continue;
         evidenceByNumber.set(issueNumber, evidence);
-        if (awaitsConfirmation(evidence)) {
+        if (
+          awaitsConfirmation(evidence) &&
+          !carriesConfirmationLabel(candidate.labels, readTrusted())
+        ) {
           queueByNumber.set(issueNumber, buildQueueEntry(candidate, evidence));
         }
       }
@@ -805,12 +825,7 @@ export function buildDecisionSourceResolver(inputs) {
       if (labelName === null || cap === null) {
         return { kind: 'blocked', reason: 'provisional_pending_unreadable' };
       }
-      const comparable = labelName.toLowerCase();
-      if (
-        candidate.labels.some(
-          (label) => label.trim().toLowerCase() === comparable,
-        )
-      ) {
+      if (carriesConfirmationLabel(candidate.labels, policy)) {
         return { kind: 'blocked' };
       }
       const open = readOpenConfirmationCount(labelName);
@@ -1264,8 +1279,8 @@ export async function evaluateDiscoverReadiness(issueNumbers, options) {
   // of this run before any verdict, so its pending cap cannot depend on scan
   // order. With no gate, or a name collision, nothing is read and the label
   // keeps excluding as before. Only an open issue that carries the label is
-  // replayed, and never a durable record, a roadmap node, or a follow-up that
-  // waits on a reviewer's decision.
+  // replayed, and never a durable record, a roadmap node, a confirmation
+  // issue, a draft carrier, or a follow-up that waits on a reviewer's decision.
   const decisionNameCollides = needsDecisionNameCollides({
     needsDecisionLabelName,
     authoringLabelName,
@@ -1282,6 +1297,8 @@ export async function evaluateDiscoverReadiness(issueNumbers, options) {
       body: issue.body,
       needsDecisionLabelName,
       roadmapLabelName,
+      authoringOnlyLabelName,
+      confirmationLabel,
       markerPrefix: resolvedMarkerPrefix,
     });
   if (decisionSources !== undefined && !decisionNameCollides) {
@@ -1824,22 +1841,26 @@ export async function evaluateDiscoverReadiness(issueNumbers, options) {
 /**
  * Whether an issue has the shape of a decision source (issue #4538): it
  * carries the needs-decision label, is not a roadmap node (by label or by
- * `roadmap-id` marker), and is not a follow-up that waits for a reviewer's
- * decision. Shared by every Discover helper so they replay and relax the same
- * issues.
+ * `roadmap-id` marker), carries no confirmation label, is not a draft
+ * carrier (authoring-only label plus the `draft-carrier` marker), and is not
+ * a follow-up that waits for a reviewer's decision. Shared by every Discover
+ * helper so they replay and relax the same issues.
  */
 export function isDecisionSourceShape(input) {
-  return (
-    input.labels.has(input.needsDecisionLabelName) &&
-    !input.labels.has(input.roadmapLabelName) &&
-    !createMarkerRegex(input.markerPrefix, 'roadmap-id').test(
-      maskMarkdownForScan(input.body),
-    ) &&
-    !hasDeferSourceMarker(
-      input.body,
-      input.markerPrefix,
-      'review-needs-decision',
-    )
+  const { labels, markerPrefix } = input;
+  if (
+    !labels.has(input.needsDecisionLabelName) ||
+    labels.has(input.roadmapLabelName) ||
+    [...labels].some((label) => input.confirmationLabel.matches(label))
+  ) {
+    return false;
+  }
+  const masked = maskMarkdownForScan(input.body);
+  return !(
+    createMarkerRegex(markerPrefix, 'roadmap-id').test(masked) ||
+    (labels.has(input.authoringOnlyLabelName) &&
+      createMarkerRegex(markerPrefix, 'draft-carrier').test(masked)) ||
+    hasDeferSourceMarker(input.body, markerPrefix, 'review-needs-decision')
   );
 }
 /**
@@ -2306,9 +2327,10 @@ function printHelp() {
   (provisional_records_present), the pending count cannot be read
   (provisional_pending_unreadable), or the count of open confirmation-label
   issues plus the queue below reaches maxPendingConfirmations
-  (provisional_pending_cap:<count>/<cap>). The gate never relaxes for a label
-  name that collides with another configured label, a roadmap node, a durable
-  record, or a review-needs-decision follow-up. A source whose provisional
+  (provisional_pending_cap:<count>/<cap>). The gate never relaxes, replays, or
+  queues a label name that collides with another configured label, a roadmap
+  node, a durable record, a confirmation issue, a draft carrier, or a
+  review-needs-decision follow-up. A source whose provisional
   work is complete and awaits confirmation is never ready, whatever the flag or
   class says (reasons: label:<name>, confirmation_pending) and is listed in
   "confirmationQueue" (present only when non-empty): its number, title, bundle
