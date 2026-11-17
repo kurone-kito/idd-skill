@@ -83,8 +83,9 @@ Request fields by "type":
   resolve:        type, claimId, agentId, branch (the coordination claim this
                   session holds for the review), decisionGenerations (the
                   decisions of the current bundle the answer applies to),
-                  input (optional), answeredPresentationSha256 (optional),
-                  downstreamResults (optional array of strings)
+                  input (optional), answeredPresentationSha256 (required
+                  with an input: echo the presentationSha256 of the dry
+                  run), downstreamResults (optional array of strings)
 
 The resolve action asks whether the implemented choices were acceptable and acts
 only on an actual answer. A dry run reports the next step and needsUserAnswer,

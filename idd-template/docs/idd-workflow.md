@@ -1001,8 +1001,9 @@ of `provisional-decision.mts` runs it, and the `idd-provisional-decision`
 command runs it for a request of type `resolve`. That request names the
 coordination claim (`claimId`, `agentId`, `branch`), the decisions of the
 current bundle (`decisionGenerations`), and optionally what the user did
-(`input`) with the digest it answered (`answeredPresentationSha256`) and the
-later results that relied on the prior ones (`downstreamResults`). A dry run
+(`input`) with the digest it answered (`answeredPresentationSha256`, required
+with an input: echo the digest a dry run reported) and the later results that
+relied on the prior ones (`downstreamResults`). A dry run
 reports the next step and `needsUserAnswer`, and the presentation and its
 digest when there is one. `--apply` without an answer only releases the
 coordination claim, so run the dry run first. The
@@ -1118,12 +1119,12 @@ with the normal unclaim.
 The command's GitHub store takes a record or an answer as already written only
 when its comment is unedited and its author is a trusted marker actor or this
 run posted it. An untrusted comment that pre-posts a deterministic record ID is
-therefore ignored and cannot stall the resolution (observed in the
-review of pull request `#5264`, 2026-11-16 to 2026-11-17 UTC; no incident
-recorded). The decision transitions keep their own rule: their planner holds
-while an untrusted or edited comment carries the ID of the record it would
-write. The store checks the claim against the history it has just read, right
-before every answer or record append that writes. The close re-reads the issue
+therefore ignored and cannot stall the resolution (found in the review of pull
+request `#5264`, merged 2026-11-17). The decision transitions keep their own
+rule: their planner holds while an untrusted or edited comment carries the ID
+of the record it would write. In a resolution the store checks the claim
+against the history it has just read, right before every answer or record
+append of the `resolve` action that writes. The close re-reads the issue
 and then the claim, and the release re-reads the claim, just before the write,
 and the close reads the closed state back. In a resolution the store also
 calls a caller-supplied hook, which re-checks the trusted policy, as its last

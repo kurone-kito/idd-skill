@@ -820,6 +820,23 @@ test('the beforeWrite hook also guards the rework-authored append', async () => 
   );
 });
 
+test('a resolution also refuses a rework-authored append from an untrusted account', async () => {
+  await withFake(
+    (state) => {
+      withReplacedClaimReleased(state);
+      state.postAs = 'session-bot';
+    },
+    async ({ fake, store }) => {
+      await assert.rejects(
+        store.appendReworkAuthoredBody(recordId, recordBody, sourceExpectation),
+        /not a trusted marker actor/,
+      );
+      assert.deepEqual(fake.writes(), []);
+    },
+    { coordinationClaim },
+  );
+});
+
 test('a resolution refuses its writes when the authenticated account cannot be read', async () => {
   await withFake(
     (state) => {
@@ -892,9 +909,12 @@ test('a rework-authored record is not appended while a coordination claim is act
 
 test('the beforeWrite hook runs as the last check before each write and can refuse it', async () => {
   const seen: string[] = [];
+  const callsAtHook: number[] = [];
+  let callCount = () => 0;
   await withFake(
     withClaim,
     async ({ fake, store }) => {
+      callCount = () => fake.state().calls.length;
       await store.appendAnswerBody('text');
       await store.appendRecordBody(recordId, recordBody);
       await store.closeSourceIssue(expectedClose());
@@ -906,8 +926,25 @@ test('the beforeWrite hook runs as the last check before each write and can refu
         'claim release',
       ]);
       assert.deepEqual(fake.writes(), ['POST', 'POST', 'issue close', 'POST']);
+      // After the hook only the write is left, so the hook follows every read
+      // of the store: the first write reads the acting account once, then posts.
+      const calls = fake.state().calls;
+      const after = callsAtHook.map((index) => calls[index]?.args ?? []);
+      assert.ok(
+        after[0]?.includes('user'),
+        'the first write reads the account',
+      );
+      assert.ok(after[1]?.includes('POST'));
+      assert.deepEqual(after[2]?.slice(0, 2), ['issue', 'close']);
+      assert.ok(after[3]?.includes('POST'));
     },
-    { coordinationClaim, beforeWrite: (write) => seen.push(write) },
+    {
+      coordinationClaim,
+      beforeWrite: (write) => {
+        seen.push(write);
+        callsAtHook.push(callCount());
+      },
+    },
   );
   await withFake(
     withClaim,
