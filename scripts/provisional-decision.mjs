@@ -2675,7 +2675,7 @@ export async function runProvisionalResolution(request, store, options = {}) {
       ...extra,
     });
   let previousKey = null;
-  const bound = options.maxSteps ?? DEFAULT_RESOLUTION_STEP_BOUND;
+  const bound = Math.max(1, options.maxSteps ?? DEFAULT_RESOLUTION_STEP_BOUND);
   for (let iteration = 0; iteration < bound; iteration += 1) {
     const plan = await planResolution(request, store);
     if (plan.kind === 'refused') {

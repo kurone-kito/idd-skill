@@ -3458,7 +3458,7 @@ const DEFAULT_RESOLUTION_STEP_BOUND = 1024;
 export interface ProvisionalResolutionOptions {
   /** Defaults to false. Only true may write. */
   readonly apply?: boolean;
-  /** The backstop on loop turns; defaults to a generous value. */
+  /** The backstop on loop turns, at least 1; defaults to a generous value. */
   readonly maxSteps?: number;
 }
 
@@ -3509,7 +3509,7 @@ export async function runProvisionalResolution(
       ...extra,
     });
   let previousKey: string | null = null;
-  const bound = options.maxSteps ?? DEFAULT_RESOLUTION_STEP_BOUND;
+  const bound = Math.max(1, options.maxSteps ?? DEFAULT_RESOLUTION_STEP_BOUND);
   for (let iteration = 0; iteration < bound; iteration += 1) {
     const plan = await planResolution(request, store);
     if (plan.kind === 'refused') {

@@ -4436,19 +4436,16 @@ test('a source closed while a rework request awaits authoring is held, not relea
   );
 });
 
-test('the step bound is a backstop that can be lowered, not a cap on bundle size', async () => {
+test('the step bound is a backstop that a caller can lower', async () => {
+  // The lifecycle needs six steps (answer, three records, close, release),
+  // so the default bound settles it and a bound of two holds without settling.
   const store = await pendingStore(3);
-  const low = await answered(
-    store,
-    conversationYes,
-    { decisionGenerations: [1, 2, 3] },
-    'claim-4536-coord',
-    true,
-  ).catch(() => null);
-  assert.ok(low);
-  assert.equal(low.outcome, 'confirmed-closed', JSON.stringify(low));
-  // The same lifecycle needs seven steps (answer, three records, close,
-  // release), so a bound of two holds without settling.
+  const settled = await answered(store, conversationYes, {
+    decisionGenerations: [1, 2, 3],
+  });
+  assert.equal(settled.outcome, 'confirmed-closed', JSON.stringify(settled));
+  assert.equal(settled.steps.length, 6);
+
   const other = await pendingStore(3);
   const digest = await shownDigest(other, { decisionGenerations: [1, 2, 3] });
   const held = await runProvisionalResolution(
@@ -4462,4 +4459,10 @@ test('the step bound is a backstop that can be lowered, not a cap on bundle size
   );
   assertRefused(held, 'recovery-hold', /did not settle within its step bound/);
   assert.equal(held.steps.length, 2);
+
+  // A non-positive bound still evaluates one plan instead of skipping the loop.
+  const dry = await runProvisionalResolution(resolveRequest(), other, {
+    maxSteps: 0,
+  });
+  assert.equal(dry.state, 'planned', JSON.stringify(dry));
 });
