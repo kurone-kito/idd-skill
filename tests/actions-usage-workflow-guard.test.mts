@@ -1802,24 +1802,26 @@ function shellQuoteEnd(line: string, start: number): number {
  * - The rest of the line is kept verbatim, comments included, from a quote
  *   after a shell-string introducer on the line, from a `$'...'` or `$"..."`
  *   quote, from a double-quoted span with a `$(` or backtick substitution,
- *   from an unquoted backtick, from an unquoted `${{`, and from a quote that
- *   never closes. Each of them can run code (GitHub Actions substitutes a
- *   `${{ ... }}` expression, whose string literals are single-quoted, before
- *   the shell reads the line), and the guard fails closed.
+ *   from an unquoted backtick, from a `${{`, escaped or not, and from a quote
+ *   that never closes. Each of them can run code (GitHub Actions substitutes
+ *   a `${{ ... }}` expression, whose string literals are single-quoted, before
+ *   the shell reads the line, and a backslash does not escape it), and the
+ *   guard fails closed. The introducer check ignores backslashes, so `-\c`
+ *   still counts, at the price of a false rejection for `echo a\ -c 'x'`.
  *
  * Known limits. These fail loudly, as a false rejection: text that stays
  * unquoted (`echo node --test`, a heredoc body), a quote that only follows an
- * introducer (`grep -c "node --test"`), and a comment after a kept span or
- * an unquoted backtick (`bash -c 'echo ok # node --test'`). These pass, as a
- * false acceptance, although they can run the test runner: a code string that
- * no introducer names (`node -e`, `ssh host '...'`, `watch`, `env -S`, a
- * non-bash `shell:` step), a command string kept in a variable and run later
- * (`CMD='node --test'; eval "$CMD"`), a string piped into a shell or written
- * to a script file, a `#` inside `${...}`, a quoted variable glued to `node`,
- * a comment that ends in a backslash (the backslash-newline join runs first,
- * as it always did), and a command between two quotes on a line that starts
- * inside a quote opened on an earlier line. The scan reads one line alone, so
- * it reads such a line as if it started outside a quote. */
+ * introducer (`grep -c "node --test"`), and a comment after a kept span, an
+ * unquoted backtick, or a `${{` (`bash -c 'echo ok # node --test'`). These
+ * pass, as a false acceptance, although they can run the test runner: a code
+ * string that no introducer names (`node -e`, `ssh host '...'`, `watch`,
+ * `env -S`, a non-bash `shell:` step), a command string kept in a variable
+ * and run later (`CMD='node --test'; eval "$CMD"`), a string piped into a
+ * shell or written to a script file, a `#` inside `${...}`, a quoted variable
+ * glued to `node`, a comment that ends in a backslash (the backslash-newline
+ * join runs first, as it always did), and a command between two quotes on a
+ * line that starts inside a quote opened on an earlier line. The scan reads
+ * one line alone, so it reads such a line as if it started outside a quote. */
 function executableShellText(line: string): string {
   let text = '';
   let index = 0;
@@ -1827,6 +1829,9 @@ function executableShellText(line: string): string {
   while (index < line.length) {
     const char = line.charAt(index);
     if (char === '\\') {
+      if (line.startsWith('${{', index + 1)) {
+        return text + line.slice(index);
+      }
       text += line.slice(index, index + 2);
       index += 2;
       afterEscape = true;
@@ -2074,6 +2079,8 @@ test('the lint job node --test guard ignores quoted and commented text but still
   const mentionedLines = [
     'echo "node --test"',
     'echo ok # node --test',
+    'echo "" "node --test"',
+    'echo "" # node --test',
     "echo 'node --test'",
     'echo "node --test" # node --test',
     'echo "a;node" --test',
@@ -2118,6 +2125,10 @@ test('the lint job node --test guard ignores quoted and commented text but still
     'echo `echo a #b` ; node --test',
     // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
     "${{ 'node --test tests/' }}",
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
+    "\\${{ 'node --test tests/' }}",
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
+    "echo ok && ${{ 'node --test tests/' }}",
     // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
     "${{ runner.os == 'Windows' && 'node.exe --test tests/' || 'node --test tests/' }}",
     'node --te""st',
