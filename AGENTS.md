@@ -404,10 +404,15 @@ failure:
   fixed before the push. The `pnpm-boundary-full` fallback path has
   not been replayed under act.
 - `pnpm-boundary-node22-floor`: the same reusable workflow on the Node
-  version set by its `node-version` input. It is the only one of the three
-  jobs that runs the typecheck, test, and distribution shards on Node 22; the
-  lint shard of the `pnpm-boundary` job always runs on Node 22 (issue
-  `#5263`).
+  version that its `node-version-file: .node-version` input selects, which
+  is Node 22. Under act the `pnpm-boundary` job takes the `node-version`
+  fallback lane, Node 24.x, for its typecheck, test, and distribution shards
+  (an act 0.2.97 dry run of `-j pnpm-boundary` on 2026-11-17 listed no other
+  version for those shards), so the floor job is the only one of the three
+  jobs that runs those shards on Node 22. The lint shard of the
+  `pnpm-boundary` job always runs on Node 22 (issue `#5263`). On GitHub, the
+  `pull_request` matrix runs every shard but lint on Node 22, 24.x, and
+  26.x.
 
 Compared with `commands.pre-push-validate`, the script adds the
 bare-Node run with no installed dependency, the frozen-lockfile install
