@@ -1122,10 +1122,12 @@ session, and anchor, an audited roadmap on the same source, and real child
 issues wired under it. The evidence names the title and body digest of the
 source as it was when the audit began, which the caller captures before it
 reads the roadmap and its children, and they must still match the source
-when the record is written. The source must still be open: a closed source is
-a recovery hold, while an authoring that is already recorded stays
-recoverable after the roadmap closes. It only appends the record. It never
-releases the authoring hold, and unknown ownership or wiring refuses it. It is
+when the record is written, and the store appends it only while that still
+holds, so a source closed or edited after the final check holds the run and
+records nothing. The source must still be open: a closed source is a recovery
+hold, while an authoring that is already recorded stays recoverable after the
+roadmap closes. It only appends the record. It never releases the authoring
+hold, and unknown ownership or wiring refuses it. It is
 terminal only when every decision of the bundle is confirmed or has its
 record.
 
