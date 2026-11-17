@@ -1800,7 +1800,8 @@ function echoOutputMayRun(shell: string): boolean {
       continue;
     }
     const startsWord =
-      index === 0 || (!afterEscape && /[\s;&|(]/.test(shell.charAt(index - 1)));
+      index === 0 ||
+      (!afterEscape && /[ \t\n;&|(]/.test(shell.charAt(index - 1)));
     afterEscape = false;
     if (char === '#' && startsWord) {
       const lineEnd = shell.indexOf('\n', index);
@@ -1817,13 +1818,9 @@ function echoOutputMayRun(shell: string): boolean {
         return true;
       }
       index = end + 1;
-    } else if (
-      char === '>' ||
-      char === '(' ||
-      (char === '|' &&
-        shell.charAt(index - 1) !== '|' &&
-        shell.charAt(index + 1) !== '|')
-    ) {
+    } else if (char === '|' && shell.charAt(index + 1) === '|') {
+      index += 2;
+    } else if (char === '>' || char === '(' || char === '|') {
       return true;
     } else {
       index += 1;
@@ -1844,9 +1841,10 @@ function echoOutputMayRun(shell: string): boolean {
  * - An unquoted `#` at the start of a word drops the rest of its line, except
  *   in a step with a `${{`, where only a comment that starts its line and
  *   holds no `${{` is dropped: an expression can end a comment early by
- *   adding a newline. A backslash makes the next character literal, so it never opens or closes
- *   a quote and never makes a following `#` start a comment, and the word
- *   start is read from the original text, never from the output.
+ *   adding a newline. A backslash makes the next character literal, so it
+ *   never opens or closes a quote and never makes a following `#` start a
+ *   comment, and the word start is read from the original text, never from
+ *   the output.
  * - A quoted argument that holds whitespace or `;&|` becomes one space when
  *   the current simple command, the text since the last `;`, `&`, `|`, `(`,
  *   or newline, starts with `echo`. Any other quoted span is kept with its
@@ -1859,10 +1857,10 @@ function echoOutputMayRun(shell: string): boolean {
  * because GitHub Actions substitutes the expression, quotes and all, before
  * the shell reads the text; nor does a step that pipes, redirects output, or
  * opens a group or substitution anywhere, because the output of an `echo`
- * there can become code. Such a step only unquotes spans in place. The rest of the text is
- * kept verbatim from a backtick, from a `$'...'` or `$"..."` quote, from a
- * double-quoted span with a `$(` or backtick in it, and from a quote that
- * never closes.
+ * there can become code. Such a step only unquotes spans in place. The rest
+ * of the text is kept verbatim from a backtick, from a `$'...'` or `$"..."`
+ * quote, from a double-quoted span with a `$(` or backtick in it, and from a
+ * quote that never closes.
  *
  * Known limits. These fail loudly, as a false rejection: text that stays
  * unquoted (`echo node --test`, a heredoc body); a quoted argument of any
@@ -1893,7 +1891,8 @@ function executableShellText(shell: string): string {
       continue;
     }
     const startsWord =
-      index === 0 || (!afterEscape && /[\s;&|(]/.test(shell.charAt(index - 1)));
+      index === 0 ||
+      (!afterEscape && /[ \t\n;&|(]/.test(shell.charAt(index - 1)));
     afterEscape = false;
     if (char === '#' && startsWord) {
       const lineEnd = shell.indexOf('\n', index);
@@ -1985,7 +1984,8 @@ function assertJobTimeoutMinutes(
 }
 
 /** Requires that no `run` value of the job's steps starts the Node test
- * runner. Backslash-newline continuations are joined first. Each value is
+ * runner. Backslash-newline continuations are joined first, with nothing between the
+ * lines, as the shell joins them. Each value is
  * reduced whole by `executableShellText`, so a comment or a quoted argument
  * that only mentions `node --test` does not count. */
 function assertJobRunsNoNodeTest(workflow: string, jobId: string): void {
@@ -1998,7 +1998,7 @@ function assertJobRunsNoNodeTest(workflow: string, jobId: string): void {
     if (!isWorkflowMapping(step) || typeof step.run !== 'string') {
       continue;
     }
-    const text = executableShellText(step.run.replace(/\\\n/g, ' '));
+    const text = executableShellText(step.run.replace(/\\\n/g, ''));
     const found = NODE_TEST_COMMAND.exec(text);
     if (found) {
       const lineEnd = text.indexOf('\n', found.index);
@@ -2168,6 +2168,8 @@ test('the lint job node --test guard ignores quoted and commented text but still
     'echo "a b" "node --test"',
     'echo "node --test" || true',
     'echo "node --test"\necho ok # node --test',
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal GitHub Actions expression under test, not a forgotten template placeholder.
+    'echo ${{ github.sha }}\n  # node --test tests/',
     "echo 'first\nnode --test tests/\nlast'",
     'echo "first\nnode --test tests/\nlast"',
     'true\necho "node --test"',
@@ -2244,6 +2246,12 @@ test('the lint job node --test guard ignores quoted and commented text but still
     "echo 'node --test #' $'\\'' | bash",
     "echo ok; bash -c 'node --test'",
     "echo ok\nbash -c 'node --test'",
+    "echo 'node --test' a\\ # | bash",
+    "echo 'node --test' a#b | bash",
+    "echo 'node --test' a\u00a0# | bash",
+    "echo 'node --test\n' \\|| bash",
+    'FOO=1\u00a0# node --test tests/',
+    'FOO=1\\\n# node --test tests/',
     '# don\'t run this\necho "node --test tests/" | bash',
     "true # it's\necho 'node --test tests/' > run.sh",
     '# say "hi\nx=$(echo \'node --test tests/\'); eval "$x"',
