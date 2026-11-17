@@ -2794,8 +2794,12 @@ only approval boundary.
   order pending without an issue, pending with the issue, member, and only
   then cleanup and abandoned, with any conflicting or out-of-order record
   failing closed. That is how this command verifies the set's originating
-  Stage 1 hold, so it cannot extend a set whose hold lives elsewhere. For
-  `--shape child`, the anchor's hold is read from `issueAuthoring.journalIssue`
+  Stage 1 hold, so it cannot extend a set whose hold lives elsewhere. The one
+  exception is a retained decision source adopted for rework, whose hold is the
+  handoff's (see
+  [Rework adoption of a retained decision source](#rework-adoption-of-a-retained-decision-source)).
+  For `--shape child`, the anchor's hold is read from
+  `issueAuthoring.journalIssue`
   and from every journal listed in `issueAuthoring.retiredJournalIssues`, the
   records merged in time order; every record this command writes still goes
   to `issueAuthoring.journalIssue`, and a hold in any other issue is refused.
@@ -4067,7 +4071,9 @@ claim of the confirmation review is released:
    a `## Tracks` list of every active child, and states revised success
    criteria that are objective and implement the operator's selected
    alternative. It names the downstream work the handoff lists
-   (`anchor.rework.downstreamResults` in the helper report), keeps the earlier
+   (`anchor.rework.downstreamResults` in the report of a child dry run, which
+   you run before the rewrite and again before saving it, because a rework
+   request recorded during authoring adds to that list), keeps the earlier
    options, the selected choice, and the implementation links, and keeps any
    parent or nested-roadmap line so those relationships stay coherent.
 5. Publish each child with `publish-authoring-hold --shape child --anchor
@@ -4103,12 +4109,15 @@ claim of the confirmation review is released:
      unproven set is an unknown prior set and is refused;
    - the handoff's own hold replays to `member`, its `member` record follows
      the generation's opening (the hold is written after the owner acquires),
-     and, on the first read only,
-     every other token of the set replays through the same record order and ends
-     settled (`member`, or `cleanup` then `abandoned`): a token that ends at
-     `cleanup`, or at `pending` after an issue was attached, or whose records
-     are out of order, is a created but unfinished child that must be
-     reconciled before another child (preventive; no observed incident yet). A
+     and, on the first read only, every other token of the set replays through
+     the same record order and ends settled (`member`, or `cleanup` then
+     `abandoned`). Each of its records names the journal it was read from, its
+     actor is its author, its minimization state is readable, the token's
+     records agree on one target and one session, and the latest record is not
+     minimized as outdated. A token that ends at `cleanup`, or at `pending`
+     after an issue was attached, or whose records break those rules, is a
+     created but unfinished child that must be reconciled before another child
+     (preventive; no observed incident yet). A
      token that never got an issue cannot be closed by any record, so the
      helper lists the repository's issues updated since a minute before the
      token's first record (one paginated call that filters inside `gh`, with no
@@ -4123,10 +4132,15 @@ claim of the confirmation review is released:
    once that exact token is reconciled.
 6. Wire each child's number into `## Tracks` as a separate reviewed edit, with
    the same review, lint, and heartbeat rules.
-7. Record the `rework-authored` transition with the guarded request of
-   `runProvisionalResolution` (`docs/idd-workflow.md`, "Resolving a
+7. Record the `rework-authored` transition with the guarded `rework-authored`
+   request of `runProvisionalResolution` (`docs/idd-workflow.md`, "Resolving a
    confirmation-pending source"), then leave the set held for the normal
-   Stage 2 release. The facts of that request come from these sources:
+   Stage 2 release. No shipped command runs that request yet: the
+   `idd-provisional-decision` command takes only the `selected`,
+   `work-started` and `work-completed` requests, so the request is made by
+   calling the function from a script. The report's `anchor.rework.owner` gives
+   the values of the owner fields, and the other facts come from these
+   sources:
 
    | Fact                                                              | Source                                                                                                                               |
    | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
@@ -4139,7 +4153,8 @@ claim of the confirmation review is released:
 
 The check compares body digests, not titles, because no owner marker records a
 title. A history that already records a rework authoring is refused, because
-the helper has no authoring evidence to replay it with. Discover, roadmap audit,
+the helper has no authoring evidence to replay it with, so a second rework of
+one source is not supported by this path. Discover, roadmap audit,
 and the pre-merge check replay without authoring evidence and keep a source
 with a rework record blocked, which is the operator's fail-closed choice on
 issue `#4533` ("consuming verified rework transitions needs its own child"). So
