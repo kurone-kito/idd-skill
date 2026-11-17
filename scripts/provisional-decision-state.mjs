@@ -2595,7 +2595,12 @@ export function readReworkHandoff(input) {
   const bundle = replay.decisions.filter(
     (decision) => decision.bundleGeneration === currentBundleGeneration,
   );
-  if (bundle.some((decision) => decision.status === 'rework-authored')) {
+  // A rework authoring recorded in any bundle ends the adoption of this source,
+  // even when a later bundle generation asks for another rework.
+  if (
+    authoredRecorded ||
+    bundle.some((decision) => decision.status === 'rework-authored')
+  ) {
     return reworkHandoffRefusal('rework-already-authored');
   }
   const requested = bundle.filter(

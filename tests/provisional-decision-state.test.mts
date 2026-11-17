@@ -2509,6 +2509,149 @@ test('source rewrites chain across rework bundles and permit a later generation'
   assert.equal(result.decisions.length, 3);
 });
 
+test('a rework authored in an earlier bundle refuses the handoff of a later bundle', () => {
+  const firstSourceAfter = {
+    ...source,
+    snapshot: {
+      ...source.snapshot,
+      bodySha256: 'b'.repeat(64),
+      updatedAt: dateAt(6),
+    },
+  };
+  const { selected, started, completed } = oneCompletedDecision();
+  const firstRationale = 'The alternate choice better fits the current need.';
+  const firstAnswer = answerComment(
+    'answer-one',
+    buildAnswer(
+      [selected],
+      [completed],
+      [firstClaim],
+      'rework',
+      'change',
+      firstRationale,
+    ),
+    4,
+  );
+  const firstRequest = record('request-one', {
+    type: 'rework-requested',
+    reworkRequest: {
+      commentUrl: firstAnswer.url,
+      requestedAt: firstAnswer.createdAt,
+      requestedOptionId: 'change',
+      rationale: firstRationale,
+    },
+  });
+  const firstAuthored = {
+    ...record('authored-one', {
+      type: 'rework-authored',
+      reworkRoadmap: {
+        roadmapIssueNumber: source.issueNumber,
+        roadmapMarkerId: 'same-source-rework',
+        authoringSetId: 'set-4599-rework',
+        url: `https://github.com/${source.repository}/issues/${source.issueNumber}`,
+      },
+    }),
+    source: firstSourceAfter,
+  };
+  const selectedTwo = record(
+    'select-two',
+    selectedEvent('Question for the second bundle?'),
+    1,
+    2,
+    [firstClaim],
+    firstSourceAfter,
+  );
+  const startedTwo = record(
+    'start-two',
+    { ...workStartedEvent(), startedAt: dateAt(8) },
+    1,
+    2,
+    [firstClaim],
+    firstSourceAfter,
+  );
+  const completedTwo = record(
+    'complete-two',
+    {
+      type: 'work-completed',
+      result: { ...completionResult(1), verifiedAt: dateAt(8) },
+    },
+    1,
+    2,
+    [firstClaim],
+    firstSourceAfter,
+  );
+  const secondRationale = 'A different alternative better fits the new need.';
+  const secondAnswer = answerComment(
+    'answer-two',
+    buildAnswer(
+      [selectedTwo],
+      [completedTwo],
+      [firstClaim],
+      'rework',
+      'change',
+      secondRationale,
+      firstSourceAfter,
+      2,
+    ),
+    10,
+  );
+  const secondRequest = record(
+    'request-two',
+    {
+      type: 'rework-requested',
+      reworkRequest: {
+        commentUrl: secondAnswer.url,
+        requestedAt: secondAnswer.createdAt,
+        requestedOptionId: 'change',
+        rationale: secondRationale,
+        handoff: handoffFor([completedTwo], {
+          handoffId: 'handoff-second',
+          authoringSetId: 'set-4599-rework-second',
+          authoringSessionId: 'session-4599-rework-second',
+        }),
+      },
+    },
+    1,
+    2,
+    [firstClaim],
+    firstSourceAfter,
+  );
+  const history = [
+    recordComment('1', selected, 1),
+    recordComment('2', started, 2),
+    recordComment('3', completed, 3),
+    firstAnswer,
+    recordComment('5', firstRequest, 5),
+    reworkPublicationComment('authored-one'),
+    recordComment('6', firstAuthored, 6),
+    recordComment('7', selectedTwo, 7),
+    recordComment('8', startedTwo, 8),
+    recordComment('9', completedTwo, 9),
+    secondAnswer,
+    recordComment('11', secondRequest, 11),
+  ];
+  const readerInput = {
+    ...handoffInput(history),
+    verifiedWork: [
+      workEvidence(1),
+      { ...workEvidence(1, 2, firstSourceAfter), verifiedAt: dateAt(8) },
+    ],
+    verifiedReworkRoadmaps: [
+      reworkEvidence('authored-one', source, firstSourceAfter),
+    ],
+  };
+  // The replay accepts the second bundle, so only the earlier authoring can
+  // refuse its handoff.
+  const replay = replayProvisionalDecisionHistory({
+    ...readerInput,
+    currentSource: firstSourceAfter,
+  });
+  assert.equal(replay.valid, true, JSON.stringify(replay.issues));
+  const read = readReworkHandoff(readerInput);
+  assert.equal(read.ok, false, JSON.stringify(read));
+  assert.equal(read.ok ? '' : read.reason, 'rework-already-authored');
+});
+
 test('incomplete or stale evidence grants no replay authority', () => {
   const selected = recordComment('1', record('select-1', selectedEvent()), 1);
   const incomplete = replayProvisionalDecisionHistory(
